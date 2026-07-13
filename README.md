@@ -4,7 +4,7 @@
 
 Category: an agent control plane. Harnesses (Claude Code, Codex) run the agent's inner loop; Freeside is the outer loop: what work starts, inside what boundary, with which credentials withheld, what counts as done, when a human is interrupted, and what survives a crash. The harness runs the agent; the reins are yours.
 
-**Status:** pre-implementation; Phase 1A (the secure publish path) is next. This is a monorepo whose component directories are intentionally empty until their phase begins.
+**Status:** Phase 1A (the secure publish path) underway. The daemon is initialized (Wave 0 unit 1: module, dual-platform CI, test conventions); this monorepo's other component directories stay intentionally empty until their phase begins.
 
 - **Everything** — charter, architecture, roadmap, decisions: [`docs/plan.md`](docs/plan.md).
 - **Conventions** — how to work in this repo: [`AGENTS.md`](AGENTS.md).
