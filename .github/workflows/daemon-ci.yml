@@ -33,9 +33,8 @@ jobs:
           # go-version-file is resolved from the workspace root, not the
           # working-directory default above.
           go-version-file: daemon/go.mod
-          # No dependencies yet, so nothing to cache; later units that
-          # add a go.sum should flip this on.
-          cache: false
+          # Like go-version-file, resolved from the workspace root.
+          cache-dependency-path: daemon/go.sum
       - run: go build ./...
       - run: go test ./...
       - run: go vet ./...
@@ -55,6 +54,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: daemon/go.mod
-          cache: false
+          cache-dependency-path: daemon/go.sum
       - run: go build ./...
       - run: go test ./...
