@@ -1,6 +1,6 @@
 # Freeside plan decision history
 
-The full decisions log of every plan revision, verbatim, including revisions never committed to this repository (2, 3, 5, and 6 were superseded before commit). docs/plan.md's Section 13 carries only the current revision's changes plus an abbreviated held-from list; this file is the archaeology. Grep it when re-litigating; promote to docs/decisions/ ADRs on first re-litigation, citing the revision entry here. The design dialogue behind these revisions included six external design reviews, adjudicated turn by turn; the raw review texts may optionally live in docs/reviews/.
+The full decisions log of every plan revision, verbatim, including revisions never committed to this repository (2, 3, 5, and 6 were superseded before commit). docs/plan.md's Section 13 carries only the current revision's changes; this file is the archaeology. Grep it when re-litigating; promote to docs/decisions/ ADRs on first re-litigation, citing the revision entry here. The design dialogue behind these revisions included six external design reviews, adjudicated turn by turn; the raw review texts may optionally live in docs/reviews/.
 
 Deciders are named in parentheses throughout. Revisions 1 through 7 were produced 2026-07-13.
 
