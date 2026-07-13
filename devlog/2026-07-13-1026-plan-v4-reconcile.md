@@ -47,6 +47,14 @@ code should ever be written against the committed v1:
   wording): "An agent control plane: turns software work items into
   evidence-backed pull requests and interrupts you only when judgment
   is required."
+- **Manual initiator moved from 1B to 1A** in §5.12 (Codex P2 on
+  PR #2; decider: user, over admin-seeding and decline options). v4
+  deferred manual to 1B while §11 defines 1A as running from a
+  hand-approved spec with an exit requiring real hand-specced changes
+  to publish, leaving 1A no in-scope entry path. Treated as restoring
+  §5.12/§11 internal consistency, not altering decided scope: no
+  revision bump, no §13 entry (revisit if the user disagrees). The
+  user's source v4 copy carries the old wording.
 
 Drains `2026-07-08-1051-scaffold-phase0.md`: the devlog-contract
 queue item resolved via plan v4 §9's cadence split — this repo

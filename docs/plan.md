@@ -208,7 +208,7 @@ security:       {credential_mode: subscription_contained}
 telemetry:      {shadow_review_rate: 0.2}
 ```
 
-**Initiators** map event sources to workflow entries with mode auto_start or propose (propose emits batched run_proposal items). Deterministic queries where possible; agent triage only where judgment is required; initiators are control-plane config; auto_start is bounded by WIP caps and budgets; the conservative default is propose. 1B ships manual and label; scan initiators arrive early Phase 2; **workflow chaining** (one workflow's output initiating another, e.g. bug-report triage feeding implementation) is Phase 2/4 horizon.
+**Initiators** map event sources to workflow entries with mode auto_start or propose (propose emits batched run_proposal items). Deterministic queries where possible; agent triage only where judgment is required; initiators are control-plane config; auto_start is bounded by WIP caps and budgets; the conservative default is propose. 1A ships the manual initiator (the hand-approved-spec entry); 1B adds label; scan initiators arrive early Phase 2; **workflow chaining** (one workflow's output initiating another, e.g. bug-report triage feeding implementation) is Phase 2/4 horizon.
 
 **Findings and classification:** raw reviewer findings are **immutable**; classification (finding_id, head_sha, severity, category, pattern, materiality, scope, confidence, status) is a separate versioned annotation; classifier prompt/model changes are digest-traceable; **low-confidence materiality defaults to continuing or human attention, never dismissal; the classifier cannot declare a finding fixed.** Yield, not round count, ends review; classification accuracy is sampled telemetry; ceilings guard against label-driven misbehavior.
 
