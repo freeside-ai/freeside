@@ -332,11 +332,9 @@ Pipeline DSL (after three shapes); more agents and skills; macOS runner class; A
 
 ## 13. Decisions log
 
-Revision 7 folded in the sixth external review as adjudicated.
+Material changes are recorded here per revision, with deciders in parentheses. This section holds only the current revision's items: when a new revision lands, the outgoing items move to docs/history/decisions.md, which holds the complete log of every revision, including revisions superseded before commit. The history file is appended in the same PR as any plan revision, so the two cannot drift. A decision promotes to a docs/decisions/ ADR on first re-litigation, citing its revision entry in the history.
 
-Held from revision 6 (abbreviated): daemon owns workflow state, clients thin; GitHub owns source/review/merge; gates daemon-native; Go + SwiftUI; monorepo; verification defines completion; capabilities at spawn; control-plane from approved commits; digest-bound approvals; SQLite + inbox/outbox; polling-first; capability-classed runners; SwiftUI bootstrap exemption; native vendor tooling; attention inbox as control system with the full sync/conversation model; elaboration in scope, severable (user); yield-driven review; CodexGitHubReview; control-plane-only review triggering (user); CI trust profiles; out-of-process gauntlet, normalized manifest, export-helper boundary; credential modes; effectively-once with invocation IDs; checkpointed backups; non-waivable gates; attended_dev/unattended; Linux as portability target; per-stage egress profiles; evidence pipeline; per-wave adversarial reviews; coordination model; naming stack (user).
-
-New in revision 7 (decider in parentheses):
+Revision 7:
 1. **Candidate-automation policy**: automation-control paths publish-blocking in the ordinary workflow; trust profiles attest effective PR-job authority (implicit token, OIDC, environments, reusable/composite actions, artifact-consuming privileged jobs); new safety-failure entries. (Review 6.)
 2. **Post-agent workspace handoff is a named capability set and the first ward implementation gate**, proven against the actual runtime; the same-VM fallback is a declared weaker class, never described as fresh-context. (Review 6.)
 3. **provider_web_read reclassified as a materially wider credential-exfiltration mode**; the 1B elaborator default is **daemon-fetched, digest-addressed research artifacts** via typed fetch requests, chosen from the review's options for security plus provenance and reproducibility. (Review 6; option selection this revision.)
