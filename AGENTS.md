@@ -124,18 +124,18 @@ the PR body); keep the working context to what the current step needs.
 
 ## Build, test, run
 
-The monorepo's components are not yet initialized. Per-component build, test, and run commands land in this table with each component's first PR (Phase 1A for the daemon; see `docs/plan.md` §11).
+The daemon is initialized (Wave 0 unit 1); the monorepo's other components are not yet initialized. Per-component build, test, and run commands land in this table with each component's first PR (see `docs/plan.md` §11).
 
 | Component     | Toolchain      | Commands                                      |
 | ------------- | -------------- | --------------------------------------------- |
-| `daemon/`     | Go             | not yet initialized; see docs/plan.md roadmap |
+| `daemon/`     | Go             | `cd daemon`; `go build ./...`; `go test ./...`; `go vet ./...`; `golangci-lint run` |
 | `app/`        | Xcode / SPM    | not yet initialized; see docs/plan.md roadmap |
 | `api/`        | OpenAPI (spec) | not yet initialized; see docs/plan.md roadmap |
 | `prompts/`    | prompt text    | not yet initialized; see docs/plan.md roadmap |
 | `policy/`     | YAML (policy)  | not yet initialized; see docs/plan.md roadmap |
 | `images/`     | OCI images     | not yet initialized; see docs/plan.md roadmap |
 
-Lint/format and CI are established with the first component that carries code; the definition-of-done block below records that these checks must be added at that time.
+Lint/format and CI are established with the first component that carries code: the daemon does so here via `daemon/.golangci.yml` and `.github/workflows/daemon-ci.yml` (Linux runs build/test/vet/lint, macOS runs build/test). Later components add their own on the same pattern.
 
 ## Monorepo scope discipline
 
