@@ -1,0 +1,60 @@
+name: daemon CI
+
+# Dual-platform per plan §5.2: Linux runs the full gate (build, test,
+# vet, lint); macOS stays lean (build and test only) so portability is
+# continuously verified without duplicating the slow checks.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "daemon/**"
+      - ".github/workflows/daemon-ci.yml"
+  pull_request:
+    paths:
+      - "daemon/**"
+      - ".github/workflows/daemon-ci.yml"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: daemon
+
+jobs:
+  linux:
+    name: linux (build, test, vet, lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # go-version-file is resolved from the workspace root, not the
+          # working-directory default above.
+          go-version-file: daemon/go.mod
+          # No dependencies yet, so nothing to cache; later units that
+          # add a go.sum should flip this on.
+          cache: false
+      - run: go build ./...
+      - run: go test ./...
+      - run: go vet ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          # Pinned like every other tool: a floating linter is
+          # nondeterministic verification, and upgrades are deliberate PRs.
+          version: v2.12.2
+          working-directory: daemon
+
+  macos:
+    name: macos (build, test)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: daemon/go.mod
+          cache: false
+      - run: go build ./...
+      - run: go test ./...

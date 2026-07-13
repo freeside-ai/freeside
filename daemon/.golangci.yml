@@ -1,0 +1,33 @@
+# Curated for deterministic, agent-friendly signal, not minimal and not
+# opinion-heavy: lint is the cheapest reviewer, so every deterministic
+# finding caught here is a review round not spent. Strictness is close to
+# free now (near-zero code) and expensive to add later (cross-lane churn),
+# while loosening is a one-line change; so we start strict and select for
+# determinism over opinion.
+#
+# This file is a §5.6 verification-control surface: weakening it is a
+# small, visible, gated change with a devlog rationale, never a silent
+# batch into a feature PR.
+version: "2"
+
+linters:
+  # "standard" = errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    - errorlint # error-wrapping mistakes (%w vs %v, errors.Is/As misuse)
+    - exhaustive # missing enum switch cases (matters once domain lands)
+    - gosec # security static checks for a credential-broker daemon
+    - misspell # free, deterministic spelling fixes in comments/strings
+    - nolintlint # keep //nolint directives specific and explained
+  settings:
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    exhaustive:
+      default-signifies-exhaustive: true
+
+formatters:
+  # Deterministic formatting as law removes an entire class of review
+  # noise; gofumpt is a strict superset of gofmt.
+  enable:
+    - gofumpt
