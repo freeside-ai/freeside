@@ -53,7 +53,7 @@ Success claims: (1) **attention reduction** against a passively logged baseline;
 
 ## 3. Operating principles
 
-### 3.1 Autonomy inside the envelope
+### 3.1 Autonomy inside the ward
 
 Autonomy is the default; gates exist only at trust-boundary crossings and the two designed judgment points. **Repeated exceptional interruptions trigger a policy review; eligible low-risk repetitions may produce a policy-change proposal; safety invariants and non-waivable gates never auto-promote or offer bypass.** Non-waivable classes: GitHub credential separation; CI trust-profile validity; candidate automation-control and reviewer-instruction changes; control-plane modifications; stale-approval rejection; failed runner conformance (including the workspace-handoff gate); host reachability; artifact integrity failures; secret detection; capability escalation outside approved manifests.
 
@@ -107,7 +107,7 @@ freesided (Go daemon; launchd/systemd; dedicated user; never root)
    ├─ StageDriver: Claude batch execution (+ permanent fake driver)
    ├─ ReviewSource: CodexGitHubReview (+ permanent fake source)
    ├─ finding classifier: annotations over immutable raw findings
-   ├─ envelope: capability classes incl. workspace-handoff capabilities;
+   ├─ ward: capability classes incl. workspace-handoff capabilities;
    │   per-stage egress profiles; attended_dev|unattended; conformance
    ├─ gauntlet: OUT-OF-PROCESS worker (export normalization, hostile import,
    │   evidence validation) -> fresh checkout -> clean verifier (recipe,
@@ -189,11 +189,11 @@ fresh checkout ──▶ clean verification workspace (no credentials, no networ
 verified candidate ──▶ git/publish ──▶ GitHub PR (under trust profile)
 ```
 
-Two channels leave the workspace and never mix: the **repo-change manifest** (regular files only; symlink, submodule, special-file, unusual-mode, **automation-control (5.5), and reviewer-instruction (5.8) changes are publish-blocking**) and the **evidence channel** (typed artifacts with provenance, 5.15). The daemon authors its own clean commit; the importer never trusts workspace .git, hooks, config, or agent-written manifests; enforces base SHA, canonical paths, allowlists, size limits, control-plane restrictions, best-effort secret scanning per 5.4. Malicious manifest, blob, and evidence fixtures are permanent suite members. **Trusted verification recipes** load only from approved control-plane config or the trusted base commit; verification-control file changes are mechanically identified, risk-flagged, and gated. Named residual: candidate test code executes inside the contained verifier envelope.
+Two channels leave the workspace and never mix: the **repo-change manifest** (regular files only; symlink, submodule, special-file, unusual-mode, **automation-control (5.5), and reviewer-instruction (5.8) changes are publish-blocking**) and the **evidence channel** (typed artifacts with provenance, 5.15). The daemon authors its own clean commit; the importer never trusts workspace .git, hooks, config, or agent-written manifests; enforces base SHA, canonical paths, allowlists, size limits, control-plane restrictions, best-effort secret scanning per 5.4. Malicious manifest, blob, and evidence fixtures are permanent suite members. **Trusted verification recipes** load only from approved control-plane config or the trusted base commit; verification-control file changes are mechanically identified, risk-flagged, and gated. Named residual: candidate test code executes inside the warded verifier.
 
-### 5.7 The envelope: runners, handoff gate, and operating modes
+### 5.7 The ward: runners, handoff gate, and operating modes
 
-Backends declare capabilities; policy states minimums; no silent downgrade. **New named capabilities: supports_detachable_workspace, supports_post_exit_export, supports_read_only_remount, supports_credential_volume_detach, supports_workspace_snapshot.** **The first envelope implementation gate:** write files in an agent workspace, terminate the credential-bearing execution context, mount the workspace read-only in a fresh credential-free context, and export it without exposing provider credentials, daemon state, or host credentials, proven against the actual runtime (candidate mechanisms: detachable volume, host-controlled block image, snapshot/export, separate export VM). **The honest fallback** (terminate the agent process, detach credentials, export in the same VM) **is a different, weaker isolation class, declared as such, never described as fresh-context handoff.**
+Backends declare capabilities; policy states minimums; no silent downgrade. **New named capabilities: supports_detachable_workspace, supports_post_exit_export, supports_read_only_remount, supports_credential_volume_detach, supports_workspace_snapshot.** **The first ward implementation gate:** write files in an agent workspace, terminate the credential-bearing execution context, mount the workspace read-only in a fresh credential-free context, and export it without exposing provider credentials, daemon state, or host credentials, proven against the actual runtime (candidate mechanisms: detachable volume, host-controlled block image, snapshot/export, separate export VM). **The honest fallback** (terminate the agent process, detach credentials, export in the same VM) **is a different, weaker isolation class, declared as such, never described as fresh-context handoff.**
 
 **Operating modes:** **attended_dev** (weaker runner class permitted; auto_start, automatic publication, and unattended escalation disabled; honest isolation claims) and **unattended** (conformance success including the handoff gate, valid trust profile, approved credential mode, runner minimums, current backup health including encryption status, no blocking system_health item). Conformance cadence: full suite at startup, after configuration changes, and on doctor's schedule; lightweight probe before each unattended job. Golden images pin CLIs; workspaces on VM-local disk. Bootstrap exception: SwiftUI work is exempt until a macOS execution class exists.
 
@@ -302,9 +302,9 @@ The binary is the installer, built after interfaces survive real use: `freesided
 
 **1A.1: secure publication with a fake candidate.** Fake candidate → workspace handoff → gauntlet → clean verification → daemon GitHub publication → ready item. Exit: malicious fixtures contained; candidate automation-control and reviewer-instruction paths blocked; verification binds to exact recipe and head; PR creation converges effectively-once; checkpoint restore succeeds (local-only acceptable); attended_dev sufficient.
 
-**1A.2: real unattended execution.** Claude → proven credential mode → **proven workspace handoff (the envelope gate)** → gauntlet → clean verifier → audited publication → iPhone, via `freesided submit`, under manually configured unattended preconditions. Exit: runner conformance green including the handoff gate; no undeclared credential in any workspace; several real items complete without terminal intervention; then setup/onboard/doctor package the proven manual operations and meet the Section 10 targets.
+**1A.2: real unattended execution.** Claude → proven credential mode → **proven workspace handoff (the ward gate)** → gauntlet → clean verifier → audited publication → iPhone, via `freesided submit`, under manually configured unattended preconditions. Exit: runner conformance green including the handoff gate; no undeclared credential in any workspace; several real items complete without terminal intervention; then setup/onboard/doctor package the proven manual operations and meet the Section 10 targets.
 
-Build order within the exits: (1) domain, sync, devices, fakes; (2) clients and the sixteen tests; (3) export/gauntlet/verifier with fake candidates, artifact store with checkpoint and provenance rules; (4) publication and reconciliation, kill tests; (5) envelope with the handoff gate, then the Claude driver; (6) real items; (7) setup/onboard/doctor; (8) exit. **The workspace-handoff gate is investigated early and in parallel** (it is the largest runtime unknown) but blocks only 1A.2, never 1A.0/1A.1.
+Build order within the exits: (1) domain, sync, devices, fakes; (2) clients and the sixteen tests; (3) export/gauntlet/verifier with fake candidates, artifact store with checkpoint and provenance rules; (4) publication and reconciliation, kill tests; (5) ward with the handoff gate, then the Claude driver; (6) real items; (7) setup/onboard/doctor; (8) exit. **The workspace-handoff gate is investigated early and in parallel** (it is the largest runtime unknown) but blocks only 1A.2, never 1A.0/1A.1.
 
 ### Phase 1B: the useful workflow
 
@@ -312,7 +312,7 @@ labeled issue (intake scanner) → elaboration over daemon-fetched research arti
 
 ### Implementation coordination (building Freeside with agents)
 
-Contracts and fakes are the coordination mechanism; CI keeps lanes honest. Wave 0 (serial): module, dual-platform CI, domain package, schema and migrations, outbox, interfaces, fakes, provisional API schema; domain/migration PRs exclusive; shared-interface changes are `kind:contract`. Wave 1 (parallel lanes): signet, gauntlet, publish, envelope, saddle pair. Wave 2 (convergent): workflow engine, real driver, end-to-end fakes, real work; the **spine** role owns integration and contract adjudication. Width bounded by review bandwidth. **Each wave's exit includes a fresh-context adversarial review by an agent given only the repository and documents, never this design history.** The issue protocol lives in AGENTS.md's Coordination section; the 1A backlog doubles as elaborator fixtures.
+Contracts and fakes are the coordination mechanism; CI keeps lanes honest. Wave 0 (serial): module, dual-platform CI, domain package, schema and migrations, outbox, interfaces, fakes, provisional API schema; domain/migration PRs exclusive; shared-interface changes are `kind:contract`. Wave 1 (parallel lanes): signet, gauntlet, publish, ward, saddle pair. Wave 2 (convergent): workflow engine, real driver, end-to-end fakes, real work; the **spine** role owns integration and contract adjudication. Width bounded by review bandwidth. **Each wave's exit includes a fresh-context adversarial review by an agent given only the repository and documents, never this design history.** The issue protocol lives in AGENTS.md's Coordination section; the 1A backlog doubles as elaborator fixtures.
 
 ### Phase 2: breadth and hardening
 
@@ -338,7 +338,7 @@ Held from revision 6 (abbreviated): daemon owns workflow state, clients thin; Gi
 
 New in revision 7 (decider in parentheses):
 1. **Candidate-automation policy**: automation-control paths publish-blocking in the ordinary workflow; trust profiles attest effective PR-job authority (implicit token, OIDC, environments, reusable/composite actions, artifact-consuming privileged jobs); new safety-failure entries. (Review 6.)
-2. **Post-agent workspace handoff is a named capability set and the first envelope implementation gate**, proven against the actual runtime; the same-VM fallback is a declared weaker class, never described as fresh-context. (Review 6.)
+2. **Post-agent workspace handoff is a named capability set and the first ward implementation gate**, proven against the actual runtime; the same-VM fallback is a declared weaker class, never described as fresh-context. (Review 6.)
 3. **provider_web_read reclassified as a materially wider credential-exfiltration mode**; the 1B elaborator default is **daemon-fetched, digest-addressed research artifacts** via typed fetch requests, chosen from the review's options for security plus provenance and reproducibility. (Review 6; option selection this revision.)
 4. **Secret-scanning language corrected to best-effort supported-format scanning** with provenance and publication controls for opaque artifacts. (Review 6.)
 5. **Auth-store mutation leases separated from inference concurrency**; max_parallel_executions established experimentally in 1B and exposed to scheduling. (Review 6.)
@@ -351,6 +351,7 @@ New in revision 7 (decider in parentheses):
 12. **1A formalized into internal exits 1A.0/1A.1/1A.2**, with the handoff gate investigated early but blocking only 1A.2. (Review 6.)
 13. **The first repository is deliberately boring, not Freeside**; Freeside becomes the bootstrap test after the path works. (Review 6; reverses this conversation's earlier self-hosting instinct.)
 14. **The classifier is never sole gatekeeper of the shadow safety override**: raw critical/high claims get a second adjudication or an attention item regardless of classifier confidence. (This revision, sharpening review 6.)
+15. **Naming amendment: the runner subsystem is the ward** (formerly envelope, which broke register with signet/gauntlet/daemon and greps poorly against message/HTTP-envelope vocabulary); the generative naming rule is restated as the binding-and-summoning register with mundane surface readings, replacing the riding-tack line, which no longer described practice. The flight-envelope concept survives as explanatory prose only. (User.)
 
 ## 14. Risks
 
@@ -358,4 +359,4 @@ Provider-credential exposure in subscription_contained (documented; egress floor
 
 ## 15. Naming and references
 
-**Freeside** (freeside.ai, github.com/freeside-ai); *free as in bird*; category line "an agent control plane"; self-brand "the harness runs the agent; the reins are yours." Subsystems: the **envelope** (runner, handoff, and safety boundary), the **signet** (attention and approval service), the **gauntlet** (export, import, and verification path, including the evidence channel); daemon **freesided**; the internal naming system is riding tack (rein appears only in brand and policy vocabulary). Reference shelf: Anthropic devcontainer/Agent SDK/credential docs; OpenAI Codex SDK, sandbox design, cloud review docs; GitHub Actions security hardening docs (token permissions, OIDC, pull_request_target); Apple container docs and issue tracker; SQLite online backup and WAL durability docs; Litestream; Antfarm, Nimbalyst, Conductor, Gas Town/Beads (cautionary); agentclientprotocol.com (Phase 3).
+**Freeside** (freeside.ai, github.com/freeside-ai); *free as in bird*; category line "an agent control plane"; self-brand "the harness runs the agent; the reins are yours." Subsystems: the **ward** (runner, handoff, and safety boundary), the **signet** (attention and approval service), the **gauntlet** (export, import, and verification path, including the evidence channel); daemon **freesided**; subsystem names come from the binding-and-summoning register: rare single-metaphor tokens with mundane surface readings (ward, signet, gauntlet, daemon); code takes functional names; rein appears only in brand and policy vocabulary. Reference shelf: Anthropic devcontainer/Agent SDK/credential docs; OpenAI Codex SDK, sandbox design, cloud review docs; GitHub Actions security hardening docs (token permissions, OIDC, pull_request_target); Apple container docs and issue tracker; SQLite online backup and WAL durability docs; Litestream; Antfarm, Nimbalyst, Conductor, Gas Town/Beads (cautionary); agentclientprotocol.com (Phase 3).
