@@ -80,3 +80,10 @@ decision (plan §11); nothing in this scope touches it.
 - Coherence grep over touched surfaces for `§4.x`, `Phase 0`, and
   `pipelines/` residue; remaining hits are only in `api/`, `images/`
   (deliberately untouched) and devlog archaeology (frozen).
+- The touched-surfaces sweep boundary proved too narrow: Codex (P2)
+  caught `docs/decisions/README.md` still pointing its ADR seed at
+  plan §9 (v1's decisions log; §13 in v4). Fixed on merits despite
+  the leave-as-is instruction (read as structural, not
+  keep-dead-links), and the cross-reference sweep widened repo-wide:
+  every `docs/plan.md` § reference outside `api/`, `images/`, and
+  frozen devlog entries now validates against v4's header list.
