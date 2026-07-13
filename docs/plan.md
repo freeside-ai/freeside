@@ -215,7 +215,7 @@ Per-active-resource state reconciliation with conditional requests; intake scann
 
 ### 5.12 Workflow definition, initiators, and artifacts
 
-Go state machine; YAML is policy only; crash retries separate from remediation. **Budget clocks are three, not one: active-compute budgets (unprefixed: per stage attempt; run_active prefix: whole run), an elapsed deadline for abandoned workflows, and waiting thresholds that raise a consolidated blocked item rather than terminating** (a run waiting overnight on a reviewer must not burn compute budget). review.hard_wall_time counts active review/remediation time, not calendar waiting.
+Go state machine; YAML is policy only; crash retries separate from remediation. **Budget clocks are three, not one: active-compute budgets (stage_active_time: per stage attempt; run_active_compute_time: whole run), an elapsed deadline for abandoned workflows, and waiting thresholds that raise a consolidated blocked item rather than terminating** (a run waiting overnight on a reviewer must not burn compute budget). review.hard_active_time counts active review/remediation time, not calendar waiting.
 
 ```yaml
 project:        {repository: freeside-ai/<first-repo>, rein: tight}
