@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 4
+revision: 7
 status: active
 phase: 1A
 updated: 2026-07-13
@@ -18,72 +18,77 @@ updated: 2026-07-13
 
 Category: **an agent control plane.** Harnesses (Claude Code, Codex) run the agent's inner loop; Freeside is the outer loop: it decides what work starts, inside what boundary, with which credentials withheld, what counts as done, when a human is interrupted, and what survives a crash. The self-brand register: *the harness runs the agent; the reins are yours.*
 
-The system runs on a Mac Studio acting as a permanent runner (reference deployment; Linux is a supported deployment class, Section 3.3). A work item (a labeled issue discovered by an intake scanner, a scan-proposed candidate, or a hand-approved spec) flows through a staged workflow: elaboration to a spec; spec approval in my attention inbox; implementation in an isolated workspace holding no GitHub credentials; a hostile import boundary into a fresh checkout; deterministic verification under a trusted recipe in a clean workspace; daemon-side publication under an audited trust profile; yield-driven independent review with capped emergency brakes; a ready-for-final-review item on my phone with mechanical evidence. I review and merge on GitHub. The attention inbox is part of the control system: a daemon-owned domain model with lifecycle, staleness, synchronization, and concurrency rules. GitHub owns code and review; Freeside owns workflow execution and approvals.
+The system runs on a Mac Studio (the supported reference deployment; the daemon core is Linux-portable, Section 3.3). A work item (a labeled issue discovered by an intake scanner, a scan-proposed candidate, or a hand-approved spec submitted through the manual initiator) flows through a staged workflow: elaboration to a spec, over daemon-fetched research artifacts; spec approval in my attention inbox; implementation in an isolated workspace holding no GitHub credentials; export across a proven post-agent workspace handoff and an out-of-process hostile import boundary into a fresh checkout; deterministic verification, including evidence capture, under a trusted recipe in a clean workspace; daemon-side publication under an audited trust profile; yield-driven independent review with emergency brakes; a ready-for-final-review item on my phone with mechanical evidence. I review and merge on GitHub. The attention inbox is part of the control system: a daemon-owned domain model with lifecycle, staleness, synchronization, and concurrency rules. GitHub owns code and review; Freeside owns workflow execution and approvals.
 
 Freeside is justified entirely as a personal-leverage tool; the metric is personal net leverage after maintenance. The usefulness of agent elaboration, implementation, and iterative review is established by my current manual workflow. **The open question is whether that workflow can become a safe, durable, low-attention system without moving the danger into provider credentials, CI, artifact import, stale approvals, or interruption creep.**
 
-Success claims: (1) **attention reduction** against a passively logged baseline; (2) **decision quality preserved** (right moments, decidable evidence, no stale actions); (3) **safety invariants hold** (Section 12); (4) **autonomy preserved** (exceptional-interruption rate stays low and trends down, Section 3.2).
+Success claims: (1) **attention reduction** against a passively logged baseline; (2) **decision quality preserved**; (3) **safety invariants hold** (Section 12); (4) **autonomy preserved** (exceptional-interruption rate stays low and trends down, Section 3.2).
 
 ## 2. Goals and non-goals
 
 ### Goals
 
-1. **Attention routing as a first-class system**: durable AttentionItems with lifecycle, type-specific actions, optimistic concurrency, cross-device synchronization, push notification, self-contained decision cards, on iPhone and Mac.
-2. **Elaboration in the tested value proposition**, severable: entry from a raw issue or a hand-approved spec; elaborator weakness degrades the entry point, never the loop. (Decider: user.)
-3. **Autonomous initiation**: initiators (manual, label, scan) map event sources to workflow entries under propose or auto_start modes, so Freeside drives loops, not only reacts to them. (Restored in revision 4; Section 5.12.)
-4. **Yield-driven review remediation** matching the validated manual process; round counts are emergency brakes only.
-5. **Bounded execution isolation**: capabilities fixed at spawn, no GitHub credentials in any workspace, declared per-run credential modes, hostile import boundary, trusted verification recipes.
-6. **CI privilege containment**: agent-authored code never reaches secret-bearing or privileged CI without an audited trust profile or an explicit gate.
+1. **Attention routing as a first-class system**: durable AttentionItems with lifecycle, type-specific actions, optimistic concurrency, cross-device synchronization, per-delivery tracking with honest status semantics, push notification, self-contained decision cards, on iPhone and Mac.
+2. **Elaboration in the tested value proposition**, severable, over **daemon-fetched research artifacts** (Section 5.4). (Decider: user.)
+3. **Autonomous initiation**: initiators (manual, label, scan) under propose or auto_start modes.
+4. **Yield-driven review remediation**; round counts are emergency brakes only.
+5. **Bounded execution isolation**: capabilities fixed at spawn, no GitHub credentials in any workspace, declared per-run credential modes, named per-stage egress profiles with honest risk classes, a **proven post-agent workspace handoff**, an out-of-process hostile import boundary, trusted verification recipes.
+6. **CI privilege containment**: agent-authored code never reaches secret-bearing or privileged CI, **and never modifies automation-control paths through the ordinary workflow**; trust profiles attest effective PR-job authority.
 7. **Remote operation from iPhone**; human role is judgment at gates plus final review and merge on GitHub.
-8. **Chat authors artifacts; the engine executes artifacts**; behavior lives in trusted versioned configuration.
-9. **Verification defines completion**, deterministically, under a trusted recipe, in a clean workspace.
-10. **Durability of decisions**: committed decisions survive restart; external effects converge (effectively-once); database and artifact store restore coherently; clients converge on daemon state.
-11. **Instrumentation sufficient for agent-driven optimization**: traces with stable join keys, outcome attribution, attention telemetry, sampled shadow reviews (Section 8).
-12. **Operational simplicity**: one-command setup, guided onboarding, self-diagnosis; targets in Section 10. (Decider: user.)
+8. **Chat authors artifacts; the engine executes artifacts.**
+9. **Verification defines completion**, deterministically, under a trusted recipe, in a clean workspace; visual evidence is captured by the verifier, never claimed by the implementer, with **machine-enforced provenance** (Section 5.15).
+10. **Durability of decisions**: committed decisions survive restart; external effects converge; database and artifact store restore coherently from complete, **encrypted** checkpoints; clients converge on daemon state.
+11. **Instrumentation sufficient for agent-driven optimization** (Section 8).
+12. **Operational simplicity as a 1A exit criterion**, automated only after the interfaces survive real use; privileged installation is a narrow elevation boundary, and the daemon never retains root. (Decider: user.)
 
 ### Non-goals
 
-1. Not an IDE; not a review surface (GitHub owns diffs and merge); no auto-merge, ever.
-2. Not a product: no multi-tenancy, billing, or hypothetical users. (Portability and simplicity are personal requirements that incidentally keep the open-source option real.)
+1. Not an IDE; not a review surface; no auto-merge, ever.
+2. Not a product: no multi-tenancy, billing, or hypothetical users.
 3. **Not a harness**: Freeside consumes vendor harnesses through their sanctioned batch interfaces and never owns a model loop.
-4. Not runtime self-modification: agents extend Freeside via ordinary reviewed PRs; control-plane config is never hot-modified.
-5. Not automatic provider fallback; not voice; not a pipeline DSL; not briefings or general project chat until earned.
-6. Not a formal pre-build validation study; not a generic CI security auditor (Phase 2 at most; 1A needs one reviewed profile plus drift detection).
-7. Not a general-purpose sync platform: server-authoritative snapshots suffice for one daemon and one user's devices.
+4. Not runtime self-modification; control-plane config is never hot-modified.
+5. Not automatic provider fallback; not voice; not a pipeline DSL; not briefings until earned.
+6. Not a formal pre-build validation study; not a generic CI security auditor.
+7. Not a general-purpose sync platform: server-authoritative snapshots suffice; no client-facing event log, no CRDTs.
 
 ## 3. Operating principles
 
 ### 3.1 Autonomy inside the envelope
 
-Autonomy is the default; gates exist only at trust-boundary crossings and the two designed judgment points (spec approval, final review). Hardening must be invisible in the happy path: the importer, clean verifier, conformance tests, sync, and credential boundaries ask nothing of anyone. **Any gate that fires repeatedly for the same reason is a bug in policy, not a fact of life.**
+Autonomy is the default; gates exist only at trust-boundary crossings and the two designed judgment points. **Repeated exceptional interruptions trigger a policy review; eligible low-risk repetitions may produce a policy-change proposal; safety invariants and non-waivable gates never auto-promote or offer bypass.** Non-waivable classes: GitHub credential separation; CI trust-profile validity; candidate automation-control and reviewer-instruction changes; control-plane modifications; stale-approval rejection; failed runner conformance (including the workspace-handoff gate); host reachability; artifact integrity failures; secret detection; capability escalation outside approved manifests.
 
 ### 3.2 The interruption budget
 
-Every AttentionItem is tagged **planned_gate** or **exceptional**. The exceptional rate per run is a tracked health metric; a rising rate is treated as a defect to fix (tune policy, extend an allowlist, promote a preference), never as the new normal. **Self-service rule:** every recurring item type must offer a path that resolves the class, not the instance (the convert-preference-to-policy action is the prototype; a gate satisfied the same way three times should offer to become policy, via the control-plane proposal path). The **rein posture** is the maturity dial: per-repo `rein: tight | loose` maps to propose-versus-auto initiation and gate strictness, loosening as trust accumulates, including eventually waiving spec approval for policy-defined low-risk change classes. Known hot spot, accepted: Freeside's own repo routinely touches control-plane paths, so a disproportionate share of its PRs carry the control-plane approval class; that is the correct cost where poisoning matters most.
+Every AttentionItem is tagged planned_gate or exceptional; the exceptional rate is a tracked health metric and a rising rate is a defect to fix, subject to 3.1. **Self-service rule:** recurring eligible classes must offer a path resolving the class, always via the control-plane proposal path. **Rein is a convenience preset, never a security dial**: it expands into explicit resolved policy at run creation, stored with digest and per-key provenance; explicit keys override preset defaults visibly. Known hot spot, accepted: Freeside's own repo routinely touches control-plane paths.
 
 ### 3.3 Portability
 
-macOS is the reference deployment; **Linux is a supported deployment class.** The daemon core takes no Apple-only dependencies; runner backends are per-platform implementations of the capability-classed interface (Apple container on macOS; Firecracker/Kata as VM-per-job class and Docker as the weaker class on Linux); launchd/systemd and dedicated-user setup are per-platform equivalents. **Enforcement: the daemon's own CI builds and tests on Linux from day one**, making portability continuously verified rather than aspirational. Cloud deployment notes: provider subscription credentials on a cloud host add exposure (host snapshots, operator access) recorded in the residual-risk documentation; vendor trusted-runner guidance for subscription auth on a single-tenant VM is a verify item. Nothing is built for cloud until wanted. (Decider: user.)
+macOS is the supported reference deployment; the daemon core is Linux-portable and continuously built and tested on Linux from day one; Linux becomes supported only after one named distribution, architecture, and `linux_vm` backend pass the complete setup, conformance, execution, recovery, and upgrade suite. Cloud notes: provider credentials on a cloud host add exposure recorded in the residual-risk documentation. (Decider: user.)
 
 ### 3.4 Simplicity
 
-Setup, onboarding, and upkeep are designed features with targets (Section 10), not emergent properties. Defaults assume the common case; the strictest option must not gate first-run; the system diagnoses itself into the same inbox everything else uses. (Decider: user.)
+Setup, onboarding, and upkeep are designed features with committed targets (Section 10). Permissive first-run is the **attended_dev** operating mode (Section 5.7), honest, never a bypass. Strict settings gate **unattended** operation, always.
 
 ## 4. The attention model
 
-**AttentionItem**: id, project_id, run_id, type, priority, reason, requested_decision, evidence_snapshot (engine facts), agent_claims (labeled), artifact_digests, pr_head_sha, item_version, interruption_class (planned_gate | exceptional), conversation_id?, timing chain (created_at, notified_at, opened_at, decided_at), expires_when, status.
+**AttentionItem**: id, project_id, subject {subject_type: run | proposal_batch | project | system, subject_id, run_id?}, type, priority, reason, requested_decision, evidence_snapshot (engine facts; only verifier/daemon artifacts under an approved recipe, Section 5.15), agent_claims (labeled), artifact_digests, pr_head_sha, item_version, interruption_class, conversation_id?, derived timing aggregates, expires_when, status. Cards render image attachments directly from the artifact store by digest.
 
-**Phase 1 types and actions** (approve is not universal):
-- **spec_approval**: approve / request changes / discuss / stop. Full artifact rendering; a revised spec renders the complete current spec, a **diff against the last version reviewed**, and prior comments with claimed addressals.
-- **review_diminishing_returns**: finish now / apply current batch then finish / continue under specified policy / convert recurring preference into project policy (**emits a policy-change proposal PR through the control-plane path; never mutates policy directly**).
+**AttentionDelivery** (per attempt): item_id, device_id, channel, attempt, **submitted_at, channel_accepted_at, opened_at**, delivery_status. A channel provider's acceptance is never called "delivered"; only a real device-level receipt earns stronger language. The product metric is open-to-decision time. Item timing fields are aggregates derived from deliveries.
+
+**Phase 1 types**: spec_approval, execution_failure, agent_question, review_diminishing_returns, review_dispute, ready_for_final_review, publish_blocked, run_proposal, system_health, plus a consolidated **blocked** item for external-wait thresholds (Section 5.12).
+
+**Actions** (approve is not universal):
+- **spec_approval**: approve / request changes / discuss / stop. Full rendering; revisions show the diff against the last version reviewed and prior comments with claimed addressals.
+- **review_diminishing_returns**: finish now / apply current batch then finish / continue under specified policy / convert recurring preference into project policy (proposal PR; never mutates policy).
 - **review_dispute**: adjudicate finding / discuss / stop.
-- **execution_failure**: retry / retry with a **predefined, policy-allowed capability manifest** (the phone never authors capabilities) / discuss / stop.
+- **execution_failure**: retry / retry with a predefined, policy-allowed capability manifest / discuss / stop.
 - **agent_question**: answer and retry / answer without retry / stop.
 - **publish_blocked**: rerun trust evaluation / choose an approved alternate publication profile / inspect trust failure / stop.
-- **ready_for_final_review**: open PR (**navigation, not resolution**; the item remains active until GitHub reports merge or close, work is returned to the agent, or it is explicitly dismissed; reconciliation auto-resolves on observed merge) / return to agent with feedback / acknowledge / stop.
-- **run_proposal** (initiators, Section 5.12): start / start with changes / decline / snooze; batched, never one ping per finding.
+- **ready_for_final_review**: open PR (navigation, not resolution) / return to agent with feedback / mark_seen / dismiss / stop. Active until merge/close is observed, work is returned, or dismissal.
+- **run_proposal**: start / **start with changes** (user changes produce a revised proposal artifact; the original item is superseded; a new item version is created; the run starts from the exact revised digest, never from unversioned ad hoc parameters) / decline / snooze; batched under a proposal_batch_id with per-candidate decisions.
+- **system_health**: acknowledge (**means seen, never resolved**) / run doctor / stop unattended operation. A system_health item remains blocking until the underlying diagnostic clears, unattended operation is explicitly stopped, or a new validated configuration supersedes the condition.
 
-**Lifecycle:** approvals bind to digests and head SHA; changed inputs invalidate; retries supersede failures; resolutions are transactional and version-checked; stale submissions receive a conflict plus the replacement item. **Notifications are read-only hints** (no sensitive payloads, no actions); the app fetches current state and submits version-bound decisions. **Fault-class capture:** adjudications and returned work record a fault class (bad_spec | bad_implementation | reviewer_preference | environment | other) at the moment of judgment. Capacity: WIP caps on runs and initiatives; GitHub Projects is the passive all-work view; the inbox is exclusively needs-me.
+**Lifecycle:** approvals bind to digests and head SHA; changed inputs invalidate; retries supersede failures; resolutions are transactional and version-checked; stale submissions receive a conflict plus the replacement item. Notifications are read-only hints. Fault-class capture is suggested, one-tap corrected, unknown permitted. WIP caps on runs and initiatives; GitHub Projects is the passive all-work view.
 
 ## 5. Architecture
 
@@ -93,188 +98,229 @@ Setup, onboarding, and upkeep are designed features with targets (Section 10), n
 GitHub (source, issues, PRs, reviews, checks, merge; Codex cloud review)
    │  per-resource reconciliation + intake scanners (no global cursor)
    ▼
-freesided (Go daemon; launchd/systemd; dedicated user)
+freesided (Go daemon; launchd/systemd; dedicated user; never root)
    ├─ event inbox: reconciled state, intake scanners, cron, manual (idempotent)
-   ├─ workflow engine: code-defined state machines; policy from config
-   ├─ signet (attention service): items, conversations, sync, devices, ntfy
+   ├─ workflow engine: code-defined state machines; policy from config;
+   │   resolved rein policy digested per run; active/elapsed/waiting clocks
+   ├─ signet: items, deliveries, conversations, sync, device pairing, ntfy
+   ├─ research fetcher: daemon-fetched, digest-addressed research artifacts
    ├─ StageDriver: Claude batch execution (+ permanent fake driver)
    ├─ ReviewSource: CodexGitHubReview (+ permanent fake source)
    ├─ finding classifier: annotations over immutable raw findings
-   ├─ envelope (runner layer): capability classes + fail-closed conformance
-   ├─ gauntlet: hostile importer -> fresh checkout -> clean verifier (recipe)
-   ├─ git/publish service: owns ALL GitHub credentials; deterministic identities
-   ├─ store: SQLite (authoritative) + inbox/outbox + content-addressed
-   │   artifact store; coherent backup invariant (5.10)
-   └─ sync API: snapshots + revision/epoch + invalidations (Tailscale-private)
+   ├─ envelope: capability classes incl. workspace-handoff capabilities;
+   │   per-stage egress profiles; attended_dev|unattended; conformance
+   ├─ gauntlet: OUT-OF-PROCESS worker (export normalization, hostile import,
+   │   evidence validation) -> fresh checkout -> clean verifier (recipe,
+   │   evidence capture)
+   ├─ git/publish: owns ALL GitHub credentials; deterministic identities;
+   │   invocation-ID reconciliation; EvidencePublisher (1B)
+   ├─ store: SQLite (WAL, synchronous=FULL) + inbox/outbox + content-
+   │   addressed artifact store; encrypted checkpointed backups (5.10)
+   └─ sync API: atomic snapshots + revision/epoch + invalidations
    ▲
    ▼
-Freeside app (SwiftUI, macOS + iOS): inbox, decision detail, run timeline
+Freeside app (SwiftUI, macOS + iOS): inbox, decision detail, run timeline;
+   platform-protected caches (5.14)
 ```
 
 ### 5.2 The daemon
 
-Go, single static binary, supervised (launchd/systemd), dedicated user, state and credentials inaccessible to other accounts, privileged services bound to loopback/Tailscale only. Rationale: appliance fit (static deployment, stdlib strength, subprocess support, explicit concurrency, supply-chain restraint, compatibility culture). Reliability from process boundaries around drivers, worker-boundary recovery, supervision restarts, durable state, idempotent external operations. Agent-maintenance compensations: small packages, table-driven tests, golden-file JSON tests, AGENTS.md conventions. CI builds and tests on macOS and Linux.
+Go, single static binary, supervised, dedicated user, state and credentials inaccessible to other accounts, privileged services bound to loopback/Tailscale only. **The daemon never runs as root; one-time privileged installation steps (user creation, launchd installation) live in a narrow elevation helper.** SQLite: WAL, synchronous=FULL, foreign_keys=ON, configured busy_timeout. CI builds and tests on macOS and Linux; macOS jobs stay lean.
 
 ### 5.3 Execution: StageDriver and ReviewSource
 
-Stages are bounded batch jobs (immutable inputs, workspace, typed outputs, exit).
+Stages are bounded batch jobs. Every external start takes a daemon-generated invocation_id and is reconcilable by it (start/inspect/stream/cancel/collect; request_review/inspect/poll/verify). **Guarantee: one committed invocation intent and at most one accepted result; the workflow never advances twice.**
 
-```
-StageDriver:  start(StageRequest) -> run_id;  stream(run_id) -> events
-              cancel(run_id);  collect(run_id) -> StageResult;  capabilities()
-ReviewSource: request_review(pr, head_sha) -> review_request_id
-              poll(review_request_id) -> raw_findings
-              verify(raw_finding) -> bool   # actor, head SHA (commit_id
-                                            # binding), request id, freshness
-```
+Phase 1: one local driver (**Claude**); one primary review source (**CodexGitHubReview**); permanent fakes of both. The 1B shadow-review arm is a Claude-driver review stage (fresh context, same head; findings recorded, never routed), doubling as the local-reviewer dry run. **Review triggering is exclusively control-plane** (decider: user); fail-closed to an attention item. Factual grounding: nested AGENTS.md reviewer guidance is documented Codex behavior; auto-re-review of remediation heads is a standing 1B integration test; the Claude setup token's inference-only scope is contract-tested against the pinned CLI.
 
-Phase 1: one local driver (**Claude**, non-interactive / Agent SDK worker, auth mode as config); one review source (**CodexGitHubReview**, the trusted cloud reviewer from the manual workflow; keeps Codex auth out of local workspaces; local reviewer is the Phase 2 hedge). **Permanent fake implementations of both are first-class test fixtures**, reproducing crashes, delays, duplicate outputs, stale heads, malformed artifacts, and pathological review patterns without provider spend. ACP is not an execution interface; it returns in Phase 3 for interactive attachment.
+**Session durability contract:** transcripts and artifacts durably recorded; workflow recovery guaranteed from stage inputs, workspace state, and artifacts; provider resume best-effort. Capabilities fixed at spawn; insufficiency means a typed request and exit.
 
-**Review triggering is exclusively control-plane** (decider: user): the ReviewSource is the only component with a code path to review requests; no implementation-side path may request, suppress, or re-trigger review. Preference: repo-configured auto-review (declarative, digest-audited in the trust profile); framework-issued re-requests after remediation pushes if auto-review does not cover new heads (minimal templated text, never agent-authored content: a submitter-composed trigger is an injection channel). Fail-closed: unconfirmed review becomes an attention item; review is never silently skipped. 1B verify items: auto-review coverage of remediation heads; Codex's exact instruction-file discovery behavior (policy in 5.8 lands regardless).
+### 5.4 Credential modes, egress profiles, and concurrency
 
-**Session durability contract:** transcripts and artifacts durably recorded; workflow recovery guaranteed from stage inputs, workspace state, and artifacts; provider resume best-effort; a dead unattended process means clean retry, snapshot resume, or escalation. **Capabilities fixed at spawn**; insufficiency means a typed request and exit; interactive sessions (Phase 3) never grant capabilities.
+**No GitHub write credential ever enters any workspace.**
 
-### 5.4 Credential modes
+**Credential modes** (declared, recorded, per run): **subscription_contained** (Phase 1 default; native vendor CLI in the agent VM; read-only credential mount where permitted; exposure accepted as documented residual risk), **api_key_isolated** (Phase 2, supported), **local_trusted** (explicitly trusted inputs only). **Export scanning is stated honestly: best-effort secret scanning of supported textual formats, with size, type, provenance, and publication controls for opaque artifacts** (universal detection across arbitrary encodings and images is impossible; Section 5.15 carries the image residual).
 
-**No GitHub write credential ever enters any workspace.** The git/publish service owns the App key and installation tokens and performs every mutation after gauntlet validation. Provider credentials run in a declared, recorded, per-run mode; project policy states acceptable modes:
+**Egress profiles** are per-stage control-plane policy over the credential-mode floor, and their risk classes are distinct, not interchangeable:
+- `provider_only` (default): provider-API reachability, nothing more.
+- `provider_web_read`: **a materially wider credential-exfiltration surface, not the same residual as provider_only** (read-only HTTP still exfiltrates via URLs, headers, bodies, redirects, DNS while the provider credential shares the trust domain). Permitted only when explicitly recorded as the wider exposure, against a small trusted-domain allowlist.
+- Clean verification workspaces have no network.
 
-- **subscription_contained** (Phase 1 default): native vendor CLI in the agent VM; provider-only egress; no registries at runtime (dependencies baked); read-only credential mount where permitted; secret scanning on every exported byte; **exposure accepted as documented residual risk.** (Setup-token scope claims: verify during 1A.)
-- **api_key_isolated** (Phase 2, supported): key in a trusted broker; mediated access; usage billing.
-- **local_trusted**: dedicated-account tooling for explicitly trusted inputs; never represented as isolated.
+**The 1B elaborator default is neither: the daemon fetches research.** The elaborator runs provider_only; it emits typed fetch requests; the daemon's research fetcher retrieves URLs through its own allowlist and returns **immutable, digest-addressed research artifacts**; the elaborator is re-invoked with them (bounded iterations). This removes the credential-exfiltration surface from the injection-exposed stage and gives research inputs provenance, caching, and reproducibility (invocations bind to artifact IDs, not live web state).
 
-Native unmodified vendor tooling; terms confirmed during 1A; **provider-level concurrency leases** serialize each auth identity; API-key fallback always available.
+**Provider concurrency is two controls, not one** (AuthIdentity {auth_store_mutation_lease, max_parallel_executions, refresh_strategy, supports_read_only_auth_snapshot}): auth-store mutation (refresh, login-state, config writes, store replacement) is serialized per identity; inference execution parallelism is a separate limit **established experimentally in 1B and exposed to WIP scheduling**. If the safe answer is one concurrent execution, that is a visible scheduling constraint, not a hidden lock. API-key fallback always available; native unmodified vendor tooling.
 
 ### 5.5 The CI trust boundary
 
-Tokens out of workspaces does not protect CI: pushed agent branches can execute agent-modified scripts inside secret-bearing Actions jobs, and same-repo branch PRs lack fork-style restrictions. Every onboarded repository carries an **automation trust profile** (pr_execution: audited_same_repo | fork_untrusted | local_only; allow_self_hosted_ci; allow_secret_bearing_pr_jobs; allow_pull_request_target; workflow_audit_digest; review: {mode, config_digest}). Default for owned repos: **audited_same_repo**. **1A scope: one repository's machine-readable profile, reviewed manually once, with deterministic drift detection failing closed**; the generalized auditor is Phase 2 material, and static inspection can never fully prove workflow safety, so drift-detection-plus-fail-closed is the durable mechanism. Fail-closed: unaudited repo means local implementation and verification complete, publish gated behind publish_blocked. **Standing prohibition:** the daemon host is never a self-hosted Actions runner for any managed repo.
+Pushed agent branches can execute agent-modified scripts inside privileged Actions jobs; same-repo branch PRs lack fork-style restrictions; **a job's implicit GITHUB_TOKEN and OIDC identity are authority even when no secret is named in YAML.** Every onboarded repository carries an **automation trust profile**:
 
-### 5.6 The gauntlet: hostile import and clean verification
+```yaml
+repository_security:
+  pr_execution: audited_same_repo | fork_untrusted | local_only
+  candidate_automation_changes: block        # .github/workflows/**,
+                                             # .github/actions/**, action.y*ml,
+                                             # CI entrypoints: publish-blocking
+                                             # in the ordinary workflow; routed
+                                             # through control-plane change
+  pr_github_token_permissions: read_only
+  allow_oidc: false
+  allow_environment_secrets: false
+  allow_secret_bearing_pr_jobs: false
+  allow_self_hosted_ci: false
+  allow_pull_request_target: false
+  workflow_audit_digest: sha256:...
+  review: {mode: auto | framework_triggered, config_digest: sha256:...}
+```
+
+The audit attests **effective PR-job authority**: effective GITHUB_TOKEN permissions, OIDC availability, environment and deployment credentials, reusable workflows, local composite actions, self-hosted runners, package-publishing permissions, and any workflow consuming artifacts produced from untrusted PR code. 1A scope: one repository's machine-readable profile, reviewed manually once, digest-bound, drift fails closed. **Standing prohibition:** the daemon host is never a self-hosted Actions runner for any managed repo.
+
+### 5.6 The gauntlet: workspace handoff, import, and clean verification
 
 ```
 daemon-owned base repo ──exact base SHA──▶ agent workspace
-agent workspace ──patch / constrained bundle + typed manifest──▶ importer
-importer ──validated──▶ fresh daemon-owned checkout (hooks disabled)
-fresh checkout ──▶ clean verification workspace (no credentials, no network)
+agent exits ──▶ POST-AGENT WORKSPACE HANDOFF (5.7 gate): credential-bearing
+   execution context terminated; workspace mounted READ-ONLY in a fresh
+   credential-free context
+export helper emits content blobs + normalized change manifest + evidence
+manifest ──▶ gauntlet worker (unprivileged, out of process) validates
+gauntlet ──▶ fresh daemon-owned checkout; daemon authors a clean commit
+fresh checkout ──▶ clean verification workspace (no credentials, no network;
+   trusted recipe runs checks and captures evidence)
 verified candidate ──▶ git/publish ──▶ GitHub PR (under trust profile)
 ```
 
-The importer never trusts the workspace's .git, hooks, git config, symlinks/hardlinks, device files, archives, submodules, modes, or agent-written manifests; enforces base SHA, ancestry and count bounds, canonical paths, type/mode allowlists, size limits, control-plane path restrictions (5.8), secret scanning, no shell interpolation, restricted git protocols, daemon-generated manifests. **Malicious artifact fixtures are permanent suite members.**
+Two channels leave the workspace and never mix: the **repo-change manifest** (regular files only; symlink, submodule, special-file, unusual-mode, **automation-control (5.5), and reviewer-instruction (5.8) changes are publish-blocking**) and the **evidence channel** (typed artifacts with provenance, 5.15). The daemon authors its own clean commit; the importer never trusts workspace .git, hooks, config, or agent-written manifests; enforces base SHA, canonical paths, allowlists, size limits, control-plane restrictions, best-effort secret scanning per 5.4. Malicious manifest, blob, and evidence fixtures are permanent suite members. **Trusted verification recipes** load only from approved control-plane config or the trusted base commit; verification-control file changes are mechanically identified, risk-flagged, and gated. Named residual: candidate test code executes inside the contained verifier envelope.
 
-**Trusted verification recipe** (clean rooms are insufficient alone, since a candidate that weakens the Makefile makes the clean VM faithfully execute hollow verification): VerificationRecipe {config_digest, runner_image_digest, commands, trusted_wrapper_digest, network_policy, timeout, expected_outputs, sensitive_control_paths} loads from approved control-plane config or the trusted base commit, never the implementation head. First repo prefers direct tool invocations (go test ./..., go vet ./...) over mutable project wrappers. Changes to verification-control files are mechanically identified, risk-flagged, invalidate prior-recipe assumptions, and gate when they can weaken or redirect verification; they are reviewed as part of the candidate, never trusted as its judge. Evidence records exact command, image digest, environment digest, exit status, immutable log. **Named residual:** candidate-authored test code still executes in the verifier VM; the recipe protects verification's judgment, while the verifier's credential-free, network-free envelope contains its execution. Both halves are required.
+### 5.7 The envelope: runners, handoff gate, and operating modes
 
-### 5.7 The envelope: runners
+Backends declare capabilities; policy states minimums; no silent downgrade. **New named capabilities: supports_detachable_workspace, supports_post_exit_export, supports_read_only_remount, supports_credential_volume_detach, supports_workspace_snapshot.** **The first envelope implementation gate:** write files in an agent workspace, terminate the credential-bearing execution context, mount the workspace read-only in a fresh credential-free context, and export it without exposing provider credentials, daemon state, or host credentials, proven against the actual runtime (candidate mechanisms: detachable volume, host-controlled block image, snapshot/export, separate export VM). **The honest fallback** (terminate the agent process, detach credentials, export in the same VM) **is a different, weaker isolation class, declared as such, never described as fresh-context handoff.**
 
-Backends declare capabilities (isolation class, VM-per-job, private networking, snapshots, read-only root, resource limits, egress-proxy support); policy states minimums; **no silent downgrade**, but first-run may accept a weaker declared class with the conformance suite reporting exactly what class is running (Section 10). Primary backends: Apple container (macOS), Firecracker/Kata (Linux VM-class), Docker (weaker class, both platforms). **Fail-closed conformance at startup and before unattended runs**: internet unreachable except via the intended proxy; daemon API, Tailscale services, host gateways, databases, artifact storage, and control sockets unreachable from the VM; DNS and IPv6 cannot bypass policy; refuse to run on failure. VM boundary treated as filesystem/kernel isolation, not proven network isolation; host hardening applies regardless. Golden images pin CLIs and toolchains; workspaces on VM-local disk; artifacts ship out at stage end. **Bootstrap exception:** the Go daemon builds itself through Freeside; SwiftUI work is exempt until a macOS execution class exists (deferred, possibly forever).
+**Operating modes:** **attended_dev** (weaker runner class permitted; auto_start, automatic publication, and unattended escalation disabled; honest isolation claims) and **unattended** (conformance success including the handoff gate, valid trust profile, approved credential mode, runner minimums, current backup health including encryption status, no blocking system_health item). Conformance cadence: full suite at startup, after configuration changes, and on doctor's schedule; lightweight probe before each unattended job. Golden images pin CLIs; workspaces on VM-local disk. Bootstrap exception: SwiftUI work is exempt until a macOS execution class exists.
 
 ### 5.8 Control-plane trust
 
-Workflow config, prompts, policy, trust profiles, verification recipes, and materiality rules load **only from an approved default-branch commit**; running stages snapshot trusted-config digests; workspace copies are data. **Vendor auto-loaded instructions are control-plane**: local agents get trusted-base overlays of all agent configuration (CLAUDE.md, .claude/*, .mcp.json, .codex/*, hooks, plugins; project MCP/hooks/plugins/skills disabled unless allowlisted); agent-modified instruction files are ordinary diff content, always risk-flagged. **Reviewer-instruction poisoning (blocking):** cloud reviewers read instruction files from the candidate branch (nested AGENTS.md included), so for the ordinary workflow, **adding or modifying any reviewer-instruction path (AGENTS.md at any depth, AGENTS.override.md, .codex/**, and peers) is publish-blocking**; such changes route through the control-plane change workflow with human approval before publication or before relying on cloud review; **auto-review is not independent review for a PR that modifies the instructions governing it.** Detection covers nested paths mechanically in the importer.
+Workflow config, prompts, policy, egress profiles, trust profiles, verification recipes, and materiality rules load only from an approved default-branch commit; running stages snapshot trusted-config digests; workspace copies are data. Vendor auto-loaded instructions are control-plane: trusted-base overlays; agent-modified instruction files are diff content, always risk-flagged. **Reviewer-instruction poisoning (blocking):** any reviewer-instruction path (AGENTS.md at any depth, AGENTS.override.md, .codex/**, peers) is publish-blocking in the ordinary workflow; **auto-review is not independent review for a PR that modifies the instructions governing it.** Detection is mechanical in the gauntlet.
 
 ### 5.9 Durability: effectively-once
 
-Authority: GitHub owns source/issues/PRs/reviews/checks/merge; **SQLite owns workflow state, gate decisions, attempts, event processing, routing, conversations, audit**; the artifact store owns immutable stage inputs/outputs; providers hold transient session state; repo docs hold promoted decisions. External actions use an **inbox/outbox** (state + intent + idempotency key in one transaction; worker acts and records). Claim: **committed workflow decisions survive restart, and external effects converge to one intended result through deterministic identities, reconciliation, and bounded retry** (run-derived branch names, hidden PR run markers, check-before-create, marker-updated comments, expected-state records, reconciliation after ambiguous timeouts). Kill-before/kill-after tests are permanent.
+Authority: GitHub owns source/issues/PRs/reviews/checks/merge; SQLite owns workflow state, decisions, attempts, events, routing, conversations, audit; the artifact store owns immutable inputs/outputs; providers hold transient session state; repo docs hold promoted decisions. Inbox/outbox on all external actions. **Committed workflow decisions survive restart; external effects converge to one intended result through deterministic identities, reconciliation, and bounded retry.** Kill-before/kill-after tests are permanent.
 
-### 5.10 Coherent backup invariant
+### 5.10 Coherent backup: encrypted checkpoints
 
-Blob writes: temp path → digest verify → fsync (file and directory) → atomic rename into the content-addressed store → **only then** the referencing SQLite row. Disaster recovery tracks ArtifactBackupState {replicated_through_revision, verified_at}; **a backup is restorable only when every artifact reachable from database state at that revision exists in replicated storage**; restore verifies every referenced digest before unattended work resumes. Rows referencing missing blobs: integrity failure, fail closed. Orphan blobs: safe, garbage-collected **subject to retention policy**. Small irreplaceables (conversation text, decisions) live in SQLite; large attachments, screenshots, patches, raw transcripts live in the artifact store. Any rollback restore issues a new client sync_epoch.
+Local ordering: blob → digest verify → fsync → atomic rename → referencing row. Missing referenced blobs fail closed; orphans GC per retention. **Restore points are complete checkpoints** (BackupCheckpoint {checkpoint_id, sync_epoch, server_revision, sqlite_snapshot_digest, artifact_manifest_digest, timestamps}; completion marker last; restore only from completed checkpoints; verify all digests before unattended work; new sync_epoch after rollback). **Confidentiality is policy** (BackupPolicy {encryption_mode, key_id, destination, retention_by_artifact_class, last_completed_checkpoint, last_restore_test}): remote checkpoints are encrypted; the key lives outside agent environments; backup credentials are never mounted into workspaces; **GitHub App keys and provider credentials are excluded from checkpoints** unless separately encrypted under a stronger recovery design, so a recovery may require reauthentication; raw transcripts have shorter retention than decisions, approved specs, and audit events; doctor checks checkpoint age, encryption status, artifact closure, and restore-test age. Encrypted backup is required before unattended mode touches private repositories with remote replication; a local-only development checkpoint may precede it.
 
 ### 5.11 GitHub integration: reconciliation plus intake
 
-Per-active-resource state reconciliation (issues, PRs, check runs, reviews) with conditional requests, modest intervals, refresh on app open. **Intake scanners discover new work** (reconciliation only tracks known resources): IssueIntakeScanner {repository, required_label, updated_since_with_overlap, issue_identity, last_completed_scan}, using overlap plus idempotent identity rather than trusting timestamps as perfect cursors. The scanner is the template all scan-class initiators follow. Webhooks are Phase 2, only if latency hurts, feeding the same event inbox; reconciliation remains mandatory.
+Per-active-resource state reconciliation with conditional requests; intake scanners discover new work (overlap plus idempotent identity). Webhooks are Phase 2, only if latency hurts.
 
 ### 5.12 Workflow definition, initiators, and artifacts
 
-The Phase 1 workflow is a Go state machine; YAML is policy only; crash retries are separated from review remediation:
+Go state machine; YAML is policy only; crash retries separate from remediation. **Budget clocks are three, not one: active-compute budgets (unprefixed: per stage attempt; run_active prefix: whole run), an elapsed deadline for abandoned workflows, and waiting thresholds that raise a consolidated blocked item rather than terminating** (a run waiting overnight on a reviewer must not burn compute budget). review.hard_wall_time counts active review/remediation time, not calendar waiting.
 
 ```yaml
 project:        {repository: freeside-ai/<first-repo>, rein: tight}
 initiators:
-  - {type: manual}
-  - {type: label, label: "freeside", mode: auto_start}
+  - {type: manual}                      # freesided submit --spec
+  - {type: label, label: "freeside",
+     mode: auto_start}                  # explicit, recorded preset override
   - {type: scan, query: stale_prs, schedule: daily, mode: propose}   # Phase 2
-elaboration:    {driver: claude, enabled: true}
-implementation: {driver: claude, failed_execution_retries: 2}
+elaboration:    {driver: claude, enabled: true, egress: provider_only,
+                 research: daemon_fetched}
+implementation: {driver: claude, failed_execution_retries: 2,
+                 egress: provider_only}
 review:
   source: codex_github
   continue_while: new_material_findings
   pattern_sweep_after: 2
   low_value_streak_before_attention: 2
-  hard_wall_time: 8h
-  hard_round_limit: 25            # emergency brakes only
-verification:   {recipe: trusted, commands: [go test ./..., go vet ./...]}
+  hard_active_time: 8h                  # active review/remediation clock
+  hard_round_limit: 25                  # emergency brakes only
+verification:   {recipe: trusted, commands: [go test ./..., go vet ./...],
+                 capture: none}
 gates:          {spec_approval: true, before_final_review: true}
-budgets:        {wall_time: 45m, max_diff_files: 40}
+budgets:        {stage_active_time: 45m,
+                 run_active_compute_time: 4h,
+                 run_elapsed_deadline: 7d,
+                 max_diff_files: 40}    # cumulative vs base
+waiting:        {checks_attention_after: 2h, review_attention_after: 4h}
 security:       {credential_mode: subscription_contained}
 telemetry:      {shadow_review_rate: 0.2}
 ```
 
-**Initiators** map event sources to workflow entries with mode auto_start or propose (propose emits batched run_proposal items). Deterministic queries where possible; agent triage only where judgment is required; initiators are control-plane config; auto_start is bounded by WIP caps and budgets; the conservative default is propose. 1A ships the manual initiator (the hand-approved-spec entry); 1B adds label; scan initiators arrive early Phase 2; **workflow chaining** (one workflow's output initiating another, e.g. bug-report triage feeding implementation) is Phase 2/4 horizon.
-
-**Findings and classification:** raw reviewer findings are **immutable**; classification (finding_id, head_sha, severity, category, pattern, materiality, scope, confidence, status) is a separate versioned annotation; classifier prompt/model changes are digest-traceable; **low-confidence materiality defaults to continuing or human attention, never dismissal; the classifier cannot declare a finding fixed.** Yield, not round count, ends review; classification accuracy is sampled telemetry; ceilings guard against label-driven misbehavior.
-
-Artifacts are typed, immutable, digest-addressed (type, schema version, digest, producing run/attempt, base/head SHAs, validator, retention, sensitivity); inputs reference artifact IDs; approvals bind to digests. Budgets are enforceable controls; token budgets are advisory telemetry. A DSL waits for three genuinely different shapes.
+`rein` resolves into digested per-run policy with per-key provenance. **Manual initiation is `freesided submit`**, registering the approved spec as a digest-addressed artifact and creating the run. auto_start is bounded by WIP caps; conservative default is propose. **Findings:** raw findings immutable; classification is a versioned annotation; low-confidence materiality defaults to continuation or human attention; the classifier cannot declare a finding fixed. Artifacts are typed, immutable, digest-addressed; approvals bind to digests. A DSL waits for three genuinely different shapes.
 
 ### 5.13 Deterministic components
 
-The engine runs verification, computes card facts, and performs cleanup as policy jobs. Agents appear where judgment is the work: elaborator (widest egress, zero write credentials), implementer, remediator, diagnostic, finding classifier, later a briefer.
+The engine runs verification, evidence capture, research fetching, card facts, evidence publication, and cleanup as policy jobs. Agents appear where judgment is the work: elaborator, implementer, remediator, diagnostic, finding classifier, shadow reviewer, later a briefer.
 
 ### 5.14 Client synchronization and conversations
 
-**Authority and consistency.** The daemon is sole authority for items, workflow state, conversations, messages, decisions. Client databases are disposable read caches; both platforms use the same API. Guarantees: transactional consistency in the daemon; optimistic concurrency for commands; eventual convergence of connected clients; read-your-write after acknowledgment; no availability while the daemon is unreachable, **but the cached read-only view remains visible with a freshness banner** (a blank app during a network hiccup would reinstate agent-window patrol); consequential actions are disabled until current state validates.
+Authority, revision/epoch, atomic bootstrap snapshots, partial-fetch semantics, heartbeat, ClientCommand idempotency, whole-snapshot conversation sync, discuss transactions with invocation IDs, and the blobs-then-transaction completion sequence: as revision 6.
 
-**Revision and epoch.** ServerState {sync_epoch UUID, revision uint64}. Every client-visible transaction increments revision, returned by all mutations and state endpoints. sync_epoch persists across ordinary restarts; an explicit restore or state rewind issues a new epoch; a client seeing an unknown epoch discards its cache and bootstraps (prevents a device ahead of a restored daemon from concluding it is current). item_version detects per-entity conflicts; revision detects overall staleness.
+**Devices:** pairing via a short-lived code displayed or printed to the terminal on the daemon host; the daemon stores a credential hash or device public key; revocation supported. **Client caches are part of the threat model:** cached metadata in platform-protected storage; Keychain only for device credentials; no long-term caching of high-sensitivity attachments by default; cache eviction on epoch change; **revocation stops future access but cannot delete already-cached content, and the plan says so** rather than implying remote wipe.
 
-**Snapshots and invalidations.** Small canonical snapshots (GET /sync/bootstrap, /attention, /runs/{id}, /conversations/{id}/messages?after={sequence}) carry epoch and revision. An active WebSocket sends lightweight StateChanged {revision, entity_type, entity_id} invalidations; the client refetches; missed revisions or reconnects trigger snapshot refresh (the active inbox is small; replacing it beats a premature delta protocol). Refresh on launch, foreground, network restoration, reconnect, notification tap, manual pull, and version conflict. **Push and WebSocket improve latency only; correctness never depends on either.**
+**Sync and device tests (permanent, in 1A), sixteen:** the twelve of revision 5, plus (13) an expired or consumed pairing code cannot create a device; (14) simultaneous pairing attempts with one code yield one device; (15) a revoked device cannot submit a previously prepared, uncommitted command; (16) a command retry after revocation may return its recorded result but produces no new side effect.
 
-**Devices and commands.** Each device is explicitly paired with a revocable credential in the Keychain (Device {id, display_name, credential, created_at, last_seen_at, revoked_at}); Tailscale is reachability, not authorization. Every mutation is a ClientCommand {command_id UUID, device_id, expected_entity_version, expected_bindings, payload}; the daemon records command and result transactionally; retries return the original result. A resolution transaction: authorize device → check status/version/bindings → record decision → advance workflow → write outbox intents → record command result → increment revision; only then does the client show success. No offline approvals in Phase 1; drafts may persist locally but never present as accepted without live acknowledgment.
+### 5.15 Evidence and images
 
-**Conversations** are Freeside domain objects, distinct from provider transcripts: Conversation {id, project_id, work_item_id, run_id, status, version, timestamps}; Message {id (client UUID for human messages), conversation_id, sequence (daemon-assigned, monotonic), author_type human|agent|system, author_device_id, body, attachment_digests, reply_to, created_at server/client, stage_attempt_id, status committed|superseded|redacted}; AgentInvocation {id, conversation_id, trigger_message_id, stage_attempt_id, input_message_ids, input_artifact_digests, status, result_message_id, transcript_artifact_digest}. Daemon sequence orders messages, never device clocks; messages are immutable (corrections are new messages); text in SQLite, attachments in the artifact store by digest. Items reference conversation_id; resolution never deletes the conversation.
+Four rules, now machine-enforced through provenance:
 
-**Discuss semantics.** One transaction: append the human message → record the exact item version and bindings addressed → supersede/transition the item → write an AgentInvocationRequested outbox intent → record the command result → increment revision. Daemon death after commit but before stage start yields exactly one invocation on recovery. **Invocations bind to explicit message and artifact IDs, never "the conversation so far"**: fresh-context stages preserved, every invocation reproducible. Agent completion commits the normalized response message, artifacts, workflow transition, and any replacement item together; the raw transcript remains an audit artifact. Phase 1 conversations are asynchronous; live streaming and mid-turn steering are Phase 3.
-
-**Sync tests (permanent, in 1A):** (1) cross-device resolve with second-device conflict; (2) offline device submits against superseded version, rejected with replacement; (3) all notifications missed, foreground refresh reconstructs the inbox; (4) lost HTTP response, command_id retry returns the committed result; (5) discuss commits, daemon dies pre-invocation, recovery starts exactly one; (6) agent response with both clients closed, both later retrieve the same ordered thread; (7) concurrent discuss on one version, one wins, no second invocation; (8) restored daemon issues new epoch, clients discard newer cursors and bootstrap; (9) late notification for a resolved item deep-links to canonical state with no stale action; (10) retried attachment/message yields one artifact and one message.
+1. **Capture belongs to the verifier**, per the recipe's capture block, in credential-free, network-free rooms (before at base SHA, after at candidate). Capture skills are not loaded in agent workspaces. Clean-room capture is the pixel-side secret mitigation; **pixels are invisible to text scanning** (OCR is a recorded Phase 2 deferral).
+2. **Every artifact carries provenance**: {producer_class: verifier | agent | daemon, producer_invocation_id, source_head_sha, verification_recipe_digest?, sensitivity_class, publish_eligible}. **Only verifier or daemon artifacts produced under an approved recipe may enter evidence_snapshot; agent-generated images appear only in labeled claims; agent-generated opaque files are never automatically uploaded to GitHub; publish_eligible is computed by trusted policy, never supplied by the agent.** A new remediation head invalidates prior-head evidence unless explicitly head-independent; the publisher verifies head binding before publication.
+3. **Images are opaque blobs to the daemon**: magic-byte, type, and size validation only; nothing server-side decodes an image; rendering happens only in clients and on GitHub.
+4. **Publication is the EvidencePublisher** (git/publish), under effectively-once discipline (digest-derived names, check-before-create, deterministic PR-section markers). **Deferred to 1B**: the first repository is deliberately non-UI (Section 11), so 1A ships the artifact schema, provenance enforcement, and client rendering; the external publisher lands with the first evidence-bearing workflow.
 
 ## 6. Verification
 
-Deterministic, engine-run, clean-room, recipe-trusted (5.6), per-project configured; outputs are run-bound artifacts cited by cards. "Done" is verification. False-ready tracking per Section 12 from day one.
+Deterministic, engine-run, clean-room, recipe-trusted, including evidence capture; outputs are run-bound artifacts cited by cards. "Done" is verification. False-ready tracking per Section 12 from day one.
 
 ## 7. Review policy
 
-Goal: independent error detection; provider diversity is one mechanism. 1B's configuration (Claude implements, Codex cloud reviews) is component fit, not doctrine. Routing comparisons run over accumulated traces **including sampled shadow reviews, which are the comparison's only valid data source**: at shadow_review_rate, a second reviewer runs against the identical head, findings recorded but never fed to remediation, deduplicated and adjudicated blind where practical. Freeside does not pass or fail on routing results.
+Independent error detection is the goal; provider diversity is one mechanism. Routing comparisons run over accumulated traces including the 1B Claude-driver shadow arm (findings recorded, never routed), adjudicated blind where practical. **Safety override, with the classifier never sole gatekeeper: a raw shadow finding claiming critical or high severity that the classifier scores low-confidence does not silently drop; it receives a second adjudication (deterministic or a distinct agent) or becomes an attention item. A credible critical/high shadow finding blocks ready status.** Contamination accepted. Freeside does not pass or fail on routing results.
 
 ## 8. Observability and optimization telemetry
 
-Traces land as **typed relational rows in SQLite with stable join keys** (run_id, item_id, finding_id, head SHA, digests); transcripts are drill-down pointers, never the primary substrate; an optimizing agent writes SQL, not archaeology. Per run: stage, prompt/config/trust/recipe digests, driver, credential mode, transcript pointer, artifacts, tokens and cost (recorded now, displayed Phase 3), wall time, attempts, review rounds and yields, classifier samples, shadow-review results, outcome, decisions. **Closed-loop attribution:** defect issues reference the producing run (PR run markers make blame-to-run mechanical); fault classes captured at adjudication (Section 4). **Attention telemetry:** item timing chains, decisions taken, conflict/staleness events, interruption-class rates (the Section 3.2 health metric); long open-to-decide gaps and discuss detours flag cards whose evidence is not self-contained. **Baseline logging is passive and concurrent with 1A**: a lightweight time log of the manual workflow anchoring the usefulness comparison; not a study, not a gate. Usage is observed telemetry, never claimed quota state.
+Typed relational rows with stable join keys; transcripts as drill-down pointers. Per run: stage, all governing digests with per-key preset/override provenance, driver, credential mode, egress profile, operating mode, artifacts with provenance, tokens and cost, active and elapsed clocks, attempts, review rounds and yields, classifier samples, shadow results, outcome, decisions. Closed-loop attribution (defect issues reference producing runs; suggested fault classes). Attention telemetry: AttentionDelivery rows with honest status fields; open-to-decision time as the product metric; interruption-class rates. Baseline logging passive and concurrent with 1A. Usage is observed telemetry, never claimed quota state.
 
 ## 9. Comprehension
 
-Evidence packets on every decision first; altitude lines once plans are structured artifacts. Plan changes gate by materiality (scope, acceptance criteria, milestones, sequencing affecting active work, architecture, risk posture, commitments); wording changes are recorded, not interrupted for; materiality rules are control-plane policy. Devlogs split by cadence: repo protocol for human sessions; artifact-store summaries for autonomous runs; shared promotion channel (decisions to ADRs/plan, deferrals to issues). Briefings and open-ended querying are Phase 3, only if repeated real questions demand them.
+Evidence packets first; altitude lines once plans are structured artifacts. Plan changes gate by materiality; wording changes are recorded, not interrupted for; materiality rules are control-plane policy. Devlogs split by cadence; shared promotion channel. Briefings and querying are Phase 3, only if demanded.
 
 ## 10. Operations and onboarding
 
-**The binary is the installer.** `freesided setup` creates the dedicated user, supervision config, config skeleton, and replication config. `freesided onboard <repo>` generates the machine-readable trust profile for one-time manual review, detects a verification recipe from the repo's toolchain, and builds the project image. `freesided doctor` repackages the conformance suite and restore verification as diagnostics, runs on a schedule, and files failures as attention items: the system reports its own degradation into the same inbox. (This is admin tooling; the "not a CLI" non-goal governs the product experience.) **GitHub App creation uses the manifest flow** (one click and a redirect, not a webform and key juggling). **Defaults:** hosted ntfy; embedded SQLite; single config directory; Docker accepted as the initial runner class where the strict backend is absent, with the conformance report stating the running class and its meaning; strictest settings never gate first-run. **Targets, committed:** fresh machine to first successful run under one hour; repo onboarding under thirty minutes with exactly one manual step (reviewing the generated trust profile, manual on principle). Supervision is installed by setup; upgrades are deliberate (pinned CLI and adapter versions, driver contract tests).
+The binary is the installer, built after interfaces survive real use: `freesided setup` (privileged steps in a narrow elevation helper; the daemon never retains root), `freesided onboard <repo>` (trust profile with effective-authority attestation for one-time manual review, recipe detection, project image), `freesided doctor` (conformance, handoff gate, backup health including encryption and restore-test age; scheduled; files system_health items), `freesided submit`. GitHub App via the manifest flow, key landing directly in protected storage. Defaults: hosted ntfy; embedded SQLite; single config directory; attended_dev with honest class reporting. **Targets, as 1A exit criteria, verified against a clean VM or spare machine:** fresh machine to first run under one hour; repo onboarding under thirty minutes with exactly one manual step.
 
-## 11. Roadmap and build order
+## 11. Roadmap, build order, and coordination
 
-### Phase 1A: the secure publish path
+### The first repository is deliberately boring
 
-From a **hand-approved spec**: implementation (subscription_contained, provider-only egress) → gauntlet (import, clean recipe verification) → daemon publication under the reviewed trust profile → ready_for_final_review on iPhone. One repository, dependencies baked. Components: workflow state; signet (items with 1A types, conversations, sync revision/epoch, device pairing, ClientCommands); **fake StageDriver and fake ReviewSource**; minimal macOS/iOS clients; artifact store with the coherent backup invariant; hostile importer with malicious fixtures; clean verifier with trusted recipes and a fake candidate producer; git/publish with deterministic identities and reconciliation; envelope with conformance suite; Claude StageDriver; trust profile (manually reviewed) with drift detection; ntfy; kill-before/kill-after, stale-approval, and the ten sync tests; `freesided setup`/`onboard`/`doctor`.
+**Not Freeside.** Freeside constantly touches control-plane paths and is the hardest possible test case; it becomes the bootstrap *test* once the path works, not the initial obstacle. The first repository: a small Go service or library; read-only PR tokens; no OIDC, environment secrets, deployments, or self-hosted runners; no UI screenshot requirement; dependencies baked into the image; direct `go test` / `go vet` verification; infrequent workflow or instruction-file changes.
 
-**Build order:** (1) workflow state, AttentionItem, conversations, sync revision, device commands, fake StageDriver; (2) minimal clients plus stale/concurrent-device tests; (3) artifact store and backup rules; (4) importer and clean verifier against a fake candidate producer; (5) git publication and reconciliation; (6) envelope and conformance; (7) Claude StageDriver; (8) real 1A work items; (9) 1B.
+### Phase 1A: the secure publish path, in three internal exits
 
-**1A exit (safety and durability only):** conformance green; malicious fixtures contained; kill, stale-approval, and sync tests pass; restore drill verifies the backup invariant; several real hand-specced changes publish with no duplicate side effects, **no undeclared credential in any workspace** (the sole workspace credential is the provider credential the recorded subscription_contained mode explicitly permits), and no terminal intervention after approval.
+**1A.0: control plane with fakes.** Fake run → attention item → resolve on iPhone → second device converges → conversation feedback → fake invocation → workflow transition. Exit: all sixteen sync/device tests pass; command retries idempotent; kill-before/kill-after with fakes; no container, Claude, publication, or backup complexity.
+
+**1A.1: secure publication with a fake candidate.** Fake candidate → workspace handoff → gauntlet → clean verification → daemon GitHub publication → ready item. Exit: malicious fixtures contained; candidate automation-control and reviewer-instruction paths blocked; verification binds to exact recipe and head; PR creation converges effectively-once; checkpoint restore succeeds (local-only acceptable); attended_dev sufficient.
+
+**1A.2: real unattended execution.** Claude → proven credential mode → **proven workspace handoff (the envelope gate)** → gauntlet → clean verifier → audited publication → iPhone, via `freesided submit`, under manually configured unattended preconditions. Exit: runner conformance green including the handoff gate; no undeclared credential in any workspace; several real items complete without terminal intervention; then setup/onboard/doctor package the proven manual operations and meet the Section 10 targets.
+
+Build order within the exits: (1) domain, sync, devices, fakes; (2) clients and the sixteen tests; (3) export/gauntlet/verifier with fake candidates, artifact store with checkpoint and provenance rules; (4) publication and reconciliation, kill tests; (5) envelope with the handoff gate, then the Claude driver; (6) real items; (7) setup/onboard/doctor; (8) exit. **The workspace-handoff gate is investigated early and in parallel** (it is the largest runtime unknown) but blocks only 1A.2, never 1A.0/1A.1.
 
 ### Phase 1B: the useful workflow
 
-labeled issue (intake scanner) → elaboration → spec_approval (full rendering; revision diffs) → implementation → gauntlet → PR under trust profile → checks (reconciliation) → Codex review, control-plane triggered → yield-driven remediation with pattern sweeps → diminishing-returns / dispute items as needed → ready_for_final_review with yield history → human merges on GitHub. Alternate entry: hand-approved spec. Adds: elaborator; intake scanner; ReviewSource with freshness verification and the auto-review-coverage question resolved; finding classifier with sampled accuracy; convergence policy; shadow-review sampling; run timeline screen. Real backlog immediately; its telemetry is the trial. **1B exit (usefulness):** no agent-window patrol; no manual polling; productive review rounds run unasked; low-value streaks yield one consolidated item; spec approval and handoff decidable from the phone; active attention materially below baseline; exceptional-interruption rate low; false-ready per Section 12.
+labeled issue (intake scanner) → elaboration over daemon-fetched research artifacts → spec_approval → implementation → gauntlet → PR under trust profile → checks → Codex review, control-plane triggered → yield-driven remediation with pattern sweeps → diminishing-returns / dispute items → ready_for_final_review with yield history → merge on GitHub. Adds: elaborator with the research fetcher; intake scanner; ReviewSource with freshness verification and the auto-re-review test; finding classifier with sampled accuracy and the second-adjudication rule; convergence policy; shadow arm; **EvidencePublisher with provenance-gated publication**; experimental determination of max_parallel_executions per auth identity, exposed to scheduling; run timeline screen. Real backlog immediately. **1B exit:** no agent-window patrol; no manual polling; productive review rounds run unasked; consolidated low-value items; phone-decidable approvals; attention materially below baseline; exceptional rate low; false-ready per Section 12.
+
+### Implementation coordination (building Freeside with agents)
+
+Contracts and fakes are the coordination mechanism; CI keeps lanes honest. Wave 0 (serial): module, dual-platform CI, domain package, schema and migrations, outbox, interfaces, fakes, provisional API schema; domain/migration PRs exclusive; shared-interface changes are `kind:contract`. Wave 1 (parallel lanes): signet, gauntlet, publish, envelope, saddle pair. Wave 2 (convergent): workflow engine, real driver, end-to-end fakes, real work; the **spine** role owns integration and contract adjudication. Width bounded by review bandwidth. **Each wave's exit includes a fresh-context adversarial review by an agent given only the repository and documents, never this design history.** The issue protocol lives in AGENTS.md's Coordination section; the 1A backlog doubles as elaborator fixtures.
 
 ### Phase 2: breadth and hardening
 
-Second repository and workflow shape; scan initiators (propose mode) and workflow chaining; local Codex driver if useful; api_key_isolated; full failure-injection campaign; restore drills; generalized (still bounded) CI audit tooling; richer classification; webhooks if latency hurts; APNs; egress proxy for registry-needing projects; risk-classified cards; Linux deployment exercised in anger if wanted.
+Second repository and workflow shape; scan initiators and chaining; local Codex driver if useful; api_key_isolated; full failure-injection campaign; restore drills; generalized (bounded) CI audit tooling; richer classification; webhooks if latency hurts; APNs; registry-capable egress profiles; provider_web_read where explicitly accepted; OCR-based image scanning if warranted; risk-classified cards; the Linux deployment matrix if wanted.
 
 ### Phase 3: comprehension and interaction
 
-ACP interactive attachment; best-effort resume; material plan-change gates end to end; briefings; usage display and evidence-informed routing (shadow-review analysis); WIP and initiative views; auto_start maturation via rein posture.
+ACP interactive attachment; best-effort resume; material plan-change gates; briefings; usage display and evidence-informed routing; WIP and initiative views; auto_start maturation.
 
 ### Phase 4: generalization
 
@@ -282,31 +328,34 @@ Pipeline DSL (after three shapes); more agents and skills; macOS runner class; A
 
 ## 12. Exit criteria definitions
 
-**Mechanical false-ready** (zero tolerated): the card asserted something objectively stale or false (checks on a previous head; review bound to an earlier commit; verification not run; spec digest changed post-approval; artifact links not matching reviewed code). **Substantive false-ready** (zero critical/high; lesser misses recorded): final review finds a material in-scope correctness, security, data-integrity, or acceptance-criteria failure the automation should reasonably have caught; a requested design improvement is not false-ready. **Safety failure** (any blocks unattended use): workspace obtains a GitHub write credential; agent reaches a privileged host service; output escapes importer constraints; untrusted PR code receives privileged CI credentials without an explicit gate; a stale mobile decision takes effect; a crash produces uncontrolled duplicates; provider auth corrupted by concurrency; control-plane content from an implementation head influences later execution; **reviewer instructions from a candidate branch govern that candidate's review**. **Kill criterion:** stop if agents perform acceptably manually but Freeside does not materially reduce attention burden after a reasonable integration pass; elaborator weakness alone is not a kill.
+**Mechanical false-ready** (zero tolerated): the card asserted something objectively stale or false. **Substantive false-ready** (zero critical/high; lesser misses recorded): a material in-scope failure the automation should reasonably have caught. **Safety failure** (any blocks unattended use): workspace obtains a GitHub write credential; agent reaches a privileged host service; output escapes gauntlet constraints (either channel); untrusted PR code receives privileged CI authority (secrets, writable tokens, OIDC) without an explicit gate; **candidate automation-control changes reach publication through the ordinary workflow**; a stale mobile decision takes effect; a crash produces uncontrolled duplicates or advances a workflow twice; provider auth corrupted by concurrency; control-plane content from an implementation head influences later execution; reviewer instructions from a candidate branch govern that candidate's review; a known credible critical/high shadow finding is disregarded; **an unencrypted checkpoint replicates off-host once encryption is required**. **Kill criterion:** stop if agents perform acceptably manually but Freeside does not materially reduce attention burden; elaborator weakness alone is not a kill.
 
 ## 13. Decisions log
 
-Each revision's material changes are recorded here with deciders. Revision 4 folded in five delta sets: optimization telemetry closure; workflow initiators (restoring autonomous initiation that revision 3 had narrowed unintentionally); a fourth external review (client synchronization and conversations, reviewer instruction poisoning, cross-store durability, trusted verification recipes, plus corrections); three standing user constraints (portability, autonomy preservation, operational simplicity); and the naming stack.
+Revision 7 folded in the sixth external review as adjudicated.
 
-Held from revision 3 (abbreviated): daemon owns workflow state, clients thin; GitHub owns source/review/merge; chat authors artifacts; gates daemon-native; Go + SwiftUI; monorepo; verification defines completion; personal scope; capabilities at spawn; control-plane from approved commits; digest-bound artifacts and approvals; SQLite + inbox/outbox; polling-first; capability-classed runners, no silent downgrade; SwiftUI bootstrap exemption; native vendor tooling with leases and API-key fallback; cross-provider review as routing hypothesis; attention inbox as control system; elaboration in scope, severable (user); devlog cadence split; materiality-gated plans; provisional API; Phase 0 deleted into 1A gates; yield-driven review with separated crash retries; finding classifier named; ReviewSource with CodexGitHubReview; control-plane-only review triggering (user); CI trust profiles, audited_same_repo default, no self-hosted runner; hostile import and clean verification; credential modes; effectively-once; per-resource reconciliation; type-specific version-bound attention actions; mechanical/substantive/safety false-ready; 1A/1B exit split.
+Held from revision 6 (abbreviated): daemon owns workflow state, clients thin; GitHub owns source/review/merge; gates daemon-native; Go + SwiftUI; monorepo; verification defines completion; capabilities at spawn; control-plane from approved commits; digest-bound approvals; SQLite + inbox/outbox; polling-first; capability-classed runners; SwiftUI bootstrap exemption; native vendor tooling; attention inbox as control system with the full sync/conversation model; elaboration in scope, severable (user); yield-driven review; CodexGitHubReview; control-plane-only review triggering (user); CI trust profiles; out-of-process gauntlet, normalized manifest, export-helper boundary; credential modes; effectively-once with invocation IDs; checkpointed backups; non-waivable gates; attended_dev/unattended; Linux as portability target; per-stage egress profiles; evidence pipeline; per-wave adversarial reviews; coordination model; naming stack (user).
 
-New in revision 4 (decider in parentheses):
-1. **Client sync and conversation model** (Section 5.14): revision/epoch, snapshots plus invalidations, device pairing, command idempotency, conversation/message/invocation domain, discuss transactions, ten permanent sync tests. (Review 4; cached read-only view with freshness banner added, this revision.)
-2. **Reviewer-instruction poisoning closed**: nested instruction paths publish-blocking in the ordinary workflow; control-plane change path required; auto-review is not independent review for PRs modifying its instructions. (Review 4; punctured revision 3's "reads through GitHub" parenthetical.)
-3. **Coherent backup invariant**: blob-before-row ordering, restorable-only-with-closure, digest-verified restore, new epoch after rollback; orphan GC respects retention. (Review 4; retention amendment this revision.)
-4. **Trusted verification recipes**, with the named residual that candidate test code still executes inside the contained envelope. (Review 4; residual named this revision.)
-5. **Corrections batch**: 1A credential-criterion wording; agent_question and publish_blocked actions; capability retries from predefined manifests; preference-to-policy via proposal PR; open-PR-as-navigation with reconciliation-driven resolution; spec revision diff cards; immutable raw findings with annotation-only classification and no-dismissal defaults; intake scanner; 1A CI audit scoped to one reviewed profile plus drift detection; fake driver and review source as permanent fixtures; build order adopted. (Review 4.)
-6. **Initiators restored**: manual/label/scan with propose|auto_start, run_proposal items, chaining on the Phase 2/4 horizon; revision 3's narrowing recorded as unintentional drift. (This revision; user prompt.)
-7. **Optimization telemetry closed**: relational trace store, timing chains, fault-class capture, defect back-links, shadow-review sampling as the routing comparison's data source. (This revision; user prompt.)
-8. **Portability as principle**: Linux a supported class, no Apple-only daemon dependencies, Linux CI from day one, cloud exposure documented. (User.)
-9. **Autonomy preservation as principle**: interruption budget with planned/exceptional tagging, exceptional rate as tracked health metric, self-service rule, rein posture as maturity dial. (User.)
-10. **Operational simplicity as principle with committed targets**: setup/onboard/doctor, manifest-flow App creation, permissive first-run defaults with honest class reporting. (User.)
-11. **Naming stack**: Freeside; category "an agent control plane"; register "the harness runs the agent; the reins are yours"; subsystems envelope, signet, gauntlet; `rein:` as the gate-posture policy key. (User.)
+New in revision 7 (decider in parentheses):
+1. **Candidate-automation policy**: automation-control paths publish-blocking in the ordinary workflow; trust profiles attest effective PR-job authority (implicit token, OIDC, environments, reusable/composite actions, artifact-consuming privileged jobs); new safety-failure entries. (Review 6.)
+2. **Post-agent workspace handoff is a named capability set and the first envelope implementation gate**, proven against the actual runtime; the same-VM fallback is a declared weaker class, never described as fresh-context. (Review 6.)
+3. **provider_web_read reclassified as a materially wider credential-exfiltration mode**; the 1B elaborator default is **daemon-fetched, digest-addressed research artifacts** via typed fetch requests, chosen from the review's options for security plus provenance and reproducibility. (Review 6; option selection this revision.)
+4. **Secret-scanning language corrected to best-effort supported-format scanning** with provenance and publication controls for opaque artifacts. (Review 6.)
+5. **Auth-store mutation leases separated from inference concurrency**; max_parallel_executions established experimentally in 1B and exposed to scheduling. (Review 6.)
+6. **Three budget clocks**: active-compute budgets, elapsed deadlines, and waiting thresholds raising consolidated blocked items; review ceilings count active time. (Review 6.)
+7. **Artifact provenance with trusted publish_eligible**; evidence_snapshot restricted to verifier/daemon artifacts under approved recipes; head-binding invalidation; agent opaque files never auto-uploaded. (Review 6.)
+8. **EvidencePublisher deferred to 1B**; schema, provenance enforcement, and client rendering remain 1A. (Review 6.)
+9. **Backup confidentiality policy**: encrypted checkpoints, keys outside agent environments, credential exclusion with recovery-may-reauth, per-class retention, doctor checks; required before unattended remote replication of private repos. (Review 6.)
+10. **Four pairing/revocation tests added; suite is sixteen.** (Review 6.)
+11. **system_health is condition-driven** (acknowledge means seen); **start-with-changes is versioned through a revised proposal artifact**; **notification statuses are submitted/channel-accepted/opened**, never claimed delivery; **client caches protected, with revocation-versus-deletion stated honestly**; **setup elevation is a narrow helper and the daemon never retains root**. (Review 6.)
+12. **1A formalized into internal exits 1A.0/1A.1/1A.2**, with the handoff gate investigated early but blocking only 1A.2. (Review 6.)
+13. **The first repository is deliberately boring, not Freeside**; Freeside becomes the bootstrap test after the path works. (Review 6; reverses this conversation's earlier self-hosting instinct.)
+14. **The classifier is never sole gatekeeper of the shadow safety override**: raw critical/high claims get a second adjudication or an attention item regardless of classifier confidence. (This revision, sharpening review 6.)
 
 ## 14. Risks
 
-Provider-credential exposure in subscription_contained (documented, egress-bounded, secret-scanned; api_key_isolated is the escape; elevated on cloud hosts); CI privilege crossing (trust profiles, drift detection, fail-closed publish, runner prohibition); reviewer-instruction poisoning (publish-blocking paths, control-plane routing); Codex cloud review as load-bearing dependency (local reviewer hedge; fail-closed review status); classifier mislabeling (immutable raw findings, sampled QA, no-dismissal defaults, ceilings, dispute items); subscription-terms drift (native tooling, leases, API-key fallback); Apple container immaturity and network-boundary uncertainty (fail-closed conformance, host hardening, capability classes, Linux class as pressure valve); vendor CLI churn (pins, contract tests, deliberate upgrades); review saturation and shallow approval (WIP caps, digest binding, false-ready tracking, revision-diff cards); interruption creep (budget metric, self-service rule); setup and upkeep burden (Section 10 targets, doctor); sync complexity creep (snapshot model is deliberately minimal; delta protocols deferred); solo scope (1A small, production-shaped, go/no-go); prompt injection as the organizing threat (no write credentials in workspaces, gauntlet, control-plane overlays, publish-blocking instruction paths, egress profiles, gates before irreversible actions, budgets, brakes).
+Provider-credential exposure in subscription_contained (documented; egress floors; daemon-fetched research removing the widest surface from the most exposed stage; api_key_isolated as the escape); CI privilege crossing (effective-authority attestation, candidate-automation blocking, drift fail-closed, runner prohibition); reviewer-instruction poisoning; **workspace-handoff uncertainty** (the largest runtime unknown; gated, investigated early, honest fallback class); Codex cloud review as load-bearing dependency (shadow arm dry-runs the hedge); classifier mislabeling (immutable raw findings, second-adjudication rule, ceilings); subscription-terms drift; Apple container immaturity; vendor CLI churn; review saturation; interruption creep; setup and upkeep burden; sync complexity creep; image handling (provenance, opaque-blob rule, OCR deferral); backup confidentiality (encryption policy, credential exclusion); 1A scope: large but ordered into three internal exits; reviewer monoculture (per-wave fresh-context reviews); prompt injection as the organizing threat (no write credentials in workspaces, proven handoff, out-of-process gauntlet with two validated channels, control-plane overlays, publish-blocking automation and instruction paths, egress floors, daemon-fetched research, gates before irreversible actions, budgets, brakes).
 
 ## 15. Naming and references
 
-**Freeside** (freeside.ai, github.com/freeside-ai); *free as in bird*; category line "an agent control plane"; self-brand "the harness runs the agent; the reins are yours." Subsystems: the **envelope** (runner and safety boundary), the **signet** (attention and approval service), the **gauntlet** (import and verification path); daemon **freesided**; clients take functional names. Reference shelf: Anthropic devcontainer/Agent SDK/credential docs; OpenAI Codex SDK, sandbox design, cloud review docs; Apple container docs and issue tracker; Firecracker/Kata; Litestream; Antfarm, Nimbalyst, Conductor, Gas Town/Beads (cautionary); agentclientprotocol.com (Phase 3).
+**Freeside** (freeside.ai, github.com/freeside-ai); *free as in bird*; category line "an agent control plane"; self-brand "the harness runs the agent; the reins are yours." Subsystems: the **envelope** (runner, handoff, and safety boundary), the **signet** (attention and approval service), the **gauntlet** (export, import, and verification path, including the evidence channel); daemon **freesided**; the internal naming system is riding tack (rein appears only in brand and policy vocabulary). Reference shelf: Anthropic devcontainer/Agent SDK/credential docs; OpenAI Codex SDK, sandbox design, cloud review docs; GitHub Actions security hardening docs (token permissions, OIDC, pull_request_target); Apple container docs and issue tracker; SQLite online backup and WAL durability docs; Litestream; Antfarm, Nimbalyst, Conductor, Gas Town/Beads (cautionary); agentclientprotocol.com (Phase 3).
