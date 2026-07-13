@@ -1,0 +1,13 @@
+{
+  "id": "art-1",
+  "type": "verify_log",
+  "digest": "sha256:log",
+  "provenance": {
+    "producer_class": "verifier",
+    "producer_invocation_id": "inv-1",
+    "source_head_sha": "cafebabe",
+    "verification_recipe_digest": "sha256:recipe-approved",
+    "sensitivity_class": "normal"
+  },
+  "publish_eligible": true
+}

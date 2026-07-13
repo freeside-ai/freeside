@@ -1,0 +1,9 @@
+{
+  "id": "find-1",
+  "run_id": "run-1",
+  "source": "codex_github",
+  "location": "daemon/main.go:42",
+  "message": "unchecked error",
+  "raw_text": "err not handled",
+  "created_at": "2026-01-02T03:04:05Z"
+}
