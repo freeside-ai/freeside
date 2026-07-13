@@ -81,7 +81,7 @@ Setup, onboarding, and upkeep are designed features with targets (Section 10), n
 - **agent_question**: answer and retry / answer without retry / stop.
 - **publish_blocked**: rerun trust evaluation / choose an approved alternate publication profile / inspect trust failure / stop.
 - **ready_for_final_review**: open PR (**navigation, not resolution**; the item remains active until GitHub reports merge or close, work is returned to the agent, or it is explicitly dismissed; reconciliation auto-resolves on observed merge) / return to agent with feedback / acknowledge / stop.
-- **run_proposal** (initiators, Section 4.11): start / start with changes / decline / snooze; batched, never one ping per finding.
+- **run_proposal** (initiators, Section 5.12): start / start with changes / decline / snooze; batched, never one ping per finding.
 
 **Lifecycle:** approvals bind to digests and head SHA; changed inputs invalidate; retries supersede failures; resolutions are transactional and version-checked; stale submissions receive a conflict plus the replacement item. **Notifications are read-only hints** (no sensitive payloads, no actions); the app fetches current state and submits version-bound decisions. **Fault-class capture:** adjudications and returned work record a fault class (bad_spec | bad_implementation | reviewer_preference | environment | other) at the moment of judgment. Capacity: WIP caps on runs and initiatives; GitHub Projects is the passive all-work view; the inbox is exclusively needs-me.
 
