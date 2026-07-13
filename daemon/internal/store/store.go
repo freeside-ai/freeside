@@ -43,6 +43,10 @@ func Open(ctx context.Context, path string, opts Options) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := seedEpoch(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
 }
 
