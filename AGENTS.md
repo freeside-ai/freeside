@@ -576,8 +576,12 @@ linking it as a dependency, and blocking or switching units.
    - open PRs and their declared paths: overlap with yours means stop and
      coordinate via issue comment before claiming;
    - the current wave's pinned tracking issue;
-   - open `kind:contract` issues, excluding the unit you are claiming:
-     if one touches your Contract, block on it; when claiming a
+   - open `kind:contract` issues, excluding the unit you are claiming
+     and any unit whose Dependencies chain includes it (a
+     dependency-ordered chain of contract units keeps at most one
+     claimable at a time, so downstream chain members may stay filed
+     without blocking their chain head): among the remainder, if one
+     touches your Contract, block on it; when claiming a
      `kind:contract` unit, block on every other open contract unit
      (contract work is serialized).
 4. Verify each dependency's PR is merged.
