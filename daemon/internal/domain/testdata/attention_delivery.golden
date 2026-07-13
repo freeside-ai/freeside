@@ -1,0 +1,10 @@
+{
+  "item_id": "item-1",
+  "device_id": "device-1",
+  "channel": "ntfy",
+  "attempt": 1,
+  "submitted_at": "2026-01-02T03:04:05Z",
+  "channel_accepted_at": "2026-01-02T03:05:05Z",
+  "opened_at": "2026-01-02T03:09:05Z",
+  "delivery_status": "opened"
+}

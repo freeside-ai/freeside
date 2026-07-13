@@ -1,0 +1,55 @@
+{
+  "id": "item-1",
+  "project_id": "proj-1",
+  "subject": {
+    "subject_type": "run",
+    "subject_id": "run-1",
+    "run_id": "run-1"
+  },
+  "type": "ready_for_final_review",
+  "priority": "normal",
+  "reason": "checks are green and the diff is ready",
+  "requested_decision": [
+    "open_pr",
+    "return_to_agent",
+    "dismiss"
+  ],
+  "evidence_snapshot": [
+    {
+      "id": "art-1",
+      "type": "verify_log",
+      "digest": "sha256:log",
+      "provenance": {
+        "producer_class": "verifier",
+        "producer_invocation_id": "inv-1",
+        "source_head_sha": "cafebabe",
+        "verification_recipe_digest": "sha256:recipe-approved",
+        "sensitivity_class": "normal"
+      },
+      "publish_eligible": true
+    }
+  ],
+  "agent_claims": [
+    {
+      "label": "screenshot",
+      "artifact_id": "art-2",
+      "digest": "sha256:img"
+    }
+  ],
+  "artifact_digests": [
+    "sha256:log"
+  ],
+  "pr_head_sha": "cafebabe",
+  "item_version": 1,
+  "interruption_class": "planned_gate",
+  "conversation_id": "conv-1",
+  "timing": {
+    "delivery_count": 1,
+    "first_submitted_at": "2026-01-02T03:04:05Z",
+    "first_accepted_at": "2026-01-02T03:05:05Z",
+    "first_opened_at": "2026-01-02T03:09:05Z",
+    "submit_to_first_open": 300000000000
+  },
+  "expires_when": "2026-01-03T03:04:05Z",
+  "status": "open"
+}

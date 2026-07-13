@@ -1,0 +1,7 @@
+{
+  "delivery_count": 1,
+  "first_submitted_at": "2026-01-02T03:04:05Z",
+  "first_accepted_at": "2026-01-02T03:05:05Z",
+  "first_opened_at": "2026-01-02T03:09:05Z",
+  "submit_to_first_open": 300000000000
+}
