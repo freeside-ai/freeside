@@ -1,274 +1,312 @@
+---
+title: Freeside Project Plan
+revision: 4
+status: active
+phase: 1A
+updated: 2026-07-13
+---
+
 # Freeside
 
-**Project charter, architecture, and roadmap.** Status: pre-implementation. This document is the starting point for the project and the reference against which changes should be argued. It encodes decisions made through analysis and research; the items marked as empirical remain open until Phase 0 closes them.
+**Project charter and implementation spec.** The plan's identity of record is its default-branch commit digest (Section 5.8); `revision` is the human label, incremented on material change per Section 9's gating, with each increment recorded in Section 13's decisions log. Revision narrative lives in PR bodies and the devlog, not here.
 
 ---
 
 ## 1. What Freeside is
 
-Freeside is a personal system for running software development through autonomous, decomposed agent pipelines with human approval gates, on hardware I control, with my attention routed to the few moments that actually need it.
+**Freeside is a local, durable workflow controller that turns a software work item into an evidence-backed pull request and interrupts me only when judgment is required.**
 
-The one-sentence version: **a pipeline engine for agent work, with an inbox for my attention.**
+Category: **an agent control plane.** Harnesses (Claude Code, Codex) run the agent's inner loop; Freeside is the outer loop: it decides what work starts, inside what boundary, with which credentials withheld, what counts as done, when a human is interrupted, and what survives a crash. The self-brand register: *the harness runs the agent; the reins are yours.*
 
-The system runs on a Mac Studio acting as a permanent runner. Work items (bugs, features, enhancements) flow through staged pipelines: an agent elaborates the item into a spec, another implements it in an isolated container, deterministic verification runs, a different provider's model reviews the result, and a PR lands, with human gates at defined points and a final human review and merge on GitHub. A SwiftUI inbox app (macOS and iOS) surfaces the decisions waiting on me, each with enough context to decide from a phone. A comprehension layer (gated plan artifacts, devlogs, periodic briefings) keeps my mental model of each project current even though agents are doing most of the work.
+The system runs on a Mac Studio acting as a permanent runner (reference deployment; Linux is a supported deployment class, Section 3.3). A work item (a labeled issue discovered by an intake scanner, a scan-proposed candidate, or a hand-approved spec) flows through a staged workflow: elaboration to a spec; spec approval in my attention inbox; implementation in an isolated workspace holding no GitHub credentials; a hostile import boundary into a fresh checkout; deterministic verification under a trusted recipe in a clean workspace; daemon-side publication under an audited trust profile; yield-driven independent review with capped emergency brakes; a ready-for-final-review item on my phone with mechanical evidence. I review and merge on GitHub. The attention inbox is part of the control system: a daemon-owned domain model with lifecycle, staleness, synchronization, and concurrency rules. GitHub owns code and review; Freeside owns workflow execution and approvals.
 
-Freeside is justified entirely as a personal-leverage tool. If the pipeline model works, it multiplies my throughput across every project I touch, indefinitely. A modest product or open-source release is a cheap option preserved by building as if others will read the code, exercised only on external signal, never a goal that shapes scope.
+Freeside is justified entirely as a personal-leverage tool; the metric is personal net leverage after maintenance. The usefulness of agent elaboration, implementation, and iterative review is established by my current manual workflow. **The open question is whether that workflow can become a safe, durable, low-attention system without moving the danger into provider credentials, CI, artifact import, stale approvals, or interruption creep.**
 
-### Why it should exist despite a crowded field
-
-The orchestration category consolidated rapidly in early 2026: Anthropic shipped Agent Teams and Claude Code on the web, OpenAI shipped Codex parallel sandboxes, and a wave of tools (Conductor, Nimbalyst, Vibe Kanban, Gas Town, Antfarm) now covers parallel-agent management. No existing tool provides the specific conjunction Freeside targets:
-
-- Event-driven pipelines with **human approval gates** (Antfarm has pipelines but no gates, surface, or mobile story; Gas Town is gateless YOLO at industrial burn rates).
-- **Cross-provider** stages using subscription plans, with the review stage deliberately run on a different provider's model than implementation.
-- **Container-isolated** runners on my own hardware.
-- An **approval inbox with resumable chat** on iOS.
-- Provider-neutral **usage monitoring**.
-
-The durable differentiator is the gates-and-attention layer over cross-provider pipelines on owned hardware. Everything else in the system should be expected to be commoditized by vendors and should be built accordingly (thin, replaceable, standard-shaped).
-
----
+Success claims: (1) **attention reduction** against a passively logged baseline; (2) **decision quality preserved** (right moments, decidable evidence, no stale actions); (3) **safety invariants hold** (Section 12); (4) **autonomy preserved** (exceptional-interruption rate stays low and trends down, Section 3.2).
 
 ## 2. Goals and non-goals
 
 ### Goals
 
-1. **Centralized attention routing.** One inbox, on desktop and phone, showing what needs me now: approvals, failures, completions. Not a workspace; a queue of decisions with context.
-2. **First-class automation.** Push (webhooks) and poll (reconciler, cron) event sources spawning agents on events, so looping is owned by the system, not by me or by an agent burning context watching a PR.
-3. **Decomposition across fresh-context stages.** Triage, spec, implement, verify, review, and cleanup as separate agent runs with compact artifact handoffs, chosen per stage for provider, model, and effort.
-4. **Hard isolation.** Agents run with full tactical autonomy inside disposable containers scoped by repo, token, egress profile, and budget. Permissions are decided at spawn time by what the container holds, not by prompts.
-5. **Mac Studio as runner; remote operation.** Full workflow drivable from an iPhone or laptop, with the human role reduced to taste, judgment, and gate decisions.
-6. **Cross-provider on subscription plans**, with local usage accounting and manual routing rules.
-7. **Chat as the authoring interface.** Conversations produce artifacts (issues, specs, plans, pipeline definitions); the engine executes only artifacts.
-8. **Multi-project** from day one.
-9. **Images both directions**: into prompts as files, out of stages as artifacts (screenshots from verification especially).
-10. **Verification as a first-class pipeline concept.** Real test runs, screenshots for UI work, repro scripts as artifacts. Loop quality is bounded by verification quality.
-11. **Agent-extensible.** Agents evolve the tool itself: pipeline definitions, stage prompts, and (with conventions) the daemon code.
-12. **Comprehension preserved.** The system actively maintains my mental model (see Section 7) rather than optimizing me out of the loop and leaving me unable to handle exceptions.
+1. **Attention routing as a first-class system**: durable AttentionItems with lifecycle, type-specific actions, optimistic concurrency, cross-device synchronization, push notification, self-contained decision cards, on iPhone and Mac.
+2. **Elaboration in the tested value proposition**, severable: entry from a raw issue or a hand-approved spec; elaborator weakness degrades the entry point, never the loop. (Decider: user.)
+3. **Autonomous initiation**: initiators (manual, label, scan) map event sources to workflow entries under propose or auto_start modes, so Freeside drives loops, not only reacts to them. (Restored in revision 4; Section 5.12.)
+4. **Yield-driven review remediation** matching the validated manual process; round counts are emergency brakes only.
+5. **Bounded execution isolation**: capabilities fixed at spawn, no GitHub credentials in any workspace, declared per-run credential modes, hostile import boundary, trusted verification recipes.
+6. **CI privilege containment**: agent-authored code never reaches secret-bearing or privileged CI without an audited trust profile or an explicit gate.
+7. **Remote operation from iPhone**; human role is judgment at gates plus final review and merge on GitHub.
+8. **Chat authors artifacts; the engine executes artifacts**; behavior lives in trusted versioned configuration.
+9. **Verification defines completion**, deterministically, under a trusted recipe, in a clean workspace.
+10. **Durability of decisions**: committed decisions survive restart; external effects converge (effectively-once); database and artifact store restore coherently; clients converge on daemon state.
+11. **Instrumentation sufficient for agent-driven optimization**: traces with stable join keys, outcome attribution, attention telemetry, sampled shadow reviews (Section 8).
+12. **Operational simplicity**: one-command setup, guided onboarding, self-diagnosis; targets in Section 10. (Decider: user.)
 
 ### Non-goals
 
-1. **Not an IDE, not a CLI.** Code is touched in other tools when necessary; the goal is not touching code.
-2. **Not a review surface.** GitHub remains the system of record for code, PRs, issues, and the merge gate. Freeside does not rebuild diff review.
-3. **Not a venture product.** No multi-tenancy, billing, onboarding, or design for hypothetical users. The moment scope is being added for imagined users, stop.
-4. **Not automatic fallback routing** between providers (deferred until vendors expose quota state; v1 is accounting plus manual rules).
-5. **Not voice** (deferred; revisit after the core loop runs daily).
-6. **Not a general agent harness.** Freeside orchestrates vendor agents (Claude Code, Codex, and anything ACP-speaking); it does not own a model loop.
+1. Not an IDE; not a review surface (GitHub owns diffs and merge); no auto-merge, ever.
+2. Not a product: no multi-tenancy, billing, or hypothetical users. (Portability and simplicity are personal requirements that incidentally keep the open-source option real.)
+3. **Not a harness**: Freeside consumes vendor harnesses through their sanctioned batch interfaces and never owns a model loop.
+4. Not runtime self-modification: agents extend Freeside via ordinary reviewed PRs; control-plane config is never hot-modified.
+5. Not automatic provider fallback; not voice; not a pipeline DSL; not briefings or general project chat until earned.
+6. Not a formal pre-build validation study; not a generic CI security auditor (Phase 2 at most; 1A needs one reviewed profile plus drift detection).
+7. Not a general-purpose sync platform: server-authoritative snapshots suffice for one daemon and one user's devices.
 
----
+## 3. Operating principles
 
-## 3. The human role
+### 3.1 Autonomy inside the envelope
 
-Two distinct jobs, served by two distinct surfaces:
+Autonomy is the default; gates exist only at trust-boundary crossings and the two designed judgment points (spec approval, final review). Hardening must be invisible in the happy path: the importer, clean verifier, conformance tests, sync, and credential boundaries ask nothing of anyone. **Any gate that fires repeatedly for the same reason is a bug in policy, not a fact of life.**
 
-**Keep agents flowing** (the inbox). Approve or reject gate items, unblock stuck runs, answer agent questions. Optimized for low latency and lock-screen decidability.
+### 3.2 The interruption budget
 
-**Understand the whole** (the comprehension layer). Maintain a living model of each project's plan, decisions, and trajectory, so gate decisions stay good and exceptions can be handled. Served by gated plan artifacts, briefings, altitude context on every inbox item, and a queryable chat interface over project state. GitHub Projects boards, self-maintained via built-in workflows, serve as a passive all-work status view (distinct from the inbox's needs-me view).
+Every AttentionItem is tagged **planned_gate** or **exceptional**. The exceptional rate per run is a tracked health metric; a rising rate is treated as a defect to fix (tune policy, extend an allowlist, promote a preference), never as the new normal. **Self-service rule:** every recurring item type must offer a path that resolves the class, not the instance (the convert-preference-to-policy action is the prototype; a gate satisfied the same way three times should offer to become policy, via the control-plane proposal path). The **rein posture** is the maturity dial: per-repo `rein: tight | loose` maps to propose-versus-auto initiation and gate strictness, loosening as trust accumulates, including eventually waiving spec approval for policy-defined low-risk change classes. Known hot spot, accepted: Freeside's own repo routinely touches control-plane paths, so a disproportionate share of its PRs carry the control-plane approval class; that is the correct cost where poisoning matters most.
 
-Capacity limits are enforced on both: WIP caps on concurrent pipeline runs (review capacity) and on concurrent major initiatives (comprehension capacity, honestly two or three for one person). Exceeding either is a visible choice, not a drift.
+### 3.3 Portability
 
----
+macOS is the reference deployment; **Linux is a supported deployment class.** The daemon core takes no Apple-only dependencies; runner backends are per-platform implementations of the capability-classed interface (Apple container on macOS; Firecracker/Kata as VM-per-job class and Docker as the weaker class on Linux); launchd/systemd and dedicated-user setup are per-platform equivalents. **Enforcement: the daemon's own CI builds and tests on Linux from day one**, making portability continuously verified rather than aspirational. Cloud deployment notes: provider subscription credentials on a cloud host add exposure (host snapshots, operator access) recorded in the residual-risk documentation; vendor trusted-runner guidance for subscription auth on a single-tenant VM is a verify item. Nothing is built for cloud until wanted. (Decider: user.)
 
-## 4. Architecture
+### 3.4 Simplicity
 
-### 4.1 Overview
+Setup, onboarding, and upkeep are designed features with targets (Section 10), not emergent properties. Defaults assume the common case; the strictest option must not gate first-run; the system diagnoses itself into the same inbox everything else uses. (Decider: user.)
+
+## 4. The attention model
+
+**AttentionItem**: id, project_id, run_id, type, priority, reason, requested_decision, evidence_snapshot (engine facts), agent_claims (labeled), artifact_digests, pr_head_sha, item_version, interruption_class (planned_gate | exceptional), conversation_id?, timing chain (created_at, notified_at, opened_at, decided_at), expires_when, status.
+
+**Phase 1 types and actions** (approve is not universal):
+- **spec_approval**: approve / request changes / discuss / stop. Full artifact rendering; a revised spec renders the complete current spec, a **diff against the last version reviewed**, and prior comments with claimed addressals.
+- **review_diminishing_returns**: finish now / apply current batch then finish / continue under specified policy / convert recurring preference into project policy (**emits a policy-change proposal PR through the control-plane path; never mutates policy directly**).
+- **review_dispute**: adjudicate finding / discuss / stop.
+- **execution_failure**: retry / retry with a **predefined, policy-allowed capability manifest** (the phone never authors capabilities) / discuss / stop.
+- **agent_question**: answer and retry / answer without retry / stop.
+- **publish_blocked**: rerun trust evaluation / choose an approved alternate publication profile / inspect trust failure / stop.
+- **ready_for_final_review**: open PR (**navigation, not resolution**; the item remains active until GitHub reports merge or close, work is returned to the agent, or it is explicitly dismissed; reconciliation auto-resolves on observed merge) / return to agent with feedback / acknowledge / stop.
+- **run_proposal** (initiators, Section 5.12): start / start with changes / decline / snooze; batched, never one ping per finding.
+
+**Lifecycle:** approvals bind to digests and head SHA; changed inputs invalidate; retries supersede failures; resolutions are transactional and version-checked; stale submissions receive a conflict plus the replacement item. **Notifications are read-only hints** (no sensitive payloads, no actions); the app fetches current state and submits version-bound decisions. **Fault-class capture:** adjudications and returned work record a fault class (bad_spec | bad_implementation | reviewer_preference | environment | other) at the moment of judgment. Capacity: WIP caps on runs and initiatives; GitHub Projects is the passive all-work view; the inbox is exclusively needs-me.
+
+## 5. Architecture
+
+### 5.1 Overview
 
 ```
-GitHub (system of record: code, issues, PRs, reviews, merge gate)
-   │  webhooks + API (GitHub App, short-lived scoped tokens)
+GitHub (source, issues, PRs, reviews, checks, merge; Codex cloud review)
+   │  per-resource reconciliation + intake scanners (no global cursor)
    ▼
-freesided (Go daemon on Mac Studio)
-   ├─ event bus: webhooks, cron, reconciler backstop
-   ├─ pipeline engine: persisted state machines over stages
-   ├─ session layer: ACP client, spawns adapter processes
-   ├─ runner layer: Apple `container` (Docker fallback), per-stage micro-VMs
-   ├─ token broker: GitHub App installation tokens, per-stage scopes
-   ├─ egress proxy: allowlist profiles per stage
-   ├─ store: SQLite (WAL) + Litestream replication
-   └─ API: OpenAPI-defined HTTP + WebSocket event stream (Tailscale)
+freesided (Go daemon; launchd/systemd; dedicated user)
+   ├─ event inbox: reconciled state, intake scanners, cron, manual (idempotent)
+   ├─ workflow engine: code-defined state machines; policy from config
+   ├─ signet (attention service): items, conversations, sync, devices, ntfy
+   ├─ StageDriver: Claude batch execution (+ permanent fake driver)
+   ├─ ReviewSource: CodexGitHubReview (+ permanent fake source)
+   ├─ finding classifier: annotations over immutable raw findings
+   ├─ envelope (runner layer): capability classes + fail-closed conformance
+   ├─ gauntlet: hostile importer -> fresh checkout -> clean verifier (recipe)
+   ├─ git/publish service: owns ALL GitHub credentials; deterministic identities
+   ├─ store: SQLite (authoritative) + inbox/outbox + content-addressed
+   │   artifact store; coherent backup invariant (5.10)
+   └─ sync API: snapshots + revision/epoch + invalidations (Tailscale-private)
    ▲
-   │  generated Swift client (swift-openapi-generator)
    ▼
-Freeside app (SwiftUI, multiplatform macOS + iOS) + APNs (ntfy interim)
+Freeside app (SwiftUI, macOS + iOS): inbox, decision detail, run timeline
 ```
 
-### 4.2 The daemon (`freesided`)
+### 5.2 The daemon
 
-Go, single static binary under launchd. Owns all state and all agent processes; clients are thin. Rationale for Go over TypeScript (a revised decision, originally TS): the daemon is a security-sensitive unattended appliance (credential broker, years-long runtime), where Go wins on supply-chain surface, rot resistance (1.x compatibility promise), single-binary deployment, and per-goroutine fault isolation in the session multiplexer. TS's advantages (agent fluency, JSON ergonomics, ACP reference libraries) were neutralized by the SwiftUI client decision and by ACP adapters being language-independent subprocesses. Compensations for Go's weaker agent fluency: small single-responsibility packages, table-driven tests, golden-file tests on all JSON boundaries, and an AGENTS.md stating conventions.
+Go, single static binary, supervised (launchd/systemd), dedicated user, state and credentials inaccessible to other accounts, privileged services bound to loopback/Tailscale only. Rationale: appliance fit (static deployment, stdlib strength, subprocess support, explicit concurrency, supply-chain restraint, compatibility culture). Reliability from process boundaries around drivers, worker-boundary recovery, supervision restarts, durable state, idempotent external operations. Agent-maintenance compensations: small packages, table-driven tests, golden-file JSON tests, AGENTS.md conventions. CI builds and tests on macOS and Linux.
 
-**State.** SQLite in WAL mode as the coordination store; Litestream replicating to object storage for the irreplaceable slice (run history, traces, usage accounting). Durability comes from where authority lives, not the engine: GitHub holds code and work items; pipeline definitions and prompts are versioned files in repos; transcripts are JSONL on disk. Losing the daemon DB must mean losing analytics and in-flight runs, never work. A reconciler can cold-start the daemon from external state, and doubles as the backstop for GitHub's at-least-once (sometimes never) webhook delivery. Every stage transition is written before acted on; recovery replays state; all event handling is idempotent.
+### 5.3 Execution: StageDriver and ReviewSource
 
-### 4.3 Sessions: ACP as the agent interface
+Stages are bounded batch jobs (immutable inputs, workspace, typed outputs, exit).
 
-The daemon is an ACP **client**. Each stage spawns an adapter subprocess (Zed's claude-code-acp for Claude, the Codex adapter, or any other ACP agent) speaking JSON-RPC over stdio, via a pinned Go ACP SDK (currently coder/acp-go-sdk, wrapped behind Freeside's own session interface so it can be regenerated or vendored if it lags the spec).
+```
+StageDriver:  start(StageRequest) -> run_id;  stream(run_id) -> events
+              cancel(run_id);  collect(run_id) -> StageResult;  capabilities()
+ReviewSource: request_review(pr, head_sha) -> review_request_id
+              poll(review_request_id) -> raw_findings
+              verify(raw_finding) -> bool   # actor, head SHA (commit_id
+                                            # binding), request id, freshness
+```
 
-The governing model: **the session is the transcript on disk; the process is an ephemeral executor.** All session events append to a persisted log; clients subscribe over WebSocket with replay-from-cursor, so phone and desktop can attach mid-flight and daemon restarts lose nothing. A user message routes by liveness: live process gets the message (queued for next turn; mid-turn steering is not first-class in ACP and is a per-adapter behavior to verify), dead session gets resumed (session/load) into a new process. The UI treats both identically. Resume gets a verification step with transcript-seeding as fallback, since native resume has documented reliability gaps. Session state dirs (~/.claude, ~/.codex) are volume-mounted to durable storage; long transcripts age out in favor of fresh agents reading stage artifacts, by explicit policy.
+Phase 1: one local driver (**Claude**, non-interactive / Agent SDK worker, auth mode as config); one review source (**CodexGitHubReview**, the trusted cloud reviewer from the manual workflow; keeps Codex auth out of local workspaces; local reviewer is the Phase 2 hedge). **Permanent fake implementations of both are first-class test fixtures**, reproducing crashes, delays, duplicate outputs, stale heads, malformed artifacts, and pathological review patterns without provider spend. ACP is not an execution interface; it returns in Phase 3 for interactive attachment.
 
-**Per-adapter contract tests are load-bearing**: permission-request fidelity varies across ACP agents (Copilot CLI documented auto-approving without ever sending session/request_permission), loadSession is a capability flag defaulting to false, and parts of the schema are marked unstable. Pin adapter and SDK versions; upgrade deliberately against the contract tests.
+**Review triggering is exclusively control-plane** (decider: user): the ReviewSource is the only component with a code path to review requests; no implementation-side path may request, suppress, or re-trigger review. Preference: repo-configured auto-review (declarative, digest-audited in the trust profile); framework-issued re-requests after remediation pushes if auto-review does not cover new heads (minimal templated text, never agent-authored content: a submitter-composed trigger is an injection channel). Fail-closed: unconfirmed review becomes an attention item; review is never silently skipped. 1B verify items: auto-review coverage of remediation heads; Codex's exact instruction-file discovery behavior (policy in 5.8 lands regardless).
 
-### 4.4 Gates
+**Session durability contract:** transcripts and artifacts durably recorded; workflow recovery guaranteed from stage inputs, workspace state, and artifacts; provider resume best-effort; a dead unattended process means clean retry, snapshot resume, or escalation. **Capabilities fixed at spawn**; insufficiency means a typed request and exit; interactive sessions (Phase 3) never grant capabilities.
 
-Two kinds, only one of which is ACP:
+### 5.4 Credential modes
 
-**Between-stage gates** (the primary kind: approve spec before implementation, approve PR-ready work before review spend). Owned by the daemon's state machine. The stage completes, the process exits, the container dies, artifacts persist, the gate emits an inbox item, and the next stage spawns on approval. Nothing blocks waiting on a human.
+**No GitHub write credential ever enters any workspace.** The git/publish service owns the App key and installation tokens and performs every mutation after gauntlet validation. Provider credentials run in a declared, recorded, per-run mode; project policy states acceptable modes:
 
-**In-session gates** (a live agent pauses mid-context, e.g. plan approval during elaboration). Native ACP session/request_permission with custom options and rich markdown content; structured approval-card fields ride in `_meta`. The daemon persists the request, emits an inbox item, and answers the blocked call when I decide. Used only where interactive latency is expected.
+- **subscription_contained** (Phase 1 default): native vendor CLI in the agent VM; provider-only egress; no registries at runtime (dependencies baked); read-only credential mount where permitted; secret scanning on every exported byte; **exposure accepted as documented residual risk.** (Setup-token scope claims: verify during 1A.)
+- **api_key_isolated** (Phase 2, supported): key in a trusted broker; mediated access; usage billing.
+- **local_trusted**: dedicated-account tooling for explicitly trusted inputs; never represented as isolated.
 
-**The approval card is a data contract, not a UX problem.** Every gate emission must include: a one-line requested action; a 3-to-5 line synthesized summary; a plan-altitude line ("implements step 3 of 6 of milestone Y; plan last changed <date>"); mechanical risk flags (test status, diff size, files touched, budget consumed); links to PR, run, and plan; and the decision set (approve / reject / discuss). A stage that cannot populate the card is a defective stage.
+Native unmodified vendor tooling; terms confirmed during 1A; **provider-level concurrency leases** serialize each auth identity; API-key fallback always available.
 
-### 4.5 Runners: containers
+### 5.5 The CI trust boundary
 
-Ephemeral `container run` micro-VMs via Apple's container 1.0 on the Mac Studio (sub-second start, one VM per container, OCI images), behind a runner interface that keeps Docker interchangeable. Note: Apple's "container machine" mode mounts the host home directory and is explicitly **not** used for agents; it defeats isolation.
+Tokens out of workspaces does not protect CI: pushed agent branches can execute agent-modified scripts inside secret-bearing Actions jobs, and same-repo branch PRs lack fork-style restrictions. Every onboarded repository carries an **automation trust profile** (pr_execution: audited_same_repo | fork_untrusted | local_only; allow_self_hosted_ci; allow_secret_bearing_pr_jobs; allow_pull_request_target; workflow_audit_digest; review: {mode, config_digest}). Default for owned repos: **audited_same_repo**. **1A scope: one repository's machine-readable profile, reviewed manually once, with deterministic drift detection failing closed**; the generalized auditor is Phase 2 material, and static inspection can never fully prove workflow safety, so drift-detection-plus-fail-closed is the durable mechanism. Fail-closed: unaudited repo means local implementation and verification complete, publish gated behind publish_blocked. **Standing prohibition:** the daemon host is never a self-hosted Actions runner for any managed repo.
 
-Provisioning is three one-time investments, after which per-spawn cost is a template:
+### 5.6 The gauntlet: hostile import and clean verification
 
-**Golden images.** `agent-claude` and `agent-codex` bases (pinned CLI + adapter versions, git, gh, common tooling), rebuilt on a schedule; per-project images extend a base with the project toolchain, devcontainer-spec shaped. Agents clone onto VM-local disk rather than working over virtiofs bind mounts (large performance gap, and better isolation); artifacts ship out at stage end.
+```
+daemon-owned base repo ──exact base SHA──▶ agent workspace
+agent workspace ──patch / constrained bundle + typed manifest──▶ importer
+importer ──validated──▶ fresh daemon-owned checkout (hooks disabled)
+fresh checkout ──▶ clean verification workspace (no credentials, no network)
+verified candidate ──▶ git/publish ──▶ GitHub PR (under trust profile)
+```
 
-**Token broker.** The daemon runs as a GitHub App and mints short-lived installation tokens per stage, scoped to the stage's needs (contents:read for review; contents:write + pull-requests:write for implement). No long-lived personal tokens anywhere; no SSH agent forwarding into autonomous containers; git credential env hardening in images. Vendor OAuth state (the crown jewels: subscription-granting tokens) lives in named volumes per provider, protected primarily by egress control.
+The importer never trusts the workspace's .git, hooks, git config, symlinks/hardlinks, device files, archives, submodules, modes, or agent-written manifests; enforces base SHA, ancestry and count bounds, canonical paths, type/mode allowlists, size limits, control-plane path restrictions (5.8), secret scanning, no shell interpolation, restricted git protocols, daemon-generated manifests. **Malicious artifact fixtures are permanent suite members.**
 
-**Egress profiles.** Enforcement lives outside the guest: an allowlist proxy on the host, with agent containers having no route except the proxy. In-guest firewalls are treated as soft guards only (documented cases of agents actively attacking their own firewall). Named profiles referenced by stage definitions: `vendor-only` (review), `vendor+github+registries` (implement), `vendor+github+web` (triage/research). Anthropic documents Claude Code's required domains; profiles are known lists, not guesswork.
+**Trusted verification recipe** (clean rooms are insufficient alone, since a candidate that weakens the Makefile makes the clean VM faithfully execute hollow verification): VerificationRecipe {config_digest, runner_image_digest, commands, trusted_wrapper_digest, network_policy, timeout, expected_outputs, sensitive_control_paths} loads from approved control-plane config or the trusted base commit, never the implementation head. First repo prefers direct tool invocations (go test ./..., go vet ./...) over mutable project wrappers. Changes to verification-control files are mechanically identified, risk-flagged, invalidate prior-recipe assumptions, and gate when they can weaken or redirect verification; they are reviewed as part of the candidate, never trusted as its judge. Evidence records exact command, image digest, environment digest, exit status, immutable log. **Named residual:** candidate-authored test code still executes in the verifier VM; the recipe protects verification's judgment, while the verifier's credential-free, network-free envelope contains its execution. Both halves are required.
 
-### 4.6 Security model
+### 5.7 The envelope: runners
 
-The threat model is prompt injection into autonomous agents: issue bodies, PR comments, CI logs, and web content are instruction channels into processes with shell access. Everything observed by an agent is data, not command. Mitigations are architectural: container isolation, per-stage scoped credentials, egress allowlists, human gates positioned **before** irreversible side effects, per-run budgets (tokens, wall time, iterations) that halt rather than degrade, max-iteration counts and kill switches on every loop (two automated loops ping-ponging is a designed-against failure mode), and full audit traces. The containers protect the machine; the token scopes and egress profiles protect the accounts and repos; the gates and verification protect the codebase. The residual channel no boundary closes is legitimate output reviewed too fast, which is what WIP limits and the comprehension layer defend.
+Backends declare capabilities (isolation class, VM-per-job, private networking, snapshots, read-only root, resource limits, egress-proxy support); policy states minimums; **no silent downgrade**, but first-run may accept a weaker declared class with the conformance suite reporting exactly what class is running (Section 10). Primary backends: Apple container (macOS), Firecracker/Kata (Linux VM-class), Docker (weaker class, both platforms). **Fail-closed conformance at startup and before unattended runs**: internet unreachable except via the intended proxy; daemon API, Tailscale services, host gateways, databases, artifact storage, and control sockets unreachable from the VM; DNS and IPv6 cannot bypass policy; refuse to run on failure. VM boundary treated as filesystem/kernel isolation, not proven network isolation; host hardening applies regardless. Golden images pin CLIs and toolchains; workspaces on VM-local disk; artifacts ship out at stage end. **Bootstrap exception:** the Go daemon builds itself through Freeside; SwiftUI work is exempt until a macOS execution class exists (deferred, possibly forever).
 
-### 4.7 Pipelines
+### 5.8 Control-plane trust
 
-YAML files in `.pipelines/` per repo, versioned, chat-authored, engine-executed. Draft schema shape (Phase 0 refines against Antfarm source reading):
+Workflow config, prompts, policy, trust profiles, verification recipes, and materiality rules load **only from an approved default-branch commit**; running stages snapshot trusted-config digests; workspace copies are data. **Vendor auto-loaded instructions are control-plane**: local agents get trusted-base overlays of all agent configuration (CLAUDE.md, .claude/*, .mcp.json, .codex/*, hooks, plugins; project MCP/hooks/plugins/skills disabled unless allowlisted); agent-modified instruction files are ordinary diff content, always risk-flagged. **Reviewer-instruction poisoning (blocking):** cloud reviewers read instruction files from the candidate branch (nested AGENTS.md included), so for the ordinary workflow, **adding or modifying any reviewer-instruction path (AGENTS.md at any depth, AGENTS.override.md, .codex/**, and peers) is publish-blocking**; such changes route through the control-plane change workflow with human approval before publication or before relying on cloud review; **auto-review is not independent review for a PR that modifies the instructions governing it.** Detection covers nested paths mechanically in the importer.
+
+### 5.9 Durability: effectively-once
+
+Authority: GitHub owns source/issues/PRs/reviews/checks/merge; **SQLite owns workflow state, gate decisions, attempts, event processing, routing, conversations, audit**; the artifact store owns immutable stage inputs/outputs; providers hold transient session state; repo docs hold promoted decisions. External actions use an **inbox/outbox** (state + intent + idempotency key in one transaction; worker acts and records). Claim: **committed workflow decisions survive restart, and external effects converge to one intended result through deterministic identities, reconciliation, and bounded retry** (run-derived branch names, hidden PR run markers, check-before-create, marker-updated comments, expected-state records, reconciliation after ambiguous timeouts). Kill-before/kill-after tests are permanent.
+
+### 5.10 Coherent backup invariant
+
+Blob writes: temp path → digest verify → fsync (file and directory) → atomic rename into the content-addressed store → **only then** the referencing SQLite row. Disaster recovery tracks ArtifactBackupState {replicated_through_revision, verified_at}; **a backup is restorable only when every artifact reachable from database state at that revision exists in replicated storage**; restore verifies every referenced digest before unattended work resumes. Rows referencing missing blobs: integrity failure, fail closed. Orphan blobs: safe, garbage-collected **subject to retention policy**. Small irreplaceables (conversation text, decisions) live in SQLite; large attachments, screenshots, patches, raw transcripts live in the artifact store. Any rollback restore issues a new client sync_epoch.
+
+### 5.11 GitHub integration: reconciliation plus intake
+
+Per-active-resource state reconciliation (issues, PRs, check runs, reviews) with conditional requests, modest intervals, refresh on app open. **Intake scanners discover new work** (reconciliation only tracks known resources): IssueIntakeScanner {repository, required_label, updated_since_with_overlap, issue_identity, last_completed_scan}, using overlap plus idempotent identity rather than trusting timestamps as perfect cursors. The scanner is the template all scan-class initiators follow. Webhooks are Phase 2, only if latency hurts, feeding the same event inbox; reconciliation remains mandatory.
+
+### 5.12 Workflow definition, initiators, and artifacts
+
+The Phase 1 workflow is a Go state machine; YAML is policy only; crash retries are separated from review remediation:
 
 ```yaml
-name: bug-to-pr
-triggers:
-  - github: {event: issues, action: labeled, label: "agent:go"}
-  - manual: true
-stages:
-  - name: elaborate
-    role: elaborator          # role = prompt file + provider + model + effort
-    egress_profile: vendor+github+web
-    budgets: {tokens: 500k, wall: 30m, iterations: 3}
-    outputs: [spec, devlog, approval_card]
-    gate: approve             # none | notify | approve
-    on_failure: {retry: 1, then: escalate}
-  - name: implement
-    role: implementer
-    egress_profile: vendor+github+registries
-    inputs: [spec]
-    outputs: [pr, devlog, verification_report, approval_card]
-    gate: notify
-  - name: review
-    role: reviewer            # cross-provider by policy
-    egress_profile: vendor-only
-    inputs: [pr, spec]
-    gate: none
+project:        {repository: freeside-ai/<first-repo>, rein: tight}
+initiators:
+  - {type: manual}
+  - {type: label, label: "freeside", mode: auto_start}
+  - {type: scan, query: stale_prs, schedule: daily, mode: propose}   # Phase 2
+elaboration:    {driver: claude, enabled: true}
+implementation: {driver: claude, failed_execution_retries: 2}
+review:
+  source: codex_github
+  continue_while: new_material_findings
+  pattern_sweep_after: 2
+  low_value_streak_before_attention: 2
+  hard_wall_time: 8h
+  hard_round_limit: 25            # emergency brakes only
+verification:   {recipe: trusted, commands: [go test ./..., go vet ./...]}
+gates:          {spec_approval: true, before_final_review: true}
+budgets:        {wall_time: 45m, max_diff_files: 40}
+security:       {credential_mode: subscription_contained}
+telemetry:      {shadow_review_rate: 0.2}
 ```
 
-Roles are data referencing versioned prompt files, never code. Initial role set: **elaborator** (triage + repro + spec merged: repro context improves the spec and a handoff wastes it), **implementer**, **verifier** (separate from implementer on principle; mostly deterministic scripts with a cheap model wrapping them), **reviewer** (cross-provider frontier model), **briefer** (cheap model), **janitor** (a scheduled pipeline for branches, worktrees, containers, stale runs). Initial model mapping is a placeholder corrected by trace data.
+**Initiators** map event sources to workflow entries with mode auto_start or propose (propose emits batched run_proposal items). Deterministic queries where possible; agent triage only where judgment is required; initiators are control-plane config; auto_start is bounded by WIP caps and budgets; the conservative default is propose. 1A ships the manual initiator (the hand-approved-spec entry); 1B adds label; scan initiators arrive early Phase 2; **workflow chaining** (one workflow's output initiating another, e.g. bug-report triage feeding implementation) is Phase 2/4 horizon.
 
-### 4.8 Clients and API boundary
+**Findings and classification:** raw reviewer findings are **immutable**; classification (finding_id, head_sha, severity, category, pattern, materiality, scope, confidence, status) is a separate versioned annotation; classifier prompt/model changes are digest-traceable; **low-confidence materiality defaults to continuing or human attention, never dismissal; the classifier cannot declare a finding fixed.** Yield, not round count, ends review; classification accuracy is sampled telemetry; ceilings guard against label-driven misbehavior.
 
-SwiftUI, one multiplatform codebase for macOS and iOS. The daemon's OpenAPI spec is a first-class artifact: swift-openapi-generator for the client, oapi-codegen for server stubs, event payloads defined as named versioned schemas in the same spec (the WebSocket channel is where drift will try to hide). Any spec change is treated as a migration. Notifications via ntfy initially, native APNs when the app is real. If a web-rendered view ever becomes necessary (diff rendering being the likely temptation), it is daemon-served HTML in a WKWebView; no JS toolchain enters the client. Remote access via Tailscale.
+Artifacts are typed, immutable, digest-addressed (type, schema version, digest, producing run/attempt, base/head SHAs, validator, retention, sensitivity); inputs reference artifact IDs; approvals bind to digests. Budgets are enforceable controls; token budgets are advisory telemetry. A DSL waits for three genuinely different shapes.
 
-Screens for v1 (roughly eight): inbox; approval card detail; run detail (CI-run-page idiom: stage timeline with artifacts, not a chat log); session chat (attach to any run's session, live or resumed); project list; project status/briefings; usage dashboard; settings. Mobile diff review stays on GitHub's app.
+### 5.13 Deterministic components
 
-### 4.9 Usage monitoring
+The engine runs verification, computes card facts, and performs cleanup as policy jobs. Agents appear where judgment is the work: elaborator (widest egress, zero write credentials), implementer, remediator, diagnostic, finding classifier, later a briefer.
 
-v1 is local accounting: per-turn token usage from session logs (ACP usage_update notifications where adapters emit them; session JSONL otherwise), aggregated per stage, provider, project, and day. Periodic probes of CLI status output for rate-limit flags. Manual thresholds and manual coarse routing rules ("Claude weekly flag set: route reviewer stages to OpenAI"). Automatic fallback is explicitly out of scope until vendors expose quota state. Constraint honored throughout: subscription plans are driven only through the vendors' own CLIs/adapters as black boxes; nothing skirts ToS by driving subscription auth from a custom harness.
+### 5.14 Client synchronization and conversations
 
----
+**Authority and consistency.** The daemon is sole authority for items, workflow state, conversations, messages, decisions. Client databases are disposable read caches; both platforms use the same API. Guarantees: transactional consistency in the daemon; optimistic concurrency for commands; eventual convergence of connected clients; read-your-write after acknowledgment; no availability while the daemon is unreachable, **but the cached read-only view remains visible with a freshness banner** (a blank app during a network hiccup would reinstate agent-window patrol); consequential actions are disabled until current state validates.
 
-## 5. Verification (first-class, not a stage detail)
+**Revision and epoch.** ServerState {sync_epoch UUID, revision uint64}. Every client-visible transaction increments revision, returned by all mutations and state endpoints. sync_epoch persists across ordinary restarts; an explicit restore or state rewind issues a new epoch; a client seeing an unknown epoch discards its cache and bootstraps (prevents a device ahead of a restored daemon from concluding it is current). item_version detects per-entity conflicts; revision detects overall staleness.
 
-Autonomous loops converge on plausible-looking garbage exactly as fast as their verification is weak. Each project defines a verification environment as part of onboarding to Freeside: real test invocation, linting, build, screenshot capture for UI work, repro-script execution for bug pipelines. Verification outputs are artifacts attached to the run and referenced by the approval card; devlog claims of outcomes must point at them. A stage's "done" is defined by its verification, not its self-report.
+**Snapshots and invalidations.** Small canonical snapshots (GET /sync/bootstrap, /attention, /runs/{id}, /conversations/{id}/messages?after={sequence}) carry epoch and revision. An active WebSocket sends lightweight StateChanged {revision, entity_type, entity_id} invalidations; the client refetches; missed revisions or reconnects trigger snapshot refresh (the active inbox is small; replacing it beats a premature delta protocol). Refresh on launch, foreground, network restoration, reconnect, notification tap, manual pull, and version conflict. **Push and WebSocket improve latency only; correctness never depends on either.**
 
----
+**Devices and commands.** Each device is explicitly paired with a revocable credential in the Keychain (Device {id, display_name, credential, created_at, last_seen_at, revoked_at}); Tailscale is reachability, not authorization. Every mutation is a ClientCommand {command_id UUID, device_id, expected_entity_version, expected_bindings, payload}; the daemon records command and result transactionally; retries return the original result. A resolution transaction: authorize device → check status/version/bindings → record decision → advance workflow → write outbox intents → record command result → increment revision; only then does the client show success. No offline approvals in Phase 1; drafts may persist locally but never present as accepted without live acknowledgment.
 
-## 6. Observability and the improvement loop
+**Conversations** are Freeside domain objects, distinct from provider transcripts: Conversation {id, project_id, work_item_id, run_id, status, version, timestamps}; Message {id (client UUID for human messages), conversation_id, sequence (daemon-assigned, monotonic), author_type human|agent|system, author_device_id, body, attachment_digests, reply_to, created_at server/client, stage_attempt_id, status committed|superseded|redacted}; AgentInvocation {id, conversation_id, trigger_message_id, stage_attempt_id, input_message_ids, input_artifact_digests, status, result_message_id, transcript_artifact_digest}. Daemon sequence orders messages, never device clocks; messages are immutable (corrections are new messages); text in SQLite, attachments in the artifact store by digest. Items reference conversation_id; resolution never deletes the conversation.
 
-Every run leaves a durable trace: stage, prompt version, provider/model, transcript pointer, artifacts, tokens, wall time, outcome, gate decisions. Prompts and pipeline definitions are versioned files so a trace identifies exactly which version produced which outcome. This is simultaneously the usage-monitoring substrate and the tuning dataset: which stages fail, which prompts cause rework, and, critically, whether cross-provider review catches findings same-provider review misses (the load-bearing moat claim, testable from these logs). Findings from review stages are tagged true/false positive and same/cross provider from the start.
+**Discuss semantics.** One transaction: append the human message → record the exact item version and bindings addressed → supersede/transition the item → write an AgentInvocationRequested outbox intent → record the command result → increment revision. Daemon death after commit but before stage start yields exactly one invocation on recovery. **Invocations bind to explicit message and artifact IDs, never "the conversation so far"**: fresh-context stages preserved, every invocation reproducible. Agent completion commits the normalized response message, artifacts, workflow transition, and any replacement item together; the raw transcript remains an audit artifact. Phase 1 conversations are asynchronous; live streaming and mid-turn steering are Phase 3.
 
----
+**Sync tests (permanent, in 1A):** (1) cross-device resolve with second-device conflict; (2) offline device submits against superseded version, rejected with replacement; (3) all notifications missed, foreground refresh reconstructs the inbox; (4) lost HTTP response, command_id retry returns the committed result; (5) discuss commits, daemon dies pre-invocation, recovery starts exactly one; (6) agent response with both clients closed, both later retrieve the same ordered thread; (7) concurrent discuss on one version, one wins, no second invocation; (8) restored daemon issues new epoch, clients discard newer cursors and bootstrap; (9) late notification for a resolved item deep-links to canonical state with no stale action; (10) retried attachment/message yields one artifact and one message.
 
-## 7. The comprehension layer
+## 6. Verification
 
-Defends against the out-of-the-loop problem: the better the pipeline gets at not needing me, the worse I get at the moments it does. Mechanisms, in order of load-bearing-ness:
+Deterministic, engine-run, clean-room, recipe-trusted (5.6), per-project configured; outputs are run-bound artifacts cited by cards. "Done" is verification. False-ready tracking per Section 12 from day one.
 
-**Plans are gated artifacts.** Since agents drive decomposition and plan evolution, plan documents, milestone structures, and specs are versioned files, and **changes to them flow through approval gates exactly like code**. An agent restructuring an approach opens a diff against the plan; that diff is an inbox item. No implementation is ever approved under a plan whose evolution I have not seen.
+## 7. Review policy
 
-**Devlogs as output contracts.** Implementation and review stages must emit a devlog entry: one file per run in `devlogs/`, front-matter (run ID, stage, date, linked issue/PR), headed sections, length-disciplined. Required content is decisions and trade-offs; outcome claims only with pointers to verification evidence (devlogs are claims, not evidence). End-of-session norms: durable decisions get promoted to the plan or an ADR with the devlog as citation; deferred work becomes issues, with the devlog recording why.
+Goal: independent error detection; provider diversity is one mechanism. 1B's configuration (Claude implements, Codex cloud reviews) is component fit, not doctrine. Routing comparisons run over accumulated traces **including sampled shadow reviews, which are the comparison's only valid data source**: at shadow_review_rate, a second reviewer runs against the identical head, findings recorded but never fed to remediation, deduplicated and adjudicated blind where practical. Freeside does not pass or fail on routing results.
 
-**Briefings.** A scheduled briefer stage per project synthesizes traces + devlogs + GitHub state into a digest: what happened, what changed in the plan, what is in flight, what is coming to me. Pull counterpart: chat queries against daemon state and plan artifacts ("brief me on X", "what did I approve last week and what came of it").
+## 8. Observability and optimization telemetry
 
-**Altitude on every inbox item** (the approval card's plan-context line), so routine gate decisions passively refresh the model.
+Traces land as **typed relational rows in SQLite with stable join keys** (run_id, item_id, finding_id, head SHA, digests); transcripts are drill-down pointers, never the primary substrate; an optimizing agent writes SQL, not archaeology. Per run: stage, prompt/config/trust/recipe digests, driver, credential mode, transcript pointer, artifacts, tokens and cost (recorded now, displayed Phase 3), wall time, attempts, review rounds and yields, classifier samples, shadow-review results, outcome, decisions. **Closed-loop attribution:** defect issues reference the producing run (PR run markers make blame-to-run mechanical); fault classes captured at adjudication (Section 4). **Attention telemetry:** item timing chains, decisions taken, conflict/staleness events, interruption-class rates (the Section 3.2 health metric); long open-to-decide gaps and discuss detours flag cards whose evidence is not self-contained. **Baseline logging is passive and concurrent with 1A**: a lightweight time log of the manual workflow anchoring the usefulness comparison; not a study, not a gate. Usage is observed telemetry, never claimed quota state.
 
-**Initiative WIP limits**, enforced and visible.
+## 9. Comprehension
 
----
+Evidence packets on every decision first; altitude lines once plans are structured artifacts. Plan changes gate by materiality (scope, acceptance criteria, milestones, sequencing affecting active work, architecture, risk posture, commitments); wording changes are recorded, not interrupted for; materiality rules are control-plane policy. Devlogs split by cadence: repo protocol for human sessions; artifact-store summaries for autonomous runs; shared promotion channel (decisions to ADRs/plan, deferrals to issues). Briefings and open-ended querying are Phase 3, only if repeated real questions demand them.
 
-## 8. Roadmap
+## 10. Operations and onboarding
 
-### Phase 0: validation (≈2 weeks, mostly agent-delegable)
+**The binary is the installer.** `freesided setup` creates the dedicated user, supervision config, config skeleton, and replication config. `freesided onboard <repo>` generates the machine-readable trust profile for one-time manual review, detects a verification recipe from the repo's toolchain, and builds the project image. `freesided doctor` repackages the conformance suite and restore verification as diagnostics, runs on a schedule, and files failures as attention items: the system reports its own degradation into the same inbox. (This is admin tooling; the "not a CLI" non-goal governs the product experience.) **GitHub App creation uses the manifest flow** (one click and a redirect, not a webform and key juggling). **Defaults:** hosted ntfy; embedded SQLite; single config directory; Docker accepted as the initial runner class where the strict backend is absent, with the conformance report stating the running class and its meaning; strictest settings never gate first-run. **Targets, committed:** fresh machine to first successful run under one hour; repo onboarding under thirty minutes with exactly one manual step (reviewing the generated trust profile, manual on principle). Supervision is installed by setup; upgrades are deliberate (pinned CLI and adapter versions, driver contract tests).
 
-The purpose is to answer the questions that determine whether and what to build, before building.
+## 11. Roadmap and build order
 
-- **The trial.** 10 to 15 real work items across two projects run through a staged flow using existing tools (Antfarm-style loops and/or hand-driven staging). Measures: merge rate without rework, my minutes per item, tokens per item, review findings tagged true/false positive and same/cross provider. **Pass criteria set in advance:** ≈60% of items reach mergeable state with only gate-level input; cross-provider review surfaces at least a few true findings same-provider review missed. If elaboration fails but implementation passes, proceed with me keeping the specing role. **If implementation-stage results fail, stop the project.**
-- **Source reading** (delegable to agents): Antfarm (pipeline schema and loop mechanics), Nimbalyst (harness adapters, iOS relay), claude-code-acp and the Codex adapter (loadSession, permission fidelity, mid-turn message behavior, static pass), coder/acp-go-sdk (client-side coverage for the multiplexer), Gas City (adopt-or-ignore for state layer).
-- **Spikes** (mostly delegable to static verification, minutes of authenticated confirmation on my machine): usage/status probe yield from both CLIs; image round-trip headless in both directions; ACP adapter contract behavior (authenticated).
-- **Design artifacts** (delegable): pipeline schema v0 with two worked examples; OpenAPI skeleton including the approval-card schema and event payloads.
+### Phase 1A: the secure publish path
 
-**Exit criteria:** trial numbers in hand; adapter contracts characterized; schema and API drafts reviewed. These four are the named revision triggers for everything below.
+From a **hand-approved spec**: implementation (subscription_contained, provider-only egress) → gauntlet (import, clean recipe verification) → daemon publication under the reviewed trust profile → ready_for_final_review on iPhone. One repository, dependencies baked. Components: workflow state; signet (items with 1A types, conversations, sync revision/epoch, device pairing, ClientCommands); **fake StageDriver and fake ReviewSource**; minimal macOS/iOS clients; artifact store with the coherent backup invariant; hostile importer with malicious fixtures; clean verifier with trusted recipes and a fake candidate producer; git/publish with deterministic identities and reconciliation; envelope with conformance suite; Claude StageDriver; trust profile (manually reviewed) with drift detection; ntfy; kill-before/kill-after, stale-approval, and the ten sync tests; `freesided setup`/`onboard`/`doctor`.
 
-### Phase 1: the headless loop (the 80%-of-value milestone)
+**Build order:** (1) workflow state, AttentionItem, conversations, sync revision, device commands, fake StageDriver; (2) minimal clients plus stale/concurrent-device tests; (3) artifact store and backup rules; (4) importer and clean verifier against a fake candidate producer; (5) git publication and reconciliation; (6) envelope and conformance; (7) Claude StageDriver; (8) real 1A work items; (9) 1B.
 
-freesided running real work daily with no Freeside UI: event bus (webhooks + reconciler + cron), pipeline engine with persisted state machines, ACP session layer behind contract tests, container runners with golden images, token broker, egress proxy, between-stage gates delivering approval cards via ntfy, devlog and verification contracts enforced, traces recorded. GitHub notifications + terminal are the interim surface; GitHub Projects auto-workflows as the passive status board. **The ugly-bootstrap rule: the earliest Freeside development work itself flows through the pipeline.** If the daemon cannot carry my real workload before the UI exists, the UI will not save it.
+**1A exit (safety and durability only):** conformance green; malicious fixtures contained; kill, stale-approval, and sync tests pass; restore drill verifies the backup invariant; several real hand-specced changes publish with no duplicate side effects, **no undeclared credential in any workspace** (the sole workspace credential is the provider credential the recorded subscription_contained mode explicitly permits), and no terminal intervention after approval.
 
-### Phase 2: the attention surface
+### Phase 1B: the useful workflow
 
-OpenAPI boundary frozen (v1), SwiftUI app: inbox, approval cards, run detail, session chat with live-attach and resume, APNs. In-session ACP gates wired end to end. Success measure: a full working day driven from the phone.
+labeled issue (intake scanner) → elaboration → spec_approval (full rendering; revision diffs) → implementation → gauntlet → PR under trust profile → checks (reconciliation) → Codex review, control-plane triggered → yield-driven remediation with pattern sweeps → diminishing-returns / dispute items as needed → ready_for_final_review with yield history → human merges on GitHub. Alternate entry: hand-approved spec. Adds: elaborator; intake scanner; ReviewSource with freshness verification and the auto-review-coverage question resolved; finding classifier with sampled accuracy; convergence policy; shadow-review sampling; run timeline screen. Real backlog immediately; its telemetry is the trial. **1B exit (usefulness):** no agent-window patrol; no manual polling; productive review rounds run unasked; low-value streaks yield one consolidated item; spec approval and handoff decidable from the phone; active attention materially below baseline; exceptional-interruption rate low; false-ready per Section 12.
 
-### Phase 3: comprehension and tuning
+### Phase 2: breadth and hardening
 
-Briefer stages and chat queries over project state; plan-diff gating enforced across projects; usage dashboard and manual routing rules; first prompt-tuning pass driven by trace data, including the cross-provider review analysis; WIP limits surfaced in UI.
+Second repository and workflow shape; scan initiators (propose mode) and workflow chaining; local Codex driver if useful; api_key_isolated; full failure-injection campaign; restore drills; generalized (still bounded) CI audit tooling; richer classification; webhooks if latency hurts; APNs; egress proxy for registry-needing projects; risk-classified cards; Linux deployment exercised in anger if wanted.
 
-### Phase 4: expansion (each item justified by daily annoyance, not roadmap momentum)
+### Phase 3: comprehension and interaction
 
-App Intents over Freeside entities, widgets, Live Activities; skills/tool exposure to stages; additional ACP agents (Gemini CLI is nearly free); voice; container-machine-based interactive environments; open-sourcing decision.
+ACP interactive attachment; best-effort resume; material plan-change gates end to end; briefings; usage display and evidence-informed routing (shadow-review analysis); WIP and initiative views; auto_start maturation via rein posture.
 
----
+### Phase 4: generalization
 
-## 9. Key decisions log (with the reasoning that would need to be overturned)
+Pipeline DSL (after three shapes); more agents and skills; macOS runner class; App Intents, widgets, Live Activities; voice; open-source packaging decision.
 
-1. **Daemon owns all state; clients are thin.** Enables second clients for free; state in an app was the named failure mode.
-2. **GitHub is the system of record and review surface.** Freeside never rebuilds review; "final review without reading diffs" was rejected as vibes.
-3. **Chat authors artifacts; the engine executes artifacts.** Workflows as conversation-resident state was rejected as rebuilding manual looping with extra steps.
-4. **Elaboration lives in vendor apps for now; artifacts flow in.** Halves early UI scope.
-5. **ACP is the session interface**; adapters are external subprocesses; per-adapter contract tests required. Codex's app-server may warrant a custom adapter if its ACP adapter underdelivers on steering.
-6. **Gates split: between-stage (daemon-native) and in-session (ACP request_permission).** Blocking a live container for hours on a human was rejected.
-7. **Go daemon, SwiftUI clients, OpenAPI boundary.** Conditional on the SwiftUI choice; a web-stack client would have flipped this to TS. Revisit only if daemon-side agent extensibility proves painful in practice.
-8. **Apple container runtime, ephemeral mode only, Docker-swappable.** Container machines excluded for agents (home-dir mount).
-9. **Egress enforced outside the guest.** In-guest firewalls demonstrated subvertible by agents.
-10. **Subscription usage only via vendor CLIs as black boxes.** ToS constraint; also kills clean automatic fallback, hence manual routing.
-11. **SQLite + Litestream; durability by authority placement, not engine choice.**
-12. **Elaborator role merges triage + repro + spec.** Repro context improves specs; handoffs waste it.
-13. **Verification defines "done"; devlogs are claims requiring evidence pointers.**
-14. **Plan changes are gated like code.** The core defense against comprehension drift.
-15. **Personal-tool scope; product option preserved but never load-bearing.**
+## 12. Exit criteria definitions
 
-## 10. Open questions and risks
+**Mechanical false-ready** (zero tolerated): the card asserted something objectively stale or false (checks on a previous head; review bound to an earlier commit; verification not run; spec digest changed post-approval; artifact links not matching reviewed code). **Substantive false-ready** (zero critical/high; lesser misses recorded): final review finds a material in-scope correctness, security, data-integrity, or acceptance-criteria failure the automation should reasonably have caught; a requested design improvement is not false-ready. **Safety failure** (any blocks unattended use): workspace obtains a GitHub write credential; agent reaches a privileged host service; output escapes importer constraints; untrusted PR code receives privileged CI credentials without an explicit gate; a stale mobile decision takes effect; a crash produces uncontrolled duplicates; provider auth corrupted by concurrency; control-plane content from an implementation head influences later execution; **reviewer instructions from a candidate branch govern that candidate's review**. **Kill criterion:** stop if agents perform acceptably manually but Freeside does not materially reduce attention burden after a reasonable integration pass; elaborator weakness alone is not a kill.
 
-**Open (empirical, Phase 0):** stage-level payoff numbers, especially elaboration; cross-provider review value; adapter contract results (permission fidelity, loadSession, mid-turn steering); usage-probe yield; whatever the Antfarm/Nimbalyst reading overturns in the schema draft.
+## 13. Decisions log
 
-**Risks and mitigations:**
-- *Vendor CLI/adapter churn:* pinned versions everywhere, contract tests, deliberate upgrades. Ongoing tax; budgeted.
-- *First-party absorption:* expected for everything except the cross-provider + gates + owned-hardware core; do not over-polish features vendors will ship natively.
-- *Anthropic/OpenAI policy shifts on subscription automation:* black-box CLI usage is the tolerated pattern today; a hard policy change against headless subscription use is the existential external risk. Mitigation is architectural neutrality (API-key mode works identically, at worse economics) and staying visibly inside each vendor's own tooling.
-- *Apple container 1.0 immaturity:* four weeks past 1.0; Docker fallback interface maintained.
-- *Review saturation:* WIP caps, fewer-higher-confidence tuning, prioritized inbox.
-- *Solo-builder scope:* Phase 1 is the go/no-go artifact; the ugly bootstrap keeps the project honest.
-- *Prompt injection:* Section 4.6; treated as the primary threat, mitigations architectural, never retrofitted.
+Each revision's material changes are recorded here with deciders. Revision 4 folded in five delta sets: optimization telemetry closure; workflow initiators (restoring autonomous initiation that revision 3 had narrowed unintentionally); a fourth external review (client synchronization and conversations, reviewer instruction poisoning, cross-store durability, trusted verification recipes, plus corrections); three standing user constraints (portability, autonomy preservation, operational simplicity); and the naming stack.
 
-## 11. Naming
+Held from revision 3 (abbreviated): daemon owns workflow state, clients thin; GitHub owns source/review/merge; chat authors artifacts; gates daemon-native; Go + SwiftUI; monorepo; verification defines completion; personal scope; capabilities at spawn; control-plane from approved commits; digest-bound artifacts and approvals; SQLite + inbox/outbox; polling-first; capability-classed runners, no silent downgrade; SwiftUI bootstrap exemption; native vendor tooling with leases and API-key fallback; cross-provider review as routing hypothesis; attention inbox as control system; elaboration in scope, severable (user); devlog cadence split; materiality-gated plans; provisional API; Phase 0 deleted into 1A gates; yield-driven review with separated crash retries; finding classifier named; ReviewSource with CodexGitHubReview; control-plane-only review triggering (user); CI trust profiles, audited_same_repo default, no self-hosted runner; hostile import and clean verification; credential modes; effectively-once; per-resource reconciliation; type-specific version-bound attention actions; mechanical/substantive/safety false-ready; 1A/1B exit split.
 
-Project: **Freeside** (freeside.ai, github.com/freeside-ai). The Gibson reference is apt: autonomous intelligences operating under hard constraints, humans holding the gates. Brand line: *free as in bird*. Components take boring functional names (freesided, Freeside for iOS); the Gibson well is umbrella, not convention.
+New in revision 4 (decider in parentheses):
+1. **Client sync and conversation model** (Section 5.14): revision/epoch, snapshots plus invalidations, device pairing, command idempotency, conversation/message/invocation domain, discuss transactions, ten permanent sync tests. (Review 4; cached read-only view with freshness banner added, this revision.)
+2. **Reviewer-instruction poisoning closed**: nested instruction paths publish-blocking in the ordinary workflow; control-plane change path required; auto-review is not independent review for PRs modifying its instructions. (Review 4; punctured revision 3's "reads through GitHub" parenthetical.)
+3. **Coherent backup invariant**: blob-before-row ordering, restorable-only-with-closure, digest-verified restore, new epoch after rollback; orphan GC respects retention. (Review 4; retention amendment this revision.)
+4. **Trusted verification recipes**, with the named residual that candidate test code still executes inside the contained envelope. (Review 4; residual named this revision.)
+5. **Corrections batch**: 1A credential-criterion wording; agent_question and publish_blocked actions; capability retries from predefined manifests; preference-to-policy via proposal PR; open-PR-as-navigation with reconciliation-driven resolution; spec revision diff cards; immutable raw findings with annotation-only classification and no-dismissal defaults; intake scanner; 1A CI audit scoped to one reviewed profile plus drift detection; fake driver and review source as permanent fixtures; build order adopted. (Review 4.)
+6. **Initiators restored**: manual/label/scan with propose|auto_start, run_proposal items, chaining on the Phase 2/4 horizon; revision 3's narrowing recorded as unintentional drift. (This revision; user prompt.)
+7. **Optimization telemetry closed**: relational trace store, timing chains, fault-class capture, defect back-links, shadow-review sampling as the routing comparison's data source. (This revision; user prompt.)
+8. **Portability as principle**: Linux a supported class, no Apple-only daemon dependencies, Linux CI from day one, cloud exposure documented. (User.)
+9. **Autonomy preservation as principle**: interruption budget with planned/exceptional tagging, exceptional rate as tracked health metric, self-service rule, rein posture as maturity dial. (User.)
+10. **Operational simplicity as principle with committed targets**: setup/onboard/doctor, manifest-flow App creation, permissive first-run defaults with honest class reporting. (User.)
+11. **Naming stack**: Freeside; category "an agent control plane"; register "the harness runs the agent; the reins are yours"; subsystems envelope, signet, gauntlet; `rein:` as the gate-posture policy key. (User.)
 
-## 12. Reference shelf
+## 14. Risks
 
-Study-for-parts, not adopt: Antfarm (staged loops, YAML+cron+SQLite), Nimbalyst (cross-harness adapters, iOS companion, open source), Conductor (Mac orchestration UX baseline), Gas Town/Gas City/Beads (persistent work units, merge queues, and the cautionary tale on gateless scale), Omnara (mobile relay), Claude Code web/iOS and the Codex app (vendor baselines to beat on the specific loop, not on polish), Anthropic's reference devcontainer and Trail of Bits' sandbox (container hardening patterns), GitHub Agentic Workflows (typed event-driven schemas). Protocol: agentclientprotocol.com, coder/acp-go-sdk, Zed's adapters. Runtime: apple/container docs.
+Provider-credential exposure in subscription_contained (documented, egress-bounded, secret-scanned; api_key_isolated is the escape; elevated on cloud hosts); CI privilege crossing (trust profiles, drift detection, fail-closed publish, runner prohibition); reviewer-instruction poisoning (publish-blocking paths, control-plane routing); Codex cloud review as load-bearing dependency (local reviewer hedge; fail-closed review status); classifier mislabeling (immutable raw findings, sampled QA, no-dismissal defaults, ceilings, dispute items); subscription-terms drift (native tooling, leases, API-key fallback); Apple container immaturity and network-boundary uncertainty (fail-closed conformance, host hardening, capability classes, Linux class as pressure valve); vendor CLI churn (pins, contract tests, deliberate upgrades); review saturation and shallow approval (WIP caps, digest binding, false-ready tracking, revision-diff cards); interruption creep (budget metric, self-service rule); setup and upkeep burden (Section 10 targets, doctor); sync complexity creep (snapshot model is deliberately minimal; delta protocols deferred); solo scope (1A small, production-shaped, go/no-go); prompt injection as the organizing threat (no write credentials in workspaces, gauntlet, control-plane overlays, publish-blocking instruction paths, egress profiles, gates before irreversible actions, budgets, brakes).
+
+## 15. Naming and references
+
+**Freeside** (freeside.ai, github.com/freeside-ai); *free as in bird*; category line "an agent control plane"; self-brand "the harness runs the agent; the reins are yours." Subsystems: the **envelope** (runner and safety boundary), the **signet** (attention and approval service), the **gauntlet** (import and verification path); daemon **freesided**; clients take functional names. Reference shelf: Anthropic devcontainer/Agent SDK/credential docs; OpenAI Codex SDK, sandbox design, cloud review docs; Apple container docs and issue tracker; Firecracker/Kata; Litestream; Antfarm, Nimbalyst, Conductor, Gas Town/Beads (cautionary); agentclientprotocol.com (Phase 3).

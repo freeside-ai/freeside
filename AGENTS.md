@@ -1,8 +1,8 @@
 # AGENTS.md
 
-**Freeside** is a personal pipeline engine for agent-driven software development, with an inbox for human attention. The spec, architecture, and roadmap live in [`docs/plan.md`](docs/plan.md); read it first, and argue changes against it. This file holds the development conventions that apply to every session: workflow bookends, branch/PR/commit discipline, and the monorepo's scope rules.
+**Freeside** is an agent control plane: a local, durable workflow controller that turns a software work item into an evidence-backed pull request and interrupts a human only when judgment is required. The spec, architecture, and roadmap live in [`docs/plan.md`](docs/plan.md); read it first, and argue changes against it. This file holds the development conventions that apply to every session: workflow bookends, branch/PR/commit discipline, and the monorepo's scope rules.
 
-Freeside is a monorepo. Each component directory (`daemon/`, `app/`, `api/`, `prompts/`, `pipelines/`, `images/`) stays empty until the phase that fills it, holding only a `README.md` stating its purpose until then; the per-component phase lives in that README and the roadmap (`docs/plan.md` §8). Do not scaffold a component ahead of its phase. "Empty" is not uniform, so it is not a blanket pre-Phase-1 rule: `api/` receives the OpenAPI skeleton (approval-card schema and event payloads) as a **Phase 0** design artifact, so drafting that skeleton is in scope, not a scope violation; `app/` is not touched until Phase 2; the rest come in Phase 1.
+Freeside is a monorepo. Each component directory (`daemon/`, `app/`, `api/`, `prompts/`, `policy/`, `images/`) stays empty until the phase that fills it, holding only a `README.md` stating its purpose until then; the per-component phase lives in that README and the roadmap (`docs/plan.md` §11). Do not scaffold a component ahead of its phase. "Empty" is not uniform: the API is provisional (plan §13), so drafting its skeleton in `api/` as a pre-1A design artifact is in scope, not a scope violation; `app/` starts with Phase 1A's minimal clients; the rest come in Phase 1A or later per their READMEs.
 
 CLAUDE.md is a pointer that imports this file; edit AGENTS.md, never the pointer.
 
@@ -124,7 +124,7 @@ the PR body); keep the working context to what the current step needs.
 
 ## Build, test, run
 
-The monorepo's components are not yet initialized. Per-component build, test, and run commands land in this table with each component's first PR (Phase 1 for the daemon; see `docs/plan.md` §8).
+The monorepo's components are not yet initialized. Per-component build, test, and run commands land in this table with each component's first PR (Phase 1A for the daemon; see `docs/plan.md` §11).
 
 | Component     | Toolchain      | Commands                                      |
 | ------------- | -------------- | --------------------------------------------- |
@@ -132,14 +132,14 @@ The monorepo's components are not yet initialized. Per-component build, test, an
 | `app/`        | Xcode / SPM    | not yet initialized; see docs/plan.md roadmap |
 | `api/`        | OpenAPI (spec) | not yet initialized; see docs/plan.md roadmap |
 | `prompts/`    | prompt text    | not yet initialized; see docs/plan.md roadmap |
-| `pipelines/`  | YAML           | not yet initialized; see docs/plan.md roadmap |
+| `policy/`     | YAML (policy)  | not yet initialized; see docs/plan.md roadmap |
 | `images/`     | OCI images     | not yet initialized; see docs/plan.md roadmap |
 
 Lint/format and CI are established with the first component that carries code; the definition-of-done block below records that these checks must be added at that time.
 
 ## Monorepo scope discipline
 
-A work unit declares which component directories it touches, in the branch-name context and the PR body, and does not modify directories outside that declared scope. This is the manual precursor of Freeside's per-stage path scoping (`docs/plan.md` §4.6, §4.7) and will later be enforced by stage prompts.
+A work unit declares which component directories it touches, in the branch-name context and the PR body, and does not modify directories outside that declared scope. This is the manual precursor of Freeside's control-plane path restrictions (`docs/plan.md` §5.6, §5.8) and will later be enforced mechanically by the importer.
 
 - Name the touched components in the PR body (a one-line "Scope:" is enough).
 - Cross-component changes (typically `api/` plus both of its consumers, `daemon/` and `app/`) are **one work unit** and must say so; a spec change and its generated-code consumers move together, never in silently coupled separate PRs.
@@ -147,10 +147,11 @@ A work unit declares which component directories it touches, in the branch-name 
 
 ## Document gating
 
-Changes to `docs/plan.md`, ADRs (`docs/decisions/`), and (later) `pipelines/` are reviewed like code and **never batched silently into a feature PR**. This is the comprehension-layer defense from `docs/plan.md` §7 (plan changes are gated like code) applied to this repo's own conventions.
+Changes to `docs/plan.md`, ADRs (`docs/decisions/`), and (later) the control-plane directories (`policy/`, `prompts/`) are reviewed like code, gated by **materiality** (`docs/plan.md` §9). Material changes — scope, acceptance criteria, milestones, sequencing affecting active work, architecture, risk posture, commitments — are **never batched silently into a feature PR**; wording and clarification changes are recorded in the PR that carries them, not separately gated.
 
-- A plan change is its own PR, unless the plan change *is* the direct subject of the feature PR (then it is called out explicitly in the PR body).
+- A material plan change is its own PR, unless the plan change *is* the direct subject of the feature PR (then it is called out explicitly in the PR body).
 - ADRs are promoted from devlog entries (`docs/decisions/README.md`); the promotion is its own reviewed change.
+- The materiality rules themselves are control-plane policy (plan §9); changing them is a material change.
 
 ## Automated reviewer
 
@@ -485,12 +486,13 @@ Before calling work done:
 
 <!-- agents-md:project:done-checks -->
 
-<!-- Pre-Phase-1 scaffold: this repo holds no code yet, so the only
+<!-- Pre-code scaffold: this repo holds no code yet, so the only
      verification is document coherence. Real per-component checks (Go
-     test/vet/lint for daemon/, swift build/test/format for app/, OpenAPI
-     lint + generator round-trip for api/, schema validation for
-     pipelines/) MUST be added to this block with each component's first
-     PR, and the finish line's "lint/build/test" steps become live then. -->
+     test/vet/lint for daemon/, on Linux as well as macOS from day one
+     per plan §3.3; swift build/test/format for app/; OpenAPI lint +
+     generator round-trip for api/; schema validation for policy/) MUST
+     be added to this block with each component's first PR, and the
+     finish line's "lint/build/test" steps become live then. -->
 
 - Docs coherent: README, AGENTS.md, and docs/plan.md do not contradict
   each other for the touched scope
