@@ -1,6 +1,16 @@
 name: Work unit
 description: A claimable unit of implementation work
 body:
+  - type: input
+    id: source_devlog
+    attributes:
+      label: Source devlog entry
+      description: >
+        For a deferral escalation, cite its repo-relative source entry
+        filename. Write "none" for an ordinary work unit.
+      placeholder: devlog/YYYY-MM-DD-HHMM-slug.md
+    validations:
+      required: true
   - type: textarea
     id: contract
     attributes:
