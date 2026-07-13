@@ -503,3 +503,89 @@ Before calling work done:
 <!-- /agents-md:project:done-checks -->
 
 <!-- /agents-md:managed:done -->
+
+## Coordination
+
+Coordination state lives in GitHub and git, never in status files. Issues
+are the unit of work; this section defines how to find, claim, and finish
+one. Runtime AttentionItems (docs/plan.md §4) are a different system; this
+section governs building Freeside, not running it.
+
+### Work units
+
+One issue per work unit, created from the work-unit template: Contract,
+Acceptance (the fixture/test list is the spec), Declared paths,
+Dependencies. Labels: `lane:*` for ownership area, `kind:*` for type.
+Milestones carry the phase (1A, 1B). Each wave has a pinned tracking issue
+listing its units; the spine role maintains it.
+
+### Lane glossary (canonical)
+
+Lane names are search keys and territory labels, defined canonically here;
+subsystem-derived lane names (signet, gauntlet, publish is functional, ward)
+also appear in docs/plan.md §15, which defines saddle and spine as
+coordination vocabulary outside the subsystem register. They never appear in
+code identifiers, package names, or API vocabulary, which stay functional
+(the attention type is AttentionItem, not SignetItem).
+
+| Lane | What it is | Owns (paths) | Plan |
+|---|---|---|---|
+| signet | Attention service: items, deliveries, conversations, sync, devices | daemon/internal/signet (api/ is shared contract territory: changes are `kind:contract`, drafted by the signet/saddle pair) | §4, §5.14 |
+| gauntlet | Candidate path: export helper, hostile importer, clean verifier, evidence channel | daemon/internal/export, daemon/internal/importer, daemon/internal/verify | §5.6, §5.15 |
+| publish | GitHub App auth, deterministic identities, reconciliation, EvidencePublisher | daemon/internal/publish | §5.5, §5.9, §5.11, §5.15 |
+| ward | Runner backends, workspace-handoff gate, conformance, operating modes | daemon/internal/ward | §5.7 |
+| saddle | SwiftUI clients (pipeline-exempt) | app/ | §5.14, §11 |
+| spine | A ROLE, not a territory: serialized shared-contract changes (domain, migrations, interfaces, api/) and Wave 2 integration (workflow engine) | daemon/internal/domain, daemon/internal/engine, migrations/, api/ | §11 |
+
+### Claiming
+
+Claim a unit by opening a **draft PR** that explicitly claims it
+(branch per the Branches section) before substantive work. A fresh
+branch has no PRable diff, so open the claim with an empty claim
+commit (`git commit --allow-empty -m "Claim #N"`); the first work
+commit follows on the same branch. Claim commits never merge: once
+work commits exist, drop the empty commit in the next branch rewrite
+(the fold-fix rules under Commits), before handoff at the latest; the
+PR's close keyword carries the claim from then on. One claim per
+unit; the active
+claim is any open PR, draft or ready, that explicitly claims the unit
+(a `Claim #N` commit or a close keyword for the issue), never one
+that merely cross-references it (`Refs #N`): if an active claim
+exists, pick another unit. Staleness applies only to claim-stage
+drafts: a draft with no work commits in 48h may be superseded; note
+the supersession in the old PR.
+
+### Contract changes
+
+Shared packages (domain types, migrations, StageDriver/ReviewSource/
+RunnerBackend interfaces, the API schema) change only through
+`kind:contract` units: exclusive, serialized, spine-owned, their own PR,
+merged before dependents adapt. A contract PR carries its required
+generated consumers and mechanical adapters (the cross-component
+one-work-unit rule under Monorepo scope discipline); only downstream
+feature work waits for the merge. Lane work never edits shared packages
+in passing; needing a contract change means filing the contract issue,
+linking it as a dependency, and blocking or switching units.
+
+### Session start
+
+1. Read docs/plan.md front-matter (revision, phase) and the sections your
+   unit's Contract cites.
+2. Read the latest devlog entries (Devlog section).
+3. Status queries:
+   - open PRs and their declared paths: overlap with yours means stop and
+     coordinate via issue comment before claiming;
+   - the current wave's pinned tracking issue;
+   - open `kind:contract` issues, excluding the unit you are claiming:
+     if one touches your Contract, block on it; when claiming a
+     `kind:contract` unit, block on every other open contract unit
+     (contract work is serialized).
+4. Verify each dependency's PR is merged.
+
+### Session end
+
+Devlog bookends per the Devlog section. Additionally: deferrals discovered
+mid-unit become issues carrying your `lane:*` label; cross-lane needs
+become issues for the owning lane, `kind:contract` only when they
+change a shared contract, never TODOs; tick your unit on the wave
+tracking issue when your PR merges (or note partial state on the issue).

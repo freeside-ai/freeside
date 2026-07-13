@@ -1,0 +1,40 @@
+name: Work unit
+description: A claimable unit of implementation work
+body:
+  - type: textarea
+    id: contract
+    attributes:
+      label: Contract
+      description: >
+        Interfaces, domain types, schemas, or API surfaces this unit touches.
+        If it CHANGES any shared contract, stop: file it as kind:contract
+        instead; contract units are exclusive and spine-owned.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: >
+        The test and fixture list that defines done. Prefer enumerable
+        fixtures (importer cases, sync tests, conformance checks) over prose.
+    validations:
+      required: true
+  - type: textarea
+    id: paths
+    attributes:
+      label: Declared paths
+      description: >
+        Directories this unit may modify (scope-discipline convention).
+        Work outside these paths belongs to another unit.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: >
+        Blocking issue refs (#N). A dependency is satisfied when its PR is
+        MERGED, not when the issue is closed. Write "none" if none.
+    validations:
+      required: true
