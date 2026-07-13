@@ -513,11 +513,17 @@ section governs building Freeside, not running it.
 
 ### Work units
 
-One issue per work unit, created from the work-unit template: Contract,
-Acceptance (the fixture/test list is the spec), Declared paths,
-Dependencies. Labels: `lane:*` for ownership area, `kind:*` for type.
-Milestones carry the phase (1A, 1B). Each wave has a pinned tracking issue
-listing its units; the spine role maintains it.
+One issue per work unit, created from the work-unit template: Source devlog
+entry (the filename for a deferral escalation, `none` otherwise), Contract,
+Acceptance (the fixture/test list is the spec), Declared paths, Dependencies.
+Labels: `lane:*` for ownership area, `kind:*` for type. Milestones carry the
+phase (1A, 1B). Each wave has a pinned tracking issue listing its units; the
+spine role maintains it.
+
+Here and below, **scheduled** means both a milestone and a listing on the
+current tracking issue. The spine changes those fields as one planning
+operation; either field alone is a spine-repair error and does not open the
+scheduling door (fiat remains independent).
 
 ### Lane glossary (canonical)
 
@@ -555,6 +561,11 @@ exists, pick another unit. Staleness applies only to claim-stage
 drafts: a draft with no work commits in 48h may be superseded; note
 the supersession in the old PR.
 
+`needs-human` deferrals use the fiat door defined under Deferral escalation,
+never self-selection: after the maintainer acts, fiat assigns the issue to a
+session; the session verifies the external state, and its required devlog
+entry supplies the audit diff for the ordinary close-keyword PR.
+
 ### Contract changes
 
 Shared packages (domain types, migrations, StageDriver/ReviewSource/
@@ -567,6 +578,10 @@ feature work waits for the merge. Lane work never edits shared packages
 in passing; needing a contract change means filing the contract issue,
 linking it as a dependency, and blocking or switching units.
 
+Before a `kind:contract` deferral is scheduled or assigned by fiat, the spine
+inserts it into the serialized Dependencies chain; if it has no valid position,
+it stays dormant. Fiat never bypasses contract ordering.
+
 ### Session start
 
 1. Read docs/plan.md front-matter (revision, phase) and the sections your
@@ -576,20 +591,57 @@ linking it as a dependency, and blocking or switching units.
    - open PRs and their declared paths: overlap with yours means stop and
      coordinate via issue comment before claiming;
    - the current wave's pinned tracking issue;
-   - open `kind:contract` issues, excluding the unit you are claiming
+   - open `kind:contract` issues, ignoring a `deferral` issue until it is
+     scheduled or has an active claim, then excluding the unit you are claiming
      and any unit whose Dependencies chain includes it (a
      dependency-ordered chain of contract units keeps at most one
      claimable at a time, so downstream chain members may stay filed
      without blocking their chain head): among the remainder, if one
      touches your Contract, block on it; when claiming a
-     `kind:contract` unit, block on every other open contract unit
+     `kind:contract` unit, block on every other remaining open contract unit
      (contract work is serialized).
 4. Verify each dependency's PR is merged.
 
 ### Session end
 
 Devlog bookends per the Devlog section. Additionally: deferrals discovered
-mid-unit become issues carrying your `lane:*` label; cross-lane needs
-become issues for the owning lane, `kind:contract` only when they
-change a shared contract, never TODOs; tick your unit on the wave
-tracking issue when your PR merges (or note partial state on the issue).
+mid-unit follow Deferral escalation below; tick your unit on the wave tracking
+issue when your PR merges (or note partial state on the issue).
+
+### Deferral escalation
+
+Devlog queue items that escalate to issues (per the Devlog section: at
+entry-writing time for items not draining within a session or two, or via
+post-merge cleanup for items outliving their PR cycle) follow these rules:
+
+- **Provenance both ways**: the issue form's required `Source devlog entry`
+  field cites the source entry filename on its single line; the entry's item
+  gets its `-> Refs #N` marker. Ordinary work units write `none` in the field.
+- **Lane label routes by owner, not discoverer**: the lane whose Declared
+  paths contain the work. Shared-package needs use `kind:contract` plus the
+  **`deferral`** origin label.
+- **For non-contract work, `kind:*` by the work's nature** (deferred scope:
+  feature; known gap: fix; hygiene: chore), plus the **`deferral`** origin
+  label.
+- **Maintainer-only actions** (repo settings, credentials, App
+  administration) get **`needs-human`** and no lane label. Self-selecting
+  sessions and future scan initiators never pick up `needs-human` issues.
+- **No milestone at escalation.** Open + `deferral` + no milestone is the
+  unscheduled queue; the spine schedules eligible items during wave planning's
+  deferral sweep and skips `needs-human`, which remains unmilestoned and
+  fiat-only. Do not add status labels; milestone presence is the status.
+- Closure is ordinary: a work-unit PR with a close keyword; the closed issue
+  is the item's drain record per the Devlog section.
+
+**Pickup: labels never authorize work.** An issue (deferral, adversarial
+finding, or anything else except `needs-human`) becomes agent-actionable
+through exactly two doors: **scheduling** (a spine sweep assigns its
+milestone and lists it on the current tracking issue, from which sessions
+self-select) or **fiat** (the human hands its number to a work-unit session,
+which covers urgent items). A `needs-human` issue uses only fiat after the
+maintainer acts, as Claiming defines. A session must never select work
+directly by label or by browsing open issues. Sweep cadence: at every
+planning session while waves exist; at phase boundaries after; ad hoc
+whenever the human runs one. Between sweeps the unscheduled queue is dormant
+by design; the Phase 1B scan initiator is the intended replacement for
+human-cadence sweeping.
