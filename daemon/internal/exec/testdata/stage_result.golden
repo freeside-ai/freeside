@@ -1,0 +1,10 @@
+{
+  "invocation_id": "inv-1",
+  "status": "completed",
+  "head_sha": "cafebabe",
+  "artifacts": [
+    "sha256:transcript",
+    "sha256:diff"
+  ],
+  "summary": "implemented the fix and its regression test"
+}
