@@ -44,4 +44,10 @@ var (
 	ErrUnapprovedRecipe            = errors.New("artifact was not produced under an approved recipe")
 	ErrMissingKeyProvenance        = errors.New("resolved-policy key lacks provenance")
 	ErrPublishEligibleInconsistent = errors.New("publish_eligible is inconsistent with provenance")
+
+	// Transition failures: how a persisted aggregate may change between its
+	// stored version and an update (the transition validators). A writer maps
+	// these onto its own conflict/stale-write errors at its boundary.
+	ErrImmutableTransition = errors.New("an immutable field or recorded history would change")
+	ErrStaleTransition     = errors.New("an update does not advance the aggregate's version or lifecycle")
 )

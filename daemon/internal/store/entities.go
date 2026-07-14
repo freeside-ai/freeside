@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -40,6 +39,23 @@ var ErrStaleWrite = errors.New("write is stale: stored state is newer")
 // before writing and Gets validate after reading, so a corrupt row fails
 // loudly at the boundary instead of leaking an invalid value into the daemon.
 type validator interface{ Validate() error }
+
+// mapTransition translates a domain transition-validator failure into the
+// store's own boundary error. The domain validators own the transition rules
+// (one definition every writer reuses); the store owns how a rejection surfaces
+// at its edge. Double-wrapping keeps the store sentinel matchable by errors.Is
+// while preserving the domain detail in the chain, so callers keep matching
+// ErrImmutableConflict / ErrStaleWrite unchanged.
+func mapTransition(err error) error {
+	switch {
+	case errors.Is(err, domain.ErrImmutableTransition):
+		return fmt.Errorf("%w: %w", ErrImmutableConflict, err)
+	case errors.Is(err, domain.ErrStaleTransition):
+		return fmt.Errorf("%w: %w", ErrStaleWrite, err)
+	default:
+		return err
+	}
+}
 
 // encode validates v and returns its canonical JSON body, as a string so it
 // binds as TEXT (a []byte binds as BLOB, which a STRICT TEXT column rejects).
@@ -123,20 +139,6 @@ func (tx *WriteTx) existingBody(ctx context.Context, selectSQL string, keyArgs .
 	return body, nil
 }
 
-// jsonEqual compares two values by their canonical JSON, the same byte form
-// the store persists.
-func jsonEqual(a, b any) (bool, error) {
-	ab, err := json.Marshal(a)
-	if err != nil {
-		return false, err
-	}
-	bb, err := json.Marshal(b)
-	if err != nil {
-		return false, err
-	}
-	return string(ab) == string(bb), nil
-}
-
 const putRunSQL = `
 INSERT INTO runs (id, project_id, policy_digest, entity_version, as_of_revision, body)
 VALUES (?, ?, ?, 1, ?, ?)
@@ -146,30 +148,6 @@ ON CONFLICT (id) DO UPDATE SET
     entity_version = runs.entity_version + 1,
     as_of_revision = excluded.as_of_revision,
     body           = excluded.body`
-
-// stagesExtend reports whether new preserves old's recorded execution
-// history: every existing stage keeps its identity and name, every existing
-// attempt is unchanged, and growth is append-only.
-func stagesExtend(old, updated []domain.Stage) bool {
-	if len(updated) < len(old) {
-		return false
-	}
-	for i, os := range old {
-		ns := updated[i]
-		if ns.ID != os.ID || ns.RunID != os.RunID || ns.Name != os.Name {
-			return false
-		}
-		if len(ns.Attempts) < len(os.Attempts) {
-			return false
-		}
-		for j, oa := range os.Attempts {
-			if ns.Attempts[j] != oa {
-				return false
-			}
-		}
-	}
-	return true
-}
 
 func (tx *WriteTx) PutRun(ctx context.Context, run domain.Run) error {
 	body, err := encode(run)
@@ -185,12 +163,8 @@ func (tx *WriteTx) PutRun(ctx context.Context, run domain.Run) error {
 		if err != nil {
 			return fmt.Errorf("put run %q: %w", run.ID, err)
 		}
-		// Project, approved spec, and resolved policy are fixed at run
-		// creation (§5.3 binds a run to its spec and policy digests), and
-		// stages/attempts are recorded history: an update may only append.
-		if run.ProjectID != old.ProjectID || run.SpecDigest != old.SpecDigest ||
-			run.PolicyDigest != old.PolicyDigest || !stagesExtend(old.Stages, run.Stages) {
-			return fmt.Errorf("put run %q: fixed bindings or recorded history would change: %w", run.ID, ErrImmutableConflict)
+		if err := domain.ValidateRunTransition(old, run); err != nil {
+			return fmt.Errorf("put run %q: %w", run.ID, mapTransition(err))
 		}
 	}
 	if _, err := tx.tx.ExecContext(ctx, putRunSQL, run.ID, run.ProjectID, run.PolicyDigest, tx.asOfRevision, body); err != nil {
@@ -244,18 +218,8 @@ func (tx *WriteTx) PutConversation(ctx context.Context, conversation domain.Conv
 		if err != nil {
 			return fmt.Errorf("put conversation %q: %w", conversation.ID, err)
 		}
-		// Messages are immutable and corrections are new messages (§5.14):
-		// an update must carry every stored message unchanged and may only
-		// append.
-		if len(conversation.Messages) < len(old.Messages) {
-			return fmt.Errorf("put conversation %q: stored messages would be dropped: %w", conversation.ID, ErrImmutableConflict)
-		}
-		same, err := jsonEqual(old.Messages, conversation.Messages[:len(old.Messages)])
-		if err != nil {
-			return fmt.Errorf("put conversation %q: %w", conversation.ID, err)
-		}
-		if !same {
-			return fmt.Errorf("put conversation %q: stored messages would be rewritten: %w", conversation.ID, ErrImmutableConflict)
+		if err := domain.ValidateConversationTransition(old, conversation); err != nil {
+			return fmt.Errorf("put conversation %q: %w", conversation.ID, mapTransition(err))
 		}
 	}
 	if _, err := tx.tx.ExecContext(ctx, putConversationSQL, conversation.ID, tx.asOfRevision, body); err != nil {
@@ -383,23 +347,8 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 		if err != nil {
 			return fmt.Errorf("put attention item %q: %w", item.ID, err)
 		}
-		// What an item is about is fixed at creation: transitions bump
-		// item_version and evolve status/evidence on the same identity, and
-		// a different subject or type is a new (superseding) item, never a
-		// retarget (§4, §5.14).
-		sameSubject, err := jsonEqual(old.Subject, item.Subject)
-		if err != nil {
-			return fmt.Errorf("put attention item %q: %w", item.ID, err)
-		}
-		if item.ProjectID != old.ProjectID || item.Type != old.Type || !sameSubject {
-			return fmt.Errorf("put attention item %q: fixed bindings would change: %w", item.ID, ErrImmutableConflict)
-		}
-		// A changed body must move the version forward, or a stale copy
-		// could roll back a later transition (a resolved v2 overwritten by
-		// an open v1).
-		if item.ItemVersion <= old.ItemVersion {
-			return fmt.Errorf("put attention item %q: item_version %d does not advance stored %d: %w",
-				item.ID, item.ItemVersion, old.ItemVersion, ErrStaleWrite)
+		if err := domain.ValidateAttentionItemTransition(old, item); err != nil {
+			return fmt.Errorf("put attention item %q: %w", item.ID, mapTransition(err))
 		}
 	}
 	if _, err := tx.tx.ExecContext(ctx, putAttentionItemSQL,
@@ -446,30 +395,6 @@ ON CONFLICT (item_id, device_id, channel, attempt) DO UPDATE SET
     as_of_revision = excluded.as_of_revision,
     body           = excluded.body`
 
-// deliveryRank orders the delivery lifecycle for the forward-only update
-// guard. Behaviour-dispatch switch per the domain convention: no default, so
-// the exhaustive linter forces a new status to be ranked; the trailing return
-// covers the invalid zero value.
-func deliveryRank(status domain.DeliveryStatus) int {
-	switch status {
-	case domain.DeliverySubmitted:
-		return 1
-	case domain.DeliveryChannelAccepted:
-		return 2
-	case domain.DeliveryOpened:
-		return 3
-	}
-	return 0
-}
-
-// timesEqual compares an optional receipt pair, nil meaning not yet recorded.
-func timesEqual(a, b *time.Time) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return a.Equal(*b)
-}
-
 func (tx *WriteTx) PutAttentionDelivery(ctx context.Context, delivery domain.AttentionDelivery) error {
 	wrap := func(err error) error {
 		return fmt.Errorf("put attention delivery %q/%q/%q/%d: %w",
@@ -495,18 +420,8 @@ func (tx *WriteTx) PutAttentionDelivery(ctx context.Context, delivery domain.Att
 		if err != nil {
 			return wrap(err)
 		}
-		// The lifecycle only moves forward: a stale retry must not roll an
-		// opened delivery back to submitted and drop the receipts that
-		// timing aggregates depend on.
-		if deliveryRank(delivery.Status) <= deliveryRank(old.Status) {
-			return wrap(fmt.Errorf("delivery_status %q does not advance stored %q: %w",
-				delivery.Status, old.Status, ErrStaleWrite))
-		}
-		// Advancing preserves the receipts already recorded.
-		if !delivery.SubmittedAt.Equal(old.SubmittedAt) ||
-			(old.ChannelAcceptedAt != nil && !timesEqual(delivery.ChannelAcceptedAt, old.ChannelAcceptedAt)) ||
-			(old.OpenedAt != nil && !timesEqual(delivery.OpenedAt, old.OpenedAt)) {
-			return wrap(fmt.Errorf("recorded receipts would change: %w", ErrImmutableConflict))
+		if err := domain.ValidateAttentionDeliveryTransition(old, delivery); err != nil {
+			return wrap(mapTransition(err))
 		}
 	}
 	if _, err := tx.tx.ExecContext(ctx, putAttentionDeliverySQL,
