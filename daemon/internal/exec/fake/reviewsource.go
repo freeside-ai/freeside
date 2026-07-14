@@ -119,6 +119,9 @@ func (s *ReviewSource) mustPersistLocked(op string, id domain.InvocationID) {
 func (s *ReviewSource) Script(id domain.InvocationID, sc ReviewScript) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Clone the scripted result so a later mutation of the caller's input
+	// slice cannot reach the registered scenario (issue #35).
+	sc.Result = cloneReviewResult(sc.Result)
 	s.scripts[id] = sc
 	s.mustPersistLocked("script", id)
 }
@@ -203,7 +206,9 @@ func (s *ReviewSource) Poll(_ context.Context, id domain.InvocationID) (exec.Rev
 		return exec.ReviewResult{}, fmt.Errorf("fake review source poll %s: %w", id, exec.ErrUnknownInvocation)
 	}
 	if r, ok := s.committed[id]; ok {
-		return r, nil
+		// Return a clone so a caller mutating the delivered slice cannot
+		// alter the committed snapshot (#35).
+		return cloneReviewResult(r), nil
 	}
 	if sess.lost {
 		return exec.ReviewResult{}, fmt.Errorf("fake review source poll %s: %w", id, exec.ErrNoResult)
@@ -239,8 +244,11 @@ func (s *ReviewSource) Poll(_ context.Context, id domain.InvocationID) (exec.Rev
 // the stored value. Callers hold s.mu.
 func (s *ReviewSource) commit(id domain.InvocationID, r exec.ReviewResult) exec.ReviewResult {
 	r.InvocationID = id
-	s.committed[id] = r
-	return r
+	// Store and return independent snapshots: Poll returns this value
+	// directly, so neither the committed copy nor the delivered one may
+	// alias the script or each other (#35).
+	s.committed[id] = cloneReviewResult(r)
+	return cloneReviewResult(r)
 }
 
 // Verify checks the committed result's freshness against expectedHead,
