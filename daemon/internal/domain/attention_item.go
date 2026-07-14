@@ -72,15 +72,22 @@ func (c AgentClaim) Validate() error {
 // directly; its evidence snapshot admits only verifier/daemon artifacts under
 // an approved recipe (enforced by NewAttentionItem).
 type AttentionItem struct {
-	ID                ItemID            `json:"id"`
-	ProjectID         ProjectID         `json:"project_id"`
-	Subject           Subject           `json:"subject"`
-	Type              AttentionType     `json:"type"`
-	Priority          Priority          `json:"priority"`
-	Reason            string            `json:"reason"`
-	RequestedDecision []Action          `json:"requested_decision"`
-	EvidenceSnapshot  []Artifact        `json:"evidence_snapshot"`
-	AgentClaims       []AgentClaim      `json:"agent_claims"`
+	ID                ItemID        `json:"id"`
+	ProjectID         ProjectID     `json:"project_id"`
+	Subject           Subject       `json:"subject"`
+	Type              AttentionType `json:"type"`
+	Priority          Priority      `json:"priority"`
+	Reason            string        `json:"reason"`
+	RequestedDecision []Action      `json:"requested_decision"`
+	EvidenceSnapshot  []Artifact    `json:"evidence_snapshot"`
+	AgentClaims       []AgentClaim  `json:"agent_claims"`
+	// ArtifactDigests is the item's approval binding set: the canonical (sorted,
+	// deduplicated) union of every digest rendered in EvidenceSnapshot and
+	// AgentClaims. It is derived by NewAttentionItem and enforced by Validate,
+	// never caller-supplied, so an item cannot display one digest while binding
+	// another (the stale-approval class, plan §3.1; §4 "approvals bind to
+	// digests"). A prepared command pins this set and is invalidated if it
+	// changes.
 	ArtifactDigests   []Digest          `json:"artifact_digests"`
 	PRHeadSHA         string            `json:"pr_head_sha"`
 	ItemVersion       int               `json:"item_version"`
@@ -92,8 +99,10 @@ type AttentionItem struct {
 }
 
 // AttentionItemInput carries the caller-supplied fields of an AttentionItem.
-// It deliberately omits Timing: timing is derived from deliveries, so there is
-// no input path that sets it (plan §4).
+// It deliberately omits Timing (derived from deliveries) and ArtifactDigests
+// (the binding set, derived from the rendered evidence and claims): there is no
+// input path that sets either, so a caller cannot bind a digest it did not
+// render (plan §4).
 type AttentionItemInput struct {
 	ID                ItemID
 	ProjectID         ProjectID
@@ -104,7 +113,6 @@ type AttentionItemInput struct {
 	RequestedDecision []Action
 	EvidenceSnapshot  []Artifact
 	AgentClaims       []AgentClaim
-	ArtifactDigests   []Digest
 	PRHeadSHA         string
 	ItemVersion       int
 	InterruptionClass InterruptionClass
@@ -136,7 +144,6 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		RequestedDecision: slices.Clone(in.RequestedDecision),
 		EvidenceSnapshot:  cloneArtifacts(in.EvidenceSnapshot),
 		AgentClaims:       slices.Clone(in.AgentClaims),
-		ArtifactDigests:   slices.Clone(in.ArtifactDigests),
 		PRHeadSHA:         in.PRHeadSHA,
 		ItemVersion:       in.ItemVersion,
 		InterruptionClass: in.InterruptionClass,
@@ -144,6 +151,11 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		ExpiresWhen:       clonePtr(in.ExpiresWhen),
 		Status:            in.Status,
 	}
+	// Derive the binding set from the rendered evidence and claims, so the
+	// approval binds exactly what was shown (plan §3.1, §4). Validate re-derives
+	// and requires equality, which is what enforces this on the store-decode path
+	// that bypasses this constructor.
+	item.ArtifactDigests = bindingDigests(item.EvidenceSnapshot, item.AgentClaims)
 	if err := item.Validate(); err != nil {
 		return AttentionItem{}, err
 	}
@@ -208,11 +220,6 @@ func (i AttentionItem) Validate() error {
 	if i.ItemVersion < 1 {
 		return fmt.Errorf("item %s item_version %d: %w", i.ID, i.ItemVersion, ErrNonPositive)
 	}
-	for idx, d := range i.ArtifactDigests {
-		if d == "" {
-			return fmt.Errorf("item %s artifact_digests[%d]: %w", i.ID, idx, ErrEmptyField)
-		}
-	}
 	if len(i.RequestedDecision) == 0 {
 		return fmt.Errorf("item %s: %w", i.ID, ErrNoActions)
 	}
@@ -258,7 +265,47 @@ func (i AttentionItem) Validate() error {
 		}
 		claimDigests[c.Artifact] = c.Digest
 	}
+	// The binding set must equal exactly the digests rendered in the evidence
+	// snapshot and the agent claims: an item may not display one digest while
+	// binding another (the stale-approval class, plan §3.1; §4 "approvals bind to
+	// digests"). bindingDigests is canonical, so this equality also fixes the
+	// field's order and rejects a duplicate, an omission, or an extra unrendered
+	// entry. NewAttentionItem derives the set; a store-decoded item is held to
+	// the same equality here, since Validate is the reconstruction backstop.
+	if want := bindingDigests(i.EvidenceSnapshot, i.AgentClaims); !slices.Equal(i.ArtifactDigests, want) {
+		return fmt.Errorf("item %s artifact_digests %v, rendered digests resolve to %v: %w", i.ID, i.ArtifactDigests, want, ErrBindingMismatch)
+	}
 	return nil
+}
+
+// bindingDigests returns an item's canonical binding set: the sorted,
+// deduplicated union of the digests rendered in its evidence snapshot and its
+// agent claims. It is the single definition of what an approval binds, so
+// NewAttentionItem derives ArtifactDigests from it and Validate requires
+// equality. It always returns a non-nil slice, so an item that renders no
+// artifacts (e.g. a system_health acknowledgement) serializes artifact_digests
+// as "[]", matching the required, non-null array the wire contract declares
+// (api/openapi.yaml). slices.Equal treats nil and empty as equal, so a value
+// decoded from a legacy null still satisfies the equality check.
+func bindingDigests(evidence []Artifact, claims []AgentClaim) []Digest {
+	out := make([]Digest, 0, len(evidence)+len(claims))
+	for _, a := range evidence {
+		out = append(out, a.Digest)
+	}
+	for _, c := range claims {
+		out = append(out, c.Digest)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// Offers reports whether the item currently offers action as one of its
+// requested decisions (plan §4 Actions). A recorded command may only accept an
+// action the item actually rendered as a choice: the offered set is
+// item-specific ("approve" is not universal), so a valid enum value that the
+// item did not offer is not a legitimate decision on it.
+func (i AttentionItem) Offers(a Action) bool {
+	return slices.Contains(i.RequestedDecision, a)
 }
 
 // WithTiming returns a copy of the item with its timing aggregates derived from

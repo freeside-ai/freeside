@@ -21,6 +21,7 @@ type fixtures struct {
 	finding      domain.Finding
 	class        domain.Classification
 	policy       domain.ResolvedPolicy
+	command      domain.Command
 }
 
 // fixtureRecipe is the verification-recipe digest the evidence-bearing fixtures
@@ -73,7 +74,6 @@ func newFixtures(t *testing.T) fixtures {
 		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionDismiss},
 		EvidenceSnapshot:  []domain.Artifact{artifact},
 		AgentClaims:       []domain.AgentClaim{{Label: "screenshot", Artifact: "art-2", Digest: "sha256:img"}},
-		ArtifactDigests:   []domain.Digest{"sha256:log"},
 		PRHeadSHA:         "cafebabe", ItemVersion: 1,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		ConversationID:    &convID, ExpiresWhen: &expires, Status: domain.StatusOpen,
@@ -84,6 +84,17 @@ func newFixtures(t *testing.T) fixtures {
 	item, err = item.WithTiming([]domain.AttentionDelivery{delivery})
 	if err != nil {
 		t.Fatalf("WithTiming: %v", err)
+	}
+
+	// The command records an accepted decision on the item, binding its version,
+	// head, and derived digest set (the union of the evidence and claim digests).
+	command, err := domain.NewCommand(domain.CommandInput{
+		CommandID: "cmd-1", DeviceID: "device-1", ItemID: item.ID,
+		ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA,
+		ArtifactDigests: item.ArtifactDigests, Action: domain.ActionOpenPR,
+	})
+	if err != nil {
+		t.Fatalf("NewCommand: %v", err)
 	}
 
 	// The digest is computed from the keys, and the run binds its policy by that
@@ -121,6 +132,7 @@ func newFixtures(t *testing.T) fixtures {
 		class: domain.Classification{
 			FindingID: "find-1", Version: 1, Materiality: "medium", Confidence: "high", Note: "worth fixing",
 		},
-		policy: policy,
+		policy:  policy,
+		command: command,
 	}
 }

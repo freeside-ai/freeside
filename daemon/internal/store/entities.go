@@ -35,6 +35,40 @@ var ErrImmutableConflict = errors.New("immutable row already exists with differe
 // (§5.14 optimistic concurrency).
 var ErrStaleWrite = errors.New("write is stale: stored state is newer")
 
+// ErrStaleCommand is returned when a new command's pinned bindings no longer
+// describe the live attention item: the item advanced (its version, PR head, or
+// rendered digest set changed) after the command was prepared, so the
+// submission is stale (§5.14 test 2). It is carried by a *StaleCommandError,
+// which also holds the current item as the canonical replacement state; match
+// the class with errors.Is and extract the replacement with errors.As.
+var ErrStaleCommand = errors.New("command bindings no longer match the item")
+
+// ErrActionNotOffered is returned when a command's action is a valid enum value
+// but not one the live item offered in its requested_decision (plan §4: the
+// offered set is item-specific, "approve" is not universal). Rejecting it keeps
+// the durable record faithful to the choices rendered to the user: a client
+// cannot record an action the item never presented.
+var ErrActionNotOffered = errors.New("command action is not offered by the item")
+
+// StaleCommandError reports a stale command submission and carries the current
+// attention item as the replacement the caller must re-render and re-decide
+// against (plan §4 lifecycle, §5.14 test 2). Idempotent replays are handled
+// before this check, so a StaleCommandError only ever names a genuinely new
+// command_id whose bound inputs drifted, never a retry of a committed one.
+type StaleCommandError struct {
+	CommandID   string
+	Replacement domain.AttentionItem
+}
+
+func (e *StaleCommandError) Error() string {
+	return fmt.Sprintf("command %q is stale: item %q is at version %d",
+		e.CommandID, e.Replacement.ID, e.Replacement.ItemVersion)
+}
+
+// Is lets errors.Is(err, ErrStaleCommand) match the class while errors.As
+// recovers the replacement item.
+func (e *StaleCommandError) Is(target error) bool { return target == ErrStaleCommand }
+
 // validator is implemented by every persisted domain type. Puts validate
 // before writing and Gets validate after reading, so a corrupt row fails
 // loudly at the boundary instead of leaking an invalid value into the daemon.
@@ -621,6 +655,103 @@ func (tx *ReadTx) GetResolvedPolicy(ctx context.Context, runID domain.RunID) (do
 		return domain.ResolvedPolicy{}, fmt.Errorf("get resolved policy %q: %w", runID, errRowInconsistent)
 	}
 	return policy, nil
+}
+
+const putCommandSQL = `
+INSERT INTO commands (command_id, item_id, item_version, pr_head_sha, device_id, action, entity_version, as_of_revision, body)
+VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`
+
+// PutCommand records one accepted client decision as a write-once, immutable
+// row keyed by command_id (§5.14 ClientCommand; §5.9 effectively-once). Two
+// checks, in this order:
+//
+//  1. Idempotency. A command_id already on record returns its original result
+//     regardless of the item's current state, so a lost-response retry converges
+//     rather than being re-judged as stale (§5.14 test 4). A different body under
+//     that id is a conflict.
+//  2. Binding authority. For a genuinely new command, its pinned bindings (the
+//     accepted item version, PR head, and rendered digest set) must still
+//     describe the live item, or the submission is stale and the caller gets the
+//     current item as the canonical replacement (§5.14 test 2). This closes the
+//     stale-approval class (plan §3.1) at the persistence boundary: an approval
+//     cannot commit against inputs that changed after it was prepared.
+//
+// It is client-visible, so it must run inside Write (which bumps revision and
+// stamps as_of_revision, the row's recorded committed result).
+func (tx *WriteTx) PutCommand(ctx context.Context, command domain.Command) error {
+	body, err := encode(command)
+	if err != nil {
+		return fmt.Errorf("put command %q: %w", command.CommandID, err)
+	}
+	existing, err := tx.existingBody(ctx, `SELECT body FROM commands WHERE command_id = ?`, command.CommandID)
+	if err != nil {
+		return fmt.Errorf("put command %q: %w", command.CommandID, err)
+	}
+	if existing != nil {
+		if string(existing) == body {
+			return nil
+		}
+		return fmt.Errorf("put command %q: %w", command.CommandID, ErrImmutableConflict)
+	}
+	// GetAttentionItem returns a wrapped ErrNotFound when the bound item does not
+	// exist (a command can only decide an item that is present), and re-runs the
+	// evidence gate so the item compared against is itself well-formed.
+	item, err := tx.GetAttentionItem(ctx, command.ItemID)
+	if err != nil {
+		return fmt.Errorf("put command %q: %w", command.CommandID, err)
+	}
+	if !command.BindsSameAs(item) {
+		return fmt.Errorf("put command %q: %w", command.CommandID,
+			&StaleCommandError{CommandID: command.CommandID, Replacement: item})
+	}
+	// The command binds the live item; its action must also be one the item
+	// offered. A stale item is handled above (the client re-decides against the
+	// replacement's offered set), so reaching here means the action was checked
+	// against the exact version the decision was rendered from.
+	if !item.Offers(command.Action) {
+		return fmt.Errorf("put command %q: action %q not offered by item %q: %w",
+			command.CommandID, command.Action, command.ItemID, ErrActionNotOffered)
+	}
+	if _, err := tx.tx.ExecContext(ctx, putCommandSQL,
+		command.CommandID, command.ItemID, command.ItemVersion, command.PRHeadSHA,
+		command.DeviceID, string(command.Action), tx.asOfRevision, body); err != nil {
+		return fmt.Errorf("put command %q: %w", command.CommandID, err)
+	}
+	return nil
+}
+
+func (tx *ReadTx) GetCommand(ctx context.Context, commandID string) (domain.Command, error) {
+	var (
+		itemID      string
+		itemVersion int
+		prHeadSHA   string
+		deviceID    string
+		action      string
+		body        []byte
+	)
+	err := tx.tx.QueryRowContext(ctx,
+		`SELECT item_id, item_version, pr_head_sha, device_id, action, body FROM commands WHERE command_id = ?`, commandID).
+		Scan(&itemID, &itemVersion, &prHeadSHA, &deviceID, &action, &body)
+	if err != nil {
+		return domain.Command{}, fmt.Errorf("get command %q: %w", commandID, notFoundOr(err))
+	}
+	command, err := decode[domain.Command](body)
+	if err != nil {
+		return domain.Command{}, fmt.Errorf("get command %q: %w", commandID, err)
+	}
+	// Every binding the store extracts into a column is cross-checked against the
+	// body: a forged row whose JSON disagrees with its authoritative columns (the
+	// bound version, head, action, device, or item) fails loudly instead of
+	// returning a decision record the columns do not back.
+	if command.CommandID != commandID ||
+		command.ItemID != domain.ItemID(itemID) ||
+		command.ItemVersion != itemVersion ||
+		command.PRHeadSHA != prHeadSHA ||
+		command.DeviceID != domain.DeviceID(deviceID) ||
+		command.Action != domain.Action(action) {
+		return domain.Command{}, fmt.Errorf("get command %q: %w", commandID, errRowInconsistent)
+	}
+	return command, nil
 }
 
 // notFoundOr maps sql.ErrNoRows to ErrNotFound and passes every other error
