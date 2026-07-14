@@ -12,13 +12,34 @@ body:
     validations:
       required: true
   - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: >
+        The outcome this unit delivers and why: the problem or need, and
+        the state of the world when the unit is done.
+    validations:
+      required: true
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals
+      description: >
+        Explicit exclusions: adjacent work this unit deliberately does not
+        do, so scope disputes resolve from the record. Write "none" if
+        there are none.
+    validations:
+      required: true
+  - type: textarea
     id: contract
     attributes:
-      label: Contract
+      label: Affected interfaces/contracts
       description: >
-        Interfaces, domain types, schemas, or API surfaces this unit touches.
-        If it CHANGES any shared contract, stop: file it as kind:contract
-        instead; contract units are exclusive and spine-owned.
+        Interfaces, domain types, schemas, or API surfaces this unit
+        touches (not the whole work contract; the issue as a whole is
+        that). If it CHANGES any shared contract, stop: file it as
+        kind:contract instead; contract units are exclusive and
+        spine-owned.
     validations:
       required: true
   - type: textarea
@@ -33,7 +54,7 @@ body:
   - type: textarea
     id: paths
     attributes:
-      label: Declared paths
+      label: Scope / declared paths
       description: >
         Directories this unit may modify (scope-discipline convention).
         Work outside these paths belongs to another unit.
@@ -44,7 +65,9 @@ body:
     attributes:
       label: Dependencies
       description: >
-        Blocking issue refs (#N). A dependency is satisfied when its PR is
-        MERGED, not when the issue is closed. Write "none" if none.
+        Blocking issue refs (#N; a dependency is satisfied when its PR is
+        MERGED, not when the issue is closed), required serialization with
+        other units, an intentional stacked base (name the open PR branch),
+        and integration order. Write "none" if none.
     validations:
       required: true
