@@ -2,12 +2,21 @@ package fake
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
+
+// ErrResultHeadMismatch marks a fixture/reviewer fault: a committed review
+// result ran against a head other than the one its invocation id requested.
+// It is distinct from exec.ErrStaleHead (freshness vs the current expected
+// head): this is the request-binding violation, checked first (§5.3's one
+// committed intent per id; issue #36). A holder of the delivered result never
+// silently substitutes a different head for the committed request.
+var ErrResultHeadMismatch = errors.New("fake: review result head does not match the requested head")
 
 // ReviewScript is one scripted review scenario, keyed to an invocation id
 // via Script. Progression is call-step-counted like StageScript: execution
@@ -147,7 +156,13 @@ func (s *ReviewSource) RequestReview(_ context.Context, id domain.InvocationID, 
 		polls:    script.PendingPolls,
 	}
 	// Record the committed intent durably (one per id): a restart reconciles
-	// a requested id by Poll/Verify, never by requesting again.
+	// a requested id by Poll/Verify, never by requesting again. This committed
+	// copy is what Verify binds the result's head to (#36). exec.ReviewRequest
+	// is scalar-only (RunID, HeadSHA), so the map assignment is a full
+	// value-copy snapshot: immutable regardless of the caller and stable
+	// across restart (persist.go round-trips it). A future reference-typed
+	// field on ReviewRequest would need a defensive copy here, as cloneReviewResult
+	// does for results.
 	s.intents[id] = req
 	s.mustPersistLocked("request", id)
 	return nil
@@ -251,11 +266,16 @@ func (s *ReviewSource) commit(id domain.InvocationID, r exec.ReviewResult) exec.
 	return cloneReviewResult(r)
 }
 
-// Verify checks the committed result's freshness against expectedHead,
-// wrapping exec.ErrStaleHead on mismatch. Before a result is committed it
-// returns exec.ErrResultNotReady (freshness of an undelivered review is
-// unknowable), or exec.ErrNoResult when the review will never commit one (a
-// failed or lost session): "never" is not "not yet".
+// Verify gates a committed result in two ordered steps. First the binding
+// check: the result's head must match the head committed under this invocation
+// id by RequestReview, else ErrResultHeadMismatch (a result that ran against a
+// head we never requested can never gate anything, whatever the caller
+// expects; #36). Only then the freshness check: the (now request-bound) head
+// must match expectedHead, else exec.ErrStaleHead (a correctly requested but
+// superseded head still fails after the PR advances, §5.3). Before a result is
+// committed it returns exec.ErrResultNotReady (freshness of an undelivered
+// review is unknowable), or exec.ErrNoResult when the review will never commit
+// one (a failed or lost session): "never" is not "not yet".
 func (s *ReviewSource) Verify(_ context.Context, id domain.InvocationID, expectedHead string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -272,6 +292,13 @@ func (s *ReviewSource) Verify(_ context.Context, id domain.InvocationID, expecte
 			return fmt.Errorf("fake review source verify %s: %w", id, exec.ErrNoResult)
 		}
 		return fmt.Errorf("fake review source verify %s: %w", id, exec.ErrResultNotReady)
+	}
+	// Binding: the result must belong to the head this id committed. Checked
+	// before freshness so a result that ran against an unrequested head fails
+	// as a binding violation, not as a coincidentally-matching current head.
+	if intent := s.intents[id]; r.HeadSHA != intent.HeadSHA {
+		return fmt.Errorf("fake review source verify %s: result head %q, requested %q: %w",
+			id, r.HeadSHA, intent.HeadSHA, ErrResultHeadMismatch)
 	}
 	if r.HeadSHA != expectedHead {
 		return fmt.Errorf("fake review source verify %s: result head %q, expected %q: %w",

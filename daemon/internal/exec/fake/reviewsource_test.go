@@ -127,9 +127,10 @@ func TestReviewSourceDuplicatePollAcceptsOnce(t *testing.T) {
 	}
 }
 
-// TestReviewSourceStaleHeadFailsVerify is scenario 4d: a review that ran
-// against a superseded head fails freshness verification against the
-// current one.
+// TestReviewSourceStaleHeadFailsVerify is scenario 4d, and #36's freshness
+// half (request A / result A / current B): a review that ran against a
+// superseded head fails freshness verification against the current one while
+// still passing the request-binding gate (result head == requested head).
 func TestReviewSourceStaleHeadFailsVerify(t *testing.T) {
 	s := fake.NewReviewSource()
 	s.Script("inv-1", fake.ReviewScript{
@@ -150,6 +151,43 @@ func TestReviewSourceStaleHeadFailsVerify(t *testing.T) {
 	}
 	if err := s.Verify(t.Context(), "inv-1", "0ld0ld"); err != nil {
 		t.Errorf("verify against the reviewed head = %v, want nil", err)
+	}
+}
+
+// TestReviewSourceResultHeadMismatchFailsVerify is #36's binding half (request
+// A / result B / verify B): a review invocation permanently binds the head it
+// requested, so a result that ran against a different head fails verification
+// as ErrResultHeadMismatch even when that head equals the caller's expected
+// head. The mis-headed result still commits and re-delivers (a real reviewer
+// that reviewed the wrong head returns something); the binding gate, not Poll,
+// is what refuses it.
+func TestReviewSourceResultHeadMismatchFailsVerify(t *testing.T) {
+	s := fake.NewReviewSource()
+	// Script a result whose head differs from the head the request commits.
+	s.Script("inv-1", fake.ReviewScript{
+		Result: exec.ReviewResult{HeadSHA: "headB"},
+	})
+
+	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "headA"}); err != nil {
+		t.Fatal(err)
+	}
+	// Poll delivers the committed (mis-headed) result unchanged: binding is
+	// Verify's job, not Poll's.
+	result, _ := pollUntilResult(t, s, "inv-1")
+	if result.HeadSHA != "headB" {
+		t.Errorf("polled result head = %q, want the committed %q", result.HeadSHA, "headB")
+	}
+
+	// Verify against the result's own head: the freshness comparison would
+	// pass (headB == headB), but binding fails first because the request
+	// committed headA.
+	if err := s.Verify(t.Context(), "inv-1", "headB"); !errors.Is(err, fake.ErrResultHeadMismatch) {
+		t.Errorf("verify against the result head = %v, want ErrResultHeadMismatch", err)
+	}
+	// Verify against the requested head fails too: the result never ran
+	// against headA, so no expected head can bind it.
+	if err := s.Verify(t.Context(), "inv-1", "headA"); !errors.Is(err, fake.ErrResultHeadMismatch) {
+		t.Errorf("verify against the requested head = %v, want ErrResultHeadMismatch", err)
 	}
 }
 
