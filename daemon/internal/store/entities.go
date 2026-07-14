@@ -290,6 +290,13 @@ func (tx *WriteTx) PutArtifact(ctx context.Context, artifact domain.Artifact) er
 	if err != nil {
 		return fmt.Errorf("put artifact %q: %w", artifact.ID, err)
 	}
+	// Re-derive publish_eligibility against policy before persisting: encode's
+	// Validate is policy-free, so a caller bypassing NewArtifact could otherwise
+	// persist a forged publish_eligible under an unapproved recipe (plan §5.15
+	// rule 2). Runs before the write, so an idempotent replay is gated too.
+	if err := domain.ValidatePublishEligibility(artifact, tx.approvedRecipes); err != nil {
+		return fmt.Errorf("put artifact %q: %w", artifact.ID, err)
+	}
 	if err := tx.putImmutable(ctx, putArtifactSQL,
 		[]any{artifact.ID, artifact.Digest, tx.asOfRevision, body},
 		`SELECT body FROM artifacts WHERE id = ?`, []any{artifact.ID}, body); err != nil {
@@ -315,6 +322,14 @@ func (tx *ReadTx) GetArtifact(ctx context.Context, id domain.ArtifactID) (domain
 	if artifact.ID != id || artifact.Digest != domain.Digest(digest) {
 		return domain.Artifact{}, fmt.Errorf("get artifact %q: %w", id, errRowInconsistent)
 	}
+	// Reconstruction re-runs the policy gate: decode's Validate cannot check
+	// recipe approval, so a row whose publish_eligible disagrees with the
+	// current approved-recipe set (a forged row, or one written under a policy
+	// that no longer approves the recipe) fails closed rather than leaking as
+	// valid evidence.
+	if err := domain.ValidatePublishEligibility(artifact, tx.approvedRecipes); err != nil {
+		return domain.Artifact{}, fmt.Errorf("get artifact %q: %w", id, err)
+	}
 	return artifact, nil
 }
 
@@ -331,6 +346,14 @@ ON CONFLICT (id) DO UPDATE SET
 func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionItem) error {
 	body, err := encode(item)
 	if err != nil {
+		return fmt.Errorf("put attention item %q: %w", item.ID, err)
+	}
+	// Gate the embedded evidence against policy before persisting: encode's
+	// Validate enforces only the producer-class half of the evidence rule, so a
+	// caller bypassing NewAttentionItem could otherwise persist an evidence
+	// artifact under an unapproved recipe (plan §5.15 rule 2). Runs before the
+	// write, so an idempotent replay is gated too.
+	if err := tx.gateEvidence(item); err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
 	}
 	existing, err := tx.existingBody(ctx, `SELECT body FROM attention_items WHERE id = ?`, item.ID)
@@ -384,7 +407,26 @@ func (tx *ReadTx) GetAttentionItem(ctx context.Context, id domain.ItemID) (domai
 	if !consistent {
 		return domain.AttentionItem{}, fmt.Errorf("get attention item %q: %w", id, errRowInconsistent)
 	}
+	// Reconstruction re-runs the evidence gate: decode's Validate cannot check
+	// recipe approval, so an item carrying evidence under a now-unapproved (or
+	// forged) recipe fails closed rather than reconstructing as valid.
+	if err := tx.gateEvidence(item); err != nil {
+		return domain.AttentionItem{}, fmt.Errorf("get attention item %q: %w", id, err)
+	}
 	return item, nil
+}
+
+// gateEvidence re-runs the approved-recipe evidence gate over an item's
+// snapshot at the persistence/reconstruction boundary, using the transaction's
+// policy set. It is the store's enforcement of the recipe-approval half of the
+// evidence rule that AttentionItem.Validate cannot check (it holds no policy).
+func (tx *ReadTx) gateEvidence(item domain.AttentionItem) error {
+	for _, a := range item.EvidenceSnapshot {
+		if err := domain.EligibleForEvidenceSnapshot(a, tx.approvedRecipes); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 const putAttentionDeliverySQL = `

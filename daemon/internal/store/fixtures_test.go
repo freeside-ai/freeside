@@ -23,11 +23,22 @@ type fixtures struct {
 	policy       domain.ResolvedPolicy
 }
 
+// fixtureRecipe is the verification-recipe digest the evidence-bearing fixtures
+// (the artifact and the item's snapshot) are built under; approvedFixtureRecipes
+// is the approved set a store must carry to persist and reconstruct them. The
+// fail-closed regression tests deliberately open with a bare store.Options{}
+// (nothing approved) instead.
+const fixtureRecipe = domain.Digest("sha256:recipe-approved")
+
+func approvedFixtureRecipes() map[domain.Digest]bool {
+	return map[domain.Digest]bool{fixtureRecipe: true}
+}
+
 func newFixtures(t *testing.T) fixtures {
 	t.Helper()
 	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	recipe := domain.Digest("sha256:recipe-approved")
-	approved := map[domain.Digest]bool{recipe: true}
+	recipe := fixtureRecipe
+	approved := approvedFixtureRecipes()
 
 	artifact, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: "art-1", Type: "verify_log", Digest: "sha256:log",

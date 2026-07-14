@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 // ServerState is the §5.14 sync anchor: every client-visible write
@@ -23,6 +25,11 @@ type ServerState struct {
 // Only valid until the callback returns.
 type ReadTx struct {
 	tx *sql.Tx
+	// approvedRecipes is the store's boundary policy set (see
+	// Options.ApprovedRecipes), carried on every transaction so a Get can
+	// re-derive an evidence artifact's publish_eligibility instead of trusting
+	// the decoded row. Read-only.
+	approvedRecipes map[domain.Digest]bool
 }
 
 // WriteTx is the transaction handle passed to Write and WriteInternal
@@ -63,7 +70,7 @@ func (s *Store) Read(ctx context.Context, fn func(*ReadTx) error) error {
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := fn(&ReadTx{tx: tx}); err != nil {
+	if err := fn(&ReadTx{tx: tx, approvedRecipes: s.approvedRecipes}); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -88,7 +95,7 @@ func (s *Store) transact(ctx context.Context, clientVisible bool, fn func(*Write
 	if clientVisible {
 		asOf = current + 1
 	}
-	if err := fn(&WriteTx{ReadTx: ReadTx{tx: tx}, asOfRevision: asOf}); err != nil {
+	if err := fn(&WriteTx{ReadTx: ReadTx{tx: tx, approvedRecipes: s.approvedRecipes}, asOfRevision: asOf}); err != nil {
 		return err
 	}
 	if clientVisible {

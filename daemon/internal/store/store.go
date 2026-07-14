@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
 	"net/url"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	// (plan §5.2) and CI dual-platform without cgo.
 	_ "modernc.org/sqlite"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
@@ -23,6 +25,16 @@ type Options struct {
 	// how long a locked database is retried before an operation fails.
 	// Zero means DefaultBusyTimeout.
 	BusyTimeout time.Duration
+
+	// ApprovedRecipes is the set of verification-recipe digests trusted policy
+	// has approved. Every write and read of an evidence-bearing artifact
+	// re-derives publish_eligibility against it at the persistence boundary, so
+	// a caller cannot bypass NewArtifact/NewAttentionItem to persist a forged
+	// publish_eligible under an unapproved recipe (plan §5.15 rule 2, §3.1). Nil
+	// means nothing is approved: the boundary fails closed. Provisional: it is
+	// process-global here, to be replaced by a per-run/per-policy resolver when
+	// policy resolution is wired (no such source exists yet).
+	ApprovedRecipes map[domain.Digest]bool
 }
 
 // Store is the daemon's handle on its SQLite database. Open configures the
@@ -30,6 +42,10 @@ type Options struct {
 // for the write-path rules.
 type Store struct {
 	db *sql.DB
+	// approvedRecipes is the boundary policy set (see Options.ApprovedRecipes),
+	// snapshotted at Open and threaded into every transaction. Read-only after
+	// Open, so it is safe to share across concurrent transactions.
+	approvedRecipes map[domain.Digest]bool
 }
 
 // Open opens (creating if absent) the database at path, applies the §5.2
@@ -47,7 +63,9 @@ func Open(ctx context.Context, path string, opts Options) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	// Snapshot the approved-recipe set so a caller mutating its map after Open
+	// cannot change the boundary policy under a live store.
+	return &Store{db: db, approvedRecipes: maps.Clone(opts.ApprovedRecipes)}, nil
 }
 
 // openDB opens the raw database handle without migrating. The pragmas ride

@@ -68,6 +68,43 @@ func TestEligibleForEvidenceSnapshot(t *testing.T) {
 	}
 }
 
+// TestValidatePublishEligibility is the standalone-artifact boundary gate: the
+// persisted PublishEligible must equal the policy computation, so a forged or
+// stale bit is rejected while a legal non-evidence row (an agent artifact with
+// the bit false) passes. Unlike the evidence gate, it does not require the
+// artifact to be evidence.
+func TestValidatePublishEligibility(t *testing.T) {
+	tests := []struct {
+		name     string
+		class    domain.ProducerClass
+		recipe   *domain.Digest
+		eligible bool
+		wantErr  error
+	}{
+		{"verifier approved match", domain.ProducerVerifier, ptr(approvedRecipe), true, nil},
+		{"daemon approved match", domain.ProducerDaemon, ptr(approvedRecipe), true, nil},
+		{"agent not eligible match", domain.ProducerAgent, nil, false, nil},
+		{"verifier unapproved bit false", domain.ProducerVerifier, ptr(domain.Digest("sha256:nope")), false, nil},
+		{"forged: verifier unapproved bit true", domain.ProducerVerifier, ptr(domain.Digest("sha256:nope")), true, domain.ErrPublishEligibleInconsistent},
+		{"forged: agent bit true", domain.ProducerAgent, nil, true, domain.ErrPublishEligibleInconsistent},
+		{"stale: verifier approved bit false", domain.ProducerVerifier, ptr(approvedRecipe), false, domain.ErrPublishEligibleInconsistent},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := domain.Artifact{ID: "a1", Type: "log", Digest: "sha256:x", Provenance: provenance(tt.class, tt.recipe), PublishEligible: tt.eligible}
+			if err := domain.ValidatePublishEligibility(a, approvedRecipes()); !errors.Is(err, tt.wantErr) {
+				t.Fatalf("error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+	// Self-standing: a malformed artifact is rejected before the bit is checked,
+	// so a reconstruction path re-running the gate cannot admit it.
+	malformed := domain.Artifact{ID: "", Type: "log", Digest: "sha256:x", Provenance: provenance(domain.ProducerVerifier, ptr(approvedRecipe))}
+	if err := domain.ValidatePublishEligibility(malformed, approvedRecipes()); !errors.Is(err, domain.ErrEmptyID) {
+		t.Fatalf("gate admitted a malformed artifact: %v", err)
+	}
+}
+
 // TestAgentArtifactRejectedFromItemEvidence checks the gate is wired into item
 // construction: an agent artifact in the evidence snapshot fails NewAttentionItem.
 func TestAgentArtifactRejectedFromItemEvidence(t *testing.T) {

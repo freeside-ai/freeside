@@ -18,7 +18,7 @@ import (
 // one client-visible transaction, one revision bump.
 func TestGoldenRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	s := openStore(t, store.Options{})
+	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
 
 	before, err := s.ServerState(ctx)
@@ -200,7 +200,7 @@ func TestPutImmutableConflict(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := openStore(t, store.Options{})
+			s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 			if err := s.Write(ctx, seed); err != nil {
 				t.Fatalf("seed: %v", err)
 			}
@@ -220,7 +220,7 @@ func TestPutImmutableConflict(t *testing.T) {
 // legitimate evolution: here a run gaining a retry attempt and a new stage.
 func TestPutAgainUpdates(t *testing.T) {
 	ctx := context.Background()
-	s := openStore(t, store.Options{})
+	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
 
 	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, f.run) }); err != nil {
@@ -291,7 +291,7 @@ func TestRunFixedBindingsAndHistory(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := openStore(t, store.Options{})
+			s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 			if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, f.run) }); err != nil {
 				t.Fatalf("seed: %v", err)
 			}
@@ -314,7 +314,7 @@ func TestConversationAppendOnly(t *testing.T) {
 	}
 
 	t.Run("append succeeds", func(t *testing.T) {
-		s := openStore(t, store.Options{})
+		s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 		if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutConversation(ctx, f.conversation) }); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
@@ -342,7 +342,7 @@ func TestConversationAppendOnly(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := openStore(t, store.Options{})
+			s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 			if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutConversation(ctx, f.conversation) }); err != nil {
 				t.Fatalf("seed: %v", err)
 			}
@@ -375,7 +375,7 @@ func TestAttentionItemFixedBindings(t *testing.T) {
 	}
 
 	t.Run("status transition succeeds", func(t *testing.T) {
-		s := openStore(t, store.Options{})
+		s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 		seed(s)
 		resolved := f.item
 		resolved.Status = domain.StatusResolved
@@ -407,7 +407,7 @@ func TestAttentionItemFixedBindings(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := openStore(t, store.Options{})
+			s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 			seed(s)
 			err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, tc.mutate(f.item)) })
 			if !errors.Is(err, store.ErrImmutableConflict) {
@@ -423,7 +423,7 @@ func TestAttentionItemFixedBindings(t *testing.T) {
 // silently.
 func TestAttentionItemStaleWriteRejected(t *testing.T) {
 	ctx := context.Background()
-	s := openStore(t, store.Options{})
+	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
 
 	resolved := f.item
@@ -462,7 +462,7 @@ func TestAttentionItemStaleWriteRejected(t *testing.T) {
 // change; a stale retry must not roll an opened delivery back to submitted.
 func TestDeliveryLifecycleForwardOnly(t *testing.T) {
 	ctx := context.Background()
-	s := openStore(t, store.Options{})
+	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
 
 	submitted := domain.AttentionDelivery{
@@ -499,7 +499,7 @@ func TestDeliveryLifecycleForwardOnly(t *testing.T) {
 	// An advance that rewrites an already-recorded receipt is rejected.
 	// Rebuild from the submitted row: fresh store, seed submitted, then
 	// advance with a shifted SubmittedAt.
-	s2 := openStore(t, store.Options{})
+	s2 := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	err = s2.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutConversation(ctx, f.conversation); err != nil {
 			return err
@@ -524,7 +524,7 @@ func TestDeliveryLifecycleForwardOnly(t *testing.T) {
 // (§5.3); a resolved policy whose digest disagrees with its run is rejected.
 func TestResolvedPolicyDigestMatchesRun(t *testing.T) {
 	ctx := context.Background()
-	s := openStore(t, store.Options{})
+	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
 
 	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, f.run) }); err != nil {
@@ -543,7 +543,7 @@ func TestResolvedPolicyDigestMatchesRun(t *testing.T) {
 // TestGetNotFound: every Get wraps ErrNotFound for a missing row.
 func TestGetNotFound(t *testing.T) {
 	ctx := context.Background()
-	s := openStore(t, store.Options{})
+	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	if err := s.Read(ctx, func(tx *store.ReadTx) error {
 		_, err := tx.GetRun(ctx, "no-such-run")
 		return err
@@ -580,7 +580,7 @@ func TestForeignKeysEnforced(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := openStore(t, store.Options{}) // fresh, empty store per case
+			s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()}) // fresh store per case
 			before, err := s.ServerState(ctx)
 			if err != nil {
 				t.Fatalf("ServerState: %v", err)
