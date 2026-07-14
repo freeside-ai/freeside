@@ -12,8 +12,11 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
 
-// The on-disk file name for the stage fake, under its persistence dir.
-const stageStateFile = "stage_state.json"
+// The on-disk file names, one per fake, under the fake's persistence dir.
+const (
+	stageStateFile  = "stage_state.json"
+	reviewStateFile = "review_state.json"
+)
 
 // stageState is the durable half of a StageDriver, the three facets a daemon
 // restart must preserve (§5.3, §5.9): the scripted scenarios (the external
@@ -24,6 +27,13 @@ type stageState struct {
 	Scripts   map[domain.InvocationID]StageScript      `json:"scripts"`
 	Committed map[domain.InvocationID]exec.StageResult `json:"committed"`
 	Intents   map[domain.InvocationID]exec.StartSpec   `json:"intents"`
+}
+
+// reviewState is the durable half of a ReviewSource, mirroring stageState.
+type reviewState struct {
+	Scripts   map[domain.InvocationID]ReviewScript       `json:"scripts"`
+	Committed map[domain.InvocationID]exec.ReviewResult  `json:"committed"`
+	Intents   map[domain.InvocationID]exec.ReviewRequest `json:"intents"`
 }
 
 // loadStageState reads dir/stage_state.json, returning empty (non-nil) maps
@@ -43,6 +53,24 @@ func loadStageState(dir string) (stageState, error) {
 	}
 	if st.Intents == nil {
 		st.Intents = map[domain.InvocationID]exec.StartSpec{}
+	}
+	return st, nil
+}
+
+// loadReviewState mirrors loadStageState for the review fake.
+func loadReviewState(dir string) (reviewState, error) {
+	st := reviewState{}
+	if err := loadState(dir, reviewStateFile, &st); err != nil {
+		return reviewState{}, err
+	}
+	if st.Scripts == nil {
+		st.Scripts = map[domain.InvocationID]ReviewScript{}
+	}
+	if st.Committed == nil {
+		st.Committed = map[domain.InvocationID]exec.ReviewResult{}
+	}
+	if st.Intents == nil {
+		st.Intents = map[domain.InvocationID]exec.ReviewRequest{}
 	}
 	return st, nil
 }
