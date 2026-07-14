@@ -20,7 +20,15 @@ func tempDBPath(t *testing.T) string {
 
 func openStore(t *testing.T, opts store.Options) *store.Store {
 	t.Helper()
-	s, err := store.Open(context.Background(), tempDBPath(t), opts)
+	return openStoreAt(t, tempDBPath(t), opts)
+}
+
+// openStoreAt opens a store at a caller-chosen path, so a test can reopen the
+// same database under different Options: a row persisted under one approved
+// recipe set can be read back under another to exercise the reconstruction gate.
+func openStoreAt(t *testing.T, path string, opts store.Options) *store.Store {
+	t.Helper()
+	s, err := store.Open(context.Background(), path, opts)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
