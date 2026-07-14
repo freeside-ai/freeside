@@ -2,6 +2,7 @@ package exec_test
 
 import (
 	"errors"
+	"maps"
 	"slices"
 	"testing"
 
@@ -118,13 +119,25 @@ func TestCheckCapabilities(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			b := backend{name: "test-backend", caps: exec.NewCapabilitySet(tc.declared...)}
-			err := exec.CheckCapabilities(b, tc.minimum)
+			adm, err := exec.CheckCapabilities(b, tc.minimum)
 
 			if tc.wantMissing == nil {
 				if err != nil {
 					t.Fatalf("want pass, got %v", err)
 				}
+				// On admission the snapshot names the backend and carries the
+				// declared set (acceptance 2).
+				if adm.Backend != "test-backend" {
+					t.Errorf("admission backend = %q, want %q", adm.Backend, "test-backend")
+				}
+				if want := exec.NewCapabilitySet(tc.declared...); !maps.Equal(adm.Declared, want) {
+					t.Errorf("admission declared = %v, want %v", adm.Declared, want)
+				}
 				return
+			}
+			// A refusal returns the zero Admission, never a partial snapshot.
+			if adm.Backend != "" || adm.Declared != nil {
+				t.Errorf("refusal admission = %+v, want zero", adm)
 			}
 			if !errors.Is(err, exec.ErrCapabilityRefused) {
 				t.Fatalf("want ErrCapabilityRefused class, got %v", err)
@@ -140,5 +153,42 @@ func TestCheckCapabilities(t *testing.T) {
 				t.Errorf("refusal missing = %v, want %v", refusal.Missing, tc.wantMissing)
 			}
 		})
+	}
+}
+
+// TestCheckCapabilitiesAdmissionFrozen is acceptance fixture 3: the admitted
+// snapshot is a spawn-time value. Mutating the backend's declaration after
+// admission, or mutating the returned snapshot, changes neither the snapshot
+// nor a later admission decision. It fails if CheckCapabilities returns the
+// backend's live set by reference instead of a frozen clone.
+func TestCheckCapabilitiesAdmissionFrozen(t *testing.T) {
+	minimum := []exec.Capability{exec.CapDetachableWorkspace, exec.CapPostExitExport}
+	b := backend{name: "test-backend", caps: exec.NewCapabilitySet(exec.AllCapabilities...)}
+
+	adm, err := exec.CheckCapabilities(b, minimum)
+	if err != nil {
+		t.Fatalf("want admission, got %v", err)
+	}
+	if !adm.Declared.Has(exec.CapDetachableWorkspace) {
+		t.Fatal("snapshot should declare detachable workspace")
+	}
+
+	// Narrow the backend's live declaration after admission; the admitted
+	// snapshot must not follow.
+	delete(b.caps, exec.CapDetachableWorkspace)
+	if !adm.Declared.Has(exec.CapDetachableWorkspace) {
+		t.Error("backend mutation after admission must not narrow the snapshot")
+	}
+
+	// Mutating the returned snapshot must not touch the backend: a later
+	// admission reads the live backend, not a held (and now mutated) snapshot.
+	adm.Declared[exec.Capability("supports_time_travel")] = struct{}{}
+	delete(adm.Declared, exec.CapPostExitExport)
+	adm2, err := exec.CheckCapabilities(b, []exec.Capability{exec.CapPostExitExport})
+	if err != nil {
+		t.Fatalf("post-exit export is still declared; want pass, got %v", err)
+	}
+	if adm2.Declared.Has("supports_time_travel") {
+		t.Error("a mutated prior snapshot must not leak into a new admission")
 	}
 }

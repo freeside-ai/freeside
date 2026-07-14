@@ -1,12 +1,9 @@
 name: api CI
 
 # Spec validation is platform-independent, so a single Linux job is the
-# whole gate. The validator (vacuum) runs as a pinned, checksum-verified
-# prebuilt binary: `go run`ning it compiled vacuum and its dependency tree
-# from source on every run (~7min), and setup-go's cache can't help because
-# the daemon go.sum doesn't cover it. The binary keeps the same lint
-# invocation the local `go run` uses (api/README.md); pinning is by version
-# plus sha256, matching the pinned-golangci-lint determinism convention.
+# whole gate. The validator is a Go tool run by pinned module version
+# (fully deterministic, matching the pinned-golangci-lint convention);
+# the same command is documented in api/README.md for local runs.
 
 on:
   push:
@@ -26,20 +23,15 @@ jobs:
   lint:
     name: lint (vacuum)
     runs-on: ubuntu-latest
-    env:
-      VACUUM_VERSION: "0.29.9"
-      # sha256 of vacuum_${VACUUM_VERSION}_linux_x86_64.tar.gz from the
-      # release's checksums.txt. Bump together with VACUUM_VERSION (and the
-      # version pinned in api/README.md and AGENTS.md).
-      VACUUM_SHA256: "d1b9618493a12a30390719b0af88bfc57a8c2074d900134983cd358c1f38b8b9"
     steps:
       - uses: actions/checkout@v4
-      - name: Install vacuum (pinned binary, checksum-verified)
-        run: |
-          set -euo pipefail
-          curl -fsSL -o vacuum.tar.gz \
-            "https://github.com/daveshanley/vacuum/releases/download/v${VACUUM_VERSION}/vacuum_${VACUUM_VERSION}_linux_x86_64.tar.gz"
-          echo "${VACUUM_SHA256}  vacuum.tar.gz" | sha256sum -c -
-          tar -xzf vacuum.tar.gz vacuum
+      - uses: actions/setup-go@v5
+        with:
+          # The daemon module pins the repo's Go toolchain; the validator
+          # is version-pinned in the command itself. No cache: the daemon
+          # go.sum doesn't cover the validator, so a restored cache would
+          # never contain it.
+          go-version-file: daemon/go.mod
+          cache: false
       - name: vacuum lint
-        run: ./vacuum lint -r api/vacuum.ruleset.yaml --details --fail-severity warn api/openapi.yaml
+        run: go run github.com/daveshanley/vacuum@v0.29.9 lint -r api/vacuum.ruleset.yaml --details --fail-severity warn api/openapi.yaml
