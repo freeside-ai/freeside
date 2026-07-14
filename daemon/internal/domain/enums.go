@@ -100,6 +100,31 @@ func (c ProducerClass) valid() bool {
 	}
 }
 
+// HeadBinding records how an artifact's provenance relates to repository head
+// (plan §5.15 rule 2). Head-bound evidence is produced against a specific
+// candidate head and is invalidated by a remediation head; head-independent
+// evidence is intentionally decoupled from head and survives a remediation.
+// There is no zero-value member: the empty string is invalid, so an omitted or
+// unknown binding is never silently read as independence.
+type HeadBinding string
+
+const (
+	HeadBound       HeadBinding = "head_bound"
+	HeadIndependent HeadBinding = "head_independent"
+)
+
+// AllHeadBindings lists every valid HeadBinding.
+var AllHeadBindings = []HeadBinding{HeadBound, HeadIndependent}
+
+func (b HeadBinding) valid() bool {
+	switch b {
+	case HeadBound, HeadIndependent:
+		return true
+	default:
+		return false
+	}
+}
+
 // DeliveryStatus is the honest lifecycle of one notification attempt (plan §4,
 // decision 11). A channel provider's acceptance is never called "delivered":
 // this vocabulary deliberately has no such member, and nothing maps to it.

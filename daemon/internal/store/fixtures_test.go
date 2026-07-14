@@ -46,6 +46,7 @@ func newFixtures(t *testing.T) fixtures {
 		Provenance: domain.Provenance{
 			ProducerClass:            domain.ProducerVerifier,
 			ProducerInvocationID:     "inv-1",
+			HeadBinding:              domain.HeadBound,
 			SourceHeadSHA:            "cafebabe",
 			VerificationRecipeDigest: &recipe,
 			SensitivityClass:         domain.SensitivityNormal,

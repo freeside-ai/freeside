@@ -138,6 +138,40 @@ func TestNewAttentionItemDerivesBindingSet(t *testing.T) {
 	}
 }
 
+// TestHeadIndependentEvidenceSurvivesRemediation is acceptance criterion 3:
+// only explicitly head-independent evidence is preserved across a remediation
+// head. Head-independent evidence (no source head) is admitted under any
+// pr_head_sha, including one it was not produced against; head-bound evidence
+// still must match the item's head.
+func TestHeadIndependentEvidenceSurvivesRemediation(t *testing.T) {
+	recipe := approvedRecipe
+	indepProv := provenance(domain.ProducerVerifier, &recipe)
+	indepProv.HeadBinding = domain.HeadIndependent
+	indepProv.SourceHeadSHA = ""
+	indep := domain.Artifact{ID: "lic", Type: "license_scan", Digest: "sha256:lic", Provenance: indepProv}
+
+	// Same head-independent artifact under two different remediation heads: both
+	// preserve it, since it is decoupled from head.
+	for _, head := range []string{"head-A", "head-B-remediation"} {
+		in := validItemInput(domain.AttentionReadyForFinalReview)
+		in.PRHeadSHA = head
+		in.EvidenceSnapshot = []domain.Artifact{indep}
+		if _, err := domain.NewAttentionItem(in, approvedRecipes()); err != nil {
+			t.Fatalf("head-independent evidence rejected under head %q: %v", head, err)
+		}
+	}
+
+	// Control: a head-bound artifact whose head does not match the (remediated)
+	// item head is still invalidated.
+	bound := domain.Artifact{ID: "log", Type: "log", Digest: "sha256:log", Provenance: provenance(domain.ProducerVerifier, &recipe)} // SourceHeadSHA "abc123"
+	in := validItemInput(domain.AttentionReadyForFinalReview)
+	in.PRHeadSHA = "head-B-remediation"
+	in.EvidenceSnapshot = []domain.Artifact{bound}
+	if _, err := domain.NewAttentionItem(in, approvedRecipes()); !errors.Is(err, domain.ErrEvidenceHeadMismatch) {
+		t.Fatalf("head-bound evidence under a mismatched head = %v, want ErrEvidenceHeadMismatch", err)
+	}
+}
+
 // TestNewAttentionItemEmptyBindingIsArray checks an item that renders no
 // artifacts serializes artifact_digests as "[]" rather than null, matching the
 // required, non-null array the wire contract declares.

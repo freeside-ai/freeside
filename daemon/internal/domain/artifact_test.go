@@ -19,6 +19,7 @@ func provenance(class domain.ProducerClass, recipe *domain.Digest) domain.Proven
 	return domain.Provenance{
 		ProducerClass:            class,
 		ProducerInvocationID:     "inv-1",
+		HeadBinding:              domain.HeadBound,
 		SourceHeadSHA:            "abc123",
 		VerificationRecipeDigest: recipe,
 		SensitivityClass:         domain.SensitivityNormal,
@@ -160,7 +161,8 @@ func TestValidateRejectsInconsistentPublishEligible(t *testing.T) {
 	}
 	// A present-but-empty recipe digest is a malformed content address, not "absent".
 	emptyRecipe := domain.Provenance{
-		ProducerClass: domain.ProducerVerifier, ProducerInvocationID: "inv", SourceHeadSHA: "h",
+		ProducerClass: domain.ProducerVerifier, ProducerInvocationID: "inv",
+		HeadBinding: domain.HeadBound, SourceHeadSHA: "h",
 		VerificationRecipeDigest: ptr(domain.Digest("")), SensitivityClass: domain.SensitivityNormal,
 	}
 	if err := emptyRecipe.Validate(); !errors.Is(err, domain.ErrEmptyField) {
@@ -187,9 +189,9 @@ func TestProvenanceRejectsAgentRecipe(t *testing.T) {
 	}
 }
 
-// TestProvenanceRequiresSourceHead checks that an evidence-bearing artifact
-// must carry the head it was produced against (plan §5.15 rule 2): an empty
-// source_head_sha is rejected, so evidence can always be head-bound.
+// TestProvenanceRequiresSourceHead checks that a head-bound artifact must carry
+// the head it was produced against (plan §5.15 rule 2): an empty source_head_sha
+// on head_bound provenance is rejected, so head-bound evidence is always bound.
 func TestProvenanceRequiresSourceHead(t *testing.T) {
 	prov := provenance(domain.ProducerVerifier, ptr(approvedRecipe))
 	prov.SourceHeadSHA = ""
@@ -201,6 +203,41 @@ func TestProvenanceRequiresSourceHead(t *testing.T) {
 	}, approvedRecipes())
 	if !errors.Is(err, domain.ErrEmptyField) {
 		t.Fatalf("NewArtifact error = %v, want ErrEmptyField", err)
+	}
+}
+
+// TestProvenanceHeadBinding is acceptance criteria 1 and 2: the head-binding
+// mode is an explicit, typed provenance field. Head-bound provenance requires a
+// source head; head-independent provenance must NOT carry one (a head on
+// head-independent evidence is a machine-checkable contradiction, never read
+// implicitly as either mode); an omitted or unknown binding is rejected, so
+// omission is never silently interpreted as independence.
+func TestProvenanceHeadBinding(t *testing.T) {
+	// head_independent with no source head is valid.
+	indep := provenance(domain.ProducerVerifier, ptr(approvedRecipe))
+	indep.HeadBinding = domain.HeadIndependent
+	indep.SourceHeadSHA = ""
+	if err := indep.Validate(); err != nil {
+		t.Fatalf("head-independent provenance without a source head rejected: %v", err)
+	}
+
+	// head_independent carrying a source head is inconsistent.
+	indepWithHead := provenance(domain.ProducerVerifier, ptr(approvedRecipe))
+	indepWithHead.HeadBinding = domain.HeadIndependent // keeps SourceHeadSHA = "abc123"
+	if err := indepWithHead.Validate(); !errors.Is(err, domain.ErrProvenanceInconsistent) {
+		t.Fatalf("head-independent provenance with a source head validated: %v", err)
+	}
+
+	// An omitted (zero-value) binding is rejected: absence is never independence.
+	zero := provenance(domain.ProducerVerifier, ptr(approvedRecipe))
+	zero.HeadBinding = ""
+	if err := zero.Validate(); !errors.Is(err, domain.ErrInvalidHeadBinding) {
+		t.Fatalf("zero-value head_binding validated: %v", err)
+	}
+	unknown := provenance(domain.ProducerVerifier, ptr(approvedRecipe))
+	unknown.HeadBinding = domain.HeadBinding("sometime")
+	if err := unknown.Validate(); !errors.Is(err, domain.ErrInvalidHeadBinding) {
+		t.Fatalf("unknown head_binding validated: %v", err)
 	}
 }
 

@@ -19,6 +19,7 @@ func forgedEligibleArtifact() domain.Artifact {
 		Provenance: domain.Provenance{
 			ProducerClass:            domain.ProducerVerifier,
 			ProducerInvocationID:     "inv-1",
+			HeadBinding:              domain.HeadBound,
 			SourceHeadSHA:            "cafebabe",
 			VerificationRecipeDigest: ptrDigest("sha256:unapproved-recipe"),
 			SensitivityClass:         domain.SensitivityNormal,
@@ -64,7 +65,7 @@ func TestPutArtifactAllowsLegalNonEvidence(t *testing.T) {
 		ID: "art-agent", Type: "image", Digest: "sha256:img",
 		Provenance: domain.Provenance{
 			ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-1",
-			SourceHeadSHA: "cafebabe", SensitivityClass: domain.SensitivityNormal,
+			HeadBinding: domain.HeadBound, SourceHeadSHA: "cafebabe", SensitivityClass: domain.SensitivityNormal,
 		},
 	}
 	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutArtifact(ctx, agentArt) }); err != nil {
@@ -75,6 +76,76 @@ func TestPutArtifactAllowsLegalNonEvidence(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Fatalf("GetArtifact of legal non-evidence artifact: %v", err)
+	}
+}
+
+// TestHeadIndependentEvidenceRoundTrips is issue #37 for the persistence
+// boundary: head-independent evidence (no source head) rides the opaque item
+// body, and a store-reconstructed item re-runs Validate, so the new binding
+// mode survives a write/read cycle and is admitted even though the item names a
+// pr_head_sha the evidence was not produced against.
+func TestHeadIndependentEvidenceRoundTrips(t *testing.T) {
+	ctx := context.Background()
+	f := newFixtures(t)
+	recipe := fixtureRecipe
+
+	indep, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: "art-lic", Type: "license_scan", Digest: "sha256:lic",
+		Provenance: domain.Provenance{
+			ProducerClass:            domain.ProducerVerifier,
+			ProducerInvocationID:     "inv-1",
+			HeadBinding:              domain.HeadIndependent,
+			VerificationRecipeDigest: &recipe,
+			SensitivityClass:         domain.SensitivityNormal,
+		},
+	}, approvedFixtureRecipes())
+	if err != nil {
+		t.Fatalf("NewArtifact: %v", err)
+	}
+
+	// An item carrying only head-independent evidence, with a pr_head_sha the
+	// evidence was not produced against, proves the evidence is preserved across
+	// that (remediation) head. Reuses the fixture conversation for the FK.
+	runID := domain.RunID("run-1")
+	convID := domain.ConversationID("conv-1")
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-indep", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
+		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Reason:            "head-independent evidence survives remediation",
+		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionDismiss},
+		EvidenceSnapshot:  []domain.Artifact{indep},
+		PRHeadSHA:         "head-remediation", ItemVersion: 1,
+		InterruptionClass: domain.InterruptionPlannedGate,
+		ConversationID:    &convID, Status: domain.StatusOpen,
+	}, approvedFixtureRecipes())
+	if err != nil {
+		t.Fatalf("NewAttentionItem with head-independent evidence: %v", err)
+	}
+
+	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutConversation(ctx, f.conversation); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatalf("persist item with head-independent evidence: %v", err)
+	}
+
+	var got domain.AttentionItem
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		got, err = tx.GetAttentionItem(ctx, item.ID)
+		return err
+	}); err != nil {
+		t.Fatalf("GetAttentionItem: %v", err)
+	}
+	if len(got.EvidenceSnapshot) != 1 || got.EvidenceSnapshot[0].Provenance.HeadBinding != domain.HeadIndependent {
+		t.Fatalf("reconstructed evidence lost its head_independent binding: %+v", got.EvidenceSnapshot)
+	}
+	if got.EvidenceSnapshot[0].Provenance.SourceHeadSHA != "" {
+		t.Errorf("head-independent evidence gained a source head: %q", got.EvidenceSnapshot[0].Provenance.SourceHeadSHA)
 	}
 }
 
