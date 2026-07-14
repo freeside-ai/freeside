@@ -1,7 +1,10 @@
 package domain_test
 
 import (
+	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,6 +112,87 @@ func TestNewAttentionItemRecomputesEvidenceEligibility(t *testing.T) {
 	}
 }
 
+// TestNewAttentionItemDerivesBindingSet is acceptance 1: the binding set is
+// derived from the rendered inputs, so it is exactly the canonical (sorted,
+// deduplicated) union of the evidence and claim digests, and a caller cannot
+// supply a divergent one (the field is not on the input).
+func TestNewAttentionItemDerivesBindingSet(t *testing.T) {
+	recipe := approvedRecipe
+	// Two evidence artifacts sharing a digest and one claim; the union
+	// deduplicates and sorts. "sha256:aaa" < "sha256:zzz" gives the order.
+	ev1 := domain.Artifact{ID: "e1", Type: "log", Digest: "sha256:zzz", Provenance: provenance(domain.ProducerVerifier, &recipe)}
+	ev2 := domain.Artifact{ID: "e2", Type: "log", Digest: "sha256:zzz", Provenance: provenance(domain.ProducerVerifier, &recipe)}
+	claim := domain.AgentClaim{Label: "shot", Artifact: "c1", Digest: "sha256:aaa"}
+	in := validItemInput(domain.AttentionReadyForFinalReview)
+	in.PRHeadSHA = "abc123" // matches provenance() so evidence head-binding passes
+	in.EvidenceSnapshot = []domain.Artifact{ev1, ev2}
+	in.AgentClaims = []domain.AgentClaim{claim}
+
+	item, err := domain.NewAttentionItem(in, approvedRecipes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []domain.Digest{"sha256:aaa", "sha256:zzz"}
+	if !slices.Equal(item.ArtifactDigests, want) {
+		t.Errorf("ArtifactDigests = %v, want %v", item.ArtifactDigests, want)
+	}
+}
+
+// TestNewAttentionItemEmptyBindingIsArray checks an item that renders no
+// artifacts serializes artifact_digests as "[]" rather than null, matching the
+// required, non-null array the wire contract declares.
+func TestNewAttentionItemEmptyBindingIsArray(t *testing.T) {
+	item, err := domain.NewAttentionItem(validItemInput(domain.AttentionSystemHealth), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.ArtifactDigests == nil || len(item.ArtifactDigests) != 0 {
+		t.Fatalf("ArtifactDigests = %v, want non-nil empty slice", item.ArtifactDigests)
+	}
+	body, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"artifact_digests":[]`) {
+		t.Errorf("serialized item missing artifact_digests:[] — got %s", body)
+	}
+}
+
+// TestValidateRejectsBindingMismatch is the reconstruction backstop for
+// acceptance 1: an item decoded from the store whose artifact_digests does not
+// equal its rendered evidence/claim digests must not validate — this is the
+// "display A, bind B" defect the derived field closes. NewAttentionItem cannot
+// produce such a value, so the mismatch is injected past it.
+func TestValidateRejectsBindingMismatch(t *testing.T) {
+	base := func() domain.AttentionItem {
+		recipe := approvedRecipe
+		in := validItemInput(domain.AttentionReadyForFinalReview)
+		in.PRHeadSHA = "abc123"
+		in.EvidenceSnapshot = []domain.Artifact{{ID: "e1", Type: "log", Digest: "sha256:log", Provenance: provenance(domain.ProducerVerifier, &recipe)}}
+		item, err := domain.NewAttentionItem(in, approvedRecipes())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return item
+	}
+	for _, tc := range []struct {
+		name    string
+		digests []domain.Digest
+	}{
+		{"extra unrendered digest", []domain.Digest{"sha256:log", "sha256:phantom"}},
+		{"omitted rendered digest", nil},
+		{"substituted digest", []domain.Digest{"sha256:other"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			item := base()
+			item.ArtifactDigests = tc.digests
+			if err := item.Validate(); !errors.Is(err, domain.ErrBindingMismatch) {
+				t.Fatalf("Validate() = %v, want ErrBindingMismatch", err)
+			}
+		})
+	}
+}
+
 // TestValidateRejectsCorruptTiming is the reconstruction backstop: an item
 // decoded from the store with an impossible Timing shape must not validate.
 func TestValidateRejectsCorruptTiming(t *testing.T) {
@@ -164,11 +248,6 @@ func TestNewAttentionItemRejects(t *testing.T) {
 			name:    "non-positive item_version",
 			mutate:  func(in *domain.AttentionItemInput) { in.ItemVersion = 0 },
 			wantErr: domain.ErrNonPositive,
-		},
-		{
-			name:    "empty artifact digest",
-			mutate:  func(in *domain.AttentionItemInput) { in.ArtifactDigests = []domain.Digest{""} },
-			wantErr: domain.ErrEmptyField,
 		},
 		{
 			name: "run_id on a system subject",

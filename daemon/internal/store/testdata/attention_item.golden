@@ -37,6 +37,7 @@
     }
   ],
   "artifact_digests": [
+    "sha256:img",
     "sha256:log"
   ],
   "pr_head_sha": "cafebabe",

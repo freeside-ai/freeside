@@ -58,7 +58,6 @@ func TestGolden(t *testing.T) {
 		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionDismiss},
 		EvidenceSnapshot:  []domain.Artifact{artifact},
 		AgentClaims:       []domain.AgentClaim{agentClaim},
-		ArtifactDigests:   []domain.Digest{"sha256:log"},
 		PRHeadSHA:         "cafebabe", ItemVersion: 1,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		ConversationID:    &convID, ExpiresWhen: &expires, Status: domain.StatusOpen,
@@ -99,11 +98,25 @@ func TestGolden(t *testing.T) {
 	stage := domain.Stage{ID: "stage-1", RunID: "run-1", Name: "implementation", Attempts: []domain.Attempt{attempt}}
 	run := domain.Run{ID: "run-1", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: resolvedPolicy.Digest, Stages: []domain.Stage{stage}}
 
+	// The command binds the item above: its accepted version, head, and the
+	// item's derived binding set (union of the evidence and claim digests). The
+	// digests are passed out of order to exercise NewCommand's canonicalization.
+	command, err := domain.NewCommand(domain.CommandInput{
+		CommandID: "cmd-1", DeviceID: "device-1", ItemID: "item-1",
+		ItemVersion: 1, PRHeadSHA: "cafebabe",
+		ArtifactDigests: []domain.Digest{"sha256:log", "sha256:img"},
+		Action:          domain.ActionOpenPR,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	cases := []struct {
 		name  string
 		value any
 	}{
 		{"attention_item", item},
+		{"command", command},
 		{"subject", subject},
 		{"agent_claim", agentClaim},
 		{"attention_delivery", delivery},

@@ -1,0 +1,12 @@
+{
+  "command_id": "cmd-1",
+  "device_id": "device-1",
+  "item_id": "item-1",
+  "item_version": 1,
+  "pr_head_sha": "cafebabe",
+  "artifact_digests": [
+    "sha256:img",
+    "sha256:log"
+  ],
+  "action": "open_pr"
+}

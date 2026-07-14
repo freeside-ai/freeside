@@ -51,7 +51,10 @@ func TestGoldenRoundTrip(t *testing.T) {
 		if err := tx.PutClassification(ctx, f.class); err != nil {
 			return err
 		}
-		return tx.PutResolvedPolicy(ctx, f.policy)
+		if err := tx.PutResolvedPolicy(ctx, f.policy); err != nil {
+			return err
+		}
+		return tx.PutCommand(ctx, f.command)
 	})
 	if err != nil {
 		t.Fatalf("Write: %v", err)
@@ -61,7 +64,7 @@ func TestGoldenRoundTrip(t *testing.T) {
 		t.Fatalf("ServerState: %v", err)
 	}
 	if after.Revision != before.Revision+1 {
-		t.Fatalf("nine puts in one Write bumped revision %d -> %d, want exactly once", before.Revision, after.Revision)
+		t.Fatalf("ten puts in one Write bumped revision %d -> %d, want exactly once", before.Revision, after.Revision)
 	}
 
 	cases := []struct {
@@ -82,6 +85,7 @@ func TestGoldenRoundTrip(t *testing.T) {
 			return tx.GetClassification(ctx, f.class.FindingID, f.class.Version)
 		}},
 		{"resolved_policy", f.policy, func(tx *store.ReadTx) (any, error) { return tx.GetResolvedPolicy(ctx, f.policy.RunID) }},
+		{"command", f.command, func(tx *store.ReadTx) (any, error) { return tx.GetCommand(ctx, f.command.CommandID) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -209,6 +213,161 @@ func TestPutImmutableConflict(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCommandIdempotentAndStale covers the command record's two guarantees
+// (issue #32 acceptance 3; §5.14 tests 2 and 4):
+//   - a retried command_id converges on the original record, and a different
+//     body under that id is a conflict;
+//   - a new command whose pinned bindings no longer match the live item is
+//     rejected as stale, carrying the current item as the replacement;
+//   - a command for an absent item is not found.
+func TestCommandIdempotentAndStale(t *testing.T) {
+	ctx := context.Background()
+	f := newFixtures(t)
+
+	seed := func(s *store.Store) {
+		t.Helper()
+		err := s.Write(ctx, func(tx *store.WriteTx) error {
+			if err := tx.PutConversation(ctx, f.conversation); err != nil {
+				return err
+			}
+			if err := tx.PutAttentionItem(ctx, f.item); err != nil {
+				return err
+			}
+			return tx.PutCommand(ctx, f.command)
+		})
+		if err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	t.Run("idempotent replay returns the original", func(t *testing.T) {
+		s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+		seed(s)
+		if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutCommand(ctx, f.command) }); err != nil {
+			t.Fatalf("identical replay errored, want convergence: %v", err)
+		}
+		var got domain.Command
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			got, err = tx.GetCommand(ctx, f.command.CommandID)
+			return err
+		}); err != nil {
+			t.Fatalf("GetCommand: %v", err)
+		}
+		if string(marshalIndent(t, got)) != string(marshalIndent(t, f.command)) {
+			t.Fatalf("replayed command changed:\ngot:  %s\nwant: %s", marshalIndent(t, got), marshalIndent(t, f.command))
+		}
+	})
+
+	t.Run("changed body under the same id conflicts", func(t *testing.T) {
+		s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+		seed(s)
+		changed := f.command
+		changed.Action = domain.ActionReturnToAgent // same command_id, different decision
+		err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutCommand(ctx, changed) })
+		if !errors.Is(err, store.ErrImmutableConflict) {
+			t.Fatalf("changed-body replay error = %v, want ErrImmutableConflict", err)
+		}
+	})
+
+	t.Run("committed command still converges after the item advanced", func(t *testing.T) {
+		// The crux of §5.14 test 4: a lost-response retry of an already-committed
+		// command_id must return the original result even though the item has since
+		// advanced past the version the command bound. This is what the
+		// idempotency-before-binding order in PutCommand guarantees; without it the
+		// retry would be wrongly re-judged stale.
+		s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+		seed(s)
+		advanced := f.item
+		advanced.Status = domain.StatusResolved
+		advanced.ItemVersion = 2
+		if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, advanced) }); err != nil {
+			t.Fatalf("advance item: %v", err)
+		}
+		// Retrying the original command (still bound to v1) converges, not stale.
+		if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutCommand(ctx, f.command) }); err != nil {
+			t.Fatalf("retry after advance errored, want convergence: %v", err)
+		}
+		var got domain.Command
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			got, err = tx.GetCommand(ctx, f.command.CommandID)
+			return err
+		}); err != nil {
+			t.Fatalf("GetCommand: %v", err)
+		}
+		if got.ItemVersion != 1 {
+			t.Errorf("retrieved command item_version = %d, want the originally recorded 1", got.ItemVersion)
+		}
+	})
+
+	t.Run("stale bindings rejected with the replacement item", func(t *testing.T) {
+		s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+		seed(s)
+		// Advance the item to v2 (a legitimate transition) after the command bound v1.
+		advanced := f.item
+		advanced.Status = domain.StatusResolved
+		advanced.ItemVersion = 2
+		if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, advanced) }); err != nil {
+			t.Fatalf("advance item: %v", err)
+		}
+		// A genuinely new command still binding v1 is stale.
+		stale := f.command
+		stale.CommandID = "cmd-stale"
+		err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutCommand(ctx, stale) })
+		if !errors.Is(err, store.ErrStaleCommand) {
+			t.Fatalf("stale command error = %v, want ErrStaleCommand", err)
+		}
+		var sce *store.StaleCommandError
+		if !errors.As(err, &sce) {
+			t.Fatalf("error = %v, want *StaleCommandError", err)
+		}
+		if sce.Replacement.ItemVersion != 2 {
+			t.Errorf("replacement item_version = %d, want the advanced 2", sce.Replacement.ItemVersion)
+		}
+	})
+
+	t.Run("action not offered by the item is rejected", func(t *testing.T) {
+		s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+		// Seed the item (and its conversation) but not a command.
+		if err := s.Write(ctx, func(tx *store.WriteTx) error {
+			if err := tx.PutConversation(ctx, f.conversation); err != nil {
+				return err
+			}
+			return tx.PutAttentionItem(ctx, f.item)
+		}); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		// The fixture item offers open_pr / return_to_agent / dismiss; a command
+		// for the valid-but-unoffered "stop" action must be refused even though it
+		// binds the current version, head, and digests.
+		unoffered, err := domain.NewCommand(domain.CommandInput{
+			CommandID: "cmd-unoffered", DeviceID: "device-1", ItemID: f.item.ID,
+			ItemVersion: f.item.ItemVersion, PRHeadSHA: f.item.PRHeadSHA,
+			ArtifactDigests: f.item.ArtifactDigests, Action: domain.ActionStop,
+		})
+		if err != nil {
+			t.Fatalf("NewCommand: %v", err)
+		}
+		err = s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutCommand(ctx, unoffered) })
+		if !errors.Is(err, store.ErrActionNotOffered) {
+			t.Fatalf("unoffered action error = %v, want ErrActionNotOffered", err)
+		}
+	})
+
+	t.Run("command for an absent item is not found", func(t *testing.T) {
+		s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+		// No item seeded.
+		orphan := f.command
+		orphan.CommandID = "cmd-orphan"
+		orphan.ItemID = "no-such-item"
+		err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutCommand(ctx, orphan) })
+		if !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("command for missing item error = %v, want ErrNotFound", err)
+		}
+	})
 }
 
 // TestPutAgainUpdates: a second Put of the same identity on a current-state
