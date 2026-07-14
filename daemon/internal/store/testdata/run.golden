@@ -2,7 +2,7 @@
   "id": "run-1",
   "project_id": "proj-1",
   "spec_digest": "sha256:spec",
-  "policy_digest": "sha256:policy",
+  "policy_digest": "sha256:dc1af0d4d3c8cdc2f6b59b72234a6988199c4d9dd9c3f2e663452eb58cd97ca7",
   "stages": [
     {
       "id": "stage-1",

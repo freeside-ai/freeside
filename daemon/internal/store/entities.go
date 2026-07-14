@@ -573,12 +573,17 @@ VALUES (?, ?, 1, ?, ?)
 ON CONFLICT (run_id) DO NOTHING`
 
 func (tx *WriteTx) PutResolvedPolicy(ctx context.Context, policy domain.ResolvedPolicy) error {
+	// encode calls policy.Validate, which recomputes the digest from the keys
+	// and rejects a forged one, so body carries an authenticated content digest
+	// (domain.ResolvedPolicy.ComputeDigest), not a caller label.
 	body, err := encode(policy)
 	if err != nil {
 		return fmt.Errorf("put resolved policy %q: %w", policy.RunID, err)
 	}
-	// The run binds its resolved policy by digest (§5.3): a policy whose
-	// digest disagrees with its run's policy_digest column is rejected. A
+	// The run binds its resolved policy by digest (§5.3): a policy whose digest
+	// disagrees with its run's policy_digest column is rejected. Because the
+	// digest above is now authenticated, this transitively binds the run's
+	// policy_digest to the verified content digest in this same transaction. A
 	// missing run falls through to the foreign-key failure on insert.
 	var runPolicyDigest string
 	err = tx.tx.QueryRowContext(ctx,

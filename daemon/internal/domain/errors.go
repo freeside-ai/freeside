@@ -44,6 +44,8 @@ var (
 	ErrUnapprovedRecipe            = errors.New("artifact was not produced under an approved recipe")
 	ErrMissingKeyProvenance        = errors.New("resolved-policy key lacks provenance")
 	ErrPublishEligibleInconsistent = errors.New("publish_eligible is inconsistent with provenance")
+	ErrPolicyDigestMismatch        = errors.New("resolved-policy digest does not match its content")
+	ErrKeysNotCanonical            = errors.New("resolved-policy keys are not in canonical (key-sorted) order")
 
 	// Transition failures: how a persisted aggregate may change between its
 	// stored version and an update (the transition validators). A writer maps

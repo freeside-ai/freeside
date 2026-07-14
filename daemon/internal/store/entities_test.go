@@ -121,6 +121,14 @@ func marshalIndent(t *testing.T, v any) []byte {
 // same-key write with different content is a contract violation, not an
 // update. A rewritten classification version, for example, would erase the
 // historical materiality/confidence while sync saw only an ordinary update.
+//
+// resolved_policy is intentionally absent: its digest is a content address of
+// its canonically-ordered keys and the run pins exactly one digest, so a
+// same-run write is either identical canonical content (an idempotent replay
+// that converges) or different content (a different digest, rejected by content
+// validation or the run binding). A distinct persisted body under one run
+// cannot be expressed, so the write-once check is unreachable here. That
+// stronger invariant is covered by TestResolvedPolicyDigestMatchesRun.
 func TestPutImmutableConflict(t *testing.T) {
 	ctx := context.Background()
 	f := newFixtures(t)
@@ -183,18 +191,6 @@ func TestPutImmutableConflict(t *testing.T) {
 				changed := f.class
 				changed.Materiality = "low"
 				return tx.PutClassification(ctx, changed)
-			},
-		},
-		{
-			"resolved policy",
-			func(tx *store.WriteTx) error { return tx.PutResolvedPolicy(ctx, f.policy) },
-			func(tx *store.WriteTx) error {
-				changed := f.policy
-				changed.Keys = []domain.PolicyKey{{
-					Key: "rein", Value: "loose",
-					Provenance: domain.KeyProvenance{Source: domain.ProvenanceOverride, Digest: "sha256:override"},
-				}}
-				return tx.PutResolvedPolicy(ctx, changed)
 			},
 		},
 	}
@@ -520,8 +516,12 @@ func TestDeliveryLifecycleForwardOnly(t *testing.T) {
 	}
 }
 
-// TestResolvedPolicyDigestMatchesRun: the run binds its policy by digest
-// (§5.3); a resolved policy whose digest disagrees with its run is rejected.
+// TestResolvedPolicyDigestMatchesRun: the digest is a verified content address
+// and the run binds its policy by that digest (§5.3, §5.12). Two rejections
+// guard the boundary, and the store's binding is the second: a forged digest
+// (content changed, old digest kept) fails content validation on encode; an
+// authentic policy whose content does not match the run's pinned policy_digest
+// fails the store's run binding; only the run's own policy is accepted.
 func TestResolvedPolicyDigestMatchesRun(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
@@ -530,11 +530,30 @@ func TestResolvedPolicyDigestMatchesRun(t *testing.T) {
 	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, f.run) }); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	mismatched := f.policy
-	mismatched.Digest = "sha256:policy-other"
-	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutResolvedPolicy(ctx, mismatched) }); err == nil {
-		t.Fatal("mismatched policy digest accepted, want error")
+
+	// A forged digest (content changed under the run's expected digest) is
+	// rejected by content validation, before the run binding is even consulted.
+	forged := f.policy
+	forged.Digest = "sha256:policy-other"
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutResolvedPolicy(ctx, forged) }); !errors.Is(err, domain.ErrPolicyDigestMismatch) {
+		t.Fatalf("forged policy digest error = %v, want ErrPolicyDigestMismatch", err)
 	}
+
+	// An authentic policy for different content has a valid digest of its own,
+	// so it passes content validation, but that digest is not what the run
+	// pinned: the store's run binding rejects it.
+	otherContent, err := domain.NewResolvedPolicy(f.policy.RunID, []domain.PolicyKey{{
+		Key: "rein", Value: "loose",
+		Provenance: domain.KeyProvenance{Source: domain.ProvenanceOverride, Digest: "sha256:override"},
+	}})
+	if err != nil {
+		t.Fatalf("NewResolvedPolicy: %v", err)
+	}
+	err = s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutResolvedPolicy(ctx, otherContent) })
+	if err == nil || errors.Is(err, domain.ErrPolicyDigestMismatch) {
+		t.Fatalf("authentic wrong-run policy error = %v, want the store run-binding rejection", err)
+	}
+
 	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutResolvedPolicy(ctx, f.policy) }); err != nil {
 		t.Fatalf("matching policy digest rejected: %v", err)
 	}

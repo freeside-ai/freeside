@@ -90,11 +90,14 @@ func TestGolden(t *testing.T) {
 		Key: "rein", Value: "tight",
 		Provenance: domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: "sha256:preset"},
 	}
-	resolvedPolicy := domain.ResolvedPolicy{RunID: "run-1", Digest: "sha256:policy", Keys: []domain.PolicyKey{policyKey}}
+	resolvedPolicy, err := domain.NewResolvedPolicy("run-1", []domain.PolicyKey{policyKey})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	attempt := domain.Attempt{ID: "attempt-1", StageID: "stage-1", Number: 1, InvocationID: "inv-1"}
 	stage := domain.Stage{ID: "stage-1", RunID: "run-1", Name: "implementation", Attempts: []domain.Attempt{attempt}}
-	run := domain.Run{ID: "run-1", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy", Stages: []domain.Stage{stage}}
+	run := domain.Run{ID: "run-1", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: resolvedPolicy.Digest, Stages: []domain.Stage{stage}}
 
 	cases := []struct {
 		name  string

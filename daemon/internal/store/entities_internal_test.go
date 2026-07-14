@@ -65,3 +65,53 @@ func TestGetRejectsInconsistentRow(t *testing.T) {
 		})
 	}
 }
+
+// TestGetResolvedPolicyRejectsForgedDigest: a stored resolved_policies body
+// whose digest is internally consistent with its digest column (so the
+// row-consistency check passes) but does not address the keys it carries must
+// fail the read. decode re-validates every body, and Validate recomputes the
+// content digest, so a forged digest is refused on read as well as on write
+// (#33 acceptance 2, the "stored digest" half). Internal test: encode would
+// reject the body, so it is written past the Put boundary as raw JSON.
+func TestGetResolvedPolicyRejectsForgedDigest(t *testing.T) {
+	ctx := context.Background()
+	db := openRaw(t)
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatalf("seedEpoch: %v", err)
+	}
+	s := &Store{db: db}
+
+	// A run to satisfy the resolved_policies foreign key.
+	runBody, err := encode(domain.Run{
+		ID: "run-1", ProjectID: "proj-1",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:forged",
+	})
+	if err != nil {
+		t.Fatalf("encode run: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO runs (id, project_id, policy_digest, entity_version, as_of_revision, body) VALUES ('run-1', 'proj-1', 'sha256:forged', 1, 1, ?)`,
+		runBody); err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+
+	// digest column == body.digest (row-consistent) but neither addresses the
+	// keys: their authentic content digest is something else entirely.
+	const forgedBody = `{"run_id":"run-1","digest":"sha256:forged","keys":[{"key":"rein","value":"tight","provenance":{"source":"preset","digest":"sha256:preset"}}]}`
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO resolved_policies (run_id, digest, entity_version, as_of_revision, body) VALUES ('run-1', 'sha256:forged', 1, 1, ?)`,
+		forgedBody); err != nil {
+		t.Fatalf("insert forged policy: %v", err)
+	}
+
+	err = s.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.GetResolvedPolicy(ctx, "run-1")
+		return err
+	})
+	if !errors.Is(err, domain.ErrPolicyDigestMismatch) {
+		t.Fatalf("GetResolvedPolicy error = %v, want ErrPolicyDigestMismatch", err)
+	}
+}
