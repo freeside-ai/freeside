@@ -159,6 +159,9 @@ func (d *StageDriver) mustPersistLocked(op string, id domain.InvocationID) {
 func (d *StageDriver) Script(id domain.InvocationID, s StageScript) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	// Clone the scripted result so a later mutation of the caller's input
+	// slice cannot reach the registered scenario (issue #35).
+	s.Result = cloneStageResult(s.Result)
 	d.scripts[id] = s
 	d.mustPersistLocked("script", id)
 }
@@ -245,7 +248,9 @@ func (d *StageDriver) Inspect(_ context.Context, id domain.InvocationID) (exec.S
 func (d *StageDriver) commit(id domain.InvocationID, r exec.StageResult, status exec.Status) {
 	r.InvocationID = id
 	r.Status = status
-	d.committed[id] = r
+	// Store an immutable snapshot: the committed result must not alias the
+	// script (or any caller slice) so redelivery is value-identical (#35).
+	d.committed[id] = cloneStageResult(r)
 }
 
 // Stream returns a reader over the scripted transcript. Each call reads from
@@ -292,7 +297,9 @@ func (d *StageDriver) Collect(_ context.Context, id domain.InvocationID) (exec.S
 		return exec.StageResult{}, fmt.Errorf("fake stage driver collect %s: %w", id, exec.ErrUnknownInvocation)
 	}
 	if r, ok := d.committed[id]; ok {
-		return r, nil
+		// Return a clone so a caller mutating the delivered slice cannot
+		// alter the committed snapshot (#35).
+		return cloneStageResult(r), nil
 	}
 	if s.lost {
 		return exec.StageResult{}, fmt.Errorf("fake stage driver collect %s: %w", id, exec.ErrNoResult)
