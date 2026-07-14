@@ -3,6 +3,7 @@ package exec
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -63,6 +64,13 @@ func (s CapabilitySet) Has(c Capability) bool {
 	return ok
 }
 
+// Clone returns an independent copy of the set. CapabilitySet is a map, so
+// handing one back by reference lets a holder mutate a backend's declaration
+// after it was read; returning a clone at every boundary keeps the returned
+// value detached from the source. maps.Clone preserves nil (a nil set clones
+// to nil), so membership semantics are unchanged.
+func (s CapabilitySet) Clone() CapabilitySet { return maps.Clone(s) }
+
 // RunnerBackend is an execution environment provider (plan §5.7). Phase 1
 // needs only the declaring side of the capability model: a backend names
 // itself and states what it supports, fixed at conformance time, and policy
@@ -71,7 +79,10 @@ func (s CapabilitySet) Has(c Capability) bool {
 type RunnerBackend interface {
 	// Name identifies the backend in policy, refusals, and audit records.
 	Name() string
-	// Capabilities returns the backend's declared capability set.
+	// Capabilities returns the backend's declared capability set as an
+	// independent copy (see CapabilitySet.Clone): a caller must not be able to
+	// mutate the backend's declaration through the returned set, so the class
+	// stays fixed at spawn (§5.3) no matter which backend implements this.
 	Capabilities() CapabilitySet
 }
 
@@ -102,13 +113,33 @@ func (e *CapabilityRefusal) Error() string {
 // Unwrap makes errors.Is(err, ErrCapabilityRefused) match the refusal class.
 func (e *CapabilityRefusal) Unwrap() error { return ErrCapabilityRefused }
 
-// CheckCapabilities checks a backend's declared capabilities against a
-// policy minimum. It returns nil only when every required capability is
-// declared; otherwise a *CapabilityRefusal listing all missing capabilities.
-// There is no partial success and no substitution: no silent downgrade
-// (§5.7). An invalid capability name in the minimum is refused too, so a
-// policy typo can never widen into an accidental pass.
-func CheckCapabilities(backend RunnerBackend, minimum []Capability) error {
+// Admission is the immutable capability declaration that admitted a run: the
+// spawn-time snapshot policy and audit bind to (§5.3). Declared is a frozen
+// clone taken at the admission decision, independent of the live backend, so a
+// later mutation of the backend's capabilities cannot silently widen or narrow
+// the admitted class (§5.7). The zero Admission is returned on refusal.
+type Admission struct {
+	// Backend is the admitting backend's name, as it appears in audit records.
+	Backend string
+	// Declared is the frozen set of capabilities the backend declared at
+	// admission, not the backend's live map.
+	Declared CapabilitySet
+}
+
+// CheckCapabilities checks a backend's declared capabilities against a policy
+// minimum and, on success, returns the admitted-capability snapshot. It
+// returns a nil error only when every required capability is declared;
+// otherwise the zero Admission and a *CapabilityRefusal listing all missing
+// capabilities. There is no partial success and no substitution: no silent
+// downgrade (§5.7). An invalid capability name in the minimum is refused too,
+// so a policy typo can never widen into an accidental pass.
+//
+// The backend's declaration is read once here and the returned snapshot is a
+// frozen clone of it, so the gate decision and the audited snapshot come from
+// the same read and cannot diverge. This is the single admission entry point:
+// a second function that re-read Capabilities() would reopen the
+// observe-a-different-set race this snapshot exists to close.
+func CheckCapabilities(backend RunnerBackend, minimum []Capability) (Admission, error) {
 	declared := backend.Capabilities()
 	var missing []Capability
 	for _, c := range minimum {
@@ -117,9 +148,9 @@ func CheckCapabilities(backend RunnerBackend, minimum []Capability) error {
 		}
 	}
 	if len(missing) == 0 {
-		return nil
+		return Admission{Backend: backend.Name(), Declared: declared.Clone()}, nil
 	}
 	slices.Sort(missing)
 	missing = slices.Compact(missing)
-	return &CapabilityRefusal{Backend: backend.Name(), Missing: missing}
+	return Admission{}, &CapabilityRefusal{Backend: backend.Name(), Missing: missing}
 }

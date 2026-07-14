@@ -16,5 +16,7 @@ type RunnerBackend struct {
 // Name identifies the fake backend in refusals and test output.
 func (b RunnerBackend) Name() string { return b.BackendName }
 
-// Capabilities returns the declared capability set.
-func (b RunnerBackend) Capabilities() exec.CapabilitySet { return b.Caps }
+// Capabilities returns the declared capability set as an independent copy, so
+// a caller that mutates the returned map cannot alter the fake's declaration
+// (the aliasing boundary issue #39 closes).
+func (b RunnerBackend) Capabilities() exec.CapabilitySet { return b.Caps.Clone() }
