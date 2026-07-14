@@ -86,10 +86,20 @@ func newFixtures(t *testing.T) fixtures {
 		t.Fatalf("WithTiming: %v", err)
 	}
 
+	// The digest is computed from the keys, and the run binds its policy by that
+	// digest, so both must reference the same computed value (not a label).
+	policy, err := domain.NewResolvedPolicy("run-1", []domain.PolicyKey{{
+		Key: "rein", Value: "tight",
+		Provenance: domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: "sha256:preset"},
+	}})
+	if err != nil {
+		t.Fatalf("NewResolvedPolicy: %v", err)
+	}
+
 	return fixtures{
 		run: domain.Run{
 			ID: "run-1", ProjectID: "proj-1",
-			SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+			SpecDigest: "sha256:spec", PolicyDigest: policy.Digest,
 			Stages: []domain.Stage{{
 				ID: "stage-1", RunID: "run-1", Name: "implementation",
 				Attempts: []domain.Attempt{{ID: "attempt-1", StageID: "stage-1", Number: 1, InvocationID: "inv-1"}},
@@ -111,12 +121,6 @@ func newFixtures(t *testing.T) fixtures {
 		class: domain.Classification{
 			FindingID: "find-1", Version: 1, Materiality: "medium", Confidence: "high", Note: "worth fixing",
 		},
-		policy: domain.ResolvedPolicy{
-			RunID: "run-1", Digest: "sha256:policy",
-			Keys: []domain.PolicyKey{{
-				Key: "rein", Value: "tight",
-				Provenance: domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: "sha256:preset"},
-			}},
-		},
+		policy: policy,
 	}
 }
