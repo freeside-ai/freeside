@@ -1,0 +1,16 @@
+# Ruleset for `vacuum lint` (see api/README.md for the pinned command).
+#
+# Two recommended rules are disabled deliberately:
+# - camel-case-properties: the wire format is snake_case by design; every
+#   schema mirrors a daemon/internal/domain type's exact JSON tags, and the
+#   cross-check between spec and domain is field-for-field.
+# - oas3-missing-example: it demands an example on every media type and
+#   property. The load-bearing rule is example *validity*
+#   (oas3-valid-schema-example, still enabled): entity schemas carry
+#   examples lifted from the domain golden files, and the linter proves
+#   they validate; duplicating them onto every response and property adds
+#   bulk, not checking.
+extends: [[spectral:oas, recommended]]
+rules:
+  camel-case-properties: false
+  oas3-missing-example: false
