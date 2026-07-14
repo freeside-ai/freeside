@@ -546,15 +546,33 @@ Before calling work done:
 ## Coordination
 
 Coordination state lives in GitHub and git, never in status files. Issues
-are the unit of work; this section defines how to find, claim, and finish
-one. Runtime AttentionItems (docs/plan.md §4) are a different system; this
+persist every work unit that outlives a direct, session-contained
+assignment; this section defines how to find, claim, and finish one.
+Runtime AttentionItems (docs/plan.md §4) are a different system; this
 section governs building Freeside, not running it.
 
 ### Work units
 
-One issue per work unit, created from the work-unit template: Source devlog
-entry (the filename for a deferral escalation, `none` otherwise), Contract,
-Acceptance (the fixture/test list is the spec), Declared paths, Dependencies.
+Every work unit carries the lightweight work contract the finish line
+defines (objective, testable acceptance criteria, scope, dependencies and
+blockers, explicit non-goals); this section governs where that contract
+persists. A direct, session-contained user assignment may carry the
+contract in the prompt, session devlog, and PR together. Scheduled work,
+backlog work, work that spans sessions, and work involving more than one
+agent require a work-unit issue; when a direct task crosses one of those
+boundaries mid-flight, promote it to an issue before continuing.
+Scheduled self-selection (the scheduling door under Pickup) remains this
+project's explicit self-selection opt-in, unchanged by the persistence
+rule.
+
+One issue per issue-backed work unit, created from the work-unit
+template: Source devlog entry (the filename for a deferral escalation,
+`none` otherwise), Objective, Non-goals (`none` allowed), Affected
+interfaces/contracts (the interface surfaces the unit touches, not the
+whole work contract; the issue as a whole is the contract), Acceptance
+(the fixture/test list is the spec), Scope / declared paths, Dependencies
+(blockers, required serialization, intentional stacked bases, and
+integration order, not only issue refs).
 Labels: `lane:*` for ownership area, `kind:*` for type. Milestones carry the
 phase (1A, 1B). Each wave has a pinned tracking issue listing its units; the
 spine role maintains it.
@@ -584,21 +602,70 @@ code identifiers, package names, or API vocabulary, which stay functional
 
 ### Claiming
 
-Claim a unit by opening a **draft PR** that explicitly claims it
-(branch per the Branches section) before substantive work. A fresh
-branch has no PRable diff, so open the claim with an empty claim
-commit (`git commit --allow-empty -m "Claim #N"`); the first work
-commit follows on the same branch. Claim commits never merge: once
-work commits exist, drop the empty commit in the next branch rewrite
-(the fold-fix rules under Commits), before handoff at the latest; the
-PR's close keyword carries the claim from then on. One claim per
-unit; the active
-claim is any open PR, draft or ready, that explicitly claims the unit
-(a `Claim #N` commit or a close keyword for the issue), never one
-that merely cross-references it (`Refs #N`): if an active claim
-exists, pick another unit. Staleness applies only to claim-stage
-drafts: a draft with no work commits in 48h may be superseded; note
-the supersession in the old PR.
+A claim records occupancy only; authorization comes from scheduling or
+fiat (see Pickup), never from the claim itself. Issue-backed work is
+claimed with an issue-comment lease that hands off to a real PR. Direct
+no-issue work needs no claim: it is not eligible for concurrent or
+multi-session execution, and gets promoted to an issue before that
+changes (see Work units).
+
+To claim a unit:
+
+1. Confirm the issue is authorized (scheduled or fiat-assigned) and has
+   no active claim: a full paginated read of its comments plus the
+   open-PR check below.
+2. Choose the branch name (per the Branches section) and post a claim
+   comment on the issue: the versioned marker line plus one visible
+   `Claim:` line naming that branch.
+
+   ```text
+   <!-- freeside-work-claim:v1 -->
+   Claim: feat/example-slug
+   ```
+
+3. Re-read all of the issue's comments with pagination. Among
+   non-expired, unreleased claim comments, the earliest `created_at`
+   wins; the numeric comment ID is the deterministic tie-breaker (lower
+   wins). Ordering is by creation time; comment edits do not reorder
+   claims.
+4. A losing claimant posts a release comment bound to its own claim and
+   stops (it may re-claim later with a new comment). A release comment
+   releases exactly the claim comment whose numeric ID its
+   `Releases-claim:` line names, never other claims: branch names do not
+   identify a claim, since concurrent claimants following the same slug
+   convention can choose the same one. The `Release:` line repeats the
+   branch for human readability only.
+
+   ```text
+   <!-- freeside-work-release:v1 -->
+   Release: feat/example-slug
+   Releases-claim: 1234567890
+   ```
+
+5. The winner creates its dedicated worktree/branch from the freshly
+   updated default-branch tip (per Branches) and begins work. No empty
+   claim commit: the branch's first commit is real work.
+
+The lease expires 48 hours after the claim comment's creation if no open
+PR from the claimed branch carries the issue's close keyword by then; an
+expired lease is dead, and re-claiming needs a new comment. Once an open
+PR from the same branch contains the close keyword, that PR is the
+active claim and the comment lease is subsumed (no further expiry).
+Closing that PR unmerged releases the claim; merging closes the issue
+normally.
+
+The active claim for a unit is therefore: a non-expired, unreleased
+comment lease; or an open PR from the lease's branch with the issue's
+close keyword; or, during the transition from the previous protocol, a
+legacy open PR claiming the unit with a `Claim #N` commit or close
+keyword. A bare cross-reference (`Refs #N`) is never a claim. One claim
+per unit: if an active claim exists, pick another unit. Do not create
+new empty claim commits; drop any legacy one in the next branch rewrite
+(the fold-fix rules under Commits). Claim state is verified, never
+assumed: a comment or PR API read or write failure at any step fails
+closed, and work does not begin (or continue past the failed step) while
+claim state cannot be verified. Collaborator comments are trusted;
+adversarial comment editing is outside this protocol's threat model.
 
 `needs-human` deferrals use the fiat door defined under Deferral escalation,
 never self-selection: after the maintainer acts, fiat assigns the issue to a
@@ -624,11 +691,13 @@ it stays dormant. Fiat never bypasses contract ordering.
 ### Session start
 
 1. Read docs/plan.md front-matter (revision, phase) and the sections your
-   unit's Contract cites.
+   unit's Affected interfaces/contracts field cites.
 2. Read the latest devlog entries (Devlog section).
 3. Status queries:
    - open PRs and their declared paths: overlap with yours means stop and
      coordinate via issue comment before claiming;
+   - active claims on any unit you intend to claim: the paginated
+     comment-lease read plus open-PR check under Claiming;
    - the current wave's pinned tracking issue;
    - open `kind:contract` issues, ignoring a `deferral` issue until it is
      scheduled or has an active claim, then excluding the unit you are claiming
@@ -636,7 +705,7 @@ it stays dormant. Fiat never bypasses contract ordering.
      dependency-ordered chain of contract units keeps at most one
      claimable at a time, so downstream chain members may stay filed
      without blocking their chain head): among the remainder, if one
-     touches your Contract, block on it; when claiming a
+     touches your Affected interfaces/contracts, block on it; when claiming a
      `kind:contract` unit, block on every other remaining open contract unit
      (contract work is serialized).
 4. Verify each dependency's PR is merged.
@@ -656,9 +725,9 @@ post-merge cleanup for items outliving their PR cycle) follow these rules:
 - **Provenance both ways**: the issue form's required `Source devlog entry`
   field cites the source entry filename on its single line; the entry's item
   gets its `-> Refs #N` marker. Ordinary work units write `none` in the field.
-- **Lane label routes by owner, not discoverer**: the lane whose Declared
-  paths contain the work. Shared-package needs use `kind:contract` plus the
-  **`deferral`** origin label.
+- **Lane label routes by owner, not discoverer**: the lane whose Scope /
+  declared paths contain the work. Shared-package needs use
+  `kind:contract` plus the **`deferral`** origin label.
 - **For non-contract work, `kind:*` by the work's nature** (deferred scope:
   feature; known gap: fix; hygiene: chore), plus the **`deferral`** origin
   label.
