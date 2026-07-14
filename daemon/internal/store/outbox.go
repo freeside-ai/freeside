@@ -43,7 +43,7 @@ FROM inbox WHERE idempotency_key = ?`
 // false and writes nothing, so a retried command converges on one intent.
 // Call it inside the Write transaction that commits the decision the effect
 // belongs to (§5.14 discuss semantics).
-func (tx *WriteTx) EnqueueOutbox(ctx context.Context, key, kind string, payload []byte) (QueueEntry, bool, error) {
+func (tx *InternalTx) EnqueueOutbox(ctx context.Context, key, kind string, payload []byte) (QueueEntry, bool, error) {
 	entry, inserted, err := tx.record(ctx, enqueueOutboxSQL, selectOutboxSQL, key, kind, payload)
 	if err != nil {
 		return QueueEntry{}, false, fmt.Errorf("enqueue outbox %q: %w", key, err)
@@ -52,10 +52,10 @@ func (tx *WriteTx) EnqueueOutbox(ctx context.Context, key, kind string, payload 
 }
 
 // RecordInbox dedups an externally-triggered intake under its idempotency
-// key, mirroring EnqueueOutbox. Intake bookkeeping is not client-visible;
-// use it inside WriteInternal unless the same transaction also commits
-// client-visible state.
-func (tx *WriteTx) RecordInbox(ctx context.Context, key, kind string, payload []byte) (QueueEntry, bool, error) {
+// key, mirroring EnqueueOutbox. Intake bookkeeping is not client-visible; use
+// it inside WriteInternal (or Write, when the same transaction also commits
+// client-visible state).
+func (tx *InternalTx) RecordInbox(ctx context.Context, key, kind string, payload []byte) (QueueEntry, bool, error) {
 	entry, inserted, err := tx.record(ctx, recordInboxSQL, selectInboxSQL, key, kind, payload)
 	if err != nil {
 		return QueueEntry{}, false, fmt.Errorf("record inbox %q: %w", key, err)
@@ -63,7 +63,7 @@ func (tx *WriteTx) RecordInbox(ctx context.Context, key, kind string, payload []
 	return entry, inserted, nil
 }
 
-func (tx *WriteTx) record(ctx context.Context, insertSQL, selectSQL, key, kind string, payload []byte) (QueueEntry, bool, error) {
+func (tx *InternalTx) record(ctx context.Context, insertSQL, selectSQL, key, kind string, payload []byte) (QueueEntry, bool, error) {
 	// An empty key would collapse unrelated actions onto one row; an empty
 	// kind is unroutable. The schema CHECKs mirror these, but failing here
 	// names the problem instead of surfacing a constraint error.
