@@ -181,6 +181,124 @@ func TestReviewSourceDelayedReview(t *testing.T) {
 	}
 }
 
+// TestReviewSourceFailedOutcome: a failed review reports StatusFailed and
+// commits no result, so Poll and Verify both answer ErrNoResult.
+func TestReviewSourceFailedOutcome(t *testing.T) {
+	s := fake.NewReviewSource()
+	s.Script("inv-1", fake.ReviewScript{
+		Outcome: fake.OutcomeFail,
+		Result:  exec.ReviewResult{HeadSHA: "cafebabe"},
+	})
+
+	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := s.Inspect(t.Context(), "inv-1"); err != nil || status != exec.StatusFailed {
+		t.Errorf("inspect = %v, %v; want failed", status, err)
+	}
+	if _, err := s.Poll(t.Context(), "inv-1"); !errors.Is(err, exec.ErrNoResult) {
+		t.Errorf("poll of a failed review = %v, want ErrNoResult", err)
+	}
+	if err := s.Verify(t.Context(), "inv-1", "cafebabe"); !errors.Is(err, exec.ErrNoResult) {
+		t.Errorf("verify of a failed review = %v, want ErrNoResult", err)
+	}
+}
+
+// TestReviewSourceFailedWaitsForExecution: while a failed review is still
+// running (inspect lag unspent), Poll and Verify report not-ready, never the
+// terminal no-result; only once Inspect drives it to the failure do they
+// answer ErrNoResult. Poll must not leak the eventual outcome ahead of Inspect.
+func TestReviewSourceFailedWaitsForExecution(t *testing.T) {
+	s := fake.NewReviewSource()
+	s.Script("inv-1", fake.ReviewScript{
+		PendingInspects: 2,
+		Outcome:         fake.OutcomeFail,
+		Result:          exec.ReviewResult{HeadSHA: "cafebabe"},
+	})
+
+	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Poll(t.Context(), "inv-1"); !errors.Is(err, exec.ErrResultNotReady) {
+		t.Errorf("poll while still running = %v, want ErrResultNotReady", err)
+	}
+	if err := s.Verify(t.Context(), "inv-1", "cafebabe"); !errors.Is(err, exec.ErrResultNotReady) {
+		t.Errorf("verify while still running = %v, want ErrResultNotReady", err)
+	}
+
+	for range 2 {
+		if status, err := s.Inspect(t.Context(), "inv-1"); err != nil || status != exec.StatusRunning {
+			t.Fatalf("inspect during lag = %v, %v; want running", status, err)
+		}
+	}
+	if status, err := s.Inspect(t.Context(), "inv-1"); err != nil || status != exec.StatusFailed {
+		t.Fatalf("inspect after lag = %v, %v; want failed", status, err)
+	}
+	if _, err := s.Poll(t.Context(), "inv-1"); !errors.Is(err, exec.ErrNoResult) {
+		t.Errorf("poll after failure = %v, want ErrNoResult", err)
+	}
+	if err := s.Verify(t.Context(), "inv-1", "cafebabe"); !errors.Is(err, exec.ErrNoResult) {
+		t.Errorf("verify after failure = %v, want ErrNoResult", err)
+	}
+}
+
+// TestReviewSourceCrashBeforeResult: the session is lost before any result;
+// Inspect reports gone and there is nothing to poll.
+func TestReviewSourceCrashBeforeResult(t *testing.T) {
+	s := fake.NewReviewSource()
+	s.Script("inv-1", fake.ReviewScript{
+		Outcome: fake.OutcomeCrashBeforeResult,
+		Result:  exec.ReviewResult{HeadSHA: "cafebabe"},
+	})
+
+	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := s.Inspect(t.Context(), "inv-1"); err != nil || status != exec.StatusGone {
+		t.Errorf("inspect = %v, %v; want gone", status, err)
+	}
+	if _, err := s.Poll(t.Context(), "inv-1"); !errors.Is(err, exec.ErrNoResult) {
+		t.Errorf("poll after crash-before-result = %v, want ErrNoResult", err)
+	}
+}
+
+// TestReviewSourceCrashAfterResultRecoverable: the result committed before the
+// session was lost, so Inspect reports gone but the result stays pollable by
+// id (§5.3 reconciliation), and redelivery is a stable replay.
+func TestReviewSourceCrashAfterResultRecoverable(t *testing.T) {
+	s := fake.NewReviewSource()
+	s.Script("inv-1", fake.ReviewScript{
+		Outcome: fake.OutcomeCrashAfterResult,
+		Result:  exec.ReviewResult{HeadSHA: "cafebabe"},
+	})
+
+	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := s.Inspect(t.Context(), "inv-1"); err != nil || status != exec.StatusGone {
+		t.Errorf("inspect = %v, %v; want gone", status, err)
+	}
+	first, err := s.Poll(t.Context(), "inv-1")
+	if err != nil {
+		t.Fatalf("result must be recoverable by id: %v", err)
+	}
+	if first.InvocationID != "inv-1" || first.HeadSHA != "cafebabe" {
+		t.Errorf("recovered result = %+v; want inv-1, cafebabe", first)
+	}
+	acc := newAcceptor()
+	acc.accept(t, "inv-1", first)
+	second, err := s.Poll(t.Context(), "inv-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acc.accept(t, "inv-1", second) {
+		t.Error("second poll accepted as a new result; want identical replay")
+	}
+	if err := s.Verify(t.Context(), "inv-1", "cafebabe"); err != nil {
+		t.Errorf("verify the recovered result = %v, want nil", err)
+	}
+}
+
 // TestReviewSourceGuards covers the identity guards: one committed intent
 // per id, loud unscripted requests, unknown ids.
 func TestReviewSourceGuards(t *testing.T) {
