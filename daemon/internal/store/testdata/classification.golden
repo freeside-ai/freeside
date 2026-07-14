@@ -1,0 +1,7 @@
+{
+  "finding_id": "find-1",
+  "version": 1,
+  "materiality": "medium",
+  "confidence": "high",
+  "note": "worth fixing"
+}

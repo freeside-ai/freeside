@@ -541,7 +541,7 @@ code identifiers, package names, or API vocabulary, which stay functional
 | publish | GitHub App auth, deterministic identities, reconciliation, EvidencePublisher | daemon/internal/publish | §5.5, §5.9, §5.11, §5.15 |
 | ward | Runner backends, workspace-handoff gate, conformance, operating modes | daemon/internal/ward | §5.7 |
 | saddle | SwiftUI clients (pipeline-exempt) | app/ | §5.14, §11 |
-| spine | A ROLE, not a territory: serialized shared-contract changes (domain, migrations, interfaces, api/) and Wave 2 integration (workflow engine) | daemon/internal/domain, daemon/internal/engine, migrations/, api/ | §11 |
+| spine | A ROLE, not a territory: serialized shared-contract changes (domain, migrations, interfaces, api/) and Wave 2 integration (workflow engine) | daemon/internal/domain, daemon/internal/store, daemon/internal/engine, daemon/migrations/, api/ | §11 |
 
 ### Claiming
 

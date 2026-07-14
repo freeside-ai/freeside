@@ -1,0 +1,14 @@
+{
+  "run_id": "run-1",
+  "digest": "sha256:policy",
+  "keys": [
+    {
+      "key": "rein",
+      "value": "tight",
+      "provenance": {
+        "source": "preset",
+        "digest": "sha256:preset"
+      }
+    }
+  ]
+}
