@@ -99,6 +99,27 @@ func (a Artifact) Validate() error {
 	return nil
 }
 
+// ValidatePublishEligibility asserts a standalone artifact's persisted
+// PublishEligible equals the policy computation over approvedRecipes.
+// PublishEligible is computed by trusted policy (NewArtifact), never supplied,
+// so a stored or exported value that disagrees, a forged or stale bit, is
+// rejected. It is the persistence/reconstruction boundary check for artifact
+// rows the store did not build through NewArtifact: unlike
+// EligibleForEvidenceSnapshot, it does not require the artifact to be evidence
+// (an agent artifact with PublishEligible false is a legal standalone row), it
+// only forbids a bit that policy would not have produced. Self-standing: it
+// re-runs structural Validate first, so a caller re-checking a reconstructed
+// row cannot admit a value the validator would reject.
+func ValidatePublishEligibility(a Artifact, approvedRecipes map[Digest]bool) error {
+	if err := a.Validate(); err != nil {
+		return err
+	}
+	if a.PublishEligible != computePublishEligible(a.Provenance, approvedRecipes) {
+		return fmt.Errorf("artifact %s: %w", a.ID, ErrPublishEligibleInconsistent)
+	}
+	return nil
+}
+
 // clone returns a deep copy detached from any caller-owned pointer, so a
 // validated artifact cannot change when the caller mutates the provenance it
 // passed in.
