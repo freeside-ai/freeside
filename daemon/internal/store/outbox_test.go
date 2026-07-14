@@ -24,7 +24,7 @@ func TestQueueRejectsEmptyIdentity(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := s.WriteInternal(ctx, func(tx *store.WriteTx) error {
+			err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
 				if _, _, err := tx.EnqueueOutbox(ctx, tc.key, tc.kind, nil); err == nil {
 					t.Error("EnqueueOutbox accepted an empty identity, want error")
 				}
@@ -47,12 +47,12 @@ func TestQueueIdempotency(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {
 		name   string
-		record func(tx *store.WriteTx, key, kind string, payload []byte) (store.QueueEntry, bool, error)
+		record func(tx *store.InternalTx, key, kind string, payload []byte) (store.QueueEntry, bool, error)
 	}{
-		{"outbox", func(tx *store.WriteTx, key, kind string, payload []byte) (store.QueueEntry, bool, error) {
+		{"outbox", func(tx *store.InternalTx, key, kind string, payload []byte) (store.QueueEntry, bool, error) {
 			return tx.EnqueueOutbox(ctx, key, kind, payload)
 		}},
-		{"inbox", func(tx *store.WriteTx, key, kind string, payload []byte) (store.QueueEntry, bool, error) {
+		{"inbox", func(tx *store.InternalTx, key, kind string, payload []byte) (store.QueueEntry, bool, error) {
 			return tx.RecordInbox(ctx, key, kind, payload)
 		}},
 	}
@@ -61,7 +61,7 @@ func TestQueueIdempotency(t *testing.T) {
 			s := openStore(t, store.Options{})
 
 			var first store.QueueEntry
-			err := s.WriteInternal(ctx, func(tx *store.WriteTx) error {
+			err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
 				var inserted bool
 				var err error
 				first, inserted, err = tc.record(tx, "cmd-1", "AgentInvocationRequested", []byte(`{"n":1}`))
@@ -80,7 +80,7 @@ func TestQueueIdempotency(t *testing.T) {
 			// The retry carries a different payload; the original row must
 			// win, unchanged.
 			var second store.QueueEntry
-			err = s.WriteInternal(ctx, func(tx *store.WriteTx) error {
+			err = s.WriteInternal(ctx, func(tx *store.InternalTx) error {
 				var inserted bool
 				var err error
 				second, inserted, err = tc.record(tx, "cmd-1", "AgentInvocationRequested", []byte(`{"n":2}`))
@@ -109,7 +109,7 @@ func TestQueueIdempotency(t *testing.T) {
 			}
 
 			// A distinct key still inserts: the dedup is per key, not global.
-			err = s.WriteInternal(ctx, func(tx *store.WriteTx) error {
+			err = s.WriteInternal(ctx, func(tx *store.InternalTx) error {
 				third, inserted, err := tc.record(tx, "cmd-2", "AgentInvocationRequested", nil)
 				if err != nil {
 					return err

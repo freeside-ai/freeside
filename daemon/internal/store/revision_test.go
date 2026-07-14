@@ -47,7 +47,12 @@ func TestWriteIncrementsRevisionOnce(t *testing.T) {
 		t.Fatalf("revision after one Write = %d, want %d", after.Revision, before.Revision+1)
 	}
 
-	if err := s.WriteInternal(ctx, func(tx *store.WriteTx) error { return nil }); err != nil {
+	// A real internal write (inbox/outbox bookkeeping) must commit without
+	// touching the revision: that is the whole point of the internal path.
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, _, err := tx.EnqueueOutbox(ctx, "cmd-1", "AgentInvocationRequested", nil)
+		return err
+	}); err != nil {
 		t.Fatalf("WriteInternal: %v", err)
 	}
 	if err := s.Read(ctx, func(tx *store.ReadTx) error { return nil }); err != nil {

@@ -22,14 +22,19 @@
 //     its Stages; a Conversation its Messages), matching Phase 1
 //     whole-snapshot sync. Extracting a field into a column later is an
 //     ordinary migration (json_extract backfill), not an API change.
-//   - Every write happens inside Write or WriteInternal, whose callbacks
-//     receive a WriteTx. Write is for client-visible transactions and
-//     increments ServerState.revision exactly once at commit; WriteInternal
+//   - Every write happens inside Write or WriteInternal. Write is for
+//     client-visible transactions; its callback receives a WriteTx and it
+//     increments ServerState.revision exactly once at commit. WriteInternal
 //     is for bookkeeping invisible to clients (inbox intake, dispatch
-//     status). Choosing Write is what makes a change visible to sync; there
-//     is no third path. Read callbacks receive a ReadTx, which exposes no
-//     write methods, so mutating outside a write path (and dodging the
-//     revision bump) does not compile.
+//     status); its callback receives the narrower InternalTx, which carries
+//     only the queue methods. Transactions that do not increment the revision
+//     cannot mutate any state exposed through synchronization: the Put methods
+//     live only on WriteTx, so they are unreachable from an InternalTx at
+//     compile time. This is a store invariant, not a convention for future
+//     callers. Read callbacks receive a ReadTx, which exposes no write methods
+//     at all. The three tiers embed in order (ReadTx in InternalTx in
+//     WriteTx), so each wider handle keeps every narrower capability, and
+//     choosing Write is still the only path to a revision bump.
 //   - The pool is a single connection: SQLite has one writer regardless, and
 //     serializing in Go avoids SQLITE_BUSY under self-contention;
 //     busy_timeout still guards cross-process access. Widening later (a

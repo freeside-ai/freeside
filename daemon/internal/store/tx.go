@@ -32,14 +32,28 @@ type ReadTx struct {
 	approvedRecipes map[domain.Digest]bool
 }
 
-// WriteTx is the transaction handle passed to Write and WriteInternal
-// callbacks: everything a ReadTx can do, plus the Put and queue methods.
-// Only valid until the callback returns.
-type WriteTx struct {
+// InternalTx is the transaction handle passed to WriteInternal callbacks:
+// everything a ReadTx can do, plus the inbox/outbox queue methods. It
+// deliberately exposes no Put method, so a transaction that does not bump the
+// revision cannot mutate any state exposed through synchronization (§5.14):
+// the Put methods live only on WriteTx, unreachable from here at compile
+// time, not by convention. Only valid until the callback returns.
+//
+// Only non-synchronized bookkeeping (inbox, outbox, dispatch) belongs on this
+// type; a write to any entity carrying as_of_revision must live on WriteTx,
+// or the §5.14 guarantee is broken without a revision bump.
+type InternalTx struct {
 	ReadTx
-	// asOfRevision is stamped into every row a Put touches: the revision
-	// the enclosing Write commits as (current+1), or the current revision
-	// inside WriteInternal.
+}
+
+// WriteTx is the transaction handle passed to Write callbacks: everything an
+// InternalTx can do, plus the Put methods for synchronized entities. Only
+// valid until the callback returns.
+type WriteTx struct {
+	InternalTx
+	// asOfRevision is stamped into every row a Put touches: the revision the
+	// enclosing Write commits as (current+1). Only Write produces a WriteTx,
+	// so this is always a client-visible revision.
 	asOfRevision int64
 }
 
@@ -48,15 +62,52 @@ type WriteTx struct {
 // fn touches. Everything a client may observe through sync goes through
 // Write; there is no other path to a revision bump.
 func (s *Store) Write(ctx context.Context, fn func(*WriteTx) error) error {
-	return s.transact(ctx, true, fn)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var current int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT revision FROM server_state WHERE id = 1`).Scan(&current); err != nil {
+		return fmt.Errorf("read server_state: %w", err)
+	}
+	wtx := &WriteTx{
+		InternalTx:   InternalTx{ReadTx: ReadTx{tx: tx, approvedRecipes: s.approvedRecipes}},
+		asOfRevision: current + 1,
+	}
+	if err := fn(wtx); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE server_state SET revision = revision + 1 WHERE id = 1`); err != nil {
+		return fmt.Errorf("increment revision: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
 }
 
 // WriteInternal runs fn in a write transaction without a revision bump, for
-// bookkeeping invisible to clients (inbox intake, dispatch status). Using it
-// for client-visible state would silently break sync invalidation; when in
-// doubt, use Write.
-func (s *Store) WriteInternal(ctx context.Context, fn func(*WriteTx) error) error {
-	return s.transact(ctx, false, fn)
+// bookkeeping invisible to clients (inbox intake, dispatch status). Its
+// callback receives an InternalTx, which exposes no Put method, so a
+// non-bumping transaction cannot mutate synchronized state even by mistake.
+func (s *Store) WriteInternal(ctx context.Context, fn func(*InternalTx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := fn(&InternalTx{ReadTx: ReadTx{tx: tx, approvedRecipes: s.approvedRecipes}}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
 }
 
 // Read runs fn in a read-only transaction: a consistent snapshot for
@@ -72,37 +123,6 @@ func (s *Store) Read(ctx context.Context, fn func(*ReadTx) error) error {
 	defer func() { _ = tx.Rollback() }()
 	if err := fn(&ReadTx{tx: tx, approvedRecipes: s.approvedRecipes}); err != nil {
 		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) transact(ctx context.Context, clientVisible bool, fn func(*WriteTx) error) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	var current int64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT revision FROM server_state WHERE id = 1`).Scan(&current); err != nil {
-		return fmt.Errorf("read server_state: %w", err)
-	}
-	asOf := current
-	if clientVisible {
-		asOf = current + 1
-	}
-	if err := fn(&WriteTx{ReadTx: ReadTx{tx: tx, approvedRecipes: s.approvedRecipes}, asOfRevision: asOf}); err != nil {
-		return err
-	}
-	if clientVisible {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE server_state SET revision = revision + 1 WHERE id = 1`); err != nil {
-			return fmt.Errorf("increment revision: %w", err)
-		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
