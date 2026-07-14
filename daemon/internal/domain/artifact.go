@@ -6,9 +6,15 @@ import "fmt"
 // 2). VerificationRecipeDigest is set only for artifacts a recipe produced; it
 // is nil for agent output.
 type Provenance struct {
-	ProducerClass            ProducerClass    `json:"producer_class"`
-	ProducerInvocationID     InvocationID     `json:"producer_invocation_id"`
-	SourceHeadSHA            string           `json:"source_head_sha"`
+	ProducerClass        ProducerClass `json:"producer_class"`
+	ProducerInvocationID InvocationID  `json:"producer_invocation_id"`
+	HeadBinding          HeadBinding   `json:"head_binding"`
+	// omitempty so head-independent provenance (which must not carry a head)
+	// omits the field entirely, and head-bound provenance (which must carry a
+	// non-empty head) always emits it: the serialized shape is a deterministic
+	// function of the validated mode, and matches the wire oneOf where
+	// source_head_sha exists only on the head-bound branch.
+	SourceHeadSHA            string           `json:"source_head_sha,omitempty"`
 	VerificationRecipeDigest *Digest          `json:"verification_recipe_digest"`
 	SensitivityClass         SensitivityClass `json:"sensitivity_class"`
 }
@@ -21,13 +27,25 @@ func (p Provenance) Validate() error {
 	if p.ProducerInvocationID == "" {
 		return fmt.Errorf("provenance producer_invocation_id: %w", ErrEmptyID)
 	}
+	if !p.HeadBinding.valid() {
+		return fmt.Errorf("provenance head_binding %q: %w", p.HeadBinding, ErrInvalidHeadBinding)
+	}
 	// source_head_sha binds an artifact to the revision that produced it; a
 	// remediation head invalidates prior-head evidence, and the publisher
-	// verifies head binding before publication (plan §5.15 rule 2). It is a
-	// non-optional provenance field, so an empty value is rejected here rather
-	// than surfacing as unbindable evidence downstream.
-	if p.SourceHeadSHA == "" {
-		return fmt.Errorf("provenance source_head_sha: %w", ErrEmptyField)
+	// verifies head binding before publication (plan §5.15 rule 2). Head-bound
+	// evidence must name that head; head-independent evidence is intentionally
+	// decoupled, so it must NOT carry a head, or the two representations would
+	// be ambiguous and an omitted head could be read as either. The explicit
+	// mode, not the presence of a head, is the single source of truth.
+	switch p.HeadBinding {
+	case HeadBound:
+		if p.SourceHeadSHA == "" {
+			return fmt.Errorf("provenance source_head_sha: %w", ErrEmptyField)
+		}
+	case HeadIndependent:
+		if p.SourceHeadSHA != "" {
+			return fmt.Errorf("head-independent provenance carries source_head_sha %q: %w", p.SourceHeadSHA, ErrProvenanceInconsistent)
+		}
 	}
 	if !p.SensitivityClass.valid() {
 		return fmt.Errorf("provenance sensitivity_class %q: %w", p.SensitivityClass, ErrInvalidSensitivityClass)

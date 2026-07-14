@@ -1,8 +1,7 @@
 {
   "producer_class": "verifier",
   "producer_invocation_id": "inv-1",
-  "head_binding": "head_bound",
-  "source_head_sha": "cafebabe",
+  "head_binding": "head_independent",
   "verification_recipe_digest": "sha256:recipe-approved",
   "sensitivity_class": "normal"
 }

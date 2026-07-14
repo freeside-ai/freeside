@@ -25,12 +25,31 @@ func TestGolden(t *testing.T) {
 	provenance := domain.Provenance{
 		ProducerClass:            domain.ProducerVerifier,
 		ProducerInvocationID:     "inv-1",
+		HeadBinding:              domain.HeadBound,
 		SourceHeadSHA:            "cafebabe", // matches the item's pr_head_sha (evidence head-binding)
 		VerificationRecipeDigest: &recipe,
 		SensitivityClass:         domain.SensitivityNormal,
 	}
 	artifact, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: "art-1", Type: "verify_log", Digest: "sha256:log", Provenance: provenance,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Head-independent provenance (plan §5.15 rule 2): evidence intentionally
+	// decoupled from repository head carries no source_head_sha and survives a
+	// remediation head. Both modes appear in the goldens so the api examples
+	// lifted from them exercise both discriminator branches.
+	indepProvenance := domain.Provenance{
+		ProducerClass:            domain.ProducerVerifier,
+		ProducerInvocationID:     "inv-1",
+		HeadBinding:              domain.HeadIndependent,
+		VerificationRecipeDigest: &recipe,
+		SensitivityClass:         domain.SensitivityNormal,
+	}
+	indepArtifact, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: "art-3", Type: "license_scan", Digest: "sha256:lic", Provenance: indepProvenance,
 	}, approved)
 	if err != nil {
 		t.Fatal(err)
@@ -123,6 +142,8 @@ func TestGolden(t *testing.T) {
 		{"timing_summary", timing},
 		{"artifact", artifact},
 		{"provenance", provenance},
+		{"head_independent_artifact", indepArtifact},
+		{"head_independent_provenance", indepProvenance},
 		{"finding", finding},
 		{"classification", classification},
 		{"conversation", conversation},

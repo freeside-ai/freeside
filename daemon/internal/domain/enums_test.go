@@ -48,6 +48,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["SensitivityClass"] = append(valids["SensitivityClass"], v.valid)
 	}
 	invalids["SensitivityClass"] = SensitivityClass("").valid
+	for _, v := range AllHeadBindings {
+		valids["HeadBinding"] = append(valids["HeadBinding"], v.valid)
+	}
+	invalids["HeadBinding"] = HeadBinding("").valid
 	for _, v := range AllAuthors {
 		valids["Author"] = append(valids["Author"], v.valid)
 	}

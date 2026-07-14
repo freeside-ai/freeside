@@ -236,11 +236,14 @@ func (i AttentionItem) Validate() error {
 		if a.Provenance.ProducerClass == ProducerAgent {
 			return fmt.Errorf("evidence artifact %s: %w", a.ID, ErrAgentArtifactInEvidence)
 		}
-		// Evidence binds to the candidate head it was produced against: a new
-		// remediation head invalidates prior-head evidence, and this package
-		// does not yet model head-independent evidence (plan §5.15 rule 2), so
-		// when the item names a head every evidence artifact must match it.
-		if i.PRHeadSHA != "" && a.Provenance.SourceHeadSHA != i.PRHeadSHA {
+		// Head-bound evidence binds to the candidate head it was produced
+		// against: a new remediation head invalidates prior-head evidence, so
+		// when the item names a head every head-bound evidence artifact must
+		// match it. Head-independent evidence is intentionally decoupled from
+		// head (plan §5.15 rule 2) and is preserved across a remediation head;
+		// its provenance carries no source head (enforced by Provenance.Validate
+		// above), so it is exempt here rather than compared.
+		if a.Provenance.HeadBinding == HeadBound && i.PRHeadSHA != "" && a.Provenance.SourceHeadSHA != i.PRHeadSHA {
 			return fmt.Errorf("evidence artifact %s head %q, want %q: %w", a.ID, a.Provenance.SourceHeadSHA, i.PRHeadSHA, ErrEvidenceHeadMismatch)
 		}
 		if _, dup := evidenceIDs[a.ID]; dup {

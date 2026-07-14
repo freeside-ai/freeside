@@ -795,6 +795,7 @@ components:
             provenance:
               producer_class: "verifier"
               producer_invocation_id: "inv-1"
+              head_binding: "head_bound"
               source_head_sha: "cafebabe"
               verification_recipe_digest: "sha256:recipe-approved"
               sensitivity_class: "normal"
@@ -925,22 +926,46 @@ components:
         provenance:
           producer_class: "verifier"
           producer_invocation_id: "inv-1"
+          head_binding: "head_bound"
           source_head_sha: "cafebabe"
           verification_recipe_digest: "sha256:recipe-approved"
           sensitivity_class: "normal"
         publish_eligible: true
 
     EvidenceProvenance:
-      type: object
       description: >
         Provenance of an evidence-admissible artifact; the evidence subset
         of domain.Provenance (plan §5.15): producer_class restricted to
         verifier or daemon, and verification_recipe_digest required
         (evidence is always recipe-bound; a null recipe digest marks agent
-        output, which never appears here).
+        output, which never appears here). head_binding discriminates
+        head-bound evidence, which carries the source_head_sha it was
+        produced against and is invalidated by a remediation head, from
+        explicitly head-independent evidence, which carries no source head
+        and is preserved across a remediation head (plan §5.15 rule 2). The
+        branches make the ambiguous cases unrepresentable: a head-bound
+        artifact without a source head, and a head-independent artifact that
+        carries one, both fail the schema, so an omitted head is never read
+        as independence.
+      oneOf:
+        - $ref: "#/components/schemas/HeadBoundProvenance"
+        - $ref: "#/components/schemas/HeadIndependentProvenance"
+      discriminator:
+        propertyName: head_binding
+        mapping:
+          head_bound: "#/components/schemas/HeadBoundProvenance"
+          head_independent: "#/components/schemas/HeadIndependentProvenance"
+
+    HeadBoundProvenance:
+      type: object
+      description: >
+        Evidence produced against a specific candidate head; source_head_sha
+        names that head and a remediation head invalidates the evidence
+        (domain AttentionItem head-binding).
       required:
         - producer_class
         - producer_invocation_id
+        - head_binding
         - source_head_sha
         - verification_recipe_digest
         - sensitivity_class
@@ -951,6 +976,9 @@ components:
         producer_invocation_id:
           type: string
           minLength: 1
+        head_binding:
+          type: string
+          enum: [head_bound]
         source_head_sha:
           type: string
           minLength: 1
@@ -958,6 +986,49 @@ components:
           $ref: "#/components/schemas/Digest"
         sensitivity_class:
           $ref: "#/components/schemas/SensitivityClass"
+      example:
+        producer_class: "verifier"
+        producer_invocation_id: "inv-1"
+        head_binding: "head_bound"
+        source_head_sha: "cafebabe"
+        verification_recipe_digest: "sha256:recipe-approved"
+        sensitivity_class: "normal"
+
+    HeadIndependentProvenance:
+      type: object
+      description: >
+        Evidence intentionally decoupled from repository head; it carries no
+        source_head_sha and is preserved across a remediation head (plan
+        §5.15 rule 2). source_head_sha is not a member and extra properties
+        are forbidden, so a head-independent artifact that names a head is
+        unrepresentable.
+      additionalProperties: false
+      required:
+        - producer_class
+        - producer_invocation_id
+        - head_binding
+        - verification_recipe_digest
+        - sensitivity_class
+      properties:
+        producer_class:
+          type: string
+          enum: [verifier, daemon]
+        producer_invocation_id:
+          type: string
+          minLength: 1
+        head_binding:
+          type: string
+          enum: [head_independent]
+        verification_recipe_digest:
+          $ref: "#/components/schemas/Digest"
+        sensitivity_class:
+          $ref: "#/components/schemas/SensitivityClass"
+      example:
+        producer_class: "verifier"
+        producer_invocation_id: "inv-1"
+        head_binding: "head_independent"
+        verification_recipe_digest: "sha256:recipe-approved"
+        sensitivity_class: "normal"
 
     TimingSummary:
       type: object
