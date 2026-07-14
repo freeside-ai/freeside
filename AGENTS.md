@@ -21,8 +21,10 @@ target, structure, and when an entry may be revised.
   the user asking. Also grep the devlog for the open `## To promote` /
   deferred / needs-human queue so promotions don't span sessions unnoticed:
   an item with no `->` state marker (or whose `-> re-deferred` clock has
-  run out) is open, unless a later entry or a tracker issue naming that
-  item and its source entry holds its drain record (see devlog/README.md).
+  run out) is open, unless a later entry or a tracker issue that names
+  that specific item and its source entry (new ones via a `deferral` label
+  and `Source devlog entry` field, older ones in prose) holds its drain
+  record (see devlog/README.md).
 - **Before finishing:** append `devlog/YYYY-MM-DD-HHMM-slug.md`: decisions
   (why, and what was rejected), deferrals, open questions; the entry may be
   built incrementally at checkpoints while its PR is unmerged (see
@@ -46,12 +48,26 @@ checks green**, not a merged branch. Merging is a human decision; do not
 merge your own PR unless the user explicitly asks, or the project has adopted
 an opt-in self-merge workflow.
 
+Before implementation, establish a lightweight work contract: objective,
+testable acceptance criteria, scope, dependencies and blockers, and explicit
+non-goals. Direct user-assigned work needs no issue; the prompt, session
+devlog, and eventual PR may carry the contract together. Persist that same
+contract in a tracker issue when the work must survive a session boundary,
+coordinate concurrent workers, or join a backlog.
+
+By default, begin work only through explicit user assignment. An issue, label,
+backlog entry, satisfied dependency, or claim is not authorization to select
+and start work. Agent self-selection requires an explicit project-specific
+opt-in policy.
+
 Use this checklist for each work session:
 
-1. Read README plus the latest devlog entries, then start from `main`, or,
-   for a follow-up that depends on an open PR, from that PR's branch (see
-   Stacked PRs under Pull requests).
-2. Create one correctly named branch for the work unit.
+1. Read README plus the latest devlog entries. Resolve the repository's
+   default branch explicitly, update it from its remote, and start ordinary
+   work from that exact tip, not from whichever branch is currently checked
+   out. Only an intentionally declared stacked PR may start from another open
+   PR's branch (see Stacked PRs under Pull requests).
+2. Create one correctly named branch explicitly from that starting tip.
 3. Make the scoped change, including docs/devlog/tests/assets that keep it
    complete.
 4. Run the relevant verification plus the standard lint/build/test checks
@@ -64,9 +80,9 @@ Use this checklist for each work session:
    invariants shouldn't live only as devlog archaeology.
 7. Push, open the PR with the template, and remove sections that do not apply.
 8. Hand off per "Handing off the PR" (under Pull requests): start the
-   review-watch, wait out required checks, handle reviewer activity,
-   self-review the PR files view, and leave the PR open for a human to
-   review and merge.
+   review-watch, complete the base-freshness pass, wait out required checks,
+   handle reviewer activity, self-review the PR files view, and leave the PR
+   open for a human to review and merge.
 
 For changes on a **destructive path** (delete/cleanup), a
 **credential-leak surface**, or a **returned-object-trust boundary**
@@ -165,12 +181,14 @@ Changes to `docs/plan.md`, ADRs (`docs/decisions/`), and (later) the control-pla
 
 ## Branches
 
-All work lands through a PR: branch from `main` (read `main` as the
-repo's default branch throughout), do the work as atomic commits (see
-Commits), open a PR; the work merges with a real merge commit, a
-human's call per the finish line. Never commit directly to `main`. No
-triviality exception: every bypass erodes the `--first-parent`
-narrative.
+All work lands through a PR. Resolve and freshly update the repository's
+default branch (`main` below), then create each ordinary work-unit branch
+explicitly from that tip. Never create an ordinary branch from the currently
+checked-out feature branch; a non-default starting point is allowed only for
+an intentionally declared stacked PR. Do the work as atomic commits (see
+Commits), then open a PR; the work merges with a real merge commit, a human's
+call per the finish line. Never commit directly to `main`. No triviality
+exception: every bypass erodes the `--first-parent` narrative.
 
 Name branches `<type>/<short-kebab-slug>`: type from the Conventional
 Commits vocabulary (`feat`, `fix`, `refactor`, `docs`, `chore`), slug
@@ -189,17 +207,24 @@ agents start pushing in parallel. Merged branches auto-delete where
 that repo setting is on (delete them after merge where it isn't); the
 merge commit carries the narrative.
 
-**Prefer a dedicated worktree per work unit.** Where your platform and
-session support working from a second checkout (a native worktree tool
-or session flag, or plain
-`git worktree add <path> -b <type>/<slug> <base>`), do the work in a
-dedicated worktree instead of the shared primary checkout, so parallel
-agent sessions and the user's own work never collide on files, branch
-state, or uncommitted changes. Remove the worktree once its branch
-merges (`git worktree remove <path>`). Where they don't (no
-multi-checkout support, or a sandbox pinned to one directory), fall
-back to a branch in the primary checkout; the branch discipline above
-still applies either way.
+**Break down concurrency before isolating it.** Keep coupled work in one work
+unit, an explicit dependency chain, or an intentionally declared stack; a
+worktree separates checkouts but cannot make logically dependent work safe in
+parallel. Before substantive work, an assigned concurrent unit uses the
+project's forge-visible claim mechanism, when one is defined. The claim
+advertises active occupancy, not authorization; its form is project-specific.
+
+**Isolate concurrent work units.** Concurrent work units must use separate
+worktrees or checkouts. Where your platform and session support a second
+checkout (a native worktree tool or session flag, or plain
+`git worktree add <path> -b <type>/<slug> <default-branch>`), create each
+worktree explicitly from the freshly updated default-branch tip, not from
+whatever branch is checked out; prefer the same isolation for a single work
+unit. Remove the worktree once its branch merges
+(`git worktree remove <path>`). Where isolated checkouts are unavailable
+(no multi-checkout support, or a sandbox pinned to one directory), serialize
+the work units and use one correctly based branch at a time in the primary
+checkout. Never run concurrent work units in one checkout.
 
 Follow-up work that depends on an open PR can stack on its branch instead
 of waiting; see the Stacked PRs pattern under Pull requests.
@@ -263,6 +288,10 @@ arc.
   scope creep, and accidental files the editor hid. This is a
   _mechanical-hygiene_ pass; it does **not** substitute for substantive
   critique.
+- **Integration evidence belongs to one base commit.** CI results, a
+  full-diff self-review, and a ready-for-handoff claim are valid only for the
+  base commit they were checked against. A base-branch change invalidates all
+  three, even when the earlier PR diff looked clean.
 - **Substantive critique needs fresh, ideally non-self eyes.** Same-context
   self-review shares the blind spots that produced the code. Independence
   ladder, weakest to strongest: self-in-context < same-model fresh-context
@@ -369,6 +398,14 @@ no new review activity outstanding. Once the PR is up:
   activity after that event is in-scope and must be handled, never absorbed
   into the baseline as already-seen. On a new push, advance or replace the
   baseline rather than leaving duplicate watchers running.
+- **Validate against the current base before final handoff.** Resolve the
+  current base tip, update the PR branch using the project's merge or rebase
+  convention, rerun the relevant verification, and self-review the complete
+  refreshed diff. Record the base commit used for that final validation in
+  the PR's Verification section or the handoff. If the base advances again
+  after handoff but before merge, the PR is stale and needs another
+  integration pass. If you do not own the branch or lack permission to
+  update it, report the stale state instead of silently rewriting it.
 - **Wait for required checks**: poll them until they complete (on
   GitHub: `gh pr checks <n>`); fix any red check on the branch, never
   hand off a known-red PR.
@@ -426,13 +463,15 @@ are the conventions for the comments the pass produces.
 
 ### Stacked PRs
 
-Dependent docs or cleanup work can proceed without waiting for its base: a
-follow-up PR can be based on an open PR's branch (on GitHub:
-`gh pr create --base <feature-branch>`, which auto-retargets to `main`
-when the base merges; on other forges retarget it manually). Two
-gotchas: while the base is open the stacked PR's diff shows only its
-own commits; and if the base is force-pushed (the fold-review-fixes
-rule in Commits), `rebase --onto` the stack onto the new base tip.
+Dependent docs or cleanup work can proceed without waiting for its base as an
+intentionally declared stacked PR. A non-default base is an explicit
+dependency: name the open PR's branch when creating both the follow-up branch
+or worktree and the PR, never inherit it from the current checkout. On GitHub,
+use `gh pr create --base <feature-branch>`; it auto-retargets to `main` when
+the base merges, while other forges may require manual retargeting. Two
+gotchas: while the base is open the stacked PR's diff shows only its own
+commits; and if the base is force-pushed (the fold-review-fixes rule in
+Commits), `rebase --onto` the stack onto the new base tip.
 
 <!-- /agents-md:managed:pull-requests -->
 
