@@ -1,0 +1,37 @@
+name: api CI
+
+# Spec validation is platform-independent, so a single Linux job is the
+# whole gate. The validator is a Go tool run by pinned module version
+# (fully deterministic, matching the pinned-golangci-lint convention);
+# the same command is documented in api/README.md for local runs.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "api/**"
+      - ".github/workflows/api-ci.yml"
+  pull_request:
+    paths:
+      - "api/**"
+      - ".github/workflows/api-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint (vacuum)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # The daemon module pins the repo's Go toolchain; the validator
+          # is version-pinned in the command itself. No cache: the daemon
+          # go.sum doesn't cover the validator, so a restored cache would
+          # never contain it.
+          go-version-file: daemon/go.mod
+          cache: false
+      - name: vacuum lint
+        run: go run github.com/daveshanley/vacuum@v0.29.9 lint -r api/vacuum.ruleset.yaml --details --fail-severity warn api/openapi.yaml

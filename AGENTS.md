@@ -124,13 +124,13 @@ the PR body); keep the working context to what the current step needs.
 
 ## Build, test, run
 
-The daemon is initialized (Wave 0 unit 1); the monorepo's other components are not yet initialized. Per-component build, test, and run commands land in this table with each component's first PR (see `docs/plan.md` §11).
+The daemon (Wave 0 unit 1) and the API spec (Wave 0 unit 5) are initialized; the monorepo's other components are not. Per-component build, test, and run commands land in this table with each component's first PR (see `docs/plan.md` §11).
 
 | Component     | Toolchain      | Commands                                      |
 | ------------- | -------------- | --------------------------------------------- |
 | `daemon/`     | Go             | `cd daemon`; `go build ./...`; `go test ./...`; `go vet ./...`; `golangci-lint run` |
 | `app/`        | Xcode / SPM    | not yet initialized; see docs/plan.md roadmap |
-| `api/`        | OpenAPI (spec) | not yet initialized; see docs/plan.md roadmap |
+| `api/`        | OpenAPI (spec) | `go run github.com/daveshanley/vacuum@v0.29.9 lint -r api/vacuum.ruleset.yaml --details --fail-severity warn api/openapi.yaml` (from repo root; see api/README.md) |
 | `prompts/`    | prompt text    | not yet initialized; see docs/plan.md roadmap |
 | `policy/`     | YAML (policy)  | not yet initialized; see docs/plan.md roadmap |
 | `images/`     | OCI images     | not yet initialized; see docs/plan.md roadmap |
