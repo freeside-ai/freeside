@@ -144,6 +144,7 @@ A work unit declares which component directories it touches, in the branch-name 
 - Name the touched components in the PR body (a one-line "Scope:" is enough).
 - Cross-component changes (typically `api/` plus both of its consumers, `daemon/` and `app/`) are **one work unit** and must say so; a spec change and its generated-code consumers move together, never in silently coupled separate PRs.
 - Do not edit a component outside the current unit's declared scope to "fix while you're here"; file it instead.
+- **A PR-time CI check (`.github/workflows/pr-integrity.yml`) enforces the part of this a diff can prove:** a change under a component dir (`daemon/ app/ api/ prompts/ policy/ images/`) whose component is not in the PR's `Scope:` fails, as does deleting or renaming a merged `devlog/` entry (frozen; append-only). It is not the importer (which guards the runtime candidate path, §5.6/§5.8) but the PR-time bridge to it, so it enforces the existing convention without redefining it; cross-cutting dirs (`devlog/` additions, `docs/`, `.github/`, root files) are never scope violations, and `repo-wide scaffold` opts out. Making it a required check is a repo-settings (maintainer) decision.
 
 ## Document gating
 

@@ -1,0 +1,61 @@
+name: PR integrity
+
+# Mechanical enforcement, on every PR, of the component-scope subset of
+# "Monorepo scope discipline" and the devlog append-only invariant
+# (AGENTS.md). It catches the class that let a parallel merge silently
+# revert an unrelated PR: a branch changing a component outside its declared
+# Scope, or deleting/renaming a frozen devlog entry. This is the PR-time
+# precursor to the runtime gauntlet importer (docs/plan.md §5.6/§5.8), not a
+# duplicate of it; it enforces the existing convention without redefining it.
+
+on:
+  # `edited` is included beyond the defaults (opened, synchronize, reopened)
+  # because the check reads the PR body for `Scope:`: without it, a body-only
+  # scope fix would stay red until an unrelated push, and a post-pass scope
+  # narrowing would leave a stale green.
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  integrity:
+    name: scope + devlog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need both the PR base and head commits present for the diff.
+          fetch-depth: 0
+      - name: self-test the checker
+        run: bash scripts/pr-integrity-check.test.sh
+      - name: scope + devlog integrity
+        # PR body and SHAs pass through env, never string-interpolated into
+        # the script, so a crafted PR description can't inject shell.
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Run the checker from the trusted BASE revision, not the PR's head
+          # copy: otherwise a PR could no-op the very script that gates it and
+          # still get a green status. On the bootstrap PR that introduces the
+          # checker (absent on base), fall back to the head copy. (The
+          # workflow file itself still runs from head — an inherent limit of
+          # `pull_request`; close that with a required check + CODEOWNERS on
+          # `.github/`, a maintainer setting.)
+          checker=scripts/pr-integrity-check.sh
+          if git cat-file -e "$BASE_SHA:$checker" 2>/dev/null; then
+            git show "$BASE_SHA:$checker" > "$RUNNER_TEMP/checker.sh"
+            checker="$RUNNER_TEMP/checker.sh"
+          fi
+          # -z: NUL-delimited, unquoted paths (non-ASCII/unusual names would
+          # otherwise be quoted and evade the dir/glob checks). numstat goes
+          # to a file since -z output contains NUL, which an env value can't
+          # carry.
+          git diff -z --numstat "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/numstat.z"
+          export NUMSTAT_FILE="$RUNNER_TEMP/numstat.z"
+          git diff -z --name-status "$BASE_SHA...$HEAD_SHA" \
+            | bash "$checker"
