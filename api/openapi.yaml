@@ -488,10 +488,10 @@ components:
     ClientCommand:
       type: object
       description: >
-        Every client mutation. Carries exactly these five fields; the
-        payload shape per command type is provisional and will be typed by
-        kind:contract changes as the signet/saddle pair exercises the
-        surface.
+        Every client mutation. Carries exactly these five fields. The
+        payload is now typed for the decision command (the first exercised
+        command type); other command types are typed as the signet/saddle
+        pair exercises the surface, via kind:contract changes.
       required:
         - command_id
         - device_id
@@ -524,14 +524,14 @@ components:
             $ref: "#/components/schemas/Digest"
           description: >
             Provisional. The digest-bound inputs the command was prepared
-            against, keyed by binding name (e.g. the artifact digests a
-            decision was rendered from); checked with
-            expected_entity_version.
+            against, keyed by binding name; checked with
+            expected_entity_version. For a decision command the authoritative
+            binding set is the payload's item_version, pr_head_sha, and
+            artifact_digests (the daemon cross-checks those against the live
+            item); this map stays for command types that name individual
+            bindings.
         payload:
-          type: object
-          description: >
-            Provisional. The command-type-specific payload; free-form until
-            command types are exercised and typed.
+          $ref: "#/components/schemas/DecisionPayload"
       example:
         command_id: "cmd-1"
         device_id: "device-1"
@@ -539,25 +539,126 @@ components:
         expected_bindings:
           evidence: "sha256:log"
         payload:
-          action: "approve"
           item_id: "item-1"
+          action: "open_pr"
+          item_version: 1
+          pr_head_sha: "cafebabe"
+          artifact_digests: ["sha256:img", "sha256:log"]
 
-    CommandResult:
+    DecisionPayload:
       type: object
       description: >
-        Provisional. The command's recorded result, written in the same
-        transaction that applied the command; a retry returns this exact
-        recorded value.
-      required: [command_id, revision]
+        The payload of a decision command: which attention item is decided,
+        the action taken, and the exact bindings the decision was rendered
+        against (the accepted item version, PR head, and the rendered digest
+        set). The daemon cross-checks these against the live item, so an
+        approval cannot commit against inputs that changed after it was
+        rendered (the stale-approval class, plan §3.1; §4 "approvals bind to
+        digests"). Mirrors the binding fields of domain.Command.
+      required: [item_id, action, item_version, pr_head_sha, artifact_digests]
+      additionalProperties: false
+      properties:
+        item_id:
+          type: string
+          minLength: 1
+          description: The attention item being decided.
+        action:
+          $ref: "#/components/schemas/Action"
+        item_version:
+          type: integer
+          minimum: 1
+          description: The accepted item_version the decision was rendered against.
+        pr_head_sha:
+          type: string
+          description: >
+            The PR head the decision bound to; empty when the item names no
+            PR (e.g. a spec awaiting approval).
+        artifact_digests:
+          type: array
+          items:
+            $ref: "#/components/schemas/Digest"
+          description: >
+            The canonical (sorted, deduplicated) binding set: exactly the
+            digests rendered in the item's evidence_snapshot and agent_claims.
+      example:
+        item_id: "item-1"
+        action: "open_pr"
+        item_version: 1
+        pr_head_sha: "cafebabe"
+        artifact_digests: ["sha256:img", "sha256:log"]
+
+    CommandRecord:
+      type: object
+      description: >
+        The durable, immutable record of one accepted decision
+        (domain.Command; plan §4 lifecycle, §5.14). It pins the exact
+        bindings the decision was accepted against; the daemon keys it by
+        command_id and a retry returns it unchanged (sync test 4).
+      required:
+        - command_id
+        - device_id
+        - item_id
+        - item_version
+        - pr_head_sha
+        - artifact_digests
+        - action
+      additionalProperties: false
       properties:
         command_id:
           type: string
           minLength: 1
+        device_id:
+          type: string
+          minLength: 1
+        item_id:
+          type: string
+          minLength: 1
+        item_version:
+          type: integer
+          minimum: 1
+        pr_head_sha:
+          type: string
+        artifact_digests:
+          type: array
+          items:
+            $ref: "#/components/schemas/Digest"
+        action:
+          $ref: "#/components/schemas/Action"
+      example:
+        command_id: "cmd-1"
+        device_id: "device-1"
+        item_id: "item-1"
+        item_version: 1
+        pr_head_sha: "cafebabe"
+        artifact_digests: ["sha256:img", "sha256:log"]
+        action: "open_pr"
+
+    CommandResult:
+      type: object
+      description: >
+        The command's committed result: the durable decision record plus the
+        server revision the transaction applied at. A retry of the same
+        command_id returns this exact value (sync test 4).
+      required: [record, revision]
+      additionalProperties: false
+      properties:
+        record:
+          $ref: "#/components/schemas/CommandRecord"
         revision:
           type: integer
           format: int64
           minimum: 1
           description: The server revision of the transaction that applied the command.
+      example:
+        record:
+          command_id: "cmd-1"
+          device_id: "device-1"
+          item_id: "item-1"
+          item_version: 1
+          pr_head_sha: "cafebabe"
+          artifact_digests: ["sha256:img", "sha256:log"]
+          action: "open_pr"
+        revision: 1
 
     StaleVersionRejection:
       type: object
@@ -650,6 +751,13 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Digest"
+          description: >
+            The approval binding set: the canonical (sorted, deduplicated)
+            union of every digest rendered in evidence_snapshot and
+            agent_claims. Derived and enforced by the daemon
+            (domain.NewAttentionItem / Validate), never client-supplied, so
+            an item cannot display one digest while binding another (the
+            stale-approval class, plan §3.1; §4 "approvals bind to digests").
         pr_head_sha:
           type: string
         item_version:
@@ -695,7 +803,7 @@ components:
           - label: "screenshot"
             artifact_id: "art-2"
             digest: "sha256:img"
-        artifact_digests: ["sha256:log"]
+        artifact_digests: ["sha256:img", "sha256:log"]
         pr_head_sha: "cafebabe"
         item_version: 1
         interruption_class: "planned_gate"
