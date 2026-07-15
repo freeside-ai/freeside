@@ -196,6 +196,14 @@ discipline).
   persistence format is not one); fixtures double as
   validation-positive cases. (Worked example: `daemon/README.md`;
   shared helper: `daemon/internal/golden`.)
+- **Trust boundaries at reconstruction/persistence**: a boundary that
+  decodes a row or accepts an exported struct re-runs the trusted
+  policy gate against current state (e.g. the approved-recipe set); a
+  decoded or caller-supplied trust bit (`publish_eligible`, recipe
+  approval, a provenance head) is never trusted, and the re-gate fails
+  closed. Promoted per #52 when the invariant recurred beyond the
+  store. (Detail: `daemon/internal/store/entities.go`,
+  `daemon/internal/domain/artifact.go`.)
 
 ## Monorepo scope discipline
 
