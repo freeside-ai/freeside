@@ -306,9 +306,9 @@ func TestCommandIdempotentAndStale(t *testing.T) {
 	t.Run("stale bindings rejected with the replacement item", func(t *testing.T) {
 		s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 		seed(s)
-		// Advance the item to v2 (a legitimate transition) after the command bound v1.
+		// Advance the still-open item to v2 (a legitimate transition) after the
+		// command bound v1; the item stays open so only staleness is at fault.
 		advanced := f.item
-		advanced.Status = domain.StatusResolved
 		advanced.ItemVersion = 2
 		if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, advanced) }); err != nil {
 			t.Fatalf("advance item: %v", err)
@@ -326,6 +326,54 @@ func TestCommandIdempotentAndStale(t *testing.T) {
 		}
 		if sce.Replacement.ItemVersion != 2 {
 			t.Errorf("replacement item_version = %d, want the advanced 2", sce.Replacement.ItemVersion)
+		}
+	})
+
+	t.Run("new command on a closed item rejected with the canonical item", func(t *testing.T) {
+		// The current-version half of issue #55: a command prepared against the
+		// resolved item's live bindings passes BindsSameAs, so without the status
+		// gate it would be durably recorded as a decision on an already-closed
+		// item. Version advance alone does not catch this.
+		s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+		seed(s)
+		resolved := f.item
+		resolved.Status = domain.StatusResolved
+		resolved.ItemVersion = 2
+		if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, resolved) }); err != nil {
+			t.Fatalf("resolve item: %v", err)
+		}
+		// A genuinely new command bound to the resolved item's current v2 (same
+		// head and digest set, so its bindings match exactly).
+		current := f.command
+		current.CommandID = "cmd-on-closed"
+		current.ItemVersion = 2
+		err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutCommand(ctx, current) })
+		if !errors.Is(err, store.ErrClosedItem) {
+			t.Fatalf("closed-item command error = %v, want ErrClosedItem", err)
+		}
+		var cie *store.ClosedItemError
+		if !errors.As(err, &cie) {
+			t.Fatalf("error = %v, want *ClosedItemError", err)
+		}
+		if cie.Item.Status != domain.StatusResolved || cie.Item.ItemVersion != 2 {
+			t.Errorf("canonical item = %s v%d, want resolved v2", cie.Item.Status, cie.Item.ItemVersion)
+		}
+
+		// A stale-bound new command against the closed item also reports closure,
+		// not staleness: the openness gate runs first, since a replacement item
+		// inviting a rebind-and-retry can never lead to an accepted command.
+		staleOnClosed := f.command
+		staleOnClosed.CommandID = "cmd-stale-on-closed"
+		err = s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutCommand(ctx, staleOnClosed) })
+		if !errors.Is(err, store.ErrClosedItem) {
+			t.Fatalf("stale command on closed item = %v, want ErrClosedItem", err)
+		}
+		cie = nil
+		if !errors.As(err, &cie) {
+			t.Fatalf("error = %v, want *ClosedItemError", err)
+		}
+		if cie.Item.Status != domain.StatusResolved || cie.Item.ItemVersion != 2 {
+			t.Errorf("canonical item = %s v%d, want resolved v2", cie.Item.Status, cie.Item.ItemVersion)
 		}
 	})
 
