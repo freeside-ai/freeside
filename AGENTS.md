@@ -150,6 +150,7 @@ The daemon (Wave 0 unit 1) and the API spec (Wave 0 unit 5) are initialized; the
 | `prompts/`    | prompt text    | not yet initialized; see docs/plan.md roadmap |
 | `policy/`     | YAML (policy)  | not yet initialized; see docs/plan.md roadmap |
 | `images/`     | OCI images     | not yet initialized; see docs/plan.md roadmap |
+| `scripts/`    | Bash           | `bash -n scripts/*.sh`; `shellcheck scripts/*.sh`; `bash scripts/test-merge-result-audit.sh` (CI pins shellcheck in `.github/workflows/scripts-ci.yml`) |
 
 Lint/format and CI are established with the first component that carries code: the daemon does so here via `daemon/.golangci.yml` and `.github/workflows/daemon-ci.yml` (Linux runs build/test/vet/lint, macOS runs build/test). Later components add their own on the same pattern.
 
@@ -176,6 +177,34 @@ Changes to `docs/plan.md`, ADRs (`docs/decisions/`), and (later) the control-pla
 - **Login/account:** `chatgpt-codex-connector` (the `chatgpt-codex-connector[bot]` form appears on inline review comments and in the pulls review-comments API).
 - **Triggered:** automatically on PR open-for-review, mark-ready, and each push (it re-reviewed after every push this session); also on demand via an `@codex review` comment.
 - **Status signals:** on a **clean pass** (no findings) it posts no review and reacts 👍 (`+1`, i.e. `THUMBS_UP`) on the PR description a few minutes after the triggering event; that reaction, dated after the trigger, is the completion signal a review-watch keys off. On a **findings pass** it posts a `COMMENTED` review whose inline comments are each tagged by priority badge (P1/P2/P3) and invite a 👍/👎 reaction.
+
+## Integration ordering and merge-result audit
+
+Freeside's mechanical defense for the integration-evidence invariant
+(**Integration evidence belongs to one base commit**, under Pull
+requests): a branch carrying stale or inverse content can silently
+revert already-merged sibling work through a clean 3-way merge (#47
+reverting #48; recovered in #49). The audit constructs the prospective
+merge result against the current base tip without mutating the
+checkout and enforces the unit's declared path scope on it.
+
+- The spine role owns final integration ordering when multiple PRs are
+  ready; a work unit's Dependencies field encodes required
+  serialization and intentional stacks (see Stacked PRs).
+- After any merge to `main`, every remaining open PR's integration
+  evidence is stale until revalidated against the new tip.
+- Before final handoff, and again after any base advance: fetch the
+  default branch, run
+  `scripts/merge-result-audit.sh origin/main <head-branch> <allowed-path>...`
+  against that exact tip, review the complete prospective change set it
+  prints, and record the resolved base SHA plus the audit command and
+  verdict in the PR's Verification section.
+- Allowed paths are the unit's declared scope, passed explicitly; the
+  audit never parses PR prose. Its guarantees are conflict detection,
+  exact-base binding, complete prospective-diff visibility, and
+  path-boundary enforcement; it does not infer semantic intent, so an
+  in-scope reversion still needs a reviewer's eyes on the printed
+  change set.
 
 <!-- agents-md:managed:branches -->
 
@@ -537,6 +566,10 @@ Before calling work done:
   each other for the touched scope
 - Scope declared: the PR body names which component directories the work
   unit touches (see Monorepo scope discipline)
+- Merge-result audit run against freshly fetched `origin/main` before
+  handoff, base SHA and verdict recorded in PR Verification (see
+  Integration ordering and merge-result audit); when `scripts/` is in
+  scope, `bash scripts/test-merge-result-audit.sh` also passes
 - Devlog entry appended for the session
 
 <!-- /agents-md:project:done-checks -->

@@ -41,4 +41,9 @@
 
 <!-- Bullets required. Start each bullet with Passed:, Checked:, Attempted:,
      or Not run:. Say what was actually run and observed. Facts only, never
-     "should work"; verification gaps are explicit Not run: bullets. -->
+     "should work"; verification gaps are explicit Not run: bullets.
+     Before handoff: fetch the default branch, run
+     `scripts/merge-result-audit.sh origin/main <head-branch> <allowed-path>...`
+     against that exact tip, and record the resolved base SHA plus the
+     audit command and verdict here (AGENTS.md: Integration ordering and
+     merge-result audit). -->
