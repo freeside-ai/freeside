@@ -43,7 +43,9 @@ servers:
 
 # Every endpoint requires the paired-device credential: revocation must be
 # enforceable by contract (a revoked device cannot submit, plan §5.14 sync
-# tests 15-16), so no operation on the sync surface is unauthenticated.
+# tests 15-16). The single exception is POST /pairing, which issues the
+# credential: it overrides with security: [], and the short-lived pairing
+# code is its authenticator.
 security:
   - deviceCredential: []
 
@@ -57,7 +59,20 @@ tags:
   - name: conversations
     description: Conversations, whole-snapshot per conversation (Phase 1 semantics).
   - name: commands
-    description: The single mutation surface, idempotent by command_id.
+    description: >
+      ClientCommand submission, idempotent by command_id: the single
+      mutation surface for decisions on synchronized domain state (plan
+      §5.14). The credential control surface (pairing, revocation) and
+      digest-addressed attachment upload sit deliberately outside it.
+  - name: devices
+    description: >
+      Device pairing and revocation, the credential control surface (plan
+      §5.14 devices): deliberately outside the ClientCommand path, which
+      decides attention items under a device credential these operations
+      grant and invalidate. Devices are revision-carrying state; the sync
+      read surface that carries them to clients (bootstrap widening or a
+      device list) lands with its first client consumer, via a later
+      contract change.
   - name: attachments
     description: Digest-addressed attachment upload.
 
@@ -85,6 +100,29 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BootstrapSnapshot"
+
+  /sync/revision:
+    get:
+      operationId: getSyncRevision
+      tags: [sync]
+      summary: The current server revision and sync epoch
+      description: |
+        The periodic revision heartbeat that catches lost invalidations
+        (plan §5.14; sync test 11): a client polls this cheap read and
+        compares `revision` against its
+        `highest_observed_server_revision`. A gap means invalidations were
+        missed, so the client refetches affected resources or bootstraps;
+        it never marks the whole cache current from this response (only a
+        bootstrap advances `last_full_snapshot_revision`). A changed
+        `sync_epoch` (a daemon restore) forces cache discard and a fresh
+        bootstrap.
+      responses:
+        "200":
+          description: The server's current sync epoch and revision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerRevision"
 
   /attention/items:
     get:
@@ -215,8 +253,10 @@ paths:
       tags: [commands]
       summary: Submit a client command
       description: |
-        The single mutation surface: every client mutation is a
-        ClientCommand (plan §5.14). Submission is idempotent by
+        The single mutation surface for decisions on synchronized domain
+        state: every such client mutation is a ClientCommand (plan §5.14);
+        only the credential control surface (pairing, revocation) and
+        attachment upload sit outside it. Submission is idempotent by
         `command_id`: the daemon records each command's result in the same
         transaction that applies it, and a retry of an already-committed
         `command_id` returns the original recorded result without applying
@@ -252,6 +292,75 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StaleVersionRejection"
+
+  /pairing:
+    post:
+      operationId: pairDevice
+      tags: [devices]
+      summary: Exchange a pairing code for a device credential
+      # The one unauthenticated operation: the requester has no credential
+      # yet, and the short-lived code displayed on the daemon host is the
+      # authenticator (plan §5.14 devices).
+      security: []
+      description: |
+        Exchanges a short-lived pairing code (displayed on the daemon host,
+        plan §5.14) for a new device and its bearer token. The token appears
+        only in this response and is never retrievable again; the daemon
+        stores only its digest. Consumption is single-winner: simultaneous
+        attempts with one code yield one device (sync test 14), and an
+        expired or consumed code creates nothing (sync test 13).
+      requestBody:
+        required: true
+        description: The pairing code and the device's human label.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairingRequest"
+      responses:
+        "201":
+          description: The paired device and its one-time-visible token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingGrant"
+        "403":
+          description: >
+            The pairing code is unknown, expired, or already consumed. One
+            undifferentiated rejection: the response never distinguishes
+            which, so an unauthenticated caller cannot probe code validity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /devices/{device_id}/revoke:
+    post:
+      operationId: revokeDevice
+      tags: [devices]
+      summary: Revoke a paired device
+      description: |
+        Revokes the device's credential (plan §5.14): a revoked device
+        cannot submit a previously prepared, uncommitted command (sync test
+        15), while a committed command's recorded result stays retrievable
+        and a retry produces no new side effect (sync test 16). Revocation
+        stops future access only; it cannot delete content the device
+        already cached (no remote wipe). Terminal and idempotent: revoking
+        an already-revoked device returns the same recorded snapshot.
+        Deliberately not a ClientCommand: revocation is the credential
+        control surface (it invalidates what commands authenticate with,
+        and must not depend on the revoked device's cooperation), not a
+        decision on an attention item.
+      parameters:
+        - $ref: "#/components/parameters/DeviceID"
+      responses:
+        "200":
+          description: The device's snapshot after revocation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceSnapshot"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /attachments/{digest}:
     parameters:
@@ -331,12 +440,28 @@ components:
       type: http
       scheme: bearer
       description: >
-        Provisional. The paired-device credential (plan §5.14 devices and
-        commands): pairing via a short-lived code issues it, the daemon
-        stores only a credential hash or device public key (never reusable
-        plaintext), and revocation invalidates it. The concrete token
-        format is pinned by a contract change when the first client
-        exercises the surface; pairing endpoints land with it.
+        The paired-device credential (plan §5.14 devices and commands).
+        `POST /pairing` exchanges a short-lived pairing code for it; the
+        bearer token is `fsd1.<device_id_b64>.<secret>`, three
+        dot-separated segments: the version prefix, the unpadded base64url
+        (RFC 4648 §5) encoding of the device identifier, and a 256-bit
+        unpadded base64url secret. It is shown once in the PairingGrant
+        and never retrievable again. Encoding the identifier segment makes
+        the format total over the identifier space: base64url is dot-free,
+        so the token always splits into exactly three segments, and every
+        character is legal in an HTTP `Authorization: Bearer` credential
+        (RFC 6750 token68) no matter what characters the raw identifier
+        contains. The
+        daemon stores only the whole token's sha256 digest, or a device
+        public key, never reusable plaintext; the embedded device_id routes
+        verification to that device's stored credential. Revocation
+        (`POST /devices/{device_id}/revoke`) stops new work: a revoked
+        device cannot submit a new or previously prepared, uncommitted
+        command (sync test 15), and a retried already-committed command
+        produces no new side effect; whether that retry still authenticates
+        to fetch its recorded result, or is refused with the record staying
+        retrievable to other devices, is enforcement policy pinned by the
+        attention service (test 16 permits either).
 
   parameters:
     ItemID:
@@ -360,6 +485,14 @@ components:
       in: path
       required: true
       description: The conversation's identifier.
+      schema:
+        type: string
+        minLength: 1
+    DeviceID:
+      name: device_id
+      in: path
+      required: true
+      description: The paired device's identifier.
       schema:
         type: string
         minLength: 1
@@ -465,6 +598,43 @@ components:
           $ref: "#/components/schemas/EntityVersion"
         conversation:
           $ref: "#/components/schemas/Conversation"
+
+    ServerRevision:
+      type: object
+      description: >
+        The revision heartbeat's payload (plan §5.14; sync test 11): the
+        daemon's current ServerState, cheap enough to poll. Carries no
+        entity data; a revision gap tells the client to refetch, never to
+        mark its cache current.
+      required: [sync_epoch, revision]
+      additionalProperties: false
+      properties:
+        sync_epoch:
+          type: string
+          minLength: 1
+          description: >
+            The daemon's sync epoch at the moment of the read; a change
+            (only ever a restore) invalidates every client cache.
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The server revision at the moment of the read.
+      example:
+        sync_epoch: "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+        revision: 42
+
+    DeviceSnapshot:
+      type: object
+      description: A resource snapshot wrapping one paired device (plan §5.14).
+      required: [as_of_revision, entity_version, device]
+      properties:
+        as_of_revision:
+          $ref: "#/components/schemas/AsOfRevision"
+        entity_version:
+          $ref: "#/components/schemas/EntityVersion"
+        device:
+          $ref: "#/components/schemas/Device"
 
     AsOfRevision:
       type: integer
@@ -671,6 +841,64 @@ components:
           type: string
         replacement_item:
           $ref: "#/components/schemas/AttentionItemSnapshot"
+
+    # --- device pairing (plan §5.14 devices) ---
+
+    PairingRequest:
+      type: object
+      description: >
+        The pairing exchange's input: the short-lived code read off the
+        daemon host and the human label the new device will carry.
+      required: [pairing_code, display_name]
+      additionalProperties: false
+      properties:
+        pairing_code:
+          type: string
+          minLength: 1
+          description: >
+            The code plaintext as displayed. The daemon re-derives its keyed
+            digest (HMAC-SHA256 under a daemon-held pairing key) for lookup
+            and stores no plaintext; the keyed derivation keeps a short
+            displayed code from being offline-brute-forced out of a leaked
+            store.
+        display_name:
+          type: string
+          minLength: 1
+          description: The device's human label ("Ben's iPhone").
+      example:
+        pairing_code: "483911"
+        display_name: "Ben's iPhone"
+
+    PairingGrant:
+      type: object
+      description: >
+        The successful pairing exchange: the new device's snapshot and its
+        bearer token. This response is the token's only appearance, ever;
+        the daemon stores only its digest, so a lost token means revoking
+        the device and pairing again.
+      required: [device_token, device]
+      additionalProperties: false
+      properties:
+        device_token:
+          type: string
+          minLength: 1
+          description: >
+            The bearer token (`fsd1.<device_id_b64>.<secret>`; see the
+            deviceCredential security scheme for the segment encoding).
+            Shown once; never retrievable again.
+        device:
+          $ref: "#/components/schemas/DeviceSnapshot"
+      example:
+        device_token: "fsd1.ZGV2aWNlLTE.3q2-8fPXm4kQzT1vY6wA9rB0cD5eF7gH8jK2lM4nP6s"
+        device:
+          as_of_revision: 1
+          entity_version: 1
+          device:
+            id: "device-1"
+            display_name: "Ben's iPhone"
+            status: "active"
+            paired_at: "2026-01-02T03:04:05Z"
+            revoked_at: null
 
     AttachmentReceipt:
       type: object
@@ -1436,3 +1664,83 @@ components:
         - user
         - agent
         - daemon
+
+    Device:
+      description: >
+        A paired client device; mirrors domain.Device. The record carries
+        no credential material: the credential is a separate daemon-internal
+        record with no wire schema, so neither the sync surface nor this
+        document can represent even its hash (plan §5.14). revoked_at
+        corresponds exactly to the status (domain Device.Validate), so each
+        status is its own branch; revoked is terminal, and revocation stops
+        future access only (sync tests 15-16). revoked_at on or after
+        paired_at is not schema-expressible and holds by the same validator.
+      oneOf:
+        - $ref: "#/components/schemas/DeviceActive"
+        - $ref: "#/components/schemas/DeviceRevoked"
+      discriminator:
+        propertyName: status
+        mapping:
+          active: "#/components/schemas/DeviceActive"
+          revoked: "#/components/schemas/DeviceRevoked"
+      example:
+        id: "device-1"
+        display_name: "Ben's iPhone"
+        status: "active"
+        paired_at: "2026-01-02T03:04:05Z"
+        revoked_at: null
+
+    DeviceActive:
+      type: object
+      description: An active device carries no revocation instant.
+      required:
+        - id
+        - display_name
+        - status
+        - paired_at
+        - revoked_at
+      properties:
+        id:
+          type: string
+          minLength: 1
+        display_name:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum: [active]
+        paired_at:
+          type: string
+          format: date-time
+        revoked_at:
+          nullable: true
+          enum: [null]
+          description: Always null; an active device is not revoked.
+
+    DeviceRevoked:
+      type: object
+      description: >
+        A revoked device carries its recorded revocation instant; the state
+        is terminal (a fresh pairing is a new device).
+      required:
+        - id
+        - display_name
+        - status
+        - paired_at
+        - revoked_at
+      properties:
+        id:
+          type: string
+          minLength: 1
+        display_name:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum: [revoked]
+        paired_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
