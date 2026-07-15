@@ -1,0 +1,36 @@
+name: app CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "api/openapi.yaml"
+      - ".github/workflows/app-ci.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "api/openapi.yaml"
+      - ".github/workflows/app-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: build and test (macOS + iOS)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify generated API client
+        working-directory: app
+        run: ./scripts/generate-api-client.sh
+      - name: Test Swift package
+        working-directory: app
+        run: swift test
+      - name: Build macOS app
+        working-directory: app
+        run: xcodebuild -project Freeside.xcodeproj -scheme FreesideMac -destination 'platform=macOS' -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO build
+      - name: Build iOS app
+        working-directory: app
+        run: xcodebuild -project Freeside.xcodeproj -scheme FreesideIOS -destination 'generic/platform=iOS Simulator' -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO build

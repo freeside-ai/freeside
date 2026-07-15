@@ -1,0 +1,208 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		100000000000000000000001 /* FreesideMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000011 /* FreesideMacApp.swift */; };
+		100000000000000000000002 /* FreesideIOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000012 /* FreesideIOSApp.swift */; };
+		100000000000000000000003 /* FreesideCore in Frameworks */ = {isa = PBXBuildFile; productRef = 100000000000000000000081 /* FreesideCore */; };
+		100000000000000000000004 /* FreesideCore in Frameworks */ = {isa = PBXBuildFile; productRef = 100000000000000000000082 /* FreesideCore */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		100000000000000000000011 /* FreesideMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FreesideMacApp.swift; sourceTree = "<group>"; };
+		100000000000000000000012 /* FreesideIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FreesideIOSApp.swift; sourceTree = "<group>"; };
+		100000000000000000000013 /* FreesideMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FreesideMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		100000000000000000000014 /* FreesideIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FreesideIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		100000000000000000000021 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100000000000000000000003 /* FreesideCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		100000000000000000000022 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100000000000000000000004 /* FreesideCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		100000000000000000000031 = {
+			isa = PBXGroup;
+			children = (
+				100000000000000000000032 /* Apps */,
+				100000000000000000000033 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		100000000000000000000032 /* Apps */ = {
+			isa = PBXGroup;
+			children = (
+				100000000000000000000034 /* macOS */,
+				100000000000000000000035 /* iOS */,
+			);
+			path = Apps;
+			sourceTree = "<group>";
+		};
+		100000000000000000000033 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				100000000000000000000013 /* FreesideMac.app */,
+				100000000000000000000014 /* FreesideIOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		100000000000000000000034 /* macOS */ = {
+			isa = PBXGroup;
+			children = (
+				100000000000000000000011 /* FreesideMacApp.swift */,
+			);
+			path = macOS;
+			sourceTree = "<group>";
+		};
+		100000000000000000000035 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				100000000000000000000012 /* FreesideIOSApp.swift */,
+			);
+			path = iOS;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		100000000000000000000041 /* FreesideMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 100000000000000000000071 /* Build configuration list for PBXNativeTarget "FreesideMac" */;
+			buildPhases = (
+				100000000000000000000051 /* Sources */,
+				100000000000000000000021 /* Frameworks */,
+				100000000000000000000061 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FreesideMac;
+			packageProductDependencies = (
+				100000000000000000000081 /* FreesideCore */,
+			);
+			productName = FreesideMac;
+			productReference = 100000000000000000000013 /* FreesideMac.app */;
+			productType = "com.apple.product-type.application";
+		};
+		100000000000000000000042 /* FreesideIOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 100000000000000000000072 /* Build configuration list for PBXNativeTarget "FreesideIOS" */;
+			buildPhases = (
+				100000000000000000000052 /* Sources */,
+				100000000000000000000022 /* Frameworks */,
+				100000000000000000000062 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FreesideIOS;
+			packageProductDependencies = (
+				100000000000000000000082 /* FreesideCore */,
+			);
+			productName = FreesideIOS;
+			productReference = 100000000000000000000014 /* FreesideIOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		100000000000000000000043 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2660;
+				LastUpgradeCheck = 2660;
+				TargetAttributes = {
+					100000000000000000000041 = {CreatedOnToolsVersion = 26.6; };
+					100000000000000000000042 = {CreatedOnToolsVersion = 26.6; };
+				};
+			};
+			buildConfigurationList = 100000000000000000000073 /* Build configuration list for PBXProject "Freeside" */;
+			compatibilityVersion = "Xcode 16.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base);
+			mainGroup = 100000000000000000000031;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				100000000000000000000080 /* XCLocalSwiftPackageReference "." */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 100000000000000000000033 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				100000000000000000000041 /* FreesideMac */,
+				100000000000000000000042 /* FreesideIOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		100000000000000000000061 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		100000000000000000000062 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		100000000000000000000051 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (100000000000000000000001 /* FreesideMacApp.swift in Sources */);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		100000000000000000000052 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (100000000000000000000002 /* FreesideIOSApp.swift in Sources */);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		100000000000000000000091 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; ONLY_ACTIVE_ARCH = YES; SWIFT_VERSION = 6.0;}; name = Debug;};
+		100000000000000000000092 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_VERSION = 6.0;}; name = Release;};
+		100000000000000000000093 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; ENABLE_PREVIEWS = YES; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = Freeside; INFOPLIST_KEY_CFBundleName = Freeside; MACOSX_DEPLOYMENT_TARGET = 14.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = ai.freeside.app.macos; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0;}; name = Debug;};
+		100000000000000000000094 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = Freeside; INFOPLIST_KEY_CFBundleName = Freeside; MACOSX_DEPLOYMENT_TARGET = 14.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = ai.freeside.app.macos; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_VERSION = 6.0;}; name = Release;};
+		100000000000000000000095 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; ENABLE_PREVIEWS = YES; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = Freeside; INFOPLIST_KEY_CFBundleName = Freeside; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = ai.freeside.app.ios; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug;};
+		100000000000000000000096 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = Freeside; INFOPLIST_KEY_CFBundleName = Freeside; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = ai.freeside.app.ios; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release;};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		100000000000000000000071 /* Build configuration list for PBXNativeTarget "FreesideMac" */ = {isa = XCConfigurationList; buildConfigurations = (100000000000000000000093 /* Debug */, 100000000000000000000094 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;};
+		100000000000000000000072 /* Build configuration list for PBXNativeTarget "FreesideIOS" */ = {isa = XCConfigurationList; buildConfigurations = (100000000000000000000095 /* Debug */, 100000000000000000000096 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;};
+		100000000000000000000073 /* Build configuration list for PBXProject "Freeside" */ = {isa = XCConfigurationList; buildConfigurations = (100000000000000000000091 /* Debug */, 100000000000000000000092 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		100000000000000000000080 /* XCLocalSwiftPackageReference "." */ = {isa = XCLocalSwiftPackageReference; relativePath = .; };
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		100000000000000000000081 /* FreesideCore */ = {isa = XCSwiftPackageProductDependency; package = 100000000000000000000080 /* XCLocalSwiftPackageReference "." */; productName = FreesideCore; };
+		100000000000000000000082 /* FreesideCore */ = {isa = XCSwiftPackageProductDependency; package = 100000000000000000000080 /* XCLocalSwiftPackageReference "." */; productName = FreesideCore; };
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 100000000000000000000043 /* Project object */;
+}
