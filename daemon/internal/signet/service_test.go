@@ -52,12 +52,82 @@ func newFixture(t *testing.T) fixture {
 	if err != nil {
 		t.Fatalf("NewAttentionItem: %v", err)
 	}
-	if err := s.Write(ctx, func(tx *store.WriteTx) error {
-		return tx.PutAttentionItem(ctx, item)
-	}); err != nil {
+	service := signet.NewService(s)
+	if err := service.PutItem(ctx, item); err != nil {
 		t.Fatalf("seed item: %v", err)
 	}
-	return fixture{service: signet.NewService(s), store: s, item: item}
+	return fixture{service: service, store: s, item: item}
+}
+
+// TestPutItemRejectsDisallowedAction exercises the signet item boundary: an
+// item can be structurally valid and still be illegitimate because its type
+// must not offer that action. Rejection happens before the store Write, so it
+// neither persists the item nor consumes a server revision.
+func TestPutItemRejectsDisallowedAction(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	before := f.revision(t)
+
+	item := f.item
+	item.ID = "item-invalid-policy"
+	item.Type = domain.AttentionSpecApproval
+	item.RequestedDecision = []domain.Action{domain.ActionOpenPR}
+	if err := item.Validate(); err != nil {
+		t.Fatalf("domain fixture must be structurally valid: %v", err)
+	}
+	if err := f.service.PutItem(ctx, item); !errors.Is(err, signet.ErrActionNotAllowedForType) {
+		t.Fatalf("PutItem error = %v, want ErrActionNotAllowedForType", err)
+	}
+	if after := f.revision(t); after != before {
+		t.Errorf("rejected item moved the revision %d → %d", before, after)
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetAttentionItem(ctx, item.ID)
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetAttentionItem after rejection = %v, want ErrNotFound", err)
+	}
+}
+
+// TestSubmitRegatesDurableItemPolicy covers rows that predate the policy or
+// bypassed PutItem through an internal store path. New commands fail closed
+// against the current per-type table before either a record-only or pending
+// action can be accepted/judged, and consume no revision.
+func TestSubmitRegatesDurableItemPolicy(t *testing.T) {
+	for _, action := range []domain.Action{domain.ActionOpenPR, domain.ActionSnooze} {
+		t.Run(string(action), func(t *testing.T) {
+			ctx := context.Background()
+			f := newFixture(t)
+			item := f.item
+			item.ID = domain.ItemID("item-legacy-" + string(action))
+			item.Type = domain.AttentionSpecApproval
+			item.RequestedDecision = []domain.Action{action}
+			if err := item.Validate(); err != nil {
+				t.Fatalf("domain fixture must be structurally valid: %v", err)
+			}
+			if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+				return tx.PutAttentionItem(ctx, item)
+			}); err != nil {
+				t.Fatalf("seed direct-store item: %v", err)
+			}
+			before := f.revision(t)
+
+			cmd := f.command("cmd-legacy-"+string(action), action)
+			cmd.Payload.ItemID = item.ID
+			if _, err := f.service.Submit(ctx, cmd); !errors.Is(err, signet.ErrActionNotAllowedForType) {
+				t.Fatalf("Submit error = %v, want ErrActionNotAllowedForType", err)
+			}
+			if after := f.revision(t); after != before {
+				t.Errorf("rejected command moved the revision %d → %d", before, after)
+			}
+			if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+				_, err := tx.GetCommand(ctx, cmd.CommandID)
+				return err
+			}); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("GetCommand after rejection = %v, want ErrNotFound", err)
+			}
+		})
+	}
 }
 
 // command prepares a ClientCommand bound to the fixture item's live state.

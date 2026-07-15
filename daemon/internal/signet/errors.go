@@ -15,6 +15,13 @@ import (
 // store.ErrActionNotOffered, store.ErrImmutableConflict) pass through
 // wrapped and keep matching their store sentinels.
 
+// ErrActionNotAllowedForType is returned when an AttentionItem offers a
+// domain-valid action outside the plan-defined set for its AttentionType. It
+// differs from store.ErrActionNotOffered: this rejects an invalid item at the
+// signet boundary, while the store error rejects a command whose action was
+// not among a valid item's rendered choices.
+var ErrActionNotAllowedForType = errors.New("action is not allowed for attention type")
+
 // ErrUnsupportedAction is returned for a genuinely new command (idempotency
 // by command_id is judged first) whose action's accepted effect this boundary
 // cannot represent yet:

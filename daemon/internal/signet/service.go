@@ -22,6 +22,22 @@ func NewService(st *store.Store) *Service {
 	return &Service{store: st}
 }
 
+// PutItem creates or advances an AttentionItem through the signet boundary.
+// Domain validation runs first, then the per-type action policy, before any
+// Write begins; a rejected item cannot consume a server revision. The store
+// remains responsible for transition, evidence-policy, and persistence gates.
+func (s *Service) PutItem(ctx context.Context, item domain.AttentionItem) error {
+	if err := item.Validate(); err != nil {
+		return fmt.Errorf("put item %q: %w", item.ID, err)
+	}
+	if err := validateRequestedActions(item.Type, item.RequestedDecision); err != nil {
+		return fmt.Errorf("put item %q: %w", item.ID, err)
+	}
+	return s.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, item)
+	})
+}
+
 // errReplay abandons the Write transaction of an idempotent retry after the
 // original result has been captured: nothing was written, so rolling back
 // keeps a replay from bumping the server revision (§5.14 test 4: the
@@ -59,19 +75,24 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 		}
 		replay := getErr == nil
 		if !replay {
-			// The pending-action gate runs only for a genuinely new command_id,
-			// after the replay determination: an id already on record keeps the
-			// command-id-first contract regardless of the resubmitted action's
-			// class (a pending action was never recorded, so such a replay is a
-			// changed body and PutCommand's ErrImmutableConflict below is the
-			// right judgment, never ErrUnsupportedAction).
-			if _, kind := actionOutcome(command.Action); kind == outcomePending {
-				return fmt.Errorf("submit command %q: action %q: %w",
-					command.CommandID, command.Action, ErrUnsupportedAction)
-			}
 			item, snap, err := tx.GetAttentionItemSnapshot(ctx, command.ItemID)
 			if err != nil {
 				return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+			}
+			// Re-run current signet policy against the durable row. PutItem gates
+			// new writes, but a pre-policy row or an internal direct-store write
+			// must not remain an authority for accepting a now-illegitimate action.
+			if err := validateRequestedActions(item.Type, item.RequestedDecision); err != nil {
+				return fmt.Errorf("submit command %q: item %q: %w", command.CommandID, item.ID, err)
+			}
+			// The pending-action gate runs only for a genuinely new command_id,
+			// after replay and durable-item policy have been judged: an id already
+			// on record keeps the command-id-first contract, while an invalid legacy
+			// item fails closed before its action's not-yet-implemented effect is
+			// considered.
+			if _, kind := actionOutcome(command.Action); kind == outcomePending {
+				return fmt.Errorf("submit command %q: action %q: %w",
+					command.CommandID, command.Action, ErrUnsupportedAction)
 			}
 			if item.Status != domain.StatusOpen {
 				return fmt.Errorf("submit command %q: %w", command.CommandID,
@@ -82,8 +103,8 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 					&StaleVersionError{CommandID: command.CommandID, Replacement: item, Snapshot: snap})
 			}
 			// PutCommand re-gates openness and checks the payload's binding
-			// authority and the action-offered set; per-type allowed action
-			// policy stays #23's, not this unit's.
+			// authority and the action-offered set. Submit has already re-gated the
+			// durable item's offered set against current per-type signet policy.
 			if err := tx.PutCommand(ctx, command); err != nil {
 				return translateRejection(err, snap)
 			}
