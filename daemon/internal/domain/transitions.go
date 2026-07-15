@@ -138,6 +138,66 @@ func ValidateAttentionDeliveryTransition(old, updated AttentionDelivery) error {
 	return nil
 }
 
+// deviceStatusSuccessors returns the statuses a device update may move status
+// to. A same-status update is always legal; revoked is terminal (plan §5.14:
+// revocation stops future access only, and test 16 relies on the recorded
+// state surviving), so regaining access is a new pairing, never a reopened
+// device. A switch, not a map, so the exhaustive linter forces a future status
+// to declare its successors instead of silently defaulting to terminal.
+func deviceStatusSuccessors(status DeviceStatus) []DeviceStatus {
+	switch status {
+	case DeviceActive:
+		return []DeviceStatus{DeviceRevoked}
+	case DeviceRevoked:
+		return nil
+	}
+	return nil
+}
+
+// ValidateDeviceTransition reports whether updated is a legal successor to the
+// stored device old. Identity and paired_at are fixed at pairing; display_name
+// may change. Revocation is one-way: revoked admits no successor, and a
+// recorded revoked_at never changes, so a stale write can neither reactivate a
+// revoked device nor move its recorded revocation instant.
+func ValidateDeviceTransition(old, updated Device) error {
+	if updated.ID != old.ID {
+		return fmt.Errorf("device %s: identity would change from %s: %w", updated.ID, old.ID, ErrImmutableTransition)
+	}
+	if !updated.PairedAt.Equal(old.PairedAt) {
+		return fmt.Errorf("device %s: paired_at would change: %w", updated.ID, ErrImmutableTransition)
+	}
+	if updated.Status != old.Status && !slices.Contains(deviceStatusSuccessors(old.Status), updated.Status) {
+		return fmt.Errorf("device %s: status %q is terminal and cannot become %q: %w",
+			updated.ID, old.Status, updated.Status, ErrImmutableTransition)
+	}
+	if old.RevokedAt != nil && !timesEqual(updated.RevokedAt, old.RevokedAt) {
+		return fmt.Errorf("device %s: recorded revoked_at would change: %w", updated.ID, ErrImmutableTransition)
+	}
+	return nil
+}
+
+// ValidatePairingCodeTransition reports whether updated is a legal successor
+// to the stored pairing code old. The code's identity and validity window are
+// fixed at mint; consumption is recorded once and never changes or clears, so
+// a consumed code can never be re-pointed at a second device (§5.14 tests
+// 13-14).
+func ValidatePairingCodeTransition(old, updated PairingCode) error {
+	if updated.CodeHash != old.CodeHash {
+		return fmt.Errorf("pairing code %s: identity would change from %s: %w",
+			updated.CodeHash, old.CodeHash, ErrImmutableTransition)
+	}
+	if !updated.CreatedAt.Equal(old.CreatedAt) || !updated.ExpiresAt.Equal(old.ExpiresAt) {
+		return fmt.Errorf("pairing code %s: validity window would change: %w", updated.CodeHash, ErrImmutableTransition)
+	}
+	if old.ConsumedAt != nil {
+		sameDevice := old.DeviceID != nil && updated.DeviceID != nil && *updated.DeviceID == *old.DeviceID
+		if !timesEqual(updated.ConsumedAt, old.ConsumedAt) || !sameDevice {
+			return fmt.Errorf("pairing code %s: recorded consumption would change: %w", updated.CodeHash, ErrImmutableTransition)
+		}
+	}
+	return nil
+}
+
 // stagesExtend reports whether updated preserves old's recorded execution
 // history: every existing stage keeps its identity and name, every existing
 // attempt is unchanged, and growth is append-only.

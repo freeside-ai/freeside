@@ -148,6 +148,53 @@ func (s DeliveryStatus) valid() bool {
 	}
 }
 
+// DeviceStatus is a paired device's access state (plan §5.14). Revocation
+// stops future access only and is terminal: a revoked device never returns to
+// active (deviceStatusSuccessors), so its recorded command results survive
+// (§5.14 test 16); regaining access is a new pairing, hence a new device.
+type DeviceStatus string
+
+const (
+	DeviceActive  DeviceStatus = "active"
+	DeviceRevoked DeviceStatus = "revoked"
+)
+
+// AllDeviceStatuses lists every valid DeviceStatus.
+var AllDeviceStatuses = []DeviceStatus{DeviceActive, DeviceRevoked}
+
+func (s DeviceStatus) valid() bool {
+	switch s {
+	case DeviceActive, DeviceRevoked:
+		return true
+	default:
+		return false
+	}
+}
+
+// DeviceCredentialKind is the stored shape of a paired device's credential
+// (plan §5.14): the digest of an issued bearer token, or the device's public
+// key. The vocabulary deliberately has no plaintext member, so a reusable
+// secret is unrepresentable in storage. Both plan-sanctioned shapes are
+// registered; v1 pairing issues only hashed bearer tokens.
+type DeviceCredentialKind string
+
+const (
+	CredentialHash      DeviceCredentialKind = "credential_hash" //nolint:gosec // enum token naming a storage shape, not a credential
+	CredentialPublicKey DeviceCredentialKind = "device_public_key"
+)
+
+// AllDeviceCredentialKinds lists every valid DeviceCredentialKind.
+var AllDeviceCredentialKinds = []DeviceCredentialKind{CredentialHash, CredentialPublicKey}
+
+func (k DeviceCredentialKind) valid() bool {
+	switch k {
+	case CredentialHash, CredentialPublicKey:
+		return true
+	default:
+		return false
+	}
+}
+
 // InterruptionClass tags an AttentionItem for the interruption budget: a
 // planned gate versus an exceptional interruption whose rate is a tracked
 // health metric (plan §3.2).

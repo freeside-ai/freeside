@@ -22,6 +22,9 @@ type fixtures struct {
 	class        domain.Classification
 	policy       domain.ResolvedPolicy
 	command      domain.Command
+	device       domain.Device
+	credential   domain.DeviceCredential
+	pairingCode  domain.PairingCode
 }
 
 // fixtureRecipe is the verification-recipe digest the evidence-bearing fixtures
@@ -135,5 +138,19 @@ func newFixtures(t *testing.T) fixtures {
 		},
 		policy:  policy,
 		command: command,
+		// The device matches the device_id the delivery and command fixtures
+		// already carry; its credential holds only verifier material (§5.14
+		// no-reusable-plaintext). The pairing code is minted unconsumed;
+		// consumption is exercised through ConsumePairingCode.
+		device: domain.Device{
+			ID: "device-1", DisplayName: "Ben's iPhone",
+			Status: domain.DeviceActive, PairedAt: ts,
+		},
+		credential: domain.DeviceCredential{ //nolint:gosec // fixture digest of a fixture string, not a credential
+			DeviceID: "device-1", Kind: domain.CredentialHash, Credential: "sha256:4d1566a1d7df42a8517456d60ea06ed284e535cfe4c956aa6ee172dbcdf945f7",
+		},
+		pairingCode: domain.PairingCode{
+			CodeHash: "sha256:e5da4a1cdb3c241cc8b3f2a9d7ba70a679960729bd9d8700791d412b34feef97", CreatedAt: ts, ExpiresAt: ts.Add(10 * time.Minute),
+		},
 	}
 }

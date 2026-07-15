@@ -13,7 +13,7 @@ import (
 )
 
 // TestGoldenRoundTrip is acceptance fixture 7: every persisted domain shape
-// has a stable golden form and round-trips store -> domain equal. All nine
+// has a stable golden form and round-trips store -> domain equal. All the
 // puts share one Write, which doubles as the multi-put half of fixture 5:
 // one client-visible transaction, one revision bump.
 func TestGoldenRoundTrip(t *testing.T) {
@@ -54,6 +54,9 @@ func TestGoldenRoundTrip(t *testing.T) {
 		if err := tx.PutResolvedPolicy(ctx, f.policy); err != nil {
 			return err
 		}
+		if err := tx.PutDevice(ctx, f.device); err != nil {
+			return err
+		}
 		return tx.PutCommand(ctx, f.command)
 	})
 	if err != nil {
@@ -64,7 +67,7 @@ func TestGoldenRoundTrip(t *testing.T) {
 		t.Fatalf("ServerState: %v", err)
 	}
 	if after.Revision != before.Revision+1 {
-		t.Fatalf("ten puts in one Write bumped revision %d -> %d, want exactly once", before.Revision, after.Revision)
+		t.Fatalf("eleven puts in one Write bumped revision %d -> %d, want exactly once", before.Revision, after.Revision)
 	}
 
 	cases := []struct {
@@ -86,6 +89,7 @@ func TestGoldenRoundTrip(t *testing.T) {
 		}},
 		{"resolved_policy", f.policy, func(tx *store.ReadTx) (any, error) { return tx.GetResolvedPolicy(ctx, f.policy.RunID) }},
 		{"command", f.command, func(tx *store.ReadTx) (any, error) { return tx.GetCommand(ctx, f.command.CommandID) }},
+		{"device", f.device, func(tx *store.ReadTx) (any, error) { return tx.GetDevice(ctx, f.device.ID) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
