@@ -173,6 +173,30 @@ The daemon (Wave 0 unit 1) and the API spec (Wave 0 unit 5) are initialized; the
 
 Lint/format and CI are established with the first component that carries code: the daemon does so here via `daemon/.golangci.yml` and `.github/workflows/daemon-ci.yml` (Linux runs build/test/vet/lint, macOS runs build/test). Later components add their own on the same pattern.
 
+## Daemon coding conventions
+
+Binding for new and changed `daemon/` Go code, promoted at Wave 0 exit
+(#27) from the domain package's point-of-use conventions; the detail
+lives at point-of-use, not here. The promotion is a ratchet, not a
+retroactive claim: a pre-promotion deviation gets a tracker issue and
+drains as its own unit, never a fix in passing (Monorepo scope
+discipline).
+
+- **Enums**: a named string type with a `valid()` predicate and an
+  `AllX` slice as the single registration point; the zero value `""` is
+  invalid by design. (Detail: `daemon/internal/domain/doc.go`.)
+- **Switches over enums**: a validity `valid()` switch uses `default`
+  (it is a predicate); a switch that dispatches behaviour omits
+  `default` so the `exhaustive` linter (`default-signifies-exhaustive:
+  true` in `daemon/.golangci.yml`) forces a new member to be handled,
+  with a trailing fallback return for the invalid zero value.
+- **Golden tests**: `json.MarshalIndent` of a fixed, valid fixture
+  (UTC-fixed times, pointer-for-optional rendering explicit null, no
+  map fields in the contract shapes goldens pin; a package-private
+  persistence format is not one); fixtures double as
+  validation-positive cases. (Worked example: `daemon/README.md`;
+  shared helper: `daemon/internal/golden`.)
+
 ## Monorepo scope discipline
 
 A work unit declares which component directories it touches, in the branch-name context and the PR body, and does not modify directories outside that declared scope. This is the manual precursor of Freeside's control-plane path restrictions (`docs/plan.md` §5.6, §5.8) and will later be enforced mechanically by the importer.
