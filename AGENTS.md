@@ -45,6 +45,18 @@ work needs no note.
 
 <!-- /agents-md:managed:devlog -->
 
+Agent-setup profile: High-assurance. A decision note is mandatory for:
+
+- contract and safety-policy changes;
+- material plan, architecture, or ADR decisions;
+- destructive, credential-leak, or returned-object trust-boundary work;
+- adversarial audits whose findings change policy or implementation;
+- explicit owner choices that would otherwise exist only in chat.
+
+Routine implementation and coordination require no note. GitHub issues
+and git remain the only sources of active work state; a note records
+why, never status.
+
 <!-- agents-md:managed:finish-line -->
 
 ## Default agent finish line
@@ -579,7 +591,8 @@ Before calling work done:
   handoff, base SHA and verdict recorded in PR Verification (see
   Integration ordering and merge-result audit); when `scripts/` is in
   scope, `bash scripts/test-merge-result-audit.sh` also passes
-- Devlog entry appended for the session
+- Decision note written or updated when the work hits a Decision notes
+  trigger or the mandatory-note list; most work needs none
 
 <!-- /agents-md:project:done-checks -->
 
