@@ -172,3 +172,124 @@ func TestGetResolvedPolicyRejectsForgedDigest(t *testing.T) {
 		t.Fatalf("GetResolvedPolicy error = %v, want ErrPolicyDigestMismatch", err)
 	}
 }
+
+// TestSnapshotRejectsForgedMetadata: the snapshot metadata is store-stamped,
+// so values the Puts cannot produce (a zero or negative version or revision,
+// or a command row past its write-once entity_version 1) mark a forged or
+// corrupt row and must fail the read like any diverging column (#91
+// acceptance 3). Internal test: the Put boundary always stamps valid values,
+// so the bad rows are written as raw SQL.
+func TestSnapshotRejectsForgedMetadata(t *testing.T) {
+	ctx := context.Background()
+	db := openRaw(t)
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatalf("seedEpoch: %v", err)
+	}
+	s := &Store{db: db}
+
+	// A minimal valid item with no evidence, so reconstruction succeeds with no
+	// approved-recipe set and only the metadata is at fault.
+	runID := domain.RunID("run-1")
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-1", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
+		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Reason:            "forged-metadata fixture",
+		RequestedDecision: []domain.Action{domain.ActionOpenPR},
+		PRHeadSHA:         "cafebabe", ItemVersion: 1,
+		InterruptionClass: domain.InterruptionPlannedGate,
+		Status:            domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewAttentionItem: %v", err)
+	}
+	itemBody, err := encode(item)
+	if err != nil {
+		t.Fatalf("encode item: %v", err)
+	}
+	command, err := domain.NewCommand(domain.CommandInput{
+		CommandID: "cmd-1", DeviceID: "device-1", ItemID: item.ID,
+		ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA,
+		ArtifactDigests: item.ArtifactDigests, Action: domain.ActionOpenPR,
+	})
+	if err != nil {
+		t.Fatalf("NewCommand: %v", err)
+	}
+	commandBody, err := encode(command)
+	if err != nil {
+		t.Fatalf("encode command: %v", err)
+	}
+
+	seedItem := func(entityVersion, asOfRevision int64) {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, `DELETE FROM commands`); err != nil {
+			t.Fatalf("reset commands: %v", err)
+		}
+		if _, err := db.ExecContext(ctx, `DELETE FROM attention_items`); err != nil {
+			t.Fatalf("reset items: %v", err)
+		}
+		if _, err := db.ExecContext(ctx,
+			`INSERT INTO attention_items (id, project_id, conversation_id, entity_version, as_of_revision, body) VALUES ('item-1', 'proj-1', NULL, ?, ?, ?)`,
+			entityVersion, asOfRevision, itemBody); err != nil {
+			t.Fatalf("insert item: %v", err)
+		}
+	}
+	seedCommand := func(entityVersion, asOfRevision int64) {
+		t.Helper()
+		seedItem(1, 1)
+		if _, err := db.ExecContext(ctx,
+			`INSERT INTO commands (command_id, item_id, item_version, pr_head_sha, device_id, action, entity_version, as_of_revision, body) VALUES ('cmd-1', 'item-1', 1, 'cafebabe', 'device-1', 'open_pr', ?, ?, ?)`,
+			entityVersion, asOfRevision, commandBody); err != nil {
+			t.Fatalf("insert command: %v", err)
+		}
+	}
+	readItem := func() error {
+		return s.Read(ctx, func(tx *ReadTx) error {
+			_, _, err := tx.GetAttentionItemSnapshot(ctx, "item-1")
+			return err
+		})
+	}
+	readCommand := func() error {
+		return s.Read(ctx, func(tx *ReadTx) error {
+			_, _, err := tx.GetCommandSnapshot(ctx, "cmd-1")
+			return err
+		})
+	}
+
+	// Control rows prove the fixtures themselves reconstruct, so the forged
+	// cases below fail on the metadata alone.
+	seedItem(1, 1)
+	if err := readItem(); err != nil {
+		t.Fatalf("control item read: %v", err)
+	}
+	seedCommand(1, 1)
+	if err := readCommand(); err != nil {
+		t.Fatalf("control command read: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		seed func()
+		read func() error
+	}{
+		{"item entity_version zero", func() { seedItem(0, 1) }, readItem},
+		{"item entity_version negative", func() { seedItem(-1, 1) }, readItem},
+		{"item as_of_revision zero", func() { seedItem(1, 0) }, readItem},
+		{"item as_of_revision negative", func() { seedItem(1, -1) }, readItem},
+		{"command entity_version zero", func() { seedCommand(0, 1) }, readCommand},
+		{"command entity_version past write-once", func() { seedCommand(2, 1) }, readCommand},
+		{"command as_of_revision zero", func() { seedCommand(1, 0) }, readCommand},
+		{"command as_of_revision negative", func() { seedCommand(1, -1) }, readCommand},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.seed()
+			if err := tc.read(); !errors.Is(err, errRowInconsistent) {
+				t.Fatalf("error = %v, want errRowInconsistent", err)
+			}
+		})
+	}
+}

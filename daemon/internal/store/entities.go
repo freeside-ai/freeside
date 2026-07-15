@@ -446,20 +446,40 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 }
 
 func (tx *ReadTx) GetAttentionItem(ctx context.Context, id domain.ItemID) (domain.AttentionItem, error) {
+	item, _, err := tx.GetAttentionItemSnapshot(ctx, id)
+	return item, err
+}
+
+// Snapshot is the persisted §5.14 sync metadata read alongside a row: the
+// per-row EntityVersion a ClientCommand's expected_entity_version is checked
+// against, and the AsOfRevision of the transaction that last wrote the row.
+// Both are stamped by the store's own Puts, never by callers, and are
+// range-checked at reconstruction like every other extracted column.
+type Snapshot struct {
+	EntityVersion int64
+	AsOfRevision  int64
+}
+
+// GetAttentionItemSnapshot returns the item together with its persisted sync
+// metadata, for the command-acceptance boundary (#91): the binding fields
+// inside the body cannot distinguish a stale expected_entity_version when the
+// domain content matches, so acceptance needs the store's own version counter.
+func (tx *ReadTx) GetAttentionItemSnapshot(ctx context.Context, id domain.ItemID) (domain.AttentionItem, Snapshot, error) {
 	var (
 		projectID      string
 		conversationID sql.NullString
+		snap           Snapshot
 		body           []byte
 	)
 	err := tx.tx.QueryRowContext(ctx,
-		`SELECT project_id, conversation_id, body FROM attention_items WHERE id = ?`, id).
-		Scan(&projectID, &conversationID, &body)
+		`SELECT project_id, conversation_id, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id).
+		Scan(&projectID, &conversationID, &snap.EntityVersion, &snap.AsOfRevision, &body)
 	if err != nil {
-		return domain.AttentionItem{}, fmt.Errorf("get attention item %q: %w", id, notFoundOr(err))
+		return domain.AttentionItem{}, Snapshot{}, fmt.Errorf("get attention item %q: %w", id, notFoundOr(err))
 	}
 	item, err := decode[domain.AttentionItem](body)
 	if err != nil {
-		return domain.AttentionItem{}, fmt.Errorf("get attention item %q: %w", id, err)
+		return domain.AttentionItem{}, Snapshot{}, fmt.Errorf("get attention item %q: %w", id, err)
 	}
 	consistent := item.ID == id && item.ProjectID == domain.ProjectID(projectID)
 	if conversationID.Valid {
@@ -468,16 +488,20 @@ func (tx *ReadTx) GetAttentionItem(ctx context.Context, id domain.ItemID) (domai
 	} else {
 		consistent = consistent && item.ConversationID == nil
 	}
+	// The metadata is store-stamped, so anything outside the values the Puts
+	// can produce (versions start at 1, revisions are client-visible and
+	// positive) is a forged or corrupt row, refused like a diverging column.
+	consistent = consistent && snap.EntityVersion >= 1 && snap.AsOfRevision >= 1
 	if !consistent {
-		return domain.AttentionItem{}, fmt.Errorf("get attention item %q: %w", id, errRowInconsistent)
+		return domain.AttentionItem{}, Snapshot{}, fmt.Errorf("get attention item %q: %w", id, errRowInconsistent)
 	}
 	// Reconstruction re-runs the evidence gate: decode's Validate cannot check
 	// recipe approval, so an item carrying evidence under a now-unapproved (or
 	// forged) recipe fails closed rather than reconstructing as valid.
 	if err := tx.gateEvidence(item); err != nil {
-		return domain.AttentionItem{}, fmt.Errorf("get attention item %q: %w", id, err)
+		return domain.AttentionItem{}, Snapshot{}, fmt.Errorf("get attention item %q: %w", id, err)
 	}
-	return item, nil
+	return item, snap, nil
 }
 
 // gateEvidence re-runs the approved-recipe evidence gate over an item's
@@ -762,37 +786,53 @@ func (tx *WriteTx) PutCommand(ctx context.Context, command domain.Command) error
 }
 
 func (tx *ReadTx) GetCommand(ctx context.Context, commandID string) (domain.Command, error) {
+	command, _, err := tx.GetCommandSnapshot(ctx, commandID)
+	return command, err
+}
+
+// GetCommandSnapshot returns the command together with its persisted sync
+// metadata. The row is write-once, so its AsOfRevision is the command's
+// original committed result: the revision an idempotent retry must return
+// unchanged (§5.14 test 4). Inside the accepting Write itself the row already
+// carries the revision that transaction will commit as, so the fresh-accept
+// and retry paths read the result the same way.
+func (tx *ReadTx) GetCommandSnapshot(ctx context.Context, commandID string) (domain.Command, Snapshot, error) {
 	var (
 		itemID      string
 		itemVersion int
 		prHeadSHA   string
 		deviceID    string
 		action      string
+		snap        Snapshot
 		body        []byte
 	)
 	err := tx.tx.QueryRowContext(ctx,
-		`SELECT item_id, item_version, pr_head_sha, device_id, action, body FROM commands WHERE command_id = ?`, commandID).
-		Scan(&itemID, &itemVersion, &prHeadSHA, &deviceID, &action, &body)
+		`SELECT item_id, item_version, pr_head_sha, device_id, action, entity_version, as_of_revision, body FROM commands WHERE command_id = ?`, commandID).
+		Scan(&itemID, &itemVersion, &prHeadSHA, &deviceID, &action, &snap.EntityVersion, &snap.AsOfRevision, &body)
 	if err != nil {
-		return domain.Command{}, fmt.Errorf("get command %q: %w", commandID, notFoundOr(err))
+		return domain.Command{}, Snapshot{}, fmt.Errorf("get command %q: %w", commandID, notFoundOr(err))
 	}
 	command, err := decode[domain.Command](body)
 	if err != nil {
-		return domain.Command{}, fmt.Errorf("get command %q: %w", commandID, err)
+		return domain.Command{}, Snapshot{}, fmt.Errorf("get command %q: %w", commandID, err)
 	}
 	// Every binding the store extracts into a column is cross-checked against the
 	// body: a forged row whose JSON disagrees with its authoritative columns (the
 	// bound version, head, action, device, or item) fails loudly instead of
-	// returning a decision record the columns do not back.
+	// returning a decision record the columns do not back. The metadata is held
+	// to what PutCommand can produce: the row is written once at entity_version 1
+	// and never updated, and its revision is client-visible, so anything else is
+	// a forged or corrupt result.
 	if command.CommandID != commandID ||
 		command.ItemID != domain.ItemID(itemID) ||
 		command.ItemVersion != itemVersion ||
 		command.PRHeadSHA != prHeadSHA ||
 		command.DeviceID != domain.DeviceID(deviceID) ||
-		command.Action != domain.Action(action) {
-		return domain.Command{}, fmt.Errorf("get command %q: %w", commandID, errRowInconsistent)
+		command.Action != domain.Action(action) ||
+		snap.EntityVersion != 1 || snap.AsOfRevision < 1 {
+		return domain.Command{}, Snapshot{}, fmt.Errorf("get command %q: %w", commandID, errRowInconsistent)
 	}
-	return command, nil
+	return command, snap, nil
 }
 
 const putDeviceSQL = `
