@@ -149,8 +149,10 @@ func decode[T validator](body []byte) (T, error) {
 // json.Marshal is deterministic, so a retried Put of the same value converges
 // on the original row (no entity_version churn, nothing new for sync to
 // observe), while a same-key write with different content fails with
-// ErrImmutableConflict.
-func (tx *WriteTx) putImmutable(ctx context.Context, insertSQL string, insertArgs []any, selectBodySQL string, keyArgs []any, body string) error {
+// ErrImmutableConflict. On InternalTx so the non-synchronized write-once
+// records (pairing codes) share it; the synchronized callers all hold a
+// WriteTx, whose statements stamp its as_of_revision.
+func (tx *InternalTx) putImmutable(ctx context.Context, insertSQL string, insertArgs []any, selectBodySQL string, keyArgs []any, body string) error {
 	res, err := tx.tx.ExecContext(ctx, insertSQL, insertArgs...)
 	if err != nil {
 		return err
@@ -187,8 +189,9 @@ func (tx *WriteTx) putImmutable(ctx context.Context, insertSQL string, insertArg
 // columns alongside the body and cross-checks them.
 
 // existingBody fetches the current body for an aggregate's key, or nil when
-// the row does not exist. The query must be a constant from this file.
-func (tx *WriteTx) existingBody(ctx context.Context, selectSQL string, keyArgs ...any) ([]byte, error) {
+// the row does not exist. The query must be a constant from this file or
+// pairing.go. On InternalTx for the same reason as putImmutable.
+func (tx *InternalTx) existingBody(ctx context.Context, selectSQL string, keyArgs ...any) ([]byte, error) {
 	var body []byte
 	err := tx.tx.QueryRowContext(ctx, selectSQL, keyArgs...).Scan(&body)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -790,6 +793,65 @@ func (tx *ReadTx) GetCommand(ctx context.Context, commandID string) (domain.Comm
 		return domain.Command{}, fmt.Errorf("get command %q: %w", commandID, errRowInconsistent)
 	}
 	return command, nil
+}
+
+const putDeviceSQL = `
+INSERT INTO devices (id, status, entity_version, as_of_revision, body)
+VALUES (?, ?, 1, ?, ?)
+ON CONFLICT (id) DO UPDATE SET
+    status         = excluded.status,
+    entity_version = devices.entity_version + 1,
+    as_of_revision = excluded.as_of_revision,
+    body           = excluded.body`
+
+func (tx *WriteTx) PutDevice(ctx context.Context, device domain.Device) error {
+	body, err := encode(device)
+	if err != nil {
+		return fmt.Errorf("put device %q: %w", device.ID, err)
+	}
+	existing, err := tx.existingBody(ctx, `SELECT body FROM devices WHERE id = ?`, device.ID)
+	if err != nil {
+		return fmt.Errorf("put device %q: %w", device.ID, err)
+	}
+	if existing != nil {
+		// A byte-identical replay (a retried revocation) converges without a
+		// write, so it causes no entity_version churn.
+		if string(existing) == body {
+			return nil
+		}
+		old, err := decode[domain.Device](existing)
+		if err != nil {
+			return fmt.Errorf("put device %q: %w", device.ID, err)
+		}
+		if err := domain.ValidateDeviceTransition(old, device); err != nil {
+			return fmt.Errorf("put device %q: %w", device.ID, mapTransition(err))
+		}
+	}
+	if _, err := tx.tx.ExecContext(ctx, putDeviceSQL,
+		device.ID, string(device.Status), tx.asOfRevision, body); err != nil {
+		return fmt.Errorf("put device %q: %w", device.ID, err)
+	}
+	return nil
+}
+
+func (tx *ReadTx) GetDevice(ctx context.Context, id domain.DeviceID) (domain.Device, error) {
+	var (
+		status string
+		body   []byte
+	)
+	err := tx.tx.QueryRowContext(ctx,
+		`SELECT status, body FROM devices WHERE id = ?`, id).Scan(&status, &body)
+	if err != nil {
+		return domain.Device{}, fmt.Errorf("get device %q: %w", id, notFoundOr(err))
+	}
+	device, err := decode[domain.Device](body)
+	if err != nil {
+		return domain.Device{}, fmt.Errorf("get device %q: %w", id, err)
+	}
+	if device.ID != id || device.Status != domain.DeviceStatus(status) {
+		return domain.Device{}, fmt.Errorf("get device %q: %w", id, errRowInconsistent)
+	}
+	return device, nil
 }
 
 // notFoundOr maps sql.ErrNoRows to ErrNotFound and passes every other error

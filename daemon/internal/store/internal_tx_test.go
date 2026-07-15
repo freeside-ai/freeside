@@ -37,9 +37,13 @@ func TestInternalTxCannotWriteSynchronizedState(t *testing.T) {
 		}
 	}
 
-	// The inbox/outbox queue methods are the intentional internal-write use
-	// case and must stay reachable from both handles.
-	for _, name := range []string{"EnqueueOutbox", "RecordInbox"} {
+	// The inbox/outbox queue and pairing-bookkeeping methods are the
+	// intentional internal-write use cases and must stay reachable from both
+	// handles (the pairing Write reaches them through WriteTx's embedding).
+	for _, name := range []string{
+		"EnqueueOutbox", "RecordInbox",
+		"MintPairingCode", "ConsumePairingCode", "RecordDeviceCredential",
+	} {
 		if _, ok := internalTx.MethodByName(name); !ok {
 			t.Errorf("*store.InternalTx lost %s; the inbox/outbox internal-write use case is broken", name)
 		}
