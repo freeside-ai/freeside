@@ -89,6 +89,22 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	device := domain.Device{
+		ID: "device-1", DisplayName: "Ben's iPhone",
+		Status: domain.DeviceActive, PairedAt: ts,
+	}
+	// The credential fixture carries only verifier material (the digest of an
+	// issued token), per the §5.14 no-reusable-plaintext contract.
+	credential := domain.DeviceCredential{ //nolint:gosec // fixture digest of a fixture string, not a credential
+		DeviceID: "device-1", Kind: domain.CredentialHash, Credential: "sha256:4d1566a1d7df42a8517456d60ea06ed284e535cfe4c956aa6ee172dbcdf945f7",
+	}
+	consumedAt := ts.Add(time.Minute)
+	consumingDevice := domain.DeviceID("device-1")
+	pairingCode := domain.PairingCode{
+		CodeHash: "sha256:e5da4a1cdb3c241cc8b3f2a9d7ba70a679960729bd9d8700791d412b34feef97", CreatedAt: ts, ExpiresAt: ts.Add(10 * time.Minute),
+		ConsumedAt: &consumedAt, DeviceID: &consumingDevice,
+	}
+
 	msg := domain.Message{
 		ID: "msg-1", ConversationID: "conv-1", Sequence: 1,
 		Author: domain.AuthorUser, Body: "please proceed", CreatedAt: ts,
@@ -144,6 +160,9 @@ func TestGolden(t *testing.T) {
 		{"provenance", provenance},
 		{"head_independent_artifact", indepArtifact},
 		{"head_independent_provenance", indepProvenance},
+		{"device", device},
+		{"device_credential", credential},
+		{"pairing_code", pairingCode},
 		{"finding", finding},
 		{"classification", classification},
 		{"conversation", conversation},

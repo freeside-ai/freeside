@@ -28,6 +28,14 @@ func TestEnumValidity(t *testing.T) {
 		valids["DeliveryStatus"] = append(valids["DeliveryStatus"], v.valid)
 	}
 	invalids["DeliveryStatus"] = DeliveryStatus("").valid
+	for _, v := range AllDeviceStatuses {
+		valids["DeviceStatus"] = append(valids["DeviceStatus"], v.valid)
+	}
+	invalids["DeviceStatus"] = DeviceStatus("").valid
+	for _, v := range AllDeviceCredentialKinds {
+		valids["DeviceCredentialKind"] = append(valids["DeviceCredentialKind"], v.valid)
+	}
+	invalids["DeviceCredentialKind"] = DeviceCredentialKind("").valid
 	for _, v := range AllInterruptionClasses {
 		valids["InterruptionClass"] = append(valids["InterruptionClass"], v.valid)
 	}

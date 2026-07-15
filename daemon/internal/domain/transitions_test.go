@@ -273,3 +273,100 @@ func TestValidateAttentionDeliveryLifecycle(t *testing.T) {
 		}
 	})
 }
+
+// TestValidateDeviceTransition covers the device lifecycle: renaming and
+// revoking an active device are legal successors; identity, paired_at, a
+// terminal revoked status, and a recorded revoked_at are fixed.
+func TestValidateDeviceTransition(t *testing.T) {
+	paired := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	active := domain.Device{
+		ID: "device-1", DisplayName: "Ben's iPhone",
+		Status: domain.DeviceActive, PairedAt: paired,
+	}
+	revoked := active
+	revoked.Status = domain.DeviceRevoked
+	revoked.RevokedAt = ptr(paired.Add(time.Hour))
+
+	renamed := active
+	renamed.DisplayName = "Ben's old iPhone"
+	if err := domain.ValidateDeviceTransition(active, renamed); err != nil {
+		t.Fatalf("renaming rejected: %v", err)
+	}
+	if err := domain.ValidateDeviceTransition(active, revoked); err != nil {
+		t.Fatalf("revoking an active device rejected: %v", err)
+	}
+	if err := domain.ValidateDeviceTransition(revoked, revoked); err != nil {
+		t.Fatalf("identical revoked device rejected: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		old  domain.Device
+		new  domain.Device
+	}{
+		{"identity changes", active, func() domain.Device { d := active; d.ID = "device-other"; return d }()},
+		{"paired_at changes", active, func() domain.Device { d := active; d.PairedAt = paired.Add(time.Minute); return d }()},
+		{"revoked reactivates", revoked, active},
+		{"recorded revoked_at changes", revoked, func() domain.Device {
+			d := revoked
+			d.RevokedAt = ptr(paired.Add(2 * time.Hour))
+			return d
+		}()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := domain.ValidateDeviceTransition(tt.old, tt.new); !errors.Is(err, domain.ErrImmutableTransition) {
+				t.Fatalf("ValidateDeviceTransition() = %v, want ErrImmutableTransition", err)
+			}
+		})
+	}
+}
+
+// TestValidatePairingCodeTransition covers one-way consumption: recording a
+// consumption is a legal successor; the identity, validity window, and a
+// recorded consumption are fixed, so a consumed code can never be re-pointed
+// at a second device (§5.14 tests 13-14).
+func TestValidatePairingCodeTransition(t *testing.T) {
+	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	fresh := domain.PairingCode{
+		CodeHash: "sha256:code", CreatedAt: created, ExpiresAt: created.Add(10 * time.Minute),
+	}
+	consumed := fresh
+	consumed.ConsumedAt = ptr(created.Add(time.Minute))
+	consumed.DeviceID = ptr(domain.DeviceID("device-1"))
+
+	if err := domain.ValidatePairingCodeTransition(fresh, consumed); err != nil {
+		t.Fatalf("consuming a fresh code rejected: %v", err)
+	}
+	if err := domain.ValidatePairingCodeTransition(consumed, consumed); err != nil {
+		t.Fatalf("identical consumed code rejected: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		old  domain.PairingCode
+		new  domain.PairingCode
+	}{
+		{"identity changes", fresh, func() domain.PairingCode { p := fresh; p.CodeHash = "sha256:other"; return p }()},
+		{"created_at changes", fresh, func() domain.PairingCode { p := fresh; p.CreatedAt = created.Add(time.Second); return p }()},
+		{"expires_at changes", fresh, func() domain.PairingCode { p := fresh; p.ExpiresAt = created.Add(time.Hour); return p }()},
+		{"consumption cleared", consumed, fresh},
+		{"consumed_at rewritten", consumed, func() domain.PairingCode {
+			p := consumed
+			p.ConsumedAt = ptr(created.Add(2 * time.Minute))
+			return p
+		}()},
+		{"re-pointed at a second device", consumed, func() domain.PairingCode {
+			p := consumed
+			p.DeviceID = ptr(domain.DeviceID("device-2"))
+			return p
+		}()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := domain.ValidatePairingCodeTransition(tt.old, tt.new); !errors.Is(err, domain.ErrImmutableTransition) {
+				t.Fatalf("ValidatePairingCodeTransition() = %v, want ErrImmutableTransition", err)
+			}
+		})
+	}
+}
