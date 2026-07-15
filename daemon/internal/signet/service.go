@@ -1,0 +1,183 @@
+package signet
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
+)
+
+// Service is the attention service's command-acceptance boundary (§4
+// lifecycle, §5.14): it accepts ClientCommands over the store, enforcing the
+// checks the store cannot see from a domain.Command alone (the
+// expected_entity_version match) and applying the accepted decision's item
+// transition in the same transaction.
+type Service struct {
+	store *store.Store
+}
+
+func NewService(st *store.Store) *Service {
+	return &Service{store: st}
+}
+
+// errReplay abandons the Write transaction of an idempotent retry after the
+// original result has been captured: nothing was written, so rolling back
+// keeps a replay from bumping the server revision (§5.14 test 4: the
+// original committed result, no second effect).
+var errReplay = errors.New("idempotent replay: original result captured")
+
+// Submit accepts one ClientCommand and returns its committed result. The
+// checks run in the store's documented acceptance order: idempotency by
+// CommandID first (a retry converges on the original result regardless of the
+// item's current state), then openness (issue #55; a concluded lifecycle is
+// the more fundamental rejection than staleness), then version and binding
+// authority, then the action-offered gate delegated to store.PutCommand.
+// An accepted decision's item transition commits atomically with the command:
+// one Write, one revision, no window where the command exists without its
+// resolution.
+func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, error) {
+	command, err := domain.NewCommand(domain.CommandInput{
+		CommandID: in.CommandID, DeviceID: in.DeviceID, ItemID: in.Payload.ItemID,
+		ItemVersion: in.Payload.ItemVersion, PRHeadSHA: in.Payload.PRHeadSHA,
+		ArtifactDigests: in.Payload.ArtifactDigests, Action: in.Payload.Action,
+	})
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, err)
+	}
+	if in.ExpectedEntityVersion < 1 {
+		return CommandResult{}, fmt.Errorf("submit command %q: expected_entity_version %d: %w",
+			in.CommandID, in.ExpectedEntityVersion, domain.ErrNonPositive)
+	}
+
+	var result CommandResult
+	err = s.store.Write(ctx, func(tx *store.WriteTx) error {
+		_, _, getErr := tx.GetCommandSnapshot(ctx, command.CommandID)
+		if getErr != nil && !errors.Is(getErr, store.ErrNotFound) {
+			return getErr
+		}
+		replay := getErr == nil
+		if !replay {
+			// The pending-action gate runs only for a genuinely new command_id,
+			// after the replay determination: an id already on record keeps the
+			// command-id-first contract regardless of the resubmitted action's
+			// class (a pending action was never recorded, so such a replay is a
+			// changed body and PutCommand's ErrImmutableConflict below is the
+			// right judgment, never ErrUnsupportedAction).
+			if _, kind := actionOutcome(command.Action); kind == outcomePending {
+				return fmt.Errorf("submit command %q: action %q: %w",
+					command.CommandID, command.Action, ErrUnsupportedAction)
+			}
+			item, snap, err := tx.GetAttentionItemSnapshot(ctx, command.ItemID)
+			if err != nil {
+				return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+			}
+			if item.Status != domain.StatusOpen {
+				return fmt.Errorf("submit command %q: %w", command.CommandID,
+					&ClosedItemError{CommandID: command.CommandID, Item: item, Snapshot: snap})
+			}
+			if snap.EntityVersion != in.ExpectedEntityVersion {
+				return fmt.Errorf("submit command %q: %w", command.CommandID,
+					&StaleVersionError{CommandID: command.CommandID, Replacement: item, Snapshot: snap})
+			}
+			// PutCommand re-gates openness and checks the payload's binding
+			// authority and the action-offered set; per-type allowed action
+			// policy stays #23's, not this unit's.
+			if err := tx.PutCommand(ctx, command); err != nil {
+				return translateRejection(err, snap)
+			}
+			if status, kind := actionOutcome(command.Action); kind == outcomeConcludes {
+				next := item
+				next.ItemVersion++
+				next.Status = status
+				if err := tx.PutAttentionItem(ctx, next); err != nil {
+					return err
+				}
+			}
+		} else {
+			// A byte-identical replay is a no-op inside PutCommand; a changed
+			// body under the same id surfaces its ErrImmutableConflict here,
+			// before any item check, so the item-carrying rejections cannot
+			// occur on this path and no translation is needed.
+			if err := tx.PutCommand(ctx, command); err != nil {
+				return err
+			}
+		}
+		record, snap, err := tx.GetCommandSnapshot(ctx, command.CommandID)
+		if err != nil {
+			return err
+		}
+		result = CommandResult{Record: record, Revision: snap.AsOfRevision}
+		if replay {
+			return errReplay
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errReplay) {
+		return CommandResult{}, err
+	}
+	return result, nil
+}
+
+// outcomeKind classifies what accepting an action does beyond recording the
+// command itself.
+type outcomeKind int
+
+const (
+	// outcomeConcludes: the decision itself concludes the item; Submit applies
+	// the status transition in the accepting transaction.
+	outcomeConcludes outcomeKind = iota
+	// outcomeRecords: the command record is the whole server-side effect; the
+	// item is left untouched.
+	outcomeRecords
+	// outcomePending: the action's accepted effect is a transaction a later
+	// unit owns; Submit rejects it with ErrUnsupportedAction rather than
+	// record a command whose effect would be silently dropped.
+	outcomePending
+)
+
+// actionOutcome maps an action to what its acceptance does, following plan
+// §4. Concluding actions are the parameterless decisions whose whole accepted
+// effect is the status flip plus the durable record (downstream reactions are
+// the Wave 2 engine's, the issue's own deferral). Record-only actions have no
+// item effect by design: open_pr is navigation, not resolution; acknowledge
+// means seen, never resolved; mark_seen decides nothing; inspect_trust_failure
+// is navigation; run_doctor leaves a system_health item blocking until the
+// diagnostic clears. Pending actions are rejected before any transaction
+// because their accepted effect cannot be represented yet: discuss needs
+// #68's conversation transaction (and must not be double-acceptable at one
+// item version meanwhile, §5.14 test 7); snooze needs the timing update;
+// start_with_changes needs the revised proposal artifact and supersede
+// transaction (plan §4); continue_under_policy, convert_to_policy,
+// adjudicate, retry_with_capabilities, and choose_alternate_profile carry
+// decision parameters DecisionPayload has no field for (a #22 contract
+// widening when their consumers land); and request_changes, answer_and_retry,
+// answer_without_retry, and return_to_agent carry content that rides the
+// conversation channel #68 owns. Recording any of them today would silently
+// drop the user's data. A behaviour switch, no default, so a new Action
+// member must declare its outcome here.
+func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
+	switch action {
+	case domain.ActionDismiss, domain.ActionDecline:
+		return domain.StatusDismissed, outcomeConcludes
+	case domain.ActionApprove, domain.ActionStop, domain.ActionFinishNow,
+		domain.ActionApplyThenFinish, domain.ActionRetry,
+		domain.ActionRerunTrustEvaluation, domain.ActionStart,
+		domain.ActionStopUnattended:
+		return domain.StatusResolved, outcomeConcludes
+	case domain.ActionOpenPR, domain.ActionMarkSeen, domain.ActionAcknowledge,
+		domain.ActionInspectTrustFailure, domain.ActionRunDoctor:
+		return "", outcomeRecords
+	case domain.ActionDiscuss, domain.ActionSnooze, domain.ActionStartWithChanges,
+		domain.ActionContinueUnderPolicy, domain.ActionConvertToPolicy,
+		domain.ActionAdjudicate, domain.ActionRetryWithCapability,
+		domain.ActionChooseAlternate, domain.ActionRequestChanges,
+		domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry,
+		domain.ActionReturnToAgent:
+		return "", outcomePending
+	}
+	// Invalid zero value: unreachable past NewCommand's validation and
+	// PutCommand's offered-action gate.
+	return "", outcomeRecords
+}
