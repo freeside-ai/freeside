@@ -1,6 +1,6 @@
 # AGENTS.md
 
-**Freeside** is an agent control plane: a local, durable workflow controller that turns a software work item into an evidence-backed pull request and interrupts a human only when judgment is required. The spec, architecture, and roadmap live in [`docs/plan.md`](docs/plan.md); read it first, and argue changes against it. This file holds the development conventions that apply to every session: workflow bookends, branch/PR/commit discipline, and the monorepo's scope rules.
+**Freeside** is an agent control plane: a local, durable workflow controller that turns a software work item into an evidence-backed pull request and interrupts a human only when judgment is required. The spec, architecture, and roadmap live in [`docs/plan.md`](docs/plan.md); read it first, and argue changes against it. This file holds the development conventions that apply to every session: decision notes, branch/PR/commit discipline, and the monorepo's scope rules.
 
 Freeside is a monorepo. Each component directory (`daemon/`, `app/`, `api/`, `prompts/`, `policy/`, `images/`) stays empty until the phase that fills it, holding only a `README.md` stating its purpose until then; the per-component phase lives in that README and the roadmap (`docs/plan.md` §11). Do not scaffold a component ahead of its phase. "Empty" is not uniform: the API is provisional (plan §11 Wave 0; the decision record lives in docs/history/decisions.md), so drafting its skeleton in `api/` as a pre-1A design artifact is in scope, not a scope violation; `app/` starts with Phase 1A's minimal clients; the rest come in Phase 1A or later per their READMEs.
 
@@ -186,7 +186,7 @@ A work unit declares which component directories it touches, in the branch-name 
 Changes to `docs/plan.md`, ADRs (`docs/decisions/`), and (later) the control-plane directories (`policy/`, `prompts/`) are reviewed like code, gated by **materiality** (`docs/plan.md` §9). Material changes — scope, acceptance criteria, milestones, sequencing affecting active work, architecture, risk posture, commitments — are **never batched silently into a feature PR**; wording and clarification changes are recorded in the PR that carries them, not separately gated.
 
 - A material plan change is its own PR, unless the plan change *is* the direct subject of the feature PR (then it is called out explicitly in the PR body).
-- ADRs are promoted from devlog entries (`docs/decisions/README.md`); the promotion is its own reviewed change.
+- ADRs are promoted from decision notes (`docs/decisions/README.md`); the promotion is its own reviewed change.
 - The materiality rules themselves are control-plane policy (plan §9); changing them is a material change.
 
 ## Automated reviewer
@@ -612,7 +612,7 @@ Every work unit carries the lightweight work contract the finish line
 defines (objective, testable acceptance criteria, scope, dependencies and
 blockers, explicit non-goals); this section governs where that contract
 persists. A direct, session-contained user assignment may carry the
-contract in the prompt, session devlog, and PR together. Scheduled work,
+contract in the prompt and PR together. Scheduled work,
 backlog work, work that spans sessions, and work involving more than one
 agent require a work-unit issue; when a direct task crosses one of those
 boundaries mid-flight, promote it to an issue before continuing.
@@ -621,8 +621,9 @@ project's explicit self-selection opt-in, unchanged by the persistence
 rule.
 
 One issue per issue-backed work unit, created from the work-unit
-template: Source devlog entry (the filename for a deferral escalation,
-`none` otherwise), Objective, Non-goals (`none` allowed), Affected
+template: Source devlog entry (optional; cite the originating decision
+note's filename only when the issue genuinely originated in one),
+Objective, Non-goals (`none` allowed), Affected
 interfaces/contracts (the interface surfaces the unit touches, not the
 whole work contract; the issue as a whole is the contract), Acceptance
 (the fixture/test list is the spec), Scope / declared paths, Dependencies
@@ -724,8 +725,9 @@ adversarial comment editing is outside this protocol's threat model.
 
 `needs-human` deferrals use the fiat door defined under Deferral escalation,
 never self-selection: after the maintainer acts, fiat assigns the issue to a
-session; the session verifies the external state, and its required devlog
-entry supplies the audit diff for the ordinary close-keyword PR.
+session; the session verifies the external state and records the audit
+diff in the ordinary close-keyword PR, adding a decision note only when
+the outcome hits a Decision notes trigger or the mandatory-note list.
 
 ### Contract changes
 
@@ -747,7 +749,8 @@ it stays dormant. Fiat never bypasses contract ordering.
 
 1. Read docs/plan.md front-matter (revision, phase) and the sections your
    unit's Affected interfaces/contracts field cites.
-2. Read the latest devlog entries (Devlog section).
+2. When resuming an existing unit, read its issue or PR and any decision
+   note it links (Decision notes section).
 3. Status queries:
    - open PRs and their declared paths: overlap with yours means stop and
      coordinate via issue comment before claiming;
@@ -767,19 +770,24 @@ it stays dormant. Fiat never bypasses contract ordering.
 
 ### Session end
 
-Devlog bookends per the Devlog section. Additionally: deferrals discovered
-mid-unit follow Deferral escalation below; tick your unit on the wave tracking
-issue when your PR merges (or note partial state on the issue).
+Write or update the unit's decision note only when a Decision notes
+trigger or the mandatory-note list applies. Additionally: deferrals
+discovered mid-unit follow Deferral escalation below; tick your unit on
+the wave tracking issue when your PR merges (or note partial state on
+the issue).
 
 ### Deferral escalation
 
-Devlog queue items that escalate to issues (per the Devlog section: at
-entry-writing time for items not draining within a session or two, or via
-post-merge cleanup for items outliving their PR cycle) follow these rules:
+Actionable work deferred out of a unit's scope gets a tracker issue
+before handoff (per the finish line); the escalation follows these
+rules:
 
-- **Provenance both ways**: the issue form's required `Source devlog entry`
-  field cites the source entry filename on its single line; the entry's item
-  gets its `-> Refs #N` marker. Ordinary work units write `none` in the field.
+- **Provenance when a note exists**: the issue form's optional
+  `Source devlog entry` field cites the originating decision note's
+  filename; the note may carry a plain `Follow-up: #N` historical link.
+  Most escalations originate in the work itself and leave the field
+  blank. Historical entries are frozen: never write markers or other
+  mutations back to them.
 - **Lane label routes by owner, not discoverer**: the lane whose Scope /
   declared paths contain the work. Shared-package needs use
   `kind:contract` plus the **`deferral`** origin label.
@@ -793,8 +801,8 @@ post-merge cleanup for items outliving their PR cycle) follow these rules:
   unscheduled queue; the spine schedules eligible items during wave planning's
   deferral sweep and skips `needs-human`, which remains unmilestoned and
   fiat-only. Do not add status labels; milestone presence is the status.
-- Closure is ordinary: a work-unit PR with a close keyword; the closed issue
-  is the item's drain record per the Devlog section.
+- Closure is ordinary: a work-unit PR with a close keyword; the issue
+  carries the item's whole status lifecycle.
 
 **Pickup: labels never authorize work.** An issue (deferral, adversarial
 finding, or anything else except `needs-human`) becomes agent-actionable

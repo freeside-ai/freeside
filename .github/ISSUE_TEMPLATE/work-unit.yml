@@ -6,11 +6,11 @@ body:
     attributes:
       label: Source devlog entry
       description: >
-        For a deferral escalation, cite its repo-relative source entry
-        filename. Write "none" for an ordinary work unit.
+        Only when this issue originated in a decision note, cite the
+        note's repo-relative filename; leave blank otherwise.
       placeholder: devlog/YYYY-MM-DD-HHMM-slug.md
     validations:
-      required: true
+      required: false
   - type: textarea
     id: objective
     attributes:

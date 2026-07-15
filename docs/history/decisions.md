@@ -157,7 +157,7 @@ New in revision 6 (decider in parentheses):
 
 ---
 
-## Revision 7 (current)
+## Revision 7
 
 
 Revision 7 folded in the sixth external review as adjudicated.
@@ -180,5 +180,16 @@ New in revision 7 (decider in parentheses):
 13. **The first repository is deliberately boring, not Freeside**; Freeside becomes the bootstrap test after the path works. (Review 6; reverses this conversation's earlier self-hosting instinct.)
 14. **The classifier is never sole gatekeeper of the shadow safety override**: raw critical/high claims get a second adjudication or an attention item regardless of classifier confidence. (This revision, sharpening review 6.)
 15. **Naming amendment: the runner subsystem is the ward** (formerly envelope, which broke register with signet/gauntlet/daemon and greps poorly against message/HTTP-envelope vocabulary); the generative naming rule is restated as the binding-and-summoning register with mundane surface readings, replacing the riding-tack line, which no longer described practice. The flight-envelope concept survives as explanatory prose only. (User.)
+
+---
+
+## Revision 8 (current)
+
+Revision 8 records the development record-keeping migration; the product spec is unchanged.
+
+Held from revision 7 (abbreviated): every held and new revision-7 item, unchanged, except the devlog cadence split with its shared promotion channel, which this revision replaces.
+
+New in revision 8 (decider in parentheses):
+1. **Selective decision notes replace the devlog cadence split and shared promotion channel**: a note is mandatory only for the change classes AGENTS.md's High-assurance list names; the issue tracker and git carry all active work state; historical entries are frozen evidence. (User.)
 
 

@@ -1,14 +1,14 @@
 ---
 title: Freeside Project Plan
-revision: 7
+revision: 8
 status: active
 phase: 1A
-updated: 2026-07-13
+updated: 2026-07-14
 ---
 
 # Freeside
 
-**Project charter and implementation spec.** The plan's identity of record is its default-branch commit digest (Section 5.8); `revision` is the human label, incremented on material change per Section 9's gating, with each increment recorded in Section 13's decisions log. Revision narrative lives in PR bodies and the devlog, not here.
+**Project charter and implementation spec.** The plan's identity of record is its default-branch commit digest (Section 5.8); `revision` is the human label, incremented on material change per Section 9's gating, with each increment recorded in Section 13's decisions log. Revision narrative lives in PR bodies and decision notes, not here.
 
 ---
 
@@ -290,7 +290,7 @@ Typed relational rows with stable join keys; transcripts as drill-down pointers.
 
 ## 9. Comprehension
 
-Evidence packets first; altitude lines once plans are structured artifacts. Plan changes gate by materiality; wording changes are recorded, not interrupted for; materiality rules are control-plane policy. Devlogs split by cadence; shared promotion channel. Briefings and querying are Phase 3, only if demanded.
+Evidence packets first; altitude lines once plans are structured artifacts. Plan changes gate by materiality; wording changes are recorded, not interrupted for; materiality rules are control-plane policy. Decision notes are selective, mandatory for the change classes AGENTS.md lists; the issue tracker carries all active work state. Briefings and querying are Phase 3, only if demanded.
 
 ## 10. Operations and onboarding
 
@@ -340,22 +340,8 @@ Pipeline DSL (after three shapes); more agents and skills; macOS runner class; A
 
 Material changes are recorded here per revision, with deciders in parentheses. This section holds only the current revision's items: when a new revision lands, the outgoing items move to docs/history/decisions.md, which holds the complete log of every revision, including revisions superseded before commit. The history file is appended in the same PR as any plan revision, so the two cannot drift. A decision promotes to a docs/decisions/ ADR on first re-litigation, citing its revision entry in the history.
 
-Revision 7:
-1. **Candidate-automation policy**: automation-control paths publish-blocking in the ordinary workflow; trust profiles attest effective PR-job authority (implicit token, OIDC, environments, reusable/composite actions, artifact-consuming privileged jobs); new safety-failure entries. (Review 6.)
-2. **Post-agent workspace handoff is a named capability set and the first ward implementation gate**, proven against the actual runtime; the same-VM fallback is a declared weaker class, never described as fresh-context. (Review 6.)
-3. **provider_web_read reclassified as a materially wider credential-exfiltration mode**; the 1B elaborator default is **daemon-fetched, digest-addressed research artifacts** via typed fetch requests, chosen from the review's options for security plus provenance and reproducibility. (Review 6; option selection this revision.)
-4. **Secret-scanning language corrected to best-effort supported-format scanning** with provenance and publication controls for opaque artifacts. (Review 6.)
-5. **Auth-store mutation leases separated from inference concurrency**; max_parallel_executions established experimentally in 1B and exposed to scheduling. (Review 6.)
-6. **Three budget clocks**: active-compute budgets, elapsed deadlines, and waiting thresholds raising consolidated blocked items; review ceilings count active time. (Review 6.)
-7. **Artifact provenance with trusted publish_eligible**; evidence_snapshot restricted to verifier/daemon artifacts under approved recipes; head-binding invalidation; agent opaque files never auto-uploaded. (Review 6.)
-8. **EvidencePublisher deferred to 1B**; schema, provenance enforcement, and client rendering remain 1A. (Review 6.)
-9. **Backup confidentiality policy**: encrypted checkpoints, keys outside agent environments, credential exclusion with recovery-may-reauth, per-class retention, doctor checks; required before unattended remote replication of private repos. (Review 6.)
-10. **Four pairing/revocation tests added; suite is sixteen.** (Review 6.)
-11. **system_health is condition-driven** (acknowledge means seen); **start-with-changes is versioned through a revised proposal artifact**; **notification statuses are submitted/channel-accepted/opened**, never claimed delivery; **client caches protected, with revocation-versus-deletion stated honestly**; **setup elevation is a narrow helper and the daemon never retains root**. (Review 6.)
-12. **1A formalized into internal exits 1A.0/1A.1/1A.2**, with the handoff gate investigated early but blocking only 1A.2. (Review 6.)
-13. **The first repository is deliberately boring, not Freeside**; Freeside becomes the bootstrap test after the path works. (Review 6; reverses this conversation's earlier self-hosting instinct.)
-14. **The classifier is never sole gatekeeper of the shadow safety override**: raw critical/high claims get a second adjudication or an attention item regardless of classifier confidence. (This revision, sharpening review 6.)
-15. **Naming amendment: the runner subsystem is the ward** (formerly envelope, which broke register with signet/gauntlet/daemon and greps poorly against message/HTTP-envelope vocabulary); the generative naming rule is restated as the binding-and-summoning register with mundane surface readings, replacing the riding-tack line, which no longer described practice. The flight-envelope concept survives as explanatory prose only. (User.)
+Revision 8:
+1. **Selective decision notes replace the devlog cadence split and shared promotion channel**: a note is mandatory only for the change classes AGENTS.md's High-assurance list names; the issue tracker and git carry all active work state; historical entries are frozen evidence. (User.)
 
 ## 14. Risks
 
