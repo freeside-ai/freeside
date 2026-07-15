@@ -167,6 +167,47 @@ func TestValidateAttentionItemStaleWrite(t *testing.T) {
 	})
 }
 
+// TestValidateAttentionItemStatusTerminality covers the status lifecycle: open
+// may move to any terminal status, a same-status update may still advance the
+// version, and no terminal status admits a successor (issue #55: resolved→open
+// at an advanced version used to pass, reopening a decided item).
+func TestValidateAttentionItemStatusTerminality(t *testing.T) {
+	for _, from := range domain.AllItemStatuses {
+		for _, to := range domain.AllItemStatuses {
+			t.Run(string(from)+" to "+string(to), func(t *testing.T) {
+				oldIn := validItemInput(domain.AttentionSpecApproval)
+				oldIn.Status = from
+				oldIn.ItemVersion = 2
+				updatedIn := validItemInput(domain.AttentionSpecApproval)
+				updatedIn.Status = to
+				updatedIn.ItemVersion = 3
+				err := domain.ValidateAttentionItemTransition(mustItem(t, oldIn), mustItem(t, updatedIn))
+				if from == to || from == domain.StatusOpen {
+					if err != nil {
+						t.Fatalf("legal status move rejected: %v", err)
+					}
+					return
+				}
+				if !errors.Is(err, domain.ErrImmutableTransition) {
+					t.Fatalf("ValidateAttentionItemTransition() = %v, want ErrImmutableTransition", err)
+				}
+			})
+		}
+	}
+
+	t.Run("resolved reopened at advanced version", func(t *testing.T) {
+		resolvedIn := validItemInput(domain.AttentionSpecApproval)
+		resolvedIn.Status = domain.StatusResolved
+		resolvedIn.ItemVersion = 2
+		reopenedIn := validItemInput(domain.AttentionSpecApproval)
+		reopenedIn.ItemVersion = 3 // version advances, so only the status move is at fault
+		err := domain.ValidateAttentionItemTransition(mustItem(t, resolvedIn), mustItem(t, reopenedIn))
+		if !errors.Is(err, domain.ErrImmutableTransition) {
+			t.Fatalf("reopening a resolved item = %v, want ErrImmutableTransition", err)
+		}
+	})
+}
+
 func mustItem(t *testing.T, in domain.AttentionItemInput) domain.AttentionItem {
 	t.Helper()
 	item, err := domain.NewAttentionItem(in, nil)

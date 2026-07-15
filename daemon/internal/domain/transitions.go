@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -19,8 +20,8 @@ import (
 //
 // Each failure wraps one of two classes, so a caller maps it onto its own
 // boundary errors without string matching:
-//   - ErrImmutableTransition: identity, another fixed field, or recorded
-//     history would change.
+//   - ErrImmutableTransition: identity, another fixed field, recorded
+//     history, or a terminal lifecycle outcome would change.
 //   - ErrStaleTransition: an update fails to advance a version or lifecycle.
 //
 // A byte-identical replay (a retried write) is the caller's concern, not these
@@ -64,12 +65,30 @@ func ValidateConversationTransition(old, updated Conversation) error {
 	return nil
 }
 
+// itemStatusSuccessors returns the statuses a version-advancing update may
+// move status to. A same-status update is always legal; an unlisted pair is
+// not. The terminal statuses (resolved, superseded, dismissed, expired) admit
+// no successors: an item's recorded final outcome never reopens, a fresh
+// decision is a new item (plan §4 lifecycle). A switch, not a map, so the
+// exhaustive linter forces a future status to declare its successors instead
+// of silently defaulting to terminal.
+func itemStatusSuccessors(status ItemStatus) []ItemStatus {
+	switch status {
+	case StatusOpen:
+		return []ItemStatus{StatusResolved, StatusSuperseded, StatusDismissed, StatusExpired}
+	case StatusResolved, StatusSuperseded, StatusDismissed, StatusExpired:
+		return nil
+	}
+	return nil
+}
+
 // ValidateAttentionItemTransition reports whether updated is a legal successor to
 // the stored item old. What an item is about is fixed at creation: transitions
 // bump item_version and evolve status/evidence on the same identity, and a
 // different subject or type is a new (superseding) item, never a retarget (plan
 // §4, §5.14). A changed body must move the version forward, or a stale copy could
-// roll back a later transition (a resolved v2 overwritten by an open v1).
+// roll back a later transition (a resolved v2 overwritten by an open v1). Status
+// moves follow itemStatusSuccessors: a terminal status is final.
 func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 	if updated.ID != old.ID {
 		return fmt.Errorf("attention item %s: identity would change from %s: %w", updated.ID, old.ID, ErrImmutableTransition)
@@ -84,6 +103,10 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 	if updated.ItemVersion <= old.ItemVersion {
 		return fmt.Errorf("attention item %s: item_version %d does not advance stored %d: %w",
 			updated.ID, updated.ItemVersion, old.ItemVersion, ErrStaleTransition)
+	}
+	if updated.Status != old.Status && !slices.Contains(itemStatusSuccessors(old.Status), updated.Status) {
+		return fmt.Errorf("attention item %s: status %q is terminal and cannot become %q: %w",
+			updated.ID, old.Status, updated.Status, ErrImmutableTransition)
 	}
 	return nil
 }

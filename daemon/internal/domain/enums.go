@@ -259,8 +259,9 @@ func (p Priority) valid() bool {
 }
 
 // ItemStatus is an AttentionItem's lifecycle state (plan §4 lifecycle:
-// approvals supersede, resolutions transition). Provisional member set;
-// flagged for spine review.
+// approvals supersede, resolutions transition). Every status except open is
+// terminal: itemStatusSuccessors admits no move out of resolved, superseded,
+// dismissed, or expired. Provisional member set; flagged for spine review.
 type ItemStatus string
 
 const (

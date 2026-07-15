@@ -23,7 +23,9 @@ import (
 // not carried in the body. Whether these bindings still match the live item is
 // the store's cross-check at submission (a mismatch is rejected with the
 // replacement item, §5.14 test 2), not a domain-local invariant: this type
-// holds no item to compare against.
+// holds no item to compare against. The store also rejects a genuinely new
+// command against an item whose status is no longer open (issue #55): binding
+// equality alone cannot detect closure at the item's current version.
 type Command struct {
 	CommandID       string   `json:"command_id"`
 	DeviceID        DeviceID `json:"device_id"`

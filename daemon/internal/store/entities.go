@@ -69,6 +69,33 @@ func (e *StaleCommandError) Error() string {
 // recovers the replacement item.
 func (e *StaleCommandError) Is(target error) bool { return target == ErrStaleCommand }
 
+// ErrClosedItem is returned when a genuinely new command targets an attention
+// item whose status is no longer open (issue #55). Unlike ErrStaleCommand it
+// does not depend on the command's bound version: the item's lifecycle has
+// concluded, so no rebind-and-retry can ever succeed. It is carried by a
+// *ClosedItemError; match the class with errors.Is and extract the canonical
+// item with errors.As.
+var ErrClosedItem = errors.New("item is no longer open for decisions")
+
+// ClosedItemError reports a new command against a non-open item and carries
+// the current attention item as the canonical state the caller should render
+// (plan §4 lifecycle). Idempotent replays are handled before this check, so a
+// ClosedItemError only ever names a genuinely new command_id, never a retry of
+// a committed one (§5.14 test 4).
+type ClosedItemError struct {
+	CommandID string
+	Item      domain.AttentionItem
+}
+
+func (e *ClosedItemError) Error() string {
+	return fmt.Sprintf("command %q rejected: item %q is %s at version %d",
+		e.CommandID, e.Item.ID, e.Item.Status, e.Item.ItemVersion)
+}
+
+// Is lets errors.Is(err, ErrClosedItem) match the class while errors.As
+// recovers the canonical item.
+func (e *ClosedItemError) Is(target error) bool { return target == ErrClosedItem }
+
 // validator is implemented by every persisted domain type. Puts validate
 // before writing and Gets validate after reading, so a corrupt row fails
 // loudly at the boundary instead of leaking an invalid value into the daemon.
@@ -662,14 +689,21 @@ INSERT INTO commands (command_id, item_id, item_version, pr_head_sha, device_id,
 VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`
 
 // PutCommand records one accepted client decision as a write-once, immutable
-// row keyed by command_id (§5.14 ClientCommand; §5.9 effectively-once). Two
+// row keyed by command_id (§5.14 ClientCommand; §5.9 effectively-once). Three
 // checks, in this order:
 //
 //  1. Idempotency. A command_id already on record returns its original result
 //     regardless of the item's current state, so a lost-response retry converges
 //     rather than being re-judged as stale (§5.14 test 4). A different body under
 //     that id is a conflict.
-//  2. Binding authority. For a genuinely new command, its pinned bindings (the
+//  2. Openness. A genuinely new command commits only against an item whose
+//     status is still open (issue #55). This runs before the binding check
+//     because a closed item is the more fundamental rejection: a stale error
+//     invites a rebind-and-retry that can never succeed once the lifecycle has
+//     concluded. Version advance alone does not imply closure (and closure at
+//     the current version defeats the binding check), so status is gated
+//     explicitly.
+//  3. Binding authority. For a genuinely new command, its pinned bindings (the
 //     accepted item version, PR head, and rendered digest set) must still
 //     describe the live item, or the submission is stale and the caller gets the
 //     current item as the canonical replacement (§5.14 test 2). This closes the
@@ -699,6 +733,10 @@ func (tx *WriteTx) PutCommand(ctx context.Context, command domain.Command) error
 	item, err := tx.GetAttentionItem(ctx, command.ItemID)
 	if err != nil {
 		return fmt.Errorf("put command %q: %w", command.CommandID, err)
+	}
+	if item.Status != domain.StatusOpen {
+		return fmt.Errorf("put command %q: %w", command.CommandID,
+			&ClosedItemError{CommandID: command.CommandID, Item: item})
 	}
 	if !command.BindsSameAs(item) {
 		return fmt.Errorf("put command %q: %w", command.CommandID,
