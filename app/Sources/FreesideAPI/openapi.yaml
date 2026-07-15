@@ -1,0 +1,1746 @@
+openapi: 3.0.3
+
+# The provisional daemon/client sync surface (docs/plan.md §5.14), spec only:
+# no server implementation and no shipped generated code (plan §11 Wave 0).
+# Schemas mirror daemon/internal/domain field-for-field; entity examples are
+# lifted verbatim from that package's golden files so the linter's
+# example-vs-schema validation corroborates the cross-check.
+
+info:
+  title: Freeside daemon API
+  version: 0.1.0
+  x-provisional: true
+  description: |
+    **Provisional.** This schema is provisional until exercised by real
+    clients (plan §11 Wave 0; the decision record lives in
+    docs/history/decisions.md, decision 21: "API provisional until
+    exercised"). It covers plan §5.14's synchronization surface: the
+    canonical bootstrap snapshot, the attention/runs/conversations read
+    surfaces, ClientCommand submission, and digest-addressed attachment
+    upload. Any change to this document is treated as a migration
+    (api/README.md).
+
+    The daemon is sole authority; client databases are disposable read
+    caches. Every schema mirrors its `daemon/internal/domain` type
+    field-for-field: every field is always present on the wire (the daemon
+    marshals without omission), so each object lists all its properties as
+    required and marks Go pointer fields nullable. Timestamps are RFC3339
+    UTC `date-time` strings; durations are int64 nanoseconds; identifiers
+    and digests are opaque non-empty strings.
+  contact:
+    name: Freeside
+    url: https://github.com/freeside-ai/freeside
+  license:
+    name: UNLICENSED
+    url: https://github.com/freeside-ai/freeside
+
+servers:
+  - url: /
+    description: >
+      The daemon serves clients directly; the base URL is
+      deployment-specific (device pairing hands the client its daemon
+      address), so paths here are relative.
+
+# Every endpoint requires the paired-device credential: revocation must be
+# enforceable by contract (a revoked device cannot submit, plan §5.14 sync
+# tests 15-16). The single exception is POST /pairing, which issues the
+# credential: it overrides with security: [], and the short-lived pairing
+# code is its authenticator.
+security:
+  - deviceCredential: []
+
+tags:
+  - name: sync
+    description: Cache bootstrap (plan §5.14 revision, epoch, and cache semantics).
+  - name: attention
+    description: Attention items and their deliveries, read surface (plan §4).
+  - name: runs
+    description: Run, stage, and attempt state, read surface.
+  - name: conversations
+    description: Conversations, whole-snapshot per conversation (Phase 1 semantics).
+  - name: commands
+    description: >
+      ClientCommand submission, idempotent by command_id: the single
+      mutation surface for decisions on synchronized domain state (plan
+      §5.14). The credential control surface (pairing, revocation) and
+      digest-addressed attachment upload sit deliberately outside it.
+  - name: devices
+    description: >
+      Device pairing and revocation, the credential control surface (plan
+      §5.14 devices): deliberately outside the ClientCommand path, which
+      decides attention items under a device credential these operations
+      grant and invalidate. Devices are revision-carrying state; the sync
+      read surface that carries them to clients (bootstrap widening or a
+      device list) lands with its first client consumer, via a later
+      contract change.
+  - name: attachments
+    description: Digest-addressed attachment upload.
+
+paths:
+  /sync/bootstrap:
+    get:
+      operationId: getSyncBootstrap
+      tags: [sync]
+      summary: One canonical snapshot of every synchronized resource
+      description: |
+        Returns one canonical snapshot produced in a single daemon read
+        transaction (plan §5.14). The response carries the server's
+        `sync_epoch` and `revision`; a client replaces its whole cache with
+        this snapshot and records `revision` as its
+        `last_full_snapshot_revision`. A partial fetch (any other read
+        endpoint) never advances the whole cache: clients track
+        `last_full_snapshot_revision` and `highest_observed_server_revision`
+        separately, and a revision gap triggers a new bootstrap or a refetch
+        of all potentially affected resources. A changed `sync_epoch` (a
+        daemon restore) forces cache discard and a fresh bootstrap.
+      responses:
+        "200":
+          description: The canonical snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BootstrapSnapshot"
+
+  /sync/revision:
+    get:
+      operationId: getSyncRevision
+      tags: [sync]
+      summary: The current server revision and sync epoch
+      description: |
+        The periodic revision heartbeat that catches lost invalidations
+        (plan §5.14; sync test 11): a client polls this cheap read and
+        compares `revision` against its
+        `highest_observed_server_revision`. A gap means invalidations were
+        missed, so the client refetches affected resources or bootstraps;
+        it never marks the whole cache current from this response (only a
+        bootstrap advances `last_full_snapshot_revision`). A changed
+        `sync_epoch` (a daemon restore) forces cache discard and a fresh
+        bootstrap.
+      responses:
+        "200":
+          description: The server's current sync epoch and revision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerRevision"
+
+  /attention/items:
+    get:
+      operationId: listAttentionItems
+      tags: [attention]
+      summary: List attention items
+      description: >
+        Lists attention items as individual resource snapshots. A partial
+        fetch: the result updates only the entities it carries and never
+        marks the whole cache current (plan §5.14).
+      responses:
+        "200":
+          description: Attention item snapshots.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AttentionItemSnapshot"
+
+  /attention/items/{item_id}:
+    get:
+      operationId: getAttentionItem
+      tags: [attention]
+      summary: Get one attention item
+      description: >
+        Returns the item's current canonical state as a resource snapshot.
+        A late notification deep-links here and exposes no stale action
+        (plan §5.14 sync test 9).
+      parameters:
+        - $ref: "#/components/parameters/ItemID"
+      responses:
+        "200":
+          description: The attention item snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttentionItemSnapshot"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /attention/items/{item_id}/deliveries:
+    get:
+      operationId: listAttentionItemDeliveries
+      tags: [attention]
+      summary: List an item's delivery attempts
+      description: >
+        Lists the item's per-channel, per-attempt delivery records (plan
+        §4), read surface only; deliveries are recorded by the daemon's
+        delivery pipeline, never submitted by clients.
+      parameters:
+        - $ref: "#/components/parameters/ItemID"
+      responses:
+        "200":
+          description: Delivery snapshots for the item.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AttentionDeliverySnapshot"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /runs:
+    get:
+      operationId: listRuns
+      tags: [runs]
+      summary: List runs
+      description: >
+        Lists runs as resource snapshots. Each run embeds its stages and
+        attempts (the run is the aggregate root). A partial fetch; it never
+        marks the whole cache current (plan §5.14).
+      responses:
+        "200":
+          description: Run snapshots.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RunSnapshot"
+
+  /runs/{run_id}:
+    get:
+      operationId: getRun
+      tags: [runs]
+      summary: Get one run
+      description: Returns the run aggregate (stages and attempts embedded) as a resource snapshot.
+      parameters:
+        - $ref: "#/components/parameters/RunID"
+      responses:
+        "200":
+          description: The run snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunSnapshot"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /conversations/{conversation_id}:
+    get:
+      operationId: getConversation
+      tags: [conversations]
+      summary: Get one conversation as a whole snapshot
+      description: >
+        Phase 1 conversation sync is whole-snapshot per conversation (plan
+        §5.14): the response carries the complete ordered message thread
+        (daemon-assigned contiguous sequence numbers), not a delta. Messages
+        are immutable; corrections are new messages. Attachments are not
+        inlined; they are fetched by digest.
+      parameters:
+        - $ref: "#/components/parameters/ConversationID"
+      responses:
+        "200":
+          description: The conversation snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationSnapshot"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /commands:
+    post:
+      operationId: submitCommand
+      tags: [commands]
+      summary: Submit a client command
+      description: |
+        The single mutation surface for decisions on synchronized domain
+        state: every such client mutation is a ClientCommand (plan §5.14);
+        only the credential control surface (pairing, revocation) and
+        attachment upload sit outside it. Submission is idempotent by
+        `command_id`: the daemon records each command's result in the same
+        transaction that applies it, and a retry of an already-committed
+        `command_id` returns the original recorded result without applying
+        anything again (a lost HTTP response is recovered by retrying, sync
+        test 4). Optimistic concurrency: a command prepared against a stale
+        `expected_entity_version` (or stale bindings) is rejected with the
+        replacement state and no side effect (sync test 2).
+      requestBody:
+        required: true
+        description: The command to apply, prepared against canonical state.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClientCommand"
+      responses:
+        "200":
+          description: >
+            The command's committed result: the original recorded result,
+            whether this request applied the command or retried an
+            already-committed one.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandResult"
+        "409":
+          description: >
+            Optimistic-concurrency rejection: the command's
+            expected_entity_version or expected_bindings no longer match
+            canonical state. Carries the replacement item snapshot so the
+            client can re-render without a refetch (sync test 2). No side
+            effect was applied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaleVersionRejection"
+
+  /pairing:
+    post:
+      operationId: pairDevice
+      tags: [devices]
+      summary: Exchange a pairing code for a device credential
+      # The one unauthenticated operation: the requester has no credential
+      # yet, and the short-lived code displayed on the daemon host is the
+      # authenticator (plan §5.14 devices).
+      security: []
+      description: |
+        Exchanges a short-lived pairing code (displayed on the daemon host,
+        plan §5.14) for a new device and its bearer token. The token appears
+        only in this response and is never retrievable again; the daemon
+        stores only its digest. Consumption is single-winner: simultaneous
+        attempts with one code yield one device (sync test 14), and an
+        expired or consumed code creates nothing (sync test 13).
+      requestBody:
+        required: true
+        description: The pairing code and the device's human label.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairingRequest"
+      responses:
+        "201":
+          description: The paired device and its one-time-visible token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingGrant"
+        "403":
+          description: >
+            The pairing code is unknown, expired, or already consumed. One
+            undifferentiated rejection: the response never distinguishes
+            which, so an unauthenticated caller cannot probe code validity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /devices/{device_id}/revoke:
+    post:
+      operationId: revokeDevice
+      tags: [devices]
+      summary: Revoke a paired device
+      description: |
+        Revokes the device's credential (plan §5.14): a revoked device
+        cannot submit a previously prepared, uncommitted command (sync test
+        15), while a committed command's recorded result stays retrievable
+        and a retry produces no new side effect (sync test 16). Revocation
+        stops future access only; it cannot delete content the device
+        already cached (no remote wipe). Terminal and idempotent: revoking
+        an already-revoked device returns the same recorded snapshot.
+        Deliberately not a ClientCommand: revocation is the credential
+        control surface (it invalidates what commands authenticate with,
+        and must not depend on the revoked device's cooperation), not a
+        decision on an attention item.
+      parameters:
+        - $ref: "#/components/parameters/DeviceID"
+      responses:
+        "200":
+          description: The device's snapshot after revocation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceSnapshot"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /attachments/{digest}:
+    parameters:
+      - name: digest
+        in: path
+        required: true
+        description: The content digest naming the stored bytes (e.g. `sha256:...`).
+        schema:
+          $ref: "#/components/schemas/Digest"
+    get:
+      operationId: getAttachment
+      tags: [attachments]
+      summary: Fetch an attachment by content digest
+      description: >
+        Digest-addressed read: returns the stored bytes the path digest
+        names. Clients render image attachments directly from the
+        artifact store by digest (plan §4), and conversation attachments
+        are never inlined (plan §5.14), so this is the read path for the
+        bytes an item's evidence_snapshot, agent_claims, and
+        artifact_digests and a message's attachments reference. Content
+        is immutable per digest.
+      responses:
+        "200":
+          description: The stored bytes for the digest.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      operationId: uploadAttachment
+      tags: [attachments]
+      summary: Upload an attachment by content digest
+      description: |
+        Digest-addressed upload (plan §5.14): the path digest names the
+        content, and the daemon verifies the body hashes to it. A retried
+        upload converges on one artifact by digest (sync test 10): re-PUT of
+        an already-stored digest is a no-op that returns the same receipt.
+        The daemon treats attachment bytes as opaque blobs (magic-byte,
+        type, and size validation only; plan §5.15); rendering happens only
+        in clients.
+      requestBody:
+        required: true
+        description: The attachment bytes; must hash to the path digest.
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: The attachment was stored under the digest.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttachmentReceipt"
+        "200":
+          description: >
+            The digest was already stored; the upload converged on the
+            existing artifact (idempotent retry).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttachmentReceipt"
+        "422":
+          description: The body does not hash to the path digest.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  securitySchemes:
+    deviceCredential:
+      type: http
+      scheme: bearer
+      description: >
+        The paired-device credential (plan §5.14 devices and commands).
+        `POST /pairing` exchanges a short-lived pairing code for it; the
+        bearer token is `fsd1.<device_id_b64>.<secret>`, three
+        dot-separated segments: the version prefix, the unpadded base64url
+        (RFC 4648 §5) encoding of the device identifier, and a 256-bit
+        unpadded base64url secret. It is shown once in the PairingGrant
+        and never retrievable again. Encoding the identifier segment makes
+        the format total over the identifier space: base64url is dot-free,
+        so the token always splits into exactly three segments, and every
+        character is legal in an HTTP `Authorization: Bearer` credential
+        (RFC 6750 token68) no matter what characters the raw identifier
+        contains. The
+        daemon stores only the whole token's sha256 digest, or a device
+        public key, never reusable plaintext; the embedded device_id routes
+        verification to that device's stored credential. Revocation
+        (`POST /devices/{device_id}/revoke`) stops new work: a revoked
+        device cannot submit a new or previously prepared, uncommitted
+        command (sync test 15), and a retried already-committed command
+        produces no new side effect; whether that retry still authenticates
+        to fetch its recorded result, or is refused with the record staying
+        retrievable to other devices, is enforcement policy pinned by the
+        attention service (test 16 permits either).
+
+  parameters:
+    ItemID:
+      name: item_id
+      in: path
+      required: true
+      description: The attention item's identifier.
+      schema:
+        type: string
+        minLength: 1
+    RunID:
+      name: run_id
+      in: path
+      required: true
+      description: The run's identifier.
+      schema:
+        type: string
+        minLength: 1
+    ConversationID:
+      name: conversation_id
+      in: path
+      required: true
+      description: The conversation's identifier.
+      schema:
+        type: string
+        minLength: 1
+    DeviceID:
+      name: device_id
+      in: path
+      required: true
+      description: The paired device's identifier.
+      schema:
+        type: string
+        minLength: 1
+
+  responses:
+    NotFound:
+      description: No entity exists under the identifier.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    # --- sync envelope shapes (plan §5.14) ---
+
+    BootstrapSnapshot:
+      type: object
+      description: >
+        One canonical snapshot of every synchronized resource, produced in a
+        single read transaction. sync_epoch and revision are the daemon's
+        ServerState; every client-visible transaction increments revision,
+        and a restore issues a new epoch forcing cache discard.
+      required:
+        - sync_epoch
+        - revision
+        - attention_items
+        - attention_deliveries
+        - runs
+        - conversations
+      properties:
+        sync_epoch:
+          type: string
+          minLength: 1
+          description: The daemon's current sync epoch; changes only on restore.
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >
+            The server revision this snapshot was read at; the client's new
+            last_full_snapshot_revision.
+        attention_items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttentionItemSnapshot"
+        attention_deliveries:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttentionDeliverySnapshot"
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/RunSnapshot"
+        conversations:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationSnapshot"
+
+    AttentionItemSnapshot:
+      type: object
+      description: A resource snapshot wrapping one attention item (plan §5.14).
+      required: [as_of_revision, entity_version, item]
+      properties:
+        as_of_revision:
+          $ref: "#/components/schemas/AsOfRevision"
+        entity_version:
+          $ref: "#/components/schemas/EntityVersion"
+        item:
+          $ref: "#/components/schemas/AttentionItem"
+
+    AttentionDeliverySnapshot:
+      type: object
+      description: A resource snapshot wrapping one attention delivery (plan §5.14).
+      required: [as_of_revision, entity_version, delivery]
+      properties:
+        as_of_revision:
+          $ref: "#/components/schemas/AsOfRevision"
+        entity_version:
+          $ref: "#/components/schemas/EntityVersion"
+        delivery:
+          $ref: "#/components/schemas/AttentionDelivery"
+
+    RunSnapshot:
+      type: object
+      description: A resource snapshot wrapping one run aggregate (plan §5.14).
+      required: [as_of_revision, entity_version, run]
+      properties:
+        as_of_revision:
+          $ref: "#/components/schemas/AsOfRevision"
+        entity_version:
+          $ref: "#/components/schemas/EntityVersion"
+        run:
+          $ref: "#/components/schemas/Run"
+
+    ConversationSnapshot:
+      type: object
+      description: A resource snapshot wrapping one whole conversation (plan §5.14).
+      required: [as_of_revision, entity_version, conversation]
+      properties:
+        as_of_revision:
+          $ref: "#/components/schemas/AsOfRevision"
+        entity_version:
+          $ref: "#/components/schemas/EntityVersion"
+        conversation:
+          $ref: "#/components/schemas/Conversation"
+
+    ServerRevision:
+      type: object
+      description: >
+        The revision heartbeat's payload (plan §5.14; sync test 11): the
+        daemon's current ServerState, cheap enough to poll. Carries no
+        entity data; a revision gap tells the client to refetch, never to
+        mark its cache current.
+      required: [sync_epoch, revision]
+      additionalProperties: false
+      properties:
+        sync_epoch:
+          type: string
+          minLength: 1
+          description: >
+            The daemon's sync epoch at the moment of the read; a change
+            (only ever a restore) invalidates every client cache.
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The server revision at the moment of the read.
+      example:
+        sync_epoch: "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+        revision: 42
+
+    DeviceSnapshot:
+      type: object
+      description: A resource snapshot wrapping one paired device (plan §5.14).
+      required: [as_of_revision, entity_version, device]
+      properties:
+        as_of_revision:
+          $ref: "#/components/schemas/AsOfRevision"
+        entity_version:
+          $ref: "#/components/schemas/EntityVersion"
+        device:
+          $ref: "#/components/schemas/Device"
+
+    AsOfRevision:
+      type: integer
+      format: int64
+      minimum: 1
+      description: >
+        The server revision of the transaction that last wrote this entity
+        (plan §5.14); lets a client detect revision gaps per resource.
+
+    EntityVersion:
+      type: integer
+      format: int64
+      minimum: 1
+      description: >
+        The entity's monotonic per-row version, incremented on every write;
+        the value a ClientCommand's expected_entity_version is checked
+        against.
+
+    # --- commands (plan §5.14 devices and commands) ---
+
+    ClientCommand:
+      type: object
+      description: >
+        Every client mutation. Carries exactly these five fields. The
+        payload is now typed for the decision command (the first exercised
+        command type); other command types are typed as the signet/saddle
+        pair exercises the surface, via kind:contract changes.
+      required:
+        - command_id
+        - device_id
+        - expected_entity_version
+        - expected_bindings
+        - payload
+      additionalProperties: false
+      properties:
+        command_id:
+          type: string
+          minLength: 1
+          description: >
+            Client-generated idempotency key; a retry with the same
+            command_id returns the original recorded result.
+        device_id:
+          type: string
+          minLength: 1
+          description: The paired device submitting the command.
+        expected_entity_version:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >
+            The entity_version of the target entity the command was
+            prepared against; a mismatch rejects the command with the
+            replacement state.
+        expected_bindings:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/Digest"
+          description: >
+            Provisional. The digest-bound inputs the command was prepared
+            against, keyed by binding name; checked with
+            expected_entity_version. For a decision command the authoritative
+            binding set is the payload's item_version, pr_head_sha, and
+            artifact_digests (the daemon cross-checks those against the live
+            item); this map stays for command types that name individual
+            bindings.
+        payload:
+          $ref: "#/components/schemas/DecisionPayload"
+      example:
+        command_id: "cmd-1"
+        device_id: "device-1"
+        expected_entity_version: 1
+        expected_bindings:
+          evidence: "sha256:log"
+        payload:
+          item_id: "item-1"
+          action: "open_pr"
+          item_version: 1
+          pr_head_sha: "cafebabe"
+          artifact_digests: ["sha256:img", "sha256:log"]
+
+    DecisionPayload:
+      type: object
+      description: >
+        The payload of a decision command: which attention item is decided,
+        the action taken, and the exact bindings the decision was rendered
+        against (the accepted item version, PR head, and the rendered digest
+        set). The daemon cross-checks these against the live item, so an
+        approval cannot commit against inputs that changed after it was
+        rendered (the stale-approval class, plan §3.1; §4 "approvals bind to
+        digests"). Mirrors the binding fields of domain.Command.
+      required: [item_id, action, item_version, pr_head_sha, artifact_digests]
+      additionalProperties: false
+      properties:
+        item_id:
+          type: string
+          minLength: 1
+          description: The attention item being decided.
+        action:
+          $ref: "#/components/schemas/Action"
+        item_version:
+          type: integer
+          minimum: 1
+          description: The accepted item_version the decision was rendered against.
+        pr_head_sha:
+          type: string
+          description: >
+            The PR head the decision bound to; empty when the item names no
+            PR (e.g. a spec awaiting approval).
+        artifact_digests:
+          type: array
+          items:
+            $ref: "#/components/schemas/Digest"
+          description: >
+            The canonical (sorted, deduplicated) binding set: exactly the
+            digests rendered in the item's evidence_snapshot and agent_claims.
+      example:
+        item_id: "item-1"
+        action: "open_pr"
+        item_version: 1
+        pr_head_sha: "cafebabe"
+        artifact_digests: ["sha256:img", "sha256:log"]
+
+    CommandRecord:
+      type: object
+      description: >
+        The durable, immutable record of one accepted decision
+        (domain.Command; plan §4 lifecycle, §5.14). It pins the exact
+        bindings the decision was accepted against; the daemon keys it by
+        command_id and a retry returns it unchanged (sync test 4).
+      required:
+        - command_id
+        - device_id
+        - item_id
+        - item_version
+        - pr_head_sha
+        - artifact_digests
+        - action
+      additionalProperties: false
+      properties:
+        command_id:
+          type: string
+          minLength: 1
+        device_id:
+          type: string
+          minLength: 1
+        item_id:
+          type: string
+          minLength: 1
+        item_version:
+          type: integer
+          minimum: 1
+        pr_head_sha:
+          type: string
+        artifact_digests:
+          type: array
+          items:
+            $ref: "#/components/schemas/Digest"
+        action:
+          $ref: "#/components/schemas/Action"
+      example:
+        command_id: "cmd-1"
+        device_id: "device-1"
+        item_id: "item-1"
+        item_version: 1
+        pr_head_sha: "cafebabe"
+        artifact_digests: ["sha256:img", "sha256:log"]
+        action: "open_pr"
+
+    CommandResult:
+      type: object
+      description: >
+        The command's committed result: the durable decision record plus the
+        server revision the transaction applied at. A retry of the same
+        command_id returns this exact value (sync test 4).
+      required: [record, revision]
+      additionalProperties: false
+      properties:
+        record:
+          $ref: "#/components/schemas/CommandRecord"
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The server revision of the transaction that applied the command.
+      example:
+        record:
+          command_id: "cmd-1"
+          device_id: "device-1"
+          item_id: "item-1"
+          item_version: 1
+          pr_head_sha: "cafebabe"
+          artifact_digests: ["sha256:img", "sha256:log"]
+          action: "open_pr"
+        revision: 1
+
+    StaleVersionRejection:
+      type: object
+      description: >
+        An optimistic-concurrency rejection carrying the replacement item
+        snapshot (plan §5.14 sync test 2).
+      required: [message, replacement_item]
+      properties:
+        message:
+          type: string
+        replacement_item:
+          $ref: "#/components/schemas/AttentionItemSnapshot"
+
+    # --- device pairing (plan §5.14 devices) ---
+
+    PairingRequest:
+      type: object
+      description: >
+        The pairing exchange's input: the short-lived code read off the
+        daemon host and the human label the new device will carry.
+      required: [pairing_code, display_name]
+      additionalProperties: false
+      properties:
+        pairing_code:
+          type: string
+          minLength: 1
+          description: >
+            The code plaintext as displayed. The daemon re-derives its keyed
+            digest (HMAC-SHA256 under a daemon-held pairing key) for lookup
+            and stores no plaintext; the keyed derivation keeps a short
+            displayed code from being offline-brute-forced out of a leaked
+            store.
+        display_name:
+          type: string
+          minLength: 1
+          description: The device's human label ("Ben's iPhone").
+      example:
+        pairing_code: "483911"
+        display_name: "Ben's iPhone"
+
+    PairingGrant:
+      type: object
+      description: >
+        The successful pairing exchange: the new device's snapshot and its
+        bearer token. This response is the token's only appearance, ever;
+        the daemon stores only its digest, so a lost token means revoking
+        the device and pairing again.
+      required: [device_token, device]
+      additionalProperties: false
+      properties:
+        device_token:
+          type: string
+          minLength: 1
+          description: >
+            The bearer token (`fsd1.<device_id_b64>.<secret>`; see the
+            deviceCredential security scheme for the segment encoding).
+            Shown once; never retrievable again.
+        device:
+          $ref: "#/components/schemas/DeviceSnapshot"
+      example:
+        device_token: "fsd1.ZGV2aWNlLTE.3q2-8fPXm4kQzT1vY6wA9rB0cD5eF7gH8jK2lM4nP6s"
+        device:
+          as_of_revision: 1
+          entity_version: 1
+          device:
+            id: "device-1"
+            display_name: "Ben's iPhone"
+            status: "active"
+            paired_at: "2026-01-02T03:04:05Z"
+            revoked_at: null
+
+    AttachmentReceipt:
+      type: object
+      description: The stored attachment's digest reference.
+      required: [digest]
+      properties:
+        digest:
+          $ref: "#/components/schemas/Digest"
+
+    Error:
+      type: object
+      description: A plain error message.
+      required: [message]
+      properties:
+        message:
+          type: string
+
+    # --- domain mirrors (daemon/internal/domain, field-for-field) ---
+
+    Digest:
+      type: string
+      minLength: 1
+      description: A content digest, algorithm-prefixed (e.g. `sha256:...`).
+
+    AttentionItem:
+      type: object
+      description: >
+        A decision request (plan §4); mirrors domain.AttentionItem.
+        item_version increments on every state change and version-binds
+        client decisions; timing is daemon-derived, never client-set.
+      required:
+        - id
+        - project_id
+        - subject
+        - type
+        - priority
+        - reason
+        - requested_decision
+        - evidence_snapshot
+        - agent_claims
+        - artifact_digests
+        - pr_head_sha
+        - item_version
+        - interruption_class
+        - conversation_id
+        - timing
+        - expires_when
+        - status
+      properties:
+        id:
+          type: string
+          minLength: 1
+        project_id:
+          type: string
+          minLength: 1
+        subject:
+          $ref: "#/components/schemas/Subject"
+        type:
+          $ref: "#/components/schemas/AttentionType"
+        priority:
+          $ref: "#/components/schemas/Priority"
+        reason:
+          type: string
+        requested_decision:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/Action"
+        evidence_snapshot:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvidenceArtifact"
+        agent_claims:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentClaim"
+        artifact_digests:
+          type: array
+          items:
+            $ref: "#/components/schemas/Digest"
+          description: >
+            The approval binding set: the canonical (sorted, deduplicated)
+            union of every digest rendered in evidence_snapshot and
+            agent_claims. Derived and enforced by the daemon
+            (domain.NewAttentionItem / Validate), never client-supplied, so
+            an item cannot display one digest while binding another (the
+            stale-approval class, plan §3.1; §4 "approvals bind to digests").
+        pr_head_sha:
+          type: string
+        item_version:
+          type: integer
+          minimum: 1
+        interruption_class:
+          $ref: "#/components/schemas/InterruptionClass"
+        conversation_id:
+          type: string
+          minLength: 1
+          nullable: true
+        timing:
+          $ref: "#/components/schemas/TimingSummary"
+        expires_when:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          $ref: "#/components/schemas/ItemStatus"
+      example:
+        id: "item-1"
+        project_id: "proj-1"
+        subject:
+          subject_type: "run"
+          subject_id: "run-1"
+          run_id: "run-1"
+        type: "ready_for_final_review"
+        priority: "normal"
+        reason: "checks are green and the diff is ready"
+        requested_decision: ["open_pr", "return_to_agent", "dismiss"]
+        evidence_snapshot:
+          - id: "art-1"
+            type: "verify_log"
+            digest: "sha256:log"
+            provenance:
+              producer_class: "verifier"
+              producer_invocation_id: "inv-1"
+              head_binding: "head_bound"
+              source_head_sha: "cafebabe"
+              verification_recipe_digest: "sha256:recipe-approved"
+              sensitivity_class: "normal"
+            publish_eligible: true
+        agent_claims:
+          - label: "screenshot"
+            artifact_id: "art-2"
+            digest: "sha256:img"
+        artifact_digests: ["sha256:img", "sha256:log"]
+        pr_head_sha: "cafebabe"
+        item_version: 1
+        interruption_class: "planned_gate"
+        conversation_id: "conv-1"
+        timing:
+          delivery_count: 1
+          first_submitted_at: "2026-01-02T03:04:05Z"
+          first_accepted_at: "2026-01-02T03:05:05Z"
+          first_opened_at: "2026-01-02T03:09:05Z"
+          submit_to_first_open: 300000000000
+        expires_when: "2026-01-03T03:04:05Z"
+        status: "open"
+
+    Subject:
+      description: >
+        What an attention item is about; mirrors domain.Subject. run_id is
+        meaningful only for run-scoped subjects (domain Subject.Validate),
+        so the branches make a project- or system-scoped subject carrying
+        a run_id unrepresentable.
+      oneOf:
+        - $ref: "#/components/schemas/RunScopedSubject"
+        - $ref: "#/components/schemas/UnscopedSubject"
+      discriminator:
+        propertyName: subject_type
+        mapping:
+          run: "#/components/schemas/RunScopedSubject"
+          proposal_batch: "#/components/schemas/RunScopedSubject"
+          project: "#/components/schemas/UnscopedSubject"
+          system: "#/components/schemas/UnscopedSubject"
+
+    RunScopedSubject:
+      type: object
+      description: >
+        A run or run-scoped proposal batch; run_id is optional context, but
+        when present it must carry a real id.
+      required: [subject_type, subject_id, run_id]
+      properties:
+        subject_type:
+          type: string
+          enum: [run, proposal_batch]
+        subject_id:
+          type: string
+          minLength: 1
+        run_id:
+          type: string
+          minLength: 1
+          nullable: true
+
+    UnscopedSubject:
+      type: object
+      description: >
+        A project- or system-scoped subject; it never carries a run_id
+        (domain Subject.Validate rejects one as mis-scoped).
+      required: [subject_type, subject_id, run_id]
+      properties:
+        subject_type:
+          type: string
+          enum: [project, system]
+        subject_id:
+          type: string
+          minLength: 1
+        run_id:
+          nullable: true
+          enum: [null]
+          description: Always null for a project- or system-scoped subject.
+
+    AgentClaim:
+      type: object
+      description: >
+        A labeled, digest-bound agent claim; mirrors domain.AgentClaim.
+        Agent-generated evidence appears only here, never in
+        evidence_snapshot (plan §5.15).
+      required: [label, artifact_id, digest]
+      properties:
+        label:
+          type: string
+          minLength: 1
+        artifact_id:
+          type: string
+          minLength: 1
+        digest:
+          $ref: "#/components/schemas/Digest"
+
+    EvidenceArtifact:
+      type: object
+      description: >
+        A digest-addressed artifact admissible as evidence: the subset of
+        domain.Artifact that domain.EligibleForEvidenceSnapshot admits
+        (plan §5.15 rule 2). Only verifier or daemon artifacts produced
+        under a verification recipe appear in an item's evidence_snapshot;
+        agent output appears only in labeled agent_claims, so an
+        agent-produced artifact is unrepresentable here. Whether the
+        recipe is on the approved set is runtime policy state, checked by
+        the daemon's gate, not expressible in the schema.
+        publish_eligible is computed by trusted policy, never supplied by
+        the agent, and is always true here: the gate admits an artifact
+        as evidence only when the same approved-recipe computation that
+        drives publish_eligible succeeds
+        (domain.EligibleForEvidenceSnapshot).
+      required: [id, type, digest, provenance, publish_eligible]
+      properties:
+        id:
+          type: string
+          minLength: 1
+        type:
+          type: string
+          minLength: 1
+        digest:
+          $ref: "#/components/schemas/Digest"
+        provenance:
+          $ref: "#/components/schemas/EvidenceProvenance"
+        publish_eligible:
+          type: boolean
+          enum: [true]
+      example:
+        id: "art-1"
+        type: "verify_log"
+        digest: "sha256:log"
+        provenance:
+          producer_class: "verifier"
+          producer_invocation_id: "inv-1"
+          head_binding: "head_bound"
+          source_head_sha: "cafebabe"
+          verification_recipe_digest: "sha256:recipe-approved"
+          sensitivity_class: "normal"
+        publish_eligible: true
+
+    EvidenceProvenance:
+      description: >
+        Provenance of an evidence-admissible artifact; the evidence subset
+        of domain.Provenance (plan §5.15): producer_class restricted to
+        verifier or daemon, and verification_recipe_digest required
+        (evidence is always recipe-bound; a null recipe digest marks agent
+        output, which never appears here). head_binding discriminates
+        head-bound evidence, which carries the source_head_sha it was
+        produced against and is invalidated by a remediation head, from
+        explicitly head-independent evidence, which carries no source head
+        and is preserved across a remediation head (plan §5.15 rule 2). The
+        branches make the ambiguous cases unrepresentable: a head-bound
+        artifact without a source head, and a head-independent artifact that
+        carries one, both fail the schema, so an omitted head is never read
+        as independence.
+      oneOf:
+        - $ref: "#/components/schemas/HeadBoundProvenance"
+        - $ref: "#/components/schemas/HeadIndependentProvenance"
+      discriminator:
+        propertyName: head_binding
+        mapping:
+          head_bound: "#/components/schemas/HeadBoundProvenance"
+          head_independent: "#/components/schemas/HeadIndependentProvenance"
+
+    HeadBoundProvenance:
+      type: object
+      description: >
+        Evidence produced against a specific candidate head; source_head_sha
+        names that head and a remediation head invalidates the evidence
+        (domain AttentionItem head-binding).
+      required:
+        - producer_class
+        - producer_invocation_id
+        - head_binding
+        - source_head_sha
+        - verification_recipe_digest
+        - sensitivity_class
+      properties:
+        producer_class:
+          type: string
+          enum: [verifier, daemon]
+        producer_invocation_id:
+          type: string
+          minLength: 1
+        head_binding:
+          type: string
+          enum: [head_bound]
+        source_head_sha:
+          type: string
+          minLength: 1
+        verification_recipe_digest:
+          $ref: "#/components/schemas/Digest"
+        sensitivity_class:
+          $ref: "#/components/schemas/SensitivityClass"
+      example:
+        producer_class: "verifier"
+        producer_invocation_id: "inv-1"
+        head_binding: "head_bound"
+        source_head_sha: "cafebabe"
+        verification_recipe_digest: "sha256:recipe-approved"
+        sensitivity_class: "normal"
+
+    HeadIndependentProvenance:
+      type: object
+      description: >
+        Evidence intentionally decoupled from repository head; it carries no
+        source_head_sha and is preserved across a remediation head (plan
+        §5.15 rule 2). source_head_sha is not a member and extra properties
+        are forbidden, so a head-independent artifact that names a head is
+        unrepresentable.
+      additionalProperties: false
+      required:
+        - producer_class
+        - producer_invocation_id
+        - head_binding
+        - verification_recipe_digest
+        - sensitivity_class
+      properties:
+        producer_class:
+          type: string
+          enum: [verifier, daemon]
+        producer_invocation_id:
+          type: string
+          minLength: 1
+        head_binding:
+          type: string
+          enum: [head_independent]
+        verification_recipe_digest:
+          $ref: "#/components/schemas/Digest"
+        sensitivity_class:
+          $ref: "#/components/schemas/SensitivityClass"
+      example:
+        producer_class: "verifier"
+        producer_invocation_id: "inv-1"
+        head_binding: "head_independent"
+        verification_recipe_digest: "sha256:recipe-approved"
+        sensitivity_class: "normal"
+
+    TimingSummary:
+      type: object
+      description: >
+        Daemon-derived delivery timing aggregates; mirrors
+        domain.TimingSummary. Never client-set. submit_to_first_open is a
+        duration in int64 nanoseconds.
+      required:
+        - delivery_count
+        - first_submitted_at
+        - first_accepted_at
+        - first_opened_at
+        - submit_to_first_open
+      properties:
+        delivery_count:
+          type: integer
+          minimum: 0
+        first_submitted_at:
+          type: string
+          format: date-time
+          nullable: true
+        first_accepted_at:
+          type: string
+          format: date-time
+          nullable: true
+        first_opened_at:
+          type: string
+          format: date-time
+          nullable: true
+        submit_to_first_open:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: >
+            Duration in nanoseconds; never negative (first_opened_at is on
+            or after first_submitted_at, and this must equal their
+            difference).
+
+    AttentionDelivery:
+      description: >
+        One delivery attempt of an item over one channel; mirrors
+        domain.AttentionDelivery (the wire field is delivery_status). The
+        receipt timestamps present must correspond exactly to the status
+        (domain AttentionDelivery.Validate; plan §4, decision 11), so each
+        status is its own branch: a status can neither outrun its receipts
+        nor be outrun by them. Receipt ordering (each receipt on or after
+        submitted_at, opened_at on or after channel_accepted_at when both
+        exist) is not schema-expressible and holds by the same validator.
+        The status vocabulary deliberately has no "delivered": channel
+        acceptance is not the user seeing it.
+      oneOf:
+        - $ref: "#/components/schemas/AttentionDeliverySubmitted"
+        - $ref: "#/components/schemas/AttentionDeliveryChannelAccepted"
+        - $ref: "#/components/schemas/AttentionDeliveryOpened"
+      discriminator:
+        propertyName: delivery_status
+        mapping:
+          submitted: "#/components/schemas/AttentionDeliverySubmitted"
+          channel_accepted: "#/components/schemas/AttentionDeliveryChannelAccepted"
+          opened: "#/components/schemas/AttentionDeliveryOpened"
+      example:
+        item_id: "item-1"
+        device_id: "device-1"
+        channel: "ntfy"
+        attempt: 1
+        submitted_at: "2026-01-02T03:04:05Z"
+        channel_accepted_at: "2026-01-02T03:05:05Z"
+        opened_at: "2026-01-02T03:09:05Z"
+        delivery_status: "opened"
+
+    AttentionDeliverySubmitted:
+      type: object
+      description: A submitted delivery carries no later receipt.
+      required:
+        - item_id
+        - device_id
+        - channel
+        - attempt
+        - submitted_at
+        - channel_accepted_at
+        - opened_at
+        - delivery_status
+      properties:
+        item_id:
+          type: string
+          minLength: 1
+        device_id:
+          type: string
+          minLength: 1
+        channel:
+          type: string
+          minLength: 1
+        attempt:
+          type: integer
+          minimum: 1
+        submitted_at:
+          type: string
+          format: date-time
+        channel_accepted_at:
+          nullable: true
+          enum: [null]
+          description: Always null; a submitted delivery has no acceptance receipt.
+        opened_at:
+          nullable: true
+          enum: [null]
+          description: Always null; a submitted delivery has no opened receipt.
+        delivery_status:
+          type: string
+          enum: [submitted]
+
+    AttentionDeliveryChannelAccepted:
+      type: object
+      description: >
+        A channel-accepted delivery carries its acceptance receipt and no
+        opened receipt.
+      required:
+        - item_id
+        - device_id
+        - channel
+        - attempt
+        - submitted_at
+        - channel_accepted_at
+        - opened_at
+        - delivery_status
+      properties:
+        item_id:
+          type: string
+          minLength: 1
+        device_id:
+          type: string
+          minLength: 1
+        channel:
+          type: string
+          minLength: 1
+        attempt:
+          type: integer
+          minimum: 1
+        submitted_at:
+          type: string
+          format: date-time
+        channel_accepted_at:
+          type: string
+          format: date-time
+        opened_at:
+          nullable: true
+          enum: [null]
+          description: Always null; a channel-accepted delivery has no opened receipt.
+        delivery_status:
+          type: string
+          enum: [channel_accepted]
+
+    AttentionDeliveryOpened:
+      type: object
+      description: >
+        An opened delivery carries its opened receipt; channel acceptance
+        may or may not have been observed first (a channel can report an
+        open without ever reporting acceptance).
+      required:
+        - item_id
+        - device_id
+        - channel
+        - attempt
+        - submitted_at
+        - channel_accepted_at
+        - opened_at
+        - delivery_status
+      properties:
+        item_id:
+          type: string
+          minLength: 1
+        device_id:
+          type: string
+          minLength: 1
+        channel:
+          type: string
+          minLength: 1
+        attempt:
+          type: integer
+          minimum: 1
+        submitted_at:
+          type: string
+          format: date-time
+        channel_accepted_at:
+          type: string
+          format: date-time
+          nullable: true
+        opened_at:
+          type: string
+          format: date-time
+        delivery_status:
+          type: string
+          enum: [opened]
+
+    Conversation:
+      type: object
+      description: >
+        A whole conversation snapshot; mirrors domain.Conversation. Messages
+        are ordered by daemon-assigned contiguous sequence; messages are
+        immutable, corrections are new messages.
+      required: [id, messages]
+      properties:
+        id:
+          type: string
+          minLength: 1
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+      example:
+        id: "conv-1"
+        messages:
+          - id: "msg-1"
+            conversation_id: "conv-1"
+            sequence: 1
+            author: "user"
+            body: "please proceed"
+            created_at: "2026-01-02T03:04:05Z"
+
+    Message:
+      type: object
+      description: One immutable conversation message; mirrors domain.Message.
+      required: [id, conversation_id, sequence, author, body, created_at]
+      properties:
+        id:
+          type: string
+          minLength: 1
+        conversation_id:
+          type: string
+          minLength: 1
+        sequence:
+          type: integer
+          minimum: 1
+          description: Daemon-assigned, contiguous from 1 within the conversation.
+        author:
+          $ref: "#/components/schemas/Author"
+        body:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    Run:
+      type: object
+      description: >
+        A run aggregate with stages and attempts embedded; mirrors
+        domain.Run. spec_digest and policy_digest bind the run to its typed
+        inputs.
+      required: [id, project_id, spec_digest, policy_digest, stages]
+      properties:
+        id:
+          type: string
+          minLength: 1
+        project_id:
+          type: string
+          minLength: 1
+        spec_digest:
+          $ref: "#/components/schemas/Digest"
+        policy_digest:
+          $ref: "#/components/schemas/Digest"
+        stages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Stage"
+      example:
+        id: "run-1"
+        project_id: "proj-1"
+        spec_digest: "sha256:spec"
+        policy_digest: "sha256:policy"
+        stages:
+          - id: "stage-1"
+            run_id: "run-1"
+            name: "implementation"
+            attempts:
+              - id: "attempt-1"
+                stage_id: "stage-1"
+                number: 1
+                invocation_id: "inv-1"
+
+    Stage:
+      type: object
+      description: One stage of a run; mirrors domain.Stage.
+      required: [id, run_id, name, attempts]
+      properties:
+        id:
+          type: string
+          minLength: 1
+        run_id:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+        attempts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Attempt"
+
+    Attempt:
+      type: object
+      description: One attempt of a stage; mirrors domain.Attempt.
+      required: [id, stage_id, number, invocation_id]
+      properties:
+        id:
+          type: string
+          minLength: 1
+        stage_id:
+          type: string
+          minLength: 1
+        number:
+          type: integer
+          minimum: 1
+          description: Retry ordinal, contiguous from 1 within the stage.
+        invocation_id:
+          type: string
+          minLength: 1
+
+    # --- enumerated vocabularies (daemon/internal/domain/enums.go) ---
+
+    AttentionType:
+      type: string
+      description: The kind of decision an attention item asks for (plan §4).
+      enum:
+        - spec_approval
+        - execution_failure
+        - agent_question
+        - review_diminishing_returns
+        - review_dispute
+        - ready_for_final_review
+        - publish_blocked
+        - run_proposal
+        - system_health
+        - blocked
+
+    InterruptionClass:
+      type: string
+      description: Whether the interruption was a planned gate or exceptional (plan §3.2).
+      enum:
+        - planned_gate
+        - exceptional
+
+    Action:
+      type: string
+      description: A decision a client can take on an attention item (plan §4).
+      enum:
+        - approve
+        - request_changes
+        - discuss
+        - stop
+        - finish_now
+        - apply_then_finish
+        - continue_under_policy
+        - convert_to_policy
+        - adjudicate
+        - retry
+        - retry_with_capabilities
+        - answer_and_retry
+        - answer_without_retry
+        - rerun_trust_evaluation
+        - choose_alternate_profile
+        - inspect_trust_failure
+        - open_pr
+        - return_to_agent
+        - mark_seen
+        - dismiss
+        - start
+        - start_with_changes
+        - decline
+        - snooze
+        - acknowledge
+        - run_doctor
+        - stop_unattended
+
+    Priority:
+      type: string
+      description: Item priority. Provisional vocabulary (domain enums.go).
+      enum:
+        - low
+        - normal
+        - high
+        - urgent
+
+    ItemStatus:
+      type: string
+      description: Item lifecycle status. Provisional vocabulary (domain enums.go).
+      enum:
+        - open
+        - resolved
+        - superseded
+        - dismissed
+        - expired
+
+    SensitivityClass:
+      type: string
+      description: Artifact sensitivity (plan §5.15). Provisional vocabulary (domain enums.go).
+      enum:
+        - normal
+        - sensitive
+        - high_sensitivity
+
+    Author:
+      type: string
+      description: Who authored a message. Provisional vocabulary (domain enums.go).
+      enum:
+        - user
+        - agent
+        - daemon
+
+    Device:
+      description: >
+        A paired client device; mirrors domain.Device. The record carries
+        no credential material: the credential is a separate daemon-internal
+        record with no wire schema, so neither the sync surface nor this
+        document can represent even its hash (plan §5.14). revoked_at
+        corresponds exactly to the status (domain Device.Validate), so each
+        status is its own branch; revoked is terminal, and revocation stops
+        future access only (sync tests 15-16). revoked_at on or after
+        paired_at is not schema-expressible and holds by the same validator.
+      oneOf:
+        - $ref: "#/components/schemas/DeviceActive"
+        - $ref: "#/components/schemas/DeviceRevoked"
+      discriminator:
+        propertyName: status
+        mapping:
+          active: "#/components/schemas/DeviceActive"
+          revoked: "#/components/schemas/DeviceRevoked"
+      example:
+        id: "device-1"
+        display_name: "Ben's iPhone"
+        status: "active"
+        paired_at: "2026-01-02T03:04:05Z"
+        revoked_at: null
+
+    DeviceActive:
+      type: object
+      description: An active device carries no revocation instant.
+      required:
+        - id
+        - display_name
+        - status
+        - paired_at
+        - revoked_at
+      properties:
+        id:
+          type: string
+          minLength: 1
+        display_name:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum: [active]
+        paired_at:
+          type: string
+          format: date-time
+        revoked_at:
+          nullable: true
+          enum: [null]
+          description: Always null; an active device is not revoked.
+
+    DeviceRevoked:
+      type: object
+      description: >
+        A revoked device carries its recorded revocation instant; the state
+        is terminal (a fresh pairing is a new device).
+      required:
+        - id
+        - display_name
+        - status
+        - paired_at
+        - revoked_at
+      properties:
+        id:
+          type: string
+          minLength: 1
+        display_name:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum: [revoked]
+        paired_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
