@@ -38,6 +38,15 @@ var ErrCredentialPermissions = errors.New("credential path permissions are too p
 // GitHub rejected the manifest.
 var ErrRegistrationDenied = errors.New("app manifest registration returned no code")
 
+// ErrGrantMismatch is returned when GitHub grants an installation
+// token whose permission or repository scope differs from the request
+// in either direction: a narrower grant would fail the publish path
+// halfway through its work, and a broader one (an extra permission,
+// an all-repositories selection) would circulate more authority than
+// the audit row records. The token is discarded rather than
+// circulated.
+var ErrGrantMismatch = errors.New("installation token grant does not match the request")
+
 // ErrGitHubAPI is the class sentinel for any non-success GitHub API
 // response; it is carried by *APIError. Match the class with errors.Is
 // and recover the status with errors.As.
