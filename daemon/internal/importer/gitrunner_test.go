@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
 // rungit runs git in a fixture repo with a pinned identity and isolated
@@ -151,7 +153,7 @@ func TestIgnoresReplaceObjects(t *testing.T) {
 // (The collision path — git SHA-1 equal but sha256 differing — cannot be
 // unit-tested without a real SHA-1 collision; the helper's correctness is
 // what the derivation relies on.)
-func TestBaseMatchesDigest(t *testing.T) {
+func TestBlobMatchesDigest(t *testing.T) {
 	checkout, _ := initBaseRepo(t, map[string]string{"a.txt": "hello\n"})
 	base := rungit(t, checkout, "rev-parse", "HEAD")
 	g := newTestRunner(t, checkout, testImportOptions(base))
@@ -161,17 +163,36 @@ func TestBaseMatchesDigest(t *testing.T) {
 	}
 	oid := tree["a.txt"].oid
 
-	ok, err := g.baseMatchesDigest(t.Context(), oid, sha256Digest("hello\n"), 6)
+	ok, err := g.blobMatchesDigest(t.Context(), oid, sha256Digest("hello\n"), 6)
 	if err != nil || !ok {
 		t.Fatalf("matching digest+size = %v, %v; want true", ok, err)
 	}
 	// Wrong size fails cheaply (no stream) and wrong digest fails on the
 	// streamed hash; both must report no match.
-	if ok, _ := g.baseMatchesDigest(t.Context(), oid, sha256Digest("hello\n"), 7); ok {
+	if ok, _ := g.blobMatchesDigest(t.Context(), oid, sha256Digest("hello\n"), 7); ok {
 		t.Error("size mismatch reported a match")
 	}
-	if ok, _ := g.baseMatchesDigest(t.Context(), oid, sha256Digest("other\n"), 6); ok {
+	if ok, _ := g.blobMatchesDigest(t.Context(), oid, sha256Digest("other\n"), 6); ok {
 		t.Error("digest mismatch reported a match")
+	}
+}
+
+func TestVerifyIngestedBlobsRejectsSHA1Collision(t *testing.T) {
+	checkout, base := initBaseRepo(t, map[string]string{"a.txt": "other\n"})
+	g := newTestRunner(t, checkout, testImportOptions(base))
+	tree, err := g.baseTree(t.Context(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oid := tree["a.txt"].oid
+	digest := sha256Digest("hello\n")
+	// Model a SHA-1 collision without requiring collision fixture bytes:
+	// verification derived oid for hello, but the object database holds
+	// different same-sized bytes at that oid.
+	expected := map[export.Digest]blobInfo{digest: {size: 6, gitOID: oid}}
+	ingested := map[export.Digest]string{digest: oid}
+	if err := g.verifyIngestedBlobs(t.Context(), []export.Digest{digest}, expected, ingested); !errors.Is(err, ErrDigestMismatch) {
+		t.Fatalf("verifyIngestedBlobs = %v, want %v", err, ErrDigestMismatch)
 	}
 }
 

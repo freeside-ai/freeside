@@ -281,7 +281,7 @@ func verifyBlobTo(dir *os.File, digest export.Digest, size int64, dst io.Writer)
 	// same check.
 	n, err := io.Copy(io.MultiWriter(writers...), io.LimitReader(f, size+1))
 	if err != nil {
-		return blobInfo{}, fmt.Errorf("read blob %s: %w: %w", digest, ErrHandoffUnreadable, err)
+		return blobInfo{}, fmt.Errorf("stream blob %s: %w: %w", digest, ErrHandoffUnreadable, err)
 	}
 	if n != size {
 		return blobInfo{}, fmt.Errorf("blob %s does not hold exactly the manifest's %d bytes: %w", digest, size, ErrSizeMismatch)

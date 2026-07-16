@@ -194,6 +194,7 @@ func TestIngestBlobsUsesVerifiedSnapshotAfterHandoffReplacement(t *testing.T) {
 		})
 	}
 }
+
 func TestBuildCommitRejectsUnplannedElision(t *testing.T) {
 	// A "modification" identical to base produces no diff-tree record;
 	// the acceptance cross-check must refuse the mismatch rather than

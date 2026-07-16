@@ -1,0 +1,27 @@
+{
+  "changes": [
+    {
+      "path": "a.txt",
+      "kind": "modified",
+      "mode": "100644",
+      "digest": "sha256:7aa7a5359173d05b63cfd682e3c38487f3cb4f7f1d60659fe59fab1505977d4c"
+    },
+    {
+      "path": "deep/x/y.txt",
+      "kind": "added",
+      "mode": "100644",
+      "digest": "sha256:3bb2abb69ebb27fbfe63c7639624c6ec5e331b841a5bc8c3ebc10b9285e90877"
+    },
+    {
+      "path": "del.txt",
+      "kind": "deleted"
+    },
+    {
+      "path": "run.sh",
+      "kind": "added",
+      "mode": "100755",
+      "digest": "sha256:a8076d3d28d21e02012b20eaf7dbf75409a6277134439025f282e368e3305abf"
+    }
+  ],
+  "findings": []
+}

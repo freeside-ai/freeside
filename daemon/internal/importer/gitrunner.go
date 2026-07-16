@@ -39,8 +39,8 @@ func (e *GitError) Unwrap() error { return e.Err }
 // no user or system config, commit-affecting checkout-local config
 // pinned (hardenedConfig), no hooks, no fsmonitor, no protocol access,
 // and a pinned daemon identity and date. Candidate bytes enter git only
-// as blob content on stdin or from the audited blob store; they are
-// never argument vector material.
+// from bounded, daemon-private snapshots of the audited blob store; they
+// are never argument vector material.
 type gitRunner struct {
 	gitPath string
 	dir     string // working directory for every invocation (the scratch)
@@ -236,18 +236,17 @@ func (g *gitRunner) blobDigest(ctx context.Context, oid string) (export.Digest, 
 	return h.digest(), h.size, nil
 }
 
-// baseMatchesDigest reports whether the base blob's content matches the
+// blobMatchesDigest reports whether a git blob's content matches the
 // given sha256 digest and size. The size is checked first (cheap): a
 // mismatch cannot match the digest and avoids streaming; only on a size
-// match does it stream the base blob through sha256. This gives the
-// caller SHA-256 evidence of base content independent of git's SHA-1
-// object identity.
-func (g *gitRunner) baseMatchesDigest(ctx context.Context, oid string, digest export.Digest, size int64) (bool, error) {
-	baseSize, err := g.blobSize(ctx, oid)
+// match does it stream the blob through sha256. This gives callers
+// SHA-256 content evidence independent of git's SHA-1 object identity.
+func (g *gitRunner) blobMatchesDigest(ctx context.Context, oid string, digest export.Digest, size int64) (bool, error) {
+	objectSize, err := g.blobSize(ctx, oid)
 	if err != nil {
 		return false, err
 	}
-	if baseSize != size {
+	if objectSize != size {
 		return false, nil
 	}
 	got, _, err := g.blobDigest(ctx, oid)
@@ -259,7 +258,9 @@ func (g *gitRunner) baseMatchesDigest(ctx context.Context, oid string, digest ex
 
 // ingestBlobs writes the immutable snapshots produced by content
 // verification into the checkout's object database via one hash-object
-// --stdin-paths invocation. Git never opens an untrusted pathname.
+// --stdin-paths invocation. Git never opens an untrusted pathname, and
+// each resulting object is checked by both its derived git OID and the
+// manifest's SHA-256 before use.
 func (g *gitRunner) ingestBlobs(ctx context.Context, digests []export.Digest, expected map[export.Digest]blobInfo) (map[export.Digest]string, error) {
 	if len(digests) == 0 {
 		return map[export.Digest]string{}, nil
@@ -288,7 +289,36 @@ func (g *gitRunner) ingestBlobs(ctx context.Context, digests []export.Digest, ex
 	for i, d := range digests {
 		m[d] = oids[i]
 	}
+	if err := g.verifyIngestedBlobs(ctx, digests, expected, m); err != nil {
+		return nil, err
+	}
 	return m, nil
+}
+
+// verifyIngestedBlobs closes the SHA-1 collision class at the object
+// database boundary. hash-object may return the expected SHA-1 while an
+// existing object at that name holds different bytes, or two distinct
+// handoff digests may derive the same SHA-1; the independent SHA-256
+// check rejects either case before the object can enter the index.
+func (g *gitRunner) verifyIngestedBlobs(ctx context.Context, digests []export.Digest, expected map[export.Digest]blobInfo, ingested map[export.Digest]string) error {
+	for _, d := range digests {
+		info, ok := expected[d]
+		if !ok {
+			return fmt.Errorf("blob %s has no verified metadata: %w", d, ErrTreeMismatch)
+		}
+		oid, ok := ingested[d]
+		if !ok || oid != info.gitOID {
+			return fmt.Errorf("blob %s ingested as %s, verification expected %s: %w", d, oid, info.gitOID, ErrTreeMismatch)
+		}
+		matches, err := g.blobMatchesDigest(ctx, oid, d, info.size)
+		if err != nil {
+			return err
+		}
+		if !matches {
+			return fmt.Errorf("ingested git object %s does not hold verified blob %s: %w", oid, d, ErrDigestMismatch)
+		}
+	}
+	return nil
 }
 
 // readTree seeds the scratch index with the enforced base's tree.

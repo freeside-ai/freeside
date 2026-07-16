@@ -17,9 +17,10 @@ const nullOID = "0000000000000000000000000000000000000000"
 // the enforced base. Two cross-checks hold construction to what content
 // verification proved: every ingested object name must equal the
 // pure-Go derivation, and the finished tree must differ from base by
-// exactly the derived change set (diff-tree, renames off). Any
-// disagreement aborts rather than committing a tree that misrepresents
-// the candidate.
+// exactly the derived change set (diff-tree, renames off). Ingested git
+// objects are also re-checked against the manifest's SHA-256, so a
+// SHA-1 collision cannot substitute different bytes. Any disagreement
+// aborts rather than committing a tree that misrepresents the candidate.
 func buildCommit(ctx context.Context, g *gitRunner, opts Options, changes []plannedChange) (treeSHA, commitSHA string, err error) {
 	if err := g.readTree(ctx, opts.BaseSHA); err != nil {
 		return "", "", err
@@ -28,8 +29,8 @@ func buildCommit(ctx context.Context, g *gitRunner, opts Options, changes []plan
 	seen := make(map[export.Digest]struct{})
 	expected := make(map[export.Digest]blobInfo)
 	for _, c := range changes {
-		if c.oid == "" {
-			continue
+		if c.oid == "" || c.fromBase {
+			continue // deletions, and mode-only changes whose object is already in base
 		}
 		if _, ok := seen[c.digest]; ok {
 			continue
@@ -46,8 +47,19 @@ func buildCommit(ctx context.Context, g *gitRunner, opts Options, changes []plan
 	for _, c := range changes {
 		switch c.kind {
 		case ChangeAdded, ChangeModified:
-			if got := ingested[c.digest]; got != c.oid {
-				return "", "", fmt.Errorf("blob %s ingested as %s, derivation expected %s: %w", c.digest, got, c.oid, ErrTreeMismatch)
+			if c.oid == "" {
+				// Derivation only plans content-free adds/modifies for
+				// changes whose findings block construction; reaching
+				// here is a pipeline bug, and committing would fake
+				// content the handoff never carried.
+				return "", "", fmt.Errorf("change %q has no verified content: %w", c.path, ErrTreeMismatch)
+			}
+			if !c.fromBase {
+				// A fromBase change reuses a trusted base object, so there
+				// is no ingested handoff blob to cross-check.
+				if got := ingested[c.digest]; got != c.oid {
+					return "", "", fmt.Errorf("blob %s ingested as %s, derivation expected %s: %w", c.digest, got, c.oid, ErrTreeMismatch)
+				}
 			}
 			records = append(records, c.mode+" "+c.oid+"\t"+c.path)
 		case ChangeDeleted:

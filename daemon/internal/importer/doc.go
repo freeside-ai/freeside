@@ -43,6 +43,10 @@
 //     pinned identity, no working-tree materialization
 //   - commit.go   scratch-index tree and commit construction with the
 //     exact-tree acceptance cross-check
+//   - derive.go   change derivation against the enforced base (the
+//     manifest is a full snapshot; what changed is computed here, never
+//     taken from workspace parentage)
+//   - importer.go the Import orchestrator and Result
 //
 // Lane: gauntlet. See docs/plan.md §5.4–§5.8 and the export package
 // (the manifest+blob wire contract's producer).
