@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/migrations"
@@ -170,6 +171,132 @@ func TestGetResolvedPolicyRejectsForgedDigest(t *testing.T) {
 	})
 	if !errors.Is(err, domain.ErrPolicyDigestMismatch) {
 		t.Fatalf("GetResolvedPolicy error = %v, want ErrPolicyDigestMismatch", err)
+	}
+}
+
+// TestGetRejectsForgedMetadata: runs, conversations, and deliveries share the
+// items' reconstruction convention (#91, extended by #98's shared scan
+// functions), so a store-impossible entity_version or as_of_revision fails
+// their Gets closed too. Internal test: the Put boundary always stamps valid
+// values, so the bad rows are written as raw SQL.
+func TestGetRejectsForgedMetadata(t *testing.T) {
+	ctx := context.Background()
+	db := openRaw(t)
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatalf("seedEpoch: %v", err)
+	}
+	s := &Store{db: db}
+
+	runBody, err := encode(domain.Run{
+		ID: "run-1", ProjectID: "proj-1",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+	})
+	if err != nil {
+		t.Fatalf("encode run: %v", err)
+	}
+	conversationBody, err := encode(domain.Conversation{ID: "conv-1"})
+	if err != nil {
+		t.Fatalf("encode conversation: %v", err)
+	}
+	deliveryBody, err := encode(domain.AttentionDelivery{
+		ItemID: "item-1", DeviceID: "device-1", Channel: "ntfy", Attempt: 1,
+		SubmittedAt: time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
+		Status:      domain.DeliverySubmitted,
+	})
+	if err != nil {
+		t.Fatalf("encode delivery: %v", err)
+	}
+	// A parent attention item to satisfy the deliveries foreign key; the
+	// delivery Get never reads it, so a minimal raw row suffices.
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO attention_items (id, project_id, conversation_id, entity_version, as_of_revision, body) VALUES ('item-1', 'proj-1', NULL, 1, 1, '{}')`); err != nil {
+		t.Fatalf("insert parent item: %v", err)
+	}
+
+	seeds := map[string]func(entityVersion, asOfRevision int64){
+		"run": func(ev, rev int64) {
+			t.Helper()
+			if _, err := db.ExecContext(ctx, `DELETE FROM runs`); err != nil {
+				t.Fatalf("reset runs: %v", err)
+			}
+			if _, err := db.ExecContext(ctx,
+				`INSERT INTO runs (id, project_id, policy_digest, entity_version, as_of_revision, body) VALUES ('run-1', 'proj-1', 'sha256:policy', ?, ?, ?)`,
+				ev, rev, runBody); err != nil {
+				t.Fatalf("insert run: %v", err)
+			}
+		},
+		"conversation": func(ev, rev int64) {
+			t.Helper()
+			if _, err := db.ExecContext(ctx, `DELETE FROM conversations`); err != nil {
+				t.Fatalf("reset conversations: %v", err)
+			}
+			if _, err := db.ExecContext(ctx,
+				`INSERT INTO conversations (id, entity_version, as_of_revision, body) VALUES ('conv-1', ?, ?, ?)`,
+				ev, rev, conversationBody); err != nil {
+				t.Fatalf("insert conversation: %v", err)
+			}
+		},
+		"delivery": func(ev, rev int64) {
+			t.Helper()
+			if _, err := db.ExecContext(ctx, `DELETE FROM attention_deliveries`); err != nil {
+				t.Fatalf("reset deliveries: %v", err)
+			}
+			if _, err := db.ExecContext(ctx,
+				`INSERT INTO attention_deliveries (item_id, device_id, channel, attempt, entity_version, as_of_revision, body) VALUES ('item-1', 'device-1', 'ntfy', 1, ?, ?, ?)`,
+				ev, rev, deliveryBody); err != nil {
+				t.Fatalf("insert delivery: %v", err)
+			}
+		},
+	}
+	reads := map[string]func() error{
+		"run": func() error {
+			return s.Read(ctx, func(tx *ReadTx) error {
+				_, err := tx.GetRun(ctx, "run-1")
+				return err
+			})
+		},
+		"conversation": func() error {
+			return s.Read(ctx, func(tx *ReadTx) error {
+				_, err := tx.GetConversation(ctx, "conv-1")
+				return err
+			})
+		},
+		"delivery": func() error {
+			return s.Read(ctx, func(tx *ReadTx) error {
+				_, err := tx.GetAttentionDelivery(ctx, "item-1", "device-1", "ntfy", 1)
+				return err
+			})
+		},
+	}
+
+	for entity, seed := range seeds {
+		read := reads[entity]
+		// Control rows prove the fixtures themselves reconstruct, so the forged
+		// cases below fail on the metadata alone.
+		seed(1, 1)
+		if err := read(); err != nil {
+			t.Fatalf("control %s read: %v", entity, err)
+		}
+		forged := []struct {
+			name    string
+			ev, rev int64
+		}{
+			{"entity_version zero", 0, 1},
+			{"entity_version negative", -1, 1},
+			{"as_of_revision zero", 1, 0},
+			{"as_of_revision negative", 1, -1},
+		}
+		for _, tc := range forged {
+			t.Run(entity+" "+tc.name, func(t *testing.T) {
+				seed(tc.ev, tc.rev)
+				if err := read(); !errors.Is(err, errRowInconsistent) {
+					t.Fatalf("error = %v, want errRowInconsistent", err)
+				}
+			})
+		}
 	}
 }
 

@@ -144,6 +144,13 @@ func decode[T validator](body []byte) (T, error) {
 	return v, nil
 }
 
+// scanner is the shared surface of *sql.Row and *sql.Rows: one reconstruction
+// function per entity (scan, decode, cross-check the extracted columns,
+// range-check the store-stamped metadata, re-run the policy gate) serves both
+// the single-entity Get and the collection List, so a gate added to one path
+// cannot be missed on the other.
+type scanner interface{ Scan(dest ...any) error }
+
 // putImmutable inserts a write-once row (INSERT ... ON CONFLICT DO NOTHING),
 // tolerating only a byte-identical replay of an existing key: canonical
 // json.Marshal is deterministic, so a retried Put of the same value converges
@@ -186,7 +193,9 @@ func (tx *InternalTx) putImmutable(ctx context.Context, insertSQL string, insert
 // still guards what the domain fixes at creation: identity bindings never
 // change, and recorded history (a run's stages and attempts, a
 // conversation's messages) only appends. Each Get selects the extracted
-// columns alongside the body and cross-checks them.
+// columns alongside the body and cross-checks them; the synchronized
+// aggregates funnel that reconstruction through one scan function per entity
+// (see scanner), which their collection Lists reuse.
 
 // existingBody fetches the current body for an aggregate's key, or nil when
 // the row does not exist. The query must be a constant from this file or
@@ -237,25 +246,37 @@ func (tx *WriteTx) PutRun(ctx context.Context, run domain.Run) error {
 	return nil
 }
 
-func (tx *ReadTx) GetRun(ctx context.Context, id domain.RunID) (domain.Run, error) {
+// scanRunSnapshot reconstructs one runs row (see the scanner doc for the
+// shared gate sequence). Errors are returned unwrapped; callers add the
+// entity/key context.
+func (tx *ReadTx) scanRunSnapshot(sc scanner) (domain.Run, Snapshot, error) {
 	var (
+		id           string
 		projectID    string
 		policyDigest string
+		snap         Snapshot
 		body         []byte
 	)
-	err := tx.tx.QueryRowContext(ctx,
-		`SELECT project_id, policy_digest, body FROM runs WHERE id = ?`, id).
-		Scan(&projectID, &policyDigest, &body)
-	if err != nil {
-		return domain.Run{}, fmt.Errorf("get run %q: %w", id, notFoundOr(err))
+	if err := sc.Scan(&id, &projectID, &policyDigest, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
+		return domain.Run{}, Snapshot{}, err
 	}
 	run, err := decode[domain.Run](body)
 	if err != nil {
-		return domain.Run{}, fmt.Errorf("get run %q: %w", id, err)
+		return domain.Run{}, Snapshot{}, err
 	}
-	if run.ID != id || run.ProjectID != domain.ProjectID(projectID) ||
-		run.PolicyDigest != domain.Digest(policyDigest) {
-		return domain.Run{}, fmt.Errorf("get run %q: %w", id, errRowInconsistent)
+	if run.ID != domain.RunID(id) || run.ProjectID != domain.ProjectID(projectID) ||
+		run.PolicyDigest != domain.Digest(policyDigest) ||
+		snap.EntityVersion < 1 || snap.AsOfRevision < 1 {
+		return domain.Run{}, Snapshot{}, errRowInconsistent
+	}
+	return run, snap, nil
+}
+
+func (tx *ReadTx) GetRun(ctx context.Context, id domain.RunID) (domain.Run, error) {
+	run, _, err := tx.scanRunSnapshot(tx.tx.QueryRowContext(ctx,
+		`SELECT id, project_id, policy_digest, entity_version, as_of_revision, body FROM runs WHERE id = ?`, id))
+	if err != nil {
+		return domain.Run{}, fmt.Errorf("get run %q: %w", id, notFoundOr(err))
 	}
 	return run, nil
 }
@@ -292,19 +313,33 @@ func (tx *WriteTx) PutConversation(ctx context.Context, conversation domain.Conv
 	return nil
 }
 
-func (tx *ReadTx) GetConversation(ctx context.Context, id domain.ConversationID) (domain.Conversation, error) {
-	var body []byte
-	err := tx.tx.QueryRowContext(ctx,
-		`SELECT body FROM conversations WHERE id = ?`, id).Scan(&body)
-	if err != nil {
-		return domain.Conversation{}, fmt.Errorf("get conversation %q: %w", id, notFoundOr(err))
+// scanConversationSnapshot reconstructs one conversations row (see the
+// scanner doc for the shared gate sequence).
+func (tx *ReadTx) scanConversationSnapshot(sc scanner) (domain.Conversation, Snapshot, error) {
+	var (
+		id   string
+		snap Snapshot
+		body []byte
+	)
+	if err := sc.Scan(&id, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
+		return domain.Conversation{}, Snapshot{}, err
 	}
 	conversation, err := decode[domain.Conversation](body)
 	if err != nil {
-		return domain.Conversation{}, fmt.Errorf("get conversation %q: %w", id, err)
+		return domain.Conversation{}, Snapshot{}, err
 	}
-	if conversation.ID != id {
-		return domain.Conversation{}, fmt.Errorf("get conversation %q: %w", id, errRowInconsistent)
+	if conversation.ID != domain.ConversationID(id) ||
+		snap.EntityVersion < 1 || snap.AsOfRevision < 1 {
+		return domain.Conversation{}, Snapshot{}, errRowInconsistent
+	}
+	return conversation, snap, nil
+}
+
+func (tx *ReadTx) GetConversation(ctx context.Context, id domain.ConversationID) (domain.Conversation, error) {
+	conversation, _, err := tx.scanConversationSnapshot(tx.tx.QueryRowContext(ctx,
+		`SELECT id, entity_version, as_of_revision, body FROM conversations WHERE id = ?`, id))
+	if err != nil {
+		return domain.Conversation{}, fmt.Errorf("get conversation %q: %w", id, notFoundOr(err))
 	}
 	return conversation, nil
 }
@@ -465,23 +500,33 @@ type Snapshot struct {
 // inside the body cannot distinguish a stale expected_entity_version when the
 // domain content matches, so acceptance needs the store's own version counter.
 func (tx *ReadTx) GetAttentionItemSnapshot(ctx context.Context, id domain.ItemID) (domain.AttentionItem, Snapshot, error) {
+	item, snap, err := tx.scanAttentionItemSnapshot(tx.tx.QueryRowContext(ctx,
+		`SELECT id, project_id, conversation_id, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
+	if err != nil {
+		return domain.AttentionItem{}, Snapshot{}, fmt.Errorf("get attention item %q: %w", id, notFoundOr(err))
+	}
+	return item, snap, nil
+}
+
+// scanAttentionItemSnapshot reconstructs one attention_items row (see the
+// scanner doc for the shared gate sequence), including the evidence policy
+// re-gate.
+func (tx *ReadTx) scanAttentionItemSnapshot(sc scanner) (domain.AttentionItem, Snapshot, error) {
 	var (
+		id             string
 		projectID      string
 		conversationID sql.NullString
 		snap           Snapshot
 		body           []byte
 	)
-	err := tx.tx.QueryRowContext(ctx,
-		`SELECT project_id, conversation_id, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id).
-		Scan(&projectID, &conversationID, &snap.EntityVersion, &snap.AsOfRevision, &body)
-	if err != nil {
-		return domain.AttentionItem{}, Snapshot{}, fmt.Errorf("get attention item %q: %w", id, notFoundOr(err))
+	if err := sc.Scan(&id, &projectID, &conversationID, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	item, err := decode[domain.AttentionItem](body)
 	if err != nil {
-		return domain.AttentionItem{}, Snapshot{}, fmt.Errorf("get attention item %q: %w", id, err)
+		return domain.AttentionItem{}, Snapshot{}, err
 	}
-	consistent := item.ID == id && item.ProjectID == domain.ProjectID(projectID)
+	consistent := item.ID == domain.ItemID(id) && item.ProjectID == domain.ProjectID(projectID)
 	if conversationID.Valid {
 		consistent = consistent && item.ConversationID != nil &&
 			*item.ConversationID == domain.ConversationID(conversationID.String)
@@ -493,13 +538,13 @@ func (tx *ReadTx) GetAttentionItemSnapshot(ctx context.Context, id domain.ItemID
 	// positive) is a forged or corrupt row, refused like a diverging column.
 	consistent = consistent && snap.EntityVersion >= 1 && snap.AsOfRevision >= 1
 	if !consistent {
-		return domain.AttentionItem{}, Snapshot{}, fmt.Errorf("get attention item %q: %w", id, errRowInconsistent)
+		return domain.AttentionItem{}, Snapshot{}, errRowInconsistent
 	}
 	// Reconstruction re-runs the evidence gate: decode's Validate cannot check
 	// recipe approval, so an item carrying evidence under a now-unapproved (or
 	// forged) recipe fails closed rather than reconstructing as valid.
 	if err := tx.gateEvidence(item); err != nil {
-		return domain.AttentionItem{}, Snapshot{}, fmt.Errorf("get attention item %q: %w", id, err)
+		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	return item, snap, nil
 }
@@ -562,21 +607,38 @@ func (tx *WriteTx) PutAttentionDelivery(ctx context.Context, delivery domain.Att
 	return nil
 }
 
-func (tx *ReadTx) GetAttentionDelivery(ctx context.Context, itemID domain.ItemID, deviceID domain.DeviceID, channel string, attempt int) (domain.AttentionDelivery, error) {
-	var body []byte
-	err := tx.tx.QueryRowContext(ctx,
-		`SELECT body FROM attention_deliveries WHERE item_id = ? AND device_id = ? AND channel = ? AND attempt = ?`,
-		itemID, deviceID, channel, attempt).Scan(&body)
-	if err != nil {
-		return domain.AttentionDelivery{}, fmt.Errorf("get attention delivery %q/%q/%q/%d: %w", itemID, deviceID, channel, attempt, notFoundOr(err))
+// scanAttentionDeliverySnapshot reconstructs one attention_deliveries row
+// (see the scanner doc for the shared gate sequence).
+func (tx *ReadTx) scanAttentionDeliverySnapshot(sc scanner) (domain.AttentionDelivery, Snapshot, error) {
+	var (
+		itemID   string
+		deviceID string
+		channel  string
+		attempt  int
+		snap     Snapshot
+		body     []byte
+	)
+	if err := sc.Scan(&itemID, &deviceID, &channel, &attempt, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
+		return domain.AttentionDelivery{}, Snapshot{}, err
 	}
 	delivery, err := decode[domain.AttentionDelivery](body)
 	if err != nil {
-		return domain.AttentionDelivery{}, fmt.Errorf("get attention delivery %q/%q/%q/%d: %w", itemID, deviceID, channel, attempt, err)
+		return domain.AttentionDelivery{}, Snapshot{}, err
 	}
-	if delivery.ItemID != itemID || delivery.DeviceID != deviceID ||
-		delivery.Channel != channel || delivery.Attempt != attempt {
-		return domain.AttentionDelivery{}, fmt.Errorf("get attention delivery %q/%q/%q/%d: %w", itemID, deviceID, channel, attempt, errRowInconsistent)
+	if delivery.ItemID != domain.ItemID(itemID) || delivery.DeviceID != domain.DeviceID(deviceID) ||
+		delivery.Channel != channel || delivery.Attempt != attempt ||
+		snap.EntityVersion < 1 || snap.AsOfRevision < 1 {
+		return domain.AttentionDelivery{}, Snapshot{}, errRowInconsistent
+	}
+	return delivery, snap, nil
+}
+
+func (tx *ReadTx) GetAttentionDelivery(ctx context.Context, itemID domain.ItemID, deviceID domain.DeviceID, channel string, attempt int) (domain.AttentionDelivery, error) {
+	delivery, _, err := tx.scanAttentionDeliverySnapshot(tx.tx.QueryRowContext(ctx,
+		`SELECT item_id, device_id, channel, attempt, entity_version, as_of_revision, body FROM attention_deliveries WHERE item_id = ? AND device_id = ? AND channel = ? AND attempt = ?`,
+		itemID, deviceID, channel, attempt))
+	if err != nil {
+		return domain.AttentionDelivery{}, fmt.Errorf("get attention delivery %q/%q/%q/%d: %w", itemID, deviceID, channel, attempt, notFoundOr(err))
 	}
 	return delivery, nil
 }
