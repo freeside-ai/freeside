@@ -54,6 +54,10 @@ type Config struct {
 	// ExporterTimeout bounds the wait for the exporter container to reach
 	// observed state stopped. Defaults to 5 minutes.
 	ExporterTimeout time.Duration
+	// TeardownTimeout bounds teardown, which runs detached from the caller's
+	// cancellation. Without its own deadline a wedged runtime call could keep
+	// a cancelled Handoff from ever returning. Defaults to 2 minutes.
+	TeardownTimeout time.Duration
 	// PollInterval is the state-poll spacing. Defaults to 500ms.
 	PollInterval time.Duration
 	// MaxExportBytes caps the bytes extracted from the exported archive's
@@ -85,6 +89,9 @@ func (cfg Config) withDefaults() Config {
 	if cfg.ExporterTimeout == 0 {
 		cfg.ExporterTimeout = 5 * time.Minute
 	}
+	if cfg.TeardownTimeout == 0 {
+		cfg.TeardownTimeout = 2 * time.Minute
+	}
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = 500 * time.Millisecond
 	}
@@ -114,6 +121,14 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: ProofPath %q is not absolute", ErrInvalidConfig, cfg.ProofPath)
 	case cfg.MaxExportBytes < 0:
 		return fmt.Errorf("%w: MaxExportBytes %d is negative", ErrInvalidConfig, cfg.MaxExportBytes)
+	case cfg.WriterStopTimeout < 0:
+		return fmt.Errorf("%w: WriterStopTimeout %s is negative", ErrInvalidConfig, cfg.WriterStopTimeout)
+	case cfg.ExporterTimeout < 0:
+		return fmt.Errorf("%w: ExporterTimeout %s is negative", ErrInvalidConfig, cfg.ExporterTimeout)
+	case cfg.PollInterval < 0:
+		return fmt.Errorf("%w: PollInterval %s is negative", ErrInvalidConfig, cfg.PollInterval)
+	case cfg.TeardownTimeout < 0:
+		return fmt.Errorf("%w: TeardownTimeout %s is negative", ErrInvalidConfig, cfg.TeardownTimeout)
 	case cfg.Scanner == nil:
 		return fmt.Errorf("%w: Scanner is required (check 7 scans every export)", ErrInvalidConfig)
 	}

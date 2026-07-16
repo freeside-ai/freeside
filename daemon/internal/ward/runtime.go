@@ -136,6 +136,10 @@ type Runtime interface {
 	CreateContainer(ctx context.Context, spec ContainerSpec) error
 	// StartContainer starts a created container.
 	StartContainer(ctx context.Context, id string) error
+	// StopContainer stops a running container. The gate never uses it on the
+	// happy path (the writer must be observed to stop on its own); teardown
+	// uses it to reap a hung container after the gate already failed.
+	StopContainer(ctx context.Context, id string) error
 	// Inspect returns the observed configuration and state of a container.
 	Inspect(ctx context.Context, id string) (InspectReport, error)
 	// DeleteContainer deletes a stopped container.

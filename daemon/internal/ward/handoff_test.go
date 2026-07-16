@@ -1,0 +1,610 @@
+package ward
+
+import (
+	"context"
+	"errors"
+	"math"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// handoffFixture wires a fake runtime to a backend with deterministic
+// waiting: Sleep is a no-op counter, and timeouts are budgeted in whole poll
+// intervals, so no test depends on wall-clock time.
+type handoffFixture struct {
+	rt     *fakeRuntime
+	cfg    Config
+	sleeps *int
+}
+
+func newHandoffFixture(t *testing.T) *handoffFixture {
+	t.Helper()
+	sleeps := 0
+	cfg := testConfig()
+	cfg.PollInterval = time.Millisecond
+	cfg.WriterStopTimeout = 10 * time.Millisecond // 10 poll attempts
+	cfg.ExporterTimeout = 10 * time.Millisecond
+	cfg.Sleep = func(context.Context, time.Duration) error {
+		sleeps++
+		return nil
+	}
+	return &handoffFixture{rt: newFakeRuntime(t), cfg: cfg, sleeps: &sleeps}
+}
+
+func (fx *handoffFixture) backend(t *testing.T) *Backend {
+	t.Helper()
+	b, err := New(fx.rt, fx.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func (fx *handoffFixture) run(t *testing.T) (*HandoffResult, error) {
+	t.Helper()
+	res, err := fx.backend(t).Handoff(context.Background(), testHandoffSpec())
+	if res != nil {
+		t.Cleanup(func() { _ = os.RemoveAll(res.ExportDir) })
+	}
+	return res, err
+}
+
+// assertReaped proves teardown left nothing: no containers, no volumes
+// (acceptance 5, asserted after success and after every induced failure).
+func (fx *handoffFixture) assertReaped(t *testing.T) {
+	t.Helper()
+	fx.rt.mu.Lock()
+	defer fx.rt.mu.Unlock()
+	for name := range fx.rt.ctrs {
+		t.Errorf("container %q survived teardown", name)
+	}
+	for name := range fx.rt.vols {
+		t.Errorf("volume %q survived teardown", name)
+	}
+}
+
+func wantCheckFailure(t *testing.T, err error, want Check) {
+	t.Helper()
+	var cf *ConformanceFailure
+	if !errors.As(err, &cf) {
+		t.Fatalf("error = %v, want ConformanceFailure", err)
+	}
+	if cf.Check != want {
+		t.Fatalf("Check = %q, want %q (reason: %s)", cf.Check, want, cf.Reason)
+	}
+	if !errors.Is(err, ErrConformance) {
+		t.Error("failure does not unwrap to ErrConformance")
+	}
+}
+
+func TestHandoffSuccess(t *testing.T) {
+	fx := newHandoffFixture(t)
+	res, err := fx.run(t)
+	if err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+
+	if res.Admission.Backend != BackendName {
+		t.Errorf("Admission.Backend = %q, want %q", res.Admission.Backend, BackendName)
+	}
+	for _, c := range declaredCapabilities {
+		if !res.Admission.Declared.Has(c) {
+			t.Errorf("Admission.Declared missing %q", c)
+		}
+	}
+	if len(res.Manifest.Entries) != 1 {
+		t.Errorf("Manifest entries = %d, want 1", len(res.Manifest.Entries))
+	}
+	if _, err := os.Stat(filepath.Join(res.ExportDir, "manifest.json")); err != nil {
+		t.Errorf("released output dir: %v", err)
+	}
+	// Only the returned output dir survives: the archive scratch dir is
+	// removed, and no other handoff temp dir for this run lingers.
+	for _, d := range scratchDirs(t, testHandoffSpec().RunID) {
+		if d != res.ExportDir {
+			t.Errorf("unexpected leftover handoff temp dir: %s", d)
+		}
+	}
+	fx.assertReaped(t)
+}
+
+// TestHandoffOrderObservedState is acceptance 3: the gate acts on observed
+// stopped state, never on scheduling intent. The agent reports running for
+// three polls; nothing writer-terminating or exporter-related may happen
+// before the stopped observation, and the exporter is inspected before it
+// is started (check 4 is pre-execution).
+func TestHandoffOrderObservedState(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.runningInspects[names.Agent] = 3
+
+	if _, err := fx.run(t); err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+
+	idx := func(call string) int {
+		i := fx.rt.callIndex(call)
+		if i < 0 {
+			t.Fatalf("call %q never happened", call)
+		}
+		return i
+	}
+	deleteAgent := idx("delete-container " + names.Agent)
+	createExporter := idx("create-container " + names.Exporter)
+	inspectExporter := idx("inspect " + names.Exporter)
+	startExporter := idx("start-container " + names.Exporter)
+
+	// Four agent inspects: three running, the fourth stopped.
+	agentInspects := 0
+	lastAgentInspect := -1
+	fx.rt.mu.Lock()
+	for i, c := range fx.rt.calls {
+		if c == "inspect "+names.Agent && i < deleteAgent {
+			agentInspects++
+			lastAgentInspect = i
+		}
+	}
+	fx.rt.mu.Unlock()
+	if agentInspects != 4 {
+		t.Errorf("agent inspected %d times before delete, want 4 (3 running + 1 stopped)", agentInspects)
+	}
+	if lastAgentInspect >= deleteAgent || deleteAgent >= createExporter {
+		t.Errorf("writer termination out of order: last inspect %d, delete %d, exporter create %d",
+			lastAgentInspect, deleteAgent, createExporter)
+	}
+	if createExporter >= inspectExporter || inspectExporter >= startExporter {
+		t.Errorf("check 4 not pre-execution: create %d, inspect %d, start %d",
+			createExporter, inspectExporter, startExporter)
+	}
+}
+
+// TestHandoffWriterNeverStops is acceptance 2/3 for check 3: a writer that
+// stays running exhausts the observation budget and fails the gate; no
+// exporter is ever created, and teardown still reaps everything.
+func TestHandoffWriterNeverStops(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.runningInspects[names.Agent] = math.MaxInt - 1
+
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckWriterTermination)
+	if i := fx.rt.callIndex("create-container " + names.Exporter); i >= 0 {
+		t.Error("exporter was created despite an unterminated writer")
+	}
+	fx.assertReaped(t)
+}
+
+func TestHandoffAgentDeleteFails(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.onDeleteContainer = func(id string) (bool, error) {
+		if id == names.Agent {
+			return false, errors.New("runtime refused")
+		}
+		return false, nil
+	}
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckWriterTermination)
+}
+
+// TestHandoffAgentStillListed: a successful delete call is not enough; the
+// ID must be absent from the full listing.
+func TestHandoffAgentStillListed(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
+		return append(list, ContainerSummary{ID: names.Agent, State: StateStopped}), nil
+	}
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckWriterTermination)
+}
+
+// TestHandoffAmbiguousCreateReaped: a CreateContainer that makes the
+// container but then reports failure (a cancellation or post-create CLI
+// error) must not leak the credential-bearing writer. Teardown reaps by
+// listing, so the object is cleaned up even though no in-memory flag was
+// ever set for it.
+func TestHandoffAmbiguousCreateReaped(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.createThenFail = names.Agent
+
+	_, err := fx.run(t)
+	if err == nil {
+		t.Fatal("ambiguous create returned success")
+	}
+	// The agent container existed but the create call failed; teardown must
+	// still have reaped it (and the workspace volume).
+	fx.assertReaped(t)
+}
+
+// TestHandoffListContainersError: check 3's absence proof fails closed when
+// the runtime cannot be listed, rather than trusting the delete call.
+func TestHandoffListContainersError(t *testing.T) {
+	fx := newHandoffFixture(t)
+	fx.rt.onListContainers = func([]ContainerSummary) ([]ContainerSummary, error) {
+		return nil, errors.New("apiserver down")
+	}
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckWriterTermination)
+}
+
+// TestHandoffAgentLingersTeardownReaps: when the agent delete reports
+// success but the container is still listed (a lying runtime, the exact
+// case check 3 catches), the credential-bearing agent must not leak: the
+// liveness flag stays set until absence is proven, so teardown re-attempts
+// to reap it rather than trusting the delete.
+func TestHandoffAgentLingersTeardownReaps(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.onDeleteContainer = func(id string) (bool, error) {
+		if id == names.Agent {
+			return true, nil // report success, leave the container
+		}
+		return false, nil
+	}
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckWriterTermination)
+
+	deletes := 0
+	fx.rt.mu.Lock()
+	for _, c := range fx.rt.calls {
+		if c == "delete-container "+names.Agent {
+			deletes++
+		}
+	}
+	fx.rt.mu.Unlock()
+	if deletes < 2 {
+		t.Errorf("agent delete attempted %d times; teardown did not reap the lingering credential-bearing agent", deletes)
+	}
+}
+
+// TestHandoffExporterAllowlistViolation is acceptance 2 for check 4 through
+// the full lifecycle: the runtime reports an extra mount on the exporter,
+// and the gate fails before the exporter ever executes.
+func TestHandoffExporterAllowlistViolation(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+		if id == names.Exporter {
+			rep.Mounts = append(rep.Mounts, Mount{
+				Type: MountVolume, Source: "provider-cred", Target: "/credentials", ReadOnly: true,
+			})
+		}
+		return rep, nil
+	}
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckExporterAllowlist)
+	if i := fx.rt.callIndex("start-container " + names.Exporter); i >= 0 {
+		t.Error("exporter was started despite a failed pre-execution inspection")
+	}
+	fx.assertReaped(t)
+}
+
+// TestHandoffExporterNeverStops: an exporter that hangs exhausts its budget
+// and fails the export check.
+func TestHandoffExporterNeverStops(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.runningInspects[names.Exporter] = math.MaxInt - 1
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckExportVerification)
+	fx.assertReaped(t)
+}
+
+// TestHandoffProofMissing is acceptance 2 for check 5 through the full
+// lifecycle: an exported rootfs without the proof file fails.
+func TestHandoffProofMissing(t *testing.T) {
+	fx := newHandoffFixture(t)
+	entries := fixtureArchive(t)
+	fx.rt.exportTarPath = buildTar(t, append(entries[:3:3], entries[4:]...))
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckInExporterVerification)
+	fx.assertReaped(t)
+}
+
+// TestHandoffScannerRefusal is acceptance 2 for check 7 through the full
+// lifecycle.
+func TestHandoffScannerRefusal(t *testing.T) {
+	fx := newHandoffFixture(t)
+	fx.cfg.Scanner = scannerFunc(func(context.Context, string) error {
+		return errors.New("marker found")
+	})
+	res, err := fx.run(t)
+	wantCheckFailure(t, err, CheckExportVerification)
+	if res != nil {
+		t.Error("refused export still released a result")
+	}
+	fx.assertReaped(t)
+}
+
+// TestHandoffTeardownFailure: everything passes but the workspace volume
+// cannot be deleted; the gate still fails, no result is released, and the
+// verified output dir is cleaned (the caller gets nil and cannot own it).
+func TestHandoffTeardownFailure(t *testing.T) {
+	fx := newHandoffFixture(t)
+	runID := testHandoffSpec().RunID
+	fx.rt.onDeleteVolume = func(string) (bool, error) {
+		return true, errors.New("volume busy")
+	}
+	before := scratchDirs(t, runID)
+	res, err := fx.run(t)
+	wantCheckFailure(t, err, CheckTeardown)
+	if res != nil {
+		t.Error("teardown failure still released a result")
+	}
+	if after := scratchDirs(t, runID); len(after) > len(before) {
+		t.Errorf("teardown failure after a good export leaked output dir(s): %v", after)
+	}
+}
+
+// TestHandoffVolumeSurvives: a delete call that silently does nothing is
+// caught by the labeled-volume sweep.
+func TestHandoffVolumeSurvives(t *testing.T) {
+	fx := newHandoffFixture(t)
+	fx.rt.onDeleteVolume = func(string) (bool, error) {
+		return true, nil // pretend success, leave the volume
+	}
+	res, err := fx.run(t)
+	wantCheckFailure(t, err, CheckTeardown)
+	if res != nil {
+		t.Error("survived volume still released a result")
+	}
+}
+
+// TestHandoffContainerSurvives: a container delete that reports success but
+// leaves the container is caught by teardown's re-listing sweep, mirroring
+// the volume case. Teardown proves absence, never trusting the delete call.
+func TestHandoffContainerSurvives(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	// The exporter delete lies: it reports success but leaves the container.
+	fx.rt.onDeleteContainer = func(id string) (bool, error) {
+		return id == names.Exporter, nil
+	}
+	res, err := fx.run(t)
+	wantCheckFailure(t, err, CheckTeardown)
+	if res != nil {
+		t.Error("survived container still released a result")
+	}
+}
+
+// TestHandoffWorkspaceVolumeSurvivesUnlabeled: a workspace volume that
+// survives teardown with its label dropped is still flagged by name, so an
+// unlabeled survivor holding agent-written data cannot pass as reaped.
+func TestHandoffWorkspaceVolumeSurvivesUnlabeled(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.onDeleteVolume = func(string) (bool, error) {
+		return true, nil // report success, leave the volume
+	}
+	fx.rt.onListVolumes = func(list []VolumeSummary) ([]VolumeSummary, error) {
+		// The workspace volume survives but with no labels.
+		return []VolumeSummary{{Name: names.Workspace}}, nil
+	}
+	res, err := fx.run(t)
+	wantCheckFailure(t, err, CheckTeardown)
+	if res != nil {
+		t.Error("unlabeled surviving workspace volume still released a result")
+	}
+}
+
+// TestHandoffTeardownListVolumesError: teardown fails closed when it cannot
+// list volumes to prove nothing was left behind.
+func TestHandoffTeardownListVolumesError(t *testing.T) {
+	fx := newHandoffFixture(t)
+	fx.rt.onListVolumes = func([]VolumeSummary) ([]VolumeSummary, error) {
+		return nil, errors.New("apiserver down")
+	}
+	res, err := fx.run(t)
+	wantCheckFailure(t, err, CheckTeardown)
+	if res != nil {
+		t.Error("unverifiable teardown still released a result")
+	}
+}
+
+// TestHandoffScratchDirCleaned: a failed run leaves no scratch directory in
+// the host temp dir. The scratch dir holds the raw exporter rootfs archive
+// and extracted output, plausibly the very credential a refused scan
+// withheld; it must not persist.
+func TestHandoffScratchDirCleaned(t *testing.T) {
+	fx := newHandoffFixture(t)
+	fx.cfg.Scanner = scannerFunc(func(context.Context, string) error {
+		return errors.New("marker found")
+	})
+	runID := testHandoffSpec().RunID
+	before := scratchDirs(t, runID)
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckExportVerification)
+	if after := scratchDirs(t, runID); len(after) > len(before) {
+		t.Errorf("failed run leaked scratch dir(s): before %v, after %v", before, after)
+	}
+}
+
+// scratchDirs lists this run's handoff scratch directories in the host temp
+// dir (os.MkdirTemp names them "freeside-handoff-<runID>-{tar,out}-*").
+func scratchDirs(t *testing.T, runID string) []string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(os.TempDir(), "freeside-handoff-"+runID+"-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return matches
+}
+
+// TestHandoffPrimaryErrorWins: when a check fails and teardown also fails,
+// the check failure is the returned error (teardown must not mask the
+// cause), but the run still returns no result.
+func TestHandoffPrimaryErrorWins(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.runningInspects[names.Agent] = math.MaxInt - 1
+	fx.rt.onDeleteVolume = func(string) (bool, error) {
+		return true, errors.New("volume busy")
+	}
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckWriterTermination)
+}
+
+// TestHandoffTeardownBounded proves teardown runs under its own deadline: a
+// runtime call that blocks past TeardownTimeout still lets Handoff return
+// (as a teardown failure) rather than hanging, even though teardown is
+// detached from the caller's cancellation.
+func TestHandoffTeardownBounded(t *testing.T) {
+	fx := newHandoffFixture(t)
+	fx.cfg.TeardownTimeout = 50 * time.Millisecond
+	// The exporter delete (reached only in teardown) blocks until its own
+	// context is done, modeling a wedged runtime call.
+	fx.rt.blockDelete = namesFor(testHandoffSpec().RunID).Exporter
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := fx.backend(t).Handoff(context.Background(), testHandoffSpec())
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		wantCheckFailure(t, err, CheckTeardown)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Handoff did not return; teardown was not bounded")
+	}
+}
+
+// TestHandoffNoReapBeforeClaim: a failure before the first create (here an
+// invalid credential mount, caught by validateAgentSpec) must not let
+// teardown reap by name, since this invocation created nothing and the names
+// could belong to another live run sharing the RunID.
+func TestHandoffNoReapBeforeClaim(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	// Simulate another live run already owning these names.
+	fx.rt.ctrs[names.Agent] = &fakeCtr{started: true}
+	fx.rt.vols[names.Workspace] = runLabels(testHandoffSpec().RunID)
+
+	spec := testHandoffSpec()
+	// A relative credential target passes HandoffSpec.validate but fails
+	// validateAgentSpec, which runs before anything is created.
+	spec.Agent.CredentialMounts = []CredentialMount{{Volume: "cred", Target: "relative"}}
+	_, err := fx.backend(t).Handoff(context.Background(), spec)
+	if !errors.Is(err, ErrConformance) {
+		t.Fatalf("Handoff = %v, want a conformance failure before any create", err)
+	}
+
+	fx.rt.mu.Lock()
+	defer fx.rt.mu.Unlock()
+	if _, ok := fx.rt.ctrs[names.Agent]; !ok {
+		t.Error("teardown reaped another run's container despite creating nothing")
+	}
+	if _, ok := fx.rt.vols[names.Workspace]; !ok {
+		t.Error("teardown reaped another run's volume despite creating nothing")
+	}
+	// It must not have even listed/deleted (no reap attempt at all).
+	for _, c := range fx.rt.calls {
+		if c == "delete-container "+names.Agent || c == "delete-volume "+names.Workspace {
+			t.Errorf("teardown attempted a reap before the run claimed its names: %q", c)
+		}
+	}
+}
+
+func TestHandoffInvalidSpec(t *testing.T) {
+	fx := newHandoffFixture(t)
+	spec := testHandoffSpec()
+	spec.RunID = "NOT-VALID"
+	_, err := fx.backend(t).Handoff(context.Background(), spec)
+	if !errors.Is(err, ErrInvalidHandoffSpec) {
+		t.Fatalf("Handoff = %v, want ErrInvalidHandoffSpec", err)
+	}
+	fx.rt.mu.Lock()
+	defer fx.rt.mu.Unlock()
+	if len(fx.rt.calls) != 0 {
+		t.Errorf("invalid spec still touched the runtime: %v", fx.rt.calls)
+	}
+}
+
+// TestHandoffCancelled: a cancelled context aborts the wait, fails the gate,
+// and teardown still reaps everything (it runs detached from the caller's
+// cancellation).
+func TestHandoffCancelled(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.runningInspects[names.Agent] = math.MaxInt - 1
+	ctx, cancel := context.WithCancel(context.Background())
+	fx.cfg.Sleep = func(ctx context.Context, _ time.Duration) error {
+		cancel()
+		return ctx.Err()
+	}
+	_, err := fx.backend(t).Handoff(ctx, testHandoffSpec())
+	if err == nil {
+		t.Fatal("cancelled handoff returned success")
+	}
+	fx.assertReaped(t)
+}
+
+// TestHandoffRuntimeErrorsFailClosed: representative runtime failures at
+// each lifecycle step yield an error, never a partial result.
+func TestHandoffRuntimeErrorsFailClosed(t *testing.T) {
+	names := namesFor(testHandoffSpec().RunID)
+	cases := []struct {
+		name string
+		set  func(fx *handoffFixture)
+	}{
+		{"create volume fails", func(fx *handoffFixture) {
+			fx.rt.onCreateVolume = func(string) error { return errors.New("disk full") }
+		}},
+		{"create agent fails", func(fx *handoffFixture) {
+			fx.rt.onCreateContainer = func(spec ContainerSpec) error {
+				if spec.Name == names.Agent {
+					return errors.New("image missing")
+				}
+				return nil
+			}
+		}},
+		{"start agent fails", func(fx *handoffFixture) {
+			fx.rt.onStart = func(id string) error {
+				if id == names.Agent {
+					return errors.New("boot failure")
+				}
+				return nil
+			}
+		}},
+		{"inspect fails", func(fx *handoffFixture) {
+			fx.rt.onInspect = func(string, InspectReport) (InspectReport, error) {
+				return InspectReport{}, errors.New("apiserver down")
+			}
+		}},
+		{"export fails", func(fx *handoffFixture) {
+			fx.rt.onExport = func(string, string) error { return errors.New("io error") }
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newHandoffFixture(t)
+			tc.set(fx)
+			res, err := fx.run(t)
+			if err == nil {
+				t.Fatal("runtime failure returned success")
+			}
+			if res != nil {
+				t.Error("runtime failure still released a result")
+			}
+		})
+	}
+}
+
+// TestHandoffSleepBudget: the wait loop spends its budget in whole poll
+// intervals through the injected Sleep — no wall-clock dependence. Agent:
+// three running polls, so three sleeps before the stopped observation.
+// Exporter: one running poll (the fake default), so one sleep.
+func TestHandoffSleepBudget(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.runningInspects[names.Agent] = 3
+	if _, err := fx.run(t); err != nil {
+		t.Fatalf("Handoff = %v", err)
+	}
+	if *fx.sleeps != 4 {
+		t.Errorf("sleeps = %d, want 4", *fx.sleeps)
+	}
+}

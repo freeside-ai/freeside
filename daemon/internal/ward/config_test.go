@@ -39,6 +39,11 @@ func TestConfigValidate(t *testing.T) {
 		{"proof equals handoff", func(c *Config) { c.ProofPath = c.HandoffDir }},
 		{"workspace inside handoff", func(c *Config) { c.WorkspaceTarget = c.HandoffDir + "/ws" }},
 		{"comma in workspace target", func(c *Config) { c.WorkspaceTarget = "/workspace,type=bind" }},
+		{"negative writer timeout", func(c *Config) { c.WriterStopTimeout = -time.Second }},
+		{"negative exporter timeout", func(c *Config) { c.ExporterTimeout = -time.Second }},
+		{"negative poll interval", func(c *Config) { c.PollInterval = -time.Millisecond }},
+		{"negative teardown timeout", func(c *Config) { c.TeardownTimeout = -time.Second }},
+		{"negative max export bytes", func(c *Config) { c.MaxExportBytes = -1 }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
