@@ -2,4 +2,6 @@
 
 This directory holds Architecture Decision Records promoted from decision notes per the Decision notes protocol in `AGENTS.md`: one file per decision, named `NNNN-slug.md`.
 
-There are no ADRs yet. The seed is the decisions record: [`docs/plan.md` §13](../plan.md) for the current revision and [`docs/history/decisions.md`](../history/decisions.md) for the complete per-revision log. A decision splits into its own ADR when it is first revisited, citing its revision entry in the history and the originating decision note.
+The decisions record remains the index: [`docs/plan.md` §13](../plan.md) for the current revision and [`docs/history/decisions.md`](../history/decisions.md) for the complete per-revision log. A decision splits into its own ADR when it is first revisited, citing its revision entry in the history and the originating decision note.
+
+- [`0001-license-freeside-under-agpl.md`](0001-license-freeside-under-agpl.md): License Freeside under AGPL-3.0-or-later.

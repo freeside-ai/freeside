@@ -31,8 +31,8 @@ info:
     name: Freeside
     url: https://github.com/freeside-ai/freeside
   license:
-    name: UNLICENSED
-    url: https://github.com/freeside-ai/freeside
+    name: AGPL-3.0-or-later
+    url: https://www.gnu.org/licenses/agpl-3.0.html
 
 servers:
   - url: /
