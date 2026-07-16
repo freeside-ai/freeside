@@ -669,6 +669,14 @@ func TestSnapshotRejectsForgedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode command: %v", err)
 	}
+	device := domain.Device{
+		ID: "device-1", DisplayName: "Ben's iPhone", Status: domain.DeviceActive,
+		PairedAt: time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
+	}
+	deviceBody, err := encode(device)
+	if err != nil {
+		t.Fatalf("encode device: %v", err)
+	}
 
 	seedItem := func(entityVersion, asOfRevision int64) {
 		t.Helper()
@@ -705,6 +713,23 @@ func TestSnapshotRejectsForgedMetadata(t *testing.T) {
 			return err
 		})
 	}
+	seedDevice := func(entityVersion, asOfRevision int64) {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, `DELETE FROM devices`); err != nil {
+			t.Fatalf("reset devices: %v", err)
+		}
+		if _, err := db.ExecContext(ctx,
+			`INSERT INTO devices (id, status, entity_version, as_of_revision, body) VALUES ('device-1', 'active', ?, ?, ?)`,
+			entityVersion, asOfRevision, deviceBody); err != nil {
+			t.Fatalf("insert device: %v", err)
+		}
+	}
+	readDevice := func() error {
+		return s.Read(ctx, func(tx *ReadTx) error {
+			_, _, err := tx.GetDeviceSnapshot(ctx, "device-1")
+			return err
+		})
+	}
 
 	// Control rows prove the fixtures themselves reconstruct, so the forged
 	// cases below fail on the metadata alone.
@@ -715,6 +740,10 @@ func TestSnapshotRejectsForgedMetadata(t *testing.T) {
 	seedCommand(1, 1)
 	if err := readCommand(); err != nil {
 		t.Fatalf("control command read: %v", err)
+	}
+	seedDevice(1, 1)
+	if err := readDevice(); err != nil {
+		t.Fatalf("control device read: %v", err)
 	}
 
 	cases := []struct {
@@ -730,6 +759,10 @@ func TestSnapshotRejectsForgedMetadata(t *testing.T) {
 		{"command entity_version past write-once", func() { seedCommand(2, 1) }, readCommand},
 		{"command as_of_revision zero", func() { seedCommand(1, 0) }, readCommand},
 		{"command as_of_revision negative", func() { seedCommand(1, -1) }, readCommand},
+		{"device entity_version zero", func() { seedDevice(0, 1) }, readDevice},
+		{"device entity_version negative", func() { seedDevice(-1, 1) }, readDevice},
+		{"device as_of_revision zero", func() { seedDevice(1, 0) }, readDevice},
+		{"device as_of_revision negative", func() { seedDevice(1, -1) }, readDevice},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

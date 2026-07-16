@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -208,6 +209,79 @@ func TestCommandSnapshotOriginalRevision(t *testing.T) {
 	}
 	if after.Revision != bumped.Revision {
 		t.Errorf("a read moved the revision: %d then %d", bumped.Revision, after.Revision)
+	}
+}
+
+// TestDeviceSnapshotMetadata (#106 acceptance 1-3): the device snapshot read
+// returns the store-stamped metadata the pairing and revocation responses
+// render. Devices are mutable, so a revocation write advances entity_version
+// to 2, unlike the write-once command rows; GetDevice reads through the same
+// path, so its behaviour is pinned by the same assertions.
+func TestDeviceSnapshotMetadata(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+	f := newFixtures(t)
+
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutDevice(ctx, f.device) }); err != nil {
+		t.Fatalf("pair device: %v", err)
+	}
+	afterPair, err := s.ServerState(ctx)
+	if err != nil {
+		t.Fatalf("ServerState: %v", err)
+	}
+	var (
+		got  domain.Device
+		snap store.Snapshot
+	)
+	read := func() {
+		t.Helper()
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			got, snap, err = tx.GetDeviceSnapshot(ctx, f.device.ID)
+			return err
+		}); err != nil {
+			t.Fatalf("GetDeviceSnapshot: %v", err)
+		}
+	}
+
+	read()
+	if string(marshalIndent(t, got)) != string(marshalIndent(t, f.device)) {
+		t.Errorf("snapshot device differs from the put device:\ngot:  %s\nwant: %s",
+			marshalIndent(t, got), marshalIndent(t, f.device))
+	}
+	if snap.EntityVersion != 1 {
+		t.Errorf("entity_version after pairing = %d, want 1", snap.EntityVersion)
+	}
+	if snap.AsOfRevision != afterPair.Revision {
+		t.Errorf("as_of_revision = %d, want the pairing transaction's revision %d",
+			snap.AsOfRevision, afterPair.Revision)
+	}
+
+	revokedAt := f.device.PairedAt.Add(time.Minute)
+	revoked := f.device
+	revoked.Status = domain.DeviceRevoked
+	revoked.RevokedAt = &revokedAt
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutDevice(ctx, revoked) }); err != nil {
+		t.Fatalf("revoke device: %v", err)
+	}
+	afterRevoke, err := s.ServerState(ctx)
+	if err != nil {
+		t.Fatalf("ServerState: %v", err)
+	}
+	read()
+	if snap.EntityVersion != 2 {
+		t.Errorf("entity_version after revocation = %d, want 2", snap.EntityVersion)
+	}
+	if snap.AsOfRevision != afterRevoke.Revision {
+		t.Errorf("as_of_revision after revocation = %d, want %d", snap.AsOfRevision, afterRevoke.Revision)
+	}
+
+	err = s.Read(ctx, func(tx *store.ReadTx) error {
+		_, _, err := tx.GetDeviceSnapshot(ctx, "device-unknown")
+		return err
+	})
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("unknown device error = %v, want ErrNotFound", err)
 	}
 }
 
