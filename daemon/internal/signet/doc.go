@@ -4,12 +4,10 @@
 // Lane: signet. See docs/plan.md §4 (the attention model) and §5.14
 // (client synchronization and conversations).
 //
-// This unit (#65) carries the item read model and the ClientCommand
-// acceptance boundary: version- and binding-checked command acceptance,
-// status-lifecycle gating, idempotent retries by command_id returning
-// the original committed result, and transactional version-checked
-// resolutions. It also owns the plan §4 per-type allowed-action policy and
-// gates item writes against it (#23). The in-process Service is the whole
-// surface; the HTTP projection of the same checks lands with the sync-surface
-// unit (#66), and devices, conversations, and deliveries with their own units.
+// The Service owns the item read model, ClientCommand acceptance, per-type
+// action policy, and the HTTP synchronization surface: canonical bootstrap,
+// partial resource snapshots, revision heartbeat, and command projection.
+// Device credential verification is a required injected HTTP dependency until
+// the device lifecycle unit (#67) supplies its implementation; conversation
+// mutation and delivery production remain with their own units.
 package signet
