@@ -46,6 +46,8 @@ public actor MockServer {
         let itemVersion: Int
         let prHeadSHA: String
         let artifactDigests: [String]
+        let message: String
+        let attachments: [String]
 
         init(_ command: Components.Schemas.ClientCommand) {
             commandID = command.command_id
@@ -55,6 +57,11 @@ public actor MockServer {
             itemVersion = command.payload.item_version
             prHeadSHA = command.payload.pr_head_sha
             artifactDigests = Array(Set(command.payload.artifact_digests)).sorted()
+            // Content fields normalize absent to empty (the daemon's record
+            // shape); attachment order is authored, so it is compared as
+            // sent, never canonicalized.
+            message = command.payload.message ?? ""
+            attachments = command.payload.attachments ?? []
         }
     }
 
@@ -451,6 +458,18 @@ public actor MockServer {
         guard !command.payload.artifact_digests.contains("") else {
             throw malformed("empty artifact digest")
         }
+        // Attachments mirror domain.NewCommand: entries are content
+        // addresses (empty is malformed) and a repeat is rejected rather
+        // than deduplicated, since order is authored content the daemon
+        // never canonicalizes.
+        if let attachments = command.payload.attachments {
+            guard !attachments.contains("") else {
+                throw malformed("empty attachment digest")
+            }
+            guard Set(attachments).count == attachments.count else {
+                throw malformed("duplicate attachment digest")
+            }
+        }
     }
 
     func runBeforeRespond(_ operationID: String) async throws {
@@ -704,7 +723,12 @@ public actor MockServer {
                 // The record persists the canonical set (domain.NewCommand),
                 // whatever order or duplication the payload carried.
                 artifact_digests: Array(Set(payload.artifact_digests)).sorted(),
-                action: payload.action
+                action: payload.action,
+                // Conversation content renders in the record even when empty
+                // (one byte-form per write-once record, domain.NewCommand);
+                // attachment order is authored, never canonicalized.
+                message: payload.message ?? "",
+                attachments: payload.attachments ?? []
             ),
             revision: revision
         )
