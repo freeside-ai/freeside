@@ -43,6 +43,8 @@ public actor MockServer {
     private var commandsByID: [String: NormalizedCommand] = [:]
     private var resultsByCommandID: [String: Components.Schemas.CommandResult] = [:]
     private var revision: Int64 = 1
+    private var syncEpoch = "mock-epoch"
+    private var epochGeneration = 1
     private var beforeRespond: BeforeRespond?
     private var afterRespond: BeforeRespond?
     /// The trusted approved-recipe set the evidence gate re-runs
@@ -88,6 +90,18 @@ public actor MockServer {
     /// The server's current canonical snapshot, for test assertions.
     public func snapshot(itemID: String) -> Components.Schemas.AttentionItemSnapshot? {
         itemsByID[itemID]
+    }
+
+    /// Simulates a daemon restore (plan §5.14 sync test 8): a new sync
+    /// epoch, optionally rewinding the revision to the restored state's.
+    /// Rows are left alone; to a client the epoch change alone is what
+    /// makes its cached cursors meaningless, whatever the new revision.
+    public func rotateEpoch(revision restored: Int64? = nil) {
+        epochGeneration += 1
+        syncEpoch = "mock-epoch-\(epochGeneration)"
+        if let restored {
+            revision = max(1, restored)
+        }
     }
 
     // MARK: - Contract semantics
@@ -284,7 +298,24 @@ public actor MockServer {
     }
 
     func serverRevision() -> Components.Schemas.ServerRevision {
-        .init(sync_epoch: "mock-epoch", revision: revision)
+        .init(sync_epoch: syncEpoch, revision: revision)
+    }
+
+    /// One canonical snapshot of every synchronized resource from a
+    /// single actor-isolated read, as the daemon's bootstrap is one
+    /// Store.Read (plan §5.14): the cursor pair and the rows can never
+    /// be torn. Deliveries, runs, and conversations stay empty until
+    /// their units seed them; the envelope still carries all four
+    /// collections, so a client decodes the real shape today.
+    func bootstrapSnapshot() throws -> Components.Schemas.BootstrapSnapshot {
+        .init(
+            sync_epoch: syncEpoch,
+            revision: revision,
+            attention_items: try listAttentionItems(),
+            attention_deliveries: [],
+            runs: [],
+            conversations: []
+        )
     }
 
     /// Read paths re-validate every row they would serve, as the
@@ -549,6 +580,20 @@ public struct MockServerTransport: ClientTransport {
         switch operationID {
         case "getSyncRevision":
             return try Self.json(status: .ok, body: await server.serverRevision())
+        case "getSyncBootstrap":
+            do {
+                return try Self.json(status: .ok, body: await server.bootstrapSnapshot())
+            } catch let invalid as MockServer.InvalidItemError {
+                // One invalid row fails the whole bootstrap closed, as the
+                // daemon's single-read upper-bound gate does (#105).
+                return try Self.json(
+                    status: .internalServerError,
+                    body: Components.Schemas._Error(
+                        message:
+                            "bootstrap reconstruction failed: item \(invalid.itemID): \(invalid.reason)"
+                    )
+                )
+            }
         case "listAttentionItems":
             do {
                 return try Self.json(status: .ok, body: await server.listAttentionItems())
