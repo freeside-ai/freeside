@@ -36,6 +36,11 @@ jobs:
           # Like go-version-file, resolved from the workspace root.
           cache-dependency-path: daemon/go.sum
       - run: go build ./...
+      - name: cross-compile exporter (static linux/arm64)
+        # Guards the exporter-image build target (#73 acceptance 4): the
+        # helper must stay a static cross-compilable binary, so a creeping
+        # cgo dependency fails CI here instead of at image-build time.
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/freeside-export
       - run: go test ./...
       - run: go vet ./...
       - name: golangci-lint
