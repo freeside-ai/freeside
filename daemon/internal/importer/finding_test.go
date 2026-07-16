@@ -31,6 +31,7 @@ func TestFindingKindBlocking(t *testing.T) {
 		FindingSizeViolation:           false,
 		FindingPathCollision:           false,
 		FindingSecret:                  false,
+		FindingSecretScanSkipped:       false,
 	}
 	if len(want) != len(AllFindingKinds) {
 		t.Fatalf("blocking table lists %d kinds, registry has %d", len(want), len(AllFindingKinds))

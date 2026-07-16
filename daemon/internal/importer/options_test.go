@@ -16,7 +16,8 @@ func TestOptionsDefaults(t *testing.T) {
 	}
 	p := o.Policy
 	if p.MaxManifestBytes != DefaultMaxManifestBytes || p.MaxEntries != DefaultMaxEntries ||
-		p.MaxBlobBytes != DefaultMaxBlobBytes || p.MaxTotalBytes != DefaultMaxTotalBytes {
+		p.MaxBlobBytes != DefaultMaxBlobBytes || p.MaxTotalBytes != DefaultMaxTotalBytes ||
+		p.SecretMaxScanBytes != DefaultSecretMaxScan {
 		t.Fatalf("policy defaults not applied: %+v", p)
 	}
 }

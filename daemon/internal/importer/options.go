@@ -17,6 +17,7 @@ const (
 	DefaultMaxEntries       = 1_000_000
 	DefaultMaxBlobBytes     = 100 << 20
 	DefaultMaxTotalBytes    = 1 << 30
+	DefaultSecretMaxScan    = 1 << 20
 )
 
 // Default daemon authorship for the clean commit. §5.6: the daemon
@@ -86,6 +87,10 @@ type Policy struct {
 	// MaxTotalBytes bounds the summed size of added and modified
 	// content before the change set as a whole is a size_violation.
 	MaxTotalBytes int64
+	// SecretMaxScanBytes caps the per-file size the best-effort secret
+	// scan reads; larger blobs are outside the scan's honest textual
+	// scope and covered by size/type controls instead.
+	SecretMaxScanBytes int64
 }
 
 // withDefaults returns a copy with every zero field set to its default.
@@ -119,6 +124,9 @@ func (p Policy) withDefaults() Policy {
 	if p.MaxTotalBytes == 0 {
 		p.MaxTotalBytes = DefaultMaxTotalBytes
 	}
+	if p.SecretMaxScanBytes == 0 {
+		p.SecretMaxScanBytes = DefaultSecretMaxScan
+	}
 	return p
 }
 
@@ -133,7 +141,8 @@ func (o Options) validate() error {
 		return fmt.Errorf("import ref %q is not a fully qualified safe ref: %w", o.ImportRef, ErrInvalidOptions)
 	}
 	if o.Policy.MaxManifestBytes < 0 || o.Policy.MaxEntries < 0 ||
-		o.Policy.MaxBlobBytes < 0 || o.Policy.MaxTotalBytes < 0 {
+		o.Policy.MaxBlobBytes < 0 || o.Policy.MaxTotalBytes < 0 ||
+		o.Policy.SecretMaxScanBytes < 0 {
 		return fmt.Errorf("negative policy cap: %w", ErrInvalidOptions)
 	}
 	// A caller-supplied glob that does not compile would otherwise

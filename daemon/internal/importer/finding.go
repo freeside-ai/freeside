@@ -45,6 +45,12 @@ const (
 	// FindingSecret records a best-effort secret-scan match (§5.4): a
 	// high-signal token pattern in supported textual content.
 	FindingSecret FindingKind = "secret"
+	// FindingSecretScanSkipped records an added or modified file whose
+	// content was not secret-scanned because it exceeded the scan cap.
+	// Surfaced rather than silently skipped so a findings-free import
+	// honestly means "everything in scope was scanned", never "a large
+	// file slipped through unscanned" (§5.4 honest scope).
+	FindingSecretScanSkipped FindingKind = "secret_scan_skipped"
 )
 
 // AllFindingKinds lists every valid FindingKind: the single place a new
@@ -60,6 +66,7 @@ var AllFindingKinds = []FindingKind{
 	FindingSizeViolation,
 	FindingPathCollision,
 	FindingSecret,
+	FindingSecretScanSkipped,
 }
 
 // valid is the validity predicate; as a predicate it uses default.
@@ -69,7 +76,7 @@ func (k FindingKind) valid() bool {
 		FindingBlobOmitted, FindingAutomationControlPath,
 		FindingReviewerInstructionPath, FindingGitMetadataPath,
 		FindingAllowlistViolation, FindingSizeViolation,
-		FindingPathCollision, FindingSecret:
+		FindingPathCollision, FindingSecret, FindingSecretScanSkipped:
 		return true
 	default:
 		return false
@@ -89,7 +96,8 @@ func (k FindingKind) blocksCommit() bool {
 		return true
 	case FindingAutomationControlPath, FindingReviewerInstructionPath,
 		FindingGitMetadataPath, FindingAllowlistViolation,
-		FindingSizeViolation, FindingPathCollision, FindingSecret:
+		FindingSizeViolation, FindingPathCollision, FindingSecret,
+		FindingSecretScanSkipped:
 		return false
 	}
 	return false

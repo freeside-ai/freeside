@@ -51,6 +51,8 @@
 //     allowlist, and size policy over the change set
 //   - collision.go  case- and Unicode-normalization-fold collisions on
 //     a case-insensitive checkout (the reference deployment is APFS)
+//   - secrets.go  best-effort secret scan of added/modified textual
+//     content (§5.4), findings by rule and line, never the bytes
 //
 // Lane: gauntlet. See docs/plan.md §5.4–§5.8 and the export package
 // (the manifest+blob wire contract's producer).
