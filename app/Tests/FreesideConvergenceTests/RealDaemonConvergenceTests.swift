@@ -49,7 +49,7 @@ struct RealDaemonConvergenceTests {
         #expect(after.lastFullSnapshotRevision == after.highestObservedServerRevision)
         #expect(coordinator.store.freshness == .fresh)
         #expect(coordinator.store.snapshotsByID[itemID] != nil)
-        #expect(cache.load()?.cursors.syncEpoch == after.syncEpoch)
+        #expect(cache.load()?.cursors?.syncEpoch == after.syncEpoch)
     }
 
     @Test func partialRefetchAdvancesOnlyTheObservedCursor() async throws {

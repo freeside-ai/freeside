@@ -52,6 +52,119 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
 
         try Data(#"{"format": 999, "state": {}}"#.utf8).write(to: file)
         #expect(store.load() == nil)
+
+        // A pre-ledger format-1 file is one such foreign format: it
+        // loads as absent (one bootstrap; a pre-upgrade unresolved
+        // ledger did not exist to lose).
+        try Data(#"{"format": 1, "state": {}}"#.utf8).write(to: file)
+        #expect(store.load() == nil)
+    }
+
+    @Test func roundTripsThePendingCommandLedger() throws {
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        var state = sampleState()
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .inFlight),
+            "item-b": .init(
+                command: makeCommand(itemID: "item-b", commandID: "cmd-b"),
+                state: .unresolved),
+        ]
+        store.save(state)
+        #expect(store.load() == state)
+    }
+
+    @Test func aLedgerOnlyStateRoundTrips() throws {
+        // The post-epoch-discard shape: cursors and rows are dead while
+        // an unresolved command still needs its verbatim resend (#115).
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let state = CachedState(
+            cursors: nil,
+            attentionItems: [],
+            pendingCommands: [
+                "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
+            ])
+        store.save(state)
+        #expect(store.load() == state)
+    }
+
+    @Test func aCorruptLedgerSectionLoadsAsAbsentWithoutDroppingTheRest() throws {
+        // The ledger degrades independently: garbling only the
+        // pendingCommands section costs the retry affordance, never the
+        // cursors and rows saved beside it.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("cache.json")
+
+        var state = sampleState()
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
+        ]
+        store.save(state)
+
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var inner = try #require(object["state"] as? [String: Any])
+        inner["pendingCommands"] = ["item-a": 42]
+        object["state"] = inner
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let loaded = try #require(store.load())
+        #expect(loaded.pendingCommands == nil)
+        #expect(loaded.cursors == state.cursors)
+        #expect(loaded.attentionItems == state.attentionItems)
+    }
+
+    @Test @MainActor func thePersistedLedgerCarriesNoCredentialMaterial() async throws {
+        // #115 acceptance 3: the ledger persists whole ClientCommands,
+        // so prove at the byte level that a command minted through the
+        // real paired, bearer-authenticated submit path writes no token
+        // material to disk — the credential's only sink stays the
+        // per-request Authorization header.
+        let (cache, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let server = MockServer(authMode: .enforcing)
+        await server.seedPairingCode("483911")
+        let grant = try await APIClientFactory.mock(server: server).pairDevice(
+            body: .json(.init(pairing_code: "483911", display_name: "Ben's iPhone"))
+        ).created.body.json
+        guard case .active(let active) = grant.device.device else {
+            Issue.record("expected an active device")
+            return
+        }
+        let token = grant.device_token
+        let client = APIClientFactory.mock(server: server) { token }
+        let coordinator = SyncCoordinator(
+            client: client, device: DeviceIdentity(deviceID: active.id), cache: cache)
+        await coordinator.bootstrap()
+
+        // Lose the response after the mock records it, so the ledger
+        // holds the submitted command when it persists.
+        await server.setAfterRespond { operationID in
+            if operationID == "submitCommand" { throw InjectedFailure() }
+        }
+        let model = DecisionModel(store: coordinator.store, itemID: "item-spec_approval")
+        await model.validate()
+        await model.submit(.approve)
+        #expect(
+            coordinator.store.pendingCommandsByItemID["item-spec_approval"]?.state
+                == .unresolved)
+
+        let data = try Data(contentsOf: directory.appendingPathComponent("cache.json"))
+        let text = try #require(String(data: data, encoding: .utf8)).lowercased()
+        #expect(text.contains("pendingcommands"))
+        #expect(!text.contains("authorization"))
+        #expect(!text.contains("bearer"))
+        #expect(!text.contains(token.lowercased()))
+        // The token scheme prefix, the mock's secret segment, and the
+        // token's base64 form: no token-shaped fragment reaches disk.
+        #expect(!text.contains("fsd1"))
+        #expect(!text.contains("mock-secret"))
+        #expect(!text.contains(Data(token.utf8).base64EncodedString().lowercased()))
     }
 
     @Test func discardDeletesTheFile() throws {

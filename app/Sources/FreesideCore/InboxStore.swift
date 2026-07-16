@@ -42,20 +42,36 @@ public final class InboxStore {
     /// read must never advance the full-snapshot cursor (plan §5.14
     /// sync test 11).
     public var revisionObserver: ((Int64) -> Void)?
+    /// Reports every pending-command ledger mutation so the sync
+    /// coordinator can persist the ledger as it changes (#115): the
+    /// retry affordance survives a relaunch only if each claim, state
+    /// move, and release reaches disk when it happens, not at the next
+    /// sync round.
+    public var pendingCommandsObserver: (() -> Void)?
     public private(set) var snapshotsByID: [String: Components.Schemas.AttentionItemSnapshot] = [:]
     /// A pending command's shared lifecycle: in flight while an attempt
     /// awaits its response (no retry affordance — the request may still
     /// succeed), unresolved once an attempt failed ambiguously (only a
     /// verbatim resend settles it).
-    public enum PendingCommandState: Equatable, Sendable {
+    public nonisolated enum PendingCommandState: String, Codable, Equatable, Sendable {
         case inFlight
         case unresolved
     }
 
     /// One pending entry: the preserved command and where it stands.
-    public struct PendingCommandEntry: Equatable, Sendable {
+    /// Codable because the ledger persists in the disk cache (#115): an
+    /// unresolved command's retry affordance must survive a relaunch. A
+    /// ClientCommand carries no credential — the token lives in the
+    /// Keychain and is attached per-request by the auth middleware — so
+    /// persisting the entry adds nothing secret to disk.
+    public nonisolated struct PendingCommandEntry: Codable, Equatable, Sendable {
         public let command: Components.Schemas.ClientCommand
         public var state: PendingCommandState
+
+        public init(command: Components.Schemas.ClientCommand, state: PendingCommandState) {
+            self.command = command
+            self.state = state
+        }
     }
 
     /// Each item's single in-flight or unresolved command. Store-owned
@@ -185,6 +201,7 @@ public final class InboxStore {
         guard pendingCommandsByItemID[command.payload.item_id] == nil else { return false }
         pendingCommandsByItemID[command.payload.item_id] =
             PendingCommandEntry(command: command, state: .inFlight)
+        pendingCommandsObserver?()
         return true
     }
 
@@ -195,6 +212,7 @@ public final class InboxStore {
     ) {
         guard pendingCommandsByItemID[itemID]?.command.command_id == commandID else { return }
         pendingCommandsByItemID[itemID]?.state = state
+        pendingCommandsObserver?()
     }
 
     /// Clears the slot only while it still holds the command that
@@ -203,6 +221,35 @@ public final class InboxStore {
     public func clearPendingCommand(itemID: String, commandID: String) {
         guard pendingCommandsByItemID[itemID]?.command.command_id == commandID else { return }
         pendingCommandsByItemID[itemID] = nil
+        pendingCommandsObserver?()
+    }
+
+    /// Restores a persisted ledger at relaunch (#115). Only empty slots
+    /// fill — a live entry is newer truth — and every restored entry
+    /// lands unresolved: no task awaits a restored command's response,
+    /// so even one persisted in flight has failed ambiguously by now,
+    /// and only a verbatim resend settles it (plan §5.14 sync test 4
+    /// across a restart). Entries whose item is absent from the restored
+    /// rows stay, as replaceAll keeps them in-process: commitment is
+    /// client mutation state, not readable cache, and the resend
+    /// converges them either way. No observer fire — the ledger came
+    /// from disk, so there is nothing new to persist.
+    public func restorePendingCommands(_ entries: [String: PendingCommandEntry]) {
+        for (itemID, entry) in entries where pendingCommandsByItemID[itemID] == nil {
+            // Decoded fields are re-gated at this reconstruction
+            // boundary, never trusted: an entry minted by another device
+            // (a re-pair after a lost credential, same deployment cache)
+            // must not occupy this device's slots — its verbatim resend
+            // would die at the daemon's device gate as an authoritative
+            // rejection and clear a possibly committed outcome as "not
+            // recorded" — and a key naming a different item than its
+            // command would block one item with another's command.
+            guard entry.command.device_id == device.deviceID,
+                entry.command.payload.item_id == itemID
+            else { continue }
+            pendingCommandsByItemID[itemID] =
+                PendingCommandEntry(command: entry.command, state: .unresolved)
+        }
     }
 
     private func sortKey(

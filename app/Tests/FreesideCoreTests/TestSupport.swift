@@ -47,6 +47,30 @@ func makeStore(server: MockServer) async -> InboxStore {
     return store
 }
 
+/// A well-formed command fixture for ledger persistence tests: the mock
+/// accepts its shape, and one naming an unknown item draws the
+/// authoritative rejection, never a validation error. The device
+/// defaults to the store default (`DeviceIdentity.mock`) so the entry
+/// survives the restore-time device re-gate.
+func makeCommand(
+    itemID: String, commandID: String = "cmd-fixture",
+    deviceID: String = DeviceIdentity.mock.deviceID
+) -> Components.Schemas.ClientCommand {
+    .init(
+        command_id: commandID,
+        device_id: deviceID,
+        expected_entity_version: 1,
+        expected_bindings: .init(additionalProperties: [:]),
+        payload: .init(
+            item_id: itemID,
+            action: .approve,
+            item_version: 1,
+            pr_head_sha: "",
+            artifact_digests: []
+        )
+    )
+}
+
 /// Answers the first matching operation with a bare HTTP status instead
 /// of reaching the mock server (simulating a transient gateway/server
 /// failure before commit); everything else passes through.
