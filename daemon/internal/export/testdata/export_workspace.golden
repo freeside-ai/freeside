@@ -1,0 +1,62 @@
+{
+  "version": "freeside.export.manifest/v1",
+  "entries": [
+    {
+      "path": ".git",
+      "kind": "git_dir",
+      "mode": null,
+      "size": null,
+      "digest": null,
+      "target": null
+    },
+    {
+      "path": "README.md",
+      "kind": "regular",
+      "mode": "0644",
+      "size": 17,
+      "digest": "sha256:0a7ae4178a6fe20d174edc3a5e116dff60683886ce8c383f5670d0115f385c52",
+      "target": null
+    },
+    {
+      "path": "bin/tool.sh",
+      "kind": "regular",
+      "mode": "0755",
+      "size": 17,
+      "digest": "sha256:306c6ca7407560340797866e077e053627ad409277d1b9da58106fce4cf717cb",
+      "target": null
+    },
+    {
+      "path": "docs-link",
+      "kind": "symlink",
+      "mode": null,
+      "size": null,
+      "digest": null,
+      "target": "README.md"
+    },
+    {
+      "path": "media/big.bin",
+      "kind": "regular",
+      "mode": "0644",
+      "size": 32,
+      "digest": "sha256:3eb1bd439947eb762998e566ccc2e099c791118b2f40579cc4f7da2b5061b7f9",
+      "target": null,
+      "blob_omitted": true
+    },
+    {
+      "path": "nested/deep/data.txt",
+      "kind": "regular",
+      "mode": "0644",
+      "size": 13,
+      "digest": "sha256:6cc65d16bafa8971dadf3839dcb78549ec09a73cd032dc8c28f8b80e80b638d2",
+      "target": null
+    },
+    {
+      "path": "vendor/dep",
+      "kind": "submodule",
+      "mode": null,
+      "size": null,
+      "digest": null,
+      "target": null
+    }
+  ]
+}
