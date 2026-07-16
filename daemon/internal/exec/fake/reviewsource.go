@@ -32,10 +32,11 @@ type ReviewScript struct {
 	// delivering outcome (complete), never to a failed or gone review.
 	PendingPolls int `json:"pending_polls"`
 	// Outcome is how the review ends once execution lag is spent; it reuses
-	// the stage Outcome vocabulary. The zero value is OutcomeComplete (a
-	// bare Result). OutcomeFail and OutcomeCrashBeforeResult commit no result
-	// (Poll returns exec.ErrNoResult); OutcomeCrashAfterResult commits the
-	// result and then loses the session (StatusGone, the result still
+	// the stage Outcome vocabulary and must be set explicitly (the zero value
+	// is invalid and fails loud, like any unknown outcome). OutcomeComplete
+	// delivers a bare Result; OutcomeFail and OutcomeCrashBeforeResult commit no
+	// result (Poll returns exec.ErrNoResult); OutcomeCrashAfterResult commits
+	// the result and then loses the session (StatusGone, the result still
 	// pollable by id, §5.3).
 	Outcome Outcome `json:"outcome"`
 	// Result carries the review's head and findings; the fake stamps
@@ -190,7 +191,7 @@ func (s *ReviewSource) Inspect(_ context.Context, id domain.InvocationID) (exec.
 	}
 
 	// Execution lag spent: apply the outcome on this observing call.
-	switch outcomeOrComplete(sess.script.Outcome) {
+	switch sess.script.Outcome {
 	case OutcomeComplete:
 		sess.finished = true
 		return exec.StatusCompleted, nil
@@ -231,7 +232,7 @@ func (s *ReviewSource) Poll(_ context.Context, id domain.InvocationID) (exec.Rev
 	// No committed result and the session is live: the answer tracks how far
 	// Inspect has driven execution, never the eventual outcome, so a review
 	// still running reads not-ready, not no-result (Collect's discipline).
-	switch outcomeOrComplete(sess.script.Outcome) {
+	switch sess.script.Outcome {
 	case OutcomeComplete:
 		if sess.polls > 0 {
 			sess.polls--
@@ -288,7 +289,7 @@ func (s *ReviewSource) Verify(_ context.Context, id domain.InvocationID, expecte
 		// Mirror Poll's timing: "never" (the session is lost, or a failed
 		// review whose execution has reached the failure) is distinct from
 		// "not yet" (still running, or an undelivered complete review).
-		if sess.lost || (outcomeOrComplete(sess.script.Outcome) == OutcomeFail && sess.finished) {
+		if sess.lost || (sess.script.Outcome == OutcomeFail && sess.finished) {
 			return fmt.Errorf("fake review source verify %s: %w", id, exec.ErrNoResult)
 		}
 		return fmt.Errorf("fake review source verify %s: %w", id, exec.ErrResultNotReady)
@@ -307,19 +308,12 @@ func (s *ReviewSource) Verify(_ context.Context, id domain.InvocationID, expecte
 	return nil
 }
 
-// outcomeOrComplete treats the zero Outcome as OutcomeComplete, so a review
-// script that predates outcomes (a bare Result) still completes and delivers.
-func outcomeOrComplete(o Outcome) Outcome {
-	if o == "" {
-		return OutcomeComplete
-	}
-	return o
-}
-
 // finishedReviewStatus is the terminal execution status a finished review
-// reports on repeat Inspects: failed for OutcomeFail, completed otherwise.
+// reports on repeat Inspects: failed for OutcomeFail, completed otherwise. A
+// session only reaches finished through the delivering/failing outcome arms of
+// Inspect, so a zero or unknown Outcome never gets here.
 func finishedReviewStatus(o Outcome) exec.Status {
-	if outcomeOrComplete(o) == OutcomeFail {
+	if o == OutcomeFail {
 		return exec.StatusFailed
 	}
 	return exec.StatusCompleted

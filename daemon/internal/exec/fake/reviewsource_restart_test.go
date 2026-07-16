@@ -27,7 +27,7 @@ func TestReviewSourceRestartBeforeIntentDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Script("inv-1", fake.ReviewScript{Result: exec.ReviewResult{HeadSHA: "cafebabe"}})
+	s.Script("inv-1", fake.ReviewScript{Outcome: fake.OutcomeComplete, Result: exec.ReviewResult{HeadSHA: "cafebabe"}})
 
 	s = reopenReviewSource(t, dir)
 	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
@@ -49,6 +49,7 @@ func TestReviewSourceRestartAfterIntentBeforeResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Script("inv-1", fake.ReviewScript{
+		Outcome:      fake.OutcomeComplete,
 		PendingPolls: 2,
 		Result:       exec.ReviewResult{HeadSHA: "cafebabe"},
 	})
@@ -85,6 +86,7 @@ func TestReviewSourceRestartAfterResultBeforeAcceptance(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Script("inv-1", fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			HeadSHA: "cafebabe",
 			Findings: []domain.Finding{{

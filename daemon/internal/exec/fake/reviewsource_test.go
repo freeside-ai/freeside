@@ -39,6 +39,7 @@ func pollUntilResult(t *testing.T, s *fake.ReviewSource, id domain.InvocationID)
 func TestReviewSourceFindingsPass(t *testing.T) {
 	s := fake.NewReviewSource()
 	s.Script("inv-1", fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
 		Result: exec.ReviewResult{
 			HeadSHA: "cafebabe",
 			Findings: []domain.Finding{{
@@ -81,7 +82,8 @@ func TestReviewSourceFindingsPass(t *testing.T) {
 func TestReviewSourceCleanPass(t *testing.T) {
 	s := fake.NewReviewSource()
 	s.Script("inv-1", fake.ReviewScript{
-		Result: exec.ReviewResult{HeadSHA: "cafebabe"},
+		Outcome: fake.OutcomeComplete,
+		Result:  exec.ReviewResult{HeadSHA: "cafebabe"},
 	})
 
 	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
@@ -105,7 +107,8 @@ func TestReviewSourceCleanPass(t *testing.T) {
 func TestReviewSourceDuplicatePollAcceptsOnce(t *testing.T) {
 	s := fake.NewReviewSource()
 	s.Script("inv-1", fake.ReviewScript{
-		Result: exec.ReviewResult{HeadSHA: "cafebabe"},
+		Outcome: fake.OutcomeComplete,
+		Result:  exec.ReviewResult{HeadSHA: "cafebabe"},
 	})
 
 	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
@@ -134,7 +137,8 @@ func TestReviewSourceDuplicatePollAcceptsOnce(t *testing.T) {
 func TestReviewSourceStaleHeadFailsVerify(t *testing.T) {
 	s := fake.NewReviewSource()
 	s.Script("inv-1", fake.ReviewScript{
-		Result: exec.ReviewResult{HeadSHA: "0ld0ld"},
+		Outcome: fake.OutcomeComplete,
+		Result:  exec.ReviewResult{HeadSHA: "0ld0ld"},
 	})
 
 	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "0ld0ld"}); err != nil {
@@ -165,7 +169,8 @@ func TestReviewSourceResultHeadMismatchFailsVerify(t *testing.T) {
 	s := fake.NewReviewSource()
 	// Script a result whose head differs from the head the request commits.
 	s.Script("inv-1", fake.ReviewScript{
-		Result: exec.ReviewResult{HeadSHA: "headB"},
+		Outcome: fake.OutcomeComplete,
+		Result:  exec.ReviewResult{HeadSHA: "headB"},
 	})
 
 	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "headA"}); err != nil {
@@ -196,6 +201,7 @@ func TestReviewSourceResultHeadMismatchFailsVerify(t *testing.T) {
 func TestReviewSourceDelayedReview(t *testing.T) {
 	s := fake.NewReviewSource()
 	s.Script("inv-1", fake.ReviewScript{
+		Outcome:         fake.OutcomeComplete,
 		PendingInspects: 1,
 		PendingPolls:    2,
 		Result:          exec.ReviewResult{HeadSHA: "cafebabe"},
@@ -341,7 +347,7 @@ func TestReviewSourceCrashAfterResultRecoverable(t *testing.T) {
 // per id, loud unscripted requests, unknown ids.
 func TestReviewSourceGuards(t *testing.T) {
 	s := fake.NewReviewSource()
-	s.Script("inv-1", fake.ReviewScript{Result: exec.ReviewResult{HeadSHA: "cafebabe"}})
+	s.Script("inv-1", fake.ReviewScript{Outcome: fake.OutcomeComplete, Result: exec.ReviewResult{HeadSHA: "cafebabe"}})
 
 	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{}); err != nil {
 		t.Fatal(err)
