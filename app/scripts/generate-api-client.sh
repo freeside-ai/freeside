@@ -7,7 +7,10 @@ repo_dir="$(cd "$app_dir/.." && pwd)"
 schema_mirror="$app_dir/Sources/FreesideAPI/openapi.yaml"
 
 cp "$repo_dir/api/openapi.yaml" "$schema_mirror"
-swift build --package-path "$app_dir" --target FreesideAPI
+swift build \
+    --package-path "$app_dir" \
+    --target FreesideAPI \
+    --only-use-versions-from-resolved-file
 
 if [[ -n "$(git -C "$repo_dir" status --porcelain --untracked-files=all -- app/Sources/FreesideAPI/openapi.yaml)" ]]; then
     echo "Generated API client inputs changed; commit the refreshed schema mirror." >&2

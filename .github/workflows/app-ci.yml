@@ -16,10 +16,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-and-test:
-    name: build and test (macOS + iOS)
-    runs-on: macos-26
+  package:
+    name: package (schema + tests)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Verify generated API client
@@ -27,10 +31,38 @@ jobs:
         run: ./scripts/generate-api-client.sh
       - name: Test Swift package
         working-directory: app
-        run: swift test
+        run: swift test --only-use-versions-from-resolved-file
+
+  apps:
+    name: apps (macOS + iOS)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
       - name: Build macOS app
         working-directory: app
-        run: xcodebuild -project Freeside.xcodeproj -scheme FreesideMac -destination 'platform=macOS' -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO build
+        run: >-
+          xcodebuild
+          -project Freeside.xcodeproj
+          -scheme FreesideMac
+          -destination 'platform=macOS'
+          -onlyUsePackageVersionsFromResolvedFile
+          -skipPackageUpdates
+          -skipPackagePluginValidation
+          CODE_SIGNING_ALLOWED=NO
+          COMPILER_INDEX_STORE_ENABLE=NO
+          build
       - name: Build iOS app
         working-directory: app
-        run: xcodebuild -project Freeside.xcodeproj -scheme FreesideIOS -destination 'generic/platform=iOS Simulator' -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO build
+        run: >-
+          xcodebuild
+          -project Freeside.xcodeproj
+          -scheme FreesideIOS
+          -destination 'generic/platform=iOS Simulator'
+          -onlyUsePackageVersionsFromResolvedFile
+          -skipPackageUpdates
+          -skipPackagePluginValidation
+          CODE_SIGNING_ALLOWED=NO
+          COMPILER_INDEX_STORE_ENABLE=NO
+          ARCHS=arm64
+          ONLY_ACTIVE_ARCH=YES
+          build

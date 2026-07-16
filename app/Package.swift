@@ -2,16 +2,45 @@
 
 import PackageDescription
 
+var products: [Product] = [
+    .library(name: "FreesideAPI", targets: ["FreesideAPI"]),
+]
+
+var targets: [Target] = [
+    .target(
+        name: "FreesideAPI",
+        dependencies: [
+            .product(name: "HTTPTypes", package: "swift-http-types"),
+            .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+            .product(name: "OpenAPIURLSession", package: "swift-openapi-urlsession"),
+        ],
+        plugins: [
+            .plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator"),
+        ]
+    ),
+    .testTarget(
+        name: "FreesideAPITests",
+        dependencies: ["FreesideAPI"]
+    ),
+]
+
+#if !os(Linux)
+products.append(.library(name: "FreesideCore", targets: ["FreesideCore"]))
+targets.append(
+    .target(
+        name: "FreesideCore",
+        dependencies: ["FreesideAPI"]
+    )
+)
+#endif
+
 let package = Package(
     name: "FreesideApp",
     platforms: [
         .macOS(.v14),
         .iOS(.v17),
     ],
-    products: [
-        .library(name: "FreesideAPI", targets: ["FreesideAPI"]),
-        .library(name: "FreesideCore", targets: ["FreesideCore"]),
-    ],
+    products: products,
     dependencies: [
         .package(
             url: "https://github.com/apple/swift-openapi-generator",
@@ -30,25 +59,5 @@ let package = Package(
             exact: "1.6.0"
         ),
     ],
-    targets: [
-        .target(
-            name: "FreesideAPI",
-            dependencies: [
-                .product(name: "HTTPTypes", package: "swift-http-types"),
-                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
-                .product(name: "OpenAPIURLSession", package: "swift-openapi-urlsession"),
-            ],
-            plugins: [
-                .plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator"),
-            ]
-        ),
-        .target(
-            name: "FreesideCore",
-            dependencies: ["FreesideAPI"]
-        ),
-        .testTarget(
-            name: "FreesideAPITests",
-            dependencies: ["FreesideAPI"]
-        ),
-    ]
+    targets: targets
 )
