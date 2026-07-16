@@ -129,16 +129,17 @@ func applyPolicy(changes []plannedChange, pol Policy) []Finding {
 
 // matchAny reports whether p matches any of the slash-separated glob
 // patterns, where "**" spans any number of path segments and other
-// segments use path.Match semantics. foldCase lowers both sides; the
-// allowlist matches exactly, since it names this repository's declared
-// paths.
+// segments use path.Match semantics. foldCase applies the same NFC +
+// Unicode full case fold as the APFS collision model; simple lowercasing
+// misses aliases such as the ﬁ ligature → fi. The allowlist matches
+// exactly, since it names this repository's declared paths.
 func matchAny(patterns []string, p string, foldCase bool) bool {
 	if foldCase {
-		p = strings.ToLower(p)
+		p = foldPath(p)
 	}
 	for _, pat := range patterns {
 		if foldCase {
-			pat = strings.ToLower(pat)
+			pat = foldPath(pat)
 		}
 		if matchSegments(strings.Split(pat, "/"), strings.Split(p, "/")) {
 			return true

@@ -165,6 +165,7 @@ func TestApplyPolicyAliasNormalization(t *testing.T) {
 		{"AGENTS.md::$DATA", FindingReviewerInstructionPath},        // reviewer-instruction ADS alias
 		{".github/workflows/ci.yml.", FindingAutomationControlPath}, // automation alias
 		{"action.yml:payload", FindingAutomationControlPath},        // automation ADS alias
+		{"Jenkins\ufb01le", FindingAutomationControlPath},           // APFS full fold: ﬁ → fi
 	}
 	for _, tc := range cases {
 		f := applyPolicy([]plannedChange{{path: tc.path, kind: ChangeAdded, mode: "100644", size: 1}}, Policy{}.withDefaults())

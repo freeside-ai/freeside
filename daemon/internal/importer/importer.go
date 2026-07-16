@@ -61,6 +61,7 @@ func Import(ctx context.Context, handoffDir, checkoutDir string, opts Options) (
 		return Result{}, err
 	}
 	findings = append(findings, applyPolicy(changes, opts.Policy)...)
+	findings = append(findings, detectCollisions(changes, base)...)
 	sortFindings(findings)
 	result := Result{
 		Changes:  make([]Change, 0, len(changes)),

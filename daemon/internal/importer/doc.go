@@ -49,6 +49,8 @@
 //   - importer.go the Import orchestrator and Result
 //   - policy.go   §5.5/§5.8 path classes, the declared-scope
 //     allowlist, and size policy over the change set
+//   - collision.go  case- and Unicode-normalization-fold collisions on
+//     a case-insensitive checkout (the reference deployment is APFS)
 //
 // Lane: gauntlet. See docs/plan.md §5.4–§5.8 and the export package
 // (the manifest+blob wire contract's producer).
