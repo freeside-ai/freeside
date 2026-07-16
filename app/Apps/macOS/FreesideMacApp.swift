@@ -7,6 +7,6 @@ struct FreesideMacApp: App {
         WindowGroup {
             FreesideRootView()
         }
-        .defaultSize(width: 480, height: 320)
+        .defaultSize(width: 960, height: 640)
     }
 }

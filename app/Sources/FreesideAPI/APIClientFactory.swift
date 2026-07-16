@@ -1,5 +1,4 @@
 import Foundation
-import HTTPTypes
 import OpenAPIRuntime
 import OpenAPIURLSession
 
@@ -8,33 +7,17 @@ public enum APIClientFactory {
         Client(serverURL: serverURL, transport: URLSessionTransport())
     }
 
+    /// A generated client over a default-seeded in-process mock server.
     public static func mock() -> Client {
+        mock(server: MockServer())
+    }
+
+    /// A generated client over the given mock server; callers hold the
+    /// server to script staleness and to gate or fail responses.
+    public static func mock(server: MockServer) -> Client {
         Client(
             serverURL: URL(string: "https://freeside.invalid")!,
-            transport: MockClientTransport()
+            transport: MockServerTransport(server: server)
         )
-    }
-}
-
-public struct MockClientTransport: ClientTransport {
-    public init() {}
-
-    public func send(
-        _ request: HTTPRequest,
-        body: HTTPBody?,
-        baseURL: URL,
-        operationID: String
-    ) async throws -> (HTTPResponse, HTTPBody?) {
-        switch operationID {
-        case "getSyncRevision":
-            let response = HTTPResponse(
-                status: .ok,
-                headerFields: [.contentType: "application/json"]
-            )
-            let json = #"{"sync_epoch":"mock-epoch","revision":1}"#
-            return (response, HTTPBody(json))
-        default:
-            return (HTTPResponse(status: .notImplemented), nil)
-        }
     }
 }

@@ -1,0 +1,110 @@
+import FreesideAPI
+import FreesideCore
+import Foundation
+import HTTPTypes
+import OpenAPIRuntime
+
+/// A reusable one-shot gate: `wait()` suspends until `open()`.
+actor AsyncGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        for waiter in waiters {
+            waiter.resume()
+        }
+        waiters.removeAll()
+    }
+}
+
+struct InjectedFailure: Error {}
+
+/// Throws on the first `times` calls to `consume()`; later calls pass.
+actor InjectedFailures {
+    private var remaining: Int
+
+    init(times: Int) {
+        remaining = times
+    }
+
+    func consume() throws {
+        guard remaining > 0 else { return }
+        remaining -= 1
+        throw InjectedFailure()
+    }
+}
+
+@MainActor
+func makeStore(server: MockServer) async -> InboxStore {
+    let store = InboxStore(client: APIClientFactory.mock(server: server))
+    await store.refresh()
+    return store
+}
+
+/// Answers the first matching operation with a bare HTTP status instead
+/// of reaching the mock server (simulating a transient gateway/server
+/// failure before commit); everything else passes through.
+struct StatusOverrideTransport: ClientTransport {
+    let base: MockServerTransport
+    let operationID: String
+    let status: Int
+    let once: OneShot
+
+    func send(
+        _ request: HTTPRequest,
+        body: HTTPBody?,
+        baseURL: URL,
+        operationID: String
+    ) async throws -> (HTTPResponse, HTTPBody?) {
+        if operationID == self.operationID, await once.fire() {
+            return (HTTPResponse(status: .init(code: status)), nil)
+        }
+        return try await base.send(request, body: body, baseURL: baseURL, operationID: operationID)
+    }
+}
+
+/// True exactly once.
+actor OneShot {
+    private var fired = false
+
+    func fire() -> Bool {
+        if fired { return false }
+        fired = true
+        return true
+    }
+}
+
+/// Scripts one behavior per matching call, in order; exhausted → pass.
+actor ScriptedResponses {
+    enum Step {
+        case pass
+        case fail
+        /// Opens `reached`, then suspends until `release` opens.
+        case hold(reached: AsyncGate, release: AsyncGate)
+    }
+
+    private var steps: [Step]
+
+    init(_ steps: [Step]) {
+        self.steps = steps
+    }
+
+    func next() async throws {
+        guard !steps.isEmpty else { return }
+        switch steps.removeFirst() {
+        case .pass:
+            return
+        case .fail:
+            throw InjectedFailure()
+        case .hold(let reached, let release):
+            await reached.open()
+            await release.wait()
+        }
+    }
+}

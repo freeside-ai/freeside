@@ -32,6 +32,12 @@ targets.append(
         dependencies: ["FreesideAPI"]
     )
 )
+targets.append(
+    .testTarget(
+        name: "FreesideCoreTests",
+        dependencies: ["FreesideCore", "FreesideAPI"]
+    )
+)
 #endif
 
 let package = Package(
