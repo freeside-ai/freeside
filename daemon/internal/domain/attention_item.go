@@ -220,9 +220,9 @@ func (i AttentionItem) Validate() error {
 	if i.ItemVersion < 1 {
 		return fmt.Errorf("item %s item_version %d: %w", i.ID, i.ItemVersion, ErrNonPositive)
 	}
-	if len(i.RequestedDecision) == 0 {
-		return fmt.Errorf("item %s: %w", i.ID, ErrNoActions)
-	}
+	// An empty requested_decision is structurally valid: the read-only blocked
+	// type offers no action (plan §4), and which types must offer at least one
+	// is per-type signet policy, not domain vocabulary.
 	for _, a := range i.RequestedDecision {
 		if !a.valid() {
 			return fmt.Errorf("item action %q: %w", a, ErrInvalidAction)

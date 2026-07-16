@@ -23,8 +23,11 @@ var (
 	ErrInvalidProvenanceSource  = errors.New("invalid provenance source")
 
 	// Structural failures.
-	ErrEmptyID                  = errors.New("required identifier is empty")
-	ErrEmptyField               = errors.New("required field is empty")
+	ErrEmptyID    = errors.New("required identifier is empty")
+	ErrEmptyField = errors.New("required field is empty")
+	// ErrNoActions is raised by signet's per-type action policy, not by
+	// structural validation: an empty requested_decision is structurally valid
+	// (the read-only blocked type offers none, plan §4).
 	ErrNoActions                = errors.New("attention item offers no requested decision")
 	ErrNonPositiveSeq           = errors.New("message sequence must be positive")
 	ErrNonPositive              = errors.New("value must be positive")

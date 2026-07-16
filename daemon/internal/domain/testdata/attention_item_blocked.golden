@@ -1,0 +1,29 @@
+{
+  "id": "item-2",
+  "project_id": "proj-1",
+  "subject": {
+    "subject_type": "run",
+    "subject_id": "run-1",
+    "run_id": "run-1"
+  },
+  "type": "blocked",
+  "priority": "normal",
+  "reason": "waiting on an external dependency",
+  "requested_decision": [],
+  "evidence_snapshot": [],
+  "agent_claims": [],
+  "artifact_digests": [],
+  "pr_head_sha": "",
+  "item_version": 1,
+  "interruption_class": "planned_gate",
+  "conversation_id": null,
+  "timing": {
+    "delivery_count": 0,
+    "first_submitted_at": null,
+    "first_accepted_at": null,
+    "first_opened_at": null,
+    "submit_to_first_open": null
+  },
+  "expires_when": null,
+  "status": "open"
+}

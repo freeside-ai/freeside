@@ -89,6 +89,49 @@ func TestPutItemRejectsDisallowedAction(t *testing.T) {
 	}
 }
 
+// TestPutItemActionlessBlocked is #96's acceptance: an actionless blocked
+// item crosses the storage boundary (the plan assigns blocked no action),
+// while an empty set on any other type is still rejected by signet policy
+// before a Write begins — the cardinality rule lives here, not in domain.
+func TestPutItemActionlessBlocked(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+
+	blocked := f.item
+	blocked.ID = "item-blocked"
+	blocked.Type = domain.AttentionBlocked
+	blocked.RequestedDecision = nil
+	if err := f.service.PutItem(ctx, blocked); err != nil {
+		t.Fatalf("PutItem(actionless blocked): %v", err)
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.GetAttentionItem(ctx, blocked.ID)
+		if err != nil {
+			return err
+		}
+		if len(got.RequestedDecision) != 0 {
+			t.Errorf("persisted RequestedDecision = %v, want empty", got.RequestedDecision)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("GetAttentionItem(blocked): %v", err)
+	}
+
+	before := f.revision(t)
+	actionless := f.item
+	actionless.ID = "item-actionless-invalid"
+	actionless.RequestedDecision = nil
+	if err := actionless.Validate(); err != nil {
+		t.Fatalf("domain fixture must be structurally valid: %v", err)
+	}
+	if err := f.service.PutItem(ctx, actionless); !errors.Is(err, domain.ErrNoActions) {
+		t.Fatalf("PutItem error = %v, want ErrNoActions", err)
+	}
+	if after := f.revision(t); after != before {
+		t.Errorf("rejected item moved the revision %d → %d", before, after)
+	}
+}
+
 // TestSubmitRegatesDurableItemPolicy covers rows that predate the policy or
 // bypassed PutItem through an internal store path. New commands fail closed
 // against the current per-type table before either a record-only or pending
