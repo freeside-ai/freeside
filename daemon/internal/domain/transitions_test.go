@@ -68,7 +68,7 @@ func TestValidateConversationTransition(t *testing.T) {
 	m1 := mustMessage(t, "m1", "conv-1", domain.AuthorUser, "first", at)
 	m2 := mustMessage(t, "m2", "conv-1", domain.AuthorAgent, "second", at.Add(time.Minute))
 
-	old, _ := domain.Conversation{ID: "conv-1"}.Append(m1)
+	old, _ := domain.Conversation{ID: "conv-1", Status: domain.ConversationIdle}.Append(m1)
 	appended, _ := old.Append(m2)
 	if err := domain.ValidateConversationTransition(old, appended); err != nil {
 		t.Fatalf("appending a message rejected: %v", err)
@@ -95,11 +95,24 @@ func TestValidateConversationTransition(t *testing.T) {
 			t.Fatalf("rewriting a stored message = %v, want ErrImmutableTransition", err)
 		}
 	})
+	t.Run("status moves freely", func(t *testing.T) {
+		// Status is lifecycle, not recorded history: it may move between valid
+		// members in either direction, with or without an append (§5.14 test
+		// 12 needs a change a message cursor cannot carry).
+		waiting := old
+		waiting.Status = domain.ConversationAwaitingAgent
+		if err := domain.ValidateConversationTransition(old, waiting); err != nil {
+			t.Fatalf("idle -> awaiting_agent rejected: %v", err)
+		}
+		if err := domain.ValidateConversationTransition(waiting, old); err != nil {
+			t.Fatalf("awaiting_agent -> idle rejected: %v", err)
+		}
+	})
 }
 
 func mustMessage(t *testing.T, id domain.MessageID, conv domain.ConversationID, author domain.Author, body string, at time.Time) domain.Message {
 	t.Helper()
-	m, err := domain.NewMessage(id, conv, author, body, at)
+	m, err := domain.NewMessage(id, conv, author, body, nil, at)
 	if err != nil {
 		t.Fatalf("NewMessage: %v", err)
 	}

@@ -197,7 +197,7 @@ func TestGetRejectsForgedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode run: %v", err)
 	}
-	conversationBody, err := encode(domain.Conversation{ID: "conv-1"})
+	conversationBody, err := encode(domain.Conversation{ID: "conv-1", Status: domain.ConversationIdle})
 	if err != nil {
 		t.Fatalf("encode conversation: %v", err)
 	}
@@ -335,8 +335,8 @@ func TestListRejectsForgedMetadata(t *testing.T) {
 	for entity, v := range map[string]validator{
 		"run-a":  domain.Run{ID: "run-a", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"},
 		"run-b":  domain.Run{ID: "run-b", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"},
-		"conv-a": domain.Conversation{ID: "conv-a"},
-		"conv-b": domain.Conversation{ID: "conv-b"},
+		"conv-a": domain.Conversation{ID: "conv-a", Status: domain.ConversationIdle},
+		"conv-b": domain.Conversation{ID: "conv-b", Status: domain.ConversationIdle},
 		"item-b": item,
 		"delivery-a": domain.AttentionDelivery{
 			ItemID: "item-b", DeviceID: "device-1", Channel: "ntfy", Attempt: 1,
@@ -471,7 +471,7 @@ func TestListRejectsInconsistentRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode run: %v", err)
 	}
-	conversationBody, err := encode(domain.Conversation{ID: "conv-1"})
+	conversationBody, err := encode(domain.Conversation{ID: "conv-1", Status: domain.ConversationIdle})
 	if err != nil {
 		t.Fatalf("encode conversation: %v", err)
 	}

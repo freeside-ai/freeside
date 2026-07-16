@@ -120,9 +120,10 @@ func newFixtures(t *testing.T) fixtures {
 				Attempts: []domain.Attempt{{ID: "attempt-1", StageID: "stage-1", Number: 1, InvocationID: "inv-1"}},
 			}},
 		},
-		conversation: domain.Conversation{ID: "conv-1", Messages: []domain.Message{{
+		conversation: domain.Conversation{ID: "conv-1", Status: domain.ConversationIdle, Messages: []domain.Message{{
 			ID: "msg-1", ConversationID: "conv-1", Sequence: 1,
-			Author: domain.AuthorUser, Body: "please proceed", CreatedAt: ts,
+			Author: domain.AuthorUser, Body: "please proceed",
+			Attachments: []domain.Digest{}, CreatedAt: ts,
 		}}},
 		invocation: domain.AgentInvocation{ID: "inv-1", InputIDs: []domain.ArtifactID{"art-1", "art-2"}},
 		artifact:   artifact,

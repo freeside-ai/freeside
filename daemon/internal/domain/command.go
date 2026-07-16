@@ -34,6 +34,15 @@ type Command struct {
 	PRHeadSHA       string   `json:"pr_head_sha"`
 	ArtifactDigests []Digest `json:"artifact_digests"`
 	Action          Action   `json:"action"`
+	// Message and Attachments carry conversation content for the actions that
+	// ride the conversation channel (discuss, plan §5.14: the transaction's
+	// first step is "append message"); both are empty for pure decisions.
+	// Unlike ArtifactDigests they are content, not a binding set: attachment
+	// order is authored, so it is preserved, never canonicalized. Which
+	// actions require or forbid them is the acceptance boundary's policy, not
+	// a domain invariant.
+	Message     string   `json:"message"`
+	Attachments []Digest `json:"attachments"`
 }
 
 // CommandInput carries the caller-supplied fields of a Command. The bound
@@ -46,6 +55,8 @@ type CommandInput struct {
 	PRHeadSHA       string
 	ArtifactDigests []Digest
 	Action          Action
+	Message         string
+	Attachments     []Digest
 }
 
 // NewCommand builds a validated Command whose bound digest set is in canonical
@@ -70,6 +81,12 @@ func NewCommand(in CommandInput) (Command, error) {
 		PRHeadSHA:       in.PRHeadSHA,
 		ArtifactDigests: digests,
 		Action:          in.Action,
+		Message:         in.Message,
+		// Copied, not canonicalized: attachment order is authored content, and
+		// a retry resends the same stored byte-form, so the #33 reordering
+		// concern does not arise. The non-nil base keeps the field
+		// array-shaped ("[]") in the write-once record.
+		Attachments: append([]Digest{}, in.Attachments...),
 	}
 	if err := c.Validate(); err != nil {
 		return Command{}, err
@@ -118,6 +135,20 @@ func (c Command) Validate() error {
 		}
 		seen[d] = struct{}{}
 		prev = d
+	}
+	// Attachment entries are content addresses like a message's (see
+	// Message.validateUnsequenced): empty is malformed and a repeat is
+	// authoring noise, but order is authored content, so no canonical-order
+	// requirement.
+	seenAtt := make(map[Digest]struct{}, len(c.Attachments))
+	for idx, d := range c.Attachments {
+		if d == "" {
+			return fmt.Errorf("command %s attachments[%d]: %w", c.CommandID, idx, ErrEmptyField)
+		}
+		if _, dup := seenAtt[d]; dup {
+			return fmt.Errorf("command %s attachments[%d] %q: %w", c.CommandID, idx, d, ErrDuplicate)
+		}
+		seenAtt[d] = struct{}{}
 	}
 	return nil
 }

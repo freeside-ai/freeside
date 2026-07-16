@@ -7,20 +7,21 @@ import "errors"
 // the invariant it guards.
 var (
 	// Enum-membership failures.
-	ErrUnknownAttentionType     = errors.New("unknown attention type")
-	ErrInvalidSubjectType       = errors.New("invalid subject type")
-	ErrInvalidProducerClass     = errors.New("invalid producer class")
-	ErrInvalidDeliveryStatus    = errors.New("invalid delivery status")
-	ErrInvalidDeviceStatus      = errors.New("invalid device status")
-	ErrInvalidCredentialKind    = errors.New("invalid device credential kind")
-	ErrInvalidInterruptionClass = errors.New("invalid interruption class")
-	ErrInvalidAction            = errors.New("invalid action")
-	ErrInvalidPriority          = errors.New("invalid priority")
-	ErrInvalidItemStatus        = errors.New("invalid item status")
-	ErrInvalidSensitivityClass  = errors.New("invalid sensitivity class")
-	ErrInvalidHeadBinding       = errors.New("invalid head binding")
-	ErrInvalidAuthor            = errors.New("invalid author")
-	ErrInvalidProvenanceSource  = errors.New("invalid provenance source")
+	ErrUnknownAttentionType      = errors.New("unknown attention type")
+	ErrInvalidSubjectType        = errors.New("invalid subject type")
+	ErrInvalidProducerClass      = errors.New("invalid producer class")
+	ErrInvalidDeliveryStatus     = errors.New("invalid delivery status")
+	ErrInvalidDeviceStatus       = errors.New("invalid device status")
+	ErrInvalidCredentialKind     = errors.New("invalid device credential kind")
+	ErrInvalidInterruptionClass  = errors.New("invalid interruption class")
+	ErrInvalidAction             = errors.New("invalid action")
+	ErrInvalidPriority           = errors.New("invalid priority")
+	ErrInvalidItemStatus         = errors.New("invalid item status")
+	ErrInvalidSensitivityClass   = errors.New("invalid sensitivity class")
+	ErrInvalidHeadBinding        = errors.New("invalid head binding")
+	ErrInvalidAuthor             = errors.New("invalid author")
+	ErrInvalidConversationStatus = errors.New("invalid conversation status")
+	ErrInvalidProvenanceSource   = errors.New("invalid provenance source")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")
@@ -47,6 +48,8 @@ var (
 	ErrProvenanceInconsistent   = errors.New("provenance fields are internally inconsistent")
 	ErrBindingMismatch          = errors.New("artifact_digests does not equal the item's rendered evidence and claim digests")
 	ErrDigestsNotCanonical      = errors.New("artifact digests are not in canonical (sorted, deduplicated) order")
+	ErrUnboundInvocation        = errors.New("agent invocation binds neither input artifacts nor a conversation prefix")
+	ErrInvocationInconsistent   = errors.New("agent invocation conversation-binding fields are internally inconsistent")
 
 	// Trust-boundary failures.
 	ErrPlaintextCredential         = errors.New("credential material must be a sha256 digest, never plaintext")

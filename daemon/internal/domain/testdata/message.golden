@@ -4,5 +4,8 @@
   "sequence": 1,
   "author": "user",
   "body": "please proceed",
+  "attachments": [
+    "sha256:img"
+  ],
   "created_at": "2026-01-02T03:04:05Z"
 }
