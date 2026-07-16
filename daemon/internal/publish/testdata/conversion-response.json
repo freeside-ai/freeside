@@ -1,0 +1,16 @@
+{
+  "id": 12345,
+  "slug": "freeside-publish",
+  "node_id": "MDM6QXBwMTIzNDU=",
+  "client_id": "Iv1.deadbeefdeadbeef",
+  "permissions": {
+    "contents": "write",
+    "pull_requests": "write",
+    "metadata": "read"
+  },
+  "name": "freeside-publish",
+  "html_url": "https://github.com/apps/freeside-publish",
+  "pem": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAzRpkEZzkj9NAYl6NtYf4k0rCNvGQtwzH7F5QQy6jjATHKBVc\nwca+WsBeIY4goa++9F7RGJLGvRRr8RfMRoehlozy4Ylk9mBFW3FLVsTpAs0qe2LD\nOSgbKcl9POH9j3+ZyjiL5oQ7TOrhs8dZ3KgWvOwzHTSlQiXfsqLJNuycyWBmpmYQ\n1NikudUspqmFSTfkX8vlEBRLn1GhW+0Rjtf0zjWj0calg0KB9HLFpOKThIbIoBlQ\nvwp3ln9SI4gcCOM/Q2Lx2h3aXgs+VsHRQ2cYDXnhzb4gHdiDXpPDbFVn7t2XIh5n\n6Vwv0NQMPcdfv6oP180z+SYqm1MYCbePLetiwwIDAQABAoIBADgNyWGC5nhkPMll\nnAcLxSTEHrYTaQCODqmL0RW7Tlk7CQ7sX7BZ17ZHsrIq/MITnPV+YFj97DDKvwFi\nBqMT+FaD6PE4so4fG3V1TijFogTw+3ZDNKWPT3UpKwATp0+riOVadOmoI+jOnKac\nifOjQKubRhDqTWv5m9xfXuyS1/q0z7hBPG4CXmXjGAS+STofGX8lSHKaWUHslyUF\n2KodFClMrZmS97HxVyAXylCVYR5lgfQwmVGT18zdKlzphB3PezYKuSZUmkjmQDQ8\nsQ8PbBbkkOXimUwnUvZpEs/ktd/PaeY1DtrDzPL3vbaUIFrTWfRUiF2qcJiqXa3m\nx8jgMKkCgYEA5urJtRZlKHJZZNc6hxGgaPPkgQXzFLj6pkG1YwjqKQ0NLzuAfwdA\n2juYeFQfvr1zVgtGERW4e6ToMBii4f7r8zS+FQR8TbZyUvSrMmKjNKOb6dShvuOw\nXpUMOxfNFAl8M7svK1IrSc3Bb7j4RgnXvKHWlLL63TQeHUxNRXrX0ycCgYEA42HH\n09ugM704qZVJJVhjpbJFW6picv9awNJPYkHBZfSDwoXFnEmm7+xv3w4EguHwCgEr\n9RfF/oGezhXCfpyPResG7GYQdBehtUcP3sGoL8L8+REzmmb8F2JgidEwCzk36hqN\nzRgh0tWRjReZatK2MyRgSzqjN0pg9ClOP+2XhQUCgYBj6jFu1orcrmW5uVsMuHbF\nEsrLfQyJ6eQibgoTGPdg3dHXnxJhZH0OMH0vi47U1FqEX4pouBJEBb2lmfNYgBoN\n+MNKis9SPOBIvq8YtQ9TJnu++I8n7pMQycMqColk4xnHtHWbdAlg/NN3CPz8KSQc\n7ZXQb4UWk4d4O9yvdJDQPwKBgHdcpgyF10QxyaPkFSDAlJavzY8AE2wwthBQlpGK\n2R5PTDd6B7EyTKrX4CYkcqPOPTbTRKMFls8ydg3TCGV0hBV8+gZw0aRPn3jM0/zo\nhgSEhE2vBPrBowYXg3v1TxYlND/1LokCaQcHS7/YKpYUBMc2CkKThoiIx/qEEGqo\nq4iNAoGBANp8H+z7lzvaDonXrdwx1xA7kR1KflosTfzRG6YmMPiRZTtH598xB2UU\nWde6QzSdE4jGI/gnOsJ6zVE7aL3dwNYKF3GXGZCVvGVHGZKac0h8QdCqzki6EC2Z\nu9jiFdp6PocH5aiOnTmpo71DDWf1EfJ0qmEMF6uz+KBKaJZVdmYJ\n-----END RSA PRIVATE KEY-----\n",
+  "webhook_secret": "whsec_WEBHOOKWEBHOOK",
+  "client_secret": "cs_CLIENTSECRETCLIENTSECRET"
+}
