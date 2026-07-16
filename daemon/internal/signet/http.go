@@ -12,6 +12,11 @@ import (
 
 const maxCommandBodyBytes = 1 << 20
 
+// maxAttachmentBodyBytes caps one attachment upload. 32 MiB covers the §4
+// card-rendering payloads (screenshots, logs) with headroom; attachments are
+// octet-stream blobs, so the JSON command cap does not apply to them.
+const maxAttachmentBodyBytes = 32 << 20
+
 // RequestAuthorizer validates the paired-device credential on an HTTP
 // request and returns the credential's device identity. The device unit (#67)
 // supplies the real implementation; requiring this dependency now keeps the
@@ -40,6 +45,8 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer) http.Handler 
 	mux.Handle("GET /runs/{run_id}", h.authenticated(h.getRun))
 	mux.Handle("GET /conversations/{conversation_id}", h.authenticated(h.getConversation))
 	mux.Handle("POST /commands", h.authenticated(h.submitCommand))
+	mux.Handle("PUT /attachments/{digest}", h.authenticated(h.putAttachment))
+	mux.Handle("GET /attachments/{digest}", h.authenticated(h.getAttachment))
 	return mux
 }
 
@@ -139,6 +146,76 @@ func (h httpHandler) getConversation(w http.ResponseWriter, r *http.Request, _ d
 	writeJSON(w, http.StatusOK, conversation)
 }
 
+// attachmentReceipt mirrors the API's AttachmentReceipt.
+type attachmentReceipt struct {
+	Digest domain.Digest `json:"digest"`
+}
+
+// putAttachment is the digest-addressed upload (api/openapi.yaml PUT
+// /attachments/{digest}; §5.14 sync test 10): 201 on first store, 200 when
+// the digest was already present and the (verified) body converged on the
+// existing bytes, 422 on a body that does not hash to the path digest.
+func (h httpHandler) putAttachment(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {
+	if h.service.blobs == nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Message: "attachments are not available"})
+		return
+	}
+	digest := domain.Digest(r.PathValue("digest"))
+	body := http.MaxBytesReader(w, r.Body, maxAttachmentBodyBytes)
+	created, err := h.service.blobs.Put(digest, body)
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrInvalidDigest):
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: err.Error()})
+		return
+	case errors.Is(err, ErrDigestMismatch):
+		writeJSON(w, http.StatusUnprocessableEntity, errorResponse{Message: err.Error()})
+		return
+	default:
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Message: "attachment body is too large"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Message: "internal server error"})
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, attachmentReceipt{Digest: digest})
+}
+
+// getAttachment streams the stored bytes (api/openapi.yaml GET
+// /attachments/{digest}): opaque octet-stream, immutable per digest.
+func (h httpHandler) getAttachment(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {
+	if h.service.blobs == nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Message: "attachments are not available"})
+		return
+	}
+	digest := domain.Digest(r.PathValue("digest"))
+	blob, err := h.service.blobs.Open(digest)
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrInvalidDigest):
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: err.Error()})
+		return
+	case errors.Is(err, ErrBlobNotFound):
+		writeJSON(w, http.StatusNotFound, errorResponse{Message: "not found"})
+		return
+	default:
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Message: "internal server error"})
+		return
+	}
+	defer func() { _ = blob.Close() }()
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.WriteHeader(http.StatusOK)
+	// The connection is the failure surface once the status is written; a
+	// copy error here cannot be reported over the same response.
+	_, _ = io.Copy(w, blob)
+}
+
 type clientCommandRequest struct {
 	CommandID             string                   `json:"command_id"`
 	DeviceID              domain.DeviceID          `json:"device_id"`
@@ -153,6 +230,12 @@ type decisionPayloadRequest struct {
 	ItemVersion     int              `json:"item_version"`
 	PRHeadSHA       *string          `json:"pr_head_sha"`
 	ArtifactDigests *[]domain.Digest `json:"artifact_digests"`
+	// Message and Attachments are optional on the wire (api/openapi.yaml:
+	// pure decisions omit them); the service's per-action content policy
+	// decides whether their presence or absence is an error, so nil maps to
+	// the zero values rather than a required-field 400 here.
+	Message     *string          `json:"message"`
+	Attachments *[]domain.Digest `json:"attachments"`
 }
 
 func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authenticatedDevice domain.DeviceID) {
@@ -188,14 +271,21 @@ func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authe
 		writeJSON(w, http.StatusForbidden, errorResponse{Message: "device_id does not match the authenticated device"})
 		return
 	}
+	payload := DecisionPayload{
+		ItemID: request.Payload.ItemID, Action: request.Payload.Action,
+		ItemVersion: request.Payload.ItemVersion, PRHeadSHA: *request.Payload.PRHeadSHA,
+		ArtifactDigests: *request.Payload.ArtifactDigests,
+	}
+	if request.Payload.Message != nil {
+		payload.Message = *request.Payload.Message
+	}
+	if request.Payload.Attachments != nil {
+		payload.Attachments = *request.Payload.Attachments
+	}
 	result, err := h.service.Submit(r.Context(), ClientCommand{
 		CommandID: request.CommandID, DeviceID: request.DeviceID,
 		ExpectedEntityVersion: request.ExpectedEntityVersion,
-		Payload: DecisionPayload{
-			ItemID: request.Payload.ItemID, Action: request.Payload.Action,
-			ItemVersion: request.Payload.ItemVersion, PRHeadSHA: *request.Payload.PRHeadSHA,
-			ArtifactDigests: *request.Payload.ArtifactDigests,
-		},
+		Payload:               payload,
 	})
 	if err != nil {
 		writeCommandError(w, err)
@@ -300,6 +390,13 @@ func writeCommandError(w http.ResponseWriter, err error) {
 		})
 		return
 	}
+	var pending *AgentPendingError
+	if errors.As(err, &pending) {
+		writeJSON(w, http.StatusConflict, staleVersionResponse{
+			Message: err.Error(), ReplacementItem: itemSnapshot(pending.Item, pending.Snapshot),
+		})
+		return
+	}
 	if errors.Is(err, ErrDeviceNotActive) {
 		writeJSON(w, http.StatusForbidden, errorResponse{Message: err.Error()})
 		return
@@ -318,6 +415,11 @@ func writeCommandError(w http.ResponseWriter, err error) {
 func isCommandRequestError(err error) bool {
 	for _, target := range []error{
 		ErrActionNotAllowedForType, ErrUnsupportedAction,
+		ErrMessageRequired, ErrContentNotAllowed, ErrAttachmentNotStored,
+		// A malformed attachment digest in the payload surfaces from the
+		// blob-store gate through validateCommandContent: the client sent
+		// it, so it is a request error like the unstored-digest case.
+		ErrInvalidDigest,
 		store.ErrActionNotOffered, store.ErrImmutableConflict,
 		domain.ErrEmptyID, domain.ErrEmptyField, domain.ErrInvalidAction,
 		domain.ErrNonPositive, domain.ErrDigestsNotCanonical, domain.ErrDuplicate,
