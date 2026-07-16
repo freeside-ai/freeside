@@ -183,7 +183,7 @@ New in revision 7 (decider in parentheses):
 
 ---
 
-## Revision 8 (current)
+## Revision 8
 
 Revision 8 records the development record-keeping migration; the product spec is unchanged.
 
@@ -193,3 +193,15 @@ New in revision 8 (decider in parentheses):
 1. **Selective decision notes replace the devlog cadence split and shared promotion channel**: a note is mandatory only for the change classes AGENTS.md's High-assurance list names; the issue tracker and git carry all active work state; historical entries are frozen evidence. (User.)
 
 
+---
+
+## Revision 9 (current)
+
+Revision 9 records the accelerated open-source publication decision; the
+product architecture and phase deliverables are unchanged.
+
+Held from revision 8 (abbreviated): every product decision held through
+revision 7 plus revision 8's selective decision-note protocol, unchanged.
+
+New in revision 9 (decider in parentheses):
+1. **Open-source publication moves from Phase 4 to Phase 1A under AGPL-3.0-or-later, including owned prior revisions**: the network-service architecture still supports the original AGPL candidate; exhausted private-repository Actions capacity changes the timing, not the product roadmap or support commitments. Repository visibility changes only after the license and historical grant land. (User; ADR 0001.)

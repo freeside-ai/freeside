@@ -1,9 +1,9 @@
 ---
 title: Freeside Project Plan
-revision: 8
+revision: 9
 status: active
 phase: 1A
-updated: 2026-07-14
+updated: 2026-07-15
 ---
 
 # Freeside
@@ -304,6 +304,14 @@ The binary is the installer, built after interfaces survive real use: `freesided
 
 ### Phase 1A: the secure publish path, in three internal exits
 
+**Open-source publication (accelerated).** The entire monorepo, including
+owned prior revisions, is licensed under AGPL-3.0-or-later and will become
+public after the licensing change lands. This advances the packaging and
+visibility decision from Phase 4 to restore public-repository CI capacity; it
+does not advance Phase 4 product features or create new support commitments.
+See
+[`docs/decisions/0001-license-freeside-under-agpl.md`](decisions/0001-license-freeside-under-agpl.md).
+
 **1A.0: control plane with fakes.** Fake run → attention item → resolve on iPhone → second device converges → conversation feedback → fake invocation → workflow transition. Exit: all sixteen sync/device tests pass; command retries idempotent; kill-before/kill-after with fakes; no container, Claude, publication, or backup complexity.
 
 **1A.1: secure publication with a fake candidate.** Fake candidate → workspace handoff → gauntlet → clean verification → daemon GitHub publication → ready item. Exit: malicious fixtures contained; candidate automation-control and reviewer-instruction paths blocked; verification binds to exact recipe and head; PR creation converges effectively-once; checkpoint restore succeeds (local-only acceptable); attended_dev sufficient.
@@ -330,7 +338,7 @@ ACP interactive attachment; best-effort resume; material plan-change gates; brie
 
 ### Phase 4: generalization
 
-Pipeline DSL (after three shapes); more agents and skills; macOS runner class; App Intents, widgets, Live Activities; voice; open-source packaging decision.
+Pipeline DSL (after three shapes); more agents and skills; macOS runner class; App Intents, widgets, Live Activities; voice.
 
 ## 12. Exit criteria definitions
 
@@ -340,8 +348,8 @@ Pipeline DSL (after three shapes); more agents and skills; macOS runner class; A
 
 Material changes are recorded here per revision, with deciders in parentheses. This section holds only the current revision's items: when a new revision lands, the outgoing items move to docs/history/decisions.md, which holds the complete log of every revision, including revisions superseded before commit. The history file is appended in the same PR as any plan revision, so the two cannot drift. A decision promotes to a docs/decisions/ ADR on first re-litigation, citing its revision entry in the history.
 
-Revision 8:
-1. **Selective decision notes replace the devlog cadence split and shared promotion channel**: a note is mandatory only for the change classes AGENTS.md's High-assurance list names; the issue tracker and git carry all active work state; historical entries are frozen evidence. (User.)
+Revision 9:
+1. **Open-source publication moves from Phase 4 to Phase 1A under AGPL-3.0-or-later, including owned prior revisions**: the network-service architecture still supports the original AGPL candidate; exhausted private-repository Actions capacity changes the timing, not the product roadmap or support commitments. Repository visibility changes only after the license and historical grant land. (User; ADR 0001.)
 
 ## 14. Risks
 
