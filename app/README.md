@@ -6,14 +6,23 @@ The SwiftUI multiplatform client: the macOS + iOS attention inbox, decision deta
 
 - **Toolchain:** Xcode / Swift Package Manager.
 - **Scope boundary:** client-side code only. The daemon/client contract is defined in `api/`; client code consuming it lives here, never in `api/`. No JS toolchain enters this component.
-- **Status:** the inbox and per-type decision cards run against an in-process stateful mock of the contract (idempotent commands, conflict-with-replacement). Pairing, cache persistence, and real-daemon convergence land in the next saddle unit.
+- **Status:** the inbox and per-type decision cards run against an in-process stateful mock of the contract (idempotent commands, conflict-with-replacement, sync envelope, device pairing and revocation), with the §5.14 client cache semantics (separate full-snapshot and observed cursors, bootstrap on revision gap, epoch-change discard), a persisted disposable cache, Keychain-held device credentials, the pairing flow, and the freshness banner. The real-daemon convergence pass waits on the signet device unit (#67) and a composed daemon listener; see #72.
+
+## Running
+
+Launch arguments select the composition (`AppSession.fromEnvironment`):
+
+- default: the permissive in-process mock with a pre-paired identity — the inbox renders immediately.
+- `-FreesidePairingDemo YES`: the full pairing flow against an enforcing mock; the code is `483911`.
+- `-FreesideServerURL <url>`: a real daemon; the device credential lives in the Keychain and the cache on disk.
+- `-FreesideColorScheme light|dark`: force an appearance for screenshots without touching the system setting.
 
 ## Structure
 
 - `Freeside.xcodeproj` contains the two application targets. Both consume the local `FreesideCore` Swift package product.
 - `Sources/FreesideAPI` owns the generated client surface, the stateful mock server and its transport, and the per-type attention fixtures. Apple Swift OpenAPI Generator produces client and type source at build time from the schema mirror in that target.
 - `Sources/FreesideCore` contains shared SwiftUI presentation code.
-- `Tests/FreesideAPITests` exercises the generated client through the mock server, with no network or daemon; `Tests/FreesideCoreTests` covers the inbox and decision view models against the same mock.
+- `Tests/FreesideAPITests` exercises the generated client through the mock server, with no network or daemon; `Tests/FreesideCoreTests` covers the inbox, decision, sync, pairing, and session models against the same mock, plus the cache and credential stores.
 
 `Sources/FreesideAPI/openapi.yaml` is a mechanical mirror of the repository contract at `../api/openapi.yaml`. Refreshing it and rebuilding the generated client is one reproducible command:
 

@@ -81,7 +81,8 @@ public actor MockServer {
     public init(
         items: [Components.Schemas.AttentionItemSnapshot] = AttentionFixtures.defaultInbox(),
         approvedRecipes: Set<String> = [AttentionFixtures.approvedRecipeDigest],
-        authMode: AuthMode = .permissive
+        authMode: AuthMode = .permissive,
+        pairingCodes: [String: PairingCodeState] = [:]
     ) {
         for snapshot in items {
             itemsByID[snapshot.item.id] = snapshot
@@ -92,6 +93,7 @@ public actor MockServer {
         revision = max(1, items.map(\.as_of_revision).max() ?? 1)
         self.approvedRecipes = approvedRecipes
         self.authMode = authMode
+        self.pairingCodes = pairingCodes
     }
 
     public func setBeforeRespond(_ hook: BeforeRespond?) {
