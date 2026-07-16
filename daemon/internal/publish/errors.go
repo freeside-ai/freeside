@@ -47,6 +47,27 @@ var ErrRegistrationDenied = errors.New("app manifest registration returned no co
 // circulated.
 var ErrGrantMismatch = errors.New("installation token grant does not match the request")
 
+// ErrHeadMismatch is returned when a head-bound artifact's
+// source_head_sha differs from the candidate head being published:
+// its evidence describes some other revision, and a new remediation
+// head invalidates prior-head evidence (plan §5.15 rule 2), so the
+// publication fails before any external effect.
+var ErrHeadMismatch = errors.New("artifact head binding does not match the candidate head")
+
+// ErrPublicationConflict is returned when an existing external
+// resource under this publication's deterministic identity disagrees
+// with the candidate: the branch exists at a different commit, the
+// marker-matched PR is closed, or more than one PR claims the
+// identity. Convergence never overwrites unknown external state; a
+// human resolves the conflict.
+var ErrPublicationConflict = errors.New("existing publication resource conflicts with the candidate")
+
+// ErrForeignResource is returned when a pull request occupies the
+// publication branch without carrying this publication's identity
+// marker. It is not ours to converge, so the publication refuses
+// rather than adopting or overwriting it.
+var ErrForeignResource = errors.New("pull request on the publication branch does not carry the identity marker")
+
 // ErrGitHubAPI is the class sentinel for any non-success GitHub API
 // response; it is carried by *APIError. Match the class with errors.Is
 // and recover the status with errors.As.
