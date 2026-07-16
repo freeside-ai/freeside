@@ -3,17 +3,27 @@ import OpenAPIRuntime
 import OpenAPIURLSession
 
 public enum APIClientFactory {
+    /// Shared by every client this factory builds: dates decode
+    /// leniently across the RFC 3339 shapes the daemon and the mock
+    /// emit.
+    public static let configuration = Configuration(dateTranscoder: .rfc3339)
+
     /// The real-daemon client. Every operation except pairing requires
     /// the paired-device credential; the provider is consulted per
     /// request, so the same client works before pairing (no header) and
-    /// after it.
+    /// after it. The transport is injectable so a test can wrap the
+    /// URLSession one (e.g. to fail requests before they leave the
+    /// process) without hand-building a Client that would drift from
+    /// this composition.
     public static func live(
         serverURL: URL,
+        transport: any ClientTransport = URLSessionTransport(),
         token: @escaping BearerAuthMiddleware.TokenProvider = { nil }
     ) -> Client {
         Client(
             serverURL: serverURL,
-            transport: URLSessionTransport(),
+            configuration: configuration,
+            transport: transport,
             middlewares: [BearerAuthMiddleware(token: token)]
         )
     }
@@ -32,6 +42,7 @@ public enum APIClientFactory {
     ) -> Client {
         Client(
             serverURL: URL(string: "https://freeside.invalid")!,
+            configuration: configuration,
             transport: MockServerTransport(server: server),
             middlewares: [BearerAuthMiddleware(token: token)]
         )

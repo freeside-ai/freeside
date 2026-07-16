@@ -38,6 +38,16 @@ targets.append(
         dependencies: ["FreesideCore", "FreesideAPI"]
     )
 )
+// The §5.14 real-daemon convergence pass (issue #72): every suite is
+// env-gated on a running freeside-signet-dev harness and skips
+// otherwise, so plain `swift test` never needs a daemon. Run through
+// scripts/run-convergence.sh at the repo root.
+targets.append(
+    .testTarget(
+        name: "FreesideConvergenceTests",
+        dependencies: ["FreesideCore", "FreesideAPI"]
+    )
+)
 #endif
 
 let package = Package(
