@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -544,7 +545,10 @@ func syncDir(dir string) error {
 // AppCredentials is the registered GitHub App's identity and key
 // material, produced by the manifest conversion and round-tripped
 // through the keystore. The secrets are Secret-typed, so they redact
-// everywhere except the keystore's deliberate persistence writes.
+// everywhere except the keystore's deliberate persistence writes; the
+// struct carries its own Format/String/GoString/MarshalJSON because
+// *rsa.PrivateKey has exported fields that fmt and encoding/json would
+// otherwise print.
 type AppCredentials struct {
 	AppID         int64
 	Slug          string
@@ -552,6 +556,36 @@ type AppCredentials struct {
 	Key           *rsa.PrivateKey
 	WebhookSecret Secret
 	ClientSecret  Secret
+}
+
+// String renders the public identity only; the key and secrets redact.
+func (c AppCredentials) String() string {
+	return fmt.Sprintf("publish.AppCredentials{AppID:%d, Slug:%q, ClientID:%q, Key:%s, WebhookSecret:%s, ClientSecret:%s}",
+		c.AppID, c.Slug, c.ClientID, redacted, redacted, redacted)
+}
+
+// GoString keeps %#v as redacted as %v.
+func (c AppCredentials) GoString() string { return c.String() }
+
+// Format covers every fmt verb, since a non-string verb like %x would
+// otherwise walk the struct fields — including the RSA key's exported
+// big integers — without consulting String.
+func (c AppCredentials) Format(f fmt.State, _ rune) {
+	io.WriteString(f, c.String()) //nolint:errcheck // fmt.State writes cannot be usefully handled
+}
+
+// MarshalJSON emits the identity with every sensitive field redacted;
+// real persistence is the keystore's explicit appMetadata write, never
+// a marshal of this struct.
+func (c AppCredentials) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		AppID         int64  `json:"app_id"`
+		Slug          string `json:"slug"`
+		ClientID      string `json:"client_id"`
+		Key           string `json:"key"`
+		WebhookSecret string `json:"webhook_secret"`
+		ClientSecret  string `json:"client_secret"`
+	}{c.AppID, c.Slug, c.ClientID, redacted, redacted, redacted})
 }
 
 // appMetadata is the decoded shape of the on-disk credential metadata.
