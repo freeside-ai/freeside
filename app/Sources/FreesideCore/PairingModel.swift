@@ -2,11 +2,10 @@ import FreesideAPI
 import Observation
 
 /// The pairing exchange (plan §5.14 devices): a short-lived code read
-/// off the daemon host buys this device its credential. The grant is
-/// the token's only appearance, ever, so custody moves to the
-/// credential store inside the same operation; a grant whose credential
-/// cannot be stored is surfaced as exactly that, because the token is
-/// already unrecoverable and only revoke-and-repair fixes it.
+/// off the daemon host buys this device its private grant. The token and ntfy
+/// subscription appear only there, so custody moves to the credential store
+/// inside the same operation; a grant whose values cannot be validated or
+/// stored is surfaced as exactly that, because only revoke-and-repair fixes it.
 @MainActor
 @Observable
 public final class PairingModel {
@@ -42,10 +41,20 @@ public final class PairingModel {
             switch output {
             case .created(let created):
                 let grant = try created.body.json
-                let credential = DeviceCredential(
-                    deviceID: Self.deviceID(of: grant.device.device),
-                    token: grant.device_token
-                )
+                let deviceID = Self.deviceID(of: grant.device.device)
+                guard let subscription = DeviceNtfySubscription(
+                    serverURL: grant.ntfy_subscription.server_url,
+                    topic: grant.ntfy_subscription.topic
+                ), let credential = DeviceCredential(
+                    deviceID: deviceID,
+                    token: grant.device_token,
+                    ntfySubscription: subscription
+                ) else {
+                    phase = .failed(
+                        "Paired, but the private grant was invalid; revoke this device on the daemon host and pair again."
+                    )
+                    return nil
+                }
                 do {
                     try credentials.save(credential)
                 } catch {

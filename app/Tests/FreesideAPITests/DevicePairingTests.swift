@@ -45,6 +45,8 @@ private func client(server: MockServer, token: String? = nil) -> Client {
             body: .json(.init(pairing_code: "483911", display_name: "Ben's iPhone"))
         ).created.body.json
         #expect(grant.device_token.hasPrefix("fsd1."))
+        #expect(grant.ntfy_subscription.server_url == "https://ntfy.example")
+        #expect(grant.ntfy_subscription.topic == "fs-00000000000000000000000000000001")
         guard case .active(let active) = grant.device.device else {
             Issue.record("expected an active device, got \(grant.device.device)")
             return

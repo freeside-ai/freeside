@@ -279,13 +279,13 @@ func TestHTTPPairingFlowEndToEnd(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
 		t.Fatalf("decode envelope: %v", err)
 	}
-	for _, key := range []string{"device_token", "device"} {
+	for _, key := range []string{"device_token", "device", "ntfy_subscription"} {
 		if _, ok := envelope[key]; !ok {
 			t.Errorf("grant envelope is missing %q: %s", key, response.Body.String())
 		}
 	}
-	if grant.DeviceToken == "" || grant.Device.EntityVersion != 1 {
-		t.Fatalf("grant = %+v, want a token and a version-1 device snapshot", grant)
+	if grant.DeviceToken == "" || grant.Device.EntityVersion != 1 || grant.NtfySubscription.Topic == "" {
+		t.Fatalf("grant = %+v, want a token, private topic, and a version-1 device snapshot", grant)
 	}
 	deviceID := grant.Device.Device.ID
 

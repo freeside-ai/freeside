@@ -31,6 +31,10 @@ type fixture struct {
 // testPairingKey is fixture key material, not a credential.
 var testPairingKey = []byte("signet-test-pairing-key")
 
+// testTopicKey has production-minimum entropy width; it is fixture material,
+// not a credential.
+var testTopicKey = []byte("0123456789abcdef0123456789abcdef")
+
 func newFixture(t *testing.T) fixture {
 	t.Helper()
 	ctx := context.Background()
@@ -64,6 +68,10 @@ func newFixture(t *testing.T) fixture {
 	service := signet.NewService(s,
 		signet.WithPairingKey(testPairingKey),
 		signet.WithClock(func() time.Time { return now }),
+		signet.WithNtfy(signet.NtfyConfig{
+			BaseURL: "https://ntfy.example", TopicKey: testTopicKey,
+			ClickBaseURL: "https://daemon.example",
+		}),
 	)
 	if err := service.PutItem(ctx, item); err != nil {
 		t.Fatalf("seed item: %v", err)

@@ -136,8 +136,14 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
             Issue.record("expected an active device")
             return
         }
-        let token = grant.device_token
-        let client = APIClientFactory.mock(server: server) { token }
+        let subscription = try #require(DeviceNtfySubscription(
+            serverURL: grant.ntfy_subscription.server_url,
+            topic: grant.ntfy_subscription.topic))
+        let credential = try #require(DeviceCredential(
+            deviceID: active.id,
+            token: grant.device_token,
+            ntfySubscription: subscription))
+        let client = APIClientFactory.mock(server: server) { credential.token }
         let coordinator = SyncCoordinator(
             client: client, device: DeviceIdentity(deviceID: active.id), cache: cache)
         await coordinator.bootstrap()
@@ -159,12 +165,17 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(text.contains("pendingcommands"))
         #expect(!text.contains("authorization"))
         #expect(!text.contains("bearer"))
-        #expect(!text.contains(token.lowercased()))
-        // The token scheme prefix, the mock's secret segment, and the
-        // token's base64 form: no token-shaped fragment reaches disk.
+        #expect(!text.contains(credential.token.lowercased()))
+        #expect(!text.contains(credential.ntfySubscription.topic.lowercased()))
+        // The token scheme prefix and the token's base64 form: no
+        // token-shaped fragment reaches disk.
         #expect(!text.contains("fsd1"))
-        #expect(!text.contains("mock-secret"))
-        #expect(!text.contains(Data(token.utf8).base64EncodedString().lowercased()))
+        #expect(
+            !text.contains(
+                Data(credential.token.utf8).base64EncodedString().lowercased()))
+        #expect(
+            !text.contains(
+                Data(credential.ntfySubscription.topic.utf8).base64EncodedString().lowercased()))
     }
 
     @Test func discardDeletesTheFile() throws {
@@ -187,7 +198,9 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         let store = InMemoryCredentialStore()
         #expect(try store.load() == nil)
 
-        let credential = DeviceCredential(deviceID: "device-1", token: "fsd1.id.secret")
+        let credential = DeviceCredential(
+            deviceID: "device-1", token: testDeviceToken(for: "device-1"),
+            ntfySubscription: .mock)!
         try store.save(credential)
         #expect(try store.load() == credential)
 
@@ -205,12 +218,19 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         defer { try? store.delete() }
 
         #expect(try store.load() == nil)
-        let first = DeviceCredential(deviceID: "device-1", token: "fsd1.one.secret")
+        let first = DeviceCredential(
+            deviceID: "device-1", token: testDeviceToken(for: "device-1"),
+            ntfySubscription: .mock)!
         try store.save(first)
         #expect(try store.load() == first)
 
         // A re-pair replaces the whole identity.
-        let second = DeviceCredential(deviceID: "device-2", token: "fsd1.two.secret")
+        let secondSubscription = try #require(DeviceNtfySubscription(
+            serverURL: "https://other-ntfy.example",
+            topic: "fs-11111111111111111111111111111111"))
+        let second = DeviceCredential(
+            deviceID: "device-2", token: testDeviceToken(for: "device-2", secretByte: 2),
+            ntfySubscription: secondSubscription)!
         try store.save(second)
         #expect(try store.load() == second)
 

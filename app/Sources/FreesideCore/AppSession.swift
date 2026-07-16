@@ -122,11 +122,15 @@ public final class AppSession {
     /// The default demo surface: a permissive mock and a pre-paired
     /// mock identity, so the inbox renders immediately.
     public static func mock() -> AppSession {
-        AppSession(
+        let secretSegment = Data(repeating: 0, count: 32).base64EncodedString()
+            .replacingOccurrences(of: "=", with: "")
+        return AppSession(
             client: APIClientFactory.mock(),
             credentials: InMemoryCredentialStore(
                 credential: DeviceCredential(
-                    deviceID: DeviceIdentity.mock.deviceID, token: "fsd1.mock.mock")),
+                    deviceID: DeviceIdentity.mock.deviceID,
+                    token: "fsd1.ZGV2aWNlLW1vY2s.\(secretSegment)",
+                    ntfySubscription: .mock)!),
             cache: InMemoryCacheStore()
         )
     }

@@ -37,7 +37,10 @@ trap cleanup EXIT
 echo "building freeside-signet-dev" >&2
 (cd "$repo_root/daemon" && go build -o "$workdir/freeside-signet-dev" ./cmd/freeside-signet-dev)
 
-"$workdir/freeside-signet-dev" -db "$workdir/signet.db" > "$workdir/readiness.json" &
+# Pairing now grants a usable ntfy subscription. The convergence matrix does
+# not publish notifications, so a valid loopback sink is enough to compose
+# the same required contract without introducing network access.
+"$workdir/freeside-signet-dev" -db "$workdir/signet.db" -ntfy-url "http://127.0.0.1:1" > "$workdir/readiness.json" &
 harness_pid=$!
 
 # The harness prints one JSON readiness line on stdout once both
