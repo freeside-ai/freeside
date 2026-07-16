@@ -181,7 +181,8 @@ public actor MockServer {
             return "zero expires_when"
         }
         if item.item_version < 1 { return "non-positive item_version" }
-        if item.requested_decision.isEmpty { return "no offered actions" }
+        // An empty requested_decision is structurally valid (#96): which
+        // types must offer an action is signet policy (itemPolicyBreach).
         if let breach = timingBreach(item.timing) { return breach }
         var evidenceIDs = Set<String>()
         for artifact in item.evidence_snapshot {
@@ -235,21 +236,21 @@ public actor MockServer {
     }
 
     /// Mirrors signet's validateRequestedActions over the authoritative
-    /// per-type table (phase1ActionSets matches the merged policy for
-    /// the nine actionable types; blocked is read-only, its placeholder
-    /// display-only).
+    /// per-type table (phase1ActionSets matches the merged policy):
+    /// blocked is read-only and must offer the empty set (#96); every
+    /// other type must offer at least one action from its allowed set.
     static func itemPolicyBreach(
         _ item: Components.Schemas.AttentionItem
     ) -> String? {
-        if item._type == .blocked {
-            return "blocked is read-only"
-        }
         guard let allowed = AttentionFixtures.phase1ActionSets[item._type] else {
             return "unknown attention type \(item._type.rawValue)"
         }
         if item.requested_decision.isEmpty {
+            if item._type == .blocked { return nil }
             return "no offered actions"
         }
+        // blocked's allowed set is empty, so any offered action on a
+        // blocked item fails here, exactly as signet rejects it.
         if let stray = item.requested_decision.first(where: { !allowed.contains($0) }) {
             return "action \(stray.rawValue) is not allowed for \(item._type.rawValue)"
         }
@@ -434,8 +435,9 @@ public actor MockServer {
         // Durable-item policy re-gates before the pending-action gate,
         // as signet.Submit orders it (validateRequestedActions): a row
         // offering actions outside its type's allowed set is no
-        // authority for accepting anything, and blocked is read-only
-        // (#97; its fixture placeholder is display-only until #96).
+        // authority for accepting anything. blocked is read-only (#97):
+        // its empty offered set means any command against it falls to
+        // the action-not-offered gate below, as on the daemon.
         if let breach = Self.itemPolicyBreach(current.item) {
             throw ItemPolicyError(itemID: payload.item_id, reason: breach)
         }

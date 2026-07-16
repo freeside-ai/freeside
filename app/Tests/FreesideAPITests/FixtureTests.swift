@@ -4,9 +4,8 @@ import Testing
 @Suite struct FixtureTests {
     /// Independent transcription of plan §4's per-type action table
     /// (docs/plan.md §4 "Actions"), for the nine types §4 defines;
-    /// signet's policy pins `blocked` read-only (no actions), and the
-    /// fixture's placeholder set lasts only until #96 relaxes the
-    /// contract's non-empty requested_decision.
+    /// signet's policy pins `blocked` read-only (no actions), which the
+    /// schema permits since #96.
     static let planSection4:
         [Components.Schemas.AttentionType: [Components.Schemas.Action]] = [
             .spec_approval: [.approve, .request_changes, .discuss, .stop],
@@ -28,11 +27,9 @@ import Testing
         for (type, actions) in Self.planSection4 {
             #expect(AttentionFixtures.phase1ActionSets[type] == actions)
         }
-        // blocked is pinned read-only by signet policy, but the contract
-        // still requires at least one action (requested_decision
-        // minItems 1) until #96 relaxes it; the placeholder holds.
-        let blocked = AttentionFixtures.phase1ActionSets[.blocked]
-        #expect(!(blocked ?? []).isEmpty)
+        // blocked is pinned read-only by signet policy: it offers the
+        // empty set, which the contract permits since #96.
+        #expect(AttentionFixtures.phase1ActionSets[.blocked] == [])
         #expect(AttentionFixtures.phase1ActionSets.count == 10)
     }
 

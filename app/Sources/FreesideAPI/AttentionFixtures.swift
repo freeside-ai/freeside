@@ -25,11 +25,8 @@ public enum AttentionFixtures {
 
     /// Plan §4's per-type action sets (docs/plan.md §4 "Actions"; approve
     /// is not universal), matching signet's authoritative
-    /// allowedActionsByType policy. `blocked` is the one deliberate
-    /// divergence: the policy pins it read-only (no actions), but the API
-    /// contract still requires a non-empty requested_decision, so this
-    /// placeholder stays until #96 relaxes that; replace it with an empty
-    /// set when #96 lands.
+    /// allowedActionsByType policy. `blocked` is read-only: the policy pins
+    /// it to no actions, and the schema permits the empty set (#96).
     public static let phase1ActionSets:
         [Components.Schemas.AttentionType: [Components.Schemas.Action]] = [
             .spec_approval: [.approve, .request_changes, .discuss, .stop],
@@ -45,7 +42,7 @@ public enum AttentionFixtures {
             ],
             .run_proposal: [.start, .start_with_changes, .decline, .snooze],
             .system_health: [.acknowledge, .run_doctor, .stop_unattended],
-            .blocked: [.acknowledge, .snooze, .stop],
+            .blocked: [],
         ]
 
     /// The default mock inbox: one open item per Phase 1 type.
