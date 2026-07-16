@@ -91,3 +91,12 @@ func (e *ConformanceFailure) Error() string {
 
 // Unwrap makes errors.Is(err, ErrConformance) match the failure class.
 func (e *ConformanceFailure) Unwrap() error { return ErrConformance }
+
+// failf builds a ConformanceFailure for check c with a formatted reason.
+func failf(c Check, format string, args ...any) error {
+	return &ConformanceFailure{
+		Backend: BackendName,
+		Check:   c,
+		Reason:  fmt.Sprintf(format, args...),
+	}
+}
