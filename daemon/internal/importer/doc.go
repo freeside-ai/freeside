@@ -36,6 +36,7 @@
 //     re-validation at the trust boundary
 //   - paths.go    structural path gates (git-component injection,
 //     file/directory conflicts)
+//   - blobs.go    blob store audit and content verification
 //
 // Lane: gauntlet. See docs/plan.md §5.4–§5.8 and the export package
 // (the manifest+blob wire contract's producer).
