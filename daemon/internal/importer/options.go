@@ -56,9 +56,26 @@ type Options struct {
 	Policy Policy
 }
 
-// Policy is the import's policy surface: caps enforced at intake and,
-// with later units of this package, the path-class and scanning policy.
+// Policy is the import's policy surface: the path-class patterns, the
+// declared-scope allowlist, and the caps enforced at intake and over
+// the change set.
 type Policy struct {
+	// Allowlist, when non-nil, is the work unit's declared path scope as
+	// glob patterns ("**" spans path segments): every derived change,
+	// deletions included, must match one, and a change outside it is an
+	// allowlist_violation finding. nil means unrestricted; an empty
+	// non-nil list flags every change.
+	Allowlist []string
+	// ExtraAutomationControlPatterns is ADDED to the mandatory §5.5
+	// automation-control class; it can widen the gate but never narrows
+	// or disables it (the defaults always apply).
+	ExtraAutomationControlPatterns []string
+	// ExtraReviewerInstructionPatterns is ADDED to the mandatory §5.8
+	// reviewer-instruction class, with the same widen-only semantics.
+	ExtraReviewerInstructionPatterns []string
+	// ExtraGitMetadataPatterns is ADDED to the mandatory git-metadata
+	// class, with the same widen-only semantics.
+	ExtraGitMetadataPatterns []string
 	// MaxManifestBytes caps the manifest.json read.
 	MaxManifestBytes int64
 	// MaxEntries caps the manifest entry count.
@@ -118,6 +135,23 @@ func (o Options) validate() error {
 	if o.Policy.MaxManifestBytes < 0 || o.Policy.MaxEntries < 0 ||
 		o.Policy.MaxBlobBytes < 0 || o.Policy.MaxTotalBytes < 0 {
 		return fmt.Errorf("negative policy cap: %w", ErrInvalidOptions)
+	}
+	// A caller-supplied glob that does not compile would otherwise
+	// silently match nothing (fail open), so a safety-gate widening
+	// meant to add coverage would add none. Reject at the boundary
+	// instead: these patterns are daemon-supplied, so a bad one is a
+	// caller bug that fails loud.
+	for _, group := range [][]string{
+		o.Policy.Allowlist,
+		o.Policy.ExtraAutomationControlPatterns,
+		o.Policy.ExtraReviewerInstructionPatterns,
+		o.Policy.ExtraGitMetadataPatterns,
+	} {
+		for _, pat := range group {
+			if err := validGlob(pat); err != nil {
+				return fmt.Errorf("policy pattern %q: %w: %w", pat, err, ErrInvalidOptions)
+			}
+		}
 	}
 	return nil
 }

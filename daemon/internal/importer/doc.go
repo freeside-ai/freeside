@@ -47,6 +47,8 @@
 //     manifest is a full snapshot; what changed is computed here, never
 //     taken from workspace parentage)
 //   - importer.go the Import orchestrator and Result
+//   - policy.go   §5.5/§5.8 path classes, the declared-scope
+//     allowlist, and size policy over the change set
 //
 // Lane: gauntlet. See docs/plan.md §5.4–§5.8 and the export package
 // (the manifest+blob wire contract's producer).

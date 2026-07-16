@@ -40,6 +40,8 @@ func TestGatePathsInjection(t *testing.T) {
 		{"hfs zero width non-joiner", ".g\u200cit/config", ErrGitPathInjection},
 		{"hfs rtl override prefix", "\u202e.git/x", ErrGitPathInjection},
 		{"hfs bom suffix", ".git\ufeff/x", ErrGitPathInjection},
+		{"ntfs ads unnamed stream", ".git::$DATA/config", ErrGitPathInjection},
+		{"ntfs ads named stream", ".git:config/config", ErrGitPathInjection},
 		{"dotgit-prefixed name", ".gitx/config", nil},
 		{"dotgit-suffixed name", "x.git/config", nil},
 		{"gitignore", ".gitignore", nil},

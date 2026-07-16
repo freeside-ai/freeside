@@ -60,6 +60,8 @@ func Import(ctx context.Context, handoffDir, checkoutDir string, opts Options) (
 	if err != nil {
 		return Result{}, err
 	}
+	findings = append(findings, applyPolicy(changes, opts.Policy)...)
+	sortFindings(findings)
 	result := Result{
 		Changes:  make([]Change, 0, len(changes)),
 		Findings: findings,
