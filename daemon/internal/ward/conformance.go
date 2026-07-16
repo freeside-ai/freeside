@@ -1,6 +1,12 @@
 package ward
 
-import "strings"
+import (
+	"bufio"
+	"bytes"
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // validateAgentSpec verifies the generated writer spec against checks 1 and
 // 2. It runs on the spec the gate itself built: the gate re-verifies its own
@@ -94,6 +100,135 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume string) e
 	if workspaceMounts != 1 {
 		return failf(CheckCredentialSeparation,
 			"agent spec has %d workspace mounts at %q, want exactly 1", workspaceMounts, cfg.WorkspaceTarget)
+	}
+	return nil
+}
+
+// verifyExporterAllowlist is check 4: the exporter's runtime-observed
+// configuration, inspected before it ever executes, must match the generated
+// allowlist exactly — one persistent mount (the expected workspace volume,
+// read-only, at the expected target), no credential volume, no host bind, no
+// SSH forwarding, no environment beyond the image PATH, and no published
+// socket or port. It verifies the runtime's report, not the gate's own spec:
+// what the VM would actually get, not what was asked for.
+func verifyExporterAllowlist(cfg Config, rep InspectReport, workspaceVolume string) error {
+	// Inspect-before-execution: the report must describe a container that has
+	// not run. On the reference runtime a created-not-started container is
+	// stopped; any other observed state means the trusted payload may already
+	// have executed before the gate approved its configuration.
+	if rep.State != StateStopped {
+		return failf(CheckExporterAllowlist,
+			"exporter observed in state %q before execution, want %q", rep.State, StateStopped)
+	}
+	if n := len(rep.Mounts); n != 1 {
+		return failf(CheckExporterAllowlist,
+			"exporter has %d persistent mounts, want exactly 1 (%s)", n, describeMounts(rep.Mounts))
+	}
+	m := rep.Mounts[0]
+	switch {
+	case m.Type != MountVolume:
+		return failf(CheckExporterAllowlist,
+			"exporter mount %q has type %q, want %q", m.Target, m.Type, MountVolume)
+	case m.Source != workspaceVolume:
+		return failf(CheckExporterAllowlist,
+			"exporter mounts volume %q, want %q", m.Source, workspaceVolume)
+	case m.Target != cfg.WorkspaceTarget:
+		return failf(CheckExporterAllowlist,
+			"exporter mounts workspace at %q, want %q", m.Target, cfg.WorkspaceTarget)
+	case !m.ReadOnly:
+		return failf(CheckExporterAllowlist,
+			"exporter workspace mount at %q is not read-only", m.Target)
+	}
+	if rep.SSH {
+		return failf(CheckExporterAllowlist, "exporter has SSH forwarding configured")
+	}
+	if n := len(rep.PublishedSockets); n > 0 {
+		return failf(CheckExporterAllowlist, "exporter publishes %d sockets, want 0", n)
+	}
+	if n := len(rep.PublishedPorts); n > 0 {
+		return failf(CheckExporterAllowlist, "exporter publishes %d ports, want 0", n)
+	}
+	for _, e := range rep.Env {
+		key, _, _ := strings.Cut(e, "=")
+		// Key only: an unexpected value could itself be a credential and
+		// must never travel in a failure reason.
+		if key != "PATH" {
+			return failf(CheckExporterAllowlist,
+				"exporter environment carries variable %q, want image PATH only", key)
+		}
+	}
+	return nil
+}
+
+// describeMounts renders mount targets and types (never sources: a bind
+// source is a host path and stays out of failure reasons).
+func describeMounts(mounts []Mount) string {
+	parts := make([]string, len(mounts))
+	for i, m := range mounts {
+		parts[i] = fmt.Sprintf("%s:%s", m.Type, m.Target)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ", ")
+}
+
+// requiredProof is check 5's contract with the exporter payload: the probes
+// run inside the exporter VM and their observations land as exactly these
+// key=value lines in the proof file. Values are inert markers, safe to echo
+// in failure reasons.
+var requiredProof = map[string]string{
+	// /proc/mounts reports the workspace mounted read-only.
+	"workspace_mounted": "ro",
+	// A write probe into the workspace failed.
+	"workspace_write": "blocked",
+	// The expected credential path does not exist in the exporter.
+	"credentials": "absent",
+	// No host home directory is visible in the exporter.
+	"host_home": "absent",
+}
+
+// verifyProof is check 5: the proof file collected from the exported rootfs
+// must contain exactly the required observations — every required key, the
+// required value, no duplicates, no unknown keys, nothing else. Any
+// deviation, including a missing or empty file, is a conformance failure;
+// the exporter's exit status is not consulted because a stopped container
+// exports regardless of how its payload exited.
+func verifyProof(data []byte) error {
+	seen := make(map[string]bool, len(requiredProof))
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	for sc.Scan() {
+		line := strings.TrimRight(sc.Text(), "\r")
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			return failf(CheckInExporterVerification, "proof line %q is not key=value", line)
+		}
+		want, known := requiredProof[key]
+		if !known {
+			return failf(CheckInExporterVerification, "proof carries unknown key %q", key)
+		}
+		if seen[key] {
+			return failf(CheckInExporterVerification, "proof repeats key %q", key)
+		}
+		seen[key] = true
+		if value != want {
+			return failf(CheckInExporterVerification,
+				"proof reports %s=%s, want %s=%s", key, value, key, want)
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return failf(CheckInExporterVerification, "proof unreadable: %v", err)
+	}
+	keys := make([]string, 0, len(requiredProof))
+	for key := range requiredProof {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if !seen[key] {
+			return failf(CheckInExporterVerification, "proof is missing key %q", key)
+		}
 	}
 	return nil
 }

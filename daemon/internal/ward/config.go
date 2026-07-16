@@ -56,6 +56,11 @@ type Config struct {
 	ExporterTimeout time.Duration
 	// PollInterval is the state-poll spacing. Defaults to 500ms.
 	PollInterval time.Duration
+	// MaxExportBytes caps the bytes extracted from the exported archive's
+	// handoff output (a tar-bomb guard on the daemon host; the export
+	// helper's own blob limits bound the honest case well below this).
+	// Defaults to 2 GiB.
+	MaxExportBytes int64
 	// Scanner is the required check-7 scanning hook.
 	Scanner OutputScanner
 	// Sleep waits between state polls; tests inject a recording stub. Nil
@@ -83,6 +88,9 @@ func (cfg Config) withDefaults() Config {
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = 500 * time.Millisecond
 	}
+	if cfg.MaxExportBytes == 0 {
+		cfg.MaxExportBytes = 2 << 30
+	}
 	if cfg.Sleep == nil {
 		cfg.Sleep = sleepContext
 	}
@@ -104,6 +112,8 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: HandoffDir %q is not absolute", ErrInvalidConfig, cfg.HandoffDir)
 	case !strings.HasPrefix(cfg.ProofPath, "/"):
 		return fmt.Errorf("%w: ProofPath %q is not absolute", ErrInvalidConfig, cfg.ProofPath)
+	case cfg.MaxExportBytes < 0:
+		return fmt.Errorf("%w: MaxExportBytes %d is negative", ErrInvalidConfig, cfg.MaxExportBytes)
 	case cfg.Scanner == nil:
 		return fmt.Errorf("%w: Scanner is required (check 7 scans every export)", ErrInvalidConfig)
 	}
