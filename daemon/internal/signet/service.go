@@ -32,8 +32,12 @@ type Service struct {
 	// and any command or completion referencing one fails closed; the daemon
 	// composition supplies it.
 	blobs *BlobStore
-	now   func() time.Time
-	rand  io.Reader
+	// ntfy is the notification channel the delivery pipeline publishes over
+	// (delivery.go, ntfy.go). Nil means delivery submission is unavailable and
+	// fails closed; the daemon composition supplies it via WithNtfy.
+	ntfy *ntfyChannel
+	now  func() time.Time
+	rand io.Reader
 }
 
 // Option configures a Service. The clock and randomness sources exist so

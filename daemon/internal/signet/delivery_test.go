@@ -3,6 +3,11 @@ package signet_test
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +15,76 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
+
+// fakeNtfy records what the pipeline actually publishes and answers with a
+// scriptable status, so tests can assert both the honest receipt timestamps
+// and that only the generic hint ever reaches the provider.
+type fakeNtfy struct {
+	mu        sync.Mutex
+	status    int
+	onPublish func()
+	requests  []publishRequest
+}
+
+type publishRequest struct {
+	topic, title, click, priority, auth, body string
+}
+
+func (f *fakeNtfy) recorded(t *testing.T) []publishRequest {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]publishRequest(nil), f.requests...)
+}
+
+// deliveryFixture is the §5.14 fixture plus a service composed with the ntfy
+// channel pointed at the fake provider.
+type deliveryFixture struct {
+	fixture
+	ntfy *fakeNtfy
+}
+
+func newDeliveryFixture(t *testing.T) deliveryFixture {
+	t.Helper()
+	f := newFixture(t)
+	fake := &fakeNtfy{status: http.StatusOK}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("fake ntfy read body: %v", err)
+		}
+		fake.requests = append(fake.requests, publishRequest{
+			topic:    strings.TrimPrefix(r.URL.Path, "/"),
+			title:    r.Header.Get("Title"),
+			click:    r.Header.Get("Click"),
+			priority: r.Header.Get("Priority"),
+			auth:     r.Header.Get("Authorization"),
+			body:     string(body),
+		})
+		if fake.onPublish != nil {
+			fake.onPublish()
+		}
+		w.WriteHeader(fake.status)
+	}))
+	t.Cleanup(server.Close)
+	service := signet.NewService(f.store,
+		signet.WithPairingKey(testPairingKey),
+		signet.WithClock(func() time.Time { return *f.now }),
+		signet.WithNtfy(signet.NtfyConfig{
+			BaseURL:      server.URL,
+			Client:       server.Client(),
+			Token:        signet.Secret(secretValue),
+			TopicKey:     []byte("signet-test-topic-key"),
+			ClickBaseURL: "https://daemon.example/",
+		}),
+	)
+	return deliveryFixture{
+		fixture: fixture{service: service, store: f.store, item: f.item, device: f.device, now: f.now},
+		ntfy:    fake,
+	}
+}
 
 // seedSubmittedDelivery plants a submitted-only delivery row directly in the
 // store, bypassing the pipeline: the item's persisted timing is deliberately
@@ -201,6 +276,264 @@ func TestOpenToDecisionDerivableFromDeliveries(t *testing.T) {
 	if openToDecision := decidedAt.Sub(*got); openToDecision != 5*time.Minute {
 		t.Errorf("open-to-decision = %v, want 5m", openToDecision)
 	}
+}
+
+// TestSubmitDeliveryRecordsHonestReceipts is issue #69's acceptance 2 for the
+// happy path: the submitted and channel-accepted instants are recorded
+// distinctly (the provider's acceptance populates channel_accepted_at only,
+// never anything stronger), opened_at stays null, and the item's timing
+// aggregates move with the row. The published payload is the generic
+// read-only hint: topic derived from the device, deep link to canonical
+// state, and no item subject or reason text.
+func TestSubmitDeliveryRecordsHonestReceipts(t *testing.T) {
+	ctx := context.Background()
+	f := newDeliveryFixture(t)
+	submittedAt := *f.now
+	acceptedAt := submittedAt.Add(30 * time.Second)
+	f.ntfy.onPublish = func() { *f.now = acceptedAt }
+
+	row, err := f.service.SubmitDelivery(ctx, f.item.ID, f.device.ID)
+	if err != nil {
+		t.Fatalf("SubmitDelivery: %v", err)
+	}
+	if row.Status != domain.DeliveryChannelAccepted {
+		t.Errorf("row status = %q, want channel_accepted", row.Status)
+	}
+	if row.Channel != "ntfy" || row.Attempt != 1 {
+		t.Errorf("row channel/attempt = %s/%d, want ntfy/1", row.Channel, row.Attempt)
+	}
+	if !row.SubmittedAt.Equal(submittedAt) {
+		t.Errorf("submitted_at = %v, want %v", row.SubmittedAt, submittedAt)
+	}
+	if row.ChannelAcceptedAt == nil || !row.ChannelAcceptedAt.Equal(acceptedAt) {
+		t.Errorf("channel_accepted_at = %v, want %v", row.ChannelAcceptedAt, acceptedAt)
+	}
+	if row.OpenedAt != nil {
+		t.Errorf("opened_at = %v, want nil: acceptance is never an open", row.OpenedAt)
+	}
+
+	item, _ := f.itemSnapshot(t)
+	if item.Timing.DeliveryCount != 1 {
+		t.Errorf("timing delivery_count = %d, want 1", item.Timing.DeliveryCount)
+	}
+	if item.Timing.FirstSubmittedAt == nil || !item.Timing.FirstSubmittedAt.Equal(submittedAt) {
+		t.Errorf("timing first_submitted_at = %v, want %v", item.Timing.FirstSubmittedAt, submittedAt)
+	}
+	if item.Timing.FirstAcceptedAt == nil || !item.Timing.FirstAcceptedAt.Equal(acceptedAt) {
+		t.Errorf("timing first_accepted_at = %v, want %v", item.Timing.FirstAcceptedAt, acceptedAt)
+	}
+	if item.Timing.FirstOpenedAt != nil {
+		t.Errorf("timing first_opened_at = %v, want nil", item.Timing.FirstOpenedAt)
+	}
+
+	requests := f.ntfy.recorded(t)
+	if len(requests) != 1 {
+		t.Fatalf("published %d notifications, want 1", len(requests))
+	}
+	got := requests[0]
+	if !strings.HasPrefix(got.topic, "fs-") || len(got.topic) != len("fs-")+32 {
+		t.Errorf("topic = %q, want fs- prefix and 32 hex chars", got.topic)
+	}
+	if got.title != "Attention needed" {
+		t.Errorf("title = %q, want the generic hint", got.title)
+	}
+	if got.click != "https://daemon.example/attention/items/"+string(f.item.ID) {
+		t.Errorf("click = %q, want the canonical deep link", got.click)
+	}
+	if got.priority != "default" {
+		t.Errorf("priority = %q, want default for a normal item", got.priority)
+	}
+	if got.auth != "Bearer "+secretValue {
+		t.Errorf("authorization = %q, want the bearer token", got.auth)
+	}
+	for _, leak := range []string{f.item.Reason, string(f.item.Subject.ID), f.item.PRHeadSHA} {
+		if strings.Contains(got.title+got.body+got.click, leak) {
+			t.Errorf("published hint leaks item content %q", leak)
+		}
+	}
+}
+
+// TestSubmitDeliveryTopicIsDeterministicPerDevice: one device always maps to
+// one topic (the client must be able to subscribe once), and two devices
+// never share one (a topic is a capability URL).
+func TestSubmitDeliveryTopicIsDeterministicPerDevice(t *testing.T) {
+	ctx := context.Background()
+	f := newDeliveryFixture(t)
+	f.seedDevice(t, "device-2")
+	for _, device := range []domain.DeviceID{f.device.ID, f.device.ID, "device-2"} {
+		if _, err := f.service.SubmitDelivery(ctx, f.item.ID, device); err != nil {
+			t.Fatalf("SubmitDelivery(%s): %v", device, err)
+		}
+	}
+	requests := f.ntfy.recorded(t)
+	if len(requests) != 3 {
+		t.Fatalf("published %d notifications, want 3", len(requests))
+	}
+	if requests[0].topic != requests[1].topic {
+		t.Errorf("one device produced two topics: %q, %q", requests[0].topic, requests[1].topic)
+	}
+	if requests[0].topic == requests[2].topic {
+		t.Errorf("two devices share topic %q", requests[0].topic)
+	}
+}
+
+// TestSubmitDeliverySurvivesCallerCancellation: once the submitted row is
+// durable, the provider call and the acceptance record run under a
+// daemon-owned context, so a caller abandoning its request mid-publish (an
+// HTTP client dropping the control route's connection) cannot strand the
+// committed attempt half-advanced or lose the real acceptance instant.
+func TestSubmitDeliverySurvivesCallerCancellation(t *testing.T) {
+	f := newDeliveryFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	f.ntfy.onPublish = cancel
+
+	row, err := f.service.SubmitDelivery(ctx, f.item.ID, f.device.ID)
+	if err != nil {
+		t.Fatalf("SubmitDelivery under canceled caller: %v", err)
+	}
+	if row.Status != domain.DeliveryChannelAccepted || row.ChannelAcceptedAt == nil {
+		t.Errorf("row = status %q accepted_at %v, want channel_accepted with a receipt",
+			row.Status, row.ChannelAcceptedAt)
+	}
+	stored, err := readDelivery(f.fixture, f.item.ID, f.device.ID, "ntfy", 1)
+	if err != nil {
+		t.Fatalf("GetAttentionDelivery: %v", err)
+	}
+	if stored.Status != domain.DeliveryChannelAccepted {
+		t.Errorf("stored row status = %q, want the acceptance recorded despite the canceled caller", stored.Status)
+	}
+}
+
+// TestSubmitDeliveryChannelFailureStaysSubmitted: a provider rejection leaves
+// the honest submitted-only row (only submitted_at is claimed, which is
+// true), surfaces a typed error carrying the status and never the response
+// body, and the retry is the next attempt number.
+func TestSubmitDeliveryChannelFailureStaysSubmitted(t *testing.T) {
+	ctx := context.Background()
+	f := newDeliveryFixture(t)
+	f.ntfy.status = http.StatusInternalServerError
+
+	row, err := f.service.SubmitDelivery(ctx, f.item.ID, f.device.ID)
+	if !errors.Is(err, signet.ErrChannelRejected) {
+		t.Fatalf("SubmitDelivery error = %v, want ErrChannelRejected", err)
+	}
+	var rejection *signet.ChannelRejectionError
+	if !errors.As(err, &rejection) || rejection.Status != http.StatusInternalServerError {
+		t.Errorf("rejection = %+v, want status 500", rejection)
+	}
+	if strings.Contains(err.Error(), secretValue) {
+		t.Errorf("error leaks the channel token: %v", err)
+	}
+	if row.Status != domain.DeliverySubmitted {
+		t.Errorf("returned row status = %q, want submitted", row.Status)
+	}
+	stored, err := readDelivery(f.fixture, f.item.ID, f.device.ID, "ntfy", 1)
+	if err != nil {
+		t.Fatalf("GetAttentionDelivery: %v", err)
+	}
+	if stored.Status != domain.DeliverySubmitted || stored.ChannelAcceptedAt != nil {
+		t.Errorf("stored row = %+v, want submitted with no acceptance", stored)
+	}
+	item, _ := f.itemSnapshot(t)
+	if item.Timing.DeliveryCount != 1 {
+		t.Errorf("timing delivery_count = %d, want the failed attempt counted", item.Timing.DeliveryCount)
+	}
+
+	f.ntfy.status = http.StatusOK
+	retry, err := f.service.SubmitDelivery(ctx, f.item.ID, f.device.ID)
+	if err != nil {
+		t.Fatalf("SubmitDelivery retry: %v", err)
+	}
+	if retry.Attempt != 2 || retry.Status != domain.DeliveryChannelAccepted {
+		t.Errorf("retry = attempt %d status %q, want attempt 2 accepted", retry.Attempt, retry.Status)
+	}
+	if item, _ := f.itemSnapshot(t); item.Timing.DeliveryCount != 2 {
+		t.Errorf("timing delivery_count = %d, want 2 after the retry", item.Timing.DeliveryCount)
+	}
+}
+
+// TestSubmitDeliveryFailsClosed: no channel configured, a revoked device, and
+// a concluded item are each refused before any effect — no delivery row, no
+// revision movement, and nothing published.
+func TestSubmitDeliveryFailsClosed(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("unconfigured channel", func(t *testing.T) {
+		f := newFixture(t)
+		before := f.revision(t)
+		if _, err := f.service.SubmitDelivery(ctx, f.item.ID, f.device.ID); !errors.Is(err, signet.ErrNotifierUnavailable) {
+			t.Fatalf("SubmitDelivery error = %v, want ErrNotifierUnavailable", err)
+		}
+		if after := f.revision(t); after != before {
+			t.Errorf("refusal moved the revision %d → %d", before, after)
+		}
+	})
+
+	t.Run("misconfigured channel", func(t *testing.T) {
+		for name, cfg := range map[string]signet.NtfyConfig{
+			"malformed base URL": {
+				BaseURL: "not a url", TopicKey: []byte("k"), ClickBaseURL: "https://daemon.example",
+			},
+			"relative base URL": {
+				BaseURL: "ntfy.example/path", TopicKey: []byte("k"), ClickBaseURL: "https://daemon.example",
+			},
+			"token over cleartext non-loopback": {
+				BaseURL: "http://ntfy.internal", Token: signet.Secret(secretValue),
+				TopicKey: []byte("k"), ClickBaseURL: "https://daemon.example",
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				f := newFixture(t)
+				service := signet.NewService(f.store,
+					signet.WithClock(func() time.Time { return *f.now }), signet.WithNtfy(cfg))
+				before := f.revision(t)
+				_, err := service.SubmitDelivery(ctx, f.item.ID, f.device.ID)
+				if !errors.Is(err, signet.ErrNotifierUnavailable) {
+					t.Fatalf("SubmitDelivery error = %v, want ErrNotifierUnavailable", err)
+				}
+				if strings.Contains(err.Error(), secretValue) {
+					t.Errorf("refusal leaks the channel token: %v", err)
+				}
+				if after := f.revision(t); after != before {
+					t.Errorf("refusal moved the revision %d → %d", before, after)
+				}
+			})
+		}
+	})
+
+	t.Run("revoked device", func(t *testing.T) {
+		f := newDeliveryFixture(t)
+		if _, err := f.service.Revoke(ctx, f.device.ID, f.device.ID); err != nil {
+			t.Fatalf("Revoke: %v", err)
+		}
+		before := f.revision(t)
+		if _, err := f.service.SubmitDelivery(ctx, f.item.ID, f.device.ID); !errors.Is(err, signet.ErrDeviceNotActive) {
+			t.Fatalf("SubmitDelivery error = %v, want ErrDeviceNotActive", err)
+		}
+		if after := f.revision(t); after != before {
+			t.Errorf("refusal moved the revision %d → %d", before, after)
+		}
+		if requests := f.ntfy.recorded(t); len(requests) != 0 {
+			t.Errorf("refused submission still published %d notifications", len(requests))
+		}
+	})
+
+	t.Run("concluded item", func(t *testing.T) {
+		f := newDeliveryFixture(t)
+		if _, err := f.service.Submit(ctx, f.command("cmd-conclude", domain.ActionStop)); err != nil {
+			t.Fatalf("Submit: %v", err)
+		}
+		before := f.revision(t)
+		if _, err := f.service.SubmitDelivery(ctx, f.item.ID, f.device.ID); !errors.Is(err, signet.ErrItemNotOpenForDelivery) {
+			t.Fatalf("SubmitDelivery error = %v, want ErrItemNotOpenForDelivery", err)
+		}
+		if after := f.revision(t); after != before {
+			t.Errorf("refusal moved the revision %d → %d", before, after)
+		}
+		if requests := f.ntfy.recorded(t); len(requests) != 0 {
+			t.Errorf("refused submission still published %d notifications", len(requests))
+		}
+	})
 }
 
 func readDelivery(f fixture, itemID domain.ItemID, deviceID domain.DeviceID, channel string, attempt int) (domain.AttentionDelivery, error) {
