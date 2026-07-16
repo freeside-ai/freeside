@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +14,26 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
+
+// blobHasher accumulates a sha256 digest and byte count from a stream,
+// for hashing content that must not buffer in memory.
+type blobHasher struct {
+	h    hash.Hash
+	size int64
+}
+
+func newBlobHasher() *blobHasher {
+	return &blobHasher{h: sha256.New()}
+}
+
+func (b *blobHasher) Write(p []byte) (int, error) {
+	b.size += int64(len(p))
+	return b.h.Write(p)
+}
+
+func (b *blobHasher) digest() export.Digest {
+	return export.Digest("sha256:" + hex.EncodeToString(b.h.Sum(nil)))
+}
 
 // blobInfo is what content verification proved about one stored blob:
 // its size and its git blob object name, both derived from the same

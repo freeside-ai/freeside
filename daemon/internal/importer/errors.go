@@ -28,6 +28,12 @@ var (
 	ErrSizeMismatch      = errors.New("blob size does not match its manifest size")
 	ErrBlobTooLarge      = errors.New("manifest declares a stored blob beyond the import size cap")
 
+	// Checkout and construction failures.
+	ErrBaseMismatch    = errors.New("checkout is not at the enforced base commit")
+	ErrUnsupportedRepo = errors.New("checkout repository is not supported")
+	ErrGitPlumbing     = errors.New("git plumbing failed")
+	ErrTreeMismatch    = errors.New("built tree does not match the derived change set")
+
 	// Import invocation failures.
 	ErrInvalidOptions = errors.New("import options are invalid")
 )

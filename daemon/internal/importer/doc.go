@@ -37,6 +37,12 @@
 //   - paths.go    structural path gates (git-component injection,
 //     file/directory conflicts)
 //   - blobs.go    blob store audit and content verification
+//   - change.go   ChangeKind enum and the derived Change shapes
+//   - gitrunner.go  hardened git plumbing (the package's only os/exec
+//     use); no hooks, no user/system/workspace config, scratch index,
+//     pinned identity, no working-tree materialization
+//   - commit.go   scratch-index tree and commit construction with the
+//     exact-tree acceptance cross-check
 //
 // Lane: gauntlet. See docs/plan.md §5.4–§5.8 and the export package
 // (the manifest+blob wire contract's producer).

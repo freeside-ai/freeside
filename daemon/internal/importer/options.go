@@ -2,7 +2,6 @@ package importer
 
 import (
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -113,8 +112,8 @@ func (o Options) validate() error {
 	if !validSHA1Hex(o.BaseSHA) {
 		return fmt.Errorf("base SHA %q is not 40 lowercase hex: %w", o.BaseSHA, ErrInvalidOptions)
 	}
-	if o.ImportRef != "" && !strings.HasPrefix(o.ImportRef, "refs/") {
-		return fmt.Errorf("import ref %q is not fully qualified: %w", o.ImportRef, ErrInvalidOptions)
+	if o.ImportRef != "" && !importRefValid(o.ImportRef) {
+		return fmt.Errorf("import ref %q is not a fully qualified safe ref: %w", o.ImportRef, ErrInvalidOptions)
 	}
 	if o.Policy.MaxManifestBytes < 0 || o.Policy.MaxEntries < 0 ||
 		o.Policy.MaxBlobBytes < 0 || o.Policy.MaxTotalBytes < 0 {
