@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -417,6 +418,107 @@ func TestHTTPRevokedDeviceCommandRejected(t *testing.T) {
 	}
 	if after := f.revision(t); after != before {
 		t.Errorf("rejected command moved revision %d -> %d", before, after)
+	}
+}
+
+// TestHTTPLateNotificationDeepLinksToCanonicalState is §5.14 test 9 over the
+// wire: a notification goes out to a second device, the item is resolved on
+// another device before the notification is acted on, and the late
+// notification still leads only to truth. Its deep link (the published Click
+// URL followed against the real handler) returns the canonical resolved
+// snapshot, and the decision the notification had invited — prepared against
+// the notified state — is refused with the canonical replacement and no side
+// effect. The notification was a read-only hint; canonical state lives only
+// behind the deep link.
+func TestHTTPLateNotificationDeepLinksToCanonicalState(t *testing.T) {
+	ctx := context.Background()
+	f := newDeliveryFixture(t)
+	f.seedDevice(t, "device-2")
+	handler := signet.NewHTTPHandler(f.service, func(r *http.Request) (domain.DeviceID, bool) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer test-device-1":
+			return "device-1", true
+		case "Bearer test-device-2":
+			return "device-2", true
+		}
+		return "", false
+	})
+
+	if _, err := f.service.SubmitDelivery(ctx, f.item.ID, "device-2"); err != nil {
+		t.Fatalf("SubmitDelivery: %v", err)
+	}
+	notifiedItem, notifiedSnap := f.itemSnapshot(t)
+
+	resolve := f.command("cmd-resolve", domain.ActionStop)
+	resolve.Payload.ItemVersion = notifiedItem.ItemVersion
+	resolve.ExpectedEntityVersion = notifiedSnap.EntityVersion
+	if _, err := f.service.Submit(ctx, resolve); err != nil {
+		t.Fatalf("Submit(resolve): %v", err)
+	}
+	resolvedItem, resolvedSnap := f.itemSnapshot(t)
+	if resolvedItem.Status != domain.StatusResolved {
+		t.Fatalf("item status = %q, want resolved", resolvedItem.Status)
+	}
+
+	requests := f.ntfy.recorded(t)
+	if len(requests) != 1 {
+		t.Fatalf("published %d notifications, want 1", len(requests))
+	}
+	click, err := url.Parse(requests[0].click)
+	if err != nil {
+		t.Fatalf("parse click URL %q: %v", requests[0].click, err)
+	}
+	linked := bearerRequest(t, handler, http.MethodGet, click.Path, "Bearer test-device-2", nil)
+	if linked.Code != http.StatusOK {
+		t.Fatalf("deep link status = %d body=%s, want 200", linked.Code, linked.Body.String())
+	}
+	var canonical signet.AttentionItemSnapshot
+	if err := json.Unmarshal(linked.Body.Bytes(), &canonical); err != nil {
+		t.Fatalf("decode deep-link response: %v", err)
+	}
+	if canonical.Item.Status != domain.StatusResolved || canonical.Item.ItemVersion != resolvedItem.ItemVersion {
+		t.Errorf("deep link = status %q version %d, want the resolved item at version %d",
+			canonical.Item.Status, canonical.Item.ItemVersion, resolvedItem.ItemVersion)
+	}
+	if canonical.EntityVersion != resolvedSnap.EntityVersion {
+		t.Errorf("deep link entity_version = %d, want the canonical %d",
+			canonical.EntityVersion, resolvedSnap.EntityVersion)
+	}
+
+	before := f.revision(t)
+	prepared := `{
+		"command_id":"cmd-from-notification",
+		"device_id":"device-2",
+		"expected_entity_version":` + jsonNumber(notifiedSnap.EntityVersion) + `,
+		"expected_bindings":{},
+		"payload":{
+			"item_id":"` + string(f.item.ID) + `",
+			"action":"stop",
+			"item_version":` + jsonNumber(int64(notifiedItem.ItemVersion)) + `,
+			"pr_head_sha":"cafebabe",
+			"artifact_digests":[]
+		}
+	}`
+	refused := bearerRequest(t, handler, http.MethodPost, "/commands", "Bearer test-device-2", []byte(prepared))
+	if refused.Code != http.StatusConflict {
+		t.Fatalf("stale prepared command status = %d body=%s, want 409", refused.Code, refused.Body.String())
+	}
+	var conflict struct {
+		ReplacementItem signet.AttentionItemSnapshot `json:"replacement_item"`
+	}
+	if err := json.Unmarshal(refused.Body.Bytes(), &conflict); err != nil {
+		t.Fatalf("decode conflict response: %v", err)
+	}
+	if conflict.ReplacementItem.Item.Status != domain.StatusResolved {
+		t.Errorf("replacement status = %q, want the canonical resolved item", conflict.ReplacementItem.Item.Status)
+	}
+	if after := f.revision(t); after != before {
+		t.Errorf("refused command moved the revision %d → %d", before, after)
+	}
+	if finalItem, finalSnap := f.itemSnapshot(t); finalItem.ItemVersion != resolvedItem.ItemVersion ||
+		finalSnap.EntityVersion != resolvedSnap.EntityVersion {
+		t.Errorf("refused command changed the item: version %d entity %d, want %d/%d",
+			finalItem.ItemVersion, finalSnap.EntityVersion, resolvedItem.ItemVersion, resolvedSnap.EntityVersion)
 	}
 }
 
