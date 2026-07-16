@@ -1,8 +1,7 @@
 {
-  "id": "inv-1",
+  "id": "inv-2",
   "input_ids": [
-    "art-1",
-    "art-2"
+    "art-1"
   ],
   "conversation_id": null,
   "through_sequence": 0

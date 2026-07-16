@@ -376,6 +376,31 @@ func (a Author) valid() bool {
 	}
 }
 
+// ConversationStatus is where a conversation sits in its request/response
+// cycle: awaiting_agent between a committed discuss and the accepted agent
+// completion, idle otherwise. It exists on the wire so a status change reaches
+// clients whose message cursor is already past every stored sequence (plan
+// §5.14 test 12) — status is not carried by message sequence. Provisional
+// member set; flagged for spine review.
+type ConversationStatus string
+
+const (
+	ConversationIdle          ConversationStatus = "idle"
+	ConversationAwaitingAgent ConversationStatus = "awaiting_agent"
+)
+
+// AllConversationStatuses lists every valid ConversationStatus.
+var AllConversationStatuses = []ConversationStatus{ConversationIdle, ConversationAwaitingAgent}
+
+func (s ConversationStatus) valid() bool {
+	switch s {
+	case ConversationIdle, ConversationAwaitingAgent:
+		return true
+	default:
+		return false
+	}
+}
+
 // ProvenanceSource records whether a resolved-policy key came from a preset
 // default or an explicit override (plan §3.2, §5.12 per-key provenance).
 type ProvenanceSource string

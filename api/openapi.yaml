@@ -750,6 +750,23 @@ components:
           description: >
             The canonical (sorted, deduplicated) binding set: exactly the
             digests rendered in the item's evidence_snapshot and agent_claims.
+        message:
+          type: string
+          description: >
+            Conversation content for the actions that ride the conversation
+            channel (plan §5.14 discuss semantics: the transaction's first
+            step is "append message"). Required for discuss, absent for pure
+            decisions; which actions require or forbid it is the daemon's
+            acceptance policy.
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Digest"
+          description: >
+            Digest addresses of attachments already uploaded via PUT
+            /attachments/{digest}, referenced by the appended message. Unlike
+            artifact_digests this is ordered message content, not a binding
+            set: order is preserved, never canonicalized.
       example:
         item_id: "item-1"
         action: "open_pr"
@@ -772,6 +789,8 @@ components:
         - pr_head_sha
         - artifact_digests
         - action
+        - message
+        - attachments
       additionalProperties: false
       properties:
         command_id:
@@ -794,6 +813,19 @@ components:
             $ref: "#/components/schemas/Digest"
         action:
           $ref: "#/components/schemas/Action"
+        message:
+          type: string
+          description: >
+            The conversation message the command carried (discuss); empty
+            for pure decisions. The record always renders both content
+            fields, empty or not, so the write-once body has one byte-form.
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Digest"
+          description: >
+            The appended message's attachment digests in authored order;
+            empty for pure decisions.
       example:
         command_id: "cmd-1"
         device_id: "device-1"
@@ -802,6 +834,8 @@ components:
         pr_head_sha: "cafebabe"
         artifact_digests: ["sha256:img", "sha256:log"]
         action: "open_pr"
+        message: ""
+        attachments: []
 
     CommandResult:
       type: object
@@ -828,6 +862,8 @@ components:
           pr_head_sha: "cafebabe"
           artifact_digests: ["sha256:img", "sha256:log"]
           action: "open_pr"
+          message: ""
+          attachments: []
         revision: 1
 
     StaleVersionRejection:
@@ -1458,30 +1494,37 @@ components:
       description: >
         A whole conversation snapshot; mirrors domain.Conversation. Messages
         are ordered by daemon-assigned contiguous sequence; messages are
-        immutable, corrections are new messages.
-      required: [id, messages]
+        immutable, corrections are new messages. Status is carried on the
+        conversation, not derived from messages, so a status change reaches
+        a client whose message cursor is already past every stored sequence
+        (plan §5.14 sync test 12).
+      required: [id, status, messages]
       properties:
         id:
           type: string
           minLength: 1
+        status:
+          $ref: "#/components/schemas/ConversationStatus"
         messages:
           type: array
           items:
             $ref: "#/components/schemas/Message"
       example:
         id: "conv-1"
+        status: "awaiting_agent"
         messages:
           - id: "msg-1"
             conversation_id: "conv-1"
             sequence: 1
             author: "user"
             body: "please proceed"
+            attachments: []
             created_at: "2026-01-02T03:04:05Z"
 
     Message:
       type: object
       description: One immutable conversation message; mirrors domain.Message.
-      required: [id, conversation_id, sequence, author, body, created_at]
+      required: [id, conversation_id, sequence, author, body, attachments, created_at]
       properties:
         id:
           type: string
@@ -1497,6 +1540,15 @@ components:
           $ref: "#/components/schemas/Author"
         body:
           type: string
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Digest"
+          description: >
+            Digest addresses into the artifact store, fetched via GET
+            /attachments/{digest}; never inlined (plan §5.14). Order is
+            authored message content, so it is preserved, never
+            canonicalized.
         created_at:
           type: string
           format: date-time
@@ -1666,6 +1718,17 @@ components:
         - user
         - agent
         - daemon
+
+    ConversationStatus:
+      type: string
+      description: >
+        Where a conversation sits in its request/response cycle:
+        awaiting_agent between a committed discuss and the accepted agent
+        completion, idle otherwise (plan §5.14 sync test 12). Provisional
+        vocabulary (domain enums.go).
+      enum:
+        - idle
+        - awaiting_agent
 
     Device:
       description: >

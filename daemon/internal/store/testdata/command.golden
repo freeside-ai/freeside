@@ -8,5 +8,7 @@
     "sha256:img",
     "sha256:log"
   ],
-  "action": "open_pr"
+  "action": "open_pr",
+  "message": "",
+  "attachments": []
 }

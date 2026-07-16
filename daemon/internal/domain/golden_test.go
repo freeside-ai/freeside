@@ -126,10 +126,23 @@ func TestGolden(t *testing.T) {
 
 	msg := domain.Message{
 		ID: "msg-1", ConversationID: "conv-1", Sequence: 1,
-		Author: domain.AuthorUser, Body: "please proceed", CreatedAt: ts,
+		Author: domain.AuthorUser, Body: "please proceed",
+		Attachments: []domain.Digest{"sha256:img"}, CreatedAt: ts,
 	}
-	conversation := domain.Conversation{ID: "conv-1", Messages: []domain.Message{msg}}
-	invocation := domain.AgentInvocation{ID: "inv-1", InputIDs: []domain.ArtifactID{"art-1", "art-2"}}
+	conversation := domain.Conversation{ID: "conv-1", Status: domain.ConversationAwaitingAgent, Messages: []domain.Message{msg}}
+	// The invocation fixture binds both immutable input classes: artifact IDs
+	// and a conversation prefix (the discuss shape, §5.14).
+	invocationConv := domain.ConversationID("conv-1")
+	invocation, err := domain.NewAgentInvocation("inv-1", []domain.ArtifactID{"art-1", "art-2"}, &invocationConv, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An artifact-bound invocation renders the conversation binding's explicit
+	// null (pointer-for-optional), pinning the pre-discuss shape.
+	artifactInvocation, err := domain.NewAgentInvocation("inv-2", []domain.ArtifactID{"art-1"}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	finding := domain.Finding{
 		ID: "find-1", RunID: "run-1", Source: "codex_github",
@@ -164,6 +177,19 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The discuss shape carries conversation content: the message body and its
+	// attachment digests, which stay in authored order (no canonicalization).
+	discussCommand, err := domain.NewCommand(domain.CommandInput{
+		CommandID: "cmd-2", DeviceID: "device-1", ItemID: "item-1",
+		ItemVersion: 1, PRHeadSHA: "cafebabe",
+		ArtifactDigests: []domain.Digest{"sha256:log", "sha256:img"},
+		Action:          domain.ActionDiscuss,
+		Message:         "why does the retry loop back off twice?",
+		Attachments:     []domain.Digest{"sha256:screen2", "sha256:screen1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		name  string
@@ -185,9 +211,11 @@ func TestGolden(t *testing.T) {
 		{"pairing_code", pairingCode},
 		{"finding", finding},
 		{"classification", classification},
+		{"command_discuss", discussCommand},
 		{"conversation", conversation},
 		{"message", msg},
 		{"agent_invocation", invocation},
+		{"agent_invocation_artifact_bound", artifactInvocation},
 		{"resolved_policy", resolvedPolicy},
 		{"policy_key", policyKey},
 		{"key_provenance", policyKey.Provenance},

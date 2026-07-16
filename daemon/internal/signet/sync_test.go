@@ -123,7 +123,7 @@ func seedSyncResources(t *testing.T, f fixture) {
 		ID: "run-1", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
 		Stages: []domain.Stage{{ID: "stage-1", RunID: "run-1", Name: "implementation"}},
 	}
-	conversation := domain.Conversation{ID: "conv-1"}
+	conversation := domain.Conversation{ID: "conv-1", Status: domain.ConversationIdle}
 	delivery := domain.AttentionDelivery{
 		ItemID: f.item.ID, DeviceID: "device-1", Channel: "ntfy", Attempt: 1,
 		SubmittedAt: ts, Status: domain.DeliverySubmitted,

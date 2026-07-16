@@ -3,5 +3,7 @@
   "input_ids": [
     "art-1",
     "art-2"
-  ]
+  ],
+  "conversation_id": "conv-1",
+  "through_sequence": 1
 }

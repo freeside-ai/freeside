@@ -128,3 +128,122 @@ func TestQueueIdempotency(t *testing.T) {
 		})
 	}
 }
+
+// TestListPendingOutbox: the recovery scan (§5.14 test 5) returns only
+// pending intents of the requested kind, in insertion order.
+func TestListPendingOutbox(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+
+	err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		for _, row := range []struct{ key, kind string }{
+			{"inv-1", "agent_invocation_requested"},
+			{"inv-2", "agent_invocation_requested"},
+			{"pub-1", "publication_requested"},
+		} {
+			if _, _, err := tx.EnqueueOutbox(ctx, row.key, row.kind, nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	assertPending := func(t *testing.T, want ...string) {
+		t.Helper()
+		err := s.Read(ctx, func(tx *store.ReadTx) error {
+			entries, err := tx.ListPendingOutbox(ctx, "agent_invocation_requested")
+			if err != nil {
+				return err
+			}
+			var got []string
+			for _, e := range entries {
+				got = append(got, e.IdempotencyKey)
+			}
+			if len(got) != len(want) {
+				t.Fatalf("pending keys = %v, want %v", got, want)
+			}
+			for i := range want {
+				if got[i] != want[i] {
+					t.Fatalf("pending keys = %v, want %v", got, want)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+	}
+
+	// Only the requested kind, in insertion order; the other kind's row is
+	// not swept into a foreign dispatcher's scan.
+	assertPending(t, "inv-1", "inv-2")
+
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.ListPendingOutbox(ctx, ""); err == nil {
+			t.Error("ListPendingOutbox accepted an empty kind, want error")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Marking removes a row from the pending scan; marking again (or marking
+	// an unknown key) is an idempotent no-op, never an error: a re-dispatch
+	// after a crashed mark must converge, not fail.
+	err = s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.MarkOutboxDispatched(ctx, "inv-1"); err != nil {
+			return err
+		}
+		if err := tx.MarkOutboxDispatched(ctx, "inv-1"); err != nil {
+			return err
+		}
+		if err := tx.MarkOutboxDispatched(ctx, "inv-missing"); err != nil {
+			return err
+		}
+		if err := tx.MarkOutboxDispatched(ctx, ""); err == nil {
+			t.Error("MarkOutboxDispatched accepted an empty key, want error")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("mark dispatched: %v", err)
+	}
+	assertPending(t, "inv-2")
+}
+
+// TestMarkOutboxDispatchedInvisibleToSync: dispatch bookkeeping rides
+// WriteInternal, so it must not bump the client-visible revision (§5.14: a
+// revision change invalidates client caches; re-dispatching on recovery must
+// not).
+func TestMarkOutboxDispatchedInvisibleToSync(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+
+	err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, _, err := tx.EnqueueOutbox(ctx, "inv-1", "agent_invocation_requested", nil)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	before, err := s.ServerState(ctx)
+	if err != nil {
+		t.Fatalf("server state: %v", err)
+	}
+	err = s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.MarkOutboxDispatched(ctx, "inv-1")
+	})
+	if err != nil {
+		t.Fatalf("mark dispatched: %v", err)
+	}
+	after, err := s.ServerState(ctx)
+	if err != nil {
+		t.Fatalf("server state: %v", err)
+	}
+	if after.Revision != before.Revision {
+		t.Fatalf("revision moved %d -> %d; dispatch bookkeeping must be invisible to sync", before.Revision, after.Revision)
+	}
+}

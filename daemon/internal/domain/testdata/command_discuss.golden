@@ -1,0 +1,17 @@
+{
+  "command_id": "cmd-2",
+  "device_id": "device-1",
+  "item_id": "item-1",
+  "item_version": 1,
+  "pr_head_sha": "cafebabe",
+  "artifact_digests": [
+    "sha256:img",
+    "sha256:log"
+  ],
+  "action": "discuss",
+  "message": "why does the retry loop back off twice?",
+  "attachments": [
+    "sha256:screen2",
+    "sha256:screen1"
+  ]
+}

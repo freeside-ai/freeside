@@ -376,6 +376,13 @@ func normalizeRun(run domain.Run) domain.Run {
 
 func normalizeConversation(conversation domain.Conversation) domain.Conversation {
 	conversation.Messages = nonNilSlice(conversation.Messages)
+	if len(conversation.Messages) == 0 {
+		return conversation
+	}
+	conversation.Messages = slices.Clone(conversation.Messages)
+	for idx := range conversation.Messages {
+		conversation.Messages[idx].Attachments = nonNilSlice(conversation.Messages[idx].Attachments)
+	}
 	return conversation
 }
 
