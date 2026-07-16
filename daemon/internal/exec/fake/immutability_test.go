@@ -106,7 +106,8 @@ func driveReviewToResult(t *testing.T, s *fake.ReviewSource, id domain.Invocatio
 func TestReviewDeliveredResultIsImmutable(t *testing.T) {
 	s := fake.NewReviewSource()
 	s.Script("inv-1", fake.ReviewScript{
-		Result: exec.ReviewResult{HeadSHA: "cafebabe", Findings: reviewFindings()},
+		Outcome: fake.OutcomeComplete,
+		Result:  exec.ReviewResult{HeadSHA: "cafebabe", Findings: reviewFindings()},
 	})
 
 	first := driveReviewToResult(t, s, "inv-1")
@@ -127,7 +128,8 @@ func TestReviewScriptInputIsImmutable(t *testing.T) {
 	s := fake.NewReviewSource()
 	findings := reviewFindings()
 	s.Script("inv-1", fake.ReviewScript{
-		Result: exec.ReviewResult{HeadSHA: "cafebabe", Findings: findings},
+		Outcome: fake.OutcomeComplete,
+		Result:  exec.ReviewResult{HeadSHA: "cafebabe", Findings: findings},
 	})
 	findings[0].Message = "TAMPERED"
 

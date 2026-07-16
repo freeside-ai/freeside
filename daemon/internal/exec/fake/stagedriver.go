@@ -40,6 +40,28 @@ const (
 	OutcomeCrashAfterResult Outcome = "crash_after_result"
 )
 
+// AllOutcomes lists every valid Outcome; the single place a new outcome is
+// registered, and the driver of table-driven tests. The zero value "" is
+// invalid by design (the daemon enum convention).
+var AllOutcomes = []Outcome{
+	OutcomeComplete,
+	OutcomeFail,
+	OutcomeCrashBeforeResult,
+	OutcomeCrashAfterResult,
+}
+
+// valid reports whether o is a registered outcome. Being a validity predicate,
+// it uses default; the behaviour-dispatch switches over Outcome omit default so
+// the exhaustive linter forces a new member to be handled.
+func (o Outcome) valid() bool {
+	switch o {
+	case OutcomeComplete, OutcomeFail, OutcomeCrashBeforeResult, OutcomeCrashAfterResult:
+		return true
+	default:
+		return false
+	}
+}
+
 // StageScript is one scripted stage scenario, keyed to an invocation id via
 // Script. Progression is call-step-counted, never timed: PendingInspects
 // then RunningInspects are consumed one per Inspect, and the outcome applies
@@ -236,7 +258,11 @@ func (d *StageDriver) Inspect(_ context.Context, id domain.InvocationID) (exec.S
 		s.lost = true
 		d.commit(id, s.script.Result, exec.StatusCompleted)
 		status = exec.StatusGone
-	default:
+	}
+	// The switch dispatches behaviour, so it omits default (exhaustive forces a
+	// new member to be handled). The invalid zero value and any unknown
+	// deserialized outcome fall through here: fail loud, never silently pass.
+	if !s.script.Outcome.valid() {
 		return "", fmt.Errorf("fake stage driver inspect %s: unknown outcome %q", id, s.script.Outcome)
 	}
 	d.mustPersistLocked("inspect", id)
