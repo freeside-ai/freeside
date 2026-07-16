@@ -9,8 +9,9 @@ import (
 
 // QueueEntry is one inbox or outbox row (§5.9): the two queues deliberately
 // share a shape. Kind names the action or event type; Payload is opaque to
-// the store. Status starts at "pending"; dispatch and consumption land with
-// the engine, not here.
+// the store. Status starts at "pending"; the dispatch loop itself lands with
+// the engine, but the store owns the ledger reads and marks it drives
+// (ListPendingOutbox, MarkOutboxDispatched).
 type QueueEntry struct {
 	ID             int64
 	IdempotencyKey string
@@ -20,6 +21,15 @@ type QueueEntry struct {
 	CreatedAt      time.Time
 }
 
+// Outbox row statuses. Pending is the schema default at enqueue; dispatched
+// records that the intent was handed to its provider, whose own durable
+// intent record is the correctness dedup — the mark only bounds rescans
+// (plan §5.14 discuss recovery).
+const (
+	outboxStatusPending    = "pending"
+	outboxStatusDispatched = "dispatched"
+)
+
 const (
 	enqueueOutboxSQL = `
 INSERT INTO outbox (idempotency_key, kind, payload, created_at)
@@ -28,6 +38,11 @@ ON CONFLICT (idempotency_key) DO NOTHING`
 	selectOutboxSQL = `
 SELECT id, idempotency_key, kind, payload, status, created_at
 FROM outbox WHERE idempotency_key = ?`
+	listPendingOutboxSQL = `
+SELECT id, idempotency_key, kind, payload, status, created_at
+FROM outbox WHERE kind = ? AND status = ? ORDER BY id`
+	markOutboxDispatchedSQL = `
+UPDATE outbox SET status = ? WHERE idempotency_key = ? AND status = ?`
 
 	recordInboxSQL = `
 INSERT INTO inbox (idempotency_key, kind, payload, created_at)
@@ -49,6 +64,56 @@ func (tx *InternalTx) EnqueueOutbox(ctx context.Context, key, kind string, paylo
 		return QueueEntry{}, false, fmt.Errorf("enqueue outbox %q: %w", key, err)
 	}
 	return entry, inserted, nil
+}
+
+// ListPendingOutbox returns the committed-but-undispatched intents of one
+// kind in insertion order: the recovery scan after a restart (§5.14 test 5
+// "discuss commits and the daemon dies pre-invocation"). Dispatch then
+// re-hands each to its provider, whose durable intent record dedups a repeat.
+func (tx *ReadTx) ListPendingOutbox(ctx context.Context, kind string) ([]QueueEntry, error) {
+	if kind == "" {
+		return nil, errors.New("list pending outbox: empty kind")
+	}
+	rows, err := tx.tx.QueryContext(ctx, listPendingOutboxSQL, kind, outboxStatusPending)
+	if err != nil {
+		return nil, fmt.Errorf("list pending outbox %q: %w", kind, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var entries []QueueEntry
+	for rows.Next() {
+		var (
+			entry  QueueEntry
+			stored string
+		)
+		if err := rows.Scan(&entry.ID, &entry.IdempotencyKey, &entry.Kind, &entry.Payload, &entry.Status, &stored); err != nil {
+			return nil, fmt.Errorf("list pending outbox %q: %w", kind, err)
+		}
+		entry.CreatedAt, err = time.Parse(time.RFC3339Nano, stored)
+		if err != nil {
+			return nil, fmt.Errorf("list pending outbox %q: stored created_at invalid: %w", kind, err)
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list pending outbox %q: %w", kind, err)
+	}
+	return entries, nil
+}
+
+// MarkOutboxDispatched flips a pending intent to dispatched. It is idempotent
+// (marking a missing or already-dispatched key affects no row and is not an
+// error) and dispatch bookkeeping is not client-visible, so it belongs inside
+// WriteInternal — a re-dispatch after a crashed mark must not invalidate
+// client caches. The provider's durable intent record, not this mark, is the
+// effectively-once guard.
+func (tx *InternalTx) MarkOutboxDispatched(ctx context.Context, key string) error {
+	if key == "" {
+		return errors.New("mark outbox dispatched: empty idempotency key")
+	}
+	if _, err := tx.tx.ExecContext(ctx, markOutboxDispatchedSQL, outboxStatusDispatched, key, outboxStatusPending); err != nil {
+		return fmt.Errorf("mark outbox dispatched %q: %w", key, err)
+	}
+	return nil
 }
 
 // RecordInbox dedups an externally-triggered intake under its idempotency
