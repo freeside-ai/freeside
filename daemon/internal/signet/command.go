@@ -39,6 +39,6 @@ type DecisionPayload struct {
 // decision record and the server revision of the transaction that applied it.
 // A retry of the same CommandID returns this exact value (§5.14 test 4).
 type CommandResult struct {
-	Record   domain.Command
-	Revision int64
+	Record   domain.Command `json:"record"`
+	Revision int64          `json:"revision"`
 }
