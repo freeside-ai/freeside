@@ -1,0 +1,46 @@
+name: convergence CI
+
+# The §5.14 real-daemon convergence pass (issue #72): the client halves
+# of sync tests 1, 2, 8, 11, and 13-16 against a live
+# freeside-signet-dev process (the eight whose daemon halves are
+# merged; 5-7, 10, and 12 join with #68's conversations). Part of the
+# 1A.0 exit evidence, so it runs in CI rather than as a local-only
+# ritual; it spans daemon/ and app/, hence its own workflow with both
+# components' paths.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "daemon/**"
+      - "api/openapi.yaml"
+      - "scripts/run-convergence.sh"
+      - ".github/workflows/convergence-ci.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "daemon/**"
+      - "api/openapi.yaml"
+      - "scripts/run-convergence.sh"
+      - ".github/workflows/convergence-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  convergence:
+    name: convergence (real daemon + Swift client)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: daemon/go.mod
+          cache-dependency-path: daemon/go.sum
+      - name: Run the convergence pass
+        run: bash scripts/run-convergence.sh
