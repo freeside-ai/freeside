@@ -83,6 +83,15 @@ public final class DecisionModel {
         guard validation == .validated, let snapshot else { return false }
         guard snapshot.item.status == .open else { return false }
         guard pendingCommand == nil else { return false }
+        // A definitive negative sync signal overrides a point-in-time
+        // validation (plan §5.14): while the daemon is unreachable or
+        // the credential is rejected, the cached view is read-only
+        // however recently this card validated. Unvalidated carries no
+        // signal either way; the per-item validation above decides.
+        switch store.freshness {
+        case .unreachable, .unauthenticated: return false
+        case .unvalidated, .fresh: break
+        }
         switch phase {
         case .idle, .superseded: return true
         case .submitting, .applied: return false
@@ -181,7 +190,18 @@ public final class DecisionModel {
                 phase = .superseded
                 validation = .validated
             case .undocumented(let statusCode, _):
-                if (400..<500).contains(statusCode) {
+                if statusCode == 401 {
+                    // The credential gate rejected this first request
+                    // before any acceptance, so the fresh command was
+                    // definitively not recorded (test 15); what failed is
+                    // the device's credential, so it surfaces as device
+                    // state, not a card error to retry through.
+                    store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
+                    phase = .idle
+                    store.freshness = .unauthenticated
+                    submissionError =
+                        "the daemon no longer accepts this device's credential; the decision was not submitted"
+                } else if (400..<500).contains(statusCode) {
                     // An authoritative daemon rejection (misuse, unknown
                     // item): the command was definitively not recorded.
                     store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
@@ -338,6 +358,17 @@ public final class DecisionModel {
                 store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
                 return .conflicted
             case .undocumented(let statusCode, _):
+                if statusCode == 401 {
+                    // The resend died at the credential gate, which
+                    // proves nothing about the original attempt's
+                    // commitment: a revoked device's retry may be served
+                    // its recorded result or rejected (test 16, the
+                    // daemon's choice), so the slot stays held and the
+                    // revoked state surfaces instead of a false "not
+                    // recorded".
+                    store.freshness = .unauthenticated
+                    return ownsSlot ? .lost : .displaced
+                }
                 if (400..<500).contains(statusCode) {
                     guard ownsSlot else { return .displaced }
                     store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
