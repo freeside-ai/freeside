@@ -50,6 +50,14 @@ public enum AttentionFixtures {
         phase1Types.map { fixture(type: $0) }
     }
 
+    /// The default inbox's item ids, in inbox order: the canonical value
+    /// list for the `-FreesideSelect` launch argument. The "Running"
+    /// section of app/README.md mirrors this list for capture workflows;
+    /// keep them in sync.
+    public static func defaultInboxItemIDs() -> [String] {
+        defaultInbox().map(\.item.id)
+    }
+
     /// One valid open item of the given type. The artifact_digests set is
     /// the sorted, deduplicated union of the evidence and claim digests,
     /// as the daemon derives it.

@@ -39,6 +39,28 @@ import Testing
         #expect(Set(inbox.map(\.item.id)).count == inbox.count)
     }
 
+    /// Pins the literal ids so the `-FreesideSelect` value list mirrored
+    /// in app/README.md cannot drift silently: renaming a type or
+    /// reordering the inbox must show up here as a doc-sync signal.
+    @Test func defaultInboxItemIDsAreTheCanonicalSelectValues() {
+        #expect(
+            AttentionFixtures.defaultInboxItemIDs() == [
+                "item-spec_approval",
+                "item-execution_failure",
+                "item-agent_question",
+                "item-review_diminishing_returns",
+                "item-review_dispute",
+                "item-ready_for_final_review",
+                "item-publish_blocked",
+                "item-run_proposal",
+                "item-system_health",
+                "item-blocked",
+            ])
+        #expect(
+            AttentionFixtures.defaultInboxItemIDs()
+                == AttentionFixtures.defaultInbox().map(\.item.id))
+    }
+
     @Test(arguments: AttentionFixtures.phase1Types)
     func fixtureIsValidAndOffersExactlyItsActionSet(
         type: Components.Schemas.AttentionType

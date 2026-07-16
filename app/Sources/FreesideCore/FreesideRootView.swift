@@ -4,14 +4,18 @@ import SwiftUI
 public struct FreesideRootView: View {
     @State private var session: AppSession
     @State private var selection: String?
+    private let launchColorScheme: ColorScheme?
 
     @MainActor
-    public init(session: AppSession) {
+    public init(session: AppSession, launchInputs: LaunchInputs = .standard()) {
         _session = State(initialValue: session)
+        _selection = State(initialValue: launchInputs.selection)
+        launchColorScheme = launchInputs.colorScheme
     }
 
-    /// Composes from launch arguments (see AppSession.fromEnvironment);
-    /// the bare default remains the permissive mock inbox.
+    /// Composes from launch arguments (see AppSession.fromEnvironment
+    /// and LaunchInputs); the bare default remains the permissive mock
+    /// inbox.
     @MainActor
     public init() {
         self.init(session: .fromEnvironment())
@@ -28,7 +32,7 @@ public struct FreesideRootView: View {
                 synced(coordinator)
             }
         }
-        .preferredColorScheme(Self.forcedColorScheme)
+        .preferredColorScheme(launchColorScheme)
     }
 
     private func synced(_ coordinator: SyncCoordinator) -> some View {
@@ -56,18 +60,5 @@ public struct FreesideRootView: View {
         // The heartbeat is the loss detector (plan §5.14); its first
         // round trip also bootstraps a session with no cursors yet.
         .task { await coordinator.heartbeatLoop(every: .seconds(15)) }
-    }
-
-    /// Screenshot and automation workflows pin the appearance per launch
-    /// (`open FreesideMac.app --args -FreesideColorScheme light|dark`)
-    /// instead of mutating the user's system appearance setting, which is
-    /// host state outside the app under test. Unset or unrecognized means
-    /// follow the system, the default for every ordinary launch.
-    static var forcedColorScheme: ColorScheme? {
-        switch UserDefaults.standard.string(forKey: "FreesideColorScheme") {
-        case "light": .light
-        case "dark": .dark
-        default: nil
-        }
     }
 }
