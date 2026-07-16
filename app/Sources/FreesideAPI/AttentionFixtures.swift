@@ -50,6 +50,33 @@ public enum AttentionFixtures {
         phase1Types.map { fixture(type: $0) }
     }
 
+    /// The bytes behind the default inbox's attachment digests, for the
+    /// mock's digest-addressed read path (plan §4: cards render image
+    /// attachments directly from the artifact store by digest). Every
+    /// `log-` evidence digest resolves to text (a non-image attachment
+    /// keeps its plain digest row) and every `img-` claim digest to the
+    /// fixture PNG — except `blocked`'s, deliberately unseeded so one
+    /// default card exercises the missing-attachment placeholder.
+    public static func defaultAttachments() -> [String: Data] {
+        var bytes: [String: Data] = [:]
+        for type in phase1Types {
+            let key = type.rawValue
+            bytes["sha256:log-\(key)"] = Data("verify log for \(key)\n".utf8)
+            if type != .blocked {
+                bytes["sha256:img-\(key)"] = fixtureImagePNG
+            }
+        }
+        return bytes
+    }
+
+    /// A small deterministic PNG (320×200 gradient, metadata stripped),
+    /// embedded so the platform-portable FreesideAPI target needs no
+    /// bundle resources or image frameworks to serve fixture bytes.
+    public static let fixtureImagePNG = Data(
+        base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAUAAAADIEAIAAABG9nO/AAAEfUlEQVR42u3dsa0dOQwFUBogsI24DFfgcBbYuoz/+hrF7sCxG+AG0wNvMOdUoEwgRV59+/nz16/fvwsAWNR16qv+TR8DAN6l58zXuIABYFXXqY8LGAB2dZ3RggaAZV2ntKABYFmXN2AAWNdz10cLGgB2aUEDQIAWNAAEPEEcV/oYAPAuKmAACOgRxAEA6wRxAECAKWgACHABA0BA1xlBHACwTAUMAAH+AwaAgCeIwwUMAKu67rEHDADLvAEDQIALGAACeiRhAcA6FTAABHQdQ1gAsM0aEgAE+A8YAAJ6Tn3NlT4GALxL1ymfMQDAMi1oAAiwhgQAAV2COABg3TOE5QIGgFV+QwKAAEEcABBgCAsAAqwhAUCAIA4ACOhRAQPAOm/AABAgiAMAAlTAABDQdUoQBwAs69GCBoB1WtAAEPAEcVzpYwDAu3TdgjgAYJsoSgAI8B8wAAT4jhAAArrO2AMGgGXWkAAgQBY0AAQYwgKAAGtIABDgMwYACLCGBAABWtAAEGAICwACuu7xGQMALBPEAQAB3oABIMAUNAAEPC3oK30MAHiXHr8hAcA6LWgACDCEBQAB1pAAIKDrCOIAgG2iKAEgQAsaAAK6zpiCBoBlXXfZAwaAZdaQACCgRxAHAKxTAQNAgCloAAjoOiWIAwCWaUEDQIAkLAAIEMQBAAFdpz5zpY8BAO/iDRgAAroEcQDAOkNYABCgBQ0AAV23IA4A2KYCBoAAWdAAECCIAwACek59VMAAsEsLGgACDGEBQIAkLAAIUAEDQIAhLAAIsIYEAAGmoAEgwAUMAAFd93zqSh8DAN7Ff8AAEGANCQACBHEAQEDXGXvAALDMFDQABPRoQQPAOkNYABCgBQ0AAV1nPlrQALBLBQwAAd6AASDAFDQABHTdJYgDAJZpQQNAgCxoAAhQAQNAgP+AASDgCeK40scAgHcRxAEAAS5gAAjoOmMKGgCW9RxBHACwzRoSAAQI4gCAABUwAASYggaAgB6/IQHAOmtIABCgBQ0AAYawACCg69RHCxoAdvWogAFgnTdgAAiQhAUAAV1n7AEDwLKnBX2ljwEA7yKIAwACegxhAcA6QRwAENB1C+IAgG32gAEgQAsaAAJ6BHEAwDpBHAAQ4A0YAAIEcQBAgAoYAAIkYQFAQNcZQRwAsEwLGgACBHEAQECXIA4AWNdzC+IAgG3PG/CVPgYAvIsWNAAEGMICgICuU96AAWCZLGgACBBFCQAB3oABIMAUNAAEGMICgAAtaAAIMIQFAAHWkAAgoOv2BgwA27wBA0CANSQACDCEBQABWtAAENB16qMFDQC7ngr4Sh8DAN6lyxswAKzrEcQBAOt8xgAAAVrQABAgCxoAAlTAABDQI4gDANZ13YI4AGCbKEoACPAGDAABviMEgICuM4I4AGCZ/4ABIEAQBwAEGMICgABvwAAQYAoaAAKeIawrfQwAeBdJWAAQoAUNAAFdtyEsANhmDQkAAr59//Pj73//pI8BAO+iAgaAgK5T3oABYJksaAAI0IIGgID/AXOWWIKW1YGjAAAAAElFTkSuQmCC"
+    )!
+
     /// The default inbox's item ids, in inbox order: the canonical value
     /// list for the `-FreesideSelect` launch argument. The "Running"
     /// section of app/README.md mirrors this list for capture workflows;

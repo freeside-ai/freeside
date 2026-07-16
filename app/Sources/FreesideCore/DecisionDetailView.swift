@@ -7,10 +7,12 @@ import SwiftUI
 /// the model's revalidation of current state succeeds.
 struct DecisionDetailView: View {
     @State private var model: DecisionModel
+    private let attachments: AttachmentLoader
 
     @MainActor
     init(store: InboxStore, itemID: String) {
         _model = State(initialValue: DecisionModel(store: store, itemID: itemID))
+        attachments = store.attachments
     }
 
     var body: some View {
@@ -44,12 +46,9 @@ struct DecisionDetailView: View {
             if !item.evidence_snapshot.isEmpty {
                 cardSection("Evidence") {
                     ForEach(item.evidence_snapshot, id: \.id) { artifact in
-                        LabeledContent(artifact._type) {
-                            Text(artifact.digest)
-                                .font(.caption.monospaced())
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
+                        AttachmentRow(
+                            label: artifact._type, digest: artifact.digest,
+                            attachments: attachments)
                     }
                 }
             }
@@ -61,12 +60,9 @@ struct DecisionDetailView: View {
                     // claim field is unique on its own and an id-keyed
                     // ForEach could drop a row the user must review.
                     ForEach(Array(item.agent_claims.enumerated()), id: \.offset) { _, claim in
-                        LabeledContent(claim.label) {
-                            Text(claim.digest)
-                                .font(.caption.monospaced())
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
+                        AttachmentRow(
+                            label: claim.label, digest: claim.digest,
+                            attachments: attachments)
                     }
                 }
             }
@@ -161,6 +157,53 @@ struct DecisionDetailView: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// One labeled attachment row: always the digest (the decision
+    /// stays visibly bound to it, whatever the bytes do), plus the
+    /// fetched rendering underneath — the image inline when the bytes
+    /// decode (plan §4), a placeholder when the fetch fails or the
+    /// digest is missing, and nothing extra for a non-image attachment,
+    /// which keeps its plain digest row.
+    private struct AttachmentRow: View {
+        let label: String
+        let digest: String
+        let attachments: AttachmentLoader
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 6) {
+                LabeledContent(label) {
+                    Text(digest)
+                        .font(.caption.monospaced())
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                switch attachments.phase(for: digest) {
+                case .image(let image):
+                    platformImage(image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 320, alignment: .leading)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .accessibilityLabel("\(label) attachment image")
+                case .unavailable:
+                    Label("Attachment unavailable", systemImage: "photo.badge.exclamationmark")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .loading, .notImage, nil:
+                    EmptyView()
+                }
+            }
+            .task(id: digest) { await attachments.load(digest) }
+        }
+
+        private func platformImage(_ image: PlatformImage) -> Image {
+            #if canImport(UIKit)
+                Image(uiImage: image)
+            #elseif canImport(AppKit)
+                Image(nsImage: image)
+            #endif
+        }
     }
 
     private func bannerLabel(_ text: String, systemImage: String, tint: Color) -> some View {
