@@ -9,7 +9,18 @@ Category: an agent control plane. Harnesses (Claude Code, Codex) run the agent's
 - **Everything** — charter, architecture, roadmap, decisions: [`docs/plan.md`](docs/plan.md).
 - **Conventions** — how to work in this repo: [`AGENTS.md`](AGENTS.md).
 
-**License:** none yet. The repository is private and unlicensed while open-sourcing stays a deferred Phase 4 option (plan §11). The leaning, recorded as an ADR-candidate in the first devlog entry, is AGPL-3.0 for the network-service core if and when it is released.
+## License
+
+This work is licensed under [AGPL-3.0-or-later](./LICENSE).
+
+The copyright holder applies this grant to every revision in this repository's
+history, except material that states a different license or copyright holder.
+
+See [LICENSING-PHILOSOPHY.md](./LICENSING-PHILOSOPHY.md) for why we chose
+this license.
+
+The philosophy describes how we choose a license for a project; it does not
+grant separate licenses to individual files in this repository.
 
 ---
 
