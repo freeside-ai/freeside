@@ -33,7 +33,7 @@ func (Secret) GoString() string { return redacted }
 // %d, ...), since a non-string verb like %x would otherwise bypass
 // String and hex-dump the underlying bytes.
 func (Secret) Format(f fmt.State, _ rune) {
-	io.WriteString(f, redacted) //nolint:errcheck // fmt.State writes cannot be usefully handled
+	io.WriteString(f, redacted) //nolint:errcheck,gosec // fmt.State writes cannot be usefully handled
 }
 
 // MarshalText implements encoding.TextMarshaler, which encoding/json

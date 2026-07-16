@@ -18,7 +18,7 @@ import (
 )
 
 // fixtureTokenValue must match testdata/token-response.json.
-const fixtureTokenValue = "ghs_FIXTURETOKENFIXTURETOKEN0000"
+const fixtureTokenValue = "ghs_FIXTURETOKENFIXTURETOKEN0000" //nolint:gosec // fixture value from the recorded response, not a credential
 
 type captureRecorder struct {
 	records []publish.MintRecord
@@ -413,7 +413,7 @@ func TestJSONLRecorder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(stateDir, "publish", "mints.jsonl"))
+	raw, err := os.ReadFile(filepath.Join(stateDir, "publish", "mints.jsonl")) //nolint:gosec // test-internal path under t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}

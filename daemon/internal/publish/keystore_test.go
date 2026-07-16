@@ -188,7 +188,8 @@ func TestKeystorePermissions(t *testing.T) {
 	}
 
 	keyPath := filepath.Join(appDir, "app.pem")
-	if err := os.Chmod(keyPath, 0o644); err != nil {
+	// G302: the widened mode is the point — the next load must refuse it.
+	if err := os.Chmod(keyPath, 0o644); err != nil { //nolint:gosec // deliberately widens the key to prove LoadApp fails closed
 		t.Fatal(err)
 	}
 	if _, err := ks.LoadApp(); !errors.Is(err, publish.ErrCredentialPermissions) {

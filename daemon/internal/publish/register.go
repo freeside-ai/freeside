@@ -220,7 +220,7 @@ func (r *Registrar) Register(ctx context.Context, m Manifest, l net.Listener, op
 		default: // a repeated redirect changes nothing; first code wins
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		fmt.Fprintln(w, "Registration received; you can close this tab.")
+		_, _ = fmt.Fprintln(w, "Registration received; you can close this tab.")
 	})
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go srv.Serve(l)   //nolint:errcheck // Serve always returns non-nil on Close; the flow's outcome travels via codeCh

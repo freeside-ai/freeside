@@ -571,7 +571,7 @@ func (c AppCredentials) GoString() string { return c.String() }
 // otherwise walk the struct fields — including the RSA key's exported
 // big integers — without consulting String.
 func (c AppCredentials) Format(f fmt.State, _ rune) {
-	io.WriteString(f, c.String()) //nolint:errcheck // fmt.State writes cannot be usefully handled
+	io.WriteString(f, c.String()) //nolint:errcheck,gosec // fmt.State writes cannot be usefully handled
 }
 
 // MarshalJSON emits the identity with every sensitive field redacted;

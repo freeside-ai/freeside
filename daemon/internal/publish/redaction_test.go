@@ -26,7 +26,7 @@ func TestNoCredentialValueRenders(t *testing.T) {
 	// A middle line of the PEM body: pure base64 key material.
 	pemNeedle := strings.Split(strings.TrimSpace(string(pemRaw)), "\n")[3]
 
-	needles := map[string]string{
+	needles := map[string]string{ //nolint:gosec // leak-detection needles built from committed fixtures, not credentials
 		"pem base64":         pemNeedle,
 		"private exponent":   key.D.String(),
 		"prime factor":       key.Primes[0].String(),

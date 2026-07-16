@@ -127,9 +127,7 @@ func (r *JSONLRecorder) RecordMint(rec MintRecord) error {
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("audit: lstat %s: %w", r.path, err)
 	}
-	// G304: the path is composed by the constructor from the daemon's
-	// own state dir, never from external input.
-	f, err := os.OpenFile(r.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // recorder-internal path derived from the daemon state dir
+	f, err := os.OpenFile(r.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("audit: open %s: %w", r.path, err)
 	}
