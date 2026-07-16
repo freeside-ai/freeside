@@ -13,16 +13,23 @@ import (
 )
 
 // fixture is the §5.14 test bed: a service over a fresh store seeded with one
-// open attention item. The item carries no evidence artifacts, so no
-// approved-recipe set is needed and the acceptance checks are the only
-// policy in play; its offered actions cover the three outcome classes
-// (stop resolves, dismiss dismisses, open_pr records without
-// concluding).
+// open attention item and one active device ("device-1", the identity every
+// command fixture submits as; Submit's active-device gate reads its row). The
+// item carries no evidence artifacts, so no approved-recipe set is needed and
+// the acceptance checks are the only policy in play; its offered actions
+// cover the three outcome classes (stop resolves, dismiss dismisses, open_pr
+// records without concluding). The service clock reads *now, so pairing
+// tests advance time by assigning through it.
 type fixture struct {
 	service *signet.Service
 	store   *store.Store
 	item    domain.AttentionItem
+	device  domain.Device
+	now     *time.Time
 }
+
+// testPairingKey is fixture key material, not a credential.
+var testPairingKey = []byte("signet-test-pairing-key")
 
 func newFixture(t *testing.T) fixture {
 	t.Helper()
@@ -38,7 +45,8 @@ func newFixture(t *testing.T) fixture {
 	})
 
 	runID := domain.RunID("run-1")
-	expires := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).Add(24 * time.Hour)
+	start := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	expires := start.Add(24 * time.Hour)
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-1", ProjectID: "proj-1",
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
@@ -52,11 +60,22 @@ func newFixture(t *testing.T) fixture {
 	if err != nil {
 		t.Fatalf("NewAttentionItem: %v", err)
 	}
-	service := signet.NewService(s)
+	now := start
+	service := signet.NewService(s,
+		signet.WithPairingKey(testPairingKey),
+		signet.WithClock(func() time.Time { return now }),
+	)
 	if err := service.PutItem(ctx, item); err != nil {
 		t.Fatalf("seed item: %v", err)
 	}
-	return fixture{service: service, store: s, item: item}
+	device := domain.Device{
+		ID: "device-1", DisplayName: "Ben's iPhone",
+		Status: domain.DeviceActive, PairedAt: start,
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutDevice(ctx, device) }); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+	return fixture{service: service, store: s, item: item, device: device, now: &now}
 }
 
 // TestPutItemRejectsDisallowedAction exercises the signet item boundary: an
@@ -184,6 +203,21 @@ func (f fixture) command(commandID string, action domain.Action) signet.ClientCo
 	}
 }
 
+// seedDevice registers another active device directly through the store, for
+// tests that need a second paired identity without running the pairing flow.
+func (f fixture) seedDevice(t *testing.T, id domain.DeviceID) {
+	t.Helper()
+	device := domain.Device{
+		ID: id, DisplayName: "seeded " + string(id),
+		Status: domain.DeviceActive, PairedAt: f.device.PairedAt,
+	}
+	if err := f.store.Write(context.Background(), func(tx *store.WriteTx) error {
+		return tx.PutDevice(context.Background(), device)
+	}); err != nil {
+		t.Fatalf("seed device %q: %v", id, err)
+	}
+}
+
 func (f fixture) revision(t *testing.T) int64 {
 	t.Helper()
 	state, err := f.store.ServerState(context.Background())
@@ -257,6 +291,7 @@ func TestSubmitAcceptsAndResolves(t *testing.T) {
 func TestSubmitCrossDeviceConflict(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
+	f.seedDevice(t, "device-2")
 
 	if _, err := f.service.Submit(ctx, f.command("cmd-dev1", domain.ActionStop)); err != nil {
 		t.Fatalf("device 1 Submit: %v", err)
