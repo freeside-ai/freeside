@@ -3,6 +3,11 @@ import OpenAPIRuntime
 import OpenAPIURLSession
 
 public enum APIClientFactory {
+    /// Shared by every client this factory builds (and the convergence
+    /// harness's hand-built one): dates decode leniently across the
+    /// RFC 3339 shapes the daemon and the mock emit.
+    public static let configuration = Configuration(dateTranscoder: .rfc3339)
+
     /// The real-daemon client. Every operation except pairing requires
     /// the paired-device credential; the provider is consulted per
     /// request, so the same client works before pairing (no header) and
@@ -13,6 +18,7 @@ public enum APIClientFactory {
     ) -> Client {
         Client(
             serverURL: serverURL,
+            configuration: configuration,
             transport: URLSessionTransport(),
             middlewares: [BearerAuthMiddleware(token: token)]
         )
@@ -32,6 +38,7 @@ public enum APIClientFactory {
     ) -> Client {
         Client(
             serverURL: URL(string: "https://freeside.invalid")!,
+            configuration: configuration,
             transport: MockServerTransport(server: server),
             middlewares: [BearerAuthMiddleware(token: token)]
         )
