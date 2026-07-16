@@ -24,22 +24,45 @@ public struct SyncCursors: Codable, Equatable, Sendable {
 }
 
 /// What the disposable read cache holds: the cursors and the metadata
-/// snapshots they scope. Attachment bytes are deliberately absent — the
-/// cache persists item metadata only, so nothing high-sensitivity can
-/// reach disk through it; when attachment rendering lands, bytes whose
-/// sensitivity_class is high_sensitivity stay memory-only by default
-/// (plan §5.14). The device credential never belongs here; it lives in
-/// the Keychain alone.
+/// snapshots they scope, plus the pending-command ledger (#115) — an
+/// unresolved command's retry affordance must survive a relaunch (plan
+/// §5.14 sync test 4), so the ledger persists alongside the rows but
+/// outlives them: cursors are absent after an epoch discard while an
+/// unsettled command still needs its verbatim resend. Attachment bytes
+/// are deliberately absent — the cache persists item metadata only, so
+/// nothing high-sensitivity can reach disk through it; when attachment
+/// rendering lands, bytes whose sensitivity_class is high_sensitivity
+/// stay memory-only by default (plan §5.14). The device credential
+/// never belongs here; it lives in the Keychain alone, and a
+/// ClientCommand carries no token, so the ledger adds no credential.
 public struct CachedState: Codable, Equatable, Sendable {
-    public var cursors: SyncCursors
+    public var cursors: SyncCursors?
     public var attentionItems: [Components.Schemas.AttentionItemSnapshot]
+    /// The persisted ledger by item id; nil when absent or unreadable.
+    /// The ledger is client mutation state, not readable cache, so it
+    /// degrades independently: a corrupt section costs the retry
+    /// affordance, never the rows and cursors around it.
+    public var pendingCommands: [String: InboxStore.PendingCommandEntry]?
 
     public init(
-        cursors: SyncCursors,
-        attentionItems: [Components.Schemas.AttentionItemSnapshot]
+        cursors: SyncCursors?,
+        attentionItems: [Components.Schemas.AttentionItemSnapshot],
+        pendingCommands: [String: InboxStore.PendingCommandEntry]? = nil
     ) {
         self.cursors = cursors
         self.attentionItems = attentionItems
+        self.pendingCommands = pendingCommands
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        cursors = try container.decodeIfPresent(SyncCursors.self, forKey: .cursors)
+        attentionItems = try container.decode(
+            [Components.Schemas.AttentionItemSnapshot].self, forKey: .attentionItems)
+        // The ledger section is forgiving on its own: an undecodable
+        // section loads as absent without failing the whole file.
+        pendingCommands = try? container.decodeIfPresent(
+            [String: InboxStore.PendingCommandEntry].self, forKey: .pendingCommands)
     }
 }
 
@@ -60,8 +83,9 @@ public protocol CacheStore: Sendable {
 /// discard is `rm`; a database earns nothing here.
 public struct DiskCacheStore: CacheStore {
     /// Bumped when the persisted shape changes incompatibly; an old
-    /// file then loads as absent and the client bootstraps.
-    static let format = 1
+    /// file then loads as absent and the client bootstraps. 2: cursors
+    /// became optional and the pending-command ledger joined (#115).
+    static let format = 2
 
     private struct CacheFile: Codable {
         var format: Int

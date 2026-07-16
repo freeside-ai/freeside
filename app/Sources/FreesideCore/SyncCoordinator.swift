@@ -34,14 +34,28 @@ public final class SyncCoordinator {
         store = InboxStore(client: client, device: device)
         self.cache = cache
         if let cached = cache.load() {
-            cursors = cached.cursors
-            store.replaceAll(with: cached.attentionItems)
+            if let cursors = cached.cursors {
+                self.cursors = cursors
+                store.replaceAll(with: cached.attentionItems)
+            }
+            // The ledger restores even without cursors: an epoch discard
+            // preserves it precisely so an unresolved command's retry
+            // survives the relaunch that follows (#115).
+            if let pending = cached.pendingCommands {
+                store.restorePendingCommands(pending)
+            }
         }
         // Freshness stays .unvalidated until a round-trip settles it:
         // the cached view renders immediately, but nothing claims it is
         // current before the first heartbeat or bootstrap says so.
         store.revisionObserver = { [weak self] revision in
             self?.observe(revision: revision)
+        }
+        // Every ledger mutation persists immediately: a sync round may
+        // never come before termination, and the persisted ledger is the
+        // §5.14 test-4 guarantee across a restart (#115).
+        store.pendingCommandsObserver = { [weak self] in
+            self?.persist()
         }
     }
 
@@ -153,13 +167,31 @@ public final class SyncCoordinator {
     }
 
     private func discardCache() {
+        // Evict before re-persisting the ledger: if the save below is
+        // lost, an absent cache is honest, while a lingering file of
+        // dead-epoch rows is not. The ledger survives the discard (#115):
+        // commitment is epoch-independent, and only its verbatim resend
+        // can settle an unresolved command against the restored daemon.
         cache.discard()
         store.discardSnapshots()
         cursors = nil
+        persist()
     }
 
     private func persist() {
-        guard let cursors else { return }
-        cache.save(CachedState(cursors: cursors, attentionItems: store.orderedSnapshots))
+        let pending = store.pendingCommandsByItemID
+        // Nothing worth a file: keeping one would undo an eviction.
+        guard cursors != nil || !pending.isEmpty else {
+            cache.discard()
+            return
+        }
+        // Rows are meaningless without the cursors that scope them, so a
+        // cursor-less save carries the ledger alone.
+        cache.save(
+            CachedState(
+                cursors: cursors,
+                attentionItems: cursors == nil ? [] : store.orderedSnapshots,
+                pendingCommands: pending
+            ))
     }
 }

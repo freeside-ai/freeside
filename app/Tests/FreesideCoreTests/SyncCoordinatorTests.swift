@@ -76,7 +76,7 @@ private func makeCoordinator(
         #expect(after.lastFullSnapshotRevision < before.lastFullSnapshotRevision)
         #expect(after.highestObservedServerRevision == after.lastFullSnapshotRevision)
         #expect(coordinator.store.freshness == .fresh)
-        #expect(cache.load()?.cursors.syncEpoch == after.syncEpoch)
+        #expect(cache.load()?.cursors?.syncEpoch == after.syncEpoch)
     }
 
     @Test func aDeadEpochIsEvictedEvenWhenTheRebootstrapFails() async throws {
@@ -213,6 +213,222 @@ private func makeCoordinator(
         #expect(
             cursorsB.highestObservedServerRevision
                 == deviceA.cursors?.highestObservedServerRevision)
+    }
+
+    @Test func anUnresolvedCommandSurvivesRelaunch() async throws {
+        // #115, §5.14 test 4 across a restart: a command whose response
+        // was lost keeps its retry affordance through a relaunch, and
+        // the restored slot still blocks a second command for the item.
+        let server = MockServer()
+        let cache = InMemoryCacheStore()
+        let first = makeCoordinator(server: server, cache: cache)
+        await first.bootstrap()
+
+        await server.setAfterRespond { operationID in
+            if operationID == "submitCommand" { throw MockOutage() }
+        }
+        let model = DecisionModel(store: first.store, itemID: "item-spec_approval")
+        await model.validate()
+        await model.submit(.approve)
+        let entry = try #require(first.store.pendingCommandsByItemID["item-spec_approval"])
+        #expect(entry.state == .unresolved)
+
+        let second = makeCoordinator(server: server, cache: cache)
+        let restored = try #require(
+            second.store.pendingCommandsByItemID["item-spec_approval"])
+        #expect(restored.command == entry.command)
+        #expect(restored.state == .unresolved)
+        #expect(
+            !second.store.registerPendingCommand(
+                makeCommand(itemID: "item-spec_approval", commandID: "cmd-duplicate")))
+    }
+
+    @Test func anInFlightEntryRestoresAsUnresolved() async throws {
+        // A command persisted mid-flight has failed ambiguously by the
+        // time a relaunch reads it: no task awaits its response, so only
+        // the unresolved state (the retry affordance) is honest.
+        let cache = InMemoryCacheStore()
+        let first = makeCoordinator(server: MockServer(), cache: cache)
+        #expect(first.store.registerPendingCommand(makeCommand(itemID: "item-x")))
+        #expect(cache.load()?.pendingCommands?["item-x"]?.state == .inFlight)
+
+        let second = makeCoordinator(server: MockServer(), cache: cache)
+        #expect(second.store.pendingCommandsByItemID["item-x"]?.state == .unresolved)
+    }
+
+    @Test func restoreDropsEntriesTheReGateRejects() async throws {
+        // Decoded ledger fields are re-gated, never trusted (Codex P2 on
+        // #125): another device's command must not occupy this device's
+        // slots — after a re-pair its verbatim resend would die at the
+        // daemon's device gate and clear a possibly committed outcome —
+        // and a key naming a different item than its command must not
+        // block that item. Only the consistent same-device entry lands.
+        let cache = InMemoryCacheStore()
+        cache.save(
+            CachedState(
+                cursors: nil,
+                attentionItems: [],
+                pendingCommands: [
+                    "item-mine": .init(
+                        command: makeCommand(itemID: "item-mine"), state: .unresolved),
+                    "item-foreign": .init(
+                        command: makeCommand(
+                            itemID: "item-foreign", commandID: "cmd-foreign",
+                            deviceID: "device-old"),
+                        state: .unresolved),
+                    "item-mismatched": .init(
+                        command: makeCommand(
+                            itemID: "item-other", commandID: "cmd-mismatched"),
+                        state: .unresolved),
+                ]))
+        let coordinator = makeCoordinator(server: MockServer(), cache: cache)
+
+        #expect(coordinator.store.pendingCommandsByItemID.count == 1)
+        #expect(coordinator.store.pendingCommandsByItemID["item-mine"] != nil)
+    }
+
+    @Test func aRestoredRetryReplaysTheRecordedResult() async throws {
+        // #115 acceptance 2, recorded-result branch: the command
+        // committed, its response was lost, the app restarted. The
+        // restored verbatim resend is served the recorded result — no
+        // second side effect — and the slot clears.
+        let server = MockServer()
+        let cache = InMemoryCacheStore()
+        let first = makeCoordinator(server: server, cache: cache)
+        await first.bootstrap()
+
+        await server.setAfterRespond { operationID in
+            if operationID == "submitCommand" { throw MockOutage() }
+        }
+        let model = DecisionModel(store: first.store, itemID: "item-spec_approval")
+        await model.validate()
+        await model.submit(.approve)
+        let lost = try #require(first.store.pendingCommandsByItemID["item-spec_approval"])
+        await server.setAfterRespond(nil)
+
+        let second = makeCoordinator(server: server, cache: cache)
+        await second.bootstrap()
+        let restored = DecisionModel(store: second.store, itemID: "item-spec_approval")
+        await restored.validate()
+        #expect(restored.canRetryLostResponse)
+
+        await restored.retryLostResponse()
+
+        #expect(restored.appliedRecord?.command_id == lost.command.command_id)
+        #expect(second.store.pendingCommandsByItemID["item-spec_approval"] == nil)
+        #expect(
+            second.store.snapshotsByID["item-spec_approval"]?.item.status == .resolved)
+    }
+
+    @Test func aRestoredRetryAcceptsAuthoritativeRejection() async throws {
+        // #115 acceptance 2, rejection branch: a restored command the
+        // daemon never recorded, for an item it does not know, draws an
+        // authoritative rejection on resend and the slot clears — the
+        // decision was definitively not recorded, nothing to recover.
+        let cache = InMemoryCacheStore()
+        cache.save(
+            CachedState(
+                cursors: nil,
+                attentionItems: [],
+                pendingCommands: [
+                    "item-ghost": .init(
+                        command: makeCommand(itemID: "item-ghost"), state: .unresolved)
+                ]))
+        let coordinator = makeCoordinator(server: MockServer(), cache: cache)
+        let model = DecisionModel(store: coordinator.store, itemID: "item-ghost")
+        #expect(model.canRetryLostResponse)
+
+        await model.retryLostResponse()
+
+        #expect(coordinator.store.pendingCommandsByItemID["item-ghost"] == nil)
+        #expect(model.submissionError != nil)
+    }
+
+    @Test func aHeartbeatEpochDiscardPreservesTheLedger() async throws {
+        // #115 acceptance 4 on the eager path: the heartbeat's epoch
+        // mismatch evicts rows and cursors immediately, but commitment
+        // is epoch-independent — the ledger survives the eviction, the
+        // persisted file, and a relaunch inside the outage window.
+        let server = MockServer()
+        let cache = InMemoryCacheStore()
+        let coordinator = makeCoordinator(server: server, cache: cache)
+        await coordinator.bootstrap()
+
+        await server.setAfterRespond { operationID in
+            if operationID == "submitCommand" { throw MockOutage() }
+        }
+        let model = DecisionModel(store: coordinator.store, itemID: "item-spec_approval")
+        await model.validate()
+        await model.submit(.approve)
+        #expect(coordinator.store.pendingCommandsByItemID["item-spec_approval"] != nil)
+        await server.setAfterRespond(nil)
+
+        await server.rotateEpoch()
+        await server.setBeforeRespond { operationID in
+            if operationID == "getSyncBootstrap" { throw MockOutage() }
+        }
+        await coordinator.heartbeat()
+
+        #expect(coordinator.store.rows.isEmpty)
+        #expect(coordinator.cursors == nil)
+        let persisted = try #require(cache.load())
+        #expect(persisted.cursors == nil)
+        #expect(persisted.attentionItems.isEmpty)
+        #expect(persisted.pendingCommands?["item-spec_approval"] != nil)
+
+        let second = makeCoordinator(server: server, cache: cache)
+        #expect(
+            second.store.pendingCommandsByItemID["item-spec_approval"]?.state
+                == .unresolved)
+    }
+
+    @Test func aBootstrapEpochDiscardPreservesTheLedger() async throws {
+        // #115 acceptance 4 on the backstop path: an epoch change first
+        // observed by a direct bootstrap discards and re-adopts in one
+        // motion; the re-persisted cache carries the new cursors and the
+        // surviving ledger together.
+        let server = MockServer()
+        let cache = InMemoryCacheStore()
+        let coordinator = makeCoordinator(server: server, cache: cache)
+        await coordinator.bootstrap()
+
+        await server.setAfterRespond { operationID in
+            if operationID == "submitCommand" { throw MockOutage() }
+        }
+        let model = DecisionModel(store: coordinator.store, itemID: "item-spec_approval")
+        await model.validate()
+        await model.submit(.approve)
+        await server.setAfterRespond(nil)
+
+        await server.rotateEpoch()
+        await coordinator.bootstrap()
+
+        let persisted = try #require(cache.load())
+        #expect(persisted.cursors?.syncEpoch == coordinator.cursors?.syncEpoch)
+        #expect(persisted.pendingCommands?["item-spec_approval"] != nil)
+        #expect(
+            coordinator.store.pendingCommandsByItemID["item-spec_approval"] != nil)
+    }
+
+    @Test func clearingTheLastLedgerEntryAfterDiscardRemovesTheFile() async throws {
+        // Once the surviving ledger settles with no cursors to keep, the
+        // file goes too: keeping one would undo the epoch eviction.
+        let cache = InMemoryCacheStore()
+        let command = makeCommand(itemID: "item-x")
+        cache.save(
+            CachedState(
+                cursors: nil,
+                attentionItems: [],
+                pendingCommands: [
+                    "item-x": .init(command: command, state: .unresolved)
+                ]))
+        let coordinator = makeCoordinator(server: MockServer(), cache: cache)
+        #expect(coordinator.store.pendingCommandsByItemID["item-x"] != nil)
+
+        coordinator.store.clearPendingCommand(
+            itemID: "item-x", commandID: command.command_id)
+
+        #expect(cache.load() == nil)
     }
 
     @Test func staleSecondDeviceSubmissionRendersTheReplacement() async throws {
