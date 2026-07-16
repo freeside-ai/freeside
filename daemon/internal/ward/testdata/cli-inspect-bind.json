@@ -1,0 +1,51 @@
+[
+ {
+  "configuration": {
+   "id": "hostile-fixture",
+   "initProcess": {
+    "arguments": ["true"],
+    "environment": [
+     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+     "PROVIDER_TOKEN=inert-fixture"
+    ],
+    "executable": "sh"
+   },
+   "labels": {},
+   "mounts": [
+    {
+     "destination": "/hostbind",
+     "options": [],
+     "source": "/Users/owner/project",
+     "type": {
+      "virtiofs": {}
+     }
+    },
+    {
+     "destination": "/mystery",
+     "options": [],
+     "source": "",
+     "type": {
+      "tmpfs": {}
+     }
+    },
+    {
+     "destination": "/unnamed",
+     "options": ["ro"],
+     "source": "",
+     "type": {
+      "volume": {}
+     }
+    }
+   ],
+   "publishedPorts": [{"hostPort": 8080}],
+   "publishedSockets": [{"hostPath": "/tmp/agent.sock"}],
+   "ssh": true
+  },
+  "id": "hostile-fixture",
+  "status": {
+   "networks": [],
+   "startedDate": "2026-07-16T21:08:49Z",
+   "state": "running"
+  }
+ }
+]

@@ -1,0 +1,29 @@
+[
+ {
+  "configuration": {
+   "creationDate": "2026-07-16T21:08:15Z",
+   "driver": "local",
+   "format": "ext4",
+   "labels": {
+    "freeside.handoff": "run-1"
+   },
+   "name": "freeside-handoff-run-1-ws",
+   "options": {
+    "size": "64M"
+   },
+   "sizeInBytes": 67108864,
+   "source": "/Users/owner/Library/Application Support/com.apple.container/volumes/freeside-handoff-run-1-ws/volume.img"
+  },
+  "id": "freeside-handoff-run-1-ws"
+ },
+ {
+  "configuration": {
+   "driver": "local",
+   "format": "ext4",
+   "labels": {},
+   "name": "unlabeled-volume",
+   "sizeInBytes": 8388608
+  },
+  "id": "unlabeled-volume"
+ }
+]
