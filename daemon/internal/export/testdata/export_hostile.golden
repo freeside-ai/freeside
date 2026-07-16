@@ -1,0 +1,53 @@
+{
+  "version": "freeside.export.manifest/v1",
+  "entries": [
+    {
+      "path_hex": "626164ff6e616d65",
+      "kind": "invalid_path",
+      "mode": null,
+      "size": null,
+      "digest": null,
+      "target": null
+    },
+    {
+      "path": "dev/fake-disk",
+      "kind": "special",
+      "mode": null,
+      "size": null,
+      "digest": null,
+      "target": null
+    },
+    {
+      "path": "link/rel",
+      "kind": "symlink",
+      "mode": null,
+      "size": null,
+      "digest": null,
+      "target": "../target"
+    },
+    {
+      "path": "payload.txt",
+      "kind": "regular",
+      "mode": "0644",
+      "size": 16,
+      "digest": "sha256:f96cdbb0b97ee3e4e0f2292db7ee767a2361d49cfa0f9b6c16a471d816cdb6fc",
+      "target": null
+    },
+    {
+      "path": "sticky/scratch",
+      "kind": "unusual_mode",
+      "mode": "01644",
+      "size": null,
+      "digest": null,
+      "target": null
+    },
+    {
+      "path": "sub/vendored",
+      "kind": "submodule",
+      "mode": null,
+      "size": null,
+      "digest": null,
+      "target": null
+    }
+  ]
+}
