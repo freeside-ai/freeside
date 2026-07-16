@@ -26,6 +26,11 @@ type RequestAuthorizer func(*http.Request) (domain.DeviceID, bool)
 func NewHTTPHandler(service *Service, authorize RequestAuthorizer) http.Handler {
 	h := httpHandler{service: service, authorize: authorize}
 	mux := http.NewServeMux()
+	// POST /pairing is the one unauthenticated route (api/openapi.yaml
+	// security: []): the requester has no credential yet, and the short-lived
+	// code is the authenticator.
+	mux.Handle("POST /pairing", http.HandlerFunc(h.pairDevice))
+	mux.Handle("POST /devices/{device_id}/revoke", h.authenticated(h.revokeDevice))
 	mux.Handle("GET /sync/bootstrap", h.authenticated(h.getBootstrap))
 	mux.Handle("GET /sync/revision", h.authenticated(h.getRevision))
 	mux.Handle("GET /attention/items", h.authenticated(h.listAttentionItems))
@@ -152,7 +157,7 @@ type decisionPayloadRequest struct {
 
 func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authenticatedDevice domain.DeviceID) {
 	var request clientCommandRequest
-	if err := decodeCommandRequest(w, r, &request); err != nil {
+	if err := decodeRequest(w, r, &request); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Message: "request body is too large"})
@@ -199,7 +204,62 @@ func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authe
 	writeJSON(w, http.StatusOK, normalizeCommandResult(result))
 }
 
-func decodeCommandRequest(w http.ResponseWriter, r *http.Request, dst *clientCommandRequest) error {
+type pairingRequest struct {
+	PairingCode *string `json:"pairing_code"`
+	DisplayName *string `json:"display_name"`
+}
+
+func (h httpHandler) pairDevice(w http.ResponseWriter, r *http.Request) {
+	var request pairingRequest
+	if err := decodeRequest(w, r, &request); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Message: "request body is too large"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: err.Error()})
+		return
+	}
+	if request.PairingCode == nil || *request.PairingCode == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "pairing_code is required"})
+		return
+	}
+	if request.DisplayName == nil || *request.DisplayName == "" {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "display_name is required"})
+		return
+	}
+	grant, err := h.service.Pair(r.Context(), *request.PairingCode, *request.DisplayName)
+	if err != nil {
+		if errors.Is(err, ErrPairingRejected) {
+			// One undifferentiated rejection (api/openapi.yaml POST /pairing
+			// 403): the response never says whether the code was unknown,
+			// expired, or consumed, so a caller cannot probe code validity.
+			writeJSON(w, http.StatusForbidden, errorResponse{Message: "pairing rejected"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Message: "internal server error"})
+		return
+	}
+	writeJSON(w, http.StatusCreated, grant)
+}
+
+func (h httpHandler) revokeDevice(w http.ResponseWriter, r *http.Request, authenticatedDevice domain.DeviceID) {
+	snapshot, err := h.service.Revoke(r.Context(), authenticatedDevice, domain.DeviceID(r.PathValue("device_id")))
+	if err != nil {
+		// The caller's in-tx gate can reject a device revoked after the
+		// middleware authorized it; that is a credential failure, not a
+		// missing target.
+		if errors.Is(err, ErrDeviceNotActive) {
+			writeJSON(w, http.StatusForbidden, errorResponse{Message: err.Error()})
+			return
+		}
+		writeReadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func decodeRequest(w http.ResponseWriter, r *http.Request, dst any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxCommandBodyBytes)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -238,6 +298,10 @@ func writeCommandError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, staleVersionResponse{
 			Message: err.Error(), ReplacementItem: itemSnapshot(closed.Item, closed.Snapshot),
 		})
+		return
+	}
+	if errors.Is(err, ErrDeviceNotActive) {
+		writeJSON(w, http.StatusForbidden, errorResponse{Message: err.Error()})
 		return
 	}
 	if errors.Is(err, store.ErrNotFound) {

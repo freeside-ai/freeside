@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -230,6 +232,193 @@ func TestHTTPCommandRejectsMalformedBodiesWithoutStateChange(t *testing.T) {
 }
 
 const maxTestCommandBodyBytes = (1 << 20) + 1
+
+// bearerRequest performs one request under an arbitrary Authorization header
+// (or none, when header is empty); the pairing and revocation flows exercise
+// the real authorizer rather than the test stub.
+func bearerRequest(t *testing.T, handler http.Handler, method, target, header string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	request := httptest.NewRequest(method, target, reader)
+	if header != "" {
+		request.Header.Set("Authorization", header)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+// TestHTTPPairingFlowEndToEnd walks the whole device lifecycle over the wire
+// with the real request authorizer: exchange a minted code (201, the
+// OpenAPI PairingGrant envelope), read with the granted token, revoke the
+// device (200, DeviceSnapshot), and observe the credential stop working
+// (401) while a second device's re-revoke returns the recorded snapshot.
+func TestHTTPPairingFlowEndToEnd(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	handler := signet.NewHTTPHandler(f.service, signet.NewRequestAuthorizer(f.store))
+
+	plaintext, _, err := f.service.MintPairingCode(ctx)
+	if err != nil {
+		t.Fatalf("MintPairingCode: %v", err)
+	}
+	response := bearerRequest(t, handler, http.MethodPost, "/pairing", "",
+		mustJSON(map[string]string{"pairing_code": plaintext, "display_name": "Ben's iPhone"}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("pairing status = %d body=%s, want 201", response.Code, response.Body.String())
+	}
+	var grant signet.PairingGrant
+	if err := json.Unmarshal(response.Body.Bytes(), &grant); err != nil {
+		t.Fatalf("decode grant: %v", err)
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	for _, key := range []string{"device_token", "device"} {
+		if _, ok := envelope[key]; !ok {
+			t.Errorf("grant envelope is missing %q: %s", key, response.Body.String())
+		}
+	}
+	if grant.DeviceToken == "" || grant.Device.EntityVersion != 1 {
+		t.Fatalf("grant = %+v, want a token and a version-1 device snapshot", grant)
+	}
+	deviceID := grant.Device.Device.ID
+
+	authorized := bearerRequest(t, handler, http.MethodGet, "/sync/revision", "Bearer "+grant.DeviceToken, nil)
+	if authorized.Code != http.StatusOK {
+		t.Fatalf("granted token read status = %d, want 200", authorized.Code)
+	}
+
+	revoke := bearerRequest(t, handler, http.MethodPost, "/devices/"+string(deviceID)+"/revoke",
+		"Bearer "+grant.DeviceToken, nil)
+	if revoke.Code != http.StatusOK {
+		t.Fatalf("revoke status = %d body=%s, want 200", revoke.Code, revoke.Body.String())
+	}
+	var snapshot signet.DeviceSnapshot
+	if err := json.Unmarshal(revoke.Body.Bytes(), &snapshot); err != nil {
+		t.Fatalf("decode revoke snapshot: %v", err)
+	}
+	if snapshot.Device.Status != domain.DeviceRevoked || snapshot.EntityVersion != 2 {
+		t.Fatalf("revoke snapshot = %+v, want revoked at entity_version 2", snapshot)
+	}
+
+	if after := bearerRequest(t, handler, http.MethodGet, "/sync/revision", "Bearer "+grant.DeviceToken, nil); after.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked token read status = %d, want 401", after.Code)
+	}
+
+	// A surviving device re-revokes the dead one: same recorded snapshot.
+	secondToken, _ := pairedDevice(t, f, "Second device")
+	again := bearerRequest(t, handler, http.MethodPost, "/devices/"+string(deviceID)+"/revoke",
+		"Bearer "+secondToken, nil)
+	if again.Code != http.StatusOK || again.Body.String() != revoke.Body.String() {
+		t.Fatalf("re-revoke = %d %s, want the recorded 200 %s",
+			again.Code, again.Body.String(), revoke.Body.String())
+	}
+}
+
+// TestHTTPPairingRejectionsAreUndifferentiated: unknown, expired, and
+// consumed codes produce byte-identical 403 responses (the anti-probing
+// contract), and malformed requests fail 400 before touching pairing state.
+func TestHTTPPairingRejectionsAreUndifferentiated(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	handler := signet.NewHTTPHandler(f.service, signet.NewRequestAuthorizer(f.store))
+
+	expired, _, err := f.service.MintPairingCode(ctx)
+	if err != nil {
+		t.Fatalf("mint expired-case code: %v", err)
+	}
+	*f.now = f.now.Add(10 * time.Minute)
+	consumed, _, err := f.service.MintPairingCode(ctx)
+	if err != nil {
+		t.Fatalf("mint consumed-case code: %v", err)
+	}
+	if _, err := f.service.Pair(ctx, consumed, "First device"); err != nil {
+		t.Fatalf("consume code: %v", err)
+	}
+
+	pairBody := func(code string) []byte {
+		return mustJSON(map[string]string{"pairing_code": code, "display_name": "Probe"})
+	}
+	responses := map[string]*httptest.ResponseRecorder{}
+	for name, code := range map[string]string{
+		"unknown": "AAAAAAAA", "expired": expired, "consumed": consumed,
+	} {
+		response := bearerRequest(t, handler, http.MethodPost, "/pairing", "", pairBody(code))
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("%s code status = %d body=%s, want 403", name, response.Code, response.Body.String())
+		}
+		responses[name] = response
+	}
+	for name, response := range responses {
+		if response.Body.String() != responses["unknown"].Body.String() {
+			t.Errorf("%s rejection %q differs from unknown %q: the 403 must not distinguish causes",
+				name, response.Body.String(), responses["unknown"].Body.String())
+		}
+	}
+
+	for name, body := range map[string][]byte{
+		"missing code":  mustJSON(map[string]string{"display_name": "Probe"}),
+		"empty code":    pairBody(""),
+		"missing label": mustJSON(map[string]string{"pairing_code": "AAAAAAAA"}),
+		"unknown field": mustJSON(map[string]string{"pairing_code": "AAAAAAAA", "display_name": "P", "extra": "x"}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := bearerRequest(t, handler, http.MethodPost, "/pairing", "", body)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d body=%s, want 400", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+// TestHTTPRevokeRequiresAuthAndKnownDevice: revocation sits behind the
+// credential (only /pairing is unauthenticated), and an unknown device is
+// 404.
+func TestHTTPRevokeRequiresAuthAndKnownDevice(t *testing.T) {
+	f := newFixture(t)
+	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
+
+	unauthenticated := bearerRequest(t, handler, http.MethodPost, "/devices/device-1/revoke", "", nil)
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated revoke status = %d, want 401", unauthenticated.Code)
+	}
+	unknown := authenticatedRequest(t, handler, http.MethodPost, "/devices/device-ghost/revoke", nil)
+	if unknown.Code != http.StatusNotFound {
+		t.Fatalf("unknown device revoke status = %d, want 404", unknown.Code)
+	}
+}
+
+// TestHTTPRevokedDeviceCommandRejected is §5.14 test 15 over the wire: with
+// the real authorizer, a revoked device's prepared command dies at the
+// credential (401) before the service gate even runs.
+func TestHTTPRevokedDeviceCommandRejected(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	handler := signet.NewHTTPHandler(f.service, signet.NewRequestAuthorizer(f.store))
+	token, deviceID := pairedDevice(t, f, "Doomed device")
+
+	if _, err := f.service.Revoke(ctx, f.device.ID, deviceID); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	before := f.revision(t)
+	prepared := commandJSON("cmd-prepared", deviceID, 1, domain.ActionStop)
+	preparedBody := make([]byte, prepared.Len())
+	if _, err := prepared.Read(preparedBody); err != nil {
+		t.Fatalf("read prepared body: %v", err)
+	}
+	response := bearerRequest(t, handler, http.MethodPost, "/commands", "Bearer "+token, preparedBody)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked device command status = %d body=%s, want 401", response.Code, response.Body.String())
+	}
+	if after := f.revision(t); after != before {
+		t.Errorf("rejected command moved revision %d -> %d", before, after)
+	}
+}
 
 func authenticatedRequest(t *testing.T, handler http.Handler, method, target string, body *bytes.Reader) *httptest.ResponseRecorder {
 	t.Helper()
