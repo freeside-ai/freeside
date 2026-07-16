@@ -3,15 +3,34 @@ import HTTPTypes
 import OpenAPIRuntime
 
 /// An in-process mock of the daemon API that implements the contract's
-/// command semantics over an in-memory item table, rather than replaying
-/// canned bodies: submission is idempotent by command_id, and a stale
-/// submission is rejected with the current snapshot as the replacement
-/// (plan §5.14 sync tests 2 and 4). #72 extends this same server for the
-/// sync surface.
+/// semantics over in-memory tables, rather than replaying canned bodies:
+/// command submission is idempotent by command_id and a stale submission
+/// is rejected with the current snapshot as the replacement (plan §5.14
+/// sync tests 2 and 4); the sync envelope carries the epoch/revision
+/// cursor (tests 8 and 11); and the device surface pairs, revokes, and
+/// authenticates bearer tokens (tests 13-16).
 public actor MockServer {
     /// Test hook run before every response; suspend it to hold a response
     /// open, throw to fail the request.
     public typealias BeforeRespond = @Sendable (_ operationID: String) async throws -> Void
+
+    /// How the mock authenticates requests: `permissive` trusts every
+    /// caller (the pre-device inbox tests), `enforcing` requires an
+    /// active paired device's bearer token on everything except pairing,
+    /// as the daemon's fail-closed injected authorizer does (#105).
+    public enum AuthMode: Sendable {
+        case permissive
+        case enforcing
+    }
+
+    /// A seedable pairing code's lifecycle (plan §5.14 sync test 13):
+    /// only a valid code pairs, and consumption is single-winner
+    /// (test 14).
+    public enum PairingCodeState: Sendable {
+        case valid
+        case expired
+        case consumed
+    }
 
     /// The normalized body the daemon persists and replays against
     /// (signet ClientCommand → domain.NewCommand): the payload and
@@ -43,15 +62,27 @@ public actor MockServer {
     private var commandsByID: [String: NormalizedCommand] = [:]
     private var resultsByCommandID: [String: Components.Schemas.CommandResult] = [:]
     private var revision: Int64 = 1
+    private var syncEpoch = "mock-epoch"
+    private var epochGeneration = 1
     private var beforeRespond: BeforeRespond?
     private var afterRespond: BeforeRespond?
     /// The trusted approved-recipe set the evidence gate re-runs
     /// against; policy state owned by the server, never by the rows.
     private let approvedRecipes: Set<String>
+    private let authMode: AuthMode
+    private var pairingCodes: [String: PairingCodeState] = [:]
+    private var devicesByID: [String: Components.Schemas.DeviceSnapshot] = [:]
+    /// Whole-token lookup: the mock never parses the token's segments,
+    /// exactly as the daemon treats it as one opaque credential whose
+    /// digest keys the stored record.
+    private var deviceIDsByToken: [String: String] = [:]
+    private var pairedDeviceCount = 0
 
     public init(
         items: [Components.Schemas.AttentionItemSnapshot] = AttentionFixtures.defaultInbox(),
-        approvedRecipes: Set<String> = [AttentionFixtures.approvedRecipeDigest]
+        approvedRecipes: Set<String> = [AttentionFixtures.approvedRecipeDigest],
+        authMode: AuthMode = .permissive,
+        pairingCodes: [String: PairingCodeState] = [:]
     ) {
         for snapshot in items {
             itemsByID[snapshot.item.id] = snapshot
@@ -61,6 +92,8 @@ public actor MockServer {
         // never run backwards relative to what this mock lists.
         revision = max(1, items.map(\.as_of_revision).max() ?? 1)
         self.approvedRecipes = approvedRecipes
+        self.authMode = authMode
+        self.pairingCodes = pairingCodes
     }
 
     public func setBeforeRespond(_ hook: BeforeRespond?) {
@@ -88,6 +121,151 @@ public actor MockServer {
     /// The server's current canonical snapshot, for test assertions.
     public func snapshot(itemID: String) -> Components.Schemas.AttentionItemSnapshot? {
         itemsByID[itemID]
+    }
+
+    /// Simulates a daemon restore (plan §5.14 sync test 8): a new sync
+    /// epoch, optionally rewinding the revision to the restored state's.
+    /// Rows are left alone; to a client the epoch change alone is what
+    /// makes its cached cursors meaningless, whatever the new revision.
+    public func rotateEpoch(revision restored: Int64? = nil) {
+        epochGeneration += 1
+        syncEpoch = "mock-epoch-\(epochGeneration)"
+        if let restored {
+            revision = max(1, restored)
+        }
+    }
+
+    // MARK: - Devices and pairing
+
+    /// Seeds a pairing code in the given lifecycle state; only `valid`
+    /// can ever be consumed. The mock keys codes by plaintext where the
+    /// daemon stores a keyed digest; the lifecycle semantics are what
+    /// the client tests exercise.
+    public func seedPairingCode(_ code: String, state: PairingCodeState = .valid) {
+        pairingCodes[code] = state
+    }
+
+    /// The device's current snapshot, for test assertions.
+    public func device(id: String) -> Components.Schemas.DeviceSnapshot? {
+        devicesByID[id]
+    }
+
+    /// Every pairing failure is one undifferentiated rejection, so an
+    /// unauthenticated caller cannot probe code validity.
+    struct PairingRejectedError: Error {}
+
+    /// Pairing and revocation instants are fixed, not wall-clock, so
+    /// device snapshots stay deterministic under test equality.
+    private static let pairedInstant = Date(timeIntervalSince1970: 1_767_323_045)
+    private static let revokedInstant = Date(timeIntervalSince1970: 1_767_326_645)
+
+    func pairDevice(
+        _ request: Components.Schemas.PairingRequest
+    ) throws -> Components.Schemas.PairingGrant {
+        guard pairingCodes[request.pairing_code] == .valid else {
+            throw PairingRejectedError()
+        }
+        // Single-winner consumption (test 14): the actor serializes
+        // requests, so the first flips the code and every other attempt,
+        // however simultaneous at its caller, finds it consumed.
+        pairingCodes[request.pairing_code] = .consumed
+        pairedDeviceCount += 1
+        let deviceID = "device-\(pairedDeviceCount)"
+        // The contract's token shape: version prefix, unpadded-base64url
+        // device id, secret. Deterministic here; entropy is the daemon's
+        // concern, and nothing in the mock parses the token back apart.
+        let idSegment = Data(deviceID.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let token = "fsd1.\(idSegment).mock-secret-\(pairedDeviceCount)"
+        // Devices are synchronized entities (#64): pairing is a
+        // client-visible write and increments the server revision.
+        revision += 1
+        let snapshot = Components.Schemas.DeviceSnapshot(
+            as_of_revision: revision,
+            entity_version: 1,
+            device: .active(
+                .init(
+                    id: deviceID,
+                    display_name: request.display_name,
+                    status: .active,
+                    paired_at: Self.pairedInstant,
+                    // The contract requires the key with an explicit
+                    // null; an empty container encodes as JSON null.
+                    revoked_at: try .init(unvalidatedValue: nil)
+                ))
+        )
+        devicesByID[deviceID] = snapshot
+        deviceIDsByToken[token] = deviceID
+        return .init(device_token: token, device: snapshot)
+    }
+
+    enum RevokeOutcome {
+        case revoked(Components.Schemas.DeviceSnapshot)
+        case unknown
+    }
+
+    func revokeDevice(id: String) -> RevokeOutcome {
+        guard let current = devicesByID[id] else { return .unknown }
+        switch current.device {
+        case .revoked:
+            // Terminal and idempotent (#64): an identical replay passes
+            // without a write, so no version or revision moves.
+            return .revoked(current)
+        case .active(let active):
+            revision += 1
+            let snapshot = Components.Schemas.DeviceSnapshot(
+                as_of_revision: revision,
+                entity_version: current.entity_version + 1,
+                device: .revoked(
+                    .init(
+                        id: active.id,
+                        display_name: active.display_name,
+                        status: .revoked,
+                        paired_at: active.paired_at,
+                        revoked_at: Self.revokedInstant
+                    ))
+            )
+            devicesByID[id] = snapshot
+            return .revoked(snapshot)
+        }
+    }
+
+    enum AuthOutcome {
+        /// Permissive mode: the caller is whoever it claims to be.
+        case anonymous
+        case device(id: String)
+        case revokedDevice(id: String)
+        case unauthorized
+    }
+
+    func authenticate(authorization: String?) -> AuthOutcome {
+        if case .permissive = authMode { return .anonymous }
+        guard let authorization, authorization.hasPrefix("Bearer "),
+            let deviceID = deviceIDsByToken[String(authorization.dropFirst("Bearer ".count))],
+            let snapshot = devicesByID[deviceID]
+        else { return .unauthorized }
+        switch snapshot.device {
+        case .active: return .device(id: deviceID)
+        case .revoked: return .revokedDevice(id: deviceID)
+        }
+    }
+
+    /// Test 16's may-branch: a revoked device's verbatim retry of its own
+    /// committed command may return the recorded result (the contract
+    /// permits recorded-result or rejection; the daemon decides in #67).
+    /// The mock takes the permissive branch so the client's rendering
+    /// path is exercisable; every other request from a revoked device
+    /// stays rejected, and this lookup writes nothing.
+    func recordedResultForRevokedRetry(
+        _ command: Components.Schemas.ClientCommand, deviceID: String
+    ) -> Components.Schemas.CommandResult? {
+        guard let original = commandsByID[command.command_id],
+            original == NormalizedCommand(command),
+            original.deviceID == deviceID
+        else { return nil }
+        return resultsByCommandID[command.command_id]
     }
 
     // MARK: - Contract semantics
@@ -284,7 +462,24 @@ public actor MockServer {
     }
 
     func serverRevision() -> Components.Schemas.ServerRevision {
-        .init(sync_epoch: "mock-epoch", revision: revision)
+        .init(sync_epoch: syncEpoch, revision: revision)
+    }
+
+    /// One canonical snapshot of every synchronized resource from a
+    /// single actor-isolated read, as the daemon's bootstrap is one
+    /// Store.Read (plan §5.14): the cursor pair and the rows can never
+    /// be torn. Deliveries, runs, and conversations stay empty until
+    /// their units seed them; the envelope still carries all four
+    /// collections, so a client decodes the real shape today.
+    func bootstrapSnapshot() throws -> Components.Schemas.BootstrapSnapshot {
+        .init(
+            sync_epoch: syncEpoch,
+            revision: revision,
+            attention_items: try listAttentionItems(),
+            attention_deliveries: [],
+            runs: [],
+            conversations: []
+        )
     }
 
     /// Read paths re-validate every row they would serve, as the
@@ -546,9 +741,56 @@ public struct MockServerTransport: ClientTransport {
         body: HTTPBody?,
         operationID: String
     ) async throws -> (HTTPResponse, HTTPBody?) {
+        // The daemon authorizes before any handler runs and fails closed
+        // (#105); pairing is the one unauthenticated operation.
+        var authenticatedDevice: String?
+        if operationID != "pairDevice" {
+            switch await server.authenticate(
+                authorization: request.headerFields[.authorization])
+            {
+            case .anonymous:
+                break
+            case .device(let id):
+                authenticatedDevice = id
+            case .revokedDevice(let id):
+                // A revoked credential authenticates nothing except test
+                // 16's recorded-replay branch on command submission.
+                if operationID == "submitCommand", let body {
+                    let data = try await Data(collecting: body, upTo: 1 << 20)
+                    if let command = try? Self.decoder.decode(
+                        Components.Schemas.ClientCommand.self, from: data),
+                        let recorded = await server.recordedResultForRevokedRetry(
+                            command, deviceID: id)
+                    {
+                        return try Self.json(status: .ok, body: recorded)
+                    }
+                }
+                return try Self.json(
+                    status: .unauthorized,
+                    body: Components.Schemas._Error(message: "unauthorized"))
+            case .unauthorized:
+                return try Self.json(
+                    status: .unauthorized,
+                    body: Components.Schemas._Error(message: "unauthorized"))
+            }
+        }
         switch operationID {
         case "getSyncRevision":
             return try Self.json(status: .ok, body: await server.serverRevision())
+        case "getSyncBootstrap":
+            do {
+                return try Self.json(status: .ok, body: await server.bootstrapSnapshot())
+            } catch let invalid as MockServer.InvalidItemError {
+                // One invalid row fails the whole bootstrap closed, as the
+                // daemon's single-read upper-bound gate does (#105).
+                return try Self.json(
+                    status: .internalServerError,
+                    body: Components.Schemas._Error(
+                        message:
+                            "bootstrap reconstruction failed: item \(invalid.itemID): \(invalid.reason)"
+                    )
+                )
+            }
         case "listAttentionItems":
             do {
                 return try Self.json(status: .ok, body: await server.listAttentionItems())
@@ -584,6 +826,36 @@ public struct MockServerTransport: ClientTransport {
                     )
                 )
             }
+        case "pairDevice":
+            guard let body else {
+                return (HTTPResponse(status: .badRequest), nil)
+            }
+            let data = try await Data(collecting: body, upTo: 1 << 20)
+            let pairing = try Self.decoder.decode(
+                Components.Schemas.PairingRequest.self, from: data)
+            do {
+                return try Self.json(status: .created, body: try await server.pairDevice(pairing))
+            } catch is MockServer.PairingRejectedError {
+                return try Self.json(
+                    status: .forbidden,
+                    body: Components.Schemas._Error(
+                        message: "the pairing code is unknown, expired, or already consumed")
+                )
+            }
+        case "revokeDevice":
+            guard let deviceID = Self.deviceID(inRevokePath: request.path) else {
+                return (HTTPResponse(status: .badRequest), nil)
+            }
+            switch await server.revokeDevice(id: deviceID) {
+            case .revoked(let snapshot):
+                return try Self.json(status: .ok, body: snapshot)
+            case .unknown:
+                return try Self.json(
+                    status: .notFound,
+                    body: Components.Schemas._Error(
+                        message: "no entity exists under the identifier")
+                )
+            }
         case "submitCommand":
             guard let body else {
                 return (HTTPResponse(status: .badRequest), nil)
@@ -591,6 +863,15 @@ public struct MockServerTransport: ClientTransport {
             let data = try await Data(collecting: body, upTo: 1 << 20)
             let command = try Self.decoder.decode(
                 Components.Schemas.ClientCommand.self, from: data)
+            // One valid device credential can never name another device
+            // in a command body (#105), ahead of the contract semantics.
+            if let authenticatedDevice, command.device_id != authenticatedDevice {
+                return try Self.json(
+                    status: .forbidden,
+                    body: Components.Schemas._Error(
+                        message: "device_id does not match the authenticated device")
+                )
+            }
             do {
                 switch try await server.submitCommand(command) {
                 case .ok(let result):
@@ -681,5 +962,13 @@ public struct MockServerTransport: ClientTransport {
 
     private static func lastPathComponent(_ path: String?) -> String? {
         path?.split(separator: "/").last.flatMap { String($0).removingPercentEncoding }
+    }
+
+    /// `/devices/{device_id}/revoke`: the id is the segment ahead of the
+    /// trailing verb.
+    private static func deviceID(inRevokePath path: String?) -> String? {
+        let parts = path?.split(separator: "/") ?? []
+        guard parts.count >= 2, parts.last == "revoke" else { return nil }
+        return String(parts[parts.count - 2]).removingPercentEncoding
     }
 }

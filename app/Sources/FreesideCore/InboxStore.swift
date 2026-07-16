@@ -4,8 +4,8 @@ import Observation
 /// The single client-side source of truth for attention item snapshots:
 /// the inbox list and every decision card read the same table, so a
 /// replacement swap or a revalidation refetch can never leave the two
-/// rendering different states. In-memory only; cache persistence and
-/// revision-gap semantics are the next unit's scope (plan §5.14).
+/// rendering different states. SyncCoordinator drives cache persistence
+/// and the §5.14 cursor semantics over this table.
 @MainActor
 @Observable
 public final class InboxStore {
@@ -16,9 +16,32 @@ public final class InboxStore {
         case failed(String)
     }
 
+    /// What the UI may claim about the cached view (plan §5.14: cached
+    /// read-only view with a freshness banner while unreachable).
+    /// Written by the sync coordinator; kept on the store because every
+    /// view and model already reads shared client state here.
+    public enum Freshness: Equatable, Sendable {
+        /// No sync round-trip has settled it yet (launching from cache,
+        /// or no coordinator in play): per-item validation decides.
+        case unvalidated
+        /// The last sync round-trip succeeded; the cache is current.
+        case fresh
+        /// The daemon is unreachable: cached read-only view.
+        case unreachable
+        /// The daemon answered 401: this device's credential no longer
+        /// authenticates (revoked, or not yet paired).
+        case unauthenticated
+    }
+
     public let client: any APIProtocol
     public let device: DeviceIdentity
     public private(set) var loadState: LoadState = .idle
+    public internal(set) var freshness: Freshness = .unvalidated
+    /// Reports every canonical `as_of_revision` this store ingests, so
+    /// the sync coordinator can advance its observed cursor; a partial
+    /// read must never advance the full-snapshot cursor (plan §5.14
+    /// sync test 11).
+    public var revisionObserver: ((Int64) -> Void)?
     public private(set) var snapshotsByID: [String: Components.Schemas.AttentionItemSnapshot] = [:]
     /// A pending command's shared lifecycle: in flight while an attempt
     /// awaits its response (no retry affordance — the request may still
@@ -110,6 +133,47 @@ public final class InboxStore {
         if !serverOrder.contains(snapshot.item.id) {
             serverOrder.append(snapshot.item.id)
         }
+        revisionObserver?(snapshot.as_of_revision)
+    }
+
+    /// Ingests a bootstrap or the persisted cache: the canonical full
+    /// snapshot replaces rows and order wholesale (per-item version
+    /// monotonicity still holds against a racing partial read), while
+    /// the pending-command ledger survives — it is client mutation
+    /// state, not readable cache, and an in-flight command can still
+    /// commit whatever the read side does.
+    public func replaceAll(with snapshots: [Components.Schemas.AttentionItemSnapshot]) {
+        var replaced: [String: Components.Schemas.AttentionItemSnapshot] = [:]
+        for snapshot in snapshots {
+            if let existing = snapshotsByID[snapshot.item.id],
+                existing.entity_version > snapshot.entity_version
+            {
+                replaced[snapshot.item.id] = existing
+            } else {
+                replaced[snapshot.item.id] = snapshot
+            }
+        }
+        snapshotsByID = replaced
+        serverOrder = snapshots.map(\.item.id)
+        loadState = .loaded
+        for snapshot in snapshots {
+            revisionObserver?(snapshot.as_of_revision)
+        }
+    }
+
+    /// Drops every cached row (an epoch change made them meaningless,
+    /// plan §5.14 sync test 8). The pending-command ledger survives:
+    /// commitment is epoch-independent, and only a verbatim resend can
+    /// settle an ambiguous command against the restored daemon.
+    public func discardSnapshots() {
+        snapshotsByID = [:]
+        serverOrder = []
+        loadState = .idle
+    }
+
+    /// Rows in server order, for cache persistence.
+    public var orderedSnapshots: [Components.Schemas.AttentionItemSnapshot] {
+        serverOrder.compactMap { snapshotsByID[$0] }
     }
 
     /// Claims the item's single in-flight slot; false when another
