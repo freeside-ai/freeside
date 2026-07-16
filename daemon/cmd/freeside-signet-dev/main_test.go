@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -119,6 +122,85 @@ func revision(t *testing.T, r readiness, bearer string) (string, int64) {
 		Revision  int64  `json:"revision"`
 	}](t, payload)
 	return state.SyncEpoch, state.Revision
+}
+
+// TestControlSubmitDeliveryDrivesThePipeline: the control route runs the real
+// delivery pipeline against a scripted ntfy — the row comes back
+// channel_accepted, the notification's deep link points into this harness's
+// own contract listener, and without -ntfy-url the same route reports the
+// pipeline's fail-closed refusal.
+func TestControlSubmitDeliveryDrivesThePipeline(t *testing.T) {
+	var (
+		clicksMu sync.Mutex
+		clicks   []string
+	)
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		clicksMu.Lock()
+		clicks = append(clicks, r.Header.Get("Click"))
+		clicksMu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(fake.Close)
+
+	h, err := run(context.Background(), config{
+		DBPath:      t.TempDir() + "/signet.db",
+		ListenAddr:  "127.0.0.1:0",
+		ControlAddr: "127.0.0.1:0",
+		NtfyURL:     fake.URL,
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := h.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	r := h.readiness()
+	token := pairNewDevice(t, r, "Notified device")
+	deviceID := deviceIDFromToken(t, token)
+	response, payload := postJSON(t, r.ControlURL+"/control/items", "",
+		map[string]any{"id": "item-notify", "item_version": 1})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("seed item status = %d body=%s, want 200", response.StatusCode, payload)
+	}
+
+	response, payload = postJSON(t, r.ControlURL+"/control/deliveries", "",
+		map[string]string{"item_id": "item-notify", "device_id": deviceID})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("submit delivery status = %d body=%s, want 200", response.StatusCode, payload)
+	}
+	delivery := decode[map[string]json.RawMessage](t, payload)["delivery"]
+	if !strings.Contains(string(delivery), `"delivery_status":"channel_accepted"`) {
+		t.Errorf("delivery = %s, want channel_accepted", delivery)
+	}
+	clicksMu.Lock()
+	if len(clicks) != 1 || clicks[0] != r.APIURL+"/attention/items/item-notify" {
+		t.Errorf("published clicks = %v, want the harness deep link", clicks)
+	}
+	clicksMu.Unlock()
+
+	_, bare := startHarness(t)
+	response, payload = postJSON(t, bare.ControlURL+"/control/deliveries", "",
+		map[string]string{"item_id": "item-notify", "device_id": deviceID})
+	if response.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("no-channel status = %d body=%s, want 503", response.StatusCode, payload)
+	}
+}
+
+// deviceIDFromToken recovers the device identity the pairing grant embeds in
+// its `fsd1.<device_id_b64>.<secret>` bearer token.
+func deviceIDFromToken(t *testing.T, token string) string {
+	t.Helper()
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("device token has %d segments, want 3", len(parts))
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || len(raw) == 0 {
+		t.Fatalf("decode device id from token: %v", err)
+	}
+	return string(raw)
 }
 
 // TestRunRefusesNonLoopback: the harness fails closed on any non-loopback

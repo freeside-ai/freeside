@@ -37,6 +37,7 @@ func main() {
 	dbPath := flags.String("db", "", "SQLite database path (required; created if absent)")
 	listenAddr := flags.String("listen", "127.0.0.1:0", "contract listener address (loopback only)")
 	controlAddr := flags.String("control", "127.0.0.1:0", "control listener address (loopback only)")
+	ntfyURL := flags.String("ntfy-url", "", "ntfy server URL for delivery submission (optional; deliveries fail closed without it)")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
@@ -44,7 +45,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	h, err := run(ctx, config{DBPath: *dbPath, ListenAddr: *listenAddr, ControlAddr: *controlAddr})
+	h, err := run(ctx, config{DBPath: *dbPath, ListenAddr: *listenAddr, ControlAddr: *controlAddr, NtfyURL: *ntfyURL})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "freeside-signet-dev:", err)
 		os.Exit(1)
@@ -67,6 +68,10 @@ type config struct {
 	DBPath      string
 	ListenAddr  string
 	ControlAddr string
+	// NtfyURL points delivery submission at an ntfy server (the convergence
+	// suite scripts a local fake). Empty means no channel is composed and
+	// POST /control/deliveries reports the pipeline's fail-closed refusal.
+	NtfyURL string
 }
 
 // readiness is the startup line: both bound URLs, so callers never guess
@@ -131,7 +136,25 @@ func run(ctx context.Context, cfg config) (*harness, error) {
 		_ = st.Close()
 		return nil, fmt.Errorf("open blob store: %w", err)
 	}
-	service := signet.NewService(st, signet.WithPairingKey(pairingKey), signet.WithBlobStore(blobs))
+	options := []signet.Option{signet.WithPairingKey(pairingKey), signet.WithBlobStore(blobs)}
+	if cfg.NtfyURL != "" {
+		// A random per-process topic key, same posture as the pairing key:
+		// topics derived by this process are meaningful only to it. The deep
+		// link points at this process's own contract listener.
+		topicKey := make([]byte, 32)
+		if _, err := rand.Read(topicKey); err != nil {
+			_ = apiListener.Close()
+			_ = controlListener.Close()
+			_ = st.Close()
+			return nil, fmt.Errorf("generate topic key: %w", err)
+		}
+		options = append(options, signet.WithNtfy(signet.NtfyConfig{
+			BaseURL:      cfg.NtfyURL,
+			TopicKey:     topicKey,
+			ClickBaseURL: "http://" + apiListener.Addr().String(),
+		}))
+	}
+	service := signet.NewService(st, options...)
 
 	h := &harness{
 		store:         st,
@@ -204,6 +227,7 @@ func newControlHandler(service *signet.Service, st *store.Store) http.Handler {
 	mux.Handle("POST /control/pairing-codes", http.HandlerFunc(c.mintPairingCode))
 	mux.Handle("POST /control/epoch", http.HandlerFunc(c.rotateEpoch))
 	mux.Handle("POST /control/items", http.HandlerFunc(c.putItem))
+	mux.Handle("POST /control/deliveries", http.HandlerFunc(c.submitDelivery))
 	return mux
 }
 
@@ -297,6 +321,48 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	controlJSON(w, http.StatusOK, map[string]any{"revision": state.Revision})
+}
+
+// submitDeliveryRequest drives one notification attempt through the real
+// pipeline (delivery row, timing recompute, ntfy publish).
+type submitDeliveryRequest struct {
+	ItemID   string `json:"item_id"`
+	DeviceID string `json:"device_id"`
+}
+
+func (c controlHandler) submitDelivery(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxControlBodyBytes))
+	if err != nil {
+		controlError(w, err)
+		return
+	}
+	var req submitDeliveryRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		controlJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+	row, err := c.service.SubmitDelivery(r.Context(), domain.ItemID(req.ItemID), domain.DeviceID(req.DeviceID))
+	switch {
+	case err == nil:
+	case errors.Is(err, signet.ErrNotifierUnavailable):
+		controlJSON(w, http.StatusServiceUnavailable, map[string]string{"message": err.Error()})
+		return
+	case errors.Is(err, signet.ErrDeviceNotActive),
+		errors.Is(err, signet.ErrItemNotOpenForDelivery),
+		errors.Is(err, store.ErrNotFound):
+		controlJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	case errors.Is(err, signet.ErrChannelRejected):
+		// The submitted-only row is committed and honest; the provider said
+		// no. 502 keeps a scripted channel failure distinct from a harness
+		// fault.
+		controlJSON(w, http.StatusBadGateway, map[string]any{"message": err.Error(), "delivery": row})
+		return
+	default:
+		controlError(w, err)
+		return
+	}
+	controlJSON(w, http.StatusOK, map[string]any{"delivery": row})
 }
 
 func controlError(w http.ResponseWriter, err error) {
