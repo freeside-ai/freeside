@@ -27,5 +27,19 @@ public struct FreesideRootView: View {
             }
         }
         .task { await store.refresh() }
+        .preferredColorScheme(Self.forcedColorScheme)
+    }
+
+    /// Screenshot and automation workflows pin the appearance per launch
+    /// (`open FreesideMac.app --args -FreesideColorScheme light|dark`)
+    /// instead of mutating the user's system appearance setting, which is
+    /// host state outside the app under test. Unset or unrecognized means
+    /// follow the system, the default for every ordinary launch.
+    static var forcedColorScheme: ColorScheme? {
+        switch UserDefaults.standard.string(forKey: "FreesideColorScheme") {
+        case "light": .light
+        case "dark": .dark
+        default: nil
+        }
     }
 }

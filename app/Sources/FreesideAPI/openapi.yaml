@@ -963,8 +963,10 @@ components:
         reason:
           type: string
         requested_decision:
+          # May be empty: the read-only `blocked` type offers no action
+          # (plan §4). Which types must offer at least one action is signet
+          # policy, enforced server-side, not schema structure.
           type: array
-          minItems: 1
           items:
             $ref: "#/components/schemas/Action"
         evidence_snapshot:

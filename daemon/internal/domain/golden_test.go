@@ -89,6 +89,25 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The read-only blocked type offers no action (plan §4; relaxed by #96):
+	// this fixture pins the actionless shape, with every collection rendering
+	// as the required non-null empty array the wire contract declares.
+	blockedItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-2", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
+		Type:    domain.AttentionBlocked, Priority: domain.PriorityNormal,
+		Reason:            "waiting on an external dependency",
+		RequestedDecision: []domain.Action{},
+		EvidenceSnapshot:  []domain.Artifact{},
+		AgentClaims:       []domain.AgentClaim{},
+		ItemVersion:       1,
+		InterruptionClass: domain.InterruptionPlannedGate,
+		Status:            domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	device := domain.Device{
 		ID: "device-1", DisplayName: "Ben's iPhone",
 		Status: domain.DeviceActive, PairedAt: ts,
@@ -151,6 +170,7 @@ func TestGolden(t *testing.T) {
 		value any
 	}{
 		{"attention_item", item},
+		{"attention_item_blocked", blockedItem},
 		{"command", command},
 		{"subject", subject},
 		{"agent_claim", agentClaim},

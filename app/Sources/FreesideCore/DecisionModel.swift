@@ -65,10 +65,10 @@ public final class DecisionModel {
     /// Whether this unit can submit the action for this item: pending
     /// actions' accepted effects (conversations, parameters, proposal
     /// revisions) belong to later units, and signet policy pins blocked
-    /// read-only (#97) — its placeholder set exists only to satisfy the
-    /// contract's non-empty requested_decision until #96. The boundary
-    /// rejects both, so the card offers them disabled instead of as
-    /// buttons that can only fail.
+    /// read-only (#97) — since #96 it offers the empty set, so the
+    /// blocked guard is a backstop for a stray offered action. The
+    /// boundary rejects both, so the card offers them disabled instead
+    /// of as buttons that can only fail.
     public func isSubmittable(_ action: Components.Schemas.Action) -> Bool {
         guard snapshot?.item._type != .blocked else { return false }
         return ActionOutcome.of(action) != .pending

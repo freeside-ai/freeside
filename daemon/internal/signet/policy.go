@@ -42,9 +42,8 @@ var allowedActionsByType = map[domain.AttentionType]map[domain.Action]struct{}{
 		domain.ActionAcknowledge, domain.ActionRunDoctor, domain.ActionStopUnattended,
 	),
 	// blocked is a read-only consolidation of external waits (§5.12). The plan
-	// assigns it no action. The shared domain/API contracts currently reject an
-	// empty requested_decision; #96 owns that contract relaxation while this
-	// table pins the authoritative signet policy now.
+	// assigns it no action; the shared domain/API contracts permit the empty
+	// set (#96), and this table keeps the per-type cardinality rule here.
 	domain.AttentionBlocked: actionSet(),
 }
 

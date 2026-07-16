@@ -382,17 +382,17 @@ import Testing
     }
 
     @Test func blockedItemAcceptsNoActionEvenWhenOffered() async throws {
-        // Signet policy pins blocked read-only (#97): the fixture's
-        // placeholder requested_decision satisfies the contract until
-        // #96, but acceptance rejects every action on the type.
+        // Signet policy pins blocked read-only (#97): since #96 the
+        // canonical fixture offers the empty set, so any command's
+        // action is rejected as not offered, without effect.
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
         let before = try await client
             .getAttentionItem(path: .init(item_id: "item-blocked")).ok.body.json
-        #expect(!before.item.requested_decision.isEmpty)
+        #expect(before.item.requested_decision.isEmpty)
 
         let output = try await client.submitCommand(
-            body: .json(Self.command(id: "cmd-blocked", against: before)))
+            body: .json(Self.command(id: "cmd-blocked", against: before, action: .acknowledge)))
         guard case .undocumented(let statusCode, _) = output else {
             Issue.record("expected an authoritative rejection, got \(output)")
             return
@@ -402,6 +402,21 @@ import Testing
         let after = try await client
             .getAttentionItem(path: .init(item_id: "item-blocked")).ok.body.json
         #expect(after == before)
+
+        // "Even when offered": a seeded blocked row that forges an
+        // offered action fails the per-type policy re-gate for that very
+        // action — blocked's allowed set is empty, as on the daemon.
+        var forged = AttentionFixtures.fixture(type: .blocked)
+        forged.item.requested_decision = [.acknowledge]
+        let forgedServer = MockServer(items: [forged])
+        let forgedClient = APIClientFactory.mock(server: forgedServer)
+        let rejected = try await forgedClient.submitCommand(
+            body: .json(Self.command(id: "cmd-blocked-forged", against: forged)))
+        guard case .undocumented(let forgedStatus, _) = rejected else {
+            Issue.record("expected an authoritative rejection, got \(rejected)")
+            return
+        }
+        #expect(forgedStatus == 422)
     }
 
     @Test func actionTheItemDidNotOfferIsRejectedWithoutSideEffect() async throws {

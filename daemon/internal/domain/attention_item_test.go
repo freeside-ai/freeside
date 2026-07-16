@@ -192,6 +192,36 @@ func TestNewAttentionItemEmptyBindingIsArray(t *testing.T) {
 	}
 }
 
+// TestNewAttentionItemActionless pins the #96 relaxation: an empty
+// requested_decision is structurally valid for any type (which types must
+// offer an action is signet policy, not domain), and an explicitly empty
+// input serializes as the required non-null array the wire contract declares.
+func TestNewAttentionItemActionless(t *testing.T) {
+	for _, typ := range []domain.AttentionType{domain.AttentionBlocked, domain.AttentionSpecApproval} {
+		t.Run(string(typ), func(t *testing.T) {
+			in := validItemInput(typ)
+			in.RequestedDecision = []domain.Action{}
+			item, err := domain.NewAttentionItem(in, nil)
+			if err != nil {
+				t.Fatalf("NewAttentionItem(%s, no actions): %v", typ, err)
+			}
+			body, err := json.Marshal(item)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(body), `"requested_decision":[]`) {
+				t.Errorf("serialized item missing requested_decision:[] — got %s", body)
+			}
+		})
+	}
+	// nil means the same thing; it round-trips through Validate too.
+	in := validItemInput(domain.AttentionBlocked)
+	in.RequestedDecision = nil
+	if _, err := domain.NewAttentionItem(in, nil); err != nil {
+		t.Fatalf("NewAttentionItem(blocked, nil actions): %v", err)
+	}
+}
+
 // TestValidateRejectsBindingMismatch is the reconstruction backstop for
 // acceptance 1: an item decoded from the store whose artifact_digests does not
 // equal its rendered evidence/claim digests must not validate — this is the
@@ -352,11 +382,6 @@ func TestNewAttentionItemRejects(t *testing.T) {
 				}
 			},
 			wantErr: domain.ErrArtifactIdentityConflict,
-		},
-		{
-			name:    "no requested decision",
-			mutate:  func(in *domain.AttentionItemInput) { in.RequestedDecision = nil },
-			wantErr: domain.ErrNoActions,
 		},
 		{
 			name:    "invalid priority",
