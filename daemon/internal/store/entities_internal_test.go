@@ -300,6 +300,326 @@ func TestGetRejectsForgedMetadata(t *testing.T) {
 	}
 }
 
+// TestListRejectsForgedMetadata: the collection reads reconstruct through
+// the same scan functions as the Gets (#98 acceptance 2), so one row with
+// store-impossible metadata fails the whole list closed, even beside a valid
+// sibling row. Internal test: the bad rows are written as raw SQL.
+func TestListRejectsForgedMetadata(t *testing.T) {
+	ctx := context.Background()
+	db := openRaw(t)
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatalf("seedEpoch: %v", err)
+	}
+	s := &Store{db: db}
+
+	// One valid sibling row per table proves the list fails because of the
+	// forged row, not the fixtures, and that a corrupt row is never skipped.
+	runID := domain.RunID("run-b")
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-b", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-b", RunID: &runID},
+		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Reason:            "forged-metadata sibling fixture",
+		RequestedDecision: []domain.Action{domain.ActionOpenPR},
+		PRHeadSHA:         "cafebabe", ItemVersion: 1,
+		InterruptionClass: domain.InterruptionPlannedGate,
+		Status:            domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewAttentionItem: %v", err)
+	}
+	bodies := map[string]string{}
+	for entity, v := range map[string]validator{
+		"run-a":  domain.Run{ID: "run-a", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"},
+		"run-b":  domain.Run{ID: "run-b", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"},
+		"conv-a": domain.Conversation{ID: "conv-a"},
+		"conv-b": domain.Conversation{ID: "conv-b"},
+		"item-b": item,
+		"delivery-a": domain.AttentionDelivery{
+			ItemID: "item-b", DeviceID: "device-1", Channel: "ntfy", Attempt: 1,
+			SubmittedAt: time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC), Status: domain.DeliverySubmitted,
+		},
+		"delivery-b": domain.AttentionDelivery{
+			ItemID: "item-b", DeviceID: "device-1", Channel: "ntfy", Attempt: 2,
+			SubmittedAt: time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC), Status: domain.DeliverySubmitted,
+		},
+	} {
+		body, err := encode(v)
+		if err != nil {
+			t.Fatalf("encode %s: %v", entity, err)
+		}
+		bodies[entity] = body
+	}
+	// The forged item body reuses the sibling's shape under its own id.
+	forgedItem := item
+	forgedItem.ID = "item-a"
+	forgedItem.Subject.ID = "run-a"
+	forgedRunID := domain.RunID("run-a")
+	forgedItem.Subject.RunID = &forgedRunID
+	forgedItemBody, err := encode(forgedItem)
+	if err != nil {
+		t.Fatalf("encode forged item: %v", err)
+	}
+	bodies["item-a"] = forgedItemBody
+
+	// Valid siblings ("-b") at metadata (1, 1); the "-a" row of each table
+	// carries the forged metadata per case.
+	seed := func(ev, rev int64) {
+		t.Helper()
+		for _, reset := range []string{
+			`DELETE FROM attention_deliveries`,
+			`DELETE FROM attention_items`,
+			`DELETE FROM conversations`,
+			`DELETE FROM runs`,
+		} {
+			if _, err := db.ExecContext(ctx, reset); err != nil {
+				t.Fatalf("%s: %v", reset, err)
+			}
+		}
+		stmts := []struct {
+			sql  string
+			args []any
+		}{
+			{`INSERT INTO runs (id, project_id, policy_digest, entity_version, as_of_revision, body) VALUES ('run-a', 'proj-1', 'sha256:policy', ?, ?, ?)`, []any{ev, rev, bodies["run-a"]}},
+			{`INSERT INTO runs (id, project_id, policy_digest, entity_version, as_of_revision, body) VALUES ('run-b', 'proj-1', 'sha256:policy', 1, 1, ?)`, []any{bodies["run-b"]}},
+			{`INSERT INTO conversations (id, entity_version, as_of_revision, body) VALUES ('conv-a', ?, ?, ?)`, []any{ev, rev, bodies["conv-a"]}},
+			{`INSERT INTO conversations (id, entity_version, as_of_revision, body) VALUES ('conv-b', 1, 1, ?)`, []any{bodies["conv-b"]}},
+			{`INSERT INTO attention_items (id, project_id, conversation_id, entity_version, as_of_revision, body) VALUES ('item-a', 'proj-1', NULL, ?, ?, ?)`, []any{ev, rev, bodies["item-a"]}},
+			{`INSERT INTO attention_items (id, project_id, conversation_id, entity_version, as_of_revision, body) VALUES ('item-b', 'proj-1', NULL, 1, 1, ?)`, []any{bodies["item-b"]}},
+			{`INSERT INTO attention_deliveries (item_id, device_id, channel, attempt, entity_version, as_of_revision, body) VALUES ('item-b', 'device-1', 'ntfy', 1, ?, ?, ?)`, []any{ev, rev, bodies["delivery-a"]}},
+			{`INSERT INTO attention_deliveries (item_id, device_id, channel, attempt, entity_version, as_of_revision, body) VALUES ('item-b', 'device-1', 'ntfy', 2, 1, 1, ?)`, []any{bodies["delivery-b"]}},
+		}
+		for _, stmt := range stmts {
+			if _, err := db.ExecContext(ctx, stmt.sql, stmt.args...); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+		}
+	}
+	lists := map[string]func(tx *ReadTx) error{
+		"runs": func(tx *ReadTx) error {
+			_, err := tx.ListRuns(ctx)
+			return err
+		},
+		"conversations": func(tx *ReadTx) error {
+			_, err := tx.ListConversations(ctx)
+			return err
+		},
+		"items": func(tx *ReadTx) error {
+			_, err := tx.ListAttentionItems(ctx)
+			return err
+		},
+		"deliveries": func(tx *ReadTx) error {
+			_, err := tx.ListAttentionDeliveries(ctx)
+			return err
+		},
+	}
+
+	// Control: with valid metadata everywhere, every list reconstructs both
+	// rows, so the forged cases below fail on the metadata alone.
+	seed(1, 1)
+	for name, list := range lists {
+		if err := s.Read(ctx, func(tx *ReadTx) error { return list(tx) }); err != nil {
+			t.Fatalf("control %s list: %v", name, err)
+		}
+	}
+
+	forged := []struct {
+		name    string
+		ev, rev int64
+	}{
+		{"entity_version zero", 0, 1},
+		{"entity_version negative", -1, 1},
+		{"as_of_revision zero", 1, 0},
+		{"as_of_revision negative", 1, -1},
+	}
+	for _, tc := range forged {
+		seed(tc.ev, tc.rev)
+		for name, list := range lists {
+			t.Run(name+" "+tc.name, func(t *testing.T) {
+				err := s.Read(ctx, func(tx *ReadTx) error { return list(tx) })
+				if !errors.Is(err, errRowInconsistent) {
+					t.Fatalf("error = %v, want errRowInconsistent", err)
+				}
+			})
+		}
+	}
+}
+
+// TestListRejectsInconsistentRow: a listed row whose JSON body disagrees with
+// an extracted key column fails the whole list closed, exactly like the
+// single Get (#98 acceptance 2), including both directions of the item's
+// nullable conversation_id column. Internal test: the corrupt rows are
+// written as raw SQL.
+func TestListRejectsInconsistentRow(t *testing.T) {
+	ctx := context.Background()
+	db := openRaw(t)
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatalf("seedEpoch: %v", err)
+	}
+	s := &Store{db: db}
+
+	runBody, err := encode(domain.Run{
+		ID: "run-1", ProjectID: "proj-1",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+	})
+	if err != nil {
+		t.Fatalf("encode run: %v", err)
+	}
+	conversationBody, err := encode(domain.Conversation{ID: "conv-1"})
+	if err != nil {
+		t.Fatalf("encode conversation: %v", err)
+	}
+	deliveryBody, err := encode(domain.AttentionDelivery{
+		ItemID: "item-1", DeviceID: "device-1", Channel: "ntfy", Attempt: 1,
+		SubmittedAt: time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
+		Status:      domain.DeliverySubmitted,
+	})
+	if err != nil {
+		t.Fatalf("encode delivery: %v", err)
+	}
+	runID := domain.RunID("run-1")
+	convID := domain.ConversationID("conv-1")
+	newItem := func(bind *domain.ConversationID) domain.AttentionItem {
+		t.Helper()
+		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+			ID: "item-1", ProjectID: "proj-1",
+			Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
+			Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+			Reason:            "inconsistent-row fixture",
+			RequestedDecision: []domain.Action{domain.ActionOpenPR},
+			PRHeadSHA:         "cafebabe", ItemVersion: 1,
+			InterruptionClass: domain.InterruptionPlannedGate,
+			ConversationID:    bind, Status: domain.StatusOpen,
+		}, nil)
+		if err != nil {
+			t.Fatalf("NewAttentionItem: %v", err)
+		}
+		return item
+	}
+	unboundItemBody, err := encode(newItem(nil))
+	if err != nil {
+		t.Fatalf("encode unbound item: %v", err)
+	}
+	boundItemBody, err := encode(newItem(&convID))
+	if err != nil {
+		t.Fatalf("encode bound item: %v", err)
+	}
+	// The conversation row satisfies the items' conversation_id foreign key
+	// and stands as every list's valid sibling alongside the corrupt row.
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO conversations (id, entity_version, as_of_revision, body) VALUES ('conv-1', 1, 1, ?)`,
+		conversationBody); err != nil {
+		t.Fatalf("insert conversation: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		seed func()
+		list func(tx *ReadTx) error
+	}{
+		{
+			"run project_id column differs from body",
+			func() {
+				if _, err := db.ExecContext(ctx,
+					`INSERT INTO runs (id, project_id, policy_digest, entity_version, as_of_revision, body) VALUES ('run-1', 'proj-other', 'sha256:policy', 1, 1, ?)`,
+					runBody); err != nil {
+					t.Fatalf("insert run: %v", err)
+				}
+			},
+			func(tx *ReadTx) error {
+				_, err := tx.ListRuns(ctx)
+				return err
+			},
+		},
+		{
+			"conversation id column differs from body",
+			func() {
+				if _, err := db.ExecContext(ctx,
+					`INSERT INTO conversations (id, entity_version, as_of_revision, body) VALUES ('conv-other', 1, 1, ?)`,
+					conversationBody); err != nil {
+					t.Fatalf("insert conversation: %v", err)
+				}
+			},
+			func(tx *ReadTx) error {
+				_, err := tx.ListConversations(ctx)
+				return err
+			},
+		},
+		{
+			"item conversation_id column NULL, body bound",
+			func() {
+				if _, err := db.ExecContext(ctx,
+					`INSERT INTO attention_items (id, project_id, conversation_id, entity_version, as_of_revision, body) VALUES ('item-1', 'proj-1', NULL, 1, 1, ?)`,
+					boundItemBody); err != nil {
+					t.Fatalf("insert item: %v", err)
+				}
+			},
+			func(tx *ReadTx) error {
+				_, err := tx.ListAttentionItems(ctx)
+				return err
+			},
+		},
+		{
+			"item conversation_id column set, body unbound",
+			func() {
+				if _, err := db.ExecContext(ctx,
+					`INSERT INTO attention_items (id, project_id, conversation_id, entity_version, as_of_revision, body) VALUES ('item-1', 'proj-1', 'conv-1', 1, 1, ?)`,
+					unboundItemBody); err != nil {
+					t.Fatalf("insert item: %v", err)
+				}
+			},
+			func(tx *ReadTx) error {
+				_, err := tx.ListAttentionItems(ctx)
+				return err
+			},
+		},
+		{
+			"delivery attempt column differs from body",
+			func() {
+				if _, err := db.ExecContext(ctx,
+					`INSERT INTO attention_items (id, project_id, conversation_id, entity_version, as_of_revision, body) VALUES ('item-1', 'proj-1', NULL, 1, 1, ?)`,
+					unboundItemBody); err != nil {
+					t.Fatalf("insert parent item: %v", err)
+				}
+				if _, err := db.ExecContext(ctx,
+					`INSERT INTO attention_deliveries (item_id, device_id, channel, attempt, entity_version, as_of_revision, body) VALUES ('item-1', 'device-1', 'ntfy', 2, 1, 1, ?)`,
+					deliveryBody); err != nil {
+					t.Fatalf("insert delivery: %v", err)
+				}
+			},
+			func(tx *ReadTx) error {
+				_, err := tx.ListAttentionDeliveries(ctx)
+				return err
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, reset := range []string{
+				`DELETE FROM attention_deliveries`,
+				`DELETE FROM attention_items`,
+				`DELETE FROM runs`,
+				`DELETE FROM conversations WHERE id != 'conv-1'`,
+			} {
+				if _, err := db.ExecContext(ctx, reset); err != nil {
+					t.Fatalf("%s: %v", reset, err)
+				}
+			}
+			tc.seed()
+			err := s.Read(ctx, func(tx *ReadTx) error { return tc.list(tx) })
+			if !errors.Is(err, errRowInconsistent) {
+				t.Fatalf("error = %v, want errRowInconsistent", err)
+			}
+		})
+	}
+}
+
 // TestSnapshotRejectsForgedMetadata: the snapshot metadata is store-stamped,
 // so values the Puts cannot produce (a zero or negative version or revision,
 // or a command row past its write-once entity_version 1) mark a forged or
