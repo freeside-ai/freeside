@@ -1,0 +1,78 @@
+{
+  "version": "freeside.export.manifest/v1",
+  "entries": [
+    {
+      "path": ".git",
+      "kind": "git_dir",
+      "mode": null,
+      "size": null,
+      "digest": null,
+      "target": null
+    },
+    {
+      "path_hex": "626164ff6e616d65",
+      "kind": "invalid_path",
+      "mode": null,
+      "size": null,
+      "digest": null,
+      "target": null
+    },
+    {
+      "path": "bin/tool",
+      "kind": "regular",
+      "mode": "0755",
+      "size": 64,
+      "digest": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+      "target": null
+    },
+    {
+      "path": "docs/readme.md",
+      "kind": "regular",
+      "mode": "0644",
+      "size": 0,
+      "digest": "sha256:2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+      "target": null
+    },
+    {
+      "path": "legacy/setuid-helper",
+      "kind": "unusual_mode",
+      "mode": "04755",
+      "size": null,
+      "digest": null,
+      "target": null
+    },
+    {
+      "path": "link-to-readme",
+      "kind": "symlink",
+      "mode": null,
+      "size": null,
+      "digest": null,
+      "target": "docs/readme.md"
+    },
+    {
+      "path": "media/huge.bin",
+      "kind": "regular",
+      "mode": "0644",
+      "size": 1073741824,
+      "digest": "sha256:3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c",
+      "target": null,
+      "blob_omitted": true
+    },
+    {
+      "path": "pipes/queue",
+      "kind": "special",
+      "mode": null,
+      "size": null,
+      "digest": null,
+      "target": null
+    },
+    {
+      "path": "vendor/dep",
+      "kind": "submodule",
+      "mode": null,
+      "size": null,
+      "digest": null,
+      "target": null
+    }
+  ]
+}
