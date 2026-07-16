@@ -539,17 +539,16 @@ func TestSubmitRejectsInvalidAndUnknown(t *testing.T) {
 	})
 
 	t.Run("pending-unit actions rejected without side effects", func(t *testing.T) {
-		// The full pending class: actions whose transaction a later unit owns
-		// (discuss's conversation, #68; snooze's timing update;
-		// start_with_changes's revised artifact and supersede) or whose
-		// decision carries parameters or conversation-borne content
-		// DecisionPayload cannot represent yet. Each must fail loudly
-		// instead of recording a command whose data is silently dropped
-		// (and discuss must not be double-acceptable at one item version,
-		// §5.14 test 7).
+		// The remaining pending class: actions whose transaction a later unit
+		// owns (snooze's timing update; start_with_changes's revised artifact
+		// and supersede), whose decision carries parameters DecisionPayload
+		// cannot represent yet, or whose conversation-borne answer's workflow
+		// effect is the Wave 2 engine's. Each must fail loudly instead of
+		// recording a command whose data is silently dropped. Discuss left
+		// this class with #68's conversation transaction (conversation_test.go).
 		before := f.revision(t)
 		pending := []domain.Action{
-			domain.ActionDiscuss, domain.ActionSnooze, domain.ActionStartWithChanges,
+			domain.ActionSnooze, domain.ActionStartWithChanges,
 			domain.ActionContinueUnderPolicy, domain.ActionConvertToPolicy,
 			domain.ActionAdjudicate, domain.ActionRetryWithCapability,
 			domain.ActionChooseAlternate, domain.ActionRequestChanges,
@@ -575,9 +574,38 @@ func TestSubmitRejectsInvalidAndUnknown(t *testing.T) {
 		if _, err := f.service.Submit(ctx, f.command("cmd-reused", domain.ActionOpenPR)); err != nil {
 			t.Fatalf("Submit: %v", err)
 		}
-		reused := f.command("cmd-reused", domain.ActionDiscuss)
+		reused := f.command("cmd-reused", domain.ActionSnooze)
 		if _, err := f.service.Submit(ctx, reused); !errors.Is(err, store.ErrImmutableConflict) {
 			t.Errorf("reused id error = %v, want ErrImmutableConflict", err)
+		}
+	})
+
+	t.Run("content policy is judged inside the new-command branch", func(t *testing.T) {
+		// Discuss without a message is malformed content, not an unsupported
+		// action; a decision action carrying content is rejected rather than
+		// silently stripped; and neither rejection consumes a revision. A
+		// committed command_id replayed with different content still gets
+		// command-id-first judgment (the #65 ordering): the changed body is
+		// the conflict, never a content-policy error that would hide it.
+		before := f.revision(t)
+		if _, err := f.service.Submit(ctx, f.command("cmd-discuss-empty", domain.ActionDiscuss)); !errors.Is(err, signet.ErrMessageRequired) {
+			t.Errorf("empty discuss error = %v, want ErrMessageRequired", err)
+		}
+		withContent := f.command("cmd-content", domain.ActionOpenPR)
+		withContent.Payload.Message = "stray"
+		if _, err := f.service.Submit(ctx, withContent); !errors.Is(err, signet.ErrContentNotAllowed) {
+			t.Errorf("open_pr with message error = %v, want ErrContentNotAllowed", err)
+		}
+		if after := f.revision(t); after != before {
+			t.Errorf("content rejection moved the revision %d → %d", before, after)
+		}
+		if _, err := f.service.Submit(ctx, f.command("cmd-reused-2", domain.ActionOpenPR)); err != nil {
+			t.Fatalf("Submit: %v", err)
+		}
+		replayed := f.command("cmd-reused-2", domain.ActionOpenPR)
+		replayed.Payload.Message = "stray"
+		if _, err := f.service.Submit(ctx, replayed); !errors.Is(err, store.ErrImmutableConflict) {
+			t.Errorf("reused id with changed content error = %v, want ErrImmutableConflict", err)
 		}
 	})
 }

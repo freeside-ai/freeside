@@ -27,8 +27,13 @@ type Service struct {
 	// pairing is unavailable and fails closed; the daemon composition supplies
 	// it.
 	pairingKey []byte
-	now        func() time.Time
-	rand       io.Reader
+	// blobs is the digest-addressed attachment store (plan §5.14 "attachments
+	// in the artifact store by digest"). Nil means attachments are unavailable
+	// and any command or completion referencing one fails closed; the daemon
+	// composition supplies it.
+	blobs *BlobStore
+	now   func() time.Time
+	rand  io.Reader
 }
 
 // Option configures a Service. The clock and randomness sources exist so
@@ -52,6 +57,13 @@ func WithClock(now func() time.Time) Option {
 // and token secrets.
 func WithRand(r io.Reader) Option {
 	return func(s *Service) { s.rand = r }
+}
+
+// WithBlobStore supplies the digest-addressed attachment store. Without it,
+// attachment upload/read and any command or agent completion referencing an
+// attachment fail closed.
+func WithBlobStore(blobs *BlobStore) Option {
+	return func(s *Service) { s.blobs = blobs }
 }
 
 func NewService(st *store.Store, opts ...Option) *Service {
@@ -98,6 +110,7 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 		CommandID: in.CommandID, DeviceID: in.DeviceID, ItemID: in.Payload.ItemID,
 		ItemVersion: in.Payload.ItemVersion, PRHeadSHA: in.Payload.PRHeadSHA,
 		ArtifactDigests: in.Payload.ArtifactDigests, Action: in.Payload.Action,
+		Message: in.Payload.Message, Attachments: in.Payload.Attachments,
 	})
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, err)
@@ -144,6 +157,14 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 				return fmt.Errorf("submit command %q: action %q: %w",
 					command.CommandID, command.Action, ErrUnsupportedAction)
 			}
+			// The per-action content policy sits with the pending gate, inside
+			// the new-command branch: a committed command_id retried with
+			// malformed content still gets command-id-first idempotent
+			// judgment (the #65 ordering), and an error here rolls the Write
+			// back, so no revision is consumed.
+			if err := s.validateCommandContent(command); err != nil {
+				return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+			}
 			if item.Status != domain.StatusOpen {
 				return fmt.Errorf("submit command %q: %w", command.CommandID,
 					&ClosedItemError{CommandID: command.CommandID, Item: item, Snapshot: snap})
@@ -158,13 +179,21 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 			if err := tx.PutCommand(ctx, command); err != nil {
 				return translateRejection(err, snap)
 			}
-			if status, kind := actionOutcome(command.Action); kind == outcomeConcludes {
+			switch status, kind := actionOutcome(command.Action); kind {
+			case outcomeConcludes:
 				next := item
 				next.ItemVersion++
 				next.Status = status
 				if err := tx.PutAttentionItem(ctx, next); err != nil {
 					return err
 				}
+			case outcomeDiscusses:
+				if err := s.applyDiscuss(ctx, tx, command, item, snap); err != nil {
+					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+				}
+			case outcomeRecords, outcomePending:
+				// Records: the command record is the whole effect. Pending:
+				// unreachable, rejected above before PutCommand.
 			}
 		} else {
 			// A byte-identical replay is a no-op inside PutCommand; a changed
@@ -202,6 +231,11 @@ const (
 	// outcomeRecords: the command record is the whole server-side effect; the
 	// item is left untouched.
 	outcomeRecords
+	// outcomeDiscusses: the discuss transaction (plan §5.14): append the
+	// user's message, supersede the item version, record the invocation, and
+	// commit the AgentInvocationRequested outbox intent, all in the accepting
+	// transaction (applyDiscuss).
+	outcomeDiscusses
 	// outcomePending: the action's accepted effect is a transaction a later
 	// unit owns; Submit rejects it with ErrUnsupportedAction rather than
 	// record a command whose effect would be silently dropped.
@@ -215,19 +249,20 @@ const (
 // item effect by design: open_pr is navigation, not resolution; acknowledge
 // means seen, never resolved; mark_seen decides nothing; inspect_trust_failure
 // is navigation; run_doctor leaves a system_health item blocking until the
-// diagnostic clears. Pending actions are rejected before any transaction
-// because their accepted effect cannot be represented yet: discuss needs
-// #68's conversation transaction (and must not be double-acceptable at one
-// item version meanwhile, §5.14 test 7); snooze needs the timing update;
-// start_with_changes needs the revised proposal artifact and supersede
-// transaction (plan §4); continue_under_policy, convert_to_policy,
-// adjudicate, retry_with_capabilities, and choose_alternate_profile carry
-// decision parameters DecisionPayload has no field for (a #22 contract
-// widening when their consumers land); and request_changes, answer_and_retry,
-// answer_without_retry, and return_to_agent carry content that rides the
-// conversation channel #68 owns. Recording any of them today would silently
-// drop the user's data. A behaviour switch, no default, so a new Action
-// member must declare its outcome here.
+// diagnostic clears. Discuss runs the conversation transaction (plan §5.14
+// discuss semantics; applyDiscuss). Pending actions are rejected before any
+// transaction because their accepted effect cannot be represented yet: snooze
+// needs the timing update; start_with_changes needs the revised proposal
+// artifact and supersede transaction (plan §4); continue_under_policy,
+// convert_to_policy, adjudicate, retry_with_capabilities, and
+// choose_alternate_profile carry decision parameters DecisionPayload has no
+// field for (a #22 contract widening when their consumers land); and
+// request_changes, answer_and_retry, answer_without_retry, and
+// return_to_agent ride the conversation channel but are decisions about a
+// prior agent turn, whose accepted effect (what the workflow does with the
+// answer) is the Wave 2 engine's, not a plain discuss append. Recording any
+// of them today would silently drop the user's data. A behaviour switch, no
+// default, so a new Action member must declare its outcome here.
 func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 	switch action {
 	case domain.ActionDismiss, domain.ActionDecline:
@@ -240,7 +275,9 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 	case domain.ActionOpenPR, domain.ActionMarkSeen, domain.ActionAcknowledge,
 		domain.ActionInspectTrustFailure, domain.ActionRunDoctor:
 		return "", outcomeRecords
-	case domain.ActionDiscuss, domain.ActionSnooze, domain.ActionStartWithChanges,
+	case domain.ActionDiscuss:
+		return "", outcomeDiscusses
+	case domain.ActionSnooze, domain.ActionStartWithChanges,
 		domain.ActionContinueUnderPolicy, domain.ActionConvertToPolicy,
 		domain.ActionAdjudicate, domain.ActionRetryWithCapability,
 		domain.ActionChooseAlternate, domain.ActionRequestChanges,

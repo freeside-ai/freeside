@@ -35,6 +35,56 @@ var ErrActionNotAllowedForType = errors.New("action is not allowed for attention
 // actionOutcome).
 var ErrUnsupportedAction = errors.New("action's transaction is not yet available at this boundary")
 
+// ErrMessageRequired is returned for a discuss command with an empty message:
+// the discuss transaction's first step is "append message" (plan §5.14), so
+// there is nothing to accept without one.
+var ErrMessageRequired = errors.New("discuss requires a non-empty message")
+
+// ErrContentNotAllowed is returned when a command whose action carries no
+// conversation content arrives with a message or attachments: recording the
+// command while dropping the content would silently lose the user's data, so
+// the boundary rejects it loudly instead.
+var ErrContentNotAllowed = errors.New("action does not carry conversation content")
+
+// ErrAttachmentNotStored is returned when a command or agent completion
+// references an attachment digest the artifact store does not hold: content
+// is uploaded first through the digest-addressed endpoint (§5.14), so a
+// dangling reference is a client error, not a race.
+var ErrAttachmentNotStored = errors.New("referenced attachment is not in the artifact store")
+
+// ErrAttachmentsUnavailable is returned when attachment functionality is
+// exercised on a service composed without a blob store; it fails closed
+// rather than accepting references it cannot verify.
+var ErrAttachmentsUnavailable = errors.New("attachment store is not configured")
+
+// ErrAgentReplyPending is returned for a discuss against a conversation that
+// is already awaiting the agent (status awaiting_agent): one outstanding
+// agent turn per conversation is the Phase 1 state machine, and mid-turn
+// steering is Phase 3 (plan §5.14). It is carried by an *AgentPendingError
+// holding the current item; match the class with errors.Is and extract the
+// item with errors.As.
+var ErrAgentReplyPending = errors.New("conversation is awaiting the agent's reply")
+
+// AgentPendingError reports a discuss submitted while the conversation's
+// agent turn is still in flight, carrying the current item and its sync
+// metadata: the API's 409 renders the same replacement-item shape as
+// staleness, so the client re-renders current state (which shows the
+// awaiting conversation) and retries after the reply lands.
+type AgentPendingError struct {
+	CommandID string
+	Item      domain.AttentionItem
+	Snapshot  store.Snapshot
+}
+
+func (e *AgentPendingError) Error() string {
+	return fmt.Sprintf("command %q rejected: conversation for item %q is awaiting the agent's reply",
+		e.CommandID, e.Item.ID)
+}
+
+// Is lets errors.Is(err, ErrAgentReplyPending) match the class while
+// errors.As recovers the current item.
+func (e *AgentPendingError) Is(target error) bool { return target == ErrAgentReplyPending }
+
 // ErrStaleVersion is returned when a genuinely new command was prepared
 // against state that is no longer canonical: its ExpectedEntityVersion does
 // not match the item's stored entity_version, or its payload bindings no

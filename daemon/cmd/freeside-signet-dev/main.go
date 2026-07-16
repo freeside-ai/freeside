@@ -120,7 +120,18 @@ func run(ctx context.Context, cfg config) (*harness, error) {
 		_ = st.Close()
 		return nil, fmt.Errorf("generate pairing key: %w", err)
 	}
-	service := signet.NewService(st, signet.WithPairingKey(pairingKey))
+	// Attachments live in a digest-addressed directory beside the store
+	// (plan §5.14: text in SQLite, blobs in the artifact store by digest);
+	// composing it here keeps PUT/GET /attachments serviceable rather than
+	// failing closed on a nil blob store.
+	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
+	if err != nil {
+		_ = apiListener.Close()
+		_ = controlListener.Close()
+		_ = st.Close()
+		return nil, fmt.Errorf("open blob store: %w", err)
+	}
+	service := signet.NewService(st, signet.WithPairingKey(pairingKey), signet.WithBlobStore(blobs))
 
 	h := &harness{
 		store:         st,

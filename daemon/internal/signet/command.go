@@ -33,6 +33,12 @@ type DecisionPayload struct {
 	// acceptance canonicalizes it (domain.NewCommand), so order and duplicates
 	// do not affect the recorded command.
 	ArtifactDigests []domain.Digest
+	// Message and Attachments carry conversation content for the actions that
+	// ride the conversation channel (discuss, plan §5.14). Which actions
+	// require or forbid them is acceptance policy (validateCommandContent);
+	// attachment order is authored content, preserved as sent.
+	Message     string
+	Attachments []domain.Digest
 }
 
 // CommandResult is the committed outcome of an accepted command: the durable
