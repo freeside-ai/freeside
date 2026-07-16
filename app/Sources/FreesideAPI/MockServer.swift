@@ -84,12 +84,18 @@ public actor MockServer {
     /// digest keys the stored record.
     private var deviceIDsByToken: [String: String] = [:]
     private var pairedDeviceCount = 0
+    /// The digest-addressed artifact bytes `getAttachment` serves
+    /// (plan §4: cards render image attachments directly from the
+    /// artifact store by digest). Content is immutable per digest, so
+    /// the table only seeds; nothing rewrites an entry.
+    private let attachmentsByDigest: [String: Data]
 
     public init(
         items: [Components.Schemas.AttentionItemSnapshot] = AttentionFixtures.defaultInbox(),
         approvedRecipes: Set<String> = [AttentionFixtures.approvedRecipeDigest],
         authMode: AuthMode = .permissive,
-        pairingCodes: [String: PairingCodeState] = [:]
+        pairingCodes: [String: PairingCodeState] = [:],
+        attachments: [String: Data] = AttentionFixtures.defaultAttachments()
     ) {
         for snapshot in items {
             itemsByID[snapshot.item.id] = snapshot
@@ -101,6 +107,11 @@ public actor MockServer {
         self.approvedRecipes = approvedRecipes
         self.authMode = authMode
         self.pairingCodes = pairingCodes
+        attachmentsByDigest = attachments
+    }
+
+    func attachmentBytes(digest: String) -> Data? {
+        attachmentsByDigest[digest]
     }
 
     public func setBeforeRespond(_ hook: BeforeRespond?) {
@@ -956,6 +967,25 @@ public struct MockServerTransport: ClientTransport {
                     )
                 )
             }
+        case "getAttachment":
+            // The digest-addressed read path: stored bytes verbatim, or
+            // an authoritative 404 the client renders as a placeholder.
+            // Bytes are opaque to the server (plan §5.15: nothing
+            // server-side decodes an image; rendering is the client's).
+            guard let digest = Self.lastPathComponent(request.path),
+                let bytes = await server.attachmentBytes(digest: digest)
+            else {
+                return try Self.json(
+                    status: .notFound,
+                    body: Components.Schemas._Error(
+                        message: "no attachment exists under the digest")
+                )
+            }
+            let response = HTTPResponse(
+                status: .ok,
+                headerFields: [.contentType: "application/octet-stream"]
+            )
+            return (response, HTTPBody(bytes))
         default:
             return (HTTPResponse(status: .notImplemented), nil)
         }

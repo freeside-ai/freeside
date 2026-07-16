@@ -2,11 +2,28 @@ import Foundation
 import OpenAPIRuntime
 import OpenAPIURLSession
 
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+
 public enum APIClientFactory {
     /// Shared by every client this factory builds: dates decode
     /// leniently across the RFC 3339 shapes the daemon and the mock
     /// emit.
     public static let configuration = Configuration(dateTranscoder: .rfc3339)
+
+    /// The uncached session behind the default live transport. The
+    /// daemon is sole authority and the app's disposable cache is the
+    /// only sanctioned client cache (plan §5.14), so no HTTP-level
+    /// cache may persist responses: the shared URLSession's URLCache
+    /// would otherwise write cacheable bodies — attachment bytes the
+    /// contract keeps memory-only — to the platform disk cache.
+    private static func uncachedSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }
 
     /// The real-daemon client. Every operation except pairing requires
     /// the paired-device credential; the provider is consulted per
@@ -14,16 +31,17 @@ public enum APIClientFactory {
     /// after it. The transport is injectable so a test can wrap the
     /// URLSession one (e.g. to fail requests before they leave the
     /// process) without hand-building a Client that would drift from
-    /// this composition.
+    /// this composition; the default rides the uncached session above.
     public static func live(
         serverURL: URL,
-        transport: any ClientTransport = URLSessionTransport(),
+        transport: (any ClientTransport)? = nil,
         token: @escaping BearerAuthMiddleware.TokenProvider = { nil }
     ) -> Client {
         Client(
             serverURL: serverURL,
             configuration: configuration,
-            transport: transport,
+            transport: transport
+                ?? URLSessionTransport(configuration: .init(session: uncachedSession())),
             middlewares: [BearerAuthMiddleware(token: token)]
         )
     }

@@ -35,6 +35,11 @@ public final class InboxStore {
 
     public let client: any APIProtocol
     public let device: DeviceIdentity
+    /// The card-shared attachment loader over the same client: digests
+    /// are content-addressed, so one memory-only table serves every
+    /// card instance (plan §5.14 keeps attachment bytes out of the
+    /// disk cache).
+    public let attachments: AttachmentLoader
     public private(set) var loadState: LoadState = .idle
     public internal(set) var freshness: Freshness = .unvalidated
     /// Reports every canonical `as_of_revision` this store ingests, so
@@ -94,6 +99,7 @@ public final class InboxStore {
     public init(client: any APIProtocol, device: DeviceIdentity = .mock) {
         self.client = client
         self.device = device
+        attachments = AttachmentLoader(client: client)
     }
 
     /// The inbox rows: open items first, urgent-to-low within a status,

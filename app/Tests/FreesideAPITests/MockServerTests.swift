@@ -21,6 +21,29 @@ import Testing
         _ = try missing.notFound
     }
 
+    @Test func attachmentsServeSeededBytesAndUnknownDigestIsNotFound() async throws {
+        // The digest-addressed read path (plan §4): stored bytes come
+        // back verbatim through the generated binary pipeline, and a
+        // digest the store does not hold is an authoritative 404 (the
+        // client's placeholder case), never a transport failure.
+        let client = APIClientFactory.mock(server: MockServer())
+
+        let image = try await client
+            .getAttachment(path: .init(digest: "sha256:img-spec_approval")).ok.body.binary
+        let imageBytes = try await Data(collecting: image, upTo: 1 << 20)
+        #expect(imageBytes == AttentionFixtures.fixtureImagePNG)
+        // The fixture is a real PNG: magic bytes, so clients can decode.
+        #expect(imageBytes.starts(with: [0x89, 0x50, 0x4E, 0x47]))
+
+        let log = try await client
+            .getAttachment(path: .init(digest: "sha256:log-spec_approval")).ok.body.binary
+        let logBytes = try await Data(collecting: log, upTo: 1 << 20)
+        #expect(String(data: logBytes, encoding: .utf8)?.contains("verify log") == true)
+
+        let missing = try await client.getAttachment(path: .init(digest: "sha256:img-blocked"))
+        _ = try missing.notFound
+    }
+
     @Test func freshCommandAppliesAndRecordsTheDecision() async throws {
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
