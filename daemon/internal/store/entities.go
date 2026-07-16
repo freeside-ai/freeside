@@ -937,23 +937,38 @@ func (tx *WriteTx) PutDevice(ctx context.Context, device domain.Device) error {
 }
 
 func (tx *ReadTx) GetDevice(ctx context.Context, id domain.DeviceID) (domain.Device, error) {
+	device, _, err := tx.GetDeviceSnapshot(ctx, id)
+	return device, err
+}
+
+// GetDeviceSnapshot returns the device together with its persisted sync
+// metadata (#106): the pairing and revocation responses render the device as
+// a DeviceSnapshot, and deriving entity_version/as_of_revision outside the
+// store would duplicate its private revision-stamping invariant.
+func (tx *ReadTx) GetDeviceSnapshot(ctx context.Context, id domain.DeviceID) (domain.Device, Snapshot, error) {
 	var (
 		status string
+		snap   Snapshot
 		body   []byte
 	)
 	err := tx.tx.QueryRowContext(ctx,
-		`SELECT status, body FROM devices WHERE id = ?`, id).Scan(&status, &body)
+		`SELECT status, entity_version, as_of_revision, body FROM devices WHERE id = ?`, id).
+		Scan(&status, &snap.EntityVersion, &snap.AsOfRevision, &body)
 	if err != nil {
-		return domain.Device{}, fmt.Errorf("get device %q: %w", id, notFoundOr(err))
+		return domain.Device{}, Snapshot{}, fmt.Errorf("get device %q: %w", id, notFoundOr(err))
 	}
 	device, err := decode[domain.Device](body)
 	if err != nil {
-		return domain.Device{}, fmt.Errorf("get device %q: %w", id, err)
+		return domain.Device{}, Snapshot{}, fmt.Errorf("get device %q: %w", id, err)
 	}
-	if device.ID != id || device.Status != domain.DeviceStatus(status) {
-		return domain.Device{}, fmt.Errorf("get device %q: %w", id, errRowInconsistent)
+	// Devices are mutable (revocation bumps entity_version), so the metadata
+	// is held to the mutable-entity range PutDevice can produce: versions
+	// start at 1, revisions are client-visible and positive.
+	if device.ID != id || device.Status != domain.DeviceStatus(status) ||
+		snap.EntityVersion < 1 || snap.AsOfRevision < 1 {
+		return domain.Device{}, Snapshot{}, fmt.Errorf("get device %q: %w", id, errRowInconsistent)
 	}
-	return device, nil
+	return device, snap, nil
 }
 
 // notFoundOr maps sql.ErrNoRows to ErrNotFound and passes every other error
