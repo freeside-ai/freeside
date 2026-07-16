@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
@@ -53,5 +54,33 @@ func loadManifest(handoffDir string, pol Policy) (export.Manifest, error) {
 	if err := m.Validate(); err != nil {
 		return export.Manifest{}, fmt.Errorf("%w: %w", ErrManifestInvalid, err)
 	}
+	if err := capPaths(m, pol); err != nil {
+		return export.Manifest{}, err
+	}
 	return m, nil
+}
+
+// capPaths bounds each entry's path length and component depth. Later
+// stages (the structural gate's ancestor walk, the collision check's
+// ancestor lookups) do work superlinear in a single path, so one deeply
+// nested path well under the total manifest cap would otherwise force
+// quadratic time and memory. A real repository entry never approaches
+// these ceilings (a path past PATH_MAX cannot be checked out), so the
+// caps only reject forged manifests.
+func capPaths(m export.Manifest, pol Policy) error {
+	for _, e := range m.Entries {
+		name, depth := e.Path, 0
+		if e.Kind == export.EntryInvalidPath {
+			name = e.PathHex // hex of the raw bytes: twice the byte length, still bounded
+		} else {
+			depth = strings.Count(e.Path, "/") + 1
+		}
+		if int64(len(name)) > pol.MaxPathBytes {
+			return fmt.Errorf("entry path length %d exceeds the cap of %d: %w", len(name), pol.MaxPathBytes, ErrManifestTooLarge)
+		}
+		if depth > pol.MaxPathDepth {
+			return fmt.Errorf("entry path depth %d exceeds the cap of %d: %w", depth, pol.MaxPathDepth, ErrManifestTooLarge)
+		}
+	}
+	return nil
 }

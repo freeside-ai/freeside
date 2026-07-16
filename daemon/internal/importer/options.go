@@ -18,6 +18,19 @@ const (
 	DefaultMaxBlobBytes     = 100 << 20
 	DefaultMaxTotalBytes    = 1 << 30
 	DefaultSecretMaxScan    = 1 << 20
+	// DefaultMaxPathBytes is a generous ceiling on one entry's path
+	// length. It bounds work that is superlinear in a single path (the
+	// gate's ancestor walk, the collision check's ancestor lookups):
+	// without it, one deeply nested manifest path well under the total
+	// manifest cap forces quadratic time and memory. A path this long
+	// cannot be checked out on the reference filesystem (PATH_MAX 4096)
+	// anyway, so the cap never rejects a real repository entry.
+	DefaultMaxPathBytes = 4096
+	// DefaultMaxPathDepth caps one entry's component count, bounding the
+	// per-path ancestor work directly (a narrow-and-deep path a/a/.../a
+	// evades a byte cap's intent otherwise). Far deeper than any real
+	// repository tree.
+	DefaultMaxPathDepth = 256
 )
 
 // Default daemon authorship for the clean commit. §5.6: the daemon
@@ -91,6 +104,10 @@ type Policy struct {
 	// scan reads; larger blobs are outside the scan's honest textual
 	// scope and covered by size/type controls instead.
 	SecretMaxScanBytes int64
+	// MaxPathBytes caps one entry's path length and MaxPathDepth its
+	// component count, bounding work superlinear in a single path.
+	MaxPathBytes int64
+	MaxPathDepth int
 }
 
 // withDefaults returns a copy with every zero field set to its default.
@@ -127,6 +144,12 @@ func (p Policy) withDefaults() Policy {
 	if p.SecretMaxScanBytes == 0 {
 		p.SecretMaxScanBytes = DefaultSecretMaxScan
 	}
+	if p.MaxPathBytes == 0 {
+		p.MaxPathBytes = DefaultMaxPathBytes
+	}
+	if p.MaxPathDepth == 0 {
+		p.MaxPathDepth = DefaultMaxPathDepth
+	}
 	return p
 }
 
@@ -142,7 +165,8 @@ func (o Options) validate() error {
 	}
 	if o.Policy.MaxManifestBytes < 0 || o.Policy.MaxEntries < 0 ||
 		o.Policy.MaxBlobBytes < 0 || o.Policy.MaxTotalBytes < 0 ||
-		o.Policy.SecretMaxScanBytes < 0 {
+		o.Policy.SecretMaxScanBytes < 0 || o.Policy.MaxPathBytes < 0 ||
+		o.Policy.MaxPathDepth < 0 {
 		return fmt.Errorf("negative policy cap: %w", ErrInvalidOptions)
 	}
 	// A caller-supplied glob that does not compile would otherwise

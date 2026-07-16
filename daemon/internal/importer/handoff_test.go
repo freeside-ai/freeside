@@ -137,6 +137,32 @@ func TestLoadManifestRejects(t *testing.T) {
 	}
 }
 
+// TestLoadManifestPathCaps is the refute-pass regression: a single
+// over-long or over-deep path is rejected at intake, before the
+// superlinear gate and collision work runs.
+func TestLoadManifestPathCaps(t *testing.T) {
+	t.Run("over-long path", func(t *testing.T) {
+		long := strings.Repeat("a", 5000)
+		dir := writeHandoff(t, manifestJSON(regularEntryJSON(long)))
+		if _, err := loadManifest(dir, Policy{}.withDefaults()); !errors.Is(err, ErrManifestTooLarge) {
+			t.Fatalf("loadManifest = %v, want %v", err, ErrManifestTooLarge)
+		}
+	})
+	t.Run("over-deep path", func(t *testing.T) {
+		var b strings.Builder
+		for i := 0; i < 300; i++ {
+			if i > 0 {
+				b.WriteByte('/')
+			}
+			b.WriteByte('a')
+		}
+		dir := writeHandoff(t, manifestJSON(regularEntryJSON(b.String())))
+		if _, err := loadManifest(dir, Policy{}.withDefaults()); !errors.Is(err, ErrManifestTooLarge) {
+			t.Fatalf("loadManifest = %v, want %v", err, ErrManifestTooLarge)
+		}
+	})
+}
+
 func TestLoadManifestMissingFile(t *testing.T) {
 	_, err := loadManifest(t.TempDir(), Policy{}.withDefaults())
 	if !errors.Is(err, ErrManifestUnreadable) {
