@@ -2,8 +2,11 @@ package signet
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -13,13 +16,50 @@ import (
 // lifecycle, §5.14): it accepts ClientCommands over the store, enforcing the
 // checks the store cannot see from a domain.Command alone (the
 // expected_entity_version match) and applying the accepted decision's item
-// transition in the same transaction.
+// transition in the same transaction. It also owns the device lifecycle
+// policy the store's shapes make enforceable: pairing-code minting and
+// redemption (pairing.go) and revocation plus the active-device gate on
+// command acceptance (device.go).
 type Service struct {
 	store *store.Store
+	// pairingKey is the daemon-held HMAC key pairing-code digests are derived
+	// under (domain.PairingCode.CodeHash); it never enters the store. Nil means
+	// pairing is unavailable and fails closed; the daemon composition supplies
+	// it.
+	pairingKey []byte
+	now        func() time.Time
+	rand       io.Reader
 }
 
-func NewService(st *store.Store) *Service {
-	return &Service{store: st}
+// Option configures a Service. The clock and randomness sources exist so
+// tests can pin expiry and generated identities; production composition
+// passes only WithPairingKey.
+type Option func(*Service)
+
+// WithPairingKey supplies the daemon-held pairing key. Without it, minting
+// and redeeming pairing codes fail closed.
+func WithPairingKey(key []byte) Option {
+	return func(s *Service) { s.pairingKey = key }
+}
+
+// WithClock overrides the time source used for pairing-code lifetimes,
+// expiry-at-redemption, and pairing/revocation timestamps.
+func WithClock(now func() time.Time) Option {
+	return func(s *Service) { s.now = now }
+}
+
+// WithRand overrides the randomness source for pairing codes, device IDs,
+// and token secrets.
+func WithRand(r io.Reader) Option {
+	return func(s *Service) { s.rand = r }
+}
+
+func NewService(st *store.Store, opts ...Option) *Service {
+	s := &Service{store: st, now: time.Now, rand: rand.Reader}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // PutItem creates or advances an AttentionItem through the signet boundary.
@@ -75,6 +115,16 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 		}
 		replay := getErr == nil
 		if !replay {
+			// The active-device gate (§5.14 test 15) runs only for a genuinely
+			// new command_id, before any item-carrying rejection can leak state
+			// to a revoked device. A replay skips it by design (test 16): the
+			// replay branch never writes, so returning the recorded result to a
+			// now-revoked device produces no new side effect. Reading the device
+			// inside the accepting transaction closes the gap between the HTTP
+			// authorizer's check and the commit.
+			if err := gateActiveDevice(ctx, tx, command.DeviceID); err != nil {
+				return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+			}
 			item, snap, err := tx.GetAttentionItemSnapshot(ctx, command.ItemID)
 			if err != nil {
 				return fmt.Errorf("submit command %q: %w", command.CommandID, err)
