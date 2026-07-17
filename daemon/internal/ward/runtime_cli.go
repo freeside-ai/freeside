@@ -54,18 +54,50 @@ func (c *CLIRuntime) runTo(ctx context.Context, stdout io.Writer, reportStderr b
 	return runPrepared(cmd, stdout, reportStderr, args[0])
 }
 
+// capWriter buffers at most max bytes and drops the rest, so a noisy or wedged
+// runtime (or its XPC service) cannot grow the captured stderr without bound
+// before the call fails closed.
+type capWriter struct {
+	buf       bytes.Buffer
+	max       int
+	truncated bool
+}
+
+func (w *capWriter) Write(p []byte) (int, error) {
+	if room := w.max - w.buf.Len(); room > 0 {
+		if len(p) <= room {
+			w.buf.Write(p)
+		} else {
+			w.buf.Write(p[:room])
+			w.truncated = true
+		}
+	} else if len(p) > 0 {
+		w.truncated = true
+	}
+	// Always report full consumption so os/exec's copier never blocks the child
+	// on a short write once the cap is reached.
+	return len(p), nil
+}
+
 func runPrepared(cmd *osexec.Cmd, stdout io.Writer, reportStderr bool, operation string) error {
-	var stderr bytes.Buffer
 	cmd.Stdout = stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if !reportStderr {
+	if !reportStderr {
+		// A redacted call never reports stderr (it may echo a caller-supplied
+		// credential), so drain it rather than buffering bytes that are thrown
+		// away — an unbounded buffer would be a memory-exhaustion vector.
+		cmd.Stderr = io.Discard
+		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("container %s: %w", operation, err)
 		}
-		msg := strings.TrimSpace(stderr.String())
-		const maxStderr = 512
-		if len(msg) > maxStderr {
-			msg = msg[:maxStderr] + "..."
+		return nil
+	}
+	const maxStderr = 512
+	stderr := &capWriter{max: maxStderr}
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.buf.String())
+		if stderr.truncated {
+			msg += "..."
 		}
 		return fmt.Errorf("container %s: %w: %s", operation, err, msg)
 	}

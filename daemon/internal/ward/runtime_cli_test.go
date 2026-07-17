@@ -395,6 +395,39 @@ func TestCreateContainerRedactsStderr(t *testing.T) {
 	}
 }
 
+// TestCapWriter proves the stderr capture is bounded: writes past the cap are
+// dropped (not buffered) and flagged, so a noisy or wedged runtime cannot grow
+// the buffer without limit before the call fails.
+func TestCapWriter(t *testing.T) {
+	w := &capWriter{max: 8}
+	// A single oversized write keeps only the cap and reports full consumption.
+	if n, err := w.Write([]byte("0123456789abcdef")); n != 16 || err != nil {
+		t.Fatalf("Write = (%d, %v), want (16, nil)", n, err)
+	}
+	if w.buf.Len() != 8 || w.buf.String() != "01234567" {
+		t.Errorf("buffered %q (len %d), want the first 8 bytes", w.buf.String(), w.buf.Len())
+	}
+	if !w.truncated {
+		t.Error("truncated not set after an over-cap write")
+	}
+	// Further writes stay dropped and never grow the buffer.
+	if _, err := w.Write([]byte("more")); err != nil {
+		t.Fatalf("Write after cap = %v", err)
+	}
+	if w.buf.Len() != 8 {
+		t.Errorf("buffer grew past the cap to %d", w.buf.Len())
+	}
+
+	// An under-cap write is kept whole and never flags truncation.
+	small := &capWriter{max: 8}
+	if _, err := small.Write([]byte("abc")); err != nil {
+		t.Fatal(err)
+	}
+	if small.buf.String() != "abc" || small.truncated {
+		t.Errorf("under-cap write = {%q, truncated:%t}, want {abc, false}", small.buf.String(), small.truncated)
+	}
+}
+
 // TestExportRootFSStreamsStdout pins the boundary CLIRuntime can enforce: the
 // CLI emits its default stdout stream into the caller-owned bounded Writer.
 func TestExportRootFSStreamsStdout(t *testing.T) {

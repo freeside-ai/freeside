@@ -680,3 +680,13 @@ wanted digest/size are manifest-derived), and the caller redacts the blob
 identifier with `redactPath`. Regression: a refused export with a
 credential-shaped digest and no matching blob, asserting the reason omits the
 digest.
+
+Round 24, P2 (host-resource boundary, adjacent to round 17): the container CLI
+buffered stderr into an unbounded `bytes.Buffer`, truncating to 512 bytes only
+after the child exited, and a redacted create failure buffered it before
+discarding. A noisy or wedged runtime/XPC service could exhaust daemon memory
+before the call failed closed. Stderr is now captured through a `capWriter` that
+buffers at most the reported cap and drops the rest, and a redacted call drains
+stderr to `io.Discard` rather than buffering bytes it throws away. Regressions: a
+`capWriter` bound/truncation unit test; the existing redacted-stderr credential
+test still passes.
