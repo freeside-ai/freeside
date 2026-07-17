@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // GitError carries a failed plumbing invocation: the argument vector
@@ -148,6 +149,10 @@ func (g *gitRunner) runTo(ctx context.Context, stdin io.Reader, w io.Writer, arg
 	cmd.Dir = g.dir
 	cmd.Env = g.env
 	cmd.Stdin = stdin
+	// Bound the pipe wait so an unexpected lingering descendant cannot
+	// block plumbing past a context kill (same class as the room's
+	// WaitDelay refute-pass finding).
+	cmd.WaitDelay = 10 * time.Second
 	var stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = w, &stderr
 	if err := cmd.Run(); err != nil {

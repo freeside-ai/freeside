@@ -237,3 +237,69 @@ func TestOutcomeValidity(t *testing.T) {
 		t.Error("zero outcome reports valid")
 	}
 }
+
+// TestVerifyTranscriptCapIsHonest pins that hitting the transcript cap
+// is recorded on the result and in the report, not silently dropped.
+func TestVerifyTranscriptCapIsHonest(t *testing.T) {
+	checkout, opts, room := verifyFixture(t, map[string]string{"main.go": "package main\n"}, nil)
+	room.results = map[string]StepResult{
+		"go test ./...": {Output: []byte("a long line of test output\n")},
+	}
+	opts.Policy.MaxTranscriptBytes = 8
+	res, err := Verify(context.Background(), checkout, opts)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !res.TranscriptTruncated {
+		t.Error("transcript hit the cap but TranscriptTruncated is false")
+	}
+	if !strings.Contains(string(res.Evidence[0].Content), `"transcript_truncated": true`) {
+		t.Error("report does not record the transcript truncation")
+	}
+}
+
+// TestVerifyFreshWorkspacePerCommand is the Codex-review (P1)
+// regression: an earlier command's candidate code that mutates the
+// workspace must not affect a later command, which runs against a fresh
+// head checkout. The room mutates the workspace on the first command
+// and reads it on the second, asserting the mutation did not carry over
+// and the two commands used different workspaces.
+func TestVerifyFreshWorkspacePerCommand(t *testing.T) {
+	checkout, opts, _ := verifyFixture(t, map[string]string{"src.go": "package main\n"}, nil)
+	var firstDir, secondDir, secondContent string
+	mutating := &sequencedRoom{onRun: func(n int, workdir string) {
+		switch n {
+		case 0:
+			firstDir = workdir
+			// Candidate code rewrites a source file mid-run.
+			_ = os.WriteFile(filepath.Join(workdir, "src.go"), []byte("SABOTAGE"), 0o644) //nolint:gosec // G306: test-owned workspace
+		case 1:
+			secondDir = workdir
+			b, _ := os.ReadFile(filepath.Join(workdir, "src.go")) //nolint:gosec // G304: test-owned workspace
+			secondContent = string(b)
+		}
+	}}
+	opts.Room = mutating
+	if _, err := Verify(context.Background(), checkout, opts); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if secondContent != "package main\n" {
+		t.Errorf("second command saw %q, want the pristine head content (mutation carried over)", secondContent)
+	}
+	if firstDir == "" || secondDir == "" || firstDir == secondDir {
+		t.Errorf("commands shared a workspace: first=%q second=%q", firstDir, secondDir)
+	}
+}
+
+// sequencedRoom invokes onRun(index, workdir) for each command and
+// always reports success.
+type sequencedRoom struct {
+	onRun func(n int, workdir string)
+	n     int
+}
+
+func (r *sequencedRoom) Run(_ context.Context, workdir string, _ []string) (StepResult, error) {
+	r.onRun(r.n, workdir)
+	r.n++
+	return StepResult{Output: []byte("ok\n")}, nil
+}

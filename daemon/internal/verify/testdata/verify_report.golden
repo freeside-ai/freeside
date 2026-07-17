@@ -30,5 +30,6 @@
       "kind": "verification_control_path",
       "detail": "added"
     }
-  ]
+  ],
+  "transcript_truncated": false
 }

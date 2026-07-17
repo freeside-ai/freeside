@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -125,5 +127,54 @@ func TestProcRoomRecordsInvocations(t *testing.T) {
 	}
 	if r.Invocations[1].Argv[0] != "echo" || r.Invocations[1].Dir != dir {
 		t.Fatalf("second invocation = %+v", r.Invocations[1])
+	}
+}
+
+// TestProcRoomWaitDelayUnblocksHeldPipe is the refute-pass regression:
+// a command that exits while a grandchild it spawned still holds the
+// output pipe must not block Run past the wait delay, and must read as
+// a failed step, never a passed one.
+func TestProcRoomWaitDelayUnblocksHeldPipe(t *testing.T) {
+	r := newProcRoom(t)
+	r.WaitDelay = 200 * time.Millisecond
+	start := time.Now()
+	res, err := r.Run(context.Background(), t.TempDir(), []string{"sh", "-c", "sleep 5 & echo done"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("Run blocked %v on a grandchild-held pipe", elapsed)
+	}
+	if res.ExitCode == 0 {
+		t.Fatal("a step with a lingering pipe-holding descendant read as passed")
+	}
+}
+
+// TestProcRoomReapsDescendants is the Codex-review regression: a
+// background process the command leaves behind must not outlive the
+// step on the host; the room kills the whole process group before
+// reporting the step complete.
+func TestProcRoomReapsDescendants(t *testing.T) {
+	r := newProcRoom(t)
+	r.WaitDelay = 200 * time.Millisecond
+	res, err := r.Run(context.Background(), t.TempDir(), []string{"sh", "-c", "sleep 30 & echo $!"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(res.Output)))
+	if err != nil {
+		t.Fatalf("parse descendant pid from %q: %v", res.Output, err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		// Signal 0 probes existence; ESRCH means the descendant is gone.
+		if killErr := syscall.Kill(pid, 0); errors.Is(killErr, syscall.ESRCH) {
+			return
+		}
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatalf("descendant %d still alive after the step completed", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

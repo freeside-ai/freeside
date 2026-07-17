@@ -78,6 +78,11 @@ type report struct {
 	Outcome      Outcome       `json:"outcome"`
 	Steps        []Step        `json:"steps"`
 	Findings     []Finding     `json:"findings"`
+	// TranscriptTruncated reports that the transcript artifact was cut
+	// at the transcript cap; the per-step flags cover only the room's
+	// per-command cap, so without this a capped transcript would read
+	// as complete.
+	TranscriptTruncated bool `json:"transcript_truncated"`
 }
 
 // buildEvidence stamps the verifier's account as §5.15 evidence: both
