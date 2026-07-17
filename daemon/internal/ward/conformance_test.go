@@ -125,7 +125,7 @@ func TestValidateAgentSpecViolations(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			spec := buildAgentSpec(cfg, hs, names)
+			spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel())
 			tc.mutate(&spec)
 			err := validateAgentSpec(cfg, spec, names.Workspace)
 			if !errors.Is(err, ErrConformance) {
@@ -266,7 +266,7 @@ func TestValidateAgentSpecNoCredentials(t *testing.T) {
 	hs := testHandoffSpec()
 	hs.Agent.CredentialMounts = nil
 	names := namesFor(hs.RunID)
-	if err := validateAgentSpec(cfg, buildAgentSpec(cfg, hs, names), names.Workspace); err != nil {
+	if err := validateAgentSpec(cfg, buildAgentSpec(cfg, hs, names, testOwnershipLabel()), names.Workspace); err != nil {
 		t.Errorf("credential-free agent spec: %v, want nil", err)
 	}
 }

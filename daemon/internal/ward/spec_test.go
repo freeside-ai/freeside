@@ -44,6 +44,10 @@ func testHandoffSpec() HandoffSpec {
 	}
 }
 
+func testOwnershipLabel() Label {
+	return Label{Key: ownershipLabelKey, Value: "00000000000000000000000000000000"}
+}
+
 func TestHandoffSpecValidate(t *testing.T) {
 	if err := testHandoffSpec().validate(); err != nil {
 		t.Fatalf("valid fixture: validate() = %v, want nil", err)
@@ -90,7 +94,7 @@ func TestNamesFor(t *testing.T) {
 func TestExporterSpecGolden(t *testing.T) {
 	cfg := testConfig()
 	hs := testHandoffSpec()
-	spec := buildExporterSpec(cfg, hs, namesFor(hs.RunID))
+	spec := buildExporterSpec(cfg, hs, namesFor(hs.RunID), testOwnershipLabel())
 	got, err := json.MarshalIndent(spec, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal exporter spec: %v", err)
@@ -102,7 +106,7 @@ func TestBuildAgentSpec(t *testing.T) {
 	cfg := testConfig()
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
-	spec := buildAgentSpec(cfg, hs, names)
+	spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel())
 
 	if spec.Name != names.Agent {
 		t.Errorf("Name = %q, want %q", spec.Name, names.Agent)

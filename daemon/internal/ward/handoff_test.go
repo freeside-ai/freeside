@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -201,23 +202,64 @@ func TestHandoffAgentStillListed(t *testing.T) {
 	wantCheckFailure(t, err, CheckWriterTermination)
 }
 
-// TestHandoffAmbiguousCreateReaped: a CreateContainer that makes the
-// container but then reports failure (a cancellation or post-create CLI
-// error) must not leak the credential-bearing writer. Teardown reaps by
-// listing, so the object is cleaned up even though no in-memory flag was
-// ever set for it.
-func TestHandoffAmbiguousCreateReaped(t *testing.T) {
+// TestHandoffAmbiguousContainerCreateReaped proves an ambiguous agent or
+// exporter create is recovered by inspecting the per-invocation ownership
+// label, then reaped despite the create call reporting failure.
+func TestHandoffAmbiguousContainerCreateReaped(t *testing.T) {
+	names := namesFor(testHandoffSpec().RunID)
+	for _, id := range []string{names.Agent, names.Exporter} {
+		t.Run(id, func(t *testing.T) {
+			fx := newHandoffFixture(t)
+			fx.rt.createThenFail = id
+
+			if _, err := fx.run(t); err == nil {
+				t.Fatal("ambiguous create returned success")
+			}
+			fx.assertReaped(t)
+		})
+	}
+}
+
+// TestHandoffAmbiguousContainerCreateReapedAfterCancellation proves
+// ownership recovery happens inside teardown's detached context. The caller
+// is canceled after the runtime inserts the object but before create returns;
+// both agent and exporter must still be discovered by their ownership label.
+func TestHandoffAmbiguousContainerCreateReapedAfterCancellation(t *testing.T) {
+	names := namesFor(testHandoffSpec().RunID)
+	for _, id := range []string{names.Agent, names.Exporter} {
+		t.Run(id, func(t *testing.T) {
+			fx := newHandoffFixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			fx.rt.createThenFail = id
+			fx.rt.afterAmbiguousContainerCreate = cancel
+
+			if _, err := fx.backend(t).Handoff(ctx, testHandoffSpec()); err == nil {
+				t.Fatal("ambiguous canceled create returned success")
+			}
+			fx.assertReaped(t)
+		})
+	}
+}
+
+// TestHandoffAmbiguousVolumeCreateReaped proves a CreateVolume call that
+// makes the workspace and then errors is cleaned up by its unpredictable
+// ownership label, even though no other runtime object was owned.
+func TestHandoffAmbiguousVolumeCreateReaped(t *testing.T) {
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
-	fx.rt.createThenFail = names.Agent
+	fx.rt.createVolumeThenFail = true
 
-	_, err := fx.run(t)
-	if err == nil {
-		t.Fatal("ambiguous create returned success")
+	if _, err := fx.run(t); err == nil {
+		t.Fatal("ambiguous volume create returned success")
 	}
-	// The agent container existed but the create call failed; teardown must
-	// still have reaped it (and the workspace volume).
-	fx.assertReaped(t)
+	fx.rt.mu.Lock()
+	defer fx.rt.mu.Unlock()
+	if _, ok := fx.rt.vols[names.Workspace]; ok {
+		t.Error("workspace from ambiguous create survived teardown")
+	}
+	if len(fx.rt.ctrs) != 0 {
+		t.Errorf("ambiguous workspace create unexpectedly touched containers: %v", fx.rt.ctrs)
+	}
 }
 
 // TestHandoffListContainersError: check 3's absence proof fails closed when
@@ -536,6 +578,114 @@ func TestHandoffNoReapBeforeClaim(t *testing.T) {
 			t.Errorf("teardown attempted a reap before the run claimed its names: %q", c)
 		}
 	}
+}
+
+// TestHandoffVolumeCollisionDoesNotClaimNames proves an ordinary
+// already-exists failure does not authorize teardown. The colliding objects
+// lack this invocation's unpredictable workspace ownership label and all
+// belong to another live run.
+func TestHandoffVolumeCollisionDoesNotClaimNames(t *testing.T) {
+	fx := newHandoffFixture(t)
+	hs := testHandoffSpec()
+	names := namesFor(hs.RunID)
+	fx.rt.vols[names.Workspace] = runLabels(hs.RunID)
+	fx.rt.ctrs[names.Agent] = &fakeCtr{started: true}
+	fx.rt.ctrs[names.Exporter] = &fakeCtr{}
+
+	if _, err := fx.backend(t).Handoff(context.Background(), hs); err == nil {
+		t.Fatal("workspace collision returned success")
+	}
+
+	fx.rt.mu.Lock()
+	defer fx.rt.mu.Unlock()
+	if _, ok := fx.rt.vols[names.Workspace]; !ok {
+		t.Error("teardown deleted another run's colliding workspace")
+	}
+	if _, ok := fx.rt.ctrs[names.Agent]; !ok {
+		t.Error("teardown deleted another run's colliding agent")
+	}
+	if _, ok := fx.rt.ctrs[names.Exporter]; !ok {
+		t.Error("teardown deleted another run's colliding exporter")
+	}
+	for _, call := range fx.rt.calls {
+		if strings.HasPrefix(call, "delete-") || strings.HasPrefix(call, "stop-") {
+			t.Errorf("teardown attempted to reap a colliding run: %q", call)
+		}
+	}
+}
+
+// TestHandoffContainerCollisionsDoNotClaimNames closes the per-object sibling
+// class: owning the workspace does not confer ownership of an independently
+// colliding agent or exporter name. A fresh listing without this invocation's
+// ownership label leaves the foreign container untouched.
+func TestHandoffContainerCollisionsDoNotClaimNames(t *testing.T) {
+	names := namesFor(testHandoffSpec().RunID)
+	for _, id := range []string{names.Agent, names.Exporter} {
+		t.Run(id, func(t *testing.T) {
+			fx := newHandoffFixture(t)
+			foreign := &fakeCtr{spec: ContainerSpec{Labels: runLabels(testHandoffSpec().RunID)}}
+			if id == names.Agent {
+				foreign.started = true
+			}
+			fx.rt.ctrs[id] = foreign
+
+			if _, err := fx.run(t); err == nil {
+				t.Fatal("container collision returned success")
+			}
+
+			fx.rt.mu.Lock()
+			defer fx.rt.mu.Unlock()
+			if _, ok := fx.rt.ctrs[id]; !ok {
+				t.Errorf("teardown deleted foreign colliding container %q", id)
+			}
+			if len(fx.rt.vols) != 0 {
+				t.Errorf("owned workspace survived failed handoff: %v", fx.rt.vols)
+			}
+			for _, call := range fx.rt.calls {
+				if call == "delete-container "+id || call == "stop-container "+id {
+					t.Errorf("teardown attempted to reap foreign colliding container: %q", call)
+				}
+			}
+		})
+	}
+}
+
+// TestHandoffAgentProvenAbsentIsNotReapedAgain pins the proven-absent state.
+// Once the owned agent was deleted and absent from the full listing, a
+// foreign same-name container appearing later must not inherit teardown
+// authority from the completed create.
+func TestHandoffAgentProvenAbsentIsNotReapedAgain(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.onCreateContainer = func(spec ContainerSpec) error {
+		if spec.Name == names.Exporter {
+			fx.rt.ctrs[names.Agent] = &fakeCtr{
+				spec:    ContainerSpec{Labels: runLabels(testHandoffSpec().RunID)},
+				started: true,
+			}
+		}
+		return nil
+	}
+
+	if _, err := fx.run(t); err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+
+	fx.rt.mu.Lock()
+	defer fx.rt.mu.Unlock()
+	if _, ok := fx.rt.ctrs[names.Agent]; !ok {
+		t.Error("teardown reaped a foreign agent after the owned agent was proven absent")
+	}
+	deletes := 0
+	for _, call := range fx.rt.calls {
+		if call == "delete-container "+names.Agent {
+			deletes++
+		}
+	}
+	if deletes != 1 {
+		t.Errorf("agent delete attempts = %d, want exactly the owned agent's delete", deletes)
+	}
+	delete(fx.rt.ctrs, names.Agent)
 }
 
 func TestHandoffInvalidSpec(t *testing.T) {

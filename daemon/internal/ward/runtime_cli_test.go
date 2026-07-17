@@ -155,11 +155,19 @@ func TestDecodeContainerList(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []ContainerSummary{
-		{ID: "freeside-handoff-run-1-agent", State: StateStopped},
-		{ID: "unrelated-container", State: StateRunning},
+		{ID: "freeside-handoff-run-1-agent", State: StateStopped, Labels: []Label{}},
+		{ID: "unrelated-container", State: StateRunning, Labels: []Label{}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("decoded list = %+v, want %+v", got, want)
+	}
+	withLabels, err := decodeContainerList([]byte(`[{"id":"c","configuration":{"id":"c","labels":{"z":"2","a":"1"}},"status":{"state":"stopped"}}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLabels := []Label{{Key: "a", Value: "1"}, {Key: "z", Value: "2"}}
+	if !reflect.DeepEqual(withLabels[0].Labels, wantLabels) {
+		t.Errorf("decoded labels = %+v, want %+v", withLabels[0].Labels, wantLabels)
 	}
 }
 
@@ -208,13 +216,14 @@ func TestCreateContainerArgs(t *testing.T) {
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
 
-	args, err := createContainerArgs(buildExporterSpec(cfg, hs, names))
+	args, err := createContainerArgs(buildExporterSpec(cfg, hs, names, testOwnershipLabel()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
 		"create", "--name", "freeside-handoff-golden-run-exporter",
 		"--label", "freeside.handoff=golden-run",
+		"--label", "freeside.handoff-owner=00000000000000000000000000000000",
 		"--mount", "type=volume,source=freeside-handoff-golden-run-ws,target=/workspace,readonly",
 		"--", cfg.ExporterImage,
 	}
@@ -223,7 +232,7 @@ func TestCreateContainerArgs(t *testing.T) {
 		t.Errorf("args = %q, want %q", args, want)
 	}
 
-	agent := buildAgentSpec(cfg, hs, names)
+	agent := buildAgentSpec(cfg, hs, names, testOwnershipLabel())
 	agentArgs, err := createContainerArgs(agent)
 	if err != nil {
 		t.Fatal(err)

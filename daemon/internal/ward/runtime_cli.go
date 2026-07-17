@@ -328,7 +328,12 @@ func decodeContainerList(out []byte) ([]ContainerSummary, error) {
 		if c.Configuration.ID != c.ID {
 			return nil, fmt.Errorf("container list entry %d id %q disagrees with configuration id %q", i, c.ID, c.Configuration.ID)
 		}
-		summaries[i] = ContainerSummary{ID: c.ID, State: ContainerState(c.Status.State)}
+		labels := make([]Label, 0, len(c.Configuration.Labels))
+		for k, val := range c.Configuration.Labels {
+			labels = append(labels, Label{Key: k, Value: val})
+		}
+		sort.Slice(labels, func(a, b int) bool { return labels[a].Key < labels[b].Key })
+		summaries[i] = ContainerSummary{ID: c.ID, State: ContainerState(c.Status.State), Labels: labels}
 	}
 	return summaries, nil
 }

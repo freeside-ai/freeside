@@ -21,6 +21,10 @@
     {
       "key": "freeside.handoff",
       "value": "golden-run"
+    },
+    {
+      "key": "freeside.handoff-owner",
+      "value": "00000000000000000000000000000000"
     }
   ]
 }

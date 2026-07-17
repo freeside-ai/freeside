@@ -61,6 +61,13 @@ type fakeRuntime struct {
 	// the container to the runtime but then return an error, modeling an
 	// ambiguous create (the object exists though the call reported failure).
 	createThenFail string
+	// afterAmbiguousContainerCreate runs after createThenFail has inserted the
+	// container but before CreateContainer returns its error. Tests use it to
+	// cancel the caller context in that exact ambiguity window.
+	afterAmbiguousContainerCreate func()
+	// createVolumeThenFail makes CreateVolume add the volume and then return
+	// an error, modeling an ambiguous post-create failure.
+	createVolumeThenFail bool
 
 	onCreateVolume    func(name string) error
 	onDeleteVolume    func(name string) (skipRemoval bool, err error)
@@ -126,6 +133,9 @@ func (f *fakeRuntime) CreateVolume(ctx context.Context, name string, _ int64, la
 		return fmt.Errorf("volume %q already exists", name)
 	}
 	f.vols[name] = labels
+	if f.createVolumeThenFail {
+		return fmt.Errorf("create of volume %q reported failure after the volume was made", name)
+	}
 	return nil
 }
 
@@ -183,6 +193,9 @@ func (f *fakeRuntime) CreateContainer(ctx context.Context, spec ContainerSpec) e
 	}
 	f.ctrs[spec.Name] = &fakeCtr{spec: spec}
 	if f.createThenFail == spec.Name {
+		if f.afterAmbiguousContainerCreate != nil {
+			f.afterAmbiguousContainerCreate()
+		}
 		// The object now exists, but the call reports failure (ambiguous
 		// create): teardown must reap it by listing, not by a create flag.
 		return fmt.Errorf("create of %q reported failure after the container was made", spec.Name)
@@ -313,7 +326,9 @@ func (f *fakeRuntime) ListContainers(ctx context.Context) ([]ContainerSummary, e
 	}
 	out := make([]ContainerSummary, 0, len(f.ctrs))
 	for name, c := range f.ctrs {
-		out = append(out, ContainerSummary{ID: name, State: f.state(c, name)})
+		out = append(out, ContainerSummary{
+			ID: name, State: f.state(c, name), Labels: append([]Label(nil), c.spec.Labels...),
+		})
 	}
 	if f.onListContainers != nil {
 		return f.onListContainers(out)

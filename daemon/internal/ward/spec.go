@@ -18,6 +18,12 @@ const BackendName = "fresh_vm_read_only_volume_handoff"
 // caller-owned volumes may carry the same metadata.
 const labelKey = "freeside.handoff"
 
+// ownershipLabelKey marks every runtime object with an unpredictable token
+// for one Handoff invocation. The token distinguishes an ambiguous create
+// that made this invocation's object from an ordinary already-exists
+// collision; unlike labelKey, it is ownership evidence for teardown.
+const ownershipLabelKey = "freeside.handoff-owner"
+
 // ErrInvalidHandoffSpec is the class sentinel for a HandoffSpec the gate
 // refuses to run at all; it is a caller error, not a conformance failure.
 var ErrInvalidHandoffSpec = errors.New("invalid handoff spec")
@@ -102,7 +108,7 @@ func runLabels(runID string) []Label {
 // read-write at the configured target, every credential volume read-only at
 // its own target, nothing else. validateAgentSpec re-verifies the result
 // rather than trusting this construction.
-func buildAgentSpec(cfg Config, hs HandoffSpec, names handoffNames) ContainerSpec {
+func buildAgentSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label) ContainerSpec {
 	mounts := []Mount{{
 		Type:   MountVolume,
 		Source: names.Workspace,
@@ -122,14 +128,14 @@ func buildAgentSpec(cfg Config, hs HandoffSpec, names handoffNames) ContainerSpe
 		Command: hs.Agent.Command,
 		Env:     hs.Agent.Env,
 		Mounts:  mounts,
-		Labels:  runLabels(hs.RunID),
+		Labels:  append(runLabels(hs.RunID), ownershipLabel),
 	}
 }
 
 // buildExporterSpec generates the exporter container and, with it, check 4's
 // mount allowlist: the pinned exporter image, the workspace volume read-only
 // at the configured target, no environment, and nothing else.
-func buildExporterSpec(cfg Config, hs HandoffSpec, names handoffNames) ContainerSpec {
+func buildExporterSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label) ContainerSpec {
 	return ContainerSpec{
 		Name:    names.Exporter,
 		Image:   cfg.ExporterImage,
@@ -140,7 +146,7 @@ func buildExporterSpec(cfg Config, hs HandoffSpec, names handoffNames) Container
 			Target:   cfg.WorkspaceTarget,
 			ReadOnly: true,
 		}},
-		Labels: runLabels(hs.RunID),
+		Labels: append(runLabels(hs.RunID), ownershipLabel),
 	}
 }
 

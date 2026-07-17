@@ -116,8 +116,9 @@ type VolumeSummary struct {
 
 // ContainerSummary identifies one container in a full listing.
 type ContainerSummary struct {
-	ID    string
-	State ContainerState
+	ID     string
+	State  ContainerState
+	Labels []Label
 }
 
 // Runtime is the seam between the gate and the container runtime. The real
