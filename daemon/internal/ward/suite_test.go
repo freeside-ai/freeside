@@ -737,6 +737,37 @@ func TestSuiteFullRejectsSmuggledFilename(t *testing.T) {
 	s.assertReaped(t, rt)
 }
 
+func TestSuiteFullRejectsChangedFixtureMode(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	mode := "0755"
+	// Rebuild the manifest fixture with executable normalized modes while
+	// preserving both expected paths and contents.
+	files := []manifestFile{
+		{path: workspaceStateFile, body: workspaceStatePayload + "\n"},
+		{path: writerResultPath, body: writerSentinel(s.fx.RunID) + "\n"},
+	}
+	archive := manifestArchive(t, files)
+	var manifest export.Manifest
+	if err := json.Unmarshal(archive[2].body, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	for i := range manifest.Entries {
+		manifest.Entries[i].Mode = &mode
+	}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive[2].body = raw
+	rt.exportTarPath = buildTar(t, archive)
+	err = s.Full(context.Background())
+	wantCheckFailure(t, err, CheckCredentialContainment)
+	if !strings.Contains(err.Error(), "manifest metadata does not exactly match") {
+		t.Errorf("error = %q, want exact fixture-metadata failure", err)
+	}
+	s.assertReaped(t, rt)
+}
+
 // TestDefaultWriterGatesOnMarkerAndEmitsSentinel: the generated default writer
 // verifies the token equals the seeded marker before producing output and emits
 // this run's sentinel, so a realized-but-wrong credential aborts the writer and

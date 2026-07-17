@@ -789,6 +789,16 @@ logs or audit. Containment diagnostics no longer include manifest entry paths,
 including the sibling omitted-blob branch. The smuggled-filename regression now
 asserts the complete returned error does not contain the marker.
 
+## Automated review round 34
+
+The exact writer-output proof pinned paths, kinds, both content digests, and
+non-omission, but it did not pin the remaining normalized manifest metadata;
+an exporter could mark the expected files executable and still pass. Full now
+compares the ordered fixture paths, path encoding, kind, mode, size, and target
+against `expectedWriterManifest`, while the existing digest and omission checks
+remain the content-specific evidence. A regression preserves both expected
+blobs but changes their modes to `0755` and fails closed.
+
 **Accepted by decision.** The marker value appears in the seed/audit
 container argv; this is safe because the marker is an inert fake credential
 by contract (the whole point of a *fake* marker is to test containment

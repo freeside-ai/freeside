@@ -185,6 +185,30 @@ func manifestHasContent(entries []export.Entry, path, content string) bool {
 	return false
 }
 
+func optionalEqual[T comparable](a, b *T) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
+}
+
+// manifestFixtureMetadataMatches binds the non-content metadata the suite
+// writer is expected to produce. Content digests and BlobOmitted have their
+// own ordered, specific checks in Full; keeping those checks separate preserves
+// the evidence each failure reports while this closes mode/size/target drift.
+func manifestFixtureMetadataMatches(got, want []export.Entry) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i].Path != want[i].Path || got[i].PathHex != want[i].PathHex ||
+			got[i].Kind != want[i].Kind ||
+			!optionalEqual(got[i].Mode, want[i].Mode) ||
+			!optionalEqual(got[i].Size, want[i].Size) ||
+			!optionalEqual(got[i].Target, want[i].Target) {
+			return false
+		}
+	}
+	return true
+}
+
 // expectedWriterManifest is the exact metadata shape Full accepts from the
 // suite-owned writer.
 func expectedWriterManifest(runID string) export.Manifest {
@@ -695,7 +719,6 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 			return failf(CheckCredentialContainment, "export carries an unexpected manifest entry (kind %q); the suite writer produces only %q and %q, so credential-bearing path metadata is redacted", e.Kind, writerResultPath, workspaceStateFile)
 		}
 	}
-
 	// A blob_omitted regular entry has no bytes under ExportDir/blobs, so the
 	// scan below cannot see whether it carries the marker: an export that omits
 	// the very file holding the leaked credential would scan clean. The marker
@@ -735,6 +758,9 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 	// digest), completing "the export is exactly this run's writer output".
 	if !manifestHasContent(res.Manifest.Entries, workspaceStateFile, workspaceStatePayload+"\n") {
 		return failf(CheckCredentialContainment, "export does not carry this run's nested workspace fixture at %s; the durable directory tree was not proven to survive", workspaceStateFile)
+	}
+	if !manifestFixtureMetadataMatches(res.Manifest.Entries, expectedWriterManifest(s.fx.RunID).Entries) {
+		return failf(CheckCredentialContainment, "export manifest metadata does not exactly match the suite writer fixture (paths redacted)")
 	}
 
 	// Containment, detached-volume half: the marker is still readable from the
