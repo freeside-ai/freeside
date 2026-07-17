@@ -94,6 +94,15 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	if err != nil {
 		return nil, err
 	}
+	// Bound the whole handoff so a runtime that wedges inside a side-effecting
+	// call (e.g. after launching the credential VM but before StartContainer
+	// returns) cannot block the gate, and the VM, indefinitely: the
+	// per-operation waits only begin once their own call returns. Every runtime
+	// call below derives from this ctx; teardown re-detaches (WithoutCancel) so
+	// it still reaps what the budget interrupts. Registered before the teardown
+	// defer so cancel runs after teardown on unwind.
+	ctx, cancel := context.WithTimeout(ctx, b.cfg.HandoffTimeout)
+	defer cancel()
 	st := &runState{ownershipLabel: ownershipLabel}
 	defer func() {
 		terr := b.teardown(ctx, names, st)

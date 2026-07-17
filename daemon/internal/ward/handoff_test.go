@@ -1250,6 +1250,27 @@ func TestHandoffAgentOwnershipDowngradedAfterDeleteUncertainty(t *testing.T) {
 	}
 }
 
+// TestHandoffBoundsWedgedWriterStart proves the overall handoff budget bounds a
+// runtime that wedges launching the credential VM: StartContainer never
+// returns, but the deadline cuts it, Handoff fails, and deferred teardown
+// (detached from the budget) still reaps the agent, so the VM cannot stay live
+// indefinitely.
+func TestHandoffBoundsWedgedWriterStart(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.cfg.HandoffTimeout = 100 * time.Millisecond
+	fx.rt.blockStart = names.Agent
+
+	_, err := fx.run(t)
+	if err == nil {
+		t.Fatal("wedged writer start returned success")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error = %v, want context.DeadlineExceeded from the handoff budget", err)
+	}
+	fx.assertReaped(t)
+}
+
 func TestHandoffOwnedWorkspaceReapedWhenListFails(t *testing.T) {
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)

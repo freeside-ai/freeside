@@ -65,6 +65,10 @@ type fakeRuntime struct {
 	// its context is done (modeling a wedged observation call under the
 	// writer/exporter timeout; pre-start allowlist inspection remains usable).
 	blockInspect string
+	// blockStart, when set, makes StartContainer of that id block until its
+	// context is done (modeling a runtime that wedges launching the VM before
+	// StartContainer returns, under the overall handoff budget).
+	blockStart string
 	// createThenFail, when set to a container name, makes CreateContainer add
 	// the container to the runtime but then return an error, modeling an
 	// ambiguous create (the object exists though the call reported failure).
@@ -213,11 +217,19 @@ func (f *fakeRuntime) CreateContainer(ctx context.Context, spec ContainerSpec) e
 
 func (f *fakeRuntime) StartContainer(ctx context.Context, id string) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.record("start-container %s", id)
 	if err := f.checkCtx(ctx); err != nil {
+		f.mu.Unlock()
 		return err
 	}
+	if f.blockStart == id {
+		// Wedge inside the call: release the lock (teardown must still run) and
+		// block until the overall handoff budget cancels the context.
+		f.mu.Unlock()
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	defer f.mu.Unlock()
 	if f.onStart != nil {
 		if err := f.onStart(id); err != nil {
 			return err

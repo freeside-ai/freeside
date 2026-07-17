@@ -58,6 +58,15 @@ type Config struct {
 	// cancellation. Without its own deadline a wedged runtime call could keep
 	// a cancelled Handoff from ever returning. Defaults to 2 minutes.
 	TeardownTimeout time.Duration
+	// HandoffTimeout is the overall wall-clock budget for one Handoff. The
+	// per-operation timeouts above only start once their own runtime call
+	// returns, so a runtime that wedges inside a side-effecting call (for
+	// example after launching the credential-bearing agent VM but before
+	// StartContainer returns) would otherwise leave the gate blocked and the VM
+	// live indefinitely. This bounds every side-effecting call from one place;
+	// teardown detaches from it (context.WithoutCancel) and reaps what it
+	// interrupts. Defaults to WriterStopTimeout + ExporterTimeout + 5 minutes.
+	HandoffTimeout time.Duration
 	// PollInterval is the state-poll spacing. Defaults to 500ms.
 	PollInterval time.Duration
 	// MaxExportBytes caps the bytes extracted from the exported archive's
@@ -108,6 +117,14 @@ func (cfg Config) withDefaults() Config {
 	}
 	if cfg.TeardownTimeout == 0 {
 		cfg.TeardownTimeout = 2 * time.Minute
+	}
+	if cfg.HandoffTimeout == 0 {
+		// A wedge backstop, not an SLA, so size it generously above the two
+		// observed-state waits it contains plus enough slack to stream,
+		// extract, hash, and scan a near-max multi-GiB export without the
+		// overall budget firing on a legitimately slow run. Operators facing
+		// larger scans can raise it.
+		cfg.HandoffTimeout = cfg.WriterStopTimeout + cfg.ExporterTimeout + 15*time.Minute
 	}
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = 500 * time.Millisecond
@@ -161,6 +178,8 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: PollInterval %s is negative", ErrInvalidConfig, cfg.PollInterval)
 	case cfg.TeardownTimeout < 0:
 		return fmt.Errorf("%w: TeardownTimeout %s is negative", ErrInvalidConfig, cfg.TeardownTimeout)
+	case cfg.HandoffTimeout < 0:
+		return fmt.Errorf("%w: HandoffTimeout %s is negative", ErrInvalidConfig, cfg.HandoffTimeout)
 	case cfg.Scanner == nil:
 		return fmt.Errorf("%w: Scanner is required (check 7 scans every export)", ErrInvalidConfig)
 	}
