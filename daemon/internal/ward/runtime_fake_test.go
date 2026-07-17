@@ -19,9 +19,12 @@ var _ Runtime = stubRuntime{}
 func (stubRuntime) CreateVolume(context.Context, string, int64, []Label) error { return nil }
 func (stubRuntime) DeleteVolume(context.Context, string) error                 { return nil }
 func (stubRuntime) ListVolumes(context.Context) ([]VolumeSummary, error)       { return nil, nil }
-func (stubRuntime) CreateContainer(context.Context, ContainerSpec) error       { return nil }
-func (stubRuntime) StartContainer(context.Context, string) error               { return nil }
-func (stubRuntime) StopContainer(context.Context, string) error                { return nil }
+func (stubRuntime) InspectVolume(context.Context, string) (VolumeSummary, error) {
+	return VolumeSummary{}, nil
+}
+func (stubRuntime) CreateContainer(context.Context, ContainerSpec) error { return nil }
+func (stubRuntime) StartContainer(context.Context, string) error         { return nil }
+func (stubRuntime) StopContainer(context.Context, string) error          { return nil }
 func (stubRuntime) Inspect(context.Context, string) (InspectReport, error) {
 	return InspectReport{}, nil
 }
@@ -37,6 +40,15 @@ type fakeCtr struct {
 	started  bool
 	stopped  bool
 	inspects int // inspects observed since start
+	// created is the opaque creation fingerprint the fake reports; a
+	// replacement gets a fresh value, like the real runtime's creationDate.
+	created string
+}
+
+// fakeVol is one volume the fakeRuntime tracks.
+type fakeVol struct {
+	labels  []Label
+	created string
 }
 
 // fakeRuntime is the scripted Runtime driving the lifecycle tests: default
@@ -49,8 +61,11 @@ type fakeRuntime struct {
 	mu sync.Mutex
 
 	calls []string
-	vols  map[string][]Label
+	vols  map[string]*fakeVol
 	ctrs  map[string]*fakeCtr
+	// seq feeds nextCreated so every object the fake makes carries a distinct
+	// opaque creation fingerprint.
+	seq int
 
 	// runningInspects is how many post-start Inspects report running before
 	// stopped, per container name; unset means 1.
@@ -83,6 +98,7 @@ type fakeRuntime struct {
 
 	onCreateVolume    func(name string) error
 	onDeleteVolume    func(name string) (skipRemoval bool, err error)
+	onInspectVolume   func(name string, v VolumeSummary) (VolumeSummary, error)
 	onCreateContainer func(spec ContainerSpec) error
 	onStart           func(id string) error
 	onStop            func(id string) error
@@ -97,11 +113,17 @@ func newFakeRuntime(t *testing.T) *fakeRuntime {
 	t.Helper()
 	return &fakeRuntime{
 		t:               t,
-		vols:            map[string][]Label{},
+		vols:            map[string]*fakeVol{},
 		ctrs:            map[string]*fakeCtr{},
 		runningInspects: map[string]int{},
 		exportTarPath:   buildTar(t, fixtureArchive(t)),
 	}
+}
+
+// nextCreated mints a distinct opaque creation fingerprint. Callers hold mu.
+func (f *fakeRuntime) nextCreated() string {
+	f.seq++
+	return fmt.Sprintf("fake-created-%d", f.seq)
 }
 
 var _ Runtime = (*fakeRuntime)(nil)
@@ -144,7 +166,7 @@ func (f *fakeRuntime) CreateVolume(ctx context.Context, name string, _ int64, la
 	if _, dup := f.vols[name]; dup {
 		return fmt.Errorf("volume %q already exists", name)
 	}
-	f.vols[name] = labels
+	f.vols[name] = &fakeVol{labels: labels, created: f.nextCreated()}
 	if f.createVolumeThenFail {
 		return fmt.Errorf("create of volume %q reported failure after the volume was made", name)
 	}
@@ -179,13 +201,34 @@ func (f *fakeRuntime) ListVolumes(ctx context.Context) ([]VolumeSummary, error) 
 		return nil, err
 	}
 	out := make([]VolumeSummary, 0, len(f.vols))
-	for name, labels := range f.vols {
-		out = append(out, VolumeSummary{Name: name, Labels: labels, LabelsObserved: true})
+	for name, v := range f.vols {
+		out = append(out, VolumeSummary{Name: name, Labels: v.labels, LabelsObserved: true, CreationDate: v.created})
 	}
 	if f.onListVolumes != nil {
 		return f.onListVolumes(out)
 	}
 	return out, nil
+}
+
+func (f *fakeRuntime) InspectVolume(ctx context.Context, name string) (VolumeSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("inspect-volume %s", name)
+	if err := f.checkCtx(ctx); err != nil {
+		return VolumeSummary{}, err
+	}
+	v, ok := f.vols[name]
+	var sum VolumeSummary
+	if ok {
+		sum = VolumeSummary{Name: name, Labels: v.labels, LabelsObserved: true, CreationDate: v.created}
+	}
+	if f.onInspectVolume != nil {
+		return f.onInspectVolume(name, sum)
+	}
+	if !ok {
+		return VolumeSummary{}, fmt.Errorf("volume %q not found", name)
+	}
+	return sum, nil
 }
 
 func (f *fakeRuntime) CreateContainer(ctx context.Context, spec ContainerSpec) error {
@@ -203,7 +246,7 @@ func (f *fakeRuntime) CreateContainer(ctx context.Context, spec ContainerSpec) e
 	if _, dup := f.ctrs[spec.Name]; dup {
 		return fmt.Errorf("container %q already exists", spec.Name)
 	}
-	f.ctrs[spec.Name] = &fakeCtr{spec: spec}
+	f.ctrs[spec.Name] = &fakeCtr{spec: spec, created: f.nextCreated()}
 	if f.createThenFail == spec.Name {
 		if f.afterAmbiguousContainerCreate != nil {
 			f.afterAmbiguousContainerCreate()
@@ -306,6 +349,7 @@ func (f *fakeRuntime) Inspect(ctx context.Context, id string) (InspectReport, er
 		Command:                 append([]string(nil), c.spec.Command...),
 		WorkingDirectory:        "/",
 		State:                   f.state(c, id),
+		CreationDate:            c.created,
 		AllowlistFieldsObserved: true,
 		Mounts:                  append([]Mount(nil), c.spec.Mounts...),
 		Env:                     append([]string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}, c.spec.Env...),
@@ -363,6 +407,7 @@ func (f *fakeRuntime) ListContainers(ctx context.Context) ([]ContainerSummary, e
 	for name, c := range f.ctrs {
 		out = append(out, ContainerSummary{
 			ID: name, State: f.state(c, name), Labels: append([]Label(nil), c.spec.Labels...), LabelsObserved: true,
+			CreationDate: c.created,
 		})
 	}
 	if f.onListContainers != nil {

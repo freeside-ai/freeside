@@ -110,6 +110,12 @@ type InspectReport struct {
 	Command          []string
 	WorkingDirectory string
 	State            ContainerState
+	// CreationDate is the runtime's reported creation instant, used as an
+	// opaque per-object identity fingerprint: two same-name observations with
+	// different values are different objects. It is compared only for
+	// equality, never parsed (parsing could normalize distinct raw values
+	// into a false match). Empty means the runtime did not report it.
+	CreationDate string
 	// AllowlistFieldsObserved records whether inspect exposed every image,
 	// process, environment, SSH, and publication field pre-start approval
 	// consumes.
@@ -138,6 +144,9 @@ type VolumeSummary struct {
 	// LabelsObserved distinguishes an explicitly empty label set from an
 	// omitted runtime field that cannot prove or disprove ownership.
 	LabelsObserved bool
+	// CreationDate has the same opaque-fingerprint meaning as on
+	// InspectReport; empty means unobserved.
+	CreationDate string
 }
 
 // ContainerSummary identifies one container in a full listing.
@@ -147,6 +156,9 @@ type ContainerSummary struct {
 	Labels []Label
 	// LabelsObserved has the same trust-boundary meaning as on VolumeSummary.
 	LabelsObserved bool
+	// CreationDate has the same opaque-fingerprint meaning as on
+	// InspectReport; empty means unobserved.
+	CreationDate string
 }
 
 // Runtime is the seam between the gate and the container runtime. The real
@@ -161,6 +173,11 @@ type Runtime interface {
 	DeleteVolume(ctx context.Context, name string) error
 	// ListVolumes returns every volume the runtime knows.
 	ListVolumes(ctx context.Context) ([]VolumeSummary, error)
+	// InspectVolume returns the observed summary of one named volume. It is
+	// the volume analogue of Inspect: a per-object observation for identity
+	// and ownership evidence when the full listing is unavailable or a fresh
+	// fingerprint is needed.
+	InspectVolume(ctx context.Context, name string) (VolumeSummary, error)
 	// CreateContainer creates (without starting) a container from spec.
 	CreateContainer(ctx context.Context, spec ContainerSpec) error
 	// StartContainer starts a created container.

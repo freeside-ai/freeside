@@ -142,6 +142,14 @@ func (c *CLIRuntime) ListVolumes(ctx context.Context) ([]VolumeSummary, error) {
 	return decodeVolumeList(out)
 }
 
+func (c *CLIRuntime) InspectVolume(ctx context.Context, name string) (VolumeSummary, error) {
+	out, err := c.run(ctx, "volume", "inspect", name)
+	if err != nil {
+		return VolumeSummary{}, err
+	}
+	return decodeVolumeInspect(out, name)
+}
+
 func (c *CLIRuntime) CreateContainer(ctx context.Context, spec ContainerSpec) error {
 	args, err := createContainerArgs(spec)
 	if err != nil {
@@ -270,11 +278,12 @@ type cliImage struct {
 }
 
 type cliConfiguration struct {
-	ID          string             `json:"id"`
-	Image       *cliImage          `json:"image"`
-	Labels      *map[string]string `json:"labels"`
-	Mounts      []cliMount         `json:"mounts"`
-	InitProcess cliInitProcess     `json:"initProcess"`
+	ID           string             `json:"id"`
+	CreationDate string             `json:"creationDate"`
+	Image        *cliImage          `json:"image"`
+	Labels       *map[string]string `json:"labels"`
+	Mounts       []cliMount         `json:"mounts"`
+	InitProcess  cliInitProcess     `json:"initProcess"`
 	// Pointers for the same reason as Environment: check 4's allowlist inputs
 	// must be observed, so an absent field fails closed rather than reading
 	// as "no SSH / no publications".
@@ -294,8 +303,9 @@ type cliContainer struct {
 }
 
 type cliVolume struct {
-	Name   string             `json:"name"`
-	Labels *map[string]string `json:"labels"`
+	Name         string             `json:"name"`
+	CreationDate string             `json:"creationDate"`
+	Labels       *map[string]string `json:"labels"`
 }
 
 type cliVolumeEntry struct {
@@ -463,6 +473,7 @@ func (c cliContainer) toReport() InspectReport {
 	rep := InspectReport{
 		ID:                      c.ID,
 		State:                   ContainerState(c.Status.State),
+		CreationDate:            c.Configuration.CreationDate,
 		AllowlistFieldsObserved: c.allowlistFieldsPresent(),
 		LabelsObserved:          c.Configuration.Labels != nil,
 	}
@@ -583,9 +594,52 @@ func decodeContainerList(out []byte) ([]ContainerSummary, error) {
 		summaries[i] = ContainerSummary{
 			ID: c.ID, State: ContainerState(c.Status.State), Labels: labels,
 			LabelsObserved: c.Configuration.Labels != nil,
+			CreationDate:   c.Configuration.CreationDate,
 		}
 	}
 	return summaries, nil
+}
+
+// decodeVolumeInspect decodes `container volume inspect` output: an array
+// with exactly one element for a single-name query, in the same entry shape
+// as the volume listing. The identity rules mirror decodeInspect: the report
+// is evidence only when both its top-level id and configuration name equal
+// the requested name, so ownership recovery cannot act on another volume's
+// labels or fingerprint.
+func decodeVolumeInspect(out []byte, name string) (VolumeSummary, error) {
+	if err := rejectDuplicateJSONKeys(out); err != nil {
+		return VolumeSummary{}, fmt.Errorf("decode volume inspect output for %q: invalid JSON structure", name)
+	}
+	var vols []cliVolumeEntry
+	if err := json.Unmarshal(out, &vols); err != nil {
+		return VolumeSummary{}, fmt.Errorf("decode volume inspect output for %q: %w", name, err)
+	}
+	if len(vols) != 1 {
+		return VolumeSummary{}, fmt.Errorf("volume inspect %q returned %d volumes, want 1", name, len(vols))
+	}
+	if vols[0].ID != name {
+		// The observed id is untrusted CLI output that could carry a copied
+		// credential in a foreign object's name; keep the reason categorical
+		// so it cannot reach ConformanceFailure.Reason as credential material.
+		return VolumeSummary{}, fmt.Errorf("volume inspect %q returned a report with a mismatched identity", name)
+	}
+	if vols[0].Configuration.Name != name {
+		return VolumeSummary{}, fmt.Errorf("volume inspect %q returned a configuration with a mismatched name", name)
+	}
+	v := vols[0]
+	labels := []Label(nil)
+	if v.Configuration.Labels != nil {
+		labels = make([]Label, 0, len(*v.Configuration.Labels))
+		for k, val := range *v.Configuration.Labels {
+			labels = append(labels, Label{Key: k, Value: val})
+		}
+	}
+	sort.Slice(labels, func(a, b int) bool { return labels[a].Key < labels[b].Key })
+	return VolumeSummary{
+		Name: v.Configuration.Name, Labels: labels,
+		LabelsObserved: v.Configuration.Labels != nil,
+		CreationDate:   v.Configuration.CreationDate,
+	}, nil
 }
 
 func decodeVolumeList(out []byte) ([]VolumeSummary, error) {
@@ -623,6 +677,7 @@ func decodeVolumeList(out []byte) ([]VolumeSummary, error) {
 		summaries[i] = VolumeSummary{
 			Name: v.Configuration.Name, Labels: labels,
 			LabelsObserved: v.Configuration.Labels != nil,
+			CreationDate:   v.Configuration.CreationDate,
 		}
 	}
 	return summaries, nil
