@@ -687,10 +687,12 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 	// as a filename (a manifest path) or a symlink target — neither becomes a
 	// scanned blob, and the §5.4 scanner is blind to the inert marker. The
 	// suite writer produces exactly result.txt and the nested state file as
-	// regular files; reject any other entry or non-regular kind.
+	// regular files; reject any other entry or non-regular kind. Never echo the
+	// attacker-controlled path in the reason: this branch is specifically where
+	// a credential marker smuggled as a filename is detected.
 	for _, e := range res.Manifest.Entries {
 		if e.Kind != export.EntryRegular || (e.Path != writerResultPath && e.Path != workspaceStateFile) {
-			return failf(CheckCredentialContainment, "export carries an unexpected manifest entry %q (kind %q); the suite writer produces only %q and %q, so a filename or symlink target could smuggle the credential past the content scan", e.Path, e.Kind, writerResultPath, workspaceStateFile)
+			return failf(CheckCredentialContainment, "export carries an unexpected manifest entry (kind %q); the suite writer produces only %q and %q, so credential-bearing path metadata is redacted", e.Kind, writerResultPath, workspaceStateFile)
 		}
 	}
 
@@ -702,7 +704,7 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 	// omitted entries either — the same gap the sentinel check guards against).
 	for _, e := range res.Manifest.Entries {
 		if e.Kind == export.EntryRegular && e.BlobOmitted {
-			return failf(CheckCredentialContainment, "export omits workspace blob %q; the credential marker's absence cannot be proven over omitted content", e.Path)
+			return failf(CheckCredentialContainment, "export omits workspace blob content; the credential marker's absence cannot be proven over omitted content")
 		}
 	}
 	// Containment, export half: the credential marker must be absent from the

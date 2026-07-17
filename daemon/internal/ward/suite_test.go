@@ -731,6 +731,9 @@ func TestSuiteFullRejectsSmuggledFilename(t *testing.T) {
 	if !strings.Contains(cf.Reason, "unexpected manifest entry") {
 		t.Errorf("reason = %q, want the unexpected-entry failure", cf.Reason)
 	}
+	if strings.Contains(err.Error(), suiteMarker) {
+		t.Errorf("error re-emitted the credential marker: %q", err)
+	}
 	s.assertReaped(t, rt)
 }
 

@@ -780,6 +780,15 @@ before seeding the fake credential. A mount-conditional eager create therefore
 cannot finish and self-mask. Ownership-bound cleanup covers the extra objects;
 regressions force the mounted probe running and capture its exact topology.
 
+## Automated review round 33
+
+The unexpected-manifest-shape failure correctly caught a marker smuggled as a
+filename but interpolated that attacker-controlled path into
+`ConformanceFailure.Reason`, re-emitting the fake credential marker through
+logs or audit. Containment diagnostics no longer include manifest entry paths,
+including the sibling omitted-blob branch. The smuggled-filename regression now
+asserts the complete returned error does not contain the marker.
+
 **Accepted by decision.** The marker value appears in the seed/audit
 container argv; this is safe because the marker is an inert fake credential
 by contract (the whole point of a *fake* marker is to test containment
