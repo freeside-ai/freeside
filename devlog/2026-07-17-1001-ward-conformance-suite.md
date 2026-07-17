@@ -68,7 +68,9 @@ construction — no capability, spec field, or backend path scaffolds it.
 The negative probes and the pre-job probe get typed identifiers
 (`writer_volume_exclusion`, `credential_containment`, `same_vm_refutation`,
 `pre_job_probe`) that share the `Check` type and `ConformanceFailure` so
-every suite result is uniformly typed and fail-closed (acceptance 3). They
+every violated assertion is uniformly typed and every non-nil result fails
+closed (acceptance 3). Operational errors that prevent a verdict stay non-nil
+without pretending a specific assertion was disproved. They
 register in `AllProbeChecks` / `CheckPreJobProbe`, not `AllChecks`, so the
 spike's "check N" numbering keeps its meaning; `valid()` and the
 exhaustiveness test cover all identifiers. No shared-package edit: the
@@ -652,6 +654,84 @@ collision, a liveness sibling, and a live-test regression I introduced):
   `sameMounts`) before trusting the state. Regression: a liveness container with
   dropped mounts fails closed.
 
+## Thorough pre-review refute pass after round 28
+
+The owner requested a fresh, thorough review before another automated pass.
+Three independent read-only lenses plus a complete local diff review found
+several worthwhile failures in classes the serial rounds had not exhausted.
+All were confirmed by executable scenarios and fixed together so the next
+review sees the class-level closure rather than another cited-line patch.
+
+- **The exclusion probe exercised RW→RW, not the required RW→RO handoff
+  conflict.** The writer held the workspace read-write, but the second probe
+  also requested read-write. A runtime that rejects two writers while allowing
+  a read-only exporter beside the live writer would pass even though the real
+  handoff isolation failed. The second container is now exporter-shaped (the
+  pinned exporter image/command) and requests the workspace read-only; a
+  regression captures and checks that exact spec.
+- **The detached-volume audit accepted arbitrary bytes.** It searched the raw
+  `ExportRootFS` stream for the public audit sentinel, and the fake happy path
+  literally returned bare sentinel bytes rather than a tar. A malformed
+  archive, filename/header, or unrelated file could therefore pass without
+  proving the stopped audit rootfs carried the marker-gated result. The export
+  is now written behind the existing byte cap to a suite-owned temp file,
+  parsed through tar EOF, and accepted only when exactly one regular file at
+  `auditMarkerPath` has the exact run-bound sentinel content. Malformed,
+  duplicate, wrong-type, wrong-size, and wrong-content evidence fails closed.
+- **The audit trusted mounts but not the command.** A runtime could preserve the
+  credential mount while replacing the marker equality test with an
+  unconditional sentinel write. Probe inspection now verifies the full
+  realized surface the proof depends on: identity, observed configuration,
+  image, command, environment, working directory, mounts, stopped state, and
+  absence of SSH/publication fields. The credential seed uses the same check.
+- **Suite cleanup had name authority, not object authority.** Reaps registered
+  before create unconditionally stopped/deleted deterministic names. An
+  already-existing object, ambiguous collision, concurrent invocation, or
+  same-name replacement could be destroyed. Each Full/PreJob invocation now
+  mints the handoff's CSPRNG ownership label, captures each successful
+  create's label-backed creation fingerprint, reclassifies fresh evidence
+  before every destructive call, and leaves foreign replacements untouched.
+  Cleanup verification direct-inspects every claimed name as well as reading
+  the full listings, closing the case where a lying delete and filtered list
+  hid a survivor. Exact-name container and volume collision regressions prove
+  the foreign objects survive.
+- **Custom writer commands made the proof optional.** The documented contract
+  said a custom command still had to read the credential, but Full could only
+  enforce a non-empty manifest and explicitly tested `true` as passing over a
+  fabricated export. The suite now owns one fixed marker-gated writer and
+  always requires its exact run sentinel, nested fixture, and manifest shape;
+  `AgentCommand` customization and its weaker metadata branch are removed.
+- **Two classifiers could self-mask.** PreJob's finite `sleep 300` could finish
+  inside a longer configured timeout when create synchronously executed it;
+  the payload is now nonterminating and can return from an eager create only
+  through context cancellation. The exclusion writer uses the same property
+  and is identity-bound, fully verified, and observed stopped before the suite
+  starts it by name, so a replacement cannot redirect that side effect.
+  `isAttachmentExclusion` no longer accepts
+  code-less prose containing “storage device attachment”; it requires the
+  reference runtime's observed top-level `VZErrorDomain Code=2` together with
+  the storage-device wording.
+- **The Full liveness surrogate was stale after the rebase.** Current main's
+  gate now asserts both the real writer and exporter are `StateStopped` in
+  their pre-start allowlist inspections, resolving the defense-in-depth gap
+  recorded as #152. Full therefore removed its redundant throwaway mounted
+  liveness VM; PreJob retains the no-start liveness check because that is its
+  actual cadence contract. #152 remains tracker state for its owner to close,
+  not a second implementation obligation here.
+- **The result contract overclaimed.** A check/probe violation is a typed
+  `*ConformanceFailure`, while operational failures from the handoff can be
+  plain errors. Turning an inability to execute into a made-up failed check
+  would be less honest, so the code contract stays “only nil is conformant”
+  and the package/PR wording now distinguishes typed assertion failures from
+  fail-closed operational errors.
+
+The same review fixed a bounded-resource hygiene issue: `dirContainsMarker`
+closed each blob immediately instead of deferring every close until the whole
+walk, avoiding descriptor exhaustion on a large valid manifest. The
+host-gated Apple-container suite was not rerun after these changes; it remains
+an explicit verification gap, while fake regressions cover every changed
+decision deterministically.
+
 **Accepted by decision.** The marker value appears in the seed/audit
 container argv; this is safe because the marker is an inert fake credential
 by contract (the whole point of a *fake* marker is to test containment
@@ -662,8 +742,7 @@ context-ignoring sleep and a never-stopping container could spin, but the
 production `Sleep` respects the context and the fake always transitions, so
 this is a test-fixture concern, not a runtime one.
 
-Revisit when: #143 lands (then the suite's reference-runtime full run
-moves from recorded gap to green); doctor scheduling wiring lands (the
-operations unit consuming this library); or Apple container exposes a
+Revisit when: doctor scheduling wiring lands (the operations unit consuming
+this library); or Apple container exposes a
 mechanism that lets the pre-job probe cheaply re-verify a realized
 isolation property, which would reopen the PreJob scope choice.

@@ -29,9 +29,12 @@
 // express — that minimality is checks 1-2's isolation argument — so it is a
 // permanent reference-runtime test driving the CLI directly
 // (TestLiveConformanceSameVMRefutation), never a Suite member and never a
-// widening of the spec. Every suite result is fail-closed: nil (conformant)
-// or a *ConformanceFailure naming the failed check or probe (the §3.1
-// non-waivable class, which never auto-promotes or offers a bypass).
+// widening of the spec. Every suite result is fail-closed: only nil is
+// conformant. A violated check or probe is a *ConformanceFailure naming that
+// assertion; an operational error that prevents the suite from reaching a
+// verdict remains non-nil and gates unattended operation without pretending a
+// specific contract assertion was disproved (the §3.1 non-waivable class,
+// which never auto-promotes or offers a bypass).
 //
 // Suite.PreJob is the lightweight probe run before each unattended job. It
 // verifies only cheap preconditions — the capability declaration is intact,

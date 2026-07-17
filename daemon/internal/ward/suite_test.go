@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -112,7 +113,23 @@ func manifestArchive(t *testing.T, files []manifestFile) []tarEntry {
 func passAudit(s *Suite) func(string, io.Writer) error {
 	return func(id string, dest io.Writer) error {
 		if id == s.conformanceName("audit") {
-			_, err := dest.Write([]byte(auditSentinel(s.fx.RunID)))
+			var buf bytes.Buffer
+			tw := tar.NewWriter(&buf)
+			body := []byte(auditSentinel(s.fx.RunID) + "\n")
+			if err := tw.WriteHeader(&tar.Header{
+				Name: strings.TrimPrefix(auditMarkerPath(s.fx.RunID), "/"),
+				Mode: 0o644,
+				Size: int64(len(body)),
+			}); err != nil {
+				return err
+			}
+			if _, err := tw.Write(body); err != nil {
+				return err
+			}
+			if err := tw.Close(); err != nil {
+				return err
+			}
+			_, err := dest.Write(buf.Bytes())
 			return err
 		}
 		return nil
@@ -131,10 +148,10 @@ func scriptHappyProbes(s *Suite, rt *fakeRuntime) {
 		}
 		return nil
 	}
-	// The exclusion probe inspects the writer twice (once before the second
-	// attach, once to re-confirm it still holds the mount after the refusal);
+	// The exclusion probe inspects the writer three times (stopped before start,
+	// running before the second attach, and running after the refusal);
 	// the fake reports a started container running for only its first inspect by
-	// default, so keep the live writer running across both.
+	// default, so keep the live writer running across both post-start inspects.
 	rt.runningInspects[s.conformanceName("excl-writer")] = 2
 }
 
@@ -367,6 +384,36 @@ func TestSuiteFullExclusionWriterMountUnrealized(t *testing.T) {
 	s.assertReaped(t, rt)
 }
 
+// TestSuiteFullExclusionDoesNotStartUnprovenWriter proves the exclusion probe
+// binds the successful create to this invocation before executing by name. A
+// contradictory post-create identity must fail closed without starting what
+// could be a foreign same-name replacement.
+func TestSuiteFullExclusionDoesNotStartUnprovenWriter(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	rt.onExport = passAudit(s)
+	writer := s.conformanceName("excl-writer")
+	firstWriterInspect := true
+	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+		if id == writer && firstWriterInspect {
+			firstWriterInspect = false
+			rep.Labels = []Label{{Key: "foreign", Value: "true"}}
+		}
+		return rep, nil
+	}
+	rt.onStart = func(id string) error {
+		if id == writer {
+			t.Fatalf("started unproven exclusion writer %q", id)
+		}
+		return nil
+	}
+	err := s.Full(context.Background())
+	wantCheckFailure(t, err, CheckWriterVolumeExclusion)
+	if !strings.Contains(err.Error(), "identity is unproven before start") {
+		t.Errorf("error = %q, want pre-start ownership failure", err)
+	}
+	s.assertReaped(t, rt)
+}
+
 // TestSuiteFullExclusionSecondRunsDespiteError: a Runtime that returns a
 // storage-attachment error from the second start yet leaves the second
 // container running (the volume was not actually excluded) must fail closed,
@@ -520,7 +567,7 @@ func TestSuiteFullAuditMountUnrealized(t *testing.T) {
 	wantCheckFailure(t, err, CheckCredentialContainment)
 	var cf *ConformanceFailure
 	_ = errors.As(err, &cf)
-	if !strings.Contains(cf.Reason, "did not realize this run's credential volume mount") {
+	if !strings.Contains(cf.Reason, "did not realize the stopped suite-owned probe spec") {
 		t.Errorf("reason = %q, want the unrealized-audit-mount failure", cf.Reason)
 	}
 	s.assertReaped(t, rt)
@@ -550,7 +597,7 @@ func TestSuiteFullAuditSpecMountMutationDefeated(t *testing.T) {
 	wantCheckFailure(t, err, CheckCredentialContainment)
 	var cf *ConformanceFailure
 	_ = errors.As(err, &cf)
-	if !strings.Contains(cf.Reason, "did not realize this run's credential volume mount") {
+	if !strings.Contains(cf.Reason, "did not realize the stopped suite-owned probe spec") {
 		t.Errorf("reason = %q, want the unrealized-audit-mount failure", cf.Reason)
 	}
 	s.assertReaped(t, rt)
@@ -606,7 +653,7 @@ func TestSuiteFullOmittedBlobMarkerUnprovable(t *testing.T) {
 func TestSuiteFullRejectsEagerStart(t *testing.T) {
 	s, rt := newSuiteTest(t)
 	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
-		if id == s.conformanceName("liveness") {
+		if id == namesFor(s.fx.RunID).Agent {
 			rep.State = StateRunning // create eagerly started the container
 		}
 		return rep, nil
@@ -615,57 +662,8 @@ func TestSuiteFullRejectsEagerStart(t *testing.T) {
 	wantCheckFailure(t, err, CheckControlPlaneIsolation)
 	var cf *ConformanceFailure
 	_ = errors.As(err, &cf)
-	if !strings.Contains(cf.Reason, "executed it before inspection") {
+	if !strings.Contains(cf.Reason, "not observed stopped before execution") {
 		t.Errorf("reason = %q, want the eager-start failure", cf.Reason)
-	}
-	s.assertReaped(t, rt)
-}
-
-// TestSuiteFullRejectsUnrealizedLivenessSpec: if the liveness container does not
-// realize the probe's mounted spec (a runtime that dropped the mounts), the
-// stopped-state proof is meaningless — it never exercised the mounted create
-// path — so Full fails closed rather than accept it.
-func TestSuiteFullRejectsUnrealizedLivenessSpec(t *testing.T) {
-	s, rt := newSuiteTest(t)
-	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
-		if id == s.conformanceName("liveness") {
-			rep.Mounts = nil // the runtime dropped the probe's mounts
-		}
-		return rep, nil
-	}
-	err := s.Full(context.Background())
-	wantCheckFailure(t, err, CheckControlPlaneIsolation)
-	var cf *ConformanceFailure
-	_ = errors.As(err, &cf)
-	if !strings.Contains(cf.Reason, "did not realize the probe spec") {
-		t.Errorf("reason = %q, want the unrealized-spec failure", cf.Reason)
-	}
-	s.assertReaped(t, rt)
-}
-
-// TestSuiteFullLivenessProbeIsMounted: the eager-start liveness probe exercises
-// the writer's own mount topology (a workspace volume read-write, the credential
-// volume read-only), so a runtime that eager-starts only mounted containers is
-// caught — not just an unmounted probe.
-func TestSuiteFullLivenessProbeIsMounted(t *testing.T) {
-	s, rt := newSuiteTest(t)
-	scriptHappyProbes(s, rt)
-	var livenessMounts []Mount
-	rt.onCreateContainer = func(spec ContainerSpec) error {
-		if spec.Name == s.conformanceName("liveness") {
-			livenessMounts = append([]Mount(nil), spec.Mounts...)
-		}
-		return nil
-	}
-	if err := s.Full(context.Background()); err != nil {
-		t.Fatalf("Full = %v, want nil", err)
-	}
-	want := []Mount{
-		{Type: MountVolume, Source: s.conformanceName("liveness-ws"), Target: s.b.cfg.WorkspaceTarget},
-		{Type: MountVolume, Source: s.conformanceName("cred"), Target: s.fx.CredentialTarget, ReadOnly: true},
-	}
-	if !sameMounts(livenessMounts, want) {
-		t.Errorf("liveness probe mounts = %+v, want the writer topology %+v", livenessMounts, want)
 	}
 	s.assertReaped(t, rt)
 }
@@ -693,74 +691,13 @@ func TestSuiteFullRejectsSmuggledFilename(t *testing.T) {
 	s.assertReaped(t, rt)
 }
 
-// TestSuiteFullCustomCommandSkipsSentinel: a caller-supplied writer command opts
-// out of the run-unique sentinel proof (the suite cannot know a custom payload's
-// output), so Full applies only the non-empty floor — a non-empty export without
-// the sentinel still passes containment.
-func TestSuiteFullCustomCommandSkipsSentinel(t *testing.T) {
-	fx := newHandoffFixture(t)
-	b := fx.backend(t)
-	s, err := NewSuite(b, SuiteFixture{
-		AgentImage:       "example.test/agent@sha256:" + strings.Repeat("1", 64),
-		CredentialMarker: suiteMarker,
-		RunID:            "conf-run",
-		AgentCommand:     []string{"sh", "-c", "true"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Default fixture export (non-empty, no sentinel); the audit passes and the
-	// second attach is refused, so only the sentinel bifurcation is exercised.
-	fx.rt.onExport = passAudit(s)
-	fx.rt.onStart = func(id string) error {
-		if id == s.conformanceName("excl-second") {
-			return errors.New("VZErrorDomain Code=2: the storage device attachment is invalid")
-		}
-		return nil
-	}
-	fx.rt.runningInspects[s.conformanceName("excl-writer")] = 2 // live across both writer inspects
-	if err := s.Full(context.Background()); err != nil {
-		t.Fatalf("Full with custom command = %v, want nil (non-empty floor only)", err)
-	}
-	s.assertReaped(t, fx.rt)
-}
-
-// TestSuiteFullCustomCommandMetadataLeak: a caller-supplied command opts out of
-// the exact-shape check, so a marker leaked as a filename (clean blob content)
-// would escape the content-only scan; the custom-path metadata scan catches it.
-func TestSuiteFullCustomCommandMetadataLeak(t *testing.T) {
-	fx := newHandoffFixture(t)
-	b := fx.backend(t)
-	s, err := NewSuite(b, SuiteFixture{
-		AgentImage:       "example.test/agent@sha256:" + strings.Repeat("1", 64),
-		CredentialMarker: suiteMarker,
-		RunID:            "conf-run",
-		AgentCommand:     []string{"sh", "-c", "true"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The export leaks the marker as a filename; its blob content is inert.
-	fx.rt.exportTarPath = buildTar(t, manifestArchive(t, []manifestFile{
-		{path: suiteMarker, body: "x\n"},
-	}))
-	err = s.Full(context.Background())
-	wantCheckFailure(t, err, CheckCredentialContainment)
-	var cf *ConformanceFailure
-	_ = errors.As(err, &cf)
-	if !strings.Contains(cf.Reason, "export metadata") {
-		t.Errorf("reason = %q, want the metadata-leak failure", cf.Reason)
-	}
-	s.assertReaped(t, fx.rt)
-}
-
 // TestDefaultWriterGatesOnMarkerAndEmitsSentinel: the generated default writer
 // verifies the token equals the seeded marker before producing output and emits
 // this run's sentinel, so a realized-but-wrong credential aborts the writer and
 // the export can be tied to this run.
 func TestDefaultWriterGatesOnMarkerAndEmitsSentinel(t *testing.T) {
 	s, _ := newSuiteTest(t)
-	cmd := strings.Join(s.fx.AgentCommand, " ")
+	cmd := strings.Join(s.agentCommand, " ")
 	if !strings.Contains(cmd, `test "$(cat `) || !strings.Contains(cmd, "= "+suiteMarker) {
 		t.Errorf("default writer does not gate on the seeded marker: %q", cmd)
 	}
@@ -788,8 +725,71 @@ func TestSuiteFullAuditCoincidentalMarkerNoSentinel(t *testing.T) {
 	wantCheckFailure(t, err, CheckCredentialContainment)
 	var cf *ConformanceFailure
 	_ = errors.As(err, &cf)
-	if !strings.Contains(cf.Reason, "not readable from the detached") {
-		t.Errorf("reason = %q, want the detached-volume audit failure", cf.Reason)
+	if !strings.Contains(cf.Reason, "validate credential-audit rootfs archive") {
+		t.Errorf("reason = %q, want the malformed-audit-archive failure", cf.Reason)
+	}
+	s.assertReaped(t, rt)
+}
+
+// TestSuiteFullAuditRejectsBareSentinel proves the detached-volume result must
+// be a valid rootfs tar with the sentinel at its exact path. Bare bytes carrying
+// the public run sentinel are not evidence that the audit command ran.
+func TestSuiteFullAuditRejectsBareSentinel(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	rt.onExport = func(id string, dest io.Writer) error {
+		if id == s.conformanceName("audit") {
+			_, err := dest.Write([]byte(auditSentinel(s.fx.RunID) + "\n"))
+			return err
+		}
+		return nil
+	}
+	err := s.Full(context.Background())
+	wantCheckFailure(t, err, CheckCredentialContainment)
+	if !strings.Contains(err.Error(), "validate credential-audit rootfs archive") {
+		t.Errorf("error = %q, want strict archive-validation failure", err)
+	}
+	s.assertReaped(t, rt)
+}
+
+// TestSuiteFullAuditRejectsChangedCommand proves a realized credential mount
+// cannot stand in for the marker-gated audit payload itself.
+func TestSuiteFullAuditRejectsChangedCommand(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+		if id == s.conformanceName("audit") {
+			rep.Command = []string{"sh", "-c", "printf '%s\\n' forged > /tmp/forged"}
+		}
+		return rep, nil
+	}
+	err := s.Full(context.Background())
+	wantCheckFailure(t, err, CheckCredentialContainment)
+	if !strings.Contains(err.Error(), "did not realize the stopped suite-owned probe spec") {
+		t.Errorf("error = %q, want unrealized audit-spec failure", err)
+	}
+	s.assertReaped(t, rt)
+}
+
+// TestSuiteFullExclusionUsesReadOnlyExporter verifies the negative probe
+// exercises the real handoff conflict: exporter RO while the writer holds RW,
+// not the weaker and different RW/RW conflict.
+func TestSuiteFullExclusionUsesReadOnlyExporter(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	scriptHappyProbes(s, rt)
+	var got ContainerSpec
+	rt.onCreateContainer = func(spec ContainerSpec) error {
+		if spec.Name == s.conformanceName("excl-second") {
+			got = cloneContainerSpec(spec)
+		}
+		return nil
+	}
+	if err := s.Full(context.Background()); err != nil {
+		t.Fatalf("Full = %v, want nil", err)
+	}
+	if got.Image != s.b.cfg.ExporterImage || !slices.Equal(got.Command, s.b.cfg.ExporterCommand) {
+		t.Errorf("second probe = image %q command %q, want exporter image/command", got.Image, got.Command)
+	}
+	if len(got.Mounts) != 1 || !got.Mounts[0].ReadOnly {
+		t.Errorf("second probe mounts = %+v, want one read-only workspace mount", got.Mounts)
 	}
 	s.assertReaped(t, rt)
 }
@@ -839,14 +839,14 @@ func TestSuiteFullExclusionWriterEvictedAfterRefusal(t *testing.T) {
 		}
 		return nil
 	}
-	// The writer would otherwise stay running across both inspects; force it
+	// The writer would otherwise stay running across both post-start inspects; force it
 	// stopped on the post-refusal re-check so the eviction is the sole cause.
 	rt.runningInspects[s.conformanceName("excl-writer")] = 2
 	writerInspects := 0
 	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
 		if id == s.conformanceName("excl-writer") {
 			writerInspects++
-			if writerInspects >= 2 { // the post-refusal re-check
+			if writerInspects >= 3 { // the post-refusal re-check
 				rep.State = StateStopped // the holder was evicted
 			}
 		}
@@ -945,6 +945,15 @@ func TestSuitePreJobFailures(t *testing.T) {
 				}
 			},
 		},
+		{
+			"liveness command not realized",
+			func(rt *fakeRuntime) {
+				rt.onInspect = func(_ string, rep InspectReport) (InspectReport, error) {
+					rep.Command = []string{"sh", "-c", "true"}
+					return rep, nil
+				}
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -976,17 +985,53 @@ func TestSuitePreJobFailsClosedOnLyingDelete(t *testing.T) {
 	}
 }
 
-// TestSuiteVerifyReapedExactNames: objects belonging to a different run whose
-// ID hyphen-extends this run's (run "conf-run" vs "conf-run-x") must not be
-// mistaken for this run's leaked objects.
-func TestSuiteVerifyReapedExactNames(t *testing.T) {
-	s, rt := newSuiteTest(t) // RunID "conf-run"
-	foreignCtr := "freeside-ward-conformance-conf-run-x-audit"
-	foreignVol := "freeside-ward-conformance-conf-run-x-cred"
-	rt.ctrs[foreignCtr] = &fakeCtr{spec: ContainerSpec{Name: foreignCtr}, created: "c"}
-	rt.vols[foreignVol] = &fakeVol{created: "v"}
-	if err := s.verifyReaped(context.Background()); err != nil {
-		t.Errorf("verifyReaped flagged a hyphen-extended foreign run's objects: %v", err)
+// TestSuitePreJobCatchesListingThatOmitsSurvivor ensures the cleanup proof does
+// not trust one filtered list when direct inspection still sees the object.
+func TestSuitePreJobCatchesListingThatOmitsSurvivor(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	rt.onDeleteContainer = func(string) (bool, error) { return true, nil }
+	rt.onListContainers = func([]ContainerSummary) ([]ContainerSummary, error) {
+		return nil, nil
+	}
+	err := s.PreJob(context.Background())
+	wantCheckFailure(t, err, CheckTeardown)
+	if !strings.Contains(err.Error(), "survived cleanup") {
+		t.Errorf("error = %q, want directly inspected survivor", err)
+	}
+}
+
+// TestSuitePreJobDoesNotDeleteForeignCollision proves registering the reap
+// before create is safe even when the deterministic name already belongs to a
+// foreign object.
+func TestSuitePreJobDoesNotDeleteForeignCollision(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	name := s.conformanceName("prejob")
+	rt.ctrs[name] = &fakeCtr{
+		spec:    ContainerSpec{Name: name, Labels: []Label{{Key: "foreign", Value: "true"}}},
+		created: "foreign-created",
+	}
+	err := s.PreJob(context.Background())
+	wantCheckFailure(t, err, CheckPreJobProbe)
+	if _, ok := rt.ctrs[name]; !ok {
+		t.Fatal("foreign same-name container was deleted")
+	}
+}
+
+// TestSuiteFullDoesNotDeleteForeignVolumeCollision is the volume analogue of
+// the container collision: an already-existing credential-volume name is not
+// authority to delete it after CreateVolume fails.
+func TestSuiteFullDoesNotDeleteForeignVolumeCollision(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	name := s.conformanceName("cred")
+	rt.vols[name] = &fakeVol{
+		labels:  []Label{{Key: "foreign", Value: "true"}},
+		created: "foreign-created",
+	}
+	if err := s.Full(context.Background()); err == nil {
+		t.Fatal("Full = nil, want create collision failure")
+	}
+	if _, ok := rt.vols[name]; !ok {
+		t.Fatal("foreign same-name volume was deleted")
 	}
 }
 
@@ -1035,27 +1080,6 @@ func TestNewSuiteValidation(t *testing.T) {
 	}
 }
 
-// TestNewSuiteFreezesAgentCommand: NewSuite clones the caller-owned command so
-// a later mutation of the caller's slice cannot change the synthetic writer
-// after fixture validation (matching New and Handoff).
-func TestNewSuiteFreezesAgentCommand(t *testing.T) {
-	b := newHandoffFixture(t).backend(t)
-	cmd := []string{"sh", "-c", "cat /credentials/token"}
-	s, err := NewSuite(b, SuiteFixture{
-		AgentImage:       "example.test/agent@sha256:" + strings.Repeat("1", 64),
-		CredentialMarker: suiteMarker,
-		RunID:            "conf-run",
-		AgentCommand:     cmd,
-	})
-	if err != nil {
-		t.Fatalf("NewSuite = %v", err)
-	}
-	cmd[2] = "rm -rf /" // mutate the caller-owned slice after construction
-	if s.fx.AgentCommand[2] != "cat /credentials/token" {
-		t.Errorf("suite command tracked the caller's mutation: %q", s.fx.AgentCommand[2])
-	}
-}
-
 func TestIsAttachmentExclusion(t *testing.T) {
 	cases := []struct {
 		name string
@@ -1064,8 +1088,8 @@ func TestIsAttachmentExclusion(t *testing.T) {
 	}{
 		{"nil", nil, false},
 		{"spike message", errors.New("VZErrorDomain Code=2: The storage device attachment is invalid"), true},
-		{"storage device only", errors.New("the storage device attachment failed"), true},
-		{"vz domain code 2 no wording", errors.New("VZErrorDomain Code=2: attachment rejected"), true},
+		{"storage device only", errors.New("the storage device attachment failed"), false},
+		{"vz domain code 2 no storage wording", errors.New("VZErrorDomain Code=2: attachment rejected"), false},
 		{"vz domain code 20 not 2", errors.New("VZErrorDomain Code=20: attachment rejected"), false},
 		{"vz domain code 21 not 2", errors.New("VZErrorDomain Code=21: attachment rejected"), false},
 		{"vz code 2 nested under a different top-level code", errors.New("VZErrorDomain Code=7: attachment failed; underlying NSError Code=2"), false},
@@ -1137,6 +1161,59 @@ func TestMarkerScanWriter(t *testing.T) {
 			t.Error("marker in a single write not found")
 		}
 	})
+}
+
+func TestAuditArchiveHasSentinel(t *testing.T) {
+	wantPath := auditMarkerPath("conf-run")
+	wantBody := auditSentinel("conf-run") + "\n"
+	cases := []struct {
+		name    string
+		entries []tarEntry
+		found   bool
+		wantErr bool
+	}{
+		{
+			name:    "exact regular file",
+			entries: []tarEntry{{name: strings.TrimPrefix(wantPath, "/"), body: []byte(wantBody)}},
+			found:   true,
+		},
+		{
+			name:    "sentinel at wrong path",
+			entries: []tarEntry{{name: "tmp/unrelated", body: []byte(wantBody)}},
+		},
+		{
+			name: "duplicate sentinel",
+			entries: []tarEntry{
+				{name: strings.TrimPrefix(wantPath, "/"), body: []byte(wantBody)},
+				{name: strings.TrimPrefix(wantPath, "/"), body: []byte(wantBody)},
+			},
+			wantErr: true,
+		},
+		{
+			name:    "sentinel is symlink",
+			entries: []tarEntry{{name: strings.TrimPrefix(wantPath, "/"), typeflag: tar.TypeSymlink, linkname: "elsewhere"}},
+			wantErr: true,
+		},
+		{
+			name:    "wrong content",
+			entries: []tarEntry{{name: strings.TrimPrefix(wantPath, "/"), body: []byte("forged\n")}},
+			wantErr: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := buildTar(t, tc.entries)
+			f, err := os.Open(p) //nolint:gosec // test temp path
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close() //nolint:errcheck // test read handle
+			found, err := auditArchiveHasSentinel(f, wantPath, wantBody)
+			if (err != nil) != tc.wantErr || found != tc.found {
+				t.Fatalf("auditArchiveHasSentinel = (%v, %v), want (%v, error=%v)", found, err, tc.found, tc.wantErr)
+			}
+		})
+	}
 }
 
 func mustWrite(t *testing.T, w io.Writer, s string) {

@@ -77,7 +77,7 @@ func TestLiveConformanceSuite(t *testing.T) {
 	bin := requireLiveContainer(t)
 	ctx := context.Background()
 	rt := NewCLIRuntime(bin)
-	runID := fmt.Sprintf("conf-%d", time.Now().Unix())
+	runID := fmt.Sprintf("conf-%d", time.Now().UnixNano())
 
 	// Failsafe sweep so an aborted assertion cannot orphan runtime state; the
 	// suite reaps its own objects on every path, this only backstops a panic.
@@ -154,7 +154,7 @@ func TestLiveConformanceSameVMRefutation(t *testing.T) {
 	bin := requireLiveContainer(t)
 	ctx := context.Background()
 	rt := NewCLIRuntime(bin)
-	runID := fmt.Sprintf("refute-%d", time.Now().Unix())
+	runID := fmt.Sprintf("refute-%d", time.Now().UnixNano())
 	ws := "freeside-ward-refute-ws-" + runID
 	cred := "freeside-ward-refute-cred-" + runID
 	sameVM := "freeside-ward-refute-samevm-" + runID
