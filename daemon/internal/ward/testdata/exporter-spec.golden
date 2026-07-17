@@ -1,0 +1,30 @@
+{
+  "name": "freeside-handoff-golden-run-exporter",
+  "image": "example.test/exporter@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "command": [
+    "/usr/local/bin/freeside-export",
+    "-workspace",
+    "/workspace",
+    "-out",
+    "/handoff"
+  ],
+  "env": null,
+  "mounts": [
+    {
+      "type": "volume",
+      "source": "freeside-handoff-golden-run-ws",
+      "target": "/workspace",
+      "read_only": true
+    }
+  ],
+  "labels": [
+    {
+      "key": "freeside.handoff",
+      "value": "golden-run"
+    },
+    {
+      "key": "freeside.handoff-owner",
+      "value": "00000000000000000000000000000000"
+    }
+  ]
+}

@@ -1,0 +1,99 @@
+[
+ {
+  "configuration": {
+   "capAdd": [],
+   "capDrop": [],
+   "creationDate": "2026-07-16T21:08:15Z",
+   "dns": {
+    "nameservers": [],
+    "options": [],
+    "searchDomains": []
+   },
+   "id": "freeside-handoff-run-1-exporter",
+   "image": {
+    "descriptor": {
+     "digest": "sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce",
+     "mediaType": "application/vnd.oci.image.index.v1+json",
+     "size": 9218
+    },
+    "reference": "docker.io/library/alpine:3.22"
+   },
+   "initProcess": {
+    "arguments": [
+     "-c",
+     "echo hi"
+    ],
+    "environment": [
+     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    ],
+    "executable": "sh",
+    "rlimits": [],
+    "supplementalGroups": [],
+    "terminal": false,
+    "user": {
+     "id": {
+      "gid": 0,
+      "uid": 0
+     }
+    },
+    "workingDirectory": "/"
+   },
+   "labels": {
+    "freeside.handoff": "run-1"
+   },
+   "mounts": [
+    {
+     "destination": "/workspace",
+     "options": [
+      "ro"
+     ],
+     "source": "/Users/owner/Library/Application Support/com.apple.container/volumes/freeside-handoff-run-1-ws/volume.img",
+     "type": {
+      "volume": {
+       "cache": {
+        "on": {}
+       },
+       "format": "ext4",
+       "name": "freeside-handoff-run-1-ws",
+       "sync": {
+        "fsync": {}
+       }
+      }
+     }
+    }
+   ],
+   "networks": [
+    {
+     "network": "default",
+     "options": {
+      "hostname": "freeside-handoff-run-1-exporter",
+      "mtu": 1280
+     }
+    }
+   ],
+   "platform": {
+    "architecture": "arm64",
+    "os": "linux"
+   },
+   "publishedPorts": [],
+   "publishedSockets": [],
+   "readOnly": false,
+   "resources": {
+    "cpuOverhead": 1,
+    "cpus": 4,
+    "memoryInBytes": 1073741824
+   },
+   "rosetta": false,
+   "runtimeHandler": "container-runtime-linux",
+   "ssh": false,
+   "sysctls": {},
+   "useInit": false,
+   "virtualization": false
+  },
+  "id": "freeside-handoff-run-1-exporter",
+  "status": {
+   "networks": [],
+   "state": "stopped"
+  }
+ }
+]
