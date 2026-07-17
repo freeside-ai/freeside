@@ -421,6 +421,119 @@ func TestHTTPRevokedDeviceCommandRejected(t *testing.T) {
 	}
 }
 
+// TestHTTPReportDeliveryOpened is #130's wire path: a paired device reports
+// the opened receipt on its own attempt (200, the recorded snapshot, the
+// item's timing aggregates moved in the same transaction), a replay returns
+// the byte-identical snapshot without consuming revision, and the failure
+// surface stays closed — a malformed attempt is 400, an unknown or
+// other-device attempt is 404 (the device comes from the credential, never
+// the path).
+func TestHTTPReportDeliveryOpened(t *testing.T) {
+	f := newFixture(t)
+	seedSubmittedDelivery(t, f, f.device.ID, 1, *f.now)
+	handler := signet.NewHTTPHandler(f.service, testAuthorizer)
+	*f.now = f.now.Add(time.Minute)
+
+	target := "/attention/items/" + string(f.item.ID) + "/deliveries/ntfy/1/opened"
+	response := authenticatedRequest(t, handler, http.MethodPut, target, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("report opened status = %d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var snapshot signet.AttentionDeliverySnapshot
+	if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	if snapshot.Delivery.Status != domain.DeliveryOpened || snapshot.Delivery.OpenedAt == nil {
+		t.Fatalf("snapshot delivery = %+v, want opened with a receipt", snapshot.Delivery)
+	}
+	item, _ := f.itemSnapshot(t)
+	if item.Timing.FirstOpenedAt == nil || !item.Timing.FirstOpenedAt.Equal(*snapshot.Delivery.OpenedAt) {
+		t.Errorf("timing first_opened_at = %v, want %v", item.Timing.FirstOpenedAt, snapshot.Delivery.OpenedAt)
+	}
+
+	before := f.revision(t)
+	*f.now = f.now.Add(time.Hour)
+	replay := authenticatedRequest(t, handler, http.MethodPut, target, nil)
+	if replay.Code != http.StatusOK || replay.Body.String() != response.Body.String() {
+		t.Fatalf("replay = %d %s, want the recorded 200 %s",
+			replay.Code, replay.Body.String(), response.Body.String())
+	}
+	if after := f.revision(t); after != before {
+		t.Errorf("replay moved the revision %d → %d", before, after)
+	}
+
+	f.seedDevice(t, "device-2")
+	seedSubmittedDelivery(t, f, "device-2", 2, *f.now)
+	for name, probe := range map[string]struct {
+		target string
+		want   int
+	}{
+		"garbage attempt":        {"/attention/items/" + string(f.item.ID) + "/deliveries/ntfy/junk/opened", http.StatusBadRequest},
+		"zero attempt":           {"/attention/items/" + string(f.item.ID) + "/deliveries/ntfy/0/opened", http.StatusBadRequest},
+		"negative attempt":       {"/attention/items/" + string(f.item.ID) + "/deliveries/ntfy/-1/opened", http.StatusBadRequest},
+		"unknown attempt":        {"/attention/items/" + string(f.item.ID) + "/deliveries/ntfy/9/opened", http.StatusNotFound},
+		"unknown channel":        {"/attention/items/" + string(f.item.ID) + "/deliveries/carrier-pigeon/1/opened", http.StatusNotFound},
+		"unknown item":           {"/attention/items/item-ghost/deliveries/ntfy/1/opened", http.StatusNotFound},
+		"another device attempt": {"/attention/items/" + string(f.item.ID) + "/deliveries/ntfy/2/opened", http.StatusNotFound},
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := f.revision(t)
+			response := authenticatedRequest(t, handler, http.MethodPut, probe.target, nil)
+			if response.Code != probe.want {
+				t.Fatalf("status = %d body=%s, want %d", response.Code, response.Body.String(), probe.want)
+			}
+			if after := f.revision(t); after != before {
+				t.Errorf("refused receipt moved the revision %d → %d", before, after)
+			}
+		})
+	}
+	if row, err := readDelivery(f, f.item.ID, "device-2", "ntfy", 2); err != nil || row.Status != domain.DeliverySubmitted {
+		t.Errorf("device-2 row = %+v (%v), want untouched submitted: device-1 must not open it", row, err)
+	}
+}
+
+// TestHTTPReportDeliveryOpenedRevokedDevice is §5.14 test 15's posture for
+// receipts: with the real authorizer a revoked credential dies at 401 before
+// the service runs, and when an authorizer still vouches for the revoked
+// device (a revocation racing authentication) the in-transaction gate refuses
+// with 403 and no effect.
+func TestHTTPReportDeliveryOpenedRevokedDevice(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	handler := signet.NewHTTPHandler(f.service, signet.NewRequestAuthorizer(f.store))
+	token, deviceID := pairedDevice(t, f, "Doomed device")
+	seedSubmittedDelivery(t, f, deviceID, 1, *f.now)
+	if _, err := f.service.Revoke(ctx, f.device.ID, deviceID); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	before := f.revision(t)
+
+	target := "/attention/items/" + string(f.item.ID) + "/deliveries/ntfy/1/opened"
+	response := bearerRequest(t, handler, http.MethodPut, target, "Bearer "+token, nil)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked credential status = %d body=%s, want 401", response.Code, response.Body.String())
+	}
+
+	permissive := signet.NewHTTPHandler(f.service, func(*http.Request) (domain.DeviceID, bool) {
+		return deviceID, true
+	})
+	raced := bearerRequest(t, permissive, http.MethodPut, target, "", nil)
+	if raced.Code != http.StatusForbidden {
+		t.Fatalf("raced revoked device status = %d body=%s, want 403", raced.Code, raced.Body.String())
+	}
+
+	if after := f.revision(t); after != before {
+		t.Errorf("refused receipt moved the revision %d → %d", before, after)
+	}
+	row, err := readDelivery(f, f.item.ID, deviceID, "ntfy", 1)
+	if err != nil {
+		t.Fatalf("readDelivery: %v", err)
+	}
+	if row.Status != domain.DeliverySubmitted || row.OpenedAt != nil {
+		t.Errorf("row = %+v, want untouched submitted: the refused receipt must have no effect", row)
+	}
+}
+
 // TestHTTPLateNotificationDeepLinksToCanonicalState is §5.14 test 9 over the
 // wire: a notification goes out to a second device, the item is resolved on
 // another device before the notification is acted on, and the late

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -41,6 +42,7 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer) http.Handler 
 	mux.Handle("GET /attention/items", h.authenticated(h.listAttentionItems))
 	mux.Handle("GET /attention/items/{item_id}", h.authenticated(h.getAttentionItem))
 	mux.Handle("GET /attention/items/{item_id}/deliveries", h.authenticated(h.listAttentionItemDeliveries))
+	mux.Handle("PUT /attention/items/{item_id}/deliveries/{channel}/{attempt}/opened", h.authenticated(h.reportDeliveryOpened))
 	mux.Handle("GET /runs", h.authenticated(h.listRuns))
 	mux.Handle("GET /runs/{run_id}", h.authenticated(h.getRun))
 	mux.Handle("GET /conversations/{conversation_id}", h.authenticated(h.getConversation))
@@ -117,6 +119,30 @@ func (h httpHandler) listAttentionItemDeliveries(w http.ResponseWriter, r *http.
 		return
 	}
 	writeJSON(w, http.StatusOK, deliveries)
+}
+
+// reportDeliveryOpened is the one client write on the deliveries surface
+// (api/openapi.yaml reportDeliveryOpened): the attempt's identity comes from
+// the path, the device solely from the authenticated credential — a device
+// can open only its own deliveries, and another device's attempt is a plain
+// 404. The request body is deliberately ignored (the spec declares none).
+func (h httpHandler) reportDeliveryOpened(w http.ResponseWriter, r *http.Request, deviceID domain.DeviceID) {
+	attempt, err := strconv.Atoi(r.PathValue("attempt"))
+	if err != nil || attempt < 1 {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "attempt must be a positive integer"})
+		return
+	}
+	snapshot, err := h.service.ReportDeliveryOpened(r.Context(),
+		domain.ItemID(r.PathValue("item_id")), deviceID, r.PathValue("channel"), attempt)
+	if err != nil {
+		if errors.Is(err, ErrDeviceNotActive) {
+			writeJSON(w, http.StatusForbidden, errorResponse{Message: err.Error()})
+			return
+		}
+		writeReadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (h httpHandler) listRuns(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {
