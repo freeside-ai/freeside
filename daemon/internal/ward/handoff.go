@@ -167,6 +167,12 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	if err != nil {
 		return nil, fmt.Errorf("observe workspace volume identity: %w", err)
 	}
+	// The gate re-checks the report's identity rather than trusting the
+	// Runtime implementation: a fingerprint bound to the wrong object would
+	// make cleanup misclassify this run's own volume later.
+	if wsView.Name != names.Workspace {
+		return nil, fmt.Errorf("workspace volume observation returned the wrong identity")
+	}
 	st.workspace.fingerprint, err = ownedFingerprint(wsView.CreationDate, wsView.Labels, wsView.LabelsObserved, ownershipLabel)
 	if err != nil {
 		return nil, fmt.Errorf("workspace volume %q: %w", names.Workspace, err)
@@ -181,12 +187,15 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	if err != nil {
 		return nil, failf(CheckControlPlaneIsolation, "inspect agent before execution: %v", err)
 	}
+	// Capture the fingerprint only after the allowlist verified the report's
+	// identity (rep.ID against the generated name): a fingerprint bound to
+	// the wrong object would make cleanup misclassify this run's own agent.
+	if err := verifyAgentAllowlist(agentRep, agentSpec); err != nil {
+		return nil, err
+	}
 	st.agent.fingerprint, err = ownedFingerprint(agentRep.CreationDate, agentRep.Labels, agentRep.LabelsObserved, ownershipLabel)
 	if err != nil {
 		return nil, failf(CheckControlPlaneIsolation, "agent container %q: %v", names.Agent, err)
-	}
-	if err := verifyAgentAllowlist(agentRep, agentSpec); err != nil {
-		return nil, err
 	}
 	if err := b.rt.StartContainer(ctx, names.Agent); err != nil {
 		return nil, fmt.Errorf("start agent container: %w", err)
@@ -195,20 +204,18 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// Check 3: writer termination is observed state, never scheduling
 	// intent (a second VM cannot attach a volume a live VM holds rw; only
 	// observed "stopped" proves the attachment is gone).
-	if err := b.waitStopped(ctx, names.Agent, st.agent.fingerprint, b.cfg.WriterStopTimeout); err != nil {
+	if err := b.waitStopped(ctx, names.Agent, st.agent, st.ownershipLabel, b.cfg.WriterStopTimeout); err != nil {
 		return nil, failf(CheckWriterTermination, "agent: %v", err)
 	}
 	if err := b.rt.DeleteContainer(ctx, names.Agent); err != nil {
 		return nil, failf(CheckWriterTermination, "delete stopped agent: %v", err)
 	}
-	// Our own delete succeeded, so this invocation no longer owns the agent by
-	// create: a later object answering to the deterministic name may be a
-	// foreign recycle, not ours. Downgrade to label-gated cleanup now, before
-	// proving absence, so that if verifyContainerAbsent fails on a transient
-	// list error deferred teardown re-proves this invocation's ownership label
-	// rather than reaping a same-name stranger by identity alone.
-	st.agent.owned = false
-	if err := b.verifyContainerAbsent(ctx, names.Agent, CheckWriterTermination); err != nil {
+	// This invocation's own delete succeeded, so the object it created is
+	// gone; whatever answers to the deterministic name from here on is
+	// classified like any other candidate (the round-28 ownership downgrade
+	// is subsumed: no path reaps by create-success identity anymore, and the
+	// absence proof below treats a foreign same-name replacement as absent).
+	if err := b.verifyContainerAbsent(ctx, names.Agent, st.agent, st.ownershipLabel, CheckWriterTermination); err != nil {
 		return nil, err
 	}
 	st.agent = objectClaim{}
@@ -225,17 +232,19 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	if err != nil {
 		return nil, failf(CheckExporterAllowlist, "inspect exporter before execution: %v", err)
 	}
+	// As with the agent: the allowlist's identity check runs before the
+	// fingerprint is captured from the same report.
+	if err := verifyExporterAllowlist(b.cfg, rep, names.Exporter, names.Workspace); err != nil {
+		return nil, err
+	}
 	st.exporter.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, ownershipLabel)
 	if err != nil {
 		return nil, failf(CheckExporterAllowlist, "exporter container %q: %v", names.Exporter, err)
 	}
-	if err := verifyExporterAllowlist(b.cfg, rep, names.Exporter, names.Workspace); err != nil {
-		return nil, err
-	}
 	if err := b.rt.StartContainer(ctx, names.Exporter); err != nil {
 		return nil, fmt.Errorf("start exporter container: %w", err)
 	}
-	if err := b.waitStopped(ctx, names.Exporter, st.exporter.fingerprint, b.cfg.ExporterTimeout); err != nil {
+	if err := b.waitStopped(ctx, names.Exporter, st.exporter, st.ownershipLabel, b.cfg.ExporterTimeout); err != nil {
 		return nil, failf(CheckExportVerification, "exporter: %v", err)
 	}
 
@@ -327,11 +336,6 @@ func newOwnershipLabel() (Label, error) {
 	return Label{Key: ownershipLabelKey, Value: hex.EncodeToString(token[:])}, nil
 }
 
-// waitStopped polls until the container is observed stopped. The wait is
-// budgeted in whole poll intervals (timeout / PollInterval attempts), so
-// tests with an injected Sleep are fully deterministic. Its own deadline also
-// bounds each runtime call: a wedged Inspect must not defeat the named writer
-// or exporter timeout when the caller context has no deadline.
 // ownedFingerprint extracts a creation fingerprint from the observation made
 // right after this invocation successfully created an object. The observation
 // must itself carry the invocation's unpredictable ownership label: the
@@ -350,13 +354,19 @@ func ownedFingerprint(creationDate string, labels []Label, labelsObserved bool, 
 	return creationDate, nil
 }
 
-// waitStopped polls until the container with the claimed creation fingerprint
-// is observed stopped. Every poll re-verifies the fingerprint: check 3's
-// stopped observation is proof about the one VM the gate started, so a
-// same-name object with a different creation instant (a replacement) can
-// never satisfy it, and the delete that follows a satisfied wait always
-// targets a just-verified observation.
-func (b *Backend) waitStopped(ctx context.Context, id, fingerprint string, timeout time.Duration) error {
+// waitStopped polls until the claimed container is observed stopped. The
+// wait is budgeted in whole poll intervals (ceil(timeout / PollInterval)
+// attempts), so tests with an injected Sleep are fully deterministic while a
+// timeout shorter than, or not a whole multiple of, the interval still spends
+// its full budget instead of giving up a poll early; its own deadline also
+// bounds each runtime call, so a wedged Inspect cannot defeat the named
+// writer or exporter timeout. Every poll re-classifies the observation
+// against the claim: check 3's stopped observation is proof about the one VM
+// the gate started, so a same-name replacement can never satisfy it (even on
+// a runtime that reports no creation instants, where the unpredictable token
+// is the whole evidence), and the delete that follows a satisfied wait
+// always targets a just-verified observation.
+func (b *Backend) waitStopped(ctx context.Context, id string, claim objectClaim, ownershipLabel Label, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	attempts := int((timeout + b.cfg.PollInterval - 1) / b.cfg.PollInterval)
@@ -372,8 +382,13 @@ func (b *Backend) waitStopped(ctx context.Context, id, fingerprint string, timeo
 		if rep.ID != id {
 			return fmt.Errorf("inspect returned a report for the wrong container")
 		}
-		if rep.CreationDate != fingerprint {
+		switch classifyEvidence(claim, ownershipLabel, rep.CreationDate, rep.Labels, rep.LabelsObserved) {
+		case evidenceOurs:
+			// The one object this run created; its state is meaningful.
+		case evidenceForeign:
 			return fmt.Errorf("inspect returned a same-name container with a different creation identity")
+		case evidenceUnprovable:
+			return fmt.Errorf("inspect could not prove the container is the one this run created")
 		}
 		if rep.State == StateStopped {
 			return nil
@@ -388,17 +403,40 @@ func (b *Backend) waitStopped(ctx context.Context, id, fingerprint string, timeo
 	return fmt.Errorf("state %q after %s, never observed %q", last, timeout, StateStopped)
 }
 
-// verifyContainerAbsent proves id is gone from the runtime's full container
-// list; check 3 requires absence, not a successful delete call.
-func (b *Backend) verifyContainerAbsent(ctx context.Context, id string, c Check) error {
+// verifyContainerAbsent proves the container this run created is gone from
+// the runtime's full container list; check 3 requires absence, not a
+// successful delete call. Absence is about the claimed object, not the name:
+// a same-name row whose fresh evidence proves it foreign is a replacement
+// that appeared in the delete-to-absence window and counts as absent, so the
+// caller clears the claim and deferred teardown never reaps the replacement
+// (failing the run here would instead leave the claim owned, and teardown
+// would destroy an object this run did not create). A row whose evidence is
+// unprovable still fails the check.
+func (b *Backend) verifyContainerAbsent(ctx context.Context, id string, claim objectClaim, ownershipLabel Label, c Check) error {
 	ctrs, err := b.rt.ListContainers(ctx)
 	if err != nil {
 		return failf(c, "list containers to verify %q absent: %v", id, err)
 	}
-	if slices.ContainsFunc(ctrs, func(cs ContainerSummary) bool { return cs.ID == id }) {
-		return failf(c, "container %q still listed after delete", id)
+	candidate, found, ferr := uniqueContainer(ctrs, id)
+	if ferr != nil {
+		return failf(c, "verify %q absent: %v", id, ferr)
 	}
-	return nil
+	if !found {
+		return nil
+	}
+	ev, eerr := b.containerEvidence(ctx, candidate, claim, ownershipLabel)
+	if eerr != nil {
+		return failf(c, "verify %q absent: %v", id, eerr)
+	}
+	switch ev {
+	case evidenceOurs:
+		return failf(c, "container %q still listed after delete", id)
+	case evidenceForeign:
+		return nil
+	case evidenceUnprovable:
+		return failf(c, "container %q absence unprovable after delete", id)
+	}
+	return failf(c, "container %q absence evidence invalid", id)
 }
 
 // teardown reaps every runtime object the run owns and proves it is gone. A
@@ -427,31 +465,27 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 		{id: names.Agent, claim: st.agent},
 		{id: names.Exporter, claim: st.exporter},
 	}
-	// Each container is reaped only when its own create succeeded or a fresh
-	// inspect carries the unpredictable ownership label after an ambiguous
-	// create error, whether that inspect comes from the teardown listing's
-	// labels or, when the full list is unavailable, from a direct inspect.
+	// Every candidate, owned or ambiguous, is reaped only on fresh evidence
+	// that it is still the object this invocation created (its captured
+	// creation fingerprint corroborated by the unpredictable ownership label,
+	// else the label alone). A foreign verdict — a collision or a same-name
+	// replacement — leaves the object untouched; an unprovable one withholds
+	// the delete and fails teardown.
 	if st.agent.attempted || st.exporter.attempted {
 		if ctrs, err := b.rt.ListContainers(ctx); err != nil {
 			problems = append(problems, fmt.Sprintf("list containers: %v", err))
 			// A full-list failure can be caused by an unrelated malformed row.
-			// It must not suppress cleanup of an exact name this invocation
-			// owns: a successful create is reaped by identity alone, and an
-			// ambiguous create is reaped by exact name once a direct inspect
-			// proves this invocation's ownership label. Otherwise one unrelated
-			// broken row could leave the credential-mounted writer restartable.
+			// It must not suppress cleanup of a name this invocation created:
+			// owned and ambiguous claims alike fall back to a direct inspect,
+			// and the reap happens only on that fresh evidence. Otherwise one
+			// unrelated broken row could leave the credential-mounted writer
+			// restartable.
 			for _, c := range containerClaims {
 				if !c.claim.attempted {
 					continue
 				}
-				if c.claim.owned {
-					if rerr := b.reapKnownOwnedContainer(ctx, c.id); rerr != nil {
-						problems = append(problems, fmt.Sprintf("remove known-owned %q after list failure: %v", c.id, rerr))
-					}
-					continue
-				}
-				if rerr := b.reapAmbiguousOwnedContainer(ctx, c.id, st.ownershipLabel); rerr != nil {
-					problems = append(problems, fmt.Sprintf("remove ambiguous-owned %q after list failure: %v", c.id, rerr))
+				if rerr := b.reapUnlistedContainer(ctx, c.id, c.claim, st.ownershipLabel); rerr != nil {
+					problems = append(problems, fmt.Sprintf("remove %q after list failure: %v", c.id, rerr))
 				}
 			}
 		} else {
@@ -467,38 +501,52 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 				if !found {
 					continue
 				}
-				if !c.claim.owned {
-					owned, oerr := b.containerHasOwnership(ctx, candidate, st.ownershipLabel)
-					if oerr != nil {
-						problems = append(problems, oerr.Error())
-						continue
-					}
-					if !owned {
-						continue
-					}
+				ev, eerr := b.containerEvidence(ctx, candidate, c.claim, st.ownershipLabel)
+				if eerr != nil {
+					problems = append(problems, eerr.Error())
+					continue
 				}
-				if rerr := b.reapContainer(ctx, candidate); rerr != nil {
-					problems = append(problems, fmt.Sprintf("remove %q: %v", c.id, rerr))
+				switch ev {
+				case evidenceOurs:
+					if rerr := b.reapContainer(ctx, candidate); rerr != nil {
+						problems = append(problems, fmt.Sprintf("remove %q: %v", c.id, rerr))
+					}
+				case evidenceForeign:
+					// Not this run's object; leave it.
+				case evidenceUnprovable:
+					problems = append(problems, fmt.Sprintf("container %q ownership unprovable; not deleting", c.id))
 				}
 			}
 		}
 	}
-	ownsWorkspace := func(v VolumeSummary) bool {
-		if v.Name != names.Workspace {
-			return false
-		}
-		return st.workspace.owned || (v.LabelsObserved && slices.Contains(v.Labels, st.ownershipLabel))
-	}
-	// After a successful create, the exact workspace name is owned. After an
-	// ambiguous failed create, require the unpredictable ownership label too.
+	// The workspace follows the same evidence rule: a successful create alone
+	// no longer authorizes a name-addressed delete, the volume observed at
+	// teardown must still prove it is the one this run made.
 	if vols, err := b.rt.ListVolumes(ctx); err != nil {
 		problems = append(problems, fmt.Sprintf("list volumes: %v", err))
 		// As with containers, an unrelated malformed row must not suppress
-		// cleanup of the exact workspace name established by a successful
-		// create. An ambiguous create still requires list/label evidence.
-		if st.workspace.owned {
-			if derr := b.rt.DeleteVolume(ctx, names.Workspace); derr != nil {
-				problems = append(problems, fmt.Sprintf("delete known-owned volume %q after list failure: %v", names.Workspace, derr))
+		// cleanup of the workspace name this invocation created: owned and
+		// ambiguous claims alike fall back to the per-object inspect, which
+		// supplies the evidence the list could not (an ambiguous claim has no
+		// fingerprint, so only the fresh token can authorize the delete).
+		if st.workspace.attempted {
+			v, verr := b.rt.InspectVolume(ctx, names.Workspace)
+			switch {
+			case verr != nil:
+				problems = append(problems, fmt.Sprintf("inspect volume %q after list failure: %v", names.Workspace, verr))
+			case v.Name != names.Workspace:
+				problems = append(problems, fmt.Sprintf("inspect volume %q after list failure returned the wrong identity", names.Workspace))
+			default:
+				switch classifyEvidence(st.workspace, st.ownershipLabel, v.CreationDate, v.Labels, v.LabelsObserved) {
+				case evidenceOurs:
+					if derr := b.rt.DeleteVolume(ctx, names.Workspace); derr != nil {
+						problems = append(problems, fmt.Sprintf("delete volume %q after list failure: %v", names.Workspace, derr))
+					}
+				case evidenceForeign:
+					// Not this run's volume; leave it.
+				case evidenceUnprovable:
+					problems = append(problems, fmt.Sprintf("volume %q ownership unprovable after list failure; not deleting", names.Workspace))
+				}
 			}
 		}
 	} else {
@@ -506,18 +554,27 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 		if ferr != nil {
 			problems = append(problems, ferr.Error())
 		} else if found {
-			if v.Name == names.Workspace && !st.workspace.owned && !v.LabelsObserved {
-				problems = append(problems, fmt.Sprintf("volume %q list entry omitted labels after ambiguous create", v.Name))
-			} else if ownsWorkspace(v) {
+			ev, eerr := b.volumeEvidence(ctx, v, st.workspace, st.ownershipLabel)
+			switch {
+			case eerr != nil:
+				problems = append(problems, eerr.Error())
+			case ev == evidenceOurs:
 				if derr := b.rt.DeleteVolume(ctx, v.Name); derr != nil {
 					problems = append(problems, fmt.Sprintf("delete volume %q: %v", v.Name, derr))
 				}
+			case ev == evidenceForeign:
+				// Not this run's volume; leave it.
+			case ev == evidenceUnprovable:
+				problems = append(problems, fmt.Sprintf("volume %q ownership unprovable; not deleting", v.Name))
 			}
 		}
 	}
 
 	// Prove absence: nothing the run owns may survive the reap (a delete that
-	// reported success but left the object is caught here).
+	// reported success but left the object is caught here). A surviving
+	// same-name row classified foreign is a replacement that appeared after
+	// this run's object was reaped: it counts as absent and is never
+	// re-reaped; only an unprovable row still fails the proof.
 	if st.agent.attempted || st.exporter.attempted {
 		if ctrs, err := b.rt.ListContainers(ctx); err != nil {
 			problems = append(problems, fmt.Sprintf("re-list containers: %v", err))
@@ -534,17 +591,18 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 				if !found {
 					continue
 				}
-				owned := c.claim.owned
-				if !owned {
-					var oerr error
-					owned, oerr = b.containerHasOwnership(ctx, candidate, st.ownershipLabel)
-					if oerr != nil {
-						problems = append(problems, "re-list "+oerr.Error())
-						continue
-					}
+				ev, eerr := b.containerEvidence(ctx, candidate, c.claim, st.ownershipLabel)
+				if eerr != nil {
+					problems = append(problems, "re-list "+eerr.Error())
+					continue
 				}
-				if owned {
+				switch ev {
+				case evidenceOurs:
 					problems = append(problems, fmt.Sprintf("container %q survived teardown", c.id))
+				case evidenceForeign:
+					// A replacement, not a survivor.
+				case evidenceUnprovable:
+					problems = append(problems, fmt.Sprintf("container %q survival unprovable after teardown", c.id))
 				}
 			}
 		}
@@ -556,10 +614,16 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 		if ferr != nil {
 			problems = append(problems, "re-list "+ferr.Error())
 		} else if found {
-			if v.Name == names.Workspace && !st.workspace.owned && !v.LabelsObserved {
-				problems = append(problems, fmt.Sprintf("volume %q re-list entry omitted labels after ambiguous create", v.Name))
-			} else if ownsWorkspace(v) {
+			ev, eerr := b.volumeEvidence(ctx, v, st.workspace, st.ownershipLabel)
+			switch {
+			case eerr != nil:
+				problems = append(problems, "re-list "+eerr.Error())
+			case ev == evidenceOurs:
 				problems = append(problems, fmt.Sprintf("volume %q survived teardown", v.Name))
+			case ev == evidenceForeign:
+				// A replacement, not a survivor.
+			case ev == evidenceUnprovable:
+				problems = append(problems, fmt.Sprintf("volume %q survival unprovable after teardown", v.Name))
 			}
 		}
 	}
@@ -570,31 +634,126 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	return nil
 }
 
-// containerHasOwnership uses a list row's labels when present and falls back
-// to inspect when the runtime's list shape omits them. The inspect report must
-// identify the exact candidate and expose labels before its invocation token
-// can authorize cleanup after an ambiguous create.
-func (b *Backend) containerHasOwnership(ctx context.Context, candidate ContainerSummary, ownershipLabel Label) (bool, error) {
-	if candidate.LabelsObserved {
-		return slices.Contains(candidate.Labels, ownershipLabel), nil
+// objectEvidence classifies a fresh observation of an attempted name against
+// this invocation's claim. Every destructive decision routes through it: a
+// successful create never confers standing name-wide authority, only the
+// right to reap the object fresh evidence proves is the one this run made.
+// The zero value "" is invalid by design.
+type objectEvidence string
+
+const (
+	// evidenceOurs: the observation proves the object is the one this
+	// invocation created; reaping it is authorized.
+	evidenceOurs objectEvidence = "ours"
+	// evidenceForeign: the observation proves the object is not this
+	// invocation's (a caller-owned collision or a same-name replacement); it
+	// is left untouched and counts as absent for this run's proofs.
+	evidenceForeign objectEvidence = "foreign"
+	// evidenceUnprovable: the observation cannot prove the object either ours
+	// or foreign; destructive action is withheld and teardown fails.
+	evidenceUnprovable objectEvidence = "unprovable"
+)
+
+// AllObjectEvidence lists every valid objectEvidence; it drives table-driven
+// tests and is the single place a new classification is registered.
+var AllObjectEvidence = []objectEvidence{evidenceOurs, evidenceForeign, evidenceUnprovable}
+
+func (e objectEvidence) valid() bool {
+	switch e {
+	case evidenceOurs, evidenceForeign, evidenceUnprovable:
+		return true
+	default:
+		return false
+	}
+}
+
+// classifyEvidence weighs one fresh observation (creation instant and labels)
+// against a claim (the fingerprint captured after create, the invocation's
+// unpredictable ownership label). The fingerprint is a veto, never proof by
+// itself: a differing instant is a replacement, foreign even when it copies
+// this run's labels, while a matching instant still needs the token to
+// corroborate it — creation instants are coarse (second granularity on the
+// reference runtime), so a same-instant observation that lacks the token, or
+// cannot show labels at all, is unprovable rather than ours. Without a
+// usable instant comparison the label decides alone: the token is
+// unpredictable, so observing it proves ours, observing its absence proves
+// foreign, and an observation that cannot show labels proves nothing.
+func classifyEvidence(claim objectClaim, ownershipLabel Label, observedDate string, labels []Label, labelsObserved bool) objectEvidence {
+	if claim.fingerprint != "" && observedDate != "" && observedDate != claim.fingerprint {
+		return evidenceForeign
+	}
+	if !labelsObserved {
+		return evidenceUnprovable
+	}
+	if slices.Contains(labels, ownershipLabel) {
+		return evidenceOurs
+	}
+	if claim.fingerprint != "" && observedDate == claim.fingerprint {
+		// Same instant, not our labels: contradictory (or a coarse-instant
+		// collision with a replacement); withhold rather than classify.
+		return evidenceUnprovable
+	}
+	return evidenceForeign
+}
+
+// underObserved reports whether an observation was too incomplete to carry a
+// verdict on its own: labels unobserved, or a claimed fingerprint with no
+// reported instant to compare against. Only such observations earn the
+// per-object inspect fallback; contradictory evidence from a complete
+// observation never retries into a cleaner answer.
+func underObserved(observedDate string, labelsObserved bool, claim objectClaim) bool {
+	return !labelsObserved || (claim.fingerprint != "" && observedDate == "")
+}
+
+// containerEvidence resolves a listed candidate to evidence, classifying the
+// row itself first and falling back to a direct inspect only when the row was
+// too incomplete to carry a verdict. The fallback report must identify the
+// exact candidate.
+func (b *Backend) containerEvidence(ctx context.Context, candidate ContainerSummary, claim objectClaim, ownershipLabel Label) (objectEvidence, error) {
+	ev := classifyEvidence(claim, ownershipLabel, candidate.CreationDate, candidate.Labels, candidate.LabelsObserved)
+	if ev != evidenceUnprovable || !underObserved(candidate.CreationDate, candidate.LabelsObserved, claim) {
+		// The row already carried a verdict (a mismatched instant proves
+		// foreign whatever the labels say), or it was fully observed and
+		// still contradictory.
+		return ev, nil
 	}
 	rep, err := b.rt.Inspect(ctx, candidate.ID)
 	if err != nil {
-		return false, fmt.Errorf("inspect container %q ownership after ambiguous create: %w", candidate.ID, err)
+		return evidenceUnprovable, fmt.Errorf("inspect container %q ownership: %w", candidate.ID, err)
 	}
 	if rep.ID != candidate.ID {
-		return false, fmt.Errorf("inspect container %q ownership returned the wrong identity", candidate.ID)
+		return evidenceUnprovable, fmt.Errorf("inspect container %q ownership returned the wrong identity", candidate.ID)
 	}
-	if !rep.LabelsObserved {
-		return false, fmt.Errorf("container %q omitted labels from both list and inspect after ambiguous create", candidate.ID)
-	}
-	return slices.Contains(rep.Labels, ownershipLabel), nil
+	return classifyEvidence(claim, ownershipLabel, rep.CreationDate, rep.Labels, rep.LabelsObserved), nil
 }
 
-// reapKnownOwnedContainer reconstructs the state needed for cleanup when the
-// full list is unavailable. It is only for a name whose create succeeded;
-// ambiguous creates must go through fresh per-invocation ownership evidence.
-func (b *Backend) reapKnownOwnedContainer(ctx context.Context, id string) error {
+// volumeEvidence is the volume analogue of containerEvidence, using the
+// per-object InspectVolume when the list row was too incomplete to carry a
+// verdict.
+func (b *Backend) volumeEvidence(ctx context.Context, candidate VolumeSummary, claim objectClaim, ownershipLabel Label) (objectEvidence, error) {
+	ev := classifyEvidence(claim, ownershipLabel, candidate.CreationDate, candidate.Labels, candidate.LabelsObserved)
+	if ev != evidenceUnprovable || !underObserved(candidate.CreationDate, candidate.LabelsObserved, claim) {
+		return ev, nil
+	}
+	v, err := b.rt.InspectVolume(ctx, candidate.Name)
+	if err != nil {
+		return evidenceUnprovable, fmt.Errorf("inspect volume %q ownership: %w", candidate.Name, err)
+	}
+	if v.Name != candidate.Name {
+		return evidenceUnprovable, fmt.Errorf("inspect volume %q ownership returned the wrong identity", candidate.Name)
+	}
+	return classifyEvidence(claim, ownershipLabel, v.CreationDate, v.Labels, v.LabelsObserved), nil
+}
+
+// reapUnlistedContainer reconstructs cleanup evidence when the full list is
+// unavailable, for owned and ambiguous claims alike: the direct inspect must
+// prove the object is the one this run created (fingerprint corroborated by
+// the token, else the token alone; an ambiguous claim has no fingerprint and
+// so always needs the token). A foreign replacement or collision is left
+// untouched; a wrong identity or unprovable observation withholds the delete
+// and fails closed. The reap uses the inspected state so an already-stopped
+// container is not needlessly stopped.
+func (b *Backend) reapUnlistedContainer(ctx context.Context, id string, claim objectClaim, ownershipLabel Label) error {
 	rep, err := b.rt.Inspect(ctx, id)
 	if err != nil {
 		return fmt.Errorf("inspect: %w", err)
@@ -602,32 +761,15 @@ func (b *Backend) reapKnownOwnedContainer(ctx context.Context, id string) error 
 	if rep.ID != id {
 		return fmt.Errorf("inspect returned the wrong identity")
 	}
-	return b.reapContainer(ctx, ContainerSummary{ID: id, State: rep.State})
-}
-
-// reapAmbiguousOwnedContainer reaps the exact name after an ambiguous create
-// when the full list is unavailable. Ownership is unproven here (create neither
-// clearly succeeded nor failed), so it acts only once a fresh inspect both
-// identifies the exact container and exposes this invocation's unpredictable
-// ownership label, the same evidence containerHasOwnership requires on the
-// success-list path. A foreign same-name object lacks the label and is left
-// untouched; a wrong identity or absent labels fails closed. The reap uses the
-// inspected state so an already-stopped container is not needlessly stopped.
-func (b *Backend) reapAmbiguousOwnedContainer(ctx context.Context, id string, ownershipLabel Label) error {
-	rep, err := b.rt.Inspect(ctx, id)
-	if err != nil {
-		return fmt.Errorf("inspect: %w", err)
-	}
-	if rep.ID != id {
-		return fmt.Errorf("inspect returned the wrong identity")
-	}
-	if !rep.LabelsObserved {
-		return fmt.Errorf("inspect omitted labels after ambiguous create")
-	}
-	if !slices.Contains(rep.Labels, ownershipLabel) {
+	switch classifyEvidence(claim, ownershipLabel, rep.CreationDate, rep.Labels, rep.LabelsObserved) {
+	case evidenceOurs:
+		return b.reapContainer(ctx, ContainerSummary{ID: id, State: rep.State})
+	case evidenceForeign:
 		return nil
+	case evidenceUnprovable:
+		return errors.New("ownership unprovable from inspect; not deleting")
 	}
-	return b.reapContainer(ctx, ContainerSummary{ID: id, State: rep.State})
+	return errors.New("invalid ownership evidence")
 }
 
 // uniqueContainer returns the one exact-id entry from a full runtime list.
