@@ -819,3 +819,44 @@ Round 28 raised one P2 adjacent to the ambiguous-reap change:
   `TestHandoffAgentOwnershipDowngradedAfterDeleteUncertainty` proves a recycled
   unlabeled same-name object is not reaped (one agent delete, the gate's own),
   and it fails against the pre-fix ordering (two deletes).
+
+Round 29 raised two P2s in new areas:
+
+- *P2: side-effecting runtime calls ran under the raw caller context.* The
+  per-operation waits (`waitStopped`) only begin once their own call returns, so
+  a runtime that wedged inside a side-effecting call, for example after launching
+  the credential-bearing agent VM but before `StartContainer` returned, could
+  block the gate, and leave the VM live, indefinitely under a no-deadline caller.
+  A new `Config.HandoffTimeout` (default `WriterStopTimeout + ExporterTimeout +
+  15m`) now wraps the whole handoff from one place, registered before the
+  teardown defer so `cancel` runs after teardown on unwind; teardown re-detaches
+  (`context.WithoutCancel`) so it still reaps what the budget interrupts. It is a
+  wedge backstop, not an SLA: sized generously above the two waits it contains
+  plus slack to stream/extract/hash/scan a near-max multi-GiB export.
+  `TestHandoffBoundsWedgedWriterStart` blocks the writer start and proves the
+  budget cuts it (deadline error) while teardown still reaps the agent.
+  *Accepted limitation:* a pathological run where both containers legitimately
+  stop near their full timeouts and a near-max export runs concurrently could
+  approach the budget; operators facing large scans raise `HandoffTimeout`.
+  Revisit when a real export size and scan cost profile lets the default fire.
+- *P2: the released manifest bytes were not checked for duplicate keys.* Check 7
+  validated the decoded manifest struct, but the raw `manifest.json` bytes are
+  the artifact released to the gauntlet, and `encoding/json` is last-value-wins,
+  so a hostile manifest with duplicate `path`/`digest` keys would validate as its
+  collapsed struct while the released bytes stayed contradictory. `verifyManifest`
+  now runs the same structural `rejectDuplicateJSONKeys` gate the runtime decoders
+  use (round 19's class) on the raw bytes, after the size cap and before decode,
+  failing closed with a value-free "not canonical" reason. This extends the
+  duplicate-key defense from the runtime decoders to the export manifest.
+  `TestVerifyExportRejectsDuplicateManifestKeys` proves a duplicate-digest
+  manifest with a matching blob (which last-value-wins would otherwise accept)
+  fails closed.
+
+The required refute-first pass on both round-29 fixes found no defect: the budget
+`cancel` runs after teardown, teardown reaps the wedged VM after expiry, the
+default is derived after its sub-timeouts default and stays above the contained
+waits, and `rejectDuplicateJSONKeys` catches duplicates at every nesting level so
+the validated view cannot diverge from the released bytes for the duplicate-key
+threat (the stronger raw-equals-`Encode()` comparison was judged unnecessary for
+it). The residual export-slack squeeze above is the pass's one flagged weak
+point, recorded as an accepted limitation rather than a defect.
