@@ -542,7 +542,9 @@ func TestHTTPReportDeliveryOpenedRevokedDevice(t *testing.T) {
 // snapshot, and the decision the notification had invited — prepared against
 // the notified state — is refused with the canonical replacement and no side
 // effect. The notification was a read-only hint; canonical state lives only
-// behind the deep link.
+// behind the deep link. The link's channel/attempt query identity still
+// yields a working late receipt (#130): opening a resolved item's attempt is
+// honest telemetry, recorded after the refused decision.
 func TestHTTPLateNotificationDeepLinksToCanonicalState(t *testing.T) {
 	ctx := context.Background()
 	f := newDeliveryFixture(t)
@@ -632,6 +634,26 @@ func TestHTTPLateNotificationDeepLinksToCanonicalState(t *testing.T) {
 		finalSnap.EntityVersion != resolvedSnap.EntityVersion {
 		t.Errorf("refused command changed the item: version %d entity %d, want %d/%d",
 			finalItem.ItemVersion, finalSnap.EntityVersion, resolvedItem.ItemVersion, resolvedSnap.EntityVersion)
+	}
+
+	// The identity the click URL carries constructs the exact receipt PUT,
+	// and the late receipt on the resolved item is accepted: resolution
+	// gates decisions, never telemetry.
+	channel, attempt := click.Query().Get("channel"), click.Query().Get("attempt")
+	if channel != "ntfy" || attempt != "1" {
+		t.Fatalf("click identity = channel %q attempt %q, want ntfy/1", channel, attempt)
+	}
+	receipt := bearerRequest(t, handler, http.MethodPut,
+		click.Path+"/deliveries/"+channel+"/"+attempt+"/opened", "Bearer test-device-2", nil)
+	if receipt.Code != http.StatusOK {
+		t.Fatalf("late receipt status = %d body=%s, want 200", receipt.Code, receipt.Body.String())
+	}
+	var opened signet.AttentionDeliverySnapshot
+	if err := json.Unmarshal(receipt.Body.Bytes(), &opened); err != nil {
+		t.Fatalf("decode receipt snapshot: %v", err)
+	}
+	if opened.Delivery.Status != domain.DeliveryOpened || opened.Delivery.OpenedAt == nil {
+		t.Errorf("late receipt = %+v, want the opened row recorded", opened.Delivery)
 	}
 }
 

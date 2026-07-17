@@ -83,7 +83,7 @@ func (s *Service) SubmitDelivery(ctx context.Context, itemID domain.ItemID, devi
 		if err := recomputeItemTiming(ctx, tx, itemID); err != nil {
 			return err
 		}
-		hint = s.ntfy.notificationFor(item, deviceID)
+		hint = s.ntfy.notificationFor(item, deviceID, row.Attempt)
 		return nil
 	})
 	if err != nil {

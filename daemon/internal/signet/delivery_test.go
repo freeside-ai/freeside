@@ -503,8 +503,8 @@ func TestSubmitDeliveryRecordsHonestReceipts(t *testing.T) {
 	if got.title != "Attention needed" {
 		t.Errorf("title = %q, want the generic hint", got.title)
 	}
-	if got.click != "https://daemon.example/attention/items/"+string(f.item.ID) {
-		t.Errorf("click = %q, want the canonical deep link", got.click)
+	if got.click != "https://daemon.example/attention/items/"+string(f.item.ID)+"?channel=ntfy&attempt=1" {
+		t.Errorf("click = %q, want the canonical deep link carrying the attempt identity", got.click)
 	}
 	if got.priority != "default" {
 		t.Errorf("priority = %q, want default for a normal item", got.priority)
