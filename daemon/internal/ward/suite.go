@@ -619,6 +619,27 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 		return fmt.Errorf("conformance: create credential volume: %w", err)
 	}
 
+	// Prove mounted create is metadata-only before the real handoff trusts its
+	// pre-start inspect. StateStopped on the finite writer is insufficient: an
+	// eager runtime could execute it synchronously to completion and self-mask
+	// as stopped. This nonterminating probe uses the writer's own mount topology,
+	// so a runtime that eager-starts only mounted containers is caught too. It
+	// runs before seeding, so its inert payload never observes credential data.
+	livenessName := s.conformanceName("liveness")
+	livenessVolume := s.conformanceName("liveness-ws")
+	defer run.reapVolume(ctx, livenessVolume)
+	defer run.reapContainer(ctx, livenessName)
+	if err := run.createVolume(ctx, livenessVolume, s.fx.WorkspaceSizeMB); err != nil {
+		return fmt.Errorf("conformance: create liveness workspace volume: %w", err)
+	}
+	livenessMounts := []Mount{
+		{Type: MountVolume, Source: livenessVolume, Target: s.b.cfg.WorkspaceTarget},
+		{Type: MountVolume, Source: credVolume, Target: s.fx.CredentialTarget, ReadOnly: true},
+	}
+	if err := s.proveNoEagerStart(ctx, run, livenessName, livenessMounts, CheckControlPlaneIsolation); err != nil {
+		return err
+	}
+
 	if err := s.seedCredential(ctx, run, credVolume); err != nil {
 		return err
 	}
@@ -781,21 +802,23 @@ func (s *Suite) PreJob(ctx context.Context) (err error) {
 		}
 	}()
 	defer run.reapContainer(ctx, name)
-	return s.proveNoEagerStart(ctx, run, name, CheckPreJobProbe)
+	return s.proveNoEagerStart(ctx, run, name, nil, CheckPreJobProbe)
 }
 
 // proveNoEagerStart creates a throwaway container from the fixture image with a
 // nonterminating inert payload and requires it StateStopped
 // after create (create realizes metadata only; a runtime that eager-started it
 // would keep the payload running past the inspect — a short-lived "true" could
-// exit first and self-mask as stopped), then deletes it. This is PreJob's core
-// liveness check. Full needs no surrogate: the handoff gate now asserts the
-// real writer and exporter are StateStopped in their own pre-start allowlist
-// inspections. The caller registers the reap/absence-proof deferrals for name.
-func (s *Suite) proveNoEagerStart(ctx context.Context, run *suiteRun, name string, check Check) error {
+// exit first and self-mask as stopped), then deletes it. PreJob uses an
+// unmounted instance for its cheap liveness contract; Full uses the writer's
+// mounted topology because the finite real writer could otherwise execute to
+// completion before its StateStopped inspection. The caller registers the
+// reap/absence-proof deferrals for name.
+func (s *Suite) proveNoEagerStart(ctx context.Context, run *suiteRun, name string, mounts []Mount, check Check) error {
 	spec := ContainerSpec{
-		Name:  name,
-		Image: s.fx.AgentImage,
+		Name:   name,
+		Image:  s.fx.AgentImage,
+		Mounts: slices.Clone(mounts),
 		// A finite sleep shorter than the enclosing timeout can self-mask a
 		// synchronous eager start: CreateContainer returns after it exits and the
 		// inspect sees stopped. This payload never terminates by itself, so an

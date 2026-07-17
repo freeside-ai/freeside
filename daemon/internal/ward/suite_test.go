@@ -668,6 +668,49 @@ func TestSuiteFullRejectsEagerStart(t *testing.T) {
 	s.assertReaped(t, rt)
 }
 
+// TestSuiteFullRejectsMountedEagerStart covers the path a stopped inspection
+// of the finite handoff writer cannot distinguish: a runtime that executes only
+// mounted creates synchronously. The mounted nonterminating liveness probe must
+// still be observed running and fail before the credential is seeded.
+func TestSuiteFullRejectsMountedEagerStart(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+		if id == s.conformanceName("liveness") {
+			rep.State = StateRunning
+		}
+		return rep, nil
+	}
+	err := s.Full(context.Background())
+	wantCheckFailure(t, err, CheckControlPlaneIsolation)
+	if !strings.Contains(err.Error(), "executed it before inspection") {
+		t.Errorf("error = %q, want mounted eager-start failure", err)
+	}
+	s.assertReaped(t, rt)
+}
+
+func TestSuiteFullLivenessProbeUsesWriterMountTopology(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	scriptHappyProbes(s, rt)
+	var got []Mount
+	rt.onCreateContainer = func(spec ContainerSpec) error {
+		if spec.Name == s.conformanceName("liveness") {
+			got = slices.Clone(spec.Mounts)
+		}
+		return nil
+	}
+	if err := s.Full(context.Background()); err != nil {
+		t.Fatalf("Full = %v, want nil", err)
+	}
+	want := []Mount{
+		{Type: MountVolume, Source: s.conformanceName("liveness-ws"), Target: s.b.cfg.WorkspaceTarget},
+		{Type: MountVolume, Source: s.conformanceName("cred"), Target: s.fx.CredentialTarget, ReadOnly: true},
+	}
+	if !sameMounts(got, want) {
+		t.Errorf("liveness mounts = %+v, want writer topology %+v", got, want)
+	}
+	s.assertReaped(t, rt)
+}
+
 // TestSuiteFullRejectsSmuggledFilename: a workspace file NAMED after the
 // credential leaks the marker as a manifest path, invisible to the content-only
 // blob scan; the manifest-shape check rejects the unexpected entry.

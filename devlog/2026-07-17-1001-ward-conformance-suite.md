@@ -712,13 +712,13 @@ review sees the class-level closure rather than another cited-line patch.
   code-less prose containing “storage device attachment”; it requires the
   reference runtime's observed top-level `VZErrorDomain Code=2` together with
   the storage-device wording.
-- **The Full liveness surrogate was stale after the rebase.** Current main's
-  gate now asserts both the real writer and exporter are `StateStopped` in
-  their pre-start allowlist inspections, resolving the defense-in-depth gap
-  recorded as #152. Full therefore removed its redundant throwaway mounted
-  liveness VM; PreJob retains the no-start liveness check because that is its
-  actual cadence contract. #152 remains tracker state for its owner to close,
-  not a second implementation obligation here.
+- **The Full liveness surrogate initially appeared stale after the rebase.**
+  Current main's gate asserts the real writer and exporter are `StateStopped`
+  in their pre-start allowlist inspections (#152). Round 32 supplied the
+  counterexample that changed this conclusion: a finite writer eagerly run to
+  completion still inspects stopped. Full therefore retains a hardened
+  throwaway probe with the writer's exact mount topology and a nonterminating
+  payload; PreJob retains its unmounted form for its cheap cadence contract.
 - **The result contract overclaimed.** A check/probe violation is a typed
   `*ConformanceFailure`, while operational failures from the handoff can be
   plain errors. Turning an inability to execute into a made-up failed check
@@ -768,6 +768,17 @@ and run-specific blob paths. Full additionally scans every relative path under
 the released directory, so an exporter/layout change cannot add marker-bearing
 path metadata without failing containment. Construction and path-walk
 regressions cover both cited tokens and the digest directory.
+
+## Automated review round 32
+
+The current-main stopped-before-start assertion does not prove create was
+metadata-only when the payload is finite: a runtime can eagerly execute the
+mounted writer synchronously, let it finish, and then report the expected
+stopped state and mounts. Full now runs the nonterminating liveness payload
+over the real writer topology (fresh workspace RW plus credential volume RO)
+before seeding the fake credential. A mount-conditional eager create therefore
+cannot finish and self-mask. Ownership-bound cleanup covers the extra objects;
+regressions force the mounted probe running and capture its exact topology.
 
 **Accepted by decision.** The marker value appears in the seed/audit
 container argv; this is safe because the marker is an inert fake credential
