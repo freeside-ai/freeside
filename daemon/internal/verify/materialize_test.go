@@ -433,6 +433,71 @@ func TestMaterializeRejectsMalformedTree(t *testing.T) {
 	}
 }
 
+// TestMaterializeRejectsCaseFoldingSymlinkCollision is the #145
+// regression: a malformed tree pairing a symlink `link` (120000, target
+// an absolute path outside the workspace) with a blob `LINK/pwned`
+// (100644) escapes on a case-insensitive FS (macOS APFS). The exact-string
+// prefix guard sees `link` and `LINK/pwned` as distinct, but the runtime
+// FS folds `LINK` onto `link`, so materializing the symlink first lets a
+// later write traverse it to an attacker-chosen host path. Routing every
+// write through an os.Root bound to dest closes it: the escaping symlink
+// component is refused regardless of map-iteration order. The loop absorbs
+// the order nondeterminism; the no-out-of-tree-write assertion is the
+// FS-independent invariant (on a case-sensitive FS the two paths are
+// genuinely distinct and materialize succeeds honestly).
+func TestMaterializeRejectsCaseFoldingSymlinkCollision(t *testing.T) {
+	dir, base := initRepo(t, map[string]string{"seed": "x\n"})
+
+	// escapeDir is outside any workspace: a distinct temp root from the
+	// per-iteration dest. It exists as a directory so that, on the
+	// vulnerable path, os.MkdirAll(dest/LINK) resolves the folded symlink
+	// to a real directory and os.WriteFile lands escapeDir/pwned; the
+	// symlink's absolute target is baked into the tree object, so it is
+	// fixed across iterations.
+	escapeDir := filepath.Join(t.TempDir(), "escape")
+	if err := os.MkdirAll(escapeDir, 0o700); err != nil {
+		t.Fatalf("create escape dir: %v", err)
+	}
+	linkBlob := runGitStdin(t, dir, []byte(escapeDir), "hash-object", "-w", "--stdin")
+	fileBlob := runGitStdin(t, dir, []byte("pwned\n"), "hash-object", "-w", "--stdin")
+
+	// Subtree `LINK` holding `pwned`, paired with a symlink `link`.
+	subtree := runGitStdin(t, dir, treeRecord("100644", "pwned", fileBlob), "hash-object", "-w", "-t", "tree", "--literally", "--stdin")
+	raw := append(treeRecord("120000", "link", linkBlob), treeRecord("040000", "LINK", subtree)...)
+	topTree := runGitStdin(t, dir, raw, "hash-object", "-w", "-t", "tree", "--literally", "--stdin")
+	head := runGit(t, dir, "commit-tree", topTree, "-p", base, "-m", "case-folding")
+
+	g := newTestRunner(t, dir)
+	caseInsensitive := fsFoldsCase(t)
+	pwned := filepath.Join(escapeDir, "pwned")
+	for i := 0; i < 64; i++ {
+		dest := filepath.Join(t.TempDir(), "ws")
+		err := g.materialize(context.Background(), head, dest)
+		if _, statErr := os.Stat(pwned); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("iteration %d: materialize wrote through the folded symlink, escaping to %s", i, pwned)
+		}
+		// On a case-insensitive FS the collision is real and must fail
+		// closed; on a case-sensitive FS the paths are distinct and
+		// materialize legitimately succeeds.
+		if caseInsensitive && err == nil {
+			t.Fatalf("iteration %d: materialize succeeded on a case-insensitive FS, want a containment error", i)
+		}
+	}
+}
+
+// fsFoldsCase reports whether the OS temp filesystem is case-insensitive
+// (APFS default on macOS), so the collision test can require a containment
+// error only where the collision is real.
+func fsFoldsCase(t *testing.T) bool {
+	t.Helper()
+	probeDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(probeDir, "probe"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("write probe: %v", err)
+	}
+	_, err := os.Stat(filepath.Join(probeDir, "PROBE"))
+	return err == nil
+}
+
 // TestMaterializeRejectsMalformedTreePaths is the #140 hardening
 // enumeration: git write-tree never emits a path with a traversal,
 // absolute, or empty component, nor a duplicate path, but a tree crafted

@@ -66,8 +66,24 @@ func (g *gitRunner) materialize(ctx context.Context, headSHA, dest string) error
 	if err := os.MkdirAll(dest, 0o700); err != nil {
 		return fmt.Errorf("create verification workspace: %w", err)
 	}
+	// Every write goes through an os.Root bound to dest, which refuses to
+	// traverse a symlink component whose target escapes the root (and any
+	// absolute symlink), per-component and independent of write order.
+	// rejectPrefixConflicts above is the exact-string early guard; this is
+	// the containment that also closes the case-folding variant a fetched
+	// malformed tree can craft on a case-insensitive FS (a symlink `link`
+	// plus a blob `LINK/pwned`, which fold onto one path at runtime but not
+	// in the dedup key). It is robust beyond ASCII case (APFS also
+	// normalizes Unicode) precisely because it never lets the kernel
+	// silently resolve an escaping component, rather than modeling one
+	// normalization in the key.
+	root, err := os.OpenRoot(dest)
+	if err != nil {
+		return fmt.Errorf("open verification workspace root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
 	for p, e := range entries {
-		if err := g.writeTreeEntry(ctx, dest, p, e); err != nil {
+		if err := g.writeTreeEntry(ctx, root, p, e); err != nil {
 			return err
 		}
 	}
@@ -75,7 +91,7 @@ func (g *gitRunner) materialize(ctx context.Context, headSHA, dest string) error
 	// clone without submodule init and the shape verifyMaterialized
 	// pins.
 	for _, gl := range gitlinks {
-		if err := os.MkdirAll(filepath.Join(dest, filepath.FromSlash(gl)), 0o700); err != nil {
+		if err := root.MkdirAll(filepath.FromSlash(gl), 0o700); err != nil {
 			return fmt.Errorf("create gitlink dir %s: %w", gl, err)
 		}
 	}
@@ -252,13 +268,18 @@ func rejectPrefixConflicts(entries map[string]treeEntry, gitlinks []string) erro
 	return nil
 }
 
-// writeTreeEntry extracts one blob entry and writes it under dest: a
-// regular file with the mode's executable bit, or a symlink whose
-// target is the blob's bytes. cat-file emits raw blob content, so no
-// filter or attribute processing runs.
-func (g *gitRunner) writeTreeEntry(ctx context.Context, dest, treePath string, e treeEntry) error {
-	full := filepath.Join(dest, filepath.FromSlash(treePath))
-	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+// writeTreeEntry extracts one blob entry and writes it under root (bound
+// to the workspace dest): a regular file with the mode's executable bit,
+// or a symlink whose target is the blob's bytes. cat-file emits raw blob
+// content, so no filter or attribute processing runs. root refuses to
+// traverse an escaping symlink component, so no write can leave dest even
+// when a malformed tree crafts a case- or Unicode-folding collision; the
+// symlink itself is created with root.Symlink, which does not validate
+// the target (a legitimate committed symlink may point outside the tree),
+// so only a later path that traverses it fails closed.
+func (g *gitRunner) writeTreeEntry(ctx context.Context, root *os.Root, treePath string, e treeEntry) error {
+	name := filepath.FromSlash(treePath)
+	if err := root.MkdirAll(filepath.FromSlash(path.Dir(treePath)), 0o700); err != nil {
 		return fmt.Errorf("create workspace dir for %s: %w", treePath, err)
 	}
 	content, err := g.run(ctx, nil, "cat-file", "blob", e.oid)
@@ -266,7 +287,7 @@ func (g *gitRunner) writeTreeEntry(ctx context.Context, dest, treePath string, e
 		return err
 	}
 	if e.mode == "120000" {
-		if err := os.Symlink(string(content), full); err != nil {
+		if err := root.Symlink(string(content), name); err != nil {
 			return fmt.Errorf("materialize symlink %s: %w", treePath, err)
 		}
 		return nil
@@ -275,7 +296,7 @@ func (g *gitRunner) writeTreeEntry(ctx context.Context, dest, treePath string, e
 	if e.mode == "100755" {
 		perm = 0o755
 	}
-	if err := os.WriteFile(full, content, perm); err != nil {
+	if err := root.WriteFile(name, content, perm); err != nil {
 		return fmt.Errorf("materialize %s: %w", treePath, err)
 	}
 	return nil
