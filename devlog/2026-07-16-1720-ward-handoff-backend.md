@@ -504,3 +504,32 @@ same omission cannot suppress cleanup when the ownership evidence is complete.
 The refute pass also exercised wrong identities and labels missing from both
 views; those unsafe or unknown cases remain fail-closed, and it found no path
 that deletes a foreign object.
+
+Round 17 raised two P2s at the host-resource boundary:
+
+- *P2: the full stopped-rootfs archive was materialized at an unbounded
+  gate-owned path before extraction applied its byte cap.* The Runtime seam
+  now streams into a caller-owned writer, and the backend writes at most
+  `MaxArchiveBytes` to its archive file before failing categorically. This is
+  distinct from `MaxExportBytes`, which still bounds only the extracted
+  handoff tree. The required refute pass rejected the first CLIRuntime
+  implementation: an `RLIMIT_FSIZE` on the `container export` child does not
+  constrain Apple Container 1.1.0's hidden temp archive. Inspection of the
+  pinned source established that the CLI chooses a UUID temp path and asks
+  the already-running Container API XPC service to write it with
+  `EXT4Reader.export`, then copies that completed file to stdout. The false
+  limit and its same-process fixture were removed. The gate therefore hard
+  caps only bytes crossing the Runtime boundary and its own archive; the
+  stock runtime's private pre-stream materialization remains inside the
+  trusted runtime implementation because its public CLI exposes neither
+  direct stopped-rootfs streaming nor a quota for that temp file. Revisit
+  when Apple exposes either mechanism; do not claim a child-process limit
+  constrains the XPC service.
+- *P2: a header-count cap did not bound filesystem objects when `MkdirAll`
+  could create arbitrarily many implicit parents for one deep file.* The
+  extractor now accepts a nested entry only after its parent appeared as an
+  earlier directory header, creates directories one level at a time, and
+  counts every object before creation. A separate archive-path length cap
+  rejects pathological names before filesystem calls. Regression cases prove
+  both a zero-byte directory flood and a single deep implicit-parent entry
+  fail before the refused object reaches the host filesystem.

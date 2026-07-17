@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -189,14 +190,66 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		return nil, fmt.Errorf("create export output dir: %w", err)
 	}
 	tarPath := filepath.Join(st.archiveDir, "export.tar")
-	if err := b.rt.ExportRootFS(ctx, names.Exporter, tarPath); err != nil {
-		return nil, failf(CheckExportVerification, "export stopped exporter rootfs: %v", err)
+	if err := b.materializeRootFS(ctx, names.Exporter, tarPath); err != nil {
+		return nil, err
 	}
 	out, err := b.verifyExport(ctx, tarPath, st.exportDir)
 	if err != nil {
 		return nil, err
 	}
 	return &HandoffResult{Admission: adm, ExportDir: out.Dir, Manifest: out.Manifest}, nil
+}
+
+var errArchiveByteCap = errors.New("archive byte cap exceeded")
+
+type archiveCapWriter struct {
+	dest      io.Writer
+	remaining int64
+	overflow  bool
+}
+
+func (w *archiveCapWriter) Write(p []byte) (int, error) {
+	limit := len(p)
+	if int64(limit) > w.remaining {
+		limit = int(w.remaining)
+		w.overflow = true
+	}
+	n, err := w.dest.Write(p[:limit])
+	w.remaining -= int64(n)
+	if err != nil {
+		return n, err
+	}
+	if n != limit {
+		return n, io.ErrShortWrite
+	}
+	if w.overflow {
+		return n, errArchiveByteCap
+	}
+	return n, nil
+}
+
+// materializeRootFS keeps the full runtime-returned archive behind a hard
+// host-side byte cap. Runtime receives only the Writer, never the scratch
+// path, so an oversized or hostile stream cannot fill the archive directory
+// before verification gets a chance to reject it.
+func (b *Backend) materializeRootFS(ctx context.Context, id, tarPath string) error {
+	f, err := os.OpenFile(tarPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // gate-owned path under a fresh temp directory
+	if err != nil {
+		return failf(CheckExportVerification, "create bounded rootfs archive: %v", err)
+	}
+	w := &archiveCapWriter{dest: f, remaining: b.cfg.MaxArchiveBytes}
+	exportErr := b.rt.ExportRootFS(ctx, id, w, b.cfg.MaxArchiveBytes)
+	closeErr := f.Close()
+	if w.overflow {
+		return failf(CheckExportVerification, "exported rootfs archive exceeds the byte cap")
+	}
+	if exportErr != nil {
+		return failf(CheckExportVerification, "export stopped exporter rootfs: %v", exportErr)
+	}
+	if closeErr != nil {
+		return failf(CheckExportVerification, "close bounded rootfs archive: %v", closeErr)
+	}
+	return nil
 }
 
 func newOwnershipLabel() (Label, error) {

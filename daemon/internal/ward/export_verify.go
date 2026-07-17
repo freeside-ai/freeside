@@ -22,6 +22,11 @@ import (
 // maxProofBytes bounds the proof file; the real one is four short lines.
 const maxProofBytes = 64 << 10
 
+// maxArchivePathBytes rejects pathological tar names before path cleaning or
+// host filesystem calls. It matches the common PATH_MAX ceiling while the
+// configurable entry budget separately bounds created output objects.
+const maxArchivePathBytes = 4 << 10
+
 // redactPath returns a stable, non-reversible token for an archive-derived
 // path. Exported paths are workspace filenames (attacker-influenced) that
 // could themselves embed a credential, and ConformanceFailure reasons must
@@ -93,6 +98,12 @@ func (b *Backend) extractHandoff(tarPath, destDir string) ([]byte, error) {
 
 	var proof []byte
 	var extracted int64
+	var outputEntries int
+	// destDir itself is the already-created handoff root. Requiring every
+	// nested parent to appear first as a directory header makes one accepted
+	// tar header create at most one host filesystem object, so the entry cap
+	// is an inode cap too rather than something MkdirAll can bypass.
+	seenDirs := map[string]struct{}{"": {}}
 	tr := tar.NewReader(f)
 	for {
 		hdr, err := tr.Next()
@@ -101,6 +112,9 @@ func (b *Backend) extractHandoff(tarPath, destDir string) ([]byte, error) {
 		}
 		if err != nil {
 			return nil, failf(CheckExportVerification, "read exported archive: %v", err)
+		}
+		if len(hdr.Name) > maxArchivePathBytes {
+			return nil, failf(CheckExportVerification, "archive entry path exceeds the length cap")
 		}
 		name := path.Clean(strings.TrimPrefix(hdr.Name, "./"))
 		if strings.HasPrefix(name, "/") || name == ".." || strings.HasPrefix(name, "../") {
@@ -124,14 +138,32 @@ func (b *Backend) extractHandoff(tarPath, destDir string) ([]byte, error) {
 			}
 		case name == handoffRel || strings.HasPrefix(name, handoffRel+"/"):
 			rel := strings.TrimPrefix(strings.TrimPrefix(name, handoffRel), "/")
+			if rel == "" {
+				if hdr.Typeflag != tar.TypeDir {
+					return nil, failf(CheckExportVerification, "handoff root is not a directory")
+				}
+				continue
+			}
+			parent := path.Dir(rel)
+			if parent == "." {
+				parent = ""
+			}
+			if _, ok := seenDirs[parent]; !ok {
+				return nil, failf(CheckExportVerification, "handoff output parent directory was not declared")
+			}
+			outputEntries++
+			if outputEntries > b.cfg.MaxExportEntries {
+				return nil, failf(CheckExportVerification, "handoff output exceeds the entry cap")
+			}
 			dest := filepath.Join(destDir, filepath.FromSlash(rel))
 			switch hdr.Typeflag {
 			case tar.TypeDir:
-				if err := os.MkdirAll(dest, 0o750); err != nil {
+				if err := os.Mkdir(dest, 0o750); err != nil {
 					// The os error embeds the destination path (which carries
 					// the attacker-derived rel); report only the redacted name.
 					return nil, failf(CheckExportVerification, "create output dir for entry %s failed", redactPath(name))
 				}
+				seenDirs[rel] = struct{}{}
 			case tar.TypeReg:
 				n, err := extractFile(tr, dest, b.cfg.MaxExportBytes-extracted)
 				extracted += n
@@ -160,9 +192,6 @@ func (b *Backend) extractHandoff(tarPath, destDir string) ([]byte, error) {
 func extractFile(r io.Reader, dest string, budget int64) (int64, error) {
 	if budget < 0 {
 		return 0, errors.New("extraction cap exhausted")
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
-		return 0, errors.New("create parent directory failed")
 	}
 	f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // dest is joined under the gate-owned destDir
 	if err != nil {

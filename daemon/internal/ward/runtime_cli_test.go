@@ -1,6 +1,7 @@
 package ward
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -359,6 +360,29 @@ func TestCreateContainerRedactsStderr(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exit status 7") {
 		t.Errorf("CreateContainer error lost the safe exit status: %v", err)
+	}
+}
+
+// TestExportRootFSStreamsStdout pins the boundary CLIRuntime can enforce: the
+// CLI emits its default stdout stream into the caller-owned bounded Writer.
+func TestExportRootFSStreamsStdout(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "container-fixture")
+	script := "#!/bin/sh\n" +
+		"[ \"$1\" = export ] || exit 8\n" +
+		"[ \"$2\" = fixture ] || exit 9\n" +
+		"printf archive-bytes\n"
+	if err := os.WriteFile(bin, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bin, 0o700); err != nil { //nolint:gosec // executable test fixture is isolated in t.TempDir
+		t.Fatal(err)
+	}
+	var dest bytes.Buffer
+	if err := NewCLIRuntime(bin).ExportRootFS(context.Background(), "fixture", &dest, 1024); err != nil {
+		t.Fatal(err)
+	}
+	if got := dest.String(); got != "archive-bytes" {
+		t.Errorf("streamed archive = %q, want archive-bytes", got)
 	}
 }
 

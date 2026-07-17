@@ -1,6 +1,9 @@
 package ward
 
-import "context"
+import (
+	"context"
+	"io"
+)
 
 // MountType is the kind of a container mount as the runtime reports it. Only
 // named volumes are ever allowed by the gate; every other kind (a host bind,
@@ -164,7 +167,10 @@ type Runtime interface {
 	// ListContainers returns every container the runtime knows, including
 	// stopped ones (container list --all).
 	ListContainers(ctx context.Context) ([]ContainerSummary, error)
-	// ExportRootFS writes the stopped container's root filesystem as a tar
-	// archive to destPath on the host.
-	ExportRootFS(ctx context.Context, id, destPath string) error
+	// ExportRootFS streams the stopped container's root filesystem as a tar
+	// archive. The caller owns the Writer so it can enforce host-side limits
+	// while bytes cross the Runtime boundary. maxBytes lets Runtime
+	// implementations apply the same cap to internal materialization when
+	// their underlying API exposes a sound mechanism for doing so.
+	ExportRootFS(ctx context.Context, id string, dest io.Writer, maxBytes int64) error
 }

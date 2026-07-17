@@ -426,6 +426,67 @@ func TestVerifyExportCap(t *testing.T) {
 	}
 }
 
+// TestExtractHandoffMetadataBudgets proves zero-byte directory floods and
+// pathological names fail before the corresponding host objects are created.
+func TestExtractHandoffMetadataBudgets(t *testing.T) {
+	t.Run("entry count", func(t *testing.T) {
+		cfg := testConfig()
+		cfg.MaxExportEntries = 1
+		b, err := New(stubRuntime{}, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dest := t.TempDir()
+		entries := []tarEntry{
+			{name: "handoff/", typeflag: tar.TypeDir},
+			{name: "handoff/first/", typeflag: tar.TypeDir},
+			{name: "handoff/refused/", typeflag: tar.TypeDir},
+		}
+		_, err = b.extractHandoff(buildTar(t, entries), dest)
+		var cf *ConformanceFailure
+		if !errors.As(err, &cf) || cf.Check != CheckExportVerification {
+			t.Fatalf("extractHandoff = %v, want export_verification failure", err)
+		}
+		if _, statErr := os.Stat(filepath.Join(dest, "refused")); !errors.Is(statErr, os.ErrNotExist) {
+			t.Errorf("entry beyond the cap reached the host filesystem: %v", statErr)
+		}
+	})
+
+	t.Run("implicit parent count", func(t *testing.T) {
+		cfg := testConfig()
+		cfg.MaxExportEntries = 1
+		b, err := New(stubRuntime{}, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dest := t.TempDir()
+		_, err = b.extractHandoff(buildTar(t, []tarEntry{
+			{name: "handoff/", typeflag: tar.TypeDir},
+			{name: "handoff/one/two/three/file", body: []byte("x")},
+		}), dest)
+		var cf *ConformanceFailure
+		if !errors.As(err, &cf) || cf.Check != CheckExportVerification {
+			t.Fatalf("extractHandoff = %v, want export_verification failure", err)
+		}
+		if _, statErr := os.Stat(filepath.Join(dest, "one")); !errors.Is(statErr, os.ErrNotExist) {
+			t.Errorf("implicit parent reached the host filesystem: %v", statErr)
+		}
+	})
+
+	t.Run("path length", func(t *testing.T) {
+		b := newTestBackend(t)
+		name := "handoff/" + strings.Repeat("x", maxArchivePathBytes)
+		_, err := b.extractHandoff(buildTar(t, []tarEntry{{name: name, typeflag: tar.TypeDir}}), t.TempDir())
+		var cf *ConformanceFailure
+		if !errors.As(err, &cf) || cf.Check != CheckExportVerification {
+			t.Fatalf("extractHandoff = %v, want export_verification failure", err)
+		}
+		if strings.Contains(err.Error(), name) {
+			t.Error("path-length failure echoed the hostile archive name")
+		}
+	})
+}
+
 // TestExtractFileCapBoundary distinguishes an exact fit from a one-byte
 // overflow, including an empty file after the byte budget is fully consumed.
 func TestExtractFileCapBoundary(t *testing.T) {

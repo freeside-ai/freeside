@@ -3,6 +3,7 @@ package ward
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -26,7 +27,9 @@ func (stubRuntime) Inspect(context.Context, string) (InspectReport, error) {
 }
 func (stubRuntime) DeleteContainer(context.Context, string) error              { return nil }
 func (stubRuntime) ListContainers(context.Context) ([]ContainerSummary, error) { return nil, nil }
-func (stubRuntime) ExportRootFS(context.Context, string, string) error         { return nil }
+func (stubRuntime) ExportRootFS(context.Context, string, io.Writer, int64) error {
+	return nil
+}
 
 // fakeCtr is one container the fakeRuntime tracks.
 type fakeCtr struct {
@@ -79,7 +82,7 @@ type fakeRuntime struct {
 	onDeleteContainer func(id string) (skipRemoval bool, err error)
 	onListContainers  func(list []ContainerSummary) ([]ContainerSummary, error)
 	onListVolumes     func(list []VolumeSummary) ([]VolumeSummary, error)
-	onExport          func(id, destPath string) error
+	onExport          func(id string, dest io.Writer) error
 }
 
 func newFakeRuntime(t *testing.T) *fakeRuntime {
@@ -343,7 +346,7 @@ func (f *fakeRuntime) ListContainers(ctx context.Context) ([]ContainerSummary, e
 	return out, nil
 }
 
-func (f *fakeRuntime) ExportRootFS(ctx context.Context, id, destPath string) error {
+func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Writer, _ int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("export %s", id)
@@ -351,16 +354,18 @@ func (f *fakeRuntime) ExportRootFS(ctx context.Context, id, destPath string) err
 		return err
 	}
 	if f.onExport != nil {
-		if err := f.onExport(id, destPath); err != nil {
+		if err := f.onExport(id, dest); err != nil {
 			return err
 		}
 	}
 	if _, ok := f.ctrs[id]; !ok {
 		return fmt.Errorf("container %q not found", id)
 	}
-	data, err := os.ReadFile(f.exportTarPath)
+	src, err := os.Open(f.exportTarPath)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(destPath, data, 0o600) //nolint:gosec // test fake writing to the gate-owned scratch path
+	defer src.Close() //nolint:errcheck // read-only test fixture
+	_, err = io.Copy(dest, src)
+	return err
 }

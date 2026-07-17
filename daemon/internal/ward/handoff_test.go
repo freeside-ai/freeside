@@ -1,8 +1,10 @@
 package ward
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -108,6 +110,36 @@ func TestHandoffSuccess(t *testing.T) {
 			t.Errorf("unexpected leftover handoff temp dir: %s", d)
 		}
 	}
+	fx.assertReaped(t)
+}
+
+func TestArchiveCapWriterBoundary(t *testing.T) {
+	t.Run("exact fit", func(t *testing.T) {
+		var dest bytes.Buffer
+		w := &archiveCapWriter{dest: &dest, remaining: 8}
+		if n, err := w.Write([]byte("12345678")); err != nil || n != 8 || w.overflow {
+			t.Fatalf("Write = (%d, %v), overflow=%v; want exact fit", n, err, w.overflow)
+		}
+	})
+
+	t.Run("one byte over", func(t *testing.T) {
+		var dest bytes.Buffer
+		w := &archiveCapWriter{dest: &dest, remaining: 8}
+		n, err := w.Write([]byte("123456789"))
+		if n != 8 || !errors.Is(err, errArchiveByteCap) || !w.overflow {
+			t.Fatalf("Write = (%d, %v), overflow=%v; want capped overflow", n, err, w.overflow)
+		}
+		if dest.Len() != 8 {
+			t.Fatalf("materialized bytes = %d, want 8", dest.Len())
+		}
+	})
+}
+
+func TestHandoffRootFSArchiveCap(t *testing.T) {
+	fx := newHandoffFixture(t)
+	fx.cfg.MaxArchiveBytes = 1024
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckExportVerification)
 	fx.assertReaped(t)
 }
 
@@ -998,7 +1030,7 @@ func TestHandoffRuntimeErrorsFailClosed(t *testing.T) {
 			}
 		}},
 		{"export fails", func(fx *handoffFixture) {
-			fx.rt.onExport = func(string, string) error { return errors.New("io error") }
+			fx.rt.onExport = func(string, io.Writer) error { return errors.New("io error") }
 		}},
 	}
 	for _, tc := range cases {

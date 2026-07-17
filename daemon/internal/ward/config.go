@@ -65,6 +65,14 @@ type Config struct {
 	// helper's own blob limits bound the honest case well below this).
 	// Defaults to 2 GiB.
 	MaxExportBytes int64
+	// MaxArchiveBytes caps the stopped container's full rootfs tar while the
+	// Runtime streams it onto the host. It is distinct from MaxExportBytes
+	// because the pinned exporter's base image is present in the archive too.
+	// Defaults to 4 GiB.
+	MaxArchiveBytes int64
+	// MaxExportEntries caps filesystem objects under HandoffDir before any
+	// archive-derived path is created on the host. Defaults to 10,000.
+	MaxExportEntries int
 	// Scanner is the required check-7 scanning hook.
 	Scanner OutputScanner
 	// Sleep waits between state polls; tests inject a recording stub. Nil
@@ -98,6 +106,12 @@ func (cfg Config) withDefaults() Config {
 	if cfg.MaxExportBytes == 0 {
 		cfg.MaxExportBytes = 2 << 30
 	}
+	if cfg.MaxArchiveBytes == 0 {
+		cfg.MaxArchiveBytes = 4 << 30
+	}
+	if cfg.MaxExportEntries == 0 {
+		cfg.MaxExportEntries = 10_000
+	}
 	if cfg.Sleep == nil {
 		cfg.Sleep = sleepContext
 	}
@@ -121,6 +135,10 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: ProofPath %q is not absolute", ErrInvalidConfig, cfg.ProofPath)
 	case cfg.MaxExportBytes < 0:
 		return fmt.Errorf("%w: MaxExportBytes %d is negative", ErrInvalidConfig, cfg.MaxExportBytes)
+	case cfg.MaxArchiveBytes < 0:
+		return fmt.Errorf("%w: MaxArchiveBytes %d is negative", ErrInvalidConfig, cfg.MaxArchiveBytes)
+	case cfg.MaxExportEntries < 0:
+		return fmt.Errorf("%w: MaxExportEntries %d is negative", ErrInvalidConfig, cfg.MaxExportEntries)
 	case cfg.WriterStopTimeout < 0:
 		return fmt.Errorf("%w: WriterStopTimeout %s is negative", ErrInvalidConfig, cfg.WriterStopTimeout)
 	case cfg.ExporterTimeout < 0:

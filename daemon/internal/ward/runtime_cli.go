@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	osexec "os/exec"
 	"sort"
 	"strings"
@@ -41,22 +42,34 @@ func (c *CLIRuntime) runRedactedStderr(ctx context.Context, args ...string) ([]b
 }
 
 func (c *CLIRuntime) runCommand(ctx context.Context, reportStderr bool, args ...string) ([]byte, error) {
+	var stdout bytes.Buffer
+	if err := c.runTo(ctx, &stdout, reportStderr, args...); err != nil {
+		return nil, err
+	}
+	return stdout.Bytes(), nil
+}
+
+func (c *CLIRuntime) runTo(ctx context.Context, stdout io.Writer, reportStderr bool, args ...string) error {
 	cmd := osexec.CommandContext(ctx, c.bin, args...) //nolint:gosec // bin is operator-configured; caller fields reach argv only through the fail-closed spec phrasing above
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
+	return runPrepared(cmd, stdout, reportStderr, args[0])
+}
+
+func runPrepared(cmd *osexec.Cmd, stdout io.Writer, reportStderr bool, operation string) error {
+	var stderr bytes.Buffer
+	cmd.Stdout = stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		if !reportStderr {
-			return nil, fmt.Errorf("container %s: %w", args[0], err)
+			return fmt.Errorf("container %s: %w", operation, err)
 		}
 		msg := strings.TrimSpace(stderr.String())
 		const maxStderr = 512
 		if len(msg) > maxStderr {
 			msg = msg[:maxStderr] + "..."
 		}
-		return nil, fmt.Errorf("container %s: %w: %s", args[0], err, msg)
+		return fmt.Errorf("container %s: %w: %s", operation, err, msg)
 	}
-	return stdout.Bytes(), nil
+	return nil
 }
 
 func (c *CLIRuntime) CreateVolume(ctx context.Context, name string, sizeMB int64, labels []Label) error {
@@ -168,9 +181,13 @@ func (c *CLIRuntime) ListContainers(ctx context.Context) ([]ContainerSummary, er
 	return decodeContainerList(out)
 }
 
-func (c *CLIRuntime) ExportRootFS(ctx context.Context, id, destPath string) error {
-	_, err := c.run(ctx, "export", "--output", destPath, id)
-	return err
+func (c *CLIRuntime) ExportRootFS(ctx context.Context, id string, dest io.Writer, _ int64) error {
+	// Omit --output so the CLI copies its completed archive to stdout, where
+	// the caller-owned Writer enforces the gate's exact byte cap. Apple
+	// container 1.1.0 first asks its already-running XPC service to materialize
+	// a private temp archive; a resource limit on this CLI child would not
+	// constrain that separate writer and must not be represented as doing so.
+	return c.runTo(ctx, dest, true, "export", id)
 }
 
 // The 1.1.0 JSON shapes, pinned by the decode fixtures under testdata/. Only
