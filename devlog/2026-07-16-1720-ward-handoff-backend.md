@@ -792,3 +792,30 @@ re-raised: the `reportStderr=true` CLI calls (inspect/list) fold a capped stderr
 tail into their error, but only `create` can echo a caller credential and it
 passes `reportStderr=false`, and identity-mismatch paths exit 0 so never reach
 that stderr fold.
+
+Round 28 raised one P2 adjacent to the ambiguous-reap change:
+
+- *P2: a delete-uncertainty window left the agent reapable by identity alone.*
+  After the writer-termination check's own `DeleteContainer(agent)` succeeded,
+  `st.agentOwned` stayed true until `verifyContainerAbsent` also succeeded. On the
+  path where the delete succeeded but absence could not be proven (for example the
+  full list errored on an unrelated row), `Handoff` returned with `agentOwned`
+  still true, so deferred teardown treated any object later answering to the
+  deterministic agent name as known-owned and reaped it by identity with no label
+  check. A foreign actor that recycled the name between our delete and teardown
+  could be stopped/deleted. Our own delete having succeeded, this invocation no
+  longer owns the agent by create, so `agentOwned` is now downgraded to false
+  immediately after the successful delete, before proving absence;
+  `agentAttempted` stays true until absence is proven. Teardown therefore
+  re-proves this invocation's unpredictable ownership label (the ambiguous path)
+  rather than reaping a same-name stranger by identity. A real labeled survivor of
+  a lying delete still carries the label and is still reaped; only an unlabeled
+  recycle is left. This narrows, but does not close, the #138 mutable-name TOCTOU:
+  it removes the label-free reap of a post-delete same-name object, while the
+  residual check-to-delete race on the label-gated path remains #138's scope. The
+  required refute-first pass confirmed the happy path is unchanged, the labeled
+  survivor is still reaped and still flagged if it survives, and no other reader of
+  `agentOwned` exists between the delete and teardown. Regression:
+  `TestHandoffAgentOwnershipDowngradedAfterDeleteUncertainty` proves a recycled
+  unlabeled same-name object is not reaped (one agent delete, the gate's own),
+  and it fails against the pre-fix ordering (two deletes).
