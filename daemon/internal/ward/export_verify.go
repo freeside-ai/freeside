@@ -98,6 +98,7 @@ func (b *Backend) extractHandoff(tarPath, destDir string) ([]byte, error) {
 	proofRel := strings.TrimPrefix(b.cfg.ProofPath, "/")
 
 	var proof []byte
+	var proofSeen bool
 	var extracted int64
 	var outputEntries int
 	// destDir itself is the already-created handoff root. Requiring every
@@ -124,6 +125,15 @@ func (b *Backend) extractHandoff(tarPath, destDir string) ([]byte, error) {
 
 		switch {
 		case name == proofRel:
+			// The proof is kept in memory, not written through O_EXCL like the
+			// output files, so a second proof header would silently overwrite
+			// the first. Approve exactly one: a duplicate (e.g. a contradictory
+			// proof followed by a valid one) fails closed rather than letting the
+			// last header decide check 5.
+			if proofSeen {
+				return nil, failf(CheckExportVerification, "archive carries more than one proof entry")
+			}
+			proofSeen = true
 			if hdr.Typeflag != tar.TypeReg {
 				return nil, failf(CheckExportVerification, "proof entry is not a regular file")
 			}

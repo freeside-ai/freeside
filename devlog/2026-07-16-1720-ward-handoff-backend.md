@@ -618,3 +618,18 @@ fails closed regardless of entry order, `*Size`/`*Digest` derefs stay guarded by
 `EntryRegular && !BlobOmitted` (which `validateRegular` proves non-nil), and the
 `verified` set is bounded by the now-capped manifest. Regression tests cover the
 manifest cap, the identical-files dedup, and the size-liar rejection.
+
+Round 21 raised one P2 in the "approve exactly one, reject duplicates" class
+(rounds 4 and 14):
+
+- *P2: a duplicate proof header silently overwrote the first.* The proof is the
+  only extracted artifact kept in memory rather than written through `O_EXCL`
+  (output files) or `Mkdir` (dirs), so a second `handoff-proof.txt` header
+  overwrote the earlier `proof` bytes and the last one decided check 5. A
+  malformed archive could pair a contradictory proof with a valid duplicate and
+  pass. `extractHandoff` now tracks `proofSeen` and fails closed on a second
+  proof header, approving exactly one observed proof. The class sweep confirmed
+  the proof is the sole memory-kept artifact: the manifest and every output file
+  extract through `O_EXCL`, and output directories through `Mkdir`, so a
+  duplicate of any of those already fails closed. Regression: a
+  "duplicate proof entry" violation case.

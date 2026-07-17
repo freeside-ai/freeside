@@ -164,6 +164,16 @@ func TestVerifyExportViolations(t *testing.T) {
 			CheckExportVerification,
 		},
 		{
+			// A second proof header must not silently overwrite the first: the
+			// gate approves exactly one observed proof (a contradictory proof
+			// followed by a valid duplicate would otherwise pass check 5).
+			"duplicate proof entry",
+			func(_ *testing.T, es []tarEntry) []tarEntry {
+				return append(es, tarEntry{name: "handoff-proof.txt", body: validProof()})
+			},
+			CheckExportVerification,
+		},
+		{
 			"blob content mismatch",
 			func(_ *testing.T, es []tarEntry) []tarEntry {
 				es[8].body = []byte("tampered-output\n")
