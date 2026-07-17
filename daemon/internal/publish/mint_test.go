@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 // fixtureTokenValue must match testdata/token-response.json.
@@ -299,133 +300,101 @@ func TestMintValidation(t *testing.T) {
 	}
 }
 
-// TestJSONLRecorderRequiresStateDir: the state root is the caller's
-// surface; a recorder that created it could not make its directory
-// entry durable, so construction fails instead.
-func TestJSONLRecorderRequiresStateDir(t *testing.T) {
-	if _, err := publish.NewJSONLRecorder(filepath.Join(t.TempDir(), "missing")); err == nil {
-		t.Error("NewJSONLRecorder with missing state dir succeeded, want error")
+// newTestStore opens a real temp-file store; SQLite needs a file (a
+// pooled :memory: DSN would give each connection its own database).
+func newTestStore(t *testing.T) *store.Store {
+	t.Helper()
+	s, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "store.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Errorf("store.Close: %v", err)
+		}
+	})
+	return s
+}
+
+// TestStoreRecorder drives a full mint through the production audit
+// path (issue #107 acceptance 2): the record lands on the store-owned
+// SQLite surface and reads back field-identical.
+func TestStoreRecorder(t *testing.T) {
+	ks := newRegisteredKeystore(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		fixture, _ := os.ReadFile(filepath.Join("testdata", "token-response.json"))
+		_, _ = w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	s := newTestStore(t)
+	rec, err := publish.NewStoreRecorder(s)
+	if err != nil {
+		t.Fatalf("NewStoreRecorder: %v", err)
+	}
+	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, fixedNow)
+	if _, err := m.MintInstallationToken(context.Background(), 777, "evidence-repo"); err != nil {
+		t.Fatalf("MintInstallationToken: %v", err)
+	}
+
+	var audits []store.MintAudit
+	err = s.Read(context.Background(), func(tx *store.ReadTx) error {
+		var err error
+		audits, err = tx.ListMintAudits(context.Background())
+		return err
+	})
+	if err != nil {
+		t.Fatalf("ListMintAudits: %v", err)
+	}
+	if len(audits) != 1 {
+		t.Fatalf("recorded %d audits, want 1", len(audits))
+	}
+	got := audits[0]
+	if got.InstallationID != 777 || got.Repo != "evidence-repo" {
+		t.Errorf("audit identity = %+v", got)
+	}
+	if !got.MintedAt.Equal(fixtureTime) {
+		t.Errorf("MintedAt = %v, want %v", got.MintedAt, fixtureTime)
+	}
+	want := publish.PublishPermissions
+	if got.RequestedContents != want.Contents || got.RequestedPullRequests != want.PullRequests ||
+		got.RequestedMetadata != want.Metadata || got.GrantedContents != want.Contents ||
+		got.GrantedPullRequests != want.PullRequests || got.GrantedMetadata != want.Metadata {
+		t.Errorf("audit scopes = %+v, want %+v for requested and granted", got, want)
 	}
 }
 
-// TestJSONLRecorderRejectsSymlinks: a symlinked publish/ dir or log
-// file would relocate audit rows off the state surface the recorder
-// owns, so both fail closed.
-func TestJSONLRecorderRejectsSymlinks(t *testing.T) {
-	base := t.TempDir()
-	elsewhere := filepath.Join(base, "elsewhere")
-	if err := os.MkdirAll(elsewhere, 0o700); err != nil {
-		t.Fatal(err)
+// TestStoreRecorderFailsClosed: the #80 invariant against the real
+// recorder rather than a fake — an audit write that cannot commit
+// fails the mint, and a nil store fails at construction.
+func TestStoreRecorderFailsClosed(t *testing.T) {
+	if _, err := publish.NewStoreRecorder(nil); err == nil {
+		t.Error("NewStoreRecorder(nil) succeeded, want error")
 	}
 
-	linkedDir := filepath.Join(base, "state-a")
-	if err := os.MkdirAll(linkedDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(elsewhere, filepath.Join(linkedDir, "publish")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := publish.NewJSONLRecorder(linkedDir); err == nil {
-		t.Error("NewJSONLRecorder with symlinked publish/ succeeded, want error")
-	}
+	ks := newRegisteredKeystore(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		fixture, _ := os.ReadFile(filepath.Join("testdata", "token-response.json"))
+		_, _ = w.Write(fixture)
+	}))
+	defer srv.Close()
 
-	linkedFile := filepath.Join(base, "state-b")
-	if err := os.MkdirAll(filepath.Join(linkedFile, "publish"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(filepath.Join(elsewhere, "target.jsonl"), filepath.Join(linkedFile, "publish", "mints.jsonl")); err != nil {
-		t.Fatal(err)
-	}
-	rec, err := publish.NewJSONLRecorder(linkedFile)
+	s, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("store.Open: %v", err)
 	}
-	if err := rec.RecordMint(publish.MintRecord{MintedAt: fixtureTime}); err == nil {
-		t.Error("RecordMint through symlinked log succeeded, want error")
+	rec, err := publish.NewStoreRecorder(s)
+	if err != nil {
+		t.Fatalf("NewStoreRecorder: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("store.Close: %v", err)
 	}
 
-	// A directory swapped after recorder construction must be caught at
-	// the write boundary too; checking only mints.jsonl would follow this
-	// parent link before Lstat reached the final path.
-	swappedState := filepath.Join(base, "state-c")
-	if err := os.MkdirAll(swappedState, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	rec, err = publish.NewJSONLRecorder(swappedState)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(filepath.Join(swappedState, "publish"), filepath.Join(swappedState, "publish-old")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(elsewhere, filepath.Join(swappedState, "publish")); err != nil {
-		t.Fatal(err)
-	}
-	if err := rec.RecordMint(publish.MintRecord{MintedAt: fixtureTime}); err == nil {
-		t.Error("RecordMint through post-construction symlinked publish/ succeeded, want error")
-	}
-	if entries, err := os.ReadDir(elsewhere); err != nil {
-		t.Fatal(err)
-	} else if len(entries) != 0 {
-		t.Errorf("post-construction symlink target gained %d entries", len(entries))
-	}
-
-	// Replacing publish/ with another real directory is also a swap; a
-	// kind-only Lstat check would accept it and split the audit history.
-	replacedState := filepath.Join(base, "state-d")
-	if err := os.MkdirAll(replacedState, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	rec, err = publish.NewJSONLRecorder(replacedState)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(filepath.Join(replacedState, "publish"), filepath.Join(replacedState, "publish-old")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(filepath.Join(replacedState, "publish"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := rec.RecordMint(publish.MintRecord{MintedAt: fixtureTime}); err == nil {
-		t.Error("RecordMint through replaced publish/ succeeded, want error")
-	}
-}
-
-// TestJSONLRecorder exercises the durable 1A audit substrate.
-func TestJSONLRecorder(t *testing.T) {
-	stateDir := t.TempDir()
-	rec, err := publish.NewJSONLRecorder(stateDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record := publish.MintRecord{
-		MintedAt:       fixtureTime,
-		InstallationID: 777,
-		Repo:           "evidence-repo",
-		Requested:      publish.PublishPermissions,
-		Granted:        publish.PublishPermissions,
-		ExpiresAt:      fixtureTime.Add(time.Hour),
-	}
-	if err := rec.RecordMint(record); err != nil {
-		t.Fatal(err)
-	}
-	if err := rec.RecordMint(record); err != nil {
-		t.Fatal(err)
-	}
-
-	raw, err := os.ReadFile(filepath.Join(stateDir, "publish", "mints.jsonl")) //nolint:gosec // test-internal path under t.TempDir
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("audit log has %d lines, want 2", len(lines))
-	}
-	var got publish.MintRecord
-	if err := json.Unmarshal([]byte(lines[0]), &got); err != nil {
-		t.Fatalf("unmarshal audit line: %v", err)
-	}
-	if got != record {
-		t.Errorf("round-tripped record = %+v, want %+v", got, record)
+	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, fixedNow)
+	if _, err := m.MintInstallationToken(context.Background(), 777, "evidence-repo"); err == nil {
+		t.Error("mint succeeded with an unwritable audit store, want error")
 	}
 }
