@@ -268,13 +268,12 @@ type cliInitProcess struct {
 	Environment *[]string `json:"environment"`
 }
 
-type cliImageDescriptor struct {
-	Digest string `json:"digest"`
-}
-
+// cliImage decodes configuration.image. Only reference is consumed: it carries
+// the pinned @sha256 digest trust binds to. The sibling descriptor.digest is
+// the runtime's resolved (arch-dependent) digest, unpredictable from the spec,
+// so it is intentionally not decoded and its presence in the JSON is ignored.
 type cliImage struct {
-	Reference  string              `json:"reference"`
-	Descriptor *cliImageDescriptor `json:"descriptor"`
+	Reference string `json:"reference"`
 }
 
 type cliConfiguration struct {
@@ -458,8 +457,6 @@ func (m cliMount) toMount() Mount {
 func (c cliContainer) allowlistFieldsPresent() bool {
 	return c.Configuration.Image != nil &&
 		c.Configuration.Image.Reference != "" &&
-		c.Configuration.Image.Descriptor != nil &&
-		c.Configuration.Image.Descriptor.Digest != "" &&
 		c.Configuration.InitProcess.Executable != "" &&
 		c.Configuration.InitProcess.Arguments != nil &&
 		c.Configuration.InitProcess.WorkingDirectory != nil &&
@@ -479,9 +476,6 @@ func (c cliContainer) toReport() InspectReport {
 	}
 	if c.Configuration.Image != nil {
 		rep.ImageReference = c.Configuration.Image.Reference
-		if c.Configuration.Image.Descriptor != nil {
-			rep.ImageDigest = c.Configuration.Image.Descriptor.Digest
-		}
 	}
 	if c.Configuration.InitProcess.Executable != "" {
 		rep.Command = append(rep.Command, c.Configuration.InitProcess.Executable)

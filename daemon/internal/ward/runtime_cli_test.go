@@ -20,8 +20,15 @@ func readFixture(t *testing.T, name string) []byte {
 	return data
 }
 
+// pinnedImageReference is the fixture's image reference: the full pinned
+// reference Apple container 1.1.0 reports (the tag dropped, the pinned digest
+// kept). The sibling descriptor.digest in the fixture is a different, resolved
+// digest that must never reach the report or the allowlist comparison.
+const pinnedImageReference = "docker.io/library/alpine@sha256:2c9d26f410d032d5b1525aa8a873e238b05b90c4ae8618743d4311f0cc827e37"
+
 // TestDecodeInspectVolume pins the 1.1.0 inspect shape for the conforming
-// exporter: one named-volume mount decoded with its volume name (not the
+// exporter: the full pinned image reference (not the resolved descriptor
+// digest), one named-volume mount decoded with its volume name (not the
 // host block-image path), options ["ro"] mapped to ReadOnly, image PATH
 // environment, no SSH, no publications.
 func TestDecodeInspectVolume(t *testing.T) {
@@ -31,8 +38,7 @@ func TestDecodeInspectVolume(t *testing.T) {
 	}
 	want := InspectReport{
 		ID:                      "freeside-handoff-run-1-exporter",
-		ImageReference:          "docker.io/library/alpine:3.22",
-		ImageDigest:             "sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce",
+		ImageReference:          pinnedImageReference,
 		Command:                 []string{"sh", "-c", "echo hi"},
 		WorkingDirectory:        "/",
 		State:                   StateStopped,
@@ -51,10 +57,12 @@ func TestDecodeInspectVolume(t *testing.T) {
 	if !reflect.DeepEqual(rep, want) {
 		t.Errorf("decoded report = %+v, want %+v", rep, want)
 	}
-	// This exact report passes check 4 against its allowlist: the decode
-	// and the verifier agree on the conforming shape.
+	// This exact report passes check 4 against its allowlist: the decode and
+	// the verifier agree on the conforming shape, and the verifier binds to the
+	// reference's pinned digest, ignoring the fixture's different descriptor
+	// digest entirely.
 	cfg := testConfig()
-	cfg.ExporterImage = want.ImageReference + "@" + want.ImageDigest
+	cfg.ExporterImage = want.ImageReference
 	cfg.ExporterCommand = want.Command
 	if err := verifyExporterAllowlist(cfg, rep, want.ID, "freeside-handoff-run-1-ws"); err != nil {
 		t.Errorf("conforming fixture fails allowlist: %v", err)
@@ -219,15 +227,16 @@ func TestDecodeInspectIdentity(t *testing.T) {
 }
 
 // TestDecodeInspectAllowlistFieldPresence: a report that omits any of check
-// 4's allowlist inputs (image, command, environment, ssh, and publications)
-// is marked incomplete and rejected by check 4 rather than reading as clean.
+// 4's allowlist inputs (image reference, command, environment, ssh, and
+// publications) is marked incomplete and rejected by check 4 rather than
+// reading as clean. The fixtures keep the runtime's descriptor object, which
+// the decoder ignores; only the reference is a required presence field.
 func TestDecodeInspectAllowlistFieldPresence(t *testing.T) {
 	// A report with the correct id and state but each allowlist field omitted
 	// in turn must preserve identity while remaining unapprovable.
 	fields := map[string]string{
 		"image":             `"initProcess":{"executable":"sh","arguments":[],"environment":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
 		"image reference":   `"image":{"descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
-		"image digest":      `"image":{"reference":"example.test/exporter"},"initProcess":{"executable":"sh","arguments":[],"environment":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
 		"executable":        `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"arguments":[],"environment":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
 		"arguments":         `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","environment":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
 		"environment":       `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,

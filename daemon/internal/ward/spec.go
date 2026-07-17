@@ -37,6 +37,36 @@ var (
 	digestPinnedImagePattern = regexp.MustCompile(`^.+@sha256:[0-9a-f]{64}$`)
 )
 
+// splitImageRef parses an OCI image reference into its name and its pinned
+// @digest, normalizing away an optional tag so the two sides of an image
+// comparison line up regardless of how the tag is spelled. ok is false when no
+// @digest is present, so a caller comparing observed against expected fails
+// closed on a tagless (unpinned) reference.
+//
+// The digest is the trust anchor: check 2/4 pin the image by digest, and Apple
+// container 1.1.0 reports the pinned digest in configuration.image.reference
+// while dropping the tag (a spec of "repo/name:3.22@sha256:PIN" is observed as
+// "repo/name@sha256:PIN"). Stripping the tag from the name's final path segment
+// lets those match on both name and digest.
+func splitImageRef(ref string) (name, digest string, ok bool) {
+	name, digest, ok = strings.Cut(ref, "@")
+	if !ok {
+		return "", "", false
+	}
+	// A tag is a ':' within the final path segment (the part after the last
+	// '/'); a ':' before the last '/' is a registry port and is preserved
+	// ("registry:5000/repo" keeps the port, strips a trailing ":tag"). A
+	// reference with no '/' is a single "repo:tag" component ("alpine:3.22").
+	// A bare "host:port" with no repository path is not a valid image
+	// reference and is out of scope; the digest gate and symmetric parsing
+	// mean mishandling it can never admit a wrong image regardless.
+	segStart := strings.LastIndex(name, "/") + 1
+	if colon := strings.LastIndex(name[segStart:], ":"); colon >= 0 {
+		name = name[:segStart+colon]
+	}
+	return name, digest, true
+}
+
 // CredentialMount places one existing credential volume into the agent VM,
 // read-only, at Target. The volume is caller-owned: the gate mounts it into
 // the writer and proves it absent from everything downstream; it never

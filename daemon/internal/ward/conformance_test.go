@@ -170,11 +170,11 @@ func TestValidateAgentSpecRedactsMalformedEnv(t *testing.T) {
 }
 
 func agentReport(spec ContainerSpec) InspectReport {
-	imageReference, imageDigest, _ := strings.Cut(spec.Image, "@")
 	return InspectReport{
-		ID:                      spec.Name,
-		ImageReference:          imageReference,
-		ImageDigest:             imageDigest,
+		ID: spec.Name,
+		// The runtime reports the full pinned reference (name@digest), as
+		// Apple container 1.1.0 does; the verifier parses it back out.
+		ImageReference:          spec.Image,
 		Command:                 append([]string(nil), spec.Command...),
 		WorkingDirectory:        "/",
 		State:                   StateStopped,
@@ -192,6 +192,16 @@ func TestVerifyAgentAllowlistViolations(t *testing.T) {
 	if err := verifyAgentAllowlist(agentReport(spec), spec); err != nil {
 		t.Fatalf("conforming report: %v, want nil", err)
 	}
+	agentImageName, agentImageDigest, _ := strings.Cut(spec.Image, "@")
+
+	// A tag on the observed reference is normalized away: the same name and
+	// pinned digest still conform, so a spec pinned by tag+digest matches the
+	// runtime's tag-dropped reference (acceptance #2).
+	tagged := agentReport(spec)
+	tagged.ImageReference = agentImageName + ":v1@" + agentImageDigest
+	if err := verifyAgentAllowlist(tagged, spec); err != nil {
+		t.Fatalf("tag-normalized reference: %v, want nil", err)
+	}
 
 	cases := []struct {
 		name   string
@@ -201,8 +211,13 @@ func TestVerifyAgentAllowlistViolations(t *testing.T) {
 		{"required field omitted", func(r *InspectReport) { r.AllowlistFieldsObserved = false }},
 		{"running before approval", func(r *InspectReport) { r.State = StateRunning }},
 		{"unknown state", func(r *InspectReport) { r.State = "unknown" }},
-		{"wrong image", func(r *InspectReport) { r.ImageReference = "example.test/other:dev" }},
-		{"wrong image digest", func(r *InspectReport) { r.ImageDigest = "sha256:" + strings.Repeat("2", 64) }},
+		{"wrong image name", func(r *InspectReport) {
+			r.ImageReference = "example.test/other@" + agentImageDigest
+		}},
+		{"wrong image digest", func(r *InspectReport) {
+			r.ImageReference = agentImageName + "@sha256:" + strings.Repeat("2", 64)
+		}},
+		{"reference missing digest", func(r *InspectReport) { r.ImageReference = agentImageName }},
 		{"workspace working directory", func(r *InspectReport) { r.WorkingDirectory = "/workspace" }},
 		{"wrong command", func(r *InspectReport) { r.Command = append(r.Command, "--drift") }},
 		{"different environment", func(r *InspectReport) { r.Env = append(r.Env, "HOST_TOKEN=inert") }},
@@ -229,11 +244,10 @@ func TestVerifyAgentAllowlistViolations(t *testing.T) {
 // exporterReport is the runtime report matching the generated allowlist:
 // the fixture the check-4 violation cases mutate.
 func exporterReport(cfg Config, exporterID, workspaceVolume string) InspectReport {
-	imageReference, imageDigest, _ := strings.Cut(cfg.ExporterImage, "@")
 	return InspectReport{
-		ID:                      exporterID,
-		ImageReference:          imageReference,
-		ImageDigest:             imageDigest,
+		ID: exporterID,
+		// The runtime reports the full pinned reference (name@digest).
+		ImageReference:          cfg.ExporterImage,
 		Command:                 append([]string(nil), cfg.ExporterCommand...),
 		WorkingDirectory:        "/",
 		State:                   StateStopped,
@@ -259,6 +273,14 @@ func TestVerifyExporterAllowlistViolations(t *testing.T) {
 	if err := verifyExporterAllowlist(cfg, exporterReport(cfg, exporter, ws), exporter, ws); err != nil {
 		t.Fatalf("conforming report: %v, want nil", err)
 	}
+	exporterImageName, exporterImageDigest, _ := strings.Cut(cfg.ExporterImage, "@")
+
+	// A tag on the observed reference is normalized away (acceptance #2).
+	tagged := exporterReport(cfg, exporter, ws)
+	tagged.ImageReference = exporterImageName + ":v1@" + exporterImageDigest
+	if err := verifyExporterAllowlist(cfg, tagged, exporter, ws); err != nil {
+		t.Fatalf("tag-normalized reference: %v, want nil", err)
+	}
 
 	cases := []struct {
 		name   string
@@ -266,8 +288,13 @@ func TestVerifyExporterAllowlistViolations(t *testing.T) {
 	}{
 		{"wrong identity", func(r *InspectReport) { r.ID = "other-exporter" }},
 		{"required field omitted", func(r *InspectReport) { r.AllowlistFieldsObserved = false }},
-		{"wrong image reference", func(r *InspectReport) { r.ImageReference = "example.test/other" }},
-		{"wrong image digest", func(r *InspectReport) { r.ImageDigest = "sha256:" + strings.Repeat("1", 64) }},
+		{"wrong image name", func(r *InspectReport) {
+			r.ImageReference = "example.test/other@" + exporterImageDigest
+		}},
+		{"wrong image digest", func(r *InspectReport) {
+			r.ImageReference = exporterImageName + "@sha256:" + strings.Repeat("1", 64)
+		}},
+		{"reference missing digest", func(r *InspectReport) { r.ImageReference = exporterImageName }},
 		{"wrong executable", func(r *InspectReport) { r.Command[0] = "/bin/other" }},
 		{"workspace working directory", func(r *InspectReport) { r.WorkingDirectory = "/workspace" }},
 		{"extra argument", func(r *InspectReport) { r.Command = append(r.Command, "--other") }},

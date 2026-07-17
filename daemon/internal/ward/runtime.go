@@ -104,9 +104,14 @@ type ContainerSpec struct {
 // container; checks 1-4 consume it to approve writer/exporter topology and
 // observe stopped state.
 type InspectReport struct {
-	ID               string
+	ID string
+	// ImageReference is the runtime's full image reference, carrying the
+	// pinned @sha256 digest (e.g. "repo/name@sha256:..."). On Apple container
+	// 1.1.0 an image pulled by a tag+digest reference is reported with the tag
+	// dropped and the pinned digest kept; the descriptor's resolved digest is a
+	// different, arch-dependent value and is deliberately not carried, since it
+	// is unpredictable from the spec and is not the digest trust binds to.
 	ImageReference   string
-	ImageDigest      string
 	Command          []string
 	WorkingDirectory string
 	State            ContainerState
