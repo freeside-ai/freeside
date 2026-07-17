@@ -860,3 +860,19 @@ the validated view cannot diverge from the released bytes for the duplicate-key
 threat (the stronger raw-equals-`Encode()` comparison was judged unnecessary for
 it). The residual export-slack squeeze above is the pass's one flagged weak
 point, recorded as an accepted limitation rather than a defect.
+
+Round 30 raised one P1, `accepted-by-decision` (declined in this PR): it
+re-surfaces the #138 mutable-name cleanup blocker, that `st.workspaceOwned` (and
+the container `claim.owned` fast path) treat a create-time owned bit as current
+ownership, so a foreign delete-and-replace of the deterministic name in the
+create-to-teardown window can make teardown delete the replacement. This is the
+exact blocker already recorded above ("cleanup authority binds to immutable
+identity or an atomic deletion precondition") and named in the PR Blocker note;
+the reviewer's own prescribed fix is #138's requirement verbatim. It needs a
+shared `Runtime` contract change (an immutable-id or atomic delete-if-labeled
+primitive), which is spine-owned and out of the ward unit's scope, and for the
+cited workspace path there is not even a per-volume inspect to recheck against
+(a label recheck was already recorded as insufficient: check-to-delete TOCTOU).
+Round 28 narrowed the one sub-case a *stale* owned bit made strictly wrong; the
+create-succeeded paths are a true TOCTOU only #138 closes. No new evidence
+changes the prior deferral, so it stays tracked in #138 and gates merge-readiness.
