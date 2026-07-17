@@ -497,6 +497,43 @@ func TestVerifyExportSharedDigest(t *testing.T) {
 	})
 }
 
+// TestVerifyExportRedactsBlobDigest proves a blob-verification failure never
+// echoes the manifest digest: a regular entry's 64-hex digest is
+// archive-derived and could encode a credential, so it must not reach the
+// conformance reason (or logs).
+func TestVerifyExportRedactsBlobDigest(t *testing.T) {
+	secretHex := strings.Repeat("dead", 16) // 64 hex chars, credential-shaped
+	mode := "0644"
+	size := int64(1)
+	digest := export.Digest("sha256:" + secretHex)
+	m := export.Manifest{
+		Version: export.ManifestVersion,
+		Entries: []export.Entry{{
+			Path: "result.txt", Kind: export.EntryRegular, Mode: &mode, Size: &size, Digest: &digest,
+		}},
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No blob for secretHex, so verifyBlob fails "missing".
+	entries := []tarEntry{
+		{name: "handoff-proof.txt", body: validProof()},
+		{name: "handoff/", typeflag: tar.TypeDir},
+		{name: "handoff/manifest.json", body: raw},
+		{name: "handoff/blobs/", typeflag: tar.TypeDir},
+		{name: "handoff/blobs/sha256/", typeflag: tar.TypeDir},
+	}
+	_, err = runVerifyExport(t, newTestBackend(t), entries)
+	var cf *ConformanceFailure
+	if !errors.As(err, &cf) || cf.Check != CheckExportVerification {
+		t.Fatalf("verifyExport = %v, want export_verification failure", err)
+	}
+	if strings.Contains(cf.Reason, secretHex) {
+		t.Errorf("failure reason leaked the manifest digest: %s", cf.Reason)
+	}
+}
+
 // TestVerifyExportManifestCap proves a manifest larger than MaxManifestBytes
 // fails closed instead of being read whole into the daemon heap.
 func TestVerifyExportManifestCap(t *testing.T) {

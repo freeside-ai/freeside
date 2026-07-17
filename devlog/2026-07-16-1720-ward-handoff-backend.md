@@ -668,3 +668,15 @@ functional break:
   ever sees normalized paths, so its prefix comparison is sound. Regressions:
   trailing-slash, dotdot, double-slash, and root cases across the three fields
   in the config-validate table.
+
+Round 24, P1 (the "no untrusted content in Reason" credential-leak class,
+rounds 3 / 10 / 13 / 15): a blob-verification failure formatted the manifest
+digest into the conformance reason. A regular entry's digest is 64 hex chars of
+archive-derived input, so a hostile export could encode a credential there,
+force a blob mismatch or omission, and have the token returned or logged despite
+the reason contract. `verifyBlob` now returns value-free category errors (its
+`os.Open` error would otherwise embed the digest-bearing blob path, and the
+wanted digest/size are manifest-derived), and the caller redacts the blob
+identifier with `redactPath`. Regression: a refused export with a
+credential-shaped digest and no matching blob, asserting the reason omits the
+digest.

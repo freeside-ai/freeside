@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -292,7 +291,11 @@ func (b *Backend) verifyManifest(destDir string) (export.Manifest, error) {
 		}
 		verified[key] = true
 		if err := verifyBlob(filepath.Join(destDir, filepath.FromSlash(rel)), hexDigest, *e.Size); err != nil {
-			return manifest, failf(CheckExportVerification, "blob %s: %v", hexDigest, err)
+			// hexDigest is manifest-derived (attacker-influenced) and a regular
+			// entry's digest field could encode a credential as 64 hex chars;
+			// redact it to a stable token and rely on verifyBlob's value-free
+			// category error, so a refused export cannot echo the raw digest.
+			return manifest, failf(CheckExportVerification, "blob %s failed verification: %v", redactPath(hexDigest), err)
 		}
 	}
 
@@ -302,23 +305,28 @@ func (b *Backend) verifyManifest(destDir string) (export.Manifest, error) {
 	return manifest, nil
 }
 
-// verifyBlob re-hashes one blob file against its manifest digest and size.
+// verifyBlob re-hashes one blob file against its manifest digest and size. Its
+// errors are value-free categories: the blob path embeds the manifest digest
+// and both the wanted digest and size are manifest-derived
+// (attacker-influenced), so none is formatted into a reason the caller reports;
+// the caller redacts the blob identifier.
 func verifyBlob(blobPath, wantHex string, wantSize int64) error {
 	f, err := os.Open(blobPath) //nolint:gosec // path built from a validated manifest digest under the gate-owned dir
 	if err != nil {
-		return err
+		// The os error embeds blobPath, which carries the manifest digest.
+		return errors.New("missing or unreadable")
 	}
 	defer f.Close() //nolint:errcheck // read-only handle
 	h := sha256.New()
 	n, err := io.Copy(h, f)
 	if err != nil {
-		return err
+		return errors.New("read failed")
 	}
 	if n != wantSize {
-		return fmt.Errorf("size %d, manifest says %d", n, wantSize)
+		return errors.New("size does not match the manifest")
 	}
 	if got := hex.EncodeToString(h.Sum(nil)); got != wantHex {
-		return fmt.Errorf("content hashes to %s, manifest says %s", got, wantHex)
+		return errors.New("content does not match the manifest digest")
 	}
 	return nil
 }
