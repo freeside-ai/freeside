@@ -63,17 +63,18 @@ demonstrates the refutation; it never implements the refuted class. This
 also honors the #76 constraint that the same-VM fallback stays absent by
 construction — no capability, spec field, or backend path scaffolds it.
 
-## Probe identifiers reuse ConformanceFailure, register apart from AllChecks
+## Probe identifiers reuse ConformanceFailure and the Check registry
 
 The negative probes and the pre-job probe get typed identifiers
 (`writer_volume_exclusion`, `credential_containment`, `same_vm_refutation`,
 `pre_job_probe`) that share the `Check` type and `ConformanceFailure` so
 every violated assertion is uniformly typed and every non-nil result fails
 closed (acceptance 3). Operational errors that prevent a verdict stay non-nil
-without pretending a specific assertion was disproved. They
-register in `AllProbeChecks` / `CheckPreJobProbe`, not `AllChecks`, so the
-spike's "check N" numbering keeps its meaning; `valid()` and the
-exhaustiveness test cover all identifiers. No shared-package edit: the
+without pretending a specific assertion was disproved. All identifiers
+register once in `AllChecks`, per the daemon enum convention; their comments
+retain the semantic distinction between spike-numbered checks and suite-level
+probes without splitting the all-valid registry. `valid()` and the
+exhaustiveness test cover that registry. No shared-package edit: the
 suite lives entirely in `daemon/internal/ward`, and no probe needed a new
 `Runtime` primitive.
 
@@ -731,6 +732,31 @@ walk, avoiding descriptor exhaustion on a large valid manifest. The
 host-gated Apple-container suite was not rerun after these changes; it remains
 an explicit verification gap, while fake regressions cover every changed
 decision deterministically.
+
+## Automated review round 30
+
+The post-hardening review found one new P2 and surfaced one older unresolved
+P2 that the thread-level sweep correctly treated as still open.
+
+- A caller could choose a fake marker such as `sha256`, `regular`, `version`,
+  or `digest` that necessarily appears in the generated `manifest.json`.
+  Because the containment scan deliberately excludes gate-generated manifest
+  metadata, accepting that fixture would claim marker absence despite a known
+  collision. `NewSuite` now serializes the exact two-entry manifest Full
+  accepts and rejects any marker present in those bytes, covering schema
+  keys, vocabulary, modes, version, fixed paths, and the run-specific content
+  digests from one source. Regression cases cover the cited schema, kind, and
+  digest vocabulary.
+- `Check` registration was split among `AllChecks`, `AllProbeChecks`, and an
+  ad hoc `CheckPreJobProbe` append. That preserved a semantic grouping but
+  violated the promoted daemon enum convention and made a range over the
+  apparent all-valid registry incomplete. `AllChecks` is now the single
+  registry for all eleven valid values; comments carry the semantic grouping,
+  and the validity/distinctness tests range the one registry.
+
+The older ownership-collision thread is resolved by the round-29
+invocation-label and creation-fingerprint design, including container and
+volume regressions that prove foreign same-name objects are left untouched.
 
 **Accepted by decision.** The marker value appears in the seed/audit
 container argv; this is safe because the marker is an inert fake credential

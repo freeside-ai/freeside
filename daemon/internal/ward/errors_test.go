@@ -6,16 +6,8 @@ import (
 	"testing"
 )
 
-// allCheckIdentifiers is every valid Check: the spike contract checks plus
-// the conformance suite's negative-probe and pre-job identifiers.
-func allCheckIdentifiers() []Check {
-	ids := append([]Check(nil), AllChecks...)
-	ids = append(ids, AllProbeChecks...)
-	return append(ids, CheckPreJobProbe)
-}
-
 func TestCheckValid(t *testing.T) {
-	for _, c := range allCheckIdentifiers() {
+	for _, c := range AllChecks {
 		if !c.valid() {
 			t.Errorf("Check %q: valid() = false, want true", c)
 		}
@@ -28,9 +20,8 @@ func TestCheckValid(t *testing.T) {
 }
 
 func TestAllChecksDistinct(t *testing.T) {
-	ids := allCheckIdentifiers()
-	seen := make(map[Check]bool, len(ids))
-	for _, c := range ids {
+	seen := make(map[Check]bool, len(AllChecks))
+	for _, c := range AllChecks {
 		if seen[c] {
 			t.Errorf("check identifier %q listed twice", c)
 		}

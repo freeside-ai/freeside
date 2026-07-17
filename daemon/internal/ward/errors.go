@@ -42,27 +42,11 @@ const (
 	CheckTeardown Check = "teardown"
 )
 
-// AllChecks lists every valid spike-numbered contract check; it drives
-// table-driven tests and is the single place a new contract check is
-// registered. The conformance suite's negative probes and pre-job probe are
-// not spike contract checks and register separately (AllProbeChecks,
-// CheckPreJobProbe) so this slice keeps its "spike check N" meaning.
-var AllChecks = []Check{
-	CheckCredentialSeparation,
-	CheckControlPlaneIsolation,
-	CheckWriterTermination,
-	CheckExporterAllowlist,
-	CheckInExporterVerification,
-	CheckExportVerification,
-	CheckTeardown,
-}
-
 // The conformance suite's own identifiers, distinct from the spike's
 // numbered contract checks above (docs/spikes/workspace-handoff.md, plan
 // §5.7). They share the Check type and ConformanceFailure so every suite
 // result is uniformly typed and fail-closed, but they name suite-level
-// assertions, not the seven contract checks, so they register apart from
-// AllChecks.
+// assertions, not the seven contract checks.
 const (
 	// CheckWriterVolumeExclusion is the spike's first negative probe: while a
 	// live writer VM holds the workspace volume read-write, a second VM's
@@ -88,12 +72,22 @@ const (
 	CheckPreJobProbe Check = "pre_job_probe"
 )
 
-// AllProbeChecks lists the three negative-probe identifiers; it is the single
-// registration point for them and drives their exhaustiveness test.
-var AllProbeChecks = []Check{
+// AllChecks lists every valid Check and is the enum's single registration
+// point. The first seven values retain the spike contract's semantic grouping;
+// the final four are suite-level probes, but that distinction does not split
+// the all-valid registry callers use for exhaustiveness.
+var AllChecks = []Check{
+	CheckCredentialSeparation,
+	CheckControlPlaneIsolation,
+	CheckWriterTermination,
+	CheckExporterAllowlist,
+	CheckInExporterVerification,
+	CheckExportVerification,
+	CheckTeardown,
 	CheckWriterVolumeExclusion,
 	CheckCredentialContainment,
 	CheckSameVMRefutation,
+	CheckPreJobProbe,
 }
 
 func (c Check) valid() bool {

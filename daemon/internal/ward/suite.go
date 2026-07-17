@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -184,6 +185,34 @@ func manifestHasContent(entries []export.Entry, path, content string) bool {
 	return false
 }
 
+// expectedWriterManifest is the exact metadata shape Full accepts from the
+// suite-owned writer. NewSuite uses its serialized form to reject a fake
+// credential marker that necessarily collides with generated manifest bytes;
+// otherwise skipping manifest metadata during the content scan would turn a
+// known collision into a false containment proof.
+func expectedWriterManifest(runID string) export.Manifest {
+	entry := func(name, content string) export.Entry {
+		mode := "0644"
+		size := int64(len(content))
+		sum := sha256.Sum256([]byte(content))
+		digest := export.Digest("sha256:" + hex.EncodeToString(sum[:]))
+		return export.Entry{
+			Path:   name,
+			Kind:   export.EntryRegular,
+			Mode:   &mode,
+			Size:   &size,
+			Digest: &digest,
+		}
+	}
+	return export.Manifest{
+		Version: export.ManifestVersion,
+		Entries: []export.Entry{
+			entry(workspaceStateFile, workspaceStatePayload+"\n"),
+			entry(writerResultPath, writerSentinel(runID)+"\n"),
+		},
+	}
+}
+
 // auditSentinel is the run-unique token the detached-volume audit writes into
 // its rootfs only after confirming the seeded marker is readable from the
 // credential volume. probeCredentialContainment scans the audit rootfs export
@@ -251,6 +280,13 @@ func NewSuite(b *Backend, fx SuiteFixture) (*Suite, error) {
 		if strings.Contains(reserved, fx.CredentialMarker) {
 			return nil, fmt.Errorf("%w: SuiteFixture.CredentialMarker %q collides with the generated suite string %q", ErrInvalidConfig, fx.CredentialMarker, reserved)
 		}
+	}
+	manifest, err := json.Marshal(expectedWriterManifest(fx.RunID))
+	if err != nil {
+		return nil, fmt.Errorf("%w: encode expected writer manifest: %w", ErrInvalidConfig, err)
+	}
+	if bytes.Contains(manifest, []byte(fx.CredentialMarker)) {
+		return nil, fmt.Errorf("%w: SuiteFixture.CredentialMarker %q collides with generated manifest metadata", ErrInvalidConfig, fx.CredentialMarker)
 	}
 	return &Suite{b: b, fx: fx, agentCommand: fx.agentCommand(b.cfg)}, nil
 }

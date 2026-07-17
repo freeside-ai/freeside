@@ -1062,6 +1062,9 @@ func TestNewSuiteValidation(t *testing.T) {
 		{"marker collides with state payload", func(fx *SuiteFixture) { fx.CredentialMarker = "durable" }},
 		{"marker collides with result path", func(fx *SuiteFixture) { fx.CredentialMarker = "result" }},
 		{"marker collides with nested state path", func(fx *SuiteFixture) { fx.CredentialMarker = "nested" }},
+		{"marker collides with manifest schema", func(fx *SuiteFixture) { fx.CredentialMarker = "version" }},
+		{"marker collides with manifest kind", func(fx *SuiteFixture) { fx.CredentialMarker = "regular" }},
+		{"marker collides with digest vocabulary", func(fx *SuiteFixture) { fx.CredentialMarker = "sha256" }},
 		{"credential target shadows audit marker path", func(fx *SuiteFixture) { fx.CredentialTarget = auditMarkerPath("conf-run") }},
 		{"bad run id", func(fx *SuiteFixture) { fx.RunID = "Conf/Run" }},
 	}
