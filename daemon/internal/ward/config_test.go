@@ -16,7 +16,7 @@ func TestConfigDefaults(t *testing.T) {
 	if cfg.WriterStopTimeout == 0 || cfg.ExporterTimeout == 0 || cfg.PollInterval == 0 || cfg.Sleep == nil {
 		t.Error("timing defaults not filled")
 	}
-	if cfg.MaxExportBytes == 0 || cfg.MaxArchiveBytes == 0 || cfg.MaxExportEntries == 0 {
+	if cfg.MaxExportBytes == 0 || cfg.MaxArchiveBytes == 0 || cfg.MaxExportEntries == 0 || cfg.MaxManifestBytes == 0 {
 		t.Error("resource-limit defaults not filled")
 	}
 }
@@ -50,6 +50,7 @@ func TestConfigValidate(t *testing.T) {
 		{"negative max export bytes", func(c *Config) { c.MaxExportBytes = -1 }},
 		{"negative max archive bytes", func(c *Config) { c.MaxArchiveBytes = -1 }},
 		{"negative max export entries", func(c *Config) { c.MaxExportEntries = -1 }},
+		{"negative max manifest bytes", func(c *Config) { c.MaxManifestBytes = -1 }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -426,6 +426,86 @@ func TestVerifyExportCap(t *testing.T) {
 	}
 }
 
+// dupEntryArchive returns a valid archive whose manifest references one blob
+// from two distinct paths, which is legal for identical files. When
+// secondSize is non-nil it overrides the second entry's declared size, modeling
+// a hostile manifest that claims two different lengths for one shared digest.
+func dupEntryArchive(t *testing.T, secondSize *int64) []tarEntry {
+	t.Helper()
+	sum := sha256.Sum256(fixtureBlob)
+	hexDigest := hex.EncodeToString(sum[:])
+	mode := "0644"
+	size := int64(len(fixtureBlob))
+	second := size
+	if secondSize != nil {
+		second = *secondSize
+	}
+	digest := export.Digest("sha256:" + hexDigest)
+	m := export.Manifest{
+		Version: export.ManifestVersion,
+		Entries: []export.Entry{
+			{Path: "a.txt", Kind: export.EntryRegular, Mode: &mode, Size: &size, Digest: &digest},
+			{Path: "b.txt", Kind: export.EntryRegular, Mode: &mode, Size: &second, Digest: &digest},
+		},
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []tarEntry{
+		{name: "handoff-proof.txt", body: validProof()},
+		{name: "handoff/", typeflag: tar.TypeDir},
+		{name: "handoff/manifest.json", body: raw},
+		{name: "handoff/blobs/", typeflag: tar.TypeDir},
+		{name: "handoff/blobs/sha256/", typeflag: tar.TypeDir},
+		{name: "handoff/blobs/sha256/" + hexDigest, body: fixtureBlob},
+	}
+}
+
+// TestVerifyExportSharedDigest covers the (digest, size) blob dedup: two paths
+// citing the same digest and size verify against one blob (no per-entry
+// re-hash), while a second entry claiming a different size for that digest
+// still fails closed rather than being skipped by a per-digest shortcut.
+func TestVerifyExportSharedDigest(t *testing.T) {
+	t.Run("identical files share one blob", func(t *testing.T) {
+		out, err := runVerifyExport(t, newTestBackend(t), dupEntryArchive(t, nil))
+		if err != nil {
+			t.Fatalf("verifyExport = %v, want nil", err)
+		}
+		if len(out.Manifest.Entries) != 2 {
+			t.Errorf("entries = %d, want 2", len(out.Manifest.Entries))
+		}
+	})
+
+	t.Run("lying size for a shared digest fails closed", func(t *testing.T) {
+		bogus := int64(len(fixtureBlob) + 1)
+		_, err := runVerifyExport(t, newTestBackend(t), dupEntryArchive(t, &bogus))
+		var cf *ConformanceFailure
+		if !errors.As(err, &cf) || cf.Check != CheckExportVerification {
+			t.Fatalf("verifyExport = %v, want export_verification failure", err)
+		}
+	})
+}
+
+// TestVerifyExportManifestCap proves a manifest larger than MaxManifestBytes
+// fails closed instead of being read whole into the daemon heap.
+func TestVerifyExportManifestCap(t *testing.T) {
+	cfg := testConfig()
+	cfg.MaxManifestBytes = 8 // any real manifest exceeds this
+	b, err := New(stubRuntime{}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runVerifyExport(t, b, fixtureArchive(t))
+	var cf *ConformanceFailure
+	if !errors.As(err, &cf) || cf.Check != CheckExportVerification {
+		t.Fatalf("verifyExport = %v, want export_verification failure", err)
+	}
+	if !strings.Contains(err.Error(), "cap") {
+		t.Errorf("reason = %q, want the manifest cap failure", err.Error())
+	}
+}
+
 // TestExtractHandoffMetadataBudgets proves zero-byte directory floods and
 // pathological names fail before the corresponding host objects are created.
 func TestExtractHandoffMetadataBudgets(t *testing.T) {

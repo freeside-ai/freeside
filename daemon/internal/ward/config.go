@@ -73,6 +73,15 @@ type Config struct {
 	// MaxExportEntries caps filesystem objects under HandoffDir before any
 	// archive-derived path is created on the host. Defaults to 10,000.
 	MaxExportEntries int
+	// MaxManifestBytes caps the manifest.json read into the daemon heap
+	// during verification. The per-file extraction budget (MaxExportBytes)
+	// alone lets a hostile manifest grow to the full export budget, so an
+	// unbounded read would load it all before JSON validation can reject it;
+	// blobless entries (symlinks, submodules) evade MaxExportEntries yet each
+	// still occupies a manifest record, so the manifest is not otherwise
+	// bounded. Sits far above any honest §5.6 manifest and far below
+	// MaxExportBytes. Defaults to 64 MiB.
+	MaxManifestBytes int64
 	// Scanner is the required check-7 scanning hook.
 	Scanner OutputScanner
 	// Sleep waits between state polls; tests inject a recording stub. Nil
@@ -112,6 +121,9 @@ func (cfg Config) withDefaults() Config {
 	if cfg.MaxExportEntries == 0 {
 		cfg.MaxExportEntries = 10_000
 	}
+	if cfg.MaxManifestBytes == 0 {
+		cfg.MaxManifestBytes = 64 << 20
+	}
 	if cfg.Sleep == nil {
 		cfg.Sleep = sleepContext
 	}
@@ -139,6 +151,8 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: MaxArchiveBytes %d is negative", ErrInvalidConfig, cfg.MaxArchiveBytes)
 	case cfg.MaxExportEntries < 0:
 		return fmt.Errorf("%w: MaxExportEntries %d is negative", ErrInvalidConfig, cfg.MaxExportEntries)
+	case cfg.MaxManifestBytes < 0:
+		return fmt.Errorf("%w: MaxManifestBytes %d is negative", ErrInvalidConfig, cfg.MaxManifestBytes)
 	case cfg.WriterStopTimeout < 0:
 		return fmt.Errorf("%w: WriterStopTimeout %s is negative", ErrInvalidConfig, cfg.WriterStopTimeout)
 	case cfg.ExporterTimeout < 0:

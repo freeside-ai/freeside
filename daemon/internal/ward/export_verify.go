@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/export"
@@ -224,9 +225,21 @@ func extractFile(r io.Reader, dest string, budget int64) (int64, error) {
 // and referenced blobs.
 func (b *Backend) verifyManifest(destDir string) (export.Manifest, error) {
 	var manifest export.Manifest
-	raw, err := os.ReadFile(filepath.Join(destDir, export.ManifestFilename)) //nolint:gosec // gate-owned extraction dir
+	mf, err := os.Open(filepath.Join(destDir, export.ManifestFilename)) //nolint:gosec // gate-owned extraction dir
 	if err != nil {
 		return manifest, failf(CheckExportVerification, "read manifest: %v", err)
+	}
+	defer mf.Close() //nolint:errcheck // read-only handle
+	// A hostile manifest can fill the whole per-file extraction budget, so
+	// bound the heap read here rather than pulling the entire file in before
+	// validation can reject it. The +1 distinguishes an at-cap file from an
+	// over-cap one, matching the proof read above.
+	raw, err := io.ReadAll(io.LimitReader(mf, b.cfg.MaxManifestBytes+1))
+	if err != nil {
+		return manifest, failf(CheckExportVerification, "read manifest: %v", err)
+	}
+	if int64(len(raw)) > b.cfg.MaxManifestBytes {
+		return manifest, failf(CheckExportVerification, "manifest exceeds the %d-byte cap", b.cfg.MaxManifestBytes)
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -248,6 +261,14 @@ func (b *Backend) verifyManifest(destDir string) (export.Manifest, error) {
 	}
 
 	referenced := make(map[string]bool)
+	// Distinct paths may share a digest (identical files), and each blob is
+	// re-hashed here; without dedup a small manifest of many entries pointing
+	// at one large blob forces a full-file read per entry. Key the dedup on
+	// (digest, size), not digest alone: a hostile manifest can claim two sizes
+	// for one digest, and a per-digest skip would leave the second, lying size
+	// unverified. A wrong size fails verifyBlob immediately, so only entries
+	// that all agree on (digest, size) collapse to a single read.
+	verified := make(map[string]bool)
 	for _, e := range manifest.Entries {
 		if e.Kind != export.EntryRegular || e.BlobOmitted {
 			continue
@@ -255,6 +276,11 @@ func (b *Backend) verifyManifest(destDir string) (export.Manifest, error) {
 		hexDigest := strings.TrimPrefix(string(*e.Digest), "sha256:")
 		rel := path.Join("blobs", "sha256", hexDigest)
 		referenced[rel] = true
+		key := hexDigest + ":" + strconv.FormatInt(*e.Size, 10)
+		if verified[key] {
+			continue
+		}
+		verified[key] = true
 		if err := verifyBlob(filepath.Join(destDir, filepath.FromSlash(rel)), hexDigest, *e.Size); err != nil {
 			return manifest, failf(CheckExportVerification, "blob %s: %v", hexDigest, err)
 		}

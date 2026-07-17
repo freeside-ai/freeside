@@ -586,3 +586,35 @@ to be digest-pinned, and pre-start inspection binds both reference and digest.
 The reference-runtime live fixture was already pinned. The cleanup fallback
 had no remaining sibling finding: it cannot act on an ambiguous workspace and
 still performs the absence re-list.
+
+Round 20 raised two P2s at the hostile-manifest verification boundary, both
+resource-exhaustion vectors the archive and per-file extraction caps miss:
+
+- *P2: the manifest was read whole into the daemon heap.* `verifyManifest`
+  used `os.ReadFile`, but a single `manifest.json` can fill the per-file
+  extraction budget (`MaxExportBytes`, 2 GiB) and blobless entries (symlinks,
+  submodules) evade `MaxExportEntries`, so nothing bounded the read before JSON
+  validation could reject it, an OOM DoS. Added a configurable
+  `MaxManifestBytes` (default 64 MiB), read through `io.LimitReader` with the
+  same +1/at-cap discipline as the proof read; over-cap fails closed as an
+  export_verification conformance failure.
+- *P2: each blob was re-hashed once per manifest entry.* Distinct paths may
+  legally share a digest (identical files), so a small archive (one large blob,
+  many entries citing it) forced thousands of full-file re-hashes. Blob
+  verification now dedupes. Key choice is load-bearing: the dedup key is
+  `(digest, size)`, not digest alone, because a per-digest skip would leave a
+  second entry lying about the shared blob's size unverified; `Validate` orders
+  entries but never cross-checks that two entries citing one digest agree on
+  size. A wrong size fails `verifyBlob` on the first read, so only entries that
+  agree on `(digest, size)` collapse to a single hash, bounding a hostile
+  same-digest fan-out to at most two reads before failure. The stray-check map
+  stays separate (it needs every referenced blob, dedup or not).
+
+The refute pass over both fixes confirmed: the manifest cap admits an exactly-
+at-cap file and rejects `cap+1`; the valid decode/trailing-bytes path is
+unchanged (decode still runs on the buffered bytes); missing-manifest still maps
+to export_verification. For the dedup, a same-digest/different-size manifest
+fails closed regardless of entry order, `*Size`/`*Digest` derefs stay guarded by
+`EntryRegular && !BlobOmitted` (which `validateRegular` proves non-nil), and the
+`verified` set is bounded by the now-capped manifest. Regression tests cover the
+manifest cap, the identical-files dedup, and the size-liar rejection.
