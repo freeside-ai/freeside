@@ -20,6 +20,10 @@ var (
 	// Checkout failures.
 	ErrGitPlumbing     = errors.New("git plumbing failed")
 	ErrUnsupportedRepo = errors.New("checkout repository is not supported")
+	// ErrHeadMismatch rejects a verification whose requested candidate
+	// head the checkout does not hold exactly; verification output binds
+	// to one head, so a mismatch fails closed before any command runs.
+	ErrHeadMismatch = errors.New("checkout does not hold the requested candidate head")
 
 	// Verify invocation failures.
 	ErrInvalidOptions = errors.New("verify options are invalid")
