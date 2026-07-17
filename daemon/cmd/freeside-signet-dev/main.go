@@ -19,6 +19,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -38,6 +39,7 @@ func main() {
 	listenAddr := flags.String("listen", "127.0.0.1:0", "contract listener address (loopback only)")
 	controlAddr := flags.String("control", "127.0.0.1:0", "control listener address (loopback only)")
 	ntfyURL := flags.String("ntfy-url", "", "ntfy server URL for delivery submission (optional; deliveries fail closed without it)")
+	topicKeyFile := flags.String("topic-key-file", "", "path to the persisted ntfy topic key (optional; must be disjoint from -db and its .blobs sibling). When set, device topics survive restarts; when unset, the key is per-process and reusing -db fails closed")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
@@ -45,7 +47,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	h, err := run(ctx, config{DBPath: *dbPath, ListenAddr: *listenAddr, ControlAddr: *controlAddr, NtfyURL: *ntfyURL})
+	h, err := run(ctx, config{DBPath: *dbPath, ListenAddr: *listenAddr, ControlAddr: *controlAddr, NtfyURL: *ntfyURL, TopicKeyFile: *topicKeyFile})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "freeside-signet-dev:", err)
 		os.Exit(1)
@@ -72,6 +74,14 @@ type config struct {
 	// suite scripts a local fake). Empty means no channel is composed and
 	// POST /control/deliveries reports the pipeline's fail-closed refusal.
 	NtfyURL string
+	// TopicKeyFile persists the ntfy topic key so device topics survive a
+	// restart against the same store (issue #133). Empty keeps the historical
+	// per-process key, which is safe only against a fresh store; reusing a
+	// pre-existing store without it fails closed rather than silently
+	// rekeying paired devices. It must be disjoint from DBPath and its
+	// ".blobs" sibling: the store is the backup/workspace surface this
+	// credential must stay out of.
+	TopicKeyFile string
 }
 
 // readiness is the startup line: both bound URLs, so callers never guess
@@ -108,6 +118,35 @@ func run(ctx context.Context, cfg config) (*harness, error) {
 		return nil, fmt.Errorf("control listener: %w", err)
 	}
 
+	// storePreexisting must be sampled before store.Open, which creates the
+	// database file when absent: a pre-existing store is the conservative
+	// proxy for "may already hold paired devices" that gates topic-key
+	// creation below (issue #133). The store exposes no device count, and
+	// over-refusing an existing-but-empty store fails safe.
+	_, statErr := os.Stat(cfg.DBPath)
+	storePreexisting := statErr == nil
+	if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
+		_ = apiListener.Close()
+		_ = controlListener.Close()
+		return nil, fmt.Errorf("stat store path: %w", statErr)
+	}
+
+	// Resolve the ntfy topic key before opening the store: store.Open creates
+	// and migrates the database when absent, so a bad -topic-key-file (rejected
+	// path or unreadable key) must fail here rather than leave a fresh store
+	// behind. A left-behind store would flip storePreexisting to true on the
+	// operator's corrected retry and refuse the still-absent key as a possible
+	// rekey (issue #133), stranding a never-paired setup.
+	var topicKey []byte
+	if cfg.NtfyURL != "" {
+		topicKey, err = resolveTopicKey(cfg.TopicKeyFile, cfg.DBPath, storePreexisting)
+		if err != nil {
+			_ = apiListener.Close()
+			_ = controlListener.Close()
+			return nil, err
+		}
+	}
+
 	st, err := store.Open(ctx, cfg.DBPath, store.Options{})
 	if err != nil {
 		_ = apiListener.Close()
@@ -138,16 +177,8 @@ func run(ctx context.Context, cfg config) (*harness, error) {
 	}
 	options := []signet.Option{signet.WithPairingKey(pairingKey), signet.WithBlobStore(blobs)}
 	if cfg.NtfyURL != "" {
-		// A random per-process topic key, same posture as the pairing key:
-		// topics derived by this process are meaningful only to it. The deep
-		// link points at this process's own contract listener.
-		topicKey := make([]byte, 32)
-		if _, err := rand.Read(topicKey); err != nil {
-			_ = apiListener.Close()
-			_ = controlListener.Close()
-			_ = st.Close()
-			return nil, fmt.Errorf("generate topic key: %w", err)
-		}
+		// topicKey was resolved before store.Open (above); the deep link points
+		// at this process's own contract listener.
 		options = append(options, signet.WithNtfy(signet.NtfyConfig{
 			BaseURL:      cfg.NtfyURL,
 			TopicKey:     topicKey,

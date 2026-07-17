@@ -22,8 +22,17 @@
 // branch and PR reconcile per resource with conditional requests
 // (Reconciler), no global cursor.
 //
-// Later units: effectively-once publication with kill tests (#82), and
-// the EvidencePublisher (1B, §5.15).
+// Effectively-once publication with kill tests (issue #82, §5.9): the
+// store-backed outbox ledger (StoreLedger) durably commits each intent
+// before dispatch; the recovery drain (DrainPendingPublications) re-
+// converges every pending intent onto its one branch, PR, and recorded
+// outcome (Outcome, on the store inbox) idempotently, resolving the full
+// candidate through a CandidateResolver (the Wave 2 engine in
+// production); and the kill-test matrix proves convergence across a
+// daemon death at each boundary. The engine-composed transaction that
+// rides the intent write on the workflow decision remains Wave 2.
+//
+// Later units: the EvidencePublisher (1B, §5.15).
 //
 // Lane: publish. See docs/plan.md §5.5 (the CI trust boundary), §5.9
 // (durability: effectively-once), §5.11 (GitHub integration), and §10

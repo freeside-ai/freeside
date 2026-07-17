@@ -41,6 +41,39 @@ var DefaultVerificationControlPatterns = []string{
 	"**/.golangci.yaml",
 	"**/.golangci.json",
 	"**/.golangci.toml",
+	// SwiftPM and Xcode steer the app lane's `swift test` / `xcodebuild`
+	// verification the same way a go.mod or Makefile steers Go's: a
+	// candidate that edits one reroutes what is compiled, which
+	// dependency is fetched, or which tests run, without touching source.
+	// The class is the full documented control surface, not just the
+	// obvious manifests, so the drip of "you missed one" is closed at
+	// once. Deliberately over-inclusive (a control flag fails closed by
+	// over-flagging): the auto-generated contents.xcworkspacedata copies
+	// under *.xcodeproj/ and .swiftpm/xcode/ are flagged too, which is
+	// acceptable. Info.plist and *.xcfilelist are excluded: the real
+	// test-host/build wiring lives in the pbxproj/xcconfig already
+	// flagged, and globbing them would flag every target's plist.
+	//
+	//   Package.swift            manifest: targets, test targets, deps
+	//   Package@swift-*.swift    version-specific manifest SwiftPM prefers
+	//   Package.resolved         pinned dependency revisions
+	//   .swiftpm/.../mirrors.json    dependency-source redirect (go.mod replace)
+	//   .swiftpm/.../registries.json package-registry redirect
+	//   *.xcconfig               build settings (compile flags, ENABLE_TESTING)
+	//   *.pbxproj                project model: sources, test membership, phases
+	//   *.xcscheme               scheme: which test targets/plans run
+	//   *.xctestplan             test plan: selected/skipped tests
+	//   contents.xcworkspacedata workspace membership (xcodebuild -workspace)
+	"**/Package.swift",
+	"**/Package@swift-*.swift",
+	"**/Package.resolved",
+	"**/.swiftpm/configuration/mirrors.json",
+	"**/.swiftpm/configuration/registries.json",
+	"**/*.xcconfig",
+	"**/*.pbxproj",
+	"**/*.xcscheme",
+	"**/*.xctestplan",
+	"**/contents.xcworkspacedata",
 	// Attributes steer materialization (ident, text/eol, filter); the
 	// verifier neutralizes them at checkout, and the flag makes the
 	// attempt visible. Also the importer's git_metadata class;

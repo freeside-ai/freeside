@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -219,14 +220,57 @@ func runStep(ctx context.Context, opts Options, workspace string, argv []string)
 }
 
 // writeTranscriptStep appends one step's record to the transcript.
-// Recipe parsing rejected every shell metacharacter, so the
-// space-joined argv rendering is unambiguous.
 func writeTranscriptStep(w *boundedBuffer, argv []string, res StepResult) {
-	_, _ = w.Write([]byte("$ " + strings.Join(argv, " ") + "\n"))
+	_, _ = w.Write([]byte("$ " + renderArgv(argv) + "\n"))
 	_, _ = w.Write(res.Output)
 	suffix := ""
 	if res.Truncated {
 		suffix = " (output truncated)"
 	}
 	_, _ = fmt.Fprintf(w, "exit %d%s\n\n", res.ExitCode, suffix)
+}
+
+// renderArgv renders an argv for the human-readable transcript. An
+// argument is now an opaque execve token that may hold whitespace,
+// shell metacharacters, or control characters (never shell text), so a
+// bare space-join would blur where one element ends and the next begins
+// and a raw metacharacter or ANSI escape could make the line read as a
+// pipeline/substitution or rewrite the terminal. Any token that is not a
+// shell-safe literal is strconv.Quote'd, so each argv element renders as
+// exactly one visible, control-free token. The transcript is an account
+// for a human reader, never re-parsed as a command.
+func renderArgv(argv []string) string {
+	parts := make([]string, len(argv))
+	for i, tok := range argv {
+		if needsQuoting(tok) {
+			parts[i] = strconv.Quote(tok)
+		} else {
+			parts[i] = tok
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// needsQuoting reports whether a token must be quoted to render
+// unambiguously and safely: empty, or carrying any rune outside the
+// shell-safe word set (alphanumerics and @%+=:,./_-, the set shlex
+// treats as needing no quoting). That set excludes whitespace, every
+// shell metacharacter, and all control characters, so a bare token can
+// never read as more than one element or carry a terminal-control
+// sequence into the transcript.
+func needsQuoting(tok string) bool {
+	if tok == "" {
+		return true
+	}
+	for _, r := range tok {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			continue
+		case strings.ContainsRune("@%+=:,./_-", r):
+			continue
+		default:
+			return true
+		}
+	}
+	return false
 }

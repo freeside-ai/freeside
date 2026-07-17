@@ -73,7 +73,7 @@ func TestLoadTrustedRecipeFailsClosed(t *testing.T) {
 // candidate commits: a workspace-modified recipe copy is flagged, and
 // the trusted bytes are what the comparison holds against.
 func TestRecipeDivergence(t *testing.T) {
-	hostile := `{"commands": ["true"], "capture": "none"}`
+	hostile := `{"commands": [["true"]], "capture": "none"}`
 	cases := []struct {
 		name       string
 		baseFiles  map[string]string
