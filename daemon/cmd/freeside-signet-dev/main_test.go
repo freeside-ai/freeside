@@ -5,9 +5,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -198,6 +201,180 @@ func TestControlSubmitDeliveryDrivesThePipeline(t *testing.T) {
 	if response.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("no-channel status = %d body=%s, want 503", response.StatusCode, payload)
 	}
+}
+
+// pairNewDeviceWithTopic walks the real pairing exchange like pairNewDevice
+// but also returns the private ntfy topic the one-time grant promises, so a
+// test can later assert the delivery pipeline publishes to that same topic.
+func pairNewDeviceWithTopic(t *testing.T, r readiness, displayName string) (token, topic string) {
+	t.Helper()
+	response, payload := postJSON(t, r.ControlURL+"/control/pairing-codes", "", nil)
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("mint status = %d body=%s, want 201", response.StatusCode, payload)
+	}
+	code := decode[map[string]string](t, payload)["pairing_code"]
+	response, payload = postJSON(t, r.APIURL+"/pairing", "",
+		map[string]string{"pairing_code": code, "display_name": displayName})
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("pairing status = %d body=%s, want 201", response.StatusCode, payload)
+	}
+	grant := decode[struct {
+		DeviceToken      string `json:"device_token"`
+		NtfySubscription struct {
+			Topic string `json:"topic"`
+		} `json:"ntfy_subscription"`
+	}](t, payload)
+	if grant.NtfySubscription.Topic == "" {
+		t.Fatalf("pairing grant carried no ntfy topic: %s", payload)
+	}
+	return grant.DeviceToken, grant.NtfySubscription.Topic
+}
+
+// TestTopicSurvivesRestart is issue #133's proof (criteria 1, 2, 4): with a
+// persisted -topic-key-file, the topic handed to a device in its one-time
+// pairing grant still equals the topic SubmitDelivery publishes to after the
+// harness is torn down and rebuilt against the same store. The store and key
+// files live in separate directories, showing the credential need not (and
+// does not) sit in the store's backup surface.
+func TestTopicSurvivesRestart(t *testing.T) {
+	var (
+		topicsMu sync.Mutex
+		topics   []string
+	)
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		topicsMu.Lock()
+		topics = append(topics, strings.TrimPrefix(r.URL.Path, "/"))
+		topicsMu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(fake.Close)
+
+	dbPath := filepath.Join(t.TempDir(), "signet.db")
+	keyPath := filepath.Join(t.TempDir(), "topic.key")
+	cfg := config{
+		DBPath: dbPath, ListenAddr: "127.0.0.1:0", ControlAddr: "127.0.0.1:0",
+		NtfyURL: fake.URL, TopicKeyFile: keyPath,
+	}
+
+	// Run 1: pair a device and capture the topic its grant promises.
+	h1, err := run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	r1 := h1.readiness()
+	token, grantTopic := pairNewDeviceWithTopic(t, r1, "Persistent device")
+	deviceID := deviceIDFromToken(t, token)
+	if err := h1.Close(); err != nil {
+		t.Fatalf("Close 1: %v", err)
+	}
+
+	// The key is credential-grade and lives outside the store's directory.
+	info, err := os.Lstat(keyPath)
+	if err != nil {
+		t.Fatalf("stat key file: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || info.IsDir() || info.Mode().Perm() != 0o600 {
+		t.Errorf("key file = mode %v, want a 0600 regular file", info.Mode())
+	}
+	if filepath.Dir(keyPath) == filepath.Dir(dbPath) {
+		t.Errorf("key file shares the store directory (its backup surface)")
+	}
+
+	// Run 2: same db + key file. A delivery must publish to the pre-restart
+	// grant's topic, not a freshly rekeyed one.
+	h2, err := run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("run 2 (restart): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := h2.Close(); err != nil {
+			t.Errorf("Close 2: %v", err)
+		}
+	})
+	r2 := h2.readiness()
+	response, payload := postJSON(t, r2.ControlURL+"/control/items", "",
+		map[string]any{"id": "item-notify", "item_version": 1})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("seed item status = %d body=%s, want 200", response.StatusCode, payload)
+	}
+	response, payload = postJSON(t, r2.ControlURL+"/control/deliveries", "",
+		map[string]string{"item_id": "item-notify", "device_id": deviceID})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("submit delivery status = %d body=%s, want 200", response.StatusCode, payload)
+	}
+
+	topicsMu.Lock()
+	defer topicsMu.Unlock()
+	if len(topics) != 1 {
+		t.Fatalf("published %d notifications, want 1", len(topics))
+	}
+	if topics[0] != grantTopic {
+		t.Errorf("post-restart published topic = %q, pre-restart grant topic = %q", topics[0], grantTopic)
+	}
+}
+
+// TestRestartWithoutTopicKeyFails covers issue #133 criterion 3: if the key
+// file is lost but the store persists, the harness refuses to start rather
+// than mint a fresh key that would silently rekey every paired device.
+func TestRestartWithoutTopicKeyFails(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "signet.db")
+	keyPath := filepath.Join(t.TempDir(), "topic.key")
+	cfg := config{
+		DBPath: dbPath, ListenAddr: "127.0.0.1:0", ControlAddr: "127.0.0.1:0",
+		NtfyURL: "http://127.0.0.1:1", TopicKeyFile: keyPath,
+	}
+	h, err := run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatalf("Close 1: %v", err)
+	}
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatalf("remove key file: %v", err)
+	}
+
+	h, err = run(context.Background(), cfg)
+	if err == nil {
+		_ = h.Close()
+		t.Fatal("restart with a lost key file succeeded, want a fail-closed refusal")
+	}
+	if !errors.Is(err, errTopicKeyAbsentForStore) {
+		t.Fatalf("restart error = %v, want errTopicKeyAbsentForStore", err)
+	}
+}
+
+// TestRunWithBadTopicKeyLeavesNoStore covers Codex round-5: a bad
+// -topic-key-file on a fresh -db must fail before store.Open creates the
+// database, so the operator's corrected retry still sees a fresh store instead
+// of being refused as a possible rekey.
+func TestRunWithBadTopicKeyLeavesNoStore(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "signet.db")
+	badKey := filepath.Join(dbPath+".blobs", "topic.key") // rejected: inside the blob tree
+	h, err := run(context.Background(), config{
+		DBPath: dbPath, ListenAddr: "127.0.0.1:0", ControlAddr: "127.0.0.1:0",
+		NtfyURL: "http://127.0.0.1:1", TopicKeyFile: badKey,
+	})
+	if err == nil {
+		_ = h.Close()
+		t.Fatal("run accepted a key path inside the store, want a refusal")
+	}
+	if _, statErr := os.Stat(dbPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("store was created despite the topic-key failure: stat err = %v", statErr)
+	}
+	// The corrected retry against the still-fresh store succeeds.
+	h, err = run(context.Background(), config{
+		DBPath: dbPath, ListenAddr: "127.0.0.1:0", ControlAddr: "127.0.0.1:0",
+		NtfyURL: "http://127.0.0.1:1", TopicKeyFile: filepath.Join(t.TempDir(), "topic.key"),
+	})
+	if err != nil {
+		t.Fatalf("corrected retry against a fresh store failed: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := h.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
 }
 
 // deviceIDFromToken recovers the device identity the pairing grant embeds in
