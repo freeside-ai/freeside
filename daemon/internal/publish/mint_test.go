@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 // fixtureTokenValue must match testdata/token-response.json.
@@ -427,5 +428,104 @@ func TestJSONLRecorder(t *testing.T) {
 	}
 	if got != record {
 		t.Errorf("round-tripped record = %+v, want %+v", got, record)
+	}
+}
+
+// newTestStore opens a real temp-file store; SQLite needs a file (a
+// pooled :memory: DSN would give each connection its own database).
+func newTestStore(t *testing.T) *store.Store {
+	t.Helper()
+	s, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "store.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Errorf("store.Close: %v", err)
+		}
+	})
+	return s
+}
+
+// TestStoreRecorder drives a full mint through the production audit
+// path (issue #107 acceptance 2): the record lands on the store-owned
+// SQLite surface and reads back field-identical.
+func TestStoreRecorder(t *testing.T) {
+	ks := newRegisteredKeystore(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		fixture, _ := os.ReadFile(filepath.Join("testdata", "token-response.json"))
+		_, _ = w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	s := newTestStore(t)
+	rec, err := publish.NewStoreRecorder(s)
+	if err != nil {
+		t.Fatalf("NewStoreRecorder: %v", err)
+	}
+	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, fixedNow)
+	if _, err := m.MintInstallationToken(context.Background(), 777, "evidence-repo"); err != nil {
+		t.Fatalf("MintInstallationToken: %v", err)
+	}
+
+	var audits []store.MintAudit
+	err = s.Read(context.Background(), func(tx *store.ReadTx) error {
+		var err error
+		audits, err = tx.ListMintAudits(context.Background())
+		return err
+	})
+	if err != nil {
+		t.Fatalf("ListMintAudits: %v", err)
+	}
+	if len(audits) != 1 {
+		t.Fatalf("recorded %d audits, want 1", len(audits))
+	}
+	got := audits[0]
+	if got.InstallationID != 777 || got.Repo != "evidence-repo" {
+		t.Errorf("audit identity = %+v", got)
+	}
+	if !got.MintedAt.Equal(fixtureTime) {
+		t.Errorf("MintedAt = %v, want %v", got.MintedAt, fixtureTime)
+	}
+	want := publish.PublishPermissions
+	if got.RequestedContents != want.Contents || got.RequestedPullRequests != want.PullRequests ||
+		got.RequestedMetadata != want.Metadata || got.GrantedContents != want.Contents ||
+		got.GrantedPullRequests != want.PullRequests || got.GrantedMetadata != want.Metadata {
+		t.Errorf("audit scopes = %+v, want %+v for requested and granted", got, want)
+	}
+}
+
+// TestStoreRecorderFailsClosed: the #80 invariant against the real
+// recorder rather than a fake — an audit write that cannot commit
+// fails the mint, and a nil store fails at construction.
+func TestStoreRecorderFailsClosed(t *testing.T) {
+	if _, err := publish.NewStoreRecorder(nil); err == nil {
+		t.Error("NewStoreRecorder(nil) succeeded, want error")
+	}
+
+	ks := newRegisteredKeystore(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		fixture, _ := os.ReadFile(filepath.Join("testdata", "token-response.json"))
+		_, _ = w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	s, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "store.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	rec, err := publish.NewStoreRecorder(s)
+	if err != nil {
+		t.Fatalf("NewStoreRecorder: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("store.Close: %v", err)
+	}
+
+	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, fixedNow)
+	if _, err := m.MintInstallationToken(context.Background(), 777, "evidence-repo"); err == nil {
+		t.Error("mint succeeded with an unwritable audit store, want error")
 	}
 }
