@@ -29,11 +29,26 @@ var _ Runtime = (*CLIRuntime)(nil)
 // run executes one CLI invocation and returns its stdout, folding a bounded
 // stderr tail into the error for diagnosis.
 func (c *CLIRuntime) run(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := osexec.CommandContext(ctx, c.bin, args...) //nolint:gosec // bin is the operator-configured CLI path; every argument is gate-generated from validated specs, never external input
+	return c.runCommand(ctx, true, args...)
+}
+
+// runRedactedStderr preserves the command's safe exit error but suppresses
+// stderr, which may echo a create argument containing an explicit environment
+// credential. Other runtime calls carry only gate-generated identifiers and
+// use run so their bounded stderr remains available for diagnosis.
+func (c *CLIRuntime) runRedactedStderr(ctx context.Context, args ...string) ([]byte, error) {
+	return c.runCommand(ctx, false, args...)
+}
+
+func (c *CLIRuntime) runCommand(ctx context.Context, reportStderr bool, args ...string) ([]byte, error) {
+	cmd := osexec.CommandContext(ctx, c.bin, args...) //nolint:gosec // bin is operator-configured; caller fields reach argv only through the fail-closed spec phrasing above
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if !reportStderr {
+			return nil, fmt.Errorf("container %s: %w", args[0], err)
+		}
 		msg := strings.TrimSpace(stderr.String())
 		const maxStderr = 512
 		if len(msg) > maxStderr {
@@ -72,7 +87,7 @@ func (c *CLIRuntime) CreateContainer(ctx context.Context, spec ContainerSpec) er
 	if err != nil {
 		return err
 	}
-	_, err = c.run(ctx, args...)
+	_, err = c.runRedactedStderr(ctx, args...)
 	return err
 }
 

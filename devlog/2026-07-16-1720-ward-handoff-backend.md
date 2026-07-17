@@ -399,3 +399,22 @@ It contains no agent-written data because the writer never started, but it
 can consume storage or poison a retry with the same name. Revisit when Apple
 container exposes atomic creation or disk-level orphan cleanup, or when the
 Runtime boundary gains a safe discovery primitive for unlisted artifacts.
+
+Round 13 raised one P2 in the credential-leak class:
+
+- *P2: a malformed bare environment entry was echoed in a refusal.* The
+  semantic gate correctly rejected a host-inheriting entry, but formatted the
+  would-be key in the conformance reason. For a bare entry, the whole string
+  is untrusted caller input and may itself be a credential copied without a
+  `KEY=` prefix. The refusal is now categorical and returns no part of the
+  entry; regression cases cover both a secret-looking bare value and an
+  empty-key value, including substring-only leak detection. A mechanical
+  sweep confirmed the CLI phrasing boundary also uses a categorical refusal,
+  while the exporter allowlist reports only the parsed variable name after an
+  explicit `key=value` split. The focused fresh-context refute pass confirmed
+  both refusal paths, then found that an external create failure could echo an
+  accepted explicit `KEY=value` credential through CLI stderr. Container
+  create now suppresses stderr while preserving the safe exit error; other
+  runtime calls retain their bounded diagnostic stderr because their argv
+  contains only gate-generated identifiers. A fixture CLI proves both the
+  secret and its variable name remain absent from the returned error.

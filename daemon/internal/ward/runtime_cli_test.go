@@ -1,6 +1,7 @@
 package ward
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -288,11 +289,45 @@ func TestCreateContainerArgsRefusesInjection(t *testing.T) {
 			}
 		})
 	}
+	const secret = "secret-fixture-value"
+	secretSpec := base
+	secretSpec.Env = []string{"github_pat_" + secret}
+	if _, err := createContainerArgs(secretSpec); err == nil || strings.Contains(err.Error(), secret) {
+		t.Errorf("bare-entry refusal leaked or accepted the environment value: %v", err)
+	}
 	// An explicit key=value env and clean mounts still pass.
 	ok := base
 	ok.Env = []string{"AGENT_MODE=fixture"}
 	if _, err := createContainerArgs(ok); err != nil {
 		t.Errorf("clean spec refused: %v", err)
+	}
+}
+
+// TestCreateContainerRedactsStderr proves an external CLI failure cannot
+// echo an accepted explicit environment credential through the Runtime
+// error. The exit status remains available for operational classification.
+func TestCreateContainerRedactsStderr(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "container-fixture")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >&2\nexit 7\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bin, 0o700); err != nil { //nolint:gosec // executable test fixture is isolated in t.TempDir
+		t.Fatal(err)
+	}
+	const secret = "secret-fixture-value"
+	err := NewCLIRuntime(bin).CreateContainer(context.Background(), ContainerSpec{
+		Name:  "fixture",
+		Image: "fixture-image",
+		Env:   []string{"PROVIDER_TOKEN=" + secret},
+	})
+	if err == nil {
+		t.Fatal("CreateContainer returned nil, want exit error")
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "PROVIDER_TOKEN") {
+		t.Errorf("CreateContainer error leaked an environment credential: %v", err)
+	}
+	if !strings.Contains(err.Error(), "exit status 7") {
+		t.Errorf("CreateContainer error lost the safe exit status: %v", err)
 	}
 }
 

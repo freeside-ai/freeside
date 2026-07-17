@@ -142,6 +142,33 @@ func TestValidateAgentSpecViolations(t *testing.T) {
 	}
 }
 
+// TestValidateAgentSpecRedactsMalformedEnv proves the pre-create refusal
+// never echoes an environment entry. A malformed bare entry is untrusted
+// caller input and may itself be a credential copied into the list without
+// a variable name.
+func TestValidateAgentSpecRedactsMalformedEnv(t *testing.T) {
+	cfg := testConfig()
+	hs := testHandoffSpec()
+	names := namesFor(hs.RunID)
+	const secret = "secret-fixture-value"
+	for _, entry := range []string{
+		"github_pat_" + secret,
+		"=" + secret,
+	} {
+		t.Run(redactPath(entry), func(t *testing.T) {
+			spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel())
+			spec.Env = append(spec.Env, entry)
+			err := validateAgentSpec(cfg, spec, names.Workspace)
+			if !errors.Is(err, ErrConformance) {
+				t.Fatalf("validateAgentSpec = %v, want ErrConformance", err)
+			}
+			if strings.Contains(err.Error(), entry) || strings.Contains(err.Error(), secret) {
+				t.Errorf("failure reason leaked malformed environment entry: %v", err)
+			}
+		})
+	}
+}
+
 // exporterReport is the runtime report matching the generated allowlist:
 // the fixture the check-4 violation cases mutate.
 func exporterReport(cfg Config, workspaceVolume string) InspectReport {

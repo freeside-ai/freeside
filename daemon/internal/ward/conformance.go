@@ -32,9 +32,8 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume string) e
 	// explicit value.
 	for _, e := range spec.Env {
 		if envInherits(e) {
-			key, _, _ := strings.Cut(e, "=")
 			return failf(CheckControlPlaneIsolation,
-				"agent env %q would inherit a host value; every variable must be key=value", key)
+				"agent environment contains a host-inheriting entry; every variable must be key=value with a non-empty key")
 		}
 	}
 
