@@ -108,8 +108,7 @@ func verifyAgentAllowlist(rep InspectReport, spec ContainerSpec) error {
 	if rep.State != StateStopped {
 		return failf(CheckControlPlaneIsolation, "agent was not observed stopped before execution")
 	}
-	imageReference, imageDigest, _ := strings.Cut(spec.Image, "@")
-	if rep.ImageReference != imageReference || rep.ImageDigest != imageDigest {
+	if !sameImage(spec.Image, rep.ImageReference) {
 		return failf(CheckControlPlaneIsolation, "agent inspection reported the wrong image")
 	}
 	if rep.WorkingDirectory != "/" {
@@ -132,6 +131,19 @@ func verifyAgentAllowlist(rep InspectReport, spec ContainerSpec) error {
 		return failf(CheckControlPlaneIsolation, "agent has a publication configured")
 	}
 	return nil
+}
+
+// sameImage reports whether an observed runtime image reference names the same
+// digest-pinned image as the expected (spec) reference. Trust binds to the
+// @sha256 digest; the name is compared tag-normalized as defense in depth. It
+// fails closed unless both references carry a digest, so a tagless observed
+// reference (no pin) never matches. The expected reference is guaranteed
+// digest-pinned upstream (HandoffSpec/Config validation), but parsing it here
+// too keeps the comparison self-contained and symmetric.
+func sameImage(expected, observed string) bool {
+	expName, expDigest, expOK := splitImageRef(expected)
+	obsName, obsDigest, obsOK := splitImageRef(observed)
+	return expOK && obsOK && expName == obsName && expDigest == obsDigest
 }
 
 func sameMounts(got, want []Mount) bool {
@@ -165,8 +177,7 @@ func verifyExporterAllowlist(cfg Config, rep InspectReport, exporterID, workspac
 	if !rep.AllowlistFieldsObserved {
 		return failf(CheckExporterAllowlist, "exporter inspection omitted required configuration")
 	}
-	imageReference, imageDigest, ok := strings.Cut(cfg.ExporterImage, "@")
-	if !ok || rep.ImageReference != imageReference || rep.ImageDigest != imageDigest {
+	if !sameImage(cfg.ExporterImage, rep.ImageReference) {
 		return failf(CheckExporterAllowlist, "exporter inspection reported the wrong image")
 	}
 	if !slices.Equal(rep.Command, cfg.ExporterCommand) {

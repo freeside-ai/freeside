@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"sync"
 	"testing"
 )
@@ -356,7 +355,10 @@ func (f *fakeRuntime) Inspect(ctx context.Context, id string) (InspectReport, er
 		Labels:                  append([]Label(nil), c.spec.Labels...),
 		LabelsObserved:          true,
 	}
-	rep.ImageReference, rep.ImageDigest, _ = strings.Cut(c.spec.Image, "@")
+	// Apple container 1.1.0 reports the full pinned reference (name@digest);
+	// the tag, if any, is dropped and the descriptor's resolved digest is a
+	// different value the report does not carry.
+	rep.ImageReference = c.spec.Image
 	if f.onInspect != nil {
 		return f.onInspect(id, rep)
 	}

@@ -12,11 +12,11 @@
    "id": "freeside-handoff-run-1-exporter",
    "image": {
     "descriptor": {
-     "digest": "sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce",
+     "digest": "sha256:6c47a97c10d032d5b1525aa8a873e238b05b90c4ae8618743d4311f0cc827e37",
      "mediaType": "application/vnd.oci.image.index.v1+json",
      "size": 9218
     },
-    "reference": "docker.io/library/alpine:3.22"
+    "reference": "docker.io/library/alpine@sha256:2c9d26f410d032d5b1525aa8a873e238b05b90c4ae8618743d4311f0cc827e37"
    },
    "initProcess": {
     "arguments": [

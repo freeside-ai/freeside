@@ -797,7 +797,10 @@ func TestHandoffExporterPayloadMismatch(t *testing.T) {
 		name   string
 		mutate func(*InspectReport)
 	}{
-		{"image digest", func(rep *InspectReport) { rep.ImageDigest = "sha256:" + strings.Repeat("1", 64) }},
+		{"image digest", func(rep *InspectReport) {
+			name, _, _ := strings.Cut(rep.ImageReference, "@")
+			rep.ImageReference = name + "@sha256:" + strings.Repeat("1", 64)
+		}},
 		{"command", func(rep *InspectReport) { rep.Command = []string{"/bin/other"} }},
 	}
 	for _, tc := range cases {
