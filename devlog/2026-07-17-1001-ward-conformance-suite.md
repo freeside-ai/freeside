@@ -799,6 +799,17 @@ against `expectedWriterManifest`, while the existing digest and omission checks
 remain the content-specific evidence. A regression preserves both expected
 blobs but changes their modes to `0755` and fails closed.
 
+## Automated review round 35
+
+The RW→RO exclusion probe used the configured exporter command for its second
+VM. That command may be finite, so a broken runtime could attach and execute
+the VM, return the expected `Code=2` error after it exited, and then satisfy the
+post-error stopped inspection. The second probe now keeps the digest-pinned
+exporter image and exact RO mount topology but uses the same nonterminating
+inert payload as the eager-start probes. A VM that actually ran cannot
+self-mask as stopped; the existing “error but running” regression exercises
+the decision.
+
 **Accepted by decision.** The marker value appears in the seed/audit
 container argv; this is safe because the marker is an inert fake credential
 by contract (the whole point of a *fake* marker is to test containment

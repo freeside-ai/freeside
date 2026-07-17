@@ -139,6 +139,10 @@ func (fx SuiteFixture) agentCommand(cfg Config) []string {
 	}
 }
 
+func nonterminatingProbeCommand() []string {
+	return []string{"sh", "-c", "while :; do sleep 3600; done"}
+}
+
 // shellQuote single-quotes s for safe inclusion in a `sh -c` command, so a
 // path with spaces or shell metacharacters (which cleanAbs/cliSafe still
 // allow) is treated as a literal, not parsed as shell syntax. Adjacent
@@ -851,7 +855,7 @@ func (s *Suite) proveNoEagerStart(ctx context.Context, run *suiteRun, name strin
 		// synchronous eager start: CreateContainer returns after it exits and the
 		// inspect sees stopped. This payload never terminates by itself, so an
 		// eager create can return only by respecting context cancellation.
-		Command: []string{"sh", "-c", "while :; do sleep 3600; done"},
+		Command: nonterminatingProbeCommand(),
 	}
 	var err error
 	spec, err = run.createContainer(ctx, spec)
@@ -1120,7 +1124,7 @@ func (s *Suite) probeWriterVolumeExclusion(ctx context.Context, run *suiteRun) e
 	writerSpec := ContainerSpec{
 		Name:    writer,
 		Image:   s.fx.AgentImage,
-		Command: []string{"sh", "-c", "while :; do sleep 3600; done"},
+		Command: nonterminatingProbeCommand(),
 		Mounts:  []Mount{{Type: MountVolume, Source: volume, Target: s.b.cfg.WorkspaceTarget}},
 	}
 	var err error
@@ -1166,9 +1170,13 @@ func (s *Suite) probeWriterVolumeExclusion(ctx context.Context, run *suiteRun) e
 	// (unexpected, since the writer created fine with the same spec shape) and
 	// fails closed rather than counting as the exclusion.
 	secondSpec := ContainerSpec{
-		Name:    second,
-		Image:   s.b.cfg.ExporterImage,
-		Command: slices.Clone(s.b.cfg.ExporterCommand),
+		Name:  second,
+		Image: s.b.cfg.ExporterImage,
+		// The exclusion proof needs the exporter image and RO mount topology,
+		// not its finite payload. A nonterminating command prevents a runtime
+		// that attached and ran despite returning Code=2 from finishing before
+		// the post-error stopped-state inspection.
+		Command: nonterminatingProbeCommand(),
 		Mounts:  []Mount{{Type: MountVolume, Source: volume, Target: s.b.cfg.WorkspaceTarget, ReadOnly: true}},
 	}
 	secondSpec, err = run.createContainer(ctx, secondSpec)

@@ -862,8 +862,8 @@ func TestSuiteFullExclusionUsesReadOnlyExporter(t *testing.T) {
 	if err := s.Full(context.Background()); err != nil {
 		t.Fatalf("Full = %v, want nil", err)
 	}
-	if got.Image != s.b.cfg.ExporterImage || !slices.Equal(got.Command, s.b.cfg.ExporterCommand) {
-		t.Errorf("second probe = image %q command %q, want exporter image/command", got.Image, got.Command)
+	if got.Image != s.b.cfg.ExporterImage || !slices.Equal(got.Command, nonterminatingProbeCommand()) {
+		t.Errorf("second probe = image %q command %q, want exporter image with nonterminating probe command", got.Image, got.Command)
 	}
 	if len(got.Mounts) != 1 || !got.Mounts[0].ReadOnly {
 		t.Errorf("second probe mounts = %+v, want one read-only workspace mount", got.Mounts)
