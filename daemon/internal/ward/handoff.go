@@ -159,11 +159,17 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	if err := b.rt.DeleteContainer(ctx, names.Agent); err != nil {
 		return nil, failf(CheckWriterTermination, "delete stopped agent: %v", err)
 	}
+	// Our own delete succeeded, so this invocation no longer owns the agent by
+	// create: a later object answering to the deterministic name may be a
+	// foreign recycle, not ours. Downgrade to label-gated cleanup now, before
+	// proving absence, so that if verifyContainerAbsent fails on a transient
+	// list error deferred teardown re-proves this invocation's ownership label
+	// rather than reaping a same-name stranger by identity alone.
+	st.agentOwned = false
 	if err := b.verifyContainerAbsent(ctx, names.Agent, CheckWriterTermination); err != nil {
 		return nil, err
 	}
 	st.agentAttempted = false
-	st.agentOwned = false
 
 	// Check 4: create the exporter but inspect it against the generated
 	// allowlist before it ever executes.

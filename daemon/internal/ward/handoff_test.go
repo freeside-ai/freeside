@@ -1212,6 +1212,44 @@ func TestHandoffAmbiguousContainerLeftWhenListFailsAndUnowned(t *testing.T) {
 	}
 }
 
+// TestHandoffAgentOwnershipDowngradedAfterDeleteUncertainty proves that once
+// the gate's own DeleteContainer succeeds but absence cannot be proven (the
+// writer-absence list errors on an unrelated row), the agent claim is
+// downgraded to label-gated: if a foreign actor recycles the deterministic
+// agent name before teardown, teardown must not reap that same-name stranger by
+// identity alone. Without the downgrade, teardown reaps it label-free.
+func TestHandoffAgentOwnershipDowngradedAfterDeleteUncertainty(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	// A recycled object under the deterministic name, lacking this invocation's
+	// ownership label (labels observed, none match).
+	foreign := ContainerSummary{ID: names.Agent, State: StateStopped, LabelsObserved: true, Labels: nil}
+	listCalls := 0
+	fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
+		listCalls++
+		if listCalls == 1 {
+			// Writer-absence verify: our delete already succeeded, but the full
+			// list errors, so absence cannot be proven this call.
+			return nil, errors.New("unrelated malformed list row")
+		}
+		return append(list, foreign), nil
+	}
+
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckWriterTermination)
+	fx.rt.mu.Lock()
+	defer fx.rt.mu.Unlock()
+	deletes := 0
+	for _, call := range fx.rt.calls {
+		if call == "delete-container "+names.Agent {
+			deletes++
+		}
+	}
+	if deletes != 1 {
+		t.Errorf("agent delete-container calls = %d, want 1 (only the gate's own delete; teardown must not reap the recycled foreign name): %v", deletes, fx.rt.calls)
+	}
+}
+
 func TestHandoffOwnedWorkspaceReapedWhenListFails(t *testing.T) {
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
