@@ -1,9 +1,9 @@
 ---
 title: Freeside Project Plan
-revision: 9
+revision: 10
 status: active
 phase: 1A
-updated: 2026-07-15
+updated: 2026-07-17
 ---
 
 # Freeside
@@ -16,7 +16,7 @@ updated: 2026-07-15
 
 **Freeside is a local, durable workflow controller that turns a software work item into an evidence-backed pull request and interrupts me only when judgment is required.**
 
-Category: **an agent control plane.** Harnesses (Claude Code, Codex) run the agent's inner loop; Freeside is the outer loop: it decides what work starts, inside what boundary, with which credentials withheld, what counts as done, when a human is interrupted, and what survives a crash. The self-brand register: *the harness runs the agent; the reins are yours.*
+Category: **an agent control plane.** Harnesses (Claude Code, Codex) run the agent's inner loop; Freeside is the outer loop: it decides what work starts, inside what boundary, with which credentials withheld, what counts as done, when a human is interrupted, and what survives a crash. The self-brand register: *the harness runs the agent; you hold the reins.*
 
 The system runs on a Mac Studio (the supported reference deployment; the daemon core is Linux-portable, Section 3.3). A work item (a labeled issue discovered by an intake scanner, a scan-proposed candidate, or a hand-approved spec submitted through the manual initiator) flows through a staged workflow: elaboration to a spec, over daemon-fetched research artifacts; spec approval in my attention inbox; implementation in an isolated workspace holding no GitHub credentials; export across a proven post-agent workspace handoff and an out-of-process hostile import boundary into a fresh checkout; deterministic verification, including evidence capture, under a trusted recipe in a clean workspace; daemon-side publication under an audited trust profile; yield-driven independent review with emergency brakes; a ready-for-final-review item on my phone with mechanical evidence. I review and merge on GitHub. The attention inbox is part of the control system: a daemon-owned domain model with lifecycle, staleness, synchronization, and concurrency rules. GitHub owns code and review; Freeside owns workflow execution and approvals.
 
@@ -348,8 +348,8 @@ Pipeline DSL (after three shapes); more agents and skills; macOS runner class; A
 
 Material changes are recorded here per revision, with deciders in parentheses. This section holds only the current revision's items: when a new revision lands, the outgoing items move to docs/history/decisions.md, which holds the complete log of every revision, including revisions superseded before commit. The history file is appended in the same PR as any plan revision, so the two cannot drift. A decision promotes to a docs/decisions/ ADR on first re-litigation, citing its revision entry in the history.
 
-Revision 9:
-1. **Open-source publication moves from Phase 4 to Phase 1A under AGPL-3.0-or-later, including owned prior revisions**: the network-service architecture still supports the original AGPL candidate; exhausted private-repository Actions capacity changes the timing, not the product roadmap or support commitments. Repository visibility changes only after the license and historical grant land. (User; ADR 0001.)
+Revision 10:
+1. **The brand register is codified as identity policy**: the tagline evolves to "the harness runs the agent; you hold the reins" (control as a held state, not a transfer); Freeside is fixed as a proper noun outside URL/daemon contexts; the two-ground visual register (light = Freeside, dark = Straylight), the signet-box mark, and the accent grammar (bronze/tawny as one metal in two ages; green reserved for the semantic palette) are adopted. Rationale and the complete rejected-alternatives record live in the brand decision note. (User; devlog 2026-07-17-0050-brand-register.md.)
 
 ## 14. Risks
 
@@ -357,4 +357,4 @@ Provider-credential exposure in subscription_contained (documented; egress floor
 
 ## 15. Naming and references
 
-**Freeside** (freeside.ai, github.com/freeside-ai); *free as in bird*; category line "an agent control plane"; self-brand "the harness runs the agent; the reins are yours." Subsystems: the **ward** (runner, handoff, and safety boundary), the **signet** (attention and approval service), the **gauntlet** (export, import, and verification path, including the evidence channel); daemon **freesided**; subsystem names come from the binding-and-summoning register: rare single-metaphor tokens with mundane surface readings (ward, signet, gauntlet, daemon); code takes functional names; rein appears only in brand and policy vocabulary. Coordination vocabulary sits outside the subsystem register: lanes take subsystem names where one exists, the client lane is informally the **saddle**, and the integration role is the **spine** (a role, never a territory); these are defined canonically in AGENTS.md's lane glossary. Reference shelf: Anthropic devcontainer/Agent SDK/credential docs; OpenAI Codex SDK, sandbox design, cloud review docs; GitHub Actions security hardening docs (token permissions, OIDC, pull_request_target); Apple container docs and issue tracker; SQLite online backup and WAL durability docs; Litestream; Antfarm, Nimbalyst, Conductor, Gas Town/Beads (cautionary); agentclientprotocol.com (Phase 3).
+**Freeside** (freeside.ai, github.com/freeside-ai) — a proper noun, capitalized wherever prose can carry it, downcased only where the medium demands it (URLs, the daemon); the org is *Free as in Bird*; category line "an agent control plane"; tagline "the harness runs the agent; you hold the reins." Subsystems: the **ward** (runner, handoff, and safety boundary), the **signet** (attention and approval service), the **gauntlet** (export, import, and verification path, including the evidence channel); daemon **freesided**; subsystem names come from the binding-and-summoning register: rare single-metaphor tokens with mundane surface readings (ward, signet, gauntlet, daemon); code takes functional names; rein appears only in brand and policy vocabulary. The visual register reads the name's own architecture: light surfaces arrive as **Freeside** (vellum ground, bronze accent), dark as **Straylight** (umber ground, tawny accent); modes follow the viewer's system setting — the dichotomy assigns meaning, never audience — and semantic colors never borrow the accent (green stays success/go). The mark is **the signet box**, the plain chambered box whose inlaid dividers imply the maker's initial; identity assets never depict the agent. The full identity system and its rejected-alternatives record: devlog/2026-07-17-0050-brand-register.md. Coordination vocabulary sits outside the subsystem register: lanes take subsystem names where one exists, the client lane is informally the **saddle**, and the integration role is the **spine** (a role, never a territory); these are defined canonically in AGENTS.md's lane glossary. Reference shelf: Anthropic devcontainer/Agent SDK/credential docs; OpenAI Codex SDK, sandbox design, cloud review docs; GitHub Actions security hardening docs (token permissions, OIDC, pull_request_target); Apple container docs and issue tracker; SQLite online backup and WAL durability docs; Litestream; Antfarm, Nimbalyst, Conductor, Gas Town/Beads (cautionary); agentclientprotocol.com (Phase 3).

@@ -2,7 +2,7 @@
 
 **Freeside is a local, durable workflow controller that turns a software work item into an evidence-backed pull request and interrupts me only when judgment is required.**
 
-Category: an agent control plane. Harnesses (Claude Code, Codex) run the agent's inner loop; Freeside is the outer loop: what work starts, inside what boundary, with which credentials withheld, what counts as done, when a human is interrupted, and what survives a crash. The harness runs the agent; the reins are yours.
+Category: an agent control plane. Harnesses (Claude Code, Codex) run the agent's inner loop; Freeside is the outer loop: what work starts, inside what boundary, with which credentials withheld, what counts as done, when a human is interrupted, and what survives a crash. The harness runs the agent; you hold the reins.
 
 **Status:** Phase 1A (the secure publish path) underway. The daemon is initialized (Wave 0 unit 1: module, dual-platform CI, test conventions); this monorepo's other component directories stay intentionally empty until their phase begins.
 

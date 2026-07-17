@@ -195,7 +195,7 @@ New in revision 8 (decider in parentheses):
 
 ---
 
-## Revision 9 (current)
+## Revision 9
 
 Revision 9 records the accelerated open-source publication decision; the
 product architecture and phase deliverables are unchanged.
@@ -205,3 +205,16 @@ revision 7 plus revision 8's selective decision-note protocol, unchanged.
 
 New in revision 9 (decider in parentheses):
 1. **Open-source publication moves from Phase 4 to Phase 1A under AGPL-3.0-or-later, including owned prior revisions**: the network-service architecture still supports the original AGPL candidate; exhausted private-repository Actions capacity changes the timing, not the product roadmap or support commitments. Repository visibility changes only after the license and historical grant land. (User; ADR 0001.)
+
+---
+
+## Revision 10 (current)
+
+Revision 10 codifies the brand register; product architecture and phase
+deliverables are unchanged.
+
+Held from revision 9 (abbreviated): every product decision held through
+revision 8 plus revision 9's accelerated open-source publication, unchanged.
+
+New in revision 10 (decider in parentheses):
+1. **The brand register is codified as identity policy**: the tagline evolves to "the harness runs the agent; you hold the reins" (control as a held state, not a transfer); Freeside is fixed as a proper noun outside URL/daemon contexts; the two-ground visual register (light = Freeside, dark = Straylight), the signet-box mark, and the accent grammar (bronze/tawny as one metal in two ages; green reserved for the semantic palette) are adopted. Rationale and the complete rejected-alternatives record live in the brand decision note. (User; devlog 2026-07-17-0050-brand-register.md.)
