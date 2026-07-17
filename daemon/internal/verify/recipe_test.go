@@ -120,3 +120,44 @@ func TestRecipeSourceValidity(t *testing.T) {
 		t.Error("base-commit source reports invalid")
 	}
 }
+
+// TestRecipeCommandPaths pins which command tokens count as
+// verification-control surfaces: repo-relative script entrypoints and
+// script arguments, but not PATH toolchains, package patterns, flags,
+// or absolute paths.
+func TestRecipeCommandPaths(t *testing.T) {
+	cases := []struct {
+		name string
+		cmds [][]string
+		want []string
+	}{
+		{"go toolchain", [][]string{{"go", "test", "./..."}, {"go", "vet", "./..."}}, nil},
+		{"local entrypoint", [][]string{{"./scripts/verify.sh"}}, []string{"scripts/verify.sh"}},
+		{"bare-relative entrypoint", [][]string{{"scripts/verify.sh"}}, []string{"scripts/verify.sh"}},
+		{"interpreter plus script", [][]string{{"bash", "tools/check.sh", "--fast"}}, []string{"tools/check.sh"}},
+		{"unclean dot path", [][]string{{"bash", "scripts/./verify.sh"}}, []string{"scripts/verify.sh"}},
+		{"unclean double slash", [][]string{{"bash", "scripts//verify.sh"}}, []string{"scripts/verify.sh"}},
+		{"dot-prefixed", [][]string{{"./scripts/verify.sh"}}, []string{"scripts/verify.sh"}},
+		{"absolute path excluded", [][]string{{"/usr/bin/make", "check"}}, nil},
+		{"package pattern excluded", [][]string{{"go", "build", "./internal/..."}}, nil},
+		{"dedup", [][]string{{"bash", "scripts/a.sh"}, {"bash", "scripts/a.sh"}}, []string{"scripts/a.sh"}},
+		{"glob-metachar filename kept", [][]string{{"./scripts/check[fast].sh"}}, []string{"scripts/check[fast].sh"}},
+		{"embedded-ellipsis filename kept", [][]string{{"./scripts/check...sh"}}, []string{"scripts/check...sh"}},
+		{"colon filename kept", [][]string{{"./scripts/check:fast.sh"}}, []string{"scripts/check:fast.sh"}},
+		{"package pattern segment excluded", [][]string{{"go", "test", "./..."}}, nil},
+		{"nested package pattern excluded", [][]string{{"go", "build", "./internal/..."}}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Recipe{Commands: tc.cmds}.CommandPaths()
+			if len(got) != len(tc.want) {
+				t.Fatalf("CommandPaths() = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("CommandPaths() = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}

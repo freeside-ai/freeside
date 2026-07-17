@@ -41,13 +41,21 @@ var DefaultVerificationControlPatterns = []string{
 	"**/.golangci.yaml",
 	"**/.golangci.json",
 	"**/.golangci.toml",
+	// Attributes steer materialization (ident, text/eol, filter); the
+	// verifier neutralizes them at checkout, and the flag makes the
+	// attempt visible. Also the importer's git_metadata class;
+	// duplicated here because it is verification-control, not only
+	// checkout metadata.
+	"**/.gitattributes",
 }
 
-// verificationControl returns the mandatory pattern class plus the
-// resolved recipe path and any caller-supplied widening. The defaults
-// ALWAYS apply: a caller can widen the class but never narrow or
-// disable it (the importer's widen-only rule, held for the same §12
-// reason).
+// verificationControl returns the mandatory glob-pattern class: the
+// defaults, the resolved recipe path, and any caller-supplied widening.
+// The defaults ALWAYS apply: a caller can widen the class but never
+// narrow or disable it (the importer's widen-only rule, held for the
+// same §12 reason). The recipe's own command entrypoints are handled
+// separately, by literal match (see flagControlPaths), because they
+// name specific files rather than a protected-name pattern.
 func verificationControl(extra []string, recipePath string) []string {
 	patterns := make([]string, 0, len(DefaultVerificationControlPatterns)+1+len(extra))
 	patterns = append(patterns, DefaultVerificationControlPatterns...)
@@ -56,14 +64,29 @@ func verificationControl(extra []string, recipePath string) []string {
 }
 
 // flagControlPaths raises a verification_control_path finding for every
-// candidate change, deletions included, whose path matches the class:
+// candidate change, deletions included, whose path is in the class:
 // deleting a Makefile or the recipe steers verification exactly as
 // rewriting one does. Changes are the importer's audited account; the
 // verifier never re-derives the diff. A non-UTF-8 path (PathHex set)
-// is flagged unconditionally: it cannot be glob-matched honestly, and
-// an unmatchable name must not be the way around a mandatory class.
-func flagControlPaths(changes []importer.Change, extra []string, recipePath string) []Finding {
+// is flagged unconditionally: it cannot be matched honestly, and an
+// unmatchable name must not be the way around a mandatory class.
+//
+// Two match kinds. The glob class (defaults, recipe path, widening) is
+// matched against the alias-normalized path (trailing dot/space and
+// NTFS ADS suffix trimmed, HFS-ignorables stripped): those are
+// protected-name *patterns*, and a canonical candidate path can
+// materialize as such a name on a downstream checkout. commandPaths are
+// specific files the trusted recipe executes, so they are matched by
+// exact case/normalization fold against the canonical change path with
+// NO alias normalization and NO glob interpretation: the runner opens
+// the literal name, so `scripts/check:fast.sh` or `scripts/check...sh`
+// must match its own bytes, not a truncated or pattern-expanded form.
+func flagControlPaths(changes []importer.Change, extra, commandPaths []string, recipePath string) []Finding {
 	patterns := verificationControl(extra, recipePath)
+	entrypoints := make(map[string]struct{}, len(commandPaths))
+	for _, cp := range commandPaths {
+		entrypoints[foldPath(cp)] = struct{}{}
+	}
 	var findings []Finding
 	for _, c := range changes {
 		if c.PathHex != "" {
@@ -74,13 +97,8 @@ func flagControlPaths(changes []importer.Change, extra []string, recipePath stri
 			})
 			continue
 		}
-		// Match against the alias-normalized path (trailing dot/space
-		// and NTFS ADS suffix trimmed, HFS-ignorables stripped): a
-		// canonical candidate path can still materialize as a protected
-		// name on a downstream checkout, and the flag must fire on the
-		// name that will exist there. The finding reports the actual
-		// candidate path.
-		if matchAny(patterns, normalizeAliases(c.Path)) {
+		_, isEntrypoint := entrypoints[foldPath(c.Path)]
+		if isEntrypoint || matchAny(patterns, normalizeAliases(c.Path)) {
 			findings = append(findings, Finding{
 				Path:   c.Path,
 				Kind:   FindingVerificationControlPath,

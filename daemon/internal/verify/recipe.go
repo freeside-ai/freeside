@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -120,6 +121,62 @@ func splitCommand(c string) ([]string, error) {
 		return nil, fmt.Errorf("recipe declares an empty command: %w", ErrRecipeInvalid)
 	}
 	return argv, nil
+}
+
+// CommandPaths returns the repo-relative file paths the recipe's
+// commands reference: a script entrypoint (`./scripts/verify.sh`) or a
+// script argument (`bash scripts/verify.sh`). These are
+// verification-control surfaces, because a candidate that rewrites one
+// changes what the trusted recipe actually runs. Bare command names
+// (`go`, `bash`) resolve through the room's PATH to its toolchain, not
+// a candidate file, and are excluded; so are absolute paths, Go's `...`
+// package patterns, and glob-bearing tokens. Paths are returned
+// slash-clean with any leading `./` stripped, matching the change
+// account's path space.
+func (r Recipe) CommandPaths() []string {
+	seen := map[string]bool{}
+	var paths []string
+	for _, argv := range r.Commands {
+		for _, tok := range argv {
+			p, ok := repoRelPath(tok)
+			if ok && !seen[p] {
+				seen[p] = true
+				paths = append(paths, p)
+			}
+		}
+	}
+	return paths
+}
+
+// repoRelPath reports whether a command token names a repo-relative
+// file and returns its cleaned path, matching the change account's path
+// space. A token qualifies only if it carries a path separator (a bare
+// name is a PATH lookup), is not absolute, and is not the Go recursive
+// package pattern (a path segment equal to `...`, as in `./...` or
+// `./internal/...`). No character in the filename disqualifies it: the
+// no-shell runner executes the literal name, so a glob metacharacter, a
+// colon, three embedded dots (`check...sh`), or a trailing dot is all
+// part of a real file the candidate could tamper with; the downstream
+// match is exact and literal, never a glob or alias fold. The path is
+// path.Clean-normalized so an unclean but valid spelling the OS still
+// resolves (`scripts/./verify.sh`, `scripts//verify.sh`) matches the
+// canonical changed path rather than slipping the flag.
+func repoRelPath(tok string) (string, bool) {
+	if !strings.Contains(tok, "/") || strings.HasPrefix(tok, "/") {
+		return "", false
+	}
+	p := path.Clean(tok)
+	if p == "." || p == ".." || strings.HasPrefix(p, "../") {
+		return "", false
+	}
+	// Exclude only the Go recursive package pattern: a `...` path
+	// *segment*, not a filename that merely contains three dots.
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "..." {
+			return "", false
+		}
+	}
+	return p, true
 }
 
 // RecipeDigest is the content address approvals bind to (§5.12): sha256

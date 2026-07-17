@@ -1,0 +1,34 @@
+{
+  "head_sha": "972c59a628ff99440ad0ac40d72fe628fbbd1550",
+  "base_sha": "d41f462f31c5e737bfb2ca412673f329671065e1",
+  "recipe_path": ".freeside/verify.json",
+  "recipe_digest": "sha256:4475ce0c1dfc3c4d825fabbfb69656be25aeba8000b45153b3b9b920414fb7c9",
+  "outcome": "passed",
+  "steps": [
+    {
+      "argv": [
+        "go",
+        "test",
+        "./..."
+      ],
+      "exit_code": 0,
+      "output_truncated": false
+    },
+    {
+      "argv": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "exit_code": 0,
+      "output_truncated": false
+    }
+  ],
+  "findings": [
+    {
+      "path": "go.mod",
+      "kind": "verification_control_path",
+      "detail": "added"
+    }
+  ]
+}
