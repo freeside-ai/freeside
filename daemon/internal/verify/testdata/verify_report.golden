@@ -1,8 +1,8 @@
 {
-  "head_sha": "972c59a628ff99440ad0ac40d72fe628fbbd1550",
-  "base_sha": "d41f462f31c5e737bfb2ca412673f329671065e1",
+  "head_sha": "dd727a6a1338d4edf9f81876bd12839a120f8501",
+  "base_sha": "709bc2cb17f802d6c185ba68700b09aacf5d6db9",
   "recipe_path": ".freeside/verify.json",
-  "recipe_digest": "sha256:4475ce0c1dfc3c4d825fabbfb69656be25aeba8000b45153b3b9b920414fb7c9",
+  "recipe_digest": "sha256:6bd9a67592b457f08cbafd0e16a71041dd1967aaa613b5f2e37cd6ae86ef49fd",
   "outcome": "passed",
   "steps": [
     {

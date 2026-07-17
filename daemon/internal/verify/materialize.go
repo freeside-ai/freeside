@@ -176,22 +176,56 @@ func (g *gitRunner) listTree(ctx context.Context, commitSHA string) (map[string]
 	}
 	entries := make(map[string]treeEntry)
 	var gitlinks []string
+	seen := map[string]struct{}{}
 	for _, rec := range bytes.Split(out, []byte{0}) {
 		if len(rec) == 0 {
 			continue
 		}
-		meta, path, ok := bytes.Cut(rec, []byte{'\t'})
+		meta, pathBytes, ok := bytes.Cut(rec, []byte{'\t'})
 		fields := strings.Fields(string(meta))
 		if !ok || len(fields) != 3 {
 			return nil, nil, fmt.Errorf("unparseable ls-tree record %q: %w", rec, ErrGitPlumbing)
 		}
+		p := string(pathBytes)
+		if err := validateTreePath(p); err != nil {
+			return nil, nil, err
+		}
+		// Reject a duplicated path before it reaches either the entries
+		// map (which would silently keep the last record) or the gitlinks
+		// slice (which would append blind): materialization writes one of
+		// them and rejectSymlinkEntrypoints reads the first, so a
+		// duplicate could make the two disagree on what a path is.
+		if _, dup := seen[p]; dup {
+			return nil, nil, fmt.Errorf("malformed tree: duplicate path %q: %w", p, ErrMalformedTree)
+		}
+		seen[p] = struct{}{}
 		if fields[0] == "160000" {
-			gitlinks = append(gitlinks, string(path))
+			gitlinks = append(gitlinks, p)
 			continue
 		}
-		entries[string(path)] = treeEntry{mode: fields[0], oid: fields[2]}
+		entries[p] = treeEntry{mode: fields[0], oid: fields[2]}
 	}
 	return entries, gitlinks, nil
+}
+
+// validateTreePath fails closed on a tree path that filepath.Join could
+// resolve outside the workspace. git write-tree never emits these, but a
+// tree crafted with `hash-object -t tree --literally` (the stated
+// malformed-tree threat) can, so every recursive tree path must be a
+// clean relative path. An empty component catches an empty path, an
+// absolute path (leading "/"), and a "//" or trailing "/" run; a "." or
+// ".." component is a traversal segment. Checked before the path becomes
+// a map key, hence before rejectPrefixConflicts and any write.
+func validateTreePath(p string) error {
+	for _, seg := range strings.Split(p, "/") {
+		switch seg {
+		case "":
+			return fmt.Errorf("malformed tree: path %q has an empty or absolute component: %w", p, ErrMalformedTree)
+		case ".", "..":
+			return fmt.Errorf("malformed tree: path %q has a %q component: %w", p, seg, ErrMalformedTree)
+		}
+	}
+	return nil
 }
 
 // rejectPrefixConflicts fails closed if any entry path has an ancestor
