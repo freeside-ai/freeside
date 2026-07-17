@@ -433,6 +433,43 @@ func TestMaterializeRejectsMalformedTree(t *testing.T) {
 	}
 }
 
+// TestMaterializeRejectsMalformedTreePaths is the #140 hardening
+// enumeration: git write-tree never emits a path with a traversal,
+// absolute, or empty component, nor a duplicate path, but a tree crafted
+// with `hash-object -t tree --literally` can. Each would let
+// filepath.Join(dest, path) escape the workspace or desync the
+// symlink-entrypoint guard (reads the first record) from materialization
+// (writes the last), so listTree must reject every one as
+// ErrMalformedTree before any write.
+func TestMaterializeRejectsMalformedTreePaths(t *testing.T) {
+	dir, base := initRepo(t, map[string]string{"seed": "x\n"})
+	blob := runGitStdin(t, dir, []byte("data\n"), "hash-object", "-w", "--stdin")
+
+	cases := []struct {
+		name string
+		raw  []byte
+	}{
+		{"dotdot component", treeRecord("100644", "..", blob)},
+		{"dot component", treeRecord("100644", ".", blob)},
+		{"absolute path", treeRecord("100644", "/abs", blob)},
+		{"empty middle component", treeRecord("100644", "a//b", blob)},
+		{"trailing slash", treeRecord("100644", "a/", blob)},
+		{"nested dotdot", treeRecord("100644", "x/../y", blob)},
+		{"duplicate path", append(treeRecord("100644", "dup", blob), treeRecord("100644", "dup", blob)...)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tree := runGitStdin(t, dir, tc.raw, "hash-object", "-w", "-t", "tree", "--literally", "--stdin")
+			head := runGit(t, dir, "commit-tree", tree, "-p", base, "-m", tc.name)
+			g := newTestRunner(t, dir)
+			dest := filepath.Join(t.TempDir(), "ws")
+			if err := g.materialize(context.Background(), head, dest); !errors.Is(err, ErrMalformedTree) {
+				t.Fatalf("materialize = %v, want ErrMalformedTree", err)
+			}
+		})
+	}
+}
+
 // treeRecord builds one raw git tree entry: "<mode> <name>\0" followed
 // by the 20 raw bytes of the hex object id.
 func treeRecord(mode, name, hexOID string) []byte {
