@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -30,6 +31,28 @@ func runGit(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// runGitStdin runs git with stdin, failing the test on error and
+// returning trimmed stdout. Used to hash-object raw objects.
+func runGitStdin(t *testing.T, dir string, stdin []byte, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...) //nolint:gosec // G204: test fixture running git over test-owned repos with test-chosen arguments
+	cmd.Dir = dir
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + t.TempDir(),
+		"GIT_CONFIG_GLOBAL=" + os.DevNull,
+		"GIT_CONFIG_SYSTEM=" + os.DevNull,
+		"GIT_CONFIG_NOSYSTEM=1",
+	}
+	cmd.Stdin = bytes.NewReader(stdin)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, stderr.String())
+	}
+	return strings.TrimSpace(stdout.String())
 }
 
 // initRepo creates a repository whose base commit holds files, and

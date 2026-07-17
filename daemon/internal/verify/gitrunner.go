@@ -48,13 +48,23 @@ type gitRunner struct {
 // hardenedConfig is prepended to every invocation; -c overrides outrank
 // even repository-local config. protectHFS and protectNTFS back the
 // materialization path with git's own alias gate on every platform.
+// autocrlf and eol are pinned off so no config-driven line-ending
+// conversion can touch materialized bytes; attribute-driven conversion
+// is neutralized by GIT_ATTR_SOURCE (see newGitRunner) and, decisively,
+// by verifyMaterialized's byte comparison.
 var hardenedConfig = []string{
 	"-c", "core.hooksPath=/dev/null",
 	"-c", "core.fsmonitor=false",
 	"-c", "protocol.allow=never",
 	"-c", "core.protectHFS=true",
 	"-c", "core.protectNTFS=true",
+	"-c", "core.autocrlf=false",
+	"-c", "core.eol=lf",
 }
+
+// emptyTreeSHA1 is git's well-known empty tree object under the sha1
+// format this package requires.
+const emptyTreeSHA1 = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 // newGitRunner resolves and hardens one verification's git context. The
 // sha1 object-format requirement matches the importer's: the head and
@@ -87,6 +97,17 @@ func newGitRunner(ctx context.Context, gitPath, checkoutDir, scratch string) (*g
 			// verification would bind evidence to a head other than the
 			// content it actually exercised.
 			"GIT_NO_REPLACE_OBJECTS=1",
+			// Read gitattributes from the empty tree instead of the
+			// candidate's: an in-tree .gitattributes (ident, text/eol,
+			// filter) would otherwise rewrite bytes at checkout-index
+			// time, so the recipe would run against content that is not
+			// the verified head's. Older git ignores this variable; the
+			// backstop either way is verifyMaterialized's byte
+			// comparison, which fails closed on any conversion.
+			"GIT_ATTR_SOURCE=" + emptyTreeSHA1,
+			// Pathspecs this package passes (the recipe path) are
+			// literal names, never globs.
+			"GIT_LITERAL_PATHSPECS=1",
 			"LC_ALL=C",
 		},
 	}

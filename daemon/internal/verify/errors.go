@@ -24,6 +24,14 @@ var (
 	// head the checkout does not hold exactly; verification output binds
 	// to one head, so a mismatch fails closed before any command runs.
 	ErrHeadMismatch = errors.New("checkout does not hold the requested candidate head")
+	// ErrWorkspaceMismatch rejects a materialized workspace whose bytes
+	// are not exactly the head tree's: a conversion or stray file means
+	// the recipe would verify content other than the bound head.
+	ErrWorkspaceMismatch = errors.New("materialized workspace does not match the head tree")
+	// ErrMalformedTree rejects a head tree that cannot be safely
+	// materialized: an entry nested under another entry (a blob under a
+	// symlink) would escape the workspace on write.
+	ErrMalformedTree = errors.New("head tree is malformed")
 
 	// Verify invocation failures.
 	ErrInvalidOptions = errors.New("verify options are invalid")
