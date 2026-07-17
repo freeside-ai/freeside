@@ -196,10 +196,10 @@ type cliInitProcess struct {
 }
 
 type cliConfiguration struct {
-	ID          string            `json:"id"`
-	Labels      map[string]string `json:"labels"`
-	Mounts      []cliMount        `json:"mounts"`
-	InitProcess cliInitProcess    `json:"initProcess"`
+	ID          string             `json:"id"`
+	Labels      *map[string]string `json:"labels"`
+	Mounts      []cliMount         `json:"mounts"`
+	InitProcess cliInitProcess     `json:"initProcess"`
 	// Pointers for the same reason as Environment: check 4's allowlist inputs
 	// must be observed, so an absent field fails closed rather than reading
 	// as "no SSH / no publications".
@@ -219,8 +219,8 @@ type cliContainer struct {
 }
 
 type cliVolume struct {
-	Name   string            `json:"name"`
-	Labels map[string]string `json:"labels"`
+	Name   string             `json:"name"`
+	Labels *map[string]string `json:"labels"`
 }
 
 type cliVolumeEntry struct {
@@ -331,6 +331,7 @@ func decodeContainerList(out []byte) ([]ContainerSummary, error) {
 		return nil, fmt.Errorf("decode container list: %w", err)
 	}
 	summaries := make([]ContainerSummary, len(ctrs))
+	seenIDs := make(map[string]bool, len(ctrs))
 	for i, c := range ctrs {
 		// An entry with no id cannot be matched against the run's names, so
 		// the absence proofs (verifyContainerAbsent, teardown) would silently
@@ -340,15 +341,25 @@ func decodeContainerList(out []byte) ([]ContainerSummary, error) {
 		if c.ID == "" {
 			return nil, fmt.Errorf("container list entry %d has no id", i)
 		}
+		if seenIDs[c.ID] {
+			return nil, fmt.Errorf("container list entry %d duplicates id %q", i, c.ID)
+		}
+		seenIDs[c.ID] = true
 		if c.Configuration.ID != c.ID {
 			return nil, fmt.Errorf("container list entry %d id %q disagrees with configuration id %q", i, c.ID, c.Configuration.ID)
 		}
-		labels := make([]Label, 0, len(c.Configuration.Labels))
-		for k, val := range c.Configuration.Labels {
-			labels = append(labels, Label{Key: k, Value: val})
+		labels := []Label(nil)
+		if c.Configuration.Labels != nil {
+			labels = make([]Label, 0, len(*c.Configuration.Labels))
+			for k, val := range *c.Configuration.Labels {
+				labels = append(labels, Label{Key: k, Value: val})
+			}
 		}
 		sort.Slice(labels, func(a, b int) bool { return labels[a].Key < labels[b].Key })
-		summaries[i] = ContainerSummary{ID: c.ID, State: ContainerState(c.Status.State), Labels: labels}
+		summaries[i] = ContainerSummary{
+			ID: c.ID, State: ContainerState(c.Status.State), Labels: labels,
+			LabelsObserved: c.Configuration.Labels != nil,
+		}
 	}
 	return summaries, nil
 }
@@ -371,12 +382,18 @@ func decodeVolumeList(out []byte) ([]VolumeSummary, error) {
 		if v.ID != v.Configuration.Name {
 			return nil, fmt.Errorf("volume list entry %d id %q disagrees with configuration name %q", i, v.ID, v.Configuration.Name)
 		}
-		labels := make([]Label, 0, len(v.Configuration.Labels))
-		for k, val := range v.Configuration.Labels {
-			labels = append(labels, Label{Key: k, Value: val})
+		labels := []Label(nil)
+		if v.Configuration.Labels != nil {
+			labels = make([]Label, 0, len(*v.Configuration.Labels))
+			for k, val := range *v.Configuration.Labels {
+				labels = append(labels, Label{Key: k, Value: val})
+			}
 		}
 		sort.Slice(labels, func(a, b int) bool { return labels[a].Key < labels[b].Key })
-		summaries[i] = VolumeSummary{Name: v.Configuration.Name, Labels: labels}
+		summaries[i] = VolumeSummary{
+			Name: v.Configuration.Name, Labels: labels,
+			LabelsObserved: v.Configuration.Labels != nil,
+		}
 	}
 	return summaries, nil
 }

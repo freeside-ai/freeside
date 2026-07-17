@@ -168,7 +168,7 @@ func (f *fakeRuntime) ListVolumes(ctx context.Context) ([]VolumeSummary, error) 
 	}
 	out := make([]VolumeSummary, 0, len(f.vols))
 	for name, labels := range f.vols {
-		out = append(out, VolumeSummary{Name: name, Labels: labels})
+		out = append(out, VolumeSummary{Name: name, Labels: labels, LabelsObserved: true})
 	}
 	if f.onListVolumes != nil {
 		return f.onListVolumes(out)
@@ -327,7 +327,7 @@ func (f *fakeRuntime) ListContainers(ctx context.Context) ([]ContainerSummary, e
 	out := make([]ContainerSummary, 0, len(f.ctrs))
 	for name, c := range f.ctrs {
 		out = append(out, ContainerSummary{
-			ID: name, State: f.state(c, name), Labels: append([]Label(nil), c.spec.Labels...),
+			ID: name, State: f.state(c, name), Labels: append([]Label(nil), c.spec.Labels...), LabelsObserved: true,
 		})
 	}
 	if f.onListContainers != nil {

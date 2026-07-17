@@ -262,6 +262,87 @@ func TestHandoffAmbiguousVolumeCreateReaped(t *testing.T) {
 	}
 }
 
+// TestHandoffAmbiguousCreateMissingLabelsFailsTeardown proves an omitted
+// label field is unknown evidence, not an observed empty set. Teardown cannot
+// safely delete the exact object without the invocation token, but it must
+// surface the incomplete cleanup alongside the primary create failure.
+func TestHandoffAmbiguousCreateMissingLabelsFailsTeardown(t *testing.T) {
+	names := namesFor(testHandoffSpec().RunID)
+	t.Run("container", func(t *testing.T) {
+		fx := newHandoffFixture(t)
+		fx.rt.createThenFail = names.Agent
+		fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
+			for i := range list {
+				if list[i].ID == names.Agent {
+					list[i].LabelsObserved = false
+					list[i].Labels = nil
+				}
+			}
+			return list, nil
+		}
+
+		_, err := fx.run(t)
+		wantCheckFailure(t, err, CheckTeardown)
+		fx.rt.mu.Lock()
+		defer fx.rt.mu.Unlock()
+		if _, ok := fx.rt.ctrs[names.Agent]; !ok {
+			t.Error("teardown deleted an ambiguously owned container without observing its labels")
+		}
+	})
+
+	t.Run("volume", func(t *testing.T) {
+		fx := newHandoffFixture(t)
+		fx.rt.createVolumeThenFail = true
+		fx.rt.onListVolumes = func(list []VolumeSummary) ([]VolumeSummary, error) {
+			for i := range list {
+				if list[i].Name == names.Workspace {
+					list[i].LabelsObserved = false
+					list[i].Labels = nil
+				}
+			}
+			return list, nil
+		}
+
+		_, err := fx.run(t)
+		wantCheckFailure(t, err, CheckTeardown)
+		fx.rt.mu.Lock()
+		defer fx.rt.mu.Unlock()
+		if _, ok := fx.rt.vols[names.Workspace]; !ok {
+			t.Error("teardown deleted an ambiguously owned volume without observing its labels")
+		}
+	})
+}
+
+// TestHandoffAmbiguousCreateDuplicateContainerIDFailsTeardown proves a
+// contradictory duplicate identity cannot make list ordering decide whether
+// the invocation token was observed. No candidate is deleted, and the
+// incomplete cleanup is returned as a teardown failure.
+func TestHandoffAmbiguousCreateDuplicateContainerIDFailsTeardown(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.createThenFail = names.Agent
+	fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
+		for _, cs := range list {
+			if cs.ID == names.Agent {
+				foreignView := ContainerSummary{
+					ID: names.Agent, State: cs.State,
+					Labels: runLabels(testHandoffSpec().RunID), LabelsObserved: true,
+				}
+				return append([]ContainerSummary{foreignView}, list...), nil
+			}
+		}
+		return list, nil
+	}
+
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckTeardown)
+	fx.rt.mu.Lock()
+	defer fx.rt.mu.Unlock()
+	if _, ok := fx.rt.ctrs[names.Agent]; !ok {
+		t.Error("teardown deleted a container after a contradictory duplicate-id listing")
+	}
+}
+
 // TestHandoffListContainersError: check 3's absence proof fails closed when
 // the runtime cannot be listed, rather than trusting the delete call.
 func TestHandoffListContainersError(t *testing.T) {
@@ -506,10 +587,9 @@ func scratchDirs(t *testing.T, runID string) []string {
 	return matches
 }
 
-// TestHandoffPrimaryErrorWins: when a check fails and teardown also fails,
-// the check failure is the returned error (teardown must not mask the
-// cause), but the run still returns no result.
-func TestHandoffPrimaryErrorWins(t *testing.T) {
+// TestHandoffPrimaryErrorRetainedWithTeardownFailure proves incomplete
+// cleanup is surfaced without masking the primary check failure.
+func TestHandoffPrimaryErrorRetainedWithTeardownFailure(t *testing.T) {
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	fx.rt.runningInspects[names.Agent] = math.MaxInt - 1
@@ -518,6 +598,9 @@ func TestHandoffPrimaryErrorWins(t *testing.T) {
 	}
 	_, err := fx.run(t)
 	wantCheckFailure(t, err, CheckWriterTermination)
+	if !strings.Contains(err.Error(), string(CheckTeardown)) {
+		t.Errorf("joined error omitted teardown failure: %v", err)
+	}
 }
 
 // TestHandoffTeardownBounded proves teardown runs under its own deadline: a

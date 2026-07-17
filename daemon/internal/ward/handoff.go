@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -90,8 +91,13 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	st := &runState{ownershipLabel: ownershipLabel}
 	defer func() {
 		terr := b.teardown(ctx, names, st)
-		if err == nil && terr != nil {
-			result, err = nil, terr
+		if terr != nil {
+			result = nil
+			if err == nil {
+				err = terr
+			} else {
+				err = errors.Join(err, terr)
+			}
 		}
 		// The archive is transient once verified; the output dir is removed on
 		// any failure (including a teardown failure that nils an otherwise
@@ -278,13 +284,22 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 				if !claim.attempted {
 					continue
 				}
-				i := slices.IndexFunc(ctrs, func(cs ContainerSummary) bool { return cs.ID == claim.id })
-				if i < 0 {
+				candidate, found, ferr := uniqueContainer(ctrs, claim.id)
+				if ferr != nil {
+					problems = append(problems, ferr.Error())
 					continue
 				}
-				candidate := ctrs[i]
-				if !claim.owned && !slices.Contains(candidate.Labels, st.ownershipLabel) {
+				if !found {
 					continue
+				}
+				if !claim.owned {
+					if !candidate.LabelsObserved {
+						problems = append(problems, fmt.Sprintf("container %q list entry omitted labels after ambiguous create", claim.id))
+						continue
+					}
+					if !slices.Contains(candidate.Labels, st.ownershipLabel) {
+						continue
+					}
 				}
 				if rerr := b.reapContainer(ctx, candidate); rerr != nil {
 					problems = append(problems, fmt.Sprintf("remove %q: %v", claim.id, rerr))
@@ -296,7 +311,7 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 		if v.Name != names.Workspace {
 			return false
 		}
-		return st.workspaceOwned || slices.Contains(v.Labels, st.ownershipLabel)
+		return st.workspaceOwned || (v.LabelsObserved && slices.Contains(v.Labels, st.ownershipLabel))
 	}
 	// After a successful create, the exact workspace name is owned. After an
 	// ambiguous failed create, require the unpredictable ownership label too.
@@ -304,6 +319,10 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 		problems = append(problems, fmt.Sprintf("list volumes: %v", err))
 	} else {
 		for _, v := range vols {
+			if v.Name == names.Workspace && !st.workspaceOwned && !v.LabelsObserved {
+				problems = append(problems, fmt.Sprintf("volume %q list entry omitted labels after ambiguous create", v.Name))
+				continue
+			}
 			if ownsWorkspace(v) {
 				if derr := b.rt.DeleteVolume(ctx, v.Name); derr != nil {
 					problems = append(problems, fmt.Sprintf("delete volume %q: %v", v.Name, derr))
@@ -322,11 +341,19 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 				if !claim.attempted {
 					continue
 				}
-				i := slices.IndexFunc(ctrs, func(cs ContainerSummary) bool { return cs.ID == claim.id })
-				if i < 0 {
+				candidate, found, ferr := uniqueContainer(ctrs, claim.id)
+				if ferr != nil {
+					problems = append(problems, "re-list "+ferr.Error())
 					continue
 				}
-				if claim.owned || slices.Contains(ctrs[i].Labels, st.ownershipLabel) {
+				if !found {
+					continue
+				}
+				if !claim.owned && !candidate.LabelsObserved {
+					problems = append(problems, fmt.Sprintf("container %q re-list entry omitted labels after ambiguous create", claim.id))
+					continue
+				}
+				if claim.owned || slices.Contains(candidate.Labels, st.ownershipLabel) {
 					problems = append(problems, fmt.Sprintf("container %q survived teardown", claim.id))
 				}
 			}
@@ -336,6 +363,10 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 		problems = append(problems, fmt.Sprintf("re-list volumes: %v", err))
 	} else {
 		for _, v := range vols {
+			if v.Name == names.Workspace && !st.workspaceOwned && !v.LabelsObserved {
+				problems = append(problems, fmt.Sprintf("volume %q re-list entry omitted labels after ambiguous create", v.Name))
+				continue
+			}
 			if ownsWorkspace(v) {
 				problems = append(problems, fmt.Sprintf("volume %q survived teardown", v.Name))
 			}
@@ -346,6 +377,24 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 		return failf(CheckTeardown, "%s", strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// uniqueContainer returns the one exact-id entry from a full runtime list.
+// Contradictory duplicate identities are unknown evidence, never an ordering
+// rule for ownership or absence.
+func uniqueContainer(ctrs []ContainerSummary, id string) (ContainerSummary, bool, error) {
+	var found ContainerSummary
+	seen := false
+	for _, cs := range ctrs {
+		if cs.ID != id {
+			continue
+		}
+		if seen {
+			return ContainerSummary{}, false, fmt.Errorf("container %q appeared more than once in runtime listing", id)
+		}
+		found, seen = cs, true
+	}
+	return found, seen, nil
 }
 
 // reapContainer stops a listed container if it is running, then deletes it.

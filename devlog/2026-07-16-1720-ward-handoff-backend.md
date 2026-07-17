@@ -418,3 +418,25 @@ Round 13 raised one P2 in the credential-leak class:
   runtime calls retain their bounded diagnostic stderr because their argv
   contains only gate-generated identifiers. A fixture CLI proves both the
   secret and its variable name remain absent from the returned error.
+
+Round 14 raised one P2 at the runtime-list trust boundary:
+
+- *P2: an omitted labels field looked like an observed empty label set.* An
+  ambiguous create may be reaped only when the exact object also carries this
+  invocation's ownership token. The JSON decoders previously collapsed an
+  omitted `configuration.labels` field to an empty map, so teardown treated a
+  shape-drifted owned object as foreign and silently skipped both deletion and
+  the survivor proof. List summaries now retain label-field presence. For an
+  exact object whose create was ambiguous, a missing field is a teardown
+  failure; successful creates still own their exact name without needing the
+  label, and unrelated unlabeled list entries do not cause a false global
+  refusal (the pinned 1.1.0 container-list fixture legitimately omits labels
+  for such entries). When a primary failure and teardown failure coincide,
+  the returned error joins them: the original cause remains discoverable and
+  the incomplete cleanup is no longer hidden. The fresh-context refute pass
+  then found a contradictory-list variant: duplicate exact container IDs
+  previously let the first entry decide ownership. The CLI decoder now rejects
+  duplicate IDs, and teardown independently rejects them from any Runtime
+  implementation before using label evidence; a regression orders an empty
+  foreign view before the owned token-bearing view and proves the ambiguity
+  fails teardown without deleting either interpretation.

@@ -112,6 +112,9 @@ type InspectReport struct {
 type VolumeSummary struct {
 	Name   string
 	Labels []Label
+	// LabelsObserved distinguishes an explicitly empty label set from an
+	// omitted runtime field that cannot prove or disprove ownership.
+	LabelsObserved bool
 }
 
 // ContainerSummary identifies one container in a full listing.
@@ -119,6 +122,8 @@ type ContainerSummary struct {
 	ID     string
 	State  ContainerState
 	Labels []Label
+	// LabelsObserved has the same trust-boundary meaning as on VolumeSummary.
+	LabelsObserved bool
 }
 
 // Runtime is the seam between the gate and the container runtime. The real

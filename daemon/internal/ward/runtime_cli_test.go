@@ -156,8 +156,8 @@ func TestDecodeContainerList(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []ContainerSummary{
-		{ID: "freeside-handoff-run-1-agent", State: StateStopped, Labels: []Label{}},
-		{ID: "unrelated-container", State: StateRunning, Labels: []Label{}},
+		{ID: "freeside-handoff-run-1-agent", State: StateStopped},
+		{ID: "unrelated-container", State: StateRunning},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("decoded list = %+v, want %+v", got, want)
@@ -167,7 +167,7 @@ func TestDecodeContainerList(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantLabels := []Label{{Key: "a", Value: "1"}, {Key: "z", Value: "2"}}
-	if !reflect.DeepEqual(withLabels[0].Labels, wantLabels) {
+	if !withLabels[0].LabelsObserved || !reflect.DeepEqual(withLabels[0].Labels, wantLabels) {
 		t.Errorf("decoded labels = %+v, want %+v", withLabels[0].Labels, wantLabels)
 	}
 }
@@ -191,6 +191,9 @@ func TestDecodeListFailsClosedOnMissingIdentity(t *testing.T) {
 	if _, err := decodeContainerList([]byte(`[{"id":"c","configuration":{"id":"other"},"status":{"state":"stopped"}}]`)); err == nil {
 		t.Error("container list entry with a mismatched configuration id was trusted")
 	}
+	if _, err := decodeContainerList([]byte(`[{"id":"c","configuration":{"id":"c"}},{"id":"c","configuration":{"id":"c"}}]`)); err == nil {
+		t.Error("container list with a duplicate id was trusted")
+	}
 	if _, err := decodeVolumeList([]byte(`[{"id":"a","configuration":{"name":"b","labels":{}}}]`)); err == nil {
 		t.Error("volume list entry with id != name was trusted")
 	}
@@ -202,11 +205,18 @@ func TestDecodeVolumeList(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []VolumeSummary{
-		{Name: "freeside-handoff-run-1-ws", Labels: []Label{{Key: "freeside.handoff", Value: "run-1"}}},
-		{Name: "unlabeled-volume", Labels: []Label{}},
+		{Name: "freeside-handoff-run-1-ws", Labels: []Label{{Key: "freeside.handoff", Value: "run-1"}}, LabelsObserved: true},
+		{Name: "unlabeled-volume", Labels: []Label{}, LabelsObserved: true},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("decoded volumes = %+v, want %+v", got, want)
+	}
+	missingLabels, err := decodeVolumeList([]byte(`[{"id":"v","configuration":{"name":"v"}}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missingLabels[0].LabelsObserved {
+		t.Error("omitted volume labels decoded as observed")
 	}
 }
 
