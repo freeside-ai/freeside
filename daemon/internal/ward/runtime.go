@@ -166,6 +166,16 @@ type ContainerSummary struct {
 // fake. The gate trusts nothing a Runtime returns: every security-relevant
 // answer is re-verified against the generated allowlist or the observed
 // state, and a Runtime error always fails the gate closed.
+//
+// Destructive operations (StopContainer, DeleteContainer, DeleteVolume) are
+// name-addressed: the runtime offers no immutable object identity and no
+// conditional delete, so an implementation cannot prove the object it acts
+// on is the one previously observed. The gate therefore never issues a
+// destructive call without fresh same-object evidence (its unpredictable
+// ownership label, with the CreationDate fingerprint vetoing replacements),
+// and the residual
+// window between that verification and the call is an accepted limitation
+// recorded in the package documentation.
 type Runtime interface {
 	// CreateVolume creates the named volume with the given size and labels.
 	CreateVolume(ctx context.Context, name string, sizeMB int64, labels []Label) error

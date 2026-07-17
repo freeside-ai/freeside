@@ -93,6 +93,19 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 	if err := rt.CreateVolume(ctx, credVolume, 8, []Label{{Key: "freeside.ward-live", Value: runID}}); err != nil {
 		t.Fatalf("create credential volume: %v", err)
 	}
+	// The cleanup contract's evidence surface must be real on the reference
+	// runtime: per-object volume inspect exists and reports labels and a
+	// creation instant (the identity fingerprint cleanup compares).
+	credView, err := rt.InspectVolume(ctx, credVolume)
+	if err != nil {
+		t.Fatalf("inspect credential volume: %v", err)
+	}
+	if credView.CreationDate == "" {
+		t.Error("volume inspect reported no creation instant; cleanup would degrade to label evidence")
+	}
+	if !credView.LabelsObserved {
+		t.Error("volume inspect omitted labels")
+	}
 	if err := rt.CreateContainer(ctx, ContainerSpec{
 		Name:    seedName,
 		Image:   liveImage,
@@ -100,6 +113,39 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 		Mounts:  []Mount{{Type: MountVolume, Source: credVolume, Target: "/credentials"}},
 	}); err != nil {
 		t.Fatalf("create seed container: %v", err)
+	}
+	// Containers report the fingerprint through both inspect and the full
+	// listing, the two observation paths teardown evidence uses.
+	seedRep, err := rt.Inspect(ctx, seedName)
+	if err != nil {
+		t.Fatalf("inspect seed container: %v", err)
+	}
+	if seedRep.CreationDate == "" {
+		t.Error("container inspect reported no creation instant")
+	}
+	seedList, err := rt.ListContainers(ctx)
+	if err != nil {
+		t.Fatalf("list containers after seed create: %v", err)
+	}
+	seedListed := false
+	for _, c := range seedList {
+		if c.ID != seedName {
+			continue
+		}
+		seedListed = true
+		if c.CreationDate == "" {
+			t.Error("container list reported no creation instant for the seed")
+		}
+		// Cleanup compares fingerprints captured via inspect against listing
+		// rows raw (never parsed), so the two endpoints must agree
+		// byte-for-byte; a format drift would silently classify this run's
+		// own objects as foreign and leak them.
+		if c.CreationDate != seedRep.CreationDate {
+			t.Errorf("creation instant differs between inspect (%q) and list (%q)", seedRep.CreationDate, c.CreationDate)
+		}
+	}
+	if !seedListed {
+		t.Fatal("just-created seed container missing from the container list; the creation-instant probes were skipped")
 	}
 	if err := rt.StartContainer(ctx, seedName); err != nil {
 		t.Fatalf("start seed container: %v", err)
@@ -206,6 +252,14 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 		}
 		if v.Name == credVolume {
 			credSurvives = true
+			if v.CreationDate == "" {
+				t.Error("volume list reported no creation instant for the credential volume")
+			}
+			// Same byte-equality requirement as containers: volume inspect
+			// and the volume listing must report one raw creation instant.
+			if v.CreationDate != credView.CreationDate {
+				t.Errorf("creation instant differs between volume inspect (%q) and list (%q)", credView.CreationDate, v.CreationDate)
+			}
 		}
 	}
 	if !credSurvives {

@@ -27,6 +27,22 @@
 //     direct named-volume export. No workaround may reach into Apple
 //     container's private block-image state.
 //
+// Runtime-object cleanup is identity-safe under replacement (#138). The
+// runtime exposes no immutable object identity (a container's id is its
+// caller-chosen name; volumes have only a name) and no conditional delete,
+// so a successful create never holds standing authority over its
+// deterministic name: every destructive decision requires fresh evidence
+// that the observed object is the one this run created — the invocation's
+// unpredictable ownership label, with the creation instant captured right
+// after each create as a veto on replacements — and an object failing that
+// evidence is a foreign replacement, left untouched and counted as absent.
+// The window between the last verification and the name-addressed
+// stop/delete call is irreducible on this runtime and accepted: the
+// freeside-handoff- name prefix is a daemon-owned namespace, and a host
+// actor mutating it holds the same user's full runtime authority, outside
+// the threat model. Revisit when Apple container exposes immutable runtime
+// IDs or conditional deletion.
+//
 // Layout, by concept:
 //
 //   - errors.go        the Check vocabulary and typed ConformanceFailure
