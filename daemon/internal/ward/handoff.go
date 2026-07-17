@@ -346,22 +346,31 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 		{id: names.Agent, attempted: st.agentAttempted, owned: st.agentOwned},
 		{id: names.Exporter, attempted: st.exporterAttempted, owned: st.exporterOwned},
 	}
-	// Each container is reaped only when its own create succeeded or the fresh
-	// teardown listing carries the unpredictable ownership label after an
-	// ambiguous create error.
+	// Each container is reaped only when its own create succeeded or a fresh
+	// inspect carries the unpredictable ownership label after an ambiguous
+	// create error, whether that inspect comes from the teardown listing's
+	// labels or, when the full list is unavailable, from a direct inspect.
 	if st.agentAttempted || st.exporterAttempted {
 		if ctrs, err := b.rt.ListContainers(ctx); err != nil {
 			problems = append(problems, fmt.Sprintf("list containers: %v", err))
 			// A full-list failure can be caused by an unrelated malformed row.
 			// It must not suppress cleanup of an exact name this invocation
-			// already owns from a successful create. Ambiguous creates still
-			// require list/label evidence and are deliberately not reaped here.
+			// owns: a successful create is reaped by identity alone, and an
+			// ambiguous create is reaped by exact name once a direct inspect
+			// proves this invocation's ownership label. Otherwise one unrelated
+			// broken row could leave the credential-mounted writer restartable.
 			for _, claim := range containerClaims {
-				if !claim.attempted || !claim.owned {
+				if !claim.attempted {
 					continue
 				}
-				if rerr := b.reapKnownOwnedContainer(ctx, claim.id); rerr != nil {
-					problems = append(problems, fmt.Sprintf("remove known-owned %q after list failure: %v", claim.id, rerr))
+				if claim.owned {
+					if rerr := b.reapKnownOwnedContainer(ctx, claim.id); rerr != nil {
+						problems = append(problems, fmt.Sprintf("remove known-owned %q after list failure: %v", claim.id, rerr))
+					}
+					continue
+				}
+				if rerr := b.reapAmbiguousOwnedContainer(ctx, claim.id, st.ownershipLabel); rerr != nil {
+					problems = append(problems, fmt.Sprintf("remove ambiguous-owned %q after list failure: %v", claim.id, rerr))
 				}
 			}
 		} else {
@@ -511,6 +520,31 @@ func (b *Backend) reapKnownOwnedContainer(ctx context.Context, id string) error 
 	}
 	if rep.ID != id {
 		return fmt.Errorf("inspect returned the wrong identity")
+	}
+	return b.reapContainer(ctx, ContainerSummary{ID: id, State: rep.State})
+}
+
+// reapAmbiguousOwnedContainer reaps the exact name after an ambiguous create
+// when the full list is unavailable. Ownership is unproven here (create neither
+// clearly succeeded nor failed), so it acts only once a fresh inspect both
+// identifies the exact container and exposes this invocation's unpredictable
+// ownership label, the same evidence containerHasOwnership requires on the
+// success-list path. A foreign same-name object lacks the label and is left
+// untouched; a wrong identity or absent labels fails closed. The reap uses the
+// inspected state so an already-stopped container is not needlessly stopped.
+func (b *Backend) reapAmbiguousOwnedContainer(ctx context.Context, id string, ownershipLabel Label) error {
+	rep, err := b.rt.Inspect(ctx, id)
+	if err != nil {
+		return fmt.Errorf("inspect: %w", err)
+	}
+	if rep.ID != id {
+		return fmt.Errorf("inspect returned the wrong identity")
+	}
+	if !rep.LabelsObserved {
+		return fmt.Errorf("inspect omitted labels after ambiguous create")
+	}
+	if !slices.Contains(rep.Labels, ownershipLabel) {
+		return nil
 	}
 	return b.reapContainer(ctx, ContainerSummary{ID: id, State: rep.State})
 }

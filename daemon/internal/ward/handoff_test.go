@@ -1115,6 +1115,103 @@ func TestHandoffOwnedContainerReapedWhenListFails(t *testing.T) {
 	}
 }
 
+// TestHandoffAmbiguousContainerReapedWhenListFails proves that when the full
+// container list is unavailable (an unrelated malformed row), an ambiguous
+// create is still reaped by exact name once a direct inspect proves this
+// invocation's ownership label. Without it, a broken sibling row could leave
+// the credential-mounted writer restartable.
+func TestHandoffAmbiguousContainerReapedWhenListFails(t *testing.T) {
+	names := namesFor(testHandoffSpec().RunID)
+	cases := []struct {
+		id           string
+		failListCall int
+	}{
+		// The agent's ambiguous create fails before any gate listing, so the
+		// teardown reap list is the first. The exporter's create follows the
+		// writer-absence listing, so the reap list is the second.
+		{id: names.Agent, failListCall: 1},
+		{id: names.Exporter, failListCall: 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.id, func(t *testing.T) {
+			fx := newHandoffFixture(t)
+			fx.rt.createThenFail = tc.id
+			listCalls := 0
+			fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
+				listCalls++
+				if listCalls == tc.failListCall {
+					return nil, errors.New("unrelated malformed list row")
+				}
+				return list, nil
+			}
+
+			_, err := fx.run(t)
+			if err == nil || !strings.Contains(err.Error(), string(CheckTeardown)) {
+				t.Fatalf("Handoff = %v, want joined teardown failure", err)
+			}
+			fx.assertReaped(t)
+			fx.rt.mu.Lock()
+			defer fx.rt.mu.Unlock()
+			wantCalls := []string{"inspect " + tc.id, "delete-container " + tc.id, "list-containers"}
+			next := 0
+			for _, call := range fx.rt.calls {
+				if next < len(wantCalls) && call == wantCalls[next] {
+					next++
+				}
+			}
+			if next != len(wantCalls) {
+				t.Errorf("runtime calls %v do not contain ordered cleanup sequence %v", fx.rt.calls, wantCalls)
+			}
+		})
+	}
+}
+
+// TestHandoffAmbiguousContainerLeftWhenListFailsAndUnowned proves the exact
+// counterweight: with the full list unavailable, an ambiguous create whose
+// direct inspect does not carry this invocation's ownership label is a possible
+// foreign same-name object and is left untouched, never deleted by name alone.
+func TestHandoffAmbiguousContainerLeftWhenListFailsAndUnowned(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.createThenFail = names.Agent
+	listCalls := 0
+	fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
+		listCalls++
+		if listCalls == 1 {
+			return nil, errors.New("unrelated malformed list row")
+		}
+		// Strip our label from every later view so the object reads as foreign
+		// through both the list and the inspect fallback.
+		for i := range list {
+			if list[i].ID == names.Agent {
+				list[i].Labels = nil
+			}
+		}
+		return list, nil
+	}
+	fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+		if id == names.Agent {
+			rep.Labels = nil // labels observed, but the ownership token absent
+		}
+		return rep, nil
+	}
+
+	_, err := fx.run(t)
+	if err == nil || !strings.Contains(err.Error(), string(CheckTeardown)) {
+		t.Fatalf("Handoff = %v, want teardown failure from the list error", err)
+	}
+	fx.rt.mu.Lock()
+	defer fx.rt.mu.Unlock()
+	if _, ok := fx.rt.ctrs[names.Agent]; !ok {
+		t.Error("teardown deleted an unowned same-name container after a list failure")
+	}
+	for _, call := range fx.rt.calls {
+		if call == "delete-container "+names.Agent {
+			t.Errorf("teardown issued %q for an object without the ownership label", call)
+		}
+	}
+}
+
 func TestHandoffOwnedWorkspaceReapedWhenListFails(t *testing.T) {
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
