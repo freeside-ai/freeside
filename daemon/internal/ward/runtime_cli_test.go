@@ -3,6 +3,7 @@ package ward
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -97,6 +98,35 @@ func TestDecodeInspectHostile(t *testing.T) {
 	cfg := testConfig()
 	if err := verifyExporterAllowlist(cfg, rep, "hostile-fixture", "any"); err == nil {
 		t.Error("hostile fixture passed the allowlist")
+	}
+}
+
+// TestToMountAccessOptions pins the access mapping the allowlist depends on:
+// ro alone is read-only, rw alone (or neither) is not, and a mount claiming
+// both is contradictory and flagged so verification fails closed rather than
+// trusting ro's mere presence.
+func TestToMountAccessOptions(t *testing.T) {
+	vol := map[string]json.RawMessage{"volume": json.RawMessage(`{"name":"ws"}`)}
+	cases := []struct {
+		name         string
+		options      []string
+		wantReadOnly bool
+		wantConflict bool
+	}{
+		{"ro only", []string{"ro"}, true, false},
+		{"rw only", []string{"rw"}, false, false},
+		{"neither", nil, false, false},
+		{"both ro and rw", []string{"ro", "rw"}, false, true},
+		{"both, rw first", []string{"rw", "ro"}, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := cliMount{Destination: "/workspace", Options: tc.options, Type: vol}.toMount()
+			if m.ReadOnly != tc.wantReadOnly || m.AccessConflict != tc.wantConflict {
+				t.Errorf("toMount(%v) = {ReadOnly:%t, AccessConflict:%t}, want {%t, %t}",
+					tc.options, m.ReadOnly, m.AccessConflict, tc.wantReadOnly, tc.wantConflict)
+			}
+		})
 	}
 }
 

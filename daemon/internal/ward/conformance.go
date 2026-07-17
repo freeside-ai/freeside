@@ -187,6 +187,8 @@ func verifyExporterAllowlist(cfg Config, rep InspectReport, exporterID, workspac
 	}
 	m := rep.Mounts[0]
 	switch {
+	case m.AccessConflict:
+		return failf(CheckExporterAllowlist, "exporter workspace mount reports contradictory ro/rw access")
 	case m.Type != MountVolume:
 		return failf(CheckExporterAllowlist, "exporter persistent mount is not a volume")
 	case m.Source != workspaceVolume:

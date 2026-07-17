@@ -633,3 +633,21 @@ Round 21 raised one P2 in the "approve exactly one, reject duplicates" class
   extract through `O_EXCL`, and output directories through `Mkdir`, so a
   duplicate of any of those already fails closed. Regression: a
   "duplicate proof entry" violation case.
+
+Round 22 raised one P2 at the returned-object (inspect) trust boundary:
+
+- *P2: a mount claiming both `ro` and `rw` read as read-only.* `toMount`
+  collapsed the options to `ReadOnly=true` on the mere presence of `ro`, so a
+  contradictory report satisfied the read-only checks (writer credential mounts,
+  exporter workspace mount) without proving read-only access. `ReadOnly` is now
+  `ro && !rw`, and a new decode-time `Mount.AccessConflict` records `ro && rw`.
+  The conflict fails closed in both allowlist paths: the writer's `sameMounts`
+  equality can no longer match a conflicting realized mount against the
+  conflict-free generated spec, and `verifyExporterAllowlist` rejects it with an
+  explicit case. The field is unserialized (`json:"-"`), so specs and their
+  goldens are untouched, and it participates in `Mount` equality as a plain
+  comparable field. The class sweep confirmed `toMount` is the only place
+  read-only is inferred from option presence (the generation side sets
+  `ReadOnly` explicitly and never conflicts). Regressions: a `toMount` access
+  table (ro / rw / neither / both, order-independent), plus contradictory-access
+  cases in the agent and exporter allowlist violation tables.

@@ -264,11 +264,21 @@ type cliVolumeEntry struct {
 // invalid MountType verbatim, so verification fails closed on it.
 func (m cliMount) toMount() Mount {
 	out := Mount{Target: m.Destination}
+	var sawRO, sawRW bool
 	for _, o := range m.Options {
-		if o == "ro" {
-			out.ReadOnly = true
+		switch o {
+		case "ro":
+			sawRO = true
+		case "rw":
+			sawRW = true
 		}
 	}
+	// A mount reporting both ro and rw proves neither access, so ro's mere
+	// presence must not read as read-only. Record the conflict and let the
+	// allowlist checks fail closed on it (sameMounts for the writer, an explicit
+	// case for the exporter).
+	out.ReadOnly = sawRO && !sawRW
+	out.AccessConflict = sawRO && sawRW
 	keys := make([]string, 0, len(m.Type))
 	for k := range m.Type {
 		keys = append(keys, k)

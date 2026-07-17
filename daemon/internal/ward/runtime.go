@@ -70,6 +70,13 @@ type Mount struct {
 	Source   string    `json:"source"`
 	Target   string    `json:"target"`
 	ReadOnly bool      `json:"read_only"`
+	// AccessConflict marks a decoded inspect mount whose options claimed both
+	// ro and rw: contradictory evidence that proves neither access. It is never
+	// set on a gate-generated spec, so a conflicting realized mount cannot match
+	// the clean spec under sameMounts, and the exporter allowlist rejects it
+	// explicitly. Decode-time evidence, not part of the seam contract, so it is
+	// unserialized and stays out of the spec goldens.
+	AccessConflict bool `json:"-"`
 }
 
 // Label is one metadata label on a container or volume. A slice of labels,

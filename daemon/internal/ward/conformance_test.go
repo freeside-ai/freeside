@@ -210,6 +210,7 @@ func TestVerifyAgentAllowlistViolations(t *testing.T) {
 			r.Mounts = append(r.Mounts, Mount{Type: MountBind, Source: "/", Target: "/host"})
 		}},
 		{"missing credential mount", func(r *InspectReport) { r.Mounts = r.Mounts[:1] }},
+		{"credential mount access conflict", func(r *InspectReport) { r.Mounts[1].AccessConflict = true }},
 		{"ssh forwarding", func(r *InspectReport) { r.SSH = true }},
 		{"published socket", func(r *InspectReport) { r.PublishedSockets = []string{"/tmp/agent.sock"} }},
 		{"published port", func(r *InspectReport) { r.PublishedPorts = []string{"8080"} }},
@@ -281,6 +282,7 @@ func TestVerifyExporterAllowlistViolations(t *testing.T) {
 		{"wrong volume", func(r *InspectReport) { r.Mounts[0].Source = "other-volume" }},
 		{"wrong target", func(r *InspectReport) { r.Mounts[0].Target = "/data" }},
 		{"read-write workspace", func(r *InspectReport) { r.Mounts[0].ReadOnly = false }},
+		{"contradictory workspace access", func(r *InspectReport) { r.Mounts[0].AccessConflict = true }},
 		{"ssh forwarding", func(r *InspectReport) { r.SSH = true }},
 		{"published socket", func(r *InspectReport) { r.PublishedSockets = []string{"/tmp/agent.sock"} }},
 		{"published port", func(r *InspectReport) { r.PublishedPorts = []string{"8080"} }},
