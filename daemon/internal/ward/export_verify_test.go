@@ -205,6 +205,20 @@ func TestVerifyExportViolations(t *testing.T) {
 			CheckExportVerification,
 		},
 		{
+			"unreferenced directory",
+			func(_ *testing.T, es []tarEntry) []tarEntry {
+				return append(es, tarEntry{name: "handoff/extra/", typeflag: tar.TypeDir})
+			},
+			CheckExportVerification,
+		},
+		{
+			"directory below blob root",
+			func(_ *testing.T, es []tarEntry) []tarEntry {
+				return append(es, tarEntry{name: "handoff/blobs/sha256/junk/", typeflag: tar.TypeDir})
+			},
+			CheckExportVerification,
+		},
+		{
 			"symlink inside handoff output",
 			func(_ *testing.T, es []tarEntry) []tarEntry {
 				return append(es, tarEntry{
@@ -369,6 +383,17 @@ func TestVerifyExportRedactsPaths(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), secretName) {
 		t.Errorf("failure reason leaked the archive filename: %v", err)
+	}
+
+	// Directory names are workspace content too, and are redacted under the
+	// exact-tree allowlist just like file names.
+	dirEntries := append(fixtureArchive(t), tarEntry{
+		name:     "handoff/" + secretName + "/",
+		typeflag: tar.TypeDir,
+	})
+	_, err = runVerifyExport(t, newTestBackend(t), dirEntries)
+	if err == nil || strings.Contains(err.Error(), secretName) {
+		t.Errorf("directory reason leaked or did not fail: %v", err)
 	}
 
 	// A traversal entry's raw name is redacted too.

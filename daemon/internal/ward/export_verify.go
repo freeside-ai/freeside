@@ -261,14 +261,19 @@ func verifyNoStrays(destDir string, referenced map[string]bool) error {
 			// A walk error embeds the path (attacker-derived); report generically.
 			return failf(CheckExportVerification, "walk output failed")
 		}
-		if d.IsDir() {
-			return nil
-		}
 		rel, err := filepath.Rel(destDir, p)
 		if err != nil {
 			return failf(CheckExportVerification, "walk output failed")
 		}
 		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			switch rel {
+			case ".", "blobs", "blobs/sha256":
+				return nil
+			default:
+				return failf(CheckExportVerification, "output carries unreferenced directory %s", redactPath(rel))
+			}
+		}
 		if rel == export.ManifestFilename || referenced[rel] {
 			return nil
 		}
