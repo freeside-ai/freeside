@@ -2,6 +2,7 @@ package ward
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -423,4 +424,35 @@ func TestVerifyExportCap(t *testing.T) {
 	if fmt.Sprint(err) == "" {
 		t.Error("empty failure message")
 	}
+}
+
+// TestExtractFileCapBoundary distinguishes an exact fit from a one-byte
+// overflow, including an empty file after the byte budget is fully consumed.
+func TestExtractFileCapBoundary(t *testing.T) {
+	t.Run("exact fit", func(t *testing.T) {
+		data := []byte("12345678")
+		dest := filepath.Join(t.TempDir(), "exact")
+		n, err := extractFile(bytes.NewReader(data), dest, int64(len(data)))
+		if err != nil || n != int64(len(data)) {
+			t.Fatalf("extractFile = (%d, %v), want (%d, nil)", n, err, len(data))
+		}
+		if got, err := os.ReadFile(dest); err != nil || !bytes.Equal(got, data) { //nolint:gosec // dest is a test-owned path under t.TempDir
+			t.Fatalf("extracted bytes = %q, %v; want %q", got, err, data)
+		}
+	})
+
+	t.Run("one byte over", func(t *testing.T) {
+		data := []byte("123456789")
+		dest := filepath.Join(t.TempDir(), "overflow")
+		if _, err := extractFile(bytes.NewReader(data), dest, int64(len(data)-1)); err == nil {
+			t.Fatal("extractFile accepted a one-byte overflow")
+		}
+	})
+
+	t.Run("empty at exhausted budget", func(t *testing.T) {
+		dest := filepath.Join(t.TempDir(), "empty")
+		if n, err := extractFile(bytes.NewReader(nil), dest, 0); err != nil || n != 0 {
+			t.Fatalf("extractFile = (%d, %v), want (0, nil)", n, err)
+		}
+	})
 }

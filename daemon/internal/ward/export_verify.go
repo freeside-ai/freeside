@@ -158,7 +158,7 @@ func (b *Backend) extractHandoff(tarPath, destDir string) ([]byte, error) {
 // (which carries the attacker-derived entry name), so the caller redacts the
 // name and this reports only what went wrong, never where.
 func extractFile(r io.Reader, dest string, budget int64) (int64, error) {
-	if budget <= 0 {
+	if budget < 0 {
 		return 0, errors.New("extraction cap exhausted")
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
@@ -176,9 +176,15 @@ func extractFile(r io.Reader, dest string, budget int64) (int64, error) {
 		return n, errors.New("write failed")
 	}
 	if n == budget {
-		// The limit may have truncated the entry; over-budget is fail, not
-		// fit-exactly-by-luck.
-		return n, errors.New("extraction cap exhausted")
+		// LimitReader reports equality for both an exact fit and truncation.
+		// Probe one byte from the entry without writing it: EOF proves the file
+		// exactly filled the remaining budget; a byte proves overflow.
+		var probe [1]byte
+		if m, perr := io.ReadFull(r, probe[:]); m > 0 {
+			return n, errors.New("extraction cap exhausted")
+		} else if perr != nil && !errors.Is(perr, io.EOF) {
+			return n, errors.New("read failed")
+		}
 	}
 	return n, nil
 }
