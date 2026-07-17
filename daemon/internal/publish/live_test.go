@@ -69,13 +69,9 @@ func TestLiveMintInstallationToken(t *testing.T) {
 	if err := ks.SaveApp(publish.AppCredentials{AppID: appID, Key: key}); err != nil {
 		t.Fatal(err)
 	}
-	// The recorder requires an existing state root (the caller's
-	// surface); in the daemon that is the composed state dir, here the
-	// test owns it.
-	if err := os.MkdirAll(filepath.Join(base, "state"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	rec, err := publish.NewJSONLRecorder(filepath.Join(base, "state"))
+	// The live mint audits through the production store-backed path, so
+	// the opt-in run exercises the same recorder the daemon composes.
+	rec, err := publish.NewStoreRecorder(newTestStore(t))
 	if err != nil {
 		t.Fatal(err)
 	}
