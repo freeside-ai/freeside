@@ -37,6 +37,22 @@ func TestFlagControlPathsDefaults(t *testing.T) {
 		".golangci.yaml",
 		".golangci.json",
 		".golangci.toml",
+		// Swift/Xcode verification-control surfaces (app lane, #140).
+		"Package.swift",
+		"app/Package.swift",
+		"Package@swift-6.0.swift",
+		"app/Package@swift-5.swift",
+		"Package.resolved",
+		"app/Package.resolved",
+		".swiftpm/configuration/mirrors.json",
+		"app/.swiftpm/configuration/mirrors.json",
+		".swiftpm/configuration/registries.json",
+		"Config/Debug.xcconfig",
+		"app/Base.xcconfig",
+		"Freeside.xcodeproj/project.pbxproj",
+		"app/Freeside.xcodeproj/xcshareddata/xcschemes/FreesideMac.xcscheme",
+		"app/FreesideTests/App.xctestplan",
+		"Freeside.xcworkspace/contents.xcworkspacedata",
 		".gitattributes",
 		"pkg/.gitattributes",
 		testRecipePath,
@@ -59,6 +75,18 @@ func TestFlagControlPathsDefaults(t *testing.T) {
 		"Makefile.md",
 		"internal/verify/verify.go",
 		".golangci.yml.bak",
+		// The Swift/Xcode class is name/extension-specific: a regular
+		// Swift source, a manifest-lookalike suffix, and prose about the
+		// project files must stay clean.
+		"app/Sources/Freeside/App.swift",
+		"Package.swift.md",
+		"Package@swift-6.0.swift.md",
+		"docs/pbxproj-notes.md",
+		// The .swiftpm config patterns are specific to the two redirect
+		// files, not the whole directory.
+		".swiftpm/configuration/other.json",
+		".swiftpm/xcode/package.xcworkspace/xcuserdata/x.plist",
+		"Config/Debug.xcconfig.bak",
 	}
 	for _, p := range flagged {
 		if got := flagControlPaths([]importer.Change{changed(p)}, nil, nil, testRecipePath); len(got) != 1 || got[0].Kind != FindingVerificationControlPath {
