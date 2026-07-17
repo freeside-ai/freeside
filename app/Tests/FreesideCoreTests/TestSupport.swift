@@ -25,6 +25,18 @@ actor AsyncGate {
 
 struct InjectedFailure: Error {}
 
+func testDeviceToken(for deviceID: String, secretByte: UInt8 = 1) -> String {
+    func base64URL(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+    let encodedID = base64URL(Data(deviceID.utf8))
+    let encodedSecret = base64URL(Data(repeating: secretByte, count: 32))
+    return "fsd1.\(encodedID).\(encodedSecret)"
+}
+
 /// Throws on the first `times` calls to `consume()`; later calls pass.
 actor InjectedFailures {
     private var remaining: Int

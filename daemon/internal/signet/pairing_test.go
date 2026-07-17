@@ -3,6 +3,7 @@ package signet_test
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -99,6 +100,11 @@ func TestPairGrantsDeviceAndOneTimeToken(t *testing.T) {
 		t.Errorf("granted as_of_revision = %d, want the pairing transaction's revision %d",
 			grant.Device.AsOfRevision, f.revision(t))
 	}
+	if grant.NtfySubscription.ServerURL != "https://ntfy.example" ||
+		!strings.HasPrefix(grant.NtfySubscription.Topic, "fs-") {
+		t.Errorf("granted ntfy subscription = %+v, want the configured server and a private topic",
+			grant.NtfySubscription)
+	}
 
 	// The daemon stores the token's sha256 digest, never the token: the
 	// verifier row must be a digest and must not contain either plaintext.
@@ -116,6 +122,94 @@ func TestPairGrantsDeviceAndOneTimeToken(t *testing.T) {
 	if !strings.HasPrefix(credential.Credential, "sha256:") ||
 		strings.Contains(credential.Credential, parts[2]) {
 		t.Errorf("stored credential %q must be a digest carrying no token material", credential.Credential)
+	}
+}
+
+// TestPairGrantTopicsArePrivatePerDevice pins issue #131's non-enumerability
+// boundary: each code holder receives only its new device's distinct topic,
+// and the synchronized Device snapshot does not grow a topic field.
+func TestPairGrantTopicsArePrivatePerDevice(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	grants := make([]signet.PairingGrant, 0, 2)
+	for _, name := range []string{"First", "Second"} {
+		code, _, err := f.service.MintPairingCode(ctx)
+		if err != nil {
+			t.Fatalf("MintPairingCode: %v", err)
+		}
+		grant, err := f.service.Pair(ctx, code, name)
+		if err != nil {
+			t.Fatalf("Pair(%s): %v", name, err)
+		}
+		grants = append(grants, grant)
+	}
+	if grants[0].NtfySubscription.Topic == grants[1].NtfySubscription.Topic {
+		t.Fatalf("two devices received the same topic %q", grants[0].NtfySubscription.Topic)
+	}
+	for _, grant := range grants {
+		encoded, err := json.Marshal(grant.Device)
+		if err != nil {
+			t.Fatalf("marshal DeviceSnapshot: %v", err)
+		}
+		if strings.Contains(string(encoded), grant.NtfySubscription.Topic) {
+			t.Errorf("device snapshot exposes private topic: %s", encoded)
+		}
+	}
+}
+
+// TestPairRequiresUsableNtfyBeforeConsumingCode ensures the code remains
+// redeemable when notification composition is absent: a failed grant must
+// not create a device or burn the caller's one-time authenticator.
+func TestPairRequiresUsableNtfyBeforeConsumingCode(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	code, _, err := f.service.MintPairingCode(ctx)
+	if err != nil {
+		t.Fatalf("MintPairingCode: %v", err)
+	}
+	invalid := map[string]*signet.NtfyConfig{
+		"absent channel": nil,
+		"URL credentials": {
+			BaseURL: "https://publisher-value@ntfy.example", TopicKey: testTopicKey,
+			ClickBaseURL: "https://daemon.example",
+		},
+		"remote cleartext": {
+			BaseURL: "http://ntfy.example", TopicKey: testTopicKey, ClickBaseURL: "https://daemon.example",
+		},
+		"query base": {
+			BaseURL: "https://ntfy.example/base?route=shared", TopicKey: testTopicKey,
+			ClickBaseURL: "https://daemon.example",
+		},
+		"fragment base": {
+			BaseURL: "https://ntfy.example/base#shared", TopicKey: testTopicKey,
+			ClickBaseURL: "https://daemon.example",
+		},
+		"out-of-range base port": {
+			BaseURL: "https://ntfy.example:99999", TopicKey: testTopicKey,
+			ClickBaseURL: "https://daemon.example",
+		},
+		"weak topic key": {
+			BaseURL: "https://ntfy.example", TopicKey: []byte("weak"), ClickBaseURL: "https://daemon.example",
+		},
+	}
+	for name, cfg := range invalid {
+		t.Run(name, func(t *testing.T) {
+			options := []signet.Option{
+				signet.WithPairingKey(testPairingKey),
+				signet.WithClock(func() time.Time { return *f.now }),
+			}
+			if cfg != nil {
+				options = append(options, signet.WithNtfy(*cfg))
+			}
+			if _, err := signet.NewService(f.store, options...).Pair(ctx, code, name); err == nil {
+				t.Fatalf("Pair with %s succeeded", name)
+			} else if strings.Contains(err.Error(), "publisher-value") {
+				t.Fatalf("Pair with %s leaked URL credential material: %v", name, err)
+			}
+		})
+	}
+	if _, err := f.service.Pair(ctx, code, "Configured retry"); err != nil {
+		t.Fatalf("Pair after configuration failure consumed the code: %v", err)
 	}
 }
 

@@ -28,9 +28,115 @@ private struct FailingCredentialStore: DeviceCredentialStore {
 
         #expect(model.phase == .idle)
         #expect(credential.token.hasPrefix("fsd1."))
+        #expect(credential.ntfySubscription.serverURL == "https://ntfy.example")
+        #expect(credential.ntfySubscription.topic == "fs-00000000000000000000000000000001")
         // Custody moved inside the same operation: the stored credential
         // is the returned one.
         #expect(try credentials.load() == credential)
+    }
+
+    @Test func malformedSubscriptionNeverBecomesDurableAuthority() async throws {
+        for (serverURL, topic) in [
+            ("https://publisher-value@ntfy.example", "fs-00000000000000000000000000000001"),
+            ("http://ntfy.example", "fs-00000000000000000000000000000001"),
+            ("http://+127.0.0.1", "fs-00000000000000000000000000000001"),
+            ("http://0127.0.0.1", "fs-00000000000000000000000000000001"),
+            ("http://[::ffff:0127.0.0.1]", "fs-00000000000000000000000000000001"),
+            ("http://[::1%25does-not-exist]", "fs-00000000000000000000000000000001"),
+            ("https://ntfy.example:99999", "fs-00000000000000000000000000000001"),
+            ("https://ntfy.example:0", "fs-00000000000000000000000000000001"),
+            ("https://ntfy.example%3A99999", "fs-00000000000000000000000000000001"),
+            ("https://ntfy.example%40evil.com", "fs-00000000000000000000000000000001"),
+            ("https://ntfy.example%2Fevil", "fs-00000000000000000000000000000001"),
+            ("https://[not-an-ip]", "fs-00000000000000000000000000000001"),
+            ("https://[::gg]", "fs-00000000000000000000000000000001"),
+            ("https://[%3A%3A1]", "fs-00000000000000000000000000000001"),
+            ("https://[fe80::1%25en0%0Aevil]", "fs-00000000000000000000000000000001"),
+            ("https://[fe80::1%25en0%0Aevil]:443", "fs-00000000000000000000000000000001"),
+            ("https://[fe80::1%25en0%2Fevil]", "fs-00000000000000000000000000000001"),
+            ("https://[fe80::1%25en0%ZZ]", "fs-00000000000000000000000000000001"),
+            ("https://[not-an-ip]:443", "fs-00000000000000000000000000000001"),
+            ("https://ntfy.example%40evil:443", "fs-00000000000000000000000000000001"),
+            ("https://ntfy.example?shared=true", "fs-00000000000000000000000000000001"),
+            ("https://ntfy.example", "not-a-private-topic"),
+        ] {
+            let server = MockServer(
+                authMode: .enforcing,
+                pairingCodes: ["483911": .valid],
+                pairingNtfyServerURL: serverURL,
+                pairingNtfyTopic: topic
+            )
+            let credentials = InMemoryCredentialStore()
+            let model = PairingModel(
+                client: APIClientFactory.mock(server: server), credentials: credentials)
+            model.pairingCode = "483911"
+            model.displayName = "Malformed grant"
+
+            #expect(await model.pair() == nil)
+            #expect(try credentials.load() == nil)
+            guard case .failed(let message) = model.phase else {
+                Issue.record("expected malformed subscription failure, got \(model.phase)")
+                continue
+            }
+            #expect(message.contains("private grant"))
+            #expect(message.contains("revoke"))
+        }
+    }
+
+    @Test func daemonAcceptedSubscriptionURLFormsRemainUsable() async throws {
+        for serverURL in [
+            "http://[0:0:0:0:0:0:0:1]",
+            "http://[::ffff:127.0.0.1]",
+            "http://[0:0:0:0:0:ffff:7f00:1]",
+            "https://m%C3%BCnich.example",
+            "https://[fe80::1%25en0]",
+            "https://[fe80::1%25en0%20space]",
+            "https://[fe80::1%25en0%25suffix]",
+            "https://ntfy.example:443",
+            "https://[::1]:443",
+            "https://[fe80::1%25en0]:443",
+        ] {
+            let server = MockServer(
+                authMode: .enforcing,
+                pairingCodes: ["483911": .valid],
+                pairingNtfyServerURL: serverURL
+            )
+            let model = PairingModel(
+                client: APIClientFactory.mock(server: server),
+                credentials: InMemoryCredentialStore())
+            model.pairingCode = "483911"
+            model.displayName = "Loopback grant"
+
+            let credential = try #require(await model.pair())
+            #expect(credential.ntfySubscription.serverURL == serverURL)
+        }
+    }
+
+    @Test func malformedTokensNeverBecomeDurableAuthority() async throws {
+        for token in [
+            testDeviceToken(for: "device-9"),
+            "fsd1.ZGV2aWNlLTE.eA",
+        ] {
+            let server = MockServer(
+                authMode: .enforcing,
+                pairingCodes: ["483911": .valid],
+                pairingDeviceToken: token
+            )
+            let credentials = InMemoryCredentialStore()
+            let model = PairingModel(
+                client: APIClientFactory.mock(server: server), credentials: credentials)
+            model.pairingCode = "483911"
+            model.displayName = "Malformed grant"
+
+            #expect(await model.pair() == nil)
+            #expect(try credentials.load() == nil)
+            guard case .failed(let message) = model.phase else {
+                Issue.record("expected invalid grant failure, got \(model.phase)")
+                continue
+            }
+            #expect(message.contains("private grant"))
+            #expect(message.contains("revoke"))
+        }
     }
 
     @Test func rejectionSurfacesOneUndifferentiatedMessage() async throws {
@@ -139,7 +245,9 @@ private struct FailingCredentialStore: DeviceCredentialStore {
 
     @Test func aSessionWithACredentialIsReadyImmediately() async throws {
         let credentials = InMemoryCredentialStore(
-            credential: DeviceCredential(deviceID: "device-7", token: "fsd1.seven.secret"))
+            credential: DeviceCredential(
+                deviceID: "device-7", token: testDeviceToken(for: "device-7"),
+                ntfySubscription: .mock)!)
         let session = AppSession(
             client: APIClientFactory.mock(),
             credentials: credentials,

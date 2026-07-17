@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,9 +63,10 @@ type NtfyConfig struct {
 	// Authorization header.
 	Token Secret
 	// TopicKey is the daemon-held key per-device topics are derived under
-	// (same posture as the pairing key): hosted ntfy topics are capability
-	// URLs, so they must be unguessable, and Device has no topic field —
-	// surfacing the topic to the device is a deferred contract unit.
+	// (same posture as the pairing key). It must carry at least 32 bytes:
+	// hosted ntfy topics are capability URLs, so they must be unguessable.
+	// Pairing returns the derived topic only to that new device; Device and the
+	// sync surfaces never carry it.
 	TopicKey []byte
 	// ClickBaseURL is the deep-link base the Click header points at; the
 	// daemon API origin in Phase 1.
@@ -81,12 +83,21 @@ type ntfyChannel struct {
 	cfg NtfyConfig
 }
 
-// validate reports whether the channel can publish at all; SubmitDelivery
-// fails closed on it before any write, so a permanently broken config can
-// never burn a submitted-only row per call. A token on a cleartext non-local
-// base is refused outright: the only Reveal site is the Authorization header,
-// and sending it over plain HTTP off-host would leak the credential on every
-// publish.
+// NtfySubscription is the private device-scoped read capability returned by
+// pairing. It deliberately carries no publish token: capability-topic
+// deployments need only this base URL and topic, while authenticated ntfy
+// subscriptions require a future device-scoped credential design rather than
+// leaking the daemon's publisher credential.
+type NtfySubscription struct {
+	ServerURL string `json:"server_url"`
+	Topic     string `json:"topic"`
+}
+
+// validate reports whether the channel can publish and issue private
+// subscriptions safely; SubmitDelivery and Pair both fail closed on it before
+// any write. A remote cleartext base would expose the capability topic even
+// without a publisher token, while URL credentials would be copied into the
+// pairing grant, so both are refused outright.
 func (c *ntfyChannel) validate() error {
 	base, err := parseHTTPURL(c.cfg.BaseURL)
 	if err != nil {
@@ -95,26 +106,64 @@ func (c *ntfyChannel) validate() error {
 	if _, err := parseHTTPURL(c.cfg.ClickBaseURL); err != nil {
 		return fmt.Errorf("ntfy click base URL: %w", err)
 	}
-	if len(c.cfg.TopicKey) == 0 {
-		return errors.New("ntfy topic key is empty")
+	if len(c.cfg.TopicKey) < sha256.Size {
+		return fmt.Errorf("ntfy topic key is %d bytes, want at least %d", len(c.cfg.TopicKey), sha256.Size)
 	}
-	if c.cfg.Token.Reveal() != "" && base.Scheme != "https" && !isLoopbackHost(base.Hostname()) {
-		return errors.New("ntfy token over cleartext non-loopback HTTP")
+	if base.Scheme != "https" && !isLoopbackHost(base.Hostname()) {
+		return errors.New("ntfy capability topic over cleartext non-loopback HTTP")
 	}
 	return nil
 }
 
-// parseHTTPURL accepts only an absolute http(s) URL with a host.
+// ntfySubscription returns exactly the address SubmitDelivery publishes to
+// for id. Pairing fails before consuming its code when the channel is absent
+// or invalid, so a successful grant never strands a device with an unusable
+// subscription.
+func (s *Service) ntfySubscription(id domain.DeviceID) (NtfySubscription, error) {
+	if s.ntfy == nil {
+		return NtfySubscription{}, errors.New("ntfy subscription: channel is not configured")
+	}
+	if err := s.ntfy.validate(); err != nil {
+		return NtfySubscription{}, fmt.Errorf("ntfy subscription: %w", err)
+	}
+	base, _ := parseHTTPURL(s.ntfy.cfg.BaseURL) // validate above proved this parse succeeds.
+	return NtfySubscription{
+		ServerURL: strings.TrimRight(base.String(), "/"),
+		Topic:     s.ntfy.topic(id),
+	}, nil
+}
+
+// parseHTTPURL accepts only a credential-free absolute http(s) base URL with
+// a host. Query and fragment syntax cannot be part of a base: string-appending
+// a topic or item path after either would route somewhere other than the
+// returned subscription or Click target.
 func parseHTTPURL(raw string) (*url.URL, error) {
 	if raw == "" {
 		return nil, errors.New("empty")
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("invalid URL syntax")
+	}
+	if u.User != nil {
+		return nil, errors.New("URL must not include userinfo")
 	}
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, fmt.Errorf("%q is not an absolute http(s) URL", raw)
+		return nil, errors.New("URL is not an absolute http(s) URL")
+	}
+	if port := u.Port(); port != "" {
+		value, err := strconv.Atoi(port)
+		if err != nil || value < 1 || value > 65535 {
+			return nil, errors.New("URL port is outside 1-65535")
+		}
+	} else if strings.HasSuffix(u.Host, ":") {
+		return nil, errors.New("URL port is empty")
+	}
+	if u.RawQuery != "" || u.ForceQuery {
+		return nil, errors.New("URL must not include a query")
+	}
+	if u.Fragment != "" || strings.Contains(raw, "#") {
+		return nil, errors.New("URL must not include a fragment")
 	}
 	return u, nil
 }

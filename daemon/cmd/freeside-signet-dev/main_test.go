@@ -19,6 +19,7 @@ func startHarness(t *testing.T) (*harness, readiness) {
 		DBPath:      t.TempDir() + "/signet.db",
 		ListenAddr:  "127.0.0.1:0",
 		ControlAddr: "127.0.0.1:0",
+		NtfyURL:     "http://127.0.0.1:1",
 	})
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -180,7 +181,18 @@ func TestControlSubmitDeliveryDrivesThePipeline(t *testing.T) {
 	}
 	clicksMu.Unlock()
 
-	_, bare := startHarness(t)
+	bareHarness, err := run(context.Background(), config{
+		DBPath: t.TempDir() + "/signet.db", ListenAddr: "127.0.0.1:0", ControlAddr: "127.0.0.1:0",
+	})
+	if err != nil {
+		t.Fatalf("run without ntfy: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := bareHarness.Close(); err != nil {
+			t.Errorf("Close bare harness: %v", err)
+		}
+	})
+	bare := bareHarness.readiness()
 	response, payload = postJSON(t, bare.ControlURL+"/control/deliveries", "",
 		map[string]string{"item_id": "item-notify", "device_id": deviceID})
 	if response.StatusCode != http.StatusServiceUnavailable {

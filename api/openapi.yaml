@@ -304,11 +304,13 @@ paths:
       security: []
       description: |
         Exchanges a short-lived pairing code (displayed on the daemon host,
-        plan §5.14) for a new device and its bearer token. The token appears
-        only in this response and is never retrievable again; the daemon
-        stores only its digest. Consumption is single-winner: simultaneous
-        attempts with one code yield one device (sync test 14), and an
-        expired or consumed code creates nothing (sync test 13).
+        plan §5.14) for a new device, its bearer token, and the device's
+        ntfy subscription. The token and subscription appear only in this
+        response and are never exposed through Device or the sync surfaces;
+        the daemon stores only the token's digest. Consumption is
+        single-winner: simultaneous attempts with one code yield one device
+        (sync test 14), and an expired or consumed code creates nothing
+        (sync test 13).
       requestBody:
         required: true
         description: The pairing code and the device's human label.
@@ -318,7 +320,9 @@ paths:
               $ref: "#/components/schemas/PairingRequest"
       responses:
         "201":
-          description: The paired device and its one-time-visible token.
+          description: >
+            The paired device, its one-time-visible token, and its private
+            ntfy subscription.
           content:
             application/json:
               schema:
@@ -909,10 +913,12 @@ components:
       type: object
       description: >
         The successful pairing exchange: the new device's snapshot and its
-        bearer token. This response is the token's only appearance, ever;
-        the daemon stores only its digest, so a lost token means revoking
-        the device and pairing again.
-      required: [device_token, device]
+        bearer token plus the device-scoped ntfy subscription. This response
+        is the only surface for either private value; neither is exposed on
+        Device or through sync, so another device cannot enumerate the topic.
+        The daemon stores only the token's digest, so a lost token means
+        revoking the device and pairing again.
+      required: [device_token, device, ntfy_subscription]
       additionalProperties: false
       properties:
         device_token:
@@ -924,6 +930,8 @@ components:
             Shown once; never retrievable again.
         device:
           $ref: "#/components/schemas/DeviceSnapshot"
+        ntfy_subscription:
+          $ref: "#/components/schemas/NtfySubscription"
       example:
         device_token: "fsd1.ZGV2aWNlLTE.3q2-8fPXm4kQzT1vY6wA9rB0cD5eF7gH8jK2lM4nP6s"
         device:
@@ -935,6 +943,27 @@ components:
             status: "active"
             paired_at: "2026-01-02T03:04:05Z"
             revoked_at: null
+        ntfy_subscription:
+          server_url: "https://ntfy.sh"
+          topic: "fs-4f18d17fc6a57b18b4e4fc8f2c3c85e4"
+
+    NtfySubscription:
+      type: object
+      description: >
+        Everything this device needs to subscribe for read-only notification
+        hints. The topic is a stable per-device capability derived under a
+        daemon-held key; it must be kept private and is never client-computable.
+      required: [server_url, topic]
+      additionalProperties: false
+      properties:
+        server_url:
+          type: string
+          format: uri
+          description: The ntfy server base URL to subscribe against.
+        topic:
+          type: string
+          pattern: '^fs-[0-9a-f]{32}$'
+          description: The device's private, unguessable ntfy topic.
 
     AttachmentReceipt:
       type: object

@@ -44,10 +44,12 @@ const deviceTokenPrefix = "fsd1"
 var ErrPairingRejected = errors.New("pairing code is unknown, expired, or already consumed")
 
 // PairingGrant is the successful pairing exchange, matching api/openapi.yaml:
-// the token's only appearance, ever, alongside the new device's snapshot.
+// the token and private ntfy subscription's only appearance, ever, alongside
+// the new device's snapshot.
 type PairingGrant struct {
-	DeviceToken string         `json:"device_token"`
-	Device      DeviceSnapshot `json:"device"`
+	DeviceToken      string           `json:"device_token"`
+	Device           DeviceSnapshot   `json:"device"`
+	NtfySubscription NtfySubscription `json:"ntfy_subscription"`
 }
 
 // DeviceSnapshot is a Device with its store-stamped sync metadata, matching
@@ -115,6 +117,10 @@ func (s *Service) Pair(ctx context.Context, plaintext, displayName string) (Pair
 	if err != nil {
 		return PairingGrant{}, fmt.Errorf("pair device: %w", err)
 	}
+	subscription, err := s.ntfySubscription(deviceID)
+	if err != nil {
+		return PairingGrant{}, fmt.Errorf("pair device: %w", err)
+	}
 
 	var grant PairingGrant
 	err = s.store.Write(ctx, func(tx *store.WriteTx) error {
@@ -163,7 +169,9 @@ func (s *Service) Pair(ctx context.Context, plaintext, displayName string) (Pair
 		if err != nil {
 			return err
 		}
-		grant = PairingGrant{DeviceToken: token, Device: deviceSnapshot(device, snap)}
+		grant = PairingGrant{
+			DeviceToken: token, Device: deviceSnapshot(device, snap), NtfySubscription: subscription,
+		}
 		return nil
 	})
 	if err != nil {

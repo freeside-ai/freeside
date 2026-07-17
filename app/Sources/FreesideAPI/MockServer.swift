@@ -84,6 +84,11 @@ public actor MockServer {
     /// digest keys the stored record.
     private var deviceIDsByToken: [String: String] = [:]
     private var pairedDeviceCount = 0
+    /// Pairing-grant test hooks. Defaults satisfy the contract; callers can
+    /// inject malformed values to exercise client-side returned-object gates.
+    private let pairingNtfyServerURL: String
+    private let pairingNtfyTopic: String?
+    private let pairingDeviceToken: String?
     /// The digest-addressed artifact bytes `getAttachment` serves
     /// (plan §4: cards render image attachments directly from the
     /// artifact store by digest). Content is immutable per digest, so
@@ -95,6 +100,9 @@ public actor MockServer {
         approvedRecipes: Set<String> = [AttentionFixtures.approvedRecipeDigest],
         authMode: AuthMode = .permissive,
         pairingCodes: [String: PairingCodeState] = [:],
+        pairingNtfyServerURL: String = "https://ntfy.example",
+        pairingNtfyTopic: String? = nil,
+        pairingDeviceToken: String? = nil,
         attachments: [String: Data] = AttentionFixtures.defaultAttachments()
     ) {
         for snapshot in items {
@@ -107,6 +115,9 @@ public actor MockServer {
         self.approvedRecipes = approvedRecipes
         self.authMode = authMode
         self.pairingCodes = pairingCodes
+        self.pairingNtfyServerURL = pairingNtfyServerURL
+        self.pairingNtfyTopic = pairingNtfyTopic
+        self.pairingDeviceToken = pairingDeviceToken
         attachmentsByDigest = attachments
     }
 
@@ -196,7 +207,13 @@ public actor MockServer {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
-        let token = "fsd1.\(idSegment).mock-secret-\(pairedDeviceCount)"
+        let secretSegment = Data(
+            repeating: UInt8(truncatingIfNeeded: pairedDeviceCount), count: 32
+        ).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let token = pairingDeviceToken ?? "fsd1.\(idSegment).\(secretSegment)"
         // Devices are synchronized entities (#64): pairing is a
         // client-visible write and increments the server revision.
         revision += 1
@@ -216,7 +233,15 @@ public actor MockServer {
         )
         devicesByID[deviceID] = snapshot
         deviceIDsByToken[token] = deviceID
-        return .init(device_token: token, device: snapshot)
+        let subscription = Components.Schemas.NtfySubscription(
+            server_url: pairingNtfyServerURL,
+            topic: pairingNtfyTopic ?? String(format: "fs-%032x", pairedDeviceCount)
+        )
+        return .init(
+            device_token: token,
+            device: snapshot,
+            ntfy_subscription: subscription
+        )
     }
 
     enum RevokeOutcome {

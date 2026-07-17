@@ -76,7 +76,7 @@ func newDeliveryFixture(t *testing.T) deliveryFixture {
 			BaseURL:      server.URL,
 			Client:       server.Client(),
 			Token:        signet.Secret(secretValue),
-			TopicKey:     []byte("signet-test-topic-key"),
+			TopicKey:     testTopicKey,
 			ClickBaseURL: "https://daemon.example/",
 		}),
 	)
@@ -377,6 +377,33 @@ func TestSubmitDeliveryTopicIsDeterministicPerDevice(t *testing.T) {
 	}
 }
 
+// TestPairingTopicMatchesDeliveryTopic is issue #131's round trip: the topic
+// handed to a newly paired device is exactly the topic the delivery pipeline
+// later publishes to for that device, not a duplicated client-facing
+// derivation that can drift.
+func TestPairingTopicMatchesDeliveryTopic(t *testing.T) {
+	ctx := context.Background()
+	f := newDeliveryFixture(t)
+	code, _, err := f.service.MintPairingCode(ctx)
+	if err != nil {
+		t.Fatalf("MintPairingCode: %v", err)
+	}
+	grant, err := f.service.Pair(ctx, code, "Notification subscriber")
+	if err != nil {
+		t.Fatalf("Pair: %v", err)
+	}
+	if _, err := f.service.SubmitDelivery(ctx, f.item.ID, grant.Device.Device.ID); err != nil {
+		t.Fatalf("SubmitDelivery: %v", err)
+	}
+	requests := f.ntfy.recorded(t)
+	if len(requests) != 1 {
+		t.Fatalf("published %d notifications, want 1", len(requests))
+	}
+	if got, want := requests[0].topic, grant.NtfySubscription.Topic; got != want {
+		t.Errorf("published topic = %q, pairing grant topic = %q", got, want)
+	}
+}
+
 // TestSubmitDeliverySurvivesCallerCancellation: once the submitted row is
 // durable, the provider call and the acceptance record run under a
 // daemon-owned context, so a caller abandoning its request mid-publish (an
@@ -460,8 +487,9 @@ func TestSubmitDeliveryFailsClosed(t *testing.T) {
 
 	t.Run("unconfigured channel", func(t *testing.T) {
 		f := newFixture(t)
+		service := signet.NewService(f.store, signet.WithClock(func() time.Time { return *f.now }))
 		before := f.revision(t)
-		if _, err := f.service.SubmitDelivery(ctx, f.item.ID, f.device.ID); !errors.Is(err, signet.ErrNotifierUnavailable) {
+		if _, err := service.SubmitDelivery(ctx, f.item.ID, f.device.ID); !errors.Is(err, signet.ErrNotifierUnavailable) {
 			t.Fatalf("SubmitDelivery error = %v, want ErrNotifierUnavailable", err)
 		}
 		if after := f.revision(t); after != before {
@@ -472,14 +500,37 @@ func TestSubmitDeliveryFailsClosed(t *testing.T) {
 	t.Run("misconfigured channel", func(t *testing.T) {
 		for name, cfg := range map[string]signet.NtfyConfig{
 			"malformed base URL": {
-				BaseURL: "not a url", TopicKey: []byte("k"), ClickBaseURL: "https://daemon.example",
+				BaseURL: "not a url", TopicKey: testTopicKey, ClickBaseURL: "https://daemon.example",
 			},
 			"relative base URL": {
-				BaseURL: "ntfy.example/path", TopicKey: []byte("k"), ClickBaseURL: "https://daemon.example",
+				BaseURL: "ntfy.example/path", TopicKey: testTopicKey, ClickBaseURL: "https://daemon.example",
 			},
-			"token over cleartext non-loopback": {
-				BaseURL: "http://ntfy.internal", Token: signet.Secret(secretValue),
-				TopicKey: []byte("k"), ClickBaseURL: "https://daemon.example",
+			"userinfo in base URL": {
+				BaseURL: "https://publisher-value@ntfy.example", TopicKey: testTopicKey,
+				ClickBaseURL: "https://daemon.example",
+			},
+			"cleartext non-loopback": {
+				BaseURL: "http://ntfy.internal", TopicKey: testTopicKey, ClickBaseURL: "https://daemon.example",
+			},
+			"query in base URL": {
+				BaseURL: "https://ntfy.example/base?route=shared", TopicKey: testTopicKey,
+				ClickBaseURL: "https://daemon.example",
+			},
+			"fragment in base URL": {
+				BaseURL: "https://ntfy.example/base#shared", TopicKey: testTopicKey,
+				ClickBaseURL: "https://daemon.example",
+			},
+			"out-of-range base port": {
+				BaseURL: "https://ntfy.example:99999", TopicKey: testTopicKey,
+				ClickBaseURL: "https://daemon.example",
+			},
+			"zero click port": {
+				BaseURL: "https://ntfy.example", TopicKey: testTopicKey,
+				ClickBaseURL: "https://daemon.example:0",
+			},
+			"weak topic key": {
+				BaseURL: "https://ntfy.example", TopicKey: []byte("weak"),
+				ClickBaseURL: "https://daemon.example",
 			},
 		} {
 			t.Run(name, func(t *testing.T) {
