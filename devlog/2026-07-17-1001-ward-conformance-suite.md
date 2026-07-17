@@ -758,6 +758,17 @@ The older ownership-collision thread is resolved by the round-29
 invocation-label and creation-fingerprint design, including container and
 volume regressions that prove foreign same-name objects are left untouched.
 
+## Automated review round 31
+
+The manifest collision fix exposed its fixed-layout sibling: markers such as
+`blob` or `json` do not occur in the manifest value but necessarily occur in
+the released `blobs/sha256/...` and `manifest.json` paths. The construction
+oracle now includes the exact conformant manifest bytes, fixed layout names,
+and run-specific blob paths. Full additionally scans every relative path under
+the released directory, so an exporter/layout change cannot add marker-bearing
+path metadata without failing containment. Construction and path-walk
+regressions cover both cited tokens and the digest directory.
+
 **Accepted by decision.** The marker value appears in the seed/audit
 container argv; this is safe because the marker is an inert fake credential
 by contract (the whole point of a *fake* marker is to test containment

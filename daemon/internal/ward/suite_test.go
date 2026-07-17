@@ -1065,6 +1065,8 @@ func TestNewSuiteValidation(t *testing.T) {
 		{"marker collides with manifest schema", func(fx *SuiteFixture) { fx.CredentialMarker = "version" }},
 		{"marker collides with manifest kind", func(fx *SuiteFixture) { fx.CredentialMarker = "regular" }},
 		{"marker collides with digest vocabulary", func(fx *SuiteFixture) { fx.CredentialMarker = "sha256" }},
+		{"marker collides with manifest filename", func(fx *SuiteFixture) { fx.CredentialMarker = "json" }},
+		{"marker collides with blob directory", func(fx *SuiteFixture) { fx.CredentialMarker = "blob" }},
 		{"credential target shadows audit marker path", func(fx *SuiteFixture) { fx.CredentialTarget = auditMarkerPath("conf-run") }},
 		{"bad run id", func(fx *SuiteFixture) { fx.RunID = "Conf/Run" }},
 	}
@@ -1164,6 +1166,29 @@ func TestMarkerScanWriter(t *testing.T) {
 			t.Error("marker in a single write not found")
 		}
 	})
+}
+
+func TestDirMetadataContainsMarker(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "blobs", "sha256"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		marker string
+		want   bool
+	}{
+		{"blob", true},
+		{"sha256", true},
+		{"not-present", false},
+	} {
+		got, err := dirMetadataContainsMarker(dir, tc.marker)
+		if err != nil {
+			t.Fatalf("dirMetadataContainsMarker(%q) = %v", tc.marker, err)
+		}
+		if got != tc.want {
+			t.Errorf("dirMetadataContainsMarker(%q) = %v, want %v", tc.marker, got, tc.want)
+		}
+	}
 }
 
 func TestAuditArchiveHasSentinel(t *testing.T) {

@@ -186,10 +186,7 @@ func manifestHasContent(entries []export.Entry, path, content string) bool {
 }
 
 // expectedWriterManifest is the exact metadata shape Full accepts from the
-// suite-owned writer. NewSuite uses its serialized form to reject a fake
-// credential marker that necessarily collides with generated manifest bytes;
-// otherwise skipping manifest metadata during the content scan would turn a
-// known collision into a false containment proof.
+// suite-owned writer.
 func expectedWriterManifest(runID string) export.Manifest {
 	entry := func(name, content string) export.Entry {
 		mode := "0644"
@@ -211,6 +208,35 @@ func expectedWriterManifest(runID string) export.Manifest {
 			entry(writerResultPath, writerSentinel(runID)+"\n"),
 		},
 	}
+}
+
+// expectedWriterExportMetadata serializes every relative path and metadata
+// byte the conformant released layout necessarily carries. NewSuite rejects a
+// marker that collides with this oracle: Full scans agent blob content and all
+// released paths, but intentionally does not treat gate-generated manifest
+// bytes as credential material, so a known fixed collision is an invalid
+// fixture rather than evidence for or against containment.
+func expectedWriterExportMetadata(runID string) ([]byte, error) {
+	manifest := expectedWriterManifest(runID)
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		return nil, err
+	}
+	var metadata bytes.Buffer
+	metadata.Write(raw)
+	for _, name := range []string{"manifest.json", "blobs", "blobs/sha256"} {
+		metadata.WriteByte('\n')
+		metadata.WriteString(name)
+	}
+	for _, entry := range manifest.Entries {
+		if entry.Digest == nil {
+			continue
+		}
+		metadata.WriteByte('\n')
+		metadata.WriteString("blobs/sha256/")
+		metadata.WriteString(strings.TrimPrefix(string(*entry.Digest), "sha256:"))
+	}
+	return metadata.Bytes(), nil
 }
 
 // auditSentinel is the run-unique token the detached-volume audit writes into
@@ -281,12 +307,12 @@ func NewSuite(b *Backend, fx SuiteFixture) (*Suite, error) {
 			return nil, fmt.Errorf("%w: SuiteFixture.CredentialMarker %q collides with the generated suite string %q", ErrInvalidConfig, fx.CredentialMarker, reserved)
 		}
 	}
-	manifest, err := json.Marshal(expectedWriterManifest(fx.RunID))
+	metadata, err := expectedWriterExportMetadata(fx.RunID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: encode expected writer manifest: %w", ErrInvalidConfig, err)
+		return nil, fmt.Errorf("%w: encode expected writer export metadata: %w", ErrInvalidConfig, err)
 	}
-	if bytes.Contains(manifest, []byte(fx.CredentialMarker)) {
-		return nil, fmt.Errorf("%w: SuiteFixture.CredentialMarker %q collides with generated manifest metadata", ErrInvalidConfig, fx.CredentialMarker)
+	if bytes.Contains(metadata, []byte(fx.CredentialMarker)) {
+		return nil, fmt.Errorf("%w: SuiteFixture.CredentialMarker %q collides with generated export metadata", ErrInvalidConfig, fx.CredentialMarker)
 	}
 	return &Suite{b: b, fx: fx, agentCommand: fx.agentCommand(b.cfg)}, nil
 }
@@ -671,6 +697,13 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 	}
 	if found {
 		return failf(CheckCredentialContainment, "credential marker present in the released export")
+	}
+	found, err = dirMetadataContainsMarker(res.ExportDir, s.fx.CredentialMarker)
+	if err != nil {
+		return failf(CheckCredentialContainment, "scan released export paths for credential marker: %v", err)
+	}
+	if found {
+		return failf(CheckCredentialContainment, "credential marker present in released export path metadata")
 	}
 	// The suite writer also writes a nested workspace file, so the deterministic
 	// directory tree must survive the export: a lossy exporter that drops nested
@@ -1238,6 +1271,33 @@ func blobsContainMarker(exportDir, marker string) (bool, error) {
 		return false, err
 	}
 	return dirContainsMarker(blobs, marker)
+}
+
+// dirMetadataContainsMarker scans every released relative path, including the
+// fixed manifest/blob layout outside the agent-authored manifest. The host
+// temp directory itself is excluded. WalkDir does not follow symlinks, so an
+// entry cannot redirect this metadata-only traversal.
+func dirMetadataContainsMarker(dir, marker string) (bool, error) {
+	want := []byte(marker)
+	found := false
+	err := filepath.WalkDir(dir, func(p string, _ os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if p == dir {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		if bytes.Contains([]byte(filepath.ToSlash(rel)), want) {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found, err
 }
 
 // dirContainsMarker reports whether any file under dir contains the marker.
