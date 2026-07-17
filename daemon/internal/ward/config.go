@@ -139,12 +139,12 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: ExporterImage %q is not digest-pinned", ErrInvalidConfig, cfg.ExporterImage)
 	case len(cfg.ExporterCommand) == 0:
 		return fmt.Errorf("%w: ExporterCommand is required", ErrInvalidConfig)
-	case !strings.HasPrefix(cfg.WorkspaceTarget, "/"):
-		return fmt.Errorf("%w: WorkspaceTarget %q is not absolute", ErrInvalidConfig, cfg.WorkspaceTarget)
-	case !strings.HasPrefix(cfg.HandoffDir, "/"):
-		return fmt.Errorf("%w: HandoffDir %q is not absolute", ErrInvalidConfig, cfg.HandoffDir)
-	case !strings.HasPrefix(cfg.ProofPath, "/"):
-		return fmt.Errorf("%w: ProofPath %q is not absolute", ErrInvalidConfig, cfg.ProofPath)
+	case !cleanAbs(cfg.WorkspaceTarget):
+		return fmt.Errorf("%w: WorkspaceTarget %q is not a clean absolute non-root path", ErrInvalidConfig, cfg.WorkspaceTarget)
+	case !cleanAbs(cfg.HandoffDir):
+		return fmt.Errorf("%w: HandoffDir %q is not a clean absolute non-root path", ErrInvalidConfig, cfg.HandoffDir)
+	case !cleanAbs(cfg.ProofPath):
+		return fmt.Errorf("%w: ProofPath %q is not a clean absolute non-root path", ErrInvalidConfig, cfg.ProofPath)
 	case cfg.MaxExportBytes < 0:
 		return fmt.Errorf("%w: MaxExportBytes %d is negative", ErrInvalidConfig, cfg.MaxExportBytes)
 	case cfg.MaxArchiveBytes < 0:

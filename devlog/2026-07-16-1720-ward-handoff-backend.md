@@ -651,3 +651,20 @@ Round 22 raised one P2 at the returned-object (inspect) trust boundary:
   `ReadOnly` explicitly and never conflicts). Regressions: a `toMount` access
   table (ro / rw / neither / both, order-independent), plus contradictory-access
   cases in the agent and exporter allowlist violation tables.
+
+Round 23 raised one P2 spanning a config-validation gap and a latent
+functional break:
+
+- *P2: unclean workspace/handoff/proof paths were accepted.* `validate` checked
+  only a leading slash, so a common operator variant like `HandoffDir:
+  "/handoff/"` passed, yet `extractHandoff` compares the unnormalized
+  `handoffRel` (`"handoff/"`) against `path.Clean`ed tar names, so no exporter
+  entry ever matched and every handoff failed export verification. The same
+  laxity let `.`/`..` segments slip past the string-prefix `disjointPaths`
+  nesting check that guards proof/manifest shadowing. All three paths are now
+  required to be clean absolute non-root paths via the existing `cleanAbs`
+  predicate (`path.Clean(p) == p`, absolute, non-root), which rejects trailing
+  slashes, `.`/`..`, double slashes, and root; `disjointPaths` consequently only
+  ever sees normalized paths, so its prefix comparison is sound. Regressions:
+  trailing-slash, dotdot, double-slash, and root cases across the three fields
+  in the config-validate table.
