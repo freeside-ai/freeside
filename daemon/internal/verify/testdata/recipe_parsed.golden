@@ -1,0 +1,16 @@
+{
+  "commands": [
+    [
+      "go",
+      "test",
+      "./..."
+    ],
+    [
+      "go",
+      "vet",
+      "./..."
+    ]
+  ],
+  "capture": "none",
+  "digest": "sha256:4475ce0c1dfc3c4d825fabbfb69656be25aeba8000b45153b3b9b920414fb7c9"
+}

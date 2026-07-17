@@ -1,0 +1,22 @@
+[
+  {
+    "path": "go.mod",
+    "kind": "verification_control_path",
+    "detail": "modified"
+  },
+  {
+    "path": "Makefile",
+    "kind": "verification_control_path",
+    "detail": "deleted"
+  },
+  {
+    "path": ".freeside/verify.json",
+    "kind": "verification_control_path",
+    "detail": "modified"
+  },
+  {
+    "path_hex": "676f2e6d6f64ff",
+    "kind": "verification_control_path",
+    "detail": "added; path is not canonical UTF-8, so it cannot be honestly matched against the class"
+  }
+]

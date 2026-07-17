@@ -1,0 +1,7 @@
+$ go test ./...
+ok  	example.test	0.01s
+exit 0
+
+$ go vet ./...
+exit 0
+
