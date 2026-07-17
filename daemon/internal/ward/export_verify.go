@@ -250,6 +250,16 @@ func (b *Backend) verifyManifest(destDir string) (export.Manifest, error) {
 	if int64(len(raw)) > b.cfg.MaxManifestBytes {
 		return manifest, failf(CheckExportVerification, "manifest exceeds the %d-byte cap", b.cfg.MaxManifestBytes)
 	}
+	// The raw manifest bytes are the artifact released to the gauntlet, but
+	// encoding/json is last-value-wins on duplicate members, so a hostile
+	// manifest with a duplicate key (two `path` or `digest` entries) would
+	// validate as its collapsed struct while the released bytes stay
+	// contradictory. Reject non-canonical duplicate keys before decoding, the
+	// same structural gate the runtime decoders apply, so the validated view
+	// and the released bytes cannot disagree.
+	if err := rejectDuplicateJSONKeys(raw); err != nil {
+		return manifest, failf(CheckExportVerification, "manifest is not canonical %s JSON", export.ManifestVersion)
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&manifest); err != nil {

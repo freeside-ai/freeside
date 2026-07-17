@@ -534,6 +534,51 @@ func TestVerifyExportRedactsBlobDigest(t *testing.T) {
 	}
 }
 
+// TestVerifyExportRejectsDuplicateManifestKeys proves a manifest whose raw
+// bytes carry a duplicate key fails closed even though encoding/json would
+// collapse it to a valid last-value-wins struct with a matching blob. The raw
+// bytes are the artifact released to the gauntlet, so the validated view must
+// not be allowed to diverge from them.
+func TestVerifyExportRejectsDuplicateManifestKeys(t *testing.T) {
+	sum := sha256.Sum256(fixtureBlob)
+	hexDigest := hex.EncodeToString(sum[:])
+	mode := "0644"
+	size := int64(len(fixtureBlob))
+	digest := export.Digest("sha256:" + hexDigest)
+	m := export.Manifest{
+		Version: export.ManifestVersion,
+		Entries: []export.Entry{{Path: "a.txt", Kind: export.EntryRegular, Mode: &mode, Size: &size, Digest: &digest}},
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A contradictory decoy digest before the real one: last-value-wins keeps
+	// the real (blob-matching) digest, so the manifest would otherwise validate;
+	// only the duplicate-key gate rejects it.
+	marker := `"digest":"` + string(digest) + `"`
+	dup := strings.Replace(string(raw), marker, `"digest":"sha256:`+strings.Repeat("0", 64)+`",`+marker, 1)
+	if dup == string(raw) {
+		t.Fatal("failed to inject a duplicate digest key")
+	}
+	entries := []tarEntry{
+		{name: "handoff-proof.txt", body: validProof()},
+		{name: "handoff/", typeflag: tar.TypeDir},
+		{name: "handoff/manifest.json", body: []byte(dup)},
+		{name: "handoff/blobs/", typeflag: tar.TypeDir},
+		{name: "handoff/blobs/sha256/", typeflag: tar.TypeDir},
+		{name: "handoff/blobs/sha256/" + hexDigest, body: fixtureBlob},
+	}
+	_, err = runVerifyExport(t, newTestBackend(t), entries)
+	var cf *ConformanceFailure
+	if !errors.As(err, &cf) || cf.Check != CheckExportVerification {
+		t.Fatalf("verifyExport = %v, want export_verification failure", err)
+	}
+	if !strings.Contains(cf.Reason, "canonical") {
+		t.Errorf("reason = %q, want the non-canonical manifest failure", cf.Reason)
+	}
+}
+
 // TestVerifyExportManifestCap proves a manifest larger than MaxManifestBytes
 // fails closed instead of being read whole into the daemon heap.
 func TestVerifyExportManifestCap(t *testing.T) {
