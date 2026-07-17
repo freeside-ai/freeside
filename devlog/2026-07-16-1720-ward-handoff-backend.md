@@ -745,3 +745,50 @@ Runtime interface changes to stop and route through a spine-owned contract unit,
 so this is not folded into PR #129. Follow-up: #138. Revisit this backend's
 merge-readiness only after cleanup authority binds to immutable identity or an
 atomic deletion precondition.
+
+Rounds 26-27 raised one identity-leak class and one cleanup gap:
+
+- *P2: identity-disagreement decode errors echoed untrusted runtime IDs.* When
+  a container/volume list row or an inspect report carried a top-level identity
+  that disagreed with its configuration identity, `decodeContainerList`,
+  `decodeVolumeList`, and `decodeInspect` formatted the raw observed IDs into the
+  error, which `verifyContainerAbsent`/`teardown`/`waitStopped` wrap into
+  `ConformanceFailure.Reason`. A user-created object whose name embeds a copied
+  token would then reach the no-credential-material reason. The four errors now
+  keep only the trusted requested id (a gate `namesFor(RunID)` output) and the
+  entry index; the untrusted observed identity is dropped. This completes the
+  identity-echo class the earlier `decodeInspect` identity work started: the
+  allowlist failures in `conformance.go` were already categorical, so the
+  decoders were the last reason-reachable echo. A single test asserts none of the
+  four disagreement errors contain the observed identity.
+- *P1: a full container-list failure left an ambiguous create restartable.* The
+  round-16 list-failure fallback reaped only names whose create had succeeded and
+  deliberately skipped ambiguous creates, on the assumption they still required
+  list/label evidence. But the success-list branch already proves ambiguous
+  ownership by inspect (`containerHasOwnership`), and inspect is available even
+  when the full list is not, so a single unrelated malformed row could leave the
+  credential-mounted writer restartable. Teardown now reaps an ambiguous exact
+  name on list failure through `reapAmbiguousOwnedContainer`, which reaps only
+  after a fresh inspect matches the exact id, observes labels, and carries this
+  invocation's unpredictable 128-bit ownership label; a foreign same-name object
+  lacks the label and is left untouched. Volumes have no per-object inspect in the
+  Runtime seam, so the ambiguous-volume-on-list-failure case genuinely cannot
+  prove ownership and correctly stays list-gated; a passive volume is not a
+  restartable writer either. This does not touch the #138 blocker, whose risk is
+  the label-free known-owned path; the ambiguous path added here is strictly
+  label-gated. Regressions prove an ambiguous agent and exporter are reaped by
+  exact name when the reap list fails, and that an unlabeled same-name object is
+  left untouched.
+
+The required refute-first pass (credential-leak and trust-boundary risk classes)
+tried to break both fixes and confirmed them: no other reason-reachable error
+echoes an untrusted runtime identity; the retained requested id is gate-generated
+at every `decodeInspect`/`Inspect` caller; the ambiguous reap cannot delete a
+foreign object without the unforgeable per-invocation label, reaps a strict
+superset of the old branch, uses the same ownership predicate as the success
+path, and cannot double-reap or falsely report a survivor. One pre-existing,
+unworsened observation was rejected by verification and is recorded so it is not
+re-raised: the `reportStderr=true` CLI calls (inspect/list) fold a capped stderr
+tail into their error, but only `create` can echo a caller credential and it
+passes `reportStderr=false`, and identity-mismatch paths exit 0 so never reach
+that stderr fold.
