@@ -146,12 +146,14 @@ func (o Options) validate() error {
 }
 
 // validRecipePath keeps the daemon-supplied recipe path inside the
-// tree and representable in both the <commit>:<path> spec and the
-// alias-normalized pattern match: relative, slash-separated, no empty
-// or dot components, and no colon (the spec separator) or backslash.
+// tree and representable everywhere it is used: relative,
+// slash-separated, no empty or dot components, no colon (the alias
+// normalizer's ADS separator) or backslash, and no glob metacharacters
+// (the path joins the verification-control pattern set as a literal;
+// an unmatchable pattern would fail open).
 func validRecipePath(p string) error {
-	if p == "" || strings.HasPrefix(p, "/") || strings.ContainsAny(p, ":\\") {
-		return fmt.Errorf("must be a relative slash path without colon or backslash")
+	if p == "" || strings.HasPrefix(p, "/") || strings.ContainsAny(p, `:\*?[]`) {
+		return fmt.Errorf("must be a relative slash path without colon, backslash, or glob metacharacters")
 	}
 	for _, comp := range strings.Split(p, "/") {
 		if comp == "" || comp == "." || comp == ".." {

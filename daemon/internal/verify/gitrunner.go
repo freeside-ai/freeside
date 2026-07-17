@@ -167,42 +167,50 @@ type blobState int
 const (
 	// blobPresent: a regular blob within the size cap; content returned.
 	blobPresent blobState = iota
-	// blobAbsent: the path resolves to no object. A plumbing failure on
-	// the type probe is classified here deliberately: for the trusted
-	// base read absence fails closed (ErrRecipeUnreadable), and for the
-	// candidate-head read it raises a divergence finding, so a masked
-	// failure still lands on the safe side in both directions.
+	// blobAbsent: the tree genuinely holds nothing at the path. This is
+	// distinguished from a plumbing failure: ls-tree exits zero with
+	// empty output for a missing path and non-zero on a real failure,
+	// so a transient error can never masquerade as absence and silently
+	// suppress a divergence flag (refute-pass finding).
 	blobAbsent
-	// blobNotRegular: the path resolves to a tree or other non-blob.
+	// blobNotRegular: the path resolves to a tree, a symlink, or another
+	// non-regular entry; there are no regular content bytes to compare
+	// or trust.
 	blobNotRegular
 	// blobTooLarge: a blob beyond the read cap; content not read.
 	blobTooLarge
 )
 
-// blobAt reads the blob at <commitSHA>:<path>, bounded by max bytes.
-// commitSHA and path are daemon-supplied (validated options), never
-// candidate bytes, so composing the spec as an argument is safe.
+// blobAt reads the regular blob at path in commitSHA's tree, bounded by
+// max bytes. commitSHA and path are daemon-supplied (validated
+// options), never candidate bytes; GIT_LITERAL_PATHSPECS pins the path
+// argument as a literal name. Plumbing failures propagate as errors.
 func (g *gitRunner) blobAt(ctx context.Context, commitSHA, path string, max int64) ([]byte, blobState, error) {
-	spec := commitSHA + ":" + path
-	out, err := g.run(ctx, nil, "cat-file", "-t", spec)
-	if err != nil {
-		return nil, blobAbsent, nil
-	}
-	if t := strings.TrimSpace(string(out)); t != "blob" {
-		return nil, blobNotRegular, nil
-	}
-	out, err = g.run(ctx, nil, "cat-file", "-s", spec)
+	out, err := g.run(ctx, nil, "ls-tree", "-z", "-l", "--full-tree", commitSHA, "--", path)
 	if err != nil {
 		return nil, blobAbsent, err
 	}
-	size, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+	rec, _, _ := strings.Cut(string(out), "\x00")
+	if rec == "" {
+		return nil, blobAbsent, nil
+	}
+	meta, _, ok := strings.Cut(rec, "\t")
+	fields := strings.Fields(meta)
+	if !ok || len(fields) != 4 {
+		return nil, blobAbsent, fmt.Errorf("unparseable ls-tree record %q: %w", rec, ErrGitPlumbing)
+	}
+	mode, objectType, oid, sizeField := fields[0], fields[1], fields[2], fields[3]
+	if objectType != "blob" || (mode != "100644" && mode != "100755") {
+		return nil, blobNotRegular, nil
+	}
+	size, err := strconv.ParseInt(sizeField, 10, 64)
 	if err != nil {
-		return nil, blobAbsent, fmt.Errorf("unparseable cat-file -s output %q: %w", out, ErrGitPlumbing)
+		return nil, blobAbsent, fmt.Errorf("unparseable ls-tree size %q: %w", sizeField, ErrGitPlumbing)
 	}
 	if size > max {
 		return nil, blobTooLarge, nil
 	}
-	content, err := g.run(ctx, nil, "cat-file", "blob", spec)
+	content, err := g.run(ctx, nil, "cat-file", "blob", oid)
 	if err != nil {
 		return nil, blobAbsent, err
 	}

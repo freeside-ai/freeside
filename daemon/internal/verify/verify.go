@@ -50,6 +50,16 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
+	// Enforce both bindings first: everything after this reads the
+	// candidate and the base by these exact SHAs, so an unheld head or
+	// a base that is not the named commit fails closed before any
+	// recipe or tree work (materialize re-checks the head).
+	if err := g.verifyHead(ctx, opts.HeadSHA); err != nil {
+		return Result{}, err
+	}
+	if err := verifyBase(ctx, g, opts.BaseSHA); err != nil {
+		return Result{}, err
+	}
 	trusted, err := loadTrustedRecipeBytes(ctx, g, opts.RecipeSource, opts.BaseSHA, opts.RecipePath, opts.Policy.MaxRecipeBytes)
 	if err != nil {
 		return Result{}, err
@@ -59,7 +69,17 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 		return Result{}, err
 	}
 	recipeDigest := RecipeDigest(trusted)
-	findings := flagControlPaths(opts.Changes, opts.Policy.ExtraVerificationControlPatterns, recipe.CommandPaths(), opts.RecipePath)
+	commandPaths := recipe.CommandPaths()
+	// Fail closed on a symlink command entrypoint. exec follows a
+	// symlink to its target, so the executed control surface would be
+	// the target, not the recorded lexical path, and a candidate change
+	// to that target would go unflagged. Resolving symlink chains in the
+	// tree is disproportionate for a trusted recipe, so the recipe must
+	// name a regular file directly.
+	if err := g.rejectSymlinkEntrypoints(ctx, opts.HeadSHA, commandPaths); err != nil {
+		return Result{}, err
+	}
+	findings := flagControlPaths(opts.Changes, opts.Policy.ExtraVerificationControlPatterns, commandPaths, opts.RecipePath)
 	divergence, err := recipeDivergence(ctx, g, opts.RecipeSource, opts.HeadSHA, opts.RecipePath, trusted, opts.Policy.MaxRecipeBytes)
 	if err != nil {
 		return Result{}, err
@@ -95,6 +115,56 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 		TranscriptTruncated: transcript.truncated,
 		Evidence:            evidence,
 	}, nil
+}
+
+// rejectSymlinkEntrypoints fails closed if any command path, or any of
+// its directory prefixes, is a symlink in the candidate head's tree
+// (mode 120000). exec follows a symlink whether it is the final
+// component (`./run-check` -> `scripts/verify.sh`) or a prefix
+// directory (`./run-check/verify.sh` with `run-check` -> `scripts`), so
+// in either case the executed control surface is a target the recorded
+// lexical path does not name. commitSHA and the paths are daemon-derived
+// (validated options and the trusted recipe's own argv), never
+// candidate bytes, so composing the ls-tree pathspec is safe;
+// GIT_LITERAL_PATHSPECS (the runner env) pins each path as a literal
+// name.
+func (g *gitRunner) rejectSymlinkEntrypoints(ctx context.Context, commitSHA string, commandPaths []string) error {
+	checked := map[string]bool{}
+	for _, p := range commandPaths {
+		segs := strings.Split(p, "/")
+		for i := range segs {
+			prefix := strings.Join(segs[:i+1], "/")
+			if checked[prefix] {
+				continue
+			}
+			checked[prefix] = true
+			symlink, err := g.isTreeSymlink(ctx, commitSHA, prefix)
+			if err != nil {
+				return err
+			}
+			if symlink {
+				return fmt.Errorf("recipe command entrypoint %q traverses symlink %q; name the target file directly: %w", p, prefix, ErrSymlinkEntrypoint)
+			}
+		}
+	}
+	return nil
+}
+
+// isTreeSymlink reports whether path is a symlink entry (mode 120000)
+// in commitSHA's tree. An absent path is not a symlink (a
+// candidate-added path is flagged as a change elsewhere).
+func (g *gitRunner) isTreeSymlink(ctx context.Context, commitSHA, path string) (bool, error) {
+	out, err := g.run(ctx, nil, "ls-tree", "-z", "--full-tree", commitSHA, "--", path)
+	if err != nil {
+		return false, err
+	}
+	rec, _, _ := strings.Cut(string(out), "\x00")
+	if rec == "" {
+		return false, nil
+	}
+	meta, _, _ := strings.Cut(rec, "\t")
+	fields := strings.Fields(meta)
+	return len(fields) >= 1 && fields[0] == "120000", nil
 }
 
 // runRecipe executes the trusted recipe's commands in order, fail-fast:

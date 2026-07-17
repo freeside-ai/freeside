@@ -176,6 +176,7 @@ func TestVerifyInvalidOptions(t *testing.T) {
 		{"absolute recipe path", func(o Options) Options { o.RecipePath = "/etc/recipe"; return o }},
 		{"dotdot recipe path", func(o Options) Options { o.RecipePath = "../verify.json"; return o }},
 		{"colon recipe path", func(o Options) Options { o.RecipePath = "a:b.json"; return o }},
+		{"glob recipe path", func(o Options) Options { o.RecipePath = "recipes/*.json"; return o }},
 		{"negative cap", func(o Options) Options { o.Policy.MaxRecipeBytes = -1; return o }},
 		{"negative timeout", func(o Options) Options { o.Policy.CommandTimeout = -1; return o }},
 		{"bad widening glob", func(o Options) Options {
@@ -302,4 +303,83 @@ func (r *sequencedRoom) Run(_ context.Context, workdir string, _ []string) (Step
 	r.onRun(r.n, workdir)
 	r.n++
 	return StepResult{Output: []byte("ok\n")}, nil
+}
+
+// TestVerifyBaseMustBeACommit is the Codex-review regression: ls-tree
+// accepts any tree-ish, so a 40-hex tree object passed as BaseSHA would
+// silently serve as the recipe source while the report claims it as the
+// enforced base commit. It must fail closed instead.
+func TestVerifyBaseMustBeACommit(t *testing.T) {
+	checkout, opts, room := verifyFixture(t, map[string]string{"main.go": "package main\n"}, nil)
+	treeSHA := runGit(t, checkout, "rev-parse", opts.BaseSHA+"^{tree}")
+	opts.BaseSHA = treeSHA
+	_, err := Verify(context.Background(), checkout, opts)
+	if !errors.Is(err, ErrBaseMismatch) {
+		t.Fatalf("err = %v, want ErrBaseMismatch", err)
+	}
+	if len(room.runs) != 0 {
+		t.Errorf("commands ran despite the tree-as-base: %v", room.runs)
+	}
+}
+
+// TestVerifyRejectsSymlinkEntrypoint is the Codex-review regression: a
+// recipe entrypoint that is a repo-local symlink is executed by
+// following it to its target, so the target (not the lexical link) is
+// the real control surface; verification fails closed rather than
+// silently flagging only the link.
+func TestVerifyRejectsSymlinkEntrypoint(t *testing.T) {
+	dir, _ := initRepo(t, map[string]string{"scripts/verify.sh": "#!/bin/sh\ntrue\n"})
+	if err := os.Symlink("scripts/verify.sh", filepath.Join(dir, "run-check")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-q", "-m", "base+symlink")
+	base := runGit(t, dir, "rev-parse", "HEAD")
+	head := commitCandidate(t, dir, base, map[string]string{"main.go": "package main\n"})
+
+	room := &recordingRoom{}
+	opts := Options{
+		HeadSHA: head, BaseSHA: base,
+		InvocationID: domain.InvocationID("inv-1"),
+		// A config recipe whose entrypoint is the repo-local symlink.
+		RecipeSource: ConfigRecipe([]byte(`{"commands": ["./run-check"], "capture": "none"}`)),
+		Room:         room,
+	}
+	_, err := Verify(context.Background(), dir, opts)
+	if !errors.Is(err, ErrSymlinkEntrypoint) {
+		t.Fatalf("err = %v, want ErrSymlinkEntrypoint", err)
+	}
+	if len(room.runs) != 0 {
+		t.Errorf("commands ran despite the symlink entrypoint: %v", room.runs)
+	}
+}
+
+// TestVerifyRejectsSymlinkPrefixEntrypoint is the Codex-review
+// regression: a recipe entrypoint that traverses a symlinked directory
+// prefix (`./run-check/verify.sh` with `run-check` -> `scripts`) runs a
+// target the lexical path does not name, so it fails closed like a
+// direct symlink entrypoint.
+func TestVerifyRejectsSymlinkPrefixEntrypoint(t *testing.T) {
+	dir, _ := initRepo(t, map[string]string{"scripts/verify.sh": "#!/bin/sh\ntrue\n"})
+	if err := os.Symlink("scripts", filepath.Join(dir, "run-check")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-q", "-m", "base+dirlink")
+	base := runGit(t, dir, "rev-parse", "HEAD")
+	head := commitCandidate(t, dir, base, map[string]string{"main.go": "package main\n"})
+	room := &recordingRoom{}
+	opts := Options{
+		HeadSHA: head, BaseSHA: base,
+		InvocationID: domain.InvocationID("inv-1"),
+		RecipeSource: ConfigRecipe([]byte(`{"commands": ["./run-check/verify.sh"], "capture": "none"}`)),
+		Room:         room,
+	}
+	_, err := Verify(context.Background(), dir, opts)
+	if !errors.Is(err, ErrSymlinkEntrypoint) {
+		t.Fatalf("err = %v, want ErrSymlinkEntrypoint", err)
+	}
+	if len(room.runs) != 0 {
+		t.Errorf("commands ran despite the symlinked prefix: %v", room.runs)
+	}
 }

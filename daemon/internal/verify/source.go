@@ -4,7 +4,23 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 )
+
+// verifyBase enforces the base binding, mirroring verifyHead: the
+// enforced base must resolve to exactly itself as a commit. ls-tree
+// accepts any tree-ish, so without this a 40-hex tree object would
+// serve as a recipe source while the report claims it as base_sha.
+func verifyBase(ctx context.Context, g *gitRunner, baseSHA string) error {
+	out, err := g.run(ctx, nil, "rev-parse", "--verify", baseSHA+"^{commit}")
+	if err != nil {
+		return fmt.Errorf("base %s is not a commit in the checkout: %w: %w", baseSHA, ErrBaseMismatch, err)
+	}
+	if got := strings.TrimSpace(string(out)); got != baseSHA {
+		return fmt.Errorf("base %s resolved to %s: %w", baseSHA, got, ErrBaseMismatch)
+	}
+	return nil
+}
 
 // loadTrustedRecipeBytes resolves the trusted recipe bytes from the
 // declared source (§5.8). The config source returns the approved bytes
