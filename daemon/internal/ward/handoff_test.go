@@ -484,7 +484,7 @@ func TestHandoffAmbiguousCreateOwnershipEvidence(t *testing.T) {
 		fx.assertReaped(t)
 	})
 
-	t.Run("volume", func(t *testing.T) {
+	t.Run("volume list falls back to volume inspect", func(t *testing.T) {
 		fx := newHandoffFixture(t)
 		fx.rt.createVolumeThenFail = true
 		fx.rt.onListVolumes = func(list []VolumeSummary) ([]VolumeSummary, error) {
@@ -497,12 +497,73 @@ func TestHandoffAmbiguousCreateOwnershipEvidence(t *testing.T) {
 			return list, nil
 		}
 
+		// The per-object volume inspect still shows this invocation's token,
+		// so the ambiguously created volume is reaped on that fresh evidence.
+		_, err := fx.run(t)
+		if err == nil {
+			t.Fatal("ambiguous create returned success")
+		}
+		fx.assertReaped(t)
+	})
+
+	t.Run("volume list and inspect both omit labels", func(t *testing.T) {
+		fx := newHandoffFixture(t)
+		fx.rt.createVolumeThenFail = true
+		fx.rt.onListVolumes = func(list []VolumeSummary) ([]VolumeSummary, error) {
+			for i := range list {
+				if list[i].Name == names.Workspace {
+					list[i].LabelsObserved = false
+					list[i].Labels = nil
+				}
+			}
+			return list, nil
+		}
+		fx.rt.onInspectVolume = func(_ string, v VolumeSummary) (VolumeSummary, error) {
+			v.LabelsObserved = false
+			v.Labels = nil
+			return v, nil
+		}
+
 		_, err := fx.run(t)
 		wantCheckFailure(t, err, CheckTeardown)
 		fx.rt.mu.Lock()
 		defer fx.rt.mu.Unlock()
 		if _, ok := fx.rt.vols[names.Workspace]; !ok {
 			t.Error("teardown deleted an ambiguously owned volume without observing its labels")
+		}
+	})
+
+	t.Run("volume inspect fallback proves foreign", func(t *testing.T) {
+		fx := newHandoffFixture(t)
+		fx.rt.createVolumeThenFail = true
+		fx.rt.onListVolumes = func(list []VolumeSummary) ([]VolumeSummary, error) {
+			for i := range list {
+				if list[i].Name == names.Workspace {
+					list[i].LabelsObserved = false
+					list[i].Labels = nil
+				}
+			}
+			return list, nil
+		}
+		// The fallback inspect observes a token-less same-name object: a
+		// colliding foreign volume, spared rather than reaped or failed on.
+		fx.rt.onInspectVolume = func(_ string, v VolumeSummary) (VolumeSummary, error) {
+			v.Labels = runLabels(testHandoffSpec().RunID)
+			v.CreationDate = "foreign-created"
+			return v, nil
+		}
+
+		_, err := fx.run(t)
+		if err == nil {
+			t.Fatal("ambiguous create returned success")
+		}
+		if strings.Contains(err.Error(), string(CheckTeardown)) {
+			t.Errorf("a foreign verdict failed teardown instead of sparing: %v", err)
+		}
+		fx.rt.mu.Lock()
+		defer fx.rt.mu.Unlock()
+		if _, ok := fx.rt.vols[names.Workspace]; !ok {
+			t.Error("teardown deleted a volume the fallback inspect proved foreign")
 		}
 	})
 }
@@ -676,6 +737,13 @@ func TestHandoffWorkspaceObservationFailure(t *testing.T) {
 		}},
 		{"ownership label missing", func(_ string, v VolumeSummary) (VolumeSummary, error) {
 			v.Labels = runLabels(testHandoffSpec().RunID)
+			return v, nil
+		}},
+		// A report for another volume must fail even when it carries the
+		// token: a fingerprint bound to the wrong object would make cleanup
+		// misclassify this run's own workspace later.
+		{"wrong identity", func(_ string, v VolumeSummary) (VolumeSummary, error) {
+			v.Name = "some-other-volume"
 			return v, nil
 		}},
 	}
@@ -1370,6 +1438,385 @@ func TestHandoffOwnedWorkspaceReapedWhenListFails(t *testing.T) {
 		}
 	}
 	t.Errorf("runtime calls %v do not contain %q", fx.rt.calls, wantDelete)
+}
+
+// TestClassifyEvidence pins the classifier every destructive decision routes
+// through. The fingerprint dominates when both sides report a creation
+// instant; otherwise the unpredictable ownership label decides; an
+// observation that can show neither proves nothing.
+func TestClassifyEvidence(t *testing.T) {
+	owner := Label{Key: ownershipLabelKey, Value: "token"}
+	ours := []Label{{Key: labelKey, Value: "run-1"}, owner}
+	foreign := []Label{{Key: labelKey, Value: "run-1"}}
+	cases := []struct {
+		name           string
+		claim          objectClaim
+		date           string
+		labels         []Label
+		labelsObserved bool
+		want           objectEvidence
+	}{
+		{"fingerprint and labels match", objectClaim{fingerprint: "c1"}, "c1", ours, true, evidenceOurs},
+		{"different creation instant is a replacement", objectClaim{fingerprint: "c1"}, "c2", ours, true, evidenceForeign},
+		{"replacement even with copied labels", objectClaim{fingerprint: "c1"}, "c2", ours, true, evidenceForeign},
+		{"matching instant without the token is contradictory", objectClaim{fingerprint: "c1"}, "c1", foreign, true, evidenceUnprovable},
+		// Instants are coarse (second granularity), so a match alone must
+		// never prove ours: a same-second no-label replacement would match.
+		{"matching instant with unobserved labels", objectClaim{fingerprint: "c1"}, "c1", nil, false, evidenceUnprovable},
+		{"different instant with unobserved labels", objectClaim{fingerprint: "c1"}, "c2", nil, false, evidenceForeign},
+		{"no observed instant falls back to the token", objectClaim{fingerprint: "c1"}, "", ours, true, evidenceOurs},
+		{"no observed instant and no token", objectClaim{fingerprint: "c1"}, "", foreign, true, evidenceForeign},
+		{"no observed instant and unobserved labels", objectClaim{fingerprint: "c1"}, "", nil, false, evidenceUnprovable},
+		{"no fingerprint falls back to the token", objectClaim{}, "c9", ours, true, evidenceOurs},
+		{"no fingerprint and no token", objectClaim{}, "c9", foreign, true, evidenceForeign},
+		{"no fingerprint and unobserved labels", objectClaim{}, "c9", nil, false, evidenceUnprovable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyEvidence(tc.claim, owner, tc.date, tc.labels, tc.labelsObserved)
+			if got != tc.want {
+				t.Errorf("classifyEvidence = %q, want %q", got, tc.want)
+			}
+			if !got.valid() {
+				t.Errorf("classifyEvidence returned invalid evidence %q", got)
+			}
+		})
+	}
+	for _, e := range AllObjectEvidence {
+		if !e.valid() {
+			t.Errorf("registered evidence %q is not valid", e)
+		}
+	}
+	if objectEvidence("").valid() {
+		t.Error("zero-value evidence is valid")
+	}
+}
+
+// TestHandoffTeardownSparesReplacedObjects is the core #138 property: a
+// successful create does not authorize destroying whatever later holds the
+// name. Each subtest replaces one successfully created object (an external
+// delete-and-recreate) before deferred teardown observes it; teardown must
+// leave the replacement untouched and not report it as a survivor.
+func TestHandoffTeardownSparesReplacedObjects(t *testing.T) {
+	names := namesFor(testHandoffSpec().RunID)
+
+	t.Run("agent", func(t *testing.T) {
+		fx := newHandoffFixture(t)
+		replaced := false
+		fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+			if id == names.Agent && rep.State == StateRunning && !replaced {
+				replaced = true
+				// External actor deletes and recreates the running writer's
+				// name; the inspect that would have observed our object fails.
+				fx.rt.ctrs[names.Agent] = &fakeCtr{created: "external-replacement"}
+				return InspectReport{}, errors.New("inspect wedged")
+			}
+			return rep, nil
+		}
+		_, err := fx.run(t)
+		wantCheckFailure(t, err, CheckWriterTermination)
+		fx.rt.mu.Lock()
+		defer fx.rt.mu.Unlock()
+		if _, ok := fx.rt.ctrs[names.Agent]; !ok {
+			t.Error("teardown deleted the foreign same-name replacement")
+		}
+		for _, call := range fx.rt.calls {
+			if call == "stop-container "+names.Agent || call == "delete-container "+names.Agent {
+				t.Errorf("teardown acted on the replaced agent name: %q", call)
+			}
+		}
+	})
+
+	t.Run("agent foreign by instant alone", func(t *testing.T) {
+		// A list row whose instant differs from the captured fingerprint
+		// proves foreign even when the row omits labels: no inspect fallback
+		// is needed, so a failing inspect cannot fail teardown into touching
+		// (or blocking on) the replacement.
+		fx := newHandoffFixture(t)
+		replaced := false
+		fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+			if id != names.Agent {
+				return rep, nil
+			}
+			if rep.State == StateRunning && !replaced {
+				replaced = true
+				fx.rt.ctrs[names.Agent] = &fakeCtr{created: "external-replacement"}
+			}
+			if replaced {
+				return InspectReport{}, errors.New("inspect wedged")
+			}
+			return rep, nil
+		}
+		fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
+			for i := range list {
+				if list[i].ID == names.Agent {
+					list[i].LabelsObserved = false
+					list[i].Labels = nil
+				}
+			}
+			return list, nil
+		}
+		_, err := fx.run(t)
+		wantCheckFailure(t, err, CheckWriterTermination)
+		if strings.Contains(err.Error(), string(CheckTeardown)) {
+			t.Errorf("the foreign row forced a needless inspect fallback into a teardown failure: %v", err)
+		}
+		fx.rt.mu.Lock()
+		defer fx.rt.mu.Unlock()
+		if _, ok := fx.rt.ctrs[names.Agent]; !ok {
+			t.Error("teardown deleted the foreign same-name replacement")
+		}
+		for _, call := range fx.rt.calls {
+			if call == "stop-container "+names.Agent || call == "delete-container "+names.Agent {
+				t.Errorf("teardown acted on the replaced agent name: %q", call)
+			}
+		}
+	})
+
+	t.Run("exporter", func(t *testing.T) {
+		fx := newHandoffFixture(t)
+		replaced := false
+		fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+			if id == names.Exporter && rep.State == StateRunning && !replaced {
+				replaced = true
+				fx.rt.ctrs[names.Exporter] = &fakeCtr{created: "external-replacement"}
+				return InspectReport{}, errors.New("inspect wedged")
+			}
+			return rep, nil
+		}
+		_, err := fx.run(t)
+		wantCheckFailure(t, err, CheckExportVerification)
+		fx.rt.mu.Lock()
+		defer fx.rt.mu.Unlock()
+		if _, ok := fx.rt.ctrs[names.Exporter]; !ok {
+			t.Error("teardown deleted the foreign same-name replacement")
+		}
+		for _, call := range fx.rt.calls {
+			if call == "stop-container "+names.Exporter || call == "delete-container "+names.Exporter {
+				t.Errorf("teardown acted on the replaced exporter name: %q", call)
+			}
+		}
+		if _, ok := fx.rt.vols[names.Workspace]; ok {
+			t.Error("owned workspace volume survived teardown")
+		}
+	})
+
+	t.Run("volume", func(t *testing.T) {
+		fx := newHandoffFixture(t)
+		fx.rt.onExport = func(string, io.Writer) error {
+			// External actor deletes and recreates the workspace volume while
+			// the export is in flight; the export fails, teardown runs.
+			fx.rt.vols[names.Workspace] = &fakeVol{created: "external-replacement"}
+			return errors.New("export wedged")
+		}
+		_, err := fx.run(t)
+		if err == nil {
+			t.Fatal("wedged export returned success")
+		}
+		if strings.Contains(err.Error(), string(CheckTeardown)) {
+			t.Errorf("replacement made teardown fail instead of counting as absent: %v", err)
+		}
+		fx.rt.mu.Lock()
+		defer fx.rt.mu.Unlock()
+		if _, ok := fx.rt.vols[names.Workspace]; !ok {
+			t.Error("teardown deleted the foreign same-name replacement volume")
+		}
+		for _, call := range fx.rt.calls {
+			if call == "delete-volume "+names.Workspace {
+				t.Errorf("teardown acted on the replaced workspace name: %q", call)
+			}
+		}
+		if _, ok := fx.rt.ctrs[names.Exporter]; ok {
+			t.Error("owned exporter survived teardown")
+		}
+	})
+}
+
+// TestHandoffFingerprintlessRuntimeStillGatesByToken: on a runtime that
+// reports no creation instants, the unpredictable token is the whole
+// evidence and is still required at every step. A same-name replacement
+// observed mid-wait cannot satisfy check 3 even when it reports stopped, and
+// teardown leaves it untouched.
+func TestHandoffFingerprintlessRuntimeStillGatesByToken(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	replaced := false
+	fx.rt.onInspectVolume = func(_ string, v VolumeSummary) (VolumeSummary, error) {
+		v.CreationDate = ""
+		return v, nil
+	}
+	fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+		rep.CreationDate = ""
+		if id == names.Agent && rep.State == StateRunning && !replaced {
+			replaced = true
+			// External delete-and-recreate while the gate polls: this very
+			// poll already observes the replacement, which reports stopped
+			// and carries the run label but not the unpredictable token.
+			fx.rt.ctrs[names.Agent] = &fakeCtr{created: "external-replacement"}
+			rep.Labels = runLabels(testHandoffSpec().RunID)
+			rep.State = StateStopped
+		}
+		return rep, nil
+	}
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckWriterTermination)
+	fx.rt.mu.Lock()
+	defer fx.rt.mu.Unlock()
+	if _, ok := fx.rt.ctrs[names.Agent]; !ok {
+		t.Error("the token-less replacement was deleted on a fingerprintless runtime")
+	}
+	for _, call := range fx.rt.calls {
+		if call == "stop-container "+names.Agent || call == "delete-container "+names.Agent {
+			t.Errorf("the replaced agent name was acted on: %q", call)
+		}
+	}
+}
+
+// TestHandoffDeleteWindowReplacementCountsAbsent is the confirmed #138 bug:
+// a foreign same-name container appearing between the happy-path agent
+// delete and its absence proof used to fail the run while the agent claim
+// stayed owned, so deferred teardown destroyed the replacement. The
+// replacement now counts as absent, the run proceeds, and the claim is
+// cleared so teardown never touches the name again.
+func TestHandoffDeleteWindowReplacementCountsAbsent(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.onDeleteContainer = func(id string) (bool, error) {
+		if id != names.Agent {
+			return false, nil
+		}
+		// The delete lands, and an external actor recreates the name inside
+		// the delete-to-absence window.
+		delete(fx.rt.ctrs, id)
+		fx.rt.ctrs[id] = &fakeCtr{created: "external-replacement"}
+		return true, nil
+	}
+	res, err := fx.run(t)
+	if err != nil {
+		t.Fatalf("Handoff = %v, want success despite a delete-window replacement", err)
+	}
+	if res == nil {
+		t.Fatal("successful handoff returned no result")
+	}
+	fx.rt.mu.Lock()
+	defer fx.rt.mu.Unlock()
+	if _, ok := fx.rt.ctrs[names.Agent]; !ok {
+		t.Error("teardown deleted the replacement that appeared in the delete-to-absence window")
+	}
+	deletes := 0
+	for _, call := range fx.rt.calls {
+		if call == "delete-container "+names.Agent {
+			deletes++
+		}
+		if call == "stop-container "+names.Agent {
+			t.Errorf("the replaced agent name was stopped: %q", call)
+		}
+	}
+	if deletes != 1 {
+		t.Errorf("agent delete issued %d times, want exactly the happy-path delete", deletes)
+	}
+}
+
+// TestHandoffReplacementSparedWhenListFails: even when the teardown listing
+// is unavailable, the owned-name fallback reap is evidence-gated. A direct
+// inspect that proves the name now holds a foreign replacement withholds the
+// delete; an inspect that can prove nothing withholds it too and fails
+// teardown.
+func TestHandoffReplacementSparedWhenListFails(t *testing.T) {
+	names := namesFor(testHandoffSpec().RunID)
+
+	t.Run("agent foreign", func(t *testing.T) {
+		fx := newHandoffFixture(t)
+		fx.rt.runningInspects[names.Agent] = math.MaxInt - 1
+		listCalls := 0
+		fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
+			listCalls++
+			if listCalls == 1 {
+				// The list fails, and the lingering writer's name is replaced
+				// before the fallback inspect observes it.
+				fx.rt.ctrs[names.Agent] = &fakeCtr{created: "external-replacement"}
+				return nil, errors.New("unrelated malformed list row")
+			}
+			return list, nil
+		}
+		_, err := fx.run(t)
+		if err == nil || !strings.Contains(err.Error(), string(CheckTeardown)) {
+			t.Fatalf("Handoff = %v, want joined teardown failure", err)
+		}
+		fx.rt.mu.Lock()
+		defer fx.rt.mu.Unlock()
+		if _, ok := fx.rt.ctrs[names.Agent]; !ok {
+			t.Error("list-failure fallback deleted the foreign replacement")
+		}
+		for _, call := range fx.rt.calls {
+			if call == "stop-container "+names.Agent || call == "delete-container "+names.Agent {
+				t.Errorf("list-failure fallback acted on the replaced agent name: %q", call)
+			}
+		}
+	})
+
+	t.Run("agent unprovable", func(t *testing.T) {
+		fx := newHandoffFixture(t)
+		fx.rt.runningInspects[names.Agent] = math.MaxInt - 1
+		listCalls := 0
+		fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
+			listCalls++
+			if listCalls == 1 {
+				return nil, errors.New("unrelated malformed list row")
+			}
+			return list, nil
+		}
+		fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+			if id == names.Agent && listCalls >= 1 {
+				rep.CreationDate = ""
+				rep.LabelsObserved = false
+				rep.Labels = nil
+			}
+			return rep, nil
+		}
+		_, err := fx.run(t)
+		if err == nil || !strings.Contains(err.Error(), string(CheckTeardown)) {
+			t.Fatalf("Handoff = %v, want joined teardown failure", err)
+		}
+		fx.rt.mu.Lock()
+		defer fx.rt.mu.Unlock()
+		if _, ok := fx.rt.ctrs[names.Agent]; !ok {
+			t.Error("an unprovable inspect still deleted the owned name")
+		}
+		for _, call := range fx.rt.calls {
+			if call == "delete-container "+names.Agent {
+				t.Errorf("unprovable evidence still issued a delete: %q", call)
+			}
+		}
+	})
+
+	t.Run("volume foreign", func(t *testing.T) {
+		fx := newHandoffFixture(t)
+		fx.rt.runningInspects[names.Agent] = math.MaxInt - 1
+		listCalls := 0
+		fx.rt.onListVolumes = func(list []VolumeSummary) ([]VolumeSummary, error) {
+			listCalls++
+			if listCalls == 1 {
+				fx.rt.vols[names.Workspace] = &fakeVol{created: "external-replacement"}
+				return nil, errors.New("unrelated malformed volume row")
+			}
+			return list, nil
+		}
+		_, err := fx.run(t)
+		if err == nil || !strings.Contains(err.Error(), string(CheckTeardown)) {
+			t.Fatalf("Handoff = %v, want joined teardown failure", err)
+		}
+		fx.rt.mu.Lock()
+		defer fx.rt.mu.Unlock()
+		if _, ok := fx.rt.vols[names.Workspace]; !ok {
+			t.Error("list-failure fallback deleted the foreign replacement volume")
+		}
+		for _, call := range fx.rt.calls {
+			if call == "delete-volume "+names.Workspace {
+				t.Errorf("list-failure fallback acted on the replaced workspace name: %q", call)
+			}
+		}
+	})
 }
 
 func TestHandoffInvalidSpec(t *testing.T) {
