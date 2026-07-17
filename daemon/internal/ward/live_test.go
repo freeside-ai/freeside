@@ -183,9 +183,9 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 		t.Error("scanner hook never saw a file")
 	}
 
-	// Teardown left nothing (acceptance 5): the run's containers are gone
-	// and no volume carries its label; only the caller-owned credential
-	// volume remains, still holding the contained marker's volume.
+	// Teardown left nothing it owns (acceptance 5): the run's containers and
+	// workspace volume are gone; only the caller-owned credential volume
+	// remains, still holding the contained marker.
 	ctrs, err := rt.ListContainers(ctx)
 	if err != nil {
 		t.Fatal(err)

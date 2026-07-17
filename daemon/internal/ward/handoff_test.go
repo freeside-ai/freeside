@@ -391,6 +391,36 @@ func TestHandoffWorkspaceVolumeSurvivesUnlabeled(t *testing.T) {
 	}
 }
 
+// TestHandoffPreservesCredentialVolumeWithRunLabel proves labels are not
+// ownership evidence. A provisioner may label every resource for a run,
+// including caller-owned credential volumes; teardown must still delete only
+// the workspace volume the gate created.
+func TestHandoffPreservesCredentialVolumeWithRunLabel(t *testing.T) {
+	fx := newHandoffFixture(t)
+	hs := testHandoffSpec()
+	names := namesFor(hs.RunID)
+	credentialVolume := hs.Agent.CredentialMounts[0].Volume
+	fx.rt.vols[credentialVolume] = runLabels(hs.RunID)
+
+	if _, err := fx.run(t); err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+
+	fx.rt.mu.Lock()
+	defer fx.rt.mu.Unlock()
+	if _, ok := fx.rt.vols[credentialVolume]; !ok {
+		t.Error("teardown deleted caller-owned credential volume sharing the run label")
+	}
+	if _, ok := fx.rt.vols[names.Workspace]; ok {
+		t.Error("workspace volume survived teardown")
+	}
+	for _, call := range fx.rt.calls {
+		if call == "delete-volume "+credentialVolume {
+			t.Errorf("teardown attempted to delete caller-owned credential volume: %q", call)
+		}
+	}
+}
+
 // TestHandoffTeardownListVolumesError: teardown fails closed when it cannot
 // list volumes to prove nothing was left behind.
 func TestHandoffTeardownListVolumesError(t *testing.T) {

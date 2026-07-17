@@ -348,3 +348,19 @@ Round 10 raised two, one a recurrence and one a regression from round 9:
   reaps nothing until this invocation owns the names. The residual
   same-RunID-collision-between-two-claimed-runs case remains a caller
   contract violation (RunID uniqueness among live runs).
+
+Round 11 raised one P2, another teardown-ownership regression from round 9:
+
+- *P2: the run label could make a caller-owned credential volume look
+  gate-owned.* Reap-by-listing treated either the deterministic workspace
+  name or `freeside.handoff=<RunID>` as proof that the gate owned a volume.
+  A provisioner may apply the run label uniformly, including to credential
+  volumes the gate must never delete, so label-only matching could destroy a
+  caller-owned credential volume on the success path. The ownership boundary
+  is now exact: teardown deletes and proves absence only for the deterministic
+  workspace volume name. Labels remain inspection metadata and never confer
+  ownership. A regression test gives the caller-owned credential volume the
+  same run label, then proves the handoff succeeds, the workspace is gone, and
+  the credential volume survives without even receiving a delete attempt.
+  This preserves round 4's unlabeled-survivor defense because the workspace's
+  known name remains the teardown and proof key.

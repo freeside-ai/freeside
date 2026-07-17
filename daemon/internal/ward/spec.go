@@ -14,7 +14,8 @@ import (
 const BackendName = "fresh_vm_read_only_volume_handoff"
 
 // labelKey marks every volume and container a handoff creates with its run
-// ID, so teardown can prove nothing was left behind.
+// ID for inspection. Teardown does not infer ownership from this label:
+// caller-owned volumes may carry the same metadata.
 const labelKey = "freeside.handoff"
 
 // ErrInvalidHandoffSpec is the class sentinel for a HandoffSpec the gate
@@ -92,7 +93,7 @@ func namesFor(runID string) handoffNames {
 	}
 }
 
-// runLabels label every object a run creates.
+// runLabels label every runtime object the gate creates.
 func runLabels(runID string) []Label {
 	return []Label{{Key: labelKey, Value: runID}}
 }

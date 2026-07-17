@@ -82,7 +82,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	names := namesFor(hs.RunID)
 	st := &runState{}
 	defer func() {
-		terr := b.teardown(ctx, hs.RunID, names, st)
+		terr := b.teardown(ctx, names, st)
 		if err == nil && terr != nil {
 			result, err = nil, terr
 		}
@@ -222,10 +222,12 @@ func (b *Backend) verifyContainerAbsent(ctx context.Context, id string, c Check)
 // would leave a flag unset while the object survives, so the only reliable
 // witness is the runtime's own listing. It reaps the run's containers
 // (matched by their deterministic names) and the workspace volume (matched
-// by name or the run label), then re-lists to prove none survived. It runs
+// only by its deterministic name), then re-lists to prove none survived.
+// Labels are metadata, not ownership evidence: caller-owned volumes may carry
+// the same run label and must never be deleted by the gate. Teardown runs
 // detached from the caller's cancellation so an aborted run is still reaped,
 // under its own deadline so a wedged runtime call cannot hang Handoff.
-func (b *Backend) teardown(ctx context.Context, runID string, names handoffNames, st *runState) error {
+func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState) error {
 	// Reap nothing until this invocation claimed the run's names: before the
 	// first create it owns no runtime object, and reaping by name could delete
 	// another run sharing the RunID.
@@ -235,10 +237,6 @@ func (b *Backend) teardown(ctx context.Context, runID string, names handoffNames
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
 	defer cancel()
 	var problems []string
-
-	ownsVolume := func(v VolumeSummary) bool {
-		return v.Name == names.Workspace || slices.Contains(v.Labels, Label{Key: labelKey, Value: runID})
-	}
 
 	// Reap the run's containers that actually exist.
 	if ctrs, err := b.rt.ListContainers(ctx); err != nil {
@@ -252,13 +250,14 @@ func (b *Backend) teardown(ctx context.Context, runID string, names handoffNames
 			}
 		}
 	}
-	// Reap the run's workspace volume if it exists (never a caller-owned
-	// credential volume: only the workspace name and run label match).
+	// Reap the run's workspace volume if it exists. The exact generated name
+	// is the ownership boundary; a shared label cannot make another volume
+	// gate-owned.
 	if vols, err := b.rt.ListVolumes(ctx); err != nil {
 		problems = append(problems, fmt.Sprintf("list volumes: %v", err))
 	} else {
 		for _, v := range vols {
-			if ownsVolume(v) {
+			if v.Name == names.Workspace {
 				if derr := b.rt.DeleteVolume(ctx, v.Name); derr != nil {
 					problems = append(problems, fmt.Sprintf("delete volume %q: %v", v.Name, derr))
 				}
@@ -281,7 +280,7 @@ func (b *Backend) teardown(ctx context.Context, runID string, names handoffNames
 		problems = append(problems, fmt.Sprintf("re-list volumes: %v", err))
 	} else {
 		for _, v := range vols {
-			if ownsVolume(v) {
+			if v.Name == names.Workspace {
 				problems = append(problems, fmt.Sprintf("volume %q survived teardown", v.Name))
 			}
 		}
