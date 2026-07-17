@@ -53,9 +53,11 @@ func (g *fakeGitHub) failOnce(method, pathSubstr string) {
 }
 
 // openKillHarness opens (or reopens) a store at dbPath and builds a
-// publisher over it and the given server. Caller closes the returned
-// store to model the daemon death.
-func openKillHarness(t *testing.T, dbPath string, srv *httptest.Server) (*store.Store, *publish.Publisher) {
+// publisher over it and the given GitHub endpoint. Caller closes the
+// returned store to model the daemon death. Taking the endpoint as
+// (client, baseURL, tokenSource) lets both the fake-server kill tests and
+// the live opt-in path reuse it.
+func openKillHarness(t *testing.T, dbPath string, client *http.Client, baseURL string, ts publish.TokenSource) (*store.Store, *publish.Publisher) {
 	t.Helper()
 	s, err := store.Open(context.Background(), dbPath, store.Options{})
 	if err != nil {
@@ -65,7 +67,7 @@ func openKillHarness(t *testing.T, dbPath string, srv *httptest.Server) (*store.
 	if err != nil {
 		t.Fatalf("NewStoreLedger: %v", err)
 	}
-	return s, publish.NewPublisher(testTokenSource(), srv.Client(), srv.URL, ledger)
+	return s, publish.NewPublisher(ts, client, baseURL, ledger)
 }
 
 func createRefRequest() string { return http.MethodPost + " " + testRepoPath + "/git/refs" }
@@ -113,7 +115,7 @@ func TestKillBeforeExternalEffect(t *testing.T) {
 	srv := gh.quietServer(t)
 	cand := testCandidate(t)
 
-	s1, p1 := openKillHarness(t, dbPath, srv)
+	s1, p1 := openKillHarness(t, dbPath, srv.Client(), srv.URL, testTokenSource())
 	gh.failOnce(http.MethodGet, "/git/ref/") // die at the first read, after recordIntent
 	if _, err := p1.Publish(ctx, cand, testApprovedRecipes()); err == nil {
 		t.Fatal("publish reached GitHub without hitting the failpoint")
@@ -128,7 +130,7 @@ func TestKillBeforeExternalEffect(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	s2, p2 := openKillHarness(t, dbPath, srv)
+	s2, p2 := openKillHarness(t, dbPath, srv.Client(), srv.URL, testTokenSource())
 	defer func() { _ = s2.Close() }()
 	n, err := publish.DrainPendingPublications(ctx, s2, p2, resolverFor(t, cand))
 	if err != nil {
@@ -150,7 +152,7 @@ func TestKillAfterBranchBeforePR(t *testing.T) {
 	srv := gh.quietServer(t)
 	cand := testCandidate(t)
 
-	s1, p1 := openKillHarness(t, dbPath, srv)
+	s1, p1 := openKillHarness(t, dbPath, srv.Client(), srv.URL, testTokenSource())
 	gh.failOnce(http.MethodPost, "/pulls") // branch created, die at PR creation
 	if _, err := p1.Publish(ctx, cand, testApprovedRecipes()); err == nil {
 		t.Fatal("publish created the PR without hitting the failpoint")
@@ -165,7 +167,7 @@ func TestKillAfterBranchBeforePR(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	s2, p2 := openKillHarness(t, dbPath, srv)
+	s2, p2 := openKillHarness(t, dbPath, srv.Client(), srv.URL, testTokenSource())
 	defer func() { _ = s2.Close() }()
 	n, err := publish.DrainPendingPublications(ctx, s2, p2, resolverFor(t, cand))
 	if err != nil {
@@ -188,7 +190,7 @@ func TestKillAfterPublishBeforeAcceptance(t *testing.T) {
 	srv := gh.quietServer(t)
 	cand := testCandidate(t)
 
-	s1, p1 := openKillHarness(t, dbPath, srv)
+	s1, p1 := openKillHarness(t, dbPath, srv.Client(), srv.URL, testTokenSource())
 	// A full publish creates the branch and PR but never finalizes: the
 	// outbox row is left pending, as after a crash before acceptance.
 	if _, err := p1.Publish(ctx, cand, testApprovedRecipes()); err != nil {
@@ -199,7 +201,7 @@ func TestKillAfterPublishBeforeAcceptance(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	s2, p2 := openKillHarness(t, dbPath, srv)
+	s2, p2 := openKillHarness(t, dbPath, srv.Client(), srv.URL, testTokenSource())
 	defer func() { _ = s2.Close() }()
 	n, err := publish.DrainPendingPublications(ctx, s2, p2, resolverFor(t, cand))
 	if err != nil {
@@ -227,7 +229,7 @@ func TestKillAfterAcceptance(t *testing.T) {
 	srv := gh.quietServer(t)
 	cand := testCandidate(t)
 
-	s1, p1 := openKillHarness(t, dbPath, srv)
+	s1, p1 := openKillHarness(t, dbPath, srv.Client(), srv.URL, testTokenSource())
 	if _, err := p1.Publish(ctx, cand, testApprovedRecipes()); err != nil {
 		t.Fatalf("seed publish: %v", err)
 	}
@@ -239,7 +241,7 @@ func TestKillAfterAcceptance(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	s2, p2 := openKillHarness(t, dbPath, srv)
+	s2, p2 := openKillHarness(t, dbPath, srv.Client(), srv.URL, testTokenSource())
 	defer func() { _ = s2.Close() }()
 	n, err := publish.DrainPendingPublications(ctx, s2, p2, resolverFor(t, cand))
 	if err != nil {
