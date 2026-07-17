@@ -1,0 +1,17 @@
+{
+  "changes": [
+    {
+      "path": "b.txt",
+      "kind": "modified",
+      "mode": "100644",
+      "digest": "sha256:41aaf437655952697569856760880b23550e4207f6324514664796bc48151d2e"
+    }
+  ],
+  "findings": [
+    {
+      "path": "b.txt",
+      "kind": "blob_omitted",
+      "detail": "content changed but its blob was withheld by export caps"
+    }
+  ]
+}

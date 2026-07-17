@@ -1,0 +1,93 @@
+{
+  "changes": [
+    {
+      "path": ".claude/settings.json",
+      "kind": "added",
+      "mode": "100644",
+      "digest": "sha256:ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    {
+      "path": ".codex/config.toml",
+      "kind": "added",
+      "mode": "100644",
+      "digest": "sha256:0d5d8cfcff59e1e92179e66508eb7bf3c6916b37144fe1c6248f0788a2daaf0b"
+    },
+    {
+      "path": ".gitattributes",
+      "kind": "added",
+      "mode": "100644",
+      "digest": "sha256:d92933938cf9dfa663b502eb71126808685dd4998c7d7cff22f2612adeec6e14"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "kind": "deleted"
+    },
+    {
+      "path": ".gitignore",
+      "kind": "added",
+      "mode": "100644",
+      "digest": "sha256:ed19d3c9c8a5e34d0179e0b1a9c2907d2e657738733e4a432a8cf81c76ce56f1"
+    },
+    {
+      "path": "AGENTS.md",
+      "kind": "modified",
+      "mode": "100644",
+      "digest": "sha256:976bc3d58e3f4ad91a30728ae3cfcd5f4c019bb0905c052648f2c7565cdcf4a0"
+    },
+    {
+      "path": "docs/readme.md",
+      "kind": "added",
+      "mode": "100644",
+      "digest": "sha256:8ecc5f94c57b05d6c5e0ee316bee4875427e1845bbeef3ead59df29c72aab36e"
+    },
+    {
+      "path": "docs/sub/AGENTS.md",
+      "kind": "added",
+      "mode": "100644",
+      "digest": "sha256:ece94e607d7fb334464222c5125f12dec49d8e25b08dc93f3ffde70cb093f927"
+    },
+    {
+      "path": "pkg/action.yaml",
+      "kind": "added",
+      "mode": "100644",
+      "digest": "sha256:38590742a3b1cccc62275bd762e998339bd6ddec91635338e7e6da39f5839158"
+    }
+  ],
+  "findings": [
+    {
+      "path": ".claude/settings.json",
+      "kind": "reviewer_instruction_path",
+      "detail": "added"
+    },
+    {
+      "path": ".codex/config.toml",
+      "kind": "reviewer_instruction_path",
+      "detail": "added"
+    },
+    {
+      "path": ".gitattributes",
+      "kind": "git_metadata_path",
+      "detail": "added"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "kind": "automation_control_path",
+      "detail": "deleted"
+    },
+    {
+      "path": "AGENTS.md",
+      "kind": "reviewer_instruction_path",
+      "detail": "modified"
+    },
+    {
+      "path": "docs/sub/AGENTS.md",
+      "kind": "reviewer_instruction_path",
+      "detail": "added"
+    },
+    {
+      "path": "pkg/action.yaml",
+      "kind": "automation_control_path",
+      "detail": "added"
+    }
+  ]
+}
