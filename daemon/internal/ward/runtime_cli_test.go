@@ -428,6 +428,30 @@ func TestCapWriter(t *testing.T) {
 	}
 }
 
+// TestRuntimeStdoutBounds proves a wedged runtime flooding stdout cannot
+// exhaust daemon memory: a JSON-producing call caps stdout and fails closed
+// rather than buffering the whole stream, while a no-output call drains it to
+// io.Discard and still succeeds.
+func TestRuntimeStdoutBounds(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "container-fixture")
+	// Emit more than maxRuntimeOutput (16 MiB) regardless of the subcommand.
+	script := "#!/bin/sh\ndd if=/dev/zero bs=1048576 count=17 2>/dev/null\n"
+	if err := os.WriteFile(bin, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bin, 0o700); err != nil { //nolint:gosec // executable test fixture is isolated in t.TempDir
+		t.Fatal(err)
+	}
+	rt := NewCLIRuntime(bin)
+
+	if _, err := rt.ListContainers(context.Background()); err == nil {
+		t.Error("ListContainers accepted an over-cap stdout flood")
+	}
+	if err := rt.DeleteContainer(context.Background(), "any"); err != nil {
+		t.Errorf("DeleteContainer on a stdout flood = %v, want nil (drained)", err)
+	}
+}
+
 // TestExportRootFSStreamsStdout pins the boundary CLIRuntime can enforce: the
 // CLI emits its default stdout stream into the caller-owned bounded Writer.
 func TestExportRootFSStreamsStdout(t *testing.T) {

@@ -690,3 +690,16 @@ buffers at most the reported cap and drops the rest, and a redacted call drains
 stderr to `io.Discard` rather than buffering bytes it throws away. Regressions: a
 `capWriter` bound/truncation unit test; the existing redacted-stderr credential
 test still passes.
+
+Round 25, P2 (host-resource boundary, the stdout sibling of round 24): every
+non-export CLI call buffered its full stdout into a `bytes.Buffer` before
+decoding or discarding it, so a wedged or hostile `inspect`/`list` (or even an
+ignored `create`/`delete` output) could exhaust daemon memory before the call
+failed closed. The runtime calls now split by whether their output is consumed:
+JSON-producing calls (`inspect`, `list`, `volume list`) buffer through the
+`capWriter` capped at `maxRuntimeOutput` (16 MiB, far above honest output) and
+fail closed rather than decoding a truncated stream; no-output calls (create,
+start, stop, delete for containers and volumes) drain stdout to `io.Discard`.
+`ExportRootFS` was already bounded by the caller-owned archive writer (round
+17). Regression: a fixture that floods stdout past the cap, proving the
+JSON path fails closed while the no-output path drains and succeeds.

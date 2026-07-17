@@ -27,26 +27,34 @@ func NewCLIRuntime(binPath string) *CLIRuntime { return &CLIRuntime{bin: binPath
 
 var _ Runtime = (*CLIRuntime)(nil)
 
-// run executes one CLI invocation and returns its stdout, folding a bounded
-// stderr tail into the error for diagnosis.
+// maxRuntimeOutput bounds the stdout buffered from a JSON-producing runtime
+// call. Honest inspect/list output is far smaller; the cap stops a wedged or
+// hostile runtime returning an unbounded stream from exhausting daemon memory
+// before decoding — the stdout analogue of the stderr and archive bounds.
+const maxRuntimeOutput = 16 << 20
+
+// run executes a JSON-producing CLI call and returns its stdout, capped so a
+// wedged runtime cannot exhaust memory, folding a bounded stderr tail into the
+// error for diagnosis. It fails closed if the command produced more than the
+// cap rather than decoding a truncated stream.
 func (c *CLIRuntime) run(ctx context.Context, args ...string) ([]byte, error) {
-	return c.runCommand(ctx, true, args...)
-}
-
-// runRedactedStderr preserves the command's safe exit error but suppresses
-// stderr, which may echo a create argument containing an explicit environment
-// credential. Other runtime calls carry only gate-generated identifiers and
-// use run so their bounded stderr remains available for diagnosis.
-func (c *CLIRuntime) runRedactedStderr(ctx context.Context, args ...string) ([]byte, error) {
-	return c.runCommand(ctx, false, args...)
-}
-
-func (c *CLIRuntime) runCommand(ctx context.Context, reportStderr bool, args ...string) ([]byte, error) {
-	var stdout bytes.Buffer
-	if err := c.runTo(ctx, &stdout, reportStderr, args...); err != nil {
+	stdout := &capWriter{max: maxRuntimeOutput}
+	if err := c.runTo(ctx, stdout, true, args...); err != nil {
 		return nil, err
 	}
-	return stdout.Bytes(), nil
+	if stdout.truncated {
+		return nil, fmt.Errorf("container %s: stdout exceeded the %d-byte cap", args[0], maxRuntimeOutput)
+	}
+	return stdout.buf.Bytes(), nil
+}
+
+// runDiscard executes a CLI call whose stdout is ignored, draining it to
+// io.Discard rather than buffering output that is thrown away. reportStderr
+// keeps the bounded stderr tail for diagnosis; a create call passes false
+// because its stderr may echo an argument carrying an explicit environment
+// credential, while other calls carry only gate-generated identifiers.
+func (c *CLIRuntime) runDiscard(ctx context.Context, reportStderr bool, args ...string) error {
+	return c.runTo(ctx, io.Discard, reportStderr, args...)
 }
 
 func (c *CLIRuntime) runTo(ctx context.Context, stdout io.Writer, reportStderr bool, args ...string) error {
@@ -110,13 +118,11 @@ func (c *CLIRuntime) CreateVolume(ctx context.Context, name string, sizeMB int64
 		args = append(args, "--label", l.Key+"="+l.Value)
 	}
 	args = append(args, name)
-	_, err := c.run(ctx, args...)
-	return err
+	return c.runDiscard(ctx, true, args...)
 }
 
 func (c *CLIRuntime) DeleteVolume(ctx context.Context, name string) error {
-	_, err := c.run(ctx, "volume", "delete", name)
-	return err
+	return c.runDiscard(ctx, true, "volume", "delete", name)
 }
 
 func (c *CLIRuntime) ListVolumes(ctx context.Context) ([]VolumeSummary, error) {
@@ -132,8 +138,7 @@ func (c *CLIRuntime) CreateContainer(ctx context.Context, spec ContainerSpec) er
 	if err != nil {
 		return err
 	}
-	_, err = c.runRedactedStderr(ctx, args...)
-	return err
+	return c.runDiscard(ctx, false, args...)
 }
 
 // createContainerArgs phrases a spec as CLI arguments. It refuses any
@@ -183,13 +188,11 @@ func createContainerArgs(spec ContainerSpec) ([]string, error) {
 }
 
 func (c *CLIRuntime) StartContainer(ctx context.Context, id string) error {
-	_, err := c.run(ctx, "start", id)
-	return err
+	return c.runDiscard(ctx, true, "start", id)
 }
 
 func (c *CLIRuntime) StopContainer(ctx context.Context, id string) error {
-	_, err := c.run(ctx, "stop", id)
-	return err
+	return c.runDiscard(ctx, true, "stop", id)
 }
 
 func (c *CLIRuntime) Inspect(ctx context.Context, id string) (InspectReport, error) {
@@ -201,8 +204,7 @@ func (c *CLIRuntime) Inspect(ctx context.Context, id string) (InspectReport, err
 }
 
 func (c *CLIRuntime) DeleteContainer(ctx context.Context, id string) error {
-	_, err := c.run(ctx, "delete", id)
-	return err
+	return c.runDiscard(ctx, true, "delete", id)
 }
 
 func (c *CLIRuntime) ListContainers(ctx context.Context) ([]ContainerSummary, error) {
