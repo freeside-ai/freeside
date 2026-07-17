@@ -42,8 +42,11 @@ const (
 	CheckTeardown Check = "teardown"
 )
 
-// AllChecks lists every valid Check; it drives table-driven tests and is the
-// single place a new check is registered.
+// AllChecks lists every valid spike-numbered contract check; it drives
+// table-driven tests and is the single place a new contract check is
+// registered. The conformance suite's negative probes and pre-job probe are
+// not spike contract checks and register separately (AllProbeChecks,
+// CheckPreJobProbe) so this slice keeps its "spike check N" meaning.
 var AllChecks = []Check{
 	CheckCredentialSeparation,
 	CheckControlPlaneIsolation,
@@ -54,11 +57,52 @@ var AllChecks = []Check{
 	CheckTeardown,
 }
 
+// The conformance suite's own identifiers, distinct from the spike's
+// numbered contract checks above (docs/spikes/workspace-handoff.md, plan
+// §5.7). They share the Check type and ConformanceFailure so every suite
+// result is uniformly typed and fail-closed, but they name suite-level
+// assertions, not the seven contract checks, so they register apart from
+// AllChecks.
+const (
+	// CheckWriterVolumeExclusion is the spike's first negative probe: while a
+	// live writer VM holds the workspace volume read-write, a second VM's
+	// attach must be refused by the runtime (Virtualization.framework
+	// VZErrorDomain Code=2 at bootstrap). It is the executable evidence that
+	// check 3's writer-termination requirement is a real exclusion, not
+	// scheduling intent.
+	CheckWriterVolumeExclusion Check = "writer_volume_exclusion"
+	// CheckCredentialContainment is the spike's second negative probe: after a
+	// handoff, the fake credential marker is absent from the export archive yet
+	// still present in its detached credential volume, proving absence was
+	// mount omission, not deletion.
+	CheckCredentialContainment Check = "credential_containment" //nolint:gosec // a probe name, not a credential
+	// CheckSameVMRefutation is the spike's third negative probe: a guest
+	// unmount of the credential mount (even with CAP_SYS_ADMIN) leaves the
+	// block device attached and remountable, so the same-VM fallback class is
+	// not a detach. It permanently refutes that class; it never implements it.
+	CheckSameVMRefutation Check = "same_vm_refutation"
+	// CheckPreJobProbe is the lightweight pre-job precondition probe (plan
+	// §5.7): a fail-closed result naming a cheap precondition that did not
+	// hold. It deliberately does not re-verify the realized isolation
+	// properties the full suite proves (see doc.go).
+	CheckPreJobProbe Check = "pre_job_probe"
+)
+
+// AllProbeChecks lists the three negative-probe identifiers; it is the single
+// registration point for them and drives their exhaustiveness test.
+var AllProbeChecks = []Check{
+	CheckWriterVolumeExclusion,
+	CheckCredentialContainment,
+	CheckSameVMRefutation,
+}
+
 func (c Check) valid() bool {
 	switch c {
 	case CheckCredentialSeparation, CheckControlPlaneIsolation,
 		CheckWriterTermination, CheckExporterAllowlist,
-		CheckInExporterVerification, CheckExportVerification, CheckTeardown:
+		CheckInExporterVerification, CheckExportVerification, CheckTeardown,
+		CheckWriterVolumeExclusion, CheckCredentialContainment,
+		CheckSameVMRefutation, CheckPreJobProbe:
 		return true
 	default:
 		return false
