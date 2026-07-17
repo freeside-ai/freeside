@@ -533,3 +533,24 @@ Round 17 raised two P2s at the host-resource boundary:
   rejects pathological names before filesystem calls. Regression cases prove
   both a zero-byte directory flood and a single deep implicit-parent entry
   fail before the refused object reaches the host filesystem.
+
+Round 18 raised one P1 at the cleanup availability boundary:
+
+- *P1: a full container-list failure suppressed cleanup of exact names whose
+  create had already succeeded.* An unrelated malformed row could make the
+  decoder reject the full listing, after which teardown skipped even the
+  known-owned credential-mounted agent. On list failure, teardown now falls
+  back to inspecting and reaping only claims established by a successful
+  create; ambiguous creates remain excluded because they still require fresh
+  per-invocation label evidence. The full-list error remains a teardown
+  failure, and the ordinary second list still proves absence.
+
+The required refute pass found two cleanup-effect gaps in the first fallback:
+an unknown inspect state skipped stop as though it proved stopped, and a stop
+error prevented deletion even when the stop side effect had succeeded. The
+shared reap primitive now attempts stop for every state not affirmatively
+`stopped`, attempts exact-name deletion regardless of the stop result, and
+joins both errors. Agent and exporter regressions cover unknown state; a third
+case makes stop take effect and return an error, then proves deletion still
+runs. Wrong inspect identity still prevents action, and no ambiguous or
+foreign-object deletion path was found.

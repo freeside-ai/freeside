@@ -963,6 +963,77 @@ func TestHandoffAgentProvenAbsentIsNotReapedAgain(t *testing.T) {
 	delete(fx.rt.ctrs, names.Agent)
 }
 
+// TestHandoffOwnedContainerReapedWhenListFails proves an unrelated malformed
+// list row cannot leave a successfully-created, credential-mounted agent
+// restartable. The list error still fails teardown, but exact owned cleanup
+// falls back to inspect, stop, and delete before the absence re-list.
+func TestHandoffOwnedContainerReapedWhenListFails(t *testing.T) {
+	names := namesFor(testHandoffSpec().RunID)
+	cases := []struct {
+		name               string
+		containerID        string
+		failListCall       int
+		unknownState       bool
+		stopErrorAfterStop bool
+	}{
+		{name: "agent unknown state", containerID: names.Agent, failListCall: 1, unknownState: true},
+		// The agent's ordinary absence proof is the first list call; the
+		// exporter teardown listing is the second.
+		{name: "exporter unknown state", containerID: names.Exporter, failListCall: 2, unknownState: true},
+		{name: "stop errors after stopping", containerID: names.Agent, failListCall: 1, stopErrorAfterStop: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newHandoffFixture(t)
+			fx.rt.runningInspects[tc.containerID] = math.MaxInt - 1
+			listCalls := 0
+			fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
+				listCalls++
+				if listCalls == tc.failListCall {
+					return nil, errors.New("unrelated malformed list row")
+				}
+				return list, nil
+			}
+			fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+				if tc.unknownState && id == tc.containerID && listCalls >= tc.failListCall {
+					rep.State = ContainerState("unknown")
+				}
+				return rep, nil
+			}
+			fx.rt.onStop = func(id string) error {
+				if !tc.stopErrorAfterStop || id != tc.containerID {
+					return nil
+				}
+				fx.rt.ctrs[id].stopped = true
+				return errors.New("stop response lost after effect")
+			}
+
+			_, err := fx.run(t)
+			if err == nil || !strings.Contains(err.Error(), string(CheckTeardown)) {
+				t.Fatalf("Handoff = %v, want joined teardown failure", err)
+			}
+			fx.assertReaped(t)
+			fx.rt.mu.Lock()
+			defer fx.rt.mu.Unlock()
+			wantCalls := []string{
+				"inspect " + tc.containerID,
+				"stop-container " + tc.containerID,
+				"delete-container " + tc.containerID,
+				"list-containers",
+			}
+			next := 0
+			for _, call := range fx.rt.calls {
+				if next < len(wantCalls) && call == wantCalls[next] {
+					next++
+				}
+			}
+			if next != len(wantCalls) {
+				t.Errorf("runtime calls %v do not contain ordered cleanup sequence %v", fx.rt.calls, wantCalls)
+			}
+		})
+	}
+}
+
 func TestHandoffInvalidSpec(t *testing.T) {
 	fx := newHandoffFixture(t)
 	spec := testHandoffSpec()

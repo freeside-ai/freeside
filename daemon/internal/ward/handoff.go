@@ -336,6 +336,18 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	if st.agentAttempted || st.exporterAttempted {
 		if ctrs, err := b.rt.ListContainers(ctx); err != nil {
 			problems = append(problems, fmt.Sprintf("list containers: %v", err))
+			// A full-list failure can be caused by an unrelated malformed row.
+			// It must not suppress cleanup of an exact name this invocation
+			// already owns from a successful create. Ambiguous creates still
+			// require list/label evidence and are deliberately not reaped here.
+			for _, claim := range containerClaims {
+				if !claim.attempted || !claim.owned {
+					continue
+				}
+				if rerr := b.reapKnownOwnedContainer(ctx, claim.id); rerr != nil {
+					problems = append(problems, fmt.Sprintf("remove known-owned %q after list failure: %v", claim.id, rerr))
+				}
+			}
 		} else {
 			for _, claim := range containerClaims {
 				if !claim.attempted {
@@ -465,6 +477,20 @@ func (b *Backend) containerHasOwnership(ctx context.Context, candidate Container
 	return slices.Contains(rep.Labels, ownershipLabel), nil
 }
 
+// reapKnownOwnedContainer reconstructs the state needed for cleanup when the
+// full list is unavailable. It is only for a name whose create succeeded;
+// ambiguous creates must go through fresh per-invocation ownership evidence.
+func (b *Backend) reapKnownOwnedContainer(ctx context.Context, id string) error {
+	rep, err := b.rt.Inspect(ctx, id)
+	if err != nil {
+		return fmt.Errorf("inspect: %w", err)
+	}
+	if rep.ID != id {
+		return fmt.Errorf("inspect returned the wrong identity")
+	}
+	return b.reapContainer(ctx, ContainerSummary{ID: id, State: rep.State})
+}
+
 // uniqueContainer returns the one exact-id entry from a full runtime list.
 // Contradictory duplicate identities are unknown evidence, never an ordering
 // rule for ownership or absence.
@@ -500,14 +526,17 @@ func uniqueVolume(vols []VolumeSummary, name string) (VolumeSummary, bool, error
 	return found, seen, nil
 }
 
-// reapContainer stops a listed container if it is running, then deletes it.
-// It acts on the listing's observed state, so it never inspects a container
-// that may already be gone.
+// reapContainer stops a container unless it is affirmatively observed stopped,
+// then attempts deletion even when stop reports an error. Unknown/drifted state
+// is not proof of stopped, and a stop error may still mean the side effect took
+// place; joining both results maximizes cleanup without hiding either failure.
 func (b *Backend) reapContainer(ctx context.Context, cs ContainerSummary) error {
-	if cs.State == StateRunning {
+	var stopErr error
+	if cs.State != StateStopped {
 		if err := b.rt.StopContainer(ctx, cs.ID); err != nil {
-			return fmt.Errorf("stop: %w", err)
+			stopErr = fmt.Errorf("stop: %w", err)
 		}
 	}
-	return b.rt.DeleteContainer(ctx, cs.ID)
+	deleteErr := b.rt.DeleteContainer(ctx, cs.ID)
+	return errors.Join(stopErr, deleteErr)
 }
