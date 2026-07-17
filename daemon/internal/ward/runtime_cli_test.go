@@ -33,6 +33,7 @@ func TestDecodeInspectVolume(t *testing.T) {
 		ImageReference:          "docker.io/library/alpine:3.22",
 		ImageDigest:             "sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce",
 		Command:                 []string{"sh", "-c", "echo hi"},
+		WorkingDirectory:        "/",
 		State:                   StateStopped,
 		AllowlistFieldsObserved: true,
 		Mounts: []Mount{{
@@ -140,15 +141,16 @@ func TestDecodeInspectAllowlistFieldPresence(t *testing.T) {
 	// A report with the correct id and state but each allowlist field omitted
 	// in turn must preserve identity while remaining unapprovable.
 	fields := map[string]string{
-		"image":            `"initProcess":{"executable":"sh","arguments":[],"environment":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
-		"image reference":  `"image":{"descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
-		"image digest":     `"image":{"reference":"example.test/exporter"},"initProcess":{"executable":"sh","arguments":[],"environment":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
-		"executable":       `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"arguments":[],"environment":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
-		"arguments":        `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","environment":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
-		"environment":      `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
-		"ssh":              `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[]},"publishedPorts":[],"publishedSockets":[]`,
-		"publishedPorts":   `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[]},"ssh":false,"publishedSockets":[]`,
-		"publishedSockets": `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[]},"ssh":false,"publishedPorts":[]`,
+		"image":             `"initProcess":{"executable":"sh","arguments":[],"environment":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
+		"image reference":   `"image":{"descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
+		"image digest":      `"image":{"reference":"example.test/exporter"},"initProcess":{"executable":"sh","arguments":[],"environment":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
+		"executable":        `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"arguments":[],"environment":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
+		"arguments":         `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","environment":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
+		"environment":       `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
+		"working directory": `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
+		"ssh":               `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[],"workingDirectory":"/"},"publishedPorts":[],"publishedSockets":[]`,
+		"publishedPorts":    `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[],"workingDirectory":"/"},"ssh":false,"publishedSockets":[]`,
+		"publishedSockets":  `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[]`,
 	}
 	for missing, cfg := range fields {
 		t.Run("missing "+missing, func(t *testing.T) {
@@ -166,7 +168,7 @@ func TestDecodeInspectAllowlistFieldPresence(t *testing.T) {
 		})
 	}
 	// Every required field present decodes cleanly.
-	out := []byte(`[{"id":"c","configuration":{"id":"c","image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]},"status":{"state":"stopped"}}]`)
+	out := []byte(`[{"id":"c","configuration":{"id":"c","image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[],"publishedSockets":[]},"status":{"state":"stopped"}}]`)
 	rep, err := decodeInspect(out, "c")
 	if err != nil {
 		t.Errorf("complete report failed: %v", err)

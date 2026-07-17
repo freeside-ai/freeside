@@ -169,6 +169,62 @@ func TestValidateAgentSpecRedactsMalformedEnv(t *testing.T) {
 	}
 }
 
+func agentReport(spec ContainerSpec) InspectReport {
+	imageReference, imageDigest, _ := strings.Cut(spec.Image, "@")
+	return InspectReport{
+		ID:                      spec.Name,
+		ImageReference:          imageReference,
+		ImageDigest:             imageDigest,
+		Command:                 append([]string(nil), spec.Command...),
+		WorkingDirectory:        "/",
+		State:                   StateStopped,
+		AllowlistFieldsObserved: true,
+		Mounts:                  append([]Mount(nil), spec.Mounts...),
+		Env:                     append([]string{fixedContainerPathEnv}, spec.Env...),
+	}
+}
+
+func TestVerifyAgentAllowlistViolations(t *testing.T) {
+	cfg := testConfig()
+	hs := testHandoffSpec()
+	names := namesFor(hs.RunID)
+	spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel())
+	if err := verifyAgentAllowlist(agentReport(spec), spec); err != nil {
+		t.Fatalf("conforming report: %v, want nil", err)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*InspectReport)
+	}{
+		{"wrong identity", func(r *InspectReport) { r.ID = "other-agent" }},
+		{"required field omitted", func(r *InspectReport) { r.AllowlistFieldsObserved = false }},
+		{"running before approval", func(r *InspectReport) { r.State = StateRunning }},
+		{"unknown state", func(r *InspectReport) { r.State = "unknown" }},
+		{"wrong image", func(r *InspectReport) { r.ImageReference = "example.test/other:dev" }},
+		{"wrong image digest", func(r *InspectReport) { r.ImageDigest = "sha256:" + strings.Repeat("2", 64) }},
+		{"workspace working directory", func(r *InspectReport) { r.WorkingDirectory = "/workspace" }},
+		{"wrong command", func(r *InspectReport) { r.Command = append(r.Command, "--drift") }},
+		{"different environment", func(r *InspectReport) { r.Env = append(r.Env, "HOST_TOKEN=inert") }},
+		{"extra host bind", func(r *InspectReport) {
+			r.Mounts = append(r.Mounts, Mount{Type: MountBind, Source: "/", Target: "/host"})
+		}},
+		{"missing credential mount", func(r *InspectReport) { r.Mounts = r.Mounts[:1] }},
+		{"ssh forwarding", func(r *InspectReport) { r.SSH = true }},
+		{"published socket", func(r *InspectReport) { r.PublishedSockets = []string{"/tmp/agent.sock"} }},
+		{"published port", func(r *InspectReport) { r.PublishedPorts = []string{"8080"} }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rep := agentReport(spec)
+			tc.mutate(&rep)
+			if err := verifyAgentAllowlist(rep, spec); !errors.Is(err, ErrConformance) {
+				t.Fatalf("verifyAgentAllowlist = %v, want ErrConformance", err)
+			}
+		})
+	}
+}
+
 // exporterReport is the runtime report matching the generated allowlist:
 // the fixture the check-4 violation cases mutate.
 func exporterReport(cfg Config, exporterID, workspaceVolume string) InspectReport {
@@ -178,6 +234,7 @@ func exporterReport(cfg Config, exporterID, workspaceVolume string) InspectRepor
 		ImageReference:          imageReference,
 		ImageDigest:             imageDigest,
 		Command:                 append([]string(nil), cfg.ExporterCommand...),
+		WorkingDirectory:        "/",
 		State:                   StateStopped,
 		AllowlistFieldsObserved: true,
 		Mounts: []Mount{{
@@ -186,7 +243,7 @@ func exporterReport(cfg Config, exporterID, workspaceVolume string) InspectRepor
 			Target:   cfg.WorkspaceTarget,
 			ReadOnly: true,
 		}},
-		Env: []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+		Env: []string{fixedContainerPathEnv},
 	}
 }
 
@@ -211,6 +268,7 @@ func TestVerifyExporterAllowlistViolations(t *testing.T) {
 		{"wrong image reference", func(r *InspectReport) { r.ImageReference = "example.test/other" }},
 		{"wrong image digest", func(r *InspectReport) { r.ImageDigest = "sha256:" + strings.Repeat("1", 64) }},
 		{"wrong executable", func(r *InspectReport) { r.Command[0] = "/bin/other" }},
+		{"workspace working directory", func(r *InspectReport) { r.WorkingDirectory = "/workspace" }},
 		{"extra argument", func(r *InspectReport) { r.Command = append(r.Command, "--other") }},
 		{"running before execution", func(r *InspectReport) { r.State = StateRunning }},
 		{"unknown state before execution", func(r *InspectReport) { r.State = "" }},
@@ -227,6 +285,7 @@ func TestVerifyExporterAllowlistViolations(t *testing.T) {
 		{"published socket", func(r *InspectReport) { r.PublishedSockets = []string{"/tmp/agent.sock"} }},
 		{"published port", func(r *InspectReport) { r.PublishedPorts = []string{"8080"} }},
 		{"environment credential", func(r *InspectReport) { r.Env = append(r.Env, "PROVIDER_TOKEN=inert-fixture") }},
+		{"workspace in PATH", func(r *InspectReport) { r.Env = []string{"PATH=/workspace:/usr/bin:/bin"} }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

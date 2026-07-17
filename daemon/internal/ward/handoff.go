@@ -134,6 +134,13 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		return nil, fmt.Errorf("create agent container: %w", err)
 	}
 	st.agentOwned = true
+	agentRep, err := b.rt.Inspect(ctx, names.Agent)
+	if err != nil {
+		return nil, failf(CheckControlPlaneIsolation, "inspect agent before execution: %v", err)
+	}
+	if err := verifyAgentAllowlist(agentRep, agentSpec); err != nil {
+		return nil, err
+	}
 	if err := b.rt.StartContainer(ctx, names.Agent); err != nil {
 		return nil, fmt.Errorf("start agent container: %w", err)
 	}
@@ -387,6 +394,14 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	// ambiguous failed create, require the unpredictable ownership label too.
 	if vols, err := b.rt.ListVolumes(ctx); err != nil {
 		problems = append(problems, fmt.Sprintf("list volumes: %v", err))
+		// As with containers, an unrelated malformed row must not suppress
+		// cleanup of the exact workspace name established by a successful
+		// create. An ambiguous create still requires list/label evidence.
+		if st.workspaceOwned {
+			if derr := b.rt.DeleteVolume(ctx, names.Workspace); derr != nil {
+				problems = append(problems, fmt.Sprintf("delete known-owned volume %q after list failure: %v", names.Workspace, derr))
+			}
+		}
 	} else {
 		v, found, ferr := uniqueVolume(vols, names.Workspace)
 		if ferr != nil {

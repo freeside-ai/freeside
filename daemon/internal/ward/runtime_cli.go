@@ -206,8 +206,9 @@ type cliMount struct {
 }
 
 type cliInitProcess struct {
-	Executable string    `json:"executable"`
-	Arguments  *[]string `json:"arguments"`
+	Executable       string    `json:"executable"`
+	Arguments        *[]string `json:"arguments"`
+	WorkingDirectory *string   `json:"workingDirectory"`
 	// Pointer so an absent environment key is distinguishable from an
 	// explicitly empty one: the allowlist must observe the field, not
 	// assume clean when the CLI shape drifts.
@@ -291,9 +292,9 @@ func (m cliMount) toMount() Mount {
 	return out
 }
 
-// allowlistFieldsPresent reports whether every security-relevant inspect
-// field check 4 reads was actually present in the JSON. A drifted or partial
-// report (renamed/omitted keys) must not read as an explicit clean report.
+// allowlistFieldsPresent reports whether every security-relevant pre-start
+// inspect field was actually present in the JSON. A drifted or partial report
+// (renamed/omitted keys) must not read as an explicit clean report.
 func (c cliContainer) allowlistFieldsPresent() bool {
 	return c.Configuration.Image != nil &&
 		c.Configuration.Image.Reference != "" &&
@@ -301,6 +302,7 @@ func (c cliContainer) allowlistFieldsPresent() bool {
 		c.Configuration.Image.Descriptor.Digest != "" &&
 		c.Configuration.InitProcess.Executable != "" &&
 		c.Configuration.InitProcess.Arguments != nil &&
+		c.Configuration.InitProcess.WorkingDirectory != nil &&
 		c.Configuration.InitProcess.Environment != nil &&
 		c.Configuration.SSH != nil &&
 		c.Configuration.PublishedPorts != nil &&
@@ -325,6 +327,9 @@ func (c cliContainer) toReport() InspectReport {
 	}
 	if c.Configuration.InitProcess.Arguments != nil {
 		rep.Command = append(rep.Command, (*c.Configuration.InitProcess.Arguments)...)
+	}
+	if c.Configuration.InitProcess.WorkingDirectory != nil {
+		rep.WorkingDirectory = *c.Configuration.InitProcess.WorkingDirectory
 	}
 	if c.Configuration.InitProcess.Environment != nil {
 		rep.Env = append(rep.Env, (*c.Configuration.InitProcess.Environment)...)

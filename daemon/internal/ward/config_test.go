@@ -32,6 +32,7 @@ func TestConfigValidate(t *testing.T) {
 	}{
 		{"missing exporter image", func(c *Config) { c.ExporterImage = "" }},
 		{"tag-only exporter image", func(c *Config) { c.ExporterImage = "example.test/exporter:latest" }},
+		{"short exporter digest", func(c *Config) { c.ExporterImage = "example.test/exporter@sha256:abc" }},
 		{"missing exporter command", func(c *Config) { c.ExporterCommand = nil }},
 		{"relative workspace target", func(c *Config) { c.WorkspaceTarget = "workspace" }},
 		{"relative handoff dir", func(c *Config) { c.HandoffDir = "handoff" }},

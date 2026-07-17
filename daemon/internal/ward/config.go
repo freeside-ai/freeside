@@ -123,7 +123,7 @@ func (cfg Config) validate() error {
 	switch {
 	case cfg.ExporterImage == "":
 		return fmt.Errorf("%w: ExporterImage is required", ErrInvalidConfig)
-	case !strings.Contains(cfg.ExporterImage, "@sha256:"):
+	case !digestPinnedImagePattern.MatchString(cfg.ExporterImage):
 		return fmt.Errorf("%w: ExporterImage %q is not digest-pinned", ErrInvalidConfig, cfg.ExporterImage)
 	case len(cfg.ExporterCommand) == 0:
 		return fmt.Errorf("%w: ExporterCommand is required", ErrInvalidConfig)

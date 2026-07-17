@@ -554,3 +554,35 @@ joins both errors. Agent and exporter regressions cover unknown state; a third
 case makes stop take effect and return an error, then proves deletion still
 runs. Wrong inspect identity still prevents action, and no ambiguous or
 foreign-object deletion path was found.
+
+Round 19 raised one P1 and two P2s across pre-execution approval and cleanup:
+
+- *P1: the credential-bearing writer was started from generated intent
+  without inspecting the runtime-realized topology.* The writer now follows
+  the exporter's create-inspect-approve-start sequence. Before start, the
+  exact identity, digest-pinned image, argv, fixed working directory, full
+  environment, mount multiset, stopped state, SSH setting, and publications
+  must match the approved writer spec. Runtime-added binds, credential mounts,
+  environment, forwarding, publications, or payload drift fail categorically
+  before credentials can execute.
+- *P2: accepting any PATH-only exporter environment left relative argv
+  resolution dependent on runtime state.* The observed exporter environment
+  is now exactly one fixed system PATH with no workspace entry. The refute
+  pass found PATH alone did not cover slash-containing relative execution
+  (`./helper`) if the runtime changed `initProcess.workingDirectory` to the
+  workspace. Working directory is therefore required inspect evidence and is
+  fixed to `/` for both writer and exporter. Omission or drift fails before
+  start.
+- *P2: a full volume-list failure suppressed deletion of a successfully
+  created workspace.* Teardown now attempts exact-name deletion on that path
+  only when `workspaceOwned` was established by successful create. An
+  ambiguous create remains list-and-token gated, the list error remains a
+  teardown failure, and the second list remains the absence proof.
+
+The refute pass also found that tag-only agent images made the new payload
+comparison non-exact: a stable reference with different resolved bytes passed
+because no expected digest existed. `HandoffSpec` now requires the agent image
+to be digest-pinned, and pre-start inspection binds both reference and digest.
+The reference-runtime live fixture was already pinned. The cleanup fallback
+had no remaining sibling finding: it cannot act on an ambiguous workspace and
+still performs the absence re-list.

@@ -94,16 +94,18 @@ type ContainerSpec struct {
 }
 
 // InspectReport is the runtime's observed configuration and state for one
-// container; check 3 reads State and check 4 verifies the rest against the
-// generated allowlist.
+// container; checks 1-4 consume it to approve writer/exporter topology and
+// observe stopped state.
 type InspectReport struct {
-	ID             string
-	ImageReference string
-	ImageDigest    string
-	Command        []string
-	State          ContainerState
+	ID               string
+	ImageReference   string
+	ImageDigest      string
+	Command          []string
+	WorkingDirectory string
+	State            ContainerState
 	// AllowlistFieldsObserved records whether inspect exposed every image,
-	// process, environment, SSH, and publication field check 4 consumes.
+	// process, environment, SSH, and publication field pre-start approval
+	// consumes.
 	AllowlistFieldsObserved bool
 	// Mounts are the persistent mounts the runtime will realize. An
 	// implementation maps unknown mount kinds to an invalid MountType rather

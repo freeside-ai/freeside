@@ -280,6 +280,7 @@ func (f *fakeRuntime) Inspect(ctx context.Context, id string) (InspectReport, er
 	rep := InspectReport{
 		ID:                      id,
 		Command:                 append([]string(nil), c.spec.Command...),
+		WorkingDirectory:        "/",
 		State:                   f.state(c, id),
 		AllowlistFieldsObserved: true,
 		Mounts:                  append([]Mount(nil), c.spec.Mounts...),

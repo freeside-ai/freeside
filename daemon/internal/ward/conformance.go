@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const fixedContainerPathEnv = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 // validateAgentSpec verifies the generated writer spec against checks 1 and
 // 2. It runs on the spec the gate itself built: the gate re-verifies its own
 // construction instead of trusting it, so a future spec-builder change that
@@ -48,7 +50,7 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume string) e
 		}
 		// A comma or control character in a mount field would let the CLI
 		// parse an injected mount option, realizing a topology this
-		// spec-level check never approved (the agent is not re-inspected).
+		// spec-level check did not approve before the runtime re-inspection.
 		if !cliSafe(m.Source) {
 			return failf(CheckCredentialSeparation, "agent mount source carries a CLI delimiter")
 		}
@@ -92,6 +94,63 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume string) e
 	return nil
 }
 
+// verifyAgentAllowlist re-runs checks 1 and 2 against the runtime-realized
+// writer before it receives credentials or executes. The generated spec is
+// necessary intent evidence, but only inspect proves the VM topology the
+// runtime will actually start.
+func verifyAgentAllowlist(rep InspectReport, spec ContainerSpec) error {
+	if rep.ID != spec.Name {
+		return failf(CheckControlPlaneIsolation, "agent inspection identified the wrong container")
+	}
+	if !rep.AllowlistFieldsObserved {
+		return failf(CheckControlPlaneIsolation, "agent inspection omitted required configuration")
+	}
+	if rep.State != StateStopped {
+		return failf(CheckControlPlaneIsolation, "agent was not observed stopped before execution")
+	}
+	imageReference, imageDigest, _ := strings.Cut(spec.Image, "@")
+	if rep.ImageReference != imageReference || rep.ImageDigest != imageDigest {
+		return failf(CheckControlPlaneIsolation, "agent inspection reported the wrong image")
+	}
+	if rep.WorkingDirectory != "/" {
+		return failf(CheckControlPlaneIsolation, "agent working directory is not the fixed image root")
+	}
+	if !slices.Equal(rep.Command, spec.Command) {
+		return failf(CheckControlPlaneIsolation, "agent inspection reported the wrong command")
+	}
+	expectedEnv := append([]string{fixedContainerPathEnv}, spec.Env...)
+	if !slices.Equal(rep.Env, expectedEnv) {
+		return failf(CheckControlPlaneIsolation, "agent inspection reported a different environment")
+	}
+	if !sameMounts(rep.Mounts, spec.Mounts) {
+		return failf(CheckCredentialSeparation, "agent inspection reported a different mount topology")
+	}
+	if rep.SSH {
+		return failf(CheckControlPlaneIsolation, "agent has SSH forwarding configured")
+	}
+	if len(rep.PublishedSockets) > 0 || len(rep.PublishedPorts) > 0 {
+		return failf(CheckControlPlaneIsolation, "agent has a publication configured")
+	}
+	return nil
+}
+
+func sameMounts(got, want []Mount) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	counts := make(map[Mount]int, len(want))
+	for _, m := range want {
+		counts[m]++
+	}
+	for _, m := range got {
+		if counts[m] == 0 {
+			return false
+		}
+		counts[m]--
+	}
+	return true
+}
+
 // verifyExporterAllowlist is check 4: the exporter's runtime-observed
 // configuration, inspected before it ever executes, must match the generated
 // allowlist exactly — one persistent mount (the expected workspace volume,
@@ -112,6 +171,9 @@ func verifyExporterAllowlist(cfg Config, rep InspectReport, exporterID, workspac
 	}
 	if !slices.Equal(rep.Command, cfg.ExporterCommand) {
 		return failf(CheckExporterAllowlist, "exporter inspection reported the wrong command")
+	}
+	if rep.WorkingDirectory != "/" {
+		return failf(CheckExporterAllowlist, "exporter working directory is not the fixed image root")
 	}
 	// Inspect-before-execution: the report must describe a container that has
 	// not run. On the reference runtime a created-not-started container is
@@ -143,11 +205,8 @@ func verifyExporterAllowlist(cfg Config, rep InspectReport, exporterID, workspac
 	if n := len(rep.PublishedPorts); n > 0 {
 		return failf(CheckExporterAllowlist, "exporter publishes %d ports, want 0", n)
 	}
-	for _, e := range rep.Env {
-		key, _, _ := strings.Cut(e, "=")
-		if key != "PATH" {
-			return failf(CheckExporterAllowlist, "exporter environment carries a non-PATH entry")
-		}
+	if !slices.Equal(rep.Env, []string{fixedContainerPathEnv}) {
+		return failf(CheckExporterAllowlist, "exporter environment does not match the fixed PATH allowlist")
 	}
 	return nil
 }

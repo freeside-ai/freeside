@@ -34,7 +34,7 @@ func testHandoffSpec() HandoffSpec {
 		RunID:           "golden-run",
 		WorkspaceSizeMB: 64,
 		Agent: AgentSpec{
-			Image:   "example.test/agent:dev",
+			Image:   "example.test/agent@sha256:" + strings.Repeat("1", 64),
 			Command: []string{"sh", "-c", "true"},
 			Env:     []string{"AGENT_MODE=fixture"},
 			CredentialMounts: []CredentialMount{
@@ -63,6 +63,8 @@ func TestHandoffSpecValidate(t *testing.T) {
 		{"run id too long", func(s *HandoffSpec) { s.RunID = strings.Repeat("a", 33) }},
 		{"zero workspace size", func(s *HandoffSpec) { s.WorkspaceSizeMB = 0 }},
 		{"missing agent image", func(s *HandoffSpec) { s.Agent.Image = "" }},
+		{"unpinned agent image", func(s *HandoffSpec) { s.Agent.Image = "example.test/agent:latest" }},
+		{"short agent digest", func(s *HandoffSpec) { s.Agent.Image = "example.test/agent@sha256:abc" }},
 		{"missing agent command", func(s *HandoffSpec) { s.Agent.Command = nil }},
 	}
 	for _, tc := range cases {

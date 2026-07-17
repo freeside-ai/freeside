@@ -28,8 +28,13 @@ const ownershipLabelKey = "freeside.handoff-owner"
 // refuses to run at all; it is a caller error, not a conformance failure.
 var ErrInvalidHandoffSpec = errors.New("invalid handoff spec")
 
-// runIDPattern keeps run IDs safe as container and volume name segments.
-var runIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+var (
+	// runIDPattern keeps run IDs safe as container and volume name segments.
+	runIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+	// digestPinnedImagePattern binds an image reference to one full lowercase
+	// sha256 digest, not a tag or a merely digest-shaped prefix.
+	digestPinnedImagePattern = regexp.MustCompile(`^.+@sha256:[0-9a-f]{64}$`)
+)
 
 // CredentialMount places one existing credential volume into the agent VM,
 // read-only, at Target. The volume is caller-owned: the gate mounts it into
@@ -78,6 +83,8 @@ func (s HandoffSpec) validate() error {
 		return fmt.Errorf("%w: WorkspaceSizeMB %d is not positive", ErrInvalidHandoffSpec, s.WorkspaceSizeMB)
 	case s.Agent.Image == "":
 		return fmt.Errorf("%w: Agent.Image is required", ErrInvalidHandoffSpec)
+	case !digestPinnedImagePattern.MatchString(s.Agent.Image):
+		return fmt.Errorf("%w: Agent.Image must be digest-pinned", ErrInvalidHandoffSpec)
 	case len(s.Agent.Command) == 0:
 		return fmt.Errorf("%w: Agent.Command is required", ErrInvalidHandoffSpec)
 	}

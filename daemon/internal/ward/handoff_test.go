@@ -164,12 +164,16 @@ func TestHandoffOrderObservedState(t *testing.T) {
 		}
 		return i
 	}
+	createAgent := idx("create-container " + names.Agent)
+	inspectAgent := idx("inspect " + names.Agent)
+	startAgent := idx("start-container " + names.Agent)
 	deleteAgent := idx("delete-container " + names.Agent)
 	createExporter := idx("create-container " + names.Exporter)
 	inspectExporter := idx("inspect " + names.Exporter)
 	startExporter := idx("start-container " + names.Exporter)
 
-	// Four agent inspects: three running, the fourth stopped.
+	// Five agent inspects: one stopped pre-start allowlist check, three
+	// running polls, and the final stopped observation.
 	agentInspects := 0
 	lastAgentInspect := -1
 	fx.rt.mu.Lock()
@@ -180,8 +184,12 @@ func TestHandoffOrderObservedState(t *testing.T) {
 		}
 	}
 	fx.rt.mu.Unlock()
-	if agentInspects != 4 {
-		t.Errorf("agent inspected %d times before delete, want 4 (3 running + 1 stopped)", agentInspects)
+	if agentInspects != 5 {
+		t.Errorf("agent inspected %d times before delete, want 5 (pre-start + 3 running + 1 stopped)", agentInspects)
+	}
+	if createAgent >= inspectAgent || inspectAgent >= startAgent {
+		t.Errorf("agent allowlist not pre-execution: create %d, inspect %d, start %d",
+			createAgent, inspectAgent, startAgent)
 	}
 	if lastAgentInspect >= deleteAgent || deleteAgent >= createExporter {
 		t.Errorf("writer termination out of order: last inspect %d, delete %d, exporter create %d",
@@ -1032,6 +1040,35 @@ func TestHandoffOwnedContainerReapedWhenListFails(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandoffOwnedWorkspaceReapedWhenListFails(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.runningInspects[names.Agent] = math.MaxInt - 1
+	listCalls := 0
+	fx.rt.onListVolumes = func(list []VolumeSummary) ([]VolumeSummary, error) {
+		listCalls++
+		if listCalls == 1 {
+			return nil, errors.New("unrelated malformed volume row")
+		}
+		return list, nil
+	}
+
+	_, err := fx.run(t)
+	if err == nil || !strings.Contains(err.Error(), string(CheckTeardown)) {
+		t.Fatalf("Handoff = %v, want joined teardown failure", err)
+	}
+	fx.assertReaped(t)
+	fx.rt.mu.Lock()
+	defer fx.rt.mu.Unlock()
+	wantDelete := "delete-volume " + names.Workspace
+	for _, call := range fx.rt.calls {
+		if call == wantDelete {
+			return
+		}
+	}
+	t.Errorf("runtime calls %v do not contain %q", fx.rt.calls, wantDelete)
 }
 
 func TestHandoffInvalidSpec(t *testing.T) {
