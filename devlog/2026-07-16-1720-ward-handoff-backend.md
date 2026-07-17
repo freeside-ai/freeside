@@ -364,3 +364,38 @@ Round 11 raised one P2, another teardown-ownership regression from round 9:
   the credential volume survives without even receiving a delete attempt.
   This preserves round 4's unlabeled-survivor defense because the workspace's
   known name remains the teardown and proof key.
+
+Round 12 raised two P2s. One showed that round 11's exact-name correction was
+still incomplete for ambiguous creates, so I ran a fresh-context refute pass
+over the ownership state machine rather than patching the cited assignment:
+
+- *P2: claiming the run namespace before a create could delete another run's
+  objects.* An ordinary already-exists failure on the workspace, agent, or
+  exporter set the shared `claimed` bit before ownership was proved. Deferred
+  teardown could then delete the colliding object and any sibling object with
+  the same RunID. Ownership is now tracked per object. A successful create
+  owns that object's exact deterministic name; a failed create is ambiguous
+  and authorizes deletion only when a fresh runtime listing finds both the
+  exact name and this invocation's unpredictable 128-bit ownership label.
+  The label is added to every object at creation, retained in list results,
+  and is never inferred from the deterministic run label. The agent becomes
+  proven absent only after delete plus a full-list absence check, so later
+  teardown cannot reap a same-name replacement. Regression tests cover
+  foreign collisions at all three creates, create-then-error for all three
+  object types, cancellation after an ambiguous container create, and reuse
+  after the agent's absence was proved.
+- *P2: export verification allowed unmanifested directories.* The stray-file
+  check rejected unmanifested files but skipped every directory, so hostile
+  extra directory trees could be released beside the manifest. The verifier
+  now accepts only the structural directories required by the contract
+  (`.`, `blobs`, and `blobs/sha256`) and reports every other directory through
+  the same redacted conformance failure as other unmanifested output.
+
+The refute pass also found a pinned Apple container 1.1.0 limitation: volume
+creation may make an on-disk directory before formatting and persistence, and
+a formatter failure can leave that directory unlisted. The Runtime interface
+cannot discover or safely delete an object absent from the runtime listing.
+It contains no agent-written data because the writer never started, but it
+can consume storage or poison a retry with the same name. Revisit when Apple
+container exposes atomic creation or disk-level orphan cleanup, or when the
+Runtime boundary gains a safe discovery primitive for unlisted artifacts.
