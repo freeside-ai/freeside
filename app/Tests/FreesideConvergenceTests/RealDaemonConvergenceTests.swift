@@ -281,6 +281,43 @@ struct RealDaemonConvergenceTests {
         #expect(try await snapshot(of: itemID, via: b) == before)
     }
 
+    // MARK: - Attachment render (issue #128, acceptance 3)
+
+    @Test func anUploadedImageRendersFromTheRealDaemon() async throws {
+        // #128 acceptance 3: an image uploaded to the real daemon reads
+        // back through getAttachment and decodes to the inline .image
+        // phase, where before the route existed every attachment settled
+        // as the unavailable placeholder (the failure Codex raised on
+        // #126). Mirrors the mock
+        // AttachmentLoaderTests.anImageDigestDecodesToTheImagePhase, here
+        // against a live freeside-signet-dev instead of MockServer.
+        let device = try await ConvergenceHarness.pairDevice(displayName: "Convergence 128")
+        let digest = try await ConvergenceHarness.uploadAttachment(
+            AttentionFixtures.fixtureImagePNG, on: device)
+        let loader = AttachmentLoader(client: device.client)
+
+        await loader.load(digest)
+
+        guard case .image = loader.phase(for: digest) else {
+            Issue.record("expected .image, got \(String(describing: loader.phase(for: digest)))")
+            return
+        }
+    }
+
+    @Test func anUnstoredDigestRendersTheUnavailablePlaceholder() async throws {
+        // The negative half: a well-formed but unstored digest gets the
+        // daemon's authoritative 404, which the loader maps to
+        // .unavailable (the card's placeholder branch) rather than a hang
+        // or a crash.
+        let device = try await ConvergenceHarness.pairDevice(displayName: "Convergence 128N")
+        let unstored = "sha256:" + String(repeating: "11", count: 32)
+        let loader = AttachmentLoader(client: device.client)
+
+        await loader.load(unstored)
+
+        #expect(loader.phase(for: unstored) == .unavailable)
+    }
+
     private func snapshot(
         of itemID: String, via device: LiveDevice
     ) async throws -> Components.Schemas.AttentionItemSnapshot {

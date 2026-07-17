@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import FreesideAPI
 import FreesideCore
@@ -166,5 +167,27 @@ enum ConvergenceHarness {
         let itemID = uniqueItemID(label)
         try await control().seedItem(id: itemID, version: 1)
         return itemID
+    }
+
+    /// Uploads bytes through the real uploadAttachment route and returns
+    /// the content digest they were stored under, so a test can then read
+    /// them back through getAttachment. The daemon verifies the body hashes
+    /// to the path digest, so the digest is computed from the bytes here,
+    /// never guessed. No control route is involved: the contract PUT is the
+    /// seeding surface for a stored blob.
+    @MainActor
+    static func uploadAttachment(_ bytes: Data, on device: LiveDevice) async throws -> String {
+        let digest = "sha256:" + SHA256.hash(data: bytes)
+            .map { String(format: "%02x", $0) }.joined()
+        let response = try await device.client.uploadAttachment(
+            path: .init(digest: digest),
+            body: .binary(HTTPBody(bytes))
+        )
+        switch response {
+        case .created, .ok:
+            return digest
+        default:
+            throw ConvergenceOutage()
+        }
     }
 }
