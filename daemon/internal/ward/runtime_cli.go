@@ -518,13 +518,16 @@ func decodeInspect(out []byte, id string) (InspectReport, error) {
 	// unidentified) object's state and mounts while the requested name is
 	// started/deleted/exported. Fail closed, matching the list decoders.
 	if ctrs[0].ID != id {
-		return InspectReport{}, fmt.Errorf("inspect %q returned a report identified as %q", id, ctrs[0].ID)
+		// The observed id is untrusted CLI output that could carry a copied
+		// credential in a foreign object's name; keep the reason categorical
+		// so it cannot reach ConformanceFailure.Reason as credential material.
+		return InspectReport{}, fmt.Errorf("inspect %q returned a report with a mismatched identity", id)
 	}
 	// The image, command, mounts, environment, SSH, and publications check 4 reads all live
 	// under configuration, so its identity must match too: a report cannot
 	// carry the requested top-level id but another object's configuration.
 	if ctrs[0].Configuration.ID != id {
-		return InspectReport{}, fmt.Errorf("inspect %q returned a configuration identified as %q", id, ctrs[0].Configuration.ID)
+		return InspectReport{}, fmt.Errorf("inspect %q returned a configuration with a mismatched identity", id)
 	}
 	// Preserve allowlist-field presence in the report instead of rejecting it
 	// here. Check 4 requires the complete exporter shape; teardown ownership
@@ -555,7 +558,10 @@ func decodeContainerList(out []byte) ([]ContainerSummary, error) {
 			return nil, fmt.Errorf("container list entry %d has no id", i)
 		}
 		if c.Configuration.ID != c.ID {
-			return nil, fmt.Errorf("container list entry %d id %q disagrees with configuration id %q", i, c.ID, c.Configuration.ID)
+			// Both ids are untrusted CLI output; report the entry position, not
+			// the observed names, so a copied credential in a foreign row's
+			// identity cannot reach ConformanceFailure.Reason.
+			return nil, fmt.Errorf("container list entry %d id disagrees with its configuration id", i)
 		}
 		labels := []Label(nil)
 		if c.Configuration.Labels != nil {
@@ -595,7 +601,7 @@ func decodeVolumeList(out []byte) ([]VolumeSummary, error) {
 			return nil, fmt.Errorf("volume list entry %d has no name", i)
 		}
 		if v.ID != v.Configuration.Name {
-			return nil, fmt.Errorf("volume list entry %d id %q disagrees with configuration name %q", i, v.ID, v.Configuration.Name)
+			return nil, fmt.Errorf("volume list entry %d id disagrees with its configuration name", i)
 		}
 		labels := []Label(nil)
 		if v.Configuration.Labels != nil {

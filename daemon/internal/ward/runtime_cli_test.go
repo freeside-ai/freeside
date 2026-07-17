@@ -304,6 +304,57 @@ func TestDecodeListFailsClosedOnMissingIdentity(t *testing.T) {
 	}
 }
 
+// TestIdentityMismatchErrorsRedactObservedIDs proves the identity-disagreement
+// failures across all three decoders never echo the untrusted CLI-observed
+// identity: a foreign row's id or name can carry a copied credential, and these
+// errors are wrapped into ConformanceFailure.Reason, which must hold no
+// credential material. The trusted requested id and entry index stay.
+func TestIdentityMismatchErrorsRedactObservedIDs(t *testing.T) {
+	const token = "copied-secret-TOKEN"
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "inspect top-level id",
+			err:  mustDecodeInspectErr(`[{"id":"`+token+`","configuration":{"id":"`+token+`","initProcess":{"environment":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]},"status":{"state":"stopped"}}]`, "wanted"),
+		},
+		{
+			name: "inspect configuration id",
+			err:  mustDecodeInspectErr(`[{"id":"wanted","configuration":{"id":"`+token+`","initProcess":{"environment":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]},"status":{"state":"stopped"}}]`, "wanted"),
+		},
+		{
+			name: "container list id disagreement",
+			err: func() error {
+				_, err := decodeContainerList([]byte(`[{"id":"wanted","configuration":{"id":"` + token + `"},"status":{"state":"stopped"}}]`))
+				return err
+			}(),
+		},
+		{
+			name: "volume list id disagreement",
+			err: func() error {
+				_, err := decodeVolumeList([]byte(`[{"id":"` + token + `","configuration":{"name":"wanted","labels":{}}}]`))
+				return err
+			}(),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.err == nil {
+				t.Fatal("mismatched identity decoded without error")
+			}
+			if strings.Contains(tc.err.Error(), token) {
+				t.Errorf("error echoes the untrusted observed identity: %v", tc.err)
+			}
+		})
+	}
+}
+
+func mustDecodeInspectErr(out, id string) error {
+	_, err := decodeInspect([]byte(out), id)
+	return err
+}
+
 func TestDecodeVolumeList(t *testing.T) {
 	got, err := decodeVolumeList(readFixture(t, "cli-volume-list.json"))
 	if err != nil {
