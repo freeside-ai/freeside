@@ -13,14 +13,23 @@ type FindingKind string
 // attempted swap visible.
 const FindingRecipeDivergence FindingKind = "recipe_divergence"
 
+// FindingVerificationControlPath records a candidate change touching a
+// verification-control path (§5.6): a file that steers what the
+// recipe's commands actually execute or check (dependency pins, build
+// entrypoints, lint config, the recipe path itself).
+const FindingVerificationControlPath FindingKind = "verification_control_path"
+
 // AllFindingKinds lists every valid FindingKind: the single place a new
 // kind is registered, driving the table-driven tests.
-var AllFindingKinds = []FindingKind{FindingRecipeDivergence}
+var AllFindingKinds = []FindingKind{
+	FindingRecipeDivergence,
+	FindingVerificationControlPath,
+}
 
 // valid is the validity predicate; as a predicate it uses default.
 func (k FindingKind) valid() bool {
 	switch k {
-	case FindingRecipeDivergence:
+	case FindingRecipeDivergence, FindingVerificationControlPath:
 		return true
 	default:
 		return false
