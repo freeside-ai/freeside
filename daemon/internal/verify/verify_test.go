@@ -61,7 +61,7 @@ func verifyFixture(t *testing.T, changes map[string]string, changeList []importe
 // the materialized workspace (so it demonstrably existed and was
 // ignored), and the divergence is flagged.
 func TestVerifyExecutesTrustedRecipeNotWorkspaceCopy(t *testing.T) {
-	hostile := `{"commands": ["true"], "capture": "none"}`
+	hostile := `{"commands": [["true"]], "capture": "none"}`
 	checkout, opts, room := verifyFixture(
 		t,
 		map[string]string{testRecipePath: hostile},
@@ -228,6 +228,34 @@ func TestVerifyReportGolden(t *testing.T) {
 	}
 }
 
+// TestRenderArgvQuotesUnsafeTokens enumerates the transcript-rendering
+// input space: a shell-safe literal renders bare, but anything that
+// could read as more than one element or inject a terminal-control
+// sequence (whitespace, a shell metacharacter, a control character, an
+// empty token) is quoted, since an argument is an opaque execve token,
+// not shell text.
+func TestRenderArgvQuotesUnsafeTokens(t *testing.T) {
+	cases := []struct {
+		name string
+		argv []string
+		want string
+	}{
+		{"safe literals", []string{"go", "test", "./..."}, "go test ./..."},
+		{"safe path and flags", []string{"bash", "scripts/verify.sh", "--fast=1"}, "bash scripts/verify.sh --fast=1"},
+		{"whitespace token", []string{"xcodebuild", "-destination", "generic/platform=iOS Simulator"}, `xcodebuild -destination "generic/platform=iOS Simulator"`},
+		{"metacharacter token", []string{"grep", "-E", "a|b", "."}, `grep -E "a|b" .`},
+		{"control char token", []string{"echo", "a\x1bb"}, `echo "a\x1bb"`},
+		{"empty token", []string{"tool", ""}, `tool ""`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := renderArgv(tc.argv); got != tc.want {
+				t.Fatalf("renderArgv(%q) = %q, want %q", tc.argv, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestOutcomeValidity(t *testing.T) {
 	for _, o := range AllOutcomes {
 		if !o.valid() {
@@ -342,7 +370,7 @@ func TestVerifyRejectsSymlinkEntrypoint(t *testing.T) {
 		HeadSHA: head, BaseSHA: base,
 		InvocationID: domain.InvocationID("inv-1"),
 		// A config recipe whose entrypoint is the repo-local symlink.
-		RecipeSource: ConfigRecipe([]byte(`{"commands": ["./run-check"], "capture": "none"}`)),
+		RecipeSource: ConfigRecipe([]byte(`{"commands": [["./run-check"]], "capture": "none"}`)),
 		Room:         room,
 	}
 	_, err := Verify(context.Background(), dir, opts)
@@ -372,7 +400,7 @@ func TestVerifyRejectsSymlinkPrefixEntrypoint(t *testing.T) {
 	opts := Options{
 		HeadSHA: head, BaseSHA: base,
 		InvocationID: domain.InvocationID("inv-1"),
-		RecipeSource: ConfigRecipe([]byte(`{"commands": ["./run-check/verify.sh"], "capture": "none"}`)),
+		RecipeSource: ConfigRecipe([]byte(`{"commands": [["./run-check/verify.sh"]], "capture": "none"}`)),
 		Room:         room,
 	}
 	_, err := Verify(context.Background(), dir, opts)

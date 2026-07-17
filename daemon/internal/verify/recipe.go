@@ -41,35 +41,43 @@ func (m CaptureMode) valid() bool {
 
 // Recipe is a parsed trusted verification recipe: the commands the
 // clean workspace runs and the capture block governing evidence.
-// Commands are argument vectors, never shell text: the wire form's
-// command strings are whitespace-split and any shell metacharacter is
-// rejected at parse, so no recipe can smuggle chaining, substitution,
-// or redirection past the no-shell execution path.
+// Commands are argument vectors given verbatim on the wire
+// ([["go", "test", "./..."]]): no shell, no splitting, arguments
+// opaque. An argument may therefore hold a space or any metacharacter
+// (`xcodebuild -destination 'generic/platform=iOS Simulator'`, a regex)
+// as one element without smuggling chaining, substitution, or
+// redirection past the no-shell execution path, which never sees the
+// argument as anything but an opaque execve token.
 type Recipe struct {
 	Commands [][]string
 	Capture  CaptureMode
 }
 
 // recipeWire is the recipe's JSON wire form, e.g.
-// {"commands": ["go test ./...", "go vet ./..."], "capture": "none"}.
+// {"commands": [["go", "test", "./..."], ["go", "vet", "./..."]],
+// "capture": "none"}. Each command is an explicit argument vector, not
+// a shell string: an argv element carries its spaces and metacharacters
+// verbatim, and the parser neither splits nor rewrites it.
 // JSON rather than the plan's §5.12 YAML config syntax: the daemon
 // carries no YAML dependency and the control-plane config format is not
 // yet initialized; the decision note records the revisit condition.
+//
+// Tokens are *string, not string, so the parser can tell a JSON null
+// (nil) from an intentional empty string (a non-nil pointer to ""):
+// json unmarshals null into a string's zero value, which would let a
+// malformed `["swift", "test", null]` masquerade as a valid empty
+// argument, so a null token fails closed rather than executing.
 type recipeWire struct {
-	Commands []string `json:"commands"`
-	Capture  string   `json:"capture"`
+	Commands [][]*string `json:"commands"`
+	Capture  string      `json:"capture"`
 }
 
-// shellMeta are the rejected shell metacharacters. The verifier never
-// invokes a shell, so these have no function in an honest recipe; their
-// presence means the recipe was written against shell semantics the
-// execution path does not provide, and it fails closed at parse.
-const shellMeta = "|&;<>()$`\\\"'"
-
 // ParseRecipe parses and validates trusted recipe bytes. Unknown
-// fields, trailing data, an empty command list, an empty command, a
-// shell metacharacter, a control character, and an invalid capture mode
-// all fail closed with ErrRecipeInvalid.
+// fields, trailing data, an empty command list, an empty command (no
+// argv or an empty executable name), a null or NUL-bearing token, a
+// ".." path segment in a token, and an invalid capture mode all fail
+// closed with ErrRecipeInvalid. Command arguments are otherwise opaque:
+// no shell, no whitespace splitting, no metacharacter rejection.
 func ParseRecipe(raw []byte) (Recipe, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -93,9 +101,15 @@ func ParseRecipe(raw []byte) (Recipe, error) {
 		Commands: make([][]string, 0, len(w.Commands)),
 		Capture:  CaptureMode(w.Capture),
 	}
-	for _, c := range w.Commands {
-		argv, err := splitCommand(c)
-		if err != nil {
+	for _, rawArgv := range w.Commands {
+		argv := make([]string, 0, len(rawArgv))
+		for _, tok := range rawArgv {
+			if tok == nil {
+				return Recipe{}, fmt.Errorf("recipe command carries a null token: %w", ErrRecipeInvalid)
+			}
+			argv = append(argv, *tok)
+		}
+		if err := validateCommand(argv); err != nil {
 			return Recipe{}, err
 		}
 		r.Commands = append(r.Commands, argv)
@@ -106,21 +120,32 @@ func ParseRecipe(raw []byte) (Recipe, error) {
 	return r, nil
 }
 
-// splitCommand turns one wire command string into an argument vector.
-func splitCommand(c string) ([]string, error) {
-	for _, r := range c {
-		if strings.ContainsRune(shellMeta, r) {
-			return nil, fmt.Errorf("command %q carries shell metacharacter %q: %w", c, r, ErrRecipeInvalid)
+// validateCommand fails closed on a malformed argument vector. A recipe
+// is trusted, so these guard against an authoring mistake or an
+// adversarial recipe, never candidate input: an empty vector or empty
+// executable name has nothing to run; a NUL byte cannot cross execve
+// and would otherwise surface as an opaque runtime error; and a ".."
+// path segment in any token is rejected before path.Clean can collapse
+// it, because a collapsed token (`./link/../verify.sh` -> `verify.sh`)
+// makes CommandPaths and the symlink-entrypoint guard record and check
+// a different path than the OS resolves and executes. Arguments are
+// otherwise opaque: spaces and shell metacharacters are legal, since
+// the runner passes each element to execve verbatim, never to a shell.
+func validateCommand(argv []string) error {
+	if len(argv) == 0 || argv[0] == "" {
+		return fmt.Errorf("recipe declares an empty command: %w", ErrRecipeInvalid)
+	}
+	for _, tok := range argv {
+		if strings.ContainsRune(tok, 0) {
+			return fmt.Errorf("command token %q carries a NUL byte: %w", tok, ErrRecipeInvalid)
 		}
-		if r < 0x20 || r == 0x7f {
-			return nil, fmt.Errorf("command %q carries a control character: %w", c, ErrRecipeInvalid)
+		for _, seg := range strings.Split(tok, "/") {
+			if seg == ".." {
+				return fmt.Errorf("command token %q carries a %q path segment: %w", tok, "..", ErrRecipeInvalid)
+			}
 		}
 	}
-	argv := strings.Fields(c)
-	if len(argv) == 0 {
-		return nil, fmt.Errorf("recipe declares an empty command: %w", ErrRecipeInvalid)
-	}
-	return argv, nil
+	return nil
 }
 
 // CommandPaths returns the repo-relative file paths the recipe's
