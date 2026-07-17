@@ -61,6 +61,10 @@ type fakeRuntime struct {
 	// context is done (modeling a wedged runtime call under teardown's
 	// bounded deadline).
 	blockDelete string
+	// blockInspect, when set, makes post-start Inspect of that id block until
+	// its context is done (modeling a wedged observation call under the
+	// writer/exporter timeout; pre-start allowlist inspection remains usable).
+	blockInspect string
 	// createThenFail, when set to a container name, makes CreateContainer add
 	// the container to the runtime but then return an error, modeling an
 	// ambiguous create (the object exists though the call reported failure).
@@ -265,15 +269,23 @@ func (f *fakeRuntime) state(c *fakeCtr, name string) ContainerState {
 
 func (f *fakeRuntime) Inspect(ctx context.Context, id string) (InspectReport, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.record("inspect %s", id)
 	if err := f.checkCtx(ctx); err != nil {
+		f.mu.Unlock()
 		return InspectReport{}, err
 	}
 	c, ok := f.ctrs[id]
 	if !ok {
+		f.mu.Unlock()
 		return InspectReport{}, fmt.Errorf("container %q not found", id)
 	}
+	block := f.blockInspect == id && c.started
+	if block {
+		f.mu.Unlock()
+		<-ctx.Done()
+		return InspectReport{}, ctx.Err()
+	}
+	defer f.mu.Unlock()
 	if c.started && !c.stopped {
 		c.inspects++
 	}

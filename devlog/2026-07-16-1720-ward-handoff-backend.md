@@ -703,3 +703,45 @@ start, stop, delete for containers and volumes) drain stdout to `io.Discard`.
 `ExportRootFS` was already bounded by the caller-owned archive writer (round
 17). Regression: a fixture that floods stdout past the cap, proving the
 JSON path fails closed while the no-output path drains and succeeds.
+
+The requested refute-first pass then found four additional in-scope failures
+before another reviewer round:
+
+- *P1: Runtime and caller slice aliasing could rewrite the expected allowlist.*
+  `Config.ExporterCommand`, the agent request slices, and the `ContainerSpec`
+  passed to `CreateContainer` shared backing arrays with the values later used as
+  expected policy. A Runtime that normalized a received spec in place could
+  therefore change the expected helper command or mount and make its own drift
+  compare equal. `New` freezes config slices, `Handoff` freezes request slices,
+  and every Runtime call receives detached spec/label slices. Regressions use a
+  mutating Runtime against both writer and exporter and prove the realized drift
+  is refused.
+- *P1: duplicate JSON members collapsed contradictory runtime evidence.*
+  `encoding/json` is last-value-wins and matches struct fields case-insensitively,
+  so dirty then clean `Mounts`/`mounts`, identity, or label members could reach
+  allowlist/ownership decisions as one clean value. A bounded structural pass now
+  rejects duplicate keys under the same Unicode simple-fold normalization the
+  decoder uses, at every nesting level, before typed decode. Inspect, container
+  list, and volume list regressions include a mixed-case collision. The same
+  sweep closed the list-shape sibling: JSON `null` decoded to a nil slice and
+  previously masqueraded as an empty absence proof; both list decoders now
+  require an actual array.
+- *P2: writer/exporter timeouts did not bound a wedged inspect.* The poll count
+  limited only promptly returning calls; one `Runtime.Inspect` under an
+  unbounded caller context could block forever. The whole observation loop now
+  runs under its named timeout context. Blocked-inspect regressions cover both
+  writer and exporter and prove teardown still reaps them.
+- *P2: a zero or typed-nil backend falsely declared the strong capability set.*
+  Only `New` now marks a backend initialized; every other value declares an
+  empty set and receives a typed capability refusal before `Handoff` can
+  dereference it. The initialized declaration remains immutable.
+
+The same pass found one out-of-scope P1 that the current Runtime contract cannot
+solve safely: successful creates authorize later destructive cleanup by a
+deterministic mutable name. An external delete-and-replace can therefore make
+teardown target a foreign same-name exporter or workspace; a label recheck is
+not sufficient because it leaves a check-to-delete TOCTOU. Issue #76 requires
+Runtime interface changes to stop and route through a spine-owned contract unit,
+so this is not folded into PR #129. Follow-up: #138. Revisit this backend's
+merge-readiness only after cleanup authority binds to immutable identity or an
+atomic deletion precondition.

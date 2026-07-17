@@ -88,6 +88,37 @@ func TestCapabilitiesImmutable(t *testing.T) {
 	}
 }
 
+// TestUninitializedBackendDeclaresNothing pins the zero-value contract: only
+// New can construct a backend that advertises the strong handoff class.
+func TestUninitializedBackendDeclaresNothing(t *testing.T) {
+	for name, b := range map[string]*Backend{
+		"typed nil":  nil,
+		"zero value": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := b.Capabilities(); len(got) != 0 {
+				t.Errorf("Capabilities = %v, want empty", got)
+			}
+			if _, err := exec.CheckCapabilities(b, declaredCapabilities); !errors.Is(err, exec.ErrCapabilityRefused) {
+				t.Errorf("CheckCapabilities = %v, want ErrCapabilityRefused", err)
+			}
+		})
+	}
+}
+
+func TestNewFreezesConfigSlices(t *testing.T) {
+	cfg := testConfig()
+	b, err := New(stubRuntime{}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := b.cfg.ExporterCommand[0]
+	cfg.ExporterCommand[0] = "caller-rewrite"
+	if b.cfg.ExporterCommand[0] != want {
+		t.Errorf("backend command = %q after caller mutation, want frozen %q", b.cfg.ExporterCommand[0], want)
+	}
+}
+
 func TestNewValidation(t *testing.T) {
 	if _, err := New(nil, testConfig()); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("New(nil runtime) = %v, want ErrInvalidConfig", err)

@@ -139,6 +139,51 @@ func TestDecodeInspectCardinality(t *testing.T) {
 	}
 }
 
+// TestRuntimeDecodersRejectDuplicateKeys proves contradictory JSON object
+// members never collapse through encoding/json's last-value-wins behavior
+// before inspect/list evidence reaches a gate check or teardown decision.
+func TestRuntimeDecodersRejectDuplicateKeys(t *testing.T) {
+	cases := []struct {
+		name string
+		call func([]byte) error
+		data string
+	}{
+		{
+			name: "inspect nested configuration",
+			call: func(data []byte) error {
+				_, err := decodeInspect(data, "c")
+				return err
+			},
+			data: `[{"id":"c","configuration":{"id":"c","Mounts":[{"destination":"/dirty"}],"mounts":[]}}]`,
+		},
+		{
+			name: "container list identity",
+			call: func(data []byte) error {
+				_, err := decodeContainerList(data)
+				return err
+			},
+			data: `[{"id":"c","id":"c","configuration":{"id":"c"}}]`,
+		},
+		{
+			name: "volume list labels",
+			call: func(data []byte) error {
+				_, err := decodeVolumeList(data)
+				return err
+			},
+			data: `[{"id":"v","configuration":{"name":"v","labels":{},"labels":{}}}]`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.call([]byte(tc.data)); err == nil {
+				t.Fatal("decoder accepted duplicate JSON object keys")
+			} else if strings.Contains(err.Error(), "mounts") || strings.Contains(err.Error(), "labels") {
+				t.Errorf("decoder error echoed an untrusted duplicate key: %v", err)
+			}
+		})
+	}
+}
+
 // TestDecodeInspectIdentity: the report must be for the requested container.
 // A missing or mismatched id fails closed, so checks 3/4 never act on the
 // wrong (or unidentified) object's state and mounts.
@@ -233,6 +278,12 @@ func TestDecodeContainerList(t *testing.T) {
 // (containers) or name (volumes) is a decode error, never a silently
 // unidentified entry the absence proofs would treat as absent.
 func TestDecodeListFailsClosedOnMissingIdentity(t *testing.T) {
+	if _, err := decodeContainerList([]byte(`null`)); err == nil {
+		t.Error("null container list decoded as an empty absence proof")
+	}
+	if _, err := decodeVolumeList([]byte(`null`)); err == nil {
+		t.Error("null volume list decoded as an empty absence proof")
+	}
 	if _, err := decodeContainerList([]byte(`[{"status":{"state":"running"}}]`)); err == nil {
 		t.Error("container list entry with no id decoded without error")
 	}

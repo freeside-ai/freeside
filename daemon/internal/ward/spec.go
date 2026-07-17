@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -155,6 +156,18 @@ func buildExporterSpec(cfg Config, hs HandoffSpec, names handoffNames, ownership
 		}},
 		Labels: append(runLabels(hs.RunID), ownershipLabel),
 	}
+}
+
+// cloneContainerSpec detaches every reference field before a spec crosses the
+// Runtime boundary. Runtime implementations may normalize or retain their
+// input; neither may rewrite the immutable expected spec used by the gate's
+// post-create allowlist comparison.
+func cloneContainerSpec(spec ContainerSpec) ContainerSpec {
+	spec.Command = slices.Clone(spec.Command)
+	spec.Env = slices.Clone(spec.Env)
+	spec.Mounts = slices.Clone(spec.Mounts)
+	spec.Labels = slices.Clone(spec.Labels)
+	return spec
 }
 
 // cleanAbs reports whether p is an absolute, cleaned, non-root path: the

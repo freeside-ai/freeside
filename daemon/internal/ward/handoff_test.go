@@ -26,9 +26,9 @@ func newHandoffFixture(t *testing.T) *handoffFixture {
 	t.Helper()
 	sleeps := 0
 	cfg := testConfig()
-	cfg.PollInterval = time.Millisecond
-	cfg.WriterStopTimeout = 10 * time.Millisecond // 10 poll attempts
-	cfg.ExporterTimeout = 10 * time.Millisecond
+	cfg.PollInterval = 100 * time.Millisecond
+	cfg.WriterStopTimeout = time.Second // 10 poll attempts, with a non-flaky real deadline
+	cfg.ExporterTimeout = time.Second
 	cfg.Sleep = func(context.Context, time.Duration) error {
 		sleeps++
 		return nil
@@ -215,6 +215,79 @@ func TestHandoffWriterNeverStops(t *testing.T) {
 		t.Error("exporter was created despite an unterminated writer")
 	}
 	fx.assertReaped(t)
+}
+
+// TestHandoffObservationTimeoutBoundsInspect proves the named writer and
+// exporter timeouts are hard ceilings around runtime observation itself, not
+// merely poll-count budgets that a wedged Inspect call can defeat.
+func TestHandoffObservationTimeoutBoundsInspect(t *testing.T) {
+	names := namesFor(testHandoffSpec().RunID)
+	cases := []struct {
+		name      string
+		container string
+		check     Check
+		setLimit  func(*Config, time.Duration)
+	}{
+		{
+			name:      "writer",
+			container: names.Agent,
+			check:     CheckWriterTermination,
+			setLimit:  func(c *Config, d time.Duration) { c.WriterStopTimeout = d },
+		},
+		{
+			name:      "exporter",
+			container: names.Exporter,
+			check:     CheckExportVerification,
+			setLimit:  func(c *Config, d time.Duration) { c.ExporterTimeout = d },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newHandoffFixture(t)
+			const limit = 20 * time.Millisecond
+			tc.setLimit(&fx.cfg, limit)
+			fx.rt.blockInspect = tc.container
+
+			started := time.Now()
+			_, err := fx.run(t)
+			wantCheckFailure(t, err, tc.check)
+			if elapsed := time.Since(started); elapsed > time.Second {
+				t.Errorf("Handoff returned after %s, want bounded near %s", elapsed, limit)
+			}
+			fx.assertReaped(t)
+		})
+	}
+}
+
+// TestHandoffRuntimeCannotRewriteExpectedSpec treats the Runtime argument as
+// an untrusted call boundary: mutating a received spec may change realized
+// state, but must not rewrite the gate's expected command or mount allowlist.
+func TestHandoffRuntimeCannotRewriteExpectedSpec(t *testing.T) {
+	names := namesFor(testHandoffSpec().RunID)
+	cases := []struct {
+		name      string
+		container string
+		check     Check
+	}{
+		{name: "writer", container: names.Agent, check: CheckControlPlaneIsolation},
+		{name: "exporter", container: names.Exporter, check: CheckExporterAllowlist},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newHandoffFixture(t)
+			fx.rt.onCreateContainer = func(spec ContainerSpec) error {
+				if spec.Name == tc.container {
+					spec.Command[0] = "runtime-rewrite"
+					spec.Mounts[0].Source = "runtime-rewrite"
+				}
+				return nil
+			}
+
+			_, err := fx.run(t)
+			wantCheckFailure(t, err, tc.check)
+			fx.assertReaped(t)
+		})
+	}
 }
 
 func TestHandoffAgentDeleteFails(t *testing.T) {

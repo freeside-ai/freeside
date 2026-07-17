@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	osexec "os/exec"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // CLIRuntime is the Runtime over the Apple container CLI (the reference
@@ -292,6 +294,101 @@ type cliVolumeEntry struct {
 	ID            string    `json:"id"`
 }
 
+// rejectDuplicateJSONKeys rejects ambiguous runtime evidence before the
+// typed decoders apply encoding/json's last-value-wins behavior. The CLI
+// output is already byte-capped by run, so this structural pass is also
+// resource-bounded.
+func rejectDuplicateJSONKeys(out []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(out))
+	if err := checkJSONValue(dec); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("runtime JSON contains more than one top-level value")
+		}
+		return err
+	}
+	return nil
+}
+
+func checkJSONValue(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := make(map[string]struct{})
+		for dec.More() {
+			keyToken, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("runtime JSON object key is not a string")
+			}
+			folded := foldJSONKey(key)
+			if _, duplicate := seen[folded]; duplicate {
+				return errors.New("runtime JSON object contains a duplicate key")
+			}
+			seen[folded] = struct{}{}
+			if err := checkJSONValue(dec); err != nil {
+				return err
+			}
+		}
+		end, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if end != json.Delim('}') {
+			return errors.New("runtime JSON object is not terminated")
+		}
+	case '[':
+		for dec.More() {
+			if err := checkJSONValue(dec); err != nil {
+				return err
+			}
+		}
+		end, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if end != json.Delim(']') {
+			return errors.New("runtime JSON array is not terminated")
+		}
+	default:
+		return errors.New("runtime JSON contains an unexpected delimiter")
+	}
+	return nil
+}
+
+// foldJSONKey mirrors encoding/json's case-insensitive struct-field matching:
+// every rune is reduced to the smallest member of its Unicode simple-fold
+// set. Keys that would target the same Go field therefore collide here even
+// when their spelling or case differs.
+func foldJSONKey(key string) string {
+	var out strings.Builder
+	out.Grow(len(key))
+	for _, r := range key {
+		for {
+			next := unicode.SimpleFold(r)
+			if next <= r {
+				r = next
+				break
+			}
+			r = next
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
+}
+
 // toMount maps one CLI mount to the seam vocabulary. The type field is a
 // single-key object; "volume" carries the volume name, "virtiofs" is a host
 // bind. Anything else — including a malformed multi-key object — maps to an
@@ -406,6 +503,9 @@ func (c cliContainer) toReport() InspectReport {
 // decodeInspect decodes `container inspect` output: an array with exactly
 // one element for a single-ID query.
 func decodeInspect(out []byte, id string) (InspectReport, error) {
+	if err := rejectDuplicateJSONKeys(out); err != nil {
+		return InspectReport{}, fmt.Errorf("decode inspect output for %q: invalid JSON structure", id)
+	}
 	var ctrs []cliContainer
 	if err := json.Unmarshal(out, &ctrs); err != nil {
 		return InspectReport{}, fmt.Errorf("decode inspect output for %q: %w", id, err)
@@ -434,9 +534,15 @@ func decodeInspect(out []byte, id string) (InspectReport, error) {
 }
 
 func decodeContainerList(out []byte) ([]ContainerSummary, error) {
+	if err := rejectDuplicateJSONKeys(out); err != nil {
+		return nil, errors.New("decode container list: invalid JSON structure")
+	}
 	var ctrs []cliContainer
 	if err := json.Unmarshal(out, &ctrs); err != nil {
 		return nil, fmt.Errorf("decode container list: %w", err)
+	}
+	if ctrs == nil {
+		return nil, errors.New("decode container list: output is null, want an array")
 	}
 	summaries := make([]ContainerSummary, len(ctrs))
 	for i, c := range ctrs {
@@ -468,9 +574,15 @@ func decodeContainerList(out []byte) ([]ContainerSummary, error) {
 }
 
 func decodeVolumeList(out []byte) ([]VolumeSummary, error) {
+	if err := rejectDuplicateJSONKeys(out); err != nil {
+		return nil, errors.New("decode volume list: invalid JSON structure")
+	}
 	var vols []cliVolumeEntry
 	if err := json.Unmarshal(out, &vols); err != nil {
 		return nil, fmt.Errorf("decode volume list: %w", err)
+	}
+	if vols == nil {
+		return nil, errors.New("decode volume list: output is null, want an array")
 	}
 	summaries := make([]VolumeSummary, len(vols))
 	for i, v := range vols {

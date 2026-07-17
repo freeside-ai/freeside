@@ -77,6 +77,11 @@ type runState struct {
 // contract check, and any other error is an operational failure of the same
 // fail-closed gate.
 func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffResult, err error) {
+	// The request is caller-owned. Freeze its slices before they feed either
+	// expected allowlists or a Runtime call.
+	hs.Agent.Command = slices.Clone(hs.Agent.Command)
+	hs.Agent.Env = slices.Clone(hs.Agent.Env)
+	hs.Agent.CredentialMounts = slices.Clone(hs.Agent.CredentialMounts)
 	if err := hs.validate(); err != nil {
 		return nil, err
 	}
@@ -124,13 +129,13 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// already-exists failure cannot authorize reaping another run.
 	st.workspaceAttempted = true
 	volumeLabels := append(runLabels(hs.RunID), ownershipLabel)
-	if err := b.rt.CreateVolume(ctx, names.Workspace, hs.WorkspaceSizeMB, volumeLabels); err != nil {
+	if err := b.rt.CreateVolume(ctx, names.Workspace, hs.WorkspaceSizeMB, slices.Clone(volumeLabels)); err != nil {
 		return nil, fmt.Errorf("create workspace volume: %w", err)
 	}
 	st.workspaceOwned = true
 
 	st.agentAttempted = true
-	if err := b.rt.CreateContainer(ctx, agentSpec); err != nil {
+	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(agentSpec)); err != nil {
 		return nil, fmt.Errorf("create agent container: %w", err)
 	}
 	st.agentOwned = true
@@ -164,7 +169,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// allowlist before it ever executes.
 	exporterSpec := buildExporterSpec(b.cfg, hs, names, ownershipLabel)
 	st.exporterAttempted = true
-	if err := b.rt.CreateContainer(ctx, exporterSpec); err != nil {
+	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(exporterSpec)); err != nil {
 		return nil, fmt.Errorf("create exporter container: %w", err)
 	}
 	st.exporterOwned = true
@@ -269,8 +274,12 @@ func newOwnershipLabel() (Label, error) {
 
 // waitStopped polls until the container is observed stopped. The wait is
 // budgeted in whole poll intervals (timeout / PollInterval attempts), so
-// tests with an injected Sleep are fully deterministic.
+// tests with an injected Sleep are fully deterministic. Its own deadline also
+// bounds each runtime call: a wedged Inspect must not defeat the named writer
+// or exporter timeout when the caller context has no deadline.
 func (b *Backend) waitStopped(ctx context.Context, id string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	attempts := int(timeout / b.cfg.PollInterval)
 	if attempts < 1 {
 		attempts = 1

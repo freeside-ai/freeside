@@ -2,6 +2,7 @@ package ward
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
@@ -10,8 +11,9 @@ import (
 // a Runtime. Construct it with New; the zero value declares nothing and
 // gates nothing.
 type Backend struct {
-	rt  Runtime
-	cfg Config
+	rt          Runtime
+	cfg         Config
+	initialized bool
 }
 
 // Compile-time contract assertion (exec package convention).
@@ -27,7 +29,10 @@ func New(rt Runtime, cfg Config) (*Backend, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	return &Backend{rt: rt, cfg: cfg}, nil
+	// Config is caller-owned. Freeze every reference field before it becomes
+	// the expected allowlist that runtime-observed state is compared against.
+	cfg.ExporterCommand = slices.Clone(cfg.ExporterCommand)
+	return &Backend{rt: rt, cfg: cfg, initialized: true}, nil
 }
 
 // Name identifies the backend in policy, refusals, and audit records.
@@ -53,6 +58,9 @@ func (b *Backend) Name() string { return BackendName }
 // unmount is not a credential-device detach (the refuted same-VM fallback
 // class), and volume snapshotting has no public support.
 func (b *Backend) Capabilities() exec.CapabilitySet {
+	if b == nil || !b.initialized {
+		return exec.NewCapabilitySet()
+	}
 	return exec.NewCapabilitySet(
 		exec.CapDetachableWorkspace,
 		exec.CapPostExitExport,
