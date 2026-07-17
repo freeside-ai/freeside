@@ -36,6 +36,7 @@ func TestDecodeInspectVolume(t *testing.T) {
 		Command:                 []string{"sh", "-c", "echo hi"},
 		WorkingDirectory:        "/",
 		State:                   StateStopped,
+		CreationDate:            "2026-07-16T21:08:15Z",
 		AllowlistFieldsObserved: true,
 		Mounts: []Mount{{
 			Type:     MountVolume,
@@ -172,6 +173,14 @@ func TestRuntimeDecodersRejectDuplicateKeys(t *testing.T) {
 			},
 			data: `[{"id":"v","configuration":{"name":"v","labels":{},"labels":{}}}]`,
 		},
+		{
+			name: "volume inspect creation date",
+			call: func(data []byte) error {
+				_, err := decodeVolumeInspect(data, "v")
+				return err
+			},
+			data: `[{"id":"v","configuration":{"name":"v","creationDate":"a","creationDate":"b"}}]`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -258,7 +267,9 @@ func TestDecodeContainerList(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []ContainerSummary{
-		{ID: "freeside-handoff-run-1-agent", State: StateStopped},
+		{ID: "freeside-handoff-run-1-agent", State: StateStopped, CreationDate: "2026-07-16T21:08:15Z"},
+		// The second fixture entry omits creationDate, pinning that an
+		// unreported fingerprint decodes as unobserved, never invented.
 		{ID: "unrelated-container", State: StateRunning},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -337,6 +348,20 @@ func TestIdentityMismatchErrorsRedactObservedIDs(t *testing.T) {
 				return err
 			}(),
 		},
+		{
+			name: "volume inspect top-level id",
+			err: func() error {
+				_, err := decodeVolumeInspect([]byte(`[{"id":"`+token+`","configuration":{"name":"`+token+`"}}]`), "wanted")
+				return err
+			}(),
+		},
+		{
+			name: "volume inspect configuration name",
+			err: func() error {
+				_, err := decodeVolumeInspect([]byte(`[{"id":"wanted","configuration":{"name":"`+token+`"}}]`), "wanted")
+				return err
+			}(),
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -361,7 +386,9 @@ func TestDecodeVolumeList(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []VolumeSummary{
-		{Name: "freeside-handoff-run-1-ws", Labels: []Label{{Key: "freeside.handoff", Value: "run-1"}}, LabelsObserved: true},
+		{Name: "freeside-handoff-run-1-ws", Labels: []Label{{Key: "freeside.handoff", Value: "run-1"}}, LabelsObserved: true, CreationDate: "2026-07-16T21:08:15Z"},
+		// The second fixture entry omits creationDate, pinning that an
+		// unreported fingerprint decodes as unobserved, never invented.
 		{Name: "unlabeled-volume", Labels: []Label{}, LabelsObserved: true},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -373,6 +400,58 @@ func TestDecodeVolumeList(t *testing.T) {
 	}
 	if missingLabels[0].LabelsObserved {
 		t.Error("omitted volume labels decoded as observed")
+	}
+}
+
+// TestDecodeVolumeInspect pins the 1.1.0 volume inspect shape (captured from
+// `container volume inspect`) and its identity rules: the single report is
+// evidence only for the requested name, so ownership recovery can never act
+// on another volume's labels or fingerprint.
+func TestDecodeVolumeInspect(t *testing.T) {
+	got, err := decodeVolumeInspect(readFixture(t, "cli-volume-inspect.json"), "freeside-handoff-run-1-ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := VolumeSummary{
+		Name: "freeside-handoff-run-1-ws",
+		Labels: []Label{
+			{Key: "freeside.handoff", Value: "run-1"},
+			{Key: "freeside.handoff-owner", Value: "deadbeefdeadbeefdeadbeefdeadbeef"},
+		},
+		LabelsObserved: true,
+		CreationDate:   "2026-07-16T21:08:15Z",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("decoded volume = %+v, want %+v", got, want)
+	}
+
+	// Requesting a different name must fail rather than trust the report.
+	if _, err := decodeVolumeInspect(readFixture(t, "cli-volume-inspect.json"), "some-other-volume"); err == nil {
+		t.Error("volume inspect report for a different volume was trusted")
+	}
+	// A top-level id that matches but a configuration name that drifts fails
+	// closed: labels and the fingerprint come from configuration.
+	if _, err := decodeVolumeInspect([]byte(`[{"id":"v","configuration":{"name":"other"}}]`), "v"); err == nil {
+		t.Error("volume inspect with a mismatched configuration name was trusted")
+	}
+	// Exactly one report: zero or several is ambiguous evidence.
+	if _, err := decodeVolumeInspect([]byte(`[]`), "v"); err == nil {
+		t.Error("empty volume inspect output was trusted")
+	}
+	two := `[{"id":"v","configuration":{"name":"v"}},{"id":"v","configuration":{"name":"v"}}]`
+	if _, err := decodeVolumeInspect([]byte(two), "v"); err == nil {
+		t.Error("volume inspect with two reports was trusted")
+	}
+	// Omitted labels decode as unobserved, never as an empty label set.
+	missing, err := decodeVolumeInspect([]byte(`[{"id":"v","configuration":{"name":"v"}}]`), "v")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missing.LabelsObserved {
+		t.Error("omitted volume labels decoded as observed")
+	}
+	if missing.CreationDate != "" {
+		t.Error("omitted creationDate decoded as observed")
 	}
 }
 

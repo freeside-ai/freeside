@@ -796,7 +796,7 @@ func TestHandoffPreservesCredentialVolumeWithRunLabel(t *testing.T) {
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
 	credentialVolume := hs.Agent.CredentialMounts[0].Volume
-	fx.rt.vols[credentialVolume] = runLabels(hs.RunID)
+	fx.rt.vols[credentialVolume] = &fakeVol{labels: runLabels(hs.RunID), created: "caller-created"}
 
 	if _, err := fx.run(t); err != nil {
 		t.Fatalf("Handoff = %v, want success", err)
@@ -908,8 +908,8 @@ func TestHandoffNoReapBeforeClaim(t *testing.T) {
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
 	// Simulate another live run already owning these names.
-	fx.rt.ctrs[names.Agent] = &fakeCtr{started: true}
-	fx.rt.vols[names.Workspace] = runLabels(testHandoffSpec().RunID)
+	fx.rt.ctrs[names.Agent] = &fakeCtr{started: true, created: "foreign-created-agent"}
+	fx.rt.vols[names.Workspace] = &fakeVol{labels: runLabels(testHandoffSpec().RunID), created: "foreign-created-ws"}
 
 	spec := testHandoffSpec()
 	// A relative credential target passes HandoffSpec.validate but fails
@@ -944,9 +944,9 @@ func TestHandoffVolumeCollisionDoesNotClaimNames(t *testing.T) {
 	fx := newHandoffFixture(t)
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
-	fx.rt.vols[names.Workspace] = runLabels(hs.RunID)
-	fx.rt.ctrs[names.Agent] = &fakeCtr{started: true}
-	fx.rt.ctrs[names.Exporter] = &fakeCtr{}
+	fx.rt.vols[names.Workspace] = &fakeVol{labels: runLabels(hs.RunID), created: "foreign-created-ws"}
+	fx.rt.ctrs[names.Agent] = &fakeCtr{started: true, created: "foreign-created-agent"}
+	fx.rt.ctrs[names.Exporter] = &fakeCtr{created: "foreign-created-exporter"}
 
 	if _, err := fx.backend(t).Handoff(context.Background(), hs); err == nil {
 		t.Fatal("workspace collision returned success")
