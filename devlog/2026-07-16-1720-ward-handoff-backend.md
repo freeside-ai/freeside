@@ -448,3 +448,22 @@ Round 14 raised one P2 at the runtime-list trust boundary:
   Uniqueness is therefore enforced on the exact target identity in teardown,
   and a success-path regression proves unrelated duplicate summaries cannot
   suppress cleanup.
+
+Round 15 raised one P1 in the credential-leak class:
+
+- *P1: malformed proof content was echoed before scanning.* The proof parser
+  formatted archive-derived lines, unknown keys, and observed values into
+  conformance reasons. Although the trusted exporter writes fixed markers,
+  the returned rootfs is an external Runtime result and cannot be trusted to
+  preserve them; a hostile or drifted archive could therefore return or log a
+  credential before the output scanner ran. Every proof-parser failure is now
+  categorical: no observed line, key, value, or scanner detail is emitted.
+  Regression cases place the same secret-shaped substring in a malformed
+  line, an unknown key, and a required key's wrong value and prove the reason
+  contains none of it. The class sweep also removed caller-built agent mount
+  fields and Runtime-observed exporter state, mount, and environment strings
+  from conformance reasons. The fresh-context refute pass found no remaining
+  string leak across malformed, unknown, duplicate, wrong-value, scanner, or
+  missing-key branches. Exporter socket and port cardinalities remain by
+  decision: they cannot reproduce input bytes or a secret substring, while
+  retaining useful topology diagnostics.

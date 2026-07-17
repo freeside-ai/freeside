@@ -3,7 +3,6 @@ package ward
 import (
 	"bufio"
 	"bytes"
-	"fmt"
 	"sort"
 	"strings"
 )
@@ -41,39 +40,32 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume string) e
 	workspaceMounts := 0
 	for _, m := range spec.Mounts {
 		if !m.Type.valid() {
-			return failf(CheckControlPlaneIsolation,
-				"agent mount %q has unknown type %q", m.Target, m.Type)
+			return failf(CheckControlPlaneIsolation, "agent spec carries an unknown mount type")
 		}
 		if m.Type == MountBind {
-			return failf(CheckControlPlaneIsolation,
-				"agent mount %q binds host path %q; host binds are never allowed", m.Target, m.Source)
+			return failf(CheckControlPlaneIsolation, "agent spec carries a host bind")
 		}
 		// A comma or control character in a mount field would let the CLI
 		// parse an injected mount option, realizing a topology this
 		// spec-level check never approved (the agent is not re-inspected).
 		if !cliSafe(m.Source) {
-			return failf(CheckCredentialSeparation,
-				"agent mount source for target %q carries a CLI mount-option delimiter", m.Target)
+			return failf(CheckCredentialSeparation, "agent mount source carries a CLI delimiter")
 		}
 		if !cliSafe(m.Target) {
-			return failf(CheckCredentialSeparation,
-				"agent mount target %q carries a CLI mount-option delimiter", m.Target)
+			return failf(CheckCredentialSeparation, "agent mount target carries a CLI delimiter")
 		}
 		if !cleanAbs(m.Target) {
-			return failf(CheckCredentialSeparation,
-				"agent mount target %q is not a clean absolute non-root path", m.Target)
+			return failf(CheckCredentialSeparation, "agent mount target is not a clean absolute non-root path")
 		}
 		if seenTargets[m.Target] {
-			return failf(CheckCredentialSeparation,
-				"agent mount target %q appears twice", m.Target)
+			return failf(CheckCredentialSeparation, "agent spec repeats a mount target")
 		}
 		seenTargets[m.Target] = true
 
 		if m.Target == cfg.WorkspaceTarget {
 			workspaceMounts++
 			if m.Source != workspaceVolume {
-				return failf(CheckCredentialSeparation,
-					"workspace target %q mounts volume %q, want %q", m.Target, m.Source, workspaceVolume)
+				return failf(CheckCredentialSeparation, "workspace target mounts the wrong volume")
 			}
 			if m.ReadOnly {
 				return failf(CheckCredentialSeparation,
@@ -84,21 +76,17 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume string) e
 
 		// Every non-workspace mount is a credential mount.
 		if strings.HasPrefix(m.Target, cfg.WorkspaceTarget+"/") {
-			return failf(CheckCredentialSeparation,
-				"credential mount %q is inside the workspace %q", m.Target, cfg.WorkspaceTarget)
+			return failf(CheckCredentialSeparation, "credential mount is inside the workspace")
 		}
 		if m.Source == workspaceVolume {
-			return failf(CheckCredentialSeparation,
-				"credential mount %q reuses the workspace volume %q", m.Target, workspaceVolume)
+			return failf(CheckCredentialSeparation, "credential mount reuses the workspace volume")
 		}
 		if !m.ReadOnly {
-			return failf(CheckCredentialSeparation,
-				"credential mount %q is not read-only", m.Target)
+			return failf(CheckCredentialSeparation, "credential mount is not read-only")
 		}
 	}
 	if workspaceMounts != 1 {
-		return failf(CheckCredentialSeparation,
-			"agent spec has %d workspace mounts at %q, want exactly 1", workspaceMounts, cfg.WorkspaceTarget)
+		return failf(CheckCredentialSeparation, "agent spec does not carry exactly one workspace mount")
 	}
 	return nil
 }
@@ -116,27 +104,21 @@ func verifyExporterAllowlist(cfg Config, rep InspectReport, workspaceVolume stri
 	// stopped; any other observed state means the trusted payload may already
 	// have executed before the gate approved its configuration.
 	if rep.State != StateStopped {
-		return failf(CheckExporterAllowlist,
-			"exporter observed in state %q before execution, want %q", rep.State, StateStopped)
+		return failf(CheckExporterAllowlist, "exporter was not observed stopped before execution")
 	}
 	if n := len(rep.Mounts); n != 1 {
-		return failf(CheckExporterAllowlist,
-			"exporter has %d persistent mounts, want exactly 1 (%s)", n, describeMounts(rep.Mounts))
+		return failf(CheckExporterAllowlist, "exporter does not carry exactly one persistent mount")
 	}
 	m := rep.Mounts[0]
 	switch {
 	case m.Type != MountVolume:
-		return failf(CheckExporterAllowlist,
-			"exporter mount %q has type %q, want %q", m.Target, m.Type, MountVolume)
+		return failf(CheckExporterAllowlist, "exporter persistent mount is not a volume")
 	case m.Source != workspaceVolume:
-		return failf(CheckExporterAllowlist,
-			"exporter mounts volume %q, want %q", m.Source, workspaceVolume)
+		return failf(CheckExporterAllowlist, "exporter mounts the wrong volume")
 	case m.Target != cfg.WorkspaceTarget:
-		return failf(CheckExporterAllowlist,
-			"exporter mounts workspace at %q, want %q", m.Target, cfg.WorkspaceTarget)
+		return failf(CheckExporterAllowlist, "exporter mounts the workspace at the wrong target")
 	case !m.ReadOnly:
-		return failf(CheckExporterAllowlist,
-			"exporter workspace mount at %q is not read-only", m.Target)
+		return failf(CheckExporterAllowlist, "exporter workspace mount is not read-only")
 	}
 	if rep.SSH {
 		return failf(CheckExporterAllowlist, "exporter has SSH forwarding configured")
@@ -149,30 +131,17 @@ func verifyExporterAllowlist(cfg Config, rep InspectReport, workspaceVolume stri
 	}
 	for _, e := range rep.Env {
 		key, _, _ := strings.Cut(e, "=")
-		// Key only: an unexpected value could itself be a credential and
-		// must never travel in a failure reason.
 		if key != "PATH" {
-			return failf(CheckExporterAllowlist,
-				"exporter environment carries variable %q, want image PATH only", key)
+			return failf(CheckExporterAllowlist, "exporter environment carries a non-PATH entry")
 		}
 	}
 	return nil
 }
 
-// describeMounts renders mount targets and types (never sources: a bind
-// source is a host path and stays out of failure reasons).
-func describeMounts(mounts []Mount) string {
-	parts := make([]string, len(mounts))
-	for i, m := range mounts {
-		parts[i] = fmt.Sprintf("%s:%s", m.Type, m.Target)
-	}
-	sort.Strings(parts)
-	return strings.Join(parts, ", ")
-}
-
 // requiredProof is check 5's contract with the exporter payload: the probes
 // run inside the exporter VM and their observations land as exactly these
-// key=value lines in the proof file. Values are inert markers, safe to echo
+// key=value lines in the proof file. These expected markers are trusted, but
+// observed proof content comes from the unscanned archive and is never echoed
 // in failure reasons.
 var requiredProof = map[string]string{
 	// /proc/mounts reports the workspace mounted read-only.
@@ -201,23 +170,22 @@ func verifyProof(data []byte) error {
 		}
 		key, value, ok := strings.Cut(line, "=")
 		if !ok {
-			return failf(CheckInExporterVerification, "proof line %q is not key=value", line)
+			return failf(CheckInExporterVerification, "proof carries a line that is not key=value")
 		}
 		want, known := requiredProof[key]
 		if !known {
-			return failf(CheckInExporterVerification, "proof carries unknown key %q", key)
+			return failf(CheckInExporterVerification, "proof carries an unknown key")
 		}
 		if seen[key] {
-			return failf(CheckInExporterVerification, "proof repeats key %q", key)
+			return failf(CheckInExporterVerification, "proof repeats a required key")
 		}
 		seen[key] = true
 		if value != want {
-			return failf(CheckInExporterVerification,
-				"proof reports %s=%s, want %s=%s", key, value, key, want)
+			return failf(CheckInExporterVerification, "proof reports an unexpected value for a required key")
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return failf(CheckInExporterVerification, "proof unreadable: %v", err)
+		return failf(CheckInExporterVerification, "proof unreadable")
 	}
 	keys := make([]string, 0, len(requiredProof))
 	for key := range requiredProof {
@@ -226,7 +194,7 @@ func verifyProof(data []byte) error {
 	sort.Strings(keys)
 	for _, key := range keys {
 		if !seen[key] {
-			return failf(CheckInExporterVerification, "proof is missing key %q", key)
+			return failf(CheckInExporterVerification, "proof is missing a required key")
 		}
 	}
 	return nil

@@ -229,7 +229,7 @@ func TestVerifyExporterAllowlistViolations(t *testing.T) {
 }
 
 // TestVerifyExporterAllowlistRedactsValues proves an environment violation
-// reports the variable name, never its value: the value could itself be the
+// reports no runtime-derived key or value: either could itself be a
 // credential the gate exists to contain.
 func TestVerifyExporterAllowlistRedactsValues(t *testing.T) {
 	cfg := testConfig()
@@ -243,8 +243,27 @@ func TestVerifyExporterAllowlistRedactsValues(t *testing.T) {
 	if strings.Contains(err.Error(), "super-secret-fixture-value") {
 		t.Errorf("failure reason leaks the environment value: %v", err)
 	}
-	if !strings.Contains(err.Error(), "PROVIDER_TOKEN") {
-		t.Errorf("failure reason should name the variable: %v", err)
+	if strings.Contains(err.Error(), "PROVIDER_TOKEN") {
+		t.Errorf("failure reason leaks the environment key: %v", err)
+	}
+}
+
+// TestConformanceReasonsRedactUntrustedFields pins the same invariant for
+// caller-built agent mounts and runtime-observed exporter fields.
+func TestConformanceReasonsRedactUntrustedFields(t *testing.T) {
+	const secret = "secret-field-fixture-value"
+	cfg := testConfig()
+	hs := testHandoffSpec()
+	names := namesFor(hs.RunID)
+	agent := buildAgentSpec(cfg, hs, names, testOwnershipLabel())
+	agent.Mounts[1].Target = secret
+	if err := validateAgentSpec(cfg, agent, names.Workspace); err == nil || strings.Contains(err.Error(), secret) {
+		t.Errorf("agent conformance failure leaked or accepted an untrusted field: %v", err)
+	}
+	rep := exporterReport(cfg, names.Workspace)
+	rep.Mounts[0].Source = secret
+	if err := verifyExporterAllowlist(cfg, rep, names.Workspace); err == nil || strings.Contains(err.Error(), secret) {
+		t.Errorf("exporter conformance failure leaked or accepted an untrusted field: %v", err)
 	}
 }
 
@@ -283,6 +302,28 @@ func TestVerifyProof(t *testing.T) {
 			var cf *ConformanceFailure
 			if !errors.As(err, &cf) || cf.Check != CheckInExporterVerification {
 				t.Fatalf("verifyProof = %v, want in_exporter_verification failure", err)
+			}
+		})
+	}
+}
+
+// TestVerifyProofRedactsArchiveContent proves every parser category keeps
+// unscanned proof bytes out of the returned conformance reason.
+func TestVerifyProofRedactsArchiveContent(t *testing.T) {
+	const secret = "secret-proof-fixture-value"
+	cases := map[string]string{
+		"malformed line": secret + "\n",
+		"unknown key":    secret + "=value\n",
+		"wrong value":    "credentials=" + secret + "\n",
+	}
+	for name, proof := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := verifyProof([]byte(proof))
+			if !errors.Is(err, ErrConformance) {
+				t.Fatalf("verifyProof = %v, want ErrConformance", err)
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("proof failure leaked archive content: %v", err)
 			}
 		})
 	}
