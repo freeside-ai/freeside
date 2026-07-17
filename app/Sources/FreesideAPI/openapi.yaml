@@ -61,9 +61,11 @@ tags:
   - name: commands
     description: >
       ClientCommand submission, idempotent by command_id: the single
-      mutation surface for decisions on synchronized domain state (plan
-      §5.14). The credential control surface (pairing, revocation) and
-      digest-addressed attachment upload sit deliberately outside it.
+      mutation surface for judgment-bearing decisions on synchronized
+      domain state (plan §5.14). The credential control surface
+      (pairing, revocation), digest-addressed attachment upload, and the
+      delivery opened receipt (monotonic telemetry, reportDeliveryOpened)
+      sit deliberately outside it.
   - name: devices
     description: >
       Device pairing and revocation, the credential control surface (plan
@@ -151,7 +153,11 @@ paths:
       description: >
         Returns the item's current canonical state as a resource snapshot.
         A late notification deep-links here and exposes no stale action
-        (plan §5.14 sync test 9).
+        (plan §5.14 sync test 9). The notification's deep link targets
+        this operation with channel and attempt query parameters
+        identifying the delivery attempt; this GET stays side-effect-free,
+        and the client reports the opened receipt separately via
+        reportDeliveryOpened.
       parameters:
         - $ref: "#/components/parameters/ItemID"
       responses:
@@ -171,8 +177,10 @@ paths:
       summary: List an item's delivery attempts
       description: >
         Lists the item's per-channel, per-attempt delivery records (plan
-        §4), read surface only; deliveries are recorded by the daemon's
-        delivery pipeline, never submitted by clients.
+        §4). Delivery rows are created and advanced by the daemon's
+        delivery pipeline; the single client write is the opened receipt
+        (reportDeliveryOpened), which advances an existing attempt and
+        never creates one.
       parameters:
         - $ref: "#/components/parameters/ItemID"
       responses:
@@ -184,6 +192,64 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/AttentionDeliverySnapshot"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /attention/items/{item_id}/deliveries/{channel}/{attempt}/opened:
+    put:
+      operationId: reportDeliveryOpened
+      tags: [attention]
+      summary: Report a delivery attempt as opened
+      description: |
+        Records the authenticated device's opened receipt on one delivery
+        attempt: the row advances to `opened` with a daemon-stamped
+        `opened_at`, and the item's timing aggregates re-derive in the
+        same transaction (plan §4). The receipt carries no request body:
+        the attempt is fully identified by the path, and the device comes
+        solely from the bearer credential — a device can open only its
+        own deliveries, and another device's attempt is a plain 404.
+        Idempotent by the attempt's identity: replaying an already-opened
+        receipt returns the recorded snapshot without moving the server
+        revision (the PUT converges on the one recorded receipt, like the
+        digest-addressed attachment upload). The item's lifecycle status
+        is deliberately not a gate: a late receipt for a resolved item is
+        honest telemetry, and its canonical rendering is the deep-link
+        GET's concern (plan §5.14 sync test 9). Deliberately not a
+        ClientCommand: a receipt is monotonic telemetry about the past,
+        not a judgment on canonical state, and an expected_entity_version
+        precondition would wrongly reject legitimate receipts as the
+        delivery row advances from submitted to channel_accepted.
+      parameters:
+        - $ref: "#/components/parameters/ItemID"
+        - $ref: "#/components/parameters/DeliveryChannel"
+        - $ref: "#/components/parameters/DeliveryAttempt"
+      responses:
+        "200":
+          description: >
+            The recorded delivery snapshot, whether this request recorded
+            the receipt or replayed an already-opened attempt.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttentionDeliverySnapshot"
+        "400":
+          description: The attempt path segment is not a positive integer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: >
+            The authenticated device is no longer active: the handler's
+            active-device re-gate refuses the receipt with no effect (plan
+            §5.14 sync test 15 posture). A revoked credential normally fails
+            the security scheme with 401 before the handler runs; this 403 is
+            the residual race where an authorizer still vouches for a device
+            revoked in between.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -253,10 +319,12 @@ paths:
       tags: [commands]
       summary: Submit a client command
       description: |
-        The single mutation surface for decisions on synchronized domain
-        state: every such client mutation is a ClientCommand (plan §5.14);
-        only the credential control surface (pairing, revocation) and
-        attachment upload sit outside it. Submission is idempotent by
+        The single mutation surface for judgment-bearing decisions on
+        synchronized domain state: every such client mutation is a
+        ClientCommand (plan §5.14); only the credential control surface
+        (pairing, revocation), attachment upload, and the delivery opened
+        receipt (monotonic telemetry, reportDeliveryOpened) sit outside
+        it. Submission is idempotent by
         `command_id`: the daemon records each command's result in the same
         transaction that applies it, and a retry of an already-committed
         `command_id` returns the original recorded result without applying
@@ -500,6 +568,24 @@ components:
       schema:
         type: string
         minLength: 1
+    DeliveryChannel:
+      name: channel
+      in: path
+      required: true
+      description: >
+        The delivery channel that carried the attempt (the AttentionDelivery
+        channel field, e.g. "ntfy").
+      schema:
+        type: string
+        minLength: 1
+    DeliveryAttempt:
+      name: attempt
+      in: path
+      required: true
+      description: The 1-based delivery attempt number.
+      schema:
+        type: integer
+        minimum: 1
 
   responses:
     NotFound:

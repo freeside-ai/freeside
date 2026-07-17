@@ -94,9 +94,38 @@ public actor MockServer {
     /// artifact store by digest). Content is immutable per digest, so
     /// the table only seeds; nothing rewrites an entry.
     private let attachmentsByDigest: [String: Data]
+    /// Delivery rows the receipt surface serves and advances, keyed by
+    /// the attempt's full identity as the daemon's composite key is.
+    /// Rows only seed through init; the one mutation is the opened
+    /// receipt, which advances an existing attempt and never creates one.
+    private var deliveriesByKey: [DeliveryKey: Components.Schemas.AttentionDeliverySnapshot] = [:]
+
+    struct DeliveryKey: Hashable, Comparable {
+        let itemID: String
+        let deviceID: String
+        let channel: String
+        let attempt: Int
+
+        init(_ delivery: Components.Schemas.AttentionDelivery) {
+            switch delivery {
+            case .submitted(let row):
+                (itemID, deviceID, channel, attempt) = (row.item_id, row.device_id, row.channel, row.attempt)
+            case .channel_accepted(let row):
+                (itemID, deviceID, channel, attempt) = (row.item_id, row.device_id, row.channel, row.attempt)
+            case .opened(let row):
+                (itemID, deviceID, channel, attempt) = (row.item_id, row.device_id, row.channel, row.attempt)
+            }
+        }
+
+        static func < (lhs: Self, rhs: Self) -> Bool {
+            (lhs.itemID, lhs.deviceID, lhs.channel, lhs.attempt)
+                < (rhs.itemID, rhs.deviceID, rhs.channel, rhs.attempt)
+        }
+    }
 
     public init(
         items: [Components.Schemas.AttentionItemSnapshot] = AttentionFixtures.defaultInbox(),
+        deliveries: [Components.Schemas.AttentionDeliverySnapshot] = [],
         approvedRecipes: Set<String> = [AttentionFixtures.approvedRecipeDigest],
         authMode: AuthMode = .permissive,
         pairingCodes: [String: PairingCodeState] = [:],
@@ -108,10 +137,58 @@ public actor MockServer {
         for snapshot in items {
             itemsByID[snapshot.item.id] = snapshot
         }
+        for snapshot in deliveries {
+            deliveriesByKey[DeliveryKey(snapshot.delivery)] = snapshot
+        }
         // The server revision starts at or beyond every seeded snapshot's
         // as_of_revision, so the heartbeat and the next CommandResult can
         // never run backwards relative to what this mock lists.
-        revision = max(1, items.map(\.as_of_revision).max() ?? 1)
+        revision = max(1, items.map(\.as_of_revision).max() ?? 1,
+            deliveries.map(\.as_of_revision).max() ?? 1)
+        // Seeded delivery rows exist only because the daemon's pipeline
+        // would have recorded them, and that pipeline re-derives the
+        // item's timing and bumps the item's versions in the same write
+        // (SubmitDelivery → recomputeItemTiming), so a fixture item's
+        // authored timing is never trusted next to seeded rows: seeding
+        // applies the same derivation, version bump, and
+        // unchanged-summary skip a live write would.
+        // Only rows the daemon's PutAttentionDelivery would have accepted
+        // fold into the derivation: an invalid seed never reaches
+        // recomputeItemTiming in the daemon, and here it stays out of the
+        // served aggregates while every delivery-serving read still fails
+        // closed on it. The daemon records one SubmitDelivery transaction
+        // per row and bumps the item on each summary-changing recompute,
+        // so seeding replays the rows one at a time in composite-key
+        // order rather than folding the set in one pretended write.
+        let seedRevision = revision
+        for itemID in Set(deliveriesByKey.keys.map(\.itemID)) {
+            guard var snapshot = itemsByID[itemID] else { continue }
+            // Validate the parent snapshot before deriving. The daemon's
+            // recomputeItemTiming reconstructs the item through
+            // GetAttentionItemSnapshot and fails closed, so seed derivation
+            // must not rewrite an invalid parent (bad metadata, inconsistent
+            // timing, or an unapproved-recipe evidence gate) into a servable
+            // row. An invalid parent is left exactly as seeded; the serve
+            // paths' snapshotBreach then fails it closed, as the daemon does.
+            if Self.snapshotBreach(snapshot, approvedRecipes: approvedRecipes) != nil { continue }
+            let rows = deliveriesByKey
+                .filter { $0.key.itemID == itemID }
+                .sorted { $0.key < $1.key }
+                .map(\.value)
+                .filter {
+                    Self.deliveryBreach(
+                        $0, serverRevision: seedRevision, hasParentItem: true) == nil
+                }
+                .map(\.delivery)
+            for prefixEnd in rows.indices {
+                if let next = Self.withDerivedTiming(
+                    snapshot, rows: Array(rows.prefix(prefixEnd + 1)), asOf: seedRevision)
+                {
+                    snapshot = next
+                }
+            }
+            itemsByID[itemID] = snapshot
+        }
         self.approvedRecipes = approvedRecipes
         self.authMode = authMode
         self.pairingCodes = pairingCodes
@@ -523,18 +600,291 @@ public actor MockServer {
     /// One canonical snapshot of every synchronized resource from a
     /// single actor-isolated read, as the daemon's bootstrap is one
     /// Store.Read (plan §5.14): the cursor pair and the rows can never
-    /// be torn. Deliveries, runs, and conversations stay empty until
-    /// their units seed them; the envelope still carries all four
-    /// collections, so a client decodes the real shape today.
+    /// be torn. Runs and conversations stay empty until their units seed
+    /// them; the envelope still carries all four collections, so a
+    /// client decodes the real shape today.
     func bootstrapSnapshot() throws -> Components.Schemas.BootstrapSnapshot {
         .init(
             sync_epoch: syncEpoch,
             revision: revision,
             attention_items: try listAttentionItems(),
-            attention_deliveries: [],
+            attention_deliveries: try listAttentionDeliveries(),
             runs: [],
             conversations: []
         )
+    }
+
+    struct InvalidDeliveryError: Error {
+        let itemID: String
+        let reason: String
+    }
+
+    /// Re-validates one delivery snapshot before it is served, as the
+    /// daemon's read paths run validateSnapshot plus the domain validator
+    /// on every row (signet sync.go, store reconstruction): a seed the
+    /// daemon would fail closed on fails the mock's read loudly instead
+    /// of letting a client test pass against unservable cache state. The
+    /// generated variant structs already make status/receipt
+    /// correspondence unrepresentable; what stays checkable here is the
+    /// snapshot metadata, the identity fields, and receipt ordering.
+    private func validated(
+        _ snapshot: Components.Schemas.AttentionDeliverySnapshot
+    ) throws -> Components.Schemas.AttentionDeliverySnapshot {
+        let key = DeliveryKey(snapshot.delivery)
+        if let breach = Self.deliveryBreach(
+            snapshot, serverRevision: revision, hasParentItem: itemsByID[key.itemID] != nil)
+        {
+            throw InvalidDeliveryError(itemID: key.itemID, reason: breach)
+        }
+        return snapshot
+    }
+
+    /// Go's `time.Time{}` zero instant (serialized "0001-01-01T00:00:00Z"),
+    /// the exact value `AttentionDelivery.Validate` rejects as an unset
+    /// submitted_at.
+    private static let daemonZeroInstant: Date = {
+        var components = DateComponents()
+        components.year = 1
+        components.month = 1
+        components.day = 1
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar.date(from: components)!
+    }()
+
+    private static func deliveryBreach(
+        _ snapshot: Components.Schemas.AttentionDeliverySnapshot,
+        serverRevision: Int64,
+        hasParentItem: Bool
+    ) -> String? {
+        let key = DeliveryKey(snapshot.delivery)
+        if snapshot.entity_version < 1 { return "non-positive entity_version" }
+        if snapshot.as_of_revision < 1 || snapshot.as_of_revision > serverRevision {
+            return "as_of_revision outside the server revision"
+        }
+        if key.itemID.isEmpty || key.deviceID.isEmpty || key.channel.isEmpty {
+            return "empty identity field"
+        }
+        if key.attempt < 1 { return "non-positive attempt" }
+        // submitted_at is required and never the type's zero value:
+        // AttentionDelivery.Validate rejects SubmittedAt.IsZero(), so a
+        // seed at or before the daemon zero instant is unproducible state.
+        let submittedAt: Date
+        switch snapshot.delivery {
+        case .submitted(let row): submittedAt = row.submitted_at
+        case .channel_accepted(let row): submittedAt = row.submitted_at
+        case .opened(let row): submittedAt = row.submitted_at
+        }
+        if submittedAt == daemonZeroInstant { return "submitted_at is unset" }
+        // A delivery row exists only because the pipeline recorded it for
+        // an existing item; an orphan row is unrepresentable daemon state.
+        if !hasParentItem { return "no parent item" }
+        switch snapshot.delivery {
+        case .submitted:
+            break
+        case .channel_accepted(let row):
+            if row.channel_accepted_at < row.submitted_at {
+                return "channel_accepted_at precedes submitted_at"
+            }
+        case .opened(let row):
+            if row.opened_at < row.submitted_at {
+                return "opened_at precedes submitted_at"
+            }
+            if let accepted = row.channel_accepted_at,
+                accepted < row.submitted_at || row.opened_at < accepted
+            {
+                return "receipt ordering violated"
+            }
+        }
+        return nil
+    }
+
+    /// Deliveries in the store's deterministic composite-key order
+    /// (item, device, channel, attempt), as the daemon lists them; every
+    /// served row re-validates first (see `validated`).
+    func listAttentionDeliveries() throws -> [Components.Schemas.AttentionDeliverySnapshot] {
+        try deliveriesByKey.sorted { $0.key < $1.key }.map { try validated($0.value) }
+    }
+
+    /// One item's delivery rows in composite-key order (the daemon's
+    /// ListAttentionItemDeliveries): a missing parent item is a loud
+    /// not-found rather than an indistinguishable empty history, the
+    /// parent reconstructs through the item gate (the daemon validates
+    /// the item snapshot in the same read), and the whole delivery table
+    /// validates (the daemon's ListAttentionDeliveries gates every row)
+    /// before the item filter.
+    func listAttentionItemDeliveries(
+        itemID: String
+    ) throws -> [Components.Schemas.AttentionDeliverySnapshot] {
+        guard try servedSnapshot(itemID: itemID) != nil else {
+            throw UnknownItemError(itemID: itemID)
+        }
+        // Validate the entire table before filtering: the daemon lists all
+        // rows through the shared decode gate (which cannot skip a gate the
+        // Get runs) ahead of the item filter, so one corrupt row for any
+        // item fails the listing closed rather than serving this item.
+        for delivery in deliveriesByKey.values {
+            _ = try validated(delivery)
+        }
+        return deliveriesByKey.filter { $0.key.itemID == itemID }
+            .sorted { $0.key < $1.key }
+            .map { $0.value }
+    }
+
+    enum ReceiptOutcome {
+        case ok(Components.Schemas.AttentionDeliverySnapshot)
+        case unknown
+    }
+
+    /// The one client write on the deliveries surface (#130): advances an
+    /// existing attempt to opened with a daemon-stamped receipt, replays
+    /// idempotently without consuming revision, and never creates a row.
+    /// The device is the caller's credential identity; permissive mode has
+    /// none, so there the row matches on the path identity alone.
+    func reportDeliveryOpened(
+        itemID: String, channel: String, attempt: Int, deviceID: String?
+    ) throws -> ReceiptOutcome {
+        guard
+            let key = deliveriesByKey.keys.sorted().first(where: {
+                $0.itemID == itemID && $0.channel == channel && $0.attempt == attempt
+                    && (deviceID == nil || $0.deviceID == deviceID)
+            }), var snapshot = deliveriesByKey[key]
+        else { return .unknown }
+        // Validate the whole delivery table before the replay check and
+        // before any mutation, as the daemon reconstructs every row (store
+        // decode gate) via recomputeItemTiming's ListAttentionDeliveries,
+        // which cannot skip a gate the Get runs, ahead of
+        // RecordDeliveryOpened's write. The list reconstructs the entire
+        // table before the service filters to this item, so one corrupt
+        // row for any item fails the receipt closed with no effect rather
+        // than being healed into a servable 200. The target row validates
+        // as part of the table; the served snapshot is its stored value.
+        for delivery in deliveriesByKey.values {
+            _ = try validated(delivery)
+        }
+        // The daemon's recompute reads the parent item through the
+        // reconstruction gate (GetAttentionItemSnapshot): an absent
+        // parent surfaces as not-found, a corrupt one fails closed.
+        guard try servedSnapshot(itemID: key.itemID) != nil else { return .unknown }
+        let opened: Components.Schemas.AttentionDeliveryOpened
+        switch snapshot.delivery {
+        case .opened:
+            // Idempotent replay: the recorded row, no revision movement.
+            return .ok(snapshot)
+        case .submitted(let row):
+            opened = .init(
+                item_id: row.item_id, device_id: row.device_id,
+                channel: row.channel, attempt: row.attempt,
+                submitted_at: row.submitted_at,
+                opened_at: row.submitted_at.addingTimeInterval(60),
+                delivery_status: .opened
+            )
+        case .channel_accepted(let row):
+            opened = .init(
+                item_id: row.item_id, device_id: row.device_id,
+                channel: row.channel, attempt: row.attempt,
+                submitted_at: row.submitted_at,
+                channel_accepted_at: row.channel_accepted_at,
+                opened_at: row.channel_accepted_at.addingTimeInterval(60),
+                delivery_status: .opened
+            )
+        }
+        revision += 1
+        snapshot.delivery = .opened(opened)
+        snapshot.entity_version += 1
+        snapshot.as_of_revision = revision
+        deliveriesByKey[key] = snapshot
+        recomputeItemTiming(itemID: key.itemID)
+        return .ok(snapshot)
+    }
+
+    /// Mirrors the daemon's recomputeItemTiming (signet delivery.go): the
+    /// receipt's write re-derives the item's timing aggregates from the
+    /// full delivery set in the same "transaction" (same revision), and
+    /// bumps the item's versions only when the summary actually changed —
+    /// an aggregate-neutral receipt must not churn item versions.
+    private func recomputeItemTiming(itemID: String) {
+        guard let snapshot = itemsByID[itemID],
+            let next = Self.withDerivedTiming(
+                snapshot,
+                rows: deliveriesByKey.filter { $0.key.itemID == itemID }.map(\.value.delivery),
+                asOf: revision)
+        else { return }
+        itemsByID[itemID] = next
+    }
+
+    /// The item snapshot after the daemon's timing write: derived
+    /// aggregates, item/entity versions bumped, snapshot stamped at the
+    /// given revision; nil when the summary is unchanged (no version
+    /// churn for an aggregate-neutral event).
+    private static func withDerivedTiming(
+        _ snapshot: Components.Schemas.AttentionItemSnapshot,
+        rows: [Components.Schemas.AttentionDelivery],
+        asOf revision: Int64
+    ) -> Components.Schemas.AttentionItemSnapshot? {
+        let derived = derivedTiming(from: rows)
+        guard snapshot.item.timing != derived else { return nil }
+        var next = snapshot
+        next.item.timing = derived
+        next.item.item_version += 1
+        next.entity_version += 1
+        next.as_of_revision = revision
+        return next
+    }
+
+    /// The item's timing aggregates as the daemon derives them from the
+    /// full delivery set (domain WithTiming).
+    private static func derivedTiming(
+        from rows: [Components.Schemas.AttentionDelivery]
+    ) -> Components.Schemas.TimingSummary {
+        var submitted: [Date] = []
+        var accepted: [Date] = []
+        var opened: [Date] = []
+        for row in rows {
+            switch row {
+            case .submitted(let row):
+                submitted.append(wireDate(row.submitted_at))
+            case .channel_accepted(let row):
+                submitted.append(wireDate(row.submitted_at))
+                accepted.append(wireDate(row.channel_accepted_at))
+            case .opened(let row):
+                submitted.append(wireDate(row.submitted_at))
+                if let acceptedAt = row.channel_accepted_at {
+                    accepted.append(wireDate(acceptedAt))
+                }
+                opened.append(wireDate(row.opened_at))
+            }
+        }
+        let firstSubmitted = submitted.min()
+        let firstOpened = opened.min()
+        return .init(
+            delivery_count: submitted.count,
+            first_submitted_at: firstSubmitted,
+            first_accepted_at: accepted.min(),
+            first_opened_at: firstOpened,
+            submit_to_first_open: firstSubmitted.flatMap { start in
+                firstOpened.map { durationNanoseconds(from: start, to: $0) }
+            }
+        )
+    }
+
+    /// The generated runtime's RFC 3339 decoder accepts whole seconds, which
+    /// is also what the mock's `.iso8601` encoder emits. Derive
+    /// timing from those same instants so the duration always agrees with
+    /// the timestamps the generated client actually decodes, including when
+    /// a fixture supplies finer-grained `Date` values.
+    private static func wireDate(_ date: Date) -> Date {
+        Date(timeIntervalSince1970: date.timeIntervalSince1970.rounded(.down))
+    }
+
+    /// Mirrors `time.Time.Sub`: nanosecond spans outside `time.Duration`'s
+    /// int64 range saturate instead of trapping. Long but valid RFC 3339
+    /// fixture dates therefore remain servable just as they are in Go.
+    private static func durationNanoseconds(from start: Date, to end: Date) -> Int64 {
+        let nanoseconds = (end.timeIntervalSince(start) * 1_000_000_000).rounded()
+        if nanoseconds >= Double(Int64.max) { return Int64.max }
+        if nanoseconds <= Double(Int64.min) { return Int64.min }
+        return Int64(nanoseconds)
     }
 
     /// Read paths re-validate every row they would serve, as the
@@ -578,9 +928,19 @@ public actor MockServer {
     func snapshotBreach(
         _ snapshot: Components.Schemas.AttentionItemSnapshot
     ) -> String? {
+        Self.snapshotBreach(snapshot, approvedRecipes: approvedRecipes)
+    }
+
+    /// The policy set is passed rather than read from `self` so seed-time
+    /// derivation (which runs in init before `approvedRecipes` is stored)
+    /// can gate a parent through the same check the serve paths run.
+    static func snapshotBreach(
+        _ snapshot: Components.Schemas.AttentionItemSnapshot,
+        approvedRecipes: Set<String>
+    ) -> String? {
         if snapshot.entity_version < 1 { return "non-positive entity_version" }
         if snapshot.as_of_revision < 1 { return "non-positive as_of_revision" }
-        if let breach = Self.itemValidityBreach(snapshot.item) { return breach }
+        if let breach = itemValidityBreach(snapshot.item) { return breach }
         for artifact in snapshot.item.evidence_snapshot {
             let recipe: String
             switch artifact.provenance {
@@ -613,7 +973,7 @@ public actor MockServer {
             ("first_accepted_at", timing.first_accepted_at),
             ("first_opened_at", timing.first_opened_at),
         ] {
-            if let at = endpoint, at.timeIntervalSince1970 < -62_000_000_000 {
+            if let at = endpoint, at == daemonZeroInstant {
                 return "zero \(name)"
             }
         }
@@ -646,7 +1006,8 @@ public actor MockServer {
                 let submitted = timing.first_submitted_at,
                 let opened = timing.first_opened_at
             else { return "submit_to_first_open without both endpoints" }
-            let nanos = Int64((opened.timeIntervalSince(submitted) * 1_000_000_000).rounded())
+            let nanos = durationNanoseconds(
+                from: wireDate(submitted), to: wireDate(opened))
             if nanos != span { return "submit_to_first_open disagrees with its endpoints" }
         }
         return nil
@@ -850,6 +1211,14 @@ public struct MockServerTransport: ClientTransport {
                             "bootstrap reconstruction failed: item \(invalid.itemID): \(invalid.reason)"
                     )
                 )
+            } catch let invalid as MockServer.InvalidDeliveryError {
+                return try Self.json(
+                    status: .internalServerError,
+                    body: Components.Schemas._Error(
+                        message:
+                            "bootstrap reconstruction failed: delivery for item \(invalid.itemID): \(invalid.reason)"
+                    )
+                )
             }
         case "listAttentionItems":
             do {
@@ -992,6 +1361,77 @@ public struct MockServerTransport: ClientTransport {
                     )
                 )
             }
+        case "listAttentionItemDeliveries":
+            guard let itemID = Self.itemID(inDeliveriesPath: request.path) else {
+                return (HTTPResponse(status: .badRequest), nil)
+            }
+            do {
+                return try Self.json(
+                    status: .ok,
+                    body: try await server.listAttentionItemDeliveries(itemID: itemID))
+            } catch let missing as MockServer.UnknownItemError {
+                return try Self.json(
+                    status: .notFound,
+                    body: Components.Schemas._Error(
+                        message: "no entity exists under \(missing.itemID)")
+                )
+            } catch let invalid as MockServer.InvalidDeliveryError {
+                return try Self.json(
+                    status: .internalServerError,
+                    body: Components.Schemas._Error(
+                        message:
+                            "list reconstruction failed: delivery for item \(invalid.itemID): \(invalid.reason)"
+                    )
+                )
+            } catch let invalid as MockServer.InvalidItemError {
+                return try Self.json(
+                    status: .internalServerError,
+                    body: Components.Schemas._Error(
+                        message: "list reconstruction failed: item \(invalid.itemID): \(invalid.reason)"
+                    )
+                )
+            }
+        case "reportDeliveryOpened":
+            guard let identity = Self.deliveryIdentity(inOpenedPath: request.path) else {
+                return try Self.json(
+                    status: .badRequest,
+                    body: Components.Schemas._Error(
+                        message: "attempt must be a positive integer")
+                )
+            }
+            do {
+                switch try await server.reportDeliveryOpened(
+                    itemID: identity.itemID, channel: identity.channel,
+                    attempt: identity.attempt, deviceID: authenticatedDevice)
+                {
+                case .ok(let snapshot):
+                    return try Self.json(status: .ok, body: snapshot)
+                case .unknown:
+                    return try Self.json(
+                        status: .notFound,
+                        body: Components.Schemas._Error(
+                            message: "no entity exists under the identifier")
+                    )
+                }
+            } catch let invalid as MockServer.InvalidDeliveryError {
+                // The daemon's wire method re-validates the snapshot it
+                // returns and fails closed (writeReadError → 500).
+                return try Self.json(
+                    status: .internalServerError,
+                    body: Components.Schemas._Error(
+                        message:
+                            "delivery reconstruction failed: item \(invalid.itemID): \(invalid.reason)"
+                    )
+                )
+            } catch let invalid as MockServer.InvalidItemError {
+                return try Self.json(
+                    status: .internalServerError,
+                    body: Components.Schemas._Error(
+                        message:
+                            "delivery reconstruction failed: item \(invalid.itemID): \(invalid.reason)"
+                    )
+                )
+            }
         case "getAttachment":
             // The digest-addressed read path: stored bytes verbatim, or
             // an authoritative 404 the client renders as a placeholder.
@@ -1049,5 +1489,31 @@ public struct MockServerTransport: ClientTransport {
         let parts = path?.split(separator: "/") ?? []
         guard parts.count >= 2, parts.last == "revoke" else { return nil }
         return String(parts[parts.count - 2]).removingPercentEncoding
+    }
+
+    /// `/attention/items/{item_id}/deliveries`: the id is the segment
+    /// ahead of the trailing collection name.
+    private static func itemID(inDeliveriesPath path: String?) -> String? {
+        let parts = (path?.split(separator: "/") ?? [])
+            .map { String($0).removingPercentEncoding ?? String($0) }
+        guard parts.count == 4, parts[0] == "attention", parts[1] == "items",
+            parts[3] == "deliveries"
+        else { return nil }
+        return parts[2]
+    }
+
+    /// `/attention/items/{item_id}/deliveries/{channel}/{attempt}/opened`:
+    /// nil when the shape is wrong or the attempt segment is not a
+    /// positive integer (the daemon answers 400 before its service runs).
+    private static func deliveryIdentity(
+        inOpenedPath path: String?
+    ) -> (itemID: String, channel: String, attempt: Int)? {
+        let parts = (path?.split(separator: "/") ?? [])
+            .map { String($0).removingPercentEncoding ?? String($0) }
+        guard parts.count == 7, parts[0] == "attention", parts[1] == "items",
+            parts[3] == "deliveries", parts[6] == "opened",
+            let attempt = Int(parts[5]), attempt >= 1
+        else { return nil }
+        return (parts[2], parts[4], attempt)
     }
 }

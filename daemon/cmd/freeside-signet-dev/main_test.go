@@ -176,8 +176,8 @@ func TestControlSubmitDeliveryDrivesThePipeline(t *testing.T) {
 		t.Errorf("delivery = %s, want channel_accepted", delivery)
 	}
 	clicksMu.Lock()
-	if len(clicks) != 1 || clicks[0] != r.APIURL+"/attention/items/item-notify" {
-		t.Errorf("published clicks = %v, want the harness deep link", clicks)
+	if len(clicks) != 1 || clicks[0] != r.APIURL+"/attention/items/item-notify?channel=ntfy&attempt=1" {
+		t.Errorf("published clicks = %v, want the harness deep link with the attempt identity", clicks)
 	}
 	clicksMu.Unlock()
 

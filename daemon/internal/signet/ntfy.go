@@ -199,13 +199,20 @@ type notification struct {
 }
 
 // notificationFor renders the generic hint for item to device: no subject or
-// reason text, a deep link to the canonical item.
-func (c *ntfyChannel) notificationFor(item domain.AttentionItem, device domain.DeviceID) notification {
+// reason text, a deep link to the canonical item. The link carries the
+// delivery's channel and attempt as query parameters — the GET it targets
+// stays side-effect-free, and the client derives the exact opened-receipt
+// PUT from them (#130). The provider-visible metadata surface is the item ID
+// and the attempt counter (inside the link) plus the priority; the widening
+// from #69's item-ID-and-priority surface is an owner decision (decision
+// note 2026-07-16-2038).
+func (c *ntfyChannel) notificationFor(item domain.AttentionItem, device domain.DeviceID, attempt int) notification {
 	return notification{
-		topic:    c.topic(device),
-		title:    "Attention needed",
-		body:     strings.ReplaceAll(string(item.Type), "_", " "),
-		click:    strings.TrimRight(c.cfg.ClickBaseURL, "/") + "/attention/items/" + url.PathEscape(string(item.ID)),
+		topic: c.topic(device),
+		title: "Attention needed",
+		body:  strings.ReplaceAll(string(item.Type), "_", " "),
+		click: strings.TrimRight(c.cfg.ClickBaseURL, "/") + "/attention/items/" + url.PathEscape(string(item.ID)) +
+			"?channel=" + url.QueryEscape(channelNtfy) + "&attempt=" + strconv.Itoa(attempt),
 		priority: item.Priority,
 	}
 }

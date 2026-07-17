@@ -2,6 +2,7 @@ package signet_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -200,6 +201,171 @@ func TestRecordDeliveryOpenedGatesDevice(t *testing.T) {
 	}
 }
 
+// TestReportDeliveryOpenedSnapshot: the wire boundary (#130) returns the
+// recorded row wrapped in the same resource snapshot the deliveries listing
+// carries, and a replay returns the identical snapshot without consuming
+// revision — the read after a rolled-back replay write sees exactly the
+// recorded state.
+func TestReportDeliveryOpenedSnapshot(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	seedSubmittedDelivery(t, f, f.device.ID, 1, *f.now)
+	*f.now = f.now.Add(time.Minute)
+
+	snapshot, err := f.service.ReportDeliveryOpened(ctx, f.item.ID, f.device.ID, "ntfy", 1)
+	if err != nil {
+		t.Fatalf("ReportDeliveryOpened: %v", err)
+	}
+	if snapshot.Delivery.Status != domain.DeliveryOpened || snapshot.Delivery.OpenedAt == nil {
+		t.Fatalf("snapshot delivery = %+v, want opened with a receipt", snapshot.Delivery)
+	}
+	listed, err := f.service.ListAttentionItemDeliveries(ctx, f.item.ID)
+	if err != nil {
+		t.Fatalf("ListAttentionItemDeliveries: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("deliveries = %d rows, want 1", len(listed))
+	}
+	if got, want := mustMarshal(t, snapshot), mustMarshal(t, listed[0]); got != want {
+		t.Errorf("reported snapshot %s differs from the listed snapshot %s", got, want)
+	}
+
+	before := f.revision(t)
+	*f.now = f.now.Add(time.Hour)
+	replay, err := f.service.ReportDeliveryOpened(ctx, f.item.ID, f.device.ID, "ntfy", 1)
+	if err != nil {
+		t.Fatalf("ReportDeliveryOpened replay: %v", err)
+	}
+	if got, want := mustMarshal(t, replay), mustMarshal(t, snapshot); got != want {
+		t.Errorf("replay snapshot %s differs from the recorded %s", got, want)
+	}
+	if after := f.revision(t); after != before {
+		t.Errorf("replay moved the revision %d → %d", before, after)
+	}
+}
+
+// TestReportDeliveryOpenedRegatesItemOnReplay: the replay read-back re-gates
+// the parent item at the reconstruction boundary. The replay path returns
+// errReplay before recomputeItemTiming, so unlike the write path this read
+// never reconstructs the item; without the re-gate a receipt whose item now
+// fails the approved-recipe evidence gate would return a snapshot here while
+// the sibling ListAttentionItemDeliveries and Bootstrap reject the same state.
+// The item is seeded and opened under an approving policy, then read back after
+// the recipe is unapproved (the store reopened with nothing approved).
+func TestReportDeliveryOpenedRegatesItemOnReplay(t *testing.T) {
+	ctx := context.Background()
+	path := t.TempDir() + "/signet.db"
+	recipe := domain.Digest("sha256:recipe-approved")
+	approved := map[domain.Digest]bool{recipe: true}
+
+	artifact, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: "art-1", Type: "verify_log", Digest: "sha256:log",
+		Provenance: domain.Provenance{
+			ProducerClass:            domain.ProducerVerifier,
+			ProducerInvocationID:     "inv-1",
+			HeadBinding:              domain.HeadBound,
+			SourceHeadSHA:            "cafebabe",
+			VerificationRecipeDigest: &recipe,
+			SensitivityClass:         domain.SensitivityNormal,
+		},
+	}, approved)
+	if err != nil {
+		t.Fatalf("NewArtifact: %v", err)
+	}
+
+	start := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	runID := domain.RunID("run-1")
+	expires := start.Add(24 * time.Hour)
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-1", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
+		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Reason:            "checks are green and the diff is ready",
+		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionStop, domain.ActionDismiss},
+		EvidenceSnapshot:  []domain.Artifact{artifact},
+		AgentClaims:       []domain.AgentClaim{{Label: "screenshot", Artifact: "art-2", Digest: "sha256:img"}},
+		PRHeadSHA:         "cafebabe", ItemVersion: 1,
+		InterruptionClass: domain.InterruptionPlannedGate,
+		ExpiresWhen:       &expires, Status: domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatalf("NewAttentionItem: %v", err)
+	}
+
+	now := start
+	newService := func(s *store.Store) *signet.Service {
+		return signet.NewService(s,
+			signet.WithPairingKey(testPairingKey),
+			signet.WithClock(func() time.Time { return now }),
+			signet.WithNtfy(signet.NtfyConfig{
+				BaseURL: "https://ntfy.example", TopicKey: testTopicKey,
+				ClickBaseURL: "https://daemon.example",
+			}),
+		)
+	}
+
+	// Seed the item and open the receipt while the recipe is approved.
+	approving, err := store.Open(ctx, path, store.Options{ApprovedRecipes: approved})
+	if err != nil {
+		t.Fatalf("Open approving: %v", err)
+	}
+	device := domain.Device{
+		ID: "device-1", DisplayName: "Ben's iPhone",
+		Status: domain.DeviceActive, PairedAt: start,
+	}
+	if err := approving.Write(ctx, func(tx *store.WriteTx) error { return tx.PutDevice(ctx, device) }); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+	svc := newService(approving)
+	if err := svc.PutItem(ctx, item); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+	submitted := domain.AttentionDelivery{
+		ItemID: item.ID, DeviceID: device.ID, Channel: "ntfy", Attempt: 1,
+		SubmittedAt: start, Status: domain.DeliverySubmitted,
+	}
+	if err := approving.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionDelivery(ctx, submitted) }); err != nil {
+		t.Fatalf("seed delivery: %v", err)
+	}
+	now = start.Add(time.Minute)
+	if _, err := svc.RecordDeliveryOpened(ctx, item.ID, device.ID, "ntfy", 1); err != nil {
+		t.Fatalf("RecordDeliveryOpened: %v", err)
+	}
+	if err := approving.Close(); err != nil {
+		t.Fatalf("Close approving: %v", err)
+	}
+
+	// Reopen with nothing approved: the item's evidence now fails closed.
+	closed, err := store.Open(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatalf("Open closed: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := closed.Close(); err != nil {
+			t.Errorf("Close closed: %v", err)
+		}
+	})
+	svc = newService(closed)
+
+	now = start.Add(time.Hour)
+	if _, err := svc.ReportDeliveryOpened(ctx, item.ID, device.ID, "ntfy", 1); !errors.Is(err, domain.ErrUnapprovedRecipe) {
+		t.Fatalf("ReportDeliveryOpened(replay) under empty policy error = %v, want ErrUnapprovedRecipe", err)
+	}
+	// Parity: the sibling listing re-gates the same item and rejects it too.
+	if _, err := svc.ListAttentionItemDeliveries(ctx, item.ID); !errors.Is(err, domain.ErrUnapprovedRecipe) {
+		t.Fatalf("ListAttentionItemDeliveries under empty policy error = %v, want ErrUnapprovedRecipe", err)
+	}
+}
+
+func mustMarshal(t *testing.T, value any) string {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal %T: %v", value, err)
+	}
+	return string(encoded)
+}
+
 // TestTimingReputSkippedWhenUnchanged: a receipt that moves no aggregate (a
 // second device's later open, when the first open already set every first_*
 // instant) writes the delivery row but leaves the item untouched — no
@@ -337,8 +503,8 @@ func TestSubmitDeliveryRecordsHonestReceipts(t *testing.T) {
 	if got.title != "Attention needed" {
 		t.Errorf("title = %q, want the generic hint", got.title)
 	}
-	if got.click != "https://daemon.example/attention/items/"+string(f.item.ID) {
-		t.Errorf("click = %q, want the canonical deep link", got.click)
+	if got.click != "https://daemon.example/attention/items/"+string(f.item.ID)+"?channel=ntfy&attempt=1" {
+		t.Errorf("click = %q, want the canonical deep link carrying the attempt identity", got.click)
 	}
 	if got.priority != "default" {
 		t.Errorf("priority = %q, want default for a normal item", got.priority)

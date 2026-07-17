@@ -13,12 +13,12 @@ import (
 )
 
 // This file is the delivery pipeline (plan §4, issue #69): the write side of
-// AttentionDelivery. Rows are recorded by the daemon, never submitted by
-// clients (api/openapi.yaml's delivery listing is read-only); the honest
-// lifecycle is submitted → channel_accepted → opened, and "delivered" does
-// not exist by design. The device-facing wire path for opened receipts is a
-// deferred contract unit; until it lands, RecordDeliveryOpened is the
-// in-process boundary.
+// AttentionDelivery. Rows are created and advanced by the daemon; the one
+// client-reachable write is the opened receipt (#130), which advances an
+// existing attempt and never creates one. The honest lifecycle is
+// submitted → channel_accepted → opened, and "delivered" does not exist by
+// design. RecordDeliveryOpened is the in-process boundary;
+// ReportDeliveryOpened projects it to the wire as a resource snapshot.
 
 // sendPhaseTimeout bounds the daemon-owned post-commit phase of a submission
 // (the provider call plus the acceptance Write) once it no longer rides the
@@ -83,7 +83,7 @@ func (s *Service) SubmitDelivery(ctx context.Context, itemID domain.ItemID, devi
 		if err := recomputeItemTiming(ctx, tx, itemID); err != nil {
 			return err
 		}
-		hint = s.ntfy.notificationFor(item, deviceID)
+		hint = s.ntfy.notificationFor(item, deviceID, row.Attempt)
 		return nil
 	})
 	if err != nil {
@@ -190,6 +190,62 @@ func (s *Service) RecordDeliveryOpened(ctx context.Context, itemID domain.ItemID
 	})
 	if err != nil && !errors.Is(err, errReplay) {
 		return domain.AttentionDelivery{}, fmt.Errorf("record delivery %s/%s/%s/%d opened: %w",
+			itemID, deviceID, channel, attempt, err)
+	}
+	return out, nil
+}
+
+// ReportDeliveryOpened is the device-facing wire boundary for opened receipts
+// (#130): it delegates the write to RecordDeliveryOpened unchanged (idempotent
+// replay, active-device gate, no open-item gate) and returns the recorded row
+// as a wire resource snapshot. The snapshot is read after the write rather
+// than captured inside it: the replay path rolls its transaction back, so an
+// in-transaction snapshot would describe a state that never committed. The
+// gap between write and read is benign — opened is terminal and receipts are
+// immutable, so the row cannot change under the read; only as_of_revision can
+// advance, which is ordinary partial-fetch staleness (plan §5.14).
+func (s *Service) ReportDeliveryOpened(ctx context.Context, itemID domain.ItemID, deviceID domain.DeviceID, channel string, attempt int) (AttentionDeliverySnapshot, error) {
+	if _, err := s.RecordDeliveryOpened(ctx, itemID, deviceID, channel, attempt); err != nil {
+		return AttentionDeliverySnapshot{}, err
+	}
+	var out AttentionDeliverySnapshot
+	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+		state, err := tx.ServerState(ctx)
+		if err != nil {
+			return err
+		}
+		// Re-gate the parent item at this reconstruction boundary. The replay
+		// path returns errReplay before recomputeItemTiming runs, so unlike
+		// the write path this read never reconstructs the item; without this a
+		// receipt whose item now fails the approved-recipe evidence gate would
+		// return 200 here while the sibling ListAttentionItemDeliveries and
+		// Bootstrap reject the same state.
+		_, itemState, err := tx.GetAttentionItemSnapshot(ctx, itemID)
+		if err != nil {
+			return err
+		}
+		if err := validateSnapshot(state, itemState); err != nil {
+			return err
+		}
+		values, err := tx.ListAttentionDeliveries(ctx)
+		if err != nil {
+			return err
+		}
+		for _, value := range values {
+			d := value.Value
+			if d.ItemID != itemID || d.DeviceID != deviceID || d.Channel != channel || d.Attempt != attempt {
+				continue
+			}
+			if err := validateSnapshot(state, value.Snapshot); err != nil {
+				return err
+			}
+			out = deliverySnapshot(d, value.Snapshot)
+			return nil
+		}
+		return store.ErrNotFound
+	})
+	if err != nil {
+		return AttentionDeliverySnapshot{}, fmt.Errorf("report delivery %s/%s/%s/%d opened: %w",
 			itemID, deviceID, channel, attempt, err)
 	}
 	return out, nil
