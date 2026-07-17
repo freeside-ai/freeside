@@ -38,22 +38,33 @@ type HandoffResult struct {
 	Manifest export.Manifest
 }
 
+// objectClaim is one runtime object's ownership state. attempted records
+// that its create was called (an ambiguous error after that point may have
+// made the object); owned records the create's success. fingerprint is the
+// creation instant observed together with this invocation's ownership label
+// right after a successful create: it binds the claim to the one object the
+// run made, so cleanup can tell it from a later same-name replacement. It
+// stays "" until that observation succeeds, or when the runtime reports no
+// creation instant, and cleanup then degrades to fresh label evidence.
+type objectClaim struct {
+	attempted   bool
+	owned       bool
+	fingerprint string
+}
+
 // runState tracks host-temp directories and each runtime object's ownership
 // state so deferred cleanup can remove only this invocation's objects. A
-// successful create proves ownership; an ambiguous create must be resolved
-// from a fresh runtime listing and this invocation's unpredictable label.
+// successful create proves ownership of the exact object observed after it,
+// never of whatever later holds the name; an ambiguous create must be
+// resolved from a fresh runtime listing and this invocation's unpredictable
+// label. On an ambiguous workspace create error, teardown may reap only a
+// workspace carrying this invocation's unpredictable ownershipLabel; an
+// ordinary already-exists collision does not carry it and is left untouched.
 type runState struct {
-	// workspaceAttempted records that CreateVolume was called. On an ambiguous
-	// error, teardown may reap only a workspace carrying this invocation's
-	// unpredictable ownershipLabel; an ordinary already-exists collision does
-	// not carry it and is left untouched.
-	workspaceAttempted bool
-	ownershipLabel     Label
-	workspaceOwned     bool
-	agentAttempted     bool
-	agentOwned         bool
-	exporterAttempted  bool
-	exporterOwned      bool
+	ownershipLabel Label
+	workspace      objectClaim
+	agent          objectClaim
+	exporter       objectClaim
 	// archiveDir holds the exported rootfs archive; always removed once
 	// verification is done or the run fails (the archive is never returned).
 	archiveDir string
@@ -136,21 +147,36 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// If the call fails after creating the volume, teardown can still identify
 	// that one object by its per-invocation ownership label; an ordinary
 	// already-exists failure cannot authorize reaping another run.
-	st.workspaceAttempted = true
+	st.workspace.attempted = true
 	volumeLabels := append(runLabels(hs.RunID), ownershipLabel)
 	if err := b.rt.CreateVolume(ctx, names.Workspace, hs.WorkspaceSizeMB, slices.Clone(volumeLabels)); err != nil {
 		return nil, fmt.Errorf("create workspace volume: %w", err)
 	}
-	st.workspaceOwned = true
+	st.workspace.owned = true
+	// Bind the claim to the one volume just made: a failed observation fails
+	// the run and leaves the claim fingerprintless, degrading cleanup to
+	// fresh label evidence rather than name-wide authority.
+	wsView, err := b.rt.InspectVolume(ctx, names.Workspace)
+	if err != nil {
+		return nil, fmt.Errorf("observe workspace volume identity: %w", err)
+	}
+	st.workspace.fingerprint, err = ownedFingerprint(wsView.CreationDate, wsView.Labels, wsView.LabelsObserved, ownershipLabel)
+	if err != nil {
+		return nil, fmt.Errorf("workspace volume %q: %w", names.Workspace, err)
+	}
 
-	st.agentAttempted = true
+	st.agent.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(agentSpec)); err != nil {
 		return nil, fmt.Errorf("create agent container: %w", err)
 	}
-	st.agentOwned = true
+	st.agent.owned = true
 	agentRep, err := b.rt.Inspect(ctx, names.Agent)
 	if err != nil {
 		return nil, failf(CheckControlPlaneIsolation, "inspect agent before execution: %v", err)
+	}
+	st.agent.fingerprint, err = ownedFingerprint(agentRep.CreationDate, agentRep.Labels, agentRep.LabelsObserved, ownershipLabel)
+	if err != nil {
+		return nil, failf(CheckControlPlaneIsolation, "agent container %q: %v", names.Agent, err)
 	}
 	if err := verifyAgentAllowlist(agentRep, agentSpec); err != nil {
 		return nil, err
@@ -162,7 +188,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// Check 3: writer termination is observed state, never scheduling
 	// intent (a second VM cannot attach a volume a live VM holds rw; only
 	// observed "stopped" proves the attachment is gone).
-	if err := b.waitStopped(ctx, names.Agent, b.cfg.WriterStopTimeout); err != nil {
+	if err := b.waitStopped(ctx, names.Agent, st.agent.fingerprint, b.cfg.WriterStopTimeout); err != nil {
 		return nil, failf(CheckWriterTermination, "agent: %v", err)
 	}
 	if err := b.rt.DeleteContainer(ctx, names.Agent); err != nil {
@@ -174,23 +200,27 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// proving absence, so that if verifyContainerAbsent fails on a transient
 	// list error deferred teardown re-proves this invocation's ownership label
 	// rather than reaping a same-name stranger by identity alone.
-	st.agentOwned = false
+	st.agent.owned = false
 	if err := b.verifyContainerAbsent(ctx, names.Agent, CheckWriterTermination); err != nil {
 		return nil, err
 	}
-	st.agentAttempted = false
+	st.agent = objectClaim{}
 
 	// Check 4: create the exporter but inspect it against the generated
 	// allowlist before it ever executes.
 	exporterSpec := buildExporterSpec(b.cfg, hs, names, ownershipLabel)
-	st.exporterAttempted = true
+	st.exporter.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(exporterSpec)); err != nil {
 		return nil, fmt.Errorf("create exporter container: %w", err)
 	}
-	st.exporterOwned = true
+	st.exporter.owned = true
 	rep, err := b.rt.Inspect(ctx, names.Exporter)
 	if err != nil {
 		return nil, failf(CheckExporterAllowlist, "inspect exporter before execution: %v", err)
+	}
+	st.exporter.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, ownershipLabel)
+	if err != nil {
+		return nil, failf(CheckExporterAllowlist, "exporter container %q: %v", names.Exporter, err)
 	}
 	if err := verifyExporterAllowlist(b.cfg, rep, names.Exporter, names.Workspace); err != nil {
 		return nil, err
@@ -198,7 +228,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	if err := b.rt.StartContainer(ctx, names.Exporter); err != nil {
 		return nil, fmt.Errorf("start exporter container: %w", err)
 	}
-	if err := b.waitStopped(ctx, names.Exporter, b.cfg.ExporterTimeout); err != nil {
+	if err := b.waitStopped(ctx, names.Exporter, st.exporter.fingerprint, b.cfg.ExporterTimeout); err != nil {
 		return nil, failf(CheckExportVerification, "exporter: %v", err)
 	}
 
@@ -292,7 +322,31 @@ func newOwnershipLabel() (Label, error) {
 // tests with an injected Sleep are fully deterministic. Its own deadline also
 // bounds each runtime call: a wedged Inspect must not defeat the named writer
 // or exporter timeout when the caller context has no deadline.
-func (b *Backend) waitStopped(ctx context.Context, id string, timeout time.Duration) error {
+// ownedFingerprint extracts a creation fingerprint from the observation made
+// right after this invocation successfully created an object. The observation
+// must itself carry the invocation's unpredictable ownership label: the
+// create succeeded with that label, so a same-name object that cannot show it
+// is contradictory evidence, possibly already a replacement, and is never
+// fingerprinted as ours. An empty fingerprint from a labeled observation is
+// valid (the runtime reports no creation instant) and degrades cleanup to
+// fresh label evidence.
+func ownedFingerprint(creationDate string, labels []Label, labelsObserved bool, ownershipLabel Label) (string, error) {
+	if !labelsObserved {
+		return "", errors.New("post-create observation omitted labels")
+	}
+	if !slices.Contains(labels, ownershipLabel) {
+		return "", errors.New("post-create observation does not carry this invocation's ownership label")
+	}
+	return creationDate, nil
+}
+
+// waitStopped polls until the container with the claimed creation fingerprint
+// is observed stopped. Every poll re-verifies the fingerprint: check 3's
+// stopped observation is proof about the one VM the gate started, so a
+// same-name object with a different creation instant (a replacement) can
+// never satisfy it, and the delete that follows a satisfied wait always
+// targets a just-verified observation.
+func (b *Backend) waitStopped(ctx context.Context, id, fingerprint string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	attempts := int(timeout / b.cfg.PollInterval)
@@ -307,6 +361,9 @@ func (b *Backend) waitStopped(ctx context.Context, id string, timeout time.Durat
 		}
 		if rep.ID != id {
 			return fmt.Errorf("inspect returned a report for the wrong container")
+		}
+		if rep.CreationDate != fingerprint {
+			return fmt.Errorf("inspect returned a same-name container with a different creation identity")
 		}
 		if rep.State == StateStopped {
 			return nil
@@ -345,7 +402,7 @@ func (b *Backend) verifyContainerAbsent(ctx context.Context, id string, c Check)
 // Handoff.
 func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState) error {
 	// Before the first create attempt this invocation owns no runtime object.
-	if !st.workspaceAttempted {
+	if !st.workspace.attempted {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
@@ -353,19 +410,18 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	var problems []string
 
 	type containerClaim struct {
-		id        string
-		attempted bool
-		owned     bool
+		id    string
+		claim objectClaim
 	}
 	containerClaims := []containerClaim{
-		{id: names.Agent, attempted: st.agentAttempted, owned: st.agentOwned},
-		{id: names.Exporter, attempted: st.exporterAttempted, owned: st.exporterOwned},
+		{id: names.Agent, claim: st.agent},
+		{id: names.Exporter, claim: st.exporter},
 	}
 	// Each container is reaped only when its own create succeeded or a fresh
 	// inspect carries the unpredictable ownership label after an ambiguous
 	// create error, whether that inspect comes from the teardown listing's
 	// labels or, when the full list is unavailable, from a direct inspect.
-	if st.agentAttempted || st.exporterAttempted {
+	if st.agent.attempted || st.exporter.attempted {
 		if ctrs, err := b.rt.ListContainers(ctx); err != nil {
 			problems = append(problems, fmt.Sprintf("list containers: %v", err))
 			// A full-list failure can be caused by an unrelated malformed row.
@@ -374,26 +430,26 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 			// ambiguous create is reaped by exact name once a direct inspect
 			// proves this invocation's ownership label. Otherwise one unrelated
 			// broken row could leave the credential-mounted writer restartable.
-			for _, claim := range containerClaims {
-				if !claim.attempted {
+			for _, c := range containerClaims {
+				if !c.claim.attempted {
 					continue
 				}
-				if claim.owned {
-					if rerr := b.reapKnownOwnedContainer(ctx, claim.id); rerr != nil {
-						problems = append(problems, fmt.Sprintf("remove known-owned %q after list failure: %v", claim.id, rerr))
+				if c.claim.owned {
+					if rerr := b.reapKnownOwnedContainer(ctx, c.id); rerr != nil {
+						problems = append(problems, fmt.Sprintf("remove known-owned %q after list failure: %v", c.id, rerr))
 					}
 					continue
 				}
-				if rerr := b.reapAmbiguousOwnedContainer(ctx, claim.id, st.ownershipLabel); rerr != nil {
-					problems = append(problems, fmt.Sprintf("remove ambiguous-owned %q after list failure: %v", claim.id, rerr))
+				if rerr := b.reapAmbiguousOwnedContainer(ctx, c.id, st.ownershipLabel); rerr != nil {
+					problems = append(problems, fmt.Sprintf("remove ambiguous-owned %q after list failure: %v", c.id, rerr))
 				}
 			}
 		} else {
-			for _, claim := range containerClaims {
-				if !claim.attempted {
+			for _, c := range containerClaims {
+				if !c.claim.attempted {
 					continue
 				}
-				candidate, found, ferr := uniqueContainer(ctrs, claim.id)
+				candidate, found, ferr := uniqueContainer(ctrs, c.id)
 				if ferr != nil {
 					problems = append(problems, ferr.Error())
 					continue
@@ -401,7 +457,7 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 				if !found {
 					continue
 				}
-				if !claim.owned {
+				if !c.claim.owned {
 					owned, oerr := b.containerHasOwnership(ctx, candidate, st.ownershipLabel)
 					if oerr != nil {
 						problems = append(problems, oerr.Error())
@@ -412,7 +468,7 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 					}
 				}
 				if rerr := b.reapContainer(ctx, candidate); rerr != nil {
-					problems = append(problems, fmt.Sprintf("remove %q: %v", claim.id, rerr))
+					problems = append(problems, fmt.Sprintf("remove %q: %v", c.id, rerr))
 				}
 			}
 		}
@@ -421,7 +477,7 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 		if v.Name != names.Workspace {
 			return false
 		}
-		return st.workspaceOwned || (v.LabelsObserved && slices.Contains(v.Labels, st.ownershipLabel))
+		return st.workspace.owned || (v.LabelsObserved && slices.Contains(v.Labels, st.ownershipLabel))
 	}
 	// After a successful create, the exact workspace name is owned. After an
 	// ambiguous failed create, require the unpredictable ownership label too.
@@ -430,7 +486,7 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 		// As with containers, an unrelated malformed row must not suppress
 		// cleanup of the exact workspace name established by a successful
 		// create. An ambiguous create still requires list/label evidence.
-		if st.workspaceOwned {
+		if st.workspace.owned {
 			if derr := b.rt.DeleteVolume(ctx, names.Workspace); derr != nil {
 				problems = append(problems, fmt.Sprintf("delete known-owned volume %q after list failure: %v", names.Workspace, derr))
 			}
@@ -440,7 +496,7 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 		if ferr != nil {
 			problems = append(problems, ferr.Error())
 		} else if found {
-			if v.Name == names.Workspace && !st.workspaceOwned && !v.LabelsObserved {
+			if v.Name == names.Workspace && !st.workspace.owned && !v.LabelsObserved {
 				problems = append(problems, fmt.Sprintf("volume %q list entry omitted labels after ambiguous create", v.Name))
 			} else if ownsWorkspace(v) {
 				if derr := b.rt.DeleteVolume(ctx, v.Name); derr != nil {
@@ -452,15 +508,15 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 
 	// Prove absence: nothing the run owns may survive the reap (a delete that
 	// reported success but left the object is caught here).
-	if st.agentAttempted || st.exporterAttempted {
+	if st.agent.attempted || st.exporter.attempted {
 		if ctrs, err := b.rt.ListContainers(ctx); err != nil {
 			problems = append(problems, fmt.Sprintf("re-list containers: %v", err))
 		} else {
-			for _, claim := range containerClaims {
-				if !claim.attempted {
+			for _, c := range containerClaims {
+				if !c.claim.attempted {
 					continue
 				}
-				candidate, found, ferr := uniqueContainer(ctrs, claim.id)
+				candidate, found, ferr := uniqueContainer(ctrs, c.id)
 				if ferr != nil {
 					problems = append(problems, "re-list "+ferr.Error())
 					continue
@@ -468,7 +524,7 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 				if !found {
 					continue
 				}
-				owned := claim.owned
+				owned := c.claim.owned
 				if !owned {
 					var oerr error
 					owned, oerr = b.containerHasOwnership(ctx, candidate, st.ownershipLabel)
@@ -478,7 +534,7 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 					}
 				}
 				if owned {
-					problems = append(problems, fmt.Sprintf("container %q survived teardown", claim.id))
+					problems = append(problems, fmt.Sprintf("container %q survived teardown", c.id))
 				}
 			}
 		}
@@ -490,7 +546,7 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 		if ferr != nil {
 			problems = append(problems, "re-list "+ferr.Error())
 		} else if found {
-			if v.Name == names.Workspace && !st.workspaceOwned && !v.LabelsObserved {
+			if v.Name == names.Workspace && !st.workspace.owned && !v.LabelsObserved {
 				problems = append(problems, fmt.Sprintf("volume %q re-list entry omitted labels after ambiguous create", v.Name))
 			} else if ownsWorkspace(v) {
 				problems = append(problems, fmt.Sprintf("volume %q survived teardown", v.Name))

@@ -626,6 +626,78 @@ func TestHandoffAgentLingersTeardownReaps(t *testing.T) {
 	}
 }
 
+// TestHandoffWriterReplacedMidRunFailsCheck3: check 3's stopped observation
+// is proof about the one VM the gate started, bound by the creation
+// fingerprint captured at create time. A same-name container observed with a
+// different creation identity mid-wait (a delete-and-recreate while the gate
+// polls) can never satisfy the wait, even when it reports stopped.
+func TestHandoffWriterReplacedMidRunFailsCheck3(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	inspects := 0
+	fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+		if id != names.Agent {
+			return rep, nil
+		}
+		// The first inspect is the pre-start observation that captures the
+		// real fingerprint; later polls observe the replacement.
+		inspects++
+		if inspects >= 2 {
+			rep.CreationDate = "replacement-created"
+			rep.State = StateStopped
+		}
+		return rep, nil
+	}
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckWriterTermination)
+	if i := fx.rt.callIndex("create-container " + names.Exporter); i >= 0 {
+		t.Error("exporter was created after the writer's identity changed mid-run")
+	}
+}
+
+// TestHandoffWorkspaceObservationFailure: the post-create volume observation
+// binds the workspace claim to the one volume just made. When it fails, or
+// cannot show this invocation's ownership label on the observed object, the
+// run fails before the credential-bearing agent is ever created; the owned
+// name is still reaped from fresh teardown evidence.
+func TestHandoffWorkspaceObservationFailure(t *testing.T) {
+	names := namesFor(testHandoffSpec().RunID)
+	cases := []struct {
+		name string
+		hook func(name string, v VolumeSummary) (VolumeSummary, error)
+	}{
+		{"inspect error", func(string, VolumeSummary) (VolumeSummary, error) {
+			return VolumeSummary{}, errors.New("volume inspect wedged")
+		}},
+		{"labels omitted", func(_ string, v VolumeSummary) (VolumeSummary, error) {
+			v.LabelsObserved = false
+			v.Labels = nil
+			return v, nil
+		}},
+		{"ownership label missing", func(_ string, v VolumeSummary) (VolumeSummary, error) {
+			v.Labels = runLabels(testHandoffSpec().RunID)
+			return v, nil
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newHandoffFixture(t)
+			fx.rt.onInspectVolume = tc.hook
+			_, err := fx.run(t)
+			if err == nil {
+				t.Fatal("Handoff succeeded without a bound workspace identity")
+			}
+			if errors.Is(err, ErrConformance) {
+				t.Errorf("identity observation failure reported as a conformance check: %v", err)
+			}
+			if i := fx.rt.callIndex("create-container " + names.Agent); i >= 0 {
+				t.Error("agent was created after the workspace identity observation failed")
+			}
+			fx.assertReaped(t)
+		})
+	}
+}
+
 // TestHandoffExporterAllowlistViolation is acceptance 2 for check 4 through
 // the full lifecycle: the runtime reports an extra mount on the exporter,
 // and the gate fails before the exporter ever executes.
