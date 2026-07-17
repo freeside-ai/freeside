@@ -28,14 +28,21 @@ func TestDecodeInspectVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := InspectReport{
-		State: StateStopped,
+		ID:                      "freeside-handoff-run-1-exporter",
+		ImageReference:          "docker.io/library/alpine:3.22",
+		ImageDigest:             "sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce",
+		Command:                 []string{"sh", "-c", "echo hi"},
+		State:                   StateStopped,
+		AllowlistFieldsObserved: true,
 		Mounts: []Mount{{
 			Type:     MountVolume,
 			Source:   "freeside-handoff-run-1-ws",
 			Target:   "/workspace",
 			ReadOnly: true,
 		}},
-		Env: []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+		Env:            []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+		Labels:         []Label{{Key: "freeside.handoff", Value: "run-1"}},
+		LabelsObserved: true,
 	}
 	if !reflect.DeepEqual(rep, want) {
 		t.Errorf("decoded report = %+v, want %+v", rep, want)
@@ -43,7 +50,9 @@ func TestDecodeInspectVolume(t *testing.T) {
 	// This exact report passes check 4 against its allowlist: the decode
 	// and the verifier agree on the conforming shape.
 	cfg := testConfig()
-	if err := verifyExporterAllowlist(cfg, rep, "freeside-handoff-run-1-ws"); err != nil {
+	cfg.ExporterImage = want.ImageReference + "@" + want.ImageDigest
+	cfg.ExporterCommand = want.Command
+	if err := verifyExporterAllowlist(cfg, rep, want.ID, "freeside-handoff-run-1-ws"); err != nil {
 		t.Errorf("conforming fixture fails allowlist: %v", err)
 	}
 }
@@ -84,7 +93,7 @@ func TestDecodeInspectHostile(t *testing.T) {
 	}
 	// And the allowlist rejects it.
 	cfg := testConfig()
-	if err := verifyExporterAllowlist(cfg, rep, "any"); err == nil {
+	if err := verifyExporterAllowlist(cfg, rep, "hostile-fixture", "any"); err == nil {
 		t.Error("hostile fixture passed the allowlist")
 	}
 }
@@ -124,29 +133,44 @@ func TestDecodeInspectIdentity(t *testing.T) {
 }
 
 // TestDecodeInspectAllowlistFieldPresence: a report that omits any of check
-// 4's allowlist inputs (environment, ssh, publishedPorts, publishedSockets)
-// fails closed rather than decoding the absence as an explicit clean report.
+// 4's allowlist inputs (image, command, environment, ssh, and publications)
+// is marked incomplete and rejected by check 4 rather than reading as clean.
 func TestDecodeInspectAllowlistFieldPresence(t *testing.T) {
 	// A report with the correct id and state but each allowlist field omitted
-	// in turn must be rejected.
+	// in turn must preserve identity while remaining unapprovable.
 	fields := map[string]string{
-		"environment":      `"initProcess":{},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
-		"ssh":              `"initProcess":{"environment":[]},"publishedPorts":[],"publishedSockets":[]`,
-		"publishedPorts":   `"initProcess":{"environment":[]},"ssh":false,"publishedSockets":[]`,
-		"publishedSockets": `"initProcess":{"environment":[]},"ssh":false,"publishedPorts":[]`,
+		"image":            `"initProcess":{"executable":"sh","arguments":[],"environment":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
+		"image reference":  `"image":{"descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
+		"image digest":     `"image":{"reference":"example.test/exporter"},"initProcess":{"executable":"sh","arguments":[],"environment":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
+		"executable":       `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"arguments":[],"environment":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
+		"arguments":        `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","environment":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
+		"environment":      `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
+		"ssh":              `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[]},"publishedPorts":[],"publishedSockets":[]`,
+		"publishedPorts":   `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[]},"ssh":false,"publishedSockets":[]`,
+		"publishedSockets": `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[]},"ssh":false,"publishedPorts":[]`,
 	}
 	for missing, cfg := range fields {
 		t.Run("missing "+missing, func(t *testing.T) {
 			out := []byte(`[{"id":"c","configuration":{"id":"c",` + cfg + `},"status":{"state":"stopped"}}]`)
-			if _, err := decodeInspect(out, "c"); err == nil {
-				t.Errorf("inspect missing %q decoded without error", missing)
+			rep, err := decodeInspect(out, "c")
+			if err != nil {
+				t.Fatalf("inspect missing %q could not decode identity/labels: %v", missing, err)
+			}
+			if rep.AllowlistFieldsObserved {
+				t.Errorf("inspect missing %q marked the exporter allowlist complete", missing)
+			}
+			if err := verifyExporterAllowlist(testConfig(), rep, "c", "workspace"); err == nil {
+				t.Errorf("inspect missing %q passed the exporter allowlist", missing)
 			}
 		})
 	}
-	// All four present decodes cleanly.
-	out := []byte(`[{"id":"c","configuration":{"id":"c","initProcess":{"environment":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]},"status":{"state":"stopped"}}]`)
-	if _, err := decodeInspect(out, "c"); err != nil {
+	// Every required field present decodes cleanly.
+	out := []byte(`[{"id":"c","configuration":{"id":"c","image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[]},"ssh":false,"publishedPorts":[],"publishedSockets":[]},"status":{"state":"stopped"}}]`)
+	rep, err := decodeInspect(out, "c")
+	if err != nil {
 		t.Errorf("complete report failed: %v", err)
+	} else if !rep.AllowlistFieldsObserved {
+		t.Error("complete report marked the exporter allowlist incomplete")
 	}
 }
 

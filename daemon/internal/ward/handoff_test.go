@@ -262,13 +262,12 @@ func TestHandoffAmbiguousVolumeCreateReaped(t *testing.T) {
 	}
 }
 
-// TestHandoffAmbiguousCreateMissingLabelsFailsTeardown proves an omitted
-// label field is unknown evidence, not an observed empty set. Teardown cannot
-// safely delete the exact object without the invocation token, but it must
-// surface the incomplete cleanup alongside the primary create failure.
-func TestHandoffAmbiguousCreateMissingLabelsFailsTeardown(t *testing.T) {
+// TestHandoffAmbiguousCreateOwnershipEvidence proves teardown uses
+// inspect when the runtime's list shape omits container labels, while still
+// failing closed if neither runtime view exposes the invocation token.
+func TestHandoffAmbiguousCreateOwnershipEvidence(t *testing.T) {
 	names := namesFor(testHandoffSpec().RunID)
-	t.Run("container", func(t *testing.T) {
+	t.Run("container list falls back to inspect", func(t *testing.T) {
 		fx := newHandoffFixture(t)
 		fx.rt.createThenFail = names.Agent
 		fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
@@ -282,12 +281,94 @@ func TestHandoffAmbiguousCreateMissingLabelsFailsTeardown(t *testing.T) {
 		}
 
 		_, err := fx.run(t)
+		if err == nil {
+			t.Fatal("ambiguous create returned success")
+		}
+		fx.assertReaped(t)
+	})
+
+	t.Run("container list and inspect both omit labels", func(t *testing.T) {
+		fx := newHandoffFixture(t)
+		fx.rt.createThenFail = names.Agent
+		fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
+			for i := range list {
+				if list[i].ID == names.Agent {
+					list[i].LabelsObserved = false
+					list[i].Labels = nil
+				}
+			}
+			return list, nil
+		}
+		fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+			if id == names.Agent {
+				rep.LabelsObserved = false
+				rep.Labels = nil
+			}
+			return rep, nil
+		}
+
+		_, err := fx.run(t)
 		wantCheckFailure(t, err, CheckTeardown)
 		fx.rt.mu.Lock()
 		defer fx.rt.mu.Unlock()
 		if _, ok := fx.rt.ctrs[names.Agent]; !ok {
 			t.Error("teardown deleted an ambiguously owned container without observing its labels")
 		}
+	})
+
+	t.Run("container inspect identifies another object", func(t *testing.T) {
+		fx := newHandoffFixture(t)
+		fx.rt.createThenFail = names.Agent
+		fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
+			for i := range list {
+				if list[i].ID == names.Agent {
+					list[i].LabelsObserved = false
+					list[i].Labels = nil
+				}
+			}
+			return list, nil
+		}
+		fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+			if id == names.Agent {
+				rep.ID = "another-object"
+			}
+			return rep, nil
+		}
+
+		_, err := fx.run(t)
+		wantCheckFailure(t, err, CheckTeardown)
+		fx.rt.mu.Lock()
+		defer fx.rt.mu.Unlock()
+		if _, ok := fx.rt.ctrs[names.Agent]; !ok {
+			t.Error("teardown deleted a container using another object's inspect report")
+		}
+	})
+
+	t.Run("container inspect omits unrelated exporter field", func(t *testing.T) {
+		fx := newHandoffFixture(t)
+		fx.rt.createThenFail = names.Agent
+		fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
+			for i := range list {
+				if list[i].ID == names.Agent {
+					list[i].LabelsObserved = false
+					list[i].Labels = nil
+				}
+			}
+			return list, nil
+		}
+		fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+			if id == names.Agent {
+				rep.AllowlistFieldsObserved = false
+				rep.ImageReference = ""
+			}
+			return rep, nil
+		}
+
+		_, err := fx.run(t)
+		if err == nil {
+			t.Fatal("ambiguous create returned success")
+		}
+		fx.assertReaped(t)
 	})
 
 	t.Run("volume", func(t *testing.T) {
@@ -452,6 +533,37 @@ func TestHandoffExporterAllowlistViolation(t *testing.T) {
 		t.Error("exporter was started despite a failed pre-execution inspection")
 	}
 	fx.assertReaped(t)
+}
+
+// TestHandoffExporterPayloadMismatch proves check 4 binds approval to the
+// runtime-observed image and argv, not only the mounts around the helper the
+// gate requested. A substituted helper never starts.
+func TestHandoffExporterPayloadMismatch(t *testing.T) {
+	names := namesFor(testHandoffSpec().RunID)
+	cases := []struct {
+		name   string
+		mutate func(*InspectReport)
+	}{
+		{"image digest", func(rep *InspectReport) { rep.ImageDigest = "sha256:" + strings.Repeat("1", 64) }},
+		{"command", func(rep *InspectReport) { rep.Command = []string{"/bin/other"} }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newHandoffFixture(t)
+			fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+				if id == names.Exporter {
+					tc.mutate(&rep)
+				}
+				return rep, nil
+			}
+			_, err := fx.run(t)
+			wantCheckFailure(t, err, CheckExporterAllowlist)
+			if i := fx.rt.callIndex("start-container " + names.Exporter); i >= 0 {
+				t.Error("exporter was started despite a mismatched inspected payload")
+			}
+			fx.assertReaped(t)
+		})
+	}
 }
 
 // TestHandoffExporterNeverStops: an exporter that hangs exhausts its budget

@@ -154,8 +154,9 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 
 	// Check 4: create the exporter but inspect it against the generated
 	// allowlist before it ever executes.
+	exporterSpec := buildExporterSpec(b.cfg, hs, names, ownershipLabel)
 	st.exporterAttempted = true
-	if err := b.rt.CreateContainer(ctx, buildExporterSpec(b.cfg, hs, names, ownershipLabel)); err != nil {
+	if err := b.rt.CreateContainer(ctx, exporterSpec); err != nil {
 		return nil, fmt.Errorf("create exporter container: %w", err)
 	}
 	st.exporterOwned = true
@@ -163,7 +164,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	if err != nil {
 		return nil, failf(CheckExporterAllowlist, "inspect exporter before execution: %v", err)
 	}
-	if err := verifyExporterAllowlist(b.cfg, rep, names.Workspace); err != nil {
+	if err := verifyExporterAllowlist(b.cfg, rep, names.Exporter, names.Workspace); err != nil {
 		return nil, err
 	}
 	if err := b.rt.StartContainer(ctx, names.Exporter); err != nil {
@@ -219,6 +220,9 @@ func (b *Backend) waitStopped(ctx context.Context, id string, timeout time.Durat
 		rep, err := b.rt.Inspect(ctx, id)
 		if err != nil {
 			return fmt.Errorf("inspect: %w", err)
+		}
+		if rep.ID != id {
+			return fmt.Errorf("inspect returned a report for the wrong container")
 		}
 		if rep.State == StateStopped {
 			return nil
@@ -293,11 +297,12 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 					continue
 				}
 				if !claim.owned {
-					if !candidate.LabelsObserved {
-						problems = append(problems, fmt.Sprintf("container %q list entry omitted labels after ambiguous create", claim.id))
+					owned, oerr := b.containerHasOwnership(ctx, candidate, st.ownershipLabel)
+					if oerr != nil {
+						problems = append(problems, oerr.Error())
 						continue
 					}
-					if !slices.Contains(candidate.Labels, st.ownershipLabel) {
+					if !owned {
 						continue
 					}
 				}
@@ -350,11 +355,16 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 				if !found {
 					continue
 				}
-				if !claim.owned && !candidate.LabelsObserved {
-					problems = append(problems, fmt.Sprintf("container %q re-list entry omitted labels after ambiguous create", claim.id))
-					continue
+				owned := claim.owned
+				if !owned {
+					var oerr error
+					owned, oerr = b.containerHasOwnership(ctx, candidate, st.ownershipLabel)
+					if oerr != nil {
+						problems = append(problems, "re-list "+oerr.Error())
+						continue
+					}
 				}
-				if claim.owned || slices.Contains(candidate.Labels, st.ownershipLabel) {
+				if owned {
 					problems = append(problems, fmt.Sprintf("container %q survived teardown", claim.id))
 				}
 			}
@@ -379,6 +389,27 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 		return failf(CheckTeardown, "%s", strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// containerHasOwnership uses a list row's labels when present and falls back
+// to inspect when the runtime's list shape omits them. The inspect report must
+// identify the exact candidate and expose labels before its invocation token
+// can authorize cleanup after an ambiguous create.
+func (b *Backend) containerHasOwnership(ctx context.Context, candidate ContainerSummary, ownershipLabel Label) (bool, error) {
+	if candidate.LabelsObserved {
+		return slices.Contains(candidate.Labels, ownershipLabel), nil
+	}
+	rep, err := b.rt.Inspect(ctx, candidate.ID)
+	if err != nil {
+		return false, fmt.Errorf("inspect container %q ownership after ambiguous create: %w", candidate.ID, err)
+	}
+	if rep.ID != candidate.ID {
+		return false, fmt.Errorf("inspect container %q ownership returned the wrong identity", candidate.ID)
+	}
+	if !rep.LabelsObserved {
+		return false, fmt.Errorf("container %q omitted labels from both list and inspect after ambiguous create", candidate.ID)
+	}
+	return slices.Contains(rep.Labels, ownershipLabel), nil
 }
 
 // uniqueContainer returns the one exact-id entry from a full runtime list.

@@ -189,14 +189,26 @@ type cliMount struct {
 }
 
 type cliInitProcess struct {
+	Executable string    `json:"executable"`
+	Arguments  *[]string `json:"arguments"`
 	// Pointer so an absent environment key is distinguishable from an
 	// explicitly empty one: the allowlist must observe the field, not
 	// assume clean when the CLI shape drifts.
 	Environment *[]string `json:"environment"`
 }
 
+type cliImageDescriptor struct {
+	Digest string `json:"digest"`
+}
+
+type cliImage struct {
+	Reference  string              `json:"reference"`
+	Descriptor *cliImageDescriptor `json:"descriptor"`
+}
+
 type cliConfiguration struct {
 	ID          string             `json:"id"`
+	Image       *cliImage          `json:"image"`
 	Labels      *map[string]string `json:"labels"`
 	Mounts      []cliMount         `json:"mounts"`
 	InitProcess cliInitProcess     `json:"initProcess"`
@@ -266,7 +278,13 @@ func (m cliMount) toMount() Mount {
 // field check 4 reads was actually present in the JSON. A drifted or partial
 // report (renamed/omitted keys) must not read as an explicit clean report.
 func (c cliContainer) allowlistFieldsPresent() bool {
-	return c.Configuration.InitProcess.Environment != nil &&
+	return c.Configuration.Image != nil &&
+		c.Configuration.Image.Reference != "" &&
+		c.Configuration.Image.Descriptor != nil &&
+		c.Configuration.Image.Descriptor.Digest != "" &&
+		c.Configuration.InitProcess.Executable != "" &&
+		c.Configuration.InitProcess.Arguments != nil &&
+		c.Configuration.InitProcess.Environment != nil &&
 		c.Configuration.SSH != nil &&
 		c.Configuration.PublishedPorts != nil &&
 		c.Configuration.PublishedSockets != nil
@@ -274,18 +292,47 @@ func (c cliContainer) allowlistFieldsPresent() bool {
 
 func (c cliContainer) toReport() InspectReport {
 	rep := InspectReport{
-		State: ContainerState(c.Status.State),
-		Env:   *c.Configuration.InitProcess.Environment,
-		SSH:   *c.Configuration.SSH,
+		ID:                      c.ID,
+		State:                   ContainerState(c.Status.State),
+		AllowlistFieldsObserved: c.allowlistFieldsPresent(),
+		LabelsObserved:          c.Configuration.Labels != nil,
+	}
+	if c.Configuration.Image != nil {
+		rep.ImageReference = c.Configuration.Image.Reference
+		if c.Configuration.Image.Descriptor != nil {
+			rep.ImageDigest = c.Configuration.Image.Descriptor.Digest
+		}
+	}
+	if c.Configuration.InitProcess.Executable != "" {
+		rep.Command = append(rep.Command, c.Configuration.InitProcess.Executable)
+	}
+	if c.Configuration.InitProcess.Arguments != nil {
+		rep.Command = append(rep.Command, (*c.Configuration.InitProcess.Arguments)...)
+	}
+	if c.Configuration.InitProcess.Environment != nil {
+		rep.Env = append(rep.Env, (*c.Configuration.InitProcess.Environment)...)
+	}
+	if c.Configuration.SSH != nil {
+		rep.SSH = *c.Configuration.SSH
+	}
+	if c.Configuration.Labels != nil {
+		for k, value := range *c.Configuration.Labels {
+			rep.Labels = append(rep.Labels, Label{Key: k, Value: value})
+		}
+		sort.Slice(rep.Labels, func(i, j int) bool { return rep.Labels[i].Key < rep.Labels[j].Key })
 	}
 	for _, m := range c.Configuration.Mounts {
 		rep.Mounts = append(rep.Mounts, m.toMount())
 	}
-	for _, p := range *c.Configuration.PublishedSockets {
-		rep.PublishedSockets = append(rep.PublishedSockets, string(p))
+	if c.Configuration.PublishedSockets != nil {
+		for _, p := range *c.Configuration.PublishedSockets {
+			rep.PublishedSockets = append(rep.PublishedSockets, string(p))
+		}
 	}
-	for _, p := range *c.Configuration.PublishedPorts {
-		rep.PublishedPorts = append(rep.PublishedPorts, string(p))
+	if c.Configuration.PublishedPorts != nil {
+		for _, p := range *c.Configuration.PublishedPorts {
+			rep.PublishedPorts = append(rep.PublishedPorts, string(p))
+		}
 	}
 	return rep
 }
@@ -307,21 +354,16 @@ func decodeInspect(out []byte, id string) (InspectReport, error) {
 	if ctrs[0].ID != id {
 		return InspectReport{}, fmt.Errorf("inspect %q returned a report identified as %q", id, ctrs[0].ID)
 	}
-	// The mounts, environment, SSH, and publications check 4 reads all live
+	// The image, command, mounts, environment, SSH, and publications check 4 reads all live
 	// under configuration, so its identity must match too: a report cannot
 	// carry the requested top-level id but another object's configuration.
 	if ctrs[0].Configuration.ID != id {
 		return InspectReport{}, fmt.Errorf("inspect %q returned a configuration identified as %q", id, ctrs[0].Configuration.ID)
 	}
-	// Every allowlist input check 4 reads must have been present: an absent
-	// env/ssh/publications field would otherwise decode to a clean-looking
-	// zero value and let the gate approve without observing it. The other
-	// security-relevant fields already fail closed on absence: an empty state
-	// is not "stopped", zero mounts fails the "exactly one" rule, and an
-	// unnamed/typeless mount decodes to an invalid type.
-	if !ctrs[0].allowlistFieldsPresent() {
-		return InspectReport{}, fmt.Errorf("inspect %q omitted a required allowlist field (environment/ssh/publishedPorts/publishedSockets)", id)
-	}
+	// Preserve allowlist-field presence in the report instead of rejecting it
+	// here. Check 4 requires the complete exporter shape; teardown ownership
+	// recovery needs only the independently verified identity and labels and
+	// must still work for a partially created container.
 	return ctrs[0].toReport(), nil
 }
 

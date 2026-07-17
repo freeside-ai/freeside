@@ -2,6 +2,12 @@
  {
   "configuration": {
    "id": "hostile-fixture",
+   "image": {
+    "descriptor": {
+     "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "reference": "example.test/hostile:fixture"
+   },
    "initProcess": {
     "arguments": ["true"],
     "environment": [

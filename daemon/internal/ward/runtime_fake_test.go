@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -274,10 +275,16 @@ func (f *fakeRuntime) Inspect(ctx context.Context, id string) (InspectReport, er
 		c.inspects++
 	}
 	rep := InspectReport{
-		State:  f.state(c, id),
-		Mounts: append([]Mount(nil), c.spec.Mounts...),
-		Env:    append([]string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}, c.spec.Env...),
+		ID:                      id,
+		Command:                 append([]string(nil), c.spec.Command...),
+		State:                   f.state(c, id),
+		AllowlistFieldsObserved: true,
+		Mounts:                  append([]Mount(nil), c.spec.Mounts...),
+		Env:                     append([]string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}, c.spec.Env...),
+		Labels:                  append([]Label(nil), c.spec.Labels...),
+		LabelsObserved:          true,
 	}
+	rep.ImageReference, rep.ImageDigest, _ = strings.Cut(c.spec.Image, "@")
 	if f.onInspect != nil {
 		return f.onInspect(id, rep)
 	}

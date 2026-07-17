@@ -467,3 +467,40 @@ Round 15 raised one P1 in the credential-leak class:
   missing-key branches. Exporter socket and port cardinalities remain by
   decision: they cannot reproduce input bytes or a secret substring, while
   retaining useful topology diagnostics.
+
+Round 16 raised two P1s at the returned-object and cleanup ownership trust
+boundaries:
+
+- *P1: exporter approval did not bind the inspected helper payload.* Check 4
+  verified the observed state, mounts, environment, SSH, and publications,
+  but not the observed image or init argv. A Runtime could therefore realize
+  a different executable behind an otherwise conforming container and have it
+  started under the pinned exporter's approval. The inspect seam now retains
+  the exact container identity, normalized image reference, descriptor digest,
+  and init executable plus arguments. Check 4 compares all four to the
+  deterministic exporter identity and digest-pinned configured payload before
+  start; absent fields, a substituted digest/reference, or any argv drift fail
+  categorically without echoing observed values. The stopped-state poll also
+  verifies the returned identity before trusting state.
+- *P1: ambiguous container cleanup depended on labels the pinned list shape
+  omits.* The full container list can identify an exact candidate but omit its
+  labels, so teardown previously refused to reap a create-then-error object
+  even though container inspect exposes the invocation token. Ambiguous
+  cleanup now uses the list row when labels are present and otherwise inspects
+  that exact candidate under the detached teardown deadline. It authorizes
+  cleanup only when inspect identifies the same object and explicitly exposes
+  the unpredictable ownership label; a wrong identity or labels omitted from
+  both views remains a teardown failure.
+
+The required fresh-context refute pass confirmed one coupling defect in the
+first implementation: the shared inspect decoder required every exporter-only
+allowlist field before returning any report, so a partially created container
+could expose a valid identity and ownership token yet remain unreaped because
+an unrelated image, environment, SSH, or publication field was missing.
+Presence is now retained as evidence on the report and enforced only by check
+4. Teardown consumes only exact identity and observed labels. Regression tests
+prove that missing exporter-only fields still refuse exporter start, while the
+same omission cannot suppress cleanup when the ownership evidence is complete.
+The refute pass also exercised wrong identities and labels missing from both
+views; those unsafe or unknown cases remain fail-closed, and it found no path
+that deletes a foreign object.

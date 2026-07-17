@@ -94,7 +94,14 @@ type ContainerSpec struct {
 // container; check 3 reads State and check 4 verifies the rest against the
 // generated allowlist.
 type InspectReport struct {
-	State ContainerState
+	ID             string
+	ImageReference string
+	ImageDigest    string
+	Command        []string
+	State          ContainerState
+	// AllowlistFieldsObserved records whether inspect exposed every image,
+	// process, environment, SSH, and publication field check 4 consumes.
+	AllowlistFieldsObserved bool
 	// Mounts are the persistent mounts the runtime will realize. An
 	// implementation maps unknown mount kinds to an invalid MountType rather
 	// than dropping them, so verification sees and rejects them.
@@ -106,6 +113,10 @@ type InspectReport struct {
 	// PublishedSockets and PublishedPorts list configured host publications.
 	PublishedSockets []string
 	PublishedPorts   []string
+	Labels           []Label
+	// LabelsObserved distinguishes an explicitly empty label set from an
+	// omitted runtime field when inspect is used as ownership evidence.
+	LabelsObserved bool
 }
 
 // VolumeSummary identifies one named volume and its labels.

@@ -3,6 +3,7 @@ package ward
 import (
 	"bufio"
 	"bytes"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -98,7 +99,20 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume string) e
 // SSH forwarding, no environment beyond the image PATH, and no published
 // socket or port. It verifies the runtime's report, not the gate's own spec:
 // what the VM would actually get, not what was asked for.
-func verifyExporterAllowlist(cfg Config, rep InspectReport, workspaceVolume string) error {
+func verifyExporterAllowlist(cfg Config, rep InspectReport, exporterID, workspaceVolume string) error {
+	if rep.ID != exporterID {
+		return failf(CheckExporterAllowlist, "exporter inspection identified the wrong container")
+	}
+	if !rep.AllowlistFieldsObserved {
+		return failf(CheckExporterAllowlist, "exporter inspection omitted required configuration")
+	}
+	imageReference, imageDigest, ok := strings.Cut(cfg.ExporterImage, "@")
+	if !ok || rep.ImageReference != imageReference || rep.ImageDigest != imageDigest {
+		return failf(CheckExporterAllowlist, "exporter inspection reported the wrong image")
+	}
+	if !slices.Equal(rep.Command, cfg.ExporterCommand) {
+		return failf(CheckExporterAllowlist, "exporter inspection reported the wrong command")
+	}
 	// Inspect-before-execution: the report must describe a container that has
 	// not run. On the reference runtime a created-not-started container is
 	// stopped; any other observed state means the trusted payload may already

@@ -171,9 +171,15 @@ func TestValidateAgentSpecRedactsMalformedEnv(t *testing.T) {
 
 // exporterReport is the runtime report matching the generated allowlist:
 // the fixture the check-4 violation cases mutate.
-func exporterReport(cfg Config, workspaceVolume string) InspectReport {
+func exporterReport(cfg Config, exporterID, workspaceVolume string) InspectReport {
+	imageReference, imageDigest, _ := strings.Cut(cfg.ExporterImage, "@")
 	return InspectReport{
-		State: StateStopped,
+		ID:                      exporterID,
+		ImageReference:          imageReference,
+		ImageDigest:             imageDigest,
+		Command:                 append([]string(nil), cfg.ExporterCommand...),
+		State:                   StateStopped,
+		AllowlistFieldsObserved: true,
 		Mounts: []Mount{{
 			Type:     MountVolume,
 			Source:   workspaceVolume,
@@ -189,9 +195,10 @@ func exporterReport(cfg Config, workspaceVolume string) InspectReport {
 // for check 4).
 func TestVerifyExporterAllowlistViolations(t *testing.T) {
 	cfg := testConfig()
+	const exporter = "freeside-handoff-run-exporter"
 	const ws = "freeside-handoff-run-ws"
 
-	if err := verifyExporterAllowlist(cfg, exporterReport(cfg, ws), ws); err != nil {
+	if err := verifyExporterAllowlist(cfg, exporterReport(cfg, exporter, ws), exporter, ws); err != nil {
 		t.Fatalf("conforming report: %v, want nil", err)
 	}
 
@@ -199,6 +206,12 @@ func TestVerifyExporterAllowlistViolations(t *testing.T) {
 		name   string
 		mutate func(*InspectReport)
 	}{
+		{"wrong identity", func(r *InspectReport) { r.ID = "other-exporter" }},
+		{"required field omitted", func(r *InspectReport) { r.AllowlistFieldsObserved = false }},
+		{"wrong image reference", func(r *InspectReport) { r.ImageReference = "example.test/other" }},
+		{"wrong image digest", func(r *InspectReport) { r.ImageDigest = "sha256:" + strings.Repeat("1", 64) }},
+		{"wrong executable", func(r *InspectReport) { r.Command[0] = "/bin/other" }},
+		{"extra argument", func(r *InspectReport) { r.Command = append(r.Command, "--other") }},
 		{"running before execution", func(r *InspectReport) { r.State = StateRunning }},
 		{"unknown state before execution", func(r *InspectReport) { r.State = "" }},
 		{"no mounts", func(r *InspectReport) { r.Mounts = nil }},
@@ -217,9 +230,9 @@ func TestVerifyExporterAllowlistViolations(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rep := exporterReport(cfg, ws)
+			rep := exporterReport(cfg, exporter, ws)
 			tc.mutate(&rep)
-			err := verifyExporterAllowlist(cfg, rep, ws)
+			err := verifyExporterAllowlist(cfg, rep, exporter, ws)
 			var cf *ConformanceFailure
 			if !errors.As(err, &cf) || cf.Check != CheckExporterAllowlist {
 				t.Fatalf("verifyExporterAllowlist = %v, want exporter_allowlist failure", err)
@@ -233,10 +246,11 @@ func TestVerifyExporterAllowlistViolations(t *testing.T) {
 // credential the gate exists to contain.
 func TestVerifyExporterAllowlistRedactsValues(t *testing.T) {
 	cfg := testConfig()
+	const exporter = "freeside-handoff-run-exporter"
 	const ws = "freeside-handoff-run-ws"
-	rep := exporterReport(cfg, ws)
+	rep := exporterReport(cfg, exporter, ws)
 	rep.Env = append(rep.Env, "PROVIDER_TOKEN=super-secret-fixture-value")
-	err := verifyExporterAllowlist(cfg, rep, ws)
+	err := verifyExporterAllowlist(cfg, rep, exporter, ws)
 	if err == nil {
 		t.Fatal("want failure")
 	}
@@ -260,9 +274,9 @@ func TestConformanceReasonsRedactUntrustedFields(t *testing.T) {
 	if err := validateAgentSpec(cfg, agent, names.Workspace); err == nil || strings.Contains(err.Error(), secret) {
 		t.Errorf("agent conformance failure leaked or accepted an untrusted field: %v", err)
 	}
-	rep := exporterReport(cfg, names.Workspace)
+	rep := exporterReport(cfg, names.Exporter, names.Workspace)
 	rep.Mounts[0].Source = secret
-	if err := verifyExporterAllowlist(cfg, rep, names.Workspace); err == nil || strings.Contains(err.Error(), secret) {
+	if err := verifyExporterAllowlist(cfg, rep, names.Exporter, names.Workspace); err == nil || strings.Contains(err.Error(), secret) {
 		t.Errorf("exporter conformance failure leaked or accepted an untrusted field: %v", err)
 	}
 }
