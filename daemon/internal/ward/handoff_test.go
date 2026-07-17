@@ -343,6 +343,54 @@ func TestHandoffAmbiguousCreateDuplicateContainerIDFailsTeardown(t *testing.T) {
 	}
 }
 
+// TestHandoffAmbiguousCreateDuplicateVolumeNameFailsTeardown is the volume
+// sibling: deletion is by name, so a labeled row cannot authorize deletion
+// while a contradictory row presents the same identity.
+func TestHandoffAmbiguousCreateDuplicateVolumeNameFailsTeardown(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.createVolumeThenFail = true
+	fx.rt.onListVolumes = func(list []VolumeSummary) ([]VolumeSummary, error) {
+		for _, v := range list {
+			if v.Name == names.Workspace {
+				foreignView := VolumeSummary{
+					Name: names.Workspace, Labels: runLabels(testHandoffSpec().RunID), LabelsObserved: true,
+				}
+				return append([]VolumeSummary{foreignView}, list...), nil
+			}
+		}
+		return list, nil
+	}
+
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckTeardown)
+	fx.rt.mu.Lock()
+	defer fx.rt.mu.Unlock()
+	if _, ok := fx.rt.vols[names.Workspace]; !ok {
+		t.Error("teardown deleted a volume after a contradictory duplicate-name listing")
+	}
+}
+
+// TestHandoffUnrelatedDuplicateSummariesDoNotBlockTeardown proves identity
+// contradictions are scoped to the object being classified. A malformed
+// unrelated pair cannot suppress cleanup of the run's owned objects.
+func TestHandoffUnrelatedDuplicateSummariesDoNotBlockTeardown(t *testing.T) {
+	fx := newHandoffFixture(t)
+	fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
+		duplicate := ContainerSummary{ID: "unrelated", State: StateStopped}
+		return append(list, duplicate, duplicate), nil
+	}
+	fx.rt.onListVolumes = func(list []VolumeSummary) ([]VolumeSummary, error) {
+		duplicate := VolumeSummary{Name: "unrelated"}
+		return append(list, duplicate, duplicate), nil
+	}
+
+	if _, err := fx.run(t); err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+	fx.assertReaped(t)
+}
+
 // TestHandoffListContainersError: check 3's absence proof fails closed when
 // the runtime cannot be listed, rather than trusting the delete call.
 func TestHandoffListContainersError(t *testing.T) {

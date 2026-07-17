@@ -318,12 +318,13 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	if vols, err := b.rt.ListVolumes(ctx); err != nil {
 		problems = append(problems, fmt.Sprintf("list volumes: %v", err))
 	} else {
-		for _, v := range vols {
+		v, found, ferr := uniqueVolume(vols, names.Workspace)
+		if ferr != nil {
+			problems = append(problems, ferr.Error())
+		} else if found {
 			if v.Name == names.Workspace && !st.workspaceOwned && !v.LabelsObserved {
 				problems = append(problems, fmt.Sprintf("volume %q list entry omitted labels after ambiguous create", v.Name))
-				continue
-			}
-			if ownsWorkspace(v) {
+			} else if ownsWorkspace(v) {
 				if derr := b.rt.DeleteVolume(ctx, v.Name); derr != nil {
 					problems = append(problems, fmt.Sprintf("delete volume %q: %v", v.Name, derr))
 				}
@@ -362,12 +363,13 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	if vols, err := b.rt.ListVolumes(ctx); err != nil {
 		problems = append(problems, fmt.Sprintf("re-list volumes: %v", err))
 	} else {
-		for _, v := range vols {
+		v, found, ferr := uniqueVolume(vols, names.Workspace)
+		if ferr != nil {
+			problems = append(problems, "re-list "+ferr.Error())
+		} else if found {
 			if v.Name == names.Workspace && !st.workspaceOwned && !v.LabelsObserved {
 				problems = append(problems, fmt.Sprintf("volume %q re-list entry omitted labels after ambiguous create", v.Name))
-				continue
-			}
-			if ownsWorkspace(v) {
+			} else if ownsWorkspace(v) {
 				problems = append(problems, fmt.Sprintf("volume %q survived teardown", v.Name))
 			}
 		}
@@ -393,6 +395,23 @@ func uniqueContainer(ctrs []ContainerSummary, id string) (ContainerSummary, bool
 			return ContainerSummary{}, false, fmt.Errorf("container %q appeared more than once in runtime listing", id)
 		}
 		found, seen = cs, true
+	}
+	return found, seen, nil
+}
+
+// uniqueVolume applies the same exact-identity rule before a name-based
+// delete can use one row's ownership evidence.
+func uniqueVolume(vols []VolumeSummary, name string) (VolumeSummary, bool, error) {
+	var found VolumeSummary
+	seen := false
+	for _, v := range vols {
+		if v.Name != name {
+			continue
+		}
+		if seen {
+			return VolumeSummary{}, false, fmt.Errorf("volume %q appeared more than once in runtime listing", name)
+		}
+		found, seen = v, true
 	}
 	return found, seen, nil
 }

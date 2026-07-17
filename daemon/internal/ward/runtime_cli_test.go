@@ -191,9 +191,6 @@ func TestDecodeListFailsClosedOnMissingIdentity(t *testing.T) {
 	if _, err := decodeContainerList([]byte(`[{"id":"c","configuration":{"id":"other"},"status":{"state":"stopped"}}]`)); err == nil {
 		t.Error("container list entry with a mismatched configuration id was trusted")
 	}
-	if _, err := decodeContainerList([]byte(`[{"id":"c","configuration":{"id":"c"}},{"id":"c","configuration":{"id":"c"}}]`)); err == nil {
-		t.Error("container list with a duplicate id was trusted")
-	}
 	if _, err := decodeVolumeList([]byte(`[{"id":"a","configuration":{"name":"b","labels":{}}}]`)); err == nil {
 		t.Error("volume list entry with id != name was trusted")
 	}

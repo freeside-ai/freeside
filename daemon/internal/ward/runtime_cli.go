@@ -331,7 +331,6 @@ func decodeContainerList(out []byte) ([]ContainerSummary, error) {
 		return nil, fmt.Errorf("decode container list: %w", err)
 	}
 	summaries := make([]ContainerSummary, len(ctrs))
-	seenIDs := make(map[string]bool, len(ctrs))
 	for i, c := range ctrs {
 		// An entry with no id cannot be matched against the run's names, so
 		// the absence proofs (verifyContainerAbsent, teardown) would silently
@@ -341,10 +340,6 @@ func decodeContainerList(out []byte) ([]ContainerSummary, error) {
 		if c.ID == "" {
 			return nil, fmt.Errorf("container list entry %d has no id", i)
 		}
-		if seenIDs[c.ID] {
-			return nil, fmt.Errorf("container list entry %d duplicates id %q", i, c.ID)
-		}
-		seenIDs[c.ID] = true
 		if c.Configuration.ID != c.ID {
 			return nil, fmt.Errorf("container list entry %d id %q disagrees with configuration id %q", i, c.ID, c.Configuration.ID)
 		}

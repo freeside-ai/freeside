@@ -435,8 +435,16 @@ Round 14 raised one P2 at the runtime-list trust boundary:
   the returned error joins them: the original cause remains discoverable and
   the incomplete cleanup is no longer hidden. The fresh-context refute pass
   then found a contradictory-list variant: duplicate exact container IDs
-  previously let the first entry decide ownership. The CLI decoder now rejects
-  duplicate IDs, and teardown independently rejects them from any Runtime
-  implementation before using label evidence; a regression orders an empty
-  foreign view before the owned token-bearing view and proves the ambiguity
-  fails teardown without deleting either interpretation.
+  previously let the first entry decide ownership. Teardown now rejects them
+  before using label evidence; a regression orders an empty foreign view
+  before the owned token-bearing view and proves the ambiguity fails teardown
+  without deleting either interpretation. The next reviewer
+  pass caught the exact volume sibling our sweep missed: because deletion is
+  by name, one labeled duplicate row cannot authorize deletion while another
+  row presents the same name. Duplicate target volume names now fail with the
+  same contradictory-order regression. A final fresh-context refute pass
+  rejected decoder-wide duplicate failure: contradictory unrelated rows could
+  otherwise make listing fail before teardown reaped this run's live object.
+  Uniqueness is therefore enforced on the exact target identity in teardown,
+  and a success-path regression proves unrelated duplicate summaries cannot
+  suppress cleanup.
