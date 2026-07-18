@@ -54,7 +54,11 @@ pins every current role against the longest valid run ID.
   specially. The refute-first pass then found that a flag-only liveness probe
   still missed runtimes specialized on the production exporter image and
   read-only workspace mount; the separate nonterminating probe now mirrors that
-  full create topology before the finite egress attempts run.
+  full create topology before the finite egress attempts run. The next review
+  found that a present but invocation-incompatible `nc` could turn a usage
+  failure into a false blocked-egress witness; the probe now requires the
+  pinned BusyBox `-w` and `-z` help contract and rejects usage/invalid-option
+  diagnostics before writing proof.
 - **Accepted by decision:** the DNS name and direct-IP endpoint are behavioral
   witnesses, not availability authorities. Endpoint failure alone is
   insufficient; the explicit empty attachment set is the load-bearing proof.

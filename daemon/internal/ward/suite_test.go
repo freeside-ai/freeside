@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -258,6 +259,35 @@ func TestSuiteFullNetworklessProbeFailure(t *testing.T) {
 		t.Error("failed networkless probe declared supports_networkless_export")
 	}
 	s.assertReaped(t, rt)
+}
+
+func TestNetworklessProbeRejectsNCUsageFailure(t *testing.T) {
+	binDir := t.TempDir()
+	fixtures := map[string]string{
+		"nslookup": "#!/bin/sh\nexit 1\n",
+		"nc": `#!/bin/sh
+if [ "$1" = "-h" ]; then
+	printf '%s\n' 'Usage: nc [OPTIONS] HOST PORT' '-w SEC' '-z Zero-I/O mode'
+	exit 1
+fi
+printf '%s\n' 'Usage: nc [OPTIONS] HOST PORT' >&2
+exit 1
+`,
+	}
+	for name, body := range fixtures {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte(body), 0o700); err != nil { //nolint:gosec // executable fixtures are isolated in t.TempDir
+			t.Fatal(err)
+		}
+	}
+	proofPath := filepath.Join(t.TempDir(), "networkless-proof.txt")
+	cmd := osexec.Command("sh", "-c", networklessProbeScript("owner", proofPath)) //nolint:gosec // fixed shell and test-owned script
+	cmd.Env = []string{"PATH=" + binDir + ":/usr/bin:/bin"}
+	if err := cmd.Run(); err == nil {
+		t.Fatal("networkless probe accepted nc usage failure")
+	}
+	if _, err := os.Stat(proofPath); !os.IsNotExist(err) {
+		t.Fatalf("proof after nc usage failure: stat error = %v, want not-exist", err)
+	}
 }
 
 func TestSuiteFullNetworklessProbeRejectsStaleProof(t *testing.T) {

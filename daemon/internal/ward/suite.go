@@ -166,14 +166,26 @@ func networklessProofContent(owner string) string {
 }
 
 func networklessProbeCommand(owner string) []string {
-	proofPath := networklessProofPath(owner)
 	return []string{
 		"sh", "-c",
-		"set -eu; command -v nslookup >/dev/null; command -v nc >/dev/null; " +
-			"dns=blocked; if nslookup example.com >/dev/null 2>&1; then dns=reachable; fi; " +
-			"direct=blocked; if nc -z -w 3 1.1.1.1 443 >/dev/null 2>&1; then direct=reachable; fi; " +
-			"printf 'owner=%s\\ndns=%s\\ndirect_connect=%s\\n' '" + owner + "' \"$dns\" \"$direct\" > " + proofPath + "; sync",
+		networklessProbeScript(owner, networklessProofPath(owner)),
 	}
+}
+
+func networklessProbeScript(owner, proofPath string) string {
+	return "set -eu; command -v nslookup >/dev/null; command -v nc >/dev/null; " +
+		// A binary's presence is not proof that the pinned invocation is valid.
+		// Match the fixture's BusyBox help before interpreting a nonzero direct-IP
+		// attempt as blocked egress, then reject any actual-call diagnostic rather
+		// than treating a tool failure as a network witness.
+		"nc_help=\"$(nc -h 2>&1 || true)\"; " +
+		"case \"$nc_help\" in *'-w SEC'*) ;; *) exit 1;; esac; " +
+		"case \"$nc_help\" in *'-z'*) ;; *) exit 1;; esac; " +
+		"dns=blocked; if nslookup example.com >/dev/null 2>&1; then dns=reachable; fi; " +
+		"direct=blocked; direct_error=''; " +
+		"if direct_error=\"$(nc -z -w 3 1.1.1.1 443 2>&1 >/dev/null)\"; then direct=reachable; " +
+		"else test -z \"$direct_error\" || exit 1; fi; " +
+		"printf 'owner=%s\\ndns=%s\\ndirect_connect=%s\\n' '" + owner + "' \"$dns\" \"$direct\" > " + shellQuote(proofPath) + "; sync"
 }
 
 // shellQuote single-quotes s for safe inclusion in a `sh -c` command, so a
