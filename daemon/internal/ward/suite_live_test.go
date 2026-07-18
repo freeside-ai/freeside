@@ -85,13 +85,17 @@ func TestLiveConformanceSuite(t *testing.T) {
 	t.Cleanup(func() {
 		for _, c := range []string{
 			names.Agent, names.Exporter,
-			prefix + "seed", prefix + "audit", prefix + "prejob", prefix + networklessProbeSuffix,
+			prefix + "seed", prefix + "audit", prefix + "prejob",
+			prefix + networklessProbeSuffix, prefix + networklessLivenessProbeSuffix,
 			prefix + "excl-writer", prefix + "excl-second",
 		} {
 			_ = rt.StopContainer(ctx, c)
 			_ = rt.DeleteContainer(ctx, c)
 		}
-		for _, v := range []string{names.Workspace, prefix + "cred", prefix + "excl-ws"} {
+		for _, v := range []string{
+			names.Workspace, prefix + "cred", prefix + "excl-ws",
+			prefix + networklessLivenessVolumeProbeSuffix,
+		} {
 			_ = rt.DeleteVolume(ctx, v)
 		}
 	})

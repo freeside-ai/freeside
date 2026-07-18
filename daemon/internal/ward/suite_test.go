@@ -210,6 +210,7 @@ func TestConformanceObjectNamesFitReferenceRuntime(t *testing.T) {
 	roles := []string{
 		"cred", "liveness", "liveness-ws", "seed", "audit", "prejob",
 		"excl-ws", "excl-writer", "excl-second", networklessProbeSuffix,
+		networklessLivenessProbeSuffix, networklessLivenessVolumeProbeSuffix,
 	}
 	for _, role := range roles {
 		if name := conformanceObjectName(runID, role); len(name) > 64 {
@@ -299,6 +300,43 @@ func TestSuiteFullNetworklessProbeRejectsAttachment(t *testing.T) {
 	wantCheckFailure(t, err, CheckNetworklessExport)
 	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
 		t.Error("attached exporter probe declared supports_networkless_export")
+	}
+	s.assertReaped(t, rt)
+}
+
+// TestSuiteFullNetworklessProbeRejectsEagerCreate covers a runtime that eagerly
+// executes only NetworkDisabled creates. The finite behavioral probe could
+// finish and self-mask as stopped; its preceding nonterminating probe must stay
+// running and expose that create-contract violation.
+func TestSuiteFullNetworklessProbeRejectsEagerCreate(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	scriptHappyProbes(s, rt)
+	liveness := s.conformanceName(networklessLivenessProbeSuffix)
+	volume := s.conformanceName(networklessLivenessVolumeProbeSuffix)
+	eager := false
+	rt.onCreateContainer = func(spec ContainerSpec) error {
+		if spec.Name == liveness {
+			wantMounts := []Mount{{Type: MountVolume, Source: volume, Target: s.b.cfg.WorkspaceTarget, ReadOnly: true}}
+			eager = spec.Image == s.b.cfg.ExporterImage &&
+				spec.NetworkDisabled &&
+				sameMounts(spec.Mounts, wantMounts) &&
+				slices.Equal(spec.Command, nonterminatingProbeCommand())
+		}
+		return nil
+	}
+	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+		if id == liveness && eager {
+			rep.State = StateRunning
+		}
+		return rep, nil
+	}
+	err := s.Full(context.Background())
+	wantCheckFailure(t, err, CheckNetworklessExport)
+	if !strings.Contains(err.Error(), "executed it before inspection") {
+		t.Errorf("error = %q, want networkless eager-create failure", err)
+	}
+	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Error("eager networkless create declared supports_networkless_export")
 	}
 	s.assertReaped(t, rt)
 }

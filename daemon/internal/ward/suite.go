@@ -94,9 +94,11 @@ const (
 	workspaceStateFile = "nested/state.txt"
 	// probeStopTimeout bounds the wait for a probe's own container to stop.
 	probeStopTimeout = 3 * time.Minute
-	// networklessProbeSuffix stays short enough that the longest valid RunID
-	// still fits Apple container's 64-character container-ID limit.
-	networklessProbeSuffix = "net"
+	// The networkless probe suffixes keep the longest valid RunID within Apple
+	// container's 64-character container-ID limit.
+	networklessProbeSuffix               = "net"
+	networklessLivenessProbeSuffix       = "net-live"
+	networklessLivenessVolumeProbeSuffix = "net-live-ws"
 	// conformanceObjectPrefix leaves enough room under that same limit for the
 	// longest valid RunID and the suite's longest existing role suffix.
 	conformanceObjectPrefix = "freeside-ward-conf-"
@@ -704,7 +706,11 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 		{Type: MountVolume, Source: livenessVolume, Target: s.b.cfg.WorkspaceTarget},
 		{Type: MountVolume, Source: credVolume, Target: s.fx.CredentialTarget, ReadOnly: true},
 	}
-	if err := s.proveNoEagerStart(ctx, run, livenessName, livenessMounts, CheckControlPlaneIsolation); err != nil {
+	if err := s.proveNoEagerStart(ctx, run, ContainerSpec{
+		Name:   livenessName,
+		Image:  s.fx.AgentImage,
+		Mounts: livenessMounts,
+	}, CheckControlPlaneIsolation); err != nil {
 		return err
 	}
 
@@ -881,29 +887,30 @@ func (s *Suite) PreJob(ctx context.Context) (err error) {
 		}
 	}()
 	defer run.reapContainer(ctx, name)
-	return s.proveNoEagerStart(ctx, run, name, nil, CheckPreJobProbe)
+	return s.proveNoEagerStart(ctx, run, ContainerSpec{
+		Name:  name,
+		Image: s.fx.AgentImage,
+	}, CheckPreJobProbe)
 }
 
-// proveNoEagerStart creates a throwaway container from the fixture image with a
-// nonterminating inert payload and requires it StateStopped
+// proveNoEagerStart creates a throwaway container with the caller's topology
+// and a nonterminating inert payload, and requires it StateStopped
 // after create (create realizes metadata only; a runtime that eager-started it
 // would keep the payload running past the inspect — a short-lived "true" could
 // exit first and self-mask as stopped), then deletes it. PreJob uses an
 // unmounted instance for its cheap liveness contract; Full uses the writer's
 // mounted topology because the finite real writer could otherwise execute to
-// completion before its StateStopped inspection. The caller registers the
-// reap/absence-proof deferrals for name.
-func (s *Suite) proveNoEagerStart(ctx context.Context, run *suiteRun, name string, mounts []Mount, check Check) error {
-	spec := ContainerSpec{
-		Name:   name,
-		Image:  s.fx.AgentImage,
-		Mounts: slices.Clone(mounts),
-		// A finite sleep shorter than the enclosing timeout can self-mask a
-		// synchronous eager start: CreateContainer returns after it exits and the
-		// inspect sees stopped. This payload never terminates by itself, so an
-		// eager create can return only by respecting context cancellation.
-		Command: nonterminatingProbeCommand(),
-	}
+// completion before its StateStopped inspection. The networkless-export probe
+// supplies the production exporter image, mount, and network topology because
+// a runtime may realize that create path differently from an ordinary
+// container. The caller registers the reap/absence-proof deferrals for name.
+func (s *Suite) proveNoEagerStart(ctx context.Context, run *suiteRun, spec ContainerSpec, check Check) error {
+	name := spec.Name
+	// A finite sleep shorter than the enclosing timeout can self-mask a
+	// synchronous eager start: CreateContainer returns after it exits and the
+	// inspect sees stopped. This payload never terminates by itself, so an eager
+	// create can return only by respecting context cancellation.
+	spec.Command = nonterminatingProbeCommand()
 	var err error
 	spec, err = run.createContainer(ctx, spec)
 	if err != nil {
@@ -952,12 +959,30 @@ func probeSpecMatches(rep InspectReport, spec ContainerSpec) bool {
 
 // probeNetworklessExport is the capability-producing conformance member. It
 // creates an exporter-role VM with Apple container's public `--network none`
-// mechanism, verifies the pre-start inspect reports an explicit empty network
-// set, then runs DNS and direct-IP attempts and validates their exact proof
-// from the stopped rootfs. Any missing tool, successful attempt, drifted
-// inspect shape, malformed archive, or cleanup failure keeps the capability
-// absent and gates unattended mode.
+// mechanism. It first proves the no-network create path is metadata-only with
+// a nonterminating payload, then verifies the finite behavioral probe's
+// pre-start inspect reports an explicit empty network set, runs DNS and
+// direct-IP attempts, and validates their exact proof from the stopped rootfs.
+// Any missing tool, successful attempt, drifted inspect shape, malformed
+// archive, or cleanup failure keeps the capability absent and gates unattended
+// mode.
 func (s *Suite) probeNetworklessExport(ctx context.Context, run *suiteRun) error {
+	livenessName := s.conformanceName(networklessLivenessProbeSuffix)
+	livenessVolume := s.conformanceName(networklessLivenessVolumeProbeSuffix)
+	defer run.reapVolume(ctx, livenessVolume)
+	defer run.reapContainer(ctx, livenessName)
+	if err := run.createVolume(ctx, livenessVolume, s.fx.WorkspaceSizeMB); err != nil {
+		return failf(CheckNetworklessExport, "create networkless liveness workspace volume: %v", err)
+	}
+	if err := s.proveNoEagerStart(ctx, run, ContainerSpec{
+		Name:            livenessName,
+		Image:           s.b.cfg.ExporterImage,
+		Mounts:          []Mount{{Type: MountVolume, Source: livenessVolume, Target: s.b.cfg.WorkspaceTarget, ReadOnly: true}},
+		NetworkDisabled: true,
+	}, CheckNetworklessExport); err != nil {
+		return err
+	}
+
 	name := s.conformanceName(networklessProbeSuffix)
 	owner := run.ownershipLabel.Value
 	defer run.reapContainer(ctx, name)
