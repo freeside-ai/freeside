@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 )
 
@@ -19,13 +20,9 @@ func (f scannerFunc) Scan(ctx context.Context, dir string) error { return f(ctx,
 // it. The all-zero digest marks it as inert fixture data.
 func testConfig() Config {
 	return Config{
-		ExporterImage: "example.test/exporter@sha256:" + strings.Repeat("0", 64),
-		ExporterCommand: []string{
-			"/usr/local/bin/freeside-export",
-			"-workspace", "/workspace",
-			"-out", "/handoff",
-		},
-		Scanner: scannerFunc(func(context.Context, string) error { return nil }),
+		ExporterImage:   "example.test/exporter@sha256:" + strings.Repeat("0", 64),
+		ExporterCommand: export.HelperCommand(),
+		Scanner:         scannerFunc(func(context.Context, string) error { return nil }),
 	}.withDefaults()
 }
 
