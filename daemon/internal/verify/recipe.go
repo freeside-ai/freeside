@@ -10,6 +10,7 @@ import (
 	"io"
 	"path"
 	"strings"
+	"unicode"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -155,9 +156,11 @@ func validateCommand(argv []string) error {
 // changes what the trusted recipe actually runs. Bare command names
 // (`go`, `bash`) resolve through the room's PATH to its toolchain, not
 // a candidate file, and are excluded; so are absolute paths, Go's `...`
-// package patterns, and glob-bearing tokens. Paths are returned
-// slash-clean with any leading `./` stripped, matching the change
-// account's path space.
+// package patterns, and whitespace-bearing tokens (a multi-word argv
+// operand such as `-destination "generic/platform=iOS Simulator"`, not
+// a single filename; see repoRelPath). Paths are returned slash-clean
+// with any leading `./` stripped, matching the change account's path
+// space.
 func (r Recipe) CommandPaths() []string {
 	seen := map[string]bool{}
 	var paths []string
@@ -178,16 +181,31 @@ func (r Recipe) CommandPaths() []string {
 // space. A token qualifies only if it carries a path separator (a bare
 // name is a PATH lookup), is not absolute, and is not the Go recursive
 // package pattern (a path segment equal to `...`, as in `./...` or
-// `./internal/...`). No character in the filename disqualifies it: the
-// no-shell runner executes the literal name, so a glob metacharacter, a
-// colon, three embedded dots (`check...sh`), or a trailing dot is all
-// part of a real file the candidate could tamper with; the downstream
-// match is exact and literal, never a glob or alias fold. The path is
-// path.Clean-normalized so an unclean but valid spelling the OS still
-// resolves (`scripts/./verify.sh`, `scripts//verify.sh`) matches the
-// canonical changed path rather than slipping the flag.
+// `./internal/...`), and carries no whitespace. Whitespace is the one
+// content rule: opaque argv packs a multi-word operand into a single
+// token (`generic/platform=iOS Simulator`, a `sh -c` script string
+// `scripts/verify.sh --fast`), so a token bearing any space, tab, or
+// newline is an operand, not one filename, and treating it as a repo
+// path both over-flags the operand and, when a prefix segment collides
+// with a repo symlink, spuriously trips the symlink-entrypoint guard.
+// A verification entrypoint path with embedded whitespace is therefore
+// not supported; the recipe author names it without spaces. This leaves
+// one latent residual: a `sh -c "..."` recipe hides its real entrypoint
+// inside the whitespace-bearing string, so a candidate edit to that
+// script goes unflagged (an under-flag). No current recipe uses a shell
+// runner, so it stays latent; the decision note carries the follow-up.
+// Otherwise no character in the filename disqualifies
+// it: the no-shell runner executes the literal name, so a glob
+// metacharacter, a colon, three embedded dots (`check...sh`), or a
+// trailing dot is all part of a real file the candidate could tamper
+// with; the downstream match is exact and literal, never a glob or
+// alias fold. The path is path.Clean-normalized so an unclean but valid
+// spelling the OS still resolves (`scripts/./verify.sh`,
+// `scripts//verify.sh`) matches the canonical changed path rather than
+// slipping the flag.
 func repoRelPath(tok string) (string, bool) {
-	if !strings.Contains(tok, "/") || strings.HasPrefix(tok, "/") {
+	if !strings.Contains(tok, "/") || strings.HasPrefix(tok, "/") ||
+		strings.ContainsFunc(tok, unicode.IsSpace) {
 		return "", false
 	}
 	p := path.Clean(tok)
