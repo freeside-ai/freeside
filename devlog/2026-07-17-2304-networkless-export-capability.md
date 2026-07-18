@@ -19,6 +19,9 @@ branch: feat/networkless-export-capability
   proven property expressible and fail-closed in policy admission. Ward's
   exhaustive consumer test classifies the member as conformance-pending so the
   registry can widen without either advertising or falsely refuting it.
+- **Updated the binding §5.7 capability list in the same contract unit.** The
+  plan and the closed Go registry must expose one vocabulary; separating them
+  would leave policy authors with two conflicting contracts.
 
 Revisit when a later backend can prove a materially different egress property
 that `supports_networkless_export` cannot state without ambiguity.
