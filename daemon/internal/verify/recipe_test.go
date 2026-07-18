@@ -211,6 +211,13 @@ func TestRecipeCommandPaths(t *testing.T) {
 		{"colon filename kept", [][]string{{"./scripts/check:fast.sh"}}, []string{"scripts/check:fast.sh"}},
 		{"package pattern segment excluded", [][]string{{"go", "test", "./..."}}, nil},
 		{"nested package pattern excluded", [][]string{{"go", "build", "./internal/..."}}, nil},
+		// Whitespace-bearing operands are not single filenames (#149): a
+		// multi-word argv operand or a `sh -c` script string carries a
+		// space and must not be read as a repo path, so it neither
+		// over-flags nor trips the symlink-entrypoint guard.
+		{"destination operand excluded", [][]string{{"xcodebuild", "-destination", "generic/platform=iOS Simulator"}}, nil},
+		{"shell-runner string excluded", [][]string{{"sh", "-c", "./scripts/verify.sh --fast"}}, nil},
+		{"tab-bearing operand excluded", [][]string{{"grep", "-rn", "a/b\tc"}}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

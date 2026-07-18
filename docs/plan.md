@@ -458,8 +458,9 @@ silently downgrades. Named capabilities are:
 - `supports_detachable_workspace`;
 - `supports_post_exit_export`;
 - `supports_read_only_remount`;
-- `supports_credential_volume_detach`; and
-- `supports_workspace_snapshot`.
+- `supports_credential_volume_detach`;
+- `supports_workspace_snapshot`; and
+- `supports_networkless_export`.
 
 #### The first ward gate
 

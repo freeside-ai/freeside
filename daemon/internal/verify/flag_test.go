@@ -195,7 +195,6 @@ func TestCommandEntrypointFilenameEnumeration(t *testing.T) {
 		"scripts/check?.sh",        // glob question
 		"scripts/check...sh",       // three embedded dots (not the ... segment)
 		"scripts/check:fast.sh",    // colon (alias/ADS separator on NTFS)
-		"scripts/weird .sh",        // trailing space before extension
 		"deep/nested/dir/build.py", // deeper path
 	}
 	for _, name := range names {
@@ -205,6 +204,21 @@ func TestCommandEntrypointFilenameEnumeration(t *testing.T) {
 				t.Fatalf("entrypoint %q change not flagged: %v", name, got)
 			}
 		})
+	}
+
+	// Whitespace-bearing entrypoint carve-out (#149): opaque argv packs
+	// multi-word operands into one token, so a token with any whitespace
+	// is treated as an operand, not a filename, and is not classified as
+	// an entrypoint. A candidate change to such a path therefore raises
+	// no entrypoint finding. This is the accepted limitation of the
+	// whitespace rule: a verification entrypoint with an embedded space
+	// is unsupported and the recipe author names it without spaces.
+	if cp := (Recipe{Commands: [][]string{{"./scripts/weird .sh"}}}).CommandPaths(); len(cp) != 0 {
+		t.Errorf("whitespace-bearing entrypoint classified: %v", cp)
+	}
+	if got := flagControlPaths([]importer.Change{changed("scripts/weird .sh")}, nil,
+		Recipe{Commands: [][]string{{"./scripts/weird .sh"}}}.CommandPaths(), testRecipePath); len(got) != 0 {
+		t.Errorf("whitespace-bearing entrypoint change flagged: %v", got)
 	}
 
 	// Literal match, never a glob expansion: a char-class entrypoint
