@@ -174,6 +174,9 @@ func networklessProbeCommand(owner string) []string {
 
 func networklessProbeScript(owner, proofPath string) string {
 	return "set -eu; command -v nslookup >/dev/null; command -v nc >/dev/null; " +
+		"ns_help=\"$(nslookup --help 2>&1 || true)\"; " +
+		"case \"$ns_help\" in *'Usage: nslookup '*) ;; *) exit 1;; esac; " +
+		"case \"$ns_help\" in *'HOST [DNS_SERVER]'*) ;; *) exit 1;; esac; " +
 		// A binary's presence is not proof that the pinned invocation is valid.
 		// Match the fixture's BusyBox help before interpreting a nonzero direct-IP
 		// attempt as blocked egress, then reject any actual-call diagnostic rather
@@ -181,7 +184,9 @@ func networklessProbeScript(owner, proofPath string) string {
 		"nc_help=\"$(nc -h 2>&1 || true)\"; " +
 		"case \"$nc_help\" in *'-w SEC'*) ;; *) exit 1;; esac; " +
 		"case \"$nc_help\" in *'-z'*) ;; *) exit 1;; esac; " +
-		"dns=blocked; if nslookup example.com >/dev/null 2>&1; then dns=reachable; fi; " +
+		"dns=blocked; dns_diagnostic=''; " +
+		"if dns_diagnostic=\"$(nslookup example.com 2>&1)\"; then dns=reachable; " +
+		"else case \"$dns_diagnostic\" in *'connection timed out; no servers could be reached'*) ;; *) exit 1;; esac; fi; " +
 		"direct=blocked; direct_error=''; " +
 		"if direct_error=\"$(nc -z -w 3 1.1.1.1 443 2>&1 >/dev/null)\"; then direct=reachable; " +
 		"else test -z \"$direct_error\" || exit 1; fi; " +
@@ -661,12 +666,19 @@ func (r *suiteRun) verifyReaped(ctx context.Context) error {
 func (s *Suite) Full(ctx context.Context) (err error) {
 	// A new full pass supersedes the prior runtime proof. Do not keep declaring
 	// the capability while a recheck is pending or after any failed recheck.
-	s.b.networkless.Store(false)
+	proofGeneration := s.b.beginNetworklessProof()
 	proved := false
 	// Publish from the final named result, after later-registered cleanup and
 	// absence-proof defers have had the chance to turn a nominal pass into a
-	// failure.
-	defer func() { s.b.networkless.Store(proved && err == nil) }()
+	// failure. A newer pass supersedes this generation even if this older pass
+	// finishes last.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.b.finishNetworklessProof(proofGeneration, false)
+			panic(recovered)
+		}
+		s.b.finishNetworklessProof(proofGeneration, proved && err == nil)
+	}()
 	// Bound the whole pass so a runtime that wedges inside a side-effecting
 	// call (e.g. after launching a probe VM but before StartContainer returns)
 	// cannot hang the suite under a long-lived caller context; the handoff

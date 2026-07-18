@@ -78,6 +78,23 @@ func TestNetworklessCapabilityRequiresConformance(t *testing.T) {
 	}
 }
 
+func TestNetworklessCapabilityRejectsStaleProofGeneration(t *testing.T) {
+	b := newTestBackend(t)
+	older := b.beginNetworklessProof()
+	newer := b.beginNetworklessProof()
+	b.finishNetworklessProof(newer, false)
+	b.finishNetworklessProof(older, true)
+	if b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Fatal("older successful proof overrode a newer failed proof")
+	}
+
+	latest := b.beginNetworklessProof()
+	b.finishNetworklessProof(latest, true)
+	if !b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Fatal("latest successful proof did not publish the capability")
+	}
+}
+
 // TestRefusedCapabilitiesRefuse proves policy asking for a refuted
 // capability gets a typed refusal, never a silent downgrade.
 func TestRefusedCapabilitiesRefuse(t *testing.T) {

@@ -261,11 +261,41 @@ func TestSuiteFullNetworklessProbeFailure(t *testing.T) {
 	s.assertReaped(t, rt)
 }
 
-func TestNetworklessProbeRejectsNCUsageFailure(t *testing.T) {
-	binDir := t.TempDir()
-	fixtures := map[string]string{
-		"nslookup": "#!/bin/sh\nexit 1\n",
-		"nc": `#!/bin/sh
+func TestNetworklessProbeRejectsToolUsageFailure(t *testing.T) {
+	validNSLookup := `#!/bin/sh
+if [ "$1" = "--help" ]; then
+	printf '%s\n' 'Usage: nslookup [-type=QUERY_TYPE] [-debug] HOST [DNS_SERVER]'
+	exit 0
+fi
+printf '%s\n' ';; connection timed out; no servers could be reached'
+exit 1
+`
+	validNC := `#!/bin/sh
+if [ "$1" = "-h" ]; then
+	printf '%s\n' 'Usage: nc [OPTIONS] HOST PORT' '-w SEC' '-z Zero-I/O mode'
+	exit 1
+fi
+exit 1
+`
+	cases := []struct {
+		name, nslookup, nc string
+	}{
+		{
+			name: "dns usage",
+			nslookup: `#!/bin/sh
+if [ "$1" = "--help" ]; then
+	printf '%s\n' 'Usage: nslookup [-type=QUERY_TYPE] [-debug] HOST [DNS_SERVER]'
+	exit 0
+fi
+printf '%s\n' 'Usage: nslookup HOST [DNS_SERVER]'
+exit 1
+`,
+			nc: validNC,
+		},
+		{
+			name:     "direct usage",
+			nslookup: validNSLookup,
+			nc: `#!/bin/sh
 if [ "$1" = "-h" ]; then
 	printf '%s\n' 'Usage: nc [OPTIONS] HOST PORT' '-w SEC' '-z Zero-I/O mode'
 	exit 1
@@ -273,20 +303,26 @@ fi
 printf '%s\n' 'Usage: nc [OPTIONS] HOST PORT' >&2
 exit 1
 `,
+		},
 	}
-	for name, body := range fixtures {
-		if err := os.WriteFile(filepath.Join(binDir, name), []byte(body), 0o700); err != nil { //nolint:gosec // executable fixtures are isolated in t.TempDir
-			t.Fatal(err)
-		}
-	}
-	proofPath := filepath.Join(t.TempDir(), "networkless-proof.txt")
-	cmd := osexec.Command("sh", "-c", networklessProbeScript("owner", proofPath)) //nolint:gosec // fixed shell and test-owned script
-	cmd.Env = []string{"PATH=" + binDir + ":/usr/bin:/bin"}
-	if err := cmd.Run(); err == nil {
-		t.Fatal("networkless probe accepted nc usage failure")
-	}
-	if _, err := os.Stat(proofPath); !os.IsNotExist(err) {
-		t.Fatalf("proof after nc usage failure: stat error = %v, want not-exist", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			binDir := t.TempDir()
+			for name, body := range map[string]string{"nslookup": tc.nslookup, "nc": tc.nc} {
+				if err := os.WriteFile(filepath.Join(binDir, name), []byte(body), 0o700); err != nil { //nolint:gosec // executable fixtures are isolated in t.TempDir
+					t.Fatal(err)
+				}
+			}
+			proofPath := filepath.Join(t.TempDir(), "networkless-proof.txt")
+			cmd := osexec.Command("sh", "-c", networklessProbeScript("owner", proofPath)) //nolint:gosec // fixed shell and test-owned script
+			cmd.Env = []string{"PATH=" + binDir + ":/usr/bin:/bin"}
+			if err := cmd.Run(); err == nil {
+				t.Fatal("networkless probe accepted tool usage failure")
+			}
+			if _, err := os.Stat(proofPath); !os.IsNotExist(err) {
+				t.Fatalf("proof after tool usage failure: stat error = %v, want not-exist", err)
+			}
+		})
 	}
 }
 
@@ -407,6 +443,83 @@ func TestSuiteFullPanicWithholdsNetworklessCapability(t *testing.T) {
 		t.Error("panicked Full declared supports_networkless_export")
 	}
 	s.assertReaped(t, rt)
+}
+
+func TestSuiteFullCleanupPanicWithholdsNetworklessCapability(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	scriptHappyProbes(s, rt)
+	livenessVolume := s.conformanceName("liveness-ws")
+	rt.onDeleteVolume = func(name string) (bool, error) {
+		if name == livenessVolume {
+			delete(rt.vols, name) // callback runs under the fake's lock
+			panic("late cleanup panic")
+		}
+		return false, nil
+	}
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_ = s.Full(context.Background())
+	}()
+	if recovered == nil {
+		t.Fatal("Full did not propagate the late cleanup panic")
+	}
+	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Error("cleanup-panicked Full declared supports_networkless_export")
+	}
+	s.assertReaped(t, rt)
+}
+
+func TestSuiteFullOlderSuccessCannotOverrideNewerFailure(t *testing.T) {
+	fx := newHandoffFixture(t)
+	scannerEntered := make(chan struct{})
+	releaseScanner := make(chan struct{})
+	fx.cfg.Scanner = scannerFunc(func(context.Context, string) error {
+		scannerEntered <- struct{}{}
+		<-releaseScanner
+		return nil
+	})
+	b := fx.backend(t)
+	newSuite := func(runID string) *Suite {
+		t.Helper()
+		s, err := NewSuite(b, SuiteFixture{
+			AgentImage:       "example.test/agent@sha256:" + strings.Repeat("1", 64),
+			CredentialMarker: suiteMarker,
+			RunID:            runID,
+		})
+		if err != nil {
+			t.Fatalf("NewSuite(%q): %v", runID, err)
+		}
+		return s
+	}
+	older := newSuite("older-run")
+	newer := newSuite("newer-run")
+	fx.rt.exportTarPath = buildTar(t, writerArchive(t, older.fx.RunID))
+	scriptHappyProbes(older, fx.rt)
+	newerCredential := newer.conformanceName("cred")
+	fx.rt.onCreateVolume = func(name string) error {
+		if name == newerCredential {
+			return errors.New("newer conformance failed")
+		}
+		return nil
+	}
+
+	olderDone := make(chan error, 1)
+	go func() { olderDone <- older.Full(context.Background()) }()
+	<-scannerEntered
+	newerErr := newer.Full(context.Background())
+	close(releaseScanner)
+	olderErr := <-olderDone
+	if newerErr == nil {
+		t.Fatal("newer Full = nil, want failure")
+	}
+	if olderErr != nil {
+		t.Fatalf("older Full = %v, want success", olderErr)
+	}
+	if b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Fatal("older successful Full overrode the newer failed generation")
+	}
+	fx.assertReaped(t)
 }
 
 func TestSuitePreJobRequiresNetworklessProof(t *testing.T) {

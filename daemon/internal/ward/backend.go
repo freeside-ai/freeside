@@ -3,6 +3,7 @@ package ward
 import (
 	"fmt"
 	"slices"
+	"sync"
 	"sync/atomic"
 
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
@@ -16,6 +17,10 @@ type Backend struct {
 	cfg         Config
 	initialized bool
 	networkless atomic.Bool
+	// networklessMu makes the generation check and capability publication one
+	// atomic decision across overlapping Full passes.
+	networklessMu         sync.Mutex
+	networklessGeneration uint64
 }
 
 // Compile-time contract assertion (exec package convention).
@@ -39,6 +44,22 @@ func New(rt Runtime, cfg Config) (*Backend, error) {
 
 // Name identifies the backend in policy, refusals, and audit records.
 func (b *Backend) Name() string { return BackendName }
+
+func (b *Backend) beginNetworklessProof() uint64 {
+	b.networklessMu.Lock()
+	defer b.networklessMu.Unlock()
+	b.networklessGeneration++
+	b.networkless.Store(false)
+	return b.networklessGeneration
+}
+
+func (b *Backend) finishNetworklessProof(generation uint64, proved bool) {
+	b.networklessMu.Lock()
+	defer b.networklessMu.Unlock()
+	if generation == b.networklessGeneration {
+		b.networkless.Store(proved)
+	}
+}
 
 // Capabilities returns the backend's declared capability set, freshly built
 // on every call so no caller can mutate it. exec.CheckCapabilities freezes

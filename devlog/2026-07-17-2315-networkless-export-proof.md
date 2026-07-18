@@ -58,10 +58,23 @@ pins every current role against the longest valid run ID.
   found that a present but invocation-incompatible `nc` could turn a usage
   failure into a false blocked-egress witness; the probe now requires the
   pinned BusyBox `-w` and `-z` help contract and rejects usage/invalid-option
-  diagnostics before writing proof.
+  diagnostics before writing proof. The following pass found the same class in
+  the DNS witness, which now requires the pinned `nslookup` help contract and
+  the reference runtime's explicit no-server timeout diagnostic. It also found
+  that overlapping Full passes could let an older success republish after a
+  newer failure; generation-checked publication now lets only the newest pass
+  change the capability state. Refute-first follow-up also found that a panic
+  from a late cleanup defer could publish after the nominal proof completed;
+  the publication defer now records failure and re-panics before any
+  capability can escape. A controlled two-run overlap and a late-cleanup panic
+  regression pin both orderings.
 - **Accepted by decision:** the DNS name and direct-IP endpoint are behavioral
   witnesses, not availability authorities. Endpoint failure alone is
   insufficient; the explicit empty attachment set is the load-bearing proof.
+  An exact-output-spoofing fixture image remains outside this probe's boundary:
+  `SuiteFixture.AgentImage` is a trusted benign input, and a malicious image
+  could forge every guest-produced witness, so its provenance belongs at the
+  trusted configuration boundary rather than in output-string heuristics.
 
 Revisit when the reference runtime changes its no-network CLI or inspected
 configuration shape, or when another backend needs a different mechanism to
