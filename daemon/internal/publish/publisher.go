@@ -40,10 +40,13 @@ type Candidate struct {
 	InvocationID domain.InvocationID
 	// AuthorizationID and TrustProfileDigest bind the candidate to its
 	// daemon-authored authorization and the automation trust profile it
-	// was authorized under (#172). Carried, not yet enforced: the
-	// fail-closed gate that requires an authorizing record (#168) and
-	// the profile drift re-audit (#169) consume them; until those land,
-	// nil means an as-yet-unbound caller.
+	// was authorized under (#172). TrustProfileDigest is enforced by the
+	// drift gate (#169): it names the profile the candidate was authorized
+	// under, and Publish fails closed unless that profile is still current
+	// and the latest audit shows no drift from it; a nil digest cannot be
+	// proven drift-free and so also fails closed. AuthorizationID is still
+	// carried, not yet enforced: the fail-closed gate that requires an
+	// authorizing record (#168) consumes it.
 	AuthorizationID    *domain.Digest
 	TrustProfileDigest *domain.Digest
 }
@@ -65,12 +68,15 @@ type Result struct {
 type Publisher struct {
 	forge  *forge
 	ledger IntentLedger
+	trust  TrustSource
 }
 
 // NewPublisher wires a Publisher. baseURL is the GitHub API root
-// (real: https://api.github.com; tests: an httptest server).
-func NewPublisher(ts TokenSource, client *http.Client, baseURL string, ledger IntentLedger) *Publisher {
-	return &Publisher{forge: newForge(ts, client, baseURL), ledger: ledger}
+// (real: https://api.github.com; tests: an httptest server). trust is the
+// source the drift gate re-reads current automation trust state from on
+// every Publish (#169, plan §5.5).
+func NewPublisher(ts TokenSource, client *http.Client, baseURL string, ledger IntentLedger, trust TrustSource) *Publisher {
+	return &Publisher{forge: newForge(ts, client, baseURL), ledger: ledger, trust: trust}
 }
 
 // Publish converges the candidate onto its one intended result: the
@@ -108,6 +114,17 @@ func (p *Publisher) Publish(ctx context.Context, c Candidate, approvedRecipes ma
 			return Result{}, fmt.Errorf("publish: artifact %s verified under a recipe other than the candidate's: %w", a.ID, ErrPublicationConflict)
 		}
 		digests[i] = a.Digest
+	}
+
+	// Trust-profile drift gate before any external effect (§5.15 rule 2,
+	// plan §5.5): the candidate's bound profile must still be the current
+	// recorded profile and the latest audit must show no drift from it, or
+	// the automation authority the candidate was approved under has changed
+	// and the publication fails closed. Placed before recordIntent so a
+	// drifted publication commits no outbox intent and touches no GitHub
+	// resource.
+	if err := p.gateTrustDrift(ctx, c); err != nil {
+		return Result{}, fmt.Errorf("publish: %w", err)
 	}
 
 	identity, err := DeriveIdentity(IdentityInput{
@@ -164,6 +181,49 @@ func (p *Publisher) Publish(ctx context.Context, c Candidate, approvedRecipes ma
 	result.PRNumber = pr
 	result.PRCreated = created
 	return result, nil
+}
+
+// gateTrustDrift fails closed unless the candidate's bound automation trust
+// profile is still the current one for the repository and the latest
+// workflow audit shows no drift from it (#169, plan §5.5). The bound
+// TrustProfileDigest is only a lookup coordinate: the current profile is
+// re-read and re-validated from the trust source (a decoded record is never
+// trusted on its face — the #52 re-gate), and a candidate bound to a
+// superseded profile, one with no current profile or audit, or one whose
+// audit exceeds the profile all fail closed. A nil binding cannot be proven
+// drift-free and fails closed too.
+func (p *Publisher) gateTrustDrift(ctx context.Context, c Candidate) error {
+	if c.TrustProfileDigest == nil {
+		return fmt.Errorf("candidate carries no trust-profile binding: %w", ErrTrustProfileDrift)
+	}
+	current, err := p.trust.CurrentTrust(ctx, c.Repo)
+	if err != nil {
+		return fmt.Errorf("read current trust: %w", err)
+	}
+	if current.Profile == nil {
+		return fmt.Errorf("no current trust profile for %s: %w", c.Repo, ErrTrustProfileDrift)
+	}
+	// #52 re-gate: the current profile is a reconstructed record whose
+	// digest is a content address; re-validate before trusting any field.
+	if err := current.Profile.Validate(); err != nil {
+		return fmt.Errorf("current trust profile for %s: %w", c.Repo, err)
+	}
+	if current.Profile.ProfileDigest != *c.TrustProfileDigest {
+		return fmt.Errorf("candidate bound to trust profile %s, current is %s: %w",
+			*c.TrustProfileDigest, current.Profile.ProfileDigest, ErrTrustProfileDrift)
+	}
+	if current.Audit == nil {
+		return fmt.Errorf("no current workflow audit for %s: %w", c.Repo, ErrTrustProfileDrift)
+	}
+	if err := current.Audit.Validate(); err != nil {
+		return fmt.Errorf("current workflow audit for %s: %w", c.Repo, err)
+	}
+	// EvaluateTrustDrift returns a *domain.TrustDriftError that reports as
+	// ErrTrustProfileDrift, so the whole gate matches one sentinel.
+	if err := domain.EvaluateTrustDrift(*current.Profile, *current.Audit); err != nil {
+		return err
+	}
+	return nil
 }
 
 // recordIntent commits the publication intent through the outbox

@@ -3,7 +3,18 @@ package publish
 import (
 	"errors"
 	"fmt"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
+
+// ErrTrustProfileDrift is the class sentinel for a publication that fails the
+// automation-trust drift gate (#169, plan §5.5): the candidate carries no
+// trust-profile binding, its bound profile is no longer current, there is no
+// current profile or audit to compare against, or the latest audit exceeds
+// the approved profile. It aliases the domain sentinel so the domain drift
+// comparator's *TrustDriftError (recover the axis with errors.As) and the
+// gate's own fail-closed cases all match one errors.Is target.
+var ErrTrustProfileDrift = domain.ErrTrustProfileDrift
 
 // The publish boundary's error vocabulary. GitHub API failures are
 // carried by *APIError, which records only the status code and request
