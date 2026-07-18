@@ -370,6 +370,28 @@ func TestSuiteFullNetworklessProbeRejectsAttachment(t *testing.T) {
 	s.assertReaped(t, rt)
 }
 
+func TestSuiteFullNetworklessProbeUsesExporterTopology(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	scriptHappyProbes(s, rt)
+	probe := s.conformanceName(networklessProbeSuffix)
+	volume := s.conformanceName(networklessLivenessVolumeProbeSuffix)
+	var got ContainerSpec
+	rt.onCreateContainer = func(spec ContainerSpec) error {
+		if spec.Name == probe {
+			got = cloneContainerSpec(spec)
+		}
+		return nil
+	}
+	if err := s.Full(context.Background()); err != nil {
+		t.Fatalf("Full = %v, want nil", err)
+	}
+	wantMounts := []Mount{{Type: MountVolume, Source: volume, Target: s.b.cfg.WorkspaceTarget, ReadOnly: true}}
+	if got.Image != s.b.cfg.ExporterImage || !got.NetworkDisabled || !sameMounts(got.Mounts, wantMounts) {
+		t.Errorf("networkless probe = image %q network_disabled=%v mounts=%+v, want production exporter topology with mounts %+v", got.Image, got.NetworkDisabled, got.Mounts, wantMounts)
+	}
+	s.assertReaped(t, rt)
+}
+
 // TestSuiteFullNetworklessProbeRejectsEagerCreate covers a runtime that eagerly
 // executes only NetworkDisabled creates. The finite behavioral probe could
 // finish and self-mask as stopped; its preceding nonterminating probe must stay

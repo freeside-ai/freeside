@@ -1012,9 +1012,10 @@ func (s *Suite) probeNetworklessExport(ctx context.Context, run *suiteRun) error
 	defer run.reapContainer(ctx, name)
 	spec := ContainerSpec{
 		Name:            name,
-		Image:           s.fx.AgentImage,
+		Image:           s.b.cfg.ExporterImage,
 		Command:         networklessProbeCommand(owner),
 		NetworkDisabled: true,
+		Mounts:          []Mount{{Type: MountVolume, Source: livenessVolume, Target: s.b.cfg.WorkspaceTarget, ReadOnly: true}},
 	}
 	var err error
 	spec, err = run.createContainer(ctx, spec)

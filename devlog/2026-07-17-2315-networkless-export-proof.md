@@ -67,7 +67,10 @@ pins every current role against the longest valid run ID.
   from a late cleanup defer could publish after the nominal proof completed;
   the publication defer now records failure and re-panics before any
   capability can escape. A controlled two-run overlap and a late-cleanup panic
-  regression pin both orderings.
+  regression pin both orderings. A later topology sweep found the behavioral
+  DNS/direct-IP probe still used the agent image without the exporter mount;
+  both the nonterminating and behavioral probes now mirror the production
+  exporter image, no-network flag, and read-only workspace topology.
 - **Accepted by decision:** the DNS name and direct-IP endpoint are behavioral
   witnesses, not availability authorities. Endpoint failure alone is
   insufficient; the explicit empty attachment set is the load-bearing proof.
