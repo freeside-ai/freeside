@@ -38,6 +38,14 @@ type Candidate struct {
 	// InvocationID is the publishing invocation: the attempt axis the
 	// outbox intent is keyed by.
 	InvocationID domain.InvocationID
+	// AuthorizationID and TrustProfileDigest bind the candidate to its
+	// daemon-authored authorization and the automation trust profile it
+	// was authorized under (#172). Carried, not yet enforced: the
+	// fail-closed gate that requires an authorizing record (#168) and
+	// the profile drift re-audit (#169) consume them; until those land,
+	// nil means an as-yet-unbound caller.
+	AuthorizationID    *domain.Digest
+	TrustProfileDigest *domain.Digest
 }
 
 // Result reports the converged publication: the one branch and PR the
