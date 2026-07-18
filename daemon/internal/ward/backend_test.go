@@ -16,6 +16,10 @@ var declaredCapabilities = []exec.Capability{
 	exec.CapReadOnlyRemount,
 }
 
+// conformancePendingCapabilities are valid vocabulary members this backend
+// does not declare until their runtime proof lands.
+var conformancePendingCapabilities = []exec.Capability{exec.CapNetworklessExport}
+
 // refusedCapabilities must never be declared: both are refuted on the
 // reference runtime (the same-VM fallback class and volume snapshots).
 var refusedCapabilities = []exec.Capability{
@@ -50,7 +54,8 @@ func TestCapabilitySnapshot(t *testing.T) {
 		declared := adm.Declared.Has(c)
 		wantDeclared := slices.Contains(declaredCapabilities, c)
 		wantRefused := slices.Contains(refusedCapabilities, c)
-		if !wantDeclared && !wantRefused {
+		wantPending := slices.Contains(conformancePendingCapabilities, c)
+		if !wantDeclared && !wantRefused && !wantPending {
 			t.Errorf("capability %q is in exec.AllCapabilities but neither declared nor refused here; place it", c)
 		}
 		if declared != wantDeclared {

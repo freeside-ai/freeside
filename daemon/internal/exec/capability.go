@@ -14,13 +14,14 @@ import (
 // isolation class is a different risk posture, not a degraded mode.
 type Capability string
 
-// The five named §5.7 capabilities.
+// The named §5.7 capabilities.
 const (
 	CapDetachableWorkspace    Capability = "supports_detachable_workspace"
 	CapPostExitExport         Capability = "supports_post_exit_export"
 	CapReadOnlyRemount        Capability = "supports_read_only_remount"
 	CapCredentialVolumeDetach Capability = "supports_credential_volume_detach"
 	CapWorkspaceSnapshot      Capability = "supports_workspace_snapshot"
+	CapNetworklessExport      Capability = "supports_networkless_export"
 )
 
 // AllCapabilities lists every valid Capability; it drives table-driven tests
@@ -31,12 +32,13 @@ var AllCapabilities = []Capability{
 	CapReadOnlyRemount,
 	CapCredentialVolumeDetach,
 	CapWorkspaceSnapshot,
+	CapNetworklessExport,
 }
 
 func (c Capability) valid() bool {
 	switch c {
 	case CapDetachableWorkspace, CapPostExitExport, CapReadOnlyRemount,
-		CapCredentialVolumeDetach, CapWorkspaceSnapshot:
+		CapCredentialVolumeDetach, CapWorkspaceSnapshot, CapNetworklessExport:
 		return true
 	default:
 		return false

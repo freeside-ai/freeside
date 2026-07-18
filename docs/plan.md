@@ -1,9 +1,9 @@
 ---
 title: Freeside Project Plan
-revision: 10
+revision: 11
 status: active
 phase: 1A
-updated: 2026-07-17
+updated: 2026-07-18
 ---
 
 # Freeside
@@ -458,8 +458,9 @@ silently downgrades. Named capabilities are:
 - `supports_detachable_workspace`;
 - `supports_post_exit_export`;
 - `supports_read_only_remount`;
-- `supports_credential_volume_detach`; and
-- `supports_workspace_snapshot`.
+- `supports_credential_volume_detach`;
+- `supports_workspace_snapshot`; and
+- `supports_networkless_export`.
 
 #### The first ward gate
 
@@ -1113,16 +1114,12 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 10:
+Revision 11:
 
-1. **Codify the brand register as identity policy.** Adopt the tagline “the
-   harness runs the agent; you hold the reins,” expressing control as a held
-   state rather than a transfer. Use Freeside as a proper noun except where a
-   URL or daemon name requires lowercase. Adopt the two-ground visual register
-   (light is Freeside; dark is Straylight), the signet-box mark, and the accent
-   grammar (bronze and tawny are one metal in two ages; green remains reserved
-   for semantics). The brand decision note records the rationale and rejected
-   alternatives. (User; `devlog/2026-07-17-0050-brand-register.md`.)
+1. **Require a named networkless-export runner capability.** Add
+   `supports_networkless_export` to the binding §5.7 vocabulary so unattended
+   policy can require the exporter egress boundary independently of the
+   runtime-specific mechanism that proves it. (User; #78.)
 
 ## 14. Risks
 
