@@ -100,6 +100,54 @@ func TestParseRecipeArgvOpaque(t *testing.T) {
 	}
 }
 
+// TestParseRecipeRejectsShellCommandString pins #154: a shell -c token
+// introduces a second parser whose command string can hide the real
+// repository entrypoint from CommandPaths. Direct shell-script argv
+// without a shell command-string option remains valid, as do opaque
+// multi-word operands for non-shell tools.
+func TestParseRecipeRejectsShellCommandString(t *testing.T) {
+	reject := [][]string{
+		{"sh", "-c", "./scripts/verify.sh --fast"},
+		{"/bin/sh", "-ec", "./scripts/verify.sh --fast"},
+		{"bash", "-xc", "./scripts/verify.sh --fast"},
+		{"dash", "-c", "./scripts/verify.sh --fast"},
+		{"zsh", "-c", "./scripts/verify.sh --fast"},
+		{"fish", "-c", "./scripts/verify.fish --fast"},
+		{"fish", "-C", "./scripts/verify.fish --fast"},
+		{"fish", "--command=./scripts/verify.fish --fast"},
+		{"fish", "--init-command", "./scripts/verify.fish --fast"},
+		// Deliberate fail-closed over-rejection: do not parse shell
+		// option ordering to decide whether the script receives -c.
+		{"bash", "scripts/verify.sh", "-c", "fast"},
+	}
+	for _, argv := range reject {
+		t.Run("reject/"+argv[0]+"/"+argv[1], func(t *testing.T) {
+			raw := marshalRecipe(t, [][]string{argv})
+			if _, err := ParseRecipe(raw); !errors.Is(err, ErrRecipeInvalid) {
+				t.Fatalf("ParseRecipe(%s) = %v, want ErrRecipeInvalid", raw, err)
+			}
+		})
+	}
+
+	keep := []struct {
+		name string
+		argv []string
+	}{
+		{"direct shell script", []string{"bash", "scripts/verify.sh", "--fast"}},
+		{"direct executable with c flag", []string{"./scripts/verify.sh", "-c", "fast"}},
+		{"non-shell c option", []string{"python3", "-c", "print('a/b c')"}},
+		{"multi-word operand", []string{"xcodebuild", "-destination", "generic/platform=iOS Simulator"}},
+	}
+	for _, tc := range keep {
+		t.Run("keep/"+tc.name, func(t *testing.T) {
+			raw := marshalRecipe(t, [][]string{tc.argv})
+			if _, err := ParseRecipe(raw); err != nil {
+				t.Fatalf("ParseRecipe(%s) = %v, want nil", raw, err)
+			}
+		})
+	}
+}
+
 // TestParseRecipeRejectsDotDotToken is the adversarial enumeration of the
 // ".." path-segment input space in command tokens (#140 hardening): a
 // ".." segment that path.Clean would collapse desyncs CommandPaths and
@@ -212,11 +260,13 @@ func TestRecipeCommandPaths(t *testing.T) {
 		{"package pattern segment excluded", [][]string{{"go", "test", "./..."}}, nil},
 		{"nested package pattern excluded", [][]string{{"go", "build", "./internal/..."}}, nil},
 		// Whitespace-bearing operands are not single filenames (#149): a
-		// multi-word argv operand or a `sh -c` script string carries a
+		// multi-word argv operand or shell-shaped command string carries a
 		// space and must not be read as a repo path, so it neither
-		// over-flags nor trips the symlink-entrypoint guard.
+		// over-flags nor trips the symlink-entrypoint guard. Parsed recipes
+		// cannot contain the latter (#154); this direct-value case keeps
+		// CommandPaths' lexical contract pinned independently.
 		{"destination operand excluded", [][]string{{"xcodebuild", "-destination", "generic/platform=iOS Simulator"}}, nil},
-		{"shell-runner string excluded", [][]string{{"sh", "-c", "./scripts/verify.sh --fast"}}, nil},
+		{"shell-shaped string excluded", [][]string{{"sh", "-c", "./scripts/verify.sh --fast"}}, nil},
 		{"tab-bearing operand excluded", [][]string{{"grep", "-rn", "a/b\tc"}}, nil},
 	}
 	for _, tc := range cases {

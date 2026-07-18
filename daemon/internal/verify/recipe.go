@@ -76,9 +76,10 @@ type recipeWire struct {
 // ParseRecipe parses and validates trusted recipe bytes. Unknown
 // fields, trailing data, an empty command list, an empty command (no
 // argv or an empty executable name), a null or NUL-bearing token, a
-// ".." path segment in a token, and an invalid capture mode all fail
-// closed with ErrRecipeInvalid. Command arguments are otherwise opaque:
-// no shell, no whitespace splitting, no metacharacter rejection.
+// ".." path segment in a token, a recognized direct shell runner
+// carrying a command-string option, and an invalid capture mode all
+// fail closed with ErrRecipeInvalid. Command arguments are otherwise
+// opaque: no whitespace splitting or metacharacter rejection.
 func ParseRecipe(raw []byte) (Recipe, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -131,7 +132,10 @@ func ParseRecipe(raw []byte) (Recipe, error) {
 // makes CommandPaths and the symlink-entrypoint guard record and check
 // a different path than the OS resolves and executes. Arguments are
 // otherwise opaque: spaces and shell metacharacters are legal, since
-// the runner passes each element to execve verbatim, never to a shell.
+// the runner passes each element to execve verbatim. Shell-runner -c
+// forms are the exception: the command string would make the shell do
+// a second parse and hide repo entrypoints from CommandPaths, so the
+// recipe must express the command as explicit argv instead.
 func validateCommand(argv []string) error {
 	if len(argv) == 0 || argv[0] == "" {
 		return fmt.Errorf("recipe declares an empty command: %w", ErrRecipeInvalid)
@@ -146,7 +150,42 @@ func validateCommand(argv []string) error {
 			}
 		}
 	}
+	if shellCommandString(argv) {
+		return fmt.Errorf("shell runner %q carries a command-string option; use explicit argv: %w", argv[0], ErrRecipeInvalid)
+	}
 	return nil
+}
+
+// shellCommandString reports recognized direct shell forms that hand an
+// opaque token to a second command parser. A -c may be its own token or
+// part of a short-option cluster (for example, -ec). Fish's equivalent
+// -C/--command/--init-command forms are included. We deliberately reject
+// these options anywhere in a direct shell-runner argv instead of
+// interpreting shell-specific option ordering: trusted verification
+// recipes can run a repository script directly when that script itself
+// needs one of these flags.
+func shellCommandString(argv []string) bool {
+	shell := path.Base(argv[0])
+	switch shell {
+	case "sh", "ash", "bash", "csh", "dash", "fish", "ksh", "mksh", "rbash", "tcsh", "yash", "zsh":
+	default:
+		return false
+	}
+	for _, tok := range argv[1:] {
+		if len(tok) > 1 && tok[0] == '-' && tok[1] != '-' && strings.ContainsRune(tok[1:], 'c') {
+			return true
+		}
+		if shell == "fish" {
+			if len(tok) > 1 && tok[0] == '-' && tok[1] != '-' && strings.ContainsRune(tok[1:], 'C') {
+				return true
+			}
+			if tok == "--command" || strings.HasPrefix(tok, "--command=") ||
+				tok == "--init-command" || strings.HasPrefix(tok, "--init-command=") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // CommandPaths returns the repo-relative file paths the recipe's
@@ -188,15 +227,13 @@ func (r Recipe) CommandPaths() []string {
 // newline is an operand, not one filename, and treating it as a repo
 // path both over-flags the operand and, when a prefix segment collides
 // with a repo symlink, spuriously trips the symlink-entrypoint guard.
-// A verification entrypoint path with embedded whitespace is therefore
-// not supported; the recipe author names it without spaces. This leaves
-// one latent residual: a `sh -c "..."` recipe hides its real entrypoint
-// inside the whitespace-bearing string, so a candidate edit to that
-// script goes unflagged (an under-flag). No current recipe uses a shell
-// runner, so it stays latent; the decision note carries the follow-up.
-// Otherwise no character in the filename disqualifies
-// it: the no-shell runner executes the literal name, so a glob
-// metacharacter, a colon, three embedded dots (`check...sh`), or a
+// ParseRecipe rejects recognized direct shell command-string forms
+// before this classification, so the whitespace rule cannot hide an
+// entrypoint behind such a command string. A verification entrypoint
+// path with embedded whitespace is not supported; the recipe author
+// names it without spaces. Otherwise no character in the filename
+// disqualifies it: the no-shell runner executes the literal name, so a
+// glob metacharacter, a colon, three embedded dots (`check...sh`), or a
 // trailing dot is all part of a real file the candidate could tamper
 // with; the downstream match is exact and literal, never a glob or
 // alias fold. The path is path.Clean-normalized so an unclean but valid

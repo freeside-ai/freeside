@@ -412,6 +412,25 @@ func TestVerifyRejectsSymlinkPrefixEntrypoint(t *testing.T) {
 	}
 }
 
+// TestVerifyRejectsShellCommandString is the end-to-end #154
+// regression: a candidate change to the script named inside sh -c can
+// no longer evade the verification-control-path account because the
+// trusted recipe fails closed before any command runs.
+func TestVerifyRejectsShellCommandString(t *testing.T) {
+	checkout, opts, room := verifyFixture(t, map[string]string{
+		"scripts/verify.sh": "#!/bin/sh\ntrue\n",
+	}, []importer.Change{changed("scripts/verify.sh")})
+	opts.RecipeSource = ConfigRecipe([]byte(`{"commands": [["sh", "-c", "./scripts/verify.sh --fast"]], "capture": "none"}`))
+
+	_, err := Verify(context.Background(), checkout, opts)
+	if !errors.Is(err, ErrRecipeInvalid) {
+		t.Fatalf("err = %v, want ErrRecipeInvalid", err)
+	}
+	if len(room.runs) != 0 {
+		t.Errorf("commands ran despite the invalid shell recipe: %v", room.runs)
+	}
+}
+
 // TestVerifyOperandWithSymlinkPrefixNotEntrypoint is #149 acceptance 1:
 // a multi-word argv operand that merely contains a slash
 // (`xcodebuild -destination "generic/platform=iOS Simulator"`) is not a
