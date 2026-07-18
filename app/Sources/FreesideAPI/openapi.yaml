@@ -1185,6 +1185,13 @@ components:
           - label: "screenshot"
             artifact_id: "art-2"
             digest: "sha256:img"
+            provenance:
+              producer_class: "agent"
+              producer_invocation_id: "inv-2"
+              head_binding: "head_bound"
+              source_head_sha: "cafebabe"
+              verification_recipe_digest: null
+              sensitivity_class: "normal"
         artifact_digests: ["sha256:img", "sha256:log"]
         pr_head_sha: "cafebabe"
         item_version: 1
@@ -1257,8 +1264,13 @@ components:
       description: >
         A labeled, digest-bound agent claim; mirrors domain.AgentClaim.
         Agent-generated evidence appears only here, never in
-        evidence_snapshot (plan §5.15).
-      required: [label, artifact_id, digest]
+        evidence_snapshot (plan §5.15). The provenance is agent-pinned
+        (#173), and extra properties are forbidden here and on both
+        provenance branches: a claim asserting a verifier or daemon
+        producer, or carrying an undeclared trust bit such as
+        publish_eligible, is non-conformant.
+      additionalProperties: false
+      required: [label, artifact_id, digest, provenance]
       properties:
         label:
           type: string
@@ -1268,6 +1280,8 @@ components:
           minLength: 1
         digest:
           $ref: "#/components/schemas/Digest"
+        provenance:
+          $ref: "#/components/schemas/ClaimProvenance"
 
     EvidenceArtifact:
       type: object
@@ -1409,6 +1423,111 @@ components:
         producer_invocation_id: "inv-1"
         head_binding: "head_independent"
         verification_recipe_digest: "sha256:recipe-approved"
+        sensitivity_class: "normal"
+
+    ClaimProvenance:
+      description: >
+        Provenance of an agent claim; the claim subset of domain.Provenance
+        (plan §5.15 rule 2, #173): producer_class is always "agent"
+        (domain.AgentClaim.Validate pins it), and
+        verification_recipe_digest is always null because agent output is
+        never produced under a verification recipe. There is no
+        publish_eligible member at any level: trusted policy computes
+        eligibility on Artifact; the agent side never carries it. The
+        head-binding branches mirror EvidenceProvenance, so an ambiguous
+        head is unrepresentable here too.
+      oneOf:
+        - $ref: "#/components/schemas/HeadBoundClaimProvenance"
+        - $ref: "#/components/schemas/HeadIndependentClaimProvenance"
+      discriminator:
+        propertyName: head_binding
+        mapping:
+          head_bound: "#/components/schemas/HeadBoundClaimProvenance"
+          head_independent: "#/components/schemas/HeadIndependentClaimProvenance"
+
+    NullRecipeDigest:
+      nullable: true
+      enum: [null]
+      description: >
+        Null whenever present; agent output is never recipe-produced. The
+        daemon always emits the member as an explicit null (the domain
+        field has no omission), but it is deliberately not in the claim
+        branches' required lists: a null-only nullable member generates as
+        an optional client property whose encoder omits it, so requiring
+        presence would make conformant clients unrepresentable. Absent and
+        null mean the same thing; any non-null value is invalid.
+
+    HeadBoundClaimProvenance:
+      type: object
+      description: >
+        An agent claim produced against a specific candidate head;
+        source_head_sha names that head. Every member is required and extra
+        properties are forbidden on both claim branches, so a smuggled
+        publish_eligible is non-conformant, not an ignored extra.
+      additionalProperties: false
+      required:
+        - producer_class
+        - producer_invocation_id
+        - head_binding
+        - source_head_sha
+        - sensitivity_class
+      properties:
+        producer_class:
+          type: string
+          enum: [agent]
+        producer_invocation_id:
+          type: string
+          minLength: 1
+        head_binding:
+          type: string
+          enum: [head_bound]
+        source_head_sha:
+          type: string
+          minLength: 1
+        verification_recipe_digest:
+          $ref: "#/components/schemas/NullRecipeDigest"
+        sensitivity_class:
+          $ref: "#/components/schemas/SensitivityClass"
+      example:
+        producer_class: "agent"
+        producer_invocation_id: "inv-2"
+        head_binding: "head_bound"
+        source_head_sha: "cafebabe"
+        verification_recipe_digest: null
+        sensitivity_class: "normal"
+
+    HeadIndependentClaimProvenance:
+      type: object
+      description: >
+        An agent claim intentionally decoupled from repository head; it
+        carries no source_head_sha (not a member, extra properties
+        forbidden), so a head-independent claim that names a head is
+        unrepresentable.
+      additionalProperties: false
+      required:
+        - producer_class
+        - producer_invocation_id
+        - head_binding
+        - sensitivity_class
+      properties:
+        producer_class:
+          type: string
+          enum: [agent]
+        producer_invocation_id:
+          type: string
+          minLength: 1
+        head_binding:
+          type: string
+          enum: [head_independent]
+        verification_recipe_digest:
+          $ref: "#/components/schemas/NullRecipeDigest"
+        sensitivity_class:
+          $ref: "#/components/schemas/SensitivityClass"
+      example:
+        producer_class: "agent"
+        producer_invocation_id: "inv-2"
+        head_binding: "head_independent"
+        verification_recipe_digest: null
         sensitivity_class: "normal"
 
     TimingSummary:

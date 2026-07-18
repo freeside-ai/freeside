@@ -516,6 +516,30 @@ public actor MockServer {
             if claim.label.isEmpty { return "empty claim label" }
             if claim.artifact_id.isEmpty { return "empty claim artifact_id" }
             if claim.digest.isEmpty { return "empty claim digest" }
+            // Claim provenance is agent-pinned by the schema's producer enum,
+            // but the generated recipe-digest container accepts any JSON
+            // value, so the representable invariants to check are the
+            // non-empty fields domain.Provenance.Validate requires plus the
+            // agent-never-recipe-bound rule (agent + non-null digest is
+            // ErrProvenanceInconsistent on the daemon). Claims are not
+            // head-matched against the item; only evidence is (§5.15).
+            switch claim.provenance {
+            case .head_bound(let bound):
+                if bound.producer_invocation_id.isEmpty {
+                    return "empty producer_invocation_id"
+                }
+                if bound.source_head_sha.isEmpty { return "empty source_head_sha" }
+                if bound.verification_recipe_digest?.value != nil {
+                    return "claim recipe digest must be null"
+                }
+            case .head_independent(let free):
+                if free.producer_invocation_id.isEmpty {
+                    return "empty producer_invocation_id"
+                }
+                if free.verification_recipe_digest?.value != nil {
+                    return "claim recipe digest must be null"
+                }
+            }
             if evidenceIDs.contains(claim.artifact_id) {
                 return "claim reuses an evidence artifact id"
             }

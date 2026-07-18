@@ -98,16 +98,19 @@ public enum AttentionFixtures {
         let subject: Components.Schemas.Subject
         let prHeadSHA: String
         let provenance: Components.Schemas.EvidenceProvenance
+        let claimProvenance: Components.Schemas.ClaimProvenance
         switch type {
         case .run_proposal:
             subject = .proposal_batch(
                 .init(subject_type: .proposal_batch, subject_id: "batch-\(key)", run_id: nil))
             prHeadSHA = ""
             provenance = headIndependent(key: key)
+            claimProvenance = claimHeadIndependent(key: key)
         case .system_health:
             subject = .system(.init(subject_type: .system, subject_id: "system", run_id: nil))
             prHeadSHA = ""
             provenance = headIndependent(key: key)
+            claimProvenance = claimHeadIndependent(key: key)
         default:
             subject = .run(
                 .init(subject_type: .run, subject_id: "run-\(key)", run_id: "run-\(key)"))
@@ -119,6 +122,15 @@ public enum AttentionFixtures {
                     head_binding: .head_bound,
                     source_head_sha: "cafebabe",
                     verification_recipe_digest: AttentionFixtures.approvedRecipeDigest,
+                    sensitivity_class: .normal
+                ))
+            claimProvenance = .head_bound(
+                .init(
+                    producer_class: .agent,
+                    producer_invocation_id: "inv-agent-\(key)",
+                    head_binding: .head_bound,
+                    source_head_sha: "cafebabe",
+                    verification_recipe_digest: nil,
                     sensitivity_class: .normal
                 ))
         }
@@ -156,7 +168,12 @@ public enum AttentionFixtures {
                 )
             ],
             agent_claims: [
-                .init(label: "screenshot", artifact_id: "art-img-\(key)", digest: claimDigest)
+                .init(
+                    label: "screenshot",
+                    artifact_id: "art-img-\(key)",
+                    digest: claimDigest,
+                    provenance: claimProvenance
+                )
             ],
             artifact_digests: [evidenceDigest, claimDigest].sorted(),
             pr_head_sha: prHeadSHA,
@@ -185,6 +202,19 @@ public enum AttentionFixtures {
                 producer_invocation_id: "inv-\(key)",
                 head_binding: .head_independent,
                 verification_recipe_digest: AttentionFixtures.approvedRecipeDigest,
+                sensitivity_class: .normal
+            ))
+    }
+
+    private static func claimHeadIndependent(
+        key: String
+    ) -> Components.Schemas.ClaimProvenance {
+        .head_independent(
+            .init(
+                producer_class: .agent,
+                producer_invocation_id: "inv-agent-\(key)",
+                head_binding: .head_independent,
+                verification_recipe_digest: nil,
                 sensitivity_class: .normal
             ))
     }
