@@ -201,6 +201,41 @@ func TestHandoffOrderObservedState(t *testing.T) {
 	}
 }
 
+// TestHandoffRejectsEagerStart is issue #152's induced-failure regression:
+// CreateContainer must leave both payloads inert until their pre-execution
+// inspections pass. A runtime that reports either container running before
+// StartContainer is non-conformant, and the gate must not start that payload.
+func TestHandoffRejectsEagerStart(t *testing.T) {
+	names := namesFor(testHandoffSpec().RunID)
+	cases := []struct {
+		name      string
+		container string
+		check     Check
+	}{
+		{name: "agent", container: names.Agent, check: CheckControlPlaneIsolation},
+		{name: "exporter", container: names.Exporter, check: CheckExporterAllowlist},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newHandoffFixture(t)
+			fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+				if id == tc.container {
+					rep.State = StateRunning
+				}
+				return rep, nil
+			}
+
+			_, err := fx.run(t)
+			wantCheckFailure(t, err, tc.check)
+			if i := fx.rt.callIndex("start-container " + tc.container); i >= 0 {
+				t.Errorf("%s was started despite being observed running before explicit start", tc.name)
+			}
+			fx.assertReaped(t)
+		})
+	}
+}
+
 // TestHandoffWriterNeverStops is acceptance 2/3 for check 3: a writer that
 // stays running exhausts the observation budget and fails the gate; no
 // exporter is ever created, and teardown still reaps everything.
