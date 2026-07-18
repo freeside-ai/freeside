@@ -168,7 +168,8 @@ func sameMounts(got, want []Mount) bool {
 // allowlist exactly — one persistent mount (the expected workspace volume,
 // read-only, at the expected target), no credential volume, no host bind, no
 // SSH forwarding, no environment beyond the image PATH, and no published
-// socket or port. It verifies the runtime's report, not the gate's own spec:
+// socket, port, or network attachment. It verifies the runtime's report, not
+// the gate's own spec:
 // what the VM would actually get, not what was asked for.
 func verifyExporterAllowlist(cfg Config, rep InspectReport, exporterID, workspaceVolume string) error {
 	if rep.ID != exporterID {
@@ -217,6 +218,12 @@ func verifyExporterAllowlist(cfg Config, rep InspectReport, exporterID, workspac
 	}
 	if n := len(rep.PublishedPorts); n > 0 {
 		return failf(CheckExporterAllowlist, "exporter publishes %d ports, want 0", n)
+	}
+	if !rep.NetworksObserved {
+		return failf(CheckExporterAllowlist, "exporter inspection omitted network attachments")
+	}
+	if rep.NetworkAttachmentCount != 0 {
+		return failf(CheckExporterAllowlist, "exporter has %d network attachments, want 0", rep.NetworkAttachmentCount)
 	}
 	if !slices.Equal(rep.Env, []string{fixedContainerPathEnv}) {
 		return failf(CheckExporterAllowlist, "exporter environment does not match the fixed PATH allowlist")

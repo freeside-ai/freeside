@@ -252,6 +252,7 @@ func exporterReport(cfg Config, exporterID, workspaceVolume string) InspectRepor
 		WorkingDirectory:        "/",
 		State:                   StateStopped,
 		AllowlistFieldsObserved: true,
+		NetworksObserved:        true,
 		Mounts: []Mount{{
 			Type:     MountVolume,
 			Source:   workspaceVolume,
@@ -313,6 +314,8 @@ func TestVerifyExporterAllowlistViolations(t *testing.T) {
 		{"ssh forwarding", func(r *InspectReport) { r.SSH = true }},
 		{"published socket", func(r *InspectReport) { r.PublishedSockets = []string{"/tmp/agent.sock"} }},
 		{"published port", func(r *InspectReport) { r.PublishedPorts = []string{"8080"} }},
+		{"networks omitted", func(r *InspectReport) { r.NetworksObserved = false }},
+		{"network attached", func(r *InspectReport) { r.NetworkAttachmentCount = 1 }},
 		{"environment credential", func(r *InspectReport) { r.Env = append(r.Env, "PROVIDER_TOKEN=inert-fixture") }},
 		{"workspace in PATH", func(r *InspectReport) { r.Env = []string{"PATH=/workspace:/usr/bin:/bin"} }},
 	}

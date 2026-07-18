@@ -3,6 +3,8 @@ package ward
 import (
 	"fmt"
 	"slices"
+	"sync"
+	"sync/atomic"
 
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
@@ -14,6 +16,11 @@ type Backend struct {
 	rt          Runtime
 	cfg         Config
 	initialized bool
+	networkless atomic.Bool
+	// networklessMu makes the generation check and capability publication one
+	// atomic decision across overlapping Full passes.
+	networklessMu         sync.Mutex
+	networklessGeneration uint64
 }
 
 // Compile-time contract assertion (exec package convention).
@@ -38,11 +45,28 @@ func New(rt Runtime, cfg Config) (*Backend, error) {
 // Name identifies the backend in policy, refusals, and audit records.
 func (b *Backend) Name() string { return BackendName }
 
+func (b *Backend) beginNetworklessProof() uint64 {
+	b.networklessMu.Lock()
+	defer b.networklessMu.Unlock()
+	b.networklessGeneration++
+	b.networkless.Store(false)
+	return b.networklessGeneration
+}
+
+func (b *Backend) finishNetworklessProof(generation uint64, proved bool) {
+	b.networklessMu.Lock()
+	defer b.networklessMu.Unlock()
+	if generation == b.networklessGeneration {
+		b.networkless.Store(proved)
+	}
+}
+
 // Capabilities returns the backend's declared capability set, freshly built
-// on every call so no caller can mutate the declaration (§5.3 fixed at
-// spawn; exec.CheckCapabilities snapshots it at admission).
+// on every call so no caller can mutate it. exec.CheckCapabilities freezes
+// the result at admission.
 //
-// The declaration is exactly what the spike proved on Apple container 1.1.0:
+// The base declaration is exactly what the handoff spike proved on Apple
+// container 1.1.0:
 //
 //   - supports_detachable_workspace: a named volume survives writer exit and
 //     deletion and reattaches to a different VM.
@@ -53,19 +77,25 @@ func (b *Backend) Name() string { return BackendName }
 //   - supports_read_only_remount: the same volume mounts rw in the writer
 //     and ro in the exporter.
 //
-// supports_networkless_export remains undeclared until #78's live conformance
-// probe proves it on the current runtime. supports_credential_volume_detach
-// and supports_workspace_snapshot are
-// refuted on this runtime and are never declared: the spike proved a guest
+// supports_networkless_export is added only after Suite.Full has passed its
+// runtime-observed empty-network check and DNS/direct-connect probe. A new or
+// failed backend therefore refuses an unattended policy minimum until the
+// proof has run. supports_credential_volume_detach and
+// supports_workspace_snapshot are refuted on this runtime and are never
+// declared: the spike proved a guest
 // unmount is not a credential-device detach (the refuted same-VM fallback
 // class), and volume snapshotting has no public support.
 func (b *Backend) Capabilities() exec.CapabilitySet {
 	if b == nil || !b.initialized {
 		return exec.NewCapabilitySet()
 	}
-	return exec.NewCapabilitySet(
+	caps := exec.NewCapabilitySet(
 		exec.CapDetachableWorkspace,
 		exec.CapPostExitExport,
 		exec.CapReadOnlyRemount,
 	)
+	if b.networkless.Load() {
+		caps[exec.CapNetworklessExport] = struct{}{}
+	}
+	return caps
 }

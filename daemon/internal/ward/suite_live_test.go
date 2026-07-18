@@ -11,9 +11,8 @@ package ward
 // orchestration and every induced check failure deterministically. These
 // tests prove the passing runs and the negative probes on the real runtime:
 //
-//   - TestLiveConformanceSuite: Suite.Full (checks 1-5, 7 + the credential
-//     containment and read-write-attach exclusion probes) and Suite.PreJob
-//     both pass.
+//   - TestLiveConformanceSuite: Suite.Full (checks 1-5, 7 + the credential,
+//     read-write-attach, and networkless-export probes) and Suite.PreJob pass.
 //   - TestLiveConformanceSameVMRefutation: the third negative probe, driven
 //     directly against the container CLI because it needs a CAP_SYS_ADMIN
 //     guest process the gate's ContainerSpec deliberately cannot express.
@@ -82,17 +81,21 @@ func TestLiveConformanceSuite(t *testing.T) {
 	// Failsafe sweep so an aborted assertion cannot orphan runtime state; the
 	// suite reaps its own objects on every path, this only backstops a panic.
 	names := namesFor(runID)
-	prefix := "freeside-ward-conformance-" + runID + "-"
+	prefix := conformanceObjectPrefix + runID + "-"
 	t.Cleanup(func() {
 		for _, c := range []string{
 			names.Agent, names.Exporter,
 			prefix + "seed", prefix + "audit", prefix + "prejob",
+			prefix + networklessProbeSuffix, prefix + networklessLivenessProbeSuffix,
 			prefix + "excl-writer", prefix + "excl-second",
 		} {
 			_ = rt.StopContainer(ctx, c)
 			_ = rt.DeleteContainer(ctx, c)
 		}
-		for _, v := range []string{names.Workspace, prefix + "cred", prefix + "excl-ws"} {
+		for _, v := range []string{
+			names.Workspace, prefix + "cred", prefix + "excl-ws",
+			prefix + networklessLivenessVolumeProbeSuffix,
+		} {
 			_ = rt.DeleteVolume(ctx, v)
 		}
 	})
@@ -135,11 +138,11 @@ func TestLiveConformanceSuite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := s.PreJob(ctx); err != nil {
-		t.Fatalf("PreJob = %v, want nil", err)
-	}
 	if err := s.Full(ctx); err != nil {
 		t.Fatalf("Full = %v, want nil", err)
+	}
+	if err := s.PreJob(ctx); err != nil {
+		t.Fatalf("PreJob = %v, want nil", err)
 	}
 }
 

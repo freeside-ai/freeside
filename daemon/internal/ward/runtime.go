@@ -92,12 +92,13 @@ type Label struct {
 // host binds beyond Mounts: what the vocabulary cannot say, the runtime is
 // never asked for (checks 2 and 4 then verify the runtime didn't add any).
 type ContainerSpec struct {
-	Name    string   `json:"name"`
-	Image   string   `json:"image"`
-	Command []string `json:"command"`
-	Env     []string `json:"env"`
-	Mounts  []Mount  `json:"mounts"`
-	Labels  []Label  `json:"labels"`
+	Name            string   `json:"name"`
+	Image           string   `json:"image"`
+	Command         []string `json:"command"`
+	Env             []string `json:"env"`
+	Mounts          []Mount  `json:"mounts"`
+	Labels          []Label  `json:"labels"`
+	NetworkDisabled bool     `json:"network_disabled"`
 }
 
 // InspectReport is the runtime's observed configuration and state for one
@@ -136,7 +137,12 @@ type InspectReport struct {
 	// PublishedSockets and PublishedPorts list configured host publications.
 	PublishedSockets []string
 	PublishedPorts   []string
-	Labels           []Label
+	// NetworkAttachmentCount is the number of configured runtime network
+	// attachments. NetworksObserved distinguishes an explicit empty array
+	// (the networkless proof) from an omitted field that proves nothing.
+	NetworkAttachmentCount int
+	NetworksObserved       bool
+	Labels                 []Label
 	// LabelsObserved distinguishes an explicitly empty label set from an
 	// omitted runtime field when inspect is used as ownership evidence.
 	LabelsObserved bool

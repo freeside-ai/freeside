@@ -35,9 +35,10 @@ import (
 // bypass, so absence of a nil result gates unattended operation.
 //
 // Full exercises the whole contract (spike checks 1-5 and 7, run together by
-// one synthetic handoff) plus two of the three negative probes: the
-// read-write-attach exclusion and credential-marker containment. The third
-// probe (same-VM guest-unmount refutation) needs a CAP_SYS_ADMIN guest
+// one synthetic handoff), two of the three negative probes (the
+// read-write-attach exclusion and credential-marker containment), and the
+// networkless-export capability probe. The third handoff-spike probe
+// (same-VM guest-unmount refutation) needs a CAP_SYS_ADMIN guest
 // process, which the gate's ContainerSpec vocabulary deliberately cannot
 // express (that minimality is checks 1-2's isolation argument); it is a
 // permanent reference-runtime test that drives the runtime CLI directly, not
@@ -93,6 +94,14 @@ const (
 	workspaceStateFile = "nested/state.txt"
 	// probeStopTimeout bounds the wait for a probe's own container to stop.
 	probeStopTimeout = 3 * time.Minute
+	// The networkless probe suffixes keep the longest valid RunID within Apple
+	// container's 64-character container-ID limit.
+	networklessProbeSuffix               = "net"
+	networklessLivenessProbeSuffix       = "net-live"
+	networklessLivenessVolumeProbeSuffix = "net-live-ws"
+	// conformanceObjectPrefix leaves enough room under that same limit for the
+	// longest valid RunID and the suite's longest existing role suffix.
+	conformanceObjectPrefix = "freeside-ward-conf-"
 )
 
 // suiteBudget is Full's overall wall-clock ceiling: the synthetic handoff's
@@ -101,7 +110,7 @@ const (
 // runtime that hangs inside a side-effecting call fails the suite closed
 // instead of blocking a long-lived daemon context forever.
 func (s *Suite) suiteBudget() time.Duration {
-	return s.b.cfg.HandoffTimeout + 4*probeStopTimeout
+	return s.b.cfg.HandoffTimeout + 5*probeStopTimeout
 }
 
 // withDefaults fills unset fixture fields.
@@ -141,6 +150,47 @@ func (fx SuiteFixture) agentCommand(cfg Config) []string {
 
 func nonterminatingProbeCommand() []string {
 	return []string{"sh", "-c", "while :; do sleep 3600; done"}
+}
+
+// networklessProbeCommand deliberately attempts both name resolution and a
+// direct-IP TCP connection. Tool presence is checked first so a missing
+// binary cannot masquerade as blocked egress. The structural pre-start proof
+// (zero observed attachments) is load-bearing; these attempts are the required
+// behavioral confirmation on the reference runtime.
+func networklessProofPath(owner string) string {
+	return "/freeside-networkless-proof-" + owner + ".txt"
+}
+
+func networklessProofContent(owner string) string {
+	return "owner=" + owner + "\ndns=blocked\ndirect_connect=blocked\n"
+}
+
+func networklessProbeCommand(owner string) []string {
+	return []string{
+		"sh", "-c",
+		networklessProbeScript(owner, networklessProofPath(owner)),
+	}
+}
+
+func networklessProbeScript(owner, proofPath string) string {
+	return "set -eu; command -v nslookup >/dev/null; command -v nc >/dev/null; " +
+		"ns_help=\"$(nslookup --help 2>&1 || true)\"; " +
+		"case \"$ns_help\" in *'Usage: nslookup '*) ;; *) exit 1;; esac; " +
+		"case \"$ns_help\" in *'HOST [DNS_SERVER]'*) ;; *) exit 1;; esac; " +
+		// A binary's presence is not proof that the pinned invocation is valid.
+		// Match the fixture's BusyBox help before interpreting a nonzero direct-IP
+		// attempt as blocked egress, then reject any actual-call diagnostic rather
+		// than treating a tool failure as a network witness.
+		"nc_help=\"$(nc -h 2>&1 || true)\"; " +
+		"case \"$nc_help\" in *'-w SEC'*) ;; *) exit 1;; esac; " +
+		"case \"$nc_help\" in *'-z'*) ;; *) exit 1;; esac; " +
+		"dns=blocked; dns_diagnostic=''; " +
+		"if dns_diagnostic=\"$(nslookup example.com 2>&1)\"; then dns=reachable; " +
+		"else case \"$dns_diagnostic\" in *'connection timed out; no servers could be reached'*) ;; *) exit 1;; esac; fi; " +
+		"direct=blocked; direct_error=''; " +
+		"if direct_error=\"$(nc -z -w 3 1.1.1.1 443 2>&1 >/dev/null)\"; then direct=reachable; " +
+		"else test -z \"$direct_error\" || exit 1; fi; " +
+		"printf 'owner=%s\\ndns=%s\\ndirect_connect=%s\\n' '" + owner + "' \"$dns\" \"$direct\" > " + shellQuote(proofPath) + "; sync"
 }
 
 // shellQuote single-quotes s for safe inclusion in a `sh -c` command, so a
@@ -349,7 +399,7 @@ func NewSuite(b *Backend, fx SuiteFixture) (*Suite, error) {
 // and a role, disjoint from the handoff's own object names (namesFor). A free
 // function so NewSuite can derive generated paths before a Suite exists.
 func conformanceObjectName(runID, role string) string {
-	return "freeside-ward-conformance-" + runID + "-" + role
+	return conformanceObjectPrefix + runID + "-" + role
 }
 
 // conformanceName builds a probe object's runtime name for this suite's run.
@@ -608,11 +658,27 @@ func (r *suiteRun) verifyReaped(ctx context.Context) error {
 
 // Full runs the whole workspace-handoff contract as one conformance pass on
 // the current runtime: a synthetic handoff exercising checks 1-5 and 7, the
-// credential-marker containment probe, and the read-write-attach exclusion
-// probe. It is fail-closed and self-cleaning: it reaps every object it
+// credential-marker containment and read-write-attach exclusion probes, and
+// the networkless-export capability probe. It is fail-closed and self-cleaning:
+// it reaps every object it
 // creates on every path. A non-nil error means the backend is not proven
 // conformant and the caller must not run unattended.
 func (s *Suite) Full(ctx context.Context) (err error) {
+	// A new full pass supersedes the prior runtime proof. Do not keep declaring
+	// the capability while a recheck is pending or after any failed recheck.
+	proofGeneration := s.b.beginNetworklessProof()
+	proved := false
+	// Publish from the final named result, after later-registered cleanup and
+	// absence-proof defers have had the chance to turn a nominal pass into a
+	// failure. A newer pass supersedes this generation even if this older pass
+	// finishes last.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.b.finishNetworklessProof(proofGeneration, false)
+			panic(recovered)
+		}
+		s.b.finishNetworklessProof(proofGeneration, proved && err == nil)
+	}()
 	// Bound the whole pass so a runtime that wedges inside a side-effecting
 	// call (e.g. after launching a probe VM but before StartContainer returns)
 	// cannot hang the suite under a long-lived caller context; the handoff
@@ -664,7 +730,11 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 		{Type: MountVolume, Source: livenessVolume, Target: s.b.cfg.WorkspaceTarget},
 		{Type: MountVolume, Source: credVolume, Target: s.fx.CredentialTarget, ReadOnly: true},
 	}
-	if err := s.proveNoEagerStart(ctx, run, livenessName, livenessMounts, CheckControlPlaneIsolation); err != nil {
+	if err := s.proveNoEagerStart(ctx, run, ContainerSpec{
+		Name:   livenessName,
+		Image:  s.fx.AgentImage,
+		Mounts: livenessMounts,
+	}, CheckControlPlaneIsolation); err != nil {
 		return err
 	}
 
@@ -776,7 +846,14 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 
 	// The read-write-attach exclusion the gate's check-3 termination depends
 	// on: a second VM cannot attach a volume a live writer holds read-write.
-	return s.probeWriterVolumeExclusion(ctx, run)
+	if err := s.probeWriterVolumeExclusion(ctx, run); err != nil {
+		return err
+	}
+	if err := s.probeNetworklessExport(ctx, run); err != nil {
+		return err
+	}
+	proved = true
+	return nil
 }
 
 // PreJob is the lightweight pre-job probe (plan §5.7): a fast, fail-closed
@@ -805,7 +882,7 @@ func (s *Suite) PreJob(ctx context.Context) (err error) {
 	// Capability declaration intact (in-memory, free): the floor the gate
 	// admits against must still be declared.
 	caps := s.b.Capabilities()
-	for _, c := range requiredCapabilities {
+	for _, c := range unattendedCapabilities {
 		if !caps.Has(c) {
 			return failf(CheckPreJobProbe, "capability declaration missing a required capability")
 		}
@@ -834,29 +911,30 @@ func (s *Suite) PreJob(ctx context.Context) (err error) {
 		}
 	}()
 	defer run.reapContainer(ctx, name)
-	return s.proveNoEagerStart(ctx, run, name, nil, CheckPreJobProbe)
+	return s.proveNoEagerStart(ctx, run, ContainerSpec{
+		Name:  name,
+		Image: s.fx.AgentImage,
+	}, CheckPreJobProbe)
 }
 
-// proveNoEagerStart creates a throwaway container from the fixture image with a
-// nonterminating inert payload and requires it StateStopped
+// proveNoEagerStart creates a throwaway container with the caller's topology
+// and a nonterminating inert payload, and requires it StateStopped
 // after create (create realizes metadata only; a runtime that eager-started it
 // would keep the payload running past the inspect — a short-lived "true" could
 // exit first and self-mask as stopped), then deletes it. PreJob uses an
 // unmounted instance for its cheap liveness contract; Full uses the writer's
 // mounted topology because the finite real writer could otherwise execute to
-// completion before its StateStopped inspection. The caller registers the
-// reap/absence-proof deferrals for name.
-func (s *Suite) proveNoEagerStart(ctx context.Context, run *suiteRun, name string, mounts []Mount, check Check) error {
-	spec := ContainerSpec{
-		Name:   name,
-		Image:  s.fx.AgentImage,
-		Mounts: slices.Clone(mounts),
-		// A finite sleep shorter than the enclosing timeout can self-mask a
-		// synchronous eager start: CreateContainer returns after it exits and the
-		// inspect sees stopped. This payload never terminates by itself, so an
-		// eager create can return only by respecting context cancellation.
-		Command: nonterminatingProbeCommand(),
-	}
+// completion before its StateStopped inspection. The networkless-export probe
+// supplies the production exporter image, mount, and network topology because
+// a runtime may realize that create path differently from an ordinary
+// container. The caller registers the reap/absence-proof deferrals for name.
+func (s *Suite) proveNoEagerStart(ctx context.Context, run *suiteRun, spec ContainerSpec, check Check) error {
+	name := spec.Name
+	// A finite sleep shorter than the enclosing timeout can self-mask a
+	// synchronous eager start: CreateContainer returns after it exits and the
+	// inspect sees stopped. This payload never terminates by itself, so an eager
+	// create can return only by respecting context cancellation.
+	spec.Command = nonterminatingProbeCommand()
 	var err error
 	spec, err = run.createContainer(ctx, spec)
 	if err != nil {
@@ -899,7 +977,100 @@ func probeSpecMatches(rep InspectReport, spec ContainerSpec) bool {
 		slices.Equal(rep.Command, spec.Command) &&
 		slices.Equal(rep.Env, expectedEnv) &&
 		sameMounts(rep.Mounts, spec.Mounts) &&
+		rep.NetworksObserved && (!spec.NetworkDisabled || rep.NetworkAttachmentCount == 0) &&
 		!rep.SSH && len(rep.PublishedSockets) == 0 && len(rep.PublishedPorts) == 0
+}
+
+// probeNetworklessExport is the capability-producing conformance member. It
+// creates an exporter-role VM with Apple container's public `--network none`
+// mechanism. It first proves the no-network create path is metadata-only with
+// a nonterminating payload, then verifies the finite behavioral probe's
+// pre-start inspect reports an explicit empty network set, runs DNS and
+// direct-IP attempts, and validates their exact proof from the stopped rootfs.
+// Any missing tool, successful attempt, drifted inspect shape, malformed
+// archive, or cleanup failure keeps the capability absent and gates unattended
+// mode.
+func (s *Suite) probeNetworklessExport(ctx context.Context, run *suiteRun) error {
+	livenessName := s.conformanceName(networklessLivenessProbeSuffix)
+	livenessVolume := s.conformanceName(networklessLivenessVolumeProbeSuffix)
+	defer run.reapVolume(ctx, livenessVolume)
+	defer run.reapContainer(ctx, livenessName)
+	if err := run.createVolume(ctx, livenessVolume, s.fx.WorkspaceSizeMB); err != nil {
+		return failf(CheckNetworklessExport, "create networkless liveness workspace volume: %v", err)
+	}
+	if err := s.proveNoEagerStart(ctx, run, ContainerSpec{
+		Name:            livenessName,
+		Image:           s.b.cfg.ExporterImage,
+		Mounts:          []Mount{{Type: MountVolume, Source: livenessVolume, Target: s.b.cfg.WorkspaceTarget, ReadOnly: true}},
+		NetworkDisabled: true,
+	}, CheckNetworklessExport); err != nil {
+		return err
+	}
+
+	name := s.conformanceName(networklessProbeSuffix)
+	owner := run.ownershipLabel.Value
+	defer run.reapContainer(ctx, name)
+	spec := ContainerSpec{
+		Name:            name,
+		Image:           s.b.cfg.ExporterImage,
+		Command:         networklessProbeCommand(owner),
+		NetworkDisabled: true,
+		Mounts:          []Mount{{Type: MountVolume, Source: livenessVolume, Target: s.b.cfg.WorkspaceTarget, ReadOnly: true}},
+	}
+	var err error
+	spec, err = run.createContainer(ctx, spec)
+	if err != nil {
+		return failf(CheckNetworklessExport, "create networkless exporter probe: %v", err)
+	}
+	rep, err := s.b.rt.Inspect(ctx, name)
+	if err != nil {
+		return failf(CheckNetworklessExport, "inspect networkless exporter probe: %v", err)
+	}
+	if err := run.observeContainer(name, rep); err != nil {
+		return failf(CheckNetworklessExport, "networkless exporter identity is unproven: %v", err)
+	}
+	if !probeSpecMatches(rep, spec) || rep.State != StateStopped {
+		return failf(CheckNetworklessExport, "networkless exporter did not realize the stopped suite-owned probe spec with zero observed network attachments")
+	}
+	if err := s.b.rt.StartContainer(ctx, name); err != nil {
+		return failf(CheckNetworklessExport, "start networkless exporter probe: %v", err)
+	}
+	if err := s.b.waitStopped(ctx, name, run.containers[name], run.ownershipLabel, probeStopTimeout); err != nil {
+		return failf(CheckNetworklessExport, "networkless exporter probe did not stop: %v", err)
+	}
+
+	archive, err := os.CreateTemp("", "freeside-ward-networkless-"+s.fx.RunID+"-*.tar")
+	if err != nil {
+		return failf(CheckNetworklessExport, "create networkless exporter archive: %v", err)
+	}
+	archivePath := archive.Name()
+	defer func() {
+		_ = archive.Close()
+		_ = os.Remove(archivePath)
+	}()
+	capped := &archiveCapWriter{dest: archive, remaining: s.b.cfg.MaxArchiveBytes}
+	exportErr := s.b.rt.ExportRootFS(ctx, name, capped, s.b.cfg.MaxArchiveBytes)
+	if capped.overflow {
+		return failf(CheckNetworklessExport, "networkless exporter rootfs exceeds the byte cap")
+	}
+	if exportErr != nil {
+		return failf(CheckNetworklessExport, "export networkless exporter rootfs: %v", exportErr)
+	}
+	if err := archive.Close(); err != nil {
+		return failf(CheckNetworklessExport, "close networkless exporter rootfs archive: %v", err)
+	}
+	archive, err = os.Open(archivePath) //nolint:gosec // suite-generated temp path
+	if err != nil {
+		return failf(CheckNetworklessExport, "open networkless exporter rootfs archive: %v", err)
+	}
+	found, err := archiveHasRegularFile(archive, networklessProofPath(owner), networklessProofContent(owner))
+	if err != nil {
+		return failf(CheckNetworklessExport, "validate networkless exporter proof: %v", err)
+	}
+	if !found {
+		return failf(CheckNetworklessExport, "DNS and direct-connect attempts did not both report blocked")
+	}
+	return nil
 }
 
 // seedCredential writes the fake marker into the credential volume through a
@@ -1039,7 +1210,7 @@ func (s *Suite) probeCredentialContainment(ctx context.Context, run *suiteRun, c
 	if err != nil {
 		return failf(CheckCredentialContainment, "open credential-audit rootfs archive: %v", err)
 	}
-	found, err := auditArchiveHasSentinel(archive, auditMarkerPath(s.fx.RunID), auditSentinel(s.fx.RunID)+"\n")
+	found, err := archiveHasRegularFile(archive, auditMarkerPath(s.fx.RunID), auditSentinel(s.fx.RunID)+"\n")
 	if err != nil {
 		return failf(CheckCredentialContainment, "validate credential-audit rootfs archive: %v", err)
 	}
@@ -1049,11 +1220,11 @@ func (s *Suite) probeCredentialContainment(ctx context.Context, run *suiteRun, c
 	return nil
 }
 
-// auditArchiveHasSentinel validates the audit rootfs tar and binds the proof to
-// one regular file at the suite-generated path with exact run-bound content.
+// archiveHasRegularFile validates a rootfs tar and binds a proof to one regular
+// file at the suite-generated path with exact content.
 // It parses through EOF even after finding the file, so trailing corruption or
 // a duplicate contradictory entry fails closed.
-func auditArchiveHasSentinel(r io.Reader, absolutePath, content string) (bool, error) {
+func archiveHasRegularFile(r io.Reader, absolutePath, content string) (bool, error) {
 	wantPath := strings.TrimPrefix(absolutePath, "/")
 	wantContent := []byte(content)
 	found := false
@@ -1077,21 +1248,21 @@ func auditArchiveHasSentinel(r io.Reader, absolutePath, content string) (bool, e
 			continue
 		}
 		if found {
-			return false, errors.New("archive carries more than one audit sentinel entry")
+			return false, errors.New("archive carries more than one proof entry")
 		}
 		found = true
 		if hdr.Typeflag != tar.TypeReg {
-			return false, errors.New("audit sentinel entry is not a regular file")
+			return false, errors.New("proof entry is not a regular file")
 		}
 		if hdr.Size != int64(len(wantContent)) {
-			return false, errors.New("audit sentinel entry has unexpected size")
+			return false, errors.New("proof entry has unexpected size")
 		}
 		got, err := io.ReadAll(io.LimitReader(tr, int64(len(wantContent))+1))
 		if err != nil {
-			return false, fmt.Errorf("read audit sentinel entry: %w", err)
+			return false, fmt.Errorf("read proof entry: %w", err)
 		}
 		if !bytes.Equal(got, wantContent) {
-			return false, errors.New("audit sentinel entry has unexpected content")
+			return false, errors.New("proof entry has unexpected content")
 		}
 	}
 }

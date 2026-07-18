@@ -44,6 +44,8 @@ func TestDecodeInspectVolume(t *testing.T) {
 		State:                   StateStopped,
 		CreationDate:            "2026-07-16T21:08:15Z",
 		AllowlistFieldsObserved: true,
+		NetworkAttachmentCount:  0,
+		NetworksObserved:        true,
 		Mounts: []Mount{{
 			Type:     MountVolume,
 			Source:   "freeside-handoff-run-1-ws",
@@ -244,9 +246,13 @@ func TestDecodeInspectAllowlistFieldPresence(t *testing.T) {
 		"ssh":               `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[],"workingDirectory":"/"},"publishedPorts":[],"publishedSockets":[]`,
 		"publishedPorts":    `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[],"workingDirectory":"/"},"ssh":false,"publishedSockets":[]`,
 		"publishedSockets":  `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[]`,
+		"networks":          `"image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[],"publishedSockets":[]`,
 	}
 	for missing, cfg := range fields {
 		t.Run("missing "+missing, func(t *testing.T) {
+			if missing != "networks" {
+				cfg += `,"networks":[]`
+			}
 			out := []byte(`[{"id":"c","configuration":{"id":"c",` + cfg + `},"status":{"state":"stopped"}}]`)
 			rep, err := decodeInspect(out, "c")
 			if err != nil {
@@ -261,7 +267,7 @@ func TestDecodeInspectAllowlistFieldPresence(t *testing.T) {
 		})
 	}
 	// Every required field present decodes cleanly.
-	out := []byte(`[{"id":"c","configuration":{"id":"c","image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[],"publishedSockets":[]},"status":{"state":"stopped"}}]`)
+	out := []byte(`[{"id":"c","configuration":{"id":"c","image":{"reference":"example.test/exporter","descriptor":{"digest":"sha256:abc"}},"initProcess":{"executable":"sh","arguments":[],"environment":[],"workingDirectory":"/"},"ssh":false,"publishedPorts":[],"publishedSockets":[],"networks":[]},"status":{"state":"stopped"}}]`)
 	rep, err := decodeInspect(out, "c")
 	if err != nil {
 		t.Errorf("complete report failed: %v", err)
@@ -480,6 +486,7 @@ func TestCreateContainerArgs(t *testing.T) {
 		"--label", "freeside.handoff=golden-run",
 		"--label", "freeside.handoff-owner=00000000000000000000000000000000",
 		"--mount", "type=volume,source=freeside-handoff-golden-run-ws,target=/workspace,readonly",
+		"--network", "none",
 		"--", cfg.ExporterImage,
 	}
 	want = append(want, cfg.ExporterCommand...)

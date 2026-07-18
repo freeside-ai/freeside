@@ -10,11 +10,13 @@ import (
 	"errors"
 	"io"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
@@ -39,6 +41,9 @@ func newSuiteTest(t *testing.T) (*Suite, *fakeRuntime) {
 	if err != nil {
 		t.Fatalf("NewSuite = %v", err)
 	}
+	// PreJob cases model a backend whose startup Full already passed. Full
+	// itself clears this state on entry and earns it again only on success.
+	b.networkless.Store(true)
 	// The default writer emits this run's sentinel; a passing-path export must
 	// carry it (and not the credential marker) for Full's non-vacuousness check.
 	// Tests that assert a containment failure override this.
@@ -110,30 +115,52 @@ func manifestArchive(t *testing.T, files []manifestFile) []tarEntry {
 // sentinel, the token probeCredentialContainment scans for (proving the
 // detached credential was readable). Used by tests that need the containment
 // audit to pass so a later probe or cleanup path is exercised.
-func passAudit(s *Suite) func(string, io.Writer) error {
+func passAudit(s *Suite, rt *fakeRuntime) func(string, io.Writer) error {
 	return func(id string, dest io.Writer) error {
-		if id == s.conformanceName("audit") {
-			var buf bytes.Buffer
-			tw := tar.NewWriter(&buf)
-			body := []byte(auditSentinel(s.fx.RunID) + "\n")
-			if err := tw.WriteHeader(&tar.Header{
-				Name: strings.TrimPrefix(auditMarkerPath(s.fx.RunID), "/"),
-				Mode: 0o644,
-				Size: int64(len(body)),
-			}); err != nil {
-				return err
+		var name, content string
+		switch id {
+		case s.conformanceName("audit"):
+			name = strings.TrimPrefix(auditMarkerPath(s.fx.RunID), "/")
+			content = auditSentinel(s.fx.RunID) + "\n"
+		case s.conformanceName(networklessProbeSuffix):
+			var owner string
+			for _, label := range rt.ctrs[id].spec.Labels {
+				if label.Key == ownershipLabelKey {
+					owner = label.Value
+				}
 			}
-			if _, err := tw.Write(body); err != nil {
-				return err
+			if owner == "" {
+				return errors.New("networkless probe has no ownership label")
 			}
-			if err := tw.Close(); err != nil {
-				return err
-			}
-			_, err := dest.Write(buf.Bytes())
-			return err
+			name = strings.TrimPrefix(networklessProofPath(owner), "/")
+			content = networklessProofContent(owner)
+		}
+		if name != "" {
+			return writeProofArchive(dest, name, content)
 		}
 		return nil
 	}
+}
+
+func writeProofArchive(dest io.Writer, name, content string) error {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	body := []byte(content)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: name,
+		Mode: 0o644,
+		Size: int64(len(body)),
+	}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(body); err != nil {
+		return err
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	_, err := dest.Write(buf.Bytes())
+	return err
 }
 
 // scriptHappyProbes makes the fake report the two Full negative probes as
@@ -141,7 +168,7 @@ func passAudit(s *Suite) func(string, io.Writer) error {
 // second attach in the exclusion probe is refused (as the reference runtime's
 // Virtualization.framework does at bootstrap).
 func scriptHappyProbes(s *Suite, rt *fakeRuntime) {
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	rt.onStart = func(id string) error {
 		if id == s.conformanceName("excl-second") {
 			return errors.New("VZErrorDomain Code=2: the storage device attachment is invalid")
@@ -173,7 +200,24 @@ func TestSuiteFullSuccess(t *testing.T) {
 	if err := s.Full(context.Background()); err != nil {
 		t.Fatalf("Full = %v, want nil", err)
 	}
+	if !s.b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Error("successful Full did not declare supports_networkless_export")
+	}
 	s.assertReaped(t, rt)
+}
+
+func TestConformanceObjectNamesFitReferenceRuntime(t *testing.T) {
+	runID := strings.Repeat("a", 32) // longest valid SuiteFixture.RunID
+	roles := []string{
+		"cred", "liveness", "liveness-ws", "seed", "audit", "prejob",
+		"excl-ws", "excl-writer", "excl-second", networklessProbeSuffix,
+		networklessLivenessProbeSuffix, networklessLivenessVolumeProbeSuffix,
+	}
+	for _, role := range roles {
+		if name := conformanceObjectName(runID, role); len(name) > 64 {
+			t.Errorf("conformance role %q produces %d-byte container ID %q, want <= 64", role, len(name), name)
+		}
+	}
 }
 
 // TestSuiteFullPropagatesCheckFailure proves Full surfaces the synthetic
@@ -193,7 +237,320 @@ func TestSuiteFullPropagatesCheckFailure(t *testing.T) {
 	}
 	err := s.Full(context.Background())
 	wantCheckFailure(t, err, CheckExporterAllowlist)
+	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Error("failed Full retained supports_networkless_export")
+	}
 	s.assertReaped(t, rt)
+}
+
+func TestSuiteFullNetworklessProbeFailure(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	scriptHappyProbes(s, rt)
+	baseExport := rt.onExport
+	rt.onExport = func(id string, dest io.Writer) error {
+		if id == s.conformanceName(networklessProbeSuffix) {
+			return nil // the default handoff archive carries no network proof
+		}
+		return baseExport(id, dest)
+	}
+	err := s.Full(context.Background())
+	wantCheckFailure(t, err, CheckNetworklessExport)
+	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Error("failed networkless probe declared supports_networkless_export")
+	}
+	s.assertReaped(t, rt)
+}
+
+func TestNetworklessProbeRejectsToolUsageFailure(t *testing.T) {
+	validNSLookup := `#!/bin/sh
+if [ "$1" = "--help" ]; then
+	printf '%s\n' 'Usage: nslookup [-type=QUERY_TYPE] [-debug] HOST [DNS_SERVER]'
+	exit 0
+fi
+printf '%s\n' ';; connection timed out; no servers could be reached'
+exit 1
+`
+	validNC := `#!/bin/sh
+if [ "$1" = "-h" ]; then
+	printf '%s\n' 'Usage: nc [OPTIONS] HOST PORT' '-w SEC' '-z Zero-I/O mode'
+	exit 1
+fi
+exit 1
+`
+	cases := []struct {
+		name, nslookup, nc string
+	}{
+		{
+			name: "dns usage",
+			nslookup: `#!/bin/sh
+if [ "$1" = "--help" ]; then
+	printf '%s\n' 'Usage: nslookup [-type=QUERY_TYPE] [-debug] HOST [DNS_SERVER]'
+	exit 0
+fi
+printf '%s\n' 'Usage: nslookup HOST [DNS_SERVER]'
+exit 1
+`,
+			nc: validNC,
+		},
+		{
+			name:     "direct usage",
+			nslookup: validNSLookup,
+			nc: `#!/bin/sh
+if [ "$1" = "-h" ]; then
+	printf '%s\n' 'Usage: nc [OPTIONS] HOST PORT' '-w SEC' '-z Zero-I/O mode'
+	exit 1
+fi
+printf '%s\n' 'Usage: nc [OPTIONS] HOST PORT' >&2
+exit 1
+`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			binDir := t.TempDir()
+			for name, body := range map[string]string{"nslookup": tc.nslookup, "nc": tc.nc} {
+				if err := os.WriteFile(filepath.Join(binDir, name), []byte(body), 0o700); err != nil { //nolint:gosec // executable fixtures are isolated in t.TempDir
+					t.Fatal(err)
+				}
+			}
+			proofPath := filepath.Join(t.TempDir(), "networkless-proof.txt")
+			cmd := osexec.Command("sh", "-c", networklessProbeScript("owner", proofPath)) //nolint:gosec // fixed shell and test-owned script
+			cmd.Env = []string{"PATH=" + binDir + ":/usr/bin:/bin"}
+			if err := cmd.Run(); err == nil {
+				t.Fatal("networkless probe accepted tool usage failure")
+			}
+			if _, err := os.Stat(proofPath); !os.IsNotExist(err) {
+				t.Fatalf("proof after tool usage failure: stat error = %v, want not-exist", err)
+			}
+		})
+	}
+}
+
+func TestSuiteFullNetworklessProbeRejectsStaleProof(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	scriptHappyProbes(s, rt)
+	baseExport := rt.onExport
+	rt.onExport = func(id string, dest io.Writer) error {
+		if id == s.conformanceName(networklessProbeSuffix) {
+			return writeProofArchive(dest, "freeside-networkless-proof.txt", "dns=blocked\ndirect_connect=blocked\n")
+		}
+		return baseExport(id, dest)
+	}
+	err := s.Full(context.Background())
+	wantCheckFailure(t, err, CheckNetworklessExport)
+	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Error("stale networkless proof declared supports_networkless_export")
+	}
+	s.assertReaped(t, rt)
+}
+
+func TestSuiteFullNetworklessProbeRejectsAttachment(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	scriptHappyProbes(s, rt)
+	probe := s.conformanceName(networklessProbeSuffix)
+	baseInspect := rt.onInspect
+	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+		if baseInspect != nil {
+			var err error
+			rep, err = baseInspect(id, rep)
+			if err != nil {
+				return rep, err
+			}
+		}
+		if id == probe {
+			rep.NetworkAttachmentCount = 1
+		}
+		return rep, nil
+	}
+	err := s.Full(context.Background())
+	wantCheckFailure(t, err, CheckNetworklessExport)
+	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Error("attached exporter probe declared supports_networkless_export")
+	}
+	s.assertReaped(t, rt)
+}
+
+func TestSuiteFullNetworklessProbeUsesExporterTopology(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	scriptHappyProbes(s, rt)
+	probe := s.conformanceName(networklessProbeSuffix)
+	volume := s.conformanceName(networklessLivenessVolumeProbeSuffix)
+	var got ContainerSpec
+	rt.onCreateContainer = func(spec ContainerSpec) error {
+		if spec.Name == probe {
+			got = cloneContainerSpec(spec)
+		}
+		return nil
+	}
+	if err := s.Full(context.Background()); err != nil {
+		t.Fatalf("Full = %v, want nil", err)
+	}
+	wantMounts := []Mount{{Type: MountVolume, Source: volume, Target: s.b.cfg.WorkspaceTarget, ReadOnly: true}}
+	if got.Image != s.b.cfg.ExporterImage || !got.NetworkDisabled || !sameMounts(got.Mounts, wantMounts) {
+		t.Errorf("networkless probe = image %q network_disabled=%v mounts=%+v, want production exporter topology with mounts %+v", got.Image, got.NetworkDisabled, got.Mounts, wantMounts)
+	}
+	s.assertReaped(t, rt)
+}
+
+// TestSuiteFullNetworklessProbeRejectsEagerCreate covers a runtime that eagerly
+// executes only NetworkDisabled creates. The finite behavioral probe could
+// finish and self-mask as stopped; its preceding nonterminating probe must stay
+// running and expose that create-contract violation.
+func TestSuiteFullNetworklessProbeRejectsEagerCreate(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	scriptHappyProbes(s, rt)
+	liveness := s.conformanceName(networklessLivenessProbeSuffix)
+	volume := s.conformanceName(networklessLivenessVolumeProbeSuffix)
+	eager := false
+	rt.onCreateContainer = func(spec ContainerSpec) error {
+		if spec.Name == liveness {
+			wantMounts := []Mount{{Type: MountVolume, Source: volume, Target: s.b.cfg.WorkspaceTarget, ReadOnly: true}}
+			eager = spec.Image == s.b.cfg.ExporterImage &&
+				spec.NetworkDisabled &&
+				sameMounts(spec.Mounts, wantMounts) &&
+				slices.Equal(spec.Command, nonterminatingProbeCommand())
+		}
+		return nil
+	}
+	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+		if id == liveness && eager {
+			rep.State = StateRunning
+		}
+		return rep, nil
+	}
+	err := s.Full(context.Background())
+	wantCheckFailure(t, err, CheckNetworklessExport)
+	if !strings.Contains(err.Error(), "executed it before inspection") {
+		t.Errorf("error = %q, want networkless eager-create failure", err)
+	}
+	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Error("eager networkless create declared supports_networkless_export")
+	}
+	s.assertReaped(t, rt)
+}
+
+func TestSuiteFullCleanupFailureWithholdsNetworklessCapability(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	scriptHappyProbes(s, rt)
+	probe := s.conformanceName(networklessProbeSuffix)
+	rt.onDeleteContainer = func(id string) (bool, error) {
+		return id == probe, nil
+	}
+	err := s.Full(context.Background())
+	wantCheckFailure(t, err, CheckTeardown)
+	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Error("cleanup-failed Full declared supports_networkless_export")
+	}
+}
+
+func TestSuiteFullPanicWithholdsNetworklessCapability(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	scriptHappyProbes(s, rt)
+	baseExport := rt.onExport
+	rt.onExport = func(id string, dest io.Writer) error {
+		if id == s.conformanceName(networklessProbeSuffix) {
+			panic("networkless proof fixture panic")
+		}
+		return baseExport(id, dest)
+	}
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_ = s.Full(context.Background())
+	}()
+	if recovered == nil {
+		t.Fatal("Full did not propagate the fixture panic")
+	}
+	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Error("panicked Full declared supports_networkless_export")
+	}
+	s.assertReaped(t, rt)
+}
+
+func TestSuiteFullCleanupPanicWithholdsNetworklessCapability(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	scriptHappyProbes(s, rt)
+	livenessVolume := s.conformanceName("liveness-ws")
+	rt.onDeleteVolume = func(name string) (bool, error) {
+		if name == livenessVolume {
+			delete(rt.vols, name) // callback runs under the fake's lock
+			panic("late cleanup panic")
+		}
+		return false, nil
+	}
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_ = s.Full(context.Background())
+	}()
+	if recovered == nil {
+		t.Fatal("Full did not propagate the late cleanup panic")
+	}
+	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Error("cleanup-panicked Full declared supports_networkless_export")
+	}
+	s.assertReaped(t, rt)
+}
+
+func TestSuiteFullOlderSuccessCannotOverrideNewerFailure(t *testing.T) {
+	fx := newHandoffFixture(t)
+	scannerEntered := make(chan struct{})
+	releaseScanner := make(chan struct{})
+	fx.cfg.Scanner = scannerFunc(func(context.Context, string) error {
+		scannerEntered <- struct{}{}
+		<-releaseScanner
+		return nil
+	})
+	b := fx.backend(t)
+	newSuite := func(runID string) *Suite {
+		t.Helper()
+		s, err := NewSuite(b, SuiteFixture{
+			AgentImage:       "example.test/agent@sha256:" + strings.Repeat("1", 64),
+			CredentialMarker: suiteMarker,
+			RunID:            runID,
+		})
+		if err != nil {
+			t.Fatalf("NewSuite(%q): %v", runID, err)
+		}
+		return s
+	}
+	older := newSuite("older-run")
+	newer := newSuite("newer-run")
+	fx.rt.exportTarPath = buildTar(t, writerArchive(t, older.fx.RunID))
+	scriptHappyProbes(older, fx.rt)
+	newerCredential := newer.conformanceName("cred")
+	fx.rt.onCreateVolume = func(name string) error {
+		if name == newerCredential {
+			return errors.New("newer conformance failed")
+		}
+		return nil
+	}
+
+	olderDone := make(chan error, 1)
+	go func() { olderDone <- older.Full(context.Background()) }()
+	<-scannerEntered
+	newerErr := newer.Full(context.Background())
+	close(releaseScanner)
+	olderErr := <-olderDone
+	if newerErr == nil {
+		t.Fatal("newer Full = nil, want failure")
+	}
+	if olderErr != nil {
+		t.Fatalf("older Full = %v, want success", olderErr)
+	}
+	if b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Fatal("older successful Full overrode the newer failed generation")
+	}
+	fx.assertReaped(t)
+}
+
+func TestSuitePreJobRequiresNetworklessProof(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	s.b.networkless.Store(false)
+	wantCheckFailure(t, s.PreJob(context.Background()), CheckPreJobProbe)
+	if rt.callIndex("list-volumes") >= 0 {
+		t.Error("PreJob touched the runtime before refusing the missing capability")
+	}
 }
 
 // TestSuiteFullExportContainmentBreach: the released output carries the
@@ -237,7 +594,7 @@ func TestSuiteFullExclusionProbeFailure(t *testing.T) {
 	s, rt := newSuiteTest(t)
 	// Marker present for the audit (containment passes) but no refusal scripted
 	// for the second attach, so the exclusion does not hold.
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	err := s.Full(context.Background())
 	wantCheckFailure(t, err, CheckWriterVolumeExclusion)
 	s.assertReaped(t, rt)
@@ -367,7 +724,7 @@ func TestSuiteFullAuditExportOverflowSwallowed(t *testing.T) {
 // probe fails closed rather than trusting a refusal it never exercised.
 func TestSuiteFullExclusionWriterMountUnrealized(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
 		if id == s.conformanceName("excl-writer") {
 			rep.Mounts = nil // runtime dropped the workspace mount
@@ -390,7 +747,7 @@ func TestSuiteFullExclusionWriterMountUnrealized(t *testing.T) {
 // could be a foreign same-name replacement.
 func TestSuiteFullExclusionDoesNotStartUnprovenWriter(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	writer := s.conformanceName("excl-writer")
 	firstWriterInspect := true
 	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
@@ -420,7 +777,7 @@ func TestSuiteFullExclusionDoesNotStartUnprovenWriter(t *testing.T) {
 // not pass on the error string alone.
 func TestSuiteFullExclusionSecondRunsDespiteError(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	rt.onStart = func(id string) error {
 		if id == s.conformanceName("excl-second") {
 			// The second VM actually started (attached the volume) but the
@@ -556,7 +913,7 @@ func TestSuiteFullSentinelBlobOmitted(t *testing.T) {
 // rather than trusting a token read from an unverified mount.
 func TestSuiteFullAuditMountUnrealized(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s) // the audit would otherwise pass
+	rt.onExport = passAudit(s, rt) // the audit would otherwise pass
 	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
 		if id == s.conformanceName("audit") {
 			rep.Mounts = []Mount{{Type: MountVolume, Source: "impostor-volume", Target: s.fx.CredentialTarget, ReadOnly: true}}
@@ -579,7 +936,7 @@ func TestSuiteFullAuditMountUnrealized(t *testing.T) {
 // the suite's immutable original spec.
 func TestSuiteFullAuditSpecMountMutationDefeated(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	impostor := Mount{Type: MountVolume, Source: "impostor-volume", Target: s.fx.CredentialTarget, ReadOnly: true}
 	rt.onCreateContainer = func(spec ContainerSpec) error {
 		if spec.Name == s.conformanceName("audit") && len(spec.Mounts) > 0 {
@@ -876,7 +1233,7 @@ func TestSuiteFullExclusionUsesReadOnlyExporter(t *testing.T) {
 // running and must fail closed rather than pass on the error string alone.
 func TestSuiteFullExclusionSecondInspectInconclusive(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	rt.onStart = func(id string) error {
 		if id == s.conformanceName("excl-second") {
 			return errors.New("VZErrorDomain Code=2: the storage device attachment is invalid")
@@ -909,7 +1266,7 @@ func TestSuiteFullExclusionSecondInspectInconclusive(t *testing.T) {
 // must fail closed, even though the second attach was refused and stopped.
 func TestSuiteFullExclusionWriterEvictedAfterRefusal(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	rt.onStart = func(id string) error {
 		if id == s.conformanceName("excl-second") {
 			return errors.New("VZErrorDomain Code=2: the storage device attachment is invalid")
@@ -946,7 +1303,7 @@ func TestSuiteFullExclusionWriterEvictedAfterRefusal(t *testing.T) {
 // on "not running".
 func TestSuiteFullExclusionSecondNotStoppedAfterError(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	rt.onStart = func(id string) error {
 		if id == s.conformanceName("excl-second") {
 			return errors.New("VZErrorDomain Code=2: the storage device attachment is invalid")
@@ -1198,7 +1555,7 @@ func TestIsAttachmentExclusion(t *testing.T) {
 // rather than pass on an unrelated error.
 func TestSuiteFullExclusionUnrelatedStartFailure(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	rt.onStart = func(id string) error {
 		if id == s.conformanceName("excl-second") {
 			return errors.New("container start failed: out of memory")
@@ -1268,7 +1625,7 @@ func TestDirMetadataContainsMarker(t *testing.T) {
 	}
 }
 
-func TestAuditArchiveHasSentinel(t *testing.T) {
+func TestArchiveHasRegularFile(t *testing.T) {
 	wantPath := auditMarkerPath("conf-run")
 	wantBody := auditSentinel("conf-run") + "\n"
 	cases := []struct {
@@ -1313,9 +1670,9 @@ func TestAuditArchiveHasSentinel(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer f.Close() //nolint:errcheck // test read handle
-			found, err := auditArchiveHasSentinel(f, wantPath, wantBody)
+			found, err := archiveHasRegularFile(f, wantPath, wantBody)
 			if (err != nil) != tc.wantErr || found != tc.found {
-				t.Fatalf("auditArchiveHasSentinel = (%v, %v), want (%v, error=%v)", found, err, tc.found, tc.wantErr)
+				t.Fatalf("archiveHasRegularFile = (%v, %v), want (%v, error=%v)", found, err, tc.found, tc.wantErr)
 			}
 		})
 	}

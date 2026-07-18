@@ -26,5 +26,6 @@
       "key": "freeside.handoff-owner",
       "value": "00000000000000000000000000000000"
     }
-  ]
+  ],
+  "network_disabled": true
 }

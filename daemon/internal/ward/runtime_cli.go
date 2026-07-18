@@ -192,6 +192,12 @@ func createContainerArgs(spec ContainerSpec) ([]string, error) {
 		}
 		args = append(args, "--env", e)
 	}
+	if spec.NetworkDisabled {
+		// Apple container 1.1.0's public no-network sentinel produces an empty
+		// configuration.networks attachment set. The pre-start inspect verifies
+		// that realized state before any exporter payload executes.
+		args = append(args, "--network", "none")
+	}
 	// Terminate option parsing before the positional image and command: a
 	// dash-prefixed image (e.g. "--mount") or command word would otherwise be
 	// reparsed as a create option, realizing a mount/SSH topology outside the
@@ -289,6 +295,7 @@ type cliConfiguration struct {
 	SSH              *bool              `json:"ssh"`
 	PublishedPorts   *[]json.RawMessage `json:"publishedPorts"`
 	PublishedSockets *[]json.RawMessage `json:"publishedSockets"`
+	Networks         *[]json.RawMessage `json:"networks"`
 }
 
 type cliStatus struct {
@@ -463,7 +470,8 @@ func (c cliContainer) allowlistFieldsPresent() bool {
 		c.Configuration.InitProcess.Environment != nil &&
 		c.Configuration.SSH != nil &&
 		c.Configuration.PublishedPorts != nil &&
-		c.Configuration.PublishedSockets != nil
+		c.Configuration.PublishedSockets != nil &&
+		c.Configuration.Networks != nil
 }
 
 func (c cliContainer) toReport() InspectReport {
@@ -473,6 +481,7 @@ func (c cliContainer) toReport() InspectReport {
 		CreationDate:            c.Configuration.CreationDate,
 		AllowlistFieldsObserved: c.allowlistFieldsPresent(),
 		LabelsObserved:          c.Configuration.Labels != nil,
+		NetworksObserved:        c.Configuration.Networks != nil,
 	}
 	if c.Configuration.Image != nil {
 		rep.ImageReference = c.Configuration.Image.Reference
@@ -510,6 +519,9 @@ func (c cliContainer) toReport() InspectReport {
 		for _, p := range *c.Configuration.PublishedPorts {
 			rep.PublishedPorts = append(rep.PublishedPorts, string(p))
 		}
+	}
+	if c.Configuration.Networks != nil {
+		rep.NetworkAttachmentCount = len(*c.Configuration.Networks)
 	}
 	return rep
 }
