@@ -53,7 +53,9 @@ func (b *Backend) Name() string { return BackendName }
 //   - supports_read_only_remount: the same volume mounts rw in the writer
 //     and ro in the exporter.
 //
-// supports_credential_volume_detach and supports_workspace_snapshot are
+// supports_networkless_export remains undeclared until #78's live conformance
+// probe proves it on the current runtime. supports_credential_volume_detach
+// and supports_workspace_snapshot are
 // refuted on this runtime and are never declared: the spike proved a guest
 // unmount is not a credential-device detach (the refuted same-VM fallback
 // class), and volume snapshotting has no public support.
