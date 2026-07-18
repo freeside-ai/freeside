@@ -94,12 +94,6 @@ const (
 	workspaceStateFile = "nested/state.txt"
 	// probeStopTimeout bounds the wait for a probe's own container to stop.
 	probeStopTimeout = 3 * time.Minute
-	// networklessProofPath is written inside the network-disabled exporter
-	// probe only after both fixed egress attempts have run.
-	networklessProofPath = "/freeside-networkless-proof.txt"
-	// networklessProofContent is exact so a partial or ambiguous observation
-	// cannot promote the capability.
-	networklessProofContent = "dns=blocked\ndirect_connect=blocked\n"
 	// networklessProbeSuffix stays short enough that the longest valid RunID
 	// still fits Apple container's 64-character container-ID limit.
 	networklessProbeSuffix = "net"
@@ -161,13 +155,22 @@ func nonterminatingProbeCommand() []string {
 // binary cannot masquerade as blocked egress. The structural pre-start proof
 // (zero observed attachments) is load-bearing; these attempts are the required
 // behavioral confirmation on the reference runtime.
-func networklessProbeCommand() []string {
+func networklessProofPath(owner string) string {
+	return "/freeside-networkless-proof-" + owner + ".txt"
+}
+
+func networklessProofContent(owner string) string {
+	return "owner=" + owner + "\ndns=blocked\ndirect_connect=blocked\n"
+}
+
+func networklessProbeCommand(owner string) []string {
+	proofPath := networklessProofPath(owner)
 	return []string{
 		"sh", "-c",
 		"set -eu; command -v nslookup >/dev/null; command -v nc >/dev/null; " +
 			"dns=blocked; if nslookup example.com >/dev/null 2>&1; then dns=reachable; fi; " +
 			"direct=blocked; if nc -z -w 3 1.1.1.1 443 >/dev/null 2>&1; then direct=reachable; fi; " +
-			"printf 'dns=%s\\ndirect_connect=%s\\n' \"$dns\" \"$direct\" > " + networklessProofPath + "; sync",
+			"printf 'owner=%s\\ndns=%s\\ndirect_connect=%s\\n' '" + owner + "' \"$dns\" \"$direct\" > " + proofPath + "; sync",
 	}
 }
 
@@ -956,11 +959,12 @@ func probeSpecMatches(rep InspectReport, spec ContainerSpec) bool {
 // absent and gates unattended mode.
 func (s *Suite) probeNetworklessExport(ctx context.Context, run *suiteRun) error {
 	name := s.conformanceName(networklessProbeSuffix)
+	owner := run.ownershipLabel.Value
 	defer run.reapContainer(ctx, name)
 	spec := ContainerSpec{
 		Name:            name,
 		Image:           s.fx.AgentImage,
-		Command:         networklessProbeCommand(),
+		Command:         networklessProbeCommand(owner),
 		NetworkDisabled: true,
 	}
 	var err error
@@ -1009,7 +1013,7 @@ func (s *Suite) probeNetworklessExport(ctx context.Context, run *suiteRun) error
 	if err != nil {
 		return failf(CheckNetworklessExport, "open networkless exporter rootfs archive: %v", err)
 	}
-	found, err := archiveHasRegularFile(archive, networklessProofPath, networklessProofContent)
+	found, err := archiveHasRegularFile(archive, networklessProofPath(owner), networklessProofContent(owner))
 	if err != nil {
 		return failf(CheckNetworklessExport, "validate networkless exporter proof: %v", err)
 	}

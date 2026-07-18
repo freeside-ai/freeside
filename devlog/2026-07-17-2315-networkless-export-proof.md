@@ -45,7 +45,10 @@ pins every current role against the longest valid run ID.
   the capability state and admission result consistent. Automated review found
   that the actual handoff allowlist initially relied on the CLI's aggregate
   field-presence bit; the independent `NetworksObserved` gate and its negative
-  fixture now make the same fail-closed rule binding for every Runtime.
+  fixture now make the same fail-closed rule binding for every Runtime. A later
+  review found the behavioral proof's fixed path could accept a preexisting
+  image file; both its path and exact content now carry the invocation's
+  unpredictable ownership token, and a stale-file fixture is refused.
 - **Accepted by decision:** the DNS name and direct-IP endpoint are behavioral
   witnesses, not availability authorities. Endpoint failure alone is
   insufficient; the explicit empty attachment set is the load-bearing proof.

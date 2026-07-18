@@ -114,7 +114,7 @@ func manifestArchive(t *testing.T, files []manifestFile) []tarEntry {
 // sentinel, the token probeCredentialContainment scans for (proving the
 // detached credential was readable). Used by tests that need the containment
 // audit to pass so a later probe or cleanup path is exercised.
-func passAudit(s *Suite) func(string, io.Writer) error {
+func passAudit(s *Suite, rt *fakeRuntime) func(string, io.Writer) error {
 	return func(id string, dest io.Writer) error {
 		var name, content string
 		switch id {
@@ -122,31 +122,44 @@ func passAudit(s *Suite) func(string, io.Writer) error {
 			name = strings.TrimPrefix(auditMarkerPath(s.fx.RunID), "/")
 			content = auditSentinel(s.fx.RunID) + "\n"
 		case s.conformanceName(networklessProbeSuffix):
-			name = strings.TrimPrefix(networklessProofPath, "/")
-			content = networklessProofContent
+			var owner string
+			for _, label := range rt.ctrs[id].spec.Labels {
+				if label.Key == ownershipLabelKey {
+					owner = label.Value
+				}
+			}
+			if owner == "" {
+				return errors.New("networkless probe has no ownership label")
+			}
+			name = strings.TrimPrefix(networklessProofPath(owner), "/")
+			content = networklessProofContent(owner)
 		}
 		if name != "" {
-			var buf bytes.Buffer
-			tw := tar.NewWriter(&buf)
-			body := []byte(content)
-			if err := tw.WriteHeader(&tar.Header{
-				Name: name,
-				Mode: 0o644,
-				Size: int64(len(body)),
-			}); err != nil {
-				return err
-			}
-			if _, err := tw.Write(body); err != nil {
-				return err
-			}
-			if err := tw.Close(); err != nil {
-				return err
-			}
-			_, err := dest.Write(buf.Bytes())
-			return err
+			return writeProofArchive(dest, name, content)
 		}
 		return nil
 	}
+}
+
+func writeProofArchive(dest io.Writer, name, content string) error {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	body := []byte(content)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: name,
+		Mode: 0o644,
+		Size: int64(len(body)),
+	}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(body); err != nil {
+		return err
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	_, err := dest.Write(buf.Bytes())
+	return err
 }
 
 // scriptHappyProbes makes the fake report the two Full negative probes as
@@ -154,7 +167,7 @@ func passAudit(s *Suite) func(string, io.Writer) error {
 // second attach in the exclusion probe is refused (as the reference runtime's
 // Virtualization.framework does at bootstrap).
 func scriptHappyProbes(s *Suite, rt *fakeRuntime) {
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	rt.onStart = func(id string) error {
 		if id == s.conformanceName("excl-second") {
 			return errors.New("VZErrorDomain Code=2: the storage device attachment is invalid")
@@ -242,6 +255,24 @@ func TestSuiteFullNetworklessProbeFailure(t *testing.T) {
 	wantCheckFailure(t, err, CheckNetworklessExport)
 	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
 		t.Error("failed networkless probe declared supports_networkless_export")
+	}
+	s.assertReaped(t, rt)
+}
+
+func TestSuiteFullNetworklessProbeRejectsStaleProof(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	scriptHappyProbes(s, rt)
+	baseExport := rt.onExport
+	rt.onExport = func(id string, dest io.Writer) error {
+		if id == s.conformanceName(networklessProbeSuffix) {
+			return writeProofArchive(dest, "freeside-networkless-proof.txt", "dns=blocked\ndirect_connect=blocked\n")
+		}
+		return baseExport(id, dest)
+	}
+	err := s.Full(context.Background())
+	wantCheckFailure(t, err, CheckNetworklessExport)
+	if s.b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Error("stale networkless proof declared supports_networkless_export")
 	}
 	s.assertReaped(t, rt)
 }
@@ -360,7 +391,7 @@ func TestSuiteFullExclusionProbeFailure(t *testing.T) {
 	s, rt := newSuiteTest(t)
 	// Marker present for the audit (containment passes) but no refusal scripted
 	// for the second attach, so the exclusion does not hold.
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	err := s.Full(context.Background())
 	wantCheckFailure(t, err, CheckWriterVolumeExclusion)
 	s.assertReaped(t, rt)
@@ -490,7 +521,7 @@ func TestSuiteFullAuditExportOverflowSwallowed(t *testing.T) {
 // probe fails closed rather than trusting a refusal it never exercised.
 func TestSuiteFullExclusionWriterMountUnrealized(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
 		if id == s.conformanceName("excl-writer") {
 			rep.Mounts = nil // runtime dropped the workspace mount
@@ -513,7 +544,7 @@ func TestSuiteFullExclusionWriterMountUnrealized(t *testing.T) {
 // could be a foreign same-name replacement.
 func TestSuiteFullExclusionDoesNotStartUnprovenWriter(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	writer := s.conformanceName("excl-writer")
 	firstWriterInspect := true
 	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
@@ -543,7 +574,7 @@ func TestSuiteFullExclusionDoesNotStartUnprovenWriter(t *testing.T) {
 // not pass on the error string alone.
 func TestSuiteFullExclusionSecondRunsDespiteError(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	rt.onStart = func(id string) error {
 		if id == s.conformanceName("excl-second") {
 			// The second VM actually started (attached the volume) but the
@@ -679,7 +710,7 @@ func TestSuiteFullSentinelBlobOmitted(t *testing.T) {
 // rather than trusting a token read from an unverified mount.
 func TestSuiteFullAuditMountUnrealized(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s) // the audit would otherwise pass
+	rt.onExport = passAudit(s, rt) // the audit would otherwise pass
 	rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
 		if id == s.conformanceName("audit") {
 			rep.Mounts = []Mount{{Type: MountVolume, Source: "impostor-volume", Target: s.fx.CredentialTarget, ReadOnly: true}}
@@ -702,7 +733,7 @@ func TestSuiteFullAuditMountUnrealized(t *testing.T) {
 // the suite's immutable original spec.
 func TestSuiteFullAuditSpecMountMutationDefeated(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	impostor := Mount{Type: MountVolume, Source: "impostor-volume", Target: s.fx.CredentialTarget, ReadOnly: true}
 	rt.onCreateContainer = func(spec ContainerSpec) error {
 		if spec.Name == s.conformanceName("audit") && len(spec.Mounts) > 0 {
@@ -999,7 +1030,7 @@ func TestSuiteFullExclusionUsesReadOnlyExporter(t *testing.T) {
 // running and must fail closed rather than pass on the error string alone.
 func TestSuiteFullExclusionSecondInspectInconclusive(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	rt.onStart = func(id string) error {
 		if id == s.conformanceName("excl-second") {
 			return errors.New("VZErrorDomain Code=2: the storage device attachment is invalid")
@@ -1032,7 +1063,7 @@ func TestSuiteFullExclusionSecondInspectInconclusive(t *testing.T) {
 // must fail closed, even though the second attach was refused and stopped.
 func TestSuiteFullExclusionWriterEvictedAfterRefusal(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	rt.onStart = func(id string) error {
 		if id == s.conformanceName("excl-second") {
 			return errors.New("VZErrorDomain Code=2: the storage device attachment is invalid")
@@ -1069,7 +1100,7 @@ func TestSuiteFullExclusionWriterEvictedAfterRefusal(t *testing.T) {
 // on "not running".
 func TestSuiteFullExclusionSecondNotStoppedAfterError(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	rt.onStart = func(id string) error {
 		if id == s.conformanceName("excl-second") {
 			return errors.New("VZErrorDomain Code=2: the storage device attachment is invalid")
@@ -1321,7 +1352,7 @@ func TestIsAttachmentExclusion(t *testing.T) {
 // rather than pass on an unrelated error.
 func TestSuiteFullExclusionUnrelatedStartFailure(t *testing.T) {
 	s, rt := newSuiteTest(t)
-	rt.onExport = passAudit(s)
+	rt.onExport = passAudit(s, rt)
 	rt.onStart = func(id string) error {
 		if id == s.conformanceName("excl-second") {
 			return errors.New("container start failed: out of memory")
