@@ -31,7 +31,11 @@ struct DecisionDetailView: View {
                 )
             }
         }
-        .task(id: model.itemID) { await model.validate() }
+        // Re-validate on open and whenever the cache is evicted for a new
+        // sync epoch (the id carries the store's cache generation), so a
+        // card left open across a restore recertifies the re-bootstrapped
+        // snapshot instead of sitting on a stale validation (issue #162).
+        .task(id: model.revalidationID) { await model.validate() }
         .navigationTitle(model.snapshot.map { AttentionDisplay.title($0.item._type) } ?? "Decision")
     }
 

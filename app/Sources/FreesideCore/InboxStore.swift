@@ -91,6 +91,14 @@ public final class InboxStore {
     public private(set) var pendingCommandsByItemID:
         [String: PendingCommandEntry] = [:]
     private var serverOrder: [String] = []
+    /// Bumped every time the cache is evicted for a sync-epoch change
+    /// (`discardSnapshots`, driven only by `SyncCoordinator.discardCache`).
+    /// A per-item validation stamps the generation it certified against,
+    /// so a validation from a dead epoch cannot certify the rows a later
+    /// bootstrap repopulates (issue #162; plan §5.14 cache eviction on
+    /// epoch change). A same-epoch gap bootstrap uses `replaceAll` without
+    /// a discard, so it deliberately does not bump.
+    public private(set) var cacheGeneration = 0
     /// Overlapping refreshes resolve by recency: only the newest call
     /// may write the load state and rebuild the order, so a stale late
     /// completion cannot clobber a newer one in either direction.
@@ -145,17 +153,27 @@ public final class InboxStore {
     /// Per-resource version monotonicity: concurrent reads can complete
     /// out of order, and an older snapshot must never downgrade newer
     /// state the cards gate their actions on.
-    public func apply(_ snapshot: Components.Schemas.AttentionItemSnapshot) {
+    ///
+    /// Returns whether `snapshot` is now the rendered row: `false` when a
+    /// cached higher `entity_version` outranked it and the write was
+    /// refused. A certifying caller must not mark a rejected snapshot
+    /// validated — `entity_version` is monotonic only within a sync
+    /// epoch, so across a restore the shadowing higher version is a dead
+    /// pre-restore row, not newer state (issue #162). The snapshot itself
+    /// carries no epoch, so the rejection is the only local signal.
+    @discardableResult
+    public func apply(_ snapshot: Components.Schemas.AttentionItemSnapshot) -> Bool {
         if let existing = snapshotsByID[snapshot.item.id],
             existing.entity_version > snapshot.entity_version
         {
-            return
+            return false
         }
         snapshotsByID[snapshot.item.id] = snapshot
         if !serverOrder.contains(snapshot.item.id) {
             serverOrder.append(snapshot.item.id)
         }
         revisionObserver?(snapshot.as_of_revision)
+        return true
     }
 
     /// Ingests a bootstrap or the persisted cache: the canonical full
@@ -191,6 +209,9 @@ public final class InboxStore {
         snapshotsByID = [:]
         serverOrder = []
         loadState = .idle
+        // A new epoch: every prior per-item validation is now stale, even
+        // for rows a subsequent bootstrap repopulates (issue #162).
+        cacheGeneration += 1
     }
 
     /// Rows in server order, for cache persistence.

@@ -40,10 +40,24 @@ public final class DecisionModel {
     /// may write the outcome, so a stale late failure cannot clobber a
     /// newer success (or vice versa).
     private var validationGeneration = 0
+    /// The store's cache generation at the moment this card last
+    /// certified current state. An epoch eviction bumps that generation
+    /// (`InboxStore.discardSnapshots`), so a validation that predates the
+    /// eviction cannot certify the rows a later bootstrap repopulates —
+    /// `actionsEnabled` fails closed until a fresh validation (#162).
+    private var validatedCacheGeneration = 0
 
     public init(store: InboxStore, itemID: String) {
         self.store = store
         self.itemID = itemID
+    }
+
+    /// Re-keys the view's validation task on the cache generation, so a
+    /// card left open across a sync-epoch eviction re-validates against
+    /// the re-bootstrapped snapshot instead of sitting on a stale
+    /// validation (issue #162).
+    public var revalidationID: String {
+        "\(itemID)#\(store.cacheGeneration)"
     }
 
     public var snapshot: Components.Schemas.AttentionItemSnapshot? {
@@ -81,6 +95,12 @@ public final class DecisionModel {
     /// every new command until it settles.
     public var actionsEnabled: Bool {
         guard validation == .validated, let snapshot else { return false }
+        // A validation certifies one sync epoch's snapshot. If the cache
+        // was evicted for a new epoch since (its generation advanced),
+        // the rendered row was repopulated by a bootstrap this card never
+        // validated, so it must not enable actions until it revalidates
+        // (plan §5.14 cache eviction on epoch change; issue #162).
+        guard store.cacheGeneration == validatedCacheGeneration else { return false }
         guard snapshot.item.status == .open else { return false }
         guard pendingCommand == nil else { return false }
         // A definitive negative sync signal overrides a point-in-time
@@ -98,6 +118,29 @@ public final class DecisionModel {
         }
     }
 
+    /// Certifies current state as validated and stamps the cache
+    /// generation it certified against, so a later epoch eviction (which
+    /// bumps that generation) invalidates it even after a bootstrap
+    /// repopulates the row (issue #162). Every certify site routes
+    /// through here so none can leave the stamp behind.
+    private func markValidated() {
+        validation = .validated
+        validatedCacheGeneration = store.cacheGeneration
+    }
+
+    /// The shared message when a certify site cannot render current
+    /// state: a cached higher `entity_version` from a dead pre-restore
+    /// epoch shadows the reset authoritative snapshot (issue #162). The
+    /// heartbeat's epoch eviction and the card's revalidation clear it.
+    private static let shadowedByStaleCache =
+        "current state is behind a cached snapshot; awaiting resync"
+
+    /// The message when a daemon restore lands mid-submit: a committed
+    /// result may have been rolled back, so it is settled as ambiguous
+    /// (retry preserved) rather than shown as applied (issue #162).
+    private static let restoredBeforeConfirmed =
+        "the daemon restored before this result was confirmed"
+
     /// Refetches the item's canonical state and swaps it into the store,
     /// so the card can never expose an action against a state it hasn't
     /// seen (plan §5.14 sync test 9: no stale action on a resolved item).
@@ -106,22 +149,40 @@ public final class DecisionModel {
         let generation = validationGeneration
         validation = .pending
         do {
-            let output = try await store.client.getAttentionItem(
-                path: .init(item_id: itemID))
-            let current = try output.ok.body.json
-            // Canonical data always applies (the store is version-
-            // monotonic); the outcome writes below belong to the newest
-            // call only.
-            store.apply(current)
-            guard generation == validationGeneration else { return }
-            validation = .validated
-            // Phase converges with canonical state: applied sticks only
-            // while the item is closed. A record-only decision whose
-            // post-commit refetch failed earlier must not strand a
-            // still-open item once a later revalidation succeeds.
-            if phase == .applied, snapshot?.item.status == .open {
-                phase = .idle
+            // Certify only a snapshot that is actually current. Two
+            // hazards, both closed by a bounded re-fetch (#162):
+            //   - apply refuses a snapshot a cached higher entity_version
+            //     outranks. Within an epoch the daemon is monotonic, so
+            //     that is an out-of-order read the daemon's next response
+            //     supersedes; a restore's reset instead stays below the
+            //     dead pre-restore row and never certifies.
+            //   - an epoch eviction can land during the fetch's await (all
+            //     @MainActor, so heartbeat() runs while this is suspended).
+            //     The response is then from a possibly dead epoch, so the
+            //     generation captured before the fetch no longer matches;
+            //     drop it and re-fetch against the current epoch rather
+            //     than applying or certifying it.
+            for _ in 0..<2 {
+                let generationBefore = store.cacheGeneration
+                let current = try await store.client.getAttentionItem(
+                    path: .init(item_id: itemID)).ok.body.json
+                guard generation == validationGeneration else { return }
+                guard store.cacheGeneration == generationBefore else { continue }
+                if store.apply(current) {
+                    markValidated()
+                    // Phase converges with canonical state: applied sticks
+                    // only while the item is closed. A record-only decision
+                    // whose post-commit refetch failed earlier must not
+                    // strand a still-open item once a later revalidation
+                    // succeeds.
+                    if phase == .applied, snapshot?.item.status == .open {
+                        phase = .idle
+                    }
+                    return
+                }
+                // Refused within the epoch: the loop re-fetches to converge.
             }
+            validation = .failed(Self.shadowedByStaleCache)
         } catch {
             guard generation == validationGeneration else { return }
             validation = .failed(String(describing: error))
@@ -156,39 +217,95 @@ public final class DecisionModel {
         // stale one would also mask the lost-response retry affordance.
         appliedRecord = nil
         phase = .submitting(action)
+        // If an epoch eviction lands while the command is in flight, the
+        // conflict replacement below is from a possibly dead epoch; the
+        // generation captured here gates certifying it (#162).
+        let generationBefore = store.cacheGeneration
         do {
             let output = try await store.client.submitCommand(body: .json(command))
             switch output {
             case .ok(let ok):
+                guard store.cacheGeneration == generationBefore else {
+                    // Eviction during submitCommand: the 200 itself is from
+                    // a possibly rolled-back pre-restore epoch. Keep the
+                    // ledger slot (its retry affordance is what
+                    // discardSnapshots preserves) and settle as ambiguous
+                    // instead of clearing it as applied (#162).
+                    await settleAmbiguousOutcome(
+                        command, message: Self.restoredBeforeConfirmed)
+                    return
+                }
                 let result = try ok.body.json
-                appliedRecord = result.record
-                store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
-                // The result carries only the record and revision, and not
-                // every action resolves its item (plan §4: open_pr is
-                // navigation, acknowledge means seen, never resolved), so
-                // read-your-write is a canonical refetch, never a local
-                // resolve. An item the daemon left open stays decidable.
+                // Read-your-write BEFORE settling. Not every action resolves
+                // its item (plan §4: open_pr is navigation, acknowledge
+                // means seen, never resolved), so read-your-write is a
+                // canonical refetch, never a local resolve — and settling
+                // (record + slot release) only after it confirms the
+                // generation means a restore that lands during the refetch
+                // is handled as ambiguous, never shown as a false "applied"
+                // with the retry slot already dropped (#162).
+                let generationBeforeRefetch = store.cacheGeneration
+                let refetched: Components.Schemas.AttentionItemSnapshot
                 do {
-                    let refetched = try await store.client.getAttentionItem(
+                    refetched = try await store.client.getAttentionItem(
                         path: .init(item_id: itemID)
                     ).ok.body.json
-                    store.apply(refetched)
-                    phase = refetched.item.status == .open ? .idle : .applied
                 } catch {
+                    guard store.cacheGeneration == generationBeforeRefetch else {
+                        // Evicted during a failed refetch: the commit may be
+                        // rolled back, so keep the slot and settle ambiguous.
+                        await settleAmbiguousOutcome(
+                            command, message: Self.restoredBeforeConfirmed)
+                        return
+                    }
                     // The command committed but current state is unknown;
-                    // fail closed until a revalidation succeeds.
+                    // settle the record and fail closed until revalidation.
+                    appliedRecord = result.record
+                    store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
                     phase = .applied
                     validation = .failed(String(describing: error))
+                    return
                 }
+                guard store.cacheGeneration == generationBeforeRefetch else {
+                    // Evicted during the refetch: the committed result may
+                    // be rolled back by the restore, so keep the slot and
+                    // settle ambiguous rather than clearing it and showing a
+                    // false applied (#162).
+                    await settleAmbiguousOutcome(
+                        command, message: Self.restoredBeforeConfirmed)
+                    return
+                }
+                appliedRecord = result.record
+                store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
+                guard store.apply(refetched) else {
+                    // A higher rendered version refuses the refetch within
+                    // the epoch; revalidate to converge on it (#162).
+                    phase = .applied
+                    await validate()
+                    return
+                }
+                phase = refetched.item.status == .open ? .idle : .applied
             case .conflict(let conflict):
                 // Staleness and closure share this shape (the recorded #65
                 // decision): the replacement is the canonical state, and
                 // its status gates whether deciding again is possible.
                 let rejection = try conflict.body.json
-                store.apply(rejection.replacement_item)
+                // The 409 proves this command never committed, so release
+                // the slot regardless of whether the replacement rendered.
                 store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
+                guard store.cacheGeneration == generationBefore,
+                    store.apply(rejection.replacement_item)
+                else {
+                    // Either an epoch eviction landed mid-submit (the
+                    // replacement may be dead-epoch) or a higher rendered
+                    // version refuses it (#162). Revalidate against the
+                    // current epoch rather than certifying it.
+                    phase = .idle
+                    await validate()
+                    return
+                }
                 phase = .superseded
-                validation = .validated
+                markValidated()
             case .undocumented(let statusCode, _):
                 if statusCode == 401 {
                     // The credential gate rejected this first request
@@ -238,15 +355,23 @@ public final class DecisionModel {
         phase = .idle
         submissionError = message
         await validate()
-        switch await replayLostResponse(command) {
+        let generationBefore = store.cacheGeneration
+        switch await replayLostResponse(command, since: generationBefore) {
         case .recovered, .rejected:
             // Settled: converge the snapshot and phase on canonical state.
             await validate()
-        case .conflicted:
+        case .conflicted(let applied):
+            guard applied else {
+                // A higher rendered version refused the replacement (#162):
+                // revalidate to converge on the newer read (same epoch) or
+                // fail closed (restore), rather than certifying it.
+                await validate()
+                break
+            }
             // Settled by a 409: the applied replacement is canonical and
             // presents exactly as a live conflict would.
             phase = .superseded
-            validation = .validated
+            markValidated()
             submissionError = nil
         case .lost, .displaced:
             break
@@ -280,15 +405,24 @@ public final class DecisionModel {
         // a concurrent retry while it runs.
         store.setPendingCommandState(
             itemID: itemID, commandID: pending.command_id, state: .inFlight)
-        switch await replayLostResponse(pending) {
+        let generationBefore = store.cacheGeneration
+        switch await replayLostResponse(pending, since: generationBefore) {
         case .recovered:
             // The stale or unknown snapshot converges on canonical state;
             // validate() also converges the phase, so a recovered
             // record-only action leaves the item open and decidable.
             await validate()
-        case .conflicted:
+        case .conflicted(let applied):
+            guard applied else {
+                // A higher rendered version refused the replacement (#162):
+                // revalidate to converge on the newer read (same epoch) or
+                // fail closed (restore), rather than certifying it.
+                phase = .idle
+                await validate()
+                break
+            }
             phase = .superseded
-            validation = .validated
+            markValidated()
         case .rejected:
             phase = .idle
             submissionError = "the decision was not recorded"
@@ -314,7 +448,9 @@ public final class DecisionModel {
         /// The resend hit a 409: the command never committed and the item
         /// advanced elsewhere; the applied replacement is canonical and
         /// deserves the same superseded presentation as a live conflict.
-        case conflicted
+        /// `applied` is false when a dead pre-restore row shadowed the
+        /// replacement, so the caller must not certify it (#162).
+        case conflicted(applied: Bool)
         /// The daemon answered authoritatively without a recorded result:
         /// the original command never committed, so nothing is recoverable.
         case rejected
@@ -328,7 +464,7 @@ public final class DecisionModel {
 
     @discardableResult
     private func replayLostResponse(
-        _ command: Components.Schemas.ClientCommand
+        _ command: Components.Schemas.ClientCommand, since generationBefore: Int
     ) async -> ReplayOutcome {
         do {
             let output = try await store.client.submitCommand(body: .json(command))
@@ -340,6 +476,13 @@ public final class DecisionModel {
             switch output {
             case .ok(let ok):
                 guard ownsSlot else { return .displaced }
+                guard store.cacheGeneration == generationBefore else {
+                    // The 200 resumed after an epoch eviction: a pre-restore
+                    // commit is ambiguous post-restore, so keep the slot
+                    // unresolved (retry stays offered) rather than clearing
+                    // it as recovered (#162).
+                    return .lost
+                }
                 let result = try ok.body.json
                 appliedRecord = result.record
                 submissionError = nil
@@ -351,12 +494,17 @@ public final class DecisionModel {
                 // check, so an authoritative non-replay answer proves
                 // the command never committed; the replacement it
                 // carries is canonical state either way.
+                var isCurrent = true
                 if let rejection = try? conflict.body.json {
-                    store.apply(rejection.replacement_item)
+                    // An epoch eviction during the replay makes the
+                    // replacement possibly dead-epoch: drop it rather than
+                    // apply it, so the caller revalidates (#162).
+                    isCurrent = store.cacheGeneration == generationBefore
+                        && store.apply(rejection.replacement_item)
                 }
                 guard ownsSlot else { return .displaced }
                 store.clearPendingCommand(itemID: itemID, commandID: command.command_id)
-                return .conflicted
+                return .conflicted(applied: isCurrent)
             case .undocumented(let statusCode, _):
                 if statusCode == 401 {
                     // The resend died at the credential gate, which
