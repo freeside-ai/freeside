@@ -459,6 +459,203 @@ private func makeCoordinator(
         #expect(replacement.item.status == .resolved)
         #expect(replacement == deviceA.store.snapshotsByID["item-spec_approval"])
     }
+
+    @Test func anEpochEvictionInvalidatesAPriorValidation() async {
+        // A card validated before a daemon restore must not stay enabled
+        // once the heartbeat evicts the dead epoch and re-bootstraps the
+        // rows: the pre-restore validation certified an epoch this card
+        // never revalidated, so actions fail closed until it does (#162;
+        // plan §5.14 cache eviction on epoch change).
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let model = DecisionModel(store: coordinator.store, itemID: "item-spec_approval")
+        await model.validate()
+        #expect(model.actionsEnabled)
+
+        // The daemon restores under a new epoch; the heartbeat discards
+        // the cache and re-bootstraps the same open item.
+        await server.rotateEpoch(revision: 1)
+        await coordinator.heartbeat()
+
+        #expect(coordinator.store.cacheGeneration > 0)
+        #expect(model.snapshot?.item.status == .open)  // the row is back...
+        #expect(!model.actionsEnabled)                 // ...but not certified
+
+        // A fresh validation against the new epoch re-enables actions.
+        await model.validate()
+        #expect(model.actionsEnabled)
+    }
+
+    @Test func aValidationEvictedMidFetchRefetchesInsteadOfCertifying() async {
+        // Everything is @MainActor, so a heartbeat eviction can land while
+        // validate()'s getAttentionItem is suspended at its await. The
+        // response is then from a possibly dead epoch, so validate must
+        // drop it and re-fetch against the current epoch rather than
+        // applying and certifying it under the new generation (#162).
+        //
+        // The in-process mock computes each response at delivery time, so
+        // it cannot hand back a genuinely stale-epoch body; what is
+        // asserted here is that the eviction is detected and forces the
+        // re-fetch (a second getAttentionItem), which is the mechanism that
+        // protects against the stale-epoch response a real daemon can send.
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let model = DecisionModel(store: coordinator.store, itemID: "item-spec_approval")
+
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        let firstGet = OneShot()
+        let getCalls = Counter()
+        await server.setBeforeRespond { operationID in
+            if operationID == "getAttentionItem" {
+                await getCalls.increment()
+                if await firstGet.fire() {
+                    await reached.open()
+                    await release.wait()
+                }
+            }
+        }
+        let validation = Task { await model.validate() }
+        await reached.wait()
+
+        // Evict the cache for a new epoch while the fetch is in flight.
+        coordinator.store.discardSnapshots()
+
+        await release.open()
+        await validation.value
+
+        // The guard fired: a second fetch happened rather than certifying
+        // the in-flight response, and the model certified current state.
+        #expect(await getCalls.count == 2)
+        #expect(model.validation == .validated)
+    }
+
+    @Test func aPostCommitRefetchEvictedMidFetchRefetchesInsteadOfCertifying() async {
+        // The read-your-write refetch after a successful submit is another
+        // @MainActor await an eviction can land inside; like validate() it
+        // must not apply/certify a response that resumed under a changed
+        // cache generation (#162). Same mock caveat as the validate case:
+        // the assertion is that the eviction forces a re-validate rather
+        // than certifying the in-flight refetch.
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let model = DecisionModel(store: coordinator.store, itemID: "item-spec_approval")
+        await model.validate()  // getAttentionItem #1
+        #expect(model.actionsEnabled)
+
+        // Installed after the initial validate(), so the first fetch this
+        // hook sees is the post-commit read-your-write refetch; hold it.
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        let getCalls = Counter()
+        await server.setBeforeRespond { operationID in
+            if operationID == "getAttentionItem" {
+                if await getCalls.incrementAndGet() == 1 {
+                    await reached.open()
+                    await release.wait()
+                }
+            }
+        }
+        let submission = Task { await model.submit(.approve) }
+        await reached.wait()
+
+        // Evict the cache for a new epoch while the refetch is in flight.
+        coordinator.store.discardSnapshots()
+
+        await release.open()
+        await submission.value
+
+        // The guard fired: the .ok path recovered against the current
+        // epoch (at least one further getAttentionItem) instead of
+        // certifying the single in-flight refetch. (The exact count depends
+        // on the recovery path — settleAmbiguousOutcome re-validates and
+        // replays — so this pins the property, not a brittle count.)
+        #expect(await getCalls.count >= 2)
+    }
+
+    @Test func aSuccessResultEvictedMidFlightIsTreatedAsAmbiguousNotCleared() async {
+        // A 200 that resumes after a mid-flight eviction is from a possibly
+        // rolled-back pre-restore epoch. Clearing the ledger then would drop
+        // the retry state discardSnapshots() preserves, so the .ok arm must
+        // treat it as ambiguous (keep the slot, replay) rather than applied
+        // (#162). Observable via the replay: a second submitCommand runs.
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let model = DecisionModel(store: coordinator.store, itemID: "item-spec_approval")
+        await model.validate()
+        #expect(model.actionsEnabled)
+
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        let firstSubmit = OneShot()
+        let submitCalls = Counter()
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" {
+                await submitCalls.increment()
+                if await firstSubmit.fire() {
+                    await reached.open()
+                    await release.wait()
+                }
+            }
+        }
+        let submission = Task { await model.submit(.approve) }
+        await reached.wait()
+
+        // Evict the cache for a new epoch while the command is in flight.
+        coordinator.store.discardSnapshots()
+
+        await release.open()
+        await submission.value
+
+        // Treated as ambiguous (settleAmbiguousOutcome replays), not cleared
+        // as applied: a second submitCommand ran.
+        #expect(await submitCalls.count == 2)
+    }
+
+    @Test func aRefetchEvictedMidFlightIsSettledAmbiguousNotFalselyApplied() async {
+        // The 200 was valid (no eviction during submitCommand), but a
+        // restore lands during the read-your-write refetch. Because the
+        // record and slot are settled only after the refetch confirms the
+        // generation, this is handled as ambiguous (keep the slot, replay)
+        // rather than left showing a false "applied" with the retry slot
+        // dropped (#162). Observable via the replay: a second submitCommand.
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let model = DecisionModel(store: coordinator.store, itemID: "item-spec_approval")
+        await model.validate()
+        #expect(model.actionsEnabled)
+
+        // Installed after the initial validate(), so the first fetch this
+        // hook sees is the post-commit refetch; hold it.
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        let getCalls = Counter()
+        let submitCalls = Counter()
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" { await submitCalls.increment() }
+            if operationID == "getAttentionItem", await getCalls.incrementAndGet() == 1 {
+                await reached.open()
+                await release.wait()
+            }
+        }
+        let submission = Task { await model.submit(.approve) }
+        await reached.wait()
+
+        // Restore during the read-your-write refetch.
+        coordinator.store.discardSnapshots()
+
+        await release.open()
+        await submission.value
+
+        // Settled ambiguous (a replay ran), not the refetch-eviction branch
+        // just revalidating and leaving the optimistic record in place.
+        #expect(await submitCalls.count == 2)
+    }
 }
 
 private struct MockOutage: Error {}

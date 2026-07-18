@@ -105,6 +105,16 @@ struct StatusOverrideTransport: ClientTransport {
     }
 }
 
+/// Counts how many times an operation ran, for asserting re-fetches.
+actor Counter {
+    private(set) var count = 0
+    func increment() { count += 1 }
+    func incrementAndGet() -> Int {
+        count += 1
+        return count
+    }
+}
+
 /// True exactly once.
 actor OneShot {
     private var fired = false

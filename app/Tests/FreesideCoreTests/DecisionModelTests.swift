@@ -733,4 +733,112 @@ import Testing
         #expect(late.snapshot?.item.status == .resolved)
         #expect(!late.actionsEnabled)
     }
+
+    // MARK: - Acceptance 5: validation is epoch-scoped (#162)
+
+    @Test func validationRefusesASnapshotAStaleCacheShadows() async {
+        // A daemon restore resets the authoritative entity_version below a
+        // dead pre-restore cache entry (revisions and versions never
+        // compare across epochs). validate() fetches the reset snapshot,
+        // apply refuses it because the higher cached version shadows it,
+        // and the card must not certify — or enable an action against —
+        // a snapshot it never rendered (#162; plan §5.14).
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-spec_approval")
+
+        guard var stale = store.snapshotsByID["item-spec_approval"] else {
+            Issue.record("missing seeded snapshot")
+            return
+        }
+        stale.entity_version = 50
+        #expect(store.apply(stale))
+        #expect(store.snapshotsByID["item-spec_approval"]?.entity_version == 50)
+
+        // The mock daemon is authoritative at entity_version 1 (fixture
+        // default): validate races ahead of any heartbeat eviction.
+        await model.validate()
+
+        // apply still refuses the reset, so the stale row stays rendered —
+        // but it is not certified, and no action is offered.
+        #expect(store.snapshotsByID["item-spec_approval"]?.entity_version == 50)
+        #expect(model.validation != .validated)
+        #expect(!model.actionsEnabled)
+    }
+
+    @Test func retryAfterRestoreDoesNotCertifyAShadowedReplacement() async {
+        // The pending-command ledger survives an epoch eviction, so a
+        // preserved retry can fire before any heartbeat. Post-restore the
+        // resend draws a 409 whose replacement is the reset low version;
+        // apply refuses it under the dead pre-restore cache entry, and the
+        // retry must fail closed rather than certify the shadowed
+        // replacement as superseded (#162).
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-spec_approval")
+
+        // A dead pre-restore snapshot at entity_version 50.
+        guard var stale = store.snapshotsByID["item-spec_approval"] else {
+            Issue.record("missing seeded snapshot")
+            return
+        }
+        stale.entity_version = 50
+        store.apply(stale)
+
+        // A preserved unresolved command whose expected version (50) no
+        // longer matches the restored daemon's current (1) → 409.
+        var command = makeCommand(itemID: "item-spec_approval", commandID: "cmd-restore")
+        command.expected_entity_version = 50
+        store.restorePendingCommands([
+            "item-spec_approval": .init(command: command, state: .unresolved)
+        ])
+        #expect(model.canRetryLostResponse)
+
+        await model.retryLostResponse()
+
+        // Failed closed: not certified, no action, stale row still shown,
+        // and the 409 released the slot (the command never committed).
+        #expect(model.validation != .validated)
+        #expect(!model.actionsEnabled)
+        #expect(store.snapshotsByID["item-spec_approval"]?.entity_version == 50)
+        #expect(store.pendingCommandsByItemID["item-spec_approval"] == nil)
+        #expect(model.phase == .idle)
+    }
+
+    @Test func aSameEpochOutOfOrderReadRevalidatesInsteadOfFailing() async {
+        // Within an epoch the daemon is monotonic, so a validate() fetch
+        // apply refuses is a stale out-of-order read, not a restore: the
+        // daemon's next response supersedes it. validate re-fetches and
+        // certifies the current version rather than failing closed the way
+        // a genuine restore does (#162).
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-spec_approval")
+
+        // A newer canonical read (entity_version 2) is already rendered
+        // while the daemon's first validate response is still version 1.
+        guard var ahead = store.snapshotsByID["item-spec_approval"] else {
+            Issue.record("missing seeded snapshot")
+            return
+        }
+        ahead.entity_version = 2
+        store.apply(ahead)
+
+        // The daemon catches up only on the re-fetch: the first
+        // getAttentionItem answers the stale version, the second the
+        // current one.
+        let firstFetch = OneShot()
+        await server.setBeforeRespond { operationID in
+            if operationID == "getAttentionItem", !(await firstFetch.fire()) {
+                await server.advance(itemID: "item-spec_approval")
+                await server.advance(itemID: "item-spec_approval")
+            }
+        }
+
+        await model.validate()
+
+        #expect(model.validation == .validated)
+        #expect(model.actionsEnabled)
+        #expect(model.snapshot?.entity_version == 3)
+    }
 }
