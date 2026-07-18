@@ -411,3 +411,47 @@ func TestVerifyRejectsSymlinkPrefixEntrypoint(t *testing.T) {
 		t.Errorf("commands ran despite the symlinked prefix: %v", room.runs)
 	}
 }
+
+// TestVerifyOperandWithSymlinkPrefixNotEntrypoint is #149 acceptance 1:
+// a multi-word argv operand that merely contains a slash
+// (`xcodebuild -destination "generic/platform=iOS Simulator"`) is not a
+// repo path, so even when the repo carries a top-level `generic`
+// symlink whose name the operand's first segment shares, verification
+// does not trip the symlink-entrypoint guard and does not flag the
+// operand as a verification-control surface. The whitespace in the
+// operand is what distinguishes it from a real entrypoint like
+// `run-check/verify.sh` (TestVerifyRejectsSymlinkPrefixEntrypoint),
+// which stays guarded.
+func TestVerifyOperandWithSymlinkPrefixNotEntrypoint(t *testing.T) {
+	dir, _ := initRepo(t, map[string]string{"scripts/verify.sh": "#!/bin/sh\ntrue\n"})
+	if err := os.Symlink("scripts", filepath.Join(dir, "generic")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-q", "-m", "base+generic-symlink")
+	base := runGit(t, dir, "rev-parse", "HEAD")
+	head := commitCandidate(t, dir, base, map[string]string{"main.go": "package main\n"})
+	room := &recordingRoom{}
+	operand := "generic/platform=iOS Simulator"
+	opts := Options{
+		HeadSHA: head, BaseSHA: base,
+		InvocationID: domain.InvocationID("inv-1"),
+		RecipeSource: ConfigRecipe([]byte(`{"commands": [["xcodebuild", "-destination", "generic/platform=iOS Simulator"]], "capture": "none"}`)),
+		Room:         room,
+		// A candidate change at the operand path proves the operand is
+		// not treated as a verification-control entrypoint.
+		Changes: []importer.Change{changed(operand)},
+	}
+	res, err := Verify(context.Background(), dir, opts)
+	if err != nil {
+		t.Fatalf("Verify: %v (want no error; the operand is not a symlink entrypoint)", err)
+	}
+	if len(room.runs) != 1 {
+		t.Errorf("command did not run: runs = %v", room.runs)
+	}
+	for _, f := range res.Findings {
+		if f.Kind == FindingVerificationControlPath && f.Path == operand {
+			t.Errorf("operand %q flagged as verification-control path: %+v", operand, f)
+		}
+	}
+}
