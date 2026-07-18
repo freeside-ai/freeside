@@ -23,7 +23,11 @@
 // read-write-attach exclusion (a second VM cannot attach the workspace a live
 // writer holds read-write) and credential-marker containment (the marker is
 // absent from the export yet still readable from the detached credential
-// volume, so its absence was mount omission, not deletion). The third probe
+// volume, so its absence was mount omission, not deletion). A separate
+// networkless-export probe verifies an explicit empty runtime attachment set
+// before start, then deliberately attempts DNS and a direct-IP connection;
+// only a complete green Full pass adds supports_networkless_export to the
+// backend declaration. The third handoff-spike probe
 // (same-VM guest unmount is not a detach) needs a CAP_SYS_ADMIN guest
 // process, which the gate's ContainerSpec vocabulary deliberately cannot
 // express — that minimality is checks 1-2's isolation argument — so it is a
@@ -37,7 +41,8 @@
 // which never auto-promotes or offers a bypass).
 //
 // Suite.PreJob is the lightweight probe run before each unattended job. It
-// verifies only cheap preconditions — the capability declaration is intact,
+// verifies only cheap preconditions — including the Full-earned networkless
+// capability declaration —
 // the images are digest-pinned, the runtime is reachable, and a
 // create→inspect→delete liveness round-trips — and boots no VM, copies no
 // workspace, and exports nothing. It deliberately does NOT re-verify the
@@ -91,8 +96,8 @@
 //   - handoff.go       the gate lifecycle: checks 3-5 sequencing and teardown
 //   - export_verify.go check 7: safe archive extraction, manifest and digest
 //     verification, and the fail-closed output-scanner hook
-//   - suite.go         the invocable conformance suite: Full (checks 1-5, 7
-//     plus two negative probes) and the lightweight PreJob probe
+//   - suite.go         the invocable conformance suite: Full (checks 1-5, 7,
+//     two handoff negative probes, and networkless export) plus PreJob
 //
 // The full-lifecycle integration test and the conformance suite's
 // reference-runtime members (Suite.Full/PreJob end to end, and the

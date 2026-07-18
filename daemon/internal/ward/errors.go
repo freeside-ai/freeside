@@ -70,11 +70,15 @@ const (
 	// hold. It deliberately does not re-verify the realized isolation
 	// properties the full suite proves (see doc.go).
 	CheckPreJobProbe Check = "pre_job_probe"
+	// CheckNetworklessExport proves the exporter VM has an explicitly observed
+	// empty network-attachment set and that deliberate DNS and direct-IP
+	// connection attempts both fail on the reference runtime.
+	CheckNetworklessExport Check = "networkless_export"
 )
 
 // AllChecks lists every valid Check and is the enum's single registration
 // point. The first seven values retain the spike contract's semantic grouping;
-// the final four are suite-level probes, but that distinction does not split
+// the final five are suite-level probes, but that distinction does not split
 // the all-valid registry callers use for exhaustiveness.
 var AllChecks = []Check{
 	CheckCredentialSeparation,
@@ -88,6 +92,7 @@ var AllChecks = []Check{
 	CheckCredentialContainment,
 	CheckSameVMRefutation,
 	CheckPreJobProbe,
+	CheckNetworklessExport,
 }
 
 func (c Check) valid() bool {
@@ -96,7 +101,7 @@ func (c Check) valid() bool {
 		CheckWriterTermination, CheckExporterAllowlist,
 		CheckInExporterVerification, CheckExportVerification, CheckTeardown,
 		CheckWriterVolumeExclusion, CheckCredentialContainment,
-		CheckSameVMRefutation, CheckPreJobProbe:
+		CheckSameVMRefutation, CheckPreJobProbe, CheckNetworklessExport:
 		return true
 	default:
 		return false

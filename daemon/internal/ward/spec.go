@@ -175,9 +175,10 @@ func buildAgentSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLab
 // at the configured target, no environment, and nothing else.
 func buildExporterSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label) ContainerSpec {
 	return ContainerSpec{
-		Name:    names.Exporter,
-		Image:   cfg.ExporterImage,
-		Command: cfg.ExporterCommand,
+		Name:            names.Exporter,
+		Image:           cfg.ExporterImage,
+		Command:         cfg.ExporterCommand,
+		NetworkDisabled: true,
 		Mounts: []Mount{{
 			Type:     MountVolume,
 			Source:   names.Workspace,

@@ -17,7 +17,7 @@ var declaredCapabilities = []exec.Capability{
 }
 
 // conformancePendingCapabilities are valid vocabulary members this backend
-// does not declare until their runtime proof lands.
+// declares only after their live probe passes.
 var conformancePendingCapabilities = []exec.Capability{exec.CapNetworklessExport}
 
 // refusedCapabilities must never be declared: both are refuted on the
@@ -61,6 +61,20 @@ func TestCapabilitySnapshot(t *testing.T) {
 		if declared != wantDeclared {
 			t.Errorf("capability %q declared = %v, want %v", c, declared, wantDeclared)
 		}
+	}
+}
+
+func TestNetworklessCapabilityRequiresConformance(t *testing.T) {
+	b := newTestBackend(t)
+	if b.Capabilities().Has(exec.CapNetworklessExport) {
+		t.Fatal("new backend declared supports_networkless_export before conformance")
+	}
+	if _, err := exec.CheckCapabilities(b, conformancePendingCapabilities); !errors.Is(err, exec.ErrCapabilityRefused) {
+		t.Fatalf("unproven networkless capability = %v, want ErrCapabilityRefused", err)
+	}
+	b.networkless.Store(true)
+	if _, err := exec.CheckCapabilities(b, append(declaredCapabilities, conformancePendingCapabilities...)); err != nil {
+		t.Fatalf("proven networkless capability = %v, want admission", err)
 	}
 }
 

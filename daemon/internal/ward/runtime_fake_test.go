@@ -354,6 +354,10 @@ func (f *fakeRuntime) Inspect(ctx context.Context, id string) (InspectReport, er
 		Env:                     append([]string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}, c.spec.Env...),
 		Labels:                  append([]Label(nil), c.spec.Labels...),
 		LabelsObserved:          true,
+		NetworksObserved:        true,
+	}
+	if !c.spec.NetworkDisabled {
+		rep.NetworkAttachmentCount = 1
 	}
 	// Apple container 1.1.0 reports the full pinned reference (name@digest);
 	// the tag, if any, is dropped and the descriptor's resolved digest is a

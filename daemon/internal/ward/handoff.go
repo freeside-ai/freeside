@@ -26,6 +26,16 @@ var requiredCapabilities = []exec.Capability{
 	exec.CapReadOnlyRemount,
 }
 
+// unattendedCapabilities is the policy floor PreJob protects. The handoff
+// itself remains usable in attended_dev before the expensive full suite runs,
+// but unattended admission must also carry the networkless-export proof.
+var unattendedCapabilities = []exec.Capability{
+	exec.CapDetachableWorkspace,
+	exec.CapPostExitExport,
+	exec.CapReadOnlyRemount,
+	exec.CapNetworklessExport,
+}
+
 // HandoffResult is a completed, gate-passed handoff.
 type HandoffResult struct {
 	// Admission is the spawn-time capability snapshot the run was admitted

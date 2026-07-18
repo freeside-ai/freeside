@@ -62,15 +62,7 @@
      }
     }
    ],
-   "networks": [
-    {
-     "network": "default",
-     "options": {
-      "hostname": "freeside-handoff-run-1-exporter",
-      "mtu": 1280
-     }
-    }
-   ],
+   "networks": [],
    "platform": {
     "architecture": "arm64",
     "os": "linux"
