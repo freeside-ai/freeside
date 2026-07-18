@@ -68,6 +68,42 @@ func TestEnumValidity(t *testing.T) {
 		valids["ProvenanceSource"] = append(valids["ProvenanceSource"], v.valid)
 	}
 	invalids["ProvenanceSource"] = ProvenanceSource("").valid
+	for _, v := range AllPRExecutionModes {
+		valids["PRExecutionMode"] = append(valids["PRExecutionMode"], v.valid)
+	}
+	invalids["PRExecutionMode"] = PRExecutionMode("").valid
+	for _, v := range AllAutomationChangePolicies {
+		valids["AutomationChangePolicy"] = append(valids["AutomationChangePolicy"], v.valid)
+	}
+	invalids["AutomationChangePolicy"] = AutomationChangePolicy("").valid
+	for _, v := range AllTokenPermissionsModes {
+		valids["TokenPermissionsMode"] = append(valids["TokenPermissionsMode"], v.valid)
+	}
+	invalids["TokenPermissionsMode"] = TokenPermissionsMode("").valid
+	for _, v := range AllReviewModes {
+		valids["ReviewMode"] = append(valids["ReviewMode"], v.valid)
+	}
+	invalids["ReviewMode"] = ReviewMode("").valid
+	for _, v := range AllCandidateFindingClasses {
+		valids["CandidateFindingClass"] = append(valids["CandidateFindingClass"], v.valid)
+	}
+	invalids["CandidateFindingClass"] = CandidateFindingClass("").valid
+	for _, v := range AllControlPlaneCategories {
+		valids["ControlPlaneCategory"] = append(valids["ControlPlaneCategory"], v.valid)
+	}
+	invalids["ControlPlaneCategory"] = ControlPlaneCategory("").valid
+	for _, v := range AllFindingDispositions {
+		valids["FindingDisposition"] = append(valids["FindingDisposition"], v.valid)
+	}
+	invalids["FindingDisposition"] = FindingDisposition("").valid
+	for _, v := range AllCandidateFindingOrigins {
+		valids["CandidateFindingOrigin"] = append(valids["CandidateFindingOrigin"], v.valid)
+	}
+	invalids["CandidateFindingOrigin"] = CandidateFindingOrigin("").valid
+	for _, v := range AllVerificationOutcomes {
+		valids["VerificationOutcome"] = append(valids["VerificationOutcome"], v.valid)
+	}
+	invalids["VerificationOutcome"] = VerificationOutcome("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {

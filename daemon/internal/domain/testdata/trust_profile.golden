@@ -1,0 +1,28 @@
+{
+  "repo": "freeside-ai/demo",
+  "pr_execution": "audited_same_repo",
+  "candidate_automation_changes": "block",
+  "pr_github_token_permissions": "read_only",
+  "allow_oidc": false,
+  "allow_environment_secrets": false,
+  "allow_secret_bearing_pr_jobs": false,
+  "allow_self_hosted_ci": false,
+  "allow_pull_request_target": false,
+  "workflow_audit_digest": "sha256:workflow-audit",
+  "review": {
+    "mode": "auto",
+    "config_digest": "sha256:review-config"
+  },
+  "protected_paths": {
+    "extra_automation_control_patterns": [
+      "ci/*.sh",
+      "deploy/**"
+    ],
+    "extra_reviewer_instruction_patterns": null,
+    "extra_git_metadata_patterns": null,
+    "extra_verification_control_patterns": [
+      "Makefile"
+    ]
+  },
+  "profile_digest": "sha256:4ae77d4827e0bcb4715938308caac81bed769edf8b7985d920b58adfada68932"
+}

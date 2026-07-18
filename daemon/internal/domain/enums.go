@@ -421,3 +421,240 @@ func (s ProvenanceSource) valid() bool {
 		return false
 	}
 }
+
+// PRExecutionMode is how repository automation may execute pull-request code
+// under the automation trust profile (plan §5.5): audited same-repo CI,
+// fork-style untrusted execution, or local-only (no hosted PR execution).
+type PRExecutionMode string
+
+const (
+	PRExecutionAuditedSameRepo PRExecutionMode = "audited_same_repo"
+	PRExecutionForkUntrusted   PRExecutionMode = "fork_untrusted"
+	PRExecutionLocalOnly       PRExecutionMode = "local_only"
+)
+
+// AllPRExecutionModes lists every valid PRExecutionMode.
+var AllPRExecutionModes = []PRExecutionMode{
+	PRExecutionAuditedSameRepo, PRExecutionForkUntrusted, PRExecutionLocalOnly,
+}
+
+func (m PRExecutionMode) valid() bool {
+	switch m {
+	case PRExecutionAuditedSameRepo, PRExecutionForkUntrusted, PRExecutionLocalOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// AutomationChangePolicy is the trust profile's stance on candidate changes
+// to automation-control paths (plan §5.5). The single member is deliberate:
+// block is the only §5.5 stance (such changes route through the
+// control-plane change process, never the ordinary candidate flow), so
+// loosening it is an explicit vocabulary change, not a flag flip.
+type AutomationChangePolicy string
+
+// AutomationChangesBlocked blocks candidate automation-control changes in
+// the ordinary workflow.
+const AutomationChangesBlocked AutomationChangePolicy = "block"
+
+// AllAutomationChangePolicies lists every valid AutomationChangePolicy.
+var AllAutomationChangePolicies = []AutomationChangePolicy{AutomationChangesBlocked}
+
+func (p AutomationChangePolicy) valid() bool {
+	switch p {
+	case AutomationChangesBlocked:
+		return true
+	default:
+		return false
+	}
+}
+
+// TokenPermissionsMode is the effective GITHUB_TOKEN permission posture of
+// PR-triggered jobs (plan §5.5): what the profile requires, and what a
+// workflow audit observed. read_write exists so an audit can represent a
+// drifted, more-permissive reality; a profile naming it is a deliberate,
+// human-approved posture, never a default.
+type TokenPermissionsMode string
+
+const (
+	TokenPermissionsReadOnly  TokenPermissionsMode = "read_only"
+	TokenPermissionsReadWrite TokenPermissionsMode = "read_write"
+)
+
+// AllTokenPermissionsModes lists every valid TokenPermissionsMode.
+var AllTokenPermissionsModes = []TokenPermissionsMode{
+	TokenPermissionsReadOnly, TokenPermissionsReadWrite,
+}
+
+func (m TokenPermissionsMode) valid() bool {
+	switch m {
+	case TokenPermissionsReadOnly, TokenPermissionsReadWrite:
+		return true
+	default:
+		return false
+	}
+}
+
+// ReviewMode is how automated review is triggered for the repository (plan
+// §5.5): automatically on PR events, or only when the framework requests it.
+type ReviewMode string
+
+const (
+	ReviewAuto               ReviewMode = "auto"
+	ReviewFrameworkTriggered ReviewMode = "framework_triggered"
+)
+
+// AllReviewModes lists every valid ReviewMode.
+var AllReviewModes = []ReviewMode{ReviewAuto, ReviewFrameworkTriggered}
+
+func (m ReviewMode) valid() bool {
+	switch m {
+	case ReviewAuto, ReviewFrameworkTriggered:
+		return true
+	default:
+		return false
+	}
+}
+
+// CandidateFindingClass is the trust class of one candidate policy finding
+// (plan §5.6, §5.8), the axis the publication gate dispatches on. It is
+// deliberately coarser than the package-local finding kinds the importer and
+// verifier emit: those map into a class via CandidateFinding.Kind without
+// this package enumerating them.
+type CandidateFindingClass string
+
+const (
+	// FindingClassControlPlane: the candidate touches §5.8 control-plane
+	// content (see ControlPlaneCategory). Non-waivable (plan §3.1).
+	FindingClassControlPlane CandidateFindingClass = "control_plane"
+	// FindingClassImportIntegrity: the repo-change channel's content could
+	// not be faithfully represented (non-regular entries, invalid paths,
+	// omitted blobs and peers). §5.6 admits regular files only and §3.1
+	// makes artifact-integrity failure non-waivable: malformed channel
+	// content is never a risk a decision record can accept.
+	FindingClassImportIntegrity CandidateFindingClass = "import_integrity"
+	// FindingClassRepoChangePolicy: an ordinary repo-change policy finding
+	// (allowlist, size, collision and peers). Waivable by a trusted
+	// decision record.
+	FindingClassRepoChangePolicy CandidateFindingClass = "repo_change_policy"
+	// FindingClassSecret: a secret-scan finding (§5.4). Non-waivable
+	// (plan §3.1).
+	FindingClassSecret CandidateFindingClass = "secret"
+)
+
+// AllCandidateFindingClasses lists every valid CandidateFindingClass.
+var AllCandidateFindingClasses = []CandidateFindingClass{
+	FindingClassControlPlane, FindingClassImportIntegrity,
+	FindingClassRepoChangePolicy, FindingClassSecret,
+}
+
+func (c CandidateFindingClass) valid() bool {
+	switch c {
+	case FindingClassControlPlane, FindingClassImportIntegrity,
+		FindingClassRepoChangePolicy, FindingClassSecret:
+		return true
+	default:
+		return false
+	}
+}
+
+// ControlPlaneCategory is the complete §5.8 control-plane content class: the
+// six categories of trusted configuration an ordinary candidate must never
+// modify, enforced independently of ordinary path allowlists.
+type ControlPlaneCategory string
+
+const (
+	ControlPlaneWorkflowConfiguration ControlPlaneCategory = "workflow_configuration"
+	ControlPlanePromptsAndPolicy      ControlPlaneCategory = "prompts_and_policy"
+	ControlPlaneEgressAndTrust        ControlPlaneCategory = "egress_and_trust_profiles"
+	ControlPlaneVerificationRecipes   ControlPlaneCategory = "verification_recipes"
+	ControlPlaneMaterialityRules      ControlPlaneCategory = "materiality_rules"
+	ControlPlaneReviewerInstructions  ControlPlaneCategory = "reviewer_instructions"
+)
+
+// AllControlPlaneCategories lists every valid ControlPlaneCategory.
+var AllControlPlaneCategories = []ControlPlaneCategory{
+	ControlPlaneWorkflowConfiguration, ControlPlanePromptsAndPolicy,
+	ControlPlaneEgressAndTrust, ControlPlaneVerificationRecipes,
+	ControlPlaneMaterialityRules, ControlPlaneReviewerInstructions,
+}
+
+func (c ControlPlaneCategory) valid() bool {
+	switch c {
+	case ControlPlaneWorkflowConfiguration, ControlPlanePromptsAndPolicy,
+		ControlPlaneEgressAndTrust, ControlPlaneVerificationRecipes,
+		ControlPlaneMaterialityRules, ControlPlaneReviewerInstructions:
+		return true
+	default:
+		return false
+	}
+}
+
+// FindingDisposition is a finding's effective publication stance: blocking
+// until a trusted decision record waives it, and waivable only for classes
+// plan §3.1 does not name non-waivable.
+type FindingDisposition string
+
+const (
+	DispositionBlocking FindingDisposition = "blocking"
+	DispositionWaived   FindingDisposition = "waived"
+)
+
+// AllFindingDispositions lists every valid FindingDisposition.
+var AllFindingDispositions = []FindingDisposition{DispositionBlocking, DispositionWaived}
+
+func (d FindingDisposition) valid() bool {
+	switch d {
+	case DispositionBlocking, DispositionWaived:
+		return true
+	default:
+		return false
+	}
+}
+
+// CandidateFindingOrigin is which trusted stage observed the finding: the
+// hostile import of the candidate change set, or the clean verification run
+// (plan §5.6).
+type CandidateFindingOrigin string
+
+const (
+	FindingOriginImport       CandidateFindingOrigin = "import"
+	FindingOriginVerification CandidateFindingOrigin = "verification"
+)
+
+// AllCandidateFindingOrigins lists every valid CandidateFindingOrigin.
+var AllCandidateFindingOrigins = []CandidateFindingOrigin{
+	FindingOriginImport, FindingOriginVerification,
+}
+
+func (o CandidateFindingOrigin) valid() bool {
+	switch o {
+	case FindingOriginImport, FindingOriginVerification:
+		return true
+	default:
+		return false
+	}
+}
+
+// VerificationOutcome is the overall result of the clean verification run a
+// candidate authorization binds (plan §5.6). The tokens mirror the verifier's
+// own outcome vocabulary so the mapping is the identity.
+type VerificationOutcome string
+
+const (
+	VerificationPassed VerificationOutcome = "passed"
+	VerificationFailed VerificationOutcome = "failed"
+)
+
+// AllVerificationOutcomes lists every valid VerificationOutcome.
+var AllVerificationOutcomes = []VerificationOutcome{VerificationPassed, VerificationFailed}
+
+func (o VerificationOutcome) valid() bool {
+	switch o {
+	case VerificationPassed, VerificationFailed:
+		return true
+	default:
+		return false
+	}
+}
