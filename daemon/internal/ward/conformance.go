@@ -219,6 +219,9 @@ func verifyExporterAllowlist(cfg Config, rep InspectReport, exporterID, workspac
 	if n := len(rep.PublishedPorts); n > 0 {
 		return failf(CheckExporterAllowlist, "exporter publishes %d ports, want 0", n)
 	}
+	if !rep.NetworksObserved {
+		return failf(CheckExporterAllowlist, "exporter inspection omitted network attachments")
+	}
 	if rep.NetworkAttachmentCount != 0 {
 		return failf(CheckExporterAllowlist, "exporter has %d network attachments, want 0", rep.NetworkAttachmentCount)
 	}

@@ -42,7 +42,10 @@ pins every current role against the longest valid run ID.
 - **Rejected by verification:** an omitted `networks` field, any nonzero
   attachment count, a missing or malformed behavioral proof, cleanup failure,
   and a panic all keep the capability absent. Repeated race-enabled runs kept
-  the capability state and admission result consistent.
+  the capability state and admission result consistent. Automated review found
+  that the actual handoff allowlist initially relied on the CLI's aggregate
+  field-presence bit; the independent `NetworksObserved` gate and its negative
+  fixture now make the same fail-closed rule binding for every Runtime.
 - **Accepted by decision:** the DNS name and direct-IP endpoint are behavioral
   witnesses, not availability authorities. Endpoint failure alone is
   insufficient; the explicit empty attachment set is the load-bearing proof.
