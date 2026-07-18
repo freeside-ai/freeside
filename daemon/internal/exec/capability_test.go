@@ -19,7 +19,7 @@ type backend struct {
 func (b backend) Name() string                     { return b.name }
 func (b backend) Capabilities() exec.CapabilitySet { return b.caps }
 
-// TestCheckCapabilities is acceptance fixture 2: table-driven over the five
+// TestCheckCapabilities is acceptance fixture 2: table-driven over the named
 // §5.7 capabilities, an unmet policy minimum yields a typed refusal naming
 // every missing capability, never a silent downgrade or partial pass.
 func TestCheckCapabilities(t *testing.T) {
@@ -49,6 +49,7 @@ func TestCheckCapabilities(t *testing.T) {
 			declared: []exec.Capability{
 				exec.CapPostExitExport, exec.CapReadOnlyRemount,
 				exec.CapCredentialVolumeDetach, exec.CapWorkspaceSnapshot,
+				exec.CapNetworklessExport,
 			},
 			minimum:     exec.AllCapabilities,
 			wantMissing: []exec.Capability{exec.CapDetachableWorkspace},
@@ -58,6 +59,7 @@ func TestCheckCapabilities(t *testing.T) {
 			declared: []exec.Capability{
 				exec.CapDetachableWorkspace, exec.CapReadOnlyRemount,
 				exec.CapCredentialVolumeDetach, exec.CapWorkspaceSnapshot,
+				exec.CapNetworklessExport,
 			},
 			minimum:     exec.AllCapabilities,
 			wantMissing: []exec.Capability{exec.CapPostExitExport},
@@ -67,6 +69,7 @@ func TestCheckCapabilities(t *testing.T) {
 			declared: []exec.Capability{
 				exec.CapDetachableWorkspace, exec.CapPostExitExport,
 				exec.CapCredentialVolumeDetach, exec.CapWorkspaceSnapshot,
+				exec.CapNetworklessExport,
 			},
 			minimum:     exec.AllCapabilities,
 			wantMissing: []exec.Capability{exec.CapReadOnlyRemount},
@@ -76,6 +79,7 @@ func TestCheckCapabilities(t *testing.T) {
 			declared: []exec.Capability{
 				exec.CapDetachableWorkspace, exec.CapPostExitExport,
 				exec.CapReadOnlyRemount, exec.CapWorkspaceSnapshot,
+				exec.CapNetworklessExport,
 			},
 			minimum:     exec.AllCapabilities,
 			wantMissing: []exec.Capability{exec.CapCredentialVolumeDetach},
@@ -85,9 +89,20 @@ func TestCheckCapabilities(t *testing.T) {
 			declared: []exec.Capability{
 				exec.CapDetachableWorkspace, exec.CapPostExitExport,
 				exec.CapReadOnlyRemount, exec.CapCredentialVolumeDetach,
+				exec.CapNetworklessExport,
 			},
 			minimum:     exec.AllCapabilities,
 			wantMissing: []exec.Capability{exec.CapWorkspaceSnapshot},
+		},
+		{
+			name: "missing networkless export",
+			declared: []exec.Capability{
+				exec.CapDetachableWorkspace, exec.CapPostExitExport,
+				exec.CapReadOnlyRemount, exec.CapCredentialVolumeDetach,
+				exec.CapWorkspaceSnapshot,
+			},
+			minimum:     exec.AllCapabilities,
+			wantMissing: []exec.Capability{exec.CapNetworklessExport},
 		},
 		{
 			name:     "empty declaration misses everything, sorted",
@@ -97,6 +112,7 @@ func TestCheckCapabilities(t *testing.T) {
 			wantMissing: []exec.Capability{
 				exec.CapCredentialVolumeDetach,
 				exec.CapDetachableWorkspace,
+				exec.CapNetworklessExport,
 				exec.CapPostExitExport,
 				exec.CapReadOnlyRemount,
 				exec.CapWorkspaceSnapshot,
