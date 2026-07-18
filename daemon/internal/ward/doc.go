@@ -14,6 +14,40 @@
 // logic (daemon/internal/export) that ships inside the pinned exporter image;
 // the gate collects its output but never owns its content.
 //
+// The conformance suite (suite.go) is the invocable form of that contract,
+// run at the plan §5.7 cadence points without a real work item (doctor
+// scheduling is a downstream operations-unit concern). Suite.Full proves the
+// whole contract as one pass on the current runtime: a synthetic handoff with
+// a benign writer and a seeded fake credential exercises checks 1-5 and 7
+// together, then two of the spike's three negative probes run — the
+// read-write-attach exclusion (a second VM cannot attach the workspace a live
+// writer holds read-write) and credential-marker containment (the marker is
+// absent from the export yet still readable from the detached credential
+// volume, so its absence was mount omission, not deletion). The third probe
+// (same-VM guest unmount is not a detach) needs a CAP_SYS_ADMIN guest
+// process, which the gate's ContainerSpec vocabulary deliberately cannot
+// express — that minimality is checks 1-2's isolation argument — so it is a
+// permanent reference-runtime test driving the CLI directly
+// (TestLiveConformanceSameVMRefutation), never a Suite member and never a
+// widening of the spec. Every suite result is fail-closed: only nil is
+// conformant. A violated check or probe is a *ConformanceFailure naming that
+// assertion; an operational error that prevents the suite from reaching a
+// verdict remains non-nil and gates unattended operation without pretending a
+// specific contract assertion was disproved (the §3.1 non-waivable class,
+// which never auto-promotes or offers a bypass).
+//
+// Suite.PreJob is the lightweight probe run before each unattended job. It
+// verifies only cheap preconditions — the capability declaration is intact,
+// the images are digest-pinned, the runtime is reachable, and a
+// create→inspect→delete liveness round-trips — and boots no VM, copies no
+// workspace, and exports nothing. It deliberately does NOT re-verify the
+// realized isolation Full proves: credential separation holding in a started
+// writer, the read-only remount, export digest/scan containment, or the
+// negative probes. A green PreJob means the backend is plausibly still
+// operable; only Full proves it conformant. The plan §5.7 cadence is
+// therefore Full at startup, after configuration changes, and on the doctor
+// schedule; PreJob before each job.
+//
 // Two owner decisions bind this package (issue #76; the Wave 1 planning
 // decision note):
 //
@@ -57,10 +91,14 @@
 //   - handoff.go       the gate lifecycle: checks 3-5 sequencing and teardown
 //   - export_verify.go check 7: safe archive extraction, manifest and digest
 //     verification, and the fail-closed output-scanner hook
+//   - suite.go         the invocable conformance suite: Full (checks 1-5, 7
+//     plus two negative probes) and the lightweight PreJob probe
 //
-// The full-lifecycle integration test runs only against the reference
-// runtime (Apple container 1.1.0 on macOS) and is opt-in via
-// FREESIDE_WARD_LIVE_TEST=1; CI does not run it, a recorded verification
-// gap. Everything else, including every check's failure path, runs against
-// the scripted fake runtime.
+// The full-lifecycle integration test and the conformance suite's
+// reference-runtime members (Suite.Full/PreJob end to end, and the
+// same-VM-refutation probe) run only against the reference runtime (Apple
+// container 1.1.0 on macOS) and are opt-in via FREESIDE_WARD_LIVE_TEST=1; CI
+// does not run them, a recorded verification gap. Everything else, including
+// every check's failure path and the suite's orchestration and fail-closed
+// results, runs against the scripted fake runtime.
 package ward

@@ -23,7 +23,7 @@ func TestAllChecksDistinct(t *testing.T) {
 	seen := make(map[Check]bool, len(AllChecks))
 	for _, c := range AllChecks {
 		if seen[c] {
-			t.Errorf("AllChecks lists %q twice", c)
+			t.Errorf("check identifier %q listed twice", c)
 		}
 		seen[c] = true
 	}
