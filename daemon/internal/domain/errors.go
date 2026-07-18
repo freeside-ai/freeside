@@ -55,6 +55,7 @@ var (
 	ErrEvidenceHeadMismatch     = errors.New("evidence artifact head does not match the item's pr_head_sha")
 	ErrArtifactIdentityConflict = errors.New("artifact id maps to conflicting digests or spans evidence and claims")
 	ErrProvenanceInconsistent   = errors.New("provenance fields are internally inconsistent")
+	ErrNonAgentClaim            = errors.New("agent claim provenance must carry the agent producer class")
 	ErrBindingMismatch          = errors.New("artifact_digests does not equal the item's rendered evidence and claim digests")
 	ErrDigestsNotCanonical      = errors.New("artifact digests are not in canonical (sorted, deduplicated) order")
 	ErrUnboundInvocation        = errors.New("agent invocation binds neither input artifacts nor a conversation prefix")

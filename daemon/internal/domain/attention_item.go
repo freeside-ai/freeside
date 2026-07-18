@@ -43,14 +43,38 @@ func (s Subject) Validate() error {
 // AgentClaim is an agent-asserted piece of context attached to an item, always
 // labeled as such and kept out of the engine's evidence snapshot (plan §4,
 // §5.15 rule 2): agent-produced artifacts appear only here, never as evidence.
+// The provenance is typed and agent-pinned: the evidence channel (#173) routes
+// agent workspace artifacts only into these claims, and a claim asserting any
+// other producer class is invalid by construction, so a decoded claim cannot
+// launder agent output into a trusted producer class.
 type AgentClaim struct {
-	Label    string     `json:"label"`
-	Artifact ArtifactID `json:"artifact_id"`
-	Digest   Digest     `json:"digest"`
+	Label      string     `json:"label"`
+	Artifact   ArtifactID `json:"artifact_id"`
+	Digest     Digest     `json:"digest"`
+	Provenance Provenance `json:"provenance"`
+}
+
+// clone returns a copy detached from the caller's provenance pointer.
+func (c AgentClaim) clone() AgentClaim {
+	c.Provenance = c.Provenance.clone()
+	return c
+}
+
+// cloneAgentClaims deep-copies a claim slice for the same reason.
+func cloneAgentClaims(in []AgentClaim) []AgentClaim {
+	if in == nil {
+		return nil
+	}
+	out := make([]AgentClaim, len(in))
+	for i, c := range in {
+		out[i] = c.clone()
+	}
+	return out
 }
 
 // Validate reports whether the claim is well-formed: a claim identifies itself
-// by label and references the artifact it is asserting about.
+// by label, references the artifact it is asserting about, and carries valid
+// agent provenance.
 func (c AgentClaim) Validate() error {
 	if c.Label == "" {
 		return fmt.Errorf("agent claim label: %w", ErrEmptyField)
@@ -63,6 +87,14 @@ func (c AgentClaim) Validate() error {
 	// rendered or audited against immutable content.
 	if c.Digest == "" {
 		return fmt.Errorf("agent claim %q digest: %w", c.Label, ErrEmptyField)
+	}
+	if err := c.Provenance.Validate(); err != nil {
+		return fmt.Errorf("agent claim %q: %w", c.Label, err)
+	}
+	// Provenance.Validate admits any producer class; a claim additionally pins
+	// the agent class, the only producer whose artifacts route through claims.
+	if c.Provenance.ProducerClass != ProducerAgent {
+		return fmt.Errorf("agent claim %q producer_class %q: %w", c.Label, c.Provenance.ProducerClass, ErrNonAgentClaim)
 	}
 	return nil
 }
@@ -143,7 +175,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		Reason:            in.Reason,
 		RequestedDecision: slices.Clone(in.RequestedDecision),
 		EvidenceSnapshot:  cloneArtifacts(in.EvidenceSnapshot),
-		AgentClaims:       slices.Clone(in.AgentClaims),
+		AgentClaims:       cloneAgentClaims(in.AgentClaims),
 		PRHeadSHA:         in.PRHeadSHA,
 		ItemVersion:       in.ItemVersion,
 		InterruptionClass: in.InterruptionClass,

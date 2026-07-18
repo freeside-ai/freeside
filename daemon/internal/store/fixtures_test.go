@@ -77,8 +77,17 @@ func newFixtures(t *testing.T) fixtures {
 		Reason:            "checks are green and the diff is ready",
 		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionDismiss},
 		EvidenceSnapshot:  []domain.Artifact{artifact},
-		AgentClaims:       []domain.AgentClaim{{Label: "screenshot", Artifact: "art-2", Digest: "sha256:img"}},
-		PRHeadSHA:         "cafebabe", ItemVersion: 1,
+		AgentClaims: []domain.AgentClaim{{
+			Label: "screenshot", Artifact: "art-2", Digest: "sha256:img",
+			Provenance: domain.Provenance{
+				ProducerClass:        domain.ProducerAgent,
+				ProducerInvocationID: "inv-2",
+				HeadBinding:          domain.HeadBound,
+				SourceHeadSHA:        "cafebabe",
+				SensitivityClass:     domain.SensitivityNormal,
+			},
+		}},
+		PRHeadSHA: "cafebabe", ItemVersion: 1,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		ConversationID:    &convID, ExpiresWhen: &expires, Status: domain.StatusOpen,
 	}, approved)
