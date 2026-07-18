@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 11
+revision: 12
 status: active
 phase: 1A
 updated: 2026-07-18
@@ -475,16 +475,22 @@ The actual runtime must prove this sequence:
 Candidate mechanisms include a detachable volume, host-controlled block image,
 snapshot/export, or separate export VM.
 
-The fallback is weaker: terminate the agent process, detach credentials, and
-export from the same VM. Freeside must declare that as a different isolation
-class and must never call it fresh-context handoff.
+The declared strong class for Apple container 1.1.0 is
+`fresh_vm_read_only_volume_handoff`, conditional on the conformance checks
+below; the name is the runner backend's declared identity.
+
+The same-VM fallback (terminate the agent process, detach credentials, and
+export from the same VM) is refuted on this runtime by execution, not merely
+weaker: release 1.1.0 exposes no host hot-detach, and a guest unmount is not a
+credential-device detach; the credential block device stays attached and
+remountable. Freeside must not implement or declare that class.
 
 #### Operating modes
 
 | Mode | Requirements and limits |
 | --- | --- |
 | `attended_dev` | May use a weaker runner class. Disables `auto_start`, automatic publication, and unattended escalation. Reports its isolation class honestly. |
-| `unattended` | Requires successful conformance including the handoff gate, a valid trust profile, an approved credential mode, all runner minimums, current backup health including encryption status, and no blocking `system_health` item. |
+| `unattended` | Requires successful conformance including the handoff gate, a valid trust profile, an approved credential mode, all runner minimums including the proven `supports_networkless_export` exporter boundary, current backup health including encryption status, and no blocking `system_health` item. |
 
 Run the full conformance suite at startup, after configuration changes, and on
 the doctor's schedule. Run a lightweight probe before every unattended job.
@@ -1114,12 +1120,18 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 11:
+Revision 12:
 
-1. **Require a named networkless-export runner capability.** Add
-   `supports_networkless_export` to the binding §5.7 vocabulary so unattended
-   policy can require the exporter egress boundary independently of the
-   runtime-specific mechanism that proves it. (User; #78.)
+1. **Declare the strong handoff class.** §5.7 names
+   `fresh_vm_read_only_volume_handoff` as the declared class for Apple
+   container 1.1.0, conditional on the conformance checks, and records the
+   same-VM fallback as refuted by execution on this runtime: never implement
+   or declare it. (User; docs/spikes/workspace-handoff.md, devlog
+   2026-07-14-2113-wave1-planning.md; #79.)
+2. **Name the network-free exporter as an unattended precondition.** The
+   `unattended` mode row requires the proven `supports_networkless_export`
+   boundary explicitly, closing the spike's open exporter-network boundary at
+   the policy level. (User; #78, #79.)
 
 ## 14. Risks
 
@@ -1128,7 +1140,7 @@ Revision 11:
 | Provider credentials in `subscription_contained` | Document the residual; enforce egress floors; let the daemon fetch research for the most exposed stage; provide `api_key_isolated` as the escape. |
 | CI privilege crossing | Attest effective authority; block candidate automation changes; fail closed on drift; prohibit the daemon host as a runner. |
 | Reviewer-instruction poisoning | Treat instruction paths as control-plane content and block candidate changes in the ordinary publication path. |
-| **Workspace-handoff uncertainty** | Treat it as the largest runtime unknown; investigate early; gate unattended use; name the fallback as a weaker class. |
+| **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section 5.7); the same-VM fallback is refuted by execution, never implemented or declared. |
 | Codex cloud review as a load-bearing dependency | Use the shadow arm to dry-run the hedge. |
 | Classifier mislabeling | Preserve immutable raw findings; require second adjudication for the safety case; enforce ceilings. |
 | Subscription-terms drift | Keep it as an explicit operating risk. |

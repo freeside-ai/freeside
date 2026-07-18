@@ -221,7 +221,7 @@ New in revision 10 (decider in parentheses):
 
 ---
 
-## Revision 11 (current)
+## Revision 11
 
 Revision 11 makes the networkless exporter boundary a named runner/policy
 contract.
@@ -235,3 +235,30 @@ New in revision 11 (decider in parentheses):
    exporter egress boundary without naming Apple container's mechanism. The
    ward implementation and live runtime proof remain #78's responsibility.
    (User; #78.)
+
+---
+
+## Revision 12 (current)
+
+Revision 12 records the workspace-handoff outcomes: the declared strong class
+and the network-free exporter precondition for unattended mode.
+
+Held from revision 11 (abbreviated): every product decision held through
+revision 10 plus revision 11's networkless-export capability, unchanged,
+except revision 7's clause declaring the same-VM fallback a weaker class,
+which decision 1 below refutes and supersedes.
+
+New in revision 12 (decider in parentheses):
+1. **The strong handoff class is declared**: §5.7 names
+   `fresh_vm_read_only_volume_handoff` for Apple container 1.1.0, conditional
+   on the conformance checks, and records the same-VM fallback as refuted by
+   execution on this runtime (no host hot-detach; a guest unmount is not a
+   credential-device detach), never to be implemented or declared. This
+   supersedes revision 7's clause that named the fallback a declared weaker
+   class. (User;
+   docs/spikes/workspace-handoff.md, devlog
+   2026-07-14-2113-wave1-planning.md; #79.)
+2. **The network-free exporter becomes an explicit unattended precondition**:
+   the `unattended` mode row names the proven `supports_networkless_export`
+   boundary, closing the spike's open exporter-network boundary at the policy
+   level. (User; #78, #79.)
