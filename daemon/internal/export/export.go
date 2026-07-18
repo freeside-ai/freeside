@@ -119,8 +119,9 @@ func blobAllowed(size, written int64, opts Options) bool {
 // path baked into the exporter rootfs) could otherwise sit beside this
 // export's blobs and masquerade as its output, so the export fails closed
 // instead; together with the blob writer trusting only what it wrote, the
-// collected output holds exactly manifest.json plus the blobs the
-// manifest references.
+// collected output holds exactly what this helper emitted: manifest.json
+// plus the blobs it references and, once the evidence channel (#167)
+// lands, evidence.json plus its evidence/ blobs.
 func ensureEmptyOutput(outDir string) error {
 	existing, err := os.ReadDir(outDir)
 	if err != nil {

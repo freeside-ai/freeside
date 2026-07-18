@@ -19,6 +19,21 @@ var (
 	ErrNegativeSize      = errors.New("size must be non-negative")
 	ErrInvalidDigest     = errors.New("digest is not a sha256 content address")
 
+	// Evidence-manifest failures (the second workspace-exit channel).
+	ErrUnknownEvidenceVersion  = errors.New("unknown evidence manifest version")
+	ErrEvidenceNotCanonical    = errors.New("evidence entries are not in canonical (label-sorted, deduplicated) order")
+	ErrInvalidLabel            = errors.New("label is not a non-empty NUL-free UTF-8 string")
+	ErrInvalidMediaType        = errors.New("media_type is empty")
+	ErrInvalidEvidenceProducer = errors.New("producer_class is not the agent class this channel admits")
+	ErrEmptyInvocationID       = errors.New("producer_invocation_id is empty")
+	ErrInvalidHeadBinding      = errors.New("head_binding is not an explicit binding mode")
+	ErrProvenanceInconsistent  = errors.New("source_head_sha contradicts the head_binding mode")
+	ErrInvalidSensitivityClass = errors.New("sensitivity_class is not a valid confidentiality tier")
+	ErrTrailingContent         = errors.New("manifest carries trailing content")
+	ErrInvalidUTF8             = errors.New("manifest bytes are not valid UTF-8")
+	ErrNotCanonicalEncoding    = errors.New("manifest bytes are not the canonical encoded form")
+	ErrNullEntries             = errors.New("entries must be a non-null array")
+
 	// Export failures.
 	ErrWorkspaceChanged = errors.New("workspace content changed during export")
 	ErrTooManyEntries   = errors.New("workspace exceeds the manifest entry cap")
