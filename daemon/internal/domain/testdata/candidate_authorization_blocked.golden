@@ -1,0 +1,43 @@
+{
+  "id": "sha256:68c2fcefceea7604348b12301582c9020ac22c722cd6328c74d4d574ec39eadc",
+  "repo": "freeside-ai/demo",
+  "base_sha": "beefcafe",
+  "head_sha": "cafebabe",
+  "import_result_digest": "sha256:import-result",
+  "verification_recipe_digest": "sha256:recipe-approved",
+  "verification_outcome": "passed",
+  "findings": [
+    {
+      "class": "control_plane",
+      "category": "reviewer_instructions",
+      "origin": "import",
+      "kind": "reviewer_instruction_path",
+      "path": "AGENTS.md",
+      "disposition": "blocking",
+      "waiver": null
+    },
+    {
+      "class": "import_integrity",
+      "category": null,
+      "origin": "import",
+      "kind": "non_regular_change",
+      "path": "bin/tool",
+      "disposition": "blocking",
+      "waiver": null
+    },
+    {
+      "class": "secret",
+      "category": null,
+      "origin": "import",
+      "kind": "secret",
+      "path": "config/app.env",
+      "detail": "rule aws-key line 3",
+      "disposition": "blocking",
+      "waiver": null
+    }
+  ],
+  "trust_profile_digest": "sha256:4ae77d4827e0bcb4715938308caac81bed769edf8b7985d920b58adfada68932",
+  "invocation_id": "inv-1",
+  "created_at": "2026-01-02T03:04:05Z",
+  "authorizes_publication": false
+}

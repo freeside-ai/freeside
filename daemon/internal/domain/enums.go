@@ -516,3 +516,145 @@ func (m ReviewMode) valid() bool {
 		return false
 	}
 }
+
+// CandidateFindingClass is the trust class of one candidate policy finding
+// (plan §5.6, §5.8), the axis the publication gate dispatches on. It is
+// deliberately coarser than the package-local finding kinds the importer and
+// verifier emit: those map into a class via CandidateFinding.Kind without
+// this package enumerating them.
+type CandidateFindingClass string
+
+const (
+	// FindingClassControlPlane: the candidate touches §5.8 control-plane
+	// content (see ControlPlaneCategory). Non-waivable (plan §3.1).
+	FindingClassControlPlane CandidateFindingClass = "control_plane"
+	// FindingClassImportIntegrity: the repo-change channel's content could
+	// not be faithfully represented (non-regular entries, invalid paths,
+	// omitted blobs and peers). §5.6 admits regular files only and §3.1
+	// makes artifact-integrity failure non-waivable: malformed channel
+	// content is never a risk a decision record can accept.
+	FindingClassImportIntegrity CandidateFindingClass = "import_integrity"
+	// FindingClassRepoChangePolicy: an ordinary repo-change policy finding
+	// (allowlist, size, collision and peers). Waivable by a trusted
+	// decision record.
+	FindingClassRepoChangePolicy CandidateFindingClass = "repo_change_policy"
+	// FindingClassSecret: a secret-scan finding (§5.4). Non-waivable
+	// (plan §3.1).
+	FindingClassSecret CandidateFindingClass = "secret"
+)
+
+// AllCandidateFindingClasses lists every valid CandidateFindingClass.
+var AllCandidateFindingClasses = []CandidateFindingClass{
+	FindingClassControlPlane, FindingClassImportIntegrity,
+	FindingClassRepoChangePolicy, FindingClassSecret,
+}
+
+func (c CandidateFindingClass) valid() bool {
+	switch c {
+	case FindingClassControlPlane, FindingClassImportIntegrity,
+		FindingClassRepoChangePolicy, FindingClassSecret:
+		return true
+	default:
+		return false
+	}
+}
+
+// ControlPlaneCategory is the complete §5.8 control-plane content class: the
+// six categories of trusted configuration an ordinary candidate must never
+// modify, enforced independently of ordinary path allowlists.
+type ControlPlaneCategory string
+
+const (
+	ControlPlaneWorkflowConfiguration ControlPlaneCategory = "workflow_configuration"
+	ControlPlanePromptsAndPolicy      ControlPlaneCategory = "prompts_and_policy"
+	ControlPlaneEgressAndTrust        ControlPlaneCategory = "egress_and_trust_profiles"
+	ControlPlaneVerificationRecipes   ControlPlaneCategory = "verification_recipes"
+	ControlPlaneMaterialityRules      ControlPlaneCategory = "materiality_rules"
+	ControlPlaneReviewerInstructions  ControlPlaneCategory = "reviewer_instructions"
+)
+
+// AllControlPlaneCategories lists every valid ControlPlaneCategory.
+var AllControlPlaneCategories = []ControlPlaneCategory{
+	ControlPlaneWorkflowConfiguration, ControlPlanePromptsAndPolicy,
+	ControlPlaneEgressAndTrust, ControlPlaneVerificationRecipes,
+	ControlPlaneMaterialityRules, ControlPlaneReviewerInstructions,
+}
+
+func (c ControlPlaneCategory) valid() bool {
+	switch c {
+	case ControlPlaneWorkflowConfiguration, ControlPlanePromptsAndPolicy,
+		ControlPlaneEgressAndTrust, ControlPlaneVerificationRecipes,
+		ControlPlaneMaterialityRules, ControlPlaneReviewerInstructions:
+		return true
+	default:
+		return false
+	}
+}
+
+// FindingDisposition is a finding's effective publication stance: blocking
+// until a trusted decision record waives it, and waivable only for classes
+// plan §3.1 does not name non-waivable.
+type FindingDisposition string
+
+const (
+	DispositionBlocking FindingDisposition = "blocking"
+	DispositionWaived   FindingDisposition = "waived"
+)
+
+// AllFindingDispositions lists every valid FindingDisposition.
+var AllFindingDispositions = []FindingDisposition{DispositionBlocking, DispositionWaived}
+
+func (d FindingDisposition) valid() bool {
+	switch d {
+	case DispositionBlocking, DispositionWaived:
+		return true
+	default:
+		return false
+	}
+}
+
+// CandidateFindingOrigin is which trusted stage observed the finding: the
+// hostile import of the candidate change set, or the clean verification run
+// (plan §5.6).
+type CandidateFindingOrigin string
+
+const (
+	FindingOriginImport       CandidateFindingOrigin = "import"
+	FindingOriginVerification CandidateFindingOrigin = "verification"
+)
+
+// AllCandidateFindingOrigins lists every valid CandidateFindingOrigin.
+var AllCandidateFindingOrigins = []CandidateFindingOrigin{
+	FindingOriginImport, FindingOriginVerification,
+}
+
+func (o CandidateFindingOrigin) valid() bool {
+	switch o {
+	case FindingOriginImport, FindingOriginVerification:
+		return true
+	default:
+		return false
+	}
+}
+
+// VerificationOutcome is the overall result of the clean verification run a
+// candidate authorization binds (plan §5.6). The tokens mirror the verifier's
+// own outcome vocabulary so the mapping is the identity.
+type VerificationOutcome string
+
+const (
+	VerificationPassed VerificationOutcome = "passed"
+	VerificationFailed VerificationOutcome = "failed"
+)
+
+// AllVerificationOutcomes lists every valid VerificationOutcome.
+var AllVerificationOutcomes = []VerificationOutcome{VerificationPassed, VerificationFailed}
+
+func (o VerificationOutcome) valid() bool {
+	switch o {
+	case VerificationPassed, VerificationFailed:
+		return true
+	default:
+		return false
+	}
+}

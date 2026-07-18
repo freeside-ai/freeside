@@ -84,6 +84,26 @@ func TestEnumValidity(t *testing.T) {
 		valids["ReviewMode"] = append(valids["ReviewMode"], v.valid)
 	}
 	invalids["ReviewMode"] = ReviewMode("").valid
+	for _, v := range AllCandidateFindingClasses {
+		valids["CandidateFindingClass"] = append(valids["CandidateFindingClass"], v.valid)
+	}
+	invalids["CandidateFindingClass"] = CandidateFindingClass("").valid
+	for _, v := range AllControlPlaneCategories {
+		valids["ControlPlaneCategory"] = append(valids["ControlPlaneCategory"], v.valid)
+	}
+	invalids["ControlPlaneCategory"] = ControlPlaneCategory("").valid
+	for _, v := range AllFindingDispositions {
+		valids["FindingDisposition"] = append(valids["FindingDisposition"], v.valid)
+	}
+	invalids["FindingDisposition"] = FindingDisposition("").valid
+	for _, v := range AllCandidateFindingOrigins {
+		valids["CandidateFindingOrigin"] = append(valids["CandidateFindingOrigin"], v.valid)
+	}
+	invalids["CandidateFindingOrigin"] = CandidateFindingOrigin("").valid
+	for _, v := range AllVerificationOutcomes {
+		valids["VerificationOutcome"] = append(valids["VerificationOutcome"], v.valid)
+	}
+	invalids["VerificationOutcome"] = VerificationOutcome("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {

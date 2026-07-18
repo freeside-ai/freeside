@@ -192,6 +192,66 @@ func TestGolden(t *testing.T) {
 		ReviewDecisionRef:   "decision-1",
 	}
 
+	// The findings are passed out of canonical order to exercise
+	// NewCandidateAuthorization's canonicalization; the waived
+	// repo-change-policy finding carries the full waiver shape, and the
+	// authorizing variant below shows the computed bit flipping with the
+	// finding set.
+	controlPlaneCategory := domain.ControlPlaneReviewerInstructions
+	blockedAuthorization, err := domain.NewCandidateAuthorization(domain.CandidateAuthorizationInput{
+		Repo: "freeside-ai/demo", BaseSHA: "beefcafe", HeadSHA: "cafebabe",
+		ImportResultDigest:       "sha256:import-result",
+		VerificationRecipeDigest: recipe,
+		VerificationOutcome:      domain.VerificationPassed,
+		Findings: []domain.CandidateFinding{
+			{
+				Class: domain.FindingClassSecret, Origin: domain.FindingOriginImport,
+				Kind: "secret", Path: "config/app.env", Detail: "rule aws-key line 3",
+				Disposition: domain.DispositionBlocking,
+			},
+			{
+				Class: domain.FindingClassControlPlane, Category: &controlPlaneCategory,
+				Origin: domain.FindingOriginImport, Kind: "reviewer_instruction_path",
+				Path: "AGENTS.md", Disposition: domain.DispositionBlocking,
+			},
+			{
+				Class: domain.FindingClassImportIntegrity, Origin: domain.FindingOriginImport,
+				Kind: "non_regular_change", Path: "bin/tool",
+				Disposition: domain.DispositionBlocking,
+			},
+		},
+		TrustProfileDigest: trustProfile.ProfileDigest,
+		InvocationID:       "inv-1",
+		CreatedAt:          ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization, err := domain.NewCandidateAuthorization(domain.CandidateAuthorizationInput{
+		Repo: "freeside-ai/demo", BaseSHA: "beefcafe", HeadSHA: "cafebabe",
+		ImportResultDigest:       "sha256:import-result",
+		VerificationRecipeDigest: recipe,
+		VerificationOutcome:      domain.VerificationPassed,
+		Findings: []domain.CandidateFinding{
+			{
+				Class: domain.FindingClassRepoChangePolicy, Origin: domain.FindingOriginImport,
+				Kind: "size_violation", Path: "assets/big.bin",
+				Disposition: domain.DispositionWaived,
+				Waiver: &domain.WaiverRecord{
+					DecisionID: "decision-2", DecidedBy: domain.AuthorUser, DecidedAt: ts,
+					Justification:  "generated fixture, reviewed",
+					DecisionDigest: "sha256:decision",
+				},
+			},
+		},
+		TrustProfileDigest: trustProfile.ProfileDigest,
+		InvocationID:       "inv-1",
+		CreatedAt:          ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	attempt := domain.Attempt{ID: "attempt-1", StageID: "stage-1", Number: 1, InvocationID: "inv-1"}
 	stage := domain.Stage{ID: "stage-1", RunID: "run-1", Name: "implementation", Attempts: []domain.Attempt{attempt}}
 	run := domain.Run{ID: "run-1", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: resolvedPolicy.Digest, Stages: []domain.Stage{stage}}
@@ -252,6 +312,8 @@ func TestGolden(t *testing.T) {
 		{"key_provenance", policyKey.Provenance},
 		{"trust_profile", trustProfile},
 		{"workflow_audit", workflowAudit},
+		{"candidate_authorization", authorization},
+		{"candidate_authorization_blocked", blockedAuthorization},
 		{"run", run},
 		{"stage", stage},
 		{"attempt", attempt},
