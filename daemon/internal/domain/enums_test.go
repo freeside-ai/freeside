@@ -68,6 +68,22 @@ func TestEnumValidity(t *testing.T) {
 		valids["ProvenanceSource"] = append(valids["ProvenanceSource"], v.valid)
 	}
 	invalids["ProvenanceSource"] = ProvenanceSource("").valid
+	for _, v := range AllPRExecutionModes {
+		valids["PRExecutionMode"] = append(valids["PRExecutionMode"], v.valid)
+	}
+	invalids["PRExecutionMode"] = PRExecutionMode("").valid
+	for _, v := range AllAutomationChangePolicies {
+		valids["AutomationChangePolicy"] = append(valids["AutomationChangePolicy"], v.valid)
+	}
+	invalids["AutomationChangePolicy"] = AutomationChangePolicy("").valid
+	for _, v := range AllTokenPermissionsModes {
+		valids["TokenPermissionsMode"] = append(valids["TokenPermissionsMode"], v.valid)
+	}
+	invalids["TokenPermissionsMode"] = TokenPermissionsMode("").valid
+	for _, v := range AllReviewModes {
+		valids["ReviewMode"] = append(valids["ReviewMode"], v.valid)
+	}
+	invalids["ReviewMode"] = ReviewMode("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {

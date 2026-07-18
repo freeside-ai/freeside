@@ -22,6 +22,10 @@ var (
 	ErrInvalidAuthor             = errors.New("invalid author")
 	ErrInvalidConversationStatus = errors.New("invalid conversation status")
 	ErrInvalidProvenanceSource   = errors.New("invalid provenance source")
+	ErrInvalidPRExecutionMode    = errors.New("invalid pr execution mode")
+	ErrInvalidAutomationChanges  = errors.New("invalid automation change policy")
+	ErrInvalidTokenPermissions   = errors.New("invalid token permissions mode")
+	ErrInvalidReviewMode         = errors.New("invalid review mode")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")
@@ -50,6 +54,7 @@ var (
 	ErrDigestsNotCanonical      = errors.New("artifact digests are not in canonical (sorted, deduplicated) order")
 	ErrUnboundInvocation        = errors.New("agent invocation binds neither input artifacts nor a conversation prefix")
 	ErrInvocationInconsistent   = errors.New("agent invocation conversation-binding fields are internally inconsistent")
+	ErrPatternsNotCanonical     = errors.New("protected-path patterns are not in canonical (sorted, deduplicated) order")
 
 	// Trust-boundary failures.
 	ErrPlaintextCredential         = errors.New("credential material must be a sha256 digest, never plaintext")
@@ -59,6 +64,7 @@ var (
 	ErrPublishEligibleInconsistent = errors.New("publish_eligible is inconsistent with provenance")
 	ErrPolicyDigestMismatch        = errors.New("resolved-policy digest does not match its content")
 	ErrKeysNotCanonical            = errors.New("resolved-policy keys are not in canonical (key-sorted) order")
+	ErrProfileDigestMismatch       = errors.New("trust-profile digest does not match its content")
 
 	// Transition failures: how a persisted aggregate may change between its
 	// stored version and an update (the transition validators). A writer maps

@@ -161,6 +161,37 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The protected-path extras are passed unsorted with a duplicate to
+	// exercise NewAutomationTrustProfile's canonicalization.
+	trustProfile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo:                       "freeside-ai/demo",
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		WorkflowAuditDigest:        "sha256:workflow-audit",
+		Review: domain.ReviewSettings{
+			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+		},
+		ProtectedPaths: domain.ProtectedPathConfig{
+			ExtraAutomationControlPatterns:   []string{"deploy/**", "ci/*.sh", "deploy/**"},
+			ExtraVerificationControlPatterns: []string{"Makefile"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflowAudit := domain.WorkflowAudit{
+		Repo:                "freeside-ai/demo",
+		AuditedCommitSHA:    "cafebabe",
+		AuditedAt:           ts,
+		WorkflowAuditDigest: "sha256:workflow-audit",
+		EffectiveTokenPerms: domain.TokenPermissionsReadOnly,
+		OIDCAvailable:       false,
+		PullRequestTarget:   true,
+		ReusableWorkflows:   true,
+		ReviewDecisionRef:   "decision-1",
+	}
+
 	attempt := domain.Attempt{ID: "attempt-1", StageID: "stage-1", Number: 1, InvocationID: "inv-1"}
 	stage := domain.Stage{ID: "stage-1", RunID: "run-1", Name: "implementation", Attempts: []domain.Attempt{attempt}}
 	run := domain.Run{ID: "run-1", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: resolvedPolicy.Digest, Stages: []domain.Stage{stage}}
@@ -219,6 +250,8 @@ func TestGolden(t *testing.T) {
 		{"resolved_policy", resolvedPolicy},
 		{"policy_key", policyKey},
 		{"key_provenance", policyKey.Provenance},
+		{"trust_profile", trustProfile},
+		{"workflow_audit", workflowAudit},
 		{"run", run},
 		{"stage", stage},
 		{"attempt", attempt},

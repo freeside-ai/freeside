@@ -15,6 +15,7 @@
 //   - conversation.go conversations, messages, invocations (§5.14)
 //   - policy.go       resolved policy with per-key provenance (§5.12)
 //   - run.go          run/stage/attempt and invocation identities (§5.3)
+//   - trust_profile.go automation trust profile and workflow audit (§5.5)
 //
 // See docs/plan.md §4 (the attention model), §5.3 (execution identities),
 // §5.12 (findings and policy resolution), §5.14 (conversations and sync), and

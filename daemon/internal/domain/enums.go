@@ -421,3 +421,98 @@ func (s ProvenanceSource) valid() bool {
 		return false
 	}
 }
+
+// PRExecutionMode is how repository automation may execute pull-request code
+// under the automation trust profile (plan §5.5): audited same-repo CI,
+// fork-style untrusted execution, or local-only (no hosted PR execution).
+type PRExecutionMode string
+
+const (
+	PRExecutionAuditedSameRepo PRExecutionMode = "audited_same_repo"
+	PRExecutionForkUntrusted   PRExecutionMode = "fork_untrusted"
+	PRExecutionLocalOnly       PRExecutionMode = "local_only"
+)
+
+// AllPRExecutionModes lists every valid PRExecutionMode.
+var AllPRExecutionModes = []PRExecutionMode{
+	PRExecutionAuditedSameRepo, PRExecutionForkUntrusted, PRExecutionLocalOnly,
+}
+
+func (m PRExecutionMode) valid() bool {
+	switch m {
+	case PRExecutionAuditedSameRepo, PRExecutionForkUntrusted, PRExecutionLocalOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// AutomationChangePolicy is the trust profile's stance on candidate changes
+// to automation-control paths (plan §5.5). The single member is deliberate:
+// block is the only §5.5 stance (such changes route through the
+// control-plane change process, never the ordinary candidate flow), so
+// loosening it is an explicit vocabulary change, not a flag flip.
+type AutomationChangePolicy string
+
+// AutomationChangesBlocked blocks candidate automation-control changes in
+// the ordinary workflow.
+const AutomationChangesBlocked AutomationChangePolicy = "block"
+
+// AllAutomationChangePolicies lists every valid AutomationChangePolicy.
+var AllAutomationChangePolicies = []AutomationChangePolicy{AutomationChangesBlocked}
+
+func (p AutomationChangePolicy) valid() bool {
+	switch p {
+	case AutomationChangesBlocked:
+		return true
+	default:
+		return false
+	}
+}
+
+// TokenPermissionsMode is the effective GITHUB_TOKEN permission posture of
+// PR-triggered jobs (plan §5.5): what the profile requires, and what a
+// workflow audit observed. read_write exists so an audit can represent a
+// drifted, more-permissive reality; a profile naming it is a deliberate,
+// human-approved posture, never a default.
+type TokenPermissionsMode string
+
+const (
+	TokenPermissionsReadOnly  TokenPermissionsMode = "read_only"
+	TokenPermissionsReadWrite TokenPermissionsMode = "read_write"
+)
+
+// AllTokenPermissionsModes lists every valid TokenPermissionsMode.
+var AllTokenPermissionsModes = []TokenPermissionsMode{
+	TokenPermissionsReadOnly, TokenPermissionsReadWrite,
+}
+
+func (m TokenPermissionsMode) valid() bool {
+	switch m {
+	case TokenPermissionsReadOnly, TokenPermissionsReadWrite:
+		return true
+	default:
+		return false
+	}
+}
+
+// ReviewMode is how automated review is triggered for the repository (plan
+// §5.5): automatically on PR events, or only when the framework requests it.
+type ReviewMode string
+
+const (
+	ReviewAuto               ReviewMode = "auto"
+	ReviewFrameworkTriggered ReviewMode = "framework_triggered"
+)
+
+// AllReviewModes lists every valid ReviewMode.
+var AllReviewModes = []ReviewMode{ReviewAuto, ReviewFrameworkTriggered}
+
+func (m ReviewMode) valid() bool {
+	switch m {
+	case ReviewAuto, ReviewFrameworkTriggered:
+		return true
+	default:
+		return false
+	}
+}
