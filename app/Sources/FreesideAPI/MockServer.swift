@@ -264,6 +264,10 @@ public actor MockServer {
     /// device snapshots stay deterministic under test equality.
     private static let pairedInstant = Date(timeIntervalSince1970: 1_767_323_045)
     private static let revokedInstant = Date(timeIntervalSince1970: 1_767_326_645)
+    /// The decision instant a concluding command stamps (daemon parity,
+    /// #171): fixed like the pairing instants so item snapshots stay
+    /// deterministic under test equality.
+    private static let decidedInstant = Date(timeIntervalSince1970: 1_767_330_245)
 
     func pairDevice(
         _ request: Components.Schemas.PairingRequest
@@ -477,6 +481,9 @@ public actor MockServer {
         }
         if let expires = item.expires_when, expires.timeIntervalSince1970 < -62_000_000_000 {
             return "zero expires_when"
+        }
+        if let decided = item.decided_at, decided.timeIntervalSince1970 < -62_000_000_000 {
+            return "zero decided_at"
         }
         if item.item_version < 1 { return "non-positive item_version" }
         // An empty requested_decision is structurally valid (#96): which
@@ -1124,6 +1131,10 @@ public actor MockServer {
             applied.as_of_revision = revision
             applied.item.item_version += 1
             applied.item.status = status
+            // The concluding decision stamps the item's decision instant in
+            // the same mutation as the status flip (signet Submit, #171); a
+            // retry replays the recorded result above and never re-stamps.
+            applied.item.decided_at = Self.decidedInstant
             itemsByID[payload.item_id] = applied
         case .records:
             // The command record is the whole server-side effect; the

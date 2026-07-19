@@ -61,6 +61,9 @@ import Testing
         #expect(after.item.status == .resolved)
         #expect(after.item.item_version == before.item.item_version + 1)
         #expect(after.entity_version == before.entity_version + 1)
+        // The concluding decision stamps the decision instant (#171).
+        #expect(before.item.decided_at == nil)
+        #expect(after.item.decided_at != nil)
     }
 
     @Test func staleCommandIsRejectedWithTheReplacementAndNoSideEffect() async throws {
@@ -99,6 +102,7 @@ import Testing
         let after = try await client
             .getAttentionItem(path: .init(item_id: "item-agent_question")).ok.body.json
         #expect(after.item.item_version == before.item.item_version + 1)
+        #expect(after.item.decided_at != nil)
     }
 
     @Test func reusedCommandIDWithADifferentBodyIsRejectedNotReplayed() async throws {
@@ -631,6 +635,8 @@ import Testing
         let after = try await client
             .getAttentionItem(path: .init(item_id: "item-ready_for_final_review")).ok.body.json
         #expect(after.item.status == .dismissed)
+        // Dismiss is a concluding decision like resolve: it stamps (#171).
+        #expect(after.item.decided_at != nil)
     }
 
     static func command(
