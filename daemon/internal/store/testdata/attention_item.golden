@@ -61,5 +61,6 @@
     "submit_to_first_open": 300000000000
   },
   "expires_when": "2026-01-03T03:04:05Z",
+  "decided_at": null,
   "status": "open"
 }

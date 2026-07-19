@@ -50,7 +50,7 @@
     "sha256:log"
   ],
   "pr_head_sha": "cafebabe",
-  "item_version": 1,
+  "item_version": 2,
   "interruption_class": "planned_gate",
   "conversation_id": "conv-1",
   "timing": {
@@ -61,6 +61,6 @@
     "submit_to_first_open": 300000000000
   },
   "expires_when": "2026-01-03T03:04:05Z",
-  "decided_at": null,
-  "status": "open"
+  "decided_at": "2026-01-02T05:04:05Z",
+  "status": "dismissed"
 }

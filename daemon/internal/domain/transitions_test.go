@@ -221,6 +221,53 @@ func TestValidateAttentionItemStatusTerminality(t *testing.T) {
 	})
 }
 
+// TestValidateAttentionItemDecidedAtImmutable covers the decision-instant
+// rule (issue #171): stamping an undecided item is legal, but once recorded
+// the instant can neither change nor be erased — in particular by a
+// constructor-built copy, which always carries nil DecidedAt.
+func TestValidateAttentionItemDecidedAtImmutable(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	dismissedIn := validItemInput(domain.AttentionSpecApproval)
+	dismissedIn.Status = domain.StatusDismissed
+	dismissedIn.ItemVersion = 2
+	decided, err := mustItem(t, dismissedIn).WithDecidedAt(ts)
+	if err != nil {
+		t.Fatalf("WithDecidedAt: %v", err)
+	}
+
+	t.Run("stamping an undecided item", func(t *testing.T) {
+		if err := domain.ValidateAttentionItemTransition(mustItem(t, validItemInput(domain.AttentionSpecApproval)), decided); err != nil {
+			t.Fatalf("nil -> stamped rejected: %v", err)
+		}
+	})
+	t.Run("preserving the stamp", func(t *testing.T) {
+		next := decided
+		next.ItemVersion = 3
+		if err := domain.ValidateAttentionItemTransition(decided, next); err != nil {
+			t.Fatalf("stamp-preserving advance rejected: %v", err)
+		}
+	})
+	t.Run("erasing the stamp", func(t *testing.T) {
+		erasedIn := dismissedIn
+		erasedIn.ItemVersion = 3
+		err := domain.ValidateAttentionItemTransition(decided, mustItem(t, erasedIn))
+		if !errors.Is(err, domain.ErrImmutableTransition) {
+			t.Fatalf("erasing decided_at = %v, want ErrImmutableTransition", err)
+		}
+	})
+	t.Run("moving the stamp", func(t *testing.T) {
+		movedIn := dismissedIn
+		movedIn.ItemVersion = 3
+		moved, err := mustItem(t, movedIn).WithDecidedAt(ts.Add(time.Hour))
+		if err != nil {
+			t.Fatalf("WithDecidedAt: %v", err)
+		}
+		if err := domain.ValidateAttentionItemTransition(decided, moved); !errors.Is(err, domain.ErrImmutableTransition) {
+			t.Fatalf("moving decided_at = %v, want ErrImmutableTransition", err)
+		}
+	})
+}
+
 func mustItem(t *testing.T, in domain.AttentionItemInput) domain.AttentionItem {
 	t.Helper()
 	item, err := domain.NewAttentionItem(in, nil)

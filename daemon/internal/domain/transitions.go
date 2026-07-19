@@ -108,6 +108,15 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 		return fmt.Errorf("attention item %s: status %q is terminal and cannot become %q: %w",
 			updated.ID, old.Status, updated.Status, ErrImmutableTransition)
 	}
+	// A recorded decision instant is the durable endpoint of the
+	// open-to-decision metric (issue #171): once stamped it never moves or
+	// disappears, so a writer holding a constructor-built copy (which always
+	// carries nil DecidedAt) cannot silently erase it. Stamping (nil → set)
+	// is the concluding transaction's legal move.
+	if old.DecidedAt != nil && !timesEqual(updated.DecidedAt, old.DecidedAt) {
+		return fmt.Errorf("attention item %s: recorded decided_at would change: %w",
+			updated.ID, ErrImmutableTransition)
+	}
 	return nil
 }
 

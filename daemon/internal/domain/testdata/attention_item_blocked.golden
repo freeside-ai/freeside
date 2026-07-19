@@ -25,5 +25,6 @@
     "submit_to_first_open": null
   },
   "expires_when": null,
+  "decided_at": null,
   "status": "open"
 }
