@@ -1,0 +1,2 @@
+# The build script cross-compiles this binary into the context at build time.
+freeside-export

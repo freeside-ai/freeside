@@ -1,0 +1,20 @@
+# Freeside exporter image (§5.6, plan §5.7; issue #170).
+#
+# The digest-pinned image ward runs in the fresh, credential-free exporter VM.
+# It ships the trusted static freeside-export helper at the contracted path
+# (daemon/internal/export.HelperPath) on top of a digest-pinned busybox base.
+#
+# The busybox shell is a required capability, not an attack surface: the exporter
+# VM is fresh, credential-free, network-disabled, and destroyed after one use,
+# and the suite's conformance probes (the networkless proof and the in-exporter
+# check-5 proof) run their shell scripts inside this same image.
+FROM docker.io/library/alpine:3.22@sha256:2c9d26f410d032d5b1525aa8a873e238b05b90c4ae8618743d4311f0cc827e37
+
+# scripts/build-exporter-image.sh cross-compiles this static linux/arm64 binary
+# into the build context before invoking the image build.
+COPY freeside-export /usr/local/bin/freeside-export
+
+# No ENTRYPOINT or CMD: the command is daemon-owned (export.HelperCommand for the
+# handoff exporter, suite-generated probe scripts for conformance) and is
+# inspect-verified before the container ever starts (Required backend contract
+# check 4).

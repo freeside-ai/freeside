@@ -168,7 +168,7 @@ The daemon (Wave 0 unit 1) and the API spec (Wave 0 unit 5) are initialized; the
 | `api/`        | OpenAPI (spec) | `go run github.com/daveshanley/vacuum@v0.29.9 lint -r api/vacuum.ruleset.yaml --details --fail-severity warn api/openapi.yaml` (from repo root; see api/README.md) |
 | `prompts/`    | prompt text    | not yet initialized; see docs/plan.md roadmap |
 | `policy/`     | YAML (policy)  | not yet initialized; see docs/plan.md roadmap |
-| `images/`     | OCI images     | not yet initialized; see docs/plan.md roadmap |
+| `images/`     | OCI images     | `bash scripts/build-exporter-image.sh` (builds `images/exporter/`; needs Apple `container` or `docker`); agent bases not yet initialized |
 | `scripts/`    | Bash           | `bash -n scripts/*.sh`; `shellcheck scripts/*.sh`; `bash scripts/test-merge-result-audit.sh` (CI pins shellcheck in `.github/workflows/scripts-ci.yml`) |
 
 Lint/format and CI are established with the first component that carries code: the daemon does so here via `daemon/.golangci.yml` and `.github/workflows/daemon-ci.yml` (Linux runs build/test/vet/lint, macOS runs build/test). Later components add their own on the same pattern.
