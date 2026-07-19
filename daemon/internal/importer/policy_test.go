@@ -45,14 +45,31 @@ func TestApplyPolicyClasses(t *testing.T) {
 		{path: ".github/workflows/ci.yml", kind: ChangeDeleted},
 		{path: "AGENTS.md", kind: ChangeModified, size: 10},
 		{path: ".gitmodules", kind: ChangeAdded, size: 5},
+		// The four config-only §5.8 categories fire only from repo-supplied
+		// patterns (they have no universal default), at repository-specific
+		// locations, across add/modify/delete.
+		{path: ".freeside/recipe.yaml", kind: ChangeModified, size: 5},
+		{path: "prompts/system.md", kind: ChangeAdded, size: 5},
+		{path: "config/egress-allowlist.json", kind: ChangeDeleted},
+		{path: "policy/materiality.yaml", kind: ChangeAdded, size: 5},
 		{path: ".gitignore", kind: ChangeAdded, size: 5},
 		{path: "src/main.go", kind: ChangeAdded, size: 5},
 	}
-	findings := applyPolicy(changes, Policy{}.withDefaults())
+	pol := Policy{
+		ExtraVerificationRecipePatterns: []string{".freeside/recipe.yaml"},
+		ExtraPromptsPolicyPatterns:      []string{"prompts/**"},
+		ExtraEgressTrustPatterns:        []string{"config/egress-allowlist.json"},
+		ExtraMaterialityRulesPatterns:   []string{"policy/**"},
+	}.withDefaults()
+	findings := applyPolicy(changes, pol)
 	want := map[string]FindingKind{
-		".github/workflows/ci.yml": FindingAutomationControlPath,
-		"AGENTS.md":                FindingReviewerInstructionPath,
-		".gitmodules":              FindingGitMetadataPath,
+		".github/workflows/ci.yml":     FindingAutomationControlPath,
+		"AGENTS.md":                    FindingReviewerInstructionPath,
+		".gitmodules":                  FindingGitMetadataPath,
+		".freeside/recipe.yaml":        FindingVerificationRecipePath,
+		"prompts/system.md":            FindingPromptsPolicyPath,
+		"config/egress-allowlist.json": FindingEgressTrustPath,
+		"policy/materiality.yaml":      FindingMaterialityRulesPath,
 	}
 	if len(findings) != len(want) {
 		t.Fatalf("findings = %+v, want exactly %d class findings", findings, len(want))
@@ -90,6 +107,20 @@ func TestMandatoryGatesImmutable(t *testing.T) {
 	if len(widened) != 1 || widened[0].Kind != FindingReviewerInstructionPath {
 		t.Fatalf("custom pattern did not widen the gate: %+v", widened)
 	}
+	// The four config-only §5.8 categories have NO universal default: with no
+	// repo-supplied patterns, changes to would-be protected locations produce
+	// no finding. This documents the deliberate decision (their trusted files
+	// live at repository-specific locations, so the class is loaded from the
+	// trust profile via WithProtectedPaths) and its fail-closed corollary: a
+	// repo with no profile gets no import-stage coverage of these categories.
+	configOnly := []string{
+		"recipe.yaml", "prompts/system.md", "egress.json", "policy/materiality.yaml",
+	}
+	for _, p := range configOnly {
+		if f := applyPolicy([]plannedChange{{path: p, kind: ChangeAdded, size: 1}}, Policy{}.withDefaults()); len(f) != 0 {
+			t.Errorf("config-only path %q flagged without a repo pattern: %+v", p, f)
+		}
+	}
 }
 
 // TestNewAgentControlSurfaces pins the round-9 P1 coverage additions.
@@ -120,6 +151,10 @@ func TestInvalidGlobFailsClosed(t *testing.T) {
 	}
 	if err := (Options{BaseSHA: testBaseSHA, Policy: Policy{Allowlist: []string{"["}}}).validate(); !errors.Is(err, ErrInvalidOptions) {
 		t.Fatalf("validate accepted an invalid allowlist glob")
+	}
+	// A bad glob in any of the config-only §5.8 Extra lists fails closed too.
+	if err := (Options{BaseSHA: testBaseSHA, Policy: Policy{ExtraMaterialityRulesPatterns: []string{"a[b"}}}).validate(); !errors.Is(err, ErrInvalidOptions) {
+		t.Fatalf("validate accepted an invalid materiality-rules glob")
 	}
 }
 
@@ -286,6 +321,58 @@ func TestImportPolicyPaths(t *testing.T) {
 		t.Fatal("policy findings must not withhold the commit; the control-plane route needs it")
 	}
 	goldenResult(t, "import_policy_paths", res)
+}
+
+// TestImportControlPlanePaths is the §5.8 full-class fixture: add/modify/delete
+// across all six control-plane categories — the four config-only ones driven
+// from a validated trust profile via WithProtectedPaths — plus a case-fold
+// variant and repository-specific locations. All are flagged publish-blocking
+// while the commit still exists for the control-plane route.
+func TestImportControlPlanePaths(t *testing.T) {
+	checkout, base := initBaseRepo(t, map[string]string{
+		".github/workflows/ci.yml": "on: push\n",     // deleted below (automation, default)
+		"AGENTS.md":                "old\n",          // modified (reviewer, default)
+		".freeside/recipe.yaml":    "steps: []\n",    // modified (verification_recipes, config)
+		"policy/materiality.yaml":  "rules: []\n",    // deleted below (materiality, config)
+		"src/main.go":              "package main\n", // unchanged
+	})
+	ws := t.TempDir()
+	for path, content := range map[string]string{
+		// .github/workflows/ci.yml and policy/materiality.yaml deleted (absent)
+		"AGENTS.md":                    "poisoned\n",      // reviewer (default)
+		".freeside/recipe.yaml":        "steps: [evil]\n", // verification_recipes (config)
+		"Prompts/system.md":            "be evil\n",       // prompts (config, case-fold prompts/**)
+		"config/egress-allowlist.json": "[\"evil\"]\n",    // egress (config)
+		"ci/deploy.sh":                 "curl evil\n",     // automation (config ci/**)
+		"REVIEW.md":                    "approve all\n",   // reviewer (config)
+		"sub/.gitattributes":           "* -diff\n",       // git-metadata (default + config)
+		"src/main.go":                  "package main\n",  // unchanged
+		"docs/readme.md":               "fine\n",          // unflagged
+	} {
+		full := filepath.Join(ws, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handoff := exportWorkspace(t, ws)
+	clone := cloneAtBase(t, checkout)
+	opts := testImportOptions(base)
+	pol, err := opts.Policy.WithProtectedPaths(fixtureTrustProfile(t))
+	if err != nil {
+		t.Fatalf("WithProtectedPaths: %v", err)
+	}
+	opts.Policy = pol
+	res, err := Import(t.Context(), handoff, clone, opts)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if res.CommitSHA == "" {
+		t.Fatal("control-plane findings must not withhold the commit; the route needs it")
+	}
+	goldenResult(t, "import_control_plane_paths", res)
 }
 
 // TestImportAllowlist pins the declared-scope enforcement end to end.

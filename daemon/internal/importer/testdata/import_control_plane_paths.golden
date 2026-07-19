@@ -1,0 +1,107 @@
+{
+  "changes": [
+    {
+      "path": ".freeside/recipe.yaml",
+      "kind": "modified",
+      "mode": "100644",
+      "digest": "sha256:9647239dd332802e6579fc4388ccda3d66418e27da846b6eac879bc092839ead"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "kind": "deleted"
+    },
+    {
+      "path": "AGENTS.md",
+      "kind": "modified",
+      "mode": "100644",
+      "digest": "sha256:bb8eb8dd1e186e6951bac69aa177e5ae29e539bcf1b74e4b3241ec6b5acaf95b"
+    },
+    {
+      "path": "Prompts/system.md",
+      "kind": "added",
+      "mode": "100644",
+      "digest": "sha256:1dba1537fe140f90b417a82798a97a9ccb0c5db24c2bd2bc624c47e2691f4cba"
+    },
+    {
+      "path": "REVIEW.md",
+      "kind": "added",
+      "mode": "100644",
+      "digest": "sha256:cea10dbec6b68a5b26e26e740ad07b119508d2090245c17d532bc9998e9d5f6f"
+    },
+    {
+      "path": "ci/deploy.sh",
+      "kind": "added",
+      "mode": "100644",
+      "digest": "sha256:0158d0c29c7b98fefb91b5d65c581baa620f666767ccac9c8129be5638745039"
+    },
+    {
+      "path": "config/egress-allowlist.json",
+      "kind": "added",
+      "mode": "100644",
+      "digest": "sha256:74d223b0e0988ba766da8a45da20ab28b0361778245cb22c03feec605ad69465"
+    },
+    {
+      "path": "docs/readme.md",
+      "kind": "added",
+      "mode": "100644",
+      "digest": "sha256:8ecc5f94c57b05d6c5e0ee316bee4875427e1845bbeef3ead59df29c72aab36e"
+    },
+    {
+      "path": "policy/materiality.yaml",
+      "kind": "deleted"
+    },
+    {
+      "path": "sub/.gitattributes",
+      "kind": "added",
+      "mode": "100644",
+      "digest": "sha256:015aa7f6529336ad8fb70f6540324ecf88ba9e090bb0f5bf69c4cea9761291f3"
+    }
+  ],
+  "findings": [
+    {
+      "path": ".freeside/recipe.yaml",
+      "kind": "verification_recipe_path",
+      "detail": "modified"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "kind": "automation_control_path",
+      "detail": "deleted"
+    },
+    {
+      "path": "AGENTS.md",
+      "kind": "reviewer_instruction_path",
+      "detail": "modified"
+    },
+    {
+      "path": "Prompts/system.md",
+      "kind": "prompts_policy_path",
+      "detail": "added"
+    },
+    {
+      "path": "REVIEW.md",
+      "kind": "reviewer_instruction_path",
+      "detail": "added"
+    },
+    {
+      "path": "ci/deploy.sh",
+      "kind": "automation_control_path",
+      "detail": "added"
+    },
+    {
+      "path": "config/egress-allowlist.json",
+      "kind": "egress_trust_path",
+      "detail": "added"
+    },
+    {
+      "path": "policy/materiality.yaml",
+      "kind": "materiality_rules_path",
+      "detail": "deleted"
+    },
+    {
+      "path": "sub/.gitattributes",
+      "kind": "git_metadata_path",
+      "detail": "added"
+    }
+  ]
+}
