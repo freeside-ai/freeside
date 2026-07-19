@@ -34,6 +34,20 @@ var (
 	ErrNotCanonicalEncoding    = errors.New("manifest bytes are not the canonical encoded form")
 	ErrNullEntries             = errors.New("entries must be a non-null array")
 
+	// Evidence source descriptor failures (the agent-authored input the helper
+	// reads to emit the evidence channel; a separate schema from the wire
+	// manifest above).
+	ErrUnknownEvidenceSourceVersion = errors.New("unknown evidence source descriptor version")
+	ErrInvalidEvidenceSourcePath    = errors.New("evidence source path is not a canonical path under the reserved evidence subtree")
+	ErrEmptyEvidenceSources         = errors.New("evidence source descriptor declares no sources")
+	ErrDuplicateEvidenceLabel       = errors.New("evidence source descriptor repeats a label")
+	// Evidence emission failures (the helper reading declared sources).
+	ErrEvidenceSourceNotRegular   = errors.New("evidence source is not a regular file")
+	ErrEvidenceSourceMissing      = errors.New("evidence source names a path absent from the workspace")
+	ErrEvidenceBlobTooLarge       = errors.New("evidence source exceeds the evidence blob cap")
+	ErrEvidenceBudgetExhausted    = errors.New("evidence sources exceed the aggregate evidence blob budget")
+	ErrEvidenceDescriptorTooLarge = errors.New("evidence descriptor exceeds the read cap")
+
 	// Export failures.
 	ErrWorkspaceChanged = errors.New("workspace content changed during export")
 	ErrTooManyEntries   = errors.New("workspace exceeds the manifest entry cap")
