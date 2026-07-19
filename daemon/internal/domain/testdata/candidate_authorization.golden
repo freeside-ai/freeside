@@ -1,5 +1,5 @@
 {
-  "id": "sha256:db1b5e10ae4d150ea4b8ae197b2dfb12ff50b2f0f3bcb06f73d8210761a84c1c",
+  "id": "sha256:ad68354ef1847cf1fa8350cf55b29ed3e0ae61e839aa347f44a6876db49a95d3",
   "repo": "freeside-ai/demo",
   "base_sha": "beefcafe",
   "head_sha": "cafebabe",
@@ -23,7 +23,7 @@
       }
     }
   ],
-  "trust_profile_digest": "sha256:4ae77d4827e0bcb4715938308caac81bed769edf8b7985d920b58adfada68932",
+  "trust_profile_digest": "sha256:a1b3fdb2ee565e09cfccca92039b68950c2c3dc2ab85f1a958932b1f75b0f89c",
   "invocation_id": "inv-1",
   "created_at": "2026-01-02T03:04:05Z",
   "authorizes_publication": true
