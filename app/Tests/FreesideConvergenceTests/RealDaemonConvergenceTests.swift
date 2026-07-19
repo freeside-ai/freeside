@@ -52,6 +52,51 @@ struct RealDaemonConvergenceTests {
         #expect(cache.load()?.cursors?.syncEpoch == after.syncEpoch)
     }
 
+    @Test func restoreEvictsTheCachedCardDespiteVersionRollback() async throws {
+        // #165 + #162 convergence gate: a real checkpoint/restore rolls the
+        // item version back below what the client cached and rotates the
+        // epoch in one operation. The epoch change must evict the higher-
+        // versioned card and bootstrap to the restored lower version, never
+        // letting the dead pre-restore row shadow the reset fetch (#162), and
+        // a decision validated afterward binds to the restored state.
+        let control = try ConvergenceHarness.control()
+        let itemID = try await ConvergenceHarness.seedUniqueItem(label: "t165")  // version 1
+        let device = try await ConvergenceHarness.pairDevice(displayName: "Convergence 165")
+        let cache = InMemoryCacheStore()
+        let coordinator = ConvergenceHarness.coordinator(for: device, cache: cache)
+
+        // Checkpoint the version-1 world, bootstrap the client onto it, then
+        // advance the client past the checkpoint so it caches version 2.
+        let checkpoint = try await control.checkpoint()
+        await coordinator.bootstrap()
+        let before = try #require(coordinator.cursors)
+        #expect(coordinator.store.snapshotsByID[itemID]?.item.item_version == 1)
+
+        try await control.seedItem(id: itemID, version: 2)
+        await coordinator.heartbeat()
+        #expect(coordinator.store.snapshotsByID[itemID]?.item.item_version == 2)
+
+        // Restore: the version rolls back to 1 and the epoch rotates in one call.
+        try await control.restore(checkpoint: checkpoint)
+        await coordinator.heartbeat()
+
+        // The epoch changed, so the client discarded the cached version 2 and
+        // bootstrapped fresh onto the restored version 1.
+        let after = try #require(coordinator.cursors)
+        #expect(after.syncEpoch != before.syncEpoch)
+        #expect(coordinator.store.freshness == .fresh)
+        #expect(after.lastFullSnapshotRevision == after.highestObservedServerRevision)
+        #expect(coordinator.store.snapshotsByID[itemID]?.item.item_version == 1)
+        #expect(cache.load()?.cursors?.syncEpoch == after.syncEpoch)
+
+        // A decision validated after the restore certifies against the
+        // restored card, not the evicted replacement (#162 generation guard).
+        let model = DecisionModel(store: coordinator.store, itemID: itemID)
+        await model.validate()
+        #expect(model.actionsEnabled)
+        #expect(model.snapshot?.item.item_version == 1)
+    }
+
     @Test func partialRefetchAdvancesOnlyTheObservedCursor() async throws {
         // Test 11, client half: a server-side write refetched
         // item-by-item must not mark the whole cache current; the

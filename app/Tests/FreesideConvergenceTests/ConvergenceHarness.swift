@@ -56,9 +56,30 @@ struct ControlClient {
         return code
     }
 
-    /// Issues a new sync epoch, the §5.14 restore simulation (test 8).
+    /// Issues a new sync epoch on its own, without a data restore: the
+    /// minimal §5.14 test-8 stimulus. The real restore (data rollback
+    /// plus rotation) is `restore(checkpoint:)`.
     func rotateEpoch() async throws {
         _ = try await post("control/epoch")
+    }
+
+    /// Snapshots the daemon's store to a fresh checkpoint file and
+    /// returns its path, so a later `restore` can roll the daemon back
+    /// to exactly this state.
+    func checkpoint() async throws -> String {
+        let data = try await post("control/checkpoint")
+        let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let path = payload?["checkpoint"] as? String, !path.isEmpty else {
+            throw ConvergenceOutage()
+        }
+        return path
+    }
+
+    /// Restores the daemon to a named checkpoint, rolling the data back
+    /// and rotating the sync epoch in one operation (the real §5.14
+    /// restore, test 8's data half).
+    func restore(checkpoint: String) async throws {
+        _ = try await post("control/restore", body: ["checkpoint": checkpoint])
     }
 
     /// Seeds or advances one attention item; the harness constructs the
