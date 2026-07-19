@@ -16,6 +16,16 @@ import (
 // gate's own fail-closed cases all match one errors.Is target.
 var ErrTrustProfileDrift = domain.ErrTrustProfileDrift
 
+// ErrUnauthorizedPublication is the class sentinel for a publication that
+// fails the candidate-authorization gate (#168, plan §5.6): the candidate
+// carries no authorization binding, names no recorded authorization, the
+// recorded authorization is malformed, it describes a different candidate, or
+// it does not authorize publication (verification failed, or a publish-blocking
+// importer/verifier finding lacks a trusted non-blocking disposition). The
+// authorization is the daemon-authored record binding what publication may
+// trust (#172); the gate fails closed before any external effect.
+var ErrUnauthorizedPublication = errors.New("candidate authorization does not permit publication")
+
 // The publish boundary's error vocabulary. GitHub API failures are
 // carried by *APIError, which records only the status code and request
 // path: response bodies can echo request credentials or carry

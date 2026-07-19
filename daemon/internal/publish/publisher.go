@@ -44,9 +44,11 @@ type Candidate struct {
 	// drift gate (#169): it names the profile the candidate was authorized
 	// under, and Publish fails closed unless that profile is still current
 	// and the latest audit shows no drift from it; a nil digest cannot be
-	// proven drift-free and so also fails closed. AuthorizationID is still
-	// carried, not yet enforced: the fail-closed gate that requires an
-	// authorizing record (#168) consumes it.
+	// proven drift-free and so also fails closed. AuthorizationID names the
+	// immutable authorization the candidate claims permits its publication;
+	// the authorization gate (#168) resolves it, re-validates it, binds it to
+	// this candidate, and fails closed unless it authorizes publication — a
+	// nil id names no authorizing record and also fails closed.
 	AuthorizationID    *domain.Digest
 	TrustProfileDigest *domain.Digest
 }
@@ -69,14 +71,17 @@ type Publisher struct {
 	forge  *forge
 	ledger IntentLedger
 	trust  TrustSource
+	authz  AuthorizationSource
 }
 
 // NewPublisher wires a Publisher. baseURL is the GitHub API root
 // (real: https://api.github.com; tests: an httptest server). trust is the
 // source the drift gate re-reads current automation trust state from on
-// every Publish (#169, plan §5.5).
-func NewPublisher(ts TokenSource, client *http.Client, baseURL string, ledger IntentLedger, trust TrustSource) *Publisher {
-	return &Publisher{forge: newForge(ts, client, baseURL), ledger: ledger, trust: trust}
+// every Publish (#169, plan §5.5); authz is the source the authorization gate
+// resolves the candidate's daemon-authored authorization from (#168, plan
+// §5.6).
+func NewPublisher(ts TokenSource, client *http.Client, baseURL string, ledger IntentLedger, trust TrustSource, authz AuthorizationSource) *Publisher {
+	return &Publisher{forge: newForge(ts, client, baseURL), ledger: ledger, trust: trust, authz: authz}
 }
 
 // Publish converges the candidate onto its one intended result: the
@@ -124,6 +129,17 @@ func (p *Publisher) Publish(ctx context.Context, c Candidate, approvedRecipes ma
 	// drifted publication commits no outbox intent and touches no GitHub
 	// resource.
 	if err := p.gateTrustDrift(ctx, c); err != nil {
+		return Result{}, fmt.Errorf("publish: %w", err)
+	}
+
+	// Authorization gate before any external effect (§5.15 rule 2, plan
+	// §5.6): the candidate must carry a daemon-authored authorization whose
+	// bound facts describe it and whose computed authorizes-publication bit is
+	// set — verification passed and every publish-blocking importer/verifier
+	// finding carries a trusted non-blocking disposition. Placed with the
+	// other pre-effect gates so an unauthorized candidate commits no outbox
+	// intent and touches no GitHub resource.
+	if err := p.gateAuthorization(ctx, c); err != nil {
 		return Result{}, fmt.Errorf("publish: %w", err)
 	}
 
@@ -226,6 +242,57 @@ func (p *Publisher) gateTrustDrift(ctx context.Context, c Candidate) error {
 	return nil
 }
 
+// gateAuthorization fails closed unless a daemon-authored authorization
+// (#172, plan §5.6) records that this exact candidate may be published. The
+// candidate carries only the authorization's content id (Candidate.
+// AuthorizationID); the record is re-read through the source and re-Validated,
+// since a decoded row is never trusted on its face (the #52 re-gate, and
+// Validate recomputes both the id and the authorizes-publication bit from the
+// bound facts, so a forged trust bit fails closed here). The record is then
+// bound to this candidate's publication coordinates: the id is a content
+// address over one candidate's facts, so an id resolving to a record for a
+// different head, recipe, repository, or trust profile must not authorize this
+// candidate. The invocation is deliberately not compared — an authorization
+// attests what a verification run observed, keyed by that producing
+// invocation, which is a different axis from the publishing invocation
+// (ledger.go); and the base is bound by SHA on the record but by ref on the
+// candidate, distinct coordinates the identity derivation already pins. A nil
+// id, or a candidate missing the recipe or trust-profile digest the record
+// binds, names no authorizing record and fails closed.
+func (p *Publisher) gateAuthorization(ctx context.Context, c Candidate) error {
+	if c.AuthorizationID == nil {
+		return fmt.Errorf("candidate carries no authorization binding: %w", ErrUnauthorizedPublication)
+	}
+	if c.RecipeDigest == nil {
+		return fmt.Errorf("candidate carries no recipe digest to bind the authorization: %w", ErrUnauthorizedPublication)
+	}
+	if c.TrustProfileDigest == nil {
+		return fmt.Errorf("candidate carries no trust-profile binding: %w", ErrUnauthorizedPublication)
+	}
+	auth, found, err := p.authz.Authorization(ctx, *c.AuthorizationID)
+	if err != nil {
+		return fmt.Errorf("read candidate authorization: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("no authorization recorded under %s: %w", *c.AuthorizationID, ErrUnauthorizedPublication)
+	}
+	// #52 re-gate: the record is a reconstructed value whose id is a content
+	// address and whose authorizes_publication is a policy computation over
+	// the bound facts; re-validate before trusting either.
+	if err := auth.Validate(); err != nil {
+		return fmt.Errorf("candidate authorization %s: %w", *c.AuthorizationID, err)
+	}
+	if auth.Repo != c.Repo || auth.HeadSHA != c.HeadSHA ||
+		auth.VerificationRecipeDigest != *c.RecipeDigest ||
+		auth.TrustProfileDigest != *c.TrustProfileDigest {
+		return fmt.Errorf("authorization %s does not describe the candidate: %w", auth.ID, ErrUnauthorizedPublication)
+	}
+	if !auth.AuthorizesPublication {
+		return fmt.Errorf("authorization %s does not authorize publication: %w", auth.ID, ErrUnauthorizedPublication)
+	}
+	return nil
+}
+
 // recordIntent commits the publication intent through the outbox
 // ledger before dispatch. A retry of the same invocation converges on
 // the recorded row; a recorded intent naming a different identity
@@ -238,6 +305,10 @@ func (p *Publisher) recordIntent(ctx context.Context, c Candidate, identity Iden
 		Repo:          c.Repo,
 		BaseRef:       c.BaseRef,
 		SourceHeadSHA: c.HeadSHA,
+		// gateAuthorization ran before recordIntent and proved AuthorizationID
+		// non-nil and validated, so the deref is safe; pinning it here lets
+		// the drain reproduce the committed authorization on recovery (#168).
+		AuthorizationID: *c.AuthorizationID,
 	}
 	payload, err := intent.Encode()
 	if err != nil {

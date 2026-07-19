@@ -163,6 +163,22 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 		t.Fatalf("NewArtifact: %v", err)
 	}
 	liveProfileDigest := trustProfileForRepo(t, repo).ProfileDigest
+	// The authorization gate (#168) requires a daemon-authored record that
+	// authorizes this candidate: a passed verification with no blocking
+	// finding, bound to the candidate's repo/head/recipe/trust profile. It is
+	// seeded below alongside trust so Publish reaches the real GitHub path.
+	liveAuth := newAuthorization(t, domain.CandidateAuthorizationInput{
+		Repo:                     repo,
+		BaseSHA:                  headSHA,
+		HeadSHA:                  headSHA,
+		ImportResultDigest:       liveDigest("freeside-live-import-" + nonce),
+		VerificationRecipeDigest: recipe,
+		VerificationOutcome:      domain.VerificationPassed,
+		TrustProfileDigest:       liveProfileDigest,
+		InvocationID:             domain.InvocationID("inv-live-verify-" + nonce),
+		CreatedAt:                time.Now().UTC(),
+	})
+	authID := liveAuth.ID
 	cand := publish.Candidate{
 		Repo:               repo,
 		BaseRef:            baseRef,
@@ -172,6 +188,7 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 		Artifacts:          []domain.Artifact{artifact},
 		RecipeDigest:       &recipe,
 		InvocationID:       domain.InvocationID("inv-live-" + nonce),
+		AuthorizationID:    &authID,
 		TrustProfileDigest: &liveProfileDigest,
 	}
 	resolver := fakeResolver{cand: cand, approved: approved}
@@ -188,7 +205,8 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 
 	dbPath := filepath.Join(t.TempDir(), "store.db")
 	s1, p1 := openKillHarness(t, dbPath, client, baseURL, ts)
-	seedTrust(t, s1, repo) // conformant trust so the drift gate passes; persists across the restart
+	seedTrust(t, s1, repo)     // conformant trust so the drift gate passes; persists across the restart
+	seedAuthz(t, s1, liveAuth) // authorizing record for the live candidate; persists across the restart
 	// Register before Publish: it can create the deterministic branch or
 	// PR and then fail returned-object validation without returning a
 	// Result. The identity supplies the branch up front; a zero PR number

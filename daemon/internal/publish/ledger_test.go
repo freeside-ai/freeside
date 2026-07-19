@@ -39,11 +39,12 @@ func (l *memoryLedger) Record(_ context.Context, key, kind string, payload []byt
 
 func fixtureIntent() publish.Intent {
 	return publish.Intent{
-		Identity:      "sha256:01c663f9a986e10d214b2c31c75fa5088e2995674a8e8f2ba959111e06a23fb8",
-		InvocationID:  "inv-0001",
-		Repo:          "freeside-ai/evidence-repo",
-		BaseRef:       "main",
-		SourceHeadSHA: "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+		Identity:        "sha256:01c663f9a986e10d214b2c31c75fa5088e2995674a8e8f2ba959111e06a23fb8",
+		InvocationID:    "inv-0001",
+		Repo:            "freeside-ai/evidence-repo",
+		BaseRef:         "main",
+		SourceHeadSHA:   "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+		AuthorizationID: "sha256:02c663f9a986e10d214b2c31c75fa5088e2995674a8e8f2ba959111e06a23fb8",
 	}
 }
 
