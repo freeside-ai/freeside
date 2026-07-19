@@ -2,6 +2,7 @@ package signet_test
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -81,30 +82,69 @@ func TestBootstrapProjectsOneTransactionalSnapshot(t *testing.T) {
 	}
 }
 
-// TestNewEpochForcesFreshBootstrap is §5.14 test 8's server half: a restore
-// changes the epoch without making an old revision cursor meaningful in the
-// new world. The next heartbeat exposes the mismatch and the canonical
-// bootstrap carries the new epoch.
-func TestNewEpochForcesFreshBootstrap(t *testing.T) {
+// TestRestoreForcesFreshBootstrap is §5.14 test 8's server half, driven by the
+// real checkpoint/restore path (#165) rather than a bare epoch hook: a restore
+// atomically rolls the database back to the checkpoint and rotates the sync
+// epoch. The rollback regresses the item version and the revision below what a
+// client cached from the advanced world; the epoch change is what invalidates
+// that client's cursor even though its cached revision is now the higher one.
+// The eviction itself is client-side (SyncCoordinator/DecisionModel, #162);
+// this pins that the server exposes a fresh epoch over regressed state through
+// the real restore, not through store.NewEpoch.
+func TestRestoreForcesFreshBootstrap(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
-	before, err := f.service.Revision(ctx)
+
+	// Checkpoint the seeded state (item-1 at version 1), then advance past it.
+	checkpoint := filepath.Join(t.TempDir(), "checkpoint.db")
+	if err := f.store.Checkpoint(ctx, checkpoint); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	atCheckpoint, err := f.service.Revision(ctx)
 	if err != nil {
-		t.Fatalf("Revision before restore: %v", err)
+		t.Fatalf("Revision at checkpoint: %v", err)
 	}
-	if _, err := f.store.NewEpoch(ctx); err != nil {
-		t.Fatalf("NewEpoch: %v", err)
+
+	advanced := f.item
+	advanced.ItemVersion = 2
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, advanced)
+	}); err != nil {
+		t.Fatalf("advance item: %v", err)
 	}
+	// The state a client caches from the advanced world.
+	cached, err := f.service.Revision(ctx)
+	if err != nil {
+		t.Fatalf("Revision after advance: %v", err)
+	}
+	if cached.Revision <= atCheckpoint.Revision {
+		t.Fatalf("advance did not move revision %d -> %d", atCheckpoint.Revision, cached.Revision)
+	}
+
+	// Restore: data rolls back and the epoch rotates in one operation.
+	if _, err := f.store.Restore(ctx, checkpoint); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+
 	after, err := f.service.Revision(ctx)
 	if err != nil {
 		t.Fatalf("Revision after restore: %v", err)
 	}
-	if after.SyncEpoch == before.SyncEpoch {
-		t.Fatalf("epoch stayed %q across restore", before.SyncEpoch)
+	// The epoch the cached client holds is now stale: it must discard and
+	// bootstrap regardless of its (higher) cached revision.
+	if after.SyncEpoch == cached.SyncEpoch {
+		t.Fatalf("epoch stayed %q across restore; a cached cursor would never evict", cached.SyncEpoch)
 	}
-	if after.Revision != before.Revision {
-		t.Errorf("restore moved revision %d -> %d; epoch change is the invalidation", before.Revision, after.Revision)
+	// Revision legitimately regressed to the checkpoint under the new epoch;
+	// revisions compare only within an epoch, so the lower value is unambiguous.
+	if after.Revision != atCheckpoint.Revision {
+		t.Fatalf("restore revision = %d, want checkpoint revision %d", after.Revision, atCheckpoint.Revision)
 	}
+	if after.Revision >= cached.Revision {
+		t.Fatalf("restore revision %d did not regress below the cached %d", after.Revision, cached.Revision)
+	}
+
+	// The canonical bootstrap carries the new epoch and the regressed item.
 	bootstrap, err := f.service.Bootstrap(ctx)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -112,6 +152,11 @@ func TestNewEpochForcesFreshBootstrap(t *testing.T) {
 	if bootstrap.SyncEpoch != after.SyncEpoch || bootstrap.Revision != after.Revision {
 		t.Errorf("bootstrap state = %q/%d, heartbeat = %q/%d",
 			bootstrap.SyncEpoch, bootstrap.Revision, after.SyncEpoch, after.Revision)
+	}
+	if len(bootstrap.AttentionItems) != 1 ||
+		bootstrap.AttentionItems[0].Item.ItemVersion != 1 ||
+		bootstrap.AttentionItems[0].EntityVersion != 1 {
+		t.Fatalf("bootstrap item = %+v, want item-1 regressed to version 1 / entity_version 1", bootstrap.AttentionItems)
 	}
 }
 
