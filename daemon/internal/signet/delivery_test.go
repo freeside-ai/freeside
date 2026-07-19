@@ -415,7 +415,11 @@ func TestTimingReputSkippedWhenUnchanged(t *testing.T) {
 // TestOpenToDecisionDerivableFromDeliveries is issue #69's acceptance 3: the
 // §8 product metric, open-to-decision time, is computable from the delivery
 // rows' opened_at and the decision that concluded the item — no dashboard,
-// just the honest endpoints.
+// just the honest endpoints. Both endpoints are read back from persisted state
+// (the delivery row's opened_at and the item's stamped decided_at), never the
+// test clock: #164 replaces the earlier arithmetic that subtracted the local
+// decidedAt, which proved computation rather than derivability from durable
+// records. The item field is stamped by the accepting transaction (#171).
 func TestOpenToDecisionDerivableFromDeliveries(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
@@ -437,6 +441,7 @@ func TestOpenToDecisionDerivableFromDeliveries(t *testing.T) {
 		t.Fatalf("Submit: %v", err)
 	}
 
+	// Opened endpoint: the persisted delivery row.
 	rows, err := f.service.ListAttentionItemDeliveries(ctx, f.item.ID)
 	if err != nil {
 		t.Fatalf("ListAttentionItemDeliveries: %v", err)
@@ -444,11 +449,24 @@ func TestOpenToDecisionDerivableFromDeliveries(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("deliveries = %d rows, want 1", len(rows))
 	}
-	got := rows[0].Delivery.OpenedAt
-	if got == nil || !got.Equal(openedAt) {
-		t.Fatalf("opened_at = %v, want %v", got, openedAt)
+	opened := rows[0].Delivery.OpenedAt
+	if opened == nil || !opened.Equal(openedAt) {
+		t.Fatalf("opened_at = %v, want %v", opened, openedAt)
 	}
-	if openToDecision := decidedAt.Sub(*got); openToDecision != 5*time.Minute {
+
+	// Decided endpoint: the item's stamped decided_at, read back through the
+	// production read path — not the test's local decidedAt.
+	got, err := f.service.GetAttentionItem(ctx, f.item.ID)
+	if err != nil {
+		t.Fatalf("GetAttentionItem: %v", err)
+	}
+	decided := got.Item.DecidedAt
+	if decided == nil || !decided.Equal(decidedAt) {
+		t.Fatalf("persisted decided_at = %v, want %v", decided, decidedAt)
+	}
+
+	// The metric derives from the two durable endpoints alone.
+	if openToDecision := decided.Sub(*opened); openToDecision != 5*time.Minute {
 		t.Errorf("open-to-decision = %v, want 5m", openToDecision)
 	}
 }
