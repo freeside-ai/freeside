@@ -13,5 +13,6 @@
       "kind": "blob_omitted",
       "detail": "content changed but its blob was withheld by export caps"
     }
-  ]
+  ],
+  "claims": []
 }

@@ -120,8 +120,10 @@ func blobAllowed(size, written int64, opts Options) bool {
 // export's blobs and masquerade as its output, so the export fails closed
 // instead; together with the blob writer trusting only what it wrote, the
 // collected output holds exactly what this helper emitted: manifest.json
-// plus the blobs it references and, once the evidence channel (#167)
-// lands, evidence.json plus its evidence/ blobs.
+// plus the blobs it references. The importer consumes the evidence channel
+// (evidence.json plus its evidence/ blobs) as of #167; this helper's
+// emission of that channel from an agent-declared workspace source is a
+// deferred follow-up co-owned with the ward image work (#170).
 func ensureEmptyOutput(outDir string) error {
 	existing, err := os.ReadDir(outDir)
 	if err != nil {

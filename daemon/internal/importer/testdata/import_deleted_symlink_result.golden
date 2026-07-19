@@ -11,5 +11,6 @@
       "kind": "non_regular_change",
       "detail": "deletes non-regular base entry (mode 120000)"
     }
-  ]
+  ],
+  "claims": []
 }

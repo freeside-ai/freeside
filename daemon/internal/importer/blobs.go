@@ -44,65 +44,112 @@ type blobInfo struct {
 	verifiedPath string
 }
 
-// verifyBlobs audits the handoff blob store against the manifest and
-// verifies every stored blob's content. The audit is exact in both
-// directions: every digest the manifest stores must exist as a blob
-// file, and nothing else may exist anywhere in the handoff directory —
-// the exporter writes exactly manifest.json plus the blobs the manifest
-// references, so a stray path (including a blob for an entry marked
-// blob_omitted) is hostile, not noise. Each stored blob then streams
-// once through sha256 (binding content to the manifest digest) and the
-// git blob object derivation that change derivation and commit
-// construction rely on later. The same stream writes a daemon-private
-// snapshot, so no later stage re-resolves a handoff pathname.
-func verifyBlobs(handoffDir, scratch string, m export.Manifest, pol Policy) (map[export.Digest]blobInfo, error) {
-	needed := make(map[export.Digest]int64, len(m.Entries))
-	var storedTotal int64
+// verifyBlobs audits both handoff blob stores against their manifests and
+// verifies every stored blob's content. The audit is exact in both directions
+// per channel: every digest a manifest stores must exist as a blob file, and
+// nothing else may exist anywhere in the handoff directory — the exporter writes
+// exactly manifest.json (plus evidence.json when the evidence channel is
+// present) and the blobs those manifests reference, so a stray path (including a
+// blob for an entry marked blob_omitted) is hostile, not noise. The two channels
+// keep physically separate stores (blobs/ and evidence/, plan §5.6), so an
+// evidence digest never resolves through a repo blob or vice versa. Each stored
+// blob then streams once through sha256 (binding content to the manifest digest)
+// and the git blob object derivation that change derivation and commit
+// construction rely on later. The same stream writes a daemon-private snapshot
+// into a per-channel scratch subdir, so no later stage re-resolves a handoff
+// pathname and a shared digest cannot collide across channels.
+func verifyBlobs(handoffDir, scratch string, m export.Manifest, em export.EvidenceManifest, emPresent bool, pol Policy) (repo, evidence map[export.Digest]blobInfo, err error) {
+	repoNeeded := make(map[export.Digest]int64, len(m.Entries))
+	var repoTotal int64
 	for _, e := range m.Entries {
 		if e.Kind != export.EntryRegular || e.BlobOmitted {
 			continue
 		}
-		// Enforce the stored-blob size caps before opening or hashing any
-		// blob: verifyBlob reads the whole file to bind its digest, so a
-		// forged manifest declaring a huge stored blob (or many blobs
-		// summing past the total) would otherwise burn that much disk I/O
-		// at the untrusted boundary. An honest exporter never stores a
-		// blob past these caps (it omits it), so an over-cap stored blob
-		// is contract-impossible; fail closed. Deduplicated blobs are
-		// counted once (the total bounds bytes actually read).
-		if pol.MaxBlobBytes > 0 && *e.Size > pol.MaxBlobBytes {
-			return nil, fmt.Errorf("stored blob %s declares %d bytes, over the %d-byte cap: %w", *e.Digest, *e.Size, pol.MaxBlobBytes, ErrBlobTooLarge)
+		if err := accumulateNeeded(repoNeeded, &repoTotal, *e.Digest, *e.Size, pol.MaxBlobBytes, pol.MaxTotalBytes); err != nil {
+			return nil, nil, err
 		}
-		if prev, ok := needed[*e.Digest]; ok {
-			if prev != *e.Size {
-				return nil, fmt.Errorf("digest %s claimed at sizes %d and %d: %w", *e.Digest, prev, *e.Size, ErrSizeMismatch)
-			}
-			continue // already counted; dedup is free
-		}
-		// Overflow-safe: storedTotal never exceeds MaxTotalBytes, so the
-		// subtraction cannot wrap.
-		if pol.MaxTotalBytes > 0 && *e.Size > pol.MaxTotalBytes-storedTotal {
-			return nil, fmt.Errorf("stored blobs exceed the %d-byte total cap: %w", pol.MaxTotalBytes, ErrBlobTooLarge)
-		}
-		storedTotal += *e.Size
-		needed[*e.Digest] = *e.Size
 	}
-	sha256Dir, err := auditHandoffLayout(handoffDir, needed)
+	// Every evidence entry has a mandatory blob (the evidence schema has no
+	// blob_omitted escape), so each contributes. emPresent need not be checked
+	// here: an absent channel decodes to a zero manifest with no entries.
+	evidenceNeeded := make(map[export.Digest]int64, len(em.Entries))
+	var evidenceTotal int64
+	for _, e := range em.Entries {
+		if err := accumulateNeeded(evidenceNeeded, &evidenceTotal, e.Digest, e.Size, pol.MaxEvidenceBlobBytes, pol.MaxEvidenceTotalBytes); err != nil {
+			return nil, nil, err
+		}
+	}
+	repoSha256, evidenceSha256, err := auditHandoffLayout(handoffDir, repoNeeded, evidenceNeeded, emPresent)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if sha256Dir != nil {
-		defer func() { _ = sha256Dir.Close() }()
+	if repoSha256 != nil {
+		defer func() { _ = repoSha256.Close() }()
 	}
-	verifiedDir := filepath.Join(scratch, "verified-blobs")
-	if err := os.Mkdir(verifiedDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create verified-blob scratch: %w", err)
+	if evidenceSha256 != nil {
+		defer func() { _ = evidenceSha256.Close() }()
 	}
-	blobs := make(map[export.Digest]blobInfo, len(needed))
-	for digest, size := range needed {
-		if sha256Dir == nil {
-			return nil, fmt.Errorf("manifest stores %s but the handoff has no blob directory: %w", digest, ErrMissingBlob)
+	repo, err = snapshotChannel(scratch, "repo", repoSha256, repoNeeded)
+	if err != nil {
+		return nil, nil, err
+	}
+	evidence, err = snapshotChannel(scratch, "evidence", evidenceSha256, evidenceNeeded)
+	if err != nil {
+		return nil, nil, err
+	}
+	return repo, evidence, nil
+}
+
+// accumulateNeeded records one stored blob into needed, enforcing the per-blob
+// and running-total size caps before any byte is read. verifyBlobTo reads a
+// whole file to bind its digest, so a forged manifest declaring a huge stored
+// blob (or many summing past the total) would otherwise burn that much disk I/O
+// at the untrusted boundary; an honest exporter never stores an over-cap blob,
+// so an over-cap declaration is contract-impossible and fails closed. A repeated
+// digest is counted once (dedup is free and bounds bytes actually read); a
+// repeat at a different size is a forged manifest.
+func accumulateNeeded(needed map[export.Digest]int64, storedTotal *int64, digest export.Digest, size, maxBlob, maxTotal int64) error {
+	if maxBlob > 0 && size > maxBlob {
+		return fmt.Errorf("stored blob %s declares %d bytes, over the %d-byte cap: %w", digest, size, maxBlob, ErrBlobTooLarge)
+	}
+	if prev, ok := needed[digest]; ok {
+		if prev != size {
+			return fmt.Errorf("digest %s claimed at sizes %d and %d: %w", digest, prev, size, ErrSizeMismatch)
 		}
+		return nil
+	}
+	// Overflow-safe: storedTotal never exceeds maxTotal, so the subtraction
+	// cannot wrap.
+	if maxTotal > 0 && size > maxTotal-*storedTotal {
+		return fmt.Errorf("stored blobs exceed the %d-byte total cap: %w", maxTotal, ErrBlobTooLarge)
+	}
+	*storedTotal += size
+	needed[digest] = size
+	return nil
+}
+
+// snapshotChannel verifies and snapshots every needed blob for one channel into
+// a private scratch subdir named for the channel. Separate subdirs keep the
+// channels' verified content physically apart even when one content digest
+// appears in both, so neither channel's snapshot can be read as the other's.
+func snapshotChannel(scratch, name string, sha256Dir *os.File, needed map[export.Digest]int64) (map[export.Digest]blobInfo, error) {
+	blobs := make(map[export.Digest]blobInfo, len(needed))
+	if len(needed) == 0 {
+		return blobs, nil
+	}
+	if sha256Dir == nil {
+		// auditHandoffLayout returns a nil directory only for a channel that
+		// stored nothing; a non-empty needed set with no store is already
+		// ErrMissingBlob there, so this is an internal invariant guard.
+		for digest := range needed {
+			return nil, fmt.Errorf("channel %s stores %s but has no blob directory: %w", name, digest, ErrMissingBlob)
+		}
+	}
+	verifiedDir := filepath.Join(scratch, "verified-blobs", name)
+	if err := os.MkdirAll(verifiedDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create verified-blob scratch for %s: %w", name, err)
+	}
+	for digest, size := range needed {
 		verifiedPath := filepath.Join(verifiedDir, strings.TrimPrefix(string(digest), "sha256:"))
 		info, err := snapshotVerifiedBlob(sha256Dir, verifiedPath, digest, size)
 		if err != nil {
@@ -113,21 +160,29 @@ func verifyBlobs(handoffDir, scratch string, m export.Manifest, pol Policy) (map
 	return blobs, nil
 }
 
-// auditHandoffLayout enforces the exact handoff shape: the root holds
-// manifest.json and at most a blobs/ directory, blobs/ holds at most a
-// sha256/ directory, and sha256/ holds exactly the needed digests as
-// regular files (a symlink or subdirectory there is hostile). Every
-// level is enumerated in bounded batches and aborts on the first
-// unexpected entry, so a hostile handoff that stuffs a directory with
-// millions of names cannot force the whole listing into memory before
-// the audit rejects it.
-func auditHandoffLayout(dir string, needed map[export.Digest]int64) (*os.File, error) {
+// auditHandoffLayout enforces the exact handoff shape in a single root scan and
+// returns each channel's pinned sha256 directory for content verification. The
+// root holds manifest.json and at most blobs/, evidence.json, and evidence/;
+// every other entry is an orphan. The root is scanned once (a second pass per
+// channel would reject the other channel's files as orphans), then each blob
+// store (blobs/, evidence/) is audited by the shared auditBlobStore: it holds at
+// most a sha256/ directory holding exactly that channel's needed digests as
+// regular files. Every level is enumerated in bounded batches and aborts on the
+// first unexpected entry, so a hostile handoff that stuffs a directory with
+// millions of names cannot force the whole listing into memory before the audit
+// rejects it. A returned directory is non-nil only for a channel that stored
+// blobs; the caller closes each after verification. When the evidence channel is
+// absent (evidencePresent false, i.e. no evidence.json), evidence.json and
+// evidence/ are NOT permitted at the root: a stale or planted second-channel
+// entry is an orphan, so an absent evidence channel is exactly the pre-evidence
+// layout.
+func auditHandoffLayout(dir string, repoNeeded, evidenceNeeded map[export.Digest]int64, evidencePresent bool) (repoSha256, evidenceSha256 *os.File, err error) {
 	root, err := openDirectory(dir, ErrHandoffUnreadable)
 	if err != nil {
-		return nil, fmt.Errorf("open %q: %w: %w", dir, ErrHandoffUnreadable, err)
+		return nil, nil, fmt.Errorf("open %q: %w: %w", dir, ErrHandoffUnreadable, err)
 	}
 	defer func() { _ = root.Close() }()
-	blobsDir := false
+	blobsDir, evidenceDir := false, false
 	if err := scanOpenDirBatched(root, dir, ErrHandoffUnreadable, func(de os.DirEntry) error {
 		switch {
 		case de.Name() == export.ManifestFilename && de.Type().IsRegular():
@@ -135,66 +190,94 @@ func auditHandoffLayout(dir string, needed map[export.Digest]int64) (*os.File, e
 		case de.Name() == "blobs" && de.IsDir():
 			blobsDir = true
 			return nil
+		case evidencePresent && de.Name() == export.EvidenceFilename && de.Type().IsRegular():
+			return nil
+		case evidencePresent && de.Name() == export.EvidenceBlobsDirname && de.IsDir():
+			evidenceDir = true
+			return nil
 		default:
 			return fmt.Errorf("unexpected handoff entry %q: %w", de.Name(), ErrOrphanBlob)
 		}
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if !blobsDir {
+	repoSha256, err = auditBlobStore(root, dir, "blobs", blobsDir, repoNeeded)
+	if err != nil {
+		return nil, nil, err
+	}
+	evidenceSha256, err = auditBlobStore(root, dir, export.EvidenceBlobsDirname, evidenceDir, evidenceNeeded)
+	if err != nil {
+		if repoSha256 != nil {
+			_ = repoSha256.Close()
+		}
+		return nil, nil, err
+	}
+	return repoSha256, evidenceSha256, nil
+}
+
+// auditBlobStore enforces one channel's blob-store shape under the pinned
+// handoff root and returns its open sha256 directory. present reports whether
+// the store's top directory (storeName) was seen at the root scan. The store
+// holds at most a sha256/ directory, which holds exactly the needed digests as
+// regular files: a stray, non-regular, or unreferenced entry is an orphan, a
+// missing needed digest is ErrMissingBlob, and an absent store with a non-empty
+// needed set is ErrMissingBlob. Both channels share this routine, so neither can
+// hold content the other's manifest references.
+func auditBlobStore(root *os.File, dir, storeName string, present bool, needed map[export.Digest]int64) (*os.File, error) {
+	if !present {
 		if len(needed) > 0 {
-			return nil, fmt.Errorf("manifest references blobs but the handoff has no blob store: %w", ErrMissingBlob)
+			return nil, fmt.Errorf("manifest references blobs but the handoff has no %s store: %w", storeName, ErrMissingBlob)
 		}
 		return nil, nil
 	}
-	blobsPath := filepath.Join(dir, "blobs")
-	blobs, err := openDirectoryAt(root, "blobs", ErrHandoffUnreadable)
+	storePath := filepath.Join(dir, storeName)
+	store, err := openDirectoryAt(root, storeName, ErrHandoffUnreadable)
 	if err != nil {
-		return nil, fmt.Errorf("open %q: %w: %w", blobsPath, ErrHandoffUnreadable, err)
+		return nil, fmt.Errorf("open %q: %w: %w", storePath, ErrHandoffUnreadable, err)
 	}
-	defer func() { _ = blobs.Close() }()
-	sha256Dir := false
-	if err := scanOpenDirBatched(blobs, blobsPath, ErrHandoffUnreadable, func(de os.DirEntry) error {
+	defer func() { _ = store.Close() }()
+	sha256Present := false
+	if err := scanOpenDirBatched(store, storePath, ErrHandoffUnreadable, func(de os.DirEntry) error {
 		if de.Name() != "sha256" || !de.IsDir() {
-			return fmt.Errorf("unexpected blob-store entry %q: %w", de.Name(), ErrOrphanBlob)
+			return fmt.Errorf("unexpected %s-store entry %q: %w", storeName, de.Name(), ErrOrphanBlob)
 		}
-		sha256Dir = true
+		sha256Present = true
 		return nil
 	}); err != nil {
 		return nil, err
 	}
-	found := make(map[string]struct{}, len(needed))
-	if sha256Dir {
-		sha256Path := filepath.Join(blobsPath, "sha256")
-		sha256, err := openDirectoryAt(blobs, "sha256", ErrHandoffUnreadable)
-		if err != nil {
-			return nil, fmt.Errorf("open %q: %w: %w", sha256Path, ErrHandoffUnreadable, err)
-		}
-		if err := scanOpenDirBatched(sha256, sha256Path, ErrHandoffUnreadable, func(bf os.DirEntry) error {
-			digest := export.Digest("sha256:" + bf.Name())
-			if _, ok := needed[digest]; !ok || !bf.Type().IsRegular() {
-				return fmt.Errorf("blob-store entry %q is unreferenced or not a regular file: %w", bf.Name(), ErrOrphanBlob)
-			}
-			found[bf.Name()] = struct{}{}
-			return nil
-		}); err != nil {
-			_ = sha256.Close()
-			return nil, err
-		}
+	if !sha256Present {
+		// An empty store with nothing needed is benign; a needed digest with no
+		// sha256 directory is missing.
 		for digest := range needed {
-			if _, ok := found[strings.TrimPrefix(string(digest), "sha256:")]; !ok {
-				_ = sha256.Close()
-				return nil, fmt.Errorf("manifest stores %s but the handoff does not hold it: %w", digest, ErrMissingBlob)
-			}
+			return nil, fmt.Errorf("%s manifest stores %s but the handoff does not hold it: %w", storeName, digest, ErrMissingBlob)
 		}
-		return sha256, nil
+		return nil, nil
+	}
+	sha256Path := filepath.Join(storePath, "sha256")
+	sha256, err := openDirectoryAt(store, "sha256", ErrHandoffUnreadable)
+	if err != nil {
+		return nil, fmt.Errorf("open %q: %w: %w", sha256Path, ErrHandoffUnreadable, err)
+	}
+	found := make(map[string]struct{}, len(needed))
+	if err := scanOpenDirBatched(sha256, sha256Path, ErrHandoffUnreadable, func(bf os.DirEntry) error {
+		digest := export.Digest("sha256:" + bf.Name())
+		if _, ok := needed[digest]; !ok || !bf.Type().IsRegular() {
+			return fmt.Errorf("%s-store entry %q is unreferenced or not a regular file: %w", storeName, bf.Name(), ErrOrphanBlob)
+		}
+		found[bf.Name()] = struct{}{}
+		return nil
+	}); err != nil {
+		_ = sha256.Close()
+		return nil, err
 	}
 	for digest := range needed {
 		if _, ok := found[strings.TrimPrefix(string(digest), "sha256:")]; !ok {
-			return nil, fmt.Errorf("manifest stores %s but the handoff does not hold it: %w", digest, ErrMissingBlob)
+			_ = sha256.Close()
+			return nil, fmt.Errorf("%s manifest stores %s but the handoff does not hold it: %w", storeName, digest, ErrMissingBlob)
 		}
 	}
-	return nil, nil
+	return sha256, nil
 }
 
 // dirBatch is how many entries scanDirBatched pulls per syscall: enough
