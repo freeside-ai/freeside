@@ -23,8 +23,12 @@ type blobWriter struct {
 	written map[Digest]bool
 }
 
-func newBlobWriter(outDir string) (*blobWriter, error) {
-	dir := filepath.Join(outDir, "blobs", "sha256")
+// newBlobWriter creates the sha256 store for one channel under
+// <outDir>/<channelDir>/sha256/. channelDir is "blobs" for the repo channel and
+// EvidenceBlobsDirname for the evidence channel, which keep physically separate
+// stores so a digest never resolves across channels (plan §5.6).
+func newBlobWriter(outDir, channelDir string) (*blobWriter, error) {
+	dir := filepath.Join(outDir, channelDir, "sha256")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("create blob directory: %w", err)
 	}

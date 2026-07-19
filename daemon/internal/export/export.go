@@ -43,6 +43,14 @@ type Options struct {
 	// not tight; the tight bound is the ward's bounded workspace volume
 	// (§5.7), since every recorded name occupies a real on-disk dirent.
 	MaxEntries int
+	// MaxEvidenceBlobBytes caps one evidence-channel blob and
+	// MaxEvidenceTotalBytes the aggregate evidence bytes. Unlike the repo caps
+	// above, an over-cap evidence source fails the export closed rather than
+	// omitting its blob: the evidence schema requires a blob for every entry
+	// (evidence.go), so an omitted evidence blob is not representable. Zero or
+	// negative disables either cap.
+	MaxEvidenceBlobBytes  int64
+	MaxEvidenceTotalBytes int64
 }
 
 // ManifestFilename is the manifest's fixed name under the output
@@ -63,7 +71,7 @@ func Export(fsys fs.FS, outDir string, opts Options) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-	bw, err := newBlobWriter(outDir)
+	bw, err := newBlobWriter(outDir, "blobs")
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -95,6 +103,13 @@ func Export(fsys fs.FS, outDir string, opts Options) (Manifest, error) {
 	if err := os.WriteFile(filepath.Join(outDir, ManifestFilename), body, 0o600); err != nil {
 		return Manifest{}, fmt.Errorf("write manifest: %w", err)
 	}
+	// The second §5.6 channel: emit evidence.json plus its evidence/ blobs from
+	// the agent-declared descriptor under the reserved subtree (which the repo
+	// walk above skipped). Absent descriptor ⇒ no evidence channel; any hostile
+	// or malformed declaration fails the whole export closed.
+	if err := emitEvidence(fsys, outDir, opts); err != nil {
+		return Manifest{}, err
+	}
 	return m, nil
 }
 
@@ -119,11 +134,10 @@ func blobAllowed(size, written int64, opts Options) bool {
 // path baked into the exporter rootfs) could otherwise sit beside this
 // export's blobs and masquerade as its output, so the export fails closed
 // instead; together with the blob writer trusting only what it wrote, the
-// collected output holds exactly what this helper emitted: manifest.json
-// plus the blobs it references. The importer consumes the evidence channel
-// (evidence.json plus its evidence/ blobs) as of #167; this helper's
-// emission of that channel from an agent-declared workspace source is a
-// deferred follow-up co-owned with the ward image work (#170).
+// collected output holds exactly what this helper emitted: the repo channel
+// (manifest.json plus its blobs) and, when the workspace declares one, the
+// evidence channel (evidence.json plus its evidence/ blobs, emitted by
+// emitEvidence from the reserved .freeside-evidence/ descriptor).
 func ensureEmptyOutput(outDir string) error {
 	existing, err := os.ReadDir(outDir)
 	if err != nil {

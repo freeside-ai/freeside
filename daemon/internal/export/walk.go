@@ -117,6 +117,14 @@ func (w *walker) visit(dir string, de fs.DirEntry) (string, error) {
 		w.entries = append(w.entries, Entry{Path: ".git", Kind: EntryGitDir})
 		return "", nil
 	}
+	// The reserved evidence subtree is the agent's transient evidence-channel
+	// staging; it leaves the workspace only through the evidence channel, never
+	// the repo-change channel (plan §5.6), so the repo walk skips it entirely
+	// and records nothing for it. The evidence emitter reaches it separately
+	// through the declared descriptor.
+	if p == EvidenceWorkspaceDir {
+		return "", nil
+	}
 	info, err := de.Info()
 	if err != nil {
 		return "", fmt.Errorf("lstat %q: %w", p, err)
