@@ -27,13 +27,13 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
 
         #expect(store.load() == nil)
         let state = sampleState()
-        store.save(state)
+        try store.save(state)
         #expect(store.load() == state)
 
         // A later save replaces the earlier state wholesale, as a
         // bootstrap rebuild does.
         let newer = sampleState(revision: 9)
-        store.save(newer)
+        try store.save(newer)
         #expect(store.load() == newer)
     }
 
@@ -71,7 +71,7 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
                 command: makeCommand(itemID: "item-b", commandID: "cmd-b"),
                 state: .unresolved),
         ]
-        store.save(state)
+        try store.save(state)
         #expect(store.load() == state)
     }
 
@@ -87,7 +87,7 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
             pendingCommands: [
                 "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
             ])
-        store.save(state)
+        try store.save(state)
         #expect(store.load() == state)
     }
 
@@ -103,7 +103,7 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         state.pendingCommands = [
             "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
         ]
-        store.save(state)
+        try store.save(state)
 
         var object = try #require(
             try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
@@ -181,7 +181,7 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
     @Test func discardDeletesTheFile() throws {
         let (store, directory) = temporaryStore()
         defer { try? FileManager.default.removeItem(at: directory) }
-        store.save(sampleState())
+        try store.save(sampleState())
         #expect(store.load() != nil)
 
         store.discard()

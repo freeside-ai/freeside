@@ -10,6 +10,35 @@ private func makeCoordinator(
     SyncCoordinator(client: APIClientFactory.mock(server: server), cache: cache)
 }
 
+/// A cache whose saves fail on demand, to drive the durable-persistence
+/// submission precondition (#163). Loads and discards delegate to an
+/// in-memory backing, so whatever did persist is still visible to a
+/// relaunch; `failSaves` can be flipped mid-test to model a disk that
+/// recovers.
+private final class FailingCacheStore: CacheStore, @unchecked Sendable {
+    struct SaveRefused: Error {}
+
+    private let backing = InMemoryCacheStore()
+    private let lock = NSLock()
+    private var _failSaves: Bool
+
+    init(failSaves: Bool) { _failSaves = failSaves }
+
+    var failSaves: Bool {
+        get { lock.withLock { _failSaves } }
+        set { lock.withLock { _failSaves = newValue } }
+    }
+
+    func load() -> CachedState? { backing.load() }
+
+    func save(_ state: CachedState) throws {
+        if failSaves { throw SaveRefused() }
+        try backing.save(state)
+    }
+
+    func discard() { backing.discard() }
+}
+
 /// The client half of plan §5.14's cursor and freshness semantics,
 /// against the mock daemon.
 @Suite @MainActor struct SyncCoordinatorTests {
@@ -239,8 +268,9 @@ private func makeCoordinator(
         #expect(restored.command == entry.command)
         #expect(restored.state == .unresolved)
         #expect(
-            !second.store.registerPendingCommand(
-                makeCommand(itemID: "item-spec_approval", commandID: "cmd-duplicate")))
+            second.store.registerPendingCommand(
+                makeCommand(itemID: "item-spec_approval", commandID: "cmd-duplicate"))
+                == .slotOccupied)
     }
 
     @Test func anInFlightEntryRestoresAsUnresolved() async throws {
@@ -249,7 +279,7 @@ private func makeCoordinator(
         // the unresolved state (the retry affordance) is honest.
         let cache = InMemoryCacheStore()
         let first = makeCoordinator(server: MockServer(), cache: cache)
-        #expect(first.store.registerPendingCommand(makeCommand(itemID: "item-x")))
+        #expect(first.store.registerPendingCommand(makeCommand(itemID: "item-x")) == .registered)
         #expect(cache.load()?.pendingCommands?["item-x"]?.state == .inFlight)
 
         let second = makeCoordinator(server: MockServer(), cache: cache)
@@ -264,7 +294,7 @@ private func makeCoordinator(
         // and a key naming a different item than its command must not
         // block that item. Only the consistent same-device entry lands.
         let cache = InMemoryCacheStore()
-        cache.save(
+        try cache.save(
             CachedState(
                 cursors: nil,
                 attentionItems: [],
@@ -326,7 +356,7 @@ private func makeCoordinator(
         // authoritative rejection on resend and the slot clears — the
         // decision was definitively not recorded, nothing to recover.
         let cache = InMemoryCacheStore()
-        cache.save(
+        try cache.save(
             CachedState(
                 cursors: nil,
                 attentionItems: [],
@@ -415,7 +445,7 @@ private func makeCoordinator(
         // file goes too: keeping one would undo the epoch eviction.
         let cache = InMemoryCacheStore()
         let command = makeCommand(itemID: "item-x")
-        cache.save(
+        try cache.save(
             CachedState(
                 cursors: nil,
                 attentionItems: [],
@@ -655,6 +685,64 @@ private func makeCoordinator(
         // Settled ambiguous (a replay ran), not the refetch-eviction branch
         // just revalidating and leaving the optimistic record in place.
         #expect(await submitCalls.count == 2)
+    }
+
+    @Test func aFailedLedgerPersistBlocksTheSendAndSurfacesIt() async throws {
+        // #163: the pending-command ledger must reach disk before the
+        // first byte leaves. If the durable write fails, no command is
+        // sent (its reusable command_id would be lost on relaunch), the
+        // in-memory slot is rolled back, and the failure surfaces on the
+        // card instead of passing silently as disposable-cache loss.
+        let server = MockServer()
+        let cache = FailingCacheStore(failSaves: true)
+        let coordinator = makeCoordinator(server: server, cache: cache)
+        await coordinator.bootstrap()
+
+        let submitCalls = Counter()
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" { await submitCalls.increment() }
+        }
+
+        let model = DecisionModel(store: coordinator.store, itemID: "item-spec_approval")
+        await model.validate()
+        #expect(model.actionsEnabled)
+
+        await model.submit(.approve)
+
+        #expect(await submitCalls.count == 0)  // nothing left the client
+        #expect(model.submissionError != nil)  // surfaced, not swallowed
+        #expect(model.phase == .idle)
+        #expect(coordinator.store.pendingCommandsByItemID["item-spec_approval"] == nil)
+    }
+
+    @Test func aRecoveredLedgerPersistLetsTheSendProceed() async throws {
+        // The precondition fails closed, it does not wedge: once the
+        // device can persist again, the same decision submits normally
+        // (#163). Guards against the gate over-blocking a healthy write.
+        let server = MockServer()
+        let cache = FailingCacheStore(failSaves: true)
+        let coordinator = makeCoordinator(server: server, cache: cache)
+        await coordinator.bootstrap()
+
+        let submitCalls = Counter()
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" { await submitCalls.increment() }
+        }
+
+        let model = DecisionModel(store: coordinator.store, itemID: "item-spec_approval")
+        await model.validate()
+        await model.submit(.approve)
+        #expect(await submitCalls.count == 0)  // blocked while the write fails
+
+        // The disk recovers; resubmitting the same decision now persists
+        // its ledger entry and sends.
+        cache.failSaves = false
+        await model.submit(.approve)
+
+        #expect(await submitCalls.count == 1)  // the command left this time
+        #expect(model.submissionError == nil)
+        #expect(model.phase == .applied)
+        #expect(coordinator.store.pendingCommandsByItemID.isEmpty)
     }
 }
 
