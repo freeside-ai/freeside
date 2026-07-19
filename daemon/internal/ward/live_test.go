@@ -25,36 +25,40 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/importer"
 )
 
-// liveImage is the spike's pinned test image: alpine 3.22, by digest, so the
-// exporter placeholder payload is digest-pinned trusted compute.
+// liveImage is the spike's pinned agent/base image: alpine 3.22, by digest.
 const liveImage = "docker.io/library/alpine:3.22@sha256:2c9d26f410d032d5b1525aa8a873e238b05b90c4ae8618743d4311f0cc827e37"
 
 // liveMarker is the spike's inert credential marker; the §5.4 scanner hook
 // greps the verified output for it, and finding it fails the gate.
 const liveMarker = "FREESIDE_FAKE_PROVIDER_CREDENTIAL_DO_NOT_EXPORT"
 
-// liveExporterPayload is the placeholder exporter payload (issue #76 allows
-// landing against one until the pinned exporter image with freeside-export
-// exists): it runs check 5's probes, writes the proof file with the
-// observed values, and emits a minimal valid §5.6 manifest plus the one
-// content blob so check 7's digest verification runs against real exported
-// bytes.
-const liveExporterPayload = `
-ws=rw
-grep " /workspace " /proc/mounts | grep -q -e " ro," -e " ro " && ws=ro
-wp=succeeded
-touch /workspace/.write-probe 2>/dev/null || wp=blocked
-[ -e /credentials ] && cr=present || cr=absent
-[ -e /Users ] && hh=present || hh=absent
-printf "workspace_mounted=%s\nworkspace_write=%s\ncredentials=%s\nhost_home=%s\n" "$ws" "$wp" "$cr" "$hh" > /handoff-proof.txt
-mkdir -p /handoff/blobs/sha256
-d=$(sha256sum /workspace/result.txt); d=${d%% *}
-s=$(wc -c < /workspace/result.txt)
-cp /workspace/result.txt "/handoff/blobs/sha256/$d"
-printf "{\"version\":\"freeside.export.manifest/v1\",\"entries\":[{\"path\":\"result.txt\",\"kind\":\"regular\",\"mode\":\"0644\",\"size\":%s,\"digest\":\"sha256:%s\",\"target\":null}]}" "$s" "$d" > /handoff/manifest.json
-`
+// liveExporterImage returns the digest-pinned exporter image the live tests run
+// the real freeside-export helper from, read from FREESIDE_WARD_EXPORTER_IMAGE.
+// Build and push it with `scripts/build-exporter-image.sh --registry <host>` and
+// set the env to the printed reference (ward resolves a digest only through a
+// registry, so a local-only build is not enough). The test skips when it is
+// unset so the alpine-only members still run.
+func liveExporterImage(t *testing.T) string {
+	t.Helper()
+	ref := os.Getenv("FREESIDE_WARD_EXPORTER_IMAGE")
+	if ref == "" {
+		t.Skip("exporter-image live test skipped: set FREESIDE_WARD_EXPORTER_IMAGE to the digest-pinned exporter image (scripts/build-exporter-image.sh --registry <host>)")
+	}
+	return ref
+}
+
+// liveAgentEvidenceStaging is appended to the agent command: it stages one
+// head-independent PNG evidence artifact under the reserved subtree so the real
+// helper emits the evidence channel alongside the repo channel. The PNG magic
+// (octal) satisfies the importer's images-only magic check.
+const liveAgentEvidenceStaging = `mkdir -p /workspace/.freeside-evidence && ` +
+	`printf '\211PNG\015\012\032\012agent-evidence' > /workspace/.freeside-evidence/shot.png && ` +
+	`printf '%s' '{"version":"freeside.export.evidence-source/v1","sources":[{"label":"shot","media_type":"image/png","path":".freeside-evidence/shot.png","head_binding":"head_independent","sensitivity_class":"normal","producer_invocation_id":"live-run"}]}' > /workspace/.freeside-evidence/evidence.json`
 
 func TestLiveHandoffLifecycle(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
@@ -176,8 +180,10 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 	})
 
 	cfg := Config{
-		ExporterImage:     liveImage,
-		ExporterCommand:   []string{"sh", "-c", liveExporterPayload},
+		// The exporter runs the REAL freeside-export helper from the pinned
+		// exporter image; the agent stays on the alpine base.
+		ExporterImage:     liveExporterImage(t),
+		ExporterCommand:   export.HelperCommand(),
 		WriterStopTimeout: 3 * time.Minute,
 		ExporterTimeout:   3 * time.Minute,
 		Scanner:           scanner,
@@ -197,7 +203,8 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 				"cat /credentials/token > /dev/null && " +
 					"echo agent-output > /workspace/result.txt && " +
 					"mkdir -p /workspace/nested && " +
-					"echo durable-workspace > /workspace/nested/state.txt",
+					"echo durable-workspace > /workspace/nested/state.txt && " +
+					liveAgentEvidenceStaging,
 			},
 			CredentialMounts: []CredentialMount{{Volume: credVolume, Target: "/credentials"}},
 		},
@@ -212,21 +219,47 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 		t.Errorf("Admission.Backend = %q, want %q", res.Admission.Backend, BackendName)
 	}
 
-	// The manifest binds the one exported file; its blob's bytes are what
-	// the agent wrote with the workspace read-write.
-	if len(res.Manifest.Entries) != 1 || res.Manifest.Entries[0].Path != "result.txt" {
-		t.Fatalf("manifest entries = %+v, want the one result.txt entry", res.Manifest.Entries)
+	// The real helper exports every regular file the agent wrote (the reserved
+	// evidence subtree excluded from the repo channel): result.txt plus
+	// nested/state.txt, bytewise-sorted.
+	repoPaths := map[string]bool{}
+	for _, e := range res.Manifest.Entries {
+		repoPaths[e.Path] = true
+		if strings.HasPrefix(e.Path, ".freeside-evidence") {
+			t.Errorf("repo manifest carries a reserved-subtree entry %q", e.Path)
+		}
 	}
-	hexDigest := strings.TrimPrefix(string(*res.Manifest.Entries[0].Digest), "sha256:")
-	blob, err := os.ReadFile(filepath.Join(res.ExportDir, "blobs", "sha256", hexDigest)) //nolint:gosec // digest from the verified manifest
-	if err != nil {
-		t.Fatalf("read exported blob: %v", err)
+	if !repoPaths["result.txt"] || !repoPaths["nested/state.txt"] {
+		t.Fatalf("manifest entries = %+v, want result.txt and nested/state.txt", res.Manifest.Entries)
 	}
-	if string(blob) != "agent-output\n" {
-		t.Errorf("exported blob = %q, want the agent's write", blob)
+	resultBlob := readManifestBlob(t, res, "result.txt")
+	if string(resultBlob) != "agent-output\n" {
+		t.Errorf("exported result.txt blob = %q, want the agent's write", resultBlob)
+	}
+
+	// The evidence channel the real helper emitted from the reserved subtree.
+	if !res.EvidencePresent || len(res.Evidence.Entries) != 1 || res.Evidence.Entries[0].Label != "shot" {
+		t.Fatalf("evidence = present:%v %+v, want the one shot entry", res.EvidencePresent, res.Evidence)
 	}
 	if scannedFiles == 0 {
 		t.Error("scanner hook never saw a file")
+	}
+
+	// The #83 ward/gauntlet convergence gate: the real image's real helper
+	// output flows through the gauntlet importer, both channels together. The
+	// repo change becomes a commit and the evidence becomes a labeled claim.
+	imported := importLiveExport(t, res.ExportDir)
+	if len(imported.Claims) != 1 || imported.Claims[0].Label != "shot" {
+		t.Errorf("imported claims = %+v, want the one shot claim", imported.Claims)
+	}
+	var sawResult bool
+	for _, c := range imported.Changes {
+		if c.Path == "result.txt" {
+			sawResult = true
+		}
+	}
+	if !sawResult {
+		t.Errorf("imported changes = %+v, want result.txt added", imported.Changes)
 	}
 
 	// Teardown left nothing it owns (acceptance 5): the run's containers and
@@ -268,6 +301,72 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 	if err := rt.DeleteVolume(ctx, credVolume); err != nil {
 		t.Errorf("delete credential volume: %v", err)
 	}
+}
+
+// readManifestBlob reads the exported blob for a repo-manifest entry by path.
+func readManifestBlob(t *testing.T, res *HandoffResult, path string) []byte {
+	t.Helper()
+	for _, e := range res.Manifest.Entries {
+		if e.Path == path && e.Digest != nil {
+			hexDigest := strings.TrimPrefix(string(*e.Digest), "sha256:")
+			b, err := os.ReadFile(filepath.Join(res.ExportDir, "blobs", "sha256", hexDigest)) //nolint:gosec // digest from the verified manifest
+			if err != nil {
+				t.Fatalf("read blob for %q: %v", path, err)
+			}
+			return b
+		}
+	}
+	t.Fatalf("no manifest entry for %q", path)
+	return nil
+}
+
+// importLiveExport feeds a verified handoff directory through the gauntlet
+// importer against a fresh empty base, proving the real image's output imports
+// (the #83 ward/gauntlet convergence). The empty base makes every exported file
+// an addition.
+func importLiveExport(t *testing.T, exportDir string) importer.Result {
+	t.Helper()
+	base := t.TempDir()
+	rungitLive(t, base, "init", "-q")
+	rungitLive(t, base, "commit", "-q", "--allow-empty", "-m", "base")
+	head := strings.TrimSpace(rungitLive(t, base, "rev-parse", "HEAD"))
+	clone := filepath.Join(t.TempDir(), "clone")
+	rungitLive(t, base, "clone", "-q", "--no-hardlinks", ".", clone)
+	res, err := importer.Import(context.Background(), exportDir, clone, importer.Options{
+		BaseSHA:    head,
+		CommitDate: time.Unix(1700000100, 0).UTC(),
+	})
+	if err != nil {
+		t.Fatalf("importer.Import(live export): %v", err)
+	}
+	return res
+}
+
+// rungitLive runs a git command in dir for the live test's import plumbing. It
+// isolates git config and pins a fixture identity (like the importer's own test
+// runner), so the temporary repo's commit does not inherit or require host
+// user.name/user.email or trip a host commit.gpgsign.
+func rungitLive(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := osexec.Command("git", args...) //nolint:gosec // fixed args, test-owned dir
+	cmd.Dir = dir
+	cmd.Env = append(
+		os.Environ(),
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_CONFIG_SYSTEM="+os.DevNull,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=fixture",
+		"GIT_AUTHOR_EMAIL=fixture@test.invalid",
+		"GIT_AUTHOR_DATE=1700000000 +0000",
+		"GIT_COMMITTER_NAME=fixture",
+		"GIT_COMMITTER_EMAIL=fixture@test.invalid",
+		"GIT_COMMITTER_DATE=1700000000 +0000",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+	}
+	return string(out)
 }
 
 // waitLiveStopped polls the real runtime until the container is observed

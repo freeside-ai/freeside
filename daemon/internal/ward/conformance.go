@@ -231,11 +231,13 @@ func verifyExporterAllowlist(cfg Config, rep InspectReport, exporterID, workspac
 	return nil
 }
 
-// requiredProof is check 5's contract with the exporter payload: the probes
-// run inside the exporter VM and their observations land as exactly these
-// key=value lines in the proof file. These expected markers are trusted, but
-// observed proof content comes from the unscanned archive and is never echoed
-// in failure reasons.
+// requiredProof is check 5's contract with the conformance probe
+// (probeInExporterVerification): the probe runs inside the exporter image and
+// its observations land as exactly these key=value lines in the proof file.
+// Check 5 is attested by that dedicated probe, not the per-handoff exporter,
+// which now runs only the trusted helper. These expected markers are trusted,
+// but observed proof content comes from the unscanned archive and is never
+// echoed in failure reasons.
 var requiredProof = map[string]string{
 	// /proc/mounts reports the workspace mounted read-only.
 	"workspace_mounted": "ro",
@@ -247,12 +249,12 @@ var requiredProof = map[string]string{
 	"host_home": "absent",
 }
 
-// verifyProof is check 5: the proof file collected from the exported rootfs
-// must contain exactly the required observations — every required key, the
-// required value, no duplicates, no unknown keys, nothing else. Any
-// deviation, including a missing or empty file, is a conformance failure;
-// the exporter's exit status is not consulted because a stopped container
-// exports regardless of how its payload exited.
+// verifyProof is check 5: the proof file collected from the probe's exported
+// rootfs must contain exactly the required observations — every required key,
+// the required value, no duplicates, no unknown keys, nothing else. Any
+// deviation, including a missing or empty file, is a conformance failure; the
+// probe's exit status is not consulted because a stopped container exports
+// regardless of how its command exited.
 func verifyProof(data []byte) error {
 	seen := make(map[string]bool, len(requiredProof))
 	sc := bufio.NewScanner(bytes.NewReader(data))
