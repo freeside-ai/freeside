@@ -72,7 +72,11 @@ func openKillHarness(t *testing.T, dbPath string, client *http.Client, baseURL s
 	if err != nil {
 		t.Fatalf("NewStoreTrustSource: %v", err)
 	}
-	return s, publish.NewPublisher(ts, client, baseURL, ledger, trust)
+	authz, err := publish.NewStoreAuthorizationSource(s)
+	if err != nil {
+		t.Fatalf("NewStoreAuthorizationSource: %v", err)
+	}
+	return s, publish.NewPublisher(ts, client, baseURL, ledger, trust, authz)
 }
 
 func createRefRequest() string { return http.MethodPost + " " + testRepoPath + "/git/refs" }
@@ -121,8 +125,9 @@ func TestKillBeforeExternalEffect(t *testing.T) {
 	cand := testCandidate(t)
 
 	s1, p1 := openKillHarness(t, dbPath, srv.Client(), srv.URL, testTokenSource())
-	seedTrust(t, s1, testTrustRepo)          // conformant trust so the drift gate passes; persists to s2
-	gh.failOnce(http.MethodGet, "/git/ref/") // die at the first read, after recordIntent
+	seedTrust(t, s1, testTrustRepo)                 // conformant trust so the drift gate passes; persists to s2
+	seedAuthz(t, s1, testCandidateAuthorization(t)) // authorizing record for the same candidate
+	gh.failOnce(http.MethodGet, "/git/ref/")        // die at the first read, after recordIntent
 	if _, err := p1.Publish(ctx, cand, testApprovedRecipes()); err == nil {
 		t.Fatal("publish reached GitHub without hitting the failpoint")
 	}
@@ -160,6 +165,7 @@ func TestKillAfterBranchBeforePR(t *testing.T) {
 
 	s1, p1 := openKillHarness(t, dbPath, srv.Client(), srv.URL, testTokenSource())
 	seedTrust(t, s1, testTrustRepo)
+	seedAuthz(t, s1, testCandidateAuthorization(t))
 	gh.failOnce(http.MethodPost, "/pulls") // branch created, die at PR creation
 	if _, err := p1.Publish(ctx, cand, testApprovedRecipes()); err == nil {
 		t.Fatal("publish created the PR without hitting the failpoint")
@@ -199,6 +205,7 @@ func TestKillAfterPublishBeforeAcceptance(t *testing.T) {
 
 	s1, p1 := openKillHarness(t, dbPath, srv.Client(), srv.URL, testTokenSource())
 	seedTrust(t, s1, testTrustRepo)
+	seedAuthz(t, s1, testCandidateAuthorization(t))
 	// A full publish creates the branch and PR but never finalizes: the
 	// outbox row is left pending, as after a crash before acceptance.
 	if _, err := p1.Publish(ctx, cand, testApprovedRecipes()); err != nil {
@@ -239,6 +246,7 @@ func TestKillAfterAcceptance(t *testing.T) {
 
 	s1, p1 := openKillHarness(t, dbPath, srv.Client(), srv.URL, testTokenSource())
 	seedTrust(t, s1, testTrustRepo)
+	seedAuthz(t, s1, testCandidateAuthorization(t))
 	if _, err := p1.Publish(ctx, cand, testApprovedRecipes()); err != nil {
 		t.Fatalf("seed publish: %v", err)
 	}

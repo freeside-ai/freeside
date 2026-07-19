@@ -325,6 +325,7 @@ func testCandidate(t *testing.T) publish.Candidate {
 	t.Helper()
 	recipe := testRecipe
 	profileDigest := testTrustProfileDigest(t)
+	authID := testCandidateAuthorization(t).ID
 	return publish.Candidate{
 		Repo:               testTrustRepo,
 		BaseRef:            "main",
@@ -334,6 +335,7 @@ func testCandidate(t *testing.T) publish.Candidate {
 		Artifacts:          []domain.Artifact{testArtifact(t, testHeadSHA)},
 		RecipeDigest:       &recipe,
 		InvocationID:       "inv-0001",
+		AuthorizationID:    &authID,
 		TrustProfileDigest: &profileDigest,
 	}
 }
@@ -348,8 +350,15 @@ func newTestPublisher(t *testing.T, gh *fakeGitHub, ledger publish.IntentLedger)
 
 func newTestPublisherWithTrust(t *testing.T, gh *fakeGitHub, ledger publish.IntentLedger, trust publish.TrustSource) *publish.Publisher {
 	t.Helper()
+	return newTestPublisherFull(t, gh, ledger, trust, conformantAuthz(t))
+}
+
+// newTestPublisherFull wires a publisher over explicit trust and
+// authorization sources, for tests that drive either gate directly.
+func newTestPublisherFull(t *testing.T, gh *fakeGitHub, ledger publish.IntentLedger, trust publish.TrustSource, authz publish.AuthorizationSource) *publish.Publisher {
+	t.Helper()
 	srv := gh.server()
-	return publish.NewPublisher(testTokenSource(), srv.Client(), srv.URL, ledger, trust)
+	return publish.NewPublisher(testTokenSource(), srv.Client(), srv.URL, ledger, trust, authz)
 }
 
 // TestPublishCreatesBranchAndPR is the clean-path publication (issue
@@ -612,7 +621,15 @@ func TestPublishRecordsIntentBeforeAnyDispatch(t *testing.T) {
 func TestPublishRefusesReusedInvocation(t *testing.T) {
 	gh := newFakeGitHub(t)
 	ledger := newMemoryLedger()
-	p := newTestPublisher(t, gh, ledger)
+
+	// The reused-invocation candidate publishes different content, so it
+	// carries its own authorizing record; both must be resolvable, or the
+	// authorization gate would intercept before the intent-conflict check.
+	otherIn := authorizingInput(t)
+	otherIn.HeadSHA = testOtherSHA
+	otherAuth := newAuthorization(t, otherIn)
+	otherID := otherAuth.ID
+	p := newTestPublisherFull(t, gh, ledger, conformantTrust(t), authzWith(testCandidateAuthorization(t), otherAuth))
 
 	c := testCandidate(t)
 	if _, err := p.Publish(context.Background(), c, testApprovedRecipes()); err != nil {
@@ -622,6 +639,7 @@ func TestPublishRefusesReusedInvocation(t *testing.T) {
 	changed := c
 	changed.HeadSHA = testOtherSHA
 	changed.Artifacts = []domain.Artifact{testArtifact(t, testOtherSHA)}
+	changed.AuthorizationID = &otherID
 	requests := len(gh.requestLog())
 	if _, err := p.Publish(context.Background(), changed, testApprovedRecipes()); !errors.Is(err, publish.ErrPublicationConflict) {
 		t.Fatalf("err = %v, want ErrPublicationConflict", err)
@@ -779,6 +797,176 @@ func TestPublishRefusesTrustProfileDrift(t *testing.T) {
 		}
 		if len(ledger.keys) != 0 || len(gh.requestLog()) != 0 {
 			t.Error("trust-source failure left an effect")
+		}
+	})
+}
+
+// catPtr returns a pointer to a control-plane category, for the
+// control-plane finding fixtures below.
+func catPtr(c domain.ControlPlaneCategory) *domain.ControlPlaneCategory { return &c }
+
+// TestPublishRefusesUnauthorizedCandidate (#168, plan §5.6): the
+// authorization gate fails closed before any external effect when the
+// candidate carries no authorization binding, names no recorded record, or
+// the recorded record does not authorize this candidate — a failed
+// verification, any class of publish-blocking importer/verifier finding, or a
+// record whose bound facts describe a different candidate. Nothing is recorded
+// and nothing is dispatched.
+func TestPublishRefusesUnauthorizedCandidate(t *testing.T) {
+	// mkCase builds a non-authorizing (or mis-binding) authorization from the
+	// conformant input, points the candidate at it, and returns the source
+	// holding it. authorizingInput matches the candidate's coordinates, so
+	// only the mutated fact drives the refusal.
+	mkCase := func(mutate func(*domain.CandidateAuthorizationInput)) func(*testing.T, *publish.Candidate) publish.AuthorizationSource {
+		return func(t *testing.T, c *publish.Candidate) publish.AuthorizationSource {
+			in := authorizingInput(t)
+			mutate(&in)
+			auth := newAuthorization(t, in)
+			id := auth.ID
+			c.AuthorizationID = &id
+			return authzWith(auth)
+		}
+	}
+	withFinding := func(f domain.CandidateFinding) func(*domain.CandidateAuthorizationInput) {
+		return func(in *domain.CandidateAuthorizationInput) { in.Findings = []domain.CandidateFinding{f} }
+	}
+
+	cases := map[string]struct {
+		build func(*testing.T, *publish.Candidate) publish.AuthorizationSource
+	}{
+		"nil authorization id": {build: func(t *testing.T, c *publish.Candidate) publish.AuthorizationSource {
+			c.AuthorizationID = nil
+			return conformantAuthz(t)
+		}},
+		"authorization not recorded": {build: func(t *testing.T, _ *publish.Candidate) publish.AuthorizationSource {
+			return authzWith() // candidate keeps its conformant id; the source is empty
+		}},
+		"failed verification": {build: mkCase(func(in *domain.CandidateAuthorizationInput) {
+			in.VerificationOutcome = domain.VerificationFailed
+		})},
+		"blocking secret finding": {build: mkCase(withFinding(domain.CandidateFinding{
+			Class: domain.FindingClassSecret, Origin: domain.FindingOriginImport,
+			Kind: "secret", Path: "config/.env", Disposition: domain.DispositionBlocking,
+		}))},
+		"blocking repo-change-policy finding": {build: mkCase(withFinding(domain.CandidateFinding{
+			Class: domain.FindingClassRepoChangePolicy, Origin: domain.FindingOriginImport,
+			Kind: "size_violation", Path: "artifacts/big.bin", Disposition: domain.DispositionBlocking,
+		}))},
+		"blocking automation-control finding": {build: mkCase(withFinding(domain.CandidateFinding{
+			Class: domain.FindingClassControlPlane, Category: catPtr(domain.ControlPlaneWorkflowConfiguration),
+			Origin: domain.FindingOriginImport, Kind: "automation_control_path",
+			Path: ".github/workflows/ci.yml", Disposition: domain.DispositionBlocking,
+		}))},
+		"blocking reviewer-instruction finding": {build: mkCase(withFinding(domain.CandidateFinding{
+			Class: domain.FindingClassControlPlane, Category: catPtr(domain.ControlPlaneReviewerInstructions),
+			Origin: domain.FindingOriginImport, Kind: "reviewer_instruction_path",
+			Path: ".github/CODEOWNERS", Disposition: domain.DispositionBlocking,
+		}))},
+		"blocking verification-control finding": {build: mkCase(withFinding(domain.CandidateFinding{
+			Class: domain.FindingClassControlPlane, Category: catPtr(domain.ControlPlaneVerificationRecipes),
+			Origin: domain.FindingOriginVerification, Kind: "verification_control_path",
+			Path: ".freeside/recipe.yml", Disposition: domain.DispositionBlocking,
+		}))},
+		"authorization for a different head": {build: mkCase(func(in *domain.CandidateAuthorizationInput) {
+			in.HeadSHA = testOtherSHA // authorizes, but not this candidate's head
+		})},
+		"authorization for a different recipe": {build: mkCase(func(in *domain.CandidateAuthorizationInput) {
+			in.VerificationRecipeDigest = domain.Digest("sha256:" + strings.Repeat("c", 64))
+		})},
+		"authorization for a different trust profile": {build: mkCase(func(in *domain.CandidateAuthorizationInput) {
+			in.TrustProfileDigest = domain.Digest("sha256:" + strings.Repeat("e", 64))
+		})},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			gh := newFakeGitHub(t)
+			ledger := newMemoryLedger()
+			c := testCandidate(t)
+			authz := tc.build(t, &c)
+			p := newTestPublisherFull(t, gh, ledger, conformantTrust(t), authz)
+
+			if _, err := p.Publish(context.Background(), c, testApprovedRecipes()); !errors.Is(err, publish.ErrUnauthorizedPublication) {
+				t.Fatalf("err = %v, want ErrUnauthorizedPublication", err)
+			}
+			if len(ledger.keys) != 0 {
+				t.Error("unauthorized candidate recorded an intent")
+			}
+			if reqs := gh.requestLog(); len(reqs) != 0 {
+				t.Errorf("unauthorized candidate dispatched %v", reqs)
+			}
+		})
+	}
+
+	// A record whose derived trust bit was forged fails closed at the #52
+	// re-gate (Validate recomputes it), surfacing the domain inconsistency
+	// rather than silently trusting the forged value.
+	t.Run("forged authorizes bit fails closed", func(t *testing.T) {
+		gh := newFakeGitHub(t)
+		ledger := newMemoryLedger()
+		in := authorizingInput(t)
+		in.VerificationOutcome = domain.VerificationFailed // truthfully non-authorizing
+		auth := newAuthorization(t, in)
+		auth.AuthorizesPublication = true // forge the trust bit post-construction
+		c := testCandidate(t)
+		id := auth.ID
+		c.AuthorizationID = &id
+		p := newTestPublisherFull(t, gh, ledger, conformantTrust(t), memoryAuthorizationSource{
+			auths: map[domain.Digest]domain.CandidateAuthorization{id: auth},
+		})
+		if _, err := p.Publish(context.Background(), c, testApprovedRecipes()); !errors.Is(err, domain.ErrAuthorizationInconsistent) {
+			t.Fatalf("err = %v, want ErrAuthorizationInconsistent", err)
+		}
+		if len(ledger.keys) != 0 || len(gh.requestLog()) != 0 {
+			t.Error("forged authorization left an effect")
+		}
+	})
+
+	// An authorization-source read failure fails closed too, with no effect.
+	t.Run("authorization source error", func(t *testing.T) {
+		gh := newFakeGitHub(t)
+		ledger := newMemoryLedger()
+		p := newTestPublisherFull(t, gh, ledger, conformantTrust(t),
+			memoryAuthorizationSource{err: errors.New("store unavailable")})
+		if _, err := p.Publish(context.Background(), testCandidate(t), testApprovedRecipes()); err == nil {
+			t.Fatal("published despite an authorization-source failure")
+		}
+		if len(ledger.keys) != 0 || len(gh.requestLog()) != 0 {
+			t.Error("authorization-source failure left an effect")
+		}
+	})
+
+	// A waivable finding carrying a valid non-agent waiver authorizes: the
+	// human decision record makes an otherwise-blocking repo-change-policy
+	// finding publishable (§5.12), and the candidate converges normally.
+	t.Run("waived finding authorizes publication", func(t *testing.T) {
+		gh := newFakeGitHub(t)
+		ledger := newMemoryLedger()
+		in := authorizingInput(t)
+		in.Findings = []domain.CandidateFinding{{
+			Class: domain.FindingClassRepoChangePolicy, Origin: domain.FindingOriginImport,
+			Kind: "size_violation", Path: "artifacts/big.bin",
+			Disposition: domain.DispositionWaived,
+			Waiver: &domain.WaiverRecord{
+				DecisionID: "decision-1", DecidedBy: domain.AuthorUser,
+				DecidedAt:      time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+				Justification:  "accepted large fixture",
+				DecisionDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
+			},
+		}}
+		auth := newAuthorization(t, in)
+		if !auth.AuthorizesPublication {
+			t.Fatal("waived finding did not authorize publication")
+		}
+		c := testCandidate(t)
+		id := auth.ID
+		c.AuthorizationID = &id
+		p := newTestPublisherFull(t, gh, ledger, conformantTrust(t), authzWith(auth))
+		res, err := p.Publish(context.Background(), c, testApprovedRecipes())
+		if err != nil {
+			t.Fatalf("Publish with waived finding: %v", err)
+		}
+		if !res.BranchCreated || !res.PRCreated {
+			t.Errorf("waived candidate did not converge: %+v", res)
 		}
 	})
 }
