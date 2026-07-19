@@ -324,22 +324,32 @@ func testArtifact(t *testing.T, headSHA string) domain.Artifact {
 func testCandidate(t *testing.T) publish.Candidate {
 	t.Helper()
 	recipe := testRecipe
+	profileDigest := testTrustProfileDigest(t)
 	return publish.Candidate{
-		Repo:         "freeside-ai/evidence-repo",
-		BaseRef:      "main",
-		HeadSHA:      testHeadSHA,
-		Title:        "Candidate: evidence-backed change",
-		Body:         "Verified candidate publication.",
-		Artifacts:    []domain.Artifact{testArtifact(t, testHeadSHA)},
-		RecipeDigest: &recipe,
-		InvocationID: "inv-0001",
+		Repo:               testTrustRepo,
+		BaseRef:            "main",
+		HeadSHA:            testHeadSHA,
+		Title:              "Candidate: evidence-backed change",
+		Body:               "Verified candidate publication.",
+		Artifacts:          []domain.Artifact{testArtifact(t, testHeadSHA)},
+		RecipeDigest:       &recipe,
+		InvocationID:       "inv-0001",
+		TrustProfileDigest: &profileDigest,
 	}
 }
 
+// newTestPublisher wires a publisher whose drift gate passes for
+// testCandidate: a conformant in-memory trust source. Tests exercising the
+// drift gate itself use newTestPublisherWithTrust.
 func newTestPublisher(t *testing.T, gh *fakeGitHub, ledger publish.IntentLedger) *publish.Publisher {
 	t.Helper()
+	return newTestPublisherWithTrust(t, gh, ledger, conformantTrust(t))
+}
+
+func newTestPublisherWithTrust(t *testing.T, gh *fakeGitHub, ledger publish.IntentLedger, trust publish.TrustSource) *publish.Publisher {
+	t.Helper()
 	srv := gh.server()
-	return publish.NewPublisher(testTokenSource(), srv.Client(), srv.URL, ledger)
+	return publish.NewPublisher(testTokenSource(), srv.Client(), srv.URL, ledger, trust)
 }
 
 // TestPublishCreatesBranchAndPR is the clean-path publication (issue
@@ -675,6 +685,102 @@ func TestPublishGatesArtifacts(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPublishRefusesTrustProfileDrift (#169, plan §5.5): the drift gate
+// fails closed before any external effect when the candidate carries no
+// trust binding, its bound profile is no longer current, there is no current
+// profile or audit to compare against, or the latest audit exceeds the
+// approved profile. The bound digest is a lookup key, never a verdict.
+func TestPublishRefusesTrustProfileDrift(t *testing.T) {
+	// A profile whose content (and so digest) differs from the one
+	// testCandidate binds to: a superseded revision (§5.5 drift recovery).
+	superseded, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo:                       testTrustRepo,
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		WorkflowAuditDigest:        "sha256:revised-audit",
+		Review:                     domain.ReviewSettings{Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config"},
+	})
+	if err != nil {
+		t.Fatalf("superseded profile: %v", err)
+	}
+	supersededAudit := testWorkflowAudit(t)
+	onlyProfile := testTrustProfile(t)
+	profile := testTrustProfile(t)
+	driftAudit := testWorkflowAudit(t)
+	driftAudit.OIDCAvailable = true
+
+	cases := map[string]struct {
+		trust  publish.TrustSource
+		mutate func(*publish.Candidate)
+	}{
+		"nil binding": {
+			trust:  conformantTrust(t),
+			mutate: func(c *publish.Candidate) { c.TrustProfileDigest = nil },
+		},
+		"no current profile": {
+			trust:  memoryTrustSource{},
+			mutate: func(*publish.Candidate) {},
+		},
+		"superseded profile": {
+			trust:  memoryTrustSource{profile: &superseded, audit: &supersededAudit},
+			mutate: func(*publish.Candidate) {},
+		},
+		"no current audit": {
+			trust:  memoryTrustSource{profile: &onlyProfile},
+			mutate: func(*publish.Candidate) {},
+		},
+		"audit drift": {
+			trust:  memoryTrustSource{profile: &profile, audit: &driftAudit},
+			mutate: func(*publish.Candidate) {},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			gh := newFakeGitHub(t)
+			ledger := newMemoryLedger()
+			p := newTestPublisherWithTrust(t, gh, ledger, tc.trust)
+
+			c := testCandidate(t)
+			tc.mutate(&c)
+			if _, err := p.Publish(context.Background(), c, testApprovedRecipes()); !errors.Is(err, publish.ErrTrustProfileDrift) {
+				t.Fatalf("err = %v, want ErrTrustProfileDrift", err)
+			}
+			if len(ledger.keys) != 0 {
+				t.Error("drifted candidate recorded an intent")
+			}
+			if reqs := gh.requestLog(); len(reqs) != 0 {
+				t.Errorf("drifted candidate dispatched %v", reqs)
+			}
+		})
+	}
+
+	// The audit-drift case reports the specific axis, so a human decision
+	// record can act on what changed.
+	t.Run("drift names the axis", func(t *testing.T) {
+		gh := newFakeGitHub(t)
+		p := newTestPublisherWithTrust(t, gh, newMemoryLedger(), memoryTrustSource{profile: &profile, audit: &driftAudit})
+		_, err := p.Publish(context.Background(), testCandidate(t), testApprovedRecipes())
+		var de *domain.TrustDriftError
+		if !errors.As(err, &de) || de.Axis != "oidc" {
+			t.Fatalf("err = %v, want *TrustDriftError on the oidc axis", err)
+		}
+	})
+
+	// A trust-source read failure fails closed too, with no effect.
+	t.Run("trust source error", func(t *testing.T) {
+		gh := newFakeGitHub(t)
+		ledger := newMemoryLedger()
+		p := newTestPublisherWithTrust(t, gh, ledger, memoryTrustSource{err: errors.New("store unavailable")})
+		if _, err := p.Publish(context.Background(), testCandidate(t), testApprovedRecipes()); err == nil {
+			t.Fatal("published despite a trust-source failure")
+		}
+		if len(ledger.keys) != 0 || len(gh.requestLog()) != 0 {
+			t.Error("trust-source failure left an effect")
+		}
+	})
 }
 
 // TestPublishRejectsMarkerShapedBody: prose that would parse as (or

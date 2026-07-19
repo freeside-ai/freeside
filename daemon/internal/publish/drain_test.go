@@ -36,6 +36,13 @@ type drainHarness struct {
 }
 
 func newDrainHarness(t *testing.T) drainHarness {
+	return newDrainHarnessWithTrust(t, conformantTrust(t))
+}
+
+// newDrainHarnessWithTrust builds a drain harness whose publisher reads
+// automation trust from the given source, so a test can drive the drift
+// gate during recovery.
+func newDrainHarnessWithTrust(t *testing.T, trust publish.TrustSource) drainHarness {
 	t.Helper()
 	s := newTestStore(t)
 	ledger, err := publish.NewStoreLedger(s)
@@ -43,7 +50,7 @@ func newDrainHarness(t *testing.T) drainHarness {
 		t.Fatalf("NewStoreLedger: %v", err)
 	}
 	gh := newFakeGitHub(t)
-	return drainHarness{store: s, gh: gh, ledger: ledger, pub: newTestPublisher(t, gh, ledger)}
+	return drainHarness{store: s, gh: gh, ledger: ledger, pub: newTestPublisherWithTrust(t, gh, ledger, trust)}
 }
 
 func resolverFor(t *testing.T, c publish.Candidate) fakeResolver {

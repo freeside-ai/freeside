@@ -77,6 +77,7 @@ var (
 	ErrKeysNotCanonical            = errors.New("resolved-policy keys are not in canonical (key-sorted) order")
 	ErrProfileDigestMismatch       = errors.New("trust-profile digest does not match its content")
 	ErrAuthorizationInconsistent   = errors.New("candidate authorization id or authorizes_publication does not match its content")
+	ErrTrustProfileDrift           = errors.New("observed automation authority drifted from the approved trust profile")
 	ErrNonWaivableFinding          = errors.New("finding class is non-waivable")
 	ErrAgentWaiver                 = errors.New("an agent cannot author a waiver")
 

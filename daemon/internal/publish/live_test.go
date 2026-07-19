@@ -162,15 +162,17 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewArtifact: %v", err)
 	}
+	liveProfileDigest := trustProfileForRepo(t, repo).ProfileDigest
 	cand := publish.Candidate{
-		Repo:         repo,
-		BaseRef:      baseRef,
-		HeadSHA:      headSHA,
-		Title:        "Freeside live effectively-once test " + nonce,
-		Body:         "Automated opt-in test (issue #82). Safe to close.",
-		Artifacts:    []domain.Artifact{artifact},
-		RecipeDigest: &recipe,
-		InvocationID: domain.InvocationID("inv-live-" + nonce),
+		Repo:               repo,
+		BaseRef:            baseRef,
+		HeadSHA:            headSHA,
+		Title:              "Freeside live effectively-once test " + nonce,
+		Body:               "Automated opt-in test (issue #82). Safe to close.",
+		Artifacts:          []domain.Artifact{artifact},
+		RecipeDigest:       &recipe,
+		InvocationID:       domain.InvocationID("inv-live-" + nonce),
+		TrustProfileDigest: &liveProfileDigest,
 	}
 	resolver := fakeResolver{cand: cand, approved: approved}
 	id, err := publish.DeriveIdentity(publish.IdentityInput{
@@ -186,6 +188,7 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 
 	dbPath := filepath.Join(t.TempDir(), "store.db")
 	s1, p1 := openKillHarness(t, dbPath, client, baseURL, ts)
+	seedTrust(t, s1, repo) // conformant trust so the drift gate passes; persists across the restart
 	// Register before Publish: it can create the deterministic branch or
 	// PR and then fail returned-object validation without returning a
 	// Result. The identity supplies the branch up front; a zero PR number

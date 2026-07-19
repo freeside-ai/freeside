@@ -348,3 +348,96 @@ func (a WorkflowAudit) Validate() error {
 	}
 	return nil
 }
+
+// TrustDriftError names the automation-authority axis on which an observed
+// workflow audit exceeded the approved trust profile (plan §5.5). It is the
+// concrete form of ErrTrustProfileDrift, so a caller can both match the
+// class (errors.Is against the sentinel) and report the specific axis
+// (errors.As). Approved and Observed carry the two values for the message
+// and for tests that assert which axis a fixture drifts.
+type TrustDriftError struct {
+	Axis     string
+	Approved string
+	Observed string
+}
+
+func (e *TrustDriftError) Error() string {
+	return fmt.Sprintf("automation authority drifted on %s: approved %q, observed %q: %v",
+		e.Axis, e.Approved, e.Observed, ErrTrustProfileDrift)
+}
+
+// Is reports the error as an ErrTrustProfileDrift so the publication gate
+// can match the whole drift class with a single sentinel.
+func (e *TrustDriftError) Is(target error) bool { return target == ErrTrustProfileDrift }
+
+// EvaluateTrustDrift fails closed if the observed workflow audit is not a
+// faithful, no-more-permissive match for the approved trust profile (plan
+// §5.5): the drift comparison the publication decision point runs against a
+// bound profile. It is a pure predicate over two already-validated records
+// (the caller re-runs Validate on both — the #52 re-gate — before trusting
+// either); it performs no I/O and consults no external policy.
+//
+// It compares axes explicitly rather than leaning on the audited-surface
+// digest, because WorkflowAudit is a trusted-but-not-self-certifying
+// observation (its digest is a content address of the audited files, not
+// recomputed from the attested facts, per the #172 contract), so digest
+// equality cannot be relied on to catch a settings-derived privilege that
+// drifts out of band of those files. The WorkflowAuditDigest equality check
+// still guards the file surface and repository settings folded into it
+// (workflows, branch protection, rulesets), which have no attested bool.
+//
+// Every attested privilege the audit carries is compared. The five the
+// profile gates directly (effective token permissions, OIDC, environment/
+// secret-bearing PR jobs, self-hosted runners, pull_request_target) drift
+// when observed beyond what the profile allows. The three the audit attests
+// but the profile has no allow axis for (reusable workflows, package
+// publishing, artifact-consuming workflows) fail closed whenever observed:
+// with no approval axis the profile cannot permit them, so any observation
+// is drift. A contract follow-up may add explicit allow axes so they become
+// approvable rather than always-blocked; until then the safe reading is
+// fail-closed, never silently passing an unevaluable authority.
+//
+// The first drift found is returned; the axis order is stable so a fixture's
+// expected axis is deterministic.
+func EvaluateTrustDrift(profile AutomationTrustProfile, audit WorkflowAudit) error {
+	if audit.Repo != profile.Repo {
+		return &TrustDriftError{Axis: "repo", Approved: profile.Repo, Observed: audit.Repo}
+	}
+	if audit.WorkflowAuditDigest != profile.WorkflowAuditDigest {
+		return &TrustDriftError{
+			Axis:     "workflow_audit_digest",
+			Approved: string(profile.WorkflowAuditDigest),
+			Observed: string(audit.WorkflowAuditDigest),
+		}
+	}
+	// read_write observed under a read_only profile is the one token-mode
+	// drift; the reverse (a less-permissive observation) is not drift.
+	if audit.EffectiveTokenPerms == TokenPermissionsReadWrite && profile.PRGitHubTokenPermissions == TokenPermissionsReadOnly {
+		return &TrustDriftError{
+			Axis:     "token_permissions",
+			Approved: string(profile.PRGitHubTokenPermissions),
+			Observed: string(audit.EffectiveTokenPerms),
+		}
+	}
+	for _, ax := range []struct {
+		name     string
+		observed bool
+		allowed  bool
+	}{
+		{"oidc", audit.OIDCAvailable, profile.AllowOIDC},
+		{"environment_secrets", audit.EnvironmentSecrets, profile.AllowEnvironmentSecrets},
+		{"secret_bearing_pr_jobs", audit.SecretBearingPRJobs, profile.AllowSecretBearingPRJobs},
+		{"self_hosted_runners", audit.SelfHostedRunners, profile.AllowSelfHostedCI},
+		{"pull_request_target", audit.PullRequestTarget, profile.AllowPullRequestTarget},
+		// No profile allow axis: the profile cannot approve these, so any
+		// observation is drift (fail closed pending an explicit axis).
+		{"reusable_workflows", audit.ReusableWorkflows, false},
+		{"package_publishing", audit.PackagePublishing, false},
+		{"artifact_consumers", audit.ArtifactConsumers, false},
+	} {
+		if ax.observed && !ax.allowed {
+			return &TrustDriftError{Axis: ax.name, Approved: "false", Observed: "true"}
+		}
+	}
+	return nil
+}

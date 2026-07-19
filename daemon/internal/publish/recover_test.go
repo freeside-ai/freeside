@@ -2,6 +2,7 @@ package publish_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -67,7 +68,11 @@ func openKillHarness(t *testing.T, dbPath string, client *http.Client, baseURL s
 	if err != nil {
 		t.Fatalf("NewStoreLedger: %v", err)
 	}
-	return s, publish.NewPublisher(ts, client, baseURL, ledger)
+	trust, err := publish.NewStoreTrustSource(s)
+	if err != nil {
+		t.Fatalf("NewStoreTrustSource: %v", err)
+	}
+	return s, publish.NewPublisher(ts, client, baseURL, ledger, trust)
 }
 
 func createRefRequest() string { return http.MethodPost + " " + testRepoPath + "/git/refs" }
@@ -116,6 +121,7 @@ func TestKillBeforeExternalEffect(t *testing.T) {
 	cand := testCandidate(t)
 
 	s1, p1 := openKillHarness(t, dbPath, srv.Client(), srv.URL, testTokenSource())
+	seedTrust(t, s1, testTrustRepo)          // conformant trust so the drift gate passes; persists to s2
 	gh.failOnce(http.MethodGet, "/git/ref/") // die at the first read, after recordIntent
 	if _, err := p1.Publish(ctx, cand, testApprovedRecipes()); err == nil {
 		t.Fatal("publish reached GitHub without hitting the failpoint")
@@ -153,6 +159,7 @@ func TestKillAfterBranchBeforePR(t *testing.T) {
 	cand := testCandidate(t)
 
 	s1, p1 := openKillHarness(t, dbPath, srv.Client(), srv.URL, testTokenSource())
+	seedTrust(t, s1, testTrustRepo)
 	gh.failOnce(http.MethodPost, "/pulls") // branch created, die at PR creation
 	if _, err := p1.Publish(ctx, cand, testApprovedRecipes()); err == nil {
 		t.Fatal("publish created the PR without hitting the failpoint")
@@ -191,6 +198,7 @@ func TestKillAfterPublishBeforeAcceptance(t *testing.T) {
 	cand := testCandidate(t)
 
 	s1, p1 := openKillHarness(t, dbPath, srv.Client(), srv.URL, testTokenSource())
+	seedTrust(t, s1, testTrustRepo)
 	// A full publish creates the branch and PR but never finalizes: the
 	// outbox row is left pending, as after a crash before acceptance.
 	if _, err := p1.Publish(ctx, cand, testApprovedRecipes()); err != nil {
@@ -230,6 +238,7 @@ func TestKillAfterAcceptance(t *testing.T) {
 	cand := testCandidate(t)
 
 	s1, p1 := openKillHarness(t, dbPath, srv.Client(), srv.URL, testTokenSource())
+	seedTrust(t, s1, testTrustRepo)
 	if _, err := p1.Publish(ctx, cand, testApprovedRecipes()); err != nil {
 		t.Fatalf("seed publish: %v", err)
 	}
@@ -297,5 +306,51 @@ func TestDrainReGateDriftLeavesPending(t *testing.T) {
 	}
 	if got := len(pendingPublications(t, h.store)); got != 1 {
 		t.Errorf("pending = %d, want 1 (no false-eligible outcome, intent stays pending)", got)
+	}
+}
+
+// TestDrainTrustDriftLeavesPending (#169, plan §5.5): if the automation
+// trust profile the candidate was approved under has drifted by the time the
+// drain runs (here the audit observed at recovery shows OIDC newly
+// available), the publish drift gate must fail closed during recovery — no
+// external effect, and the intent stays pending until a human records an
+// approved new profile.
+func TestDrainTrustDriftLeavesPending(t *testing.T) {
+	ctx := context.Background()
+	// The current profile still forbids OIDC, but the latest audit observes
+	// it available: drift on the oidc axis.
+	profile := testTrustProfile(t)
+	audit := testWorkflowAudit(t)
+	audit.OIDCAvailable = true
+	h := newDrainHarnessWithTrust(t, memoryTrustSource{profile: &profile, audit: &audit})
+	cand := testCandidate(t)
+
+	id := testCandidateIdentity(t)
+	key, err := publish.IntentKey("inv-0001", publish.IntentKindPublication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentPayload, err := publish.Intent{
+		Identity:      id.Digest(),
+		InvocationID:  "inv-0001",
+		Repo:          cand.Repo,
+		BaseRef:       cand.BaseRef,
+		SourceHeadSHA: cand.HeadSHA,
+	}.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.ledger.Record(ctx, key, publish.IntentKindPublication, intentPayload); err != nil {
+		t.Fatalf("seed intent: %v", err)
+	}
+
+	if _, err := publish.DrainPendingPublications(ctx, h.store, h.pub, resolverFor(t, cand)); !errors.Is(err, publish.ErrTrustProfileDrift) {
+		t.Fatalf("drain error = %v, want ErrTrustProfileDrift", err)
+	}
+	if got := len(h.gh.requestLog()); got != 0 {
+		t.Errorf("GitHub requests = %d, want 0 (drift gate failed before any effect)", got)
+	}
+	if got := len(pendingPublications(t, h.store)); got != 1 {
+		t.Errorf("pending = %d, want 1 (intent stays pending under trust drift)", got)
 	}
 }

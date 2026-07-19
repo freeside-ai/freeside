@@ -297,3 +297,86 @@ func TestWorkflowAuditValidation(t *testing.T) {
 		})
 	}
 }
+
+// conformantWorkflowAudit returns an audit that matches validTrustProfileInput
+// on every axis: the approved surface digest, read_only token permissions, and
+// no privilege the profile does not allow.
+func conformantWorkflowAudit() domain.WorkflowAudit {
+	return domain.WorkflowAudit{
+		Repo:                "freeside-ai/demo",
+		AuditedCommitSHA:    "cafebabe",
+		AuditedAt:           time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		WorkflowAuditDigest: "sha256:workflow-audit",
+		EffectiveTokenPerms: domain.TokenPermissionsReadOnly,
+	}
+}
+
+// TestEvaluateTrustDrift: the publication decision-point comparison (plan
+// §5.5) passes a conformant observation and fails closed on each axis where
+// the observed audit exceeds the approved profile, naming the drifted axis.
+func TestEvaluateTrustDrift(t *testing.T) {
+	profile, err := domain.NewAutomationTrustProfile(validTrustProfileInput())
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile: %v", err)
+	}
+
+	// A conformant audit is not drift.
+	if err := domain.EvaluateTrustDrift(profile, conformantWorkflowAudit()); err != nil {
+		t.Fatalf("conformant audit reported drift: %v", err)
+	}
+
+	// A less-permissive-than-allowed observation is not drift: a profile that
+	// approves read_write tolerates a read_only reality. WorkflowAuditDigest is
+	// unchanged by the token-mode field, so the surface digest still matches.
+	rwInput := validTrustProfileInput()
+	rwInput.PRGitHubTokenPermissions = domain.TokenPermissionsReadWrite
+	rwProfile, err := domain.NewAutomationTrustProfile(rwInput)
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile read_write: %v", err)
+	}
+	if err := domain.EvaluateTrustDrift(rwProfile, conformantWorkflowAudit()); err != nil {
+		t.Fatalf("read_only observation under read_write profile reported drift: %v", err)
+	}
+
+	// The file surface and repository settings folded into it (workflows,
+	// branch protection, rulesets) have no attested bool, so they are guarded
+	// by the WorkflowAuditDigest equality check. Every attested privilege is
+	// compared explicitly, including the three the profile has no allow axis
+	// for (reusable workflows, package publishing, artifact consumers), which
+	// fail closed whenever observed.
+	tests := []struct {
+		name     string
+		mutate   func(*domain.WorkflowAudit)
+		wantAxis string
+	}{
+		{"workflow surface drift", func(a *domain.WorkflowAudit) { a.WorkflowAuditDigest = "sha256:workflow-file-changed" }, "workflow_audit_digest"},
+		{"branch/ruleset drift", func(a *domain.WorkflowAudit) { a.WorkflowAuditDigest = "sha256:branch-protection-relaxed" }, "workflow_audit_digest"},
+		{"token permission drift", func(a *domain.WorkflowAudit) { a.EffectiveTokenPerms = domain.TokenPermissionsReadWrite }, "token_permissions"},
+		{"oidc drift", func(a *domain.WorkflowAudit) { a.OIDCAvailable = true }, "oidc"},
+		{"environment secrets drift", func(a *domain.WorkflowAudit) { a.EnvironmentSecrets = true }, "environment_secrets"},
+		{"secret-bearing PR jobs drift", func(a *domain.WorkflowAudit) { a.SecretBearingPRJobs = true }, "secret_bearing_pr_jobs"},
+		{"self-hosted runner drift", func(a *domain.WorkflowAudit) { a.SelfHostedRunners = true }, "self_hosted_runners"},
+		{"pull_request_target drift", func(a *domain.WorkflowAudit) { a.PullRequestTarget = true }, "pull_request_target"},
+		{"reusable workflows drift", func(a *domain.WorkflowAudit) { a.ReusableWorkflows = true }, "reusable_workflows"},
+		{"package publishing drift", func(a *domain.WorkflowAudit) { a.PackagePublishing = true }, "package_publishing"},
+		{"artifact consumers drift", func(a *domain.WorkflowAudit) { a.ArtifactConsumers = true }, "artifact_consumers"},
+		{"repo mismatch", func(a *domain.WorkflowAudit) { a.Repo = "attacker/demo" }, "repo"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			audit := conformantWorkflowAudit()
+			tt.mutate(&audit)
+			err := domain.EvaluateTrustDrift(profile, audit)
+			if !errors.Is(err, domain.ErrTrustProfileDrift) {
+				t.Fatalf("error = %v, want ErrTrustProfileDrift", err)
+			}
+			var de *domain.TrustDriftError
+			if !errors.As(err, &de) {
+				t.Fatalf("error = %v, want *TrustDriftError", err)
+			}
+			if de.Axis != tt.wantAxis {
+				t.Fatalf("drift axis = %q, want %q", de.Axis, tt.wantAxis)
+			}
+		})
+	}
+}
