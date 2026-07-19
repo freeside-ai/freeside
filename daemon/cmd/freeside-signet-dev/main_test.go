@@ -462,8 +462,9 @@ func TestControlPutItemAdvancesRevision(t *testing.T) {
 	}
 }
 
-// TestControlEpochRotation: rotating the epoch simulates a restore (§5.14
-// test 8 server half) without bumping the revision.
+// TestControlEpochRotation: POST /control/epoch rotates the epoch on its own
+// (the minimal §5.14 test-8 stimulus) without bumping the revision. The real
+// data restore is covered by TestControlCheckpointRestore.
 func TestControlEpochRotation(t *testing.T) {
 	_, r := startHarness(t)
 	token := pairNewDevice(t, r, "Convergence A")
@@ -479,6 +480,124 @@ func TestControlEpochRotation(t *testing.T) {
 	}
 	if afterRevision != beforeRevision {
 		t.Fatalf("revision = %d, want unchanged %d (the epoch change is the invalidation)", afterRevision, beforeRevision)
+	}
+}
+
+// TestControlCheckpointRestore drives the real §5.14 restore through the
+// control surface: checkpoint a state, advance past it, then restore. The
+// restore rolls the revision back below the advanced world and rotates the
+// epoch in one call, so the epoch a client cached from the advanced state is
+// now stale even though its cached revision is the higher one.
+func TestControlCheckpointRestore(t *testing.T) {
+	_, r := startHarness(t)
+	token := pairNewDevice(t, r, "Convergence A")
+
+	response, payload := postJSON(t, r.ControlURL+"/control/items", "",
+		map[string]any{"id": "item-1", "item_version": 1})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("seed item status = %d body=%s, want 200", response.StatusCode, payload)
+	}
+	checkpointEpoch, checkpointRevision := revision(t, r, token)
+
+	response, payload = postJSON(t, r.ControlURL+"/control/checkpoint", "", nil)
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("checkpoint status = %d body=%s, want 201", response.StatusCode, payload)
+	}
+	checkpointPath := decode[map[string]string](t, payload)["checkpoint"]
+	if checkpointPath == "" {
+		t.Fatalf("checkpoint returned no path: %s", payload)
+	}
+
+	// Advance past the checkpoint: a client caches this higher-revision world.
+	response, payload = postJSON(t, r.ControlURL+"/control/items", "",
+		map[string]any{"id": "item-1", "item_version": 2})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("advance item status = %d body=%s, want 200", response.StatusCode, payload)
+	}
+	_, advancedRevision := revision(t, r, token)
+	if advancedRevision <= checkpointRevision {
+		t.Fatalf("advance did not move revision %d -> %d", checkpointRevision, advancedRevision)
+	}
+
+	response, payload = postJSON(t, r.ControlURL+"/control/restore", "",
+		map[string]string{"checkpoint": checkpointPath})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("restore status = %d body=%s, want 200", response.StatusCode, payload)
+	}
+	restored := decode[struct {
+		SyncEpoch string `json:"sync_epoch"`
+		Revision  int64  `json:"revision"`
+	}](t, payload)
+
+	if restored.SyncEpoch == checkpointEpoch {
+		t.Fatalf("restore did not rotate the epoch from %q", checkpointEpoch)
+	}
+	if restored.Revision != checkpointRevision {
+		t.Fatalf("restore revision = %d, want checkpoint revision %d", restored.Revision, checkpointRevision)
+	}
+	if restored.Revision >= advancedRevision {
+		t.Fatalf("restore revision %d did not regress below the advanced %d", restored.Revision, advancedRevision)
+	}
+	// The daemon now serves the restored state to clients.
+	served, servedRevision := revision(t, r, token)
+	if served != restored.SyncEpoch || servedRevision != restored.Revision {
+		t.Fatalf("served state = %q/%d, want restored %q/%d", served, servedRevision, restored.SyncEpoch, restored.Revision)
+	}
+}
+
+// TestControlRestoreRejectsNonIssuedCheckpoint: /control/restore accepts only a
+// checkpoint this harness issued (a 32-hex .db name resolved inside its own
+// checkpoint dir), so a loopback control caller cannot make the raw table copy
+// in Store.Restore replace the store from an arbitrary database.
+func TestControlRestoreRejectsNonIssuedCheckpoint(t *testing.T) {
+	_, r := startHarness(t)
+	for name, checkpoint := range map[string]string{
+		"a non-issued name":             "not-a-checkpoint",
+		"a path traversal":              "../../etc/passwd",
+		"a valid name in a foreign dir": "/tmp/" + strings.Repeat("a", 32) + ".db",
+	} {
+		response, payload := postJSON(t, r.ControlURL+"/control/restore", "",
+			map[string]string{"checkpoint": checkpoint})
+		if response.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: restore status = %d body=%s, want 400", name, response.StatusCode, payload)
+		}
+	}
+}
+
+// TestRunRejectsLooseCheckpointDir: a pre-existing, group/world-readable
+// checkpoint directory must fail run() closed rather than receive full store
+// snapshots (device credentials, pairing rows) — the path is predictable and
+// persists across runs, so MkdirAll's silent accept of an existing loose dir
+// is a credential-leak surface.
+func TestRunRejectsLooseCheckpointDir(t *testing.T) {
+	// The gate requires exactly 0700: group/other bits are a credential leak,
+	// and a missing owner write/execute bit would only fail closed later, at
+	// the first checkpoint write, instead of here at startup.
+	for name, mode := range map[string]os.FileMode{
+		"group-readable (0750)": 0o750,
+		"non-writable (0500)":   0o500,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "signet.db")
+			if err := os.MkdirAll(dbPath+".checkpoints", mode); err != nil {
+				t.Fatalf("pre-create checkpoint dir: %v", err)
+			}
+			h, err := run(context.Background(), config{
+				DBPath:      dbPath,
+				ListenAddr:  "127.0.0.1:0",
+				ControlAddr: "127.0.0.1:0",
+			})
+			if err == nil {
+				_ = h.Close()
+				t.Fatalf("run accepted a mode-%04o checkpoint dir, want fail-closed", mode)
+			}
+			// The rejection must happen before store.Open, so no fresh,
+			// never-paired store is left behind to strand the operator's retry
+			// behind the issue #133 topic-key gate.
+			if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+				t.Fatalf("run created the store at %s before rejecting the checkpoint dir; stat err = %v", dbPath, statErr)
+			}
+		})
 	}
 }
 

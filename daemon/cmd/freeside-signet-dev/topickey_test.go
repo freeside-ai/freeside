@@ -178,10 +178,12 @@ func TestResolveTopicKeyRejectsStorePaths(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "signet.db")
 	for name, keyPath := range map[string]string{
-		"the store file itself":  dbPath,
-		"a SQLite WAL sidecar":   dbPath + "-wal",
-		"the blob store dir":     dbPath + ".blobs",
-		"a file in the blobtree": filepath.Join(dbPath+".blobs", "ab", "cdef"),
+		"the store file itself":     dbPath,
+		"a SQLite WAL sidecar":      dbPath + "-wal",
+		"the blob store dir":        dbPath + ".blobs",
+		"a file in the blobtree":    filepath.Join(dbPath+".blobs", "ab", "cdef"),
+		"the checkpoint dir":        dbPath + ".checkpoints",
+		"a file in the checkpoints": filepath.Join(dbPath+".checkpoints", "topic.key"),
 	} {
 		if _, err := resolveTopicKey(keyPath, dbPath, false); !errors.Is(err, errTopicKeyInStore) {
 			t.Errorf("%s: err = %v, want errTopicKeyInStore", name, err)

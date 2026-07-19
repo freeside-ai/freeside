@@ -3,7 +3,8 @@
 // store, service, and request authorizer behind the contract handler on one
 // loopback listener, plus a dev-only control surface on a second loopback
 // listener for test choreography the contract deliberately does not offer
-// (minting pairing codes, rotating the sync epoch to simulate a restore,
+// (minting pairing codes, checkpointing and restoring the store through the
+// real §5.14 epoch-rotating restore path, rotating the sync epoch on its own,
 // seeding attention items). It is a test harness, not the product daemon:
 // `freesided` and its operational surface stay with plan §10. Both listeners
 // refuse non-loopback addresses outright (plan §5.2), and the pairing key is
@@ -24,6 +25,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"regexp"
 	"syscall"
 	"time"
 
@@ -39,7 +42,7 @@ func main() {
 	listenAddr := flags.String("listen", "127.0.0.1:0", "contract listener address (loopback only)")
 	controlAddr := flags.String("control", "127.0.0.1:0", "control listener address (loopback only)")
 	ntfyURL := flags.String("ntfy-url", "", "ntfy server URL for delivery submission (optional; deliveries fail closed without it)")
-	topicKeyFile := flags.String("topic-key-file", "", "path to the persisted ntfy topic key (optional; must be disjoint from -db and its .blobs sibling). When set, device topics survive restarts; when unset, the key is per-process and reusing -db fails closed")
+	topicKeyFile := flags.String("topic-key-file", "", "path to the persisted ntfy topic key (optional; must be disjoint from -db and its .blobs/.checkpoints siblings). When set, device topics survive restarts; when unset, the key is per-process and reusing -db fails closed")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
@@ -79,8 +82,8 @@ type config struct {
 	// per-process key, which is safe only against a fresh store; reusing a
 	// pre-existing store without it fails closed rather than silently
 	// rekeying paired devices. It must be disjoint from DBPath and its
-	// ".blobs" sibling: the store is the backup/workspace surface this
-	// credential must stay out of.
+	// ".blobs" and ".checkpoints" siblings: those are the backup/workspace
+	// surfaces this credential must stay out of.
 	TopicKeyFile string
 }
 
@@ -116,6 +119,27 @@ func run(ctx context.Context, cfg config) (*harness, error) {
 	if err != nil {
 		_ = apiListener.Close()
 		return nil, fmt.Errorf("control listener: %w", err)
+	}
+
+	// Checkpoints are standalone SQLite snapshot files beside the store; the
+	// control surface writes them here and restores from them through the real
+	// §5.14 restore (epoch rotation included). A snapshot carries the whole
+	// store (device credentials, pairing rows), and this path is predictable
+	// and persists across runs, so a pre-existing loose or symlinked directory
+	// must fail closed rather than silently receive them: MkdirAll leaves an
+	// existing directory's mode untouched, so re-assert owner-only access.
+	// Validated before store.Open so a rejected directory cannot strand a
+	// just-created, never-paired store behind the issue #133 topic-key gate.
+	checkpointDir := cfg.DBPath + ".checkpoints"
+	if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
+		_ = apiListener.Close()
+		_ = controlListener.Close()
+		return nil, fmt.Errorf("create checkpoint dir: %w", err)
+	}
+	if err := assertPrivateDir(checkpointDir); err != nil {
+		_ = apiListener.Close()
+		_ = controlListener.Close()
+		return nil, err
 	}
 
 	// storePreexisting must be sampled before store.Open, which creates the
@@ -196,7 +220,7 @@ func run(ctx context.Context, cfg config) (*harness, error) {
 			ReadHeaderTimeout: 5 * time.Second,
 		},
 		controlServer: &http.Server{
-			Handler:           newControlHandler(service, st),
+			Handler:           newControlHandler(service, st, checkpointDir),
 			ReadHeaderTimeout: 5 * time.Second,
 		},
 		serveErrs: make(chan error, 2),
@@ -248,14 +272,39 @@ func listenLoopback(addr string) (net.Listener, error) {
 
 const maxControlBodyBytes = 1 << 20
 
+// assertPrivateDir fails closed unless path is a real directory (not a
+// symlink) reachable only by its owner, mirroring the keystore's permission
+// gate (internal/publish) for a credential-bearing path. Lstat, not Stat: a
+// symlinked checkpoint directory would carry snapshots outside the validated
+// location, so it must fail the kind check rather than be followed.
+func assertPrivateDir(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("checkpoint dir %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("checkpoint dir %s is not a plain directory", path)
+	}
+	// Require exactly 0700: reject group/other bits (a leak), and also a
+	// missing owner write/execute bit (e.g. 0500), which would pass a
+	// group/other-only check yet fail closed only later, at the first
+	// /control/checkpoint write, instead of here at startup.
+	if info.Mode().Perm() != 0o700 {
+		return fmt.Errorf("checkpoint dir %s is mode %04o, want owner-only 0700", path, info.Mode().Perm())
+	}
+	return nil
+}
+
 // newControlHandler serves the dev-only choreography surface. It lives in
 // package main, never in internal/signet, so the contract handler cannot
 // grow a control route by accident: what production composes is exactly what
 // this binary's api listener serves.
-func newControlHandler(service *signet.Service, st *store.Store) http.Handler {
-	c := controlHandler{service: service, store: st}
+func newControlHandler(service *signet.Service, st *store.Store, checkpointDir string) http.Handler {
+	c := controlHandler{service: service, store: st, checkpointDir: checkpointDir}
 	mux := http.NewServeMux()
 	mux.Handle("POST /control/pairing-codes", http.HandlerFunc(c.mintPairingCode))
+	mux.Handle("POST /control/checkpoint", http.HandlerFunc(c.checkpoint))
+	mux.Handle("POST /control/restore", http.HandlerFunc(c.restore))
 	mux.Handle("POST /control/epoch", http.HandlerFunc(c.rotateEpoch))
 	mux.Handle("POST /control/items", http.HandlerFunc(c.putItem))
 	mux.Handle("POST /control/deliveries", http.HandlerFunc(c.submitDelivery))
@@ -263,8 +312,92 @@ func newControlHandler(service *signet.Service, st *store.Store) http.Handler {
 }
 
 type controlHandler struct {
-	service *signet.Service
-	store   *store.Store
+	service       *signet.Service
+	store         *store.Store
+	checkpointDir string
+}
+
+// checkpointName matches the filenames POST /control/checkpoint issues: 16
+// random bytes as hex plus ".db". Restore accepts only these, so a control
+// caller cannot make Store.Restore copy an arbitrary database (whose raw table
+// copy bypasses the write-time domain gates) from outside the daemon-issued
+// set.
+var checkpointName = regexp.MustCompile(`^[0-9a-f]{32}\.db$`)
+
+// resolveCheckpoint constrains a caller-supplied checkpoint reference to a
+// file this handler issued: an issued name inside checkpointDir that is a
+// regular file, not a symlink. The path is derived from the validated base
+// name alone, so any directory the caller supplies (including traversal) is
+// discarded.
+func (c controlHandler) resolveCheckpoint(supplied string) (string, error) {
+	name := filepath.Base(supplied)
+	if !checkpointName.MatchString(name) {
+		return "", fmt.Errorf("not an issued checkpoint: %q", supplied)
+	}
+	path := filepath.Join(c.checkpointDir, name)
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("checkpoint %s: %w", name, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("checkpoint %s is not a regular file", name)
+	}
+	return path, nil
+}
+
+// checkpoint snapshots the live store to a fresh file and returns its path, so
+// a later restore can roll the daemon back to exactly this state.
+func (c controlHandler) checkpoint(w http.ResponseWriter, r *http.Request) {
+	var name [16]byte
+	if _, err := rand.Read(name[:]); err != nil {
+		controlError(w, err)
+		return
+	}
+	path := filepath.Join(c.checkpointDir, fmt.Sprintf("%x.db", name))
+	if err := c.store.Checkpoint(r.Context(), path); err != nil {
+		controlError(w, err)
+		return
+	}
+	controlJSON(w, http.StatusCreated, map[string]string{"checkpoint": path})
+}
+
+// restoreRequest names a checkpoint produced by POST /control/checkpoint.
+type restoreRequest struct {
+	Checkpoint string `json:"checkpoint"`
+}
+
+// restore is the real §5.14 restore: it rolls the store back to the named
+// checkpoint and rotates the sync epoch in the same operation, so a client
+// cached against the intervening state must discard and bootstrap.
+func (c controlHandler) restore(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxControlBodyBytes))
+	if err != nil {
+		controlError(w, err)
+		return
+	}
+	var req restoreRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		controlJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+	if req.Checkpoint == "" {
+		controlJSON(w, http.StatusBadRequest, map[string]string{"message": "checkpoint path is required"})
+		return
+	}
+	path, err := c.resolveCheckpoint(req.Checkpoint)
+	if err != nil {
+		controlJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+	state, err := c.store.Restore(r.Context(), path)
+	if err != nil {
+		controlError(w, err)
+		return
+	}
+	controlJSON(w, http.StatusOK, map[string]any{
+		"sync_epoch": state.SyncEpoch,
+		"revision":   state.Revision,
+	})
 }
 
 func (c controlHandler) mintPairingCode(w http.ResponseWriter, r *http.Request) {
@@ -276,6 +409,9 @@ func (c controlHandler) mintPairingCode(w http.ResponseWriter, r *http.Request) 
 	controlJSON(w, http.StatusCreated, map[string]string{"pairing_code": plaintext})
 }
 
+// rotateEpoch rotates the sync epoch on its own, without a data restore: the
+// minimal §5.14 test-8 stimulus for "a bare epoch change evicts the cache".
+// The real restore (data rollback plus rotation) is POST /control/restore.
 func (c controlHandler) rotateEpoch(w http.ResponseWriter, r *http.Request) {
 	state, err := c.store.NewEpoch(r.Context())
 	if err != nil {
