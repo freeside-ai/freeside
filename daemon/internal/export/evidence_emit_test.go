@@ -56,7 +56,7 @@ func TestEmitEvidenceGolden(t *testing.T) {
 	if _, err := export.Export(os.DirFS(buildEvidenceWorkspace(t)), out, export.Options{}); err != nil {
 		t.Fatalf("export: %v", err)
 	}
-	body, err := os.ReadFile(filepath.Join(out, export.EvidenceFilename))
+	body, err := os.ReadFile(filepath.Join(out, export.EvidenceFilename)) //nolint:gosec // test-owned temp path
 	if err != nil {
 		t.Fatalf("read evidence.json: %v", err)
 	}

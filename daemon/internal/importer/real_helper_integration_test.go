@@ -21,8 +21,10 @@ import (
 // pngMagic and jpegMagic are the smallest headers the importer's evidence
 // magic check accepts for their media types (evidence is images-only, §5.15
 // rule 3).
-var pngMagic = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}
-var jpegMagic = []byte{0xFF, 0xD8, 0xFF}
+var (
+	pngMagic  = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}
+	jpegMagic = []byte{0xFF, 0xD8, 0xFF}
+)
 
 func writeWorkspace(t *testing.T, dir, rel string, content []byte) {
 	t.Helper()
@@ -75,8 +77,8 @@ func TestImportRealHelperEvidenceToClaims(t *testing.T) {
 	jpegBytes := append(append([]byte{}, jpegMagic...), []byte("style image bytes")...)
 
 	workspace := t.TempDir()
-	writeWorkspace(t, workspace, "keep.txt", []byte("keep\n"))            // unchanged
-	writeWorkspace(t, workspace, "feature.txt", []byte("new feature\n"))  // added
+	writeWorkspace(t, workspace, "keep.txt", []byte("keep\n"))           // unchanged
+	writeWorkspace(t, workspace, "feature.txt", []byte("new feature\n")) // added
 	writeWorkspace(t, workspace, ".freeside-evidence/evidence.json", []byte(twoSourceDescriptor))
 	writeWorkspace(t, workspace, ".freeside-evidence/after.png", pngBytes)
 	writeWorkspace(t, workspace, ".freeside-evidence/style.jpg", jpegBytes)
