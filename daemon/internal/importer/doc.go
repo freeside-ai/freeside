@@ -6,13 +6,26 @@
 // manifests, and re-validates everything the manifest claims before any
 // of it can influence the import.
 //
+// Exactly two channels leave the agent workspace and never mix (§5.6).
+// The repo-change channel (manifest.json + blobs/) drives the clean
+// commit above. The evidence channel (evidence.json + evidence/, plan
+// §5.15) carries typed, provenance-bearing agent artifacts; it is
+// optional. Valid entries route into labeled domain AgentClaims on the
+// Result (never an item's evidence snapshot, never auto-uploaded); the
+// declared media type is validated against blob magic bytes. The two
+// stores stay physically separate, so an evidence digest never resolves
+// through a repo blob or vice versa.
+//
 // Outcomes split into two classes, deliberately:
 //
 //   - Integrity violations fail closed as typed errors (no Result, no
 //     commit): an unreadable, oversized, or invalid manifest, a path
 //     smuggling a git-metadata component, a path that is both a file
-//     and a directory, and (with later units of this package) blob and
-//     base violations.
+//     and a directory, blob and base violations, and any invalid
+//     evidence (a malformed evidence manifest, forged provenance, a
+//     content/media-type magic mismatch, or an oversized evidence
+//     blob). Evidence has no waivable-finding class: it is agent context
+//     that either validates into a claim or fails the import closed.
 //   - Policy violations accumulate as publish-blocking Findings on the
 //     Result: §5.6's non-regular change class, §5.5 automation-control
 //     and §5.8 reviewer-instruction paths, allowlist and size policy,
@@ -34,6 +47,8 @@
 //   - options.go  Options and Policy with defaults
 //   - handoff.go  manifest intake: capped read, strict decode,
 //     re-validation at the trust boundary
+//   - evidence.go the evidence channel: optional manifest intake, magic/
+//     type validation, and routing into labeled agent claims
 //   - paths.go    structural path gates (git-component injection,
 //     file/directory conflicts)
 //   - blobs.go    blob store audit and content verification

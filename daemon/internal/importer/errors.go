@@ -7,10 +7,24 @@ import "errors"
 // comparison. Each names an integrity invariant; policy outcomes are
 // Findings on the Result, never errors.
 var (
-	// Manifest intake failures.
+	// Manifest intake failures. ErrManifestTooLarge covers both channels'
+	// intake caps (manifest bytes, entry count, and stored-blob size).
 	ErrManifestUnreadable = errors.New("manifest cannot be read")
 	ErrManifestInvalid    = errors.New("manifest failed validation")
 	ErrManifestTooLarge   = errors.New("manifest exceeds an import cap")
+
+	// Evidence-channel intake failures (the second §5.6 workspace-exit
+	// channel). Evidence is optional, but a present evidence.json is untrusted:
+	// a malformed manifest, a forged producer class or provenance, or an
+	// injected trust field fails the import closed the same way the repo
+	// channel does. ErrEvidenceMediaMismatch covers an unlisted or forged
+	// media_type and content that does not match its declared type (§5.15
+	// rule 3). The shared blob-store sentinels below (ErrMissingBlob,
+	// ErrOrphanBlob, ErrDigestMismatch, ErrSizeMismatch, ErrBlobTooLarge) name
+	// the invariant, not the channel, so both channels reuse them.
+	ErrEvidenceUnreadable    = errors.New("evidence manifest cannot be read")
+	ErrEvidenceInvalid       = errors.New("evidence manifest failed validation")
+	ErrEvidenceMediaMismatch = errors.New("evidence blob does not match its declared media type")
 
 	// Structural path-gate failures. An honest exporter cannot produce
 	// either shape (a real filesystem cannot hold them), so both are

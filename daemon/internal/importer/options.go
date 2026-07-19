@@ -112,6 +112,14 @@ type Policy struct {
 	// MaxTotalBytes bounds the summed size of added and modified
 	// content before the change set as a whole is a size_violation.
 	MaxTotalBytes int64
+	// MaxEvidenceBlobBytes caps one evidence-channel blob and
+	// MaxEvidenceTotalBytes the summed evidence bytes, tracked separately from
+	// the repo-channel caps so the two channels stay independent. Unlike the
+	// repo channel these are hard-fail integrity caps, not size-violation
+	// findings: the evidence schema has no blob_omitted escape, so an over-cap
+	// evidence blob is contract-impossible for an honest helper.
+	MaxEvidenceBlobBytes  int64
+	MaxEvidenceTotalBytes int64
 	// SecretMaxScanBytes caps the per-file size the best-effort secret
 	// scan reads; larger blobs are outside the scan's honest textual
 	// scope and covered by size/type controls instead.
@@ -153,6 +161,12 @@ func (p Policy) withDefaults() Policy {
 	if p.MaxTotalBytes == 0 {
 		p.MaxTotalBytes = DefaultMaxTotalBytes
 	}
+	if p.MaxEvidenceBlobBytes == 0 {
+		p.MaxEvidenceBlobBytes = DefaultMaxBlobBytes
+	}
+	if p.MaxEvidenceTotalBytes == 0 {
+		p.MaxEvidenceTotalBytes = DefaultMaxTotalBytes
+	}
 	if p.SecretMaxScanBytes == 0 {
 		p.SecretMaxScanBytes = DefaultSecretMaxScan
 	}
@@ -177,6 +191,7 @@ func (o Options) validate() error {
 	}
 	if o.Policy.MaxManifestBytes < 0 || o.Policy.MaxEntries < 0 ||
 		o.Policy.MaxBlobBytes < 0 || o.Policy.MaxTotalBytes < 0 ||
+		o.Policy.MaxEvidenceBlobBytes < 0 || o.Policy.MaxEvidenceTotalBytes < 0 ||
 		o.Policy.SecretMaxScanBytes < 0 || o.Policy.MaxPathBytes < 0 ||
 		o.Policy.MaxPathDepth < 0 {
 		return fmt.Errorf("negative policy cap: %w", ErrInvalidOptions)

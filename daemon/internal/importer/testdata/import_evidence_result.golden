@@ -1,0 +1,38 @@
+{
+  "changes": [
+    {
+      "path": "a.txt",
+      "kind": "modified",
+      "mode": "100644",
+      "digest": "sha256:7aa7a5359173d05b63cfd682e3c38487f3cb4f7f1d60659fe59fab1505977d4c"
+    }
+  ],
+  "findings": [],
+  "claims": [
+    {
+      "label": "after-shot",
+      "artifact_id": "sha256:7ee2fb7588299839205ebdb5322fd3955dd5f668c3d72661f0e581575bfe7ffe",
+      "digest": "sha256:7ee2fb7588299839205ebdb5322fd3955dd5f668c3d72661f0e581575bfe7ffe",
+      "provenance": {
+        "producer_class": "agent",
+        "producer_invocation_id": "inv-after-shot",
+        "head_binding": "head_independent",
+        "verification_recipe_digest": null,
+        "sensitivity_class": "normal"
+      }
+    },
+    {
+      "label": "before-shot",
+      "artifact_id": "sha256:d303b4e45f0765c212dad6a6edda3e025d4d52299fee4abb0ca54bbfb2118c27",
+      "digest": "sha256:d303b4e45f0765c212dad6a6edda3e025d4d52299fee4abb0ca54bbfb2118c27",
+      "provenance": {
+        "producer_class": "agent",
+        "producer_invocation_id": "inv-before-shot",
+        "head_binding": "head_bound",
+        "source_head_sha": "0123456789abcdef0123456789abcdef01234567",
+        "verification_recipe_digest": null,
+        "sensitivity_class": "sensitive"
+      }
+    }
+  ]
+}
