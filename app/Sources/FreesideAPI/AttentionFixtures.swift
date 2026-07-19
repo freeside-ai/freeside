@@ -188,6 +188,7 @@ public enum AttentionFixtures {
                 submit_to_first_open: nil
             ),
             expires_when: nil,
+            decided_at: nil,
             status: .open
         )
         return .init(as_of_revision: 1, entity_version: 1, item: item)

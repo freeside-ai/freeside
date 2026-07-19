@@ -291,6 +291,68 @@ func TestValidateRejectsCorruptTiming(t *testing.T) {
 	}
 }
 
+// TestWithDecidedAt covers the decision-instant writer (issue #171): a real
+// UTC instant stamps once; zero, non-UTC, and re-stamping are rejected; and
+// the constructor never sets the field.
+func TestWithDecidedAt(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	base, err := domain.NewAttentionItem(validItemInput(domain.AttentionSpecApproval), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.DecidedAt != nil {
+		t.Fatalf("constructor set decided_at %v, want nil", base.DecidedAt)
+	}
+
+	decided, err := base.WithDecidedAt(ts)
+	if err != nil {
+		t.Fatalf("WithDecidedAt: %v", err)
+	}
+	if decided.DecidedAt == nil || !decided.DecidedAt.Equal(ts) {
+		t.Fatalf("decided_at = %v, want %v", decided.DecidedAt, ts)
+	}
+	if err := decided.Validate(); err != nil {
+		t.Fatalf("stamped item Validate: %v", err)
+	}
+	if base.DecidedAt != nil {
+		t.Fatal("WithDecidedAt mutated its receiver")
+	}
+
+	if _, err := base.WithDecidedAt(time.Time{}); !errors.Is(err, domain.ErrMissingTimestamp) {
+		t.Fatalf("zero instant = %v, want ErrMissingTimestamp", err)
+	}
+	if _, err := base.WithDecidedAt(ts.In(time.FixedZone("PST", -8*3600))); !errors.Is(err, domain.ErrTimestampNotUTC) {
+		t.Fatalf("non-UTC instant = %v, want ErrTimestampNotUTC", err)
+	}
+	if _, err := decided.WithDecidedAt(ts.Add(time.Hour)); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("re-stamp = %v, want ErrImmutableTransition", err)
+	}
+}
+
+// TestValidateDecidedAt covers the reconstruction backstop for the pointer
+// field: nil is absent, a present pointer must carry a real UTC instant.
+func TestValidateDecidedAt(t *testing.T) {
+	base, err := domain.NewAttentionItem(validItemInput(domain.AttentionSpecApproval), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("zero", func(t *testing.T) {
+		item := base
+		item.DecidedAt = &time.Time{}
+		if err := item.Validate(); !errors.Is(err, domain.ErrMissingTimestamp) {
+			t.Fatalf("Validate() = %v, want ErrMissingTimestamp", err)
+		}
+	})
+	t.Run("non-UTC", func(t *testing.T) {
+		item := base
+		local := time.Date(2026, 1, 2, 3, 4, 5, 0, time.FixedZone("PST", -8*3600))
+		item.DecidedAt = &local
+		if err := item.Validate(); !errors.Is(err, domain.ErrTimestampNotUTC) {
+			t.Fatalf("Validate() = %v, want ErrTimestampNotUTC", err)
+		}
+	})
+}
+
 func TestNewAttentionItemRejects(t *testing.T) {
 	tests := []struct {
 		name    string

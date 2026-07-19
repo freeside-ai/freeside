@@ -141,6 +141,9 @@ struct RealDaemonConvergenceTests {
         await model.validate()
         await model.submit(.stop)
         #expect(deviceA.store.snapshotsByID[itemID]?.item.status == .resolved)
+        // The real daemon stamps the decision instant with the conclusion
+        // (#171); this is the wire-shape proof the mock mirrors.
+        #expect(deviceA.store.snapshotsByID[itemID]?.item.decided_at != nil)
         #expect(deviceB.store.snapshotsByID[itemID]?.item.status == .open)
 
         await deviceB.heartbeat()
@@ -182,6 +185,7 @@ struct RealDaemonConvergenceTests {
         #expect(modelB.phase == .superseded)
         let replacement = try #require(deviceB.store.snapshotsByID[itemID])
         #expect(replacement.item.status == .resolved)
+        #expect(replacement.item.decided_at != nil)
         #expect(replacement == deviceA.store.snapshotsByID[itemID])
     }
 

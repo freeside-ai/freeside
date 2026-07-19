@@ -117,6 +117,17 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The decided fixture pins the present render of decided_at (issue #171):
+	// the item above, concluded by its offered dismiss decision, stamped at a
+	// UTC-fixed instant. The base fixture keeps the explicit-null render.
+	decidedItem := item
+	decidedItem.ItemVersion = 2
+	decidedItem.Status = domain.StatusDismissed
+	decidedItem, err = decidedItem.WithDecidedAt(ts.Add(2 * time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	device := domain.Device{
 		ID: "device-1", DisplayName: "Ben's iPhone",
 		Status: domain.DeviceActive, PairedAt: ts,
@@ -299,6 +310,7 @@ func TestGolden(t *testing.T) {
 	}{
 		{"attention_item", item},
 		{"attention_item_blocked", blockedItem},
+		{"attention_item_decided", decidedItem},
 		{"command", command},
 		{"subject", subject},
 		{"agent_claim", agentClaim},

@@ -828,3 +828,85 @@ func TestForeignKeysEnforced(t *testing.T) {
 		})
 	}
 }
+
+// TestDecisionInstantsSurviveReopen is issue #171 acceptance 5, the fixture
+// the open-to-decision derivation (#164) consumes: after a restart, both
+// endpoints of the metric — the delivery's opened receipt and the item's
+// decision instant — read back from durable state alone, no test clock.
+func TestDecisionInstantsSurviveReopen(t *testing.T) {
+	ctx := context.Background()
+	path := tempDBPath(t)
+	opts := store.Options{ApprovedRecipes: approvedFixtureRecipes()}
+	f := newFixtures(t)
+
+	decidedAt := f.delivery.OpenedAt.Add(2 * time.Hour)
+	concluded := f.item
+	concluded.ItemVersion = 2
+	concluded.Status = domain.StatusDismissed
+	concluded, err := concluded.WithDecidedAt(decidedAt)
+	if err != nil {
+		t.Fatalf("WithDecidedAt: %v", err)
+	}
+
+	s, err := store.Open(ctx, path, opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	err = s.Write(ctx, func(tx *store.WriteTx) error {
+		// Referential order: the item's foreign keys, then the item (open,
+		// v1), its opened delivery, and the concluding transition (v2,
+		// stamped) over the stored v1, as the accepting transaction writes it.
+		if err := tx.PutRun(ctx, f.run); err != nil {
+			return err
+		}
+		if err := tx.PutConversation(ctx, f.conversation); err != nil {
+			return err
+		}
+		if err := tx.PutAgentInvocation(ctx, f.invocation); err != nil {
+			return err
+		}
+		if err := tx.PutArtifact(ctx, f.artifact); err != nil {
+			return err
+		}
+		if err := tx.PutAttentionItem(ctx, f.item); err != nil {
+			return err
+		}
+		if err := tx.PutAttentionDelivery(ctx, f.delivery); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, concluded)
+	})
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// The restart: a fresh handle on the same file is all the derivation may
+	// rely on.
+	reopened := openStoreAt(t, path, opts)
+	err = reopened.Read(ctx, func(tx *store.ReadTx) error {
+		item, err := tx.GetAttentionItem(ctx, f.item.ID)
+		if err != nil {
+			return err
+		}
+		if item.DecidedAt == nil || !item.DecidedAt.Equal(decidedAt) {
+			t.Fatalf("reopened decided_at = %v, want %v", item.DecidedAt, decidedAt)
+		}
+		delivery, err := tx.GetAttentionDelivery(ctx, f.delivery.ItemID, f.delivery.DeviceID, f.delivery.Channel, f.delivery.Attempt)
+		if err != nil {
+			return err
+		}
+		if delivery.OpenedAt == nil || !delivery.OpenedAt.Equal(*f.delivery.OpenedAt) {
+			t.Fatalf("reopened opened_at = %v, want %v", delivery.OpenedAt, f.delivery.OpenedAt)
+		}
+		if got := item.DecidedAt.Sub(*delivery.OpenedAt); got != 2*time.Hour {
+			t.Fatalf("open-to-decision from durable state = %v, want 2h", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+}

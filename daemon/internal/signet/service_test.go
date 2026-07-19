@@ -116,6 +116,35 @@ func TestPutItemRejectsDisallowedAction(t *testing.T) {
 	}
 }
 
+// TestPutItemRejectsCallerSetDecidedAt: the decision instant is stamped only
+// by Submit's concluding transaction (#171), so intake refuses an item that
+// already carries one — a trusted copy would forge the metric endpoint and
+// wedge an open item against ever concluding (refute-first finding).
+func TestPutItemRejectsCallerSetDecidedAt(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	before := f.revision(t)
+
+	item := f.item
+	item.ID = "item-prestamped"
+	stamped, err := item.WithDecidedAt(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("WithDecidedAt: %v", err)
+	}
+	if err := f.service.PutItem(ctx, stamped); !errors.Is(err, signet.ErrCallerSetDecidedAt) {
+		t.Fatalf("PutItem error = %v, want ErrCallerSetDecidedAt", err)
+	}
+	if after := f.revision(t); after != before {
+		t.Errorf("rejected item moved the revision %d → %d", before, after)
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetAttentionItem(ctx, stamped.ID)
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetAttentionItem after rejection = %v, want ErrNotFound", err)
+	}
+}
+
 // TestPutItemActionlessBlocked is #96's acceptance: an actionless blocked
 // item crosses the storage boundary (the plan assigns blocked no action),
 // while an empty set on any other type is still rejected by signet policy
@@ -291,6 +320,14 @@ func TestSubmitAcceptsAndResolves(t *testing.T) {
 		t.Errorf("item as_of_revision = %d, command revision = %d; want the same transaction",
 			snap.AsOfRevision, result.Revision)
 	}
+	// The accepting transaction stamps the decision instant from the service
+	// clock (#171): the durable endpoint of the open-to-decision metric.
+	if item.DecidedAt == nil || !item.DecidedAt.Equal(*f.now) {
+		t.Errorf("item decided_at = %v, want the accepting instant %v", item.DecidedAt, *f.now)
+	}
+	if item.DecidedAt != nil && item.DecidedAt.Location() != time.UTC {
+		t.Errorf("item decided_at location = %v, want UTC", item.DecidedAt.Location())
+	}
 }
 
 // TestSubmitCrossDeviceConflict is §5.14 test 1: two devices hold the same
@@ -415,6 +452,11 @@ func TestSubmitRetryIdempotent(t *testing.T) {
 		t.Fatalf("Submit: %v", err)
 	}
 	before := f.revision(t)
+	decidedAt := *f.now
+
+	// The retry arrives later on the wall clock; a replay that re-stamped the
+	// decision instant would surface here as a moved decided_at (#171).
+	*f.now = f.now.Add(45 * time.Minute)
 
 	retried, err := f.service.Submit(ctx, f.command("cmd-1", domain.ActionStop))
 	if err != nil {
@@ -432,6 +474,8 @@ func TestSubmitRetryIdempotent(t *testing.T) {
 	}
 	if item, _ := f.itemSnapshot(t); item.ItemVersion != 2 {
 		t.Errorf("retry re-applied the transition: item at v%d, want v2", item.ItemVersion)
+	} else if item.DecidedAt == nil || !item.DecidedAt.Equal(decidedAt) {
+		t.Errorf("retry moved decided_at to %v, want the original instant %v", item.DecidedAt, decidedAt)
 	}
 
 	mutated := f.command("cmd-1", domain.ActionDismiss)
@@ -502,6 +546,9 @@ func TestSubmitNonConcludingAction(t *testing.T) {
 	}
 	if snap.EntityVersion != 1 {
 		t.Errorf("item entity_version = %d, want untouched 1", snap.EntityVersion)
+	}
+	if item.DecidedAt != nil {
+		t.Errorf("navigation action stamped decided_at %v, want nil: open_pr decides nothing (#171)", item.DecidedAt)
 	}
 }
 
@@ -630,5 +677,10 @@ func TestSubmitDismissingAction(t *testing.T) {
 	item, _ := f.itemSnapshot(t)
 	if item.Status != domain.StatusDismissed || item.ItemVersion != 2 {
 		t.Errorf("item after dismiss: status %q v%d, want dismissed v2", item.Status, item.ItemVersion)
+	}
+	// Dismiss is a concluding decision like resolve: it stamps the decision
+	// instant (#171).
+	if item.DecidedAt == nil || !item.DecidedAt.Equal(*f.now) {
+		t.Errorf("item decided_at = %v, want the accepting instant %v", item.DecidedAt, *f.now)
 	}
 }

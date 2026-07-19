@@ -22,6 +22,13 @@ import (
 // not among a valid item's rendered choices.
 var ErrActionNotAllowedForType = errors.New("action is not allowed for attention type")
 
+// ErrCallerSetDecidedAt rejects an item arriving at the intake boundary with
+// a decision instant already recorded. The instant is stamped only by
+// Submit's concluding transaction (#171); trusting a caller's copy would
+// forge the open-to-decision endpoint and, on an open item, wedge it forever,
+// since the concluding stamp refuses an already-recorded instant.
+var ErrCallerSetDecidedAt = errors.New("decided_at is stamped by the accepting transaction, never caller-set")
+
 // ErrUnsupportedAction is returned for a genuinely new command (idempotency
 // by command_id is judged first) whose action's accepted effect this boundary
 // cannot represent yet:

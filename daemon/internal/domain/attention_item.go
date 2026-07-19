@@ -127,7 +127,15 @@ type AttentionItem struct {
 	ConversationID    *ConversationID   `json:"conversation_id"`
 	Timing            TimingSummary     `json:"timing"`
 	ExpiresWhen       *time.Time        `json:"expires_when"`
-	Status            ItemStatus        `json:"status"`
+	// DecidedAt is the daemon-stamped instant the item's first concluding
+	// decision was accepted (plan §4: open-to-decision is the product metric;
+	// issue #171). It is set only by WithDecidedAt in the transaction that
+	// records the concluding command, never caller-supplied, and nil for items
+	// that were not concluded by a decision (open, expired, superseded). Once
+	// recorded it is immutable (ValidateAttentionItemTransition): an
+	// idempotent command replay or a later re-put must not move or erase it.
+	DecidedAt *time.Time `json:"decided_at"`
+	Status    ItemStatus `json:"status"`
 }
 
 // AttentionItemInput carries the caller-supplied fields of an AttentionItem.
@@ -244,6 +252,22 @@ func (i AttentionItem) Validate() error {
 	if i.ExpiresWhen != nil && i.ExpiresWhen.IsZero() {
 		return fmt.Errorf("item %s expires_when: %w", i.ID, ErrMissingTimestamp)
 	}
+	if i.DecidedAt != nil {
+		if i.DecidedAt.IsZero() {
+			return fmt.Errorf("item %s decided_at: %w", i.ID, ErrMissingTimestamp)
+		}
+		// The item body is a canonical persisted encoding whose re-put
+		// convergence is a byte compare: a non-UTC instant is the same moment
+		// in a different byte form, so it would give one stamp two encodings.
+		if i.DecidedAt.Location() != time.UTC {
+			return fmt.Errorf("item %s decided_at: %w", i.ID, ErrTimestampNotUTC)
+		}
+	}
+	// DecidedAt presence is deliberately not coupled to Status here: terminal
+	// items may legitimately carry no decision (expiry, supersession, rows
+	// persisted before the field existed, and this Validate re-runs on every
+	// store decode), and the lifecycle rule (only a concluding command stamps)
+	// is the signet transaction's, not a structural invariant.
 	// Timing is trusted card telemetry produced only by WithTiming; a
 	// reconstructed item must still carry an internally consistent shape.
 	if err := i.Timing.Validate(); err != nil {
@@ -365,5 +389,27 @@ func (i AttentionItem) WithTiming(deliveries []AttentionDelivery) (AttentionItem
 		seen[k] = struct{}{}
 	}
 	i.Timing = TimingAggregates(deliveries)
+	return i, nil
+}
+
+// WithDecidedAt returns a copy of the item stamped with the instant its first
+// concluding decision was accepted. It is the only writer of DecidedAt: the
+// signet accepting transaction calls it when a concluding command commits, so
+// the stamp and the terminal status land in one write (issue #171). The
+// instant must be a real UTC time (the same canonicality Validate enforces);
+// re-stamping an already-decided item is refused here and erasure is refused
+// by ValidateAttentionItemTransition, so the recorded decision endpoint of the
+// open-to-decision metric cannot drift under replays or later re-puts.
+func (i AttentionItem) WithDecidedAt(t time.Time) (AttentionItem, error) {
+	if t.IsZero() {
+		return AttentionItem{}, fmt.Errorf("item %s decided_at: %w", i.ID, ErrMissingTimestamp)
+	}
+	if t.Location() != time.UTC {
+		return AttentionItem{}, fmt.Errorf("item %s decided_at: %w", i.ID, ErrTimestampNotUTC)
+	}
+	if i.DecidedAt != nil {
+		return AttentionItem{}, fmt.Errorf("item %s decided_at already recorded: %w", i.ID, ErrImmutableTransition)
+	}
+	i.DecidedAt = &t
 	return i, nil
 }

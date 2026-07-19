@@ -1097,6 +1097,7 @@ components:
         - conversation_id
         - timing
         - expires_when
+        - decided_at
         - status
       properties:
         id:
@@ -1156,6 +1157,16 @@ components:
           type: string
           format: date-time
           nullable: true
+        decided_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            The daemon-stamped instant the item's first concluding decision
+            was accepted, recorded in the same transaction as the command
+            and the status flip; the durable endpoint of the open-to-decision
+            metric (plan §4). Never client-set; null while the item is open
+            and for items concluded without a decision (expiry, supersession).
         status:
           $ref: "#/components/schemas/ItemStatus"
       example:
@@ -1204,6 +1215,7 @@ components:
           first_opened_at: "2026-01-02T03:09:05Z"
           submit_to_first_open: 300000000000
         expires_when: "2026-01-03T03:04:05Z"
+        decided_at: null
         status: "open"
 
     Subject:
