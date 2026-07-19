@@ -1,5 +1,13 @@
 {
   "label": "screenshot",
   "artifact_id": "art-2",
-  "digest": "sha256:img"
+  "digest": "sha256:img",
+  "provenance": {
+    "producer_class": "agent",
+    "producer_invocation_id": "inv-2",
+    "head_binding": "head_bound",
+    "source_head_sha": "cafebabe",
+    "verification_recipe_digest": null,
+    "sensitivity_class": "normal"
+  }
 }

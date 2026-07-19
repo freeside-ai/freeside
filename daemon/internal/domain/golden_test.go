@@ -67,7 +67,16 @@ func TestGolden(t *testing.T) {
 	runID := domain.RunID("run-1")
 	convID := domain.ConversationID("conv-1")
 	expires := ts.Add(24 * time.Hour)
-	agentClaim := domain.AgentClaim{Label: "screenshot", Artifact: "art-2", Digest: "sha256:img"}
+	agentClaim := domain.AgentClaim{
+		Label: "screenshot", Artifact: "art-2", Digest: "sha256:img",
+		Provenance: domain.Provenance{
+			ProducerClass:        domain.ProducerAgent,
+			ProducerInvocationID: "inv-2",
+			HeadBinding:          domain.HeadBound,
+			SourceHeadSHA:        "cafebabe",
+			SensitivityClass:     domain.SensitivityNormal,
+		},
+	}
 	subject := domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID}
 
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{

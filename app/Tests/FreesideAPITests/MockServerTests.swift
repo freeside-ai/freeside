@@ -319,8 +319,38 @@ import Testing
         var staleEligibleBit = AttentionFixtures.fixture(type: .review_diminishing_returns)
         staleEligibleBit.item.evidence_snapshot[0].publish_eligible = false
 
+        // Claim provenance (#173): the schema pins the agent producer and a
+        // null recipe digest, so the representable breach left is an empty
+        // required field, checked like domain.Provenance.Validate.
+        var claimEmptyInvocation = AttentionFixtures.fixture(type: .blocked)
+        claimEmptyInvocation.item.agent_claims[0].provenance = .head_bound(
+            .init(
+                producer_class: .agent,
+                producer_invocation_id: "",
+                head_binding: .head_bound,
+                source_head_sha: "cafebabe",
+                verification_recipe_digest: nil,
+                sensitivity_class: .normal
+            ))
+
+        // Agent output is never recipe-produced: a non-null recipe digest on
+        // a claim is ErrProvenanceInconsistent on the daemon, and the
+        // generated container type makes it representable here.
+        var claimRecipeBound = AttentionFixtures.fixture(type: .agent_question)
+        claimRecipeBound.item.agent_claims[0].provenance = .head_bound(
+            .init(
+                producer_class: .agent,
+                producer_invocation_id: "inv-forged",
+                head_binding: .head_bound,
+                source_head_sha: "cafebabe",
+                verification_recipe_digest: "sha256:recipe-forged",
+                sensitivity_class: .normal
+            ))
+
         for (label, seed) in [
             ("empty claim artifact_id", emptyClaimID),
+            ("empty claim provenance invocation", claimEmptyInvocation),
+            ("recipe-bound claim provenance", claimRecipeBound),
             ("head-bound evidence off the item head", headMismatch),
             ("duplicate evidence id", duplicateEvidence),
             ("claim reusing an evidence id", claimReusesEvidenceID),

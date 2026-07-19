@@ -1,0 +1,30 @@
+{
+  "version": "freeside.export.evidence/v1",
+  "entries": [
+    {
+      "label": "after-screenshot",
+      "media_type": "image/png",
+      "size": 2048,
+      "digest": "sha256:4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d",
+      "provenance": {
+        "producer_class": "agent",
+        "producer_invocation_id": "agent-run-7f",
+        "head_binding": "head_bound",
+        "source_head_sha": "4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e",
+        "sensitivity_class": "normal"
+      }
+    },
+    {
+      "label": "style-reference",
+      "media_type": "image/jpeg",
+      "size": 0,
+      "digest": "sha256:5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+      "provenance": {
+        "producer_class": "agent",
+        "producer_invocation_id": "agent-run-7f",
+        "head_binding": "head_independent",
+        "sensitivity_class": "sensitive"
+      }
+    }
+  ]
+}

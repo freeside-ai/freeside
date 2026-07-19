@@ -31,8 +31,8 @@ func main() {
 func run(args []string, stderr io.Writer) error {
 	flags := flag.NewFlagSet("freeside-export", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	workspace := flags.String("workspace", "/workspace", "read-only workspace mount to export")
-	out := flags.String("out", "/handoff", "output directory for the manifest and content blobs")
+	workspace := flags.String("workspace", export.HelperWorkspaceDir, "read-only workspace mount to export")
+	out := flags.String("out", export.HelperHandoffDir, "output directory for the manifest and content blobs")
 	maxBlobBytes := flags.Int64("max-blob-bytes", 100<<20,
 		"largest file that still gets a content blob; larger files are recorded blob_omitted; 0 disables the cap")
 	maxTotalBlobBytes := flags.Int64("max-total-blob-bytes", 1<<30,

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
 // OutputScanner is check 7's §5.4 scanning hook: it inspects the verified
@@ -101,10 +103,10 @@ type Config struct {
 // withDefaults returns cfg with unset optional fields filled.
 func (cfg Config) withDefaults() Config {
 	if cfg.WorkspaceTarget == "" {
-		cfg.WorkspaceTarget = "/workspace"
+		cfg.WorkspaceTarget = export.HelperWorkspaceDir
 	}
 	if cfg.HandoffDir == "" {
-		cfg.HandoffDir = "/handoff"
+		cfg.HandoffDir = export.HelperHandoffDir
 	}
 	if cfg.ProofPath == "" {
 		cfg.ProofPath = "/handoff-proof.txt"

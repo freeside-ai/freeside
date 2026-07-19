@@ -116,13 +116,34 @@ func TestNewAttentionItemRecomputesEvidenceEligibility(t *testing.T) {
 // derived from the rendered inputs, so it is exactly the canonical (sorted,
 // deduplicated) union of the evidence and claim digests, and a caller cannot
 // supply a divergent one (the field is not on the input).
+// TestAgentClaimWireExcludesPublishEligible proves the agent side of the
+// evidence contract (#173) has no publish-eligibility input: neither the
+// claim nor its provenance serializes a publish_eligible field, so a decoded
+// claim cannot carry the trust bit trusted policy computes on Artifact.
+func TestAgentClaimWireExcludesPublishEligible(t *testing.T) {
+	claim := domain.AgentClaim{
+		Label: "shot", Artifact: "c1", Digest: "sha256:aaa",
+		Provenance: provenance(domain.ProducerAgent, nil),
+	}
+	if err := claim.Validate(); err != nil {
+		t.Fatalf("fixture must be valid: %v", err)
+	}
+	b, err := json.Marshal(claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "publish_eligible") {
+		t.Errorf("marshaled agent claim carries publish_eligible: %s", b)
+	}
+}
+
 func TestNewAttentionItemDerivesBindingSet(t *testing.T) {
 	recipe := approvedRecipe
 	// Two evidence artifacts sharing a digest and one claim; the union
 	// deduplicates and sorts. "sha256:aaa" < "sha256:zzz" gives the order.
 	ev1 := domain.Artifact{ID: "e1", Type: "log", Digest: "sha256:zzz", Provenance: provenance(domain.ProducerVerifier, &recipe)}
 	ev2 := domain.Artifact{ID: "e2", Type: "log", Digest: "sha256:zzz", Provenance: provenance(domain.ProducerVerifier, &recipe)}
-	claim := domain.AgentClaim{Label: "shot", Artifact: "c1", Digest: "sha256:aaa"}
+	claim := domain.AgentClaim{Label: "shot", Artifact: "c1", Digest: "sha256:aaa", Provenance: provenance(domain.ProducerAgent, nil)}
 	in := validItemInput(domain.AttentionReadyForFinalReview)
 	in.PRHeadSHA = "abc123" // matches provenance() so evidence head-binding passes
 	in.EvidenceSnapshot = []domain.Artifact{ev1, ev2}
@@ -309,6 +330,33 @@ func TestNewAttentionItemRejects(t *testing.T) {
 			wantErr: domain.ErrEmptyField,
 		},
 		{
+			name: "agent claim without provenance",
+			mutate: func(in *domain.AttentionItemInput) {
+				in.AgentClaims = []domain.AgentClaim{{Label: "shot", Artifact: "art-1", Digest: "sha256:s"}}
+			},
+			wantErr: domain.ErrInvalidProducerClass,
+		},
+		{
+			name: "agent claim with verifier provenance",
+			mutate: func(in *domain.AttentionItemInput) {
+				in.AgentClaims = []domain.AgentClaim{{
+					Label: "shot", Artifact: "art-1", Digest: "sha256:s",
+					Provenance: provenance(domain.ProducerVerifier, nil),
+				}}
+			},
+			wantErr: domain.ErrNonAgentClaim,
+		},
+		{
+			name: "agent claim with daemon provenance",
+			mutate: func(in *domain.AttentionItemInput) {
+				in.AgentClaims = []domain.AgentClaim{{
+					Label: "shot", Artifact: "art-1", Digest: "sha256:s",
+					Provenance: provenance(domain.ProducerDaemon, nil),
+				}}
+			},
+			wantErr: domain.ErrNonAgentClaim,
+		},
+		{
 			name:    "non-positive item_version",
 			mutate:  func(in *domain.AttentionItemInput) { in.ItemVersion = 0 },
 			wantErr: domain.ErrNonPositive,
@@ -369,7 +417,7 @@ func TestNewAttentionItemRejects(t *testing.T) {
 				recipe := approvedRecipe
 				in.PRHeadSHA = "abc123" // matches provenance() SourceHeadSHA so head-binding passes
 				in.EvidenceSnapshot = []domain.Artifact{{ID: "shared", Type: "log", Digest: "sha256:e", Provenance: provenance(domain.ProducerVerifier, &recipe)}}
-				in.AgentClaims = []domain.AgentClaim{{Label: "x", Artifact: "shared", Digest: "sha256:c"}}
+				in.AgentClaims = []domain.AgentClaim{{Label: "x", Artifact: "shared", Digest: "sha256:c", Provenance: provenance(domain.ProducerAgent, nil)}}
 			},
 			wantErr: domain.ErrArtifactIdentityConflict,
 		},
@@ -377,8 +425,8 @@ func TestNewAttentionItemRejects(t *testing.T) {
 			name: "claim id maps to two digests",
 			mutate: func(in *domain.AttentionItemInput) {
 				in.AgentClaims = []domain.AgentClaim{
-					{Label: "a", Artifact: "c1", Digest: "sha256:x"},
-					{Label: "b", Artifact: "c1", Digest: "sha256:y"},
+					{Label: "a", Artifact: "c1", Digest: "sha256:x", Provenance: provenance(domain.ProducerAgent, nil)},
+					{Label: "b", Artifact: "c1", Digest: "sha256:y", Provenance: provenance(domain.ProducerAgent, nil)},
 				}
 			},
 			wantErr: domain.ErrArtifactIdentityConflict,
