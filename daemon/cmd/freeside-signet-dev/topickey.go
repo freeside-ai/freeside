@@ -274,12 +274,17 @@ func storeSurface(dbPath string) (files, dirs []string, err error) {
 			return nil, nil, err
 		}
 	}
-	// The blob store directory NewBlobStore opens beside the db.
-	if err := add(dbPath+".blobs", seenDir, &dirs); err != nil {
-		return nil, nil, err
-	}
-	if err := add(resolvedDB+".blobs", seenDir, &dirs); err != nil {
-		return nil, nil, err
+	// The blob store directory NewBlobStore opens beside the db, and the
+	// checkpoint directory the control surface writes store snapshots into:
+	// both are backup/workspace surfaces the derive-all topic key must stay
+	// out of, or copying an artifact would carry the live credential.
+	for _, suffix := range []string{".blobs", ".checkpoints"} {
+		if err := add(dbPath+suffix, seenDir, &dirs); err != nil {
+			return nil, nil, err
+		}
+		if err := add(resolvedDB+suffix, seenDir, &dirs); err != nil {
+			return nil, nil, err
+		}
 	}
 	return files, dirs, nil
 }
