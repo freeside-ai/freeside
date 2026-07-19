@@ -23,76 +23,106 @@ const maxEvidenceDescriptorBytes = 1 << 20
 // hostile or broken declaration.
 var errReservedAbsent = errors.New("reserved evidence path is absent")
 
-// emitEvidence writes the evidence channel (evidence.json plus its evidence/
-// blobs) from the agent-declared descriptor under EvidenceWorkspaceDir. A
-// missing descriptor means the workspace declared no evidence, and nothing is
-// written (the importer treats an absent evidence.json as the pre-evidence
-// shape). Any present-but-malformed declaration, or any source that is missing,
-// non-regular, reached through a symlink, or over-cap, fails the whole export
-// closed: the evidence schema has no way to omit a blob, so a partial or lying
-// evidence channel is never emitted.
-func emitEvidence(fsys fs.FS, outDir string, opts Options) error {
+// resolvedEvidenceSource is one declared source proven present, regular, and
+// within the caps, ready to copy. Resolution is separated from writing so the
+// whole malformed-declaration surface fails before any output is written.
+type resolvedEvidenceSource struct {
+	source EvidenceSource
+	size   int64
+}
+
+// resolveEvidence reads and validates the agent evidence descriptor and
+// resolves every declared source (symlink-safe, regular-file, within the
+// per-blob and aggregate caps) WITHOUT writing anything. It returns nil when
+// the workspace declares no evidence (an absent descriptor is the benign
+// pre-evidence shape the importer already tolerates). Any present-but-malformed
+// declaration, or any source that is missing, non-regular, reached through a
+// symlink, or over-cap, fails closed HERE — Export calls this before it writes
+// the repo channel, so a bad declaration fails the whole export before any
+// manifest exists (the ward gate verifies output, not exit status, so failing
+// before the repo manifest is written is what makes the handoff fail closed
+// rather than silently degrade to a repo-only export). The evidence schema
+// cannot omit a blob, so a partial or lying evidence channel is never emitted.
+func resolveEvidence(fsys fs.FS, opts Options) ([]resolvedEvidenceSource, error) {
 	info, err := lstatUnderReserved(fsys, EvidenceDescriptorPath)
 	if err != nil {
 		if errors.Is(err, errReservedAbsent) {
-			return nil
+			return nil, nil
 		}
-		return err
+		return nil, err
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("evidence descriptor %q: %w", EvidenceDescriptorPath, ErrEvidenceSourceNotRegular)
+		return nil, fmt.Errorf("evidence descriptor %q: %w", EvidenceDescriptorPath, ErrEvidenceSourceNotRegular)
 	}
-
 	raw, err := readReservedFile(fsys, EvidenceDescriptorPath, maxEvidenceDescriptorBytes)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	desc, err := DecodeEvidenceSourceManifest(raw)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	bw, err := newBlobWriter(outDir, EvidenceBlobsDirname)
-	if err != nil {
-		return err
-	}
-	var written int64
-	entries := make([]EvidenceEntry, 0, len(desc.Sources))
+	resolved := make([]resolvedEvidenceSource, 0, len(desc.Sources))
+	var total int64
 	for _, s := range desc.Sources {
 		finfo, err := lstatUnderReserved(fsys, s.Path)
 		if err != nil {
 			if errors.Is(err, errReservedAbsent) {
-				return fmt.Errorf("evidence source %q path %q: %w", s.Label, s.Path, ErrEvidenceSourceMissing)
+				return nil, fmt.Errorf("evidence source %q path %q: %w", s.Label, s.Path, ErrEvidenceSourceMissing)
 			}
-			return err
+			return nil, err
 		}
 		if !finfo.Mode().IsRegular() {
-			return fmt.Errorf("evidence source %q path %q: %w", s.Label, s.Path, ErrEvidenceSourceNotRegular)
+			return nil, fmt.Errorf("evidence source %q path %q: %w", s.Label, s.Path, ErrEvidenceSourceNotRegular)
 		}
 		size := finfo.Size()
 		if opts.MaxEvidenceBlobBytes > 0 && size > opts.MaxEvidenceBlobBytes {
-			return fmt.Errorf("evidence source %q: %d bytes: %w", s.Label, size, ErrEvidenceBlobTooLarge)
+			return nil, fmt.Errorf("evidence source %q: %d bytes: %w", s.Label, size, ErrEvidenceBlobTooLarge)
 		}
-		// Compare against the remaining headroom, never written+size, so a
-		// hostile size near MaxInt64 cannot wrap past the cap (written never
-		// exceeds the budget, so the subtraction cannot overflow).
-		if opts.MaxEvidenceTotalBytes > 0 && size > opts.MaxEvidenceTotalBytes-written {
-			return fmt.Errorf("evidence source %q: %w", s.Label, ErrEvidenceBudgetExhausted)
+		// Compare against the remaining headroom, never total+size, so a hostile
+		// size near MaxInt64 cannot wrap past the cap (total never exceeds the
+		// budget, so the subtraction cannot overflow). The aggregate is summed
+		// over declared (stat) sizes here rather than bytes written, a stricter
+		// bound that ignores any later blob dedup — fine, since it only
+		// over-rejects and does so before any write.
+		if opts.MaxEvidenceTotalBytes > 0 && size > opts.MaxEvidenceTotalBytes-total {
+			return nil, fmt.Errorf("evidence source %q: %w", s.Label, ErrEvidenceBudgetExhausted)
 		}
-		res, err := bw.digestAndStore(fsys, s.Path, true)
+		total += size
+		resolved = append(resolved, resolvedEvidenceSource{source: s, size: size})
+	}
+	return resolved, nil
+}
+
+// writeEvidence emits the pre-resolved evidence channel (evidence.json plus its
+// evidence/ blobs) into outDir. It runs after the repo channel is written, over
+// sources resolveEvidence already proved valid, so its only failure mode is a
+// source that changed size between resolution and copy — the quiescent-workspace
+// invariant the repo channel relies on too.
+func writeEvidence(fsys fs.FS, outDir string, sources []resolvedEvidenceSource) error {
+	if len(sources) == 0 {
+		return nil
+	}
+	bw, err := newBlobWriter(outDir, EvidenceBlobsDirname)
+	if err != nil {
+		return err
+	}
+	entries := make([]EvidenceEntry, 0, len(sources))
+	for _, rs := range sources {
+		res, err := bw.digestAndStore(fsys, rs.source.Path, true)
 		if err != nil {
 			return err
 		}
-		if res.size != size {
-			return fmt.Errorf("evidence source %q: size %d became %d: %w", s.Label, size, res.size, ErrWorkspaceChanged)
+		if res.size != rs.size {
+			return fmt.Errorf("evidence source %q: size %d became %d: %w", rs.source.Label, rs.size, res.size, ErrWorkspaceChanged)
 		}
-		written += res.bytesWritten
 		entries = append(entries, EvidenceEntry{
-			Label:      s.Label,
-			MediaType:  s.MediaType,
+			Label:      rs.source.Label,
+			MediaType:  rs.source.MediaType,
 			Size:       res.size,
 			Digest:     res.digest,
-			Provenance: s.provenance(),
+			Provenance: rs.source.provenance(),
 		})
 	}
 

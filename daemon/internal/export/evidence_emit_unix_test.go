@@ -54,6 +54,36 @@ func TestEmitEvidenceSymlinkEscape(t *testing.T) {
 	}
 }
 
+// TestEmitEvidenceWriteFailureLeavesNoManifest proves the manifest-last commit
+// ordering: a source that passes resolution (lstat sees a regular file) but
+// fails the copy (open denied, modeling an infrastructure failure like ENOSPC
+// while emitting declared evidence after the repo blobs are written) leaves no
+// manifest.json, so the ward gate fails the whole handoff closed rather than
+// shipping a repo-only export that silently dropped the declared evidence.
+func TestEmitEvidenceWriteFailureLeavesNoManifest(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses the unreadable-source permission check")
+	}
+	dir := t.TempDir()
+	mustWrite(t, dir, "README.md", "repo\n")
+	mustWrite(t, dir, ".freeside-evidence/shot.png", "unreadable")
+	if err := os.Chmod(filepath.Join(dir, ".freeside-evidence", "shot.png"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, dir, ".freeside-evidence/evidence.json", oneSource(".freeside-evidence/shot.png"))
+
+	out := t.TempDir()
+	if _, err := export.Export(os.DirFS(dir), out, export.Options{}); err == nil {
+		t.Fatal("expected export to fail on an unreadable evidence source")
+	}
+	if _, statErr := os.Stat(filepath.Join(out, export.ManifestFilename)); statErr == nil {
+		t.Error("manifest.json written despite an evidence-emission failure; it must be written last")
+	}
+	if _, statErr := os.Stat(filepath.Join(out, export.EvidenceFilename)); statErr == nil {
+		t.Error("evidence.json written despite an evidence-emission failure")
+	}
+}
+
 func mustSymlinkAt(t *testing.T, dir, rel, target string) {
 	t.Helper()
 	p := filepath.Join(dir, filepath.FromSlash(rel))

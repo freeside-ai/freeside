@@ -164,10 +164,16 @@ func TestEmitEvidenceHostile(t *testing.T) {
 			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
 				t.Fatalf("export err = %v, want %v", err, tc.wantErr)
 			}
-			// A failed evidence emission must leave no evidence.json for a
-			// downstream consumer to trust.
+			// A malformed evidence declaration fails the whole export atomically
+			// BEFORE any output is written: neither evidence.json nor the repo
+			// manifest.json exists. This is what makes the ward handoff fail
+			// closed (it verifies output, not the helper's exit status) rather
+			// than shipping a repo-only handoff that silently dropped evidence.
 			if _, statErr := os.Stat(filepath.Join(out, export.EvidenceFilename)); statErr == nil {
 				t.Errorf("evidence.json written despite emission failure")
+			}
+			if _, statErr := os.Stat(filepath.Join(out, export.ManifestFilename)); statErr == nil {
+				t.Errorf("repo manifest.json written despite a malformed evidence declaration; export must fail closed before writing output")
 			}
 		})
 	}

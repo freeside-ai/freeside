@@ -71,6 +71,15 @@ func Export(fsys fs.FS, outDir string, opts Options) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
+	// Resolve and validate the agent-declared evidence channel BEFORE writing
+	// any output, so a malformed declaration fails the whole export closed (no
+	// manifest is written, so the ward gate, which verifies output not exit
+	// status, fails the handoff) rather than degrading to a repo-only export.
+	// The reserved subtree was skipped by the walk above.
+	evidence, err := resolveEvidence(fsys, opts)
+	if err != nil {
+		return Manifest{}, err
+	}
 	bw, err := newBlobWriter(outDir, "blobs")
 	if err != nil {
 		return Manifest{}, err
@@ -100,15 +109,19 @@ func Export(fsys fs.FS, outDir string, opts Options) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
+	// Emit the pre-resolved evidence channel (evidence.json plus its evidence/
+	// blobs) BEFORE writing manifest.json. manifest.json is the atomic commit
+	// marker: the ward gate keys success on it, so writing it last means any
+	// failure emitting the declared evidence — a malformed descriptor (already
+	// caught by resolveEvidence above), or an infrastructure failure like ENOSPC
+	// during the blob copy here — leaves no manifest, and the whole handoff fails
+	// closed rather than silently degrading to a repo-only export that dropped
+	// the agent's declared evidence.
+	if err := writeEvidence(fsys, outDir, evidence); err != nil {
+		return Manifest{}, err
+	}
 	if err := os.WriteFile(filepath.Join(outDir, ManifestFilename), body, 0o600); err != nil {
 		return Manifest{}, fmt.Errorf("write manifest: %w", err)
-	}
-	// The second §5.6 channel: emit evidence.json plus its evidence/ blobs from
-	// the agent-declared descriptor under the reserved subtree (which the repo
-	// walk above skipped). Absent descriptor ⇒ no evidence channel; any hostile
-	// or malformed declaration fails the whole export closed.
-	if err := emitEvidence(fsys, outDir, opts); err != nil {
-		return Manifest{}, err
 	}
 	return m, nil
 }
