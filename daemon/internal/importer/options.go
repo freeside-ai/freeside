@@ -90,6 +90,18 @@ type Policy struct {
 	// ExtraGitMetadataPatterns is ADDED to the mandatory git-metadata
 	// class, with the same widen-only semantics.
 	ExtraGitMetadataPatterns []string
+	// ExtraVerificationRecipePatterns, ExtraPromptsPolicyPatterns,
+	// ExtraEgressTrustPatterns, and ExtraMaterialityRulesPatterns define the
+	// four §5.8 control-plane categories that have no universal default
+	// (their trusted files live at repository-specific locations): the whole
+	// class comes from the repository's trust profile via WithProtectedPaths.
+	// The widen-only semantics still hold — the default is empty, so config
+	// can only add coverage — and an empty list simply leaves that category
+	// with no import-stage coverage for this repository.
+	ExtraVerificationRecipePatterns []string
+	ExtraPromptsPolicyPatterns      []string
+	ExtraEgressTrustPatterns        []string
+	ExtraMaterialityRulesPatterns   []string
 	// MaxManifestBytes caps the manifest.json read.
 	MaxManifestBytes int64
 	// MaxEntries caps the manifest entry count.
@@ -179,6 +191,10 @@ func (o Options) validate() error {
 		o.Policy.ExtraAutomationControlPatterns,
 		o.Policy.ExtraReviewerInstructionPatterns,
 		o.Policy.ExtraGitMetadataPatterns,
+		o.Policy.ExtraVerificationRecipePatterns,
+		o.Policy.ExtraPromptsPolicyPatterns,
+		o.Policy.ExtraEgressTrustPatterns,
+		o.Policy.ExtraMaterialityRulesPatterns,
 	} {
 		for _, pat := range group {
 			if err := validGlob(pat); err != nil {

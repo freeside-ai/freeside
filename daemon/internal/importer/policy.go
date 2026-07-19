@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path"
 	"strings"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 // DefaultAutomationControlPatterns is the §5.5 automation-control path
@@ -79,6 +81,67 @@ func (p Policy) gitMetadata() []string {
 	return append(append([]string{}, DefaultGitMetadataPatterns...), p.ExtraGitMetadataPatterns...)
 }
 
+// The remaining §5.8 control-plane categories (verification recipes, prompts
+// and policy, egress and trust profiles, materiality rules) have no universal
+// mandatory-minimum defaults: their trusted files live at repository-specific
+// locations, so the whole class is loaded from the repository's trust profile
+// (see WithProtectedPaths) rather than a hard-coded list. The accessors return
+// only the caller-supplied extras; the widen-only rule holds trivially because
+// the default is empty. A repository that supplies no widening for one of
+// these categories gets no import-stage coverage of it — the fail-closed
+// requirement lives in WithProtectedPaths, which refuses to build a policy
+// from an absent or invalid profile.
+func (p Policy) verificationRecipe() []string {
+	return append([]string{}, p.ExtraVerificationRecipePatterns...)
+}
+
+func (p Policy) promptsPolicy() []string {
+	return append([]string{}, p.ExtraPromptsPolicyPatterns...)
+}
+
+func (p Policy) egressTrust() []string {
+	return append([]string{}, p.ExtraEgressTrustPatterns...)
+}
+
+func (p Policy) materialityRules() []string {
+	return append([]string{}, p.ExtraMaterialityRulesPatterns...)
+}
+
+// controlPlaneClasses is the complete §5.8 control-plane path class: one row
+// per domain.ControlPlaneCategory, pairing the importer FindingKind emitted
+// for a match with the domain category it lifts to and the widen-only pattern
+// accessor that defines it. It is the single source applyPolicy emits from and
+// categoryFor (the Finding.Candidate lift) resolves categories from, so the
+// gate and the lift can never disagree on a category. TestControlPlaneCategory‐
+// Coverage asserts every domain.AllControlPlaneCategories member appears here
+// exactly once — the runtime completeness check the exhaustive linter, which
+// sees no enum in a table literal, cannot give.
+var controlPlaneClasses = []struct {
+	kind     FindingKind
+	category domain.ControlPlaneCategory
+	patterns func(Policy) []string
+}{
+	{FindingAutomationControlPath, domain.ControlPlaneWorkflowConfiguration, Policy.automationControl},
+	{FindingReviewerInstructionPath, domain.ControlPlaneReviewerInstructions, Policy.reviewerInstruction},
+	{FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes, Policy.verificationRecipe},
+	{FindingPromptsPolicyPath, domain.ControlPlanePromptsAndPolicy, Policy.promptsPolicy},
+	{FindingEgressTrustPath, domain.ControlPlaneEgressAndTrust, Policy.egressTrust},
+	{FindingMaterialityRulesPath, domain.ControlPlaneMaterialityRules, Policy.materialityRules},
+}
+
+// categoryFor returns the §5.8 category a control-plane FindingKind lifts to.
+// The second result is false for a non-control-plane kind, so a caller that
+// mis-routes a repo-change or integrity kind here does not silently mint a
+// zero category.
+func categoryFor(kind FindingKind) (domain.ControlPlaneCategory, bool) {
+	for _, cl := range controlPlaneClasses {
+		if cl.kind == kind {
+			return cl.category, true
+		}
+	}
+	return "", false
+}
+
 // applyPolicy evaluates the path-class, allowlist, and size policy over
 // the derived change set, deletions included: removing a workflow or an
 // AGENTS.md changes what CI runs and what reviewers obey exactly as
@@ -97,11 +160,10 @@ func applyPolicy(changes []plannedChange, pol Policy) []Finding {
 		// fire on the name that will exist there. The finding still
 		// reports the actual candidate path.
 		classPath := normalizeAliases(c.path)
-		if matchAny(pol.automationControl(), classPath, true) {
-			findings = append(findings, c.finding(FindingAutomationControlPath, string(c.kind)))
-		}
-		if matchAny(pol.reviewerInstruction(), classPath, true) {
-			findings = append(findings, c.finding(FindingReviewerInstructionPath, string(c.kind)))
+		for _, cl := range controlPlaneClasses {
+			if matchAny(cl.patterns(pol), classPath, true) {
+				findings = append(findings, c.finding(cl.kind, string(c.kind)))
+			}
 		}
 		if matchAny(pol.gitMetadata(), classPath, true) {
 			findings = append(findings, c.finding(FindingGitMetadataPath, string(c.kind)))
