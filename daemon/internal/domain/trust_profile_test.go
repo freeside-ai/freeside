@@ -1,7 +1,9 @@
 package domain_test
 
 import (
+	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -20,6 +22,7 @@ func validTrustProfileInput() domain.AutomationTrustProfileInput {
 		},
 		ProtectedPaths: domain.ProtectedPathConfig{
 			ExtraAutomationControlPatterns: []string{"deploy/**"},
+			ExtraPromptsAndPolicyPatterns:  []string{"prompts/**"},
 		},
 	}
 }
@@ -60,11 +63,13 @@ func TestTrustProfileDigest(t *testing.T) {
 	// constructor canonicalizes, so equal content converges on one digest.
 	in := validTrustProfileInput()
 	in.ProtectedPaths.ExtraAutomationControlPatterns = []string{"deploy/**", "ci/*.sh"}
+	in.ProtectedPaths.ExtraEgressAndTrustPatterns = []string{"egress.yaml", "trust/**"}
 	sorted, err := domain.NewAutomationTrustProfile(in)
 	if err != nil {
 		t.Fatalf("NewAutomationTrustProfile sorted: %v", err)
 	}
 	in.ProtectedPaths.ExtraAutomationControlPatterns = []string{"ci/*.sh", "deploy/**", "ci/*.sh"}
+	in.ProtectedPaths.ExtraEgressAndTrustPatterns = []string{"trust/**", "egress.yaml", "trust/**"}
 	reordered, err := domain.NewAutomationTrustProfile(in)
 	if err != nil {
 		t.Fatalf("NewAutomationTrustProfile reordered: %v", err)
@@ -122,6 +127,15 @@ func TestTrustProfileValidation(t *testing.T) {
 		{"trailing slash", func(in *domain.AutomationTrustProfileInput) {
 			in.ProtectedPaths.ExtraGitMetadataPatterns = []string{"vendor/"}
 		}, domain.ErrPatternsNotCanonical},
+		{"empty prompts pattern", func(in *domain.AutomationTrustProfileInput) {
+			in.ProtectedPaths.ExtraPromptsAndPolicyPatterns = []string{""}
+		}, domain.ErrEmptyField},
+		{"absolute egress pattern", func(in *domain.AutomationTrustProfileInput) {
+			in.ProtectedPaths.ExtraEgressAndTrustPatterns = []string{"/egress.yaml"}
+		}, domain.ErrPatternsNotCanonical},
+		{"parent segment materiality pattern", func(in *domain.AutomationTrustProfileInput) {
+			in.ProtectedPaths.ExtraMaterialityRulesPatterns = []string{"docs/../plan.md"}
+		}, domain.ErrPatternsNotCanonical},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -165,6 +179,79 @@ func TestTrustProfileValidation(t *testing.T) {
 	emptyList.ProtectedPaths.ExtraGitMetadataPatterns = []string{}
 	if err := emptyList.Validate(); !errors.Is(err, domain.ErrPatternsNotCanonical) {
 		t.Fatalf("empty-list patterns error = %v, want ErrPatternsNotCanonical", err)
+	}
+}
+
+// TestTrustProfileRoundTrip: a serialized widened profile decodes to the
+// same value and passes Validate's digest recompute — the path a store read
+// takes (decode re-runs Validate), covered here for every pattern list.
+func TestTrustProfileRoundTrip(t *testing.T) {
+	in := validTrustProfileInput()
+	in.ProtectedPaths = domain.ProtectedPathConfig{
+		ExtraAutomationControlPatterns:   []string{"deploy/**"},
+		ExtraReviewerInstructionPatterns: []string{"REVIEWING.md"},
+		ExtraGitMetadataPatterns:         []string{"vendor/**"},
+		ExtraVerificationControlPatterns: []string{"Makefile"},
+		ExtraPromptsAndPolicyPatterns:    []string{"prompts/**"},
+		ExtraEgressAndTrustPatterns:      []string{"egress.yaml"},
+		ExtraMaterialityRulesPatterns:    []string{"docs/plan.md"},
+	}
+	original, err := domain.NewAutomationTrustProfile(in)
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile: %v", err)
+	}
+	body, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded domain.AutomationTrustProfile
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if err := decoded.Validate(); err != nil {
+		t.Fatalf("decoded profile rejected: %v", err)
+	}
+	if !reflect.DeepEqual(decoded, original) {
+		t.Fatalf("round trip diverged:\n got %#v\nwant %#v", decoded, original)
+	}
+}
+
+// TestTrustProfileDigestStability pins the v2 canonical form: a fixed,
+// fully-populated profile resolves to this digest on every build. A mismatch
+// means the canonical encoding changed without a version bump (or a bump
+// without repinning), either of which would read unchanged profiles as drift
+// across a daemon upgrade (plan §5.5).
+func TestTrustProfileDigestStability(t *testing.T) {
+	p, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo:                       "freeside-ai/demo",
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		AllowOIDC:                  true,
+		AllowEnvironmentSecrets:    false,
+		AllowSecretBearingPRJobs:   false,
+		AllowSelfHostedCI:          true,
+		AllowPullRequestTarget:     false,
+		WorkflowAuditDigest:        "sha256:workflow-audit",
+		Review: domain.ReviewSettings{
+			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+		},
+		ProtectedPaths: domain.ProtectedPathConfig{
+			ExtraAutomationControlPatterns:   []string{"deploy/**"},
+			ExtraReviewerInstructionPatterns: []string{"REVIEWING.md"},
+			ExtraGitMetadataPatterns:         []string{"vendor/**"},
+			ExtraVerificationControlPatterns: []string{"Makefile"},
+			ExtraPromptsAndPolicyPatterns:    []string{"prompts/**"},
+			ExtraEgressAndTrustPatterns:      []string{"egress.yaml"},
+			ExtraMaterialityRulesPatterns:    []string{"docs/plan.md"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile: %v", err)
+	}
+	const want = domain.Digest("sha256:47ea9bd9d11adf9daf2f5861b87a54feb1d6a47829fef78bc32c7bef9e5d9ea3")
+	if p.ProfileDigest != want {
+		t.Fatalf("v2 canonical digest = %q, want %q", p.ProfileDigest, want)
 	}
 }
 

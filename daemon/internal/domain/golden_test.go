@@ -184,6 +184,8 @@ func TestGolden(t *testing.T) {
 		ProtectedPaths: domain.ProtectedPathConfig{
 			ExtraAutomationControlPatterns:   []string{"deploy/**", "ci/*.sh", "deploy/**"},
 			ExtraVerificationControlPatterns: []string{"Makefile"},
+			ExtraPromptsAndPolicyPatterns:    []string{"prompts/**", "policy/**", "prompts/**"},
+			ExtraMaterialityRulesPatterns:    []string{"docs/plan.md"},
 		},
 	})
 	if err != nil {

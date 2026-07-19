@@ -15,7 +15,11 @@ import (
 // discipline) is a new version: two daemon builds must never derive different
 // digests for the same profile content, or the digest-bound publication gate
 // (plan §5.5) would read an unchanged profile as drift across an upgrade.
-const trustProfileEncodingVersion = "freeside-trust-profile/v1"
+// v2 added the prompts-and-policy, egress-and-trust, and materiality-rules
+// widening lists to ProtectedPathConfig; v1 rows fail Validate's digest
+// recompute and are re-recorded by a human, never migrated (§5.5 drift
+// recovery).
+const trustProfileEncodingVersion = "freeside-trust-profile/v2"
 
 // ProtectedPathConfig is the repository-specific widening of the protected
 // control-plane path classes (plan §5.5, §5.8). Only Extra* fields exist by
@@ -23,12 +27,18 @@ const trustProfileEncodingVersion = "freeside-trust-profile/v1"
 // enforce them and are not representable here, so no profile content can
 // narrow or disable a default class; a profile can only widen a gate. The
 // glob dialect is the importer's: path.Match segments with ** spanning
-// directories.
+// directories. Every §5.8 ControlPlaneCategory has a widening list here
+// (automation-control reaches workflow_configuration), so no category is
+// enumerable but unreachable from config; git-metadata is an orthogonal
+// integrity concern, not a §5.8 category.
 type ProtectedPathConfig struct {
 	ExtraAutomationControlPatterns   []string `json:"extra_automation_control_patterns"`
 	ExtraReviewerInstructionPatterns []string `json:"extra_reviewer_instruction_patterns"`
 	ExtraGitMetadataPatterns         []string `json:"extra_git_metadata_patterns"`
 	ExtraVerificationControlPatterns []string `json:"extra_verification_control_patterns"`
+	ExtraPromptsAndPolicyPatterns    []string `json:"extra_prompts_and_policy_patterns"`
+	ExtraEgressAndTrustPatterns      []string `json:"extra_egress_and_trust_patterns"`
+	ExtraMaterialityRulesPatterns    []string `json:"extra_materiality_rules_patterns"`
 }
 
 // Validate reports whether every pattern list is well-formed and canonical
@@ -44,6 +54,9 @@ func (c ProtectedPathConfig) Validate() error {
 		{"extra_reviewer_instruction_patterns", c.ExtraReviewerInstructionPatterns},
 		{"extra_git_metadata_patterns", c.ExtraGitMetadataPatterns},
 		{"extra_verification_control_patterns", c.ExtraVerificationControlPatterns},
+		{"extra_prompts_and_policy_patterns", c.ExtraPromptsAndPolicyPatterns},
+		{"extra_egress_and_trust_patterns", c.ExtraEgressAndTrustPatterns},
+		{"extra_materiality_rules_patterns", c.ExtraMaterialityRulesPatterns},
 	} {
 		// A non-nil empty list is the same content as nil but a different
 		// byte encoding ("[]" vs null); one representation per content is
@@ -89,6 +102,9 @@ func (c ProtectedPathConfig) canonicalize() ProtectedPathConfig {
 	c.ExtraReviewerInstructionPatterns = canonicalPatterns(c.ExtraReviewerInstructionPatterns)
 	c.ExtraGitMetadataPatterns = canonicalPatterns(c.ExtraGitMetadataPatterns)
 	c.ExtraVerificationControlPatterns = canonicalPatterns(c.ExtraVerificationControlPatterns)
+	c.ExtraPromptsAndPolicyPatterns = canonicalPatterns(c.ExtraPromptsAndPolicyPatterns)
+	c.ExtraEgressAndTrustPatterns = canonicalPatterns(c.ExtraEgressAndTrustPatterns)
+	c.ExtraMaterialityRulesPatterns = canonicalPatterns(c.ExtraMaterialityRulesPatterns)
 	return c
 }
 

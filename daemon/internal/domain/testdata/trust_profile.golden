@@ -22,7 +22,15 @@
     "extra_git_metadata_patterns": null,
     "extra_verification_control_patterns": [
       "Makefile"
+    ],
+    "extra_prompts_and_policy_patterns": [
+      "policy/**",
+      "prompts/**"
+    ],
+    "extra_egress_and_trust_patterns": null,
+    "extra_materiality_rules_patterns": [
+      "docs/plan.md"
     ]
   },
-  "profile_digest": "sha256:4ae77d4827e0bcb4715938308caac81bed769edf8b7985d920b58adfada68932"
+  "profile_digest": "sha256:a1b3fdb2ee565e09cfccca92039b68950c2c3dc2ab85f1a958932b1f75b0f89c"
 }
