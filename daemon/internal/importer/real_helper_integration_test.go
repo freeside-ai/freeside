@@ -117,6 +117,38 @@ func TestImportRealHelperEvidenceToClaims(t *testing.T) {
 	}
 }
 
+// TestImportReservedEvidenceBaseNeverDeleted proves the reserved subtree is
+// opaque to the repo channel in both directions: when the base repo already
+// tracks content under .freeside-evidence/ (an unusual but possible state), the
+// walk's exclusion must not make the importer derive that content as a deletion
+// (which would silently remove the user's tracked files when the agent stages
+// evidence).
+func TestImportReservedEvidenceBaseNeverDeleted(t *testing.T) {
+	checkout, base := initBaseRepo(t, map[string]string{
+		"keep.txt":                      "keep\n",
+		".freeside-evidence/tracked.md": "base notes\n",
+	})
+	workspace := t.TempDir()
+	// The agent's workspace is the base checkout (which carries the tracked
+	// reserved content) plus a fresh repo change.
+	writeWorkspace(t, workspace, "keep.txt", []byte("keep\n"))
+	writeWorkspace(t, workspace, ".freeside-evidence/tracked.md", []byte("base notes\n"))
+	writeWorkspace(t, workspace, "added.txt", []byte("new\n"))
+
+	res, err := Import(t.Context(), realHandoff(t, workspace, export.Options{}), cloneAtBase(t, checkout), testImportOptions(base))
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	for _, c := range res.Changes {
+		if strings.HasPrefix(c.Path, ".freeside-evidence") {
+			t.Errorf("reserved-subtree base path in the change set (would delete/modify tracked base content): %+v", c)
+		}
+	}
+	if res.CommitSHA == "" {
+		t.Fatalf("clean import produced no commit: findings=%+v", res.Findings)
+	}
+}
+
 // TestImportRealHelperBothChannelsWithOmittedBlob drives both channels through
 // the helper at once with an over-cap repo blob: the omitted-and-changed blob
 // blocks the commit as a publish-blocking finding, while the evidence channel

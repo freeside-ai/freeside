@@ -25,6 +25,15 @@ refute-first rule applies.
   properties, more lifecycle); verifier-only capture (deletes the agent-claims
   channel that #167/#173 already built).
 
+  The exclusion is **bidirectional**: the walk never emits the reserved subtree,
+  and the importer treats it as an opaque reserved path, so a base repo that
+  tracks content under `.freeside-evidence/` (unusual but possible) has that
+  content *retained*, never derived as a deletion. Without this the walk-skip
+  alone would make the importer read absence-from-manifest as a deletion and
+  silently remove the user's tracked reserved content when the agent stages
+  evidence (Codex P2, round 2; `derive.go` protects an exact reserved-name path
+  via `consumed` and paths beneath it via `opaqueSet`).
+
 - **The reserved name is `.freeside-evidence/`, NOT `.freeside/`.** `.freeside/`
   is the trusted control-plane directory (`.freeside/verify.json` is the verify
   recipe path; `.freeside/recipe.yaml` is control-plane config). Reserving it
