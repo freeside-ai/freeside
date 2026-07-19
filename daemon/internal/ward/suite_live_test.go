@@ -27,6 +27,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
 func requireLiveContainer(t *testing.T) string {
@@ -43,30 +45,6 @@ func requireLiveContainer(t *testing.T) string {
 	}
 	return bin
 }
-
-// liveSuiteExporterPayload is the suite's exporter shell. Unlike the handoff
-// live test's liveExporterPayload (which manifests only result.txt, as that
-// test asserts a single entry), it copies and manifests BOTH files the default
-// writer produces — result.txt and nested/state.txt — which Suite.Full requires
-// as this run's exact output. Entries are bytewise-sorted (nested precedes
-// result), the manifest invariant.
-const liveSuiteExporterPayload = `
-ws=rw
-grep " /workspace " /proc/mounts | grep -q -e " ro," -e " ro " && ws=ro
-wp=succeeded
-touch /workspace/.write-probe 2>/dev/null || wp=blocked
-[ -e /credentials ] && cr=present || cr=absent
-[ -e /Users ] && hh=present || hh=absent
-printf "workspace_mounted=%s\nworkspace_write=%s\ncredentials=%s\nhost_home=%s\n" "$ws" "$wp" "$cr" "$hh" > /handoff-proof.txt
-mkdir -p /handoff/blobs/sha256
-dr=$(sha256sum /workspace/result.txt); dr=${dr%% *}
-sr=$(wc -c < /workspace/result.txt)
-cp /workspace/result.txt "/handoff/blobs/sha256/$dr"
-dn=$(sha256sum /workspace/nested/state.txt); dn=${dn%% *}
-sn=$(wc -c < /workspace/nested/state.txt)
-cp /workspace/nested/state.txt "/handoff/blobs/sha256/$dn"
-printf "{\"version\":\"freeside.export.manifest/v1\",\"entries\":[{\"path\":\"nested/state.txt\",\"kind\":\"regular\",\"mode\":\"0644\",\"size\":%s,\"digest\":\"sha256:%s\",\"target\":null},{\"path\":\"result.txt\",\"kind\":\"regular\",\"mode\":\"0644\",\"size\":%s,\"digest\":\"sha256:%s\",\"target\":null}]}" "$sn" "$dn" "$sr" "$dr" > /handoff/manifest.json
-`
 
 // TestLiveConformanceSuite runs the invocable suite against the reference
 // runtime: Full proves checks 1-5, 7, the credential-containment probe, and
@@ -119,8 +97,10 @@ func TestLiveConformanceSuite(t *testing.T) {
 	})
 
 	cfg := Config{
-		ExporterImage:     liveImage,
-		ExporterCommand:   []string{"sh", "-c", liveSuiteExporterPayload},
+		// The exporter runs the REAL freeside-export helper from the pinned
+		// exporter image; Suite.Full's check-5 probe also runs in this image.
+		ExporterImage:     liveExporterImage(t),
+		ExporterCommand:   export.HelperCommand(),
 		WriterStopTimeout: 3 * time.Minute,
 		ExporterTimeout:   3 * time.Minute,
 		Scanner:           scanner,

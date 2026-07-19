@@ -39,6 +39,10 @@ func run(args []string, stderr io.Writer) error {
 		"aggregate bytes written under blobs/ before further blobs are recorded blob_omitted; 0 disables the cap")
 	maxEntries := flags.Int("max-entries", 1_000_000,
 		"fail the export when the walk touches more names (files and directories) than this; 0 disables the cap")
+	maxEvidenceBlobBytes := flags.Int64("max-evidence-blob-bytes", 100<<20,
+		"largest evidence source that still gets a blob; a larger source fails the export (evidence blobs cannot be omitted); 0 disables the cap")
+	maxEvidenceTotalBytes := flags.Int64("max-evidence-total-bytes", 1<<30,
+		"aggregate bytes written under evidence/ before an evidence source fails the export; 0 disables the cap")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -47,9 +51,11 @@ func run(args []string, stderr io.Writer) error {
 	}
 
 	m, err := export.Export(os.DirFS(*workspace), *out, export.Options{
-		MaxBlobBytes:      *maxBlobBytes,
-		MaxTotalBlobBytes: *maxTotalBlobBytes,
-		MaxEntries:        *maxEntries,
+		MaxBlobBytes:          *maxBlobBytes,
+		MaxTotalBlobBytes:     *maxTotalBlobBytes,
+		MaxEntries:            *maxEntries,
+		MaxEvidenceBlobBytes:  *maxEvidenceBlobBytes,
+		MaxEvidenceTotalBytes: *maxEvidenceTotalBytes,
 	})
 	if err != nil {
 		return err

@@ -103,10 +103,18 @@ func deriveChanges(ctx context.Context, g *gitRunner, base map[string]treeEntry,
 		}
 	}
 
-	opaqueSet := make(map[string]struct{}, len(opaque))
+	opaqueSet := make(map[string]struct{}, len(opaque)+1)
 	for _, p := range opaque {
 		opaqueSet[p] = struct{}{}
 	}
+	// The reserved evidence subtree is excluded from the repo channel in both
+	// directions: the export walk never emits it (walk.go), so a base path at or
+	// under it is absent from the manifest and would otherwise derive as a
+	// deletion, silently removing tracked base content when the agent stages
+	// evidence. Retain it instead — consumed protects an exact base file/dir with
+	// the reserved name, opaque protects base paths beneath the subtree.
+	consumed[export.EvidenceWorkspaceDir] = true
+	opaqueSet[export.EvidenceWorkspaceDir] = struct{}{}
 	for path, be := range base {
 		if consumed[path] || underAnyOpaque(opaqueSet, path) {
 			continue
