@@ -68,12 +68,16 @@ public struct CachedState: Codable, Equatable, Sendable {
 
 /// Persistence for the disposable read cache (plan §5.14: the daemon is
 /// sole authority; client databases are caches a client can always
-/// rebuild by bootstrapping). Loading is therefore forgiving — anything
-/// unreadable is absent — while saving is best-effort: a lost save
-/// costs one bootstrap, never correctness.
+/// rebuild by bootstrapping). Loading is forgiving — anything unreadable
+/// is absent. Saving now *reports* failure by throwing; whether that is
+/// fatal is the caller's call: the read-cache and cursor paths stay
+/// best-effort (a lost save costs one bootstrap, never correctness), but
+/// registering a pending command treats a failed save as a hard
+/// precondition, because an unpersisted command_id cannot be replayed
+/// after a relaunch (plan §5.14 sync test 4, issue #163).
 public protocol CacheStore: Sendable {
     func load() -> CachedState?
-    func save(_ state: CachedState)
+    func save(_ state: CachedState) throws
     func discard()
 }
 
@@ -106,10 +110,11 @@ public struct DiskCacheStore: CacheStore {
         return file.state
     }
 
-    public func save(_ state: CachedState) {
-        guard let data = try? Self.encoder.encode(CacheFile(format: Self.format, state: state))
-        else { return }
-        try? FileManager.default.createDirectory(
+    public func save(_ state: CachedState) throws {
+        let data = try Self.encoder.encode(CacheFile(format: Self.format, state: state))
+        // createDirectory(withIntermediateDirectories:) is a no-op when the
+        // directory already exists, so the steady state never throws here.
+        try FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
@@ -120,7 +125,7 @@ public struct DiskCacheStore: CacheStore {
             // background refresh can still persist.
             options.insert(.completeFileProtectionUntilFirstUserAuthentication)
         #endif
-        try? data.write(to: fileURL, options: options)
+        try data.write(to: fileURL, options: options)
     }
 
     public func discard() {
@@ -151,7 +156,7 @@ public final class InMemoryCacheStore: CacheStore, @unchecked Sendable {
         lock.withLock { state }
     }
 
-    public func save(_ state: CachedState) {
+    public func save(_ state: CachedState) throws {
         lock.withLock { self.state = state }
     }
 

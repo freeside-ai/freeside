@@ -51,8 +51,11 @@ public final class InboxStore {
     /// coordinator can persist the ledger as it changes (#115): the
     /// retry affordance survives a relaunch only if each claim, state
     /// move, and release reaches disk when it happens, not at the next
-    /// sync round.
-    public var pendingCommandsObserver: (() -> Void)?
+    /// sync round. Returns whether the write reached disk, so a claim can
+    /// gate the first send on durability (#163); the post-send state
+    /// moves and releases ignore it (their loss only offers a harmless,
+    /// idempotent verbatim resend on relaunch).
+    public var pendingCommandsObserver: (() -> Bool)?
     public private(set) var snapshotsByID: [String: Components.Schemas.AttentionItemSnapshot] = [:]
     /// A pending command's shared lifecycle: in flight while an attempt
     /// awaits its response (no retry affordance — the request may still
@@ -219,27 +222,53 @@ public final class InboxStore {
         serverOrder.compactMap { snapshotsByID[$0] }
     }
 
-    /// Claims the item's single in-flight slot; false when another
-    /// command already occupies it, so a racing card instance can never
-    /// replace or duplicate an unresolved submission.
+    /// The outcome of claiming an item's in-flight slot for a first send.
+    /// `registered` alone clears the send: the command_id is both claimed
+    /// in memory and durably recorded. `slotOccupied` means another
+    /// command already holds the item (a racing card instance), and
+    /// `notPersisted` means the durable write failed, so the claim was
+    /// rolled back and the caller must not send (#163).
+    public nonisolated enum PendingCommandRegistration: Equatable, Sendable {
+        case registered
+        case slotOccupied
+        case notPersisted
+    }
+
+    /// Claims the item's single in-flight slot and durably records the
+    /// command before the caller sends. The durable write is a
+    /// precondition, not a side effect: an in-memory-only claim whose
+    /// disk write is lost would let a committed command's reusable
+    /// command_id vanish on relaunch, defeating the lost-response replay
+    /// (plan §5.14 sync test 4, #163). If the observer reports the write
+    /// failed, the just-claimed slot is rolled back and `notPersisted`
+    /// returned; with no observer wired (a bare store in tests) there is
+    /// no cache to gate on and the in-memory claim stands.
     public func registerPendingCommand(
         _ command: Components.Schemas.ClientCommand
-    ) -> Bool {
-        guard pendingCommandsByItemID[command.payload.item_id] == nil else { return false }
-        pendingCommandsByItemID[command.payload.item_id] =
+    ) -> PendingCommandRegistration {
+        let itemID = command.payload.item_id
+        guard pendingCommandsByItemID[itemID] == nil else { return .slotOccupied }
+        pendingCommandsByItemID[itemID] =
             PendingCommandEntry(command: command, state: .inFlight)
-        pendingCommandsObserver?()
-        return true
+        if let observer = pendingCommandsObserver, observer() == false {
+            // The write failed and left disk untouched, so dropping the
+            // in-memory entry restores the pre-claim state exactly.
+            pendingCommandsByItemID[itemID] = nil
+            return .notPersisted
+        }
+        return .registered
     }
 
     /// Moves the slot between in-flight and unresolved, only while it
-    /// still holds the named command.
+    /// still holds the named command. Best-effort persistence: this runs
+    /// after the send, and a lost write only offers an idempotent
+    /// verbatim resend on relaunch (#163).
     public func setPendingCommandState(
         itemID: String, commandID: String, state: PendingCommandState
     ) {
         guard pendingCommandsByItemID[itemID]?.command.command_id == commandID else { return }
         pendingCommandsByItemID[itemID]?.state = state
-        pendingCommandsObserver?()
+        _ = pendingCommandsObserver?()
     }
 
     /// Clears the slot only while it still holds the command that
@@ -248,7 +277,7 @@ public final class InboxStore {
     public func clearPendingCommand(itemID: String, commandID: String) {
         guard pendingCommandsByItemID[itemID]?.command.command_id == commandID else { return }
         pendingCommandsByItemID[itemID] = nil
-        pendingCommandsObserver?()
+        _ = pendingCommandsObserver?()
     }
 
     /// Restores a persisted ledger at relaunch (#115). Only empty slots

@@ -65,10 +65,10 @@ import Testing
                 artifact_digests: snapshot.item.artifact_digests
             )
         )
-        #expect(store.registerPendingCommand(older))
+        #expect(store.registerPendingCommand(older) == .registered)
         store.clearPendingCommand(itemID: "item-spec_approval", commandID: "cmd-older")
         older.command_id = "cmd-newer"
-        #expect(store.registerPendingCommand(older))
+        #expect(store.registerPendingCommand(older) == .registered)
 
         // The older command's late completion must not release the slot.
         store.clearPendingCommand(itemID: "item-spec_approval", commandID: "cmd-older")

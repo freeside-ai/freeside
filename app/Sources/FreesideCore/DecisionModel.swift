@@ -141,6 +141,14 @@ public final class DecisionModel {
     private static let restoredBeforeConfirmed =
         "the daemon restored before this result was confirmed"
 
+    /// The message when the pending-command ledger could not be durably
+    /// recorded, so the command was not sent: sending an unpersisted
+    /// command_id risks losing the lost-response retry across a relaunch
+    /// (issue #163). Failing closed keeps the item decidable once the
+    /// device can persist again.
+    private static let ledgerPersistFailed =
+        "the decision could not be saved on this device and was not submitted"
+
     /// Refetches the item's canonical state and swaps it into the store,
     /// so the card can never expose an action against a state it hasn't
     /// seen (plan §5.14 sync test 9: no stale action on a resolved item).
@@ -207,11 +215,24 @@ public final class DecisionModel {
                 artifact_digests: snapshot.item.artifact_digests
             )
         )
-        // The command claims the item's in-flight slot before the first
-        // byte leaves: a card recreated mid-flight sees the pending
-        // entry and cannot mint a second command; only a definitive
-        // outcome below releases the slot.
-        guard store.registerPendingCommand(command) else { return }
+        // The command claims the item's in-flight slot and durably records
+        // itself before the first byte leaves: a card recreated mid-flight
+        // sees the pending entry and cannot mint a second command, and a
+        // relaunch after a lost response still has the command_id to replay
+        // (#163). Only a definitive outcome below releases the slot.
+        switch store.registerPendingCommand(command) {
+        case .registered:
+            break
+        case .slotOccupied:
+            // Another command already holds the item; nothing to send.
+            return
+        case .notPersisted:
+            // The ledger write failed: sending now would risk losing the
+            // reusable command_id on relaunch, so fail closed and surface
+            // it rather than treat it as disposable-cache loss (#163).
+            submissionError = Self.ledgerPersistFailed
+            return
+        }
         submissionError = nil
         // A new submission supersedes the previously displayed record; a
         // stale one would also mask the lost-response retry affordance.

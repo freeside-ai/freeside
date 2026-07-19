@@ -53,9 +53,12 @@ public final class SyncCoordinator {
         }
         // Every ledger mutation persists immediately: a sync round may
         // never come before termination, and the persisted ledger is the
-        // §5.14 test-4 guarantee across a restart (#115).
+        // §5.14 test-4 guarantee across a restart (#115). The observer
+        // reports whether the write reached disk so registration can gate
+        // the first send on durability (#163); a coordinator torn down
+        // mid-registration reports false and fails the send closed.
         store.pendingCommandsObserver = { [weak self] in
-            self?.persist()
+            self?.persist() ?? false
         }
     }
 
@@ -178,20 +181,31 @@ public final class SyncCoordinator {
         persist()
     }
 
-    private func persist() {
+    /// Writes the current cache and reports whether it reached disk. The
+    /// read-cache/cursor callers discard the result (a lost save costs one
+    /// bootstrap), while the ledger-registration observer gates the first
+    /// send on it (#163).
+    @discardableResult
+    private func persist() -> Bool {
         let pending = store.pendingCommandsByItemID
-        // Nothing worth a file: keeping one would undo an eviction.
+        // Nothing worth a file: keeping one would undo an eviction. An
+        // empty ledger is durably recorded by definition.
         guard cursors != nil || !pending.isEmpty else {
             cache.discard()
-            return
+            return true
         }
         // Rows are meaningless without the cursors that scope them, so a
         // cursor-less save carries the ledger alone.
-        cache.save(
-            CachedState(
-                cursors: cursors,
-                attentionItems: cursors == nil ? [] : store.orderedSnapshots,
-                pendingCommands: pending
-            ))
+        do {
+            try cache.save(
+                CachedState(
+                    cursors: cursors,
+                    attentionItems: cursors == nil ? [] : store.orderedSnapshots,
+                    pendingCommands: pending
+                ))
+            return true
+        } catch {
+            return false
+        }
     }
 }
