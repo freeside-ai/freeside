@@ -263,6 +263,9 @@ func TestDiscussRecoverySingleAcceptedResult(t *testing.T) {
 		if item.Status != domain.StatusOpen {
 			t.Errorf("item status = %q, want open", item.Status)
 		}
+		if item.DecidedAt != nil {
+			t.Errorf("discuss stamped decided_at %v, want nil: discussing is not deciding (#171)", item.DecidedAt)
+		}
 		return nil
 	}); err != nil {
 		t.Fatalf("read item: %v", err)

@@ -86,6 +86,12 @@ func (s *Service) PutItem(ctx context.Context, item domain.AttentionItem) error 
 	if err := item.Validate(); err != nil {
 		return fmt.Errorf("put item %q: %w", item.ID, err)
 	}
+	// The decision instant is stamped only by Submit's concluding transaction
+	// (#171): item intake never carries one, so the boundary fails closed
+	// instead of trusting the caller's copy (see ErrCallerSetDecidedAt).
+	if item.DecidedAt != nil {
+		return fmt.Errorf("put item %q: %w", item.ID, ErrCallerSetDecidedAt)
+	}
 	if err := validateRequestedActions(item.Type, item.RequestedDecision); err != nil {
 		return fmt.Errorf("put item %q: %w", item.ID, err)
 	}
@@ -188,6 +194,18 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 				next := item
 				next.ItemVersion++
 				next.Status = status
+				// The concluding decision's accepted instant is the durable
+				// endpoint of the open-to-decision metric (#171), stamped in
+				// the same transaction as the command record and the status
+				// flip. Only concluding actions stamp: records-only actions
+				// decide nothing (actionOutcome), and a replay never reaches
+				// this branch, so the instant is set exactly once — the item
+				// was open, so no earlier concluding command can have stamped
+				// it.
+				next, err = next.WithDecidedAt(s.now().UTC())
+				if err != nil {
+					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+				}
 				if err := tx.PutAttentionItem(ctx, next); err != nil {
 					return err
 				}
