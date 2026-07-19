@@ -34,6 +34,11 @@ func manifestJSON(entries ...string) string {
 }
 
 func TestLoadManifestRejects(t *testing.T) {
+	// The #180 laundering regression: a raw invalid byte inside a path.
+	// encoding/json would replace it with U+FFFD on decode, so without the
+	// raw-bytes pre-check it becomes a valid-looking canonical path; the
+	// pre-check rejects it before the decoder ever sees it.
+	invalidUTF8 := strings.Replace(manifestJSON(regularEntryJSON("a.txt")), "a.txt", "a\xfftxt", 1)
 	cases := []struct {
 		name     string
 		manifest string
@@ -121,6 +126,12 @@ func TestLoadManifestRejects(t *testing.T) {
 			manifest: manifestJSON(regularEntryJSON("a.txt"), regularEntryJSON("b.txt")),
 			policy:   Policy{MaxEntries: 1},
 			wantErr:  ErrManifestTooLarge,
+		},
+		{
+			name:     "invalid utf-8 in path",
+			manifest: invalidUTF8,
+			wantErr:  ErrManifestInvalid,
+			wantAlso: export.ErrInvalidUTF8,
 		},
 	}
 	for _, tc := range cases {
