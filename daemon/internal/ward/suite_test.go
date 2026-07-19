@@ -344,6 +344,64 @@ func TestSuiteFullNetworklessProbeRejectsStaleProof(t *testing.T) {
 	s.assertReaped(t, rt)
 }
 
+// TestInExporterProbeScriptWritesProof runs the real probe shell against a
+// throwaway workspace and asserts it writes a well-formed proof with all four
+// required keys and an absent credential observation. It catches shell quoting
+// or syntax bugs; the ro-mount / host-home observations are runtime-specific and
+// exercised in the live suite.
+func TestInExporterProbeScriptWritesProof(t *testing.T) {
+	proofPath := filepath.Join(t.TempDir(), "proof.txt")
+	script := inExporterProbeScript(t.TempDir(), filepath.Join(t.TempDir(), "no-such-credentials"), proofPath)
+	if out, err := osexec.Command("sh", "-c", script).CombinedOutput(); err != nil { //nolint:gosec // fixed shell, test-owned script
+		t.Fatalf("probe script failed: %v: %s", err, out)
+	}
+	data, err := os.ReadFile(proofPath) //nolint:gosec // test-owned path
+	if err != nil {
+		t.Fatalf("read proof: %v", err)
+	}
+	for _, key := range []string{"workspace_mounted=", "workspace_write=", "credentials=absent", "host_home="} {
+		if !strings.Contains(string(data), key) {
+			t.Errorf("proof missing %q; got:\n%s", key, data)
+		}
+	}
+}
+
+// TestSuiteFullInExporterProbeRejectsBadProof proves the relocated check 5
+// still gates: an in-exporter probe reporting a writable workspace fails the
+// suite through the real verifyProof gate.
+func TestSuiteFullInExporterProbeRejectsBadProof(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	scriptHappyProbes(s, rt)
+	baseExport := rt.onExport
+	rt.onExport = func(id string, dest io.Writer) error {
+		if id == s.conformanceName(inExporterProbeSuffix) {
+			return writeProofArchive(dest, "handoff-proof.txt",
+				"workspace_mounted=rw\nworkspace_write=succeeded\ncredentials=absent\nhost_home=absent\n")
+		}
+		return baseExport(id, dest)
+	}
+	err := s.Full(context.Background())
+	wantCheckFailure(t, err, CheckInExporterVerification)
+	s.assertReaped(t, rt)
+}
+
+// TestSuiteFullInExporterProbeRejectsMissingProof proves an in-exporter probe
+// that wrote no proof file fails the suite rather than passing vacuously.
+func TestSuiteFullInExporterProbeRejectsMissingProof(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	scriptHappyProbes(s, rt)
+	baseExport := rt.onExport
+	rt.onExport = func(id string, dest io.Writer) error {
+		if id == s.conformanceName(inExporterProbeSuffix) {
+			return writeProofArchive(dest, "unrelated.txt", "no proof here")
+		}
+		return baseExport(id, dest)
+	}
+	err := s.Full(context.Background())
+	wantCheckFailure(t, err, CheckInExporterVerification)
+	s.assertReaped(t, rt)
+}
+
 func TestSuiteFullNetworklessProbeRejectsAttachment(t *testing.T) {
 	s, rt := newSuiteTest(t)
 	scriptHappyProbes(s, rt)

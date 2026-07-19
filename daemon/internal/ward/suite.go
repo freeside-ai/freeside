@@ -99,18 +99,24 @@ const (
 	networklessProbeSuffix               = "net"
 	networklessLivenessProbeSuffix       = "net-live"
 	networklessLivenessVolumeProbeSuffix = "net-live-ws"
+	// The in-exporter (check 5) probe suffixes, likewise short.
+	inExporterProbeSuffix       = "inx"
+	inExporterLivenessSuffix    = "inx-live"
+	inExporterVolumeProbeSuffix = "inx-ws"
 	// conformanceObjectPrefix leaves enough room under that same limit for the
 	// longest valid RunID and the suite's longest existing role suffix.
 	conformanceObjectPrefix = "freeside-ward-conf-"
 )
 
 // suiteBudget is Full's overall wall-clock ceiling: the synthetic handoff's
-// own budget plus room for the seed and the two probes (each a create, a
-// start, and a bounded wait). A wedge backstop, not an SLA; it exists so a
-// runtime that hangs inside a side-effecting call fails the suite closed
-// instead of blocking a long-lived daemon context forever.
+// own budget plus room for the seed and the three probes (the credential and
+// writer-exclusion probes, the networkless-export probe, and the in-exporter
+// check-5 probe, each a create, a start, and a bounded wait). A wedge backstop,
+// not an SLA; it exists so a runtime that hangs inside a side-effecting call
+// fails the suite closed instead of blocking a long-lived daemon context
+// forever.
 func (s *Suite) suiteBudget() time.Duration {
-	return s.b.cfg.HandoffTimeout + 5*probeStopTimeout
+	return s.b.cfg.HandoffTimeout + 7*probeStopTimeout
 }
 
 // withDefaults fills unset fixture fields.
@@ -150,6 +156,29 @@ func (fx SuiteFixture) agentCommand(cfg Config) []string {
 
 func nonterminatingProbeCommand() []string {
 	return []string{"sh", "-c", "while :; do sleep 3600; done"}
+}
+
+// inExporterProbeCommand runs check 5 inside the pinned exporter image: it
+// observes the in-VM environment (the workspace mounted read-only, a write
+// probe blocked, no credential path, no host home) and writes those
+// observations to the proof file. It is suite-owned conformance scaffolding
+// (like the networkless probe), distinct from the handoff exporter's fixed
+// helper command: the trusted freeside-export helper emits the channels, not
+// this environment proof, so check 5 is attested here rather than per handoff.
+func inExporterProbeCommand(workspaceTarget, credentialTarget, proofPath string) []string {
+	return []string{"sh", "-c", inExporterProbeScript(workspaceTarget, credentialTarget, proofPath)}
+}
+
+func inExporterProbeScript(workspaceTarget, credentialTarget, proofPath string) string {
+	// No `set -e`: each probe records its observation (including a failing one,
+	// which verifyProof then rejects) and the proof write must always run.
+	return "t=" + shellQuote(workspaceTarget) + "; c=" + shellQuote(credentialTarget) + "; " +
+		"m=rw; if grep \" $t \" /proc/mounts 2>/dev/null | grep -q -e \" ro,\" -e \" ro \"; then m=ro; fi; " +
+		"w=succeeded; if ! touch \"$t/.freeside-write-probe\" 2>/dev/null; then w=blocked; fi; " +
+		"if [ -e \"$c\" ]; then cr=present; else cr=absent; fi; " +
+		"if [ -e /Users ]; then hh=present; else hh=absent; fi; " +
+		"printf 'workspace_mounted=%s\\nworkspace_write=%s\\ncredentials=%s\\nhost_home=%s\\n' " +
+		"\"$m\" \"$w\" \"$cr\" \"$hh\" > " + shellQuote(proofPath) + "; sync"
 }
 
 // networklessProbeCommand deliberately attempts both name resolution and a
@@ -852,6 +881,12 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 	if err := s.probeNetworklessExport(ctx, run); err != nil {
 		return err
 	}
+	// Check 5, attested here rather than per handoff: the handoff exporter now
+	// runs only the trusted helper (which emits no environment proof), so a
+	// dedicated probe confirms the in-VM view the ro-mount topology produces.
+	if err := s.probeInExporterVerification(ctx, run); err != nil {
+		return err
+	}
 	proved = true
 	return nil
 }
@@ -1073,6 +1108,98 @@ func (s *Suite) probeNetworklessExport(ctx context.Context, run *suiteRun) error
 	return nil
 }
 
+// probeInExporterVerification is check 5: it runs the suite-owned probe inside
+// the pinned exporter image with the workspace mounted read-only and no
+// credential mount, exports the stopped probe's rootfs, and runs the real
+// verifyProof gate over the collected proof file. It attests the in-VM
+// environment (ro remount, blocked write, absent credential and host paths)
+// that check 4's host-side inspect asserts structurally per handoff; it is the
+// behavioral counterpart to probeNetworklessExport, moved off the per-handoff
+// path because the exporter now runs only the trusted helper.
+func (s *Suite) probeInExporterVerification(ctx context.Context, run *suiteRun) error {
+	volume := s.conformanceName(inExporterVolumeProbeSuffix)
+	defer run.reapVolume(ctx, volume)
+	if err := run.createVolume(ctx, volume, s.fx.WorkspaceSizeMB); err != nil {
+		return failf(CheckInExporterVerification, "create in-exporter probe workspace volume: %v", err)
+	}
+	mounts := []Mount{{Type: MountVolume, Source: volume, Target: s.b.cfg.WorkspaceTarget, ReadOnly: true}}
+
+	livenessName := s.conformanceName(inExporterLivenessSuffix)
+	defer run.reapContainer(ctx, livenessName)
+	if err := s.proveNoEagerStart(ctx, run, ContainerSpec{
+		Name:   livenessName,
+		Image:  s.b.cfg.ExporterImage,
+		Mounts: mounts,
+	}, CheckInExporterVerification); err != nil {
+		return err
+	}
+
+	name := s.conformanceName(inExporterProbeSuffix)
+	defer run.reapContainer(ctx, name)
+	spec := ContainerSpec{
+		Name:    name,
+		Image:   s.b.cfg.ExporterImage,
+		Command: inExporterProbeCommand(s.b.cfg.WorkspaceTarget, s.fx.CredentialTarget, s.b.cfg.ProofPath),
+		Mounts:  mounts,
+	}
+	var err error
+	spec, err = run.createContainer(ctx, spec)
+	if err != nil {
+		return failf(CheckInExporterVerification, "create in-exporter probe: %v", err)
+	}
+	rep, err := s.b.rt.Inspect(ctx, name)
+	if err != nil {
+		return failf(CheckInExporterVerification, "inspect in-exporter probe: %v", err)
+	}
+	if err := run.observeContainer(name, rep); err != nil {
+		return failf(CheckInExporterVerification, "in-exporter probe identity is unproven: %v", err)
+	}
+	if !probeSpecMatches(rep, spec) || rep.State != StateStopped {
+		return failf(CheckInExporterVerification, "in-exporter probe did not realize the stopped suite-owned probe spec")
+	}
+	if err := s.b.rt.StartContainer(ctx, name); err != nil {
+		return failf(CheckInExporterVerification, "start in-exporter probe: %v", err)
+	}
+	if err := s.b.waitStopped(ctx, name, run.containers[name], run.ownershipLabel, probeStopTimeout); err != nil {
+		return failf(CheckInExporterVerification, "in-exporter probe did not stop: %v", err)
+	}
+
+	archive, err := os.CreateTemp("", "freeside-ward-inexporter-"+s.fx.RunID+"-*.tar")
+	if err != nil {
+		return failf(CheckInExporterVerification, "create in-exporter probe archive: %v", err)
+	}
+	archivePath := archive.Name()
+	defer func() {
+		_ = archive.Close()
+		_ = os.Remove(archivePath)
+	}()
+	capped := &archiveCapWriter{dest: archive, remaining: s.b.cfg.MaxArchiveBytes}
+	exportErr := s.b.rt.ExportRootFS(ctx, name, capped, s.b.cfg.MaxArchiveBytes)
+	if capped.overflow {
+		return failf(CheckInExporterVerification, "in-exporter probe rootfs exceeds the byte cap")
+	}
+	if exportErr != nil {
+		return failf(CheckInExporterVerification, "export in-exporter probe rootfs: %v", exportErr)
+	}
+	if err := archive.Close(); err != nil {
+		return failf(CheckInExporterVerification, "close in-exporter probe rootfs archive: %v", err)
+	}
+	archive, err = os.Open(archivePath) //nolint:gosec // suite-generated temp path
+	if err != nil {
+		return failf(CheckInExporterVerification, "open in-exporter probe rootfs archive: %v", err)
+	}
+	proof, found, err := extractArchiveRegularFile(archive, s.b.cfg.ProofPath, maxProofBytes)
+	if err != nil {
+		return failf(CheckInExporterVerification, "read in-exporter proof: %v", err)
+	}
+	if !found {
+		return failf(CheckInExporterVerification, "in-exporter probe wrote no proof at %s", s.b.cfg.ProofPath)
+	}
+	// verifyProof is the real check-5 gate: canonical key=value observations,
+	// every required key, no unknowns, no duplicates.
+	return verifyProof(proof)
+}
+
 // seedCredential writes the fake marker into the credential volume through a
 // throwaway seed container, then reaps it. The marker lands at
 // CredentialTarget/token, where the writer and audit containers read it.
@@ -1218,6 +1345,56 @@ func (s *Suite) probeCredentialContainment(ctx context.Context, run *suiteRun, c
 		return failf(CheckCredentialContainment, "credential marker not readable from the detached credential volume")
 	}
 	return nil
+}
+
+// extractArchiveRegularFile validates a rootfs tar and returns the bytes of one
+// regular file at the given absolute path (bounded by limit), reporting whether
+// it was found. Like archiveHasRegularFile it parses through EOF and rejects a
+// duplicate entry, so a contradictory second proof fails closed. The caller
+// runs the real check gate (verifyProof) over the returned bytes rather than
+// matching a fixed string, so order-independence and unknown-key rejection are
+// exercised end to end.
+func extractArchiveRegularFile(r io.Reader, absolutePath string, limit int64) ([]byte, bool, error) {
+	wantPath := strings.TrimPrefix(absolutePath, "/")
+	var data []byte
+	found := false
+	tr := tar.NewReader(r)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return data, found, nil
+		}
+		if err != nil {
+			return nil, false, fmt.Errorf("read tar: %w", err)
+		}
+		if len(hdr.Name) > maxArchivePathBytes {
+			return nil, false, errors.New("archive entry path exceeds the length cap")
+		}
+		name := path.Clean(strings.TrimPrefix(hdr.Name, "./"))
+		if strings.HasPrefix(name, "/") || name == ".." || strings.HasPrefix(name, "../") {
+			return nil, false, errors.New("archive entry escapes the archive root")
+		}
+		if name != wantPath {
+			continue
+		}
+		if found {
+			return nil, false, errors.New("archive carries more than one proof entry")
+		}
+		found = true
+		if hdr.Typeflag != tar.TypeReg {
+			return nil, false, errors.New("proof entry is not a regular file")
+		}
+		if hdr.Size > limit {
+			return nil, false, errors.New("proof entry exceeds the cap")
+		}
+		data, err = io.ReadAll(io.LimitReader(tr, limit+1))
+		if err != nil {
+			return nil, false, fmt.Errorf("read proof entry: %w", err)
+		}
+		if int64(len(data)) > limit {
+			return nil, false, errors.New("proof entry exceeds the cap")
+		}
+	}
 }
 
 // archiveHasRegularFile validates a rootfs tar and binds a proof to one regular

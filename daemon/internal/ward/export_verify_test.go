@@ -93,8 +93,9 @@ func fixtureManifest(t *testing.T, blob []byte) ([]byte, string) {
 	return raw, hexDigest
 }
 
-// fixtureArchive is a valid exported rootfs: OS noise the gate must ignore,
-// the proof file, and a handoff tree whose blob matches the manifest.
+// fixtureArchive is a valid exported rootfs: OS noise the gate must ignore
+// (including a stray handoff-proof.txt, no longer part of the per-handoff path),
+// and a handoff tree whose blob matches the manifest.
 func fixtureArchive(t *testing.T) []tarEntry {
 	t.Helper()
 	manifest, hexDigest := fixtureManifest(t, fixtureBlob)
@@ -129,9 +130,135 @@ func TestVerifyExportValid(t *testing.T) {
 	}
 }
 
-// TestVerifyExportViolations induces check 5 and check 7 violations in the
-// exported archive and asserts each fails closed with the right check
-// (acceptance 2 for checks 5 and 7).
+// fixtureEvidence builds a valid evidence channel (canonical evidence.json plus
+// its one blob) and returns the entries to append to a repo-channel archive.
+func fixtureEvidence(t *testing.T) (entries []tarEntry, body []byte, hexDigest string, blob []byte) {
+	t.Helper()
+	blob = []byte("evidence-screenshot-bytes")
+	sum := sha256.Sum256(blob)
+	hexDigest = hex.EncodeToString(sum[:])
+	em := export.EvidenceManifest{
+		Version: export.EvidenceManifestVersion,
+		Entries: []export.EvidenceEntry{{
+			Label:     "after-shot",
+			MediaType: "image/png",
+			Size:      int64(len(blob)),
+			Digest:    export.Digest("sha256:" + hexDigest),
+			Provenance: export.EvidenceProvenance{
+				ProducerClass:        export.EvidenceProducerAgent,
+				ProducerInvocationID: "run-1",
+				HeadBinding:          export.EvidenceHeadIndependent,
+				SensitivityClass:     export.EvidenceSensitivityNormal,
+			},
+		}},
+	}
+	body, err := em.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries = []tarEntry{
+		{name: "handoff/evidence.json", body: body},
+		{name: "handoff/evidence/", typeflag: tar.TypeDir},
+		{name: "handoff/evidence/sha256/", typeflag: tar.TypeDir},
+		{name: "handoff/evidence/sha256/" + hexDigest, body: blob},
+	}
+	return entries, body, hexDigest, blob
+}
+
+// evidenceArchive is a valid two-channel export: the repo fixture plus the
+// evidence channel.
+func evidenceArchive(t *testing.T) []tarEntry {
+	t.Helper()
+	ev, _, _, _ := fixtureEvidence(t)
+	return append(fixtureArchive(t), ev...)
+}
+
+// TestVerifyExportEvidenceValid proves a valid evidence channel is accepted,
+// verified, and surfaced on the export output.
+func TestVerifyExportEvidenceValid(t *testing.T) {
+	out, err := runVerifyExport(t, newTestBackend(t), evidenceArchive(t))
+	if err != nil {
+		t.Fatalf("verifyExport = %v, want nil", err)
+	}
+	if !out.EvidencePresent {
+		t.Fatal("EvidencePresent = false, want true")
+	}
+	if len(out.Evidence.Entries) != 1 || out.Evidence.Entries[0].Label != "after-shot" {
+		t.Errorf("evidence = %+v, want the one after-shot entry", out.Evidence)
+	}
+	// The repo channel is unaffected.
+	if len(out.Manifest.Entries) != 1 || out.Manifest.Entries[0].Path != "result.txt" {
+		t.Errorf("repo manifest = %+v, want the one result.txt entry", out.Manifest)
+	}
+}
+
+// TestVerifyExportNoEvidence proves an absent evidence channel is the
+// pre-evidence shape, not an error.
+func TestVerifyExportNoEvidence(t *testing.T) {
+	out, err := runVerifyExport(t, newTestBackend(t), fixtureArchive(t))
+	if err != nil {
+		t.Fatalf("verifyExport = %v, want nil", err)
+	}
+	if out.EvidencePresent {
+		t.Error("EvidencePresent = true with no evidence channel")
+	}
+}
+
+// TestVerifyExportEvidenceViolations induces evidence-channel check-7
+// violations and asserts each fails closed as export_verification.
+func TestVerifyExportEvidenceViolations(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(t *testing.T) []tarEntry
+	}{
+		{"evidence blob content mismatch", func(t *testing.T) []tarEntry {
+			es := evidenceArchive(t)
+			es[len(es)-1].body = []byte("tampered")
+			return es
+		}},
+		{"evidence blob missing", func(t *testing.T) []tarEntry {
+			es := evidenceArchive(t)
+			return es[:len(es)-1]
+		}},
+		{"evidence manifest not canonical", func(t *testing.T) []tarEntry {
+			es := evidenceArchive(t)
+			_, body, _, _ := fixtureEvidence(t)
+			// Strip the trailing newline Encode appends: valid JSON, but not the
+			// canonical byte form DecodeEvidenceManifest requires.
+			es[len(es)-4].body = bytes.TrimRight(body, "\n")
+			return es
+		}},
+		{"evidence stray blob", func(t *testing.T) []tarEntry {
+			es := evidenceArchive(t)
+			stray := sha256.Sum256([]byte("stray-evidence"))
+			return append(es, tarEntry{
+				name: "handoff/evidence/sha256/" + hex.EncodeToString(stray[:]),
+				body: []byte("stray-evidence"),
+			})
+		}},
+		{"evidence file with no channel", func(t *testing.T) []tarEntry {
+			// evidence.json present but decodes empty is valid; here we drop the
+			// evidence.json so a lone evidence/ blob is an orphan.
+			es := evidenceArchive(t)
+			// Remove the evidence.json entry (index len-4), leaving evidence/ blobs.
+			return append(es[:len(es)-4], es[len(es)-3:]...)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := runVerifyExport(t, newTestBackend(t), tc.mutate(t))
+			var cf *ConformanceFailure
+			if !errors.As(err, &cf) || cf.Check != CheckExportVerification {
+				t.Fatalf("verifyExport = %v, want export_verification failure", err)
+			}
+		})
+	}
+}
+
+// TestVerifyExportViolations induces check 7 violations in the exported
+// archive and asserts each fails closed with the right check (acceptance 2 for
+// check 7). Check 5's proof is no longer part of this path: it is attested by
+// the conformance probe (TestSuiteInExporterProbe), not per handoff.
 func TestVerifyExportViolations(t *testing.T) {
 	_, wantHex := fixtureManifest(t, fixtureBlob)
 
@@ -140,39 +267,6 @@ func TestVerifyExportViolations(t *testing.T) {
 		mutate    func(*testing.T, []tarEntry) []tarEntry
 		wantCheck Check
 	}{
-		{
-			"missing proof",
-			func(_ *testing.T, es []tarEntry) []tarEntry {
-				return append(es[:3:3], es[4:]...)
-			},
-			CheckInExporterVerification,
-		},
-		{
-			"proof reports writable workspace",
-			func(_ *testing.T, es []tarEntry) []tarEntry {
-				es[3].body = []byte("workspace_mounted=rw\nworkspace_write=succeeded\ncredentials=absent\nhost_home=absent\n")
-				return es
-			},
-			CheckInExporterVerification,
-		},
-		{
-			"proof is a symlink",
-			func(_ *testing.T, es []tarEntry) []tarEntry {
-				es[3] = tarEntry{name: "handoff-proof.txt", typeflag: tar.TypeSymlink, linkname: "/etc/alpine-release"}
-				return es
-			},
-			CheckExportVerification,
-		},
-		{
-			// A second proof header must not silently overwrite the first: the
-			// gate approves exactly one observed proof (a contradictory proof
-			// followed by a valid duplicate would otherwise pass check 5).
-			"duplicate proof entry",
-			func(_ *testing.T, es []tarEntry) []tarEntry {
-				return append(es, tarEntry{name: "handoff-proof.txt", body: validProof()})
-			},
-			CheckExportVerification,
-		},
 		{
 			"blob content mismatch",
 			func(_ *testing.T, es []tarEntry) []tarEntry {
@@ -614,7 +708,7 @@ func TestExtractHandoffMetadataBudgets(t *testing.T) {
 			{name: "handoff/first/", typeflag: tar.TypeDir},
 			{name: "handoff/refused/", typeflag: tar.TypeDir},
 		}
-		_, err = b.extractHandoff(buildTar(t, entries), dest)
+		err = b.extractHandoff(buildTar(t, entries), dest)
 		var cf *ConformanceFailure
 		if !errors.As(err, &cf) || cf.Check != CheckExportVerification {
 			t.Fatalf("extractHandoff = %v, want export_verification failure", err)
@@ -632,7 +726,7 @@ func TestExtractHandoffMetadataBudgets(t *testing.T) {
 			t.Fatal(err)
 		}
 		dest := t.TempDir()
-		_, err = b.extractHandoff(buildTar(t, []tarEntry{
+		err = b.extractHandoff(buildTar(t, []tarEntry{
 			{name: "handoff/", typeflag: tar.TypeDir},
 			{name: "handoff/one/two/three/file", body: []byte("x")},
 		}), dest)
@@ -648,7 +742,7 @@ func TestExtractHandoffMetadataBudgets(t *testing.T) {
 	t.Run("path length", func(t *testing.T) {
 		b := newTestBackend(t)
 		name := "handoff/" + strings.Repeat("x", maxArchivePathBytes)
-		_, err := b.extractHandoff(buildTar(t, []tarEntry{{name: name, typeflag: tar.TypeDir}}), t.TempDir())
+		err := b.extractHandoff(buildTar(t, []tarEntry{{name: name, typeflag: tar.TypeDir}}), t.TempDir())
 		var cf *ConformanceFailure
 		if !errors.As(err, &cf) || cf.Check != CheckExportVerification {
 			t.Fatalf("extractHandoff = %v, want export_verification failure", err)

@@ -41,11 +41,16 @@ type HandoffResult struct {
 	// Admission is the spawn-time capability snapshot the run was admitted
 	// under (§5.3); audit binds to it.
 	Admission exec.Admission
-	// ExportDir holds the verified manifest and blobs. The caller owns the
-	// directory and removes it when done.
+	// ExportDir holds the verified manifest and blobs (both §5.6 channels when
+	// the workspace declared evidence). The caller owns the directory and
+	// removes it when done.
 	ExportDir string
-	// Manifest is the decoded, digest-verified §5.6 manifest.
+	// Manifest is the decoded, digest-verified §5.6 repo-change manifest.
 	Manifest export.Manifest
+	// Evidence is the decoded, digest-verified evidence manifest; valid only
+	// when EvidencePresent is true.
+	Evidence        export.EvidenceManifest
+	EvidencePresent bool
 }
 
 // objectClaim is one runtime object's ownership state. attempted records
@@ -94,10 +99,14 @@ type runState struct {
 // floor, run the agent with the workspace read-write and credentials in
 // their own read-only mounts (checks 1-2), prove the writer VM terminated by
 // observed state (check 3), run the exporter with the workspace read-only
-// behind a pre-execution mount-allowlist inspection (check 4), and verify
-// the in-exporter proof, exported digests, and §5.4 scan (checks 5, 7)
-// before releasing anything. Teardown runs on every exit path; a teardown
-// failure fails the gate even when everything else passed.
+// behind a pre-execution mount-allowlist inspection (check 4), and verify the
+// exported digests of both §5.6 channels plus the §5.4 scan (check 7) before
+// releasing anything. Check 5 (the in-exporter environment proof) is attested
+// at conformance time by a dedicated probe (Suite.Full), not on every handoff:
+// the exporter now runs only the trusted helper, which emits the channels but
+// not the proof, and check 4's inspect-before-execute covers the mount topology
+// per handoff. Teardown runs on every exit path; a teardown failure fails the
+// gate even when everything else passed.
 //
 // Any error means no trusted export: a *ConformanceFailure names the failed
 // contract check, and any other error is an operational failure of the same
@@ -258,8 +267,8 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		return nil, failf(CheckExportVerification, "exporter: %v", err)
 	}
 
-	// Checks 5 and 7: collect the stopped exporter's rootfs and verify the
-	// proof, manifest, digests, and scan before releasing anything. The
+	// Check 7: collect the stopped exporter's rootfs and verify both channels'
+	// manifests, digests, and the §5.4 scan before releasing anything. The
 	// archive and the extracted output are separate host-temp entities so the
 	// success path can hand the caller exactly the output directory with no
 	// leftover parent (teardown removes the archive; the output dir is the
@@ -283,7 +292,13 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// Mark success only here, so the deferred cleanup keeps the output dir only
 	// on a real delivery; a panic before this point still removes it.
 	st.succeeded = true
-	return &HandoffResult{Admission: adm, ExportDir: out.Dir, Manifest: out.Manifest}, nil
+	return &HandoffResult{
+		Admission:       adm,
+		ExportDir:       out.Dir,
+		Manifest:        out.Manifest,
+		Evidence:        out.Evidence,
+		EvidencePresent: out.EvidencePresent,
+	}, nil
 }
 
 var errArchiveByteCap = errors.New("archive byte cap exceeded")

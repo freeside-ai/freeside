@@ -868,14 +868,23 @@ func TestHandoffExporterNeverStops(t *testing.T) {
 	fx.assertReaped(t)
 }
 
-// TestHandoffProofMissing is acceptance 2 for check 5 through the full
-// lifecycle: an exported rootfs without the proof file fails.
-func TestHandoffProofMissing(t *testing.T) {
+// TestHandoffIgnoresMissingProof documents that check 5 is decoupled from the
+// per-handoff path: an exported rootfs without the proof file still completes,
+// because the exporter now runs only the trusted helper (which emits the
+// channels but no environment proof) and check 5 is attested by the conformance
+// probe (TestSuiteInExporterProbe*) instead. Check 4's inspect-before-execute
+// still covers the mount topology on every handoff.
+func TestHandoffIgnoresMissingProof(t *testing.T) {
 	fx := newHandoffFixture(t)
 	entries := fixtureArchive(t)
 	fx.rt.exportTarPath = buildTar(t, append(entries[:3:3], entries[4:]...))
-	_, err := fx.run(t)
-	wantCheckFailure(t, err, CheckInExporterVerification)
+	res, err := fx.run(t)
+	if err != nil {
+		t.Fatalf("handoff = %v, want success without a proof file", err)
+	}
+	if res == nil {
+		t.Fatal("nil result from a proof-less handoff")
+	}
 	fx.assertReaped(t)
 }
 
