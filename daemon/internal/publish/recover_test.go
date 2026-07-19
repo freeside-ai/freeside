@@ -290,11 +290,12 @@ func TestDrainReGateDriftLeavesPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	intentPayload, err := publish.Intent{
-		Identity:      id.Digest(),
-		InvocationID:  "inv-0001",
-		Repo:          cand.Repo,
-		BaseRef:       cand.BaseRef,
-		SourceHeadSHA: cand.HeadSHA,
+		Identity:        id.Digest(),
+		InvocationID:    "inv-0001",
+		Repo:            cand.Repo,
+		BaseRef:         cand.BaseRef,
+		SourceHeadSHA:   cand.HeadSHA,
+		AuthorizationID: testCandidateAuthorization(t).ID,
 	}.Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -339,11 +340,12 @@ func TestDrainTrustDriftLeavesPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	intentPayload, err := publish.Intent{
-		Identity:      id.Digest(),
-		InvocationID:  "inv-0001",
-		Repo:          cand.Repo,
-		BaseRef:       cand.BaseRef,
-		SourceHeadSHA: cand.HeadSHA,
+		Identity:        id.Digest(),
+		InvocationID:    "inv-0001",
+		Repo:            cand.Repo,
+		BaseRef:         cand.BaseRef,
+		SourceHeadSHA:   cand.HeadSHA,
+		AuthorizationID: testCandidateAuthorization(t).ID,
 	}.Encode()
 	if err != nil {
 		t.Fatal(err)

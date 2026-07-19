@@ -133,6 +133,17 @@ func DrainPendingPublications(ctx context.Context, s *store.Store, p *Publisher,
 			return dispatched, fmt.Errorf("drain publications: intent %q resolved to identity %s: %w",
 				entry.IdempotencyKey, derived.Digest(), errPublicationIntentDiverged)
 		}
+		// Authorization axis (#168): the identity excludes the authorization
+		// binding, so a resolver reconstructing the same head under a
+		// different current authorization would derive the same identity yet
+		// publish under a decision the intent never committed. Reproduce the
+		// committed authorization or refuse — Publish's gate re-checks the
+		// record is still authorizing, but recovery must not retarget which
+		// record that is.
+		if cand.AuthorizationID == nil || *cand.AuthorizationID != intent.AuthorizationID {
+			return dispatched, fmt.Errorf("drain publications: intent %q committed authorization %s, resolved candidate carries %s: %w",
+				entry.IdempotencyKey, intent.AuthorizationID, derefDigest(cand.AuthorizationID), errPublicationIntentDiverged)
+		}
 
 		result, err := p.Publish(ctx, cand, approved)
 		if err != nil {
@@ -191,6 +202,15 @@ func DrainPendingPublications(ctx context.Context, s *store.Store, p *Publisher,
 		dispatched++
 	}
 	return dispatched, nil
+}
+
+// derefDigest renders an optional digest for a divergence message: the
+// value, or "none" when the resolved candidate carried no authorization.
+func derefDigest(d *domain.Digest) domain.Digest {
+	if d == nil {
+		return "none"
+	}
+	return *d
 }
 
 // deriveCandidateIdentity computes a candidate's publication identity

@@ -305,6 +305,10 @@ func (p *Publisher) recordIntent(ctx context.Context, c Candidate, identity Iden
 		Repo:          c.Repo,
 		BaseRef:       c.BaseRef,
 		SourceHeadSHA: c.HeadSHA,
+		// gateAuthorization ran before recordIntent and proved AuthorizationID
+		// non-nil and validated, so the deref is safe; pinning it here lets
+		// the drain reproduce the committed authorization on recovery (#168).
+		AuthorizationID: *c.AuthorizationID,
 	}
 	payload, err := intent.Encode()
 	if err != nil {

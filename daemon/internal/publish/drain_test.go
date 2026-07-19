@@ -205,11 +205,12 @@ func TestDrainRejectsCorruptIntent(t *testing.T) {
 
 	corruptKey := "publish/inv-corrupt/" + publish.IntentKindPublication
 	payload, err := publish.Intent{
-		Identity:      testCandidateIdentity(t).Digest(),
-		InvocationID:  "inv-other", // disagrees with the key
-		Repo:          "freeside-ai/evidence-repo",
-		BaseRef:       "main",
-		SourceHeadSHA: testHeadSHA,
+		Identity:        testCandidateIdentity(t).Digest(),
+		InvocationID:    "inv-other", // disagrees with the key
+		Repo:            "freeside-ai/evidence-repo",
+		BaseRef:         "main",
+		SourceHeadSHA:   testHeadSHA,
+		AuthorizationID: testCandidateAuthorization(t).ID,
 	}.Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -250,11 +251,12 @@ func TestDrainRejectsDivergedResolver(t *testing.T) {
 		t.Fatal(err)
 	}
 	intentPayload, err := publish.Intent{
-		Identity:      id.Digest(),
-		InvocationID:  "inv-0001",
-		Repo:          "freeside-ai/evidence-repo",
-		BaseRef:       "main",
-		SourceHeadSHA: testHeadSHA,
+		Identity:        id.Digest(),
+		InvocationID:    "inv-0001",
+		Repo:            "freeside-ai/evidence-repo",
+		BaseRef:         "main",
+		SourceHeadSHA:   testHeadSHA,
+		AuthorizationID: testCandidateAuthorization(t).ID,
 	}.Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -308,11 +310,12 @@ func TestDrainRejectsInvocationMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	intentPayload, err := publish.Intent{
-		Identity:      id.Digest(),
-		InvocationID:  "inv-0001",
-		Repo:          "freeside-ai/evidence-repo",
-		BaseRef:       "main",
-		SourceHeadSHA: testHeadSHA,
+		Identity:        id.Digest(),
+		InvocationID:    "inv-0001",
+		Repo:            "freeside-ai/evidence-repo",
+		BaseRef:         "main",
+		SourceHeadSHA:   testHeadSHA,
+		AuthorizationID: testCandidateAuthorization(t).ID,
 	}.Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -334,6 +337,58 @@ func TestDrainRejectsInvocationMismatch(t *testing.T) {
 	pending := pendingPublications(t, h.store)
 	if len(pending) != 1 || pending[0].IdempotencyKey != key {
 		t.Errorf("pending = %v, want only the original intent (no second row under the resolver's invocation)", pending)
+	}
+}
+
+// TestDrainRejectsAuthorizationMismatch (#168): a resolver that returns the
+// right content (same identity) and the same invocation, but a candidate
+// bound to a different authorization than the intent committed, is refused
+// before any external effect. The identity excludes the authorization
+// binding, so the content and attempt axes both pass; without the
+// authorization-axis check recovery would silently retarget to a different
+// authorizing record. Zero effect, the original row stays pending.
+func TestDrainRejectsAuthorizationMismatch(t *testing.T) {
+	ctx := context.Background()
+	h := newDrainHarness(t)
+
+	id := testCandidateIdentity(t)
+	key, err := publish.IntentKey("inv-0001", publish.IntentKindPublication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentPayload, err := publish.Intent{
+		Identity:        id.Digest(),
+		InvocationID:    "inv-0001",
+		Repo:            "freeside-ai/evidence-repo",
+		BaseRef:         "main",
+		SourceHeadSHA:   testHeadSHA,
+		AuthorizationID: testCandidateAuthorization(t).ID,
+	}.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.ledger.Record(ctx, key, publish.IntentKindPublication, intentPayload); err != nil {
+		t.Fatalf("seed intent: %v", err)
+	}
+
+	// A distinct authorizing record for the same candidate (a re-run under a
+	// different producing invocation mints a different content id). Same
+	// identity and publishing invocation, different authorization.
+	otherIn := authorizingInput(t)
+	otherIn.InvocationID = "inv-verify-other"
+	otherID := newAuthorization(t, otherIn).ID
+	retargeted := testCandidate(t)
+	retargeted.AuthorizationID = &otherID
+
+	if _, err := publish.DrainPendingPublications(ctx, h.store, h.pub, fakeResolver{cand: retargeted, approved: testApprovedRecipes()}); err == nil {
+		t.Fatal("authorization mismatch drained, want error")
+	}
+	if got := len(h.gh.requestLog()); got != 0 {
+		t.Errorf("GitHub requests = %d, want 0 (refused before any effect)", got)
+	}
+	pending := pendingPublications(t, h.store)
+	if len(pending) != 1 || pending[0].IdempotencyKey != key {
+		t.Errorf("pending = %v, want the original intent still pending", pending)
 	}
 }
 

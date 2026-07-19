@@ -36,12 +36,21 @@ type IntentLedger interface {
 // derived identity (content axis) bound to the invocation that is
 // publishing it (attempt axis), plus the coordinates reconciliation
 // needs to find the branch and PR again without re-deriving anything.
+//
+// AuthorizationID pins the daemon-authored authorization the publication
+// committed under (#168). Recovery must reproduce the committed decision,
+// not silently retarget to whatever authorization is current at drain time:
+// the identity excludes the authorization binding, so the invocation and
+// identity divergence checks alone would not catch a resolver reconstructing
+// the same head under a different authorization. The drain fails closed when
+// the resolved candidate's AuthorizationID differs from this one.
 type Intent struct {
-	Identity      domain.Digest       `json:"identity"`
-	InvocationID  domain.InvocationID `json:"invocation_id"`
-	Repo          string              `json:"repo"`
-	BaseRef       string              `json:"base_ref"`
-	SourceHeadSHA string              `json:"source_head_sha"`
+	Identity        domain.Digest       `json:"identity"`
+	InvocationID    domain.InvocationID `json:"invocation_id"`
+	Repo            string              `json:"repo"`
+	BaseRef         string              `json:"base_ref"`
+	SourceHeadSHA   string              `json:"source_head_sha"`
+	AuthorizationID domain.Digest       `json:"authorization_id"`
 }
 
 // Validate reports whether the intent is well-formed. It runs on both
@@ -63,6 +72,12 @@ func (i Intent) Validate() error {
 	}
 	if i.SourceHeadSHA == "" {
 		return errors.New("intent: empty source head sha")
+	}
+	// The authorization id is a sha256 content address (validIdentityDigest
+	// checks the same sha256 form). A malformed one cannot name the record
+	// the publication committed under, so the drain must not act on it.
+	if !validIdentityDigest(string(i.AuthorizationID)) {
+		return fmt.Errorf("intent authorization_id %q is not a digest", i.AuthorizationID)
 	}
 	return nil
 }
