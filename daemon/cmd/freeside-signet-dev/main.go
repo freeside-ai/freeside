@@ -436,6 +436,10 @@ type putItemRequest struct {
 	Reason            string   `json:"reason"`
 	Type              string   `json:"type"`
 	RequestedDecision []string `json:"requested_decision"`
+	// TextClaim, when non-empty, attaches one markdown text claim carrying
+	// this content (#217), digest-bound server-side by ComputeDigest, so the
+	// convergence suite can assert the inline carrier survives the real wire.
+	TextClaim string `json:"text_claim"`
 }
 
 func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
@@ -462,6 +466,23 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 			requested[i] = domain.Action(a)
 		}
 	}
+	var claims []domain.AgentClaim
+	if req.TextClaim != "" {
+		text := domain.ClaimText{MediaType: domain.MediaTypeTextMarkdown, Content: req.TextClaim}
+		claims = []domain.AgentClaim{{
+			Label:    "summary",
+			Artifact: domain.ArtifactID("art-sum-" + req.ID),
+			Digest:   text.ComputeDigest(),
+			Text:     &text,
+			Provenance: domain.Provenance{
+				ProducerClass:        domain.ProducerAgent,
+				ProducerInvocationID: domain.InvocationID("inv-" + req.ID),
+				HeadBinding:          domain.HeadBound,
+				SourceHeadSHA:        "cafebabe",
+				SensitivityClass:     domain.SensitivityNormal,
+			},
+		}}
+	}
 	runID := domain.RunID("run-" + req.ID)
 	expires := time.Now().Add(24 * time.Hour)
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
@@ -472,6 +493,7 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		Priority:          domain.PriorityNormal,
 		Reason:            req.Reason,
 		RequestedDecision: requested,
+		AgentClaims:       claims,
 		PRHeadSHA:         "cafebabe",
 		ItemVersion:       req.ItemVersion,
 		InterruptionClass: domain.InterruptionPlannedGate,

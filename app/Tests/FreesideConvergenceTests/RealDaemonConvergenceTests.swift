@@ -367,6 +367,31 @@ struct RealDaemonConvergenceTests {
         #expect(loader.phase(for: unstored) == .unavailable)
     }
 
+    // MARK: - Text-claim carrier (issue #217)
+
+    @Test func aTextClaimRoundTripsThroughTheRealDaemon() async throws {
+        // #217: the daemon constructs a markdown text claim (digest bound
+        // to the content by domain.ClaimText.ComputeDigest and re-validated
+        // on every decode) and the generated client must deliver the inline
+        // carrier intact through a real bootstrap — content, media type,
+        // and the claim digest's membership in the item's binding set.
+        let control = try ConvergenceHarness.control()
+        let itemID = ConvergenceHarness.uniqueItemID("t217")
+        let summary = "Work on **\(itemID)** is ready; one decision is open."
+        try await control.seedItem(id: itemID, version: 1, textClaim: summary)
+        let device = try await ConvergenceHarness.pairDevice(displayName: "Convergence 217")
+        let coordinator = ConvergenceHarness.coordinator(for: device, cache: InMemoryCacheStore())
+
+        await coordinator.bootstrap()
+
+        let item = try #require(coordinator.store.snapshotsByID[itemID]?.item)
+        let claim = try #require(item.agent_claims.first { $0.text != nil })
+        let text = try #require(claim.text)
+        #expect(text.media_type == .text_sol_markdown)
+        #expect(text.content == summary)
+        #expect(item.artifact_digests.contains(claim.digest))
+    }
+
     // MARK: - Policy matrix parity (issue #204)
 
     /// Cross-language proof that the Swift fixture matrix

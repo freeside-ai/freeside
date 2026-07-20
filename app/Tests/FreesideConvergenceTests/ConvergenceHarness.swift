@@ -84,9 +84,13 @@ struct ControlClient {
 
     /// Seeds or advances one attention item; the harness constructs the
     /// item body server-side, so version bumps here are the real
-    /// analogue of the mock's advance hook.
-    func seedItem(id: String, version: Int) async throws {
-        _ = try await post("control/items", body: ["id": id, "item_version": version])
+    /// analogue of the mock's advance hook. A non-nil `textClaim` attaches
+    /// one markdown text claim carrying that content, digest-bound by the
+    /// daemon (#217).
+    func seedItem(id: String, version: Int, textClaim: String? = nil) async throws {
+        var body: [String: Any] = ["id": id, "item_version": version]
+        if let textClaim { body["text_claim"] = textClaim }
+        _ = try await post("control/items", body: body)
     }
 
     /// Seeds one item at an explicit type and offered action set and returns the
