@@ -56,6 +56,18 @@ func postJSON(t *testing.T, url, bearer string, body any) (*http.Response, []byt
 	return doRequest(t, req)
 }
 
+// postRaw POSTs an arbitrary byte body, so a test can express bodies postJSON
+// cannot: unknown fields, multiple JSON values, trailing junk, and over-cap
+// input that must be rejected at the control boundary.
+func postRaw(t *testing.T, url string, body []byte) (*http.Response, []byte) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build %s request: %v", url, err)
+	}
+	return doRequest(t, req)
+}
+
 func getJSON(t *testing.T, url, bearer string) (*http.Response, []byte) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
@@ -631,6 +643,84 @@ func TestReadinessAddressesServe(t *testing.T) {
 			_ = response.Body.Close()
 			t.Errorf("%s still serving after Close", url)
 		}
+	}
+}
+
+// TestDecodeControlRequest exercises the shared control-boundary helper
+// directly: it is the single decode path all three POST handlers use, so
+// proving its four boundary shapes here proves them for every handler. The
+// LimitReader it replaced silently truncated over-cap bodies and accepted
+// unknown fields and trailing junk; the helper must reject them, and must
+// keep 413 (over cap) distinct from 400 (malformed).
+func TestDecodeControlRequest(t *testing.T) {
+	const prefix = `{"checkpoint":"` // 15 bytes; suffix `"}` is 2
+	atLimit := prefix + strings.Repeat("a", maxControlBodyBytes-len(prefix)-2) + `"}`
+	if len(atLimit) != maxControlBodyBytes {
+		t.Fatalf("at-limit body is %d bytes, want exactly %d", len(atLimit), maxControlBodyBytes)
+	}
+	overLimit := prefix + strings.Repeat("a", maxControlBodyBytes-len(prefix)-2+1) + `"}` // one over
+
+	for name, tc := range map[string]struct {
+		body       []byte
+		wantOK     bool
+		wantStatus int
+	}{
+		"one value at the cap":            {[]byte(atLimit), true, http.StatusOK},
+		"unknown field":                   {[]byte(`{"bogus":1}`), false, http.StatusBadRequest},
+		"two values":                      {[]byte(`{}{}`), false, http.StatusBadRequest},
+		"trailing non-whitespace":         {[]byte(`{} garbage`), false, http.StatusBadRequest},
+		"single value over the cap":       {[]byte(overLimit), false, http.StatusRequestEntityTooLarge},
+		"valid prefix, over-cap trailing": {append([]byte("{} "), bytes.Repeat([]byte(" "), maxControlBodyBytes)...), false, http.StatusRequestEntityTooLarge},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(tc.body))
+			var req restoreRequest
+			ok := decodeControlRequest(w, r, &req)
+			if ok != tc.wantOK {
+				t.Fatalf("decodeControlRequest ok = %v, want %v (status %d)", ok, tc.wantOK, w.Code)
+			}
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", w.Code, tc.wantStatus)
+			}
+		})
+	}
+}
+
+// TestControlHandlersRejectMalformedBodies proves every control POST handler
+// wires the shared helper: each rejects an unknown field and two values with
+// 400 and over-cap input with 413. The at-limit case rides a real putItem to
+// prove a large but valid body still passes the boundary end to end (200), the
+// behavior the truncating LimitReader could not guarantee.
+func TestControlHandlersRejectMalformedBodies(t *testing.T) {
+	_, r := startHarness(t)
+	overCap := append([]byte("{} "), bytes.Repeat([]byte(" "), maxControlBodyBytes)...)
+	for _, route := range []string{"/control/restore", "/control/items", "/control/deliveries"} {
+		for name, tc := range map[string]struct {
+			body       []byte
+			wantStatus int
+		}{
+			"unknown field": {[]byte(`{"nope":1}`), http.StatusBadRequest},
+			"two values":    {[]byte(`{}{}`), http.StatusBadRequest},
+			"over the cap":  {overCap, http.StatusRequestEntityTooLarge},
+		} {
+			response, payload := postRaw(t, r.ControlURL+route, tc.body)
+			if response.StatusCode != tc.wantStatus {
+				t.Errorf("%s %s: status = %d body=%s, want %d", route, name, response.StatusCode, payload, tc.wantStatus)
+			}
+		}
+	}
+
+	// A valid body of exactly maxControlBodyBytes must pass the boundary; a real
+	// putItem then constructs and stores the item, so acceptance shows as 200.
+	itemPrefix := `{"id":"item-atlimit","item_version":1,"reason":"`
+	atLimit := itemPrefix + strings.Repeat("a", maxControlBodyBytes-len(itemPrefix)-2) + `"}`
+	if len(atLimit) != maxControlBodyBytes {
+		t.Fatalf("at-limit item body is %d bytes, want exactly %d", len(atLimit), maxControlBodyBytes)
+	}
+	response, payload := postRaw(t, r.ControlURL+"/control/items", []byte(atLimit))
+	if response.StatusCode != http.StatusOK {
+		t.Errorf("at-limit put item status = %d body=%s, want 200", response.StatusCode, payload)
 	}
 }
 

@@ -373,14 +373,8 @@ type restoreRequest struct {
 // checkpoint and rotates the sync epoch in the same operation, so a client
 // cached against the intervening state must discard and bootstrap.
 func (c controlHandler) restore(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxControlBodyBytes))
-	if err != nil {
-		controlError(w, err)
-		return
-	}
 	var req restoreRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		controlJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+	if !decodeControlRequest(w, r, &req) {
 		return
 	}
 	if req.Checkpoint == "" {
@@ -439,14 +433,8 @@ type putItemRequest struct {
 }
 
 func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxControlBodyBytes))
-	if err != nil {
-		controlError(w, err)
-		return
-	}
 	var req putItemRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		controlJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+	if !decodeControlRequest(w, r, &req) {
 		return
 	}
 	if req.Reason == "" {
@@ -501,14 +489,8 @@ type submitDeliveryRequest struct {
 }
 
 func (c controlHandler) submitDelivery(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxControlBodyBytes))
-	if err != nil {
-		controlError(w, err)
-		return
-	}
 	var req submitDeliveryRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		controlJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+	if !decodeControlRequest(w, r, &req) {
 		return
 	}
 	row, err := c.service.SubmitDelivery(r.Context(), domain.ItemID(req.ItemID), domain.DeviceID(req.DeviceID))
@@ -533,6 +515,44 @@ func (c controlHandler) submitDelivery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	controlJSON(w, http.StatusOK, map[string]any{"delivery": row})
+}
+
+// decodeControlRequest enforces the dev control boundary uniformly for every
+// POST handler: the body cap (413 on overflow, including a valid prefix
+// trailed by over-cap bytes), unknown-field rejection, and exactly one JSON
+// value with no trailing non-whitespace (400). It mirrors internal/signet's
+// decodeRequest rather than sharing it: the control surface is a separate,
+// dev-only boundary (issue #199 non-goal: no repository-wide JSON framework).
+// On an unacceptable body it writes the response and returns false, so the
+// caller returns without touching the store, preserving decode-before-mutate.
+func decodeControlRequest(w http.ResponseWriter, r *http.Request, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxControlBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	err := dec.Decode(dst)
+	if err == nil {
+		var extra any
+		if err2 := dec.Decode(&extra); !errors.Is(err2, io.EOF) {
+			// A second value, trailing junk, or over-cap trailing bytes: err2
+			// is nil for a bare extra value and a MaxBytesError for over-cap
+			// trailing content, which the classifier below routes to 413.
+			if err2 == nil {
+				err = errors.New("request body must contain exactly one JSON value")
+			} else {
+				err = err2
+			}
+		}
+	}
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			controlJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"message": "request body is too large"})
+		} else {
+			controlJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		}
+		return false
+	}
+	return true
 }
 
 func controlError(w http.ResponseWriter, err error) {
