@@ -105,8 +105,6 @@ container image push "$ref" >&2
 
 # Read the pushed manifest digest back from the registry: that is the content
 # address ward pins and `container create` resolves.
-digest=$(container image inspect "$ref" |
-	grep -o '"digest"[[:space:]]*:[[:space:]]*"sha256:[0-9a-f]\{64\}"' |
-	head -n 1 | grep -o 'sha256:[0-9a-f]\{64\}')
+digest=$(digest_of "$ref")
 [ -n "${digest:-}" ] || { echo "build-exporter-image: could not read the pushed image digest" >&2; exit 1; }
 echo "${registry}/${image_name}@${digest}"
