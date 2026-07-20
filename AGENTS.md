@@ -221,6 +221,10 @@ Changes to `docs/plan.md`, ADRs (`docs/decisions/`), and (later) the control-pla
 - ADRs are promoted from decision notes (`docs/decisions/README.md`); the promotion is its own reviewed change.
 - The materiality rules themselves are control-plane policy (plan §9); changing them is a material change.
 
+## Markdown conventions
+
+Markdown headings use **title case** at every level (`docs/intro.md` is the reference example). Convergence is a **ratchet, not a retroactive sweep**: new docs and any heading a substantial revision already touches adopt title case; existing sentence-case docs (`docs/plan.md`, this file, the component READMEs) stay as they are until a substantive revision brings them along, and a heading-only retitle of an otherwise-unchanged doc is not a work unit. The point is that no doc drifts *away* from title case, not that every doc is converted at once.
+
 ## Automated reviewer
 
 **Codex** reviews pull requests automatically. Respond to its findings per **Responding to automated review** under Pull requests, and filter later review activity by its login.
