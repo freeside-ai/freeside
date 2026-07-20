@@ -265,7 +265,7 @@ New in revision 12 (decider in parentheses):
 
 ---
 
-## Revision 13 (current)
+## Revision 13
 
 Revision 13 specifies comprehension: §9 grows from two lines into a normative
 presentation specification.
@@ -288,3 +288,32 @@ New in revision 13 (decider in parentheses):
    Rejected alternatives (daemon-templated, verifier-produced, and
    independent-summarizer-now provenance) live in the decision note. (User;
    PR #192 review, devlog 2026-07-20-1137-comprehension-spec.md; #194.)
+
+---
+
+## Revision 14 (current)
+
+Revision 14 records the serialized-history adoption for the gauntlet
+repo-change channel.
+
+Held from revision 13 (abbreviated): every decision held through revision 12
+plus revision 13's comprehension specification, unchanged, except §5.6's
+singular clean-commit framing, which decision 1 narrows to one clean commit
+per non-empty normalized first-parent state transition, and revision 5
+decision 7's "agent commit
+history not preserved" clause, which decision 1 supersedes: history now
+crosses as validated serialized data (the never-trust-workspace-`.git`
+invariant is unchanged).
+
+New in revision 14 (decider in parentheses):
+1. **Agent commit structure survives the gauntlet as serialized data**: the
+   §5.6 repo-change channel gains an optional serialized commit history,
+   carrying commit boundaries and messages as ordered, validated data, never
+   git objects. The daemon re-authors one clean commit per non-empty
+   normalized first-parent state transition, gated per repository by trust
+   profile; importer enforcement
+   (control-plane classification, secret scanning) applies to every commit
+   in a chain, since intermediate content publishes even when absent from
+   the final tree; evidence and publication identities still bind to the
+   single candidate head. (User; devlog
+   2026-07-20-1145-gauntlet-commit-structure.md; #192, #193.)

@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 13
+revision: 14
 status: active
 phase: 1A
 updated: 2026-07-20
@@ -397,6 +397,21 @@ repository_security:
   allow_secret_bearing_pr_jobs: false
   allow_self_hosted_ci: false
   allow_pull_request_target: false
+  history_import: single_commit | serialized_preferred | serialized_required
+                                             # Section 5.6 serialized commit
+                                             # history; conservative default
+                                             # single_commit. preferred
+                                             # surfaces omission; required
+                                             # blocks on it
+  message_ruleset: {base: github/1, extensions: []}
+                                             # versioned forge/CI commit-
+                                             # message screening ruleset
+                                             # (Section 5.6); widen-only
+                                             # repo extensions ride inline
+                                             # so both are digest-bound;
+                                             # unknown forge/CI keeps
+                                             # boundaries, daemon-authors
+                                             # every message
   workflow_audit_digest: sha256:...
   review: {mode: auto | framework_triggered, config_digest: sha256:...}
 ```
@@ -424,9 +439,10 @@ daemon-owned base repo ──exact base SHA──▶ agent workspace
 agent exits ──▶ POST-AGENT WORKSPACE HANDOFF (5.7 gate): credential-bearing
    execution context terminated; workspace mounted READ-ONLY in a fresh
    credential-free context
-export helper emits content blobs + normalized change manifest + evidence
-manifest ──▶ gauntlet worker (unprivileged, out of process) validates
-gauntlet ──▶ fresh daemon-owned checkout; daemon authors a clean commit
+export helper emits content blobs + normalized change manifest + optional
+serialized commit history + evidence manifest ──▶ gauntlet worker
+   (unprivileged, out of process) validates
+gauntlet ──▶ fresh daemon-owned checkout; daemon re-authors clean commits
 fresh checkout ──▶ clean verification workspace (no credentials, no network;
    trusted recipe runs checks and captures evidence)
 verified candidate ──▶ git/publish ──▶ GitHub PR (under trust profile)
@@ -434,19 +450,45 @@ verified candidate ──▶ git/publish ──▶ GitHub PR (under trust profil
 
 Exactly two channels leave the agent workspace, and they never mix:
 
-1. The **repo-change channel** contains content blobs and a normalized manifest.
+1. The **repo-change channel** contains content blobs, a normalized manifest,
+   and an optional serialized commit history: the agent's commit boundaries
+   and messages carried as ordered, validated data, never as git objects.
    It permits regular files only. Symlinks, submodules, special files, unusual
    modes, automation-control changes (Section 5.5), and reviewer-instruction
    changes (Section 5.8) are publish-blocking.
 2. The **evidence channel** contains typed, provenance-bearing artifacts under
    Section 5.15.
 
-The daemon authors a new clean commit. The importer never trusts the
-workspace's `.git`, hooks, configuration, or agent-written manifests. It
-enforces the exact base SHA, canonical paths, allowlists, size limits,
-control-plane restrictions, and Section 5.4 best-effort secret scanning.
+The agent commits normally with git; its **first-parent commit chain** is
+the review narrative and it survives (a merge commit's side branch folds
+into that merge's own change; side-branch commits are not individually
+replayed). Everything the agent hands over is untrusted, but only part of
+it has a validation path: the history's semantic content, an ordered list
+of tree states and messages, can be normalized and checked like any other
+channel input, while raw git machinery, hooks, configuration, and crafted
+objects, can smuggle behavior a content review never sees and is never
+adopted at all. The export
+helper therefore reads that content out of `.git` with a hardened reader
+and serializes it as data; the raw objects, hooks, and configuration never
+cross. The daemon adds no intelligence of its own: it replays the validated
+history, authoring one new clean commit per non-empty validated commit of
+that
+first-parent chain onto the
+exact base (gated per repository by trust profile, with omission surfaced
+or blocking per the Section 5.5 `history_import` mode), a single commit
+otherwise. Agent commit SHAs, timestamps, and identities never survive
+re-authoring; messages cross as validated, labeled claim text screened as
+automation-control surface. The importer never trusts the workspace's
+`.git`, hooks, configuration, or agent-written manifests. It enforces the
+exact base SHA, canonical paths, allowlists, size limits, control-plane
+restrictions, and Section 5.4 best-effort secret scanning, applied to every
+commit in a serialized history, not only the head state: content that
+appears in an intermediate commit publishes even when absent from the final
+tree. Evidence and publication identities still bind to the single
+candidate head (Section 5.15); intermediate commits are unattested
+ancestry.
 
-Permanent tests include malicious manifests, blobs, and evidence. Trusted
+Permanent tests include malicious manifests, histories, blobs, and evidence. Trusted
 verification recipes load only from approved control-plane configuration or the
 trusted base commit. Freeside mechanically identifies, risk-flags, and gates
 changes to verification-control files.
@@ -1225,18 +1267,18 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 13:
+Revision 14:
 
-1. **Specify comprehension as a first-class attention concern.** §9 expands
-   from two lines into a normative presentation specification: a four-layer
-   card ordering, three required digests, per-item-type leads, summary
-   provenance (deterministic card facts from the daemon; judgment summaries
-   as labeled claims from the stage agent, with a briefer promotion
-   condition on recurring audited contradictions), and comprehension metrics
-   paired against correctness. "Present evidence packets first" is
-   reinterpreted: the short labeled summary now leads above the evidence
-   packet, and evidence precedes long-form agent text. (User; PR #192
-   review, devlog 2026-07-20-1137-comprehension-spec.md; #194.)
+1. **Agent commit structure survives the gauntlet as serialized data.** The
+   §5.6 repo-change channel gains an optional serialized commit history:
+   boundaries and messages as ordered, validated data, never git objects.
+   The daemon re-authors one clean commit per non-empty normalized
+   first-parent state transition, gated
+   per repository by trust profile; importer enforcement applies to every
+   commit in a chain, since intermediate content publishes even when absent
+   from the final tree; evidence and publication identities still bind to
+   the single candidate head. (User; devlog
+   2026-07-20-1145-gauntlet-commit-structure.md; #192, #193.)
 
 ## 14. Risks
 

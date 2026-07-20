@@ -136,10 +136,17 @@ The environment that enforces this is the **ward**.
 
 An agent's workspace is a working copy, but an untrusted one. Exactly two
 things leave it: the changed file contents with a normalized manifest, and
-typed evidence artifacts. Everything else, including the `.git` directory,
-hooks, and the agent's own commit history, stays behind. An out-of-process
-importer validates the export, and Freeside creates a clean commit of
-the validated contents onto the exact base it handed the agent.
+typed evidence artifacts. The agent commits its work normally, and those
+commit boundaries and messages may ride along as plain, validated data;
+everything else, including the `.git` directory itself, its hooks, and its
+objects, stays behind. The split is deliberate: hooks, configuration, and
+hand-crafted git objects are the parts of a repository that can carry an
+attack, while the commits' boundaries and messages are just data that can
+be checked like any other. An out-of-process importer validates the export,
+and Freeside re-authors clean commits of the validated contents onto the
+exact base it handed the agent: one clean commit for each branch-line
+agent commit that still changes something after normalization, when that
+history rides along, and a single commit otherwise.
 
 "Done" has a mechanical gate the implementer does not control. Verification
 runs in a clean room with no credentials and no network, using checks loaded
