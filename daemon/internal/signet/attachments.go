@@ -8,8 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
@@ -56,14 +56,9 @@ func NewBlobStore(dir string) (*BlobStore, error) {
 // rejected before touching the filesystem, so path construction never sees
 // attacker-shaped input (separators, traversal, alternate encodings).
 func (b *BlobStore) blobPath(digest domain.Digest) (string, error) {
-	raw, ok := strings.CutPrefix(string(digest), "sha256:")
-	if !ok || len(raw) != 64 {
+	raw, ok := contentaddr.Parse(string(digest))
+	if !ok {
 		return "", fmt.Errorf("digest %q: %w", digest, ErrInvalidDigest)
-	}
-	for _, c := range raw {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return "", fmt.Errorf("digest %q: %w", digest, ErrInvalidDigest)
-		}
 	}
 	return filepath.Join(b.dir, "sha256-"+raw), nil
 }
