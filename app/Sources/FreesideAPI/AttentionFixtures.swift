@@ -168,6 +168,33 @@ public enum AttentionFixtures {
             preconditionFailure("phase1ActionSets is total over phase1Types")
         }
 
+        // Every card keeps its referenced screenshot claim; cards whose type
+        // carries §9's summary layer also get an inline text claim, whose
+        // digest is computed over the content so the mock's binding check and
+        // the fixture can never disagree. The purely mechanical types
+        // (system_health, blocked) carry daemon facts alone (§9), so they
+        // stay text-free — blocked's unseeded screenshot digest keeps
+        // exercising the missing-attachment placeholder.
+        var agentClaims: [Components.Schemas.AgentClaim] = [
+            .init(
+                label: "screenshot",
+                artifact_id: "art-img-\(key)",
+                digest: claimDigest,
+                provenance: claimProvenance
+            )
+        ]
+        if type != .system_health, type != .blocked {
+            let summary = "Work on **\(key)** is ready; one decision is open."
+            agentClaims.append(
+                .init(
+                    label: "summary",
+                    artifact_id: "art-sum-\(key)",
+                    digest: MockContractValidation.sha256Digest(of: summary),
+                    provenance: claimProvenance,
+                    text: .init(media_type: .text_sol_markdown, content: summary)
+                ))
+        }
+
         let item = Components.Schemas.AttentionItem(
             id: "item-\(key)",
             project_id: "proj-1",
@@ -185,15 +212,8 @@ public enum AttentionFixtures {
                     publish_eligible: true
                 )
             ],
-            agent_claims: [
-                .init(
-                    label: "screenshot",
-                    artifact_id: "art-img-\(key)",
-                    digest: claimDigest,
-                    provenance: claimProvenance
-                )
-            ],
-            artifact_digests: [evidenceDigest, claimDigest].sorted(),
+            agent_claims: agentClaims,
+            artifact_digests: (agentClaims.map(\.digest) + [evidenceDigest]).sorted(),
             pr_head_sha: prHeadSHA,
             item_version: 1,
             interruption_class: interruption,

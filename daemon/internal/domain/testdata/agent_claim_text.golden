@@ -1,0 +1,17 @@
+{
+  "label": "change summary",
+  "artifact_id": "art-3",
+  "digest": "sha256:5357dcdc93ba41d3e733fe85dc6c209364af87860d6c246b522b3e63eb56fac5",
+  "provenance": {
+    "producer_class": "agent",
+    "producer_invocation_id": "inv-2",
+    "head_binding": "head_bound",
+    "source_head_sha": "cafebabe",
+    "verification_recipe_digest": null,
+    "sensitivity_class": "normal"
+  },
+  "text": {
+    "media_type": "text/markdown",
+    "content": "All checks green; the diff touches only docs."
+  }
+}

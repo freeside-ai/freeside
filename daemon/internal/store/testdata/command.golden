@@ -5,6 +5,7 @@
   "item_version": 1,
   "pr_head_sha": "cafebabe",
   "artifact_digests": [
+    "sha256:5357dcdc93ba41d3e733fe85dc6c209364af87860d6c246b522b3e63eb56fac5",
     "sha256:img",
     "sha256:log"
   ],

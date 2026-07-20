@@ -360,6 +360,12 @@ import Testing
                 sensitivity_class: .normal
             ))
 
+        // A text claim's digest binds its inline content (#217): serving a
+        // seed whose displayed text no longer hashes to the bound digest is
+        // the stale-approval class, so the read fails closed.
+        var textDigestMismatch = AttentionFixtures.fixture(type: .ready_for_final_review)
+        textDigestMismatch.item.agent_claims[1].text?.content = "tampered summary"
+
         // Agent output is never recipe-produced: a non-null recipe digest on
         // a claim is ErrProvenanceInconsistent on the daemon, and the
         // generated container type makes it representable here.
@@ -378,6 +384,7 @@ import Testing
             ("empty claim artifact_id", emptyClaimID),
             ("empty claim provenance invocation", claimEmptyInvocation),
             ("recipe-bound claim provenance", claimRecipeBound),
+            ("text claim digest mismatch", textDigestMismatch),
             ("head-bound evidence off the item head", headMismatch),
             ("duplicate evidence id", duplicateEvidence),
             ("claim reusing an evidence id", claimReusesEvidenceID),

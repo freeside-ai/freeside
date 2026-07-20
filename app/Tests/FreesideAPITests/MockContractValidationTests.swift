@@ -56,6 +56,82 @@ import Testing
                 == "artifact_digests is not the canonical union of rendered digests")
     }
 
+    // The text-claim carrier (#217): the daemon recomputes the claim digest
+    // over the content bytes, so the mirrored checks here are the empty
+    // content, the byte cap, and the binding rule. The invalid-media-type
+    // and invalid-UTF-8 arms are unrepresentable over the generated shapes
+    // (the enum pins the two media types; Swift String is always valid
+    // UTF-8). The happy path rides validItemHasNoBreach: every non-mechanical
+    // fixture now carries a text claim.
+    @Test func textClaimBreachesNameTheFailedInvariant() {
+        // The fixture's summary claim is agent_claims[1]; index 0 stays the
+        // referenced screenshot claim.
+        var tampered = AttentionFixtures.fixture(type: .spec_approval).item
+        tampered.agent_claims[1].text?.content = "tampered summary"
+        #expect(
+            MockContractValidation.itemValidityBreach(tampered)
+                == "claim digest does not match its text content")
+
+        var emptyContent = AttentionFixtures.fixture(type: .spec_approval).item
+        emptyContent.agent_claims[1].text?.content = ""
+        #expect(
+            MockContractValidation.itemValidityBreach(emptyContent)
+                == "empty claim text content")
+
+        // Inline text is barred from the high-sensitivity tier (§5.14
+        // no-high-sensitivity-at-rest: CachedState persists item metadata
+        // to disk); only the provenance flips, so the sensitivity bar is
+        // the one invariant the seed breaks.
+        var highSensitivity = AttentionFixtures.fixture(type: .spec_approval).item
+        highSensitivity.agent_claims[1].provenance = .head_bound(
+            .init(
+                producer_class: .agent,
+                producer_invocation_id: "inv-high",
+                head_binding: .head_bound,
+                source_head_sha: "cafebabe",
+                verification_recipe_digest: nil,
+                sensitivity_class: .high_sensitivity
+            ))
+        #expect(
+            MockContractValidation.itemValidityBreach(highSensitivity)
+                == "high-sensitivity claim carries inline text")
+
+        // The digest is recomputed over the oversize content so the size cap
+        // is the one invariant the seed breaks.
+        var oversize = AttentionFixtures.fixture(type: .spec_approval).item
+        let bigContent = String(repeating: "a", count: 65537)
+        oversize.agent_claims[1].text?.content = bigContent
+        oversize.agent_claims[1].digest = MockContractValidation.sha256Digest(of: bigContent)
+        #expect(
+            MockContractValidation.itemValidityBreach(oversize)
+                == "claim text exceeds the inline size cap")
+    }
+
+    // Pins the derivation to a fixed vector (FIPS 180-2 "abc"), so the Swift
+    // twin and domain.ClaimText.ComputeDigest can only agree or both be
+    // wrong in the same published way.
+    @Test func sha256DigestMatchesTheKnownVector() {
+        #expect(
+            MockContractValidation.sha256Digest(of: "abc")
+                == "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    }
+
+    // Every fixture passes the full validity check, each text claim's digest
+    // recomputes from its content, and the summary claim appears exactly on
+    // the types that carry §9's summary layer (the purely mechanical
+    // system_health and blocked stay text-free).
+    @Test(arguments: AttentionFixtures.phase1Types)
+    func fixtureTextClaimsBindTheirContent(type: Components.Schemas.AttentionType) {
+        let item = AttentionFixtures.fixture(type: type).item
+        #expect(MockContractValidation.itemValidityBreach(item) == nil)
+        for claim in item.agent_claims {
+            guard let text = claim.text else { continue }
+            #expect(claim.digest == MockContractValidation.sha256Digest(of: text.content))
+        }
+        let hasText = item.agent_claims.contains { $0.text != nil }
+        #expect(hasText == (type != .system_health && type != .blocked))
+    }
+
     // MARK: - itemPolicyBreach
 
     @Test func validPolicyHasNoBreach() {

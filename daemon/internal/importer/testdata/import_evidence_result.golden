@@ -19,7 +19,8 @@
         "head_binding": "head_independent",
         "verification_recipe_digest": null,
         "sensitivity_class": "normal"
-      }
+      },
+      "text": null
     },
     {
       "label": "before-shot",
@@ -32,7 +33,8 @@
         "source_head_sha": "0123456789abcdef0123456789abcdef01234567",
         "verification_recipe_digest": null,
         "sensitivity_class": "sensitive"
-      }
+      },
+      "text": null
     }
   ]
 }

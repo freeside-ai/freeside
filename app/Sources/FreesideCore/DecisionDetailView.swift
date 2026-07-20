@@ -66,7 +66,7 @@ struct DecisionDetailView: View {
                     ForEach(Array(item.agent_claims.enumerated()), id: \.offset) { _, claim in
                         AttachmentRow(
                             label: claim.label, digest: claim.digest,
-                            attachments: attachments)
+                            attachments: attachments, text: claim.text)
                     }
                 }
             }
@@ -165,14 +165,18 @@ struct DecisionDetailView: View {
 
     /// One labeled attachment row: always the digest (the decision
     /// stays visibly bound to it, whatever the bytes do), plus the
-    /// fetched rendering underneath — the image inline when the bytes
-    /// decode (plan §4), a placeholder when the fetch fails or the
+    /// rendering underneath. A text claim renders its inline,
+    /// digest-bound content directly (plan §9's summary carrier; the
+    /// daemon already re-verified digest == sha256(content), so no fetch
+    /// runs). Otherwise the fetched bytes render — the image inline when
+    /// they decode (plan §4), a placeholder when the fetch fails or the
     /// digest is missing, and nothing extra for a non-image attachment,
     /// which keeps its plain digest row.
     private struct AttachmentRow: View {
         let label: String
         let digest: String
         let attachments: AttachmentLoader
+        var text: Components.Schemas.ClaimText? = nil
 
         var body: some View {
             VStack(alignment: .leading, spacing: 6) {
@@ -182,23 +186,53 @@ struct DecisionDetailView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                switch attachments.phase(for: digest) {
-                case .image(let image):
-                    platformImage(image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: 320, alignment: .leading)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .accessibilityLabel("\(label) attachment image")
-                case .unavailable:
-                    Label("Attachment unavailable", systemImage: "photo.badge.exclamationmark")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                case .loading, .notImage, nil:
-                    EmptyView()
+                if let text {
+                    // No accessibility override: the content is the text a
+                    // VoiceOver user must hear, and the claim's label is
+                    // already announced by the labeled digest row above.
+                    claimText(text)
+                        .font(.callout)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    fetchedAttachment
+                        .task(id: digest) { await attachments.load(digest) }
                 }
             }
-            .task(id: digest) { await attachments.load(digest) }
+        }
+
+        private func claimText(_ text: Components.Schemas.ClaimText) -> Text {
+            switch text.media_type {
+            case .text_sol_plain:
+                return Text(text.content)
+            case .text_sol_markdown:
+                // Inline-only interpretation keeps a summary a compact
+                // paragraph; unparsable markdown falls back to the raw
+                // content rather than dropping the claim's body.
+                let attributed = try? AttributedString(
+                    markdown: text.content,
+                    options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+                return Text(attributed ?? AttributedString(text.content))
+            }
+        }
+
+        @ViewBuilder
+        private var fetchedAttachment: some View {
+            switch attachments.phase(for: digest) {
+            case .image(let image):
+                platformImage(image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: 320, alignment: .leading)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .accessibilityLabel("\(label) attachment image")
+            case .unavailable:
+                Label("Attachment unavailable", systemImage: "photo.badge.exclamationmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            case .loading, .notImage, nil:
+                EmptyView()
+            }
         }
 
         private func platformImage(_ image: PlatformImage) -> Image {

@@ -77,6 +77,24 @@ func TestGolden(t *testing.T) {
 			SensitivityClass:     domain.SensitivityNormal,
 		},
 	}
+	// A text claim's digest is computed, never hand-written: Validate
+	// recomputes it over the content bytes, so a placeholder would make the
+	// fixture validation-negative.
+	claimText := domain.ClaimText{
+		MediaType: domain.MediaTypeTextMarkdown,
+		Content:   "All checks green; the diff touches only docs.",
+	}
+	textClaim := domain.AgentClaim{
+		Label: "change summary", Artifact: "art-3", Digest: claimText.ComputeDigest(),
+		Text: &claimText,
+		Provenance: domain.Provenance{
+			ProducerClass:        domain.ProducerAgent,
+			ProducerInvocationID: "inv-2",
+			HeadBinding:          domain.HeadBound,
+			SourceHeadSHA:        "cafebabe",
+			SensitivityClass:     domain.SensitivityNormal,
+		},
+	}
 	subject := domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID}
 
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
@@ -314,6 +332,7 @@ func TestGolden(t *testing.T) {
 		{"command", command},
 		{"subject", subject},
 		{"agent_claim", agentClaim},
+		{"agent_claim_text", textClaim},
 		{"attention_delivery", delivery},
 		{"timing_summary", timing},
 		{"artifact", artifact},
