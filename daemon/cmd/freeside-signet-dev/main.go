@@ -421,15 +421,21 @@ func (c controlHandler) rotateEpoch(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// putItemRequest seeds or advances one attention item. The shape stays
-// minimal on purpose: the item body is constructed here, mirroring signet's
-// own test fixture, so the Swift suite never re-encodes domain shapes and
-// the domain gates (Validate, per-type action policy) still run on every
-// put.
+// putItemRequest seeds or advances one attention item. The item body is
+// constructed here, mirroring signet's own test fixture, so the Swift suite
+// never re-encodes the full domain shape and the domain gates (Validate,
+// per-type action policy) still run on every put. Type and RequestedDecision
+// are optional overrides: an omitted type seeds ready_for_final_review, and an
+// omitted (nil, never merely empty) action set seeds that type's default offer.
+// The policy-parity suite (#204) sets both to drive the whole
+// attention-type/action matrix, including the invalid/unknown strings the typed
+// Swift enums cannot represent, through the real per-type action policy.
 type putItemRequest struct {
-	ID          string `json:"id"`
-	ItemVersion int    `json:"item_version"`
-	Reason      string `json:"reason"`
+	ID                string   `json:"id"`
+	ItemVersion       int      `json:"item_version"`
+	Reason            string   `json:"reason"`
+	Type              string   `json:"type"`
+	RequestedDecision []string `json:"requested_decision"`
 }
 
 func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
@@ -440,18 +446,32 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 	if req.Reason == "" {
 		req.Reason = "seeded by the convergence harness"
 	}
+	// Type and the offered action set default to the historical fixture
+	// (ready_for_final_review offering open_pr/stop/dismiss), so the sync tests'
+	// seedItem(id, version) calls are unchanged. An explicit empty action set is
+	// deliberately distinct from an omitted one (nil): the parity suite sends
+	// [] to drive the blocked accept and the non-blocked ErrNoActions rejection.
+	itemType := domain.AttentionReadyForFinalReview
+	if req.Type != "" {
+		itemType = domain.AttentionType(req.Type)
+	}
+	requested := []domain.Action{domain.ActionOpenPR, domain.ActionStop, domain.ActionDismiss}
+	if req.RequestedDecision != nil {
+		requested = make([]domain.Action, len(req.RequestedDecision))
+		for i, a := range req.RequestedDecision {
+			requested[i] = domain.Action(a)
+		}
+	}
 	runID := domain.RunID("run-" + req.ID)
 	expires := time.Now().Add(24 * time.Hour)
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID:        domain.ItemID(req.ID),
-		ProjectID: "proj-convergence",
-		Subject:   domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
-		Type:      domain.AttentionReadyForFinalReview,
-		Priority:  domain.PriorityNormal,
-		Reason:    req.Reason,
-		RequestedDecision: []domain.Action{
-			domain.ActionOpenPR, domain.ActionStop, domain.ActionDismiss,
-		},
+		ID:                domain.ItemID(req.ID),
+		ProjectID:         "proj-convergence",
+		Subject:           domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		Type:              itemType,
+		Priority:          domain.PriorityNormal,
+		Reason:            req.Reason,
+		RequestedDecision: requested,
 		PRHeadSHA:         "cafebabe",
 		ItemVersion:       req.ItemVersion,
 		InterruptionClass: domain.InterruptionPlannedGate,
@@ -459,6 +479,9 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		Status:            domain.StatusOpen,
 	}, nil)
 	if err != nil {
+		// NewAttentionItem's Validate rejects an unknown type or a malformed
+		// action string here, before policy runs: a client-visible 400, not a
+		// harness 500. This is the invalid/unknown-input arm of the parity suite.
 		controlJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
 	}
@@ -466,7 +489,11 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		// PutItem rejects policy violations before its Write; anything
 		// else (store contention, I/O) is the harness's fault, not the
 		// request's, and must not read as a scripted 400 in a test log.
-		if errors.Is(err, signet.ErrActionNotAllowedForType) {
+		// ErrActionNotAllowedForType (a valid action wrong for the type) and
+		// ErrNoActions (a non-blocked type offering nothing) are both per-type
+		// policy rejections and surface as the client-visible 400 the parity
+		// suite asserts.
+		if errors.Is(err, signet.ErrActionNotAllowedForType) || errors.Is(err, domain.ErrNoActions) {
 			controlJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 			return
 		}
