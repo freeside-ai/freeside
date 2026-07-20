@@ -1,6 +1,6 @@
+import Foundation
 import FreesideAPI
 import FreesideCore
-import Foundation
 import Testing
 
 /// Counts matching operations, for single-flight assertions.

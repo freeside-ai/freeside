@@ -1,6 +1,6 @@
+import Foundation
 import FreesideAPI
 import FreesideCore
-import Foundation
 import HTTPTypes
 import OpenAPIRuntime
 

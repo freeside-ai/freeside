@@ -27,6 +27,7 @@ public struct DeviceNtfySubscription: Equatable, Sendable {
     }
 
     /// Valid non-secret fixture material for previews and tests.
+    // swift-format-ignore: NeverForceUnwrap
     public static let mock = DeviceNtfySubscription(
         serverURL: "https://ntfy.example",
         topic: "fs-00000000000000000000000000000000"
@@ -128,8 +129,10 @@ public struct DeviceNtfySubscription: Equatable, Sendable {
 
     private static func isHostByte(_ byte: UInt8) -> Bool {
         (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte)
-            || [33, 34, 36, 38, 39, 40, 41, 42, 43, 44, 45, 46, 58, 59, 60, 61, 62,
-                91, 93, 95, 126].contains(byte)
+            || [
+                33, 34, 36, 38, 39, 40, 41, 42, 43, 44, 45, 46, 58, 59, 60, 61, 62,
+                91, 93, 95, 126,
+            ].contains(byte)
     }
 
     private static func hexValue(_ byte: UInt8) -> UInt8? {
@@ -143,7 +146,8 @@ public struct DeviceNtfySubscription: Equatable, Sendable {
 
     private static func isLoopback(_ host: String) -> Bool {
         if host == "localhost" { return true }
-        let literal = host.hasPrefix("[") && host.hasSuffix("]")
+        let literal =
+            host.hasPrefix("[") && host.hasSuffix("]")
             ? String(host.dropFirst().dropLast())
             : host
         guard !literal.contains("%") else { return false }
@@ -178,9 +182,10 @@ public struct DeviceNtfySubscription: Equatable, Sendable {
     private static func isValidTopic(_ topic: String) -> Bool {
         guard topic.hasPrefix("fs-") else { return false }
         let suffix = topic.dropFirst(3).utf8
-        return suffix.count == 32 && suffix.allSatisfy { byte in
-            (48...57).contains(byte) || (97...102).contains(byte)
-        }
+        return suffix.count == 32
+            && suffix.allSatisfy { byte in
+                (48...57).contains(byte) || (97...102).contains(byte)
+            }
     }
 }
 
@@ -218,13 +223,16 @@ public struct DeviceCredential: Equatable, Sendable {
     }
 
     private static func decodeBase64URL(_ segment: Substring) -> Data? {
-        guard !segment.isEmpty, segment.utf8.allSatisfy({ byte in
-            (48...57).contains(byte) || (65...90).contains(byte)
-                || (97...122).contains(byte) || byte == 45 || byte == 95
-        }) else { return nil }
+        guard !segment.isEmpty,
+            segment.utf8.allSatisfy({ byte in
+                (48...57).contains(byte) || (65...90).contains(byte)
+                    || (97...122).contains(byte) || byte == 45 || byte == 95
+            })
+        else { return nil }
 
         let encoded = String(segment)
-        var padded = encoded
+        var padded =
+            encoded
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
         padded += String(repeating: "=", count: (4 - padded.count % 4) % 4)

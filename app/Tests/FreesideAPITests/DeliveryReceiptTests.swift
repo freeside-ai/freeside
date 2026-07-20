@@ -26,6 +26,7 @@ private struct AuthorizedTransport: ClientTransport {
 }
 
 private func client(server: MockServer, token: String? = nil) -> Client {
+    // swift-format-ignore: NeverForceUnwrap
     Client(
         serverURL: URL(string: "https://freeside.invalid")!,
         transport: AuthorizedTransport(server: server, token: token)
@@ -329,8 +330,9 @@ private func submittedDelivery(
         #expect(submitted == wireDelivery.submitted_at)
         #expect(openedAt == wireDelivery.opened_at)
         #expect(
-            span == Int64(
-                (openedAt.timeIntervalSince(submitted) * 1_000_000_000).rounded()))
+            span
+                == Int64(
+                    (openedAt.timeIntervalSince(submitted) * 1_000_000_000).rounded()))
     }
 
     @Test func longReceiptSpanSaturatesLikeGoDuration() async throws {

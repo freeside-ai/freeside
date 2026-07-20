@@ -91,8 +91,7 @@ public final class InboxStore {
     /// slot; a transport loss or 5xx marks it unresolved until a
     /// verbatim resend returns the recorded result or an authoritative
     /// rejection (plan §5.14 sync test 4).
-    public private(set) var pendingCommandsByItemID:
-        [String: PendingCommandEntry] = [:]
+    public private(set) var pendingCommandsByItemID: [String: PendingCommandEntry] = [:]
     private var serverOrder: [String] = []
     /// Bumped every time the cache is evicted for a sync-epoch change
     /// (`discardSnapshots`, driven only by `SyncCoordinator.discardCache`).

@@ -21,6 +21,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  style:
+    name: style (swift-format)
+    runs-on: macos-26
+    env:
+      # Pin the toolchain-bundled swift-format via Xcode selection; a
+      # floating tool version would make the formatting gate
+      # nondeterministic (same reasoning as the shellcheck and vacuum
+      # pins). Bump together with SWIFT_FORMAT_VERSION and the version
+      # documented in app/README.md.
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app
+      SWIFT_FORMAT_VERSION: 6.3.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify pinned swift-format version
+        run: |
+          version="$(xcrun swift-format --version)"
+          if [ "${version}" != "${SWIFT_FORMAT_VERSION}" ]; then
+            echo "swift-format ${version} != pinned ${SWIFT_FORMAT_VERSION}" >&2
+            exit 1
+          fi
+      - name: Lint
+        working-directory: app
+        run: xcrun swift-format lint --strict --recursive Sources Tests Apps Package.swift
+      - name: Check formatting drift
+        working-directory: app
+        run: |
+          xcrun swift-format format --in-place --recursive Sources Tests Apps Package.swift
+          git diff --exit-code
+
   package:
     name: package (schema + tests)
     runs-on: ubuntu-latest

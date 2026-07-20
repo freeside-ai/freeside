@@ -42,14 +42,17 @@ public final class PairingModel {
             case .created(let created):
                 let grant = try created.body.json
                 let deviceID = Self.deviceID(of: grant.device.device)
-                guard let subscription = DeviceNtfySubscription(
-                    serverURL: grant.ntfy_subscription.server_url,
-                    topic: grant.ntfy_subscription.topic
-                ), let credential = DeviceCredential(
-                    deviceID: deviceID,
-                    token: grant.device_token,
-                    ntfySubscription: subscription
-                ) else {
+                guard
+                    let subscription = DeviceNtfySubscription(
+                        serverURL: grant.ntfy_subscription.server_url,
+                        topic: grant.ntfy_subscription.topic
+                    ),
+                    let credential = DeviceCredential(
+                        deviceID: deviceID,
+                        token: grant.device_token,
+                        ntfySubscription: subscription
+                    )
+                else {
                     phase = .failed(
                         "Paired, but the private grant was invalid; revoke this device on the daemon host and pair again."
                     )

@@ -1,5 +1,5 @@
-import FreesideAPI
 import Foundation
+import FreesideAPI
 import Observation
 
 /// One attention item's decision surface: revalidates the item's current
@@ -173,7 +173,8 @@ public final class DecisionModel {
             for _ in 0..<2 {
                 let generationBefore = store.cacheGeneration
                 let current = try await store.client.getAttentionItem(
-                    path: .init(item_id: itemID)).ok.body.json
+                    path: .init(item_id: itemID)
+                ).ok.body.json
                 guard generation == validationGeneration else { return }
                 guard store.cacheGeneration == generationBefore else { continue }
                 if store.apply(current) {
@@ -520,7 +521,8 @@ public final class DecisionModel {
                     // An epoch eviction during the replay makes the
                     // replacement possibly dead-epoch: drop it rather than
                     // apply it, so the caller revalidates (#162).
-                    isCurrent = store.cacheGeneration == generationBefore
+                    isCurrent =
+                        store.cacheGeneration == generationBefore
                         && store.apply(rejection.replacement_item)
                 }
                 guard ownsSlot else { return .displaced }

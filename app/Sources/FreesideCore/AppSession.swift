@@ -124,6 +124,7 @@ public final class AppSession {
     public static func mock() -> AppSession {
         let secretSegment = Data(repeating: 0, count: 32).base64EncodedString()
             .replacingOccurrences(of: "=", with: "")
+        // swift-format-ignore: NeverForceUnwrap
         return AppSession(
             client: APIClientFactory.mock(),
             credentials: InMemoryCredentialStore(

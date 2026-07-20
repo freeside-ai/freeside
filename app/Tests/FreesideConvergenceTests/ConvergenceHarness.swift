@@ -198,7 +198,9 @@ enum ConvergenceHarness {
     /// seeding surface for a stored blob.
     @MainActor
     static func uploadAttachment(_ bytes: Data, on device: LiveDevice) async throws -> String {
-        let digest = "sha256:" + SHA256.hash(data: bytes)
+        let digest =
+            "sha256:"
+            + SHA256.hash(data: bytes)
             .map { String(format: "%02x", $0) }.joined()
         let response = try await device.client.uploadAttachment(
             path: .init(digest: digest),

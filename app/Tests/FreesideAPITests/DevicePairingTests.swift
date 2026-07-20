@@ -26,6 +26,7 @@ private struct AuthorizedTransport: ClientTransport {
 }
 
 private func client(server: MockServer, token: String? = nil) -> Client {
+    // swift-format-ignore: NeverForceUnwrap
     Client(
         serverURL: URL(string: "https://freeside.invalid")!,
         transport: AuthorizedTransport(server: server, token: token)
@@ -180,7 +181,8 @@ private func client(server: MockServer, token: String? = nil) -> Client {
             return
         }
         let paired = client(server: server, token: grant.device_token)
-        let item = try await paired
+        let item =
+            try await paired
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
 
         var command = MockServerTests.command(id: "cmd-imposter", against: item)
@@ -211,7 +213,8 @@ private func client(server: MockServer, token: String? = nil) -> Client {
             return
         }
         let paired = client(server: server, token: grant.device_token)
-        let before = try await paired
+        let before =
+            try await paired
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         var prepared = MockServerTests.command(id: "cmd-prepared", against: before)
         prepared.device_id = active.id
@@ -245,7 +248,8 @@ private func client(server: MockServer, token: String? = nil) -> Client {
             return
         }
         let paired = client(server: server, token: grant.device_token)
-        let before = try await paired
+        let before =
+            try await paired
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         var command = MockServerTests.command(id: "cmd-committed", against: before)
         command.device_id = active.id

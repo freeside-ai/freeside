@@ -510,7 +510,7 @@ private final class FailingCacheStore: CacheStore, @unchecked Sendable {
 
         #expect(coordinator.store.cacheGeneration > 0)
         #expect(model.snapshot?.item.status == .open)  // the row is back...
-        #expect(!model.actionsEnabled)                 // ...but not certified
+        #expect(!model.actionsEnabled)  // ...but not certified
 
         // A fresh validation against the new epoch re-enables actions.
         await model.validate()

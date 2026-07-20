@@ -80,3 +80,26 @@ xcodebuild -project Freeside.xcodeproj -scheme FreesideIOS \
   -destination 'generic/platform=iOS Simulator' -skipPackagePluginValidation \
   CODE_SIGNING_ALLOWED=NO build
 ```
+
+## Style
+
+Swift formatting and style analysis both come from the toolchain's
+`swift-format` (swift-format 6.3.0, shipped with Xcode 26.6; CI pins the
+matching Xcode and fails if the tool version drifts). The configuration is
+`.swift-format` in this directory; the decision record is
+`devlog/2026-07-20-1140-swift-style-tooling.md`.
+
+From `app/`:
+
+```sh
+# Check formatting and style (what CI runs):
+xcrun swift-format lint --strict --recursive Sources Tests Apps Package.swift
+# Rewrite in place:
+xcrun swift-format format --in-place --recursive Sources Tests Apps Package.swift
+```
+
+Generated OpenAPI client sources are build-plugin output under `.build/` and
+never checked in, so the commands above gate only the hand-written roots.
+Deliberate constant-input force unwraps on mock and fixture surfaces carry
+`// swift-format-ignore: NeverForceUnwrap` annotations; the rule stays on
+everywhere else.

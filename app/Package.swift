@@ -3,7 +3,7 @@
 import PackageDescription
 
 var products: [Product] = [
-    .library(name: "FreesideAPI", targets: ["FreesideAPI"]),
+    .library(name: "FreesideAPI", targets: ["FreesideAPI"])
 ]
 
 var targets: [Target] = [
@@ -15,7 +15,7 @@ var targets: [Target] = [
             .product(name: "OpenAPIURLSession", package: "swift-openapi-urlsession"),
         ],
         plugins: [
-            .plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator"),
+            .plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")
         ]
     ),
     .testTarget(
@@ -25,29 +25,29 @@ var targets: [Target] = [
 ]
 
 #if !os(Linux)
-products.append(.library(name: "FreesideCore", targets: ["FreesideCore"]))
-targets.append(
-    .target(
-        name: "FreesideCore",
-        dependencies: ["FreesideAPI"]
+    products.append(.library(name: "FreesideCore", targets: ["FreesideCore"]))
+    targets.append(
+        .target(
+            name: "FreesideCore",
+            dependencies: ["FreesideAPI"]
+        )
     )
-)
-targets.append(
-    .testTarget(
-        name: "FreesideCoreTests",
-        dependencies: ["FreesideCore", "FreesideAPI"]
+    targets.append(
+        .testTarget(
+            name: "FreesideCoreTests",
+            dependencies: ["FreesideCore", "FreesideAPI"]
+        )
     )
-)
-// The §5.14 real-daemon convergence pass (issue #72): every suite is
-// env-gated on a running freeside-signet-dev harness and skips
-// otherwise, so plain `swift test` never needs a daemon. Run through
-// scripts/run-convergence.sh at the repo root.
-targets.append(
-    .testTarget(
-        name: "FreesideConvergenceTests",
-        dependencies: ["FreesideCore", "FreesideAPI"]
+    // The §5.14 real-daemon convergence pass (issue #72): every suite is
+    // env-gated on a running freeside-signet-dev harness and skips
+    // otherwise, so plain `swift test` never needs a daemon. Run through
+    // scripts/run-convergence.sh at the repo root.
+    targets.append(
+        .testTarget(
+            name: "FreesideConvergenceTests",
+            dependencies: ["FreesideCore", "FreesideAPI"]
+        )
     )
-)
 #endif
 
 let package = Package(

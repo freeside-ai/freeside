@@ -6,22 +6,21 @@ import Testing
     /// (docs/plan.md §4 "Actions"), for the nine types §4 defines;
     /// signet's policy pins `blocked` read-only (no actions), which the
     /// schema permits since #96.
-    static let planSection4:
-        [Components.Schemas.AttentionType: [Components.Schemas.Action]] = [
-            .spec_approval: [.approve, .request_changes, .discuss, .stop],
-            .review_diminishing_returns: [
-                .finish_now, .apply_then_finish, .continue_under_policy, .convert_to_policy,
-            ],
-            .review_dispute: [.adjudicate, .discuss, .stop],
-            .execution_failure: [.retry, .retry_with_capabilities, .discuss, .stop],
-            .agent_question: [.answer_and_retry, .answer_without_retry, .stop],
-            .publish_blocked: [
-                .rerun_trust_evaluation, .choose_alternate_profile, .inspect_trust_failure, .stop,
-            ],
-            .ready_for_final_review: [.open_pr, .return_to_agent, .mark_seen, .dismiss, .stop],
-            .run_proposal: [.start, .start_with_changes, .decline, .snooze],
-            .system_health: [.acknowledge, .run_doctor, .stop_unattended],
-        ]
+    static let planSection4: [Components.Schemas.AttentionType: [Components.Schemas.Action]] = [
+        .spec_approval: [.approve, .request_changes, .discuss, .stop],
+        .review_diminishing_returns: [
+            .finish_now, .apply_then_finish, .continue_under_policy, .convert_to_policy,
+        ],
+        .review_dispute: [.adjudicate, .discuss, .stop],
+        .execution_failure: [.retry, .retry_with_capabilities, .discuss, .stop],
+        .agent_question: [.answer_and_retry, .answer_without_retry, .stop],
+        .publish_blocked: [
+            .rerun_trust_evaluation, .choose_alternate_profile, .inspect_trust_failure, .stop,
+        ],
+        .ready_for_final_review: [.open_pr, .return_to_agent, .mark_seen, .dismiss, .stop],
+        .run_proposal: [.start, .start_with_changes, .decline, .snooze],
+        .system_health: [.acknowledge, .run_doctor, .stop_unattended],
+    ]
 
     @Test func actionSetsMatchPlanSection4() {
         for (type, actions) in Self.planSection4 {
