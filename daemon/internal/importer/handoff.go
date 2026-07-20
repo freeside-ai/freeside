@@ -33,9 +33,17 @@ import (
 // output. Such a gate would reject honest
 // exporter output (see TestImportLossySymlinkTargetNeverElides). The
 // evidence manifest has no verbatim field, so it can afford the stricter
-// gate. The leniencies that gate would also close (duplicate-key
-// last-wins, whitespace) smuggle nothing here: the repo manifest carries
-// no trust bit, and Validate re-gates whatever value the decoder resolves.
+// gate.
+//
+// The one leniency that gate would close and that matters here is
+// duplicate-key last-wins: a hostile manifest can hide an over-cap
+// "entries" array behind a second "entries" key so json discards it after
+// building it, forcing a byte-cap-sized allocation that then validates as
+// small. The streaming entry-count gate below handles that directly by
+// summing every "entries" array before the typed decode. The remaining
+// leniencies (whitespace, key order) smuggle nothing: the repo manifest
+// carries no trust bit, and Validate re-gates whatever value the decoder
+// resolves.
 func loadManifest(handoffDir string, pol Policy) (export.Manifest, error) {
 	name := filepath.Join(handoffDir, export.ManifestFilename)
 	// The handoff directory is daemon-supplied, but its contents are the
@@ -63,6 +71,20 @@ func loadManifest(handoffDir string, pol Policy) (export.Manifest, error) {
 	// decode sees the already-laundered string.
 	if !utf8.Valid(data) {
 		return export.Manifest{}, fmt.Errorf("manifest bytes: %w: %w", ErrManifestInvalid, export.ErrInvalidUTF8)
+	}
+	// Bound the entry count BEFORE the typed decode (the shared helper the
+	// evidence channel uses), so a hostile manifest cannot force a
+	// byte-cap-sized []Entry allocation and then validate as small. The
+	// streaming count sums every "entries" array's elements, matched
+	// case-insensitively like the decoder and including duplicate keys, so an
+	// over-cap array hidden under an alternate spelling ("Entries") or behind
+	// a second "entries" key that json's last-wins would discard is rejected
+	// before it is allocated. The post-decode len check below stays the
+	// authoritative cap: this gate is the allocation bound, not the source of
+	// truth, so a future divergence from the decoder's key matching cannot
+	// silently raise the effective cap.
+	if manifestEntryCountExceeds(data, pol.MaxEntries) {
+		return export.Manifest{}, fmt.Errorf("entries exceed the cap of %d: %w", pol.MaxEntries, ErrManifestTooLarge)
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()

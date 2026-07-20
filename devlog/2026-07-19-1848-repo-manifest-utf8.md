@@ -53,16 +53,52 @@ a laundered one must stay distinguishable). Making `Encode` idempotent is
 an export-package contract change, out of this unit's `daemon/internal/importer`
 scope and unnecessary for #180.
 
-**Why UTF-8-only is sufficient here.** The leniencies the dropped gate
-would also close smuggle nothing in *this* manifest: it carries no trust
-bit (no `publish_eligible` equivalent), `DisallowUnknownFields` rejects
-undeclared keys, `Manifest.Validate` re-gates whatever value the decoder
-resolves, and `Entry.Digest` is verified by re-hashing the actual blob
-(`importer/blobs.go`), not trusted verbatim. A duplicate-key last-wins can
-only select a value that is then fully validated and processed; there is no
+**Why UTF-8-only is sufficient for correctness here.** Duplicate-key
+last-wins smuggles no *trust bit* into this manifest: it carries none (no
+`publish_eligible` equivalent), `DisallowUnknownFields` rejects undeclared
+keys, `Manifest.Validate` re-gates whatever value the decoder resolves, and
+`Entry.Digest` is verified by re-hashing the actual blob
+(`importer/blobs.go`), not trusted verbatim. A duplicate key can only select
+a value that is then fully validated and processed; there is no
 first-key/rendered-value gap for it to exploit. This differs from the
-evidence/claim boundary, where the canonical gate was load-bearing against
-a real trust-bit smuggle.
+evidence/claim boundary, where the canonical gate was load-bearing against a
+real trust-bit smuggle.
+
+**But duplicate keys were not fully harmless — a resource gap (Codex P1,
+PR #198).** An initial version of this note claimed duplicate keys "smuggle
+nothing." That was wrong on the *resource* axis: a hostile manifest can hide
+an over-cap `entries` array behind a second `entries` key, so json builds
+(allocates) the first array before last-wins discards it, while the old
+post-decode `len(m.Entries)` cap saw only the empty final value and
+validated it as small. With `MaxManifestBytes` = 256 MiB and `MaxEntries` =
+1M, that forces a multi-GB `[]Entry` allocation from a byte-cap-sized input.
+This was pre-existing (the entry cap was always post-decode) and independent
+of the UTF-8 fix, but it lands at this boundary. Fix: `loadManifest` now runs
+the streaming pre-decode counter the evidence channel already used
+(`manifestEntryCountExceeds`, renamed from `evidenceEntryCountExceeds` since
+it is channel-neutral), which sums *every* `entries` array's elements with an
+early exit at the cap, so the hidden array is rejected before the typed
+decode allocates it. The evidence channel's comment already claimed
+loadManifest mirrored this order; that claim is now true. Note: a re-encode
+canonical gate would *not* have closed this DoS either, since it also decodes
+fully before rejecting; bounding the decode is the actual fix, in both
+channels.
+
+**Second Codex P1 (same PR): the counter must match the key the way the
+decoder does.** The first version of the counter matched only the exact
+lowercase `entries`, but `encoding/json` matches struct fields
+case-insensitively even under `DisallowUnknownFields`, so an over-cap array
+under `Entries`/`ENTRIES` decoded into `m.Entries` uncounted — and because
+that fix had also removed the post-decode `len` check, the cap was fully
+bypassed. Two changes close it: the counter now matches with
+`strings.EqualFold` (verified a superset of Go's field fold for an ASCII key,
+including the long-s `entrieſ` case, in `TestManifestEntryCountCaseInsensitive`
+and an ad-hoc decode probe), and the post-decode `len(m.Entries)` check is
+restored as the *authoritative* cap. Design rule taken from this: the
+pre-decode count is only the allocation bound; the post-decode `len` is the
+source of truth, so any future divergence between the counter's key matching
+and the decoder's cannot silently raise the effective cap (it can at worst
+cost one bounded allocation before `len` rejects).
 
 ## Refute-first verification
 
@@ -75,6 +111,13 @@ was prompted to disprove the fix given only the diff and stated intent.
 - Dropping the canonical gate is safe: no trusted-verbatim field in
   `export.Manifest`/`Entry` (digest re-hashed; kind/blob_omitted/size are
   decoded-then-processed, no separate first-key rendering).
+
+**Missed by the pre-commit refute pass, caught in review:** both the
+refuter and this note reasoned only about *trust-bit* smuggling and
+concluded duplicate keys were safe; neither considered the *resource* axis
+(the discarded array's decode cost). Codex's P1 caught it. Lesson: a
+"duplicate-key last-wins is harmless" argument must cover allocation cost,
+not just value correctness. Fixed as described above.
 
 **Rejected by verification (not defects):**
 - Escaped unpaired surrogate `\uD800` in a `path` decodes to U+FFFD and
