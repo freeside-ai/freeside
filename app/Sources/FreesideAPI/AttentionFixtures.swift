@@ -45,6 +45,23 @@ public enum AttentionFixtures {
         .blocked: [],
     ]
 
+    /// Every Phase 1 action, in the schema's enum order: the Swift analogue of
+    /// Go's `domain.AllActions`, hand-authored like `phase1Types` rather than
+    /// derived. The cross-language policy-parity suite enumerates each type's
+    /// *disallowed* complement against this list, so a daemon that reassigned an
+    /// action would surface; `FixtureTests` guards it against the union of
+    /// `phase1ActionSets` so it cannot silently omit a member.
+    public static let phase1Actions: [Components.Schemas.Action] = [
+        .approve, .request_changes, .discuss, .stop,
+        .finish_now, .apply_then_finish, .continue_under_policy, .convert_to_policy,
+        .adjudicate, .retry, .retry_with_capabilities,
+        .answer_and_retry, .answer_without_retry,
+        .rerun_trust_evaluation, .choose_alternate_profile, .inspect_trust_failure,
+        .open_pr, .return_to_agent, .mark_seen, .dismiss,
+        .start, .start_with_changes, .decline, .snooze,
+        .acknowledge, .run_doctor, .stop_unattended,
+    ]
+
     /// The default mock inbox: one open item per Phase 1 type.
     public static func defaultInbox() -> [Components.Schemas.AttentionItemSnapshot] {
         phase1Types.map { fixture(type: $0) }

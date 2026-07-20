@@ -8,7 +8,9 @@
 # for the two bound URLs, and runs the FreesideConvergenceTests suite
 # against it. Without those URLs in the environment the suite skips,
 # so this script is the one entry point that actually exercises the
-# client halves of the sixteen-test matrix against a real daemon.
+# client halves of the sixteen-test matrix against a real daemon, plus
+# the cross-language enumeration that proves the Swift fixture matrix and
+# the daemon's per-type action policy agree over every attention type (#204).
 #
 # Requires: Go (daemon toolchain), Swift (app toolchain), macOS.
 set -euo pipefail

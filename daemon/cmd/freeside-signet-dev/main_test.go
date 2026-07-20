@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -472,6 +473,52 @@ func TestControlPutItemAdvancesRevision(t *testing.T) {
 		putItemRequest{ID: "", ItemVersion: 1})
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("invalid item status = %d body=%s, want 400 from the domain gate", response.StatusCode, payload)
+	}
+}
+
+// TestControlPutItemPolicyBoundary drives the per-type action policy through the
+// control seed route. The parameterized type/action fields let a caller assert
+// the daemon's accept/reject verdict for any (type, action) combination, and
+// every rejection is the client-visible 400 the Swift parity suite (#204)
+// asserts, never a harness 500. This is the Go-side counterpart to the Swift
+// cross-language enumeration; both mirror internal/signet's policy_test.go.
+func TestControlPutItemPolicyBoundary(t *testing.T) {
+	_, r := startHarness(t)
+
+	cases := []struct {
+		name       string
+		itemType   string
+		actions    []string
+		wantStatus int
+		wantMsg    string
+	}{
+		{"allowed set accepted", "run_proposal", []string{"start", "decline"}, http.StatusOK, ""},
+		{"disallowed action rejected", "run_proposal", []string{"approve"}, http.StatusBadRequest, "is not allowed for"},
+		{"empty set on non-blocked rejected", "spec_approval", []string{}, http.StatusBadRequest, "offers no requested decision"},
+		{"blocked accepts the empty set", "blocked", []string{}, http.StatusOK, ""},
+		{"blocked rejects any action", "blocked", []string{"stop"}, http.StatusBadRequest, "is not allowed for"},
+		{"unknown type rejected", "not_a_real_type", []string{"stop"}, http.StatusBadRequest, "unknown attention type"},
+		{"unknown action rejected", "spec_approval", []string{"not_a_real_action"}, http.StatusBadRequest, "invalid action"},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			response, payload := postJSON(t, r.ControlURL+"/control/items", "",
+				putItemRequest{
+					ID:                fmt.Sprintf("item-policy-%d", i),
+					ItemVersion:       1,
+					Type:              tc.itemType,
+					RequestedDecision: tc.actions,
+				})
+			if response.StatusCode != tc.wantStatus {
+				t.Fatalf("status = %d body=%s, want %d", response.StatusCode, payload, tc.wantStatus)
+			}
+			if tc.wantMsg != "" {
+				msg := decode[map[string]string](t, payload)["message"]
+				if !strings.Contains(msg, tc.wantMsg) {
+					t.Fatalf("message = %q, want containing %q", msg, tc.wantMsg)
+				}
+			}
+		})
 	}
 }
 
