@@ -280,28 +280,19 @@ func auditBlobStore(root *os.File, dir, storeName string, present bool, needed m
 	return sha256, nil
 }
 
-// dirBatch is how many entries scanDirBatched pulls per syscall: enough
-// to keep enumeration cheap, small enough that a hostile directory of
-// millions of names never lands in memory at once.
+// dirBatch is how many entries scanOpenDirBatched pulls per syscall:
+// enough to keep enumeration cheap, small enough that a hostile
+// directory of millions of names never lands in memory at once.
 const dirBatch = 4096
 
-// scanDirBatched enumerates a directory in bounded batches, calling fn
-// on each entry and stopping at the first fn error. Unlike os.ReadDir it
-// never reads the whole listing into memory, so it fails closed on a
-// hostile directory without an unbounded allocation first. A directory
-// that cannot be opened or read wraps unreadableErr.
-func scanDirBatched(path string, unreadableErr error, fn func(os.DirEntry) error) error {
-	d, err := openDirectory(path, unreadableErr)
-	if err != nil {
-		return fmt.Errorf("open %q: %w: %w", path, unreadableErr, err)
-	}
-	defer func() { _ = d.Close() }()
-	return scanOpenDirBatched(d, path, unreadableErr, fn)
-}
-
-// scanOpenDirBatched scans a directory descriptor the caller has pinned.
-// It does not close d, so an audit can use that same inode as the parent
-// for a descriptor-relative child open after inspecting its entries.
+// scanOpenDirBatched enumerates a directory descriptor the caller has
+// pinned in bounded batches, calling fn on each entry and stopping at
+// the first fn error. Unlike os.ReadDir it never reads the whole listing
+// into memory, so it fails closed on a hostile directory without an
+// unbounded allocation first; a directory that cannot be read wraps
+// unreadableErr. It does not close d, so an audit can use that same
+// inode as the parent for a descriptor-relative child open after
+// inspecting its entries.
 func scanOpenDirBatched(d *os.File, path string, unreadableErr error, fn func(os.DirEntry) error) error {
 	for {
 		entries, err := d.ReadDir(dirBatch)
