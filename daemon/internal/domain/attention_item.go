@@ -1,9 +1,11 @@
 package domain
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"slices"
 	"time"
+	"unicode/utf8"
 )
 
 // Subject is what an AttentionItem is about (plan §4). RunID is set only when
@@ -52,11 +54,38 @@ type AgentClaim struct {
 	Artifact   ArtifactID `json:"artifact_id"`
 	Digest     Digest     `json:"digest"`
 	Provenance Provenance `json:"provenance"`
+	Text       *ClaimText `json:"text"`
 }
 
-// clone returns a copy detached from the caller's provenance pointer.
+// MaxClaimTextBytes caps a text claim's inline content. The content rides
+// inside the item blob (persisted per item, re-sent on every list and
+// bootstrap read), unlike attachments fetched out of line, so the cap keeps
+// item payloads bounded while staying far beyond a seconds-readable summary
+// (plan §9).
+const MaxClaimTextBytes = 1 << 16
+
+// ClaimText is the inline renderable body of a text claim (plan §9's summary
+// carrier): media-typed prose carried on the claim itself so the card's
+// summary layer renders without a fetch. The enclosing claim's digest binds
+// the content (Validate recomputes it), so inline text rides the same digest
+// discipline as every referenced artifact.
+type ClaimText struct {
+	MediaType ClaimMediaType `json:"media_type"`
+	Content   string         `json:"content"`
+}
+
+// ComputeDigest returns the content address of the text's UTF-8 bytes, in
+// the repository-wide "sha256:<hex>" form, so a text claim's digest is also
+// a valid attachment-store address for the same bytes.
+func (t ClaimText) ComputeDigest() Digest {
+	return Digest(fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(t.Content))))
+}
+
+// clone returns a copy detached from the caller's provenance and text
+// pointers.
 func (c AgentClaim) clone() AgentClaim {
 	c.Provenance = c.Provenance.clone()
+	c.Text = clonePtr(c.Text)
 	return c
 }
 
@@ -95,6 +124,37 @@ func (c AgentClaim) Validate() error {
 	// the agent class, the only producer whose artifacts route through claims.
 	if c.Provenance.ProducerClass != ProducerAgent {
 		return fmt.Errorf("agent claim %q producer_class %q: %w", c.Label, c.Provenance.ProducerClass, ErrNonAgentClaim)
+	}
+	if c.Text != nil {
+		// Inline content is barred from the high-sensitivity tier: clients
+		// persist item metadata in disk caches under §5.14's
+		// no-high-sensitivity-at-rest default, so prose that must stay
+		// memory-only travels the referenced attachment path instead of
+		// riding inside the item.
+		if c.Provenance.SensitivityClass == SensitivityHigh {
+			return fmt.Errorf("agent claim %q sensitivity_class %q: %w", c.Label, c.Provenance.SensitivityClass, ErrHighSensitivityClaimText)
+		}
+		// Cheap shape checks precede the hash so a malformed claim never
+		// buys a digest computation; the mismatch check is the binding rule
+		// itself: a claim cannot display one text while binding another
+		// digest (the stale-approval class, plan §3.1).
+		if !c.Text.MediaType.valid() {
+			return fmt.Errorf("agent claim %q text media_type %q: %w", c.Label, c.Text.MediaType, ErrInvalidClaimMediaType)
+		}
+		if c.Text.Content == "" {
+			return fmt.Errorf("agent claim %q text content: %w", c.Label, ErrEmptyField)
+		}
+		// A JSON decode admits invalid UTF-8 (escaped raw bytes survive
+		// unmarshalling, #180), so validity is checked, never assumed.
+		if !utf8.ValidString(c.Text.Content) {
+			return fmt.Errorf("agent claim %q: %w", c.Label, ErrClaimTextNotUTF8)
+		}
+		if len(c.Text.Content) > MaxClaimTextBytes {
+			return fmt.Errorf("agent claim %q text content %d bytes: %w", c.Label, len(c.Text.Content), ErrClaimTextTooLarge)
+		}
+		if computed := c.Text.ComputeDigest(); c.Digest != computed {
+			return fmt.Errorf("agent claim %q digest %q, text content resolves to %q: %w", c.Label, c.Digest, computed, ErrClaimTextDigestMismatch)
+		}
 	}
 	return nil
 }

@@ -100,6 +100,29 @@ func (c ProducerClass) valid() bool {
 	}
 }
 
+// ClaimMediaType names the renderable media type of a text claim's inline
+// content (plan §9's summary carrier). The set is deliberately closed to
+// seconds-readable prose: images and other binary artifacts stay on the
+// referenced-attachment path, never inline.
+type ClaimMediaType string
+
+const (
+	MediaTypeTextPlain    ClaimMediaType = "text/plain"
+	MediaTypeTextMarkdown ClaimMediaType = "text/markdown"
+)
+
+// AllClaimMediaTypes lists every valid ClaimMediaType.
+var AllClaimMediaTypes = []ClaimMediaType{MediaTypeTextPlain, MediaTypeTextMarkdown}
+
+func (t ClaimMediaType) valid() bool {
+	switch t {
+	case MediaTypeTextPlain, MediaTypeTextMarkdown:
+		return true
+	default:
+		return false
+	}
+}
+
 // HeadBinding records how an artifact's provenance relates to repository head
 // (plan §5.15 rule 2). Head-bound evidence is produced against a specific
 // candidate head and is invalidated by a remediation head; head-independent

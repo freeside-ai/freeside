@@ -31,6 +31,19 @@ func validItemInput(typ domain.AttentionType) domain.AttentionItemInput {
 	}
 }
 
+// textClaims wraps one otherwise-valid text claim around the given body;
+// digest defaults to the computed content address so each rejection case
+// isolates its own defect.
+func textClaims(text domain.ClaimText, digest domain.Digest) []domain.AgentClaim {
+	if digest == "" {
+		digest = text.ComputeDigest()
+	}
+	return []domain.AgentClaim{{
+		Label: "summary", Artifact: "art-1", Digest: digest,
+		Text: &text, Provenance: provenance(domain.ProducerAgent, nil),
+	}}
+}
+
 // TestNewAttentionItemTypes is acceptance criterion 1: each of the ten Phase 1
 // attention types constructs a valid item; an unknown type and an invalid
 // subject type are rejected.
@@ -144,16 +157,24 @@ func TestNewAttentionItemDerivesBindingSet(t *testing.T) {
 	ev1 := domain.Artifact{ID: "e1", Type: "log", Digest: "sha256:zzz", Provenance: provenance(domain.ProducerVerifier, &recipe)}
 	ev2 := domain.Artifact{ID: "e2", Type: "log", Digest: "sha256:zzz", Provenance: provenance(domain.ProducerVerifier, &recipe)}
 	claim := domain.AgentClaim{Label: "shot", Artifact: "c1", Digest: "sha256:aaa", Provenance: provenance(domain.ProducerAgent, nil)}
+	// A text claim joins the binding set through its computed content digest,
+	// so an approval over the item binds the rendered summary too.
+	text := domain.ClaimText{MediaType: domain.MediaTypeTextPlain, Content: "summary"}
+	textClaim := domain.AgentClaim{
+		Label: "summary", Artifact: "c2", Digest: text.ComputeDigest(),
+		Text: &text, Provenance: provenance(domain.ProducerAgent, nil),
+	}
 	in := validItemInput(domain.AttentionReadyForFinalReview)
 	in.PRHeadSHA = "abc123" // matches provenance() so evidence head-binding passes
 	in.EvidenceSnapshot = []domain.Artifact{ev1, ev2}
-	in.AgentClaims = []domain.AgentClaim{claim}
+	in.AgentClaims = []domain.AgentClaim{claim, textClaim}
 
 	item, err := domain.NewAttentionItem(in, approvedRecipes())
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []domain.Digest{"sha256:aaa", "sha256:zzz"}
+	want := []domain.Digest{"sha256:aaa", "sha256:zzz", text.ComputeDigest()}
+	slices.Sort(want)
 	if !slices.Equal(item.ArtifactDigests, want) {
 		t.Errorf("ArtifactDigests = %v, want %v", item.ArtifactDigests, want)
 	}
@@ -417,6 +438,56 @@ func TestNewAttentionItemRejects(t *testing.T) {
 				}}
 			},
 			wantErr: domain.ErrNonAgentClaim,
+		},
+		{
+			name: "high-sensitivity text claim",
+			mutate: func(in *domain.AttentionItemInput) {
+				// Inline content is barred from the high-sensitivity tier
+				// (§5.14 no-high-sensitivity-at-rest: clients persist item
+				// metadata to disk); only the referenced path may carry it.
+				claims := textClaims(domain.ClaimText{MediaType: domain.MediaTypeTextPlain, Content: "secret"}, "")
+				claims[0].Provenance.SensitivityClass = domain.SensitivityHigh
+				in.AgentClaims = claims
+			},
+			wantErr: domain.ErrHighSensitivityClaimText,
+		},
+		{
+			name: "text claim with unregistered media type",
+			mutate: func(in *domain.AttentionItemInput) {
+				in.AgentClaims = textClaims(domain.ClaimText{MediaType: "text/html", Content: "x"}, "")
+			},
+			wantErr: domain.ErrInvalidClaimMediaType,
+		},
+		{
+			name: "text claim with empty content",
+			mutate: func(in *domain.AttentionItemInput) {
+				in.AgentClaims = textClaims(domain.ClaimText{MediaType: domain.MediaTypeTextPlain}, "")
+			},
+			wantErr: domain.ErrEmptyField,
+		},
+		{
+			name: "text claim with invalid UTF-8 content",
+			mutate: func(in *domain.AttentionItemInput) {
+				// A raw 0xff survives json.Unmarshal (#180), so Validate must
+				// catch it rather than trust the decode.
+				in.AgentClaims = textClaims(domain.ClaimText{MediaType: domain.MediaTypeTextPlain, Content: "\xff"}, "")
+			},
+			wantErr: domain.ErrClaimTextNotUTF8,
+		},
+		{
+			name: "text claim over the size cap",
+			mutate: func(in *domain.AttentionItemInput) {
+				oversize := strings.Repeat("a", domain.MaxClaimTextBytes+1)
+				in.AgentClaims = textClaims(domain.ClaimText{MediaType: domain.MediaTypeTextPlain, Content: oversize}, "")
+			},
+			wantErr: domain.ErrClaimTextTooLarge,
+		},
+		{
+			name: "text claim digest not over its content",
+			mutate: func(in *domain.AttentionItemInput) {
+				in.AgentClaims = textClaims(domain.ClaimText{MediaType: domain.MediaTypeTextPlain, Content: "shown text"}, "sha256:other")
+			},
+			wantErr: domain.ErrClaimTextDigestMismatch,
 		},
 		{
 			name:    "non-positive item_version",

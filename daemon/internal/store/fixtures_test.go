@@ -70,6 +70,10 @@ func newFixtures(t *testing.T) fixtures {
 	runID := domain.RunID("run-1")
 	convID := domain.ConversationID("conv-1")
 	expires := ts.Add(24 * time.Hour)
+	claimText := domain.ClaimText{
+		MediaType: domain.MediaTypeTextMarkdown,
+		Content:   "All checks green; the diff touches only docs.",
+	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-1", ProjectID: "proj-1",
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
@@ -79,6 +83,19 @@ func newFixtures(t *testing.T) fixtures {
 		EvidenceSnapshot:  []domain.Artifact{artifact},
 		AgentClaims: []domain.AgentClaim{{
 			Label: "screenshot", Artifact: "art-2", Digest: "sha256:img",
+			Provenance: domain.Provenance{
+				ProducerClass:        domain.ProducerAgent,
+				ProducerInvocationID: "inv-2",
+				HeadBinding:          domain.HeadBound,
+				SourceHeadSHA:        "cafebabe",
+				SensitivityClass:     domain.SensitivityNormal,
+			},
+		}, {
+			// A text claim (#217): the digest is computed over the content, so
+			// the persisted item exercises the decode-side re-validation of
+			// the binding rule, not just the marshalled shape.
+			Label: "change summary", Artifact: "art-3", Digest: claimText.ComputeDigest(),
+			Text: &claimText,
 			Provenance: domain.Provenance{
 				ProducerClass:        domain.ProducerAgent,
 				ProducerInvocationID: "inv-2",
