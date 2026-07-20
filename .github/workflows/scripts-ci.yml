@@ -1,21 +1,25 @@
 name: scripts CI
 
-# Gates the repo's workflow scripts: bash syntax, shellcheck, and the
-# merge-result-audit regression suite (isolated synthetic repos, no
-# network). This tests the audit implementation only; nothing here
-# parses PR prose. shellcheck runs as a pinned, checksum-verified
-# prebuilt binary, matching the pinned-vacuum/golangci-lint determinism
-# convention (a floating linter is nondeterministic verification).
+# Gates the repo's maintained Bash scripts: bash syntax and shellcheck
+# over every script under scripts/ and app/scripts/ (the set AGENTS.md
+# tells contributors to run), plus the merge-result-audit regression
+# suite (isolated synthetic repos, no network). The suite tests the
+# audit implementation only; nothing here parses PR prose. shellcheck
+# runs as a pinned, checksum-verified prebuilt binary, matching the
+# pinned-vacuum/golangci-lint determinism convention (a floating linter
+# is nondeterministic verification).
 
 on:
   push:
     branches: [main]
     paths:
       - "scripts/**"
+      - "app/scripts/**"
       - ".github/workflows/scripts-ci.yml"
   pull_request:
     paths:
       - "scripts/**"
+      - "app/scripts/**"
       - ".github/workflows/scripts-ci.yml"
 
 permissions:
@@ -35,8 +39,7 @@ jobs:
       - name: bash syntax check
         run: |
           set -euo pipefail
-          bash -n scripts/merge-result-audit.sh
-          bash -n scripts/test-merge-result-audit.sh
+          bash -n scripts/*.sh app/scripts/*.sh
       - name: Install shellcheck (pinned binary, checksum-verified)
         run: |
           set -euo pipefail
@@ -45,6 +48,6 @@ jobs:
           echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
           tar -xJf shellcheck.tar.xz "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
       - name: shellcheck
-        run: ./shellcheck-v${SHELLCHECK_VERSION}/shellcheck scripts/merge-result-audit.sh scripts/test-merge-result-audit.sh
+        run: ./shellcheck-v${SHELLCHECK_VERSION}/shellcheck scripts/*.sh app/scripts/*.sh
       - name: merge-result-audit regression suite
         run: bash scripts/test-merge-result-audit.sh
