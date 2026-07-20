@@ -2,8 +2,9 @@ import Foundation
 
 /// Deterministic, schema-valid attention items: one per Phase 1 attention
 /// type, with `requested_decision` transcribed from plan §4's per-type
-/// action table. Builders over JSON resources so a schema change breaks
-/// these at compile time, not at decode time.
+/// action table. Built in Swift from the generated schema types (no JSON
+/// resources or decode step), so a schema change breaks these at compile
+/// time.
 public enum AttentionFixtures {
     /// The recipe digest every fixture's evidence is produced under;
     /// MockServer's default approved set contains exactly this digest.
