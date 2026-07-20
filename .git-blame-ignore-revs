@@ -1,0 +1,6 @@
+# Mechanical churn commits — skip in blame.
+# Activate locally: git config blame.ignoreRevsFile .git-blame-ignore-revs
+# (GitHub blame picks this file up by name automatically.)
+
+# Reformat app Swift sources with swift-format (18 files)
+ffead062320536bf3da7bf8d6eb027723cda14d8
