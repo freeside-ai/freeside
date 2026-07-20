@@ -136,13 +136,15 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
             Issue.record("expected an active device")
             return
         }
-        let subscription = try #require(DeviceNtfySubscription(
-            serverURL: grant.ntfy_subscription.server_url,
-            topic: grant.ntfy_subscription.topic))
-        let credential = try #require(DeviceCredential(
-            deviceID: active.id,
-            token: grant.device_token,
-            ntfySubscription: subscription))
+        let subscription = try #require(
+            DeviceNtfySubscription(
+                serverURL: grant.ntfy_subscription.server_url,
+                topic: grant.ntfy_subscription.topic))
+        let credential = try #require(
+            DeviceCredential(
+                deviceID: active.id,
+                token: grant.device_token,
+                ntfySubscription: subscription))
         let client = APIClientFactory.mock(server: server) { credential.token }
         let coordinator = SyncCoordinator(
             client: client, device: DeviceIdentity(deviceID: active.id), cache: cache)
@@ -225,9 +227,10 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(try store.load() == first)
 
         // A re-pair replaces the whole identity.
-        let secondSubscription = try #require(DeviceNtfySubscription(
-            serverURL: "https://other-ntfy.example",
-            topic: "fs-11111111111111111111111111111111"))
+        let secondSubscription = try #require(
+            DeviceNtfySubscription(
+                serverURL: "https://other-ntfy.example",
+                topic: "fs-11111111111111111111111111111111"))
         let second = DeviceCredential(
             deviceID: "device-2", token: testDeviceToken(for: "device-2", secretByte: 2),
             ntfySubscription: secondSubscription)!

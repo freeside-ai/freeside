@@ -14,7 +14,8 @@ import Testing
 
     @Test func getReturnsCanonicalStateAndUnknownIsNotFound() async throws {
         let client = APIClientFactory.mock(server: MockServer())
-        let snapshot = try await client
+        let snapshot =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         #expect(snapshot.item._type == .spec_approval)
         let missing = try await client.getAttentionItem(path: .init(item_id: "item-unknown"))
@@ -28,14 +29,16 @@ import Testing
         // client's placeholder case), never a transport failure.
         let client = APIClientFactory.mock(server: MockServer())
 
-        let image = try await client
+        let image =
+            try await client
             .getAttachment(path: .init(digest: "sha256:img-spec_approval")).ok.body.binary
         let imageBytes = try await Data(collecting: image, upTo: 1 << 20)
         #expect(imageBytes == AttentionFixtures.fixtureImagePNG)
         // The fixture is a real PNG: magic bytes, so clients can decode.
         #expect(imageBytes.starts(with: [0x89, 0x50, 0x4E, 0x47]))
 
-        let log = try await client
+        let log =
+            try await client
             .getAttachment(path: .init(digest: "sha256:log-spec_approval")).ok.body.binary
         let logBytes = try await Data(collecting: log, upTo: 1 << 20)
         #expect(String(data: logBytes, encoding: .utf8)?.contains("verify log") == true)
@@ -47,16 +50,19 @@ import Testing
     @Test func freshCommandAppliesAndRecordsTheDecision() async throws {
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
-        let before = try await client
+        let before =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
 
-        let result = try await client
+        let result =
+            try await client
             .submitCommand(body: .json(Self.command(id: "cmd-1", against: before)))
             .ok.body.json
         #expect(result.record.action == .approve)
         #expect(result.record.item_id == "item-spec_approval")
 
-        let after = try await client
+        let after =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         #expect(after.item.status == .resolved)
         #expect(after.item.item_version == before.item.item_version + 1)
@@ -69,18 +75,21 @@ import Testing
     @Test func staleCommandIsRejectedWithTheReplacementAndNoSideEffect() async throws {
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
-        let before = try await client
+        let before =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         await server.advance(itemID: "item-spec_approval")
 
-        let output = try await client
+        let output =
+            try await client
             .submitCommand(body: .json(Self.command(id: "cmd-stale", against: before)))
         let rejection = try output.conflict.body.json
         #expect(rejection.replacement_item.entity_version == before.entity_version + 1)
         #expect(rejection.replacement_item.item.item_version == before.item.item_version + 1)
 
         // No side effect: the live item is still open at the advanced version.
-        let current = try await client
+        let current =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         #expect(current.item.status == .open)
         #expect(current == rejection.replacement_item)
@@ -89,7 +98,8 @@ import Testing
     @Test func retryByCommandIDReturnsTheRecordedResultWithoutReapplying() async throws {
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
-        let before = try await client
+        let before =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-agent_question")).ok.body.json
         let command = Self.command(id: "cmd-retry", against: before, action: .stop)
 
@@ -99,7 +109,8 @@ import Testing
         let second = try await client.submitCommand(body: .json(command)).ok.body.json
         #expect(first == second)
 
-        let after = try await client
+        let after =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-agent_question")).ok.body.json
         #expect(after.item.item_version == before.item.item_version + 1)
         #expect(after.item.decided_at != nil)
@@ -111,13 +122,16 @@ import Testing
         // hide that misuse behind a successful replay.
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
-        let first = try await client
+        let first =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
-        _ = try await client
+        _ =
+            try await client
             .submitCommand(body: .json(Self.command(id: "cmd-reused", against: first)))
             .ok.body.json
 
-        let other = try await client
+        let other =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-agent_question")).ok.body.json
         let output = try await client.submitCommand(
             body: .json(Self.command(id: "cmd-reused", against: other, action: .stop)))
@@ -134,9 +148,11 @@ import Testing
         // non-positive expected version is malformed, never a replay.
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
-        let before = try await client
+        let before =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
-        _ = try await client
+        _ =
+            try await client
             .submitCommand(body: .json(Self.command(id: "cmd-valid", against: before)))
             .ok.body.json
 
@@ -160,7 +176,8 @@ import Testing
             return
         }
         #expect(emptyStatus == 422)
-        let after = try await client
+        let after =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         #expect(after.item.item_version == before.item.item_version + 1)
     }
@@ -171,7 +188,8 @@ import Testing
         // reports not-found, never unsupported-action.
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
-        let before = try await client
+        let before =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         var command = Self.command(id: "cmd-pending-missing", against: before, action: .discuss)
         command.payload.item_id = "item-none"
@@ -191,9 +209,11 @@ import Testing
         // refreshed expectations still converges on the recorded result.
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
-        let before = try await client
+        let before =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
-        let first = try await client
+        let first =
+            try await client
             .submitCommand(body: .json(Self.command(id: "cmd-refresh", against: before)))
             .ok.body.json
 
@@ -206,7 +226,8 @@ import Testing
         // regardless of the order the payload submitted.
         #expect(second.record.artifact_digests == before.item.artifact_digests)
 
-        let after = try await client
+        let after =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         #expect(after.item.item_version == before.item.item_version + 1)
     }
@@ -217,9 +238,11 @@ import Testing
         // new body names a pending action.
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
-        let before = try await client
+        let before =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
-        _ = try await client
+        _ =
+            try await client
             .submitCommand(body: .json(Self.command(id: "cmd-order", against: before)))
             .ok.body.json
 
@@ -433,7 +456,8 @@ import Testing
         }
         #expect(statusCode == 422)
 
-        let after = try await client
+        let after =
+            try await client
             .getAttentionItem(path: .init(item_id: invalid.item.id)).ok.body.json
         #expect(after == invalid)
     }
@@ -444,7 +468,8 @@ import Testing
         // action is rejected as not offered, without effect.
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
-        let before = try await client
+        let before =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-blocked")).ok.body.json
         #expect(before.item.requested_decision.isEmpty)
 
@@ -456,7 +481,8 @@ import Testing
         }
         #expect(statusCode == 422)
 
-        let after = try await client
+        let after =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-blocked")).ok.body.json
         #expect(after == before)
 
@@ -482,7 +508,8 @@ import Testing
         // matches the live item.
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
-        let before = try await client
+        let before =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         #expect(!before.item.requested_decision.contains(.start))
 
@@ -494,7 +521,8 @@ import Testing
         }
         #expect(statusCode == 422)
 
-        let after = try await client
+        let after =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         #expect(after == before)
     }
@@ -506,12 +534,15 @@ import Testing
         // closed state at any version, never a rebind invitation.
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
-        let before = try await client
+        let before =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
-        _ = try await client
+        _ =
+            try await client
             .submitCommand(body: .json(Self.command(id: "cmd-close", against: before)))
             .ok.body.json
-        let closed = try await client
+        let closed =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         #expect(closed.item.status == .resolved)
 
@@ -522,7 +553,8 @@ import Testing
         let rejection = try output.conflict.body.json
         #expect(rejection.replacement_item == closed)
 
-        let after = try await client
+        let after =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         #expect(after == closed)
     }
@@ -533,7 +565,8 @@ import Testing
         // transport error a client could mistake for a lost response.
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
-        let before = try await client
+        let before =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         var command = Self.command(id: "cmd-unknown-item", against: before)
         command.payload.item_id = "item-unknown"
@@ -558,7 +591,8 @@ import Testing
         let heartbeat = try await client.getSyncRevision().ok.body.json
         #expect(heartbeat.revision >= 7)
 
-        let result = try await client
+        let result =
+            try await client
             .submitCommand(body: .json(Self.command(id: "cmd-rev", against: seeded)))
             .ok.body.json
         #expect(result.revision > 7)
@@ -570,13 +604,15 @@ import Testing
         // no version bumps and the item stays open at the same state.
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
-        let before = try await client
+        let before =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-ready_for_final_review")).ok.body.json
 
         let command = Self.command(id: "cmd-seen", against: before, action: .mark_seen)
         _ = try await client.submitCommand(body: .json(command)).ok.body.json
 
-        let after = try await client
+        let after =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-ready_for_final_review")).ok.body.json
         #expect(after == before)
     }
@@ -587,11 +623,13 @@ import Testing
         // engine's reaction, not the acceptance's.
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
-        let before = try await client
+        let before =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-execution_failure")).ok.body.json
         let command = Self.command(id: "cmd-retry-resolve", against: before, action: .retry)
         _ = try await client.submitCommand(body: .json(command)).ok.body.json
-        let after = try await client
+        let after =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-execution_failure")).ok.body.json
         #expect(after.item.status == .resolved)
     }
@@ -602,7 +640,8 @@ import Testing
         // record a command whose effect would be silently dropped.
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
-        let before = try await client
+        let before =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         #expect(before.item.requested_decision.contains(.discuss))
 
@@ -615,10 +654,12 @@ import Testing
         #expect(statusCode == 422)
 
         // No effect: the same prepared state still applies cleanly.
-        let after = try await client
+        let after =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         #expect(after == before)
-        _ = try await client
+        _ =
+            try await client
             .submitCommand(body: .json(Self.command(id: "cmd-still-valid", against: before)))
             .ok.body.json
     }
@@ -626,13 +667,15 @@ import Testing
     @Test func dismissDismissesTheItem() async throws {
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
-        let before = try await client
+        let before =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-ready_for_final_review")).ok.body.json
 
         let command = Self.command(id: "cmd-dismiss", against: before, action: .dismiss)
         _ = try await client.submitCommand(body: .json(command)).ok.body.json
 
-        let after = try await client
+        let after =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-ready_for_final_review")).ok.body.json
         #expect(after.item.status == .dismissed)
         // Dismiss is a concluding decision like resolve: it stamps (#171).

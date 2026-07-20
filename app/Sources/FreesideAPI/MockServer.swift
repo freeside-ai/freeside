@@ -143,7 +143,8 @@ public actor MockServer {
         // The server revision starts at or beyond every seeded snapshot's
         // as_of_revision, so the heartbeat and the next CommandResult can
         // never run backwards relative to what this mock lists.
-        revision = max(1, items.map(\.as_of_revision).max() ?? 1,
+        revision = max(
+            1, items.map(\.as_of_revision).max() ?? 1,
             deliveries.map(\.as_of_revision).max() ?? 1)
         // Seeded delivery rows exist only because the daemon's pipeline
         // would have recorded them, and that pipeline re-derives the
@@ -171,7 +172,8 @@ public actor MockServer {
             // row. An invalid parent is left exactly as seeded; the serve
             // paths' snapshotBreach then fails it closed, as the daemon does.
             if Self.snapshotBreach(snapshot, approvedRecipes: approvedRecipes) != nil { continue }
-            let rows = deliveriesByKey
+            let rows =
+                deliveriesByKey
                 .filter { $0.key.itemID == itemID }
                 .sorted { $0.key < $1.key }
                 .map(\.value)

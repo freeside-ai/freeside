@@ -1,5 +1,5 @@
-import FreesideAPI
 import Foundation
+import FreesideAPI
 import Observation
 
 #if canImport(UIKit)

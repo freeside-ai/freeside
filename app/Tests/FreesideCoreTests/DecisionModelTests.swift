@@ -186,7 +186,8 @@ import Testing
         await server.setBeforeRespond(nil)
         let client = APIClientFactory.mock(server: server)
         _ = try await client.submitCommand(body: .json(original)).ok.body.json
-        let committed = try await client
+        let committed =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-system_health")).ok.body.json
         #expect(committed.item.status == .open)
 
@@ -195,7 +196,8 @@ import Testing
         #expect(model.appliedRecord?.command_id == original.command_id)
         #expect(model.pendingCommand == nil)
         // Replayed, not reapplied: the record-only item never advanced.
-        let after = try await client
+        let after =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-system_health")).ok.body.json
         #expect(after.item.item_version == committed.item.item_version)
     }
@@ -213,7 +215,8 @@ import Testing
         #expect(model.actionsEnabled)
 
         let otherDevice = APIClientFactory.mock(server: server)
-        let current = try await otherDevice
+        let current =
+            try await otherDevice
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
         _ = try await otherDevice.submitCommand(
             body: .json(
@@ -378,7 +381,8 @@ import Testing
         #expect(model.pendingCommand == nil)
         // Exactly one command committed; the record-only item never moved.
         let client = APIClientFactory.mock(server: server)
-        let after = try await client
+        let after =
+            try await client
             .getAttentionItem(path: .init(item_id: "item-system_health")).ok.body.json
         #expect(after.item.item_version == model.snapshot?.item.item_version)
         #expect(after.item.status == .open)
