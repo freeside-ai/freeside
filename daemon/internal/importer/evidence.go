@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
@@ -50,13 +51,13 @@ func loadEvidenceManifest(handoffDir string, pol Policy) (export.EvidenceManifes
 	// manifest that is still under the byte cap never pays for the per-entry typed
 	// decode, the per-entry validation, and the canonical re-encode that
 	// DecodeEvidenceManifest runs. The count is a streaming token pass
-	// (evidenceEntryCountExceeds) that reads only the first JSON value and counts
+	// (manifestEntryCountExceeds) that reads only the first JSON value and counts
 	// every "entries" array's elements with an early exit at the cap: it does not
 	// trust json.Unmarshal's last-wins on a duplicate key or its whole-input
 	// requirement, both of which a hostile manifest can use to hide a large array
-	// behind a trailing value or a second "entries" key. This mirrors
-	// loadManifest's count-before-Validate order for the repo channel.
-	if evidenceEntryCountExceeds(data, pol.MaxEntries) {
+	// behind a trailing value or a second "entries" key. loadManifest applies the
+	// same helper before its strict decode for the repo channel.
+	if manifestEntryCountExceeds(data, pol.MaxEntries) {
 		return export.EvidenceManifest{}, false, fmt.Errorf("evidence entries exceed the cap of %d: %w", pol.MaxEntries, ErrManifestTooLarge)
 	}
 	em, err := export.DecodeEvidenceManifest(data)
@@ -66,17 +67,19 @@ func loadEvidenceManifest(handoffDir string, pol Policy) (export.EvidenceManifes
 	return em, true, nil
 }
 
-// evidenceEntryCountExceeds reports whether the manifest structurally declares
+// manifestEntryCountExceeds reports whether the manifest structurally declares
 // more than max entries, counted by a streaming token pass that early-exits at
 // the cap so a hostile manifest cannot force a byte-cap-sized typed decode before
 // the cap rejects it. It reads only the first JSON value (trailing content cannot
 // smuggle a second) and counts the elements of every top-level "entries" array,
 // duplicate keys included, since the typed decoder would build each in turn. Any
 // shape it cannot count structurally (a non-object root, a malformed stream)
-// yields false: DecodeEvidenceManifest is the authoritative rejection, and those
-// shapes cannot force a large typed decode (a non-object root fails the struct
-// decode immediately, and total work stays bounded by the byte cap).
-func evidenceEntryCountExceeds(data []byte, max int) bool {
+// yields false: the channel's typed decoder (DecodeEvidenceManifest for the
+// evidence channel, loadManifest's strict decode for the repo channel) is the
+// authoritative rejection, and those shapes cannot force a large typed decode (a
+// non-object root fails the struct decode immediately, and total work stays
+// bounded by the byte cap). Shared by both channels' manifest intake.
+func manifestEntryCountExceeds(data []byte, max int) bool {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	tok, err := dec.Token()
 	if err != nil {
@@ -95,7 +98,13 @@ func evidenceEntryCountExceeds(data []byte, max int) bool {
 		if !ok {
 			return false
 		}
-		if key != "entries" {
+		// Match the key the way encoding/json matches the struct field:
+		// case-insensitively (EqualFold, which covers every fold Go's field
+		// matcher does for an ASCII name, verified in TestManifestEntryCount
+		// CaseInsensitive). Counting only the exact lowercase "entries" would
+		// let a hostile "Entries"/"ENTRIES" array route into the typed decode
+		// uncounted, defeating the cap.
+		if !strings.EqualFold(key, "entries") {
 			if err := skipJSONValue(dec); err != nil {
 				return false
 			}

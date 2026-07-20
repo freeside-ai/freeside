@@ -34,6 +34,11 @@ func manifestJSON(entries ...string) string {
 }
 
 func TestLoadManifestRejects(t *testing.T) {
+	// The #180 laundering regression: a raw invalid byte inside a path.
+	// encoding/json would replace it with U+FFFD on decode, so without the
+	// raw-bytes pre-check it becomes a valid-looking canonical path; the
+	// pre-check rejects it before the decoder ever sees it.
+	invalidUTF8 := strings.Replace(manifestJSON(regularEntryJSON("a.txt")), "a.txt", "a\xfftxt", 1)
 	cases := []struct {
 		name     string
 		manifest string
@@ -122,6 +127,33 @@ func TestLoadManifestRejects(t *testing.T) {
 			policy:   Policy{MaxEntries: 1},
 			wantErr:  ErrManifestTooLarge,
 		},
+		{
+			name:     "invalid utf-8 in path",
+			manifest: invalidUTF8,
+			wantErr:  ErrManifestInvalid,
+			wantAlso: export.ErrInvalidUTF8,
+		},
+		{
+			// A second "entries" key hides an over-cap array that json's
+			// last-wins would discard as empty; the streaming count sums both
+			// arrays and rejects before the typed decode can allocate the
+			// discarded one.
+			name: "duplicate entries key hides over-cap array",
+			manifest: `{"version":"` + export.ManifestVersion + `","entries":[` +
+				regularEntryJSON("a.txt") + `,` + regularEntryJSON("b.txt") + `],"entries":[]}`,
+			policy:  Policy{MaxEntries: 1},
+			wantErr: ErrManifestTooLarge,
+		},
+		{
+			// json matches the struct field case-insensitively, so an over-cap
+			// array under "Entries" still decodes into m.Entries; the count
+			// must match the same way or the cap is bypassed.
+			name: "over-cap array under case-variant entries key",
+			manifest: `{"version":"` + export.ManifestVersion + `","Entries":[` +
+				regularEntryJSON("a.txt") + `,` + regularEntryJSON("b.txt") + `]}`,
+			policy:  Policy{MaxEntries: 1},
+			wantErr: ErrManifestTooLarge,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -182,5 +214,22 @@ func TestLoadManifestAccepts(t *testing.T) {
 	}
 	if len(m.Entries) != 3 {
 		t.Fatalf("got %d entries, want 3", len(m.Entries))
+	}
+}
+
+// TestManifestEntryCountCaseInsensitive pins that the shared pre-decode
+// counter matches the "entries" key the same way encoding/json matches the
+// struct field: case-insensitively. json routes "Entries"/"ENTRIES" into
+// m.Entries, so a case-sensitive count would let an over-cap array under an
+// alternate spelling reach the typed decode uncounted.
+func TestManifestEntryCountCaseInsensitive(t *testing.T) {
+	for _, key := range []string{"entries", "Entries", "ENTRIES", "eNtRiEs"} {
+		body := []byte(`{"version":"x","` + key + `":[{},{}]}`)
+		if !manifestEntryCountExceeds(body, 1) {
+			t.Errorf("key %q: 2 entries did not exceed cap 1", key)
+		}
+	}
+	if manifestEntryCountExceeds([]byte(`{"version":"x","entries":[{}]}`), 1) {
+		t.Error("1 entry must not exceed cap 1")
 	}
 }
