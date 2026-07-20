@@ -238,7 +238,7 @@ New in revision 11 (decider in parentheses):
 
 ---
 
-## Revision 12 (current)
+## Revision 12
 
 Revision 12 records the workspace-handoff outcomes: the declared strong class
 and the network-free exporter precondition for unattended mode.
@@ -262,3 +262,29 @@ New in revision 12 (decider in parentheses):
    the `unattended` mode row names the proven `supports_networkless_export`
    boundary, closing the spike's open exporter-network boundary at the policy
    level. (User; #78, #79.)
+
+---
+
+## Revision 13 (current)
+
+Revision 13 specifies comprehension: §9 grows from two lines into a normative
+presentation specification.
+
+Held from revision 12: every product decision, unchanged. §9's original
+"present evidence packets first" is reinterpreted rather than dropped: the
+short labeled summary now leads above the evidence packet, and evidence
+precedes long-form agent text.
+
+New in revision 13 (decider in parentheses):
+1. **Comprehension is specified as a first-class attention concern**: a
+   four-layer card ordering (ask and daemon facts, labeled summary, evidence
+   packet, drill-down), three required digests (change summaries, plan
+   altitude, digested review feedback), per-item-type leads for all ten
+   Phase 1 types, summary provenance (deterministic card facts from the
+   daemon under §12's mechanical false-ready; judgment summaries as labeled
+   claims from the stage agent, never in `evidence_snapshot`, with promotion
+   to an independent briefer on recurring audited summary-evidence
+   contradictions), and comprehension metrics paired against correctness.
+   Rejected alternatives (daemon-templated, verifier-produced, and
+   independent-summarizer-now provenance) live in the decision note. (User;
+   PR #192 review, devlog 2026-07-20-1137-comprehension-spec.md; #194.)
