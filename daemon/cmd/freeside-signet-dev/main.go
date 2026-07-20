@@ -106,20 +106,37 @@ type harness struct {
 // run opens the store, composes the two servers, and starts serving. It is
 // main's whole body behind a testable seam; Close releases everything run
 // acquired.
-func run(ctx context.Context, cfg config) (*harness, error) {
+func run(ctx context.Context, cfg config) (_ *harness, err error) {
 	if cfg.DBPath == "" {
 		return nil, errors.New("-db is required")
 	}
+
+	// One rollback for every partial-construction failure: each acquired
+	// resource registers its closer, and the deferred guard unwinds them in
+	// reverse order unless success flips true. On success the listeners and
+	// store pass to the harness (Close owns them), so the guard must not fire
+	// and double-close them.
+	var cleanup []func()
+	success := false
+	defer func() {
+		if !success {
+			for i := len(cleanup) - 1; i >= 0; i-- {
+				cleanup[i]()
+			}
+		}
+	}()
 
 	apiListener, err := listenLoopback(cfg.ListenAddr)
 	if err != nil {
 		return nil, fmt.Errorf("contract listener: %w", err)
 	}
+	cleanup = append(cleanup, func() { _ = apiListener.Close() })
+
 	controlListener, err := listenLoopback(cfg.ControlAddr)
 	if err != nil {
-		_ = apiListener.Close()
 		return nil, fmt.Errorf("control listener: %w", err)
 	}
+	cleanup = append(cleanup, func() { _ = controlListener.Close() })
 
 	// Checkpoints are standalone SQLite snapshot files beside the store; the
 	// control surface writes them here and restores from them through the real
@@ -132,13 +149,9 @@ func run(ctx context.Context, cfg config) (*harness, error) {
 	// just-created, never-paired store behind the issue #133 topic-key gate.
 	checkpointDir := cfg.DBPath + ".checkpoints"
 	if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
-		_ = apiListener.Close()
-		_ = controlListener.Close()
 		return nil, fmt.Errorf("create checkpoint dir: %w", err)
 	}
 	if err := assertPrivateDir(checkpointDir); err != nil {
-		_ = apiListener.Close()
-		_ = controlListener.Close()
 		return nil, err
 	}
 
@@ -150,8 +163,6 @@ func run(ctx context.Context, cfg config) (*harness, error) {
 	_, statErr := os.Stat(cfg.DBPath)
 	storePreexisting := statErr == nil
 	if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
-		_ = apiListener.Close()
-		_ = controlListener.Close()
 		return nil, fmt.Errorf("stat store path: %w", statErr)
 	}
 
@@ -165,27 +176,21 @@ func run(ctx context.Context, cfg config) (*harness, error) {
 	if cfg.NtfyURL != "" {
 		topicKey, err = resolveTopicKey(cfg.TopicKeyFile, cfg.DBPath, storePreexisting)
 		if err != nil {
-			_ = apiListener.Close()
-			_ = controlListener.Close()
 			return nil, err
 		}
 	}
 
 	st, err := store.Open(ctx, cfg.DBPath, store.Options{})
 	if err != nil {
-		_ = apiListener.Close()
-		_ = controlListener.Close()
 		return nil, err
 	}
+	cleanup = append(cleanup, func() { _ = st.Close() })
 
 	// A random per-process pairing key: codes minted through the control
 	// surface are redeemable only against this process, which is exactly the
 	// harness's lifetime.
 	pairingKey := make([]byte, 32)
 	if _, err := rand.Read(pairingKey); err != nil {
-		_ = apiListener.Close()
-		_ = controlListener.Close()
-		_ = st.Close()
 		return nil, fmt.Errorf("generate pairing key: %w", err)
 	}
 	// Attachments live in a digest-addressed directory beside the store
@@ -194,9 +199,6 @@ func run(ctx context.Context, cfg config) (*harness, error) {
 	// failing closed on a nil blob store.
 	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
 	if err != nil {
-		_ = apiListener.Close()
-		_ = controlListener.Close()
-		_ = st.Close()
 		return nil, fmt.Errorf("open blob store: %w", err)
 	}
 	options := []signet.Option{signet.WithPairingKey(pairingKey), signet.WithBlobStore(blobs)}
@@ -227,6 +229,7 @@ func run(ctx context.Context, cfg config) (*harness, error) {
 	}
 	go func() { h.serveErrs <- h.apiServer.Serve(apiListener) }()
 	go func() { h.serveErrs <- h.controlServer.Serve(controlListener) }()
+	success = true
 	return h, nil
 }
 

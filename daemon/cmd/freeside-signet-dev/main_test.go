@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -630,5 +631,42 @@ func TestReadinessAddressesServe(t *testing.T) {
 			_ = response.Body.Close()
 			t.Errorf("%s still serving after Close", url)
 		}
+	}
+}
+
+// TestRunReleasesListenersAfterStartupFailure proves the deferred rollback
+// closes resources acquired before an injected startup failure: a loose
+// checkpoint dir fails run() after both listeners bind, so the bound api
+// address must be immediately re-bindable. (TestRunRejectsLooseCheckpointDir
+// proves the complementary property that no store is created.)
+func TestRunReleasesListenersAfterStartupFailure(t *testing.T) {
+	// Learn a free loopback address, then hand it back to run() as a fixed
+	// bind so a successful re-bind after the failure proves the release.
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("probe listen: %v", err)
+	}
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatalf("probe close: %v", err)
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "signet.db")
+	if err := os.MkdirAll(dbPath+".checkpoints", 0o750); err != nil { // loose: rejected after listeners bind
+		t.Fatalf("pre-create loose checkpoint dir: %v", err)
+	}
+	h, err := run(context.Background(), config{DBPath: dbPath, ListenAddr: addr, ControlAddr: "127.0.0.1:0"})
+	if err == nil {
+		_ = h.Close()
+		t.Fatal("run accepted a loose checkpoint dir, want fail-closed")
+	}
+
+	// If the rollback left the api listener open, this re-bind fails.
+	rebound, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("api listener was not released after startup failure: %v", err)
+	}
+	if err := rebound.Close(); err != nil {
+		t.Errorf("close rebound listener: %v", err)
 	}
 }
