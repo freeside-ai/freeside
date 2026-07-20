@@ -1,9 +1,9 @@
 ---
 title: Freeside Project Plan
-revision: 12
+revision: 13
 status: active
 phase: 1A
-updated: 2026-07-18
+updated: 2026-07-20
 ---
 
 # Freeside
@@ -235,6 +235,9 @@ Approval is not a universal action.
 | `run_proposal` | Start, **start with changes**, decline, or snooze. “Start with changes” creates a revised proposal artifact, supersedes the original item, creates a new item version, and starts the run from the exact revised digest. It never uses unversioned ad hoc parameters. Proposals are grouped under `proposal_batch_id` with per-candidate decisions. |
 | `system_health` | Acknowledge, run doctor, or stop unattended operation. Acknowledge means seen, never resolved. The item remains blocking until the diagnostic clears, unattended operation is explicitly stopped, or a validated configuration supersedes it. |
 | `blocked` | Consolidates external waits that exceed Section 5.12 thresholds. It is read-only. |
+
+Section 9 governs each type's presentation: what its card leads with and what
+layers below.
 
 ### Lifecycle rules
 
@@ -862,13 +865,115 @@ classes, closing the attribution loop.
 
 Attention telemetry uses `AttentionDelivery` rows with honest status fields.
 Open-to-decision time is the product metric. Interruption-class rates are
-tracked. Passive baseline logging runs alongside Phase 1A. Usage is observed
+tracked. Card drill-down opens are recorded per item and device, and sampled
+decision audits record comprehension defects; both feed the Section 9
+measurements. Passive baseline logging runs alongside Phase 1A. Usage is observed
 telemetry, never asserted quota state.
 
 ## 9. Comprehension
 
-Present evidence packets first. Add altitude summaries once plans become
-structured artifacts.
+Comprehension is a first-class attention concern. Agents produce more text
+than anyone reads, and unread text pushes the human out of the loop, so a card
+is judged by whether it enables a fast, informed decision. The unit of
+presentation is the decision card; presentation order is normative, not a
+rendering preference.
+
+### Layering
+
+A card presents at most four layers, in this order; the per-item-type table
+below governs which layers each type carries:
+
+1. **The ask and the facts**: `requested_decision` plus deterministic card
+   facts (verdicts, diff stats, counts, digests, timing). Daemon-produced
+   only (Section 5.13).
+2. **The summary**: what happened, why, and what remains open, with
+   uncertainty preserved; absorbable in seconds. A labeled agent claim,
+   present only where the card concerns agent work: a purely mechanical card
+   (`system_health`, `blocked`) carries daemon facts alone.
+3. **Evidence**: the `evidence_snapshot` packet (Section 5.15). Evidence
+   precedes any long-form agent text.
+4. **Drill-down**: full artifacts, full specifications and diffs, and
+   transcript pointers (Section 8).
+
+Three digests are required wherever their content appears:
+
+- **Change summaries** for candidate diffs: what changed and why, rendered
+  before the diff itself.
+- **Plan altitude**: summaries and key questions high, detail lower. Altitude
+  becomes enforced structure once plans become structured artifacts; until
+  then it is prompt-level convention.
+- **Digested review feedback**: findings grouped by disposition, dissent
+  preserved. A digest never silently drops an unresolved or
+  low-confidence-classified finding (Section 7).
+
+### Presentation per Item Type
+
+Actions and lifecycle live in Section 4; presentation is specified here.
+
+| Item type | Leads with | Below |
+| --- | --- | --- |
+| `spec_approval` | The ask and a plan-altitude summary: intent, then key questions and decisions. A revision leads with the diff-from-last-reviewed summary and claimed addressals mapped to prior comments. | Full specification and full diff. |
+| `review_diminishing_returns` | Daemon facts: rounds, finding-rate trend, cost so far. Agent claim: what remains. | Per-finding list. |
+| `review_dispute` | The disputed finding with both positions side by side. Dissent is the content; it is never summarized away. | Code context and the full thread. |
+| `execution_failure` | Daemon facts: failure class and failing step. Labeled diagnostic claim: probable cause. | Log excerpt and transcript pointer. |
+| `agent_question` | The question as a labeled agent claim, self-contained: what is blocked and any enumerated options. Answering never requires the transcript. | The agent's supporting context. |
+| `publish_blocked` | The trust rule that failed (daemon fact) and the approved alternate profiles. | The failing artifact or scan detail. |
+| `ready_for_final_review` | The ask, a labeled change summary, and daemon verification verdicts with diff stats. | Digested review history, then the evidence packet, and the PR link last (navigation, not resolution). |
+| `run_proposal` | One line per candidate: intent plus expected cost and scope facts. | Full proposal artifact; “start with changes” shows the revised-digest diff. |
+| `system_health` | The diagnostic fact and the unattended capability it impairs. | Doctor output. |
+| `blocked` | What is waited on and since when. Daemon facts only; no agent prose. | The waiting run's context. |
+
+### Summary Provenance
+
+Two content classes, two producers:
+
+1. Every objective assertion in the ask-and-facts layer is a daemon-produced
+   card fact (Section 5.13). A false or stale card fact is a mechanical
+   false-ready (Section 12).
+2. Every judgment summary (the summary layer, change summaries, plan
+   altitude, digested feedback) is `producer_class: agent`, carried in
+   `agent_claims`, and rendered as a labeled claim. It never enters
+   `evidence_snapshot` (Section 5.15).
+
+The same labeling covers any agent prose a card leads with (an agent's
+question, a proposal's intent line): it renders as a labeled claim, never as
+unlabeled authoritative text.
+
+In Phase 1 the summarizer is the stage agent whose work the card concerns,
+labeled with its `producer_invocation_id`. An independent invocation would
+still be `producer_class: agent`, so independence buys no trust-class
+upgrade, only resistance to self-serving framing; that risk is bounded by
+composition instead: a summary may not assert a verifiable fact except by
+citing the daemon fact or linking the artifact digest it compresses. Every
+summary is itself a trust surface: producer identified, uncertainty and
+dissent preserved, evidence linked.
+
+A labeled summary contradicted by its cited evidence is a **comprehension
+defect**: found by sampled decision audits and recorded in Section 8
+telemetry. It is not a Section 12 false-ready (claims are claims), but
+recurring contradictions promote summarization to an independent briefer
+invocation (Section 5.13) blind to the implementer's rationale. The claim
+contract currently carries labeled artifact references, not inline prose, so
+the summary layer requires a renderable text carrier on the claim path; that
+carrier is an explicit contract change that precedes the implementing work,
+never an ad hoc rendering choice.
+
+### Measurement
+
+- Open-to-decision time per item type (median), against the passive Phase 1A
+  baseline. It must not degrade as evidence volume grows.
+- Reversal rate: decisions later reversed or work returned after approval.
+- Drill-down rate: the fraction of decisions made without opening the
+  drill-down layer. A health signal, never a target; it is trivially gamed by
+  hiding detail.
+- Comprehension-defect count from sampled audits: the target is zero;
+  occurrences are recorded; the tolerance is not zero.
+
+Speed counts only alongside correctness: an open-to-decision improvement is
+claimed only with the reversal rate, the comprehension-defect count, and
+Section 12 substantive false-ready held level or better.
+
+### Document Change Discipline
 
 Plan changes are gated by materiality:
 
@@ -1120,18 +1225,18 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 12:
+Revision 13:
 
-1. **Declare the strong handoff class.** §5.7 names
-   `fresh_vm_read_only_volume_handoff` as the declared class for Apple
-   container 1.1.0, conditional on the conformance checks, and records the
-   same-VM fallback as refuted by execution on this runtime: never implement
-   or declare it. (User; docs/spikes/workspace-handoff.md, devlog
-   2026-07-14-2113-wave1-planning.md; #79.)
-2. **Name the network-free exporter as an unattended precondition.** The
-   `unattended` mode row requires the proven `supports_networkless_export`
-   boundary explicitly, closing the spike's open exporter-network boundary at
-   the policy level. (User; #78, #79.)
+1. **Specify comprehension as a first-class attention concern.** §9 expands
+   from two lines into a normative presentation specification: a four-layer
+   card ordering, three required digests, per-item-type leads, summary
+   provenance (deterministic card facts from the daemon; judgment summaries
+   as labeled claims from the stage agent, with a briefer promotion
+   condition on recurring audited contradictions), and comprehension metrics
+   paired against correctness. "Present evidence packets first" is
+   reinterpreted: the short labeled summary now leads above the evidence
+   packet, and evidence precedes long-form agent text. (User; PR #192
+   review, devlog 2026-07-20-1137-comprehension-spec.md; #194.)
 
 ## 14. Risks
 
