@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 // ManifestVersion identifies the wire format this package emits. The
@@ -22,16 +24,7 @@ const ManifestVersion = "freeside.export.manifest/v1"
 type Digest string
 
 func (d Digest) valid() bool {
-	s, ok := strings.CutPrefix(string(d), "sha256:")
-	if !ok || len(s) != 64 {
-		return false
-	}
-	for _, c := range s {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
+	return contentaddr.Valid(string(d))
 }
 
 // EntryKind classifies one workspace entry. Only regular entries carry

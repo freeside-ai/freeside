@@ -3,6 +3,8 @@ package domain
 import (
 	"fmt"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 // Device is the daemon-side record of a paired client device (plan §5.14). It
@@ -105,14 +107,5 @@ func (c DeviceCredential) Validate() error {
 // Validate wearing a digest's field. Deliberately local to the credential
 // surface: Digest at large stays an opaque content address.
 func isSHA256Digest(s string) bool {
-	const prefix = "sha256:"
-	if len(s) != len(prefix)+64 || s[:len(prefix)] != prefix {
-		return false
-	}
-	for _, r := range s[len(prefix):] {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
-			return false
-		}
-	}
-	return true
+	return contentaddr.Valid(s)
 }

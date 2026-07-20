@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
@@ -181,14 +182,5 @@ func ParseMarker(body string) (domain.Digest, bool) {
 // validIdentityDigest reports whether raw is exactly "sha256:" plus 64
 // lowercase hex digits — the only form DeriveIdentity produces.
 func validIdentityDigest(raw string) bool {
-	hexPart, ok := strings.CutPrefix(raw, "sha256:")
-	if !ok || len(hexPart) != sha256.Size*2 {
-		return false
-	}
-	for _, c := range hexPart {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
+	return contentaddr.Valid(raw)
 }
