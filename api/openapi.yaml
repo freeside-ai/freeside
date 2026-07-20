@@ -1196,6 +1196,7 @@ components:
           - label: "screenshot"
             artifact_id: "art-2"
             digest: "sha256:img"
+            text: null
             provenance:
               producer_class: "agent"
               producer_invocation_id: "inv-2"
@@ -1280,9 +1281,13 @@ components:
         (#173), and extra properties are forbidden here and on both
         provenance branches: a claim asserting a verifier or daemon
         producer, or carrying an undeclared trust bit such as
-        publish_eligible, is non-conformant.
+        publish_eligible, is non-conformant. A text claim (plan §9's
+        renderable summary carrier) additionally inlines its content in
+        text; its digest then binds that content (see ClaimText), so the
+        claim path carries prose under the same digest discipline as
+        every other artifact.
       additionalProperties: false
-      required: [label, artifact_id, digest, provenance]
+      required: [label, artifact_id, digest, provenance, text]
       properties:
         label:
           type: string
@@ -1294,6 +1299,43 @@ components:
           $ref: "#/components/schemas/Digest"
         provenance:
           $ref: "#/components/schemas/ClaimProvenance"
+        text:
+          $ref: "#/components/schemas/ClaimText"
+
+    ClaimText:
+      type: object
+      nullable: true
+      description: >
+        The inline renderable body of a text claim; null for every other
+        claim (the daemon always emits the member, null when absent).
+        When present, the enclosing claim's digest MUST equal
+        "sha256:<hex>" over the content's UTF-8 bytes;
+        domain.AgentClaim.Validate recomputes it and rejects a mismatch
+        fail-closed, so a claim cannot display one text while binding
+        another digest, and the digest remains a valid content address
+        for the same bytes. Content must be non-empty valid UTF-8 of at
+        most 65536 bytes (domain.MaxClaimTextBytes; maxLength below
+        counts code points, the daemon's byte cap is authoritative). A
+        claim whose provenance carries sensitivity_class
+        high_sensitivity never carries inline text (the daemon rejects
+        the combination): clients persist item metadata in disk caches
+        under §5.14's no-high-sensitivity-at-rest default, so
+        memory-only prose travels the referenced attachment path.
+        Summaries stay agent-asserted context: they render as labeled
+        claims, never in evidence_snapshot (plan §5.15 unchanged).
+      additionalProperties: false
+      required: [media_type, content]
+      properties:
+        media_type:
+          type: string
+          enum: [text/plain, text/markdown]
+        content:
+          type: string
+          minLength: 1
+          maxLength: 65536
+      example:
+        media_type: "text/markdown"
+        content: "All checks green; the diff touches only docs."
 
     EvidenceArtifact:
       type: object
