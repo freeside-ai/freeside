@@ -675,6 +675,7 @@ public actor MockServer {
     /// Go's `time.Time{}` zero instant (serialized "0001-01-01T00:00:00Z"),
     /// the exact value `AttentionDelivery.Validate` rejects as an unset
     /// submitted_at.
+    // swift-format-ignore: NeverForceUnwrap
     private static let daemonZeroInstant: Date = {
         var components = DateComponents()
         components.year = 1

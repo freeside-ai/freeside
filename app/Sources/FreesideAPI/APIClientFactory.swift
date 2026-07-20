@@ -58,6 +58,7 @@ public enum APIClientFactory {
         server: MockServer,
         token: @escaping BearerAuthMiddleware.TokenProvider = { nil }
     ) -> Client {
+        // swift-format-ignore: NeverForceUnwrap
         Client(
             serverURL: URL(string: "https://freeside.invalid")!,
             configuration: configuration,

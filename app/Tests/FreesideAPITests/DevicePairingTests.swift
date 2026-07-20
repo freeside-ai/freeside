@@ -26,6 +26,7 @@ private struct AuthorizedTransport: ClientTransport {
 }
 
 private func client(server: MockServer, token: String? = nil) -> Client {
+    // swift-format-ignore: NeverForceUnwrap
     Client(
         serverURL: URL(string: "https://freeside.invalid")!,
         transport: AuthorizedTransport(server: server, token: token)

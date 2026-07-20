@@ -27,6 +27,7 @@ public struct DeviceNtfySubscription: Equatable, Sendable {
     }
 
     /// Valid non-secret fixture material for previews and tests.
+    // swift-format-ignore: NeverForceUnwrap
     public static let mock = DeviceNtfySubscription(
         serverURL: "https://ntfy.example",
         topic: "fs-00000000000000000000000000000000"
