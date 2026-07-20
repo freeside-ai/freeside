@@ -315,7 +315,7 @@ func TestVerifyBlobsRejectsOmittedBlobPresent(t *testing.T) {
 	}
 }
 
-func TestScanDirBatchedRejectsSpecialDirectory(t *testing.T) {
+func TestOpenDirectoryRejectsSpecialDirectory(t *testing.T) {
 	cases := []struct {
 		name  string
 		plant func(t *testing.T, path string)
@@ -343,17 +343,28 @@ func TestScanDirBatchedRejectsSpecialDirectory(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "replaced")
 			tc.plant(t, path)
+			// openDirectory is the pathname boundary the importer opens the
+			// handoff root through; O_NONBLOCK must make even a FIFO open
+			// return at once instead of blocking for a writer, so the
+			// goroutine + timeout proves it never hangs.
 			done := make(chan error, 1)
 			go func() {
-				done <- scanDirBatched(path, ErrHandoffUnreadable, func(os.DirEntry) error { return nil })
+				d, err := openDirectory(path, ErrHandoffUnreadable)
+				if d != nil {
+					_ = d.Close()
+				}
+				done <- err
 			}()
 			select {
 			case err := <-done:
-				if !errors.Is(err, ErrHandoffUnreadable) {
-					t.Fatalf("scanDirBatched = %v, want %v", err, ErrHandoffUnreadable)
+				// A symlink is refused by O_NOFOLLOW (ELOOP); a FIFO fails
+				// O_DIRECTORY (ENOTDIR). Either way the special inode never
+				// becomes a scannable handoff directory.
+				if !errors.Is(err, syscall.ELOOP) && !errors.Is(err, syscall.ENOTDIR) {
+					t.Fatalf("openDirectory = %v, want ELOOP or ENOTDIR", err)
 				}
 			case <-time.After(10 * time.Second):
-				t.Fatal("scanDirBatched blocked on a replaced handoff directory")
+				t.Fatal("openDirectory blocked on a replaced handoff directory")
 			}
 		})
 	}
