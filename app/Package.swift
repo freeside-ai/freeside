@@ -10,6 +10,9 @@ var targets: [Target] = [
     .target(
         name: "FreesideAPI",
         dependencies: [
+            // swift-crypto (CryptoKit's portable twin) backs the text-claim
+            // digest check on Linux, where FreesideAPI's tests run in CI.
+            .product(name: "Crypto", package: "swift-crypto"),
             .product(name: "HTTPTypes", package: "swift-http-types"),
             .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
             .product(name: "OpenAPIURLSession", package: "swift-openapi-urlsession"),
@@ -73,6 +76,10 @@ let package = Package(
         .package(
             url: "https://github.com/apple/swift-http-types",
             exact: "1.6.0"
+        ),
+        .package(
+            url: "https://github.com/apple/swift-crypto",
+            exact: "4.5.1"
         ),
     ],
     targets: targets

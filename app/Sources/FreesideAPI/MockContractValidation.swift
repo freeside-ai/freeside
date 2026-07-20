@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 
 /// Pure, state-free mirror of the daemon's contract validation over the
@@ -99,6 +100,33 @@ enum MockContractValidation {
                 }
                 if free.verification_recipe_digest?.value != nil {
                     return "claim recipe digest must be null"
+                }
+            }
+            // Mirrors the daemon's text-carrier checks (#217). The generated
+            // media_type enum and Swift's always-valid-UTF-8 String make the
+            // daemon's ErrInvalidClaimMediaType and ErrClaimTextNotUTF8 arms
+            // unrepresentable here; what stays checkable is the sensitivity
+            // bar, the non-empty content, the inline size cap, and the
+            // binding rule that the claim's digest is the content's address.
+            if let text = claim.text {
+                // Inline content is barred from the high-sensitivity tier:
+                // CachedState persists item metadata to disk, so memory-only
+                // prose travels the referenced attachment path (§5.14).
+                let sensitivity: Components.Schemas.SensitivityClass
+                switch claim.provenance {
+                case .head_bound(let bound): sensitivity = bound.sensitivity_class
+                case .head_independent(let free): sensitivity = free.sensitivity_class
+                }
+                if sensitivity == .high_sensitivity {
+                    return "high-sensitivity claim carries inline text"
+                }
+                if text.content.isEmpty { return "empty claim text content" }
+                // Mirrors domain.MaxClaimTextBytes (64 KiB over UTF-8 bytes).
+                if text.content.utf8.count > 65536 {
+                    return "claim text exceeds the inline size cap"
+                }
+                if sha256Digest(of: text.content) != claim.digest {
+                    return "claim digest does not match its text content"
                 }
             }
             if evidenceIDs.contains(claim.artifact_id) {
@@ -325,6 +353,14 @@ enum MockContractValidation {
         calendar.timeZone = TimeZone(identifier: "UTC")!
         return calendar.date(from: components)!
     }()
+
+    /// The content address of a text claim's UTF-8 bytes, in the
+    /// repository-wide "sha256:<hex>" form; the Swift twin of
+    /// domain.ClaimText.ComputeDigest, and the single derivation path the
+    /// fixtures and the validation mirror share.
+    static func sha256Digest(of content: String) -> String {
+        "sha256:" + SHA256.hash(data: Data(content.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
 
     /// The generated runtime's RFC 3339 decoder accepts whole seconds, which
     /// is also what the mock's `.iso8601` encoder emits. Derive
