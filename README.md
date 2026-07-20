@@ -6,6 +6,7 @@ Category: an agent control plane. Harnesses (Claude Code, Codex) run the agent's
 
 **Status:** Phase 1A (the secure publish path) underway. The daemon is initialized (Wave 0 unit 1: module, dual-platform CI, test conventions); this monorepo's other component directories stay intentionally empty until their phase begins.
 
+- **Start here** — the goals and core ideas in plain language: [`docs/intro.md`](docs/intro.md).
 - **Everything** — charter, architecture, roadmap, decisions: [`docs/plan.md`](docs/plan.md).
 - **Conventions** — how to work in this repo: [`AGENTS.md`](AGENTS.md).
 
