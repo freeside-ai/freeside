@@ -80,7 +80,7 @@ latency, usage, and cost.
 
 ## The Core Ideas
 
-### Interruptions are a product, not a side effect
+### Interruptions Are a Product, Not a Side Effect
 
 Most automation treats interrupting you as an afterthought. Freeside treats
 interruptions as a first-class product. An interruption is a durable record with
@@ -103,7 +103,7 @@ and make an informed decision quickly.
 
 Freeside calls the interruption service the **signet**.
 
-### Autonomy is bounded, and the boundary does the watching
+### Autonomy Is Bounded, and the Boundary Does the Watching
 
 An agent that must ask before every consequential step is providing barely
 more leverage than doing the work yourself. Freeside constrains the boundary
@@ -132,7 +132,7 @@ by nature: a scan reduces risk; it cannot prove absence.
 
 The environment that enforces this is the **ward**.
 
-### Agent output is untrusted; verification is independent
+### Agent Output Is Untrusted; Verification Is Independent
 
 An agent's workspace is a working copy, but an untrusted one. Exactly two
 things leave it: the changed file contents with a normalized manifest, and
@@ -172,7 +172,7 @@ its reviewer's instructions. Guarded is not frozen: what agents learn flows back
 into prompts and policy through the same reviewed, gated path as any other
 change.
 
-### Decisions are durable
+### Decisions Are Durable
 
 Unattended operation is only safe if a crash cannot lose a decision or double an
 action. A decision, once committed, survives restart, no matter when the process
