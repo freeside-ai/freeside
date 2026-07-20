@@ -88,6 +88,48 @@ struct ControlClient {
     func seedItem(id: String, version: Int) async throws {
         _ = try await post("control/items", body: ["id": id, "item_version": version])
     }
+
+    /// Seeds one item at an explicit type and offered action set and returns the
+    /// daemon's verdict (status + `message`) instead of throwing on a 4xx, so a
+    /// policy test can assert the accept/reject outcome. `type` / `actions` are
+    /// raw wire strings sent only when non-nil: raw strings reach the real
+    /// per-type policy for the invalid/unknown cases the typed enums cannot
+    /// represent, and a nil field lets the daemon apply its default. An explicit
+    /// empty `actions` (`[]`) is distinct from nil — it drives the blocked accept
+    /// and the non-blocked no-actions rejection.
+    func seedItemOutcome(
+        id: String, version: Int = 1, type: String?, actions: [String]?
+    ) async throws -> SeedOutcome {
+        var body: [String: Any] = ["id": id, "item_version": version]
+        if let type { body["type"] = type }
+        if let actions { body["requested_decision"] = actions }
+        var request = URLRequest(url: baseURL.appendingPathComponent("control/items"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw ConvergenceOutage() }
+        let message =
+            (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["message"] as? String
+        return SeedOutcome(statusCode: http.statusCode, message: message)
+    }
+
+    /// Typed convenience for the valid enumeration: maps the generated enums to
+    /// their wire strings so a caller can drive `phase1Types` / `phase1Actions`
+    /// directly.
+    func seedItemOutcome(
+        id: String, type: Components.Schemas.AttentionType, actions: [Components.Schemas.Action]
+    ) async throws -> SeedOutcome {
+        try await seedItemOutcome(id: id, type: type.rawValue, actions: actions.map(\.rawValue))
+    }
+}
+
+/// The daemon's verdict on a `control/items` seed: the HTTP status and the JSON
+/// `message` body (nil when absent). A 4xx is a value here, not a thrown error,
+/// so the policy-parity suite can assert the daemon's accept/reject decision.
+struct SeedOutcome {
+    let statusCode: Int
+    let message: String?
 }
 
 /// A client transport that fails matching operations before any bytes

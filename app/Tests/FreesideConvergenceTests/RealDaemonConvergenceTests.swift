@@ -367,6 +367,94 @@ struct RealDaemonConvergenceTests {
         #expect(loader.phase(for: unstored) == .unavailable)
     }
 
+    // MARK: - Policy matrix parity (issue #204)
+
+    /// Cross-language proof that the Swift fixture matrix
+    /// (`AttentionFixtures.phase1ActionSets`) and the daemon's authoritative
+    /// per-type action policy agree, for every (type, action) cell. It drives
+    /// the real policy over the control seed boundary — the wire-level port of
+    /// signet's `policy_test.go` — so it fails when *either* side's matrix
+    /// changes alone: the daemon's accept/reject verdict must equal the
+    /// fixture's classification for every action.
+    @Test(arguments: AttentionFixtures.phase1Types)
+    func daemonPolicyMatchesTheFixtureMatrix(
+        _ type: Components.Schemas.AttentionType
+    ) async throws {
+        let control = try ConvergenceHarness.control()
+        let allowed = try #require(AttentionFixtures.phase1ActionSets[type])
+        let allowedSet = Set(allowed)
+
+        // The whole allowed set is accepted at the policy boundary (blocked: the
+        // empty set). A fixture that offered an action the daemon disallows would
+        // 400 here — one drift signal.
+        let whole = try await control.seedItemOutcome(
+            id: ConvergenceHarness.uniqueItemID("pol-\(type.rawValue)-all"),
+            type: type, actions: allowed)
+        #expect(
+            whole.statusCode == 200,
+            "allowed set for \(type.rawValue) rejected: \(whole.message ?? "")")
+
+        // Each action's individual verdict must equal the fixture's
+        // classification: allowed → accepted; otherwise → the typed
+        // ErrActionNotAllowedForType 400. Removing an action from either side
+        // alone flips exactly these cells.
+        for action in AttentionFixtures.phase1Actions {
+            let outcome = try await control.seedItemOutcome(
+                id: ConvergenceHarness.uniqueItemID("pol-\(type.rawValue)-\(action.rawValue)"),
+                type: type, actions: [action])
+            if allowedSet.contains(action) {
+                #expect(
+                    outcome.statusCode == 200,
+                    "\(action.rawValue) should be allowed for \(type.rawValue): \(outcome.message ?? "")")
+            } else {
+                #expect(
+                    outcome.statusCode == 400,
+                    "\(action.rawValue) should be rejected for \(type.rawValue)")
+                #expect(
+                    outcome.message?.contains("is not allowed for") == true,
+                    "want not-allowed 400 for \(action.rawValue): \(outcome.message ?? "")")
+            }
+        }
+
+        // Every actionable type must offer at least one decision; the empty set
+        // is the client-visible ErrNoActions 400. blocked is the read-only
+        // exception, proven accepted by the whole-set seed above.
+        if type != .blocked {
+            let empty = try await control.seedItemOutcome(
+                id: ConvergenceHarness.uniqueItemID("pol-\(type.rawValue)-empty"),
+                type: type, actions: [])
+            #expect(empty.statusCode == 400)
+            #expect(
+                empty.message?.contains("offers no requested decision") == true,
+                "expected ErrNoActions for \(type.rawValue), got: \(empty.message ?? "")")
+        }
+    }
+
+    /// The invalid/unknown arm: an unrecognized attention type or action string
+    /// is rejected with a client-visible 400 without either enum's validation
+    /// being weakened — the values are sent as raw strings the typed Swift enums
+    /// cannot hold, and the daemon's domain gate rejects them.
+    @Test func daemonRejectsUnknownTypeAndAction() async throws {
+        let control = try ConvergenceHarness.control()
+
+        let unknownType = try await control.seedItemOutcome(
+            id: ConvergenceHarness.uniqueItemID("pol-unknown-type"),
+            type: "not_a_real_type", actions: ["stop"])
+        #expect(unknownType.statusCode == 400)
+        #expect(
+            unknownType.message?.contains("unknown attention type") == true,
+            "got: \(unknownType.message ?? "")")
+
+        let unknownAction = try await control.seedItemOutcome(
+            id: ConvergenceHarness.uniqueItemID("pol-unknown-action"),
+            type: Components.Schemas.AttentionType.spec_approval.rawValue,
+            actions: ["not_a_real_action"])
+        #expect(unknownAction.statusCode == 400)
+        #expect(
+            unknownAction.message?.contains("invalid action") == true,
+            "got: \(unknownAction.message ?? "")")
+    }
+
     private func snapshot(
         of itemID: String, via device: LiveDevice
     ) async throws -> Components.Schemas.AttentionItemSnapshot {

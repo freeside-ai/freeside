@@ -32,6 +32,17 @@ import Testing
         #expect(AttentionFixtures.phase1ActionSets.count == 10)
     }
 
+    /// phase1Actions is the enumeration universe the cross-language policy
+    /// parity suite walks; if it dropped an action, that action's cells would
+    /// go unchecked. Pin it to exactly the union of the per-type sets (every
+    /// action is offered by at least one type) and to a duplicate-free 27.
+    @Test func phase1ActionsCoverEveryOfferedActionWithoutDuplicates() {
+        let offered = Set(AttentionFixtures.phase1ActionSets.values.flatMap { $0 })
+        #expect(Set(AttentionFixtures.phase1Actions) == offered)
+        #expect(AttentionFixtures.phase1Actions.count == 27)
+        #expect(Set(AttentionFixtures.phase1Actions).count == AttentionFixtures.phase1Actions.count)
+    }
+
     @Test func defaultInboxCoversEveryPhase1TypeOnce() {
         let inbox = AttentionFixtures.defaultInbox()
         #expect(inbox.map(\.item._type) == AttentionFixtures.phase1Types)
