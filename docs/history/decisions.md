@@ -291,7 +291,7 @@ New in revision 13 (decider in parentheses):
 
 ---
 
-## Revision 14 (current)
+## Revision 14
 
 Revision 14 adopts the agent-proposed commit plan through the gauntlet:
 commit structure crosses as grouping, ordering, and messages over the final
@@ -339,3 +339,64 @@ New in revision 14 (decider in parentheses):
    Rejected alternatives and the full design live in the decision note.
    (User; PR #192 review, devlog
    2026-07-20-1145-gauntlet-commit-structure.md; #193.)
+
+---
+
+## Revision 15 (current)
+
+Revision 15 harvests the intro review (PR #192, issue #208) into the
+charter: the thesis grants agents autonomy, the objective is a positive
+return, the success claims become necessary gates with an explicit
+numerator, the auto-merge door stays deliberately open, oversight and
+standing-grant promotion become stated principles, durability names its
+cannot-safely-retry fallback, and routing inputs and manual-balancing
+accounting are stated.
+
+Held from revision 14: every decision not named below, unchanged. The §1
+identity (local, durable workflow controller; agent control plane; one
+owner) is unchanged; the thesis rewording changes emphasis, not scope or
+authority. Non-goal 1's IDE/review-surface exclusion is narrowed in wording,
+not substance: Freeside still never rebuilds review, and merging stays on
+GitHub; what changes below is that the auto-merge absolute becomes an
+explicitly open question.
+
+New in revision 15 (decider in parentheses):
+
+1. **The canonical thesis grants autonomy.** §1, README, and AGENTS.md now
+   read "grants agents the autonomy to turn work items into evidence-backed
+   pull requests", superseding "turns a software work item into an
+   evidence-backed pull request". (User; devlog
+   2026-07-20-2331-plan-alignment-harvest.md; #192, #208.)
+2. **The objective is a positive return, and the success claims are
+   necessary gates.** §1's measure is restated as useful, correct work worth
+   more than the attention, maintenance, money, and risk it costs; claim 1
+   gains its numerator (work per unit of attention rising against a
+   passively logged, normalized baseline); claim 3 is verified by
+   conformance and adversarial tests, never read off telemetry; passing all
+   four is named necessary, not sufficient. §9 Measurement adds
+   normalization by volume and risk and maintenance accounting; the §11
+   exit criterion and §12 kill criterion align to the same per-unit
+   measure, and §4/§8 subordinate open-to-decision time to it as the
+   headline attention-latency metric. (User; devlog
+   2026-07-20-2331-plan-alignment-harvest.md; #208.)
+3. **The auto-merge door stays deliberately open.** §2 non-goal 1 drops
+   "never auto-merges": code review and merging stay on GitHub, human merge
+   is the current accountability checkpoint, and whether narrow,
+   risk-bounded classes of change ever earn automatic merge remains an open
+   question, adopting the owner decision recorded on PR #192. (User; devlog
+   2026-07-20-2331-plan-alignment-harvest.md; #192, #208.)
+4. **Oversight and standing-grant promotion become stated principles.** New
+   §3.5 states oversight as non-optional and deliberately frictionless;
+   §3.1 gains the promotion criteria: low risk, stable preconditions, and
+   bounded downside, never repetition alone. (User; devlog
+   2026-07-20-2331-plan-alignment-harvest.md; #208.)
+5. **Durability names its fallback.** §5.9: anything that cannot be safely
+   retried waits for me. (User; devlog
+   2026-07-20-2331-plan-alignment-harvest.md; #208.)
+6. **Routing inputs are named and manual balancing is accounted.** §8
+   states routing policy is informed by task class, quality, latency,
+   usage, and cost, and counts today's manual provider balancing in the
+   attention accounting; §2 non-goal 5's deferrals open on recorded
+   outcomes. The intro's "stops opening pull requests" drift claim was
+   verified against §5.5 and needed no edit. (User; devlog
+   2026-07-20-2331-plan-alignment-harvest.md; #208.)
