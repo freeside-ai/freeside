@@ -188,7 +188,8 @@ type AttentionItem struct {
 	Timing            TimingSummary     `json:"timing"`
 	ExpiresWhen       *time.Time        `json:"expires_when"`
 	// DecidedAt is the daemon-stamped instant the item's first concluding
-	// decision was accepted (plan §4: open-to-decision is the product metric;
+	// decision was accepted (plan §4: open-to-decision time is the headline
+	// attention-latency metric, with the §1 per-unit measure governing;
 	// issue #171). It is set only by WithDecidedAt in the transaction that
 	// records the concluding command, never caller-supplied, and nil for items
 	// that were not concluded by a decision (open, expired, superseded). Once

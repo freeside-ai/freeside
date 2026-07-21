@@ -413,9 +413,10 @@ func TestTimingReputSkippedWhenUnchanged(t *testing.T) {
 }
 
 // TestOpenToDecisionDerivableFromDeliveries is issue #69's acceptance 3: the
-// §8 product metric, open-to-decision time, is computable from the delivery
-// rows' opened_at and the decision that concluded the item — no dashboard,
-// just the honest endpoints. Both endpoints are read back from persisted state
+// §8 headline attention-latency metric, open-to-decision time (the §1
+// per-unit measure governs), is computable from the delivery rows'
+// opened_at and the decision that concluded the item — no dashboard, just
+// the honest endpoints. Both endpoints are read back from persisted state
 // (the delivery row's opened_at and the item's stamped decided_at), never the
 // test clock: #164 replaces the earlier arithmetic that subtracted the local
 // decidedAt, which proved computation rather than derivability from durable
