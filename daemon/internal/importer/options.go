@@ -3,6 +3,9 @@ package importer
 import (
 	"fmt"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
 // Default caps. The blob caps mirror the export helper's defaults so an
@@ -30,7 +33,9 @@ const (
 	// per-path ancestor work directly (a narrow-and-deep path a/a/.../a
 	// evades a byte cap's intent otherwise). Far deeper than any real
 	// repository tree.
-	DefaultMaxPathDepth = 256
+	DefaultMaxPathDepth          = 256
+	DefaultMaxCommitPlanGroups   = 100
+	DefaultMaxCommitMessageBytes = 8 << 10
 )
 
 // Default daemon authorship for the clean commit. §5.6: the daemon
@@ -68,12 +73,24 @@ type Options struct {
 	GitPath string
 	// Policy is the import's policy surface.
 	Policy Policy
+	// Test-only fault hooks exercise the construct-all/swap-once boundary.
+	// They are deliberately unexported so production callers cannot alter the
+	// pipeline; a non-nil hook returning an error is an operational failure.
+	constructionHook   func(group int) error
+	beforeRefUpdate    func() error
+	planValidationHook func() error
 }
 
 // Policy is the import's policy surface: the path-class patterns, the
 // declared-scope allowlist, and the caps enforced at intake and over
 // the change set.
 type Policy struct {
+	// CommitPlan and MessageRuleset come from the reviewed, digest-bound trust
+	// profile. Their zero values select the conservative V1 defaults for direct
+	// importer callers; WithProtectedPaths replaces them with the validated
+	// profile values.
+	CommitPlan     domain.CommitPlanMode
+	MessageRuleset domain.MessageRuleset
 	// Allowlist, when non-nil, is the work unit's declared path scope as
 	// glob patterns ("**" spans path segments): every derived change,
 	// deletions included, must match one, and a change outside it is an
@@ -126,8 +143,11 @@ type Policy struct {
 	SecretMaxScanBytes int64
 	// MaxPathBytes caps one entry's path length and MaxPathDepth its
 	// component count, bounding work superlinear in a single path.
-	MaxPathBytes int64
-	MaxPathDepth int
+	MaxPathBytes          int64
+	MaxPathDepth          int
+	MaxCommitPlanBytes    int64
+	MaxCommitPlanGroups   int
+	MaxCommitMessageBytes int
 }
 
 // withDefaults returns a copy with every zero field set to its default.
@@ -149,6 +169,12 @@ func (o Options) withDefaults() Options {
 }
 
 func (p Policy) withDefaults() Policy {
+	if p.CommitPlan == "" {
+		p.CommitPlan = domain.CommitPlanSingleCommit
+	}
+	if p.MessageRuleset == "" {
+		p.MessageRuleset = domain.MessageRulesetGitHub1
+	}
 	if p.MaxManifestBytes == 0 {
 		p.MaxManifestBytes = DefaultMaxManifestBytes
 	}
@@ -176,6 +202,15 @@ func (p Policy) withDefaults() Policy {
 	if p.MaxPathDepth == 0 {
 		p.MaxPathDepth = DefaultMaxPathDepth
 	}
+	if p.MaxCommitPlanBytes == 0 {
+		p.MaxCommitPlanBytes = export.DefaultMaxCommitPlanBytes
+	}
+	if p.MaxCommitPlanGroups == 0 {
+		p.MaxCommitPlanGroups = DefaultMaxCommitPlanGroups
+	}
+	if p.MaxCommitMessageBytes == 0 {
+		p.MaxCommitMessageBytes = DefaultMaxCommitMessageBytes
+	}
 	return p
 }
 
@@ -193,8 +228,21 @@ func (o Options) validate() error {
 		o.Policy.MaxBlobBytes < 0 || o.Policy.MaxTotalBytes < 0 ||
 		o.Policy.MaxEvidenceBlobBytes < 0 || o.Policy.MaxEvidenceTotalBytes < 0 ||
 		o.Policy.SecretMaxScanBytes < 0 || o.Policy.MaxPathBytes < 0 ||
-		o.Policy.MaxPathDepth < 0 {
+		o.Policy.MaxPathDepth < 0 || o.Policy.MaxCommitPlanBytes < 0 ||
+		o.Policy.MaxCommitPlanGroups < 0 || o.Policy.MaxCommitMessageBytes < 0 {
 		return fmt.Errorf("negative policy cap: %w", ErrInvalidOptions)
+	}
+	switch o.Policy.CommitPlan {
+	case "":
+	case domain.CommitPlanSingleCommit, domain.CommitPlanPlanPreferred:
+	default:
+		return fmt.Errorf("commit plan mode %q: %w", o.Policy.CommitPlan, ErrInvalidOptions)
+	}
+	switch o.Policy.MessageRuleset {
+	case "":
+	case domain.MessageRulesetGitHub1:
+	default:
+		return fmt.Errorf("message ruleset %q: %w", o.Policy.MessageRuleset, ErrInvalidOptions)
 	}
 	// A caller-supplied glob that does not compile would otherwise
 	// silently match nothing (fail open), so a safety-gate widening

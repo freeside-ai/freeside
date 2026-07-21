@@ -58,7 +58,7 @@ type blobInfo struct {
 // construction rely on later. The same stream writes a daemon-private snapshot
 // into a per-channel scratch subdir, so no later stage re-resolves a handoff
 // pathname and a shared digest cannot collide across channels.
-func verifyBlobs(handoffDir, scratch string, m export.Manifest, em export.EvidenceManifest, emPresent bool, pol Policy) (repo, evidence map[export.Digest]blobInfo, err error) {
+func verifyBlobs(handoffDir, scratch string, m export.Manifest, em export.EvidenceManifest, emPresent, planPresent bool, pol Policy) (repo, evidence map[export.Digest]blobInfo, err error) {
 	repoNeeded := make(map[export.Digest]int64, len(m.Entries))
 	var repoTotal int64
 	for _, e := range m.Entries {
@@ -79,7 +79,7 @@ func verifyBlobs(handoffDir, scratch string, m export.Manifest, em export.Eviden
 			return nil, nil, err
 		}
 	}
-	repoSha256, evidenceSha256, err := auditHandoffLayout(handoffDir, repoNeeded, evidenceNeeded, emPresent)
+	repoSha256, evidenceSha256, err := auditHandoffLayout(handoffDir, repoNeeded, evidenceNeeded, emPresent, planPresent)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -162,8 +162,9 @@ func snapshotChannel(scratch, name string, sha256Dir *os.File, needed map[export
 
 // auditHandoffLayout enforces the exact handoff shape in a single root scan and
 // returns each channel's pinned sha256 directory for content verification. The
-// root holds manifest.json and at most blobs/, evidence.json, and evidence/;
-// every other entry is an orphan. The root is scanned once (a second pass per
+// root holds manifest.json and at most blobs/, evidence.json, evidence/, and
+// the declared commit-plan member when present; every other entry is an orphan.
+// The root is scanned once (a second pass per
 // channel would reject the other channel's files as orphans), then each blob
 // store (blobs/, evidence/) is audited by the shared auditBlobStore: it holds at
 // most a sha256/ directory holding exactly that channel's needed digests as
@@ -176,7 +177,7 @@ func snapshotChannel(scratch, name string, sha256Dir *os.File, needed map[export
 // evidence/ are NOT permitted at the root: a stale or planted second-channel
 // entry is an orphan, so an absent evidence channel is exactly the pre-evidence
 // layout.
-func auditHandoffLayout(dir string, repoNeeded, evidenceNeeded map[export.Digest]int64, evidencePresent bool) (repoSha256, evidenceSha256 *os.File, err error) {
+func auditHandoffLayout(dir string, repoNeeded, evidenceNeeded map[export.Digest]int64, evidencePresent, planPresent bool) (repoSha256, evidenceSha256 *os.File, err error) {
 	root, err := openDirectory(dir, ErrHandoffUnreadable)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open %q: %w: %w", dir, ErrHandoffUnreadable, err)
@@ -194,6 +195,8 @@ func auditHandoffLayout(dir string, repoNeeded, evidenceNeeded map[export.Digest
 			return nil
 		case evidencePresent && de.Name() == export.EvidenceBlobsDirname && de.IsDir():
 			evidenceDir = true
+			return nil
+		case planPresent && de.Name() == export.CommitPlanFilename && de.Type().IsRegular():
 			return nil
 		default:
 			return fmt.Errorf("unexpected handoff entry %q: %w", de.Name(), ErrOrphanBlob)

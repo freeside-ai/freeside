@@ -204,6 +204,66 @@ func TestVerifyExportNoEvidence(t *testing.T) {
 	}
 }
 
+func TestVerifyExportCommitPlanDeclaredMemberAndScan(t *testing.T) {
+	plan := []byte(`{"version":"freeside.commit-plan/v1","groups":[]}`)
+	entries := append(fixtureArchive(t), tarEntry{name: "handoff/" + export.CommitPlanFilename, body: plan})
+	var scanned []byte
+	cfg := testConfig()
+	cfg.Scanner = scannerFunc(func(_ context.Context, dir string) error {
+		var err error
+		// #nosec G304 -- dir is the ward-owned extraction directory and the leaf is fixed.
+		scanned, err = os.ReadFile(filepath.Join(dir, export.CommitPlanFilename))
+		return err
+	})
+	b, err := New(stubRuntime{}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := runVerifyExport(t, b, entries)
+	if err != nil {
+		t.Fatalf("verifyExport: %v", err)
+	}
+	if !out.CommitPlanPresent || string(scanned) != string(plan) {
+		t.Fatalf("plan present=%v scanned=%q", out.CommitPlanPresent, scanned)
+	}
+	withStray := append(append([]tarEntry(nil), entries...), tarEntry{name: "handoff/stray", body: []byte("x")})
+	if out, err := runVerifyExport(t, b, withStray); err == nil || out != nil {
+		t.Fatalf("declared plan weakened stray rejection: out=%v err=%v", out, err)
+	}
+
+	cfg.Scanner = scannerFunc(func(context.Context, string) error { return errors.New("literal secret") })
+	b, err = New(stubRuntime{}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runVerifyExport(t, b, entries); err == nil || out != nil {
+		t.Fatalf("scanner refusal released plan output: out=%v err=%v", out, err)
+	}
+
+	secretEntries := append(fixtureArchive(t), tarEntry{
+		name: "handoff/" + export.CommitPlanFilename,
+		body: []byte(`{"version":"freeside.commit-plan/v1","token":"ghp_literal"}`),
+	})
+	cfg.Scanner = scannerFunc(func(_ context.Context, dir string) error {
+		// #nosec G304 -- dir is the ward-owned extraction directory and the leaf is fixed.
+		raw, err := os.ReadFile(filepath.Join(dir, export.CommitPlanFilename))
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(raw, []byte("ghp_")) {
+			return errors.New("literal secret")
+		}
+		return nil
+	})
+	b, err = New(stubRuntime{}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runVerifyExport(t, b, secretEntries); err == nil || out != nil {
+		t.Fatalf("literal plan secret passed check 7: out=%v err=%v", out, err)
+	}
+}
+
 // TestVerifyExportEvidenceViolations induces evidence-channel check-7
 // violations and asserts each fails closed as export_verification.
 func TestVerifyExportEvidenceViolations(t *testing.T) {

@@ -76,6 +76,7 @@ func TestFindingCandidateLift(t *testing.T) {
 		FindingGitMetadataPath:         domain.FindingClassRepoChangePolicy,
 		FindingSecret:                  domain.FindingClassSecret,
 		FindingSecretScanSkipped:       domain.FindingClassSecret,
+		FindingCommitPlanSecret:        domain.FindingClassSecret,
 		FindingAutomationControlPath:   domain.FindingClassControlPlane,
 		FindingReviewerInstructionPath: domain.FindingClassControlPlane,
 		FindingVerificationRecipePath:  domain.FindingClassControlPlane,
@@ -179,6 +180,9 @@ func TestProtectedPathPolicyFailClosed(t *testing.T) {
 	got, err := (Policy{}).WithProtectedPaths(fixtureTrustProfile(t))
 	if err != nil {
 		t.Fatalf("valid profile: %v", err)
+	}
+	if got.CommitPlan != domain.CommitPlanSingleCommit || got.MessageRuleset != domain.MessageRulesetGitHub1 {
+		t.Fatalf("profile commit policy not copied: %+v", got)
 	}
 	for _, tc := range []struct {
 		name string

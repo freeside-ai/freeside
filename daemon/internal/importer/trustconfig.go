@@ -17,10 +17,10 @@ import (
 // with no control-plane widening. The returned globs are still re-checked by
 // Options.validate, so a malformed pattern also fails closed at import.
 //
-// Only the Extra* fields are set; the caps, the allowlist, and the accessors'
-// mandatory defaults are untouched, so config can only widen a gate, never
-// narrow or disable one. The profile is the trust-anchored source, so any
-// widening already on the policy is replaced, not merged.
+// The commit-plan mode and message-ruleset identifier are copied with the
+// Extra* path fields; caps and the allowlist stay untouched. The profile is the
+// trust-anchored source, so any prior profile-derived values on the policy are
+// replaced rather than merged.
 //
 // Category crosswalk: the profile's ExtraVerificationControlPatterns feeds this
 // package's verification_recipes gate (Policy.ExtraVerificationRecipePatterns /
@@ -40,6 +40,8 @@ func (p Policy) WithProtectedPaths(profile domain.AutomationTrustProfile) (Polic
 	// able to narrow or redirect control-plane coverage out of band. slices.Clone
 	// preserves nil for an empty list.
 	cfg := profile.ProtectedPaths
+	p.CommitPlan = profile.CommitPlan
+	p.MessageRuleset = profile.MessageRuleset
 	p.ExtraAutomationControlPatterns = slices.Clone(cfg.ExtraAutomationControlPatterns)
 	p.ExtraReviewerInstructionPatterns = slices.Clone(cfg.ExtraReviewerInstructionPatterns)
 	p.ExtraGitMetadataPatterns = slices.Clone(cfg.ExtraGitMetadataPatterns)

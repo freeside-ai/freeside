@@ -77,6 +77,31 @@ func TestGatePathsExemptsRecordedGitDir(t *testing.T) {
 	}
 }
 
+func TestGatePathsRejectsCommitPlanNamespace(t *testing.T) {
+	cases := []struct {
+		path string
+		want error
+	}{
+		{export.CommitPlanFilename, ErrCommitPlanCollision},
+		{export.CommitPlanFilename + "/child", ErrCommitPlanCollision},
+		{".FREESIDE-COMMIT-PLAN.JSON", ErrCommitPlanCollision},
+		{".freeſide-commit-plan.json/child", ErrCommitPlanCollision},
+		{export.CommitPlanFilename + ".bak", nil},
+		{".FREESIDE-COMMIT-PLAN.JSON.bak", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			err := gatePaths(export.Manifest{
+				Version: export.ManifestVersion,
+				Entries: []export.Entry{testEntry(export.EntryRegular, tc.path)},
+			})
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("gatePaths(%q) = %v, want %v", tc.path, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestGatePathsPrefixConflict(t *testing.T) {
 	cases := []struct {
 		name    string

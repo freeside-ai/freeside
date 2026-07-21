@@ -1,14 +1,15 @@
 // Package importer is the gauntlet's hostile importer (§5.6): it
 // validates the export helper's manifest and content blobs and produces
-// a daemon-authored clean commit on a fresh daemon-owned checkout at
+// one or more daemon-authored clean commits on a fresh daemon-owned checkout at
 // the enforced base SHA. Every handoff byte is untrusted: the importer
 // never trusts workspace .git, hooks, config, or agent-written
 // manifests, and re-validates everything the manifest claims before any
 // of it can influence the import.
 //
 // Exactly two channels leave the agent workspace and never mix (§5.6).
-// The repo-change channel (manifest.json + blobs/) drives the clean
-// commit above. The evidence channel (evidence.json + evidence/, plan
+// The repo-change channel (manifest.json + blobs/, with the optional opaque
+// .freeside-commit-plan.json metadata member) drives commit construction. The
+// evidence channel (evidence.json + evidence/, plan
 // §5.15) carries typed, provenance-bearing agent artifacts; it is
 // optional. Valid entries route into labeled domain AgentClaims on the
 // Result (never an item's evidence snapshot, never auto-uploaded); the
@@ -36,9 +37,10 @@
 // through control-plane change, which needs the imported commit to
 // exist, and §12 forbids such changes reaching publication, not import;
 // the publication gate consumes Result.Findings. The commit is withheld
-// only when the tree cannot faithfully hold the candidate: a changed
-// non-regular kind, an invalid_path entry, or a needed-but-omitted
-// blob (FindingKind.blocksCommit is the dispatch).
+// only when the tree cannot faithfully hold the candidate, or when a decoded
+// commit-plan secret must prevent fallback: a changed non-regular kind, an
+// invalid_path entry, a needed-but-omitted blob, or a commit-plan secret
+// (FindingKind.blocksCommit is the dispatch).
 //
 // Layout, by concept:
 //
@@ -49,6 +51,9 @@
 //     re-validation at the trust boundary
 //   - evidence.go the evidence channel: optional manifest intake, magic/
 //     type validation, and routing into labeled agent claims
+//   - commit_plan.go the opaque plan intake, tolerant decoded-string secret
+//     pass, strict V1 validation, exact-cover resolution, and tree-order checks
+//   - message.go the built-in versioned publishing-message screening rules
 //   - paths.go    structural path gates (git-component injection,
 //     file/directory conflicts)
 //   - blobs.go    blob store audit and content verification
@@ -56,8 +61,8 @@
 //   - gitrunner.go  hardened git plumbing (the package's only os/exec
 //     use); no hooks, no user/system/workspace config, scratch index,
 //     pinned identity, no working-tree materialization
-//   - commit.go   scratch-index tree and commit construction with the
-//     exact-tree acceptance cross-check
+//   - commit.go   scratch-index tree and atomic multi-commit construction with
+//     the exact-tree acceptance cross-check and one compare-and-swap ref move
 //   - derive.go   change derivation against the enforced base (the
 //     manifest is a full snapshot; what changed is computed here, never
 //     taken from workspace parentage)

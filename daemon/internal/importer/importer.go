@@ -2,6 +2,7 @@ package importer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -22,6 +23,9 @@ type Result struct {
 	Changes   []Change            `json:"changes"`
 	Findings  []Finding           `json:"findings"`
 	Claims    []domain.AgentClaim `json:"claims"`
+	// CommitPlanNotice is a daemon-derived reason for consuming but not using
+	// the plan channel, or for the plan_preferred unified fallback.
+	CommitPlanNotice *domain.CommitPlanNoticeReason `json:"commit_plan_notice,omitempty"`
 }
 
 // Import validates the handoff under handoffDir and imports it onto the
@@ -46,12 +50,16 @@ func Import(ctx context.Context, handoffDir, checkoutDir string, opts Options) (
 	if err != nil {
 		return Result{}, err
 	}
+	planRaw, planPresent, err := loadCommitPlan(handoffDir, opts.Policy)
+	if err != nil {
+		return Result{}, err
+	}
 	scratch, err := os.MkdirTemp("", "freeside-import-")
 	if err != nil {
 		return Result{}, fmt.Errorf("create import scratch: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(scratch) }()
-	blobs, evidenceBlobs, err := verifyBlobs(handoffDir, scratch, m, em, emPresent, opts.Policy)
+	blobs, evidenceBlobs, err := verifyBlobs(handoffDir, scratch, m, em, emPresent, planPresent, opts.Policy)
 	if err != nil {
 		return Result{}, err
 	}
@@ -75,6 +83,9 @@ func Import(ctx context.Context, handoffDir, checkoutDir string, opts Options) (
 	if err != nil {
 		return Result{}, err
 	}
+	if err := preflightCommitPlanBase(base); err != nil {
+		return Result{}, err
+	}
 	changes, findings, err := deriveChanges(ctx, g, base, m, blobs)
 	if err != nil {
 		return Result{}, err
@@ -86,11 +97,17 @@ func Import(ctx context.Context, handoffDir, checkoutDir string, opts Options) (
 		return Result{}, err
 	}
 	findings = append(findings, secretFindings...)
+	if opts.Policy.CommitPlan == domain.CommitPlanPlanPreferred && planPresent {
+		findings = append(findings, scanCommitPlanStrings(planRaw)...)
+	}
 	sortFindings(findings)
 	result := Result{
 		Changes:  make([]Change, 0, len(changes)),
 		Findings: findings,
 		Claims:   claims,
+	}
+	if planPresent && opts.Policy.CommitPlan == domain.CommitPlanSingleCommit {
+		setPlanNotice(&result, domain.CommitPlanNoticePresentButNotHonored)
 	}
 	if result.Findings == nil {
 		result.Findings = []Finding{}
@@ -106,10 +123,52 @@ func Import(ctx context.Context, handoffDir, checkoutDir string, opts Options) (
 			return result, nil
 		}
 	}
+	if opts.Policy.CommitPlan == domain.CommitPlanPlanPreferred {
+		if len(changes) == 0 {
+			if planPresent {
+				setPlanNotice(&result, domain.CommitPlanNoticePresentButNotHonored)
+			}
+			tree, commit, err := buildCommit(ctx, g, opts, changes)
+			if err != nil {
+				return Result{}, err
+			}
+			result.TreeSHA, result.CommitSHA = tree, commit
+			return result, nil
+		}
+		if !planPresent {
+			setPlanNotice(&result, domain.CommitPlanNoticeAbsent)
+		} else {
+			if opts.planValidationHook != nil {
+				if err := opts.planValidationHook(); err != nil {
+					return Result{}, fmt.Errorf("commit-plan validation: %w", err)
+				}
+			}
+			groups, planErr := decodeAndResolveCommitPlan(planRaw, changes, base, opts.Policy)
+			if planErr == nil {
+				if messageFindings := screenCommitMessages(groups, opts.Policy); len(messageFindings) == 0 {
+					tree, commit, err := buildCommitPlan(ctx, g, opts, groups, changes)
+					if err != nil {
+						return Result{}, err
+					}
+					result.TreeSHA, result.CommitSHA = tree, commit
+					return result, nil
+				}
+				setPlanNotice(&result, domain.CommitPlanNoticeScreening)
+			} else if errors.Is(planErr, errPlanStructural) {
+				setPlanNotice(&result, domain.CommitPlanNoticeStructural)
+			} else {
+				return Result{}, planErr
+			}
+		}
+	}
 	tree, commit, err := buildCommit(ctx, g, opts, changes)
 	if err != nil {
 		return Result{}, err
 	}
 	result.TreeSHA, result.CommitSHA = tree, commit
 	return result, nil
+}
+
+func setPlanNotice(result *Result, reason domain.CommitPlanNoticeReason) {
+	result.CommitPlanNotice = &reason
 }

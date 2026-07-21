@@ -21,6 +21,13 @@ func gatePaths(m export.Manifest) error {
 		if e.Kind == export.EntryInvalidPath || e.Kind == export.EntryGitDir {
 			continue
 		}
+		// The exporter reserves this whole namespace for the opaque plan
+		// channel. Re-check it here because the handoff manifest is hostile: a
+		// forged repo entry must not turn reserved metadata into committed
+		// content or poison the next import's trusted-base preflight.
+		if export.IsCommitPlanNamespacePath(e.Path) {
+			return fmt.Errorf("manifest path %q occupies the reserved commit-plan namespace: %w", e.Path, ErrCommitPlanCollision)
+		}
 		for _, comp := range strings.Split(e.Path, "/") {
 			if gitUnsafeComponent(comp) {
 				return fmt.Errorf("path %q component %q: %w", e.Path, comp, ErrGitPathInjection)

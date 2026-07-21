@@ -1,7 +1,8 @@
 // Package export is the gauntlet's trusted export helper (§5.6): given a
 // workspace mounted read-only, it emits digest-addressed content blobs and
-// a normalized manifest onto the exporter's own root filesystem, and never
-// executes workspace content. It ships inside the ward's pinned exporter
+// a normalized manifest onto the exporter's own root filesystem, optionally
+// lifting the reserved commit plan as one opaque capped member, and never
+// executes or parses workspace content. It ships inside the ward's pinned exporter
 // image (the #73/#76 seam); the ward collects the output via container
 // export of the stopped exporter, and the hostile importer consumes it.
 //
@@ -20,6 +21,7 @@
 //   - errors.go    sentinel validation errors (wrapped with %w)
 //   - walk.go      read-only workspace walk and entry classification
 //   - blob.go      digest-addressed blob writing
+//   - commit_plan.go opaque reserved-path lift
 //   - export.go    the Export orchestrator the helper binary calls
 //
 // See docs/plan.md §5.6 (the gauntlet), §5.7/§5.8 (why non-regular and

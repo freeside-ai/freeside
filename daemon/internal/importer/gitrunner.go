@@ -38,9 +38,9 @@ func (e *GitError) Unwrap() error { return e.Err }
 // never walks the filesystem again), a scratch index and scratch HOME,
 // no user or system config, commit-affecting checkout-local config
 // pinned (hardenedConfig), no hooks, no fsmonitor, no protocol access,
-// and a pinned daemon identity and date. Candidate bytes enter git only
-// from bounded, daemon-private snapshots of the audited blob store; they
-// are never argument vector material.
+// and a pinned daemon identity and date. Candidate file bytes enter git only
+// from bounded, daemon-private snapshots of the audited blob store; validated
+// plan messages use stdin. Neither is ever argument-vector material.
 type gitRunner struct {
 	gitPath string
 	dir     string // working directory for every invocation (the scratch)
@@ -389,7 +389,14 @@ func (g *gitRunner) diffTree(ctx context.Context, baseSHA, treeSHA string) ([]di
 // commitTree writes the daemon-authored commit object for the built
 // tree onto the enforced base.
 func (g *gitRunner) commitTree(ctx context.Context, treeSHA, parentSHA, message string) (string, error) {
-	out, err := g.run(ctx, nil, "commit-tree", treeSHA, "-p", parentSHA, "-m", message)
+	// Message text may be a validated agent proposal. Keep it off argv (and
+	// therefore process listings and plumbing errors) by using commit-tree's
+	// stdin message channel.
+	stdinMessage := message
+	if !strings.HasSuffix(stdinMessage, "\n") {
+		stdinMessage += "\n"
+	}
+	out, err := g.run(ctx, strings.NewReader(stdinMessage), "commit-tree", treeSHA, "-p", parentSHA)
 	if err != nil {
 		return "", err
 	}
@@ -398,7 +405,24 @@ func (g *gitRunner) commitTree(ctx context.Context, treeSHA, parentSHA, message 
 
 // updateRef points the fully qualified ref at the produced commit,
 // anchoring it against gc.
-func (g *gitRunner) updateRef(ctx context.Context, ref, commitSHA string) error {
-	_, err := g.run(ctx, nil, "update-ref", ref, commitSHA)
+func (g *gitRunner) refValue(ctx context.Context, ref string) (string, error) {
+	out, err := g.run(ctx, nil, "for-each-ref", "--format=%(objectname)", "--count=1", ref)
+	if err != nil {
+		return "", err
+	}
+	value := strings.TrimSpace(string(out))
+	if value != "" && !validSHA1Hex(value) {
+		return "", fmt.Errorf("ref %s resolved to invalid object name %q: %w", ref, value, ErrGitPlumbing)
+	}
+	return value, nil
+}
+
+// updateRefCAS moves the import ref only if it still has the value observed
+// before construction. An absent ref is represented by Git's null object name.
+func (g *gitRunner) updateRefCAS(ctx context.Context, ref, commitSHA, oldSHA string) error {
+	if oldSHA == "" {
+		oldSHA = nullOID
+	}
+	_, err := g.run(ctx, nil, "update-ref", ref, commitSHA, oldSHA)
 	return err
 }
