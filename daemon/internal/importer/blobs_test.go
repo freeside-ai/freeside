@@ -81,7 +81,7 @@ func loadFixtureManifest(t *testing.T, dir string) export.Manifest {
 func verifyBlobsForTest(t *testing.T, dir string, m export.Manifest, pol Policy) (map[export.Digest]blobInfo, error) {
 	t.Helper()
 	// These tests exercise the repo channel; no evidence channel is present.
-	repo, _, err := verifyBlobs(dir, t.TempDir(), m, export.EvidenceManifest{}, false, pol)
+	repo, _, err := verifyBlobs(dir, t.TempDir(), m, export.EvidenceManifest{}, false, false, pol)
 	return repo, err
 }
 

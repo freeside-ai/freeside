@@ -4,6 +4,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
 const testBaseSHA = "0123456789abcdef0123456789abcdef01234567"
@@ -18,7 +21,9 @@ func TestOptionsDefaults(t *testing.T) {
 	if p.MaxManifestBytes != DefaultMaxManifestBytes || p.MaxEntries != DefaultMaxEntries ||
 		p.MaxBlobBytes != DefaultMaxBlobBytes || p.MaxTotalBytes != DefaultMaxTotalBytes ||
 		p.SecretMaxScanBytes != DefaultSecretMaxScan || p.MaxPathBytes != DefaultMaxPathBytes ||
-		p.MaxPathDepth != DefaultMaxPathDepth {
+		p.MaxPathDepth != DefaultMaxPathDepth || p.CommitPlan != domain.CommitPlanSingleCommit ||
+		p.MessageRuleset != domain.MessageRulesetGitHub1 || p.MaxCommitPlanBytes != export.DefaultMaxCommitPlanBytes ||
+		p.MaxCommitPlanGroups != DefaultMaxCommitPlanGroups || p.MaxCommitMessageBytes != DefaultMaxCommitMessageBytes {
 		t.Fatalf("policy defaults not applied: %+v", p)
 	}
 }
@@ -37,6 +42,8 @@ func TestOptionsValidate(t *testing.T) {
 		{"non-hex base", Options{BaseSHA: strings.Repeat("g", 40)}, false},
 		{"unqualified ref", Options{BaseSHA: testBaseSHA, ImportRef: "main"}, false},
 		{"negative cap", Options{BaseSHA: testBaseSHA, Policy: Policy{MaxEntries: -1}}, false},
+		{"invalid commit plan", Options{BaseSHA: testBaseSHA, Policy: Policy{CommitPlan: "plan_required"}}, false},
+		{"invalid message ruleset", Options{BaseSHA: testBaseSHA, Policy: Policy{MessageRuleset: "github/2"}}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -50,8 +50,9 @@ type exportOutput struct {
 	// Evidence is the decoded, digest-verified evidence manifest; valid only
 	// when EvidencePresent is true (an absent evidence channel is the
 	// pre-evidence shape, not an error).
-	Evidence        export.EvidenceManifest
-	EvidencePresent bool
+	Evidence          export.EvidenceManifest
+	EvidencePresent   bool
+	CommitPlanPresent bool
 }
 
 // verifyExport runs check 7 against the exported rootfs archive at tarPath: it
@@ -77,7 +78,11 @@ func (b *Backend) verifyExport(ctx context.Context, tarPath, destDir string) (*e
 	if err != nil {
 		return nil, err
 	}
-	if err := verifyNoStrays(destDir, repoRef, evidenceRef, evidencePresent); err != nil {
+	planPresent, err := b.verifyCommitPlan(destDir)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyNoStrays(destDir, repoRef, evidenceRef, evidencePresent, planPresent); err != nil {
 		return nil, err
 	}
 	if err := b.cfg.Scanner.Scan(ctx, destDir); err != nil {
@@ -87,7 +92,26 @@ func (b *Backend) verifyExport(ctx context.Context, tarPath, destDir string) (*e
 		// its own audited sink.
 		return nil, failf(CheckExportVerification, "output scan refused the export (details withheld)")
 	}
-	return &exportOutput{Dir: destDir, Manifest: manifest, Evidence: evidence, EvidencePresent: evidencePresent}, nil
+	return &exportOutput{Dir: destDir, Manifest: manifest, Evidence: evidence, EvidencePresent: evidencePresent, CommitPlanPresent: planPresent}, nil
+}
+
+func (b *Backend) verifyCommitPlan(destDir string) (bool, error) {
+	f, err := os.Open(filepath.Join(destDir, export.CommitPlanFilename)) //nolint:gosec // gate-owned extraction dir
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, failf(CheckExportVerification, "read commit plan")
+	}
+	defer f.Close() //nolint:errcheck // read-only handle
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return false, failf(CheckExportVerification, "commit plan is not a regular file")
+	}
+	if info.Size() > b.cfg.MaxManifestBytes {
+		return false, failf(CheckExportVerification, "commit plan exceeds the byte cap")
+	}
+	return true, nil
 }
 
 // extractHandoff streams the archive, extracting regular files under the
@@ -380,7 +404,7 @@ func verifyBlob(blobPath, wantHex string, wantSize int64) error {
 // channel (evidence.json, evidence/) only when the exporter emitted one, so a
 // stale or planted evidence.json or evidence/ blob with no evidence channel is
 // an orphan and fails closed (matching the importer's own layout audit).
-func verifyNoStrays(destDir string, repoRef, evidenceRef map[string]bool, evidencePresent bool) error {
+func verifyNoStrays(destDir string, repoRef, evidenceRef map[string]bool, evidencePresent, planPresent bool) error {
 	allowedDirs := map[string]bool{"": true, "blobs": true, "blobs/sha256": true}
 	if evidencePresent {
 		allowedDirs[export.EvidenceBlobsDirname] = true
@@ -409,6 +433,9 @@ func verifyNoStrays(destDir string, repoRef, evidenceRef map[string]bool, eviden
 			return nil
 		}
 		if evidencePresent && (rel == export.EvidenceFilename || evidenceRef[rel]) {
+			return nil
+		}
+		if planPresent && rel == export.CommitPlanFilename {
 			return nil
 		}
 		// rel is an attacker-derived output filename; redact it in the reason.

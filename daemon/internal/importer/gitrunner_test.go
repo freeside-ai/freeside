@@ -86,6 +86,41 @@ func TestVerifyBase(t *testing.T) {
 	}
 }
 
+// TestCommitTreeStdinMatchesPriorMessageSemantics is the refute-first
+// equivalence harness for moving commit messages off argv. It reconstructs the
+// previous `commit-tree -m` invocation and compares object identities over a
+// deterministic fuzzed corpus, so the trust-boundary hardening cannot silently
+// change existing single-commit hashes or message cleanup behavior.
+func TestCommitTreeStdinMatchesPriorMessageSemantics(t *testing.T) {
+	dir, base := initBaseRepo(t, map[string]string{"a.txt": "base\n"})
+	g := newTestRunner(t, dir, testImportOptions(base))
+	tree := rungit(t, dir, "log", "-1", "--format=%T", base)
+	alphabet := []rune("abc XYZ012\n\tø中")
+	state := uint64(0x9e3779b97f4a7c15)
+	for i := 0; i < 200; i++ {
+		length := i % 73
+		var message strings.Builder
+		for range length {
+			state = state*6364136223846793005 + 1442695040888963407
+			message.WriteRune(alphabet[state%uint64(len(alphabet))])
+		}
+		if strings.TrimSpace(message.String()) == "" {
+			message.WriteString("message")
+		}
+		got, err := g.commitTree(t.Context(), tree, base, message.String())
+		if err != nil {
+			t.Fatalf("stdin commit %d: %v", i, err)
+		}
+		old, err := g.run(t.Context(), nil, "commit-tree", tree, "-p", base, "-m", message.String())
+		if err != nil {
+			t.Fatalf("prior argv commit %d: %v", i, err)
+		}
+		if want := strings.TrimSpace(string(old)); got != want {
+			t.Fatalf("message transport changed commit %d: stdin=%s argv=%s message=%q", i, got, want, message.String())
+		}
+	}
+}
+
 func TestNewGitRunnerRejectsSHA256Repos(t *testing.T) {
 	dir := t.TempDir()
 	rungit(t, dir, "init", "-q", "--object-format=sha256")

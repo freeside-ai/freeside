@@ -15,8 +15,8 @@ func TestFindingKindValid(t *testing.T) {
 	}
 }
 
-// TestFindingKindBlocking pins the blocking classification: the three
-// kinds a git tree cannot faithfully represent withhold the commit;
+// TestFindingKindBlocking pins the blocking classification: the three kinds a
+// git tree cannot faithfully represent, plus decoded plan secrets, withhold the commit;
 // every policy-only kind leaves it available for the §5.5 control-plane
 // route. A new kind must be added here deliberately.
 func TestFindingKindBlocking(t *testing.T) {
@@ -36,6 +36,7 @@ func TestFindingKindBlocking(t *testing.T) {
 		FindingPathCollision:           false,
 		FindingSecret:                  false,
 		FindingSecretScanSkipped:       false,
+		FindingCommitPlanSecret:        true,
 	}
 	if len(want) != len(AllFindingKinds) {
 		t.Fatalf("blocking table lists %d kinds, registry has %d", len(want), len(AllFindingKinds))

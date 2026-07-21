@@ -141,7 +141,7 @@ func (cfg Config) withDefaults() Config {
 		cfg.MaxExportEntries = 10_000
 	}
 	if cfg.MaxManifestBytes == 0 {
-		cfg.MaxManifestBytes = 64 << 20
+		cfg.MaxManifestBytes = export.DefaultMaxCommitPlanBytes
 	}
 	if cfg.Sleep == nil {
 		cfg.Sleep = sleepContext

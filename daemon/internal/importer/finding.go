@@ -76,6 +76,10 @@ const (
 	// honestly means "everything in scope was scanned", never "a large
 	// file slipped through unscanned" (§5.4 honest scope).
 	FindingSecretScanSkipped FindingKind = "secret_scan_skipped"
+	// FindingCommitPlanSecret records a secret found only after syntactic JSON
+	// unescaping. It withholds construction so neither an agent-authored plan
+	// commit nor the single-commit fallback can launder the escaped credential.
+	FindingCommitPlanSecret FindingKind = "commit_plan_secret" //nolint:gosec // Finding name, not a credential.
 )
 
 // AllFindingKinds lists every valid FindingKind: the single place a new
@@ -96,6 +100,7 @@ var AllFindingKinds = []FindingKind{
 	FindingPathCollision,
 	FindingSecret,
 	FindingSecretScanSkipped,
+	FindingCommitPlanSecret,
 }
 
 // valid is the validity predicate; as a predicate it uses default.
@@ -107,7 +112,8 @@ func (k FindingKind) valid() bool {
 		FindingVerificationRecipePath, FindingPromptsPolicyPath,
 		FindingEgressTrustPath, FindingMaterialityRulesPath,
 		FindingAllowlistViolation, FindingSizeViolation,
-		FindingPathCollision, FindingSecret, FindingSecretScanSkipped:
+		FindingPathCollision, FindingSecret, FindingSecretScanSkipped,
+		FindingCommitPlanSecret:
 		return true
 	default:
 		return false
@@ -123,7 +129,8 @@ func (k FindingKind) valid() bool {
 // value.
 func (k FindingKind) blocksCommit() bool {
 	switch k {
-	case FindingNonRegularChange, FindingInvalidPathEntry, FindingBlobOmitted:
+	case FindingNonRegularChange, FindingInvalidPathEntry, FindingBlobOmitted,
+		FindingCommitPlanSecret:
 		return true
 	case FindingAutomationControlPath, FindingReviewerInstructionPath,
 		FindingGitMetadataPath, FindingVerificationRecipePath,
@@ -191,7 +198,7 @@ func (f Finding) Candidate() domain.CandidateFinding {
 	case FindingAllowlistViolation, FindingSizeViolation,
 		FindingPathCollision, FindingGitMetadataPath:
 		cf.Class = domain.FindingClassRepoChangePolicy
-	case FindingSecret, FindingSecretScanSkipped:
+	case FindingSecret, FindingSecretScanSkipped, FindingCommitPlanSecret:
 		cf.Class = domain.FindingClassSecret
 	case FindingAutomationControlPath, FindingReviewerInstructionPath,
 		FindingVerificationRecipePath, FindingPromptsPolicyPath,

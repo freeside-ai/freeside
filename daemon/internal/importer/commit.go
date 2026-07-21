@@ -3,6 +3,7 @@ package importer
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/export"
@@ -22,13 +23,42 @@ const nullOID = "0000000000000000000000000000000000000000"
 // SHA-1 collision cannot substitute different bytes. Any disagreement
 // aborts rather than committing a tree that misrepresents the candidate.
 func buildCommit(ctx context.Context, g *gitRunner, opts Options, changes []plannedChange) (treeSHA, commitSHA string, err error) {
+	return buildCommitGroups(ctx, g, opts, []resolvedCommitGroup{{message: opts.CommitMessage, changes: changes}}, changes)
+}
+
+func buildCommitPlan(ctx context.Context, g *gitRunner, opts Options, groups []resolvedCommitGroup, changes []plannedChange) (treeSHA, commitSHA string, err error) {
+	nonEmpty := make([]resolvedCommitGroup, 0, len(groups))
+	for _, group := range groups {
+		if len(group.changes) == 0 {
+			continue
+		}
+		group.message = labelAgentMessage(group.message)
+		nonEmpty = append(nonEmpty, group)
+	}
+	if len(nonEmpty) == 0 {
+		return "", "", fmt.Errorf("resolved commit plan has no non-empty groups: %w", ErrTreeMismatch)
+	}
+	return buildCommitGroups(ctx, g, opts, nonEmpty, changes)
+}
+
+// buildCommitGroups constructs every tree and commit object before moving the
+// import ref once with compare-and-swap. Intermediate objects are harmlessly
+// orphaned if any later group, the final-tree assertion, or the CAS fails.
+func buildCommitGroups(ctx context.Context, g *gitRunner, opts Options, groups []resolvedCommitGroup, allChanges []plannedChange) (treeSHA, commitSHA string, err error) {
+	oldRef := ""
+	if opts.ImportRef != "" {
+		oldRef, err = g.refValue(ctx, opts.ImportRef)
+		if err != nil {
+			return "", "", err
+		}
+	}
 	if err := g.readTree(ctx, opts.BaseSHA); err != nil {
 		return "", "", err
 	}
 	var digests []export.Digest
 	seen := make(map[export.Digest]struct{})
 	expected := make(map[export.Digest]blobInfo)
-	for _, c := range changes {
+	for _, c := range allChanges {
 		if c.oid == "" || c.fromBase {
 			continue // deletions, and mode-only changes whose object is already in base
 		}
@@ -43,49 +73,69 @@ func buildCommit(ctx context.Context, g *gitRunner, opts Options, changes []plan
 	if err != nil {
 		return "", "", err
 	}
+	parent := opts.BaseSHA
+	var cumulative []plannedChange
+	for i, group := range groups {
+		if opts.constructionHook != nil {
+			if err := opts.constructionHook(i); err != nil {
+				return "", "", fmt.Errorf("construct commit-plan group %d: %w", i+1, err)
+			}
+		}
+		records, err := indexRecords(group.changes, ingested)
+		if err != nil {
+			return "", "", err
+		}
+		if err := g.applyIndex(ctx, records); err != nil {
+			return "", "", err
+		}
+		treeSHA, err = g.writeTree(ctx)
+		if err != nil {
+			return "", "", err
+		}
+		cumulative = append(cumulative, group.changes...)
+		sort.Slice(cumulative, func(i, j int) bool { return cumulative[i].path < cumulative[j].path })
+		if err := verifyTreeMatchesChanges(ctx, g, opts.BaseSHA, treeSHA, cumulative); err != nil {
+			return "", "", err
+		}
+		commitSHA, err = g.commitTree(ctx, treeSHA, parent, group.message)
+		if err != nil {
+			return "", "", err
+		}
+		parent = commitSHA
+	}
+	if err := verifyTreeMatchesChanges(ctx, g, opts.BaseSHA, treeSHA, allChanges); err != nil {
+		return "", "", err
+	}
+	if opts.ImportRef != "" {
+		if opts.beforeRefUpdate != nil {
+			if err := opts.beforeRefUpdate(); err != nil {
+				return "", "", fmt.Errorf("before import-ref update: %w", err)
+			}
+		}
+		if err := g.updateRefCAS(ctx, opts.ImportRef, commitSHA, oldRef); err != nil {
+			return "", "", err
+		}
+	}
+	return treeSHA, commitSHA, nil
+}
+
+func indexRecords(changes []plannedChange, ingested map[export.Digest]string) ([]string, error) {
 	records := make([]string, 0, len(changes))
 	for _, c := range changes {
 		switch c.kind {
 		case ChangeAdded, ChangeModified:
 			if c.oid == "" {
-				// Derivation only plans content-free adds/modifies for
-				// changes whose findings block construction; reaching
-				// here is a pipeline bug, and committing would fake
-				// content the handoff never carried.
-				return "", "", fmt.Errorf("change %q has no verified content: %w", c.path, ErrTreeMismatch)
+				return nil, fmt.Errorf("change %q has no verified content: %w", c.path, ErrTreeMismatch)
 			}
-			if !c.fromBase {
-				// A fromBase change reuses a trusted base object, so there
-				// is no ingested handoff blob to cross-check.
-				if got := ingested[c.digest]; got != c.oid {
-					return "", "", fmt.Errorf("blob %s ingested as %s, derivation expected %s: %w", c.digest, got, c.oid, ErrTreeMismatch)
-				}
+			if !c.fromBase && ingested[c.digest] != c.oid {
+				return nil, fmt.Errorf("blob %s ingested as %s, derivation expected %s: %w", c.digest, ingested[c.digest], c.oid, ErrTreeMismatch)
 			}
 			records = append(records, c.mode+" "+c.oid+"\t"+c.path)
 		case ChangeDeleted:
 			records = append(records, "0 "+nullOID+"\t"+c.path)
 		}
 	}
-	if err := g.applyIndex(ctx, records); err != nil {
-		return "", "", err
-	}
-	tree, err := g.writeTree(ctx)
-	if err != nil {
-		return "", "", err
-	}
-	if err := verifyTreeMatchesChanges(ctx, g, opts.BaseSHA, tree, changes); err != nil {
-		return "", "", err
-	}
-	commit, err := g.commitTree(ctx, tree, opts.BaseSHA, opts.CommitMessage)
-	if err != nil {
-		return "", "", err
-	}
-	if opts.ImportRef != "" {
-		if err := g.updateRef(ctx, opts.ImportRef, commit); err != nil {
-			return "", "", err
-		}
-	}
-	return tree, commit, nil
+	return records, nil
 }
 
 // verifyTreeMatchesChanges is the exact-tree acceptance check: the

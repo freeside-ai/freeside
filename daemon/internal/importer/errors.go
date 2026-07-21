@@ -25,6 +25,8 @@ var (
 	ErrEvidenceUnreadable    = errors.New("evidence manifest cannot be read")
 	ErrEvidenceInvalid       = errors.New("evidence manifest failed validation")
 	ErrEvidenceMediaMismatch = errors.New("evidence blob does not match its declared media type")
+	ErrCommitPlanUnreadable  = errors.New("commit plan cannot be read")
+	ErrCommitPlanCollision   = errors.New("reserved commit-plan namespace collision")
 
 	// Structural path-gate failures. An honest exporter cannot produce
 	// either shape (a real filesystem cannot hold them), so both are

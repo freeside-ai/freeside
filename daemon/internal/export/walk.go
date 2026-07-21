@@ -125,6 +125,15 @@ func (w *walker) visit(dir string, de fs.DirEntry) (string, error) {
 	if p == EvidenceWorkspaceDir {
 		return "", nil
 	}
+	// The reserved commit-plan namespace leaves only through its opaque handoff
+	// member. Checking one complete path component, not a raw prefix, keeps a
+	// near-prefix such as .freeside-commit-plan.json.bak ordinary content.
+	if IsCommitPlanNamespacePath(p) {
+		if p != CommitPlanFilename {
+			return "", fmt.Errorf("reserved commit-plan path %q: %w", p, ErrCommitPlanPathAlias)
+		}
+		return "", nil
+	}
 	info, err := de.Info()
 	if err != nil {
 		return "", fmt.Errorf("lstat %q: %w", p, err)

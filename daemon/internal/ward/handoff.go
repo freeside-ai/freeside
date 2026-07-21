@@ -51,6 +51,9 @@ type HandoffResult struct {
 	// when EvidencePresent is true.
 	Evidence        export.EvidenceManifest
 	EvidencePresent bool
+	// CommitPlanPresent records that check 7 admitted and scanned the reserved
+	// opaque plan member. Its bytes remain in ExportDir for the hostile importer.
+	CommitPlanPresent bool
 }
 
 // objectClaim is one runtime object's ownership state. attempted records
@@ -293,11 +296,12 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// on a real delivery; a panic before this point still removes it.
 	st.succeeded = true
 	return &HandoffResult{
-		Admission:       adm,
-		ExportDir:       out.Dir,
-		Manifest:        out.Manifest,
-		Evidence:        out.Evidence,
-		EvidencePresent: out.EvidencePresent,
+		Admission:         adm,
+		ExportDir:         out.Dir,
+		Manifest:          out.Manifest,
+		Evidence:          out.Evidence,
+		EvidencePresent:   out.EvidencePresent,
+		CommitPlanPresent: out.CommitPlanPresent,
 	}, nil
 }
 

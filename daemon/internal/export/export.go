@@ -51,6 +51,11 @@ type Options struct {
 	// negative disables either cap.
 	MaxEvidenceBlobBytes  int64
 	MaxEvidenceTotalBytes int64
+	// MaxCommitPlanBytes caps the opaque reserved commit-plan lift. Unlike a
+	// repo blob, an over-cap plan cannot be omitted without silently consuming
+	// the reserved channel, so it fails the export closed. Zero selects
+	// DefaultMaxCommitPlanBytes; negative values are invalid.
+	MaxCommitPlanBytes int64
 }
 
 // ManifestFilename is the manifest's fixed name under the output
@@ -77,6 +82,17 @@ func Export(fsys fs.FS, outDir string, opts Options) (Manifest, error) {
 	// status, fails the handoff) rather than degrading to a repo-only export.
 	// The reserved subtree was skipped by the walk above.
 	evidence, err := resolveEvidence(fsys, opts)
+	if err != nil {
+		return Manifest{}, err
+	}
+	maxCommitPlanBytes := opts.MaxCommitPlanBytes
+	if maxCommitPlanBytes == 0 {
+		maxCommitPlanBytes = DefaultMaxCommitPlanBytes
+	}
+	if maxCommitPlanBytes < 0 {
+		return Manifest{}, fmt.Errorf("negative commit-plan cap")
+	}
+	plan, err := resolveCommitPlan(fsys, maxCommitPlanBytes)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -120,6 +136,9 @@ func Export(fsys fs.FS, outDir string, opts Options) (Manifest, error) {
 	if err := writeEvidence(fsys, outDir, evidence); err != nil {
 		return Manifest{}, err
 	}
+	if err := writeCommitPlan(outDir, plan); err != nil {
+		return Manifest{}, err
+	}
 	if err := os.WriteFile(filepath.Join(outDir, ManifestFilename), body, 0o600); err != nil {
 		return Manifest{}, fmt.Errorf("write manifest: %w", err)
 	}
@@ -148,7 +167,8 @@ func blobAllowed(size, written int64, opts Options) bool {
 // export's blobs and masquerade as its output, so the export fails closed
 // instead; together with the blob writer trusting only what it wrote, the
 // collected output holds exactly what this helper emitted: the repo channel
-// (manifest.json plus its blobs) and, when the workspace declares one, the
+// (manifest.json plus its blobs and optional opaque commit-plan metadata) and,
+// when the workspace declares one, the
 // evidence channel (evidence.json plus its evidence/ blobs, emitted by
 // emitEvidence from the reserved .freeside-evidence/ descriptor).
 func ensureEmptyOutput(outDir string) error {

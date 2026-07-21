@@ -47,6 +47,9 @@ var (
 	ErrEvidenceBlobTooLarge       = errors.New("evidence source exceeds the evidence blob cap")
 	ErrEvidenceBudgetExhausted    = errors.New("evidence sources exceed the aggregate evidence blob budget")
 	ErrEvidenceDescriptorTooLarge = errors.New("evidence descriptor exceeds the read cap")
+	ErrCommitPlanNotRegular       = errors.New("commit plan is not a regular file")
+	ErrCommitPlanTooLarge         = errors.New("commit plan exceeds the read cap")
+	ErrCommitPlanPathAlias        = errors.New("commit plan path uses a case or normalization alias")
 
 	// Export failures.
 	ErrWorkspaceChanged = errors.New("workspace content changed during export")
