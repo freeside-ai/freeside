@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 13
+revision: 14
 status: active
 phase: 1A
 updated: 2026-07-20
@@ -397,6 +397,32 @@ repository_security:
   allow_secret_bearing_pr_jobs: false
   allow_self_hosted_ci: false
   allow_pull_request_target: false
+  commit_plan: single_commit | plan_preferred
+                                             # Section 5.6 agent-proposed
+                                             # commit plan; conservative
+                                             # default single_commit.
+                                             # preferred falls back to one
+                                             # commit with a surfaced
+                                             # notice when a non-empty
+                                             # import has an absent plan or
+                                             # an enumerated agent-caused
+                                             # structural/non-secret
+                                             # screening rejection
+                                             # (zero-change imports keep the
+                                             # empty commit and surface a
+                                             # present plan as not honored);
+                                             # under plan_preferred, a
+                                             # decoded secret
+                                             # anywhere in the plan's text
+                                             # blocks instead (Section 3.1)
+  message_ruleset: github/1
+                                             # built-in versioned commit-
+                                             # message screening ruleset
+                                             # (Section 5.6); the
+                                             # identifier is validated
+                                             # against the built-in
+                                             # registry at profile review,
+                                             # digest-bound
   workflow_audit_digest: sha256:...
   review: {mode: auto | framework_triggered, config_digest: sha256:...}
 ```
@@ -424,9 +450,10 @@ daemon-owned base repo ──exact base SHA──▶ agent workspace
 agent exits ──▶ POST-AGENT WORKSPACE HANDOFF (5.7 gate): credential-bearing
    execution context terminated; workspace mounted READ-ONLY in a fresh
    credential-free context
-export helper emits content blobs + normalized change manifest + evidence
-manifest ──▶ gauntlet worker (unprivileged, out of process) validates
-gauntlet ──▶ fresh daemon-owned checkout; daemon authors a clean commit
+export helper emits content blobs + normalized change manifest + optional
+commit plan + evidence manifest ──▶ gauntlet worker (unprivileged, out of
+   process) validates
+gauntlet ──▶ fresh daemon-owned checkout; daemon re-authors clean commits
 fresh checkout ──▶ clean verification workspace (no credentials, no network;
    trusted recipe runs checks and captures evidence)
 verified candidate ──▶ git/publish ──▶ GitHub PR (under trust profile)
@@ -434,19 +461,70 @@ verified candidate ──▶ git/publish ──▶ GitHub PR (under trust profil
 
 Exactly two channels leave the agent workspace, and they never mix:
 
-1. The **repo-change channel** contains content blobs and a normalized manifest.
+1. The **repo-change channel** contains content blobs, a normalized manifest,
+   and an optional agent-proposed commit plan: how the validated changes group
+   into commits, in what order, with what messages, carried as plain untrusted
+   data whose schema only the importer interprets and validates, never as git
+   objects.
    It permits regular files only. Symlinks, submodules, special files, unusual
    modes, automation-control changes (Section 5.5), and reviewer-instruction
    changes (Section 5.8) are publish-blocking.
 2. The **evidence channel** contains typed, provenance-bearing artifacts under
    Section 5.15.
 
-The daemon authors a new clean commit. The importer never trusts the
-workspace's `.git`, hooks, configuration, or agent-written manifests. It
-enforces the exact base SHA, canonical paths, allowlists, size limits,
-control-plane restrictions, and Section 5.4 best-effort secret scanning.
+The agent commits normally with git, but nothing of its `.git` is ever read
+or imported by any trusted component: no objects, hooks, configuration, or
+history as git state. What
+may cross is a **commit plan** the agent writes as ordinary data at a
+reserved workspace path, proposing how the final validated change set splits
+into commits; it crosses as a declared member of the handoff output, so the
+ward's stray rule admits it and the ward's whole-output secret scan covers
+it like every other exported byte, in every mode. Under `plan_preferred`, the
+daemon derives the
+authoritative base-to-final change set
+itself and accepts the plan only as an exact cover of it: every derived
+change in exactly one ordered group, no unknown paths, every interpolated
+intermediate tree structurally valid, every resolved non-empty group's
+publishing message screened. For a non-empty import, it re-authors one
+clean commit per resolved non-empty group when a plan is accepted, or one
+daemon-authored commit under `single_commit` and the
+enumerated `plan_preferred` fallback cases described below. A blocking
+failure authors no candidate. Published tree content is confined to the
+trusted base and the validated final snapshot by construction, so the
+tree-content publication surface equals the single-commit import's, and the
+screened messages are the one new published surface; intermediate commits
+are unattested ancestry, and evidence and publication identities bind to the
+single candidate head (Section 5.15). Agent commit SHAs, timestamps, and
+identities never cross; publishing messages cross as validated, labeled claim
+text screened as automation-control surface under the profile's
+`message_ruleset`; under `plan_preferred`, an empty remainder's
+non-publishing message skips those checks after the plan-wide secret scan. On
+a non-empty import under `plan_preferred`, an absent plan or
+one rejected for an enumerated agent-caused structural or non-secret
+screening failure falls back to the single clean commit with a surfaced notice
+naming the reason class. A zero-change import under `plan_preferred` takes the
+deliberate empty-commit path after the tolerant scan and surfaces a present
+plan as present-but-not-honored, while under `plan_preferred` a decoded secret
+anywhere in the plan's text is publish-blocking until remediated
+(Section 3.1 non-waivable). Under `single_commit` a plan is not decoded or
+honored, its presence is surfaced as a notice, and escaped credentials retain
+only the ward's literal best-effort coverage. Before either mode dispatches, a
+trusted
+base that tracks the reserved plan path or any descendant beneath it blocks
+construction: the reserved name can be a Git tree even though the plan
+channel itself is one regular file, and that entire namespace is excluded
+from the derived change set. The walk exclusion and preflight use a
+path-component boundary;
+near-prefix names such as `.freeside-commit-plan.json.bak` remain ordinary
+repository content.
+The importer
+never trusts the workspace's `.git`, hooks, configuration, or agent-written
+manifests. It enforces the exact base SHA, canonical paths, allowlists, size
+limits, control-plane restrictions, and Section 5.4 best-effort secret
+scanning.
 
-Permanent tests include malicious manifests, blobs, and evidence. Trusted
+Permanent tests include malicious manifests, commit plans, blobs, and
+evidence. Trusted
 verification recipes load only from approved control-plane configuration or the
 trusted base commit. Freeside mechanically identifies, risk-flags, and gates
 changes to verification-control files.
@@ -1225,18 +1303,38 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 13:
+Revision 14:
 
-1. **Specify comprehension as a first-class attention concern.** §9 expands
-   from two lines into a normative presentation specification: a four-layer
-   card ordering, three required digests, per-item-type leads, summary
-   provenance (deterministic card facts from the daemon; judgment summaries
-   as labeled claims from the stage agent, with a briefer promotion
-   condition on recurring audited contradictions), and comprehension metrics
-   paired against correctness. "Present evidence packets first" is
-   reinterpreted: the short labeled summary now leads above the evidence
-   packet, and evidence precedes long-form agent text. (User; PR #192
-   review, devlog 2026-07-20-1137-comprehension-spec.md; #194.)
+1. **Agent commit structure crosses the gauntlet as a proposed commit
+   plan.** The §5.6 repo-change channel gains an optional agent-proposed
+   commit plan: grouping, ordering, and messages over the final validated
+   change set, carried as plain untrusted data whose schema only the importer
+   interprets and validates; no trusted component reads workspace `.git`. The
+   daemon derives the change set, verifies exact cover and structural validity
+   of each constructed tree, and screens each resolved non-empty group's
+   publishing message under the built-in `message_ruleset`, then re-authors
+   one clean commit per resolved non-empty
+   group, gated per
+   repository by the §5.5 `commit_plan` mode (V1: `single_commit`, the
+   conservative default, and `plan_preferred`, whose non-empty-import
+   absent-plan or enumerated agent-caused structural/non-secret screening
+   fallback is a single commit with a surfaced notice; under
+   `plan_preferred`, zero-change imports use the empty-commit path after the
+   tolerant scan and surface a present plan as not honored; a trusted-base
+   collision at the reserved path or any descendant blocks both modes; under
+   `plan_preferred`, a decoded secret
+   anywhere in the plan's text stays publish-blocking per §3.1, and other
+   failure classes remain blocking); the ward's whole-output
+   handoff verification covers the plan like every exported byte. Tree content
+   stays confined to the trusted base and validated snapshot, so the
+   tree-content publication surface equals the single-commit import's
+   (screened messages are the one new published
+   surface), and evidence and publication identities still bind to the
+   single candidate head. `plan_required`, ruleset extensions, and a
+   run-scoped plan drop are deferred by decision until real usage demands
+   them. Supersedes the serialized-history design
+   deliberated on PR #213. (User; devlog
+   2026-07-20-1145-gauntlet-commit-structure.md; #192, #193.)
 
 ## 14. Risks
 
