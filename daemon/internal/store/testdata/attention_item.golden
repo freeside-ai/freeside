@@ -69,6 +69,7 @@
     "sha256:log"
   ],
   "pr_head_sha": "cafebabe",
+  "commit_plan_notice": "present_but_not_honored",
   "item_version": 1,
   "interruption_class": "planned_gate",
   "conversation_id": "conv-1",

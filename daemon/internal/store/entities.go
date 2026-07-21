@@ -469,6 +469,20 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 		if err != nil {
 			return fmt.Errorf("put attention item %q: %w", item.ID, err)
 		}
+		// A row persisted under an older encoding can carry this item's exact
+		// content in different bytes: a since-added optional member (e.g.
+		// commit_plan_notice, #222) renders as an explicit null the stored
+		// body predates. Re-encode the decoded row so the idempotence compare
+		// is canonical content, not raw bytes, and an unchanged replay against
+		// such a row still converges without a version-advance demand; the
+		// row itself is rewritten only by a real transition.
+		oldCanonical, err := encode(old)
+		if err != nil {
+			return fmt.Errorf("put attention item %q: %w", item.ID, err)
+		}
+		if oldCanonical == body {
+			return nil
+		}
 		if err := domain.ValidateAttentionItemTransition(old, item); err != nil {
 			return fmt.Errorf("put attention item %q: %w", item.ID, mapTransition(err))
 		}

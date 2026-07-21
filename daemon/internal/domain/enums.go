@@ -598,6 +598,43 @@ func (r MessageRuleset) valid() bool {
 	}
 }
 
+// CommitPlanNoticeReason classifies the daemon-derived commit-plan notice
+// (plan §5.6): the fact, carried on an attention item, that the reserved
+// plan channel was consumed without a plan structuring the import. It is
+// informational surfacing, not a publication-gate finding (contrast
+// CandidateFindingClass): the import it describes still produced a
+// candidate. absent, structural, and screening name the plan_preferred
+// fallback classes on a non-empty import; present_but_not_honored records a
+// present plan consumed but not used, under single_commit or on a
+// zero-change plan_preferred import. The reason is derived by the daemon,
+// which observed absence or classified an enumerated rejection itself, and
+// is never supplied by the workspace. Emission is #212's; this vocabulary
+// is the contract surface it emits into.
+type CommitPlanNoticeReason string
+
+const (
+	CommitPlanNoticeAbsent               CommitPlanNoticeReason = "absent"
+	CommitPlanNoticeStructural           CommitPlanNoticeReason = "structural"
+	CommitPlanNoticeScreening            CommitPlanNoticeReason = "screening"
+	CommitPlanNoticePresentButNotHonored CommitPlanNoticeReason = "present_but_not_honored"
+)
+
+// AllCommitPlanNoticeReasons lists every valid CommitPlanNoticeReason.
+var AllCommitPlanNoticeReasons = []CommitPlanNoticeReason{
+	CommitPlanNoticeAbsent, CommitPlanNoticeStructural,
+	CommitPlanNoticeScreening, CommitPlanNoticePresentButNotHonored,
+}
+
+func (r CommitPlanNoticeReason) valid() bool {
+	switch r {
+	case CommitPlanNoticeAbsent, CommitPlanNoticeStructural,
+		CommitPlanNoticeScreening, CommitPlanNoticePresentButNotHonored:
+		return true
+	default:
+		return false
+	}
+}
+
 // CandidateFindingClass is the trust class of one candidate policy finding
 // (plan §5.6, §5.8), the axis the publication gate dispatches on. It is
 // deliberately coarser than the package-local finding kinds the importer and

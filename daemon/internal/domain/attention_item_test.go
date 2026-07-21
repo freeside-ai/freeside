@@ -374,6 +374,51 @@ func TestValidateDecidedAt(t *testing.T) {
 	})
 }
 
+// TestAttentionItemCommitPlanNotice pins the plan-notice contract surface
+// (plan §5.6; #212 owns emission): nil is absent and renders as an explicit
+// null like decided_at, every registered reason survives a marshal/decode
+// round trip through Validate, and an unregistered reason fails closed.
+func TestAttentionItemCommitPlanNotice(t *testing.T) {
+	for _, reason := range domain.AllCommitPlanNoticeReasons {
+		t.Run(string(reason), func(t *testing.T) {
+			in := validItemInput(domain.AttentionReadyForFinalReview)
+			r := reason
+			in.CommitPlanNotice = &r
+			item, err := domain.NewAttentionItem(in, nil)
+			if err != nil {
+				t.Fatalf("NewAttentionItem: %v", err)
+			}
+			body, err := json.Marshal(item)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var decoded domain.AttentionItem
+			if err := json.Unmarshal(body, &decoded); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if err := decoded.Validate(); err != nil {
+				t.Fatalf("decoded item rejected: %v", err)
+			}
+			if decoded.CommitPlanNotice == nil || *decoded.CommitPlanNotice != reason {
+				t.Fatalf("round trip lost the notice: %v", decoded.CommitPlanNotice)
+			}
+		})
+	}
+	t.Run("absent renders explicit null", func(t *testing.T) {
+		item, err := domain.NewAttentionItem(validItemInput(domain.AttentionReadyForFinalReview), nil)
+		if err != nil {
+			t.Fatalf("NewAttentionItem: %v", err)
+		}
+		body, err := json.Marshal(item)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !strings.Contains(string(body), `"commit_plan_notice":null`) {
+			t.Fatalf("absent notice not rendered as explicit null: %s", body)
+		}
+	})
+}
+
 func TestNewAttentionItemRejects(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -394,6 +439,14 @@ func TestNewAttentionItemRejects(t *testing.T) {
 			name:    "missing project_id",
 			mutate:  func(in *domain.AttentionItemInput) { in.ProjectID = "" },
 			wantErr: domain.ErrEmptyID,
+		},
+		{
+			name: "invalid commit plan notice",
+			mutate: func(in *domain.AttentionItemInput) {
+				bad := domain.CommitPlanNoticeReason("plan_rejected")
+				in.CommitPlanNotice = &bad
+			},
+			wantErr: domain.ErrInvalidCommitPlanNotice,
 		},
 		{
 			name:    "agent claim without label",

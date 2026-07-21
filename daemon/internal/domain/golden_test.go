@@ -97,6 +97,10 @@ func TestGolden(t *testing.T) {
 	}
 	subject := domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID}
 
+	// The base item carries a present commit-plan notice so the goldens pin
+	// both renders: present here (and on the decided fixture derived from
+	// it), explicit null on the blocked fixture.
+	noticeReason := domain.CommitPlanNoticePresentButNotHonored
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-1", ProjectID: "proj-1", Subject: subject,
 		Type: domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
@@ -104,7 +108,9 @@ func TestGolden(t *testing.T) {
 		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionDismiss},
 		EvidenceSnapshot:  []domain.Artifact{artifact},
 		AgentClaims:       []domain.AgentClaim{agentClaim},
-		PRHeadSHA:         "cafebabe", ItemVersion: 1,
+		PRHeadSHA:         "cafebabe",
+		CommitPlanNotice:  &noticeReason,
+		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		ConversationID:    &convID, ExpiresWhen: &expires, Status: domain.StatusOpen,
 	}, approved)

@@ -70,6 +70,9 @@ func newFixtures(t *testing.T) fixtures {
 	runID := domain.RunID("run-1")
 	convID := domain.ConversationID("conv-1")
 	expires := ts.Add(24 * time.Hour)
+	// A present commit-plan notice, so the persisted item round-trips the
+	// optional daemon-derived field, not only its null render.
+	noticeReason := domain.CommitPlanNoticePresentButNotHonored
 	claimText := domain.ClaimText{
 		MediaType: domain.MediaTypeTextMarkdown,
 		Content:   "All checks green; the diff touches only docs.",
@@ -104,7 +107,7 @@ func newFixtures(t *testing.T) fixtures {
 				SensitivityClass:     domain.SensitivityNormal,
 			},
 		}},
-		PRHeadSHA: "cafebabe", ItemVersion: 1,
+		PRHeadSHA: "cafebabe", CommitPlanNotice: &noticeReason, ItemVersion: 1,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		ConversationID:    &convID, ExpiresWhen: &expires, Status: domain.StatusOpen,
 	}, approved)
