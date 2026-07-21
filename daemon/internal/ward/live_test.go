@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 )
@@ -39,26 +40,26 @@ const liveMarker = "FREESIDE_FAKE_PROVIDER_CREDENTIAL_DO_NOT_EXPORT"
 
 // liveExporterImage returns the digest-pinned exporter image the live tests run
 // the real freeside-export helper from, read from FREESIDE_WARD_EXPORTER_IMAGE.
-// Build and push it with `scripts/build-exporter-image.sh --registry <host>` and
-// set the env to the printed reference (ward resolves a digest only through a
-// registry, so a local-only build is not enough). The test skips when it is
-// unset so the alpine-only members still run.
+// Seed it with `scripts/build-exporter-image.sh --local-registry-port <port>`
+// (or push it to an external registry) and set the env to the printed reference.
+// The test skips when it is unset so the alpine-only members still run.
 func liveExporterImage(t *testing.T) string {
 	t.Helper()
 	ref := os.Getenv("FREESIDE_WARD_EXPORTER_IMAGE")
 	if ref == "" {
-		t.Skip("exporter-image live test skipped: set FREESIDE_WARD_EXPORTER_IMAGE to the digest-pinned exporter image (scripts/build-exporter-image.sh --registry <host>)")
+		t.Skip("exporter-image live test skipped: set FREESIDE_WARD_EXPORTER_IMAGE to the digest-pinned exporter image (scripts/build-exporter-image.sh --local-registry-port <port>)")
 	}
 	return ref
 }
 
-// liveAgentEvidenceStaging is appended to the agent command: it stages one
-// head-independent PNG evidence artifact under the reserved subtree so the real
-// helper emits the evidence channel alongside the repo channel. The PNG magic
-// (octal) satisfies the importer's images-only magic check.
-const liveAgentEvidenceStaging = `mkdir -p /workspace/.freeside-evidence && ` +
+// liveAgentControlStaging is appended to the agent command: it stages one
+// head-independent PNG evidence artifact and one valid commit-plan proposal so
+// the real helper emits every reserved member alongside the repo channel. The
+// PNG magic (octal) satisfies the importer's images-only magic check.
+const liveAgentControlStaging = `mkdir -p /workspace/.freeside-evidence && ` +
 	`printf '\211PNG\015\012\032\012agent-evidence' > /workspace/.freeside-evidence/shot.png && ` +
-	`printf '%s' '{"version":"freeside.export.evidence-source/v1","sources":[{"label":"shot","media_type":"image/png","path":".freeside-evidence/shot.png","head_binding":"head_independent","sensitivity_class":"normal","producer_invocation_id":"live-run"}]}' > /workspace/.freeside-evidence/evidence.json`
+	`printf '%s' '{"version":"freeside.export.evidence-source/v1","sources":[{"label":"shot","media_type":"image/png","path":".freeside-evidence/shot.png","head_binding":"head_independent","sensitivity_class":"normal","producer_invocation_id":"live-run"}]}' > /workspace/.freeside-evidence/evidence.json && ` +
+	`printf '%s' '{"version":"freeside.commit-plan/v1","groups":[{"name":"all","message":"Apply live candidate","remainder":true}]}' > /workspace/.freeside-commit-plan.json`
 
 func TestLiveHandoffLifecycle(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
@@ -204,7 +205,7 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 					"echo agent-output > /workspace/result.txt && " +
 					"mkdir -p /workspace/nested && " +
 					"echo durable-workspace > /workspace/nested/state.txt && " +
-					liveAgentEvidenceStaging,
+					liveAgentControlStaging,
 			},
 			CredentialMounts: []CredentialMount{{Volume: credVolume, Target: "/credentials"}},
 		},
@@ -228,6 +229,9 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 		if strings.HasPrefix(e.Path, ".freeside-evidence") {
 			t.Errorf("repo manifest carries a reserved-subtree entry %q", e.Path)
 		}
+		if export.IsCommitPlanNamespacePath(e.Path) {
+			t.Errorf("repo manifest carries the reserved commit-plan entry %q", e.Path)
+		}
 	}
 	if !repoPaths["result.txt"] || !repoPaths["nested/state.txt"] {
 		t.Fatalf("manifest entries = %+v, want result.txt and nested/state.txt", res.Manifest.Entries)
@@ -241,13 +245,18 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 	if !res.EvidencePresent || len(res.Evidence.Entries) != 1 || res.Evidence.Entries[0].Label != "shot" {
 		t.Fatalf("evidence = present:%v %+v, want the one shot entry", res.EvidencePresent, res.Evidence)
 	}
+	if !res.CommitPlanPresent {
+		t.Fatal("verified handoff did not report the staged commit plan")
+	}
 	if scannedFiles == 0 {
 		t.Error("scanner hook never saw a file")
 	}
 
 	// The #83 ward/gauntlet convergence gate: the real image's real helper
-	// output flows through the gauntlet importer, both channels together. The
-	// repo change becomes a commit and the evidence becomes a labeled claim.
+	// output flows through the gauntlet importer with all reserved members. The
+	// repo change becomes a commit, the evidence becomes a labeled claim, and
+	// the default single_commit policy records that it consumed but did not use
+	// the agent's commit-plan proposal.
 	imported := importLiveExport(t, res.ExportDir)
 	if len(imported.Claims) != 1 || imported.Claims[0].Label != "shot" {
 		t.Errorf("imported claims = %+v, want the one shot claim", imported.Claims)
@@ -260,6 +269,9 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 	}
 	if !sawResult {
 		t.Errorf("imported changes = %+v, want result.txt added", imported.Changes)
+	}
+	if imported.CommitPlanNotice == nil || *imported.CommitPlanNotice != domain.CommitPlanNoticePresentButNotHonored {
+		t.Errorf("commit-plan notice = %v, want %q", imported.CommitPlanNotice, domain.CommitPlanNoticePresentButNotHonored)
 	}
 
 	// Teardown left nothing it owns (acceptance 5): the run's containers and
