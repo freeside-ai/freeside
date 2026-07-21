@@ -217,7 +217,13 @@ type autoScriptStageDriver struct {
 }
 
 func (d autoScriptStageDriver) Start(ctx context.Context, id domain.InvocationID, spec exec.StartSpec) error {
+	if err := killTestCheckpoint(killCheckpointBeforeIntentDispatch); err != nil {
+		return err
+	}
 	err := d.StageDriver.Start(ctx, id, spec)
+	if err == nil {
+		return killTestCheckpoint(killCheckpointAfterIntentAccepted)
+	}
 	if !errors.Is(err, fake.ErrUnscripted) {
 		return err
 	}
@@ -227,7 +233,23 @@ func (d autoScriptStageDriver) Start(ctx context.Context, id domain.InvocationID
 			Summary: "The fake workflow invocation completed.",
 		},
 	})
-	return d.StageDriver.Start(ctx, id, spec)
+	if err := d.StageDriver.Start(ctx, id, spec); err != nil {
+		return err
+	}
+	return killTestCheckpoint(killCheckpointAfterIntentAccepted)
+}
+
+func (d autoScriptStageDriver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Status, error) {
+	status, err := d.StageDriver.Inspect(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if status == exec.StatusCompleted {
+		if err := killTestCheckpoint(killCheckpointAfterResultCommitted); err != nil {
+			return "", err
+		}
+	}
+	return status, nil
 }
 
 func (d *daemon) readiness() readiness {
