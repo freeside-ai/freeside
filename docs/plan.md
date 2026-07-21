@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 14
+revision: 15
 status: active
 phase: 1A
 updated: 2026-07-20
@@ -29,7 +29,7 @@ records every revision. PR bodies and decision notes carry the narrative.
 
 ## 1. What Freeside is
 
-**Freeside is a local, durable workflow controller that turns a software work item into an evidence-backed pull request and interrupts me only when judgment is required.**
+**Freeside is a local, durable workflow controller that grants agents the autonomy to turn work items into evidence-backed pull requests and interrupts me only when judgment is required.**
 
 Category: **an agent control plane.** Harnesses such as Claude Code and Codex
 run the agent's inner loop. Freeside runs the outer loop. It controls:
@@ -74,8 +74,9 @@ rules.
 | GitHub | Source, issues, pull requests, reviews, checks, and merge |
 | Freeside | Workflow execution, durable decisions, routing, and approvals |
 
-Freeside exists as a personal-leverage tool. Its measure is net personal
-leverage after maintenance. The manual workflow already shows that elaboration,
+Freeside exists as a personal-leverage tool. Its measure is a positive
+return: useful, correct work worth more than the attention, maintenance,
+money, and risk it costs. The manual workflow already shows that elaboration,
 implementation, and iterative review are useful. The open question is whether
 Freeside can make that workflow safe, durable, and low-attention without moving
 the danger into provider credentials, CI, artifact import, stale approvals, or
@@ -83,11 +84,16 @@ interruption creep.
 
 The project succeeds only if all four claims hold:
 
-1. **Attention falls** against a passively logged baseline.
+1. **Useful, correct work per unit of my attention rises** against a
+   passively logged, normalized baseline.
 2. **Decision quality is preserved.**
-3. **Safety invariants hold** under Section 12.
+3. **Safety invariants hold** under Section 12, verified by conformance and
+   adversarial tests, never read off telemetry.
 4. **Autonomy is preserved:** exceptional interruptions remain rare and trend
    down under Section 3.2.
+
+The four claims are necessary gates, not the goal: cost and maintenance still
+decide whether passing them yields a positive return.
 
 ## 2. Goals and non-goals
 
@@ -126,14 +132,17 @@ The project succeeds only if all four claims hold:
 
 ### Non-goals
 
-1. Freeside is not an IDE or review surface, and it never auto-merges.
+1. Freeside is not an IDE or review surface: code review and merging stay on
+   GitHub; Freeside owns workflow decisions and approvals. Human merge is the
+   current accountability checkpoint; whether narrow, risk-bounded classes of
+   change ever earn automatic merge remains deliberately open.
 2. It is not a product for hypothetical users: no multi-tenancy or billing.
 3. It is **not a harness**. It uses sanctioned vendor batch interfaces and never
    owns a model loop.
 4. It does not modify itself at runtime. Control-plane configuration is never
    hot-modified.
 5. Automatic provider fallback, voice, a pipeline DSL, and briefings are out of
-   scope until explicitly earned by later phases.
+   scope until the recorded outcomes of later phases earn them.
 6. It is neither a formal pre-build validation study nor a generic CI security
    auditor.
 7. It is not a general-purpose synchronization platform. Server-authoritative
@@ -146,9 +155,11 @@ The project succeeds only if all four claims hold:
 Autonomy is the default. Gates exist only at trust-boundary crossings and the
 two designed judgment points.
 
-Repeated exceptional interruptions trigger a policy review. An eligible,
-low-risk repetition may produce a policy-change proposal. Safety invariants and
-non-waivable gates never auto-promote and never offer a bypass.
+Repeated exceptional interruptions trigger a policy review. An eligible
+repetition may produce a policy-change proposal; promotion to a standing grant
+requires low risk, stable preconditions, and bounded downside, never
+repetition alone. Safety invariants and non-waivable gates never auto-promote
+and never offer a bypass.
 
 The following classes are non-waivable:
 
@@ -194,6 +205,14 @@ Setup, onboarding, and upkeep are product features with committed targets
 mode (Section 5.7); it is never a bypass. Strict settings always gate
 `unattended` operation.
 
+### 3.5 Oversight
+
+Oversight is part of my contribution, not pure overhead: it is how failures
+are caught early, so it cannot be optional. The design goal is frictionless
+oversight, because oversight that is a chore is oversight that gets skipped.
+Sections 8 and 9 carry its designed instruments: honest attention telemetry
+and sampled decision audits.
+
 ## 4. The attention model
 
 ### Core records
@@ -216,8 +235,9 @@ Cards render image attachments directly from the artifact store by digest.
 `channel_accepted_at`, `opened_at`, and `delivery_status`.
 
 Provider acceptance is never called “delivered.” Stronger language requires a
-real device receipt. Open-to-decision time is the product metric. Item timing
-fields are aggregates derived from deliveries.
+real device receipt. Open-to-decision time is the headline attention-latency
+metric; the Section 1 per-unit measure governs. Item timing fields are
+aggregates derived from deliveries.
 
 ### Phase 1 item types and actions
 
@@ -616,7 +636,8 @@ govern that review. The gauntlet detects these paths mechanically.
 
 Every external action uses inbox/outbox discipline. Committed workflow
 decisions survive restart. Deterministic identities, reconciliation, and
-bounded retry make external effects converge on one intended result.
+bounded retry make external effects converge on one intended result. Anything
+that cannot be safely retried waits for me.
 
 Kill-before and kill-after tests are permanent.
 
@@ -942,11 +963,18 @@ Defect issues reference their producing runs and may carry suggested fault
 classes, closing the attribution loop.
 
 Attention telemetry uses `AttentionDelivery` rows with honest status fields.
-Open-to-decision time is the product metric. Interruption-class rates are
+Open-to-decision time is the headline attention-latency metric; the Section 1
+per-unit measure governs. Interruption-class rates are
 tracked. Card drill-down opens are recorded per item and device, and sampled
 decision audits record comprehension defects; both feed the Section 9
 measurements. Passive baseline logging runs alongside Phase 1A. Usage is observed
 telemetry, never asserted quota state.
+
+Routing policy sits above the harness and is informed by task class, quality,
+latency, usage, and cost, all drawn from these records. The provider
+balancing I do by hand today, including usage-limit-driven switching, is
+attention work: until routing absorbs it, it counts in the attention
+accounting.
 
 ## 9. Comprehension
 
@@ -1046,6 +1074,10 @@ never an ad hoc rendering choice.
   hiding detail.
 - Comprehension-defect count from sampled audits: the target is zero;
   occurrences are recorded; the tolerance is not zero.
+- Normalization by volume and risk: rates are compared against the period's
+  workload, never as raw counts.
+- Maintenance accounting: time spent operating and maintaining Freeside
+  itself is recorded and netted against the return.
 
 Speed counts only alongside correctness: an open-to-decision improvement is
 claimed only with the reversal rate, the comprehension-defect count, and
@@ -1210,7 +1242,7 @@ Exit requires:
 - productive review rounds that run without prompting;
 - consolidated low-value interruptions;
 - approvals decidable from the phone;
-- attention materially below baseline;
+- useful, correct work per unit of attention materially above baseline;
 - a low exceptional-interruption rate; and
 - false-ready performance within Section 12.
 
@@ -1287,8 +1319,8 @@ Safety failures are:
   required.
 
 **Kill criterion:** stop if agents work acceptably in the manual workflow but
-Freeside does not materially reduce attention. Elaborator weakness alone is not
-a kill criterion.
+Freeside does not materially raise useful, correct work per unit of attention.
+Elaborator weakness alone is not a kill criterion.
 
 ## 13. Decisions log
 
@@ -1303,38 +1335,46 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 14:
+Revision 15:
 
-1. **Agent commit structure crosses the gauntlet as a proposed commit
-   plan.** The §5.6 repo-change channel gains an optional agent-proposed
-   commit plan: grouping, ordering, and messages over the final validated
-   change set, carried as plain untrusted data whose schema only the importer
-   interprets and validates; no trusted component reads workspace `.git`. The
-   daemon derives the change set, verifies exact cover and structural validity
-   of each constructed tree, and screens each resolved non-empty group's
-   publishing message under the built-in `message_ruleset`, then re-authors
-   one clean commit per resolved non-empty
-   group, gated per
-   repository by the §5.5 `commit_plan` mode (V1: `single_commit`, the
-   conservative default, and `plan_preferred`, whose non-empty-import
-   absent-plan or enumerated agent-caused structural/non-secret screening
-   fallback is a single commit with a surfaced notice; under
-   `plan_preferred`, zero-change imports use the empty-commit path after the
-   tolerant scan and surface a present plan as not honored; a trusted-base
-   collision at the reserved path or any descendant blocks both modes; under
-   `plan_preferred`, a decoded secret
-   anywhere in the plan's text stays publish-blocking per §3.1, and other
-   failure classes remain blocking); the ward's whole-output
-   handoff verification covers the plan like every exported byte. Tree content
-   stays confined to the trusted base and validated snapshot, so the
-   tree-content publication surface equals the single-commit import's
-   (screened messages are the one new published
-   surface), and evidence and publication identities still bind to the
-   single candidate head. `plan_required`, ruleset extensions, and a
-   run-scoped plan drop are deferred by decision until real usage demands
-   them. Supersedes the serialized-history design
-   deliberated on PR #213. (User; devlog
-   2026-07-20-1145-gauntlet-commit-structure.md; #192, #193.)
+1. **The canonical thesis grants autonomy.** §1, README, and AGENTS.md now
+   read "grants agents the autonomy to turn work items into evidence-backed
+   pull requests", superseding "turns a software work item into an
+   evidence-backed pull request". (User; devlog
+   2026-07-20-2331-plan-alignment-harvest.md; #192, #208.)
+2. **The objective is a positive return, and the success claims are
+   necessary gates.** §1's measure is restated as useful, correct work worth
+   more than the attention, maintenance, money, and risk it costs; claim 1
+   gains its numerator (work per unit of attention rising against a
+   passively logged, normalized baseline); claim 3 is verified by
+   conformance and adversarial tests, never read off telemetry; passing all
+   four is named necessary, not sufficient. §9 Measurement adds
+   normalization by volume and risk and maintenance accounting; the §11
+   exit criterion and §12 kill criterion align to the same per-unit
+   measure, and §4/§8 subordinate open-to-decision time to it as the
+   headline attention-latency metric. (User; devlog
+   2026-07-20-2331-plan-alignment-harvest.md; #208.)
+3. **The auto-merge door stays deliberately open.** §2 non-goal 1 drops
+   "never auto-merges": code review and merging stay on GitHub, human merge
+   is the current accountability checkpoint, and whether narrow,
+   risk-bounded classes of change ever earn automatic merge remains an open
+   question, adopting the owner decision recorded on PR #192. (User; devlog
+   2026-07-20-2331-plan-alignment-harvest.md; #192, #208.)
+4. **Oversight and standing-grant promotion become stated principles.** New
+   §3.5 states oversight as non-optional and deliberately frictionless;
+   §3.1 gains the promotion criteria: low risk, stable preconditions, and
+   bounded downside, never repetition alone. (User; devlog
+   2026-07-20-2331-plan-alignment-harvest.md; #208.)
+5. **Durability names its fallback.** §5.9: anything that cannot be safely
+   retried waits for me. (User; devlog
+   2026-07-20-2331-plan-alignment-harvest.md; #208.)
+6. **Routing inputs are named and manual balancing is accounted.** §8
+   states routing policy is informed by task class, quality, latency,
+   usage, and cost, and counts today's manual provider balancing in the
+   attention accounting; §2 non-goal 5's deferrals open on recorded
+   outcomes. The intro's "stops opening pull requests" drift claim was
+   verified against §5.5 and needed no edit. (User; devlog
+   2026-07-20-2331-plan-alignment-harvest.md; #208.)
 
 ## 14. Risks
 
