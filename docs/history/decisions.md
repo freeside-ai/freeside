@@ -265,7 +265,7 @@ New in revision 12 (decider in parentheses):
 
 ---
 
-## Revision 13 (current)
+## Revision 13
 
 Revision 13 specifies comprehension: §9 grows from two lines into a normative
 presentation specification.
@@ -288,3 +288,54 @@ New in revision 13 (decider in parentheses):
    Rejected alternatives (daemon-templated, verifier-produced, and
    independent-summarizer-now provenance) live in the decision note. (User;
    PR #192 review, devlog 2026-07-20-1137-comprehension-spec.md; #194.)
+
+---
+
+## Revision 14 (current)
+
+Revision 14 adopts the agent-proposed commit plan through the gauntlet:
+commit structure crosses as grouping, ordering, and messages over the final
+validated change set, and the daemon re-authors one clean commit per
+resolved non-empty plan group.
+
+Held from revision 13: every product decision, unchanged. §5.6's
+clean-commit framing is narrowed, not dropped: the daemon still authors
+every commit, one per resolved non-empty plan group instead of exactly one,
+and the
+single commit remains the default and the fallback. Revision 5 decision 7's
+"agent commit history not preserved" clause is upheld and clarified: the
+agent's real history, as git state, still never crosses; what the candidate
+branch gains is agent-proposed structure over validated content.
+
+New in revision 14 (decider in parentheses):
+1. **Agent commit structure crosses the gauntlet as a proposed commit
+   plan**: the agent writes a plan (ordered groups of changed paths plus
+   messages) as ordinary data at a reserved workspace path; the daemon
+   derives the authoritative base-to-final change set, verifies exact
+   cover and structural validity of each constructed tree, and screens
+   each resolved non-empty group's publishing message under the
+   digest-bound §5.5 `commit_plan` mode and built-in `message_ruleset`,
+   then re-authors one clean commit per resolved non-empty group; the ward's
+   whole-output handoff verification covers the plan like every exported byte.
+   Tree content is confined to the trusted base and validated snapshot by
+   construction; screened publishing-message text is the separate new
+   published surface.
+   V1 ships `single_commit` (conservative default) and `plan_preferred`
+   (on a non-empty import, an absent plan or an enumerated agent-caused
+   structural or non-secret screening rejection falls back to one commit
+   with a surfaced notice; under `plan_preferred`, zero-change imports use the
+   empty-commit path after the tolerant scan and surface a present plan as not
+   honored; a
+   trusted-base collision at the reserved path or any descendant blocks both
+   modes; under `plan_preferred`, a decoded secret anywhere in the plan's text
+   stays publish-blocking per §3.1; other failure classes remain blocking);
+   `plan_required`, ruleset extensions, and a run-scoped plan
+   drop are deferred by decision until real usage demands them.
+   The serialized-history design worked to near-completion on PR #213
+   (closed as superseded) was rejected: reading hostile `.git` put a
+   parser inside trusted compute whose hardening bought availability but
+   no provenance, and the isolated-generator variant kept the widened
+   publication surface (intermediate-only content publishing forever).
+   Rejected alternatives and the full design live in the decision note.
+   (User; PR #192 review, devlog
+   2026-07-20-1145-gauntlet-commit-structure.md; #193.)

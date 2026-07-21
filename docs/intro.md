@@ -135,11 +135,20 @@ The environment that enforces this is the **ward**.
 ### Agent Output Is Untrusted; Verification Is Independent
 
 An agent's workspace is a working copy, but an untrusted one. Exactly two
-things leave it: the changed file contents with a normalized manifest, and
-typed evidence artifacts. Everything else, including the `.git` directory,
-hooks, and the agent's own commit history, stays behind. An out-of-process
-importer validates the export, and Freeside creates a clean commit of
-the validated contents onto the exact base it handed the agent.
+channels leave it: the repository changes, meaning the changed file
+contents with a normalized manifest, and typed evidence artifacts. Riding
+the repository-change channel as bounded, untrusted data, the export may
+include a proposed commit plan saying how the changes group into commits,
+in what order, with what messages. Everything git-shaped, the `.git`
+directory, hooks, objects, the agent's own commit history, stays behind
+and is never read by anything trusted. The plan remains hostile input: its
+messages are credential-leak and automation-control surfaces, but the
+importer can bound, decode, validate, and screen it without interpreting Git.
+An out-of-process importer validates the export, and Freeside re-authors clean
+commits onto the exact base it handed the agent: one commit for each accepted
+group that still
+contains a change, or, when no plan is accepted and policy permits the
+fallback, a single commit.
 
 "Done" has a mechanical gate the implementer does not control. Verification
 runs in a clean room with no credentials and no network, using checks loaded
