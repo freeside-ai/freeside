@@ -125,6 +125,8 @@ func conformantTrust(t *testing.T, headSHA string) (domain.AutomationTrustProfil
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit-fixture",
 		Review:                     domain.ReviewSettings{Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config"},
 	})

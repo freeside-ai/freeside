@@ -47,6 +47,14 @@ struct DecisionDetailView: View {
             Text(item.reason)
                 .font(.body)
 
+            // Daemon-derived commit-plan notice (plan §5.6): the reserved
+            // plan channel was consumed without structuring the import, and
+            // that must never be silent.
+            if let notice = item.commit_plan_notice?.value1 {
+                LabeledContent("Commit plan", value: AttentionDisplay.label(notice))
+                    .font(.callout)
+            }
+
             if !item.evidence_snapshot.isEmpty {
                 cardSection("Evidence") {
                     ForEach(item.evidence_snapshot, id: \.id) { artifact in

@@ -14,6 +14,7 @@
   "agent_claims": [],
   "artifact_digests": [],
   "pr_head_sha": "",
+  "commit_plan_notice": null,
   "item_version": 1,
   "interruption_class": "planned_gate",
   "conversation_id": null,

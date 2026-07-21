@@ -1092,6 +1092,7 @@ components:
         - agent_claims
         - artifact_digests
         - pr_head_sha
+        - commit_plan_notice
         - item_version
         - interruption_class
         - conversation_id
@@ -1142,6 +1143,16 @@ components:
             stale-approval class, plan §3.1; §4 "approvals bind to digests").
         pr_head_sha:
           type: string
+        commit_plan_notice:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/CommitPlanNoticeReason"
+          description: >
+            The daemon-derived commit-plan notice (plan §5.6; mirrors
+            domain.AttentionItem.CommitPlanNotice): set when the reserved
+            plan channel was consumed without a plan structuring the
+            import, null otherwise. Classified by the daemon, never
+            client-set; null until emission lands (#212).
         item_version:
           type: integer
           minimum: 1
@@ -1206,6 +1217,7 @@ components:
               sensitivity_class: "normal"
         artifact_digests: ["sha256:img", "sha256:log"]
         pr_head_sha: "cafebabe"
+        commit_plan_notice: "present_but_not_honored"
         item_version: 1
         interruption_class: "planned_gate"
         conversation_id: "conv-1"
@@ -2017,6 +2029,20 @@ components:
       enum:
         - idle
         - awaiting_agent
+
+    CommitPlanNoticeReason:
+      type: string
+      description: >
+        Why a consumed commit-plan channel did not structure the import
+        (plan §5.6; domain enums.go): absent, structural, and screening name
+        the plan_preferred fallback classes on a non-empty import;
+        present_but_not_honored records a present plan consumed but not used
+        (single_commit, or a zero-change plan_preferred import).
+      enum:
+        - absent
+        - structural
+        - screening
+        - present_but_not_honored
 
     Device:
       description: >

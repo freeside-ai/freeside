@@ -70,6 +70,15 @@ enum AttentionDisplay {
         }
     }
 
+    static func label(_ notice: Components.Schemas.CommitPlanNoticeReason) -> String {
+        switch notice {
+        case .absent: return "No plan provided"
+        case .structural: return "Plan rejected (structure)"
+        case .screening: return "Plan rejected (message screening)"
+        case .present_but_not_honored: return "Plan present, not honored"
+        }
+    }
+
     static func subject(_ subject: Components.Schemas.Subject) -> String {
         switch subject {
         case .run(let run), .proposal_batch(let run):

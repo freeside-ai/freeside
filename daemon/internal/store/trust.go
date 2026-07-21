@@ -50,6 +50,9 @@ ON CONFLICT (profile_digest) DO NOTHING`
 	listTrustProfilesSQL = `
 SELECT profile_digest, repo, recorded_at, body FROM trust_profiles
 WHERE repo = ? ORDER BY rowid`
+	latestTrustProfileSQL = `
+SELECT profile_digest, repo, recorded_at, body FROM trust_profiles
+WHERE repo = ? ORDER BY rowid DESC LIMIT 1`
 
 	recordWorkflowAuditSQL = `
 INSERT INTO workflow_audits (repo, audited_commit_sha, audited_at, workflow_audit_digest, body)
@@ -135,9 +138,28 @@ func (tx *ReadTx) GetTrustProfile(ctx context.Context, digest domain.Digest) (do
 	return rec.Profile, nil
 }
 
+// LatestTrustProfile reconstructs only the newest recorded profile
+// revision for a repository: the current-binding read (plan §5.5). It
+// deliberately validates no older history: after an encoding-version bump
+// every pre-bump row is permanently stale by design, so a full-history read
+// would fail forever and make the documented re-approval recovery
+// unreachable (#222 review). The newest row itself still fails closed while
+// it is stale (the re-approval not yet recorded), and a stale historical
+// digest addressed directly (GetTrustProfile, an old authorization's
+// binding) stays fail-closed.
+func (tx *ReadTx) LatestTrustProfile(ctx context.Context, repo string) (domain.AutomationTrustProfile, error) {
+	row := tx.tx.QueryRowContext(ctx, latestTrustProfileSQL, repo)
+	rec, err := scanTrustProfile(row, "")
+	if err != nil {
+		return domain.AutomationTrustProfile{}, fmt.Errorf("latest trust profile %q: %w", repo, notFoundOr(err))
+	}
+	return rec.Profile, nil
+}
+
 // ListTrustProfiles returns every recorded profile revision for a
-// repository in recorded order, for the consumer that selects the current
-// binding.
+// repository in recorded order, validating every row: the audit/history
+// read. A consumer selecting the current binding uses LatestTrustProfile,
+// which stale history cannot poison.
 func (tx *ReadTx) ListTrustProfiles(ctx context.Context, repo string) ([]TrustProfileRecord, error) {
 	rows, err := tx.tx.QueryContext(ctx, listTrustProfilesSQL, repo)
 	if err != nil {

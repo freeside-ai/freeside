@@ -180,13 +180,20 @@ type AttentionItem struct {
 	// another (the stale-approval class, plan §3.1; §4 "approvals bind to
 	// digests"). A prepared command pins this set and is invalidated if it
 	// changes.
-	ArtifactDigests   []Digest          `json:"artifact_digests"`
-	PRHeadSHA         string            `json:"pr_head_sha"`
-	ItemVersion       int               `json:"item_version"`
-	InterruptionClass InterruptionClass `json:"interruption_class"`
-	ConversationID    *ConversationID   `json:"conversation_id"`
-	Timing            TimingSummary     `json:"timing"`
-	ExpiresWhen       *time.Time        `json:"expires_when"`
+	ArtifactDigests []Digest `json:"artifact_digests"`
+	PRHeadSHA       string   `json:"pr_head_sha"`
+	// CommitPlanNotice is the daemon-derived commit-plan notice (plan §5.6;
+	// CommitPlanNoticeReason): set when the reserved plan channel was
+	// consumed without a plan structuring the import, nil otherwise. The
+	// reason is classified by the daemon and never supplied by the
+	// workspace; emission is #212's, so nothing sets it until that unit
+	// lands.
+	CommitPlanNotice  *CommitPlanNoticeReason `json:"commit_plan_notice"`
+	ItemVersion       int                     `json:"item_version"`
+	InterruptionClass InterruptionClass       `json:"interruption_class"`
+	ConversationID    *ConversationID         `json:"conversation_id"`
+	Timing            TimingSummary           `json:"timing"`
+	ExpiresWhen       *time.Time              `json:"expires_when"`
 	// DecidedAt is the daemon-stamped instant the item's first concluding
 	// decision was accepted (plan §4: open-to-decision time is the headline
 	// attention-latency metric, with the §1 per-unit measure governing;
@@ -215,6 +222,7 @@ type AttentionItemInput struct {
 	EvidenceSnapshot  []Artifact
 	AgentClaims       []AgentClaim
 	PRHeadSHA         string
+	CommitPlanNotice  *CommitPlanNoticeReason
 	ItemVersion       int
 	InterruptionClass InterruptionClass
 	ConversationID    *ConversationID
@@ -246,6 +254,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		EvidenceSnapshot:  cloneArtifacts(in.EvidenceSnapshot),
 		AgentClaims:       cloneAgentClaims(in.AgentClaims),
 		PRHeadSHA:         in.PRHeadSHA,
+		CommitPlanNotice:  clonePtr(in.CommitPlanNotice),
 		ItemVersion:       in.ItemVersion,
 		InterruptionClass: in.InterruptionClass,
 		ConversationID:    clonePtr(in.ConversationID),
@@ -312,6 +321,9 @@ func (i AttentionItem) Validate() error {
 	}
 	if i.ExpiresWhen != nil && i.ExpiresWhen.IsZero() {
 		return fmt.Errorf("item %s expires_when: %w", i.ID, ErrMissingTimestamp)
+	}
+	if i.CommitPlanNotice != nil && !i.CommitPlanNotice.valid() {
+		return fmt.Errorf("item %s commit_plan_notice %q: %w", i.ID, *i.CommitPlanNotice, ErrInvalidCommitPlanNotice)
 	}
 	if i.DecidedAt != nil {
 		if i.DecidedAt.IsZero() {

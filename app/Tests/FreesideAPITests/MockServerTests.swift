@@ -12,6 +12,33 @@ import Testing
         #expect(snapshots.map(\.item.id) == expected)
     }
 
+    @Test func commitPlanNoticeRoundTripsThroughTheMock() async throws {
+        // The #222 plan-notice vocabulary (plan §5.6): every reason class
+        // survives the seed → serve → decode path, and absence stays nil.
+        var seeds: [Components.Schemas.AttentionItemSnapshot] = []
+        let reasons = Components.Schemas.CommitPlanNoticeReason.allCases
+        for (index, reason) in reasons.enumerated() {
+            var seed = AttentionFixtures.fixture(type: .ready_for_final_review)
+            seed.item.id = "item-notice-\(index)"
+            seed.item.commit_plan_notice = .init(value1: reason)
+            seeds.append(seed)
+        }
+        var absent = AttentionFixtures.fixture(type: .spec_approval)
+        absent.item.commit_plan_notice = nil
+        seeds.append(absent)
+
+        let server = MockServer(items: seeds)
+        let client = APIClientFactory.mock(server: server)
+        let snapshots = try await client.listAttentionItems().ok.body.json
+        for (index, reason) in reasons.enumerated() {
+            let item = snapshots.first { $0.item.id == "item-notice-\(index)" }?.item
+            #expect(item?.commit_plan_notice?.value1 == reason)
+        }
+        let served = snapshots.first { $0.item.id == "item-spec_approval" }?.item
+        #expect(served != nil)
+        #expect(served?.commit_plan_notice == nil)
+    }
+
     @Test func getReturnsCanonicalStateAndUnknownIsNotFound() async throws {
         let client = APIClientFactory.mock(server: MockServer())
         let snapshot =

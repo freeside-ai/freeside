@@ -40,6 +40,11 @@ enum MockContractValidation {
         if let decided = item.decided_at, decided.timeIntervalSince1970 < -62_000_000_000 {
             return "zero decided_at"
         }
+        // commit_plan_notice mirrors the domain's optional daemon-derived
+        // reason (#222): the generated closed enum makes the daemon's
+        // ErrInvalidCommitPlanNotice arm unrepresentable here (an unknown
+        // reason fails decode), and nil is a valid absence, so no check
+        // remains to mirror.
         if item.item_version < 1 { return "non-positive item_version" }
         // An empty requested_decision is structurally valid (#96): which
         // types must offer an action is signet policy (itemPolicyBreach).

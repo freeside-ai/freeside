@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -771,5 +772,74 @@ func TestSnapshotRejectsForgedMetadata(t *testing.T) {
 				t.Fatalf("error = %v, want errRowInconsistent", err)
 			}
 		})
+	}
+}
+
+// TestPutAttentionItemPreNoticeRowConverges is the #222 upgrade-boundary
+// guard for idempotent replay: a row persisted before commit_plan_notice
+// existed carries this item's exact content in different bytes (the stored
+// body has no such key, the fresh encoding renders an explicit null), so the
+// raw-byte fast path misses and the canonical compare must converge the
+// unchanged replay instead of rejecting it as a same-version rewrite.
+// Internal test: the legacy row is written as raw SQL past the Put boundary.
+func TestPutAttentionItemPreNoticeRowConverges(t *testing.T) {
+	ctx := context.Background()
+	db := openRaw(t)
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatalf("seedEpoch: %v", err)
+	}
+	s := &Store{db: db}
+
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-1", ProjectID: "proj-1",
+		Subject:           domain.Subject{Type: domain.SubjectRun, ID: "run-1"},
+		Type:              domain.AttentionReadyForFinalReview,
+		Priority:          domain.PriorityNormal,
+		Reason:            "checks are green and the diff is ready",
+		RequestedDecision: []domain.Action{domain.ActionOpenPR},
+		ItemVersion:       1,
+		InterruptionClass: domain.InterruptionPlannedGate,
+		Status:            domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewAttentionItem: %v", err)
+	}
+	body, err := encode(item)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	legacy := strings.Replace(body, `"commit_plan_notice":null,`, "", 1)
+	if legacy == body {
+		t.Fatal("legacy strip did not apply")
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO attention_items (id, project_id, conversation_id, entity_version, as_of_revision, body) VALUES (?, ?, NULL, 1, 1, ?)`,
+		item.ID, item.ProjectID, legacy); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+
+	if err := s.Write(ctx, func(tx *WriteTx) error {
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatalf("idempotent replay against a pre-notice row: %v", err)
+	}
+
+	// Converged without churn: the version did not advance and the stored
+	// bytes were not rewritten (only a real transition rewrites the row).
+	var version int64
+	var stored string
+	if err := db.QueryRowContext(ctx,
+		`SELECT entity_version, body FROM attention_items WHERE id = ?`, item.ID).
+		Scan(&version, &stored); err != nil {
+		t.Fatalf("read row back: %v", err)
+	}
+	if version != 1 {
+		t.Fatalf("entity_version = %d, want 1 (no churn)", version)
+	}
+	if stored != legacy {
+		t.Fatalf("stored body was rewritten:\ngot  %s\nwant %s", stored, legacy)
 	}
 }

@@ -32,9 +32,12 @@ type TrustSource interface {
 // StoreTrustSource is the store-backed TrustSource, mirroring StoreLedger:
 // it reads the latest recorded trust profile and workflow audit for a
 // repository in its own read transaction. The "current" profile and audit
-// are the last recorded revision of each (ListTrustProfiles and
-// ListWorkflowAudits order by insertion), so a §5.5 drift-recovery
-// re-approval or a fresh audit becomes current the moment it is recorded.
+// are the last recorded revision of each (LatestTrustProfile, and
+// ListWorkflowAudits ordered by insertion), so a §5.5 drift-recovery
+// re-approval or a fresh audit becomes current the moment it is recorded;
+// the latest-only profile read is what keeps that true across an
+// encoding-version bump, whose permanently stale pre-bump rows would abort
+// a validating full-history read forever (#222).
 type StoreTrustSource struct {
 	store *store.Store
 }
@@ -55,13 +58,12 @@ func NewStoreTrustSource(s *store.Store) (*StoreTrustSource, error) {
 func (t *StoreTrustSource) CurrentTrust(ctx context.Context, repo string) (CurrentTrust, error) {
 	var ct CurrentTrust
 	err := t.store.Read(ctx, func(tx *store.ReadTx) error {
-		profiles, err := tx.ListTrustProfiles(ctx, repo)
-		if err != nil {
+		profile, err := tx.LatestTrustProfile(ctx, repo)
+		switch {
+		case err == nil:
+			ct.Profile = &profile
+		case !errors.Is(err, store.ErrNotFound):
 			return err
-		}
-		if n := len(profiles); n > 0 {
-			p := profiles[n-1].Profile
-			ct.Profile = &p
 		}
 		audits, err := tx.ListWorkflowAudits(ctx, repo)
 		if err != nil {

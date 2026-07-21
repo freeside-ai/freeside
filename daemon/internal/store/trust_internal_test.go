@@ -33,6 +33,8 @@ func TestTrustRowsTamperedBodyFailsClosed(t *testing.T) {
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
 		Review:                     domain.ReviewSettings{Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config"},
 	})
@@ -118,6 +120,69 @@ func TestTrustRowsTamperedBodyFailsClosed(t *testing.T) {
 	}
 }
 
+// Captured verbatim from the v2 build: encode() of a minimal valid profile
+// (no commit_plan or message_ruleset members existed). The digest is
+// authentic for this content under the v2 encoding.
+const (
+	staleV2ProfileDigest = "sha256:2a6ed3b4091ca53f6b23a0af9153d3710a91611ee19d6ea2c21d3fe4c0a9b032"
+	staleV2ProfileBody   = `{"repo":"freeside-ai/candidate-repo","pr_execution":"audited_same_repo","candidate_automation_changes":"block","pr_github_token_permissions":"read_only","allow_oidc":false,"allow_environment_secrets":false,"allow_secret_bearing_pr_jobs":false,"allow_self_hosted_ci":false,"allow_pull_request_target":false,"workflow_audit_digest":"sha256:workflow-audit","review":{"mode":"auto","config_digest":"sha256:review-config"},"protected_paths":{"extra_automation_control_patterns":null,"extra_reviewer_instruction_patterns":null,"extra_git_metadata_patterns":null,"extra_verification_control_patterns":null,"extra_prompts_and_policy_patterns":null,"extra_egress_and_trust_patterns":null,"extra_materiality_rules_patterns":null},"profile_digest":"sha256:2a6ed3b4091ca53f6b23a0af9153d3710a91611ee19d6ea2c21d3fe4c0a9b032"}`
+)
+
+// TestTrustProfileStaleEncodingRowFailsClosed is the migration-path proof
+// for the v3 encoding bump at the persistence boundary: a row recorded under
+// the v2 encoding (this literal body and digest were captured from the v2
+// build, so the digest is authentic for its content under v2) fails decode's
+// Validate recompute under v3 and surfaces as a hard error, never ErrNotFound
+// and never a silently defaulted profile. The only path back to a readable
+// profile is a human re-recording an owner-approved v3 profile, which is how
+// the conservative single_commit default arrives (plan §5.5 drift recovery;
+// the v2 precedent is the protected-path widening bump).
+func TestTrustProfileStaleEncodingRowFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	db := openRaw(t)
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatalf("seedEpoch: %v", err)
+	}
+	s := &Store{db: db}
+
+	const v2Digest = staleV2ProfileDigest
+	const v2Body = staleV2ProfileBody
+
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO trust_profiles (profile_digest, repo, recorded_at, body) VALUES (?, ?, ?, ?)`,
+		v2Digest, "freeside-ai/candidate-repo",
+		formatTime(time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)), v2Body); err != nil {
+		t.Fatalf("insert v2 row: %v", err)
+	}
+
+	// decode's Validate rejects the row on its first v3 invariant: the
+	// commit_plan member a v2 body cannot carry. The digest recompute would
+	// reject it too (the version string participates in the address; the
+	// domain-level re-approval test pins that class); either way the read is
+	// a hard error, so no v2 row is ever silently defaulted into a v3
+	// profile.
+	err := s.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.GetTrustProfile(ctx, domain.Digest(v2Digest))
+		return err
+	})
+	if !errors.Is(err, domain.ErrInvalidCommitPlanMode) {
+		t.Fatalf("stale v2 row read error = %v, want ErrInvalidCommitPlanMode", err)
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("stale v2 row surfaced as ErrNotFound; a stale profile must be a hard error, not a miss: %v", err)
+	}
+	err = s.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.ListTrustProfiles(ctx, "freeside-ai/candidate-repo")
+		return err
+	})
+	if !errors.Is(err, domain.ErrInvalidCommitPlanMode) {
+		t.Fatalf("stale v2 row list error = %v, want ErrInvalidCommitPlanMode", err)
+	}
+}
+
 // TestTrustRowsInconsistentColumnsFailClosed: a row whose extracted key
 // columns disagree with a valid body is corrupt, not trusted data — the
 // scanner cross-check rejects it even though the body itself validates.
@@ -137,6 +202,8 @@ func TestTrustRowsInconsistentColumnsFailClosed(t *testing.T) {
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
 		Review:                     domain.ReviewSettings{Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config"},
 	})
@@ -187,5 +254,82 @@ func TestTrustRowsInconsistentColumnsFailClosed(t *testing.T) {
 	})
 	if !errors.Is(err, errRowInconsistent) {
 		t.Fatalf("inconsistent audit list error = %v, want errRowInconsistent", err)
+	}
+}
+
+// TestLatestTrustProfileSurvivesStaleHistory is the recovery half of the v3
+// migration path (#222 review): once the owner records a re-approved v3
+// profile, the current-binding read returns it even though the stale v2 row
+// remains in history; before that re-approval the newest row is the stale
+// one and the read still fails closed. The validating full-history list
+// keeps failing either way, so stale history is never silently readable.
+func TestLatestTrustProfileSurvivesStaleHistory(t *testing.T) {
+	ctx := context.Background()
+	db := openRaw(t)
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatalf("seedEpoch: %v", err)
+	}
+	s := &Store{db: db}
+
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO trust_profiles (profile_digest, repo, recorded_at, body) VALUES (?, ?, ?, ?)`,
+		staleV2ProfileDigest, "freeside-ai/candidate-repo",
+		formatTime(time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)), staleV2ProfileBody); err != nil {
+		t.Fatalf("insert v2 row: %v", err)
+	}
+
+	// Before re-approval the stale row is the newest: still fail closed.
+	err := s.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.LatestTrustProfile(ctx, "freeside-ai/candidate-repo")
+		return err
+	})
+	if !errors.Is(err, domain.ErrInvalidCommitPlanMode) {
+		t.Fatalf("latest over only a stale row error = %v, want ErrInvalidCommitPlanMode", err)
+	}
+
+	// The owner records the re-approved v3 profile: same content plus the
+	// explicit policy keys, a new digest, a new row.
+	reapproved, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo:                       "freeside-ai/candidate-repo",
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
+		WorkflowAuditDigest:        "sha256:workflow-audit",
+		Review:                     domain.ReviewSettings{Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config"},
+	})
+	if err != nil {
+		t.Fatalf("re-approved profile: %v", err)
+	}
+	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		return tx.RecordTrustProfile(ctx, reapproved, time.Date(2026, 7, 21, 13, 0, 0, 0, time.UTC))
+	}); err != nil {
+		t.Fatalf("record re-approved profile: %v", err)
+	}
+
+	// The current-binding read recovers the moment the re-approval lands.
+	var current domain.AutomationTrustProfile
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		p, err := tx.LatestTrustProfile(ctx, "freeside-ai/candidate-repo")
+		current = p
+		return err
+	}); err != nil {
+		t.Fatalf("latest after re-approval: %v", err)
+	}
+	if current.ProfileDigest != reapproved.ProfileDigest {
+		t.Fatalf("latest profile digest = %q, want re-approved %q", current.ProfileDigest, reapproved.ProfileDigest)
+	}
+
+	// The validating full-history read still fails closed on the stale row.
+	err = s.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.ListTrustProfiles(ctx, "freeside-ai/candidate-repo")
+		return err
+	})
+	if !errors.Is(err, domain.ErrInvalidCommitPlanMode) {
+		t.Fatalf("history list after re-approval error = %v, want ErrInvalidCommitPlanMode", err)
 	}
 }

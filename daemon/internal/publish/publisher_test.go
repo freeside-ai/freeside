@@ -718,6 +718,8 @@ func TestPublishRefusesTrustProfileDrift(t *testing.T) {
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:revised-audit",
 		Review:                     domain.ReviewSettings{Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config"},
 	})

@@ -540,6 +540,101 @@ func (m ReviewMode) valid() bool {
 	}
 }
 
+// CommitPlanMode gates commit-plan import per repository (plan §5.5, §5.6):
+// under single_commit, the conservative default, a present plan is never
+// decoded or honored and its presence surfaces as a notice; under
+// plan_preferred a valid plan structures a non-empty import, with the
+// enumerated agent-caused rejections falling back to one clean commit plus a
+// notice. There is no zero-value member: the empty string is invalid, so a
+// profile must record an explicit owner choice. The import behavior itself
+// is #212's; this type is the digest-bound policy key.
+type CommitPlanMode string
+
+const (
+	CommitPlanSingleCommit  CommitPlanMode = "single_commit"
+	CommitPlanPlanPreferred CommitPlanMode = "plan_preferred"
+)
+
+// AllCommitPlanModes lists every valid CommitPlanMode.
+var AllCommitPlanModes = []CommitPlanMode{CommitPlanSingleCommit, CommitPlanPlanPreferred}
+
+func (m CommitPlanMode) valid() bool {
+	switch m {
+	case CommitPlanSingleCommit, CommitPlanPlanPreferred:
+		return true
+	default:
+		return false
+	}
+}
+
+// MessageRuleset names a built-in versioned commit-message screening ruleset
+// (plan §5.5, §5.6): the automation-control corpus that publishing messages
+// are screened against under plan_preferred. AllMessageRulesets is the
+// built-in registry the profile's message_ruleset identifier validates
+// against when the profile is reviewed; an unknown identifier fails closed
+// there, and V1 deliberately has no extension surface and no import-time
+// fallback. The ruleset content (the screening corpus) lives with the
+// screening implementation (#212); this identifier is the digest-bound
+// policy key that pins which corpus version the owner approved.
+type MessageRuleset string
+
+const (
+	// MessageRulesetGitHub1 is the built-in GitHub ruleset, version 1:
+	// forge close keywords, CI-skip directives, identity and attestation
+	// trailers, and the daemon's reserved provenance trailer key.
+	MessageRulesetGitHub1 MessageRuleset = "github/1"
+)
+
+// AllMessageRulesets is the built-in ruleset registry, the single place a
+// new ruleset version is registered.
+var AllMessageRulesets = []MessageRuleset{MessageRulesetGitHub1}
+
+func (r MessageRuleset) valid() bool {
+	switch r {
+	case MessageRulesetGitHub1:
+		return true
+	default:
+		return false
+	}
+}
+
+// CommitPlanNoticeReason classifies the daemon-derived commit-plan notice
+// (plan §5.6): the fact, carried on an attention item, that the reserved
+// plan channel was consumed without a plan structuring the import. It is
+// informational surfacing, not a publication-gate finding (contrast
+// CandidateFindingClass): the import it describes still produced a
+// candidate. absent, structural, and screening name the plan_preferred
+// fallback classes on a non-empty import; present_but_not_honored records a
+// present plan consumed but not used, under single_commit or on a
+// zero-change plan_preferred import. The reason is derived by the daemon,
+// which observed absence or classified an enumerated rejection itself, and
+// is never supplied by the workspace. Emission is #212's; this vocabulary
+// is the contract surface it emits into.
+type CommitPlanNoticeReason string
+
+const (
+	CommitPlanNoticeAbsent               CommitPlanNoticeReason = "absent"
+	CommitPlanNoticeStructural           CommitPlanNoticeReason = "structural"
+	CommitPlanNoticeScreening            CommitPlanNoticeReason = "screening"
+	CommitPlanNoticePresentButNotHonored CommitPlanNoticeReason = "present_but_not_honored"
+)
+
+// AllCommitPlanNoticeReasons lists every valid CommitPlanNoticeReason.
+var AllCommitPlanNoticeReasons = []CommitPlanNoticeReason{
+	CommitPlanNoticeAbsent, CommitPlanNoticeStructural,
+	CommitPlanNoticeScreening, CommitPlanNoticePresentButNotHonored,
+}
+
+func (r CommitPlanNoticeReason) valid() bool {
+	switch r {
+	case CommitPlanNoticeAbsent, CommitPlanNoticeStructural,
+		CommitPlanNoticeScreening, CommitPlanNoticePresentButNotHonored:
+		return true
+	default:
+		return false
+	}
+}
+
 // CandidateFindingClass is the trust class of one candidate policy finding
 // (plan §5.6, §5.8), the axis the publication gate dispatches on. It is
 // deliberately coarser than the package-local finding kinds the importer and
