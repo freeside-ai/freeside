@@ -195,6 +195,13 @@ public enum AttentionFixtures {
                 ))
         }
 
+        // The daemon-derived commit-plan notice (plan §5.6) rides the review
+        // card in the seeded inbox, matching the daemon's golden fixture: a
+        // present plan a single_commit repository consumed but did not
+        // honor. Every other card keeps the null render.
+        let commitPlanNotice: Components.Schemas.AttentionItem.commit_plan_noticePayload? =
+            type == .ready_for_final_review ? .init(value1: .present_but_not_honored) : nil
+
         let item = Components.Schemas.AttentionItem(
             id: "item-\(key)",
             project_id: "proj-1",
@@ -215,6 +222,7 @@ public enum AttentionFixtures {
             agent_claims: agentClaims,
             artifact_digests: (agentClaims.map(\.digest) + [evidenceDigest]).sorted(),
             pr_head_sha: prHeadSHA,
+            commit_plan_notice: commitPlanNotice,
             item_version: 1,
             interruption_class: interruption,
             conversation_id: nil,
