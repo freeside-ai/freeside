@@ -16,6 +16,8 @@ func validTrustProfileInput() domain.AutomationTrustProfileInput {
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
 		Review: domain.ReviewSettings{
 			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
@@ -57,6 +59,15 @@ func TestTrustProfileDigest(t *testing.T) {
 	drifted.AllowSelfHostedCI = true
 	if err := drifted.Validate(); !errors.Is(err, domain.ErrProfileDigestMismatch) {
 		t.Fatalf("drifted content error = %v, want ErrProfileDigestMismatch", err)
+	}
+
+	// A commit-plan policy flip under the bound digest is the same drift
+	// class: the §5.6 gating keys participate in the address, so flipping the
+	// mode requires owner re-approval of a new digest.
+	planFlipped := base
+	planFlipped.CommitPlan = domain.CommitPlanPlanPreferred
+	if err := planFlipped.Validate(); !errors.Is(err, domain.ErrProfileDigestMismatch) {
+		t.Fatalf("commit-plan flip error = %v, want ErrProfileDigestMismatch", err)
 	}
 
 	// Pattern order and duplication do not change the address: the
@@ -107,6 +118,10 @@ func TestTrustProfileValidation(t *testing.T) {
 		{"invalid automation changes", func(in *domain.AutomationTrustProfileInput) { in.CandidateAutomationChanges = "allow" }, domain.ErrInvalidAutomationChanges},
 		{"invalid token permissions", func(in *domain.AutomationTrustProfileInput) { in.PRGitHubTokenPermissions = "admin" }, domain.ErrInvalidTokenPermissions},
 		{"empty workflow audit digest", func(in *domain.AutomationTrustProfileInput) { in.WorkflowAuditDigest = "" }, domain.ErrEmptyField},
+		{"invalid commit plan", func(in *domain.AutomationTrustProfileInput) { in.CommitPlan = "plan_required" }, domain.ErrInvalidCommitPlanMode},
+		{"empty commit plan", func(in *domain.AutomationTrustProfileInput) { in.CommitPlan = "" }, domain.ErrInvalidCommitPlanMode},
+		{"unregistered message ruleset", func(in *domain.AutomationTrustProfileInput) { in.MessageRuleset = "github/2" }, domain.ErrUnknownMessageRuleset},
+		{"empty message ruleset", func(in *domain.AutomationTrustProfileInput) { in.MessageRuleset = "" }, domain.ErrUnknownMessageRuleset},
 		{"invalid review mode", func(in *domain.AutomationTrustProfileInput) { in.Review.Mode = "manual" }, domain.ErrInvalidReviewMode},
 		{"empty review config digest", func(in *domain.AutomationTrustProfileInput) { in.Review.ConfigDigest = "" }, domain.ErrEmptyField},
 		{"empty pattern", func(in *domain.AutomationTrustProfileInput) {
@@ -216,13 +231,11 @@ func TestTrustProfileRoundTrip(t *testing.T) {
 	}
 }
 
-// TestTrustProfileDigestStability pins the v2 canonical form: a fixed,
-// fully-populated profile resolves to this digest on every build. A mismatch
-// means the canonical encoding changed without a version bump (or a bump
-// without repinning), either of which would read unchanged profiles as drift
-// across a daemon upgrade (plan §5.5).
-func TestTrustProfileDigestStability(t *testing.T) {
-	p, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+// fullyPopulatedTrustProfileInput is the digest-stability fixture: every
+// field non-zero where the posture allows it. It is also what the stale-v2
+// re-approval test perturbs, so both pins describe one content.
+func fullyPopulatedTrustProfileInput() domain.AutomationTrustProfileInput {
+	return domain.AutomationTrustProfileInput{
 		Repo:                       "freeside-ai/demo",
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
@@ -232,6 +245,8 @@ func TestTrustProfileDigestStability(t *testing.T) {
 		AllowSecretBearingPRJobs:   false,
 		AllowSelfHostedCI:          true,
 		AllowPullRequestTarget:     false,
+		CommitPlan:                 domain.CommitPlanPlanPreferred,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
 		Review: domain.ReviewSettings{
 			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
@@ -245,13 +260,43 @@ func TestTrustProfileDigestStability(t *testing.T) {
 			ExtraEgressAndTrustPatterns:      []string{"egress.yaml"},
 			ExtraMaterialityRulesPatterns:    []string{"docs/plan.md"},
 		},
-	})
+	}
+}
+
+// TestTrustProfileDigestStability pins the v3 canonical form: a fixed,
+// fully-populated profile resolves to this digest on every build. A mismatch
+// means the canonical encoding changed without a version bump (or a bump
+// without repinning), either of which would read unchanged profiles as drift
+// across a daemon upgrade (plan §5.5).
+func TestTrustProfileDigestStability(t *testing.T) {
+	p, err := domain.NewAutomationTrustProfile(fullyPopulatedTrustProfileInput())
 	if err != nil {
 		t.Fatalf("NewAutomationTrustProfile: %v", err)
 	}
-	const want = domain.Digest("sha256:47ea9bd9d11adf9daf2f5861b87a54feb1d6a47829fef78bc32c7bef9e5d9ea3")
+	const want = domain.Digest("sha256:9c5e7c171d229057d8f75fcf844c51901c181a0f740cf0d142461b0a66cc696d")
 	if p.ProfileDigest != want {
-		t.Fatalf("v2 canonical digest = %q, want %q", p.ProfileDigest, want)
+		t.Fatalf("v3 canonical digest = %q, want %q", p.ProfileDigest, want)
+	}
+}
+
+// TestTrustProfileV2DigestRequiresReapproval is the migration-path proof for
+// the v3 encoding bump: a digest a human approved under v2 (the pinned v2
+// stability digest, computed over this same content before commit_plan and
+// message_ruleset existed) no longer validates, so every stored profile
+// fails closed until an owner records a re-approved v3 profile. The
+// conservative single_commit default therefore arrives only through that
+// re-approval, never by silent injection into an already-approved digest.
+func TestTrustProfileV2DigestRequiresReapproval(t *testing.T) {
+	p, err := domain.NewAutomationTrustProfile(fullyPopulatedTrustProfileInput())
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile: %v", err)
+	}
+	// The v2 pin from TestTrustProfileDigestStability before the bump.
+	const v2Digest = domain.Digest("sha256:47ea9bd9d11adf9daf2f5861b87a54feb1d6a47829fef78bc32c7bef9e5d9ea3")
+	stale := p
+	stale.ProfileDigest = v2Digest
+	if err := stale.Validate(); !errors.Is(err, domain.ErrProfileDigestMismatch) {
+		t.Fatalf("v2-approved digest error = %v, want ErrProfileDigestMismatch", err)
 	}
 }
 

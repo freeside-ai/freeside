@@ -26,6 +26,8 @@ var (
 	ErrInvalidAutomationChanges  = errors.New("invalid automation change policy")
 	ErrInvalidTokenPermissions   = errors.New("invalid token permissions mode")
 	ErrInvalidReviewMode         = errors.New("invalid review mode")
+	ErrInvalidCommitPlanMode     = errors.New("invalid commit plan mode")
+	ErrUnknownMessageRuleset     = errors.New("message ruleset is not in the built-in ruleset registry")
 	ErrInvalidFindingClass       = errors.New("invalid candidate finding class")
 	ErrInvalidFindingCategory    = errors.New("invalid control-plane category")
 	ErrInvalidFindingDisposition = errors.New("invalid finding disposition")

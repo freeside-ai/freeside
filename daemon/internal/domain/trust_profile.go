@@ -15,11 +15,16 @@ import (
 // discipline) is a new version: two daemon builds must never derive different
 // digests for the same profile content, or the digest-bound publication gate
 // (plan §5.5) would read an unchanged profile as drift across an upgrade.
-// v2 added the prompts-and-policy, egress-and-trust, and materiality-rules
-// widening lists to ProtectedPathConfig; v1 rows fail Validate's digest
+// v3 added the commit_plan and message_ruleset policy keys (§5.5, §5.6
+// commit-plan gating): a policy flip must change the profile digest, and a
+// stored profile acquires the conservative single_commit default only
+// through owner re-approval, never by silent injection into an
+// already-approved digest. v2 added the prompts-and-policy,
+// egress-and-trust, and materiality-rules widening lists to
+// ProtectedPathConfig. Rows from a prior version fail Validate's digest
 // recompute and are re-recorded by a human, never migrated (§5.5 drift
 // recovery).
-const trustProfileEncodingVersion = "freeside-trust-profile/v2"
+const trustProfileEncodingVersion = "freeside-trust-profile/v3"
 
 // ProtectedPathConfig is the repository-specific widening of the protected
 // control-plane path classes (plan §5.5, §5.8). Only Extra* fields exist by
@@ -154,6 +159,8 @@ type AutomationTrustProfile struct {
 	AllowSecretBearingPRJobs   bool                   `json:"allow_secret_bearing_pr_jobs"`
 	AllowSelfHostedCI          bool                   `json:"allow_self_hosted_ci"`
 	AllowPullRequestTarget     bool                   `json:"allow_pull_request_target"`
+	CommitPlan                 CommitPlanMode         `json:"commit_plan"`
+	MessageRuleset             MessageRuleset         `json:"message_ruleset"`
 	WorkflowAuditDigest        Digest                 `json:"workflow_audit_digest"`
 	Review                     ReviewSettings         `json:"review"`
 	ProtectedPaths             ProtectedPathConfig    `json:"protected_paths"`
@@ -174,6 +181,8 @@ type AutomationTrustProfileInput struct {
 	AllowSecretBearingPRJobs   bool
 	AllowSelfHostedCI          bool
 	AllowPullRequestTarget     bool
+	CommitPlan                 CommitPlanMode
+	MessageRuleset             MessageRuleset
 	WorkflowAuditDigest        Digest
 	Review                     ReviewSettings
 	ProtectedPaths             ProtectedPathConfig
@@ -194,6 +203,8 @@ func NewAutomationTrustProfile(in AutomationTrustProfileInput) (AutomationTrustP
 		AllowSecretBearingPRJobs:   in.AllowSecretBearingPRJobs,
 		AllowSelfHostedCI:          in.AllowSelfHostedCI,
 		AllowPullRequestTarget:     in.AllowPullRequestTarget,
+		CommitPlan:                 in.CommitPlan,
+		MessageRuleset:             in.MessageRuleset,
 		WorkflowAuditDigest:        in.WorkflowAuditDigest,
 		Review:                     in.Review,
 		ProtectedPaths:             in.ProtectedPaths.canonicalize(),
@@ -223,6 +234,8 @@ type canonicalTrustProfile struct {
 	AllowSecretBearingPRJobs   bool                   `json:"allow_secret_bearing_pr_jobs"`
 	AllowSelfHostedCI          bool                   `json:"allow_self_hosted_ci"`
 	AllowPullRequestTarget     bool                   `json:"allow_pull_request_target"`
+	CommitPlan                 CommitPlanMode         `json:"commit_plan"`
+	MessageRuleset             MessageRuleset         `json:"message_ruleset"`
 	WorkflowAuditDigest        Digest                 `json:"workflow_audit_digest"`
 	Review                     ReviewSettings         `json:"review"`
 	ProtectedPaths             ProtectedPathConfig    `json:"protected_paths"`
@@ -246,6 +259,8 @@ func (p AutomationTrustProfile) ComputeDigest() (Digest, error) {
 		AllowSecretBearingPRJobs:   p.AllowSecretBearingPRJobs,
 		AllowSelfHostedCI:          p.AllowSelfHostedCI,
 		AllowPullRequestTarget:     p.AllowPullRequestTarget,
+		CommitPlan:                 p.CommitPlan,
+		MessageRuleset:             p.MessageRuleset,
 		WorkflowAuditDigest:        p.WorkflowAuditDigest,
 		Review:                     p.Review,
 		ProtectedPaths:             p.ProtectedPaths.canonicalize(),
@@ -273,6 +288,15 @@ func (p AutomationTrustProfile) Validate() error {
 	}
 	if !p.PRGitHubTokenPermissions.valid() {
 		return fmt.Errorf("trust profile pr_github_token_permissions %q: %w", p.PRGitHubTokenPermissions, ErrInvalidTokenPermissions)
+	}
+	if !p.CommitPlan.valid() {
+		return fmt.Errorf("trust profile commit_plan %q: %w", p.CommitPlan, ErrInvalidCommitPlanMode)
+	}
+	// The registry check is the §5.5 profile-review gate: an identifier the
+	// built-in registry does not carry fails closed here, so an unscreenable
+	// ruleset can never be approved into a digest.
+	if !p.MessageRuleset.valid() {
+		return fmt.Errorf("trust profile message_ruleset %q: %w", p.MessageRuleset, ErrUnknownMessageRuleset)
 	}
 	if p.WorkflowAuditDigest == "" {
 		return fmt.Errorf("trust profile workflow_audit_digest: %w", ErrEmptyField)

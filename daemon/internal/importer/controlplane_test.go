@@ -19,6 +19,8 @@ func fixtureTrustProfile(t *testing.T) domain.AutomationTrustProfile {
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
 		Review: domain.ReviewSettings{
 			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
