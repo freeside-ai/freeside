@@ -417,6 +417,9 @@ repository_security:
   allow_secret_bearing_pr_jobs: false
   allow_self_hosted_ci: false
   allow_pull_request_target: false
+  allow_reusable_workflows: false
+  allow_package_publishing: false
+  allow_artifact_consumers: false
   commit_plan: single_commit | plan_preferred
                                              # Section 5.6 agent-proposed
                                              # commit plan; conservative

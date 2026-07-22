@@ -35,6 +35,7 @@ func fixtureKey(t *testing.T) *rsa.PrivateKey {
 	block, _ := pem.Decode(raw)
 	if block == nil {
 		t.Fatal("fixture key is not PEM")
+		return nil
 	}
 	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 	if err != nil {

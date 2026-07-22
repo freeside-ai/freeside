@@ -184,6 +184,10 @@ func (s trustSource) CurrentTrust(context.Context, string) (publish.CurrentTrust
 	return publish.CurrentTrust{Profile: &s.profile, Audit: &s.audit}, nil
 }
 
+func (s trustSource) Audit(context.Context, string, string) (domain.WorkflowAudit, error) {
+	return s.audit, nil
+}
+
 type authzSource struct {
 	auths map[domain.Digest]domain.CandidateAuthorization
 }
@@ -264,6 +268,7 @@ func TestImportFindingsBlockPublication(t *testing.T) {
 
 	pub := publish.NewPublisher(
 		zeroTokenSource{}, forge.Client(), forge.URL,
+		trustSource{profile: profile, audit: audit},
 		failLedger{t},
 		trustSource{profile: profile, audit: audit},
 		authzSource{auths: map[domain.Digest]domain.CandidateAuthorization{auth.ID: auth}},

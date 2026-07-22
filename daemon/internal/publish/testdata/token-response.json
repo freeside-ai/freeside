@@ -2,7 +2,10 @@
   "token": "ghs_FIXTURETOKENFIXTURETOKEN0000",
   "expires_at": "2026-07-16T13:00:00Z",
   "permissions": {
+    "actions": "read",
+    "administration": "read",
     "contents": "write",
+    "environments": "read",
     "pull_requests": "write",
     "metadata": "read"
   },

@@ -1,1 +1,1 @@
-{"repositories":["evidence-repo"],"permissions":{"contents":"write","pull_requests":"write","metadata":"read"}}
+{"repositories":["evidence-repo"],"permissions":{"actions":"read","administration":"read","contents":"write","environments":"read","pull_requests":"write","metadata":"read"}}

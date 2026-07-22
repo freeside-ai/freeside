@@ -2,6 +2,7 @@ package publish_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -84,6 +85,25 @@ func (s memoryTrustSource) CurrentTrust(context.Context, string) (publish.Curren
 }
 
 var _ publish.TrustSource = memoryTrustSource{}
+
+// sourceWorkflowAuditor adapts the pre-#182 trust fixtures into a fresh-audit
+// port for publisher tests. Production uses GitHubWorkflowAuditor; these tests
+// deliberately keep their existing fixed observation so each gate case stays
+// focused on one axis.
+type sourceWorkflowAuditor struct{ source publish.TrustSource }
+
+func (a sourceWorkflowAuditor) Audit(ctx context.Context, repo, _ string) (domain.WorkflowAudit, error) {
+	current, err := a.source.CurrentTrust(ctx, repo)
+	if err != nil {
+		return domain.WorkflowAudit{}, err
+	}
+	if current.Audit == nil {
+		return domain.WorkflowAudit{}, fmt.Errorf("no current workflow audit for %s: %w", repo, publish.ErrTrustProfileDrift)
+	}
+	return *current.Audit, nil
+}
+
+var _ publish.WorkflowAuditor = sourceWorkflowAuditor{}
 
 // conformantTrust is the memory trust source testCandidate passes the drift
 // gate against: the current profile it is bound to and a matching audit.

@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -129,12 +131,12 @@ const (
 )
 
 // TestTrustProfileStaleEncodingRowFailsClosed is the migration-path proof
-// for the v3 encoding bump at the persistence boundary: a row recorded under
+// for trust-profile encoding bumps at the persistence boundary: a row recorded under
 // the v2 encoding (this literal body and digest were captured from the v2
 // build, so the digest is authentic for its content under v2) fails decode's
-// Validate recompute under v3 and surfaces as a hard error, never ErrNotFound
+// Validate recompute under v4 and surfaces as a hard error, never ErrNotFound
 // and never a silently defaulted profile. The only path back to a readable
-// profile is a human re-recording an owner-approved v3 profile, which is how
+// profile is a human re-recording an owner-approved current profile, which is how
 // the conservative single_commit default arrives (plan §5.5 drift recovery;
 // the v2 precedent is the protected-path widening bump).
 func TestTrustProfileStaleEncodingRowFailsClosed(t *testing.T) {
@@ -158,11 +160,11 @@ func TestTrustProfileStaleEncodingRowFailsClosed(t *testing.T) {
 		t.Fatalf("insert v2 row: %v", err)
 	}
 
-	// decode's Validate rejects the row on its first v3 invariant: the
+	// decode's Validate rejects the row on its first post-v2 invariant: the
 	// commit_plan member a v2 body cannot carry. The digest recompute would
 	// reject it too (the version string participates in the address; the
 	// domain-level re-approval test pins that class); either way the read is
-	// a hard error, so no v2 row is ever silently defaulted into a v3
+	// a hard error, so no v2 row is ever silently defaulted into a current
 	// profile.
 	err := s.Read(ctx, func(tx *ReadTx) error {
 		_, err := tx.GetTrustProfile(ctx, domain.Digest(v2Digest))
@@ -257,8 +259,8 @@ func TestTrustRowsInconsistentColumnsFailClosed(t *testing.T) {
 	}
 }
 
-// TestLatestTrustProfileSurvivesStaleHistory is the recovery half of the v3
-// migration path (#222 review): once the owner records a re-approved v3
+// TestLatestTrustProfileSurvivesStaleHistory is the recovery half of the
+// migration path (#222 review): once the owner records a re-approved current
 // profile, the current-binding read returns it even though the stale v2 row
 // remains in history; before that re-approval the newest row is the stale
 // one and the read still fails closed. The validating full-history list
@@ -280,6 +282,12 @@ func TestLatestTrustProfileSurvivesStaleHistory(t *testing.T) {
 		formatTime(time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)), staleV2ProfileBody); err != nil {
 		t.Fatalf("insert v2 row: %v", err)
 	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO trust_profile_activations (repo, profile_digest, activated_at) VALUES (?, ?, ?)`,
+		"freeside-ai/candidate-repo", staleV2ProfileDigest,
+		formatTime(time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC))); err != nil {
+		t.Fatalf("activate v2 row: %v", err)
+	}
 
 	// Before re-approval the stale row is the newest: still fail closed.
 	err := s.Read(ctx, func(tx *ReadTx) error {
@@ -290,7 +298,7 @@ func TestLatestTrustProfileSurvivesStaleHistory(t *testing.T) {
 		t.Fatalf("latest over only a stale row error = %v, want ErrInvalidCommitPlanMode", err)
 	}
 
-	// The owner records the re-approved v3 profile: same content plus the
+	// The owner records the re-approved current profile: same content plus the
 	// explicit policy keys, a new digest, a new row.
 	reapproved, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo:                       "freeside-ai/candidate-repo",
@@ -331,5 +339,73 @@ func TestLatestTrustProfileSurvivesStaleHistory(t *testing.T) {
 	})
 	if !errors.Is(err, domain.ErrInvalidCommitPlanMode) {
 		t.Fatalf("history list after re-approval error = %v, want ErrInvalidCommitPlanMode", err)
+	}
+}
+
+func TestTrustProfileActivationMigrationBackfillsLatestProfile(t *testing.T) {
+	ctx := context.Background()
+	db := openRaw(t)
+	files, err := fs.Glob(migrations.FS, "000[1-7]_*.sql")
+	if err != nil {
+		t.Fatalf("glob pre-activation migrations: %v", err)
+	}
+	prefix := fstest.MapFS{}
+	for _, name := range files {
+		body, err := fs.ReadFile(migrations.FS, name)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", name, err)
+		}
+		prefix[name] = &fstest.MapFile{Data: body}
+	}
+	if err := migrate(ctx, db, prefix); err != nil {
+		t.Fatalf("migrate through 0007: %v", err)
+	}
+
+	profileA, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: "freeside-ai/candidate-repo", PRExecution: domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
+		WorkflowAuditDigest: "sha256:workflow-audit",
+		Review:              domain.ReviewSettings{Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config"},
+	})
+	if err != nil {
+		t.Fatalf("profile A: %v", err)
+	}
+	inputB := domain.AutomationTrustProfileInput{
+		Repo: profileA.Repo, PRExecution: profileA.PRExecution,
+		CandidateAutomationChanges: profileA.CandidateAutomationChanges,
+		PRGitHubTokenPermissions:   profileA.PRGitHubTokenPermissions, AllowOIDC: true,
+		CommitPlan: profileA.CommitPlan, MessageRuleset: profileA.MessageRuleset,
+		WorkflowAuditDigest: profileA.WorkflowAuditDigest, Review: profileA.Review,
+	}
+	profileB, err := domain.NewAutomationTrustProfile(inputB)
+	if err != nil {
+		t.Fatalf("profile B: %v", err)
+	}
+	for i, profile := range []domain.AutomationTrustProfile{profileA, profileB} {
+		body, err := encode(profile)
+		if err != nil {
+			t.Fatalf("encode profile %d: %v", i, err)
+		}
+		if _, err := db.ExecContext(ctx,
+			`INSERT INTO trust_profiles (profile_digest, repo, recorded_at, body) VALUES (?, ?, ?, ?)`,
+			profile.ProfileDigest, profile.Repo,
+			formatTime(time.Date(2026, 7, 21, 12+i, 0, 0, 0, time.UTC)), body); err != nil {
+			t.Fatalf("insert profile %d: %v", i, err)
+		}
+	}
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate through activation: %v", err)
+	}
+	s := &Store{db: db}
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		current, err := tx.LatestTrustProfile(ctx, profileA.Repo)
+		if err == nil && current.ProfileDigest != profileB.ProfileDigest {
+			t.Errorf("backfilled digest = %q, want latest %q", current.ProfileDigest, profileB.ProfileDigest)
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("read backfilled current profile: %v", err)
 	}
 }

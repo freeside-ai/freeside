@@ -8,6 +8,9 @@
   "allow_secret_bearing_pr_jobs": false,
   "allow_self_hosted_ci": false,
   "allow_pull_request_target": false,
+  "allow_reusable_workflows": false,
+  "allow_package_publishing": false,
+  "allow_artifact_consumers": false,
   "commit_plan": "single_commit",
   "message_ruleset": "github/1",
   "workflow_audit_digest": "sha256:workflow-audit",
@@ -34,5 +37,5 @@
       "docs/plan.md"
     ]
   },
-  "profile_digest": "sha256:94600d68b4ff63de11e365164b95f08a6937a3d2a5554c479c1406d04fdf8c79"
+  "profile_digest": "sha256:7b0fccb74a2bd610c66339968470160a2e7f6fb17cb087ab73ce7c61916c393f"
 }

@@ -42,6 +42,9 @@ const (
 INSERT INTO trust_profiles (profile_digest, repo, recorded_at, body)
 VALUES (?, ?, ?, ?)
 ON CONFLICT (profile_digest) DO NOTHING`
+	recordTrustProfileActivationSQL = `
+INSERT INTO trust_profile_activations (repo, profile_digest, activated_at)
+VALUES (?, ?, ?)`
 	getTrustProfileSQL = `SELECT repo, recorded_at, body FROM trust_profiles WHERE profile_digest = ?`
 	// Lists order by rowid (insertion order), never by the RFC3339Nano text
 	// columns: trailing zeros are trimmed, so sub-second instants misorder
@@ -51,8 +54,11 @@ ON CONFLICT (profile_digest) DO NOTHING`
 SELECT profile_digest, repo, recorded_at, body FROM trust_profiles
 WHERE repo = ? ORDER BY rowid`
 	latestTrustProfileSQL = `
-SELECT profile_digest, repo, recorded_at, body FROM trust_profiles
-WHERE repo = ? ORDER BY rowid DESC LIMIT 1`
+SELECT p.profile_digest, p.repo, p.recorded_at, p.body
+FROM trust_profile_activations AS a
+JOIN trust_profiles AS p
+  ON p.repo = a.repo AND p.profile_digest = a.profile_digest
+WHERE a.repo = ? ORDER BY a.id DESC LIMIT 1`
 
 	recordWorkflowAuditSQL = `
 INSERT INTO workflow_audits (repo, audited_commit_sha, audited_at, workflow_audit_digest, body)
@@ -74,11 +80,11 @@ FROM candidate_authorizations WHERE repo = ? AND head_sha = ?
 ORDER BY rowid`
 )
 
-// RecordTrustProfile persists one human-approved profile revision,
-// write-once per content digest: a byte-identical replay converges on the
-// existing row, a different profile under the same digest is an
-// ErrImmutableConflict (and unreachable without a digest collision, since
-// encode's Validate recomputes the digest from the content).
+// RecordTrustProfile persists and activates one new human-approved profile
+// revision, write-once per content digest. A byte-identical replay converges
+// without recording another activation: otherwise a stale retry of profile A
+// after profile B could silently reactivate A. ActivateTrustProfile is the
+// explicit A -> B -> A owner-decision path.
 func (tx *InternalTx) RecordTrustProfile(ctx context.Context, profile domain.AutomationTrustProfile, recordedAt time.Time) error {
 	body, err := encode(profile)
 	if err != nil {
@@ -87,13 +93,63 @@ func (tx *InternalTx) RecordTrustProfile(ctx context.Context, profile domain.Aut
 	if recordedAt.IsZero() {
 		return fmt.Errorf("record trust profile %q: zero recorded_at", profile.Repo)
 	}
-	if err := tx.putImmutable(ctx, recordTrustProfileSQL,
-		[]any{profile.ProfileDigest, profile.Repo, formatTime(recordedAt.UTC()), body},
-		`SELECT body FROM trust_profiles WHERE profile_digest = ?`,
-		[]any{profile.ProfileDigest}, body); err != nil {
+	res, err := tx.tx.ExecContext(ctx, recordTrustProfileSQL,
+		profile.ProfileDigest, profile.Repo, formatTime(recordedAt.UTC()), body)
+	if err != nil {
+		return fmt.Errorf("record trust profile %q: %w", profile.Repo, err)
+	}
+	inserted, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("record trust profile %q: %w", profile.Repo, err)
+	}
+	if inserted == 0 {
+		var existing string
+		if err := tx.tx.QueryRowContext(ctx,
+			`SELECT body FROM trust_profiles WHERE profile_digest = ?`,
+			profile.ProfileDigest).Scan(&existing); err != nil {
+			return fmt.Errorf("record trust profile %q: %w", profile.Repo, err)
+		}
+		if existing != body {
+			return fmt.Errorf("record trust profile %q: %w", profile.Repo, ErrImmutableConflict)
+		}
+		return nil
+	}
+	if err := tx.recordTrustProfileActivation(ctx, profile.Repo, profile.ProfileDigest, recordedAt); err != nil {
 		return fmt.Errorf("record trust profile %q: %w", profile.Repo, err)
 	}
 	return nil
+}
+
+// ActivateTrustProfile explicitly selects a previously recorded profile as
+// current. It validates the addressed immutable row before appending the
+// decision, so a stale-encoding or cross-repository digest cannot become
+// current. Repeating an activation is harmless history and leaves the same
+// profile current; callers that need command-level idempotency supply it at
+// the command/inbox boundary.
+func (tx *InternalTx) ActivateTrustProfile(ctx context.Context, repo string, digest domain.Digest, activatedAt time.Time) error {
+	if repo == "" || digest == "" {
+		return fmt.Errorf("activate trust profile: empty repo or digest")
+	}
+	if activatedAt.IsZero() {
+		return fmt.Errorf("activate trust profile %q: zero activated_at", repo)
+	}
+	profile, err := tx.GetTrustProfile(ctx, digest)
+	if err != nil {
+		return fmt.Errorf("activate trust profile %q: %w", repo, err)
+	}
+	if profile.Repo != repo {
+		return fmt.Errorf("activate trust profile %q: digest belongs to %q", repo, profile.Repo)
+	}
+	if err := tx.recordTrustProfileActivation(ctx, repo, digest, activatedAt); err != nil {
+		return fmt.Errorf("activate trust profile %q: %w", repo, err)
+	}
+	return nil
+}
+
+func (tx *InternalTx) recordTrustProfileActivation(ctx context.Context, repo string, digest domain.Digest, activatedAt time.Time) error {
+	_, err := tx.tx.ExecContext(ctx, recordTrustProfileActivationSQL,
+		repo, digest, formatTime(activatedAt.UTC()))
+	return err
 }
 
 // scanTrustProfile is the one reconstruction path for profile rows: decode
@@ -138,12 +194,12 @@ func (tx *ReadTx) GetTrustProfile(ctx context.Context, digest domain.Digest) (do
 	return rec.Profile, nil
 }
 
-// LatestTrustProfile reconstructs only the newest recorded profile
-// revision for a repository: the current-binding read (plan §5.5). It
+// LatestTrustProfile reconstructs the explicitly activated profile for a
+// repository: the current-binding read (plan §5.5). It
 // deliberately validates no older history: after an encoding-version bump
 // every pre-bump row is permanently stale by design, so a full-history read
 // would fail forever and make the documented re-approval recovery
-// unreachable (#222 review). The newest row itself still fails closed while
+// unreachable (#222 review). The selected row itself still fails closed while
 // it is stale (the re-approval not yet recorded), and a stale historical
 // digest addressed directly (GetTrustProfile, an old authorization's
 // binding) stays fail-closed.

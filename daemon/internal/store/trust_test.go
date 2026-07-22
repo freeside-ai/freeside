@@ -130,6 +130,65 @@ func TestTrustProfileRoundTrip(t *testing.T) {
 	}
 }
 
+// TestTrustProfileExactReactivation proves that current selection is an
+// owner-decision axis rather than profile insertion order: A -> B -> A is
+// representable without mutating immutable profile content, while replaying
+// RecordTrustProfile(A) after B remains inert and cannot resurrect A.
+func TestTrustProfileExactReactivation(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	profileA := trustProfileFixture(t)
+	inB := domain.AutomationTrustProfileInput{
+		Repo: profileA.Repo, PRExecution: profileA.PRExecution,
+		CandidateAutomationChanges: profileA.CandidateAutomationChanges,
+		PRGitHubTokenPermissions:   profileA.PRGitHubTokenPermissions,
+		AllowOIDC:                  true,
+		CommitPlan:                 profileA.CommitPlan,
+		MessageRuleset:             profileA.MessageRuleset,
+		WorkflowAuditDigest:        profileA.WorkflowAuditDigest,
+		Review:                     profileA.Review,
+		ProtectedPaths:             profileA.ProtectedPaths,
+	}
+	profileB, err := domain.NewAutomationTrustProfile(inB)
+	if err != nil {
+		t.Fatalf("profile B: %v", err)
+	}
+	t0 := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.RecordTrustProfile(ctx, profileA, t0); err != nil {
+			return err
+		}
+		return tx.RecordTrustProfile(ctx, profileB, t0.Add(time.Minute))
+	}); err != nil {
+		t.Fatalf("record A then B: %v", err)
+	}
+	// A stale retry is content persistence, not a new owner decision.
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordTrustProfile(ctx, profileA, t0)
+	}); err != nil {
+		t.Fatalf("replay A: %v", err)
+	}
+	assertCurrent := func(want domain.Digest) {
+		t.Helper()
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			got, err := tx.LatestTrustProfile(ctx, profileA.Repo)
+			if err == nil && got.ProfileDigest != want {
+				t.Errorf("current digest = %q, want %q", got.ProfileDigest, want)
+			}
+			return err
+		}); err != nil {
+			t.Fatalf("read current: %v", err)
+		}
+	}
+	assertCurrent(profileB.ProfileDigest)
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.ActivateTrustProfile(ctx, profileA.Repo, profileA.ProfileDigest, t0.Add(2*time.Minute))
+	}); err != nil {
+		t.Fatalf("reactivate A: %v", err)
+	}
+	assertCurrent(profileA.ProfileDigest)
+}
+
 // TestWorkflowAuditAppendOnly: audits are an observation ledger — two
 // identical observations are two rows, read back field-identical in
 // insertion order.

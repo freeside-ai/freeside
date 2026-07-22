@@ -76,7 +76,7 @@ func openKillHarness(t *testing.T, dbPath string, client *http.Client, baseURL s
 	if err != nil {
 		t.Fatalf("NewStoreAuthorizationSource: %v", err)
 	}
-	return s, publish.NewPublisher(ts, client, baseURL, ledger, trust, authz)
+	return s, publish.NewPublisher(ts, client, baseURL, sourceWorkflowAuditor{source: trust}, ledger, trust, authz)
 }
 
 func createRefRequest() string { return http.MethodPost + " " + testRepoPath + "/git/refs" }

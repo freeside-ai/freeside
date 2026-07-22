@@ -5,6 +5,7 @@ go 1.26.5
 require (
 	golang.org/x/sys v0.44.0
 	golang.org/x/text v0.40.0
+	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.53.0
 )
 

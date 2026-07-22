@@ -15,7 +15,9 @@ import (
 // discipline) is a new version: two daemon builds must never derive different
 // digests for the same profile content, or the digest-bound publication gate
 // (plan §5.5) would read an unchanged profile as drift across an upgrade.
-// v3 added the commit_plan and message_ruleset policy keys (§5.5, §5.6
+// v4 adds explicit allow axes for every privilege WorkflowAudit attests:
+// reusable workflows, package publishing, and artifact consumers. v3 added
+// the commit_plan and message_ruleset policy keys (§5.5, §5.6
 // commit-plan gating): a policy flip must change the profile digest, and a
 // stored profile acquires the conservative single_commit default only
 // through owner re-approval, never by silent injection into an
@@ -24,7 +26,7 @@ import (
 // ProtectedPathConfig. Rows from a prior version fail Validate's digest
 // recompute and are re-recorded by a human, never migrated (§5.5 drift
 // recovery).
-const trustProfileEncodingVersion = "freeside-trust-profile/v3"
+const trustProfileEncodingVersion = "freeside-trust-profile/v4"
 
 // ProtectedPathConfig is the repository-specific widening of the protected
 // control-plane path classes (plan §5.5, §5.8). Only Extra* fields exist by
@@ -159,6 +161,9 @@ type AutomationTrustProfile struct {
 	AllowSecretBearingPRJobs   bool                   `json:"allow_secret_bearing_pr_jobs"`
 	AllowSelfHostedCI          bool                   `json:"allow_self_hosted_ci"`
 	AllowPullRequestTarget     bool                   `json:"allow_pull_request_target"`
+	AllowReusableWorkflows     bool                   `json:"allow_reusable_workflows"`
+	AllowPackagePublishing     bool                   `json:"allow_package_publishing"`
+	AllowArtifactConsumers     bool                   `json:"allow_artifact_consumers"`
 	CommitPlan                 CommitPlanMode         `json:"commit_plan"`
 	MessageRuleset             MessageRuleset         `json:"message_ruleset"`
 	WorkflowAuditDigest        Digest                 `json:"workflow_audit_digest"`
@@ -181,6 +186,9 @@ type AutomationTrustProfileInput struct {
 	AllowSecretBearingPRJobs   bool
 	AllowSelfHostedCI          bool
 	AllowPullRequestTarget     bool
+	AllowReusableWorkflows     bool
+	AllowPackagePublishing     bool
+	AllowArtifactConsumers     bool
 	CommitPlan                 CommitPlanMode
 	MessageRuleset             MessageRuleset
 	WorkflowAuditDigest        Digest
@@ -203,6 +211,9 @@ func NewAutomationTrustProfile(in AutomationTrustProfileInput) (AutomationTrustP
 		AllowSecretBearingPRJobs:   in.AllowSecretBearingPRJobs,
 		AllowSelfHostedCI:          in.AllowSelfHostedCI,
 		AllowPullRequestTarget:     in.AllowPullRequestTarget,
+		AllowReusableWorkflows:     in.AllowReusableWorkflows,
+		AllowPackagePublishing:     in.AllowPackagePublishing,
+		AllowArtifactConsumers:     in.AllowArtifactConsumers,
 		CommitPlan:                 in.CommitPlan,
 		MessageRuleset:             in.MessageRuleset,
 		WorkflowAuditDigest:        in.WorkflowAuditDigest,
@@ -234,6 +245,9 @@ type canonicalTrustProfile struct {
 	AllowSecretBearingPRJobs   bool                   `json:"allow_secret_bearing_pr_jobs"`
 	AllowSelfHostedCI          bool                   `json:"allow_self_hosted_ci"`
 	AllowPullRequestTarget     bool                   `json:"allow_pull_request_target"`
+	AllowReusableWorkflows     bool                   `json:"allow_reusable_workflows"`
+	AllowPackagePublishing     bool                   `json:"allow_package_publishing"`
+	AllowArtifactConsumers     bool                   `json:"allow_artifact_consumers"`
 	CommitPlan                 CommitPlanMode         `json:"commit_plan"`
 	MessageRuleset             MessageRuleset         `json:"message_ruleset"`
 	WorkflowAuditDigest        Digest                 `json:"workflow_audit_digest"`
@@ -259,6 +273,9 @@ func (p AutomationTrustProfile) ComputeDigest() (Digest, error) {
 		AllowSecretBearingPRJobs:   p.AllowSecretBearingPRJobs,
 		AllowSelfHostedCI:          p.AllowSelfHostedCI,
 		AllowPullRequestTarget:     p.AllowPullRequestTarget,
+		AllowReusableWorkflows:     p.AllowReusableWorkflows,
+		AllowPackagePublishing:     p.AllowPackagePublishing,
+		AllowArtifactConsumers:     p.AllowArtifactConsumers,
 		CommitPlan:                 p.CommitPlan,
 		MessageRuleset:             p.MessageRuleset,
 		WorkflowAuditDigest:        p.WorkflowAuditDigest,
@@ -410,16 +427,11 @@ func (e *TrustDriftError) Is(target error) bool { return target == ErrTrustProfi
 // still guards the file surface and repository settings folded into it
 // (workflows, branch protection, rulesets), which have no attested bool.
 //
-// Every attested privilege the audit carries is compared. The five the
-// profile gates directly (effective token permissions, OIDC, environment/
-// secret-bearing PR jobs, self-hosted runners, pull_request_target) drift
-// when observed beyond what the profile allows. The three the audit attests
-// but the profile has no allow axis for (reusable workflows, package
-// publishing, artifact-consuming workflows) fail closed whenever observed:
-// with no approval axis the profile cannot permit them, so any observation
-// is drift. A contract follow-up may add explicit allow axes so they become
-// approvable rather than always-blocked; until then the safe reading is
-// fail-closed, never silently passing an unevaluable authority.
+// Every attested privilege the audit carries has an explicit profile axis and
+// drifts when observed without approval. This one-to-one shape is deliberate:
+// adding an audit fact without a corresponding comparison would make reality
+// drift invisible, while adding a profile allowance without an observation
+// would make approval unauditable.
 //
 // The first drift found is returned; the axis order is stable so a fixture's
 // expected axis is deterministic.
@@ -453,11 +465,9 @@ func EvaluateTrustDrift(profile AutomationTrustProfile, audit WorkflowAudit) err
 		{"secret_bearing_pr_jobs", audit.SecretBearingPRJobs, profile.AllowSecretBearingPRJobs},
 		{"self_hosted_runners", audit.SelfHostedRunners, profile.AllowSelfHostedCI},
 		{"pull_request_target", audit.PullRequestTarget, profile.AllowPullRequestTarget},
-		// No profile allow axis: the profile cannot approve these, so any
-		// observation is drift (fail closed pending an explicit axis).
-		{"reusable_workflows", audit.ReusableWorkflows, false},
-		{"package_publishing", audit.PackagePublishing, false},
-		{"artifact_consumers", audit.ArtifactConsumers, false},
+		{"reusable_workflows", audit.ReusableWorkflows, profile.AllowReusableWorkflows},
+		{"package_publishing", audit.PackagePublishing, profile.AllowPackagePublishing},
+		{"artifact_consumers", audit.ArtifactConsumers, profile.AllowArtifactConsumers},
 	} {
 		if ax.observed && !ax.allowed {
 			return &TrustDriftError{Axis: ax.name, Approved: "false", Observed: "true"}

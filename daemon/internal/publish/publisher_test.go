@@ -358,7 +358,7 @@ func newTestPublisherWithTrust(t *testing.T, gh *fakeGitHub, ledger publish.Inte
 func newTestPublisherFull(t *testing.T, gh *fakeGitHub, ledger publish.IntentLedger, trust publish.TrustSource, authz publish.AuthorizationSource) *publish.Publisher {
 	t.Helper()
 	srv := gh.server()
-	return publish.NewPublisher(testTokenSource(), srv.Client(), srv.URL, ledger, trust, authz)
+	return publish.NewPublisher(testTokenSource(), srv.Client(), srv.URL, sourceWorkflowAuditor{source: trust}, ledger, trust, authz)
 }
 
 // TestPublishCreatesBranchAndPR is the clean-path publication (issue
@@ -708,7 +708,7 @@ func TestPublishGatesArtifacts(t *testing.T) {
 // TestPublishRefusesTrustProfileDrift (#169, plan §5.5): the drift gate
 // fails closed before any external effect when the candidate carries no
 // trust binding, its bound profile is no longer current, there is no current
-// profile or audit to compare against, or the latest audit exceeds the
+// profile or fresh audit to compare against, or the fresh audit exceeds the
 // approved profile. The bound digest is a lookup key, never a verdict.
 func TestPublishRefusesTrustProfileDrift(t *testing.T) {
 	// A profile whose content (and so digest) differs from the one

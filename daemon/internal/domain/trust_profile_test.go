@@ -245,6 +245,9 @@ func fullyPopulatedTrustProfileInput() domain.AutomationTrustProfileInput {
 		AllowSecretBearingPRJobs:   false,
 		AllowSelfHostedCI:          true,
 		AllowPullRequestTarget:     false,
+		AllowReusableWorkflows:     true,
+		AllowPackagePublishing:     true,
+		AllowArtifactConsumers:     true,
 		CommitPlan:                 domain.CommitPlanPlanPreferred,
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
@@ -263,7 +266,7 @@ func fullyPopulatedTrustProfileInput() domain.AutomationTrustProfileInput {
 	}
 }
 
-// TestTrustProfileDigestStability pins the v3 canonical form: a fixed,
+// TestTrustProfileDigestStability pins the v4 canonical form: a fixed,
 // fully-populated profile resolves to this digest on every build. A mismatch
 // means the canonical encoding changed without a version bump (or a bump
 // without repinning), either of which would read unchanged profiles as drift
@@ -273,17 +276,33 @@ func TestTrustProfileDigestStability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAutomationTrustProfile: %v", err)
 	}
-	const want = domain.Digest("sha256:9c5e7c171d229057d8f75fcf844c51901c181a0f740cf0d142461b0a66cc696d")
+	const want = domain.Digest("sha256:5dda565a91631a7058152f2aacf85a6ab7870ee12f70f5e5da6fbeea4bdb83f5")
 	if p.ProfileDigest != want {
-		t.Fatalf("v3 canonical digest = %q, want %q", p.ProfileDigest, want)
+		t.Fatalf("v4 canonical digest = %q, want %q", p.ProfileDigest, want)
 	}
 }
 
-// TestTrustProfileV2DigestRequiresReapproval is the migration-path proof for
-// the v3 encoding bump: a digest a human approved under v2 (the pinned v2
+// TestTrustProfileV3DigestRequiresReapproval pins the migration behavior for
+// the v4 allow-axis expansion: approval under v3 did not cover the three new
+// privileges, so it cannot be silently treated as approval under v4.
+func TestTrustProfileV3DigestRequiresReapproval(t *testing.T) {
+	p, err := domain.NewAutomationTrustProfile(fullyPopulatedTrustProfileInput())
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile: %v", err)
+	}
+	const v3Digest = domain.Digest("sha256:9c5e7c171d229057d8f75fcf844c51901c181a0f740cf0d142461b0a66cc696d")
+	stale := p
+	stale.ProfileDigest = v3Digest
+	if err := stale.Validate(); !errors.Is(err, domain.ErrProfileDigestMismatch) {
+		t.Fatalf("v3-approved digest error = %v, want ErrProfileDigestMismatch", err)
+	}
+}
+
+// TestTrustProfileV2DigestRequiresReapproval is a migration-path proof for
+// profile encoding bumps: a digest a human approved under v2 (the pinned v2
 // stability digest, computed over this same content before commit_plan and
 // message_ruleset existed) no longer validates, so every stored profile
-// fails closed until an owner records a re-approved v3 profile. The
+// fails closed until an owner records a re-approved current profile. The
 // conservative single_commit default therefore arrives only through that
 // re-approval, never by silent injection into an already-approved digest.
 func TestTrustProfileV2DigestRequiresReapproval(t *testing.T) {
@@ -386,9 +405,8 @@ func TestEvaluateTrustDrift(t *testing.T) {
 	// The file surface and repository settings folded into it (workflows,
 	// branch protection, rulesets) have no attested bool, so they are guarded
 	// by the WorkflowAuditDigest equality check. Every attested privilege is
-	// compared explicitly, including the three the profile has no allow axis
-	// for (reusable workflows, package publishing, artifact consumers), which
-	// fail closed whenever observed.
+	// compared explicitly, including reusable workflows, package publishing,
+	// and artifact consumers.
 	tests := []struct {
 		name     string
 		mutate   func(*domain.WorkflowAudit)
@@ -423,5 +441,21 @@ func TestEvaluateTrustDrift(t *testing.T) {
 				t.Fatalf("drift axis = %q, want %q", de.Axis, tt.wantAxis)
 			}
 		})
+	}
+
+	allowedInput := validTrustProfileInput()
+	allowedInput.AllowReusableWorkflows = true
+	allowedInput.AllowPackagePublishing = true
+	allowedInput.AllowArtifactConsumers = true
+	allowed, err := domain.NewAutomationTrustProfile(allowedInput)
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile allowed privileges: %v", err)
+	}
+	allowedAudit := conformantWorkflowAudit()
+	allowedAudit.ReusableWorkflows = true
+	allowedAudit.PackagePublishing = true
+	allowedAudit.ArtifactConsumers = true
+	if err := domain.EvaluateTrustDrift(allowed, allowedAudit); err != nil {
+		t.Fatalf("explicitly allowed privileges reported drift: %v", err)
 	}
 }
