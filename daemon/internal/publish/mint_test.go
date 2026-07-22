@@ -149,7 +149,7 @@ func TestMintRejectsGrantMismatch(t *testing.T) {
 	const (
 		expiry    = `"expires_at":"2026-07-16T13:00:00Z"`
 		wantRepos = `"repository_selection":"selected","repositories":[{"name":"evidence-repo"}]`
-		wantPerms = `"permissions":{"contents":"write","pull_requests":"write","metadata":"read"}`
+		wantPerms = `"permissions":{"actions":"read","administration":"read","contents":"write","environments":"read","pull_requests":"write","metadata":"read"}`
 	)
 	cases := []struct {
 		name string
@@ -158,9 +158,9 @@ func TestMintRejectsGrantMismatch(t *testing.T) {
 		{"narrower permissions", `{"token":"` + fixtureTokenValue + `",` + expiry + `,` +
 			`"permissions":{"contents":"write","metadata":"read"},` + wantRepos + `}`},
 		{"extra permission key", `{"token":"` + fixtureTokenValue + `",` + expiry + `,` +
-			`"permissions":{"contents":"write","pull_requests":"write","metadata":"read","issues":"write"},` + wantRepos + `}`},
+			`"permissions":{"actions":"read","administration":"read","contents":"write","environments":"read","pull_requests":"write","metadata":"read","issues":"write"},` + wantRepos + `}`},
 		{"credential-shaped permission", `{"token":"` + fixtureTokenValue + `",` + expiry + `,` +
-			`"permissions":{"contents":"` + fixtureTokenValue + `","pull_requests":"write","metadata":"read"},` + wantRepos + `}`},
+			`"permissions":{"actions":"read","administration":"read","contents":"` + fixtureTokenValue + `","environments":"read","pull_requests":"write","metadata":"read"},` + wantRepos + `}`},
 		{"all repositories", `{"token":"` + fixtureTokenValue + `",` + expiry + `,` +
 			wantPerms + `,"repository_selection":"all","repositories":[]}`},
 		{"credential-shaped repository selection", `{"token":"` + fixtureTokenValue + `",` + expiry + `,` +
@@ -201,18 +201,19 @@ func TestMintRejectsGrantMismatch(t *testing.T) {
 // syntactically valid 201 whose token is missing or already expired
 // must not advance the audit barrier or circulate as a credential.
 func TestMintRejectsUnusableToken(t *testing.T) {
+	const wantPerms = `"permissions":{"actions":"read","administration":"read","contents":"write","environments":"read","pull_requests":"write","metadata":"read"}`
 	cases := []struct {
 		name string
 		body string
 	}{
 		{"empty token", `{"token":"","expires_at":"2026-07-16T13:00:00Z",` +
-			`"permissions":{"contents":"write","pull_requests":"write","metadata":"read"},` +
+			wantPerms + `,` +
 			`"repository_selection":"selected","repositories":[{"name":"evidence-repo"}]}`},
 		{"expired token", `{"token":"` + fixtureTokenValue + `","expires_at":"2026-07-16T11:00:00Z",` +
-			`"permissions":{"contents":"write","pull_requests":"write","metadata":"read"},` +
+			wantPerms + `,` +
 			`"repository_selection":"selected","repositories":[{"name":"evidence-repo"}]}`},
 		{"credential-shaped invalid expiry", `{"token":"` + fixtureTokenValue + `","expires_at":"` + fixtureTokenValue + `",` +
-			`"permissions":{"contents":"write","pull_requests":"write","metadata":"read"},` +
+			wantPerms + `,` +
 			`"repository_selection":"selected","repositories":[{"name":"evidence-repo"}]}`},
 	}
 	for _, tc := range cases {

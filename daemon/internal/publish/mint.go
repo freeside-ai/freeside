@@ -12,26 +12,31 @@ import (
 	"time"
 )
 
-// Permissions is the GitHub App permission set a mint requests and a
-// grant reports. It is a closed three-field struct, not an enum: the
-// publish path needs exactly these, and plan §11 keeps the first
-// repository deliberately boring (no OIDC, environments, deployments).
+// Permissions is the GitHub App repository-permission set a mint requests and
+// a grant reports. It is closed rather than map-shaped so tokens cannot carry
+// authority the live audit and publication paths do not declare.
 type Permissions struct {
-	Contents     string `json:"contents,omitempty"`
-	PullRequests string `json:"pull_requests,omitempty"`
-	Metadata     string `json:"metadata,omitempty"`
+	Actions        string `json:"actions,omitempty"`
+	Administration string `json:"administration,omitempty"`
+	Contents       string `json:"contents,omitempty"`
+	Environments   string `json:"environments,omitempty"`
+	PullRequests   string `json:"pull_requests,omitempty"`
+	Metadata       string `json:"metadata,omitempty"`
 }
 
-// PublishPermissions is the minimum the publish path needs (issue #80
-// acceptance 3): contents:write to push candidate branches,
-// pull_requests:write to open and update PRs (the later publish units'
-// purpose — minting requests final-shape scopes now so the audit trail
-// stays truthful when they land), and metadata:read, GitHub's implied
-// baseline, requested explicitly so the recorded set is complete.
+// PublishPermissions is the minimum combined publish-and-live-audit set:
+// contents:write and pull_requests:write perform publication; actions:read,
+// administration:read, environments:read, contents access, and metadata:read
+// inspect workflows, repository automation policy, environment secret names,
+// local automation files, branch protection, and rulesets (#80, #182). The
+// mint audit records both requested and granted values losslessly.
 var PublishPermissions = Permissions{
-	Contents:     "write",
-	PullRequests: "write",
-	Metadata:     "read",
+	Actions:        "read",
+	Administration: "read",
+	Contents:       "write",
+	Environments:   "read",
+	PullRequests:   "write",
+	Metadata:       "read",
 }
 
 // publishPermissionScopes is the lossless form the mint validates
@@ -39,9 +44,12 @@ var PublishPermissions = Permissions{
 // so a grant carrying an unknown key (broader authority) cannot be
 // silently dropped by a fixed struct before the comparison.
 var publishPermissionScopes = map[string]string{
-	"contents":      PublishPermissions.Contents,
-	"pull_requests": PublishPermissions.PullRequests,
-	"metadata":      PublishPermissions.Metadata,
+	"actions":        PublishPermissions.Actions,
+	"administration": PublishPermissions.Administration,
+	"contents":       PublishPermissions.Contents,
+	"environments":   PublishPermissions.Environments,
+	"pull_requests":  PublishPermissions.PullRequests,
+	"metadata":       PublishPermissions.Metadata,
 }
 
 // InstallationToken is a short-lived, per-repository credential minted

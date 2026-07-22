@@ -21,17 +21,23 @@ import (
 // insert-only with no idempotency key: two identical mints are two real
 // events.
 type MintAudit struct {
-	ID                    int64
-	MintedAt              time.Time
-	InstallationID        int64
-	Repo                  string
-	RequestedContents     string
-	RequestedPullRequests string
-	RequestedMetadata     string
-	GrantedContents       string
-	GrantedPullRequests   string
-	GrantedMetadata       string
-	ExpiresAt             time.Time
+	ID                      int64
+	MintedAt                time.Time
+	InstallationID          int64
+	Repo                    string
+	RequestedActions        string
+	RequestedAdministration string
+	RequestedContents       string
+	RequestedEnvironments   string
+	RequestedPullRequests   string
+	RequestedMetadata       string
+	GrantedActions          string
+	GrantedAdministration   string
+	GrantedContents         string
+	GrantedEnvironments     string
+	GrantedPullRequests     string
+	GrantedMetadata         string
+	ExpiresAt               time.Time
 }
 
 const (
@@ -40,12 +46,16 @@ INSERT INTO publish_mint_audits (
     minted_at, installation_id, repo,
     requested_contents, requested_pull_requests, requested_metadata,
     granted_contents, granted_pull_requests, granted_metadata,
+    requested_actions, requested_administration, requested_environments,
+    granted_actions, granted_administration, granted_environments,
     expires_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	listMintAuditsSQL = `
 SELECT id, minted_at, installation_id, repo,
     requested_contents, requested_pull_requests, requested_metadata,
     granted_contents, granted_pull_requests, granted_metadata,
+    requested_actions, requested_administration, requested_environments,
+    granted_actions, granted_administration, granted_environments,
     expires_at
 FROM publish_mint_audits ORDER BY id`
 )
@@ -75,6 +85,8 @@ func (tx *InternalTx) RecordMintAudit(ctx context.Context, rec MintAudit) (MintA
 		formatTime(rec.MintedAt), rec.InstallationID, rec.Repo,
 		rec.RequestedContents, rec.RequestedPullRequests, rec.RequestedMetadata,
 		rec.GrantedContents, rec.GrantedPullRequests, rec.GrantedMetadata,
+		rec.RequestedActions, rec.RequestedAdministration, rec.RequestedEnvironments,
+		rec.GrantedActions, rec.GrantedAdministration, rec.GrantedEnvironments,
 		formatTime(rec.ExpiresAt))
 	if err != nil {
 		return MintAudit{}, fmt.Errorf("record mint audit %q: %w", rec.Repo, err)
@@ -104,6 +116,8 @@ func (tx *ReadTx) ListMintAudits(ctx context.Context) ([]MintAudit, error) {
 		if err := rows.Scan(&rec.ID, &mintedAt, &rec.InstallationID, &rec.Repo,
 			&rec.RequestedContents, &rec.RequestedPullRequests, &rec.RequestedMetadata,
 			&rec.GrantedContents, &rec.GrantedPullRequests, &rec.GrantedMetadata,
+			&rec.RequestedActions, &rec.RequestedAdministration, &rec.RequestedEnvironments,
+			&rec.GrantedActions, &rec.GrantedAdministration, &rec.GrantedEnvironments,
 			&expiresAt); err != nil {
 			return nil, fmt.Errorf("list mint audits: %w", err)
 		}

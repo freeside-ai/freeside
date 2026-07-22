@@ -11,16 +11,22 @@ import (
 
 func mintAuditFixture() store.MintAudit {
 	return store.MintAudit{
-		MintedAt:              time.Date(2026, 7, 17, 12, 0, 0, 123456789, time.UTC),
-		InstallationID:        424242,
-		Repo:                  "freeside-ai/candidate-repo",
-		RequestedContents:     "write",
-		RequestedPullRequests: "write",
-		RequestedMetadata:     "read",
-		GrantedContents:       "write",
-		GrantedPullRequests:   "write",
-		GrantedMetadata:       "read",
-		ExpiresAt:             time.Date(2026, 7, 17, 13, 0, 0, 0, time.UTC),
+		MintedAt:                time.Date(2026, 7, 17, 12, 0, 0, 123456789, time.UTC),
+		InstallationID:          424242,
+		Repo:                    "freeside-ai/candidate-repo",
+		RequestedActions:        "read",
+		RequestedAdministration: "read",
+		RequestedContents:       "write",
+		RequestedEnvironments:   "read",
+		RequestedPullRequests:   "write",
+		RequestedMetadata:       "read",
+		GrantedContents:         "write",
+		GrantedActions:          "read",
+		GrantedAdministration:   "read",
+		GrantedEnvironments:     "read",
+		GrantedPullRequests:     "write",
+		GrantedMetadata:         "read",
+		ExpiresAt:               time.Date(2026, 7, 17, 13, 0, 0, 0, time.UTC),
 	}
 }
 

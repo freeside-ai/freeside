@@ -43,7 +43,7 @@ type Candidate struct {
 	// was authorized under (#172). TrustProfileDigest is enforced by the
 	// drift gate (#169): it names the profile the candidate was authorized
 	// under, and Publish fails closed unless that profile is still current
-	// and the latest audit shows no drift from it; a nil digest cannot be
+	// and a fresh live audit shows no drift from it; a nil digest cannot be
 	// proven drift-free and so also fails closed. AuthorizationID names the
 	// immutable authorization the candidate claims permits its publication;
 	// the authorization gate (#168) resolves it, re-validates it, binds it to
@@ -68,20 +68,41 @@ type Result struct {
 // deterministic identity, and the intent is recorded through the
 // outbox ledger before anything is dispatched.
 type Publisher struct {
-	forge  *forge
-	ledger IntentLedger
-	trust  TrustSource
-	authz  AuthorizationSource
+	forge         *forge
+	auditor       WorkflowAuditor
+	ledger        IntentLedger
+	trust         TrustSource
+	authz         AuthorizationSource
+	storeDecision *storePublicationDecision
+	wiringErr     error
 }
 
-// NewPublisher wires a Publisher. baseURL is the GitHub API root
-// (real: https://api.github.com; tests: an httptest server). trust is the
-// source the drift gate re-reads current automation trust state from on
-// every Publish (#169, plan §5.5); authz is the source the authorization gate
-// resolves the candidate's daemon-authored authorization from (#168, plan
-// §5.6).
-func NewPublisher(ts TokenSource, client *http.Client, baseURL string, ledger IntentLedger, trust TrustSource, authz AuthorizationSource) *Publisher {
-	return &Publisher{forge: newForge(ts, client, baseURL), ledger: ledger, trust: trust, authz: authz}
+// NewPublisher wires a Publisher. baseURL is the GitHub API root (real:
+// https://api.github.com; tests: an httptest server). auditor observes live
+// automation authority on every Publish. Store-backed ledger, trust, and authz
+// adapters are recognized as one decision boundary and composed into a single
+// SQLite transaction; non-store implementations remain useful test seams.
+func NewPublisher(ts TokenSource, client *http.Client, baseURL string, auditor WorkflowAuditor, ledger IntentLedger, trust TrustSource, authz AuthorizationSource) *Publisher {
+	p := &Publisher{forge: newForge(ts, client, baseURL), auditor: auditor, ledger: ledger, trust: trust, authz: authz}
+	sl, ledgerIsStore := ledger.(*StoreLedger)
+	st, trustIsStore := trust.(*StoreTrustSource)
+	sa, authzIsStore := authz.(*StoreAuthorizationSource)
+	storeAdapters := 0
+	for _, present := range []bool{ledgerIsStore, trustIsStore, authzIsStore} {
+		if present {
+			storeAdapters++
+		}
+	}
+	if storeAdapters == 3 {
+		if sl.store != st.store || sl.store != sa.store {
+			p.wiringErr = errors.New("publisher: store-backed ledger, trust, and authorization adapters must share one store")
+		} else {
+			p.storeDecision = &storePublicationDecision{store: sl.store}
+		}
+	} else if storeAdapters > 1 {
+		p.wiringErr = errors.New("publisher: mixed store-backed decision adapters cannot compose atomically")
+	}
+	return p
 }
 
 // Publish converges the candidate onto its one intended result: the
@@ -91,6 +112,12 @@ func NewPublisher(ts TokenSource, client *http.Client, baseURL string, ledger In
 // retried at any point finds what the previous attempt created and
 // continues instead of duplicating (issue #81 acceptance 2, 4).
 func (p *Publisher) Publish(ctx context.Context, c Candidate, approvedRecipes map[domain.Digest]bool) (Result, error) {
+	if p.wiringErr != nil {
+		return Result{}, p.wiringErr
+	}
+	if p.auditor == nil {
+		return Result{}, errors.New("publish: no workflow auditor")
+	}
 	repo, err := parseRepo(c.Repo)
 	if err != nil {
 		return Result{}, fmt.Errorf("publish: %w", err)
@@ -121,28 +148,6 @@ func (p *Publisher) Publish(ctx context.Context, c Candidate, approvedRecipes ma
 		digests[i] = a.Digest
 	}
 
-	// Trust-profile drift gate before any external effect (§5.15 rule 2,
-	// plan §5.5): the candidate's bound profile must still be the current
-	// recorded profile and the latest audit must show no drift from it, or
-	// the automation authority the candidate was approved under has changed
-	// and the publication fails closed. Placed before recordIntent so a
-	// drifted publication commits no outbox intent and touches no GitHub
-	// resource.
-	if err := p.gateTrustDrift(ctx, c); err != nil {
-		return Result{}, fmt.Errorf("publish: %w", err)
-	}
-
-	// Authorization gate before any external effect (§5.15 rule 2, plan
-	// §5.6): the candidate must carry a daemon-authored authorization whose
-	// bound facts describe it and whose computed authorizes-publication bit is
-	// set — verification passed and every publish-blocking importer/verifier
-	// finding carries a trusted non-blocking disposition. Placed with the
-	// other pre-effect gates so an unauthorized candidate commits no outbox
-	// intent and touches no GitHub resource.
-	if err := p.gateAuthorization(ctx, c); err != nil {
-		return Result{}, fmt.Errorf("publish: %w", err)
-	}
-
 	identity, err := DeriveIdentity(IdentityInput{
 		Repo:            c.Repo,
 		BaseRef:         c.BaseRef,
@@ -163,7 +168,14 @@ func (p *Publisher) Publish(ctx context.Context, c Candidate, approvedRecipes ma
 		return Result{}, errors.New("publish: candidate body would not parse back to the publication identity marker")
 	}
 
-	if err := p.recordIntent(ctx, c, identity); err != nil {
+	// Re-audit immediately before the decision transaction. GitHub reads are
+	// external observations, not effects; a failure or incomplete observation
+	// aborts without recording an audit or intent.
+	audit, err := p.auditor.Audit(ctx, c.Repo, c.BaseRef)
+	if err != nil {
+		return Result{}, fmt.Errorf("publish: fresh workflow audit: %w", err)
+	}
+	if err := p.preparePublication(ctx, c, audit, identity); err != nil {
 		return Result{}, err
 	}
 
@@ -208,7 +220,7 @@ func (p *Publisher) Publish(ctx context.Context, c Candidate, approvedRecipes ma
 // superseded profile, one with no current profile or audit, or one whose
 // audit exceeds the profile all fail closed. A nil binding cannot be proven
 // drift-free and fails closed too.
-func (p *Publisher) gateTrustDrift(ctx context.Context, c Candidate) error {
+func (p *Publisher) gateTrustDrift(ctx context.Context, c Candidate, audit domain.WorkflowAudit) error {
 	if c.TrustProfileDigest == nil {
 		return fmt.Errorf("candidate carries no trust-profile binding: %w", ErrTrustProfileDrift)
 	}
@@ -228,15 +240,23 @@ func (p *Publisher) gateTrustDrift(ctx context.Context, c Candidate) error {
 		return fmt.Errorf("candidate bound to trust profile %s, current is %s: %w",
 			*c.TrustProfileDigest, current.Profile.ProfileDigest, ErrTrustProfileDrift)
 	}
-	if current.Audit == nil {
-		return fmt.Errorf("no current workflow audit for %s: %w", c.Repo, ErrTrustProfileDrift)
+	return validateTrustCandidate(c, *current.Profile, audit)
+}
+
+func validateTrustCandidate(c Candidate, profile domain.AutomationTrustProfile, audit domain.WorkflowAudit) error {
+	if c.TrustProfileDigest == nil {
+		return fmt.Errorf("candidate carries no trust-profile binding: %w", ErrTrustProfileDrift)
 	}
-	if err := current.Audit.Validate(); err != nil {
-		return fmt.Errorf("current workflow audit for %s: %w", c.Repo, err)
+	if err := profile.Validate(); err != nil {
+		return fmt.Errorf("current trust profile for %s: %w", c.Repo, err)
 	}
-	// EvaluateTrustDrift returns a *domain.TrustDriftError that reports as
-	// ErrTrustProfileDrift, so the whole gate matches one sentinel.
-	if err := domain.EvaluateTrustDrift(*current.Profile, *current.Audit); err != nil {
+	if profile.ProfileDigest != *c.TrustProfileDigest {
+		return fmt.Errorf("candidate bound to trust profile %s, current is %s: %w", *c.TrustProfileDigest, profile.ProfileDigest, ErrTrustProfileDrift)
+	}
+	if err := audit.Validate(); err != nil {
+		return fmt.Errorf("fresh workflow audit for %s: %w", c.Repo, err)
+	}
+	if err := domain.EvaluateTrustDrift(profile, audit); err != nil {
 		return err
 	}
 	return nil
@@ -276,6 +296,19 @@ func (p *Publisher) gateAuthorization(ctx context.Context, c Candidate) error {
 	if !found {
 		return fmt.Errorf("no authorization recorded under %s: %w", *c.AuthorizationID, ErrUnauthorizedPublication)
 	}
+	return validateAuthorizationCandidate(c, auth)
+}
+
+func validateAuthorizationCandidate(c Candidate, auth domain.CandidateAuthorization) error {
+	if c.AuthorizationID == nil {
+		return fmt.Errorf("candidate carries no authorization binding: %w", ErrUnauthorizedPublication)
+	}
+	if c.RecipeDigest == nil {
+		return fmt.Errorf("candidate carries no recipe digest to bind the authorization: %w", ErrUnauthorizedPublication)
+	}
+	if c.TrustProfileDigest == nil {
+		return fmt.Errorf("candidate carries no trust-profile binding: %w", ErrUnauthorizedPublication)
+	}
 	// #52 re-gate: the record is a reconstructed value whose id is a content
 	// address and whose authorizes_publication is a policy computation over
 	// the bound facts; re-validate before trusting either.
@@ -298,7 +331,10 @@ func (p *Publisher) gateAuthorization(ctx context.Context, c Candidate) error {
 // the recorded row; a recorded intent naming a different identity
 // means the invocation ID was reused for different content, which
 // fails closed rather than publishing under a stale identity.
-func (p *Publisher) recordIntent(ctx context.Context, c Candidate, identity Identity) error {
+func (p *Publisher) preparePublication(ctx context.Context, c Candidate, audit domain.WorkflowAudit, identity Identity) error {
+	if c.AuthorizationID == nil {
+		return fmt.Errorf("publish: candidate carries no authorization binding: %w", ErrUnauthorizedPublication)
+	}
 	intent := Intent{
 		Identity:      identity.Digest(),
 		InvocationID:  c.InvocationID,
@@ -318,9 +354,21 @@ func (p *Publisher) recordIntent(ctx context.Context, c Candidate, identity Iden
 	if err != nil {
 		return fmt.Errorf("publish: %w", err)
 	}
-	prior, recorded, err := p.ledger.Record(ctx, key, IntentKindPublication, payload)
+	var prior []byte
+	var recorded bool
+	if p.storeDecision != nil {
+		prior, recorded, err = p.storeDecision.prepare(ctx, c, audit, key, payload)
+	} else {
+		if err := p.gateTrustDrift(ctx, c, audit); err != nil {
+			return fmt.Errorf("publish: %w", err)
+		}
+		if err := p.gateAuthorization(ctx, c); err != nil {
+			return fmt.Errorf("publish: %w", err)
+		}
+		prior, recorded, err = p.ledger.Record(ctx, key, IntentKindPublication, payload)
+	}
 	if err != nil {
-		return fmt.Errorf("publish: record intent: %w", err)
+		return fmt.Errorf("publish: prepare decision: %w", err)
 	}
 	if !recorded {
 		committed, err := DecodeIntent(prior)

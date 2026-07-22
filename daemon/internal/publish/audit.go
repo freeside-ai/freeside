@@ -61,16 +61,22 @@ func (r *StoreRecorder) RecordMint(rec MintRecord) error {
 	ctx := context.Background()
 	err := r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		_, err := tx.RecordMintAudit(ctx, store.MintAudit{
-			MintedAt:              rec.MintedAt,
-			InstallationID:        rec.InstallationID,
-			Repo:                  rec.Repo,
-			RequestedContents:     rec.Requested.Contents,
-			RequestedPullRequests: rec.Requested.PullRequests,
-			RequestedMetadata:     rec.Requested.Metadata,
-			GrantedContents:       rec.Granted.Contents,
-			GrantedPullRequests:   rec.Granted.PullRequests,
-			GrantedMetadata:       rec.Granted.Metadata,
-			ExpiresAt:             rec.ExpiresAt,
+			MintedAt:                rec.MintedAt,
+			InstallationID:          rec.InstallationID,
+			Repo:                    rec.Repo,
+			RequestedActions:        rec.Requested.Actions,
+			RequestedAdministration: rec.Requested.Administration,
+			RequestedContents:       rec.Requested.Contents,
+			RequestedEnvironments:   rec.Requested.Environments,
+			RequestedPullRequests:   rec.Requested.PullRequests,
+			RequestedMetadata:       rec.Requested.Metadata,
+			GrantedActions:          rec.Granted.Actions,
+			GrantedAdministration:   rec.Granted.Administration,
+			GrantedContents:         rec.Granted.Contents,
+			GrantedEnvironments:     rec.Granted.Environments,
+			GrantedPullRequests:     rec.Granted.PullRequests,
+			GrantedMetadata:         rec.Granted.Metadata,
+			ExpiresAt:               rec.ExpiresAt,
 		})
 		return err
 	})

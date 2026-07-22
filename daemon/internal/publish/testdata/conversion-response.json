@@ -4,7 +4,10 @@
   "node_id": "MDM6QXBwMTIzNDU=",
   "client_id": "Iv1.deadbeefdeadbeef",
   "permissions": {
+    "actions": "read",
+    "administration": "read",
     "contents": "write",
+    "environments": "read",
     "pull_requests": "write",
     "metadata": "read"
   },
