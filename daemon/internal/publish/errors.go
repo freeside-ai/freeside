@@ -95,6 +95,12 @@ var ErrNoInstallation = errors.New("no GitHub App installation for repository ow
 // credentials implicitly, so minting fails closed.
 var ErrAmbiguousInstallation = errors.New("multiple GitHub App installations for repository owner")
 
+// ErrJanitorInactive reports that a public registration has not completed a
+// successful pass under the always-on installation janitor. Public
+// registrations are inoperable while the janitor is absent, starting, or
+// stopped.
+var ErrJanitorInactive = errors.New("public GitHub App installation janitor is not active")
+
 // ErrHeadMismatch is returned when a head-bound artifact's
 // source_head_sha differs from the candidate head being published:
 // its evidence describes some other revision, and a new remediation

@@ -231,6 +231,9 @@ whether passing them is worth it.
 
 ## Where To Go Next
 
+- [`docs/github-app-postures.md`](github-app-postures.md) explains the default
+  public GitHub App posture, its residual risks, and when the private
+  work-account posture is the better fit.
 - [`docs/plan.md`](plan.md) is the charter and specification. Sections 1–4
   define the product and attention model, 5 the architecture and its
   binding contracts, 6–10 verification through operations, 11–12 the

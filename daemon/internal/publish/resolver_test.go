@@ -31,6 +31,24 @@ func saveResolverApp(t *testing.T, ks *publish.Keystore, owner string, ownerID, 
 	}
 }
 
+type activeJanitorStatus struct{}
+
+func (activeJanitorStatus) ActiveFor(int64) bool { return true }
+
+func newActiveResolver(
+	ks *publish.Keystore,
+	client *http.Client,
+	baseURL string,
+) *publish.InstallationResolver {
+	return publish.NewInstallationResolverWithJanitor(
+		ks,
+		client,
+		baseURL,
+		fixedNow,
+		activeJanitorStatus{},
+	)
+}
+
 // TestInstallationResolverPublicRegistrationMatchesOwner proves one public
 // registration may carry several installations and resolution selects by the
 // canonical installation account rather than by registration owner.
@@ -57,7 +75,7 @@ func TestInstallationResolverPublicRegistrationMatchesOwner(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	resolver := publish.NewInstallationResolver(ks, srv.Client(), srv.URL, fixedNow)
+	resolver := newActiveResolver(ks, srv.Client(), srv.URL)
 	got, err := resolver.Resolve(context.Background(), "FreeAsInBird")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -85,7 +103,7 @@ func TestInstallationResolverUnknownOwnerFailsClosed(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	resolver := publish.NewInstallationResolver(ks, srv.Client(), srv.URL, fixedNow)
+	resolver := newActiveResolver(ks, srv.Client(), srv.URL)
 	if _, err := resolver.Resolve(context.Background(), "unknown-owner"); !errors.Is(err, publish.ErrNoInstallation) {
 		t.Fatalf("err = %v, want ErrNoInstallation", err)
 	}
@@ -102,7 +120,7 @@ func TestInstallationResolverRejectsPrivateOwnerMismatch(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	resolver := publish.NewInstallationResolver(ks, srv.Client(), srv.URL, fixedNow)
+	resolver := newActiveResolver(ks, srv.Client(), srv.URL)
 	_, err := resolver.Resolve(context.Background(), "operator")
 	if !errors.Is(err, publish.ErrInstallationResolution) {
 		t.Fatalf("err = %v, want ErrInstallationResolution", err)
@@ -130,7 +148,7 @@ func TestInstallationResolverRejectsUnknownRegistrationIdentity(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	resolver := publish.NewInstallationResolver(ks, srv.Client(), srv.URL, fixedNow)
+	resolver := newActiveResolver(ks, srv.Client(), srv.URL)
 	if _, err := resolver.Resolve(context.Background(), "freeasinbird"); !errors.Is(err, publish.ErrInstallationResolution) {
 		t.Fatalf("err = %v, want ErrInstallationResolution", err)
 	}
@@ -152,7 +170,7 @@ func TestInstallationResolverRejectsBroadRepositorySelection(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			resolver := publish.NewInstallationResolver(ks, srv.Client(), srv.URL, fixedNow)
+			resolver := newActiveResolver(ks, srv.Client(), srv.URL)
 			_, err := resolver.Resolve(context.Background(), "freeasinbird")
 			var failure *publish.ResolutionFailure
 			if !errors.As(err, &failure) {
@@ -195,7 +213,7 @@ func TestInstallationResolverRejectsAmbiguousRegistrations(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	resolver := publish.NewInstallationResolver(ks, srv.Client(), srv.URL, fixedNow)
+	resolver := newActiveResolver(ks, srv.Client(), srv.URL)
 	if _, err := resolver.Resolve(context.Background(), "freeasinbird"); !errors.Is(err, publish.ErrAmbiguousInstallation) {
 		t.Fatalf("err = %v, want ErrAmbiguousInstallation", err)
 	}
