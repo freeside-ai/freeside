@@ -92,12 +92,36 @@ type InstallationResolver struct {
 	client   *http.Client
 	baseURL  string
 	now      func() time.Time
+	janitor  JanitorStatus
 }
 
 // NewInstallationResolver wires owner resolution to the registration keystore
-// and GitHub's App-authenticated installation endpoint.
+// and GitHub's App-authenticated installation endpoint. It deliberately has no
+// janitor status, so a keystore containing a public registration fails closed;
+// production composition for public registrations uses
+// NewInstallationResolverWithJanitor.
 func NewInstallationResolver(ks *Keystore, client *http.Client, baseURL string, now func() time.Time) *InstallationResolver {
 	return &InstallationResolver{keystore: ks, client: noRedirect(client), baseURL: baseURL, now: now}
+}
+
+// NewInstallationResolverWithJanitor wires resolution to the always-on
+// installation janitor. The status is checked before any registration reaches
+// GitHub, and every public registration must be covered by the janitor's latest
+// successful pass.
+func NewInstallationResolverWithJanitor(
+	ks *Keystore,
+	client *http.Client,
+	baseURL string,
+	now func() time.Time,
+	janitor JanitorStatus,
+) *InstallationResolver {
+	return &InstallationResolver{
+		keystore: ks,
+		client:   noRedirect(client),
+		baseURL:  baseURL,
+		now:      now,
+		janitor:  janitor,
+	}
 }
 
 type installationResponse struct {
@@ -128,6 +152,16 @@ func (r *InstallationResolver) Resolve(ctx context.Context, owner string) (Insta
 	}
 	if len(apps) == 0 {
 		return InstallationBinding{}, fmt.Errorf("installation resolution: %w", ErrNoAppCredentials)
+	}
+	for _, app := range apps {
+		if app.Visibility == AppVisibilityPublic &&
+			(r.janitor == nil || !r.janitor.ActiveFor(app.AppID)) {
+			return InstallationBinding{}, fmt.Errorf(
+				"installation resolution: registration %d: %w",
+				app.AppID,
+				ErrJanitorInactive,
+			)
+		}
 	}
 
 	var matches []InstallationBinding
@@ -217,33 +251,16 @@ func (r *InstallationResolver) installations(ctx context.Context, app AppCredent
 	}
 	var all []installationResponse
 	for page := 1; page <= installationMaxPages; page++ {
-		path := "/app/installations?per_page=" + strconv.Itoa(installationPageSize) + "&page=" + strconv.Itoa(page)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+path, nil)
-		if err != nil {
-			return nil, fmt.Errorf("installation resolution: build request: %w", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+jwt.Reveal())
-		req.Header.Set("Accept", "application/vnd.github+json")
-		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-		resp, err := r.client.Do(req)
+		pageInstallations, err := installationPage(
+			ctx,
+			r.client,
+			r.baseURL,
+			jwt,
+			page,
+			installationPageSize,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("installation resolution: %w", err)
-		}
-		if resp.StatusCode != http.StatusOK {
-			drainAndClose(resp.Body)
-			return nil, fmt.Errorf("installation resolution: %w", &APIError{
-				Status:      resp.StatusCode,
-				RequestPath: "/app/installations",
-			})
-		}
-		var pageInstallations []installationResponse
-		decodeErr := decodeResponse(resp.Body, &pageInstallations)
-		drainAndClose(resp.Body)
-		if decodeErr != nil {
-			return nil, errors.New("installation resolution: decode response")
-		}
-		if len(pageInstallations) > installationPageSize {
-			return nil, errors.New("installation resolution: response page exceeds the requested limit")
 		}
 		all = append(all, pageInstallations...)
 		if len(pageInstallations) < installationPageSize {
@@ -251,4 +268,43 @@ func (r *InstallationResolver) installations(ctx context.Context, app AppCredent
 		}
 	}
 	return nil, errors.New("installation resolution: installation pagination exceeded the safety limit")
+}
+
+func installationPage(
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	jwt Secret,
+	page int,
+	pageSize int,
+) ([]installationResponse, error) {
+	path := "/app/installations?per_page=" + strconv.Itoa(pageSize) + "&page=" + strconv.Itoa(page)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+jwt.Reveal())
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		drainAndClose(resp.Body)
+		return nil, &APIError{
+			Status:      resp.StatusCode,
+			RequestPath: "/app/installations",
+		}
+	}
+	var installations []installationResponse
+	decodeErr := decodeResponse(resp.Body, &installations)
+	drainAndClose(resp.Body)
+	if decodeErr != nil || installations == nil {
+		return nil, errors.New("decode response")
+	}
+	if len(installations) > pageSize {
+		return nil, errors.New("response page exceeds the requested limit")
+	}
+	return installations, nil
 }

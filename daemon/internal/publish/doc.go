@@ -11,6 +11,10 @@
 // minimum permission set (Minter, PublishPermissions); a per-mint audit
 // record naming the registration (MintRecord, Recorder); and the
 // redaction boundary every credential value lives behind (Secret).
+// Public registrations additionally require the always-on
+// InstallationJanitor: a successful exhaustive pass activates their runtime
+// gate, unsolicited owner installations are audit-recorded then removed, and
+// bounded cycles prevent deletion churn from monopolizing reconciliation.
 // The credentials directory is structurally disjoint from
 // the state directory, so the key stays out of backup checkpoints
 // (§5.10; recovery may require reauthentication) and workspace mounts.

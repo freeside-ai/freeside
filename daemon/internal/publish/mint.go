@@ -95,6 +95,29 @@ func NewMinter(ks *Keystore, client *http.Client, baseURL string, rec Recorder, 
 	}
 }
 
+// NewMinterWithJanitor wires minting to the always-on janitor required by
+// public registrations. NewMinter remains the private-registration path and
+// fails closed if its keystore later contains a public registration.
+func NewMinterWithJanitor(
+	ks *Keystore,
+	client *http.Client,
+	baseURL string,
+	rec Recorder,
+	trust TrustSource,
+	now func() time.Time,
+	janitor JanitorStatus,
+) *Minter {
+	return &Minter{
+		keystore: ks,
+		resolver: NewInstallationResolverWithJanitor(ks, client, baseURL, now, janitor),
+		trust:    trust,
+		client:   noRedirect(client),
+		baseURL:  baseURL,
+		recorder: rec,
+		now:      now,
+	}
+}
+
 // noRedirect copies a client and disables redirect-following: the
 // GitHub API endpoints this package calls never legitimately redirect,
 // and following one would re-send a request whose URL, Referer, or
