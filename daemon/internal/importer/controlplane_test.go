@@ -16,6 +16,7 @@ func fixtureTrustProfile(t *testing.T) domain.AutomationTrustProfile {
 	t.Helper()
 	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo:                       "freeside-ai/demo",
+		RepositoryID:               123456789,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,

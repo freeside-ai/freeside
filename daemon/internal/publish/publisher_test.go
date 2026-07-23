@@ -715,6 +715,7 @@ func TestPublishRefusesTrustProfileDrift(t *testing.T) {
 	// testCandidate binds to: a superseded revision (§5.5 drift recovery).
 	superseded, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo:                       testTrustRepo,
+		RepositoryID:               123456789,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,

@@ -122,6 +122,7 @@ func conformantTrust(t *testing.T, headSHA string) (domain.AutomationTrustProfil
 	t.Helper()
 	p, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo:                       testRepo,
+		RepositoryID:               123456789,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,

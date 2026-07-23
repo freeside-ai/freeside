@@ -209,6 +209,7 @@ func TestGolden(t *testing.T) {
 	// exercise NewAutomationTrustProfile's canonicalization.
 	trustProfile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo:                       "freeside-ai/demo",
+		RepositoryID:               123456789,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,

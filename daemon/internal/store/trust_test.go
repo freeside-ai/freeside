@@ -15,6 +15,7 @@ func trustProfileFixture(t *testing.T) domain.AutomationTrustProfile {
 	t.Helper()
 	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo:                       "freeside-ai/candidate-repo",
+		RepositoryID:               123456789,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
@@ -80,6 +81,7 @@ func TestTrustProfileRoundTrip(t *testing.T) {
 	revised.AllowOIDC = true
 	revisedInput := domain.AutomationTrustProfileInput{
 		Repo:                       revised.Repo,
+		RepositoryID:               revised.RepositoryID,
 		PRExecution:                revised.PRExecution,
 		CandidateAutomationChanges: revised.CandidateAutomationChanges,
 		PRGitHubTokenPermissions:   revised.PRGitHubTokenPermissions,
@@ -139,7 +141,7 @@ func TestTrustProfileExactReactivation(t *testing.T) {
 	s := openStore(t, store.Options{})
 	profileA := trustProfileFixture(t)
 	inB := domain.AutomationTrustProfileInput{
-		Repo: profileA.Repo, PRExecution: profileA.PRExecution,
+		Repo: profileA.Repo, RepositoryID: profileA.RepositoryID, PRExecution: profileA.PRExecution,
 		CandidateAutomationChanges: profileA.CandidateAutomationChanges,
 		PRGitHubTokenPermissions:   profileA.PRGitHubTokenPermissions,
 		AllowOIDC:                  true,
@@ -374,6 +376,7 @@ func TestAuthorizationUniquePerHeadAndProfile(t *testing.T) {
 	// and must be representable.
 	revisedInput := domain.AutomationTrustProfileInput{
 		Repo:                       profile.Repo,
+		RepositoryID:               profile.RepositoryID,
 		PRExecution:                profile.PRExecution,
 		CandidateAutomationChanges: profile.CandidateAutomationChanges,
 		PRGitHubTokenPermissions:   profile.PRGitHubTokenPermissions,
