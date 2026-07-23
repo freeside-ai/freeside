@@ -18,6 +18,7 @@ import (
 // narrows a grant.
 type MintRecord struct {
 	MintedAt       time.Time   `json:"minted_at"`
+	RegistrationID int64       `json:"registration_id"`
 	InstallationID int64       `json:"installation_id"`
 	Repo           string      `json:"repo"`
 	Requested      Permissions `json:"requested"`
@@ -62,6 +63,7 @@ func (r *StoreRecorder) RecordMint(rec MintRecord) error {
 	err := r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		_, err := tx.RecordMintAudit(ctx, store.MintAudit{
 			MintedAt:                rec.MintedAt,
+			RegistrationID:          rec.RegistrationID,
 			InstallationID:          rec.InstallationID,
 			Repo:                    rec.Repo,
 			RequestedActions:        rec.Requested.Actions,
