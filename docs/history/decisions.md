@@ -342,7 +342,7 @@ New in revision 14 (decider in parentheses):
 
 ---
 
-## Revision 15 (current)
+## Revision 15
 
 Revision 15 harvests the intro review (PR #192, issue #208) into the
 charter: the thesis grants agents autonomy, the objective is a positive
@@ -400,3 +400,62 @@ New in revision 15 (decider in parentheses):
    outcomes. The intro's "stops opening pull requests" drift claim was
    verified against §5.5 and needed no edit. (User; devlog
    2026-07-20-2331-plan-alignment-harvest.md; #208.)
+
+---
+
+## Revision 16 (current)
+
+Revision 16 establishes the multi-account GitHub App identity model: every
+operator is a distinct agent principal, while registration topology is an
+owner policy choice between one public personal-account App by default and
+private per-owning-account Apps as the work-account opt-in.
+
+Held from revision 15: every decision, unchanged. Personal-tool scope still
+means one owner per Freeside deployment; this revision specifies how separate
+operators remain separate principals and how one operator acts across several
+repository-owning accounts and machines.
+
+New in revision 16 (decider in parentheses):
+
+1. **GitHub publication identity is a per-user principal with
+   owner-selected registration topology.** The default is one public,
+   personal-account-owned App per operator, installed per repository-owning
+   account through GitHub's native approval and repository-selection flow;
+   the opt-in work-account posture uses one private App per owning account
+   when the organization must own and terminate the credential. Both
+   postures bind trust to numeric App IDs, onboarded repositories, known
+   registrations and installations, and trusted principals. Both postures
+   additionally require an always-on installation-grant janitor
+   that suspends any installation with unrecorded repository grants; public
+   registrations also delete untrusted-owner installations. Unsolicited
+   authority neither authorizes Freeside minting nor reaches AttentionItems.
+   Each worker-bound installation-token request names exactly one canonical
+   repository ID and the approved permissions, and Freeside verifies the
+   returned repository, permissions, and expiry before exposing the token. A
+   daemon-internal, read-only, immediately revoked janitor credential is the
+   only full-installation enumeration path, is gated before mint to a trusted
+   installation or metadata-matched pending envelope, verifies pending
+   repository IDs only after enumeration, and is never worker-exposed. A
+   bounded pending-install-or-expansion intent with no new authority serializes
+   native installation and repository-selection changes with the janitor. The
+   binding set, pending intent, and expiring mutation lease are principal-wide
+   CAS state; competing daemons attach or wait, and multi-machine installation
+   mutation fails closed without that shared authority. Both
+   pending and trusted installations require selected-repository mode before
+   exact ID comparison. Callback, polling, or explicit local resume can make an
+   exact pending match reviewable; only the accepted local trust review promotes
+   it. Its expected owner and exact repository delta are a temporary
+   reconciliation exception but gain no authority. Grant drift enters terminal
+   quarantine and requires deletion plus fresh
+   installation; Freeside never auto-unsuspends the drifted installation.
+   Keys are per-machine, individually revocable, and tracked by GitHub's
+   displayed SHA-256 fingerprint; names are canonicalized
+   from the manifest conversion response, same-principal multi-daemon
+   concurrency is expected, and bot-user-ID-bearing `Co-authored-by` trailers
+   add human-readable provenance without replacing App-ID credential checks.
+   Native GitHub installation and organization approval are an explicit
+   account-onboarding prerequisite; Phase 1A's one-step repository target
+   begins after that prerequisite completes.
+   Rejected alternatives, residuals, and revisit conditions live in the
+   decision note.
+   (User; devlog 2026-07-22-2124-multi-account-agent-identity.md; #244, #251.)

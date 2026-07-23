@@ -1,9 +1,9 @@
 ---
 title: Freeside Project Plan
-revision: 15
+revision: 16
 status: active
 phase: 1A
-updated: 2026-07-20
+updated: 2026-07-22
 ---
 
 # Freeside
@@ -463,6 +463,22 @@ The audit attests the PR job's **effective authority**, including:
 Phase 1A supports one repository with a machine-readable profile. A human
 reviews it once; the daemon binds it by digest; drift fails closed.
 
+Publication authenticates as a per-user agent principal under Section 10's
+GitHub App identity model. Every trusted registration is bound by numeric App
+ID to that principal; App names and slugs are display metadata, never trust
+inputs. Installation-token minting fails closed unless the target repository
+is onboarded and trusted and the specific installation is recorded as known
+for that repository under a known registration bound to the principal,
+regardless of whether that registration uses the public default or the private
+work-account posture. Every worker-bound publication mint request supplies
+`repository_ids` containing only the target repository's canonical numeric ID
+and narrows `permissions` to the profile-approved operation. The response is
+untrusted until Freeside verifies that it names exactly that repository, grants
+no permission beyond the approved effective set, includes every permission the
+operation requires, and has the expected bounded expiry. A missing or
+mismatched field discards the token before any worker can receive it and fails
+closed.
+
 **Standing prohibition:** the daemon host is never a self-hosted Actions runner
 for a managed repository.
 
@@ -642,6 +658,23 @@ decisions survive restart. Deterministic identities, reconciliation, and
 bounded retry make external effects converge on one intended result. Anything
 that cannot be safely retried waits for me.
 
+One principal may act through multiple daemons on different machines at the
+same time. Reconciliation, deterministic identities, and compare-and-swap
+effects therefore tolerate same-principal concurrency; no correctness rule
+assumes that a principal has a single writer.
+
+Registration trust bindings, pending installation intents, and installation
+mutation leases are principal-wide coordinated state, not independent local
+SQLite facts. Their shared authority provides compare-and-swap by binding every
+mutation to a ledger generation and binding-set version. Before an installation
+ID exists, the lease key is `(registration_id, owner_id)`; afterward it is
+`(registration_id, installation_id)`. Only the current lease generation may
+start or resume GitHub's installation or repository-selection flow, promote an
+intent, or release the lease. A competing daemon attaches to or waits on the
+same intent; it never opens a second flow from the same base set. Multi-machine
+installation mutation fails closed when this shared CAS authority is
+unavailable.
+
 Kill-before and kill-after tests are permanent.
 
 ### 5.10 Coherent backup: encrypted checkpoints
@@ -671,9 +704,10 @@ retention_by_artifact_class, last_completed_checkpoint, last_restore_test}`
 - Remote checkpoints are encrypted.
 - Encryption keys live outside agent environments.
 - Backup credentials are never mounted into workspaces.
-- GitHub App keys and provider credentials are excluded unless a stronger
-  recovery design encrypts them separately. Recovery may therefore require
-  reauthentication.
+- GitHub App private keys are per-machine credentials under Section 10 and are
+  excluded, as are provider credentials, unless a stronger recovery design
+  encrypts them separately. Recovery may therefore require reauthentication;
+  copying a key from another machine is not a recovery mechanism.
 - Raw transcripts have shorter retention than decisions, approved
   specifications, and audit events.
 - `freesided doctor` checks checkpoint age, encryption state, artifact closure,
@@ -1106,12 +1140,122 @@ Build the installer only after the underlying interfaces survive real use. The
 | Command | Function |
 | --- | --- |
 | `freesided setup` | Performs installation. Privileged steps run through a narrow elevation helper; the daemon never retains root. |
-| `freesided onboard <repo>` | Creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and builds the project image. |
+| `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and builds the project image. If installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls; a callback or `--resume` reopens the same review after approval. |
 | `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, and restore-test age. It runs on a schedule and files `system_health` items. |
 | `freesided submit` | Starts a manually approved work item. |
 
-The GitHub App uses the manifest flow, and its key lands directly in protected
-storage.
+### GitHub App Agent Identity
+
+Each Freeside operator is a distinct agent principal and holds their own
+GitHub App registration or registrations. Registrations and private keys are
+never shared across operators. A principal may map to more than one numeric
+App ID under the work-account posture below, but every App ID is explicitly
+bound to exactly one trusted principal.
+
+Registration topology is owner policy, not an architectural distinction:
+
+- **Default: one public App per operator.** The registration is owned by the
+  operator's personal account and installed separately on the operator's
+  personal account and each repository-owning organization through GitHub's
+  native install or approval flow, with repository-scoped selection. This
+  default is permitted only while the Section 5.5 mint gate applies
+  unconditionally, GitHub inputs can cause AttentionItems only through a
+  trusted principal and recorded installation-to-repository binding, there is
+  no unauthenticated GitHub write path into the attention system, and the
+  always-on installation-grant janitor below is active.
+- **Opt-in: one private App per repository-owning account.** An operator may
+  choose this work-account posture when an organization must own and terminate
+  the credential. Each such registration still represents that operator and
+  is never shared with another operator. The same mint, attention, and
+  installation-grant reconciliation gates apply; private visibility is not
+  treated as a substitute for them.
+
+Before redirecting to create or approve an installation or to add a repository
+to an existing selected-repository installation, `freesided onboard`
+atomically acquires the principal-wide mutation lease above and records exactly
+one single-use pending-install-or-expansion intent containing its lease
+generation and base binding-set version, the registration,
+expected numeric owner, the installation ID when known, the current trusted
+repository IDs, the exact expected post-change repository IDs, required
+`repository_selection: selected`, a callback nonce, and an expiry. The intent
+grants no authority beyond existing trusted bindings: in particular, the added
+repository cannot mint, publish, or reach attention. The janitor may leave
+exactly one remote installation matching that owner, installation ID when
+known, selected-repository mode, and exact post-change repository set untouched
+only until expiry. A same-session callback that matches the nonce is an
+acceleration, not the authority path. The daemon also polls App-authenticated
+installation state for exact pending matches, and
+`freesided onboard <repo> --resume` reopens that state after another browser,
+session, or daemon restart.
+Either path moves the intent only to ready-for-review. Promotion still requires
+canonical owner, installation, selected mode, and post-change IDs plus
+acceptance of the local one-time trust review; that acceptance atomically
+creates the installation-to-repository binding. A missing, ambiguous,
+over-broad, replayed, or expired match fails closed, compare-and-swap releases
+the lease, and ordinary reconciliation resumes.
+
+Every registration, public or private, requires the always-on
+installation-grant janitor. The daemon refuses to operate a registration
+without it. The janitor enumerates every installation and its granted
+repositories against the recorded principal, owner, installation, and
+repository bindings. Before minting any installation token, it uses the
+App-authenticated installation record to require either a trusted binding (and,
+for a public registration, a trusted owner) or an unexpired pending envelope
+whose registration, expected owner, installation ID when known, and current
+lease generation match. This pre-token gate does not claim the pending
+repository set matches. It deletes and audit-logs every other installation from
+that metadata alone, without enumerating its repositories. For a candidate
+that passes this gate, the janitor first requires the canonical installation
+response's `repository_selection` to be `selected`; a missing or different mode
+is drift even when the current repository IDs happen to match. To make complete
+repository enumeration possible, the janitor alone may mint an installation
+token without `repository_ids`, narrowed to the
+minimum permission set accepted by GitHub's list-repositories endpoint. This
+credential remains in daemon memory, may call only that paginated read
+endpoint, is never logged, persisted, or exposed to a worker, and is revoked as
+soon as enumeration completes or fails. The returned repository pages are
+untrusted until pagination completes and their canonical IDs form the compared
+set. Only then does a pending envelope become an exact pending match by
+matching its expected post-change repository set. For that exact,
+unexpired match only, the expected owner and post-change
+repository set are temporarily exempt from the untrusted-owner and
+unrecorded-grant branches; the exception grants no authority and disappears on
+promotion or expiry. Outside that exception, any unrecorded repository grant,
+including `all repositories`, immediately suspends and audit-logs the whole
+affected installation. That suspension is
+terminal quarantine: Freeside records the observed grant set, deletes the
+installation with App authentication, invalidates its binding, and requires a
+fresh native installation through the pending-intent flow. It never
+automatically unsuspends a drifted installation or mints a token against it.
+Unsolicited installations and repository grants never authorize Freeside
+minting or reach the attention system.
+
+Registration uses the manifest flow, and the initial key lands directly in
+protected storage. Each additional machine receives a distinct private key
+within the registration. Freeside computes and records for each machine the
+same SHA-256 public-key fingerprint GitHub displays in the App settings, and
+uses that fingerprint to identify the exact key the operator must delete when a
+machine is lost, retired, or compromised. A single key can therefore be revoked
+without replacing its siblings. Copying PEM files between machines is outside
+the contract.
+
+GitHub App names are globally unique and limited to 34 characters while
+GitHub user and organization names can reach 39. Freeside generates a
+suggested name by truncating the account-derived portion while retaining a
+legible username, reserves room for a numeric collision suffix, and retries
+with increasing suffixes. The requested name is only a suggestion: the
+manifest conversion response supplies the canonical numeric App ID, name, and
+slug that Freeside stores. App names are thereafter effectively immutable
+policy because a rename churns the visible `[bot]` login; trust decisions
+continue to use only the numeric App ID.
+
+Daemon-authored agent commits carry a `Co-authored-by` trailer using the
+GitHub bot no-reply address
+`<bot-user-id>+<app-slug>[bot]@users.noreply.github.com`. Freeside resolves and
+records the bot account's numeric user ID from the canonical App slug; the bot
+user ID and slug are attribution metadata, not trust inputs. This
+human-readable provenance complements credential-level attribution and never
+substitutes for the App-ID, installation, repository, or token-mint checks.
 
 Defaults are hosted ntfy, embedded SQLite, one configuration directory, and
 `attended_dev` with honest isolation-class reporting.
@@ -1119,7 +1263,11 @@ Defaults are hosted ntfy, embedded SQLite, one configuration directory, and
 Phase 1A exit targets, verified on a clean VM or spare machine:
 
 - fresh machine to first run in under one hour; and
-- repository onboarding in under thirty minutes with exactly one manual step.
+- repository onboarding in under thirty minutes with exactly one Freeside
+  manual review when the selected App installation and any organization
+  approval are already complete. GitHub's native installation or approval is
+  an account-onboarding prerequisite measured separately; after it completes,
+  `freesided onboard` resumes the same onboarding transaction.
 
 ## 11. Roadmap, build order, and coordination
 
@@ -1338,46 +1486,50 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 15:
+Revision 16:
 
-1. **The canonical thesis grants autonomy.** §1, README, and AGENTS.md now
-   read "grants agents the autonomy to turn work items into evidence-backed
-   pull requests", superseding "turns a software work item into an
-   evidence-backed pull request". (User; devlog
-   2026-07-20-2331-plan-alignment-harvest.md; #192, #208.)
-2. **The objective is a positive return, and the success claims are
-   necessary gates.** §1's measure is restated as useful, correct work worth
-   more than the attention, maintenance, money, and risk it costs; claim 1
-   gains its numerator (work per unit of attention rising against a
-   passively logged, normalized baseline); claim 3 is verified by
-   conformance and adversarial tests, never read off telemetry; passing all
-   four is named necessary, not sufficient. §9 Measurement adds
-   normalization by volume and risk and maintenance accounting; the §11
-   exit criterion and §12 kill criterion align to the same per-unit
-   measure, and §4/§8 subordinate open-to-decision time to it as the
-   headline attention-latency metric. (User; devlog
-   2026-07-20-2331-plan-alignment-harvest.md; #208.)
-3. **The auto-merge door stays deliberately open.** §2 non-goal 1 drops
-   "never auto-merges": code review and merging stay on GitHub, human merge
-   is the current accountability checkpoint, and whether narrow,
-   risk-bounded classes of change ever earn automatic merge remains an open
-   question, adopting the owner decision recorded on PR #192. (User; devlog
-   2026-07-20-2331-plan-alignment-harvest.md; #192, #208.)
-4. **Oversight and standing-grant promotion become stated principles.** New
-   §3.5 states oversight as non-optional and deliberately frictionless;
-   §3.1 gains the promotion criteria: low risk, stable preconditions, and
-   bounded downside, never repetition alone. (User; devlog
-   2026-07-20-2331-plan-alignment-harvest.md; #208.)
-5. **Durability names its fallback.** §5.9: anything that cannot be safely
-   retried waits for me. (User; devlog
-   2026-07-20-2331-plan-alignment-harvest.md; #208.)
-6. **Routing inputs are named and manual balancing is accounted.** §8
-   states routing policy is informed by task class, quality, latency,
-   usage, and cost, and counts today's manual provider balancing in the
-   attention accounting; §2 non-goal 5's deferrals open on recorded
-   outcomes. The intro's "stops opening pull requests" drift claim was
-   verified against §5.5 and needed no edit. (User; devlog
-   2026-07-20-2331-plan-alignment-harvest.md; #208.)
+1. **GitHub publication identity is a per-user principal with
+   owner-selected registration topology.** The default is one public,
+   personal-account-owned App per operator, installed per repository-owning
+   account through GitHub's native approval and repository-selection flow;
+   the opt-in work-account posture uses one private App per owning account
+   when the organization must own and terminate the credential. Both
+   postures bind trust to numeric App IDs, onboarded repositories, known
+   registrations and installations, and trusted principals. Both postures
+   additionally require an always-on installation-grant janitor
+   that suspends any installation with unrecorded repository grants; public
+   registrations also delete untrusted-owner installations. Unsolicited
+   authority neither authorizes Freeside minting nor reaches AttentionItems.
+   Each worker-bound installation-token request names exactly one canonical
+   repository ID and the approved permissions, and Freeside verifies the
+   returned repository, permissions, and expiry before exposing the token. A
+   daemon-internal, read-only, immediately revoked janitor credential is the
+   only full-installation enumeration path, is gated before mint to a trusted
+   installation or metadata-matched pending envelope, verifies pending
+   repository IDs only after enumeration, and is never worker-exposed. A
+   bounded pending-install-or-expansion intent with no new authority serializes
+   native installation and repository-selection changes with the janitor. The
+   binding set, pending intent, and expiring mutation lease are principal-wide
+   CAS state; competing daemons attach or wait, and multi-machine installation
+   mutation fails closed without that shared authority. Both
+   pending and trusted installations require selected-repository mode before
+   exact ID comparison. Callback, polling, or explicit local resume can make an
+   exact pending match reviewable; only the accepted local trust review promotes
+   it. Its expected owner and exact repository delta are a temporary
+   reconciliation exception but gain no authority. Grant drift enters terminal
+   quarantine and requires deletion plus fresh
+   installation; Freeside never auto-unsuspends the drifted installation.
+   Keys are per-machine, individually revocable, and tracked by GitHub's
+   displayed SHA-256 fingerprint; names are canonicalized
+   from the manifest conversion response, same-principal multi-daemon
+   concurrency is expected, and bot-user-ID-bearing `Co-authored-by` trailers
+   add human-readable provenance without replacing App-ID credential checks.
+   Native GitHub installation and organization approval are an explicit
+   account-onboarding prerequisite; Phase 1A's one-step repository target
+   begins after that prerequisite completes.
+   Rejected alternatives, residuals, and revisit conditions live in the
+   decision note.
+   (User; devlog 2026-07-22-2124-multi-account-agent-identity.md; #244, #251.)
 
 ## 14. Risks
 
