@@ -32,6 +32,7 @@ func TestTrustRowsTamperedBodyFailsClosed(t *testing.T) {
 
 	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo:                       "freeside-ai/candidate-repo",
+		RepositoryID:               123456789,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
@@ -122,6 +123,55 @@ func TestTrustRowsTamperedBodyFailsClosed(t *testing.T) {
 	}
 }
 
+// Captured verbatim from the v4 build: encode() of a valid profile before the
+// canonical repository ID became part of the owner-approved content.
+const (
+	staleV4ProfileDigest = "sha256:7b0fccb74a2bd610c66339968470160a2e7f6fb17cb087ab73ce7c61916c393f"
+	staleV4ProfileBody   = `{"repo":"freeside-ai/demo","pr_execution":"audited_same_repo","candidate_automation_changes":"block","pr_github_token_permissions":"read_only","allow_oidc":false,"allow_environment_secrets":false,"allow_secret_bearing_pr_jobs":false,"allow_self_hosted_ci":false,"allow_pull_request_target":false,"allow_reusable_workflows":false,"allow_package_publishing":false,"allow_artifact_consumers":false,"commit_plan":"single_commit","message_ruleset":"github/1","workflow_audit_digest":"sha256:workflow-audit","review":{"mode":"auto","config_digest":"sha256:review-config"},"protected_paths":{"extra_automation_control_patterns":["ci/*.sh","deploy/**"],"extra_reviewer_instruction_patterns":null,"extra_git_metadata_patterns":null,"extra_verification_control_patterns":["Makefile"],"extra_prompts_and_policy_patterns":["policy/**","prompts/**"],"extra_egress_and_trust_patterns":null,"extra_materiality_rules_patterns":["docs/plan.md"]},"profile_digest":"sha256:7b0fccb74a2bd610c66339968470160a2e7f6fb17cb087ab73ce7c61916c393f"}`
+)
+
+// TestTrustProfilePreRepositoryIDRowFailsClosed proves that a persisted v4
+// profile cannot silently acquire a guessed repository ID after the v5
+// encoding bump. JSON decoding leaves the absent field at zero, and the
+// persistence-boundary re-gate rejects it before the profile can authorize
+// publication or token minting.
+func TestTrustProfilePreRepositoryIDRowFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	db := openRaw(t)
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatalf("seedEpoch: %v", err)
+	}
+	s := &Store{db: db}
+
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO trust_profiles (profile_digest, repo, recorded_at, body) VALUES (?, ?, ?, ?)`,
+		staleV4ProfileDigest, "freeside-ai/demo",
+		formatTime(time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)), staleV4ProfileBody); err != nil {
+		t.Fatalf("insert v4 row: %v", err)
+	}
+
+	err := s.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.GetTrustProfile(ctx, domain.Digest(staleV4ProfileDigest))
+		return err
+	})
+	if !errors.Is(err, domain.ErrNonPositive) {
+		t.Fatalf("pre-repository-ID profile read error = %v, want ErrNonPositive", err)
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("stale profile surfaced as ErrNotFound; it must be a hard error: %v", err)
+	}
+	err = s.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.ListTrustProfiles(ctx, "freeside-ai/demo")
+		return err
+	})
+	if !errors.Is(err, domain.ErrNonPositive) {
+		t.Fatalf("pre-repository-ID profile list error = %v, want ErrNonPositive", err)
+	}
+}
+
 // Captured verbatim from the v2 build: encode() of a minimal valid profile
 // (no commit_plan or message_ruleset members existed). The digest is
 // authentic for this content under the v2 encoding.
@@ -134,7 +184,7 @@ const (
 // for trust-profile encoding bumps at the persistence boundary: a row recorded under
 // the v2 encoding (this literal body and digest were captured from the v2
 // build, so the digest is authentic for its content under v2) fails decode's
-// Validate recompute under v4 and surfaces as a hard error, never ErrNotFound
+// Validate under v5 and surfaces as a hard error, never ErrNotFound
 // and never a silently defaulted profile. The only path back to a readable
 // profile is a human re-recording an owner-approved current profile, which is how
 // the conservative single_commit default arrives (plan §5.5 drift recovery;
@@ -161,17 +211,16 @@ func TestTrustProfileStaleEncodingRowFailsClosed(t *testing.T) {
 	}
 
 	// decode's Validate rejects the row on its first post-v2 invariant: the
-	// commit_plan member a v2 body cannot carry. The digest recompute would
-	// reject it too (the version string participates in the address; the
-	// domain-level re-approval test pins that class); either way the read is
-	// a hard error, so no v2 row is ever silently defaulted into a current
+	// positive repository_id a v2 body cannot carry. Later missing policy
+	// members and the digest recompute would reject it too; the first error
+	// is enough to prove no v2 row is silently defaulted into a current
 	// profile.
 	err := s.Read(ctx, func(tx *ReadTx) error {
 		_, err := tx.GetTrustProfile(ctx, domain.Digest(v2Digest))
 		return err
 	})
-	if !errors.Is(err, domain.ErrInvalidCommitPlanMode) {
-		t.Fatalf("stale v2 row read error = %v, want ErrInvalidCommitPlanMode", err)
+	if !errors.Is(err, domain.ErrNonPositive) {
+		t.Fatalf("stale v2 row read error = %v, want ErrNonPositive", err)
 	}
 	if errors.Is(err, ErrNotFound) {
 		t.Fatalf("stale v2 row surfaced as ErrNotFound; a stale profile must be a hard error, not a miss: %v", err)
@@ -180,8 +229,8 @@ func TestTrustProfileStaleEncodingRowFailsClosed(t *testing.T) {
 		_, err := tx.ListTrustProfiles(ctx, "freeside-ai/candidate-repo")
 		return err
 	})
-	if !errors.Is(err, domain.ErrInvalidCommitPlanMode) {
-		t.Fatalf("stale v2 row list error = %v, want ErrInvalidCommitPlanMode", err)
+	if !errors.Is(err, domain.ErrNonPositive) {
+		t.Fatalf("stale v2 row list error = %v, want ErrNonPositive", err)
 	}
 }
 
@@ -201,6 +250,7 @@ func TestTrustRowsInconsistentColumnsFailClosed(t *testing.T) {
 
 	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo:                       "freeside-ai/candidate-repo",
+		RepositoryID:               123456789,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
@@ -294,14 +344,15 @@ func TestLatestTrustProfileSurvivesStaleHistory(t *testing.T) {
 		_, err := tx.LatestTrustProfile(ctx, "freeside-ai/candidate-repo")
 		return err
 	})
-	if !errors.Is(err, domain.ErrInvalidCommitPlanMode) {
-		t.Fatalf("latest over only a stale row error = %v, want ErrInvalidCommitPlanMode", err)
+	if !errors.Is(err, domain.ErrNonPositive) {
+		t.Fatalf("latest over only a stale row error = %v, want ErrNonPositive", err)
 	}
 
 	// The owner records the re-approved current profile: same content plus the
 	// explicit policy keys, a new digest, a new row.
 	reapproved, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo:                       "freeside-ai/candidate-repo",
+		RepositoryID:               123456789,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
@@ -337,8 +388,8 @@ func TestLatestTrustProfileSurvivesStaleHistory(t *testing.T) {
 		_, err := tx.ListTrustProfiles(ctx, "freeside-ai/candidate-repo")
 		return err
 	})
-	if !errors.Is(err, domain.ErrInvalidCommitPlanMode) {
-		t.Fatalf("history list after re-approval error = %v, want ErrInvalidCommitPlanMode", err)
+	if !errors.Is(err, domain.ErrNonPositive) {
+		t.Fatalf("history list after re-approval error = %v, want ErrNonPositive", err)
 	}
 }
 
@@ -362,7 +413,7 @@ func TestTrustProfileActivationMigrationBackfillsLatestProfile(t *testing.T) {
 	}
 
 	profileA, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
-		Repo: "freeside-ai/candidate-repo", PRExecution: domain.PRExecutionAuditedSameRepo,
+		Repo: "freeside-ai/candidate-repo", RepositoryID: 123456789, PRExecution: domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
 		CommitPlan:                 domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
@@ -373,7 +424,7 @@ func TestTrustProfileActivationMigrationBackfillsLatestProfile(t *testing.T) {
 		t.Fatalf("profile A: %v", err)
 	}
 	inputB := domain.AutomationTrustProfileInput{
-		Repo: profileA.Repo, PRExecution: profileA.PRExecution,
+		Repo: profileA.Repo, RepositoryID: profileA.RepositoryID, PRExecution: profileA.PRExecution,
 		CandidateAutomationChanges: profileA.CandidateAutomationChanges,
 		PRGitHubTokenPermissions:   profileA.PRGitHubTokenPermissions, AllowOIDC: true,
 		CommitPlan: profileA.CommitPlan, MessageRuleset: profileA.MessageRuleset,

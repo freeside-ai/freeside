@@ -15,7 +15,9 @@ import (
 // discipline) is a new version: two daemon builds must never derive different
 // digests for the same profile content, or the digest-bound publication gate
 // (plan §5.5) would read an unchanged profile as drift across an upgrade.
-// v4 adds explicit allow axes for every privilege WorkflowAudit attests:
+// v5 binds the immutable GitHub repository ID so a renamed or deleted
+// owner/name cannot authorize minting for a different repository. v4 adds
+// explicit allow axes for every privilege WorkflowAudit attests:
 // reusable workflows, package publishing, and artifact consumers. v3 added
 // the commit_plan and message_ruleset policy keys (§5.5, §5.6
 // commit-plan gating): a policy flip must change the profile digest, and a
@@ -26,7 +28,7 @@ import (
 // ProtectedPathConfig. Rows from a prior version fail Validate's digest
 // recompute and are re-recorded by a human, never migrated (§5.5 drift
 // recovery).
-const trustProfileEncodingVersion = "freeside-trust-profile/v4"
+const trustProfileEncodingVersion = "freeside-trust-profile/v5"
 
 // ProtectedPathConfig is the repository-specific widening of the protected
 // control-plane path classes (plan §5.5, §5.8). Only Extra* fields exist by
@@ -153,6 +155,7 @@ func (r ReviewSettings) Validate() error {
 // AutomationTrustProfileInput.
 type AutomationTrustProfile struct {
 	Repo                       string                 `json:"repo"`
+	RepositoryID               int64                  `json:"repository_id"`
 	PRExecution                PRExecutionMode        `json:"pr_execution"`
 	CandidateAutomationChanges AutomationChangePolicy `json:"candidate_automation_changes"`
 	PRGitHubTokenPermissions   TokenPermissionsMode   `json:"pr_github_token_permissions"`
@@ -178,6 +181,7 @@ type AutomationTrustProfile struct {
 // path that can bind a profile to a digest its content does not resolve to.
 type AutomationTrustProfileInput struct {
 	Repo                       string
+	RepositoryID               int64
 	PRExecution                PRExecutionMode
 	CandidateAutomationChanges AutomationChangePolicy
 	PRGitHubTokenPermissions   TokenPermissionsMode
@@ -203,6 +207,7 @@ type AutomationTrustProfileInput struct {
 func NewAutomationTrustProfile(in AutomationTrustProfileInput) (AutomationTrustProfile, error) {
 	p := AutomationTrustProfile{
 		Repo:                       in.Repo,
+		RepositoryID:               in.RepositoryID,
 		PRExecution:                in.PRExecution,
 		CandidateAutomationChanges: in.CandidateAutomationChanges,
 		PRGitHubTokenPermissions:   in.PRGitHubTokenPermissions,
@@ -237,6 +242,7 @@ func NewAutomationTrustProfile(in AutomationTrustProfileInput) (AutomationTrustP
 type canonicalTrustProfile struct {
 	Version                    string                 `json:"version"`
 	Repo                       string                 `json:"repo"`
+	RepositoryID               int64                  `json:"repository_id"`
 	PRExecution                PRExecutionMode        `json:"pr_execution"`
 	CandidateAutomationChanges AutomationChangePolicy `json:"candidate_automation_changes"`
 	PRGitHubTokenPermissions   TokenPermissionsMode   `json:"pr_github_token_permissions"`
@@ -265,6 +271,7 @@ func (p AutomationTrustProfile) ComputeDigest() (Digest, error) {
 	body, err := json.Marshal(canonicalTrustProfile{
 		Version:                    trustProfileEncodingVersion,
 		Repo:                       p.Repo,
+		RepositoryID:               p.RepositoryID,
 		PRExecution:                p.PRExecution,
 		CandidateAutomationChanges: p.CandidateAutomationChanges,
 		PRGitHubTokenPermissions:   p.PRGitHubTokenPermissions,
@@ -296,6 +303,9 @@ func (p AutomationTrustProfile) ComputeDigest() (Digest, error) {
 func (p AutomationTrustProfile) Validate() error {
 	if p.Repo == "" {
 		return fmt.Errorf("trust profile repo: %w", ErrEmptyField)
+	}
+	if p.RepositoryID <= 0 {
+		return fmt.Errorf("trust profile repository_id %d: %w", p.RepositoryID, ErrNonPositive)
 	}
 	if !p.PRExecution.valid() {
 		return fmt.Errorf("trust profile pr_execution %q: %w", p.PRExecution, ErrInvalidPRExecutionMode)

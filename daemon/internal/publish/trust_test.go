@@ -13,15 +13,24 @@ import (
 
 // testTrustRepo is the repository testCandidate publishes to; its trust
 // fixtures below are what the drift gate checks the candidate against.
-const testTrustRepo = "freeside-ai/evidence-repo"
+const (
+	testTrustRepo       = "freeside-ai/evidence-repo"
+	fixtureRepositoryID = int64(990011)
+)
 
 // trustProfileForRepo builds a conformant, human-approved trust profile for
 // repo via the trusted constructor: read_only tokens, no OIDC/secret/self-
 // hosted/pull_request_target allowance, bound to a fixed audit digest.
 func trustProfileForRepo(t *testing.T, repo string) domain.AutomationTrustProfile {
 	t.Helper()
+	return trustProfileForRepoID(t, repo, fixtureRepositoryID)
+}
+
+func trustProfileForRepoID(t *testing.T, repo string, repositoryID int64) domain.AutomationTrustProfile {
+	t.Helper()
 	p, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo:                       repo,
+		RepositoryID:               repositoryID,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
@@ -119,8 +128,14 @@ func conformantTrust(t *testing.T) memoryTrustSource {
 // returns the recorded profile's digest, which a candidate must bind to.
 func seedTrust(t *testing.T, s *store.Store, repo string) domain.Digest {
 	t.Helper()
-	ctx := context.Background()
 	profile := trustProfileForRepo(t, repo)
+	return seedTrustProfile(t, s, profile)
+}
+
+func seedTrustProfile(t *testing.T, s *store.Store, profile domain.AutomationTrustProfile) domain.Digest {
+	t.Helper()
+	ctx := context.Background()
+	repo := profile.Repo
 	audit := workflowAuditForRepo(t, repo)
 	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		if err := tx.RecordTrustProfile(ctx, profile, audit.AuditedAt); err != nil {

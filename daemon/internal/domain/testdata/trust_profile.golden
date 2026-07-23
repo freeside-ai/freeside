@@ -1,5 +1,6 @@
 {
   "repo": "freeside-ai/demo",
+  "repository_id": 123456789,
   "pr_execution": "audited_same_repo",
   "candidate_automation_changes": "block",
   "pr_github_token_permissions": "read_only",
@@ -37,5 +38,5 @@
       "docs/plan.md"
     ]
   },
-  "profile_digest": "sha256:7b0fccb74a2bd610c66339968470160a2e7f6fb17cb087ab73ce7c61916c393f"
+  "profile_digest": "sha256:9d6b02249b80b5348d5be813f37c8cf2a2df3f5bea9122b085cc3f7dd93f935e"
 }
