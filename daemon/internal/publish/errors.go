@@ -40,12 +40,23 @@ var ErrUnauthorizedPublication = errors.New("candidate authorization does not pe
 // any path ambiguity.
 var ErrCredentialsInsideStateDir = errors.New("credentials directory overlaps the state directory")
 
-// ErrNoAppCredentials is returned by Keystore.LoadApp when no App has
-// been registered yet (no key material on disk). Registration via the
-// manifest flow is the only way to create it; after a checkpoint
-// restore this is the expected state (recovery may require
-// reauthentication, §5.10).
+// ErrNoAppCredentials reports that no App has been registered yet (no key
+// material on disk). Registration via the manifest flow is the only ordinary
+// way to create it; after a checkpoint restore this is the expected state
+// (recovery may require reauthentication, §5.10).
 var ErrNoAppCredentials = errors.New("no GitHub App credentials in the keystore")
+
+// ErrNoAppRegistration is returned by Keystore.LoadApp when the requested
+// numeric owner has no registration. It is distinct from the entirely empty
+// keystore state so resolution can fail closed without hiding which binding
+// is absent.
+var ErrNoAppRegistration = errors.New("no GitHub App registration for owner")
+
+// ErrLegacyAppMigrationRequired is returned while the former singleton
+// layout is present. Its metadata has no owner or visibility, so no load,
+// enumeration, or new save may silently attribute it; MigrateLegacyApp
+// requires both values explicitly before relocating the credential.
+var ErrLegacyAppMigrationRequired = errors.New("legacy GitHub App credentials require explicit migration")
 
 // ErrCredentialPermissions is returned when on-disk credential files or
 // directories are reachable by group or other. The keystore re-asserts

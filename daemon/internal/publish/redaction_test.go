@@ -36,6 +36,8 @@ func TestNoCredentialValueRenders(t *testing.T) {
 	}
 
 	creds := publish.AppCredentials{
+		Owner:         "freeside-ai",
+		OwnerID:       testOwnerID,
 		AppID:         fixtureAppID,
 		Slug:          "freeside-publish",
 		ClientID:      "Iv1.deadbeefdeadbeef",

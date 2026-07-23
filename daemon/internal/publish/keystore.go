@@ -2,7 +2,9 @@ package publish
 
 import (
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -11,6 +13,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -39,7 +43,7 @@ const (
 // every load so a widened file fails closed rather than being trusted.
 type Keystore struct {
 	root string // the credentials directory
-	dir  string // root/github-app
+	dir  string // root/github-app, whose children are numeric-owner-keyed registrations
 	mu   *sync.Mutex
 }
 
@@ -81,8 +85,9 @@ func NewKeystore(credentialsDir, stateDir string) (*Keystore, error) {
 // units keep out of every mount.
 func (k *Keystore) Dir() string { return k.root }
 
-// SaveApp persists the App's credentials: the private key as PKCS#1 PEM
-// and the registration metadata (including the webhook and client
+// SaveApp persists one numeric owner's App credentials: the private key as
+// PKCS#1 PEM and the registration metadata (including the display login,
+// webhook, and client
 // secrets, which are unrecoverable after the one-time manifest
 // conversion) as JSON. Both files are written owner-only and their
 // permissions re-asserted after the write, so a pre-existing wider file
@@ -91,6 +96,10 @@ func (k *Keystore) SaveApp(creds AppCredentials) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
+	return k.saveAppLocked(creds, false)
+}
+
+func (k *Keystore) saveAppLocked(creds AppCredentials, allowLegacy bool) error {
 	if creds.Key == nil {
 		return errors.New("keystore: refusing to save credentials without a private key")
 	}
@@ -99,6 +108,20 @@ func (k *Keystore) SaveApp(creds AppCredentials) error {
 	// working credentials and fail every later mint.
 	if creds.AppID <= 0 {
 		return fmt.Errorf("keystore: refusing to save credentials with app id %d", creds.AppID)
+	}
+	if err := validateOwnerLogin(creds.Owner); err != nil {
+		return err
+	}
+	ownerKey, err := appOwnerKey(creds.OwnerID)
+	if err != nil {
+		return err
+	}
+	if !creds.Visibility.valid() {
+		return fmt.Errorf("keystore: refusing to save credentials with visibility %q", creds.Visibility)
+	}
+	creds.KeyID, err = appKeyID(creds.Key)
+	if err != nil {
+		return err
 	}
 	// Converge the target to a secure state before any secret bytes
 	// land: the root chain is proven symlink-free (it was resolved at
@@ -115,10 +138,30 @@ func (k *Keystore) SaveApp(creds AppCredentials) error {
 	if err := narrowDir(k.root); err != nil {
 		return err
 	}
-	if err := k.recoverSwap(false); err != nil {
+	if err := rejectNonDir(k.dir); err != nil {
 		return err
 	}
-	if err := rejectNonDir(k.dir); err != nil {
+	if err := mkdirAllSync(k.dir); err != nil {
+		return fmt.Errorf("keystore: create %s: %w", k.dir, err)
+	}
+	if err := narrowDir(k.dir); err != nil {
+		return err
+	}
+	if !allowLegacy {
+		legacy, err := k.hasLegacyLayout()
+		if err != nil {
+			return err
+		}
+		if legacy {
+			return ErrLegacyAppMigrationRequired
+		}
+	}
+
+	appDir := filepath.Join(k.dir, ownerKey)
+	if err := k.recoverSwap(appDir, false); err != nil {
+		return err
+	}
+	if err := rejectNonDir(appDir); err != nil {
 		return err
 	}
 
@@ -129,7 +172,7 @@ func (k *Keystore) SaveApp(creds AppCredentials) error {
 	// the two renames is recovered by LoadApp or the next SaveApp before
 	// any caller observes the store. The mutex serializes loads with that
 	// short rename window in this daemon process.
-	staging, old := k.dir+".staging", k.dir+".old"
+	staging, old := appDir+".staging", appDir+".old"
 	for _, leftover := range []string{staging, old} {
 		if _, err := removeSwapLeftover(leftover); err != nil {
 			return fmt.Errorf("keystore: clear leftover %s: %w", leftover, err)
@@ -138,7 +181,7 @@ func (k *Keystore) SaveApp(creds AppCredentials) error {
 	if err := os.Mkdir(staging, 0o700); err != nil {
 		return fmt.Errorf("keystore: create staging: %w", err)
 	}
-	if err := syncDir(k.root); err != nil {
+	if err := syncDir(k.dir); err != nil {
 		return fmt.Errorf("keystore: sync staging entry: %w", err)
 	}
 
@@ -154,12 +197,28 @@ func (k *Keystore) SaveApp(creds AppCredentials) error {
 	// revealed: real values persist only inside the protected
 	// directory, and no named type ever holds them as plain strings.
 	meta, err := json.MarshalIndent(struct { //nolint:gosec // the keystore's protected-storage write is the one sanctioned secret persistence
-		AppID         int64  `json:"app_id"`
-		Slug          string `json:"slug"`
-		ClientID      string `json:"client_id"`
-		WebhookSecret string `json:"webhook_secret"`
-		ClientSecret  string `json:"client_secret"`
-	}{creds.AppID, creds.Slug, creds.ClientID, creds.WebhookSecret.Reveal(), creds.ClientSecret.Reveal()}, "", "  ")
+		Owner         string        `json:"owner"`
+		OwnerID       int64         `json:"owner_id"`
+		Visibility    AppVisibility `json:"visibility"`
+		KeyID         string        `json:"key_id"`
+		AppID         int64         `json:"app_id"`
+		Name          string        `json:"name"`
+		Slug          string        `json:"slug"`
+		ClientID      string        `json:"client_id"`
+		WebhookSecret string        `json:"webhook_secret"`
+		ClientSecret  string        `json:"client_secret"`
+	}{
+		creds.Owner,
+		creds.OwnerID,
+		creds.Visibility,
+		creds.KeyID,
+		creds.AppID,
+		creds.Name,
+		creds.Slug,
+		creds.ClientID,
+		creds.WebhookSecret.Reveal(),
+		creds.ClientSecret.Reveal(),
+	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("keystore: encode metadata: %w", err)
 	}
@@ -168,58 +227,301 @@ func (k *Keystore) SaveApp(creds AppCredentials) error {
 	}
 
 	hadOld := false
-	if _, err := os.Lstat(k.dir); err == nil {
-		if err := os.Rename(k.dir, old); err != nil {
+	if _, err := os.Lstat(appDir); err == nil {
+		if err := os.Rename(appDir, old); err != nil {
 			return fmt.Errorf("keystore: set aside previous credentials: %w", err)
 		}
 		hadOld = true
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("keystore: lstat %s: %w", k.dir, err)
+		return fmt.Errorf("keystore: lstat %s: %w", appDir, err)
 	}
-	if err := os.Rename(staging, k.dir); err != nil {
+	if err := os.Rename(staging, appDir); err != nil {
 		activateErr := fmt.Errorf("keystore: activate credentials: %w", err)
 		if !hadOld {
 			return activateErr
 		}
-		if rollbackErr := os.Rename(old, k.dir); rollbackErr != nil {
+		if rollbackErr := os.Rename(old, appDir); rollbackErr != nil {
 			return errors.Join(activateErr, fmt.Errorf("keystore: restore previous credentials: %w", rollbackErr))
 		}
-		if rollbackErr := syncDir(k.root); rollbackErr != nil {
+		if rollbackErr := syncDir(k.dir); rollbackErr != nil {
 			return errors.Join(activateErr, fmt.Errorf("keystore: sync restored credentials: %w", rollbackErr))
 		}
 		return activateErr
 	}
-	if err := syncDir(k.root); err != nil {
-		return fmt.Errorf("keystore: sync %s: %w", k.root, err)
+	if err := syncDir(k.dir); err != nil {
+		return fmt.Errorf("keystore: sync %s: %w", k.dir, err)
 	}
 	if _, err := removeSwapLeftover(old); err != nil {
 		return fmt.Errorf("keystore: remove previous credentials: %w", err)
 	}
-	if err := syncDir(k.root); err != nil {
+	if err := syncDir(k.dir); err != nil {
 		return fmt.Errorf("keystore: sync previous-credential removal: %w", err)
 	}
 
-	return k.assertPermissions()
+	return k.assertPermissionsAt(appDir)
 }
 
-// LoadApp reads the persisted credentials back, re-asserting the
+// LoadApp reads one stable numeric owner's persisted credentials back,
+// re-asserting the
 // owner-only permissions first: a key reachable by group or other must
 // be treated as exposed, so the load fails closed rather than trusting
-// it. A keystore with no key material returns ErrNoAppCredentials — the
-// expected state before registration and after a checkpoint restore
-// (§5.10: recovery may require reauthentication).
-func (k *Keystore) LoadApp() (AppCredentials, error) {
+// it. An unknown owner returns ErrNoAppRegistration. A legacy singleton
+// returns ErrLegacyAppMigrationRequired until MigrateLegacyApp receives
+// explicit owner login, numeric ID, and visibility attribution.
+func (k *Keystore) LoadApp(ownerID int64) (AppCredentials, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
-	if err := k.recoverSwap(true); err != nil {
-		return AppCredentials{}, err
-	}
-	creds, err := k.loadAppFrom(k.dir)
+	legacy, err := k.hasLegacyLayout()
 	if err != nil {
 		return AppCredentials{}, err
 	}
-	if err := k.clearSwapLeftovers(); err != nil {
+	if legacy {
+		return AppCredentials{}, ErrLegacyAppMigrationRequired
+	}
+	ownerKey, err := appOwnerKey(ownerID)
+	if err != nil {
+		return AppCredentials{}, err
+	}
+	appDir := filepath.Join(k.dir, ownerKey)
+	exists, err := realDirExists(appDir)
+	if err != nil {
+		return AppCredentials{}, err
+	}
+	if !exists {
+		staged, stageErr := realDirExists(appDir + ".staging")
+		old, oldErr := realDirExists(appDir + ".old")
+		if stageErr != nil {
+			return AppCredentials{}, stageErr
+		}
+		if oldErr != nil {
+			return AppCredentials{}, oldErr
+		}
+		if !staged && !old {
+			return AppCredentials{}, ErrNoAppRegistration
+		}
+	}
+	if err := k.recoverSwap(appDir, true); err != nil {
+		return AppCredentials{}, err
+	}
+	creds, err := k.loadAppFrom(appDir)
+	if err != nil {
+		if errors.Is(err, ErrNoAppCredentials) {
+			active, existsErr := realDirExists(appDir)
+			if existsErr != nil {
+				return AppCredentials{}, existsErr
+			}
+			if active {
+				return AppCredentials{}, fmt.Errorf("keystore: registration %q is incomplete: %w", ownerKey, err)
+			}
+			return AppCredentials{}, ErrNoAppRegistration
+		}
+		return AppCredentials{}, err
+	}
+	if creds.OwnerID != ownerID {
+		return AppCredentials{}, fmt.Errorf("keystore: registration owner id %d does not match lookup %d", creds.OwnerID, ownerID)
+	}
+	if err := k.clearSwapLeftovers(appDir); err != nil {
+		return AppCredentials{}, err
+	}
+	return creds, nil
+}
+
+// ListApps enumerates every numeric-owner-keyed registration in stable ID order.
+// Unexpected entries and any legacy singleton fail closed rather than being
+// skipped, since omission could make callers operate with an incomplete view.
+func (k *Keystore) ListApps() ([]AppCredentials, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
+	legacy, err := k.hasLegacyLayout()
+	if err != nil {
+		return nil, err
+	}
+	if legacy {
+		return nil, ErrLegacyAppMigrationRequired
+	}
+	return k.listAppsLocked()
+}
+
+func (k *Keystore) listAppsLocked() ([]AppCredentials, error) {
+	exists, err := realDirExists(k.dir)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+	if err := assertMode(k.root, true); err != nil {
+		return nil, err
+	}
+	if err := assertMode(k.dir, true); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(k.dir)
+	if err != nil {
+		return nil, fmt.Errorf("keystore: enumerate registrations: %w", err)
+	}
+	owners := make(map[int64]struct{})
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 || !entry.IsDir() {
+			return nil, fmt.Errorf("keystore: unexpected registration entry %s: %w", entry.Name(), ErrCredentialPermissions)
+		}
+		name := entry.Name()
+		if strings.HasSuffix(name, ".staging") {
+			name = strings.TrimSuffix(name, ".staging")
+		} else if strings.HasSuffix(name, ".old") {
+			name = strings.TrimSuffix(name, ".old")
+		}
+		if name == "" || strings.Contains(name, ".") {
+			return nil, fmt.Errorf("keystore: unexpected registration directory %s: %w", entry.Name(), ErrCredentialPermissions)
+		}
+		ownerID, err := strconv.ParseInt(name, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("keystore: unexpected registration directory %s: %w", entry.Name(), ErrCredentialPermissions)
+		}
+		ownerKey, err := appOwnerKey(ownerID)
+		if err != nil {
+			return nil, fmt.Errorf("keystore: unexpected registration directory %s: %w", entry.Name(), err)
+		}
+		if ownerKey != name {
+			return nil, fmt.Errorf("keystore: unexpected registration directory %s: %w", entry.Name(), ErrCredentialPermissions)
+		}
+		owners[ownerID] = struct{}{}
+	}
+	keys := make([]int64, 0, len(owners))
+	for ownerID := range owners {
+		keys = append(keys, ownerID)
+	}
+	slices.Sort(keys)
+
+	apps := make([]AppCredentials, 0, len(keys))
+	for _, ownerID := range keys {
+		ownerKey, err := appOwnerKey(ownerID)
+		if err != nil {
+			return nil, err
+		}
+		appDir := filepath.Join(k.dir, ownerKey)
+		if err := k.recoverSwap(appDir, true); err != nil {
+			return nil, err
+		}
+		creds, err := k.loadAppFrom(appDir)
+		if err != nil {
+			if errors.Is(err, ErrNoAppCredentials) {
+				active, existsErr := realDirExists(appDir)
+				if existsErr != nil {
+					return nil, existsErr
+				}
+				if !active {
+					// recoverSwap discarded an incomplete first-save stage;
+					// there is no registration to enumerate.
+					continue
+				}
+				return nil, fmt.Errorf("keystore: registration %q is incomplete: %w", ownerKey, err)
+			}
+			return nil, err
+		}
+		if creds.OwnerID != ownerID {
+			return nil, fmt.Errorf("keystore: registration directory %q does not match persisted owner id %d", ownerKey, creds.OwnerID)
+		}
+		if err := k.clearSwapLeftovers(appDir); err != nil {
+			return nil, err
+		}
+		apps = append(apps, creds)
+	}
+	return apps, nil
+}
+
+// MigrateLegacyApp relocates the former singleton only after the caller
+// explicitly supplies the owner login, numeric ID, and visibility that its
+// metadata could not record. Repeating the migration after a partial failure
+// is safe.
+func (k *Keystore) MigrateLegacyApp(owner string, ownerID int64, visibility AppVisibility) (AppCredentials, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
+	legacy, err := k.hasLegacyLayout()
+	if err != nil {
+		return AppCredentials{}, err
+	}
+	if !legacy {
+		return AppCredentials{}, ErrNoAppCredentials
+	}
+	if err := validateOwnerLogin(owner); err != nil {
+		return AppCredentials{}, err
+	}
+	if _, err := appOwnerKey(ownerID); err != nil {
+		return AppCredentials{}, err
+	}
+	if !visibility.valid() {
+		return AppCredentials{}, fmt.Errorf("keystore: invalid legacy registration visibility %q", visibility)
+	}
+	legacyDir := k.dir + ".legacy"
+	sourceDir, err := k.legacySourceDir()
+	if err != nil {
+		return AppCredentials{}, err
+	}
+	creds, err := k.loadLegacyAppFrom(sourceDir)
+	if err != nil {
+		if sourceDir == k.dir+".staging" {
+			if _, clearErr := removeSwapLeftover(sourceDir); clearErr != nil {
+				return AppCredentials{}, errors.Join(
+					fmt.Errorf("keystore: validate legacy staging credentials: %w", err),
+					fmt.Errorf("keystore: discard incomplete legacy staging credentials: %w", clearErr),
+				)
+			}
+			if syncErr := syncDir(k.root); syncErr != nil {
+				return AppCredentials{}, fmt.Errorf("keystore: sync discarded legacy staging credentials: %w", syncErr)
+			}
+			return AppCredentials{}, ErrNoAppCredentials
+		}
+		return AppCredentials{}, err
+	}
+	creds.Owner = owner
+	creds.OwnerID = ownerID
+	creds.Visibility = visibility
+	creds.Name = creds.Slug
+	creds.KeyID, err = appKeyID(creds.Key)
+	if err != nil {
+		return AppCredentials{}, err
+	}
+	if sourceDir != legacyDir {
+		if err := os.Rename(sourceDir, legacyDir); err != nil {
+			return AppCredentials{}, fmt.Errorf("keystore: journal legacy credentials: %w", err)
+		}
+		if err := syncDir(k.root); err != nil {
+			return AppCredentials{}, fmt.Errorf("keystore: sync legacy journal: %w", err)
+		}
+	}
+	apps, err := k.listAppsLocked()
+	if err != nil {
+		return AppCredentials{}, err
+	}
+	if len(apps) > 1 {
+		return AppCredentials{}, errors.New("keystore: legacy migration journal conflicts with multiple registrations")
+	}
+	if len(apps) == 1 {
+		existing := apps[0]
+		if existing.AppID != creds.AppID || existing.KeyID != creds.KeyID {
+			return AppCredentials{}, errors.New("keystore: legacy migration journal conflicts with an existing registration")
+		}
+		if existing.OwnerID != ownerID || !strings.EqualFold(existing.Owner, owner) || existing.Visibility != visibility {
+			return AppCredentials{}, fmt.Errorf(
+				"keystore: legacy migration already attributed to owner %q (%d) with visibility %q",
+				existing.Owner,
+				existing.OwnerID,
+				existing.Visibility,
+			)
+		}
+		if err := k.clearLegacyJournals(); err != nil {
+			return AppCredentials{}, err
+		}
+		return existing, nil
+	}
+	if err := k.saveAppLocked(creds, true); err != nil {
+		return AppCredentials{}, err
+	}
+	if err := k.clearLegacyJournals(); err != nil {
 		return AppCredentials{}, err
 	}
 	return creds, nil
@@ -266,9 +568,30 @@ func (k *Keystore) loadAppFrom(dir string) (AppCredentials, error) {
 	if meta.AppID <= 0 {
 		return AppCredentials{}, fmt.Errorf("keystore: persisted credentials have invalid app id %d", meta.AppID)
 	}
+	if err := validateOwnerLogin(meta.Owner); err != nil {
+		return AppCredentials{}, fmt.Errorf("keystore: persisted credentials: %w", err)
+	}
+	if _, err := appOwnerKey(meta.OwnerID); err != nil {
+		return AppCredentials{}, fmt.Errorf("keystore: persisted credentials: %w", err)
+	}
+	if !meta.Visibility.valid() {
+		return AppCredentials{}, fmt.Errorf("keystore: persisted credentials have invalid visibility %q", meta.Visibility)
+	}
+	keyID, err := appKeyID(key)
+	if err != nil {
+		return AppCredentials{}, err
+	}
+	if meta.KeyID == "" || meta.KeyID != keyID {
+		return AppCredentials{}, errors.New("keystore: persisted key id does not match the private key")
+	}
 
 	return AppCredentials{
+		Owner:         meta.Owner,
+		OwnerID:       meta.OwnerID,
+		Visibility:    meta.Visibility,
+		KeyID:         meta.KeyID,
 		AppID:         meta.AppID,
+		Name:          meta.Name,
 		Slug:          meta.Slug,
 		ClientID:      meta.ClientID,
 		Key:           key,
@@ -281,56 +604,56 @@ func (k *Keystore) loadAppFrom(dir string) (AppCredentials, error) {
 // directory is visible. A previous directory wins over a staged one;
 // without a previous version, a staged directory is promoted only after
 // its key, metadata, permissions, and identity all validate.
-func (k *Keystore) recoverSwap(promoteStaging bool) error {
-	active, err := realDirExists(k.dir)
+func (k *Keystore) recoverSwap(appDir string, promoteStaging bool) error {
+	active, err := realDirExists(appDir)
 	if err != nil || active {
 		return err
 	}
-	old, err := realDirExists(k.dir + ".old")
+	old, err := realDirExists(appDir + ".old")
 	if err != nil {
 		return err
 	}
-	staging, err := realDirExists(k.dir + ".staging")
+	staging, err := realDirExists(appDir + ".staging")
 	if err != nil {
 		return err
 	}
 
 	source := ""
 	if old {
-		source = k.dir + ".old"
+		source = appDir + ".old"
 	} else if staging {
 		// LoadApp has no replacement value and must salvage a complete
 		// first-registration stage. SaveApp already holds a fresh value;
 		// discarding an incomplete prior stage lets the new registration
 		// replace it without manual filesystem cleanup.
 		if !promoteStaging {
-			return k.clearSwapLeftovers()
+			return k.clearSwapLeftovers(appDir)
 		}
-		source = k.dir + ".staging"
+		source = appDir + ".staging"
 	} else {
 		return nil
 	}
 	if _, err := k.loadAppFrom(source); err != nil {
-		if source == k.dir+".staging" {
-			if clearErr := k.clearSwapLeftovers(); clearErr != nil {
+		if source == appDir+".staging" {
+			if clearErr := k.clearSwapLeftovers(appDir); clearErr != nil {
 				return errors.Join(fmt.Errorf("keystore: validate recoverable credentials: %w", err), clearErr)
 			}
 			return nil
 		}
 		return fmt.Errorf("keystore: validate recoverable credentials: %w", err)
 	}
-	if err := os.Rename(source, k.dir); err != nil {
+	if err := os.Rename(source, appDir); err != nil {
 		return fmt.Errorf("keystore: recover active credentials: %w", err)
 	}
-	if err := syncDir(k.root); err != nil {
+	if err := syncDir(filepath.Dir(appDir)); err != nil {
 		return fmt.Errorf("keystore: sync recovered credentials: %w", err)
 	}
-	return k.clearSwapLeftovers()
+	return k.clearSwapLeftovers(appDir)
 }
 
-func (k *Keystore) clearSwapLeftovers() error {
+func (k *Keystore) clearSwapLeftovers(appDir string) error {
 	removed := false
-	for _, leftover := range []string{k.dir + ".staging", k.dir + ".old"} {
+	for _, leftover := range []string{appDir + ".staging", appDir + ".old"} {
 		removedOne, err := removeSwapLeftover(leftover)
 		if err != nil {
 			return fmt.Errorf("keystore: clear leftover %s: %w", leftover, err)
@@ -338,7 +661,7 @@ func (k *Keystore) clearSwapLeftovers() error {
 		removed = removed || removedOne
 	}
 	if removed {
-		if err := syncDir(k.root); err != nil {
+		if err := syncDir(filepath.Dir(appDir)); err != nil {
 			return fmt.Errorf("keystore: sync leftover removal: %w", err)
 		}
 	}
@@ -381,14 +704,8 @@ func realDirExists(path string) (bool, error) {
 	return true, nil
 }
 
-// assertPermissions fails closed unless every keystore directory is
-// 0700 and every credential file 0600 (no group/other bits anywhere).
-func (k *Keystore) assertPermissions() error {
-	return k.assertPermissionsAt(k.dir)
-}
-
 func (k *Keystore) assertPermissionsAt(appDir string) error {
-	for _, dir := range []string{k.root, appDir} {
+	for _, dir := range []string{k.root, k.dir, appDir} {
 		if err := assertMode(dir, true); err != nil {
 			return err
 		}
@@ -403,6 +720,127 @@ func (k *Keystore) assertPermissionsAt(appDir string) error {
 		}
 	}
 	return nil
+}
+
+func (k *Keystore) hasLegacyLayout() (bool, error) {
+	for _, journal := range []string{k.dir + ".legacy", k.dir + ".old", k.dir + ".staging"} {
+		if exists, err := realDirExists(journal); err != nil {
+			return false, err
+		} else if exists {
+			return true, nil
+		}
+	}
+	return legacyFilesExist(k.dir)
+}
+
+func (k *Keystore) legacySourceDir() (string, error) {
+	legacyDir := k.dir + ".legacy"
+	// A migration journal is already the selected source. Otherwise the
+	// active singleton wins over its old SaveApp journals, preserving the
+	// pre-upgrade recovery rule that an activated registration is current.
+	if exists, err := realDirExists(legacyDir); err != nil {
+		return "", err
+	} else if exists {
+		return legacyDir, nil
+	}
+	if exists, err := legacyFilesExist(k.dir); err != nil {
+		return "", err
+	} else if exists {
+		return k.dir, nil
+	}
+	for _, journal := range []string{k.dir + ".old", k.dir + ".staging"} {
+		if exists, err := realDirExists(journal); err != nil {
+			return "", err
+		} else if exists {
+			return journal, nil
+		}
+	}
+	return "", ErrNoAppCredentials
+}
+
+func legacyFilesExist(dir string) (bool, error) {
+	info, err := os.Lstat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("keystore: inspect registration root: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return false, fmt.Errorf("keystore: %s is not a real directory: %w", dir, ErrCredentialPermissions)
+	}
+	for _, name := range []string{keyFileName, metaFileName} {
+		_, err := os.Lstat(filepath.Join(dir, name))
+		if err == nil {
+			return true, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return false, fmt.Errorf("keystore: inspect legacy %s: %w", name, err)
+		}
+	}
+	return false, nil
+}
+
+func (k *Keystore) clearLegacyJournals() error {
+	removed := false
+	for _, journal := range []string{k.dir + ".legacy", k.dir + ".old", k.dir + ".staging"} {
+		removedOne, err := removeSwapLeftover(journal)
+		if err != nil {
+			return fmt.Errorf("keystore: clear legacy journal %s: %w", journal, err)
+		}
+		removed = removed || removedOne
+	}
+	if removed {
+		if err := syncDir(k.root); err != nil {
+			return fmt.Errorf("keystore: sync legacy migration: %w", err)
+		}
+	}
+	return nil
+}
+
+func (k *Keystore) loadLegacyAppFrom(dir string) (AppCredentials, error) {
+	if err := assertMode(k.root, true); err != nil {
+		return AppCredentials{}, err
+	}
+	if err := assertMode(dir, true); err != nil {
+		return AppCredentials{}, err
+	}
+	for _, name := range []string{keyFileName, metaFileName} {
+		if err := assertMode(filepath.Join(dir, name), false); err != nil {
+			return AppCredentials{}, err
+		}
+	}
+	keyPEM, err := os.ReadFile(filepath.Join(dir, keyFileName)) //nolint:gosec // legacy path is fixed beneath the validated credentials root
+	if err != nil {
+		return AppCredentials{}, fmt.Errorf("keystore: read legacy key: %w", err)
+	}
+	block, _ := pem.Decode(keyPEM)
+	if block == nil || block.Type != "RSA PRIVATE KEY" {
+		return AppCredentials{}, errors.New("keystore: legacy key file is not an RSA PRIVATE KEY PEM")
+	}
+	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		return AppCredentials{}, fmt.Errorf("keystore: parse legacy key: %w", err)
+	}
+	metaRaw, err := os.ReadFile(filepath.Join(dir, metaFileName)) //nolint:gosec // legacy path is fixed beneath the validated credentials root
+	if err != nil {
+		return AppCredentials{}, fmt.Errorf("keystore: read legacy metadata: %w", err)
+	}
+	var meta legacyAppMetadata
+	if err := json.Unmarshal(metaRaw, &meta); err != nil {
+		return AppCredentials{}, fmt.Errorf("keystore: decode legacy metadata: %w", err)
+	}
+	if meta.AppID <= 0 {
+		return AppCredentials{}, fmt.Errorf("keystore: legacy credentials have invalid app id %d", meta.AppID)
+	}
+	return AppCredentials{
+		AppID:         meta.AppID,
+		Slug:          meta.Slug,
+		ClientID:      meta.ClientID,
+		Key:           key,
+		WebhookSecret: meta.WebhookSecret,
+		ClientSecret:  meta.ClientSecret,
+	}, nil
 }
 
 func assertMode(path string, dir bool) error {
@@ -542,7 +980,30 @@ func syncDir(dir string) error {
 	return d.Sync()
 }
 
-// AppCredentials is the registered GitHub App's identity and key
+// AppVisibility records whether GitHub permits installations outside the
+// registration owner. It is metadata, not an authority decision.
+type AppVisibility string
+
+const (
+	AppVisibilityPrivate AppVisibility = "private"
+	AppVisibilityPublic  AppVisibility = "public"
+)
+
+// AllAppVisibilities is the single registration point for valid visibility
+// values.
+var AllAppVisibilities = []AppVisibility{AppVisibilityPrivate, AppVisibilityPublic}
+
+func (v AppVisibility) valid() bool {
+	switch v {
+	case AppVisibilityPrivate, AppVisibilityPublic:
+		return true
+	default:
+		return false
+	}
+}
+
+// AppCredentials is the registered GitHub App's identity, stable numeric
+// owner, display login, and key
 // material, produced by the manifest conversion and round-tripped
 // through the keystore. The secrets are Secret-typed, so they redact
 // everywhere except the keystore's deliberate persistence writes; the
@@ -550,7 +1011,12 @@ func syncDir(dir string) error {
 // *rsa.PrivateKey has exported fields that fmt and encoding/json would
 // otherwise print.
 type AppCredentials struct {
+	Owner         string
+	OwnerID       int64
+	Visibility    AppVisibility
+	KeyID         string
 	AppID         int64
+	Name          string
 	Slug          string
 	ClientID      string
 	Key           *rsa.PrivateKey
@@ -560,8 +1026,8 @@ type AppCredentials struct {
 
 // String renders the public identity only; the key and secrets redact.
 func (c AppCredentials) String() string {
-	return fmt.Sprintf("publish.AppCredentials{AppID:%d, Slug:%q, ClientID:%q, Key:%s, WebhookSecret:%s, ClientSecret:%s}",
-		c.AppID, c.Slug, c.ClientID, redacted, redacted, redacted)
+	return fmt.Sprintf("publish.AppCredentials{Owner:%q, OwnerID:%d, Visibility:%q, KeyID:%q, AppID:%d, Name:%q, Slug:%q, ClientID:%q, Key:%s, WebhookSecret:%s, ClientSecret:%s}",
+		c.Owner, c.OwnerID, c.Visibility, c.KeyID, c.AppID, c.Name, c.Slug, c.ClientID, redacted, redacted, redacted)
 }
 
 // GoString keeps %#v as redacted as %v.
@@ -579,13 +1045,30 @@ func (c AppCredentials) Format(f fmt.State, _ rune) {
 // a marshal of this struct.
 func (c AppCredentials) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		AppID         int64  `json:"app_id"`
-		Slug          string `json:"slug"`
-		ClientID      string `json:"client_id"`
-		Key           string `json:"key"`
-		WebhookSecret string `json:"webhook_secret"`
-		ClientSecret  string `json:"client_secret"`
-	}{c.AppID, c.Slug, c.ClientID, redacted, redacted, redacted})
+		Owner         string        `json:"owner"`
+		OwnerID       int64         `json:"owner_id"`
+		Visibility    AppVisibility `json:"visibility"`
+		KeyID         string        `json:"key_id"`
+		AppID         int64         `json:"app_id"`
+		Name          string        `json:"name"`
+		Slug          string        `json:"slug"`
+		ClientID      string        `json:"client_id"`
+		Key           string        `json:"key"`
+		WebhookSecret string        `json:"webhook_secret"`
+		ClientSecret  string        `json:"client_secret"`
+	}{
+		c.Owner,
+		c.OwnerID,
+		c.Visibility,
+		c.KeyID,
+		c.AppID,
+		c.Name,
+		c.Slug,
+		c.ClientID,
+		redacted,
+		redacted,
+		redacted,
+	})
 }
 
 // appMetadata is the decoded shape of the on-disk credential metadata.
@@ -593,11 +1076,62 @@ func (c AppCredentials) MarshalJSON() ([]byte, error) {
 // every other; the persistence write in SaveApp uses its own inline
 // struct with explicit Reveal calls instead.
 type appMetadata struct {
+	Owner         string        `json:"owner"`
+	OwnerID       int64         `json:"owner_id"`
+	Visibility    AppVisibility `json:"visibility"`
+	KeyID         string        `json:"key_id"`
+	AppID         int64         `json:"app_id"`
+	Name          string        `json:"name"`
+	Slug          string        `json:"slug"`
+	ClientID      string        `json:"client_id"`
+	WebhookSecret Secret        `json:"webhook_secret"`
+	ClientSecret  Secret        `json:"client_secret"`
+}
+
+type legacyAppMetadata struct {
 	AppID         int64  `json:"app_id"`
 	Slug          string `json:"slug"`
 	ClientID      string `json:"client_id"`
 	WebhookSecret Secret `json:"webhook_secret"`
 	ClientSecret  Secret `json:"client_secret"`
+}
+
+func validateOwnerLogin(owner string) error {
+	if owner == "" || strings.TrimSpace(owner) != owner {
+		return errors.New("keystore: registration owner is empty or has surrounding whitespace")
+	}
+	if len(owner) > 39 {
+		return fmt.Errorf("keystore: registration owner %q exceeds GitHub's login limit", owner)
+	}
+	for i, char := range owner {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') {
+			continue
+		}
+		if char == '-' && i > 0 && i < len(owner)-1 {
+			continue
+		}
+		return fmt.Errorf("keystore: registration owner %q is not a GitHub login", owner)
+	}
+	return nil
+}
+
+func appOwnerKey(ownerID int64) (string, error) {
+	if ownerID <= 0 {
+		return "", fmt.Errorf("keystore: registration owner id %d is invalid", ownerID)
+	}
+	return strconv.FormatInt(ownerID, 10), nil
+}
+
+func appKeyID(key *rsa.PrivateKey) (string, error) {
+	if key == nil {
+		return "", errors.New("keystore: cannot fingerprint a nil private key")
+	}
+	publicDER, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		return "", fmt.Errorf("keystore: encode public key for fingerprint: %w", err)
+	}
+	digest := sha256.Sum256(publicDER)
+	return "SHA256:" + base64.StdEncoding.EncodeToString(digest[:]), nil
 }
 
 // resolveExisting makes path absolute and resolves symlinks through its

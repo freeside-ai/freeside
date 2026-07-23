@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -75,20 +76,43 @@ func (r *Registrar) ManifestForm(m Manifest) (action string, fields url.Values, 
 // field decodes directly into Secret.
 type conversionResponse struct {
 	ID            int64             `json:"id"`
+	Name          string            `json:"name"`
 	Slug          string            `json:"slug"`
 	ClientID      string            `json:"client_id"`
 	Permissions   map[string]string `json:"permissions"`
 	Pem           Secret            `json:"pem"`
 	WebhookSecret Secret            `json:"webhook_secret"`
 	ClientSecret  Secret            `json:"client_secret"`
+	Owner         struct {
+		Login string `json:"login"`
+		ID    int64  `json:"id"`
+	} `json:"owner"`
 }
 
-// ExchangeCode converts the temporary manifest code and lands the
-// credentials in the keystore before returning them: the key's only
-// existence outside GitHub is the protected storage write.
-func (r *Registrar) ExchangeCode(ctx context.Context, code string) (AppCredentials, error) {
+// ExchangeCode converts the temporary manifest code and lands the credentials
+// in the keystore before returning them. The canonical returned owner login
+// and stable numeric ID must both match the expected owner, so a browser flow
+// completed under the wrong personal or organization account, or under a
+// renamed/login-reused account, cannot silently change credential ownership.
+// The key's only existence outside GitHub is the protected storage write.
+func (r *Registrar) ExchangeCode(
+	ctx context.Context,
+	code string,
+	expectedOwner string,
+	expectedOwnerID int64,
+	visibility AppVisibility,
+) (AppCredentials, error) {
 	if code == "" {
 		return AppCredentials{}, ErrRegistrationDenied
+	}
+	if err := validateOwnerLogin(expectedOwner); err != nil {
+		return AppCredentials{}, fmt.Errorf("register: expected owner: %w", err)
+	}
+	if _, err := appOwnerKey(expectedOwnerID); err != nil {
+		return AppCredentials{}, fmt.Errorf("register: expected owner: %w", err)
+	}
+	if !visibility.valid() {
+		return AppCredentials{}, fmt.Errorf("register: invalid App visibility %q", visibility)
 	}
 	// The conversion URL embeds the code, which until GitHub consumes
 	// it is credential-equivalent (it exchanges for the App key), so
@@ -124,6 +148,26 @@ func (r *Registrar) ExchangeCode(ctx context.Context, code string) (AppCredentia
 	if conv.ID <= 0 {
 		return AppCredentials{}, fmt.Errorf("register: conversion response carries app id %d", conv.ID)
 	}
+	if err := validateOwnerLogin(conv.Owner.Login); err != nil {
+		return AppCredentials{}, fmt.Errorf("register: conversion response: %w", err)
+	}
+	if _, err := appOwnerKey(conv.Owner.ID); err != nil {
+		return AppCredentials{}, fmt.Errorf("register: conversion response: %w", err)
+	}
+	if !strings.EqualFold(conv.Owner.Login, expectedOwner) {
+		return AppCredentials{}, fmt.Errorf(
+			"register: converted App owner %q does not match expected owner %q",
+			conv.Owner.Login,
+			expectedOwner,
+		)
+	}
+	if conv.Owner.ID != expectedOwnerID {
+		return AppCredentials{}, fmt.Errorf(
+			"register: converted App owner id %d does not match expected owner id %d",
+			conv.Owner.ID,
+			expectedOwnerID,
+		)
+	}
 	if !maps.Equal(conv.Permissions, publishPermissionScopes) {
 		return AppCredentials{}, errors.New("register: converted app permissions differ from the required set")
 	}
@@ -138,12 +182,20 @@ func (r *Registrar) ExchangeCode(ctx context.Context, code string) (AppCredentia
 	}
 
 	creds := AppCredentials{
+		Owner:         conv.Owner.Login,
+		OwnerID:       conv.Owner.ID,
+		Visibility:    visibility,
 		AppID:         conv.ID,
+		Name:          conv.Name,
 		Slug:          conv.Slug,
 		ClientID:      conv.ClientID,
 		Key:           key,
 		WebhookSecret: conv.WebhookSecret,
 		ClientSecret:  conv.ClientSecret,
+	}
+	creds.KeyID, err = appKeyID(key)
+	if err != nil {
+		return AppCredentials{}, fmt.Errorf("register: %w", err)
 	}
 	if err := r.keystore.SaveApp(creds); err != nil {
 		return AppCredentials{}, fmt.Errorf("register: %w", err)
@@ -171,7 +223,8 @@ var formPage = template.Must(template.New("form").Parse(`<!DOCTYPE html>
 <noscript><button type="submit">Register the Freeside GitHub App</button></noscript>
 </form></body></html>`))
 
-// Register orchestrates the interactive flow on the supplied listener:
+// Register orchestrates the interactive flow for the expected owner login and
+// stable numeric ID on the supplied listener:
 // it serves the auto-submitting form, hands the browser to openURL,
 // waits for GitHub's redirect to deliver the temporary code (or the
 // context to expire), and exchanges it. A redirect without a code
@@ -179,7 +232,20 @@ var formPage = template.Must(template.New("form").Parse(`<!DOCTYPE html>
 // an unguessable per-attempt nonce, so only the redirect carrying this
 // registration's manifest can deliver a code: an unrelated local
 // request cannot inject a foreign code or abort the flow.
-func (r *Registrar) Register(ctx context.Context, m Manifest, l net.Listener, openURL func(string) error) (AppCredentials, error) {
+func (r *Registrar) Register(
+	ctx context.Context,
+	expectedOwner string,
+	expectedOwnerID int64,
+	m Manifest,
+	l net.Listener,
+	openURL func(string) error,
+) (AppCredentials, error) {
+	if err := validateOwnerLogin(expectedOwner); err != nil {
+		return AppCredentials{}, fmt.Errorf("register: expected owner: %w", err)
+	}
+	if _, err := appOwnerKey(expectedOwnerID); err != nil {
+		return AppCredentials{}, fmt.Errorf("register: expected owner: %w", err)
+	}
 	local, err := loopbackListenerURL(l)
 	if err != nil {
 		return AppCredentials{}, fmt.Errorf("register: %w", err)
@@ -232,7 +298,11 @@ func (r *Registrar) Register(ctx context.Context, m Manifest, l net.Listener, op
 
 	select {
 	case code := <-codeCh:
-		return r.ExchangeCode(ctx, code)
+		visibility := AppVisibilityPrivate
+		if m.Public {
+			visibility = AppVisibilityPublic
+		}
+		return r.ExchangeCode(ctx, code, expectedOwner, expectedOwnerID, visibility)
 	case <-ctx.Done():
 		return AppCredentials{}, fmt.Errorf("register: %w", ctx.Err())
 	}
