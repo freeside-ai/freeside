@@ -206,6 +206,7 @@ func (m *Minter) MintInstallationToken(ctx context.Context, installationID int64
 	// requested and granted; any other grant never reaches this point.
 	if err := m.recorder.RecordMint(MintRecord{
 		MintedAt:       m.now().UTC(),
+		RegistrationID: creds.AppID,
 		InstallationID: installationID,
 		Repo:           repo,
 		Requested:      PublishPermissions,

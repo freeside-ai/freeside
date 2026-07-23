@@ -125,7 +125,7 @@ func TestMintInstallationToken(t *testing.T) {
 	if r.Requested != publish.PublishPermissions || r.Granted != publish.PublishPermissions {
 		t.Errorf("record scopes = %+v", r)
 	}
-	if r.InstallationID != 777 || r.Repo != "evidence-repo" {
+	if r.RegistrationID != fixtureAppID || r.InstallationID != 777 || r.Repo != "evidence-repo" {
 		t.Errorf("record identity = %+v", r)
 	}
 	if !r.MintedAt.Equal(fixtureTime) {
@@ -356,7 +356,7 @@ func TestStoreRecorder(t *testing.T) {
 		t.Fatalf("recorded %d audits, want 1", len(audits))
 	}
 	got := audits[0]
-	if got.InstallationID != 777 || got.Repo != "evidence-repo" {
+	if got.RegistrationID != fixtureAppID || got.InstallationID != 777 || got.Repo != "evidence-repo" {
 		t.Errorf("audit identity = %+v", got)
 	}
 	if !got.MintedAt.Equal(fixtureTime) {

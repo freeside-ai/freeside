@@ -12,6 +12,7 @@ import (
 func mintAuditFixture() store.MintAudit {
 	return store.MintAudit{
 		MintedAt:                time.Date(2026, 7, 17, 12, 0, 0, 123456789, time.UTC),
+		RegistrationID:          4365457,
 		InstallationID:          424242,
 		Repo:                    "freeside-ai/candidate-repo",
 		RequestedActions:        "read",
@@ -133,6 +134,8 @@ func TestRecordMintAuditRejections(t *testing.T) {
 		wantErr string
 	}{
 		{"empty repo", func(r *store.MintAudit) { r.Repo = "" }, "empty repo"},
+		{"zero registration id", func(r *store.MintAudit) { r.RegistrationID = 0 }, "not positive"},
+		{"negative registration id", func(r *store.MintAudit) { r.RegistrationID = -1 }, "not positive"},
 		{"zero installation id", func(r *store.MintAudit) { r.InstallationID = 0 }, "not positive"},
 		{"negative installation id", func(r *store.MintAudit) { r.InstallationID = -1 }, "not positive"},
 		{"zero minted at", func(r *store.MintAudit) { r.MintedAt = time.Time{} }, "zero mint or expiry time"},
