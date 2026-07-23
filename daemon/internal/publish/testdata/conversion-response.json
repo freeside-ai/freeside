@@ -5,7 +5,8 @@
   "client_id": "Iv1.deadbeefdeadbeef",
   "owner": {
     "login": "freeside-ai",
-    "id": 24680
+    "id": 24680,
+    "type": "Organization"
   },
   "permissions": {
     "actions": "read",
