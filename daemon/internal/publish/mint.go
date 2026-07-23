@@ -9,6 +9,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -56,10 +57,13 @@ var publishPermissionScopes = map[string]string{
 // from the App JWT. Token is a Secret; Permissions is what GitHub
 // actually granted.
 type InstallationToken struct {
-	Token       Secret
-	ExpiresAt   time.Time
-	Repo        string
-	Permissions Permissions
+	Token          Secret
+	ExpiresAt      time.Time
+	RegistrationID int64
+	InstallationID int64
+	RepositoryID   int64
+	Repo           string
+	Permissions    Permissions
 }
 
 // Minter mints installation tokens against the GitHub API. The HTTP
@@ -67,6 +71,8 @@ type InstallationToken struct {
 // the keystore is the only credential source.
 type Minter struct {
 	keystore *Keystore
+	resolver *InstallationResolver
+	trust    TrustSource
 	client   *http.Client
 	baseURL  string
 	recorder Recorder
@@ -77,8 +83,16 @@ type Minter struct {
 // https://api.github.com; tests: an httptest server). The injected
 // client is wrapped to never follow redirects (see noRedirect), so a
 // caller-supplied CheckRedirect cannot carry the App JWT anywhere.
-func NewMinter(ks *Keystore, client *http.Client, baseURL string, rec Recorder, now func() time.Time) *Minter {
-	return &Minter{keystore: ks, client: noRedirect(client), baseURL: baseURL, recorder: rec, now: now}
+func NewMinter(ks *Keystore, client *http.Client, baseURL string, rec Recorder, trust TrustSource, now func() time.Time) *Minter {
+	return &Minter{
+		keystore: ks,
+		resolver: NewInstallationResolver(ks, client, baseURL, now),
+		trust:    trust,
+		client:   noRedirect(client),
+		baseURL:  baseURL,
+		recorder: rec,
+		now:      now,
+	}
 }
 
 // noRedirect copies a client and disables redirect-following: the
@@ -88,6 +102,9 @@ func NewMinter(ks *Keystore, client *http.Client, baseURL string, rec Recorder, 
 // target (a misconfigured base URL or interposed proxy). A 3xx
 // surfaces as its status through the ordinary redacted APIError path.
 func noRedirect(c *http.Client) *http.Client {
+	if c == nil {
+		return nil
+	}
 	nc := *c
 	nc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &nc
@@ -97,8 +114,8 @@ func noRedirect(c *http.Client) *http.Client {
 // request golden test, which is the durable statement of the minimum
 // scope set.
 type mintRequest struct {
-	Repositories []string    `json:"repositories"`
-	Permissions  Permissions `json:"permissions"`
+	RepositoryIDs []int64     `json:"repository_ids"`
+	Permissions   Permissions `json:"permissions"`
 }
 
 // mintResponse decodes the 201 body: the token lands directly in a
@@ -111,44 +128,75 @@ type mintResponse struct {
 	Permissions         map[string]string `json:"permissions"`
 	RepositorySelection string            `json:"repository_selection"`
 	Repositories        []struct {
+		ID   int64  `json:"id"`
 		Name string `json:"name"`
 	} `json:"repositories"`
 }
 
-// MintInstallationToken mints a token for exactly one repository (repo
-// is the repository name within the installation's account, per the
-// GitHub access_tokens API) with the minimum publish permission set,
-// and records the mint for audit before the token is returned: a mint
-// whose audit row cannot be written fails.
-func (m *Minter) MintInstallationToken(ctx context.Context, installationID int64, repo string) (InstallationToken, error) {
-	if installationID <= 0 {
-		return InstallationToken{}, fmt.Errorf("mint: invalid installation id %d", installationID)
-	}
-	if repo == "" {
-		return InstallationToken{}, errors.New("mint: empty repository name")
-	}
-
-	apps, err := m.keystore.ListApps()
+// MintInstallationToken resolves repo's owner to a known registration and
+// installation, re-gates repo against the existing trusted-repository source,
+// mints a token with the minimum publish permission set, and records the mint
+// before returning it. No caller-supplied installation ID can bypass either
+// gate.
+func (m *Minter) MintInstallationToken(ctx context.Context, repo string) (InstallationToken, error) {
+	binding, parsed, repositoryID, err := m.resolveTrusted(ctx, repo)
 	if err != nil {
-		return InstallationToken{}, fmt.Errorf("mint: %w", err)
+		return InstallationToken{}, err
 	}
-	if len(apps) == 0 {
-		return InstallationToken{}, fmt.Errorf("mint: %w", ErrNoAppCredentials)
+	return m.mintResolved(ctx, binding, parsed, repositoryID)
+}
+
+func (m *Minter) resolveTrusted(ctx context.Context, repo string) (InstallationBinding, repoRef, int64, error) {
+	parsed, err := parseRepo(repo)
+	if err != nil {
+		return InstallationBinding{}, repoRef{}, 0, fmt.Errorf("mint: %w", err)
 	}
-	if len(apps) != 1 {
-		return InstallationToken{}, errors.New("mint: multiple App registrations require owner resolution")
+	if m == nil || m.keystore == nil || m.resolver == nil || m.trust == nil ||
+		m.client == nil || m.recorder == nil || m.now == nil {
+		return InstallationBinding{}, repoRef{}, 0, errors.New("mint: nil or invalid dependency")
 	}
-	creds := apps[0]
+	current, err := m.trust.CurrentTrust(ctx, repo)
+	if err != nil {
+		return InstallationBinding{}, repoRef{}, 0, fmt.Errorf("mint: read current trust: %w", err)
+	}
+	if current.Profile == nil {
+		return InstallationBinding{}, repoRef{}, 0, fmt.Errorf("mint: no current trust profile for %s: %w",
+			repo, ErrTrustProfileDrift)
+	}
+	if err := current.Profile.Validate(); err != nil {
+		return InstallationBinding{}, repoRef{}, 0, fmt.Errorf("mint: current trust profile for %s: %w", repo, err)
+	}
+	if current.Profile.Repo != repo {
+		return InstallationBinding{}, repoRef{}, 0, fmt.Errorf("mint: current trust profile names a different repository: %w",
+			ErrTrustProfileDrift)
+	}
+	binding, err := m.resolver.Resolve(ctx, parsed.owner)
+	if err != nil {
+		return InstallationBinding{}, repoRef{}, 0, fmt.Errorf("mint: %w", err)
+	}
+	return binding, parsed, current.Profile.RepositoryID, nil
+}
+
+func (m *Minter) mintResolved(ctx context.Context, binding InstallationBinding, repo repoRef, repositoryID int64) (InstallationToken, error) {
+	creds, err := m.keystore.LoadApp(binding.RegistrationOwnerID)
+	if err != nil {
+		return InstallationToken{}, fmt.Errorf("mint: load registration: %w", err)
+	}
+	if creds.AppID != binding.RegistrationID ||
+		!strings.EqualFold(binding.Account, repo.owner) ||
+		binding.InstallationID <= 0 || binding.AccountID <= 0 || repositoryID <= 0 {
+		return InstallationToken{}, fmt.Errorf("mint: resolved installation binding changed: %w", ErrInstallationResolution)
+	}
 	jwt, err := AppJWT(creds.Key, creds.AppID, m.now())
 	if err != nil {
 		return InstallationToken{}, fmt.Errorf("mint: %w", err)
 	}
 
-	body, err := json.Marshal(mintRequest{Repositories: []string{repo}, Permissions: PublishPermissions})
+	body, err := json.Marshal(mintRequest{RepositoryIDs: []int64{repositoryID}, Permissions: PublishPermissions})
 	if err != nil {
 		return InstallationToken{}, fmt.Errorf("mint: encode request: %w", err)
 	}
-	path := fmt.Sprintf("/app/installations/%d/access_tokens", installationID)
+	path := fmt.Sprintf("/app/installations/%d/access_tokens", binding.InstallationID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return InstallationToken{}, fmt.Errorf("mint: build request: %w", err)
@@ -168,7 +216,7 @@ func (m *Minter) MintInstallationToken(ctx context.Context, installationID int64
 		return InstallationToken{}, fmt.Errorf("mint: %w", &APIError{Status: resp.StatusCode, RequestPath: path})
 	}
 	var minted mintResponse
-	if err := json.NewDecoder(resp.Body).Decode(&minted); err != nil {
+	if err := decodeResponse(resp.Body, &minted); err != nil {
 		return InstallationToken{}, fmt.Errorf("mint: decode response: %w", err)
 	}
 	expiresAt, err := time.Parse(time.RFC3339, minted.ExpiresAt.Reveal())
@@ -188,7 +236,8 @@ func (m *Minter) MintInstallationToken(ctx context.Context, installationID int64
 	if !maps.Equal(minted.Permissions, publishPermissionScopes) {
 		return InstallationToken{}, fmt.Errorf("mint: granted permissions differ from the request: %w", ErrGrantMismatch)
 	}
-	if minted.RepositorySelection != "selected" || len(minted.Repositories) != 1 || minted.Repositories[0].Name != repo {
+	if minted.RepositorySelection != "selected" || len(minted.Repositories) != 1 ||
+		minted.Repositories[0].ID != repositoryID || minted.Repositories[0].Name != repo.name {
 		return InstallationToken{}, fmt.Errorf("mint: granted repository scope differs from the request: %w", ErrGrantMismatch)
 	}
 	// Returned-object trust boundary: a syntactically valid 201 that
@@ -206,9 +255,9 @@ func (m *Minter) MintInstallationToken(ctx context.Context, installationID int64
 	// requested and granted; any other grant never reaches this point.
 	if err := m.recorder.RecordMint(MintRecord{
 		MintedAt:       m.now().UTC(),
-		RegistrationID: creds.AppID,
-		InstallationID: installationID,
-		Repo:           repo,
+		RegistrationID: binding.RegistrationID,
+		InstallationID: binding.InstallationID,
+		Repo:           repo.path(),
 		Requested:      PublishPermissions,
 		Granted:        PublishPermissions,
 		ExpiresAt:      expiresAt,
@@ -217,10 +266,13 @@ func (m *Minter) MintInstallationToken(ctx context.Context, installationID int64
 	}
 
 	return InstallationToken{
-		Token:       minted.Token,
-		ExpiresAt:   expiresAt,
-		Repo:        repo,
-		Permissions: PublishPermissions,
+		Token:          minted.Token,
+		ExpiresAt:      expiresAt,
+		RegistrationID: binding.RegistrationID,
+		InstallationID: binding.InstallationID,
+		RepositoryID:   repositoryID,
+		Repo:           repo.path(),
+		Permissions:    PublishPermissions,
 	}, nil
 }
 

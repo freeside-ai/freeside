@@ -79,6 +79,22 @@ var ErrRegistrationDenied = errors.New("app manifest registration returned no co
 // circulated.
 var ErrGrantMismatch = errors.New("installation token grant does not match the request")
 
+// ErrInstallationResolution is the class sentinel for installation metadata
+// that fails the returned-object trust boundary. A *ResolutionFailure carries
+// the safe registration and expected-owner coordinates for audit without
+// retaining the untrusted response value.
+var ErrInstallationResolution = errors.New("installation metadata failed validation")
+
+// ErrNoInstallation reports that no known registration has an installation
+// for the repository owner. Unknown owners never fall back to a caller-supplied
+// installation ID.
+var ErrNoInstallation = errors.New("no GitHub App installation for repository owner")
+
+// ErrAmbiguousInstallation reports that more than one registration claims an
+// installation for the same repository owner. Resolution cannot choose between
+// credentials implicitly, so minting fails closed.
+var ErrAmbiguousInstallation = errors.New("multiple GitHub App installations for repository owner")
+
 // ErrHeadMismatch is returned when a head-bound artifact's
 // source_head_sha differs from the candidate head being published:
 // its evidence describes some other revision, and a new remediation

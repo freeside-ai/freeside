@@ -5,11 +5,13 @@
 // This unit (issue #80) is App authentication with contained
 // credentials: registration via the manifest flow (Registrar), with
 // the private key landing directly in protected storage (Keystore,
-// §10); App JWT construction (AppJWT); per-repository installation
-// tokens with the pinned minimum permission set (Minter,
-// PublishPermissions); a per-mint audit record (MintRecord, Recorder);
-// and the redaction boundary every credential value lives behind
-// (Secret). The credentials directory is structurally disjoint from
+// §10); App JWT construction (AppJWT); repository-owner resolution to
+// a trusted registration and installation (InstallationResolver);
+// trust-gated per-repository installation tokens with the pinned
+// minimum permission set (Minter, PublishPermissions); a per-mint audit
+// record naming the registration (MintRecord, Recorder); and the
+// redaction boundary every credential value lives behind (Secret).
+// The credentials directory is structurally disjoint from
 // the state directory, so the key stays out of backup checkpoints
 // (§5.10; recovery may require reauthentication) and workspace mounts.
 //

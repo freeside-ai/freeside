@@ -61,7 +61,7 @@ func (f *forge) do(ctx context.Context, method string, repo repoRef, path, etag 
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	tok, err := f.tokens.Token(ctx, repo.name)
+	tok, err := f.tokens.Token(ctx, repo.path())
 	if err != nil {
 		return nil, err
 	}

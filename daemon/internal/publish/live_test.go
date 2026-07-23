@@ -38,12 +38,12 @@ func parseTestPEM(raw []byte) (*rsa.PrivateKey, error) {
 // opt-in live-test environment, skipping when it is not set (issue #80
 // acceptance 1: CI documents these as Not run). It needs an
 // already-registered App (registration requires a browser).
-func newLiveMinter(t *testing.T) (m *publish.Minter, repo string, installationID int64) {
+func newLiveMinter(t *testing.T) (m *publish.Minter, repo string, profile domain.AutomationTrustProfile) {
 	t.Helper()
 	if os.Getenv("FREESIDE_PUBLISH_LIVE_TEST") != "1" {
 		t.Skip("live GitHub integration is opt-in: set FREESIDE_PUBLISH_LIVE_TEST=1, " +
 			"FREESIDE_PUBLISH_LIVE_APP_ID, FREESIDE_PUBLISH_LIVE_OWNER_ID, FREESIDE_PUBLISH_LIVE_KEY_PATH, " +
-			"FREESIDE_PUBLISH_LIVE_INSTALLATION_ID, FREESIDE_PUBLISH_LIVE_REPO (owner/name)")
+			"FREESIDE_PUBLISH_LIVE_REPOSITORY_ID, FREESIDE_PUBLISH_LIVE_REPO (owner/name)")
 	}
 
 	appID, err := strconv.ParseInt(os.Getenv("FREESIDE_PUBLISH_LIVE_APP_ID"), 10, 64)
@@ -54,9 +54,9 @@ func newLiveMinter(t *testing.T) (m *publish.Minter, repo string, installationID
 	if err != nil {
 		t.Fatalf("FREESIDE_PUBLISH_LIVE_OWNER_ID: %v", err)
 	}
-	installationID, err = strconv.ParseInt(os.Getenv("FREESIDE_PUBLISH_LIVE_INSTALLATION_ID"), 10, 64)
+	repositoryID, err := strconv.ParseInt(os.Getenv("FREESIDE_PUBLISH_LIVE_REPOSITORY_ID"), 10, 64)
 	if err != nil {
-		t.Fatalf("FREESIDE_PUBLISH_LIVE_INSTALLATION_ID: %v", err)
+		t.Fatalf("FREESIDE_PUBLISH_LIVE_REPOSITORY_ID: %v", err)
 	}
 	repo = os.Getenv("FREESIDE_PUBLISH_LIVE_REPO")
 	if repo == "" {
@@ -99,23 +99,16 @@ func newLiveMinter(t *testing.T) (m *publish.Minter, repo string, installationID
 		t.Fatal(err)
 	}
 	client := &http.Client{Timeout: 30 * time.Second}
-	return publish.NewMinter(ks, client, "https://api.github.com", rec, time.Now), repo, installationID
+	profile = trustProfileForRepoID(t, repo, repositoryID)
+	trust := memoryTrustSource{profile: &profile}
+	return publish.NewMinter(ks, client, "https://api.github.com", rec, trust, time.Now), repo, profile
 }
 
 // TestLiveMintInstallationToken exercises the App JWT and
 // installation-token lifecycle against the real GitHub API.
 func TestLiveMintInstallationToken(t *testing.T) {
-	m, repo, installationID := newLiveMinter(t)
-
-	// The minter grants (and validates GitHub's returned repository name)
-	// by the bare repository name; FREESIDE_PUBLISH_LIVE_REPO is owner/name
-	// so the publish test can use it as Candidate.Repo, so pass only the
-	// name here.
-	repoName, err := bareRepoName(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tok, err := m.MintInstallationToken(context.Background(), installationID, repoName)
+	m, repo, _ := newLiveMinter(t)
+	tok, err := m.MintInstallationToken(context.Background(), repo)
 	if err != nil {
 		t.Fatalf("live mint: %v", err)
 	}
@@ -136,7 +129,7 @@ func TestLiveMintInstallationToken(t *testing.T) {
 // refs, it does not upload objects) and cleans up the branch and PR it
 // creates.
 func TestLivePublishEffectivelyOnce(t *testing.T) {
-	m, repo, installationID := newLiveMinter(t)
+	m, repo, liveProfile := newLiveMinter(t)
 	headSHA := os.Getenv("FREESIDE_PUBLISH_LIVE_HEAD_SHA")
 	if headSHA == "" {
 		t.Skip("set FREESIDE_PUBLISH_LIVE_HEAD_SHA to a commit that exists in the live repo")
@@ -148,7 +141,7 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 	ctx := context.Background()
 	const baseURL = "https://api.github.com"
 	client := &http.Client{Timeout: 30 * time.Second}
-	ts := publish.NewCachedTokenSource(m, installationID, time.Now)
+	ts := publish.NewCachedTokenSource(m, time.Now)
 
 	// A unique nonce per run gives a fresh publication identity, so a
 	// leftover branch or PR from an earlier run never collides with this
@@ -173,7 +166,7 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewArtifact: %v", err)
 	}
-	liveProfileDigest := trustProfileForRepo(t, repo).ProfileDigest
+	liveProfileDigest := liveProfile.ProfileDigest
 	// The authorization gate (#168) requires a daemon-authored record that
 	// authorizes this candidate: a passed verification with no blocking
 	// finding, bound to the candidate's repo/head/recipe/trust profile. It is
@@ -216,8 +209,8 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 
 	dbPath := filepath.Join(t.TempDir(), "store.db")
 	s1, p1 := openKillHarness(t, dbPath, client, baseURL, ts)
-	seedTrust(t, s1, repo)     // conformant trust so the drift gate passes; persists across the restart
-	seedAuthz(t, s1, liveAuth) // authorizing record for the live candidate; persists across the restart
+	seedTrustProfile(t, s1, liveProfile) // conformant trust so the drift gate passes; persists across the restart
+	seedAuthz(t, s1, liveAuth)           // authorizing record for the live candidate; persists across the restart
 	// Register before Publish: it can create the deterministic branch or
 	// PR and then fail returned-object validation without returning a
 	// Result. The identity supplies the branch up front; a zero PR number
@@ -284,16 +277,7 @@ func bareRepoName(repo string) (string, error) {
 // the live test created, so opt-in runs leave no residue.
 func cleanupLivePublication(t *testing.T, client *http.Client, baseURL string, ts publish.TokenSource, repo, branch string, prNumber int) {
 	t.Helper()
-	// The publish path (forge.do) keys tokens by the bare repository name,
-	// and GitHub scopes an installation token to a repo by name; mint and
-	// the cache both expect the bare name here, while the REST URLs below
-	// take owner/name.
-	repoName, err := bareRepoName(repo)
-	if err != nil {
-		t.Logf("cleanup: %v", err)
-		return
-	}
-	tok, err := ts.Token(context.Background(), repoName)
+	tok, err := ts.Token(context.Background(), repo)
 	if err != nil {
 		t.Logf("cleanup: token: %v", err)
 		return

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -58,6 +59,23 @@ func newRegisteredKeystore(t *testing.T) *publish.Keystore {
 
 func fixedNow() time.Time { return fixtureTime }
 
+// newMintServer serves the App-authenticated installation discovery endpoint
+// before delegating the token request to handler.
+func newMintServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
+			_, _ = io.WriteString(w, `[{"id":777,"app_id":`+
+				fmt.Sprint(fixtureAppID)+`,"target_id":`+fmt.Sprint(testOwnerID)+
+				`,"repository_selection":"selected"`+
+				`,"account":{"login":"freeside-ai","id":`+
+				fmt.Sprint(testOwnerID)+`}}]`)
+			return
+		}
+		handler(w, r)
+	}))
+}
+
 // TestMintInstallationToken drives the full lifecycle against the
 // recorded fixture (issue #80 acceptance 1): the request carries the
 // App JWT and the pinned minimum scope body, the fixture response
@@ -71,7 +89,7 @@ func TestMintInstallationToken(t *testing.T) {
 	}
 
 	var gotBody []byte
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newMintServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/app/installations/777/access_tokens" {
 			t.Errorf("request = %s %s, want POST /app/installations/777/access_tokens", r.Method, r.URL.Path)
 		}
@@ -91,12 +109,12 @@ func TestMintInstallationToken(t *testing.T) {
 			t.Errorf("read fixture: %v", err)
 		}
 		_, _ = w.Write(fixture)
-	}))
+	})
 	defer srv.Close()
 
 	rec := &captureRecorder{}
-	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, fixedNow)
-	tok, err := m.MintInstallationToken(context.Background(), 777, "evidence-repo")
+	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
+	tok, err := m.MintInstallationToken(context.Background(), testTrustRepo)
 	if err != nil {
 		t.Fatalf("MintInstallationToken: %v", err)
 	}
@@ -111,8 +129,14 @@ func TestMintInstallationToken(t *testing.T) {
 	if want := time.Date(2026, 7, 16, 13, 0, 0, 0, time.UTC); !tok.ExpiresAt.Equal(want) {
 		t.Errorf("ExpiresAt = %v, want %v", tok.ExpiresAt, want)
 	}
-	if tok.Repo != "evidence-repo" {
+	if tok.Repo != testTrustRepo {
 		t.Errorf("Repo = %q", tok.Repo)
+	}
+	if tok.RegistrationID != fixtureAppID || tok.InstallationID != 777 {
+		t.Errorf("token binding = %+v", tok)
+	}
+	if tok.RepositoryID != fixtureRepositoryID {
+		t.Errorf("token repository ID = %d, want %d", tok.RepositoryID, fixtureRepositoryID)
 	}
 	if tok.Permissions != publish.PublishPermissions {
 		t.Errorf("granted permissions = %+v, want %+v", tok.Permissions, publish.PublishPermissions)
@@ -125,7 +149,7 @@ func TestMintInstallationToken(t *testing.T) {
 	if r.Requested != publish.PublishPermissions || r.Granted != publish.PublishPermissions {
 		t.Errorf("record scopes = %+v", r)
 	}
-	if r.RegistrationID != fixtureAppID || r.InstallationID != 777 || r.Repo != "evidence-repo" {
+	if r.RegistrationID != fixtureAppID || r.InstallationID != 777 || r.Repo != testTrustRepo {
 		t.Errorf("record identity = %+v", r)
 	}
 	if !r.MintedAt.Equal(fixtureTime) {
@@ -152,7 +176,7 @@ func TestMintInstallationToken(t *testing.T) {
 func TestMintRejectsGrantMismatch(t *testing.T) {
 	const (
 		expiry    = `"expires_at":"2026-07-16T13:00:00Z"`
-		wantRepos = `"repository_selection":"selected","repositories":[{"name":"evidence-repo"}]`
+		wantRepos = `"repository_selection":"selected","repositories":[{"id":990011,"name":"evidence-repo"}]`
 		wantPerms = `"permissions":{"actions":"read","administration":"read","contents":"write","environments":"read","pull_requests":"write","metadata":"read"}`
 	)
 	cases := []struct {
@@ -169,25 +193,27 @@ func TestMintRejectsGrantMismatch(t *testing.T) {
 			wantPerms + `,"repository_selection":"all","repositories":[]}`},
 		{"credential-shaped repository selection", `{"token":"` + fixtureTokenValue + `",` + expiry + `,` +
 			wantPerms + `,"repository_selection":"` + fixtureTokenValue + `","repositories":[]}`},
+		{"different repository ID", `{"token":"` + fixtureTokenValue + `",` + expiry + `,` +
+			wantPerms + `,"repository_selection":"selected","repositories":[{"id":990012,"name":"evidence-repo"}]}`},
 		{"different repository", `{"token":"` + fixtureTokenValue + `",` + expiry + `,` +
-			wantPerms + `,"repository_selection":"selected","repositories":[{"name":"other-repo"}]}`},
+			wantPerms + `,"repository_selection":"selected","repositories":[{"id":990011,"name":"other-repo"}]}`},
 		{"credential-shaped repository", `{"token":"` + fixtureTokenValue + `",` + expiry + `,` +
-			wantPerms + `,"repository_selection":"selected","repositories":[{"name":"` + fixtureTokenValue + `"}]}`},
+			wantPerms + `,"repository_selection":"selected","repositories":[{"id":990011,"name":"` + fixtureTokenValue + `"}]}`},
 		{"extra repository", `{"token":"` + fixtureTokenValue + `",` + expiry + `,` +
-			wantPerms + `,"repository_selection":"selected","repositories":[{"name":"evidence-repo"},{"name":"other-repo"}]}`},
+			wantPerms + `,"repository_selection":"selected","repositories":[{"id":990011,"name":"evidence-repo"},{"id":990012,"name":"other-repo"}]}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ks := newRegisteredKeystore(t)
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			srv := newMintServer(t, func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusCreated)
 				_, _ = io.WriteString(w, tc.body)
-			}))
+			})
 			defer srv.Close()
 
 			rec := &captureRecorder{}
-			m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, fixedNow)
-			_, err := m.MintInstallationToken(context.Background(), 777, "evidence-repo")
+			m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
+			_, err := m.MintInstallationToken(context.Background(), testTrustRepo)
 			if !errors.Is(err, publish.ErrGrantMismatch) {
 				t.Fatalf("err = %v, want ErrGrantMismatch", err)
 			}
@@ -212,26 +238,26 @@ func TestMintRejectsUnusableToken(t *testing.T) {
 	}{
 		{"empty token", `{"token":"","expires_at":"2026-07-16T13:00:00Z",` +
 			wantPerms + `,` +
-			`"repository_selection":"selected","repositories":[{"name":"evidence-repo"}]}`},
+			`"repository_selection":"selected","repositories":[{"id":990011,"name":"evidence-repo"}]}`},
 		{"expired token", `{"token":"` + fixtureTokenValue + `","expires_at":"2026-07-16T11:00:00Z",` +
 			wantPerms + `,` +
-			`"repository_selection":"selected","repositories":[{"name":"evidence-repo"}]}`},
+			`"repository_selection":"selected","repositories":[{"id":990011,"name":"evidence-repo"}]}`},
 		{"credential-shaped invalid expiry", `{"token":"` + fixtureTokenValue + `","expires_at":"` + fixtureTokenValue + `",` +
 			wantPerms + `,` +
-			`"repository_selection":"selected","repositories":[{"name":"evidence-repo"}]}`},
+			`"repository_selection":"selected","repositories":[{"id":990011,"name":"evidence-repo"}]}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ks := newRegisteredKeystore(t)
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			srv := newMintServer(t, func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusCreated)
 				_, _ = io.WriteString(w, tc.body)
-			}))
+			})
 			defer srv.Close()
 
 			rec := &captureRecorder{}
-			m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, fixedNow)
-			_, err := m.MintInstallationToken(context.Background(), 777, "evidence-repo")
+			m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
+			_, err := m.MintInstallationToken(context.Background(), testTrustRepo)
 			if err == nil {
 				t.Error("unusable token accepted, want error")
 			}
@@ -251,15 +277,15 @@ func TestMintRejectsUnusableToken(t *testing.T) {
 // with no audit record and no body content in the error.
 func TestMintAPIError(t *testing.T) {
 	ks := newRegisteredKeystore(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := newMintServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = io.WriteString(w, `{"message":"boom ghs_LEAKYBODYVALUE"}`)
-	}))
+	})
 	defer srv.Close()
 
 	rec := &captureRecorder{}
-	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, fixedNow)
-	_, err := m.MintInstallationToken(context.Background(), 777, "evidence-repo")
+	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
+	_, err := m.MintInstallationToken(context.Background(), testTrustRepo)
 	if !errors.Is(err, publish.ErrGitHubAPI) {
 		t.Fatalf("err = %v, want ErrGitHubAPI", err)
 	}
@@ -279,16 +305,16 @@ func TestMintAPIError(t *testing.T) {
 // circulate.
 func TestMintFailsWhenRecorderFails(t *testing.T) {
 	ks := newRegisteredKeystore(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := newMintServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		fixture, _ := os.ReadFile(filepath.Join("testdata", "token-response.json"))
 		_, _ = w.Write(fixture)
-	}))
+	})
 	defer srv.Close()
 
 	rec := &captureRecorder{err: errors.New("audit disk full")}
-	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, fixedNow)
-	if _, err := m.MintInstallationToken(context.Background(), 777, "evidence-repo"); err == nil {
+	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
+	if _, err := m.MintInstallationToken(context.Background(), testTrustRepo); err == nil {
 		t.Error("mint succeeded with a failing recorder, want error")
 	}
 }
@@ -296,12 +322,76 @@ func TestMintFailsWhenRecorderFails(t *testing.T) {
 // TestMintValidation covers the fail-fast argument checks.
 func TestMintValidation(t *testing.T) {
 	ks := newRegisteredKeystore(t)
-	m := publish.NewMinter(ks, http.DefaultClient, "http://unreachable.invalid", &captureRecorder{}, fixedNow)
-	if _, err := m.MintInstallationToken(context.Background(), 0, "repo"); err == nil {
-		t.Error("installation id 0 accepted, want error")
+	m := publish.NewMinter(ks, http.DefaultClient, "http://unreachable.invalid", &captureRecorder{}, conformantTrust(t), fixedNow)
+	if _, err := m.MintInstallationToken(context.Background(), "repo"); err == nil {
+		t.Error("bare repository name accepted, want error")
 	}
-	if _, err := m.MintInstallationToken(context.Background(), 777, ""); err == nil {
+	if _, err := m.MintInstallationToken(context.Background(), ""); err == nil {
 		t.Error("empty repo accepted, want error")
+	}
+}
+
+// TestMintRejectsRepositoryOutsideTrustedSet proves the onboarded trust source
+// gates every mint before installation discovery or token exchange.
+func TestMintRejectsRepositoryOutsideTrustedSet(t *testing.T) {
+	requests := 0
+	client := &http.Client{Transport: cleanupTransportFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return nil, errors.New("request should not be sent")
+	})}
+	m := publish.NewMinter(
+		newRegisteredKeystore(t),
+		client,
+		"https://api.github.test",
+		&captureRecorder{},
+		memoryTrustSource{},
+		fixedNow,
+	)
+	_, err := m.MintInstallationToken(context.Background(), testTrustRepo)
+	if !errors.Is(err, publish.ErrTrustProfileDrift) {
+		t.Fatalf("err = %v, want ErrTrustProfileDrift", err)
+	}
+	if requests != 0 {
+		t.Errorf("sent %d GitHub requests before the trust gate, want 0", requests)
+	}
+}
+
+// TestMintRejectsRegistrationChangeAfterResolution attacks the seam between
+// live installation discovery and signing. A locally replaced registration
+// cannot inherit a binding resolved under the prior App ID.
+func TestMintRejectsRegistrationChangeAfterResolution(t *testing.T) {
+	ks := newRegisteredKeystore(t)
+	tokenRequests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
+			_, _ = io.WriteString(w, `[{"id":777,"app_id":`+
+				fmt.Sprint(fixtureAppID)+`,"target_id":`+fmt.Sprint(testOwnerID)+
+				`,"repository_selection":"selected"`+
+				`,"account":{"login":"freeside-ai","id":`+fmt.Sprint(testOwnerID)+`}}]`)
+			if err := ks.SaveApp(publish.AppCredentials{
+				Owner:      "freeside-ai",
+				OwnerID:    testOwnerID,
+				Visibility: publish.AppVisibilityPrivate,
+				AppID:      fixtureAppID + 1,
+				Name:       "replacement-app",
+				Key:        fixtureKey(t),
+			}); err != nil {
+				t.Errorf("replace registration: %v", err)
+			}
+			return
+		}
+		tokenRequests++
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	rec := &captureRecorder{}
+	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
+	if _, err := m.MintInstallationToken(context.Background(), testTrustRepo); !errors.Is(err, publish.ErrInstallationResolution) {
+		t.Fatalf("err = %v, want ErrInstallationResolution", err)
+	}
+	if tokenRequests != 0 || len(rec.records) != 0 {
+		t.Errorf("registration change reached %d token requests and %d audit rows", tokenRequests, len(rec.records))
 	}
 }
 
@@ -326,11 +416,11 @@ func newTestStore(t *testing.T) *store.Store {
 // SQLite surface and reads back field-identical.
 func TestStoreRecorder(t *testing.T) {
 	ks := newRegisteredKeystore(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := newMintServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		fixture, _ := os.ReadFile(filepath.Join("testdata", "token-response.json"))
 		_, _ = w.Write(fixture)
-	}))
+	})
 	defer srv.Close()
 
 	s := newTestStore(t)
@@ -338,8 +428,8 @@ func TestStoreRecorder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStoreRecorder: %v", err)
 	}
-	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, fixedNow)
-	if _, err := m.MintInstallationToken(context.Background(), 777, "evidence-repo"); err != nil {
+	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
+	if _, err := m.MintInstallationToken(context.Background(), testTrustRepo); err != nil {
 		t.Fatalf("MintInstallationToken: %v", err)
 	}
 
@@ -356,7 +446,7 @@ func TestStoreRecorder(t *testing.T) {
 		t.Fatalf("recorded %d audits, want 1", len(audits))
 	}
 	got := audits[0]
-	if got.RegistrationID != fixtureAppID || got.InstallationID != 777 || got.Repo != "evidence-repo" {
+	if got.RegistrationID != fixtureAppID || got.InstallationID != 777 || got.Repo != testTrustRepo {
 		t.Errorf("audit identity = %+v", got)
 	}
 	if !got.MintedAt.Equal(fixtureTime) {
@@ -379,11 +469,11 @@ func TestStoreRecorderFailsClosed(t *testing.T) {
 	}
 
 	ks := newRegisteredKeystore(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := newMintServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		fixture, _ := os.ReadFile(filepath.Join("testdata", "token-response.json"))
 		_, _ = w.Write(fixture)
-	}))
+	})
 	defer srv.Close()
 
 	s, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "store.db"), store.Options{})
@@ -398,8 +488,8 @@ func TestStoreRecorderFailsClosed(t *testing.T) {
 		t.Fatalf("store.Close: %v", err)
 	}
 
-	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, fixedNow)
-	if _, err := m.MintInstallationToken(context.Background(), 777, "evidence-repo"); err == nil {
+	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
+	if _, err := m.MintInstallationToken(context.Background(), testTrustRepo); err == nil {
 		t.Error("mint succeeded with an unwritable audit store, want error")
 	}
 }
