@@ -40,7 +40,11 @@ func newRegisteredKeystore(t *testing.T) *publish.Keystore {
 	t.Helper()
 	ks := newTestKeystore(t)
 	if err := ks.SaveApp(publish.AppCredentials{
+		Owner:         "freeside-ai",
+		OwnerID:       testOwnerID,
+		Visibility:    publish.AppVisibilityPrivate,
 		AppID:         fixtureAppID,
+		Name:          "freeside-publish",
 		Slug:          "freeside-publish",
 		ClientID:      "Iv1.deadbeefdeadbeef",
 		Key:           fixtureKey(t),

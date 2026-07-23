@@ -21,7 +21,7 @@ import (
 
 func testManifest() publish.Manifest {
 	return publish.Manifest{
-		Name:               "freeside-publish",
+		Name:               "requested-app-name",
 		URL:                "https://github.com/freeside-ai/freeside",
 		Public:             false,
 		DefaultPermissions: publish.PublishPermissions,
@@ -78,15 +78,20 @@ func TestExchangeCodeFixture(t *testing.T) {
 	ks := newTestKeystore(t)
 	r := publish.NewRegistrar(ks, srv.Client(), srv.URL, "https://github.example")
 
-	creds, err := r.ExchangeCode(context.Background(), "CODE123")
+	creds, err := r.ExchangeCode(context.Background(), "CODE123", "freeside-ai", testOwnerID, publish.AppVisibilityPrivate)
 	if err != nil {
 		t.Fatalf("ExchangeCode: %v", err)
 	}
 	if want := "POST /app-manifests/CODE123/conversions"; gotPath != want {
 		t.Errorf("request = %q, want %q", gotPath, want)
 	}
-	if creds.AppID != fixtureAppID || creds.Slug != "freeside-publish" || creds.ClientID != "Iv1.deadbeefdeadbeef" {
+	if creds.Owner != "freeside-ai" || creds.OwnerID != testOwnerID || creds.Visibility != publish.AppVisibilityPrivate ||
+		creds.AppID != fixtureAppID || creds.Name != "freeside-publish" ||
+		creds.Slug != "freeside-publish" || creds.ClientID != "Iv1.deadbeefdeadbeef" {
 		t.Errorf("credentials identity = %+v", creds)
+	}
+	if want := "SHA256:hV+YFKg8ua+92Bp5aukhasPJ9bU/H6vmoC3lMQPYVvc="; creds.KeyID != want {
+		t.Errorf("key id = %q, want GitHub SHA-256 fingerprint %q", creds.KeyID, want)
 	}
 	if !creds.Key.Equal(fixtureKey(t)) {
 		t.Error("conversion key does not match the fixture key")
@@ -96,12 +101,62 @@ func TestExchangeCodeFixture(t *testing.T) {
 	}
 
 	// The registration's key material is already in protected storage.
-	loaded, err := ks.LoadApp()
+	loaded, err := ks.LoadApp(creds.OwnerID)
 	if err != nil {
 		t.Fatalf("LoadApp after exchange: %v", err)
 	}
 	if !loaded.Key.Equal(fixtureKey(t)) {
 		t.Error("keystore does not hold the converted key")
+	}
+	if loaded.Name != "freeside-publish" || loaded.Name == testManifest().Name {
+		t.Errorf("stored name = %q, want canonical conversion name rather than requested %q", loaded.Name, testManifest().Name)
+	}
+}
+
+// TestExchangeCodeRejectsOwnerMismatch keeps an App created through the wrong
+// personal or organization settings page from being stored under that
+// unexpected account.
+func TestExchangeCodeRejectsOwnerMismatch(t *testing.T) {
+	var gotPath string
+	srv := conversionServer(t, &gotPath)
+	defer srv.Close()
+
+	ks := newTestKeystore(t)
+	r := publish.NewRegistrar(ks, srv.Client(), srv.URL, "https://github.example")
+	if _, err := r.ExchangeCode(
+		context.Background(),
+		"CODE123",
+		"bennelsonweiss",
+		testOwnerID,
+		publish.AppVisibilityPrivate,
+	); err == nil {
+		t.Fatal("ExchangeCode accepted an App owned by the wrong account")
+	}
+	if apps, err := ks.ListApps(); err != nil || len(apps) != 0 {
+		t.Errorf("owner-mismatched conversion changed the keystore: apps=%d err=%v", len(apps), err)
+	}
+}
+
+// TestExchangeCodeRejectsOwnerIDMismatch prevents a renamed or login-reused
+// account from being accepted as the expected registration owner.
+func TestExchangeCodeRejectsOwnerIDMismatch(t *testing.T) {
+	var gotPath string
+	srv := conversionServer(t, &gotPath)
+	defer srv.Close()
+
+	ks := newTestKeystore(t)
+	r := publish.NewRegistrar(ks, srv.Client(), srv.URL, "https://github.example")
+	if _, err := r.ExchangeCode(
+		context.Background(),
+		"CODE123",
+		"freeside-ai",
+		testOwnerID+1,
+		publish.AppVisibilityPrivate,
+	); err == nil {
+		t.Fatal("ExchangeCode accepted an App owned by the wrong numeric account")
+	}
+	if apps, err := ks.ListApps(); err != nil || len(apps) != 0 {
+		t.Errorf("owner-ID-mismatched conversion changed the keystore: apps=%d err=%v", len(apps), err)
 	}
 }
 
@@ -116,11 +171,11 @@ func TestExchangeCodeAPIError(t *testing.T) {
 
 	ks := newTestKeystore(t)
 	r := publish.NewRegistrar(ks, srv.Client(), srv.URL, "https://github.example")
-	_, err := r.ExchangeCode(context.Background(), "EXPIRED")
+	_, err := r.ExchangeCode(context.Background(), "EXPIRED", "freeside-ai", testOwnerID, publish.AppVisibilityPrivate)
 	if !errors.Is(err, publish.ErrGitHubAPI) {
 		t.Fatalf("err = %v, want ErrGitHubAPI", err)
 	}
-	if _, err := ks.LoadApp(); !errors.Is(err, publish.ErrNoAppCredentials) {
+	if apps, err := ks.ListApps(); err != nil || len(apps) != 0 {
 		t.Error("failed exchange left credentials in the keystore")
 	}
 }
@@ -133,7 +188,7 @@ func TestExchangeCodeTransportErrorRedactsCode(t *testing.T) {
 	ks := newTestKeystore(t)
 	// A closed port: the connect fails before any request leaves.
 	r := publish.NewRegistrar(ks, &http.Client{Timeout: time.Second}, "http://127.0.0.1:1", "https://github.example")
-	_, err := r.ExchangeCode(context.Background(), "SECRETMANIFESTCODE123")
+	_, err := r.ExchangeCode(context.Background(), "SECRETMANIFESTCODE123", "freeside-ai", testOwnerID, publish.AppVisibilityPrivate)
 	if err == nil {
 		t.Fatal("ExchangeCode against a closed port succeeded")
 	}
@@ -160,7 +215,7 @@ func TestExchangeCodeRefusesRedirect(t *testing.T) {
 
 	ks := newTestKeystore(t)
 	r := publish.NewRegistrar(ks, srv.Client(), srv.URL, "https://github.example")
-	_, err := r.ExchangeCode(context.Background(), "SECRETMANIFESTCODE123")
+	_, err := r.ExchangeCode(context.Background(), "SECRETMANIFESTCODE123", "freeside-ai", testOwnerID, publish.AppVisibilityPrivate)
 	var apiErr *publish.APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusFound {
 		t.Errorf("err = %v, want *APIError with status 302", err)
@@ -221,10 +276,10 @@ func TestExchangeCodeRejectsMissingAppID(t *testing.T) {
 
 	ks := newTestKeystore(t)
 	r := publish.NewRegistrar(ks, srv.Client(), srv.URL, "https://github.example")
-	if _, err := r.ExchangeCode(context.Background(), "CODE123"); err == nil {
+	if _, err := r.ExchangeCode(context.Background(), "CODE123", "freeside-ai", testOwnerID, publish.AppVisibilityPrivate); err == nil {
 		t.Error("conversion without app id accepted, want error")
 	}
-	if _, err := ks.LoadApp(); !errors.Is(err, publish.ErrNoAppCredentials) {
+	if apps, err := ks.ListApps(); err != nil || len(apps) != 0 {
 		t.Error("rejected conversion left credentials in the keystore")
 	}
 }
@@ -250,10 +305,10 @@ func TestExchangeCodeRejectsPermissionMismatch(t *testing.T) {
 
 	ks := newTestKeystore(t)
 	r := publish.NewRegistrar(ks, srv.Client(), srv.URL, "https://github.example")
-	if _, err := r.ExchangeCode(context.Background(), "CODE123"); err == nil {
+	if _, err := r.ExchangeCode(context.Background(), "CODE123", "freeside-ai", testOwnerID, publish.AppVisibilityPrivate); err == nil {
 		t.Error("conversion with mismatched permissions accepted, want error")
 	}
-	if _, err := ks.LoadApp(); !errors.Is(err, publish.ErrNoAppCredentials) {
+	if apps, err := ks.ListApps(); err != nil || len(apps) != 0 {
 		t.Error("rejected conversion left credentials in the keystore")
 	}
 }
@@ -309,7 +364,7 @@ func TestRegisterOrchestration(t *testing.T) {
 		return nil
 	}
 
-	creds, err := r.Register(context.Background(), testManifest(), l, openURL)
+	creds, err := r.Register(context.Background(), "freeside-ai", testOwnerID, testManifest(), l, openURL)
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -319,7 +374,7 @@ func TestRegisterOrchestration(t *testing.T) {
 	if creds.AppID != fixtureAppID {
 		t.Errorf("AppID = %d, want %d", creds.AppID, fixtureAppID)
 	}
-	if _, err := ks.LoadApp(); err != nil {
+	if _, err := ks.LoadApp(creds.OwnerID); err != nil {
 		t.Errorf("keystore empty after Register: %v", err)
 	}
 }
@@ -342,7 +397,7 @@ func TestRegisterRejectsNonLoopbackListener(t *testing.T) {
 	for _, ip := range []net.IP{net.IPv4zero, net.IPv6zero, net.ParseIP("192.0.2.1")} {
 		l := &addrOnlyListener{addr: &net.TCPAddr{IP: ip, Port: 4321}}
 		opened := false
-		_, err := r.Register(context.Background(), testManifest(), l, func(string) error {
+		_, err := r.Register(context.Background(), "freeside-ai", testOwnerID, testManifest(), l, func(string) error {
 			opened = true
 			return nil
 		})
@@ -379,7 +434,7 @@ func TestRegisterDenied(t *testing.T) {
 		return nil
 	}
 
-	_, err = r.Register(context.Background(), testManifest(), l, openURL)
+	_, err = r.Register(context.Background(), "freeside-ai", testOwnerID, testManifest(), l, openURL)
 	if !errors.Is(err, publish.ErrRegistrationDenied) {
 		t.Errorf("Register without code = %v, want ErrRegistrationDenied", err)
 	}

@@ -3,6 +3,10 @@
   "slug": "freeside-publish",
   "node_id": "MDM6QXBwMTIzNDU=",
   "client_id": "Iv1.deadbeefdeadbeef",
+  "owner": {
+    "login": "freeside-ai",
+    "id": 24680
+  },
   "permissions": {
     "actions": "read",
     "administration": "read",

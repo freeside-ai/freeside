@@ -128,10 +128,17 @@ func (m *Minter) MintInstallationToken(ctx context.Context, installationID int64
 		return InstallationToken{}, errors.New("mint: empty repository name")
 	}
 
-	creds, err := m.keystore.LoadApp()
+	apps, err := m.keystore.ListApps()
 	if err != nil {
 		return InstallationToken{}, fmt.Errorf("mint: %w", err)
 	}
+	if len(apps) == 0 {
+		return InstallationToken{}, fmt.Errorf("mint: %w", ErrNoAppCredentials)
+	}
+	if len(apps) != 1 {
+		return InstallationToken{}, errors.New("mint: multiple App registrations require owner resolution")
+	}
+	creds := apps[0]
 	jwt, err := AppJWT(creds.Key, creds.AppID, m.now())
 	if err != nil {
 		return InstallationToken{}, fmt.Errorf("mint: %w", err)

@@ -42,13 +42,17 @@ func newLiveMinter(t *testing.T) (m *publish.Minter, repo string, installationID
 	t.Helper()
 	if os.Getenv("FREESIDE_PUBLISH_LIVE_TEST") != "1" {
 		t.Skip("live GitHub integration is opt-in: set FREESIDE_PUBLISH_LIVE_TEST=1, " +
-			"FREESIDE_PUBLISH_LIVE_APP_ID, FREESIDE_PUBLISH_LIVE_KEY_PATH, " +
+			"FREESIDE_PUBLISH_LIVE_APP_ID, FREESIDE_PUBLISH_LIVE_OWNER_ID, FREESIDE_PUBLISH_LIVE_KEY_PATH, " +
 			"FREESIDE_PUBLISH_LIVE_INSTALLATION_ID, FREESIDE_PUBLISH_LIVE_REPO (owner/name)")
 	}
 
 	appID, err := strconv.ParseInt(os.Getenv("FREESIDE_PUBLISH_LIVE_APP_ID"), 10, 64)
 	if err != nil {
 		t.Fatalf("FREESIDE_PUBLISH_LIVE_APP_ID: %v", err)
+	}
+	ownerID, err := strconv.ParseInt(os.Getenv("FREESIDE_PUBLISH_LIVE_OWNER_ID"), 10, 64)
+	if err != nil {
+		t.Fatalf("FREESIDE_PUBLISH_LIVE_OWNER_ID: %v", err)
 	}
 	installationID, err = strconv.ParseInt(os.Getenv("FREESIDE_PUBLISH_LIVE_INSTALLATION_ID"), 10, 64)
 	if err != nil {
@@ -78,7 +82,14 @@ func newLiveMinter(t *testing.T) (m *publish.Minter, repo string, installationID
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ks.SaveApp(publish.AppCredentials{AppID: appID, Key: key}); err != nil {
+	if err := ks.SaveApp(publish.AppCredentials{
+		Owner:      strings.SplitN(repo, "/", 2)[0],
+		OwnerID:    ownerID,
+		Visibility: publish.AppVisibilityPrivate,
+		AppID:      appID,
+		Name:       "live-test-app",
+		Key:        key,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	// The live mint audits through the production store-backed path, so
