@@ -13,6 +13,7 @@ import (
 func validTrustProfileInput() domain.AutomationTrustProfileInput {
 	return domain.AutomationTrustProfileInput{
 		Repo:                       "freeside-ai/demo",
+		RepositoryID:               123456789,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
@@ -59,6 +60,15 @@ func TestTrustProfileDigest(t *testing.T) {
 	drifted.AllowSelfHostedCI = true
 	if err := drifted.Validate(); !errors.Is(err, domain.ErrProfileDigestMismatch) {
 		t.Fatalf("drifted content error = %v, want ErrProfileDigestMismatch", err)
+	}
+
+	// The immutable repository identity participates in the address, so a
+	// caller cannot retain approval while redirecting a profile to another
+	// repository that later occupies the same owner/name.
+	rebound := base
+	rebound.RepositoryID++
+	if err := rebound.Validate(); !errors.Is(err, domain.ErrProfileDigestMismatch) {
+		t.Fatalf("repository-ID flip error = %v, want ErrProfileDigestMismatch", err)
 	}
 
 	// A commit-plan policy flip under the bound digest is the same drift
@@ -113,6 +123,8 @@ func TestTrustProfileValidation(t *testing.T) {
 		want   error
 	}{
 		{"empty repo", func(in *domain.AutomationTrustProfileInput) { in.Repo = "" }, domain.ErrEmptyField},
+		{"zero repository id", func(in *domain.AutomationTrustProfileInput) { in.RepositoryID = 0 }, domain.ErrNonPositive},
+		{"negative repository id", func(in *domain.AutomationTrustProfileInput) { in.RepositoryID = -1 }, domain.ErrNonPositive},
 		{"invalid pr_execution", func(in *domain.AutomationTrustProfileInput) { in.PRExecution = "trusted" }, domain.ErrInvalidPRExecutionMode},
 		{"empty pr_execution", func(in *domain.AutomationTrustProfileInput) { in.PRExecution = "" }, domain.ErrInvalidPRExecutionMode},
 		{"invalid automation changes", func(in *domain.AutomationTrustProfileInput) { in.CandidateAutomationChanges = "allow" }, domain.ErrInvalidAutomationChanges},
@@ -237,6 +249,7 @@ func TestTrustProfileRoundTrip(t *testing.T) {
 func fullyPopulatedTrustProfileInput() domain.AutomationTrustProfileInput {
 	return domain.AutomationTrustProfileInput{
 		Repo:                       "freeside-ai/demo",
+		RepositoryID:               123456789,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
@@ -266,7 +279,7 @@ func fullyPopulatedTrustProfileInput() domain.AutomationTrustProfileInput {
 	}
 }
 
-// TestTrustProfileDigestStability pins the v4 canonical form: a fixed,
+// TestTrustProfileDigestStability pins the v5 canonical form: a fixed,
 // fully-populated profile resolves to this digest on every build. A mismatch
 // means the canonical encoding changed without a version bump (or a bump
 // without repinning), either of which would read unchanged profiles as drift
@@ -276,15 +289,30 @@ func TestTrustProfileDigestStability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAutomationTrustProfile: %v", err)
 	}
-	const want = domain.Digest("sha256:5dda565a91631a7058152f2aacf85a6ab7870ee12f70f5e5da6fbeea4bdb83f5")
+	const want = domain.Digest("sha256:61775dbfa6a865b12d308519cec0a4ea979d6644c7e2a5b859c01dbfd823d100")
 	if p.ProfileDigest != want {
-		t.Fatalf("v4 canonical digest = %q, want %q", p.ProfileDigest, want)
+		t.Fatalf("v5 canonical digest = %q, want %q", p.ProfileDigest, want)
 	}
 }
 
-// TestTrustProfileV3DigestRequiresReapproval pins the migration behavior for
-// the v4 allow-axis expansion: approval under v3 did not cover the three new
-// privileges, so it cannot be silently treated as approval under v4.
+// TestTrustProfileV4DigestRequiresReapproval pins the v5 repository-ID
+// binding: approval under v4 named only owner/repo, so it cannot authorize a
+// canonical repository ID without owner re-approval.
+func TestTrustProfileV4DigestRequiresReapproval(t *testing.T) {
+	p, err := domain.NewAutomationTrustProfile(fullyPopulatedTrustProfileInput())
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile: %v", err)
+	}
+	const v4Digest = domain.Digest("sha256:5dda565a91631a7058152f2aacf85a6ab7870ee12f70f5e5da6fbeea4bdb83f5")
+	stale := p
+	stale.ProfileDigest = v4Digest
+	if err := stale.Validate(); !errors.Is(err, domain.ErrProfileDigestMismatch) {
+		t.Fatalf("v4-approved digest error = %v, want ErrProfileDigestMismatch", err)
+	}
+}
+
+// TestTrustProfileV3DigestRequiresReapproval pins the earlier v4 allow-axis
+// expansion: approval under v3 did not cover the three new privileges.
 func TestTrustProfileV3DigestRequiresReapproval(t *testing.T) {
 	p, err := domain.NewAutomationTrustProfile(fullyPopulatedTrustProfileInput())
 	if err != nil {

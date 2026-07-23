@@ -22,6 +22,7 @@ func trustProfileForRepo(t *testing.T, repo string) domain.AutomationTrustProfil
 	t.Helper()
 	p, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo:                       repo,
+		RepositoryID:               123456789,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
