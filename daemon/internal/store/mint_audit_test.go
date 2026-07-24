@@ -14,6 +14,7 @@ func mintAuditFixture() store.MintAudit {
 		MintedAt:                time.Date(2026, 7, 17, 12, 0, 0, 123456789, time.UTC),
 		RegistrationID:          4365457,
 		InstallationID:          424242,
+		RepositoryID:            990011,
 		Repo:                    "freeside-ai/candidate-repo",
 		RequestedActions:        "read",
 		RequestedAdministration: "read",
@@ -138,6 +139,8 @@ func TestRecordMintAuditRejections(t *testing.T) {
 		{"negative registration id", func(r *store.MintAudit) { r.RegistrationID = -1 }, "not positive"},
 		{"zero installation id", func(r *store.MintAudit) { r.InstallationID = 0 }, "not positive"},
 		{"negative installation id", func(r *store.MintAudit) { r.InstallationID = -1 }, "not positive"},
+		{"zero repository id", func(r *store.MintAudit) { r.RepositoryID = 0 }, "not positive"},
+		{"negative repository id", func(r *store.MintAudit) { r.RepositoryID = -1 }, "not positive"},
 		{"zero minted at", func(r *store.MintAudit) { r.MintedAt = time.Time{} }, "zero mint or expiry time"},
 		{"zero expires at", func(r *store.MintAudit) { r.ExpiresAt = time.Time{} }, "zero mint or expiry time"},
 	}
@@ -166,6 +169,53 @@ func TestRecordMintAuditRejections(t *testing.T) {
 	}
 	if len(listed) != 0 {
 		t.Fatalf("rejected records left %d rows, want 0", len(listed))
+	}
+}
+
+// TestMintAuditRepositoryIdentitySurvivesRenameAndNameReuse proves the durable
+// ledger distinguishes one repository before and after a rename from a
+// different repository that later reuses the original display path.
+func TestMintAuditRepositoryIdentitySurvivesRenameAndNameReuse(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+
+	original := mintAuditFixture()
+	renamed := mintAuditFixture()
+	renamed.Repo = "freeside-ai/renamed-repo"
+	reused := mintAuditFixture()
+	reused.RepositoryID++
+
+	err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		for _, rec := range []store.MintAudit{original, renamed, reused} {
+			if _, err := tx.RecordMintAudit(ctx, rec); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("record identity history: %v", err)
+	}
+
+	var listed []store.MintAudit
+	err = s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		listed, err = tx.ListMintAudits(ctx)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("list identity history: %v", err)
+	}
+	if len(listed) != 3 {
+		t.Fatalf("listed %d audits, want 3", len(listed))
+	}
+	if listed[0].RepositoryID != listed[1].RepositoryID ||
+		listed[0].Repo == listed[1].Repo {
+		t.Errorf("rename lost canonical identity: before=%+v after=%+v", listed[0], listed[1])
+	}
+	if listed[0].Repo != listed[2].Repo ||
+		listed[0].RepositoryID == listed[2].RepositoryID {
+		t.Errorf("name reuse was not distinguished: original=%+v reused=%+v", listed[0], listed[2])
 	}
 }
 

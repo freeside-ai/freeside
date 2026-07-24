@@ -53,7 +53,9 @@ func TestNoCredentialValueRenders(t *testing.T) {
 	}
 	record := publish.MintRecord{
 		MintedAt:       fixtureTime,
+		RegistrationID: fixtureAppID,
 		InstallationID: 777,
+		RepositoryID:   fixtureRepositoryID,
 		Repo:           "evidence-repo",
 		Requested:      publish.PublishPermissions,
 		Granted:        publish.PublishPermissions,
