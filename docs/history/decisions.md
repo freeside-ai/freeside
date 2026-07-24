@@ -403,7 +403,7 @@ New in revision 15 (decider in parentheses):
 
 ---
 
-## Revision 16 (current)
+## Revision 16
 
 Revision 16 establishes the multi-account GitHub App identity model: every
 operator is a distinct agent principal, while registration topology is an
@@ -459,3 +459,43 @@ New in revision 16 (decider in parentheses):
    Rejected alternatives, residuals, and revisit conditions live in the
    decision note.
    (User; devlog 2026-07-22-2124-multi-account-agent-identity.md; #244, #251.)
+
+---
+
+## Revision 17 (current)
+
+Revision 17 replaces same-principal concurrent daemons and their unhosted
+shared CAS ledger with an active/passive movable control plane. It preserves
+per-machine GitHub App credentials while making cross-machine continuity a
+durability and takeover contract.
+
+Held from revision 16: every decision except the same-principal concurrent
+writer requirement and its principal-wide installation-mutation ledger. The
+identity, mint, onboarding, and janitor protections otherwise remain intact.
+
+New in revision 17 (decider in parentheses):
+
+1. **The control plane is movable, not concurrent.** A stable
+   `control_plane_id` spans enrolled hosts, but exactly one host owns the
+   global execution seat. `standalone` remains the zero-configuration,
+   single-machine contract. `portable` adds a remote durability frontier and
+   active-epoch compare-and-swap only after a complete activation ceremony.
+   Every portable external effect requires the current epoch and a remotely
+   durable intent; store unavailability therefore stops effects. Complete
+   encrypted checkpoints, an encrypted append-only journal, encrypted
+   content-addressed blobs, and one atomic remote head make acknowledged
+   conversations, decisions, workflow state, and artifacts recoverable on
+   another enrolled host. Graceful and crash takeover restore the whole
+   frontier and record explicit adoption; graceful handoff quiesces workspace
+   writers before capturing the normalized workspace, while crash recovery
+   returns to the last successful daemon-side push and may lose all unexported
+   in-flight changes. Store eligibility is capability- and conformance-based,
+   with direct R2 as the first reference backend and consumer sync folders
+   excluded. Host-specific data-key wraps plus an offline recovery wrap close
+   the recovery path; excluding a host first revokes and verifies denial of its
+   replica credential, then rotates the data key and wraps. Per-machine GitHub
+   App keys remain independently revocable. The single active writer replaces
+   principal-wide installation leases and binding-set versions; pending
+   envelopes bind to `active_epoch` and `durable_intent_revision`.
+   Rejected alternatives and revisit conditions live in the decision note.
+   (User; devlog 2026-07-23-1932-movable-control-plane.md; #264.)

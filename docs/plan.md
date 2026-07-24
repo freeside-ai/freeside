@@ -1,9 +1,9 @@
 ---
 title: Freeside Project Plan
-revision: 16
+revision: 17
 status: active
 phase: 1A
-updated: 2026-07-22
+updated: 2026-07-23
 ---
 
 # Freeside
@@ -643,13 +643,14 @@ workflow, Freeside blocks every reviewer-instruction path, including
 automatic review is not independent when its PR changes the instructions that
 govern that review. The gauntlet detects these paths mechanically.
 
-### 5.9 Durability: effectively-once
+### 5.9 Durability: Effectively Once
 
 | System | Authority |
 | --- | --- |
 | GitHub | Source, issues, PRs, reviews, checks, and merge |
 | SQLite | Workflow state, decisions, attempts, events, routing, conversations, and audit |
 | Artifact store | Immutable inputs and outputs |
+| Replica store (`portable`) | Encrypted recovery frontier, atomic remote head, and active-epoch fencing |
 | Providers | Transient session state |
 | Repository documentation | Promoted decisions |
 
@@ -658,26 +659,84 @@ decisions survive restart. Deterministic identities, reconciliation, and
 bounded retry make external effects converge on one intended result. Anything
 that cannot be safely retried waits for me.
 
-One principal may act through multiple daemons on different machines at the
-same time. Reconciliation, deterministic identities, and compare-and-swap
-effects therefore tolerate same-principal concurrency; no correctness rule
-assumes that a principal has a single writer.
+One logical control plane has a stable `control_plane_id`, one or more enrolled
+hosts with distinct host identities, and exactly one active host: a single
+global execution seat. GitHub App private keys remain per-machine credentials;
+the logical identity does not turn them into shared secrets. A standby may
+verify replica and takeover readiness but serves no authoritative work. It does
+not process inbox or restored outbox work, run agents, mutate workflow state,
+or execute external effects.
 
-Registration trust bindings, pending installation intents, and installation
-mutation leases are principal-wide coordinated state, not independent local
-SQLite facts. Their shared authority provides compare-and-swap by binding every
-mutation to a ledger generation and binding-set version. Before an installation
-ID exists, the lease key is `(registration_id, owner_id)`; afterward it is
-`(registration_id, installation_id)`. Only the current lease generation may
-start or resume GitHub's installation or repository-selection flow, promote an
-intent, or release the lease. A competing daemon attaches to or waits on the
-same intent; it never opens a second flow from the same base set. Multi-machine
-installation mutation fails closed when this shared CAS authority is
-unavailable.
+Freeside has two operating modes:
+
+- **`standalone` is the default, zero-configuration mode.** Local SQLite and
+  artifacts are the durable frontier, the active epoch is implicit, and the
+  operator contract permits one machine only. Running copied standalone state
+  as the same principal on two machines is out of contract, like copying a
+  GitHub App PEM. If that machine and its backup are lost, forge
+  reconstruction with human re-adjudication is the disaster floor.
+- **`portable` is required before a second enrolled host may activate.** A
+  conforming remote store holds the durability frontier in one remote head
+  whose conditional writes also carry the active host identity and epoch.
+  Portable-mode fencing applies only after the activation ceremony below
+  completes. Standalone does not pretend to fence a second copy it cannot
+  observe.
+
+Portable mode is enabled only by a completed ceremony:
+
+1. provision independently revocable store credentials for each enrolled
+   host;
+2. wrap the control-plane data key separately for every enrolled standby and
+   create the offline recovery wrap required by Section 5.10;
+3. create a complete seed checkpoint and begin the local append-only journal at
+   the same transaction boundary, then upload and verify that checkpoint and
+   all referenced blobs while standalone work continues;
+4. quiesce authoritative local mutations, flush and verify the journal delta
+   and its blob closure, then conditionally create the remote head in
+   `activating` state with the complete frontier, initial active host, and
+   initial active epoch; and
+5. pass `freesided doctor` takeover-readiness checks from every enrolled
+   standby, then conditionally change that same head to `portable` and resume
+   authoritative work.
+
+Before the final cutover, the control plane remains fully functional in
+`standalone`. The cutover pauses acknowledged mutations until step 5 succeeds
+or the candidate activation is conditionally marked abandoned. Failure resumes
+standalone from its intact local frontier; it never leaves a partly fenced
+portable state, and no standby may activate from an `activating` or abandoned
+head.
+
+In portable mode, lease expiry is never authority. A host becomes active only
+by conditionally rewriting the observed remote head to advance its active
+epoch and name its own enrolled host identity. Every external effect requires
+that head's current host identity and epoch plus a remotely durable intent whose
+referenced artifacts have reached the head's durability frontier. If the store
+cannot acknowledge that frontier or validate the host and epoch, portable
+external effects stop. A stale host that returns becomes passive before it may
+inspect or process restored outbox work. Starting an agent invocation counts as
+an external effect: after takeover, the successor does not start a replacement
+while the prior invocation may still run. It first cancels or proves that
+invocation ended, then records its adoption disposition.
+
+Epoch fencing and credential fencing solve different problems. Ordinary
+failover uses the active epoch; it does not rotate GitHub credentials. Deleting
+a lost or compromised host's App key prevents new App authentication by that
+key. When immediate installation-wide fencing is required, Freeside suspends
+the installation. Exclusion becomes terminal only after every outstanding
+installation token expires or is explicitly revoked. Revocation cannot undo an
+effect already caused with copied credentials.
+
+The active host is the only writer, so registration bindings and pending
+installation intents need no principal-wide mutation lease or binding-set
+version. A pending envelope instead binds to `active_epoch` and a monotonically
+increasing `durable_intent_revision`. The active host serializes changes in its
+local transaction, publishes the resulting intent to the portable frontier
+before redirecting or producing any external effect, and rejects an envelope
+from another epoch or superseded revision.
 
 Kill-before and kill-after tests are permanent.
 
-### 5.10 Coherent backup: encrypted checkpoints
+### 5.10 Coherent Backup: Encrypted Checkpoints
 
 Local artifact commits follow this order:
 
@@ -696,14 +755,104 @@ sqlite_snapshot_digest, artifact_manifest_digest, timestamps}`
 - Verify every digest before unattended work resumes.
 - Issue a new `sync_epoch` after rollback.
 
+Portable replication adds four object classes around that checkpoint:
+
+- periodic complete encrypted checkpoints;
+- an encrypted append-only journal that records every committed transaction
+  after the selected checkpoint;
+- encrypted content-addressed blobs for every referenced artifact and
+  workspace capture; and
+- one conditional-write remote head naming the checkpoint, journal frontier,
+  active host, active epoch, and complete content-addressed blob closure.
+
+`RemoteHead {control_plane_id, mode, active_host_id, active_epoch,
+checkpoint_id, journal_frontier, blob_closure_digest}`
+
+Only `mode: portable` grants portable authority. `activating` and abandoned
+heads are recovery evidence, not fencing or activation authority.
+
+The head advances atomically only after every referenced object is durably
+acknowledged. A conversation message, decision, workflow transition, or other
+result presented as committed or completed must therefore be recoverable by
+another enrolled host. An external effect in portable mode follows the same
+rule: its intent and every referenced artifact reach the head's durability
+frontier before execution. This extends, rather than bypasses, the Section 5.9
+outbox discipline.
+
+The replica store contract is capability-based:
+
+- strong read-after-write and overwrite consistency for control objects;
+- conditional destination writes sufficient for remote-head compare-and-swap;
+- immutable content-addressed objects;
+- persisted-write acknowledgment;
+- independently revocable per-host credentials with bounded, observable
+  revocation; the conformance suite proves a revoked credential is rejected by
+  both control-object and data-object operations before recovery resumes;
+- declared, bounded object and metadata sizes that accommodate Freeside's
+  objects; and
+- no caching or sync layer in front of mutable control objects.
+
+Every portable backend passes the same multi-client conformance suite.
+Cloudflare R2 through its direct S3 API is the first reference backend because
+it offers the required consistency and conditional `PutObject`; neither R2 nor
+S3 compatibility is an architectural assumption. A filesystem target is
+always valid for standalone backup and testing. It is portable only after the
+full suite passes for the exact filesystem and mount configuration. Consumer
+sync folders such as iCloud Drive and Dropbox are categorically ineligible.
+The availability trade is deliberate: portable external effects stop while
+the replica store is unavailable rather than risk an unfenced effect.
+
+Takeover restores a complete frontier; there is no partial mode:
+
+- **Graceful handoff:** the active host stops new work, cancels or waits for
+  every in-flight workspace writer and proves each one ended, flushes the
+  journal, performs one normalized workspace capture, and uploads and verifies
+  the resulting frontier. One conditional head write then both names that
+  frontier and names the successor host while advancing the active epoch,
+  transferring the seat atomically. The successor restores the resulting head
+  and records explicit adoption events for in-flight attempts before resuming
+  them.
+- **Crash takeover:** the successor conditionally rewrites the remote head to
+  name itself and advance the active epoch while retaining the last complete
+  frontier, restores that frontier, records the same adoption events, proves or
+  waits for any prior agent invocation to end, and reconciles from there. The
+  workspace recovery point is the last successful daemon-side push. Because
+  workers hold no GitHub write credential and crash mode performs no ad hoc
+  capture, every unexported change from an in-flight invocation may be lost.
+  Periodic or per-turn workspace capture is not yet in contract. Loss of the
+  replica store itself falls back to forge reconstruction and human
+  re-adjudication, not a partial database or artifact restore.
+
+Workspace capture uses one mechanism: a normalized, content-addressed export
+that reuses the gauntlet handoff machinery, excludes credentials and trusted
+`.git` state, and restores only as untrusted workspace input. Tier 1, one
+capture during graceful handoff, is contractual. Periodic and per-turn capture
+tiers remain an evolution of trigger policy over the same mechanism. Revisit
+them only after real handoffs measure capture cost and show that the loss
+window since the last successful daemon-side push is unacceptable.
+
 **Confidentiality is policy:**
 
 `BackupPolicy {encryption_mode, key_id, destination,
 retention_by_artifact_class, last_completed_checkpoint, last_restore_test}`
 
 - Remote checkpoints are encrypted.
+- Journals, artifact blobs, and workspace captures are encrypted with the
+  control-plane data key before remote upload. Content addresses continue to
+  identify verified plaintext; the remote objects contain only ciphertext.
 - Encryption keys live outside agent environments.
 - Backup credentials are never mounted into workspaces.
+- Each enrolled host receives its own host-specific wrap of the control-plane
+  data key. An operator-held recovery wrap remains offline and outside every
+  daemon host, so retiring the last healthy host does not destroy the only
+  recovery path.
+- Retiring, losing, or compromising a host first revokes that host's replica
+  credential. Portable effects remain stopped until the store rejects that
+  credential on both control and data paths, a remaining host selects and
+  verifies the trusted frontier, and one head compare-and-swap establishes the
+  new epoch. The control-plane data key and remaining host wraps then rotate.
+  Revocation prevents future access; it cannot erase ciphertext or keys a
+  compromised host already copied.
 - GitHub App private keys are per-machine credentials under Section 10 and are
   excluded, as are provider credentials, unless a stronger recovery design
   encrypts them separately. Recovery may therefore require reauthentication;
@@ -799,12 +948,14 @@ The engine, not an agent, runs deterministic policy jobs:
 Agents appear where judgment is the work: elaborator, implementer, remediator,
 diagnostic, finding classifier, shadow reviewer, and, later, briefer.
 
-### 5.14 Client synchronization and conversations
+### 5.14 Client Synchronization and Conversations
 
-#### Authority and consistency
+#### Authority and Consistency
 
-The daemon is the sole authority. Client databases are disposable read caches.
-The synchronization contract guarantees:
+The active daemon is the sole authority. In portable mode, activation restores
+conversations, decisions, workflow state, and artifact references from one
+remote durability frontier before the successor serves clients. Client
+databases are disposable read caches. The synchronization contract guarantees:
 
 - transactional consistency in the daemon;
 - optimistic concurrency;
@@ -814,12 +965,13 @@ The synchronization contract guarantees:
   unreachable; and
 - no consequential action until the client validates current state.
 
-#### Revision, epoch, and cache semantics
+#### Revision, Epoch, and Cache Semantics
 
 `ServerState {sync_epoch, revision}`
 
 - Every client-visible transaction increments `revision`.
-- A restore creates a new `sync_epoch`, which forces clients to discard caches.
+- A restore or portable-host takeover creates a new `sync_epoch`, which forces
+  clients to discard caches.
 - **A partial fetch never advances the whole cache.** Clients track
   `last_full_snapshot_revision` separately from
   `highest_observed_server_revision`.
@@ -830,7 +982,7 @@ The synchronization contract guarantees:
 - A periodic revision heartbeat detects lost invalidations.
 - Push and WebSocket improve latency only; correctness does not depend on them.
 
-#### Devices, commands, and caches
+#### Devices, Commands, and Caches
 
 Pairing uses a short-lived code shown or printed on the daemon host; no display
 is assumed. The daemon stores only a credential hash or device public key, never
@@ -866,7 +1018,7 @@ Client caches are part of the threat model:
 - revocation prevents future access but cannot erase content already cached.
   Freeside must not imply remote wipe.
 
-#### Conversations and discuss
+#### Conversations and Discuss
 
 Conversations are Freeside domain objects:
 
@@ -892,7 +1044,7 @@ message, transition, and replacement item in one SQLite transaction. A failed
 transaction leaves only harmless orphan blobs. Live streaming and mid-turn
 steering are deferred to Phase 3.
 
-#### Permanent Phase 1A sync and device tests
+#### Permanent Phase 1A Sync and Device Tests
 
 1. Resolving on one device produces a conflict on a second device.
 2. An offline device submitting against a superseded version is rejected and
@@ -906,8 +1058,8 @@ steering are deferred to Phase 3.
    retrieved by both as the same ordered thread.
 7. Two concurrent discuss commands against one item version produce one winner
    and no second accepted result.
-8. After daemon restore, a new epoch makes clients discard newer cursors and
-   bootstrap.
+8. After daemon restore or portable-host takeover, a new epoch makes clients
+   discard newer cursors and bootstrap.
 9. A late notification for a resolved item deep-links to canonical state and
    exposes no stale action.
 10. Retrying an attachment or message produces one artifact and one message.
@@ -1172,27 +1324,28 @@ Registration topology is owner policy, not an architectural distinction:
 
 Before redirecting to create or approve an installation or to add a repository
 to an existing selected-repository installation, `freesided onboard`
-atomically acquires the principal-wide mutation lease above and records exactly
-one single-use pending-install-or-expansion intent containing its lease
-generation and base binding-set version, the registration,
-expected numeric owner, the installation ID when known, the current trusted
-repository IDs, the exact expected post-change repository IDs, required
-`repository_selection: selected`, a callback nonce, and an expiry. The intent
-grants no authority beyond existing trusted bindings: in particular, the added
-repository cannot mint, publish, or reach attention. The janitor may leave
-exactly one remote installation matching that owner, installation ID when
-known, selected-repository mode, and exact post-change repository set untouched
-only until expiry. A same-session callback that matches the nonce is an
-acceleration, not the authority path. The daemon also polls App-authenticated
-installation state for exact pending matches, and
+records exactly one single-use pending-install-or-expansion intent containing
+its `active_epoch`, `durable_intent_revision`, registration, expected numeric
+owner, installation ID when known, current trusted repository IDs, exact
+expected post-change repository IDs, required `repository_selection:
+selected`, callback nonce, and expiry. In portable mode, the redirect waits
+until the intent and its referenced state reach the remote durability
+frontier. The intent grants no authority beyond existing trusted bindings: in
+particular, the added repository cannot mint, publish, or reach attention. The
+janitor may leave exactly one remote installation matching that owner,
+installation ID when known, selected-repository mode, active epoch, durable
+intent revision, and exact post-change repository set untouched only until
+expiry. A same-session callback that matches the nonce is an acceleration, not
+the authority path. The active daemon also polls App-authenticated installation
+state for exact pending matches, and
 `freesided onboard <repo> --resume` reopens that state after another browser,
 session, or daemon restart.
 Either path moves the intent only to ready-for-review. Promotion still requires
 canonical owner, installation, selected mode, and post-change IDs plus
 acceptance of the local one-time trust review; that acceptance atomically
 creates the installation-to-repository binding. A missing, ambiguous,
-over-broad, replayed, or expired match fails closed, compare-and-swap releases
-the lease, and ordinary reconciliation resumes.
+over-broad, replayed, stale-epoch, superseded-revision, or expired match fails
+closed, invalidates the intent, and lets ordinary reconciliation resume.
 
 Every registration, public or private, requires the always-on
 installation-grant janitor. The daemon refuses to operate a registration
@@ -1201,15 +1354,15 @@ repositories against the recorded principal, owner, installation, and
 repository bindings. Before minting any installation token, it uses the
 App-authenticated installation record to require either a trusted binding (and,
 for a public registration, a trusted owner) or an unexpired pending envelope
-whose registration, expected owner, installation ID when known, and current
-lease generation match. This pre-token gate does not claim the pending
-repository set matches. It deletes and audit-logs every other installation from
-that metadata alone, without enumerating its repositories. For a candidate
-that passes this gate, the janitor first requires the canonical installation
-response's `repository_selection` to be `selected`; a missing or different mode
-is drift even when the current repository IDs happen to match. To make complete
-repository enumeration possible, the janitor alone may mint an installation
-token without `repository_ids`, narrowed to the
+whose registration, expected owner, installation ID when known, active epoch,
+and durable intent revision match current state. This pre-token gate does not
+claim the pending repository set matches. It deletes and audit-logs every other
+installation from that metadata alone, without enumerating its repositories.
+For a candidate that passes this gate, the janitor first requires the canonical
+installation response's `repository_selection` to be `selected`; a missing or
+different mode is drift even when the current repository IDs happen to match.
+To make complete repository enumeration possible, the janitor alone may mint
+an installation token without `repository_ids`, narrowed to the
 minimum permission set accepted by GitHub's list-repositories endpoint. This
 credential remains in daemon memory, may call only that paginated read
 endpoint, is never logged, persisted, or exposed to a worker, and is revoked as
@@ -1466,14 +1619,14 @@ Safety failures are:
 - reviewer instructions from a candidate branch govern that candidate's
   review;
 - Freeside disregards a known credible critical or high shadow finding; or
-- an unencrypted checkpoint replicates off-host after encryption becomes
-  required.
+- a portable checkpoint, journal, artifact blob, or workspace capture
+  replicates off-host without its required encryption.
 
 **Kill criterion:** stop if agents work acceptably in the manual workflow but
 Freeside does not materially raise useful, correct work per unit of attention.
 Elaborator weakness alone is not a kill criterion.
 
-## 13. Decisions log
+## 13. Decisions Log
 
 Record material changes here by revision, with the decider in parentheses.
 
@@ -1486,50 +1639,32 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 16:
+Revision 17:
 
-1. **GitHub publication identity is a per-user principal with
-   owner-selected registration topology.** The default is one public,
-   personal-account-owned App per operator, installed per repository-owning
-   account through GitHub's native approval and repository-selection flow;
-   the opt-in work-account posture uses one private App per owning account
-   when the organization must own and terminate the credential. Both
-   postures bind trust to numeric App IDs, onboarded repositories, known
-   registrations and installations, and trusted principals. Both postures
-   additionally require an always-on installation-grant janitor
-   that suspends any installation with unrecorded repository grants; public
-   registrations also delete untrusted-owner installations. Unsolicited
-   authority neither authorizes Freeside minting nor reaches AttentionItems.
-   Each worker-bound installation-token request names exactly one canonical
-   repository ID and the approved permissions, and Freeside verifies the
-   returned repository, permissions, and expiry before exposing the token. A
-   daemon-internal, read-only, immediately revoked janitor credential is the
-   only full-installation enumeration path, is gated before mint to a trusted
-   installation or metadata-matched pending envelope, verifies pending
-   repository IDs only after enumeration, and is never worker-exposed. A
-   bounded pending-install-or-expansion intent with no new authority serializes
-   native installation and repository-selection changes with the janitor. The
-   binding set, pending intent, and expiring mutation lease are principal-wide
-   CAS state; competing daemons attach or wait, and multi-machine installation
-   mutation fails closed without that shared authority. Both
-   pending and trusted installations require selected-repository mode before
-   exact ID comparison. Callback, polling, or explicit local resume can make an
-   exact pending match reviewable; only the accepted local trust review promotes
-   it. Its expected owner and exact repository delta are a temporary
-   reconciliation exception but gain no authority. Grant drift enters terminal
-   quarantine and requires deletion plus fresh
-   installation; Freeside never auto-unsuspends the drifted installation.
-   Keys are per-machine, individually revocable, and tracked by GitHub's
-   displayed SHA-256 fingerprint; names are canonicalized
-   from the manifest conversion response, same-principal multi-daemon
-   concurrency is expected, and bot-user-ID-bearing `Co-authored-by` trailers
-   add human-readable provenance without replacing App-ID credential checks.
-   Native GitHub installation and organization approval are an explicit
-   account-onboarding prerequisite; Phase 1A's one-step repository target
-   begins after that prerequisite completes.
-   Rejected alternatives, residuals, and revisit conditions live in the
-   decision note.
-   (User; devlog 2026-07-22-2124-multi-account-agent-identity.md; #244, #251.)
+1. **The control plane is movable, not concurrent.** A stable
+   `control_plane_id` spans enrolled hosts, but exactly one host owns the
+   global execution seat. `standalone` remains the zero-configuration,
+   single-machine contract. `portable` adds a remote durability frontier and
+   active-epoch compare-and-swap only after a complete activation ceremony.
+   Every portable external effect requires the current epoch and a remotely
+   durable intent; store unavailability therefore stops effects. Complete
+   encrypted checkpoints, an encrypted append-only journal, encrypted
+   content-addressed blobs, and one atomic remote head make acknowledged
+   conversations, decisions, workflow state, and artifacts recoverable on
+   another enrolled host. Graceful and crash takeover restore the whole
+   frontier and record explicit adoption; graceful handoff quiesces workspace
+   writers before capturing the normalized workspace, while crash recovery
+   returns to the last successful daemon-side push and may lose all unexported
+   in-flight changes. Store eligibility is capability- and conformance-based,
+   with direct R2 as the first reference backend and consumer sync folders
+   excluded. Host-specific data-key wraps plus an offline recovery wrap close
+   the recovery path; excluding a host first revokes and verifies denial of its
+   replica credential, then rotates the data key and wraps. Per-machine GitHub
+   App keys remain independently revocable. The single active writer replaces
+   principal-wide installation leases and binding-set versions; pending
+   envelopes bind to `active_epoch` and `durable_intent_revision`.
+   Rejected alternatives and revisit conditions live in the decision note.
+   (User; devlog 2026-07-23-1932-movable-control-plane.md; #264.)
 
 ## 14. Risks
 
