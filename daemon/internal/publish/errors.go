@@ -58,6 +58,17 @@ var ErrNoAppRegistration = errors.New("no GitHub App registration for owner")
 // requires both values explicitly before relocating the credential.
 var ErrLegacyAppMigrationRequired = errors.New("legacy GitHub App credentials require explicit migration")
 
+// ErrUnreadableRegistration reports that one owner-keyed registration
+// failed the trust gate every load runs (its key, metadata, or persisted
+// identity). Enumeration still fails closed rather than skipping the
+// record: owner resolution selects among all local registrations, so a
+// partial view could bind an owner through a second registration while
+// the unreadable one binds it too, and the janitor cannot claim complete
+// coverage while one registration is invisible. The error names the
+// record so the operator repairs or quarantines exactly that
+// registration instead of the whole keystore reading as broken.
+var ErrUnreadableRegistration = errors.New("GitHub App registration in the keystore is unreadable")
+
 // ErrCredentialPermissions is returned when on-disk credential files or
 // directories are reachable by group or other. The keystore re-asserts
 // containment on every load and fails closed rather than narrowing the

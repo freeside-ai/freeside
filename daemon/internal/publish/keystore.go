@@ -35,7 +35,34 @@ const (
 	appDirName   = "github-app"
 	keyFileName  = "app.pem"
 	metaFileName = "app.json"
+
+	// quarantineDirSuffix names the sibling directory holding records the
+	// operator has withdrawn from this host. It is deliberately not one of
+	// the legacy-singleton journal suffixes (.legacy/.old/.staging), which
+	// migration treats as credential sources.
+	quarantineDirSuffix = ".quarantine"
 )
+
+// UnreadableRegistrationError names the single registration whose record
+// failed to load, so a caller can route the operator to it. OwnerID is
+// the record's directory key: safe numeric routing information, never
+// credential material.
+type UnreadableRegistrationError struct {
+	OwnerID int64
+	Err     error
+}
+
+func (e *UnreadableRegistrationError) Error() string {
+	return fmt.Sprintf("keystore: registration for owner %d is unreadable: %v", e.OwnerID, e.Err)
+}
+
+// Unwrap exposes the sentinel and the underlying cause together, so a
+// caller that already distinguishes a specific cause (widened
+// permissions, an absent key) keeps matching it, while a caller that only
+// needs "this record is unusable" matches the sentinel.
+func (e *UnreadableRegistrationError) Unwrap() []error {
+	return []error{ErrUnreadableRegistration, e.Err}
+}
 
 // Keystore stores the GitHub App's credentials (private key and
 // registration metadata) under a dedicated credentials directory with
@@ -402,10 +429,23 @@ func (k *Keystore) listAppsLocked() ([]AppCredentials, error) {
 			return nil, err
 		}
 		appDir := filepath.Join(k.dir, ownerKey)
+		// Failures from here on belong to one record, so each is attributed
+		// to its owner: an unattributed error is what made a single damaged
+		// record read as a broken keystore (#271). Attribution is not
+		// automatic, though. It claims the record is unreadable, which routes
+		// the operator to withdrawal, so it must hold only where withdrawal
+		// can actually help: recovery both promotes a record and clears the
+		// journals afterwards, and a cleanup failure after a successful
+		// promotion leaves a registration that loads fine and would be
+		// refused. Ask the record itself rather than trusting the error's
+		// shape.
 		if err := k.recoverSwap(appDir, true); err != nil {
-			return nil, err
+			if _, loadErr := k.loadRegistrationAt(appDir, ownerID); loadErr == nil {
+				return nil, err
+			}
+			return nil, k.attributeRecord(ownerID, appDir, err)
 		}
-		creds, err := k.loadAppFrom(appDir)
+		creds, err := k.loadRegistrationAt(appDir, ownerID)
 		if err != nil {
 			if errors.Is(err, ErrNoAppCredentials) {
 				active, existsErr := realDirExists(appDir)
@@ -417,19 +457,252 @@ func (k *Keystore) listAppsLocked() ([]AppCredentials, error) {
 					// there is no registration to enumerate.
 					continue
 				}
-				return nil, fmt.Errorf("keystore: registration %q is incomplete: %w", ownerKey, err)
+				return nil, k.attributeRecord(ownerID, appDir,
+					fmt.Errorf("keystore: registration %q is incomplete: %w", ownerKey, err))
 			}
-			return nil, err
+			return nil, k.attributeRecord(ownerID, appDir, err)
 		}
-		if creds.OwnerID != ownerID {
-			return nil, fmt.Errorf("keystore: registration directory %q does not match persisted owner id %d", ownerKey, creds.OwnerID)
-		}
+		// Deliberately not attributed as an unreadable record: the
+		// registration loaded and bound, so withdrawal is the wrong remedy
+		// for a leftover that will not clear, and routing the operator to it
+		// would drop a working registration out of janitor coverage. The
+		// error already names the leftover path.
 		if err := k.clearSwapLeftovers(appDir); err != nil {
 			return nil, err
 		}
 		apps = append(apps, creds)
 	}
 	return apps, nil
+}
+
+// attributeRecord names the owner a per-record failure belongs to, unless
+// the roots make every record unwithdrawable. Attribution is a promise
+// that withdrawal is the remedy, so it must not be made where withdrawal
+// is refused: routing an operator to a remedy that declines leaves
+// enumeration blocked with nowhere to go. Every attribution in the
+// enumeration loop passes through here, so the two cannot disagree about
+// when the promise holds.
+func (k *Keystore) attributeRecord(ownerID int64, appDir string, err error) error {
+	// Ask the withdrawal's own preconditions rather than re-deriving them.
+	// Every recurrence of this defect has been a condition present in one
+	// side and absent from the other, so the two sides now run the same
+	// checks and a new precondition is inherited by both.
+	if reason := k.withdrawalUnavailable(appDir); reason != nil {
+		return errors.Join(err, reason)
+	}
+	return &UnreadableRegistrationError{OwnerID: ownerID, Err: err}
+}
+
+// withdrawalUnavailable returns why a withdrawal of the record at appDir
+// would be refused, or nil when it would be accepted. It is the preflight
+// half of QuarantineApp: everything that method checks before it mutates
+// anything.
+func (k *Keystore) withdrawalUnavailable(appDir string) error {
+	if err := k.assertWithdrawalDirs(); err != nil {
+		return err
+	}
+	return k.assertWithdrawalTargets(appDir)
+}
+
+// QuarantineApp withdraws one unreadable registration from the enumerated
+// set, so a record this host cannot load stops denying resolution for
+// every other registration. It is deliberately an explicit operator act,
+// not a silent skip inside enumeration: the record's installations remain
+// live on GitHub and simply leave this host's view, which is a decision
+// only the operator can make.
+//
+// Quarantine is not deletion. The key and metadata move intact to a
+// sibling directory under the same credentials root, keeping them
+// available for repair or forensics and inside the containment boundary
+// that keeps App keys out of checkpoints and workspaces.
+//
+// It reaches every state that blocks enumeration, including a record
+// whose persisted identity does not bind to its directory key and one
+// left as an invalid recovery journal with no active directory; refusing
+// either would route the operator to a remedy that declines the record
+// enumeration rejected.
+//
+// A readable registration is refused, judged by the same gate enumeration
+// applies: withdrawing a working registration would drop it from janitor
+// coverage while its installations keep running, which is the fail-open
+// direction. An existing quarantine record whose source is still present
+// is a distinct earlier withdrawal and is refused rather than
+// overwritten; one with nothing left to move is this owner's own
+// withdrawal, which completes idempotently.
+func (k *Keystore) QuarantineApp(ownerID int64) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
+	// The directories gate everything below, so they are checked first: a
+	// mode that blocks reads, traversal, or renames disables this remedy for
+	// every record alike, and the legacy and record checks cannot even be
+	// evaluated through an unsearchable root.
+	if err := k.assertWithdrawalDirs(); err != nil {
+		return err
+	}
+	quarantineDir := k.dir + quarantineDirSuffix
+
+	legacy, err := k.hasLegacyLayout()
+	if err != nil {
+		return err
+	}
+	if legacy {
+		return ErrLegacyAppMigrationRequired
+	}
+	ownerKey, err := appOwnerKey(ownerID)
+	if err != nil {
+		return err
+	}
+	appDir := filepath.Join(k.dir, ownerKey)
+	// Settle the swap journals first, so quarantine acts on the same state
+	// enumeration would have loaded rather than on a half-finished save. A
+	// recovery that itself fails is not a reason to refuse: an invalid
+	// journal is one of the states that blocks enumeration, and withdrawal
+	// is precisely its remedy.
+	recoverErr := k.recoverSwap(appDir, true)
+	sources, err := k.quarantineSources(appDir)
+	if err != nil {
+		return err
+	}
+	if len(sources) == 0 {
+		if recoverErr != nil {
+			return recoverErr
+		}
+		// Nothing left to move means either this owner was never here or an
+		// earlier attempt moved everything and then failed at the durability
+		// barrier. A failing sync cannot be journalled past, since the
+		// journal write carries the same barrier, so the tractable guarantee
+		// is that a retry finishes the sequence rather than reporting a
+		// missing record over a withdrawal that already happened. Re-issuing
+		// both syncs is idempotent, and reporting success is honest: the
+		// postcondition, withdrawn and preserved, holds.
+		withdrawn, err := k.quarantineHoldsRecord(quarantineDir, ownerKey)
+		if err != nil {
+			return err
+		}
+		if !withdrawn {
+			return ErrNoAppRegistration
+		}
+		return k.syncWithdrawal(quarantineDir)
+	}
+	if _, err := k.loadRegistrationAt(appDir, ownerID); err == nil {
+		return fmt.Errorf(
+			"keystore: registration for owner %d is readable; quarantine withdraws only unreadable records",
+			ownerID,
+		)
+	}
+
+	if err := k.assertWithdrawalTargets(appDir); err != nil {
+		return err
+	}
+	if err := mkdirAllSync(quarantineDir); err != nil {
+		return fmt.Errorf("keystore: create quarantine directory: %w", err)
+	}
+	activePresent := slices.Contains(sources, appDir)
+	for _, source := range sources {
+		if source == appDir {
+			continue
+		}
+		target := filepath.Join(quarantineDir, filepath.Base(source))
+		if err := os.Rename(source, target); err != nil {
+			return fmt.Errorf("keystore: quarantine registration for owner %d: %w", ownerID, err)
+		}
+		// Persist each journal removal before the next rename. Rename order
+		// alone does not survive a crash, and a journal left on the source
+		// side is promotion-capable: with no active directory, recovery
+		// adopts a valid .old or .staging and resurrects the registration
+		// the operator withdrew. Syncing here bounds the exposure to the one
+		// rename in flight rather than any earlier one, and subsumes the
+		// barrier the active record would otherwise need.
+		if err := k.syncWithdrawal(quarantineDir); err != nil {
+			return err
+		}
+	}
+	if activePresent {
+		target := filepath.Join(quarantineDir, filepath.Base(appDir))
+		if err := os.Rename(appDir, target); err != nil {
+			return fmt.Errorf("keystore: quarantine registration for owner %d: %w", ownerID, err)
+		}
+	}
+	return k.syncWithdrawal(quarantineDir)
+}
+
+// syncWithdrawal persists the withdrawal's two directory changes.
+// Destination first: this is a cross-directory rename, so persisting the
+// source's removal before the destination's new entry would make a crash
+// between them lose the credential outright. In this order the only
+// crash-side divergence is a stale source entry, which still holds the
+// record and is refused rather than silently overwritten on the retry.
+// Re-issuing both is idempotent, so a retry after a transient sync failure
+// completes the sequence.
+func (k *Keystore) syncWithdrawal(quarantineDir string) error {
+	if err := syncDir(quarantineDir); err != nil {
+		return fmt.Errorf("keystore: sync quarantine directory: %w", err)
+	}
+	if err := syncDir(k.dir); err != nil {
+		return fmt.Errorf("keystore: sync quarantined registration: %w", err)
+	}
+	return nil
+}
+
+// quarantineHoldsRecord reports whether any piece of one owner's record is
+// already withdrawn, which distinguishes a completed-but-unsynced
+// withdrawal from an owner that was never present.
+func (k *Keystore) quarantineHoldsRecord(quarantineDir, ownerKey string) (bool, error) {
+	for _, suffix := range []string{"", ".staging", ".old"} {
+		exists, err := realDirExists(filepath.Join(quarantineDir, ownerKey+suffix))
+		if err != nil {
+			return false, err
+		}
+		if exists {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// assertWithdrawalRoot rejects a root the withdrawal cannot operate
+// through, in either direction: too permissive to trust, or missing an
+// owner bit it needs.
+func (k *Keystore) assertWithdrawalRoot(dir string) error {
+	if err := assertMode(dir, true); err != nil {
+		return err
+	}
+	usable, err := rootUsable(dir)
+	if err != nil {
+		return err
+	}
+	if !usable {
+		return fmt.Errorf("keystore: %s lacks owner access: %w", dir, ErrCredentialPermissions)
+	}
+	return nil
+}
+
+// quarantineSources lists any swap journals recoverSwap left behind and
+// the active registration directory, in that order. All of them move
+// together: leaving a .staging or .old sibling would let the next
+// enumeration promote the record back into the active set, undoing the
+// withdrawal.
+//
+// The order is load-bearing, not cosmetic. Moving the active directory
+// last means a failure part-way through always leaves the active
+// directory in place, so recovery never sees the journals-without-active
+// shape it would promote, and the retry finds free destinations for
+// whatever is left. Moving it first would let a later failure strand the
+// record: recovery would promote a journal into the active slot the retry
+// then finds already occupied in quarantine, wedging the only remedy.
+func (k *Keystore) quarantineSources(appDir string) ([]string, error) {
+	var sources []string
+	for _, candidate := range []string{appDir + ".staging", appDir + ".old", appDir} {
+		exists, err := realDirExists(candidate)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			sources = append(sources, candidate)
+		}
+	}
+	return sources, nil
 }
 
 // MigrateLegacyApp relocates the former singleton only after the caller
@@ -598,6 +871,27 @@ func (k *Keystore) loadAppFrom(dir string) (AppCredentials, error) {
 		WebhookSecret: meta.WebhookSecret,
 		ClientSecret:  meta.ClientSecret,
 	}, nil
+}
+
+// loadRegistrationAt is the keystore's one readability gate: the record
+// must load, and its persisted identity must bind to the directory key it
+// was found under. Enumeration and quarantine share it so they cannot
+// disagree about which records are usable; when they did, the doctor
+// could route an operator to quarantine a record quarantine then refused,
+// leaving resolution blocked with no remedy.
+func (k *Keystore) loadRegistrationAt(appDir string, ownerID int64) (AppCredentials, error) {
+	creds, err := k.loadAppFrom(appDir)
+	if err != nil {
+		return AppCredentials{}, err
+	}
+	if creds.OwnerID != ownerID {
+		return AppCredentials{}, fmt.Errorf(
+			"keystore: registration directory %q does not match persisted owner id %d",
+			filepath.Base(appDir),
+			creds.OwnerID,
+		)
+	}
+	return creds, nil
 }
 
 // recoverSwap repairs the only two crash states in which no active
@@ -841,6 +1135,87 @@ func (k *Keystore) loadLegacyAppFrom(dir string) (AppCredentials, error) {
 		WebhookSecret: meta.WebhookSecret,
 		ClientSecret:  meta.ClientSecret,
 	}, nil
+}
+
+// withdrawalAvailable reports whether a withdrawal would be accepted at
+// all: every directory it operates through, judged by the same gate the
+// withdrawal itself applies. A mode deviation in either direction
+// disqualifies a directory — too permissive to trust with credential
+// material, or missing an owner bit the withdrawal needs — and either way
+// it disables the remedy for every record alike, so a failure under it is
+// keystore-wide and must not be attributed to whichever record met it.
+//
+// narrowDir deliberately lets a caller keep a directory tighter than 0700,
+// so an under-permissive one is a supported state rather than corruption;
+// it simply means the remedy is unavailable until the operator restores
+// access.
+func (k *Keystore) assertWithdrawalDirs() error {
+	if err := k.assertWithdrawalRoot(k.root); err != nil {
+		return err
+	}
+	// Ordered deliberately: the registration root cannot be examined through
+	// an unsearchable credentials root, and neither can the quarantine
+	// directory beside it.
+	exists, err := realDirExists(k.dir)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNoAppRegistration
+	}
+	if err := k.assertWithdrawalRoot(k.dir); err != nil {
+		return err
+	}
+	quarantineDir := k.dir + quarantineDirSuffix
+	quarantineExists, err := realDirExists(quarantineDir)
+	if err != nil {
+		return err
+	}
+	if !quarantineExists {
+		// Absent is fine: it is created through the credentials root, which
+		// this function already accepted.
+		return nil
+	}
+	// The destination is as load-bearing as the sources: one the owner
+	// cannot write into fails every rename, and one that is too permissive
+	// would hold credential material exposed.
+	return k.assertWithdrawalRoot(quarantineDir)
+}
+
+// assertWithdrawalTargets rejects the destinations a withdrawal of the
+// record at appDir would occupy. It runs after recovery has settled the
+// swap journals, since recovery changes which pieces exist. A destination
+// whose source still exists is a distinct earlier withdrawal for the same
+// owner, and overwriting it would be the loss this path exists to avoid; a
+// piece an interrupted attempt already moved is absent from the source
+// list entirely, so its destination is never examined and the retry
+// resumes. A malformed destination — a file or symlink where a directory
+// belongs — fails the same way.
+func (k *Keystore) assertWithdrawalTargets(appDir string) error {
+	sources, err := k.quarantineSources(appDir)
+	if err != nil {
+		return err
+	}
+	quarantineDir := k.dir + quarantineDirSuffix
+	for _, source := range sources {
+		target := filepath.Join(quarantineDir, filepath.Base(source))
+		exists, err := realDirExists(target)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return fmt.Errorf("keystore: quarantine record already exists at %s: %w", target, ErrCredentialPermissions)
+		}
+	}
+	return nil
+}
+
+func rootUsable(dir string) (bool, error) {
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return false, fmt.Errorf("keystore: lstat %s: %w", dir, err)
+	}
+	return info.Mode().Perm()&0o700 == 0o700, nil
 }
 
 func assertMode(path string, dir bool) error {

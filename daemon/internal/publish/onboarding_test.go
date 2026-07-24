@@ -586,6 +586,98 @@ func TestCredentialDoctorDetections(t *testing.T) {
 		assertFinding(t, findings, publish.CredentialFindingBadPermissions)
 	})
 
+	// A keystore-wide failure has no owner to name; a per-record one always
+	// does, whichever finding code it lands on. Without the owner the
+	// operator cannot tell which of several registrations blocks every
+	// resolver and janitor cycle, which is the whole point of #271.
+	t.Run("per-record failures name their owner", func(t *testing.T) {
+		cases := []struct {
+			name   string
+			damage func(t *testing.T, appDir string)
+			want   publish.CredentialFindingCode
+		}{
+			{"absent key", func(t *testing.T, appDir string) {
+				if err := os.Remove(filepath.Join(appDir, "app.pem")); err != nil {
+					t.Fatal(err)
+				}
+			}, publish.CredentialFindingMissingKey},
+			{"widened key permissions", func(t *testing.T, appDir string) {
+				//nolint:gosec // deliberately exposed doctor fixture
+				if err := os.Chmod(filepath.Join(appDir, "app.pem"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}, publish.CredentialFindingBadPermissions},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				ks := newTestKeystore(t)
+				damaged := publicFixtureCredentials(t)
+				other := publicFixtureCredentials(t)
+				other.OwnerID = damaged.OwnerID + 1
+				other.AppID = damaged.AppID + 1
+				for _, creds := range []publish.AppCredentials{damaged, other} {
+					if err := ks.SaveApp(creds); err != nil {
+						t.Fatal(err)
+					}
+				}
+				tc.damage(t, filepath.Join(
+					ks.Dir(), "github-app", strconv.FormatInt(damaged.OwnerID, 10),
+				))
+
+				onboarder, _, _ := newTestOnboarder(t, ks, activeJanitorStatus{})
+				findings, err := publish.NewCredentialDoctor(onboarder, activeJanitorStatus{}).
+					Check(context.Background(), nil)
+				if err != nil {
+					t.Fatalf("Check: %v", err)
+				}
+				assertFinding(t, findings, tc.want)
+				if len(findings) != 1 || findings[0].OwnerID != damaged.OwnerID {
+					t.Fatalf("findings = %+v, want owner %d", findings, damaged.OwnerID)
+				}
+			})
+		}
+	})
+
+	t.Run("keystore-wide failure names no owner", func(t *testing.T) {
+		ks := newTestKeystore(t)
+		if err := ks.SaveApp(publicFixtureCredentials(t)); err != nil {
+			t.Fatal(err)
+		}
+		// Widening the registration root, not one record: the failure belongs
+		// to no single owner, so the finding must not name one.
+		if err := os.Chmod(filepath.Join(ks.Dir(), "github-app"), 0o755); err != nil { //nolint:gosec // deliberately exposed doctor fixture
+			t.Fatal(err)
+		}
+		onboarder, _, _ := newTestOnboarder(t, ks, activeJanitorStatus{})
+		findings, err := publish.NewCredentialDoctor(onboarder, activeJanitorStatus{}).
+			Check(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Check: %v", err)
+		}
+		assertFinding(t, findings, publish.CredentialFindingBadPermissions)
+		if len(findings) != 1 || findings[0].OwnerID != 0 {
+			t.Fatalf("findings = %+v, want no owner named", findings)
+		}
+	})
+
+	t.Run("unreadable registration", func(t *testing.T) {
+		ks := newTestKeystore(t)
+		if err := ks.SaveApp(publicFixtureCredentials(t)); err != nil {
+			t.Fatal(err)
+		}
+		stripOwnerMetadata(t, ks, testOwnerID)
+		onboarder, _, _ := newTestOnboarder(t, ks, activeJanitorStatus{})
+		findings, err := publish.NewCredentialDoctor(onboarder, activeJanitorStatus{}).
+			Check(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Check over an unreadable record returned an operational error: %v", err)
+		}
+		assertFinding(t, findings, publish.CredentialFindingUnreadableRecord)
+		if len(findings) != 1 || findings[0].OwnerID != testOwnerID {
+			t.Fatalf("findings = %+v, want the unreadable record's owner %d", findings, testOwnerID)
+		}
+	})
+
 	t.Run("visibility mismatch", func(t *testing.T) {
 		ks := newTestKeystore(t)
 		if err := ks.SaveApp(publicFixtureCredentials(t)); err != nil {
