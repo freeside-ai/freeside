@@ -34,6 +34,9 @@ func saveResolverApp(t *testing.T, ks *publish.Keystore, owner string, ownerID, 
 type activeJanitorStatus struct{}
 
 func (activeJanitorStatus) ActiveFor(int64) bool { return true }
+func (activeJanitorStatus) AllowsRepository(int64, int64, int64) bool {
+	return true
+}
 
 func newActiveResolver(
 	ks *publish.Keystore,

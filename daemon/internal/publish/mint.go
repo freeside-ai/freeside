@@ -96,8 +96,7 @@ func NewMinter(ks *Keystore, client *http.Client, baseURL string, rec Recorder, 
 }
 
 // NewMinterWithJanitor wires minting to the always-on janitor required by
-// public registrations. NewMinter remains the private-registration path and
-// fails closed if its keystore later contains a public registration.
+// every registration. NewMinter is the explicit fail-closed path.
 func NewMinterWithJanitor(
 	ks *Keystore,
 	client *http.Client,
@@ -196,6 +195,15 @@ func (m *Minter) resolveTrusted(ctx context.Context, repo string) (InstallationB
 	binding, err := m.resolver.Resolve(ctx, parsed.owner)
 	if err != nil {
 		return InstallationBinding{}, repoRef{}, 0, fmt.Errorf("mint: %w", err)
+	}
+	if !m.resolver.allowsRepository(binding.RegistrationID, binding.InstallationID, current.Profile.RepositoryID) {
+		return InstallationBinding{}, repoRef{}, 0, fmt.Errorf(
+			"mint: registration %d installation %d repository %d: %w",
+			binding.RegistrationID,
+			binding.InstallationID,
+			current.Profile.RepositoryID,
+			ErrInstallationGrantUntrusted,
+		)
 	}
 	return binding, parsed, current.Profile.RepositoryID, nil
 }

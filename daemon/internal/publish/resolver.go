@@ -95,18 +95,16 @@ type InstallationResolver struct {
 	janitor  JanitorStatus
 }
 
-// NewInstallationResolver wires owner resolution to the registration keystore
-// and GitHub's App-authenticated installation endpoint. It deliberately has no
-// janitor status, so a keystore containing a public registration fails closed;
-// production composition for public registrations uses
-// NewInstallationResolverWithJanitor.
+// NewInstallationResolver wires owner resolution without janitor coverage.
+// It exists for explicit fail-closed construction tests; every registration
+// will be refused before GitHub is contacted.
 func NewInstallationResolver(ks *Keystore, client *http.Client, baseURL string, now func() time.Time) *InstallationResolver {
 	return &InstallationResolver{keystore: ks, client: noRedirect(client), baseURL: baseURL, now: now}
 }
 
 // NewInstallationResolverWithJanitor wires resolution to the always-on
 // installation janitor. The status is checked before any registration reaches
-// GitHub, and every public registration must be covered by the janitor's latest
+// GitHub, and every registration must be covered by the janitor's latest
 // successful pass.
 func NewInstallationResolverWithJanitor(
 	ks *Keystore,
@@ -154,8 +152,7 @@ func (r *InstallationResolver) Resolve(ctx context.Context, owner string) (Insta
 		return InstallationBinding{}, fmt.Errorf("installation resolution: %w", ErrNoAppCredentials)
 	}
 	for _, app := range apps {
-		if app.Visibility == AppVisibilityPublic &&
-			(r.janitor == nil || !r.janitor.ActiveFor(app.AppID)) {
+		if r.janitor == nil || !r.janitor.ActiveFor(app.AppID) {
 			return InstallationBinding{}, fmt.Errorf(
 				"installation resolution: registration %d: %w",
 				app.AppID,
@@ -235,6 +232,13 @@ func (r *InstallationResolver) Resolve(ctx context.Context, owner string) (Insta
 		return InstallationBinding{}, fmt.Errorf("installation resolution: owner %q matched multiple registrations: %w",
 			owner, ErrAmbiguousInstallation)
 	}
+}
+
+func (r *InstallationResolver) allowsRepository(
+	registrationID, installationID, repositoryID int64,
+) bool {
+	return r != nil && r.janitor != nil &&
+		r.janitor.AllowsRepository(registrationID, installationID, repositoryID)
 }
 
 func expectedInstallationOwner(app AppCredentials, requested string) string {

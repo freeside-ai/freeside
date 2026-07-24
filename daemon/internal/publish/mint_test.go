@@ -59,6 +59,25 @@ func newRegisteredKeystore(t *testing.T) *publish.Keystore {
 
 func fixedNow() time.Time { return fixtureTime }
 
+func newCoveredMinter(
+	ks *publish.Keystore,
+	client *http.Client,
+	baseURL string,
+	recorder publish.Recorder,
+	trust publish.TrustSource,
+	now func() time.Time,
+) *publish.Minter {
+	return publish.NewMinterWithJanitor(
+		ks,
+		client,
+		baseURL,
+		recorder,
+		trust,
+		now,
+		activeJanitorStatus{},
+	)
+}
+
 // newMintServer serves the App-authenticated installation discovery endpoint
 // before delegating the token request to handler.
 func newMintServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
@@ -113,7 +132,7 @@ func TestMintInstallationToken(t *testing.T) {
 	defer srv.Close()
 
 	rec := &captureRecorder{}
-	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
+	m := newCoveredMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
 	tok, err := m.MintInstallationToken(context.Background(), testTrustRepo)
 	if err != nil {
 		t.Fatalf("MintInstallationToken: %v", err)
@@ -213,7 +232,7 @@ func TestMintRejectsGrantMismatch(t *testing.T) {
 			defer srv.Close()
 
 			rec := &captureRecorder{}
-			m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
+			m := newCoveredMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
 			_, err := m.MintInstallationToken(context.Background(), testTrustRepo)
 			if !errors.Is(err, publish.ErrGrantMismatch) {
 				t.Fatalf("err = %v, want ErrGrantMismatch", err)
@@ -257,7 +276,7 @@ func TestMintRejectsUnusableToken(t *testing.T) {
 			defer srv.Close()
 
 			rec := &captureRecorder{}
-			m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
+			m := newCoveredMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
 			_, err := m.MintInstallationToken(context.Background(), testTrustRepo)
 			if err == nil {
 				t.Error("unusable token accepted, want error")
@@ -285,7 +304,7 @@ func TestMintAPIError(t *testing.T) {
 	defer srv.Close()
 
 	rec := &captureRecorder{}
-	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
+	m := newCoveredMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
 	_, err := m.MintInstallationToken(context.Background(), testTrustRepo)
 	if !errors.Is(err, publish.ErrGitHubAPI) {
 		t.Fatalf("err = %v, want ErrGitHubAPI", err)
@@ -314,7 +333,7 @@ func TestMintFailsWhenRecorderFails(t *testing.T) {
 	defer srv.Close()
 
 	rec := &captureRecorder{err: errors.New("audit disk full")}
-	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
+	m := newCoveredMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
 	if _, err := m.MintInstallationToken(context.Background(), testTrustRepo); err == nil {
 		t.Error("mint succeeded with a failing recorder, want error")
 	}
@@ -323,7 +342,7 @@ func TestMintFailsWhenRecorderFails(t *testing.T) {
 // TestMintValidation covers the fail-fast argument checks.
 func TestMintValidation(t *testing.T) {
 	ks := newRegisteredKeystore(t)
-	m := publish.NewMinter(ks, http.DefaultClient, "http://unreachable.invalid", &captureRecorder{}, conformantTrust(t), fixedNow)
+	m := newCoveredMinter(ks, http.DefaultClient, "http://unreachable.invalid", &captureRecorder{}, conformantTrust(t), fixedNow)
 	if _, err := m.MintInstallationToken(context.Background(), "repo"); err == nil {
 		t.Error("bare repository name accepted, want error")
 	}
@@ -340,7 +359,7 @@ func TestMintRejectsRepositoryOutsideTrustedSet(t *testing.T) {
 		requests++
 		return nil, errors.New("request should not be sent")
 	})}
-	m := publish.NewMinter(
+	m := newCoveredMinter(
 		newRegisteredKeystore(t),
 		client,
 		"https://api.github.test",
@@ -387,7 +406,7 @@ func TestMintRejectsRegistrationChangeAfterResolution(t *testing.T) {
 	defer srv.Close()
 
 	rec := &captureRecorder{}
-	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
+	m := newCoveredMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
 	if _, err := m.MintInstallationToken(context.Background(), testTrustRepo); !errors.Is(err, publish.ErrInstallationResolution) {
 		t.Fatalf("err = %v, want ErrInstallationResolution", err)
 	}
@@ -429,7 +448,7 @@ func TestStoreRecorder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStoreRecorder: %v", err)
 	}
-	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
+	m := newCoveredMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
 	if _, err := m.MintInstallationToken(context.Background(), testTrustRepo); err != nil {
 		t.Fatalf("MintInstallationToken: %v", err)
 	}
@@ -490,7 +509,7 @@ func TestStoreRecorderFailsClosed(t *testing.T) {
 		t.Fatalf("store.Close: %v", err)
 	}
 
-	m := publish.NewMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
+	m := newCoveredMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
 	if _, err := m.MintInstallationToken(context.Background(), testTrustRepo); err == nil {
 		t.Error("mint succeeded with an unwritable audit store, want error")
 	}
