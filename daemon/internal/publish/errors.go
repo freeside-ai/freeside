@@ -46,10 +46,10 @@ var ErrCredentialsInsideStateDir = errors.New("credentials directory overlaps th
 // (recovery may require reauthentication, §5.10).
 var ErrNoAppCredentials = errors.New("no GitHub App credentials in the keystore")
 
-// ErrNoAppRegistration is returned by Keystore.LoadApp when the requested
-// numeric owner has no registration. It is distinct from the entirely empty
-// keystore state so resolution can fail closed without hiding which binding
-// is absent.
+// ErrNoAppRegistration is returned when the requested numeric owner or
+// explicitly selected App identity has no local registration. It is distinct
+// from the entirely empty keystore state so resolution can fail closed without
+// hiding which binding is absent.
 var ErrNoAppRegistration = errors.New("no GitHub App registration for owner")
 
 // ErrLegacyAppMigrationRequired is returned while the former singleton
@@ -69,6 +69,20 @@ var ErrCredentialPermissions = errors.New("credential path permissions are too p
 // comes back without a temporary code, i.e. the user cancelled or
 // GitHub rejected the manifest.
 var ErrRegistrationDenied = errors.New("app manifest registration returned no code")
+
+// ErrAmbiguousAppRegistration reports that the default public onboarding flow
+// found more than one local registration and therefore cannot infer which
+// principal the operator intends to use.
+var ErrAmbiguousAppRegistration = errors.New("multiple GitHub App registrations require an explicit selection")
+
+// ErrAppRegistrationMismatch reports that trusted registration metadata and
+// the canonical App observed with the candidate private key disagree. Returned
+// App strings are deliberately omitted from the error.
+var ErrAppRegistrationMismatch = errors.New("GitHub App registration metadata does not match the canonical App")
+
+// ErrAppVisibilityMismatch reports that the locally recorded public/private
+// posture disagrees with GitHub's independently observed visibility.
+var ErrAppVisibilityMismatch = errors.New("GitHub App visibility does not match the recorded registration")
 
 // ErrGrantMismatch is returned when GitHub grants an installation
 // token whose permission or repository scope differs from the request

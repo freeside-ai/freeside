@@ -99,7 +99,9 @@ type InstallationResolver struct {
 // It exists for explicit fail-closed construction tests; every registration
 // will be refused before GitHub is contacted.
 func NewInstallationResolver(ks *Keystore, client *http.Client, baseURL string, now func() time.Time) *InstallationResolver {
-	return &InstallationResolver{keystore: ks, client: noRedirect(client), baseURL: baseURL, now: now}
+	// Trailing slash trimmed: installation paths concatenate a leading-slash
+	// path onto baseURL, so a raw trailing slash would double the separator.
+	return &InstallationResolver{keystore: ks, client: noRedirect(client), baseURL: strings.TrimRight(baseURL, "/"), now: now}
 }
 
 // NewInstallationResolverWithJanitor wires resolution to the always-on
@@ -116,7 +118,7 @@ func NewInstallationResolverWithJanitor(
 	return &InstallationResolver{
 		keystore: ks,
 		client:   noRedirect(client),
-		baseURL:  baseURL,
+		baseURL:  strings.TrimRight(baseURL, "/"),
 		now:      now,
 		janitor:  janitor,
 	}
@@ -138,6 +140,31 @@ type installationResponse struct {
 // its owner's single installation. No match or more than one match fails
 // closed.
 func (r *InstallationResolver) Resolve(ctx context.Context, owner string) (InstallationBinding, error) {
+	return r.resolve(ctx, owner, 0)
+}
+
+// ResolveRegistration returns the installation for owner under one explicitly
+// selected registration. Onboarding uses this scoped form so another local App
+// cannot satisfy the selected registration's prerequisite.
+func (r *InstallationResolver) ResolveRegistration(
+	ctx context.Context,
+	owner string,
+	registrationID int64,
+) (InstallationBinding, error) {
+	if registrationID <= 0 {
+		return InstallationBinding{}, fmt.Errorf(
+			"installation resolution: registration id %d is invalid",
+			registrationID,
+		)
+	}
+	return r.resolve(ctx, owner, registrationID)
+}
+
+func (r *InstallationResolver) resolve(
+	ctx context.Context,
+	owner string,
+	registrationID int64,
+) (InstallationBinding, error) {
 	if err := validateOwnerLogin(owner); err != nil {
 		return InstallationBinding{}, fmt.Errorf("installation resolution: %w", err)
 	}
@@ -150,6 +177,29 @@ func (r *InstallationResolver) Resolve(ctx context.Context, owner string) (Insta
 	}
 	if len(apps) == 0 {
 		return InstallationBinding{}, fmt.Errorf("installation resolution: %w", ErrNoAppCredentials)
+	}
+	if registrationID > 0 {
+		selected := make([]AppCredentials, 0, 1)
+		for _, app := range apps {
+			if app.AppID == registrationID {
+				selected = append(selected, app)
+			}
+		}
+		if len(selected) == 0 {
+			return InstallationBinding{}, fmt.Errorf(
+				"installation resolution: registration %d: %w",
+				registrationID,
+				ErrNoAppRegistration,
+			)
+		}
+		if len(selected) > 1 {
+			return InstallationBinding{}, fmt.Errorf(
+				"installation resolution: registration %d is duplicated: %w",
+				registrationID,
+				ErrAmbiguousAppRegistration,
+			)
+		}
+		apps = selected
 	}
 	for _, app := range apps {
 		if r.janitor == nil || !r.janitor.ActiveFor(app.AppID) {

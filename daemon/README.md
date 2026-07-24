@@ -34,3 +34,32 @@ func TestRender(t *testing.T) {
   ```
 
 `internal/golden` and its `golden_test.go` are the worked example.
+
+## GitHub App Credential Onboarding
+
+The default publish identity is one public GitHub App owned by the operator's
+personal account. A fresh operator registers it through GitHub's manifest flow;
+Freeside generates the suggested name, pins the publish permission set, and
+writes the conversion key directly to the protected credentials directory.
+
+Repository onboarding uses GitHub's native installation page:
+`https://github.com/apps/<app-slug>/installations/new`. Select only the
+repository being onboarded. For an organization, GitHub may turn that action
+into a request for an organization owner's approval; after approval, resume
+onboarding and Freeside detects the installation through canonical
+App-authenticated discovery.
+
+Every machine uses a distinct private key within the same registration. On a
+new machine, open the App's personal-account settings page, generate a private
+key, and import the downloaded PKCS#1 PEM. Freeside authenticates the key
+against the recorded numeric App ID, owner, canonical name and slug, and
+visibility before protected storage accepts it, then records the same SHA-256
+public-key fingerprint GitHub displays. Delete the downloaded PEM after the
+import succeeds. Copying a PEM between machines is outside the contract because
+it prevents independent machine revocation.
+
+Publish-credential doctor checks cover the keystore layout and owner-only
+modes, expected per-registration key presence, canonical visibility metadata,
+active janitor coverage for every registration, and the former singleton
+layout. Reusing one key across multiple local registrations is also reported,
+the PEM-copy pattern that can be detected from one machine.

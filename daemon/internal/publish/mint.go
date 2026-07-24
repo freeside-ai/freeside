@@ -84,6 +84,9 @@ type Minter struct {
 // client is wrapped to never follow redirects (see noRedirect), so a
 // caller-supplied CheckRedirect cannot carry the App JWT anywhere.
 func NewMinter(ks *Keystore, client *http.Client, baseURL string, rec Recorder, trust TrustSource, now func() time.Time) *Minter {
+	// Normalize once: the mint path (m.baseURL+"/…") concatenates a leading-slash
+	// path, so a raw trailing slash would double the separator.
+	baseURL = strings.TrimRight(baseURL, "/")
 	return &Minter{
 		keystore: ks,
 		resolver: NewInstallationResolver(ks, client, baseURL, now),
@@ -106,6 +109,7 @@ func NewMinterWithJanitor(
 	now func() time.Time,
 	janitor JanitorStatus,
 ) *Minter {
+	baseURL = strings.TrimRight(baseURL, "/")
 	return &Minter{
 		keystore: ks,
 		resolver: NewInstallationResolverWithJanitor(ks, client, baseURL, now, janitor),

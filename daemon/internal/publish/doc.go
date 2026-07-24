@@ -11,6 +11,13 @@
 // minimum permission set (Minter, PublishPermissions); a per-mint audit
 // record naming the registration (MintRecord, Recorder); and the
 // redaction boundary every credential value lives behind (Secret).
+// Public registration and per-machine-key onboarding (issue #248) composes
+// those seams through CredentialOnboarder: it emits the personal manifest,
+// key-settings, and native installation actions without owning CLI effects;
+// verifies imported keys against canonical App identity and visibility; and
+// polls installation discovery. CredentialDoctor checks containment, expected
+// key presence, visibility, janitor coverage, legacy layout, and detectable
+// cross-registration key reuse.
 // Public registrations additionally require the always-on
 // InstallationJanitor: a successful exhaustive pass activates their runtime
 // gate, unsolicited owner installations are audit-recorded then removed, and
