@@ -136,7 +136,16 @@ type Registrar struct {
 // send the code-bearing conversion URL as the Referer to the target,
 // and the code is credential-equivalent until GitHub consumes it.
 func NewRegistrar(ks *Keystore, client *http.Client, apiBaseURL, webBaseURL string) *Registrar {
-	return &Registrar{keystore: ks, client: noRedirect(client), apiBaseURL: apiBaseURL, webBaseURL: webBaseURL}
+	// Trailing slashes are trimmed here because every URL below concatenates an
+	// absolute, leading-slash path onto the base; a raw trailing slash would
+	// emit a doubled separator (`...//settings/apps/new`) that servers and
+	// proxies may treat as a distinct path or redirect.
+	return &Registrar{
+		keystore:   ks,
+		client:     noRedirect(client),
+		apiBaseURL: strings.TrimRight(apiBaseURL, "/"),
+		webBaseURL: strings.TrimRight(webBaseURL, "/"),
+	}
 }
 
 // ManifestForm returns the owner-targeted form action and fields the user's
