@@ -101,7 +101,7 @@ func newLiveMinter(t *testing.T) (m *publish.Minter, repo string, profile domain
 	client := &http.Client{Timeout: 30 * time.Second}
 	profile = trustProfileForRepoID(t, repo, repositoryID)
 	trust := memoryTrustSource{profile: &profile}
-	return publish.NewMinter(ks, client, "https://api.github.com", rec, trust, time.Now), repo, profile
+	return newCoveredMinter(ks, client, "https://api.github.com", rec, trust, time.Now), repo, profile
 }
 
 // TestLiveMintInstallationToken exercises the App JWT and

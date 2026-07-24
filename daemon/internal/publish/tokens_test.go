@@ -34,7 +34,7 @@ func newMintCountingSource(t *testing.T, clock *time.Time) (*publish.CachedToken
 	})
 	t.Cleanup(srv.Close)
 
-	m := publish.NewMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, &captureRecorder{}, conformantTrust(t), func() time.Time { return *clock })
+	m := newCoveredMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, &captureRecorder{}, conformantTrust(t), func() time.Time { return *clock })
 	return publish.NewCachedTokenSource(m, func() time.Time { return *clock }), &mints
 }
 
@@ -107,7 +107,7 @@ func TestCachedTokenSourceRevalidatesInstallationBeforeCacheHit(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := publish.NewMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, &captureRecorder{}, conformantTrust(t), fixedNow)
+	m := newCoveredMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, &captureRecorder{}, conformantTrust(t), fixedNow)
 	src := publish.NewCachedTokenSource(m, fixedNow)
 	if _, err := src.Token(context.Background(), testTrustRepo); err != nil {
 		t.Fatalf("first Token: %v", err)
@@ -189,7 +189,7 @@ func TestCachedTokenSourceIsolatesRegistrations(t *testing.T) {
 	firstProfile := trustProfileForRepo(t, testTrustRepo)
 	secondProfile := trustProfileForRepoID(t, secondRepo, secondRepoID)
 	trust := repositoryTrustSource{testTrustRepo: firstProfile, secondRepo: secondProfile}
-	m := publish.NewMinter(ks, srv.Client(), srv.URL, &captureRecorder{}, trust, fixedNow)
+	m := newCoveredMinter(ks, srv.Client(), srv.URL, &captureRecorder{}, trust, fixedNow)
 	src := publish.NewCachedTokenSource(m, fixedNow)
 
 	var tokens []publish.InstallationToken

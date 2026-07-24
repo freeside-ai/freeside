@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,16 +19,20 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
-type trustedOwnerSource map[int64][]publish.TrustedOwner
+type installationAuthoritySource map[int64]publish.InstallationAuthority
 
-func (s trustedOwnerSource) TrustedOwners(_ context.Context, registrationID int64) ([]publish.TrustedOwner, error) {
-	return append([]publish.TrustedOwner(nil), s[registrationID]...), nil
+func (s installationAuthoritySource) InstallationAuthority(
+	_ context.Context,
+	registrationID int64,
+) (publish.InstallationAuthority, error) {
+	return s[registrationID], nil
 }
 
 type removalRecorder struct {
-	mu      sync.Mutex
-	records []publish.InstallationRemovalRecord
-	err     error
+	mu          sync.Mutex
+	records     []publish.InstallationRemovalRecord
+	quarantines []publish.InstallationRemovalRecord
+	err         error
 }
 
 func (r *removalRecorder) RecordInstallationRemoval(record publish.InstallationRemovalRecord) error {
@@ -40,10 +45,27 @@ func (r *removalRecorder) RecordInstallationRemoval(record publish.InstallationR
 	return nil
 }
 
+func (r *removalRecorder) RecordInstallationQuarantine(record publish.InstallationRemovalRecord) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return r.err
+	}
+	r.records = append(r.records, record)
+	r.quarantines = append(r.quarantines, record)
+	return nil
+}
+
 func (r *removalRecorder) snapshot() []publish.InstallationRemovalRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]publish.InstallationRemovalRecord(nil), r.records...)
+}
+
+func (r *removalRecorder) quarantineSnapshot() []publish.InstallationRemovalRecord {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]publish.InstallationRemovalRecord(nil), r.quarantines...)
 }
 
 func publicJanitorKeystore(t *testing.T) *publish.Keystore {
@@ -57,7 +79,7 @@ func newJanitor(
 	t *testing.T,
 	ks *publish.Keystore,
 	server *httptest.Server,
-	owners trustedOwnerSource,
+	authority installationAuthoritySource,
 	recorder *removalRecorder,
 	maxRemovals int,
 ) *publish.InstallationJanitor {
@@ -66,7 +88,7 @@ func newJanitor(
 		ks,
 		server.Client(),
 		server.URL,
-		owners,
+		authority,
 		recorder,
 		fixedNow,
 		maxRemovals,
@@ -75,6 +97,38 @@ func newJanitor(
 		t.Fatalf("NewInstallationJanitor: %v", err)
 	}
 	return janitor
+}
+
+func publicAuthority(bindings ...publish.TrustedInstallation) installationAuthoritySource {
+	return installationAuthoritySource{
+		501: {
+			TrustedOwners:        []publish.TrustedOwner{{Login: "operator", ID: 101}},
+			TrustedInstallations: bindings,
+		},
+	}
+}
+
+func handleExactGrant(w http.ResponseWriter, r *http.Request, repositoryIDs ...int64) bool {
+	switch {
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/access_tokens"):
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w,
+			`{"token":"`+fixtureTokenValue+`","permissions":{"metadata":"read"},"repository_selection":"selected"}`)
+	case r.Method == http.MethodGet && r.URL.Path == "/installation/repositories":
+		repositories := make([]map[string]int64, len(repositoryIDs))
+		for index, repositoryID := range repositoryIDs {
+			repositories[index] = map[string]int64{"id": repositoryID}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"total_count":  len(repositoryIDs),
+			"repositories": repositories,
+		})
+	case r.Method == http.MethodDelete && r.URL.Path == "/installation/token":
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		return false
+	}
+	return true
 }
 
 // TestInstallationJanitorRemovesUnknownOwner proves the public-default
@@ -86,10 +140,13 @@ func TestInstallationJanitorRemovesUnknownOwner(t *testing.T) {
 	var deletes []string
 	recorder := &removalRecorder{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if handleExactGrant(w, r, fixtureRepositoryID) {
+			return
+		}
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 			_, _ = io.WriteString(w, `[
-				{"id":701,"app_id":501,"target_id":101,"account":{"login":"operator","id":101}},
+				{"id":701,"app_id":501,"target_id":101,"repository_selection":"selected","account":{"login":"operator","id":101}},
 				{"id":702,"app_id":501,"target_id":202,"account":{"login":"unsolicited-owner","id":202}}
 			]`)
 		case r.Method == http.MethodDelete:
@@ -104,9 +161,13 @@ func TestInstallationJanitorRemovesUnknownOwner(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	janitor := newJanitor(t, ks, srv, trustedOwnerSource{
-		501: {{Login: "operator", ID: 101}},
-	}, recorder, 10)
+	janitor := newJanitor(t, ks, srv, publicAuthority(publish.TrustedInstallation{
+		RegistrationID: 501,
+		InstallationID: 701,
+		Account:        "operator",
+		AccountID:      101,
+		RepositoryIDs:  []int64{fixtureRepositoryID},
+	}), recorder, 10)
 	cycle, err := janitor.RunCycle(context.Background())
 	if err != nil {
 		t.Fatalf("RunCycle: %v", err)
@@ -128,7 +189,7 @@ func TestInstallationJanitorRemovesUnknownOwner(t *testing.T) {
 		AccountID:      202,
 		Reason:         publish.InstallationRemovalUntrustedOwner,
 	}
-	if records[0] != want {
+	if !reflect.DeepEqual(records[0], want) {
 		t.Errorf("audit record = %+v, want %+v", records[0], want)
 	}
 }
@@ -152,9 +213,7 @@ func TestInstallationJanitorBoundsRemovalWork(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	janitor := newJanitor(t, ks, srv, trustedOwnerSource{
-		501: {{Login: "operator", ID: 101}},
-	}, &removalRecorder{}, 2)
+	janitor := newJanitor(t, ks, srv, publicAuthority(), &removalRecorder{}, 2)
 	cycle, err := janitor.RunCycle(context.Background())
 	if err != nil {
 		t.Fatalf("RunCycle: %v", err)
@@ -189,7 +248,7 @@ func TestInstallationJanitorEnumeratesBeforePaginatedDeletes(t *testing.T) {
 	installations := make([]wireInstallation, 0, 101)
 	installations = append(installations, newWireInstallation(701, 201, "unknown-one"))
 	for id := int64(702); id < 801; id++ {
-		installations = append(installations, newWireInstallation(id, 101, "operator"))
+		installations = append(installations, newWireInstallation(id, id, "unknown-"+strconv.FormatInt(id, 10)))
 	}
 	installations = append(installations, newWireInstallation(801, 202, "unknown-two"))
 
@@ -222,19 +281,17 @@ func TestInstallationJanitorEnumeratesBeforePaginatedDeletes(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	janitor := newJanitor(t, ks, srv, trustedOwnerSource{
-		501: {{Login: "operator", ID: 101}},
-	}, &removalRecorder{}, 10)
+	janitor := newJanitor(t, ks, srv, publicAuthority(), &removalRecorder{}, 101)
 	cycle, err := janitor.RunCycle(context.Background())
 	if err != nil {
 		t.Fatalf("RunCycle: %v", err)
 	}
-	if cycle.Examined != 101 || cycle.Removed != 2 || cycle.RemovalLimitReached {
+	if cycle.Examined != 101 || cycle.Removed != 101 || cycle.RemovalLimitReached {
 		t.Errorf("cycle = %+v", cycle)
 	}
-	wantEvents := []string{"GET 1", "GET 2", "DELETE 701", "DELETE 801"}
-	if fmt.Sprint(events) != fmt.Sprint(wantEvents) {
-		t.Errorf("events = %v, want %v", events, wantEvents)
+	if len(events) != 103 || events[0] != "GET 1" || events[1] != "GET 2" ||
+		events[2] != "DELETE 701" || events[len(events)-1] != "DELETE 801" {
+		t.Errorf("events = %v, want both GETs before 101 ordered deletes", events)
 	}
 }
 
@@ -256,9 +313,7 @@ func TestInstallationJanitorAuditFailurePreventsDelete(t *testing.T) {
 	defer srv.Close()
 
 	recorder := &removalRecorder{err: errors.New("audit unavailable")}
-	janitor := newJanitor(t, ks, srv, trustedOwnerSource{
-		501: {{Login: "operator", ID: 101}},
-	}, recorder, 1)
+	janitor := newJanitor(t, ks, srv, publicAuthority(), recorder, 1)
 	if _, err := janitor.RunCycle(context.Background()); err == nil {
 		t.Fatal("RunCycle succeeded with a failing audit recorder")
 	}
@@ -268,9 +323,8 @@ func TestInstallationJanitorAuditFailurePreventsDelete(t *testing.T) {
 }
 
 // TestInstallationJanitorRequiresRegistrationOwner is the local-policy
-// refutation: an empty or misbound trusted-owner source cannot make the
-// janitor interpret every installation, including the operator's own, as
-// removable.
+// refutation: an empty or misbound authority source cannot make the janitor
+// interpret every installation, including the operator's own, as removable.
 func TestInstallationJanitorRequiresRegistrationOwner(t *testing.T) {
 	ks := publicJanitorKeystore(t)
 	requests := 0
@@ -282,7 +336,7 @@ func TestInstallationJanitorRequiresRegistrationOwner(t *testing.T) {
 		ks,
 		client,
 		"https://api.github.test",
-		trustedOwnerSource{},
+		installationAuthoritySource{},
 		&removalRecorder{},
 		fixedNow,
 		1,
@@ -319,9 +373,7 @@ func TestInstallationJanitorRejectsMalformedIdentityBeforeDelete(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	janitor := newJanitor(t, ks, srv, trustedOwnerSource{
-		501: {{Login: "operator", ID: 101}},
-	}, recorder, 1)
+	janitor := newJanitor(t, ks, srv, publicAuthority(), recorder, 1)
 	_, err := janitor.RunCycle(context.Background())
 	if !errors.Is(err, publish.ErrInstallationResolution) {
 		t.Fatalf("err = %v, want ErrInstallationResolution", err)
@@ -334,9 +386,9 @@ func TestInstallationJanitorRejectsMalformedIdentityBeforeDelete(t *testing.T) {
 	}
 }
 
-// TestPublicResolutionRequiresActiveJanitor proves a public registration is
-// refused before GitHub is contacted when no always-on janitor covers it.
-func TestPublicResolutionRequiresActiveJanitor(t *testing.T) {
+// TestResolutionRequiresActiveJanitor proves a registration is refused before
+// GitHub is contacted when no always-on janitor covers it.
+func TestResolutionRequiresActiveJanitor(t *testing.T) {
 	ks := publicJanitorKeystore(t)
 	requests := 0
 	client := &http.Client{Transport: cleanupTransportFunc(func(*http.Request) (*http.Response, error) {
@@ -361,27 +413,38 @@ func TestInstallationJanitorRunActivatesOnlyAfterCleanPass(t *testing.T) {
 	secondStarted := make(chan struct{}, 1)
 	releaseSecond := make(chan struct{})
 	var callsMu sync.Mutex
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	installationCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if handleExactGrant(w, r, fixtureRepositoryID) {
+			return
+		}
+		if r.URL.Path != "/app/installations" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			return
+		}
 		callsMu.Lock()
-		calls++
-		call := calls
+		installationCalls++
+		call := installationCalls
 		callsMu.Unlock()
 		if call == 2 {
 			secondStarted <- struct{}{}
 			<-releaseSecond
 		}
 		_, _ = io.WriteString(w,
-			`[{"id":701,"app_id":501,"target_id":101,"account":{"login":"operator","id":101}}]`)
+			`[{"id":701,"app_id":501,"target_id":101,"repository_selection":"selected","account":{"login":"operator","id":101}}]`)
 		if call == 1 {
 			firstPassed <- struct{}{}
 		}
 	}))
 	defer srv.Close()
 
-	janitor := newJanitor(t, ks, srv, trustedOwnerSource{
-		501: {{Login: "operator", ID: 101}},
-	}, &removalRecorder{}, 1)
+	janitor := newJanitor(t, ks, srv, publicAuthority(publish.TrustedInstallation{
+		RegistrationID: 501,
+		InstallationID: 701,
+		Account:        "operator",
+		AccountID:      101,
+		RepositoryIDs:  []int64{fixtureRepositoryID},
+	}), &removalRecorder{}, 1)
 	if janitor.ActiveFor(501) {
 		t.Fatal("janitor active before its first pass")
 	}
@@ -396,6 +459,9 @@ func TestInstallationJanitorRunActivatesOnlyAfterCleanPass(t *testing.T) {
 	if !janitor.ActiveFor(501) {
 		t.Fatal("janitor did not activate after a clean pass")
 	}
+	if !janitor.AllowsRepository(501, 701, fixtureRepositoryID) {
+		t.Fatal("exact trusted grant did not enter the mint allow-set")
+	}
 	<-secondStarted
 	if janitor.ActiveFor(501) {
 		t.Fatal("janitor left stale coverage active while the next pass was blocked")
@@ -407,6 +473,9 @@ func TestInstallationJanitorRunActivatesOnlyAfterCleanPass(t *testing.T) {
 	}
 	if janitor.ActiveFor(501) {
 		t.Fatal("janitor remained active after shutdown")
+	}
+	if janitor.AllowsRepository(501, 701, fixtureRepositoryID) {
+		t.Fatal("trusted grant remained allowed after shutdown")
 	}
 }
 
