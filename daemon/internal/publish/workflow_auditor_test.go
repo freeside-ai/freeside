@@ -42,6 +42,7 @@ type auditFixtureServer struct {
 	localAction       string
 	baseOnlyWorkflow  string
 	runnerOverflow    bool
+	extraWorkflowRows []string
 }
 
 func (f *auditFixtureServer) handler(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +74,8 @@ func (f *auditFixtureServer) handler(w http.ResponseWriter, r *http.Request) {
 	case "/repos/freeside-ai/evidence-repo/actions/permissions/selected-actions":
 		_, _ = w.Write([]byte(`{"github_owned_allowed":true,"verified_allowed":false,"patterns_allowed":["freeside-ai/*"]}`))
 	case "/repos/freeside-ai/evidence-repo/actions/workflows":
-		_, _ = w.Write([]byte(`{"total_count":1,"workflows":[{"path":".github/workflows/publish.yml","state":"active"}]}`))
+		rows := append([]string{`{"path":".github/workflows/publish.yml","state":"active"}`}, f.extraWorkflowRows...)
+		_, _ = fmt.Fprintf(w, `{"total_count":%d,"workflows":[%s]}`, len(rows), strings.Join(rows, ","))
 	case "/repos/freeside-ai/evidence-repo/git/trees/base-sha", "/repos/freeside-ai/evidence-repo/git/trees/old-sha":
 		entries := []string{`{"path":".github/workflows/publish.yml","type":"blob","sha":"workflow-blob"}`}
 		if f.localAction != "" {
@@ -227,6 +229,68 @@ jobs:
 	}
 }
 
+func TestGitHubWorkflowAuditorAcceptsDynamicWorkflowRows(t *testing.T) {
+	baseline := runAuditFixture(t, &auditFixtureServer{t: t})
+	audit := runAuditFixture(t, &auditFixtureServer{t: t, extraWorkflowRows: []string{
+		`{"path":"dynamic/dependabot/dependabot-updates","state":"active"}`,
+	}})
+	// The synthetic row is digest-bound evidence, never analyzed content:
+	// every derived fact matches the baseline while the digest moves, so its
+	// appearance forces a human re-review instead of either aborting the
+	// audit or silently widening the derived authority.
+	if audit.WorkflowAuditDigest == baseline.WorkflowAuditDigest {
+		t.Fatalf("dynamic row retained digest %q", audit.WorkflowAuditDigest)
+	}
+	baseline.WorkflowAuditDigest, audit.WorkflowAuditDigest = "", ""
+	baseline.AuditedAt, audit.AuditedAt = time.Time{}, time.Time{}
+	if audit != baseline {
+		t.Fatalf("dynamic row changed derived facts: %+v != %+v", audit, baseline)
+	}
+}
+
+func TestGitHubWorkflowAuditorDigestCoversDynamicWorkflowState(t *testing.T) {
+	active := runAuditFixture(t, &auditFixtureServer{t: t, extraWorkflowRows: []string{
+		`{"path":"dynamic/dependabot/dependabot-updates","state":"active"}`,
+	}})
+	disabled := runAuditFixture(t, &auditFixtureServer{t: t, extraWorkflowRows: []string{
+		`{"path":"dynamic/dependabot/dependabot-updates","state":"disabled_manually"}`,
+	}})
+	if active.WorkflowAuditDigest == disabled.WorkflowAuditDigest {
+		t.Fatalf("dynamic state change retained digest %q", active.WorkflowAuditDigest)
+	}
+}
+
+func TestGitHubWorkflowAuditorFailsClosedOnMalformedWorkflowRows(t *testing.T) {
+	tests := []struct {
+		name string
+		rows []string
+		want string
+	}{
+		{"unknown root path", []string{`{"path":"pipelines/build.yml","state":"active"}`}, "malformed workflow row"},
+		{"non-canonical dynamic path", []string{`{"path":"dynamic//dependabot","state":"active"}`}, "malformed workflow row"},
+		{"empty dynamic state", []string{`{"path":"dynamic/dependabot/dependabot-updates","state":""}`}, "malformed workflow row"},
+		{"duplicate dynamic path", []string{
+			`{"path":"dynamic/dependabot/dependabot-updates","state":"active"}`,
+			`{"path":"dynamic/dependabot/dependabot-updates","state":"active"}`,
+		}, "duplicate path"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := &auditFixtureServer{t: t, extraWorkflowRows: tt.rows}
+			server := httptest.NewServer(http.HandlerFunc(fixture.handler))
+			defer server.Close()
+			auditor, err := publish.NewGitHubWorkflowAuditor(testTokenSource(), server.Client(), server.URL, time.Now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = auditor.Audit(t.Context(), "freeside-ai/evidence-repo", "main")
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestGitHubWorkflowAuditorDigestCoversLiveSettings(t *testing.T) {
 	baseline := runAuditFixture(t, &auditFixtureServer{t: t})
 	tests := []struct {
@@ -237,6 +301,7 @@ func TestGitHubWorkflowAuditorDigestCoversLiveSettings(t *testing.T) {
 		{"environment protection", &auditFixtureServer{t: t, environmentWait: 20}},
 		{"ruleset detail", &auditFixtureServer{t: t, requiredApprovals: 2}},
 		{"local composite action", &auditFixtureServer{t: t, localAction: "name: release\nruns:\n  using: composite\n  steps: []\n"}},
+		{"dynamic workflow row", &auditFixtureServer{t: t, extraWorkflowRows: []string{`{"path":"dynamic/github-code-scanning/codeql","state":"active"}`}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	workflowAuditEncodingVersion = "freeside-workflow-audit/v1"
+	workflowAuditEncodingVersion = "freeside-workflow-audit/v2"
 	auditPageSize                = 100
 	auditMaxPages                = 100
 )
@@ -58,6 +58,20 @@ type auditedFile struct {
 	Content []byte `json:"content"`
 }
 
+// auditDynamicWorkflow is a platform-managed synthetic workflow row (path
+// prefix "dynamic/", e.g. Dependabot version updates or CodeQL default
+// setup). It has no definition fetchable as repository content at the
+// audited commit, so no authority facts can be derived from it; instead its
+// identity and state are digest-bound in the evidence, which makes its
+// appearance, disappearance, or state change a workflow_audit_digest drift
+// that fails closed until a human re-reviews the profile (plan §5.5). The
+// human profile review, not content analysis, accounts for the authority of
+// platform automation.
+type auditDynamicWorkflow struct {
+	Path  string `json:"path"`
+	State string `json:"state"`
+}
+
 type auditEnvironment struct {
 	Name                   string   `json:"name"`
 	Secrets                []string `json:"secrets"`
@@ -71,18 +85,19 @@ type auditRunner struct {
 }
 
 type workflowAuditEvidence struct {
-	Version                     string             `json:"version"`
-	Repo                        string             `json:"repo"`
-	DefaultWorkflowPermissions  string             `json:"default_workflow_permissions"`
-	CanApprovePullRequestReview bool               `json:"can_approve_pull_request_reviews"`
-	ActionsPermissions          any                `json:"actions_permissions"`
-	SelectedActions             any                `json:"selected_actions"`
-	Workflows                   []auditedWorkflow  `json:"workflows"`
-	LocalActions                []auditedFile      `json:"local_actions"`
-	Environments                []auditEnvironment `json:"environments"`
-	Runners                     []auditRunner      `json:"runners"`
-	BranchProtection            any                `json:"branch_protection"`
-	Rulesets                    any                `json:"rulesets"`
+	Version                     string                 `json:"version"`
+	Repo                        string                 `json:"repo"`
+	DefaultWorkflowPermissions  string                 `json:"default_workflow_permissions"`
+	CanApprovePullRequestReview bool                   `json:"can_approve_pull_request_reviews"`
+	ActionsPermissions          any                    `json:"actions_permissions"`
+	SelectedActions             any                    `json:"selected_actions"`
+	Workflows                   []auditedWorkflow      `json:"workflows"`
+	DynamicWorkflows            []auditDynamicWorkflow `json:"dynamic_workflows"`
+	LocalActions                []auditedFile          `json:"local_actions"`
+	Environments                []auditEnvironment     `json:"environments"`
+	Runners                     []auditRunner          `json:"runners"`
+	BranchProtection            any                    `json:"branch_protection"`
+	Rulesets                    any                    `json:"rulesets"`
 }
 
 func (a *GitHubWorkflowAuditor) Audit(ctx context.Context, repoName, baseRef string) (domain.WorkflowAudit, error) {
@@ -141,7 +156,7 @@ func (a *GitHubWorkflowAuditor) collect(ctx context.Context, repo repoRef, sha, 
 	if err != nil {
 		return workflowAuditEvidence{}, workflowFacts{}, err
 	}
-	workflows, err := a.workflows(ctx, repo, sha)
+	workflows, dynamicWorkflows, err := a.workflows(ctx, repo, sha)
 	if err != nil {
 		return workflowAuditEvidence{}, workflowFacts{}, err
 	}
@@ -181,7 +196,8 @@ func (a *GitHubWorkflowAuditor) collect(ctx context.Context, repo repoRef, sha, 
 		Version: workflowAuditEncodingVersion, Repo: repo.path(),
 		DefaultWorkflowPermissions: string(defaultPerms), CanApprovePullRequestReview: canApprove,
 		ActionsPermissions: actionsPermissions, SelectedActions: selectedActions,
-		Workflows: workflows, LocalActions: localActions, Environments: environments, Runners: runners,
+		Workflows: workflows, DynamicWorkflows: dynamicWorkflows,
+		LocalActions: localActions, Environments: environments, Runners: runners,
 		BranchProtection: branchProtection, Rulesets: rulesets,
 	}
 	return evidence, facts, nil
@@ -270,8 +286,9 @@ func (a *GitHubWorkflowAuditor) defaultWorkflowPermissions(ctx context.Context, 
 	}
 }
 
-func (a *GitHubWorkflowAuditor) workflows(ctx context.Context, repo repoRef, sha string) ([]auditedWorkflow, error) {
+func (a *GitHubWorkflowAuditor) workflows(ctx context.Context, repo repoRef, sha string) ([]auditedWorkflow, []auditDynamicWorkflow, error) {
 	states := map[string]string{}
+	dynamicStates := map[string]string{}
 	for page := 1; page <= auditMaxPages; page++ {
 		var decoded struct {
 			Total     int `json:"total_count"`
@@ -282,31 +299,49 @@ func (a *GitHubWorkflowAuditor) workflows(ctx context.Context, repo repoRef, sha
 		}
 		requestPath := fmt.Sprintf("/repos/%s/actions/workflows?per_page=%d&page=%d", repo.path(), auditPageSize, page)
 		if err := a.getJSON(ctx, repo, requestPath, &decoded); err != nil {
-			return nil, fmt.Errorf("list workflows: %w", err)
+			return nil, nil, fmt.Errorf("list workflows: %w", err)
 		}
 		if decoded.Workflows == nil {
-			return nil, errors.New("list workflows: response is not a list")
+			return nil, nil, errors.New("list workflows: response is not a list")
 		}
 		for _, item := range decoded.Workflows {
 			clean := path.Clean(item.Path)
-			if clean != item.Path || !strings.HasPrefix(clean, ".github/workflows/") || item.State == "" {
-				return nil, errors.New("list workflows: malformed workflow row")
+			if clean != item.Path || item.State == "" {
+				return nil, nil, errors.New("list workflows: malformed workflow row")
 			}
-			if _, exists := states[clean]; exists {
-				return nil, fmt.Errorf("list workflows: duplicate path %q", clean)
+			switch {
+			case strings.HasPrefix(clean, ".github/workflows/"):
+				if _, exists := states[clean]; exists {
+					return nil, nil, fmt.Errorf("list workflows: duplicate path %q", clean)
+				}
+				states[clean] = item.State
+			case strings.HasPrefix(clean, "dynamic/"):
+				// Platform-managed synthetic row: digest-bound but never
+				// content-analyzed (see auditDynamicWorkflow). A repo path
+				// shape outside these two families stays fail-closed below.
+				if _, exists := dynamicStates[clean]; exists {
+					return nil, nil, fmt.Errorf("list workflows: duplicate path %q", clean)
+				}
+				dynamicStates[clean] = item.State
+			default:
+				return nil, nil, errors.New("list workflows: malformed workflow row")
 			}
-			states[clean] = item.State
 		}
-		if len(states) >= decoded.Total {
+		if len(states)+len(dynamicStates) >= decoded.Total {
 			break
 		}
 		if len(decoded.Workflows) < auditPageSize {
-			return nil, errors.New("list workflows: pagination ended before total_count")
+			return nil, nil, errors.New("list workflows: pagination ended before total_count")
 		}
 		if page == auditMaxPages {
-			return nil, errors.New("list workflows: pagination exceeded 100 pages")
+			return nil, nil, errors.New("list workflows: pagination exceeded 100 pages")
 		}
 	}
+	dynamic := make([]auditDynamicWorkflow, 0, len(dynamicStates))
+	for dynamicPath, state := range dynamicStates {
+		dynamic = append(dynamic, auditDynamicWorkflow{Path: dynamicPath, State: state})
+	}
+	slices.SortFunc(dynamic, func(x, y auditDynamicWorkflow) int { return strings.Compare(x.Path, y.Path) })
 
 	var tree struct {
 		Truncated bool `json:"truncated"`
@@ -318,37 +353,37 @@ func (a *GitHubWorkflowAuditor) workflows(ctx context.Context, repo repoRef, sha
 	}
 	requestPath := "/repos/" + repo.path() + "/git/trees/" + url.PathEscape(sha) + "?recursive=1"
 	if err := a.getJSON(ctx, repo, requestPath, &tree); err != nil {
-		return nil, fmt.Errorf("list workflow files: %w", err)
+		return nil, nil, fmt.Errorf("list workflow files: %w", err)
 	}
 	if tree.Truncated {
-		return nil, errors.New("list workflow files: recursive tree is truncated")
+		return nil, nil, errors.New("list workflow files: recursive tree is truncated")
 	}
 	if tree.Entries == nil {
-		return nil, errors.New("list workflow files: response is not a tree")
+		return nil, nil, errors.New("list workflow files: response is not a tree")
 	}
 	var all []auditedWorkflow
 	seen := map[string]bool{}
 	for _, entry := range tree.Entries {
 		if path.Clean(entry.Path) != entry.Path {
-			return nil, fmt.Errorf("list workflow files: non-canonical path %q", entry.Path)
+			return nil, nil, fmt.Errorf("list workflow files: non-canonical path %q", entry.Path)
 		}
 		if !strings.HasPrefix(entry.Path, ".github/workflows/") ||
 			(path.Ext(entry.Path) != ".yml" && path.Ext(entry.Path) != ".yaml") {
 			continue
 		}
 		if seen[entry.Path] {
-			return nil, fmt.Errorf("list workflow files: duplicate path %q", entry.Path)
+			return nil, nil, fmt.Errorf("list workflow files: duplicate path %q", entry.Path)
 		}
 		seen[entry.Path] = true
 		if entry.Type != "blob" || entry.SHA == "" {
-			return nil, fmt.Errorf("list workflow files: unsupported entry %q of type %q", entry.Path, entry.Type)
+			return nil, nil, fmt.Errorf("list workflow files: unsupported entry %q of type %q", entry.Path, entry.Type)
 		}
 		content, blobSHA, err := a.repositoryContent(ctx, repo, entry.Path, sha)
 		if err != nil {
-			return nil, fmt.Errorf("read workflow %s: %w", entry.Path, err)
+			return nil, nil, fmt.Errorf("read workflow %s: %w", entry.Path, err)
 		}
 		if blobSHA != entry.SHA {
-			return nil, fmt.Errorf("read workflow %s: tree/content SHA mismatch", entry.Path)
+			return nil, nil, fmt.Errorf("read workflow %s: tree/content SHA mismatch", entry.Path)
 		}
 		state := states[entry.Path]
 		if state == "" {
@@ -360,7 +395,7 @@ func (a *GitHubWorkflowAuditor) workflows(ctx context.Context, repo repoRef, sha
 		all = append(all, auditedWorkflow{Path: entry.Path, SHA: blobSHA, State: state, Content: content})
 	}
 	slices.SortFunc(all, func(x, y auditedWorkflow) int { return strings.Compare(x.Path, y.Path) })
-	return all, nil
+	return all, dynamic, nil
 }
 
 func (a *GitHubWorkflowAuditor) repositoryContent(ctx context.Context, repo repoRef, filePath, ref string) ([]byte, string, error) {
