@@ -20,6 +20,7 @@ type MintRecord struct {
 	MintedAt       time.Time   `json:"minted_at"`
 	RegistrationID int64       `json:"registration_id"`
 	InstallationID int64       `json:"installation_id"`
+	RepositoryID   int64       `json:"repository_id"`
 	Repo           string      `json:"repo"`
 	Requested      Permissions `json:"requested"`
 	Granted        Permissions `json:"granted"`
@@ -65,6 +66,7 @@ func (r *StoreRecorder) RecordMint(rec MintRecord) error {
 			MintedAt:                rec.MintedAt,
 			RegistrationID:          rec.RegistrationID,
 			InstallationID:          rec.InstallationID,
+			RepositoryID:            rec.RepositoryID,
 			Repo:                    rec.Repo,
 			RequestedActions:        rec.Requested.Actions,
 			RequestedAdministration: rec.Requested.Administration,

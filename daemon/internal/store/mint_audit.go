@@ -25,6 +25,7 @@ type MintAudit struct {
 	MintedAt                time.Time
 	RegistrationID          int64
 	InstallationID          int64
+	RepositoryID            int64
 	Repo                    string
 	RequestedActions        string
 	RequestedAdministration string
@@ -44,15 +45,15 @@ type MintAudit struct {
 const (
 	recordMintAuditSQL = `
 INSERT INTO publish_mint_audits (
-    minted_at, registration_id, installation_id, repo,
+    minted_at, registration_id, installation_id, repository_id, repo,
     requested_contents, requested_pull_requests, requested_metadata,
     granted_contents, granted_pull_requests, granted_metadata,
     requested_actions, requested_administration, requested_environments,
     granted_actions, granted_administration, granted_environments,
     expires_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	listMintAuditsSQL = `
-SELECT id, minted_at, registration_id, installation_id, repo,
+SELECT id, minted_at, registration_id, installation_id, repository_id, repo,
     requested_contents, requested_pull_requests, requested_metadata,
     granted_contents, granted_pull_requests, granted_metadata,
     requested_actions, requested_administration, requested_environments,
@@ -81,13 +82,17 @@ func (tx *InternalTx) RecordMintAudit(ctx context.Context, rec MintAudit) (MintA
 		return MintAudit{}, fmt.Errorf("record mint audit %q: installation id %d is not positive",
 			rec.Repo, rec.InstallationID)
 	}
+	if rec.RepositoryID <= 0 {
+		return MintAudit{}, fmt.Errorf("record mint audit %q: repository id %d is not positive",
+			rec.Repo, rec.RepositoryID)
+	}
 	if rec.MintedAt.IsZero() || rec.ExpiresAt.IsZero() {
 		return MintAudit{}, fmt.Errorf("record mint audit %q: zero mint or expiry time", rec.Repo)
 	}
 	rec.MintedAt = rec.MintedAt.UTC()
 	rec.ExpiresAt = rec.ExpiresAt.UTC()
 	res, err := tx.tx.ExecContext(ctx, recordMintAuditSQL,
-		formatTime(rec.MintedAt), rec.RegistrationID, rec.InstallationID, rec.Repo,
+		formatTime(rec.MintedAt), rec.RegistrationID, rec.InstallationID, rec.RepositoryID, rec.Repo,
 		rec.RequestedContents, rec.RequestedPullRequests, rec.RequestedMetadata,
 		rec.GrantedContents, rec.GrantedPullRequests, rec.GrantedMetadata,
 		rec.RequestedActions, rec.RequestedAdministration, rec.RequestedEnvironments,
@@ -118,7 +123,7 @@ func (tx *ReadTx) ListMintAudits(ctx context.Context) ([]MintAudit, error) {
 			mintedAt  string
 			expiresAt string
 		)
-		if err := rows.Scan(&rec.ID, &mintedAt, &rec.RegistrationID, &rec.InstallationID, &rec.Repo,
+		if err := rows.Scan(&rec.ID, &mintedAt, &rec.RegistrationID, &rec.InstallationID, &rec.RepositoryID, &rec.Repo,
 			&rec.RequestedContents, &rec.RequestedPullRequests, &rec.RequestedMetadata,
 			&rec.GrantedContents, &rec.GrantedPullRequests, &rec.GrantedMetadata,
 			&rec.RequestedActions, &rec.RequestedAdministration, &rec.RequestedEnvironments,
