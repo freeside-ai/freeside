@@ -446,6 +446,20 @@ func (inactiveJanitorStatus) AllowsRepository(int64, int64, int64) bool {
 	return false
 }
 
+// faultedJanitorStatus is an inactive janitor that also reports why, the way
+// the real one does for a registration its latest pass could not complete.
+type faultedJanitorStatus struct {
+	inactiveJanitorStatus
+	registrationID int64
+}
+
+func (s faultedJanitorStatus) RegistrationFaults() []publish.JanitorRegistrationFault {
+	return []publish.JanitorRegistrationFault{{
+		RegistrationID: s.registrationID,
+		Err:            errors.New("authority snapshot names no such registration"),
+	}}
+}
+
 type mutableJanitorStatus struct {
 	mu     sync.Mutex
 	active bool
@@ -745,6 +759,48 @@ func TestCredentialDoctorDetections(t *testing.T) {
 		}
 		onboarder, _, _ := newTestOnboarder(t, ks, inactiveJanitorStatus{})
 		findings, err := publish.NewCredentialDoctor(onboarder, inactiveJanitorStatus{}).
+			Check(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFinding(t, findings, publish.CredentialFindingJanitorInactive)
+	})
+
+	// The loop survives a per-registration failure (#281), so a registration
+	// it keeps failing is inactive forever and looks exactly like one waiting
+	// for its first pass. Only the fault tells them apart.
+	t.Run("janitor failing this registration", func(t *testing.T) {
+		ks := newTestKeystore(t)
+		credentials := publicFixtureCredentials(t)
+		if err := ks.SaveApp(credentials); err != nil {
+			t.Fatal(err)
+		}
+		status := faultedJanitorStatus{registrationID: credentials.AppID}
+		onboarder, _, _ := newTestOnboarder(t, ks, status)
+		findings, err := publish.NewCredentialDoctor(onboarder, status).
+			Check(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFinding(t, findings, publish.CredentialFindingJanitorFailed)
+		for _, finding := range findings {
+			if finding.Code == publish.CredentialFindingJanitorInactive {
+				t.Error("a failing registration also reported the waiting-for-first-pass code")
+			}
+		}
+	})
+
+	// A registration the janitor is not failing keeps the generic code even
+	// when another registration has a fault.
+	t.Run("janitor failing another registration", func(t *testing.T) {
+		ks := newTestKeystore(t)
+		credentials := publicFixtureCredentials(t)
+		if err := ks.SaveApp(credentials); err != nil {
+			t.Fatal(err)
+		}
+		status := faultedJanitorStatus{registrationID: credentials.AppID + 1}
+		onboarder, _, _ := newTestOnboarder(t, ks, status)
+		findings, err := publish.NewCredentialDoctor(onboarder, status).
 			Check(context.Background(), nil)
 		if err != nil {
 			t.Fatal(err)

@@ -2,6 +2,7 @@ package publish
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -84,10 +85,40 @@ type JanitorRecorder interface {
 // JanitorCycle reports bounded reconciliation work. RemovalLimitReached means
 // the cycle stopped after MaxRemovals removals and deliberately did not claim
 // complete coverage for the interrupted registration.
+//
+// Removed counts completed removals, so a pass that fails partway can report
+// fewer than it attempted; attempted is what the bound is spent against, since
+// a destructive request that fails is still a destructive request.
 type JanitorCycle struct {
 	Examined            int
 	Removed             int
 	RemovalLimitReached bool
+
+	attempted int
+}
+
+// errJanitorUnsafe marks a failure of the daemon's own safety machinery rather
+// than of one registration's remote or authored state: the durable audit
+// barrier, or a credential the janitor minted that it cannot account for,
+// whether revocation failed or the mint's outcome is simply unknown. Neither
+// belongs to the registration that happened to reach it first, and continuing
+// the pass would keep acting destructively without a barrier, or keep minting
+// credentials the daemon cannot take back. Such a failure stops the pass, as
+// every failure did before #281.
+var errJanitorUnsafe = errors.New("installation janitor: unsafe to continue")
+
+// JanitorRegistrationFault names one registration the latest pass could not
+// complete, with the error that denied it. A faulted registration is absent
+// from coverage, so its runtime gate is already shut; the fault is what tells
+// an operator why, instead of leaving an unexplained denial behind.
+//
+// Err is the janitor's own wrapped error. It may quote a remote or
+// operator-authored value, so it belongs in an operator diagnostic, not in a
+// durable audit record: InstallationRemovalRecord and CredentialFinding carry
+// safe coordinates by design.
+type JanitorRegistrationFault struct {
+	RegistrationID int64
+	Err            error
 }
 
 // InstallationJanitor reconciles every App registration against canonical
@@ -107,6 +138,7 @@ type InstallationJanitor struct {
 	mu      sync.RWMutex
 	running bool
 	covered map[int64]registrationCoverage
+	faults  []JanitorRegistrationFault
 }
 
 // NewInstallationJanitor constructs a janitor with a hard per-cycle removal
@@ -176,10 +208,31 @@ func (j *InstallationJanitor) AllowsRepository(registrationID, installationID, r
 	return ok
 }
 
+// RegistrationFaults reports the registrations the most recently completed
+// pass could not complete, ordered by registration ID. Faults outlive the gate
+// they explain: they stay published while the next pass runs, and are replaced
+// only when that pass finishes. They are empty before the first pass and after
+// Run returns. A one-off RunCycle does not publish here; it returns its faults
+// as an error.
+func (j *InstallationJanitor) RegistrationFaults() []JanitorRegistrationFault {
+	if j == nil {
+		return nil
+	}
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return slices.Clone(j.faults)
+}
+
 // Run keeps reconciliation active until ctx is canceled. Coverage is published
-// only after each successful cycle and cleared before Run returns; an API,
-// authority-source, or audit failure therefore closes registration operation
-// immediately.
+// only after each cycle and cleared before Run returns, so a registration is
+// active only while its own latest pass covered it.
+//
+// A failure attributable to one registration denies that registration and is
+// reported by RegistrationFaults; the loop keeps running and the remaining
+// registrations keep their coverage. Only a failure of the whole pass stops
+// the loop, because a stopped loop denies every registration until a human
+// restarts the daemon, and an authority source may legitimately have no entry
+// for a registration onboarding has just written (#281).
 func (j *InstallationJanitor) Run(ctx context.Context, interval time.Duration) error {
 	if j == nil {
 		return errors.New("installation janitor: nil janitor")
@@ -194,16 +247,19 @@ func (j *InstallationJanitor) Run(ctx context.Context, interval time.Duration) e
 
 	for {
 		// A pass that stalls or fails must not leave the previous pass's
-		// coverage looking current.
-		j.setCovered(nil)
-		_, covered, err := j.runCycle(ctx)
+		// coverage looking current. Its faults stay published: they are a
+		// diagnostic, not a grant, and clearing them would leave a
+		// persistently failing registration reporting as merely unvisited for
+		// as long as each pass takes.
+		j.withdrawCoverage()
+		_, covered, faults, err := j.runCycle(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil
 			}
 			return err
 		}
-		j.setCovered(covered)
+		j.publishPass(covered, faults)
 
 		timer := time.NewTimer(interval)
 		select {
@@ -215,7 +271,10 @@ func (j *InstallationJanitor) Run(ctx context.Context, interval time.Duration) e
 	}
 }
 
-// RunCycle performs one bounded pass without activating the runtime gate.
+// RunCycle performs one bounded pass without activating the runtime gate or
+// publishing faults. A per-registration failure is an error here rather than a
+// recorded fault: the one-off form exists for operator diagnostics, which have
+// no later pass to report through.
 func (j *InstallationJanitor) RunCycle(ctx context.Context) (JanitorCycle, error) {
 	if j == nil {
 		return JanitorCycle{}, errors.New("installation janitor: nil janitor")
@@ -226,52 +285,122 @@ func (j *InstallationJanitor) RunCycle(ctx context.Context) (JanitorCycle, error
 	if running {
 		return JanitorCycle{}, errors.New("installation janitor: always-on loop is already running")
 	}
-	cycle, _, err := j.runCycle(ctx)
-	return cycle, err
+	cycle, _, faults, err := j.runCycle(ctx)
+	if err != nil {
+		return cycle, err
+	}
+	faulted := make([]error, 0, len(faults))
+	for _, fault := range faults {
+		faulted = append(faulted, fault.Err)
+	}
+	return cycle, errors.Join(faulted...)
 }
 
-func (j *InstallationJanitor) runCycle(ctx context.Context) (JanitorCycle, []registrationCoverage, error) {
+// runCycle reconciles every registration in the keystore. A failure it can
+// attribute to one registration becomes a fault: that registration is left out
+// of coverage, which shuts its gate, and the pass continues.
+//
+// Three classes are not attributable and are returned as an error, stopping
+// the pass: enumerating the keystore, a canceled context, and errJanitorUnsafe
+// (the shared audit barrier, or a credential the janitor could not revoke).
+func (j *InstallationJanitor) runCycle(
+	ctx context.Context,
+) (JanitorCycle, []registrationCoverage, []JanitorRegistrationFault, error) {
 	if j == nil || j.keystore == nil || j.client == nil || j.authority == nil ||
 		j.recorder == nil || j.now == nil || j.maxRemovals <= 0 {
-		return JanitorCycle{}, nil, errors.New("installation janitor: nil or invalid dependency")
+		return JanitorCycle{}, nil, nil, errors.New("installation janitor: nil or invalid dependency")
 	}
 	j.cycleMu.Lock()
 	defer j.cycleMu.Unlock()
 
 	apps, err := j.keystore.ListApps()
 	if err != nil {
-		return JanitorCycle{}, nil, fmt.Errorf("installation janitor: %w", err)
+		return JanitorCycle{}, nil, nil, fmt.Errorf("installation janitor: %w", err)
 	}
 
 	var cycle JanitorCycle
 	var covered []registrationCoverage
+	var faults []JanitorRegistrationFault
 	for _, app := range apps {
-		snapshot, err := j.authority.InstallationAuthority(ctx, app.AppID)
+		complete, registrationCoverage, err := j.reconcileApp(ctx, app, &cycle)
 		if err != nil {
-			return cycle, covered, fmt.Errorf(
-				"installation janitor: registration %d authority: %w",
-				app.AppID,
-				err,
-			)
-		}
-		authority, err := validateInstallationAuthority(app, snapshot, j.now())
-		if err != nil {
-			return cycle, covered, fmt.Errorf(
-				"installation janitor: registration %d authority: %w",
-				app.AppID,
-				err,
-			)
-		}
-		complete, registrationCoverage, err := j.reconcileRegistration(ctx, app, authority, &cycle)
-		if err != nil {
-			return cycle, covered, err
+			if errors.Is(err, errJanitorUnsafe) {
+				return cycle, covered, faults, err
+			}
+			// Shutdown is not a registration's fault, and recording it as one
+			// would bury the pass's real faults under every remaining app.
+			// What failed first need not be the cancellation itself, so the
+			// cause rides along with it rather than replacing it.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return cycle, covered, faults, fmt.Errorf("%w: %w", ctxErr, err)
+			}
+			faults = append(faults, JanitorRegistrationFault{RegistrationID: app.AppID, Err: err})
+			continue
 		}
 		if !complete {
-			return cycle, covered, nil
+			// The removal bound is the whole pass's budget, so a later
+			// registration could not be reconciled within it either.
+			if cycle.RemovalLimitReached {
+				break
+			}
+			continue
 		}
 		covered = append(covered, registrationCoverage)
 	}
-	return cycle, covered, nil
+	slices.SortFunc(faults, func(a, b JanitorRegistrationFault) int {
+		return cmp.Compare(a.RegistrationID, b.RegistrationID)
+	})
+	return cycle, withdrawFaulted(covered, faults), faults, nil
+}
+
+// withdrawFaulted drops coverage for any registration ID that also faulted in
+// the same pass. Enumeration is keyed by owner, so two keystore records can
+// carry one registration ID (which is what ErrAmbiguousAppRegistration
+// exists for); without this, the record that reconciled would open the gate
+// for an ID whose sibling record could not be validated.
+func withdrawFaulted(
+	covered []registrationCoverage,
+	faults []JanitorRegistrationFault,
+) []registrationCoverage {
+	if len(faults) == 0 {
+		return covered
+	}
+	faulted := make(map[int64]struct{}, len(faults))
+	for _, fault := range faults {
+		faulted[fault.RegistrationID] = struct{}{}
+	}
+	return slices.DeleteFunc(covered, func(coverage registrationCoverage) bool {
+		_, ok := faulted[coverage.registrationID]
+		return ok
+	})
+}
+
+// reconcileApp resolves one registration's authority and reconciles it. Its
+// errors are attributable to that registration alone except for
+// errJanitorUnsafe, which reconcileRegistration raises for the shared audit
+// barrier and for a credential it could not revoke; runCycle separates them.
+func (j *InstallationJanitor) reconcileApp(
+	ctx context.Context,
+	app AppCredentials,
+	cycle *JanitorCycle,
+) (bool, registrationCoverage, error) {
+	snapshot, err := j.authority.InstallationAuthority(ctx, app.AppID)
+	if err != nil {
+		return false, registrationCoverage{}, fmt.Errorf(
+			"installation janitor: registration %d authority: %w",
+			app.AppID,
+			err,
+		)
+	}
+	authority, err := validateInstallationAuthority(app, snapshot, j.now())
+	if err != nil {
+		return false, registrationCoverage{}, fmt.Errorf(
+			"installation janitor: registration %d authority: %w",
+			app.AppID,
+			err,
+		)
+	}
+	return j.reconcileRegistration(ctx, app, authority, cycle)
 }
 
 type registrationCoverage struct {
@@ -429,7 +558,12 @@ func (j *InstallationJanitor) reconcileRegistration(
 		return true, coverage, nil
 	}
 	for _, installation := range actions {
-		if cycle.Removed >= j.maxRemovals {
+		// The bound is spent on attempts, not successes. A failed suspend or
+		// delete used to end the pass, so counting only what completed was
+		// safe; now that the pass continues, counting completions would let
+		// every registration spend one more destructive request than the
+		// operator's bound allows.
+		if cycle.attempted >= j.maxRemovals {
 			cycle.RemovalLimitReached = true
 			return false, registrationCoverage{}, nil
 		}
@@ -454,12 +588,16 @@ func (j *InstallationJanitor) reconcileRegistration(
 			recordErr = j.recorder.RecordInstallationRemoval(record)
 		}
 		if recordErr != nil {
+			// The journal is one shared file, so its failure is the host's,
+			// not this registration's.
 			return false, registrationCoverage{}, fmt.Errorf(
-				"installation janitor: registration %d audit removal: %w",
+				"installation janitor: registration %d audit removal: %w: %w",
 				app.AppID,
+				errJanitorUnsafe,
 				recordErr,
 			)
 		}
+		cycle.attempted++
 		if installation.quarantine {
 			if err := j.suspendInstallation(ctx, jwt, installation.installationID); err != nil {
 				return false, registrationCoverage{}, fmt.Errorf("installation janitor: registration %d: %w", app.AppID, err)
@@ -520,6 +658,13 @@ func (j *InstallationJanitor) enumerateRepositoryGrants(
 	revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	revokeErr := j.revokeInstallationToken(revokeCtx, token)
+	if revokeErr != nil {
+		// A token the janitor minted and could not revoke stays live for an
+		// hour. Faulting the registration would re-mint one every pass, so an
+		// unrevoked token stops the pass instead: the daemon must not keep
+		// issuing credentials it has just proven it cannot take back.
+		revokeErr = fmt.Errorf("%w: %w", errJanitorUnsafe, revokeErr)
+	}
 	if mintErr != nil {
 		if revokeErr != nil {
 			return nil, errors.Join(mintErr, revokeErr)
@@ -552,23 +697,38 @@ func (j *InstallationJanitor) mintGrantReadToken(
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("Content-Type", "application/json")
+	// Minting is not idempotent, so from here on an error that leaves the
+	// outcome unknown must not be retried: the token GitHub may have created
+	// is live for an hour and this daemon never learned its value, so it can
+	// never be revoked. Only a refusal proves nothing was created.
 	resp, err := j.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("mint grant-read token: %w", err)
+		return "", fmt.Errorf("mint grant-read token: %w: %w", errJanitorUnsafe, err)
 	}
 	defer drainAndClose(resp.Body)
 	if resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("mint grant-read token: %w", &APIError{
+		mintErr := fmt.Errorf("mint grant-read token: %w", &APIError{
 			Status:      resp.StatusCode,
 			RequestPath: "/app/installations/{installation_id}/access_tokens",
 		})
+		if resp.StatusCode < http.StatusBadRequest || resp.StatusCode >= http.StatusInternalServerError {
+			return "", fmt.Errorf("%w: %w", errJanitorUnsafe, mintErr)
+		}
+		// GitHub refused the request, which is this registration's own state:
+		// a wrong key, a withdrawn installation.
+		return "", mintErr
 	}
+	// GitHub created a token. Every path below either carries its value out
+	// for the caller to revoke, or has lost it for good.
 	var minted grantReadMintResponse
 	if err := decodeResponse(resp.Body, &minted); err != nil {
+		if minted.Token.Reveal() == "" {
+			return "", fmt.Errorf("mint grant-read token: %w: decode response", errJanitorUnsafe)
+		}
 		return minted.Token, errors.New("mint grant-read token: decode response")
 	}
 	if minted.Token.Reveal() == "" {
-		return "", errors.New("mint grant-read token: response carries no token")
+		return "", fmt.Errorf("mint grant-read token: %w: response carries no token", errJanitorUnsafe)
 	}
 	if !maps.Equal(minted.Permissions, grantReadPermissionScopes) ||
 		minted.RepositorySelection != "selected" {
@@ -713,13 +873,30 @@ func (j *InstallationJanitor) deleteInstallation(ctx context.Context, jwt Secret
 	return nil
 }
 
-func (j *InstallationJanitor) setCovered(registrations []registrationCoverage) {
+// withdrawCoverage shuts every gate while leaving the last pass's faults
+// published, so a registration that is failing does not read as one that has
+// simply not been visited yet.
+func (j *InstallationJanitor) withdrawCoverage() {
+	j.mu.Lock()
+	j.covered = map[int64]registrationCoverage{}
+	j.mu.Unlock()
+}
+
+// publishPass replaces the gate's whole view of the latest pass. Coverage and
+// faults are written together, so neither can be published without the other;
+// a reader that takes them in two calls can still straddle a pass boundary,
+// which degrades a fault to plain inactivity and never the reverse.
+func (j *InstallationJanitor) publishPass(
+	registrations []registrationCoverage,
+	faults []JanitorRegistrationFault,
+) {
 	covered := make(map[int64]registrationCoverage, len(registrations))
 	for _, registration := range registrations {
 		covered[registration.registrationID] = registration
 	}
 	j.mu.Lock()
 	j.covered = covered
+	j.faults = slices.Clone(faults)
 	j.mu.Unlock()
 }
 
@@ -737,5 +914,6 @@ func (j *InstallationJanitor) finishRun() {
 	j.mu.Lock()
 	j.running = false
 	j.covered = map[int64]registrationCoverage{}
+	j.faults = nil
 	j.mu.Unlock()
 }

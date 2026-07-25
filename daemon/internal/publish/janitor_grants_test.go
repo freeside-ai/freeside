@@ -293,9 +293,16 @@ func TestInstallationJanitorTokenFailuresNeverPublishCoverage(t *testing.T) {
 				recorder,
 				1,
 			)
-			err := janitor.Run(context.Background(), time.Hour)
+			// One bounded pass, so the counts below are exact. The always-on
+			// loop no longer stops on a token failure it can attribute to a
+			// registration (#281), so driving Run here would retry the
+			// registration every interval and make every count unbounded;
+			// the loop's own behaviour on these failures is pinned by
+			// TestInstallationJanitorIsolatesAReconcileFailure and
+			// TestInstallationJanitorStopsOnAnUnrevokedToken.
+			_, err := janitor.RunCycle(context.Background())
 			if err == nil {
-				t.Fatal("Run accepted a token or revoke failure")
+				t.Fatal("RunCycle accepted a token or revoke failure")
 			}
 			if revokes != tc.wantRevoke || janitor.ActiveFor(501) ||
 				len(recorder.snapshot()) != 0 {
