@@ -131,6 +131,14 @@ var ErrJanitorInactive = errors.New("GitHub App installation janitor is not acti
 // enters this mint allow-set.
 var ErrInstallationGrantUntrusted = errors.New("installation repository grant is not trusted")
 
+// ErrInstallationAuthoritySnapshot reports that the operator-authored
+// installation authority snapshot could not be read as exactly one complete,
+// well-formed authority for the registration being reconciled. Every such
+// failure denies the pass: an authority this package cannot fully interpret
+// would otherwise read as an empty one, and an empty authority instructs the
+// janitor to delete every installation it observes.
+var ErrInstallationAuthoritySnapshot = errors.New("installation authority snapshot is unusable")
+
 // ErrHeadMismatch is returned when a head-bound artifact's
 // source_head_sha differs from the candidate head being published:
 // its evidence describes some other revision, and a new remediation

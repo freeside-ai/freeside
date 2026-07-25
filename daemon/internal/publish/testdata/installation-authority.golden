@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "registrations": [
+    {
+      "registration_id": 4385298,
+      "active_epoch": 1,
+      "durable_intent_revision": 1,
+      "trusted_owners": [
+        {
+          "login": "freeside-ai",
+          "id": 231470451
+        }
+      ],
+      "trusted_installations": [
+        {
+          "installation_id": 148770512,
+          "account": "freeside-ai",
+          "account_id": 231470451,
+          "repository_ids": [
+            1278475858
+          ]
+        }
+      ],
+      "pending": null
+    },
+    {
+      "registration_id": 7700001,
+      "active_epoch": 3,
+      "durable_intent_revision": 7,
+      "trusted_owners": [
+        {
+          "login": "example-org",
+          "id": 4242
+        }
+      ],
+      "trusted_installations": [],
+      "pending": {
+        "active_epoch": 3,
+        "durable_intent_revision": 7,
+        "expected_account": "example-org",
+        "expected_account_id": 4242,
+        "installation_id": 0,
+        "current_repository_ids": [],
+        "expected_repository_ids": [
+          55,
+          56
+        ],
+        "required_repository_mode": "selected",
+        "expires_at": "2026-07-25T12:00:00Z"
+      }
+    }
+  ]
+}
