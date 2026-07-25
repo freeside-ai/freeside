@@ -79,7 +79,7 @@ func newJanitor(
 	t *testing.T,
 	ks *publish.Keystore,
 	server *httptest.Server,
-	authority installationAuthoritySource,
+	authority publish.InstallationAuthoritySource,
 	recorder *removalRecorder,
 	maxRemovals int,
 ) *publish.InstallationJanitor {
