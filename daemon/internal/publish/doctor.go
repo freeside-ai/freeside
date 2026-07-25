@@ -16,6 +16,7 @@ const (
 	CredentialFindingVisibilityMismatch CredentialFindingCode = "visibility_mismatch"
 	CredentialFindingMetadataMismatch   CredentialFindingCode = "registration_metadata_mismatch"
 	CredentialFindingJanitorInactive    CredentialFindingCode = "janitor_inactive"
+	CredentialFindingJanitorFailed      CredentialFindingCode = "janitor_registration_failed"
 	CredentialFindingLegacyLayout       CredentialFindingCode = "legacy_singleton_layout"
 	CredentialFindingReusedMachineKey   CredentialFindingCode = "reused_machine_key"
 	CredentialFindingUnreadableRecord   CredentialFindingCode = "unreadable_registration" //nolint:gosec // diagnostic vocabulary, not a credential
@@ -30,6 +31,7 @@ var AllCredentialFindingCodes = []CredentialFindingCode{
 	CredentialFindingVisibilityMismatch,
 	CredentialFindingMetadataMismatch,
 	CredentialFindingJanitorInactive,
+	CredentialFindingJanitorFailed,
 	CredentialFindingLegacyLayout,
 	CredentialFindingReusedMachineKey,
 	CredentialFindingUnreadableRecord,
@@ -43,6 +45,7 @@ func (c CredentialFindingCode) valid() bool {
 		CredentialFindingVisibilityMismatch,
 		CredentialFindingMetadataMismatch,
 		CredentialFindingJanitorInactive,
+		CredentialFindingJanitorFailed,
 		CredentialFindingLegacyLayout,
 		CredentialFindingReusedMachineKey,
 		CredentialFindingUnreadableRecord,
@@ -73,6 +76,15 @@ type CredentialFinding struct {
 	RegistrationID int64
 	OwnerID        int64
 	KeyID          string
+}
+
+// janitorFaultSource is the reporting half of the always-on janitor. The
+// doctor discovers it on the JanitorStatus it already holds rather than taking
+// it as a second dependency, so the fault explaining a shut gate always comes
+// from the janitor that shut it. A JanitorStatus that does not implement it
+// degrades to the generic inactive finding.
+type janitorFaultSource interface {
+	RegistrationFaults() []JanitorRegistrationFault
 }
 
 // CredentialDoctor checks the local keystore and canonical App metadata. It
@@ -223,6 +235,25 @@ func (d *CredentialDoctor) Check(
 	return findings, nil
 }
 
+// janitorCode separates a registration the janitor is actively failing from
+// one that is merely waiting for its first pass. Both shut the same gate, but
+// only one is a state an operator has to repair, and #281 made the failing
+// case survivable rather than fatal to the loop, so nothing else announces it.
+// The reason stays in the janitor's own fault, which may quote a remote or
+// operator-authored value; CredentialFinding carries safe coordinates only.
+func (d *CredentialDoctor) janitorCode(registrationID int64) CredentialFindingCode {
+	faults, ok := d.janitor.(janitorFaultSource)
+	if !ok {
+		return CredentialFindingJanitorInactive
+	}
+	for _, fault := range faults.RegistrationFaults() {
+		if fault.RegistrationID == registrationID {
+			return CredentialFindingJanitorFailed
+		}
+	}
+	return CredentialFindingJanitorInactive
+}
+
 func (d *CredentialDoctor) checkApp(
 	ctx context.Context,
 	app AppCredentials,
@@ -248,7 +279,7 @@ func (d *CredentialDoctor) checkApp(
 	}
 	if d.janitor == nil || !d.janitor.ActiveFor(app.AppID) {
 		return []CredentialFinding{credentialFinding(
-			CredentialFindingJanitorInactive,
+			d.janitorCode(app.AppID),
 			app.AppID,
 			app.OwnerID,
 			"",
