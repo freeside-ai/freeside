@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,25 +21,49 @@ const (
 	// whose authority had been tampered with.
 	installationAuthorityFileName = "installation-authority.json"
 
+	// installationJanitorJournalFileName is the daemon-owned audit log and
+	// quarantine set.
+	installationJanitorJournalFileName = "installation-janitor-journal.json"
+
+	// installationJanitorLockFileName serializes the journal's
+	// read-modify-write. See lockJournal.
+	installationJanitorLockFileName = "installation-janitor-journal.lock"
+
 	// installationAuthorityMaxBytes bounds the operator's file. Exceeding it
 	// denies the pass rather than truncating: a partial authority is a narrower
 	// one, and a narrower authority is destructive.
 	installationAuthorityMaxBytes = 1 << 20
+
+	// installationJournalMaxBytes bounds the daemon's own journal, which grows
+	// by one audit entry per destructive request and carries the repository set
+	// observed at grant drift. That set is sized by the account being
+	// reconciled, so the bound is larger than the operator's file and, unlike
+	// it, is enforced on the way in as well: a journal written past the size it
+	// can be read at would deny every registration and could not be repaired by
+	// the daemon itself.
+	installationJournalMaxBytes = 8 << 20
 )
 
-// InstallationAuthorityStore serves the janitor's installation authority from a
-// daemon state directory on a standalone host. It is the port's first non-test
-// implementation: #263 deferred its persistence until a consumer existed, which
-// left every registration inoperable behind the janitor gate.
+// InstallationAuthorityStore backs both janitor ports from a daemon state
+// directory on a standalone host. It is the first non-test implementation of
+// either: #263 deferred their persistence until a consumer existed, which left
+// every registration inoperable behind the janitor gate.
+//
+// One type implements both ports because quarantine's local invalidation has to
+// commit with its audit record (see JanitorRecorder): one file and one rename
+// are that transaction, and one mutex keeps a half-written withdrawal
+// unobservable by a concurrent load.
 //
 // The operator's file is a reconstruction trust boundary, so every field is
 // re-validated on load and any failure denies the pass. "Fails closed" is
 // bounded, though, and the bounds are these. It covers structural tamper:
 // truncation, a partial write, a widened mode, a symlinked component, unknown
-// or duplicated fields, an over-cap file. It does not cover authorship: the
-// file is plaintext under a directory the operator controls, and the
-// directory's ownership is not checked, only its mode, as the keystore checks
-// its own.
+// or duplicated fields, an over-cap file. It does not cover authorship: both
+// files are plaintext under a directory the operator controls, the directory's
+// ownership is not checked (only its mode, as the keystore checks its own), and
+// deleting the journal outright restores trust in every installation the
+// operator's file still names. A withdrawal survives a restart; it does not
+// survive an operator discarding the daemon's state.
 //
 // The composing caller (#236) must pass the same state directory the keystore
 // was constructed against, which keeps App credentials structurally outside it.
@@ -47,7 +72,10 @@ type InstallationAuthorityStore struct {
 	mu  sync.Mutex
 }
 
-var _ InstallationAuthoritySource = (*InstallationAuthorityStore)(nil)
+var (
+	_ InstallationAuthoritySource = (*InstallationAuthorityStore)(nil)
+	_ JanitorRecorder             = (*InstallationAuthorityStore)(nil)
+)
 
 // NewInstallationAuthorityStore resolves the state directory once, the way the
 // keystore resolves its roots: a symlink at the directory itself is the
@@ -67,9 +95,10 @@ func NewInstallationAuthorityStore(stateDir string) (*InstallationAuthorityStore
 	return &InstallationAuthorityStore{dir: resolved}, nil
 }
 
-// InstallationAuthority serves one registration's authored authority.
+// InstallationAuthority serves one registration's authority, with every
+// installation this daemon has quarantined withdrawn from it.
 //
-// The file is re-read on every call. A registration is reconciled against
+// Both files are re-read on every call. A registration is reconciled against
 // the authority as it stands when its turn comes, and an operator's correction
 // takes effect on the next pass without a restart.
 func (s *InstallationAuthorityStore) InstallationAuthority(
@@ -102,11 +131,118 @@ func (s *InstallationAuthorityStore) InstallationAuthority(
 	if err != nil {
 		return InstallationAuthority{}, err
 	}
+	journal, err := s.loadJournalLocked()
+	if err != nil {
+		return InstallationAuthority{}, err
+	}
 	entry, err := document.entry(registrationID)
 	if err != nil {
 		return InstallationAuthority{}, err
 	}
-	return entry.authority(), nil
+	served, err := applyQuarantine(entry, journal.Quarantined)
+	if err != nil {
+		return InstallationAuthority{}, err
+	}
+	return served.authority(), nil
+}
+
+// RecordInstallationRemoval commits the audit barrier for a removal. A removal
+// withdraws nothing locally: the installation it names was never trusted.
+func (s *InstallationAuthorityStore) RecordInstallationRemoval(record InstallationRemovalRecord) error {
+	return s.record(janitorActionRemoval, record)
+}
+
+// RecordInstallationQuarantine commits the audit barrier and the durable
+// withdrawal of trust in one write, before the janitor suspends or deletes
+// anything. A process that dies after this returns cannot re-trust the
+// installation on restart, because the load path subtracts it from whatever the
+// operator's file still says.
+func (s *InstallationAuthorityStore) RecordInstallationQuarantine(record InstallationRemovalRecord) error {
+	return s.record(janitorActionQuarantine, record)
+}
+
+func (s *InstallationAuthorityStore) record(action janitorAction, record InstallationRemovalRecord) error {
+	if s == nil {
+		return errors.New("installation janitor journal: nil store")
+	}
+	entry := janitorAuditEntry{
+		Action:                action,
+		RequestedAt:           record.RequestedAt.UTC(),
+		RegistrationID:        record.RegistrationID,
+		InstallationID:        record.InstallationID,
+		AccountID:             record.AccountID,
+		Reason:                record.Reason,
+		ObservedRepositoryIDs: slices.Clone(record.ObservedRepositoryIDs),
+	}
+	if err := entry.validate(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockJournal()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	journal, err := s.loadJournalLocked()
+	if err != nil {
+		return err
+	}
+	payload, err := journal.record(entry).encode()
+	if err != nil {
+		return err
+	}
+	if len(payload) > installationJournalMaxBytes {
+		return fmt.Errorf(
+			"installation janitor journal: recording installation %d would grow the journal to %d bytes, "+
+				"over the %d byte limit; trim its audit entries and keep its quarantine set",
+			entry.InstallationID, len(payload), installationJournalMaxBytes,
+		)
+	}
+	return s.writeFile(installationJanitorJournalFileName, payload)
+}
+
+// lockJournal takes an exclusive advisory lock for the journal's
+// read-modify-write. The in-process mutex belongs to one store value, and
+// nothing stops a composer from constructing one store per port, or a second
+// process from sharing the state directory; either would let two writers read
+// the same journal and have the later rename discard the earlier's withdrawal,
+// leaving an installation this daemon suspended and deleted trusted again on
+// restart. The lock is released by the kernel when the descriptor closes, so no
+// crash can leave it held.
+func (s *InstallationAuthorityStore) lockJournal() (func(), error) {
+	if err := s.assertDirectory(); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(s.dir, installationJanitorLockFileName)
+	if err := rejectSymlinkedPath(path); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600) //nolint:gosec // G304: fixed name under the resolved state directory
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return func() { _ = f.Close() }, nil
+}
+
+// loadJournalLocked reads the daemon's own journal. An absent file is the only
+// tolerated absence in this store: no destructive request has been recorded
+// yet, so nothing has been withdrawn. Every other failure denies the caller.
+func (s *InstallationAuthorityStore) loadJournalLocked() (janitorJournal, error) {
+	payload, err := s.readFile(installationJanitorJournalFileName, installationJournalMaxBytes)
+	if errors.Is(err, fs.ErrNotExist) {
+		return janitorJournal{Version: installationJanitorJournalVersion}, nil
+	}
+	if err != nil {
+		return janitorJournal{}, fmt.Errorf("installation janitor journal: %w", err)
+	}
+	return decodeJanitorJournal(payload)
 }
 
 // readFile reads one state file under the store's directory, refusing anything
@@ -149,6 +285,48 @@ func (s *InstallationAuthorityStore) readFile(name string, maxBytes int64) ([]by
 		return nil, fmt.Errorf("%s grew past the %d byte limit while being read", path, maxBytes)
 	}
 	return payload, nil
+}
+
+// writeFile replaces one state file durably: a fresh owner-only temporary file,
+// synced, renamed over the destination, and the directory entry synced. A
+// reader therefore sees either the whole previous file or the whole new one,
+// and a crash cannot leave a half-written journal that would decode as a
+// narrower quarantine set.
+func (s *InstallationAuthorityStore) writeFile(name string, payload []byte) (err error) {
+	if err := s.assertDirectory(); err != nil {
+		return err
+	}
+	// A crash between the temporary file and the rename leaves an orphan behind.
+	// Nothing reads it, but the caller holds the journal lock here, so this is
+	// the one safe moment to collect them.
+	stale, _ := filepath.Glob(filepath.Join(s.dir, name+".tmp-*"))
+	for _, path := range stale {
+		_ = os.Remove(path)
+	}
+	tmp, err := os.CreateTemp(s.dir, name+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		if err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err = tmp.Write(payload); err != nil {
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(tmpPath, filepath.Join(s.dir, name)); err != nil {
+		return err
+	}
+	return syncDir(s.dir)
 }
 
 // assertDirectory refuses a state directory another account can write to.
