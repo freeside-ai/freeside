@@ -46,18 +46,9 @@ func newLiveMinter(t *testing.T) (m *publish.Minter, repo string, profile domain
 			"FREESIDE_PUBLISH_LIVE_REPOSITORY_ID, FREESIDE_PUBLISH_LIVE_REPO (owner/name)")
 	}
 
-	appID, err := strconv.ParseInt(os.Getenv("FREESIDE_PUBLISH_LIVE_APP_ID"), 10, 64)
-	if err != nil {
-		t.Fatalf("FREESIDE_PUBLISH_LIVE_APP_ID: %v", err)
-	}
-	ownerID, err := strconv.ParseInt(os.Getenv("FREESIDE_PUBLISH_LIVE_OWNER_ID"), 10, 64)
-	if err != nil {
-		t.Fatalf("FREESIDE_PUBLISH_LIVE_OWNER_ID: %v", err)
-	}
-	repositoryID, err := strconv.ParseInt(os.Getenv("FREESIDE_PUBLISH_LIVE_REPOSITORY_ID"), 10, 64)
-	if err != nil {
-		t.Fatalf("FREESIDE_PUBLISH_LIVE_REPOSITORY_ID: %v", err)
-	}
+	appID := liveInt64(t, "FREESIDE_PUBLISH_LIVE_APP_ID")
+	ownerID := liveInt64(t, "FREESIDE_PUBLISH_LIVE_OWNER_ID")
+	repositoryID := liveInt64(t, "FREESIDE_PUBLISH_LIVE_REPOSITORY_ID")
 	repo = os.Getenv("FREESIDE_PUBLISH_LIVE_REPO")
 	if repo == "" {
 		t.Fatal("FREESIDE_PUBLISH_LIVE_REPO is empty")
@@ -433,4 +424,178 @@ func liveAuthed(req *http.Request, auth string) {
 	req.Header.Set("Authorization", auth)
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("Accept", "application/vnd.github+json")
+}
+
+// liveGuardRecorder makes the opt-in live janitor pass non-destructive, with no
+// way to opt back in. The janitor commits an audit barrier before it suspends or
+// deletes anything and abandons the pass when that fails, so refusing here turns
+// an unexpected drift on the operator's real App into a failed test rather than
+// a deleted installation.
+//
+// There is deliberately no escape hatch. This fixture builds a keystore and a
+// state directory under t.TempDir(), which the framework removes when the test
+// ends: a genuinely destructive pass out of it would suspend and delete a real
+// installation and then discard the audit record and the durable withdrawal that
+// justified doing so, leaving the operator's own daemon to re-trust whatever
+// survived. Exercising removal against a live App needs the operator's real
+// state directory, which is not a thing a test fixture may borrow.
+type liveGuardRecorder struct{}
+
+func (liveGuardRecorder) RecordInstallationRemoval(record publish.InstallationRemovalRecord) error {
+	return fmt.Errorf("live guard: refusing to remove installation %d", record.InstallationID)
+}
+
+func (liveGuardRecorder) RecordInstallationQuarantine(record publish.InstallationRemovalRecord) error {
+	return fmt.Errorf("live guard: refusing to quarantine installation %d", record.InstallationID)
+}
+
+// TestLiveInstallationJanitorPublishesCoverage runs the always-on janitor against
+// the real GitHub API with its authority read from a state-directory snapshot
+// (issue #276 acceptance 6). It proves the gate every mint depends on can
+// actually be opened by a standalone host: the janitor reconciles the operator's
+// authored bindings against the App's real installations and publishes coverage
+// for the exact repository.
+func TestLiveInstallationJanitorPublishesCoverage(t *testing.T) {
+	if os.Getenv("FREESIDE_PUBLISH_LIVE_TEST") != "1" {
+		t.Skip("live GitHub integration is opt-in: set FREESIDE_PUBLISH_LIVE_TEST=1, " +
+			"FREESIDE_PUBLISH_LIVE_APP_ID, FREESIDE_PUBLISH_LIVE_APP_OWNER, FREESIDE_PUBLISH_LIVE_OWNER_ID, " +
+			"FREESIDE_PUBLISH_LIVE_APP_VISIBILITY (public|private), FREESIDE_PUBLISH_LIVE_KEY_PATH, " +
+			"FREESIDE_PUBLISH_LIVE_REPO (owner/name), FREESIDE_PUBLISH_LIVE_REPOSITORY_ID, " +
+			"FREESIDE_PUBLISH_LIVE_INSTALLATION_ID, FREESIDE_PUBLISH_LIVE_ACCOUNT_ID")
+	}
+	appID := liveInt64(t, "FREESIDE_PUBLISH_LIVE_APP_ID")
+	ownerID := liveInt64(t, "FREESIDE_PUBLISH_LIVE_OWNER_ID")
+	repositoryID := liveInt64(t, "FREESIDE_PUBLISH_LIVE_REPOSITORY_ID")
+	installationID := liveInt64(t, "FREESIDE_PUBLISH_LIVE_INSTALLATION_ID")
+	accountID := liveInt64(t, "FREESIDE_PUBLISH_LIVE_ACCOUNT_ID")
+	appOwner := os.Getenv("FREESIDE_PUBLISH_LIVE_APP_OWNER")
+	repo := os.Getenv("FREESIDE_PUBLISH_LIVE_REPO")
+	if _, err := bareRepoName(repo); err != nil {
+		t.Fatalf("FREESIDE_PUBLISH_LIVE_REPO: %v", err)
+	}
+	// The installation's account is the repository's owner: an installation can
+	// only grant repositories the account it is installed on holds.
+	account := strings.SplitN(repo, "/", 2)[0]
+	var visibility publish.AppVisibility
+	switch os.Getenv("FREESIDE_PUBLISH_LIVE_APP_VISIBILITY") {
+	case "public":
+		visibility = publish.AppVisibilityPublic
+	case "private":
+		visibility = publish.AppVisibilityPrivate
+	default:
+		t.Fatal("FREESIDE_PUBLISH_LIVE_APP_VISIBILITY must be public or private")
+	}
+
+	keyPEM, err := os.ReadFile(os.Getenv("FREESIDE_PUBLISH_LIVE_KEY_PATH")) //nolint:gosec // operator-supplied path for the opt-in live test
+	if err != nil {
+		t.Fatalf("read live key: %v", err)
+	}
+	key, err := parseTestPEM(keyPEM)
+	if err != nil {
+		t.Fatalf("parse live key: %v", err)
+	}
+
+	// Credentials and state are siblings, the arrangement the keystore enforces
+	// and the one freesided will compose.
+	base := t.TempDir()
+	stateDir := filepath.Join(base, "state")
+	if err := os.Mkdir(stateDir, 0o700); err != nil {
+		t.Fatalf("create state dir: %v", err)
+	}
+	ks, err := publish.NewKeystore(filepath.Join(base, "credentials"), stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ks.SaveApp(publish.AppCredentials{
+		Owner:      appOwner,
+		OwnerID:    ownerID,
+		Visibility: visibility,
+		AppID:      appID,
+		Name:       "live-test-app",
+		Key:        key,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A public registration must trust its own owner as well as the account it
+	// is installed on; when they are the same account, one entry says both.
+	owners := []publish.TrustedOwnerRecord{{Login: appOwner, ID: ownerID}}
+	if accountID != ownerID {
+		owners = append(owners, publish.TrustedOwnerRecord{Login: account, ID: accountID})
+	}
+	document := publish.InstallationAuthorityDocument{
+		Version: 1,
+		Registrations: []publish.InstallationAuthorityEntry{{
+			RegistrationID:        appID,
+			ActiveEpoch:           1,
+			DurableIntentRevision: 1,
+			TrustedOwners:         owners,
+			TrustedInstallations: []publish.TrustedInstallationRecord{{
+				InstallationID: installationID,
+				Account:        account,
+				AccountID:      accountID,
+				RepositoryIDs:  []int64{repositoryID},
+			}},
+		}},
+	}
+	payload, err := document.Encode()
+	if err != nil {
+		t.Fatalf("encode authority: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "installation-authority.json"), payload, 0o600); err != nil {
+		t.Fatalf("write authority: %v", err)
+	}
+
+	store, err := publish.NewInstallationAuthorityStore(stateDir)
+	if err != nil {
+		t.Fatalf("new authority store: %v", err)
+	}
+	janitor, err := publish.NewInstallationJanitor(
+		ks,
+		&http.Client{Timeout: 30 * time.Second},
+		"https://api.github.com",
+		store,
+		liveGuardRecorder{},
+		time.Now,
+		1,
+	)
+	if err != nil {
+		t.Fatalf("NewInstallationJanitor: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- janitor.Run(ctx, time.Hour) }()
+	deadline := time.Now().Add(60 * time.Second)
+	for !janitor.ActiveFor(appID) && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	activated := janitor.ActiveFor(appID)
+	allowed := janitor.AllowsRepository(appID, installationID, repositoryID)
+	cancel()
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("live janitor pass: %v", err)
+	}
+
+	if !activated {
+		t.Fatal("the live pass published no coverage for the registration")
+	}
+	if !allowed {
+		t.Fatalf("coverage does not authorize repository %d under installation %d", repositoryID, installationID)
+	}
+	// Nothing was recorded, so nothing was suspended or deleted: the journal is
+	// only ever written by the audit barrier.
+	if _, err := os.Lstat(filepath.Join(stateDir, "installation-janitor-journal.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the live pass recorded a destructive request (%v)", err)
+	}
+}
+
+func liveInt64(t *testing.T, name string) int64 {
+	t.Helper()
+	value, err := strconv.ParseInt(os.Getenv(name), 10, 64)
+	if err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	return value
 }
