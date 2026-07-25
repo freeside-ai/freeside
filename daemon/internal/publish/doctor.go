@@ -18,6 +18,7 @@ const (
 	CredentialFindingJanitorInactive    CredentialFindingCode = "janitor_inactive"
 	CredentialFindingLegacyLayout       CredentialFindingCode = "legacy_singleton_layout"
 	CredentialFindingReusedMachineKey   CredentialFindingCode = "reused_machine_key"
+	CredentialFindingUnreadableRecord   CredentialFindingCode = "unreadable_registration" //nolint:gosec // diagnostic vocabulary, not a credential
 )
 
 // AllCredentialFindingCodes is the single registration point for doctor
@@ -30,6 +31,7 @@ var AllCredentialFindingCodes = []CredentialFindingCode{
 	CredentialFindingJanitorInactive,
 	CredentialFindingLegacyLayout,
 	CredentialFindingReusedMachineKey,
+	CredentialFindingUnreadableRecord,
 }
 
 func (c CredentialFindingCode) valid() bool {
@@ -40,7 +42,8 @@ func (c CredentialFindingCode) valid() bool {
 		CredentialFindingMetadataMismatch,
 		CredentialFindingJanitorInactive,
 		CredentialFindingLegacyLayout,
-		CredentialFindingReusedMachineKey:
+		CredentialFindingReusedMachineKey,
+		CredentialFindingUnreadableRecord:
 		return true
 	default:
 		return false
@@ -110,11 +113,24 @@ func (d *CredentialDoctor) Check(
 
 	apps, err := d.onboarder.keystore.ListApps()
 	if err != nil {
+		// Enumeration fails closed on the whole keystore, so whenever the
+		// failure belongs to one record its owner ID rides every finding
+		// code, not only the unreadable one: an operator told "missing key"
+		// or "bad permissions" with no owner cannot tell which of several
+		// registrations is blocking every resolver and janitor cycle. A
+		// keystore-wide failure carries no owner and reports zero.
+		var unreadable *UnreadableRegistrationError
+		var ownerID int64
+		if errors.As(err, &unreadable) {
+			ownerID = unreadable.OwnerID
+		}
 		switch {
 		case errors.Is(err, ErrCredentialPermissions):
-			return []CredentialFinding{credentialFinding(CredentialFindingBadPermissions, 0, 0, "")}, nil
+			return []CredentialFinding{credentialFinding(CredentialFindingBadPermissions, 0, ownerID, "")}, nil
 		case errors.Is(err, ErrNoAppCredentials), errors.Is(err, ErrNoAppRegistration):
-			return []CredentialFinding{credentialFinding(CredentialFindingMissingKey, 0, 0, "")}, nil
+			return []CredentialFinding{credentialFinding(CredentialFindingMissingKey, 0, ownerID, "")}, nil
+		case errors.Is(err, ErrUnreadableRegistration):
+			return []CredentialFinding{credentialFinding(CredentialFindingUnreadableRecord, 0, ownerID, "")}, nil
 		default:
 			return nil, fmt.Errorf("credential doctor: inspect keystore: %w", err)
 		}

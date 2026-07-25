@@ -1136,3 +1136,884 @@ const (
 	metaFileNameForTest = "app.json"
 	testOwnerID         = int64(24680)
 )
+
+// stripOwnerMetadata reproduces the pre-#245 record shape found on the
+// maintainer's machine (#271): an owner-keyed directory whose metadata
+// carries the app id and slug but null owner, owner id, visibility, key
+// id, and name.
+func stripOwnerMetadata(t *testing.T, ks *publish.Keystore, ownerID int64) {
+	t.Helper()
+	metaPath := filepath.Join(testAppDir(ks, ownerID), metaFileNameForTest)
+	metaRaw, err := os.ReadFile(metaPath) //nolint:gosec // test fixture under t.TempDir
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(metaRaw, &meta); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"owner", "owner_id", "visibility", "key_id", "name"} {
+		meta[field] = nil
+	}
+	stripped, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metaPath, stripped, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestListAppsNamesTheUnreadableRegistration is #271's core property: one
+// record with incomplete metadata still fails enumeration closed, but the
+// failure now names that record instead of reading as a broken keystore.
+func TestListAppsNamesTheUnreadableRegistration(t *testing.T) {
+	ks := newTestKeystore(t)
+	personal, org := twoRegistrations()
+	saveAll(t, ks, personal, org)
+	stripOwnerMetadata(t, ks, org.OwnerID)
+
+	apps, err := ks.ListApps()
+	if err == nil {
+		t.Fatalf("ListApps returned %d registrations over an incomplete record, want error", len(apps))
+	}
+	if !errors.Is(err, publish.ErrUnreadableRegistration) {
+		t.Fatalf("ListApps error = %v, want ErrUnreadableRegistration", err)
+	}
+	var unreadable *publish.UnreadableRegistrationError
+	if !errors.As(err, &unreadable) {
+		t.Fatalf("ListApps error %v does not carry *UnreadableRegistrationError", err)
+	}
+	if unreadable.OwnerID != org.OwnerID {
+		t.Errorf("unreadable owner id = %d, want %d", unreadable.OwnerID, org.OwnerID)
+	}
+	if !strings.Contains(err.Error(), strconv.FormatInt(org.OwnerID, 10)) {
+		t.Errorf("ListApps error %q does not identify owner ID %d", err, org.OwnerID)
+	}
+}
+
+// TestQuarantineAppRestoresEnumeration proves the operator's withdrawal is
+// what re-opens resolution, and that it preserves rather than deletes the
+// record.
+func TestQuarantineAppRestoresEnumeration(t *testing.T) {
+	ks := newTestKeystore(t)
+	personal, org := twoRegistrations()
+	saveAll(t, ks, personal, org)
+	stripOwnerMetadata(t, ks, org.OwnerID)
+
+	if err := ks.QuarantineApp(org.OwnerID); err != nil {
+		t.Fatalf("QuarantineApp: %v", err)
+	}
+	apps, err := ks.ListApps()
+	if err != nil {
+		t.Fatalf("ListApps after quarantine: %v", err)
+	}
+	if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
+		t.Fatalf("ListApps after quarantine = %+v, want only owner %d", apps, personal.OwnerID)
+	}
+	quarantined := filepath.Join(
+		ks.Dir(), "github-app"+".quarantine", strconv.FormatInt(org.OwnerID, 10),
+	)
+	for _, name := range []string{keyFileNameForTest, metaFileNameForTest} {
+		if _, err := os.Lstat(filepath.Join(quarantined, name)); err != nil {
+			t.Errorf("quarantined %s: %v", name, err)
+		}
+	}
+	if _, err := os.Lstat(testAppDir(ks, org.OwnerID)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("active registration remains after quarantine: %v", err)
+	}
+}
+
+// TestQuarantineAppRefusesReadableRegistration keeps the withdrawal from
+// becoming a way to drop a working registration out of janitor coverage
+// while its installations stay live on GitHub.
+func TestQuarantineAppRefusesReadableRegistration(t *testing.T) {
+	ks := newTestKeystore(t)
+	personal, org := twoRegistrations()
+	saveAll(t, ks, personal, org)
+
+	if err := ks.QuarantineApp(org.OwnerID); err == nil {
+		t.Fatal("QuarantineApp over a readable registration = nil, want refusal")
+	}
+	apps, err := ks.ListApps()
+	if err != nil {
+		t.Fatalf("ListApps after refused quarantine: %v", err)
+	}
+	if len(apps) != 2 {
+		t.Errorf("ListApps after refused quarantine returned %d registrations, want 2", len(apps))
+	}
+}
+
+// TestQuarantineAppRefusesOverwrite keeps a second withdrawal from
+// destroying the first record it preserved.
+func TestQuarantineAppRefusesOverwrite(t *testing.T) {
+	ks := newTestKeystore(t)
+	personal, org := twoRegistrations()
+	saveAll(t, ks, personal, org)
+	stripOwnerMetadata(t, ks, org.OwnerID)
+	if err := ks.QuarantineApp(org.OwnerID); err != nil {
+		t.Fatalf("QuarantineApp: %v", err)
+	}
+
+	reSaved := org
+	if err := ks.SaveApp(reSaved); err != nil {
+		t.Fatal(err)
+	}
+	stripOwnerMetadata(t, ks, org.OwnerID)
+	if err := ks.QuarantineApp(org.OwnerID); err == nil {
+		t.Fatal("second QuarantineApp = nil, want refusal rather than overwrite")
+	}
+}
+
+// TestQuarantineAppWithdrawsSwapLeftovers proves a .staging sibling cannot
+// resurrect a withdrawn record on the next enumeration.
+func TestQuarantineAppWithdrawsSwapLeftovers(t *testing.T) {
+	ks := newTestKeystore(t)
+	personal, org := twoRegistrations()
+	saveAll(t, ks, personal, org)
+	stripOwnerMetadata(t, ks, org.OwnerID)
+	leftover := testAppDir(ks, org.OwnerID) + ".old"
+	if err := os.MkdirAll(leftover, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{keyFileNameForTest, metaFileNameForTest} {
+		source, err := os.ReadFile(filepath.Join(testAppDir(ks, org.OwnerID), name)) //nolint:gosec // test fixture under t.TempDir
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(leftover, name), source, 0o600); err != nil { //nolint:gosec // test fixture under t.TempDir
+			t.Fatal(err)
+		}
+	}
+
+	if err := ks.QuarantineApp(org.OwnerID); err != nil {
+		t.Fatalf("QuarantineApp: %v", err)
+	}
+	if _, err := os.Lstat(leftover); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("swap leftover remains in the active set after quarantine: %v", err)
+	}
+	apps, err := ks.ListApps()
+	if err != nil {
+		t.Fatalf("ListApps after quarantine: %v", err)
+	}
+	if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
+		t.Fatalf("ListApps after quarantine = %+v, want only owner %d", apps, personal.OwnerID)
+	}
+}
+
+// TestQuarantineAppAbsentOwner keeps the withdrawal from inventing a record.
+func TestQuarantineAppAbsentOwner(t *testing.T) {
+	ks := newTestKeystore(t)
+	if err := ks.SaveApp(testCredentials()); err != nil {
+		t.Fatal(err)
+	}
+	if err := ks.QuarantineApp(999999); !errors.Is(err, publish.ErrNoAppRegistration) {
+		t.Fatalf("QuarantineApp(absent) = %v, want ErrNoAppRegistration", err)
+	}
+}
+
+func twoRegistrations() (personal, org publish.AppCredentials) {
+	personal = testCredentials()
+	personal.Owner = "BenNelsonWeiss"
+	personal.OwnerID = 111
+	personal.AppID = 111
+	org = testCredentials()
+	org.Owner = "freeside-ai"
+	org.OwnerID = 222
+	org.AppID = 222
+	return personal, org
+}
+
+func saveAll(t *testing.T, ks *publish.Keystore, creds ...publish.AppCredentials) {
+	t.Helper()
+	for _, c := range creds {
+		if err := ks.SaveApp(c); err != nil {
+			t.Fatalf("SaveApp(%s): %v", c.Owner, err)
+		}
+	}
+}
+
+// rewriteOwnerID makes a record internally valid but bound to a different
+// owner than its directory key: readable to loadAppFrom, rejected by
+// enumeration. This is the state that let the doctor and the quarantine
+// remedy disagree.
+func rewriteOwnerID(t *testing.T, ks *publish.Keystore, dirOwnerID, persistedOwnerID int64) {
+	t.Helper()
+	metaPath := filepath.Join(testAppDir(ks, dirOwnerID), metaFileNameForTest)
+	metaRaw, err := os.ReadFile(metaPath) //nolint:gosec // test fixture under t.TempDir
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(metaRaw, &meta); err != nil {
+		t.Fatal(err)
+	}
+	meta["owner_id"] = persistedOwnerID
+	rewritten, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metaPath, rewritten, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestQuarantineWithdrawsEveryEnumerationBlocker is the refute-first
+// harness for the withdrawal path: it enumerates the record states that
+// block ListApps and requires each to be both attributed to its owner and
+// withdrawable. A state that enumeration rejects but quarantine refuses
+// would leave resolution blocked with no remedy.
+func TestQuarantineWithdrawsEveryEnumerationBlocker(t *testing.T) {
+	cases := []struct {
+		name   string
+		damage func(t *testing.T, ks *publish.Keystore, ownerID int64)
+	}{
+		{"incomplete metadata", func(t *testing.T, ks *publish.Keystore, ownerID int64) {
+			stripOwnerMetadata(t, ks, ownerID)
+		}},
+		{"identity does not bind to directory", func(t *testing.T, ks *publish.Keystore, ownerID int64) {
+			rewriteOwnerID(t, ks, ownerID, ownerID+1)
+		}},
+		{"absent key", func(t *testing.T, ks *publish.Keystore, ownerID int64) {
+			if err := os.Remove(filepath.Join(testAppDir(ks, ownerID), keyFileNameForTest)); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"widened key permissions", func(t *testing.T, ks *publish.Keystore, ownerID int64) {
+			//nolint:gosec // deliberately exposed fixture under t.TempDir
+			if err := os.Chmod(filepath.Join(testAppDir(ks, ownerID), keyFileNameForTest), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"invalid recovery journal without an active record", func(t *testing.T, ks *publish.Keystore, ownerID int64) {
+			appDir := testAppDir(ks, ownerID)
+			if err := os.Rename(appDir, appDir+".old"); err != nil {
+				t.Fatal(err)
+			}
+			stripJournalMetadata(t, appDir+".old")
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ks := newTestKeystore(t)
+			personal, org := twoRegistrations()
+			saveAll(t, ks, personal, org)
+			tc.damage(t, ks, org.OwnerID)
+
+			apps, err := ks.ListApps()
+			if err == nil {
+				t.Fatalf("ListApps returned %d registrations over a damaged record, want error", len(apps))
+			}
+			var unreadable *publish.UnreadableRegistrationError
+			if !errors.As(err, &unreadable) {
+				t.Fatalf("ListApps error %v does not attribute the damaged record", err)
+			}
+			if unreadable.OwnerID != org.OwnerID {
+				t.Fatalf("attributed owner = %d, want %d", unreadable.OwnerID, org.OwnerID)
+			}
+
+			if err := ks.QuarantineApp(unreadable.OwnerID); err != nil {
+				t.Fatalf("QuarantineApp(%d) after ListApps routed to it: %v", unreadable.OwnerID, err)
+			}
+			apps, err = ks.ListApps()
+			if err != nil {
+				t.Fatalf("ListApps after quarantine: %v", err)
+			}
+			if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
+				t.Fatalf("ListApps after quarantine = %+v, want only owner %d", apps, personal.OwnerID)
+			}
+		})
+	}
+}
+
+// stripJournalMetadata damages a swap journal in place, so recovery cannot
+// promote it and the record has no active directory at all.
+func stripJournalMetadata(t *testing.T, journalDir string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(journalDir, metaFileNameForTest), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestQuarantineAppDiscardedStageLeavesNothingToWithdraw keeps the remedy
+// honest about the one state recovery resolves on its own: an incomplete
+// first-save stage is discarded, not withdrawn.
+func TestQuarantineAppDiscardedStageLeavesNothingToWithdraw(t *testing.T) {
+	ks := newTestKeystore(t)
+	if err := ks.SaveApp(testCredentials()); err != nil {
+		t.Fatal(err)
+	}
+	stage := testAppDir(ks, 333) + ".staging"
+	if err := os.MkdirAll(stage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stage, metaFileNameForTest), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ks.QuarantineApp(333); !errors.Is(err, publish.ErrNoAppRegistration) {
+		t.Fatalf("QuarantineApp over a discarded stage = %v, want ErrNoAppRegistration", err)
+	}
+	if _, err := ks.ListApps(); err != nil {
+		t.Fatalf("ListApps after discarded stage: %v", err)
+	}
+}
+
+// TestQuarantineAppRefusesKeystoreWideFailure keeps a widened directory
+// mode from being read as a damaged record: it fails the load gate for
+// every registration alike, so withdrawing the named owner would drop a
+// working registration while leaving enumeration just as blocked.
+func TestQuarantineAppRefusesKeystoreWideFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		widen  func(ks *publish.Keystore) string
+		damage bool
+	}{
+		{"widened registration root", func(ks *publish.Keystore) string {
+			return filepath.Join(ks.Dir(), "github-app")
+		}, false},
+		{"widened credentials root", func(ks *publish.Keystore) string {
+			return ks.Dir()
+		}, false},
+		{"widened root over a damaged record", func(ks *publish.Keystore) string {
+			return filepath.Join(ks.Dir(), "github-app")
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ks := newTestKeystore(t)
+			personal, org := twoRegistrations()
+			saveAll(t, ks, personal, org)
+			if tc.damage {
+				stripOwnerMetadata(t, ks, org.OwnerID)
+			}
+			if err := os.Chmod(tc.widen(ks), 0o755); err != nil { //nolint:gosec // deliberately exposed fixture under t.TempDir
+				t.Fatal(err)
+			}
+
+			if err := ks.QuarantineApp(org.OwnerID); !errors.Is(err, publish.ErrCredentialPermissions) {
+				t.Fatalf("QuarantineApp under a keystore-wide failure = %v, want ErrCredentialPermissions", err)
+			}
+			if _, err := os.Lstat(testAppDir(ks, org.OwnerID)); err != nil {
+				t.Errorf("registration withdrawn despite a keystore-wide failure: %v", err)
+			}
+		})
+	}
+}
+
+// TestQuarantineAppResumesPartialWithdrawal covers the partial-failure
+// state the move order is designed to leave: journals already withdrawn,
+// the active directory still in place. Recovery must not promote anything
+// (the active directory is present), and the retry must complete rather
+// than refuse on a destination its own earlier attempt created.
+func TestQuarantineAppResumesPartialWithdrawal(t *testing.T) {
+	ks := newTestKeystore(t)
+	personal, org := twoRegistrations()
+	saveAll(t, ks, personal, org)
+	stripOwnerMetadata(t, ks, org.OwnerID)
+
+	// Stand in for a run that moved the journal and then failed before the
+	// active directory.
+	appDir := testAppDir(ks, org.OwnerID)
+	journal := appDir + ".old"
+	if err := os.MkdirAll(journal, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	quarantineDir := filepath.Join(ks.Dir(), "github-app.quarantine")
+	if err := os.MkdirAll(quarantineDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(journal, filepath.Join(quarantineDir, filepath.Base(journal))); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ks.QuarantineApp(org.OwnerID); err != nil {
+		t.Fatalf("QuarantineApp resuming a partial withdrawal: %v", err)
+	}
+	apps, err := ks.ListApps()
+	if err != nil {
+		t.Fatalf("ListApps after resumed withdrawal: %v", err)
+	}
+	if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
+		t.Fatalf("ListApps after resumed withdrawal = %+v, want only owner %d", apps, personal.OwnerID)
+	}
+	for _, name := range []string{
+		strconv.FormatInt(org.OwnerID, 10),
+		strconv.FormatInt(org.OwnerID, 10) + ".old",
+	} {
+		if _, err := os.Lstat(filepath.Join(quarantineDir, name)); err != nil {
+			t.Errorf("quarantined %s: %v", name, err)
+		}
+	}
+}
+
+// TestQuarantineAppMovesTheActiveRecordLast pins the ordering the
+// resumption property depends on: a failure after the active directory
+// moved would leave journals recovery promotes back into the active slot,
+// and the retry would then collide with its own quarantined record.
+func TestQuarantineAppMovesTheActiveRecordLast(t *testing.T) {
+	ks := newTestKeystore(t)
+	_, org := twoRegistrations()
+	if err := ks.SaveApp(org); err != nil {
+		t.Fatal(err)
+	}
+	stripOwnerMetadata(t, ks, org.OwnerID)
+	appDir := testAppDir(ks, org.OwnerID)
+	if err := os.MkdirAll(appDir+".old", 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	// A destination collision on the last source proves ordering: the
+	// occupied name is the active record's, so the journals must already
+	// have been examined and the active directory reached last.
+	quarantineDir := filepath.Join(ks.Dir(), "github-app.quarantine")
+	if err := os.MkdirAll(filepath.Join(quarantineDir, strconv.FormatInt(org.OwnerID, 10)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ks.QuarantineApp(org.OwnerID); err == nil {
+		t.Fatal("QuarantineApp onto an occupied destination = nil, want refusal")
+	}
+	if _, err := os.Lstat(appDir); err != nil {
+		t.Errorf("active record moved despite the refusal: %v", err)
+	}
+	if _, err := os.Lstat(appDir + ".old"); err != nil {
+		t.Errorf("journal moved despite the refusal: %v", err)
+	}
+}
+
+// TestListAppsDoesNotAttributePostPromotionCleanup keeps enumeration from
+// claiming a record is unreadable when recovery promoted it successfully
+// and only the leftover cleanup failed. The registration loads, so
+// withdrawal would refuse it; attributing the failure would route the
+// operator to a remedy that cannot help while enumeration stays blocked
+// on the leftover.
+func TestListAppsDoesNotAttributePostPromotionCleanup(t *testing.T) {
+	ks := newTestKeystore(t)
+	personal, org := twoRegistrations()
+	saveAll(t, ks, personal, org)
+
+	// No active directory, a valid journal to promote, and a second journal
+	// whose contents cannot be unlinked.
+	appDir := testAppDir(ks, org.OwnerID)
+	if err := os.Rename(appDir, appDir+".old"); err != nil {
+		t.Fatal(err)
+	}
+	undeletable := filepath.Join(appDir+".staging", "sub")
+	if err := os.MkdirAll(undeletable, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(undeletable, "pinned"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(undeletable, 0o500); err != nil { //nolint:gosec // directory mode; blocks unlink to simulate an uncleanable leftover
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(undeletable, 0o700) }) //nolint:gosec // restore owner traversal so t.TempDir can clean up
+
+	_, err := ks.ListApps()
+	if err == nil {
+		t.Fatal("ListApps with an uncleanable leftover = nil, want error")
+	}
+	var unreadable *publish.UnreadableRegistrationError
+	if errors.As(err, &unreadable) {
+		t.Fatalf("post-promotion cleanup failure attributed as unreadable owner %d: %v", unreadable.OwnerID, err)
+	}
+	// Once the leftover can be cleared, enumeration succeeds with both
+	// registrations present: the failure was never a property of the record,
+	// which is exactly why withdrawing it would have been the wrong remedy.
+	if err := os.Chmod(undeletable, 0o700); err != nil { //nolint:gosec // directory mode, restoring owner traversal
+		t.Fatal(err)
+	}
+	apps, err := ks.ListApps()
+	if err != nil {
+		t.Fatalf("ListApps once the leftover is clearable: %v", err)
+	}
+	if len(apps) != 2 {
+		t.Fatalf("ListApps returned %d registrations, want both", len(apps))
+	}
+}
+
+// TestQuarantineAppCompletesAnUnsyncedWithdrawal covers the failure
+// boundary after every rename has landed: a sync failure leaves nothing to
+// move, and a retry must finish the durability sequence rather than report
+// a record that is in fact already withdrawn.
+func TestQuarantineAppCompletesAnUnsyncedWithdrawal(t *testing.T) {
+	ks := newTestKeystore(t)
+	personal, org := twoRegistrations()
+	saveAll(t, ks, personal, org)
+	stripOwnerMetadata(t, ks, org.OwnerID)
+
+	// Stand in for a run whose renames all landed and whose sync then failed.
+	quarantineDir := filepath.Join(ks.Dir(), "github-app.quarantine")
+	if err := os.MkdirAll(quarantineDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ownerKey := strconv.FormatInt(org.OwnerID, 10)
+	if err := os.Rename(testAppDir(ks, org.OwnerID), filepath.Join(quarantineDir, ownerKey)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ks.QuarantineApp(org.OwnerID); err != nil {
+		t.Fatalf("QuarantineApp completing an unsynced withdrawal: %v", err)
+	}
+	apps, err := ks.ListApps()
+	if err != nil {
+		t.Fatalf("ListApps after the completed withdrawal: %v", err)
+	}
+	if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
+		t.Fatalf("ListApps = %+v, want only owner %d", apps, personal.OwnerID)
+	}
+	for _, name := range []string{keyFileNameForTest, metaFileNameForTest} {
+		if _, err := os.Lstat(filepath.Join(quarantineDir, ownerKey, name)); err != nil {
+			t.Errorf("quarantined %s: %v", name, err)
+		}
+	}
+}
+
+// TestQuarantineAppWithdrawsJournalsAndActiveTogether pins the shape the
+// crash barrier protects: with both a journal and an active record, every
+// piece leaves the active set and none is left behind on the source side
+// for recovery to promote.
+func TestQuarantineAppWithdrawsJournalsAndActiveTogether(t *testing.T) {
+	ks := newTestKeystore(t)
+	personal, org := twoRegistrations()
+	saveAll(t, ks, personal, org)
+	stripOwnerMetadata(t, ks, org.OwnerID)
+	appDir := testAppDir(ks, org.OwnerID)
+	if err := os.MkdirAll(appDir+".old", 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ks.QuarantineApp(org.OwnerID); err != nil {
+		t.Fatalf("QuarantineApp: %v", err)
+	}
+	for _, leftover := range []string{appDir, appDir + ".old", appDir + ".staging"} {
+		if _, err := os.Lstat(leftover); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s survives on the source side after withdrawal: %v", leftover, err)
+		}
+	}
+	// Nothing recovery could promote: a second enumeration must not
+	// resurrect the record.
+	for round := range 2 {
+		apps, err := ks.ListApps()
+		if err != nil {
+			t.Fatalf("ListApps round %d: %v", round, err)
+		}
+		if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
+			t.Fatalf("ListApps round %d = %+v, want only owner %d", round, apps, personal.OwnerID)
+		}
+	}
+}
+
+// deficientRootModes enumerates the owner-access deviations a root can
+// carry, rather than the one that happened to be reported: no write, no
+// search, and neither. Each disables the withdrawal for every record
+// alike, so each must be classified keystore-wide.
+var deficientRootModes = []struct {
+	name string
+	mode fs.FileMode
+}{
+	{"no owner write", 0o500},
+	{"no owner search", 0o600},
+	{"read only", 0o400},
+	{"group and other bits", 0o755},
+}
+
+// TestDeficientRegistrationRootIsKeystoreWide is the mirror of the
+// widened-mode case: a registration root missing any owner bit blocks
+// recovery for every record alike, so it must not be attributed to
+// whichever record met it, and the withdrawal must refuse rather than
+// attempt a move that cannot succeed. narrowDir deliberately preserves a
+// tighter-than-0700 root, so these are supported states, not corruption.
+func TestDeficientRegistrationRootIsKeystoreWide(t *testing.T) {
+	for _, tc := range deficientRootModes {
+		t.Run(tc.name, func(t *testing.T) {
+			ks := newTestKeystore(t)
+			personal, org := twoRegistrations()
+			saveAll(t, ks, personal, org)
+			// The owner exists only as a journal, so recovery must rename it
+			// into place and cannot.
+			appDir := testAppDir(ks, org.OwnerID)
+			if err := os.Rename(appDir, appDir+".old"); err != nil {
+				t.Fatal(err)
+			}
+			locked := filepath.Join(ks.Dir(), "github-app")
+			if err := os.Chmod(locked, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(locked, 0o700) }) //nolint:gosec // restore owner access
+
+			_, err := ks.ListApps()
+			if err == nil {
+				t.Fatal("ListApps under a deficient registration root = nil, want error")
+			}
+			var unreadable *publish.UnreadableRegistrationError
+			if errors.As(err, &unreadable) {
+				t.Errorf("keystore-wide failure attributed to owner %d: %v", unreadable.OwnerID, err)
+			}
+			if err := ks.QuarantineApp(org.OwnerID); !errors.Is(err, publish.ErrCredentialPermissions) {
+				t.Fatalf("QuarantineApp under a deficient root = %v, want ErrCredentialPermissions", err)
+			}
+
+			// Restoring owner access makes it an ordinary recoverable record.
+			if err := os.Chmod(locked, 0o700); err != nil { //nolint:gosec // restore owner access
+				t.Fatal(err)
+			}
+			if _, err := os.Lstat(appDir + ".old"); err != nil {
+				t.Errorf("journal disturbed by the refused withdrawal: %v", err)
+			}
+			apps, err := ks.ListApps()
+			if err != nil {
+				t.Fatalf("ListApps once the root is usable: %v", err)
+			}
+			if len(apps) != 2 {
+				t.Fatalf("ListApps returned %d registrations, want both", len(apps))
+			}
+		})
+	}
+}
+
+// TestDeficientCredentialsRootRefusesWithdrawal covers the other root the
+// withdrawal writes: enumeration is unaffected, since recovery renames
+// within the registration root, but the quarantine directory is created
+// beside it, so the withdrawal must refuse rather than fail part-way.
+func TestDeficientCredentialsRootRefusesWithdrawal(t *testing.T) {
+	for _, tc := range deficientRootModes {
+		t.Run(tc.name, func(t *testing.T) {
+			ks := newTestKeystore(t)
+			personal, org := twoRegistrations()
+			saveAll(t, ks, personal, org)
+			stripOwnerMetadata(t, ks, org.OwnerID)
+			if err := os.Chmod(ks.Dir(), tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(ks.Dir(), 0o700) }) //nolint:gosec // restore owner access
+
+			if err := ks.QuarantineApp(org.OwnerID); !errors.Is(err, publish.ErrCredentialPermissions) {
+				t.Fatalf("QuarantineApp under a deficient credentials root = %v, want ErrCredentialPermissions", err)
+			}
+			if err := os.Chmod(ks.Dir(), 0o700); err != nil { //nolint:gosec // restore owner access
+				t.Fatal(err)
+			}
+			if _, err := os.Lstat(testAppDir(ks, org.OwnerID)); err != nil {
+				t.Errorf("record disturbed by the refused withdrawal: %v", err)
+			}
+			if err := ks.QuarantineApp(org.OwnerID); err != nil {
+				t.Fatalf("QuarantineApp once the root is usable: %v", err)
+			}
+			apps, err := ks.ListApps()
+			if err != nil {
+				t.Fatalf("ListApps after withdrawal: %v", err)
+			}
+			if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
+				t.Fatalf("ListApps = %+v, want only owner %d", apps, personal.OwnerID)
+			}
+		})
+	}
+}
+
+// TestDeficientRootDoesNotAttributeActiveRecordFailure covers the other
+// attribution branch: an active record that simply fails to load, with no
+// recovery involved. Mode 0500 is the mode that makes the point — it
+// permits the read and the traversal, so the load failure is genuine, and
+// forbids the rename, so withdrawal would refuse. Attribution promises a
+// remedy, so it must not be made here either.
+func TestDeficientRootDoesNotAttributeActiveRecordFailure(t *testing.T) {
+	ks := newTestKeystore(t)
+	personal, org := twoRegistrations()
+	saveAll(t, ks, personal, org)
+	stripOwnerMetadata(t, ks, org.OwnerID)
+	locked := filepath.Join(ks.Dir(), "github-app")
+	if err := os.Chmod(locked, 0o500); err != nil { //nolint:gosec // directory mode is the state under test
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) }) //nolint:gosec // restore owner access
+
+	_, err := ks.ListApps()
+	if err == nil {
+		t.Fatal("ListApps over a damaged record under a deficient root = nil, want error")
+	}
+	var unreadable *publish.UnreadableRegistrationError
+	if errors.As(err, &unreadable) {
+		t.Errorf("attributed owner %d while withdrawal would refuse: %v", unreadable.OwnerID, err)
+	}
+	if err := ks.QuarantineApp(org.OwnerID); !errors.Is(err, publish.ErrCredentialPermissions) {
+		t.Fatalf("QuarantineApp under a deficient root = %v, want ErrCredentialPermissions", err)
+	}
+
+	// With the root usable the promise holds again: the same failure is
+	// attributed, and the remedy it advertises works.
+	if err := os.Chmod(locked, 0o700); err != nil { //nolint:gosec // restore owner access
+		t.Fatal(err)
+	}
+	_, err = ks.ListApps()
+	if !errors.As(err, &unreadable) {
+		t.Fatalf("ListApps once the root is usable = %v, want an attributed failure", err)
+	}
+	if unreadable.OwnerID != org.OwnerID {
+		t.Fatalf("attributed owner = %d, want %d", unreadable.OwnerID, org.OwnerID)
+	}
+	if err := ks.QuarantineApp(unreadable.OwnerID); err != nil {
+		t.Fatalf("QuarantineApp after attribution: %v", err)
+	}
+	apps, err := ks.ListApps()
+	if err != nil {
+		t.Fatalf("ListApps after withdrawal: %v", err)
+	}
+	if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
+		t.Fatalf("ListApps = %+v, want only owner %d", apps, personal.OwnerID)
+	}
+}
+
+// TestDeficientQuarantineDestinationIsKeystoreWide extends the root-mode
+// table to the destination: an existing quarantine directory the owner
+// cannot write into fails every rename just as a deficient source root
+// does, so it must not be attributed to a record either.
+func TestDeficientQuarantineDestinationIsKeystoreWide(t *testing.T) {
+	for _, tc := range deficientRootModes {
+		t.Run(tc.name, func(t *testing.T) {
+			ks := newTestKeystore(t)
+			personal, org := twoRegistrations()
+			saveAll(t, ks, personal, org)
+			stripOwnerMetadata(t, ks, org.OwnerID)
+			quarantineDir := filepath.Join(ks.Dir(), "github-app.quarantine")
+			if err := os.MkdirAll(quarantineDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(quarantineDir, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(quarantineDir, 0o700) }) //nolint:gosec // restore owner access
+
+			_, err := ks.ListApps()
+			if err == nil {
+				t.Fatal("ListApps with a deficient quarantine destination = nil, want error")
+			}
+			var unreadable *publish.UnreadableRegistrationError
+			if errors.As(err, &unreadable) {
+				t.Errorf("attributed owner %d while the destination blocks withdrawal: %v", unreadable.OwnerID, err)
+			}
+			if err := ks.QuarantineApp(org.OwnerID); !errors.Is(err, publish.ErrCredentialPermissions) {
+				t.Fatalf("QuarantineApp into a deficient destination = %v, want ErrCredentialPermissions", err)
+			}
+
+			// Restoring owner access restores both the attribution and the
+			// remedy it advertises.
+			if err := os.Chmod(quarantineDir, 0o700); err != nil { //nolint:gosec // restore owner access
+				t.Fatal(err)
+			}
+			_, err = ks.ListApps()
+			if !errors.As(err, &unreadable) || unreadable.OwnerID != org.OwnerID {
+				t.Fatalf("ListApps once the destination is usable = %v, want owner %d attributed", err, org.OwnerID)
+			}
+			if err := ks.QuarantineApp(org.OwnerID); err != nil {
+				t.Fatalf("QuarantineApp once the destination is usable: %v", err)
+			}
+			apps, err := ks.ListApps()
+			if err != nil {
+				t.Fatalf("ListApps after withdrawal: %v", err)
+			}
+			if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
+				t.Fatalf("ListApps = %+v, want only owner %d", apps, personal.OwnerID)
+			}
+		})
+	}
+}
+
+// TestMalformedQuarantineTargetIsNotAttributed closes the last shape of
+// the availability class: the destination directories are fine, but the
+// owner's own target inside them is a file or a symlink, so the rename
+// cannot land. Attribution promises the withdrawal, so it must ask the
+// withdrawal's own preconditions rather than only the directory modes.
+func TestMalformedQuarantineTargetIsNotAttributed(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		plant func(t *testing.T, target string)
+	}{
+		{"regular file", func(t *testing.T, target string) {
+			if err := os.WriteFile(target, []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"symlink", func(t *testing.T, target string) {
+			if err := os.Symlink(t.TempDir(), target); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ks := newTestKeystore(t)
+			personal, org := twoRegistrations()
+			saveAll(t, ks, personal, org)
+			stripOwnerMetadata(t, ks, org.OwnerID)
+			quarantineDir := filepath.Join(ks.Dir(), "github-app.quarantine")
+			if err := os.MkdirAll(quarantineDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(quarantineDir, strconv.FormatInt(org.OwnerID, 10))
+			tc.plant(t, target)
+
+			_, err := ks.ListApps()
+			if err == nil {
+				t.Fatal("ListApps with a malformed quarantine target = nil, want error")
+			}
+			var unreadable *publish.UnreadableRegistrationError
+			if errors.As(err, &unreadable) {
+				t.Errorf("attributed owner %d while its destination is unusable: %v", unreadable.OwnerID, err)
+			}
+			if err := ks.QuarantineApp(org.OwnerID); err == nil {
+				t.Fatal("QuarantineApp onto a malformed target = nil, want refusal")
+			}
+			if _, err := os.Lstat(testAppDir(ks, org.OwnerID)); err != nil {
+				t.Errorf("record disturbed by the refused withdrawal: %v", err)
+			}
+
+			// Clearing the obstruction restores both the attribution and the
+			// remedy it advertises.
+			if err := os.Remove(target); err != nil {
+				t.Fatal(err)
+			}
+			_, err = ks.ListApps()
+			if !errors.As(err, &unreadable) || unreadable.OwnerID != org.OwnerID {
+				t.Fatalf("ListApps once the target is clear = %v, want owner %d attributed", err, org.OwnerID)
+			}
+			if err := ks.QuarantineApp(org.OwnerID); err != nil {
+				t.Fatalf("QuarantineApp once the target is clear: %v", err)
+			}
+			apps, err := ks.ListApps()
+			if err != nil {
+				t.Fatalf("ListApps after withdrawal: %v", err)
+			}
+			if len(apps) != 1 || apps[0].OwnerID != personal.OwnerID {
+				t.Fatalf("ListApps = %+v, want only owner %d", apps, personal.OwnerID)
+			}
+		})
+	}
+}
+
+// TestExistingWithdrawalIsNotAttributed pins the other precondition
+// attribution now inherits: a destination whose source still exists is a
+// distinct earlier withdrawal that the remedy refuses, so it must not be
+// advertised either.
+func TestExistingWithdrawalIsNotAttributed(t *testing.T) {
+	ks := newTestKeystore(t)
+	personal, org := twoRegistrations()
+	saveAll(t, ks, personal, org)
+	stripOwnerMetadata(t, ks, org.OwnerID)
+	quarantineDir := filepath.Join(ks.Dir(), "github-app.quarantine")
+	occupied := filepath.Join(quarantineDir, strconv.FormatInt(org.OwnerID, 10))
+	if err := os.MkdirAll(occupied, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ks.ListApps()
+	if err == nil {
+		t.Fatal("ListApps with an occupied destination = nil, want error")
+	}
+	var unreadable *publish.UnreadableRegistrationError
+	if errors.As(err, &unreadable) {
+		t.Errorf("attributed owner %d while the withdrawal would refuse: %v", unreadable.OwnerID, err)
+	}
+	if err := ks.QuarantineApp(org.OwnerID); err == nil {
+		t.Fatal("QuarantineApp onto an occupied destination = nil, want refusal")
+	}
+}
