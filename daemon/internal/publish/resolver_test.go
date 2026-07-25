@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -93,6 +95,32 @@ func TestInstallationResolverPublicRegistrationMatchesOwner(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("binding = %+v, want %+v", got, want)
+	}
+}
+
+// TestInstallationResolverSurvivesFinderArtifact drives the repaired defect at
+// its harm site (#284). Resolution reads the complete registration set, so a
+// keystore enumeration that failed on the .DS_Store an operating system writes
+// into any directory a human displays denied credentials for every owner.
+func TestInstallationResolverSurvivesFinderArtifact(t *testing.T) {
+	ks := newTestKeystore(t)
+	saveResolverApp(t, ks, "operator", 101, 501, publish.AppVisibilityPublic)
+	artifact := filepath.Join(ks.Dir(), "github-app", ".DS_Store")
+	if err := os.WriteFile(artifact, []byte("finder"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `[{"id":701,"app_id":501,"target_id":101,"repository_selection":"selected","account":{"login":"operator","id":101}}]`)
+	}))
+	defer srv.Close()
+
+	resolver := newActiveResolver(ks, srv.Client(), srv.URL)
+	got, err := resolver.Resolve(context.Background(), "operator")
+	if err != nil {
+		t.Fatalf("Resolve with a Finder artifact in the keystore: %v", err)
+	}
+	if got.InstallationID != 701 || got.RegistrationID != 501 {
+		t.Errorf("binding = %+v, want installation 701 of registration 501", got)
 	}
 }
 
