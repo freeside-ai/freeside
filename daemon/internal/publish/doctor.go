@@ -19,6 +19,7 @@ const (
 	CredentialFindingLegacyLayout       CredentialFindingCode = "legacy_singleton_layout"
 	CredentialFindingReusedMachineKey   CredentialFindingCode = "reused_machine_key"
 	CredentialFindingUnreadableRecord   CredentialFindingCode = "unreadable_registration" //nolint:gosec // diagnostic vocabulary, not a credential
+	CredentialFindingUnexpectedEntry    CredentialFindingCode = "unexpected_keystore_entry"
 )
 
 // AllCredentialFindingCodes is the single registration point for doctor
@@ -32,6 +33,7 @@ var AllCredentialFindingCodes = []CredentialFindingCode{
 	CredentialFindingLegacyLayout,
 	CredentialFindingReusedMachineKey,
 	CredentialFindingUnreadableRecord,
+	CredentialFindingUnexpectedEntry,
 }
 
 func (c CredentialFindingCode) valid() bool {
@@ -43,7 +45,8 @@ func (c CredentialFindingCode) valid() bool {
 		CredentialFindingJanitorInactive,
 		CredentialFindingLegacyLayout,
 		CredentialFindingReusedMachineKey,
-		CredentialFindingUnreadableRecord:
+		CredentialFindingUnreadableRecord,
+		CredentialFindingUnexpectedEntry:
 		return true
 	default:
 		return false
@@ -111,6 +114,23 @@ func (d *CredentialDoctor) Check(
 		return []CredentialFinding{credentialFinding(CredentialFindingLegacyLayout, 0, 0, "")}, nil
 	}
 
+	// Enumeration skips an entry that could never be a registration rather
+	// than denying every one of them (#284), so the doctor is where a skipped
+	// entry surfaces. It is gathered before enumeration and carried through
+	// the failure returns below: a damaged record must not hide the artifact
+	// sitting next to it.
+	var findings []CredentialFinding
+	unexpected, err := d.onboarder.keystore.UnexpectedEntries()
+	if err != nil {
+		if errors.Is(err, ErrCredentialPermissions) {
+			return []CredentialFinding{credentialFinding(CredentialFindingBadPermissions, 0, 0, "")}, nil
+		}
+		return nil, fmt.Errorf("credential doctor: inspect keystore entries: %w", err)
+	}
+	if len(unexpected) > 0 {
+		findings = append(findings, credentialFinding(CredentialFindingUnexpectedEntry, 0, 0, ""))
+	}
+
 	apps, err := d.onboarder.keystore.ListApps()
 	if err != nil {
 		// Enumeration fails closed on the whole keystore, so whenever the
@@ -126,11 +146,11 @@ func (d *CredentialDoctor) Check(
 		}
 		switch {
 		case errors.Is(err, ErrCredentialPermissions):
-			return []CredentialFinding{credentialFinding(CredentialFindingBadPermissions, 0, ownerID, "")}, nil
+			return append(findings, credentialFinding(CredentialFindingBadPermissions, 0, ownerID, "")), nil
 		case errors.Is(err, ErrNoAppCredentials), errors.Is(err, ErrNoAppRegistration):
-			return []CredentialFinding{credentialFinding(CredentialFindingMissingKey, 0, ownerID, "")}, nil
+			return append(findings, credentialFinding(CredentialFindingMissingKey, 0, ownerID, "")), nil
 		case errors.Is(err, ErrUnreadableRegistration):
-			return []CredentialFinding{credentialFinding(CredentialFindingUnreadableRecord, 0, ownerID, "")}, nil
+			return append(findings, credentialFinding(CredentialFindingUnreadableRecord, 0, ownerID, "")), nil
 		default:
 			return nil, fmt.Errorf("credential doctor: inspect keystore: %w", err)
 		}
@@ -140,7 +160,6 @@ func (d *CredentialDoctor) Check(
 	for _, app := range apps {
 		localByOwner[app.OwnerID] = app
 	}
-	var findings []CredentialFinding
 	firstByKey := make(map[string]AppCredentials, len(apps))
 	reusedKeyIDs := make(map[string]struct{})
 	for _, app := range apps {

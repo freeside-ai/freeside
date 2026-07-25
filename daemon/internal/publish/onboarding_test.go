@@ -678,6 +678,51 @@ func TestCredentialDoctorDetections(t *testing.T) {
 		}
 	})
 
+	// Enumeration skips the artifact an operating system writes into a
+	// directory it merely displays (#284), so the doctor is the only place it
+	// stays visible. It must not read as a permissions problem: the keystore's
+	// permissions are intact, and that diagnosis routes the operator nowhere.
+	t.Run("unexpected keystore entry", func(t *testing.T) {
+		ks := newTestKeystore(t)
+		if err := ks.SaveApp(publicFixtureCredentials(t)); err != nil {
+			t.Fatal(err)
+		}
+		plantFinderArtifact(t, ks)
+		onboarder, _, _ := newTestOnboarder(t, ks, activeJanitorStatus{})
+		findings, err := publish.NewCredentialDoctor(onboarder, activeJanitorStatus{}).
+			Check(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Check: %v", err)
+		}
+		assertFinding(t, findings, publish.CredentialFindingUnexpectedEntry)
+		for _, finding := range findings {
+			if finding.Code == publish.CredentialFindingBadPermissions {
+				t.Fatalf("findings = %+v, want no permissions finding for an intact keystore", findings)
+			}
+		}
+	})
+
+	// A damaged record and a stray artifact are independent problems, and
+	// enumeration still fails closed on the record. That early return must
+	// carry the artifact too, or fixing the record is the only way to learn
+	// the artifact was ever there.
+	t.Run("unexpected entry survives a damaged record", func(t *testing.T) {
+		ks := newTestKeystore(t)
+		if err := ks.SaveApp(publicFixtureCredentials(t)); err != nil {
+			t.Fatal(err)
+		}
+		stripOwnerMetadata(t, ks, testOwnerID)
+		plantFinderArtifact(t, ks)
+		onboarder, _, _ := newTestOnboarder(t, ks, activeJanitorStatus{})
+		findings, err := publish.NewCredentialDoctor(onboarder, activeJanitorStatus{}).
+			Check(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Check: %v", err)
+		}
+		assertFinding(t, findings, publish.CredentialFindingUnreadableRecord)
+		assertFinding(t, findings, publish.CredentialFindingUnexpectedEntry)
+	})
+
 	t.Run("visibility mismatch", func(t *testing.T) {
 		ks := newTestKeystore(t)
 		if err := ks.SaveApp(publicFixtureCredentials(t)); err != nil {
@@ -776,6 +821,16 @@ func TestCredentialDoctorDetections(t *testing.T) {
 		}
 		assertFinding(t, findings, publish.CredentialFindingReusedMachineKey)
 	})
+}
+
+// plantFinderArtifact reproduces what Finder leaves behind whenever it
+// displays the credentials directory.
+func plantFinderArtifact(t *testing.T, ks *publish.Keystore) {
+	t.Helper()
+	artifact := filepath.Join(ks.Dir(), "github-app", ".DS_Store")
+	if err := os.WriteFile(artifact, []byte("finder"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func assertFinding(t *testing.T, findings []publish.CredentialFinding, want publish.CredentialFindingCode) {
