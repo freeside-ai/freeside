@@ -355,8 +355,13 @@ func (k *Keystore) LoadApp(ownerID int64) (AppCredentials, error) {
 }
 
 // ListApps enumerates every numeric-owner-keyed registration in stable ID order.
-// Unexpected entries and any legacy singleton fail closed rather than being
-// skipped, since omission could make callers operate with an incomplete view.
+// A legacy singleton, and any entry that occupies a registration's name without
+// being a real directory, fail closed rather than being skipped, since omission
+// could make callers operate with an incomplete view. Only an entry whose name
+// could never be a registration, and whose kind an operating system writes on
+// its own (a regular file), is skipped; the legacy singleton's own file names
+// are excluded from that skip whatever their kind. skippableEntry holds the
+// rule, and UnexpectedEntries reports what it passed over.
 func (k *Keystore) ListApps() ([]AppCredentials, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -391,28 +396,15 @@ func (k *Keystore) listAppsLocked() ([]AppCredentials, error) {
 	}
 	owners := make(map[int64]struct{})
 	for _, entry := range entries {
-		if entry.Type()&os.ModeSymlink != 0 || !entry.IsDir() {
+		ownerID, named := registrationOwnerID(entry.Name())
+		if !named {
+			if skippableEntry(entry) {
+				continue
+			}
 			return nil, fmt.Errorf("keystore: unexpected registration entry %s: %w", entry.Name(), ErrCredentialPermissions)
 		}
-		name := entry.Name()
-		if strings.HasSuffix(name, ".staging") {
-			name = strings.TrimSuffix(name, ".staging")
-		} else if strings.HasSuffix(name, ".old") {
-			name = strings.TrimSuffix(name, ".old")
-		}
-		if name == "" || strings.Contains(name, ".") {
-			return nil, fmt.Errorf("keystore: unexpected registration directory %s: %w", entry.Name(), ErrCredentialPermissions)
-		}
-		ownerID, err := strconv.ParseInt(name, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("keystore: unexpected registration directory %s: %w", entry.Name(), ErrCredentialPermissions)
-		}
-		ownerKey, err := appOwnerKey(ownerID)
-		if err != nil {
-			return nil, fmt.Errorf("keystore: unexpected registration directory %s: %w", entry.Name(), err)
-		}
-		if ownerKey != name {
-			return nil, fmt.Errorf("keystore: unexpected registration directory %s: %w", entry.Name(), ErrCredentialPermissions)
+		if entry.Type()&os.ModeSymlink != 0 || !entry.IsDir() {
+			return nil, fmt.Errorf("keystore: registration %s is not a directory: %w", entry.Name(), ErrCredentialPermissions)
 		}
 		owners[ownerID] = struct{}{}
 	}
@@ -473,6 +465,107 @@ func (k *Keystore) listAppsLocked() ([]AppCredentials, error) {
 		apps = append(apps, creds)
 	}
 	return apps, nil
+}
+
+// registrationOwnerID reports the owner a keystore entry name registers, and
+// false for a name that could never be one. The name carries the whole
+// registration contract (a canonical numeric owner ID, plus at most one swap
+// journal suffix), so failing it is not a damaged registration: it is not a
+// registration at all.
+//
+// That distinction is what lets enumeration split by name rather than by entry
+// kind. Skipping a registration narrows the set resolution picks among, which
+// can resolve to the wrong App or miss an ambiguity, so an unreadable record
+// still fails closed (#279). A name that could never be a registration was
+// never in that set, so skipping it narrows nothing (#284).
+func registrationOwnerID(name string) (int64, bool) {
+	base := name
+	switch {
+	case strings.HasSuffix(base, ".staging"):
+		base = strings.TrimSuffix(base, ".staging")
+	case strings.HasSuffix(base, ".old"):
+		base = strings.TrimSuffix(base, ".old")
+	}
+	if base == "" || strings.Contains(base, ".") {
+		return 0, false
+	}
+	ownerID, err := strconv.ParseInt(base, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	ownerKey, err := appOwnerKey(ownerID)
+	if err != nil || ownerKey != base {
+		return 0, false
+	}
+	return ownerID, true
+}
+
+// skippableEntry reports whether an entry whose name could never be a
+// registration may be passed over. Only a regular file qualifies, since that is
+// the class an operating system writes on its own; a directory or symlink there
+// is operator error, a half-finished migration, or tampering, and stays a hard
+// error.
+//
+// The legacy singleton's own file names never qualify, whatever their kind.
+// They are keystore state rather than foreign noise, and the legacy migration
+// enumerates without the gate ListApps runs first, so skipping them would let a
+// migration complete while a credential file it must refuse sits in the
+// registration root.
+// The name test is case-folded because the legacy gate's is: legacyFilesExist
+// lstats app.pem, which resolves APP.PEM on the reference platform's
+// case-insensitive filesystem while the directory entry keeps its own spelling.
+// An exact comparison would skip that entry while the gate still saw a
+// singleton, letting a migration complete over stranded key material and leave
+// every later enumeration denied. Folding over-refuses on a case-sensitive
+// volume, which is the fail-closed direction.
+func skippableEntry(entry os.DirEntry) bool {
+	for _, legacy := range []string{keyFileName, metaFileName} {
+		if strings.EqualFold(entry.Name(), legacy) {
+			return false
+		}
+	}
+	return entry.Type().IsRegular()
+}
+
+// UnexpectedEntries reports the entries enumeration skips: regular files whose
+// names could never be a registration. That is the class an operating system
+// writes into a directory it merely displays (.DS_Store and its kin), which is
+// why enumeration no longer fails on them; reporting them keeps a skipped entry
+// visible to an operator rather than silently swallowed (#284). Names come back
+// sorted, as os.ReadDir returns them, and carry no path: a caller diagnosing the
+// keystore has its directory already.
+func (k *Keystore) UnexpectedEntries() ([]string, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
+	exists, err := realDirExists(k.dir)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+	if err := assertMode(k.root, true); err != nil {
+		return nil, err
+	}
+	if err := assertMode(k.dir, true); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(k.dir)
+	if err != nil {
+		return nil, fmt.Errorf("keystore: enumerate registrations: %w", err)
+	}
+	var skipped []string
+	for _, entry := range entries {
+		if _, named := registrationOwnerID(entry.Name()); named {
+			continue
+		}
+		if !skippableEntry(entry) {
+			continue
+		}
+		skipped = append(skipped, entry.Name())
+	}
+	return skipped, nil
 }
 
 // attributeRecord names the owner a per-record failure belongs to, unless

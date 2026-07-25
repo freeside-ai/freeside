@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -290,6 +291,134 @@ func TestListAppsRejectsCompoundJournalSuffix(t *testing.T) {
 	}
 }
 
+// TestListAppsEntryPolicy pins the split enumeration applies to a keystore
+// entry (#284): the name decides whether an entry could be a registration at
+// all, and only then does the kind decide whether it is a valid one. An
+// operating system rewrites .DS_Store into any directory it displays, so
+// failing closed on it let browsing the credentials directory deny every
+// registration; an entry that occupies a registration's name, or a directory
+// nobody can explain, still fails closed.
+func TestListAppsEntryPolicy(t *testing.T) {
+	personal, org := twoRegistrations()
+	strayOwner := strconv.FormatInt(org.OwnerID+1, 10)
+
+	writeFile := func(name string) func(*testing.T, string) {
+		return func(t *testing.T, root string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(root, name), []byte("stray"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	makeDir := func(name string) func(*testing.T, string) {
+		return func(t *testing.T, root string) {
+			t.Helper()
+			if err := os.Mkdir(filepath.Join(root, name), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	linkToRegistration := func(name string) func(*testing.T, string) {
+		return func(t *testing.T, root string) {
+			t.Helper()
+			target := filepath.Join(root, strconv.FormatInt(personal.OwnerID, 10))
+			if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	cases := []struct {
+		name  string
+		plant func(*testing.T, string)
+		want  error // nil: the registrations enumerate around the entry
+	}{
+		{name: "finder artifact", plant: writeFile(".DS_Store")},
+		{name: "resource fork", plant: writeFile("._app.json")},
+		{name: "undotted stray file", plant: writeFile("readme")},
+		{name: "file at a registration name", plant: writeFile(strayOwner), want: publish.ErrCredentialPermissions},
+		{name: "file at a staging journal name", plant: writeFile(strayOwner + ".staging"), want: publish.ErrCredentialPermissions},
+		{name: "file at an old journal name", plant: writeFile(strayOwner + ".old"), want: publish.ErrCredentialPermissions},
+		{name: "symlink at a registration name", plant: linkToRegistration(strayOwner), want: publish.ErrCredentialPermissions},
+		{name: "symlink at an impossible name", plant: linkToRegistration(".DS_Store"), want: publish.ErrCredentialPermissions},
+		{name: "directory at an impossible name", plant: makeDir("notes"), want: publish.ErrCredentialPermissions},
+		{name: "non-canonical numeric directory", plant: makeDir("0" + strayOwner), want: publish.ErrCredentialPermissions},
+		{name: "signed numeric directory", plant: makeDir("+" + strayOwner), want: publish.ErrCredentialPermissions},
+		{name: "zero owner directory", plant: makeDir("0"), want: publish.ErrCredentialPermissions},
+		// The legacy singleton's own file names are never skippable, so the
+		// gate that precedes enumeration still sees them.
+		{name: "legacy key file", plant: writeFile("app.pem"), want: publish.ErrLegacyAppMigrationRequired},
+		{name: "legacy metadata file", plant: writeFile("app.json"), want: publish.ErrLegacyAppMigrationRequired},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ks := newTestKeystore(t)
+			saveAll(t, ks, personal, org)
+			tc.plant(t, filepath.Join(ks.Dir(), "github-app"))
+
+			apps, err := ks.ListApps()
+			if tc.want != nil {
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("ListApps = %v, want %v", err, tc.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ListApps: %v", err)
+			}
+			got := make([]int64, 0, len(apps))
+			for _, app := range apps {
+				got = append(got, app.OwnerID)
+			}
+			want := []int64{personal.OwnerID, org.OwnerID}
+			if !slices.Equal(got, want) {
+				t.Errorf("ListApps owner IDs = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// TestUnexpectedEntries proves a skipped entry stays visible to a human
+// rather than being silently swallowed.
+func TestUnexpectedEntries(t *testing.T) {
+	ks := newTestKeystore(t)
+	if entries, err := ks.UnexpectedEntries(); err != nil || entries != nil {
+		t.Fatalf("UnexpectedEntries on an unpopulated keystore = %v, %v, want nil, nil", entries, err)
+	}
+
+	personal, org := twoRegistrations()
+	saveAll(t, ks, personal, org)
+	root := filepath.Join(ks.Dir(), "github-app")
+	for _, name := range []string{".DS_Store", "readme"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("stray"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Everything enumeration refuses to skip must stay out of the report, or
+	// the two disagree about what was passed over: the legacy singleton's file
+	// names in either spelling, and any kind an operating system does not write
+	// on its own.
+	for _, name := range []string{"app.pem", "APP.JSON"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("legacy"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(root, "readme"), filepath.Join(root, "readme.link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "notes"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := ks.UnexpectedEntries()
+	if err != nil {
+		t.Fatalf("UnexpectedEntries: %v", err)
+	}
+	if want := []string{".DS_Store", "readme"}; !slices.Equal(entries, want) {
+		t.Errorf("UnexpectedEntries = %v, want %v", entries, want)
+	}
+}
+
 // TestLoadAppAbsentOwner distinguishes a missing owner binding from an
 // entirely unauthenticated keystore.
 func TestLoadAppAbsentOwner(t *testing.T) {
@@ -364,6 +493,48 @@ func TestMigrateLegacyAppResumesJournaledState(t *testing.T) {
 	}
 	if _, err := os.Lstat(registrationRoot + ".legacy"); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("legacy journal remains after migration: %v", err)
+	}
+}
+
+// TestMigrateLegacyAppRefusesStrandedSingletonFile keeps the enumeration skip
+// (#284) out of the migration path. Migration enumerates the registration root
+// directly, without the legacy gate ListApps runs first, so a legacy credential
+// file stranded there must still fail closed: completing the migration around
+// it would leave a private key in a root the daemon then treats as active.
+// The spellings are folded because the reference platform's filesystem is:
+// lstat("app.pem") resolves a file named APP.PEM, so a case-sensitive skip
+// would pass over an entry the legacy gate still counts as a singleton.
+func TestMigrateLegacyAppRefusesStrandedSingletonFile(t *testing.T) {
+	for _, name := range []string{
+		keyFileNameForTest, metaFileNameForTest,
+		strings.ToUpper(keyFileNameForTest), strings.ToUpper(metaFileNameForTest),
+	} {
+		t.Run(name, func(t *testing.T) {
+			ks := newTestKeystore(t)
+			creds := testCredentials()
+			registrationRoot := writeLegacyLayout(t, ks, creds)
+			if err := os.Rename(registrationRoot, registrationRoot+".legacy"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(registrationRoot, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			stranded := filepath.Join(registrationRoot, name)
+			if err := os.WriteFile(stranded, []byte("stranded credential"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := ks.MigrateLegacyApp(creds.Owner, creds.OwnerID, creds.Visibility)
+			if !errors.Is(err, publish.ErrCredentialPermissions) {
+				t.Fatalf("MigrateLegacyApp over a stranded %s = %v, want ErrCredentialPermissions", name, err)
+			}
+			if _, err := os.Lstat(stranded); err != nil {
+				t.Errorf("stranded legacy credential disturbed by the refused migration: %v", err)
+			}
+			if _, err := os.Lstat(registrationRoot + ".legacy"); err != nil {
+				t.Errorf("legacy journal cleared by the refused migration: %v", err)
+			}
+		})
 	}
 }
 
