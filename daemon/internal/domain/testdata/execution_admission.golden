@@ -1,0 +1,31 @@
+{
+  "id": "sha256:575845b7be22acfcbee1fe7b04f5f67153c19ae4ca5779b55774e465288480a3",
+  "invocation_id": "inv-1",
+  "run_id": "run-1",
+  "stage_id": "stage-1",
+  "attempt_id": "attempt-1",
+  "backend": "fresh_vm_read_only_volume_handoff",
+  "capabilities": [
+    "supports_detachable_workspace",
+    "supports_post_exit_export",
+    "supports_read_only_remount"
+  ],
+  "operating_mode": "attended_dev",
+  "credential_mode": "subscription_contained",
+  "egress_profile": "provider_only",
+  "image_ref": "ghcr.io/freeside-ai/agent@sha256:abababababababababababababababababababababababababababababababab",
+  "spec_digest": "sha256:spec",
+  "policy_digest": "sha256:dc1af0d4d3c8cdc2f6b59b72234a6988199c4d9dd9c3f2e663452eb58cd97ca7",
+  "input_digest": "sha256:input",
+  "base": {
+    "repo": "owner/repo",
+    "repository_id": 424242,
+    "base_ref": "refs/heads/main",
+    "base_sha": "deadbeef"
+  },
+  "workspace": "freeside-handoff-run-1-ws",
+  "auth_identity_id": "auth-claude-owner",
+  "trust_profile_digest": null,
+  "backup_encryption_waiver": null,
+  "admitted_at": "2026-01-02T03:04:05Z"
+}

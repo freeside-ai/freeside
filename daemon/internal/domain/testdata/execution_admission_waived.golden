@@ -1,0 +1,37 @@
+{
+  "id": "sha256:42ff0ec7215a4268690608ba14bb30af080fa97060a42fe90b6595e10f0a185a",
+  "invocation_id": "inv-2",
+  "run_id": "run-1",
+  "stage_id": "stage-1",
+  "attempt_id": "attempt-2",
+  "backend": "fresh_vm_read_only_volume_handoff",
+  "capabilities": [
+    "supports_credential_volume_detach",
+    "supports_detachable_workspace",
+    "supports_networkless_export",
+    "supports_post_exit_export",
+    "supports_read_only_remount",
+    "supports_workspace_snapshot"
+  ],
+  "operating_mode": "unattended",
+  "credential_mode": "subscription_contained",
+  "egress_profile": "clean_verification",
+  "image_ref": "ghcr.io/freeside-ai/verifier@sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "spec_digest": "sha256:spec",
+  "policy_digest": "sha256:dc1af0d4d3c8cdc2f6b59b72234a6988199c4d9dd9c3f2e663452eb58cd97ca7",
+  "input_digest": "sha256:input",
+  "base": {
+    "repo": "owner/repo",
+    "repository_id": 424242,
+    "base_ref": "refs/heads/main",
+    "base_sha": "deadbeef"
+  },
+  "workspace": "freeside-handoff-run-1-ws",
+  "auth_identity_id": null,
+  "trust_profile_digest": "sha256:trust-profile-v1",
+  "backup_encryption_waiver": {
+    "repository_id": 424242,
+    "reason": "phase 1a.2 supervised runs (plan §5.7)"
+  },
+  "admitted_at": "2026-01-02T03:04:05Z"
+}

@@ -1,0 +1,10 @@
+{
+  "invocation_id": "inv-1",
+  "admission_id": "sha256:575845b7be22acfcbee1fe7b04f5f67153c19ae4ca5779b55774e465288480a3",
+  "observed_base_sha": "deadbeef",
+  "head_sha": "cafebabe",
+  "manifest_digest": "sha256:change-manifest",
+  "evidence_manifest_digest": "sha256:evidence-manifest",
+  "commit_plan_present": true,
+  "recorded_at": "2026-01-02T04:04:05Z"
+}
