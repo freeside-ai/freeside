@@ -1,9 +1,14 @@
 package engine
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 func TestFakePublicationDurabilityHelpers(t *testing.T) {
@@ -31,5 +36,47 @@ func TestFakePublicationDurabilityHelpersRejectNonDirectoryAncestor(t *testing.T
 	}
 	if err := makeFakePublicationDirectory(filepath.Join(notDirectory, "child"), 0o700); err == nil {
 		t.Fatal("created directory beneath a regular file")
+	}
+}
+
+func TestPutTerminalItemAcceptsCompatibleLifecycleAdvance(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	attention := signet.NewService(st)
+	runID := domain.RunID("run-terminal")
+	expected, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "ready-run-terminal", ProjectID: "project-terminal",
+		Subject: domain.Subject{
+			Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID,
+		},
+		Type: domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Reason: "owner/repo#7 is published and ready for final review.",
+		RequestedDecision: []domain.Action{
+			domain.ActionOpenPR, domain.ActionMarkSeen, domain.ActionDismiss, domain.ActionStop,
+		},
+		PRHeadSHA:   "0123456789012345678901234567890123456789",
+		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
+		Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := attention.PutItem(ctx, expected); err != nil {
+		t.Fatal(err)
+	}
+	advanced := expected
+	advanced.ItemVersion = 2
+	advanced.Status = domain.StatusDismissed
+	if err := attention.PutItem(ctx, advanced); err != nil {
+		t.Fatal(err)
+	}
+
+	workflow := &fakePublicationWorkflow{store: st, attention: attention}
+	if err := workflow.putTerminalItem(ctx, expected); err != nil {
+		t.Fatalf("compatible terminal replay: %v", err)
 	}
 }

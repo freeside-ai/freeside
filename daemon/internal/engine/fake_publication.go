@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -208,7 +209,7 @@ type attentionService interface {
 // report and transcript bytes. Metadata never commits before these bytes.
 type ArtifactStore interface {
 	Put(domain.Digest, io.Reader) (bool, error)
-	Has(domain.Digest) (bool, error)
+	Open(domain.Digest) (io.ReadCloser, error)
 }
 
 type fakePublicationReconcileResult struct {
@@ -551,6 +552,19 @@ func (w *fakePublicationWorkflow) reconcileTask(ctx context.Context, task fakePu
 		},
 	)
 	if err != nil {
+		if isDefinitiveTrustRefusal(err) {
+			if putErr := w.putBlockedItem(
+				ctx, task, imported.CommitSHA, imported.Claims, artifacts,
+				imported.CommitPlanNotice,
+				"Current trust state definitively blocked publication.",
+			); putErr != nil {
+				return taskOutcome{}, errors.Join(err, putErr)
+			}
+			if finishErr := w.finishTask(ctx, task); finishErr != nil {
+				return taskOutcome{}, errors.Join(err, finishErr)
+			}
+			return taskOutcome{blocked: true}, nil
+		}
 		return taskOutcome{}, fmt.Errorf("publish candidate: %w", err)
 	}
 	if _, err := publish.DrainPublicationIntent(
@@ -562,7 +576,7 @@ func (w *fakePublicationWorkflow) reconcileTask(ctx context.Context, task fakePu
 	if err != nil {
 		return taskOutcome{}, err
 	}
-	if err := w.attention.PutItem(ctx, ready); err != nil {
+	if err := w.putTerminalItem(ctx, ready); err != nil {
 		return taskOutcome{}, fmt.Errorf("create ready item: %w", err)
 	}
 	if err := w.finishTask(ctx, task); err != nil {
@@ -699,6 +713,9 @@ func (w *fakePublicationWorkflow) verifyCandidate(
 			return fakePublicationCandidateCheckpoint{}, fmt.Errorf(
 				"persist evidence artifact %s: %w", item.Artifact.ID, err)
 		}
+		if err := verifyFakePublicationBlob(w.artifacts, item.Artifact); err != nil {
+			return fakePublicationCandidateCheckpoint{}, err
+		}
 	}
 	outcome := domain.VerificationFailed
 	if verified.Outcome == verify.OutcomePassed {
@@ -807,9 +824,8 @@ func (w *fakePublicationWorkflow) loadCandidateCheckpoint(
 			*provenance.VerificationRecipeDigest != task.RecipeDigest {
 			return fakePublicationCandidateCheckpoint{}, false, domain.ErrEvidenceHeadMismatch
 		}
-		if present, err := w.artifacts.Has(artifact.Digest); err != nil || !present {
-			return fakePublicationCandidateCheckpoint{}, false,
-				fmt.Errorf("candidate checkpoint artifact %s content unavailable", artifact.ID)
+		if err := verifyFakePublicationBlob(w.artifacts, artifact); err != nil {
+			return fakePublicationCandidateCheckpoint{}, false, err
 		}
 	}
 	return checkpoint, true, nil
@@ -961,10 +977,50 @@ func (w *fakePublicationWorkflow) putBlockedItem(
 	if err != nil {
 		return fmt.Errorf("construct publish-blocked item: %w", err)
 	}
-	if err := w.attention.PutItem(ctx, item); err != nil {
+	if err := w.putTerminalItem(ctx, item); err != nil {
 		return fmt.Errorf("create publish-blocked item: %w", err)
 	}
 	return nil
+}
+
+func (w *fakePublicationWorkflow) putTerminalItem(
+	ctx context.Context,
+	item domain.AttentionItem,
+) error {
+	err := w.attention.PutItem(ctx, item)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, store.ErrStaleWrite) && !errors.Is(err, store.ErrImmutableConflict) {
+		return err
+	}
+	var current domain.AttentionItem
+	if readErr := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		current, err = tx.GetAttentionItem(ctx, item.ID)
+		return err
+	}); readErr != nil {
+		return errors.Join(err, readErr)
+	}
+	if !compatibleTerminalItem(item, current) {
+		return err
+	}
+	return nil
+}
+
+func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
+	normalized := current
+	normalized.ItemVersion = expected.ItemVersion
+	normalized.Status = expected.Status
+	normalized.DecidedAt = expected.DecidedAt
+	normalized.Timing = expected.Timing
+	if !reflect.DeepEqual(normalized, expected) {
+		return false
+	}
+	if reflect.DeepEqual(current, expected) {
+		return true
+	}
+	return domain.ValidateAttentionItemTransition(expected, current) == nil
 }
 
 func (w *fakePublicationWorkflow) finishTask(ctx context.Context, task fakePublicationTask) error {
@@ -1189,6 +1245,31 @@ func validateFakePublicationAllowlist(patterns []string) error {
 		}
 	}
 	return nil
+}
+
+func verifyFakePublicationBlob(store ArtifactStore, artifact domain.Artifact) error {
+	body, err := store.Open(artifact.Digest)
+	if err != nil {
+		return fmt.Errorf("open candidate checkpoint artifact %s: %w", artifact.ID, err)
+	}
+	hasher := sha256.New()
+	_, copyErr := io.Copy(hasher, body)
+	closeErr := body.Close()
+	if err := errors.Join(copyErr, closeErr); err != nil {
+		return fmt.Errorf("read candidate checkpoint artifact %s: %w", artifact.ID, err)
+	}
+	got := domain.Digest("sha256:" + hex.EncodeToString(hasher.Sum(nil)))
+	if got != artifact.Digest {
+		return fmt.Errorf(
+			"candidate checkpoint artifact %s body hashes to %s, want %s",
+			artifact.ID, got, artifact.Digest,
+		)
+	}
+	return nil
+}
+
+func isDefinitiveTrustRefusal(err error) bool {
+	return errors.Is(err, publish.ErrTrustProfileDrift)
 }
 
 var _ publish.CandidateResolver = (*fakePublicationWorkflow)(nil)

@@ -235,6 +235,7 @@ type integrationTransport struct {
 
 	mu     sync.Mutex
 	pushes int
+	fail   bool
 }
 
 func (tr *integrationTransport) FetchBase(
@@ -268,7 +269,12 @@ func (tr *integrationTransport) PushHead(
 	}
 	tr.mu.Lock()
 	tr.pushes++
+	fail := tr.fail
+	tr.fail = false
 	tr.mu.Unlock()
+	if fail {
+		return publish.PushResult{}, errors.New("injected publication push failure")
+	}
 	conflict := tr.forge.setRef(identity.BranchName(), in.SourceHeadSHA)
 	if conflict {
 		return publish.PushResult{}, errors.New("publication ref moved")
@@ -282,10 +288,17 @@ func (tr *integrationTransport) pushCount() int {
 	return tr.pushes
 }
 
+func (tr *integrationTransport) failNextPush() {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.fail = true
+}
+
 type publicationHarness struct {
 	t         *testing.T
 	ctx       context.Context
 	dbPath    string
+	blobDir   string
 	workDir   string
 	baseDir   string
 	baseSHA   string
@@ -357,12 +370,14 @@ func newPublicationHarness(t *testing.T) *publicationHarness {
 		t.Fatal(err)
 	}
 	forge, server := newIntegrationForge(t)
-	blobs, err := signet.NewBlobStore(filepath.Join(root, "blobs"))
+	blobDir := filepath.Join(root, "blobs")
+	blobs, err := signet.NewBlobStore(blobDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &publicationHarness{
-		t: t, ctx: ctx, dbPath: dbPath, workDir: filepath.Join(root, "publication"),
+		t: t, ctx: ctx, dbPath: dbPath, blobDir: blobDir,
+		workDir: filepath.Join(root, "publication"),
 		baseDir: base, baseSHA: baseSHA, recipe: recipe, recipeD: recipeDigest,
 		profile: profile, audit: audit, store: st,
 		attention: signet.NewService(st, signet.WithBlobStore(blobs)), blobs: blobs,
@@ -520,6 +535,40 @@ func TestFakeCandidatePublicationRestoresAndConvergesExactlyOnce(t *testing.T) {
 	}
 	if replay, err := restored.Reconcile(h.ctx); err != nil || replay != (engine.ReconcileResult{}) {
 		t.Fatalf("settled reconcile = %+v, %v", replay, err)
+	}
+}
+
+func TestFakeCandidatePublicationRejectsCorruptCheckpointBlob(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	writeFile(t, workspace, "candidate.txt", "verified\n")
+
+	workflow := h.engine()
+	h.transport.failNextPush()
+	if _, err := workflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
+		t.Fatalf("StartFakePublication: %v", err)
+	}
+	if _, err := workflow.Reconcile(h.ctx); err == nil {
+		t.Fatal("injected push failure did not leave the task pending")
+	}
+	blobs, err := os.ReadDir(h.blobDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blobs) != 2 {
+		t.Fatalf("checkpoint blobs = %d, want 2", len(blobs))
+	}
+	if err := os.WriteFile(filepath.Join(h.blobDir, blobs[0].Name()), []byte("corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pushes := h.transport.pushCount()
+	if _, err := workflow.Reconcile(h.ctx); err == nil ||
+		!strings.Contains(err.Error(), "body hashes to") {
+		t.Fatalf("corrupt checkpoint blob error = %v", err)
+	}
+	if got := h.transport.pushCount(); got != pushes {
+		t.Fatalf("corrupt checkpoint reached push: %d -> %d", pushes, got)
 	}
 }
 
@@ -698,9 +747,12 @@ func TestFakeCandidatePublicationChecksFreshTrustBeforePush(t *testing.T) {
 	if _, err := workflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
 		t.Fatalf("StartFakePublication: %v", err)
 	}
-	_, err := workflow.Reconcile(h.ctx)
-	if !errors.Is(err, publish.ErrTrustProfileDrift) {
-		t.Fatalf("Reconcile error = %v, want ErrTrustProfileDrift", err)
+	result, err := workflow.Reconcile(h.ctx)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if result.BlockedItemsCreated != 1 || result.ReadyItemsCreated != 0 {
+		t.Fatalf("drifted trust result = %+v", result)
 	}
 	if refs, prs := h.forge.counts(); refs != 0 || prs != 0 {
 		t.Fatalf("drifted trust created forge resources = refs:%d prs:%d", refs, prs)
@@ -744,11 +796,25 @@ func TestFakeCandidatePublicationReplayKeepsOriginalTrustBinding(t *testing.T) {
 	if _, err := workflow.StartFakePublication(h.ctx, spec); err != nil {
 		t.Fatalf("idempotent start after profile change: %v", err)
 	}
-	_, err = workflow.Reconcile(h.ctx)
-	if !errors.Is(err, publish.ErrTrustProfileDrift) {
-		t.Fatalf("Reconcile error = %v, want ErrTrustProfileDrift", err)
+	secondWorkspace := t.TempDir()
+	writeFile(t, secondWorkspace, "README.md", "base\n")
+	writeFile(t, secondWorkspace, "candidate.txt", "current profile\n")
+	second := h.spec(secondWorkspace)
+	second.RunID = "run-current-profile"
+	second.ProjectID = "project-current-profile"
+	second.VerificationInvocationID = "verify-current-profile"
+	second.PublicationInvocationID = "publish-current-profile"
+	if _, err := workflow.StartFakePublication(h.ctx, second); err != nil {
+		t.Fatalf("start current-profile task: %v", err)
 	}
-	if pushes := h.transport.pushCount(); pushes != 0 {
-		t.Fatalf("superseded task binding reached push %d times", pushes)
+	result, err := workflow.Reconcile(h.ctx)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if result.BlockedItemsCreated != 1 || result.ReadyItemsCreated != 1 {
+		t.Fatalf("mixed-profile reconciliation = %+v", result)
+	}
+	if pushes := h.transport.pushCount(); pushes != 1 {
+		t.Fatalf("mixed-profile tasks reached push %d times, want only the current task", pushes)
 	}
 }

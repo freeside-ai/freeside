@@ -113,6 +113,17 @@ slash-separated glob grammar the importer will apply before exporting or
 enqueueing anything; a regression proves an invalid pattern creates no task
 and the corrected request can start immediately.
 
+The next review round tightened three recovery boundaries. Checkpoint reuse now
+streams and hashes each verifier blob, both immediately after `Put` and after
+restart, instead of trusting a digest-shaped filename. Terminal ready and
+blocked items accept an existing compatible lifecycle successor without
+rewriting it, so a decision racing the task's final dispatch mark cannot strand
+the task. Finally, current trust-profile drift is a definitive blocked outcome:
+the workflow persists a `publish_blocked` item and dispatches that task, while
+operational and invariant failures remain errors for retry or repair. A
+mixed-profile regression proves the superseded task blocks without pushing and
+the following current-profile task still reaches ready in the same pass.
+
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
 while workspace export and verification execution move behind those stronger
