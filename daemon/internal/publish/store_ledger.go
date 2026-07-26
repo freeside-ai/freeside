@@ -50,23 +50,9 @@ func (l *StoreLedger) Record(ctx context.Context, key, kind string, payload []by
 		inserted bool
 	)
 	err = l.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		entry, ins, err := tx.EnqueueOutbox(ctx, key, kind, payload)
-		if err != nil {
-			return err
-		}
-		// The outbox is unique by idempotency key alone, so a foreign row
-		// can occupy this key under another kind. The returned row is the
-		// durable intent Record is attesting to; verify both coordinates
-		// before allowing an insert to commit or an existing row to
-		// converge.
-		if entry.IdempotencyKey != key || entry.Kind != kind {
-			return fmt.Errorf("key %q holds kind %q", entry.IdempotencyKey, entry.Kind)
-		}
-		if entry.Quarantined() {
-			return fmt.Errorf("intent %q is quarantined: %w", key, ErrUnauthorizedPublication)
-		}
-		stored, inserted = entry.Payload, ins
-		return nil
+		var err error
+		stored, inserted, err = commitReservedIntent(ctx, tx, key, kind, payload)
+		return err
 	})
 	if err != nil {
 		return nil, false, fmt.Errorf("ledger: record intent %q: %w", key, err)

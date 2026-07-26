@@ -56,21 +56,18 @@ func (d *storePublicationDecision) prepare(ctx context.Context, c Candidate, aud
 			decisionErr = err
 			return nil
 		}
-		entry, inserted, err := tx.EnqueueOutbox(ctx, key, IntentKindPublication, payload)
+		stored, inserted, err := commitReservedIntent(ctx, tx, key, IntentKindPublication, payload)
 		if err != nil {
+			// A refusal the publication itself earned (a quarantined intent)
+			// is a decision, not a transaction failure: the fresh audit this
+			// transaction recorded is a real observation and must still commit.
+			if isPublicationRefusal(err) {
+				decisionErr = err
+				return nil
+			}
 			return fmt.Errorf("record intent: %w", err)
 		}
-		if entry.IdempotencyKey != key || entry.Kind != IntentKindPublication {
-			return fmt.Errorf("record intent: key %q holds kind %q", entry.IdempotencyKey, entry.Kind)
-		}
-		if entry.Quarantined() {
-			decisionErr = fmt.Errorf(
-				"publication intent %q is quarantined: %w",
-				key, ErrUnauthorizedPublication,
-			)
-			return nil
-		}
-		prior, recorded = entry.Payload, inserted
+		prior, recorded = stored, inserted
 		return nil
 	})
 	if err != nil {
