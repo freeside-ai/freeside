@@ -283,6 +283,9 @@ func (w *fakePublicationWorkflow) start(ctx context.Context, spec FakePublicatio
 			return fmt.Errorf("task row disagrees with key or kind: %w", domain.ErrParentKeyMismatch)
 		}
 		if inserted {
+			if err := validateFakePublicationWorkspace(task.WorkspaceDir); err != nil {
+				return err
+			}
 			committed = task
 		} else {
 			prior, err := decodeFakePublicationTask(entry.Payload)
@@ -335,13 +338,6 @@ func (w *fakePublicationWorkflow) newTask(
 	workspaceDir, err := filepath.Abs(spec.WorkspaceDir)
 	if err != nil {
 		return fakePublicationTask{}, false, fmt.Errorf("resolve workspace: %w", err)
-	}
-	info, err := os.Stat(workspaceDir)
-	if err != nil {
-		return fakePublicationTask{}, false, fmt.Errorf("stat workspace: %w", err)
-	}
-	if !info.IsDir() {
-		return fakePublicationTask{}, false, errors.New("workspace is not a directory")
 	}
 	var profile domain.AutomationTrustProfile
 	err = w.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -575,7 +571,9 @@ func (w *fakePublicationWorkflow) reconcileTask(ctx context.Context, task fakePu
 	if err != nil {
 		return taskOutcome{}, fmt.Errorf("publish candidate: %w", err)
 	}
-	if _, err := publish.DrainPendingPublications(ctx, w.store, w.publisher, w); err != nil {
+	if _, err := publish.DrainPublicationIntent(
+		ctx, w.store, w.publisher, w, task.PublicationInvocationID,
+	); err != nil {
 		return taskOutcome{}, fmt.Errorf("finalize publication: %w", err)
 	}
 	ready, err := w.readyItem(task, imported, artifacts, published)
@@ -772,6 +770,17 @@ func (w *fakePublicationWorkflow) expectedHandoffDir(task fakePublicationTask) (
 	}
 	sum := sha256.Sum256(payload)
 	return filepath.Join(w.workDir, "handoffs", hex.EncodeToString(sum[:])), nil
+}
+
+func validateFakePublicationWorkspace(workspaceDir string) error {
+	info, err := os.Stat(workspaceDir)
+	if err != nil {
+		return fmt.Errorf("stat workspace: %w", err)
+	}
+	if !info.IsDir() {
+		return errors.New("workspace is not a directory")
+	}
+	return nil
 }
 
 func publicationRun(task fakePublicationTask) domain.Run {

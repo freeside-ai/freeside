@@ -66,7 +66,13 @@ dispatched task forever. The command always reconciles before reading that
 result, so a terminal item persisted just before a crash cannot strand its
 outbox row as pending. It ignores aggregate task counters and queries the
 requested run directly, preventing another run's ready, blocked, or PR outcome
-from being misreported.
+from being misreported. Publication-intent finalization is likewise scoped to
+the active task's invocation, so an unrelated crashed intent cannot require a
+candidate this reconciliation pass did not reconstruct. Replay loads the
+committed task without statting its source workspace; a newly inserted task
+still validates the workspace inside its decision transaction, while a
+post-handoff recovery no longer depends on the source execution context
+remaining mounted.
 
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,

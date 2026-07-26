@@ -71,6 +71,34 @@ type CandidateResolver interface {
 // gap is the after-effect-before-acceptance boundary, closed by the
 // idempotent re-converge, not by a shared commit.
 func DrainPendingPublications(ctx context.Context, s *store.Store, p *Publisher, resolve CandidateResolver) (int, error) {
+	return drainPendingPublications(ctx, s, p, resolve, "")
+}
+
+// DrainPublicationIntent re-converges only the publication intent committed
+// by invocationID. A workflow reconciling one durable task uses this scoped
+// form so another task's pending intent cannot require a process-local
+// candidate the active task did not reconstruct.
+func DrainPublicationIntent(
+	ctx context.Context,
+	s *store.Store,
+	p *Publisher,
+	resolve CandidateResolver,
+	invocationID domain.InvocationID,
+) (int, error) {
+	key, err := IntentKey(invocationID, IntentKindPublication)
+	if err != nil {
+		return 0, fmt.Errorf("drain publication: %w", err)
+	}
+	return drainPendingPublications(ctx, s, p, resolve, key)
+}
+
+func drainPendingPublications(
+	ctx context.Context,
+	s *store.Store,
+	p *Publisher,
+	resolve CandidateResolver,
+	targetKey string,
+) (int, error) {
 	var pending []store.QueueEntry
 	err := s.Read(ctx, func(tx *store.ReadTx) error {
 		entries, err := tx.ListPendingOutbox(ctx, IntentKindPublication)
@@ -86,6 +114,9 @@ func DrainPendingPublications(ctx context.Context, s *store.Store, p *Publisher,
 
 	dispatched := 0
 	for _, entry := range pending {
+		if targetKey != "" && entry.IdempotencyKey != targetKey {
+			continue
+		}
 		intent, err := DecodeIntent(entry.Payload)
 		if err != nil {
 			return dispatched, fmt.Errorf("drain publications: intent %q payload: %w", entry.IdempotencyKey, err)

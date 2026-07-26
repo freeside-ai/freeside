@@ -468,6 +468,12 @@ func TestFakeCandidatePublicationRestoresAndConvergesExactlyOnce(t *testing.T) {
 	}
 	h.attention = signet.NewService(h.store, signet.WithBlobStore(h.blobs))
 	restored := h.engine()
+	if err := os.RemoveAll(workspace); err != nil {
+		t.Fatalf("remove source workspace: %v", err)
+	}
+	if _, err := restored.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
+		t.Fatalf("replay without source workspace: %v", err)
+	}
 	second, err := restored.Reconcile(h.ctx)
 	if err != nil {
 		t.Fatalf("restored Reconcile: %v", err)

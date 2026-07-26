@@ -195,6 +195,42 @@ func TestDrainNoPending(t *testing.T) {
 	}
 }
 
+func TestDrainPublicationIntentScopesRecoveryToInvocation(t *testing.T) {
+	ctx := context.Background()
+	h := newDrainHarness(t)
+	first := testCandidate(t)
+	second := first
+	second.InvocationID = "inv-0002"
+
+	if _, err := h.pub.Publish(ctx, first, testApprovedRecipes()); err != nil {
+		t.Fatalf("publish first: %v", err)
+	}
+	if _, err := h.pub.Publish(ctx, second, testApprovedRecipes()); err != nil {
+		t.Fatalf("publish second: %v", err)
+	}
+	if got := len(pendingPublications(t, h.store)); got != 2 {
+		t.Fatalf("pending before scoped drain = %d, want 2", got)
+	}
+
+	n, err := publish.DrainPublicationIntent(
+		ctx, h.store, h.pub, resolverFor(t, second), second.InvocationID,
+	)
+	if err != nil {
+		t.Fatalf("scoped drain: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("scoped drain finalized %d, want 1", n)
+	}
+	pending := pendingPublications(t, h.store)
+	firstKey, err := publish.IntentKey(first.InvocationID, publish.IntentKindPublication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].IdempotencyKey != firstKey {
+		t.Fatalf("pending after scoped drain = %+v, want only %q", pending, firstKey)
+	}
+}
+
 // TestDrainRejectsCorruptIntent: a pending row whose payload names a
 // different invocation than its idempotency key is never published and
 // never dispatched; it stays pending as loud evidence (mirrors signet's
