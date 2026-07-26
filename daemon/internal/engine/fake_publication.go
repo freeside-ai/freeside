@@ -547,14 +547,21 @@ func (w *fakePublicationWorkflow) acquireTaskLock(
 	taskKey string,
 ) (func() error, error) {
 	lockDir := filepath.Join(w.workDir, "task-locks")
-	if err := makeFakePublicationDirectory(lockDir, 0o700); err != nil {
+	if err := os.MkdirAll(lockDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create publication task lock directory: %w", err)
 	}
-	digest := sha256.Sum256([]byte(taskKey))
+	return acquireFakePublicationLock(ctx, lockDir, taskKey)
+}
+
+func acquireFakePublicationLock(
+	ctx context.Context,
+	lockDir, key string,
+) (func() error, error) {
+	digest := sha256.Sum256([]byte(key))
 	lockPath := filepath.Join(lockDir, hex.EncodeToString(digest[:])+".lock")
 	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // fixed digest name under daemon-owned work directory
 	if err != nil {
-		return nil, fmt.Errorf("open publication task lock: %w", err)
+		return nil, fmt.Errorf("open publication lock: %w", err)
 	}
 	for {
 		err = unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB)
@@ -565,7 +572,7 @@ func (w *fakePublicationWorkflow) acquireTaskLock(
 		}
 		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
 			_ = lock.Close()
-			return nil, fmt.Errorf("lock publication task: %w", err)
+			return nil, fmt.Errorf("lock publication: %w", err)
 		}
 		timer := time.NewTimer(25 * time.Millisecond)
 		select {
@@ -584,7 +591,10 @@ type taskOutcome struct {
 	prNumber int
 }
 
-func (w *fakePublicationWorkflow) reconcileTask(ctx context.Context, task fakePublicationTask) (taskOutcome, error) {
+func (w *fakePublicationWorkflow) reconcileTask(
+	ctx context.Context,
+	task fakePublicationTask,
+) (outcome taskOutcome, err error) {
 	if err := requireCommittedHandoff(task); err != nil {
 		return taskOutcome{}, err
 	}
@@ -669,6 +679,24 @@ func (w *fakePublicationWorkflow) reconcileTask(ctx context.Context, task fakePu
 	w.candidates[task.PublicationInvocationID] = candidate
 	defer delete(w.candidates, task.PublicationInvocationID)
 
+	identity, err := fakePublicationIdentity(candidate)
+	if err != nil {
+		return taskOutcome{}, err
+	}
+	identityLockDir := filepath.Join(w.workDir, "identity-locks")
+	if err := os.MkdirAll(identityLockDir, 0o700); err != nil {
+		return taskOutcome{}, fmt.Errorf("create publication identity lock directory: %w", err)
+	}
+	releaseIdentity, err := acquireFakePublicationLock(
+		ctx, identityLockDir, string(identity.Digest()),
+	)
+	if err != nil {
+		return taskOutcome{}, err
+	}
+	defer func() {
+		err = errors.Join(err, releaseIdentity())
+	}()
+
 	if published, found, err := w.loadPublicationOutcome(ctx, candidate); err != nil {
 		return taskOutcome{}, err
 	} else if found {
@@ -747,15 +775,7 @@ func (w *fakePublicationWorkflow) loadPublicationOutcome(
 	ctx context.Context,
 	candidate publish.Candidate,
 ) (publish.Result, bool, error) {
-	digests := make([]domain.Digest, len(candidate.Artifacts))
-	for i, artifact := range candidate.Artifacts {
-		digests[i] = artifact.Digest
-	}
-	identity, err := publish.DeriveIdentity(publish.IdentityInput{
-		Repo: candidate.Repo, BaseRef: candidate.BaseRef,
-		SourceHeadSHA: candidate.HeadSHA, ArtifactDigests: digests,
-		RecipeDigest: candidate.RecipeDigest,
-	})
+	identity, err := fakePublicationIdentity(candidate)
 	if err != nil {
 		return publish.Result{}, false, err
 	}
@@ -808,6 +828,18 @@ func (w *fakePublicationWorkflow) loadPublicationOutcome(
 	return publish.Result{
 		Identity: identity, Branch: outcome.Branch, PRNumber: outcome.PRNumber,
 	}, true, nil
+}
+
+func fakePublicationIdentity(candidate publish.Candidate) (publish.Identity, error) {
+	digests := make([]domain.Digest, len(candidate.Artifacts))
+	for i, artifact := range candidate.Artifacts {
+		digests[i] = artifact.Digest
+	}
+	return publish.DeriveIdentity(publish.IdentityInput{
+		Repo: candidate.Repo, BaseRef: candidate.BaseRef,
+		SourceHeadSHA: candidate.HeadSHA, ArtifactDigests: digests,
+		RecipeDigest: candidate.RecipeDigest,
+	})
 }
 
 // Resolve implements publish.CandidateResolver for the publication intent
@@ -1089,17 +1121,28 @@ func (w *fakePublicationWorkflow) candidateCheckpointPath(task fakePublicationTa
 	return filepath.Join(w.workDir, "candidates", filepath.Base(task.HandoffDir)+".json")
 }
 
-// makeFakePublicationDirectory creates every missing directory one level at a
-// time and syncs its parent before proceeding. A later file or directory fsync
-// cannot make an unsynced ancestor entry durable on its own.
+// makeFakePublicationDirectory re-syncs the deepest existing boundary, then
+// creates every missing directory one level at a time and syncs its parent
+// before proceeding. A later file or directory fsync cannot make an unsynced
+// ancestor entry durable on its own.
 func makeFakePublicationDirectory(path string, mode fs.FileMode) error {
+	return makeFakePublicationDirectoryWithSync(path, mode, syncFakePublicationDirectory)
+}
+
+func makeFakePublicationDirectoryWithSync(
+	path string,
+	mode fs.FileMode,
+	syncDir func(string) error,
+) error {
 	var missing []string
+	var existing string
 	for current := filepath.Clean(path); ; current = filepath.Dir(current) {
 		info, err := os.Stat(current)
 		if err == nil {
 			if !info.IsDir() {
 				return fmt.Errorf("%s is not a directory", current)
 			}
+			existing = current
 			break
 		}
 		if !errors.Is(err, os.ErrNotExist) {
@@ -1109,6 +1152,9 @@ func makeFakePublicationDirectory(path string, mode fs.FileMode) error {
 		if parent := filepath.Dir(current); parent == current {
 			return fmt.Errorf("no existing ancestor for %s", path)
 		}
+	}
+	if err := syncDir(filepath.Dir(existing)); err != nil {
+		return err
 	}
 	for i := len(missing) - 1; i >= 0; i-- {
 		if err := os.Mkdir(missing[i], mode); err != nil {
@@ -1123,7 +1169,7 @@ func makeFakePublicationDirectory(path string, mode fs.FileMode) error {
 				return fmt.Errorf("%s is not a directory", missing[i])
 			}
 		}
-		if err := syncFakePublicationDirectory(filepath.Dir(missing[i])); err != nil {
+		if err := syncDir(filepath.Dir(missing[i])); err != nil {
 			return err
 		}
 	}

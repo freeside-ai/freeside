@@ -196,6 +196,13 @@ preserving artifact integrity across the item-to-dispatch crash window.
 Repository admission also applies the transport's exact owner/name grammar
 before exporting a handoff or committing immutable task state.
 
+Directory durability retries now resync the parent of the deepest existing
+path before accepting it as a durable boundary; concurrent creators verify an
+`EEXIST` winner instead of failing. This applies to both the publication work
+tree and the blob-store root. Publication reconciliation additionally locks
+the derived content identity across processes, so different task keys cannot
+race the same branch and pull-request convergence.
+
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
 while workspace export and verification execution move behind those stronger

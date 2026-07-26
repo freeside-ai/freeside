@@ -657,6 +657,79 @@ func TestFakeCandidatePublicationSerializesOneTaskAcrossEngines(t *testing.T) {
 	}
 }
 
+func TestFakeCandidatePublicationSerializesOneIdentityAcrossRuns(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	writeFile(t, workspace, "candidate.txt", "verified\n")
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var hookMu sync.Mutex
+	blockNext := true
+	h.afterPublicationFinalized = func() error {
+		hookMu.Lock()
+		block := blockNext
+		blockNext = false
+		hookMu.Unlock()
+		if block {
+			close(entered)
+			<-release
+		}
+		return nil
+	}
+	firstEngine := h.engine()
+	secondEngine := h.engine()
+	commitDate := fakePublicationTime.Add(-time.Hour)
+	first := h.spec(workspace)
+	first.CommitDate = commitDate
+	second := h.spec(workspace)
+	second.RunID = "run-same-identity"
+	second.ProjectID = "project-same-identity"
+	second.PublicationInvocationID = "publish-same-identity"
+	second.CommitDate = commitDate
+	if _, err := firstEngine.StartFakePublication(h.ctx, first); err != nil {
+		t.Fatalf("start first publication: %v", err)
+	}
+	if _, err := secondEngine.StartFakePublication(h.ctx, second); err != nil {
+		t.Fatalf("start second publication: %v", err)
+	}
+
+	type reconcileResult struct {
+		result engine.ReconcileResult
+		err    error
+	}
+	firstDone := make(chan reconcileResult, 1)
+	go func() {
+		result, err := firstEngine.ReconcileFakePublication(h.ctx, first.RunID)
+		firstDone <- reconcileResult{result: result, err: err}
+	}()
+	<-entered
+	secondDone := make(chan reconcileResult, 1)
+	go func() {
+		result, err := secondEngine.ReconcileFakePublication(h.ctx, second.RunID)
+		secondDone <- reconcileResult{result: result, err: err}
+	}()
+	select {
+	case result := <-secondDone:
+		t.Fatalf("second run crossed the identity lock before release: %+v, %v", result.result, result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	for name, done := range map[string]<-chan reconcileResult{
+		"first": firstDone, "second": secondDone,
+	} {
+		result := <-done
+		if result.err != nil || result.result.ReadyItemsCreated != 1 ||
+			result.result.LastPRNumber != 101 {
+			t.Fatalf("%s reconcile = %+v, %v", name, result.result, result.err)
+		}
+	}
+	if refs, prs := h.forge.counts(); refs != 1 || prs != 1 {
+		t.Fatalf("same-identity runs duplicated forge resources = refs:%d prs:%d", refs, prs)
+	}
+}
+
 func TestFakeCandidatePublicationRejectsCorruptCheckpointBlob(t *testing.T) {
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()

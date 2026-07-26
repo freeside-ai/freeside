@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -37,6 +38,37 @@ func TestFakePublicationDurabilityHelpersRejectNonDirectoryAncestor(t *testing.T
 	}
 	if err := makeFakePublicationDirectory(filepath.Join(notDirectory, "child"), 0o700); err == nil {
 		t.Fatal("created directory beneath a regular file")
+	}
+}
+
+func TestMakeFakePublicationDirectoryRetriesExistingParentSync(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "candidate")
+	failedSync := errors.New("injected parent sync failure")
+	calls := 0
+	err := makeFakePublicationDirectoryWithSync(target, 0o700, func(string) error {
+		calls++
+		if calls == 2 {
+			return failedSync
+		}
+		return nil
+	})
+	if !errors.Is(err, failedSync) {
+		t.Fatalf("first creation error = %v, want injected sync failure", err)
+	}
+	if info, statErr := os.Stat(target); statErr != nil || !info.IsDir() {
+		t.Fatalf("failed sync did not leave the created directory for retry: %v", statErr)
+	}
+
+	var synced []string
+	if err := makeFakePublicationDirectoryWithSync(target, 0o700, func(path string) error {
+		synced = append(synced, path)
+		return nil
+	}); err != nil {
+		t.Fatalf("retry existing directory: %v", err)
+	}
+	if len(synced) != 1 || synced[0] != root {
+		t.Fatalf("retry synced %v, want the existing target's parent %s", synced, root)
 	}
 }
 
