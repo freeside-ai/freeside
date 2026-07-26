@@ -97,6 +97,15 @@ process-local exposure therefore remains an attended-development limitation,
 not an unattended security claim; this command never enables automatic or
 unattended startup.
 
+A subsequent recovery finding showed that syncing checkpoint contents before
+rename did not persist the renamed directory entry. The durability sweep
+covered both pre-database filesystem authorities: candidate checkpoints now
+sync their parent after rename, while immutable handoffs sync every exported
+file and directory before rename and then sync the destination parent. Missing
+work-directory ancestors are created one level at a time with each parent
+synced, so a durable SQLite task or publication intent cannot outlive the
+filesystem name it depends on after power loss.
+
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
 while workspace export and verification execution move behind those stronger

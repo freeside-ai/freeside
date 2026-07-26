@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -590,7 +591,7 @@ func (w *fakePublicationWorkflow) commitHandoff(task fakePublicationTask) error 
 		return fmt.Errorf("inspect handoff target: %w", err)
 	}
 	parent := filepath.Dir(task.HandoffDir)
-	if err := os.MkdirAll(parent, 0o700); err != nil {
+	if err := makeFakePublicationDirectory(parent, 0o700); err != nil {
 		return fmt.Errorf("create handoff parent: %w", err)
 	}
 	temp, err := os.MkdirTemp(parent, ".handoff-")
@@ -615,8 +616,14 @@ func (w *fakePublicationWorkflow) commitHandoff(task fakePublicationTask) error 
 	}); err != nil {
 		return fmt.Errorf("export helper: %w", err)
 	}
+	if err := syncFakePublicationTree(output); err != nil {
+		return fmt.Errorf("sync handoff: %w", err)
+	}
 	if err := os.Rename(output, task.HandoffDir); err != nil {
 		return fmt.Errorf("commit handoff: %w", err)
+	}
+	if err := syncFakePublicationDirectory(parent); err != nil {
+		return fmt.Errorf("commit handoff directory entry: %w", err)
 	}
 	committed = true
 	_ = os.RemoveAll(temp)
@@ -718,10 +725,11 @@ func (w *fakePublicationWorkflow) verifyCandidate(
 		return fakePublicationCandidateCheckpoint{}, err
 	}
 	path := w.candidateCheckpointPath(task)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	parent := filepath.Dir(path)
+	if err := makeFakePublicationDirectory(parent, 0o700); err != nil {
 		return fakePublicationCandidateCheckpoint{}, err
 	}
-	temp, err := os.CreateTemp(filepath.Dir(path), ".candidate-")
+	temp, err := os.CreateTemp(parent, ".candidate-")
 	if err != nil {
 		return fakePublicationCandidateCheckpoint{}, err
 	}
@@ -739,6 +747,9 @@ func (w *fakePublicationWorkflow) verifyCandidate(
 		return fakePublicationCandidateCheckpoint{}, err
 	}
 	if err := os.Rename(tempName, path); err != nil {
+		return fakePublicationCandidateCheckpoint{}, err
+	}
+	if err := syncFakePublicationDirectory(parent); err != nil {
 		return fakePublicationCandidateCheckpoint{}, err
 	}
 	return checkpoint, nil
@@ -802,6 +813,80 @@ func (w *fakePublicationWorkflow) loadCandidateCheckpoint(
 
 func (w *fakePublicationWorkflow) candidateCheckpointPath(task fakePublicationTask) string {
 	return filepath.Join(w.workDir, "candidates", filepath.Base(task.HandoffDir)+".json")
+}
+
+// makeFakePublicationDirectory creates every missing directory one level at a
+// time and syncs its parent before proceeding. A later file or directory fsync
+// cannot make an unsynced ancestor entry durable on its own.
+func makeFakePublicationDirectory(path string, mode fs.FileMode) error {
+	var missing []string
+	for current := filepath.Clean(path); ; current = filepath.Dir(current) {
+		info, err := os.Stat(current)
+		if err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("%s is not a directory", current)
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		missing = append(missing, current)
+		if parent := filepath.Dir(current); parent == current {
+			return fmt.Errorf("no existing ancestor for %s", path)
+		}
+	}
+	for i := len(missing) - 1; i >= 0; i-- {
+		if err := os.Mkdir(missing[i], mode); err != nil {
+			return err
+		}
+		if err := syncFakePublicationDirectory(filepath.Dir(missing[i])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// syncFakePublicationTree finalizes an exported handoff bottom-up before its
+// directory is renamed into the durable task binding.
+func syncFakePublicationTree(root string) error {
+	var dirs []string
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		switch {
+		case entry.IsDir():
+			dirs = append(dirs, path)
+			return nil
+		case entry.Type().IsRegular():
+			file, err := os.Open(path) //nolint:gosec // private exporter output rooted at root
+			if err != nil {
+				return err
+			}
+			syncErr := file.Sync()
+			return errors.Join(syncErr, file.Close())
+		default:
+			return fmt.Errorf("handoff output %s is not a regular file or directory", path)
+		}
+	})
+	if err != nil {
+		return err
+	}
+	for i := len(dirs) - 1; i >= 0; i-- {
+		if err := syncFakePublicationDirectory(dirs[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func syncFakePublicationDirectory(path string) error {
+	dir, err := os.Open(path) //nolint:gosec // daemon-owned work directory path
+	if err != nil {
+		return err
+	}
+	return errors.Join(dir.Sync(), dir.Close())
 }
 
 func (w *fakePublicationWorkflow) persistCandidateMetadata(
