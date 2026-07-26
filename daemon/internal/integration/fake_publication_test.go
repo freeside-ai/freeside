@@ -762,6 +762,79 @@ func TestFakeCandidatePublicationChecksFreshTrustBeforePush(t *testing.T) {
 	}
 }
 
+func TestFakeCandidatePublicationRetainsRecoveryTaskAfterIntentTrustDrift(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	writeFile(t, workspace, "candidate.txt", "verified\n")
+
+	workflow := h.engine()
+	h.transport.failNextPush()
+	if _, err := workflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
+		t.Fatalf("StartFakePublication: %v", err)
+	}
+	if _, err := workflow.Reconcile(h.ctx); err == nil {
+		t.Fatal("injected push failure did not leave the task pending")
+	}
+
+	reviewedAgain, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: h.profile.Repo, RepositoryID: h.profile.RepositoryID,
+		PRExecution:                h.profile.PRExecution,
+		CandidateAutomationChanges: h.profile.CandidateAutomationChanges,
+		PRGitHubTokenPermissions:   h.profile.PRGitHubTokenPermissions,
+		CommitPlan:                 h.profile.CommitPlan, MessageRuleset: h.profile.MessageRuleset,
+		WorkflowAuditDigest: h.profile.WorkflowAuditDigest,
+		Review: domain.ReviewSettings{
+			Mode: h.profile.Review.Mode, ConfigDigest: "sha256:re-reviewed-after-intent",
+		},
+		ProtectedPaths: h.profile.ProtectedPaths,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.WriteInternal(h.ctx, func(tx *store.InternalTx) error {
+		return tx.RecordTrustProfile(h.ctx, reviewedAgain, fakePublicationTime.Add(time.Minute))
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := workflow.Reconcile(h.ctx); !errors.Is(err, publish.ErrTrustProfileDrift) {
+		t.Fatalf("Reconcile error = %v, want ErrTrustProfileDrift", err)
+	}
+	var engineTasks, publicationIntents []store.QueueEntry
+	if err := h.store.Read(h.ctx, func(tx *store.ReadTx) error {
+		var err error
+		engineTasks, err = tx.ListPendingOutbox(h.ctx, "engine.fake_publication")
+		if err != nil {
+			return err
+		}
+		publicationIntents, err = tx.ListPendingOutbox(
+			h.ctx, publish.IntentKindPublication,
+		)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(engineTasks) != 1 || len(publicationIntents) != 1 {
+		t.Fatalf(
+			"pending recovery authority = engine:%d publication:%d, want 1 each",
+			len(engineTasks), len(publicationIntents),
+		)
+	}
+	if pushes := h.transport.pushCount(); pushes != 1 {
+		t.Fatalf("trust-drifted retry reached push %d times, want original attempt only", pushes)
+	}
+	item, err := h.attention.GetAttentionItem(
+		h.ctx, "publish-blocked-run-fake-publication",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Item.Type != domain.AttentionPublishBlocked {
+		t.Fatalf("blocked item type = %s", item.Item.Type)
+	}
+}
+
 func TestFakeCandidatePublicationReplayKeepsOriginalTrustBinding(t *testing.T) {
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()

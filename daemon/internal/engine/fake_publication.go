@@ -235,9 +235,6 @@ func newFakePublicationWorkflow(
 	if err != nil {
 		return nil, fmt.Errorf("resolve work directory: %w", err)
 	}
-	if err := os.MkdirAll(workDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create work directory: %w", err)
-	}
 	if _, err := verify.ParseRecipe(cfg.Recipe); err != nil {
 		return nil, fmt.Errorf("trusted recipe: %w", err)
 	}
@@ -248,6 +245,12 @@ func newFakePublicationWorkflow(
 	recipePath := cfg.RecipePath
 	if recipePath == "" {
 		recipePath = verify.DefaultRecipePath
+	}
+	if err := validateFakePublicationRecipePath(recipePath); err != nil {
+		return nil, fmt.Errorf("trusted recipe path %q: %w", recipePath, err)
+	}
+	if err := makeFakePublicationDirectory(workDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create work directory: %w", err)
 	}
 	now := cfg.Now
 	if now == nil {
@@ -553,12 +556,23 @@ func (w *fakePublicationWorkflow) reconcileTask(ctx context.Context, task fakePu
 	)
 	if err != nil {
 		if isDefinitiveTrustRefusal(err) {
+			pendingIntent, pendingErr := w.hasPendingPublicationIntent(
+				ctx, task.PublicationInvocationID,
+			)
+			if pendingErr != nil {
+				return taskOutcome{}, errors.Join(err, pendingErr)
+			}
 			if putErr := w.putBlockedItem(
 				ctx, task, imported.CommitSHA, imported.Claims, artifacts,
 				imported.CommitPlanNotice,
 				"Current trust state definitively blocked publication.",
 			); putErr != nil {
 				return taskOutcome{}, errors.Join(err, putErr)
+			}
+			if pendingIntent {
+				return taskOutcome{}, fmt.Errorf(
+					"publication intent retained with its recovery task: %w", err,
+				)
 			}
 			if finishErr := w.finishTask(ctx, task); finishErr != nil {
 				return taskOutcome{}, errors.Join(err, finishErr)
@@ -1029,6 +1043,30 @@ func (w *fakePublicationWorkflow) finishTask(ctx context.Context, task fakePubli
 	})
 }
 
+func (w *fakePublicationWorkflow) hasPendingPublicationIntent(
+	ctx context.Context,
+	invocationID domain.InvocationID,
+) (bool, error) {
+	key, err := publish.IntentKey(invocationID, publish.IntentKindPublication)
+	if err != nil {
+		return false, err
+	}
+	var pending []store.QueueEntry
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		pending, err = tx.ListPendingOutbox(ctx, publish.IntentKindPublication)
+		return err
+	}); err != nil {
+		return false, err
+	}
+	for _, entry := range pending {
+		if entry.IdempotencyKey == key {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (w *fakePublicationWorkflow) expectedHandoffDir(task fakePublicationTask) (string, error) {
 	task.HandoffDir = ""
 	payload, err := json.Marshal(task)
@@ -1242,6 +1280,21 @@ func validateFakePublicationAllowlist(patterns []string) error {
 			if _, err := path.Match(segment, ""); err != nil {
 				return fmt.Errorf("invalid candidate path allowlist pattern %q: %w", pattern, err)
 			}
+		}
+	}
+	return nil
+}
+
+func validateFakePublicationRecipePath(recipePath string) error {
+	if recipePath == "" || strings.HasPrefix(recipePath, "/") ||
+		strings.ContainsAny(recipePath, `:\*?[]`) {
+		return errors.New(
+			"must be a relative slash path without colon, backslash, or glob metacharacters",
+		)
+	}
+	for _, component := range strings.Split(recipePath, "/") {
+		if component == "" || component == "." || component == ".." {
+			return fmt.Errorf("component %q is not allowed", component)
 		}
 	}
 	return nil

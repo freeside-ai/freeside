@@ -39,6 +39,28 @@ func TestFakePublicationDurabilityHelpersRejectNonDirectoryAncestor(t *testing.T
 	}
 }
 
+func TestValidateFakePublicationRecipePath(t *testing.T) {
+	for _, path := range []string{
+		"",
+		"/verify.json",
+		"../verify.json",
+		"./verify.json",
+		"recipes//verify.json",
+		"recipes/*.json",
+		"recipes\\verify.json",
+		"recipes:verify.json",
+	} {
+		t.Run(path, func(t *testing.T) {
+			if err := validateFakePublicationRecipePath(path); err == nil {
+				t.Fatalf("accepted invalid recipe path %q", path)
+			}
+		})
+	}
+	if err := validateFakePublicationRecipePath(".freeside/verify.json"); err != nil {
+		t.Fatalf("rejected valid recipe path: %v", err)
+	}
+}
+
 func TestPutTerminalItemAcceptsCompatibleLifecycleAdvance(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})

@@ -102,9 +102,9 @@ rename did not persist the renamed directory entry. The durability sweep
 covered both pre-database filesystem authorities: candidate checkpoints now
 sync their parent after rename, while immutable handoffs sync every exported
 file and directory before rename and then sync the destination parent. Missing
-work-directory ancestors are created one level at a time with each parent
-synced, so a durable SQLite task or publication intent cannot outlive the
-filesystem name it depends on after power loss.
+work-directory ancestors, including the configured root itself, are created one
+level at a time with each parent synced, so a durable SQLite task or publication
+intent cannot outlive the filesystem name it depends on after power loss.
 
 The following deterministic-input finding showed that malformed allowlist
 globs were accepted into the durable outbox and could then fail every
@@ -123,6 +123,19 @@ the workflow persists a `publish_blocked` item and dispatches that task, while
 operational and invariant failures remain errors for retry or repair. A
 mixed-profile regression proves the superseded task blocks without pushing and
 the following current-profile task still reaches ready in the same pass.
+
+The final recovery review distinguished fresh trust refusal from drift after a
+publication intent already committed. With no publication intent, drift remains
+a terminal blocked outcome and the engine task is dispatched. With a pending
+publication intent, the workflow also persists the blocked item but retains the
+engine task as the only durable authority capable of rebuilding the candidate
+needed to inspect or finish that intent. Dispatching it would strand the
+publication outbox because this scope has no separate terminal cancellation
+contract for committed publication intents. A regression injects a push failure
+after intent commit, activates a new trust profile, and proves both outbox rows
+remain paired without another push. This round also moved trusted recipe-path
+validation to workflow admission, before any filesystem or task side effect,
+using the same relative slash-path grammar the verifier enforces.
 
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
