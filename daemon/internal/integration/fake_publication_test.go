@@ -421,6 +421,35 @@ func (h *publicationHarness) spec(workspace string) engine.FakePublicationSpec {
 	}
 }
 
+func TestFakeCandidatePublicationRejectsInvalidAllowlistBeforeCommit(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+
+	workflow := h.engine()
+	spec := h.spec(workspace)
+	spec.AllowedPaths = []string{"["}
+	if _, err := workflow.StartFakePublication(h.ctx, spec); err == nil {
+		t.Fatal("StartFakePublication accepted an invalid allowlist glob")
+	}
+	var pending []store.QueueEntry
+	if err := h.store.Read(h.ctx, func(tx *store.ReadTx) error {
+		var err error
+		pending, err = tx.ListPendingOutbox(h.ctx, "engine.fake_publication")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("invalid allowlist committed %d publication tasks", len(pending))
+	}
+
+	spec.AllowedPaths = []string{"**"}
+	if _, err := workflow.StartFakePublication(h.ctx, spec); err != nil {
+		t.Fatalf("corrected publication did not start: %v", err)
+	}
+}
+
 func TestFakeCandidatePublicationRestoresAndConvergesExactlyOnce(t *testing.T) {
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()

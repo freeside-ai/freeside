@@ -106,6 +106,13 @@ work-directory ancestors are created one level at a time with each parent
 synced, so a durable SQLite task or publication intent cannot outlive the
 filesystem name it depends on after power loss.
 
+The following deterministic-input finding showed that malformed allowlist
+globs were accepted into the durable outbox and could then fail every
+reconciliation ahead of corrected work. Admission now validates the exact
+slash-separated glob grammar the importer will apply before exporting or
+enqueueing anything; a regression proves an invalid pattern creates no task
+and the corrected request can start immediately.
+
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
 while workspace export and verification execution move behind those stronger

@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -347,6 +348,9 @@ func (w *fakePublicationWorkflow) newTask(
 	}
 	if len(spec.AllowedPaths) == 0 {
 		return fakePublicationTask{}, false, errors.New("at least one candidate path allowlist pattern is required")
+	}
+	if err := validateFakePublicationAllowlist(spec.AllowedPaths); err != nil {
+		return fakePublicationTask{}, false, err
 	}
 	workspaceDir, err := filepath.Abs(spec.WorkspaceDir)
 	if err != nil {
@@ -1168,6 +1172,23 @@ func validCommitSHA(sha string) bool {
 		}
 	}
 	return true
+}
+
+// validateFakePublicationAllowlist mirrors the importer's slash-separated
+// glob grammar at admission. A deterministic caller error must not become a
+// durable outbox row that fails identically on every reconciliation.
+func validateFakePublicationAllowlist(patterns []string) error {
+	for _, pattern := range patterns {
+		for _, segment := range strings.Split(pattern, "/") {
+			if segment == "**" {
+				continue
+			}
+			if _, err := path.Match(segment, ""); err != nil {
+				return fmt.Errorf("invalid candidate path allowlist pattern %q: %w", pattern, err)
+			}
+		}
+	}
+	return nil
 }
 
 var _ publish.CandidateResolver = (*fakePublicationWorkflow)(nil)
