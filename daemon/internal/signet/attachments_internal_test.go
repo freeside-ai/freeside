@@ -1,11 +1,16 @@
 package signet
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 func TestMakeBlobStoreDirectoryRetriesExistingParentSync(t *testing.T) {
@@ -59,5 +64,37 @@ func TestMakeBlobStoreDirectoryConvergesConcurrentCreators(t *testing.T) {
 		if err != nil {
 			t.Fatalf("concurrent blob-root creation: %v", err)
 		}
+	}
+}
+
+func TestBlobStorePutRetriesExistingBlobDirectorySync(t *testing.T) {
+	store, err := NewBlobStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := "durable artifact"
+	digest := domain.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(body))))
+	failedSync := errors.New("injected blob directory sync failure")
+	syncCalls := 0
+	syncDir := func() error {
+		syncCalls++
+		if syncCalls == 1 {
+			return failedSync
+		}
+		return nil
+	}
+
+	if _, err := store.put(digest, strings.NewReader(body), syncDir); !errors.Is(err, failedSync) {
+		t.Fatalf("first put error = %v, want injected sync failure", err)
+	}
+	created, err := store.put(digest, strings.NewReader(body), syncDir)
+	if err != nil {
+		t.Fatalf("retry existing blob: %v", err)
+	}
+	if created {
+		t.Fatal("retry reported existing blob as newly created")
+	}
+	if syncCalls != 2 {
+		t.Fatalf("directory sync calls = %d, want 2", syncCalls)
 	}
 }

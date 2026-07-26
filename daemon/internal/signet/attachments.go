@@ -130,6 +130,14 @@ func (b *BlobStore) blobPath(digest domain.Digest) (string, error) {
 // already present and the upload converged on the existing immutable bytes
 // (the retried-upload half of sync test 10).
 func (b *BlobStore) Put(digest domain.Digest, r io.Reader) (created bool, err error) {
+	return b.put(digest, r, b.syncDir)
+}
+
+func (b *BlobStore) put(
+	digest domain.Digest,
+	r io.Reader,
+	syncDir func() error,
+) (created bool, err error) {
 	path, err := b.blobPath(digest)
 	if err != nil {
 		return false, err
@@ -156,6 +164,9 @@ func (b *BlobStore) Put(digest domain.Digest, r io.Reader) (created bool, err er
 	// stored content before the request is called converged, or a mismatched
 	// re-PUT of an existing digest would return success.
 	if _, err := os.Stat(path); err == nil {
+		if err := syncDir(); err != nil {
+			return false, fmt.Errorf("attachment %q: %w", digest, err)
+		}
 		return false, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return false, fmt.Errorf("attachment %q: %w", digest, err)
@@ -172,7 +183,7 @@ func (b *BlobStore) Put(digest domain.Digest, r io.Reader) (created bool, err er
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return false, fmt.Errorf("attachment %q: %w", digest, err)
 	}
-	if err := b.syncDir(); err != nil {
+	if err := syncDir(); err != nil {
 		return false, fmt.Errorf("attachment %q: %w", digest, err)
 	}
 	return true, nil

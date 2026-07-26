@@ -337,16 +337,30 @@ func janitorInactiveError(status JanitorStatus, registrationIDs ...int64) error 
 		for _, registrationID := range registrationIDs {
 			requested[registrationID] = struct{}{}
 		}
-		var faults []error
+		faultByRegistration := make(map[int64]error, len(requested))
 		for _, fault := range source.RegistrationFaults() {
 			if _, ok := requested[fault.RegistrationID]; !ok || fault.Err == nil {
 				continue
 			}
-			faults = append(faults, fmt.Errorf(
-				"registration %d janitor fault: %w", fault.RegistrationID, fault.Err,
-			))
+			faultByRegistration[fault.RegistrationID] = fault.Err
 		}
-		if len(faults) > 0 {
+		// Before repository matching, any unfaulted candidate may become
+		// covered when the active janitor pass finishes. Only a known single
+		// registration, or a candidate set faulted in full, is definitive.
+		if len(faultByRegistration) == len(requested) {
+			faults := make([]error, 0, len(requested))
+			seen := make(map[int64]struct{}, len(requested))
+			for _, registrationID := range registrationIDs {
+				if _, ok := seen[registrationID]; ok {
+					continue
+				}
+				seen[registrationID] = struct{}{}
+				faults = append(faults, fmt.Errorf(
+					"registration %d janitor fault: %w",
+					registrationID,
+					faultByRegistration[registrationID],
+				))
+			}
 			return fmt.Errorf("installation resolution: %w", errors.Join(faults...))
 		}
 	}

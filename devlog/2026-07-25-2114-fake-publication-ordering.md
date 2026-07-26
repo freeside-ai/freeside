@@ -222,6 +222,15 @@ task-bound recipe blob is the sole recipe authority after admission, so a
 later symlink change to the unused CLI path cannot strand recovery. Fresh
 requests still validate the ambient recipe path before reading it.
 
+Blob convergence now repeats the blob-directory fsync when immutable content
+already exists, closing the rename-success/fsync-failure retry window for both
+task-bound recipes and verifier evidence. Janitor fault routing also keeps
+pre-match resolution transient while any uncovered candidate registration has
+no recorded fault; a cached sibling fault cannot terminate a request that a
+healthy registration may serve after the active pass restores coverage.
+Recorded faults remain definitive when the requested registration is already
+known or every possible registration is faulted.
+
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
 while workspace export and verification execution move behind those stronger

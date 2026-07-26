@@ -94,7 +94,7 @@ func TestResolutionSurvivesAnInactiveNonMatchingRegistration(t *testing.T) {
 	}
 }
 
-func TestResolutionSurfacesRecordedFaultBeforeCoverage(t *testing.T) {
+func TestResolutionKeepsSiblingFaultTransientBeforeCoverage(t *testing.T) {
 	ks, srv, contacted := twoRegistrationForge(t)
 	fault := errors.New("authority snapshot is unreadable")
 	resolver := publish.NewInstallationResolverWithJanitor(
@@ -102,18 +102,45 @@ func TestResolutionSurfacesRecordedFaultBeforeCoverage(t *testing.T) {
 		coveredJanitorStatus{
 			covered: map[int64]bool{},
 			faults: []publish.JanitorRegistrationFault{{
-				RegistrationID: 501,
+				RegistrationID: 601,
 				Err:            fault,
 			}},
 		},
 	)
 
 	_, err := resolver.Resolve(context.Background(), "operator")
-	if !errors.Is(err, fault) {
-		t.Fatalf("err = %v, want the recorded janitor fault", err)
+	if !errors.Is(err, publish.ErrJanitorInactive) {
+		t.Fatalf("err = %v, want transient janitor inactivity", err)
+	}
+	if errors.Is(err, fault) {
+		t.Fatalf("err = %v, sibling fault escaped before repository matching", err)
+	}
+	if contacted(501) != 0 || contacted(601) != 0 {
+		t.Error("resolution contacted the forge before any registration had coverage")
+	}
+}
+
+func TestResolutionSurfacesAllRecordedFaultsBeforeCoverage(t *testing.T) {
+	ks, srv, contacted := twoRegistrationForge(t)
+	firstFault := errors.New("operator authority snapshot is unreadable")
+	secondFault := errors.New("partner authority snapshot is unreadable")
+	resolver := publish.NewInstallationResolverWithJanitor(
+		ks, srv.Client(), srv.URL, fixedNow,
+		coveredJanitorStatus{
+			covered: map[int64]bool{},
+			faults: []publish.JanitorRegistrationFault{
+				{RegistrationID: 501, Err: firstFault},
+				{RegistrationID: 601, Err: secondFault},
+			},
+		},
+	)
+
+	_, err := resolver.Resolve(context.Background(), "operator")
+	if !errors.Is(err, firstFault) || !errors.Is(err, secondFault) {
+		t.Fatalf("err = %v, want both recorded janitor faults", err)
 	}
 	if errors.Is(err, publish.ErrJanitorInactive) {
-		t.Fatalf("err = %v, recorded fault was reduced to transient janitor inactivity", err)
+		t.Fatalf("err = %v, all-registration faults were reduced to transient inactivity", err)
 	}
 	if contacted(501) != 0 || contacted(601) != 0 {
 		t.Error("resolution contacted the forge before any registration had coverage")
