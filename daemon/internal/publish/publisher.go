@@ -112,6 +112,36 @@ func NewPublisher(ts TokenSource, client *http.Client, baseURL string, auditor W
 // retried at any point finds what the previous attempt created and
 // continues instead of duplicating (issue #81 acceptance 2, 4).
 func (p *Publisher) Publish(ctx context.Context, c Candidate, approvedRecipes map[domain.Digest]bool) (Result, error) {
+	return p.publish(ctx, c, approvedRecipes, nil)
+}
+
+// PublishAfterGate is the engine composition point for a daemon-side git
+// transport. It runs after every artifact, authorization, and fresh trust-drift
+// gate has passed and the publication intent is durable, but before Publisher
+// observes or creates the deterministic branch and PR. The callback must only
+// converge that exact candidate head onto its derived publication branch.
+//
+// A callback failure leaves the intent pending for recovery. A callback
+// success followed by a later failure is also safe to retry: the transport and
+// Publisher both use the same content identity and converge independently.
+func (p *Publisher) PublishAfterGate(
+	ctx context.Context,
+	c Candidate,
+	approvedRecipes map[domain.Digest]bool,
+	publishHead func(context.Context, IdentityInput) error,
+) (Result, error) {
+	if publishHead == nil {
+		return Result{}, errors.New("publish: nil after-gate head publisher")
+	}
+	return p.publish(ctx, c, approvedRecipes, publishHead)
+}
+
+func (p *Publisher) publish(
+	ctx context.Context,
+	c Candidate,
+	approvedRecipes map[domain.Digest]bool,
+	publishHead func(context.Context, IdentityInput) error,
+) (Result, error) {
 	if p.wiringErr != nil {
 		return Result{}, p.wiringErr
 	}
@@ -148,13 +178,14 @@ func (p *Publisher) Publish(ctx context.Context, c Candidate, approvedRecipes ma
 		digests[i] = a.Digest
 	}
 
-	identity, err := DeriveIdentity(IdentityInput{
+	identityInput := IdentityInput{
 		Repo:            c.Repo,
 		BaseRef:         c.BaseRef,
 		SourceHeadSHA:   c.HeadSHA,
 		ArtifactDigests: digests,
 		RecipeDigest:    c.RecipeDigest,
-	})
+	}
+	identity, err := DeriveIdentity(identityInput)
 	if err != nil {
 		return Result{}, fmt.Errorf("publish: %w", err)
 	}
@@ -177,6 +208,11 @@ func (p *Publisher) Publish(ctx context.Context, c Candidate, approvedRecipes ma
 	}
 	if err := p.preparePublication(ctx, c, audit, identity); err != nil {
 		return Result{}, err
+	}
+	if publishHead != nil {
+		if err := publishHead(ctx, identityInput); err != nil {
+			return Result{}, fmt.Errorf("publish: publish candidate head after gate: %w", err)
+		}
 	}
 
 	branch := identity.BranchName()

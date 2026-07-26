@@ -404,6 +404,48 @@ func TestPublishCreatesBranchAndPR(t *testing.T) {
 	}
 }
 
+func TestPublishAfterGateOrdersTransportBetweenIntentAndForge(t *testing.T) {
+	gh := newFakeGitHub(t)
+	ledger := newMemoryLedger()
+	p := newTestPublisher(t, gh, ledger)
+	candidate := testCandidate(t)
+	calls := 0
+
+	result, err := p.PublishAfterGate(
+		context.Background(),
+		candidate,
+		testApprovedRecipes(),
+		func(_ context.Context, input publish.IdentityInput) error {
+			calls++
+			if len(ledger.keys) != 1 {
+				t.Fatalf("durable intents at transport callback = %d, want 1", len(ledger.keys))
+			}
+			if requests := gh.requestLog(); len(requests) != 0 {
+				t.Fatalf("forge contacted before transport callback: %v", requests)
+			}
+			identity, err := publish.DeriveIdentity(input)
+			if err != nil {
+				return err
+			}
+			gh.mu.Lock()
+			gh.refs[identity.BranchName()] = candidate.HeadSHA
+			gh.mu.Unlock()
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishAfterGate: %v", err)
+	}
+	if calls != 1 || result.PRNumber == 0 || result.BranchCreated {
+		t.Fatalf("callback calls = %d, result = %+v", calls, result)
+	}
+	for _, request := range gh.writeRequests() {
+		if strings.Contains(request, "/git/refs") {
+			t.Fatalf("publisher recreated transport branch: %v", gh.writeRequests())
+		}
+	}
+}
+
 // TestPublishRetryConverges: a full re-run of the same candidate finds
 // the branch and PR and issues no writes at all (issue #81 acceptance
 // 2: converge, not duplicate).
