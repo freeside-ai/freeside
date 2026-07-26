@@ -30,6 +30,10 @@ type ReadTx struct {
 	// re-derive an evidence artifact's publish_eligibility instead of trusting
 	// the decoded row. Read-only.
 	approvedRecipes map[domain.Digest]bool
+	// admissionPolicy is the execution-admission half of that boundary policy
+	// (see Options.AdmissionFloors), carried the same way so a reconstructed
+	// admission is re-gated against the floor policy states now. Read-only.
+	admissionPolicy domain.AdmissionPolicy
 }
 
 // InternalTx is the transaction handle passed to WriteInternal callbacks:
@@ -74,7 +78,7 @@ func (s *Store) Write(ctx context.Context, fn func(*WriteTx) error) error {
 		return fmt.Errorf("read server_state: %w", err)
 	}
 	wtx := &WriteTx{
-		InternalTx:   InternalTx{ReadTx: ReadTx{tx: tx, approvedRecipes: s.approvedRecipes}},
+		InternalTx:   InternalTx{ReadTx: s.newReadTx(tx)},
 		asOfRevision: current + 1,
 	}
 	if err := fn(wtx); err != nil {
@@ -101,7 +105,7 @@ func (s *Store) WriteInternal(ctx context.Context, fn func(*InternalTx) error) e
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := fn(&InternalTx{ReadTx: ReadTx{tx: tx, approvedRecipes: s.approvedRecipes}}); err != nil {
+	if err := fn(&InternalTx{ReadTx: s.newReadTx(tx)}); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -121,13 +125,22 @@ func (s *Store) Read(ctx context.Context, fn func(*ReadTx) error) error {
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := fn(&ReadTx{tx: tx, approvedRecipes: s.approvedRecipes}); err != nil {
+	readTx := s.newReadTx(tx)
+	if err := fn(&readTx); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
+}
+
+// newReadTx builds the read surface every transaction shares, carrying the
+// store's boundary policy. One constructor means a policy added to the store
+// reaches all three transaction kinds, instead of the two whoever adds it
+// remembers.
+func (s *Store) newReadTx(tx *sql.Tx) ReadTx {
+	return ReadTx{tx: tx, approvedRecipes: s.approvedRecipes, admissionPolicy: s.admissionPolicy}
 }
 
 // ServerState reads the current sync epoch and revision inside the

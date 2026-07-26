@@ -1,0 +1,452 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+)
+
+// ErrRepositoryUntrusted is returned when an admission that must run against a
+// trusted repository names one with no approved trust profile to bind its
+// canonical numeric identity. It is deliberately distinct from ErrNotFound:
+// the admission row exists and was refused, which is not the same as having no
+// record.
+var ErrRepositoryUntrusted = errors.New("admission names a repository with no approved trust profile")
+
+// The durable execution record (plan §5.3, §5.7): what admitted one stage
+// attempt, and what that attempt exported. Both are write-once and
+// daemon-internal, so the writes live on InternalTx with non-Put names (the
+// #38 invariant) and rows carry no entity_version/as_of_revision. The engine
+// records an admission inside the same Write that appends its attempt, which
+// InternalTx being embedded in WriteTx makes possible: an attempt with no
+// audited class, or an admission for an attempt that was never appended, is
+// exactly what a split would leave behind after a crash.
+//
+// Two boundaries protect these rows, and they answer different questions. The
+// record is self-certifying, so decode rejects a body whose fields no longer
+// resolve to its content address; that catches partial corruption and any
+// edit that did not recompute the digest, not an actor with full write access
+// to the database, who could recompute it. The re-gate is the half that keeps
+// meaning: a snapshot admitted under an older, weaker floor stops reading as
+// admissible the moment policy raises it, and a waiver the operator does not
+// hold is refused however well-formed the row is.
+
+const (
+	recordExecutionAdmissionSQL = `
+INSERT INTO execution_admissions
+    (invocation_id, id, run_id, stage_id, attempt_id, operating_mode, auth_identity_id, admitted_at, body)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (invocation_id) DO NOTHING`
+	selectExecutionAdmissionBodySQL = `SELECT body FROM execution_admissions WHERE invocation_id = ?`
+	getExecutionAdmissionSQL        = `
+SELECT invocation_id, id, run_id, stage_id, attempt_id, operating_mode, auth_identity_id, admitted_at, body
+FROM execution_admissions WHERE invocation_id = ?`
+	// Ordered by rowid (insertion order), never by the RFC3339Nano admitted_at
+	// column: trailing zeros are trimmed, so sub-second instants misorder
+	// lexicographically.
+	listRunExecutionAdmissionsSQL = `
+SELECT invocation_id, id, run_id, stage_id, attempt_id, operating_mode, auth_identity_id, admitted_at, body
+FROM execution_admissions WHERE run_id = ? ORDER BY rowid`
+
+	recordExecutionExportSQL = `
+INSERT INTO execution_exports
+    (invocation_id, admission_id, observed_base_sha, head_sha, manifest_digest,
+     evidence_manifest_digest, commit_plan_present, recorded_at, body)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (invocation_id) DO NOTHING`
+	selectExecutionExportBodySQL = `SELECT body FROM execution_exports WHERE invocation_id = ?`
+	getExecutionExportSQL        = `
+SELECT invocation_id, admission_id, observed_base_sha, head_sha, manifest_digest,
+       evidence_manifest_digest, commit_plan_present, recorded_at, body
+FROM execution_exports WHERE invocation_id = ?`
+)
+
+// RecordExecutionAdmission persists the spawn-time record for one attempt. It
+// re-gates the record against current policy before writing, so an admission
+// the running daemon would not grant cannot be recorded as though it had, and
+// it cross-checks the attempt against the run aggregate in the same
+// transaction: an admission is a claim about an attempt, and a claim about an
+// attempt the run does not carry is refused.
+//
+// The attempt cross-check is a write-time check only. A run's stages and
+// attempts are append-only (domain.ValidateRunTransition), so an attempt that
+// existed when the admission was recorded cannot later stop existing; a
+// read-time repeat would cost a run read per row and rule out nothing.
+//
+// Write-once: a byte-identical replay converges on the stored row, and a
+// second admission of the same invocation with different content fails with
+// ErrImmutableConflict.
+func (tx *InternalTx) RecordExecutionAdmission(ctx context.Context, admission domain.ExecutionAdmission) error {
+	body, err := encode(admission)
+	if err != nil {
+		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
+	}
+	if err := tx.gateAdmission(ctx, admission); err != nil {
+		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
+	}
+	if err := tx.requireRecordedAttempt(ctx, admission); err != nil {
+		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
+	}
+	var identity any
+	if admission.AuthIdentityID != nil {
+		identity = *admission.AuthIdentityID
+	}
+	if err := tx.putImmutable(ctx, recordExecutionAdmissionSQL,
+		[]any{
+			admission.InvocationID, admission.ID, admission.RunID, admission.StageID,
+			admission.AttemptID, admission.OperatingMode, identity,
+			formatTime(admission.AdmittedAt), body,
+		},
+		selectExecutionAdmissionBodySQL, []any{admission.InvocationID}, body); err != nil {
+		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
+	}
+	return nil
+}
+
+// LookupExecutionAdmission reconstructs one attempt's admission and reports
+// separately whether a row exists at all.
+//
+// The separation is the point. A caller deciding "does this attempt have an
+// audited class?" must not learn the answer by classifying an error, because
+// the gate itself can fail with a not-found (a waived admission whose trusted
+// profile is gone), and reading that as "no record" would accept work whose
+// reconstruction had explicitly failed closed. Here absence is a boolean and
+// every error is a failure.
+func (tx *ReadTx) LookupExecutionAdmission(
+	ctx context.Context, id domain.InvocationID,
+) (domain.ExecutionAdmission, bool, error) {
+	row := tx.tx.QueryRowContext(ctx, getExecutionAdmissionSQL, id)
+	admission, err := tx.scanExecutionAdmission(ctx, row)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return domain.ExecutionAdmission{}, false, nil
+	case err != nil:
+		return domain.ExecutionAdmission{}, false, fmt.Errorf("get execution admission %q: %w", id, err)
+	}
+	if admission.InvocationID != id {
+		return domain.ExecutionAdmission{}, false,
+			fmt.Errorf("get execution admission %q: %w", id, errRowInconsistent)
+	}
+	return admission, true, nil
+}
+
+// GetExecutionAdmission reconstructs one attempt's admission, reporting a
+// missing row as ErrNotFound. Callers that must distinguish an absent record
+// from a refused one use LookupExecutionAdmission instead.
+func (tx *ReadTx) GetExecutionAdmission(ctx context.Context, id domain.InvocationID) (domain.ExecutionAdmission, error) {
+	admission, found, err := tx.LookupExecutionAdmission(ctx, id)
+	if err != nil {
+		return domain.ExecutionAdmission{}, err
+	}
+	if !found {
+		return domain.ExecutionAdmission{}, fmt.Errorf("get execution admission %q: %w", id, ErrNotFound)
+	}
+	return admission, nil
+}
+
+// ListRunExecutionAdmissions reconstructs every admission recorded for a run,
+// in insertion order. It reuses the same reconstruction function as the
+// single-record Get, so the re-gate cannot be missed on one path.
+func (tx *ReadTx) ListRunExecutionAdmissions(ctx context.Context, runID domain.RunID) ([]domain.ExecutionAdmission, error) {
+	rows, err := tx.tx.QueryContext(ctx, listRunExecutionAdmissionsSQL, runID)
+	if err != nil {
+		return nil, fmt.Errorf("list execution admissions for run %q: %w", runID, err)
+	}
+	defer rows.Close() //nolint:errcheck // rows.Err below reports any deferred-close failure
+	var admissions []domain.ExecutionAdmission
+	for rows.Next() {
+		admission, err := tx.scanExecutionAdmission(ctx, rows)
+		if err != nil {
+			return nil, fmt.Errorf("list execution admissions for run %q: %w", runID, err)
+		}
+		admissions = append(admissions, admission)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list execution admissions for run %q: %w", runID, err)
+	}
+	return admissions, nil
+}
+
+// scanExecutionAdmission is the single reconstruction path (see scanner):
+// scan, decode, cross-check the extracted columns against the body, and
+// re-run the admission gate. Both the Get and the List go through it.
+func (tx *ReadTx) scanExecutionAdmission(ctx context.Context, row scanner) (domain.ExecutionAdmission, error) {
+	var (
+		invocationID   string
+		id             string
+		runID          string
+		stageID        string
+		attemptID      string
+		operatingMode  string
+		authIdentityID sql.NullString
+		admittedAt     string
+		body           []byte
+	)
+	if err := row.Scan(&invocationID, &id, &runID, &stageID, &attemptID,
+		&operatingMode, &authIdentityID, &admittedAt, &body); err != nil {
+		return domain.ExecutionAdmission{}, err
+	}
+	admission, err := decode[domain.ExecutionAdmission](body)
+	if err != nil {
+		return domain.ExecutionAdmission{}, err
+	}
+	if string(admission.InvocationID) != invocationID || string(admission.ID) != id ||
+		string(admission.RunID) != runID || string(admission.StageID) != stageID ||
+		string(admission.AttemptID) != attemptID ||
+		string(admission.OperatingMode) != operatingMode ||
+		!authIdentityColumnEqual(authIdentityID, admission.AuthIdentityID) ||
+		!timeColumnEqual(admittedAt, admission.AdmittedAt) {
+		return domain.ExecutionAdmission{}, errRowInconsistent
+	}
+	if err := tx.gateAdmission(ctx, admission); err != nil {
+		return domain.ExecutionAdmission{}, err
+	}
+	return admission, nil
+}
+
+// authIdentityColumnEqual reports whether the extracted nullable column names
+// the same identity as the decoded body: both absent, or both the same id.
+// Without this the foreign key is decorative, since reconstruction would take
+// the body's word for an identity binding no trusted row backs.
+func authIdentityColumnEqual(column sql.NullString, want *domain.AuthIdentityID) bool {
+	if !column.Valid || want == nil {
+		return !column.Valid && want == nil
+	}
+	return column.String == string(*want)
+}
+
+// evidenceDigestColumnEqual reports whether the extracted nullable column
+// names the same evidence manifest as the decoded body: both absent, or both
+// the same digest.
+func evidenceDigestColumnEqual(column sql.NullString, want *domain.Digest) bool {
+	if !column.Valid || want == nil {
+		return !column.Valid && want == nil
+	}
+	return column.String == string(*want)
+}
+
+// gateAdmission re-runs the trusted admission gate against the policy this
+// transaction carries. It does not consult attention items: §5.7 also requires
+// no blocking system_health of an unattended run, and the rule is not "any
+// open item blocks" — a validated waiver configuration supersedes the
+// degraded-posture notice's blocking state (§4), and that supersession does
+// not exist in the tree yet. Approximating it here would encode it as a
+// convention. Filed as #321. It is the store's enforcement of the half the record
+// cannot check for itself, and it fails closed: an unconfigured floor admits
+// nothing, exactly as a nil approved-recipe set approves nothing.
+//
+// A record claiming the §5.7 waiver gets one more check, because the domain
+// gate can only compare the numbers the record itself carries: the repository
+// identity the record names must match the one the repository's approved trust
+// profile carries. That profile is human-approved state the record cannot
+// write, so the name-to-id pair stops being self-asserted, and a waiver cannot
+// follow a repository name onto a different repository.
+func (tx *ReadTx) gateAdmission(ctx context.Context, admission domain.ExecutionAdmission) error {
+	if err := domain.AdmittedUnder(admission, tx.admissionPolicy); err != nil {
+		return err
+	}
+	// Two admissions must be anchored to a human-approved profile: one running
+	// unattended, because §5.7 lists a trust profile among the conformance an
+	// unattended run requires, and one claiming the §5.7 waiver, whose whole
+	// meaning is which repository it covers. For both, the record's own
+	// name-and-number pair is caller-supplied, so the profile is what makes it
+	// evidence rather than an assertion.
+	// An admission naming a provider identity is only as good as that
+	// identity's declaration: the foreign key proves a row exists, not that it
+	// reconstructs. Reading it here means a record whose identity has a
+	// malformed body fails closed, rather than a replay dispatching under
+	// credential state whose concurrency, refresh, and snapshot declaration
+	// could not be read back.
+	if admission.AuthIdentityID != nil {
+		if _, err := tx.GetAuthIdentity(ctx, *admission.AuthIdentityID); err != nil {
+			return fmt.Errorf("admission %q names auth identity %q: %w",
+				admission.InvocationID, *admission.AuthIdentityID, err)
+		}
+	}
+	if !admission.RequiresTrustProfile() {
+		return nil
+	}
+	profile, err := tx.LatestTrustProfile(ctx, admission.Base.Repo)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			// Deliberately not reported as ErrNotFound: the admission row is
+			// present and was refused. A caller asking "is there a record?"
+			// must not read this refusal as "there is none".
+			return fmt.Errorf("admission %q: no approved trust profile for %q: %w",
+				admission.InvocationID, admission.Base.Repo, ErrRepositoryUntrusted)
+		}
+		return fmt.Errorf("admission %q: trusted profile for %q: %w",
+			admission.InvocationID, admission.Base.Repo, err)
+	}
+	if profile.RepositoryID != admission.Base.RepositoryID {
+		return fmt.Errorf("admission %q names repository %d, trusted profile for %q names %d: %w",
+			admission.InvocationID, admission.Base.RepositoryID,
+			admission.Base.Repo, profile.RepositoryID, domain.ErrRepositoryIdentityMismatch)
+	}
+	// The repository id survives a revision, so it cannot answer "was this
+	// admitted under the profile that is approved now". The digest can: an
+	// operator who activates a revised profile expects it to bind in-flight
+	// work, not just the next run.
+	if admission.TrustProfileDigest == nil || *admission.TrustProfileDigest != profile.ProfileDigest {
+		return fmt.Errorf("admission %q was admitted under trust profile %v, %q now activates %s: %w",
+			admission.InvocationID, admission.TrustProfileDigest,
+			admission.Base.Repo, profile.ProfileDigest, domain.ErrTrustProfileSuperseded)
+	}
+	return nil
+}
+
+// requireRecordedAttempt checks that the run carries the exact attempt the
+// admission claims. It reads the run in the writer's own transaction, so a
+// concurrent writer cannot append the attempt after this passed.
+func (tx *InternalTx) requireRecordedAttempt(ctx context.Context, admission domain.ExecutionAdmission) error {
+	run, err := tx.GetRun(ctx, admission.RunID)
+	if err != nil {
+		return err
+	}
+	// The run's spec and policy digests are fixed at creation, and the record
+	// is what the driver is later started from, so an admission that names
+	// different ones would point execution at a spec or policy the run is not
+	// bound to. They are available right here; take them from the run rather
+	// than from the caller's word for them.
+	if err := tx.requireBoundInputs(ctx, admission); err != nil {
+		return err
+	}
+	if admission.SpecDigest != run.SpecDigest || admission.PolicyDigest != run.PolicyDigest {
+		return fmt.Errorf(
+			"admission %q names spec %s and policy %s, run %q is bound to %s and %s: %w",
+			admission.InvocationID, admission.SpecDigest, admission.PolicyDigest,
+			run.ID, run.SpecDigest, run.PolicyDigest, domain.ErrParentKeyMismatch)
+	}
+	for _, stage := range run.Stages {
+		if stage.ID != admission.StageID {
+			continue
+		}
+		for _, attempt := range stage.Attempts {
+			if attempt.InvocationID != admission.InvocationID {
+				continue
+			}
+			if attempt.ID != admission.AttemptID {
+				return fmt.Errorf("run %q binds invocation %q to attempt %q, admission names %q: %w",
+					run.ID, admission.InvocationID, attempt.ID, admission.AttemptID, domain.ErrParentKeyMismatch)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("run %q carries no attempt %q for invocation %q in stage %q: %w",
+		run.ID, admission.AttemptID, admission.InvocationID, admission.StageID, domain.ErrParentKeyMismatch)
+}
+
+// requireBoundInputs checks the record's input digest against the invocation's
+// own durable binding. The agent invocation record *is* the statement of what
+// inputs a turn was given (§5.14), so where one exists it is the authority and
+// the admission may not claim different inputs; the digest is recomputed here
+// rather than trusted from the caller.
+//
+// An invocation with no such record is left alone: not every stage kind binds
+// its inputs through a conversation prefix or artifact list, and there is
+// nothing to compare against for one that does not. This closes substitution
+// wherever a durable input binding exists, which today is every dispatched
+// invocation.
+func (tx *InternalTx) requireBoundInputs(ctx context.Context, admission domain.ExecutionAdmission) error {
+	invocation, err := tx.GetAgentInvocation(ctx, admission.InvocationID)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	bound, err := invocation.ComputeInputDigest()
+	if err != nil {
+		return err
+	}
+	if admission.InputDigest != bound {
+		return fmt.Errorf("admission %q names input digest %s, invocation binds %s: %w",
+			admission.InvocationID, admission.InputDigest, bound, domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+// RecordExecutionExport persists what one admitted attempt handed back. The
+// admission is loaded in the same transaction (which re-gates it) and the
+// binding is checked against it: an export whose observed base differs from
+// the admitted base, or which names another admission, is refused before it
+// can let the publication chain bind a head to an admission that never
+// produced it.
+//
+// Write-once: a byte-identical replay converges, and a second, different
+// export for one invocation fails with ErrImmutableConflict.
+func (tx *InternalTx) RecordExecutionExport(ctx context.Context, export domain.ExecutionExport) error {
+	body, err := encode(export)
+	if err != nil {
+		return fmt.Errorf("record execution export %q: %w", export.InvocationID, err)
+	}
+	admission, err := tx.GetExecutionAdmission(ctx, export.InvocationID)
+	if err != nil {
+		return fmt.Errorf("record execution export %q: %w", export.InvocationID, err)
+	}
+	if err := domain.ValidateExportBinding(admission, export); err != nil {
+		return fmt.Errorf("record execution export %q: %w", export.InvocationID, err)
+	}
+	var evidence any
+	if export.EvidenceManifestDigest != nil {
+		evidence = string(*export.EvidenceManifestDigest)
+	}
+	if err := tx.putImmutable(ctx, recordExecutionExportSQL,
+		[]any{
+			export.InvocationID, export.AdmissionID, export.ObservedBaseSHA, export.HeadSHA,
+			export.ManifestDigest, evidence, export.CommitPlanPresent,
+			formatTime(export.RecordedAt), body,
+		},
+		selectExecutionExportBodySQL, []any{export.InvocationID}, body); err != nil {
+		return fmt.Errorf("record execution export %q: %w", export.InvocationID, err)
+	}
+	return nil
+}
+
+// GetExecutionExport reconstructs one attempt's export record, re-checking
+// its binding to the admission it names. The admission read re-gates that
+// record too, so a read of an export cannot succeed while the run it belongs
+// to is no longer admissible.
+func (tx *ReadTx) GetExecutionExport(ctx context.Context, id domain.InvocationID) (domain.ExecutionExport, error) {
+	var (
+		invocationID    string
+		admissionID     string
+		observedBaseSHA string
+		headSHA         string
+		manifestDigest  string
+		evidenceDigest  sql.NullString
+		commitPlan      bool
+		recordedAt      string
+		body            []byte
+	)
+	err := tx.tx.QueryRowContext(ctx, getExecutionExportSQL, id).
+		Scan(&invocationID, &admissionID, &observedBaseSHA, &headSHA, &manifestDigest,
+			&evidenceDigest, &commitPlan, &recordedAt, &body)
+	if err != nil {
+		return domain.ExecutionExport{}, fmt.Errorf("get execution export %q: %w", id, notFoundOr(err))
+	}
+	export, err := decode[domain.ExecutionExport](body)
+	if err != nil {
+		return domain.ExecutionExport{}, fmt.Errorf("get execution export %q: %w", id, err)
+	}
+	if export.InvocationID != id || string(export.InvocationID) != invocationID ||
+		string(export.AdmissionID) != admissionID ||
+		export.ObservedBaseSHA != observedBaseSHA || export.HeadSHA != headSHA ||
+		string(export.ManifestDigest) != manifestDigest ||
+		!evidenceDigestColumnEqual(evidenceDigest, export.EvidenceManifestDigest) ||
+		export.CommitPlanPresent != commitPlan ||
+		!timeColumnEqual(recordedAt, export.RecordedAt) {
+		return domain.ExecutionExport{}, fmt.Errorf("get execution export %q: %w", id, errRowInconsistent)
+	}
+	admission, err := tx.GetExecutionAdmission(ctx, id)
+	if err != nil {
+		return domain.ExecutionExport{}, fmt.Errorf("get execution export %q: %w", id, err)
+	}
+	if err := domain.ValidateExportBinding(admission, export); err != nil {
+		return domain.ExecutionExport{}, fmt.Errorf("get execution export %q: %w", id, err)
+	}
+	return export, nil
+}
