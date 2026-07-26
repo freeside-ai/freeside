@@ -460,6 +460,29 @@ func (s faultedJanitorStatus) RegistrationFaults() []publish.JanitorRegistration
 	}}
 }
 
+type churningJanitorStatus struct {
+	inactiveJanitorStatus
+	registrationID int64
+}
+
+func (s churningJanitorStatus) ChurningRegistrations() []publish.JanitorRegistrationChurn {
+	return []publish.JanitorRegistrationChurn{{
+		RegistrationID:    s.registrationID,
+		ConsecutivePasses: 3,
+	}}
+}
+
+type faultedChurningJanitorStatus struct {
+	churningJanitorStatus
+}
+
+func (s faultedChurningJanitorStatus) RegistrationFaults() []publish.JanitorRegistrationFault {
+	return []publish.JanitorRegistrationFault{{
+		RegistrationID: s.registrationID,
+		Err:            errors.New("delete installation: conflict"),
+	}}
+}
+
 type mutableJanitorStatus struct {
 	mu     sync.Mutex
 	active bool
@@ -806,6 +829,61 @@ func TestCredentialDoctorDetections(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertFinding(t, findings, publish.CredentialFindingJanitorInactive)
+	})
+
+	t.Run("janitor repeatedly removing from this registration", func(t *testing.T) {
+		ks := newTestKeystore(t)
+		credentials := publicFixtureCredentials(t)
+		if err := ks.SaveApp(credentials); err != nil {
+			t.Fatal(err)
+		}
+		status := churningJanitorStatus{registrationID: credentials.AppID}
+		onboarder, _, _ := newTestOnboarder(t, ks, status)
+		findings, err := publish.NewCredentialDoctor(onboarder, status).
+			Check(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFinding(t, findings, publish.CredentialFindingJanitorChurning)
+		for _, finding := range findings {
+			if finding.Code == publish.CredentialFindingJanitorInactive {
+				t.Error("removal churn also reported the waiting-for-first-pass code")
+			}
+		}
+	})
+
+	t.Run("janitor repeatedly removing from another registration", func(t *testing.T) {
+		ks := newTestKeystore(t)
+		credentials := publicFixtureCredentials(t)
+		if err := ks.SaveApp(credentials); err != nil {
+			t.Fatal(err)
+		}
+		status := churningJanitorStatus{registrationID: credentials.AppID + 1}
+		onboarder, _, _ := newTestOnboarder(t, ks, status)
+		findings, err := publish.NewCredentialDoctor(onboarder, status).
+			Check(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFinding(t, findings, publish.CredentialFindingJanitorInactive)
+	})
+
+	t.Run("janitor failure takes precedence over removal churn", func(t *testing.T) {
+		ks := newTestKeystore(t)
+		credentials := publicFixtureCredentials(t)
+		if err := ks.SaveApp(credentials); err != nil {
+			t.Fatal(err)
+		}
+		status := faultedChurningJanitorStatus{
+			churningJanitorStatus: churningJanitorStatus{registrationID: credentials.AppID},
+		}
+		onboarder, _, _ := newTestOnboarder(t, ks, status)
+		findings, err := publish.NewCredentialDoctor(onboarder, status).
+			Check(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFinding(t, findings, publish.CredentialFindingJanitorFailed)
 	})
 
 	t.Run("private janitor inactive", func(t *testing.T) {

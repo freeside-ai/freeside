@@ -35,6 +35,34 @@ type removalRecorder struct {
 	err         error
 }
 
+type failSecondRemovalRecorder struct {
+	mu    sync.Mutex
+	count int
+	err   error
+}
+
+func (r *failSecondRemovalRecorder) record() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.count == 1 {
+		return r.err
+	}
+	r.count++
+	return nil
+}
+
+func (r *failSecondRemovalRecorder) RecordInstallationRemoval(
+	publish.InstallationRemovalRecord,
+) error {
+	return r.record()
+}
+
+func (r *failSecondRemovalRecorder) RecordInstallationQuarantine(
+	publish.InstallationRemovalRecord,
+) error {
+	return r.record()
+}
+
 func (r *removalRecorder) RecordInstallationRemoval(record publish.InstallationRemovalRecord) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -80,7 +108,7 @@ func newJanitor(
 	ks *publish.Keystore,
 	server *httptest.Server,
 	authority publish.InstallationAuthoritySource,
-	recorder *removalRecorder,
+	recorder publish.JanitorRecorder,
 	maxRemovals int,
 ) *publish.InstallationJanitor {
 	t.Helper()
@@ -220,6 +248,168 @@ func TestInstallationJanitorBoundsRemovalWork(t *testing.T) {
 	}
 	if deletes != 2 || cycle.Removed != 2 || !cycle.RemovalLimitReached {
 		t.Errorf("deletes = %d, cycle = %+v", deletes, cycle)
+	}
+}
+
+// TestInstallationJanitorAttemptsRemovalSiblings is the regression for #290:
+// one installation GitHub will not delete must not starve later removals in the
+// same registration, and every failed or successful attempt spends the same
+// pass-wide bound.
+func TestInstallationJanitorAttemptsRemovalSiblings(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		maxRemovals  int
+		wantDeletes  []string
+		wantRemoved  int
+		wantLimitHit bool
+	}{
+		{
+			name:         "continues after a failed removal",
+			maxRemovals:  3,
+			wantDeletes:  []string{"/app/installations/702", "/app/installations/703", "/app/installations/704"},
+			wantRemoved:  2,
+			wantLimitHit: false,
+		},
+		{
+			name:         "failed attempts spend the bound",
+			maxRemovals:  2,
+			wantDeletes:  []string{"/app/installations/702", "/app/installations/703"},
+			wantRemoved:  1,
+			wantLimitHit: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ks := publicJanitorKeystore(t)
+			recorder := &removalRecorder{}
+			var deletes []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if handleExactGrant(w, r, fixtureRepositoryID) {
+					return
+				}
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
+					_, _ = io.WriteString(w, `[
+						{"id":701,"app_id":501,"target_id":101,"repository_selection":"selected","account":{"login":"operator","id":101}},
+						{"id":702,"app_id":501,"target_id":202,"account":{"login":"stuck","id":202}},
+						{"id":703,"app_id":501,"target_id":203,"account":{"login":"removable-one","id":203}},
+						{"id":704,"app_id":501,"target_id":204,"account":{"login":"removable-two","id":204}}
+					]`)
+				case r.Method == http.MethodDelete:
+					deletes = append(deletes, r.URL.Path)
+					if r.URL.Path == "/app/installations/702" {
+						http.Error(w, "installation cannot be deleted", http.StatusConflict)
+						return
+					}
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+
+			janitor := newJanitor(t, ks, srv, publicAuthority(publish.TrustedInstallation{
+				RegistrationID: 501,
+				InstallationID: 701,
+				Account:        "operator",
+				AccountID:      101,
+				RepositoryIDs:  []int64{fixtureRepositoryID},
+			}), recorder, tt.maxRemovals)
+			cycle, err := janitor.RunCycle(context.Background())
+			if err == nil {
+				t.Fatal("RunCycle succeeded despite the unremovable installation")
+			}
+			if !reflect.DeepEqual(deletes, tt.wantDeletes) {
+				t.Errorf("deletes = %v, want %v", deletes, tt.wantDeletes)
+			}
+			if cycle.Removed != tt.wantRemoved || cycle.RemovalLimitReached != tt.wantLimitHit {
+				t.Errorf("cycle = %+v, want Removed %d and RemovalLimitReached %t", cycle, tt.wantRemoved, tt.wantLimitHit)
+			}
+			if records := recorder.snapshot(); len(records) != len(tt.wantDeletes) {
+				t.Errorf("audit records = %d, want one before each of %d attempts", len(records), len(tt.wantDeletes))
+			}
+		})
+	}
+}
+
+func TestInstallationJanitorAttemptsRemovalSiblingsAfterSuspendFailure(t *testing.T) {
+	ks := publicJanitorKeystore(t)
+	recorder := &removalRecorder{}
+	var effects []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if handleExactGrant(w, r, fixtureRepositoryID) {
+			return
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
+			_, _ = io.WriteString(w, `[
+				{"id":701,"app_id":501,"target_id":101,"repository_selection":"all","account":{"login":"operator","id":101}},
+				{"id":702,"app_id":501,"target_id":202,"account":{"login":"removable","id":202}}
+			]`)
+		case r.Method == http.MethodPut && r.URL.Path == "/app/installations/701/suspended":
+			effects = append(effects, r.Method+" "+r.URL.Path)
+			http.Error(w, "installation cannot be suspended", http.StatusConflict)
+		case r.Method == http.MethodDelete:
+			effects = append(effects, r.Method+" "+r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	janitor := newJanitor(t, ks, srv, publicAuthority(publish.TrustedInstallation{
+		RegistrationID: 501,
+		InstallationID: 701,
+		Account:        "operator",
+		AccountID:      101,
+		RepositoryIDs:  []int64{fixtureRepositoryID},
+	}), recorder, 2)
+	cycle, err := janitor.RunCycle(context.Background())
+	if err == nil {
+		t.Fatal("RunCycle succeeded despite the unsuspendable installation")
+	}
+	wantEffects := []string{
+		"PUT /app/installations/701/suspended",
+		"DELETE /app/installations/702",
+	}
+	if !reflect.DeepEqual(effects, wantEffects) {
+		t.Errorf("effects = %v, want %v (and no delete of unsuspended installation 701)", effects, wantEffects)
+	}
+	if cycle.Removed != 1 || cycle.RemovalLimitReached {
+		t.Errorf("cycle = %+v, want one completed removal within the two-attempt bound", cycle)
+	}
+	if records := recorder.snapshot(); len(records) != 2 {
+		t.Errorf("audit records = %d, want one before each attempt", len(records))
+	}
+}
+
+func TestInstallationJanitorKeepsEarlierFailureWhenAuditBarrierFails(t *testing.T) {
+	ks := publicJanitorKeystore(t)
+	errJournal := errors.New("journal became unwritable")
+	recorder := &failSecondRemovalRecorder{err: errJournal}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet:
+			_, _ = io.WriteString(w, `[
+				{"id":702,"app_id":501,"target_id":202,"account":{"login":"stuck","id":202}},
+				{"id":703,"app_id":501,"target_id":203,"account":{"login":"later","id":203}}
+			]`)
+		case r.Method == http.MethodDelete && r.URL.Path == "/app/installations/702":
+			http.Error(w, "installation cannot be deleted", http.StatusConflict)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	janitor := newJanitor(t, ks, srv, publicAuthority(), recorder, 2)
+	_, err := janitor.RunCycle(context.Background())
+	if !errors.Is(err, errJournal) {
+		t.Fatalf("RunCycle error = %v, want the audit-barrier failure", err)
+	}
+	var apiErr *publish.APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusConflict {
+		t.Errorf("RunCycle error = %v, want the earlier failed delete too", err)
 	}
 }
 
