@@ -119,6 +119,21 @@ func (r Reservation) Same(other Reservation) bool {
 	return r == other
 }
 
+// candidateReservationClaim is the claim a candidate presents when it commits
+// its intent. A candidate naming no run reserved nothing and presents nothing;
+// the reserved key then refuses it, which is the behaviour a foreign publisher
+// must get.
+func candidateReservationClaim(c Candidate) (*Reservation, error) {
+	if c.RunID == "" {
+		return nil, nil
+	}
+	claim, err := NewReservation(c.InvocationID, c.RunID)
+	if err != nil {
+		return nil, err
+	}
+	return &claim, nil
+}
+
 // ReservationReader is the read half of the reservation gates: the store's
 // outbox lookup, satisfied by *store.ReadTx and everything embedding it.
 type ReservationReader interface {

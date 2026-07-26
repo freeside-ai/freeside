@@ -210,6 +210,7 @@ func TestDrainRecoversHeadTransportBeforeForgeConvergence(t *testing.T) {
 	}
 	if _, _, err := h.ledger.Record(
 		ctx, key, publish.IntentKindPublication, payload,
+		nil,
 	); err != nil {
 		t.Fatalf("record intent: %v", err)
 	}
@@ -408,7 +409,7 @@ func TestDrainRejectsDivergedResolver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := h.ledger.Record(ctx, key, publish.IntentKindPublication, intentPayload); err != nil {
+	if _, _, err := h.ledger.Record(ctx, key, publish.IntentKindPublication, intentPayload, nil); err != nil {
 		t.Fatalf("seed intent: %v", err)
 	}
 
@@ -467,7 +468,7 @@ func TestDrainRejectsInvocationMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := h.ledger.Record(ctx, key, publish.IntentKindPublication, intentPayload); err != nil {
+	if _, _, err := h.ledger.Record(ctx, key, publish.IntentKindPublication, intentPayload, nil); err != nil {
 		t.Fatalf("seed intent: %v", err)
 	}
 
@@ -514,7 +515,7 @@ func TestDrainRejectsAuthorizationMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := h.ledger.Record(ctx, key, publish.IntentKindPublication, intentPayload); err != nil {
+	if _, _, err := h.ledger.Record(ctx, key, publish.IntentKindPublication, intentPayload, nil); err != nil {
 		t.Fatalf("seed intent: %v", err)
 	}
 

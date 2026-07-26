@@ -38,6 +38,13 @@ type Candidate struct {
 	// InvocationID is the publishing invocation: the attempt axis the
 	// outbox intent is keyed by.
 	InvocationID domain.InvocationID
+	// RunID names the run that reserved this publication invocation
+	// (reservation.go, #308). A workflow that committed to an invocation ID
+	// before its candidate existed holds the intent key under a reservation;
+	// presenting the same run ID here is what settles that reservation into
+	// this intent. Empty presents no claim: an unreserved invocation publishes
+	// as before, and a reserved one refuses.
+	RunID domain.RunID
 	// AuthorizationID and TrustProfileDigest bind the candidate to its
 	// daemon-authored authorization and the automation trust profile it
 	// was authorized under (#172). TrustProfileDigest is enforced by the
@@ -475,18 +482,34 @@ func (p *Publisher) preparePublication(ctx context.Context, c Candidate, audit d
 	if err != nil {
 		return fmt.Errorf("publish: %w", err)
 	}
+	claim, err := candidateReservationClaim(c)
+	if err != nil {
+		return fmt.Errorf("publish: %w", err)
+	}
 	var prior []byte
 	var recorded bool
 	if p.storeDecision != nil {
-		prior, recorded, err = p.storeDecision.prepare(ctx, c, audit, key, payload)
+		prior, recorded, err = p.storeDecision.prepare(ctx, c, audit, key, payload, claim)
 	} else {
+		if claim != nil {
+			// Only a store-backed writer can see the reservation namespace, so
+			// no other ledger may settle a reserved invocation. Refusing here
+			// keeps a misconfigured wiring from publishing past a reservation
+			// it never checked.
+			if _, ok := p.ledger.(*StoreLedger); !ok {
+				return fmt.Errorf(
+					"publish: invocation %s is reserved and needs a store-backed ledger: %w",
+					c.InvocationID, ErrInvocationReserved,
+				)
+			}
+		}
 		if err := p.gateTrustDrift(ctx, c, audit); err != nil {
 			return fmt.Errorf("publish: %w", err)
 		}
 		if err := p.gateAuthorization(ctx, c); err != nil {
 			return fmt.Errorf("publish: %w", err)
 		}
-		prior, recorded, err = p.ledger.Record(ctx, key, IntentKindPublication, payload)
+		prior, recorded, err = p.ledger.Record(ctx, key, IntentKindPublication, payload, claim)
 	}
 	if err != nil {
 		return fmt.Errorf("publish: prepare decision: %w", err)

@@ -44,14 +44,14 @@ func NewStoreLedger(s *store.Store) (*StoreLedger, error) {
 // write precedes any external effect, so the caller's context governs it
 // directly — a cancellation before commit safely abandons a publication
 // nothing has dispatched yet.
-func (l *StoreLedger) Record(ctx context.Context, key, kind string, payload []byte) (prior []byte, recorded bool, err error) {
+func (l *StoreLedger) Record(ctx context.Context, key, kind string, payload []byte, claim *Reservation) (prior []byte, recorded bool, err error) {
 	var (
 		stored   []byte
 		inserted bool
 	)
 	err = l.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		var err error
-		stored, inserted, err = commitReservedIntent(ctx, tx, key, kind, payload)
+		stored, inserted, err = commitReservedIntent(ctx, tx, key, kind, payload, claim)
 		return err
 	})
 	if err != nil {

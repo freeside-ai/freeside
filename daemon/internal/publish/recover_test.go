@@ -300,7 +300,7 @@ func TestDrainReGateDriftLeavesPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := h.ledger.Record(ctx, key, publish.IntentKindPublication, intentPayload); err != nil {
+	if _, _, err := h.ledger.Record(ctx, key, publish.IntentKindPublication, intentPayload, nil); err != nil {
 		t.Fatalf("seed intent: %v", err)
 	}
 
@@ -350,7 +350,7 @@ func TestDrainTrustDriftLeavesPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := h.ledger.Record(ctx, key, publish.IntentKindPublication, intentPayload); err != nil {
+	if _, _, err := h.ledger.Record(ctx, key, publish.IntentKindPublication, intentPayload, nil); err != nil {
 		t.Fatalf("seed intent: %v", err)
 	}
 

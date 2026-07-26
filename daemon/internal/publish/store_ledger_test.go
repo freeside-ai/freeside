@@ -26,7 +26,7 @@ func TestStoreLedgerRecordsIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prior, recorded, err := ledger.Record(context.Background(), key, publish.IntentKindPublication, payload)
+	prior, recorded, err := ledger.Record(context.Background(), key, publish.IntentKindPublication, payload, nil)
 	if err != nil {
 		t.Fatalf("Record: %v", err)
 	}
@@ -57,13 +57,13 @@ func TestStoreLedgerConverges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := ledger.Record(context.Background(), key, publish.IntentKindPublication, original); err != nil {
+	if _, _, err := ledger.Record(context.Background(), key, publish.IntentKindPublication, original, nil); err != nil {
 		t.Fatalf("first Record: %v", err)
 	}
 
 	// A retry under the same key with a different payload must not
 	// overwrite: the port returns the committed intent, recorded false.
-	prior, recorded, err := ledger.Record(context.Background(), key, publish.IntentKindPublication, []byte(`{"retry":true}`))
+	prior, recorded, err := ledger.Record(context.Background(), key, publish.IntentKindPublication, []byte(`{"retry":true}`), nil)
 	if err != nil {
 		t.Fatalf("second Record: %v", err)
 	}
@@ -93,10 +93,10 @@ func TestStoreLedgerRejectsForeignKind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := ledger.Record(context.Background(), key, "foreign.kind", payload); err != nil {
+	if _, _, err := ledger.Record(context.Background(), key, "foreign.kind", payload, nil); err != nil {
 		t.Fatalf("seed foreign kind: %v", err)
 	}
-	if _, _, err := ledger.Record(context.Background(), key, publish.IntentKindPublication, payload); err == nil {
+	if _, _, err := ledger.Record(context.Background(), key, publish.IntentKindPublication, payload, nil); err == nil {
 		t.Fatal("Record accepted a foreign-kind row under the publication key")
 	}
 }

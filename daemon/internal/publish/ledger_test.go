@@ -2,6 +2,7 @@ package publish_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -23,7 +24,13 @@ func newMemoryLedger() *memoryLedger {
 	return &memoryLedger{rows: map[string][]byte{}, kinds: map[string]string{}}
 }
 
-func (l *memoryLedger) Record(_ context.Context, key, kind string, payload []byte) ([]byte, bool, error) {
+// Record ignores nothing it is given: an in-memory ledger cannot see the
+// reservation namespace, so per the port contract it refuses a claim rather
+// than writing past a reservation it never checked.
+func (l *memoryLedger) Record(_ context.Context, key, kind string, payload []byte, claim *publish.Reservation) ([]byte, bool, error) {
+	if claim != nil {
+		return nil, false, errors.New("memory ledger cannot honour an invocation reservation")
+	}
 	if l.err != nil {
 		return nil, false, l.err
 	}
@@ -148,11 +155,11 @@ func TestIntentKey(t *testing.T) {
 // original payload, not the new one.
 func TestMemoryLedgerConverges(t *testing.T) {
 	l := newMemoryLedger()
-	first, recorded, err := l.Record(context.Background(), "k", "kind", []byte("original"))
+	first, recorded, err := l.Record(context.Background(), "k", "kind", []byte("original"), nil)
 	if err != nil || !recorded || string(first) != "original" {
 		t.Fatalf("first Record = (%q, %t, %v)", first, recorded, err)
 	}
-	prior, recorded, err := l.Record(context.Background(), "k", "kind", []byte("retry"))
+	prior, recorded, err := l.Record(context.Background(), "k", "kind", []byte("retry"), nil)
 	if err != nil || recorded || string(prior) != "original" {
 		t.Errorf("second Record = (%q, %t, %v), want original payload, not recorded", prior, recorded, err)
 	}

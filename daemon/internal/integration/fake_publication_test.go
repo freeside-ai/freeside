@@ -1774,7 +1774,7 @@ func TestFakeCandidatePublicationRejectsUnboundReadyTerminalDecisionInputs(t *te
 		t.Fatal(err)
 	}
 	if _, _, err := ledger.Record(
-		h.ctx, intentKey, publish.IntentKindPublication, payload,
+		h.ctx, intentKey, publish.IntentKindPublication, payload, nil,
 	); err != nil {
 		t.Fatal(err)
 	}

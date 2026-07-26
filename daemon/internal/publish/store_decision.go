@@ -18,7 +18,7 @@ type storePublicationDecision struct {
 	store *store.Store
 }
 
-func (d *storePublicationDecision) prepare(ctx context.Context, c Candidate, audit domain.WorkflowAudit, key string, payload []byte) ([]byte, bool, error) {
+func (d *storePublicationDecision) prepare(ctx context.Context, c Candidate, audit domain.WorkflowAudit, key string, payload []byte, claim *Reservation) ([]byte, bool, error) {
 	var (
 		prior       []byte
 		recorded    bool
@@ -56,11 +56,12 @@ func (d *storePublicationDecision) prepare(ctx context.Context, c Candidate, aud
 			decisionErr = err
 			return nil
 		}
-		stored, inserted, err := commitReservedIntent(ctx, tx, key, IntentKindPublication, payload)
+		stored, inserted, err := commitReservedIntent(ctx, tx, key, IntentKindPublication, payload, claim)
 		if err != nil {
-			// A refusal the publication itself earned (a quarantined intent)
-			// is a decision, not a transaction failure: the fresh audit this
-			// transaction recorded is a real observation and must still commit.
+			// A refusal the publication itself earned (a quarantined intent,
+			// an invocation another owner reserved) is a decision, not a
+			// transaction failure: the fresh audit this transaction recorded
+			// is a real observation and must still commit.
 			if isPublicationRefusal(err) {
 				decisionErr = err
 				return nil
