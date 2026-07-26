@@ -121,13 +121,17 @@ func TestFakePublicationCommandConfigResolvesSymlinksBeforeContainment(t *testin
 	}
 }
 
-func TestPrepareFakePublicationConfigUsesDurableWorkspaceBeforeResolvingAlias(t *testing.T) {
+func TestPrepareFakePublicationConfigUsesDurablePathsBeforeResolvingAliases(t *testing.T) {
 	for _, dispatched := range []bool{false, true} {
 		t.Run(map[bool]string{false: "pending", true: "completed"}[dispatched], func(t *testing.T) {
 			root := t.TempDir()
 			workspace := filepath.Join(root, "workspace")
+			workDir := filepath.Join(root, "durable-work")
 			credentials := filepath.Join(root, "credentials")
 			if err := os.Mkdir(workspace, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(workDir, 0o700); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.Mkdir(credentials, 0o700); err != nil {
@@ -137,6 +141,10 @@ func TestPrepareFakePublicationConfigUsesDurableWorkspaceBeforeResolvingAlias(t 
 			if err := os.Symlink(credentials, alias); err != nil {
 				t.Fatal(err)
 			}
+			workAlias := filepath.Join(root, "work-alias")
+			if err := os.Symlink(workspace, workAlias); err != nil {
+				t.Fatal(err)
+			}
 			recipeAlias := filepath.Join(root, "recipe-alias")
 			if err := os.Symlink(workspace, recipeAlias); err != nil {
 				t.Fatal(err)
@@ -144,7 +152,7 @@ func TestPrepareFakePublicationConfigUsesDurableWorkspaceBeforeResolvingAlias(t 
 			cfg := fakePublicationCommandConfig{
 				DBPath: filepath.Join(root, "freeside.db"), StateDir: filepath.Join(root, "state"),
 				CredentialsDir: credentials, WorkspaceDir: alias,
-				RecipeFile: recipeAlias, Repo: "owner/repo",
+				WorkDir: workAlias, RecipeFile: recipeAlias, Repo: "owner/repo",
 				BaseRef: "main", BaseSHA: "1111111111111111111111111111111111111111",
 			}
 			found, err := prepareFakePublicationConfig(
@@ -158,8 +166,13 @@ func TestPrepareFakePublicationConfigUsesDurableWorkspaceBeforeResolvingAlias(t 
 						t.Fatalf("loader received workspace %q, want unresolved alias %q",
 							received.WorkspaceDir, alias)
 					}
+					if received.WorkDir != workAlias {
+						t.Fatalf("loader received work root %q, want unresolved alias %q",
+							received.WorkDir, workAlias)
+					}
 					return engine.FakePublicationReplayBinding{
 						WorkspaceDir: workspace,
+						WorkDir:      workDir,
 						Dispatched:   dispatched,
 					}, true, nil
 				},
@@ -174,6 +187,14 @@ func TestPrepareFakePublicationConfigUsesDurableWorkspaceBeforeResolvingAlias(t 
 			if !found || cfg.WorkspaceDir != resolvedWorkspace {
 				t.Fatalf("prepared workspace = %q, found %t, want durable %q",
 					cfg.WorkspaceDir, found, resolvedWorkspace)
+			}
+			resolvedWorkDir, err := resolvePublicationPath(workDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.WorkDir != resolvedWorkDir {
+				t.Fatalf("prepared work root = %q, want durable %q",
+					cfg.WorkDir, resolvedWorkDir)
 			}
 			if cfg.RecipeFile != recipeAlias {
 				t.Fatalf("replay recipe path = %q, want unused ambient alias %q",

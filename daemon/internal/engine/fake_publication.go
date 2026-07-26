@@ -1484,13 +1484,33 @@ func (w *fakePublicationWorkflow) hasPendingPublicationIntent(
 }
 
 func (w *fakePublicationWorkflow) expectedHandoffDir(task fakePublicationTask) (string, error) {
+	return expectedFakePublicationHandoffDir(w.workDir, task)
+}
+
+func expectedFakePublicationHandoffDir(
+	workDir string,
+	task fakePublicationTask,
+) (string, error) {
 	task.HandoffDir = ""
 	payload, err := json.Marshal(task)
 	if err != nil {
 		return "", fmt.Errorf("encode handoff binding: %w", err)
 	}
 	sum := sha256.Sum256(payload)
-	return filepath.Join(w.workDir, "handoffs", hex.EncodeToString(sum[:])), nil
+	return filepath.Join(workDir, "handoffs", hex.EncodeToString(sum[:])), nil
+}
+
+func fakePublicationTaskWorkDir(task fakePublicationTask) (string, error) {
+	workDir := filepath.Dir(filepath.Dir(task.HandoffDir))
+	expected, err := expectedFakePublicationHandoffDir(workDir, task)
+	if err != nil {
+		return "", err
+	}
+	if task.HandoffDir != expected {
+		return "", fmt.Errorf("handoff %q, want %q: %w",
+			task.HandoffDir, expected, domain.ErrParentKeyMismatch)
+	}
+	return workDir, nil
 }
 
 func validateFakePublicationWorkspace(workspaceDir string) error {
@@ -1721,17 +1741,19 @@ func validateFakePublicationRecipePath(recipePath string) error {
 type FakePublicationReplay struct {
 	Recipe       []byte
 	WorkspaceDir string
+	WorkDir      string
 	Dispatched   bool
 }
 
 // FakePublicationReplayBinding is the task identity needed before ambient
-// workspace aliases are resolved during command replay.
+// workspace and work-root aliases are resolved during command replay.
 type FakePublicationReplayBinding struct {
 	WorkspaceDir string
+	WorkDir      string
 	Dispatched   bool
 }
 
-// LoadFakePublicationReplayBinding recovers the durable workspace identity
+// LoadFakePublicationReplayBinding recovers the durable filesystem identities
 // without requiring the artifact store to be opened first.
 func LoadFakePublicationReplayBinding(
 	ctx context.Context,
@@ -1742,14 +1764,20 @@ func LoadFakePublicationReplayBinding(
 	if err != nil || !found {
 		return FakePublicationReplayBinding{}, found, err
 	}
+	workDir, err := fakePublicationTaskWorkDir(task)
+	if err != nil {
+		return FakePublicationReplayBinding{}, false,
+			fmt.Errorf("task %q work directory: %w", entry.IdempotencyKey, err)
+	}
 	return FakePublicationReplayBinding{
 		WorkspaceDir: task.WorkspaceDir,
+		WorkDir:      workDir,
 		Dispatched:   entry.Dispatched(),
 	}, true, nil
 }
 
 // LoadFakePublicationReplay recovers the exact approved recipe, canonical
-// workspace identity, and dispatch status bound into one durable task.
+// filesystem identities, and dispatch status bound into one durable task.
 func LoadFakePublicationReplay(
 	ctx context.Context,
 	st *store.Store,
@@ -1769,8 +1797,14 @@ func LoadFakePublicationReplay(
 		return FakePublicationReplay{}, false,
 			fmt.Errorf("task %q recipe: %w", entry.IdempotencyKey, err)
 	}
+	workDir, err := fakePublicationTaskWorkDir(task)
+	if err != nil {
+		return FakePublicationReplay{}, false,
+			fmt.Errorf("task %q work directory: %w", entry.IdempotencyKey, err)
+	}
 	return FakePublicationReplay{
-		Recipe: recipe, WorkspaceDir: task.WorkspaceDir, Dispatched: entry.Dispatched(),
+		Recipe: recipe, WorkspaceDir: task.WorkspaceDir, WorkDir: workDir,
+		Dispatched: entry.Dispatched(),
 	}, true, nil
 }
 

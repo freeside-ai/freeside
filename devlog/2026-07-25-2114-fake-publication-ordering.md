@@ -231,6 +231,13 @@ healthy registration may serve after the active pass restores coverage.
 Recorded faults remain definitive when the requested registration is already
 known or every possible registration is faulted.
 
+Command replay now restores both durable filesystem identities before path
+validation: the original workspace and the work root re-derived and
+revalidated from the task's immutable handoff path. A changed or repointed
+`-publication-work-dir` therefore cannot relocate checkpoint, lock, or handoff
+lookup after admission, and the full replay read cross-checks both identities
+against the bootstrap snapshot before reconstructing the workflow.
+
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
 while workspace export and verification execution move behind those stronger

@@ -80,7 +80,8 @@ func runFakePublicationCommand(
 	}
 	var recipe []byte
 	if replayFound {
-		if !loadedReplay || replay.WorkspaceDir != cfg.WorkspaceDir {
+		if !loadedReplay || replay.WorkspaceDir != cfg.WorkspaceDir ||
+			replay.WorkDir != cfg.WorkDir {
 			return fakePublicationCommandResult{}, errors.New(
 				"durable publication replay changed during bootstrap",
 			)
@@ -268,6 +269,7 @@ func prepareFakePublicationConfig(
 	}
 	if found {
 		cfg.WorkspaceDir = binding.WorkspaceDir
+		cfg.WorkDir = binding.WorkDir
 	}
 	if err := cfg.resolveAndValidatePaths(!found); err != nil {
 		return false, err

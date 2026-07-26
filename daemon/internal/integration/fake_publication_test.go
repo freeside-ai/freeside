@@ -1039,7 +1039,7 @@ func TestFakeCandidatePublicationRecoversPersistedRecipe(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !found || !bytes.Equal(replay.Recipe, h.recipe) || replay.Dispatched ||
-		replay.WorkspaceDir != workspaceLink {
+		replay.WorkspaceDir != workspaceLink || replay.WorkDir != h.workDir {
 		t.Fatalf("pending replay = %+v, found %t", replay, found)
 	}
 	restarted := h.engineWithRecipe(replay.Recipe)
@@ -1057,7 +1057,7 @@ func TestFakeCandidatePublicationRecoversPersistedRecipe(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !found || !bytes.Equal(replay.Recipe, h.recipe) || !replay.Dispatched ||
-		replay.WorkspaceDir != workspaceLink {
+		replay.WorkspaceDir != workspaceLink || replay.WorkDir != h.workDir {
 		t.Fatalf("dispatched replay = %+v, found %t", replay, found)
 	}
 }
