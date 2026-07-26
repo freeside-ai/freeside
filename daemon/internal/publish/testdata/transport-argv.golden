@@ -1,0 +1,41 @@
+{
+  "hardened_config": [
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "protocol.allow=never",
+    "-c",
+    "protocol.https.allow=always",
+    "-c",
+    "core.protectHFS=true",
+    "-c",
+    "core.protectNTFS=true",
+    "-c",
+    "credential.helper=",
+    "-c",
+    "http.followRedirects=false",
+    "-c",
+    "push.followTags=false",
+    "-c",
+    "fetch.recurseSubmodules=false",
+    "-c",
+    "transfer.fsckObjects=true"
+  ],
+  "fetch": [
+    "fetch",
+    "--no-tags",
+    "https://github.com/freeasinbird/example.git",
+    "refs/heads/main:refs/freeside/base"
+  ],
+  "push": [
+    "push",
+    "--atomic",
+    "--porcelain",
+    "--no-follow-tags",
+    "--force-with-lease=refs/heads/freeside/publish/0123456789abcdef:",
+    "https://github.com/freeasinbird/example.git",
+    "0123456789abcdef0123456789abcdef01234567:refs/heads/freeside/publish/0123456789abcdef"
+  ]
+}

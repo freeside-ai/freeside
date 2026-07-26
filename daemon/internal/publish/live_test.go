@@ -68,15 +68,33 @@ func newLiveMinter(t *testing.T) (m *publish.Minter, repo string, profile domain
 		t.Fatalf("parse live key: %v", err)
 	}
 
+	// The registration's true shape: by default the legacy assumption
+	// (a private App owned by the account it is installed on), overridden
+	// by the optional shape variables for a real registration like the
+	// live App, which is public and owned by a different account than
+	// the installation's.
+	appOwner := os.Getenv("FREESIDE_PUBLISH_LIVE_APP_OWNER")
+	if appOwner == "" {
+		appOwner = strings.SplitN(repo, "/", 2)[0]
+	}
+	visibility := publish.AppVisibilityPrivate
+	switch os.Getenv("FREESIDE_PUBLISH_LIVE_APP_VISIBILITY") {
+	case "", "private":
+	case "public":
+		visibility = publish.AppVisibilityPublic
+	default:
+		t.Fatal("FREESIDE_PUBLISH_LIVE_APP_VISIBILITY must be public or private")
+	}
+
 	base := t.TempDir()
 	ks, err := publish.NewKeystore(filepath.Join(base, "credentials"), filepath.Join(base, "state"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := ks.SaveApp(publish.AppCredentials{
-		Owner:      strings.SplitN(repo, "/", 2)[0],
+		Owner:      appOwner,
 		OwnerID:    ownerID,
-		Visibility: publish.AppVisibilityPrivate,
+		Visibility: visibility,
 		AppID:      appID,
 		Name:       "live-test-app",
 		Key:        key,
