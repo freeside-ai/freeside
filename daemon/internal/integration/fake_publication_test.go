@@ -297,6 +297,7 @@ type publicationHarness struct {
 	transport *integrationTransport
 	forge     *integrationForge
 	server    *httptest.Server
+	now       time.Time
 }
 
 func newPublicationHarness(t *testing.T) *publicationHarness {
@@ -364,7 +365,7 @@ func newPublicationHarness(t *testing.T) *publicationHarness {
 		profile: profile, audit: audit, store: st,
 		attention: signet.NewService(st, signet.WithBlobStore(blobs)), blobs: blobs,
 		transport: &integrationTransport{t: t, baseDir: base, forge: forge},
-		forge:     forge, server: server,
+		forge:     forge, server: server, now: fakePublicationTime,
 	}
 }
 
@@ -397,7 +398,7 @@ func (h *publicationHarness) engine() *engine.Engine {
 			ApprovedRecipes: map[domain.Digest]bool{h.recipeD: true},
 			Transport:       h.transport, Publisher: publisher, Artifacts: h.blobs,
 			NewRoom: func(home string) verify.Room { return &verify.ProcRoom{Home: home} },
-			Now:     func() time.Time { return fakePublicationTime },
+			Now:     func() time.Time { return h.now },
 		}),
 	)
 	if err != nil {
@@ -482,6 +483,61 @@ func TestFakeCandidatePublicationRestoresAndConvergesExactlyOnce(t *testing.T) {
 	}
 	if replay, err := restored.Reconcile(h.ctx); err != nil || replay != (engine.ReconcileResult{}) {
 		t.Fatalf("settled reconcile = %+v, %v", replay, err)
+	}
+}
+
+func TestFakeCandidatePublicationDoesNotReuseHandoffAfterStateRollback(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	writeFile(t, workspace, "candidate.txt", "first\n")
+
+	checkpoint := filepath.Join(t.TempDir(), "checkpoint.db")
+	if err := h.store.Checkpoint(h.ctx, checkpoint); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	firstWorkflow := h.engine()
+	if _, err := firstWorkflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
+		t.Fatalf("first StartFakePublication: %v", err)
+	}
+	first, err := firstWorkflow.Reconcile(h.ctx)
+	if err != nil {
+		t.Fatalf("first Reconcile: %v", err)
+	}
+	if first.ReadyItemsCreated != 1 || first.LastPRNumber != 101 {
+		t.Fatalf("first result = %+v", first)
+	}
+	firstItem, err := h.attention.GetAttentionItem(h.ctx, "ready-run-fake-publication")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.store.Restore(h.ctx, checkpoint); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	h.attention = signet.NewService(h.store, signet.WithBlobStore(h.blobs))
+	h.now = h.now.Add(time.Minute)
+	writeFile(t, workspace, "candidate.txt", "second\n")
+	secondWorkflow := h.engine()
+	if _, err := secondWorkflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
+		t.Fatalf("second StartFakePublication: %v", err)
+	}
+	second, err := secondWorkflow.Reconcile(h.ctx)
+	if err != nil {
+		t.Fatalf("second Reconcile: %v", err)
+	}
+	if second.ReadyItemsCreated != 1 || second.LastPRNumber != 102 {
+		t.Fatalf("second result = %+v", second)
+	}
+	secondItem, err := h.attention.GetAttentionItem(h.ctx, "ready-run-fake-publication")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondItem.Item.PRHeadSHA == firstItem.Item.PRHeadSHA {
+		t.Fatalf("rollback reused stale handoff head %s", secondItem.Item.PRHeadSHA)
+	}
+	if refs, prs := h.forge.counts(); refs != 2 || prs != 2 {
+		t.Fatalf("rollback resources = refs:%d prs:%d, want 2 each", refs, prs)
 	}
 }
 

@@ -366,11 +366,11 @@ func (w *fakePublicationWorkflow) newTask(
 	} else {
 		commitDate = commitDate.UTC()
 	}
-	return fakePublicationTask{
+	task := fakePublicationTask{
 		Version: fakePublicationTaskVersion,
 		RunID:   spec.RunID, ProjectID: spec.ProjectID,
-		WorkspaceDir: workspaceDir, HandoffDir: w.handoffDir(spec.RunID),
-		Repo: spec.Repo, BaseRef: spec.BaseRef, BaseSHA: spec.BaseSHA,
+		WorkspaceDir: workspaceDir,
+		Repo:         spec.Repo, BaseRef: spec.BaseRef, BaseSHA: spec.BaseSHA,
 		AllowedPaths: slices.Clone(spec.AllowedPaths),
 		RecipeDigest: w.recipeDigest, RecipePath: w.recipePath,
 		TrustProfileDigest:       profile.ProfileDigest,
@@ -379,7 +379,13 @@ func (w *fakePublicationWorkflow) newTask(
 		Title:                    spec.Title, Body: spec.Body,
 		CommitDate: commitDate, StartedAt: startedAt,
 		OperatingMode: spec.OperatingMode,
-	}, explicitCommitDate, nil
+	}
+	handoffDir, err := w.expectedHandoffDir(task)
+	if err != nil {
+		return fakePublicationTask{}, false, fmt.Errorf("bind handoff: %w", err)
+	}
+	task.HandoffDir = handoffDir
+	return task, explicitCommitDate, nil
 }
 
 func (w *fakePublicationWorkflow) reconcile(ctx context.Context) (fakePublicationReconcileResult, error) {
@@ -404,6 +410,15 @@ func (w *fakePublicationWorkflow) reconcile(ctx context.Context) (fakePublicatio
 		if entry.IdempotencyKey != fakePublicationTaskKey(task.RunID) {
 			return result, fmt.Errorf("task %q names run %q: %w",
 				entry.IdempotencyKey, task.RunID, domain.ErrParentKeyMismatch)
+		}
+		expectedHandoff, err := w.expectedHandoffDir(task)
+		if err != nil {
+			return result, fmt.Errorf("task %q handoff binding: %w", entry.IdempotencyKey, err)
+		}
+		if task.HandoffDir != expectedHandoff {
+			return result, fmt.Errorf("task %q handoff %q, want %q: %w",
+				entry.IdempotencyKey, task.HandoffDir, expectedHandoff,
+				domain.ErrParentKeyMismatch)
 		}
 		outcome, err := w.reconcileTask(ctx, task)
 		if err != nil {
@@ -749,9 +764,14 @@ func (w *fakePublicationWorkflow) finishTask(ctx context.Context, task fakePubli
 	})
 }
 
-func (w *fakePublicationWorkflow) handoffDir(runID domain.RunID) string {
-	sum := sha256.Sum256([]byte(runID))
-	return filepath.Join(w.workDir, "handoffs", hex.EncodeToString(sum[:]))
+func (w *fakePublicationWorkflow) expectedHandoffDir(task fakePublicationTask) (string, error) {
+	task.HandoffDir = ""
+	payload, err := json.Marshal(task)
+	if err != nil {
+		return "", fmt.Errorf("encode handoff binding: %w", err)
+	}
+	sum := sha256.Sum256(payload)
+	return filepath.Join(w.workDir, "handoffs", hex.EncodeToString(sum[:])), nil
 }
 
 func publicationRun(task fakePublicationTask) domain.Run {
@@ -863,6 +883,8 @@ func sameFakePublicationRequest(
 		proposed.CommitDate = prior.CommitDate
 	}
 	proposed.StartedAt = prior.StartedAt
+	// HandoffDir is derived from the complete committed task and verified
+	// during reconciliation; it is not a caller-controlled request field.
 	// TrustProfileDigest deliberately stays out of the request comparison.
 	// A replay re-reads current trust only to construct a possible new task,
 	// but an existing run remains bound to its originally reviewed profile;
@@ -872,7 +894,6 @@ func sameFakePublicationRequest(
 		prior.RunID == proposed.RunID &&
 		prior.ProjectID == proposed.ProjectID &&
 		prior.WorkspaceDir == proposed.WorkspaceDir &&
-		prior.HandoffDir == proposed.HandoffDir &&
 		prior.Repo == proposed.Repo &&
 		prior.BaseRef == proposed.BaseRef &&
 		prior.BaseSHA == proposed.BaseSHA &&

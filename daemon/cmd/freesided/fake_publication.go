@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -168,6 +170,11 @@ func runFakePublicationCommand(
 	if err != nil {
 		return fakePublicationCommandResult{}, err
 	}
+	if result, ok, err := existingFakePublicationResult(ctx, attention, cfg); err != nil {
+		return fakePublicationCommandResult{}, err
+	} else if ok {
+		return result, nil
+	}
 
 	runCtx, cancel := context.WithCancel(ctx)
 	janitorDone := make(chan struct{})
@@ -187,6 +194,11 @@ func runFakePublicationCommand(
 	ticker := time.NewTicker(cfg.ReconcileInterval)
 	defer ticker.Stop()
 	for {
+		if result, ok, err := existingFakePublicationResult(ctx, attention, cfg); err != nil {
+			return fakePublicationCommandResult{}, err
+		} else if ok {
+			return result, nil
+		}
 		reconciled, err := workflow.Reconcile(ctx)
 		if err != nil {
 			return fakePublicationCommandResult{}, err
@@ -270,10 +282,42 @@ func (cfg *fakePublicationCommandConfig) withDefaultsAndValidate() error {
 	if len(cfg.AllowedPaths) == 0 {
 		cfg.AllowedPaths = []string{"**"}
 	}
-	for _, dir := range []string{cfg.StateDir, cfg.CredentialsDir, cfg.WorkspaceDir} {
-		if _, err := filepath.Abs(dir); err != nil {
-			return fmt.Errorf("resolve publication path: %w", err)
+	paths := []struct {
+		name string
+		path *string
+		dir  bool
+	}{
+		{"-publication-workspace", &cfg.WorkspaceDir, true},
+		{"-db", &cfg.DBPath, false},
+		{"-publication-work-dir", &cfg.WorkDir, true},
+		{"-fake-stage-driver-dir", &cfg.FakeDriverDir, true},
+		{"-publication-state-dir", &cfg.StateDir, true},
+		{"-publication-credentials-dir", &cfg.CredentialsDir, true},
+		{"-publication-recipe", &cfg.RecipeFile, false},
+	}
+	for _, candidate := range paths {
+		resolved, err := resolvePublicationPath(*candidate.path)
+		if err != nil {
+			return fmt.Errorf("resolve %s: %w", candidate.name, err)
 		}
+		*candidate.path = resolved
+	}
+	blobDir, err := resolvePublicationPath(cfg.DBPath + ".blobs")
+	if err != nil {
+		return fmt.Errorf("resolve -db artifact directory: %w", err)
+	}
+	workspace := strings.ToLower(cfg.WorkspaceDir)
+	for _, candidate := range paths[1:] {
+		target := strings.ToLower(*candidate.path)
+		if publicationPathContains(workspace, target) ||
+			(candidate.dir && publicationPathContains(target, workspace)) {
+			return fmt.Errorf("%s overlaps -publication-workspace", candidate.name)
+		}
+	}
+	blobDir = strings.ToLower(blobDir)
+	if publicationPathContains(workspace, blobDir) ||
+		publicationPathContains(blobDir, workspace) {
+		return errors.New("-db artifact directory overlaps -publication-workspace")
 	}
 	for i, pattern := range cfg.AllowedPaths {
 		cfg.AllowedPaths[i] = strings.TrimSpace(pattern)
@@ -282,4 +326,99 @@ func (cfg *fakePublicationCommandConfig) withDefaultsAndValidate() error {
 		}
 	}
 	return nil
+}
+
+func existingFakePublicationResult(
+	ctx context.Context,
+	attention *signet.Service,
+	cfg fakePublicationCommandConfig,
+) (fakePublicationCommandResult, bool, error) {
+	terminalItems := []struct {
+		id       domain.ItemID
+		itemType domain.AttentionType
+	}{
+		{domain.ItemID("ready-" + string(cfg.RunID)), domain.AttentionReadyForFinalReview},
+		{domain.ItemID("publish-blocked-" + string(cfg.RunID)), domain.AttentionPublishBlocked},
+	}
+	var found *fakePublicationCommandResult
+	for _, terminal := range terminalItems {
+		snapshot, err := attention.GetAttentionItem(ctx, terminal.id)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return fakePublicationCommandResult{}, false, err
+		}
+		item := snapshot.Item
+		if item.ID != terminal.id || item.ProjectID != cfg.ProjectID ||
+			item.Type != terminal.itemType || item.Subject.Type != domain.SubjectRun ||
+			item.Subject.ID != domain.SubjectID(cfg.RunID) || item.Subject.RunID == nil ||
+			*item.Subject.RunID != cfg.RunID {
+			return fakePublicationCommandResult{}, false,
+				fmt.Errorf("terminal publication item %q does not match run", terminal.id)
+		}
+		result := fakePublicationCommandResult{
+			OperatingMode: engine.OperatingModeAttendedDev,
+			RunID:         cfg.RunID,
+			ItemID:        terminal.id,
+			ItemType:      terminal.itemType,
+			HeadSHA:       item.PRHeadSHA,
+		}
+		if terminal.itemType == domain.AttentionReadyForFinalReview {
+			prefix := cfg.Repo + "#"
+			const suffix = " is published and ready for final review."
+			if !strings.HasPrefix(item.Reason, prefix) || !strings.HasSuffix(item.Reason, suffix) {
+				return fakePublicationCommandResult{}, false,
+					fmt.Errorf("terminal publication item %q has invalid ready reason", terminal.id)
+			}
+			number := strings.TrimSuffix(strings.TrimPrefix(item.Reason, prefix), suffix)
+			prNumber, err := strconv.Atoi(number)
+			if err != nil || prNumber <= 0 {
+				return fakePublicationCommandResult{}, false,
+					fmt.Errorf("terminal publication item %q has invalid pull request number", terminal.id)
+			}
+			result.PRNumber = prNumber
+		}
+		if found != nil {
+			return fakePublicationCommandResult{}, false,
+				fmt.Errorf("run %q has multiple terminal publication items", cfg.RunID)
+		}
+		found = &result
+	}
+	if found != nil {
+		return *found, true, nil
+	}
+	return fakePublicationCommandResult{}, false, nil
+}
+
+func resolvePublicationPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	rest := ""
+	for current := filepath.Clean(abs); ; {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			return filepath.Join(resolved, rest), nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("no existing ancestor for %s", abs)
+		}
+		rest = filepath.Join(filepath.Base(current), rest)
+		current = parent
+	}
+}
+
+func publicationPathContains(outer, inner string) bool {
+	relative, err := filepath.Rel(outer, inner)
+	if err != nil {
+		return false
+	}
+	return relative == "." ||
+		(relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }

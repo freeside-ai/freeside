@@ -20,12 +20,14 @@ lifecycle without improving the content-identity convergence contract.
 **Chose one durable engine outbox task as the fake workflow's recovery
 authority.** It binds the exact base SHA, verification recipe, originally
 reviewed trust-profile digest, invocation identities, allowlist, deterministic
-commit time, and committed export location before any external effect. A
-restart reconstructs the candidate from those bindings; a later trust-profile
-activation does not rewrite the task, and Publisher's current-profile check
-refuses the superseded binding before the transport callback. This preserves
-the reviewed decision instead of silently upgrading a pending run to a
-different policy.
+commit time, and a handoff directory derived from the complete task before any
+external effect. The derived directory prevents a database rollback followed
+by reuse of the same run ID from accepting an export committed by the lost
+task. A restart reconstructs the candidate from those bindings; a later
+trust-profile activation does not rewrite the task, and Publisher's
+current-profile check refuses the superseded binding before the transport
+callback. This preserves the reviewed decision instead of silently upgrading
+a pending run to a different policy.
 
 **Chose the existing digest-addressed blob store for verifier report and
 transcript bytes, finalized before SQLite artifact metadata.** Storing only
@@ -50,6 +52,17 @@ Automation-control paths, reviewer-instruction paths, and symlinks all produced
 a blocked item without a push. A deliberately drifted live audit and a
 superseded stored profile both failed before the transport callback, closing
 the ordering error found during self-review.
+
+Automated review exposed three recovery-boundary gaps. Symlink-aware
+configuration validation now proves that the database, artifact blobs, export
+handoffs, fake driver, publication state, credentials, and trusted recipe are
+structurally separate from the candidate workspace before export. A rollback
+test confirmed that the same run ID with a newly committed task cannot reuse
+the prior handoff and publishes the changed candidate under a distinct content
+identity. Command replay now reconstructs a terminal ready or blocked result
+from the durable attention item, validates its run and project bindings, and
+refuses malformed or ambiguous terminal state instead of polling an already
+dispatched task forever.
 
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
