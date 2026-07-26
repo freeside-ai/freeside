@@ -252,9 +252,10 @@ func newFakePublicationWorkflow(
 	}, nil
 }
 
-// StartFakePublication commits one durable attended_dev task and its Run
-// before any export, git, verification, or GitHub effect. A replay converges
-// on the originally committed timestamps and rejects changed bindings.
+// StartFakePublication captures one immutable handoff, then commits its
+// attended_dev task and Run before any git, verification, or GitHub effect.
+// A replay converges on the originally committed timestamps and rejects
+// changed bindings without re-reading the source workspace.
 func (e *Engine) StartFakePublication(ctx context.Context, spec FakePublicationSpec) (domain.Run, error) {
 	if e.publication == nil {
 		return domain.Run{}, errors.New("start fake publication: workflow is not configured")
@@ -284,6 +285,9 @@ func (w *fakePublicationWorkflow) start(ctx context.Context, spec FakePublicatio
 		}
 		if inserted {
 			if err := validateFakePublicationWorkspace(task.WorkspaceDir); err != nil {
+				return err
+			}
+			if err := w.commitHandoff(task); err != nil {
 				return err
 			}
 			committed = task
@@ -440,7 +444,7 @@ type taskOutcome struct {
 }
 
 func (w *fakePublicationWorkflow) reconcileTask(ctx context.Context, task fakePublicationTask) (taskOutcome, error) {
-	if err := w.ensureHandoff(task); err != nil {
+	if err := requireCommittedHandoff(task); err != nil {
 		return taskOutcome{}, err
 	}
 	profile, err := w.loadBoundProfile(ctx, task)
@@ -606,16 +610,11 @@ func (w *fakePublicationWorkflow) Resolve(
 	return candidate, maps.Clone(w.approvedRecipes), nil
 }
 
-func (w *fakePublicationWorkflow) ensureHandoff(task fakePublicationTask) error {
-	info, err := os.Lstat(task.HandoffDir)
-	switch {
-	case err == nil:
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return errors.New("committed handoff path is not a real directory")
-		}
-		return nil
-	case !errors.Is(err, os.ErrNotExist):
-		return fmt.Errorf("inspect handoff: %w", err)
+func (w *fakePublicationWorkflow) commitHandoff(task fakePublicationTask) error {
+	if _, err := os.Lstat(task.HandoffDir); err == nil {
+		return errors.New("handoff path already exists before task commit")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect handoff target: %w", err)
 	}
 	parent := filepath.Dir(task.HandoffDir)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
@@ -644,16 +643,21 @@ func (w *fakePublicationWorkflow) ensureHandoff(task fakePublicationTask) error 
 		return fmt.Errorf("export helper: %w", err)
 	}
 	if err := os.Rename(output, task.HandoffDir); err != nil {
-		if info, statErr := os.Lstat(task.HandoffDir); statErr == nil &&
-			info.Mode()&os.ModeSymlink == 0 && info.IsDir() {
-			committed = true
-			_ = os.RemoveAll(temp)
-			return nil
-		}
 		return fmt.Errorf("commit handoff: %w", err)
 	}
 	committed = true
 	_ = os.RemoveAll(temp)
+	return nil
+}
+
+func requireCommittedHandoff(task fakePublicationTask) error {
+	info, err := os.Lstat(task.HandoffDir)
+	if err != nil {
+		return fmt.Errorf("inspect committed handoff: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return errors.New("committed handoff path is not a real directory")
+	}
 	return nil
 }
 

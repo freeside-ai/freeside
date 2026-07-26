@@ -2,6 +2,8 @@ package integration_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -506,6 +508,24 @@ func TestFakeCandidatePublicationDoesNotReuseHandoffAfterStateRollback(t *testin
 	if _, err := firstWorkflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
 		t.Fatalf("first StartFakePublication: %v", err)
 	}
+	handoffs, err := os.ReadDir(filepath.Join(h.workDir, "handoffs"))
+	if err != nil {
+		t.Fatalf("read committed handoffs: %v", err)
+	}
+	if len(handoffs) != 1 {
+		t.Fatalf("committed handoffs = %d, want 1", len(handoffs))
+	}
+	manifest, err := os.ReadFile(filepath.Join(
+		h.workDir, "handoffs", handoffs[0].Name(), "manifest.json",
+	))
+	if err != nil {
+		t.Fatalf("read committed manifest: %v", err)
+	}
+	firstDigest := sha256.Sum256([]byte("first\n"))
+	if !strings.Contains(string(manifest), "sha256:"+hex.EncodeToString(firstDigest[:])) {
+		t.Fatal("committed handoff does not bind the workspace bytes observed at Start")
+	}
+	writeFile(t, workspace, "candidate.txt", "changed after task commit\n")
 	first, err := firstWorkflow.Reconcile(h.ctx)
 	if err != nil {
 		t.Fatalf("first Reconcile: %v", err)
@@ -544,6 +564,28 @@ func TestFakeCandidatePublicationDoesNotReuseHandoffAfterStateRollback(t *testin
 	}
 	if refs, prs := h.forge.counts(); refs != 2 || prs != 2 {
 		t.Fatalf("rollback resources = refs:%d prs:%d, want 2 each", refs, prs)
+	}
+}
+
+func TestFakeCandidatePublicationDoesNotReExportMissingCommittedHandoff(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	writeFile(t, workspace, "candidate.txt", "committed\n")
+
+	workflow := h.engine()
+	if _, err := workflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
+		t.Fatalf("StartFakePublication: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(h.workDir, "handoffs")); err != nil {
+		t.Fatalf("remove committed handoff: %v", err)
+	}
+	writeFile(t, workspace, "candidate.txt", "uncommitted replacement\n")
+	if _, err := workflow.Reconcile(h.ctx); err == nil {
+		t.Fatal("Reconcile recreated a missing committed handoff")
+	}
+	if pushes := h.transport.pushCount(); pushes != 0 {
+		t.Fatalf("missing committed handoff reached push %d times", pushes)
 	}
 }
 

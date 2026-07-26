@@ -20,14 +20,17 @@ lifecycle without improving the content-identity convergence contract.
 **Chose one durable engine outbox task as the fake workflow's recovery
 authority.** It binds the exact base SHA, verification recipe, originally
 reviewed trust-profile digest, invocation identities, allowlist, deterministic
-commit time, and a handoff directory derived from the complete task before any
-external effect. The derived directory prevents a database rollback followed
-by reuse of the same run ID from accepting an export committed by the lost
-task. A restart reconstructs the candidate from those bindings; a later
-trust-profile activation does not rewrite the task, and Publisher's
-current-profile check refuses the superseded binding before the transport
-callback. This preserves the reviewed decision instead of silently upgrading
-a pending run to a different policy.
+commit time, and a handoff directory derived from the complete task. A new
+task exports the workspace into that immutable handoff before its database
+transaction commits; an export failure rolls back the task, and reconciliation
+never recreates a missing committed handoff from mutable workspace bytes. The
+derived directory prevents a database rollback followed by reuse of the same
+run ID from accepting an export committed by the lost task. A restart
+reconstructs the candidate from those bindings; a later trust-profile
+activation does not rewrite the task, and Publisher's current-profile check
+refuses the superseded binding before the transport callback. This preserves
+the reviewed decision instead of silently upgrading a pending run to a
+different policy.
 
 **Chose the existing digest-addressed blob store for verifier report and
 transcript bytes, finalized before SQLite artifact metadata.** Storing only
@@ -72,7 +75,10 @@ candidate this reconciliation pass did not reconstruct. Replay loads the
 committed task without statting its source workspace; a newly inserted task
 still validates the workspace inside its decision transaction, while a
 post-handoff recovery no longer depends on the source execution context
-remaining mounted.
+remaining mounted. The final refute-first pass modified the workspace after
+task creation and confirmed the committed manifest retained the earlier bytes;
+deleting that handoff then failed reconciliation without re-exporting or
+reaching the transport.
 
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
