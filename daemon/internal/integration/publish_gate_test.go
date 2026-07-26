@@ -35,13 +35,13 @@ const (
 
 var fixtureTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
-// runGit runs git over a test-owned repo with global and system config
-// neutralized and a fixed identity, so commits are deterministic and no
-// developer git config leaks in. Mirrors the importer suite's helper.
+// runGit runs git over a test-owned repo with ambient git state and global and
+// system config neutralized and a fixed identity, so commits are deterministic
+// and no developer git config leaks in. Mirrors the importer suite's helper.
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...) //nolint:gosec // G204: test running git over test-owned repos with test-chosen args
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(scrubbedGitEnv(),
 		"GIT_CONFIG_GLOBAL="+os.DevNull,
 		"GIT_CONFIG_SYSTEM="+os.DevNull,
 		"GIT_CONFIG_NOSYSTEM=1",
@@ -55,6 +55,41 @@ func runGit(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func scrubbedGitEnv() []string {
+	var env []string
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "GIT_") {
+			env = append(env, entry)
+		}
+	}
+	return env
+}
+
+func TestRunGitIgnoresAmbientGitDir(t *testing.T) {
+	fixture := t.TempDir()
+	runGit(t, fixture, "init", "-q")
+	decoy := t.TempDir()
+	runGit(t, decoy, "init", "-q")
+
+	t.Setenv("GIT_DIR", filepath.Join(decoy, ".git"))
+	runGit(t, fixture, "config", "freeside.fixture", "target")
+
+	fixtureConfig, err := os.ReadFile(filepath.Join(fixture, ".git", "config")) //nolint:gosec // G304: fixed config path under a test-owned temp repository
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoyConfig, err := os.ReadFile(filepath.Join(decoy, ".git", "config")) //nolint:gosec // G304: fixed config path under a test-owned temp repository
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(fixtureConfig), "fixture = target") {
+		t.Error("fixture command did not update its target repository")
+	}
+	if strings.Contains(string(decoyConfig), "fixture = target") {
+		t.Error("fixture command inherited hostile GIT_DIR and updated the decoy repository")
+	}
 }
 
 func writeFile(t *testing.T, root, rel, content string) {
