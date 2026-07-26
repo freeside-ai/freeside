@@ -1,0 +1,20 @@
+{
+  "run_id": "run-1",
+  "stage_id": "stage-1",
+  "attempt_id": "attempt-1",
+  "input_digest": "sha256:input",
+  "spec_digest": "sha256:spec",
+  "policy_digest": "sha256:policy",
+  "base": {
+    "repo": "owner/repo",
+    "repository_id": 424242,
+    "base_ref": "refs/heads/main",
+    "base_sha": "deadbeef"
+  },
+  "workspace": "freeside-handoff-run-1-ws",
+  "image_ref": "ghcr.io/freeside-ai/agent@sha256:abababababababababababababababababababababababababababababababab",
+  "credential_mode": "subscription_contained",
+  "egress_profile": "provider_only",
+  "auth_identity_id": "auth-claude-owner",
+  "admission_id": "sha256:db2c35a985244a9722db2569094807ea64b1417fafea14756fb116d32767468a"
+}

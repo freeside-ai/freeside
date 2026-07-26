@@ -2,6 +2,7 @@ package exec_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,19 +40,44 @@ func TestGolden(t *testing.T) {
 		}},
 	}
 
+	// The widened start spec, rendered from the record that authorizes it:
+	// pinning the spec's shape this way also pins the mapping, so a field
+	// added to the record and forgotten here shows up as a golden diff.
+	identity := domain.AuthIdentityID("auth-claude-owner")
+	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: "inv-1", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-1",
+		Backend:        "fresh_vm_read_only_volume_handoff",
+		Capabilities:   domain.NewCapabilitySnapshot(domain.CapDetachableWorkspace, domain.CapPostExitExport),
+		OperatingMode:  domain.ModeAttendedDev,
+		CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile:  domain.EgressProviderOnly,
+		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
+		SpecDigest:     "sha256:spec", PolicyDigest: "sha256:policy", InputDigest: "sha256:input",
+		Base:           domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
+		Workspace:      "freeside-handoff-run-1-ws",
+		AuthIdentityID: &identity,
+		AdmittedAt:     ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	cases := []struct {
 		name  string
-		value interface {
-			Validate() error
-		}
+		value any
 	}{
 		{"stage_result", stage},
 		{"review_result", review},
+		{"start_spec", exec.StartSpecFromAdmission(admission)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := tc.value.Validate(); err != nil {
-				t.Fatalf("fixture must be valid: %v", err)
+			// StartSpec has no Validate (see driver.go): it is valid because
+			// the admission it was rendered from is.
+			if v, ok := tc.value.(interface{ Validate() error }); ok {
+				if err := v.Validate(); err != nil {
+					t.Fatalf("fixture must be valid: %v", err)
+				}
 			}
 			got, err := json.MarshalIndent(tc.value, "", "  ")
 			if err != nil {
