@@ -34,6 +34,11 @@ var (
 	ErrInvalidFindingDisposition = errors.New("invalid finding disposition")
 	ErrInvalidFindingOrigin      = errors.New("invalid candidate finding origin")
 	ErrInvalidOutcome            = errors.New("invalid verification outcome")
+	ErrInvalidRunnerCapability   = errors.New("invalid runner capability")
+	ErrInvalidOperatingMode      = errors.New("invalid operating mode")
+	ErrInvalidCredentialMode     = errors.New("invalid credential mode")
+	ErrInvalidEgressProfile      = errors.New("invalid egress profile")
+	ErrInvalidRefreshStrategy    = errors.New("invalid refresh strategy")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")
@@ -74,6 +79,7 @@ var (
 	ErrCategoryInconsistent     = errors.New("control-plane category is required exactly for control-plane findings")
 	ErrWaiverInconsistent       = errors.New("waiver record is required exactly for waived findings")
 	ErrFindingPathConflict      = errors.New("finding carries both path and path_hex")
+	ErrCapabilitiesNotCanonical = errors.New("capability snapshot is not in canonical (sorted, deduplicated) order")
 
 	// Trust-boundary failures.
 	ErrPlaintextCredential         = errors.New("credential material must be a sha256 digest, never plaintext")

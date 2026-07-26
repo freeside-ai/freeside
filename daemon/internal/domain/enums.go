@@ -776,3 +776,105 @@ func (o VerificationOutcome) valid() bool {
 		return false
 	}
 }
+
+// OperatingMode is the posture a run executes under (plan §5.7).
+// attended_dev allows a weaker runner class and disables auto-start,
+// automatic publication, and unattended escalation; unattended requires full
+// conformance, and a durable record of which mode admitted a run is what
+// later audit reads.
+type OperatingMode string
+
+const (
+	ModeAttendedDev OperatingMode = "attended_dev"
+	ModeUnattended  OperatingMode = "unattended"
+)
+
+// AllOperatingModes lists every valid OperatingMode.
+var AllOperatingModes = []OperatingMode{ModeAttendedDev, ModeUnattended}
+
+func (m OperatingMode) valid() bool {
+	switch m {
+	case ModeAttendedDev, ModeUnattended:
+		return true
+	default:
+		return false
+	}
+}
+
+// CredentialMode is the provider-credential containment a run declares and
+// records (plan §5.4). subscription_contained is the Phase 1 default;
+// api_key_isolated lands in Phase 2; local_trusted is permitted only for
+// explicitly trusted inputs.
+type CredentialMode string
+
+const (
+	CredentialSubscriptionContained CredentialMode = "subscription_contained"
+	CredentialAPIKeyIsolated        CredentialMode = "api_key_isolated"
+	CredentialLocalTrusted          CredentialMode = "local_trusted"
+)
+
+// AllCredentialModes lists every valid CredentialMode.
+var AllCredentialModes = []CredentialMode{
+	CredentialSubscriptionContained, CredentialAPIKeyIsolated, CredentialLocalTrusted,
+}
+
+func (m CredentialMode) valid() bool {
+	switch m {
+	case CredentialSubscriptionContained, CredentialAPIKeyIsolated, CredentialLocalTrusted:
+		return true
+	default:
+		return false
+	}
+}
+
+// EgressProfile is the network exposure a stage runs under, assigned by
+// control-plane policy above the credential-mode floor (plan §5.4).
+// provider_only is the default; provider_web_read is a materially wider
+// credential-exfiltration exposure and requires an explicit record of it,
+// which is why the profile is part of the durable admission record;
+// clean_verification is the plan's no-network verification profile.
+type EgressProfile string
+
+const (
+	EgressProviderOnly      EgressProfile = "provider_only"
+	EgressProviderWebRead   EgressProfile = "provider_web_read"
+	EgressCleanVerification EgressProfile = "clean_verification"
+)
+
+// AllEgressProfiles lists every valid EgressProfile.
+var AllEgressProfiles = []EgressProfile{
+	EgressProviderOnly, EgressProviderWebRead, EgressCleanVerification,
+}
+
+func (p EgressProfile) valid() bool {
+	switch p {
+	case EgressProviderOnly, EgressProviderWebRead, EgressCleanVerification:
+		return true
+	default:
+		return false
+	}
+}
+
+// RefreshStrategy is how an AuthIdentity's provider credential is refreshed
+// (plan §5.4). The plan names the field without enumerating its members;
+// these are the two the Phase 1A surface distinguishes (the daemon drives a
+// refresh itself, or something outside the daemon owns it). Widening the
+// vocabulary is a kind:contract change.
+type RefreshStrategy string
+
+const (
+	RefreshOnDemand RefreshStrategy = "refresh_on_demand"
+	RefreshExternal RefreshStrategy = "refresh_external"
+)
+
+// AllRefreshStrategies lists every valid RefreshStrategy.
+var AllRefreshStrategies = []RefreshStrategy{RefreshOnDemand, RefreshExternal}
+
+func (s RefreshStrategy) valid() bool {
+	switch s {
+	case RefreshOnDemand, RefreshExternal:
+		return true
+	default:
+		return false
+	}
+}
