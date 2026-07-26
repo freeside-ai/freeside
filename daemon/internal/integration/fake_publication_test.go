@@ -296,24 +296,25 @@ func (tr *integrationTransport) failNextPush() {
 }
 
 type publicationHarness struct {
-	t         *testing.T
-	ctx       context.Context
-	dbPath    string
-	blobDir   string
-	workDir   string
-	baseDir   string
-	baseSHA   string
-	recipe    []byte
-	recipeD   domain.Digest
-	profile   domain.AutomationTrustProfile
-	audit     domain.WorkflowAudit
-	store     *store.Store
-	attention *signet.Service
-	blobs     *signet.BlobStore
-	transport *integrationTransport
-	forge     *integrationForge
-	server    *httptest.Server
-	now       time.Time
+	t                         *testing.T
+	ctx                       context.Context
+	dbPath                    string
+	blobDir                   string
+	workDir                   string
+	baseDir                   string
+	baseSHA                   string
+	recipe                    []byte
+	recipeD                   domain.Digest
+	profile                   domain.AutomationTrustProfile
+	audit                     domain.WorkflowAudit
+	store                     *store.Store
+	attention                 *signet.Service
+	blobs                     *signet.BlobStore
+	transport                 *integrationTransport
+	forge                     *integrationForge
+	server                    *httptest.Server
+	now                       time.Time
+	afterPublicationFinalized func() error
 }
 
 func newPublicationHarness(t *testing.T) *publicationHarness {
@@ -419,8 +420,9 @@ func (h *publicationHarness) engineWithRecipe(recipe []byte) *engine.Engine {
 			WorkDir: h.workDir, Recipe: recipe,
 			ApprovedRecipes: map[domain.Digest]bool{verify.RecipeDigest(recipe): true},
 			Transport:       h.transport, Publisher: publisher, Artifacts: h.blobs,
-			NewRoom: func(home string) verify.Room { return &verify.ProcRoom{Home: home} },
-			Now:     func() time.Time { return h.now },
+			NewRoom:                   func(home string) verify.Room { return &verify.ProcRoom{Home: home} },
+			Now:                       func() time.Time { return h.now },
+			AfterPublicationFinalized: h.afterPublicationFinalized,
 		}),
 	)
 	if err != nil {
@@ -630,26 +632,86 @@ func TestFakeCandidatePublicationContinuesPastBrokenSibling(t *testing.T) {
 	}
 }
 
+func TestFakeCandidatePublicationFinishesDurableTerminalReplayBeforeHandoff(t *testing.T) {
+	h := newPublicationHarness(t)
+	workflow := h.engine()
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	if _, err := workflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
+		t.Fatalf("StartFakePublication: %v", err)
+	}
+	runID := domain.RunID("run-fake-publication")
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "publish-blocked-run-fake-publication", ProjectID: "project-fake-publication",
+		Subject: domain.Subject{
+			Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID,
+		},
+		Type: domain.AttentionPublishBlocked, Priority: domain.PriorityHigh,
+		Reason: "publication was durably blocked",
+		RequestedDecision: []domain.Action{
+			domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+		},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+		Status: domain.StatusOpen,
+	}, map[domain.Digest]bool{h.recipeD: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.attention.PutItem(h.ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(h.workDir, "handoffs")); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := workflow.ReconcileFakePublications(h.ctx)
+	if err != nil {
+		t.Fatalf("terminal replay ReconcileFakePublications: %v", err)
+	}
+	if result.BlockedItemsCreated != 1 {
+		t.Fatalf("terminal replay result = %+v", result)
+	}
+	var pending []store.QueueEntry
+	if err := h.store.Read(h.ctx, func(tx *store.ReadTx) error {
+		var err error
+		pending, err = tx.ListPendingOutbox(h.ctx, "engine.fake_publication")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("terminal replay left %d engine tasks pending", len(pending))
+	}
+}
+
 func TestFakeCandidatePublicationRecoversPersistedRecipe(t *testing.T) {
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
 	writeFile(t, workspace, "candidate.txt", "verified\n")
+	workspaceLink := filepath.Join(t.TempDir(), "workspace-link")
+	if err := os.Symlink(workspace, workspaceLink); err != nil {
+		t.Fatal(err)
+	}
 
 	workflow := h.engine()
-	if _, err := workflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
+	if _, err := workflow.StartFakePublication(h.ctx, h.spec(workspaceLink)); err != nil {
 		t.Fatalf("StartFakePublication: %v", err)
 	}
-	recipe, found, err := engine.LoadFakePublicationRecipe(
+	if err := os.Remove(workspaceLink); err != nil {
+		t.Fatal(err)
+	}
+	replay, found, err := engine.LoadFakePublicationReplay(
 		h.ctx, h.store, h.blobs, "run-fake-publication",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !found || !bytes.Equal(recipe, h.recipe) {
-		t.Fatalf("recovered recipe = %q, found %t", recipe, found)
+	if !found || !bytes.Equal(replay.Recipe, h.recipe) || replay.Dispatched ||
+		replay.WorkspaceDir != workspaceLink {
+		t.Fatalf("pending replay = %+v, found %t", replay, found)
 	}
-	restarted := h.engineWithRecipe(recipe)
+	restarted := h.engineWithRecipe(replay.Recipe)
 	result, err := restarted.ReconcileFakePublications(h.ctx)
 	if err != nil {
 		t.Fatalf("recovered ReconcileFakePublications: %v", err)
@@ -657,14 +719,15 @@ func TestFakeCandidatePublicationRecoversPersistedRecipe(t *testing.T) {
 	if result.ReadyItemsCreated != 1 || result.LastPRNumber != 101 {
 		t.Fatalf("recovered result = %+v", result)
 	}
-	recipe, found, err = engine.LoadFakePublicationRecipe(
+	replay, found, err = engine.LoadFakePublicationReplay(
 		h.ctx, h.store, h.blobs, "run-fake-publication",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !found || !bytes.Equal(recipe, h.recipe) {
-		t.Fatalf("dispatched recipe = %q, found %t", recipe, found)
+	if !found || !bytes.Equal(replay.Recipe, h.recipe) || !replay.Dispatched ||
+		replay.WorkspaceDir != workspaceLink {
+		t.Fatalf("dispatched replay = %+v, found %t", replay, found)
 	}
 }
 
@@ -985,6 +1048,40 @@ func TestFakeCandidatePublicationRetainsRecoveryTaskAfterIntentTrustDrift(t *tes
 		h.ctx, "publish-blocked-run-fake-publication",
 	); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("trust recovery left contradictory blocked item: %v", err)
+	}
+}
+
+func TestFakeCandidatePublicationRecoversDispatchedOutcomeBeforeTrustGate(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	writeFile(t, workspace, "candidate.txt", "verified\n")
+	h.afterPublicationFinalized = func() error {
+		return errors.New("injected crash after publication outcome")
+	}
+
+	workflow := h.engine()
+	if _, err := workflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
+		t.Fatalf("StartFakePublication: %v", err)
+	}
+	if _, err := workflow.Reconcile(h.ctx); err == nil ||
+		!strings.Contains(err.Error(), "injected crash after publication outcome") {
+		t.Fatalf("post-outcome crash error = %v", err)
+	}
+	if pushes := h.transport.pushCount(); pushes != 1 {
+		t.Fatalf("initial publication pushes = %d, want 1", pushes)
+	}
+
+	h.audit.OIDCAvailable = true
+	result, err := workflow.Reconcile(h.ctx)
+	if err != nil {
+		t.Fatalf("outcome recovery Reconcile: %v", err)
+	}
+	if result.ReadyItemsCreated != 1 || result.LastPRNumber != 101 {
+		t.Fatalf("outcome recovery result = %+v", result)
+	}
+	if pushes := h.transport.pushCount(); pushes != 1 {
+		t.Fatalf("outcome recovery repeated push: %d", pushes)
 	}
 }
 

@@ -22,6 +22,12 @@ type QueueEntry struct {
 	CreatedAt      time.Time
 }
 
+// Dispatched reports whether this durable queue row has completed its
+// provider handoff.
+func (e QueueEntry) Dispatched() bool {
+	return e.Status == outboxStatusDispatched
+}
+
 // Outbox row statuses. Pending is the schema default at enqueue; dispatched
 // records that the intent was handed to its provider, whose own durable
 // intent record is the correctness dedup — the mark only bounds rescans
@@ -124,6 +130,32 @@ func (tx *ReadTx) GetOutbox(ctx context.Context, key string) (QueueEntry, error)
 	entry.CreatedAt, err = time.Parse(time.RFC3339Nano, stored)
 	if err != nil {
 		return QueueEntry{}, fmt.Errorf("get outbox %q: stored created_at invalid: %w", key, err)
+	}
+	return entry, nil
+}
+
+// GetInbox returns one durable accepted result by idempotency key.
+func (tx *ReadTx) GetInbox(ctx context.Context, key string) (QueueEntry, error) {
+	if key == "" {
+		return QueueEntry{}, errors.New("get inbox: empty idempotency key")
+	}
+	var (
+		entry  QueueEntry
+		stored string
+	)
+	err := tx.tx.QueryRowContext(ctx, selectInboxSQL, key).Scan(
+		&entry.ID, &entry.IdempotencyKey, &entry.Kind, &entry.Payload,
+		&entry.Status, &stored,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return QueueEntry{}, fmt.Errorf("get inbox %q: %w", key, ErrNotFound)
+	}
+	if err != nil {
+		return QueueEntry{}, fmt.Errorf("get inbox %q: %w", key, err)
+	}
+	entry.CreatedAt, err = time.Parse(time.RFC3339Nano, stored)
+	if err != nil {
+		return QueueEntry{}, fmt.Errorf("get inbox %q: stored created_at invalid: %w", key, err)
 	}
 	return entry, nil
 }

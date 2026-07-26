@@ -71,9 +71,25 @@ func runFakePublicationCommand(
 	if err != nil {
 		return fakePublicationCommandResult{}, fmt.Errorf("open artifact store: %w", err)
 	}
-	recipe, err := fakePublicationRecipe(ctx, cfg, blobs)
+	replay, replayFound, err := fakePublicationReplay(ctx, cfg, blobs)
 	if err != nil {
 		return fakePublicationCommandResult{}, err
+	}
+	var recipe []byte
+	if replayFound {
+		cfg.WorkspaceDir = replay.WorkspaceDir
+		if err := cfg.withDefaultsAndValidate(); err != nil {
+			return fakePublicationCommandResult{}, err
+		}
+		recipe = replay.Recipe
+	} else {
+		recipe, err = os.ReadFile(cfg.RecipeFile)
+		if err != nil {
+			return fakePublicationCommandResult{}, fmt.Errorf("read verification recipe: %w", err)
+		}
+		if _, err := verify.ParseRecipe(recipe); err != nil {
+			return fakePublicationCommandResult{}, fmt.Errorf("verification recipe: %w", err)
+		}
 	}
 	recipeDigest := verify.RecipeDigest(recipe)
 	approvedRecipes := map[domain.Digest]bool{recipeDigest: true}
@@ -192,6 +208,20 @@ func runFakePublicationCommand(
 		if result, ok, err := existingFakePublicationResult(ctx, attention, cfg); err != nil {
 			return fakePublicationCommandResult{}, err
 		} else if ok {
+			replay, found, stateErr := engine.LoadFakePublicationReplay(
+				ctx, st, blobs, cfg.RunID,
+			)
+			if stateErr != nil {
+				return fakePublicationCommandResult{}, stateErr
+			}
+			if !found || !replay.Dispatched {
+				if reconcileErr != nil {
+					return fakePublicationCommandResult{}, reconcileErr
+				}
+				return fakePublicationCommandResult{}, fmt.Errorf(
+					"terminal publication task %q is not dispatched", cfg.RunID,
+				)
+			}
 			return result, nil
 		}
 		if reconcileErr != nil {
@@ -210,32 +240,18 @@ func runFakePublicationCommand(
 	}
 }
 
-func fakePublicationRecipe(
+func fakePublicationReplay(
 	ctx context.Context,
 	cfg fakePublicationCommandConfig,
 	artifacts engine.ArtifactStore,
-) (_ []byte, err error) {
+) (_ engine.FakePublicationReplay, _ bool, err error) {
 	bootstrap, err := store.Open(ctx, cfg.DBPath, store.Options{})
 	if err != nil {
-		return nil, err
+		return engine.FakePublicationReplay{}, false, err
 	}
 	defer func() { err = errors.Join(err, bootstrap.Close()) }()
 
-	if recipe, found, err := engine.LoadFakePublicationRecipe(
-		ctx, bootstrap, artifacts, cfg.RunID,
-	); err != nil {
-		return nil, err
-	} else if found {
-		return recipe, nil
-	}
-	recipe, err := os.ReadFile(cfg.RecipeFile)
-	if err != nil {
-		return nil, fmt.Errorf("read verification recipe: %w", err)
-	}
-	if _, err := verify.ParseRecipe(recipe); err != nil {
-		return nil, fmt.Errorf("verification recipe: %w", err)
-	}
-	return recipe, nil
+	return engine.LoadFakePublicationReplay(ctx, bootstrap, artifacts, cfg.RunID)
 }
 
 func (cfg *fakePublicationCommandConfig) withDefaultsAndValidate() error {

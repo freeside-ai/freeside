@@ -2,12 +2,14 @@ package publish
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 // IntentKindOutcome is the inbox kind under which a converged
@@ -122,4 +124,44 @@ const outcomeKeyPrefix = IntentKindOutcome + "/"
 // the PR marker carries the full digest).
 func OutcomeKey(id Identity) string {
 	return outcomeKeyPrefix + string(id.Digest())
+}
+
+// LoadOutcome reconstructs and validates the durable result for one
+// publication identity. A missing row is a normal cache miss; any foreign
+// kind, key, or malformed payload fails closed.
+func LoadOutcome(
+	ctx context.Context,
+	st *store.Store,
+	id Identity,
+) (Outcome, bool, error) {
+	if st == nil {
+		return Outcome{}, false, errors.New("load publication outcome: nil store")
+	}
+	key := OutcomeKey(id)
+	var entry store.QueueEntry
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		entry, err = tx.GetInbox(ctx, key)
+		return err
+	}); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return Outcome{}, false, nil
+		}
+		return Outcome{}, false, err
+	}
+	if entry.IdempotencyKey != key || entry.Kind != IntentKindOutcome {
+		return Outcome{}, false, fmt.Errorf(
+			"publication outcome %q has kind %q", key, entry.Kind,
+		)
+	}
+	outcome, err := DecodeOutcome(entry.Payload)
+	if err != nil {
+		return Outcome{}, false, fmt.Errorf("publication outcome %q: %w", key, err)
+	}
+	if outcome.Identity != id.Digest() {
+		return Outcome{}, false, fmt.Errorf(
+			"publication outcome %q carries identity %s", key, outcome.Identity,
+		)
+	}
+	return outcome, true, nil
 }

@@ -146,6 +146,9 @@ func TestListPendingOutbox(t *testing.T) {
 				return err
 			}
 		}
+		if _, _, err := tx.RecordInbox(ctx, "inbox-key", "kind", []byte("result")); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
@@ -218,7 +221,7 @@ func TestListPendingOutbox(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if entry.IdempotencyKey != "inv-1" || entry.Status != "dispatched" {
+		if entry.IdempotencyKey != "inv-1" || !entry.Dispatched() {
 			t.Fatalf("dispatched entry = %+v", entry)
 		}
 		if _, err := tx.GetOutbox(ctx, "missing"); !errors.Is(err, store.ErrNotFound) {
@@ -226,6 +229,19 @@ func TestListPendingOutbox(t *testing.T) {
 		}
 		if _, err := tx.GetOutbox(ctx, ""); err == nil {
 			t.Fatal("GetOutbox accepted an empty key")
+		}
+		inbox, err := tx.GetInbox(ctx, "inbox-key")
+		if err != nil {
+			return err
+		}
+		if inbox.IdempotencyKey != "inbox-key" || inbox.Kind != "kind" {
+			t.Fatalf("inbox entry = %+v", inbox)
+		}
+		if _, err := tx.GetInbox(ctx, "missing"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("missing inbox error = %v, want ErrNotFound", err)
+		}
+		if _, err := tx.GetInbox(ctx, ""); err == nil {
+			t.Fatal("GetInbox accepted an empty key")
 		}
 		return nil
 	}); err != nil {

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -122,6 +123,9 @@ type FakePublicationConfig struct {
 	Artifacts       ArtifactStore
 	NewRoom         func(home string) verify.Room
 	Now             func() time.Time
+	// AfterPublicationFinalized is a crash-checkpoint seam used by recovery
+	// tests after the durable outcome commits but before terminal attention.
+	AfterPublicationFinalized func() error
 }
 
 // WithFakePublication enables the 1A.1 fake-candidate workflow.
@@ -184,17 +188,18 @@ type fakePublicationCandidateCheckpoint struct {
 }
 
 type fakePublicationWorkflow struct {
-	store           *store.Store
-	attention       attentionService
-	workDir         string
-	recipeDigest    domain.Digest
-	recipePath      string
-	approvedRecipes map[domain.Digest]bool
-	transport       PublicationTransport
-	publisher       *publish.Publisher
-	artifacts       ArtifactStore
-	newRoom         func(home string) verify.Room
-	now             func() time.Time
+	store                     *store.Store
+	attention                 attentionService
+	workDir                   string
+	recipeDigest              domain.Digest
+	recipePath                string
+	approvedRecipes           map[domain.Digest]bool
+	transport                 PublicationTransport
+	publisher                 *publish.Publisher
+	artifacts                 ArtifactStore
+	newRoom                   func(home string) verify.Room
+	now                       func() time.Time
+	afterPublicationFinalized func() error
 
 	reconcileMu sync.Mutex
 	candidates  map[domain.InvocationID]publish.Candidate
@@ -268,7 +273,8 @@ func newFakePublicationWorkflow(
 		approvedRecipes: maps.Clone(cfg.ApprovedRecipes),
 		transport:       cfg.Transport, publisher: cfg.Publisher, artifacts: cfg.Artifacts,
 		newRoom: cfg.NewRoom, now: now,
-		candidates: map[domain.InvocationID]publish.Candidate{},
+		afterPublicationFinalized: cfg.AfterPublicationFinalized,
+		candidates:                map[domain.InvocationID]publish.Candidate{},
 	}, nil
 }
 
@@ -467,6 +473,11 @@ func (w *fakePublicationWorkflow) reconcileEntry(
 		return taskOutcome{}, fmt.Errorf("handoff %q, want %q: %w",
 			task.HandoffDir, expectedHandoff, domain.ErrParentKeyMismatch)
 	}
+	if outcome, found, err := w.recoverTerminalTask(ctx, task); err != nil {
+		return taskOutcome{}, err
+	} else if found {
+		return outcome, nil
+	}
 	return w.reconcileTask(ctx, task)
 }
 
@@ -561,6 +572,11 @@ func (w *fakePublicationWorkflow) reconcileTask(ctx context.Context, task fakePu
 	w.candidates[task.PublicationInvocationID] = candidate
 	defer delete(w.candidates, task.PublicationInvocationID)
 
+	if published, found, err := w.loadPublicationOutcome(ctx, candidate); err != nil {
+		return taskOutcome{}, err
+	} else if found {
+		return w.completePublishedTask(ctx, task, imported, artifacts, published)
+	}
 	published, err := w.publisher.PublishAfterGate(
 		ctx,
 		candidate,
@@ -602,6 +618,21 @@ func (w *fakePublicationWorkflow) reconcileTask(ctx context.Context, task fakePu
 	); err != nil {
 		return taskOutcome{}, fmt.Errorf("finalize publication: %w", err)
 	}
+	if w.afterPublicationFinalized != nil {
+		if err := w.afterPublicationFinalized(); err != nil {
+			return taskOutcome{}, fmt.Errorf("after publication finalized: %w", err)
+		}
+	}
+	return w.completePublishedTask(ctx, task, imported, artifacts, published)
+}
+
+func (w *fakePublicationWorkflow) completePublishedTask(
+	ctx context.Context,
+	task fakePublicationTask,
+	imported importer.Result,
+	artifacts []domain.Artifact,
+	published publish.Result,
+) (taskOutcome, error) {
 	ready, err := w.readyItem(task, imported, artifacts, published)
 	if err != nil {
 		return taskOutcome{}, err
@@ -613,6 +644,37 @@ func (w *fakePublicationWorkflow) reconcileTask(ctx context.Context, task fakePu
 		return taskOutcome{}, err
 	}
 	return taskOutcome{ready: true, prNumber: published.PRNumber}, nil
+}
+
+func (w *fakePublicationWorkflow) loadPublicationOutcome(
+	ctx context.Context,
+	candidate publish.Candidate,
+) (publish.Result, bool, error) {
+	digests := make([]domain.Digest, len(candidate.Artifacts))
+	for i, artifact := range candidate.Artifacts {
+		digests[i] = artifact.Digest
+	}
+	identity, err := publish.DeriveIdentity(publish.IdentityInput{
+		Repo: candidate.Repo, BaseRef: candidate.BaseRef,
+		SourceHeadSHA: candidate.HeadSHA, ArtifactDigests: digests,
+		RecipeDigest: candidate.RecipeDigest,
+	})
+	if err != nil {
+		return publish.Result{}, false, err
+	}
+	outcome, found, err := publish.LoadOutcome(ctx, w.store, identity)
+	if err != nil || !found {
+		return publish.Result{}, found, err
+	}
+	if outcome.Repo != candidate.Repo || outcome.BaseRef != candidate.BaseRef ||
+		outcome.HeadSHA != candidate.HeadSHA {
+		return publish.Result{}, false, fmt.Errorf(
+			"publication outcome disagrees with candidate: %w", domain.ErrParentKeyMismatch,
+		)
+	}
+	return publish.Result{
+		Identity: identity, Branch: outcome.Branch, PRNumber: outcome.PRNumber,
+	}, true, nil
 }
 
 // Resolve implements publish.CandidateResolver for the publication intent
@@ -1057,6 +1119,98 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	return domain.ValidateAttentionItemTransition(expected, current) == nil
 }
 
+func (w *fakePublicationWorkflow) recoverTerminalTask(
+	ctx context.Context,
+	task fakePublicationTask,
+) (taskOutcome, bool, error) {
+	var items []domain.AttentionItem
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		for _, id := range []domain.ItemID{
+			readyItemID(task.RunID), blockedItemID(task.RunID),
+		} {
+			item, err := tx.GetAttentionItem(ctx, id)
+			if errors.Is(err, store.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			items = append(items, item)
+		}
+		return nil
+	}); err != nil {
+		return taskOutcome{}, false, err
+	}
+	if len(items) == 0 {
+		return taskOutcome{}, false, nil
+	}
+	if len(items) != 1 {
+		return taskOutcome{}, false, fmt.Errorf(
+			"run %q has multiple terminal publication items", task.RunID,
+		)
+	}
+	item := items[0]
+	if item.ProjectID != task.ProjectID || item.Subject.Type != domain.SubjectRun ||
+		item.Subject.ID != domain.SubjectID(task.RunID) || item.Subject.RunID == nil ||
+		*item.Subject.RunID != task.RunID {
+		return taskOutcome{}, false, fmt.Errorf(
+			"terminal publication item %q does not match task: %w",
+			item.ID, domain.ErrParentKeyMismatch,
+		)
+	}
+	outcome := taskOutcome{}
+	switch item.Type {
+	case domain.AttentionPublishBlocked:
+		if item.ID != blockedItemID(task.RunID) {
+			return taskOutcome{}, false, fmt.Errorf(
+				"blocked item has unexpected id %q: %w", item.ID, domain.ErrParentKeyMismatch,
+			)
+		}
+		outcome.blocked = true
+	case domain.AttentionReadyForFinalReview:
+		if item.ID != readyItemID(task.RunID) {
+			return taskOutcome{}, false, fmt.Errorf(
+				"ready item has unexpected id %q: %w", item.ID, domain.ErrParentKeyMismatch,
+			)
+		}
+		prefix := task.Repo + "#"
+		const suffix = " is published and ready for final review."
+		if !strings.HasPrefix(item.Reason, prefix) || !strings.HasSuffix(item.Reason, suffix) {
+			return taskOutcome{}, false, fmt.Errorf("ready item %q has invalid reason", item.ID)
+		}
+		number := strings.TrimSuffix(strings.TrimPrefix(item.Reason, prefix), suffix)
+		prNumber, err := strconv.Atoi(number)
+		if err != nil || prNumber <= 0 {
+			return taskOutcome{}, false, fmt.Errorf(
+				"ready item %q has invalid pull request number", item.ID,
+			)
+		}
+		recipeDigest := task.RecipeDigest
+		published, found, err := w.loadPublicationOutcome(ctx, publish.Candidate{
+			Repo: task.Repo, BaseRef: task.BaseRef, HeadSHA: item.PRHeadSHA,
+			Artifacts: item.EvidenceSnapshot, RecipeDigest: &recipeDigest,
+		})
+		if err != nil {
+			return taskOutcome{}, false, err
+		}
+		if !found || published.PRNumber != prNumber {
+			return taskOutcome{}, false, fmt.Errorf(
+				"ready item %q has no matching publication outcome", item.ID,
+			)
+		}
+		outcome.ready = true
+		outcome.prNumber = prNumber
+	default:
+		return taskOutcome{}, false, fmt.Errorf(
+			"terminal item %q has unexpected type %q", item.ID, item.Type,
+		)
+	}
+	if err := w.finishTask(ctx, task); err != nil {
+		return taskOutcome{}, false, err
+	}
+	return outcome, true, nil
+}
+
 func (w *fakePublicationWorkflow) finishTask(ctx context.Context, task fakePublicationTask) error {
 	return w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.MarkOutboxDispatched(ctx, fakePublicationTaskKey(task.RunID))
@@ -1320,18 +1474,25 @@ func validateFakePublicationRecipePath(recipePath string) error {
 	return nil
 }
 
-// LoadFakePublicationRecipe recovers the exact approved recipe bytes bound
-// into one durable task, including after its outbox row is dispatched. It lets
-// the one-shot command bootstrap after the original recipe file changes or
-// disappears, both during recovery and terminal-result replay.
-func LoadFakePublicationRecipe(
+// FakePublicationReplay is the durable bootstrap state a one-shot command
+// needs before replaying its original request.
+type FakePublicationReplay struct {
+	Recipe       []byte
+	WorkspaceDir string
+	Dispatched   bool
+}
+
+// LoadFakePublicationReplay recovers the exact approved recipe, canonical
+// workspace identity, and dispatch status bound into one durable task.
+func LoadFakePublicationReplay(
 	ctx context.Context,
 	st *store.Store,
 	artifacts ArtifactStore,
 	runID domain.RunID,
-) ([]byte, bool, error) {
+) (FakePublicationReplay, bool, error) {
 	if st == nil || artifacts == nil {
-		return nil, false, errors.New("load fake publication recipe: nil dependency")
+		return FakePublicationReplay{}, false,
+			errors.New("load fake publication replay: nil dependency")
 	}
 	key := fakePublicationTaskKey(runID)
 	var entry store.QueueEntry
@@ -1341,27 +1502,29 @@ func LoadFakePublicationRecipe(
 		return err
 	}); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, false, nil
+			return FakePublicationReplay{}, false, nil
 		}
-		return nil, false, err
+		return FakePublicationReplay{}, false, err
 	}
 	if entry.IdempotencyKey != key || entry.Kind != fakePublicationTaskKind {
-		return nil, false, fmt.Errorf("task %q has kind %q: %w",
+		return FakePublicationReplay{}, false, fmt.Errorf("task %q has kind %q: %w",
 			key, entry.Kind, domain.ErrParentKeyMismatch)
 	}
 	task, err := decodeFakePublicationTask(entry.Payload)
 	if err != nil {
-		return nil, false, fmt.Errorf("task %q: %w", key, err)
+		return FakePublicationReplay{}, false, fmt.Errorf("task %q: %w", key, err)
 	}
 	if task.RunID != runID {
-		return nil, false, fmt.Errorf("task %q names run %q: %w",
+		return FakePublicationReplay{}, false, fmt.Errorf("task %q names run %q: %w",
 			key, task.RunID, domain.ErrParentKeyMismatch)
 	}
 	recipe, err := loadFakePublicationRecipe(artifacts, task.RecipeDigest)
 	if err != nil {
-		return nil, false, fmt.Errorf("task %q recipe: %w", key, err)
+		return FakePublicationReplay{}, false, fmt.Errorf("task %q recipe: %w", key, err)
 	}
-	return recipe, true, nil
+	return FakePublicationReplay{
+		Recipe: recipe, WorkspaceDir: task.WorkspaceDir, Dispatched: entry.Dispatched(),
+	}, true, nil
 }
 
 func loadFakePublicationRecipe(

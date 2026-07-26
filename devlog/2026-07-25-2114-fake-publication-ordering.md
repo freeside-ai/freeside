@@ -153,6 +153,18 @@ durable task row, pending or dispatched, before reopening the store with the
 recovered approval set. Changing or removing the original recipe file therefore
 cannot rewrite or strand already-committed work.
 
+The last crash-window sweep made replay prefer already-committed outcomes over
+fresh gates and ambient request spelling. A dispatched publication outcome is
+loaded by its derived identity and cross-checked against the reconstructed
+candidate before creating missing ready attention, so later trust drift cannot
+misreport a PR that already exists as blocked. A durable terminal attention
+item is validated against its task (and, for ready items, its publication
+outcome) and dispatches the task before the command may return it; sibling
+errors cannot hide an unfinished requested task. Finally, command bootstrap
+restores the workspace identity recorded in the durable task before replaying
+`StartFakePublication`, so a removed symlink alias cannot turn an idempotent
+replay into an immutable-input conflict.
+
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
 while workspace export and verification execution move behind those stronger

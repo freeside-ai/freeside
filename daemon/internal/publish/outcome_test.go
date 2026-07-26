@@ -1,12 +1,15 @@
 package publish_test
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 func fixtureOutcome() publish.Outcome {
@@ -126,5 +129,49 @@ func TestOutcomeKeyIsKindNamespacedFullDigest(t *testing.T) {
 	}
 	if strings.Contains(id.BranchName(), key) {
 		t.Errorf("OutcomeKey %q must be wider than the branch prefix %q", key, id.BranchName())
+	}
+}
+
+func TestLoadOutcomeReconstructsDurableResult(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	recipe := testRecipe
+	id, err := publish.DeriveIdentity(publish.IdentityInput{
+		Repo:            "freeside-ai/evidence-repo",
+		BaseRef:         "main",
+		SourceHeadSHA:   testHeadSHA,
+		ArtifactDigests: []domain.Digest{testArtifactD},
+		RecipeDigest:    &recipe,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := publish.Outcome{
+		Identity: id.Digest(), Repo: "freeside-ai/evidence-repo", BaseRef: "main",
+		HeadSHA: testHeadSHA, Branch: id.BranchName(), PRNumber: 101,
+		EvidenceEligible: true,
+	}
+	payload, err := want.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, _, err := tx.RecordInbox(
+			ctx, publish.OutcomeKey(id), publish.IntentKindOutcome, payload,
+		)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := publish.LoadOutcome(ctx, st, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || got != want {
+		t.Fatalf("loaded outcome = %+v, found %t", got, found)
 	}
 }
