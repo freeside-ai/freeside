@@ -1,9 +1,9 @@
 ---
 title: Freeside Project Plan
-revision: 17
+revision: 18
 status: active
 phase: 1A
-updated: 2026-07-23
+updated: 2026-07-26
 ---
 
 # Freeside
@@ -615,6 +615,26 @@ remountable. Freeside must not implement or declare that class.
 Run the full conformance suite at startup, after configuration changes, and on
 the doctor's schedule. Run a lightweight probe before every unattended job.
 Golden images pin CLI versions. Workspaces use VM-local disk.
+
+Phase 1A.2 exception (owner decision, 2026-07-26): unattended admission may
+waive the encryption-state dimension of backup health, and only that
+dimension — checkpoint currency, artifact closure, and restore-test age
+still gate admission, evaluated against the local owner-only checkpoint
+(§5.10) — only while all of the following hold, checked mechanically at
+admission: an explicit operator-set `backup_encryption_waiver` naming the
+exact trusted numeric repository ID it covers is present in the daemon
+configuration; the run targets exactly that repository, verified against its
+trusted binding rather than a positional notion like "the first onboarded";
+and
+the daemon does not yet carry the encrypted, digest-bound `BackupCheckpoint`
+(a build that carries it rejects the waiver as invalid configuration,
+retiring the exception). Admission without the waiver fails closed as
+before, and every admission under it records the waiver in the run's audit
+record and surfaces the degraded posture as a `system_health` item whose
+blocking state the validated waiver configuration supersedes (the §4
+supersession rule), keeping it visible without blocking the subsequent
+admissions the waiver exists to permit. The encrypted checkpoint must land
+before the Phase 1A exit; the doctor (§10) packages its encryption check.
 
 Bootstrap exception: SwiftUI work is exempt until a macOS execution class
 exists.
@@ -1639,32 +1659,25 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 17:
+Revision 18:
 
-1. **The control plane is movable, not concurrent.** A stable
-   `control_plane_id` spans enrolled hosts, but exactly one host owns the
-   global execution seat. `standalone` remains the zero-configuration,
-   single-machine contract. `portable` adds a remote durability frontier and
-   active-epoch compare-and-swap only after a complete activation ceremony.
-   Every portable external effect requires the current epoch and a remotely
-   durable intent; store unavailability therefore stops effects. Complete
-   encrypted checkpoints, an encrypted append-only journal, encrypted
-   content-addressed blobs, and one atomic remote head make acknowledged
-   conversations, decisions, workflow state, and artifacts recoverable on
-   another enrolled host. Graceful and crash takeover restore the whole
-   frontier and record explicit adoption; graceful handoff quiesces workspace
-   writers before capturing the normalized workspace, while crash recovery
-   returns to the last successful daemon-side push and may lose all unexported
-   in-flight changes. Store eligibility is capability- and conformance-based,
-   with direct R2 as the first reference backend and consumer sync folders
-   excluded. Host-specific data-key wraps plus an offline recovery wrap close
-   the recovery path; excluding a host first revokes and verifies denial of its
-   replica credential, then rotates the data key and wraps. Per-machine GitHub
-   App keys remain independently revocable. The single active writer replaces
-   principal-wide installation leases and binding-set versions; pending
-   envelopes bind to `active_epoch` and `durable_intent_revision`.
+1. **The 1A.2 backup-health exception is a mechanical waiver, not prose.**
+   Unattended admission may waive only the encryption-state dimension of
+   backup health, with checkpoint currency, artifact closure, and
+   restore-test age still gating admission against the local owner-only
+   checkpoint (§5.10), only while an explicit operator-set
+   `backup_encryption_waiver` naming the exact trusted numeric repository ID
+   it covers is configured, the run targets exactly that repository, and the
+   build does not yet carry the encrypted,
+   digest-bound `BackupCheckpoint`; a build that carries it rejects the
+   waiver as invalid configuration, retiring the exception. Each waived
+   admission is recorded in the run's audit record and surfaced as a
+   `system_health` item the validated waiver configuration supersedes per
+   §4, visible but not blocking. The encrypted checkpoint must land before
+   the Phase 1A exit; the doctor packages its encryption check. Keeps a
+   serialized contract unit off the first real runs' critical path.
    Rejected alternatives and revisit conditions live in the decision note.
-   (User; devlog 2026-07-23-1932-movable-control-plane.md; #264.)
+   (User; devlog 2026-07-26-0957-1a2-chain-repair.md; #305.)
 
 ## 14. Risks
 
