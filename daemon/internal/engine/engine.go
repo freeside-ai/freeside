@@ -42,6 +42,10 @@ type Engine struct {
 	signet      *signet.Service
 	driver      exec.StageDriver
 	publication *fakePublicationWorkflow
+	// admission is the configured capability gate and durable-record writer
+	// (see WithAdmission); nil leaves dispatch exactly as it was before a
+	// runner backend existed to admit against.
+	admission *admitter
 }
 
 // Option configures an optional engine workflow without changing the shared

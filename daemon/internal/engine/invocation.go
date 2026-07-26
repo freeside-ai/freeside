@@ -75,11 +75,40 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			return started, fmt.Errorf("intent %q: run %q has no feedback stage",
 				entry.IdempotencyKey, binding.run.ID)
 		}
-		if _, err := e.recordAttempt(ctx, binding.run.ID, request.InvocationID); err != nil {
+		// Durable state decides first. The run snapshot already says whether
+		// this invocation has an attempt, and a recorded attempt starts under
+		// the admission stored beside it, so the live capability gate runs
+		// only for an attempt that does not exist yet. Admitting first would
+		// let a backend that no longer clears the floor strand work that was
+		// already admitted, which is the same mistake as letting the current
+		// configuration decide whether to read the record at all.
+		var fresh *domain.ExecutionAdmission
+		if !attemptRecorded(binding.run, request.InvocationID) {
+			admission, admitted, err := e.admitAttempt(ctx, binding, stage, request.InvocationID)
+			if err != nil {
+				// A backend below the floor is a typed refusal (§5.7): nothing
+				// is appended and nothing is started, so the intent stays
+				// pending for a pass under a backend that clears the floor.
+				return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
+			}
+			if admitted {
+				fresh = &admission
+			}
+		}
+		// recordAttempt reports the admission that is actually durable: on a
+		// replay it is the stored one, not a freshly built value whose
+		// admission instant (and therefore identity) has moved since. Starting
+		// under a fresh id would hand the driver an admission no reader can
+		// reconstruct.
+		_, effective, bound, err := e.recordAttempt(ctx, binding.run.ID, request.InvocationID, fresh)
+		if err != nil {
 			return started, err
 		}
 
 		startSpec := exec.StartSpec{RunID: binding.run.ID, StageID: stage.ID}
+		if bound {
+			startSpec = exec.StartSpecFromAdmission(effective)
+		}
 		if err := e.driver.Start(ctx, request.InvocationID, startSpec); err != nil {
 			if !errors.Is(err, exec.ErrDuplicateStart) {
 				return started, fmt.Errorf("intent %q: start: %w", entry.IdempotencyKey, err)
@@ -133,7 +162,7 @@ func (e *Engine) acceptCompletedInvocations(ctx context.Context) (int, error) {
 }
 
 func (e *Engine) acceptAttempt(ctx context.Context, run domain.Run, attempt domain.Attempt) (bool, error) {
-	if attempt.ID != domain.AttemptID("attempt-"+string(attempt.InvocationID)) {
+	if attempt.ID != attemptIDFor(attempt.InvocationID) {
 		return false, fmt.Errorf("attempt %q disagrees with invocation %q: %w",
 			attempt.ID, attempt.InvocationID, domain.ErrParentKeyMismatch)
 	}
@@ -187,6 +216,17 @@ func (e *Engine) acceptAttempt(ctx context.Context, run domain.Run, attempt doma
 		return false, fmt.Errorf("result status %q: %w", result.Status, ErrInvocationUnsuccessful)
 	}
 
+	// Re-gated here rather than before Inspect/Collect: a verdict taken before
+	// I/O and carried across it is a verdict about the past, and the trust
+	// profile an unattended or waived admission is anchored to can change
+	// while a driver call is in flight. This is the last point the engine
+	// controls before the acceptance commits.
+	//
+	// It is still not inside the accepting transaction, which signet owns
+	// (#316): a profile retired in the remaining window is not caught here.
+	if err := e.requireAdmissible(ctx, attempt.InvocationID); err != nil {
+		return false, err
+	}
 	if err := e.signet.AcceptAgentCompletion(ctx, attempt.InvocationID, signet.AgentReply{
 		Body: result.Summary, Attachments: result.Artifacts,
 	}); err != nil {
@@ -217,6 +257,54 @@ func (e *Engine) loadInvocationRequest(ctx context.Context, entry store.QueueEnt
 		)
 	}
 	return request, binding, nil
+}
+
+// requireAdmissible re-gates an attempt's admission before its result is
+// accepted. Reading the record runs the store's reconstruction gate, so an
+// attempt admitted under a floor policy has since raised stops here rather
+// than advancing the workflow: accepting that output would publish work
+// produced under an isolation class the operator now rejects, which is the
+// silent downgrade §5.7 refuses.
+//
+// An attempt with no admission record is left alone. Admission is configured
+// (see WithAdmission), and an attempt appended before it was, or by a build
+// that predates the record, has no audited class to re-gate; failing those
+// would wedge existing work on a contract that did not exist when it started.
+func (e *Engine) requireAdmissible(ctx context.Context, invocationID domain.InvocationID) error {
+	// Absence is a boolean here, never an error class. A refused
+	// reconstruction can itself surface as a not-found (a waived admission
+	// whose trusted profile is gone), and reading that as "no record" would
+	// accept output whose gate had explicitly failed closed.
+	err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		_, _, err := tx.LookupExecutionAdmission(ctx, invocationID)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("invocation %q is no longer admissible: %w", invocationID, err)
+	}
+	return nil
+}
+
+// attemptRecorded reports whether the run snapshot already carries an attempt
+// for this invocation. It reads the snapshot the pass already loaded rather
+// than the store, and recordAttempt re-checks authoritatively inside its own
+// transaction, so a concurrent append between the two is still caught.
+func attemptRecorded(run domain.Run, invocationID domain.InvocationID) bool {
+	for _, stage := range run.Stages {
+		for _, attempt := range stage.Attempts {
+			if attempt.InvocationID == invocationID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// attemptIDFor is the deterministic attempt identity for an invocation: the
+// engine derives it rather than generating one, so a replayed dispatch and the
+// admission recorded beside it name the same attempt.
+func attemptIDFor(invocationID domain.InvocationID) domain.AttemptID {
+	return domain.AttemptID("attempt-" + string(invocationID))
 }
 
 func (e *Engine) loadInvocationBinding(ctx context.Context, invocationID domain.InvocationID) (invocationBinding, error) {
@@ -337,8 +425,21 @@ func decodeInvocationRequest(payload []byte) (invocationRequest, error) {
 	return request, nil
 }
 
-func (e *Engine) recordAttempt(ctx context.Context, runID domain.RunID, invocationID domain.InvocationID) (bool, error) {
+// recordAttempt appends the attempt that makes an invocation discoverable
+// after a restart and, when the dispatch was admitted, records that admission
+// in the same transaction. Splitting the two would leave either an attempt
+// with no audited class or an admission for an attempt that was never
+// appended, and a crash between them is exactly when the record matters.
+func (e *Engine) recordAttempt(
+	ctx context.Context, runID domain.RunID, invocationID domain.InvocationID,
+	fresh *domain.ExecutionAdmission,
+) (bool, domain.ExecutionAdmission, bool, error) {
 	added := false
+	var effective domain.ExecutionAdmission
+	bound := fresh != nil
+	if fresh != nil {
+		effective = *fresh
+	}
 	err := e.store.Write(ctx, func(tx *store.WriteTx) error {
 		run, err := tx.GetRun(ctx, runID)
 		if err != nil {
@@ -349,9 +450,44 @@ func (e *Engine) recordAttempt(ctx context.Context, runID domain.RunID, invocati
 			for _, attempt := range stage.Attempts {
 				if attempt.InvocationID == invocationID {
 					if stage.ID != feedbackStageID(runID) ||
-						attempt.ID != domain.AttemptID("attempt-"+string(invocationID)) {
+						attempt.ID != attemptIDFor(invocationID) {
 						return fmt.Errorf("invocation %q is already bound to attempt %q in stage %q: %w",
 							invocationID, attempt.ID, stage.ID, domain.ErrParentKeyMismatch)
+					}
+					// The attempt is already durable, so this pass must start
+					// under whatever admission is stored beside it, never
+					// under the one it just built (whose instant, and so
+					// whose identity, has moved). The lookup does not depend
+					// on this process being configured to admit: an attempt
+					// that was admitted stays admitted, and a restart that
+					// happens to have lost the configuration must not
+					// downgrade it to an unbound start. Reading the record
+					// also re-gates it, so a floor raised in the meantime
+					// stops the replay here.
+					stored, found, err := tx.LookupExecutionAdmission(ctx, invocationID)
+					switch {
+					case err != nil:
+						// Reconstruction was refused, which is not the same as
+						// having no record: fail the replay rather than
+						// treating a closed gate as a legacy attempt.
+						return fmt.Errorf("replayed invocation %q: %w", invocationID, err)
+					case found:
+						effective, bound = stored, true
+					case e.admission == nil:
+						// No record exists, so there is no durable decision to
+						// honour here and the only question is what to do in
+						// its absence. That question, unlike anything about a
+						// record that does exist, is legitimately the current
+						// configuration's: an engine that admits nothing
+						// starts the attempt as it always did, while a
+						// configured one falls through and fails closed rather
+						// than starting unaudited work.
+						bound = false
+					default:
+						// Configured to admit, but the attempt carries no
+						// audited class: fail closed rather than invent one.
+						return fmt.Errorf("replayed invocation %q has no admission: %w",
+							invocationID, store.ErrNotFound)
 					}
 					return errReplay
 				}
@@ -365,7 +501,7 @@ func (e *Engine) recordAttempt(ctx context.Context, runID domain.RunID, invocati
 		}
 		stage := run.Stages[stageIndex]
 		stage.Attempts = append(stage.Attempts, domain.Attempt{
-			ID:           domain.AttemptID("attempt-" + string(invocationID)),
+			ID:           attemptIDFor(invocationID),
 			StageID:      stage.ID,
 			Number:       len(stage.Attempts) + 1,
 			InvocationID: invocationID,
@@ -374,16 +510,36 @@ func (e *Engine) recordAttempt(ctx context.Context, runID domain.RunID, invocati
 		if err := tx.PutRun(ctx, run); err != nil {
 			return err
 		}
+		if fresh != nil {
+			if err := tx.RecordExecutionAdmission(ctx, *fresh); err != nil {
+				return err
+			}
+			// §5.7 requires a waived admission to surface its degraded
+			// posture, not only to record the waiver. It lands in this same
+			// transaction: an admission committed without its notice would
+			// leave unattended work running on the exception with nothing
+			// telling the operator so.
+			if fresh.BackupEncryptionWaiver != nil {
+				item, err := waivedPostureItem(run, invocationID, *fresh.BackupEncryptionWaiver)
+				if err != nil {
+					return err
+				}
+				if err := tx.PutAttentionItem(ctx, item); err != nil {
+					return err
+				}
+			}
+		}
 		added = true
 		return nil
 	})
 	if errors.Is(err, errReplay) {
-		return false, nil
+		return false, effective, bound, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("record invocation %q on run %q: %w", invocationID, runID, err)
+		return false, domain.ExecutionAdmission{}, false,
+			fmt.Errorf("record invocation %q on run %q: %w", invocationID, runID, err)
 	}
-	return added, nil
+	return added, effective, bound, nil
 }
 
 func findFeedbackStage(run domain.Run) (domain.Stage, bool) {
