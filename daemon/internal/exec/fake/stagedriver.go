@@ -216,6 +216,17 @@ func (d *StageDriver) Start(_ context.Context, id domain.InvocationID, spec exec
 	return nil
 }
 
+// StartSpec returns the durable intent an invocation was started with, and
+// whether it was started at all. It exists for assertions about what a caller
+// dispatched: the spec is the committed intent, so a test can hold a
+// dispatcher to the bindings it claimed to run under, across a restart.
+func (d *StageDriver) StartSpec(id domain.InvocationID) (exec.StartSpec, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	spec, ok := d.intents[id]
+	return spec, ok
+}
+
 // Inspect consumes one scripted step and reports the resulting status.
 func (d *StageDriver) Inspect(_ context.Context, id domain.InvocationID) (exec.Status, error) {
 	d.mu.Lock()

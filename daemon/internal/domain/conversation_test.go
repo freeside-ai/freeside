@@ -203,3 +203,62 @@ func TestAgentInvocationValidate(t *testing.T) {
 		}
 	}
 }
+
+// TestComputeInputDigestAddressesInputsNotTheRecord pins what the digest is
+// for: two invocations of identical inputs share it, so an audit comparison
+// across runs is about the inputs rather than about which daemon-assigned id
+// happened to carry them. Changing a bound input still changes it.
+func TestComputeInputDigestAddressesInputsNotTheRecord(t *testing.T) {
+	conversation := domain.ConversationID("conv-1")
+	first, err := domain.NewAgentInvocation("inv-1", []domain.ArtifactID{"art-1"}, &conversation, 2)
+	if err != nil {
+		t.Fatalf("NewAgentInvocation: %v", err)
+	}
+	rerun, err := domain.NewAgentInvocation("inv-2", []domain.ArtifactID{"art-1"}, &conversation, 2)
+	if err != nil {
+		t.Fatalf("NewAgentInvocation: %v", err)
+	}
+
+	firstDigest, err := first.ComputeInputDigest()
+	if err != nil {
+		t.Fatalf("ComputeInputDigest: %v", err)
+	}
+	rerunDigest, err := rerun.ComputeInputDigest()
+	if err != nil {
+		t.Fatalf("ComputeInputDigest: %v", err)
+	}
+	if firstDigest != rerunDigest {
+		t.Fatalf("same inputs under a new id digest to %s and %s", firstDigest, rerunDigest)
+	}
+
+	for _, tc := range []struct {
+		name       string
+		invocation domain.AgentInvocation
+	}{
+		{"other artifact", mustInvocation(t, "inv-3", []domain.ArtifactID{"art-2"}, &conversation, 2)},
+		{"other prefix", mustInvocation(t, "inv-4", []domain.ArtifactID{"art-1"}, &conversation, 1)},
+		{"artifacts only", mustInvocation(t, "inv-5", []domain.ArtifactID{"art-1"}, nil, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			other, err := tc.invocation.ComputeInputDigest()
+			if err != nil {
+				t.Fatalf("ComputeInputDigest: %v", err)
+			}
+			if other == firstDigest {
+				t.Fatalf("%s digests the same as the original binding", tc.name)
+			}
+		})
+	}
+}
+
+func mustInvocation(
+	t *testing.T, id domain.InvocationID, inputs []domain.ArtifactID,
+	conversation *domain.ConversationID, through int,
+) domain.AgentInvocation {
+	t.Helper()
+	invocation, err := domain.NewAgentInvocation(id, inputs, conversation, through)
+	if err != nil {
+		t.Fatalf("NewAgentInvocation: %v", err)
+	}
+	return invocation
+}

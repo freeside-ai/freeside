@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -307,6 +308,78 @@ func TestGolden(t *testing.T) {
 	stage := domain.Stage{ID: "stage-1", RunID: "run-1", Name: "implementation", Attempts: []domain.Attempt{attempt}}
 	run := domain.Run{ID: "run-1", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: resolvedPolicy.Digest, Stages: []domain.Stage{stage}}
 
+	// The provider identity the stage below runs under, and a live lease on
+	// its auth store.
+	identity := domain.AuthIdentity{
+		ID: "auth-claude-owner", Provider: "claude", AuthStoreMutationLease: true,
+		MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
+	}
+	mutationLease := domain.AuthStoreMutationLease{
+		AuthIdentityID: identity.ID, Holder: "inv-1", Fence: 1,
+		AcquiredAt: ts, ExpiresAt: ts.Add(5 * time.Minute),
+	}
+
+	// The durable execution record for that attempt. Capabilities are passed
+	// unsorted to exercise the constructor's canonicalization.
+	authIdentity := identity.ID
+	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: "inv-1", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-1",
+		Backend: "fresh_vm_read_only_volume_handoff",
+		Capabilities: domain.CapabilitySnapshot{
+			domain.CapPostExitExport, domain.CapDetachableWorkspace, domain.CapReadOnlyRemount,
+		},
+		OperatingMode:  domain.ModeAttendedDev,
+		CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile:  domain.EgressProviderOnly,
+		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
+		SpecDigest:     "sha256:spec", PolicyDigest: resolvedPolicy.Digest, InputDigest: "sha256:input",
+		Base:           domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
+		Workspace:      "freeside-handoff-run-1-ws",
+		AuthIdentityID: &authIdentity,
+		AdmittedAt:     ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waivedProfileDigest := domain.Digest("sha256:trust-profile-v1")
+	// The waived, unattended variant: both pointer-for-optional branches
+	// (waiver present, auth identity absent under clean verification) render
+	// explicitly, so neither discriminator goes unpinned.
+	waivedAdmission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: "inv-2", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-2",
+		Backend:        "fresh_vm_read_only_volume_handoff",
+		Capabilities:   domain.CapabilitySnapshot(domain.AllRunnerCapabilities),
+		OperatingMode:  domain.ModeUnattended,
+		CredentialMode: domain.CredentialSubscriptionContained,
+		EgressProfile:  domain.EgressCleanVerification,
+		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/verifier@sha256:" + strings.Repeat("cd", 32)),
+		SpecDigest:     "sha256:spec", PolicyDigest: resolvedPolicy.Digest, InputDigest: "sha256:input",
+		Base:               domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
+		Workspace:          "freeside-handoff-run-1-ws",
+		TrustProfileDigest: &waivedProfileDigest,
+		BackupEncryptionWaiver: &domain.BackupEncryptionWaiver{
+			RepositoryID: 424242, Reason: "phase 1a.2 supervised runs (plan §5.7)",
+		},
+		AdmittedAt: ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	evidenceManifest := domain.Digest("sha256:evidence-manifest")
+	export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+		InvocationID: "inv-1", AdmissionID: admission.ID,
+		ObservedBaseSHA: "deadbeef", HeadSHA: "cafebabe",
+		ManifestDigest:         "sha256:change-manifest",
+		EvidenceManifestDigest: &evidenceManifest,
+		CommitPlanPresent:      true,
+		RecordedAt:             ts.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// The command binds the item above: its accepted version, head, and the
 	// item's derived binding set (union of the evidence and claim digests). The
 	// digests are passed out of order to exercise NewCommand's canonicalization.
@@ -370,6 +443,11 @@ func TestGolden(t *testing.T) {
 		{"run", run},
 		{"stage", stage},
 		{"attempt", attempt},
+		{"auth_identity", identity},
+		{"auth_store_mutation_lease", mutationLease},
+		{"execution_admission", admission},
+		{"execution_admission_waived", waivedAdmission},
+		{"execution_export", export},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

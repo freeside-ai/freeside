@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"slices"
 	"time"
 
 	// The pure-Go SQLite driver: keeps the daemon a single static binary
@@ -35,6 +36,27 @@ type Options struct {
 	// process-global here, to be replaced by a per-run/per-policy resolver when
 	// policy resolution is wired (no such source exists yet).
 	ApprovedRecipes map[domain.Digest]bool
+
+	// AdmissionFloors is the minimum runner capability class current policy
+	// requires of each operating mode (plan §5.7). Every write and read of an
+	// execution admission re-checks the recorded spawn-time snapshot against
+	// it, so a class admitted under a weaker floor stops reading as admissible
+	// once policy raises it. A missing entry admits nothing: an unconfigured
+	// floor is not an empty floor. Provisional and process-global for the same
+	// reason ApprovedRecipes is.
+	AdmissionFloors map[domain.OperatingMode]domain.CapabilitySnapshot
+
+	// ApprovedCredentialModes is the set of credential containments policy has
+	// approved for unattended running (§5.7). Empty approves nothing, so an
+	// unattended admission fails closed; attended_dev is not held to it.
+	ApprovedCredentialModes []domain.CredentialMode
+
+	// BackupEncryptionWaiverRepositoryID is the exact trusted numeric
+	// repository ID the operator waived §5.7's backup-encryption dimension
+	// for, or nil when no waiver is configured. An admission claiming a waiver
+	// this does not match fails closed at the boundary, so the waiver cannot
+	// be forged into a row.
+	BackupEncryptionWaiverRepositoryID *int64
 }
 
 // Store is the daemon's handle on its SQLite database. Open configures the
@@ -46,6 +68,9 @@ type Store struct {
 	// snapshotted at Open and threaded into every transaction. Read-only after
 	// Open, so it is safe to share across concurrent transactions.
 	approvedRecipes map[domain.Digest]bool
+	// admissionPolicy is the execution-admission half of the same boundary
+	// policy (see Options.AdmissionFloors), snapshotted the same way.
+	admissionPolicy domain.AdmissionPolicy
 }
 
 // Open opens (creating if absent) the database at path, applies the §5.2
@@ -63,9 +88,31 @@ func Open(ctx context.Context, path string, opts Options) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	// Snapshot the approved-recipe set so a caller mutating its map after Open
-	// cannot change the boundary policy under a live store.
-	return &Store{db: db, approvedRecipes: maps.Clone(opts.ApprovedRecipes)}, nil
+	// Snapshot the boundary policy so a caller mutating its maps or slices
+	// after Open cannot change it under a live store.
+	return &Store{
+		db:              db,
+		approvedRecipes: maps.Clone(opts.ApprovedRecipes),
+		admissionPolicy: cloneAdmissionPolicy(opts),
+	}, nil
+}
+
+// cloneAdmissionPolicy detaches the admission policy from the caller's
+// options: the floors map, each floor slice, and the waiver pointer.
+func cloneAdmissionPolicy(opts Options) domain.AdmissionPolicy {
+	policy := domain.AdmissionPolicy{}
+	if opts.AdmissionFloors != nil {
+		policy.Floors = make(map[domain.OperatingMode]domain.CapabilitySnapshot, len(opts.AdmissionFloors))
+		for mode, floor := range opts.AdmissionFloors {
+			policy.Floors[mode] = floor.Clone()
+		}
+	}
+	policy.ApprovedCredentialModes = slices.Clone(opts.ApprovedCredentialModes)
+	if opts.BackupEncryptionWaiverRepositoryID != nil {
+		waiver := *opts.BackupEncryptionWaiverRepositoryID
+		policy.BackupEncryptionWaiverRepositoryID = &waiver
+	}
+	return policy
 }
 
 // openDB opens the raw database handle without migrating. The pragmas ride

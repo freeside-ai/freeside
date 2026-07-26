@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
 
@@ -206,5 +207,32 @@ func TestCheckCapabilitiesAdmissionFrozen(t *testing.T) {
 	}
 	if adm2.Declared.Has("supports_time_travel") {
 		t.Error("a mutated prior snapshot must not leak into a new admission")
+	}
+}
+
+// TestCapabilitySetSnapshotIsCanonical pins the persisted rendering of a live
+// declaration: sorted, deduplicated, and detached from the map, so one
+// declaration cannot serialize two ways depending on iteration order. An
+// empty declaration renders as nil, the one representation for "nothing".
+func TestCapabilitySetSnapshotIsCanonical(t *testing.T) {
+	set := exec.NewCapabilitySet(exec.CapReadOnlyRemount, exec.CapDetachableWorkspace)
+	want := domain.CapabilitySnapshot{exec.CapDetachableWorkspace, exec.CapReadOnlyRemount}
+	for range 8 { // map iteration order varies per range; the snapshot must not.
+		if got := set.Snapshot(); !slices.Equal(got, want) {
+			t.Fatalf("Snapshot() = %v, want %v", got, want)
+		}
+	}
+	if err := set.Snapshot().Validate(); err != nil {
+		t.Fatalf("snapshot of a declared set must validate: %v", err)
+	}
+	if got := exec.NewCapabilitySet().Snapshot(); got != nil {
+		t.Errorf("empty set Snapshot() = %v, want nil", got)
+	}
+	// The snapshot is the admitted record's field, so it must not alias the
+	// backend's live map: emptying the set afterwards leaves it unchanged.
+	snapshot := set.Snapshot()
+	delete(set, exec.CapDetachableWorkspace)
+	if !slices.Equal(snapshot, want) {
+		t.Errorf("snapshot = %v after the set was narrowed, want %v", snapshot, want)
 	}
 }

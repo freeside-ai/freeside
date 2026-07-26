@@ -104,6 +104,26 @@ func TestEnumValidity(t *testing.T) {
 		valids["VerificationOutcome"] = append(valids["VerificationOutcome"], v.valid)
 	}
 	invalids["VerificationOutcome"] = VerificationOutcome("").valid
+	for _, v := range AllRunnerCapabilities {
+		valids["RunnerCapability"] = append(valids["RunnerCapability"], v.valid)
+	}
+	invalids["RunnerCapability"] = RunnerCapability("").valid
+	for _, v := range AllOperatingModes {
+		valids["OperatingMode"] = append(valids["OperatingMode"], v.valid)
+	}
+	invalids["OperatingMode"] = OperatingMode("").valid
+	for _, v := range AllCredentialModes {
+		valids["CredentialMode"] = append(valids["CredentialMode"], v.valid)
+	}
+	invalids["CredentialMode"] = CredentialMode("").valid
+	for _, v := range AllEgressProfiles {
+		valids["EgressProfile"] = append(valids["EgressProfile"], v.valid)
+	}
+	invalids["EgressProfile"] = EgressProfile("").valid
+	for _, v := range AllRefreshStrategies {
+		valids["RefreshStrategy"] = append(valids["RefreshStrategy"], v.valid)
+	}
+	invalids["RefreshStrategy"] = RefreshStrategy("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {

@@ -34,6 +34,11 @@ var (
 	ErrInvalidFindingDisposition = errors.New("invalid finding disposition")
 	ErrInvalidFindingOrigin      = errors.New("invalid candidate finding origin")
 	ErrInvalidOutcome            = errors.New("invalid verification outcome")
+	ErrInvalidRunnerCapability   = errors.New("invalid runner capability")
+	ErrInvalidOperatingMode      = errors.New("invalid operating mode")
+	ErrInvalidCredentialMode     = errors.New("invalid credential mode")
+	ErrInvalidEgressProfile      = errors.New("invalid egress profile")
+	ErrInvalidRefreshStrategy    = errors.New("invalid refresh strategy")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")
@@ -74,6 +79,10 @@ var (
 	ErrCategoryInconsistent     = errors.New("control-plane category is required exactly for control-plane findings")
 	ErrWaiverInconsistent       = errors.New("waiver record is required exactly for waived findings")
 	ErrFindingPathConflict      = errors.New("finding carries both path and path_hex")
+	ErrCapabilitiesNotCanonical = errors.New("capability snapshot is not in canonical (sorted, deduplicated) order")
+	ErrImageNotDigestPinned     = errors.New("image reference is not pinned to a sha256 digest")
+	ErrAuthIdentityInconsistent = errors.New("auth identity is inconsistent with the stage's egress profile")
+	ErrExportBaseMismatch       = errors.New("observed export base does not match the admitted base")
 
 	// Trust-boundary failures.
 	ErrPlaintextCredential         = errors.New("credential material must be a sha256 digest, never plaintext")
@@ -86,6 +95,17 @@ var (
 	ErrProfileDigestMismatch       = errors.New("trust-profile digest does not match its content")
 	ErrAuthorizationInconsistent   = errors.New("candidate authorization id or authorizes_publication does not match its content")
 	ErrTrustProfileDrift           = errors.New("observed automation authority drifted from the approved trust profile")
+	ErrAdmissionInconsistent       = errors.New("execution admission id does not match its content")
+	ErrUnknownAdmissionFloor       = errors.New("no capability floor is configured for the admission's operating mode")
+	ErrCapabilityBelowFloor        = errors.New("admitted capability class is below the current policy floor")
+	ErrCredentialModeNotApproved   = errors.New("unattended admission runs under a credential mode policy has not approved")
+	ErrWaiverNotConfigured         = errors.New("admission claims a backup encryption waiver the operator has not configured")
+	ErrWaiverRepositoryMismatch    = errors.New("admission targets a repository the backup encryption waiver does not cover")
+	ErrWaiverModeMismatch          = errors.New("backup encryption waiver claimed outside unattended running")
+	ErrTrustProfileInconsistent    = errors.New("trust profile digest is inconsistent with the admission's operating mode")
+	ErrTrustProfileSuperseded      = errors.New("admission names a trust profile revision that is no longer active")
+	ErrBackupAuthorizationMissing  = errors.New("unattended admission presents no backup authorization")
+	ErrRepositoryIdentityMismatch  = errors.New("recorded repository identity does not match the repository's trusted profile")
 	ErrNonWaivableFinding          = errors.New("finding class is non-waivable")
 	ErrAgentWaiver                 = errors.New("an agent cannot author a waiver")
 

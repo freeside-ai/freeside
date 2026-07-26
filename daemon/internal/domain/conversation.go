@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"time"
@@ -196,6 +198,42 @@ func NewAgentInvocation(id InvocationID, inputIDs []ArtifactID, conversationID *
 		return AgentInvocation{}, err
 	}
 	return inv, nil
+}
+
+// invocationInputEncodingVersion tags the canonical serialization
+// ComputeInputDigest addresses.
+const invocationInputEncodingVersion = "freeside.agent.invocation.inputs/v1"
+
+// canonicalInvocationInputs is what the input digest covers: the bound inputs
+// and nothing else. The invocation's own id is excluded deliberately — with it
+// in the hash the digest would address the record rather than the inputs, so
+// re-running identical inputs under a new daemon-assigned id would look like
+// different inputs to every audit comparison. Input order is preserved rather
+// than sorted: it is how the invocation recorded its binding, not a set.
+type canonicalInvocationInputs struct {
+	Version         string          `json:"version"`
+	InputIDs        []ArtifactID    `json:"input_ids"`
+	ConversationID  *ConversationID `json:"conversation_id"`
+	ThroughSequence int             `json:"through_sequence"`
+}
+
+// ComputeInputDigest returns the content address of everything this invocation
+// is bound to: its input artifacts and its immutable conversation prefix. The
+// record already is the binding (§5.14), so digesting it is what lets a
+// durable execution record name the inputs a stage ran against without
+// inventing a second notion of "the inputs". Two invocations of the same
+// inputs share a digest, which is what makes it comparable across runs.
+func (a AgentInvocation) ComputeInputDigest() (Digest, error) {
+	body, err := json.Marshal(canonicalInvocationInputs{
+		Version:         invocationInputEncodingVersion,
+		InputIDs:        a.InputIDs,
+		ConversationID:  a.ConversationID,
+		ThroughSequence: a.ThroughSequence,
+	})
+	if err != nil {
+		return "", fmt.Errorf("agent invocation %s input digest: %w", a.ID, err)
+	}
+	return Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body))), nil
 }
 
 // Validate reports whether the invocation is well-formed. It is the
