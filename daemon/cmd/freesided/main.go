@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
 const defaultReconcileInterval = 100 * time.Millisecond
@@ -45,12 +47,50 @@ func main() {
 	listenAddr := flags.String("listen", "127.0.0.1:0", "signet listener address (loopback only)")
 	ntfyURL := flags.String("ntfy-url", defaultNtfyURL, "ntfy server URL for device notifications")
 	interval := flags.Duration("reconcile-interval", defaultReconcileInterval, "workflow reconciliation interval")
+	fakePublication := flags.Bool("fake-publication", false, "run one explicit attended fake-candidate publication")
+	publicationStateDir := flags.String("publication-state-dir", "", "GitHub App authority state directory")
+	publicationCredentialsDir := flags.String("publication-credentials-dir", "", "GitHub App credential directory")
+	publicationWorkDir := flags.String("publication-work-dir", "", "durable publication handoff directory")
+	publicationWorkspace := flags.String("publication-workspace", "", "fake candidate workspace to export")
+	publicationRecipe := flags.String("publication-recipe", "", "trusted JSON verification recipe")
+	publicationRecipePath := flags.String("publication-recipe-path", verify.DefaultRecipePath, "repository-relative verification recipe path")
+	publicationRepo := flags.String("publication-repo", "", "managed owner/name repository")
+	publicationBaseRef := flags.String("publication-base-ref", "", "managed repository base branch")
+	publicationBaseSHA := flags.String("publication-base-sha", "", "exact 40-character base commit")
+	publicationAllowedPaths := flags.String("publication-allowed-paths", "**", "comma-separated candidate path allowlist")
+	publicationRunID := flags.String("publication-run-id", "run-fake-publication", "durable publication run id")
+	publicationProjectID := flags.String("publication-project-id", "project-fake-publication", "publication project id")
+	publicationTitle := flags.String("publication-title", "Publish attended fake candidate", "pull request title")
+	publicationBody := flags.String("publication-body", "", "pull request body")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if *fakePublication {
+		result, err := runFakePublicationCommand(ctx, fakePublicationCommandConfig{
+			DBPath: *dbPath, FakeDriverDir: *driverDir,
+			StateDir: *publicationStateDir, CredentialsDir: *publicationCredentialsDir,
+			WorkDir: *publicationWorkDir, WorkspaceDir: *publicationWorkspace,
+			RecipeFile: *publicationRecipe, RecipeRepoPath: *publicationRecipePath,
+			Repo:    *publicationRepo,
+			BaseRef: *publicationBaseRef, BaseSHA: *publicationBaseSHA,
+			AllowedPaths: strings.Split(*publicationAllowedPaths, ","),
+			RunID:        domain.RunID(*publicationRunID), ProjectID: domain.ProjectID(*publicationProjectID),
+			Title: *publicationTitle, Body: *publicationBody,
+			ReconcileInterval: *interval,
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "freesided:", err)
+			os.Exit(1)
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
+			fmt.Fprintln(os.Stderr, "freesided:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	h, err := run(ctx, config{
 		DBPath: *dbPath, FakeDriverDir: *driverDir,
 		ListenAddr: *listenAddr, NtfyURL: *ntfyURL, ReconcileInterval: *interval,
