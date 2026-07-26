@@ -85,6 +85,18 @@ transcript bytes may vary. Path containment preserves case on case-sensitive
 filesystems and folds only when an existing ancestor proves the volume is
 case-insensitive.
 
+The next automated-review round correctly found that the terminal command
+result reported only `attended_dev`; it now also reports the actual
+`process_local` isolation class. The round also proposed moving candidate
+verification behind a credential-inaccessible filesystem boundary before this
+path may use the live App keystore. That stronger boundary is deliberately not
+folded into this work unit: #236 explicitly excludes the real Ward gate and
+assigns it to the next unit, #237, while plan §5.7 permits `attended_dev` to use
+a weaker runner class provided that class is reported honestly. The
+process-local exposure therefore remains an attended-development limitation,
+not an unattended security claim; this command never enables automatic or
+unattended startup.
+
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
 while workspace export and verification execution move behind those stronger

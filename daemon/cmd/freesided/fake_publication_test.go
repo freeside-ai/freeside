@@ -155,7 +155,7 @@ func TestExistingFakePublicationResultReturnsDurableTerminalItem(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !ok || result.ItemID != item.ID || result.ItemType != item.Type ||
-		result.OperatingMode != "attended_dev" {
+		result.OperatingMode != "attended_dev" || result.IsolationClass != "process_local" {
 		t.Fatalf("terminal result = %+v, %t", result, ok)
 	}
 }

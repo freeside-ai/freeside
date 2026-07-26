@@ -26,6 +26,7 @@ const (
 	defaultGitHubRemoteBase    = "https://github.com"
 	defaultJanitorInterval     = 30 * time.Second
 	defaultJanitorRemovalBound = 10
+	fakePublicationIsolation   = "process_local"
 )
 
 type fakePublicationCommandConfig struct {
@@ -50,12 +51,13 @@ type fakePublicationCommandConfig struct {
 }
 
 type fakePublicationCommandResult struct {
-	OperatingMode string               `json:"operating_mode"`
-	RunID         domain.RunID         `json:"run_id"`
-	ItemID        domain.ItemID        `json:"item_id"`
-	ItemType      domain.AttentionType `json:"item_type"`
-	HeadSHA       string               `json:"head_sha,omitempty"`
-	PRNumber      int                  `json:"pr_number,omitempty"`
+	OperatingMode  string               `json:"operating_mode"`
+	IsolationClass string               `json:"isolation_class"`
+	RunID          domain.RunID         `json:"run_id"`
+	ItemID         domain.ItemID        `json:"item_id"`
+	ItemType       domain.AttentionType `json:"item_type"`
+	HeadSHA        string               `json:"head_sha,omitempty"`
+	PRNumber       int                  `json:"pr_number,omitempty"`
 }
 
 func runFakePublicationCommand(
@@ -343,11 +345,12 @@ func existingFakePublicationResult(
 				fmt.Errorf("terminal publication item %q does not match run", terminal.id)
 		}
 		result := fakePublicationCommandResult{
-			OperatingMode: engine.OperatingModeAttendedDev,
-			RunID:         cfg.RunID,
-			ItemID:        terminal.id,
-			ItemType:      terminal.itemType,
-			HeadSHA:       item.PRHeadSHA,
+			OperatingMode:  engine.OperatingModeAttendedDev,
+			IsolationClass: fakePublicationIsolation,
+			RunID:          cfg.RunID,
+			ItemID:         terminal.id,
+			ItemType:       terminal.itemType,
+			HeadSHA:        item.PRHeadSHA,
 		}
 		if terminal.itemType == domain.AttentionReadyForFinalReview {
 			prefix := cfg.Repo + "#"
