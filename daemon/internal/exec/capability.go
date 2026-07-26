@@ -6,49 +6,41 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 // Capability is an isolation property a runner backend either has or lacks
 // (plan §5.7). Backends declare capabilities, policy states minimums, and an
 // unmet minimum is a typed refusal, never a silent downgrade: a weaker
 // isolation class is a different risk posture, not a degraded mode.
-type Capability string
+//
+// The vocabulary itself lives in domain, because an admitted declaration is
+// persisted in the execution record and re-gated when the store reconstructs
+// it, and neither domain nor store may import exec. This alias keeps exec the
+// place drivers and backends name capabilities from, with one registration
+// point behind it.
+type Capability = domain.RunnerCapability
 
 // The named §5.7 capabilities.
 const (
-	CapDetachableWorkspace    Capability = "supports_detachable_workspace"
-	CapPostExitExport         Capability = "supports_post_exit_export"
-	CapReadOnlyRemount        Capability = "supports_read_only_remount"
-	CapCredentialVolumeDetach Capability = "supports_credential_volume_detach"
-	CapWorkspaceSnapshot      Capability = "supports_workspace_snapshot"
-	CapNetworklessExport      Capability = "supports_networkless_export"
+	CapDetachableWorkspace    = domain.CapDetachableWorkspace
+	CapPostExitExport         = domain.CapPostExitExport
+	CapReadOnlyRemount        = domain.CapReadOnlyRemount
+	CapCredentialVolumeDetach = domain.CapCredentialVolumeDetach
+	CapWorkspaceSnapshot      = domain.CapWorkspaceSnapshot
+	CapNetworklessExport      = domain.CapNetworklessExport
 )
 
 // AllCapabilities lists every valid Capability; it drives table-driven tests
-// and is the single place a new capability is registered.
-var AllCapabilities = []Capability{
-	CapDetachableWorkspace,
-	CapPostExitExport,
-	CapReadOnlyRemount,
-	CapCredentialVolumeDetach,
-	CapWorkspaceSnapshot,
-	CapNetworklessExport,
-}
-
-func (c Capability) valid() bool {
-	switch c {
-	case CapDetachableWorkspace, CapPostExitExport, CapReadOnlyRemount,
-		CapCredentialVolumeDetach, CapWorkspaceSnapshot, CapNetworklessExport:
-		return true
-	default:
-		return false
-	}
-}
+// and aliases the single place a new capability is registered.
+var AllCapabilities = domain.AllRunnerCapabilities
 
 // CapabilitySet is the set of capabilities a backend declares. Sets are built
 // with NewCapabilitySet and queried with Has; the map form keeps membership
-// checks O(1) and JSON out of scope (capability declarations are runtime
-// facts, not persisted contracts).
+// checks O(1) and JSON out of scope. A live declaration stays a runtime fact:
+// what persists is Snapshot's canonical slice, which is a different type with
+// a single byte form.
 type CapabilitySet map[Capability]struct{}
 
 // NewCapabilitySet builds a set from the given capabilities.
@@ -64,6 +56,16 @@ func NewCapabilitySet(caps ...Capability) CapabilitySet {
 func (s CapabilitySet) Has(c Capability) bool {
 	_, ok := s[c]
 	return ok
+}
+
+// Snapshot renders the set in the canonical form the domain persists: sorted,
+// deduplicated, and detached from the map, so one declaration cannot serialize
+// two ways depending on map iteration order.
+func (s CapabilitySet) Snapshot() domain.CapabilitySnapshot {
+	if len(s) == 0 {
+		return nil
+	}
+	return domain.NewCapabilitySnapshot(slices.Collect(maps.Keys(s))...)
 }
 
 // Clone returns an independent copy of the set. CapabilitySet is a map, so
@@ -143,16 +145,12 @@ type Admission struct {
 // observe-a-different-set race this snapshot exists to close.
 func CheckCapabilities(backend RunnerBackend, minimum []Capability) (Admission, error) {
 	declared := backend.Capabilities()
-	var missing []Capability
-	for _, c := range minimum {
-		if !c.valid() || !declared.Has(c) {
-			missing = append(missing, c)
-		}
+	// domain.MissingCapabilities is the same predicate the store re-runs when
+	// it reconstructs a persisted admission, so a snapshot cannot pass the
+	// spawn gate under one reading of the floor and fail re-admission under
+	// another.
+	if missing := domain.MissingCapabilities(declared.Snapshot(), minimum); len(missing) > 0 {
+		return Admission{}, &CapabilityRefusal{Backend: backend.Name(), Missing: missing}
 	}
-	if len(missing) == 0 {
-		return Admission{Backend: backend.Name(), Declared: declared.Clone()}, nil
-	}
-	slices.Sort(missing)
-	missing = slices.Compact(missing)
-	return Admission{}, &CapabilityRefusal{Backend: backend.Name(), Missing: missing}
+	return Admission{Backend: backend.Name(), Declared: declared.Clone()}, nil
 }
