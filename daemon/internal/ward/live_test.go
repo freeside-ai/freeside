@@ -355,15 +355,15 @@ func importLiveExport(t *testing.T, exportDir string) importer.Result {
 }
 
 // rungitLive runs a git command in dir for the live test's import plumbing. It
-// isolates git config and pins a fixture identity (like the importer's own test
-// runner), so the temporary repo's commit does not inherit or require host
-// user.name/user.email or trip a host commit.gpgsign.
+// isolates ambient git state and config and pins a fixture identity (like the
+// importer's own test runner), so the temporary repo's commit does not inherit
+// or require host user.name/user.email or trip a host commit.gpgsign.
 func rungitLive(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := osexec.Command("git", args...) //nolint:gosec // fixed args, test-owned dir
 	cmd.Dir = dir
 	cmd.Env = append(
-		os.Environ(),
+		scrubbedLiveGitEnv(),
 		"GIT_CONFIG_GLOBAL="+os.DevNull,
 		"GIT_CONFIG_SYSTEM="+os.DevNull,
 		"GIT_CONFIG_NOSYSTEM=1",
@@ -379,6 +379,41 @@ func rungitLive(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
 	}
 	return string(out)
+}
+
+func scrubbedLiveGitEnv() []string {
+	var env []string
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "GIT_") {
+			env = append(env, entry)
+		}
+	}
+	return env
+}
+
+func TestRungitLiveIgnoresAmbientGitDir(t *testing.T) {
+	fixture := t.TempDir()
+	rungitLive(t, fixture, "init", "-q")
+	decoy := t.TempDir()
+	rungitLive(t, decoy, "init", "-q")
+
+	t.Setenv("GIT_DIR", filepath.Join(decoy, ".git"))
+	rungitLive(t, fixture, "config", "freeside.fixture", "target")
+
+	fixtureConfig, err := os.ReadFile(filepath.Join(fixture, ".git", "config")) //nolint:gosec // G304: fixed config path under a test-owned temp repository
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoyConfig, err := os.ReadFile(filepath.Join(decoy, ".git", "config")) //nolint:gosec // G304: fixed config path under a test-owned temp repository
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(fixtureConfig), "fixture = target") {
+		t.Error("fixture command did not update its target repository")
+	}
+	if strings.Contains(string(decoyConfig), "fixture = target") {
+		t.Error("fixture command inherited hostile GIT_DIR and updated the decoy repository")
+	}
 }
 
 // waitLiveStopped polls the real runtime until the container is observed
