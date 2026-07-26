@@ -284,15 +284,22 @@ func (cfg *fakePublicationCommandConfig) withDefaultsAndValidate() error {
 	if err != nil {
 		return fmt.Errorf("resolve -db artifact directory: %w", err)
 	}
-	workspace := strings.ToLower(cfg.WorkspaceDir)
+	foldCase := publicationFilesystemCaseInsensitive(cfg.WorkspaceDir)
+	pathKey := func(path string) string {
+		if foldCase {
+			return strings.ToLower(path)
+		}
+		return path
+	}
+	workspace := pathKey(cfg.WorkspaceDir)
 	for _, candidate := range paths[1:] {
-		target := strings.ToLower(*candidate.path)
+		target := pathKey(*candidate.path)
 		if publicationPathContains(workspace, target) ||
 			(candidate.dir && publicationPathContains(target, workspace)) {
 			return fmt.Errorf("%s overlaps -publication-workspace", candidate.name)
 		}
 	}
-	blobDir = strings.ToLower(blobDir)
+	blobDir = pathKey(blobDir)
 	if publicationPathContains(workspace, blobDir) ||
 		publicationPathContains(blobDir, workspace) {
 		return errors.New("-db artifact directory overlaps -publication-workspace")
@@ -399,4 +406,32 @@ func publicationPathContains(outer, inner string) bool {
 	}
 	return relative == "." ||
 		(relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
+}
+
+func publicationFilesystemCaseInsensitive(path string) bool {
+	for current := filepath.Clean(path); ; current = filepath.Dir(current) {
+		info, err := os.Stat(current)
+		if err == nil {
+			base := filepath.Base(current)
+			for i, char := range []byte(base) {
+				var alternate byte
+				switch {
+				case char >= 'a' && char <= 'z':
+					alternate = char - ('a' - 'A')
+				case char >= 'A' && char <= 'Z':
+					alternate = char + ('a' - 'A')
+				default:
+					continue
+				}
+				changed := []byte(base)
+				changed[i] = alternate
+				other, err := os.Stat(filepath.Join(filepath.Dir(current), string(changed)))
+				return err == nil && os.SameFile(info, other)
+			}
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return false
+		}
+	}
 }

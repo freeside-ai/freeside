@@ -173,6 +173,13 @@ type fakePublicationTask struct {
 	OperatingMode            string              `json:"operating_mode"`
 }
 
+type fakePublicationCandidateCheckpoint struct {
+	Version       string                        `json:"version"`
+	TaskKey       string                        `json:"task_key"`
+	Authorization domain.CandidateAuthorization `json:"authorization"`
+	Artifacts     []domain.Artifact             `json:"artifacts"`
+}
+
 type fakePublicationWorkflow struct {
 	store           *store.Store
 	attention       attentionService
@@ -199,6 +206,7 @@ type attentionService interface {
 // report and transcript bytes. Metadata never commits before these bytes.
 type ArtifactStore interface {
 	Put(domain.Digest, io.Reader) (bool, error)
+	Has(domain.Digest) (bool, error)
 }
 
 type fakePublicationReconcileResult struct {
@@ -490,54 +498,19 @@ func (w *fakePublicationWorkflow) reconcileTask(ctx context.Context, task fakePu
 		return taskOutcome{blocked: true}, nil
 	}
 
-	home := filepath.Join(scratch, "verify-home")
-	if err := os.Mkdir(home, 0o700); err != nil {
-		return taskOutcome{}, fmt.Errorf("create verification home: %w", err)
-	}
-	verified, err := verify.Verify(ctx, checkout.Dir(), verify.Options{
-		HeadSHA: imported.CommitSHA, BaseSHA: task.BaseSHA,
-		InvocationID: task.VerificationInvocationID,
-		RecipeSource: verify.ConfigRecipe(w.recipe), RecipePath: task.RecipePath,
-		Room: w.newRoom(home), ApprovedRecipes: w.approvedRecipes,
-		Changes: imported.Changes,
-		Policy: verify.Policy{
-			ExtraVerificationControlPatterns: slices.Clone(
-				profile.ProtectedPaths.ExtraVerificationControlPatterns,
-			),
-		},
-	})
+	checkpoint, found, err := w.loadCandidateCheckpoint(task, imported)
 	if err != nil {
-		return taskOutcome{}, fmt.Errorf("clean verification: %w", err)
+		return taskOutcome{}, err
 	}
-	if verified.HeadSHA != imported.CommitSHA || verified.RecipeDigest != task.RecipeDigest {
-		return taskOutcome{}, fmt.Errorf("verification result disagrees with task binding: %w",
-			domain.ErrParentKeyMismatch)
+	if !found {
+		checkpoint, err = w.verifyCandidate(ctx, task, imported, profile, checkout.Dir(), scratch)
+		if err != nil {
+			return taskOutcome{}, err
+		}
 	}
-
-	artifacts := make([]domain.Artifact, len(verified.Evidence))
-	for i, evidence := range verified.Evidence {
-		artifacts[i] = evidence.Artifact
-	}
-	findings := candidateFindings(imported.Findings, verified.Findings)
-	verificationOutcome := domain.VerificationFailed
-	if verified.Outcome == verify.OutcomePassed {
-		verificationOutcome = domain.VerificationPassed
-	}
-	importDigest, err := digestJSON(imported)
-	if err != nil {
-		return taskOutcome{}, fmt.Errorf("digest import account: %w", err)
-	}
-	authorization, err := domain.NewCandidateAuthorization(domain.CandidateAuthorizationInput{
-		Repo: task.Repo, BaseSHA: task.BaseSHA, HeadSHA: imported.CommitSHA,
-		ImportResultDigest: importDigest, VerificationRecipeDigest: verified.RecipeDigest,
-		VerificationOutcome: verificationOutcome, Findings: findings,
-		TrustProfileDigest: task.TrustProfileDigest,
-		InvocationID:       task.VerificationInvocationID, CreatedAt: task.StartedAt,
-	})
-	if err != nil {
-		return taskOutcome{}, fmt.Errorf("construct candidate authorization: %w", err)
-	}
-	if err := w.persistCandidateAccount(ctx, verified.Evidence, authorization); err != nil {
+	authorization := checkpoint.Authorization
+	artifacts := checkpoint.Artifacts
+	if err := w.persistCandidateMetadata(ctx, artifacts, authorization); err != nil {
 		return taskOutcome{}, err
 	}
 	if !authorization.AuthorizesPublication {
@@ -681,19 +654,164 @@ func (w *fakePublicationWorkflow) loadBoundProfile(
 	return profile, nil
 }
 
-func (w *fakePublicationWorkflow) persistCandidateAccount(
+func (w *fakePublicationWorkflow) verifyCandidate(
 	ctx context.Context,
-	evidence []verify.Evidence,
-	authorization domain.CandidateAuthorization,
-) error {
-	for _, item := range evidence {
+	task fakePublicationTask,
+	imported importer.Result,
+	profile domain.AutomationTrustProfile,
+	checkoutDir, scratch string,
+) (fakePublicationCandidateCheckpoint, error) {
+	home := filepath.Join(scratch, "verify-home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		return fakePublicationCandidateCheckpoint{}, fmt.Errorf("create verification home: %w", err)
+	}
+	verified, err := verify.Verify(ctx, checkoutDir, verify.Options{
+		HeadSHA: imported.CommitSHA, BaseSHA: task.BaseSHA,
+		InvocationID: task.VerificationInvocationID,
+		RecipeSource: verify.ConfigRecipe(w.recipe), RecipePath: task.RecipePath,
+		Room: w.newRoom(home), ApprovedRecipes: w.approvedRecipes, Changes: imported.Changes,
+		Policy: verify.Policy{ExtraVerificationControlPatterns: slices.Clone(
+			profile.ProtectedPaths.ExtraVerificationControlPatterns,
+		)},
+	})
+	if err != nil {
+		return fakePublicationCandidateCheckpoint{}, fmt.Errorf("clean verification: %w", err)
+	}
+	if verified.HeadSHA != imported.CommitSHA || verified.RecipeDigest != task.RecipeDigest {
+		return fakePublicationCandidateCheckpoint{}, fmt.Errorf(
+			"verification result disagrees with task binding: %w", domain.ErrParentKeyMismatch)
+	}
+	artifacts := make([]domain.Artifact, len(verified.Evidence))
+	for i, item := range verified.Evidence {
+		artifacts[i] = item.Artifact
 		if _, err := w.artifacts.Put(item.Artifact.Digest, bytes.NewReader(item.Content)); err != nil {
-			return fmt.Errorf("persist evidence artifact %s: %w", item.Artifact.ID, err)
+			return fakePublicationCandidateCheckpoint{}, fmt.Errorf(
+				"persist evidence artifact %s: %w", item.Artifact.ID, err)
 		}
 	}
+	outcome := domain.VerificationFailed
+	if verified.Outcome == verify.OutcomePassed {
+		outcome = domain.VerificationPassed
+	}
+	importDigest, err := digestJSON(imported)
+	if err != nil {
+		return fakePublicationCandidateCheckpoint{}, fmt.Errorf("digest import account: %w", err)
+	}
+	authorization, err := domain.NewCandidateAuthorization(domain.CandidateAuthorizationInput{
+		Repo: task.Repo, BaseSHA: task.BaseSHA, HeadSHA: imported.CommitSHA,
+		ImportResultDigest: importDigest, VerificationRecipeDigest: verified.RecipeDigest,
+		VerificationOutcome: outcome,
+		Findings:            candidateFindings(imported.Findings, verified.Findings),
+		TrustProfileDigest:  task.TrustProfileDigest,
+		InvocationID:        task.VerificationInvocationID, CreatedAt: task.StartedAt,
+	})
+	if err != nil {
+		return fakePublicationCandidateCheckpoint{}, fmt.Errorf("construct candidate authorization: %w", err)
+	}
+	checkpoint := fakePublicationCandidateCheckpoint{
+		Version: "freeside.fake-publication-candidate/v1",
+		TaskKey: fakePublicationTaskKey(task.RunID), Authorization: authorization,
+		Artifacts: artifacts,
+	}
+	body, err := json.Marshal(checkpoint)
+	if err != nil {
+		return fakePublicationCandidateCheckpoint{}, err
+	}
+	path := w.candidateCheckpointPath(task)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fakePublicationCandidateCheckpoint{}, err
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), ".candidate-")
+	if err != nil {
+		return fakePublicationCandidateCheckpoint{}, err
+	}
+	tempName := temp.Name()
+	defer os.Remove(tempName) //nolint:errcheck // scratch cleanup cannot repair a completed checkpoint
+	if _, err := temp.Write(body); err != nil {
+		_ = temp.Close()
+		return fakePublicationCandidateCheckpoint{}, err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return fakePublicationCandidateCheckpoint{}, err
+	}
+	if err := temp.Close(); err != nil {
+		return fakePublicationCandidateCheckpoint{}, err
+	}
+	if err := os.Rename(tempName, path); err != nil {
+		return fakePublicationCandidateCheckpoint{}, err
+	}
+	return checkpoint, nil
+}
+
+func (w *fakePublicationWorkflow) loadCandidateCheckpoint(
+	task fakePublicationTask,
+	imported importer.Result,
+) (fakePublicationCandidateCheckpoint, bool, error) {
+	body, err := os.ReadFile(w.candidateCheckpointPath(task))
+	if errors.Is(err, os.ErrNotExist) {
+		return fakePublicationCandidateCheckpoint{}, false, nil
+	}
+	if err != nil {
+		return fakePublicationCandidateCheckpoint{}, false, err
+	}
+	var checkpoint fakePublicationCandidateCheckpoint
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&checkpoint); err != nil {
+		return fakePublicationCandidateCheckpoint{}, false, err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return fakePublicationCandidateCheckpoint{}, false,
+			errors.New("candidate checkpoint has trailing content")
+	}
+	importDigest, err := digestJSON(imported)
+	if err != nil {
+		return fakePublicationCandidateCheckpoint{}, false, err
+	}
+	a := checkpoint.Authorization
+	if checkpoint.Version != "freeside.fake-publication-candidate/v1" ||
+		checkpoint.TaskKey != fakePublicationTaskKey(task.RunID) || a.Validate() != nil ||
+		a.Repo != task.Repo || a.BaseSHA != task.BaseSHA || a.HeadSHA != imported.CommitSHA ||
+		a.ImportResultDigest != importDigest || a.VerificationRecipeDigest != task.RecipeDigest ||
+		a.TrustProfileDigest != task.TrustProfileDigest ||
+		a.InvocationID != task.VerificationInvocationID || !a.CreatedAt.Equal(task.StartedAt) ||
+		len(checkpoint.Artifacts) != 2 {
+		return fakePublicationCandidateCheckpoint{}, false,
+			fmt.Errorf("candidate checkpoint disagrees with task: %w", domain.ErrParentKeyMismatch)
+	}
+	for _, artifact := range checkpoint.Artifacts {
+		if err := domain.ValidatePublishEligibility(artifact, w.approvedRecipes); err != nil {
+			return fakePublicationCandidateCheckpoint{}, false, err
+		}
+		provenance := artifact.Provenance
+		if provenance.ProducerClass != domain.ProducerVerifier ||
+			provenance.ProducerInvocationID != task.VerificationInvocationID ||
+			provenance.SourceHeadSHA != imported.CommitSHA ||
+			provenance.VerificationRecipeDigest == nil ||
+			*provenance.VerificationRecipeDigest != task.RecipeDigest {
+			return fakePublicationCandidateCheckpoint{}, false, domain.ErrEvidenceHeadMismatch
+		}
+		if present, err := w.artifacts.Has(artifact.Digest); err != nil || !present {
+			return fakePublicationCandidateCheckpoint{}, false,
+				fmt.Errorf("candidate checkpoint artifact %s content unavailable", artifact.ID)
+		}
+	}
+	return checkpoint, true, nil
+}
+
+func (w *fakePublicationWorkflow) candidateCheckpointPath(task fakePublicationTask) string {
+	return filepath.Join(w.workDir, "candidates", filepath.Base(task.HandoffDir)+".json")
+}
+
+func (w *fakePublicationWorkflow) persistCandidateMetadata(
+	ctx context.Context,
+	artifacts []domain.Artifact,
+	authorization domain.CandidateAuthorization,
+) error {
 	return w.store.Write(ctx, func(tx *store.WriteTx) error {
-		for _, item := range evidence {
-			if err := tx.PutArtifact(ctx, item.Artifact); err != nil {
+		for _, artifact := range artifacts {
+			if err := tx.PutArtifact(ctx, artifact); err != nil {
 				return err
 			}
 		}

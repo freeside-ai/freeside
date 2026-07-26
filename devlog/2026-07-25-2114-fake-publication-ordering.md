@@ -78,7 +78,12 @@ post-handoff recovery no longer depends on the source execution context
 remaining mounted. The final refute-first pass modified the workspace after
 task creation and confirmed the committed manifest retained the earlier bytes;
 deleting that handoff then failed reconciliation without re-exporting or
-reaching the transport.
+reaching the transport. Verification artifacts and their authorization are
+also checkpointed after blob durability and before publication intent: retries
+reload and re-gate that exact account instead of rerunning a recipe whose
+transcript bytes may vary. Path containment preserves case on case-sensitive
+filesystems and folds only when an existing ancestor proves the volume is
+case-insensitive.
 
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
