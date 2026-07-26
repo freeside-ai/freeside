@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -36,6 +37,61 @@ func TestFakePublicationDurabilityHelpersRejectNonDirectoryAncestor(t *testing.T
 	}
 	if err := makeFakePublicationDirectory(filepath.Join(notDirectory, "child"), 0o700); err == nil {
 		t.Fatal("created directory beneath a regular file")
+	}
+}
+
+func TestInstallFakePublicationCheckpointDoesNotReplaceConcurrentWinner(t *testing.T) {
+	root := t.TempDir()
+	destination := filepath.Join(root, "candidate.json")
+	sources := []string{
+		filepath.Join(root, "candidate-one"),
+		filepath.Join(root, "candidate-two"),
+	}
+	for i, source := range sources {
+		if err := os.WriteFile(source, []byte{byte('1' + i)}, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	start := make(chan struct{})
+	results := make(chan bool, len(sources))
+	errs := make(chan error, len(sources))
+	var workers sync.WaitGroup
+	for _, source := range sources {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			installed, err := installFakePublicationCheckpoint(source, destination)
+			results <- installed
+			errs <- err
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+	close(errs)
+
+	installed := 0
+	for result := range results {
+		if result {
+			installed++
+		}
+	}
+	if installed != 1 {
+		t.Fatalf("installed = %d, want exactly one winner", installed)
+	}
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("install checkpoint: %v", err)
+		}
+	}
+	body, err := os.ReadFile(destination) //nolint:gosec // test-owned path rooted in t.TempDir
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "1" && string(body) != "2" {
+		t.Fatalf("checkpoint body = %q, want one complete contender", body)
 	}
 }
 

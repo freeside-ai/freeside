@@ -178,6 +178,16 @@ Finally, base refs pass the transport's exact branch-name grammar before
 workspace export or task commit, preventing a permanent invalid task from
 entering the queue.
 
+The final concurrency and liveness pass made candidate checkpoints
+first-writer-wins across processes: a synced temporary file is hard-linked
+into place, and a loser reloads and revalidates the installed winner instead
+of replacing it. This keeps a publication intent bound to the checkpoint it
+actually observed. Installation resolution now also distinguishes transient
+janitor inactivity from a recorded registration fault. The former remains a
+retryable wait, while the latter retains its diagnostic and terminates the
+one-shot publication instead of waiting forever for a janitor loop that is
+running but cannot cover the requested registration.
+
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
 while workspace export and verification execution move behind those stronger

@@ -942,13 +942,38 @@ func (w *fakePublicationWorkflow) verifyCandidate(
 	if err := temp.Close(); err != nil {
 		return fakePublicationCandidateCheckpoint{}, err
 	}
-	if err := os.Rename(tempName, path); err != nil {
+	installed, err := installFakePublicationCheckpoint(tempName, path)
+	if err != nil {
 		return fakePublicationCandidateCheckpoint{}, err
+	}
+	if !installed {
+		existing, found, err := w.loadCandidateCheckpoint(task, imported)
+		if err != nil {
+			return fakePublicationCandidateCheckpoint{}, err
+		}
+		if !found {
+			return fakePublicationCandidateCheckpoint{}, errors.New(
+				"candidate checkpoint disappeared after concurrent installation",
+			)
+		}
+		return existing, nil
 	}
 	if err := syncFakePublicationDirectory(parent); err != nil {
 		return fakePublicationCandidateCheckpoint{}, err
 	}
 	return checkpoint, nil
+}
+
+// installFakePublicationCheckpoint atomically publishes one immutable
+// checkpoint without replacing a winner installed by a concurrent process.
+func installFakePublicationCheckpoint(source, destination string) (bool, error) {
+	if err := os.Link(source, destination); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func (w *fakePublicationWorkflow) loadCandidateCheckpoint(

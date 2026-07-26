@@ -95,6 +95,10 @@ type InstallationResolver struct {
 	janitor  JanitorStatus
 }
 
+type resolverJanitorFaultSource interface {
+	RegistrationFaults() []JanitorRegistrationFault
+}
+
 // NewInstallationResolver wires owner resolution without janitor coverage.
 // It exists for explicit fail-closed construction tests; every registration
 // will be refused before GitHub is contacted.
@@ -232,11 +236,11 @@ func (r *InstallationResolver) resolve(
 		}
 	}
 	if covered == 0 {
-		return InstallationBinding{}, fmt.Errorf(
-			"installation resolution: registration %d: %w",
-			apps[0].AppID,
-			ErrJanitorInactive,
-		)
+		registrationIDs := make([]int64, len(apps))
+		for i, app := range apps {
+			registrationIDs[i] = app.AppID
+		}
+		return InstallationBinding{}, janitorInactiveError(r.janitor, registrationIDs...)
 	}
 
 	var matches []InstallationBinding
@@ -312,11 +316,7 @@ func (r *InstallationResolver) resolve(
 	// is present by the time any match exists.
 	for _, match := range matches {
 		if !r.janitor.ActiveFor(match.RegistrationID) {
-			return InstallationBinding{}, fmt.Errorf(
-				"installation resolution: registration %d: %w",
-				match.RegistrationID,
-				ErrJanitorInactive,
-			)
+			return InstallationBinding{}, janitorInactiveError(r.janitor, match.RegistrationID)
 		}
 	}
 
@@ -329,6 +329,32 @@ func (r *InstallationResolver) resolve(
 		return InstallationBinding{}, fmt.Errorf("installation resolution: owner %q matched multiple registrations: %w",
 			owner, ErrAmbiguousInstallation)
 	}
+}
+
+func janitorInactiveError(status JanitorStatus, registrationIDs ...int64) error {
+	if source, ok := status.(resolverJanitorFaultSource); ok {
+		requested := make(map[int64]struct{}, len(registrationIDs))
+		for _, registrationID := range registrationIDs {
+			requested[registrationID] = struct{}{}
+		}
+		var faults []error
+		for _, fault := range source.RegistrationFaults() {
+			if _, ok := requested[fault.RegistrationID]; !ok || fault.Err == nil {
+				continue
+			}
+			faults = append(faults, fmt.Errorf(
+				"registration %d janitor fault: %w", fault.RegistrationID, fault.Err,
+			))
+		}
+		if len(faults) > 0 {
+			return fmt.Errorf("installation resolution: %w", errors.Join(faults...))
+		}
+	}
+	return fmt.Errorf(
+		"installation resolution: registration %d: %w",
+		registrationIDs[0],
+		ErrJanitorInactive,
+	)
 }
 
 func (r *InstallationResolver) allowsRepository(

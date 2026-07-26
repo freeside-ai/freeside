@@ -21,6 +21,7 @@ import (
 // none of them can exercise the gate's scope.
 type coveredJanitorStatus struct {
 	covered map[int64]bool
+	faults  []publish.JanitorRegistrationFault
 }
 
 func (s coveredJanitorStatus) ActiveFor(registrationID int64) bool {
@@ -29,6 +30,10 @@ func (s coveredJanitorStatus) ActiveFor(registrationID int64) bool {
 
 func (s coveredJanitorStatus) AllowsRepository(registrationID, _, _ int64) bool {
 	return s.covered[registrationID]
+}
+
+func (s coveredJanitorStatus) RegistrationFaults() []publish.JanitorRegistrationFault {
+	return s.faults
 }
 
 // twoRegistrationForge answers /app/installations for both registrations of
@@ -89,6 +94,32 @@ func TestResolutionSurvivesAnInactiveNonMatchingRegistration(t *testing.T) {
 	}
 }
 
+func TestResolutionSurfacesRecordedFaultBeforeCoverage(t *testing.T) {
+	ks, srv, contacted := twoRegistrationForge(t)
+	fault := errors.New("authority snapshot is unreadable")
+	resolver := publish.NewInstallationResolverWithJanitor(
+		ks, srv.Client(), srv.URL, fixedNow,
+		coveredJanitorStatus{
+			covered: map[int64]bool{},
+			faults: []publish.JanitorRegistrationFault{{
+				RegistrationID: 501,
+				Err:            fault,
+			}},
+		},
+	)
+
+	_, err := resolver.Resolve(context.Background(), "operator")
+	if !errors.Is(err, fault) {
+		t.Fatalf("err = %v, want the recorded janitor fault", err)
+	}
+	if errors.Is(err, publish.ErrJanitorInactive) {
+		t.Fatalf("err = %v, recorded fault was reduced to transient janitor inactivity", err)
+	}
+	if contacted(501) != 0 || contacted(601) != 0 {
+		t.Error("resolution contacted the forge before any registration had coverage")
+	}
+}
+
 // TestResolutionSurvivesARealJanitorFault closes the loop #281 left open. Its
 // isolation tests prove the always-on loop keeps covering the healthy
 // registration when a sibling's authority entry is missing, but none of them
@@ -136,8 +167,8 @@ func TestResolutionSurvivesARealJanitorFault(t *testing.T) {
 	if got.RegistrationID != 501 || got.InstallationID != 701 {
 		t.Errorf("binding = %+v, want installation 701 of registration 501", got)
 	}
-	if _, err := resolver.Resolve(context.Background(), "partner"); !errors.Is(err, publish.ErrJanitorInactive) {
-		t.Errorf("err = %v, want the faulted registration to still deny its own owner", err)
+	if _, err := resolver.Resolve(context.Background(), "partner"); !errors.Is(err, errAuthorityUnavailable) {
+		t.Errorf("err = %v, want the faulted registration's durable diagnostic", err)
 	}
 	assertShutdown(t, cancel, done)
 }
