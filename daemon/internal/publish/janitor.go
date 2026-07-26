@@ -121,6 +121,15 @@ type JanitorRegistrationFault struct {
 	Err            error
 }
 
+// JanitorRegistrationChurn identifies a registration whose latest completed
+// pass removed installations without reaching a clean pass. ConsecutivePasses
+// counts how many completed passes in a row have done so, distinguishing
+// repeated removal churn from a registration that has not been visited yet.
+type JanitorRegistrationChurn struct {
+	RegistrationID    int64
+	ConsecutivePasses int
+}
+
 // InstallationJanitor reconciles every App registration against canonical
 // installation-to-repository bindings and the current pending envelope. It has
 // no signet or AttentionItem dependency: unsolicited GitHub state can be
@@ -139,6 +148,7 @@ type InstallationJanitor struct {
 	running bool
 	covered map[int64]registrationCoverage
 	faults  []JanitorRegistrationFault
+	churn   []JanitorRegistrationChurn
 }
 
 // NewInstallationJanitor constructs a janitor with a hard per-cycle removal
@@ -223,6 +233,19 @@ func (j *InstallationJanitor) RegistrationFaults() []JanitorRegistrationFault {
 	return slices.Clone(j.faults)
 }
 
+// ChurningRegistrations reports registrations whose most recently completed
+// pass removed installations without reaching a clean pass, ordered by
+// registration ID. Like faults, churn stays published while the next pass runs
+// and is cleared after a clean or failed pass and when Run returns.
+func (j *InstallationJanitor) ChurningRegistrations() []JanitorRegistrationChurn {
+	if j == nil {
+		return nil
+	}
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return slices.Clone(j.churn)
+}
+
 // Run keeps reconciliation active until ctx is canceled. Coverage is published
 // only after each cycle and cleared before Run returns, so a registration is
 // active only while its own latest pass covered it.
@@ -247,19 +270,19 @@ func (j *InstallationJanitor) Run(ctx context.Context, interval time.Duration) e
 
 	for {
 		// A pass that stalls or fails must not leave the previous pass's
-		// coverage looking current. Its faults stay published: they are a
-		// diagnostic, not a grant, and clearing them would leave a
-		// persistently failing registration reporting as merely unvisited for
-		// as long as each pass takes.
+		// coverage looking current. Its diagnostics stay published: they are
+		// not grants, and clearing them would leave a persistently failing or
+		// churning registration reporting as merely unvisited for as long as
+		// each pass takes.
 		j.withdrawCoverage()
-		_, covered, faults, err := j.runCycle(ctx)
+		_, pass, err := j.runCycle(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil
 			}
 			return err
 		}
-		j.publishPass(covered, faults)
+		j.publishPass(pass)
 
 		timer := time.NewTimer(interval)
 		select {
@@ -272,9 +295,9 @@ func (j *InstallationJanitor) Run(ctx context.Context, interval time.Duration) e
 }
 
 // RunCycle performs one bounded pass without activating the runtime gate or
-// publishing faults. A per-registration failure is an error here rather than a
-// recorded fault: the one-off form exists for operator diagnostics, which have
-// no later pass to report through.
+// publishing diagnostics. A per-registration failure is an error here rather
+// than a recorded fault: the one-off form exists for operator diagnostics,
+// which have no later pass to report through.
 func (j *InstallationJanitor) RunCycle(ctx context.Context) (JanitorCycle, error) {
 	if j == nil {
 		return JanitorCycle{}, errors.New("installation janitor: nil janitor")
@@ -285,15 +308,23 @@ func (j *InstallationJanitor) RunCycle(ctx context.Context) (JanitorCycle, error
 	if running {
 		return JanitorCycle{}, errors.New("installation janitor: always-on loop is already running")
 	}
-	cycle, _, faults, err := j.runCycle(ctx)
+	cycle, pass, err := j.runCycle(ctx)
 	if err != nil {
 		return cycle, err
 	}
-	faulted := make([]error, 0, len(faults))
-	for _, fault := range faults {
+	faulted := make([]error, 0, len(pass.faults))
+	for _, fault := range pass.faults {
 		faulted = append(faulted, fault.Err)
 	}
 	return cycle, errors.Join(faulted...)
+}
+
+type janitorPass struct {
+	registrations []int64
+	covered       []registrationCoverage
+	faults        []JanitorRegistrationFault
+	churn         []int64
+	incomplete    []int64
 }
 
 // runCycle reconciles every registration in the keystore. A failure it can
@@ -305,39 +336,56 @@ func (j *InstallationJanitor) RunCycle(ctx context.Context) (JanitorCycle, error
 // (the shared audit barrier, or a credential the janitor could not revoke).
 func (j *InstallationJanitor) runCycle(
 	ctx context.Context,
-) (JanitorCycle, []registrationCoverage, []JanitorRegistrationFault, error) {
+) (JanitorCycle, janitorPass, error) {
 	if j == nil || j.keystore == nil || j.client == nil || j.authority == nil ||
 		j.recorder == nil || j.now == nil || j.maxRemovals <= 0 {
-		return JanitorCycle{}, nil, nil, errors.New("installation janitor: nil or invalid dependency")
+		return JanitorCycle{}, janitorPass{}, errors.New("installation janitor: nil or invalid dependency")
 	}
 	j.cycleMu.Lock()
 	defer j.cycleMu.Unlock()
 
 	apps, err := j.keystore.ListApps()
 	if err != nil {
-		return JanitorCycle{}, nil, nil, fmt.Errorf("installation janitor: %w", err)
+		return JanitorCycle{}, janitorPass{}, fmt.Errorf("installation janitor: %w", err)
 	}
 
 	var cycle JanitorCycle
-	var covered []registrationCoverage
-	var faults []JanitorRegistrationFault
+	pass := janitorPass{registrations: make([]int64, 0, len(apps))}
+	requiredRecords := make(map[int64]int, len(apps))
 	for _, app := range apps {
+		pass.registrations = append(pass.registrations, app.AppID)
+		requiredRecords[app.AppID]++
+	}
+	slices.Sort(pass.registrations)
+	pass.registrations = slices.Compact(pass.registrations)
+	cleanRecords := make(map[int64]int, len(pass.registrations))
+	for _, app := range apps {
+		removedBefore := cycle.Removed
 		complete, registrationCoverage, err := j.reconcileApp(ctx, app, &cycle)
 		if err != nil {
 			if errors.Is(err, errJanitorUnsafe) {
-				return cycle, covered, faults, err
+				return cycle, pass, err
 			}
 			// Shutdown is not a registration's fault, and recording it as one
 			// would bury the pass's real faults under every remaining app.
 			// What failed first need not be the cancellation itself, so the
 			// cause rides along with it rather than replacing it.
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return cycle, covered, faults, fmt.Errorf("%w: %w", ctxErr, err)
+				return cycle, pass, fmt.Errorf("%w: %w", ctxErr, err)
 			}
-			faults = append(faults, JanitorRegistrationFault{RegistrationID: app.AppID, Err: err})
+			pass.faults = append(
+				pass.faults,
+				JanitorRegistrationFault{RegistrationID: app.AppID, Err: err},
+			)
+			if cycle.RemovalLimitReached {
+				break
+			}
 			continue
 		}
 		if !complete {
+			if cycle.Removed > removedBefore {
+				pass.churn = append(pass.churn, app.AppID)
+			}
 			// The removal bound is the whole pass's budget, so a later
 			// registration could not be reconciled within it either.
 			if cycle.RemovalLimitReached {
@@ -345,32 +393,66 @@ func (j *InstallationJanitor) runCycle(
 			}
 			continue
 		}
-		covered = append(covered, registrationCoverage)
+		pass.covered = append(pass.covered, registrationCoverage)
+		cleanRecords[app.AppID]++
 	}
-	slices.SortFunc(faults, func(a, b JanitorRegistrationFault) int {
+	slices.SortFunc(pass.faults, func(a, b JanitorRegistrationFault) int {
 		return cmp.Compare(a.RegistrationID, b.RegistrationID)
 	})
-	return cycle, withdrawFaulted(covered, faults), faults, nil
+	slices.Sort(pass.churn)
+	pass.churn = slices.Compact(pass.churn)
+	if len(pass.faults) > 0 && len(pass.churn) > 0 {
+		faulted := make(map[int64]struct{}, len(pass.faults))
+		for _, fault := range pass.faults {
+			faulted[fault.RegistrationID] = struct{}{}
+		}
+		pass.churn = slices.DeleteFunc(pass.churn, func(registrationID int64) bool {
+			_, ok := faulted[registrationID]
+			return ok
+		})
+	}
+	for registrationID, required := range requiredRecords {
+		if cleanRecords[registrationID] < required {
+			pass.incomplete = append(pass.incomplete, registrationID)
+		}
+	}
+	slices.Sort(pass.incomplete)
+	pass.covered = withdrawUnreconciled(
+		pass.covered,
+		pass.faults,
+		pass.churn,
+		pass.incomplete,
+	)
+	return cycle, pass, nil
 }
 
-// withdrawFaulted drops coverage for any registration ID that also faulted in
-// the same pass. Enumeration is keyed by owner, so two keystore records can
-// carry one registration ID (which is what ErrAmbiguousAppRegistration
-// exists for); without this, the record that reconciled would open the gate
-// for an ID whose sibling record could not be validated.
-func withdrawFaulted(
+// withdrawUnreconciled drops coverage for any registration ID that faulted,
+// removed installations, or whose owner-keyed records did not all finish clean
+// in the same pass. Two keystore records can carry one registration ID (which
+// is what ErrAmbiguousAppRegistration exists for); without this, a record that
+// reconciled would open the gate for an ID whose sibling record was not clean,
+// was skipped, or reached drift only after the pass-wide bound was spent.
+func withdrawUnreconciled(
 	covered []registrationCoverage,
 	faults []JanitorRegistrationFault,
+	churn []int64,
+	incomplete []int64,
 ) []registrationCoverage {
-	if len(faults) == 0 {
+	if len(faults) == 0 && len(churn) == 0 && len(incomplete) == 0 {
 		return covered
 	}
-	faulted := make(map[int64]struct{}, len(faults))
+	unreconciled := make(map[int64]struct{}, len(faults)+len(churn)+len(incomplete))
 	for _, fault := range faults {
-		faulted[fault.RegistrationID] = struct{}{}
+		unreconciled[fault.RegistrationID] = struct{}{}
+	}
+	for _, registrationID := range churn {
+		unreconciled[registrationID] = struct{}{}
+	}
+	for _, registrationID := range incomplete {
+		unreconciled[registrationID] = struct{}{}
 	}
 	return slices.DeleteFunc(covered, func(coverage registrationCoverage) bool {
-		_, ok := faulted[coverage.registrationID]
+		_, ok := unreconciled[coverage.registrationID]
 		return ok
 	})
 }
@@ -557,6 +639,7 @@ func (j *InstallationJanitor) reconcileRegistration(
 	if len(actions) == 0 {
 		return true, coverage, nil
 	}
+	var removalErrs []error
 	for _, installation := range actions {
 		// The bound is spent on attempts, not successes. A failed suspend or
 		// delete used to end the pass, so counting only what completed was
@@ -565,7 +648,7 @@ func (j *InstallationJanitor) reconcileRegistration(
 		// operator's bound allows.
 		if cycle.attempted >= j.maxRemovals {
 			cycle.RemovalLimitReached = true
-			return false, registrationCoverage{}, nil
+			return false, registrationCoverage{}, errors.Join(removalErrs...)
 		}
 		record := InstallationRemovalRecord{
 			RequestedAt:    j.now().UTC(),
@@ -590,25 +673,47 @@ func (j *InstallationJanitor) reconcileRegistration(
 		if recordErr != nil {
 			// The journal is one shared file, so its failure is the host's,
 			// not this registration's.
-			return false, registrationCoverage{}, fmt.Errorf(
+			unsafeErr := fmt.Errorf(
 				"installation janitor: registration %d audit removal: %w: %w",
 				app.AppID,
 				errJanitorUnsafe,
 				recordErr,
 			)
+			return false, registrationCoverage{}, errors.Join(append(removalErrs, unsafeErr)...)
 		}
 		cycle.attempted++
 		if installation.quarantine {
 			if err := j.suspendInstallation(ctx, jwt, installation.installationID); err != nil {
-				return false, registrationCoverage{}, fmt.Errorf("installation janitor: registration %d: %w", app.AppID, err)
+				removalErrs = append(removalErrs, fmt.Errorf(
+					"installation janitor: registration %d installation %d: %w",
+					app.AppID,
+					installation.installationID,
+					err,
+				))
+				if ctx.Err() != nil {
+					return false, registrationCoverage{}, errors.Join(removalErrs...)
+				}
+				continue
 			}
 		}
 		if err := j.deleteInstallation(ctx, jwt, installation.installationID); err != nil {
-			return false, registrationCoverage{}, fmt.Errorf("installation janitor: registration %d: %w", app.AppID, err)
+			removalErrs = append(removalErrs, fmt.Errorf(
+				"installation janitor: registration %d installation %d: %w",
+				app.AppID,
+				installation.installationID,
+				err,
+			))
+			if ctx.Err() != nil {
+				return false, registrationCoverage{}, errors.Join(removalErrs...)
+			}
+			continue
 		}
 		cycle.Removed++
 	}
 
+	if len(removalErrs) > 0 {
+		return false, registrationCoverage{}, errors.Join(removalErrs...)
+	}
 	// The snapshot was exhaustive, but a destructive pass changed the
 	// collection it described. Only a later clean pass may publish coverage.
 	return false, registrationCoverage{}, nil
@@ -873,30 +978,66 @@ func (j *InstallationJanitor) deleteInstallation(ctx context.Context, jwt Secret
 	return nil
 }
 
-// withdrawCoverage shuts every gate while leaving the last pass's faults
-// published, so a registration that is failing does not read as one that has
-// simply not been visited yet.
+// withdrawCoverage shuts every gate while leaving the last pass's diagnostics
+// published, so a registration that is failing or repeatedly removing does not
+// read as one that has simply not been visited yet.
 func (j *InstallationJanitor) withdrawCoverage() {
 	j.mu.Lock()
 	j.covered = map[int64]registrationCoverage{}
 	j.mu.Unlock()
 }
 
-// publishPass replaces the gate's whole view of the latest pass. Coverage and
-// faults are written together, so neither can be published without the other;
-// a reader that takes them in two calls can still straddle a pass boundary,
-// which degrades a fault to plain inactivity and never the reverse.
-func (j *InstallationJanitor) publishPass(
-	registrations []registrationCoverage,
-	faults []JanitorRegistrationFault,
-) {
-	covered := make(map[int64]registrationCoverage, len(registrations))
-	for _, registration := range registrations {
+// publishPass replaces the gate's whole view of the latest pass. Coverage,
+// faults, and churn are written together. Churn persists without incrementing
+// when the pass-wide bound skips a known registration, and clears only after a
+// clean or failed reconciliation or when the registration leaves the keystore.
+// A reader that takes diagnostics in separate calls can still straddle a pass
+// boundary, which may report a less specific inactive state but never grants
+// coverage.
+func (j *InstallationJanitor) publishPass(pass janitorPass) {
+	covered := make(map[int64]registrationCoverage, len(pass.covered))
+	for _, registration := range pass.covered {
 		covered[registration.registrationID] = registration
 	}
 	j.mu.Lock()
+	known := make(map[int64]struct{}, len(pass.registrations))
+	for _, registrationID := range pass.registrations {
+		known[registrationID] = struct{}{}
+	}
+	resolved := make(map[int64]struct{}, len(pass.covered)+len(pass.faults)+len(pass.churn))
+	for _, registration := range pass.covered {
+		resolved[registration.registrationID] = struct{}{}
+	}
+	for _, fault := range pass.faults {
+		resolved[fault.RegistrationID] = struct{}{}
+	}
+	for _, registrationID := range pass.churn {
+		resolved[registrationID] = struct{}{}
+	}
+	previousChurn := make(map[int64]int, len(j.churn))
+	for _, registration := range j.churn {
+		previousChurn[registration.RegistrationID] = registration.ConsecutivePasses
+	}
+	nextChurn := make([]JanitorRegistrationChurn, 0, len(pass.churn)+len(j.churn))
+	for _, registrationID := range pass.churn {
+		nextChurn = append(nextChurn, JanitorRegistrationChurn{
+			RegistrationID:    registrationID,
+			ConsecutivePasses: previousChurn[registrationID] + 1,
+		})
+	}
+	for _, registration := range j.churn {
+		_, stillKnown := known[registration.RegistrationID]
+		_, reachedOutcome := resolved[registration.RegistrationID]
+		if stillKnown && !reachedOutcome {
+			nextChurn = append(nextChurn, registration)
+		}
+	}
+	slices.SortFunc(nextChurn, func(a, b JanitorRegistrationChurn) int {
+		return cmp.Compare(a.RegistrationID, b.RegistrationID)
+	})
 	j.covered = covered
-	j.faults = slices.Clone(faults)
+	j.faults = slices.Clone(pass.faults)
+	j.churn = nextChurn
 	j.mu.Unlock()
 }
 
@@ -915,5 +1056,6 @@ func (j *InstallationJanitor) finishRun() {
 	j.running = false
 	j.covered = map[int64]registrationCoverage{}
 	j.faults = nil
+	j.churn = nil
 	j.mu.Unlock()
 }

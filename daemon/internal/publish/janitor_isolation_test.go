@@ -159,6 +159,31 @@ func awaitFault(
 	}
 }
 
+func awaitChurn(
+	t *testing.T,
+	janitor *publish.InstallationJanitor,
+	registrationID int64,
+	consecutivePasses int,
+) publish.JanitorRegistrationChurn {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		for _, churn := range janitor.ChurningRegistrations() {
+			if churn.RegistrationID == registrationID && churn.ConsecutivePasses >= consecutivePasses {
+				return churn
+			}
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf(
+				"registration %d never reported %d consecutive removal passes",
+				registrationID,
+				consecutivePasses,
+			)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func assertRunning(t *testing.T, done <-chan error) {
 	t.Helper()
 	select {
@@ -393,6 +418,10 @@ func TestInstallationJanitorRemovalDoesNotDenyASibling(t *testing.T) {
 	go func() { done <- janitor.Run(ctx, time.Millisecond) }()
 
 	awaitActive(t, janitor, 601)
+	churn := awaitChurn(t, janitor, 501, 2)
+	if churn.ConsecutivePasses < 2 {
+		t.Errorf("churn = %+v, want repeated completed removal passes", churn)
+	}
 	if janitor.ActiveFor(501) {
 		t.Fatal("a registration whose pass removed an installation was covered")
 	}
@@ -401,8 +430,110 @@ func TestInstallationJanitorRemovalDoesNotDenyASibling(t *testing.T) {
 	}
 	assertRunning(t, done)
 	assertShutdown(t, cancel, done)
+	if churn := janitor.ChurningRegistrations(); len(churn) != 0 {
+		t.Errorf("churn survived shutdown: %+v", churn)
+	}
 	if len(recorder.snapshot()) == 0 {
 		t.Error("the sibling's removals never ran")
+	}
+}
+
+// TestInstallationJanitorPreservesSkippedRemovalChurn pins the latest
+// per-registration state across a pass-wide bound. Registration 601 churns in
+// pass one, is skipped when 501 spends pass two's bound, then churns again in
+// pass three. The skipped pass neither clears nor increments its count.
+func TestInstallationJanitorPreservesSkippedRemovalChurn(t *testing.T) {
+	ks := twoRegistrationKeystore(t)
+	third501 := make(chan struct{})
+	releaseThird501 := make(chan struct{})
+	fourth501 := make(chan struct{})
+	releaseFourth501 := make(chan struct{})
+	var callsMu sync.Mutex
+	calls := map[int64]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
+			registrationID := requestingRegistration(t, r)
+			callsMu.Lock()
+			calls[registrationID]++
+			call := calls[registrationID]
+			callsMu.Unlock()
+			switch registrationID {
+			case 501:
+				switch call {
+				case 1:
+					_, _ = io.WriteString(w, operatorInstallations)
+				case 2:
+					_, _ = io.WriteString(w, `[{"id":701,"app_id":501,"target_id":101,`+
+						`"repository_selection":"selected","account":{"login":"operator","id":101}},`+
+						`{"id":702,"app_id":501,"target_id":303,`+
+						`"repository_selection":"selected","account":{"login":"stranger","id":303}},`+
+						`{"id":703,"app_id":501,"target_id":304,`+
+						`"repository_selection":"selected","account":{"login":"intruder","id":304}}]`)
+				case 3:
+					close(third501)
+					<-releaseThird501
+					_, _ = io.WriteString(w, operatorInstallations)
+				case 4:
+					close(fourth501)
+					<-releaseFourth501
+					_, _ = io.WriteString(w, operatorInstallations)
+				default:
+					_, _ = io.WriteString(w, operatorInstallations)
+				}
+			case 601:
+				_, _ = io.WriteString(w, `[{"id":801,"app_id":601,"target_id":202,`+
+					`"repository_selection":"selected","account":{"login":"partner","id":202}},`+
+					`{"id":802,"app_id":601,"target_id":303,`+
+					`"repository_selection":"selected","account":{"login":"stranger","id":303}}]`)
+			}
+			return
+		}
+		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/app/installations/") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if !handleExactGrant(w, r, fixtureRepositoryID) {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	janitor := newJanitor(t, ks, srv, twoRegistrationAuthority(), &removalRecorder{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- janitor.Run(ctx, time.Millisecond) }()
+
+	<-third501
+	churn := janitor.ChurningRegistrations()
+	if len(churn) != 2 ||
+		churn[0] != (publish.JanitorRegistrationChurn{RegistrationID: 501, ConsecutivePasses: 1}) ||
+		churn[1] != (publish.JanitorRegistrationChurn{RegistrationID: 601, ConsecutivePasses: 1}) {
+		t.Errorf("churn after skipped pass = %+v, want 501:1 and preserved 601:1", churn)
+	}
+	callsMu.Lock()
+	if calls[601] != 1 {
+		t.Errorf("registration 601 was visited %d times before pass three, want once", calls[601])
+	}
+	callsMu.Unlock()
+
+	close(releaseThird501)
+	<-fourth501
+	churn = janitor.ChurningRegistrations()
+	if len(churn) != 1 ||
+		churn[0] != (publish.JanitorRegistrationChurn{RegistrationID: 601, ConsecutivePasses: 2}) {
+		t.Errorf("churn after the next completed pass = %+v, want only 601:2", churn)
+	}
+	callsMu.Lock()
+	if calls[601] != 2 {
+		t.Errorf("registration 601 was visited %d times before pass four, want twice", calls[601])
+	}
+	callsMu.Unlock()
+
+	cancel()
+	close(releaseFourth501)
+	if err := <-done; err != nil {
+		t.Fatalf("Run shutdown: %v", err)
 	}
 }
 
@@ -668,6 +799,192 @@ func TestInstallationJanitorWithdrawsCoverageFromADuplicatedRegistration(t *test
 	assertShutdown(t, cancel, done)
 }
 
+func TestInstallationJanitorWithdrawsChurningCoverageFromADuplicatedRegistration(t *testing.T) {
+	ks := newTestKeystore(t)
+	saveResolverApp(t, ks, "operator", 101, 501, publish.AppVisibilityPublic)
+	saveResolverApp(t, ks, "partner", 202, 501, publish.AppVisibilityPublic)
+	authority := installationAuthoritySource{
+		501: {
+			TrustedOwners: []publish.TrustedOwner{
+				{Login: "operator", ID: 101},
+				{Login: "partner", ID: 202},
+			},
+			TrustedInstallations: []publish.TrustedInstallation{{
+				RegistrationID: 501,
+				InstallationID: 701,
+				Account:        "operator",
+				AccountID:      101,
+				RepositoryIDs:  []int64{fixtureRepositoryID},
+			}},
+		},
+	}
+	var callsMu sync.Mutex
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
+			callsMu.Lock()
+			calls++
+			call := calls
+			callsMu.Unlock()
+			if call%2 == 1 {
+				_, _ = io.WriteString(w, operatorInstallations)
+				return
+			}
+			_, _ = io.WriteString(w, `[{"id":701,"app_id":501,"target_id":101,`+
+				`"repository_selection":"selected","account":{"login":"operator","id":101}},`+
+				`{"id":702,"app_id":501,"target_id":303,`+
+				`"repository_selection":"selected","account":{"login":"stranger","id":303}}]`)
+			return
+		}
+		if r.Method == http.MethodDelete && r.URL.Path == "/app/installations/702" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if !handleExactGrant(w, r, fixtureRepositoryID) {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	janitor := newJanitor(t, ks, srv, authority, &removalRecorder{}, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- janitor.Run(ctx, time.Millisecond) }()
+
+	awaitChurn(t, janitor, 501, 1)
+	if janitor.ActiveFor(501) {
+		t.Fatal("a registration ID that churned in the same pass kept coverage")
+	}
+	if janitor.AllowsRepository(501, 701, fixtureRepositoryID) {
+		t.Fatal("a duplicated churning registration kept its mint allow-set")
+	}
+	assertShutdown(t, cancel, done)
+}
+
+func TestInstallationJanitorWithdrawsIncompleteDuplicateCoverage(t *testing.T) {
+	t.Run("later duplicate is skipped", func(t *testing.T) {
+		testInstallationJanitorWithdrawsIncompleteDuplicateCoverage(
+			t,
+			`[{"id":801,"app_id":601,"target_id":150,`+
+				`"repository_selection":"selected","account":{"login":"middle","id":150}},`+
+				`{"id":802,"app_id":601,"target_id":303,`+
+				`"repository_selection":"selected","account":{"login":"stranger","id":303}},`+
+				`{"id":803,"app_id":601,"target_id":304,`+
+				`"repository_selection":"selected","account":{"login":"intruder","id":304}}]`,
+			operatorInstallations,
+			1,
+		)
+	})
+	t.Run("later duplicate is reached after the last attempt", func(t *testing.T) {
+		testInstallationJanitorWithdrawsIncompleteDuplicateCoverage(
+			t,
+			`[{"id":801,"app_id":601,"target_id":150,`+
+				`"repository_selection":"selected","account":{"login":"middle","id":150}},`+
+				`{"id":802,"app_id":601,"target_id":303,`+
+				`"repository_selection":"selected","account":{"login":"stranger","id":303}}]`,
+			`[{"id":701,"app_id":501,"target_id":101,`+
+				`"repository_selection":"selected","account":{"login":"operator","id":101}},`+
+				`{"id":702,"app_id":501,"target_id":303,`+
+				`"repository_selection":"selected","account":{"login":"stranger","id":303}}]`,
+			2,
+		)
+	})
+}
+
+func testInstallationJanitorWithdrawsIncompleteDuplicateCoverage(
+	t *testing.T,
+	middleInstallations string,
+	laterDuplicateInstallations string,
+	want501Calls int,
+) {
+	t.Helper()
+	ks := newTestKeystore(t)
+	saveResolverApp(t, ks, "operator", 101, 501, publish.AppVisibilityPublic)
+	saveResolverApp(t, ks, "middle", 150, 601, publish.AppVisibilityPublic)
+	saveResolverApp(t, ks, "partner", 202, 501, publish.AppVisibilityPublic)
+	authority := installationAuthoritySource{
+		501: {
+			TrustedOwners: []publish.TrustedOwner{
+				{Login: "operator", ID: 101},
+				{Login: "partner", ID: 202},
+			},
+			TrustedInstallations: []publish.TrustedInstallation{{
+				RegistrationID: 501,
+				InstallationID: 701,
+				Account:        "operator",
+				AccountID:      101,
+				RepositoryIDs:  []int64{fixtureRepositoryID},
+			}},
+		},
+		601: {
+			TrustedOwners: []publish.TrustedOwner{{Login: "middle", ID: 150}},
+			TrustedInstallations: []publish.TrustedInstallation{{
+				RegistrationID: 601,
+				InstallationID: 801,
+				Account:        "middle",
+				AccountID:      150,
+				RepositoryIDs:  []int64{fixtureRepositoryID},
+			}},
+		},
+	}
+	var callsMu sync.Mutex
+	calls501 := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
+			switch requestingRegistration(t, r) {
+			case 501:
+				callsMu.Lock()
+				calls501++
+				call := calls501
+				callsMu.Unlock()
+				if call == 1 {
+					_, _ = io.WriteString(w, operatorInstallations)
+				} else {
+					_, _ = io.WriteString(w, laterDuplicateInstallations)
+				}
+			case 601:
+				_, _ = io.WriteString(w, middleInstallations)
+			}
+			return
+		}
+		if r.Method == http.MethodDelete && r.URL.Path == "/app/installations/802" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if !handleExactGrant(w, r, fixtureRepositoryID) {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	janitor := newJanitor(t, ks, srv, authority, &removalRecorder{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- janitor.Run(ctx, time.Hour) }()
+
+	awaitChurn(t, janitor, 601, 1)
+	if janitor.ActiveFor(501) {
+		t.Fatal("the first clean owner record covered an App ID whose later duplicate was skipped")
+	}
+	if janitor.AllowsRepository(501, 701, fixtureRepositoryID) {
+		t.Fatal("a partially visited duplicate App ID kept its mint allow-set")
+	}
+	churn := janitor.ChurningRegistrations()
+	if len(churn) != 1 ||
+		churn[0] != (publish.JanitorRegistrationChurn{RegistrationID: 601, ConsecutivePasses: 1}) {
+		t.Errorf("churn = %+v, want only the bound-spending registration 601", churn)
+	}
+	callsMu.Lock()
+	if calls501 != want501Calls {
+		t.Errorf("registration 501 was reconciled %d times, want %d", calls501, want501Calls)
+	}
+	callsMu.Unlock()
+
+	assertShutdown(t, cancel, done)
+}
+
 // TestInstallationJanitorFaultsOutliveTheGateTheyExplain keeps the diagnosis
 // readable. Coverage is withdrawn before every pass, but clearing faults with
 // it would report a registration that has failed for hours as merely unvisited
@@ -808,5 +1125,52 @@ func TestInstallationJanitorRemovalLimitStopsThePass(t *testing.T) {
 	}
 	if examined[601] != 0 {
 		t.Errorf("the pass kept examining registrations after spending its removal budget")
+	}
+}
+
+func TestInstallationJanitorFailedAttemptLimitStopsThePass(t *testing.T) {
+	ks := twoRegistrationKeystore(t)
+	examined := map[int64]int{}
+	var examinedMu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
+			registrationID := requestingRegistration(t, r)
+			examinedMu.Lock()
+			examined[registrationID]++
+			examinedMu.Unlock()
+			if registrationID != 501 {
+				t.Error("the pass examined a later registration after a failed attempt spent its bound")
+				_, _ = io.WriteString(w, partnerInstallations)
+				return
+			}
+			_, _ = io.WriteString(w, `[{"id":701,"app_id":501,"target_id":101,`+
+				`"repository_selection":"selected","account":{"login":"operator","id":101}},`+
+				`{"id":702,"app_id":501,"target_id":303,`+
+				`"repository_selection":"selected","account":{"login":"stuck","id":303}},`+
+				`{"id":703,"app_id":501,"target_id":304,`+
+				`"repository_selection":"selected","account":{"login":"later","id":304}}]`)
+		case r.Method == http.MethodDelete && r.URL.Path == "/app/installations/702":
+			http.Error(w, "installation cannot be deleted", http.StatusConflict)
+		default:
+			if !handleExactGrant(w, r, fixtureRepositoryID) {
+				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			}
+		}
+	}))
+	defer srv.Close()
+
+	janitor := newJanitor(t, ks, srv, twoRegistrationAuthority(), &removalRecorder{}, 1)
+	cycle, err := janitor.RunCycle(context.Background())
+	if err == nil {
+		t.Fatal("RunCycle hid the failed removal")
+	}
+	if !cycle.RemovalLimitReached || cycle.Removed != 0 {
+		t.Errorf("cycle = %+v, want the failed attempt to spend the pass-wide bound", cycle)
+	}
+	examinedMu.Lock()
+	defer examinedMu.Unlock()
+	if examined[501] != 1 || examined[601] != 0 {
+		t.Errorf("enumerations = %v, want only registration 501", examined)
 	}
 }
