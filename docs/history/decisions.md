@@ -462,7 +462,7 @@ New in revision 16 (decider in parentheses):
 
 ---
 
-## Revision 17 (current)
+## Revision 17
 
 Revision 17 replaces same-principal concurrent daemons and their unhosted
 shared CAS ledger with an active/passive movable control plane. It preserves
@@ -499,3 +499,32 @@ New in revision 17 (decider in parentheses):
    envelopes bind to `active_epoch` and `durable_intent_revision`.
    Rejected alternatives and revisit conditions live in the decision note.
    (User; devlog 2026-07-23-1932-movable-control-plane.md; #264.)
+
+## Revision 18 (current)
+
+Revision 18 scopes the §5.7 unattended backup-health gate for Phase 1A.2 so
+the first real unattended runs do not wait on the encrypted checkpoint,
+replacing a prose "supervised" posture with an enforceable admission
+predicate.
+
+Held from revision 17: every decision.
+
+New in revision 18 (decider in parentheses):
+
+1. **The 1A.2 backup-health exception is a mechanical waiver, not prose.**
+   Unattended admission may waive only the encryption-state dimension of
+   backup health, with checkpoint currency, artifact closure, and
+   restore-test age still gating admission against the local owner-only
+   checkpoint (§5.10), only while an explicit operator-set
+   `backup_encryption_waiver` naming the exact trusted numeric repository ID
+   it covers is configured, the run targets exactly that repository, and the
+   build does not yet carry the encrypted,
+   digest-bound `BackupCheckpoint`; a build that carries it rejects the
+   waiver as invalid configuration, retiring the exception. Each waived
+   admission is recorded in the run's audit record and surfaced as a
+   `system_health` item the validated waiver configuration supersedes per
+   §4, visible but not blocking. The encrypted checkpoint must land before
+   the Phase 1A exit; the doctor packages its encryption check. Keeps a
+   serialized contract unit off the first real runs' critical path.
+   Rejected alternatives and revisit conditions live in the decision note.
+   (User; devlog 2026-07-26-0957-1a2-chain-repair.md; #305.)
