@@ -154,6 +154,13 @@ var ErrHeadMismatch = errors.New("artifact head binding does not match the candi
 // human resolves the conflict.
 var ErrPublicationConflict = errors.New("existing publication resource conflicts with the candidate")
 
+// ErrInvocationReserved is returned when a publication invocation is held by
+// another owner's reservation (#308): the invocation ID is immutable committed
+// state for whoever reserved it, so a second writer must not take the key its
+// reconciliation depends on. Refusing is zero-effect and happens before any
+// intent is recorded or any GitHub request is made.
+var ErrInvocationReserved = errors.New("publication invocation is reserved by another owner")
+
 // ErrForeignResource is returned when a pull request occupies the
 // publication branch without carrying this publication's identity
 // marker. It is not ours to converge, so the publication refuses
