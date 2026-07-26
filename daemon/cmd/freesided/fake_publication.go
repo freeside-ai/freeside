@@ -170,11 +170,6 @@ func runFakePublicationCommand(
 	if err != nil {
 		return fakePublicationCommandResult{}, err
 	}
-	if result, ok, err := existingFakePublicationResult(ctx, attention, cfg); err != nil {
-		return fakePublicationCommandResult{}, err
-	} else if ok {
-		return result, nil
-	}
 
 	runCtx, cancel := context.WithCancel(ctx)
 	janitorDone := make(chan struct{})
@@ -194,31 +189,14 @@ func runFakePublicationCommand(
 	ticker := time.NewTicker(cfg.ReconcileInterval)
 	defer ticker.Stop()
 	for {
+		_, err := workflow.Reconcile(ctx)
+		if err != nil {
+			return fakePublicationCommandResult{}, err
+		}
 		if result, ok, err := existingFakePublicationResult(ctx, attention, cfg); err != nil {
 			return fakePublicationCommandResult{}, err
 		} else if ok {
 			return result, nil
-		}
-		reconciled, err := workflow.Reconcile(ctx)
-		if err != nil {
-			return fakePublicationCommandResult{}, err
-		}
-		if reconciled.PublicationTasksCompleted > 0 {
-			itemID := domain.ItemID("ready-" + string(cfg.RunID))
-			itemType := domain.AttentionReadyForFinalReview
-			if reconciled.BlockedItemsCreated > 0 {
-				itemID = domain.ItemID("publish-blocked-" + string(cfg.RunID))
-				itemType = domain.AttentionPublishBlocked
-			}
-			snapshot, err := attention.GetAttentionItem(ctx, itemID)
-			if err != nil {
-				return fakePublicationCommandResult{}, err
-			}
-			return fakePublicationCommandResult{
-				OperatingMode: engine.OperatingModeAttendedDev,
-				RunID:         cfg.RunID, ItemID: itemID, ItemType: itemType,
-				HeadSHA: snapshot.Item.PRHeadSHA, PRNumber: reconciled.LastPRNumber,
-			}, nil
 		}
 		select {
 		case <-janitorDone:

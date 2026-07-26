@@ -62,7 +62,11 @@ the prior handoff and publishes the changed candidate under a distinct content
 identity. Command replay now reconstructs a terminal ready or blocked result
 from the durable attention item, validates its run and project bindings, and
 refuses malformed or ambiguous terminal state instead of polling an already
-dispatched task forever.
+dispatched task forever. The command always reconciles before reading that
+result, so a terminal item persisted just before a crash cannot strand its
+outbox row as pending. It ignores aggregate task counters and queries the
+requested run directly, preventing another run's ready, blocked, or PR outcome
+from being misreported.
 
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
