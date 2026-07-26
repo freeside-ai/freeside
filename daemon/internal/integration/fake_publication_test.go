@@ -496,6 +496,30 @@ func TestFakeCandidatePublicationRejectsInvalidBaseRefBeforeCommit(t *testing.T)
 	}
 }
 
+func TestFakeCandidatePublicationRejectsInvalidRepoBeforeCommit(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+
+	workflow := h.engine()
+	spec := h.spec(workspace)
+	spec.Repo = "owner/name/extra"
+	if _, err := workflow.StartFakePublication(h.ctx, spec); err == nil {
+		t.Fatal("StartFakePublication accepted an invalid repository")
+	}
+	var pending []store.QueueEntry
+	if err := h.store.Read(h.ctx, func(tx *store.ReadTx) error {
+		var err error
+		pending, err = tx.ListPendingOutbox(h.ctx, "engine.fake_publication")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("invalid repository committed %d publication tasks", len(pending))
+	}
+}
+
 func TestFakeCandidatePublicationRestoresAndConvergesExactlyOnce(t *testing.T) {
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
@@ -569,6 +593,70 @@ func TestFakeCandidatePublicationRestoresAndConvergesExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestFakeCandidatePublicationSerializesOneTaskAcrossEngines(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	writeFile(t, workspace, "candidate.txt", "verified\n")
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var hookMu sync.Mutex
+	blockNext := true
+	h.afterPublicationFinalized = func() error {
+		hookMu.Lock()
+		block := blockNext
+		blockNext = false
+		hookMu.Unlock()
+		if block {
+			close(entered)
+			<-release
+		}
+		return nil
+	}
+	first := h.engine()
+	second := h.engine()
+	spec := h.spec(workspace)
+	if _, err := first.StartFakePublication(h.ctx, spec); err != nil {
+		t.Fatalf("StartFakePublication: %v", err)
+	}
+
+	type reconcileResult struct {
+		result engine.ReconcileResult
+		err    error
+	}
+	firstDone := make(chan reconcileResult, 1)
+	go func() {
+		result, err := first.ReconcileFakePublication(h.ctx, spec.RunID)
+		firstDone <- reconcileResult{result: result, err: err}
+	}()
+	<-entered
+
+	secondDone := make(chan reconcileResult, 1)
+	go func() {
+		result, err := second.ReconcileFakePublication(h.ctx, spec.RunID)
+		secondDone <- reconcileResult{result: result, err: err}
+	}()
+	select {
+	case result := <-secondDone:
+		t.Fatalf("second engine crossed the task lock before release: %+v, %v", result.result, result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	for name, done := range map[string]<-chan reconcileResult{
+		"first": firstDone, "second": secondDone,
+	} {
+		result := <-done
+		if result.err != nil || result.result.ReadyItemsCreated != 1 ||
+			result.result.LastPRNumber != 101 {
+			t.Fatalf("%s reconcile = %+v, %v", name, result.result, result.err)
+		}
+	}
+	if refs, prs := h.forge.counts(); refs != 1 || prs != 1 {
+		t.Fatalf("concurrent engines duplicated forge resources = refs:%d prs:%d", refs, prs)
+	}
+}
+
 func TestFakeCandidatePublicationRejectsCorruptCheckpointBlob(t *testing.T) {
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
@@ -611,6 +699,80 @@ func TestFakeCandidatePublicationRejectsCorruptCheckpointBlob(t *testing.T) {
 	}
 	if got := h.transport.pushCount(); got != pushes {
 		t.Fatalf("corrupt checkpoint reached push: %d -> %d", pushes, got)
+	}
+}
+
+func TestFakeCandidatePublicationRejectsCorruptTerminalEvidenceBeforeDispatch(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	writeFile(t, workspace, "candidate.txt", "verified\n")
+	workflow := h.engine()
+	first := h.spec(workspace)
+	if _, err := workflow.StartFakePublication(h.ctx, first); err != nil {
+		t.Fatalf("start first publication: %v", err)
+	}
+	if result, err := workflow.ReconcileFakePublication(h.ctx, first.RunID); err != nil ||
+		result.ReadyItemsCreated != 1 {
+		t.Fatalf("first publication = %+v, %v", result, err)
+	}
+	ready, err := h.attention.GetAttentionItem(
+		h.ctx, domain.ItemID("ready-"+string(first.RunID)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second := first
+	second.RunID = "run-terminal-corrupt"
+	second.ProjectID = "project-terminal-corrupt"
+	second.VerificationInvocationID = "verify-terminal-corrupt"
+	second.PublicationInvocationID = "publish-terminal-corrupt"
+	if _, err := workflow.StartFakePublication(h.ctx, second); err != nil {
+		t.Fatalf("start second publication: %v", err)
+	}
+	runID := second.RunID
+	blocked, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: domain.ItemID("publish-blocked-" + string(runID)), ProjectID: second.ProjectID,
+		Subject: domain.Subject{
+			Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID,
+		},
+		Type: domain.AttentionPublishBlocked, Priority: domain.PriorityHigh,
+		Reason: "publication was durably blocked",
+		RequestedDecision: []domain.Action{
+			domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+		},
+		EvidenceSnapshot: ready.Item.EvidenceSnapshot, PRHeadSHA: ready.Item.PRHeadSHA,
+		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+		Status: domain.StatusOpen,
+	}, map[domain.Digest]bool{h.recipeD: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.attention.PutItem(h.ctx, blocked); err != nil {
+		t.Fatal(err)
+	}
+	corrupt := ready.Item.EvidenceSnapshot[0]
+	blob := "sha256-" + strings.TrimPrefix(string(corrupt.Digest), "sha256:")
+	if err := os.WriteFile(filepath.Join(h.blobDir, blob), []byte("corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := workflow.ReconcileFakePublication(h.ctx, second.RunID); err == nil ||
+		!strings.Contains(err.Error(), "body hashes to") {
+		t.Fatalf("corrupt terminal evidence error = %v", err)
+	}
+	var pending []store.QueueEntry
+	if err := h.store.Read(h.ctx, func(tx *store.ReadTx) error {
+		var err error
+		pending, err = tx.ListPendingOutbox(h.ctx, "engine.fake_publication")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 ||
+		pending[0].IdempotencyKey != "engine.fake_publication/"+string(second.RunID) {
+		t.Fatalf("corrupt terminal evidence dispatched task: %+v", pending)
 	}
 }
 

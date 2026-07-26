@@ -188,6 +188,14 @@ retryable wait, while the latter retains its diagnostic and terminates the
 one-shot publication instead of waiting forever for a janitor loop that is
 running but cannot cover the requested registration.
 
+The last cross-process sweep serializes reconciliation by durable task key with
+a daemon-work-root file lock, so a trust refusal cannot race another process
+that is committing or finalizing the same publication intent. Terminal replay
+now opens and hashes every evidence blob before dispatching the engine task,
+preserving artifact integrity across the item-to-dispatch crash window.
+Repository admission also applies the transport's exact owner/name grammar
+before exporting a handoff or committing immutable task state.
+
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
 while workspace export and verification execution move behind those stronger

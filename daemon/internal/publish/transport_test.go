@@ -237,3 +237,14 @@ func TestParseTransportRepo(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateRepository(t *testing.T) {
+	if err := ValidateRepository("freeasinbird/gh-imgup"); err != nil {
+		t.Fatalf("ValidateRepository(valid) = %v", err)
+	}
+	for _, repo := range []string{"owner/name/extra", "owner/.repo", "-owner/repo"} {
+		if err := ValidateRepository(repo); err == nil {
+			t.Errorf("ValidateRepository(%q) accepted", repo)
+		}
+	}
+}

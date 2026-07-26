@@ -479,6 +479,13 @@ func parseTransportRepo(repo string) (repoRef, error) {
 	return ref, nil
 }
 
+// ValidateRepository applies the exact transport repository grammar before a
+// caller commits durable work that will later require FetchBase.
+func ValidateRepository(repo string) error {
+	_, err := parseTransportRepo(repo)
+	return err
+}
+
 // validCommitSHA reports whether s is a full lowercase 40-hex sha1
 // commit name, the only object-name form the transport ever puts on
 // an argument vector.

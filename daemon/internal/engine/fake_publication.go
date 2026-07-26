@@ -27,6 +27,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -362,6 +363,9 @@ func (w *fakePublicationWorkflow) newTask(
 		spec.Title == "" {
 		return fakePublicationTask{}, false, errors.New("repository, base ref, full base SHA, and title are required")
 	}
+	if err := publish.ValidateRepository(spec.Repo); err != nil {
+		return fakePublicationTask{}, false, fmt.Errorf("repository %q: %w", spec.Repo, err)
+	}
 	if err := publish.ValidateBranchName(spec.BaseRef); err != nil {
 		return fakePublicationTask{}, false, fmt.Errorf("base ref %q: %w", spec.BaseRef, err)
 	}
@@ -499,6 +503,20 @@ func (w *fakePublicationWorkflow) reconcileRun(
 func (w *fakePublicationWorkflow) reconcileEntry(
 	ctx context.Context,
 	entry store.QueueEntry,
+) (outcome taskOutcome, err error) {
+	release, err := w.acquireTaskLock(ctx, entry.IdempotencyKey)
+	if err != nil {
+		return taskOutcome{}, err
+	}
+	defer func() {
+		err = errors.Join(err, release())
+	}()
+	return w.reconcileEntryLocked(ctx, entry)
+}
+
+func (w *fakePublicationWorkflow) reconcileEntryLocked(
+	ctx context.Context,
+	entry store.QueueEntry,
 ) (taskOutcome, error) {
 	task, err := decodeFakePublicationTask(entry.Payload)
 	if err != nil {
@@ -522,6 +540,42 @@ func (w *fakePublicationWorkflow) reconcileEntry(
 		return outcome, nil
 	}
 	return w.reconcileTask(ctx, task)
+}
+
+func (w *fakePublicationWorkflow) acquireTaskLock(
+	ctx context.Context,
+	taskKey string,
+) (func() error, error) {
+	lockDir := filepath.Join(w.workDir, "task-locks")
+	if err := makeFakePublicationDirectory(lockDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create publication task lock directory: %w", err)
+	}
+	digest := sha256.Sum256([]byte(taskKey))
+	lockPath := filepath.Join(lockDir, hex.EncodeToString(digest[:])+".lock")
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // fixed digest name under daemon-owned work directory
+	if err != nil {
+		return nil, fmt.Errorf("open publication task lock: %w", err)
+	}
+	for {
+		err = unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			return func() error {
+				return errors.Join(unix.Flock(int(lock.Fd()), unix.LOCK_UN), lock.Close())
+			}, nil
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+			_ = lock.Close()
+			return nil, fmt.Errorf("lock publication task: %w", err)
+		}
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			_ = lock.Close()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 type taskOutcome struct {
@@ -1058,7 +1112,16 @@ func makeFakePublicationDirectory(path string, mode fs.FileMode) error {
 	}
 	for i := len(missing) - 1; i >= 0; i-- {
 		if err := os.Mkdir(missing[i], mode); err != nil {
-			return err
+			if !errors.Is(err, fs.ErrExist) {
+				return err
+			}
+			info, statErr := os.Stat(missing[i])
+			if statErr != nil {
+				return statErr
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("%s is not a directory", missing[i])
+			}
 		}
 		if err := syncFakePublicationDirectory(filepath.Dir(missing[i])); err != nil {
 			return err
@@ -1261,6 +1324,13 @@ func (w *fakePublicationWorkflow) recoverTerminalTask(
 			"terminal publication item %q does not match task: %w",
 			item.ID, domain.ErrParentKeyMismatch,
 		)
+	}
+	for _, artifact := range item.EvidenceSnapshot {
+		if err := verifyFakePublicationBlob(w.artifacts, artifact); err != nil {
+			return taskOutcome{}, false, fmt.Errorf(
+				"terminal item %q evidence: %w", item.ID, err,
+			)
+		}
 	}
 	outcome := taskOutcome{}
 	switch item.Type {
