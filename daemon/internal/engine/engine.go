@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -37,14 +38,19 @@ var errReplay = errors.New("engine transition already committed")
 // execution driver. It is safe to call Reconcile repeatedly; the store ledger
 // and deterministic workflow identities collapse retries onto prior work.
 type Engine struct {
-	store  *store.Store
-	signet *signet.Service
-	driver exec.StageDriver
+	store       *store.Store
+	signet      *signet.Service
+	driver      exec.StageDriver
+	publication *fakePublicationWorkflow
 }
+
+// Option configures an optional engine workflow without changing the shared
+// store, signet, or driver contracts.
+type Option func(*Engine) error
 
 // New constructs an Engine from already-open boundaries. Their lifetimes stay
 // with the daemon composition that supplied them.
-func New(st *store.Store, attention *signet.Service, driver exec.StageDriver) (*Engine, error) {
+func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, opts ...Option) (*Engine, error) {
 	if st == nil {
 		return nil, errors.New("new engine: nil store")
 	}
@@ -54,15 +60,28 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver) (*
 	if driver == nil {
 		return nil, errors.New("new engine: nil stage driver")
 	}
-	return &Engine{store: st, signet: attention, driver: driver}, nil
+	e := &Engine{store: st, signet: attention, driver: driver}
+	for _, opt := range opts {
+		if opt == nil {
+			return nil, errors.New("new engine: nil option")
+		}
+		if err := opt(e); err != nil {
+			return nil, err
+		}
+	}
+	return e, nil
 }
 
 // ReconcileResult reports the work one pass committed. It is operational
 // evidence for tests and the daemon loop, not workflow authority.
 type ReconcileResult struct {
-	RunTransitions     int
-	InvocationsStarted int
-	ResultsAccepted    int
+	RunTransitions            int
+	InvocationsStarted        int
+	ResultsAccepted           int
+	PublicationTasksCompleted int
+	ReadyItemsCreated         int
+	BlockedItemsCreated       int
+	LastPRNumber              int
 }
 
 // Reconcile advances every durable run and invocation as far as the currently
@@ -78,11 +97,63 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 	if err != nil {
 		return ReconcileResult{}, fmt.Errorf("reconcile invocations: %w", err)
 	}
-	return ReconcileResult{
+	result := ReconcileResult{
 		RunTransitions:     runTransitions,
 		InvocationsStarted: started,
 		ResultsAccepted:    accepted,
-	}, nil
+	}
+	if e.publication == nil {
+		return result, nil
+	}
+	publication, err := e.ReconcileFakePublications(ctx)
+	result.PublicationTasksCompleted = publication.PublicationTasksCompleted
+	result.ReadyItemsCreated = publication.ReadyItemsCreated
+	result.BlockedItemsCreated = publication.BlockedItemsCreated
+	result.LastPRNumber = publication.LastPRNumber
+	return result, err
+}
+
+// ReconcileFakePublications advances only the attended fake-publication lane.
+// One-shot publication commands use this entry point so an unrelated run or
+// invocation in the shared store cannot be advanced by their private driver.
+func (e *Engine) ReconcileFakePublications(ctx context.Context) (ReconcileResult, error) {
+	if e.publication == nil {
+		return ReconcileResult{}, errors.New("fake publication workflow is not configured")
+	}
+	publication, err := e.publication.reconcile(ctx)
+	result := ReconcileResult{
+		PublicationTasksCompleted: publication.completed,
+		ReadyItemsCreated:         publication.ready,
+		BlockedItemsCreated:       publication.blocked,
+		LastPRNumber:              publication.lastPRNumber,
+	}
+	if err != nil {
+		return result, fmt.Errorf("reconcile fake publications: %w", err)
+	}
+	return result, nil
+}
+
+// ReconcileFakePublication advances only the requested attended publication.
+// A one-shot command uses this form so a broken sibling cannot terminate or
+// otherwise interfere with the requested run.
+func (e *Engine) ReconcileFakePublication(
+	ctx context.Context,
+	runID domain.RunID,
+) (ReconcileResult, error) {
+	if e.publication == nil {
+		return ReconcileResult{}, errors.New("fake publication workflow is not configured")
+	}
+	publication, err := e.publication.reconcileRun(ctx, runID)
+	result := ReconcileResult{
+		PublicationTasksCompleted: publication.completed,
+		ReadyItemsCreated:         publication.ready,
+		BlockedItemsCreated:       publication.blocked,
+		LastPRNumber:              publication.lastPRNumber,
+	}
+	if err != nil {
+		return result, fmt.Errorf("reconcile fake publication %q: %w", runID, err)
+	}
+	return result, nil
 }
 
 // Run reconciles immediately and then on interval until ctx is canceled. A
