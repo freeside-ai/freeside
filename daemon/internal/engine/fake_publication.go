@@ -454,19 +454,16 @@ func validateNewFakePublicationBindings(
 			domain.ErrParentKeyMismatch,
 		)
 	}
-	intentKey, err := publish.IntentKey(
-		task.PublicationInvocationID, publish.IntentKindPublication,
-	)
+	reservation, err := fakePublicationReservation(task)
 	if err != nil {
-		return fmt.Errorf("publication intent key: %w", err)
+		return err
 	}
-	if _, err := tx.GetOutbox(ctx, intentKey); err == nil {
-		return fmt.Errorf(
-			"publication invocation %q already has a publisher intent: %w",
-			task.PublicationInvocationID, domain.ErrParentKeyMismatch,
-		)
-	} else if !errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf("check publication intent %q: %w", intentKey, err)
+	// A publisher intent already at this invocation's key means somebody
+	// published under the identity this task is about to commit itself to, so
+	// admission refuses. This task's own reservation does not: re-admitting the
+	// same request must converge, not refuse itself.
+	if err := publish.CheckInvocationAvailable(ctx, tx, reservation); err != nil {
+		return err
 	}
 	return nil
 }
@@ -487,7 +484,53 @@ func claimFakePublicationInvocations(
 			return err
 		}
 	}
-	return nil
+	// The owner rows above bind each invocation to this run for the engine's
+	// own reconciliation checks. They cannot stop another publisher from taking
+	// the publication intent's key before this task reconciles, because no
+	// publisher consults them. Occupying that key is what does (#308).
+	reservation, err := fakePublicationReservation(task)
+	if err != nil {
+		return err
+	}
+	return publish.ClaimInvocation(ctx, tx, reservation)
+}
+
+// validateAndClaim re-checks the task's durable bindings and holds its
+// publication invocation, in one write transaction.
+//
+// The claim is here, and not only at admission, because a task admitted before
+// the reservation contract existed carries no reservation, and recovery reaches
+// reconciliation without passing through admission: restarting under a build
+// that has the contract would otherwise never install one, leaving that task's
+// invocation key unprotected for the rest of its life. Claiming is idempotent
+// for a task that already holds its reservation and accepts the settled intent
+// of one that already published.
+//
+// Validating and claiming share a transaction so no writer can take the key in
+// the gap between them. Both are bookkeeping rather than client-visible state,
+// so the transaction is internal and bumps no revision.
+func (w *fakePublicationWorkflow) validateAndClaim(
+	ctx context.Context,
+	task fakePublicationTask,
+) error {
+	reservation, err := fakePublicationReservation(task)
+	if err != nil {
+		return err
+	}
+	return w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := validateFakePublicationReconciliation(ctx, tx, task); err != nil {
+			return err
+		}
+		return publish.ClaimInvocation(ctx, tx, reservation)
+	})
+}
+
+// fakePublicationReservation is the claim this task holds on the publication
+// intent's key from admission until it publishes. It carries the same run
+// identity the publication-role owner row does, so the two cannot disagree
+// about who owns the invocation.
+func fakePublicationReservation(task fakePublicationTask) (publish.Reservation, error) {
+	return publish.NewReservation(task.PublicationInvocationID, task.RunID)
 }
 
 func expectedFakePublicationInvocationOwners(
@@ -830,9 +873,7 @@ func (w *fakePublicationWorkflow) reconcileEntryLocked(
 		return taskOutcome{}, fmt.Errorf("handoff %q, want %q: %w",
 			task.HandoffDir, expectedHandoff, domain.ErrParentKeyMismatch)
 	}
-	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
-		return validateFakePublicationReconciliation(ctx, tx, task)
-	}); err != nil {
+	if err := w.validateAndClaim(ctx, task); err != nil {
 		return taskOutcome{}, err
 	}
 	if outcome, found, err := w.recoverTerminalTask(ctx, task); err != nil {
@@ -1270,6 +1311,7 @@ func fakePublicationCandidate(
 		Repo: task.Repo, BaseRef: task.BaseRef, HeadSHA: checkpoint.Imported.CommitSHA,
 		Title: task.Title, Body: task.Body, Artifacts: checkpoint.Artifacts,
 		RecipeDigest: &recipeDigest, InvocationID: task.PublicationInvocationID,
+		RunID:           task.RunID,
 		AuthorizationID: &authorizationID, TrustProfileDigest: &profileDigest,
 	}
 }
@@ -1297,7 +1339,29 @@ func (w *fakePublicationWorkflow) loadPublicationOutcome(
 		}
 		return publish.Result{}, false, err
 	}
-	if entry.IdempotencyKey != intentKey || entry.Kind != publish.IntentKindPublication {
+	if entry.IdempotencyKey != intentKey {
+		return publish.Result{}, false, fmt.Errorf(
+			"publication intent %q read back key %q: %w",
+			intentKey, entry.IdempotencyKey, domain.ErrParentKeyMismatch,
+		)
+	}
+	if entry.Kind == publish.IntentKindReservation {
+		// The key still holds this task's reservation, so nothing has been
+		// published under this invocation yet. Reading that as an error would
+		// break every reconcile, since admission is what put it there.
+		held, err := publish.DecodeReservation(entry.Payload)
+		if err != nil {
+			return publish.Result{}, false, err
+		}
+		if held.InvocationID != candidate.InvocationID || held.RunID != candidate.RunID {
+			return publish.Result{}, false, fmt.Errorf(
+				"publication invocation %q is reserved by run %q: %w",
+				intentKey, held.RunID, domain.ErrParentKeyMismatch,
+			)
+		}
+		return publish.Result{}, false, nil
+	}
+	if entry.Kind != publish.IntentKindPublication {
 		return publish.Result{}, false, fmt.Errorf(
 			"publication intent %q has kind %q: %w",
 			intentKey, entry.Kind, domain.ErrParentKeyMismatch,
@@ -2096,6 +2160,7 @@ func (w *fakePublicationWorkflow) recoverTerminalTask(
 			Artifacts: item.EvidenceSnapshot, RecipeDigest: &recipeDigest,
 			TrustProfileDigest: &profileDigest,
 			InvocationID:       task.PublicationInvocationID,
+			RunID:              task.RunID,
 		})
 		if err != nil {
 			return taskOutcome{}, false, err

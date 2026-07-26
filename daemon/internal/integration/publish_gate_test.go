@@ -235,7 +235,7 @@ func (s authzSource) Authorization(_ context.Context, id domain.Digest) (domain.
 
 type failLedger struct{ t *testing.T }
 
-func (l failLedger) Record(context.Context, string, string, []byte) ([]byte, bool, error) {
+func (l failLedger) Record(context.Context, string, string, []byte, *publish.Reservation) ([]byte, bool, error) {
 	l.t.Error("outbox intent recorded: the authorization gate must fail before recordIntent")
 	return nil, false, errors.New("ledger must not be reached")
 }

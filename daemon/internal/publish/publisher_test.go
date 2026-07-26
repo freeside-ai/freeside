@@ -16,6 +16,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 // fixedTokenSource hands out one static token; publisher tests do not
@@ -1455,5 +1456,143 @@ func TestPublishValidation(t *testing.T) {
 		if _, err := p.Publish(context.Background(), c, testApprovedRecipes()); err == nil {
 			t.Errorf("%s accepted, want error", name)
 		}
+	}
+}
+
+// newReservingPublisher wires a publisher over the store-backed ledger, the
+// only ledger that can see the reservation namespace. Trust and authorization
+// stay in memory: a single store adapter does not compose the decision
+// transaction, which keeps these tests on the ledger path the reservation
+// gates.
+func newReservingPublisher(t *testing.T, gh *fakeGitHub, s *store.Store) *publish.Publisher {
+	t.Helper()
+	ledger, err := publish.NewStoreLedger(s)
+	if err != nil {
+		t.Fatalf("NewStoreLedger: %v", err)
+	}
+	return newTestPublisher(t, gh, ledger)
+}
+
+// TestPublishSettlesReservedInvocation: the run that reserved the invocation
+// publishes normally. Its intent replaces the reservation on the same row, so
+// the key it committed to was never free for anybody else to take.
+func TestPublishSettlesReservedInvocation(t *testing.T) {
+	ctx := context.Background()
+	gh := newFakeGitHub(t)
+	s := newTestStore(t)
+	candidate := testCandidate(t)
+	candidate.RunID = "run-0001"
+	claim, err := publish.NewReservation(candidate.InvocationID, candidate.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return publish.ClaimInvocation(ctx, tx, claim)
+	}); err != nil {
+		t.Fatalf("ClaimInvocation: %v", err)
+	}
+
+	result, err := newReservingPublisher(t, gh, s).Publish(ctx, candidate, testApprovedRecipes())
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if !result.PRCreated || result.PRNumber == 0 {
+		t.Fatalf("reserved publication did not create its PR: %+v", result)
+	}
+
+	key, err := claim.Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entry store.QueueEntry
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		entry, err = tx.GetOutbox(ctx, key)
+		return err
+	}); err != nil {
+		t.Fatalf("read settled intent: %v", err)
+	}
+	if entry.Kind != publish.IntentKindPublication {
+		t.Fatalf("row at %s = kind %q, want the settled publication intent", key, entry.Kind)
+	}
+	intent, err := publish.DecodeIntent(entry.Payload)
+	if err != nil {
+		t.Fatalf("decode settled intent: %v", err)
+	}
+	if intent.InvocationID != candidate.InvocationID || intent.SourceHeadSHA != candidate.HeadSHA {
+		t.Fatalf("settled intent = %+v, want the published candidate", intent)
+	}
+}
+
+// TestPublishRefusesReservedInvocationBeforeAnyForgeEffect: a publisher that
+// does not hold the reservation is refused before it touches GitHub, so the
+// reserving task still finds the world exactly as it left it.
+func TestPublishRefusesReservedInvocationBeforeAnyForgeEffect(t *testing.T) {
+	ctx := context.Background()
+	owner, err := publish.NewReservation("inv-0001", "run-0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name  string
+		runID domain.RunID
+	}{
+		{"presents no claim", ""},
+		{"presents another run's claim", "run-other"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gh := newFakeGitHub(t)
+			s := newTestStore(t)
+			if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				return publish.ClaimInvocation(ctx, tx, owner)
+			}); err != nil {
+				t.Fatalf("ClaimInvocation: %v", err)
+			}
+			candidate := testCandidate(t)
+			candidate.RunID = tc.runID
+
+			_, err := newReservingPublisher(t, gh, s).Publish(ctx, candidate, testApprovedRecipes())
+			if !errors.Is(err, publish.ErrInvocationReserved) {
+				t.Fatalf("Publish error = %v, want ErrInvocationReserved", err)
+			}
+			if writes := gh.writeRequests(); len(writes) != 0 {
+				t.Fatalf("refused publication issued forge writes: %v", writes)
+			}
+			key, err := owner.Key()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var entry store.QueueEntry
+			if err := s.Read(ctx, func(tx *store.ReadTx) error {
+				var err error
+				entry, err = tx.GetOutbox(ctx, key)
+				return err
+			}); err != nil {
+				t.Fatalf("read reservation: %v", err)
+			}
+			if entry.Kind != publish.IntentKindReservation {
+				t.Fatalf("row at %s = kind %q, want the reservation intact", key, entry.Kind)
+			}
+		})
+	}
+}
+
+// TestPublishRefusesReservationClaimWithoutAStoreLedger: only a store-backed
+// ledger can see the reservation namespace, so a candidate presenting a claim
+// through any other ledger fails closed rather than publishing past a
+// reservation nothing checked.
+func TestPublishRefusesReservationClaimWithoutAStoreLedger(t *testing.T) {
+	gh := newFakeGitHub(t)
+	candidate := testCandidate(t)
+	candidate.RunID = "run-0001"
+
+	_, err := newTestPublisher(t, gh, newMemoryLedger()).
+		Publish(context.Background(), candidate, testApprovedRecipes())
+	if !errors.Is(err, publish.ErrInvocationReserved) {
+		t.Fatalf("Publish error = %v, want ErrInvocationReserved", err)
+	}
+	if writes := gh.writeRequests(); len(writes) != 0 {
+		t.Fatalf("refused publication issued forge writes: %v", writes)
 	}
 }

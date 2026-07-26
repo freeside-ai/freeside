@@ -28,8 +28,14 @@ const IntentKindPublication = "publish.publication"
 // payload when a prior attempt already committed the key (recorded
 // false), so a retry converges on the original intent instead of
 // re-recording.
+//
+// claim is the caller's proof that it holds the reservation occupying
+// the key (reservation.go), or nil when the invocation was never
+// reserved. An implementation that cannot see the reservation namespace
+// cannot honour a claim, so it must refuse a non-nil one rather than
+// writing past a reservation it did not check.
 type IntentLedger interface {
-	Record(ctx context.Context, key, kind string, payload []byte) (prior []byte, recorded bool, err error)
+	Record(ctx context.Context, key, kind string, payload []byte, claim *Reservation) (prior []byte, recorded bool, err error)
 }
 
 // Intent is the recorded payload of one publication effect: the

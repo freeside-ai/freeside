@@ -1052,8 +1052,12 @@ func TestFakeCandidatePublicationRejectsPublicationInvocationOwnedByAnotherTask(
 	second.RunID = "run-other"
 	second.ProjectID = "project-other"
 	second.VerificationInvocationID = "verify-other"
+	// The refusal now comes from the invocation reservation the first task
+	// committed at admission (#308), which is both earlier and more specific
+	// than the owner-row mismatch that used to catch this: the second run is
+	// refused before any of its own task state is written.
 	if _, err := workflow.StartFakePublication(h.ctx, second); err == nil ||
-		!errors.Is(err, domain.ErrParentKeyMismatch) {
+		!errors.Is(err, publish.ErrInvocationReserved) {
 		t.Fatalf("reused publication invocation error = %v", err)
 	}
 	var pending []store.QueueEntry
@@ -1773,8 +1777,16 @@ func TestFakeCandidatePublicationRejectsUnboundReadyTerminalDecisionInputs(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The admitted task reserved this invocation, so the seeded intent settles
+	// that reservation exactly as the task's own publication would; recording
+	// it without the claim is what a foreign writer would attempt, and is
+	// refused.
+	claim, err := publish.NewReservation(second.PublicationInvocationID, second.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err := ledger.Record(
-		h.ctx, intentKey, publish.IntentKindPublication, payload,
+		h.ctx, intentKey, publish.IntentKindPublication, payload, &claim,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -2629,5 +2641,245 @@ func TestFakeCandidatePublicationReplayKeepsOriginalTrustBinding(t *testing.T) {
 	}
 	if pushes := h.transport.pushCount(); pushes != 1 {
 		t.Fatalf("mixed-profile tasks reached push %d times, want only the current task", pushes)
+	}
+}
+
+// TestFakeCandidatePublicationBlocksForeignIntentBetweenAdmissionAndReconciliation
+// is the race #308 closes, driven as the exact sequence it would produce. A
+// task commits itself to a publication invocation at admission; a second
+// store-backed publisher intent writer then reaches that invocation's key
+// before the task reconciles. The task cannot renegotiate the invocation ID it
+// already committed, so a foreign intent there would strand it permanently.
+func TestFakeCandidatePublicationBlocksForeignIntentBetweenAdmissionAndReconciliation(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	writeFile(t, workspace, "candidate.txt", "verified\n")
+	workflow := h.engine()
+	spec := h.spec(workspace)
+	if _, err := workflow.StartFakePublication(h.ctx, spec); err != nil {
+		t.Fatalf("StartFakePublication: %v", err)
+	}
+
+	intentKey, err := publish.IntentKey(
+		spec.PublicationInvocationID, publish.IntentKindPublication,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved := publicationOutboxRow(t, h, intentKey)
+	if reserved.Kind != publish.IntentKindReservation {
+		t.Fatalf("after admission %s holds kind %q, want the reservation", intentKey, reserved.Kind)
+	}
+	held, err := publish.DecodeReservation(reserved.Payload)
+	if err != nil {
+		t.Fatalf("decode reservation: %v", err)
+	}
+	if held.RunID != spec.RunID || held.InvocationID != spec.PublicationInvocationID {
+		t.Fatalf("reservation = %+v, want the admitted task's", held)
+	}
+
+	// The foreign writer knows nothing about reservations: it commits an intent
+	// the way any publisher does, and is refused because the key it needs is
+	// already occupied.
+	ledger, err := publish.NewStoreLedger(h.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := publish.Intent{
+		Identity:        "sha256:01c663f9a986e10d214b2c31c75fa5088e2995674a8e8f2ba959111e06a23fb8",
+		InvocationID:    spec.PublicationInvocationID,
+		Repo:            fakePublicationRepo,
+		BaseRef:         "main",
+		SourceHeadSHA:   "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+		AuthorizationID: "sha256:02c663f9a986e10d214b2c31c75fa5088e2995674a8e8f2ba959111e06a23fb8",
+	}
+	foreignPayload, err := foreign.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherRun, err := publish.NewReservation(spec.PublicationInvocationID, "run-foreign")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		claim *publish.Reservation
+	}{
+		{"no claim", nil},
+		{"another run's claim", &otherRun},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := ledger.Record(
+				h.ctx, intentKey, publish.IntentKindPublication, foreignPayload, tc.claim,
+			)
+			if !errors.Is(err, publish.ErrInvocationReserved) {
+				t.Fatalf("foreign Record error = %v, want ErrInvocationReserved", err)
+			}
+			after := publicationOutboxRow(t, h, intentKey)
+			if after.ID != reserved.ID || after.Kind != publish.IntentKindReservation ||
+				!bytes.Equal(after.Payload, reserved.Payload) {
+				t.Fatalf("refused foreign write moved the reservation: %+v", after)
+			}
+		})
+	}
+
+	// The owning task still publishes: the reservation it has been holding
+	// becomes its intent on the same row.
+	result, err := workflow.ReconcileFakePublication(h.ctx, spec.RunID)
+	if err != nil {
+		t.Fatalf("ReconcileFakePublication: %v", err)
+	}
+	if result.ReadyItemsCreated != 1 || result.LastPRNumber != 101 {
+		t.Fatalf("reconciliation after the blocked foreign writer = %+v", result)
+	}
+	settled := publicationOutboxRow(t, h, intentKey)
+	if settled.ID != reserved.ID {
+		t.Errorf("settled intent row id = %d, want the reservation's row %d", settled.ID, reserved.ID)
+	}
+	if settled.Kind != publish.IntentKindPublication || !settled.Dispatched() {
+		t.Fatalf("settled row = kind %q status %q, want a dispatched publication intent",
+			settled.Kind, settled.Status)
+	}
+	intent, err := publish.DecodeIntent(settled.Payload)
+	if err != nil {
+		t.Fatalf("decode settled intent: %v", err)
+	}
+	if intent.InvocationID != spec.PublicationInvocationID || intent.Repo != fakePublicationRepo {
+		t.Fatalf("settled intent = %+v, want the admitted task's publication", intent)
+	}
+}
+
+// TestFakeCandidatePublicationRejectsForeignReservationAtAdmission: the mirror
+// case. A run cannot admit a task bound to an invocation another run is
+// already holding, and it finds out before any of its own state is committed.
+func TestFakeCandidatePublicationRejectsForeignReservationAtAdmission(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	spec := h.spec(workspace)
+
+	foreign, err := publish.NewReservation(spec.PublicationInvocationID, "run-foreign")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.WriteInternal(h.ctx, func(tx *store.InternalTx) error {
+		return publish.ClaimInvocation(h.ctx, tx, foreign)
+	}); err != nil {
+		t.Fatalf("seed foreign reservation: %v", err)
+	}
+
+	if _, err := h.engine().StartFakePublication(h.ctx, spec); !errors.Is(err, publish.ErrInvocationReserved) {
+		t.Fatalf("StartFakePublication error = %v, want ErrInvocationReserved", err)
+	}
+	var tasks []store.QueueEntry
+	if err := h.store.Read(h.ctx, func(tx *store.ReadTx) error {
+		var err error
+		tasks, err = tx.ListPendingOutbox(h.ctx, "engine.fake_publication")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("refused admission committed tasks: %+v", tasks)
+	}
+}
+
+func publicationOutboxRow(t *testing.T, h *publicationHarness, key string) store.QueueEntry {
+	t.Helper()
+	var entry store.QueueEntry
+	if err := h.store.Read(h.ctx, func(tx *store.ReadTx) error {
+		var err error
+		entry, err = tx.GetOutbox(h.ctx, key)
+		return err
+	}); err != nil {
+		t.Fatalf("read %s: %v", key, err)
+	}
+	return entry
+}
+
+// TestFakeCandidatePublicationSettlesAReservationWrittenBeforeRestart: the
+// reservation outlives the process that wrote it, so a daemon that restarts
+// between admission and reconciliation must read its own reservation as "not
+// published yet" and settle it, not as a foreign row at the intent key.
+func TestFakeCandidatePublicationSettlesAReservationWrittenBeforeRestart(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	writeFile(t, workspace, "candidate.txt", "verified\n")
+	spec := h.spec(workspace)
+	if _, err := h.engine().StartFakePublication(h.ctx, spec); err != nil {
+		t.Fatalf("StartFakePublication: %v", err)
+	}
+
+	result, err := h.engine().ReconcileFakePublication(h.ctx, spec.RunID)
+	if err != nil {
+		t.Fatalf("ReconcileFakePublication after restart: %v", err)
+	}
+	if result.ReadyItemsCreated != 1 || result.LastPRNumber != 101 {
+		t.Fatalf("restarted reconciliation = %+v", result)
+	}
+}
+
+// TestFakeCandidatePublicationBackfillsAReservationMissingFromAdmission: a task
+// admitted by a build that predates the reservation contract carries no
+// reservation, and recovery reaches reconciliation without passing through
+// admission. Without a backfill its invocation key would stay unprotected for
+// the rest of the task's life, so the upgrade would leave exactly the strand
+// this unit exists to prevent.
+func TestFakeCandidatePublicationBackfillsAReservationMissingFromAdmission(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	writeFile(t, workspace, "candidate.txt", "verified\n")
+	spec := h.spec(workspace)
+	if _, err := h.engine().StartFakePublication(h.ctx, spec); err != nil {
+		t.Fatalf("StartFakePublication: %v", err)
+	}
+	intentKey, err := publish.IntentKey(
+		spec.PublicationInvocationID, publish.IntentKindPublication,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Drop the reservation to leave exactly the durable state an older build's
+	// admission would have committed: task and owner rows, no reservation.
+	raw, err := sql.Open("sqlite", h.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropped, err := raw.ExecContext(h.ctx,
+		`DELETE FROM outbox WHERE idempotency_key = ?`, intentKey,
+	)
+	if err != nil {
+		_ = raw.Close()
+		t.Fatalf("simulate a pre-reservation task: %v", err)
+	}
+	if removed, err := dropped.RowsAffected(); err != nil || removed != 1 {
+		_ = raw.Close()
+		t.Fatalf("removed reservation rows = %d, %v", removed, err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fail the reconcile after the claim so the reservation can be observed
+	// while the task is still mid-flight, which is the window it must cover.
+	h.transport.failFetch(errors.New("transport unavailable"))
+	if _, err := h.engine().ReconcileFakePublication(h.ctx, spec.RunID); err == nil {
+		t.Fatal("ReconcileFakePublication succeeded, want the injected transport failure")
+	}
+
+	entry := publicationOutboxRow(t, h, intentKey)
+	if entry.Kind != publish.IntentKindReservation {
+		t.Fatalf("row at %s = kind %q, want a backfilled reservation", intentKey, entry.Kind)
+	}
+	held, err := publish.DecodeReservation(entry.Payload)
+	if err != nil {
+		t.Fatalf("decode backfilled reservation: %v", err)
+	}
+	if held.RunID != spec.RunID || held.InvocationID != spec.PublicationInvocationID {
+		t.Fatalf("backfilled reservation = %+v, want the restored task's", held)
 	}
 }

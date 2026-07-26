@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -65,6 +66,9 @@ SELECT id, idempotency_key, kind, payload, status, created_at
 FROM outbox WHERE kind = ? AND status = ? ORDER BY id`
 	markOutboxDispatchedSQL = `
 UPDATE outbox SET status = ? WHERE idempotency_key = ? AND status = ?`
+	promoteOutboxSQL = `
+UPDATE outbox SET kind = ?, payload = ?
+WHERE idempotency_key = ? AND kind = ? AND payload = ? AND status = ?`
 
 	recordInboxSQL = `
 INSERT INTO inbox (idempotency_key, kind, payload, created_at)
@@ -192,6 +196,62 @@ func (tx *InternalTx) MarkOutboxDispatched(ctx context.Context, key string) erro
 		return fmt.Errorf("mark outbox dispatched %q: %w", key, err)
 	}
 	return nil
+}
+
+// PromoteOutbox refines one pending row in place: a placeholder committed
+// under fromKind becomes its final kind and payload, keeping id, created_at,
+// and status. It exists so a caller can occupy an idempotency key before it
+// knows the final payload — the key is the contested resource — and then
+// settle it without the row ever being absent for a competing writer to take.
+//
+// The UPDATE is guarded on the exact current kind, payload, and pending
+// status, so it cannot land on a row that moved underneath it. Affecting no
+// row is not an error: a retried promotion is ordinary, so the current row is
+// returned with promoted false and the caller decides whether what it found is
+// what it wanted. The row is always re-read and re-checked before returning,
+// since the guard proves what was matched, not what the row now holds.
+func (tx *InternalTx) PromoteOutbox(
+	ctx context.Context,
+	key, fromKind, toKind string,
+	expectPayload, payload []byte,
+) (QueueEntry, bool, error) {
+	if key == "" {
+		return QueueEntry{}, false, errors.New("promote outbox: empty idempotency key")
+	}
+	if fromKind == "" || toKind == "" {
+		return QueueEntry{}, false, fmt.Errorf("promote outbox %q: empty kind", key)
+	}
+	if fromKind == toKind {
+		// A promotion that does not change the kind would let the guard match
+		// the row it just wrote on a retry, so a payload rewrite could pass as
+		// a fresh promotion. Payload-only edits are not this method's contract.
+		return QueueEntry{}, false, fmt.Errorf("promote outbox %q: kind %q is unchanged", key, toKind)
+	}
+	if expectPayload == nil {
+		expectPayload = []byte{}
+	}
+	if payload == nil {
+		payload = []byte{}
+	}
+	res, err := tx.tx.ExecContext(ctx, promoteOutboxSQL,
+		toKind, payload, key, fromKind, expectPayload, outboxStatusPending)
+	if err != nil {
+		return QueueEntry{}, false, fmt.Errorf("promote outbox %q: %w", key, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return QueueEntry{}, false, fmt.Errorf("promote outbox %q: %w", key, err)
+	}
+	entry, err := tx.GetOutbox(ctx, key)
+	if err != nil {
+		return QueueEntry{}, false, fmt.Errorf("promote outbox %q: %w", key, err)
+	}
+	if affected > 0 && (entry.Kind != toKind || !bytes.Equal(entry.Payload, payload) ||
+		entry.Status != outboxStatusPending) {
+		return QueueEntry{}, false, fmt.Errorf(
+			"promote outbox %q: row holds kind %q after promotion", key, entry.Kind)
+	}
+	return entry, affected > 0, nil
 }
 
 // RecordInbox dedups an externally-triggered intake under its idempotency

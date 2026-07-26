@@ -282,3 +282,193 @@ func TestMarkOutboxDispatchedInvisibleToSync(t *testing.T) {
 		t.Fatalf("revision moved %d -> %d; dispatch bookkeeping must be invisible to sync", before.Revision, after.Revision)
 	}
 }
+
+// TestPromoteOutboxRefinesPendingRowInPlace: a placeholder settles into its
+// final kind and payload without the row ever being absent, so the identity a
+// caller occupied at insert survives the promotion — same id, same created_at,
+// still pending and therefore still visible to the recovery scan.
+func TestPromoteOutboxRefinesPendingRowInPlace(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	placeholder := []byte(`{"reserved":true}`)
+	final := []byte(`{"intent":true}`)
+
+	var before store.QueueEntry
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		var err error
+		before, _, err = tx.EnqueueOutbox(ctx, "key-1", "reservation", placeholder)
+		return err
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	var after store.QueueEntry
+	var promoted bool
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		var err error
+		after, promoted, err = tx.PromoteOutbox(ctx, "key-1", "reservation", "intent", placeholder, final)
+		return err
+	}); err != nil {
+		t.Fatalf("PromoteOutbox: %v", err)
+	}
+	if !promoted {
+		t.Error("promoted = false, want true")
+	}
+	if after.ID != before.ID || !after.CreatedAt.Equal(before.CreatedAt) {
+		t.Errorf("promotion moved the row: id %d -> %d, created_at %v -> %v",
+			before.ID, after.ID, before.CreatedAt, after.CreatedAt)
+	}
+	if after.Kind != "intent" || !bytes.Equal(after.Payload, final) {
+		t.Errorf("promoted row = kind %q payload %q, want kind \"intent\" payload %q",
+			after.Kind, after.Payload, final)
+	}
+	if after.Dispatched() || after.Quarantined() {
+		t.Errorf("promoted row status = %q, want pending so recovery still scans it", after.Status)
+	}
+
+	var pending []store.QueueEntry
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		pending, err = tx.ListPendingOutbox(ctx, "intent")
+		return err
+	}); err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	if len(pending) != 1 || pending[0].IdempotencyKey != "key-1" {
+		t.Fatalf("pending under the final kind = %+v, want the promoted row", pending)
+	}
+}
+
+// TestPromoteOutboxRefusesRowThatMoved: the guard is the whole point. A row
+// whose kind, payload, or status is not exactly what the caller matched is a
+// row somebody else settled, so the promotion must affect nothing and report
+// that it did not promote rather than overwriting the other writer's decision.
+func TestPromoteOutboxRefusesRowThatMoved(t *testing.T) {
+	ctx := context.Background()
+	placeholder := []byte(`{"reserved":true}`)
+	final := []byte(`{"intent":true}`)
+	cases := []struct {
+		name          string
+		seedKind      string
+		seedPayload   []byte
+		dispatch      bool
+		fromKind      string
+		expectPayload []byte
+	}{
+		{"wrong from kind", "other", placeholder, false, "reservation", placeholder},
+		{"changed payload", "reservation", []byte(`{"reserved":false}`), false, "reservation", placeholder},
+		{"already dispatched", "reservation", placeholder, true, "reservation", placeholder},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := openStore(t, store.Options{})
+			if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				if _, _, err := tx.EnqueueOutbox(ctx, "key-1", tc.seedKind, tc.seedPayload); err != nil {
+					return err
+				}
+				if tc.dispatch {
+					return tx.MarkOutboxDispatched(ctx, "key-1")
+				}
+				return nil
+			}); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+
+			var entry store.QueueEntry
+			var promoted bool
+			if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				var err error
+				entry, promoted, err = tx.PromoteOutbox(
+					ctx, "key-1", tc.fromKind, "intent", tc.expectPayload, final)
+				return err
+			}); err != nil {
+				t.Fatalf("PromoteOutbox: %v", err)
+			}
+			if promoted {
+				t.Error("promoted = true, want false")
+			}
+			if entry.Kind != tc.seedKind || !bytes.Equal(entry.Payload, tc.seedPayload) {
+				t.Errorf("row = kind %q payload %q, want it untouched (kind %q payload %q)",
+					entry.Kind, entry.Payload, tc.seedKind, tc.seedPayload)
+			}
+		})
+	}
+}
+
+// TestPromoteOutboxSecondAttemptReportsNotPromoted: a retried promotion is
+// ordinary (a caller re-entering after a crash), so the second attempt reports
+// promoted false and hands back the settled row instead of erroring — the
+// caller compares it against what it wanted and converges.
+func TestPromoteOutboxSecondAttemptReportsNotPromoted(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	placeholder := []byte(`{"reserved":true}`)
+	final := []byte(`{"intent":true}`)
+
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if _, _, err := tx.EnqueueOutbox(ctx, "key-1", "reservation", placeholder); err != nil {
+			return err
+		}
+		_, _, err := tx.PromoteOutbox(ctx, "key-1", "reservation", "intent", placeholder, final)
+		return err
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	var entry store.QueueEntry
+	var promoted bool
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		var err error
+		entry, promoted, err = tx.PromoteOutbox(ctx, "key-1", "reservation", "intent", placeholder, final)
+		return err
+	}); err != nil {
+		t.Fatalf("second PromoteOutbox: %v", err)
+	}
+	if promoted {
+		t.Error("second promoted = true, want false")
+	}
+	if entry.Kind != "intent" || !bytes.Equal(entry.Payload, final) {
+		t.Errorf("row = kind %q payload %q, want the already-promoted intent", entry.Kind, entry.Payload)
+	}
+}
+
+// TestPromoteOutboxRejectsUnusableRequest: an absent key names no row to
+// refine, and an unchanged kind would let the guard match the row the caller
+// just wrote, so a payload rewrite could pass as a fresh promotion.
+func TestPromoteOutboxRejectsUnusableRequest(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, _, err := tx.EnqueueOutbox(ctx, "key-1", "reservation", []byte(`{}`))
+		return err
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cases := []struct {
+		name     string
+		key      string
+		fromKind string
+		toKind   string
+		wantErr  error
+	}{
+		{"empty key", "", "reservation", "intent", nil},
+		{"empty from kind", "key-1", "", "intent", nil},
+		{"empty to kind", "key-1", "reservation", "", nil},
+		{"unchanged kind", "key-1", "intent", "intent", nil},
+		{"missing row", "key-2", "reservation", "intent", store.ErrNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				_, _, err := tx.PromoteOutbox(ctx, tc.key, tc.fromKind, tc.toKind, []byte(`{}`), []byte(`{}`))
+				return err
+			})
+			if err == nil {
+				t.Fatal("PromoteOutbox accepted an unusable request, want error")
+			}
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Fatalf("PromoteOutbox error = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
