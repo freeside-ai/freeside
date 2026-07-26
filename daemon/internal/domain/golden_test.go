@@ -308,9 +308,20 @@ func TestGolden(t *testing.T) {
 	stage := domain.Stage{ID: "stage-1", RunID: "run-1", Name: "implementation", Attempts: []domain.Attempt{attempt}}
 	run := domain.Run{ID: "run-1", ProjectID: "proj-1", SpecDigest: "sha256:spec", PolicyDigest: resolvedPolicy.Digest, Stages: []domain.Stage{stage}}
 
+	// The provider identity the stage below runs under, and a live lease on
+	// its auth store.
+	identity := domain.AuthIdentity{
+		ID: "auth-claude-owner", Provider: "claude", AuthStoreMutationLease: true,
+		MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
+	}
+	mutationLease := domain.AuthStoreMutationLease{
+		AuthIdentityID: identity.ID, Holder: "inv-1", Fence: 1,
+		AcquiredAt: ts, ExpiresAt: ts.Add(5 * time.Minute),
+	}
+
 	// The durable execution record for that attempt. Capabilities are passed
 	// unsorted to exercise the constructor's canonicalization.
-	authIdentity := domain.AuthIdentityID("auth-claude-owner")
+	authIdentity := identity.ID
 	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
 		InvocationID: "inv-1", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-1",
 		Backend: "fresh_vm_read_only_volume_handoff",
@@ -432,6 +443,8 @@ func TestGolden(t *testing.T) {
 		{"run", run},
 		{"stage", stage},
 		{"attempt", attempt},
+		{"auth_identity", identity},
+		{"auth_store_mutation_lease", mutationLease},
 		{"execution_admission", admission},
 		{"execution_admission_waived", waivedAdmission},
 		{"execution_export", export},

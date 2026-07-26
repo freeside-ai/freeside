@@ -16,6 +16,8 @@
 //   - policy.go       resolved policy with per-key provenance (§5.12)
 //   - run.go          run/stage/attempt and invocation identities (§5.3)
 //   - capability.go   runner capabilities and their persisted snapshot (§5.7)
+//   - execution.go    the durable admission and export records (§5.3, §5.7)
+//   - auth_identity.go provider identities and the mutation lease (§5.4)
 //   - trust_profile.go automation trust profile and workflow audit (§5.5)
 //   - authorization.go candidate authorization and finding classes (§5.6, §5.8)
 //
