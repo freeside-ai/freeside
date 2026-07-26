@@ -211,6 +211,17 @@ alias after admission therefore cannot strand either a pending or completed
 run, while the stored identity is still checked against every daemon-owned
 path before use.
 
+Recovered verifier metadata is now part of the authorization trust boundary,
+not merely a structurally valid companion to it. Candidate authorization
+encoding v2 binds the digest of the complete ordered evidence snapshot, and
+checkpoint recovery recomputes that digest before accepting any artifact.
+This rejects substitution with other well-formed, digest-valid verifier blobs
+whose claimed provenance happens to match the task. Durable replay also omits
+the ambient recipe file from path resolution and overlap validation: the
+task-bound recipe blob is the sole recipe authority after admission, so a
+later symlink change to the unused CLI path cannot strand recovery. Fresh
+requests still validate the ambient recipe path before reading it.
+
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
 while workspace export and verification execution move behind those stronger

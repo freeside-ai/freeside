@@ -245,6 +245,7 @@ func TestImportFindingsBlockPublication(t *testing.T) {
 		HeadSHA:                  headSHA,
 		ImportResultDigest:       domain.Digest("sha256:" + strings.Repeat("f", 64)),
 		VerificationRecipeDigest: testRecipe,
+		EvidenceSnapshotDigest:   "sha256:evidence-snapshot",
 		VerificationOutcome:      domain.VerificationPassed,
 		Findings:                 findings,
 		TrustProfileDigest:       profile.ProfileDigest,

@@ -14,7 +14,7 @@ import (
 // new version: two daemon builds must never derive different identities for
 // the same bound facts, or a replay across an upgrade would mint a second
 // authorization for one candidate.
-const authorizationEncodingVersion = "freeside-candidate-authorization/v1"
+const authorizationEncodingVersion = "freeside-candidate-authorization/v2"
 
 // Waivable reports whether a finding of this class may carry a waived
 // disposition at all. Plan §3.1 names control-plane modifications,
@@ -164,9 +164,9 @@ func (f CandidateFinding) clone() CandidateFinding {
 // CandidateAuthorization is the immutable, daemon-authored record that binds
 // everything publication is allowed to trust about one candidate (plan §5.6):
 // the exact import result, the candidate head and base, the verification
-// recipe and outcome, the findings and their dispositions, and the automation
-// trust profile the whole run was bound to. The publication gate consumes it;
-// nothing agent-authored can produce or alter one. ID and
+// recipe, evidence snapshot, and outcome, the findings and their dispositions,
+// and the automation trust profile the whole run was bound to. The publication
+// gate consumes it; nothing agent-authored can produce or alter one. ID and
 // AuthorizesPublication are exported so the type serializes, but both are
 // computed from the bound facts in NewCandidateAuthorization and never taken
 // from caller input; Validate recomputes both, so a decoded or exported
@@ -179,6 +179,7 @@ type CandidateAuthorization struct {
 	HeadSHA                  string              `json:"head_sha"`
 	ImportResultDigest       Digest              `json:"import_result_digest"`
 	VerificationRecipeDigest Digest              `json:"verification_recipe_digest"`
+	EvidenceSnapshotDigest   Digest              `json:"evidence_snapshot_digest"`
 	VerificationOutcome      VerificationOutcome `json:"verification_outcome"`
 	Findings                 []CandidateFinding  `json:"findings"`
 	TrustProfileDigest       Digest              `json:"trust_profile_digest"`
@@ -197,6 +198,7 @@ type CandidateAuthorizationInput struct {
 	HeadSHA                  string
 	ImportResultDigest       Digest
 	VerificationRecipeDigest Digest
+	EvidenceSnapshotDigest   Digest
 	VerificationOutcome      VerificationOutcome
 	Findings                 []CandidateFinding
 	TrustProfileDigest       Digest
@@ -221,6 +223,7 @@ func NewCandidateAuthorization(in CandidateAuthorizationInput) (CandidateAuthori
 		HeadSHA:                  in.HeadSHA,
 		ImportResultDigest:       in.ImportResultDigest,
 		VerificationRecipeDigest: in.VerificationRecipeDigest,
+		EvidenceSnapshotDigest:   in.EvidenceSnapshotDigest,
 		VerificationOutcome:      in.VerificationOutcome,
 		Findings:                 findings,
 		TrustProfileDigest:       in.TrustProfileDigest,
@@ -281,6 +284,7 @@ type canonicalAuthorization struct {
 	HeadSHA                  string              `json:"head_sha"`
 	ImportResultDigest       Digest              `json:"import_result_digest"`
 	VerificationRecipeDigest Digest              `json:"verification_recipe_digest"`
+	EvidenceSnapshotDigest   Digest              `json:"evidence_snapshot_digest"`
 	VerificationOutcome      VerificationOutcome `json:"verification_outcome"`
 	Findings                 []CandidateFinding  `json:"findings"`
 	TrustProfileDigest       Digest              `json:"trust_profile_digest"`
@@ -310,6 +314,7 @@ func (a CandidateAuthorization) ComputeID() (Digest, error) {
 		HeadSHA:                  a.HeadSHA,
 		ImportResultDigest:       a.ImportResultDigest,
 		VerificationRecipeDigest: a.VerificationRecipeDigest,
+		EvidenceSnapshotDigest:   a.EvidenceSnapshotDigest,
 		VerificationOutcome:      a.VerificationOutcome,
 		Findings:                 findings,
 		TrustProfileDigest:       a.TrustProfileDigest,
@@ -378,6 +383,9 @@ func (a CandidateAuthorization) Validate() error {
 	}
 	if a.VerificationRecipeDigest == "" {
 		return fmt.Errorf("authorization verification_recipe_digest: %w", ErrEmptyField)
+	}
+	if a.EvidenceSnapshotDigest == "" {
+		return fmt.Errorf("authorization evidence_snapshot_digest: %w", ErrEmptyField)
 	}
 	if !a.VerificationOutcome.valid() {
 		return fmt.Errorf("authorization verification_outcome %q: %w", a.VerificationOutcome, ErrInvalidOutcome)

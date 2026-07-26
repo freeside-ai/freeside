@@ -28,6 +28,7 @@ func authorizingInput(t *testing.T) domain.CandidateAuthorizationInput {
 		HeadSHA:                  testHeadSHA,
 		ImportResultDigest:       "sha256:import-result-fixture",
 		VerificationRecipeDigest: testRecipe,
+		EvidenceSnapshotDigest:   "sha256:evidence-snapshot",
 		VerificationOutcome:      domain.VerificationPassed,
 		Findings:                 nil,
 		TrustProfileDigest:       testTrustProfileDigest(t),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -136,10 +137,14 @@ func TestPrepareFakePublicationConfigUsesDurableWorkspaceBeforeResolvingAlias(t 
 			if err := os.Symlink(credentials, alias); err != nil {
 				t.Fatal(err)
 			}
+			recipeAlias := filepath.Join(root, "recipe-alias")
+			if err := os.Symlink(workspace, recipeAlias); err != nil {
+				t.Fatal(err)
+			}
 			cfg := fakePublicationCommandConfig{
 				DBPath: filepath.Join(root, "freeside.db"), StateDir: filepath.Join(root, "state"),
 				CredentialsDir: credentials, WorkspaceDir: alias,
-				RecipeFile: filepath.Join(root, "recipe.json"), Repo: "owner/repo",
+				RecipeFile: recipeAlias, Repo: "owner/repo",
 				BaseRef: "main", BaseSHA: "1111111111111111111111111111111111111111",
 			}
 			found, err := prepareFakePublicationConfig(
@@ -170,7 +175,45 @@ func TestPrepareFakePublicationConfigUsesDurableWorkspaceBeforeResolvingAlias(t 
 				t.Fatalf("prepared workspace = %q, found %t, want durable %q",
 					cfg.WorkspaceDir, found, resolvedWorkspace)
 			}
+			if cfg.RecipeFile != recipeAlias {
+				t.Fatalf("replay recipe path = %q, want unused ambient alias %q",
+					cfg.RecipeFile, recipeAlias)
+			}
 		})
+	}
+}
+
+func TestPrepareFakePublicationConfigValidatesAmbientRecipeForNewRun(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	if err := os.Mkdir(workspace, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	recipeAlias := filepath.Join(root, "recipe-alias")
+	if err := os.Symlink(workspace, recipeAlias); err != nil {
+		t.Fatal(err)
+	}
+	cfg := fakePublicationCommandConfig{
+		DBPath: filepath.Join(root, "freeside.db"), StateDir: filepath.Join(root, "state"),
+		CredentialsDir: filepath.Join(root, "credentials"), WorkspaceDir: workspace,
+		RecipeFile: recipeAlias, Repo: "owner/repo",
+		BaseRef: "main", BaseSHA: "1111111111111111111111111111111111111111",
+	}
+	found, err := prepareFakePublicationConfig(
+		t.Context(),
+		&cfg,
+		func(
+			context.Context,
+			fakePublicationCommandConfig,
+		) (engine.FakePublicationReplayBinding, bool, error) {
+			return engine.FakePublicationReplayBinding{}, false, nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "-publication-recipe overlaps") {
+		t.Fatalf("new-run ambient recipe validation error = %v", err)
+	}
+	if found {
+		t.Fatal("new run reported a durable replay binding")
 	}
 }
 

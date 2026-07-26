@@ -775,6 +775,67 @@ func TestFakeCandidatePublicationRejectsCorruptCheckpointBlob(t *testing.T) {
 	}
 }
 
+func TestFakeCandidatePublicationRejectsSubstitutedCheckpointArtifact(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	writeFile(t, workspace, "candidate.txt", "verified\n")
+
+	workflow := h.engine()
+	h.transport.failNextPush()
+	if _, err := workflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
+		t.Fatalf("StartFakePublication: %v", err)
+	}
+	if _, err := workflow.Reconcile(h.ctx); err == nil {
+		t.Fatal("injected push failure did not leave the task pending")
+	}
+	candidateDir := filepath.Join(h.workDir, "candidates")
+	checkpoints, err := os.ReadDir(candidateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(checkpoints) != 1 {
+		t.Fatalf("candidate checkpoints = %d, want 1", len(checkpoints))
+	}
+	checkpointPath := filepath.Join(candidateDir, checkpoints[0].Name())
+	body, err := os.ReadFile(checkpointPath) //nolint:gosec // test-owned path rooted in the harness temp directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checkpoint map[string]json.RawMessage
+	if err := json.Unmarshal(body, &checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	var artifacts []json.RawMessage
+	if err := json.Unmarshal(checkpoint["artifacts"], &artifacts); err != nil {
+		t.Fatal(err)
+	}
+	if len(artifacts) != 2 {
+		t.Fatalf("checkpoint artifacts = %d, want 2", len(artifacts))
+	}
+	artifacts[0] = artifacts[1]
+	checkpoint["artifacts"], err = json.Marshal(artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err = json.Marshal(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(checkpointPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	pushes := h.transport.pushCount()
+	if _, err := workflow.Reconcile(h.ctx); err == nil ||
+		!errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("substituted checkpoint artifact error = %v", err)
+	}
+	if got := h.transport.pushCount(); got != pushes {
+		t.Fatalf("substituted checkpoint reached push: %d -> %d", pushes, got)
+	}
+}
+
 func TestFakeCandidatePublicationRejectsCorruptTerminalEvidenceBeforeDispatch(t *testing.T) {
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()

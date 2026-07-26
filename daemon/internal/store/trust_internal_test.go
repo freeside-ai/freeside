@@ -48,6 +48,7 @@ func TestTrustRowsTamperedBodyFailsClosed(t *testing.T) {
 		Repo: profile.Repo, BaseSHA: "beefcafe", HeadSHA: "cafebabe",
 		ImportResultDigest:       "sha256:import-result",
 		VerificationRecipeDigest: "sha256:recipe-approved",
+		EvidenceSnapshotDigest:   "sha256:evidence-snapshot",
 		VerificationOutcome:      domain.VerificationFailed,
 		TrustProfileDigest:       profile.ProfileDigest,
 		InvocationID:             "inv-1",

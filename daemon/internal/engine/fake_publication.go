@@ -986,19 +986,23 @@ func (w *fakePublicationWorkflow) verifyCandidate(
 	if err != nil {
 		return fakePublicationCandidateCheckpoint{}, fmt.Errorf("digest import account: %w", err)
 	}
+	evidenceDigest, err := digestJSON(artifacts)
+	if err != nil {
+		return fakePublicationCandidateCheckpoint{}, fmt.Errorf("digest evidence snapshot: %w", err)
+	}
 	authorization, err := domain.NewCandidateAuthorization(domain.CandidateAuthorizationInput{
 		Repo: task.Repo, BaseSHA: task.BaseSHA, HeadSHA: imported.CommitSHA,
 		ImportResultDigest: importDigest, VerificationRecipeDigest: verified.RecipeDigest,
-		VerificationOutcome: outcome,
-		Findings:            candidateFindings(imported.Findings, verified.Findings),
-		TrustProfileDigest:  task.TrustProfileDigest,
-		InvocationID:        task.VerificationInvocationID, CreatedAt: task.StartedAt,
+		EvidenceSnapshotDigest: evidenceDigest, VerificationOutcome: outcome,
+		Findings:           candidateFindings(imported.Findings, verified.Findings),
+		TrustProfileDigest: task.TrustProfileDigest,
+		InvocationID:       task.VerificationInvocationID, CreatedAt: task.StartedAt,
 	})
 	if err != nil {
 		return fakePublicationCandidateCheckpoint{}, fmt.Errorf("construct candidate authorization: %w", err)
 	}
 	checkpoint := fakePublicationCandidateCheckpoint{
-		Version: "freeside.fake-publication-candidate/v1",
+		Version: "freeside.fake-publication-candidate/v2",
 		TaskKey: fakePublicationTaskKey(task.RunID), Authorization: authorization,
 		Artifacts: artifacts,
 	}
@@ -1092,11 +1096,16 @@ func (w *fakePublicationWorkflow) loadCandidateCheckpoint(
 	if err != nil {
 		return fakePublicationCandidateCheckpoint{}, false, err
 	}
+	evidenceDigest, err := digestJSON(checkpoint.Artifacts)
+	if err != nil {
+		return fakePublicationCandidateCheckpoint{}, false, err
+	}
 	a := checkpoint.Authorization
-	if checkpoint.Version != "freeside.fake-publication-candidate/v1" ||
+	if checkpoint.Version != "freeside.fake-publication-candidate/v2" ||
 		checkpoint.TaskKey != fakePublicationTaskKey(task.RunID) || a.Validate() != nil ||
 		a.Repo != task.Repo || a.BaseSHA != task.BaseSHA || a.HeadSHA != imported.CommitSHA ||
 		a.ImportResultDigest != importDigest || a.VerificationRecipeDigest != task.RecipeDigest ||
+		a.EvidenceSnapshotDigest != evidenceDigest ||
 		a.TrustProfileDigest != task.TrustProfileDigest ||
 		a.InvocationID != task.VerificationInvocationID || !a.CreatedAt.Equal(task.StartedAt) ||
 		len(checkpoint.Artifacts) != 2 {

@@ -269,7 +269,7 @@ func prepareFakePublicationConfig(
 	if found {
 		cfg.WorkspaceDir = binding.WorkspaceDir
 	}
-	if err := cfg.resolveAndValidatePaths(); err != nil {
+	if err := cfg.resolveAndValidatePaths(!found); err != nil {
 		return false, err
 	}
 	return found, nil
@@ -311,7 +311,7 @@ func (cfg *fakePublicationCommandConfig) withDefaultsAndValidate() error {
 	if err := cfg.withDefaults(); err != nil {
 		return err
 	}
-	return cfg.resolveAndValidatePaths()
+	return cfg.resolveAndValidatePaths(true)
 }
 
 func (cfg *fakePublicationCommandConfig) withDefaults() error {
@@ -372,19 +372,22 @@ func (cfg *fakePublicationCommandConfig) withDefaults() error {
 	return nil
 }
 
-func (cfg *fakePublicationCommandConfig) resolveAndValidatePaths() error {
-	paths := []struct {
+func (cfg *fakePublicationCommandConfig) resolveAndValidatePaths(resolveAmbientRecipe bool) error {
+	type publicationPath struct {
 		name string
 		path *string
 		dir  bool
-	}{
+	}
+	paths := []publicationPath{
 		{"-publication-workspace", &cfg.WorkspaceDir, true},
 		{"-db", &cfg.DBPath, false},
 		{"-publication-work-dir", &cfg.WorkDir, true},
 		{"-fake-stage-driver-dir", &cfg.FakeDriverDir, true},
 		{"-publication-state-dir", &cfg.StateDir, true},
 		{"-publication-credentials-dir", &cfg.CredentialsDir, true},
-		{"-publication-recipe", &cfg.RecipeFile, false},
+	}
+	if resolveAmbientRecipe {
+		paths = append(paths, publicationPath{"-publication-recipe", &cfg.RecipeFile, false})
 	}
 	for _, candidate := range paths {
 		resolved, err := resolvePublicationPath(*candidate.path)

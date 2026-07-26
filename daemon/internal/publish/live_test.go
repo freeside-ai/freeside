@@ -186,6 +186,7 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 		HeadSHA:                  headSHA,
 		ImportResultDigest:       liveDigest("freeside-live-import-" + nonce),
 		VerificationRecipeDigest: recipe,
+		EvidenceSnapshotDigest:   liveDigest("freeside-live-evidence-" + nonce),
 		VerificationOutcome:      domain.VerificationPassed,
 		TrustProfileDigest:       liveProfileDigest,
 		InvocationID:             domain.InvocationID("inv-live-verify-" + nonce),
