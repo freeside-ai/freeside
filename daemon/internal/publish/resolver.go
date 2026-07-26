@@ -105,9 +105,21 @@ func NewInstallationResolver(ks *Keystore, client *http.Client, baseURL string, 
 }
 
 // NewInstallationResolverWithJanitor wires resolution to the always-on
-// installation janitor. The status is checked before any registration reaches
-// GitHub, and every registration must be covered by the janitor's latest
-// successful pass.
+// installation janitor. The status gates resolution twice: nothing reaches
+// GitHub while no candidate registration is covered by the janitor's latest
+// successful pass, and a binding is only returned for a registration that pass
+// covered. Coverage of a registration that produced no match for the requested
+// owner is therefore no longer required, since that registration never provides
+// the token the gate exists to prove cleanup for; every registration is still
+// enumerated and matched, so ambiguity detection is untouched (#291).
+//
+// This narrows the janitor gate only. Resolution still fails closed for every
+// owner when a registration cannot be enumerated or validated at all, because
+// an unreadable registration's accounts are unknown and the match set it would
+// have contributed to must be complete for ambiguity detection to be sound
+// (keystore.go's enumeration rule, #279). A registration whose fault also
+// breaks its listing (a revoked key, a forge outage scoped to it) therefore
+// still denies unrelated owners.
 func NewInstallationResolverWithJanitor(
 	ks *Keystore,
 	client *http.Client,
@@ -201,14 +213,30 @@ func (r *InstallationResolver) resolve(
 		}
 		apps = selected
 	}
+	// A candidate set with no covered registration can never produce a usable
+	// binding, so refusing it here spares GitHub every App key while the
+	// janitor is absent, starting, or stopped. The scoped form's candidate set
+	// is one registration, so its gate is unchanged (#291).
+	//
+	// This is a guard, not an invariant, and no snapshot of coverage could make
+	// it one: a pass may begin after the count and before the requests go out,
+	// so a listing can always reach GitHub for a registration that is uncovered
+	// by the time it arrives. Coverage is empty for the duration of every pass
+	// anyway (`janitor.go`'s Run withdraws it before each one) while the
+	// janitor itself contacts every registration. The invariant is the token
+	// gate below, which is re-read after matching and re-checked at the mint.
+	covered := 0
 	for _, app := range apps {
-		if r.janitor == nil || !r.janitor.ActiveFor(app.AppID) {
-			return InstallationBinding{}, fmt.Errorf(
-				"installation resolution: registration %d: %w",
-				app.AppID,
-				ErrJanitorInactive,
-			)
+		if r.janitor != nil && r.janitor.ActiveFor(app.AppID) {
+			covered++
 		}
+	}
+	if covered == 0 {
+		return InstallationBinding{}, fmt.Errorf(
+			"installation resolution: registration %d: %w",
+			apps[0].AppID,
+			ErrJanitorInactive,
+		)
 	}
 
 	var matches []InstallationBinding
@@ -270,6 +298,25 @@ func (r *InstallationResolver) resolve(
 				Account:             installation.Account.Login,
 				AccountID:           installation.Account.ID,
 			})
+		}
+	}
+
+	// Every registration was enumerated and matched above, so the match set is
+	// still computed over the complete candidate set and an uncovered
+	// registration that does match still denies: a narrowing can never launder
+	// an ambiguity into a confident single match. What no longer denies is a
+	// registration that produced no match, because it never provides the token
+	// the gate exists to prove cleanup for (#291).
+	//
+	// The floor above returns unless some registration is covered, so a janitor
+	// is present by the time any match exists.
+	for _, match := range matches {
+		if !r.janitor.ActiveFor(match.RegistrationID) {
+			return InstallationBinding{}, fmt.Errorf(
+				"installation resolution: registration %d: %w",
+				match.RegistrationID,
+				ErrJanitorInactive,
+			)
 		}
 	}
 
