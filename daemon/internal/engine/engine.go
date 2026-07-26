@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -128,6 +129,29 @@ func (e *Engine) ReconcileFakePublications(ctx context.Context) (ReconcileResult
 	}
 	if err != nil {
 		return result, fmt.Errorf("reconcile fake publications: %w", err)
+	}
+	return result, nil
+}
+
+// ReconcileFakePublication advances only the requested attended publication.
+// A one-shot command uses this form so a broken sibling cannot terminate or
+// otherwise interfere with the requested run.
+func (e *Engine) ReconcileFakePublication(
+	ctx context.Context,
+	runID domain.RunID,
+) (ReconcileResult, error) {
+	if e.publication == nil {
+		return ReconcileResult{}, errors.New("fake publication workflow is not configured")
+	}
+	publication, err := e.publication.reconcileRun(ctx, runID)
+	result := ReconcileResult{
+		PublicationTasksCompleted: publication.completed,
+		ReadyItemsCreated:         publication.ready,
+		BlockedItemsCreated:       publication.blocked,
+		LastPRNumber:              publication.lastPRNumber,
+	}
+	if err != nil {
+		return result, fmt.Errorf("reconcile fake publication %q: %w", runID, err)
 	}
 	return result, nil
 }

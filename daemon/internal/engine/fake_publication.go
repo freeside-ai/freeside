@@ -362,6 +362,9 @@ func (w *fakePublicationWorkflow) newTask(
 		spec.Title == "" {
 		return fakePublicationTask{}, false, errors.New("repository, base ref, full base SHA, and title are required")
 	}
+	if err := publish.ValidateBranchName(spec.BaseRef); err != nil {
+		return fakePublicationTask{}, false, fmt.Errorf("base ref %q: %w", spec.BaseRef, err)
+	}
 	if len(spec.AllowedPaths) == 0 {
 		return fakePublicationTask{}, false, errors.New("at least one candidate path allowlist pattern is required")
 	}
@@ -451,6 +454,46 @@ func (w *fakePublicationWorkflow) reconcile(ctx context.Context) (fakePublicatio
 		}
 	}
 	return result, taskErr
+}
+
+func (w *fakePublicationWorkflow) reconcileRun(
+	ctx context.Context,
+	runID domain.RunID,
+) (fakePublicationReconcileResult, error) {
+	w.reconcileMu.Lock()
+	defer w.reconcileMu.Unlock()
+
+	key := fakePublicationTaskKey(runID)
+	var entry store.QueueEntry
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		entry, err = tx.GetOutbox(ctx, key)
+		return err
+	}); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return fakePublicationReconcileResult{}, nil
+		}
+		return fakePublicationReconcileResult{}, err
+	}
+	if entry.IdempotencyKey != key || entry.Kind != fakePublicationTaskKind {
+		return fakePublicationReconcileResult{}, fmt.Errorf(
+			"task %q has kind %q: %w", key, entry.Kind, domain.ErrParentKeyMismatch,
+		)
+	}
+	if entry.Dispatched() {
+		return fakePublicationReconcileResult{}, nil
+	}
+	outcome, err := w.reconcileEntry(ctx, entry)
+	if errors.Is(err, publish.ErrJanitorInactive) {
+		return fakePublicationReconcileResult{}, nil
+	}
+	if err != nil {
+		return fakePublicationReconcileResult{}, fmt.Errorf("task %q: %w", key, err)
+	}
+	return fakePublicationReconcileResult{
+		completed: 1, ready: boolCount(outcome.ready), blocked: boolCount(outcome.blocked),
+		lastPRNumber: outcome.prNumber,
+	}, nil
 }
 
 func (w *fakePublicationWorkflow) reconcileEntry(
@@ -661,6 +704,42 @@ func (w *fakePublicationWorkflow) loadPublicationOutcome(
 	})
 	if err != nil {
 		return publish.Result{}, false, err
+	}
+	intentKey, err := publish.IntentKey(candidate.InvocationID, publish.IntentKindPublication)
+	if err != nil {
+		return publish.Result{}, false, err
+	}
+	var entry store.QueueEntry
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		entry, err = tx.GetOutbox(ctx, intentKey)
+		return err
+	}); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return publish.Result{}, false, nil
+		}
+		return publish.Result{}, false, err
+	}
+	if entry.IdempotencyKey != intentKey || entry.Kind != publish.IntentKindPublication {
+		return publish.Result{}, false, fmt.Errorf(
+			"publication intent %q has kind %q: %w",
+			intentKey, entry.Kind, domain.ErrParentKeyMismatch,
+		)
+	}
+	if !entry.Dispatched() {
+		return publish.Result{}, false, nil
+	}
+	intent, err := publish.DecodeIntent(entry.Payload)
+	if err != nil {
+		return publish.Result{}, false, err
+	}
+	if intent.InvocationID != candidate.InvocationID || intent.Identity != identity.Digest() ||
+		intent.Repo != candidate.Repo || intent.BaseRef != candidate.BaseRef ||
+		intent.SourceHeadSHA != candidate.HeadSHA ||
+		(candidate.AuthorizationID != nil && intent.AuthorizationID != *candidate.AuthorizationID) {
+		return publish.Result{}, false, fmt.Errorf(
+			"publication intent disagrees with candidate: %w", domain.ErrParentKeyMismatch,
+		)
 	}
 	outcome, found, err := publish.LoadOutcome(ctx, w.store, identity)
 	if err != nil || !found {
@@ -1189,6 +1268,7 @@ func (w *fakePublicationWorkflow) recoverTerminalTask(
 		published, found, err := w.loadPublicationOutcome(ctx, publish.Candidate{
 			Repo: task.Repo, BaseRef: task.BaseRef, HeadSHA: item.PRHeadSHA,
 			Artifacts: item.EvidenceSnapshot, RecipeDigest: &recipeDigest,
+			InvocationID: task.PublicationInvocationID,
 		})
 		if err != nil {
 			return taskOutcome{}, false, err

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -43,10 +44,43 @@ var ErrBlobNotFound = errors.New("no attachment stored under the digest")
 
 // NewBlobStore opens (creating if needed) the attachment directory.
 func NewBlobStore(dir string) (*BlobStore, error) {
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := makeBlobStoreDirectory(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("blob store %q: %w", dir, err)
 	}
 	return &BlobStore{dir: dir}, nil
+}
+
+func makeBlobStoreDirectory(path string, mode fs.FileMode) error {
+	var missing []string
+	for current := filepath.Clean(path); ; current = filepath.Dir(current) {
+		info, err := os.Stat(current)
+		if err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("%s is not a directory", current)
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		missing = append(missing, current)
+		if parent := filepath.Dir(current); parent == current {
+			return fmt.Errorf("no existing ancestor for %s", path)
+		}
+	}
+	for i := len(missing) - 1; i >= 0; i-- {
+		if err := os.Mkdir(missing[i], mode); err != nil {
+			return err
+		}
+		parent, err := os.Open(filepath.Dir(missing[i]))
+		if err != nil {
+			return err
+		}
+		if err := errors.Join(parent.Sync(), parent.Close()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // blobPath validates the digest and derives the content path. The digest

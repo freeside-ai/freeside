@@ -169,6 +169,9 @@ func TestValidBranchName(t *testing.T) {
 		if !validBranchName(name) {
 			t.Errorf("validBranchName(%q) = false, want true", name)
 		}
+		if err := ValidateBranchName(name); err != nil {
+			t.Errorf("ValidateBranchName(%q) = %v, want nil", name, err)
+		}
 	}
 	invalid := []string{
 		"",                                        // empty
@@ -191,6 +194,9 @@ func TestValidBranchName(t *testing.T) {
 	for _, name := range invalid {
 		if validBranchName(name) {
 			t.Errorf("validBranchName(%q) = true, want false", name)
+		}
+		if err := ValidateBranchName(name); err == nil {
+			t.Errorf("ValidateBranchName(%q) accepted", name)
 		}
 	}
 }

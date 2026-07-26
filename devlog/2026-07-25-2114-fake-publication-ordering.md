@@ -165,6 +165,19 @@ restores the workspace identity recorded in the durable task before replaying
 `StartFakePublication`, so a removed symlink alias cannot turn an idempotent
 replay into an immutable-input conflict.
 
+The final attempt-axis and admission sweep closed four remaining deterministic
+failure modes. Outcome recovery now requires this task's own publication intent
+to be dispatched and cross-checks that intent's invocation, identity,
+repository, base, head, and authorization before accepting the identity-keyed
+outcome; a same-content second task therefore cannot inherit the first task's
+prior gate. The one-shot loop reconciles only its requested publication task,
+so a broken sibling cannot interrupt an expected janitor wait. The
+digest-addressed blob-store root now creates missing ancestors one at a time and
+syncs each parent before any recipe or evidence can become task authority.
+Finally, base refs pass the transport's exact branch-name grammar before
+workspace export or task commit, preventing a permanent invalid task from
+entering the queue.
+
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
 while workspace export and verification execution move behind those stronger

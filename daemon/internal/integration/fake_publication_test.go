@@ -472,6 +472,30 @@ func TestFakeCandidatePublicationRejectsInvalidAllowlistBeforeCommit(t *testing.
 	}
 }
 
+func TestFakeCandidatePublicationRejectsInvalidBaseRefBeforeCommit(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+
+	workflow := h.engine()
+	spec := h.spec(workspace)
+	spec.BaseRef = "release/.candidate"
+	if _, err := workflow.StartFakePublication(h.ctx, spec); err == nil {
+		t.Fatal("StartFakePublication accepted an invalid base ref")
+	}
+	var pending []store.QueueEntry
+	if err := h.store.Read(h.ctx, func(tx *store.ReadTx) error {
+		var err error
+		pending, err = tx.ListPendingOutbox(h.ctx, "engine.fake_publication")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("invalid base ref committed %d publication tasks", len(pending))
+	}
+}
+
 func TestFakeCandidatePublicationRestoresAndConvergesExactlyOnce(t *testing.T) {
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
@@ -620,15 +644,26 @@ func TestFakeCandidatePublicationContinuesPastBrokenSibling(t *testing.T) {
 	if _, err := workflow.StartFakePublication(h.ctx, second); err != nil {
 		t.Fatalf("start independent task: %v", err)
 	}
-	result, err := workflow.ReconcileFakePublications(h.ctx)
-	if err == nil || !strings.Contains(err.Error(), "inspect committed handoff") {
-		t.Fatalf("independent reconciliation error = %v", err)
+	result, err := workflow.ReconcileFakePublication(h.ctx, second.RunID)
+	if err != nil {
+		t.Fatalf("requested-task reconciliation error = %v", err)
 	}
 	if result.ReadyItemsCreated != 1 || result.LastPRNumber != 101 {
 		t.Fatalf("independent reconciliation result = %+v", result)
 	}
 	if got := h.transport.pushCount(); got != 1 {
 		t.Fatalf("independent task pushes = %d, want 1", got)
+	}
+	var pending []store.QueueEntry
+	if err := h.store.Read(h.ctx, func(tx *store.ReadTx) error {
+		var err error
+		pending, err = tx.ListPendingOutbox(h.ctx, "engine.fake_publication")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("broken sibling pending tasks = %d, want 1", len(pending))
 	}
 }
 
@@ -1083,6 +1118,95 @@ func TestFakeCandidatePublicationRecoversDispatchedOutcomeBeforeTrustGate(t *tes
 	if pushes := h.transport.pushCount(); pushes != 1 {
 		t.Fatalf("outcome recovery repeated push: %d", pushes)
 	}
+}
+
+func TestFakeCandidatePublicationDoesNotReuseSiblingOutcome(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	writeFile(t, workspace, "candidate.txt", "verified\n")
+	commitDate := fakePublicationTime.Add(-time.Hour)
+
+	workflow := h.engine()
+	first := h.spec(workspace)
+	first.CommitDate = commitDate
+	if _, err := workflow.StartFakePublication(h.ctx, first); err != nil {
+		t.Fatalf("start first publication: %v", err)
+	}
+	if result, err := workflow.ReconcileFakePublication(h.ctx, first.RunID); err != nil ||
+		result.ReadyItemsCreated != 1 {
+		t.Fatalf("first publication = %+v, %v", result, err)
+	}
+
+	second := h.spec(workspace)
+	second.RunID = "run-same-candidate"
+	second.ProjectID = "project-same-candidate"
+	second.PublicationInvocationID = "publish-same-candidate"
+	second.CommitDate = commitDate
+	if _, err := workflow.StartFakePublication(h.ctx, second); err != nil {
+		t.Fatalf("start same-candidate publication: %v", err)
+	}
+	reviewedAgain, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: h.profile.Repo, RepositoryID: h.profile.RepositoryID,
+		PRExecution:                h.profile.PRExecution,
+		CandidateAutomationChanges: h.profile.CandidateAutomationChanges,
+		PRGitHubTokenPermissions:   h.profile.PRGitHubTokenPermissions,
+		CommitPlan:                 h.profile.CommitPlan, MessageRuleset: h.profile.MessageRuleset,
+		WorkflowAuditDigest: h.profile.WorkflowAuditDigest,
+		Review: domain.ReviewSettings{
+			Mode: h.profile.Review.Mode, ConfigDigest: "sha256:same-candidate-re-reviewed",
+		},
+		ProtectedPaths: h.profile.ProtectedPaths,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.WriteInternal(h.ctx, func(tx *store.InternalTx) error {
+		return tx.RecordTrustProfile(h.ctx, reviewedAgain, fakePublicationTime.Add(time.Minute))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := workflow.ReconcileFakePublication(h.ctx, second.RunID)
+	if err != nil {
+		t.Fatalf("same-candidate ReconcileFakePublication: %v", err)
+	}
+	if result.BlockedItemsCreated != 1 || result.ReadyItemsCreated != 0 {
+		t.Fatalf("same-candidate result = %+v", result)
+	}
+	if pushes := h.transport.pushCount(); pushes != 1 {
+		t.Fatalf("same-candidate tasks pushed %d times, want first attempt only", pushes)
+	}
+	firstItem, err := h.attention.GetAttentionItem(h.ctx, "ready-run-fake-publication")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondItem, err := h.attention.GetAttentionItem(h.ctx, "publish-blocked-run-same-candidate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstItem.Item.PRHeadSHA != secondItem.Item.PRHeadSHA ||
+		!sameArtifactDigests(firstItem.Item.EvidenceSnapshot, secondItem.Item.EvidenceSnapshot) {
+		t.Fatal("fixture did not produce the same publication identity inputs")
+	}
+}
+
+func sameArtifactDigests(a, b []domain.Artifact) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	digests := make(map[domain.Digest]int, len(a))
+	for _, artifact := range a {
+		digests[artifact.Digest]++
+	}
+	for _, artifact := range b {
+		digests[artifact.Digest]--
+	}
+	for _, count := range digests {
+		if count != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func TestFakeCandidatePublicationReplayKeepsOriginalTrustBinding(t *testing.T) {

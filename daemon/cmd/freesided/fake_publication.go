@@ -204,7 +204,7 @@ func runFakePublicationCommand(
 	ticker := time.NewTicker(cfg.ReconcileInterval)
 	defer ticker.Stop()
 	for {
-		_, reconcileErr := workflow.ReconcileFakePublications(ctx)
+		_, reconcileErr := workflow.ReconcileFakePublication(ctx, cfg.RunID)
 		if result, ok, err := existingFakePublicationResult(ctx, attention, cfg); err != nil {
 			return fakePublicationCommandResult{}, err
 		} else if ok {

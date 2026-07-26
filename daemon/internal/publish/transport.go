@@ -166,8 +166,8 @@ func (t *Transport) FetchBase(ctx context.Context, repo, baseRef, baseSHA, dir s
 	if err != nil {
 		return Checkout{}, err
 	}
-	if !validBranchName(baseRef) {
-		return Checkout{}, fmt.Errorf("base ref %q is not a valid branch name", baseRef)
+	if err := ValidateBranchName(baseRef); err != nil {
+		return Checkout{}, fmt.Errorf("base ref %q: %w", baseRef, err)
 	}
 	if !validCommitSHA(baseSHA) {
 		return Checkout{}, fmt.Errorf("base %q is not a full commit SHA", baseSHA)
@@ -533,4 +533,13 @@ func validBranchName(name string) bool {
 		}
 	}
 	return true
+}
+
+// ValidateBranchName applies the exact transport refname grammar before a
+// caller commits durable work that will later require FetchBase.
+func ValidateBranchName(name string) error {
+	if !validBranchName(name) {
+		return errors.New("not a valid branch name")
+	}
+	return nil
 }
