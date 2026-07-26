@@ -16,13 +16,16 @@ import (
 // a fixed candidate (and approved-recipe set), the way the engine would
 // reload it from workflow state. err injects a resolution failure.
 type fakeResolver struct {
-	cand     publish.Candidate
-	approved map[domain.Digest]bool
-	err      error
+	cand        publish.Candidate
+	approved    map[domain.Digest]bool
+	publishHead func(context.Context, publish.IdentityInput) error
+	err         error
 }
 
-func (r fakeResolver) Resolve(context.Context, publish.Intent) (publish.Candidate, map[domain.Digest]bool, error) {
-	return r.cand, r.approved, r.err
+func (r fakeResolver) Resolve(context.Context, publish.Intent) (publish.RecoveryCandidate, error) {
+	return publish.RecoveryCandidate{
+		Candidate: r.cand, ApprovedRecipes: r.approved, PublishHead: r.publishHead,
+	}, r.err
 }
 
 var _ publish.CandidateResolver = fakeResolver{}
@@ -33,6 +36,14 @@ type drainHarness struct {
 	gh     *fakeGitHub
 	ledger *publish.StoreLedger
 	pub    *publish.Publisher
+}
+
+type mutableWorkflowAuditor struct {
+	audit *domain.WorkflowAudit
+}
+
+func (a mutableWorkflowAuditor) Audit(context.Context, string, string) (domain.WorkflowAudit, error) {
+	return *a.audit, nil
 }
 
 func newDrainHarness(t *testing.T) drainHarness {
@@ -55,7 +66,10 @@ func newDrainHarnessWithTrust(t *testing.T, trust publish.TrustSource) drainHarn
 
 func resolverFor(t *testing.T, c publish.Candidate) fakeResolver {
 	t.Helper()
-	return fakeResolver{cand: c, approved: testApprovedRecipes()}
+	return fakeResolver{
+		cand: c, approved: testApprovedRecipes(),
+		publishHead: func(context.Context, publish.IdentityInput) error { return nil },
+	}
 }
 
 // testCandidateIdentity derives the identity a clean publish of
@@ -177,6 +191,103 @@ func TestDrainConvergesPendingIntent(t *testing.T) {
 	})
 }
 
+func TestDrainRecoversHeadTransportBeforeForgeConvergence(t *testing.T) {
+	ctx := context.Background()
+	h := newDrainHarness(t)
+	cand := testCandidate(t)
+	id := testCandidateIdentity(t)
+	key, err := publish.IntentKey(cand.InvocationID, publish.IntentKindPublication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := publish.Intent{
+		Identity: id.Digest(), InvocationID: cand.InvocationID,
+		Repo: cand.Repo, BaseRef: cand.BaseRef, SourceHeadSHA: cand.HeadSHA,
+		AuthorizationID: *cand.AuthorizationID,
+	}.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.ledger.Record(
+		ctx, key, publish.IntentKindPublication, payload,
+	); err != nil {
+		t.Fatalf("record intent: %v", err)
+	}
+
+	transportCalls := 0
+	resolver := resolverFor(t, cand)
+	resolver.publishHead = func(_ context.Context, input publish.IdentityInput) error {
+		transportCalls++
+		identity, err := publish.DeriveIdentity(input)
+		if err != nil {
+			return err
+		}
+		h.gh.mu.Lock()
+		h.gh.refs[identity.BranchName()] = cand.HeadSHA
+		h.gh.mu.Unlock()
+		return nil
+	}
+	if n, err := publish.DrainPendingPublications(
+		ctx, h.store, h.pub, resolver,
+	); err != nil || n != 1 {
+		t.Fatalf("drain = %d, %v, want 1, nil", n, err)
+	}
+	if transportCalls != 1 {
+		t.Fatalf("recovered transport calls = %d, want 1", transportCalls)
+	}
+	if refs, prs := len(h.gh.refs), len(h.gh.prs); refs != 1 || prs != 1 {
+		t.Fatalf("recovered forge resources = refs:%d prs:%d, want 1 each", refs, prs)
+	}
+}
+
+func TestPublishAfterGateAndFinalizeDoesNotRegateReturnedResult(t *testing.T) {
+	ctx := context.Background()
+	audit := testWorkflowAudit(t)
+	s := newTestStore(t)
+	seedDecisionRecords(t, s)
+	gh := newFakeGitHub(t)
+	pub := storeBackedPublisher(t, s, gh, mutableWorkflowAuditor{audit: &audit})
+	cand := testCandidate(t)
+
+	result, err := pub.PublishAfterGateAndFinalize(
+		ctx,
+		cand,
+		testApprovedRecipes(),
+		func(_ context.Context, input publish.IdentityInput) error {
+			identity, err := publish.DeriveIdentity(input)
+			if err != nil {
+				return err
+			}
+			gh.mu.Lock()
+			gh.refs[identity.BranchName()] = cand.HeadSHA
+			gh.mu.Unlock()
+			// The external head now exists. A second pre-effect audit would
+			// reject this drift and strand the returned PR result.
+			audit.OIDCAvailable = true
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("publish and finalize returned result: %v", err)
+	}
+	if result.PRNumber != 101 {
+		t.Fatalf("result = %+v, want PR 101", result)
+	}
+	if got := len(pendingPublications(t, s)); got != 0 {
+		t.Fatalf("pending after direct finalize = %d, want 0", got)
+	}
+	id := testCandidateIdentity(t)
+	assertOutcomeRecorded(t, s, publish.OutcomeKey(id), publish.Outcome{
+		Identity:         id.Digest(),
+		Repo:             cand.Repo,
+		BaseRef:          cand.BaseRef,
+		HeadSHA:          cand.HeadSHA,
+		Branch:           id.BranchName(),
+		PRNumber:         101,
+		EvidenceEligible: true,
+	})
+}
+
 // TestDrainNoPending: an empty outbox drains to zero with no GitHub
 // traffic.
 func TestDrainNoPending(t *testing.T) {
@@ -192,6 +303,42 @@ func TestDrainNoPending(t *testing.T) {
 	}
 	if got := len(h.gh.requestLog()); got != 0 {
 		t.Errorf("GitHub requests = %d, want 0", got)
+	}
+}
+
+func TestDrainPublicationIntentScopesRecoveryToInvocation(t *testing.T) {
+	ctx := context.Background()
+	h := newDrainHarness(t)
+	first := testCandidate(t)
+	second := first
+	second.InvocationID = "inv-0002"
+
+	if _, err := h.pub.Publish(ctx, first, testApprovedRecipes()); err != nil {
+		t.Fatalf("publish first: %v", err)
+	}
+	if _, err := h.pub.Publish(ctx, second, testApprovedRecipes()); err != nil {
+		t.Fatalf("publish second: %v", err)
+	}
+	if got := len(pendingPublications(t, h.store)); got != 2 {
+		t.Fatalf("pending before scoped drain = %d, want 2", got)
+	}
+
+	n, err := publish.DrainPublicationIntent(
+		ctx, h.store, h.pub, resolverFor(t, second), second.InvocationID,
+	)
+	if err != nil {
+		t.Fatalf("scoped drain: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("scoped drain finalized %d, want 1", n)
+	}
+	pending := pendingPublications(t, h.store)
+	firstKey, err := publish.IntentKey(first.InvocationID, publish.IntentKindPublication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].IdempotencyKey != firstKey {
+		t.Fatalf("pending after scoped drain = %+v, want only %q", pending, firstKey)
 	}
 }
 

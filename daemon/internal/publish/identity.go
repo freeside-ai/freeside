@@ -179,6 +179,18 @@ func ParseMarker(body string) (domain.Digest, bool) {
 	return found, found != ""
 }
 
+// ValidateCandidateBody rejects prose that could be interpreted as a
+// publication marker before the caller commits immutable workflow state. The
+// publisher appends the one authoritative marker itself.
+func ValidateCandidateBody(body string) error {
+	for line := range strings.Lines(body) {
+		if strings.HasPrefix(strings.TrimSpace(line), markerPrefix) {
+			return errors.New("candidate body contains a publication identity marker")
+		}
+	}
+	return nil
+}
+
 // validIdentityDigest reports whether raw is exactly "sha256:" plus 64
 // lowercase hex digits — the only form DeriveIdentity produces.
 func validIdentityDigest(raw string) bool {

@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io/fs"
+	"maps"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -12,6 +14,192 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/migrations"
 )
+
+func TestCandidateAuthorizationV2MigrationArchivesV1Rows(t *testing.T) {
+	ctx := context.Background()
+	db := openRaw(t)
+	files, err := fs.Glob(migrations.FS, "*.sql")
+	if err != nil {
+		t.Fatalf("glob migrations: %v", err)
+	}
+	prefix := fstest.MapFS{}
+	for _, name := range files {
+		if name >= "0012_" {
+			continue
+		}
+		body, err := fs.ReadFile(migrations.FS, name)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", name, err)
+		}
+		prefix[name] = &fstest.MapFile{Data: body}
+	}
+	if err := migrate(ctx, db, prefix); err != nil {
+		t.Fatalf("migrate through 0011: %v", err)
+	}
+
+	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: "freeside-ai/candidate-repo", RepositoryID: 123456789,
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
+		WorkflowAuditDigest:        "sha256:workflow-audit",
+		Review: domain.ReviewSettings{
+			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+		},
+	})
+	if err != nil {
+		t.Fatalf("profile: %v", err)
+	}
+	auth, err := domain.NewCandidateAuthorization(domain.CandidateAuthorizationInput{
+		Repo: profile.Repo, BaseSHA: "beefcafe", HeadSHA: "cafebabe",
+		ImportResultDigest:       "sha256:import-result",
+		VerificationRecipeDigest: "sha256:recipe-approved",
+		EvidenceSnapshotDigest:   "sha256:evidence-snapshot",
+		VerificationOutcome:      domain.VerificationPassed,
+		TrustProfileDigest:       profile.ProfileDigest,
+		InvocationID:             "verify-v1",
+		CreatedAt:                time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("authorization: %v", err)
+	}
+	profileBody, err := encode(profile)
+	if err != nil {
+		t.Fatalf("encode profile: %v", err)
+	}
+	var legacyBody map[string]any
+	currentBody, err := json.Marshal(auth)
+	if err != nil {
+		t.Fatalf("marshal authorization: %v", err)
+	}
+	if err := json.Unmarshal(currentBody, &legacyBody); err != nil {
+		t.Fatalf("decode authorization fixture: %v", err)
+	}
+	delete(legacyBody, "evidence_snapshot_digest")
+	legacyBody["id"] = "sha256:legacy-authorization"
+	encodedLegacy, err := json.Marshal(legacyBody)
+	if err != nil {
+		t.Fatalf("encode v1 authorization: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO trust_profiles (profile_digest, repo, recorded_at, body) VALUES (?, ?, ?, ?)`,
+		profile.ProfileDigest, profile.Repo, formatTime(auth.CreatedAt), profileBody,
+	); err != nil {
+		t.Fatalf("insert profile: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO candidate_authorizations (id, repo, base_sha, head_sha, trust_profile_digest, created_at, body) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"sha256:legacy-authorization", auth.Repo, auth.BaseSHA, auth.HeadSHA,
+		auth.TrustProfileDigest, formatTime(auth.CreatedAt), string(encodedLegacy),
+	); err != nil {
+		t.Fatalf("insert v1 authorization: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO candidate_authorizations (id, repo, base_sha, head_sha, trust_profile_digest, created_at, body) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"sha256:corrupt-authorization", auth.Repo, auth.BaseSHA, "deadbeef",
+		auth.TrustProfileDigest, formatTime(auth.CreatedAt), "not-json",
+	); err != nil {
+		t.Fatalf("insert corrupt authorization: %v", err)
+	}
+	forgedV2Marker := maps.Clone(legacyBody)
+	forgedV2Marker["id"] = "sha256:forged-v2-marker"
+	forgedV2Marker["head_sha"] = "feedface"
+	forgedV2Marker["evidence_snapshot_digest"] = "sha256:caller-supplied"
+	encodedForgedV2Marker, err := json.Marshal(forgedV2Marker)
+	if err != nil {
+		t.Fatalf("encode forged v2 marker: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO candidate_authorizations (id, repo, base_sha, head_sha, trust_profile_digest, created_at, body) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"sha256:forged-v2-marker", auth.Repo, auth.BaseSHA, "feedface",
+		auth.TrustProfileDigest, formatTime(auth.CreatedAt), string(encodedForgedV2Marker),
+	); err != nil {
+		t.Fatalf("insert forged v2 marker: %v", err)
+	}
+	legacyIntent, err := json.Marshal(map[string]any{
+		"identity":         "sha256:" + strings.Repeat("a", 64),
+		"invocation_id":    "legacy-publication",
+		"repo":             auth.Repo,
+		"base_ref":         "main",
+		"source_head_sha":  auth.HeadSHA,
+		"authorization_id": "sha256:legacy-authorization",
+	})
+	if err != nil {
+		t.Fatalf("encode legacy intent: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO outbox (idempotency_key, kind, payload, created_at) VALUES (?, ?, ?, ?)`,
+		"publish/legacy-publication/publish.publication", "publish.publication",
+		legacyIntent, formatTime(auth.CreatedAt),
+	); err != nil {
+		t.Fatalf("insert legacy publication intent: %v", err)
+	}
+
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate through v2 transition: %v", err)
+	}
+	var active, archived, corruptArchived, forgedArchived int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM candidate_authorizations`,
+	).Scan(&active); err != nil {
+		t.Fatalf("count active authorizations: %v", err)
+	}
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM legacy_candidate_authorizations WHERE id = 'sha256:legacy-authorization'`,
+	).Scan(&archived); err != nil {
+		t.Fatalf("count archived authorizations: %v", err)
+	}
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM legacy_candidate_authorizations WHERE id = 'sha256:corrupt-authorization'`,
+	).Scan(&corruptArchived); err != nil {
+		t.Fatalf("count corrupt archived authorizations: %v", err)
+	}
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM legacy_candidate_authorizations WHERE id = 'sha256:forged-v2-marker'`,
+	).Scan(&forgedArchived); err != nil {
+		t.Fatalf("count forged-marker archived authorizations: %v", err)
+	}
+	if active != 0 || archived != 1 || corruptArchived != 1 || forgedArchived != 1 {
+		t.Fatalf(
+			"after migration active=%d archived=%d corrupt=%d forged=%d, want 0, 1, 1, 1",
+			active, archived, corruptArchived, forgedArchived,
+		)
+	}
+
+	s := &Store{db: db}
+	var quarantined QueueEntry
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		quarantined, err = tx.GetOutbox(
+			ctx, "publish/legacy-publication/publish.publication",
+		)
+		return err
+	}); err != nil {
+		t.Fatalf("read quarantined intent: %v", err)
+	}
+	if !quarantined.Quarantined() {
+		t.Fatalf("legacy intent status = %q, want quarantined", quarantined.Status)
+	}
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		pending, err := tx.ListPendingOutbox(ctx, "publish.publication")
+		if err != nil {
+			return err
+		}
+		if len(pending) != 0 {
+			t.Fatalf("legacy intent remained in active scan: %+v", pending)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("list active publication intents: %v", err)
+	}
+	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		return tx.RecordCandidateAuthorization(ctx, auth)
+	}); err != nil {
+		t.Fatalf("record v2 replacement: %v", err)
+	}
+}
 
 // TestTrustRowsTamperedBodyFailsClosed is the #52 re-gate for the trust
 // shapes at the persistence boundary: a row whose body was altered around
@@ -48,6 +236,7 @@ func TestTrustRowsTamperedBodyFailsClosed(t *testing.T) {
 		Repo: profile.Repo, BaseSHA: "beefcafe", HeadSHA: "cafebabe",
 		ImportResultDigest:       "sha256:import-result",
 		VerificationRecipeDigest: "sha256:recipe-approved",
+		EvidenceSnapshotDigest:   "sha256:evidence-snapshot",
 		VerificationOutcome:      domain.VerificationFailed,
 		TrustProfileDigest:       profile.ProfileDigest,
 		InvocationID:             "inv-1",

@@ -415,7 +415,10 @@ func TestInstallationJanitorRemovalDoesNotDenyASibling(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- janitor.Run(ctx, time.Millisecond) }()
+	// Keep each published pass observable for substantially longer than the
+	// polling cadence below; equal 1 ms windows can be missed indefinitely by
+	// a fast janitor loop on a contended Linux runner.
+	go func() { done <- janitor.Run(ctx, 25*time.Millisecond) }()
 
 	awaitActive(t, janitor, 601)
 	churn := awaitChurn(t, janitor, 501, 2)

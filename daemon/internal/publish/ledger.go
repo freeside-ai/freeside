@@ -53,6 +53,24 @@ type Intent struct {
 	AuthorizationID domain.Digest       `json:"authorization_id"`
 }
 
+func intentForCandidate(c Candidate, identity Identity) (Intent, error) {
+	if c.AuthorizationID == nil {
+		return Intent{}, fmt.Errorf("candidate carries no authorization binding: %w", ErrUnauthorizedPublication)
+	}
+	intent := Intent{
+		Identity:        identity.Digest(),
+		InvocationID:    c.InvocationID,
+		Repo:            c.Repo,
+		BaseRef:         c.BaseRef,
+		SourceHeadSHA:   c.HeadSHA,
+		AuthorizationID: *c.AuthorizationID,
+	}
+	if err := intent.Validate(); err != nil {
+		return Intent{}, err
+	}
+	return intent, nil
+}
+
 // Validate reports whether the intent is well-formed. It runs on both
 // sides of the ledger boundary: before encoding, and on every decode,
 // since a decoded outbox row is a reconstructed value and is not

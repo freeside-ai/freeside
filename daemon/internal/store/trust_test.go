@@ -41,6 +41,7 @@ func authorizationFixture(t *testing.T, profile domain.AutomationTrustProfile, i
 		Repo: profile.Repo, BaseSHA: "beefcafe", HeadSHA: "cafebabe",
 		ImportResultDigest:       "sha256:import-result",
 		VerificationRecipeDigest: "sha256:recipe-approved",
+		EvidenceSnapshotDigest:   "sha256:evidence-snapshot",
 		VerificationOutcome:      domain.VerificationPassed,
 		Findings: []domain.CandidateFinding{{
 			Class: domain.FindingClassRepoChangePolicy, Origin: domain.FindingOriginImport,
@@ -321,6 +322,7 @@ func TestAuthorizationRequiresProfileRow(t *testing.T) {
 		Repo: "freeside-ai/other-repo", BaseSHA: "beefcafe", HeadSHA: "cafebabe",
 		ImportResultDigest:       "sha256:import-result",
 		VerificationRecipeDigest: "sha256:recipe-approved",
+		EvidenceSnapshotDigest:   "sha256:evidence-snapshot",
 		VerificationOutcome:      domain.VerificationPassed,
 		TrustProfileDigest:       profile.ProfileDigest,
 		InvocationID:             "inv-1",

@@ -176,6 +176,10 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 		t.Fatalf("NewArtifact: %v", err)
 	}
 	liveProfileDigest := liveProfile.ProfileDigest
+	evidenceDigest, err := domain.ComputeEvidenceSnapshotDigest([]domain.Artifact{artifact})
+	if err != nil {
+		t.Fatalf("ComputeEvidenceSnapshotDigest: %v", err)
+	}
 	// The authorization gate (#168) requires a daemon-authored record that
 	// authorizes this candidate: a passed verification with no blocking
 	// finding, bound to the candidate's repo/head/recipe/trust profile. It is
@@ -186,6 +190,7 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 		HeadSHA:                  headSHA,
 		ImportResultDigest:       liveDigest("freeside-live-import-" + nonce),
 		VerificationRecipeDigest: recipe,
+		EvidenceSnapshotDigest:   evidenceDigest,
 		VerificationOutcome:      domain.VerificationPassed,
 		TrustProfileDigest:       liveProfileDigest,
 		InvocationID:             domain.InvocationID("inv-live-verify-" + nonce),

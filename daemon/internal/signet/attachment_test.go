@@ -5,12 +5,29 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 )
+
+func TestNewBlobStoreCreatesNestedDurableRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state", "attachments", "blobs")
+	blobs, err := signet.NewBlobStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("durable-root")
+	digest := domain.Digest("sha256:" + hex.EncodeToString(sha256sum(content)))
+	if _, err := blobs.Put(digest, bytes.NewReader(content)); err != nil {
+		t.Fatal(err)
+	}
+	if stored, err := blobs.Has(digest); err != nil || !stored {
+		t.Fatalf("stored = %t, %v", stored, err)
+	}
+}
 
 // TestGetAttachmentServesStoredBytes pins the digest-addressed read path
 // (api/openapi.yaml getAttachment; handler daemon/internal/signet/http.go). The

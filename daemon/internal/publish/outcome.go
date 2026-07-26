@@ -2,12 +2,14 @@ package publish
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 // IntentKindOutcome is the inbox kind under which a converged
@@ -115,6 +117,10 @@ func DecodeOutcome(payload []byte) (Outcome, error) {
 // unambiguously the publish lane's.
 const outcomeKeyPrefix = IntentKindOutcome + "/"
 
+// OutcomeVerifier independently verifies the persisted outcome against the
+// publication identity's live forge state before LoadOutcome returns it.
+type OutcomeVerifier func(context.Context, Candidate, Identity, Outcome) error
+
 // OutcomeKey returns the inbox idempotency key for a publication's
 // outcome: the kind prefix plus the full identity digest — the full
 // digest, not the 16-hex branch prefix, so two identities sharing a
@@ -122,4 +128,72 @@ const outcomeKeyPrefix = IntentKindOutcome + "/"
 // the PR marker carries the full digest).
 func OutcomeKey(id Identity) string {
 	return outcomeKeyPrefix + string(id.Digest())
+}
+
+// LoadOutcome reconstructs and validates the durable result for one
+// publication identity. A missing row is a normal cache miss; any foreign
+// kind, key, or malformed payload fails closed.
+func LoadOutcome(
+	ctx context.Context,
+	st *store.Store,
+	candidate Candidate,
+	approvedRecipes map[domain.Digest]bool,
+	verify OutcomeVerifier,
+) (Outcome, bool, error) {
+	if st == nil {
+		return Outcome{}, false, errors.New("load publication outcome: nil store")
+	}
+	if verify == nil {
+		return Outcome{}, false, errors.New("load publication outcome: nil live verifier")
+	}
+	identityInput, err := gatedCandidateIdentityInput(candidate, approvedRecipes)
+	if err != nil {
+		return Outcome{}, false, fmt.Errorf(
+			"load publication outcome: evidence gate: %w", err,
+		)
+	}
+	id, err := DeriveIdentity(identityInput)
+	if err != nil {
+		return Outcome{}, false, fmt.Errorf("load publication outcome: identity: %w", err)
+	}
+	key := OutcomeKey(id)
+	var entry store.QueueEntry
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		entry, err = tx.GetInbox(ctx, key)
+		return err
+	}); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return Outcome{}, false, nil
+		}
+		return Outcome{}, false, err
+	}
+	if entry.IdempotencyKey != key || entry.Kind != IntentKindOutcome {
+		return Outcome{}, false, fmt.Errorf(
+			"publication outcome %q has kind %q", key, entry.Kind,
+		)
+	}
+	outcome, err := DecodeOutcome(entry.Payload)
+	if err != nil {
+		return Outcome{}, false, fmt.Errorf("publication outcome %q: %w", key, err)
+	}
+	if outcome.Identity != id.Digest() {
+		return Outcome{}, false, fmt.Errorf(
+			"publication outcome %q carries identity %s", key, outcome.Identity,
+		)
+	}
+	if outcome.Repo != candidate.Repo ||
+		outcome.BaseRef != candidate.BaseRef ||
+		outcome.HeadSHA != candidate.HeadSHA {
+		return Outcome{}, false, fmt.Errorf(
+			"publication outcome %q coordinates disagree with candidate",
+			key,
+		)
+	}
+	if err := verify(ctx, candidate, id, outcome); err != nil {
+		return Outcome{}, false, fmt.Errorf(
+			"publication outcome %q live verification: %w", key, err,
+		)
+	}
+	return outcome, true, nil
 }

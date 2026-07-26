@@ -1,12 +1,16 @@
 package publish_test
 
 import (
+	"context"
+	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 func fixtureOutcome() publish.Outcome {
@@ -126,5 +130,129 @@ func TestOutcomeKeyIsKindNamespacedFullDigest(t *testing.T) {
 	}
 	if strings.Contains(id.BranchName(), key) {
 		t.Errorf("OutcomeKey %q must be wider than the branch prefix %q", key, id.BranchName())
+	}
+}
+
+func TestLoadOutcomeReconstructsDurableResult(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	recipe := testRecipe
+	id, err := publish.DeriveIdentity(publish.IdentityInput{
+		Repo:            "freeside-ai/evidence-repo",
+		BaseRef:         "main",
+		SourceHeadSHA:   testHeadSHA,
+		ArtifactDigests: []domain.Digest{testArtifactD},
+		RecipeDigest:    &recipe,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := publish.Outcome{
+		Identity: id.Digest(), Repo: "freeside-ai/evidence-repo", BaseRef: "main",
+		HeadSHA: testHeadSHA, Branch: id.BranchName(), PRNumber: 101,
+		EvidenceEligible: true,
+	}
+	payload, err := want.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, _, err := tx.RecordInbox(
+			ctx, publish.OutcomeKey(id), publish.IntentKindOutcome, payload,
+		)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	candidate := testCandidate(t)
+	verify := func(
+		_ context.Context,
+		_ publish.Candidate,
+		_ publish.Identity,
+		outcome publish.Outcome,
+	) error {
+		if outcome.PRNumber != want.PRNumber {
+			return errors.New("live pull request number disagrees")
+		}
+		return nil
+	}
+	got, found, err := publish.LoadOutcome(
+		ctx, st, candidate, testApprovedRecipes(), verify,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || got != want {
+		t.Fatalf("loaded outcome = %+v, found %t", got, found)
+	}
+	if _, _, err := publish.LoadOutcome(
+		ctx, st, candidate, map[domain.Digest]bool{}, verify,
+	); err == nil {
+		t.Fatal("LoadOutcome trusted persisted eligibility after recipe revocation")
+	}
+}
+
+func TestLoadOutcomeRejectsForeignCoordinates(t *testing.T) {
+	candidate := testCandidate(t)
+	recipe := testRecipe
+	id, err := publish.DeriveIdentity(publish.IdentityInput{
+		Repo: candidate.Repo, BaseRef: candidate.BaseRef,
+		SourceHeadSHA:   candidate.HeadSHA,
+		ArtifactDigests: []domain.Digest{testArtifactD},
+		RecipeDigest:    &recipe,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*publish.Outcome){
+		"repository": func(outcome *publish.Outcome) { outcome.Repo = "foreign/repo" },
+		"base ref":   func(outcome *publish.Outcome) { outcome.BaseRef = "release" },
+		"head":       func(outcome *publish.Outcome) { outcome.HeadSHA = testOtherSHA },
+		"pr number":  func(outcome *publish.Outcome) { outcome.PRNumber = 202 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			st, err := store.Open(
+				ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			outcome := fixtureOutcome()
+			mutate(&outcome)
+			payload, err := outcome.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				_, _, err := tx.RecordInbox(
+					ctx, publish.OutcomeKey(id), publish.IntentKindOutcome, payload,
+				)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := publish.LoadOutcome(
+				ctx, st, candidate, testApprovedRecipes(),
+				func(
+					_ context.Context,
+					_ publish.Candidate,
+					_ publish.Identity,
+					outcome publish.Outcome,
+				) error {
+					if outcome.PRNumber != 101 {
+						return errors.New("live pull request number disagrees")
+					}
+					return nil
+				},
+			); err == nil {
+				t.Fatal("LoadOutcome trusted foreign outcome coordinates")
+			}
+		})
 	}
 }

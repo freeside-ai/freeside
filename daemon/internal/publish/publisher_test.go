@@ -404,6 +404,48 @@ func TestPublishCreatesBranchAndPR(t *testing.T) {
 	}
 }
 
+func TestPublishAfterGateOrdersTransportBetweenIntentAndForge(t *testing.T) {
+	gh := newFakeGitHub(t)
+	ledger := newMemoryLedger()
+	p := newTestPublisher(t, gh, ledger)
+	candidate := testCandidate(t)
+	calls := 0
+
+	result, err := p.PublishAfterGate(
+		context.Background(),
+		candidate,
+		testApprovedRecipes(),
+		func(_ context.Context, input publish.IdentityInput) error {
+			calls++
+			if len(ledger.keys) != 1 {
+				t.Fatalf("durable intents at transport callback = %d, want 1", len(ledger.keys))
+			}
+			if requests := gh.requestLog(); len(requests) != 0 {
+				t.Fatalf("forge contacted before transport callback: %v", requests)
+			}
+			identity, err := publish.DeriveIdentity(input)
+			if err != nil {
+				return err
+			}
+			gh.mu.Lock()
+			gh.refs[identity.BranchName()] = candidate.HeadSHA
+			gh.mu.Unlock()
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishAfterGate: %v", err)
+	}
+	if calls != 1 || result.PRNumber == 0 || result.BranchCreated {
+		t.Fatalf("callback calls = %d, result = %+v", calls, result)
+	}
+	for _, request := range gh.writeRequests() {
+		if strings.Contains(request, "/git/refs") {
+			t.Fatalf("publisher recreated transport branch: %v", gh.writeRequests())
+		}
+	}
+}
+
 // TestPublishRetryConverges: a full re-run of the same candidate finds
 // the branch and PR and issues no writes at all (issue #81 acceptance
 // 2: converge, not duplicate).
@@ -627,6 +669,12 @@ func TestPublishRefusesReusedInvocation(t *testing.T) {
 	// authorization gate would intercept before the intent-conflict check.
 	otherIn := authorizingInput(t)
 	otherIn.HeadSHA = testOtherSHA
+	otherArtifacts := []domain.Artifact{testArtifact(t, testOtherSHA)}
+	otherEvidenceDigest, err := domain.ComputeEvidenceSnapshotDigest(otherArtifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherIn.EvidenceSnapshotDigest = otherEvidenceDigest
 	otherAuth := newAuthorization(t, otherIn)
 	otherID := otherAuth.ID
 	p := newTestPublisherFull(t, gh, ledger, conformantTrust(t), authzWith(testCandidateAuthorization(t), otherAuth))
@@ -638,7 +686,7 @@ func TestPublishRefusesReusedInvocation(t *testing.T) {
 
 	changed := c
 	changed.HeadSHA = testOtherSHA
-	changed.Artifacts = []domain.Artifact{testArtifact(t, testOtherSHA)}
+	changed.Artifacts = otherArtifacts
 	changed.AuthorizationID = &otherID
 	requests := len(gh.requestLog())
 	if _, err := p.Publish(context.Background(), changed, testApprovedRecipes()); !errors.Is(err, publish.ErrPublicationConflict) {
@@ -876,6 +924,9 @@ func TestPublishRefusesUnauthorizedCandidate(t *testing.T) {
 		"authorization for a different recipe": {build: mkCase(func(in *domain.CandidateAuthorizationInput) {
 			in.VerificationRecipeDigest = domain.Digest("sha256:" + strings.Repeat("c", 64))
 		})},
+		"authorization for different evidence": {build: mkCase(func(in *domain.CandidateAuthorizationInput) {
+			in.EvidenceSnapshotDigest = domain.Digest("sha256:" + strings.Repeat("d", 64))
+		})},
 		"authorization for a different trust profile": {build: mkCase(func(in *domain.CandidateAuthorizationInput) {
 			in.TrustProfileDigest = domain.Digest("sha256:" + strings.Repeat("e", 64))
 		})},
@@ -1000,6 +1051,58 @@ func TestPublishRejectsMarkerShapedBody(t *testing.T) {
 				t.Errorf("marker-shaped body dispatched %v", reqs)
 			}
 		})
+	}
+}
+
+func TestVerifyOutcomeBindsUniqueLivePullRequestNumber(t *testing.T) {
+	gh := newFakeGitHub(t)
+	p := newTestPublisher(t, gh, newMemoryLedger())
+	candidate := testCandidate(t)
+	identity := testCandidateIdentity(t)
+	gh.prs = append(gh.prs, fakePR{
+		Number: 101, State: "open", Title: candidate.Title,
+		Body: identity.Marker(), HeadRef: identity.BranchName(),
+		HeadSHA: candidate.HeadSHA,
+	})
+	outcome := fixtureOutcome()
+	if err := p.VerifyOutcome(
+		context.Background(), candidate, identity, outcome,
+	); err != nil {
+		t.Fatalf("VerifyOutcome: %v", err)
+	}
+	if writes := gh.writeRequests(); len(writes) != 0 {
+		t.Fatalf("VerifyOutcome wrote to forge: %v", writes)
+	}
+	gh.prs[0].State = "closed"
+	if err := p.VerifyOutcome(
+		context.Background(), candidate, identity, outcome,
+	); err != nil {
+		t.Fatalf("VerifyOutcome after completion: %v", err)
+	}
+	gh.prs[0].State = "unknown"
+	if err := p.VerifyOutcome(
+		context.Background(), candidate, identity, outcome,
+	); !errors.Is(err, publish.ErrPublicationConflict) {
+		t.Fatalf("unknown PR state error = %v", err)
+	}
+	gh.prs[0].State = "closed"
+
+	outcome.PRNumber = 202
+	if err := p.VerifyOutcome(
+		context.Background(), candidate, identity, outcome,
+	); !errors.Is(err, publish.ErrPublicationConflict) {
+		t.Fatalf("substituted PR number error = %v", err)
+	}
+	outcome.PRNumber = 101
+	gh.prs = append(gh.prs, fakePR{
+		Number: 102, State: "open", Title: candidate.Title,
+		Body: identity.Marker(), HeadRef: identity.BranchName(),
+		HeadSHA: candidate.HeadSHA,
+	})
+	if err := p.VerifyOutcome(
+		context.Background(), candidate, identity, outcome,
+	); !errors.Is(err, publish.ErrPublicationConflict) {
+		t.Fatalf("duplicate identity PR error = %v", err)
 	}
 }
 
