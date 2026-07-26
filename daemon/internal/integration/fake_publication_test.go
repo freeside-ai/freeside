@@ -640,7 +640,7 @@ func TestFakeCandidatePublicationRecoversPersistedRecipe(t *testing.T) {
 	if _, err := workflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
 		t.Fatalf("StartFakePublication: %v", err)
 	}
-	recipe, found, err := engine.LoadPendingFakePublicationRecipe(
+	recipe, found, err := engine.LoadFakePublicationRecipe(
 		h.ctx, h.store, h.blobs, "run-fake-publication",
 	)
 	if err != nil {
@@ -656,6 +656,15 @@ func TestFakeCandidatePublicationRecoversPersistedRecipe(t *testing.T) {
 	}
 	if result.ReadyItemsCreated != 1 || result.LastPRNumber != 101 {
 		t.Fatalf("recovered result = %+v", result)
+	}
+	recipe, found, err = engine.LoadFakePublicationRecipe(
+		h.ctx, h.store, h.blobs, "run-fake-publication",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || !bytes.Equal(recipe, h.recipe) {
+		t.Fatalf("dispatched recipe = %q, found %t", recipe, found)
 	}
 }
 
@@ -947,14 +956,35 @@ func TestFakeCandidatePublicationRetainsRecoveryTaskAfterIntentTrustDrift(t *tes
 	if pushes := h.transport.pushCount(); pushes != 1 {
 		t.Fatalf("trust-drifted retry reached push %d times, want original attempt only", pushes)
 	}
-	item, err := h.attention.GetAttentionItem(
+	if _, err := h.attention.GetAttentionItem(
 		h.ctx, "publish-blocked-run-fake-publication",
-	)
-	if err != nil {
+	); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("recoverable drift created terminal blocked item: %v", err)
+	}
+	if err := h.store.WriteInternal(h.ctx, func(tx *store.InternalTx) error {
+		return tx.ActivateTrustProfile(
+			h.ctx, h.profile.Repo, h.profile.ProfileDigest,
+			fakePublicationTime.Add(2*time.Minute),
+		)
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if item.Item.Type != domain.AttentionPublishBlocked {
-		t.Fatalf("blocked item type = %s", item.Item.Type)
+	result, err := workflow.Reconcile(h.ctx)
+	if err != nil {
+		t.Fatalf("recovered Reconcile: %v", err)
+	}
+	if result.ReadyItemsCreated != 1 || result.LastPRNumber != 101 {
+		t.Fatalf("recovered result = %+v", result)
+	}
+	if _, err := h.attention.GetAttentionItem(
+		h.ctx, "ready-run-fake-publication",
+	); err != nil {
+		t.Fatalf("ready item after trust recovery: %v", err)
+	}
+	if _, err := h.attention.GetAttentionItem(
+		h.ctx, "publish-blocked-run-fake-publication",
+	); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("trust recovery left contradictory blocked item: %v", err)
 	}
 }
 

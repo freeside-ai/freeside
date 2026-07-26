@@ -127,15 +127,18 @@ the following current-profile task still reaches ready in the same pass.
 The final recovery review distinguished fresh trust refusal from drift after a
 publication intent already committed. With no publication intent, drift remains
 a terminal blocked outcome and the engine task is dispatched. With a pending
-publication intent, the workflow also persists the blocked item but retains the
+publication intent, the workflow defers terminal attention and retains the
 engine task as the only durable authority capable of rebuilding the candidate
 needed to inspect or finish that intent. Dispatching it would strand the
 publication outbox because this scope has no separate terminal cancellation
-contract for committed publication intents. A regression injects a push failure
-after intent commit, activates a new trust profile, and proves both outbox rows
-remain paired without another push. This round also moved trusted recipe-path
-validation to workflow admission, before any filesystem or task side effect,
-using the same relative slash-path grammar the verifier enforces.
+contract for committed publication intents; creating a terminal blocked item
+would conflict with the ready item if trust later recovers. A regression injects
+a push failure after intent commit, activates a new trust profile, and proves
+both outbox rows remain paired without another push; reactivating the reviewed
+profile then converges on one ready item and no contradictory blocked item.
+This round also moved trusted recipe-path validation to workflow admission,
+before any filesystem or task side effect, using the same relative slash-path
+grammar the verifier enforces.
 
 The next recovery pass removed two kinds of ambient process dependence. The
 one-shot command now invokes a publication-only reconciler, so its private fake
@@ -145,9 +148,10 @@ continuing through independent siblings; the command checks its requested
 run's durable terminal item before surfacing a sibling error. The exact
 approved recipe bytes are finalized in the digest-addressed blob store before a
 task can commit, and verification reloads them by the task's bound digest.
-Command restart bootstraps that recipe from a pending task before reopening the
-store with the recovered approval set, so changing or removing the original
-recipe file cannot rewrite or strand already-committed work.
+Command restart and terminal-result replay bootstrap that recipe from the
+durable task row, pending or dispatched, before reopening the store with the
+recovered approval set. Changing or removing the original recipe file therefore
+cannot rewrite or strand already-committed work.
 
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,

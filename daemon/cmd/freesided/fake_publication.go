@@ -221,7 +221,7 @@ func fakePublicationRecipe(
 	}
 	defer func() { err = errors.Join(err, bootstrap.Close()) }()
 
-	if recipe, found, err := engine.LoadPendingFakePublicationRecipe(
+	if recipe, found, err := engine.LoadFakePublicationRecipe(
 		ctx, bootstrap, artifacts, cfg.RunID,
 	); err != nil {
 		return nil, err

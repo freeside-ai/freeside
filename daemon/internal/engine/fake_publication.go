@@ -578,17 +578,17 @@ func (w *fakePublicationWorkflow) reconcileTask(ctx context.Context, task fakePu
 			if pendingErr != nil {
 				return taskOutcome{}, errors.Join(err, pendingErr)
 			}
+			if pendingIntent {
+				return taskOutcome{}, fmt.Errorf(
+					"publication intent retained with its recovery task: %w", err,
+				)
+			}
 			if putErr := w.putBlockedItem(
 				ctx, task, imported.CommitSHA, imported.Claims, artifacts,
 				imported.CommitPlanNotice,
 				"Current trust state definitively blocked publication.",
 			); putErr != nil {
 				return taskOutcome{}, errors.Join(err, putErr)
-			}
-			if pendingIntent {
-				return taskOutcome{}, fmt.Errorf(
-					"publication intent retained with its recovery task: %w", err,
-				)
 			}
 			if finishErr := w.finishTask(ctx, task); finishErr != nil {
 				return taskOutcome{}, errors.Join(err, finishErr)
@@ -1320,46 +1320,48 @@ func validateFakePublicationRecipePath(recipePath string) error {
 	return nil
 }
 
-// LoadPendingFakePublicationRecipe recovers the exact approved recipe bytes
-// bound into one pending durable task. It lets the one-shot command bootstrap
-// after its original recipe file changes or disappears.
-func LoadPendingFakePublicationRecipe(
+// LoadFakePublicationRecipe recovers the exact approved recipe bytes bound
+// into one durable task, including after its outbox row is dispatched. It lets
+// the one-shot command bootstrap after the original recipe file changes or
+// disappears, both during recovery and terminal-result replay.
+func LoadFakePublicationRecipe(
 	ctx context.Context,
 	st *store.Store,
 	artifacts ArtifactStore,
 	runID domain.RunID,
 ) ([]byte, bool, error) {
 	if st == nil || artifacts == nil {
-		return nil, false, errors.New("load pending fake publication recipe: nil dependency")
+		return nil, false, errors.New("load fake publication recipe: nil dependency")
 	}
 	key := fakePublicationTaskKey(runID)
-	var pending []store.QueueEntry
+	var entry store.QueueEntry
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		pending, err = tx.ListPendingOutbox(ctx, fakePublicationTaskKind)
+		entry, err = tx.GetOutbox(ctx, key)
 		return err
 	}); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, false, nil
+		}
 		return nil, false, err
 	}
-	for _, entry := range pending {
-		if entry.IdempotencyKey != key {
-			continue
-		}
-		task, err := decodeFakePublicationTask(entry.Payload)
-		if err != nil {
-			return nil, false, fmt.Errorf("task %q: %w", key, err)
-		}
-		if task.RunID != runID {
-			return nil, false, fmt.Errorf("task %q names run %q: %w",
-				key, task.RunID, domain.ErrParentKeyMismatch)
-		}
-		recipe, err := loadFakePublicationRecipe(artifacts, task.RecipeDigest)
-		if err != nil {
-			return nil, false, fmt.Errorf("task %q recipe: %w", key, err)
-		}
-		return recipe, true, nil
+	if entry.IdempotencyKey != key || entry.Kind != fakePublicationTaskKind {
+		return nil, false, fmt.Errorf("task %q has kind %q: %w",
+			key, entry.Kind, domain.ErrParentKeyMismatch)
 	}
-	return nil, false, nil
+	task, err := decodeFakePublicationTask(entry.Payload)
+	if err != nil {
+		return nil, false, fmt.Errorf("task %q: %w", key, err)
+	}
+	if task.RunID != runID {
+		return nil, false, fmt.Errorf("task %q names run %q: %w",
+			key, task.RunID, domain.ErrParentKeyMismatch)
+	}
+	recipe, err := loadFakePublicationRecipe(artifacts, task.RecipeDigest)
+	if err != nil {
+		return nil, false, fmt.Errorf("task %q recipe: %w", key, err)
+	}
+	return recipe, true, nil
 }
 
 func loadFakePublicationRecipe(

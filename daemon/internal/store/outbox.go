@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -98,6 +99,33 @@ func (tx *ReadTx) ListPendingOutbox(ctx context.Context, kind string) ([]QueueEn
 		return nil, fmt.Errorf("list pending outbox %q: %w", kind, err)
 	}
 	return entries, nil
+}
+
+// GetOutbox returns one durable intent by idempotency key regardless of
+// whether it is still pending or has been dispatched.
+func (tx *ReadTx) GetOutbox(ctx context.Context, key string) (QueueEntry, error) {
+	if key == "" {
+		return QueueEntry{}, errors.New("get outbox: empty idempotency key")
+	}
+	var (
+		entry  QueueEntry
+		stored string
+	)
+	err := tx.tx.QueryRowContext(ctx, selectOutboxSQL, key).Scan(
+		&entry.ID, &entry.IdempotencyKey, &entry.Kind, &entry.Payload,
+		&entry.Status, &stored,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return QueueEntry{}, fmt.Errorf("get outbox %q: %w", key, ErrNotFound)
+	}
+	if err != nil {
+		return QueueEntry{}, fmt.Errorf("get outbox %q: %w", key, err)
+	}
+	entry.CreatedAt, err = time.Parse(time.RFC3339Nano, stored)
+	if err != nil {
+		return QueueEntry{}, fmt.Errorf("get outbox %q: stored created_at invalid: %w", key, err)
+	}
+	return entry, nil
 }
 
 // MarkOutboxDispatched flips a pending intent to dispatched. It is idempotent
