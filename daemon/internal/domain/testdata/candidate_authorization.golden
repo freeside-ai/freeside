@@ -1,10 +1,11 @@
 {
-  "id": "sha256:6f1799ea0e863a722faac1f39e83196c4b8b5960d872e3552e669d2035486475",
+  "id": "sha256:3e70b16a9107cbbef23360932703ca607d4670d5d1e80f9f9b63e311475cf871",
   "repo": "freeside-ai/demo",
   "base_sha": "beefcafe",
   "head_sha": "cafebabe",
   "import_result_digest": "sha256:import-result",
   "verification_recipe_digest": "sha256:recipe-approved",
+  "evidence_snapshot_digest": "sha256:evidence-snapshot",
   "verification_outcome": "passed",
   "findings": [
     {

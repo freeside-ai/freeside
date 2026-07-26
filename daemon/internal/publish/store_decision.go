@@ -63,6 +63,13 @@ func (d *storePublicationDecision) prepare(ctx context.Context, c Candidate, aud
 		if entry.IdempotencyKey != key || entry.Kind != IntentKindPublication {
 			return fmt.Errorf("record intent: key %q holds kind %q", entry.IdempotencyKey, entry.Kind)
 		}
+		if entry.Quarantined() {
+			decisionErr = fmt.Errorf(
+				"publication intent %q is quarantined: %w",
+				key, ErrUnauthorizedPublication,
+			)
+			return nil
+		}
 		prior, recorded = entry.Payload, inserted
 		return nil
 	})

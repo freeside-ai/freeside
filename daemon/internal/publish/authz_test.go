@@ -22,12 +22,19 @@ const testBaseSHA = "1111111111111111111111111111111111111111"
 // from the publishing invocation the candidate carries.
 func authorizingInput(t *testing.T) domain.CandidateAuthorizationInput {
 	t.Helper()
+	evidenceDigest, err := domain.ComputeEvidenceSnapshotDigest(
+		[]domain.Artifact{testArtifact(t, testHeadSHA)},
+	)
+	if err != nil {
+		t.Fatalf("ComputeEvidenceSnapshotDigest: %v", err)
+	}
 	return domain.CandidateAuthorizationInput{
 		Repo:                     testTrustRepo,
 		BaseSHA:                  testBaseSHA,
 		HeadSHA:                  testHeadSHA,
 		ImportResultDigest:       "sha256:import-result-fixture",
 		VerificationRecipeDigest: testRecipe,
+		EvidenceSnapshotDigest:   evidenceDigest,
 		VerificationOutcome:      domain.VerificationPassed,
 		Findings:                 nil,
 		TrustProfileDigest:       testTrustProfileDigest(t),

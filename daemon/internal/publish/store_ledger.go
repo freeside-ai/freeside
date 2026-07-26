@@ -62,6 +62,9 @@ func (l *StoreLedger) Record(ctx context.Context, key, kind string, payload []by
 		if entry.IdempotencyKey != key || entry.Kind != kind {
 			return fmt.Errorf("key %q holds kind %q", entry.IdempotencyKey, entry.Kind)
 		}
+		if entry.Quarantined() {
+			return fmt.Errorf("intent %q is quarantined: %w", key, ErrUnauthorizedPublication)
+		}
 		stored, inserted = entry.Payload, ins
 		return nil
 	})

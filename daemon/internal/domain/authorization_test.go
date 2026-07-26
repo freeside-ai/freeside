@@ -13,6 +13,7 @@ func validAuthorizationInput() domain.CandidateAuthorizationInput {
 		Repo: "freeside-ai/demo", BaseSHA: "beefcafe", HeadSHA: "cafebabe",
 		ImportResultDigest:       "sha256:import-result",
 		VerificationRecipeDigest: "sha256:recipe-approved",
+		EvidenceSnapshotDigest:   "sha256:evidence-snapshot",
 		VerificationOutcome:      domain.VerificationPassed,
 		TrustProfileDigest:       "sha256:profile",
 		InvocationID:             "inv-1",
@@ -86,6 +87,12 @@ func TestAuthorizationComputedTrust(t *testing.T) {
 	swappedHead.HeadSHA = "0ddba11"
 	if err := swappedHead.Validate(); !errors.Is(err, domain.ErrAuthorizationInconsistent) {
 		t.Fatalf("swapped head error = %v, want ErrAuthorizationInconsistent", err)
+	}
+
+	swappedEvidence := base
+	swappedEvidence.EvidenceSnapshotDigest = "sha256:substituted-evidence"
+	if err := swappedEvidence.Validate(); !errors.Is(err, domain.ErrAuthorizationInconsistent) {
+		t.Fatalf("swapped evidence error = %v, want ErrAuthorizationInconsistent", err)
 	}
 
 	// A blocking finding withdraws authorization; the same finding waived
@@ -182,6 +189,7 @@ func TestAuthorizationValidation(t *testing.T) {
 		{"empty head sha", func(in *domain.CandidateAuthorizationInput) { in.HeadSHA = "" }, domain.ErrEmptyField},
 		{"empty import result", func(in *domain.CandidateAuthorizationInput) { in.ImportResultDigest = "" }, domain.ErrEmptyField},
 		{"empty recipe digest", func(in *domain.CandidateAuthorizationInput) { in.VerificationRecipeDigest = "" }, domain.ErrEmptyField},
+		{"empty evidence digest", func(in *domain.CandidateAuthorizationInput) { in.EvidenceSnapshotDigest = "" }, domain.ErrEmptyField},
 		{"invalid outcome", func(in *domain.CandidateAuthorizationInput) { in.VerificationOutcome = "inconclusive" }, domain.ErrInvalidOutcome},
 		{"empty outcome", func(in *domain.CandidateAuthorizationInput) { in.VerificationOutcome = "" }, domain.ErrInvalidOutcome},
 		{"empty profile digest", func(in *domain.CandidateAuthorizationInput) { in.TrustProfileDigest = "" }, domain.ErrEmptyField},

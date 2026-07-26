@@ -169,6 +169,9 @@ func TestValidBranchName(t *testing.T) {
 		if !validBranchName(name) {
 			t.Errorf("validBranchName(%q) = false, want true", name)
 		}
+		if err := ValidateBranchName(name); err != nil {
+			t.Errorf("ValidateBranchName(%q) = %v, want nil", name, err)
+		}
 	}
 	invalid := []string{
 		"",                                        // empty
@@ -191,6 +194,9 @@ func TestValidBranchName(t *testing.T) {
 	for _, name := range invalid {
 		if validBranchName(name) {
 			t.Errorf("validBranchName(%q) = true, want false", name)
+		}
+		if err := ValidateBranchName(name); err == nil {
+			t.Errorf("ValidateBranchName(%q) accepted", name)
 		}
 	}
 }
@@ -228,6 +234,17 @@ func TestParseTransportRepo(t *testing.T) {
 	} {
 		if _, err := parseTransportRepo(repo); err == nil {
 			t.Errorf("parseTransportRepo(%q) accepted", repo)
+		}
+	}
+}
+
+func TestValidateRepository(t *testing.T) {
+	if err := ValidateRepository("freeasinbird/gh-imgup"); err != nil {
+		t.Fatalf("ValidateRepository(valid) = %v", err)
+	}
+	for _, repo := range []string{"owner/name/extra", "owner/.repo", "-owner/repo"} {
+		if err := ValidateRepository(repo); err == nil {
+			t.Errorf("ValidateRepository(%q) accepted", repo)
 		}
 	}
 }

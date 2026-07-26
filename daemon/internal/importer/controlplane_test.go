@@ -152,6 +152,7 @@ func TestFindingCandidateLiftSecretsDistinct(t *testing.T) {
 		HeadSHA:                  "cafebabe",
 		ImportResultDigest:       "sha256:import-result",
 		VerificationRecipeDigest: "sha256:recipe",
+		EvidenceSnapshotDigest:   "sha256:evidence-snapshot",
 		VerificationOutcome:      domain.VerificationFailed,
 		Findings:                 []domain.CandidateFinding{a, b},
 		TrustProfileDigest:       "sha256:profile",

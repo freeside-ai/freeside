@@ -251,6 +251,7 @@ func TestGolden(t *testing.T) {
 		Repo: "freeside-ai/demo", BaseSHA: "beefcafe", HeadSHA: "cafebabe",
 		ImportResultDigest:       "sha256:import-result",
 		VerificationRecipeDigest: recipe,
+		EvidenceSnapshotDigest:   "sha256:evidence-snapshot",
 		VerificationOutcome:      domain.VerificationPassed,
 		Findings: []domain.CandidateFinding{
 			{
@@ -280,6 +281,7 @@ func TestGolden(t *testing.T) {
 		Repo: "freeside-ai/demo", BaseSHA: "beefcafe", HeadSHA: "cafebabe",
 		ImportResultDigest:       "sha256:import-result",
 		VerificationRecipeDigest: recipe,
+		EvidenceSnapshotDigest:   "sha256:evidence-snapshot",
 		VerificationOutcome:      domain.VerificationPassed,
 		Findings: []domain.CandidateFinding{
 			{

@@ -45,12 +45,22 @@ var errPublicationOutcomeConflict = errors.New("outcome inbox key holds a differ
 // with the empty StartSpec (dispatch.go): full request reconstruction is
 // the engine's, not this recovery scan's.
 //
-// Resolve returns the candidate and the approved-recipe set the publish
-// re-gate runs against, both as the engine currently holds them: a
-// recipe un-approved since the intent committed must make Publish fail
-// closed, not converge on stale eligibility.
+// RecoveryCandidate carries every input needed to repeat the complete
+// publication effect after an intent-only crash. PublishHead must
+// idempotently transport this exact candidate head before Publisher asks the
+// forge to converge the pull request.
+type RecoveryCandidate struct {
+	Candidate       Candidate
+	ApprovedRecipes map[domain.Digest]bool
+	PublishHead     func(context.Context, IdentityInput) error
+}
+
+// Resolve returns the candidate, current approved-recipe set, and the
+// idempotent head transport reconstructed by the engine. A recipe un-approved
+// since the intent committed must make Publish fail closed, and a missing
+// transport must not leave a locally re-authored head unrecoverable.
 type CandidateResolver interface {
-	Resolve(ctx context.Context, intent Intent) (Candidate, map[domain.Digest]bool, error)
+	Resolve(ctx context.Context, intent Intent) (RecoveryCandidate, error)
 }
 
 // DrainPendingPublications re-converges every committed-but-undispatched
@@ -71,6 +81,55 @@ type CandidateResolver interface {
 // gap is the after-effect-before-acceptance boundary, closed by the
 // idempotent re-converge, not by a shared commit.
 func DrainPendingPublications(ctx context.Context, s *store.Store, p *Publisher, resolve CandidateResolver) (int, error) {
+	return drainPendingPublications(ctx, s, p, resolve, "")
+}
+
+// DrainPublicationIntent re-converges only the publication intent committed
+// by invocationID. A workflow reconciling one durable task uses this scoped
+// form so another task's pending intent cannot require a process-local
+// candidate the active task did not reconstruct.
+func DrainPublicationIntent(
+	ctx context.Context,
+	s *store.Store,
+	p *Publisher,
+	resolve CandidateResolver,
+	invocationID domain.InvocationID,
+) (int, error) {
+	key, err := IntentKey(invocationID, IntentKindPublication)
+	if err != nil {
+		return 0, fmt.Errorf("drain publication: %w", err)
+	}
+	return drainPendingPublications(ctx, s, p, resolve, key)
+}
+
+func finalizePublicationResult(
+	ctx context.Context,
+	s *store.Store,
+	candidate Candidate,
+	result Result,
+) error {
+	identity, err := deriveCandidateIdentity(candidate)
+	if err != nil {
+		return fmt.Errorf("derive candidate identity: %w", err)
+	}
+	expected, err := intentForCandidate(candidate, identity)
+	if err != nil {
+		return err
+	}
+	key, err := IntentKey(candidate.InvocationID, IntentKindPublication)
+	if err != nil {
+		return err
+	}
+	return finalizePublicationEntry(ctx, s, key, expected, result)
+}
+
+func drainPendingPublications(
+	ctx context.Context,
+	s *store.Store,
+	p *Publisher,
+	resolve CandidateResolver,
+	targetKey string,
+) (int, error) {
 	var pending []store.QueueEntry
 	err := s.Read(ctx, func(tx *store.ReadTx) error {
 		entries, err := tx.ListPendingOutbox(ctx, IntentKindPublication)
@@ -86,6 +145,9 @@ func DrainPendingPublications(ctx context.Context, s *store.Store, p *Publisher,
 
 	dispatched := 0
 	for _, entry := range pending {
+		if targetKey != "" && entry.IdempotencyKey != targetKey {
+			continue
+		}
 		intent, err := DecodeIntent(entry.Payload)
 		if err != nil {
 			return dispatched, fmt.Errorf("drain publications: intent %q payload: %w", entry.IdempotencyKey, err)
@@ -105,10 +167,11 @@ func DrainPendingPublications(ctx context.Context, s *store.Store, p *Publisher,
 				entry.IdempotencyKey, intent.InvocationID, errPublicationIntentCorrupt)
 		}
 
-		cand, approved, err := resolve.Resolve(ctx, intent)
+		recovered, err := resolve.Resolve(ctx, intent)
 		if err != nil {
 			return dispatched, fmt.Errorf("drain publications: resolve %q: %w", entry.IdempotencyKey, err)
 		}
+		cand := recovered.Candidate
 
 		// The resolver is trusted to reload the candidate, not to reload
 		// the *right* one, so match the resolved candidate against the
@@ -144,64 +207,97 @@ func DrainPendingPublications(ctx context.Context, s *store.Store, p *Publisher,
 			return dispatched, fmt.Errorf("drain publications: intent %q committed authorization %s, resolved candidate carries %s: %w",
 				entry.IdempotencyKey, intent.AuthorizationID, derefDigest(cand.AuthorizationID), errPublicationIntentDiverged)
 		}
+		if recovered.PublishHead == nil {
+			return dispatched, fmt.Errorf(
+				"drain publications: resolve %q returned no head transport",
+				entry.IdempotencyKey,
+			)
+		}
 
-		result, err := p.Publish(ctx, cand, approved)
+		result, err := p.PublishAfterGate(
+			ctx, cand, recovered.ApprovedRecipes, recovered.PublishHead,
+		)
 		if err != nil {
 			return dispatched, fmt.Errorf("drain publications: publish %q: %w", entry.IdempotencyKey, err)
 		}
 
-		// Publish returned success, so every artifact passed the evidence
-		// gate before any external effect (publisher.go): the recorded
-		// eligibility is the gate's verdict, not an assumed one.
-		outcome := Outcome{
-			Identity:         result.Identity.Digest(),
-			Repo:             intent.Repo,
-			BaseRef:          intent.BaseRef,
-			HeadSHA:          intent.SourceHeadSHA,
-			Branch:           result.Branch,
-			PRNumber:         result.PRNumber,
-			EvidenceEligible: true,
-		}
-		payload, err := outcome.Encode()
-		if err != nil {
-			return dispatched, fmt.Errorf("drain publications: outcome %q: %w", entry.IdempotencyKey, err)
-		}
-
-		// One internal transaction records the outcome and marks the
-		// intent dispatched together (#82 acceptance 3): both are
-		// non-revision-bumping bookkeeping, and both are individually
-		// idempotent, so a re-drive after this commit re-converges cleanly.
-		// RecordInbox does not overwrite an existing key, so a returned
-		// row is a reconstruction boundary: it must be this outcome
-		// (byte-identical, since an outcome is deterministic per identity)
-		// or the finalize is refusing a foreign/corrupt row — fail closed
-		// and leave the intent pending rather than dispatch it with no
-		// valid outcome recorded.
-		outcomeKey := OutcomeKey(result.Identity)
-		err = s.WriteInternal(ctx, func(tx *store.InternalTx) error {
-			if err := tx.MarkOutboxDispatched(ctx, entry.IdempotencyKey); err != nil {
-				return err
-			}
-			existing, _, err := tx.RecordInbox(ctx, outcomeKey, IntentKindOutcome, payload)
-			if err != nil {
-				return err
-			}
-			// The returned row is the durable outcome this transaction is
-			// attesting to. The inbox is unique by key alone, so payload
-			// equality is insufficient: a foreign kind can occupy the key
-			// with the same bytes. Verify the complete identity/kind/payload
-			// tuple whether this call inserted or converged.
-			if existing.IdempotencyKey != outcomeKey || existing.Kind != IntentKindOutcome || !bytes.Equal(existing.Payload, payload) {
-				return fmt.Errorf("outcome key %s: %w", outcomeKey, errPublicationOutcomeConflict)
-			}
-			return nil
-		})
-		if err != nil {
+		if err := finalizePublicationEntry(
+			ctx, s, entry.IdempotencyKey, intent, result,
+		); err != nil {
 			return dispatched, fmt.Errorf("drain publications: finalize %q: %w", entry.IdempotencyKey, err)
 		}
 		dispatched++
 	}
 	return dispatched, nil
+}
+
+func finalizePublicationEntry(
+	ctx context.Context,
+	s *store.Store,
+	key string,
+	intent Intent,
+	result Result,
+) error {
+	if result.Identity.Digest() != intent.Identity {
+		return fmt.Errorf("publication intent %q disagrees with returned result: %w",
+			key, errPublicationIntentDiverged)
+	}
+	// Publish returned success, so every artifact passed the evidence gate
+	// before any external effect (publisher.go): the recorded eligibility is
+	// that gate's verdict, not an assumed one.
+	outcome := Outcome{
+		Identity:         result.Identity.Digest(),
+		Repo:             intent.Repo,
+		BaseRef:          intent.BaseRef,
+		HeadSHA:          intent.SourceHeadSHA,
+		Branch:           result.Branch,
+		PRNumber:         result.PRNumber,
+		EvidenceEligible: true,
+	}
+	payload, err := outcome.Encode()
+	if err != nil {
+		return fmt.Errorf("outcome %q: %w", key, err)
+	}
+
+	// One internal transaction records the outcome and marks the intent
+	// dispatched together. A returned inbox row is a reconstruction boundary:
+	// verify its complete identity, kind, and payload before accepting it.
+	outcomeKey := OutcomeKey(result.Identity)
+	return s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		entry, err := tx.GetOutbox(ctx, key)
+		if err != nil {
+			return fmt.Errorf("read publication intent %q: %w", key, err)
+		}
+		if entry.IdempotencyKey != key || entry.Kind != IntentKindPublication {
+			return fmt.Errorf("publication intent %q has kind %q: %w",
+				key, entry.Kind, errPublicationIntentCorrupt)
+		}
+		if entry.Quarantined() {
+			return fmt.Errorf("publication intent %q is quarantined: %w",
+				key, errPublicationIntentDiverged)
+		}
+		committed, err := DecodeIntent(entry.Payload)
+		if err != nil {
+			return fmt.Errorf("publication intent %q payload: %w", key, err)
+		}
+		if committed != intent {
+			return fmt.Errorf("publication intent %q changed before finalization: %w",
+				key, errPublicationIntentDiverged)
+		}
+		if err := tx.MarkOutboxDispatched(ctx, key); err != nil {
+			return err
+		}
+		existing, _, err := tx.RecordInbox(ctx, outcomeKey, IntentKindOutcome, payload)
+		if err != nil {
+			return err
+		}
+		if existing.IdempotencyKey != outcomeKey ||
+			existing.Kind != IntentKindOutcome ||
+			!bytes.Equal(existing.Payload, payload) {
+			return fmt.Errorf("outcome key %s: %w", outcomeKey, errPublicationOutcomeConflict)
+		}
+		return nil
+	})
 }
 
 // derefDigest renders an optional digest for a divergence message: the

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -21,13 +22,34 @@ type QueueEntry struct {
 	CreatedAt      time.Time
 }
 
+// Dispatched reports whether this durable queue row has completed its
+// provider handoff.
+func (e QueueEntry) Dispatched() bool {
+	return e.Status == outboxStatusDispatched
+}
+
+// Quarantined reports whether a migration preserved this intent for audit
+// while removing it from active recovery because its authority can no longer
+// be reconstructed safely.
+func (e QueueEntry) Quarantined() bool {
+	return e.Status == outboxStatusQuarantined
+}
+
+func (e QueueEntry) validStatus() bool {
+	return e.Status == outboxStatusPending ||
+		e.Status == outboxStatusDispatched ||
+		e.Status == outboxStatusQuarantined
+}
+
 // Outbox row statuses. Pending is the schema default at enqueue; dispatched
 // records that the intent was handed to its provider, whose own durable
-// intent record is the correctness dedup — the mark only bounds rescans
-// (plan §5.14 discuss recovery).
+// intent record is the correctness dedup — the mark only bounds rescans.
+// Quarantined preserves an intent whose authority cannot be reconstructed
+// while keeping it out of the pending recovery scan.
 const (
-	outboxStatusPending    = "pending"
-	outboxStatusDispatched = "dispatched"
+	outboxStatusPending     = "pending"
+	outboxStatusDispatched  = "dispatched"
+	outboxStatusQuarantined = "quarantined"
 )
 
 const (
@@ -100,6 +122,62 @@ func (tx *ReadTx) ListPendingOutbox(ctx context.Context, kind string) ([]QueueEn
 	return entries, nil
 }
 
+// GetOutbox returns one durable intent by idempotency key regardless of
+// whether it is still pending or has been dispatched.
+func (tx *ReadTx) GetOutbox(ctx context.Context, key string) (QueueEntry, error) {
+	if key == "" {
+		return QueueEntry{}, errors.New("get outbox: empty idempotency key")
+	}
+	var (
+		entry  QueueEntry
+		stored string
+	)
+	err := tx.tx.QueryRowContext(ctx, selectOutboxSQL, key).Scan(
+		&entry.ID, &entry.IdempotencyKey, &entry.Kind, &entry.Payload,
+		&entry.Status, &stored,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return QueueEntry{}, fmt.Errorf("get outbox %q: %w", key, ErrNotFound)
+	}
+	if err != nil {
+		return QueueEntry{}, fmt.Errorf("get outbox %q: %w", key, err)
+	}
+	entry.CreatedAt, err = time.Parse(time.RFC3339Nano, stored)
+	if err != nil {
+		return QueueEntry{}, fmt.Errorf("get outbox %q: stored created_at invalid: %w", key, err)
+	}
+	if !entry.validStatus() {
+		return QueueEntry{}, fmt.Errorf("get outbox %q: invalid status %q", key, entry.Status)
+	}
+	return entry, nil
+}
+
+// GetInbox returns one durable accepted result by idempotency key.
+func (tx *ReadTx) GetInbox(ctx context.Context, key string) (QueueEntry, error) {
+	if key == "" {
+		return QueueEntry{}, errors.New("get inbox: empty idempotency key")
+	}
+	var (
+		entry  QueueEntry
+		stored string
+	)
+	err := tx.tx.QueryRowContext(ctx, selectInboxSQL, key).Scan(
+		&entry.ID, &entry.IdempotencyKey, &entry.Kind, &entry.Payload,
+		&entry.Status, &stored,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return QueueEntry{}, fmt.Errorf("get inbox %q: %w", key, ErrNotFound)
+	}
+	if err != nil {
+		return QueueEntry{}, fmt.Errorf("get inbox %q: %w", key, err)
+	}
+	entry.CreatedAt, err = time.Parse(time.RFC3339Nano, stored)
+	if err != nil {
+		return QueueEntry{}, fmt.Errorf("get inbox %q: stored created_at invalid: %w", key, err)
+	}
+	return entry, nil
+}
+
 // MarkOutboxDispatched flips a pending intent to dispatched. It is idempotent
 // (marking a missing or already-dispatched key affects no row and is not an
 // error) and dispatch bookkeeping is not client-visible, so it belongs inside
@@ -165,6 +243,9 @@ func (tx *InternalTx) record(ctx context.Context, insertSQL, selectSQL, key, kin
 	entry.CreatedAt, err = time.Parse(time.RFC3339Nano, stored)
 	if err != nil {
 		return QueueEntry{}, false, fmt.Errorf("stored created_at invalid: %w", err)
+	}
+	if !entry.validStatus() {
+		return QueueEntry{}, false, fmt.Errorf("stored status %q is invalid", entry.Status)
 	}
 	return entry, affected > 0, nil
 }

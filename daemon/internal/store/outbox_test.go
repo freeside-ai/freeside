@@ -3,6 +3,7 @@ package store_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -145,6 +146,9 @@ func TestListPendingOutbox(t *testing.T) {
 				return err
 			}
 		}
+		if _, _, err := tx.RecordInbox(ctx, "inbox-key", "kind", []byte("result")); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
@@ -212,6 +216,37 @@ func TestListPendingOutbox(t *testing.T) {
 		t.Fatalf("mark dispatched: %v", err)
 	}
 	assertPending(t, "inv-2")
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		entry, err := tx.GetOutbox(ctx, "inv-1")
+		if err != nil {
+			return err
+		}
+		if entry.IdempotencyKey != "inv-1" || !entry.Dispatched() {
+			t.Fatalf("dispatched entry = %+v", entry)
+		}
+		if _, err := tx.GetOutbox(ctx, "missing"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("missing outbox error = %v, want ErrNotFound", err)
+		}
+		if _, err := tx.GetOutbox(ctx, ""); err == nil {
+			t.Fatal("GetOutbox accepted an empty key")
+		}
+		inbox, err := tx.GetInbox(ctx, "inbox-key")
+		if err != nil {
+			return err
+		}
+		if inbox.IdempotencyKey != "inbox-key" || inbox.Kind != "kind" {
+			t.Fatalf("inbox entry = %+v", inbox)
+		}
+		if _, err := tx.GetInbox(ctx, "missing"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("missing inbox error = %v, want ErrNotFound", err)
+		}
+		if _, err := tx.GetInbox(ctx, ""); err == nil {
+			t.Fatal("GetInbox accepted an empty key")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("get dispatched outbox: %v", err)
+	}
 }
 
 // TestMarkOutboxDispatchedInvisibleToSync: dispatch bookkeeping rides

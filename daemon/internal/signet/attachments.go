@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -43,10 +44,71 @@ var ErrBlobNotFound = errors.New("no attachment stored under the digest")
 
 // NewBlobStore opens (creating if needed) the attachment directory.
 func NewBlobStore(dir string) (*BlobStore, error) {
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := makeBlobStoreDirectory(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("blob store %q: %w", dir, err)
 	}
 	return &BlobStore{dir: dir}, nil
+}
+
+// makeBlobStoreDirectory re-syncs the deepest existing boundary before
+// creating and parent-syncing each missing component.
+func makeBlobStoreDirectory(path string, mode fs.FileMode) error {
+	return makeBlobStoreDirectoryWithSync(path, mode, syncBlobStoreDirectory)
+}
+
+func makeBlobStoreDirectoryWithSync(
+	path string,
+	mode fs.FileMode,
+	syncDir func(string) error,
+) error {
+	var missing []string
+	var existing string
+	for current := filepath.Clean(path); ; current = filepath.Dir(current) {
+		info, err := os.Stat(current)
+		if err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("%s is not a directory", current)
+			}
+			existing = current
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		missing = append(missing, current)
+		if parent := filepath.Dir(current); parent == current {
+			return fmt.Errorf("no existing ancestor for %s", path)
+		}
+	}
+	if err := syncDir(filepath.Dir(existing)); err != nil {
+		return err
+	}
+	for i := len(missing) - 1; i >= 0; i-- {
+		if err := os.Mkdir(missing[i], mode); err != nil {
+			if !errors.Is(err, fs.ErrExist) {
+				return err
+			}
+			info, statErr := os.Stat(missing[i])
+			if statErr != nil {
+				return statErr
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("%s is not a directory", missing[i])
+			}
+		}
+		if err := syncDir(filepath.Dir(missing[i])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func syncBlobStoreDirectory(path string) error {
+	dir, err := os.Open(path) //nolint:gosec // caller passes only the blob-root ancestor chain
+	if err != nil {
+		return err
+	}
+	return errors.Join(dir.Sync(), dir.Close())
 }
 
 // blobPath validates the digest and derives the content path. The digest
@@ -68,6 +130,14 @@ func (b *BlobStore) blobPath(digest domain.Digest) (string, error) {
 // already present and the upload converged on the existing immutable bytes
 // (the retried-upload half of sync test 10).
 func (b *BlobStore) Put(digest domain.Digest, r io.Reader) (created bool, err error) {
+	return b.put(digest, r, b.syncDir)
+}
+
+func (b *BlobStore) put(
+	digest domain.Digest,
+	r io.Reader,
+	syncDir func() error,
+) (created bool, err error) {
 	path, err := b.blobPath(digest)
 	if err != nil {
 		return false, err
@@ -94,6 +164,9 @@ func (b *BlobStore) Put(digest domain.Digest, r io.Reader) (created bool, err er
 	// stored content before the request is called converged, or a mismatched
 	// re-PUT of an existing digest would return success.
 	if _, err := os.Stat(path); err == nil {
+		if err := syncDir(); err != nil {
+			return false, fmt.Errorf("attachment %q: %w", digest, err)
+		}
 		return false, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return false, fmt.Errorf("attachment %q: %w", digest, err)
@@ -110,7 +183,7 @@ func (b *BlobStore) Put(digest domain.Digest, r io.Reader) (created bool, err er
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return false, fmt.Errorf("attachment %q: %w", digest, err)
 	}
-	if err := b.syncDir(); err != nil {
+	if err := syncDir(); err != nil {
 		return false, fmt.Errorf("attachment %q: %w", digest, err)
 	}
 	return true, nil

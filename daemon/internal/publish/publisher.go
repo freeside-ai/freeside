@@ -112,6 +112,108 @@ func NewPublisher(ts TokenSource, client *http.Client, baseURL string, auditor W
 // retried at any point finds what the previous attempt created and
 // continues instead of duplicating (issue #81 acceptance 2, 4).
 func (p *Publisher) Publish(ctx context.Context, c Candidate, approvedRecipes map[domain.Digest]bool) (Result, error) {
+	return p.publish(ctx, c, approvedRecipes, nil)
+}
+
+// VerifyOutcome observes the identity's unique live pull request without
+// mutating it. A persisted PR number is not trusted until the live marker and
+// candidate coordinates identify exactly that PR.
+func (p *Publisher) VerifyOutcome(
+	ctx context.Context,
+	c Candidate,
+	identity Identity,
+	outcome Outcome,
+) error {
+	repo, err := parseRepo(c.Repo)
+	if err != nil {
+		return fmt.Errorf("verify publication outcome: %w", err)
+	}
+	prs, err := p.forge.listPRsByHead(ctx, repo, identity.BranchName())
+	if err != nil {
+		return fmt.Errorf("verify publication outcome: %w", err)
+	}
+	if len(prs) != 1 {
+		return fmt.Errorf(
+			"verify publication outcome: found %d pull requests on identity branch %s: %w",
+			len(prs), identity.BranchName(), ErrPublicationConflict,
+		)
+	}
+	pr := prs[0]
+	parsed, ok := ParseMarker(pr.Body)
+	if !ok || parsed != identity.Digest() {
+		return fmt.Errorf(
+			"verify publication outcome: pull request #%d occupies branch %s: %w",
+			pr.Number, identity.BranchName(), ErrForeignResource,
+		)
+	}
+	if !prMatchesPublicationCoordinates(pr, repo, identity, c) {
+		return fmt.Errorf(
+			"verify publication outcome: pull request #%d does not match candidate: %w",
+			pr.Number, ErrPublicationConflict,
+		)
+	}
+	if pr.Number != outcome.PRNumber {
+		return fmt.Errorf(
+			"verify publication outcome: live pull request #%d, persisted #%d: %w",
+			pr.Number, outcome.PRNumber, ErrPublicationConflict,
+		)
+	}
+	return nil
+}
+
+// PublishAfterGate is the engine composition point for a daemon-side git
+// transport. It runs after every artifact, authorization, and fresh trust-drift
+// gate has passed and the publication intent is durable, but before Publisher
+// observes or creates the deterministic branch and PR. The callback must only
+// converge that exact candidate head onto its derived publication branch.
+//
+// A callback failure leaves the intent pending for recovery. A callback
+// success followed by a later failure is also safe to retry: the transport and
+// Publisher both use the same content identity and converge independently.
+func (p *Publisher) PublishAfterGate(
+	ctx context.Context,
+	c Candidate,
+	approvedRecipes map[domain.Digest]bool,
+	publishHead func(context.Context, IdentityInput) error,
+) (Result, error) {
+	if publishHead == nil {
+		return Result{}, errors.New("publish: nil after-gate head publisher")
+	}
+	return p.publish(ctx, c, approvedRecipes, publishHead)
+}
+
+// PublishAfterGateAndFinalize performs the daemon-side transport publication
+// and records its returned outcome without entering the pre-effect gates a
+// second time. PublishAfterGate has already gated the candidate and committed
+// its intent before the callback or forge effect; finalization binds the
+// result returned by that same call to that intent.
+func (p *Publisher) PublishAfterGateAndFinalize(
+	ctx context.Context,
+	c Candidate,
+	approvedRecipes map[domain.Digest]bool,
+	publishHead func(context.Context, IdentityInput) error,
+) (Result, error) {
+	if p.storeDecision == nil {
+		return Result{}, errors.New("publish: finalization requires one shared store decision boundary")
+	}
+	result, err := p.PublishAfterGate(ctx, c, approvedRecipes, publishHead)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := finalizePublicationResult(
+		ctx, p.storeDecision.store, c, result,
+	); err != nil {
+		return Result{}, fmt.Errorf("publish: finalize returned result: %w", err)
+	}
+	return result, nil
+}
+
+func (p *Publisher) publish(
+	ctx context.Context,
+	c Candidate,
+	approvedRecipes map[domain.Digest]bool,
+	publishHead func(context.Context, IdentityInput) error,
+) (Result, error) {
 	if p.wiringErr != nil {
 		return Result{}, p.wiringErr
 	}
@@ -125,6 +227,9 @@ func (p *Publisher) Publish(ctx context.Context, c Candidate, approvedRecipes ma
 	if c.Title == "" {
 		return Result{}, errors.New("publish: empty title")
 	}
+	if err := ValidateCandidateBody(c.Body); err != nil {
+		return Result{}, fmt.Errorf("publish: %w", err)
+	}
 
 	// Trust gate before any external effect (§5.15 rule 2): every
 	// artifact is re-gated against the current approved-recipe set —
@@ -133,28 +238,11 @@ func (p *Publisher) Publish(ctx context.Context, c Candidate, approvedRecipes ma
 	// and every artifact's recipe must be the candidate's recipe, so
 	// the identity records the provenance the evidence was actually
 	// produced under.
-	digests := make([]domain.Digest, len(c.Artifacts))
-	for i, a := range c.Artifacts {
-		if err := domain.EligibleForEvidenceSnapshot(a, approvedRecipes); err != nil {
-			return Result{}, fmt.Errorf("publish: %w", err)
-		}
-		if a.Provenance.HeadBinding == domain.HeadBound && a.Provenance.SourceHeadSHA != c.HeadSHA {
-			return Result{}, fmt.Errorf("publish: artifact %s bound to a different head: %w", a.ID, ErrHeadMismatch)
-		}
-		// The gate above guarantees a recipe digest is present.
-		if c.RecipeDigest == nil || *a.Provenance.VerificationRecipeDigest != *c.RecipeDigest {
-			return Result{}, fmt.Errorf("publish: artifact %s verified under a recipe other than the candidate's: %w", a.ID, ErrPublicationConflict)
-		}
-		digests[i] = a.Digest
+	identityInput, err := gatedCandidateIdentityInput(c, approvedRecipes)
+	if err != nil {
+		return Result{}, fmt.Errorf("publish: %w", err)
 	}
-
-	identity, err := DeriveIdentity(IdentityInput{
-		Repo:            c.Repo,
-		BaseRef:         c.BaseRef,
-		SourceHeadSHA:   c.HeadSHA,
-		ArtifactDigests: digests,
-		RecipeDigest:    c.RecipeDigest,
-	})
+	identity, err := DeriveIdentity(identityInput)
 	if err != nil {
 		return Result{}, fmt.Errorf("publish: %w", err)
 	}
@@ -177,6 +265,11 @@ func (p *Publisher) Publish(ctx context.Context, c Candidate, approvedRecipes ma
 	}
 	if err := p.preparePublication(ctx, c, audit, identity); err != nil {
 		return Result{}, err
+	}
+	if publishHead != nil {
+		if err := publishHead(ctx, identityInput); err != nil {
+			return Result{}, fmt.Errorf("publish: publish candidate head after gate: %w", err)
+		}
 	}
 
 	branch := identity.BranchName()
@@ -209,6 +302,39 @@ func (p *Publisher) Publish(ctx context.Context, c Candidate, approvedRecipes ma
 	result.PRNumber = pr
 	result.PRCreated = created
 	return result, nil
+}
+
+func gatedCandidateIdentityInput(
+	c Candidate,
+	approvedRecipes map[domain.Digest]bool,
+) (IdentityInput, error) {
+	digests := make([]domain.Digest, len(c.Artifacts))
+	for i, a := range c.Artifacts {
+		if err := domain.EligibleForEvidenceSnapshot(a, approvedRecipes); err != nil {
+			return IdentityInput{}, err
+		}
+		if a.Provenance.HeadBinding == domain.HeadBound && a.Provenance.SourceHeadSHA != c.HeadSHA {
+			return IdentityInput{}, fmt.Errorf(
+				"artifact %s bound to a different head: %w", a.ID, ErrHeadMismatch,
+			)
+		}
+		// The gate above guarantees a recipe digest is present.
+		if c.RecipeDigest == nil ||
+			*a.Provenance.VerificationRecipeDigest != *c.RecipeDigest {
+			return IdentityInput{}, fmt.Errorf(
+				"artifact %s verified under a recipe other than the candidate's: %w",
+				a.ID, ErrPublicationConflict,
+			)
+		}
+		digests[i] = a.Digest
+	}
+	return IdentityInput{
+		Repo:            c.Repo,
+		BaseRef:         c.BaseRef,
+		SourceHeadSHA:   c.HeadSHA,
+		ArtifactDigests: digests,
+		RecipeDigest:    c.RecipeDigest,
+	}, nil
 }
 
 // gateTrustDrift fails closed unless the candidate's bound automation trust
@@ -315,8 +441,13 @@ func validateAuthorizationCandidate(c Candidate, auth domain.CandidateAuthorizat
 	if err := auth.Validate(); err != nil {
 		return fmt.Errorf("candidate authorization %s: %w", *c.AuthorizationID, err)
 	}
+	evidenceDigest, err := domain.ComputeEvidenceSnapshotDigest(c.Artifacts)
+	if err != nil {
+		return fmt.Errorf("digest candidate evidence snapshot: %w", err)
+	}
 	if auth.Repo != c.Repo || auth.HeadSHA != c.HeadSHA ||
 		auth.VerificationRecipeDigest != *c.RecipeDigest ||
+		auth.EvidenceSnapshotDigest != evidenceDigest ||
 		auth.TrustProfileDigest != *c.TrustProfileDigest {
 		return fmt.Errorf("authorization %s does not describe the candidate: %w", auth.ID, ErrUnauthorizedPublication)
 	}
@@ -332,19 +463,9 @@ func validateAuthorizationCandidate(c Candidate, auth domain.CandidateAuthorizat
 // means the invocation ID was reused for different content, which
 // fails closed rather than publishing under a stale identity.
 func (p *Publisher) preparePublication(ctx context.Context, c Candidate, audit domain.WorkflowAudit, identity Identity) error {
-	if c.AuthorizationID == nil {
-		return fmt.Errorf("publish: candidate carries no authorization binding: %w", ErrUnauthorizedPublication)
-	}
-	intent := Intent{
-		Identity:      identity.Digest(),
-		InvocationID:  c.InvocationID,
-		Repo:          c.Repo,
-		BaseRef:       c.BaseRef,
-		SourceHeadSHA: c.HeadSHA,
-		// gateAuthorization ran before recordIntent and proved AuthorizationID
-		// non-nil and validated, so the deref is safe; pinning it here lets
-		// the drain reproduce the committed authorization on recovery (#168).
-		AuthorizationID: *c.AuthorizationID,
+	intent, err := intentForCandidate(c, identity)
+	if err != nil {
+		return fmt.Errorf("publish: %w", err)
 	}
 	payload, err := intent.Encode()
 	if err != nil {
@@ -472,8 +593,18 @@ func (p *Publisher) convergePR(ctx context.Context, repo repoRef, identity Ident
 // predicate, so no field is checked on one path and dropped on
 // another.
 func prMatchesCandidate(pr prState, repo repoRef, identity Identity, c Candidate) bool {
-	parsed, ok := ParseMarker(pr.Body)
 	return pr.State == "open" &&
+		prMatchesPublicationCoordinates(pr, repo, identity, c)
+}
+
+func prMatchesPublicationCoordinates(
+	pr prState,
+	repo repoRef,
+	identity Identity,
+	c Candidate,
+) bool {
+	parsed, ok := ParseMarker(pr.Body)
+	return (pr.State == "open" || pr.State == "closed") &&
 		pr.HeadRef == identity.BranchName() &&
 		pr.HeadSHA == c.HeadSHA &&
 		pr.HeadRepo == repo.path() &&
