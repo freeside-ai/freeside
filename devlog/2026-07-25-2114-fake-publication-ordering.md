@@ -137,6 +137,18 @@ remain paired without another push. This round also moved trusted recipe-path
 validation to workflow admission, before any filesystem or task side effect,
 using the same relative slash-path grammar the verifier enforces.
 
+The next recovery pass removed two kinds of ambient process dependence. The
+one-shot command now invokes a publication-only reconciler, so its private fake
+driver cannot advance unrelated generic runs or invocations in a shared
+database. Publication reconciliation reports persistent per-task errors after
+continuing through independent siblings; the command checks its requested
+run's durable terminal item before surfacing a sibling error. The exact
+approved recipe bytes are finalized in the digest-addressed blob store before a
+task can commit, and verification reloads them by the task's bound digest.
+Command restart bootstraps that recipe from a pending task before reopening the
+store with the recovered approval set, so changing or removing the original
+recipe file cannot rewrite or strand already-committed work.
+
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
 while workspace export and verification execution move behind those stronger

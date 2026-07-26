@@ -67,12 +67,13 @@ func runFakePublicationCommand(
 	if err := cfg.withDefaultsAndValidate(); err != nil {
 		return fakePublicationCommandResult{}, err
 	}
-	recipe, err := os.ReadFile(cfg.RecipeFile)
+	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
 	if err != nil {
-		return fakePublicationCommandResult{}, fmt.Errorf("read verification recipe: %w", err)
+		return fakePublicationCommandResult{}, fmt.Errorf("open artifact store: %w", err)
 	}
-	if _, err := verify.ParseRecipe(recipe); err != nil {
-		return fakePublicationCommandResult{}, fmt.Errorf("verification recipe: %w", err)
+	recipe, err := fakePublicationRecipe(ctx, cfg, blobs)
+	if err != nil {
+		return fakePublicationCommandResult{}, err
 	}
 	recipeDigest := verify.RecipeDigest(recipe)
 	approvedRecipes := map[domain.Digest]bool{recipeDigest: true}
@@ -86,10 +87,6 @@ func runFakePublicationCommand(
 	driver, err := fake.NewStageDriverAt(cfg.FakeDriverDir)
 	if err != nil {
 		return fakePublicationCommandResult{}, fmt.Errorf("open fake stage driver: %w", err)
-	}
-	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
-	if err != nil {
-		return fakePublicationCommandResult{}, fmt.Errorf("open artifact store: %w", err)
 	}
 	attention := signet.NewService(st, signet.WithBlobStore(blobs))
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -191,14 +188,14 @@ func runFakePublicationCommand(
 	ticker := time.NewTicker(cfg.ReconcileInterval)
 	defer ticker.Stop()
 	for {
-		_, err := workflow.Reconcile(ctx)
-		if err != nil {
-			return fakePublicationCommandResult{}, err
-		}
+		_, reconcileErr := workflow.ReconcileFakePublications(ctx)
 		if result, ok, err := existingFakePublicationResult(ctx, attention, cfg); err != nil {
 			return fakePublicationCommandResult{}, err
 		} else if ok {
 			return result, nil
+		}
+		if reconcileErr != nil {
+			return fakePublicationCommandResult{}, reconcileErr
 		}
 		select {
 		case <-janitorDone:
@@ -211,6 +208,34 @@ func runFakePublicationCommand(
 		case <-ticker.C:
 		}
 	}
+}
+
+func fakePublicationRecipe(
+	ctx context.Context,
+	cfg fakePublicationCommandConfig,
+	artifacts engine.ArtifactStore,
+) (_ []byte, err error) {
+	bootstrap, err := store.Open(ctx, cfg.DBPath, store.Options{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, bootstrap.Close()) }()
+
+	if recipe, found, err := engine.LoadPendingFakePublicationRecipe(
+		ctx, bootstrap, artifacts, cfg.RunID,
+	); err != nil {
+		return nil, err
+	} else if found {
+		return recipe, nil
+	}
+	recipe, err := os.ReadFile(cfg.RecipeFile)
+	if err != nil {
+		return nil, fmt.Errorf("read verification recipe: %w", err)
+	}
+	if _, err := verify.ParseRecipe(recipe); err != nil {
+		return nil, fmt.Errorf("verification recipe: %w", err)
+	}
+	return recipe, nil
 }
 
 func (cfg *fakePublicationCommandConfig) withDefaultsAndValidate() error {

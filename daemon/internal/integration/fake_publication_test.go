@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -387,6 +388,10 @@ func newPublicationHarness(t *testing.T) *publicationHarness {
 }
 
 func (h *publicationHarness) engine() *engine.Engine {
+	return h.engineWithRecipe(h.recipe)
+}
+
+func (h *publicationHarness) engineWithRecipe(recipe []byte) *engine.Engine {
 	h.t.Helper()
 	ledger, err := publish.NewStoreLedger(h.store)
 	if err != nil {
@@ -411,8 +416,8 @@ func (h *publicationHarness) engine() *engine.Engine {
 	workflow, err := engine.New(
 		h.store, h.attention, driver,
 		engine.WithFakePublication(engine.FakePublicationConfig{
-			WorkDir: h.workDir, Recipe: h.recipe,
-			ApprovedRecipes: map[domain.Digest]bool{h.recipeD: true},
+			WorkDir: h.workDir, Recipe: recipe,
+			ApprovedRecipes: map[domain.Digest]bool{verify.RecipeDigest(recipe): true},
 			Transport:       h.transport, Publisher: publisher, Artifacts: h.blobs,
 			NewRoom: func(home string) verify.Room { return &verify.ProcRoom{Home: home} },
 			Now:     func() time.Time { return h.now },
@@ -556,10 +561,21 @@ func TestFakeCandidatePublicationRejectsCorruptCheckpointBlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(blobs) != 2 {
-		t.Fatalf("checkpoint blobs = %d, want 2", len(blobs))
+	if len(blobs) != 3 {
+		t.Fatalf("recipe and checkpoint blobs = %d, want 3", len(blobs))
 	}
-	if err := os.WriteFile(filepath.Join(h.blobDir, blobs[0].Name()), []byte("corrupt"), 0o600); err != nil {
+	recipeBlob := "sha256-" + strings.TrimPrefix(string(h.recipeD), "sha256:")
+	corruptBlob := ""
+	for _, blob := range blobs {
+		if blob.Name() != recipeBlob {
+			corruptBlob = blob.Name()
+			break
+		}
+	}
+	if corruptBlob == "" {
+		t.Fatal("no checkpoint artifact blob found")
+	}
+	if err := os.WriteFile(filepath.Join(h.blobDir, corruptBlob), []byte("corrupt"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	pushes := h.transport.pushCount()
@@ -569,6 +585,113 @@ func TestFakeCandidatePublicationRejectsCorruptCheckpointBlob(t *testing.T) {
 	}
 	if got := h.transport.pushCount(); got != pushes {
 		t.Fatalf("corrupt checkpoint reached push: %d -> %d", pushes, got)
+	}
+}
+
+func TestFakeCandidatePublicationContinuesPastBrokenSibling(t *testing.T) {
+	h := newPublicationHarness(t)
+	workflow := h.engine()
+	firstWorkspace := t.TempDir()
+	writeFile(t, firstWorkspace, "README.md", "base\n")
+	writeFile(t, firstWorkspace, "candidate.txt", "broken\n")
+	if _, err := workflow.StartFakePublication(h.ctx, h.spec(firstWorkspace)); err != nil {
+		t.Fatalf("start broken task: %v", err)
+	}
+	handoffs, err := os.ReadDir(filepath.Join(h.workDir, "handoffs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(handoffs) != 1 {
+		t.Fatalf("handoffs = %d, want 1", len(handoffs))
+	}
+	if err := os.RemoveAll(filepath.Join(h.workDir, "handoffs", handoffs[0].Name())); err != nil {
+		t.Fatal(err)
+	}
+	secondWorkspace := t.TempDir()
+	writeFile(t, secondWorkspace, "README.md", "base\n")
+	writeFile(t, secondWorkspace, "candidate.txt", "independent\n")
+	second := h.spec(secondWorkspace)
+	second.RunID = "run-after-corrupt-checkpoint"
+	second.ProjectID = "project-after-corrupt-checkpoint"
+	second.VerificationInvocationID = "verify-after-corrupt-checkpoint"
+	second.PublicationInvocationID = "publish-after-corrupt-checkpoint"
+	if _, err := workflow.StartFakePublication(h.ctx, second); err != nil {
+		t.Fatalf("start independent task: %v", err)
+	}
+	result, err := workflow.ReconcileFakePublications(h.ctx)
+	if err == nil || !strings.Contains(err.Error(), "inspect committed handoff") {
+		t.Fatalf("independent reconciliation error = %v", err)
+	}
+	if result.ReadyItemsCreated != 1 || result.LastPRNumber != 101 {
+		t.Fatalf("independent reconciliation result = %+v", result)
+	}
+	if got := h.transport.pushCount(); got != 1 {
+		t.Fatalf("independent task pushes = %d, want 1", got)
+	}
+}
+
+func TestFakeCandidatePublicationRecoversPersistedRecipe(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	writeFile(t, workspace, "candidate.txt", "verified\n")
+
+	workflow := h.engine()
+	if _, err := workflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
+		t.Fatalf("StartFakePublication: %v", err)
+	}
+	recipe, found, err := engine.LoadPendingFakePublicationRecipe(
+		h.ctx, h.store, h.blobs, "run-fake-publication",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || !bytes.Equal(recipe, h.recipe) {
+		t.Fatalf("recovered recipe = %q, found %t", recipe, found)
+	}
+	restarted := h.engineWithRecipe(recipe)
+	result, err := restarted.ReconcileFakePublications(h.ctx)
+	if err != nil {
+		t.Fatalf("recovered ReconcileFakePublications: %v", err)
+	}
+	if result.ReadyItemsCreated != 1 || result.LastPRNumber != 101 {
+		t.Fatalf("recovered result = %+v", result)
+	}
+}
+
+func TestFakeCandidatePublicationScopedReconcileLeavesGenericRunUntouched(t *testing.T) {
+	h := newPublicationHarness(t)
+	workflow := h.engine()
+	if _, err := workflow.StartFakeRun(h.ctx, engine.FakeRunSpec{
+		RunID: "run-unrelated", ProjectID: "project-unrelated",
+		SpecDigest: "sha256:unrelated-spec", PolicyDigest: "sha256:unrelated-policy",
+	}); err != nil {
+		t.Fatalf("StartFakeRun: %v", err)
+	}
+	before, err := h.attention.GetRun(h.ctx, "run-unrelated")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	writeFile(t, workspace, "candidate.txt", "verified\n")
+	if _, err := workflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
+		t.Fatalf("StartFakePublication: %v", err)
+	}
+	result, err := workflow.ReconcileFakePublications(h.ctx)
+	if err != nil {
+		t.Fatalf("ReconcileFakePublications: %v", err)
+	}
+	if result.ReadyItemsCreated != 1 {
+		t.Fatalf("publication result = %+v", result)
+	}
+	after, err := h.attention.GetRun(h.ctx, "run-unrelated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.EntityVersion != before.EntityVersion {
+		t.Fatalf("scoped publication reconcile mutated unrelated run")
 	}
 }
 

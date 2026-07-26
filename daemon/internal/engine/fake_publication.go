@@ -187,7 +187,6 @@ type fakePublicationWorkflow struct {
 	store           *store.Store
 	attention       attentionService
 	workDir         string
-	recipe          []byte
 	recipeDigest    domain.Digest
 	recipePath      string
 	approvedRecipes map[domain.Digest]bool
@@ -205,8 +204,9 @@ type attentionService interface {
 	PutItem(context.Context, domain.AttentionItem) error
 }
 
-// ArtifactStore is the durable content-addressed boundary for verifier-authored
-// report and transcript bytes. Metadata never commits before these bytes.
+// ArtifactStore is the durable content-addressed boundary for the trusted
+// recipe and verifier-authored report and transcript bytes. Metadata and tasks
+// never commit before the bytes they require.
 type ArtifactStore interface {
 	Put(domain.Digest, io.Reader) (bool, error)
 	Open(domain.Digest) (io.ReadCloser, error)
@@ -249,6 +249,12 @@ func newFakePublicationWorkflow(
 	if err := validateFakePublicationRecipePath(recipePath); err != nil {
 		return nil, fmt.Errorf("trusted recipe path %q: %w", recipePath, err)
 	}
+	if _, err := cfg.Artifacts.Put(recipeDigest, bytes.NewReader(cfg.Recipe)); err != nil {
+		return nil, fmt.Errorf("persist trusted recipe %s: %w", recipeDigest, err)
+	}
+	if _, err := loadFakePublicationRecipe(cfg.Artifacts, recipeDigest); err != nil {
+		return nil, fmt.Errorf("reload trusted recipe %s: %w", recipeDigest, err)
+	}
 	if err := makeFakePublicationDirectory(workDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create work directory: %w", err)
 	}
@@ -258,7 +264,7 @@ func newFakePublicationWorkflow(
 	}
 	return &fakePublicationWorkflow{
 		store: st, attention: attention, workDir: workDir,
-		recipe: slices.Clone(cfg.Recipe), recipeDigest: recipeDigest, recipePath: recipePath,
+		recipeDigest: recipeDigest, recipePath: recipePath,
 		approvedRecipes: maps.Clone(cfg.ApprovedRecipes),
 		transport:       cfg.Transport, publisher: cfg.Publisher, artifacts: cfg.Artifacts,
 		newRoom: cfg.NewRoom, now: now,
@@ -419,30 +425,17 @@ func (w *fakePublicationWorkflow) reconcile(ctx context.Context) (fakePublicatio
 	}
 
 	var result fakePublicationReconcileResult
+	var taskErr error
 	for _, entry := range pending {
-		task, err := decodeFakePublicationTask(entry.Payload)
-		if err != nil {
-			return result, fmt.Errorf("task %q: %w", entry.IdempotencyKey, err)
-		}
-		if entry.IdempotencyKey != fakePublicationTaskKey(task.RunID) {
-			return result, fmt.Errorf("task %q names run %q: %w",
-				entry.IdempotencyKey, task.RunID, domain.ErrParentKeyMismatch)
-		}
-		expectedHandoff, err := w.expectedHandoffDir(task)
-		if err != nil {
-			return result, fmt.Errorf("task %q handoff binding: %w", entry.IdempotencyKey, err)
-		}
-		if task.HandoffDir != expectedHandoff {
-			return result, fmt.Errorf("task %q handoff %q, want %q: %w",
-				entry.IdempotencyKey, task.HandoffDir, expectedHandoff,
-				domain.ErrParentKeyMismatch)
-		}
-		outcome, err := w.reconcileTask(ctx, task)
+		outcome, err := w.reconcileEntry(ctx, entry)
 		if err != nil {
 			if errors.Is(err, publish.ErrJanitorInactive) {
 				continue
 			}
-			return result, fmt.Errorf("task %q: %w", entry.IdempotencyKey, err)
+			taskErr = errors.Join(
+				taskErr, fmt.Errorf("task %q: %w", entry.IdempotencyKey, err),
+			)
+			continue
 		}
 		result.completed++
 		result.ready += boolCount(outcome.ready)
@@ -451,7 +444,30 @@ func (w *fakePublicationWorkflow) reconcile(ctx context.Context) (fakePublicatio
 			result.lastPRNumber = outcome.prNumber
 		}
 	}
-	return result, nil
+	return result, taskErr
+}
+
+func (w *fakePublicationWorkflow) reconcileEntry(
+	ctx context.Context,
+	entry store.QueueEntry,
+) (taskOutcome, error) {
+	task, err := decodeFakePublicationTask(entry.Payload)
+	if err != nil {
+		return taskOutcome{}, err
+	}
+	if entry.IdempotencyKey != fakePublicationTaskKey(task.RunID) {
+		return taskOutcome{}, fmt.Errorf("names run %q: %w",
+			task.RunID, domain.ErrParentKeyMismatch)
+	}
+	expectedHandoff, err := w.expectedHandoffDir(task)
+	if err != nil {
+		return taskOutcome{}, fmt.Errorf("handoff binding: %w", err)
+	}
+	if task.HandoffDir != expectedHandoff {
+		return taskOutcome{}, fmt.Errorf("handoff %q, want %q: %w",
+			task.HandoffDir, expectedHandoff, domain.ErrParentKeyMismatch)
+	}
+	return w.reconcileTask(ctx, task)
 }
 
 type taskOutcome struct {
@@ -704,10 +720,14 @@ func (w *fakePublicationWorkflow) verifyCandidate(
 	if err := os.Mkdir(home, 0o700); err != nil {
 		return fakePublicationCandidateCheckpoint{}, fmt.Errorf("create verification home: %w", err)
 	}
+	recipe, err := loadFakePublicationRecipe(w.artifacts, task.RecipeDigest)
+	if err != nil {
+		return fakePublicationCandidateCheckpoint{}, err
+	}
 	verified, err := verify.Verify(ctx, checkoutDir, verify.Options{
 		HeadSHA: imported.CommitSHA, BaseSHA: task.BaseSHA,
 		InvocationID: task.VerificationInvocationID,
-		RecipeSource: verify.ConfigRecipe(w.recipe), RecipePath: task.RecipePath,
+		RecipeSource: verify.ConfigRecipe(recipe), RecipePath: task.RecipePath,
 		Room: w.newRoom(home), ApprovedRecipes: w.approvedRecipes, Changes: imported.Changes,
 		Policy: verify.Policy{ExtraVerificationControlPatterns: slices.Clone(
 			profile.ProtectedPaths.ExtraVerificationControlPatterns,
@@ -1300,6 +1320,62 @@ func validateFakePublicationRecipePath(recipePath string) error {
 	return nil
 }
 
+// LoadPendingFakePublicationRecipe recovers the exact approved recipe bytes
+// bound into one pending durable task. It lets the one-shot command bootstrap
+// after its original recipe file changes or disappears.
+func LoadPendingFakePublicationRecipe(
+	ctx context.Context,
+	st *store.Store,
+	artifacts ArtifactStore,
+	runID domain.RunID,
+) ([]byte, bool, error) {
+	if st == nil || artifacts == nil {
+		return nil, false, errors.New("load pending fake publication recipe: nil dependency")
+	}
+	key := fakePublicationTaskKey(runID)
+	var pending []store.QueueEntry
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		pending, err = tx.ListPendingOutbox(ctx, fakePublicationTaskKind)
+		return err
+	}); err != nil {
+		return nil, false, err
+	}
+	for _, entry := range pending {
+		if entry.IdempotencyKey != key {
+			continue
+		}
+		task, err := decodeFakePublicationTask(entry.Payload)
+		if err != nil {
+			return nil, false, fmt.Errorf("task %q: %w", key, err)
+		}
+		if task.RunID != runID {
+			return nil, false, fmt.Errorf("task %q names run %q: %w",
+				key, task.RunID, domain.ErrParentKeyMismatch)
+		}
+		recipe, err := loadFakePublicationRecipe(artifacts, task.RecipeDigest)
+		if err != nil {
+			return nil, false, fmt.Errorf("task %q recipe: %w", key, err)
+		}
+		return recipe, true, nil
+	}
+	return nil, false, nil
+}
+
+func loadFakePublicationRecipe(
+	artifacts ArtifactStore,
+	digest domain.Digest,
+) ([]byte, error) {
+	body, err := loadFakePublicationBlob(artifacts, digest)
+	if err != nil {
+		return nil, fmt.Errorf("load trusted recipe %s: %w", digest, err)
+	}
+	if _, err := verify.ParseRecipe(body); err != nil {
+		return nil, fmt.Errorf("parse trusted recipe %s: %w", digest, err)
+	}
+	return body, nil
+}
+
 func verifyFakePublicationBlob(store ArtifactStore, artifact domain.Artifact) error {
 	body, err := store.Open(artifact.Digest)
 	if err != nil {
@@ -1319,6 +1395,28 @@ func verifyFakePublicationBlob(store ArtifactStore, artifact domain.Artifact) er
 		)
 	}
 	return nil
+}
+
+func loadFakePublicationBlob(
+	store ArtifactStore,
+	digest domain.Digest,
+) ([]byte, error) {
+	body, err := store.Open(digest)
+	if err != nil {
+		return nil, fmt.Errorf("open body: %w", err)
+	}
+	hasher := sha256.New()
+	var content bytes.Buffer
+	_, copyErr := io.Copy(io.MultiWriter(&content, hasher), body)
+	closeErr := body.Close()
+	if err := errors.Join(copyErr, closeErr); err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+	got := domain.Digest("sha256:" + hex.EncodeToString(hasher.Sum(nil)))
+	if got != digest {
+		return nil, fmt.Errorf("body hashes to %s, want %s", got, digest)
+	}
+	return content.Bytes(), nil
 }
 
 func isDefinitiveTrustRefusal(err error) bool {
