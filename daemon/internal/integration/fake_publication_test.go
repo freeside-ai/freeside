@@ -1052,8 +1052,12 @@ func TestFakeCandidatePublicationRejectsPublicationInvocationOwnedByAnotherTask(
 	second.RunID = "run-other"
 	second.ProjectID = "project-other"
 	second.VerificationInvocationID = "verify-other"
+	// The refusal now comes from the invocation reservation the first task
+	// committed at admission (#308), which is both earlier and more specific
+	// than the owner-row mismatch that used to catch this: the second run is
+	// refused before any of its own task state is written.
 	if _, err := workflow.StartFakePublication(h.ctx, second); err == nil ||
-		!errors.Is(err, domain.ErrParentKeyMismatch) {
+		!errors.Is(err, publish.ErrInvocationReserved) {
 		t.Fatalf("reused publication invocation error = %v", err)
 	}
 	var pending []store.QueueEntry
@@ -1773,8 +1777,16 @@ func TestFakeCandidatePublicationRejectsUnboundReadyTerminalDecisionInputs(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The admitted task reserved this invocation, so the seeded intent settles
+	// that reservation exactly as the task's own publication would; recording
+	// it without the claim is what a foreign writer would attempt, and is
+	// refused.
+	claim, err := publish.NewReservation(second.PublicationInvocationID, second.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err := ledger.Record(
-		h.ctx, intentKey, publish.IntentKindPublication, payload, nil,
+		h.ctx, intentKey, publish.IntentKindPublication, payload, &claim,
 	); err != nil {
 		t.Fatal(err)
 	}

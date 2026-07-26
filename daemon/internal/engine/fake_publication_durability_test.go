@@ -488,6 +488,7 @@ func TestValidateNewFakePublicationBindingsRejectsChangedEpochAndProfile(t *test
 		StoreEpoch: state.SyncEpoch, Repo: profile.Repo,
 		TrustProfileDigest:      profile.ProfileDigest,
 		PublicationInvocationID: "publish-bindings",
+		RunID:                   "run-bindings",
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return validateNewFakePublicationBindings(ctx, tx, task)
