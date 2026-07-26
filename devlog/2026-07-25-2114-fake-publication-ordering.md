@@ -203,6 +203,14 @@ tree and the blob-store root. Publication reconciliation additionally locks
 the derived content identity across processes, so different task keys cannot
 race the same branch and pull-request convergence.
 
+Checkpoint recovery now re-syncs the checkpoint directory whenever it accepts
+an existing file, closing the install-success/fsync-failure retry window.
+Command replay also loads the durable task's workspace identity before
+resolving or checking the caller's ambient workspace alias; repointing that
+alias after admission therefore cannot strand either a pending or completed
+run, while the stored identity is still checked against every daemon-owned
+path before use.
+
 Revisit when the real worker and Ward room replace the fake workspace and
 `ProcRoom`; the durable task and after-gate transport ordering should remain,
 while workspace export and verification execution move behind those stronger

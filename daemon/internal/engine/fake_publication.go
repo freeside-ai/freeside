@@ -1066,12 +1066,17 @@ func (w *fakePublicationWorkflow) loadCandidateCheckpoint(
 	task fakePublicationTask,
 	imported importer.Result,
 ) (fakePublicationCandidateCheckpoint, bool, error) {
-	body, err := os.ReadFile(w.candidateCheckpointPath(task))
+	path := w.candidateCheckpointPath(task)
+	body, err := os.ReadFile(path) //nolint:gosec // path derives from the task-bound daemon work root
 	if errors.Is(err, os.ErrNotExist) {
 		return fakePublicationCandidateCheckpoint{}, false, nil
 	}
 	if err != nil {
 		return fakePublicationCandidateCheckpoint{}, false, err
+	}
+	if err := syncFakePublicationCheckpointDirectory(path, syncFakePublicationDirectory); err != nil {
+		return fakePublicationCandidateCheckpoint{}, false,
+			fmt.Errorf("sync existing candidate checkpoint directory: %w", err)
 	}
 	var checkpoint fakePublicationCandidateCheckpoint
 	dec := json.NewDecoder(bytes.NewReader(body))
@@ -1115,6 +1120,13 @@ func (w *fakePublicationWorkflow) loadCandidateCheckpoint(
 		}
 	}
 	return checkpoint, true, nil
+}
+
+func syncFakePublicationCheckpointDirectory(
+	checkpointPath string,
+	syncDir func(string) error,
+) error {
+	return syncDir(filepath.Dir(checkpointPath))
 }
 
 func (w *fakePublicationWorkflow) candidateCheckpointPath(task fakePublicationTask) string {
@@ -1703,6 +1715,30 @@ type FakePublicationReplay struct {
 	Dispatched   bool
 }
 
+// FakePublicationReplayBinding is the task identity needed before ambient
+// workspace aliases are resolved during command replay.
+type FakePublicationReplayBinding struct {
+	WorkspaceDir string
+	Dispatched   bool
+}
+
+// LoadFakePublicationReplayBinding recovers the durable workspace identity
+// without requiring the artifact store to be opened first.
+func LoadFakePublicationReplayBinding(
+	ctx context.Context,
+	st *store.Store,
+	runID domain.RunID,
+) (FakePublicationReplayBinding, bool, error) {
+	task, entry, found, err := loadFakePublicationReplayTask(ctx, st, runID)
+	if err != nil || !found {
+		return FakePublicationReplayBinding{}, found, err
+	}
+	return FakePublicationReplayBinding{
+		WorkspaceDir: task.WorkspaceDir,
+		Dispatched:   entry.Dispatched(),
+	}, true, nil
+}
+
 // LoadFakePublicationReplay recovers the exact approved recipe, canonical
 // workspace identity, and dispatch status bound into one durable task.
 func LoadFakePublicationReplay(
@@ -1715,6 +1751,29 @@ func LoadFakePublicationReplay(
 		return FakePublicationReplay{}, false,
 			errors.New("load fake publication replay: nil dependency")
 	}
+	task, entry, found, err := loadFakePublicationReplayTask(ctx, st, runID)
+	if err != nil || !found {
+		return FakePublicationReplay{}, found, err
+	}
+	recipe, err := loadFakePublicationRecipe(artifacts, task.RecipeDigest)
+	if err != nil {
+		return FakePublicationReplay{}, false,
+			fmt.Errorf("task %q recipe: %w", entry.IdempotencyKey, err)
+	}
+	return FakePublicationReplay{
+		Recipe: recipe, WorkspaceDir: task.WorkspaceDir, Dispatched: entry.Dispatched(),
+	}, true, nil
+}
+
+func loadFakePublicationReplayTask(
+	ctx context.Context,
+	st *store.Store,
+	runID domain.RunID,
+) (fakePublicationTask, store.QueueEntry, bool, error) {
+	if st == nil {
+		return fakePublicationTask{}, store.QueueEntry{}, false,
+			errors.New("load fake publication replay task: nil store")
+	}
 	key := fakePublicationTaskKey(runID)
 	var entry store.QueueEntry
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
@@ -1723,29 +1782,23 @@ func LoadFakePublicationReplay(
 		return err
 	}); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return FakePublicationReplay{}, false, nil
+			return fakePublicationTask{}, store.QueueEntry{}, false, nil
 		}
-		return FakePublicationReplay{}, false, err
+		return fakePublicationTask{}, store.QueueEntry{}, false, err
 	}
 	if entry.IdempotencyKey != key || entry.Kind != fakePublicationTaskKind {
-		return FakePublicationReplay{}, false, fmt.Errorf("task %q has kind %q: %w",
+		return fakePublicationTask{}, store.QueueEntry{}, false, fmt.Errorf("task %q has kind %q: %w",
 			key, entry.Kind, domain.ErrParentKeyMismatch)
 	}
 	task, err := decodeFakePublicationTask(entry.Payload)
 	if err != nil {
-		return FakePublicationReplay{}, false, fmt.Errorf("task %q: %w", key, err)
+		return fakePublicationTask{}, store.QueueEntry{}, false, fmt.Errorf("task %q: %w", key, err)
 	}
 	if task.RunID != runID {
-		return FakePublicationReplay{}, false, fmt.Errorf("task %q names run %q: %w",
+		return fakePublicationTask{}, store.QueueEntry{}, false, fmt.Errorf("task %q names run %q: %w",
 			key, task.RunID, domain.ErrParentKeyMismatch)
 	}
-	recipe, err := loadFakePublicationRecipe(artifacts, task.RecipeDigest)
-	if err != nil {
-		return FakePublicationReplay{}, false, fmt.Errorf("task %q recipe: %w", key, err)
-	}
-	return FakePublicationReplay{
-		Recipe: recipe, WorkspaceDir: task.WorkspaceDir, Dispatched: entry.Dispatched(),
-	}, true, nil
+	return task, entry, true, nil
 }
 
 func loadFakePublicationRecipe(

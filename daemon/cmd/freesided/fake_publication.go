@@ -64,25 +64,34 @@ func runFakePublicationCommand(
 	ctx context.Context,
 	cfg fakePublicationCommandConfig,
 ) (_ fakePublicationCommandResult, err error) {
-	if err := cfg.withDefaultsAndValidate(); err != nil {
+	replayFound, err := prepareFakePublicationConfig(
+		ctx, &cfg, fakePublicationReplayBinding,
+	)
+	if err != nil {
 		return fakePublicationCommandResult{}, err
 	}
 	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
 	if err != nil {
 		return fakePublicationCommandResult{}, fmt.Errorf("open artifact store: %w", err)
 	}
-	replay, replayFound, err := fakePublicationReplay(ctx, cfg, blobs)
+	replay, loadedReplay, err := fakePublicationReplay(ctx, cfg, blobs)
 	if err != nil {
 		return fakePublicationCommandResult{}, err
 	}
 	var recipe []byte
 	if replayFound {
-		cfg.WorkspaceDir = replay.WorkspaceDir
-		if err := cfg.withDefaultsAndValidate(); err != nil {
-			return fakePublicationCommandResult{}, err
+		if !loadedReplay || replay.WorkspaceDir != cfg.WorkspaceDir {
+			return fakePublicationCommandResult{}, errors.New(
+				"durable publication replay changed during bootstrap",
+			)
 		}
 		recipe = replay.Recipe
 	} else {
+		if loadedReplay {
+			return fakePublicationCommandResult{}, errors.New(
+				"durable publication replay appeared during bootstrap; retry the command",
+			)
+		}
 		recipe, err = os.ReadFile(cfg.RecipeFile)
 		if err != nil {
 			return fakePublicationCommandResult{}, fmt.Errorf("read verification recipe: %w", err)
@@ -240,6 +249,50 @@ func runFakePublicationCommand(
 	}
 }
 
+type fakePublicationReplayBindingLoader func(
+	context.Context,
+	fakePublicationCommandConfig,
+) (engine.FakePublicationReplayBinding, bool, error)
+
+func prepareFakePublicationConfig(
+	ctx context.Context,
+	cfg *fakePublicationCommandConfig,
+	load fakePublicationReplayBindingLoader,
+) (bool, error) {
+	if err := cfg.withDefaults(); err != nil {
+		return false, err
+	}
+	binding, found, err := load(ctx, *cfg)
+	if err != nil {
+		return false, err
+	}
+	if found {
+		cfg.WorkspaceDir = binding.WorkspaceDir
+	}
+	if err := cfg.resolveAndValidatePaths(); err != nil {
+		return false, err
+	}
+	return found, nil
+}
+
+func fakePublicationReplayBinding(
+	ctx context.Context,
+	cfg fakePublicationCommandConfig,
+) (_ engine.FakePublicationReplayBinding, _ bool, err error) {
+	if _, err := os.Stat(cfg.DBPath); errors.Is(err, os.ErrNotExist) {
+		return engine.FakePublicationReplayBinding{}, false, nil
+	} else if err != nil {
+		return engine.FakePublicationReplayBinding{}, false, err
+	}
+	bootstrap, err := store.Open(ctx, cfg.DBPath, store.Options{})
+	if err != nil {
+		return engine.FakePublicationReplayBinding{}, false, err
+	}
+	defer func() { err = errors.Join(err, bootstrap.Close()) }()
+
+	return engine.LoadFakePublicationReplayBinding(ctx, bootstrap, cfg.RunID)
+}
+
 func fakePublicationReplay(
 	ctx context.Context,
 	cfg fakePublicationCommandConfig,
@@ -255,6 +308,13 @@ func fakePublicationReplay(
 }
 
 func (cfg *fakePublicationCommandConfig) withDefaultsAndValidate() error {
+	if err := cfg.withDefaults(); err != nil {
+		return err
+	}
+	return cfg.resolveAndValidatePaths()
+}
+
+func (cfg *fakePublicationCommandConfig) withDefaults() error {
 	switch {
 	case cfg.DBPath == "":
 		return errors.New("-db is required")
@@ -303,6 +363,16 @@ func (cfg *fakePublicationCommandConfig) withDefaultsAndValidate() error {
 	if len(cfg.AllowedPaths) == 0 {
 		cfg.AllowedPaths = []string{"**"}
 	}
+	for i, pattern := range cfg.AllowedPaths {
+		cfg.AllowedPaths[i] = strings.TrimSpace(pattern)
+		if cfg.AllowedPaths[i] == "" {
+			return errors.New("publication allowed path is empty")
+		}
+	}
+	return nil
+}
+
+func (cfg *fakePublicationCommandConfig) resolveAndValidatePaths() error {
 	paths := []struct {
 		name string
 		path *string
@@ -346,12 +416,6 @@ func (cfg *fakePublicationCommandConfig) withDefaultsAndValidate() error {
 	if publicationPathContains(workspace, blobDir) ||
 		publicationPathContains(blobDir, workspace) {
 		return errors.New("-db artifact directory overlaps -publication-workspace")
-	}
-	for i, pattern := range cfg.AllowedPaths {
-		cfg.AllowedPaths[i] = strings.TrimSpace(pattern)
-		if cfg.AllowedPaths[i] == "" {
-			return errors.New("publication allowed path is empty")
-		}
 	}
 	return nil
 }

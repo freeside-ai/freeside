@@ -72,6 +72,21 @@ func TestMakeFakePublicationDirectoryRetriesExistingParentSync(t *testing.T) {
 	}
 }
 
+func TestSyncFakePublicationCheckpointDirectoryRetriesExistingEntry(t *testing.T) {
+	parent := t.TempDir()
+	path := filepath.Join(parent, "candidate.json")
+	failedSync := errors.New("injected checkpoint directory sync failure")
+	err := syncFakePublicationCheckpointDirectory(path, func(got string) error {
+		if got != parent {
+			t.Fatalf("synced %q, want checkpoint parent %q", got, parent)
+		}
+		return failedSync
+	})
+	if !errors.Is(err, failedSync) {
+		t.Fatalf("checkpoint sync error = %v, want injected failure", err)
+	}
+}
+
 func TestInstallFakePublicationCheckpointDoesNotReplaceConcurrentWinner(t *testing.T) {
 	root := t.TempDir()
 	destination := filepath.Join(root, "candidate.json")

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
@@ -116,6 +117,60 @@ func TestFakePublicationCommandConfigResolvesSymlinksBeforeContainment(t *testin
 	}
 	if err := cfg.withDefaultsAndValidate(); err == nil {
 		t.Fatal("symlinked overlap succeeded")
+	}
+}
+
+func TestPrepareFakePublicationConfigUsesDurableWorkspaceBeforeResolvingAlias(t *testing.T) {
+	for _, dispatched := range []bool{false, true} {
+		t.Run(map[bool]string{false: "pending", true: "completed"}[dispatched], func(t *testing.T) {
+			root := t.TempDir()
+			workspace := filepath.Join(root, "workspace")
+			credentials := filepath.Join(root, "credentials")
+			if err := os.Mkdir(workspace, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(credentials, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			alias := filepath.Join(root, "workspace-alias")
+			if err := os.Symlink(credentials, alias); err != nil {
+				t.Fatal(err)
+			}
+			cfg := fakePublicationCommandConfig{
+				DBPath: filepath.Join(root, "freeside.db"), StateDir: filepath.Join(root, "state"),
+				CredentialsDir: credentials, WorkspaceDir: alias,
+				RecipeFile: filepath.Join(root, "recipe.json"), Repo: "owner/repo",
+				BaseRef: "main", BaseSHA: "1111111111111111111111111111111111111111",
+			}
+			found, err := prepareFakePublicationConfig(
+				t.Context(),
+				&cfg,
+				func(
+					_ context.Context,
+					received fakePublicationCommandConfig,
+				) (engine.FakePublicationReplayBinding, bool, error) {
+					if received.WorkspaceDir != alias {
+						t.Fatalf("loader received workspace %q, want unresolved alias %q",
+							received.WorkspaceDir, alias)
+					}
+					return engine.FakePublicationReplayBinding{
+						WorkspaceDir: workspace,
+						Dispatched:   dispatched,
+					}, true, nil
+				},
+			)
+			if err != nil {
+				t.Fatalf("prepare replay config: %v", err)
+			}
+			resolvedWorkspace, err := resolvePublicationPath(workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !found || cfg.WorkspaceDir != resolvedWorkspace {
+				t.Fatalf("prepared workspace = %q, found %t, want durable %q",
+					cfg.WorkspaceDir, found, resolvedWorkspace)
+			}
+		})
 	}
 }
 
