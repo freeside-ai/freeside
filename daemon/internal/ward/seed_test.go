@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -27,24 +28,32 @@ func testBaseRevision() domain.BaseRevision {
 
 // writeSeedCheckout materializes a minimal daemon-owned checkout under root and
 // returns its path: a detached .git/HEAD holding sha, plus one ordinary file.
-// It mirrors what publish.Transport.FetchBase leaves behind (HEAD detached at
-// the base, no symlinks), which is the only shape the gate accepts.
+// It models the materialized shape #330 will produce from FetchBase's detached
+// checkout, including the no-symlink invariant the current gate accepts.
 func writeSeedCheckout(t *testing.T, root, sha string) string {
 	t.Helper()
-	return writeSeedCheckoutFor(t, root, sha, testBaseRevision().Repo)
+	return writeSeedCheckoutFor(t, root, sha, testBaseRevision().Repo, testBaseRevision().RepositoryID)
 }
 
 // writeSeedCheckoutFor is writeSeedCheckout bound to a named repository, so a
 // test can build the cross-repository source the binding check exists to
-// refuse. The config mirrors what publish.Transport.FetchBase stamps.
-func writeSeedCheckoutFor(t *testing.T, root, sha, repo string) string {
+// refuse. The config models the fully materialized checkout #330 hands ward:
+// FetchBase's repository mark plus the trusted canonical repository ID.
+func writeSeedCheckoutFor(t *testing.T, root, sha, repo string, repositoryID int64) string {
 	t.Helper()
 	dir := filepath.Join(root, "checkout")
 	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cfg := "[core]\n\tbare = false\n[freeside \"transport\"]\n\trepo = " + repo + "\n"
+	cfg := seedBindingConfig(repo)
 	if err := os.WriteFile(filepath.Join(dir, ".git", "config"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(dir, filepath.FromSlash(seedRepoBindingIDPath)),
+		[]byte(strconv.FormatInt(repositoryID, 10)+"\n"),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte(sha+"\n"), 0o600); err != nil {
@@ -54,6 +63,17 @@ func writeSeedCheckoutFor(t *testing.T, root, sha, repo string) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+func seedBindingConfig(repo string) string {
+	return "[core]\n" +
+		"\trepositoryformatversion = 0\n" +
+		"\tfilemode = true\n" +
+		"\tbare = false\n" +
+		"\tlogallrefupdates = true\n" +
+		"\tignorecase = true\n" +
+		"\tprecomposeunicode = true\n" +
+		"[freeside \"transport\"]\n\trepo = " + repo + "\n"
 }
 
 // writeGitConfig replaces a fixture checkout's config, so a test can shape the
@@ -298,7 +318,7 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	cfg := testConfig()
 	cfg.SeedRoot = root
 	snap := t.TempDir()
-	digest, err := stageSeedSource(cfg, dir, testBaseRevision().Repo, snap)
+	digest, err := stageSeedSource(cfg, dir, testBaseRevision().Repo, testBaseRevision().RepositoryID, snap)
 	if err != nil {
 		t.Fatalf("stageSeedSource() = %v, want nil", err)
 	}
@@ -319,7 +339,9 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("tampered\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	changed, err := stageSeedSource(cfg, dir, testBaseRevision().Repo, t.TempDir())
+	changed, err := stageSeedSource(
+		cfg, dir, testBaseRevision().Repo, testBaseRevision().RepositoryID, t.TempDir(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +356,9 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho hi\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	plain, err := stageSeedSource(cfg, dir, testBaseRevision().Repo, t.TempDir())
+	plain, err := stageSeedSource(
+		cfg, dir, testBaseRevision().Repo, testBaseRevision().RepositoryID, t.TempDir(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,12 +366,54 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	if err := os.Chmod(script, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	executable, err := stageSeedSource(cfg, dir, testBaseRevision().Repo, t.TempDir())
+	executable, err := stageSeedSource(
+		cfg, dir, testBaseRevision().Repo, testBaseRevision().RepositoryID, t.TempDir(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if plain == executable {
 		t.Error("tree digest is unchanged after a file gains the executable bit")
+	}
+
+	// Git folds section and key names but not a quoted subsection. The ward
+	// parser must accept the same daemon-authored binding Git reads.
+	writeGitConfig(t, dir, "[FREESIDE \"transport\"]\n\tRePo = "+testBaseRevision().Repo+
+		"\n")
+	if _, err := stageSeedSource(
+		cfg, dir, testBaseRevision().Repo, testBaseRevision().RepositoryID, t.TempDir(),
+	); err != nil {
+		t.Errorf("case-varied Git-equivalent binding: stageSeedSource() = %v, want nil", err)
+	}
+
+	// Ignored text is not part of the daemon-authored facts. It may contain
+	// credential material after corruption, so the snapshot must hold only the
+	// validated canonical config and its digest must describe that rewrite.
+	const ignoredSensitiveText = "inert-sensitive-comment"
+	writeGitConfig(t, dir, "# "+ignoredSensitiveText+"\n[core] # "+ignoredSensitiveText+
+		"\n\tbare = false\n[freeside \"transport\"]\n\trepo = "+testBaseRevision().Repo+
+		"\n; "+ignoredSensitiveText+"\n")
+	canonicalSnapshot := t.TempDir()
+	canonicalDigest, err := stageSeedSource(
+		cfg, dir, testBaseRevision().Repo, testBaseRevision().RepositoryID, canonicalSnapshot,
+	)
+	if err != nil {
+		t.Fatalf("comment-bearing daemon config: stageSeedSource() = %v, want nil", err)
+	}
+	canonicalConfig, err := os.ReadFile(filepath.Join(canonicalSnapshot, ".git", "config")) //nolint:gosec // test-owned snapshot path
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantConfig := "[core]\n\tbare = false\n[freeside \"transport\"]\n\trepo = " +
+		testBaseRevision().Repo + "\n"
+	if got := string(canonicalConfig); got != wantConfig {
+		t.Errorf("canonical git config = %q, want %q", got, wantConfig)
+	}
+	if strings.Contains(string(canonicalConfig), ignoredSensitiveText) {
+		t.Error("canonical git config retained ignored sensitive text")
+	}
+	if got := digestOfDir(t, canonicalSnapshot); got != canonicalDigest {
+		t.Errorf("canonicalized tree digest = %q, observer digest = %q", canonicalDigest, got)
 	}
 }
 
@@ -432,7 +498,7 @@ func TestVerifySeedSourceFailsClosed(t *testing.T) {
 		// tree-shaped check here. Only the daemon-authored binding separates
 		// them.
 		{"bound to a different repository", func(t *testing.T, root string, _ *Config) string {
-			return writeSeedCheckoutFor(t, root, testBaseSHA, "example/fork")
+			return writeSeedCheckoutFor(t, root, testBaseSHA, "example/fork", testBaseRevision().RepositoryID)
 		}},
 		{"no repository binding", func(t *testing.T, root string, _ *Config) string {
 			dir := writeSeedCheckout(t, root, testBaseSHA)
@@ -450,12 +516,114 @@ func TestVerifySeedSourceFailsClosed(t *testing.T) {
 		// so the config cannot be evaluated here at all.
 		{"config carries an include", func(t *testing.T, root string, _ *Config) string {
 			dir := writeSeedCheckout(t, root, testBaseSHA)
-			writeGitConfig(t, dir, "[include]\n\tpath = other\n[freeside \"transport\"]\n\trepo = "+testBaseRevision().Repo+"\n")
+			writeGitConfig(t, dir, "[include]\n\tpath = other\n"+seedBindingConfig(testBaseRevision().Repo))
+			return dir
+		}},
+		{"config carries an HTTP authorization header", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, seedBindingConfig(testBaseRevision().Repo)+
+				"\n[http]\n\textraHeader = authorization: inert-test-value\n")
+			return dir
+		}},
+		{"config carries a credential helper", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, seedBindingConfig(testBaseRevision().Repo)+
+				"\n[credential]\n\thelper = inert-test-helper\n")
+			return dir
+		}},
+		{"config carries a URL rewrite", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, seedBindingConfig(testBaseRevision().Repo)+
+				"\n[url \"https://example.invalid/\"]\n\tinsteadOf = https://github.com/\n")
+			return dir
+		}},
+		{"config carries an unknown core key", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, seedBindingConfig(testBaseRevision().Repo)+
+				"\n[core]\n\thooksPath = /tmp/inert-test-hooks\n")
+			return dir
+		}},
+		{"config carries a non-daemon value under an allowed key", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, "[core]\n\tbare = inert-sensitive-test-value\n"+
+				"[freeside \"transport\"]\n\trepo = "+testBaseRevision().Repo+"\n")
+			return dir
+		}},
+		{"config carries ignored text after an allowed value", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, "[core]\n\tbare = false # inert-sensitive-test-value\n"+
+				"[freeside \"transport\"]\n\trepo = "+testBaseRevision().Repo+"\n")
+			return dir
+		}},
+		{"config redirects the worktree", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, seedBindingConfig(testBaseRevision().Repo)+
+				"\n[core]\n\tworktree = /tmp/inert-test-worktree\n")
 			return dir
 		}},
 		{"binding repeated with conflicting values", func(t *testing.T, root string, _ *Config) string {
 			dir := writeSeedCheckout(t, root, testBaseSHA)
-			writeGitConfig(t, dir, "[freeside \"transport\"]\n\trepo = "+testBaseRevision().Repo+"\n\trepo = example/fork\n")
+			writeGitConfig(t, dir, seedBindingConfig(testBaseRevision().Repo)+
+				"\n[freeside \"transport\"]\n\trepo = example/fork\n")
+			return dir
+		}},
+		{"binding repeated under case-varied section", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, seedBindingConfig(testBaseRevision().Repo)+
+				"\n[FREESIDE \"transport\"]\n\trepo = example/fork\n")
+			return dir
+		}},
+		{"binding repeated under deprecated dotted section", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, seedBindingConfig(testBaseRevision().Repo)+
+				"\n[FREESIDE.TRANSPORT]\n\trepo = example/fork\n")
+			return dir
+		}},
+		{"binding repeated under escaped subsection alias", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, seedBindingConfig(testBaseRevision().Repo)+
+				"\n[freeside \"trans\\port\"]\n\trepo = example/fork\n")
+			return dir
+		}},
+		{"unrelated escaped subsection is refused", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, seedBindingConfig(testBaseRevision().Repo)+
+				"\n[other \"sub\\section\"]\n\tvalue = ignored\n")
+			return dir
+		}},
+		{"binding repeated as an implicit boolean", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, seedBindingConfig(testBaseRevision().Repo)+
+				"\n[freeside \"transport\"]\n\trepo\n")
+			return dir
+		}},
+		{"bound to a different canonical repository id", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			if err := os.WriteFile(
+				filepath.Join(dir, filepath.FromSlash(seedRepoBindingIDPath)),
+				[]byte(strconv.FormatInt(testBaseRevision().RepositoryID+1, 10)+"\n"),
+				0o600,
+			); err != nil {
+				t.Fatal(err)
+			}
+			return dir
+		}},
+		{"canonical repository id omitted", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			if err := os.Remove(filepath.Join(dir, filepath.FromSlash(seedRepoBindingIDPath))); err != nil {
+				t.Fatal(err)
+			}
+			return dir
+		}},
+		{"canonical repository id carries multiple values", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			if err := os.WriteFile(
+				filepath.Join(dir, filepath.FromSlash(seedRepoBindingIDPath)),
+				[]byte("42\n43\n"),
+				0o600,
+			); err != nil {
+				t.Fatal(err)
+			}
 			return dir
 		}},
 		// git treats a subsection name case-sensitively, so a differently-cased
@@ -488,6 +656,17 @@ func TestVerifySeedSourceFailsClosed(t *testing.T) {
 			}
 			return dir
 		}},
+		{"git head exceeds the observer input bound", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			if err := os.WriteFile(
+				filepath.Join(dir, ".git", "HEAD"),
+				[]byte(strings.Repeat("a", maxGitHeadBytes+1)),
+				0o600,
+			); err != nil {
+				t.Fatal(err)
+			}
+			return dir
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -495,11 +674,34 @@ func TestVerifySeedSourceFailsClosed(t *testing.T) {
 			cfg := testConfig()
 			cfg.SeedRoot = root
 			dir := tc.build(t, root, &cfg)
-			digest, err := stageSeedSource(cfg, dir, testBaseRevision().Repo, t.TempDir())
+			digest, err := stageSeedSource(
+				cfg, dir, testBaseRevision().Repo, testBaseRevision().RepositoryID, t.TempDir(),
+			)
 			wantCheckFailure(t, err, CheckWorkspaceSeeding)
 			if digest != "" {
 				t.Errorf("rejected source still yielded a digest %q", digest)
 			}
 		})
+	}
+}
+
+func TestVerifySeedSourceDoesNotEchoRejectedGitConfig(t *testing.T) {
+	root := t.TempDir()
+	cfg := testConfig()
+	cfg.SeedRoot = root
+	dir := writeSeedCheckout(t, root, testBaseSHA)
+	const (
+		rejectedKey   = "bare"
+		rejectedValue = "authorization: inert-sensitive-test-value"
+	)
+	writeGitConfig(t, dir, "[core]\n\t"+rejectedKey+" = "+rejectedValue+
+		"\n[freeside \"transport\"]\n\trepo = "+testBaseRevision().Repo+"\n")
+
+	_, err := stageSeedSource(
+		cfg, dir, testBaseRevision().Repo, testBaseRevision().RepositoryID, t.TempDir(),
+	)
+	wantCheckFailure(t, err, CheckWorkspaceSeeding)
+	if strings.Contains(err.Error(), rejectedKey) || strings.Contains(err.Error(), rejectedValue) {
+		t.Errorf("rejected Git config leaked its key or value in the error: %v", err)
 	}
 }

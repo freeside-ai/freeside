@@ -9,14 +9,21 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
+	"unicode"
 )
 
 // gitHeadPath is the file the observer later reads the seeded base from. A
 // source without it is refused on the host rather than staged and then found
 // wanting two VMs later.
 const gitHeadPath = ".git/HEAD"
+
+// maxGitHeadBytes is one full SHA-1 commit plus Git's terminating newline.
+// The observer's shell reads HEAD through command substitution, so the host
+// must reject a corrupted multi-megabyte file before it reaches that VM.
+const maxGitHeadBytes = 41
 
 // stageSeedSource materializes a private, gate-owned snapshot of the seed
 // source and returns the digest of what it wrote.
@@ -33,58 +40,59 @@ const gitHeadPath = ".git/HEAD"
 // credential-bearing VM mounts read-write, so the gate refuses anything it
 // cannot describe exactly:
 //
-//   - containment: dir and SeedRoot are both resolved through symlinks before
-//     the prefix test, so a symlinked path cannot name a directory outside the
-//     daemon's own checkout root;
+//   - containment: SeedRoot is opened first and the source is opened through
+//     that descriptor, so a swapped path cannot redirect either handle outside
+//     the daemon's own checkout root;
 //   - no symlinks anywhere in the tree, of any kind. publish.Transport's
 //     FetchBase leaves none, so refusing them costs an honest source nothing,
-//     while a symlink copied onto the workspace is a path trick aimed at
-//     whatever later walks that tree;
+//     while support for the symlinks git legitimately tracks remains deferred
+//     to #339 because the reference runtime silently drops escaping links;
 //   - regular files and directories only, so no device node, socket, or FIFO
 //     is staged;
+//   - local Git config reduced to validated daemon-authored facts, so neither
+//     hostile values nor ignored comments cross into the writer;
 //   - bounded bytes and entries, because the tree lands twice (the seeder's
 //     root filesystem and then the workspace volume).
 //
 // The returned error is a CheckWorkspaceSeeding ConformanceFailure: by the time
 // the gate is reading the filesystem, a bad source is a failed seeding
 // assertion, not the syntactic caller error WorkspaceSeed.validate reports.
-func stageSeedSource(cfg Config, dir, declaredRepo, snapshot string) (digest string, err error) {
+func stageSeedSource(cfg Config, dir, declaredRepo string, declaredRepositoryID int64, snapshot string) (digest string, err error) {
 	if cfg.SeedRoot == "" {
 		return "", failf(CheckWorkspaceSeeding, "backend is not configured with a seed root")
 	}
-	root, err := filepath.EvalSymlinks(cfg.SeedRoot)
+	// Anchor on SeedRoot's own descriptor first, then open the source THROUGH
+	// it. Resolving names and comparing strings left the anchor itself
+	// acquired by pathname: the source could be swapped for a symlink after the
+	// containment test and before the open, and the root descriptor would land
+	// outside SeedRoot entirely. A descriptor cannot be swapped, and every
+	// component of the path opened through it is validated against it, so
+	// containment stops being a check that can go stale and becomes a property
+	// of the handle.
+	anchor, err := os.OpenRoot(cfg.SeedRoot)
 	if err != nil {
-		return "", failf(CheckWorkspaceSeeding, "seed root could not be resolved")
+		return "", failf(CheckWorkspaceSeeding, "seed root could not be opened")
 	}
-	resolved, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		return "", failf(CheckWorkspaceSeeding, "seed source could not be resolved")
-	}
-	// Compare resolved against resolved: an unresolved prefix test would accept
-	// a source whose own path is inside the root but whose real location is not.
-	if resolved != root && !strings.HasPrefix(resolved, root+string(os.PathSeparator)) {
+	defer anchor.Close() //nolint:errcheck // read-only handle
+	rel, err := filepath.Rel(cfg.SeedRoot, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		// Lexically outside; the descriptor below would refuse it too, but the
+		// reason is clearer said here.
 		return "", failf(CheckWorkspaceSeeding, "seed source does not resolve under the daemon's seed root")
 	}
-	info, err := os.Lstat(resolved)
+	srcRoot, err := anchor.OpenRoot(filepath.ToSlash(rel))
 	if err != nil {
-		return "", failf(CheckWorkspaceSeeding, "seed source could not be read")
-	}
-	if !info.IsDir() {
-		return "", failf(CheckWorkspaceSeeding, "seed source is not a directory")
-	}
-	// Every read below goes through this root. It holds a descriptor to the
-	// resolved source and validates each path component against it, so a
-	// directory swapped for a symlink mid-walk cannot lead the staging pass
-	// outside the seed root. O_NOFOLLOW on the final component only guards the
-	// leaf; intermediate components need this.
-	srcRoot, err := os.OpenRoot(resolved)
-	if err != nil {
-		return "", failf(CheckWorkspaceSeeding, "seed source could not be opened as a root")
+		// Escaping the anchor, absent, or not a directory all land here; none of
+		// them is a source the gate will stage, and distinguishing them would
+		// report the daemon's layout into a ConformanceFailure.Reason.
+		return "", failf(CheckWorkspaceSeeding, "seed source could not be opened under the daemon's seed root")
 	}
 	defer srcRoot.Close() //nolint:errcheck // read-only handle
 
 	remaining := cfg.MaxSeedBytes
-	var entries, worktreeFiles int
+	var entries, worktreeFiles, gitConfigContentIndex int
+	var gitConfigSourceBytes int64
+	gitConfigContentIndex = -1
 	var contentLines, execPaths, dirPaths []string
 	walkErr := fs.WalkDir(srcRoot.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -135,7 +143,12 @@ func stageSeedSource(cfg Config, dir, declaredRepo, snapshot string) (digest str
 		if !isUnderGitDir(rel) {
 			worktreeFiles++
 		}
-		contentLines = append(contentLines, sum+"  "+findPath(rel))
+		contentLine := sum + "  " + findPath(rel)
+		if filepath.ToSlash(rel) == ".git/config" {
+			gitConfigContentIndex = len(contentLines)
+			gitConfigSourceBytes = written
+		}
+		contentLines = append(contentLines, contentLine)
 		// The user-execute bit only, which is the one a git tree records.
 		if perm&0o100 != 0 {
 			execPaths = append(execPaths, findPath(rel))
@@ -150,6 +163,9 @@ func stageSeedSource(cfg Config, dir, declaredRepo, snapshot string) (digest str
 	head, err := os.Lstat(filepath.Join(snapshot, filepath.FromSlash(gitHeadPath)))
 	if err != nil || !head.Mode().IsRegular() {
 		return "", failf(CheckWorkspaceSeeding, "seed source does not carry a regular %s", gitHeadPath)
+	}
+	if head.Size() > maxGitHeadBytes {
+		return "", failf(CheckWorkspaceSeeding, "seed source carries an oversized %s", gitHeadPath)
 	}
 	// A checkout with a .git but no working tree is the case the intended
 	// producer actually hands over: publish.Transport.FetchBase moves HEAD to
@@ -170,9 +186,25 @@ func stageSeedSource(cfg Config, dir, declaredRepo, snapshot string) (digest str
 	// source would leave the same window the snapshot exists to close: a
 	// checkout swapped mid-walk could put another repository into the snapshot,
 	// and its digest and HEAD would be self-consistent about the wrong thing.
-	if err := verifySeedRepoBinding(snapshot, declaredRepo); err != nil {
+	if err := canonicalizeSeedRepoBinding(snapshot, declaredRepo, declaredRepositoryID); err != nil {
 		return "", err
 	}
+	if gitConfigContentIndex < 0 {
+		return "", failf(CheckWorkspaceSeeding, "seed source carries no git config to bind it to a repository")
+	}
+	configPath := filepath.Join(snapshot, ".git", "config")
+	configInfo, err := os.Stat(configPath)
+	if err != nil || !configInfo.Mode().IsRegular() {
+		return "", failf(CheckWorkspaceSeeding, "canonical seed git config could not be examined")
+	}
+	if growth := configInfo.Size() - gitConfigSourceBytes; growth > remaining {
+		return "", failf(CheckWorkspaceSeeding, "canonical seed git config exceeds the byte budget")
+	}
+	configSum, err := fileSHA256(configPath)
+	if err != nil {
+		return "", failf(CheckWorkspaceSeeding, "canonical seed git config could not be hashed")
+	}
+	contentLines[gitConfigContentIndex] = configSum + "  ./.git/config"
 	return treeDigest(contentLines, execPaths, dirPaths), nil
 }
 
@@ -230,19 +262,53 @@ func copySeedFile(root *os.Root, rel, dest string, budget int64) (sum string, wr
 	return hex.EncodeToString(h.Sum(nil)), written, perm, nil
 }
 
-// The daemon-authored mark publish.Transport.FetchBase stamps into a checkout's
-// own config, naming the managed repository it was materialized from, and which
-// PushHead re-gates against before pushing. Ward re-gates against it too rather
-// than importing publish, which is another lane's package; the literal is
-// duplicated deliberately and a change to it must move both.
+// The daemon-authored marks the checkout materialization boundary stamps name
+// the managed repository in local config and its canonical forge ID in a
+// daemon metadata file. Ward re-gates against them without importing the
+// publishing lane; the repository key literal is duplicated deliberately and
+// a change to it must move both.
 const (
-	seedRepoBindingSection = `[freeside "transport"]`
-	seedRepoBindingName    = "repo"
-	maxGitConfigBytes      = 1 << 20
+	seedRepoBindingSectionName = "freeside"
+	seedRepoBindingSubsection  = "transport"
+	seedRepoBindingName        = "repo"
+	seedRepoBindingIDPath      = ".git/freeside-repository-id"
+	maxGitConfigBytes          = 1 << 20
+	maxRepositoryIDBytes       = 64
 )
 
-// verifySeedRepoBinding proves the checkout was materialized from the
-// repository the caller declared.
+// seedGitConfigKeys is the safe subset of publish.pristineConfigKeys that can
+// describe an ordinary daemon-authored working tree. Ward cannot import the
+// publishing lane, so these literals are duplicated deliberately and changes
+// to their shared keys must move both. core.worktree is intentionally absent:
+// FetchBase initializes .git inside its checkout and never authors that key,
+// while accepting an arbitrary path would redirect the writer's worktree.
+var seedGitConfigKeys = map[string]bool{
+	"core.bare":                    true,
+	"core.filemode":                true,
+	"core.ignorecase":              true,
+	"core.logallrefupdates":        true,
+	"core.precomposeunicode":       true,
+	"core.repositoryformatversion": true,
+	"core.symlinks":                true,
+	"extensions.objectformat":      true,
+	"freeside.transport.repo":      true,
+}
+
+var seedGitConfigKeyOrder = []string{
+	"core.repositoryformatversion",
+	"core.filemode",
+	"core.bare",
+	"core.logallrefupdates",
+	"core.symlinks",
+	"core.ignorecase",
+	"core.precomposeunicode",
+	"extensions.objectformat",
+	"freeside.transport.repo",
+}
+
+// canonicalizeSeedRepoBinding proves the checkout was materialized from the
+// repository the caller declared, then replaces its local config with the
+// validated daemon-authored facts in one canonical, comment-free form.
 //
 // Containment under SeedRoot is not enough on its own. A seed root holds
 // checkouts for every managed repository, and forks share commits, so a source
@@ -251,12 +317,15 @@ const (
 // so the observer would agree with it, and the writer would receive the wrong
 // repository's entire object database under a correct-looking base.
 //
-// The binding is read as text rather than through git, which ward may not
-// shell out to. Anything ambiguous is refused rather than resolved: an include
-// directive could define the key elsewhere, and a repeated key has no single
-// answer.
-func verifySeedRepoBinding(dir, declaredRepo string) error {
-	f, err := os.Open(filepath.Join(dir, ".git", "config")) //nolint:gosec // inside the daemon's own seed root, already resolved and contained
+// The config is read as text rather than through git, which ward may not shell
+// out to. Anything ambiguous is refused rather than resolved: an include can
+// define a key elsewhere, a repeated key has no single answer, and even an
+// allowlisted key can hide credential bytes in its value. Full-line comments
+// and formatting are discarded when the canonical file is written, so no
+// ignored input reaches the credential-bearing writer.
+func canonicalizeSeedRepoBinding(dir, declaredRepo string, declaredRepositoryID int64) error {
+	configPath := filepath.Join(dir, ".git", "config")
+	f, err := os.Open(configPath) //nolint:gosec // inside the gate-owned snapshot
 	if err != nil {
 		return failf(CheckWorkspaceSeeding, "seed source carries no readable git config to bind it to a repository")
 	}
@@ -279,41 +348,162 @@ func verifySeedRepoBinding(dir, declaredRepo string) error {
 		return failf(CheckWorkspaceSeeding, "seed source git config carries an include directive")
 	}
 
-	var values []string
-	inSection := false
+	values := make(map[string]string)
+	var section, subsection string
 	for _, line := range strings.Split(text, "\n") {
 		t := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
 		if strings.HasPrefix(t, "[") {
-			// Exact literal, not a case-folded match: git treats a subsection
-			// name case-sensitively, so accepting a differently-cased header
-			// would accept a section git itself considers a different one.
-			inSection = t == seedRepoBindingSection
+			// Git removes backslashes while parsing quoted subsection names:
+			// [freeside "trans\port"] therefore aliases "transport". The
+			// daemon-authored config needs no escaped section header at all, so
+			// refuse one rather than implementing only the latest alias.
+			if end := strings.IndexByte(t, ']'); end >= 0 && strings.Contains(t[:end+1], `\`) {
+				return failf(CheckWorkspaceSeeding, "seed source git config carries an escaped section header")
+			}
+			var ok bool
+			section, subsection, ok = parseSeedGitConfigSection(t)
+			if !ok {
+				return failf(CheckWorkspaceSeeding, "seed source git config carries a malformed section header")
+			}
 			continue
 		}
-		if !inSection || t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, ";") {
+		if t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, ";") {
 			continue
 		}
 		name, value, ok := strings.Cut(t, "=")
-		if !ok || !strings.EqualFold(strings.TrimSpace(name), seedRepoBindingName) {
-			continue
+		name = strings.TrimSpace(name)
+		key := strings.ToLower(section)
+		if subsection != "" {
+			key += "." + subsection
 		}
-		values = append(values, strings.TrimSpace(value))
+		key += "." + strings.ToLower(name)
+		if !seedGitConfigKeys[key] {
+			// Never echo the rejected key or value: either can contain
+			// credential material in a corrupted checkout.
+			return failf(CheckWorkspaceSeeding, "seed source git config carries a non-daemon key")
+		}
+		if !ok {
+			return failf(CheckWorkspaceSeeding, "seed source git config carries an implicit or missing value")
+		}
+		value = strings.TrimSpace(value)
+		if _, duplicate := values[key]; duplicate {
+			return failf(CheckWorkspaceSeeding, "seed source git config carries a repeated key")
+		}
+		if !validSeedGitConfigValue(key, value, declaredRepo) {
+			return failf(CheckWorkspaceSeeding, "seed source git config carries a non-daemon value")
+		}
+		values[key] = value
 	}
 
-	if len(values) != 1 {
+	repoKey := seedRepoBindingSectionName + "." + seedRepoBindingSubsection + "." + seedRepoBindingName
+	if _, ok := values[repoKey]; !ok {
 		return failf(CheckWorkspaceSeeding, "seed source git config does not carry exactly one repository binding")
 	}
-	// A quoted or continued value would need git's own unescaping to compare
-	// faithfully; refuse rather than approximate it.
-	if strings.ContainsAny(values[0], "\"\\") {
-		return failf(CheckWorkspaceSeeding, "seed source repository binding is quoted or escaped")
+	idFile, err := os.Open(filepath.Join(dir, filepath.FromSlash(seedRepoBindingIDPath))) //nolint:gosec // inside the verified snapshot
+	if err != nil {
+		return failf(CheckWorkspaceSeeding, "seed source carries no readable canonical repository id binding")
 	}
-	if values[0] != declaredRepo {
-		// Neither side is echoed: the bound value names a repository, and a
-		// refusal should not report which other repository the caller reached.
-		return failf(CheckWorkspaceSeeding, "seed source is bound to a different repository than the declared base")
+	defer idFile.Close() //nolint:errcheck // read-only handle
+	idData, err := io.ReadAll(io.LimitReader(idFile, maxRepositoryIDBytes+1))
+	if err != nil || len(idData) > maxRepositoryIDBytes {
+		return failf(CheckWorkspaceSeeding, "seed source canonical repository id binding could not be read")
+	}
+	idText := strings.TrimSuffix(string(idData), "\n")
+	repositoryID, err := strconv.ParseInt(idText, 10, 64)
+	if err != nil || repositoryID <= 0 || idText != strconv.FormatInt(repositoryID, 10) {
+		return failf(CheckWorkspaceSeeding, "seed source carries an invalid canonical repository id binding")
+	}
+	if repositoryID != declaredRepositoryID {
+		return failf(CheckWorkspaceSeeding, "seed source is bound to a different repository identity than the declared base")
+	}
+	if err := os.WriteFile(configPath, []byte(canonicalSeedGitConfig(values)), 0o600); err != nil {
+		return failf(CheckWorkspaceSeeding, "canonical seed git config could not be written")
 	}
 	return nil
+}
+
+func validSeedGitConfigValue(key, value, declaredRepo string) bool {
+	switch key {
+	case "core.repositoryformatversion":
+		return value == "0"
+	case "core.bare":
+		return value == "false"
+	case "core.logallrefupdates":
+		return value == "true"
+	case "extensions.objectformat":
+		return value == "sha1"
+	case "core.filemode", "core.ignorecase", "core.precomposeunicode", "core.symlinks":
+		return value == "true" || value == "false"
+	case seedRepoBindingSectionName + "." + seedRepoBindingSubsection + "." + seedRepoBindingName:
+		return value == declaredRepo && !strings.ContainsAny(value, "\"\\")
+	}
+	return false
+}
+
+func canonicalSeedGitConfig(values map[string]string) string {
+	var b strings.Builder
+	section := ""
+	for _, key := range seedGitConfigKeyOrder {
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+		keySection, name, _ := strings.Cut(key, ".")
+		if key == seedRepoBindingSectionName+"."+seedRepoBindingSubsection+"."+seedRepoBindingName {
+			keySection = seedRepoBindingSectionName + ` "` + seedRepoBindingSubsection + `"`
+			name = seedRepoBindingName
+		}
+		if keySection != section {
+			b.WriteByte('[')
+			b.WriteString(keySection)
+			b.WriteString("]\n")
+			section = keySection
+		}
+		b.WriteByte('\t')
+		b.WriteString(name)
+		b.WriteString(" = ")
+		b.WriteString(value)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// parseSeedGitConfigSection recognizes the section forms accepted from the
+// daemon-authored config. Git folds section names, preserves modern quoted
+// subsection case, and folds the deprecated dotted subsection spelling.
+func parseSeedGitConfigSection(line string) (section, subsection string, ok bool) {
+	if len(line) < 3 || line[0] != '[' {
+		return "", "", false
+	}
+	end := strings.IndexByte(line, ']')
+	if end < 0 {
+		return "", "", false
+	}
+	if trailing := strings.TrimSpace(line[end+1:]); trailing != "" &&
+		!strings.HasPrefix(trailing, "#") && !strings.HasPrefix(trailing, ";") {
+		return "", "", false
+	}
+	inner := strings.TrimSpace(line[1:end])
+	if inner == "" {
+		return "", "", false
+	}
+	if split := strings.IndexFunc(inner, unicode.IsSpace); split >= 0 {
+		section = strings.ToLower(inner[:split])
+		quoted := strings.TrimSpace(inner[split:])
+		if section == "" || len(quoted) < 3 || quoted[0] != '"' ||
+			quoted[len(quoted)-1] != '"' || strings.ContainsRune(quoted[1:len(quoted)-1], '"') {
+			return "", "", false
+		}
+		return section, quoted[1 : len(quoted)-1], true
+	}
+	section, subsection, dotted := strings.Cut(inner, ".")
+	if section == "" || dotted && subsection == "" {
+		return "", "", false
+	}
+	if dotted {
+		subsection = strings.ToLower(subsection)
+	}
+	return strings.ToLower(section), subsection, true
 }
 
 // isUnderGitDir reports whether a source-relative path is the repository's own
@@ -398,17 +588,17 @@ func (b *Backend) seedWorkspace(ctx context.Context, hs HandoffSpec, names hando
 	if hs.Seed.Mode != SeedBaseCheckout {
 		return nil
 	}
-	// Everything below stages `source`, the path verification resolved, never
-	// the caller's spelling of it. Verifying one path and copying another would
-	// leave the containment check advisory: a symlink swapped in after the walk
-	// would re-point the copy at a tree nothing checked, and outside SeedRoot,
-	// which is the property the resolve exists to establish.
+	// Everything below stages the private snapshot, never the caller's mutable
+	// path. The source was opened through SeedRoot's descriptor and every byte
+	// was copied through that anchored handle before this runtime boundary.
 	snapshot, err := os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-seed-")
 	if err != nil {
 		return failf(CheckWorkspaceSeeding, "create seed snapshot directory: %v", err)
 	}
 	st.seedSnapshotDir = snapshot
-	digest, err := stageSeedSource(b.cfg, hs.Seed.SourceDir, hs.Seed.Base.Repo, snapshot)
+	digest, err := stageSeedSource(
+		b.cfg, hs.Seed.SourceDir, hs.Seed.Base.Repo, hs.Seed.Base.RepositoryID, snapshot,
+	)
 	if err != nil {
 		return err
 	}

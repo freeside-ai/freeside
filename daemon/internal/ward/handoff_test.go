@@ -57,7 +57,7 @@ func (fx *handoffFixture) run(t *testing.T) (*HandoffResult, error) {
 
 // seed points the fixture at a real daemon-owned checkout under a real seed
 // root and returns the matching spec. The checkout is a real directory tree
-// because verifySeedSource reads the host, and a fake path cannot exercise the
+// because stageSeedSource reads the host, and a fake path cannot exercise the
 // containment and shape rules that are the point of it.
 func (fx *handoffFixture) seed(t *testing.T) HandoffSpec {
 	t.Helper()

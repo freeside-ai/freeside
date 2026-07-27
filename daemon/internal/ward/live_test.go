@@ -542,18 +542,6 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 		wantCheckFailure(t, err, CheckObservedBaseIdentity)
 	}
 
-	// The observer must report a symlink on the volume, which is what closes
-	// the window between the host's no-symlink walk and the copy: a source
-	// mutated in between would otherwise be invisible to both sides, since the
-	// digest hashes only regular files. Planted directly on the volume through
-	// a writer, because the host gate would refuse it in the source.
-	plantSymlinkOnWorkspace(t, rt, names, runID)
-	if _, err := b.observeSeededBase(ctx, hs, names, st); err == nil {
-		t.Error("observeSeededBase accepted a workspace carrying an unapproved symlink")
-	} else {
-		wantCheckFailure(t, err, CheckObservedBaseIdentity)
-	}
-
 	// The tree digest is computed by Go on the host and by BusyBox in the
 	// guest, so agreement between two independent implementations is the whole
 	// property. The pass above already required it; assert it explicitly so a
@@ -569,7 +557,29 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 	} else {
 		wantCheckFailure(t, err, CheckObservedBaseIdentity)
 	}
+	if !st.observer.owned {
+		t.Fatal("tree-digest mismatch failed before the observer was created; the negative probe did not exercise the proof")
+	}
+	if err := rt.DeleteContainer(ctx, names.Observer); err != nil {
+		t.Fatalf("delete observer after expected digest refusal: %v", err)
+	}
+	st.observer = objectClaim{}
 	st.seedTreeDigest = tampered
+
+	// The observer must report a symlink on the volume, which is what closes
+	// the window between the host's no-symlink walk and the copy: a source
+	// mutated in between would otherwise be invisible to both sides, since the
+	// digest hashes only regular files. Planted directly on the volume through
+	// a writer, because the host gate would refuse it in the source.
+	plantSymlinkOnWorkspace(t, rt, names, runID)
+	if _, err := b.observeSeededBase(ctx, hs, names, st); err == nil {
+		t.Error("observeSeededBase accepted a workspace carrying an unapproved symlink")
+	} else {
+		wantCheckFailure(t, err, CheckObservedBaseIdentity)
+	}
+	if !st.observer.owned {
+		t.Fatal("symlink refusal failed before the observer was created; the negative probe did not exercise the proof")
+	}
 }
 
 // TestLiveSeedRefusesWorktreelessCheckout pins the case the intended producer
@@ -593,7 +603,9 @@ func TestLiveSeedRefusesWorktreelessCheckout(t *testing.T) {
 	}
 	cfg := testConfig()
 	cfg.SeedRoot = root
-	_, err := stageSeedSource(cfg, dir, testBaseRevision().Repo, t.TempDir())
+	_, err := stageSeedSource(
+		cfg, dir, testBaseRevision().Repo, testBaseRevision().RepositoryID, t.TempDir(),
+	)
 	wantCheckFailure(t, err, CheckWorkspaceSeeding)
 }
 
