@@ -220,6 +220,28 @@ func (b *BlobStore) Has(digest domain.Digest) (bool, error) {
 	return true, nil
 }
 
+// Verify reports whether the stored bytes exist and hash to digest. Backup
+// closure uses this stronger check: a digest-named path is not evidence that
+// the bytes survived intact.
+func (b *BlobStore) Verify(digest domain.Digest) (bool, error) {
+	body, err := b.Open(digest)
+	if errors.Is(err, ErrBlobNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	hasher := sha256.New()
+	_, copyErr := io.Copy(hasher, body)
+	closeErr := body.Close()
+	if err := errors.Join(copyErr, closeErr); err != nil {
+		return false, fmt.Errorf("attachment %q: verify: %w", digest, err)
+	}
+	got := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
+	return got == string(digest), nil
+}
+
 func (b *BlobStore) syncDir() error {
 	d, err := os.Open(b.dir)
 	if err != nil {

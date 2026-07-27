@@ -22,6 +22,46 @@ import (
 // reservations exist.
 const IntentKindReservation = "publish.invocation_reservation"
 
+// ReservationBackupPayloadDigests validates a durable reservation. The claim
+// is self-contained and needs no external blobs.
+func ReservationBackupPayloadDigests(entry store.QueueEntry) ([]domain.Digest, error) {
+	if entry.Kind != IntentKindReservation {
+		return nil, domain.ErrParentKeyMismatch
+	}
+	reservation, err := DecodeReservation(entry.Payload)
+	if err != nil {
+		return nil, err
+	}
+	key, err := reservation.Key()
+	if err != nil {
+		return nil, err
+	}
+	if entry.IdempotencyKey != key {
+		return nil, domain.ErrParentKeyMismatch
+	}
+	return nil, nil
+}
+
+// PublicationBackupPayloadDigests validates a durable publication intent. The
+// intent is self-contained and needs no external blobs.
+func PublicationBackupPayloadDigests(entry store.QueueEntry) ([]domain.Digest, error) {
+	if entry.Kind != IntentKindPublication {
+		return nil, domain.ErrParentKeyMismatch
+	}
+	intent, err := DecodeIntent(entry.Payload)
+	if err != nil {
+		return nil, err
+	}
+	key, err := IntentKey(intent.InvocationID, IntentKindPublication)
+	if err != nil {
+		return nil, err
+	}
+	if entry.IdempotencyKey != key {
+		return nil, domain.ErrParentKeyMismatch
+	}
+	return nil, nil
+}
+
 // reservationVersion is stamped into every reservation payload. A decoded row
 // carrying another version is a shape this build cannot interpret, and an
 // uninterpretable reservation must not read as an absent one.

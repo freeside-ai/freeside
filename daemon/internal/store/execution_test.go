@@ -68,6 +68,22 @@ func attendedFloors() map[domain.OperatingMode]domain.CapabilitySnapshot {
 	}
 }
 
+func healthyBackupHealth() domain.BackupHealth {
+	return domain.BackupHealth{
+		CheckpointCurrency: domain.BackupHealthHealthy,
+		ArtifactClosure:    domain.BackupHealthHealthy,
+		RestoreTestAge:     domain.BackupHealthHealthy,
+	}
+}
+
+func healthyBackupHealthSource() store.BackupHealthSource {
+	return store.BackupHealthSourceFunc(func(
+		context.Context, store.BackupHealthContext,
+	) (domain.BackupHealth, error) {
+		return healthyBackupHealth(), nil
+	})
+}
+
 // openWithFixture opens a store under the given policy and seeds the run and
 // identity an admission refers to.
 func openWithFixture(t *testing.T, f admissionFixture, opts store.Options) *store.Store {
@@ -257,6 +273,7 @@ func TestExecutionAdmissionWaiverRegatedAgainstTheOperator(t *testing.T) {
 	untrusted := openWithFixture(t, f, store.Options{
 		AdmissionFloors: waiverFloors, ApprovedCredentialModes: waiverApproved,
 		BackupEncryptionWaiverRepositoryID: &configured,
+		BackupHealthSource:                 healthyBackupHealthSource(),
 	})
 	untrustedErr := recordAdmission(t, untrusted, f.admission)
 	if !errors.Is(untrustedErr, store.ErrRepositoryUntrusted) {
@@ -275,6 +292,7 @@ func TestExecutionAdmissionWaiverRegatedAgainstTheOperator(t *testing.T) {
 	drifted := openWithFixture(t, f, store.Options{
 		AdmissionFloors: waiverFloors, ApprovedCredentialModes: waiverApproved,
 		BackupEncryptionWaiverRepositoryID: &configured,
+		BackupHealthSource:                 healthyBackupHealthSource(),
 	})
 	seedTrustProfile(t, drifted, f.admission.Base.Repo, 999)
 	if err := recordAdmission(t, drifted, f.admission); !errors.Is(err, domain.ErrRepositoryIdentityMismatch) {
@@ -284,6 +302,7 @@ func TestExecutionAdmissionWaiverRegatedAgainstTheOperator(t *testing.T) {
 	matched := openWithFixture(t, f, store.Options{
 		AdmissionFloors: waiverFloors, ApprovedCredentialModes: waiverApproved,
 		BackupEncryptionWaiverRepositoryID: &configured,
+		BackupHealthSource:                 healthyBackupHealthSource(),
 	})
 	seedTrustProfile(t, matched, f.admission.Base.Repo, f.admission.Base.RepositoryID)
 	if err := recordAdmission(t, matched, f.admission); err != nil {
@@ -409,6 +428,7 @@ func TestUnattendedAdmissionRequiresATrustedRepository(t *testing.T) {
 	untrusted := openWithFixture(t, f, store.Options{
 		AdmissionFloors: floors, ApprovedCredentialModes: approved,
 		BackupEncryptionWaiverRepositoryID: &waiverRepository,
+		BackupHealthSource:                 healthyBackupHealthSource(),
 	})
 	if err := recordAdmission(t, untrusted, f.admission); !errors.Is(err, store.ErrRepositoryUntrusted) {
 		t.Fatalf("unattended admission with no profile = %v, want %v", err, store.ErrRepositoryUntrusted)
@@ -417,6 +437,7 @@ func TestUnattendedAdmissionRequiresATrustedRepository(t *testing.T) {
 	drifted := openWithFixture(t, f, store.Options{
 		AdmissionFloors: floors, ApprovedCredentialModes: approved,
 		BackupEncryptionWaiverRepositoryID: &waiverRepository,
+		BackupHealthSource:                 healthyBackupHealthSource(),
 	})
 	seedTrustProfile(t, drifted, f.admission.Base.Repo, 999)
 	if err := recordAdmission(t, drifted, f.admission); !errors.Is(err, domain.ErrRepositoryIdentityMismatch) {
@@ -427,6 +448,7 @@ func TestUnattendedAdmissionRequiresATrustedRepository(t *testing.T) {
 	trusted := openWithFixture(t, f, store.Options{
 		AdmissionFloors: floors, ApprovedCredentialModes: approved,
 		BackupEncryptionWaiverRepositoryID: &waiverRepository,
+		BackupHealthSource:                 healthyBackupHealthSource(),
 	})
 	seedTrustProfile(t, trusted, f.admission.Base.Repo, f.admission.Base.RepositoryID)
 	if err := recordAdmission(t, trusted, f.admission); err != nil {
@@ -470,6 +492,7 @@ func TestUnattendedAdmissionRequiresBackupAuthorization(t *testing.T) {
 			domain.ModeUnattended: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		},
 		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
+		BackupHealthSource:      healthyBackupHealthSource(),
 	})
 	seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
 
@@ -485,6 +508,216 @@ func TestUnattendedAdmissionRequiresBackupAuthorization(t *testing.T) {
 	dev := openWithFixture(t, attended, store.Options{AdmissionFloors: attendedFloors()})
 	if err := recordAdmission(t, dev, attended.admission); err != nil {
 		t.Fatalf("attended_dev must not require backup authorization: %v", err)
+	}
+}
+
+// TestBackupHealthIsQueryable pins the producer seam independently of
+// admission: callers can inspect every dimension, while an unconfigured store
+// reports absence instead of synthesizing a healthy default.
+func TestBackupHealthIsQueryable(t *testing.T) {
+	ctx := context.Background()
+	want := healthyBackupHealth()
+	configured := openStore(t, store.Options{BackupHealthSource: healthyBackupHealthSource()})
+	got, err := configured.BackupHealth(ctx)
+	if err != nil {
+		t.Fatalf("BackupHealth: %v", err)
+	}
+	if got != want {
+		t.Fatalf("BackupHealth = %+v, want %+v", got, want)
+	}
+
+	unconfigured := openStore(t, store.Options{})
+	if _, err := unconfigured.BackupHealth(ctx); !errors.Is(err, domain.ErrBackupHealthUnavailable) {
+		t.Fatalf("unconfigured BackupHealth = %v, want %v", err, domain.ErrBackupHealthUnavailable)
+	}
+}
+
+// TestUnattendedAdmissionRegatesEveryBackupHealthDimension covers #317 at
+// both trust boundaries. Each failed dimension independently refuses the
+// initial write, then the same live source is changed after a healthy write
+// and reconstruction refuses the already-recorded admission.
+func TestUnattendedAdmissionRegatesEveryBackupHealthDimension(t *testing.T) {
+	ctx := context.Background()
+	active := testTrustProfile(t, "owner/repo", 424242).ProfileDigest
+	waiverRepository := int64(424242)
+	f := newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
+		in.OperatingMode = domain.ModeUnattended
+		in.Capabilities = domain.NewCapabilitySnapshot(domain.AllRunnerCapabilities...)
+		in.TrustProfileDigest = &active
+		in.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
+			RepositoryID: waiverRepository, Reason: "phase 1a.2 supervised runs",
+		}
+	})
+
+	health := healthyBackupHealth()
+	source := store.BackupHealthSourceFunc(func(
+		context.Context, store.BackupHealthContext,
+	) (domain.BackupHealth, error) {
+		return health, nil
+	})
+	opts := store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeUnattended: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+		ApprovedCredentialModes:            []domain.CredentialMode{domain.CredentialSubscriptionContained},
+		BackupEncryptionWaiverRepositoryID: &waiverRepository,
+		BackupHealthSource:                 source,
+	}
+	s := openWithFixture(t, f, opts)
+	seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
+
+	cases := []struct {
+		name    string
+		fail    func(*domain.BackupHealth)
+		wantErr error
+	}{
+		{
+			"checkpoint currency",
+			func(health *domain.BackupHealth) {
+				health.CheckpointCurrency = domain.BackupHealthUnhealthy
+			},
+			domain.ErrCheckpointNotCurrent,
+		},
+		{
+			"artifact closure",
+			func(health *domain.BackupHealth) {
+				health.ArtifactClosure = domain.BackupHealthUnhealthy
+			},
+			domain.ErrArtifactClosureIncomplete,
+		},
+		{
+			"restore-test age",
+			func(health *domain.BackupHealth) {
+				health.RestoreTestAge = domain.BackupHealthUnhealthy
+			},
+			domain.ErrRestoreTestStale,
+		},
+		{
+			"missing dimension",
+			func(health *domain.BackupHealth) {
+				health.RestoreTestAge = ""
+			},
+			domain.ErrInvalidBackupHealthStatus,
+		},
+	}
+	for _, tc := range cases {
+		t.Run("write/"+tc.name, func(t *testing.T) {
+			health = healthyBackupHealth()
+			tc.fail(&health)
+			if err := recordAdmission(t, s, f.admission); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("record = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+
+	health = healthyBackupHealth()
+	if err := recordAdmission(t, s, f.admission); err != nil {
+		t.Fatalf("record under healthy backup signal: %v", err)
+	}
+	for _, tc := range cases {
+		t.Run("reconstruction/"+tc.name, func(t *testing.T) {
+			health = healthyBackupHealth()
+			tc.fail(&health)
+			err := s.Read(ctx, func(tx *store.ReadTx) error {
+				_, err := tx.GetExecutionAdmission(ctx, f.admission.InvocationID)
+				return err
+			})
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("GetExecutionAdmission = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+	health = healthyBackupHealth()
+}
+
+// TestUnattendedAdmissionWithNoBackupHealthSourceFailsClosed distinguishes a
+// missing producer from an explicitly unhealthy signal. The valid
+// repository-scoped encryption waiver cannot cover that absence.
+func TestUnattendedAdmissionWithNoBackupHealthSourceFailsClosed(t *testing.T) {
+	active := testTrustProfile(t, "owner/repo", 424242).ProfileDigest
+	waiverRepository := int64(424242)
+	f := newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
+		in.OperatingMode = domain.ModeUnattended
+		in.Capabilities = domain.NewCapabilitySnapshot(domain.AllRunnerCapabilities...)
+		in.TrustProfileDigest = &active
+		in.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
+			RepositoryID: waiverRepository, Reason: "phase 1a.2 supervised runs",
+		}
+	})
+	s := openWithFixture(t, f, store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeUnattended: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+		ApprovedCredentialModes:            []domain.CredentialMode{domain.CredentialSubscriptionContained},
+		BackupEncryptionWaiverRepositoryID: &waiverRepository,
+	})
+	seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
+	if err := recordAdmission(t, s, f.admission); !errors.Is(err, domain.ErrBackupHealthUnavailable) {
+		t.Fatalf("record with no backup-health source = %v, want %v",
+			err, domain.ErrBackupHealthUnavailable)
+	}
+}
+
+func TestListUnattendedAdmissionsEvaluatesBackupHealthOnce(t *testing.T) {
+	ctx := context.Background()
+	active := testTrustProfile(t, "owner/repo", 424242).ProfileDigest
+	waiverRepository := int64(424242)
+	unattended := func(in *domain.ExecutionAdmissionInput) {
+		in.OperatingMode = domain.ModeUnattended
+		in.Capabilities = domain.NewCapabilitySnapshot(domain.AllRunnerCapabilities...)
+		in.TrustProfileDigest = &active
+		in.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
+			RepositoryID: waiverRepository, Reason: "phase 1a.2 supervised runs",
+		}
+	}
+	first := newAdmissionFixture(t, unattended)
+	second := newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
+		unattended(in)
+		in.InvocationID = "inv-2"
+		in.AttemptID = "attempt-2"
+		in.InputDigest = "sha256:input-2"
+		in.Workspace = "ws-2"
+	})
+	first.run.Stages[0].Attempts = append(first.run.Stages[0].Attempts, domain.Attempt{
+		ID: "attempt-2", StageID: "stage-1", Number: 2, InvocationID: "inv-2",
+	})
+
+	sourceCalls := 0
+	s := openWithFixture(t, first, store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeUnattended: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+		ApprovedCredentialModes:            []domain.CredentialMode{domain.CredentialSubscriptionContained},
+		BackupEncryptionWaiverRepositoryID: &waiverRepository,
+		BackupHealthSource: store.BackupHealthSourceFunc(func(
+			context.Context, store.BackupHealthContext,
+		) (domain.BackupHealth, error) {
+			sourceCalls++
+			return healthyBackupHealth(), nil
+		}),
+	})
+	seedTrustProfile(t, s, first.admission.Base.Repo, first.admission.Base.RepositoryID)
+	if err := recordAdmission(t, s, first.admission); err != nil {
+		t.Fatalf("record first admission: %v", err)
+	}
+	if err := recordAdmission(t, s, second.admission); err != nil {
+		t.Fatalf("record second admission: %v", err)
+	}
+
+	sourceCalls = 0
+	var admissions []domain.ExecutionAdmission
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		admissions, err = tx.ListRunExecutionAdmissions(ctx, first.run.ID)
+		return err
+	}); err != nil {
+		t.Fatalf("ListRunExecutionAdmissions: %v", err)
+	}
+	if len(admissions) != 2 {
+		t.Fatalf("listed %d admissions, want 2", len(admissions))
+	}
+	if sourceCalls != 1 {
+		t.Fatalf("backup-health source calls = %d, want 1 per transaction", sourceCalls)
 	}
 }
 
@@ -512,6 +745,7 @@ func TestAdmissionBoundToTheActiveTrustProfileRevision(t *testing.T) {
 		AdmissionFloors:                    floors,
 		ApprovedCredentialModes:            []domain.CredentialMode{domain.CredentialSubscriptionContained},
 		BackupEncryptionWaiverRepositoryID: &waiverRepository,
+		BackupHealthSource:                 healthyBackupHealthSource(),
 	})
 	seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
 	if err := recordAdmission(t, s, f.admission); err != nil {

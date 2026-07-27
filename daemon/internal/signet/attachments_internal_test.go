@@ -98,3 +98,31 @@ func TestBlobStorePutRetriesExistingBlobDirectorySync(t *testing.T) {
 		t.Fatalf("directory sync calls = %d, want 2", syncCalls)
 	}
 }
+
+func TestBlobStoreVerifyHashesStoredBytes(t *testing.T) {
+	store, err := NewBlobStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := "durable artifact"
+	digest := domain.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(body))))
+	if _, err := store.Put(digest, strings.NewReader(body)); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	verified, err := store.Verify(digest)
+	if err != nil || !verified {
+		t.Fatalf("Verify stored bytes = %t, %v; want true, nil", verified, err)
+	}
+
+	path, err := store.blobPath(digest)
+	if err != nil {
+		t.Fatalf("blobPath: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("corrupt"), 0o600); err != nil {
+		t.Fatalf("corrupt blob: %v", err)
+	}
+	verified, err = store.Verify(digest)
+	if err != nil || verified {
+		t.Fatalf("Verify corrupted bytes = %t, %v; want false, nil", verified, err)
+	}
+}

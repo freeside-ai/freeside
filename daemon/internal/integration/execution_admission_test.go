@@ -529,6 +529,15 @@ func TestWaivedAdmissionSurfacesItsPosture(t *testing.T) {
 		},
 		ApprovedCredentialModes:            []domain.CredentialMode{domain.CredentialSubscriptionContained},
 		BackupEncryptionWaiverRepositoryID: &waiverRepository,
+		BackupHealthSource: store.BackupHealthSourceFunc(func(
+			context.Context, store.BackupHealthContext,
+		) (domain.BackupHealth, error) {
+			return domain.BackupHealth{
+				CheckpointCurrency: domain.BackupHealthHealthy,
+				ArtifactClosure:    domain.BackupHealthHealthy,
+				RestoreTestAge:     domain.BackupHealthHealthy,
+			}, nil
+		}),
 	})
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)

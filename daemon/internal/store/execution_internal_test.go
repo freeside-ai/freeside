@@ -80,6 +80,15 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 		},
 		ApprovedCredentialModes:            []domain.CredentialMode{domain.CredentialSubscriptionContained},
 		BackupEncryptionWaiverRepositoryID: &waiverID,
+		BackupHealthSource: BackupHealthSourceFunc(func(
+			context.Context, BackupHealthContext,
+		) (domain.BackupHealth, error) {
+			return domain.BackupHealth{
+				CheckpointCurrency: domain.BackupHealthHealthy,
+				ArtifactClosure:    domain.BackupHealthHealthy,
+				RestoreTestAge:     domain.BackupHealthHealthy,
+			}, nil
+		}),
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)

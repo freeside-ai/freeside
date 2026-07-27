@@ -2,10 +2,14 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"sort"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -788,8 +792,74 @@ func (tx *ReadTx) GetResolvedPolicy(ctx context.Context, runID domain.RunID) (do
 }
 
 const putCommandSQL = `
-INSERT INTO commands (command_id, item_id, item_version, pr_head_sha, device_id, action, entity_version, as_of_revision, body)
-VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`
+INSERT INTO commands (command_id, item_id, item_version, pr_head_sha, device_id, action, entity_version, as_of_revision, backup_binding_digest, body)
+VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`
+
+type storedInlineClaim struct {
+	Digest  domain.Digest `json:"digest"`
+	Content string        `json:"content"`
+}
+
+type storedCommandEnvelope struct {
+	Command      domain.Command      `json:"command"`
+	InlineClaims []storedInlineClaim `json:"inline_claims"`
+}
+
+func encodeStoredCommand(
+	command domain.Command, inlineOnly map[domain.Digest]string,
+) (string, domain.Digest, error) {
+	claims := make([]storedInlineClaim, 0, len(inlineOnly))
+	for digest, content := range inlineOnly {
+		claims = append(claims, storedInlineClaim{Digest: digest, Content: content})
+	}
+	sort.Slice(claims, func(i, j int) bool { return claims[i].Digest < claims[j].Digest })
+	body, err := json.Marshal(storedCommandEnvelope{Command: command, InlineClaims: claims})
+	if err != nil {
+		return "", "", err
+	}
+	sum := sha256.Sum256(body)
+	return string(body), domain.Digest(fmt.Sprintf("sha256:%x", sum)), nil
+}
+
+func decodeStoredCommand(
+	body []byte,
+) (domain.Command, map[domain.Digest]struct{}, domain.Digest, error) {
+	var probe struct {
+		Command json.RawMessage `json:"command"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return domain.Command{}, nil, "", err
+	}
+	if len(probe.Command) == 0 {
+		command, err := decode[domain.Command](body)
+		return command, map[domain.Digest]struct{}{}, "", err
+	}
+
+	var envelope storedCommandEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return domain.Command{}, nil, "", err
+	}
+	if err := envelope.Command.Validate(); err != nil {
+		return domain.Command{}, nil, "", fmt.Errorf("stored row invalid: %w", err)
+	}
+	inline := make(map[domain.Digest]struct{}, len(envelope.InlineClaims))
+	var previous domain.Digest
+	for idx, claim := range envelope.InlineClaims {
+		if claim.Digest == "" || claim.Content == "" ||
+			!utf8.ValidString(claim.Content) ||
+			len(claim.Content) > domain.MaxClaimTextBytes ||
+			(domain.ClaimText{Content: claim.Content}).ComputeDigest() != claim.Digest ||
+			!slices.Contains(envelope.Command.ArtifactDigests, claim.Digest) ||
+			(idx > 0 && claim.Digest <= previous) {
+			return domain.Command{}, nil, "", errRowInconsistent
+		}
+		inline[claim.Digest] = struct{}{}
+		previous = claim.Digest
+	}
+	sum := sha256.Sum256(body)
+	return envelope.Command, inline,
+		domain.Digest(fmt.Sprintf("sha256:%x", sum)), nil
+}
 
 // PutCommand records one accepted client decision as a write-once, immutable
 // row keyed by command_id (§5.14 ClientCommand; §5.9 effectively-once). Three
@@ -816,7 +886,7 @@ VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`
 // It is client-visible, so it must run inside Write (which bumps revision and
 // stamps as_of_revision, the row's recorded committed result).
 func (tx *WriteTx) PutCommand(ctx context.Context, command domain.Command) error {
-	body, err := encode(command)
+	commandBody, err := encode(command)
 	if err != nil {
 		return fmt.Errorf("put command %q: %w", command.CommandID, err)
 	}
@@ -825,7 +895,15 @@ func (tx *WriteTx) PutCommand(ctx context.Context, command domain.Command) error
 		return fmt.Errorf("put command %q: %w", command.CommandID, err)
 	}
 	if existing != nil {
-		if string(existing) == body {
+		stored, _, _, err := decodeStoredCommand(existing)
+		if err != nil {
+			return fmt.Errorf("put command %q: %w", command.CommandID, err)
+		}
+		storedBody, err := encode(stored)
+		if err != nil {
+			return fmt.Errorf("put command %q: %w", command.CommandID, err)
+		}
+		if storedBody == commandBody {
 			return nil
 		}
 		return fmt.Errorf("put command %q: %w", command.CommandID, ErrImmutableConflict)
@@ -853,9 +931,33 @@ func (tx *WriteTx) PutCommand(ctx context.Context, command domain.Command) error
 		return fmt.Errorf("put command %q: action %q not offered by item %q: %w",
 			command.CommandID, command.Action, command.ItemID, ErrActionNotOffered)
 	}
+	externallyBacked := make(map[domain.Digest]struct{},
+		len(item.EvidenceSnapshot)+len(item.AgentClaims))
+	for _, artifact := range item.EvidenceSnapshot {
+		externallyBacked[artifact.Digest] = struct{}{}
+	}
+	for _, claim := range item.AgentClaims {
+		if claim.Text == nil {
+			externallyBacked[claim.Digest] = struct{}{}
+		}
+	}
+	inlineOnly := make(map[domain.Digest]string, len(item.AgentClaims))
+	for _, claim := range item.AgentClaims {
+		if claim.Text == nil {
+			continue
+		}
+		if _, external := externallyBacked[claim.Digest]; external {
+			continue
+		}
+		inlineOnly[claim.Digest] = claim.Text.Content
+	}
+	body, bindingDigest, err := encodeStoredCommand(command, inlineOnly)
+	if err != nil {
+		return fmt.Errorf("put command %q backup binding: %w", command.CommandID, err)
+	}
 	if _, err := tx.tx.ExecContext(ctx, putCommandSQL,
 		command.CommandID, command.ItemID, command.ItemVersion, command.PRHeadSHA,
-		command.DeviceID, string(command.Action), tx.asOfRevision, body); err != nil {
+		command.DeviceID, string(command.Action), tx.asOfRevision, bindingDigest, body); err != nil {
 		return fmt.Errorf("put command %q: %w", command.CommandID, err)
 	}
 	return nil
@@ -873,24 +975,34 @@ func (tx *ReadTx) GetCommand(ctx context.Context, commandID string) (domain.Comm
 // carries the revision that transaction will commit as, so the fresh-accept
 // and retry paths read the result the same way.
 func (tx *ReadTx) GetCommandSnapshot(ctx context.Context, commandID string) (domain.Command, Snapshot, error) {
+	command, _, snap, err := tx.getStoredCommandSnapshot(ctx, commandID)
+	return command, snap, err
+}
+
+func (tx *ReadTx) getStoredCommandSnapshot(
+	ctx context.Context, commandID string,
+) (domain.Command, map[domain.Digest]struct{}, Snapshot, error) {
 	var (
-		itemID      string
-		itemVersion int
-		prHeadSHA   string
-		deviceID    string
-		action      string
-		snap        Snapshot
-		body        []byte
+		itemID              string
+		itemVersion         int
+		prHeadSHA           string
+		deviceID            string
+		action              string
+		backupBindingDigest domain.Digest
+		snap                Snapshot
+		body                []byte
 	)
 	err := tx.tx.QueryRowContext(ctx,
-		`SELECT item_id, item_version, pr_head_sha, device_id, action, entity_version, as_of_revision, body FROM commands WHERE command_id = ?`, commandID).
-		Scan(&itemID, &itemVersion, &prHeadSHA, &deviceID, &action, &snap.EntityVersion, &snap.AsOfRevision, &body)
+		`SELECT item_id, item_version, pr_head_sha, device_id, action, entity_version, as_of_revision, backup_binding_digest, body FROM commands WHERE command_id = ?`, commandID).
+		Scan(&itemID, &itemVersion, &prHeadSHA, &deviceID, &action,
+			&snap.EntityVersion, &snap.AsOfRevision, &backupBindingDigest, &body)
 	if err != nil {
-		return domain.Command{}, Snapshot{}, fmt.Errorf("get command %q: %w", commandID, notFoundOr(err))
+		return domain.Command{}, nil, Snapshot{},
+			fmt.Errorf("get command %q: %w", commandID, notFoundOr(err))
 	}
-	command, err := decode[domain.Command](body)
+	command, inline, computedBindingDigest, err := decodeStoredCommand(body)
 	if err != nil {
-		return domain.Command{}, Snapshot{}, fmt.Errorf("get command %q: %w", commandID, err)
+		return domain.Command{}, nil, Snapshot{}, fmt.Errorf("get command %q: %w", commandID, err)
 	}
 	// Every binding the store extracts into a column is cross-checked against the
 	// body: a forged row whose JSON disagrees with its authoritative columns (the
@@ -905,10 +1017,12 @@ func (tx *ReadTx) GetCommandSnapshot(ctx context.Context, commandID string) (dom
 		command.PRHeadSHA != prHeadSHA ||
 		command.DeviceID != domain.DeviceID(deviceID) ||
 		command.Action != domain.Action(action) ||
+		computedBindingDigest != backupBindingDigest ||
 		snap.EntityVersion != 1 || snap.AsOfRevision < 1 {
-		return domain.Command{}, Snapshot{}, fmt.Errorf("get command %q: %w", commandID, errRowInconsistent)
+		return domain.Command{}, nil, Snapshot{},
+			fmt.Errorf("get command %q: %w", commandID, errRowInconsistent)
 	}
-	return command, snap, nil
+	return command, inline, snap, nil
 }
 
 const putDeviceSQL = `
