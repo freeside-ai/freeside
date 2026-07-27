@@ -103,6 +103,44 @@ Cost accepted: two extra VMs per seeded handoff.
   unattended admission never requires it (#327, a contract unit plus a
   §5.7 amendment).
 
+### Fresh-context review round (pre-push)
+
+An independent refute-first pass found no blocking defect and five real
+ones, all fixed:
+
+- **Locale-dependent hex test in the observer.** A shell bracket range is
+  collated, not byte-valued, so under a UTF-8 locale `[!0-9a-f]` does not
+  reject `A`–`E`. Reproduced: `LC_ALL=en_US.UTF-8` attested forty
+  uppercase `A`s as a detached commit. `verifyBaseProof` re-tests
+  host-side, so nothing could have been accepted; the defect was that the
+  guest was strict only by accident of the pinned image's environment
+  while its comment claimed otherwise. Fixed by `LC_ALL=C` in the script.
+- **Verified one path, copied another.** `verifySeedSource` resolved the
+  source through symlinks; `seedWorkspace` staged the caller's unresolved
+  path, leaving containment advisory against a symlink swap. Fixed by
+  returning and staging the resolved path.
+- **Guest wait raced the host's copies.** The seeder's give-up budget
+  equalled one `SeedTimeout` while both host copies (bounded at
+  `SeedTimeout` each) happen after it starts, so a large legitimate copy
+  could trip a spurious refusal. Budget now exceeds the bounds it races.
+- **Fake modeled around the runtime rather than after it.** It ignored
+  `targetDir` and gated the silent discard on a manual flag, so a
+  regression aiming the staged copy into the mount would have passed CI
+  while seeding nothing. The discard is now derived from the container's
+  mounts; verified by inducing exactly that regression and watching the
+  ordering test fail with production's signature.
+- **Fake's unseeded observer produced no proof**, so the "copy succeeded
+  but seeded nothing" case exercised the missing-file branch instead of
+  the `git_dir=absent` branch production takes.
+
+Declined, with reasons: `$(cat)` drops NUL bytes, so a `.git/HEAD` of
+NUL + 40 hex would attest that SHA — it needs a hostile seed source that
+also matches the caller's declared base, which buys an attacker nothing
+the declaration did not already give them. And `WorkspaceRef` has no
+caller yet; it is the ward lane's published definition of
+`exec.StartSpec.Workspace`'s opaque shape, consumed by #237, not
+speculative surface.
+
 Revisit when the reference runtime changes `container copy`'s
 running-only requirement or its silent discard into a mount: both are
 load-bearing, and the second is the reason the attestation exists in this
