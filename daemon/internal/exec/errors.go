@@ -24,4 +24,24 @@ var (
 	ErrInvalidStatus = errors.New("invalid invocation status")
 	// ErrNonTerminalResult: a committed result must carry a terminal status.
 	ErrNonTerminalResult = errors.New("result status is not terminal")
+	// ErrInputSourceMissing: no content-addressed store was supplied.
+	ErrInputSourceMissing = errors.New("stage input source is missing")
+	// ErrInputBodyMissing: a source reported success without returning a body.
+	ErrInputBodyMissing = errors.New("stage input source returned no body")
+	// ErrInputLimitInvalid: a materialization byte limit is not positive.
+	ErrInputLimitInvalid = errors.New("stage input byte limit is invalid")
+	// ErrStageInputsMissing: a legacy admission has no materializable snapshot.
+	ErrStageInputsMissing = errors.New("stage input snapshot is missing")
+	// ErrInputTooLarge: one input or the aggregate exceeds its configured cap.
+	ErrInputTooLarge = errors.New("stage input exceeds materialization limit")
+	// ErrInputDigestMismatch: resolved bytes do not match the admitted digest.
+	ErrInputDigestMismatch = errors.New("stage input content does not match its admitted digest")
+	// ErrInputDigestInvalid: an admitted input is not a canonical sha256
+	// content address and therefore cannot be passed to a source.
+	ErrInputDigestInvalid = errors.New("stage input digest is not canonical sha256")
+	// ErrMaterializerMissing: the production driver adapter has no input
+	// materializer.
+	ErrMaterializerMissing = errors.New("stage input materializer is missing")
+	// ErrMaterializedDriverMissing: the adapter has no process-facing driver.
+	ErrMaterializedDriverMissing = errors.New("materialized stage driver is missing")
 )

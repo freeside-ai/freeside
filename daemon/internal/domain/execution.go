@@ -13,7 +13,10 @@ import (
 // ExecutionAdmission.ComputeID digests. A change to the encoding is a change
 // to every admission's identity, so it is versioned explicitly rather than
 // left implicit in the struct's field order.
-const admissionEncodingVersion = "freeside.execution.admission/v1"
+const (
+	admissionEncodingVersion      = "freeside.execution.admission/v1"
+	admissionInputEncodingVersion = "freeside.execution.admission/v2"
+)
 
 // digestPinnedImage binds an image reference to one full lowercase sha256
 // digest, not a tag or a merely digest-shaped prefix.
@@ -129,7 +132,11 @@ type ExecutionAdmission struct {
 	SpecDigest     Digest             `json:"spec_digest"`
 	PolicyDigest   Digest             `json:"policy_digest"`
 	InputDigest    Digest             `json:"input_digest"`
-	Base           BaseRevision       `json:"base"`
+	// StageInputs is nil on historical pre-materialization admissions. A real
+	// Phase 1A driver requires it: the snapshot binds every content role to
+	// the digest the materializer must verify before process start.
+	StageInputs *StageInputSnapshot `json:"stage_inputs,omitempty"`
+	Base        BaseRevision        `json:"base"`
 	// Workspace is an opaque workspace reference; the ward lane defines its
 	// shape (§5.7). It is recorded, never interpreted here.
 	Workspace string `json:"workspace"`
@@ -167,6 +174,7 @@ type ExecutionAdmissionInput struct {
 	SpecDigest             Digest
 	PolicyDigest           Digest
 	InputDigest            Digest
+	StageInputs            *StageInputSnapshot
 	Base                   BaseRevision
 	Workspace              string
 	AuthIdentityID         *AuthIdentityID
@@ -196,6 +204,7 @@ func NewExecutionAdmission(in ExecutionAdmissionInput) (ExecutionAdmission, erro
 		SpecDigest:             in.SpecDigest,
 		PolicyDigest:           in.PolicyDigest,
 		InputDigest:            in.InputDigest,
+		StageInputs:            cloneStageInputSnapshot(in.StageInputs),
 		Base:                   in.Base,
 		Workspace:              in.Workspace,
 		AuthIdentityID:         clonePtr(in.AuthIdentityID),
@@ -233,6 +242,7 @@ type canonicalAdmission struct {
 	SpecDigest             Digest                  `json:"spec_digest"`
 	PolicyDigest           Digest                  `json:"policy_digest"`
 	InputDigest            Digest                  `json:"input_digest"`
+	StageInputs            *StageInputSnapshot     `json:"stage_inputs,omitempty"`
 	Base                   BaseRevision            `json:"base"`
 	Workspace              string                  `json:"workspace"`
 	AuthIdentityID         *AuthIdentityID         `json:"auth_identity_id"`
@@ -246,8 +256,15 @@ type canonicalAdmission struct {
 // defensively so it is a true content address for any input; a value that also
 // passes Validate is already canonical.
 func (a ExecutionAdmission) ComputeID() (Digest, error) {
+	version := admissionEncodingVersion
+	var stageInputs *StageInputSnapshot
+	if a.StageInputs != nil {
+		version = admissionInputEncodingVersion
+		cloned := a.StageInputs.clone()
+		stageInputs = &cloned
+	}
 	body, err := json.Marshal(canonicalAdmission{
-		Version:                admissionEncodingVersion,
+		Version:                version,
 		InvocationID:           a.InvocationID,
 		RunID:                  a.RunID,
 		StageID:                a.StageID,
@@ -261,6 +278,7 @@ func (a ExecutionAdmission) ComputeID() (Digest, error) {
 		SpecDigest:             a.SpecDigest,
 		PolicyDigest:           a.PolicyDigest,
 		InputDigest:            a.InputDigest,
+		StageInputs:            stageInputs,
 		Base:                   a.Base,
 		Workspace:              a.Workspace,
 		AuthIdentityID:         a.AuthIdentityID,
@@ -323,6 +341,17 @@ func (a ExecutionAdmission) Validate() error {
 	if a.InputDigest == "" {
 		return fmt.Errorf("execution admission %s input_digest: %w", a.InvocationID, ErrEmptyField)
 	}
+	if a.StageInputs != nil {
+		if err := a.StageInputs.Validate(); err != nil {
+			return fmt.Errorf("execution admission %s: %w", a.InvocationID, err)
+		}
+		if a.StageInputs.InputDigest != a.InputDigest ||
+			a.StageInputs.SpecificationDigest != a.SpecDigest ||
+			a.StageInputs.PolicyDigest != a.PolicyDigest {
+			return fmt.Errorf("execution admission %s stage input bindings disagree: %w",
+				a.InvocationID, ErrParentKeyMismatch)
+		}
+	}
 	if err := a.Base.Validate(); err != nil {
 		return fmt.Errorf("execution admission %s: %w", a.InvocationID, err)
 	}
@@ -356,6 +385,14 @@ func (a ExecutionAdmission) Validate() error {
 			a.ID, computed, ErrAdmissionInconsistent)
 	}
 	return nil
+}
+
+func cloneStageInputSnapshot(in *StageInputSnapshot) *StageInputSnapshot {
+	if in == nil {
+		return nil
+	}
+	cloned := in.clone()
+	return &cloned
 }
 
 // validateAuthIdentity binds the provider identity to the egress profile: a

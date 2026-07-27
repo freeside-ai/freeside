@@ -84,6 +84,7 @@ var (
 	ErrImageNotDigestPinned     = errors.New("image reference is not pinned to a sha256 digest")
 	ErrAuthIdentityInconsistent = errors.New("auth identity is inconsistent with the stage's egress profile")
 	ErrExportBaseMismatch       = errors.New("observed export base does not match the admitted base")
+	ErrStageInputsNotCanonical  = errors.New("stage input snapshot must use canonical digest and array forms")
 
 	// Trust-boundary failures.
 	ErrPlaintextCredential         = errors.New("credential material must be a sha256 digest, never plaintext")
@@ -111,6 +112,7 @@ var (
 	ErrArtifactClosureIncomplete   = errors.New("backup artifact closure is incomplete")
 	ErrRestoreTestStale            = errors.New("backup restore test is stale")
 	ErrRepositoryIdentityMismatch  = errors.New("recorded repository identity does not match the repository's trusted profile")
+	ErrStageInputDigestMismatch    = errors.New("stage input snapshot digest does not match its content")
 	ErrNonWaivableFinding          = errors.New("finding class is non-waivable")
 	ErrAgentWaiver                 = errors.New("an agent cannot author a waiver")
 

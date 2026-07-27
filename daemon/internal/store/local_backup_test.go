@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -182,6 +183,108 @@ func TestLocalCheckpointHealthEvaluatesEveryDimension(t *testing.T) {
 	}
 	if health.RestoreTestAge != domain.BackupHealthUnhealthy {
 		t.Fatalf("restore-test age = %q, want unhealthy", health.RestoreTestAge)
+	}
+}
+
+func TestLocalCheckpointHealthIncludesEveryStageInputRole(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "freeside.db")
+	checkpointPath := filepath.Join(root, "checkpoint.db")
+	now := time.Date(2026, 7, 27, 4, 0, 0, 0, time.UTC)
+	digest := func(char string) domain.Digest {
+		return domain.Digest("sha256:" + strings.Repeat(char, 64))
+	}
+	specDigest := digest("1")
+	promptDigest := digest("2")
+	policyDigest := digest("3")
+	inputDigest := digest("4")
+	conversationDigest := digest("5")
+	priorDigest := digest("6")
+	imageDigest := digest("7")
+	stageInputs, err := domain.NewStageInputSnapshot(domain.StageInputSnapshotInput{
+		InputDigest:          inputDigest,
+		SpecificationDigest:  specDigest,
+		PromptPackageDigest:  promptDigest,
+		PolicyDigest:         policyDigest,
+		ConversationDigest:   &conversationDigest,
+		PriorArtifactDigests: []domain.Digest{priorDigest},
+		ImageInputDigests:    []domain.Digest{imageDigest},
+	})
+	if err != nil {
+		t.Fatalf("NewStageInputSnapshot: %v", err)
+	}
+	f := newAdmissionFixture(t, nil)
+	f.run.SpecDigest = specDigest
+	f.run.PolicyDigest = policyDigest
+	f.admission, err = domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: f.admission.InvocationID, RunID: f.admission.RunID,
+		StageID: f.admission.StageID, AttemptID: f.admission.AttemptID,
+		Backend: f.admission.Backend, Capabilities: f.admission.Capabilities,
+		OperatingMode: f.admission.OperatingMode, CredentialMode: f.admission.CredentialMode,
+		EgressProfile: f.admission.EgressProfile, ImageRef: f.admission.ImageRef,
+		SpecDigest: specDigest, PolicyDigest: policyDigest, InputDigest: inputDigest,
+		StageInputs: &stageInputs, Base: f.admission.Base, Workspace: f.admission.Workspace,
+		AuthIdentityID: f.admission.AuthIdentityID, AdmittedAt: f.admission.AdmittedAt,
+	})
+	if err != nil {
+		t.Fatalf("NewExecutionAdmission: %v", err)
+	}
+
+	stageInputDigests := []domain.Digest{
+		specDigest, promptDigest, policyDigest, conversationDigest, priorDigest, imageDigest,
+	}
+	artifacts := backupArtifactSet{}
+	for _, stageInputDigest := range stageInputDigests {
+		artifacts[stageInputDigest] = true
+	}
+	source, err := store.NewLocalCheckpointHealthSource(store.LocalCheckpointHealthOptions{
+		CheckpointPath:  checkpointPath,
+		RestoreTestPath: filepath.Join(root, "restore-test.db"),
+		Artifacts:       artifacts, ApprovedRecipes: approvedFixtureRecipes(),
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewLocalCheckpointHealthSource: %v", err)
+	}
+	s := openStoreAt(t, dbPath, store.Options{
+		AdmissionFloors: attendedFloors(), ApprovedRecipes: approvedFixtureRecipes(),
+		BackupHealthSource: source,
+	})
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, f.run); err != nil {
+			return err
+		}
+		return tx.RecordAuthIdentity(ctx, f.identity, admissionEpoch)
+	}); err != nil {
+		t.Fatalf("seed admission parents: %v", err)
+	}
+	if err := recordAdmission(t, s, f.admission); err != nil {
+		t.Fatalf("record admission: %v", err)
+	}
+	if err := s.Checkpoint(ctx, checkpointPath); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	writeCheckpointGeneratedAt(t, checkpointPath, now)
+
+	for _, missing := range stageInputDigests {
+		health, err := s.BackupHealth(ctx)
+		if err != nil {
+			t.Fatalf("BackupHealth with complete stage inputs: %v", err)
+		}
+		if health.ArtifactClosure != domain.BackupHealthHealthy {
+			t.Fatalf("complete stage input closure = %q, want healthy", health.ArtifactClosure)
+		}
+		artifacts[missing] = false
+		health, err = s.BackupHealth(ctx)
+		if err != nil {
+			t.Fatalf("BackupHealth missing %s: %v", missing, err)
+		}
+		if health.ArtifactClosure != domain.BackupHealthUnhealthy {
+			t.Fatalf("closure missing %s = %q, want unhealthy",
+				missing, health.ArtifactClosure)
+		}
+		artifacts[missing] = true
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -33,8 +34,12 @@ type AdmissionEnvironment struct {
 	CredentialMode domain.CredentialMode
 	EgressProfile  domain.EgressProfile
 	ImageRef       domain.ImageRef
-	Base           domain.BaseRevision
-	Workspace      string
+	// PromptPackageDigest is the trusted default-branch prompt artifact for
+	// every stage this environment admits. It is configuration because the
+	// prompt package is control-plane authority, not invocation-owned input.
+	PromptPackageDigest domain.Digest
+	Base                domain.BaseRevision
+	Workspace           string
 	// AuthIdentityID is the provider identity the stage runs under; nil only
 	// for a clean-verification stage, which reaches no provider.
 	AuthIdentityID *domain.AuthIdentityID
@@ -127,6 +132,10 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 		if now == nil {
 			return errors.New("with admission: nil clock")
 		}
+		if !contentaddr.Valid(string(env.PromptPackageDigest)) {
+			return fmt.Errorf("with admission: prompt package digest %q is not canonical",
+				env.PromptPackageDigest)
+		}
 		// Detached from the caller's values before they become live
 		// configuration: an environment or floor that followed later edits
 		// could weaken the gate, or retarget the credential and waiver
@@ -160,6 +169,11 @@ func (e *Engine) admitAttempt(
 		return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
 	}
 	env := e.admission.environment
+	stageInputs, err := e.stageInputSnapshot(ctx, binding, inputDigest)
+	if err != nil {
+		return domain.ExecutionAdmission{}, false, fmt.Errorf(
+			"admit invocation %q stage inputs: %w", invocationID, err)
+	}
 	// A mode that must be anchored to an approved trust profile records the
 	// exact revision it was admitted under, read here rather than configured:
 	// the operator activates revisions at runtime, and a configured digest
@@ -196,6 +210,7 @@ func (e *Engine) admitAttempt(
 		SpecDigest:             binding.run.SpecDigest,
 		PolicyDigest:           binding.run.PolicyDigest,
 		InputDigest:            inputDigest,
+		StageInputs:            &stageInputs,
 		Base:                   env.Base,
 		Workspace:              env.Workspace,
 		AuthIdentityID:         env.AuthIdentityID,
@@ -207,4 +222,69 @@ func (e *Engine) admitAttempt(
 		return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
 	}
 	return admission, true, nil
+}
+
+// imageInputArtifactType is the Phase 1 artifact vocabulary already used for
+// agent-produced image inputs. Other artifact types are prior artifacts.
+const imageInputArtifactType = "image"
+
+func (e *Engine) stageInputSnapshot(
+	ctx context.Context, binding invocationBinding, inputDigest domain.Digest,
+) (domain.StageInputSnapshot, error) {
+	priorArtifacts := make([]domain.Digest, 0, len(binding.invocation.InputIDs))
+	imageInputs := make([]domain.Digest, 0, len(binding.invocation.InputIDs))
+	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		for _, id := range binding.invocation.InputIDs {
+			artifact, err := tx.GetArtifact(ctx, id)
+			if err != nil {
+				return fmt.Errorf("resolve input artifact %q: %w", id, err)
+			}
+			if artifact.Type == imageInputArtifactType {
+				imageInputs = append(imageInputs, artifact.Digest)
+				continue
+			}
+			priorArtifacts = append(priorArtifacts, artifact.Digest)
+		}
+		return nil
+	}); err != nil {
+		return domain.StageInputSnapshot{}, err
+	}
+	var conversationDigest *domain.Digest
+	var conversationBody []byte
+	if binding.invocation.ConversationID != nil {
+		if binding.conversation.ID != *binding.invocation.ConversationID {
+			return domain.StageInputSnapshot{}, fmt.Errorf(
+				"conversation %q, invocation binds %q: %w",
+				binding.conversation.ID, *binding.invocation.ConversationID,
+				domain.ErrParentKeyMismatch)
+		}
+		digest, body, err := binding.conversation.PrefixContent(
+			binding.invocation.ThroughSequence)
+		if err != nil {
+			return domain.StageInputSnapshot{}, err
+		}
+		conversationDigest, conversationBody = &digest, body
+		for _, message := range binding.conversation.Messages[:binding.invocation.ThroughSequence] {
+			priorArtifacts = append(priorArtifacts, message.Attachments...)
+		}
+	}
+	snapshot, err := domain.NewStageInputSnapshot(domain.StageInputSnapshotInput{
+		InputDigest:          inputDigest,
+		SpecificationDigest:  binding.run.SpecDigest,
+		PromptPackageDigest:  e.admission.environment.PromptPackageDigest,
+		PolicyDigest:         binding.run.PolicyDigest,
+		ConversationDigest:   conversationDigest,
+		PriorArtifactDigests: priorArtifacts,
+		ImageInputDigests:    imageInputs,
+	})
+	if err != nil {
+		return domain.StageInputSnapshot{}, err
+	}
+	if conversationDigest != nil {
+		if err := e.signet.PutStageInput(ctx, *conversationDigest, conversationBody); err != nil {
+			return domain.StageInputSnapshot{}, fmt.Errorf(
+				"store conversation prefix %s: %w", *conversationDigest, err)
+		}
+	}
+	return snapshot, nil
 }

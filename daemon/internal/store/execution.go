@@ -50,6 +50,9 @@ FROM execution_admissions WHERE invocation_id = ?`
 	listRunExecutionAdmissionsSQL = `
 SELECT invocation_id, id, run_id, stage_id, attempt_id, operating_mode, auth_identity_id, admitted_at, body
 FROM execution_admissions WHERE run_id = ? ORDER BY rowid`
+	listExecutionAdmissionsSQL = `
+SELECT invocation_id, id, run_id, stage_id, attempt_id, operating_mode, auth_identity_id, admitted_at, body
+FROM execution_admissions ORDER BY rowid`
 
 	recordExecutionExportSQL = `
 INSERT INTO execution_exports
@@ -174,6 +177,21 @@ func (tx *ReadTx) ListRunExecutionAdmissions(ctx context.Context, runID domain.R
 // scan, decode, cross-check the extracted columns against the body, and
 // re-run the admission gate. Both the Get and the List go through it.
 func (tx *ReadTx) scanExecutionAdmission(ctx context.Context, row scanner) (domain.ExecutionAdmission, error) {
+	admission, err := scanExecutionAdmissionRecord(row)
+	if err != nil {
+		return domain.ExecutionAdmission{}, err
+	}
+	if err := tx.gateAdmission(ctx, admission); err != nil {
+		return domain.ExecutionAdmission{}, err
+	}
+	return admission, nil
+}
+
+// scanExecutionAdmissionRecord authenticates the durable record without
+// applying current admission policy. Backup closure uses this narrower
+// reconstruction because retired or currently refused admissions still name
+// blobs a restore must preserve.
+func scanExecutionAdmissionRecord(row scanner) (domain.ExecutionAdmission, error) {
 	var (
 		invocationID   string
 		id             string
@@ -200,9 +218,6 @@ func (tx *ReadTx) scanExecutionAdmission(ctx context.Context, row scanner) (doma
 		!authIdentityColumnEqual(authIdentityID, admission.AuthIdentityID) ||
 		!timeColumnEqual(admittedAt, admission.AdmittedAt) {
 		return domain.ExecutionAdmission{}, errRowInconsistent
-	}
-	if err := tx.gateAdmission(ctx, admission); err != nil {
-		return domain.ExecutionAdmission{}, err
 	}
 	return admission, nil
 }

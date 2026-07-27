@@ -1,6 +1,8 @@
 package signet
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -133,6 +135,25 @@ func (b *BlobStore) Put(digest domain.Digest, r io.Reader) (created bool, err er
 	return b.put(digest, r, b.syncDir)
 }
 
+// PutStageInput stores daemon-created canonical stage-input bytes through the
+// same durable content-addressed boundary as attachments. A canceled caller
+// never receives success; a blob completed concurrently with cancellation is
+// a harmless immutable orphan until an admission references it.
+func (s *Service) PutStageInput(
+	ctx context.Context, digest domain.Digest, body []byte,
+) error {
+	if s.blobs == nil {
+		return ErrAttachmentsUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := s.blobs.Put(digest, bytes.NewReader(body)); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
 func (b *BlobStore) put(
 	digest domain.Digest,
 	r io.Reader,
@@ -191,6 +212,18 @@ func (b *BlobStore) put(
 
 // Open returns a reader over the stored bytes; the caller closes it.
 func (b *BlobStore) Open(digest domain.Digest) (io.ReadCloser, error) {
+	return b.OpenContext(context.Background(), digest)
+}
+
+// OpenContext returns a reader over the stored bytes unless lookup was
+// canceled. The post-open check closes a file obtained concurrently with
+// cancellation rather than handing it to a caller whose operation has ended.
+func (b *BlobStore) OpenContext(
+	ctx context.Context, digest domain.Digest,
+) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	path, err := b.blobPath(digest)
 	if err != nil {
 		return nil, err
@@ -201,6 +234,9 @@ func (b *BlobStore) Open(digest domain.Digest) (io.ReadCloser, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("attachment %q: %w", digest, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Join(err, f.Close())
 	}
 	return f, nil
 }
