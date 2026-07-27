@@ -41,7 +41,7 @@ const gitHeadPath = ".git/HEAD"
 // The returned error is a CheckWorkspaceSeeding ConformanceFailure: by the time
 // the gate is reading the filesystem, a bad source is a failed seeding
 // assertion, not the syntactic caller error WorkspaceSeed.validate reports.
-func verifySeedSource(cfg Config, dir string) (resolvedDir, digest string, err error) {
+func verifySeedSource(cfg Config, dir, declaredRepo string) (resolvedDir, digest string, err error) {
 	if cfg.SeedRoot == "" {
 		return "", "", failf(CheckWorkspaceSeeding, "backend is not configured with a seed root")
 	}
@@ -148,7 +148,90 @@ func verifySeedSource(cfg Config, dir string) (resolvedDir, digest string, err e
 		return "", "", failf(CheckWorkspaceSeeding,
 			"seed source carries only a git directory: either its checkout was never materialized or the base commit's tree is empty")
 	}
+	// Last, because it is the only check that needs the declaration rather than
+	// the tree alone: the source must be the repository the caller named, not
+	// merely a well-formed checkout somewhere under the seed root.
+	if err := verifySeedRepoBinding(resolved, declaredRepo); err != nil {
+		return "", "", err
+	}
 	return resolved, treeDigest(lines, execPaths), nil
+}
+
+// The daemon-authored mark publish.Transport.FetchBase stamps into a checkout's
+// own config, naming the managed repository it was materialized from, and which
+// PushHead re-gates against before pushing. Ward re-gates against it too rather
+// than importing publish, which is another lane's package; the literal is
+// duplicated deliberately and a change to it must move both.
+const (
+	seedRepoBindingSection = `[freeside "transport"]`
+	seedRepoBindingName    = "repo"
+	maxGitConfigBytes      = 1 << 20
+)
+
+// verifySeedRepoBinding proves the checkout was materialized from the
+// repository the caller declared.
+//
+// Containment under SeedRoot is not enough on its own. A seed root holds
+// checkouts for every managed repository, and forks share commits, so a source
+// naming another repository whose HEAD happens to equal the declared SHA would
+// satisfy every other check here: the digest is computed from that same source,
+// so the observer would agree with it, and the writer would receive the wrong
+// repository's entire object database under a correct-looking base.
+//
+// The binding is read as text rather than through git, which ward may not
+// shell out to. Anything ambiguous is refused rather than resolved: an include
+// directive could define the key elsewhere, and a repeated key has no single
+// answer.
+func verifySeedRepoBinding(dir, declaredRepo string) error {
+	data, err := os.ReadFile(filepath.Join(dir, ".git", "config")) //nolint:gosec // inside the daemon's own seed root, already resolved and contained
+	if err != nil {
+		return failf(CheckWorkspaceSeeding, "seed source carries no readable git config to bind it to a repository")
+	}
+	if len(data) > maxGitConfigBytes {
+		return failf(CheckWorkspaceSeeding, "seed source git config exceeds the readable budget")
+	}
+	text := string(data)
+	// An include can define the binding in a file this check never reads, so a
+	// config carrying one cannot be evaluated here at all.
+	if strings.Contains(strings.ToLower(text), "[include") {
+		return failf(CheckWorkspaceSeeding, "seed source git config carries an include directive")
+	}
+
+	var values []string
+	inSection := false
+	for _, line := range strings.Split(text, "\n") {
+		t := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if strings.HasPrefix(t, "[") {
+			// Exact literal, not a case-folded match: git treats a subsection
+			// name case-sensitively, so accepting a differently-cased header
+			// would accept a section git itself considers a different one.
+			inSection = t == seedRepoBindingSection
+			continue
+		}
+		if !inSection || t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, ";") {
+			continue
+		}
+		name, value, ok := strings.Cut(t, "=")
+		if !ok || !strings.EqualFold(strings.TrimSpace(name), seedRepoBindingName) {
+			continue
+		}
+		values = append(values, strings.TrimSpace(value))
+	}
+
+	if len(values) != 1 {
+		return failf(CheckWorkspaceSeeding, "seed source git config does not carry exactly one repository binding")
+	}
+	// A quoted or continued value would need git's own unescaping to compare
+	// faithfully; refuse rather than approximate it.
+	if strings.ContainsAny(values[0], "\"\\") {
+		return failf(CheckWorkspaceSeeding, "seed source repository binding is quoted or escaped")
+	}
+	if values[0] != declaredRepo {
+		// Neither side is echoed: the bound value names a repository, and a
+		// refusal should not report which other repository the caller reached.
+		return failf(CheckWorkspaceSeeding, "seed source is bound to a different repository than the declared base")
+	}
+	return nil
 }
 
 // isUnderGitDir reports whether a source-relative path is the repository's own
@@ -235,7 +318,7 @@ func (b *Backend) seedWorkspace(ctx context.Context, hs HandoffSpec, names hando
 	// leave the containment check advisory: a symlink swapped in after the walk
 	// would re-point the copy at a tree nothing checked, and outside SeedRoot,
 	// which is the property the resolve exists to establish.
-	source, digest, err := verifySeedSource(b.cfg, hs.Seed.SourceDir)
+	source, digest, err := verifySeedSource(b.cfg, hs.Seed.SourceDir, hs.Seed.Base.Repo)
 	if err != nil {
 		return err
 	}

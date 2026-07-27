@@ -31,8 +31,20 @@ func testBaseRevision() domain.BaseRevision {
 // the base, no symlinks), which is the only shape the gate accepts.
 func writeSeedCheckout(t *testing.T, root, sha string) string {
 	t.Helper()
+	return writeSeedCheckoutFor(t, root, sha, testBaseRevision().Repo)
+}
+
+// writeSeedCheckoutFor is writeSeedCheckout bound to a named repository, so a
+// test can build the cross-repository source the binding check exists to
+// refuse. The config mirrors what publish.Transport.FetchBase stamps.
+func writeSeedCheckoutFor(t *testing.T, root, sha, repo string) string {
+	t.Helper()
 	dir := filepath.Join(root, "checkout")
 	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := "[core]\n\tbare = false\n[freeside \"transport\"]\n\trepo = " + repo + "\n"
+	if err := os.WriteFile(filepath.Join(dir, ".git", "config"), []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte(sha+"\n"), 0o600); err != nil {
@@ -42,6 +54,15 @@ func writeSeedCheckout(t *testing.T, root, sha string) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// writeGitConfig replaces a fixture checkout's config, so a test can shape the
+// daemon-authored repository binding the gate re-gates against.
+func writeGitConfig(t *testing.T, dir, contents string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, ".git", "config"), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestWorkspaceSeedValidate(t *testing.T) {
@@ -222,7 +243,7 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	dir := writeSeedCheckout(t, root, testBaseSHA)
 	cfg := testConfig()
 	cfg.SeedRoot = root
-	got, digest, err := verifySeedSource(cfg, dir)
+	got, digest, err := verifySeedSource(cfg, dir, testBaseRevision().Repo)
 	if err != nil {
 		t.Fatalf("verifySeedSource() = %v, want nil", err)
 	}
@@ -248,7 +269,7 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("tampered\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, changed, err := verifySeedSource(cfg, dir)
+	_, changed, err := verifySeedSource(cfg, dir, testBaseRevision().Repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +284,7 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho hi\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, plain, err := verifySeedSource(cfg, dir)
+	_, plain, err := verifySeedSource(cfg, dir, testBaseRevision().Repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +292,7 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	if err := os.Chmod(script, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, executable, err := verifySeedSource(cfg, dir)
+	_, executable, err := verifySeedSource(cfg, dir, testBaseRevision().Repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,6 +376,50 @@ func TestVerifySeedSourceFailsClosed(t *testing.T) {
 			}
 			return dir
 		}},
+		// The cross-repository case: a seed root holds every managed
+		// repository's checkout, and forks share commits, so another
+		// repository's checkout can carry the declared SHA and satisfy every
+		// tree-shaped check here. Only the daemon-authored binding separates
+		// them.
+		{"bound to a different repository", func(t *testing.T, root string, _ *Config) string {
+			return writeSeedCheckoutFor(t, root, testBaseSHA, "example/fork")
+		}},
+		{"no repository binding", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, "[core]\n\tbare = false\n")
+			return dir
+		}},
+		{"no git config at all", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			if err := os.Remove(filepath.Join(dir, ".git", "config")); err != nil {
+				t.Fatal(err)
+			}
+			return dir
+		}},
+		// An include could define the binding in a file this check never reads,
+		// so the config cannot be evaluated here at all.
+		{"config carries an include", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, "[include]\n\tpath = other\n[freeside \"transport\"]\n\trepo = "+testBaseRevision().Repo+"\n")
+			return dir
+		}},
+		{"binding repeated with conflicting values", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, "[freeside \"transport\"]\n\trepo = "+testBaseRevision().Repo+"\n\trepo = example/fork\n")
+			return dir
+		}},
+		// git treats a subsection name case-sensitively, so a differently-cased
+		// header is a different section and carries no binding at all.
+		{"binding under a differently cased subsection", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, "[freeside \"Transport\"]\n\trepo = "+testBaseRevision().Repo+"\n")
+			return dir
+		}},
+		{"binding commented out", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, "[freeside \"transport\"]\n\t# repo = "+testBaseRevision().Repo+"\n")
+			return dir
+		}},
 		{"no git head", func(t *testing.T, root string, _ *Config) string {
 			dir := writeSeedCheckout(t, root, testBaseSHA)
 			if err := os.Remove(filepath.Join(dir, ".git", "HEAD")); err != nil {
@@ -380,7 +445,7 @@ func TestVerifySeedSourceFailsClosed(t *testing.T) {
 			cfg := testConfig()
 			cfg.SeedRoot = root
 			dir := tc.build(t, root, &cfg)
-			got, digest, err := verifySeedSource(cfg, dir)
+			got, digest, err := verifySeedSource(cfg, dir, testBaseRevision().Repo)
 			wantCheckFailure(t, err, CheckWorkspaceSeeding)
 			if got != "" || digest != "" {
 				t.Errorf("rejected source still yielded path %q digest %q", got, digest)
