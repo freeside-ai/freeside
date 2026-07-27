@@ -43,7 +43,10 @@ func newLiveMinter(t *testing.T) (m *publish.Minter, repo string, profile domain
 	if os.Getenv("FREESIDE_PUBLISH_LIVE_TEST") != "1" {
 		t.Skip("live GitHub integration is opt-in: set FREESIDE_PUBLISH_LIVE_TEST=1, " +
 			"FREESIDE_PUBLISH_LIVE_APP_ID, FREESIDE_PUBLISH_LIVE_OWNER_ID, FREESIDE_PUBLISH_LIVE_KEY_PATH, " +
-			"FREESIDE_PUBLISH_LIVE_REPOSITORY_ID, FREESIDE_PUBLISH_LIVE_REPO (owner/name)")
+			"FREESIDE_PUBLISH_LIVE_REPOSITORY_ID, FREESIDE_PUBLISH_LIVE_REPO (owner/name); set " +
+			"FREESIDE_PUBLISH_LIVE_APP_VISIBILITY=public for any public App (default: private), and " +
+			"FREESIDE_PUBLISH_LIVE_APP_OWNER when the registration owner differs from the repo owner " +
+			"(default: the repo owner)")
 	}
 
 	appID := liveInt64(t, "FREESIDE_PUBLISH_LIVE_APP_ID")
