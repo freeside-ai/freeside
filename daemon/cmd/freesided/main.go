@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -38,6 +39,37 @@ const (
 	defaultFakeRunID     domain.RunID     = "run-walking-skeleton"
 	defaultFakeProjectID domain.ProjectID = "project-walking-skeleton"
 )
+
+type repositoryIDFlag struct {
+	value *int64
+}
+
+func (f *repositoryIDFlag) Set(value string) error {
+	repositoryID, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return fmt.Errorf("parse repository ID %q: %w", value, err)
+	}
+	if repositoryID <= 0 {
+		return fmt.Errorf("repository ID must be positive, got %d", repositoryID)
+	}
+	f.value = &repositoryID
+	return nil
+}
+
+func (f *repositoryIDFlag) String() string {
+	if f.value == nil {
+		return ""
+	}
+	return strconv.FormatInt(*f.value, 10)
+}
+
+func (f *repositoryIDFlag) Value() *int64 {
+	if f.value == nil {
+		return nil
+	}
+	value := *f.value
+	return &value
+}
 
 func main() {
 	flags := flag.NewFlagSet("freesided", flag.ContinueOnError)
@@ -62,6 +94,9 @@ func main() {
 	publicationProjectID := flags.String("publication-project-id", "project-fake-publication", "publication project id")
 	publicationTitle := flags.String("publication-title", "Publish attended fake candidate", "pull request title")
 	publicationBody := flags.String("publication-body", "", "pull request body")
+	var backupEncryptionWaiverRepositoryID repositoryIDFlag
+	flags.Var(&backupEncryptionWaiverRepositoryID, "backup-encryption-waiver-repository-id",
+		"temporary Phase 1A.2 backup-encryption waiver for this exact trusted numeric repository ID")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
@@ -94,6 +129,7 @@ func main() {
 	h, err := run(ctx, config{
 		DBPath: *dbPath, FakeDriverDir: *driverDir,
 		ListenAddr: *listenAddr, NtfyURL: *ntfyURL, ReconcileInterval: *interval,
+		BackupEncryptionWaiverRepositoryID: backupEncryptionWaiverRepositoryID.Value(),
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
@@ -114,11 +150,24 @@ func main() {
 }
 
 type config struct {
-	DBPath            string
-	FakeDriverDir     string
-	ListenAddr        string
-	NtfyURL           string
-	ReconcileInterval time.Duration
+	DBPath                             string
+	FakeDriverDir                      string
+	ListenAddr                         string
+	NtfyURL                            string
+	ReconcileInterval                  time.Duration
+	BackupEncryptionWaiverRepositoryID *int64
+}
+
+func (cfg config) storeOptions() (store.Options, error) {
+	if cfg.BackupEncryptionWaiverRepositoryID == nil {
+		return store.Options{}, nil
+	}
+	repositoryID := *cfg.BackupEncryptionWaiverRepositoryID
+	if repositoryID <= 0 {
+		return store.Options{}, fmt.Errorf(
+			"-backup-encryption-waiver-repository-id must be positive, got %d", repositoryID)
+	}
+	return store.Options{BackupEncryptionWaiverRepositoryID: &repositoryID}, nil
 }
 
 type readiness struct {
@@ -157,6 +206,10 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 	if cfg.NtfyURL == "" {
 		cfg.NtfyURL = defaultNtfyURL
 	}
+	storeOptions, err := cfg.storeOptions()
+	if err != nil {
+		return nil, err
+	}
 	_, statErr := os.Stat(cfg.DBPath)
 	storePreexisting := statErr == nil
 	if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
@@ -182,7 +235,7 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 		}
 	}()
 
-	st, err := store.Open(parent, cfg.DBPath, store.Options{})
+	st, err := store.Open(parent, cfg.DBPath, storeOptions)
 	if err != nil {
 		return nil, err
 	}

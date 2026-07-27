@@ -217,6 +217,64 @@ func TestRunValidatesConfiguration(t *testing.T) {
 	}
 }
 
+func TestConfigStoreOptions(t *testing.T) {
+	t.Parallel()
+	options, err := (config{}).storeOptions()
+	if err != nil {
+		t.Fatalf("storeOptions with no waiver: %v", err)
+	}
+	if options.BackupEncryptionWaiverRepositoryID != nil {
+		t.Fatalf("missing waiver configured repository %d", *options.BackupEncryptionWaiverRepositoryID)
+	}
+
+	repositoryID := int64(424242)
+	options, err = (config{BackupEncryptionWaiverRepositoryID: &repositoryID}).storeOptions()
+	if err != nil {
+		t.Fatalf("storeOptions with waiver: %v", err)
+	}
+	if options.BackupEncryptionWaiverRepositoryID == nil ||
+		*options.BackupEncryptionWaiverRepositoryID != repositoryID {
+		t.Fatalf("configured waiver = %v, want %d", options.BackupEncryptionWaiverRepositoryID, repositoryID)
+	}
+	repositoryID = 7
+	if *options.BackupEncryptionWaiverRepositoryID != 424242 {
+		t.Fatalf("configured waiver followed caller mutation: %d", *options.BackupEncryptionWaiverRepositoryID)
+	}
+
+	for _, invalid := range []int64{0, -1} {
+		invalid := invalid
+		if _, err := (config{BackupEncryptionWaiverRepositoryID: &invalid}).storeOptions(); err == nil {
+			t.Errorf("storeOptions accepted repository ID %d", invalid)
+		}
+	}
+}
+
+func TestRepositoryIDFlag(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"", "0", "-1", "repo", "9223372036854775808"} {
+		var flagValue repositoryIDFlag
+		if err := flagValue.Set(value); err == nil {
+			t.Errorf("Set(%q) succeeded", value)
+		}
+		if flagValue.Value() != nil {
+			t.Errorf("Set(%q) retained repository ID %d after rejection", value, *flagValue.Value())
+		}
+	}
+
+	var flagValue repositoryIDFlag
+	if err := flagValue.Set("424242"); err != nil {
+		t.Fatalf("Set(valid): %v", err)
+	}
+	got := flagValue.Value()
+	if got == nil || *got != 424242 {
+		t.Fatalf("Value() = %v, want 424242", got)
+	}
+	*got = 7
+	if reread := flagValue.Value(); reread == nil || *reread != 424242 {
+		t.Fatalf("Value() followed caller mutation: %v", reread)
+	}
+}
+
 func TestRunDrivesFakeWorkflow(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
