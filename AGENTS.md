@@ -168,7 +168,7 @@ The daemon (Wave 0 unit 1) and the API spec (Wave 0 unit 5) are initialized; the
 | `api/`        | OpenAPI (spec) | `go run github.com/daveshanley/vacuum@v0.29.9 lint -r api/vacuum.ruleset.yaml --details --fail-severity warn api/openapi.yaml` (from repo root; see api/README.md) |
 | `prompts/`    | prompt text    | not yet initialized; see docs/plan.md roadmap |
 | `policy/`     | YAML (policy)  | not yet initialized; see docs/plan.md roadmap |
-| `images/`     | OCI images     | `bash scripts/build-exporter-image.sh`; `bash scripts/build-agent-claude-image.sh` then `bash scripts/check-agent-image.sh <ref>` (both need Apple `container`, and the build needs container egress); `agent-codex` not yet initialized; per-project images are built by `freesided onboard`, not from this directory |
+| `images/`     | OCI images     | `bash scripts/build-exporter-image.sh`; `bash scripts/build-agent-claude-image.sh` then `bash scripts/check-agent-image.sh <ref>` (both need Apple `container`, and the build needs container egress); `agent-codex` not yet initialized; per-project images are runtime artifacts from the reusable builder (#334), manually proven before #237 and later invoked by `freesided onboard` (#238), not built from this directory |
 | `scripts/`    | Bash           | `bash -n scripts/*.sh app/scripts/*.sh`; `shellcheck scripts/*.sh app/scripts/*.sh`; `bash scripts/test-merge-result-audit.sh` (CI pins shellcheck in `.github/workflows/scripts-ci.yml`) |
 
 Lint/format and CI are established with the first component that carries code: the daemon does so here via `daemon/.golangci.yml` and `.github/workflows/daemon-ci.yml` (Linux runs build/test/vet/lint, macOS runs build/test). Later components add their own on the same pattern.

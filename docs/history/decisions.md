@@ -500,7 +500,7 @@ New in revision 17 (decider in parentheses):
    Rejected alternatives and revisit conditions live in the decision note.
    (User; devlog 2026-07-23-1932-movable-control-plane.md; #264.)
 
-## Revision 18 (current)
+## Revision 18
 
 Revision 18 scopes the §5.7 unattended backup-health gate for Phase 1A.2 so
 the first real unattended runs do not wait on the encrypted checkpoint,
@@ -528,3 +528,33 @@ New in revision 18 (decider in parentheses):
    serialized contract unit off the first real runs' critical path.
    Rejected alternatives and revisit conditions live in the decision note.
    (User; devlog 2026-07-26-0957-1a2-chain-repair.md; #305.)
+
+## Revision 19 (current)
+
+Revision 19 makes the measured golden-image shape canonical, repairs the
+project-image dependency order exposed by removing the checked-in stand-in, and
+aligns the first-repository criteria with the selected target.
+
+Held from revision 18: every decision.
+
+New in revision 19 (decider in parentheses):
+
+1. **Golden agent and project images share one ward-enforced realized shape.**
+   Image metadata may not alter that shape; project images bake the exact
+   repository dependency closure and trusted recipe configuration, prove that
+   recipe verbatim without network, and reach ward only through
+   registry-resolvable digest references. A build-time tag is a measured Apple
+   `container` 1.1.0 compatibility hop whose exact base digest is verified and
+   recorded, not execution authority.
+2. **The reusable project-image builder precedes and survives onboarding
+   packaging.** It is manually proven before #237's real runs, then #238 invokes
+   the same primitive. A checked-in image for one repository would import
+   another project's dependency churn; a second onboarding implementation
+   would let the proof and packaged behavior diverge.
+3. **The first repository is selected by behavior, not language.**
+   `freeasinbird/gh-imgup` remains the selected target because its authority is
+   representable, its trusted recipe can run offline, and it has ordinary work
+   for the gauntlet. The prior Go and `go test`/`go vet` wording was a stale
+   example, not an eligibility rule.
+   Rejected alternatives and revisit conditions live in the decision note.
+   (User; devlog 2026-07-26-2330-phase1a-image-order.md; #325, #337.)

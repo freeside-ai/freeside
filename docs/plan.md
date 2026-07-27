@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 18
+revision: 19
 status: active
 phase: 1A
 updated: 2026-07-26
@@ -605,6 +605,58 @@ weaker: release 1.1.0 exposes no host hot-detach, and a guest unmount is not a
 credential-device detach; the credential block device stays attached and
 remountable. Freeside must not implement or declare that class.
 
+#### Golden Agent and Project Images
+
+Golden images split into reusable agent bases, which carry a pinned vendor CLI,
+and project images, which add one managed repository's verification
+dependencies. A project image is still an agent image and must pass the same
+ward gate.
+
+The ward owns the realized launch shape; the contract is not the blanket
+absence of every OCI metadata key. No agent base or project image may contribute
+or inherit `ENV`, `WORKDIR`, `ENTRYPOINT`, `CMD`, `USER`, or `VOLUME` metadata
+that changes the required shape. Apple `container` 1.1.0 merges image
+environment and working-directory metadata into the created container and
+honors the other launch metadata. Before use, the image-side probe creates a
+container with a supplied command and no environment or mounts, then requires
+exactly the fixed `PATH`, `/` as the working directory, that supplied command,
+no mounts, no SSH forwarding, and no publications. Ward repeats the
+runtime-exposed checks against the full daemon specification before credentials
+enter or the container starts. The current inspect report exposes no user
+field, so source and build validation must also require the runtime-default root
+user for the root-owned workspace.
+
+Inherited base metadata such as the fixed `PATH`, or a default `CMD` that the
+daemon-supplied command replaces, is acceptable only when the probe proves the
+required realized shape. A derived project image is checked again; a compliant
+base does not make the extension trusted.
+
+A reusable builder consumes the canonical repository identity, an exact commit,
+and the trusted verification recipe. It derives a project image from the
+approved agent base, bakes the dependency closure and tool configuration as
+files, records the repository, commit, recipe, and base-image provenance, and
+returns a digest-pinned image reference. Per-project image definitions and
+copied dependency manifests do not live in the Freeside control-plane source.
+A changed dependency manifest therefore rebuilds the runtime artifact without a
+Freeside source change.
+
+The declared verification recipe runs verbatim with networking disabled. The
+builder proves both that this clean run passes and that the baked dependency
+material is load-bearing: a negative probe masks that material and must fail by
+attempting the registry or network access the positive run did not need. A
+candidate that changes the dependency closure beyond the baked inputs fails
+loudly and requires a new reviewed project image; verification never fetches a
+missing dependency.
+
+Every runnable agent-base and project-image reference is
+registry-resolvable `name@sha256:<digest>` and is admitted by digest, never by
+tag. A local content-store digest without a registry identity is not a runnable
+reference on Apple `container` 1.1.0. Where that runtime also cannot use a
+locally built `name@digest` as a build base, the builder may use a tag only for
+that build-time hop after verifying its digest, and must record the exact base
+digest in the derived image. The image supplied to ward remains a
+registry-resolved digest reference.
+
 #### Operating modes
 
 | Mode | Requirements and limits |
@@ -912,7 +964,7 @@ A run waiting overnight for a reviewer does not consume compute budget.
 waiting.
 
 ```yaml
-project:        {repository: freeside-ai/<first-repo>, rein: tight}
+project:        {repository: freeasinbird/gh-imgup, rein: tight}
 initiators:
   - {type: manual}                      # freesided submit --spec
   - {type: label, label: "freeside",
@@ -929,7 +981,9 @@ review:
   low_value_streak_before_attention: 2
   hard_active_time: 8h                  # active review/remediation clock
   hard_round_limit: 25                  # emergency brakes only
-verification:   {recipe: trusted, commands: [go test ./..., go vet ./...],
+verification:   {recipe: trusted,
+                 commands: [[npm, ci], [npm, run, lint],
+                            [npm, run, typecheck], [npm, test]],
                  capture: none}
 gates:          {spec_approval: true, before_final_review: true}
 budgets:        {stage_active_time: 45m,
@@ -1312,9 +1366,15 @@ Build the installer only after the underlying interfaces survive real use. The
 | Command | Function |
 | --- | --- |
 | `freesided setup` | Performs installation. Privileged steps run through a narrow elevation helper; the daemon never retains root. |
-| `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and builds the project image. If installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls; a callback or `--resume` reopens the same review after approval. |
+| `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and invokes the proven reusable project-image builder. If installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls; a callback or `--resume` reopens the same review after approval. |
 | `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, and restore-test age. It runs on a schedule and files `system_health` items. |
 | `freesided submit` | Starts a manually approved work item. |
+
+The project-image builder is an internal primitive, not an onboarding-only
+implementation. Phase 1A manually proves that primitive against the selected
+repository before the first real run, then `freesided onboard` packages the
+same primitive after the run path has survived real use. Onboarding must not
+carry a second image builder or a second copy of recipe semantics.
 
 ### GitHub App Agent Identity
 
@@ -1444,20 +1504,34 @@ Phase 1A exit targets, verified on a clean VM or spare machine:
 
 ## 11. Roadmap, build order, and coordination
 
-### The first repository is deliberately boring
+### The First Repository Is Deliberately Boring
 
 The first managed repository is **not Freeside**. Freeside often changes
 control-plane paths, so it is the hardest possible starting case. It becomes the
-bootstrap test after the path works.
+bootstrap test after the path works. The selected first target is
+`freeasinbird/gh-imgup`, a small TypeScript CLI. Language and toolchain are not
+selection criteria; the generic recipe and project-image model must verify the
+repository honestly.
 
-Choose a small Go service or library with:
+The selected repository must:
 
-- read-only PR tokens;
-- no OIDC, environment secrets, deployments, or self-hosted runners;
-- no UI screenshot requirement;
-- dependencies baked into the image;
-- direct `go test` and `go vet` verification; and
-- infrequent workflow or instruction-file changes.
+- have automation authority the current machine-readable `WorkflowAudit` and
+  `AutomationTrustProfile` can represent without repository-specific logic;
+- support deterministic, networkless clean verification through a trusted
+  recipe, with its toolchain and dependency closure baked into the project
+  image;
+- contain representative ordinary changes that can traverse the gauntlet
+  without inherently touching publish-blocking control-plane paths;
+- have enough genuine work for the several real items required by the 1A.2
+  exit; and
+- permit installation of the Freeside GitHub App and one-time human review of
+  the generated trust profile.
+
+Prefer, without requiring, a small code and dependency surface, fast direct
+verification commands, low PR-reachable automation authority, no UI evidence
+requirement, and infrequent workflow or instruction-file changes. Ordinary
+repository features such as tag-only release automation belong in the audited,
+digest-bound trust profile; they are not prose exceptions.
 
 ### Phase 1A: the secure publish path, in three internal exits
 
@@ -1516,21 +1590,27 @@ Exit requires:
 
 - green runner conformance, including the workspace-handoff gate;
 - no undeclared credential in any workspace;
+- the reusable project-image builder manually proven against the selected
+  repository at an exact commit and recipe, with its digest-pinned result
+  available to an admitted run;
 - several real work items completed without terminal intervention; and
-- `setup`, `onboard`, and `doctor` packaging the proven manual operations and
-  meeting the Section 10 targets.
+- `setup`, `onboard`, and `doctor` packaging the proven manual operations,
+  including that same project-image builder, and meeting the Section 10
+  targets.
 
-#### Phase 1A build order
+#### Phase 1A Build Order
 
 1. Domain, synchronization, devices, and fakes.
 2. Clients and the sixteen permanent tests.
 3. Export, gauntlet, and verifier with fake candidates; artifact store with
    checkpoint and provenance rules.
 4. Publication, reconciliation, and kill tests.
-5. ward and its handoff gate, then the Claude driver.
-6. Real work items.
-7. `setup`, `onboard`, and `doctor`.
-8. Phase exit.
+5. ward and its handoff gate, then the Claude agent base.
+6. The reusable project-image builder (#334), manually proven against the
+   selected repository.
+7. The Claude driver and real work items (#237), consuming that project image.
+8. `setup`, `onboard`, and `doctor` (#238), packaging the same builder.
+9. Phase exit.
 
 Investigate the workspace-handoff gate early and in parallel because it is the
 largest runtime unknown. It blocks only 1A.2, never 1A.0 or 1A.1.
@@ -1659,25 +1739,27 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 18:
+Revision 19:
 
-1. **The 1A.2 backup-health exception is a mechanical waiver, not prose.**
-   Unattended admission may waive only the encryption-state dimension of
-   backup health, with checkpoint currency, artifact closure, and
-   restore-test age still gating admission against the local owner-only
-   checkpoint (§5.10), only while an explicit operator-set
-   `backup_encryption_waiver` naming the exact trusted numeric repository ID
-   it covers is configured, the run targets exactly that repository, and the
-   build does not yet carry the encrypted,
-   digest-bound `BackupCheckpoint`; a build that carries it rejects the
-   waiver as invalid configuration, retiring the exception. Each waived
-   admission is recorded in the run's audit record and surfaced as a
-   `system_health` item the validated waiver configuration supersedes per
-   §4, visible but not blocking. The encrypted checkpoint must land before
-   the Phase 1A exit; the doctor packages its encryption check. Keeps a
-   serialized contract unit off the first real runs' critical path.
+1. **Golden agent and project images share one ward-enforced realized shape.**
+   Image metadata may not alter that shape; project images bake the exact
+   repository dependency closure and trusted recipe configuration, prove that
+   recipe verbatim without network, and reach ward only through
+   registry-resolvable digest references. A build-time tag is a measured Apple
+   `container` 1.1.0 compatibility hop whose exact base digest is verified and
+   recorded, not execution authority.
+2. **The reusable project-image builder precedes and survives onboarding
+   packaging.** It is manually proven before #237's real runs, then #238 invokes
+   the same primitive. A checked-in image for one repository would import
+   another project's dependency churn; a second onboarding implementation
+   would let the proof and packaged behavior diverge.
+3. **The first repository is selected by behavior, not language.**
+   `freeasinbird/gh-imgup` remains the selected target because its authority is
+   representable, its trusted recipe can run offline, and it has ordinary work
+   for the gauntlet. The prior Go and `go test`/`go vet` wording was a stale
+   example, not an eligibility rule.
    Rejected alternatives and revisit conditions live in the decision note.
-   (User; devlog 2026-07-26-0957-1a2-chain-repair.md; #305.)
+   (User; devlog 2026-07-26-2330-phase1a-image-order.md; #325, #337.)
 
 ## 14. Risks
 
