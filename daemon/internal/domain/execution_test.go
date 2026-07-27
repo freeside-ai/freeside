@@ -15,6 +15,17 @@ const testImage = "ghcr.io/freeside-ai/agent@sha256:abababababababababababababab
 
 func admissionInput() domain.ExecutionAdmissionInput {
 	identity := domain.AuthIdentityID("auth-1")
+	stageInputs, err := domain.NewStageInputSnapshot(domain.StageInputSnapshotInput{
+		InputDigest:          stageDigest("1"),
+		SpecificationDigest:  stageDigest("2"),
+		PromptPackageDigest:  stageDigest("3"),
+		PolicyDigest:         stageDigest("4"),
+		PriorArtifactDigests: []domain.Digest{stageDigest("5"), stageDigest("6")},
+		ImageInputDigests:    []domain.Digest{stageDigest("7")},
+	})
+	if err != nil {
+		panic(err)
+	}
 	return domain.ExecutionAdmissionInput{
 		InvocationID: "inv-1", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-1",
 		Backend: "fresh_vm_read_only_volume_handoff",
@@ -25,7 +36,8 @@ func admissionInput() domain.ExecutionAdmissionInput {
 		CredentialMode: domain.CredentialSubscriptionContained,
 		EgressProfile:  domain.EgressProviderOnly,
 		ImageRef:       testImage,
-		SpecDigest:     "sha256:spec", PolicyDigest: "sha256:policy", InputDigest: "sha256:input",
+		SpecDigest:     stageDigest("2"), PolicyDigest: stageDigest("4"), InputDigest: stageDigest("1"),
+		StageInputs:    &stageInputs,
 		Base:           domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
 		Workspace:      "ws-1",
 		AuthIdentityID: &identity,
@@ -87,12 +99,15 @@ func TestNewExecutionAdmissionDetachesCallerState(t *testing.T) {
 	waiver := domain.BackupEncryptionWaiver{RepositoryID: 424242, Reason: "supervised"}
 	in.Capabilities, in.AuthIdentityID = caps, &identity
 	in.TrustProfileDigest, in.BackupEncryptionWaiver = &profile, &waiver
+	inputs := *in.StageInputs
+	in.StageInputs = &inputs
 
 	a := mustAdmission(t, in)
 	caps[0] = domain.CapNetworklessExport
 	identity = "auth-other"
 	profile = "sha256:profile-v2"
 	waiver.RepositoryID = 9
+	in.StageInputs.PriorArtifactDigests[0] = "sha256:changed"
 
 	if a.Capabilities[0] != domain.CapDetachableWorkspace {
 		t.Errorf("capabilities followed the caller's slice: %v", a.Capabilities)
@@ -105,6 +120,9 @@ func TestNewExecutionAdmissionDetachesCallerState(t *testing.T) {
 	}
 	if *a.TrustProfileDigest != "sha256:profile-v1" {
 		t.Errorf("trust profile digest followed the caller's pointer: %q", *a.TrustProfileDigest)
+	}
+	if a.StageInputs.PriorArtifactDigests[0] != stageDigest("5") {
+		t.Errorf("stage inputs followed the caller's slice: %q", a.StageInputs.PriorArtifactDigests[0])
 	}
 	if err := a.Validate(); err != nil {
 		t.Errorf("detached record must still validate: %v", err)
@@ -138,6 +156,9 @@ func TestExecutionAdmissionTamperFailsClosed(t *testing.T) {
 		{"swapped image", func(a *domain.ExecutionAdmission) {
 			a.ImageRef = domain.ImageRef("evil/agent@sha256:" + strings.Repeat("ef", 32))
 		}, domain.ErrAdmissionInconsistent},
+		{"retargeted prompt", func(a *domain.ExecutionAdmission) {
+			a.StageInputs.PromptPackageDigest = stageDigest("f")
+		}, domain.ErrStageInputDigestMismatch},
 		{
 			// A waiver pasted onto an attended record is refused by the mode
 			// rule; the digest never gets a chance to disagree.
@@ -157,6 +178,14 @@ func TestExecutionAdmissionTamperFailsClosed(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tampered := a
+			if a.StageInputs != nil {
+				inputs := *a.StageInputs
+				inputs.PriorArtifactDigests = append(
+					[]domain.Digest{}, a.StageInputs.PriorArtifactDigests...)
+				inputs.ImageInputDigests = append(
+					[]domain.Digest{}, a.StageInputs.ImageInputDigests...)
+				tampered.StageInputs = &inputs
+			}
 			tc.edit(&tampered)
 			if err := tampered.Validate(); !errors.Is(err, tc.wantE) {
 				t.Fatalf("Validate() = %v, want %v", err, tc.wantE)
@@ -259,6 +288,26 @@ func TestExecutionAdmissionRejectsNonUTC(t *testing.T) {
 	a.AdmittedAt = a.AdmittedAt.In(time.FixedZone("UTC+2", 2*60*60))
 	if err := a.Validate(); !errors.Is(err, domain.ErrTimestampNotUTC) {
 		t.Fatalf("Validate() = %v, want %v", err, domain.ErrTimestampNotUTC)
+	}
+}
+
+func TestLegacyExecutionAdmissionRemainsReconstructable(t *testing.T) {
+	in := admissionInput()
+	in.StageInputs = nil
+	legacy := mustAdmission(t, in)
+	if legacy.StageInputs != nil {
+		t.Fatal("legacy admission unexpectedly carries stage inputs")
+	}
+	body, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reconstructed domain.ExecutionAdmission
+	if err := json.Unmarshal(body, &reconstructed); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconstructed.Validate(); err != nil {
+		t.Fatalf("legacy admission no longer reconstructs: %v", err)
 	}
 }
 

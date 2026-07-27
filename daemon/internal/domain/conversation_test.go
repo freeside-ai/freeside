@@ -3,11 +3,52 @@ package domain_test
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
+
+func TestConversationPrefixContentBindsExactMessageBytes(t *testing.T) {
+	at := time.Date(2026, 7, 27, 1, 2, 3, 0, time.UTC)
+	first, err := domain.NewMessage(
+		"m1", "conv-1", domain.AuthorUser, "first",
+		[]domain.Digest{stageDigest("a")}, at,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := domain.NewMessage(
+		"m2", "conv-1", domain.AuthorAgent, "later", nil, at.Add(time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation := domain.Conversation{ID: "conv-1", Status: domain.ConversationIdle}
+	conversation, _ = conversation.Append(first)
+	conversation, _ = conversation.Append(second)
+
+	digest, body, err := conversation.PrefixContent(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"body":"first"`) ||
+		strings.Contains(string(body), `"body":"later"`) {
+		t.Fatalf("prefix body = %s", body)
+	}
+	conversation.Status = domain.ConversationAwaitingAgent
+	again, sameBody, err := conversation.PrefixContent(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != digest || string(sameBody) != string(body) {
+		t.Fatal("conversation lifecycle state changed immutable prefix content")
+	}
+	if _, _, err := conversation.PrefixContent(3); err == nil {
+		t.Fatal("prefix beyond the recorded conversation succeeded")
+	}
+}
 
 // TestMessageSequenceDaemonAssigned is acceptance criterion 6: message sequence
 // is daemon-assigned. NewMessage takes no sequence (a fresh message is

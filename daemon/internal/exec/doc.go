@@ -17,6 +17,7 @@
 //
 //   - status.go      the shared invocation Status vocabulary
 //   - driver.go      StageDriver and its StartSpec/StageResult contract (§5.3)
+//   - materialize.go digest-verified immutable stage inputs
 //   - review.go      ReviewSource and its ReviewRequest/ReviewResult contract (§5.3)
 //   - capability.go  Capability, RunnerBackend, CheckCapabilities (§5.7)
 //   - errors.go      sentinel errors (wrapped with %w)

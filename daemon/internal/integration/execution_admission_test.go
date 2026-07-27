@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,8 @@ func admissionEnvironment() engine.AdmissionEnvironment {
 		CredentialMode: domain.CredentialSubscriptionContained,
 		EgressProfile:  domain.EgressProviderOnly,
 		ImageRef:       agentImage,
+		PromptPackageDigest: domain.Digest(
+			"sha256:037aa38647518d5b7d034a92109df888dda8247b1772d509e7c4d77b517ddacd"),
 		Base: domain.BaseRevision{
 			Repo: "freeside-ai/candidate-repo", RepositoryID: 424242,
 			BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
@@ -151,6 +154,30 @@ func TestAdmissionSnapshotPersistsWithTheAttempt(t *testing.T) {
 	if admission.AuthIdentityID == nil || *admission.AuthIdentityID != testIdentity.ID {
 		t.Errorf("recorded auth identity = %v, want %q", admission.AuthIdentityID, testIdentity.ID)
 	}
+	if admission.StageInputs == nil {
+		t.Fatal("recorded admission has no materializable stage inputs")
+	}
+	if admission.StageInputs.PromptPackageDigest != env.PromptPackageDigest ||
+		admission.StageInputs.SpecificationDigest != admission.SpecDigest ||
+		admission.StageInputs.PolicyDigest != admission.PolicyDigest ||
+		admission.StageInputs.InputDigest != admission.InputDigest {
+		t.Errorf("recorded stage inputs = %+v, want the admission's frozen input roles",
+			admission.StageInputs)
+	}
+	if admission.StageInputs.ConversationDigest == nil {
+		t.Fatal("conversation-bound admission has no materialized conversation prefix")
+	}
+	blobs, err := signet.NewBlobStore(filepath.Join(f.root, "blobs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix, err := blobs.Open(*admission.StageInputs.ConversationDigest)
+	if err != nil {
+		t.Fatalf("open admitted conversation prefix: %v", err)
+	}
+	if err := prefix.Close(); err != nil {
+		t.Fatalf("close admitted conversation prefix: %v", err)
+	}
 
 	// The attempt the record claims is the attempt the run carries.
 	run, err := f.signet.GetRun(ctx, testRunID)
@@ -168,7 +195,7 @@ func TestAdmissionSnapshotPersistsWithTheAttempt(t *testing.T) {
 	if !ok {
 		t.Fatal("driver recorded no start spec")
 	}
-	if spec != exec.StartSpecFromAdmission(admission) {
+	if !reflect.DeepEqual(spec, exec.StartSpecFromAdmission(admission)) {
 		t.Fatalf("start spec = %+v, want the admission's spec %+v", spec, exec.StartSpecFromAdmission(admission))
 	}
 }
@@ -356,7 +383,7 @@ func TestReplayWithoutAdmissionConfigStillUsesTheRecord(t *testing.T) {
 	if !ok {
 		t.Fatal("replay did not start the driver")
 	}
-	if spec != exec.StartSpecFromAdmission(stored) {
+	if !reflect.DeepEqual(spec, exec.StartSpecFromAdmission(stored)) {
 		t.Fatalf("started under %+v, want the stored admission's spec %+v",
 			spec, exec.StartSpecFromAdmission(stored))
 	}
@@ -410,7 +437,7 @@ func TestReplayUnderADegradedBackendUsesTheRecord(t *testing.T) {
 	if !ok {
 		t.Fatal("replay did not start the driver")
 	}
-	if spec != exec.StartSpecFromAdmission(stored) {
+	if !reflect.DeepEqual(spec, exec.StartSpecFromAdmission(stored)) {
 		t.Fatalf("started under %+v, want the stored admission's spec %+v",
 			spec, exec.StartSpecFromAdmission(stored))
 	}

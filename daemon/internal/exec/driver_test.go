@@ -10,8 +10,25 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
 
+func execStageDigest(fill string) domain.Digest {
+	return domain.Digest("sha256:" + strings.Repeat(fill, 64))
+}
+
 func fullAdmission(t *testing.T, identity *domain.AuthIdentityID, egress domain.EgressProfile) domain.ExecutionAdmission {
 	t.Helper()
+	conversationDigest := execStageDigest("7")
+	stageInputs, err := domain.NewStageInputSnapshot(domain.StageInputSnapshotInput{
+		InputDigest:          execStageDigest("1"),
+		SpecificationDigest:  execStageDigest("2"),
+		PromptPackageDigest:  execStageDigest("3"),
+		PolicyDigest:         execStageDigest("4"),
+		ConversationDigest:   &conversationDigest,
+		PriorArtifactDigests: []domain.Digest{execStageDigest("5")},
+		ImageInputDigests:    []domain.Digest{execStageDigest("6")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	a, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
 		InvocationID: "inv-1", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-1",
 		Backend:        "fresh_vm_read_only_volume_handoff",
@@ -20,7 +37,8 @@ func fullAdmission(t *testing.T, identity *domain.AuthIdentityID, egress domain.
 		CredentialMode: domain.CredentialSubscriptionContained,
 		EgressProfile:  egress,
 		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
-		SpecDigest:     "sha256:spec", PolicyDigest: "sha256:policy", InputDigest: "sha256:input",
+		SpecDigest:     execStageDigest("2"), PolicyDigest: execStageDigest("4"), InputDigest: execStageDigest("1"),
+		StageInputs:    &stageInputs,
 		Base:           domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
 		Workspace:      "ws-1",
 		AuthIdentityID: identity,
@@ -70,5 +88,19 @@ func TestStartSpecFromAdmissionWithoutIdentity(t *testing.T) {
 	}
 	if spec.EgressProfile != domain.EgressCleanVerification {
 		t.Fatalf("spec egress_profile = %q, want %q", spec.EgressProfile, domain.EgressCleanVerification)
+	}
+}
+
+func TestStartSpecFromAdmissionDetachesStageInputs(t *testing.T) {
+	identity := domain.AuthIdentityID("auth-1")
+	admission := fullAdmission(t, &identity, domain.EgressProviderOnly)
+	spec := exec.StartSpecFromAdmission(admission)
+	*admission.StageInputs.ConversationDigest = execStageDigest("f")
+	admission.StageInputs.PriorArtifactDigests[0] = "sha256:changed"
+	admission.StageInputs.ImageInputDigests[0] = "sha256:changed"
+	if *spec.StageInputs.ConversationDigest != execStageDigest("7") ||
+		spec.StageInputs.PriorArtifactDigests[0] != execStageDigest("5") ||
+		spec.StageInputs.ImageInputDigests[0] != execStageDigest("6") {
+		t.Fatal("start spec followed mutable admission slice storage")
 	}
 }

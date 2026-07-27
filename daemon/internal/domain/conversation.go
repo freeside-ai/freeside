@@ -163,6 +163,39 @@ func (c Conversation) Validate() error {
 	return nil
 }
 
+const conversationPrefixEncodingVersion = "freeside.conversation.prefix/v1"
+
+type canonicalConversationPrefix struct {
+	Version         string         `json:"version"`
+	ConversationID  ConversationID `json:"conversation_id"`
+	ThroughSequence int            `json:"through_sequence"`
+	Messages        []Message      `json:"messages"`
+}
+
+// PrefixContent returns the canonical bytes and content digest of messages
+// 1..through. Status is excluded: an invocation binds an immutable message
+// prefix, not the conversation's later lifecycle state.
+func (c Conversation) PrefixContent(through int) (Digest, []byte, error) {
+	if err := c.Validate(); err != nil {
+		return "", nil, err
+	}
+	if through < 1 || through > len(c.Messages) {
+		return "", nil, fmt.Errorf(
+			"conversation %s prefix through_sequence %d outside 1..%d: %w",
+			c.ID, through, len(c.Messages), ErrNonPositiveSeq)
+	}
+	body, err := json.Marshal(canonicalConversationPrefix{
+		Version:         conversationPrefixEncodingVersion,
+		ConversationID:  c.ID,
+		ThroughSequence: through,
+		Messages:        c.Messages[:through],
+	})
+	if err != nil {
+		return "", nil, fmt.Errorf("conversation %s prefix: %w", c.ID, err)
+	}
+	return Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body))), body, nil
+}
+
 // AgentInvocation binds an agent turn to the explicit immutable inputs it was
 // given (plan §5.14): input artifact IDs, a conversation's immutable message
 // prefix, or both — never live state — so a run is reproducible from its

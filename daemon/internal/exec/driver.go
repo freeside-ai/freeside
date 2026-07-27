@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -52,8 +53,8 @@ type StartSpec struct {
 	// AttemptID names the attempt row this start belongs to, so a recovering
 	// daemon rejoins a spec to its attempt without scanning the run body.
 	AttemptID domain.AttemptID `json:"attempt_id"`
-	// InputDigest is the content address of the stage's input bundle (spec,
-	// prompt, and prior artifacts are bound by digest, §5.9).
+	// InputDigest is the logical invocation binding. StageInputs separately
+	// content-addresses every materialized role that realizes that binding.
 	InputDigest domain.Digest `json:"input_digest"`
 	// SpecDigest and PolicyDigest are the trusted configuration this stage
 	// runs under (§5.8). A driver holds no store handle, so they arrive here
@@ -80,6 +81,10 @@ type StartSpec struct {
 	// AdmissionID is the content address of the admission record this start
 	// was authorized by, so driver-side logs join to the audit row.
 	AdmissionID domain.Digest `json:"admission_id"`
+	// StageInputs freezes every content role the real driver may consume.
+	// Historical walking-skeleton admissions leave it nil and cannot pass the
+	// production materializer.
+	StageInputs *domain.StageInputSnapshot `json:"stage_inputs,omitempty"`
 }
 
 // StartSpecFromAdmission renders the durable admission record as the spec its
@@ -101,11 +106,26 @@ func StartSpecFromAdmission(a domain.ExecutionAdmission) StartSpec {
 		CredentialMode: a.CredentialMode,
 		EgressProfile:  a.EgressProfile,
 		AdmissionID:    a.ID,
+		StageInputs:    cloneStageInputSnapshot(a.StageInputs),
 	}
 	if a.AuthIdentityID != nil {
 		spec.AuthIdentityID = *a.AuthIdentityID
 	}
 	return spec
+}
+
+func cloneStageInputSnapshot(in *domain.StageInputSnapshot) *domain.StageInputSnapshot {
+	if in == nil {
+		return nil
+	}
+	cloned := *in
+	if in.ConversationDigest != nil {
+		digest := *in.ConversationDigest
+		cloned.ConversationDigest = &digest
+	}
+	cloned.PriorArtifactDigests = slices.Clone(in.PriorArtifactDigests)
+	cloned.ImageInputDigests = slices.Clone(in.ImageInputDigests)
+	return &cloned
 }
 
 // StartSpec deliberately has no Validate method, unlike the other serialized
