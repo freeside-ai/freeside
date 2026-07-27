@@ -170,6 +170,12 @@ func runFakePublicationCommand(
 	publisher := publish.NewPublisher(
 		tokens, client, defaultGitHubAPIBase, auditor, ledger, trust, authz,
 	)
+	// Claim the transport's single publication authority for this
+	// publisher: from here on its gate verdicts are the only ones that
+	// transport's PushHead honours, and the claim cannot be displaced.
+	if err := gitTransport.AuthorizePublisher(publisher); err != nil {
+		return fakePublicationCommandResult{}, err
+	}
 	workflow, err := engine.New(
 		st, attention, autoScriptStageDriver{StageDriver: driver},
 		engine.WithFakePublication(engine.FakePublicationConfig{

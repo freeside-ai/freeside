@@ -52,7 +52,7 @@ func TestTransportLeavesNoTokenOnDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 	head := candidateHead(t, co)
-	if _, err := remote.transport.PushHead(t.Context(), co, testIdentityInput(remote.repo, head)); err != nil {
+	if _, err := remote.transport.PushHead(t.Context(), co, testGatedHead(t, remote.transport, testIdentityInput(remote.repo, head))); err != nil {
 		t.Fatal(err)
 	}
 	scanTreeForTokenForms(t, co.Dir())
@@ -131,7 +131,7 @@ func TestPushRefusesRedirectingCheckoutConfig(t *testing.T) {
 			head := candidateHead(t, co)
 			mints := counter.mints
 			gitOut(t, co.Dir(), "config", "--local", key, value)
-			if _, err := tr.PushHead(t.Context(), co, testIdentityInput(remote.repo, head)); err == nil {
+			if _, err := tr.PushHead(t.Context(), co, testGatedHead(t, tr, testIdentityInput(remote.repo, head))); err == nil {
 				t.Fatalf("PushHead ran against a checkout carrying %s", key)
 			}
 			if counter.mints != mints {
@@ -194,7 +194,7 @@ func TestPushRefusesCheckoutFromAnotherTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 	head := candidateHead(t, co)
-	if _, err := remote.transport.PushHead(t.Context(), co, testIdentityInput(remote.repo, head)); err == nil {
+	if _, err := remote.transport.PushHead(t.Context(), co, testGatedHead(t, remote.transport, testIdentityInput(remote.repo, head))); err == nil {
 		t.Error("PushHead accepted a checkout minted by a different transport instance")
 	}
 	if refs := gitOut(t, remote.bare, "for-each-ref", "--format=%(refname)"); refs != "refs/heads/main" {

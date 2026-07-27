@@ -130,6 +130,27 @@ func TestDeriveIdentityValidation(t *testing.T) {
 	}
 }
 
+// TestZeroIdentityNamesNoBranch: an Identity that DeriveIdentity never
+// produced holds no digest to slice, and BranchName must say so rather
+// than panic. Two exported paths hand one to a caller outside the
+// package — DeriveIdentity returns it alongside its error, and
+// GatedHead.Identity reads it out of an unminted capability — so the
+// crash would be reachable from any consumer that ignored an error or
+// held the zero capability.
+func TestZeroIdentityNamesNoBranch(t *testing.T) {
+	if got := (publish.Identity{}).BranchName(); got != "" {
+		t.Errorf("zero Identity branch = %q, want empty", got)
+	}
+	if got := (publish.GatedHead{}).Identity().BranchName(); got != "" {
+		t.Errorf("ungated head branch = %q, want empty", got)
+	}
+	// The empty name is not merely non-panicking: every branch gate must
+	// refuse it, so it cannot become a ref.
+	if err := publish.ValidateBranchName(""); err == nil {
+		t.Error("empty branch name accepted by the branch gate")
+	}
+}
+
 // TestParseMarker covers the round trip and the adversarial input
 // space of a returned PR body: absent, malformed, truncated,
 // wrong-case, and conflicting markers all fail closed.

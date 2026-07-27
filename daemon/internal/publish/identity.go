@@ -140,8 +140,16 @@ func DeriveIdentity(in IdentityInput) (Identity, error) {
 func (id Identity) Digest() domain.Digest { return id.digest }
 
 // BranchName returns the deterministic publication branch for this
-// identity: branchPrefix plus the digest's leading hex digits.
+// identity: branchPrefix plus the digest's leading hex digits. An
+// Identity that DeriveIdentity never produced names no branch and
+// returns "", which every branch gate refuses; it must not panic on the
+// short slice. The zero value is reachable from outside the package —
+// DeriveIdentity returns it alongside its error, and it is what
+// GatedHead.Identity reads out of an unminted capability.
 func (id Identity) BranchName() string {
+	if !validIdentityDigest(string(id.digest)) {
+		return ""
+	}
 	hexPart := strings.TrimPrefix(string(id.digest), "sha256:")
 	return branchPrefix + hexPart[:branchDigestHexLen]
 }
