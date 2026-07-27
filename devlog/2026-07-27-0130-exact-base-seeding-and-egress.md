@@ -208,6 +208,134 @@ plus a third digest dimension agreed between Go and BusyBox, which is a
 unit, not an amendment. #339 carries the finding so it is not
 rediscovered.
 
+### Codex Review Rounds 5-7
+
+Round 5 found a real bug in round 3's own fix: the guest budget converted
+to `sleep 1` ticks by truncation, so a 600ms `SeedTimeout` collapsed a
+1.8s budget to one tick and reinstated the sentinel race. Rounds up now,
+pinned by a table, and the test was proven to catch it by restoring the
+truncation.
+
+Round 6 found that pruning `./lost+found` by name made a repository that
+legitimately tracks one permanently unseedable. Fixed by deleting the
+special case rather than refining it: the seeder clears the filesystem's
+own copy before staging, so the observer digests the whole workspace.
+That also closed a blind spot where anything under that path was
+invisible to the attestation.
+
+Round 7 re-raised the tree-fidelity boundary as P1 with a sharper
+consequence, and the consequence is verified: `deriveChanges` computes
+against the trusted base tree, so a source that is already dirty has its
+pre-existing omission derived as a deletion **the agent made**, and it
+becomes publishable as agent output.
+
+That remains #330, on mechanism rather than scope. There is no git in the
+observer image, ward may not shell out to git on the host (`CLIRuntime`
+is the package's only `os/exec` user), and computing tree hashes in Go
+would require parsing loose objects and packfiles out of `.git`. What
+changed in response: `WorkspaceObservation.Seeded` now states what it does
+not assert, and #330 is recorded as **blocking #237's use of seeding**
+rather than a loose follow-up. Nothing is exposed by merging, since
+`Handoff` has no production caller yet.
+
+### Refute-First Review Rounds 8-16
+
+The later review rounds moved the source check from a sequence of facts
+about a mutable pathname to one stable object:
+
+- A gate-owned snapshot is now the only tree copied into the seeder.
+  Rechecking the source and then copying it still left a whole-tree swap
+  window; snapshotting first and attesting the snapshot removes it.
+- Each source file is opened with no-follow semantics, then classified
+  and copied from that descriptor. Trusting the earlier walk entry let a
+  regular file be replaced with a symlink between classification and
+  open.
+- Traversal is rooted in an `os.Root` descriptor, including the initial
+  `SeedRoot` anchor. Opening the source first and checking where it
+  resolved still let the root path itself be swapped before its
+  descriptor was acquired.
+- The snapshot re-gates the daemon-authored repository binding rather
+  than accepting containment under a multi-repository seed root as
+  repository identity. The binding is now the canonical pair:
+  owner/name from local config and the positive forge repository ID from
+  `.git/freeside-repository-id`. #330's checkout materialization must
+  stamp the ID from the trusted admission binding; it must not copy it
+  from agent-controlled state.
+
+The automated review then found that the local-config parser recognized
+only the producer's exact `[freeside "transport"]` spelling even though
+Git folds section and key names. A later
+`[FREESIDE "transport"]` entry could therefore change Git's value while
+the ward saw one good binding. The parser now mirrors Git's case rules,
+recognizes the deprecated dotted section spelling, and counts a
+key-without-`=` as Git's implicit boolean value so every duplicate is
+refused.
+
+The next pass found the remaining alias class: Git removes backslashes
+from quoted subsection names, so `[freeside "trans\port"]` is another
+spelling of the target section. The daemon-authored config needs no
+escaped section header, including in unrelated sections, so the gate now
+refuses any such header rather than implementing an unescape grammar one
+alias at a time.
+
+Round 14 found that the observer validated HEAD's shape only after shell
+command substitution had materialized the whole file. The global seed
+budget still allowed a corrupted HEAD hundreds of MiB large, enough to
+OOM the constrained observer before the categorical rejection. The
+gate-owned snapshot is immutable by this point, so staging now refuses a
+regular `.git/HEAD` larger than 41 bytes (one SHA-1 plus Git's newline)
+before any VM sees it.
+
+Round 15 found that the repository-binding check ignored every local Git
+configuration key outside its own section, then copied that config into the
+credential-bearing writer. A corrupted checkout could therefore disclose an
+authorization header or helper before post-run scanning. Ward now mirrors the
+publishing lane's exact daemon-authored key allowlist and reports rejected
+configuration categorically, without echoing a key or value. Adversarial cases
+cover HTTP headers, credential helpers, URL rewrites, and an unknown core key.
+
+Round 16 found that a name-only allowlist still preserved arbitrary values and
+ignored text. A credential hidden in an otherwise allowed value or comment
+would therefore reach the writer. Ward now validates each allowed key's
+daemon-authored value domain, rejects duplicates and `core.worktree`, and
+rebuilds a canonical comment-free config before computing the snapshot digest.
+Tests prove a secret-bearing allowed value and inline comment are refused,
+full-line and section comments are removed, and the observer digest covers the
+rewritten file.
+
+### Pre-Handoff Review Findings
+
+Two additional defects were confirmed before the next automated pass:
+
+- `Suite.Full` described itself as exercising the whole handoff while
+  forcing `SeedBlank`. Startup and configuration-change conformance
+  could therefore stay green with a broken copy command, seeder, or
+  observer. `SuiteFixture` now requires a real `base_checkout` seed, the
+  synthetic handoff observes it before the writer, and the suite-owned
+  writer clears that disposable tree before emitting its exact two-file
+  export oracle. A negative test breaks the workspace copy and proves
+  Full fails under `workspace_seeding`.
+- The live runtime test ran two proof-negative cases through one
+  observer name. A proof rejection intentionally leaves the observer for
+  outer teardown, so the second call could fail at create-time on the
+  surviving name and still satisfy the broad check-class assertion. The
+  test now proves the first negative reached an owned observer, deletes
+  it, resets the claim, and proves the second negative also reached its
+  observer.
+
+Accepted boundary, made explicit: `os.Root` anchors pathname traversal
+but does not make a filesystem mount namespace immutable. The seed root
+is daemon-owned and the agent VM has no host mount authority; a local
+principal able to replace mounts inside that root already controls the
+daemon's host trust boundary. Revisit if seed roots become writable or
+mountable by a less-trusted principal, at which point mount-ID or
+same-filesystem enforcement becomes part of the gate rather than a
+pathname check.
+
+**Revisit when** the observer image gains git: #330 and #339 both become
+tractable, and the `worktreeFiles == 0` heuristic can be replaced by a
+real tree comparison.
+
 Declined, with reasons: `$(cat)` drops NUL bytes, so a `.git/HEAD` of
 NUL + 40 hex would attest that SHA — it needs a hostile seed source that
 also matches the caller's declared base, which buys an attacker nothing
