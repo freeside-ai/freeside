@@ -1,0 +1,341 @@
+package store_test
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
+)
+
+// unattendedAdmissionFixture is the waived unattended admission the §5.7
+// operating-state tests start from: the same run/identity fixture, admitted
+// unattended under the Phase 1A.2 waiver and the active trust profile.
+func unattendedAdmissionFixture(t *testing.T) admissionFixture {
+	t.Helper()
+	activeProfile := testTrustProfile(t, "owner/repo", 424242).ProfileDigest
+	return newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
+		in.OperatingMode = domain.ModeUnattended
+		in.Capabilities = domain.NewCapabilitySnapshot(domain.AllRunnerCapabilities...)
+		in.TrustProfileDigest = &activeProfile
+		in.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
+			RepositoryID: 424242, Reason: "phase 1a.2 supervised runs",
+		}
+	})
+}
+
+// unattendedOptions is the operator configuration under which the fixture
+// admission is valid on its own merits, so a refusal in these tests isolates
+// the operating-state gate rather than a missing floor or waiver.
+func unattendedOptions() store.Options {
+	configured := int64(424242)
+	return store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+			domain.ModeUnattended:  domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+		ApprovedCredentialModes:            []domain.CredentialMode{domain.CredentialSubscriptionContained},
+		BackupEncryptionWaiverRepositoryID: &configured,
+		BackupHealthSource:                 healthyBackupHealthSource(),
+	}
+}
+
+func recordTransition(t *testing.T, s *store.Store, transition domain.UnattendedOperationTransition) {
+	t.Helper()
+	ctx := context.Background()
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordUnattendedOperationTransition(ctx, transition)
+	}); err != nil {
+		t.Fatalf("RecordUnattendedOperationTransition: %v", err)
+	}
+}
+
+func stoppedAt(at time.Time) domain.UnattendedOperationTransition {
+	return domain.UnattendedOperationTransition{
+		State: domain.UnattendedStopped, Reason: "operator stopped unattended operation",
+		OccurredAt: at,
+	}
+}
+
+func resumedAt(at time.Time) domain.UnattendedOperationTransition {
+	return domain.UnattendedOperationTransition{
+		State: domain.UnattendedResumed, Reason: "operator resumed unattended operation",
+		OccurredAt: at,
+	}
+}
+
+// healthItem builds an open system_health item, optionally carrying the typed
+// supersession condition (issue #321).
+func healthItem(t *testing.T, id domain.ItemID, cond *domain.BlockingSupersession) domain.AttentionItem {
+	t.Helper()
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: id, ProjectID: "proj-1",
+		Subject:              domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		Type:                 domain.AttentionSystemHealth,
+		Priority:             domain.PriorityNormal,
+		Reason:               "diagnostic finding",
+		RequestedDecision:    []domain.Action{domain.ActionAcknowledge},
+		ItemVersion:          1,
+		InterruptionClass:    domain.InterruptionExceptional,
+		BlockingSupersession: cond,
+		Status:               domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewAttentionItem: %v", err)
+	}
+	return item
+}
+
+func putItem(t *testing.T, s *store.Store, item domain.AttentionItem) {
+	t.Helper()
+	ctx := context.Background()
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatalf("PutAttentionItem: %v", err)
+	}
+}
+
+// TestUnattendedOperationTransitionLog is the append-only latest-wins
+// contract: an empty log reports absence, each append becomes the current
+// state, and a repeated state is a recorded decision, not a conflict.
+func TestUnattendedOperationTransitionLog(t *testing.T) {
+	ctx := context.Background()
+	f := newAdmissionFixture(t, nil)
+	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
+
+	latest := func() (domain.UnattendedOperationTransition, bool) {
+		t.Helper()
+		var (
+			tr    domain.UnattendedOperationTransition
+			found bool
+		)
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			tr, found, err = tx.LatestUnattendedOperationTransition(ctx)
+			return err
+		}); err != nil {
+			t.Fatalf("LatestUnattendedOperationTransition: %v", err)
+		}
+		return tr, found
+	}
+
+	if _, found := latest(); found {
+		t.Fatal("empty log reported a transition")
+	}
+	recordTransition(t, s, stoppedAt(admissionEpoch))
+	// A second stop is a real operator decision on another item; the log
+	// records it and the state is unchanged.
+	recordTransition(t, s, stoppedAt(admissionEpoch.Add(time.Minute)))
+	if tr, found := latest(); !found || tr.State != domain.UnattendedStopped {
+		t.Fatalf("latest after two stops = %+v (found %v), want stopped", tr, found)
+	}
+	recordTransition(t, s, resumedAt(admissionEpoch.Add(2*time.Minute)))
+	tr, found := latest()
+	if !found || tr.State != domain.UnattendedResumed {
+		t.Fatalf("latest after resume = %+v (found %v), want resumed", tr, found)
+	}
+	if !tr.OccurredAt.Equal(admissionEpoch.Add(2 * time.Minute)) {
+		t.Fatalf("resumed occurred_at = %v, want %v", tr.OccurredAt, admissionEpoch.Add(2*time.Minute))
+	}
+}
+
+// TestStopClosesUnattendedAdmission is #319's admission half: a recorded stop
+// refuses a new unattended admission in the admitting transaction, survives a
+// daemon restart structurally (nothing writes "resumed" at open), and only an
+// explicit resume reopens admission. attended_dev is untouched throughout.
+func TestStopClosesUnattendedAdmission(t *testing.T) {
+	ctx := context.Background()
+	f := unattendedAdmissionFixture(t)
+	path := tempDBPath(t)
+
+	s, err := store.Open(ctx, path, unattendedOptions())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, f.run); err != nil {
+			return err
+		}
+		return tx.RecordAuthIdentity(ctx, f.identity, admissionEpoch)
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
+
+	recordTransition(t, s, stoppedAt(admissionEpoch))
+	if err := recordAdmission(t, s, f.admission); !errors.Is(err, domain.ErrUnattendedOperationStopped) {
+		t.Fatalf("unattended admission while stopped = %v, want %v", err, domain.ErrUnattendedOperationStopped)
+	}
+
+	// Restart: reopen the same database. The stop is durable state, not
+	// configuration, so admission stays closed.
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened, err := store.Open(ctx, path, unattendedOptions())
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if err := recordAdmission(t, reopened, f.admission); !errors.Is(err, domain.ErrUnattendedOperationStopped) {
+		t.Fatalf("unattended admission after restart = %v, want %v", err, domain.ErrUnattendedOperationStopped)
+	}
+
+	recordTransition(t, reopened, resumedAt(admissionEpoch.Add(time.Hour)))
+	if err := recordAdmission(t, reopened, f.admission); err != nil {
+		t.Fatalf("unattended admission after resume: %v", err)
+	}
+
+	// attended_dev admission is unaffected by a stop. A separate store: the
+	// attended fixture reuses the same run and invocation, so it needs its
+	// own database to occupy them.
+	attended := newAdmissionFixture(t, nil)
+	stoppedStore := openWithFixture(t, attended, unattendedOptions())
+	recordTransition(t, stoppedStore, stoppedAt(admissionEpoch))
+	if err := recordAdmission(t, stoppedStore, attended.admission); err != nil {
+		t.Fatalf("attended admission while stopped: %v", err)
+	}
+}
+
+// TestStopDoesNotPoisonRecordedHistory pins the gate-placement decision: the
+// operating-state checks run when an admission is recorded, never when one is
+// reconstructed, so an operator stop leaves recorded history readable.
+func TestStopDoesNotPoisonRecordedHistory(t *testing.T) {
+	ctx := context.Background()
+	f := unattendedAdmissionFixture(t)
+	s := openWithFixture(t, f, unattendedOptions())
+	seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
+
+	if err := recordAdmission(t, s, f.admission); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	recordTransition(t, s, stoppedAt(admissionEpoch.Add(time.Minute)))
+
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.GetExecutionAdmission(ctx, f.admission.InvocationID); err != nil {
+			return err
+		}
+		listed, err := tx.ListRunExecutionAdmissions(ctx, f.run.ID)
+		if err != nil {
+			return err
+		}
+		if len(listed) != 1 {
+			t.Fatalf("listed %d admissions, want 1", len(listed))
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("reading recorded history while stopped: %v", err)
+	}
+}
+
+// TestBlockingSystemHealthRefusesUnattendedAdmission is #321's core rule in
+// the admitting transaction: an open system_health item with no supersession
+// condition blocks unattended admission; one whose condition validates against
+// the live waiver configuration does not; one whose condition names a
+// repository the operator's waiver does not cover blocks again. attended_dev
+// never consults the rule.
+func TestBlockingSystemHealthRefusesUnattendedAdmission(t *testing.T) {
+	f := unattendedAdmissionFixture(t)
+
+	t.Run("unconditional open item blocks", func(t *testing.T) {
+		s := openWithFixture(t, f, unattendedOptions())
+		seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
+		putItem(t, s, healthItem(t, "health-1", nil))
+		if err := recordAdmission(t, s, f.admission); !errors.Is(err, domain.ErrBlockingSystemHealth) {
+			t.Fatalf("admission under open health item = %v, want %v", err, domain.ErrBlockingSystemHealth)
+		}
+
+		// The same open item never gates attended_dev.
+		attended := newAdmissionFixture(t, nil)
+		if err := recordAdmission(t, s, attended.admission); err != nil {
+			t.Fatalf("attended admission under open health item: %v", err)
+		}
+	})
+
+	t.Run("validated waiver supersedes only its notice", func(t *testing.T) {
+		s := openWithFixture(t, f, unattendedOptions())
+		seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
+		putItem(t, s, healthItem(t, "waiver-notice", &domain.BlockingSupersession{
+			Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 424242,
+		}))
+		if err := recordAdmission(t, s, f.admission); err != nil {
+			t.Fatalf("admission under superseded notice: %v", err)
+		}
+
+		// The notice is still open and visible; supersession changed only its
+		// blocking effect, not its lifecycle.
+		ctx := context.Background()
+		var notice domain.AttentionItem
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			notice, err = tx.GetAttentionItem(ctx, "waiver-notice")
+			return err
+		}); err != nil {
+			t.Fatalf("GetAttentionItem: %v", err)
+		}
+		if notice.Status != domain.StatusOpen {
+			t.Fatalf("notice status = %q, want open", notice.Status)
+		}
+	})
+
+	t.Run("retargeted waiver re-blocks a stale notice", func(t *testing.T) {
+		// A notice recorded when the waiver covered repository 999: the
+		// operator's waiver now covers 424242, so the stored condition no
+		// longer holds and the still-open notice blocks, with no write in
+		// between.
+		s := openWithFixture(t, f, unattendedOptions())
+		seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
+		putItem(t, s, healthItem(t, "stale-notice", &domain.BlockingSupersession{
+			Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 999,
+		}))
+		if err := recordAdmission(t, s, f.admission); !errors.Is(err, domain.ErrBlockingSystemHealth) {
+			t.Fatalf("admission under stale notice = %v, want %v", err, domain.ErrBlockingSystemHealth)
+		}
+	})
+
+	t.Run("resolved item stops blocking", func(t *testing.T) {
+		s := openWithFixture(t, f, unattendedOptions())
+		seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
+		item := healthItem(t, "health-2", nil)
+		putItem(t, s, item)
+
+		resolved := item
+		resolved.ItemVersion = 2
+		resolved.Status = domain.StatusResolved
+		var err error
+		if resolved, err = resolved.WithDecidedAt(admissionEpoch); err != nil {
+			t.Fatalf("WithDecidedAt: %v", err)
+		}
+		putItem(t, s, resolved)
+		if err := recordAdmission(t, s, f.admission); err != nil {
+			t.Fatalf("admission after the diagnostic cleared: %v", err)
+		}
+	})
+}
+
+// TestRequireUnattendedAdmissibleClearedWaiver exercises the supersession
+// re-derivation in isolation: under a policy with no configured waiver, the
+// stored condition no longer holds and the notice blocks. The full admission
+// path cannot isolate this case because a waived admission fails its own
+// waiver clause first under the same cleared policy.
+func TestRequireUnattendedAdmissibleClearedWaiver(t *testing.T) {
+	ctx := context.Background()
+	f := unattendedAdmissionFixture(t)
+	cleared := unattendedOptions()
+	cleared.BackupEncryptionWaiverRepositoryID = nil
+	s := openWithFixture(t, f, cleared)
+	putItem(t, s, healthItem(t, "waiver-notice", &domain.BlockingSupersession{
+		Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 424242,
+	}))
+
+	err := s.Read(ctx, func(tx *store.ReadTx) error {
+		return tx.RequireUnattendedAdmissible(ctx, f.admission)
+	})
+	if !errors.Is(err, domain.ErrBlockingSystemHealth) || !errors.Is(err, domain.ErrWaiverNotConfigured) {
+		t.Fatalf("cleared waiver = %v, want %v wrapping %v",
+			err, domain.ErrBlockingSystemHealth, domain.ErrWaiverNotConfigured)
+	}
+}

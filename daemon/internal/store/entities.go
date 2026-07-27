@@ -437,11 +437,13 @@ func (tx *ReadTx) GetArtifact(ctx context.Context, id domain.ArtifactID) (domain
 }
 
 const putAttentionItemSQL = `
-INSERT INTO attention_items (id, project_id, conversation_id, entity_version, as_of_revision, body)
-VALUES (?, ?, ?, 1, ?, ?)
+INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body)
+VALUES (?, ?, ?, ?, ?, 1, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     project_id      = excluded.project_id,
     conversation_id = excluded.conversation_id,
+    item_type       = excluded.item_type,
+    status          = excluded.status,
     entity_version  = attention_items.entity_version + 1,
     as_of_revision  = excluded.as_of_revision,
     body            = excluded.body`
@@ -492,7 +494,8 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 		}
 	}
 	if _, err := tx.tx.ExecContext(ctx, putAttentionItemSQL,
-		item.ID, item.ProjectID, item.ConversationID, tx.asOfRevision, body); err != nil {
+		item.ID, item.ProjectID, item.ConversationID, item.Type, item.Status,
+		tx.asOfRevision, body); err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
 	}
 	return nil
@@ -519,7 +522,7 @@ type Snapshot struct {
 // domain content matches, so acceptance needs the store's own version counter.
 func (tx *ReadTx) GetAttentionItemSnapshot(ctx context.Context, id domain.ItemID) (domain.AttentionItem, Snapshot, error) {
 	item, snap, err := tx.scanAttentionItemSnapshot(tx.tx.QueryRowContext(ctx,
-		`SELECT id, project_id, conversation_id, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
+		`SELECT id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
 	if err != nil {
 		return domain.AttentionItem{}, Snapshot{}, fmt.Errorf("get attention item %q: %w", id, notFoundOr(err))
 	}
@@ -534,17 +537,24 @@ func (tx *ReadTx) scanAttentionItemSnapshot(sc scanner) (domain.AttentionItem, S
 		id             string
 		projectID      string
 		conversationID sql.NullString
+		itemType       string
+		status         string
 		snap           Snapshot
 		body           []byte
 	)
-	if err := sc.Scan(&id, &projectID, &conversationID, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
+	if err := sc.Scan(&id, &projectID, &conversationID, &itemType, &status, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	item, err := decode[domain.AttentionItem](body)
 	if err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
-	consistent := item.ID == domain.ItemID(id) && item.ProjectID == domain.ProjectID(projectID)
+	// item_type and status are the admission gate's lookup keys (issue #321):
+	// a column diverging from the canonical body could hide an open blocking
+	// item from the WHERE clause, so a mismatch is a forged or corrupt row,
+	// not a repairable skew.
+	consistent := item.ID == domain.ItemID(id) && item.ProjectID == domain.ProjectID(projectID) &&
+		item.Type == domain.AttentionType(itemType) && item.Status == domain.ItemStatus(status)
 	if conversationID.Valid {
 		consistent = consistent && item.ConversationID != nil &&
 			*item.ConversationID == domain.ConversationID(conversationID.String)

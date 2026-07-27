@@ -90,6 +90,18 @@ func (tx *InternalTx) RecordExecutionAdmission(ctx context.Context, admission do
 	if err := tx.gateAdmission(ctx, admission); err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
+	// The operating-state half runs only here and at dispatch, not in
+	// scanExecutionAdmission's re-gate: an operator stop or a blocking item
+	// closes new unattended operation without making recorded history
+	// unreadable (RequireUnattendedAdmissible). Ordering matters twice over:
+	// the engine writes the current admission's own waived-posture notice
+	// after this call in the same transaction, so an admission never blocks
+	// itself; and running before putImmutable means a byte-identical replay
+	// arriving after a stop refuses rather than converging — fail-closed, the
+	// run-level replay path re-dispatches after a resume.
+	if err := tx.RequireUnattendedAdmissible(ctx, admission); err != nil {
+		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
+	}
 	if err := tx.requireRecordedAttempt(ctx, admission); err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
@@ -244,14 +256,17 @@ func evidenceDigestColumnEqual(column sql.NullString, want *domain.Digest) bool 
 }
 
 // gateAdmission re-runs the trusted admission gate against the policy this
-// transaction carries. It does not consult attention items: §5.7 also requires
-// no blocking system_health of an unattended run, and the rule is not "any
-// open item blocks" — a validated waiver configuration supersedes the
-// degraded-posture notice's blocking state (§4), and that supersession does
-// not exist in the tree yet. Approximating it here would encode it as a
-// convention. Filed as #321. It is the store's enforcement of the half the record
-// cannot check for itself, and it fails closed: an unconfigured floor admits
-// nothing, exactly as a nil approved-recipe set approves nothing.
+// transaction carries: the checks that define what the record means under
+// current policy, so they hold on every reconstruction path. §5.7's
+// operating-state conditions — no operator stop in force, no blocking
+// system_health item — are deliberately not here but in
+// RequireUnattendedAdmissible, which runs when an admission is recorded and
+// when a stored one dispatches: they are preconditions on new unattended
+// operation, and re-running them at reconstruction would make recorded
+// history unreadable the moment an operator stops. This gate is the store's
+// enforcement of the half the record cannot check for itself, and it fails
+// closed: an unconfigured floor admits nothing, exactly as a nil
+// approved-recipe set approves nothing.
 //
 // A record claiming the §5.7 waiver gets one more check, because the domain
 // gate can only compare the numbers the record itself carries: the repository
