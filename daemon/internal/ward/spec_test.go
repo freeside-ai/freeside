@@ -234,6 +234,13 @@ func TestSeederSpecShape(t *testing.T) {
 			t.Errorf("seeder script does not reference %q", want)
 		}
 	}
+	// The guest's give-up budget must sit above the host bounds it races: both
+	// staged copies are bounded at SeedTimeout each and both happen after the
+	// seeder starts, so a guest deadline at or below one of them would abort a
+	// large but legitimate copy.
+	if got := seederGuestBudget(cfg.SeedTimeout); got <= 2*cfg.SeedTimeout {
+		t.Errorf("seeder guest budget %s does not exceed the two host copy budgets (%s)", got, 2*cfg.SeedTimeout)
+	}
 }
 
 func TestBuildAgentSpec(t *testing.T) {

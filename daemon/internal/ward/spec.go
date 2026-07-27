@@ -342,6 +342,14 @@ func seederCommand(cfg Config) []string {
 	return []string{"sh", "-c", seederScript(cfg)}
 }
 
+// seederGuestBudget is how long the seeder waits for the completion sentinel
+// before giving up. It covers both host copies (SeedTimeout each) plus a
+// margin, so the guest never fires first; the host's waitStopped is the real
+// deadline.
+func seederGuestBudget(seedTimeout time.Duration) time.Duration {
+	return 3 * seedTimeout
+}
+
 // seederScript waits for the host to signal that the staged checkout is
 // complete, then moves it onto the workspace volume and exits.
 //
@@ -351,11 +359,19 @@ func seederCommand(cfg Config) []string {
 // state; the gate never interprets them, because the seeder's exit status is
 // its own account of itself. What the gate believes is what the observer reads
 // off the volume afterwards.
+//
+// The guest budget deliberately exceeds one SeedTimeout. Both host copies are
+// bounded at SeedTimeout each and both happen after the seeder starts, so a
+// guest budget equal to one of them would let a large but legitimate staged
+// copy race the seeder's own exit: the seeder would give up, and the sentinel
+// copy would then fail against a stopped container. Sizing the backstop above
+// the host bounds it is racing keeps it a backstop rather than a second,
+// tighter deadline nobody declared.
 func seederScript(cfg Config) string {
 	ready := shellQuote(path.Join(cfg.SeedReadyDir, seedReadyFile))
 	stage := shellQuote(cfg.SeedStageDir)
 	ws := shellQuote(cfg.WorkspaceTarget)
-	ticks := int(cfg.SeedTimeout / time.Second)
+	ticks := int(seederGuestBudget(cfg.SeedTimeout) / time.Second)
 	if ticks < 1 {
 		ticks = 1
 	}
