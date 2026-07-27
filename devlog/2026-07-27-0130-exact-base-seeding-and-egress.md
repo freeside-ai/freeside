@@ -133,6 +133,35 @@ ones, all fixed:
   but seeded nothing" case exercised the missing-file branch instead of
   the `git_dir=absent` branch production takes.
 
+### Codex review round 1 (P1: HEAD is not content)
+
+Confirmed and fixed. The observer proved HEAD matched the declared base
+and stopped there, but HEAD is a pointer: a workspace can carry the right
+one over a tree that is empty, partial, or altered. The intended producer
+makes it concrete rather than theoretical, and the reviewer named it
+exactly: `publish.Transport.FetchBase` moves HEAD to the base and never
+checks anything out, so handing its directory to the gate seeded a
+workspace with a `.git` and no files, which the old attestation passed.
+
+The fix attests content within what ward can prove without git: the host
+refuses a source with no working-tree content (so the FetchBase-shaped
+case fails on the host, naming what is missing), and the observer reports
+a digest over every file in the workspace that the host recomputes over
+the source it verified. They agree only if the tree that landed is the
+tree that was approved, which also closes partial and altered copies. The
+digest covers paths and content, not modes or ownership, because
+`container copy` does not preserve ownership across the host boundary.
+Verified on the reference runtime that the Go and BusyBox implementations
+agree.
+
+**Deliberately not closed here:** whether the approved tree is *faithful
+to the commit HEAD names*. That needs git in the observer image, and the
+exporter image ships none; #302's scope routes an image change to the
+images unit, so it is #330 rather than a widened ward unit. Stating the
+boundary matters more than the gap: the gate now attests "the workspace
+holds the tree the daemon staged and declared as base X", not "the
+workspace is commit X".
+
 Declined, with reasons: `$(cat)` drops NUL bytes, so a `.git/HEAD` of
 NUL + 40 hex would attest that SHA — it needs a hostile seed source that
 also matches the caller's declared base, which buys an attacker nothing
