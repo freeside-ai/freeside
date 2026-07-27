@@ -406,11 +406,11 @@ type cliVolumeEntry struct {
 	ID            string    `json:"id"`
 }
 
-// rejectDuplicateJSONKeys rejects ambiguous runtime evidence before the
+// RejectDuplicateJSONKeys rejects ambiguous runtime evidence before the
 // typed decoders apply encoding/json's last-value-wins behavior. The CLI
 // output is already byte-capped by run, so this structural pass is also
 // resource-bounded.
-func rejectDuplicateJSONKeys(out []byte) error {
+func RejectDuplicateJSONKeys(out []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(out))
 	if err := checkJSONValue(dec); err != nil {
 		return err
@@ -655,7 +655,7 @@ func (n cliNetworkResource) toReport() NetworkReport {
 }
 
 func decodeNetworkList(out []byte) ([]NetworkSummary, error) {
-	if err := rejectDuplicateJSONKeys(out); err != nil {
+	if err := RejectDuplicateJSONKeys(out); err != nil {
 		return nil, errors.New("decode network list output: invalid JSON structure")
 	}
 	var resources []cliNetworkResource
@@ -674,7 +674,7 @@ func decodeNetworkList(out []byte) ([]NetworkSummary, error) {
 }
 
 func decodeNetworkInspect(out []byte, name string) (NetworkReport, error) {
-	if err := rejectDuplicateJSONKeys(out); err != nil {
+	if err := RejectDuplicateJSONKeys(out); err != nil {
 		return NetworkReport{}, fmt.Errorf("decode network inspect output for %q: invalid JSON structure", name)
 	}
 	var resources []cliNetworkResource
@@ -694,7 +694,7 @@ func decodeNetworkInspect(out []byte, name string) (NetworkReport, error) {
 // decodeInspect decodes `container inspect` output: an array with exactly
 // one element for a single-ID query.
 func decodeInspect(out []byte, id string) (InspectReport, error) {
-	if err := rejectDuplicateJSONKeys(out); err != nil {
+	if err := RejectDuplicateJSONKeys(out); err != nil {
 		return InspectReport{}, fmt.Errorf("decode inspect output for %q: invalid JSON structure", id)
 	}
 	var ctrs []cliContainer
@@ -728,7 +728,7 @@ func decodeInspect(out []byte, id string) (InspectReport, error) {
 }
 
 func decodeContainerList(out []byte) ([]ContainerSummary, error) {
-	if err := rejectDuplicateJSONKeys(out); err != nil {
+	if err := RejectDuplicateJSONKeys(out); err != nil {
 		return nil, errors.New("decode container list: invalid JSON structure")
 	}
 	var ctrs []cliContainer
@@ -778,7 +778,7 @@ func decodeContainerList(out []byte) ([]ContainerSummary, error) {
 // the requested name, so ownership recovery cannot act on another volume's
 // labels or fingerprint.
 func decodeVolumeInspect(out []byte, name string) (VolumeSummary, error) {
-	if err := rejectDuplicateJSONKeys(out); err != nil {
+	if err := RejectDuplicateJSONKeys(out); err != nil {
 		return VolumeSummary{}, fmt.Errorf("decode volume inspect output for %q: invalid JSON structure", name)
 	}
 	var vols []cliVolumeEntry
@@ -814,7 +814,7 @@ func decodeVolumeInspect(out []byte, name string) (VolumeSummary, error) {
 }
 
 func decodeVolumeList(out []byte) ([]VolumeSummary, error) {
-	if err := rejectDuplicateJSONKeys(out); err != nil {
+	if err := RejectDuplicateJSONKeys(out); err != nil {
 		return nil, errors.New("decode volume list: invalid JSON structure")
 	}
 	var vols []cliVolumeEntry

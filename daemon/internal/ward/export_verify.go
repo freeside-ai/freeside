@@ -266,7 +266,7 @@ func (b *Backend) verifyManifest(destDir string) (export.Manifest, map[string]bo
 	// contradictory. Reject non-canonical duplicate keys before decoding, the
 	// same structural gate the runtime decoders apply, so the validated view
 	// and the released bytes cannot disagree.
-	if err := rejectDuplicateJSONKeys(raw); err != nil {
+	if err := RejectDuplicateJSONKeys(raw); err != nil {
 		return manifest, nil, failf(CheckExportVerification, "manifest is not canonical %s JSON", export.ManifestVersion)
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))

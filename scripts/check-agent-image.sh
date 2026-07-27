@@ -25,15 +25,15 @@
 # preconditions; exit 1 means it does not; exit 2 is a usage error.
 #
 # Usage:
-#   scripts/check-agent-image.sh <image-reference>
+#   scripts/check-agent-image.sh <image-reference> [container-executable]
 set -euo pipefail
 
 # Duplicated from daemon/internal/ward/conformance.go (fixedContainerPathEnv).
 # The gate's literal is the contract; this check exists to fail before it does.
 fixed_path_env="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-if [ "$#" -ne 1 ] || [ -z "${1:-}" ]; then
-	echo "check-agent-image: usage: scripts/check-agent-image.sh <image-reference>" >&2
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ] || [ -z "${1:-}" ] || [ -z "${2-container}" ]; then
+	echo "check-agent-image: usage: scripts/check-agent-image.sh <image-reference> [container-executable]" >&2
 	exit 2
 fi
 case "$1" in
@@ -43,6 +43,7 @@ case "$1" in
 	;;
 esac
 image_ref="$1"
+container_bin="${2:-container}"
 
 command -v jq >/dev/null 2>&1 || {
 	echo "check-agent-image: jq is required to compare the inspected configuration" >&2
@@ -50,33 +51,94 @@ command -v jq >/dev/null 2>&1 || {
 }
 
 probe_container=""
+cidfile=""
+ownership_label="ai.freeside.project-image.owner"
+# The token gates a force-delete, so it must be unguessable: a predictable
+# value would let a local process plant a container that passes the ownership
+# check and steer the delete (mirrors the daemon's crypto/rand randomToken).
+ownership_token="checker-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+if [ "${#ownership_token}" -ne 40 ]; then
+	echo "check-agent-image: could not generate an ownership token" >&2
+	exit 1
+fi
+
+valid_container_id() {
+	case "$1" in
+	"" | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*) return 1 ;;
+	*) return 0 ;;
+	esac
+}
 
 cleanup() {
 	status=$?
 	trap - EXIT
+	cleanup_failed=0
+	if [ -z "$probe_container" ] && [ -n "$cidfile" ] && [ -f "$cidfile" ]; then
+		recovered_id=$(tr -d '\r\n' <"$cidfile" 2>/dev/null) || recovered_id=""
+		if valid_container_id "$recovered_id"; then
+			probe_container="$recovered_id"
+		fi
+	fi
 	if [ -n "$probe_container" ]; then
-		container delete --force "$probe_container" >/dev/null 2>&1 ||
-			echo "check-agent-image: could not remove probe container ${probe_container}" >&2
+		inspection=""
+		if inspection=$("$container_bin" inspect "$probe_container" 2>/dev/null); then
+			owned_id=$(
+				printf '%s' "$inspection" |
+					jq -er --arg id "$probe_container" \
+						--arg label "$ownership_label" \
+						--arg token "$ownership_token" '
+						if length == 1
+							and .[0].id == $id
+							and .[0].configuration.id == $id
+							and .[0].configuration.labels[$label] == $token
+						then .[0].id
+						else empty
+						end
+					' 2>/dev/null
+			) || owned_id=""
+			if [ "$owned_id" = "$probe_container" ]; then
+				if ! "$container_bin" delete --force "$owned_id" >/dev/null 2>&1; then
+					echo "check-agent-image: could not remove probe container ${owned_id}" >&2
+					cleanup_failed=1
+				fi
+			else
+				echo "check-agent-image: refusing to remove unowned probe container ${probe_container}" >&2
+				cleanup_failed=1
+			fi
+		else
+			echo "check-agent-image: could not inspect probe container ${probe_container} for cleanup" >&2
+			cleanup_failed=1
+		fi
+	fi
+	if [ -n "$cidfile" ] && ! rm -f "$cidfile"; then
+		echo "check-agent-image: could not remove probe identity file" >&2
+		cleanup_failed=1
+	fi
+	if [ "$cleanup_failed" -ne 0 ] && [ "$status" -eq 0 ]; then
+		status=1
 	fi
 	exit "$status"
 }
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 
-candidate="freeside-agent-image-check-$(date +%s)-$$"
-if container inspect "$candidate" >/dev/null 2>&1; then
-	echo "check-agent-image: probe container name already exists: $candidate" >&2
-	exit 1
-fi
-# Arm cleanup before create so a partially created container is still owned here.
-probe_container="$candidate"
+cidfile=$(mktemp "${TMPDIR:-/tmp}/freeside-image-checker-id.XXXXXX")
+rm -f "$cidfile"
 
 # The container is created, never started: the allowlist is verified on a
 # stopped container, exactly as the gate does it.
 echo "check-agent-image: creating a probe container from ${image_ref}" >&2
-container create --name "$probe_container" -- "$image_ref" sh -c true >&2
+"$container_bin" create --cidfile "$cidfile" \
+	--label "${ownership_label}=${ownership_token}" \
+	-- "$image_ref" sh -c true >&2
+runtime_id=$(tr -d '\r\n' <"$cidfile")
+if ! valid_container_id "$runtime_id"; then
+	echo "check-agent-image: runtime returned invalid probe container ID" >&2
+	exit 1
+fi
+probe_container="$runtime_id"
 
-report=$(container inspect "$probe_container")
+report=$("$container_bin" inspect "$probe_container")
 
 failures=0
 fail() {
