@@ -163,26 +163,37 @@ func (tx *ReadTx) RequireUnattendedAdmissible(
 	if admission.OperatingMode != domain.ModeUnattended {
 		return nil
 	}
-	latest, found, err := tx.LatestUnattendedOperationTransition(ctx)
-	if err != nil {
+	if err := tx.RequireUnattendedOperationOpen(ctx); err != nil {
 		return fmt.Errorf("admission %q: %w", admission.InvocationID, err)
 	}
+	return nil
+}
+
+// RequireUnattendedOperationOpen is the whole operating-state predicate with
+// no admission in hand: no operator stop in force, and no blocking open
+// system_health item. It exists as one function so every consumer gates on
+// both conditions or neither — the engine's per-pass check calls it for a
+// dispatch whose operating mode is unknowable (no admission configuration),
+// where "unknown fails closed" must mean the full gate, not whichever half
+// was remembered.
+func (tx *ReadTx) RequireUnattendedOperationOpen(ctx context.Context) error {
+	latest, found, err := tx.LatestUnattendedOperationTransition(ctx)
+	if err != nil {
+		return err
+	}
 	if found && latest.State == domain.UnattendedStopped {
-		return fmt.Errorf("admission %q: %w",
-			admission.InvocationID, domain.ErrUnattendedOperationStopped)
+		return domain.ErrUnattendedOperationStopped
 	}
 	items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
 	if err != nil {
-		return fmt.Errorf("admission %q: %w", admission.InvocationID, err)
+		return err
 	}
 	for _, item := range items {
 		if item.BlockingSupersession == nil {
-			return fmt.Errorf("admission %q: item %q: %w",
-				admission.InvocationID, item.ID, domain.ErrBlockingSystemHealth)
+			return fmt.Errorf("item %q: %w", item.ID, domain.ErrBlockingSystemHealth)
 		}
 		if err := item.BlockingSupersession.Supersedes(tx.admissionPolicy); err != nil {
-			return fmt.Errorf("admission %q: item %q: %w: %w",
-				admission.InvocationID, item.ID, domain.ErrBlockingSystemHealth, err)
+			return fmt.Errorf("item %q: %w: %w", item.ID, domain.ErrBlockingSystemHealth, err)
 		}
 	}
 	return nil

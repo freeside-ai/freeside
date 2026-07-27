@@ -74,11 +74,13 @@ func waivedPostureItemID(invocationID domain.InvocationID) domain.ItemID {
 // record: an operator who cannot see that unattended work is proceeding on the
 // temporary exception has no way to know the exception is still in use.
 //
-// It is raised as an ordinary open system_health item. §5.7's supersession —
-// the validated waiver configuration overriding the item's blocking state, so
-// the notice stays visible without blocking the admissions the waiver exists
-// to permit — is the §4 attention semantics signet owns; this raises the
-// visible notice and does not attempt to model the blocking rule here.
+// It is raised as an ordinary open system_health item carrying the typed §4
+// supersession condition: the validated waiver configuration overrides the
+// item's blocking state, so the notice stays visible without blocking the
+// admissions the waiver exists to permit. The condition names the waived
+// repository; whether it holds is re-derived against live policy at every
+// admission (store.RequireUnattendedAdmissible), so clearing the waiver makes
+// this still-open notice blocking again with no write.
 func waivedPostureItem(
 	run domain.Run, invocationID domain.InvocationID, waiver domain.BackupEncryptionWaiver,
 ) (domain.AttentionItem, error) {
@@ -91,14 +93,16 @@ func waivedPostureItem(
 			"Unattended execution admitted under the Phase 1A.2 backup-encryption waiver "+
 				"for repository %d (%s). Backup encryption is not verified for this run.",
 			waiver.RepositoryID, waiver.Reason),
-		// Acknowledge only. signet's policy also offers stop_unattended for
-		// this type, but nothing here consumes such a command: the admission
-		// environment is fixed at engine construction, so an operator whose
-		// stop "succeeded" would keep seeing unattended work admitted. An
-		// action the system cannot honour is worse than an absent one, so it
-		// is offered when the durable mode transition exists (#319), not now.
-		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
+		// stop_unattended is offered now that accepting it is a durable
+		// operating transition the admission gate honours (#319); before
+		// that existed, offering an action the system could not honour was
+		// judged worse than an absent one.
+		RequestedDecision: []domain.Action{domain.ActionAcknowledge, domain.ActionStopUnattended},
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
+		BlockingSupersession: &domain.BlockingSupersession{
+			Kind:         domain.SupersessionBackupEncryptionWaiver,
+			RepositoryID: waiver.RepositoryID,
+		},
 		Status: domain.StatusOpen,
 	}, nil)
 }

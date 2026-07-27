@@ -51,14 +51,47 @@ func (e *Engine) reconcileInvocations(ctx context.Context) (int, int, error) {
 // its store contract and become dispatched without making the result
 // undiscoverable after a daemon restart.
 func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
-	var pending []store.QueueEntry
+	var (
+		pending []store.QueueEntry
+		held    bool
+	)
 	err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		// An engine that is not explicitly configured attended_dev honours
+		// the whole operating-state gate — the durable operator stop and
+		// the blocking system_health rule — before dispatching anything
+		// (#319, #321): the intents stay pending, the pass reports no error
+		// (a hold is operator-visible state in signet, not a failure, and a
+		// Run-loop error would halt attended work too), and a resume or a
+		// cleared blocker makes a later pass pick them up. An engine with
+		// no admission configuration is included: its dispatches record no
+		// operating mode, so whether they are unattended is unknowable, and
+		// unknown fails closed against the full gate — the one shared
+		// predicate, so this path cannot cover one half and miss the other
+		// (a daemon restarted without its configuration runs no
+		// in-transaction gate at all for an unrecorded intent). Every
+		// durable window routes through this per-pass check; the residual
+		// in-process race with a hold committing mid-pass is closed for
+		// admitted work by the store's gate inside each admitting
+		// transaction, mapped to the same quiet hold below.
+		if e.admission == nil || e.admission.environment.OperatingMode == domain.ModeUnattended {
+			if err := tx.RequireUnattendedOperationOpen(ctx); err != nil {
+				if errors.Is(err, domain.ErrUnattendedOperationStopped) ||
+					errors.Is(err, domain.ErrBlockingSystemHealth) {
+					held = true
+					return nil
+				}
+				return err
+			}
+		}
 		var err error
 		pending, err = tx.ListPendingOutbox(ctx, kindAgentInvocationRequested)
 		return err
 	})
 	if err != nil {
 		return 0, err
+	}
+	if held {
+		return 0, nil
 	}
 
 	started := 0
@@ -102,6 +135,16 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		// reconstruct.
 		_, effective, bound, err := e.recordAttempt(ctx, binding.run.ID, request.InvocationID, fresh)
 		if err != nil {
+			// The admitting transaction's operating-state refusal (a stop or a
+			// blocking system_health item committed since the pass began) is
+			// the pre-check's race-free backstop: hold the remaining intents
+			// for a later pass instead of failing the loop. The operator
+			// already sees why — the stop notice or the blocking item is open
+			// in signet.
+			if errors.Is(err, domain.ErrUnattendedOperationStopped) ||
+				errors.Is(err, domain.ErrBlockingSystemHealth) {
+				return started, nil
+			}
 			return started, err
 		}
 
@@ -183,6 +226,34 @@ func (e *Engine) acceptAttempt(ctx context.Context, run domain.Run, attempt doma
 
 	status, err := e.driver.Inspect(ctx, attempt.InvocationID)
 	if err != nil {
+		// An invocation the driver does not know is ambiguous: a pending
+		// outbox intent is bookkeeping, not proof of an unstarted driver
+		// (Start can succeed and the daemon die before MarkOutboxDispatched).
+		// The driver's own answer disambiguates: unknown *and* still pending
+		// means the launch never happened — the crash window between the
+		// admitting transaction and Start, or a dispatch held by the
+		// operator stop (#319) — and the start is the dispatch loop's to
+		// replay, so acceptance waits without error. Unknown but already
+		// dispatched is a genuinely lost invocation and stays the failure it
+		// always was. A known invocation proceeds to collection regardless
+		// of the intent's state: a stop halts new starts, never the
+		// acceptance of work already running.
+		if errors.Is(err, exec.ErrUnknownInvocation) {
+			var pendingDispatch bool
+			if outboxErr := e.store.Read(ctx, func(tx *store.ReadTx) error {
+				entry, getErr := tx.GetOutbox(ctx, string(attempt.InvocationID))
+				if getErr != nil {
+					return getErr
+				}
+				pendingDispatch = !entry.Dispatched()
+				return nil
+			}); outboxErr != nil {
+				return false, fmt.Errorf("outbox intent: %w", outboxErr)
+			}
+			if pendingDispatch {
+				return false, nil
+			}
+		}
 		return false, fmt.Errorf("inspect: %w", err)
 	}
 	switch status {
@@ -472,6 +543,15 @@ func (e *Engine) recordAttempt(
 						// treating a closed gate as a legacy attempt.
 						return fmt.Errorf("replayed invocation %q: %w", invocationID, err)
 					case found:
+						// A recorded admission whose driver never started is
+						// still new unattended operation about to begin, so
+						// the operating-state gate holds here too (#319): a
+						// stop between the record and this dispatch must not
+						// leak one last start. The record itself stays
+						// readable — this gates the start, not the row.
+						if err := tx.RequireUnattendedAdmissible(ctx, stored); err != nil {
+							return fmt.Errorf("replayed invocation %q: %w", invocationID, err)
+						}
 						effective, bound = stored, true
 					case e.admission == nil:
 						// No record exists, so there is no durable decision to
