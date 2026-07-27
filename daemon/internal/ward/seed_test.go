@@ -255,6 +255,29 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	if changed == digest {
 		t.Error("tree digest is unchanged after altering a file's content")
 	}
+
+	// A git tree records the executable bit, so a workspace whose scripts lost
+	// it is not the approved tree even with identical bytes.
+	script := filepath.Join(dir, "run.sh")
+	//nolint:gosec // the pair of modes is the property under test
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, plain, err := verifySeedSource(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	//nolint:gosec // granting the executable bit is exactly what this asserts is detected
+	if err := os.Chmod(script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, executable, err := verifySeedSource(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain == executable {
+		t.Error("tree digest is unchanged after a file gains the executable bit")
+	}
 }
 
 func TestVerifySeedSourceFailsClosed(t *testing.T) {

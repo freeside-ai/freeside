@@ -457,6 +457,14 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 	// and publishing the exporter image first.
 	root := t.TempDir()
 	checkout := writeSeedCheckout(t, root, testBaseSHA)
+	// An executable file, so the digest's exec-bit dimension is exercised
+	// against the real runtime rather than only against the fake: if
+	// `container copy` or the seeder's `cp -a` ever stopped preserving modes,
+	// the host and guest digests would diverge and this test would catch it.
+	//nolint:gosec // the executable bit is the property under test; 0600 would defeat it
+	if err := os.WriteFile(filepath.Join(checkout, "run.sh"), []byte("#!/bin/sh\necho hi\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	cfg := testConfig()
 	cfg.ExporterImage = liveImage
 	cfg.SeedRoot = root

@@ -70,6 +70,7 @@ func verifySeedSource(cfg Config, dir string) (resolvedDir, digest string, err e
 	var entries int
 	var worktreeFiles int
 	var lines []string
+	var execPaths []string
 	walkErr := filepath.WalkDir(resolved, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return failf(CheckWorkspaceSeeding, "seed source could not be walked")
@@ -115,6 +116,10 @@ func verifySeedSource(cfg Config, dir string) (resolvedDir, digest string, err e
 			return failf(CheckWorkspaceSeeding, "seed source entry could not be digested")
 		}
 		lines = append(lines, sum+"  ./"+filepath.ToSlash(rel))
+		// The user-execute bit only, which is the one a git tree records.
+		if fi.Mode().Perm()&0o100 != 0 {
+			execPaths = append(execPaths, "./"+filepath.ToSlash(rel))
+		}
 		return nil
 	})
 	if walkErr != nil {
@@ -135,7 +140,7 @@ func verifySeedSource(cfg Config, dir string) (resolvedDir, digest string, err e
 	if worktreeFiles == 0 {
 		return "", "", failf(CheckWorkspaceSeeding, "seed source carries no working-tree content, only a git directory")
 	}
-	return resolved, treeDigest(lines), nil
+	return resolved, treeDigest(lines, execPaths), nil
 }
 
 // isUnderGitDir reports whether a source-relative path is the repository's own
@@ -157,15 +162,31 @@ func fileSHA256(p string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// treeDigest reduces per-file "<sha256>  ./<path>" lines to one digest over the
-// whole tree. The lines are sorted bytewise and joined exactly as the guest
-// will assemble them, so the host and the observer compute the same value from
-// the same content without either running git.
+// treeDigest reduces the tree to one digest over two dimensions git itself
+// distinguishes: every file's path and bytes, and which files are executable.
+// Each dimension is hashed from bytewise-sorted lines and the two results are
+// hashed together, exactly as the guest assembles them, so the host and the
+// observer compute the same value from the same tree without either running
+// git.
 //
-// It covers paths and bytes, not modes or ownership: `container copy` does not
-// preserve ownership across the host boundary (files arrive owned by the host
-// uid), so a mode-sensitive digest would never match.
-func treeDigest(lines []string) string {
+// The executable bit is in scope because a git tree records it (100755 versus
+// 100644), so a workspace whose scripts lost it is not the approved tree even
+// with identical bytes. Verified on the reference runtime that `container
+// copy` and the seeder's `cp -a` preserve modes end to end, so including it
+// cannot make an honest seed fail.
+//
+// Ownership is deliberately out of scope: files cross the host boundary owned
+// by the host uid rather than the source's, so a uid-sensitive digest could
+// never match. Directory modes are out of scope because git does not track
+// them.
+func treeDigest(contentLines, execPaths []string) string {
+	return hex.EncodeToString(sha256Sum(
+		digestLines(contentLines) + "\n" + digestLines(execPaths) + "\n"))
+}
+
+// digestLines hashes bytewise-sorted lines, each newline-terminated: the shape
+// `... | sort | sha256sum` produces in the guest.
+func digestLines(lines []string) string {
 	sort.Strings(lines)
 	h := sha256.New()
 	for _, l := range lines {
@@ -173,6 +194,11 @@ func treeDigest(lines []string) string {
 		h.Write([]byte{'\n'})
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+func sha256Sum(s string) []byte {
+	sum := sha256.Sum256([]byte(s))
+	return sum[:]
 }
 
 // seedWorkspace puts the declared base into the workspace volume before
