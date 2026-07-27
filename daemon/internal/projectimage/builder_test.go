@@ -3,6 +3,7 @@ package projectimage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -38,6 +39,19 @@ func (f *fakeSource) Copy(_ context.Context, _ string, commit, destination strin
 		return errors.New("unexpected copied commit")
 	}
 	return writeNPMFixture(destination)
+}
+
+type fakeResolver struct {
+	calls int
+	errs  []error
+}
+
+func (f *fakeResolver) Verify(context.Context, string, int64) error {
+	f.calls++
+	if f.calls <= len(f.errs) {
+		return f.errs[f.calls-1]
+	}
+	return nil
 }
 
 func writeNPMFixture(directory string) error {
@@ -345,6 +359,37 @@ func TestBuildRefutesBaseAndProofFailures(t *testing.T) {
 				t.Fatalf("Build = %v, want ErrProofFailed", err)
 			}
 		})
+	}
+}
+
+func TestBuildReverifiesRepositoryIdentityAfterFetch(t *testing.T) {
+	resolver := &fakeResolver{}
+	builder := newBuilder(&fakeSource{}, newFakeBackend(), t.TempDir())
+	builder.resolver = resolver
+	if _, err := builder.Build(t.Context(), validRequest()); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if resolver.calls != 2 {
+		t.Fatalf("resolver calls = %d, want 2 (pre- and post-fetch)", resolver.calls)
+	}
+}
+
+func TestBuildRefutesRepositoryIdentityDriftAfterFetch(t *testing.T) {
+	drift := fmt.Errorf("repository freeasinbird/gh-imgup resolved to id 999: %w", ErrInvalidRequest)
+	resolver := &fakeResolver{errs: []error{nil, drift}}
+	source := &fakeSource{}
+	backend := newFakeBackend()
+	builder := newBuilder(source, backend, t.TempDir())
+	builder.resolver = resolver
+	_, err := builder.Build(t.Context(), validRequest())
+	if !errors.Is(err, ErrProofFailed) {
+		t.Fatalf("Build = %v, want ErrProofFailed", err)
+	}
+	if source.fetches != 1 || source.copies != 0 {
+		t.Fatalf("source fetch/copies = %d/%d, want 1/0 (fail before materialization)", source.fetches, source.copies)
+	}
+	if len(backend.builds) != 0 || len(backend.publishes) != 0 {
+		t.Fatalf("backend builds/publishes = %d/%d, want 0/0", len(backend.builds), len(backend.publishes))
 	}
 }
 

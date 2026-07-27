@@ -11,6 +11,10 @@ import (
 
 const maxRepositoryIdentityBytes = 1 << 20
 
+// repositoryResolver proves an owner/name still maps to the caller's numeric
+// repository ID. Build invokes it twice per build, before and after the
+// source fetch, so a name transfer between verification and clone cannot
+// bind fetched content to a stale identity.
 type repositoryResolver interface {
 	Verify(context.Context, string, int64) error
 }
