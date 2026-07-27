@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
@@ -240,6 +241,30 @@ func TestSeederSpecShape(t *testing.T) {
 	// large but legitimate copy.
 	if got := seederGuestBudget(cfg.SeedTimeout); got <= 2*cfg.SeedTimeout {
 		t.Errorf("seeder guest budget %s does not exceed the two host copy budgets (%s)", got, 2*cfg.SeedTimeout)
+	}
+}
+
+// TestSeederScriptBudgetSurvivesSubsecondTimeouts pins the tick arithmetic
+// against truncation. The guest loop's granularity is one `sleep 1`, so a
+// budget converted with integer division collapses at subsecond timeouts:
+// 600ms yields a 1.8s budget that truncates to a single tick, and the seeder
+// would give up after about a second while the two host copies may
+// legitimately take 1.2s — reinstating the race the budget exists to prevent.
+func TestSeederScriptBudgetSurvivesSubsecondTimeouts(t *testing.T) {
+	for _, seedTimeout := range []time.Duration{
+		100 * time.Millisecond, 600 * time.Millisecond, 1500 * time.Millisecond,
+		time.Second, 5 * time.Minute,
+	} {
+		cfg := testConfig()
+		cfg.SeedTimeout = seedTimeout
+		ticks := seederScriptTicks(cfg)
+		// The guest must outlast both host copies, which are bounded at
+		// SeedTimeout each, measured in whole seconds the loop can actually count.
+		copies := 2 * seedTimeout
+		if got := time.Duration(ticks) * time.Second; got < copies {
+			t.Errorf("SeedTimeout %s: guest budget %s is under the two host copy budgets (%s)",
+				seedTimeout, got, copies)
+		}
 	}
 }
 

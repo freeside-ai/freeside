@@ -350,6 +350,20 @@ func seederGuestBudget(seedTimeout time.Duration) time.Duration {
 	return 3 * seedTimeout
 }
 
+// seederScriptTicks converts the guest budget into whole `sleep 1` iterations,
+// rounding UP. The loop can only count seconds, so truncating would undo the
+// budget's purpose at subsecond timeouts: a 600ms SeedTimeout gives a 1.8s
+// budget that truncates to one tick, and the seeder would give up after about
+// a second while the two host copies may legitimately take 1.2s — reinstating
+// the sentinel-copy race the budget exists to prevent.
+func seederScriptTicks(cfg Config) int {
+	ticks := int((seederGuestBudget(cfg.SeedTimeout) + time.Second - 1) / time.Second)
+	if ticks < 1 {
+		ticks = 1
+	}
+	return ticks
+}
+
 // seederScript waits for the host to signal that the staged checkout is
 // complete, then moves it onto the workspace volume and exits.
 //
@@ -371,10 +385,7 @@ func seederScript(cfg Config) string {
 	ready := shellQuote(path.Join(cfg.SeedReadyDir, seedReadyFile))
 	stage := shellQuote(cfg.SeedStageDir)
 	ws := shellQuote(cfg.WorkspaceTarget)
-	ticks := int(seederGuestBudget(cfg.SeedTimeout) / time.Second)
-	if ticks < 1 {
-		ticks = 1
-	}
+	ticks := seederScriptTicks(cfg)
 	return "set -eu; i=0; " +
 		"while [ ! -f " + ready + " ]; do " +
 		"i=$((i+1)); if [ \"$i\" -gt " + strconv.Itoa(ticks) + " ]; then exit 91; fi; " +

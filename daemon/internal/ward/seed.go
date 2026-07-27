@@ -134,11 +134,19 @@ func verifySeedSource(cfg Config, dir string) (resolvedDir, digest string, err e
 	// A checkout with a .git but no working tree is the case the intended
 	// producer actually hands over: publish.Transport.FetchBase moves HEAD to
 	// the base and never checks anything out. Copying it would give the writer
-	// an empty workspace that still carries the declared HEAD, so a
-	// HEAD-only attestation would report it seeded at the exact base. Refuse it
-	// here, where the reason can say what is missing.
+	// an empty workspace that still carries the declared HEAD, so a HEAD-only
+	// attestation would report it seeded at the exact base.
+	//
+	// This is a conservative refusal, not a diagnosis. Without git the gate
+	// cannot tell an unmaterialized checkout from a base whose commit tree is
+	// legitimately empty, so it refuses both and the reason says so rather than
+	// asserting a cause it cannot establish. Refusing an empty-tree base costs
+	// a workspace nothing to work from; accepting an unmaterialized one would
+	// hand the writer an empty workspace under a declared base. Distinguishing
+	// them needs the commit's own tree, which is #330.
 	if worktreeFiles == 0 {
-		return "", "", failf(CheckWorkspaceSeeding, "seed source carries no working-tree content, only a git directory")
+		return "", "", failf(CheckWorkspaceSeeding,
+			"seed source carries only a git directory: either its checkout was never materialized or the base commit's tree is empty")
 	}
 	return resolved, treeDigest(lines, execPaths), nil
 }
