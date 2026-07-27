@@ -220,4 +220,22 @@ type Runtime interface {
 	// implementations apply the same cap to internal materialization when
 	// their underlying API exposes a sound mechanism for doing so.
 	ExportRootFS(ctx context.Context, id string, dest io.Writer, maxBytes int64) error
+	// CopyIntoContainer copies hostDir into the container's own root
+	// filesystem at targetDir, which must not exist yet: the runtime creates
+	// it as a copy of hostDir rather than nesting hostDir beneath it.
+	//
+	// This is the only host-to-guest data path besides argv and env, and it
+	// widens nothing: it names an existing container the gate already
+	// inspected and approved, so it cannot introduce a mount, a network, or a
+	// process the allowlist never saw. Host binds stay refused everywhere.
+	//
+	// targetDir is a root-filesystem path and never a mount target. On Apple
+	// container 1.1.0 a copy whose destination lies inside a mounted volume
+	// writes nothing and still succeeds, so seeding a volume means copying to
+	// the container's own filesystem and letting its gate-authored command
+	// move the tree onto the mount.
+	//
+	// A nil return is not evidence the bytes arrived, for the same reason and
+	// generally: the gate proves the result by observing it afterwards.
+	CopyIntoContainer(ctx context.Context, id, hostDir, targetDir string) error
 }

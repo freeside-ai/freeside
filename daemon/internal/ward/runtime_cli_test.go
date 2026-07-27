@@ -519,6 +519,55 @@ func TestCreateContainerArgs(t *testing.T) {
 	}
 }
 
+func TestCopyArgs(t *testing.T) {
+	args, err := copyArgs("freeside-handoff-golden-run-seeder", "/seeds/checkout", "/seed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The canonical subcommand, not the `cp` alias: the phrasing must not
+	// depend on an alias surviving a runtime upgrade.
+	want := []string{"copy", "/seeds/checkout", "freeside-handoff-golden-run-seeder:/seed"}
+	if !reflect.DeepEqual(args, want) {
+		t.Errorf("args = %q, want %q", args, want)
+	}
+}
+
+// TestCopyArgsRefusesInjection is the copy boundary's fail-closed guard. The
+// CLI addresses the container side as <container>:<path>, so a ':' anywhere
+// could reparse the call against a different container's filesystem, and a
+// leading '-' would be parsed as an option. Both are refused at phrasing time
+// rather than escaped, so a direct Runtime caller cannot bypass the
+// spec-level checks.
+func TestCopyArgsRefusesInjection(t *testing.T) {
+	cases := []struct {
+		name                   string
+		id, hostDir, targetDir string
+	}{
+		{"colon in id", "seed:er", "/seeds/checkout", "/seed"},
+		{"colon in host dir", "seeder", "/seeds/check:out", "/seed"},
+		{"colon in target dir", "seeder", "/seeds/checkout", "/se:ed"},
+		{"newline in host dir", "seeder", "/seeds/check\nout", "/seed"},
+		{"control character in id", "see\x00der", "/seeds/checkout", "/seed"},
+		{"leading dash in id", "-seeder", "/seeds/checkout", "/seed"},
+		{"empty id", "", "/seeds/checkout", "/seed"},
+		{"empty host dir", "seeder", "", "/seed"},
+		{"empty target dir", "seeder", "/seeds/checkout", ""},
+		{"relative host dir", "seeder", "seeds/checkout", "/seed"},
+		{"relative target dir", "seeder", "/seeds/checkout", "seed"},
+		{"root host dir", "seeder", "/", "/seed"},
+		{"root target dir", "seeder", "/seeds/checkout", "/"},
+		{"uncleaned host dir", "seeder", "/seeds/../seeds/checkout", "/seed"},
+		{"uncleaned target dir", "seeder", "/seeds/checkout", "/seed/../seed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if args, err := copyArgs(tc.id, tc.hostDir, tc.targetDir); err == nil {
+				t.Errorf("copyArgs() = %q, want an error", args)
+			}
+		})
+	}
+}
+
 // TestCreateContainerArgsRefusesInjection is the CLI boundary's fail-closed
 // guard for the two review findings: a bare-key env entry (which the CLI
 // would inherit from the host) and a comma-bearing mount field (which the

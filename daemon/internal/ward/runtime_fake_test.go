@@ -32,6 +32,7 @@ func (stubRuntime) ListContainers(context.Context) ([]ContainerSummary, error) {
 func (stubRuntime) ExportRootFS(context.Context, string, io.Writer, int64) error {
 	return nil
 }
+func (stubRuntime) CopyIntoContainer(context.Context, string, string, string) error { return nil }
 
 // fakeCtr is one container the fakeRuntime tracks.
 type fakeCtr struct {
@@ -59,9 +60,10 @@ type fakeRuntime struct {
 	t  *testing.T
 	mu sync.Mutex
 
-	calls []string
-	vols  map[string]*fakeVol
-	ctrs  map[string]*fakeCtr
+	calls  []string
+	vols   map[string]*fakeVol
+	ctrs   map[string]*fakeCtr
+	copies []fakeCopy
 	// seq feeds nextCreated so every object the fake makes carries a distinct
 	// opaque creation fingerprint.
 	seq int
@@ -106,6 +108,16 @@ type fakeRuntime struct {
 	onListContainers  func(list []ContainerSummary) ([]ContainerSummary, error)
 	onListVolumes     func(list []VolumeSummary) ([]VolumeSummary, error)
 	onExport          func(id string, dest io.Writer) error
+	// onCopyIntoContainer overrides the copy outcome. Returning nil without the
+	// fake recording anything models the runtime's real and most dangerous
+	// behaviour: a copy into a mounted volume writes nothing and still reports
+	// success.
+	onCopyIntoContainer func(id, hostDir, targetDir string) error
+}
+
+// fakeCopy is one host-to-container copy the fake observed.
+type fakeCopy struct {
+	id, hostDir, targetDir string
 }
 
 func newFakeRuntime(t *testing.T) *fakeRuntime {
@@ -420,6 +432,32 @@ func (f *fakeRuntime) ListContainers(ctx context.Context) ([]ContainerSummary, e
 		return f.onListContainers(out)
 	}
 	return out, nil
+}
+
+// CopyIntoContainer models Apple container 1.1.0's copy: it refuses a
+// container that is not running, which is why the gate must start the seeder
+// rather than address a merely created one.
+func (f *fakeRuntime) CopyIntoContainer(ctx context.Context, id, hostDir, targetDir string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("copy %s %s %s", id, hostDir, targetDir)
+	if err := f.checkCtx(ctx); err != nil {
+		return err
+	}
+	if f.onCopyIntoContainer != nil {
+		if err := f.onCopyIntoContainer(id, hostDir, targetDir); err != nil {
+			return err
+		}
+	}
+	c, ok := f.ctrs[id]
+	if !ok {
+		return fmt.Errorf("container %q not found", id)
+	}
+	if !c.started || c.stopped {
+		return fmt.Errorf("invalidState: container %q is not running", id)
+	}
+	f.copies = append(f.copies, fakeCopy{id: id, hostDir: hostDir, targetDir: targetDir})
+	return nil
 }
 
 func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Writer, _ int64) error {
