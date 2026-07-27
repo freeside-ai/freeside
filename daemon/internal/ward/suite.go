@@ -74,6 +74,10 @@ type SuiteFixture struct {
 	// invocation, e.g. from a timestamp). Probe objects derive their names
 	// from it.
 	RunID string
+	// Seed is the daemon-owned exact-base checkout the synthetic handoff stages.
+	// Full requires a real base_checkout seed so startup and configuration
+	// conformance exercise the same seeder and observer path as a real run.
+	Seed WorkspaceSeed
 }
 
 const (
@@ -146,6 +150,11 @@ func (fx SuiteFixture) agentCommand(cfg Config) []string {
 		// anything: a runtime that mounted some other volume carrying a `token`
 		// file, or did not realize the mount at all, aborts under set -eu.
 		"set -eu; test \"$(cat " + token + ")\" = " + fx.CredentialMarker + "; " +
+			// The observer has already attested the suite seed. Clear the
+			// disposable seeded tree so the exported oracle remains exactly the
+			// two suite-owned writer files and cannot accidentally pass on stale
+			// checkout content.
+			"find " + ws + " -mindepth 1 -maxdepth 1 -exec rm -rf {} \\;; " +
 			// Emit this run's writer sentinel only after the marker check, so its
 			// presence proves this run's writer produced the output.
 			"printf '%s\\n' " + writerSentinel(fx.RunID) + " > " + ws + "/" + writerResultPath + "; " +
@@ -374,13 +383,18 @@ func (fx SuiteFixture) validate() error {
 		return fmt.Errorf("%w: SuiteFixture.CredentialSizeMB %d is not positive", ErrInvalidConfig, fx.CredentialSizeMB)
 	case !runIDPattern.MatchString(fx.RunID):
 		return fmt.Errorf("%w: SuiteFixture.RunID %q does not match %s", ErrInvalidConfig, fx.RunID, runIDPattern)
+	case fx.Seed.Mode != SeedBaseCheckout:
+		return fmt.Errorf("%w: SuiteFixture.Seed must use %s", ErrInvalidConfig, SeedBaseCheckout)
+	}
+	if err := fx.Seed.validate(); err != nil {
+		return fmt.Errorf("%w: SuiteFixture.Seed: %w", ErrInvalidConfig, err)
 	}
 	return nil
 }
 
 // NewSuite builds a conformance suite over an initialized backend. The
-// fixture must carry a digest-pinned agent image, a credential marker, and a
-// valid run ID; other fields default.
+// fixture must carry a digest-pinned agent image, a credential marker, a
+// base-checkout seed, and a valid run ID; other fields default.
 func NewSuite(b *Backend, fx SuiteFixture) (*Suite, error) {
 	if b == nil || !b.initialized {
 		return nil, fmt.Errorf("%w: Suite requires an initialized Backend", ErrInvalidConfig)
@@ -778,6 +792,7 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 	res, err := s.b.Handoff(ctx, HandoffSpec{
 		RunID:           s.fx.RunID,
 		WorkspaceSizeMB: s.fx.WorkspaceSizeMB,
+		Seed:            s.fx.Seed,
 		Agent: AgentSpec{
 			Image:            s.fx.AgentImage,
 			Command:          s.agentCommand,

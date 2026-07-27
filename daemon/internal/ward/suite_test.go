@@ -32,11 +32,13 @@ const suiteMarker = "FREESIDE_FAKE_PROVIDER_CREDENTIAL_DO_NOT_EXPORT"
 func newSuiteTest(t *testing.T) (*Suite, *fakeRuntime) {
 	t.Helper()
 	fx := newHandoffFixture(t)
+	seed := suiteSeed(t, fx)
 	b := fx.backend(t)
 	s, err := NewSuite(b, SuiteFixture{
 		AgentImage:       "example.test/agent@sha256:" + strings.Repeat("1", 64),
 		CredentialMarker: suiteMarker,
 		RunID:            "conf-run",
+		Seed:             seed,
 	})
 	if err != nil {
 		t.Fatalf("NewSuite = %v", err)
@@ -49,6 +51,14 @@ func newSuiteTest(t *testing.T) (*Suite, *fakeRuntime) {
 	// Tests that assert a containment failure override this.
 	fx.rt.exportTarPath = buildTar(t, writerArchive(t, s.fx.RunID))
 	return s, fx.rt
+}
+
+func suiteSeed(t *testing.T, fx *handoffFixture) WorkspaceSeed {
+	t.Helper()
+	root := t.TempDir()
+	dir := writeSeedCheckout(t, root, testBaseSHA)
+	fx.cfg.SeedRoot = root
+	return WorkspaceSeed{Mode: SeedBaseCheckout, SourceDir: dir, Base: testBaseRevision()}
 }
 
 // writerArchive is the workspace export a passing default writer produces: the
@@ -200,9 +210,31 @@ func TestSuiteFullSuccess(t *testing.T) {
 	if err := s.Full(context.Background()); err != nil {
 		t.Fatalf("Full = %v, want nil", err)
 	}
+	seeder := namesFor(s.fx.RunID).Seeder
+	var seedCopies int
+	for _, copy := range rt.copies {
+		if copy.id == seeder {
+			seedCopies++
+		}
+	}
+	if seedCopies != 2 {
+		t.Errorf("Full made %d workspace-seed copies, want staged tree and sentinel", seedCopies)
+	}
 	if !s.b.Capabilities().Has(exec.CapNetworklessExport) {
 		t.Error("successful Full did not declare supports_networkless_export")
 	}
+	s.assertReaped(t, rt)
+}
+
+func TestSuiteFullFailsWhenWorkspaceSeedingFails(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	rt.onCopyIntoContainer = func(id, _, _ string) error {
+		if id == namesFor(s.fx.RunID).Seeder {
+			return errors.New("workspace seeding unavailable")
+		}
+		return nil
+	}
+	wantCheckFailure(t, s.Full(context.Background()), CheckWorkspaceSeeding)
 	s.assertReaped(t, rt)
 }
 
@@ -552,6 +584,7 @@ func TestSuiteFullCleanupPanicWithholdsNetworklessCapability(t *testing.T) {
 
 func TestSuiteFullOlderSuccessCannotOverrideNewerFailure(t *testing.T) {
 	fx := newHandoffFixture(t)
+	seed := suiteSeed(t, fx)
 	scannerEntered := make(chan struct{})
 	releaseScanner := make(chan struct{})
 	fx.cfg.Scanner = scannerFunc(func(context.Context, string) error {
@@ -566,6 +599,7 @@ func TestSuiteFullOlderSuccessCannotOverrideNewerFailure(t *testing.T) {
 			AgentImage:       "example.test/agent@sha256:" + strings.Repeat("1", 64),
 			CredentialMarker: suiteMarker,
 			RunID:            runID,
+			Seed:             seed,
 		})
 		if err != nil {
 			t.Fatalf("NewSuite(%q): %v", runID, err)
@@ -724,12 +758,14 @@ func TestSuiteFullJoinsCleanupFailureWithProbeError(t *testing.T) {
 // than draining unbounded until the suite budget.
 func TestSuiteFullAuditExportCapped(t *testing.T) {
 	fx := newHandoffFixture(t)
+	seed := suiteSeed(t, fx)
 	fx.cfg.MaxArchiveBytes = 1 << 20 // above the fixture archive, below the flood
 	b := fx.backend(t)
 	s, err := NewSuite(b, SuiteFixture{
 		AgentImage:       "example.test/agent@sha256:" + strings.Repeat("1", 64),
 		CredentialMarker: suiteMarker,
 		RunID:            "conf-run",
+		Seed:             seed,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -753,12 +789,14 @@ func TestSuiteFullAuditExportCapped(t *testing.T) {
 // the overflow check.
 func TestSuiteFullAuditExportOverflowSwallowed(t *testing.T) {
 	fx := newHandoffFixture(t)
+	seed := suiteSeed(t, fx)
 	fx.cfg.MaxArchiveBytes = 1 << 20
 	b := fx.backend(t)
 	s, err := NewSuite(b, SuiteFixture{
 		AgentImage:       "example.test/agent@sha256:" + strings.Repeat("1", 64),
 		CredentialMarker: suiteMarker,
 		RunID:            "conf-run",
+		Seed:             seed,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1528,11 +1566,14 @@ func TestSuiteFullDoesNotDeleteForeignVolumeCollision(t *testing.T) {
 }
 
 func TestNewSuiteValidation(t *testing.T) {
-	b := newHandoffFixture(t).backend(t)
+	handoff := newHandoffFixture(t)
+	seed := suiteSeed(t, handoff)
+	b := handoff.backend(t)
 	valid := SuiteFixture{
 		AgentImage:       "example.test/agent@sha256:" + strings.Repeat("1", 64),
 		CredentialMarker: suiteMarker,
 		RunID:            "conf-run",
+		Seed:             seed,
 	}
 	if _, err := NewSuite(b, valid); err != nil {
 		t.Fatalf("valid fixture: NewSuite = %v", err)
@@ -1561,6 +1602,10 @@ func TestNewSuiteValidation(t *testing.T) {
 		{"marker collides with blob directory", func(fx *SuiteFixture) { fx.CredentialMarker = "blob" }},
 		{"credential target shadows audit marker path", func(fx *SuiteFixture) { fx.CredentialTarget = auditMarkerPath("conf-run") }},
 		{"bad run id", func(fx *SuiteFixture) { fx.RunID = "Conf/Run" }},
+		{"blank seed", func(fx *SuiteFixture) { fx.Seed = WorkspaceSeed{Mode: SeedBlank} }},
+		{"invalid base seed", func(fx *SuiteFixture) {
+			fx.Seed = WorkspaceSeed{Mode: SeedBaseCheckout, SourceDir: "relative", Base: testBaseRevision()}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

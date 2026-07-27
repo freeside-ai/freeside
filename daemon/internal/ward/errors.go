@@ -76,10 +76,24 @@ const (
 	CheckNetworklessExport Check = "networkless_export"
 )
 
+// Gate assertions that extend the spike's seven contract checks. The spike
+// proved a handoff over a blank workspace; a real run starts from a declared
+// exact base (plan §5.9), and these name the two claims that addition makes.
+const (
+	// CheckWorkspaceSeeding covers everything up to the point the workspace
+	// holds the declared base: the seed source was daemon-owned and
+	// well-formed, the seeder realized exactly the approved read-write
+	// topology and had not executed when it was approved, the staged copy
+	// succeeded, and the seeder terminated and was proven absent before
+	// anything else attached the volume.
+	CheckWorkspaceSeeding Check = "workspace_seeding"
+)
+
 // AllChecks lists every valid Check and is the enum's single registration
-// point. The first seven values retain the spike contract's semantic grouping;
-// the final five are suite-level probes, but that distinction does not split
-// the all-valid registry callers use for exhaustiveness.
+// point. The first seven values retain the spike contract's semantic grouping,
+// the next five are suite-level probes, and the last extend the gate past the
+// spike's blank-workspace scope, but those distinctions do not split the
+// all-valid registry callers use for exhaustiveness.
 var AllChecks = []Check{
 	CheckCredentialSeparation,
 	CheckControlPlaneIsolation,
@@ -93,6 +107,7 @@ var AllChecks = []Check{
 	CheckSameVMRefutation,
 	CheckPreJobProbe,
 	CheckNetworklessExport,
+	CheckWorkspaceSeeding,
 }
 
 func (c Check) valid() bool {
@@ -101,7 +116,8 @@ func (c Check) valid() bool {
 		CheckWriterTermination, CheckExporterAllowlist,
 		CheckInExporterVerification, CheckExportVerification, CheckTeardown,
 		CheckWriterVolumeExclusion, CheckCredentialContainment,
-		CheckSameVMRefutation, CheckPreJobProbe, CheckNetworklessExport:
+		CheckSameVMRefutation, CheckPreJobProbe, CheckNetworklessExport,
+		CheckWorkspaceSeeding:
 		return true
 	default:
 		return false

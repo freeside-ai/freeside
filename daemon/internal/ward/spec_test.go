@@ -30,6 +30,7 @@ func testHandoffSpec() HandoffSpec {
 	return HandoffSpec{
 		RunID:           "golden-run",
 		WorkspaceSizeMB: 64,
+		Seed:            WorkspaceSeed{Mode: SeedBlank},
 		Agent: AgentSpec{
 			Image:   "example.test/agent@sha256:" + strings.Repeat("1", 64),
 			Command: []string{"sh", "-c", "true"},
@@ -63,6 +64,10 @@ func TestHandoffSpecValidate(t *testing.T) {
 		{"unpinned agent image", func(s *HandoffSpec) { s.Agent.Image = "example.test/agent:latest" }},
 		{"short agent digest", func(s *HandoffSpec) { s.Agent.Image = "example.test/agent@sha256:abc" }},
 		{"missing agent command", func(s *HandoffSpec) { s.Agent.Command = nil }},
+		// The seed is part of the spec's caller-error surface, so its rejections
+		// must reach ErrInvalidHandoffSpec through HandoffSpec.validate too.
+		{"unset seed mode", func(s *HandoffSpec) { s.Seed = WorkspaceSeed{} }},
+		{"unknown seed mode", func(s *HandoffSpec) { s.Seed = WorkspaceSeed{Mode: SeedMode("copy")} }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -79,11 +84,38 @@ func TestNamesFor(t *testing.T) {
 	n := namesFor("run-1")
 	want := handoffNames{
 		Workspace: "freeside-handoff-run-1-ws",
+		Seeder:    "freeside-handoff-run-1-seeder",
+		Observer:  "freeside-handoff-run-1-observer",
 		Agent:     "freeside-handoff-run-1-agent",
 		Exporter:  "freeside-handoff-run-1-exporter",
 	}
 	if n != want {
 		t.Errorf("namesFor(run-1) = %+v, want %+v", n, want)
+	}
+	if got := WorkspaceRef("run-1"); got != want.Workspace {
+		t.Errorf("WorkspaceRef(run-1) = %q, want %q", got, want.Workspace)
+	}
+}
+
+// TestNamesForFitsRuntimeIDLimit pins every role name against the longest
+// valid run ID: Apple container 1.1.0 refuses an ID over 64 bytes, and the
+// networkless-export work already had to shorten a role prefix once for
+// exactly this reason. "observer" is the longest suffix, so a new role longer
+// than it must re-check this bound.
+func TestNamesForFitsRuntimeIDLimit(t *testing.T) {
+	const runtimeIDLimit = 64
+	longest := "a" + strings.Repeat("b", 31) // the max runIDPattern admits
+	if !runIDPattern.MatchString(longest) {
+		t.Fatalf("fixture run ID %q is not a valid run ID", longest)
+	}
+	n := namesFor(longest)
+	for role, name := range map[string]string{
+		"workspace": n.Workspace, "seeder": n.Seeder, "observer": n.Observer,
+		"agent": n.Agent, "exporter": n.Exporter,
+	} {
+		if len(name) > runtimeIDLimit {
+			t.Errorf("%s name %q is %d bytes, over the runtime's %d-byte limit", role, name, len(name), runtimeIDLimit)
+		}
 	}
 }
 

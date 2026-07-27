@@ -96,6 +96,8 @@ func TestLiveConformanceSuite(t *testing.T) {
 		})
 	})
 
+	seedRoot := t.TempDir()
+	seedDir := writeSeedCheckout(t, seedRoot, testBaseSHA)
 	cfg := Config{
 		// The exporter runs the REAL freeside-export helper from the pinned
 		// exporter image; Suite.Full's check-5 probe also runs in this image.
@@ -103,6 +105,7 @@ func TestLiveConformanceSuite(t *testing.T) {
 		ExporterCommand:   export.HelperCommand(),
 		WriterStopTimeout: 3 * time.Minute,
 		ExporterTimeout:   3 * time.Minute,
+		SeedRoot:          seedRoot,
 		Scanner:           scanner,
 	}
 	b, err := New(rt, cfg)
@@ -113,6 +116,9 @@ func TestLiveConformanceSuite(t *testing.T) {
 		AgentImage:       liveImage,
 		CredentialMarker: liveMarker,
 		RunID:            runID,
+		Seed: WorkspaceSeed{
+			Mode: SeedBaseCheckout, SourceDir: seedDir, Base: testBaseRevision(),
+		},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 // BackendName is the backend's name in policy, refusals, and audit records:
@@ -35,6 +37,14 @@ var (
 	// digestPinnedImagePattern binds an image reference to one full lowercase
 	// sha256 digest, not a tag or a merely digest-shaped prefix.
 	digestPinnedImagePattern = regexp.MustCompile(`^.+@sha256:[0-9a-f]{64}$`)
+	// commitSHAPattern is the exact shape of a resolved git commit. The gate
+	// compares a declared base against one observed in the seeded workspace
+	// byte for byte, so the shape is pinned here even though
+	// domain.BaseRevision only requires the field to be non-empty: an
+	// abbreviated, uppercase, or ref-shaped value would compare unequal against
+	// a full lowercase observation for reasons that have nothing to do with the
+	// bases differing.
+	commitSHAPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 )
 
 // splitImageRef parses an OCI image reference into its name and its pinned
@@ -90,15 +100,103 @@ type AgentSpec struct {
 	CredentialMounts []CredentialMount
 }
 
-// HandoffSpec is one full handoff request: run the agent against a fresh
-// workspace volume, prove its VM terminated, and export the workspace
-// through the read-only exporter.
+// SeedMode is how a run's workspace volume is populated before the writer
+// starts. The zero value is invalid by design: an absent mode would make an
+// unseeded workspace the silent default, and a run whose base nobody declared
+// is exactly the run §5.9's exact-base binding exists to prevent.
+type SeedMode string
+
+const (
+	// SeedBlank leaves the workspace empty. It is safe only for a synthetic
+	// caller that deliberately has no base; the full conformance suite uses
+	// SeedBaseCheckout so it exercises the production seeder and observer.
+	// A blank seed produces no observed base: domain.BaseRevision requires a
+	// commit, so a caller comparing a declared base against a blank workspace's
+	// empty observation can never match.
+	SeedBlank SeedMode = "blank"
+	// SeedBaseCheckout copies a daemon-owned checkout of the declared base into
+	// the workspace before the writer starts.
+	SeedBaseCheckout SeedMode = "base_checkout"
+)
+
+// AllSeedModes lists every valid SeedMode.
+var AllSeedModes = []SeedMode{SeedBlank, SeedBaseCheckout}
+
+func (m SeedMode) valid() bool {
+	switch m {
+	case SeedBlank, SeedBaseCheckout:
+		return true
+	default:
+		return false
+	}
+}
+
+// WorkspaceSeed declares what the workspace holds when the writer starts.
+//
+// Base is the caller's *declaration*, never evidence: the gate reads the base
+// the seeded volume actually carries from a read-only observer VM and compares
+// it against this value. A caller that declares one base and stages another is
+// refused, which is the whole point of recording an observed identity rather
+// than echoing the request (plan §5.9).
+type WorkspaceSeed struct {
+	Mode SeedMode
+	// SourceDir is the daemon-owned checkout to stage, required for
+	// SeedBaseCheckout and empty otherwise. It must resolve under
+	// Config.SeedRoot and carry the daemon-authored canonical repository
+	// name/ID binding; the gate never accepts an arbitrary host path.
+	SourceDir string
+	// Base is the exact revision SourceDir is declared to hold.
+	Base domain.BaseRevision
+}
+
+// validate reports the first caller error in the seed declaration. Filesystem
+// facts about SourceDir (existence, shape, size) are verified while
+// stageSeedSource snapshots it; this is the syntactic gate that runs before
+// anything is touched.
+func (s WorkspaceSeed) validate() error {
+	if !s.Mode.valid() {
+		return fmt.Errorf("%w: Seed.Mode %q is not one of %v", ErrInvalidHandoffSpec, s.Mode, AllSeedModes)
+	}
+	if s.Mode == SeedBlank {
+		// A blank seed carrying a source or a base is an ambiguous request: the
+		// caller either meant to seed and named the wrong mode, or is passing a
+		// base the gate will never verify. Both are refused rather than silently
+		// resolved in one direction.
+		if s.SourceDir != "" {
+			return fmt.Errorf("%w: Seed.SourceDir is set on a %s seed", ErrInvalidHandoffSpec, SeedBlank)
+		}
+		if s.Base != (domain.BaseRevision{}) {
+			return fmt.Errorf("%w: Seed.Base is set on a %s seed", ErrInvalidHandoffSpec, SeedBlank)
+		}
+		return nil
+	}
+	if !cleanAbs(s.SourceDir) {
+		return fmt.Errorf("%w: Seed.SourceDir %q is not a clean absolute non-root path", ErrInvalidHandoffSpec, s.SourceDir)
+	}
+	if !copyPathSafe(s.SourceDir) {
+		return fmt.Errorf("%w: Seed.SourceDir %q carries a container-reference delimiter", ErrInvalidHandoffSpec, s.SourceDir)
+	}
+	if err := s.Base.Validate(); err != nil {
+		return fmt.Errorf("%w: Seed.Base: %w", ErrInvalidHandoffSpec, err)
+	}
+	if !commitSHAPattern.MatchString(s.Base.BaseSHA) {
+		return fmt.Errorf("%w: Seed.Base.BaseSHA %q is not a full lowercase commit SHA", ErrInvalidHandoffSpec, s.Base.BaseSHA)
+	}
+	return nil
+}
+
+// HandoffSpec is one full handoff request: seed a fresh workspace volume at a
+// declared exact base, run the agent against it, prove its VM terminated, and
+// export the workspace through the read-only exporter.
 type HandoffSpec struct {
 	// RunID names this run's volumes and containers; it must match
 	// ^[a-z0-9][a-z0-9-]{0,31}$ and be unique among live runs.
 	RunID string
 	// WorkspaceSizeMB is the workspace volume size in megabytes.
 	WorkspaceSizeMB int64
+	// Seed declares what the workspace holds when the writer starts. It is
+	// required: see SeedMode on why absence is not a mode.
+	Seed WorkspaceSeed
 	// Agent is the writer container.
 	Agent AgentSpec
 }
@@ -119,12 +217,14 @@ func (s HandoffSpec) validate() error {
 	case len(s.Agent.Command) == 0:
 		return fmt.Errorf("%w: Agent.Command is required", ErrInvalidHandoffSpec)
 	}
-	return nil
+	return s.Seed.validate()
 }
 
 // handoffNames are the runtime object names one run owns.
 type handoffNames struct {
 	Workspace string
+	Seeder    string
+	Observer  string
 	Agent     string
 	Exporter  string
 }
@@ -132,10 +232,19 @@ type handoffNames struct {
 func namesFor(runID string) handoffNames {
 	return handoffNames{
 		Workspace: "freeside-handoff-" + runID + "-ws",
+		Seeder:    "freeside-handoff-" + runID + "-seeder",
+		Observer:  "freeside-handoff-" + runID + "-observer",
 		Agent:     "freeside-handoff-" + runID + "-agent",
 		Exporter:  "freeside-handoff-" + runID + "-exporter",
 	}
 }
+
+// WorkspaceRef is the ward lane's opaque workspace reference for a run: the
+// name of the workspace volume the handoff creates and the exporter reads.
+// exec.StartSpec.Workspace is declared opaque and ward-defined (plan §5.7);
+// this function is that definition, so a caller can name the workspace without
+// reconstructing the gate's naming scheme.
+func WorkspaceRef(runID string) string { return namesFor(runID).Workspace }
 
 // runLabels label every runtime object the gate creates.
 func runLabels(runID string) []Label {
@@ -219,6 +328,24 @@ func cliSafe(s string) bool {
 	}
 	for _, r := range s {
 		if r == ',' || r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// copyPathSafe reports whether p is safe to place in a `container copy`
+// argument. The CLI addresses a container-side path as <container>:<path>, so
+// a ':' anywhere in either argument could reparse the argument into a
+// different container's path; control characters are refused for the same
+// reason cliSafe refuses them. Such a value is refused, never escaped. The
+// empty string is not safe (both copy arguments are always required).
+func copyPathSafe(p string) bool {
+	if p == "" {
+		return false
+	}
+	for _, r := range p {
+		if r == ':' || r < 0x20 || r == 0x7f {
 			return false
 		}
 	}

@@ -197,6 +197,7 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 	res, err := b.Handoff(ctx, HandoffSpec{
 		RunID:           runID,
 		WorkspaceSizeMB: 64,
+		Seed:            WorkspaceSeed{Mode: SeedBlank},
 		Agent: AgentSpec{
 			Image: liveImage,
 			Command: []string{
