@@ -322,11 +322,20 @@ func verifySeedRoleAllowlist(cfg Config, rep InspectReport, spec ContainerSpec, 
 // The nonce must equal this invocation's unpredictable ownership token. That is
 // what makes the proof this run's rather than a file the image shipped with or
 // an earlier run left behind.
-func verifyBaseProof(data []byte, nonce string) (string, error) {
+func verifyBaseProof(data []byte, nonce, treeDigest string) (string, error) {
 	fixed := map[string]string{
 		baseProofNonceKey:    nonce,
 		baseProofGitDirKey:   "present",
 		baseProofDetachedKey: "yes",
+		// Named separately from the digest so the likeliest wrong workspace --
+		// a git directory with nothing checked out, which is exactly what
+		// publish.Transport.FetchBase produces -- fails as itself rather than
+		// as an opaque digest mismatch.
+		baseProofWorktreeKey: "present",
+		// The tree the host verified, recomputed by the observer over the
+		// volume. HEAD is a pointer and proves nothing about content; this is
+		// what makes the attestation cover what the writer will actually see.
+		baseProofTreeKey: treeDigest,
 	}
 	seen := map[string]bool{}
 	var observed string
@@ -365,7 +374,10 @@ func verifyBaseProof(data []byte, nonce string) (string, error) {
 	if err := sc.Err(); err != nil {
 		return "", failf(CheckObservedBaseIdentity, "base proof unreadable")
 	}
-	for _, key := range []string{baseProofNonceKey, baseProofGitDirKey, baseProofDetachedKey, baseProofSHAKey} {
+	for _, key := range []string{
+		baseProofNonceKey, baseProofGitDirKey, baseProofDetachedKey,
+		baseProofSHAKey, baseProofWorktreeKey, baseProofTreeKey,
+	} {
 		if !seen[key] {
 			return "", failf(CheckObservedBaseIdentity, "base proof omits a required key")
 		}

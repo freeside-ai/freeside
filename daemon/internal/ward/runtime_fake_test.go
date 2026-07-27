@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,6 +73,8 @@ type fakeRuntime struct {
 	// reaches the volume when the guest's own command runs, not when the host's
 	// copy returns.
 	volBase map[string]string
+	// volTree is the tree digest the simulated seeder placed alongside it.
+	volTree map[string]string
 	// staged is the host directory most recently staged into each container.
 	staged map[string]string
 	// baseProofPath is where the observer's proof lands in its rootfs; it
@@ -148,6 +151,7 @@ func newFakeRuntime(t *testing.T) *fakeRuntime {
 		vols:            map[string]*fakeVol{},
 		ctrs:            map[string]*fakeCtr{},
 		volBase:         map[string]string{},
+		volTree:         map[string]string{},
 		staged:          map[string]string{},
 		baseProofPath:   "/handoff-base.txt",
 		runningInspects: map[string]int{},
@@ -211,17 +215,19 @@ func (c *fakeCtr) ownershipToken() string {
 
 // baseProofFor renders the proof the pinned observer image would write for a
 // workspace holding sha.
-func baseProofFor(nonce, sha string) []byte {
-	return fmt.Appendf(nil, "%s=%s\n%s=present\n%s=yes\n%s=%s\n",
-		baseProofNonceKey, nonce, baseProofGitDirKey, baseProofDetachedKey, baseProofSHAKey, sha)
+func baseProofFor(nonce, sha, tree string) []byte {
+	return fmt.Appendf(nil, "%s=%s\n%s=present\n%s=yes\n%s=%s\n%s=present\n%s=%s\n",
+		baseProofNonceKey, nonce, baseProofGitDirKey, baseProofDetachedKey,
+		baseProofSHAKey, sha, baseProofWorktreeKey, baseProofTreeKey, tree)
 }
 
 // baseProofForAbsentGitDir renders the proof the observer writes over a
 // workspace that was never seeded: the observation still happens and is still
 // reported, it just reports nothing there.
 func baseProofForAbsentGitDir(nonce string) []byte {
-	return fmt.Appendf(nil, "%s=%s\n%s=absent\n%s=no\n%s=none\n",
-		baseProofNonceKey, nonce, baseProofGitDirKey, baseProofDetachedKey, baseProofSHAKey)
+	return fmt.Appendf(nil, "%s=%s\n%s=absent\n%s=no\n%s=none\n%s=absent\n%s=none\n",
+		baseProofNonceKey, nonce, baseProofGitDirKey, baseProofDetachedKey,
+		baseProofSHAKey, baseProofWorktreeKey, baseProofTreeKey)
 }
 
 // writeProofTar streams a one-entry archive carrying proof at absolutePath,
@@ -603,7 +609,38 @@ func (f *fakeRuntime) CopyIntoContainer(ctx context.Context, id, hostDir, target
 		return nil //nolint:nilerr // a stage without a HEAD seeds nothing, and the copy itself still succeeded
 	}
 	f.volBase[vol] = strings.TrimSpace(string(head))
+	// The volume receives the staged tree, so the digest the observer reports
+	// is the digest of what was staged. Computing it from the fixture rather
+	// than echoing the host's expectation is what lets an altered or partial
+	// copy fail the attestation in a test.
+	f.volTree[vol] = digestOfDir(f.t, src)
 	return nil
+}
+
+// digestOfDir computes the tree digest the observer would report for a
+// directory, using the same helpers the host applies to the seed source.
+func digestOfDir(t *testing.T, root string) string {
+	t.Helper()
+	var lines []string
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, relErr := filepath.Rel(root, p)
+		if relErr != nil {
+			return relErr
+		}
+		sum, sumErr := fileSHA256(p)
+		if sumErr != nil {
+			return sumErr
+		}
+		lines = append(lines, sum+"  ./"+filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("digest fixture tree %s: %v", root, err)
+	}
+	return treeDigest(lines)
 }
 
 func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Writer, _ int64) error {
@@ -631,7 +668,7 @@ func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Write
 	if vol, isObserver := c.observedVolume(f.baseProofPath); isObserver {
 		proof := baseProofForAbsentGitDir(c.ownershipToken())
 		if sha, seeded := f.volBase[vol]; seeded {
-			proof = baseProofFor(c.ownershipToken(), sha)
+			proof = baseProofFor(c.ownershipToken(), sha, f.volTree[vol])
 		}
 		if f.observerProof != nil {
 			proof = f.observerProof(id, proof)

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -110,11 +111,17 @@ func TestAllSeedModesValid(t *testing.T) {
 	}
 }
 
+// dropField marks a proof field the fixture should omit entirely, as distinct
+// from one carrying a wrong value.
+const dropField = "\x00drop"
+
 func TestVerifyBaseProof(t *testing.T) {
 	const nonce = "0123456789abcdef0123456789abcdef"
-	good := []byte("nonce=" + nonce + "\ngit_dir=present\nhead_detached=yes\nbase_sha=" + testBaseSHA + "\n")
+	const tree = "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface"
+	good := []byte("nonce=" + nonce + "\ngit_dir=present\nhead_detached=yes\nbase_sha=" + testBaseSHA +
+		"\nworktree=present\ntree_sha256=" + tree + "\n")
 
-	got, err := verifyBaseProof(good, nonce)
+	got, err := verifyBaseProof(good, nonce, tree)
 	if err != nil {
 		t.Fatalf("conforming proof: %v, want nil", err)
 	}
@@ -122,24 +129,58 @@ func TestVerifyBaseProof(t *testing.T) {
 		t.Errorf("observed base = %q, want %q", got, testBaseSHA)
 	}
 
+	// proofWith renders a full proof with one field replaced, so each case
+	// differs from the conforming fixture only in the thing under test.
+	proofWith := func(overrides map[string]string) string {
+		fields := []struct{ key, val string }{
+			{baseProofNonceKey, nonce},
+			{baseProofGitDirKey, "present"},
+			{baseProofDetachedKey, "yes"},
+			{baseProofSHAKey, testBaseSHA},
+			{baseProofWorktreeKey, "present"},
+			{baseProofTreeKey, tree},
+		}
+		var b strings.Builder
+		for _, f := range fields {
+			v, replaced := overrides[f.key]
+			if replaced && v == dropField {
+				continue
+			}
+			if !replaced {
+				v = f.val
+			}
+			b.WriteString(f.key + "=" + v + "\n")
+		}
+		return b.String()
+	}
+
 	cases := []struct {
 		name  string
 		proof string
 	}{
 		{"empty", ""},
-		{"omits nonce", "git_dir=present\nhead_detached=yes\nbase_sha=" + testBaseSHA + "\n"},
-		{"omits git dir", "nonce=" + nonce + "\nhead_detached=yes\nbase_sha=" + testBaseSHA + "\n"},
-		{"omits detached", "nonce=" + nonce + "\ngit_dir=present\nbase_sha=" + testBaseSHA + "\n"},
-		{"omits sha", "nonce=" + nonce + "\ngit_dir=present\nhead_detached=yes\n"},
+		{"omits nonce", proofWith(map[string]string{baseProofNonceKey: dropField})},
+		{"omits git dir", proofWith(map[string]string{baseProofGitDirKey: dropField})},
+		{"omits detached", proofWith(map[string]string{baseProofDetachedKey: dropField})},
+		{"omits sha", proofWith(map[string]string{baseProofSHAKey: dropField})},
+		{"omits worktree", proofWith(map[string]string{baseProofWorktreeKey: dropField})},
+		{"omits tree digest", proofWith(map[string]string{baseProofTreeKey: dropField})},
 		// The nonce is what binds the proof to this invocation; without the
 		// check, a file the image shipped with would satisfy the gate.
-		{"foreign nonce", "nonce=" + strings.Repeat("f", 32) + "\ngit_dir=present\nhead_detached=yes\nbase_sha=" + testBaseSHA + "\n"},
-		{"empty nonce", "nonce=\ngit_dir=present\nhead_detached=yes\nbase_sha=" + testBaseSHA + "\n"},
-		{"no git dir", "nonce=" + nonce + "\ngit_dir=absent\nhead_detached=yes\nbase_sha=" + testBaseSHA + "\n"},
-		{"symbolic head", "nonce=" + nonce + "\ngit_dir=present\nhead_detached=no\nbase_sha=" + testBaseSHA + "\n"},
-		{"abbreviated sha", "nonce=" + nonce + "\ngit_dir=present\nhead_detached=yes\nbase_sha=" + testBaseSHA[:12] + "\n"},
-		{"uppercase sha", "nonce=" + nonce + "\ngit_dir=present\nhead_detached=yes\nbase_sha=" + strings.ToUpper(testBaseSHA) + "\n"},
-		{"ref-shaped sha", "nonce=" + nonce + "\ngit_dir=present\nhead_detached=yes\nbase_sha=ref: refs/heads/main\n"},
+		{"foreign nonce", proofWith(map[string]string{baseProofNonceKey: strings.Repeat("f", 32)})},
+		{"empty nonce", proofWith(map[string]string{baseProofNonceKey: ""})},
+		{"no git dir", proofWith(map[string]string{baseProofGitDirKey: "absent"})},
+		{"symbolic head", proofWith(map[string]string{baseProofDetachedKey: "no"})},
+		// The case the intended producer actually causes: a checkout whose
+		// worktree was never materialized. HEAD alone would have passed.
+		{"no working tree", proofWith(map[string]string{baseProofWorktreeKey: "absent"})},
+		// Content that is not the content the host verified: a partial or
+		// altered copy that still carries the right HEAD.
+		{"tree digest mismatch", proofWith(map[string]string{baseProofTreeKey: strings.Repeat("a", 64)})},
+		{"tree digest unset", proofWith(map[string]string{baseProofTreeKey: "none"})},
+		{"abbreviated sha", proofWith(map[string]string{baseProofSHAKey: testBaseSHA[:12]})},
+		{"uppercase sha", proofWith(map[string]string{baseProofSHAKey: strings.ToUpper(testBaseSHA)})},
+		{"ref-shaped sha", proofWith(map[string]string{baseProofSHAKey: "ref: refs/heads/main"})},
 		{"unknown key", string(good) + "workspace_write=succeeded\n"},
 		{"repeated key", string(good) + "base_sha=" + strings.Repeat("c", 40) + "\n"},
 		{"repeated fixed key", string(good) + "git_dir=present\n"},
@@ -147,7 +188,7 @@ func TestVerifyBaseProof(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			sha, err := verifyBaseProof([]byte(tc.proof), nonce)
+			sha, err := verifyBaseProof([]byte(tc.proof), nonce, tree)
 			wantCheckFailure(t, err, CheckObservedBaseIdentity)
 			if sha != "" {
 				t.Errorf("rejected proof still yielded a base %q", sha)
@@ -162,7 +203,8 @@ func TestVerifyBaseProof(t *testing.T) {
 func TestVerifyBaseProofNeverEchoesContent(t *testing.T) {
 	const nonce = "0123456789abcdef0123456789abcdef"
 	const planted = "attacker-controlled-fixture-value"
-	_, err := verifyBaseProof([]byte("nonce="+nonce+"\ngit_dir="+planted+"\nhead_detached=yes\nbase_sha="+testBaseSHA+"\n"), nonce)
+	_, err := verifyBaseProof([]byte("nonce="+nonce+"\ngit_dir="+planted+"\nhead_detached=yes\nbase_sha="+testBaseSHA+
+		"\nworktree=present\ntree_sha256="+strings.Repeat("e", 64)+"\n"), nonce, strings.Repeat("e", 64))
 	if err == nil {
 		t.Fatal("unexpected value accepted, want a failure")
 	}
@@ -180,7 +222,7 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	dir := writeSeedCheckout(t, root, testBaseSHA)
 	cfg := testConfig()
 	cfg.SeedRoot = root
-	got, err := verifySeedSource(cfg, dir)
+	got, digest, err := verifySeedSource(cfg, dir)
 	if err != nil {
 		t.Fatalf("verifySeedSource() = %v, want nil", err)
 	}
@@ -192,6 +234,26 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("resolved source = %q, want %q", got, want)
+	}
+	// The digest is the expectation the observer is held to, so it must cover
+	// the tree the host just walked, deterministically.
+	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(digest) {
+		t.Errorf("tree digest = %q, want a sha256 hex digest", digest)
+	}
+	if again := digestOfDir(t, want); again != digest {
+		t.Errorf("tree digest is not deterministic: %q then %q", digest, again)
+	}
+	// A single changed byte anywhere in the tree must change it, or a partial
+	// or altered copy would attest as the verified one.
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("tampered\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, changed, err := verifySeedSource(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed == digest {
+		t.Error("tree digest is unchanged after altering a file's content")
 	}
 }
 
@@ -295,10 +357,10 @@ func TestVerifySeedSourceFailsClosed(t *testing.T) {
 			cfg := testConfig()
 			cfg.SeedRoot = root
 			dir := tc.build(t, root, &cfg)
-			got, err := verifySeedSource(cfg, dir)
+			got, digest, err := verifySeedSource(cfg, dir)
 			wantCheckFailure(t, err, CheckWorkspaceSeeding)
-			if got != "" {
-				t.Errorf("rejected source still yielded a path %q", got)
+			if got != "" || digest != "" {
+				t.Errorf("rejected source still yielded path %q digest %q", got, digest)
 			}
 		})
 	}

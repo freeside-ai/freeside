@@ -424,7 +424,18 @@ const (
 	baseProofGitDirKey   = "git_dir"
 	baseProofDetachedKey = "head_detached"
 	baseProofSHAKey      = "base_sha"
+	baseProofTreeKey     = "tree_sha256"
+	// baseProofWorktreeKey reports whether the workspace holds working-tree
+	// content at all, separately from the tree digest, so the case the
+	// intended producer actually causes -- a .git with nothing checked out --
+	// names itself instead of surfacing as an opaque digest mismatch.
+	baseProofWorktreeKey = "worktree"
 )
+
+// lostFoundDir is the ext4 volume's own directory, present before anything is
+// seeded and absent from every source tree. The observer prunes it so the
+// digest covers the staged content and nothing the filesystem added.
+const lostFoundDir = "lost+found"
 
 // observerScript reads the seeded base off the workspace and writes it, with
 // this invocation's unpredictable nonce, to the observer's own root
@@ -464,11 +475,28 @@ func observerScript(cfg Config, nonce string) string {
 		"*[!0-9a-f]*) ;; " +
 		"????????????????????????????????????????) d=yes; s=\"$h\";; " +
 		"esac; fi; " +
+		// Working-tree content, reported on its own: a checkout with a .git and
+		// nothing checked out is what publish.Transport.FetchBase produces, so
+		// it is the likeliest wrong workspace and deserves to name itself
+		// rather than arrive as an opaque digest mismatch.
+		"w=absent; if [ -n \"$(cd " + ws + " 2>/dev/null && " +
+		"find . -path ./" + lostFoundDir + " -prune -o -path ./.git -prune -o -type f -print 2>/dev/null | head -n 1)\" ]; " +
+		"then w=present; fi; " +
+		// The tree digest: every regular file's sha256 against its path, sorted
+		// bytewise, hashed. It is computed the same way on the host over the
+		// verified source, so the two agree only if the tree that landed is the
+		// tree the gate approved. LC_ALL=C above is what makes the sort
+		// byte-ordered on both sides.
+		"t=none; if [ \"$g\" = present ]; then " +
+		"t=\"$(cd " + ws + " && find . -path ./" + lostFoundDir + " -prune -o -type f -exec sha256sum {} + 2>/dev/null " +
+		"| sort | sha256sum | cut -d' ' -f1)\"; fi; " +
 		"printf '" + baseProofNonceKey + "=%s\\n" +
 		baseProofGitDirKey + "=%s\\n" +
 		baseProofDetachedKey + "=%s\\n" +
-		baseProofSHAKey + "=%s\\n' " +
-		shellQuote(nonce) + " \"$g\" \"$d\" \"$s\" > " + proof + "; sync"
+		baseProofSHAKey + "=%s\\n" +
+		baseProofWorktreeKey + "=%s\\n" +
+		baseProofTreeKey + "=%s\\n' " +
+		shellQuote(nonce) + " \"$g\" \"$d\" \"$s\" \"$w\" \"$t\" > " + proof + "; sync"
 }
 
 // cloneContainerSpec detaches every reference field before a spec crosses the

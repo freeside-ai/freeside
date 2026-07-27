@@ -522,6 +522,48 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 	} else {
 		wantCheckFailure(t, err, CheckObservedBaseIdentity)
 	}
+
+	// The tree digest is computed by Go on the host and by BusyBox in the
+	// guest, so agreement between two independent implementations is the whole
+	// property. The pass above already required it; assert it explicitly so a
+	// drift in either side names itself instead of surfacing as a generic
+	// proof mismatch.
+	if st.seedTreeDigest == "" {
+		t.Fatal("host computed no tree digest for a seeded workspace")
+	}
+	tampered := st.seedTreeDigest
+	st.seedTreeDigest = strings.Repeat("a", 64)
+	if _, err := b.observeSeededBase(ctx, hs, names, st); err == nil {
+		t.Error("observeSeededBase accepted a workspace whose tree digest does not match the verified source")
+	} else {
+		wantCheckFailure(t, err, CheckObservedBaseIdentity)
+	}
+	st.seedTreeDigest = tampered
+}
+
+// TestLiveSeedRefusesWorktreelessCheckout pins the case the intended producer
+// actually causes: publish.Transport.FetchBase moves HEAD to the base and
+// never checks anything out, so its directory carries a .git and no working
+// tree. Copying it would hand the writer an empty workspace that still holds
+// the declared HEAD, which a HEAD-only attestation would report as seeded at
+// the exact base. The gate must refuse it on the host, before any VM runs.
+func TestLiveSeedRefusesWorktreelessCheckout(t *testing.T) {
+	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
+		t.Skip("live workspace-seeding test skipped: set FREESIDE_WARD_LIVE_TEST=1")
+	}
+	root := t.TempDir()
+	// A FetchBase-shaped result: .git/HEAD detached at the base, nothing else.
+	dir := filepath.Join(root, "checkout")
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte(testBaseSHA+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig()
+	cfg.SeedRoot = root
+	_, _, err := verifySeedSource(cfg, dir)
+	wantCheckFailure(t, err, CheckWorkspaceSeeding)
 }
 
 // waitLiveStopped polls the real runtime until the container is observed

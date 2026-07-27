@@ -93,11 +93,23 @@
 // separate sentinel copy signals that the staged tree is whole, because a
 // directory copy is not atomic. None of that attempt is believed. After the
 // seeder is proven absent, a second container mounts the workspace read-only
-// and writes the base it reads, bound to the invocation's unpredictable
+// and writes what it observes, bound to the invocation's unpredictable
 // ownership token, into its own root filesystem, which the gate exports and
 // parses. The attestation runs before the writer because the base is a
-// pre-writer fact, and a workspace holding a base other than the declared one
-// fails the gate rather than being reported.
+// pre-writer fact, and a workspace that does not match what was declared fails
+// the gate rather than being reported.
+//
+// What is attested is content, not just a pointer. HEAD names a commit but
+// says nothing about what is checked out, and the intended producer makes that
+// gap concrete: publish.Transport.FetchBase moves HEAD to the base and never
+// checks anything out, so its directory carries a .git and an empty working
+// tree. The gate therefore refuses a source with no working-tree content, and
+// the observer reports both that the workspace has one and a digest over every
+// file in it. The host computes the same digest over the source it verified,
+// so the two agree only if the tree that landed is the tree that was approved
+// -- which also catches a partial or altered copy. Whether that tree is
+// faithful to the commit is a stronger claim needing git in the observer
+// image, which the gate deliberately does not have.
 //
 // Layout, by concept:
 //

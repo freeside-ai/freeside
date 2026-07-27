@@ -2,9 +2,13 @@ package ward
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -37,40 +41,52 @@ const gitHeadPath = ".git/HEAD"
 // The returned error is a CheckWorkspaceSeeding ConformanceFailure: by the time
 // the gate is reading the filesystem, a bad source is a failed seeding
 // assertion, not the syntactic caller error WorkspaceSeed.validate reports.
-func verifySeedSource(cfg Config, dir string) (string, error) {
+func verifySeedSource(cfg Config, dir string) (resolvedDir, digest string, err error) {
 	if cfg.SeedRoot == "" {
-		return "", failf(CheckWorkspaceSeeding, "backend is not configured with a seed root")
+		return "", "", failf(CheckWorkspaceSeeding, "backend is not configured with a seed root")
 	}
 	root, err := filepath.EvalSymlinks(cfg.SeedRoot)
 	if err != nil {
-		return "", failf(CheckWorkspaceSeeding, "seed root could not be resolved")
+		return "", "", failf(CheckWorkspaceSeeding, "seed root could not be resolved")
 	}
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		return "", failf(CheckWorkspaceSeeding, "seed source could not be resolved")
+		return "", "", failf(CheckWorkspaceSeeding, "seed source could not be resolved")
 	}
 	// Compare resolved against resolved: an unresolved prefix test would accept
 	// a source whose own path is inside the root but whose real location is not.
 	if resolved != root && !strings.HasPrefix(resolved, root+string(os.PathSeparator)) {
-		return "", failf(CheckWorkspaceSeeding, "seed source does not resolve under the daemon's seed root")
+		return "", "", failf(CheckWorkspaceSeeding, "seed source does not resolve under the daemon's seed root")
 	}
 	info, err := os.Lstat(resolved)
 	if err != nil {
-		return "", failf(CheckWorkspaceSeeding, "seed source could not be read")
+		return "", "", failf(CheckWorkspaceSeeding, "seed source could not be read")
 	}
 	if !info.IsDir() {
-		return "", failf(CheckWorkspaceSeeding, "seed source is not a directory")
+		return "", "", failf(CheckWorkspaceSeeding, "seed source is not a directory")
 	}
 
 	var bytes int64
 	var entries int
-	walkErr := filepath.WalkDir(resolved, func(_ string, d fs.DirEntry, err error) error {
+	var worktreeFiles int
+	var lines []string
+	walkErr := filepath.WalkDir(resolved, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return failf(CheckWorkspaceSeeding, "seed source could not be walked")
 		}
 		entries++
 		if cfg.MaxSeedEntries > 0 && entries > cfg.MaxSeedEntries {
 			return failf(CheckWorkspaceSeeding, "seed source exceeds the entry budget of %d", cfg.MaxSeedEntries)
+		}
+		rel, relErr := filepath.Rel(resolved, p)
+		if relErr != nil {
+			return failf(CheckWorkspaceSeeding, "seed source entry could not be located")
+		}
+		// A newline in a path would make the guest's line-oriented digest
+		// ambiguous, and no git checkout needs one. Refused rather than
+		// escaped, like every other delimiter this package meets.
+		if strings.ContainsAny(rel, "\n\r") {
+			return failf(CheckWorkspaceSeeding, "seed source contains a path with a line break")
 		}
 		switch {
 		case d.IsDir():
@@ -91,18 +107,72 @@ func verifySeedSource(cfg Config, dir string) (string, error) {
 		if cfg.MaxSeedBytes > 0 && bytes > cfg.MaxSeedBytes {
 			return failf(CheckWorkspaceSeeding, "seed source exceeds the byte budget of %d", cfg.MaxSeedBytes)
 		}
+		if !isUnderGitDir(rel) {
+			worktreeFiles++
+		}
+		sum, err := fileSHA256(p)
+		if err != nil {
+			return failf(CheckWorkspaceSeeding, "seed source entry could not be digested")
+		}
+		lines = append(lines, sum+"  ./"+filepath.ToSlash(rel))
 		return nil
 	})
 	if walkErr != nil {
-		return "", walkErr
+		return "", "", walkErr
 	}
 	// The observer reads the seeded base from this file; a source without it
 	// could only ever produce a failed attestation.
 	head, err := os.Lstat(filepath.Join(resolved, filepath.FromSlash(gitHeadPath)))
 	if err != nil || !head.Mode().IsRegular() {
-		return "", failf(CheckWorkspaceSeeding, "seed source does not carry a regular %s", gitHeadPath)
+		return "", "", failf(CheckWorkspaceSeeding, "seed source does not carry a regular %s", gitHeadPath)
 	}
-	return resolved, nil
+	// A checkout with a .git but no working tree is the case the intended
+	// producer actually hands over: publish.Transport.FetchBase moves HEAD to
+	// the base and never checks anything out. Copying it would give the writer
+	// an empty workspace that still carries the declared HEAD, so a
+	// HEAD-only attestation would report it seeded at the exact base. Refuse it
+	// here, where the reason can say what is missing.
+	if worktreeFiles == 0 {
+		return "", "", failf(CheckWorkspaceSeeding, "seed source carries no working-tree content, only a git directory")
+	}
+	return resolved, treeDigest(lines), nil
+}
+
+// isUnderGitDir reports whether a source-relative path is the repository's own
+// git directory rather than working-tree content.
+func isUnderGitDir(rel string) bool {
+	return rel == ".git" || strings.HasPrefix(rel, ".git"+string(os.PathSeparator))
+}
+
+func fileSHA256(p string) (string, error) {
+	f, err := os.Open(p) //nolint:gosec // a path the gate is in the middle of validating, under its own seed root
+	if err != nil {
+		return "", err
+	}
+	defer f.Close() //nolint:errcheck // read-only handle
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// treeDigest reduces per-file "<sha256>  ./<path>" lines to one digest over the
+// whole tree. The lines are sorted bytewise and joined exactly as the guest
+// will assemble them, so the host and the observer compute the same value from
+// the same content without either running git.
+//
+// It covers paths and bytes, not modes or ownership: `container copy` does not
+// preserve ownership across the host boundary (files arrive owned by the host
+// uid), so a mode-sensitive digest would never match.
+func treeDigest(lines []string) string {
+	sort.Strings(lines)
+	h := sha256.New()
+	for _, l := range lines {
+		h.Write([]byte(l))
+		h.Write([]byte{'\n'})
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // seedWorkspace puts the declared base into the workspace volume before
@@ -131,10 +201,13 @@ func (b *Backend) seedWorkspace(ctx context.Context, hs HandoffSpec, names hando
 	// leave the containment check advisory: a symlink swapped in after the walk
 	// would re-point the copy at a tree nothing checked, and outside SeedRoot,
 	// which is the property the resolve exists to establish.
-	source, err := verifySeedSource(b.cfg, hs.Seed.SourceDir)
+	source, digest, err := verifySeedSource(b.cfg, hs.Seed.SourceDir)
 	if err != nil {
 		return err
 	}
+	// The observer recomputes this over the volume, so the attestation covers
+	// the tree that landed and not merely the HEAD pointer that came with it.
+	st.seedTreeDigest = digest
 	readyDir, err := os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-ready-")
 	if err != nil {
 		return failf(CheckWorkspaceSeeding, "create seed sentinel directory: %v", err)
@@ -286,7 +359,7 @@ func (b *Backend) readBaseProof(ctx context.Context, runID, id string, st *runSt
 	if !found {
 		return "", failf(CheckObservedBaseIdentity, "base observer produced no proof")
 	}
-	return verifyBaseProof(data, st.ownershipLabel.Value)
+	return verifyBaseProof(data, st.ownershipLabel.Value, st.seedTreeDigest)
 }
 
 // maxBaseProofBytes bounds the proof read into the daemon's heap. The honest

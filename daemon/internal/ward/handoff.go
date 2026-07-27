@@ -111,6 +111,11 @@ type runState struct {
 	// archiveDir holds the exported rootfs archive; always removed once
 	// verification is done or the run fails (the archive is never returned).
 	archiveDir string
+	// seedTreeDigest is the digest the host computed over the verified seed
+	// source. The observer recomputes it over the workspace volume, so the
+	// attestation covers the tree that actually landed rather than only the
+	// HEAD pointer that came with it.
+	seedTreeDigest string
 	// baseArchiveDir holds the observer's rootfs archive while its proof is
 	// read. It is cleared as soon as that read finishes, so it is non-empty
 	// only inside that window; the deferred cleanup removes whatever it names
