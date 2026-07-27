@@ -1,11 +1,11 @@
-# Exact-base workspace seeding and enforced agent egress
+# Exact-Base Workspace Seeding and Enforced Agent Egress
 
 Work unit: #302. Mandatory note: contract-adjacent and returned-object
 trust-boundary work, plus owner decisions that would otherwise exist only
 in chat. Delivered as three stacked PRs under one issue; this note covers
 the unit and is updated as the stack advances.
 
-## Owner decisions (2026-07-27)
+## Owner Decisions (2026-07-27)
 
 - **Build real `provider_only` enforcement**, not a fail-closed refusal
   and not an operator waiver. Rejected: declaring the profile
@@ -25,7 +25,7 @@ the unit and is updated as the stack advances.
   server, and a capability-earning probe at once. Split at the seam where
   PR 2b adds no `Runtime` method and no `InspectReport` field.
 
-## The seeding mechanism is forced by the runtime, not chosen
+## The Seeding Mechanism Is Forced by the Runtime, Not Chosen
 
 The plan assumed the seeder could receive a copy without executing
 ("nothing from the image ever runs"). Probing Apple container 1.1.0
@@ -57,7 +57,7 @@ refuses a target inside the workspace mount, `Config.validate` requires
 the stage and sentinel paths to be disjoint from it, and the sentinel is
 a **second** copy because a directory copy is not atomic.
 
-## Why the observer is a separate read-only VM
+## Why the Observer Is a Separate Read-Only VM
 
 Finding 2 means the copy's exit status is worth nothing, and the seeder's
 own exit status is its account of itself. The attestation therefore comes
@@ -74,7 +74,7 @@ what one file says rather than what a read-only mount presents).
 
 Cost accepted: two extra VMs per seeded handoff.
 
-## Refute-first findings (PR 1)
+## Refute-First Findings (PR 1)
 
 - **Confirmed by execution:** the full sequence works on the reference
   runtime — seeder receives, copies, exits on its own; a read-only
@@ -103,7 +103,7 @@ Cost accepted: two extra VMs per seeded handoff.
   unattended admission never requires it (#327, a contract unit plus a
   §5.7 amendment).
 
-### Fresh-context review round (pre-push)
+### Fresh-Context Review Round (Pre-Push)
 
 An independent refute-first pass found no blocking defect and five real
 ones, all fixed:
@@ -133,7 +133,7 @@ ones, all fixed:
   but seeded nothing" case exercised the missing-file branch instead of
   the `git_dir=absent` branch production takes.
 
-### Codex review round 1 (P1: HEAD is not content)
+### Codex Review Round 1 (P1: HEAD Is Not Content)
 
 Confirmed and fixed. The observer proved HEAD matched the declared base
 and stopped there, but HEAD is a pointer: a workspace can carry the right
