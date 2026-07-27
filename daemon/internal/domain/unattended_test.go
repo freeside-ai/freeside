@@ -23,9 +23,8 @@ func TestUnattendedOperationTransitionValidate(t *testing.T) {
 		wantErr error
 	}{
 		{"stopped with command", func(*domain.UnattendedOperationTransition) {}, nil},
-		{"resumed without command", func(tr *domain.UnattendedOperationTransition) {
+		{"resumed with command", func(tr *domain.UnattendedOperationTransition) {
 			tr.State = domain.UnattendedResumed
-			tr.CommandID = nil
 			tr.Reason = ""
 		}, nil},
 		{"zero state", func(tr *domain.UnattendedOperationTransition) {
@@ -34,9 +33,12 @@ func TestUnattendedOperationTransitionValidate(t *testing.T) {
 		{"unknown state", func(tr *domain.UnattendedOperationTransition) {
 			tr.State = "paused"
 		}, domain.ErrInvalidUnattendedOperationState},
+		{"missing command", func(tr *domain.UnattendedOperationTransition) {
+			tr.CommandID = nil
+		}, domain.ErrTransitionUnbacked},
 		{"present empty command id", func(tr *domain.UnattendedOperationTransition) {
 			tr.CommandID = &emptyCommand
-		}, domain.ErrEmptyID},
+		}, domain.ErrTransitionUnbacked},
 		{"zero instant", func(tr *domain.UnattendedOperationTransition) {
 			tr.OccurredAt = time.Time{}
 		}, domain.ErrMissingTimestamp},

@@ -40,9 +40,11 @@ func (s UnattendedOperationState) valid() bool {
 // stop/resume log. The log is append-only and the latest row wins: "stopped"
 // holds until a "resumed" row is appended by the explicit operator path, so
 // surviving a restart is structural rather than a recovery step. CommandID
-// binds the transition to the signet command that carried the decision (and
-// through it the deciding device and item); nil is reserved for writers that
-// have no command, none of which exist yet.
+// binds the transition to the accepted signet command that carried the
+// decision (and through it the deciding device and item); it is required,
+// because the immutable command is the independently trusted authority a
+// reconstruction re-derives the state from — an unbacked row is a forgery
+// surface, not a convenience, and no non-command writer exists.
 type UnattendedOperationTransition struct {
 	State      UnattendedOperationState
 	CommandID  *string
@@ -50,13 +52,27 @@ type UnattendedOperationTransition struct {
 	OccurredAt time.Time
 }
 
+// AuthorizingAction returns the accepted command action that authorizes a
+// transition to this state. Behaviour dispatch, so no default: a new state
+// must declare its authorizing action; the trailing return rejects the
+// invalid zero value.
+func (s UnattendedOperationState) AuthorizingAction() (Action, bool) {
+	switch s {
+	case UnattendedStopped:
+		return ActionStopUnattended, true
+	case UnattendedResumed:
+		return ActionResumeUnattended, true
+	}
+	return "", false
+}
+
 // Validate reports whether the transition is structurally sound.
 func (t UnattendedOperationTransition) Validate() error {
 	if !t.State.valid() {
 		return fmt.Errorf("unattended operation state %q: %w", t.State, ErrInvalidUnattendedOperationState)
 	}
-	if t.CommandID != nil && *t.CommandID == "" {
-		return fmt.Errorf("unattended operation transition command_id: %w", ErrEmptyID)
+	if t.CommandID == nil || *t.CommandID == "" {
+		return fmt.Errorf("unattended operation transition: %w", ErrTransitionUnbacked)
 	}
 	if t.OccurredAt.IsZero() {
 		return fmt.Errorf("unattended operation transition occurred_at: %w", ErrMissingTimestamp)

@@ -191,26 +191,21 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 			}
 			switch status, kind := actionOutcome(command.Action); kind {
 			case outcomeConcludes:
-				next := item
-				next.ItemVersion++
-				next.Status = status
-				// The concluding decision's accepted instant is the durable
-				// endpoint of the open-to-decision metric (#171), stamped in
-				// the same transaction as the command record and the status
-				// flip. Only concluding actions stamp: records-only actions
-				// decide nothing (actionOutcome), and a replay never reaches
-				// this branch, so the instant is set exactly once — the item
-				// was open, so no earlier concluding command can have stamped
-				// it.
-				next, err = next.WithDecidedAt(s.now().UTC())
-				if err != nil {
+				// The stamp-and-flip semantics live in concludeItem, shared
+				// with the operating-state transactions below.
+				if err := concludeItem(ctx, tx, item, status, s.now().UTC()); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
-				}
-				if err := tx.PutAttentionItem(ctx, next); err != nil {
-					return err
 				}
 			case outcomeDiscusses:
 				if err := s.applyDiscuss(ctx, tx, command, item, snap); err != nil {
+					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+				}
+			case outcomeStopsUnattended:
+				if err := s.applyStopUnattended(ctx, tx, command, item, status); err != nil {
+					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+				}
+			case outcomeResumesUnattended:
+				if err := s.applyResumeUnattended(ctx, tx, command, item, status); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
 			case outcomeRecords, outcomePending:
@@ -262,6 +257,16 @@ const (
 	// unit owns; Submit rejects it with ErrUnsupportedAction rather than
 	// record a command whose effect would be silently dropped.
 	outcomePending
+	// outcomeStopsUnattended: the operator stop transaction (plan §4
+	// stop_unattended; issue #319): conclude the decided item, append the
+	// durable stopped transition, and raise the resume-offering notice, all
+	// in the accepting transaction (applyStopUnattended).
+	outcomeStopsUnattended
+	// outcomeResumesUnattended: the explicit resume transaction (issue #319):
+	// conclude the stopped notice and append the resumed transition in the
+	// accepting transaction (applyResumeUnattended). Only this operator path
+	// writes "resumed"; a restart alone never does.
+	outcomeResumesUnattended
 )
 
 // actionOutcome maps an action to what its acceptance does, following plan
@@ -271,7 +276,10 @@ const (
 // item effect by design: open_pr is navigation, not resolution; acknowledge
 // means seen, never resolved; mark_seen decides nothing; inspect_trust_failure
 // is navigation; run_doctor leaves a system_health item blocking until the
-// diagnostic clears. Discuss runs the conversation transaction (plan §5.14
+// diagnostic clears. Stop/resume of unattended operation conclude the decided
+// item and append the durable operating transition in the accepting
+// transaction (issue #319; applyStopUnattended, applyResumeUnattended).
+// Discuss runs the conversation transaction (plan §5.14
 // discuss semantics; applyDiscuss). Pending actions are rejected before any
 // transaction because their accepted effect cannot be represented yet: snooze
 // needs the timing update; start_with_changes needs the revised proposal
@@ -291,9 +299,12 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		return domain.StatusDismissed, outcomeConcludes
 	case domain.ActionApprove, domain.ActionStop, domain.ActionFinishNow,
 		domain.ActionApplyThenFinish, domain.ActionRetry,
-		domain.ActionRerunTrustEvaluation, domain.ActionStart,
-		domain.ActionStopUnattended:
+		domain.ActionRerunTrustEvaluation, domain.ActionStart:
 		return domain.StatusResolved, outcomeConcludes
+	case domain.ActionStopUnattended:
+		return domain.StatusResolved, outcomeStopsUnattended
+	case domain.ActionResumeUnattended:
+		return domain.StatusResolved, outcomeResumesUnattended
 	case domain.ActionOpenPR, domain.ActionMarkSeen, domain.ActionAcknowledge,
 		domain.ActionInspectTrustFailure, domain.ActionRunDoctor:
 		return "", outcomeRecords
@@ -304,7 +315,7 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		domain.ActionAdjudicate, domain.ActionRetryWithCapability,
 		domain.ActionChooseAlternate, domain.ActionRequestChanges,
 		domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry,
-		domain.ActionReturnToAgent, domain.ActionResumeUnattended:
+		domain.ActionReturnToAgent:
 		return "", outcomePending
 	}
 	// Invalid zero value: unreachable past NewCommand's validation and

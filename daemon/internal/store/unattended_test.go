@@ -42,26 +42,82 @@ func unattendedOptions() store.Options {
 	}
 }
 
+// recordTransition appends one transition through the full trust binding:
+// the accepted command that authorizes it is seeded first (a transition is
+// never written unbacked), against an open decisions item created on demand.
 func recordTransition(t *testing.T, s *store.Store, transition domain.UnattendedOperationTransition) {
 	t.Helper()
 	ctx := context.Background()
-	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	action, ok := transition.State.AuthorizingAction()
+	if !ok {
+		t.Fatalf("state %q has no authorizing action", transition.State)
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		itemID := domain.ItemID("decisions-" + *transition.CommandID)
+		if err := tx.PutAttentionItem(ctx, decisionsItem(t, itemID)); err != nil {
+			return err
+		}
+		command, err := domain.NewCommand(domain.CommandInput{
+			CommandID: *transition.CommandID, DeviceID: "device-1",
+			ItemID: itemID, ItemVersion: 1, Action: action,
+		})
+		if err != nil {
+			return err
+		}
+		if err := tx.PutCommand(ctx, command); err != nil {
+			return err
+		}
+		// Conclude the carrier as signet's accepting transaction would, so
+		// it does not linger as an open unconditional blocker of the very
+		// admissions these tests exercise.
+		concluded := decisionsItem(t, itemID)
+		concluded.ItemVersion = 2
+		concluded.Status = domain.StatusResolved
+		if concluded, err = concluded.WithDecidedAt(transition.OccurredAt); err != nil {
+			return err
+		}
+		if err := tx.PutAttentionItem(ctx, concluded); err != nil {
+			return err
+		}
 		return tx.RecordUnattendedOperationTransition(ctx, transition)
 	}); err != nil {
 		t.Fatalf("RecordUnattendedOperationTransition: %v", err)
 	}
 }
 
-func stoppedAt(at time.Time) domain.UnattendedOperationTransition {
+// decisionsItem is an open system_health item offering both operating-state
+// actions, the carrier the test commands decide against.
+func decisionsItem(t *testing.T, id domain.ItemID) domain.AttentionItem {
+	t.Helper()
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: id, ProjectID: "proj-1",
+		Subject:           domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		Type:              domain.AttentionSystemHealth,
+		Priority:          domain.PriorityNormal,
+		Reason:            "operating-state decision carrier",
+		RequestedDecision: []domain.Action{domain.ActionStopUnattended, domain.ActionResumeUnattended},
+		ItemVersion:       1,
+		InterruptionClass: domain.InterruptionExceptional,
+		Status:            domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewAttentionItem: %v", err)
+	}
+	return item
+}
+
+func stoppedAt(at time.Time, commandID string) domain.UnattendedOperationTransition {
 	return domain.UnattendedOperationTransition{
-		State: domain.UnattendedStopped, Reason: "operator stopped unattended operation",
+		State: domain.UnattendedStopped, CommandID: &commandID,
+		Reason:     "operator stopped unattended operation",
 		OccurredAt: at,
 	}
 }
 
-func resumedAt(at time.Time) domain.UnattendedOperationTransition {
+func resumedAt(at time.Time, commandID string) domain.UnattendedOperationTransition {
 	return domain.UnattendedOperationTransition{
-		State: domain.UnattendedResumed, Reason: "operator resumed unattended operation",
+		State: domain.UnattendedResumed, CommandID: &commandID,
+		Reason:     "operator resumed unattended operation",
 		OccurredAt: at,
 	}
 }
@@ -125,14 +181,14 @@ func TestUnattendedOperationTransitionLog(t *testing.T) {
 	if _, found := latest(); found {
 		t.Fatal("empty log reported a transition")
 	}
-	recordTransition(t, s, stoppedAt(admissionEpoch))
+	recordTransition(t, s, stoppedAt(admissionEpoch, "cmd-stop-1"))
 	// A second stop is a real operator decision on another item; the log
 	// records it and the state is unchanged.
-	recordTransition(t, s, stoppedAt(admissionEpoch.Add(time.Minute)))
+	recordTransition(t, s, stoppedAt(admissionEpoch.Add(time.Minute), "cmd-stop-2"))
 	if tr, found := latest(); !found || tr.State != domain.UnattendedStopped {
 		t.Fatalf("latest after two stops = %+v (found %v), want stopped", tr, found)
 	}
-	recordTransition(t, s, resumedAt(admissionEpoch.Add(2*time.Minute)))
+	recordTransition(t, s, resumedAt(admissionEpoch.Add(2*time.Minute), "cmd-resume-1"))
 	tr, found := latest()
 	if !found || tr.State != domain.UnattendedResumed {
 		t.Fatalf("latest after resume = %+v (found %v), want resumed", tr, found)
@@ -165,7 +221,7 @@ func TestStopClosesUnattendedAdmission(t *testing.T) {
 	}
 	seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
 
-	recordTransition(t, s, stoppedAt(admissionEpoch))
+	recordTransition(t, s, stoppedAt(admissionEpoch, "cmd-stop-a"))
 	if err := recordAdmission(t, s, f.admission); !errors.Is(err, domain.ErrUnattendedOperationStopped) {
 		t.Fatalf("unattended admission while stopped = %v, want %v", err, domain.ErrUnattendedOperationStopped)
 	}
@@ -184,7 +240,7 @@ func TestStopClosesUnattendedAdmission(t *testing.T) {
 		t.Fatalf("unattended admission after restart = %v, want %v", err, domain.ErrUnattendedOperationStopped)
 	}
 
-	recordTransition(t, reopened, resumedAt(admissionEpoch.Add(time.Hour)))
+	recordTransition(t, reopened, resumedAt(admissionEpoch.Add(time.Hour), "cmd-resume-a"))
 	if err := recordAdmission(t, reopened, f.admission); err != nil {
 		t.Fatalf("unattended admission after resume: %v", err)
 	}
@@ -194,7 +250,7 @@ func TestStopClosesUnattendedAdmission(t *testing.T) {
 	// own database to occupy them.
 	attended := newAdmissionFixture(t, nil)
 	stoppedStore := openWithFixture(t, attended, unattendedOptions())
-	recordTransition(t, stoppedStore, stoppedAt(admissionEpoch))
+	recordTransition(t, stoppedStore, stoppedAt(admissionEpoch, "cmd-stop-b"))
 	if err := recordAdmission(t, stoppedStore, attended.admission); err != nil {
 		t.Fatalf("attended admission while stopped: %v", err)
 	}
@@ -212,7 +268,7 @@ func TestStopDoesNotPoisonRecordedHistory(t *testing.T) {
 	if err := recordAdmission(t, s, f.admission); err != nil {
 		t.Fatalf("record: %v", err)
 	}
-	recordTransition(t, s, stoppedAt(admissionEpoch.Add(time.Minute)))
+	recordTransition(t, s, stoppedAt(admissionEpoch.Add(time.Minute), "cmd-stop-c"))
 
 	if err := s.Read(ctx, func(tx *store.ReadTx) error {
 		if _, err := tx.GetExecutionAdmission(ctx, f.admission.InvocationID); err != nil {

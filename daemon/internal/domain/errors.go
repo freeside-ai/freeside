@@ -122,6 +122,8 @@ var (
 	ErrSupersessionOutsideSystemHealth = errors.New("blocking supersession is a system_health semantic")
 	ErrUnattendedOperationStopped      = errors.New("unattended operation is stopped by operator decision")
 	ErrBlockingSystemHealth            = errors.New("an open system_health item blocks unattended admission")
+	ErrTransitionUnbacked              = errors.New("operating transition names no accepted command")
+	ErrTransitionCommandMismatch       = errors.New("operating transition disagrees with its accepted command")
 
 	// Transition failures: how a persisted aggregate may change between its
 	// stored version and an update (the transition validators). A writer maps

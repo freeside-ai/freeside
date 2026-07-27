@@ -20,6 +20,17 @@ FROM unattended_operation_transitions ORDER BY id DESC LIMIT 1`
 	listOpenAttentionItemsByTypeSQL = `
 SELECT id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body
 FROM attention_items WHERE item_type = ? AND status = 'open' ORDER BY id`
+	// The lookup columns can only fail open by omission: a row whose column
+	// diverges from its canonical body is invisible to the WHERE clause
+	// above, so the per-row cross-check in scanAttentionItemSnapshot never
+	// sees it. This one SQL pass proves the column view agrees with the body
+	// view for every row (COALESCE mirrors the 0017 backfill's treatment of
+	// a body the extraction cannot read), so an omitted mismatch fails the
+	// query instead of silently shrinking the blocking set.
+	attentionColumnDivergenceSQL = `
+SELECT COUNT(*) FROM attention_items
+WHERE item_type <> COALESCE(json_extract(body, '$.type'), '')
+   OR status <> COALESCE(json_extract(body, '$.status'), '')`
 )
 
 // RecordUnattendedOperationTransition appends one operator stop/resume
@@ -27,21 +38,50 @@ FROM attention_items WHERE item_type = ? AND status = 'open' ORDER BY id`
 // log is the audit trail of operator intent, the latest row is the operating
 // state, and a repeated state (a second stop while stopped) is a real
 // recorded decision, not a conflict. Named Record, not Put: rows are never
-// updated.
+// updated. Puts validate before writing: the transition must be authorized
+// by the accepted command it names (requireTransitionCommand), the same
+// binding reconstruction re-derives, so a row this boundary would refuse to
+// write cannot be told apart from tampering when read back.
 func (tx *InternalTx) RecordUnattendedOperationTransition(
 	ctx context.Context, transition domain.UnattendedOperationTransition,
 ) error {
 	if err := transition.Validate(); err != nil {
 		return fmt.Errorf("record unattended operation transition: %w", err)
 	}
-	var command any
-	if transition.CommandID != nil {
-		command = *transition.CommandID
+	if err := tx.requireTransitionCommand(ctx, transition); err != nil {
+		return fmt.Errorf("record unattended operation transition: %w", err)
 	}
 	if _, err := tx.tx.ExecContext(ctx, recordUnattendedOperationTransitionSQL,
-		transition.State, command, transition.Reason,
+		transition.State, *transition.CommandID, transition.Reason,
 		formatTime(transition.OccurredAt)); err != nil {
 		return fmt.Errorf("record unattended operation transition: %w", err)
+	}
+	return nil
+}
+
+// requireTransitionCommand re-derives a transition's authority from the
+// immutable command it names: the command must reconstruct (running its own
+// gates) and its accepted action must authorize the transition's state. The
+// stored state is a decoded trust bit — "resumed" lifts a safety gate — so
+// it is never trusted on its own: a single-column tamper flipping stopped to
+// resumed fails closed here because the referenced command still says
+// stop_unattended.
+func (tx *ReadTx) requireTransitionCommand(
+	ctx context.Context, transition domain.UnattendedOperationTransition,
+) error {
+	command, _, err := tx.GetCommandSnapshot(ctx, *transition.CommandID)
+	if err != nil {
+		return fmt.Errorf("transition command %q: %w", *transition.CommandID, err)
+	}
+	authorizing, ok := transition.State.AuthorizingAction()
+	if !ok {
+		return fmt.Errorf("unattended operation state %q: %w",
+			transition.State, domain.ErrInvalidUnattendedOperationState)
+	}
+	if command.Action != authorizing {
+		return fmt.Errorf("transition %q backed by command %q with action %q: %w",
+			transition.State, command.CommandID, command.Action,
+			domain.ErrTransitionCommandMismatch)
 	}
 	return nil
 }
@@ -82,9 +122,17 @@ func (tx *ReadTx) LatestUnattendedOperationTransition(
 		transition.CommandID = &commandID.String
 	}
 	// Gets validate after reading: a row the current vocabulary cannot
-	// express (an unknown state written by tampering or a future schema)
-	// fails closed instead of reconstructing as "not stopped".
+	// express (an unknown state written by tampering or a future schema, or
+	// one naming no command) fails closed instead of reconstructing as "not
+	// stopped", and the state is re-derived from the immutable command the
+	// row names (requireTransitionCommand) rather than trusted from the
+	// column — a tampered resumed row does not lift the stop while its
+	// command still says stop_unattended.
 	if err := transition.Validate(); err != nil {
+		return domain.UnattendedOperationTransition{}, false,
+			fmt.Errorf("latest unattended operation transition: %w", err)
+	}
+	if err := tx.requireTransitionCommand(ctx, transition); err != nil {
 		return domain.UnattendedOperationTransition{}, false,
 			fmt.Errorf("latest unattended operation transition: %w", err)
 	}
@@ -123,16 +171,11 @@ func (tx *ReadTx) RequireUnattendedAdmissible(
 		return fmt.Errorf("admission %q: %w",
 			admission.InvocationID, domain.ErrUnattendedOperationStopped)
 	}
-	rows, err := tx.tx.QueryContext(ctx, listOpenAttentionItemsByTypeSQL, domain.AttentionSystemHealth)
+	items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
 	if err != nil {
-		return fmt.Errorf("admission %q: open system_health items: %w", admission.InvocationID, err)
+		return fmt.Errorf("admission %q: %w", admission.InvocationID, err)
 	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		item, _, err := tx.scanAttentionItemSnapshot(rows)
-		if err != nil {
-			return fmt.Errorf("admission %q: open system_health items: %w", admission.InvocationID, err)
-		}
+	for _, item := range items {
 		if item.BlockingSupersession == nil {
 			return fmt.Errorf("admission %q: item %q: %w",
 				admission.InvocationID, item.ID, domain.ErrBlockingSystemHealth)
@@ -142,8 +185,45 @@ func (tx *ReadTx) RequireUnattendedAdmissible(
 				admission.InvocationID, item.ID, domain.ErrBlockingSystemHealth, err)
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("admission %q: open system_health items: %w", admission.InvocationID, err)
-	}
 	return nil
+}
+
+// ListOpenAttentionItems returns every open item of one type, in id order,
+// selected by the extracted lookup columns and fully reconstructed through
+// the shared scan (decode, cross-check, evidence re-gate), so a caller acting
+// on the result acts on validated rows, never on column claims. Selection is
+// guarded against omission too: the divergence count proves no row's columns
+// disagree with its body, because a tampered column would otherwise hide an
+// open blocking item from the WHERE clause with no scan left to refuse it.
+// Consumers: the unattended admission gate above, and signet's stop
+// transaction, which must find an existing resume-offering notice before
+// raising another.
+func (tx *ReadTx) ListOpenAttentionItems(
+	ctx context.Context, itemType domain.AttentionType,
+) ([]domain.AttentionItem, error) {
+	var divergent int
+	if err := tx.tx.QueryRowContext(ctx, attentionColumnDivergenceSQL).Scan(&divergent); err != nil {
+		return nil, fmt.Errorf("list open %q items: column integrity: %w", itemType, err)
+	}
+	if divergent > 0 {
+		return nil, fmt.Errorf("list open %q items: %d row(s) whose lookup columns diverge from their bodies: %w",
+			itemType, divergent, errRowInconsistent)
+	}
+	rows, err := tx.tx.QueryContext(ctx, listOpenAttentionItemsByTypeSQL, itemType)
+	if err != nil {
+		return nil, fmt.Errorf("list open %q items: %w", itemType, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var items []domain.AttentionItem
+	for rows.Next() {
+		item, _, err := tx.scanAttentionItemSnapshot(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list open %q items: %w", itemType, err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list open %q items: %w", itemType, err)
+	}
+	return items, nil
 }
