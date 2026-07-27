@@ -420,6 +420,19 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	projectImage, err := domain.NewProjectImage(domain.ProjectImageInput{
+		Repository: "freeasinbird/gh-imgup", RepositoryID: 1278475858,
+		CommitSHA:          "6ab4e3dff2be53f74bde9b8b3150290775152f9f",
+		RecipeDigest:       domain.Digest("sha256:" + strings.Repeat("ef", 32)),
+		PreparationCommand: []string{"/usr/local/bin/freeside-project-prepare"},
+		BaseImageRef: domain.ImageRef("ghcr.io/freeside-ai/agent-claude@sha256:" +
+			strings.Repeat("ab", 32)),
+		ImageRef: domain.ImageRef("127.0.0.1:5100/freeside-project-freeasinbird-gh-imgup@sha256:" +
+			strings.Repeat("cd", 32)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		name  string
@@ -464,6 +477,7 @@ func TestGolden(t *testing.T) {
 		{"execution_admission", admission},
 		{"execution_admission_waived", waivedAdmission},
 		{"execution_export", export},
+		{"project_image", projectImage},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

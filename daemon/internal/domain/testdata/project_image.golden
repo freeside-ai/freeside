@@ -1,0 +1,12 @@
+{
+  "id": "sha256:7e7a5c42548e88175b869c057c4ad4bb221dc0069e4caf6818dfe7c4af926349",
+  "repository": "freeasinbird/gh-imgup",
+  "repository_id": 1278475858,
+  "commit_sha": "6ab4e3dff2be53f74bde9b8b3150290775152f9f",
+  "recipe_digest": "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+  "preparation_command": [
+    "/usr/local/bin/freeside-project-prepare"
+  ],
+  "base_image_ref": "ghcr.io/freeside-ai/agent-claude@sha256:abababababababababababababababababababababababababababababababab",
+  "image_ref": "127.0.0.1:5100/freeside-project-freeasinbird-gh-imgup@sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+}
