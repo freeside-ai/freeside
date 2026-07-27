@@ -245,7 +245,15 @@ func evidenceDigestColumnEqual(column sql.NullString, want *domain.Digest) bool 
 // write, so the name-to-id pair stops being self-asserted, and a waiver cannot
 // follow a repository name onto a different repository.
 func (tx *ReadTx) gateAdmission(ctx context.Context, admission domain.ExecutionAdmission) error {
-	if err := domain.AdmittedUnder(admission, tx.admissionPolicy); err != nil {
+	policy := tx.admissionPolicy
+	if admission.OperatingMode == domain.ModeUnattended {
+		health, err := tx.transactionBackupHealth(ctx)
+		if err != nil {
+			return fmt.Errorf("backup health: %w", err)
+		}
+		policy.BackupHealth = health
+	}
+	if err := domain.AdmittedUnder(admission, policy); err != nil {
 		return err
 	}
 	// Two admissions must be anchored to a human-approved profile: one running
@@ -296,6 +304,28 @@ func (tx *ReadTx) gateAdmission(ctx context.Context, admission domain.ExecutionA
 			admission.Base.Repo, profile.ProfileDigest, domain.ErrTrustProfileSuperseded)
 	}
 	return nil
+}
+
+func (tx *ReadTx) transactionBackupHealth(ctx context.Context) (*domain.BackupHealth, error) {
+	if tx.backupHealthEvaluated {
+		return tx.backupHealth, tx.backupHealthErr
+	}
+	tx.backupHealthEvaluated = true
+	if tx.backupHealthSource == nil {
+		return nil, nil
+	}
+	state, err := tx.backupHealthContext(ctx)
+	if err != nil {
+		tx.backupHealthErr = err
+		return nil, err
+	}
+	health, err := tx.backupHealthSource.BackupHealth(ctx, state)
+	if err != nil {
+		tx.backupHealthErr = err
+		return nil, err
+	}
+	tx.backupHealth = &health
+	return tx.backupHealth, nil
 }
 
 // requireRecordedAttempt checks that the run carries the exact attempt the

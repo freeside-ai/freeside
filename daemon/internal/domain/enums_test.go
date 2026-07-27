@@ -124,6 +124,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["RefreshStrategy"] = append(valids["RefreshStrategy"], v.valid)
 	}
 	invalids["RefreshStrategy"] = RefreshStrategy("").valid
+	for _, v := range AllBackupHealthStatuses {
+		valids["BackupHealthStatus"] = append(valids["BackupHealthStatus"], v.valid)
+	}
+	invalids["BackupHealthStatus"] = BackupHealthStatus("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {

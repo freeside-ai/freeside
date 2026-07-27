@@ -57,6 +57,13 @@ type Options struct {
 	// this does not match fails closed at the boundary, so the waiver cannot
 	// be forged into a row.
 	BackupEncryptionWaiverRepositoryID *int64
+
+	// BackupHealthSource evaluates the three non-encryption backup-health
+	// dimensions that §5.7 requires of unattended running. Nil admits nothing
+	// unattended. The source is queried on every admission write and
+	// reconstruction rather than snapshotted at Open, so a stale checkpoint or
+	// restore test closes the gate for already-recorded work too.
+	BackupHealthSource BackupHealthSource
 }
 
 // Store is the daemon's handle on its SQLite database. Open configures the
@@ -71,6 +78,9 @@ type Store struct {
 	// admissionPolicy is the execution-admission half of the same boundary
 	// policy (see Options.AdmissionFloors), snapshotted the same way.
 	admissionPolicy domain.AdmissionPolicy
+	// backupHealthSource is live operational evidence, not policy or part of an
+	// admission's identity. It is queried at each admission trust boundary.
+	backupHealthSource BackupHealthSource
 }
 
 // Open opens (creating if absent) the database at path, applies the §5.2
@@ -91,9 +101,10 @@ func Open(ctx context.Context, path string, opts Options) (*Store, error) {
 	// Snapshot the boundary policy so a caller mutating its maps or slices
 	// after Open cannot change it under a live store.
 	return &Store{
-		db:              db,
-		approvedRecipes: maps.Clone(opts.ApprovedRecipes),
-		admissionPolicy: cloneAdmissionPolicy(opts),
+		db:                 db,
+		approvedRecipes:    maps.Clone(opts.ApprovedRecipes),
+		admissionPolicy:    cloneAdmissionPolicy(opts),
+		backupHealthSource: opts.BackupHealthSource,
 	}, nil
 }
 

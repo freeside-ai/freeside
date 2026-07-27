@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -45,19 +46,9 @@ func (s *Service) DispatchPendingInvocations(ctx context.Context, driver exec.St
 
 	dispatched := 0
 	for _, entry := range pending {
-		var request invocationRequest
-		if err := json.Unmarshal(entry.Payload, &request); err != nil {
+		request, err := decodeBoundInvocationRequest(entry)
+		if err != nil {
 			return dispatched, fmt.Errorf("dispatch invocations: intent %q payload: %w", entry.IdempotencyKey, err)
-		}
-		// Queue payloads are opaque to the store, so the decoded intent is a
-		// reconstruction boundary: re-check it against the row's own key
-		// before acting (the store trust-boundary convention). A mismatch
-		// fails loudly and leaves the row pending — starting a decoded
-		// foreign id while marking the original dispatched would both
-		// misfire an invocation and orphan the real intent.
-		if request.InvocationID == "" || string(request.InvocationID) != entry.IdempotencyKey {
-			return dispatched, fmt.Errorf("dispatch invocations: intent %q payload names invocation %q: %w",
-				entry.IdempotencyKey, request.InvocationID, errInvocationIntentCorrupt)
 		}
 		// StartSpec's run/stage/input fields describe pipeline stages; a
 		// conversation invocation has none yet. Their shape for agent turns
@@ -66,7 +57,7 @@ func (s *Service) DispatchPendingInvocations(ctx context.Context, driver exec.St
 		if err := driver.Start(ctx, request.InvocationID, exec.StartSpec{}); err != nil && !errors.Is(err, exec.ErrDuplicateStart) {
 			return dispatched, fmt.Errorf("dispatch invocations: start %q: %w", request.InvocationID, err)
 		}
-		err := s.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		err = s.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 			return tx.MarkOutboxDispatched(ctx, entry.IdempotencyKey)
 		})
 		if err != nil {
@@ -75,4 +66,31 @@ func (s *Service) DispatchPendingInvocations(ctx context.Context, driver exec.St
 		dispatched++
 	}
 	return dispatched, nil
+}
+
+// AgentInvocationBackupPayloadDigests validates a durable discuss invocation.
+// The request is self-contained and needs no external blobs.
+func AgentInvocationBackupPayloadDigests(entry store.QueueEntry) ([]domain.Digest, error) {
+	if _, err := decodeBoundInvocationRequest(entry); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func decodeBoundInvocationRequest(entry store.QueueEntry) (invocationRequest, error) {
+	var request invocationRequest
+	if err := json.Unmarshal(entry.Payload, &request); err != nil {
+		return invocationRequest{}, err
+	}
+	// Queue payloads are opaque to the store, so the decoded intent is a
+	// reconstruction boundary: re-check it against the row's own kind and key
+	// before acting or declaring it backup-valid.
+	if entry.Kind != AgentInvocationRequestedKind ||
+		request.InvocationID == "" ||
+		string(request.InvocationID) != entry.IdempotencyKey {
+		return invocationRequest{}, fmt.Errorf(
+			"intent %q payload names invocation %q: %w",
+			entry.IdempotencyKey, request.InvocationID, errInvocationIntentCorrupt)
+	}
+	return request, nil
 }

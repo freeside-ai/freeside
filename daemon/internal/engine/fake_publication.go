@@ -45,6 +45,14 @@ const (
 	OperatingModeAttendedDev = "attended_dev"
 )
 
+// FakePublicationTaskKind identifies the durable outbox payload whose recipe
+// blob must remain in backup closure for replay after restore.
+const FakePublicationTaskKind = fakePublicationTaskKind
+
+// FakePublicationInvocationOwnerKind identifies a completed durable
+// invocation-owner claim.
+const FakePublicationInvocationOwnerKind = fakePublicationInvocationOwnerKind
+
 // ErrForeignPublicationCheckout marks a checkout capability that did not
 // originate at the configured transport adapter.
 var ErrForeignPublicationCheckout = errors.New("publication checkout belongs to a different transport")
@@ -863,13 +871,9 @@ func (w *fakePublicationWorkflow) reconcileEntryLocked(
 	ctx context.Context,
 	entry store.QueueEntry,
 ) (taskOutcome, error) {
-	task, err := decodeFakePublicationTask(entry.Payload)
+	task, err := decodeBoundFakePublicationTask(entry)
 	if err != nil {
 		return taskOutcome{}, err
-	}
-	if entry.IdempotencyKey != fakePublicationTaskKey(task.RunID) {
-		return taskOutcome{}, fmt.Errorf("names run %q: %w",
-			task.RunID, domain.ErrParentKeyMismatch)
 	}
 	expectedHandoff, err := w.expectedHandoffDir(task)
 	if err != nil {
@@ -2505,6 +2509,49 @@ func decodeFakePublicationTask(payload []byte) (fakePublicationTask, error) {
 	}
 	if err := task.validate(); err != nil {
 		return fakePublicationTask{}, err
+	}
+	return task, nil
+}
+
+// FakePublicationBackupPayloadDigests validates a durable fake-publication
+// entry and returns the externally stored blobs required to replay it.
+func FakePublicationBackupPayloadDigests(entry store.QueueEntry) ([]domain.Digest, error) {
+	task, err := decodeBoundFakePublicationTask(entry)
+	if err != nil {
+		return nil, err
+	}
+	return []domain.Digest{task.RecipeDigest}, nil
+}
+
+// FakePublicationInvocationOwnerBackupPayloadDigests validates a completed
+// invocation-owner entry. The claim is self-contained and needs no blobs.
+func FakePublicationInvocationOwnerBackupPayloadDigests(
+	entry store.QueueEntry,
+) ([]domain.Digest, error) {
+	if entry.Kind != FakePublicationInvocationOwnerKind || !entry.Dispatched() {
+		return nil, domain.ErrParentKeyMismatch
+	}
+	owner, err := decodeFakePublicationInvocationOwner(entry.Payload)
+	if err != nil {
+		return nil, err
+	}
+	if entry.IdempotencyKey != fakePublicationInvocationOwnerKey(owner.InvocationID) {
+		return nil, domain.ErrParentKeyMismatch
+	}
+	return nil, nil
+}
+
+func decodeBoundFakePublicationTask(entry store.QueueEntry) (fakePublicationTask, error) {
+	if entry.Kind != FakePublicationTaskKind {
+		return fakePublicationTask{}, domain.ErrParentKeyMismatch
+	}
+	task, err := decodeFakePublicationTask(entry.Payload)
+	if err != nil {
+		return fakePublicationTask{}, err
+	}
+	if entry.IdempotencyKey != fakePublicationTaskKey(task.RunID) {
+		return fakePublicationTask{}, fmt.Errorf("names run %q: %w",
+			task.RunID, domain.ErrParentKeyMismatch)
 	}
 	return task, nil
 }

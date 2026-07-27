@@ -34,6 +34,15 @@ type ReadTx struct {
 	// (see Options.AdmissionFloors), carried the same way so a reconstructed
 	// admission is re-gated against the floor policy states now. Read-only.
 	admissionPolicy domain.AdmissionPolicy
+	// backupHealthSource supplies live backup evidence at the admission
+	// boundary; unlike policy it is deliberately not snapshotted at Open.
+	backupHealthSource BackupHealthSource
+	// Backup closure may hash many blobs. Memoize one verdict (including a
+	// source error) for this transaction so a list applies one current,
+	// consistent result to every row without re-evaluating the same evidence.
+	backupHealthEvaluated bool
+	backupHealth          *domain.BackupHealth
+	backupHealthErr       error
 }
 
 // InternalTx is the transaction handle passed to WriteInternal callbacks:
@@ -140,7 +149,10 @@ func (s *Store) Read(ctx context.Context, fn func(*ReadTx) error) error {
 // reaches all three transaction kinds, instead of the two whoever adds it
 // remembers.
 func (s *Store) newReadTx(tx *sql.Tx) ReadTx {
-	return ReadTx{tx: tx, approvedRecipes: s.approvedRecipes, admissionPolicy: s.admissionPolicy}
+	return ReadTx{
+		tx: tx, approvedRecipes: s.approvedRecipes,
+		admissionPolicy: s.admissionPolicy, backupHealthSource: s.backupHealthSource,
+	}
 }
 
 // ServerState reads the current sync epoch and revision inside the

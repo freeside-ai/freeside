@@ -292,6 +292,15 @@ func TestRunDrivesFakeWorkflow(t *testing.T) {
 			t.Errorf("Close: %v", err)
 		}
 	})
+	health, err := h.store.BackupHealth(ctx)
+	if err != nil {
+		t.Fatalf("production backup-health source: %v", err)
+	}
+	if health.CheckpointCurrency != domain.BackupHealthHealthy ||
+		health.ArtifactClosure != domain.BackupHealthHealthy ||
+		health.RestoreTestAge != domain.BackupHealthHealthy {
+		t.Fatalf("produced local checkpoint health = %+v, want every dimension healthy", health)
+	}
 
 	pairedAt := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
 	if err := h.store.Write(ctx, func(tx *store.WriteTx) error {

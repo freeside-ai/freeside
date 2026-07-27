@@ -308,6 +308,7 @@ func TestAdmittedUnder(t *testing.T) {
 	approved := []domain.CredentialMode{domain.CredentialSubscriptionContained}
 	waiverID := int64(424242)
 	otherID := int64(43)
+	backupHealth := healthyBackupHealth()
 
 	cases := []struct {
 		name    string
@@ -342,6 +343,7 @@ func TestAdmittedUnder(t *testing.T) {
 			domain.AdmissionPolicy{
 				Floors: floor, ApprovedCredentialModes: approved,
 				BackupEncryptionWaiverRepositoryID: &waiverID,
+				BackupHealth:                       &backupHealth,
 			},
 			nil,
 		},
@@ -368,7 +370,11 @@ func TestAdmittedUnder(t *testing.T) {
 		},
 		{
 			"waiver matching the operator's", waived,
-			domain.AdmissionPolicy{Floors: floor, ApprovedCredentialModes: approved, BackupEncryptionWaiverRepositoryID: &waiverID},
+			domain.AdmissionPolicy{
+				Floors: floor, ApprovedCredentialModes: approved,
+				BackupEncryptionWaiverRepositoryID: &waiverID,
+				BackupHealth:                       &backupHealth,
+			},
 			nil,
 		},
 		{
@@ -435,12 +441,14 @@ func TestAdmittedUnderDoesNotMutateTheFloor(t *testing.T) {
 
 	configured := domain.NewCapabilitySnapshot(domain.CapPostExitExport, domain.CapDetachableWorkspace)
 	waiverRepository := int64(424242)
+	backupHealth := healthyBackupHealth()
 	policy := domain.AdmissionPolicy{
 		Floors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeUnattended: configured,
 		},
 		ApprovedCredentialModes:            []domain.CredentialMode{domain.CredentialSubscriptionContained},
 		BackupEncryptionWaiverRepositoryID: &waiverRepository,
+		BackupHealth:                       &backupHealth,
 	}
 	before := slices.Clone(configured)
 	if err := domain.AdmittedUnder(record, policy); err != nil {

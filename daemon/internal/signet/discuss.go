@@ -15,6 +15,10 @@ import (
 // Wave 2 engine later) scans this kind.
 const kindAgentInvocationRequested = "agent_invocation_requested"
 
+// AgentInvocationRequestedKind identifies a committed discuss invocation in
+// the durable outbox.
+const AgentInvocationRequestedKind = kindAgentInvocationRequested
+
 // invocationRequest is the AgentInvocationRequested outbox payload: what a
 // dispatcher needs to start the agent turn and what recovery needs to
 // reconcile it (§5.14 test 5). The invocation id doubles as the row's

@@ -168,6 +168,41 @@ func validFakePublicationTask(t *testing.T) fakePublicationTask {
 	}
 }
 
+func TestFakePublicationBackupPayloadDigests(t *testing.T) {
+	task := validFakePublicationTask(t)
+	payload := mustEncodeFakePublicationTask(task)
+	entry := store.QueueEntry{
+		IdempotencyKey: fakePublicationTaskKey(task.RunID),
+		Kind:           FakePublicationTaskKind,
+		Payload:        payload,
+	}
+	got, err := FakePublicationBackupPayloadDigests(entry)
+	if err != nil {
+		t.Fatalf("FakePublicationBackupPayloadDigests: %v", err)
+	}
+	if len(got) != 1 || got[0] != task.RecipeDigest {
+		t.Fatalf("backup payload digests = %v, want [%s]", got, task.RecipeDigest)
+	}
+	entry.Payload = []byte(`{}`)
+	if _, err := FakePublicationBackupPayloadDigests(entry); err == nil {
+		t.Fatal("FakePublicationBackupPayloadDigests accepted an invalid task")
+	}
+	entry.Payload = payload
+	entry.IdempotencyKey = fakePublicationTaskKey("other-run")
+	if _, err := FakePublicationBackupPayloadDigests(entry); !errors.Is(
+		err, domain.ErrParentKeyMismatch,
+	) {
+		t.Fatalf("mismatched task key error = %v, want ErrParentKeyMismatch", err)
+	}
+	entry.IdempotencyKey = fakePublicationTaskKey(task.RunID)
+	entry.Kind = FakePublicationInvocationOwnerKind
+	if _, err := FakePublicationBackupPayloadDigests(entry); !errors.Is(
+		err, domain.ErrParentKeyMismatch,
+	) {
+		t.Fatalf("mismatched task kind error = %v, want ErrParentKeyMismatch", err)
+	}
+}
+
 func TestFakePublicationDurabilityHelpers(t *testing.T) {
 	root := t.TempDir()
 	nested := filepath.Join(root, "one", "two")

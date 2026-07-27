@@ -437,6 +437,10 @@ type AdmissionPolicy struct {
 	// repository ID the operator waived §5.7's encryption dimension for, or
 	// nil when no waiver is configured.
 	BackupEncryptionWaiverRepositoryID *int64
+	// BackupHealth is the latest evaluation supplied by the configured health
+	// source. Nil is not an implicit pass: unattended admission fails closed
+	// when no source is configured or no signal is available.
+	BackupHealth *BackupHealth
 }
 
 // AdmittedUnder re-runs the trusted admission gate over a record against
@@ -514,6 +518,15 @@ func AdmittedUnder(a ExecutionAdmission, policy AdmissionPolicy) error {
 		if a.Base.RepositoryID != waived {
 			return fmt.Errorf("execution admission %s targets repository %d under a waiver for %d: %w",
 				a.InvocationID, a.Base.RepositoryID, waived, ErrWaiverRepositoryMismatch)
+		}
+	}
+	if a.OperatingMode == ModeUnattended {
+		if policy.BackupHealth == nil {
+			return fmt.Errorf("execution admission %s runs unattended: %w",
+				a.InvocationID, ErrBackupHealthUnavailable)
+		}
+		if err := policy.BackupHealth.RequireHealthy(); err != nil {
+			return fmt.Errorf("execution admission %s backup health: %w", a.InvocationID, err)
 		}
 	}
 	return nil

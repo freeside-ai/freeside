@@ -26,6 +26,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
@@ -235,6 +236,27 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 		}
 	}()
 
+	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
+	if err != nil {
+		return nil, fmt.Errorf("open attachment store: %w", err)
+	}
+	localBackupFiles, err := store.NewDefaultLocalBackupFiles(cfg.DBPath)
+	if err != nil {
+		return nil, err
+	}
+	backupHealth, err := localBackupFiles.NewCheckpointHealthSource(
+		blobs, storeOptions.ApprovedRecipes,
+		map[string]store.BackupPayloadDigestExtractor{
+			engine.FakePublicationTaskKind:            engine.FakePublicationBackupPayloadDigests,
+			engine.FakePublicationInvocationOwnerKind: engine.FakePublicationInvocationOwnerBackupPayloadDigests,
+			signet.AgentInvocationRequestedKind:       signet.AgentInvocationBackupPayloadDigests,
+			publish.IntentKindReservation:             publish.ReservationBackupPayloadDigests,
+			publish.IntentKindPublication:             publish.PublicationBackupPayloadDigests,
+		})
+	if err != nil {
+		return nil, err
+	}
+	storeOptions.BackupHealthSource = backupHealth
 	st, err := store.Open(parent, cfg.DBPath, storeOptions)
 	if err != nil {
 		return nil, err
@@ -244,10 +266,6 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 			_ = st.Close()
 		}
 	}()
-	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
-	if err != nil {
-		return nil, fmt.Errorf("open attachment store: %w", err)
-	}
 	driver, err := fake.NewStageDriverAt(cfg.FakeDriverDir)
 	if err != nil {
 		return nil, fmt.Errorf("open fake stage driver: %w", err)
@@ -274,17 +292,24 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 	}); err != nil {
 		return nil, fmt.Errorf("seed walking-skeleton run: %w", err)
 	}
+	localBackups, err := localBackupFiles.NewProducer(st)
+	if err != nil {
+		return nil, err
+	}
+	if err := localBackups.Maintain(parent); err != nil {
+		return nil, err
+	}
 
 	ctx, cancel := context.WithCancel(parent)
 	d := &daemon{
 		store: st, attention: attention, workflow: workflow, driver: driver,
-		listener: listener, cancel: cancel, errs: make(chan error, 2), pairingCode: pairingCode,
+		listener: listener, cancel: cancel, errs: make(chan error, 3), pairingCode: pairingCode,
 		server: &http.Server{
 			Handler:           signet.NewHTTPHandler(attention, signet.NewRequestAuthorizer(st)),
 			ReadHeaderTimeout: 5 * time.Second,
 		},
 	}
-	d.wg.Add(2)
+	d.wg.Add(3)
 	go func() {
 		defer d.wg.Done()
 		err := d.server.Serve(listener)
@@ -296,6 +321,10 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 	go func() {
 		defer d.wg.Done()
 		d.errs <- workflow.Run(ctx, cfg.ReconcileInterval)
+	}()
+	go func() {
+		defer d.wg.Done()
+		d.errs <- localBackups.Run(ctx)
 	}()
 	success = true
 	return d, nil
@@ -349,7 +378,7 @@ func (d *daemon) readiness() readiness {
 	return readiness{APIURL: "http://" + d.listener.Addr().String(), PairingCode: d.pairingCode}
 }
 
-// Wait returns when the process context is canceled or either long-running
+// Wait returns when the process context is canceled or any long-running
 // component exits. A nil component result is normal only during shutdown.
 func (d *daemon) Wait(ctx context.Context) error {
 	select {

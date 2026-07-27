@@ -39,6 +39,7 @@ var (
 	ErrInvalidCredentialMode     = errors.New("invalid credential mode")
 	ErrInvalidEgressProfile      = errors.New("invalid egress profile")
 	ErrInvalidRefreshStrategy    = errors.New("invalid refresh strategy")
+	ErrInvalidBackupHealthStatus = errors.New("invalid backup health status")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")
@@ -105,6 +106,10 @@ var (
 	ErrTrustProfileInconsistent    = errors.New("trust profile digest is inconsistent with the admission's operating mode")
 	ErrTrustProfileSuperseded      = errors.New("admission names a trust profile revision that is no longer active")
 	ErrBackupAuthorizationMissing  = errors.New("unattended admission presents no backup authorization")
+	ErrBackupHealthUnavailable     = errors.New("backup health is unavailable")
+	ErrCheckpointNotCurrent        = errors.New("backup checkpoint is not current")
+	ErrArtifactClosureIncomplete   = errors.New("backup artifact closure is incomplete")
+	ErrRestoreTestStale            = errors.New("backup restore test is stale")
 	ErrRepositoryIdentityMismatch  = errors.New("recorded repository identity does not match the repository's trusted profile")
 	ErrNonWaivableFinding          = errors.New("finding class is non-waivable")
 	ErrAgentWaiver                 = errors.New("an agent cannot author a waiver")
