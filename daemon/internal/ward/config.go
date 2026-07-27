@@ -105,7 +105,8 @@ type Config struct {
 	// StartContainer returns) would otherwise leave the gate blocked and the VM
 	// live indefinitely. This bounds every side-effecting call from one place;
 	// teardown detaches from it (context.WithoutCancel) and reaps what it
-	// interrupts. Defaults to WriterStopTimeout + ExporterTimeout + 5 minutes.
+	// interrupts. Defaults to WriterStopTimeout + ExporterTimeout +
+	// 4*SeedTimeout + 15 minutes.
 	HandoffTimeout time.Duration
 	// PollInterval is the state-poll spacing. Defaults to 500ms.
 	PollInterval time.Duration
@@ -177,12 +178,16 @@ func (cfg Config) withDefaults() Config {
 		cfg.TeardownTimeout = 2 * time.Minute
 	}
 	if cfg.HandoffTimeout == 0 {
-		// A wedge backstop, not an SLA, so size it generously above the four
-		// observed-state waits it contains plus enough slack to stream,
+		// A wedge backstop, not an SLA, so size it generously above the
+		// bounded operations it contains plus enough slack to stream,
 		// extract, hash, and scan a near-max multi-GiB export without the
 		// overall budget firing on a legitimately slow run. Operators facing
 		// larger scans can raise it.
-		cfg.HandoffTimeout = cfg.WriterStopTimeout + cfg.ExporterTimeout + 2*cfg.SeedTimeout + 15*time.Minute
+		//
+		// Seeding contributes four SeedTimeout-bounded operations, not two:
+		// the two staged copies as well as the seeder's and observer's waits.
+		// Counting only the waits would quietly spend the export slack.
+		cfg.HandoffTimeout = cfg.WriterStopTimeout + cfg.ExporterTimeout + 4*cfg.SeedTimeout + 15*time.Minute
 	}
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = 500 * time.Millisecond
