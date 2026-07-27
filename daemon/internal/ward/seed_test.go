@@ -257,7 +257,12 @@ func TestCopySeedFileRefusesSymlink(t *testing.T) {
 	if err := os.Symlink(outside, link); err != nil {
 		t.Fatal(err)
 	}
-	_, _, _, err := copySeedFile(link, filepath.Join(dir, "dest"), 1<<20)
+	srcRoot, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srcRoot.Close() //nolint:errcheck // read-only handle
+	_, _, _, err = copySeedFile(srcRoot, "entry", filepath.Join(dir, "dest"), 1<<20)
 	wantCheckFailure(t, err, CheckWorkspaceSeeding)
 	if _, statErr := os.Stat(filepath.Join(dir, "dest")); statErr == nil {
 		t.Error("a refused entry still produced a snapshot file")
@@ -273,7 +278,12 @@ func TestCopySeedFileTakesModeFromTheDescriptor(t *testing.T) {
 	if err := os.WriteFile(src, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, _, perm, err := copySeedFile(src, filepath.Join(dir, "dest"), 1<<20)
+	srcRoot, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srcRoot.Close() //nolint:errcheck // read-only handle
+	_, _, perm, err := copySeedFile(srcRoot, "run.sh", filepath.Join(dir, "dest"), 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}

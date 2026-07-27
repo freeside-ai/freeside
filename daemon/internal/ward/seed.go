@@ -72,10 +72,21 @@ func stageSeedSource(cfg Config, dir, declaredRepo, snapshot string) (digest str
 	if !info.IsDir() {
 		return "", failf(CheckWorkspaceSeeding, "seed source is not a directory")
 	}
+	// Every read below goes through this root. It holds a descriptor to the
+	// resolved source and validates each path component against it, so a
+	// directory swapped for a symlink mid-walk cannot lead the staging pass
+	// outside the seed root. O_NOFOLLOW on the final component only guards the
+	// leaf; intermediate components need this.
+	srcRoot, err := os.OpenRoot(resolved)
+	if err != nil {
+		return "", failf(CheckWorkspaceSeeding, "seed source could not be opened as a root")
+	}
+	defer srcRoot.Close() //nolint:errcheck // read-only handle
+
 	remaining := cfg.MaxSeedBytes
 	var entries, worktreeFiles int
 	var contentLines, execPaths, dirPaths []string
-	walkErr := filepath.WalkDir(resolved, func(p string, d fs.DirEntry, err error) error {
+	walkErr := fs.WalkDir(srcRoot.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return failf(CheckWorkspaceSeeding, "seed source could not be walked")
 		}
@@ -83,17 +94,13 @@ func stageSeedSource(cfg Config, dir, declaredRepo, snapshot string) (digest str
 		if cfg.MaxSeedEntries > 0 && entries > cfg.MaxSeedEntries {
 			return failf(CheckWorkspaceSeeding, "seed source exceeds the entry budget of %d", cfg.MaxSeedEntries)
 		}
-		rel, relErr := filepath.Rel(resolved, p)
-		if relErr != nil {
-			return failf(CheckWorkspaceSeeding, "seed source entry could not be located")
-		}
 		// A newline in a path would make the guest's line-oriented digest
 		// ambiguous, and no git checkout needs one. Refused rather than
 		// escaped, like every other delimiter this package meets.
 		if strings.ContainsAny(rel, "\n\r") {
 			return failf(CheckWorkspaceSeeding, "seed source contains a path with a line break")
 		}
-		dest := filepath.Join(snapshot, rel)
+		dest := filepath.Join(snapshot, filepath.FromSlash(rel))
 		switch {
 		case d.IsDir():
 			if rel != "." {
@@ -120,7 +127,7 @@ func stageSeedSource(cfg Config, dir, declaredRepo, snapshot string) (digest str
 		// comes from the opened descriptor, not from the walk entry, for the
 		// same reason the open refuses to follow: the entry describes what was
 		// there at walk time.
-		sum, written, perm, copyErr := copySeedFile(p, dest, remaining)
+		sum, written, perm, copyErr := copySeedFile(srcRoot, rel, dest, remaining)
 		if copyErr != nil {
 			return copyErr
 		}
@@ -189,8 +196,8 @@ func findPath(rel string) string {
 // symlink in between would otherwise be followed, and the target's bytes, from
 // anywhere on the host, would be stored as a regular file whose digest and
 // irregular=absent report are perfectly self-consistent about the wrong thing.
-func copySeedFile(src, dest string, budget int64) (sum string, written int64, perm fs.FileMode, err error) {
-	in, err := os.OpenFile(src, os.O_RDONLY|syscall.O_NOFOLLOW, 0) //nolint:gosec // inside the daemon's own seed root, already resolved and contained
+func copySeedFile(root *os.Root, rel, dest string, budget int64) (sum string, written int64, perm fs.FileMode, err error) {
+	in, err := root.OpenFile(rel, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return "", 0, 0, failf(CheckWorkspaceSeeding, "seed source entry could not be opened without following a link")
 	}
