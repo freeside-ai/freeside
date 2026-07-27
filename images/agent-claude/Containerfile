@@ -1,0 +1,127 @@
+# Freeside agent base for the Claude CLI (plan §5.4, §5.7; issue #304).
+#
+# The digest-pinned image the agent stage runs in under the
+# `subscription_contained` credential mode: the native vendor CLI runs in the
+# agent VM, its credential mount read-only. Plan §5.7 requires golden images to
+# pin CLI versions, so the Claude CLI version is an explicit build input,
+# recorded in a label and in the in-image manifest, and asserted from the built
+# image by scripts/build-agent-claude-image.sh.
+#
+# Instructions this image must NOT carry (ward check 2,
+# daemon/internal/ward/conformance.go verifyAgentAllowlist):
+#
+#   ENV        - Apple container 1.1.0 merges image environment into the
+#                created container's initProcess.environment (measured), and
+#                the gate compares that list against exactly the fixed PATH
+#                plus the daemon-supplied Env. Any image variable fails the
+#                check, which is why an official node:* base (NODE_VERSION) is
+#                unusable and this image installs Node itself.
+#   WORKDIR    - honored by the runtime (measured); the gate requires "/".
+#   ENTRYPOINT
+#   CMD        - the command is daemon-owned and inspect-verified before the
+#                container starts, exactly as in images/exporter/Containerfile.
+#   USER       - ward passes no user; the workspace volume is root-owned.
+#   VOLUME     - would add an anonymous mount to a topology the gate compares
+#                mount-for-mount.
+#
+# LABEL is not inspected by the gate and is the safe place for provenance.
+#
+# The image is linux/arm64 only: Apple container on Apple silicon is the
+# Phase 1A runtime.
+
+# The pins are declared before the first FROM so both stages, and the labels in
+# the final one, see the same values. Node comes from the official nodejs.org
+# tarball, verified against the sha256 literal held here: fetching
+# SHASUMS256.txt at build time would be a mutable input verifying itself. The
+# Claude CLI requires Node >= 22.
+ARG BASE_IMAGE=docker.io/library/debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd
+ARG NODE_VERSION=24.18.0
+ARG NODE_SHA256=58c9520501f6ae2b52d5b210444e24b9d0c029a58c5011b797bc1fe7105886f6
+ARG CLAUDE_CODE_VERSION=2.1.220
+
+FROM ${BASE_IMAGE} AS build
+
+ARG NODE_VERSION
+ARG NODE_SHA256
+ARG CLAUDE_CODE_VERSION
+
+# curl and xz-utils exist only in this stage: the credential-bearing agent VM
+# has no reason to carry a downloader.
+RUN set -eux; \
+	apt-get update; \
+	apt-get install -y --no-install-recommends ca-certificates curl xz-utils; \
+	rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+	curl -fsSLo /tmp/node.tar.xz \
+		"https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-arm64.tar.xz"; \
+	echo "${NODE_SHA256}  /tmp/node.tar.xz" | sha256sum -c -; \
+	tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
+		--exclude CHANGELOG.md --exclude LICENSE --exclude README.md; \
+	rm /tmp/node.tar.xz; \
+	node --version; \
+	npm --version
+
+# npm resolves the platform-specific optional dependency
+# (@anthropic-ai/claude-code-linux-arm64) for the build architecture. The
+# version is pinned; its transitive resolution is recorded, not pinned, and the
+# built image's own `claude --version` is the assertion that matters.
+RUN set -eux; \
+	npm install -g --no-fund --no-audit "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"; \
+	npm cache clean --force
+
+FROM ${BASE_IMAGE}
+
+ARG BASE_IMAGE
+ARG NODE_VERSION
+ARG CLAUDE_CODE_VERSION
+
+# git is a workspace tool: the agent commits normally, and nothing of its .git
+# is ever imported as git state (plan §5.6). ca-certificates serves the
+# provider API under the `provider_only` egress profile. Their versions are
+# recorded in the manifest below rather than pinned: Debian drops superseded
+# versions from the mirror, so an exact pin turns into an unbuildable image.
+RUN set -eux; \
+	apt-get update; \
+	apt-get install -y --no-install-recommends ca-certificates git; \
+	rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /usr/local /usr/local
+
+# Managed policy settings, the Linux system-wide path Claude Code reads before
+# user and project settings. Auto-update is disabled here so the pinned version
+# survives a run that has provider egress; the image cannot set DISABLE_AUTOUPDATER
+# itself, because ENV is forbidden above. See images/agent-claude/README.md for
+# the environment the daemon must supply.
+RUN set -eux; \
+	mkdir -p /etc/claude-code; \
+	printf '%s\n' \
+		'{' \
+		'  "autoUpdates": false,' \
+		'  "env": {' \
+		'    "DISABLE_AUTOUPDATER": "1"' \
+		'  }' \
+		'}' > /etc/claude-code/managed-settings.json
+
+# The manifest records what the pinned inputs actually resolved to. Running the
+# CLI here also proves it starts in this image; the state it writes under HOME
+# is removed so no session state is baked in.
+RUN set -eux; \
+	mkdir -p /usr/local/share/freeside; \
+	{ \
+		echo "base_image ${BASE_IMAGE}"; \
+		echo "node $(node --version)"; \
+		echo "npm $(npm --version)"; \
+		echo "claude $(claude --version)"; \
+		echo "--- dpkg ---"; \
+		dpkg-query -W -f='${binary:Package} ${Version}\n'; \
+		echo "--- npm -g ---"; \
+		npm ls -g --depth 0 --json; \
+	} > /usr/local/share/freeside/image-manifest.txt; \
+	rm -rf /root/.claude /root/.claude.json /root/.npm /root/.cache
+
+LABEL org.opencontainers.image.title="freeside-agent-claude" \
+	org.opencontainers.image.description="Freeside agent base: pinned Claude CLI on a pinned Debian slim base" \
+	org.opencontainers.image.base.name="${BASE_IMAGE}" \
+	ai.freeside.claude-code.version="${CLAUDE_CODE_VERSION}" \
+	ai.freeside.node.version="${NODE_VERSION}"
