@@ -14,12 +14,26 @@
 // logic (daemon/internal/export) that ships inside the pinned exporter image;
 // the gate collects its output but never owns its content.
 //
+// The credential-bearing writer receives exactly one per-run host-only
+// network. Its only route beyond that network is a daemon-side CONNECT proxy
+// advertised at the network's host gateway; the proxy admits only configured
+// canonical DNS host:port authorities and requires matching TLS SNI before
+// forwarding the ClientHello. The gate attests both the runtime's host-only
+// mode and the writer's exact named attachment before execution. Proxy
+// environment is compared as an exact key/value set independent of runtime
+// ordering, and direct external and guest-DNS egress remain structurally
+// absent if the writer ignores or clears those variables. Suite.Full also
+// requires each configured provider/CDN to reject an alternate encrypted HTTP
+// Host; without TLS termination, that application-layer rule is an explicit
+// provider assumption rather than a property CONNECT can enforce.
+//
 // The conformance suite (suite.go) is the invocable form of that contract,
 // run at the plan §5.7 cadence points without a real work item (doctor
 // scheduling is a downstream operations-unit concern). Suite.Full proves the
 // whole contract as one pass on the current runtime: a synthetic handoff with
 // a benign writer and a seeded fake credential exercises checks 1-5 and 7
-// together, then two of the spike's three negative probes run — the
+// together (including declared-provider success, undeclared CONNECT refusal,
+// and direct external-IP refusal), then two of the spike's three negative probes run — the
 // read-write-attach exclusion (a second VM cannot attach the workspace a live
 // writer holds read-write) and credential-marker containment (the marker is
 // absent from the export yet still readable from the detached credential
@@ -122,6 +136,8 @@
 //     seeder lifecycle, and the read-only base attestation
 //   - runtime_cli.go   CLIRuntime, the os/exec-backed Apple container
 //     implementation (the package's only os/exec importer)
+//   - egress.go        the host-only network lifecycle and exact CONNECT
+//     allowlist proxy
 //   - config.go        Backend configuration and validation
 //   - backend.go       the exec.RunnerBackend implementation and its frozen
 //     capability declaration
@@ -132,7 +148,8 @@
 //   - export_verify.go check 7: safe archive extraction, manifest and digest
 //     verification, and the fail-closed output-scanner hook
 //   - suite.go         the invocable conformance suite: Full (checks 1-5, 7,
-//     two handoff negative probes, and networkless export) plus PreJob
+//     agent egress probes, two handoff negative probes, and networkless
+//     export) plus PreJob
 //
 // The full-lifecycle integration test and the conformance suite's
 // reference-runtime members (Suite.Full/PreJob end to end, and the

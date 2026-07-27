@@ -30,6 +30,11 @@ func TestConfigValidate(t *testing.T) {
 		name   string
 		mutate func(*Config)
 	}{
+		{"missing provider endpoints", func(c *Config) { c.ProviderEndpoints = nil }},
+		{"wildcard provider endpoint", func(c *Config) { c.ProviderEndpoints = []string{"*.example.com:443"} }},
+		{"IP provider endpoint", func(c *Config) { c.ProviderEndpoints = []string{"127.0.0.1:443"} }},
+		{"duplicate provider endpoint", func(c *Config) { c.ProviderEndpoints = []string{"provider.example:443", "provider.example:443"} }},
+		{"negative egress proxy timeout", func(c *Config) { c.EgressProxyTimeout = -time.Second }},
 		{"missing exporter image", func(c *Config) { c.ExporterImage = "" }},
 		{"tag-only exporter image", func(c *Config) { c.ExporterImage = "example.test/exporter:latest" }},
 		{"short exporter digest", func(c *Config) { c.ExporterImage = "example.test/exporter@sha256:abc" }},

@@ -30,6 +30,18 @@ var ErrInvalidConfig = errors.New("invalid ward backend config")
 // (check 6), while everything the gate enforces about the exporter (checks 4,
 // 5, 7) comes from here.
 type Config struct {
+	// ProviderEndpoints is the exact CONNECT authority allowlist for
+	// provider_only writer egress. Each entry is a canonical lowercase
+	// TLS DNS-name:port pair; no wildcard, IP literal, or implicit port is
+	// allowed. Suite.Full requires matching TLS SNI and an HTTP response from
+	// every entry, plus rejection of its alternate-Host fronting witness.
+	ProviderEndpoints []string
+	// EgressProxyTimeout bounds CONNECT request parsing and upstream dialing.
+	// Defaults to 15 seconds.
+	EgressProxyTimeout time.Duration
+	// EgressDialContext is an injectable upstream dialer for conformance tests.
+	// Nil uses net.Dialer; production callers leave it nil.
+	EgressDialContext dialContextFunc
 	// ExporterImage is the digest-pinned exporter image reference
 	// ("repo/name@sha256:..."). A tag-only reference is refused: the exporter
 	// is trusted compute, and trust binds to bytes, not a movable tag.
@@ -162,6 +174,9 @@ func (cfg Config) withDefaults() Config {
 	if cfg.SeedTimeout == 0 {
 		cfg.SeedTimeout = 5 * time.Minute
 	}
+	if cfg.EgressProxyTimeout == 0 {
+		cfg.EgressProxyTimeout = 15 * time.Second
+	}
 	if cfg.MaxSeedBytes == 0 {
 		cfg.MaxSeedBytes = 512 << 20
 	}
@@ -213,6 +228,10 @@ func (cfg Config) withDefaults() Config {
 // validate reports the first violation in a defaults-applied Config.
 func (cfg Config) validate() error {
 	switch {
+	case len(cfg.ProviderEndpoints) == 0:
+		return fmt.Errorf("%w: ProviderEndpoints is required for provider_only egress", ErrInvalidConfig)
+	case cfg.EgressProxyTimeout < 0:
+		return fmt.Errorf("%w: EgressProxyTimeout %s is negative", ErrInvalidConfig, cfg.EgressProxyTimeout)
 	case cfg.ExporterImage == "":
 		return fmt.Errorf("%w: ExporterImage is required", ErrInvalidConfig)
 	case !digestPinnedImagePattern.MatchString(cfg.ExporterImage):
@@ -263,6 +282,17 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: HandoffTimeout %s is negative", ErrInvalidConfig, cfg.HandoffTimeout)
 	case cfg.Scanner == nil:
 		return fmt.Errorf("%w: Scanner is required (check 7 scans every export)", ErrInvalidConfig)
+	}
+	seenEndpoints := make(map[string]struct{}, len(cfg.ProviderEndpoints))
+	for _, endpoint := range cfg.ProviderEndpoints {
+		canonical, err := canonicalAuthority(endpoint)
+		if err != nil || canonical != endpoint {
+			return fmt.Errorf("%w: ProviderEndpoints contains a non-canonical authority", ErrInvalidConfig)
+		}
+		if _, duplicate := seenEndpoints[endpoint]; duplicate {
+			return fmt.Errorf("%w: ProviderEndpoints contains a duplicate authority", ErrInvalidConfig)
+		}
+		seenEndpoints[endpoint] = struct{}{}
 	}
 	// Every path the gate collects evidence from is on some container's own
 	// root filesystem and must be disjoint from the workspace, which the agent

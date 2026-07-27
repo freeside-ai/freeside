@@ -2,6 +2,7 @@ package ward
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -125,7 +126,7 @@ func TestValidateAgentSpecViolations(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel())
+			spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 			tc.mutate(&spec)
 			err := validateAgentSpec(cfg, spec, names.Workspace)
 			if !errors.Is(err, ErrConformance) {
@@ -156,7 +157,7 @@ func TestValidateAgentSpecRedactsMalformedEnv(t *testing.T) {
 		"=" + secret,
 	} {
 		t.Run(redactPath(entry), func(t *testing.T) {
-			spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel())
+			spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 			spec.Env = append(spec.Env, entry)
 			err := validateAgentSpec(cfg, spec, names.Workspace)
 			if !errors.Is(err, ErrConformance) {
@@ -179,6 +180,8 @@ func agentReport(spec ContainerSpec) InspectReport {
 		WorkingDirectory:        "/",
 		State:                   StateStopped,
 		AllowlistFieldsObserved: true,
+		NetworksObserved:        true,
+		Networks:                []string{spec.Network},
 		Mounts:                  append([]Mount(nil), spec.Mounts...),
 		Env:                     append([]string{fixedContainerPathEnv}, spec.Env...),
 	}
@@ -188,7 +191,7 @@ func TestVerifyAgentAllowlistViolations(t *testing.T) {
 	cfg := testConfig()
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
-	spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel())
+	spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 	if err := verifyAgentAllowlist(agentReport(spec), spec); err != nil {
 		t.Fatalf("conforming report: %v, want nil", err)
 	}
@@ -201,6 +204,11 @@ func TestVerifyAgentAllowlistViolations(t *testing.T) {
 	tagged.ImageReference = agentImageName + ":v1@" + agentImageDigest
 	if err := verifyAgentAllowlist(tagged, spec); err != nil {
 		t.Fatalf("tag-normalized reference: %v, want nil", err)
+	}
+	permuted := agentReport(spec)
+	slices.Reverse(permuted.Env)
+	if err := verifyAgentAllowlist(permuted, spec); err != nil {
+		t.Fatalf("permuted environment: %v, want nil", err)
 	}
 
 	cases := []struct {
@@ -221,6 +229,8 @@ func TestVerifyAgentAllowlistViolations(t *testing.T) {
 		{"workspace working directory", func(r *InspectReport) { r.WorkingDirectory = "/workspace" }},
 		{"wrong command", func(r *InspectReport) { r.Command = append(r.Command, "--drift") }},
 		{"different environment", func(r *InspectReport) { r.Env = append(r.Env, "HOST_TOKEN=inert") }},
+		{"missing environment", func(r *InspectReport) { r.Env = r.Env[1:] }},
+		{"duplicate environment key", func(r *InspectReport) { r.Env = append(r.Env, "AGENT_MODE=other") }},
 		{"extra host bind", func(r *InspectReport) {
 			r.Mounts = append(r.Mounts, Mount{Type: MountBind, Source: "/", Target: "/host"})
 		}},
@@ -229,6 +239,10 @@ func TestVerifyAgentAllowlistViolations(t *testing.T) {
 		{"ssh forwarding", func(r *InspectReport) { r.SSH = true }},
 		{"published socket", func(r *InspectReport) { r.PublishedSockets = []string{"/tmp/agent.sock"} }},
 		{"published port", func(r *InspectReport) { r.PublishedPorts = []string{"8080"} }},
+		{"networks omitted", func(r *InspectReport) { r.NetworksObserved = false }},
+		{"network missing", func(r *InspectReport) { r.Networks = nil }},
+		{"wrong network", func(r *InspectReport) { r.Networks = []string{"default"} }},
+		{"extra network", func(r *InspectReport) { r.Networks = append(r.Networks, "default") }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -460,7 +474,7 @@ func TestConformanceReasonsRedactUntrustedFields(t *testing.T) {
 	cfg := testConfig()
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
-	agent := buildAgentSpec(cfg, hs, names, testOwnershipLabel())
+	agent := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 	agent.Mounts[1].Target = secret
 	if err := validateAgentSpec(cfg, agent, names.Workspace); err == nil || strings.Contains(err.Error(), secret) {
 		t.Errorf("agent conformance failure leaked or accepted an untrusted field: %v", err)
@@ -539,7 +553,7 @@ func TestValidateAgentSpecNoCredentials(t *testing.T) {
 	hs := testHandoffSpec()
 	hs.Agent.CredentialMounts = nil
 	names := namesFor(hs.RunID)
-	if err := validateAgentSpec(cfg, buildAgentSpec(cfg, hs, names, testOwnershipLabel()), names.Workspace); err != nil {
+	if err := validateAgentSpec(cfg, buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345"), names.Workspace); err != nil {
 		t.Errorf("credential-free agent spec: %v, want nil", err)
 	}
 }

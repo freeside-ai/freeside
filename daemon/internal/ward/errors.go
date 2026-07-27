@@ -74,6 +74,9 @@ const (
 	// empty network-attachment set and that deliberate DNS and direct-IP
 	// connection attempts both fail on the reference runtime.
 	CheckNetworklessExport Check = "networkless_export"
+	// CheckAgentEgress proves provider_only is realized as the run's exact
+	// host-only attachment plus the daemon's exact CONNECT allowlist.
+	CheckAgentEgress Check = "agent_egress"
 )
 
 // Gate assertions that extend the spike's seven contract checks. The spike
@@ -115,6 +118,7 @@ var AllChecks = []Check{
 	CheckSameVMRefutation,
 	CheckPreJobProbe,
 	CheckNetworklessExport,
+	CheckAgentEgress,
 	CheckWorkspaceSeeding,
 	CheckObservedBaseIdentity,
 }
@@ -125,7 +129,7 @@ func (c Check) valid() bool {
 		CheckWriterTermination, CheckExporterAllowlist,
 		CheckInExporterVerification, CheckExportVerification, CheckTeardown,
 		CheckWriterVolumeExclusion, CheckCredentialContainment,
-		CheckSameVMRefutation, CheckPreJobProbe, CheckNetworklessExport,
+		CheckSameVMRefutation, CheckPreJobProbe, CheckNetworklessExport, CheckAgentEgress,
 		CheckWorkspaceSeeding, CheckObservedBaseIdentity:
 		return true
 	default:

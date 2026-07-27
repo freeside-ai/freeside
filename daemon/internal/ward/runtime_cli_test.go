@@ -71,6 +71,42 @@ func TestDecodeInspectVolume(t *testing.T) {
 	}
 }
 
+func TestDecodeInspectRetainsExactNetworkAttachment(t *testing.T) {
+	raw := readFixture(t, "cli-inspect-volume.json")
+	raw = bytes.Replace(raw, []byte(`"networks": []`), []byte(`"networks": [{"network":"freeside-handoff-run-1-egress","options":{"hostname":"fixture","mtu":1280}}]`), 1)
+	rep, err := decodeInspect(raw, "freeside-handoff-run-1-exporter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(rep.Networks, []string{"freeside-handoff-run-1-egress"}) || rep.NetworkAttachmentCount != 1 {
+		t.Fatalf("networks = %q count=%d", rep.Networks, rep.NetworkAttachmentCount)
+	}
+}
+
+func TestDecodeNetworkInspect(t *testing.T) {
+	raw := []byte(`[{"configuration":{"creationDate":"2026-07-27T19:00:39Z","labels":{"freeside.handoff":"run-1"},"mode":"hostOnly","name":"freeside-handoff-run-1-egress","options":{},"plugin":"container-network-vmnet"},"id":"freeside-handoff-run-1-egress","status":{"ipv4Gateway":"192.168.128.1","ipv4Subnet":"192.168.128.0/24"}}]`)
+	report, err := decodeNetworkInspect(raw, "freeside-handoff-run-1-egress")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Name != "freeside-handoff-run-1-egress" || report.Mode != NetworkHostOnly ||
+		report.IPv4Gateway != "192.168.128.1" || report.IPv4Subnet != "192.168.128.0/24" ||
+		!report.LabelsObserved ||
+		!reflect.DeepEqual(report.Labels, []Label{{Key: "freeside.handoff", Value: "run-1"}}) {
+		t.Fatalf("report = %+v", report)
+	}
+}
+
+func TestDecodeNetworkRejectsInconsistentIdentity(t *testing.T) {
+	raw := []byte(`[{"configuration":{"creationDate":"2026-07-27T19:00:39Z","labels":{},"mode":"hostOnly","name":"replacement","options":{},"plugin":"container-network-vmnet"},"id":"requested","status":{"ipv4Gateway":"192.168.128.1"}}]`)
+	if _, err := decodeNetworkInspect(raw, "requested"); err == nil {
+		t.Fatal("inconsistent inspect identity accepted")
+	}
+	if _, err := decodeNetworkList(raw); err == nil {
+		t.Fatal("inconsistent list identity accepted")
+	}
+}
+
 // TestDecodeInspectHostile pins the mappings verification depends on to
 // reject a hostile configuration: virtiofs decodes to the bind type, an
 // unknown mount kind and an unnamed volume decode to invalid types (never
@@ -494,7 +530,7 @@ func TestCreateContainerArgs(t *testing.T) {
 		t.Errorf("args = %q, want %q", args, want)
 	}
 
-	agent := buildAgentSpec(cfg, hs, names, testOwnershipLabel())
+	agent := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 	agentArgs, err := createContainerArgs(agent)
 	if err != nil {
 		t.Fatal(err)
@@ -509,6 +545,9 @@ func TestCreateContainerArgs(t *testing.T) {
 	if !strings.Contains(joined, "type=volume,source=provider-cred,target=/credentials,readonly") {
 		t.Errorf("credential mount not phrased readonly: %q", joined)
 	}
+	if !strings.Contains(joined, "--network "+names.Network) {
+		t.Errorf("writer provider network missing or mis-phrased: %q", joined)
+	}
 
 	if _, err := createContainerArgs(ContainerSpec{
 		Name:   "x",
@@ -516,6 +555,9 @@ func TestCreateContainerArgs(t *testing.T) {
 		Mounts: []Mount{{Type: MountBind, Source: "/host", Target: "/m"}},
 	}); err == nil {
 		t.Error("bind mount phrased instead of refused")
+	}
+	if _, err := createContainerArgs(ContainerSpec{Name: "x", Image: "img"}); err == nil {
+		t.Error("implicit runtime-default network phrased instead of refused")
 	}
 }
 
@@ -575,9 +617,10 @@ func TestCopyArgsRefusesInjection(t *testing.T) {
 // time, so a direct Runtime caller cannot bypass the spec-level checks.
 func TestCreateContainerArgsRefusesInjection(t *testing.T) {
 	base := ContainerSpec{
-		Name:   "c",
-		Image:  "img",
-		Mounts: []Mount{{Type: MountVolume, Source: "ws", Target: "/workspace"}},
+		Name:            "c",
+		Image:           "img",
+		Mounts:          []Mount{{Type: MountVolume, Source: "ws", Target: "/workspace"}},
+		NetworkDisabled: true,
 	}
 	cases := []struct {
 		name   string
@@ -626,9 +669,10 @@ func TestCreateContainerRedactsStderr(t *testing.T) {
 	}
 	const secret = "secret-fixture-value"
 	err := NewCLIRuntime(bin).CreateContainer(context.Background(), ContainerSpec{
-		Name:  "fixture",
-		Image: "fixture-image",
-		Env:   []string{"PROVIDER_TOKEN=" + secret},
+		Name:            "fixture",
+		Image:           "fixture-image",
+		Env:             []string{"PROVIDER_TOKEN=" + secret},
+		NetworkDisabled: true,
 	})
 	if err == nil {
 		t.Fatal("CreateContainer returned nil, want exit error")
@@ -764,10 +808,11 @@ func TestExportRootFSStreamsStdout(t *testing.T) {
 // "--mount" would let the next word realize a host bind outside the spec.
 func TestCreateContainerArgsTerminatesOptions(t *testing.T) {
 	spec := ContainerSpec{
-		Name:    "c",
-		Image:   "--mount",
-		Command: []string{"type=bind,source=/Users,target=/host"},
-		Mounts:  []Mount{{Type: MountVolume, Source: "ws", Target: "/workspace"}},
+		Name:            "c",
+		Image:           "--mount",
+		Command:         []string{"type=bind,source=/Users,target=/host"},
+		Mounts:          []Mount{{Type: MountVolume, Source: "ws", Target: "/workspace"}},
+		NetworkDisabled: true,
 	}
 	args, err := createContainerArgs(spec)
 	if err != nil {

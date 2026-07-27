@@ -11,8 +11,9 @@ package ward
 // orchestration and every induced check failure deterministically. These
 // tests prove the passing runs and the negative probes on the real runtime:
 //
-//   - TestLiveConformanceSuite: Suite.Full (checks 1-5, 7 + the credential,
-//     read-write-attach, and networkless-export probes) and Suite.PreJob pass.
+//   - TestLiveConformanceSuite: Suite.Full (checks 1-5, 7 + provider-only
+//     egress, credential, read-write-attach, and networkless-export probes)
+//     and Suite.PreJob pass.
 //   - TestLiveConformanceSameVMRefutation: the third negative probe, driven
 //     directly against the container CLI because it needs a CAP_SYS_ADMIN
 //     guest process the gate's ContainerSpec deliberately cannot express.
@@ -47,9 +48,9 @@ func requireLiveContainer(t *testing.T) string {
 }
 
 // TestLiveConformanceSuite runs the invocable suite against the reference
-// runtime: Full proves checks 1-5, 7, the credential-containment probe, and
-// the read-write-attach exclusion probe on real VMs, and PreJob proves the
-// lightweight precondition path.
+// runtime: Full proves checks 1-5, 7, provider-only egress, the
+// credential-containment probe, and the read-write-attach exclusion probe on
+// real VMs, and PreJob proves the lightweight precondition path.
 func TestLiveConformanceSuite(t *testing.T) {
 	bin := requireLiveContainer(t)
 	ctx := context.Background()
@@ -76,6 +77,7 @@ func TestLiveConformanceSuite(t *testing.T) {
 		} {
 			_ = rt.DeleteVolume(ctx, v)
 		}
+		_ = rt.DeleteNetwork(ctx, names.Network)
 	})
 
 	// The §5.4 scanner proves the configured hook runs and never sees the
@@ -103,6 +105,7 @@ func TestLiveConformanceSuite(t *testing.T) {
 	}
 	base := commitLiveSeedCheckout(t, seedDir)
 	cfg := Config{
+		ProviderEndpoints: []string{"api.anthropic.com:443"},
 		// The exporter runs the REAL freeside-export helper from the pinned
 		// exporter image; Suite.Full's check-5 probe also runs in this image.
 		ExporterImage:     liveExporterImage(t),

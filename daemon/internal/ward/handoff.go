@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
@@ -56,6 +57,17 @@ type HandoffResult struct {
 	CommitPlanPresent bool
 	// Workspace is what the gate observed about the workspace this run used.
 	Workspace WorkspaceObservation
+	// Egress is the writer network the runtime reported, not the requested
+	// topology echoed back. Profile is the gate's resulting classification;
+	// Network and HostOnly come from the attested runtime report.
+	Egress EgressObservation
+}
+
+type EgressObservation struct {
+	Profile        domain.EgressProfile
+	Network        string
+	HostOnly       bool
+	ProxyAuthority string
 }
 
 // WorkspaceObservation is the workspace's identity as the gate observed it,
@@ -116,6 +128,8 @@ type runState struct {
 	observer       objectClaim
 	agent          objectClaim
 	exporter       objectClaim
+	network        objectClaim
+	proxy          *connectProxy
 	// archiveDir holds the exported rootfs archive; always removed once
 	// verification is done or the run fails (the archive is never returned).
 	archiveDir string
@@ -219,9 +233,12 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		}
 	}()
 
-	// Checks 1-2: the generated writer spec is re-verified, not trusted.
-	agentSpec := buildAgentSpec(b.cfg, hs, names, ownershipLabel)
-	if err := validateAgentSpec(b.cfg, agentSpec, names.Workspace); err != nil {
+	// Reject every caller-controlled writer-shape violation before acquiring
+	// any runtime object. The real proxy URL is not known until the host-only
+	// network exists; a syntactically valid placeholder exercises the same
+	// mount, environment-key, and explicit-network checks.
+	preflightAgentSpec := buildAgentSpec(b.cfg, hs, names, ownershipLabel, "http://127.0.0.1:1")
+	if err := validateAgentSpec(b.cfg, preflightAgentSpec, names.Workspace); err != nil {
 		return nil, err
 	}
 
@@ -266,6 +283,18 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		return nil, err
 	}
 
+	networkReport, proxyURL, err := b.prepareProviderEgress(ctx, hs, names, st)
+	if err != nil {
+		return nil, err
+	}
+	// Checks 1-2 plus provider_only: the generated writer spec is re-verified,
+	// not trusted, after the runtime supplies the host-only gateway the proxy
+	// address is derived from.
+	agentSpec := buildAgentSpec(b.cfg, hs, names, ownershipLabel, proxyURL)
+	if err := validateAgentSpec(b.cfg, agentSpec, names.Workspace); err != nil {
+		return nil, err
+	}
+
 	st.agent.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(agentSpec)); err != nil {
 		return nil, fmt.Errorf("create agent container: %w", err)
@@ -280,6 +309,29 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// the wrong object would make cleanup misclassify this run's own agent.
 	if err := verifyAgentAllowlist(agentRep, agentSpec); err != nil {
 		return nil, err
+	}
+	currentNetwork, err := b.rt.InspectNetwork(ctx, names.Network)
+	if err != nil {
+		return nil, failf(CheckAgentEgress, "re-inspect provider network before writer execution: %v", err)
+	}
+	if currentNetwork.Name != networkReport.Name ||
+		currentNetwork.Mode != NetworkHostOnly ||
+		currentNetwork.IPv4Gateway != networkReport.IPv4Gateway ||
+		currentNetwork.IPv4Subnet != networkReport.IPv4Subnet {
+		return nil, failf(CheckAgentEgress, "provider network changed before writer execution")
+	}
+	switch classifyEvidence(
+		st.network,
+		st.ownershipLabel,
+		currentNetwork.CreationDate,
+		currentNetwork.Labels,
+		currentNetwork.LabelsObserved,
+	) {
+	case evidenceOurs:
+	case evidenceForeign:
+		return nil, failf(CheckAgentEgress, "provider network was replaced before writer execution")
+	case evidenceUnprovable:
+		return nil, failf(CheckAgentEgress, "provider network identity became unprovable before writer execution")
 	}
 	st.agent.fingerprint, err = ownedFingerprint(agentRep.CreationDate, agentRep.Labels, agentRep.LabelsObserved, ownershipLabel)
 	if err != nil {
@@ -307,6 +359,10 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		return nil, err
 	}
 	st.agent = objectClaim{}
+	if err := st.proxy.Close(); err != nil {
+		return nil, failf(CheckAgentEgress, "provider proxy failed while the writer ran: %v", err)
+	}
+	st.proxy = nil
 
 	// Check 4: create the exporter but inspect it against the generated
 	// allowlist before it ever executes.
@@ -376,7 +432,18 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 			Seeded:          observedBaseSHA != "",
 			ObservedBaseSHA: observedBaseSHA,
 		},
+		Egress: EgressObservation{
+			Profile:        domain.EgressProviderOnly,
+			Network:        networkReport.Name,
+			HostOnly:       networkReport.Mode == NetworkHostOnly,
+			ProxyAuthority: mustProxyAddress(proxyURL),
+		},
 	}, nil
+}
+
+func mustProxyAddress(proxyURL string) string {
+	address, _ := proxyAddress(proxyURL)
+	return address
 }
 
 var errArchiveByteCap = errors.New("archive byte cap exceeded")
@@ -563,6 +630,12 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
 	defer cancel()
 	var problems []string
+	if st.proxy != nil {
+		if err := st.proxy.Close(); err != nil {
+			problems = append(problems, fmt.Sprintf("close provider proxy: %v", err))
+		}
+		st.proxy = nil
+	}
 
 	type containerClaim struct {
 		id    string
@@ -686,6 +759,11 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 			}
 		}
 	}
+	if st.network.attempted {
+		if err := b.teardownNetwork(ctx, names.Network, st.network, st.ownershipLabel); err != nil {
+			problems = append(problems, err.Error())
+		}
+	}
 
 	// Prove absence: nothing the run owns may survive the reap (a delete that
 	// reported success but left the object is caught here). A surviving
@@ -747,6 +825,70 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 
 	if len(problems) > 0 {
 		return failf(CheckTeardown, "%s", strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+func (b *Backend) teardownNetwork(ctx context.Context, name string, claim objectClaim, ownershipLabel Label) error {
+	networks, err := b.rt.ListNetworks(ctx)
+	if err != nil {
+		report, inspectErr := b.rt.InspectNetwork(ctx, name)
+		if inspectErr != nil {
+			return errors.Join(
+				fmt.Errorf("list networks: %w", err),
+				fmt.Errorf("inspect network %q: %w", name, inspectErr),
+			)
+		}
+		if report.Name != name {
+			return fmt.Errorf("inspect network %q returned the wrong identity", name)
+		}
+		switch classifyEvidence(claim, ownershipLabel, report.CreationDate, report.Labels, report.LabelsObserved) {
+		case evidenceOurs:
+			if deleteErr := b.rt.DeleteNetwork(ctx, name); deleteErr != nil {
+				return fmt.Errorf("delete network %q after list failure: %w", name, deleteErr)
+			}
+			remaining, relistErr := b.rt.ListNetworks(ctx)
+			if relistErr != nil {
+				return fmt.Errorf("re-list networks after direct delete: %w", relistErr)
+			}
+			return verifyNetworkAbsent(remaining, name, claim, ownershipLabel)
+		case evidenceForeign:
+			return nil
+		case evidenceUnprovable:
+			return fmt.Errorf("network %q ownership unprovable; not deleting", name)
+		}
+	}
+	candidate, found, err := uniqueNetwork(networks, name)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	switch classifyEvidence(claim, ownershipLabel, candidate.CreationDate, candidate.Labels, candidate.LabelsObserved) {
+	case evidenceOurs:
+		if err := b.rt.DeleteNetwork(ctx, name); err != nil {
+			return fmt.Errorf("delete network %q: %w", name, err)
+		}
+	case evidenceForeign:
+		return nil
+	case evidenceUnprovable:
+		return fmt.Errorf("network %q ownership unprovable; not deleting", name)
+	}
+	remaining, err := b.rt.ListNetworks(ctx)
+	if err != nil {
+		return fmt.Errorf("re-list networks: %w", err)
+	}
+	return verifyNetworkAbsent(remaining, name, claim, ownershipLabel)
+}
+
+func verifyNetworkAbsent(networks []NetworkSummary, name string, claim objectClaim, ownershipLabel Label) error {
+	candidate, found, err := uniqueNetwork(networks, name)
+	if err != nil {
+		return err
+	}
+	if found && classifyEvidence(claim, ownershipLabel, candidate.CreationDate, candidate.Labels, candidate.LabelsObserved) != evidenceForeign {
+		return fmt.Errorf("network %q survived teardown or has unprovable ownership", name)
 	}
 	return nil
 }
@@ -920,6 +1062,21 @@ func uniqueVolume(vols []VolumeSummary, name string) (VolumeSummary, bool, error
 			return VolumeSummary{}, false, fmt.Errorf("volume %q appeared more than once in runtime listing", name)
 		}
 		found, seen = v, true
+	}
+	return found, seen, nil
+}
+
+func uniqueNetwork(networks []NetworkSummary, name string) (NetworkSummary, bool, error) {
+	var found NetworkSummary
+	seen := false
+	for _, network := range networks {
+		if network.Name != name {
+			continue
+		}
+		if seen {
+			return NetworkSummary{}, false, fmt.Errorf("network %q appeared more than once in runtime listing", name)
+		}
+		found, seen = network, true
 	}
 	return found, seen, nil
 }

@@ -39,6 +39,7 @@ func New(rt Runtime, cfg Config) (*Backend, error) {
 	// Config is caller-owned. Freeze every reference field before it becomes
 	// the expected allowlist that runtime-observed state is compared against.
 	cfg.ExporterCommand = slices.Clone(cfg.ExporterCommand)
+	cfg.ProviderEndpoints = slices.Clone(cfg.ProviderEndpoints)
 	return &Backend{rt: rt, cfg: cfg, initialized: true}, nil
 }
 

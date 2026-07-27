@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 )
@@ -24,9 +25,10 @@ func (f scannerFunc) Scan(ctx context.Context, dir string) error { return f(ctx,
 // it. The all-zero digest marks it as inert fixture data.
 func testConfig() Config {
 	return Config{
-		ExporterImage:   "example.test/exporter@sha256:" + strings.Repeat("0", 64),
-		ExporterCommand: export.HelperCommand(),
-		Scanner:         scannerFunc(func(context.Context, string) error { return nil }),
+		ProviderEndpoints: []string{"provider.example:443"},
+		ExporterImage:     "example.test/exporter@sha256:" + strings.Repeat("0", 64),
+		ExporterCommand:   export.HelperCommand(),
+		Scanner:           scannerFunc(func(context.Context, string) error { return nil }),
 	}.withDefaults()
 }
 
@@ -36,9 +38,10 @@ func testHandoffSpec() HandoffSpec {
 		WorkspaceSizeMB: 64,
 		Seed:            WorkspaceSeed{Mode: SeedBlank},
 		Agent: AgentSpec{
-			Image:   "example.test/agent@sha256:" + strings.Repeat("1", 64),
-			Command: []string{"sh", "-c", "true"},
-			Env:     []string{"AGENT_MODE=fixture"},
+			Image:         "example.test/agent@sha256:" + strings.Repeat("1", 64),
+			Command:       []string{"sh", "-c", "true"},
+			Env:           []string{"AGENT_MODE=fixture"},
+			EgressProfile: domain.EgressProviderOnly,
 			CredentialMounts: []CredentialMount{
 				{Volume: "provider-cred", Target: "/credentials"},
 			},
@@ -68,6 +71,8 @@ func TestHandoffSpecValidate(t *testing.T) {
 		{"unpinned agent image", func(s *HandoffSpec) { s.Agent.Image = "example.test/agent:latest" }},
 		{"short agent digest", func(s *HandoffSpec) { s.Agent.Image = "example.test/agent@sha256:abc" }},
 		{"missing agent command", func(s *HandoffSpec) { s.Agent.Command = nil }},
+		{"missing egress profile", func(s *HandoffSpec) { s.Agent.EgressProfile = "" }},
+		{"unenforceable wider egress profile", func(s *HandoffSpec) { s.Agent.EgressProfile = domain.EgressProviderWebRead }},
 		// The seed is part of the spec's caller-error surface, so its rejections
 		// must reach ErrInvalidHandoffSpec through HandoffSpec.validate too.
 		{"unset seed mode", func(s *HandoffSpec) { s.Seed = WorkspaceSeed{} }},
@@ -92,6 +97,7 @@ func TestNamesFor(t *testing.T) {
 		Observer:  "freeside-handoff-run-1-observer",
 		Agent:     "freeside-handoff-run-1-agent",
 		Exporter:  "freeside-handoff-run-1-exporter",
+		Network:   "freeside-handoff-run-1-egress",
 	}
 	if n != want {
 		t.Errorf("namesFor(run-1) = %+v, want %+v", n, want)
@@ -431,7 +437,7 @@ func TestBuildAgentSpec(t *testing.T) {
 	cfg := testConfig()
 	hs := testHandoffSpec()
 	names := namesFor(hs.RunID)
-	spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel())
+	spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 
 	if spec.Name != names.Agent {
 		t.Errorf("Name = %q, want %q", spec.Name, names.Agent)

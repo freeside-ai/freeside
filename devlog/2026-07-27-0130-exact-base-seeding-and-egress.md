@@ -348,3 +348,134 @@ Revisit when the reference runtime changes `container copy`'s
 running-only requirement or its silent discard into a mount: both are
 load-bearing, and the second is the reason the attestation exists in this
 shape.
+
+## Provider-Only Egress Enforcement (Remaining #302)
+
+The reference runtime observations that fix the mechanism are:
+
+- `container network create --internal` reports mode `hostOnly`, a
+  per-network IPv4 gateway, the requested labels, and the same exact
+  network name in both the resource ID and configuration. A stopped
+  container created with `--network <name>` reports that exact name in
+  `configuration.networks`; the gate retains and compares the name rather
+  than reducing it to an attachment count.
+- The reported gateway is the address a guest uses for the macOS host. It
+  is not assigned to a macOS interface, so binding a listener directly to
+  it fails with `EADDRNOTAVAIL`. The provider proxy therefore binds an
+  ephemeral port on the host and advertises the host-only gateway plus
+  that port into the writer. It accepts clients only from the exact
+  runtime-reported per-run `/24`, whose gateway must be its first host, so
+  the necessary wildcard bind is not shared across ward networks. This
+  listener is the intended provider path, not a general daemon listener;
+  #326 remains responsible for proving that every other daemon service is
+  absent from the agent-reachable gateway.
+- A real writer on that network completed HTTPS to the declared
+  `api.anthropic.com:443` authority through CONNECT, received `403` for an
+  undeclared authority, received a 4xx response when it kept the allowed
+  CONNECT/TLS authority but sent encrypted `Host: example.com`, could not
+  resolve an external DNS name, and could not connect directly to the
+  normally reachable `1.1.1.1:443`. The same live handoff then completed
+  export and teardown, proving the positive and negative network probes
+  run in the credential-bearing writer rather than in a host
+  approximation.
+
+The proxy accepts CONNECT only, compares one canonical lowercase DNS
+`host:port` authority against an exact configured set, and uses Go's TLS
+parser to require the ClientHello SNI to equal that CONNECT host before
+replaying the captured bytes upstream. It rejects IP literals (including
+macOS's legacy decimal/octal/hex resolver aliases), wildcards,
+noncanonical ports, ordinary HTTP, request bodies, oversized headers, and
+missing or mismatched TLS identity; it caps concurrent connections,
+ClientHello size, and dial/read time. The header bound does not cap the
+tunnel: a unit proof sends more than 16 KiB through TLS and gets the
+upstream response. The writer receives both uppercase and lowercase HTTP
+proxy variables and explicitly empty `NO_PROXY` variants. The network is
+structural: there is no NAT or guest DNS route, so an agent that ignores
+or clears those variables does not recover direct external access.
+
+Rejected alternatives: a NAT network plus proxy environment alone
+(advisory, because the agent can ignore it); DNS allowlisting in the
+guest (the guest is adversarial); and trusting `--internal` without
+attesting the returned mode and exact attachment (a runtime drift could
+silently restore the default network).
+
+## Exact Environment Attestation (#323)
+
+Apple container does not promise to preserve caller environment order,
+so order is not part of the security contract. The shared verifier now
+parses every entry once by its first `=`, rejects empty or duplicate keys,
+and requires exact key/value equality with the generated set. It is used
+by writer, exporter, seed roles, and generic conformance probes. Tests
+pin reordered success and missing, extra, duplicate, malformed, and
+changed-value refusal. This folds #323 into #302 rather than leaving the
+writer's new proxy variables dependent on slice order.
+
+## Egress Refute-First Findings
+
+- **Confirmed by the reference runtime:** host-only mode and labels are
+  observable, the exact configured network attachment is observable, the
+  gateway/listen-address split is necessary, and the full allow/deny/direct
+  behavioral probe passes.
+- **Rejected by verification:** an implicit runtime default network is
+  never accepted. Every generated container declares either one exact
+  named network or explicit network disablement, and the CLI adapter
+  refuses a spec that declares neither or both.
+- **Rejected by verification:** a successful name-addressed delete is not
+  absence proof. Network cleanup freshly classifies ownership from the
+  invocation token and creation fingerprint, deletes only evidence
+  classified as this run's, and re-lists to prove absence. An ambiguous
+  create that made the object before returning an error is reaped; a list
+  failure cannot turn a direct delete into an unproved success.
+- **Rejected by verification:** inconsistent runtime identities are
+  refused when a network resource ID and configuration name differ, and
+  duplicate or extra writer attachments fail the allowlist.
+- **Confirmed and fixed by fresh-context review:** the initial header
+  `LimitedReader` accidentally capped the whole client-to-provider tunnel
+  at 8193 bytes; the direct-IP negative used TEST-NET-3, whose expected
+  failure was vacuous even with NAT; legacy IPv4 spellings reached the
+  macOS resolver; and a partial CONNECT/ClientHello could make proxy close
+  wait for the egress timeout beyond teardown's budget. The tunnel now
+  continues after the bounded parser, the live oracle uses `1.1.1.1:443`,
+  authority parsing rejects the alias class, and close first closes every
+  tracked active client. Regression tests pin a large bidirectional TLS
+  exchange and a one-hour partial-hello timeout interrupted in under one
+  second.
+- **Confirmed and narrowed by fresh-context review:** CONNECT authority
+  alone permits a different TLS SNI on a shared endpoint. The proxy now
+  refuses that before forwarding any ClientHello bytes, and the unit test
+  proves a mismatched SNI cannot use the same upstream that accepts the
+  matching one. Guest DNS was another undeclared path; the live witness
+  now requires BusyBox's known invocation and exact no-server diagnostic.
+- **Accepted by decision:** the ephemeral provider proxy binds on the
+  host because the vmnet gateway itself is not bindable. Its protocol and
+  destination surface are restricted as above, and it carries no provider
+  credential. Isolation of all unrelated host listeners remains #326,
+  which explicitly depends on this network shape.
+
+Application-layer authority inside TLS is the residual of the
+owner-selected CONNECT design: without terminating TLS, the proxy cannot
+read HTTP `Host` or HTTP/2 `:authority`. The current Anthropic/Cloudflare
+endpoint was probed both on the host and from the real writer and rejected
+an alternate encrypted Host with `403`; `Suite.Full` keeps that
+alternate-Host witness beside the exact SNI check. This is an explicit
+provider/CDN no-fronting assumption, not a universal property of CONNECT.
+Revisit and re-prove it on every provider endpoint or CDN change. A
+provider that routes an alternate Host successfully requires a
+provider-specific application gateway/TLS termination design and cannot
+be admitted by this backend configuration.
+
+The fresh-context reviewer re-ran its refute pass after these fixes and
+reported no remaining actionable finding.
+
+Current-base revalidation also found that the existing
+`TestLiveWorkspaceSeeding` and therefore `TestLiveConformanceSuite` fail
+before writer creation because the observer reports a non-SHA base value.
+The blank-workspace live handoff independently completed all three egress
+probes, so this does not weaken the egress evidence. #349 records the
+seeded-workspace regression rather than silently widening this work unit.
+
+**Revisit when** the provider endpoint set is derived from authenticated
+recipe configuration rather than static ward configuration. The same
+canonical exact-authority validation and runtime attestation must remain
+the final gate; a broader caller-supplied pattern must not become proxy
+policy.

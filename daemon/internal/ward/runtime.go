@@ -98,6 +98,7 @@ type ContainerSpec struct {
 	Env             []string `json:"env"`
 	Mounts          []Mount  `json:"mounts"`
 	Labels          []Label  `json:"labels"`
+	Network         string   `json:"network,omitempty"`
 	NetworkDisabled bool     `json:"network_disabled"`
 }
 
@@ -137,15 +138,54 @@ type InspectReport struct {
 	// PublishedSockets and PublishedPorts list configured host publications.
 	PublishedSockets []string
 	PublishedPorts   []string
-	// NetworkAttachmentCount is the number of configured runtime network
-	// attachments. NetworksObserved distinguishes an explicit empty array
-	// (the networkless proof) from an omitted field that proves nothing.
+	// Networks is the exact configured runtime network attachment set.
+	// NetworksObserved distinguishes an explicit empty array (the networkless
+	// proof) from an omitted field that proves nothing.
+	Networks               []string
 	NetworkAttachmentCount int
 	NetworksObserved       bool
 	Labels                 []Label
 	// LabelsObserved distinguishes an explicitly empty label set from an
 	// omitted runtime field when inspect is used as ownership evidence.
 	LabelsObserved bool
+}
+
+// NetworkMode is the runtime-observed reachability class of a managed
+// network. The provider-only gate accepts only host_only; nat would restore
+// unrestricted external egress. The zero value is invalid by design.
+type NetworkMode string
+
+const (
+	NetworkHostOnly NetworkMode = "host_only"
+	NetworkNAT      NetworkMode = "nat"
+)
+
+var AllNetworkModes = []NetworkMode{NetworkHostOnly, NetworkNAT}
+
+func (m NetworkMode) valid() bool {
+	switch m {
+	case NetworkHostOnly, NetworkNAT:
+		return true
+	default:
+		return false
+	}
+}
+
+// NetworkSummary is the ownership evidence available from a complete runtime
+// network listing.
+type NetworkSummary struct {
+	Name           string
+	Mode           NetworkMode
+	Labels         []Label
+	LabelsObserved bool
+	CreationDate   string
+}
+
+// NetworkReport adds the host gateway the daemon-side CONNECT proxy binds to.
+type NetworkReport struct {
+	NetworkSummary
+	IPv4Gateway string
+	IPv4Subnet  string
 }
 
 // VolumeSummary identifies one named volume and its labels.
@@ -188,6 +228,15 @@ type ContainerSummary struct {
 // window between that verification and the call is an accepted limitation
 // recorded in the package documentation.
 type Runtime interface {
+	// CreateNetwork creates a host-only managed network.
+	CreateNetwork(ctx context.Context, name string, labels []Label) error
+	// DeleteNetwork deletes the named network.
+	DeleteNetwork(ctx context.Context, name string) error
+	// ListNetworks returns every managed network.
+	ListNetworks(ctx context.Context) ([]NetworkSummary, error)
+	// InspectNetwork returns the observed configuration and gateway of one
+	// managed network.
+	InspectNetwork(ctx context.Context, name string) (NetworkReport, error)
 	// CreateVolume creates the named volume with the given size and labels.
 	CreateVolume(ctx context.Context, name string, sizeMB int64, labels []Label) error
 	// DeleteVolume deletes the named volume.

@@ -3,6 +3,7 @@ package ward
 import (
 	"archive/tar"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -19,6 +20,15 @@ type stubRuntime struct{}
 
 var _ Runtime = stubRuntime{}
 
+func (stubRuntime) CreateNetwork(context.Context, string, []Label) error { return nil }
+func (stubRuntime) DeleteNetwork(context.Context, string) error          { return nil }
+func (stubRuntime) ListNetworks(context.Context) ([]NetworkSummary, error) {
+	return nil, nil
+}
+
+func (stubRuntime) InspectNetwork(context.Context, string) (NetworkReport, error) {
+	return NetworkReport{}, nil
+}
 func (stubRuntime) CreateVolume(context.Context, string, int64, []Label) error { return nil }
 func (stubRuntime) DeleteVolume(context.Context, string) error                 { return nil }
 func (stubRuntime) ListVolumes(context.Context) ([]VolumeSummary, error)       { return nil, nil }
@@ -55,6 +65,11 @@ type fakeVol struct {
 	created string
 }
 
+type fakeNetwork struct {
+	labels  []Label
+	created string
+}
+
 // fakeRuntime is the scripted Runtime driving the lifecycle tests: default
 // behavior models Apple container 1.1.0 (a created-but-never-started
 // container reports stopped; a started one reports running for
@@ -65,6 +80,7 @@ type fakeRuntime struct {
 	mu sync.Mutex
 
 	calls  []string
+	nets   map[string]*fakeNetwork
 	vols   map[string]*fakeVol
 	ctrs   map[string]*fakeCtr
 	copies []fakeCopy
@@ -120,8 +136,15 @@ type fakeRuntime struct {
 	// createVolumeThenFail makes CreateVolume add the volume and then return
 	// an error, modeling an ambiguous post-create failure.
 	createVolumeThenFail bool
+	// createNetworkThenFail makes CreateNetwork add the network and then
+	// return an error, modeling the same ambiguous mutation boundary.
+	createNetworkThenFail bool
 
 	onCreateVolume    func(name string) error
+	onCreateNetwork   func(name string) error
+	onDeleteNetwork   func(name string) (skipRemoval bool, err error)
+	onInspectNetwork  func(name string, n NetworkReport) (NetworkReport, error)
+	onListNetworks    func(list []NetworkSummary) ([]NetworkSummary, error)
 	onDeleteVolume    func(name string) (skipRemoval bool, err error)
 	onInspectVolume   func(name string, v VolumeSummary) (VolumeSummary, error)
 	onCreateContainer func(spec ContainerSpec) error
@@ -148,6 +171,7 @@ func newFakeRuntime(t *testing.T) *fakeRuntime {
 	t.Helper()
 	return &fakeRuntime{
 		t:               t,
+		nets:            map[string]*fakeNetwork{},
 		vols:            map[string]*fakeVol{},
 		ctrs:            map[string]*fakeCtr{},
 		volBase:         map[string]string{},
@@ -157,6 +181,87 @@ func newFakeRuntime(t *testing.T) *fakeRuntime {
 		runningInspects: map[string]int{},
 		exportTarPath:   buildTar(t, fixtureArchive(t)),
 	}
+}
+
+func (f *fakeRuntime) CreateNetwork(ctx context.Context, name string, labels []Label) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("create-network %s", name)
+	if err := f.checkCtx(ctx); err != nil {
+		return err
+	}
+	if f.onCreateNetwork != nil {
+		if err := f.onCreateNetwork(name); err != nil {
+			return err
+		}
+	}
+	if _, duplicate := f.nets[name]; duplicate {
+		return fmt.Errorf("network %q already exists", name)
+	}
+	f.nets[name] = &fakeNetwork{labels: labels, created: f.nextCreated()}
+	if f.createNetworkThenFail {
+		return errors.New("ambiguous network create failure")
+	}
+	return nil
+}
+
+func (f *fakeRuntime) DeleteNetwork(ctx context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("delete-network %s", name)
+	if err := f.checkCtx(ctx); err != nil {
+		return err
+	}
+	if f.onDeleteNetwork != nil {
+		skip, err := f.onDeleteNetwork(name)
+		if err != nil || skip {
+			return err
+		}
+	}
+	if _, ok := f.nets[name]; !ok {
+		return fmt.Errorf("network %q not found", name)
+	}
+	delete(f.nets, name)
+	return nil
+}
+
+func (f *fakeRuntime) ListNetworks(ctx context.Context) ([]NetworkSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("list-networks")
+	if err := f.checkCtx(ctx); err != nil {
+		return nil, err
+	}
+	out := make([]NetworkSummary, 0, len(f.nets))
+	for name, network := range f.nets {
+		out = append(out, NetworkSummary{Name: name, Mode: NetworkHostOnly, Labels: network.labels, LabelsObserved: true, CreationDate: network.created})
+	}
+	if f.onListNetworks != nil {
+		return f.onListNetworks(out)
+	}
+	return out, nil
+}
+
+func (f *fakeRuntime) InspectNetwork(ctx context.Context, name string) (NetworkReport, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("inspect-network %s", name)
+	if err := f.checkCtx(ctx); err != nil {
+		return NetworkReport{}, err
+	}
+	network, ok := f.nets[name]
+	if !ok {
+		return NetworkReport{}, fmt.Errorf("network %q not found", name)
+	}
+	report := NetworkReport{
+		NetworkSummary: NetworkSummary{Name: name, Mode: NetworkHostOnly, Labels: network.labels, LabelsObserved: true, CreationDate: network.created},
+		IPv4Gateway:    "127.0.0.1",
+		IPv4Subnet:     "127.0.0.0/24",
+	}
+	if f.onInspectNetwork != nil {
+		return f.onInspectNetwork(name, report)
+	}
+	return report, nil
 }
 
 // rwVolume returns the container's read-write volume mount source, if it has
@@ -487,9 +592,12 @@ func (f *fakeRuntime) Inspect(ctx context.Context, id string) (InspectReport, er
 		LabelsObserved:          true,
 		NetworksObserved:        true,
 	}
-	if !c.spec.NetworkDisabled {
-		rep.NetworkAttachmentCount = 1
+	if c.spec.Network != "" {
+		rep.Networks = []string{c.spec.Network}
+	} else if !c.spec.NetworkDisabled {
+		rep.Networks = []string{"default"}
 	}
+	rep.NetworkAttachmentCount = len(rep.Networks)
 	// Apple container 1.1.0 reports the full pinned reference (name@digest);
 	// the tag, if any, is dropped and the descriptor's resolved digest is a
 	// different value the report does not carry.

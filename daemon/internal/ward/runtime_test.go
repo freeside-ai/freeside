@@ -27,3 +27,16 @@ func TestContainerStateValid(t *testing.T) {
 		}
 	}
 }
+
+func TestNetworkModeValid(t *testing.T) {
+	for _, m := range AllNetworkModes {
+		if !m.valid() {
+			t.Errorf("NetworkMode %q: valid() = false, want true", m)
+		}
+	}
+	for _, m := range []NetworkMode{"", "hostOnly", "bridge"} {
+		if m.valid() {
+			t.Errorf("NetworkMode %q: valid() = true, want false", m)
+		}
+	}
+}
