@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -48,6 +49,31 @@ func (fx *handoffFixture) backend(t *testing.T) *Backend {
 func (fx *handoffFixture) run(t *testing.T) (*HandoffResult, error) {
 	t.Helper()
 	res, err := fx.backend(t).Handoff(context.Background(), testHandoffSpec())
+	if res != nil {
+		t.Cleanup(func() { _ = os.RemoveAll(res.ExportDir) })
+	}
+	return res, err
+}
+
+// seed points the fixture at a real daemon-owned checkout under a real seed
+// root and returns the matching spec. The checkout is a real directory tree
+// because stageSeedSource reads the host, and a fake path cannot exercise the
+// containment and shape rules that are the point of it.
+func (fx *handoffFixture) seed(t *testing.T) HandoffSpec {
+	t.Helper()
+	root := t.TempDir()
+	dir := writeSeedCheckout(t, root, testBaseSHA)
+	fx.cfg.SeedRoot = root
+	hs := testHandoffSpec()
+	hs.Seed = WorkspaceSeed{Mode: SeedBaseCheckout, SourceDir: dir, Base: testBaseRevision()}
+	return hs
+}
+
+// runSeeded is run() over a base_checkout seed.
+func (fx *handoffFixture) runSeeded(t *testing.T) (*HandoffResult, error) {
+	t.Helper()
+	hs := fx.seed(t)
+	res, err := fx.backend(t).Handoff(context.Background(), hs)
 	if res != nil {
 		t.Cleanup(func() { _ = os.RemoveAll(res.ExportDir) })
 	}
@@ -199,6 +225,300 @@ func TestHandoffOrderObservedState(t *testing.T) {
 		t.Errorf("check 4 not pre-execution: create %d, inspect %d, start %d",
 			createExporter, inspectExporter, startExporter)
 	}
+}
+
+// TestHandoffSeedsBeforeTheWriterStarts pins the unit's central ordering
+// claim: the workspace is seeded at the declared base, and the seeder's
+// read-write attachment is proven released, before the writer VM is ever
+// started. The final inequality (seeder absent < agent start) is the
+// acceptance criterion itself, not an implementation detail.
+func TestHandoffSeedsBeforeTheWriterStarts(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+
+	res, err := fx.runSeeded(t)
+	if err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+
+	// The observation is the deliverable: the base came off the volume, in the
+	// vocabulary domain.ExecutionExport.ObservedBaseSHA expects.
+	if !res.Workspace.Seeded {
+		t.Error("Workspace.Seeded = false, want true")
+	}
+	if res.Workspace.ObservedBaseSHA != testBaseSHA {
+		t.Errorf("Workspace.ObservedBaseSHA = %q, want %q", res.Workspace.ObservedBaseSHA, testBaseSHA)
+	}
+	if res.Workspace.Volume != names.Workspace {
+		t.Errorf("Workspace.Volume = %q, want %q", res.Workspace.Volume, names.Workspace)
+	}
+
+	idx := func(call string) int {
+		i := fx.rt.callIndex(call)
+		if i < 0 {
+			t.Fatalf("call %q never happened", call)
+		}
+		return i
+	}
+	steps := []struct {
+		name string
+		at   int
+	}{
+		{"create workspace volume", idx("create-volume " + names.Workspace)},
+		{"create seeder", idx("create-container " + names.Seeder)},
+		{"inspect seeder (pre-execution allowlist)", idx("inspect " + names.Seeder)},
+		{"start seeder", idx("start-container " + names.Seeder)},
+		{"delete seeder", idx("delete-container " + names.Seeder)},
+		// The observer only runs once the seeder's read-write attachment is
+		// provably gone, and it reads through a read-only mount.
+		{"create observer", idx("create-container " + names.Observer)},
+		{"inspect observer (pre-execution allowlist)", idx("inspect " + names.Observer)},
+		{"start observer", idx("start-container " + names.Observer)},
+		{"export observer proof", idx("export " + names.Observer)},
+		{"delete observer", idx("delete-container " + names.Observer)},
+		// The attestation precedes the writer because the base is a pre-writer
+		// fact: the agent may legitimately move HEAD.
+		{"create agent", idx("create-container " + names.Agent)},
+		{"start agent", idx("start-container " + names.Agent)},
+	}
+	for i := 1; i < len(steps); i++ {
+		if steps[i-1].at >= steps[i].at {
+			t.Errorf("%s (%d) must precede %s (%d)", steps[i-1].name, steps[i-1].at, steps[i].name, steps[i].at)
+		}
+	}
+
+	// Both copies land between the seeder's start and its stop, in order: the
+	// checkout first, the completion sentinel only once it is whole.
+	fx.rt.mu.Lock()
+	copies := append([]fakeCopy(nil), fx.rt.copies...)
+	fx.rt.mu.Unlock()
+	if len(copies) != 2 {
+		t.Fatalf("recorded %d copies, want 2 (staged checkout, then sentinel)", len(copies))
+	}
+	if copies[0].targetDir != fx.cfg.SeedStageDir {
+		t.Errorf("first copy targeted %q, want the staging dir %q", copies[0].targetDir, fx.cfg.SeedStageDir)
+	}
+	if copies[1].targetDir != fx.cfg.SeedReadyDir {
+		t.Errorf("second copy targeted %q, want the sentinel dir %q", copies[1].targetDir, fx.cfg.SeedReadyDir)
+	}
+	// Staging into the workspace mount is the silent-failure case on the
+	// reference runtime, so assert the gate never aims a copy there.
+	for _, c := range copies {
+		if c.targetDir == fx.cfg.WorkspaceTarget ||
+			strings.HasPrefix(c.targetDir, fx.cfg.WorkspaceTarget+"/") {
+			t.Errorf("copy targeted %q, inside the workspace mount, where the runtime discards it silently", c.targetDir)
+		}
+		if c.id != names.Seeder {
+			t.Errorf("copy addressed %q, want only the seeder %q", c.id, names.Seeder)
+		}
+	}
+	fx.assertReaped(t)
+}
+
+// TestHandoffBlankSeedTouchesNoSeeder proves the blank mode is a real no-op:
+// the conformance suite runs it on every Full pass, so it must not create,
+// start, or copy into anything.
+func TestHandoffBlankSeedTouchesNoSeeder(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+
+	if _, err := fx.run(t); err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+	for _, call := range []string{
+		"create-container " + names.Seeder,
+		"start-container " + names.Seeder,
+	} {
+		if i := fx.rt.callIndex(call); i >= 0 {
+			t.Errorf("blank seed made call %q at %d, want none", call, i)
+		}
+	}
+	fx.rt.mu.Lock()
+	n := len(fx.rt.copies)
+	fx.rt.mu.Unlock()
+	if n != 0 {
+		t.Errorf("blank seed performed %d copies, want 0", n)
+	}
+	fx.assertReaped(t)
+}
+
+// TestHandoffSeedingFailsClosed induces every way seeding and its attestation
+// can go wrong and asserts each fails closed under the check that names it,
+// leaving nothing behind.
+//
+// The case that matters most is "copy succeeds but seeds nothing": the
+// reference runtime discards a copy aimed at a mounted volume and still exits
+// 0, so a gate that believed the copy's exit status would run the writer
+// against an empty workspace while reporting the declared base. Here the gate
+// must refuse, and it must refuse on the attestation, not on the copy.
+func TestHandoffSeedingFailsClosed(t *testing.T) {
+	names := namesFor(testHandoffSpec().RunID)
+	cases := []struct {
+		name    string
+		prepare func(t *testing.T, fx *handoffFixture, hs *HandoffSpec)
+		want    Check
+	}{
+		{"copy reports success but seeds nothing", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.copySeedsNothing = true
+		}, CheckObservedBaseIdentity},
+		{"copy fails", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.onCopyIntoContainer = func(string, string, string) error { return errors.New("copy refused") }
+		}, CheckWorkspaceSeeding},
+		{"workspace holds a different base than declared", func(t *testing.T, fx *handoffFixture, hs *HandoffSpec) {
+			root := t.TempDir()
+			hs.Seed.SourceDir = writeSeedCheckout(t, root, strings.Repeat("b", 40))
+			fx.cfg.SeedRoot = root
+		}, CheckObservedBaseIdentity},
+		{"seeder started before the gate approved it", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.onInspect = runningReport(names.Seeder)
+		}, CheckWorkspaceSeeding},
+		{"observer started before the gate approved it", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.onInspect = runningReport(names.Observer)
+		}, CheckObservedBaseIdentity},
+		{"seeder holds the workspace read-only", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.onInspect = mountRewrite(names.Seeder, func(m *Mount) { m.ReadOnly = true })
+		}, CheckWorkspaceSeeding},
+		{"observer holds the workspace read-write", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.onInspect = mountRewrite(names.Observer, func(m *Mount) { m.ReadOnly = false })
+		}, CheckObservedBaseIdentity},
+		{"seeder mounts a foreign volume", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.onInspect = mountRewrite(names.Seeder, func(m *Mount) { m.Source = "someone-elses-ws" })
+		}, CheckWorkspaceSeeding},
+		{"seeder has a network attachment", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+				if id == names.Seeder {
+					rep.NetworkAttachmentCount = 1
+				}
+				return rep, nil
+			}
+		}, CheckWorkspaceSeeding},
+		{"seeder never stops", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.runningInspects[names.Seeder] = math.MaxInt - 1
+		}, CheckWorkspaceSeeding},
+		{"observer never stops", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.runningInspects[names.Observer] = math.MaxInt - 1
+		}, CheckObservedBaseIdentity},
+		// Only the gate's own delete is subverted; teardown's later delete is
+		// left working, so the assertion is that the absence proof catches a
+		// delete that reported success, not that teardown gives up.
+		{"seeder delete reports success but leaves it listed", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			subverted := false
+			fx.rt.onDeleteContainer = func(id string) (bool, error) {
+				if id == names.Seeder && !subverted {
+					subverted = true
+					return true, nil
+				}
+				return false, nil
+			}
+		}, CheckWorkspaceSeeding},
+		{"observer produces no proof", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.observerProof = func(string, []byte) []byte { return nil }
+		}, CheckObservedBaseIdentity},
+		{"proof omits a required key", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.observerProof = func(_ string, p []byte) []byte {
+				return dropProofLine(p, baseProofDetachedKey)
+			}
+		}, CheckObservedBaseIdentity},
+		{"proof reports no git dir", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.observerProof = func(_ string, p []byte) []byte {
+				return setProofValue(p, baseProofGitDirKey, "absent")
+			}
+		}, CheckObservedBaseIdentity},
+		{"proof reports a symbolic head", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.observerProof = func(_ string, p []byte) []byte {
+				return setProofValue(p, baseProofDetachedKey, "no")
+			}
+		}, CheckObservedBaseIdentity},
+		// A proof carrying another run's (or the image's) nonce proves nothing
+		// about this workspace.
+		{"proof replays a foreign nonce", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.observerProof = func(_ string, p []byte) []byte {
+				return setProofValue(p, baseProofNonceKey, strings.Repeat("f", 32))
+			}
+		}, CheckObservedBaseIdentity},
+		{"proof carries an unknown key", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.observerProof = func(_ string, p []byte) []byte {
+				return append(p, []byte("workspace_write=succeeded\n")...)
+			}
+		}, CheckObservedBaseIdentity},
+		{"proof repeats a key", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.observerProof = func(_ string, p []byte) []byte {
+				return append(p, fmt.Appendf(nil, "%s=%s\n", baseProofSHAKey, strings.Repeat("c", 40))...)
+			}
+		}, CheckObservedBaseIdentity},
+		{"proof is not key=value", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.observerProof = func(_ string, p []byte) []byte {
+				return append(p, []byte("garbage\n")...)
+			}
+		}, CheckObservedBaseIdentity},
+		{"seed source escapes the seed root", func(t *testing.T, _ *handoffFixture, hs *HandoffSpec) {
+			hs.Seed.SourceDir = writeSeedCheckout(t, t.TempDir(), testBaseSHA)
+		}, CheckWorkspaceSeeding},
+		{"seed source carries a symlink", func(t *testing.T, _ *handoffFixture, hs *HandoffSpec) {
+			if err := os.Symlink(filepath.Join(hs.Seed.SourceDir, "README.md"),
+				filepath.Join(hs.Seed.SourceDir, "link.md")); err != nil {
+				t.Fatal(err)
+			}
+		}, CheckWorkspaceSeeding},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newHandoffFixture(t)
+			hs := fx.seed(t)
+			tc.prepare(t, fx, &hs)
+			res, err := fx.backend(t).Handoff(context.Background(), hs)
+			if res != nil {
+				t.Cleanup(func() { _ = os.RemoveAll(res.ExportDir) })
+			}
+			wantCheckFailure(t, err, tc.want)
+			// A refused seed must never reach the credential-bearing writer.
+			if i := fx.rt.callIndex("start-container " + names.Agent); i >= 0 {
+				t.Errorf("writer started at %d despite a failed seed", i)
+			}
+			fx.assertReaped(t)
+		})
+	}
+}
+
+// runningReport makes one container's pre-start inspection report running.
+func runningReport(id string) func(string, InspectReport) (InspectReport, error) {
+	return func(got string, rep InspectReport) (InspectReport, error) {
+		if got == id && rep.State == StateStopped {
+			rep.State = StateRunning
+		}
+		return rep, nil
+	}
+}
+
+// mountRewrite rewrites one container's observed workspace mount.
+func mountRewrite(id string, f func(*Mount)) func(string, InspectReport) (InspectReport, error) {
+	return func(got string, rep InspectReport) (InspectReport, error) {
+		if got == id && len(rep.Mounts) > 0 {
+			f(&rep.Mounts[0])
+		}
+		return rep, nil
+	}
+}
+
+func dropProofLine(proof []byte, key string) []byte {
+	var kept []string
+	for _, line := range strings.Split(string(proof), "\n") {
+		if line == "" || strings.HasPrefix(line, key+"=") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return []byte(strings.Join(kept, "\n") + "\n")
+}
+
+func setProofValue(proof []byte, key, value string) []byte {
+	lines := strings.Split(strings.TrimRight(string(proof), "\n"), "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, key+"=") {
+			lines[i] = key + "=" + value
+		}
+	}
+	return []byte(strings.Join(lines, "\n") + "\n")
 }
 
 // TestHandoffRejectsEagerStart is issue #152's induced-failure regression:

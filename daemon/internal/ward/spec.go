@@ -6,7 +6,11 @@ import (
 	"path"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 // BackendName is the backend's name in policy, refusals, and audit records:
@@ -35,6 +39,14 @@ var (
 	// digestPinnedImagePattern binds an image reference to one full lowercase
 	// sha256 digest, not a tag or a merely digest-shaped prefix.
 	digestPinnedImagePattern = regexp.MustCompile(`^.+@sha256:[0-9a-f]{64}$`)
+	// commitSHAPattern is the exact shape of a resolved git commit. The gate
+	// compares a declared base against one observed in the seeded workspace
+	// byte for byte, so the shape is pinned here even though
+	// domain.BaseRevision only requires the field to be non-empty: an
+	// abbreviated, uppercase, or ref-shaped value would compare unequal against
+	// a full lowercase observation for reasons that have nothing to do with the
+	// bases differing.
+	commitSHAPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 )
 
 // splitImageRef parses an OCI image reference into its name and its pinned
@@ -90,15 +102,103 @@ type AgentSpec struct {
 	CredentialMounts []CredentialMount
 }
 
-// HandoffSpec is one full handoff request: run the agent against a fresh
-// workspace volume, prove its VM terminated, and export the workspace
-// through the read-only exporter.
+// SeedMode is how a run's workspace volume is populated before the writer
+// starts. The zero value is invalid by design: an absent mode would make an
+// unseeded workspace the silent default, and a run whose base nobody declared
+// is exactly the run §5.9's exact-base binding exists to prevent.
+type SeedMode string
+
+const (
+	// SeedBlank leaves the workspace empty. It is safe only for a synthetic
+	// caller that deliberately has no base; the full conformance suite uses
+	// SeedBaseCheckout so it exercises the production seeder and observer.
+	// A blank seed produces no observed base: domain.BaseRevision requires a
+	// commit, so a caller comparing a declared base against a blank workspace's
+	// empty observation can never match.
+	SeedBlank SeedMode = "blank"
+	// SeedBaseCheckout copies a daemon-owned checkout of the declared base into
+	// the workspace before the writer starts.
+	SeedBaseCheckout SeedMode = "base_checkout"
+)
+
+// AllSeedModes lists every valid SeedMode.
+var AllSeedModes = []SeedMode{SeedBlank, SeedBaseCheckout}
+
+func (m SeedMode) valid() bool {
+	switch m {
+	case SeedBlank, SeedBaseCheckout:
+		return true
+	default:
+		return false
+	}
+}
+
+// WorkspaceSeed declares what the workspace holds when the writer starts.
+//
+// Base is the caller's *declaration*, never evidence: the gate reads the base
+// the seeded volume actually carries from a read-only observer VM and compares
+// it against this value. A caller that declares one base and stages another is
+// refused, which is the whole point of recording an observed identity rather
+// than echoing the request (plan §5.9).
+type WorkspaceSeed struct {
+	Mode SeedMode
+	// SourceDir is the daemon-owned checkout to stage, required for
+	// SeedBaseCheckout and empty otherwise. It must resolve under
+	// Config.SeedRoot and carry the daemon-authored canonical repository
+	// name/ID binding; the gate never accepts an arbitrary host path.
+	SourceDir string
+	// Base is the exact revision SourceDir is declared to hold.
+	Base domain.BaseRevision
+}
+
+// validate reports the first caller error in the seed declaration. Filesystem
+// facts about SourceDir (existence, shape, size) are verified while
+// stageSeedSource snapshots it; this is the syntactic gate that runs before
+// anything is touched.
+func (s WorkspaceSeed) validate() error {
+	if !s.Mode.valid() {
+		return fmt.Errorf("%w: Seed.Mode %q is not one of %v", ErrInvalidHandoffSpec, s.Mode, AllSeedModes)
+	}
+	if s.Mode == SeedBlank {
+		// A blank seed carrying a source or a base is an ambiguous request: the
+		// caller either meant to seed and named the wrong mode, or is passing a
+		// base the gate will never verify. Both are refused rather than silently
+		// resolved in one direction.
+		if s.SourceDir != "" {
+			return fmt.Errorf("%w: Seed.SourceDir is set on a %s seed", ErrInvalidHandoffSpec, SeedBlank)
+		}
+		if s.Base != (domain.BaseRevision{}) {
+			return fmt.Errorf("%w: Seed.Base is set on a %s seed", ErrInvalidHandoffSpec, SeedBlank)
+		}
+		return nil
+	}
+	if !cleanAbs(s.SourceDir) {
+		return fmt.Errorf("%w: Seed.SourceDir %q is not a clean absolute non-root path", ErrInvalidHandoffSpec, s.SourceDir)
+	}
+	if !copyPathSafe(s.SourceDir) {
+		return fmt.Errorf("%w: Seed.SourceDir %q carries a container-reference delimiter", ErrInvalidHandoffSpec, s.SourceDir)
+	}
+	if err := s.Base.Validate(); err != nil {
+		return fmt.Errorf("%w: Seed.Base: %w", ErrInvalidHandoffSpec, err)
+	}
+	if !commitSHAPattern.MatchString(s.Base.BaseSHA) {
+		return fmt.Errorf("%w: Seed.Base.BaseSHA %q is not a full lowercase commit SHA", ErrInvalidHandoffSpec, s.Base.BaseSHA)
+	}
+	return nil
+}
+
+// HandoffSpec is one full handoff request: seed a fresh workspace volume at a
+// declared exact base, run the agent against it, prove its VM terminated, and
+// export the workspace through the read-only exporter.
 type HandoffSpec struct {
 	// RunID names this run's volumes and containers; it must match
 	// ^[a-z0-9][a-z0-9-]{0,31}$ and be unique among live runs.
 	RunID string
 	// WorkspaceSizeMB is the workspace volume size in megabytes.
 	WorkspaceSizeMB int64
+	// Seed declares what the workspace holds when the writer starts. It is
+	// required: see SeedMode on why absence is not a mode.
+	Seed WorkspaceSeed
 	// Agent is the writer container.
 	Agent AgentSpec
 }
@@ -119,12 +219,14 @@ func (s HandoffSpec) validate() error {
 	case len(s.Agent.Command) == 0:
 		return fmt.Errorf("%w: Agent.Command is required", ErrInvalidHandoffSpec)
 	}
-	return nil
+	return s.Seed.validate()
 }
 
 // handoffNames are the runtime object names one run owns.
 type handoffNames struct {
 	Workspace string
+	Seeder    string
+	Observer  string
 	Agent     string
 	Exporter  string
 }
@@ -132,10 +234,19 @@ type handoffNames struct {
 func namesFor(runID string) handoffNames {
 	return handoffNames{
 		Workspace: "freeside-handoff-" + runID + "-ws",
+		Seeder:    "freeside-handoff-" + runID + "-seeder",
+		Observer:  "freeside-handoff-" + runID + "-observer",
 		Agent:     "freeside-handoff-" + runID + "-agent",
 		Exporter:  "freeside-handoff-" + runID + "-exporter",
 	}
 }
+
+// WorkspaceRef is the ward lane's opaque workspace reference for a run: the
+// name of the workspace volume the handoff creates and the exporter reads.
+// exec.StartSpec.Workspace is declared opaque and ward-defined (plan §5.7);
+// this function is that definition, so a caller can name the workspace without
+// reconstructing the gate's naming scheme.
+func WorkspaceRef(runID string) string { return namesFor(runID).Workspace }
 
 // runLabels label every runtime object the gate creates.
 func runLabels(runID string) []Label {
@@ -189,6 +300,265 @@ func buildExporterSpec(cfg Config, hs HandoffSpec, names handoffNames, ownership
 	}
 }
 
+// seedReadyFile is the sentinel the host copies, as its own second copy, once
+// the staged checkout is complete. A marker written as part of the checkout
+// copy would be unsound: a directory copy is not atomic, so the marker could
+// become visible before the rest of the tree and the seeder would move a
+// partial checkout onto the workspace.
+const seedReadyFile = "ready"
+
+// buildSeederSpec generates the container that puts the staged checkout onto
+// the workspace volume: the pinned exporter image, the workspace read-write at
+// the configured target, no environment, no network, and nothing else.
+//
+// It reuses the exporter image rather than introducing a second pinned image.
+// The seeder needs a shell and coreutils and nothing more, the exporter image
+// already provides both, and a second image would be a second supply-chain
+// surface for no gain.
+//
+// The workspace is read-write here, which is the one place before the writer
+// where it is. That is unavoidable: the runtime refuses to copy into a
+// container that is not running and silently discards a copy aimed at a
+// mounted volume, so something inside a VM has to move the tree. Keeping that
+// something a fixed, gate-authored command in a pinned image is the bound; the
+// observer, which mounts the workspace read-only in a different VM, is the
+// proof.
+func buildSeederSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label) ContainerSpec {
+	return ContainerSpec{
+		Name:            names.Seeder,
+		Image:           cfg.ExporterImage,
+		Command:         seederCommand(cfg),
+		NetworkDisabled: true,
+		Mounts: []Mount{{
+			Type:   MountVolume,
+			Source: names.Workspace,
+			Target: cfg.WorkspaceTarget,
+		}},
+		Labels: append(runLabels(hs.RunID), ownershipLabel),
+	}
+}
+
+func seederCommand(cfg Config) []string {
+	return []string{"sh", "-c", seederScript(cfg)}
+}
+
+// seederGuestBudget is how long the seeder waits for the completion sentinel
+// before giving up. It covers both host copies (SeedTimeout each) plus a
+// margin, so the guest never fires first; the host's waitStopped is the real
+// deadline.
+func seederGuestBudget(seedTimeout time.Duration) time.Duration {
+	return 3 * seedTimeout
+}
+
+// seederScriptTicks converts the guest budget into whole `sleep 1` iterations,
+// rounding UP. The loop can only count seconds, so truncating would undo the
+// budget's purpose at subsecond timeouts: a 600ms SeedTimeout gives a 1.8s
+// budget that truncates to one tick, and the seeder would give up after about
+// a second while the two host copies may legitimately take 1.2s — reinstating
+// the sentinel-copy race the budget exists to prevent.
+func seederScriptTicks(cfg Config) int {
+	ticks := int((seederGuestBudget(cfg.SeedTimeout) + time.Second - 1) / time.Second)
+	if ticks < 1 {
+		ticks = 1
+	}
+	return ticks
+}
+
+// seederScript waits for the host to signal that the staged checkout is
+// complete, then moves it onto the workspace volume and exits.
+//
+// The wait is bounded in the guest as well as by the host's own stop timeout,
+// so a seeder whose host died cannot spin forever holding the workspace
+// read-write. The distinct exit codes are for a human reading a stuck run's
+// state; the gate never interprets them, because the seeder's exit status is
+// its own account of itself. What the gate believes is what the observer reads
+// off the volume afterwards.
+//
+// The guest budget deliberately exceeds one SeedTimeout. Both host copies are
+// bounded at SeedTimeout each and both happen after the seeder starts, so a
+// guest budget equal to one of them would let a large but legitimate staged
+// copy race the seeder's own exit: the seeder would give up, and the sentinel
+// copy would then fail against a stopped container. Sizing the backstop above
+// the host bounds it is racing keeps it a backstop rather than a second,
+// tighter deadline nobody declared.
+func seederScript(cfg Config) string {
+	ready := shellQuote(path.Join(cfg.SeedReadyDir, seedReadyFile))
+	stage := shellQuote(cfg.SeedStageDir)
+	ws := shellQuote(cfg.WorkspaceTarget)
+	ticks := seederScriptTicks(cfg)
+	return "set -eu; i=0; " +
+		"while [ ! -f " + ready + " ]; do " +
+		"i=$((i+1)); if [ \"$i\" -gt " + strconv.Itoa(ticks) + " ]; then exit 91; fi; " +
+		"sleep 1; done; " +
+		// The staged tree is a checkout or it is nothing: refusing here keeps a
+		// half-copied or wrong-shaped stage from being merged onto the volume,
+		// where the observer would then have to distinguish it from a seed that
+		// never happened.
+		"if [ ! -d " + stage + "/.git ]; then exit 92; fi; " +
+		// Clear the filesystem's own lost+found before staging, so the workspace
+		// afterwards holds exactly the source tree and nothing the volume added.
+		// The observer can then digest the whole workspace instead of pruning a
+		// path by name, which would otherwise make a repository that genuinely
+		// tracks a root-level lost+found undigestable on one side and digested
+		// on the other -- a mismatch no honest seed could ever clear.
+		"rm -rf " + ws + "/" + lostFoundDir + "; " +
+		"cp -a " + stage + "/. " + ws + "/; sync"
+}
+
+// buildObserverSpec generates the container that attests what the workspace
+// actually holds: the same pinned image and the same credential-free,
+// network-free position as the seeder, but the workspace mounted READ-ONLY.
+//
+// It is a separate VM from the seeder on purpose. The seeder holds the
+// workspace read-write and is the thing that placed the tree; an observation
+// taken through that same handle would be the writer vouching for its own
+// write. This container did not place anything, cannot write anything, and
+// reads the workspace through the same access class the exporter later uses,
+// so what it attests is the workspace as a reader sees it.
+func buildObserverSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label) ContainerSpec {
+	return ContainerSpec{
+		Name:            names.Observer,
+		Image:           cfg.ExporterImage,
+		Command:         observerCommand(cfg, ownershipLabel.Value),
+		NetworkDisabled: true,
+		Mounts: []Mount{{
+			Type:     MountVolume,
+			Source:   names.Workspace,
+			Target:   cfg.WorkspaceTarget,
+			ReadOnly: true,
+		}},
+		Labels: append(runLabels(hs.RunID), ownershipLabel),
+	}
+}
+
+func observerCommand(cfg Config, nonce string) []string {
+	return []string{"sh", "-c", observerScript(cfg, nonce)}
+}
+
+// Proof keys the observer emits. They are the gate's contract with its own
+// pinned image, in the same shape check 5's proof uses.
+const (
+	baseProofNonceKey    = "nonce"
+	baseProofGitDirKey   = "git_dir"
+	baseProofDetachedKey = "head_detached"
+	baseProofSHAKey      = "base_sha"
+	baseProofTreeKey     = "tree_sha256"
+	// baseProofWorktreeKey reports whether the workspace holds working-tree
+	// content at all, separately from the tree digest, so the case the
+	// intended producer actually causes -- a .git with nothing checked out --
+	// names itself instead of surfacing as an opaque digest mismatch.
+	baseProofWorktreeKey = "worktree"
+	// baseProofIrregularKey reports whether the workspace holds anything that
+	// is neither a regular file nor a directory.
+	//
+	// The host refuses such entries in the source, but until the observer says
+	// so too, that refusal was never attested: the digest hashes only regular
+	// files, so a symlink introduced into the source after the walk and before
+	// the copy would be invisible to both sides and would reach the
+	// credential-bearing writer unapproved. Attesting the rule the host
+	// enforces is what closes that window.
+	//
+	// When #339 teaches the gate to carry tracked symlinks, this key gives way
+	// to a type-and-target dimension in the digest; until then the policy is
+	// "none", and this is that policy observed rather than assumed.
+	baseProofIrregularKey = "irregular"
+)
+
+// lostFoundDir is the ext4 volume's own directory, present on a fresh volume
+// before anything is seeded. The seeder removes it before staging rather than
+// the observer pruning it by name: a repository may legitimately track a
+// root-level lost+found, and excluding the path on one side while the host
+// digests it on the other would make such a tree permanently unseedable.
+// Clearing it instead lets the attestation cover the whole workspace.
+const lostFoundDir = "lost+found"
+
+// observerScript reads the seeded base off the workspace and writes it, with
+// this invocation's unpredictable nonce, to the observer's own root
+// filesystem, where the host collects it by exporting the stopped container.
+//
+// The nonce is what makes the proof this run's. Without it, a proof file baked
+// into the image or left behind by an earlier run would satisfy the gate, and
+// the attestation would prove only that some workspace once held some base.
+//
+// HEAD is read directly rather than resolved with git: a checkout from
+// publish.Transport.FetchBase is detached at the base, so HEAD holds the raw
+// commit, and requiring that shape is stricter than resolving a symbolic ref
+// would be. A workspace whose HEAD is symbolic is refused rather than followed.
+func observerScript(cfg Config, nonce string) string {
+	ws := shellQuote(cfg.WorkspaceTarget)
+	proof := shellQuote(cfg.BaseProofPath)
+	// Config.validate accepts any clean absolute path disjoint from the others,
+	// so the proof may sit below a directory the pinned image does not carry.
+	// Without this the redirect fails, no proof is exported, and every seeded
+	// handoff fails on a configuration the gate said was valid.
+	mkProofDir := ""
+	if parent := path.Dir(cfg.BaseProofPath); parent != "/" && parent != "." {
+		mkProofDir = "mkdir -p " + shellQuote(parent) + "; "
+	}
+	// No `set -e`: every branch must reach the proof write, because a proof
+	// that reports an unexpected observation is what verifyBaseProof rejects.
+	// A missing proof file and a proof reporting "absent" are both failures,
+	// but only the second tells a reader what was wrong.
+	//
+	// LC_ALL=C is load-bearing, not hygiene. A bracket range in a shell
+	// pattern is collated, not byte-valued, so under a UTF-8 locale `[!0-9a-f]`
+	// does not reject `A` through `E`: they collate inside the a-f range. A
+	// guest with LANG set would then attest an uppercase HEAD as a valid
+	// detached commit. verifyBaseProof re-tests the shape host-side and would
+	// still refuse it, but the guest expression must be strict on its own
+	// rather than leaning on an unstated environment assumption.
+	return "LC_ALL=C; export LC_ALL; " + mkProofDir +
+		"g=absent; if [ -d " + ws + "/.git ]; then g=present; fi; " +
+		"d=no; s=none; " +
+		"if [ -f " + ws + "/.git/HEAD ]; then " +
+		"h=\"$(cat " + ws + "/.git/HEAD 2>/dev/null || true)\"; " +
+		// The shape test is the detachment test: a symbolic ref does not match
+		// 40 hex characters, so one expression settles both.
+		"case \"$h\" in " +
+		"*[!0-9a-f]*) ;; " +
+		"????????????????????????????????????????) d=yes; s=\"$h\";; " +
+		"esac; fi; " +
+		// Working-tree content, reported on its own: a checkout with a .git and
+		// nothing checked out is what publish.Transport.FetchBase produces, so
+		// it is the likeliest wrong workspace and deserves to name itself
+		// rather than arrive as an opaque digest mismatch.
+		"w=absent; if [ -n \"$(cd " + ws + " 2>/dev/null && " +
+		"find . -path ./.git -prune -o -type f -print 2>/dev/null | head -n 1)\" ]; " +
+		"then w=present; fi; " +
+		// The tree digest, over the two dimensions a git tree distinguishes:
+		// every regular file's sha256 against its path, and which files carry
+		// the user-execute bit. Each is hashed from bytewise-sorted lines and
+		// the two results are hashed together. The host computes it the same
+		// way over the verified source, so the two agree only if the tree that
+		// landed is the tree the gate approved. LC_ALL=C above is what makes
+		// both sorts byte-ordered.
+		//
+		// Two batched passes rather than a per-file loop: a real checkout is
+		// thousands of files, and spawning a process each would put that cost
+		// on every seeded handoff.
+		// Anything that is not a regular file or a directory, reported so the
+		// host's refusal of such entries is corroborated by observation rather
+		// than trusted from a walk that ran before the copy.
+		"n=present; if [ -z \"$(cd " + ws + " 2>/dev/null && " +
+		"find . ! -type f ! -type d -print 2>/dev/null | head -n 1)\" ]; then n=absent; fi; " +
+		"t=none; if [ \"$g\" = present ]; then " +
+		"tc=\"$(cd " + ws + " && find . -type f -exec sha256sum {} + 2>/dev/null " +
+		"| sort | sha256sum | cut -d' ' -f1)\"; " +
+		"tx=\"$(cd " + ws + " && find . -type f -perm -u+x -print 2>/dev/null " +
+		"| sort | sha256sum | cut -d' ' -f1)\"; " +
+		"td=\"$(cd " + ws + " && find . -type d -print 2>/dev/null " +
+		"| sort | sha256sum | cut -d' ' -f1)\"; " +
+		"t=\"$(printf '%s\\n%s\\n%s\\n' \"$tc\" \"$tx\" \"$td\" | sha256sum | cut -d' ' -f1)\"; fi; " +
+		"printf '" + baseProofNonceKey + "=%s\\n" +
+		baseProofGitDirKey + "=%s\\n" +
+		baseProofDetachedKey + "=%s\\n" +
+		baseProofSHAKey + "=%s\\n" +
+		baseProofWorktreeKey + "=%s\\n" +
+		baseProofIrregularKey + "=%s\\n" +
+		baseProofTreeKey + "=%s\\n' " +
+		shellQuote(nonce) + " \"$g\" \"$d\" \"$s\" \"$w\" \"$n\" \"$t\" > " + proof + "; sync"
+}
+
 // cloneContainerSpec detaches every reference field before a spec crosses the
 // Runtime boundary. Runtime implementations may normalize or retain their
 // input; neither may rewrite the immutable expected spec used by the gate's
@@ -219,6 +589,24 @@ func cliSafe(s string) bool {
 	}
 	for _, r := range s {
 		if r == ',' || r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// copyPathSafe reports whether p is safe to place in a `container copy`
+// argument. The CLI addresses a container-side path as <container>:<path>, so
+// a ':' anywhere in either argument could reparse the argument into a
+// different container's path; control characters are refused for the same
+// reason cliSafe refuses them. Such a value is refused, never escaped. The
+// empty string is not safe (both copy arguments are always required).
+func copyPathSafe(p string) bool {
+	if p == "" {
+		return false
+	}
+	for _, r := range p {
+		if r == ':' || r < 0x20 || r == 0x7f {
 			return false
 		}
 	}

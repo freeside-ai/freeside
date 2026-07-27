@@ -263,6 +263,106 @@ func exporterReport(cfg Config, exporterID, workspaceVolume string) InspectRepor
 	}
 }
 
+// seedRoleReport is the conforming observation of a seeding-role container
+// realized exactly as its generated spec asks.
+func seedRoleReport(cfg Config, spec ContainerSpec) InspectReport {
+	return InspectReport{
+		ID:                      spec.Name,
+		ImageReference:          spec.Image,
+		Command:                 append([]string(nil), spec.Command...),
+		WorkingDirectory:        "/",
+		State:                   StateStopped,
+		AllowlistFieldsObserved: true,
+		NetworksObserved:        true,
+		Mounts:                  append([]Mount(nil), spec.Mounts...),
+		Env:                     []string{fixedContainerPathEnv},
+	}
+}
+
+// TestVerifySeedRoleAllowlistViolations induces every seeding-role allowlist
+// violation and asserts each fails closed under the caller's check. The
+// mount-access case is the one that differs from check 4's rules and the one
+// that matters most: the seeder is the only container before the writer that
+// can write the workspace, so its access must match what was approved in both
+// directions.
+func TestVerifySeedRoleAllowlistViolations(t *testing.T) {
+	cfg := testConfig()
+	hs := testHandoffSpec()
+	names := namesFor(hs.RunID)
+	spec := buildSeederSpec(cfg, hs, names, testOwnershipLabel())
+
+	if err := verifySeedRoleAllowlist(cfg, seedRoleReport(cfg, spec), spec, names.Workspace, CheckWorkspaceSeeding); err != nil {
+		t.Fatalf("conforming report: %v, want nil", err)
+	}
+	imageName, imageDigest, _ := strings.Cut(cfg.ExporterImage, "@")
+
+	cases := []struct {
+		name   string
+		mutate func(*InspectReport)
+	}{
+		{"wrong identity", func(r *InspectReport) { r.ID = "other-seeder" }},
+		{"required field omitted", func(r *InspectReport) { r.AllowlistFieldsObserved = false }},
+		{"wrong image name", func(r *InspectReport) { r.ImageReference = "example.test/other@" + imageDigest }},
+		{"wrong image digest", func(r *InspectReport) {
+			r.ImageReference = imageName + "@sha256:" + strings.Repeat("1", 64)
+		}},
+		{"reference missing digest", func(r *InspectReport) { r.ImageReference = imageName }},
+		{"wrong command", func(r *InspectReport) { r.Command = []string{"sh", "-c", "cp -a / /workspace/"} }},
+		{"no command", func(r *InspectReport) { r.Command = nil }},
+		{"wrong working directory", func(r *InspectReport) { r.WorkingDirectory = "/root" }},
+		// Inspect-before-execution: a seeder observed running may already have
+		// written the workspace before the gate approved what it would write.
+		{"already running", func(r *InspectReport) { r.State = StateRunning }},
+		{"no mounts", func(r *InspectReport) { r.Mounts = nil }},
+		{"extra mount", func(r *InspectReport) {
+			r.Mounts = append(r.Mounts, Mount{Type: MountVolume, Source: "provider-cred", Target: "/credentials", ReadOnly: true})
+		}},
+		{"bind mount", func(r *InspectReport) { r.Mounts[0].Type = MountBind }},
+		{"wrong volume", func(r *InspectReport) { r.Mounts[0].Source = "someone-elses-ws" }},
+		{"wrong target", func(r *InspectReport) { r.Mounts[0].Target = "/elsewhere" }},
+		{"contradictory access", func(r *InspectReport) { r.Mounts[0].AccessConflict = true }},
+		// The seeder was approved read-write; a read-only realization cannot
+		// place the checkout and must not be treated as conforming either.
+		{"read-only where read-write was approved", func(r *InspectReport) { r.Mounts[0].ReadOnly = true }},
+		{"ssh forwarding", func(r *InspectReport) { r.SSH = true }},
+		{"published socket", func(r *InspectReport) { r.PublishedSockets = []string{"/tmp/s"} }},
+		{"published port", func(r *InspectReport) { r.PublishedPorts = []string{"8080"} }},
+		{"network attachments omitted", func(r *InspectReport) { r.NetworksObserved = false }},
+		{"network attached", func(r *InspectReport) { r.NetworkAttachmentCount = 1 }},
+		{"extra environment", func(r *InspectReport) { r.Env = append(r.Env, "PROVIDER_TOKEN=fixture") }},
+		{"no environment", func(r *InspectReport) { r.Env = nil }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rep := seedRoleReport(cfg, spec)
+			tc.mutate(&rep)
+			err := verifySeedRoleAllowlist(cfg, rep, spec, names.Workspace, CheckWorkspaceSeeding)
+			wantCheckFailure(t, err, CheckWorkspaceSeeding)
+		})
+	}
+}
+
+// TestVerifySeedRoleAllowlistRedactsValues holds the seeding verifier to check
+// 4's rule: an observed environment can carry a caller's credential, so a
+// refusal names the violation and never echoes the value.
+func TestVerifySeedRoleAllowlistRedactsValues(t *testing.T) {
+	cfg := testConfig()
+	hs := testHandoffSpec()
+	names := namesFor(hs.RunID)
+	spec := buildSeederSpec(cfg, hs, names, testOwnershipLabel())
+	rep := seedRoleReport(cfg, spec)
+	const secret = "super-secret-fixture-value"
+	rep.Env = append(rep.Env, "PROVIDER_TOKEN="+secret)
+
+	err := verifySeedRoleAllowlist(cfg, rep, spec, names.Workspace, CheckWorkspaceSeeding)
+	if err == nil {
+		t.Fatal("extra environment accepted, want a failure")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("failure echoes the observed value: %v", err)
+	}
+}
+
 // TestVerifyExporterAllowlistViolations induces every check 4 violation and
 // asserts each fails closed with the exporter_allowlist check (acceptance 2
 // for check 4).

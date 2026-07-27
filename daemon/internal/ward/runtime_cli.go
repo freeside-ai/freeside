@@ -150,6 +150,50 @@ func (c *CLIRuntime) InspectVolume(ctx context.Context, name string) (VolumeSumm
 	return decodeVolumeInspect(out, name)
 }
 
+func (c *CLIRuntime) CopyIntoContainer(ctx context.Context, id, hostDir, targetDir string) error {
+	args, err := copyArgs(id, hostDir, targetDir)
+	if err != nil {
+		return err
+	}
+	// Stderr is withheld: it echoes the daemon-side path on failure, and this
+	// error reaches a ConformanceFailure.Reason, which never carries the host's
+	// layout.
+	return c.runDiscard(ctx, false, args...)
+}
+
+// copyArgs phrases one host-to-container copy as CLI arguments.
+//
+// The CLI addresses the container side as <container>:<path>, so a ':' in any
+// argument could reparse it into a different container's path; a leading '-'
+// would be parsed as an option. Both are refused rather than escaped, matching
+// how createContainerArgs treats a mount-option delimiter. The canonical
+// subcommand name is used rather than the `cp` alias, so the phrasing does not
+// depend on an alias surviving a runtime upgrade.
+//
+// Refusals name which argument was wrong but never repeat its value. The host
+// directory is a daemon-side path, and these errors are wrapped into a
+// ConformanceFailure.Reason, which does not carry the host's layout; naming the
+// argument is enough to debug a refusal.
+func copyArgs(id, hostDir, targetDir string) ([]string, error) {
+	for _, f := range []struct{ name, value string }{
+		{"container id", id}, {"host directory", hostDir}, {"target directory", targetDir},
+	} {
+		if !copyPathSafe(f.value) {
+			return nil, fmt.Errorf("copy %s carries a container-reference delimiter or control character", f.name)
+		}
+		if strings.HasPrefix(f.value, "-") {
+			return nil, fmt.Errorf("copy %s would be parsed as an option", f.name)
+		}
+	}
+	if !cleanAbs(hostDir) {
+		return nil, errors.New("copy host directory is not a clean absolute non-root path")
+	}
+	if !cleanAbs(targetDir) {
+		return nil, errors.New("copy target directory is not a clean absolute non-root path")
+	}
+	return []string{"copy", hostDir, id + ":" + targetDir}, nil
+}
+
 func (c *CLIRuntime) CreateContainer(ctx context.Context, spec ContainerSpec) error {
 	args, err := createContainerArgs(spec)
 	if err != nil {

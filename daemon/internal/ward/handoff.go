@@ -54,6 +54,39 @@ type HandoffResult struct {
 	// CommitPlanPresent records that check 7 admitted and scanned the reserved
 	// opaque plan member. Its bytes remain in ExportDir for the hostile importer.
 	CommitPlanPresent bool
+	// Workspace is what the gate observed about the workspace this run used.
+	Workspace WorkspaceObservation
+}
+
+// WorkspaceObservation is the workspace's identity as the gate observed it,
+// not as the caller described it.
+type WorkspaceObservation struct {
+	// Volume is the workspace volume's name: the ward lane's opaque workspace
+	// reference (plan §5.7), the same value WorkspaceRef derives from a run ID.
+	Volume string
+	// Seeded is true only when the gate placed a declared base into the
+	// workspace and then proved the result. A caller cannot set it, and a
+	// seeding attempt that was not attested does not reach here at all.
+	//
+	// What it asserts, exactly: the workspace holds the tree the daemon staged
+	// and declared as this base. It does NOT assert that the staged tree is
+	// faithful to the commit BaseSHA names — the gate has no git in the
+	// observer image, so it can compare the workspace against the source it
+	// verified but not against the commit's own tree. A caller that hands over
+	// a dirty checkout gets Seeded=true, and the gauntlet importer will then
+	// derive the pre-existing difference as agent output, since it computes
+	// changes against the trusted base tree. Closing that is #330, which must
+	// land before this field is used to admit real work.
+	Seeded bool
+	// ObservedBaseSHA is the base the workspace was observed to hold, read
+	// through a read-only mount by a container that did not write it. It is
+	// empty exactly when Seeded is false.
+	//
+	// It is stated in domain.ExecutionExport.ObservedBaseSHA's vocabulary (a
+	// full lowercase commit) so a caller can carry it into the durable record
+	// unchanged. It is never the declared value echoed back: a run whose
+	// workspace held a different base fails the gate instead of reporting one.
+	ObservedBaseSHA string
 }
 
 // objectClaim is one runtime object's ownership state. attempted records
@@ -81,11 +114,27 @@ type objectClaim struct {
 type runState struct {
 	ownershipLabel Label
 	workspace      objectClaim
+	seeder         objectClaim
+	observer       objectClaim
 	agent          objectClaim
 	exporter       objectClaim
 	// archiveDir holds the exported rootfs archive; always removed once
 	// verification is done or the run fails (the archive is never returned).
 	archiveDir string
+	// seedTreeDigest is the digest the host computed over the verified seed
+	// source. The observer recomputes it over the workspace volume, so the
+	// attestation covers the tree that actually landed rather than only the
+	// HEAD pointer that came with it.
+	seedTreeDigest string
+	// seedSnapshotDir holds the gate's private copy of the seed source. It is
+	// what gets staged into the seeder, so nothing outside the gate can mutate
+	// the tree between verification and the copy.
+	seedSnapshotDir string
+	// baseArchiveDir holds the observer's rootfs archive while its proof is
+	// read. It is cleared as soon as that read finishes, so it is non-empty
+	// only inside that window; the deferred cleanup removes whatever it names
+	// if the run unwinds mid-read.
+	baseArchiveDir string
 	// exportDir holds the extracted, verified output. It is returned to the
 	// caller only when the run ultimately succeeds; on any failure, including
 	// a teardown failure after a good export, it is removed here (the caller
@@ -161,6 +210,12 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		if st.archiveDir != "" {
 			_ = os.RemoveAll(st.archiveDir)
 		}
+		if st.baseArchiveDir != "" {
+			_ = os.RemoveAll(st.baseArchiveDir)
+		}
+		if st.seedSnapshotDir != "" {
+			_ = os.RemoveAll(st.seedSnapshotDir)
+		}
 		if st.exportDir != "" && (!st.succeeded || err != nil) {
 			_ = os.RemoveAll(st.exportDir)
 		}
@@ -198,6 +253,19 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	st.workspace.fingerprint, err = ownedFingerprint(wsView.CreationDate, wsView.Labels, wsView.LabelsObserved, ownershipLabel)
 	if err != nil {
 		return nil, fmt.Errorf("workspace volume %q: %w", names.Workspace, err)
+	}
+
+	// Seed the workspace at the declared base and prove the seeder gone before
+	// the writer can attach, then attest what the volume actually holds from a
+	// read-only mount in a container that did not write it. Both are no-ops for
+	// a blank seed. The attestation runs before the writer because the base is
+	// a pre-writer fact: the agent may legitimately move HEAD.
+	if err := b.seedWorkspace(ctx, hs, names, st); err != nil {
+		return nil, err
+	}
+	observedBaseSHA, err := b.observeSeededBase(ctx, hs, names, st)
+	if err != nil {
+		return nil, err
 	}
 
 	st.agent.attempted = true
@@ -285,7 +353,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		return nil, fmt.Errorf("create export output dir: %w", err)
 	}
 	tarPath := filepath.Join(st.archiveDir, "export.tar")
-	if err := b.materializeRootFS(ctx, names.Exporter, tarPath); err != nil {
+	if err := b.materializeRootFS(ctx, names.Exporter, tarPath, CheckExportVerification); err != nil {
 		return nil, err
 	}
 	out, err := b.verifyExport(ctx, tarPath, st.exportDir)
@@ -302,6 +370,14 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		Evidence:          out.Evidence,
 		EvidencePresent:   out.EvidencePresent,
 		CommitPlanPresent: out.CommitPlanPresent,
+		Workspace: WorkspaceObservation{
+			Volume: names.Workspace,
+			// Seeded is derived from the observation having been made, not from
+			// the request: observeSeededBase returns a value only after the
+			// proof validated and matched, and fails the run otherwise.
+			Seeded:          observedBaseSHA != "",
+			ObservedBaseSHA: observedBaseSHA,
+		},
 	}, nil
 }
 
@@ -337,22 +413,26 @@ func (w *archiveCapWriter) Write(p []byte) (int, error) {
 // host-side byte cap. Runtime receives only the Writer, never the scratch
 // path, so an oversized or hostile stream cannot fill the archive directory
 // before verification gets a chance to reject it.
-func (b *Backend) materializeRootFS(ctx context.Context, id, tarPath string) error {
+// materializeRootFS streams one stopped container's root filesystem to a
+// host-side archive under the byte cap. The check names the assertion the
+// caller is proving, so the same bounded collection serves the export path and
+// the base observation without either borrowing the other's failure vocabulary.
+func (b *Backend) materializeRootFS(ctx context.Context, id, tarPath string, c Check) error {
 	f, err := os.OpenFile(tarPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // gate-owned path under a fresh temp directory
 	if err != nil {
-		return failf(CheckExportVerification, "create bounded rootfs archive: %v", err)
+		return failf(c, "create bounded rootfs archive: %v", err)
 	}
 	w := &archiveCapWriter{dest: f, remaining: b.cfg.MaxArchiveBytes}
 	exportErr := b.rt.ExportRootFS(ctx, id, w, b.cfg.MaxArchiveBytes)
 	closeErr := f.Close()
 	if w.overflow {
-		return failf(CheckExportVerification, "exported rootfs archive exceeds the byte cap")
+		return failf(c, "exported rootfs archive exceeds the byte cap")
 	}
 	if exportErr != nil {
-		return failf(CheckExportVerification, "export stopped exporter rootfs: %v", exportErr)
+		return failf(c, "export stopped container rootfs: %v", exportErr)
 	}
 	if closeErr != nil {
-		return failf(CheckExportVerification, "close bounded rootfs archive: %v", closeErr)
+		return failf(c, "close bounded rootfs archive: %v", closeErr)
 	}
 	return nil
 }
@@ -491,16 +571,26 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 		claim objectClaim
 	}
 	containerClaims := []containerClaim{
+		{id: names.Seeder, claim: st.seeder},
+		{id: names.Observer, claim: st.observer},
 		{id: names.Agent, claim: st.agent},
 		{id: names.Exporter, claim: st.exporter},
 	}
+	// Derived from the claim list rather than naming roles: a failure during
+	// seeding leaves the agent and exporter unattempted, so a role-by-role
+	// condition would skip both the reap sweep below and the survival re-proof
+	// after it, and a seeder holding the workspace read-write would survive
+	// teardown unnoticed.
+	anyContainerAttempted := slices.ContainsFunc(containerClaims, func(c containerClaim) bool {
+		return c.claim.attempted
+	})
 	// Every candidate, owned or ambiguous, is reaped only on fresh evidence
 	// that it is still the object this invocation created (its captured
 	// creation fingerprint corroborated by the unpredictable ownership label,
 	// else the label alone). A foreign verdict — a collision or a same-name
 	// replacement — leaves the object untouched; an unprovable one withholds
 	// the delete and fails teardown.
-	if st.agent.attempted || st.exporter.attempted {
+	if anyContainerAttempted {
 		if ctrs, err := b.rt.ListContainers(ctx); err != nil {
 			problems = append(problems, fmt.Sprintf("list containers: %v", err))
 			// A full-list failure can be caused by an unrelated malformed row.
@@ -604,7 +694,7 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	// same-name row classified foreign is a replacement that appeared after
 	// this run's object was reaped: it counts as absent and is never
 	// re-reaped; only an unprovable row still fails the proof.
-	if st.agent.attempted || st.exporter.attempted {
+	if anyContainerAttempted {
 		if ctrs, err := b.rt.ListContainers(ctx); err != nil {
 			problems = append(problems, fmt.Sprintf("re-list containers: %v", err))
 		} else {
