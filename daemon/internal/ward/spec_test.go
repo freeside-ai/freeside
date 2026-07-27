@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	osexec "os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -209,6 +212,144 @@ func TestObserverScriptCreatesProofParent(t *testing.T) {
 	// be noise in the golden every reader has to discount.
 	if root := observerScript(testConfig(), testOwnershipLabel().Value); strings.Contains(root, "mkdir -p") {
 		t.Errorf("observer script creates a directory for a root-level proof path:\n%s", root)
+	}
+}
+
+func TestObserverGitScriptComparesAgainstCommit(t *testing.T) {
+	run := func(t *testing.T, checkout string) (string, string, string) {
+		t.Helper()
+		scratch := t.TempDir()
+		script := "h=\"$(cat " + shellQuote(filepath.Join(checkout, ".git", "HEAD")) + ")\"; " +
+			"d=yes; s=none; w=error; r=error; " +
+			observerGitScript(checkout, filepath.Join(scratch, "git")) +
+			"printf '%s\\n%s\\n%s\\n' \"$s\" \"$w\" \"$r\""
+		shell := "sh"
+		if dash, err := osexec.LookPath("dash"); err == nil {
+			// macOS sh accepts extensions that Ubuntu's dash rejects. Prefer
+			// dash when available so the generated command stays portable.
+			shell = dash
+		}
+		cmd := osexec.Command(shell, "-c", script) //nolint:gosec // fixed shell and test-owned script
+		cmd.Env = scrubbedLiveGitEnv()
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("observer git script: %v: %s", err, out)
+		}
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		if len(lines) != 3 {
+			t.Fatalf("observer git output = %q, want sha, worktree state, and replacement state", out)
+		}
+		return lines[0], lines[1], lines[2]
+	}
+
+	root := t.TempDir()
+	checkout := initLiveSeedCheckout(t, root)
+	if err := os.WriteFile(filepath.Join(checkout, ".gitignore"), []byte("ignored.txt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, ".gitattributes"), []byte("README.md text eol=crlf\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, "README.md"), []byte("clean\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, "tab\tname.txt"), []byte("literal tab path\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"foo", `"foo"`} {
+		if err := os.WriteFile(filepath.Join(checkout, name), []byte("same blob\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := commitLiveSeedCheckout(t, checkout)
+	if sha, state, replacements := run(t, checkout); sha != base.BaseSHA || state != "clean" || replacements != "absent" {
+		t.Fatalf("clean checkout = (%q, %q, %q), want (%q, clean, absent)", sha, state, replacements, base.BaseSHA)
+	}
+
+	if err := os.WriteFile(filepath.Join(checkout, `"foo"`), []byte("dirty quoted path\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, state, _ := run(t, checkout); state != "dirty" {
+		t.Errorf("quoted-path edit reported %q, want dirty", state)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, `"foo"`), []byte("same blob\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(checkout, "README.md"), []byte("dirty\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The source index is deliberately told to hide the edit. The observer's
+	// raw blob comparison must still expose it.
+	rungitLive(t, checkout, "update-index", "--assume-unchanged", "README.md")
+	if _, state, _ := run(t, checkout); state != "dirty" {
+		t.Errorf("assume-unchanged edit reported %q, want dirty", state)
+	}
+	rungitLive(t, checkout, "update-index", "--no-assume-unchanged", "README.md")
+	if err := os.WriteFile(filepath.Join(checkout, "README.md"), []byte("clean\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, "README.md"), []byte("clean\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, state, _ := run(t, checkout); state != "dirty" {
+		t.Errorf("attribute-normalized CRLF bytes reported %q, want dirty", state)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, "README.md"), []byte("clean\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rungitLive(t, checkout, "config", "core.filemode", "false")
+	//nolint:gosec // the executable bit is the property under test
+	if err := os.Chmod(filepath.Join(checkout, "README.md"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, state, _ := run(t, checkout); state != "dirty" {
+		t.Errorf("mode-only edit under core.filemode=false reported %q, want dirty", state)
+	}
+	if err := os.Chmod(filepath.Join(checkout, "README.md"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, "ignored.txt"), []byte("extra\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, state, _ := run(t, checkout); state != "dirty" {
+		t.Errorf("ignored extra file reported %q, want dirty", state)
+	}
+	if err := os.Remove(filepath.Join(checkout, "ignored.txt")); err != nil {
+		t.Fatal(err)
+	}
+	tree := strings.TrimSpace(rungitLive(t, checkout, "rev-parse", "HEAD^{tree}"))
+	replacement := strings.TrimSpace(rungitLive(t, checkout, "commit-tree", tree, "-m", "replacement"))
+	rungitLive(t, checkout, "replace", base.BaseSHA, replacement)
+	if _, state, replacements := run(t, checkout); state != "error" || replacements != "present" {
+		t.Errorf("replacement metadata = (%q, %q), want (error, present)", state, replacements)
+	}
+	rungitLive(t, checkout, "replace", "-d", base.BaseSHA)
+	if err := os.WriteFile(filepath.Join(checkout, ".git", "info", "grafts"), []byte(base.BaseSHA+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, state, replacements := run(t, checkout); state != "error" || replacements != "present" {
+		t.Errorf("legacy graft metadata = (%q, %q), want (error, present)", state, replacements)
+	}
+	if err := os.Remove(filepath.Join(checkout, ".git", "info", "grafts")); err != nil {
+		t.Fatal(err)
+	}
+	rungitLive(t, checkout, "tag", "-a", "tag-object-head", "-m", "tag object head")
+	tagObject := strings.TrimSpace(rungitLive(t, checkout, "rev-parse", "refs/tags/tag-object-head"))
+	if err := os.WriteFile(filepath.Join(checkout, ".git", "HEAD"), []byte(tagObject+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if sha, state, replacements := run(t, checkout); sha != base.BaseSHA || state != "error" || replacements != "error" {
+		t.Errorf("tag-object HEAD = (%q, %q, %q), want (%q, error, error)", sha, state, replacements, base.BaseSHA)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, ".git", "HEAD"), []byte(base.BaseSHA+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	empty := initLiveSeedCheckout(t, t.TempDir())
+	emptyBase := commitLiveSeedCheckout(t, empty)
+	if sha, state, replacements := run(t, empty); sha != emptyBase.BaseSHA || state != "clean" || replacements != "absent" {
+		t.Errorf("empty commit = (%q, %q, %q), want (%q, clean, absent)", sha, state, replacements, emptyBase.BaseSHA)
 	}
 }
 

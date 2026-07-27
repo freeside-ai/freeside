@@ -103,13 +103,15 @@
 // says nothing about what is checked out, and the intended producer makes that
 // gap concrete: publish.Transport.FetchBase moves HEAD to the base and never
 // checks anything out, so its directory carries a .git and an empty working
-// tree. The gate therefore refuses a source with no working-tree content, and
-// the observer reports both that the workspace has one and a digest over every
-// file in it. The host computes the same digest over the source it verified,
-// so the two agree only if the tree that landed is the tree that was approved
-// -- which also catches a partial or altered copy. Whether that tree is
-// faithful to the commit is a stronger claim needing git in the observer
-// image, which the gate deliberately does not have.
+// tree. The observer therefore asks the pinned Git in its image for HEAD's
+// tree, then compares each regular file's raw blob identity and executable
+// mode and refuses extras. This avoids trusting copied index flags and Git
+// attribute conversions. Replacement objects are disabled during resolution
+// and rejected when present. Independently, the observer reports a digest
+// over every file the host computes over the source snapshot, so the two agree
+// only if the tree that landed is the tree that was approved. The two proofs
+// together bind the writer's starting tree to the declared commit; a
+// legitimately empty commit remains clean and is accepted.
 //
 // Layout, by concept:
 //

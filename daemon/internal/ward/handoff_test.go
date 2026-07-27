@@ -429,6 +429,16 @@ func TestHandoffSeedingFailsClosed(t *testing.T) {
 				return setProofValue(p, baseProofDetachedKey, "no")
 			}
 		}, CheckObservedBaseIdentity},
+		{"proof reports a dirty worktree", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.observerProof = func(_ string, p []byte) []byte {
+				return setProofValue(p, baseProofWorktreeKey, "dirty")
+			}
+		}, CheckObservedBaseIdentity},
+		{"proof reports replacement objects", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {
+			fx.rt.observerProof = func(_ string, p []byte) []byte {
+				return setProofValue(p, baseProofReplacementsKey, "present")
+			}
+		}, CheckObservedBaseIdentity},
 		// A proof carrying another run's (or the image's) nonce proves nothing
 		// about this workspace.
 		{"proof replays a foreign nonce", func(_ *testing.T, fx *handoffFixture, _ *HandoffSpec) {

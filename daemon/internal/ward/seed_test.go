@@ -26,10 +26,10 @@ func testBaseRevision() domain.BaseRevision {
 	}
 }
 
-// writeSeedCheckout materializes a minimal daemon-owned checkout under root and
-// returns its path: a detached .git/HEAD holding sha, plus one ordinary file.
-// It models the materialized shape #330 will produce from FetchBase's detached
-// checkout, including the no-symlink invariant the current gate accepts.
+// writeSeedCheckout materializes the minimal checkout shape the scripted fake
+// needs under root and returns its path: a detached .git/HEAD holding sha, plus
+// one ordinary file. The reference-runtime tests use a real Git repository,
+// because the observer now asks Git to compare HEAD with the worktree.
 func writeSeedCheckout(t *testing.T, root, sha string) string {
 	t.Helper()
 	return writeSeedCheckoutFor(t, root, sha, testBaseRevision().Repo, testBaseRevision().RepositoryID)
@@ -37,8 +37,8 @@ func writeSeedCheckout(t *testing.T, root, sha string) string {
 
 // writeSeedCheckoutFor is writeSeedCheckout bound to a named repository, so a
 // test can build the cross-repository source the binding check exists to
-// refuse. The config models the fully materialized checkout #330 hands ward:
-// FetchBase's repository mark plus the trusted canonical repository ID.
+// refuse. The config carries FetchBase's repository mark plus the trusted
+// canonical repository ID.
 func writeSeedCheckoutFor(t *testing.T, root, sha, repo string, repositoryID int64) string {
 	t.Helper()
 	dir := filepath.Join(root, "checkout")
@@ -160,7 +160,7 @@ func TestVerifyBaseProof(t *testing.T) {
 	const nonce = "0123456789abcdef0123456789abcdef"
 	const tree = "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface"
 	good := []byte("nonce=" + nonce + "\ngit_dir=present\nhead_detached=yes\nbase_sha=" + testBaseSHA +
-		"\nworktree=present\nirregular=absent\ntree_sha256=" + tree + "\n")
+		"\nworktree=clean\ngit_replacements=absent\nirregular=absent\ntree_sha256=" + tree + "\n")
 
 	got, err := verifyBaseProof(good, nonce, tree)
 	if err != nil {
@@ -178,7 +178,8 @@ func TestVerifyBaseProof(t *testing.T) {
 			{baseProofGitDirKey, "present"},
 			{baseProofDetachedKey, "yes"},
 			{baseProofSHAKey, testBaseSHA},
-			{baseProofWorktreeKey, "present"},
+			{baseProofWorktreeKey, "clean"},
+			{baseProofReplacementsKey, "absent"},
 			{baseProofIrregularKey, "absent"},
 			{baseProofTreeKey, tree},
 		}
@@ -206,6 +207,7 @@ func TestVerifyBaseProof(t *testing.T) {
 		{"omits detached", proofWith(map[string]string{baseProofDetachedKey: dropField})},
 		{"omits sha", proofWith(map[string]string{baseProofSHAKey: dropField})},
 		{"omits worktree", proofWith(map[string]string{baseProofWorktreeKey: dropField})},
+		{"omits replacements", proofWith(map[string]string{baseProofReplacementsKey: dropField})},
 		{"omits irregular", proofWith(map[string]string{baseProofIrregularKey: dropField})},
 		// A symlink slipped into the source between the walk and the copy.
 		{"irregular entry present", proofWith(map[string]string{baseProofIrregularKey: "present"})},
@@ -216,9 +218,12 @@ func TestVerifyBaseProof(t *testing.T) {
 		{"empty nonce", proofWith(map[string]string{baseProofNonceKey: ""})},
 		{"no git dir", proofWith(map[string]string{baseProofGitDirKey: "absent"})},
 		{"symbolic head", proofWith(map[string]string{baseProofDetachedKey: "no"})},
-		// The case the intended producer actually causes: a checkout whose
-		// worktree was never materialized. HEAD alone would have passed.
-		{"no working tree", proofWith(map[string]string{baseProofWorktreeKey: "absent"})},
+		// A non-empty commit whose worktree was never materialized reports
+		// every tracked path missing.
+		{"dirty working tree", proofWith(map[string]string{baseProofWorktreeKey: "dirty"})},
+		{"git comparison failed", proofWith(map[string]string{baseProofWorktreeKey: "error"})},
+		{"replacement object present", proofWith(map[string]string{baseProofReplacementsKey: "present"})},
+		{"replacement scan failed", proofWith(map[string]string{baseProofReplacementsKey: "error"})},
 		// Content that is not the content the host verified: a partial or
 		// altered copy that still carries the right HEAD.
 		{"tree digest mismatch", proofWith(map[string]string{baseProofTreeKey: strings.Repeat("a", 64)})},
@@ -249,7 +254,7 @@ func TestVerifyBaseProofNeverEchoesContent(t *testing.T) {
 	const nonce = "0123456789abcdef0123456789abcdef"
 	const planted = "attacker-controlled-fixture-value"
 	_, err := verifyBaseProof([]byte("nonce="+nonce+"\ngit_dir="+planted+"\nhead_detached=yes\nbase_sha="+testBaseSHA+
-		"\nworktree=present\nirregular=absent\ntree_sha256="+strings.Repeat("e", 64)+"\n"), nonce, strings.Repeat("e", 64))
+		"\nworktree=clean\ngit_replacements=absent\nirregular=absent\ntree_sha256="+strings.Repeat("e", 64)+"\n"), nonce, strings.Repeat("e", 64))
 	if err == nil {
 		t.Fatal("unexpected value accepted, want a failure")
 	}
@@ -414,6 +419,21 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	}
 	if got := digestOfDir(t, canonicalSnapshot); got != canonicalDigest {
 		t.Errorf("canonicalized tree digest = %q, observer digest = %q", canonicalDigest, got)
+	}
+}
+
+func TestVerifySeedSourceAllowsEmptyCommitCandidate(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSeedCheckout(t, root, testBaseSHA)
+	if err := os.Remove(filepath.Join(dir, "README.md")); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig()
+	cfg.SeedRoot = root
+	if _, err := stageSeedSource(
+		cfg, dir, testBaseRevision().Repo, testBaseRevision().RepositoryID, t.TempDir(),
+	); err != nil {
+		t.Fatalf("empty-commit candidate: stageSeedSource() = %v, want nil", err)
 	}
 }
 
