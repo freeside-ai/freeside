@@ -1,10 +1,16 @@
-# agent-claude
+# Claude Agent Base
 
 The digest-pinned agent base the Claude stage runs in under the
 `subscription_contained` credential mode (plan §5.4): the native vendor CLI runs
 in the agent VM with its credential mount read-only. Plan §5.7 requires golden
 images to pin CLI versions, so the Claude CLI version is a build input recorded
 in a label and asserted from the built image.
+
+Plan §5.7, **Golden Agent and Project Images**, is the canonical shape contract:
+agent-base and derived-project-image metadata must preserve ward's required
+realized launch shape, and ward consumes only registry-resolvable digest
+references. This README records the Claude base's pins and the measured Apple
+`container` behavior that implements that contract.
 
 Build it, and print its digest reference, with
 `scripts/build-agent-claude-image.sh`; check it against the ward's post-create
@@ -34,12 +40,16 @@ identical invocations (see
 
 Ward's check 2 (`daemon/internal/ward/conformance.go`, `verifyAgentAllowlist`)
 compares the created container's inspected configuration against exactly the
-fixed PATH plus the daemon-supplied environment, a working directory of `/`, and
-the daemon-supplied command. Apple `container` 1.1.0 merges the image's own
-environment and working directory into that report (measured), so the image
-carries no `ENV`, `WORKDIR`, `ENTRYPOINT`, `CMD`, `USER`, or `VOLUME`. That is
-also why the image installs Node from the upstream tarball instead of building on
-an official `node:*` image, which sets `NODE_VERSION`.
+fixed PATH plus the daemon-supplied environment, a working directory of `/`,
+the daemon-supplied command, and the declared mount topology. Apple `container`
+1.1.0 merges image environment and working-directory metadata into that report
+(measured), so this Containerfile adds no `ENV`, `WORKDIR`, `ENTRYPOINT`, `CMD`,
+`USER`, or `VOLUME`. Its Debian base may still contribute metadata, including
+the fixed PATH and a default command that the daemon replaces; the image-side
+probe proves the realized result rather than inferring compliance from the
+Containerfile. This is also why the image installs Node from the upstream
+tarball instead of building on an official `node:*` image, which adds
+`NODE_VERSION` to the realized environment.
 
 `LABEL` is not inspected by the gate and carries the provenance instead.
 
