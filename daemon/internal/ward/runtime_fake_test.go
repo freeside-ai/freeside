@@ -189,6 +189,17 @@ func (c *fakeCtr) observedVolume(proofPath string) (string, bool) {
 	return "", false
 }
 
+// mountShadows reports whether target lies at or under one of the container's
+// mounts, where the runtime discards a copy while still reporting success.
+func (c *fakeCtr) mountShadows(target string) bool {
+	for _, m := range c.spec.Mounts {
+		if target == m.Target || strings.HasPrefix(target, m.Target+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *fakeCtr) ownershipToken() string {
 	for _, l := range c.spec.Labels {
 		if l.Key == ownershipLabelKey {
@@ -203,6 +214,14 @@ func (c *fakeCtr) ownershipToken() string {
 func baseProofFor(nonce, sha string) []byte {
 	return fmt.Appendf(nil, "%s=%s\n%s=present\n%s=yes\n%s=%s\n",
 		baseProofNonceKey, nonce, baseProofGitDirKey, baseProofDetachedKey, baseProofSHAKey, sha)
+}
+
+// baseProofForAbsentGitDir renders the proof the observer writes over a
+// workspace that was never seeded: the observation still happens and is still
+// reported, it just reports nothing there.
+func baseProofForAbsentGitDir(nonce string) []byte {
+	return fmt.Appendf(nil, "%s=%s\n%s=absent\n%s=no\n%s=none\n",
+		baseProofNonceKey, nonce, baseProofGitDirKey, baseProofDetachedKey, baseProofSHAKey)
 }
 
 // writeProofTar streams a one-entry archive carrying proof at absolutePath,
@@ -549,7 +568,13 @@ func (f *fakeRuntime) CopyIntoContainer(ctx context.Context, id, hostDir, target
 		return fmt.Errorf("invalidState: container %q is not running", id)
 	}
 	f.copies = append(f.copies, fakeCopy{id: id, hostDir: hostDir, targetDir: targetDir})
-	if f.copySeedsNothing {
+	// The runtime's silent discard, modeled structurally rather than by a flag:
+	// a copy whose destination lies inside a mounted volume writes nothing and
+	// still succeeds. Deriving it from the container's own mounts means a
+	// regression that aims a copy into the workspace mount fails the fake the
+	// same way it would fail production, instead of passing because the fake
+	// only looked at call ordinality.
+	if c.mountShadows(targetDir) || f.copySeedsNothing {
 		return nil
 	}
 
@@ -597,15 +622,21 @@ func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Write
 	if !ok {
 		return fmt.Errorf("container %q not found", id)
 	}
-	// The base observer's rootfs carries its proof, not an export.
+	// The base observer's rootfs carries its proof, not an export. It always
+	// carries one: the real observer's script has no `set -e` precisely so
+	// every branch reaches the proof write, and an unseeded workspace is
+	// reported as git_dir=absent rather than as a missing file. Falling through
+	// to the export fixture here would make the "copy seeded nothing" case
+	// exercise the missing-file branch instead of the one production takes.
 	if vol, isObserver := c.observedVolume(f.baseProofPath); isObserver {
+		proof := baseProofForAbsentGitDir(c.ownershipToken())
 		if sha, seeded := f.volBase[vol]; seeded {
-			proof := baseProofFor(c.ownershipToken(), sha)
-			if f.observerProof != nil {
-				proof = f.observerProof(id, proof)
-			}
-			return writeProofTar(dest, f.baseProofPath, proof)
+			proof = baseProofFor(c.ownershipToken(), sha)
 		}
+		if f.observerProof != nil {
+			proof = f.observerProof(id, proof)
+		}
+		return writeProofTar(dest, f.baseProofPath, proof)
 	}
 	src, err := os.Open(f.exportTarPath)
 	if err != nil {
