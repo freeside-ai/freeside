@@ -126,6 +126,10 @@ type runState struct {
 	// attestation covers the tree that actually landed rather than only the
 	// HEAD pointer that came with it.
 	seedTreeDigest string
+	// seedSnapshotDir holds the gate's private copy of the seed source. It is
+	// what gets staged into the seeder, so nothing outside the gate can mutate
+	// the tree between verification and the copy.
+	seedSnapshotDir string
 	// baseArchiveDir holds the observer's rootfs archive while its proof is
 	// read. It is cleared as soon as that read finishes, so it is non-empty
 	// only inside that window; the deferred cleanup removes whatever it names
@@ -208,6 +212,9 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		}
 		if st.baseArchiveDir != "" {
 			_ = os.RemoveAll(st.baseArchiveDir)
+		}
+		if st.seedSnapshotDir != "" {
+			_ = os.RemoveAll(st.seedSnapshotDir)
 		}
 		if st.exportDir != "" && (!st.succeeded || err != nil) {
 			_ = os.RemoveAll(st.exportDir)

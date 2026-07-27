@@ -593,7 +593,7 @@ func TestLiveSeedRefusesWorktreelessCheckout(t *testing.T) {
 	}
 	cfg := testConfig()
 	cfg.SeedRoot = root
-	_, _, err := verifySeedSource(cfg, dir, testBaseRevision().Repo)
+	_, err := stageSeedSource(cfg, dir, testBaseRevision().Repo, t.TempDir())
 	wantCheckFailure(t, err, CheckWorkspaceSeeding)
 }
 

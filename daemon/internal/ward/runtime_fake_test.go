@@ -623,14 +623,18 @@ func (f *fakeRuntime) CopyIntoContainer(ctx context.Context, id, hostDir, target
 // directory, using the same helpers the host applies to the seed source.
 func digestOfDir(t *testing.T, root string) string {
 	t.Helper()
-	var lines, execPaths []string
+	var lines, execPaths, dirPaths []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
 			return err
 		}
 		rel, relErr := filepath.Rel(root, p)
 		if relErr != nil {
 			return relErr
+		}
+		if d.IsDir() {
+			dirPaths = append(dirPaths, findPath(rel))
+			return nil
 		}
 		sum, sumErr := fileSHA256(p)
 		if sumErr != nil {
@@ -649,7 +653,7 @@ func digestOfDir(t *testing.T, root string) string {
 	if err != nil {
 		t.Fatalf("digest fixture tree %s: %v", root, err)
 	}
-	return treeDigest(lines, execPaths)
+	return treeDigest(lines, execPaths, dirPaths)
 }
 
 func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Writer, _ int64) error {

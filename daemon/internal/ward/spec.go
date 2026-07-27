@@ -546,7 +546,9 @@ func observerScript(cfg Config, nonce string) string {
 		"| sort | sha256sum | cut -d' ' -f1)\"; " +
 		"tx=\"$(cd " + ws + " && find . -type f -perm -u+x -print 2>/dev/null " +
 		"| sort | sha256sum | cut -d' ' -f1)\"; " +
-		"t=\"$(printf '%s\\n%s\\n' \"$tc\" \"$tx\" | sha256sum | cut -d' ' -f1)\"; fi; " +
+		"td=\"$(cd " + ws + " && find . -type d -print 2>/dev/null " +
+		"| sort | sha256sum | cut -d' ' -f1)\"; " +
+		"t=\"$(printf '%s\\n%s\\n%s\\n' \"$tc\" \"$tx\" \"$td\" | sha256sum | cut -d' ' -f1)\"; fi; " +
 		"printf '" + baseProofNonceKey + "=%s\\n" +
 		baseProofGitDirKey + "=%s\\n" +
 		baseProofDetachedKey + "=%s\\n" +

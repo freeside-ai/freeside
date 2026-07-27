@@ -247,25 +247,21 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	dir := writeSeedCheckout(t, root, testBaseSHA)
 	cfg := testConfig()
 	cfg.SeedRoot = root
-	got, digest, err := verifySeedSource(cfg, dir, testBaseRevision().Repo)
+	snap := t.TempDir()
+	digest, err := stageSeedSource(cfg, dir, testBaseRevision().Repo, snap)
 	if err != nil {
-		t.Fatalf("verifySeedSource() = %v, want nil", err)
+		t.Fatalf("stageSeedSource() = %v, want nil", err)
 	}
-	// The resolved path is what the caller stages, so it must come back
-	// resolved: staging the caller's spelling would leave containment advisory.
-	want, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != want {
-		t.Errorf("resolved source = %q, want %q", got, want)
+	// The snapshot is what gets staged, so it must actually hold the tree.
+	if _, err := os.Stat(filepath.Join(snap, ".git", "HEAD")); err != nil {
+		t.Errorf("snapshot does not carry the checkout: %v", err)
 	}
 	// The digest is the expectation the observer is held to, so it must cover
 	// the tree the host just walked, deterministically.
 	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(digest) {
 		t.Errorf("tree digest = %q, want a sha256 hex digest", digest)
 	}
-	if again := digestOfDir(t, want); again != digest {
+	if again := digestOfDir(t, snap); again != digest {
 		t.Errorf("tree digest is not deterministic: %q then %q", digest, again)
 	}
 	// A single changed byte anywhere in the tree must change it, or a partial
@@ -273,7 +269,7 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("tampered\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, changed, err := verifySeedSource(cfg, dir, testBaseRevision().Repo)
+	changed, err := stageSeedSource(cfg, dir, testBaseRevision().Repo, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +284,7 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho hi\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, plain, err := verifySeedSource(cfg, dir, testBaseRevision().Repo)
+	plain, err := stageSeedSource(cfg, dir, testBaseRevision().Repo, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +292,7 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	if err := os.Chmod(script, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, executable, err := verifySeedSource(cfg, dir, testBaseRevision().Repo)
+	executable, err := stageSeedSource(cfg, dir, testBaseRevision().Repo, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -449,10 +445,10 @@ func TestVerifySeedSourceFailsClosed(t *testing.T) {
 			cfg := testConfig()
 			cfg.SeedRoot = root
 			dir := tc.build(t, root, &cfg)
-			got, digest, err := verifySeedSource(cfg, dir, testBaseRevision().Repo)
+			digest, err := stageSeedSource(cfg, dir, testBaseRevision().Repo, t.TempDir())
 			wantCheckFailure(t, err, CheckWorkspaceSeeding)
-			if got != "" || digest != "" {
-				t.Errorf("rejected source still yielded path %q digest %q", got, digest)
+			if digest != "" {
+				t.Errorf("rejected source still yielded a digest %q", digest)
 			}
 		})
 	}
