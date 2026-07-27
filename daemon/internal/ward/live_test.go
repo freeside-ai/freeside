@@ -18,10 +18,17 @@ package ward
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +67,140 @@ const liveAgentControlStaging = `mkdir -p /workspace/.freeside-evidence && ` +
 	`printf '\211PNG\015\012\032\012agent-evidence' > /workspace/.freeside-evidence/shot.png && ` +
 	`printf '%s' '{"version":"freeside.export.evidence-source/v1","sources":[{"label":"shot","media_type":"image/png","path":".freeside-evidence/shot.png","head_binding":"head_independent","sensitivity_class":"normal","producer_invocation_id":"live-run"}]}' > /workspace/.freeside-evidence/evidence.json && ` +
 	`printf '%s' '{"version":"freeside.commit-plan/v1","groups":[{"name":"all","message":"Apply live candidate","remainder":true}]}' > /workspace/.freeside-commit-plan.json`
+
+func hostServiceIsolationProbeScript(port int) string {
+	return "proxy=${HTTPS_PROXY#http://}; proxy_host=${proxy%:*}; " +
+		"if nc -w 3 \"$proxy_host\" " + strconv.Itoa(port) +
+		" </dev/null >/dev/null 2>&1; then exit 85; fi; "
+}
+
+type liveFreesided struct {
+	port    int
+	done    <-chan struct{}
+	waitErr *error
+}
+
+func (p *liveFreesided) assertRunning(t *testing.T) {
+	t.Helper()
+	select {
+	case <-p.done:
+		t.Fatalf("freesided listener fixture exited before the writer probe completed: %v", *p.waitErr)
+	default:
+	}
+}
+
+// startLiveFreesided starts the actual production composition on its
+// loopback-only listener and returns that listener's port. The writer probes
+// the same port at its host-only gateway address: a successful TCP connect
+// would prove the daemon API escaped the loopback gate.
+func startLiveFreesided(t *testing.T) *liveFreesided {
+	t.Helper()
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve ward live-test source path")
+	}
+	moduleRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "..", ".."))
+	binary := filepath.Join(t.TempDir(), "freesided-live-listener")
+	build := osexec.Command("go", "build", "-o", binary, "./cmd/freesided") //nolint:gosec // fixed tool and test-owned output
+	build.Dir = moduleRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build freesided listener fixture: %v\n%s", err, output)
+	}
+
+	ntfy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(ntfy.Close)
+	root := t.TempDir()
+	cmd := osexec.Command(binary, //nolint:gosec // test-built binary with fixed arguments
+		"-db", filepath.Join(root, "freeside.db"),
+		"-fake-driver-dir", filepath.Join(root, "driver"),
+		"-listen", "127.0.0.1:0",
+		"-ntfy-url", ntfy.URL,
+		"-reconcile-interval", "5ms",
+	)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("freesided stdout pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start freesided listener fixture: %v", err)
+	}
+	done := make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = cmd.Wait()
+		close(done)
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-done:
+		default:
+			_ = cmd.Process.Signal(os.Interrupt)
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				_ = cmd.Process.Kill()
+				<-done
+			}
+		}
+		if waitErr != nil {
+			t.Errorf("stop freesided listener fixture: %v; stderr=%s", waitErr, stderr.String())
+		}
+	})
+
+	type readiness struct {
+		APIURL string `json:"api_url"`
+	}
+	decoded := make(chan struct {
+		ready readiness
+		err   error
+	}, 1)
+	go func() {
+		var ready readiness
+		err := json.NewDecoder(stdout).Decode(&ready)
+		decoded <- struct {
+			ready readiness
+			err   error
+		}{ready: ready, err: err}
+	}()
+	var ready readiness
+	select {
+	case result := <-decoded:
+		if result.err != nil {
+			_ = cmd.Process.Kill()
+			<-done
+			t.Fatalf("decode freesided readiness: %v; stderr=%s", result.err, stderr.String())
+		}
+		ready = result.ready
+	case <-time.After(5 * time.Second):
+		t.Fatal("freesided did not emit readiness within 5s")
+	}
+
+	response, err := (&http.Client{Timeout: time.Second}).Get(ready.APIURL + "/sync/revision")
+	if err != nil {
+		t.Fatalf("reach freesided over host loopback: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("freesided loopback status = %d, want 401", response.StatusCode)
+	}
+	u, err := url.Parse(ready.APIURL)
+	if err != nil {
+		t.Fatalf("parse freesided readiness URL: %v", err)
+	}
+	_, portText, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		t.Fatalf("split freesided readiness address: %v", err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		t.Fatalf("freesided readiness port = %q, want 1..65535", portText)
+	}
+	return &liveFreesided{port: port, done: done, waitErr: &waitErr}
+}
 
 func TestLiveHandoffLifecycle(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
@@ -197,6 +338,8 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	egressProbe := providerEgressProbeScript(cfg.ProviderEndpoints)
+	liveDaemon := startLiveFreesided(t)
+	hostIsolationProbe := hostServiceIsolationProbeScript(liveDaemon.port)
 
 	res, err := b.Handoff(ctx, HandoffSpec{
 		RunID:           runID,
@@ -207,7 +350,7 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 			EgressProfile: domain.EgressProviderOnly,
 			Command: []string{
 				"sh", "-c",
-				"set -eu; " + egressProbe +
+				"set -eu; " + hostIsolationProbe + egressProbe +
 					"cat /credentials/token > /dev/null && " +
 					"echo agent-output > /workspace/result.txt && " +
 					"mkdir -p /workspace/nested && " +
@@ -220,6 +363,7 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handoff = %v, want success", err)
 	}
+	liveDaemon.assertRunning(t)
 	t.Cleanup(func() { _ = os.RemoveAll(res.ExportDir) })
 
 	// Admission snapshot (acceptance 4, on the reference runtime).

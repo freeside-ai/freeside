@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -378,10 +381,159 @@ func waitForItem(t *testing.T, attention *signet.Service, id domain.ItemID) sign
 	return signet.AttentionItemSnapshot{}
 }
 
-func TestListenLoopbackRejectsWildcard(t *testing.T) {
-	t.Parallel()
-	if listener, err := listenLoopback("0.0.0.0:0"); err == nil {
-		_ = listener.Close()
-		t.Fatal("listenLoopback accepted a wildcard address")
+func TestListenPrivileged(t *testing.T) {
+	listener, err := listenPrivileged("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listenPrivileged(loopback): %v", err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close loopback listener: %v", err)
+	}
+
+	for _, addr := range []string{":0", "0.0.0.0:0", "[::]:0", "192.0.2.1:0"} {
+		t.Run(addr, func(t *testing.T) {
+			if listener, err := listenPrivileged(addr); err == nil {
+				_ = listener.Close()
+				t.Fatalf("listenPrivileged(%q) accepted a wildcard or arbitrary non-loopback address", addr)
+			}
+		})
+	}
+}
+
+func TestListenPrivilegedRejectsBeforeBind(t *testing.T) {
+	bindCalled := false
+	_, err := listenPrivilegedWith(
+		"0.0.0.0:0",
+		func(string, *net.TCPAddr) (net.Listener, error) {
+			bindCalled = true
+			return nil, errors.New("unsafe bind was attempted")
+		},
+		func() ([]netip.Addr, error) {
+			t.Fatal("wildcard validation queried Tailscale")
+			return nil, nil
+		},
+	)
+	if err == nil {
+		t.Fatal("listenPrivilegedWith accepted a wildcard address")
+	}
+	if bindCalled {
+		t.Fatal("listenPrivilegedWith called the binder before rejecting a wildcard address")
+	}
+}
+
+type listenerStub struct {
+	addr   net.Addr
+	closed bool
+}
+
+func (*listenerStub) Accept() (net.Conn, error) {
+	return nil, errors.New("stub listener does not accept")
+}
+func (l *listenerStub) Close() error   { l.closed = true; return nil }
+func (l *listenerStub) Addr() net.Addr { return l.addr }
+
+func TestListenPrivilegedAcceptsOnlyTailscaleOwnedAddresses(t *testing.T) {
+	for _, addr := range []string{"100.64.0.7:8443", "[fd7a:115c:a1e0::7]:8443"} {
+		t.Run(addr, func(t *testing.T) {
+			resolved, err := net.ResolveTCPAddr("tcp", addr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tailscaleIP, ok := netip.AddrFromSlice(resolved.IP)
+			if !ok {
+				t.Fatalf("parse test Tailscale address %q", resolved.IP)
+			}
+			stub := &listenerStub{addr: &net.TCPAddr{IP: resolved.IP, Port: resolved.Port}}
+			listener, err := listenPrivilegedWith(
+				addr,
+				func(_ string, _ *net.TCPAddr) (net.Listener, error) { return stub, nil },
+				func() ([]netip.Addr, error) { return []netip.Addr{tailscaleIP}, nil },
+			)
+			if err != nil {
+				t.Fatalf("listenPrivilegedWith(%q): %v", addr, err)
+			}
+			if listener != stub || stub.closed {
+				t.Fatal("accepted Tailscale listener was replaced or closed")
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name      string
+		addr      string
+		tailscale []netip.Addr
+		queryErr  error
+	}{
+		{name: "unreported Tailscale", addr: "100.64.0.7:8443"},
+		{name: "different reported Tailscale", addr: "100.64.0.7:8443", tailscale: []netip.Addr{
+			netip.MustParseAddr("100.64.0.8"),
+		}},
+		{name: "Tailscale query failure", addr: "100.64.0.7:8443", queryErr: errors.New("tailscaled unavailable")},
+		{name: "arbitrary non-loopback", addr: "192.0.2.7:8443"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bindCalled := false
+			_, err := listenPrivilegedWith(
+				tc.addr,
+				func(string, *net.TCPAddr) (net.Listener, error) {
+					bindCalled = true
+					return nil, errors.New("unsafe bind was attempted")
+				},
+				func() ([]netip.Addr, error) { return tc.tailscale, tc.queryErr },
+			)
+			if err == nil {
+				t.Fatalf("listenPrivilegedWith(%q) accepted unsupported address", tc.addr)
+			}
+			if bindCalled {
+				t.Fatalf("listenPrivilegedWith(%q) attempted a bind", tc.addr)
+			}
+		})
+	}
+}
+
+func TestParseTailscaleIPs(t *testing.T) {
+	got, err := parseTailscaleIPs("100.64.0.7\nfd7a:115c:a1e0::7\n")
+	if err != nil {
+		t.Fatalf("parseTailscaleIPs: %v", err)
+	}
+	want := []netip.Addr{
+		netip.MustParseAddr("100.64.0.7"),
+		netip.MustParseAddr("fd7a:115c:a1e0::7"),
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("parseTailscaleIPs = %v, want %v", got, want)
+	}
+
+	for _, output := range []string{
+		"",
+		"not-an-ip",
+		"192.0.2.7",
+		"fe80::1%utun4",
+		"100.64.0.7\n192.0.2.7",
+	} {
+		t.Run(output, func(t *testing.T) {
+			if _, err := parseTailscaleIPs(output); err == nil {
+				t.Fatalf("parseTailscaleIPs(%q) accepted unsupported output", output)
+			}
+		})
+	}
+}
+
+func TestRunRefusesNonLoopbackBeforeCreatingState(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	driverDir := filepath.Join(t.TempDir(), "driver")
+	h, err := run(context.Background(), config{
+		DBPath:        dbPath,
+		ListenAddr:    "0.0.0.0:0",
+		FakeDriverDir: driverDir,
+	})
+	if err == nil {
+		_ = h.Close()
+		t.Fatal("run accepted a wildcard listener")
+	}
+	for _, path := range []string{dbPath, dbPath + topicKeySuffix, dbPath + ".blobs", driverDir} {
+		if _, statErr := os.Stat(path); !errors.Is(statErr, fs.ErrNotExist) {
+			t.Errorf("unsafe listener startup created %q: stat error = %v", path, statErr)
+		}
 	}
 }

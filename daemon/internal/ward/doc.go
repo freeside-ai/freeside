@@ -27,6 +27,17 @@
 // Host; without TLS termination, that application-layer rule is an explicit
 // provider assumption rather than a property CONNECT can enforce.
 //
+// Host-only describes the network shape, not absence of a host neighbor: the
+// runtime gateway remains an address through which a wildcard-bound host
+// service could be reached. The production freesided API therefore enforces
+// loopback or an exact address reported by the local Tailscale client as a
+// separate fail-before-bind invariant; any other host service needs its own
+// declared binding policy, while the ward CONNECT proxy is the deliberate
+// agent-reachable exception. The reference-runtime lifecycle test starts the
+// real freesided API on loopback, proves it is live from the host, then
+// requires the writer to fail a TCP connection to that same port through its
+// gateway while the declared provider path succeeds.
+//
 // The conformance suite (suite.go) is the invocable form of that contract,
 // run at the plan §5.7 cadence points without a real work item (doctor
 // scheduling is a downstream operations-unit concern). Suite.Full proves the

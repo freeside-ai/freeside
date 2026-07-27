@@ -14,7 +14,9 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
+	osexec "os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -77,7 +79,7 @@ func main() {
 	flags.SetOutput(os.Stderr)
 	dbPath := flags.String("db", "", "SQLite database path (required; created if absent)")
 	driverDir := flags.String("fake-driver-dir", "", "permanent fake StageDriver state directory (defaults beside -db)")
-	listenAddr := flags.String("listen", "127.0.0.1:0", "signet listener address (loopback only)")
+	listenAddr := flags.String("listen", "127.0.0.1:0", "signet listener address (loopback or Tailscale-owned address only)")
 	ntfyURL := flags.String("ntfy-url", defaultNtfyURL, "ntfy server URL for device notifications")
 	interval := flags.Duration("reconcile-interval", defaultReconcileInterval, "workflow reconciliation interval")
 	fakePublication := flags.Bool("fake-publication", false, "run one explicit attended fake-candidate publication")
@@ -211,6 +213,17 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 	if err != nil {
 		return nil, err
 	}
+	listener, err := listenPrivileged(cfg.ListenAddr)
+	if err != nil {
+		return nil, err
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = listener.Close()
+		}
+	}()
+
 	_, statErr := os.Stat(cfg.DBPath)
 	storePreexisting := statErr == nil
 	if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
@@ -224,17 +237,6 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 	if _, err := rand.Read(pairingKey); err != nil {
 		return nil, fmt.Errorf("generate pairing key: %w", err)
 	}
-
-	listener, err := listenLoopback(cfg.ListenAddr)
-	if err != nil {
-		return nil, err
-	}
-	success := false
-	defer func() {
-		if !success {
-			_ = listener.Close()
-		}
-	}()
 
 	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
 	if err != nil {
@@ -401,15 +403,119 @@ func (d *daemon) Close() error {
 	return d.closeErr
 }
 
-func listenLoopback(addr string) (net.Listener, error) {
-	listener, err := net.Listen("tcp", addr)
+var (
+	tailscaleIPv4 = netip.MustParsePrefix("100.64.0.0/10")
+	tailscaleIPv6 = netip.MustParsePrefix("fd7a:115c:a1e0::/48")
+)
+
+const tailscaleIPTimeout = 5 * time.Second
+
+func listenPrivileged(addr string) (net.Listener, error) {
+	return listenPrivilegedWith(
+		addr,
+		func(network string, resolved *net.TCPAddr) (net.Listener, error) {
+			return net.ListenTCP(network, resolved)
+		},
+		readTailscaleIPs,
+	)
+}
+
+func listenPrivilegedWith(
+	addr string,
+	bind func(string, *net.TCPAddr) (net.Listener, error),
+	tailscaleIPs func() ([]netip.Addr, error),
+) (net.Listener, error) {
+	resolved, err := net.ResolveTCPAddr("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("resolve listen address %q: %w", addr, err)
+	}
+	if resolved.IP == nil || resolved.IP.IsUnspecified() || resolved.Zone != "" {
+		return nil, fmt.Errorf("listen %q resolved to an unsupported address %q", addr, resolved)
+	}
+	if !resolved.IP.IsLoopback() {
+		if !isTailscaleIP(resolved.IP) {
+			return nil, fmt.Errorf("listen %q resolved to non-loopback, non-Tailscale address %q", addr, resolved)
+		}
+		addrs, err := tailscaleIPs()
+		if err != nil {
+			return nil, fmt.Errorf("query Tailscale addresses for listener %q: %w", addr, err)
+		}
+		if !tailscaleOwnsIP(resolved.IP, addrs) {
+			return nil, fmt.Errorf("listen %q resolved to address %q not reported by Tailscale", addr, resolved)
+		}
+	}
+	network := "tcp6"
+	if resolved.IP.To4() != nil {
+		network = "tcp4"
+	}
+	listener, err := bind(network, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("listen %q: %w", addr, err)
 	}
-	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
-	if !ok || !tcpAddr.IP.IsLoopback() {
+	bound, ok := listener.Addr().(*net.TCPAddr)
+	if !ok || !bound.IP.Equal(resolved.IP) {
 		_ = listener.Close()
-		return nil, fmt.Errorf("listen %q resolved to non-loopback address %q", addr, listener.Addr())
+		return nil, fmt.Errorf("listen %q bound unexpected address %q", addr, listener.Addr())
 	}
 	return listener, nil
+}
+
+func isTailscaleIP(ip net.IP) bool {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	return isTailscaleAddr(addr)
+}
+
+func readTailscaleIPs() ([]netip.Addr, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), tailscaleIPTimeout)
+	defer cancel()
+
+	// The executable name and arguments are fixed; only the trusted supervisor
+	// controls the daemon's PATH.
+	cmd := osexec.CommandContext(ctx, "tailscale", "ip") //nolint:gosec // G204 has no untrusted command input.
+	output, err := cmd.Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("tailscale ip: %w", ctx.Err())
+		}
+		return nil, fmt.Errorf("tailscale ip: %w", err)
+	}
+	return parseTailscaleIPs(string(output))
+}
+
+func parseTailscaleIPs(output string) ([]netip.Addr, error) {
+	fields := strings.Fields(output)
+	if len(fields) == 0 {
+		return nil, errors.New("tailscale ip returned no addresses")
+	}
+	addrs := make([]netip.Addr, 0, len(fields))
+	for _, field := range fields {
+		addr, err := netip.ParseAddr(field)
+		if err != nil || addr.Zone() != "" || !isTailscaleAddr(addr) {
+			return nil, fmt.Errorf("tailscale ip returned unsupported address %q", field)
+		}
+		addrs = append(addrs, addr.Unmap())
+	}
+	return addrs, nil
+}
+
+func tailscaleOwnsIP(ip net.IP, addrs []netip.Addr) bool {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	addr = addr.Unmap()
+	for _, assigned := range addrs {
+		if assigned.Unmap() == addr {
+			return true
+		}
+	}
+	return false
+}
+
+func isTailscaleAddr(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	return tailscaleIPv4.Contains(addr) || tailscaleIPv6.Contains(addr)
 }

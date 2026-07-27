@@ -368,7 +368,7 @@ sit above the credential-mode floor and represent different risk classes:
 
 | Profile | Access and risk |
 | --- | --- |
-| `provider_only` | Default. Only the provider API is reachable. |
+| `provider_only` | Default. The writer has one host-only network: direct external and guest-DNS paths are absent, and the provider API is reachable only through the daemon's allowlisting proxy. The host gateway remains a network neighbor. The production API is isolated by its loopback-or-Tailscale-owned listener gate; every other host service needs its own declared binding policy, and the ward proxy is the intentional agent-reachable exception. |
 | `provider_web_read` | Materially wider credential-exfiltration exposure. Read-only HTTP can still exfiltrate through URLs, headers, bodies, redirects, and DNS while the provider credential shares the trust domain. It requires an explicit record of the wider exposure and a small trusted-domain allowlist. |
 | Clean verification | No network access. |
 
