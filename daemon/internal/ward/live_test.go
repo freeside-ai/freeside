@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -57,6 +58,64 @@ func liveExporterImage(t *testing.T) string {
 		t.Skip("exporter-image live test skipped: set FREESIDE_WARD_EXPORTER_IMAGE to the digest-pinned exporter image (scripts/build-exporter-image.sh --local-registry-port <port>)")
 	}
 	return ref
+}
+
+// requireExporterGit fails fast when the exporter image cannot run git. The
+// seeded-base observer resolves HEAD with the image's own git, so an exporter
+// image built before that dependency existed fails only later, and only as
+// the gate's categorical observed_base_identity refusal (#349). Probing up
+// front turns an image/observer version skew into a failure that names its
+// cause and the rebuild that fixes it. A fatal failure, not a skip: skipping
+// would silently hollow out the seeded live lane. Presence only, no version
+// pin; images/exporter/Containerfile owns the pinned version. Networkless,
+// like every gate-owned execution of this image: the probe runs an
+// operator-supplied reference before New validates it, and must not hand it
+// a default-networked execution on the way.
+func requireExporterGit(t *testing.T, bin, ref string) {
+	t.Helper()
+	// Bounded: this probe exists to turn a broken image into a fast, nameable
+	// failure, so it must not itself hang the lane until the go test timeout
+	// when the image's entrypoint or git stalls. "--" terminates option
+	// parsing so a reference starting with "-" cannot be reinterpreted as a
+	// run option; this probe sees the reference before New validates its
+	// shape.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	//nolint:gosec // resolved CLI path, fixed args around the probed reference
+	cmd := osexec.CommandContext(ctx, bin,
+		"run", "--rm", "--network", "none", "--", ref, "sh", "-c", "git --version")
+	// The runtime package's capWriter, for the same noisy-runtime case it
+	// exists for: a probe of a not-yet-validated image must bound what it
+	// retains, or a flooding entrypoint defeats the time bound through
+	// memory. One writer for both streams; os/exec serializes writes to an
+	// identical Stdout/Stderr value.
+	capped := &capWriter{max: 64 << 10}
+	cmd.Stdout = capped
+	cmd.Stderr = capped
+	err := cmd.Run()
+	out := capped.buf.String()
+	if capped.truncated {
+		out += " [output truncated at cap]"
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("git preflight timed out in the exporter image: %v: %s", ctx.Err(), out)
+	}
+	if err == nil {
+		lines := strings.Split(strings.TrimSpace(out), "\n")
+		t.Logf("exporter image git preflight: %s", lines[len(lines)-1])
+		return
+	}
+	// Only the shell's command-not-found status, which `container run`
+	// propagates as its own exit code, convicts the image's contents; any
+	// other failure (runtime stopped, unresolvable reference, unsupported
+	// architecture) is a launch problem the rebuild advice would mask.
+	var exit *osexec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 127 {
+		t.Fatalf("exporter image cannot run git; rebuild it at this revision "+
+			"(scripts/build-exporter-image.sh --local-registry-port <port>) and update "+
+			"FREESIDE_WARD_EXPORTER_IMAGE: %v: %s", err, out)
+	}
+	t.Fatalf("git preflight could not run in the exporter image: %v: %s", err, out)
 }
 
 // liveAgentControlStaging is appended to the agent command: it stages one
@@ -661,6 +720,7 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 	base := commitLiveSeedCheckout(t, checkout)
 	cfg := testConfig()
 	cfg.ExporterImage = liveExporterImage(t)
+	requireExporterGit(t, bin, cfg.ExporterImage)
 	cfg.SeedRoot = root
 	cfg.PollInterval = 500 * time.Millisecond
 	cfg.SeedTimeout = 2 * time.Minute
