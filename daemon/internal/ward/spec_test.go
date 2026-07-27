@@ -194,6 +194,24 @@ func TestObserverSpecReadsOnly(t *testing.T) {
 	}
 }
 
+// TestObserverScriptCreatesProofParent pins the nested-proof-path case:
+// Config.validate accepts any clean absolute disjoint path, so the proof may
+// sit below a directory the pinned image does not carry, and without a mkdir
+// the redirect fails and no proof is exported at all.
+func TestObserverScriptCreatesProofParent(t *testing.T) {
+	cfg := testConfig()
+	cfg.BaseProofPath = "/proof/nested/base.txt"
+	script := observerScript(cfg, testOwnershipLabel().Value)
+	if !strings.Contains(script, "mkdir -p '/proof/nested'") {
+		t.Errorf("observer script does not create the proof's parent directory:\n%s", script)
+	}
+	// The default sits at the image root and needs no mkdir; emitting one would
+	// be noise in the golden every reader has to discount.
+	if root := observerScript(testConfig(), testOwnershipLabel().Value); strings.Contains(root, "mkdir -p") {
+		t.Errorf("observer script creates a directory for a root-level proof path:\n%s", root)
+	}
+}
+
 // TestSeederSpecShape asserts the properties the golden would let drift
 // silently if someone regenerated it: the seeder is credential-free,
 // network-free, and holds the workspace read-write at the configured target.

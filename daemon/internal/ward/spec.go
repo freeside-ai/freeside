@@ -487,6 +487,14 @@ const lostFoundDir = "lost+found"
 func observerScript(cfg Config, nonce string) string {
 	ws := shellQuote(cfg.WorkspaceTarget)
 	proof := shellQuote(cfg.BaseProofPath)
+	// Config.validate accepts any clean absolute path disjoint from the others,
+	// so the proof may sit below a directory the pinned image does not carry.
+	// Without this the redirect fails, no proof is exported, and every seeded
+	// handoff fails on a configuration the gate said was valid.
+	mkProofDir := ""
+	if parent := path.Dir(cfg.BaseProofPath); parent != "/" && parent != "." {
+		mkProofDir = "mkdir -p " + shellQuote(parent) + "; "
+	}
 	// No `set -e`: every branch must reach the proof write, because a proof
 	// that reports an unexpected observation is what verifyBaseProof rejects.
 	// A missing proof file and a proof reporting "absent" are both failures,
@@ -499,7 +507,7 @@ func observerScript(cfg Config, nonce string) string {
 	// detached commit. verifyBaseProof re-tests the shape host-side and would
 	// still refuse it, but the guest expression must be strict on its own
 	// rather than leaning on an unstated environment assumption.
-	return "LC_ALL=C; export LC_ALL; " +
+	return "LC_ALL=C; export LC_ALL; " + mkProofDir +
 		"g=absent; if [ -d " + ws + "/.git ]; then g=present; fi; " +
 		"d=no; s=none; " +
 		"if [ -f " + ws + "/.git/HEAD ]; then " +
