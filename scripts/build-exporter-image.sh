@@ -2,7 +2,8 @@
 # Build the Freeside exporter image (issue #170).
 #
 # Cross-compiles the static freeside-export helper and assembles the OCI image
-# that ships it at the contracted path (images/exporter/Containerfile). Prints a
+# that ships it at the contracted path (images/exporter/Containerfile), together
+# with the pinned git used by ward's read-only base observer. Prints a
 # name@sha256:<digest> reference for ward's ExporterImage and the live
 # conformance tests (FREESIDE_WARD_EXPORTER_IMAGE).
 #
@@ -96,7 +97,12 @@ if [ -n "$local_registry_port" ]; then
 fi
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
-context="$repo_root/images/exporter"
+source_context="$repo_root/images/exporter"
+context=$(mktemp -d)
+if [ -z "$context" ] || [ "$context" = "/" ]; then
+	echo "build-exporter-image: could not create a private build context" >&2
+	exit 1
+fi
 binary="$context/freeside-export"
 registry_container=""
 
@@ -112,7 +118,11 @@ remove_registry() {
 cleanup() {
 	status=$?
 	trap - EXIT
-	rm -f "$binary"
+	rm -f "$binary" "$context/Containerfile"
+	if ! rmdir "$context" && [ "$status" -eq 0 ]; then
+		echo "build-exporter-image: private build context was not empty at cleanup" >&2
+		status=1
+	fi
 	if ! remove_registry && [ "$status" -eq 0 ]; then
 		status=1
 	fi
@@ -121,6 +131,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 
+cp "$source_context/Containerfile" "$context/Containerfile"
 echo "build-exporter-image: cross-compiling the static exporter helper" >&2
 (
 	cd "$repo_root/daemon"

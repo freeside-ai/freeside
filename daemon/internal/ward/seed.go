@@ -90,7 +90,7 @@ func stageSeedSource(cfg Config, dir, declaredRepo string, declaredRepositoryID 
 	defer srcRoot.Close() //nolint:errcheck // read-only handle
 
 	remaining := cfg.MaxSeedBytes
-	var entries, worktreeFiles, gitConfigContentIndex int
+	var entries, gitConfigContentIndex int
 	var gitConfigSourceBytes int64
 	gitConfigContentIndex = -1
 	var contentLines, execPaths, dirPaths []string
@@ -140,9 +140,6 @@ func stageSeedSource(cfg Config, dir, declaredRepo string, declaredRepositoryID 
 			return copyErr
 		}
 		remaining -= written
-		if !isUnderGitDir(rel) {
-			worktreeFiles++
-		}
 		contentLine := sum + "  " + findPath(rel)
 		if filepath.ToSlash(rel) == ".git/config" {
 			gitConfigContentIndex = len(contentLines)
@@ -167,21 +164,10 @@ func stageSeedSource(cfg Config, dir, declaredRepo string, declaredRepositoryID 
 	if head.Size() > maxGitHeadBytes {
 		return "", failf(CheckWorkspaceSeeding, "seed source carries an oversized %s", gitHeadPath)
 	}
-	// A checkout with a .git but no working tree is the case the intended
-	// producer actually hands over: publish.Transport.FetchBase moves HEAD to
-	// the base and never checks anything out. Copying it would give the writer
-	// an empty workspace that still carries the declared HEAD, so a HEAD-only
-	// attestation would report it seeded at the exact base.
-	//
-	// This is a conservative refusal, not a diagnosis. Without git the gate
-	// cannot tell an unmaterialized checkout from a base whose commit tree is
-	// legitimately empty, so it refuses both and the reason says so rather than
-	// asserting a cause it cannot establish. Distinguishing them needs the
-	// commit's own tree, which is #330.
-	if worktreeFiles == 0 {
-		return "", failf(CheckWorkspaceSeeding,
-			"seed source carries only a git directory: either its checkout was never materialized or the base commit's tree is empty")
-	}
+	// Do not infer materialization from the presence of an ordinary worktree
+	// file. A legitimately empty commit has none. The read-only observer
+	// compares the raw files and modes with HEAD and distinguishes that valid
+	// case from an unmaterialized checkout of a non-empty commit.
 	// Bound to the SNAPSHOT, not the source it came from. Checking the mutable
 	// source would leave the same window the snapshot exists to close: a
 	// checkout swapped mid-walk could put another repository into the snapshot,
@@ -504,12 +490,6 @@ func parseSeedGitConfigSection(line string) (section, subsection string, ok bool
 		subsection = strings.ToLower(subsection)
 	}
 	return strings.ToLower(section), subsection, true
-}
-
-// isUnderGitDir reports whether a source-relative path is the repository's own
-// git directory rather than working-tree content.
-func isUnderGitDir(rel string) bool {
-	return rel == ".git" || strings.HasPrefix(rel, ".git"+string(os.PathSeparator))
 }
 
 func fileSHA256(p string) (string, error) {

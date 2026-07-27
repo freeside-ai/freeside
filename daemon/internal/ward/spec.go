@@ -443,11 +443,17 @@ const (
 	baseProofDetachedKey = "head_detached"
 	baseProofSHAKey      = "base_sha"
 	baseProofTreeKey     = "tree_sha256"
-	// baseProofWorktreeKey reports whether the workspace holds working-tree
-	// content at all, separately from the tree digest, so the case the
-	// intended producer actually causes -- a .git with nothing checked out --
-	// names itself instead of surfacing as an opaque digest mismatch.
+	// baseProofWorktreeKey reports whether raw worktree paths, bytes, and
+	// executable bits exactly match the commit tree, without Git attribute
+	// conversions or the copied index participating. "clean" accepts a
+	// legitimately empty commit; an unmaterialized non-empty checkout is dirty
+	// because every tracked path is missing.
 	baseProofWorktreeKey = "worktree"
+	// baseProofReplacementsKey reports whether the repository carries replace
+	// refs or legacy grafts. The observer disables their interpretation while
+	// resolving the commit, and refuses their presence so the writer cannot
+	// see a different history than the gate proved.
+	baseProofReplacementsKey = "git_replacements"
 	// baseProofIrregularKey reports whether the workspace holds anything that
 	// is neither a regular file nor a directory.
 	//
@@ -480,10 +486,11 @@ const lostFoundDir = "lost+found"
 // into the image or left behind by an earlier run would satisfy the gate, and
 // the attestation would prove only that some workspace once held some base.
 //
-// HEAD is read directly rather than resolved with git: a checkout from
-// publish.Transport.FetchBase is detached at the base, so HEAD holds the raw
-// commit, and requiring that shape is stricter than resolving a symbolic ref
-// would be. A workspace whose HEAD is symbolic is refused rather than followed.
+// The raw HEAD shape is checked before Git resolves it: a checkout from
+// publish.Transport.FetchBase is detached at the base, so requiring the
+// 40-lowercase-hex shape is stricter than following a symbolic ref. Git then
+// resolves that commit with replacement processing disabled and compares the
+// read-only worktree's raw paths, bytes, and modes with its tree.
 func observerScript(cfg Config, nonce string) string {
 	ws := shellQuote(cfg.WorkspaceTarget)
 	proof := shellQuote(cfg.BaseProofPath)
@@ -509,31 +516,25 @@ func observerScript(cfg Config, nonce string) string {
 	// rather than leaning on an unstated environment assumption.
 	return "LC_ALL=C; export LC_ALL; " + mkProofDir +
 		"g=absent; if [ -d " + ws + "/.git ]; then g=present; fi; " +
-		"d=no; s=none; " +
+		"d=no; s=none; w=error; r=error; " +
 		"if [ -f " + ws + "/.git/HEAD ]; then " +
 		"h=\"$(cat " + ws + "/.git/HEAD 2>/dev/null || true)\"; " +
 		// The shape test is the detachment test: a symbolic ref does not match
 		// 40 hex characters, so one expression settles both.
 		"case \"$h\" in " +
 		"*[!0-9a-f]*) ;; " +
-		"????????????????????????????????????????) d=yes; s=\"$h\";; " +
+		"????????????????????????????????????????) d=yes;; " +
 		"esac; fi; " +
-		// Working-tree content, reported on its own: a checkout with a .git and
-		// nothing checked out is what publish.Transport.FetchBase produces, so
-		// it is the likeliest wrong workspace and deserves to name itself
-		// rather than arrive as an opaque digest mismatch.
-		"w=absent; if [ -n \"$(cd " + ws + " 2>/dev/null && " +
-		"find . -path ./.git -prune -o -type f -print 2>/dev/null | head -n 1)\" ]; " +
-		"then w=present; fi; " +
-		// The tree digest, over the two dimensions a git tree distinguishes:
-		// every regular file's sha256 against its path, and which files carry
-		// the user-execute bit. Each is hashed from bytewise-sorted lines and
-		// the two results are hashed together. The host computes it the same
-		// way over the verified source, so the two agree only if the tree that
-		// landed is the tree the gate approved. LC_ALL=C above is what makes
-		// both sorts byte-ordered.
+		observerGitScript(cfg.WorkspaceTarget, cfg.BaseProofPath+".git") +
+		// The tree digest, over the three dimensions the gate preserves: every
+		// regular file's sha256 against its path, which files carry the
+		// user-execute bit, and which directories exist. Each is hashed from
+		// bytewise-sorted lines and the three results are hashed together. The
+		// host computes it the same way over the verified source, so the two
+		// agree only if the tree that landed is the tree the gate approved.
+		// LC_ALL=C above is what makes the sorts byte-ordered.
 		//
-		// Two batched passes rather than a per-file loop: a real checkout is
+		// Three batched passes rather than a per-file loop: a real checkout is
 		// thousands of files, and spawning a process each would put that cost
 		// on every seeded handoff.
 		// Anything that is not a regular file or a directory, reported so the
@@ -554,9 +555,77 @@ func observerScript(cfg Config, nonce string) string {
 		baseProofDetachedKey + "=%s\\n" +
 		baseProofSHAKey + "=%s\\n" +
 		baseProofWorktreeKey + "=%s\\n" +
+		baseProofReplacementsKey + "=%s\\n" +
 		baseProofIrregularKey + "=%s\\n" +
 		baseProofTreeKey + "=%s\\n' " +
-		shellQuote(nonce) + " \"$g\" \"$d\" \"$s\" \"$w\" \"$n\" \"$t\" > " + proof + "; sync"
+		shellQuote(nonce) + " \"$g\" \"$d\" \"$s\" \"$w\" \"$r\" \"$n\" \"$t\" > " + proof + "; sync"
+}
+
+// observerGitScript resolves HEAD and compares the raw worktree against its
+// commit tree. It expects d to say whether the raw HEAD was detached and leaves
+// s (resolved commit), w (clean, dirty, or error), and r (replacement metadata
+// absent, present, or error) for the proof renderer. Scratch files live on the
+// observer's own writable rootfs; the workspace remains read-only.
+func observerGitScript(workspace, scratchPrefix string) string {
+	ws := shellQuote(workspace)
+	commitFile := shellQuote(scratchPrefix + ".commit")
+	treeFile := shellQuote(scratchPrefix + ".tree")
+	expectedFile := shellQuote(scratchPrefix + ".expected")
+	actualFile := shellQuote(scratchPrefix + ".actual")
+	pathFile := shellQuote(scratchPrefix + ".paths")
+	expectedHashFile := shellQuote(scratchPrefix + ".expected-hashes")
+	actualHashFile := shellQuote(scratchPrefix + ".actual-hashes")
+	expectedExecFile := shellQuote(scratchPrefix + ".expected-exec")
+	actualExecFile := shellQuote(scratchPrefix + ".actual-exec")
+	replacementsFile := shellQuote(scratchPrefix + ".replacements")
+	dirtyFile := shellQuote(scratchPrefix + ".dirty")
+	gitEnv := "GIT_CONFIG_NOSYSTEM=1 HOME=/nonexistent XDG_CONFIG_HOME=/nonexistent "
+	git := gitEnv + "git -c safe.directory=" + ws + " -C " + ws + " "
+	rawGit := "GIT_NO_REPLACE_OBJECTS=1 " + git
+	batchHash := "env GIT_NO_REPLACE_OBJECTS=1 GIT_CONFIG_NOSYSTEM=1 HOME=/nonexistent " +
+		"XDG_CONFIG_HOME=/nonexistent git -c safe.directory=" + ws + " -C " + ws +
+		" hash-object --no-filters -- "
+	cleanup := "rm -f " + commitFile + " " + treeFile + " " + expectedFile + " " +
+		actualFile + " " + pathFile + " " + expectedHashFile + " " + actualHashFile + " " +
+		expectedExecFile + " " + actualExecFile + " " + replacementsFile + " " + dirtyFile + "; "
+	processEntries := "tab=\"$(printf '\\t')\"; for entry do " +
+		"meta=\"${entry%%\"$tab\"*}\"; p=\"${entry#*\"$tab\"}\"; " +
+		"mode=\"${meta%% *}\"; rest=\"${meta#* }\"; type=\"${rest%% *}\"; oid=\"${rest#* }\"; " +
+		"case \"$mode $type\" in '100644 blob'|'100755 blob') ;; " +
+		"*) : > " + dirtyFile + "; continue;; esac; " +
+		"file=" + ws + "/\"$p\"; if [ ! -f \"$file\" ] || [ -L \"$file\" ]; " +
+		"then : > " + dirtyFile + "; continue; fi; " +
+		"printf '%s\\000' \"$p\" >> " + pathFile + "; printf '%s\\n' \"$oid\" >> " + expectedHashFile + "; " +
+		"printf './%s\\n' \"$p\" >> " + expectedFile + "; " +
+		"if [ \"$mode\" = 100755 ]; then printf './%s\\n' \"$p\" >> " + expectedExecFile + "; fi; done"
+	return cleanup +
+		"if [ \"$d\" = yes ] && " +
+		rawGit + "rev-parse --verify 'HEAD^{commit}' > " + commitFile + " 2>/dev/null; then " +
+		"s=\"$(cat " + commitFile + " 2>/dev/null || true)\"; " +
+		"if [ \"$s\" = \"$h\" ] && " + git + "replace -l > " + replacementsFile + " 2>/dev/null; then " +
+		"if [ -s " + replacementsFile + " ] || [ -e " + ws + "/.git/info/grafts ]; " +
+		"then r=present; else r=absent; fi; fi; " +
+		"if [ \"$r\" = absent ] && " +
+		rawGit + "ls-tree -rz --full-tree HEAD > " + treeFile + " 2>/dev/null; then " +
+		"w=clean; : > " + expectedFile + "; : > " + pathFile + "; : > " + expectedHashFile +
+		"; : > " + expectedExecFile + "; " +
+		"if ! xargs -0 -n 100 sh -c " + shellQuote(processEntries) + " sh < " + treeFile +
+		"; then w=error; elif [ -e " + dirtyFile + " ]; then w=dirty; fi; " +
+		"if [ \"$w\" = clean ]; then " +
+		"if [ -s " + pathFile + " ]; then xargs -0 -n 100 " + batchHash + "< " + pathFile +
+		" > " + actualHashFile + " 2>/dev/null || w=dirty; else : > " + actualHashFile + "; fi; " +
+		"fi; if [ \"$w\" = clean ]; then " +
+		"(cd " + ws + " && find . -path ./.git -prune -o -type f -print | LC_ALL=C sort) > " +
+		actualFile + " 2>/dev/null || w=error; " +
+		"(cd " + ws + " && find . -path ./.git -prune -o -type f -perm -u+x -print | LC_ALL=C sort) > " +
+		actualExecFile + " 2>/dev/null || w=error; " +
+		"fi; if [ \"$w\" = clean ]; then " +
+		"LC_ALL=C sort -o " + expectedFile + " " + expectedFile + " 2>/dev/null && " +
+		"LC_ALL=C sort -o " + expectedExecFile + " " + expectedExecFile + " 2>/dev/null || w=error; fi; " +
+		"if [ \"$w\" = clean ] && { ! cmp -s " + expectedFile + " " + actualFile +
+		" || ! cmp -s " + expectedHashFile + " " + actualHashFile +
+		" || ! cmp -s " + expectedExecFile + " " + actualExecFile + "; }; then w=dirty; fi; " +
+		"fi; fi; " + cleanup
 }
 
 // cloneContainerSpec detaches every reference field before a spec crosses the

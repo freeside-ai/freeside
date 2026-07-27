@@ -2,13 +2,20 @@
 #
 # The digest-pinned image ward runs in the fresh, credential-free exporter VM.
 # It ships the trusted static freeside-export helper at the contracted path
-# (daemon/internal/export.HelperPath) on top of a digest-pinned busybox base.
+# (daemon/internal/export.HelperPath) and the pinned git used by ward's
+# read-only seeded-worktree observer, on top of a digest-pinned busybox base.
 #
 # The busybox shell is a required capability, not an attack surface: the exporter
 # VM is fresh, credential-free, network-disabled, and destroyed after one use,
 # and the suite's conformance probes (the networkless proof and the in-exporter
 # check-5 proof) run their shell scripts inside this same image.
 FROM docker.io/library/alpine:3.22@sha256:2c9d26f410d032d5b1525aa8a873e238b05b90c4ae8618743d4311f0cc827e37
+
+# The observer uses git's object plumbing to compare raw worktree bytes and
+# executable modes with HEAD while replacement objects are disabled. Pin the
+# package version as well as the Alpine base so an exporter-image rebuild
+# cannot silently change the verifier implementation.
+RUN apk add --no-cache git=2.49.1-r0
 
 # scripts/build-exporter-image.sh cross-compiles this static linux/arm64 binary
 # into the build context before invoking the image build.

@@ -327,11 +327,15 @@ func verifyBaseProof(data []byte, nonce, treeDigest string) (string, error) {
 		baseProofNonceKey:    nonce,
 		baseProofGitDirKey:   "present",
 		baseProofDetachedKey: "yes",
-		// Named separately from the digest so the likeliest wrong workspace --
-		// a git directory with nothing checked out, which is exactly what
-		// publish.Transport.FetchBase produces -- fails as itself rather than
-		// as an opaque digest mismatch.
-		baseProofWorktreeKey: "present",
+		// The observer hashes raw worktree bytes without clean filters and
+		// compares those blob IDs and executable modes directly with HEAD. A
+		// legitimate empty commit is clean; an unmaterialized non-empty
+		// checkout is dirty.
+		baseProofWorktreeKey: "clean",
+		// Replacement refs and legacy grafts change the object graph Git shows
+		// the writer. The observer disables them while proving HEAD and also
+		// requires that the copied repository carries none.
+		baseProofReplacementsKey: "absent",
 		// The host refuses symlinks and every other non-regular kind in the
 		// source; this is that refusal observed on the volume, so a source
 		// mutated between the walk and the copy cannot slip one past both.
@@ -380,7 +384,8 @@ func verifyBaseProof(data []byte, nonce, treeDigest string) (string, error) {
 	}
 	for _, key := range []string{
 		baseProofNonceKey, baseProofGitDirKey, baseProofDetachedKey,
-		baseProofSHAKey, baseProofWorktreeKey, baseProofIrregularKey, baseProofTreeKey,
+		baseProofSHAKey, baseProofWorktreeKey, baseProofReplacementsKey,
+		baseProofIrregularKey, baseProofTreeKey,
 	} {
 		if !seen[key] {
 			return "", failf(CheckObservedBaseIdentity, "base proof omits a required key")

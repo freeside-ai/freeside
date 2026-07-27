@@ -28,14 +28,16 @@ temporary loopback one.
 ## exporter/
 
 The digest-pinned image ward runs in the fresh, credential-free exporter VM
-(plan §5.6/§5.7). It ships the trusted static `freeside-export` helper at
-`/usr/local/bin/freeside-export` on a pinned Alpine base (the base's BusyBox
-shell is required by the conformance probes). Build it and print its digest
+(plan §5.6/§5.7), and reuses for the workspace seeder and read-only base
+observer. It ships the trusted static `freeside-export` helper at
+`/usr/local/bin/freeside-export`, the pinned Git used to compare a seeded
+worktree with its declared commit, and the pinned Alpine base whose BusyBox
+shell is required by the conformance probes. Build it and print its digest
 reference with `scripts/build-exporter-image.sh`; the copied `freeside-export`
-binary is a build artifact and is gitignored. Ward resolves a digest only through
-a registry (Apple `container` 1.1.0 does not resolve a local-only digest), so a
-live run pushes the image to a registry and pins the pushed digest — see the
-build script's header.
+binary is a build artifact and is gitignored. Ward resolves a digest only
+through a registry (Apple `container` 1.1.0 does not resolve a local-only
+digest), so a live run pushes the image to a registry and pins the pushed
+digest; see the build script's header.
 
 ## Agent Claude
 

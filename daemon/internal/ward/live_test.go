@@ -382,6 +382,38 @@ func rungitLive(t *testing.T, dir string, args ...string) string {
 	return string(out)
 }
 
+// initLiveSeedCheckout creates the real committed checkout the read-only
+// observer requires, and stamps the daemon-authored repository identity that
+// stageSeedSource re-gates. Callers may add files before commitLiveSeedCheckout
+// so the live test can exercise specific tree shapes.
+func initLiveSeedCheckout(t *testing.T, root string) string {
+	t.Helper()
+	dir := filepath.Join(root, "checkout")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rungitLive(t, dir, "init", "-q")
+	rungitLive(t, dir, "config", "freeside.transport.repo", testBaseRevision().Repo)
+	if err := os.WriteFile(
+		filepath.Join(dir, filepath.FromSlash(seedRepoBindingIDPath)),
+		[]byte(fmt.Sprintf("%d\n", testBaseRevision().RepositoryID)),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func commitLiveSeedCheckout(t *testing.T, dir string) domain.BaseRevision {
+	t.Helper()
+	rungitLive(t, dir, "add", "--all")
+	rungitLive(t, dir, "commit", "-q", "--allow-empty", "-m", "base")
+	base := testBaseRevision()
+	base.BaseSHA = strings.TrimSpace(rungitLive(t, dir, "rev-parse", "HEAD"))
+	rungitLive(t, dir, "checkout", "--detach", "-q", "HEAD")
+	return base
+}
+
 func scrubbedLiveGitEnv() []string {
 	var env []string
 	for _, entry := range os.Environ() {
@@ -452,11 +484,11 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 		_ = rt.DeleteVolume(ctx, names.Workspace)
 	})
 
-	// alpine stands in for the exporter image: the seeding roles need only a
-	// shell and coreutils, and this keeps the test runnable without building
-	// and publishing the exporter image first.
 	root := t.TempDir()
-	checkout := writeSeedCheckout(t, root, testBaseSHA)
+	checkout := initLiveSeedCheckout(t, root)
+	if err := os.WriteFile(filepath.Join(checkout, "README.md"), []byte("fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	// An executable file, so the digest's exec-bit dimension is exercised
 	// against the real runtime rather than only against the fake: if
 	// `container copy` or the seeder's `cp -a` ever stopped preserving modes,
@@ -476,8 +508,9 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(checkout, "lost+found", "tracked.txt"), []byte("tracked\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	base := commitLiveSeedCheckout(t, checkout)
 	cfg := testConfig()
-	cfg.ExporterImage = liveImage
+	cfg.ExporterImage = liveExporterImage(t)
 	cfg.SeedRoot = root
 	cfg.PollInterval = 500 * time.Millisecond
 	cfg.SeedTimeout = 2 * time.Minute
@@ -488,7 +521,7 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 	hs := HandoffSpec{
 		RunID:           runID,
 		WorkspaceSizeMB: 64,
-		Seed:            WorkspaceSeed{Mode: SeedBaseCheckout, SourceDir: checkout, Base: testBaseRevision()},
+		Seed:            WorkspaceSeed{Mode: SeedBaseCheckout, SourceDir: checkout, Base: base},
 		Agent:           AgentSpec{Image: liveImage, Command: []string{"sh", "-c", "true"}},
 	}
 	label, err := newOwnershipLabel()
@@ -528,8 +561,8 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("observeSeededBase: %v", err)
 	}
-	if observed != testBaseSHA {
-		t.Errorf("observed base = %q, want %q", observed, testBaseSHA)
+	if observed != base.BaseSHA {
+		t.Errorf("observed base = %q, want %q", observed, base.BaseSHA)
 	}
 
 	// A workspace holding a different base must be refused, not reported. This
