@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 // gitHeadPath is the file the observer later reads the seeded base from. A
@@ -71,10 +72,6 @@ func stageSeedSource(cfg Config, dir, declaredRepo, snapshot string) (digest str
 	if !info.IsDir() {
 		return "", failf(CheckWorkspaceSeeding, "seed source is not a directory")
 	}
-	if err := verifySeedRepoBinding(resolved, declaredRepo); err != nil {
-		return "", err
-	}
-
 	remaining := cfg.MaxSeedBytes
 	var entries, worktreeFiles int
 	var contentLines, execPaths, dirPaths []string
@@ -117,14 +114,13 @@ func stageSeedSource(cfg Config, dir, declaredRepo, snapshot string) (digest str
 		case !d.Type().IsRegular():
 			return failf(CheckWorkspaceSeeding, "seed source contains a non-regular file")
 		}
-		fi, err := d.Info()
-		if err != nil {
-			return failf(CheckWorkspaceSeeding, "seed source entry could not be sized")
-		}
 		// Copy and hash in one pass, bounded as it goes. The budget applies to
 		// bytes actually written, not to a size read before the copy, so a file
-		// growing underneath cannot spend more than the cap allows.
-		sum, written, copyErr := copySeedFile(p, dest, fi.Mode().Perm(), remaining)
+		// growing underneath cannot spend more than the cap allows. The mode
+		// comes from the opened descriptor, not from the walk entry, for the
+		// same reason the open refuses to follow: the entry describes what was
+		// there at walk time.
+		sum, written, perm, copyErr := copySeedFile(p, dest, remaining)
 		if copyErr != nil {
 			return copyErr
 		}
@@ -134,7 +130,7 @@ func stageSeedSource(cfg Config, dir, declaredRepo, snapshot string) (digest str
 		}
 		contentLines = append(contentLines, sum+"  "+findPath(rel))
 		// The user-execute bit only, which is the one a git tree records.
-		if fi.Mode().Perm()&0o100 != 0 {
+		if perm&0o100 != 0 {
 			execPaths = append(execPaths, findPath(rel))
 		}
 		return nil
@@ -163,6 +159,13 @@ func stageSeedSource(cfg Config, dir, declaredRepo, snapshot string) (digest str
 		return "", failf(CheckWorkspaceSeeding,
 			"seed source carries only a git directory: either its checkout was never materialized or the base commit's tree is empty")
 	}
+	// Bound to the SNAPSHOT, not the source it came from. Checking the mutable
+	// source would leave the same window the snapshot exists to close: a
+	// checkout swapped mid-walk could put another repository into the snapshot,
+	// and its digest and HEAD would be self-consistent about the wrong thing.
+	if err := verifySeedRepoBinding(snapshot, declaredRepo); err != nil {
+		return "", err
+	}
 	return treeDigest(contentLines, execPaths, dirPaths), nil
 }
 
@@ -179,30 +182,45 @@ func findPath(rel string) string {
 // writes and refusing to write more than budget. Hashing what is written, not
 // what was read from a separate pass, is what makes the digest describe the
 // snapshot exactly.
-func copySeedFile(src, dest string, perm fs.FileMode, budget int64) (sum string, written int64, err error) {
-	in, err := os.Open(src) //nolint:gosec // inside the daemon's own seed root, already resolved and contained
+//
+// The open refuses to follow a symlink, and the type and permissions come from
+// the opened descriptor rather than the walk's directory entry. That entry
+// describes what was there when the walk passed it; an entry replaced by a
+// symlink in between would otherwise be followed, and the target's bytes, from
+// anywhere on the host, would be stored as a regular file whose digest and
+// irregular=absent report are perfectly self-consistent about the wrong thing.
+func copySeedFile(src, dest string, budget int64) (sum string, written int64, perm fs.FileMode, err error) {
+	in, err := os.OpenFile(src, os.O_RDONLY|syscall.O_NOFOLLOW, 0) //nolint:gosec // inside the daemon's own seed root, already resolved and contained
 	if err != nil {
-		return "", 0, failf(CheckWorkspaceSeeding, "seed source entry could not be opened")
+		return "", 0, 0, failf(CheckWorkspaceSeeding, "seed source entry could not be opened without following a link")
 	}
-	defer in.Close()                                                              //nolint:errcheck // read-only handle
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm.Perm()) //nolint:gosec // gate-owned snapshot under a fresh temp directory
+	defer in.Close() //nolint:errcheck // read-only handle
+	st, err := in.Stat()
 	if err != nil {
-		return "", 0, failf(CheckWorkspaceSeeding, "seed snapshot entry could not be created")
+		return "", 0, 0, failf(CheckWorkspaceSeeding, "seed source entry could not be examined")
+	}
+	if !st.Mode().IsRegular() {
+		return "", 0, 0, failf(CheckWorkspaceSeeding, "seed source entry is not a regular file")
+	}
+	perm = st.Mode().Perm()
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm) //nolint:gosec // gate-owned snapshot under a fresh temp directory
+	if err != nil {
+		return "", 0, 0, failf(CheckWorkspaceSeeding, "seed snapshot entry could not be created")
 	}
 	h := sha256.New()
 	// One byte past the budget is enough to know the source outgrew it.
 	written, copyErr := io.Copy(io.MultiWriter(out, h), io.LimitReader(in, budget+1))
 	closeErr := out.Close()
 	if copyErr != nil {
-		return "", 0, failf(CheckWorkspaceSeeding, "seed source entry could not be staged")
+		return "", 0, 0, failf(CheckWorkspaceSeeding, "seed source entry could not be staged")
 	}
 	if closeErr != nil {
-		return "", 0, failf(CheckWorkspaceSeeding, "seed snapshot entry could not be closed")
+		return "", 0, 0, failf(CheckWorkspaceSeeding, "seed snapshot entry could not be closed")
 	}
 	if written > budget {
-		return "", 0, failf(CheckWorkspaceSeeding, "seed source exceeds the byte budget")
+		return "", 0, 0, failf(CheckWorkspaceSeeding, "seed source exceeds the byte budget")
 	}
-	return hex.EncodeToString(h.Sum(nil)), written, nil
+	return hex.EncodeToString(h.Sum(nil)), written, perm, nil
 }
 
 // The daemon-authored mark publish.Transport.FetchBase stamps into a checkout's

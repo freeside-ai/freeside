@@ -242,6 +242,46 @@ func TestVerifyBaseProofNeverEchoesContent(t *testing.T) {
 	}
 }
 
+// TestCopySeedFileRefusesSymlink pins the substitution race directly: the walk
+// classifies an entry, and by the time the copy opens it the entry may be a
+// symlink pointing anywhere on the host. Following it would store the target's
+// bytes as a regular file whose digest and irregular=absent report agree with
+// each other about the wrong thing.
+func TestCopySeedFileRefusesSymlink(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "outside.txt")
+	if err := os.WriteFile(outside, []byte("host data\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "entry")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err := copySeedFile(link, filepath.Join(dir, "dest"), 1<<20)
+	wantCheckFailure(t, err, CheckWorkspaceSeeding)
+	if _, statErr := os.Stat(filepath.Join(dir, "dest")); statErr == nil {
+		t.Error("a refused entry still produced a snapshot file")
+	}
+}
+
+// TestCopySeedFileTakesModeFromTheDescriptor proves the executable bit is read
+// from what was opened, not from a walk entry that may since have changed.
+func TestCopySeedFileTakesModeFromTheDescriptor(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "run.sh")
+	//nolint:gosec // the executable bit is the property under test
+	if err := os.WriteFile(src, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, _, perm, err := copySeedFile(src, filepath.Join(dir, "dest"), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm&0o100 == 0 {
+		t.Errorf("perm = %o, want the executable bit set", perm)
+	}
+}
+
 func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	root := t.TempDir()
 	dir := writeSeedCheckout(t, root, testBaseSHA)
