@@ -67,6 +67,16 @@ type WorkspaceObservation struct {
 	// Seeded is true only when the gate placed a declared base into the
 	// workspace and then proved the result. A caller cannot set it, and a
 	// seeding attempt that was not attested does not reach here at all.
+	//
+	// What it asserts, exactly: the workspace holds the tree the daemon staged
+	// and declared as this base. It does NOT assert that the staged tree is
+	// faithful to the commit BaseSHA names — the gate has no git in the
+	// observer image, so it can compare the workspace against the source it
+	// verified but not against the commit's own tree. A caller that hands over
+	// a dirty checkout gets Seeded=true, and the gauntlet importer will then
+	// derive the pre-existing difference as agent output, since it computes
+	// changes against the trusted base tree. Closing that is #330, which must
+	// land before this field is used to admit real work.
 	Seeded bool
 	// ObservedBaseSHA is the base the workspace was observed to hold, read
 	// through a read-only mount by a container that did not write it. It is
