@@ -212,7 +212,15 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 		AuthorizationID:    &authID,
 		TrustProfileDigest: &liveProfileDigest,
 	}
-	resolver := fakeResolver{cand: cand, approved: approved}
+	// The drain refuses a recovered candidate without a head transport.
+	// This test's premise is a head commit that already exists in the
+	// live repo (the publisher creates refs, it does not upload
+	// objects), so there is nothing to push and a no-op capability is
+	// the live equivalent of the engine's transport-backed one.
+	resolver := fakeResolver{
+		cand: cand, approved: approved,
+		publishHead: func(context.Context, publish.GatedHead) error { return nil },
+	}
 	id, err := publish.DeriveIdentity(publish.IdentityInput{
 		Repo:            repo,
 		BaseRef:         baseRef,
