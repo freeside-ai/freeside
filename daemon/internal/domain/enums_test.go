@@ -128,6 +128,14 @@ func TestEnumValidity(t *testing.T) {
 		valids["BackupHealthStatus"] = append(valids["BackupHealthStatus"], v.valid)
 	}
 	invalids["BackupHealthStatus"] = BackupHealthStatus("").valid
+	for _, v := range AllUnattendedOperationStates {
+		valids["UnattendedOperationState"] = append(valids["UnattendedOperationState"], v.valid)
+	}
+	invalids["UnattendedOperationState"] = UnattendedOperationState("").valid
+	for _, v := range AllSupersessionKinds {
+		valids["SupersessionKind"] = append(valids["SupersessionKind"], v.valid)
+	}
+	invalids["SupersessionKind"] = SupersessionKind("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {

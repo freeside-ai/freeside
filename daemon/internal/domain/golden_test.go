@@ -153,6 +153,29 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The waived-posture shape (issues #319/#321): a system_health notice
+	// carrying the typed condition that supersedes its blocking effect, so the
+	// goldens pin the present render of blocking_supersession beside the
+	// explicit null the fixtures above keep.
+	supersededItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-3", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
+		Type:    domain.AttentionSystemHealth, Priority: domain.PriorityNormal,
+		Reason:            "unattended execution admitted under the backup-encryption waiver for repository 424242",
+		RequestedDecision: []domain.Action{domain.ActionAcknowledge, domain.ActionStopUnattended},
+		EvidenceSnapshot:  []domain.Artifact{},
+		AgentClaims:       []domain.AgentClaim{},
+		ItemVersion:       1,
+		InterruptionClass: domain.InterruptionExceptional,
+		BlockingSupersession: &domain.BlockingSupersession{
+			Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 424242,
+		},
+		Status: domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	device := domain.Device{
 		ID: "device-1", DisplayName: "Ben's iPhone",
 		Status: domain.DeviceActive, PairedAt: ts,
@@ -441,6 +464,7 @@ func TestGolden(t *testing.T) {
 		{"attention_item", item},
 		{"attention_item_blocked", blockedItem},
 		{"attention_item_decided", decidedItem},
+		{"attention_item_superseded", supersededItem},
 		{"command", command},
 		{"subject", subject},
 		{"agent_claim", agentClaim},

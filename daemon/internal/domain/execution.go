@@ -546,9 +546,8 @@ func AdmittedUnder(a ExecutionAdmission, policy AdmissionPolicy) error {
 		// only the operator's side would let a waiver for repository 42
 		// authorize a run against any other repository that repeats the
 		// number.
-		configured := policy.BackupEncryptionWaiverRepositoryID
 		waived := a.BackupEncryptionWaiver.RepositoryID
-		if configured == nil || *configured != waived {
+		if !waiverConfiguredFor(waived, policy) {
 			return fmt.Errorf("execution admission %s claims a waiver for repository %d: %w",
 				a.InvocationID, waived, ErrWaiverNotConfigured)
 		}
@@ -567,6 +566,17 @@ func AdmittedUnder(a ExecutionAdmission, policy AdmissionPolicy) error {
 		}
 	}
 	return nil
+}
+
+// waiverConfiguredFor reports whether current policy configures the §5.7
+// backup-encryption waiver for exactly repositoryID. It is the single
+// definition of "the operator holds this waiver": AdmittedUnder consumes it
+// for an admission that claims the waiver, and BlockingSupersession.Supersedes
+// consumes it for the degraded-posture notice that waiver supersedes, so the
+// two gates cannot drift apart (issue #321).
+func waiverConfiguredFor(repositoryID int64, policy AdmissionPolicy) bool {
+	configured := policy.BackupEncryptionWaiverRepositoryID
+	return configured != nil && *configured == repositoryID
 }
 
 // requiredCapabilities returns the floor a mode must clear: the configured

@@ -116,6 +116,13 @@ var (
 	ErrNonWaivableFinding          = errors.New("finding class is non-waivable")
 	ErrAgentWaiver                 = errors.New("an agent cannot author a waiver")
 
+	// Unattended operating-state and §4 blocking failures (issues #319, #321).
+	ErrInvalidUnattendedOperationState = errors.New("unknown unattended operation state")
+	ErrInvalidSupersessionKind         = errors.New("unknown blocking supersession kind")
+	ErrSupersessionOutsideSystemHealth = errors.New("blocking supersession is a system_health semantic")
+	ErrUnattendedOperationStopped      = errors.New("unattended operation is stopped by operator decision")
+	ErrBlockingSystemHealth            = errors.New("an open system_health item blocks unattended admission")
+
 	// Transition failures: how a persisted aggregate may change between its
 	// stored version and an update (the transition validators). A writer maps
 	// these onto its own conflict/stale-write errors at its boundary.

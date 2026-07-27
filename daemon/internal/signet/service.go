@@ -304,7 +304,7 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		domain.ActionAdjudicate, domain.ActionRetryWithCapability,
 		domain.ActionChooseAlternate, domain.ActionRequestChanges,
 		domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry,
-		domain.ActionReturnToAgent:
+		domain.ActionReturnToAgent, domain.ActionResumeUnattended:
 		return "", outcomePending
 	}
 	// Invalid zero value: unreachable past NewCommand's validation and

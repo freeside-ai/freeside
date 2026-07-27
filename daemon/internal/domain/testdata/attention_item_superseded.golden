@@ -1,22 +1,25 @@
 {
-  "id": "item-2",
+  "id": "item-3",
   "project_id": "proj-1",
   "subject": {
     "subject_type": "run",
     "subject_id": "run-1",
     "run_id": "run-1"
   },
-  "type": "blocked",
+  "type": "system_health",
   "priority": "normal",
-  "reason": "waiting on an external dependency",
-  "requested_decision": [],
+  "reason": "unattended execution admitted under the backup-encryption waiver for repository 424242",
+  "requested_decision": [
+    "acknowledge",
+    "stop_unattended"
+  ],
   "evidence_snapshot": [],
   "agent_claims": [],
   "artifact_digests": [],
   "pr_head_sha": "",
   "commit_plan_notice": null,
   "item_version": 1,
-  "interruption_class": "planned_gate",
+  "interruption_class": "exceptional",
   "conversation_id": null,
   "timing": {
     "delivery_count": 0,
@@ -27,6 +30,9 @@
   },
   "expires_when": null,
   "decided_at": null,
-  "blocking_supersession": null,
+  "blocking_supersession": {
+    "kind": "backup_encryption_waiver",
+    "repository_id": 424242
+  },
   "status": "open"
 }

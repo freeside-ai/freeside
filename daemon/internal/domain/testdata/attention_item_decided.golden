@@ -64,5 +64,6 @@
   },
   "expires_when": "2026-01-03T03:04:05Z",
   "decided_at": "2026-01-02T05:04:05Z",
+  "blocking_supersession": null,
   "status": "dismissed"
 }

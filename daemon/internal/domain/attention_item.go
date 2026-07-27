@@ -159,6 +159,82 @@ func (c AgentClaim) Validate() error {
 	return nil
 }
 
+// SupersessionKind names the class of validated configuration that can
+// supersede a system_health item's blocking effect (plan §4: "a validated
+// configuration supersedes it"). The zero value is invalid.
+type SupersessionKind string
+
+const (
+	// SupersessionBackupEncryptionWaiver: the §5.7 Phase 1A.2
+	// backup-encryption waiver supersedes the degraded-posture notice raised
+	// by an admission that ran under it.
+	SupersessionBackupEncryptionWaiver SupersessionKind = "backup_encryption_waiver"
+)
+
+// AllSupersessionKinds is the single registration point for supersession
+// kinds.
+var AllSupersessionKinds = []SupersessionKind{SupersessionBackupEncryptionWaiver}
+
+func (k SupersessionKind) valid() bool {
+	switch k {
+	case SupersessionBackupEncryptionWaiver:
+		return true
+	default:
+		return false
+	}
+}
+
+// BlockingSupersession is the typed condition under which an open
+// system_health item does not block unattended admission (plan §4, §5.7). It
+// names the validated configuration that supersedes the item's blocking
+// effect; it is never a stored verdict. Whether the condition currently holds
+// is re-evaluated against live policy at every admission (Supersedes), so
+// clearing or retargeting the configuration makes the still-open item
+// blocking again without any write.
+type BlockingSupersession struct {
+	Kind SupersessionKind `json:"kind"`
+	// RepositoryID is the exact trusted numeric repository ID the superseding
+	// waiver must cover (backup_encryption_waiver). Written by the daemon
+	// from the validated admission waiver, never client-supplied.
+	RepositoryID int64 `json:"repository_id"`
+}
+
+// Validate reports whether the condition is structurally sound. Payload rules
+// dispatch on kind, so a future kind must declare what its payload means; the
+// trailing return rejects the invalid zero kind.
+func (s BlockingSupersession) Validate() error {
+	switch s.Kind {
+	case SupersessionBackupEncryptionWaiver:
+		if s.RepositoryID <= 0 {
+			return fmt.Errorf("blocking supersession repository_id %d: %w", s.RepositoryID, ErrNonPositive)
+		}
+		return nil
+	}
+	return fmt.Errorf("blocking supersession kind %q: %w", s.Kind, ErrInvalidSupersessionKind)
+}
+
+// Supersedes reports whether the condition currently holds under policy: the
+// item's blocking effect is superseded exactly while the operator's validated
+// configuration covers it (§5.7: "whose blocking state the validated waiver
+// configuration supersedes"). The stored condition names what must hold; this
+// re-derivation against live policy is what makes it hold, so a decoded item
+// can never assert its own non-blocking state. It fails closed: an invalid
+// condition supersedes nothing.
+func (s BlockingSupersession) Supersedes(policy AdmissionPolicy) error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
+	switch s.Kind {
+	case SupersessionBackupEncryptionWaiver:
+		if !waiverConfiguredFor(s.RepositoryID, policy) {
+			return fmt.Errorf("blocking supersession names repository %d: %w",
+				s.RepositoryID, ErrWaiverNotConfigured)
+		}
+		return nil
+	}
+	return fmt.Errorf("blocking supersession kind %q: %w", s.Kind, ErrInvalidSupersessionKind)
+}
+
 // AttentionItem is a single request for human judgement (plan §4). Its timing
 // aggregates are derived from deliveries via WithTiming, never constructed
 // directly; its evidence snapshot admits only verifier/daemon artifacts under
@@ -203,7 +279,15 @@ type AttentionItem struct {
 	// recorded it is immutable (ValidateAttentionItemTransition): an
 	// idempotent command replay or a later re-put must not move or erase it.
 	DecidedAt *time.Time `json:"decided_at"`
-	Status    ItemStatus `json:"status"`
+	// BlockingSupersession is the typed condition under which this open
+	// system_health item does not block unattended admission (plan §4, §5.7),
+	// nil for every other item and for a health item that blocks
+	// unconditionally. Set at creation by the daemon from the validated
+	// configuration the item reports on; fixed once set
+	// (ValidateAttentionItemTransition), and never read as a verdict — the
+	// admission gate re-validates it against live policy (Supersedes).
+	BlockingSupersession *BlockingSupersession `json:"blocking_supersession"`
+	Status               ItemStatus            `json:"status"`
 }
 
 // AttentionItemInput carries the caller-supplied fields of an AttentionItem.
@@ -227,7 +311,10 @@ type AttentionItemInput struct {
 	InterruptionClass InterruptionClass
 	ConversationID    *ConversationID
 	ExpiresWhen       *time.Time
-	Status            ItemStatus
+	// BlockingSupersession may be set only by daemon-internal creators of
+	// system_health items; there is no client input path to it.
+	BlockingSupersession *BlockingSupersession
+	Status               ItemStatus
 }
 
 // NewAttentionItem builds a validated AttentionItem. Every artifact placed in
@@ -244,22 +331,23 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 	subject := in.Subject
 	subject.RunID = clonePtr(in.Subject.RunID)
 	item := AttentionItem{
-		ID:                in.ID,
-		ProjectID:         in.ProjectID,
-		Subject:           subject,
-		Type:              in.Type,
-		Priority:          in.Priority,
-		Reason:            in.Reason,
-		RequestedDecision: slices.Clone(in.RequestedDecision),
-		EvidenceSnapshot:  cloneArtifacts(in.EvidenceSnapshot),
-		AgentClaims:       cloneAgentClaims(in.AgentClaims),
-		PRHeadSHA:         in.PRHeadSHA,
-		CommitPlanNotice:  clonePtr(in.CommitPlanNotice),
-		ItemVersion:       in.ItemVersion,
-		InterruptionClass: in.InterruptionClass,
-		ConversationID:    clonePtr(in.ConversationID),
-		ExpiresWhen:       clonePtr(in.ExpiresWhen),
-		Status:            in.Status,
+		ID:                   in.ID,
+		ProjectID:            in.ProjectID,
+		Subject:              subject,
+		Type:                 in.Type,
+		Priority:             in.Priority,
+		Reason:               in.Reason,
+		RequestedDecision:    slices.Clone(in.RequestedDecision),
+		EvidenceSnapshot:     cloneArtifacts(in.EvidenceSnapshot),
+		AgentClaims:          cloneAgentClaims(in.AgentClaims),
+		PRHeadSHA:            in.PRHeadSHA,
+		CommitPlanNotice:     clonePtr(in.CommitPlanNotice),
+		ItemVersion:          in.ItemVersion,
+		InterruptionClass:    in.InterruptionClass,
+		ConversationID:       clonePtr(in.ConversationID),
+		ExpiresWhen:          clonePtr(in.ExpiresWhen),
+		BlockingSupersession: clonePtr(in.BlockingSupersession),
+		Status:               in.Status,
 	}
 	// Derive the binding set from the rendered evidence and claims, so the
 	// approval binds exactly what was shown (plan §3.1, §4). Validate re-derives
@@ -324,6 +412,18 @@ func (i AttentionItem) Validate() error {
 	}
 	if i.CommitPlanNotice != nil && !i.CommitPlanNotice.valid() {
 		return fmt.Errorf("item %s commit_plan_notice %q: %w", i.ID, *i.CommitPlanNotice, ErrInvalidCommitPlanNotice)
+	}
+	if i.BlockingSupersession != nil {
+		// Blocking is a system_health semantic (plan §4): only that type's
+		// blocking effect can be superseded, so a condition on any other type
+		// is a malformed item, not a benign extra.
+		if i.Type != AttentionSystemHealth {
+			return fmt.Errorf("item %s type %q carries a blocking supersession: %w",
+				i.ID, i.Type, ErrSupersessionOutsideSystemHealth)
+		}
+		if err := i.BlockingSupersession.Validate(); err != nil {
+			return fmt.Errorf("item %s: %w", i.ID, err)
+		}
 	}
 	if i.DecidedAt != nil {
 		if i.DecidedAt.IsZero() {
