@@ -109,6 +109,71 @@ func TestAllSeedModesValid(t *testing.T) {
 	}
 }
 
+func TestVerifyBaseProof(t *testing.T) {
+	const nonce = "0123456789abcdef0123456789abcdef"
+	good := []byte("nonce=" + nonce + "\ngit_dir=present\nhead_detached=yes\nbase_sha=" + testBaseSHA + "\n")
+
+	got, err := verifyBaseProof(good, nonce)
+	if err != nil {
+		t.Fatalf("conforming proof: %v, want nil", err)
+	}
+	if got != testBaseSHA {
+		t.Errorf("observed base = %q, want %q", got, testBaseSHA)
+	}
+
+	cases := []struct {
+		name  string
+		proof string
+	}{
+		{"empty", ""},
+		{"omits nonce", "git_dir=present\nhead_detached=yes\nbase_sha=" + testBaseSHA + "\n"},
+		{"omits git dir", "nonce=" + nonce + "\nhead_detached=yes\nbase_sha=" + testBaseSHA + "\n"},
+		{"omits detached", "nonce=" + nonce + "\ngit_dir=present\nbase_sha=" + testBaseSHA + "\n"},
+		{"omits sha", "nonce=" + nonce + "\ngit_dir=present\nhead_detached=yes\n"},
+		// The nonce is what binds the proof to this invocation; without the
+		// check, a file the image shipped with would satisfy the gate.
+		{"foreign nonce", "nonce=" + strings.Repeat("f", 32) + "\ngit_dir=present\nhead_detached=yes\nbase_sha=" + testBaseSHA + "\n"},
+		{"empty nonce", "nonce=\ngit_dir=present\nhead_detached=yes\nbase_sha=" + testBaseSHA + "\n"},
+		{"no git dir", "nonce=" + nonce + "\ngit_dir=absent\nhead_detached=yes\nbase_sha=" + testBaseSHA + "\n"},
+		{"symbolic head", "nonce=" + nonce + "\ngit_dir=present\nhead_detached=no\nbase_sha=" + testBaseSHA + "\n"},
+		{"abbreviated sha", "nonce=" + nonce + "\ngit_dir=present\nhead_detached=yes\nbase_sha=" + testBaseSHA[:12] + "\n"},
+		{"uppercase sha", "nonce=" + nonce + "\ngit_dir=present\nhead_detached=yes\nbase_sha=" + strings.ToUpper(testBaseSHA) + "\n"},
+		{"ref-shaped sha", "nonce=" + nonce + "\ngit_dir=present\nhead_detached=yes\nbase_sha=ref: refs/heads/main\n"},
+		{"unknown key", string(good) + "workspace_write=succeeded\n"},
+		{"repeated key", string(good) + "base_sha=" + strings.Repeat("c", 40) + "\n"},
+		{"repeated fixed key", string(good) + "git_dir=present\n"},
+		{"not key=value", string(good) + "garbage\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sha, err := verifyBaseProof([]byte(tc.proof), nonce)
+			wantCheckFailure(t, err, CheckObservedBaseIdentity)
+			if sha != "" {
+				t.Errorf("rejected proof still yielded a base %q", sha)
+			}
+		})
+	}
+}
+
+// TestVerifyBaseProofNeverEchoesContent holds the proof parser to the same
+// rule as check 5's: the bytes come out of an archive nothing has scanned, so
+// a refusal names the violation and never repeats what it read.
+func TestVerifyBaseProofNeverEchoesContent(t *testing.T) {
+	const nonce = "0123456789abcdef0123456789abcdef"
+	const planted = "attacker-controlled-fixture-value"
+	_, err := verifyBaseProof([]byte("nonce="+nonce+"\ngit_dir="+planted+"\nhead_detached=yes\nbase_sha="+testBaseSHA+"\n"), nonce)
+	if err == nil {
+		t.Fatal("unexpected value accepted, want a failure")
+	}
+	if strings.Contains(err.Error(), planted) {
+		t.Errorf("failure echoes proof content: %v", err)
+	}
+	// The nonce is likewise withheld: naming it would confirm a guess.
+	if strings.Contains(err.Error(), nonce) {
+		t.Errorf("failure echoes the invocation nonce: %v", err)
+	}
+}
+
 func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	root := t.TempDir()
 	dir := writeSeedCheckout(t, root, testBaseSHA)

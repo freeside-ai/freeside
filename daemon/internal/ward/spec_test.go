@@ -149,6 +149,50 @@ func TestSeederSpecGolden(t *testing.T) {
 	golden.Assert(t, "seeder-spec", append(got, '\n'))
 }
 
+// TestObserverSpecGolden pins the attesting container's allowlist. The
+// observer is where the unit's evidence comes from, so its topology and its
+// proof-writing command must not drift unreviewed.
+func TestObserverSpecGolden(t *testing.T) {
+	cfg := testConfig()
+	hs := testHandoffSpec()
+	spec := buildObserverSpec(cfg, hs, namesFor(hs.RunID), testOwnershipLabel())
+	got, err := json.MarshalIndent(spec, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal observer spec: %v", err)
+	}
+	golden.Assert(t, "observer-spec", append(got, '\n'))
+}
+
+// TestObserverSpecReadsOnly is the observer's whole argument in one assertion:
+// it cannot write what it attests. A read-write observer would be the writer
+// vouching for its own write.
+func TestObserverSpecReadsOnly(t *testing.T) {
+	cfg := testConfig()
+	hs := testHandoffSpec()
+	names := namesFor(hs.RunID)
+	spec := buildObserverSpec(cfg, hs, names, testOwnershipLabel())
+
+	if len(spec.Mounts) != 1 {
+		t.Fatalf("Mounts = %+v, want exactly the workspace", spec.Mounts)
+	}
+	if !spec.Mounts[0].ReadOnly {
+		t.Error("observer workspace mount is read-write; it must be read-only")
+	}
+	if spec.Mounts[0].Source != names.Workspace {
+		t.Errorf("observer mounts %q, want the workspace %q", spec.Mounts[0].Source, names.Workspace)
+	}
+	if spec.Name == names.Seeder {
+		t.Error("observer and seeder share a name; the attestation must come from a different VM")
+	}
+	if !spec.NetworkDisabled || len(spec.Env) != 0 {
+		t.Errorf("observer is not credential-free and network-free: env=%q networkDisabled=%v", spec.Env, spec.NetworkDisabled)
+	}
+	// The nonce must reach the guest, or the proof could be any run's.
+	if !strings.Contains(observerScript(cfg, testOwnershipLabel().Value), testOwnershipLabel().Value) {
+		t.Error("observer script does not carry this invocation's nonce")
+	}
+}
+
 // TestSeederSpecShape asserts the properties the golden would let drift
 // silently if someone regenerated it: the seeder is credential-free,
 // network-free, and holds the workspace read-write at the configured target.

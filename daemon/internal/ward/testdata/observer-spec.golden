@@ -1,0 +1,29 @@
+{
+  "name": "freeside-handoff-golden-run-observer",
+  "image": "example.test/exporter@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "command": [
+    "sh",
+    "-c",
+    "g=absent; if [ -d '/workspace'/.git ]; then g=present; fi; d=no; s=none; if [ -f '/workspace'/.git/HEAD ]; then h=\"$(cat '/workspace'/.git/HEAD 2\u003e/dev/null || true)\"; case \"$h\" in *[!0-9a-f]*) ;; ????????????????????????????????????????) d=yes; s=\"$h\";; esac; fi; printf 'nonce=%s\\ngit_dir=%s\\nhead_detached=%s\\nbase_sha=%s\\n' '00000000000000000000000000000000' \"$g\" \"$d\" \"$s\" \u003e '/handoff-base.txt'; sync"
+  ],
+  "env": null,
+  "mounts": [
+    {
+      "type": "volume",
+      "source": "freeside-handoff-golden-run-ws",
+      "target": "/workspace",
+      "read_only": true
+    }
+  ],
+  "labels": [
+    {
+      "key": "freeside.handoff",
+      "value": "golden-run"
+    },
+    {
+      "key": "freeside.handoff-owner",
+      "value": "00000000000000000000000000000000"
+    }
+  ],
+  "network_disabled": true
+}

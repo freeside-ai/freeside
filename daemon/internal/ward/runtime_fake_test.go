@@ -1,10 +1,13 @@
 package ward
 
 import (
+	"archive/tar"
 	"context"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -64,6 +67,24 @@ type fakeRuntime struct {
 	vols   map[string]*fakeVol
 	ctrs   map[string]*fakeCtr
 	copies []fakeCopy
+	// volBase is the base SHA a volume holds, as the simulated seeder placed
+	// it. Only the sentinel copy sets it, mirroring the real seeder: the tree
+	// reaches the volume when the guest's own command runs, not when the host's
+	// copy returns.
+	volBase map[string]string
+	// staged is the host directory most recently staged into each container.
+	staged map[string]string
+	// baseProofPath is where the observer's proof lands in its rootfs; it
+	// mirrors Config.BaseProofPath, which the fake cannot see.
+	baseProofPath string
+	// observerProof rewrites the synthesized proof bytes before they are
+	// archived, so a test can corrupt, truncate, or replay one.
+	observerProof func(id string, proof []byte) []byte
+	// copySeedsNothing models the reference runtime's most dangerous
+	// behaviour: a copy whose destination lies inside a mounted volume writes
+	// nothing and still reports success. The call is recorded and returns nil;
+	// no volume changes.
+	copySeedsNothing bool
 	// seq feeds nextCreated so every object the fake makes carries a distinct
 	// opaque creation fingerprint.
 	seq int
@@ -126,9 +147,80 @@ func newFakeRuntime(t *testing.T) *fakeRuntime {
 		t:               t,
 		vols:            map[string]*fakeVol{},
 		ctrs:            map[string]*fakeCtr{},
+		volBase:         map[string]string{},
+		staged:          map[string]string{},
+		baseProofPath:   "/handoff-base.txt",
 		runningInspects: map[string]int{},
 		exportTarPath:   buildTar(t, fixtureArchive(t)),
 	}
+}
+
+// rwVolume returns the container's read-write volume mount source, if it has
+// exactly one; the seeder is the only role that does.
+func (c *fakeCtr) rwVolume() (string, bool) {
+	for _, m := range c.spec.Mounts {
+		if m.Type == MountVolume && !m.ReadOnly {
+			return m.Source, true
+		}
+	}
+	return "", false
+}
+
+// observedVolume returns the volume a base observer reads, if this container
+// is one. The observer and the exporter both hold the workspace read-only, so
+// the mount alone cannot tell them apart; what distinguishes the observer is
+// that its command writes the proof file the gate will look for.
+func (c *fakeCtr) observedVolume(proofPath string) (string, bool) {
+	writesProof := false
+	for _, arg := range c.spec.Command {
+		if strings.Contains(arg, proofPath) {
+			writesProof = true
+			break
+		}
+	}
+	if !writesProof {
+		return "", false
+	}
+	for _, m := range c.spec.Mounts {
+		if m.Type == MountVolume && m.ReadOnly {
+			return m.Source, true
+		}
+	}
+	return "", false
+}
+
+func (c *fakeCtr) ownershipToken() string {
+	for _, l := range c.spec.Labels {
+		if l.Key == ownershipLabelKey {
+			return l.Value
+		}
+	}
+	return ""
+}
+
+// baseProofFor renders the proof the pinned observer image would write for a
+// workspace holding sha.
+func baseProofFor(nonce, sha string) []byte {
+	return fmt.Appendf(nil, "%s=%s\n%s=present\n%s=yes\n%s=%s\n",
+		baseProofNonceKey, nonce, baseProofGitDirKey, baseProofDetachedKey, baseProofSHAKey, sha)
+}
+
+// writeProofTar streams a one-entry archive carrying proof at absolutePath,
+// the shape the gate extracts from an observer's exported rootfs.
+func writeProofTar(w io.Writer, absolutePath string, proof []byte) error {
+	tw := tar.NewWriter(w)
+	if err := tw.WriteHeader(&tar.Header{
+		Name:     strings.TrimPrefix(absolutePath, "/"),
+		Typeflag: tar.TypeReg,
+		Mode:     0o600,
+		Size:     int64(len(proof)),
+	}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(proof); err != nil {
+		return err
+	}
+	return tw.Close()
 }
 
 // nextCreated mints a distinct opaque creation fingerprint. Callers hold mu.
@@ -457,6 +549,35 @@ func (f *fakeRuntime) CopyIntoContainer(ctx context.Context, id, hostDir, target
 		return fmt.Errorf("invalidState: container %q is not running", id)
 	}
 	f.copies = append(f.copies, fakeCopy{id: id, hostDir: hostDir, targetDir: targetDir})
+	if f.copySeedsNothing {
+		return nil
+	}
+
+	// Simulate the guest side. The first copy stages a tree into the
+	// container's own filesystem and changes no volume; the second is the
+	// completion sentinel, and only then does the seeder's own command move the
+	// tree onto the workspace. Modeling that ordering is the point: a gate that
+	// seeded without signalling completion would pass a fake that copied on the
+	// first call.
+	if _, staged := f.staged[id]; !staged {
+		f.staged[id] = hostDir
+		return nil
+	}
+	src, ok := f.staged[id]
+	if !ok {
+		return nil
+	}
+	vol, ok := f.ctrs[id].rwVolume()
+	if !ok {
+		// No read-write volume: the copy landed in the rootfs and nothing
+		// reaches a workspace, exactly as the runtime behaves.
+		return nil
+	}
+	head, err := os.ReadFile(filepath.Join(src, ".git", "HEAD")) //nolint:gosec // test fixture path
+	if err != nil {
+		return nil //nolint:nilerr // a stage without a HEAD seeds nothing, and the copy itself still succeeded
+	}
+	f.volBase[vol] = strings.TrimSpace(string(head))
 	return nil
 }
 
@@ -472,8 +593,19 @@ func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Write
 			return err
 		}
 	}
-	if _, ok := f.ctrs[id]; !ok {
+	c, ok := f.ctrs[id]
+	if !ok {
 		return fmt.Errorf("container %q not found", id)
+	}
+	// The base observer's rootfs carries its proof, not an export.
+	if vol, isObserver := c.observedVolume(f.baseProofPath); isObserver {
+		if sha, seeded := f.volBase[vol]; seeded {
+			proof := baseProofFor(c.ownershipToken(), sha)
+			if f.observerProof != nil {
+				proof = f.observerProof(id, proof)
+			}
+			return writeProofTar(dest, f.baseProofPath, proof)
+		}
 	}
 	src, err := os.Open(f.exportTarPath)
 	if err != nil {

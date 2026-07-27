@@ -309,6 +309,70 @@ func verifySeedRoleAllowlist(cfg Config, rep InspectReport, spec ContainerSpec, 
 	return nil
 }
 
+// verifyBaseProof reads the observer's proof file and returns the base the
+// workspace was observed to hold.
+//
+// It is modeled on verifyProof and holds the same line: the proof comes out of
+// an archive nothing has scanned, so its content is parsed strictly and never
+// echoed. Every required key must appear exactly once, no unknown key is
+// tolerated, the fixed-value keys must carry their fixed values, and the SHA
+// must be a full lowercase commit. A proof that omits a key is rejected rather
+// than defaulted, so a truncated write cannot pass as a partial observation.
+//
+// The nonce must equal this invocation's unpredictable ownership token. That is
+// what makes the proof this run's rather than a file the image shipped with or
+// an earlier run left behind.
+func verifyBaseProof(data []byte, nonce string) (string, error) {
+	fixed := map[string]string{
+		baseProofNonceKey:    nonce,
+		baseProofGitDirKey:   "present",
+		baseProofDetachedKey: "yes",
+	}
+	seen := map[string]bool{}
+	var observed string
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	for sc.Scan() {
+		line := strings.TrimRight(sc.Text(), "\r")
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			return "", failf(CheckObservedBaseIdentity, "base proof carries a line that is not key=value")
+		}
+		if seen[key] {
+			return "", failf(CheckObservedBaseIdentity, "base proof repeats a required key")
+		}
+		seen[key] = true
+		if key == baseProofSHAKey {
+			if !commitSHAPattern.MatchString(value) {
+				return "", failf(CheckObservedBaseIdentity, "base proof reports a value that is not a full lowercase commit SHA")
+			}
+			observed = value
+			continue
+		}
+		want, known := fixed[key]
+		if !known {
+			return "", failf(CheckObservedBaseIdentity, "base proof carries an unknown key")
+		}
+		if value != want {
+			// Deliberately categorical, including for the nonce: naming which
+			// key mismatched would confirm a guessed token to whoever produced
+			// the file.
+			return "", failf(CheckObservedBaseIdentity, "base proof reports an unexpected value for a required key")
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return "", failf(CheckObservedBaseIdentity, "base proof unreadable")
+	}
+	for _, key := range []string{baseProofNonceKey, baseProofGitDirKey, baseProofDetachedKey, baseProofSHAKey} {
+		if !seen[key] {
+			return "", failf(CheckObservedBaseIdentity, "base proof omits a required key")
+		}
+	}
+	return observed, nil
+}
+
 // requiredProof is check 5's contract with the conformance probe
 // (probeInExporterVerification): the probe runs inside the exporter image and
 // its observations land as exactly these key=value lines in the proof file.

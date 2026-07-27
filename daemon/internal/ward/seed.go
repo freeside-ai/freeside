@@ -185,6 +185,106 @@ func (b *Backend) seedWorkspace(ctx context.Context, hs HandoffSpec, names hando
 	return nil
 }
 
+// observeSeededBase reads the base the workspace actually holds and checks it
+// against the one the caller declared, returning the observed value.
+//
+// This is the whole point of the unit. Everything before it is an attempt; this
+// is the evidence. The observation is taken by a different VM than the one that
+// wrote the workspace, after that VM was proven absent, through a read-only
+// mount, and it reaches the host as bytes in the observer's own exported root
+// filesystem rather than as anything the runtime says. A blank seed has no
+// declared base and is not observed.
+//
+// The observer runs before the writer, because the base is a pre-writer fact:
+// once the agent runs it may legitimately move HEAD, and an observation taken
+// afterwards would attest the agent's work rather than the base it started from.
+func (b *Backend) observeSeededBase(ctx context.Context, hs HandoffSpec, names handoffNames, st *runState) (string, error) {
+	if hs.Seed.Mode != SeedBaseCheckout {
+		return "", nil
+	}
+	spec := buildObserverSpec(b.cfg, hs, names, st.ownershipLabel)
+	st.observer.attempted = true
+	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
+		return "", failf(CheckObservedBaseIdentity, "create base observer container: %v", err)
+	}
+	st.observer.owned = true
+	rep, err := b.rt.Inspect(ctx, names.Observer)
+	if err != nil {
+		return "", failf(CheckObservedBaseIdentity, "inspect base observer before execution: %v", err)
+	}
+	if err := verifySeedRoleAllowlist(b.cfg, rep, spec, names.Workspace, CheckObservedBaseIdentity); err != nil {
+		return "", err
+	}
+	st.observer.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel)
+	if err != nil {
+		return "", failf(CheckObservedBaseIdentity, "base observer container %q: %v", names.Observer, err)
+	}
+	if err := b.rt.StartContainer(ctx, names.Observer); err != nil {
+		return "", failf(CheckObservedBaseIdentity, "start base observer container: %v", err)
+	}
+	if err := b.waitStopped(ctx, names.Observer, st.observer, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
+		return "", failf(CheckObservedBaseIdentity, "base observer: %v", err)
+	}
+
+	observed, err := b.readBaseProof(ctx, hs.RunID, names.Observer, st)
+	if err != nil {
+		return "", err
+	}
+
+	if err := b.rt.DeleteContainer(ctx, names.Observer); err != nil {
+		return "", failf(CheckObservedBaseIdentity, "delete stopped base observer: %v", err)
+	}
+	if err := b.verifyContainerAbsent(ctx, names.Observer, st.observer, st.ownershipLabel, CheckObservedBaseIdentity); err != nil {
+		return "", err
+	}
+	st.observer = objectClaim{}
+
+	if observed != hs.Seed.Base.BaseSHA {
+		// Categorical: the observed value comes from an archive nothing has
+		// scanned, so neither side of the comparison is echoed.
+		return "", failf(CheckObservedBaseIdentity, "workspace holds a different base than the one declared")
+	}
+	return observed, nil
+}
+
+// readBaseProof collects the observer's proof out of its stopped root
+// filesystem and validates it. The archive is streamed under the same byte cap
+// as the export path and removed as soon as the proof is read: it is evidence
+// for this decision, never output.
+func (b *Backend) readBaseProof(ctx context.Context, runID, id string, st *runState) (string, error) {
+	dir, err := os.MkdirTemp("", "freeside-handoff-"+runID+"-base-")
+	if err != nil {
+		return "", failf(CheckObservedBaseIdentity, "create base proof directory: %v", err)
+	}
+	st.baseArchiveDir = dir
+	defer func() {
+		_ = os.RemoveAll(dir) // best-effort; the deferred teardown removes it again
+		st.baseArchiveDir = ""
+	}()
+	tarPath := filepath.Join(dir, "observer.tar")
+	if err := b.materializeRootFS(ctx, id, tarPath, CheckObservedBaseIdentity); err != nil {
+		return "", err
+	}
+	f, err := os.Open(tarPath) //nolint:gosec // gate-owned path under a fresh temp directory
+	if err != nil {
+		return "", failf(CheckObservedBaseIdentity, "open base proof archive: %v", err)
+	}
+	defer f.Close() //nolint:errcheck // read-only handle on a temp file removed above
+	data, found, err := extractArchiveRegularFile(f, b.cfg.BaseProofPath, maxBaseProofBytes)
+	if err != nil {
+		return "", failf(CheckObservedBaseIdentity, "read base proof from observer rootfs: %v", err)
+	}
+	if !found {
+		return "", failf(CheckObservedBaseIdentity, "base observer produced no proof")
+	}
+	return verifyBaseProof(data, st.ownershipLabel.Value)
+}
+
+// maxBaseProofBytes bounds the proof read into the daemon's heap. The honest
+// proof is four short lines; this sits far above that and far below anything
+// that could pressure the host.
+const maxBaseProofBytes = 4 << 10
+
 func (b *Backend) copyIntoSeeder(ctx context.Context, id, hostDir, targetDir string) error {
 	ctx, cancel := context.WithTimeout(ctx, b.cfg.SeedTimeout)
 	defer cancel()

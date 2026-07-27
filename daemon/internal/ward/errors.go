@@ -87,6 +87,14 @@ const (
 	// succeeded, and the seeder terminated and was proven absent before
 	// anything else attached the volume.
 	CheckWorkspaceSeeding Check = "workspace_seeding"
+	// CheckObservedBaseIdentity covers the attestation: the base the workspace
+	// actually holds, read through a read-only mount by a credential-free
+	// container that did not place it, equals the base the caller declared.
+	// It is separate from CheckWorkspaceSeeding because the two name different
+	// failures — the seeding attempt went wrong, versus the seeding attempt
+	// reported success and produced the wrong workspace — and a caller has to
+	// be able to tell those apart.
+	CheckObservedBaseIdentity Check = "observed_base_identity"
 )
 
 // AllChecks lists every valid Check and is the enum's single registration
@@ -108,6 +116,7 @@ var AllChecks = []Check{
 	CheckPreJobProbe,
 	CheckNetworklessExport,
 	CheckWorkspaceSeeding,
+	CheckObservedBaseIdentity,
 }
 
 func (c Check) valid() bool {
@@ -117,7 +126,7 @@ func (c Check) valid() bool {
 		CheckInExporterVerification, CheckExportVerification, CheckTeardown,
 		CheckWriterVolumeExclusion, CheckCredentialContainment,
 		CheckSameVMRefutation, CheckPreJobProbe, CheckNetworklessExport,
-		CheckWorkspaceSeeding:
+		CheckWorkspaceSeeding, CheckObservedBaseIdentity:
 		return true
 	default:
 		return false

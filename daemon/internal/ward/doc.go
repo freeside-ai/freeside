@@ -82,18 +82,39 @@
 // the threat model. Revisit when Apple container exposes immutable runtime
 // IDs or conditional deletion.
 //
+// Beyond the spike's blank-workspace scope, the gate seeds the workspace at a
+// declared exact base (plan §5.9) and attests what it actually holds. The
+// mechanism is forced by the reference runtime rather than chosen: Apple
+// container 1.1.0 refuses to copy into a container that is not running, and a
+// copy whose destination lies inside a mounted volume writes nothing while
+// still reporting success. So a pinned, credential-free, network-free seeder
+// holds the workspace read-write, receives the daemon-owned checkout into its
+// own root filesystem, and its fixed command moves the tree onto the mount; a
+// separate sentinel copy signals that the staged tree is whole, because a
+// directory copy is not atomic. None of that attempt is believed. After the
+// seeder is proven absent, a second container mounts the workspace read-only
+// and writes the base it reads, bound to the invocation's unpredictable
+// ownership token, into its own root filesystem, which the gate exports and
+// parses. The attestation runs before the writer because the base is a
+// pre-writer fact, and a workspace holding a base other than the declared one
+// fails the gate rather than being reported.
+//
 // Layout, by concept:
 //
 //   - errors.go        the Check vocabulary and typed ConformanceFailure
 //   - runtime.go       the Runtime seam over the container runtime, and its
 //     report vocabulary
+//   - seed.go          workspace seeding: host-side source verification, the
+//     seeder lifecycle, and the read-only base attestation
 //   - runtime_cli.go   CLIRuntime, the os/exec-backed Apple container
 //     implementation (the package's only os/exec importer)
 //   - config.go        Backend configuration and validation
 //   - backend.go       the exec.RunnerBackend implementation and its frozen
 //     capability declaration
-//   - conformance.go   pure verifiers for checks 1, 2, 4, and 5
-//   - handoff.go       the gate lifecycle: checks 3-5 sequencing and teardown
+//   - conformance.go   pure verifiers for checks 1, 2, 4, and 5, the seeding
+//     roles' allowlist, and the seeded-base proof
+//   - handoff.go       the gate lifecycle: seeding, checks 3-5 sequencing, and
+//     teardown
 //   - export_verify.go check 7: safe archive extraction, manifest and digest
 //     verification, and the fail-closed output-scanner hook
 //   - suite.go         the invocable conformance suite: Full (checks 1-5, 7,
@@ -103,7 +124,12 @@
 // reference-runtime members (Suite.Full/PreJob end to end, and the
 // same-VM-refutation probe) run only against the reference runtime (Apple
 // container 1.1.0 on macOS) and are opt-in via FREESIDE_WARD_LIVE_TEST=1; CI
-// does not run them, a recorded verification gap. Everything else, including
-// every check's failure path and the suite's orchestration and fail-closed
-// results, runs against the scripted fake runtime.
+// does not run them, a recorded verification gap. The seeding and
+// base-attestation path is in that same class: the fake models the reference
+// runtime's copy semantics (running-only, and silently discarded into a mount)
+// so the fail-closed paths are covered in CI, but the guest-side behaviour of
+// the seeder and observer commands is proven only by the opt-in live run.
+// Everything else, including every check's failure path and the suite's
+// orchestration and fail-closed results, runs against the scripted fake
+// runtime.
 package ward

@@ -371,6 +371,81 @@ func seederScript(cfg Config) string {
 		"cp -a " + stage + "/. " + ws + "/; sync"
 }
 
+// buildObserverSpec generates the container that attests what the workspace
+// actually holds: the same pinned image and the same credential-free,
+// network-free position as the seeder, but the workspace mounted READ-ONLY.
+//
+// It is a separate VM from the seeder on purpose. The seeder holds the
+// workspace read-write and is the thing that placed the tree; an observation
+// taken through that same handle would be the writer vouching for its own
+// write. This container did not place anything, cannot write anything, and
+// reads the workspace through the same access class the exporter later uses,
+// so what it attests is the workspace as a reader sees it.
+func buildObserverSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label) ContainerSpec {
+	return ContainerSpec{
+		Name:            names.Observer,
+		Image:           cfg.ExporterImage,
+		Command:         observerCommand(cfg, ownershipLabel.Value),
+		NetworkDisabled: true,
+		Mounts: []Mount{{
+			Type:     MountVolume,
+			Source:   names.Workspace,
+			Target:   cfg.WorkspaceTarget,
+			ReadOnly: true,
+		}},
+		Labels: append(runLabels(hs.RunID), ownershipLabel),
+	}
+}
+
+func observerCommand(cfg Config, nonce string) []string {
+	return []string{"sh", "-c", observerScript(cfg, nonce)}
+}
+
+// Proof keys the observer emits. They are the gate's contract with its own
+// pinned image, in the same shape check 5's proof uses.
+const (
+	baseProofNonceKey    = "nonce"
+	baseProofGitDirKey   = "git_dir"
+	baseProofDetachedKey = "head_detached"
+	baseProofSHAKey      = "base_sha"
+)
+
+// observerScript reads the seeded base off the workspace and writes it, with
+// this invocation's unpredictable nonce, to the observer's own root
+// filesystem, where the host collects it by exporting the stopped container.
+//
+// The nonce is what makes the proof this run's. Without it, a proof file baked
+// into the image or left behind by an earlier run would satisfy the gate, and
+// the attestation would prove only that some workspace once held some base.
+//
+// HEAD is read directly rather than resolved with git: a checkout from
+// publish.Transport.FetchBase is detached at the base, so HEAD holds the raw
+// commit, and requiring that shape is stricter than resolving a symbolic ref
+// would be. A workspace whose HEAD is symbolic is refused rather than followed.
+func observerScript(cfg Config, nonce string) string {
+	ws := shellQuote(cfg.WorkspaceTarget)
+	proof := shellQuote(cfg.BaseProofPath)
+	// No `set -e`: every branch must reach the proof write, because a proof
+	// that reports an unexpected observation is what verifyBaseProof rejects.
+	// A missing proof file and a proof reporting "absent" are both failures,
+	// but only the second tells a reader what was wrong.
+	return "g=absent; if [ -d " + ws + "/.git ]; then g=present; fi; " +
+		"d=no; s=none; " +
+		"if [ -f " + ws + "/.git/HEAD ]; then " +
+		"h=\"$(cat " + ws + "/.git/HEAD 2>/dev/null || true)\"; " +
+		// The shape test is the detachment test: a symbolic ref does not match
+		// 40 hex characters, so one expression settles both.
+		"case \"$h\" in " +
+		"*[!0-9a-f]*) ;; " +
+		"????????????????????????????????????????) d=yes; s=\"$h\";; " +
+		"esac; fi; " +
+		"printf '" + baseProofNonceKey + "=%s\\n" +
+		baseProofGitDirKey + "=%s\\n" +
+		baseProofDetachedKey + "=%s\\n" +
+		baseProofSHAKey + "=%s\\n' " +
+		shellQuote(nonce) + " \"$g\" \"$d\" \"$s\" > " + proof + "; sync"
+}
+
 // cloneContainerSpec detaches every reference field before a spec crosses the
 // Runtime boundary. Runtime implementations may normalize or retain their
 // input; neither may rewrite the immutable expected spec used by the gate's
