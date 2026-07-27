@@ -48,6 +48,7 @@ enum AttentionDisplay {
         case .acknowledge: return "Acknowledge"
         case .run_doctor: return "Run doctor"
         case .stop_unattended: return "Stop unattended"
+        case .resume_unattended: return "Resume unattended"
         }
     }
 

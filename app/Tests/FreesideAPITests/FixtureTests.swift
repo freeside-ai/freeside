@@ -19,7 +19,7 @@ import Testing
         ],
         .ready_for_final_review: [.open_pr, .return_to_agent, .mark_seen, .dismiss, .stop],
         .run_proposal: [.start, .start_with_changes, .decline, .snooze],
-        .system_health: [.acknowledge, .run_doctor, .stop_unattended],
+        .system_health: [.acknowledge, .run_doctor, .stop_unattended, .resume_unattended],
     ]
 
     @Test func actionSetsMatchPlanSection4() {
@@ -35,11 +35,11 @@ import Testing
     /// phase1Actions is the enumeration universe the cross-language policy
     /// parity suite walks; if it dropped an action, that action's cells would
     /// go unchecked. Pin it to exactly the union of the per-type sets (every
-    /// action is offered by at least one type) and to a duplicate-free 27.
+    /// action is offered by at least one type) and to a duplicate-free 28.
     @Test func phase1ActionsCoverEveryOfferedActionWithoutDuplicates() {
         let offered = Set(AttentionFixtures.phase1ActionSets.values.flatMap { $0 })
         #expect(Set(AttentionFixtures.phase1Actions) == offered)
-        #expect(AttentionFixtures.phase1Actions.count == 27)
+        #expect(AttentionFixtures.phase1Actions.count == 28)
         #expect(Set(AttentionFixtures.phase1Actions).count == AttentionFixtures.phase1Actions.count)
     }
 
