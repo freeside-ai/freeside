@@ -1,0 +1,76 @@
+# Freeside project image for freeasinbird/gh-imgup (plan §5.4, §11; issue #304).
+#
+# The per-project extension of the agent base: the same image, plus this
+# project's dependency closure baked in, so a stage running under the default
+# `provider_only` egress profile reaches no package registry, and the clean
+# verifier (plan §5.6: no network) can still run the project's verification
+# recipe:
+#
+#   npm ci && npm run lint && npm run typecheck && npm test
+#
+# The recipe is run verbatim: the baked npm cache plus the npmrc written here
+# are what make it work with networking disabled. Nothing about the recipe is
+# rewritten for the offline case, because a rewritten recipe would prove a
+# different recipe. scripts/check-project-offline.sh runs it under
+# `--network none`, and then re-runs it with the cache made unreadable to prove
+# the cache is what made it work.
+#
+# The offline envelope is bound to the vendored lockfile: a candidate branch
+# that adds or bumps a dependency fails `npm ci` offline. That is the correct
+# loud failure, not a regression to paper over.
+#
+# The instruction prohibitions in images/agent-claude/Containerfile (no ENV,
+# WORKDIR, ENTRYPOINT, CMD, USER, VOLUME) apply here too: this image is also an
+# agent image, so ward check 2 inspects it the same way. That is why the npm
+# cache location is configured through a global npmrc rather than NPM_CONFIG_CACHE.
+
+# The base is passed by tag, not by digest: Apple container 1.1.0 cannot resolve
+# a locally built name@digest, and the builder runs in its own VM, where a
+# loopback temporary registry is not reachable. Provenance comes from
+# BASE_DIGEST, which scripts/build-project-gh-imgup-image.sh reads from the
+# built base and records in a label.
+ARG BASE_IMAGE=freeside-agent-claude:local
+
+FROM ${BASE_IMAGE}
+
+ARG BASE_IMAGE
+ARG BASE_DIGEST=unrecorded
+# Upstream commit the vendored package.json and package-lock.json come from.
+ARG GH_IMGUP_COMMIT=6ab4e3dff2be53f74bde9b8b3150290775152f9f
+
+# prefer-offline (not offline) so an online run that legitimately needs the
+# registry degrades to an ordinary network failure instead of a confusing cache
+# miss. audit is the setting that actually reaches the network on `npm ci`.
+RUN set -eux; \
+	mkdir -p /usr/local/etc /opt/freeside/npm-cache; \
+	printf '%s\n' \
+		'cache=/opt/freeside/npm-cache' \
+		'prefer-offline=true' \
+		'audit=false' \
+		'fund=false' \
+		'update-notifier=false' > /usr/local/etc/npmrc; \
+	test "$(npm config get cache)" = "/opt/freeside/npm-cache"
+
+# Vendored in-repo rather than fetched at build time: a build-time fetch would
+# hide from review what is actually baked, and would make the image's contents
+# depend on an unpinned network read.
+COPY package.json package-lock.json /opt/freeside/gh-imgup-seed/
+
+# Warming the cache with a real `npm ci` is what proves the cache holds every
+# tarball the lockfile resolves, including the platform-native optional
+# dependencies this project pulls on linux/arm64 (@biomejs/cli-linux-arm64,
+# which declares glibc, and the native @typescript/* build). The installed tree
+# is then discarded: the workspace gets its own from the cache.
+RUN set -eux; \
+	cd /opt/freeside/gh-imgup-seed; \
+	npm ci; \
+	test -x node_modules/.bin/biome; \
+	test -x node_modules/.bin/tsc; \
+	rm -rf node_modules
+
+LABEL org.opencontainers.image.title="freeside-project-gh-imgup" \
+	org.opencontainers.image.description="Freeside project image: agent base plus the baked dependency closure for freeasinbird/gh-imgup" \
+	org.opencontainers.image.base.name="${BASE_IMAGE}" \
+	ai.freeside.base.digest="${BASE_DIGEST}" \
+	ai.freeside.project.repository="freeasinbird/gh-imgup" \
+	ai.freeside.project.commit="${GH_IMGUP_COMMIT}"
