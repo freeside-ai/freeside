@@ -417,6 +417,113 @@ func TestRungitLiveIgnoresAmbientGitDir(t *testing.T) {
 	}
 }
 
+// TestLiveWorkspaceSeeding proves the seeding path against the reference
+// runtime end to end: the gate-generated seeder and observer commands are the
+// one part of this unit the scripted fake cannot exercise, because the fake
+// never runs a guest.
+//
+// It also pins the three runtime behaviours the design is built on, so a
+// runtime upgrade that changes any of them fails here rather than silently:
+// copy refuses a container that is not running, copy into a mounted volume
+// writes nothing while reporting success, and an in-guest copy does reach the
+// volume.
+//
+//	FREESIDE_WARD_LIVE_TEST=1 go test ./internal/ward -run TestLiveWorkspaceSeeding -v
+func TestLiveWorkspaceSeeding(t *testing.T) {
+	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
+		t.Skip("live workspace-seeding test skipped: set FREESIDE_WARD_LIVE_TEST=1 (requires macOS, Apple container 1.1.0, `container system start`, and the pinned alpine:3.22 image)")
+	}
+	bin, err := osexec.LookPath("container")
+	if err != nil {
+		t.Fatalf("container CLI not on PATH: %v", err)
+	}
+	if out, perr := osexec.Command(bin, "image", "pull", liveImage).CombinedOutput(); perr != nil { //nolint:gosec // fixed args, resolved CLI path
+		t.Logf("image pull (continuing; may be cached): %v: %s", perr, out)
+	}
+	ctx := context.Background()
+	rt := NewCLIRuntime(bin)
+	runID := fmt.Sprintf("liveseed-%d", time.Now().Unix())
+	names := namesFor(runID)
+	t.Cleanup(func() {
+		for _, c := range []string{names.Seeder, names.Observer} {
+			_ = rt.StopContainer(ctx, c)
+			_ = rt.DeleteContainer(ctx, c)
+		}
+		_ = rt.DeleteVolume(ctx, names.Workspace)
+	})
+
+	// alpine stands in for the exporter image: the seeding roles need only a
+	// shell and coreutils, and this keeps the test runnable without building
+	// and publishing the exporter image first.
+	root := t.TempDir()
+	checkout := writeSeedCheckout(t, root, testBaseSHA)
+	cfg := testConfig()
+	cfg.ExporterImage = liveImage
+	cfg.SeedRoot = root
+	cfg.PollInterval = 500 * time.Millisecond
+	cfg.SeedTimeout = 2 * time.Minute
+	b, err := New(rt, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs := HandoffSpec{
+		RunID:           runID,
+		WorkspaceSizeMB: 64,
+		Seed:            WorkspaceSeed{Mode: SeedBaseCheckout, SourceDir: checkout, Base: testBaseRevision()},
+		Agent:           AgentSpec{Image: liveImage, Command: []string{"sh", "-c", "true"}},
+	}
+	label, err := newOwnershipLabel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &runState{ownershipLabel: label}
+
+	if err := rt.CreateVolume(ctx, names.Workspace, hs.WorkspaceSizeMB, append(runLabels(runID), label)); err != nil {
+		t.Fatalf("create workspace volume: %v", err)
+	}
+	st.workspace.attempted = true
+	st.workspace.owned = true
+
+	// The design's premise: copy refuses a container that is not running. If a
+	// runtime upgrade relaxes this, the seeder no longer has to execute and the
+	// trust argument should be revisited rather than silently kept.
+	probe := names.Seeder + "-createonly"
+	t.Cleanup(func() { _ = rt.DeleteContainer(ctx, probe) })
+	if err := rt.CreateContainer(ctx, ContainerSpec{
+		Name: probe, Image: liveImage, Command: []string{"sh", "-c", "sleep 60"},
+		NetworkDisabled: true, Labels: append(runLabels(runID), label),
+	}); err != nil {
+		t.Fatalf("create probe container: %v", err)
+	}
+	if err := rt.CopyIntoContainer(ctx, probe, checkout, cfg.SeedStageDir); err == nil {
+		t.Error("copy into a created-but-never-started container succeeded; the seeder need not execute and the design's trust argument should be revisited")
+	}
+	if err := rt.DeleteContainer(ctx, probe); err != nil {
+		t.Fatalf("delete probe container: %v", err)
+	}
+
+	if err := b.seedWorkspace(ctx, hs, names, st); err != nil {
+		t.Fatalf("seedWorkspace: %v", err)
+	}
+	observed, err := b.observeSeededBase(ctx, hs, names, st)
+	if err != nil {
+		t.Fatalf("observeSeededBase: %v", err)
+	}
+	if observed != testBaseSHA {
+		t.Errorf("observed base = %q, want %q", observed, testBaseSHA)
+	}
+
+	// A workspace holding a different base must be refused, not reported. This
+	// is the guest-side half of the fake's declared-vs-observed case.
+	wrong := hs
+	wrong.Seed.Base.BaseSHA = strings.Repeat("b", 40)
+	if _, err := b.observeSeededBase(ctx, wrong, names, st); err == nil {
+		t.Error("observeSeededBase accepted a base the workspace does not hold")
+	} else {
+		wantCheckFailure(t, err, CheckObservedBaseIdentity)
+	}
+}
+
 // waitLiveStopped polls the real runtime until the container is observed
 // stopped; test-setup plumbing, not the gate's own wait.
 func waitLiveStopped(t *testing.T, rt Runtime, id string) {
