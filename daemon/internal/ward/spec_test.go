@@ -133,6 +133,65 @@ func TestExporterSpecGolden(t *testing.T) {
 	golden.Assert(t, "exporter-spec", append(got, '\n'))
 }
 
+// TestSeederSpecGolden pins the seeder's generated allowlist for the same
+// reason the exporter's is pinned, and with one extra stake: the seeder is the
+// only container before the writer that holds the workspace read-write, and
+// its command is the only gate-authored payload that writes the workspace. A
+// drift in either must be a reviewed diff.
+func TestSeederSpecGolden(t *testing.T) {
+	cfg := testConfig()
+	hs := testHandoffSpec()
+	spec := buildSeederSpec(cfg, hs, namesFor(hs.RunID), testOwnershipLabel())
+	got, err := json.MarshalIndent(spec, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal seeder spec: %v", err)
+	}
+	golden.Assert(t, "seeder-spec", append(got, '\n'))
+}
+
+// TestSeederSpecShape asserts the properties the golden would let drift
+// silently if someone regenerated it: the seeder is credential-free,
+// network-free, and holds the workspace read-write at the configured target.
+func TestSeederSpecShape(t *testing.T) {
+	cfg := testConfig()
+	hs := testHandoffSpec()
+	names := namesFor(hs.RunID)
+	spec := buildSeederSpec(cfg, hs, names, testOwnershipLabel())
+
+	if spec.Image != cfg.ExporterImage {
+		t.Errorf("Image = %q, want the pinned exporter image %q", spec.Image, cfg.ExporterImage)
+	}
+	if !spec.NetworkDisabled {
+		t.Error("seeder is not network-disabled")
+	}
+	if len(spec.Env) != 0 {
+		t.Errorf("Env = %q, want none", spec.Env)
+	}
+	if len(spec.Mounts) != 1 {
+		t.Fatalf("Mounts = %+v, want exactly the workspace", spec.Mounts)
+	}
+	m := spec.Mounts[0]
+	if m.Type != MountVolume || m.Source != names.Workspace || m.Target != cfg.WorkspaceTarget {
+		t.Errorf("mount = %+v, want the workspace volume at %q", m, cfg.WorkspaceTarget)
+	}
+	if m.ReadOnly {
+		t.Error("seeder workspace mount is read-only; it must be read-write to place the checkout")
+	}
+	// The staging and sentinel destinations must stay outside the mount: a copy
+	// aimed inside it is discarded silently by the reference runtime.
+	script := seederScript(cfg)
+	for _, inside := range []string{cfg.WorkspaceTarget + "/.git", cfg.WorkspaceTarget + "/seed"} {
+		if strings.Contains(script, inside) {
+			t.Errorf("seeder script references %q inside the workspace mount", inside)
+		}
+	}
+	for _, want := range []string{cfg.SeedStageDir, cfg.SeedReadyDir, cfg.WorkspaceTarget} {
+		if !strings.Contains(script, want) {
+			t.Errorf("seeder script does not reference %q", want)
+		}
+	}
+}
+
 func TestBuildAgentSpec(t *testing.T) {
 	cfg := testConfig()
 	hs := testHandoffSpec()

@@ -54,6 +54,31 @@ func (fx *handoffFixture) run(t *testing.T) (*HandoffResult, error) {
 	return res, err
 }
 
+// seed points the fixture at a real daemon-owned checkout under a real seed
+// root and returns the matching spec. The checkout is a real directory tree
+// because verifySeedSource reads the host, and a fake path cannot exercise the
+// containment and shape rules that are the point of it.
+func (fx *handoffFixture) seed(t *testing.T) HandoffSpec {
+	t.Helper()
+	root := t.TempDir()
+	dir := writeSeedCheckout(t, root, testBaseSHA)
+	fx.cfg.SeedRoot = root
+	hs := testHandoffSpec()
+	hs.Seed = WorkspaceSeed{Mode: SeedBaseCheckout, SourceDir: dir, Base: testBaseRevision()}
+	return hs
+}
+
+// runSeeded is run() over a base_checkout seed.
+func (fx *handoffFixture) runSeeded(t *testing.T) (*HandoffResult, error) {
+	t.Helper()
+	hs := fx.seed(t)
+	res, err := fx.backend(t).Handoff(context.Background(), hs)
+	if res != nil {
+		t.Cleanup(func() { _ = os.RemoveAll(res.ExportDir) })
+	}
+	return res, err
+}
+
 // assertReaped proves teardown left nothing: no containers, no volumes
 // (acceptance 5, asserted after success and after every induced failure).
 func (fx *handoffFixture) assertReaped(t *testing.T) {
@@ -199,6 +224,107 @@ func TestHandoffOrderObservedState(t *testing.T) {
 		t.Errorf("check 4 not pre-execution: create %d, inspect %d, start %d",
 			createExporter, inspectExporter, startExporter)
 	}
+}
+
+// TestHandoffSeedsBeforeTheWriterStarts pins the unit's central ordering
+// claim: the workspace is seeded at the declared base, and the seeder's
+// read-write attachment is proven released, before the writer VM is ever
+// started. The final inequality (seeder absent < agent start) is the
+// acceptance criterion itself, not an implementation detail.
+func TestHandoffSeedsBeforeTheWriterStarts(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+
+	if _, err := fx.runSeeded(t); err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+
+	idx := func(call string) int {
+		i := fx.rt.callIndex(call)
+		if i < 0 {
+			t.Fatalf("call %q never happened", call)
+		}
+		return i
+	}
+	createVolume := idx("create-volume " + names.Workspace)
+	createSeeder := idx("create-container " + names.Seeder)
+	inspectSeeder := idx("inspect " + names.Seeder)
+	startSeeder := idx("start-container " + names.Seeder)
+	deleteSeeder := idx("delete-container " + names.Seeder)
+	createAgent := idx("create-container " + names.Agent)
+	startAgent := idx("start-container " + names.Agent)
+
+	steps := []struct {
+		name string
+		at   int
+	}{
+		{"create workspace volume", createVolume},
+		{"create seeder", createSeeder},
+		{"inspect seeder (pre-execution allowlist)", inspectSeeder},
+		{"start seeder", startSeeder},
+		{"delete seeder", deleteSeeder},
+		{"create agent", createAgent},
+		{"start agent", startAgent},
+	}
+	for i := 1; i < len(steps); i++ {
+		if steps[i-1].at >= steps[i].at {
+			t.Errorf("%s (%d) must precede %s (%d)", steps[i-1].name, steps[i-1].at, steps[i].name, steps[i].at)
+		}
+	}
+
+	// Both copies land between the seeder's start and its stop, in order: the
+	// checkout first, the completion sentinel only once it is whole.
+	fx.rt.mu.Lock()
+	copies := append([]fakeCopy(nil), fx.rt.copies...)
+	fx.rt.mu.Unlock()
+	if len(copies) != 2 {
+		t.Fatalf("recorded %d copies, want 2 (staged checkout, then sentinel)", len(copies))
+	}
+	if copies[0].targetDir != fx.cfg.SeedStageDir {
+		t.Errorf("first copy targeted %q, want the staging dir %q", copies[0].targetDir, fx.cfg.SeedStageDir)
+	}
+	if copies[1].targetDir != fx.cfg.SeedReadyDir {
+		t.Errorf("second copy targeted %q, want the sentinel dir %q", copies[1].targetDir, fx.cfg.SeedReadyDir)
+	}
+	// Staging into the workspace mount is the silent-failure case on the
+	// reference runtime, so assert the gate never aims a copy there.
+	for _, c := range copies {
+		if c.targetDir == fx.cfg.WorkspaceTarget ||
+			strings.HasPrefix(c.targetDir, fx.cfg.WorkspaceTarget+"/") {
+			t.Errorf("copy targeted %q, inside the workspace mount, where the runtime discards it silently", c.targetDir)
+		}
+		if c.id != names.Seeder {
+			t.Errorf("copy addressed %q, want only the seeder %q", c.id, names.Seeder)
+		}
+	}
+	fx.assertReaped(t)
+}
+
+// TestHandoffBlankSeedTouchesNoSeeder proves the blank mode is a real no-op:
+// the conformance suite runs it on every Full pass, so it must not create,
+// start, or copy into anything.
+func TestHandoffBlankSeedTouchesNoSeeder(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+
+	if _, err := fx.run(t); err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+	for _, call := range []string{
+		"create-container " + names.Seeder,
+		"start-container " + names.Seeder,
+	} {
+		if i := fx.rt.callIndex(call); i >= 0 {
+			t.Errorf("blank seed made call %q at %d, want none", call, i)
+		}
+	}
+	fx.rt.mu.Lock()
+	n := len(fx.rt.copies)
+	fx.rt.mu.Unlock()
+	if n != 0 {
+		t.Errorf("blank seed performed %d copies, want 0", n)
+	}
+	fx.assertReaped(t)
 }
 
 // TestHandoffRejectsEagerStart is issue #152's induced-failure regression:

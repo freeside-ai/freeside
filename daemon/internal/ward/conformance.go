@@ -231,6 +231,84 @@ func verifyExporterAllowlist(cfg Config, rep InspectReport, exporterID, workspac
 	return nil
 }
 
+// verifySeedRoleAllowlist approves one seeding-role container (the seeder or
+// the observer) from its runtime-observed configuration, before it executes.
+//
+// It is deliberately a separate function rather than a generalization of
+// verifyExporterAllowlist. That verifier is check 4's frozen contract surface,
+// proven on the reference runtime and pinned by a golden; refactoring it into a
+// shared body would put regression risk on it to save duplication that costs
+// nothing. The two are expected to read almost identically, and any divergence
+// between them should be a deliberate, reviewed one.
+//
+// The single difference from the exporter's rules is the workspace mount's
+// access: the seeder holds it read-write to place the checkout, the observer
+// read-only to attest it. Everything else is the same allowlist, because these
+// containers run in the same credential-free, network-free position.
+func verifySeedRoleAllowlist(cfg Config, rep InspectReport, spec ContainerSpec, workspaceVolume string, c Check) error {
+	if len(spec.Mounts) != 1 {
+		// The gate generates these specs, so a caller cannot reach this. It is
+		// asserted rather than assumed so the mount indexing below is total.
+		return failf(c, "seeding container spec does not carry exactly one mount")
+	}
+	if rep.ID != spec.Name {
+		return failf(c, "seeding container inspection identified the wrong container")
+	}
+	if !rep.AllowlistFieldsObserved {
+		return failf(c, "seeding container inspection omitted required configuration")
+	}
+	if !sameImage(spec.Image, rep.ImageReference) {
+		return failf(c, "seeding container inspection reported the wrong image")
+	}
+	if !slices.Equal(rep.Command, spec.Command) {
+		return failf(c, "seeding container inspection reported the wrong command")
+	}
+	if rep.WorkingDirectory != "/" {
+		return failf(c, "seeding container working directory is not the fixed image root")
+	}
+	// Inspect-before-execution, as for the agent and exporter: a container
+	// observed in any other state may already have run before the gate approved
+	// what it would run as.
+	if rep.State != StateStopped {
+		return failf(c, "seeding container was not observed stopped before execution")
+	}
+	if n := len(rep.Mounts); n != 1 {
+		return failf(c, "seeding container does not carry exactly one persistent mount")
+	}
+	m := rep.Mounts[0]
+	switch {
+	case m.AccessConflict:
+		return failf(c, "seeding container workspace mount reports contradictory ro/rw access")
+	case m.Type != MountVolume:
+		return failf(c, "seeding container persistent mount is not a volume")
+	case m.Source != workspaceVolume:
+		return failf(c, "seeding container mounts the wrong volume")
+	case m.Target != cfg.WorkspaceTarget:
+		return failf(c, "seeding container mounts the workspace at the wrong target")
+	case m.ReadOnly != spec.Mounts[0].ReadOnly:
+		return failf(c, "seeding container workspace mount access does not match its approved access")
+	}
+	if rep.SSH {
+		return failf(c, "seeding container has SSH forwarding configured")
+	}
+	if n := len(rep.PublishedSockets); n > 0 {
+		return failf(c, "seeding container publishes %d sockets, want 0", n)
+	}
+	if n := len(rep.PublishedPorts); n > 0 {
+		return failf(c, "seeding container publishes %d ports, want 0", n)
+	}
+	if !rep.NetworksObserved {
+		return failf(c, "seeding container inspection omitted network attachments")
+	}
+	if rep.NetworkAttachmentCount != 0 {
+		return failf(c, "seeding container has %d network attachments, want 0", rep.NetworkAttachmentCount)
+	}
+	if !slices.Equal(rep.Env, []string{fixedContainerPathEnv}) {
+		return failf(c, "seeding container environment does not match the fixed PATH allowlist")
+	}
+	return nil
+}
+
 // requiredProof is check 5's contract with the conformance probe
 // (probeInExporterVerification): the probe runs inside the exporter image and
 // its observations land as exactly these key=value lines in the proof file.

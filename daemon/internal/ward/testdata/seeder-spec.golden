@@ -1,0 +1,29 @@
+{
+  "name": "freeside-handoff-golden-run-seeder",
+  "image": "example.test/exporter@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "command": [
+    "sh",
+    "-c",
+    "set -eu; i=0; while [ ! -f '/seed-ready/ready' ]; do i=$((i+1)); if [ \"$i\" -gt 300 ]; then exit 91; fi; sleep 1; done; if [ ! -d '/seed'/.git ]; then exit 92; fi; cp -a '/seed'/. '/workspace'/; sync"
+  ],
+  "env": null,
+  "mounts": [
+    {
+      "type": "volume",
+      "source": "freeside-handoff-golden-run-ws",
+      "target": "/workspace",
+      "read_only": false
+    }
+  ],
+  "labels": [
+    {
+      "key": "freeside.handoff",
+      "value": "golden-run"
+    },
+    {
+      "key": "freeside.handoff-owner",
+      "value": "00000000000000000000000000000000"
+    }
+  ],
+  "network_disabled": true
+}

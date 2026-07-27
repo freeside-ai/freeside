@@ -6,7 +6,9 @@ import (
 	"path"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -296,6 +298,77 @@ func buildExporterSpec(cfg Config, hs HandoffSpec, names handoffNames, ownership
 		}},
 		Labels: append(runLabels(hs.RunID), ownershipLabel),
 	}
+}
+
+// seedReadyFile is the sentinel the host copies, as its own second copy, once
+// the staged checkout is complete. A marker written as part of the checkout
+// copy would be unsound: a directory copy is not atomic, so the marker could
+// become visible before the rest of the tree and the seeder would move a
+// partial checkout onto the workspace.
+const seedReadyFile = "ready"
+
+// buildSeederSpec generates the container that puts the staged checkout onto
+// the workspace volume: the pinned exporter image, the workspace read-write at
+// the configured target, no environment, no network, and nothing else.
+//
+// It reuses the exporter image rather than introducing a second pinned image.
+// The seeder needs a shell and coreutils and nothing more, the exporter image
+// already provides both, and a second image would be a second supply-chain
+// surface for no gain.
+//
+// The workspace is read-write here, which is the one place before the writer
+// where it is. That is unavoidable: the runtime refuses to copy into a
+// container that is not running and silently discards a copy aimed at a
+// mounted volume, so something inside a VM has to move the tree. Keeping that
+// something a fixed, gate-authored command in a pinned image is the bound; the
+// observer, which mounts the workspace read-only in a different VM, is the
+// proof.
+func buildSeederSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label) ContainerSpec {
+	return ContainerSpec{
+		Name:            names.Seeder,
+		Image:           cfg.ExporterImage,
+		Command:         seederCommand(cfg),
+		NetworkDisabled: true,
+		Mounts: []Mount{{
+			Type:   MountVolume,
+			Source: names.Workspace,
+			Target: cfg.WorkspaceTarget,
+		}},
+		Labels: append(runLabels(hs.RunID), ownershipLabel),
+	}
+}
+
+func seederCommand(cfg Config) []string {
+	return []string{"sh", "-c", seederScript(cfg)}
+}
+
+// seederScript waits for the host to signal that the staged checkout is
+// complete, then moves it onto the workspace volume and exits.
+//
+// The wait is bounded in the guest as well as by the host's own stop timeout,
+// so a seeder whose host died cannot spin forever holding the workspace
+// read-write. The distinct exit codes are for a human reading a stuck run's
+// state; the gate never interprets them, because the seeder's exit status is
+// its own account of itself. What the gate believes is what the observer reads
+// off the volume afterwards.
+func seederScript(cfg Config) string {
+	ready := shellQuote(path.Join(cfg.SeedReadyDir, seedReadyFile))
+	stage := shellQuote(cfg.SeedStageDir)
+	ws := shellQuote(cfg.WorkspaceTarget)
+	ticks := int(cfg.SeedTimeout / time.Second)
+	if ticks < 1 {
+		ticks = 1
+	}
+	return "set -eu; i=0; " +
+		"while [ ! -f " + ready + " ]; do " +
+		"i=$((i+1)); if [ \"$i\" -gt " + strconv.Itoa(ticks) + " ]; then exit 91; fi; " +
+		"sleep 1; done; " +
+		// The staged tree is a checkout or it is nothing: refusing here keeps a
+		// half-copied or wrong-shaped stage from being merged onto the volume,
+		// where the observer would then have to distinguish it from a seed that
+		// never happened.
+		"if [ ! -d " + stage + "/.git ]; then exit 92; fi; " +
+		"cp -a " + stage + "/. " + ws + "/; sync"
 }
 
 // cloneContainerSpec detaches every reference field before a spec crosses the

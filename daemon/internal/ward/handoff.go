@@ -81,6 +81,8 @@ type objectClaim struct {
 type runState struct {
 	ownershipLabel Label
 	workspace      objectClaim
+	seeder         objectClaim
+	observer       objectClaim
 	agent          objectClaim
 	exporter       objectClaim
 	// archiveDir holds the exported rootfs archive; always removed once
@@ -198,6 +200,12 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	st.workspace.fingerprint, err = ownedFingerprint(wsView.CreationDate, wsView.Labels, wsView.LabelsObserved, ownershipLabel)
 	if err != nil {
 		return nil, fmt.Errorf("workspace volume %q: %w", names.Workspace, err)
+	}
+
+	// Seed the workspace at the declared base and prove the seeder gone before
+	// the writer can attach. A blank seed is a no-op.
+	if err := b.seedWorkspace(ctx, hs, names, st); err != nil {
+		return nil, err
 	}
 
 	st.agent.attempted = true
@@ -491,16 +499,26 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 		claim objectClaim
 	}
 	containerClaims := []containerClaim{
+		{id: names.Seeder, claim: st.seeder},
+		{id: names.Observer, claim: st.observer},
 		{id: names.Agent, claim: st.agent},
 		{id: names.Exporter, claim: st.exporter},
 	}
+	// Derived from the claim list rather than naming roles: a failure during
+	// seeding leaves the agent and exporter unattempted, so a role-by-role
+	// condition would skip both the reap sweep below and the survival re-proof
+	// after it, and a seeder holding the workspace read-write would survive
+	// teardown unnoticed.
+	anyContainerAttempted := slices.ContainsFunc(containerClaims, func(c containerClaim) bool {
+		return c.claim.attempted
+	})
 	// Every candidate, owned or ambiguous, is reaped only on fresh evidence
 	// that it is still the object this invocation created (its captured
 	// creation fingerprint corroborated by the unpredictable ownership label,
 	// else the label alone). A foreign verdict — a collision or a same-name
 	// replacement — leaves the object untouched; an unprovable one withholds
 	// the delete and fails teardown.
-	if st.agent.attempted || st.exporter.attempted {
+	if anyContainerAttempted {
 		if ctrs, err := b.rt.ListContainers(ctx); err != nil {
 			problems = append(problems, fmt.Sprintf("list containers: %v", err))
 			// A full-list failure can be caused by an unrelated malformed row.
@@ -604,7 +622,7 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	// same-name row classified foreign is a replacement that appeared after
 	// this run's object was reaped: it counts as absent and is never
 	// re-reaped; only an unprovable row still fails the proof.
-	if st.agent.attempted || st.exporter.attempted {
+	if anyContainerAttempted {
 		if ctrs, err := b.rt.ListContainers(ctx); err != nil {
 			problems = append(problems, fmt.Sprintf("re-list containers: %v", err))
 		} else {
