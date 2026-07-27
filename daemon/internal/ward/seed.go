@@ -37,29 +37,29 @@ const gitHeadPath = ".git/HEAD"
 // The returned error is a CheckWorkspaceSeeding ConformanceFailure: by the time
 // the gate is reading the filesystem, a bad source is a failed seeding
 // assertion, not the syntactic caller error WorkspaceSeed.validate reports.
-func verifySeedSource(cfg Config, dir string) error {
+func verifySeedSource(cfg Config, dir string) (string, error) {
 	if cfg.SeedRoot == "" {
-		return failf(CheckWorkspaceSeeding, "backend is not configured with a seed root")
+		return "", failf(CheckWorkspaceSeeding, "backend is not configured with a seed root")
 	}
 	root, err := filepath.EvalSymlinks(cfg.SeedRoot)
 	if err != nil {
-		return failf(CheckWorkspaceSeeding, "seed root could not be resolved")
+		return "", failf(CheckWorkspaceSeeding, "seed root could not be resolved")
 	}
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		return failf(CheckWorkspaceSeeding, "seed source could not be resolved")
+		return "", failf(CheckWorkspaceSeeding, "seed source could not be resolved")
 	}
 	// Compare resolved against resolved: an unresolved prefix test would accept
 	// a source whose own path is inside the root but whose real location is not.
 	if resolved != root && !strings.HasPrefix(resolved, root+string(os.PathSeparator)) {
-		return failf(CheckWorkspaceSeeding, "seed source does not resolve under the daemon's seed root")
+		return "", failf(CheckWorkspaceSeeding, "seed source does not resolve under the daemon's seed root")
 	}
 	info, err := os.Lstat(resolved)
 	if err != nil {
-		return failf(CheckWorkspaceSeeding, "seed source could not be read")
+		return "", failf(CheckWorkspaceSeeding, "seed source could not be read")
 	}
 	if !info.IsDir() {
-		return failf(CheckWorkspaceSeeding, "seed source is not a directory")
+		return "", failf(CheckWorkspaceSeeding, "seed source is not a directory")
 	}
 
 	var bytes int64
@@ -94,15 +94,15 @@ func verifySeedSource(cfg Config, dir string) error {
 		return nil
 	})
 	if walkErr != nil {
-		return walkErr
+		return "", walkErr
 	}
 	// The observer reads the seeded base from this file; a source without it
 	// could only ever produce a failed attestation.
 	head, err := os.Lstat(filepath.Join(resolved, filepath.FromSlash(gitHeadPath)))
 	if err != nil || !head.Mode().IsRegular() {
-		return failf(CheckWorkspaceSeeding, "seed source does not carry a regular %s", gitHeadPath)
+		return "", failf(CheckWorkspaceSeeding, "seed source does not carry a regular %s", gitHeadPath)
 	}
-	return nil
+	return resolved, nil
 }
 
 // seedWorkspace puts the declared base into the workspace volume before
@@ -126,13 +126,22 @@ func (b *Backend) seedWorkspace(ctx context.Context, hs HandoffSpec, names hando
 	if hs.Seed.Mode != SeedBaseCheckout {
 		return nil
 	}
-	if err := verifySeedSource(b.cfg, hs.Seed.SourceDir); err != nil {
+	// Everything below stages `source`, the path verification resolved, never
+	// the caller's spelling of it. Verifying one path and copying another would
+	// leave the containment check advisory: a symlink swapped in after the walk
+	// would re-point the copy at a tree nothing checked, and outside SeedRoot,
+	// which is the property the resolve exists to establish.
+	source, err := verifySeedSource(b.cfg, hs.Seed.SourceDir)
+	if err != nil {
 		return err
 	}
 	readyDir, err := os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-ready-")
 	if err != nil {
 		return failf(CheckWorkspaceSeeding, "create seed sentinel directory: %v", err)
 	}
+	// The sentinel directory is the gate's own, made fresh under the host temp
+	// root, so it needs no containment check; it carries one file the gate
+	// wrote.
 	defer os.RemoveAll(readyDir) //nolint:errcheck // best-effort cleanup of a host scratch dir holding no run output
 	if err := os.WriteFile(filepath.Join(readyDir, seedReadyFile), []byte("ready\n"), 0o600); err != nil {
 		return failf(CheckWorkspaceSeeding, "write seed sentinel: %v", err)
@@ -164,7 +173,7 @@ func (b *Backend) seedWorkspace(ctx context.Context, hs HandoffSpec, names hando
 
 	// Each copy is bounded on its own so a wedged transfer cannot consume the
 	// whole handoff budget while the seeder holds the workspace read-write.
-	if err := b.copyIntoSeeder(ctx, names.Seeder, hs.Seed.SourceDir, b.cfg.SeedStageDir); err != nil {
+	if err := b.copyIntoSeeder(ctx, names.Seeder, source, b.cfg.SeedStageDir); err != nil {
 		return err
 	}
 	// Ordering signal, sent only after the staged tree is complete.

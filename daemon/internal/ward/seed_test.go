@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -179,8 +180,18 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	dir := writeSeedCheckout(t, root, testBaseSHA)
 	cfg := testConfig()
 	cfg.SeedRoot = root
-	if err := verifySeedSource(cfg, dir); err != nil {
+	got, err := verifySeedSource(cfg, dir)
+	if err != nil {
 		t.Fatalf("verifySeedSource() = %v, want nil", err)
+	}
+	// The resolved path is what the caller stages, so it must come back
+	// resolved: staging the caller's spelling would leave containment advisory.
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("resolved source = %q, want %q", got, want)
 	}
 }
 
@@ -251,6 +262,14 @@ func TestVerifySeedSourceFailsClosed(t *testing.T) {
 			cfg.MaxSeedBytes = 1
 			return dir
 		}},
+		{"tree contains a non-regular file", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			fifo := filepath.Join(dir, "pipe")
+			if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+				t.Skipf("mkfifo unsupported here: %v", err)
+			}
+			return dir
+		}},
 		{"no git head", func(t *testing.T, root string, _ *Config) string {
 			dir := writeSeedCheckout(t, root, testBaseSHA)
 			if err := os.Remove(filepath.Join(dir, ".git", "HEAD")); err != nil {
@@ -276,8 +295,11 @@ func TestVerifySeedSourceFailsClosed(t *testing.T) {
 			cfg := testConfig()
 			cfg.SeedRoot = root
 			dir := tc.build(t, root, &cfg)
-			err := verifySeedSource(cfg, dir)
+			got, err := verifySeedSource(cfg, dir)
 			wantCheckFailure(t, err, CheckWorkspaceSeeding)
+			if got != "" {
+				t.Errorf("rejected source still yielded a path %q", got)
+			}
 		})
 	}
 }
