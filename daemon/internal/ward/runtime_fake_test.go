@@ -216,18 +216,20 @@ func (c *fakeCtr) ownershipToken() string {
 // baseProofFor renders the proof the pinned observer image would write for a
 // workspace holding sha.
 func baseProofFor(nonce, sha, tree string) []byte {
-	return fmt.Appendf(nil, "%s=%s\n%s=present\n%s=yes\n%s=%s\n%s=present\n%s=%s\n",
+	return fmt.Appendf(nil, "%s=%s\n%s=present\n%s=yes\n%s=%s\n%s=present\n%s=absent\n%s=%s\n",
 		baseProofNonceKey, nonce, baseProofGitDirKey, baseProofDetachedKey,
-		baseProofSHAKey, sha, baseProofWorktreeKey, baseProofTreeKey, tree)
+		baseProofSHAKey, sha, baseProofWorktreeKey, baseProofIrregularKey,
+		baseProofTreeKey, tree)
 }
 
 // baseProofForAbsentGitDir renders the proof the observer writes over a
 // workspace that was never seeded: the observation still happens and is still
 // reported, it just reports nothing there.
 func baseProofForAbsentGitDir(nonce string) []byte {
-	return fmt.Appendf(nil, "%s=%s\n%s=absent\n%s=no\n%s=none\n%s=absent\n%s=none\n",
+	return fmt.Appendf(nil, "%s=%s\n%s=absent\n%s=no\n%s=none\n%s=absent\n%s=absent\n%s=none\n",
 		baseProofNonceKey, nonce, baseProofGitDirKey, baseProofDetachedKey,
-		baseProofSHAKey, baseProofWorktreeKey, baseProofTreeKey)
+		baseProofSHAKey, baseProofWorktreeKey, baseProofIrregularKey,
+		baseProofTreeKey)
 }
 
 // writeProofTar streams a one-entry archive carrying proof at absolutePath,

@@ -448,6 +448,20 @@ const (
 	// intended producer actually causes -- a .git with nothing checked out --
 	// names itself instead of surfacing as an opaque digest mismatch.
 	baseProofWorktreeKey = "worktree"
+	// baseProofIrregularKey reports whether the workspace holds anything that
+	// is neither a regular file nor a directory.
+	//
+	// The host refuses such entries in the source, but until the observer says
+	// so too, that refusal was never attested: the digest hashes only regular
+	// files, so a symlink introduced into the source after the walk and before
+	// the copy would be invisible to both sides and would reach the
+	// credential-bearing writer unapproved. Attesting the rule the host
+	// enforces is what closes that window.
+	//
+	// When #339 teaches the gate to carry tracked symlinks, this key gives way
+	// to a type-and-target dimension in the digest; until then the policy is
+	// "none", and this is that policy observed rather than assumed.
+	baseProofIrregularKey = "irregular"
 )
 
 // lostFoundDir is the ext4 volume's own directory, present on a fresh volume
@@ -514,6 +528,11 @@ func observerScript(cfg Config, nonce string) string {
 		// Two batched passes rather than a per-file loop: a real checkout is
 		// thousands of files, and spawning a process each would put that cost
 		// on every seeded handoff.
+		// Anything that is not a regular file or a directory, reported so the
+		// host's refusal of such entries is corroborated by observation rather
+		// than trusted from a walk that ran before the copy.
+		"n=present; if [ -z \"$(cd " + ws + " 2>/dev/null && " +
+		"find . ! -type f ! -type d -print 2>/dev/null | head -n 1)\" ]; then n=absent; fi; " +
 		"t=none; if [ \"$g\" = present ]; then " +
 		"tc=\"$(cd " + ws + " && find . -type f -exec sha256sum {} + 2>/dev/null " +
 		"| sort | sha256sum | cut -d' ' -f1)\"; " +
@@ -525,8 +544,9 @@ func observerScript(cfg Config, nonce string) string {
 		baseProofDetachedKey + "=%s\\n" +
 		baseProofSHAKey + "=%s\\n" +
 		baseProofWorktreeKey + "=%s\\n" +
+		baseProofIrregularKey + "=%s\\n" +
 		baseProofTreeKey + "=%s\\n' " +
-		shellQuote(nonce) + " \"$g\" \"$d\" \"$s\" \"$w\" \"$t\" > " + proof + "; sync"
+		shellQuote(nonce) + " \"$g\" \"$d\" \"$s\" \"$w\" \"$n\" \"$t\" > " + proof + "; sync"
 }
 
 // cloneContainerSpec detaches every reference field before a spec crosses the

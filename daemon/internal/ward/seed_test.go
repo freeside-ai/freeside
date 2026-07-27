@@ -140,7 +140,7 @@ func TestVerifyBaseProof(t *testing.T) {
 	const nonce = "0123456789abcdef0123456789abcdef"
 	const tree = "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface"
 	good := []byte("nonce=" + nonce + "\ngit_dir=present\nhead_detached=yes\nbase_sha=" + testBaseSHA +
-		"\nworktree=present\ntree_sha256=" + tree + "\n")
+		"\nworktree=present\nirregular=absent\ntree_sha256=" + tree + "\n")
 
 	got, err := verifyBaseProof(good, nonce, tree)
 	if err != nil {
@@ -159,6 +159,7 @@ func TestVerifyBaseProof(t *testing.T) {
 			{baseProofDetachedKey, "yes"},
 			{baseProofSHAKey, testBaseSHA},
 			{baseProofWorktreeKey, "present"},
+			{baseProofIrregularKey, "absent"},
 			{baseProofTreeKey, tree},
 		}
 		var b strings.Builder
@@ -185,6 +186,9 @@ func TestVerifyBaseProof(t *testing.T) {
 		{"omits detached", proofWith(map[string]string{baseProofDetachedKey: dropField})},
 		{"omits sha", proofWith(map[string]string{baseProofSHAKey: dropField})},
 		{"omits worktree", proofWith(map[string]string{baseProofWorktreeKey: dropField})},
+		{"omits irregular", proofWith(map[string]string{baseProofIrregularKey: dropField})},
+		// A symlink slipped into the source between the walk and the copy.
+		{"irregular entry present", proofWith(map[string]string{baseProofIrregularKey: "present"})},
 		{"omits tree digest", proofWith(map[string]string{baseProofTreeKey: dropField})},
 		// The nonce is what binds the proof to this invocation; without the
 		// check, a file the image shipped with would satisfy the gate.
@@ -225,7 +229,7 @@ func TestVerifyBaseProofNeverEchoesContent(t *testing.T) {
 	const nonce = "0123456789abcdef0123456789abcdef"
 	const planted = "attacker-controlled-fixture-value"
 	_, err := verifyBaseProof([]byte("nonce="+nonce+"\ngit_dir="+planted+"\nhead_detached=yes\nbase_sha="+testBaseSHA+
-		"\nworktree=present\ntree_sha256="+strings.Repeat("e", 64)+"\n"), nonce, strings.Repeat("e", 64))
+		"\nworktree=present\nirregular=absent\ntree_sha256="+strings.Repeat("e", 64)+"\n"), nonce, strings.Repeat("e", 64))
 	if err == nil {
 		t.Fatal("unexpected value accepted, want a failure")
 	}

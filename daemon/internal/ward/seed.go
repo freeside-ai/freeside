@@ -183,9 +183,18 @@ const (
 // directive could define the key elsewhere, and a repeated key has no single
 // answer.
 func verifySeedRepoBinding(dir, declaredRepo string) error {
-	data, err := os.ReadFile(filepath.Join(dir, ".git", "config")) //nolint:gosec // inside the daemon's own seed root, already resolved and contained
+	f, err := os.Open(filepath.Join(dir, ".git", "config")) //nolint:gosec // inside the daemon's own seed root, already resolved and contained
 	if err != nil {
 		return failf(CheckWorkspaceSeeding, "seed source carries no readable git config to bind it to a repository")
+	}
+	defer f.Close() //nolint:errcheck // read-only handle
+	// Bounded at read time, not after: reading first and measuring second would
+	// let a corrupted source pull hundreds of megabytes into the daemon before
+	// the budget it is supposed to be held to ever applies. One byte past the
+	// cap is enough to know it is over.
+	data, err := io.ReadAll(io.LimitReader(f, maxGitConfigBytes+1))
+	if err != nil {
+		return failf(CheckWorkspaceSeeding, "seed source git config could not be read")
 	}
 	if len(data) > maxGitConfigBytes {
 		return failf(CheckWorkspaceSeeding, "seed source git config exceeds the readable budget")

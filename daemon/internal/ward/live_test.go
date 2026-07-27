@@ -542,6 +542,18 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 		wantCheckFailure(t, err, CheckObservedBaseIdentity)
 	}
 
+	// The observer must report a symlink on the volume, which is what closes
+	// the window between the host's no-symlink walk and the copy: a source
+	// mutated in between would otherwise be invisible to both sides, since the
+	// digest hashes only regular files. Planted directly on the volume through
+	// a writer, because the host gate would refuse it in the source.
+	plantSymlinkOnWorkspace(t, rt, names, runID)
+	if _, err := b.observeSeededBase(ctx, hs, names, st); err == nil {
+		t.Error("observeSeededBase accepted a workspace carrying an unapproved symlink")
+	} else {
+		wantCheckFailure(t, err, CheckObservedBaseIdentity)
+	}
+
 	// The tree digest is computed by Go on the host and by BusyBox in the
 	// guest, so agreement between two independent implementations is the whole
 	// property. The pass above already required it; assert it explicitly so a
@@ -583,6 +595,31 @@ func TestLiveSeedRefusesWorktreelessCheckout(t *testing.T) {
 	cfg.SeedRoot = root
 	_, _, err := verifySeedSource(cfg, dir, testBaseRevision().Repo)
 	wantCheckFailure(t, err, CheckWorkspaceSeeding)
+}
+
+// plantSymlinkOnWorkspace writes a symlink straight onto the workspace volume,
+// standing in for a source mutated between the host walk and the copy.
+func plantSymlinkOnWorkspace(t *testing.T, rt Runtime, names handoffNames, runID string) {
+	t.Helper()
+	ctx := context.Background()
+	id := "freeside-ward-live-plant-" + runID
+	t.Cleanup(func() { _ = rt.DeleteContainer(ctx, id) })
+	if err := rt.CreateContainer(ctx, ContainerSpec{
+		Name:            id,
+		Image:           liveImage,
+		Command:         []string{"sh", "-c", "ln -s /etc/hostname /workspace/planted.link"},
+		NetworkDisabled: true,
+		Mounts:          []Mount{{Type: MountVolume, Source: names.Workspace, Target: "/workspace"}},
+	}); err != nil {
+		t.Fatalf("create plant container: %v", err)
+	}
+	if err := rt.StartContainer(ctx, id); err != nil {
+		t.Fatalf("start plant container: %v", err)
+	}
+	waitLiveStopped(t, rt, id)
+	if err := rt.DeleteContainer(ctx, id); err != nil {
+		t.Fatalf("delete plant container: %v", err)
+	}
 }
 
 // waitLiveStopped polls the real runtime until the container is observed

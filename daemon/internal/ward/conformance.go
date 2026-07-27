@@ -332,6 +332,10 @@ func verifyBaseProof(data []byte, nonce, treeDigest string) (string, error) {
 		// publish.Transport.FetchBase produces -- fails as itself rather than
 		// as an opaque digest mismatch.
 		baseProofWorktreeKey: "present",
+		// The host refuses symlinks and every other non-regular kind in the
+		// source; this is that refusal observed on the volume, so a source
+		// mutated between the walk and the copy cannot slip one past both.
+		baseProofIrregularKey: "absent",
 		// The tree the host verified, recomputed by the observer over the
 		// volume. HEAD is a pointer and proves nothing about content; this is
 		// what makes the attestation cover what the writer will actually see.
@@ -376,7 +380,7 @@ func verifyBaseProof(data []byte, nonce, treeDigest string) (string, error) {
 	}
 	for _, key := range []string{
 		baseProofNonceKey, baseProofGitDirKey, baseProofDetachedKey,
-		baseProofSHAKey, baseProofWorktreeKey, baseProofTreeKey,
+		baseProofSHAKey, baseProofWorktreeKey, baseProofIrregularKey, baseProofTreeKey,
 	} {
 		if !seen[key] {
 			return "", failf(CheckObservedBaseIdentity, "base proof omits a required key")
