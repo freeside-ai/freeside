@@ -185,6 +185,29 @@ The lesson repeats the earlier rounds': an assertion about the runtime
 that was never executed is not evidence, even when it sits in a rationale
 comment.
 
+### Codex Review Round 4 (Symlinks), Deferred by Owner Decision
+
+Valid finding, deferred rather than declined (#339, owner-confirmed). Git
+tracks symlinks, the export helper records `EntrySymlink` verbatim, and
+the importer's `deriveSymlink` elides an unchanged one, so refusing every
+symlink blocks a base shape the rest of the pipeline supports. The
+refusal's stated rationale — a path trick against whatever later walks
+the tree — does not hold: the writer VM can create symlinks in the
+workspace at will, and the exporter classifies rather than follows them.
+The refusal buys no downstream property.
+
+Deferred because the current behaviour is fail-closed and loud rather
+than silently wrong, because #302's acceptance is exact-base seeding with
+an observed identity (symlink coverage extends it), and because the
+runtime handed the fix a new problem: **`container copy` preserves
+symlinks with targets intact but silently drops one whose target escapes
+the tree, still exiting 0.** An escaping symlink therefore cannot
+round-trip, and without an explicit rule it would land as an opaque
+digest mismatch instead of a named refusal. That needs a decided policy
+plus a third digest dimension agreed between Go and BusyBox, which is a
+unit, not an amendment. #339 carries the finding so it is not
+rediscovered.
+
 Declined, with reasons: `$(cat)` drops NUL bytes, so a `.git/HEAD` of
 NUL + 40 hex would attest that SHA — it needs a hostile seed source that
 also matches the caller's declared base, which buys an attacker nothing
