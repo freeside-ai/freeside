@@ -130,6 +130,35 @@ func (c *CLIRuntime) CreateVolume(ctx context.Context, name string, sizeMB int64
 	return c.runDiscard(ctx, true, args...)
 }
 
+func (c *CLIRuntime) CreateNetwork(ctx context.Context, name string, labels []Label) error {
+	args := []string{"network", "create", "--internal"}
+	for _, l := range labels {
+		args = append(args, "--label", l.Key+"="+l.Value)
+	}
+	args = append(args, name)
+	return c.runDiscard(ctx, true, args...)
+}
+
+func (c *CLIRuntime) DeleteNetwork(ctx context.Context, name string) error {
+	return c.runDiscard(ctx, true, "network", "delete", name)
+}
+
+func (c *CLIRuntime) ListNetworks(ctx context.Context) ([]NetworkSummary, error) {
+	out, err := c.run(ctx, "network", "list", "--format", "json")
+	if err != nil {
+		return nil, err
+	}
+	return decodeNetworkList(out)
+}
+
+func (c *CLIRuntime) InspectNetwork(ctx context.Context, name string) (NetworkReport, error) {
+	out, err := c.run(ctx, "network", "inspect", name)
+	if err != nil {
+		return NetworkReport{}, err
+	}
+	return decodeNetworkInspect(out, name)
+}
+
 func (c *CLIRuntime) DeleteVolume(ctx context.Context, name string) error {
 	return c.runDiscard(ctx, true, "volume", "delete", name)
 }
@@ -236,11 +265,21 @@ func createContainerArgs(spec ContainerSpec) ([]string, error) {
 		}
 		args = append(args, "--env", e)
 	}
+	if spec.NetworkDisabled && spec.Network != "" {
+		return nil, fmt.Errorf("refusing to create container %q with contradictory network settings", spec.Name)
+	}
 	if spec.NetworkDisabled {
 		// Apple container 1.1.0's public no-network sentinel produces an empty
 		// configuration.networks attachment set. The pre-start inspect verifies
 		// that realized state before any exporter payload executes.
 		args = append(args, "--network", "none")
+	} else if spec.Network != "" {
+		if !cliSafe(spec.Network) || strings.HasPrefix(spec.Network, "-") {
+			return nil, fmt.Errorf("refusing to create container %q with an unsafe network name", spec.Name)
+		}
+		args = append(args, "--network", spec.Network)
+	} else {
+		return nil, fmt.Errorf("refusing to create container %q without an explicit network", spec.Name)
 	}
 	// Terminate option parsing before the positional image and command: a
 	// dash-prefixed image (e.g. "--mount") or command word would otherwise be
@@ -318,6 +357,10 @@ type cliInitProcess struct {
 	Environment *[]string `json:"environment"`
 }
 
+type cliNetworkAttachment struct {
+	Network string `json:"network"`
+}
+
 // cliImage decodes configuration.image. Only reference is consumed: it carries
 // the pinned @sha256 digest trust binds to. The sibling descriptor.digest is
 // the runtime's resolved (arch-dependent) digest, unpredictable from the spec,
@@ -336,10 +379,10 @@ type cliConfiguration struct {
 	// Pointers for the same reason as Environment: check 4's allowlist inputs
 	// must be observed, so an absent field fails closed rather than reading
 	// as "no SSH / no publications".
-	SSH              *bool              `json:"ssh"`
-	PublishedPorts   *[]json.RawMessage `json:"publishedPorts"`
-	PublishedSockets *[]json.RawMessage `json:"publishedSockets"`
-	Networks         *[]json.RawMessage `json:"networks"`
+	SSH              *bool                   `json:"ssh"`
+	PublishedPorts   *[]json.RawMessage      `json:"publishedPorts"`
+	PublishedSockets *[]json.RawMessage      `json:"publishedSockets"`
+	Networks         *[]cliNetworkAttachment `json:"networks"`
 }
 
 type cliStatus struct {
@@ -565,9 +608,87 @@ func (c cliContainer) toReport() InspectReport {
 		}
 	}
 	if c.Configuration.Networks != nil {
-		rep.NetworkAttachmentCount = len(*c.Configuration.Networks)
+		for _, attachment := range *c.Configuration.Networks {
+			rep.Networks = append(rep.Networks, attachment.Network)
+		}
+		rep.NetworkAttachmentCount = len(rep.Networks)
 	}
 	return rep
+}
+
+type cliNetworkConfiguration struct {
+	Name         string             `json:"name"`
+	CreationDate string             `json:"creationDate"`
+	Mode         string             `json:"mode"`
+	Labels       *map[string]string `json:"labels"`
+}
+
+type cliNetworkStatus struct {
+	IPv4Gateway string `json:"ipv4Gateway"`
+	IPv4Subnet  string `json:"ipv4Subnet"`
+}
+
+type cliNetworkResource struct {
+	ID            string                  `json:"id"`
+	Configuration cliNetworkConfiguration `json:"configuration"`
+	Status        cliNetworkStatus        `json:"status"`
+}
+
+func (n cliNetworkResource) toReport() NetworkReport {
+	mode := NetworkMode(n.Configuration.Mode)
+	if mode == "hostOnly" {
+		mode = NetworkHostOnly
+	}
+	out := NetworkReport{NetworkSummary: NetworkSummary{
+		Name:           n.ID,
+		Mode:           mode,
+		CreationDate:   n.Configuration.CreationDate,
+		LabelsObserved: n.Configuration.Labels != nil,
+	}, IPv4Gateway: n.Status.IPv4Gateway, IPv4Subnet: n.Status.IPv4Subnet}
+	if n.Configuration.Labels != nil {
+		for key, value := range *n.Configuration.Labels {
+			out.Labels = append(out.Labels, Label{Key: key, Value: value})
+		}
+		sort.Slice(out.Labels, func(i, j int) bool { return out.Labels[i].Key < out.Labels[j].Key })
+	}
+	return out
+}
+
+func decodeNetworkList(out []byte) ([]NetworkSummary, error) {
+	if err := rejectDuplicateJSONKeys(out); err != nil {
+		return nil, errors.New("decode network list output: invalid JSON structure")
+	}
+	var resources []cliNetworkResource
+	if err := json.Unmarshal(out, &resources); err != nil {
+		return nil, fmt.Errorf("decode network list output: %w", err)
+	}
+	result := make([]NetworkSummary, 0, len(resources))
+	for _, resource := range resources {
+		if resource.ID == "" || resource.ID != resource.Configuration.Name {
+			return nil, errors.New("decode network list output: inconsistent network identity")
+		}
+		report := resource.toReport()
+		result = append(result, report.NetworkSummary)
+	}
+	return result, nil
+}
+
+func decodeNetworkInspect(out []byte, name string) (NetworkReport, error) {
+	if err := rejectDuplicateJSONKeys(out); err != nil {
+		return NetworkReport{}, fmt.Errorf("decode network inspect output for %q: invalid JSON structure", name)
+	}
+	var resources []cliNetworkResource
+	if err := json.Unmarshal(out, &resources); err != nil {
+		return NetworkReport{}, fmt.Errorf("decode network inspect output for %q: %w", name, err)
+	}
+	if len(resources) != 1 {
+		return NetworkReport{}, fmt.Errorf("network inspect %q returned %d networks, want 1", name, len(resources))
+	}
+	if resources[0].ID == "" || resources[0].ID != resources[0].Configuration.Name {
+		return NetworkReport{}, fmt.Errorf("network inspect %q returned inconsistent identity", name)
+	}
+	report := resources[0].toReport()
+	return report, nil
 }
 
 // decodeInspect decodes `container inspect` output: an array with exactly

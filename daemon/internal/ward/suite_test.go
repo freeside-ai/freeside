@@ -173,6 +173,53 @@ func writeProofArchive(dest io.Writer, name, content string) error {
 	return err
 }
 
+func TestProbeSpecMatchesEnvironmentExactlyByKey(t *testing.T) {
+	spec := ContainerSpec{
+		Name:            "probe",
+		Image:           testConfig().ExporterImage,
+		Command:         []string{"true"},
+		Env:             []string{"A=1", "B=two=parts"},
+		NetworkDisabled: true,
+	}
+	report := InspectReport{
+		ID:                      spec.Name,
+		ImageReference:          spec.Image,
+		Command:                 slices.Clone(spec.Command),
+		WorkingDirectory:        "/",
+		State:                   StateStopped,
+		AllowlistFieldsObserved: true,
+		NetworksObserved:        true,
+		Env:                     []string{"B=two=parts", fixedContainerPathEnv, "A=1"},
+	}
+	if !probeSpecMatches(report, spec) {
+		t.Fatal("permuted exact probe environment did not match")
+	}
+	report.Env = append(report.Env, "C=3")
+	if probeSpecMatches(report, spec) {
+		t.Fatal("probe environment with an extra key matched")
+	}
+}
+
+func TestProviderEgressProbeCoversEveryAllowedEndpoint(t *testing.T) {
+	script := providerEgressProbeScript([]string{
+		"api.provider-one.example:443",
+		"api.provider-two.example:8443",
+	})
+	for _, endpoint := range []string{
+		"api.provider-one.example:443",
+		"api.provider-two.example:8443",
+	} {
+		if got := strings.Count(script, endpoint); got != 4 {
+			t.Errorf("probe references %q %d times, want CONNECT pair plus two HTTPS URLs", endpoint, got)
+		}
+	}
+	if !strings.Contains(script, "undeclared.invalid:443") ||
+		!strings.Contains(script, "nslookup example.com") ||
+		!strings.Contains(script, "1.1.1.1 443") {
+		t.Fatal("probe omitted an undeclared CONNECT, DNS, or direct-IP witness")
+	}
+}
+
 // scriptHappyProbes makes the fake report the two Full negative probes as
 // passing: the audit container's rootfs export carries the marker, and the
 // second attach in the exclusion probe is refused (as the reference runtime's
@@ -448,6 +495,7 @@ func TestSuiteFullNetworklessProbeRejectsAttachment(t *testing.T) {
 			}
 		}
 		if id == probe {
+			rep.Networks = []string{"default"}
 			rep.NetworkAttachmentCount = 1
 		}
 		return rep, nil

@@ -38,6 +38,12 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume string) e
 				"agent environment contains a host-inheriting entry; every variable must be key=value with a non-empty key")
 		}
 	}
+	if spec.NetworkDisabled || spec.Network == "" || !cliSafe(spec.Network) {
+		return failf(CheckControlPlaneIsolation, "agent spec does not declare one enforceable provider network")
+	}
+	if _, ok := environmentByKey(append([]string{fixedContainerPathEnv}, spec.Env...)); !ok {
+		return failf(CheckControlPlaneIsolation, "agent environment contains a duplicate or malformed key")
+	}
 
 	seenTargets := make(map[string]bool, len(spec.Mounts))
 	workspaceMounts := 0
@@ -118,7 +124,7 @@ func verifyAgentAllowlist(rep InspectReport, spec ContainerSpec) error {
 		return failf(CheckControlPlaneIsolation, "agent inspection reported the wrong command")
 	}
 	expectedEnv := append([]string{fixedContainerPathEnv}, spec.Env...)
-	if !slices.Equal(rep.Env, expectedEnv) {
+	if !sameEnvironment(rep.Env, expectedEnv) {
 		return failf(CheckControlPlaneIsolation, "agent inspection reported a different environment")
 	}
 	if !sameMounts(rep.Mounts, spec.Mounts) {
@@ -130,7 +136,39 @@ func verifyAgentAllowlist(rep InspectReport, spec ContainerSpec) error {
 	if len(rep.PublishedSockets) > 0 || len(rep.PublishedPorts) > 0 {
 		return failf(CheckControlPlaneIsolation, "agent has a publication configured")
 	}
+	if !rep.NetworksObserved || !slices.Equal(rep.Networks, []string{spec.Network}) {
+		return failf(CheckControlPlaneIsolation, "agent inspection reported a different network attachment")
+	}
 	return nil
+}
+
+func sameEnvironment(got, want []string) bool {
+	gotByKey, gotOK := environmentByKey(got)
+	wantByKey, wantOK := environmentByKey(want)
+	if !gotOK || !wantOK || len(gotByKey) != len(wantByKey) {
+		return false
+	}
+	for key, value := range wantByKey {
+		if gotByKey[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func environmentByKey(entries []string) (map[string]string, bool) {
+	result := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || key == "" {
+			return nil, false
+		}
+		if _, duplicate := result[key]; duplicate {
+			return nil, false
+		}
+		result[key] = entry
+	}
+	return result, true
 }
 
 // sameImage reports whether an observed runtime image reference names the same
@@ -225,7 +263,7 @@ func verifyExporterAllowlist(cfg Config, rep InspectReport, exporterID, workspac
 	if rep.NetworkAttachmentCount != 0 {
 		return failf(CheckExporterAllowlist, "exporter has %d network attachments, want 0", rep.NetworkAttachmentCount)
 	}
-	if !slices.Equal(rep.Env, []string{fixedContainerPathEnv}) {
+	if !sameEnvironment(rep.Env, []string{fixedContainerPathEnv}) {
 		return failf(CheckExporterAllowlist, "exporter environment does not match the fixed PATH allowlist")
 	}
 	return nil
@@ -303,7 +341,7 @@ func verifySeedRoleAllowlist(cfg Config, rep InspectReport, spec ContainerSpec, 
 	if rep.NetworkAttachmentCount != 0 {
 		return failf(c, "seeding container has %d network attachments, want 0", rep.NetworkAttachmentCount)
 	}
-	if !slices.Equal(rep.Env, []string{fixedContainerPathEnv}) {
+	if !sameEnvironment(rep.Env, []string{fixedContainerPathEnv}) {
 		return failf(c, "seeding container environment does not match the fixed PATH allowlist")
 	}
 	return nil

@@ -90,6 +90,7 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 			_ = rt.StopContainer(ctx, c)
 			_ = rt.DeleteContainer(ctx, c)
 		}
+		_ = rt.DeleteNetwork(ctx, names.Network)
 		_ = rt.DeleteVolume(ctx, names.Workspace)
 		_ = rt.DeleteVolume(ctx, credVolume)
 	})
@@ -112,10 +113,11 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 		t.Error("volume inspect omitted labels")
 	}
 	if err := rt.CreateContainer(ctx, ContainerSpec{
-		Name:    seedName,
-		Image:   liveImage,
-		Command: []string{"sh", "-c", "printf " + liveMarker + " > /credentials/token"},
-		Mounts:  []Mount{{Type: MountVolume, Source: credVolume, Target: "/credentials"}},
+		Name:            seedName,
+		Image:           liveImage,
+		Command:         []string{"sh", "-c", "printf " + liveMarker + " > /credentials/token"},
+		Mounts:          []Mount{{Type: MountVolume, Source: credVolume, Target: "/credentials"}},
+		NetworkDisabled: true,
 	}); err != nil {
 		t.Fatalf("create seed container: %v", err)
 	}
@@ -183,6 +185,7 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 	cfg := Config{
 		// The exporter runs the REAL freeside-export helper from the pinned
 		// exporter image; the agent stays on the alpine base.
+		ProviderEndpoints: []string{"api.anthropic.com:443"},
 		ExporterImage:     liveExporterImage(t),
 		ExporterCommand:   export.HelperCommand(),
 		WriterStopTimeout: 3 * time.Minute,
@@ -193,16 +196,19 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	egressProbe := providerEgressProbeScript(cfg.ProviderEndpoints)
 
 	res, err := b.Handoff(ctx, HandoffSpec{
 		RunID:           runID,
 		WorkspaceSizeMB: 64,
 		Seed:            WorkspaceSeed{Mode: SeedBlank},
 		Agent: AgentSpec{
-			Image: liveImage,
+			Image:         liveImage,
+			EgressProfile: domain.EgressProviderOnly,
 			Command: []string{
 				"sh", "-c",
-				"cat /credentials/token > /dev/null && " +
+				"set -eu; " + egressProbe +
+					"cat /credentials/token > /dev/null && " +
 					"echo agent-output > /workspace/result.txt && " +
 					"mkdir -p /workspace/nested && " +
 					"echo durable-workspace > /workspace/nested/state.txt && " +
@@ -522,7 +528,7 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 		RunID:           runID,
 		WorkspaceSizeMB: 64,
 		Seed:            WorkspaceSeed{Mode: SeedBaseCheckout, SourceDir: checkout, Base: base},
-		Agent:           AgentSpec{Image: liveImage, Command: []string{"sh", "-c", "true"}},
+		Agent:           AgentSpec{Image: liveImage, Command: []string{"sh", "-c", "true"}, EgressProfile: domain.EgressProviderOnly},
 	}
 	label, err := newOwnershipLabel()
 	if err != nil {

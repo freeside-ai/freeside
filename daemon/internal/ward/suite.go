@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
@@ -146,10 +147,14 @@ func (fx SuiteFixture) agentCommand(cfg Config) []string {
 	ws := shellQuote(cfg.WorkspaceTarget)
 	return []string{
 		"sh", "-c",
-		// Verify the realized credential is the seeded marker before writing
-		// anything: a runtime that mounted some other volume carrying a `token`
-		// file, or did not realize the mount at all, aborts under set -eu.
-		"set -eu; test \"$(cat " + token + ")\" = " + fx.CredentialMarker + "; " +
+		// Prove the writer can reach the declared provider only through the
+		// daemon proxy, the proxy rejects an undeclared CONNECT authority, and
+		// the host-only network blocks both direct external-IP and DNS paths.
+		"set -eu; " + providerEgressProbeScript(cfg.ProviderEndpoints) +
+			// Verify the realized credential is the seeded marker before writing
+			// anything: a runtime that mounted some other volume carrying a `token`
+			// file, or did not realize the mount at all, aborts under set -eu.
+			"test \"$(cat " + token + ")\" = " + fx.CredentialMarker + "; " +
 			// The observer has already attested the suite seed. Clear the
 			// disposable seeded tree so the exported oracle remains exactly the
 			// two suite-owned writer files and cannot accidentally pass on stale
@@ -161,6 +166,31 @@ func (fx SuiteFixture) agentCommand(cfg Config) []string {
 			"mkdir -p " + ws + "/nested; " +
 			"printf '%s\\n' " + workspaceStatePayload + " > " + ws + "/" + workspaceStateFile + "; sync",
 	}
+}
+
+func providerEgressProbeScript(endpoints []string) string {
+	probes := "command -v nslookup >/dev/null; command -v wget >/dev/null; " +
+		"proxy=${HTTPS_PROXY#http://}; proxy_host=${proxy%:*}; proxy_port=${proxy##*:}; "
+	for _, endpoint := range endpoints {
+		authority := shellQuote(endpoint)
+		endpointURL := shellQuote("https://" + endpoint + "/")
+		probes += "test \"$(printf 'CONNECT %s HTTP/1.1\\r\\nHost: %s\\r\\n\\r\\n' " + authority + " " + authority +
+			" | nc -w 10 \"$proxy_host\" \"$proxy_port\" | head -n 1 | tr -d '\\r')\" = 'HTTP/1.1 200 OK'; " +
+			"provider_diagnostic=\"$(wget -S -O /dev/null -T 10 " + endpointURL + " 2>&1 || true)\"; " +
+			"case \"$provider_diagnostic\" in *'HTTP/1.1 '*) ;; *) exit 83;; esac; " +
+			"fronting_diagnostic=\"$(wget -S --header 'Host: example.com' -O /dev/null -T 10 " + endpointURL + " 2>&1 || true)\"; " +
+			"case \"$fronting_diagnostic\" in *'HTTP/1.1 4'*) ;; *) exit 84;; esac; "
+	}
+	denied := shellQuote("undeclared.invalid:443")
+	return probes +
+		"test \"$(printf 'CONNECT %s HTTP/1.1\\r\\nHost: %s\\r\\n\\r\\n' " + denied + " " + denied +
+		" | nc -w 10 \"$proxy_host\" \"$proxy_port\" | head -n 1 | tr -d '\\r')\" = 'HTTP/1.1 403 Forbidden'; " +
+		"if nc -w 3 1.1.1.1 443 </dev/null >/dev/null 2>&1; then exit 81; fi; " +
+		"ns_help=\"$(nslookup --help 2>&1 || true)\"; " +
+		"case \"$ns_help\" in *'Usage: nslookup '*) ;; *) exit 1;; esac; " +
+		"case \"$ns_help\" in *'HOST [DNS_SERVER]'*) ;; *) exit 1;; esac; " +
+		"dns_diagnostic=''; if dns_diagnostic=\"$(nslookup example.com 2>&1)\"; then exit 82; " +
+		"else case \"$dns_diagnostic\" in *'connection timed out; no servers could be reached'*) ;; *) exit 1;; esac; fi; "
 }
 
 func nonterminatingProbeCommand() []string {
@@ -774,9 +804,10 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 		{Type: MountVolume, Source: credVolume, Target: s.fx.CredentialTarget, ReadOnly: true},
 	}
 	if err := s.proveNoEagerStart(ctx, run, ContainerSpec{
-		Name:   livenessName,
-		Image:  s.fx.AgentImage,
-		Mounts: livenessMounts,
+		Name:            livenessName,
+		Image:           s.fx.AgentImage,
+		Mounts:          livenessMounts,
+		NetworkDisabled: true,
 	}, CheckControlPlaneIsolation); err != nil {
 		return err
 	}
@@ -796,6 +827,8 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 		Agent: AgentSpec{
 			Image:            s.fx.AgentImage,
 			Command:          s.agentCommand,
+			Env:              []string{"FREESIDE_CONFORMANCE_A=1", "FREESIDE_CONFORMANCE_B=2"},
+			EgressProfile:    domain.EgressProviderOnly,
 			CredentialMounts: []CredentialMount{{Volume: credVolume, Target: s.fx.CredentialTarget}},
 		},
 	})
@@ -962,8 +995,9 @@ func (s *Suite) PreJob(ctx context.Context) (err error) {
 	}()
 	defer run.reapContainer(ctx, name)
 	return s.proveNoEagerStart(ctx, run, ContainerSpec{
-		Name:  name,
-		Image: s.fx.AgentImage,
+		Name:            name,
+		Image:           s.fx.AgentImage,
+		NetworkDisabled: true,
 	}, CheckPreJobProbe)
 }
 
@@ -1025,10 +1059,21 @@ func probeSpecMatches(rep InspectReport, spec ContainerSpec) bool {
 		sameImage(spec.Image, rep.ImageReference) &&
 		rep.WorkingDirectory == "/" &&
 		slices.Equal(rep.Command, spec.Command) &&
-		slices.Equal(rep.Env, expectedEnv) &&
+		sameEnvironment(rep.Env, expectedEnv) &&
 		sameMounts(rep.Mounts, spec.Mounts) &&
-		rep.NetworksObserved && (!spec.NetworkDisabled || rep.NetworkAttachmentCount == 0) &&
+		rep.NetworksObserved && sameContainerNetworks(rep.Networks, spec) &&
 		!rep.SSH && len(rep.PublishedSockets) == 0 && len(rep.PublishedPorts) == 0
+}
+
+func sameContainerNetworks(observed []string, spec ContainerSpec) bool {
+	switch {
+	case spec.NetworkDisabled:
+		return len(observed) == 0
+	case spec.Network != "":
+		return slices.Equal(observed, []string{spec.Network})
+	default:
+		return false
+	}
 }
 
 // probeNetworklessExport is the capability-producing conformance member. It
@@ -1142,9 +1187,10 @@ func (s *Suite) probeInExporterVerification(ctx context.Context, run *suiteRun) 
 	livenessName := s.conformanceName(inExporterLivenessSuffix)
 	defer run.reapContainer(ctx, livenessName)
 	if err := s.proveNoEagerStart(ctx, run, ContainerSpec{
-		Name:   livenessName,
-		Image:  s.b.cfg.ExporterImage,
-		Mounts: mounts,
+		Name:            livenessName,
+		Image:           s.b.cfg.ExporterImage,
+		Mounts:          mounts,
+		NetworkDisabled: true,
 	}, CheckInExporterVerification); err != nil {
 		return err
 	}
@@ -1152,10 +1198,11 @@ func (s *Suite) probeInExporterVerification(ctx context.Context, run *suiteRun) 
 	name := s.conformanceName(inExporterProbeSuffix)
 	defer run.reapContainer(ctx, name)
 	spec := ContainerSpec{
-		Name:    name,
-		Image:   s.b.cfg.ExporterImage,
-		Command: inExporterProbeCommand(s.b.cfg.WorkspaceTarget, s.fx.CredentialTarget, s.b.cfg.ProofPath),
-		Mounts:  mounts,
+		Name:            name,
+		Image:           s.b.cfg.ExporterImage,
+		Command:         inExporterProbeCommand(s.b.cfg.WorkspaceTarget, s.fx.CredentialTarget, s.b.cfg.ProofPath),
+		Mounts:          mounts,
+		NetworkDisabled: true,
 	}
 	var err error
 	spec, err = run.createContainer(ctx, spec)
@@ -1222,10 +1269,11 @@ func (s *Suite) seedCredential(ctx context.Context, run *suiteRun, credVolume st
 	name := s.conformanceName("seed")
 	token := shellQuote(path.Join(s.fx.CredentialTarget, credentialTokenFile))
 	spec := ContainerSpec{
-		Name:    name,
-		Image:   s.fx.AgentImage,
-		Command: []string{"sh", "-c", "printf '%s\\n' " + s.fx.CredentialMarker + " > " + token + "; sync"},
-		Mounts:  []Mount{{Type: MountVolume, Source: credVolume, Target: s.fx.CredentialTarget}},
+		Name:            name,
+		Image:           s.fx.AgentImage,
+		Command:         []string{"sh", "-c", "printf '%s\\n' " + s.fx.CredentialMarker + " > " + token + "; sync"},
+		Mounts:          []Mount{{Type: MountVolume, Source: credVolume, Target: s.fx.CredentialTarget}},
+		NetworkDisabled: true,
 	}
 	// Reap (stop then delete) is registered before the create so an ambiguous
 	// create is reaped, and so a seed that starts but never stops is stopped
@@ -1267,8 +1315,9 @@ func (s *Suite) probeCredentialContainment(ctx context.Context, run *suiteRun, c
 	token := shellQuote(path.Join(s.fx.CredentialTarget, credentialTokenFile))
 	markerFile := shellQuote(auditMarkerPath(s.fx.RunID))
 	spec := ContainerSpec{
-		Name:  name,
-		Image: s.fx.AgentImage,
+		Name:            name,
+		Image:           s.fx.AgentImage,
+		NetworkDisabled: true,
 		// Fail closed unless the detached volume is mounted and its token is the
 		// seeded marker: set -eu plus an explicit equality test, so a deleted or
 		// unmounted volume (or a wrong token) aborts before writing. Only then
@@ -1485,10 +1534,11 @@ func (s *Suite) probeWriterVolumeExclusion(ctx context.Context, run *suiteRun) e
 	// A long-lived writer holds the volume read-write and stays live while the
 	// second attach is attempted.
 	writerSpec := ContainerSpec{
-		Name:    writer,
-		Image:   s.fx.AgentImage,
-		Command: nonterminatingProbeCommand(),
-		Mounts:  []Mount{{Type: MountVolume, Source: volume, Target: s.b.cfg.WorkspaceTarget}},
+		Name:            writer,
+		Image:           s.fx.AgentImage,
+		Command:         nonterminatingProbeCommand(),
+		Mounts:          []Mount{{Type: MountVolume, Source: volume, Target: s.b.cfg.WorkspaceTarget}},
+		NetworkDisabled: true,
 	}
 	var err error
 	writerSpec, err = run.createContainer(ctx, writerSpec)
@@ -1533,8 +1583,9 @@ func (s *Suite) probeWriterVolumeExclusion(ctx context.Context, run *suiteRun) e
 	// (unexpected, since the writer created fine with the same spec shape) and
 	// fails closed rather than counting as the exclusion.
 	secondSpec := ContainerSpec{
-		Name:  second,
-		Image: s.b.cfg.ExporterImage,
+		Name:            second,
+		Image:           s.b.cfg.ExporterImage,
+		NetworkDisabled: true,
 		// The exclusion proof needs the exporter image and RO mount topology,
 		// not its finite payload. A nonterminating command prevents a runtime
 		// that attached and ran despite returning Code=2 from finishing before

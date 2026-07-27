@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +93,9 @@ func (fx *handoffFixture) assertReaped(t *testing.T) {
 	for name := range fx.rt.vols {
 		t.Errorf("volume %q survived teardown", name)
 	}
+	for name := range fx.rt.nets {
+		t.Errorf("network %q survived teardown", name)
+	}
 }
 
 func wantCheckFailure(t *testing.T, err error, want Check) {
@@ -137,6 +141,86 @@ func TestHandoffSuccess(t *testing.T) {
 		}
 	}
 	fx.assertReaped(t)
+}
+
+func TestHandoffRejectsUnenforcedEgress(t *testing.T) {
+	fx := newHandoffFixture(t)
+	fx.rt.onInspectNetwork = func(_ string, report NetworkReport) (NetworkReport, error) {
+		report.Mode = NetworkNAT
+		return report, nil
+	}
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckAgentEgress)
+	fx.assertReaped(t)
+}
+
+func TestHandoffRejectsUndeclaredAgentAttachment(t *testing.T) {
+	fx := newHandoffFixture(t)
+	names := namesFor(testHandoffSpec().RunID)
+	fx.rt.onInspect = func(id string, report InspectReport) (InspectReport, error) {
+		if id == names.Agent {
+			report.Networks = []string{"default"}
+			report.NetworkAttachmentCount = 1
+		}
+		return report, nil
+	}
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckControlPlaneIsolation)
+	fx.assertReaped(t)
+}
+
+func TestHandoffRejectsNetworkReplacementBeforeWriterStart(t *testing.T) {
+	fx := newHandoffFixture(t)
+	var inspections int
+	fx.rt.onInspectNetwork = func(_ string, report NetworkReport) (NetworkReport, error) {
+		inspections++
+		if inspections == 2 {
+			report.CreationDate = "replacement"
+		}
+		return report, nil
+	}
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckAgentEgress)
+	names := namesFor(testHandoffSpec().RunID)
+	if slices.Contains(fx.rt.calls, "start "+names.Agent) {
+		t.Fatal("writer started after the provider network was replaced")
+	}
+	fx.assertReaped(t)
+}
+
+func TestHandoffNetworkCleanupFailureFailsClosed(t *testing.T) {
+	fx := newHandoffFixture(t)
+	fx.rt.onDeleteNetwork = func(string) (bool, error) { return true, nil }
+	res, err := fx.run(t)
+	if res != nil {
+		t.Fatal("cleanup-failed handoff returned a trusted result")
+	}
+	wantCheckFailure(t, err, CheckTeardown)
+}
+
+func TestHandoffReapsAmbiguousNetworkCreate(t *testing.T) {
+	fx := newHandoffFixture(t)
+	fx.rt.createNetworkThenFail = true
+	_, err := fx.run(t)
+	wantCheckFailure(t, err, CheckAgentEgress)
+	fx.assertReaped(t)
+}
+
+func TestHandoffRequiresNetworkAbsenceProofAfterListFailure(t *testing.T) {
+	fx := newHandoffFixture(t)
+	var lists int
+	fx.rt.onListNetworks = func(list []NetworkSummary) ([]NetworkSummary, error) {
+		lists++
+		if lists <= 2 {
+			return nil, errors.New("network list unavailable")
+		}
+		return list, nil
+	}
+	res, err := fx.run(t)
+	if res != nil {
+		t.Fatal("absence-unproven handoff returned a trusted result")
+	}
+	wantCheckFailure(t, err, CheckTeardown)
 }
 
 func TestArchiveCapWriterBoundary(t *testing.T) {

@@ -92,9 +92,10 @@ type CredentialMount struct {
 
 // AgentSpec describes the credential-bearing writer container.
 type AgentSpec struct {
-	Image   string
-	Command []string
-	Env     []string
+	Image         string
+	Command       []string
+	Env           []string
+	EgressProfile domain.EgressProfile
 	// CredentialMounts lists every provider credential the agent gets. Each
 	// is its own mount, distinct from the workspace (spike check 1); the
 	// spec vocabulary cannot express a credential inside the root filesystem
@@ -218,6 +219,8 @@ func (s HandoffSpec) validate() error {
 		return fmt.Errorf("%w: Agent.Image must be digest-pinned", ErrInvalidHandoffSpec)
 	case len(s.Agent.Command) == 0:
 		return fmt.Errorf("%w: Agent.Command is required", ErrInvalidHandoffSpec)
+	case s.Agent.EgressProfile != domain.EgressProviderOnly:
+		return fmt.Errorf("%w: Agent.EgressProfile %q is not enforceable by this backend", ErrInvalidHandoffSpec, s.Agent.EgressProfile)
 	}
 	return s.Seed.validate()
 }
@@ -229,6 +232,7 @@ type handoffNames struct {
 	Observer  string
 	Agent     string
 	Exporter  string
+	Network   string
 }
 
 func namesFor(runID string) handoffNames {
@@ -238,6 +242,7 @@ func namesFor(runID string) handoffNames {
 		Observer:  "freeside-handoff-" + runID + "-observer",
 		Agent:     "freeside-handoff-" + runID + "-agent",
 		Exporter:  "freeside-handoff-" + runID + "-exporter",
+		Network:   "freeside-handoff-" + runID + "-egress",
 	}
 }
 
@@ -257,7 +262,7 @@ func runLabels(runID string) []Label {
 // read-write at the configured target, every credential volume read-only at
 // its own target, nothing else. validateAgentSpec re-verifies the result
 // rather than trusting this construction.
-func buildAgentSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label) ContainerSpec {
+func buildAgentSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label, proxyURL string) ContainerSpec {
 	mounts := []Mount{{
 		Type:   MountVolume,
 		Source: names.Workspace,
@@ -275,9 +280,10 @@ func buildAgentSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLab
 		Name:    names.Agent,
 		Image:   hs.Agent.Image,
 		Command: hs.Agent.Command,
-		Env:     hs.Agent.Env,
+		Env:     append(slices.Clone(hs.Agent.Env), proxyEnvironment(proxyURL)...),
 		Mounts:  mounts,
 		Labels:  append(runLabels(hs.RunID), ownershipLabel),
+		Network: names.Network,
 	}
 }
 

@@ -153,6 +153,11 @@ func TestNewFreezesConfigSlices(t *testing.T) {
 	if b.cfg.ExporterCommand[0] != want {
 		t.Errorf("backend command = %q after caller mutation, want frozen %q", b.cfg.ExporterCommand[0], want)
 	}
+	wantEndpoint := b.cfg.ProviderEndpoints[0]
+	cfg.ProviderEndpoints[0] = "caller-rewrite.example:443"
+	if b.cfg.ProviderEndpoints[0] != wantEndpoint {
+		t.Errorf("backend provider endpoint = %q after caller mutation, want frozen %q", b.cfg.ProviderEndpoints[0], wantEndpoint)
+	}
 }
 
 func TestNewValidation(t *testing.T) {
