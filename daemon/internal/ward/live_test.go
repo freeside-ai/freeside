@@ -465,6 +465,17 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(checkout, "run.sh"), []byte("#!/bin/sh\necho hi\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// A repository may legitimately track a root-level lost+found. The seeder
+	// clears the volume's own copy before staging so the observer can digest
+	// the whole workspace; if that ever regressed to pruning the path by name,
+	// the host would digest this file while the guest would not and the two
+	// would never agree. Seeding it here is what makes that a caught failure.
+	if err := os.MkdirAll(filepath.Join(checkout, "lost+found"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, "lost+found", "tracked.txt"), []byte("tracked\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cfg := testConfig()
 	cfg.ExporterImage = liveImage
 	cfg.SeedRoot = root

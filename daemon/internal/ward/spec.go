@@ -395,6 +395,13 @@ func seederScript(cfg Config) string {
 		// where the observer would then have to distinguish it from a seed that
 		// never happened.
 		"if [ ! -d " + stage + "/.git ]; then exit 92; fi; " +
+		// Clear the filesystem's own lost+found before staging, so the workspace
+		// afterwards holds exactly the source tree and nothing the volume added.
+		// The observer can then digest the whole workspace instead of pruning a
+		// path by name, which would otherwise make a repository that genuinely
+		// tracks a root-level lost+found undigestable on one side and digested
+		// on the other -- a mismatch no honest seed could ever clear.
+		"rm -rf " + ws + "/" + lostFoundDir + "; " +
 		"cp -a " + stage + "/. " + ws + "/; sync"
 }
 
@@ -443,9 +450,12 @@ const (
 	baseProofWorktreeKey = "worktree"
 )
 
-// lostFoundDir is the ext4 volume's own directory, present before anything is
-// seeded and absent from every source tree. The observer prunes it so the
-// digest covers the staged content and nothing the filesystem added.
+// lostFoundDir is the ext4 volume's own directory, present on a fresh volume
+// before anything is seeded. The seeder removes it before staging rather than
+// the observer pruning it by name: a repository may legitimately track a
+// root-level lost+found, and excluding the path on one side while the host
+// digests it on the other would make such a tree permanently unseedable.
+// Clearing it instead lets the attestation cover the whole workspace.
 const lostFoundDir = "lost+found"
 
 // observerScript reads the seeded base off the workspace and writes it, with
@@ -491,7 +501,7 @@ func observerScript(cfg Config, nonce string) string {
 		// it is the likeliest wrong workspace and deserves to name itself
 		// rather than arrive as an opaque digest mismatch.
 		"w=absent; if [ -n \"$(cd " + ws + " 2>/dev/null && " +
-		"find . -path ./" + lostFoundDir + " -prune -o -path ./.git -prune -o -type f -print 2>/dev/null | head -n 1)\" ]; " +
+		"find . -path ./.git -prune -o -type f -print 2>/dev/null | head -n 1)\" ]; " +
 		"then w=present; fi; " +
 		// The tree digest, over the two dimensions a git tree distinguishes:
 		// every regular file's sha256 against its path, and which files carry
@@ -505,9 +515,9 @@ func observerScript(cfg Config, nonce string) string {
 		// thousands of files, and spawning a process each would put that cost
 		// on every seeded handoff.
 		"t=none; if [ \"$g\" = present ]; then " +
-		"tc=\"$(cd " + ws + " && find . -path ./" + lostFoundDir + " -prune -o -type f -exec sha256sum {} + 2>/dev/null " +
+		"tc=\"$(cd " + ws + " && find . -type f -exec sha256sum {} + 2>/dev/null " +
 		"| sort | sha256sum | cut -d' ' -f1)\"; " +
-		"tx=\"$(cd " + ws + " && find . -path ./" + lostFoundDir + " -prune -o -type f -perm -u+x -print 2>/dev/null " +
+		"tx=\"$(cd " + ws + " && find . -type f -perm -u+x -print 2>/dev/null " +
 		"| sort | sha256sum | cut -d' ' -f1)\"; " +
 		"t=\"$(printf '%s\\n%s\\n' \"$tc\" \"$tx\" | sha256sum | cut -d' ' -f1)\"; fi; " +
 		"printf '" + baseProofNonceKey + "=%s\\n" +
