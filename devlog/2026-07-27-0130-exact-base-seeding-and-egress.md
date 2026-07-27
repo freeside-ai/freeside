@@ -162,6 +162,29 @@ boundary matters more than the gap: the gate now attests "the workspace
 holds the tree the daemon staged and declared as base X", not "the
 workspace is commit X".
 
+### Codex Review Rounds 2 and 3
+
+Round 2 (P2): the note's headings were sentence case where AGENTS.md
+requires title case for new Markdown, and every recent note already
+complies. Swept all seven headings rather than the two cited.
+
+Round 3 (P2, and the more interesting one): the tree digest covered paths
+and bytes only, so a workspace whose scripts lost the executable bit
+attested as the approved tree. A git tree records that bit, so the digest
+was not covering what it claimed. The stated rationale had conflated two
+things: ownership genuinely is not preserved across the host boundary,
+but **modes are** — which had been asserted without ever being tested.
+Probed the runtime before acting: 0755, 0644, and 0600 all survive
+`container copy`, `cp -a`, and the read-only remount unchanged, so
+including the bit could not fail an honest seed. The digest now covers
+per-file content against path plus the set of user-executable paths, and
+the live test seeds an executable file so Go's `Perm()&0o100` and
+BusyBox's `find -perm -u+x` are proven to agree on real content.
+
+The lesson repeats the earlier rounds': an assertion about the runtime
+that was never executed is not evidence, even when it sits in a rationale
+comment.
+
 Declined, with reasons: `$(cat)` drops NUL bytes, so a `.git/HEAD` of
 NUL + 40 hex would attest that SHA — it needs a hostile seed source that
 also matches the caller's declared base, which buys an attacker nothing
