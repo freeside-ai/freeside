@@ -322,6 +322,19 @@ func TestGolden(t *testing.T) {
 	// The durable execution record for that attempt. Capabilities are passed
 	// unsorted to exercise the constructor's canonicalization.
 	authIdentity := identity.ID
+	conversationDigest := stageDigest("7")
+	stageInputs, err := domain.NewStageInputSnapshot(domain.StageInputSnapshotInput{
+		InputDigest:          stageDigest("1"),
+		SpecificationDigest:  stageDigest("2"),
+		PromptPackageDigest:  stageDigest("3"),
+		PolicyDigest:         resolvedPolicy.Digest,
+		ConversationDigest:   &conversationDigest,
+		PriorArtifactDigests: []domain.Digest{stageDigest("4"), stageDigest("5")},
+		ImageInputDigests:    []domain.Digest{stageDigest("6")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
 		InvocationID: "inv-1", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-1",
 		Backend: "fresh_vm_read_only_volume_handoff",
@@ -332,7 +345,8 @@ func TestGolden(t *testing.T) {
 		CredentialMode: domain.CredentialSubscriptionContained,
 		EgressProfile:  domain.EgressProviderOnly,
 		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
-		SpecDigest:     "sha256:spec", PolicyDigest: resolvedPolicy.Digest, InputDigest: "sha256:input",
+		SpecDigest:     stageDigest("2"), PolicyDigest: resolvedPolicy.Digest, InputDigest: stageDigest("1"),
+		StageInputs:    &stageInputs,
 		Base:           domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
 		Workspace:      "freeside-handoff-run-1-ws",
 		AuthIdentityID: &authIdentity,
@@ -354,7 +368,8 @@ func TestGolden(t *testing.T) {
 		CredentialMode: domain.CredentialSubscriptionContained,
 		EgressProfile:  domain.EgressCleanVerification,
 		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/verifier@sha256:" + strings.Repeat("cd", 32)),
-		SpecDigest:     "sha256:spec", PolicyDigest: resolvedPolicy.Digest, InputDigest: "sha256:input",
+		SpecDigest:     stageDigest("2"), PolicyDigest: resolvedPolicy.Digest, InputDigest: stageDigest("1"),
+		StageInputs:        &stageInputs,
 		Base:               domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
 		Workspace:          "freeside-handoff-run-1-ws",
 		TrustProfileDigest: &waivedProfileDigest,
@@ -445,6 +460,7 @@ func TestGolden(t *testing.T) {
 		{"attempt", attempt},
 		{"auth_identity", identity},
 		{"auth_store_mutation_lease", mutationLease},
+		{"stage_input_snapshot", stageInputs},
 		{"execution_admission", admission},
 		{"execution_admission_waived", waivedAdmission},
 		{"execution_export", export},

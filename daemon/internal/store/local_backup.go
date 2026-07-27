@@ -342,6 +342,37 @@ func checkpointArtifactDigests(
 		}
 	}
 
+	admissionRows, err := sqlTx.QueryContext(ctx, listExecutionAdmissionsSQL)
+	if err != nil {
+		return nil, err
+	}
+	for admissionRows.Next() {
+		admission, err := scanExecutionAdmissionRecord(admissionRows)
+		if err != nil {
+			_ = admissionRows.Close()
+			return nil, err
+		}
+		if admission.StageInputs == nil {
+			continue
+		}
+		stageInputs := admission.StageInputs
+		digests[stageInputs.SpecificationDigest] = struct{}{}
+		digests[stageInputs.PromptPackageDigest] = struct{}{}
+		digests[stageInputs.PolicyDigest] = struct{}{}
+		if stageInputs.ConversationDigest != nil {
+			digests[*stageInputs.ConversationDigest] = struct{}{}
+		}
+		for _, digest := range stageInputs.PriorArtifactDigests {
+			digests[digest] = struct{}{}
+		}
+		for _, digest := range stageInputs.ImageInputDigests {
+			digests[digest] = struct{}{}
+		}
+	}
+	if err := errors.Join(admissionRows.Err(), admissionRows.Close()); err != nil {
+		return nil, err
+	}
+
 	items, err := readTx.ListAttentionItems(ctx)
 	if err != nil {
 		return nil, err

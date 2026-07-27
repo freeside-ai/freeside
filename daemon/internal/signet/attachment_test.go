@@ -2,7 +2,9 @@ package signet_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -26,6 +28,19 @@ func TestNewBlobStoreCreatesNestedDurableRoot(t *testing.T) {
 	}
 	if stored, err := blobs.Has(digest); err != nil || !stored {
 		t.Fatalf("stored = %t, %v", stored, err)
+	}
+}
+
+func TestBlobStoreOpenContextRejectsCanceledLookup(t *testing.T) {
+	blobs, err := signet.NewBlobStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	digest := domain.Digest("sha256:" + strings.Repeat("11", 32))
+	if _, err := blobs.OpenContext(ctx, digest); !errors.Is(err, context.Canceled) {
+		t.Fatalf("OpenContext = %v, want %v", err, context.Canceled)
 	}
 }
 

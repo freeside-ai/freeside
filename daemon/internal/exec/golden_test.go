@@ -44,6 +44,19 @@ func TestGolden(t *testing.T) {
 	// pinning the spec's shape this way also pins the mapping, so a field
 	// added to the record and forgotten here shows up as a golden diff.
 	identity := domain.AuthIdentityID("auth-claude-owner")
+	conversationDigest := execStageDigest("7")
+	stageInputs, err := domain.NewStageInputSnapshot(domain.StageInputSnapshotInput{
+		InputDigest:          execStageDigest("1"),
+		SpecificationDigest:  execStageDigest("2"),
+		PromptPackageDigest:  execStageDigest("3"),
+		PolicyDigest:         execStageDigest("4"),
+		ConversationDigest:   &conversationDigest,
+		PriorArtifactDigests: []domain.Digest{execStageDigest("5")},
+		ImageInputDigests:    []domain.Digest{execStageDigest("6")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
 		InvocationID: "inv-1", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-1",
 		Backend:        "fresh_vm_read_only_volume_handoff",
@@ -52,7 +65,8 @@ func TestGolden(t *testing.T) {
 		CredentialMode: domain.CredentialSubscriptionContained,
 		EgressProfile:  domain.EgressProviderOnly,
 		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
-		SpecDigest:     "sha256:spec", PolicyDigest: "sha256:policy", InputDigest: "sha256:input",
+		SpecDigest:     execStageDigest("2"), PolicyDigest: execStageDigest("4"), InputDigest: execStageDigest("1"),
+		StageInputs:    &stageInputs,
 		Base:           domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
 		Workspace:      "freeside-handoff-run-1-ws",
 		AuthIdentityID: &identity,

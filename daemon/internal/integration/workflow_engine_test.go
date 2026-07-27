@@ -6,6 +6,7 @@ import (
 	"io"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,7 +80,8 @@ func (f *workflowFixture) seed(t *testing.T) {
 	ctx := context.Background()
 	if _, err := f.engine.StartFakeRun(ctx, engine.FakeRunSpec{
 		RunID: testRunID, ProjectID: testProjectID,
-		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+		SpecDigest:   domain.Digest("sha256:" + strings.Repeat("1", 64)),
+		PolicyDigest: domain.Digest("sha256:" + strings.Repeat("2", 64)),
 	}); err != nil {
 		t.Fatalf("StartFakeRun: %v", err)
 	}
