@@ -220,6 +220,15 @@ func TestProviderEgressProbeCoversEveryAllowedEndpoint(t *testing.T) {
 	}
 }
 
+func TestHostServiceIsolationProbeUsesWardGateway(t *testing.T) {
+	script := hostServiceIsolationProbeScript(43123)
+	if !strings.Contains(script, `proxy_host=${proxy%:*}`) ||
+		!strings.Contains(script, `nc -w 3 "$proxy_host" 43123`) ||
+		!strings.Contains(script, "then exit 85") {
+		t.Fatalf("host-service isolation probe does not fail on a gateway connection: %q", script)
+	}
+}
+
 // scriptHappyProbes makes the fake report the two Full negative probes as
 // passing: the audit container's rootfs export carries the marker, and the
 // second attach in the exclusion probe is refused (as the reference runtime's
