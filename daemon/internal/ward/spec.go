@@ -429,7 +429,16 @@ func observerScript(cfg Config, nonce string) string {
 	// that reports an unexpected observation is what verifyBaseProof rejects.
 	// A missing proof file and a proof reporting "absent" are both failures,
 	// but only the second tells a reader what was wrong.
-	return "g=absent; if [ -d " + ws + "/.git ]; then g=present; fi; " +
+	//
+	// LC_ALL=C is load-bearing, not hygiene. A bracket range in a shell
+	// pattern is collated, not byte-valued, so under a UTF-8 locale `[!0-9a-f]`
+	// does not reject `A` through `E`: they collate inside the a-f range. A
+	// guest with LANG set would then attest an uppercase HEAD as a valid
+	// detached commit. verifyBaseProof re-tests the shape host-side and would
+	// still refuse it, but the guest expression must be strict on its own
+	// rather than leaning on an unstated environment assumption.
+	return "LC_ALL=C; export LC_ALL; " +
+		"g=absent; if [ -d " + ws + "/.git ]; then g=present; fi; " +
 		"d=no; s=none; " +
 		"if [ -f " + ws + "/.git/HEAD ]; then " +
 		"h=\"$(cat " + ws + "/.git/HEAD 2>/dev/null || true)\"; " +
