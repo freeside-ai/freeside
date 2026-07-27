@@ -41,8 +41,8 @@ var (
 // ErrInvalidRequest marks malformed or mutually inconsistent builder inputs.
 var ErrInvalidRequest = errors.New("invalid project-image build request")
 
-// ErrProofFailed marks a build whose allowlist, offline, or cache-dependency
-// proof did not establish the contract.
+// ErrProofFailed marks a build whose allowlist, offline, cache-dependency, or
+// repository-identity proof did not establish the contract.
 var ErrProofFailed = errors.New("project-image proof failed")
 
 // Request binds one build to its repository, commit, recipe, approved base,
@@ -207,6 +207,18 @@ func (b *Builder) Build(
 	if err := b.source.Fetch(ctx, normalized.Repository, normalized.CommitSHA, repositoryDir); err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("materialize %s at %s: %w",
 			normalized.Repository, normalized.CommitSHA, err)
+	}
+	// Re-resolve owner/name -> numeric ID now that the clone is complete: the
+	// HTTPS clone URL is name-addressed and mutable, and forks share object
+	// stores (see ward's seed rebinding), so a name transferred between the
+	// pre-fetch verification and the clone would serve foreign content that
+	// still carries the pinned commit. Verifying at both edges of the fetch
+	// rebinds the fetched content to the pre-verified RepositoryID; a transfer
+	// away and back inside the clone window, or API state lagging git serving,
+	// still escapes, and GitHub offers no ID-bound fetch mechanism to close
+	// either.
+	if err := b.resolver.Verify(ctx, normalized.Repository, normalized.RepositoryID); err != nil {
+		return domain.ProjectImage{}, fmt.Errorf("post-fetch repository identity: %w: %w", err, ErrProofFailed)
 	}
 	sourceDir := filepath.Join(scratch, "source")
 	if err := b.source.Copy(ctx, repositoryDir, normalized.CommitSHA, sourceDir); err != nil {
