@@ -12,7 +12,8 @@
 # build intended.
 #
 # The ward allowlist check is a separate step, scripts/check-agent-image.sh, and
-# applies to every agent image: this base, and any project image built on it.
+# applies to every agent image: this base, and any image later built on it (a
+# project image onboarding derives from it is an agent image too).
 #
 # Resolving the digest: an agent image must be digest-pinned, but Apple
 # `container` 1.1.0 does not resolve a locally-built name@digest reference from
