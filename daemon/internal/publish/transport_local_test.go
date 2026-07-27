@@ -3,6 +3,9 @@ package publish
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +35,28 @@ func testBranch(t *testing.T, in IdentityInput) string {
 		t.Fatal(err)
 	}
 	return id.BranchName()
+}
+
+// testGatedHead mints the publication gate capability that tr will
+// accept, claiming tr's authority for a stub publisher on first use the
+// way the daemon's wiring claims it for the real one. Production mints
+// the capability at exactly one site — inside Publisher.publish, once
+// every gate has passed — so a transport test exercising the transport's
+// own re-gates rather than the publication gate has to stand in for that
+// site. Tests of the gate requirement itself pass the zero GatedHead, or
+// one issued for another transport.
+func testGatedHead(t *testing.T, tr *Transport, in IdentityInput) GatedHead {
+	t.Helper()
+	if tr.publisher == nil {
+		if err := tr.AuthorizePublisher(&Publisher{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gated, err := gateHead(in, tr.publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return gated
 }
 
 // gitOut runs plain git to build and inspect test fixtures (the
@@ -84,9 +109,21 @@ type localRemote struct {
 
 func newLocalRemote(t *testing.T) *localRemote {
 	t.Helper()
+	return newLocalRemoteForRepo(t, "owner/example")
+}
+
+// newLocalRemoteForRepo builds the fixture under a caller-chosen
+// owner/name, so a test composing the transport with fixtures keyed to
+// another repository (the publisher's forge fake, its trust profile) can
+// have all of them name the same one.
+func newLocalRemoteForRepo(t *testing.T, repo string) *localRemote {
+	t.Helper()
 	root := t.TempDir()
-	repo := "owner/example"
-	bare := filepath.Join(root, "owner", "example.git")
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok {
+		t.Fatalf("fixture repo %q is not owner/name", repo)
+	}
+	bare := filepath.Join(root, owner, name+".git")
 	if err := os.MkdirAll(filepath.Dir(bare), 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +279,7 @@ func TestFetchBaseAcceptsRelativeDir(t *testing.T) {
 		t.Errorf("HEAD = %s, want %s", head, remote.baseSHA)
 	}
 	head := candidateHead(t, co)
-	if _, err := remote.transport.PushHead(t.Context(), co, testIdentityInput(remote.repo, head)); err != nil {
+	if _, err := remote.transport.PushHead(t.Context(), co, testGatedHead(t, remote.transport, testIdentityInput(remote.repo, head))); err != nil {
 		t.Errorf("PushHead over a relatively-named checkout: %v", err)
 	}
 }
@@ -305,7 +342,7 @@ func TestRejectedCallsMintNoToken(t *testing.T) {
 	if _, err := tr.FetchBase(t.Context(), remote.repo, "absent branch name", remote.baseSHA, checkoutDir(t)); err == nil {
 		t.Fatal("invalid base ref accepted")
 	}
-	if _, err := tr.PushHead(t.Context(), Checkout{dir: t.TempDir(), baseSHA: remote.baseSHA}, testIdentityInput(remote.repo, remote.baseSHA)); err == nil {
+	if _, err := tr.PushHead(t.Context(), Checkout{dir: t.TempDir(), baseSHA: remote.baseSHA}, testGatedHead(t, tr, testIdentityInput(remote.repo, remote.baseSHA))); err == nil {
 		t.Fatal("unbound checkout accepted")
 	}
 	if counter.mints != 0 {
@@ -320,7 +357,7 @@ func TestRejectedCallsMintNoToken(t *testing.T) {
 		t.Errorf("successful fetch minted %d tokens, want 1", counter.mints)
 	}
 	head := candidateHead(t, co)
-	if _, err := tr.PushHead(t.Context(), co, testIdentityInput(remote.repo, head)); err != nil {
+	if _, err := tr.PushHead(t.Context(), co, testGatedHead(t, tr, testIdentityInput(remote.repo, head))); err != nil {
 		t.Fatal(err)
 	}
 	if counter.mints < 2 {
@@ -336,7 +373,7 @@ func TestPushHeadCreatesBranch(t *testing.T) {
 	}
 	head := candidateHead(t, co)
 	in := testIdentityInput(remote.repo, head)
-	res, err := remote.transport.PushHead(t.Context(), co, in)
+	res, err := remote.transport.PushHead(t.Context(), co, testGatedHead(t, remote.transport, in))
 	if err != nil {
 		t.Fatalf("PushHead: %v", err)
 	}
@@ -356,11 +393,11 @@ func TestPushHeadConvergesOnIdenticalHead(t *testing.T) {
 	}
 	head := candidateHead(t, co)
 	in := testIdentityInput(remote.repo, head)
-	if _, err := remote.transport.PushHead(t.Context(), co, in); err != nil {
+	if _, err := remote.transport.PushHead(t.Context(), co, testGatedHead(t, remote.transport, in)); err != nil {
 		t.Fatal(err)
 	}
 	refsBefore := gitOut(t, remote.bare, "for-each-ref")
-	res, err := remote.transport.PushHead(t.Context(), co, in)
+	res, err := remote.transport.PushHead(t.Context(), co, testGatedHead(t, remote.transport, in))
 	if err != nil {
 		t.Fatalf("re-push: %v", err)
 	}
@@ -385,7 +422,7 @@ func TestPushHeadRefusesForeignBranch(t *testing.T) {
 	// is its descendant, so a plain push would fast-forward it — the
 	// exact ref move the create-only discipline must refuse.
 	gitOut(t, remote.work, "push", remote.bare, remote.baseSHA+":refs/heads/"+branch)
-	_, err = remote.transport.PushHead(t.Context(), co, in)
+	_, err = remote.transport.PushHead(t.Context(), co, testGatedHead(t, remote.transport, in))
 	if !errors.Is(err, ErrPublicationConflict) {
 		t.Errorf("error = %v, want ErrPublicationConflict", err)
 	}
@@ -406,7 +443,7 @@ func TestPushHeadMovesOnlyTheIntendedRef(t *testing.T) {
 	gitOut(t, co.Dir(), "branch", "extra", head)
 	gitOut(t, co.Dir(), "tag", "v9", head)
 	in := testIdentityInput(remote.repo, head)
-	if _, err := remote.transport.PushHead(t.Context(), co, in); err != nil {
+	if _, err := remote.transport.PushHead(t.Context(), co, testGatedHead(t, remote.transport, in)); err != nil {
 		t.Fatal(err)
 	}
 	refs := gitOut(t, remote.bare, "for-each-ref", "--format=%(refname)")
@@ -423,20 +460,166 @@ func TestPushHeadRefusesHeadMissingFromCheckout(t *testing.T) {
 		t.Fatal(err)
 	}
 	missing := strings.Repeat("deadbeef", 5)
-	if _, err := remote.transport.PushHead(t.Context(), co, testIdentityInput(remote.repo, missing)); err == nil {
+	if _, err := remote.transport.PushHead(t.Context(), co, testGatedHead(t, remote.transport, testIdentityInput(remote.repo, missing))); err == nil {
 		t.Error("PushHead accepted a head absent from the checkout")
 	}
 }
 
-func TestPushHeadRefusesInvalidIdentityInput(t *testing.T) {
+// TestPushHeadRefusesUngatedHead is the #288 boundary: the zero
+// GatedHead is the only one a caller outside this package can build, and
+// a push carrying it is refused before the checkout is even observed —
+// no token minted, no ref on the remote. A candidate that never faced
+// Publisher's gates therefore cannot reach the managed repository even
+// with a genuine Checkout in hand.
+func TestPushHeadRefusesUngatedHead(t *testing.T) {
 	remote := newLocalRemote(t)
-	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
+	counter := &countingTokenSource{}
+	tr := &Transport{tokens: counter, gitPath: "git", remoteBase: remote.transport.remoteBase, scheme: "file"}
+	co, err := tr.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := remote.transport.PushHead(t.Context(), co, IdentityInput{}); err == nil {
-		t.Error("PushHead accepted an identity input that derives nothing")
+	head := candidateHead(t, co)
+	mintsAfterFetch := counter.mints
+
+	if _, err := tr.PushHead(t.Context(), co, GatedHead{}); !errors.Is(err, ErrUngatedPublication) {
+		t.Errorf("error = %v, want ErrUngatedPublication", err)
 	}
+	if counter.mints != mintsAfterFetch {
+		t.Errorf("ungated push minted %d tokens, want 0", counter.mints-mintsAfterFetch)
+	}
+	// The identity the ungated head would have targeted holds no ref: the
+	// refusal is zero-effect, not a rejected-after-the-fact cleanup.
+	branch := testBranch(t, testIdentityInput(remote.repo, head))
+	if refs := gitOut(t, remote.bare, "for-each-ref", "--format=%(refname)"); strings.Contains(refs, branch) {
+		t.Errorf("ungated push created %s; remote refs: %s", branch, refs)
+	}
+
+	// A capability minted for a different transport is refused just as
+	// hard, and just as early: the gate this transport honours is its own
+	// publisher's, not any publisher's.
+	other := testGatedHead(t, remote.transport, testIdentityInput(remote.repo, head))
+	if _, err := tr.PushHead(t.Context(), co, other); !errors.Is(err, ErrUngatedPublication) {
+		t.Errorf("error = %v, want ErrUngatedPublication for a foreign publisher's gate", err)
+	}
+	if counter.mints != mintsAfterFetch {
+		t.Errorf("foreign-gated push minted %d tokens, want 0", counter.mints-mintsAfterFetch)
+	}
+	if refs := gitOut(t, remote.bare, "for-each-ref", "--format=%(refname)"); strings.Contains(refs, branch) {
+		t.Errorf("foreign-gated push created %s; remote refs: %s", branch, refs)
+	}
+}
+
+// TestGatedHeadIsSealed pins the capability property PushHead's gate
+// requirement rests on: outside this package a GatedHead can only be the
+// zero value and can only be read, so no caller can mint one or repoint
+// one it holds at another candidate. A new exported field fails it.
+func TestGatedHeadIsSealed(t *testing.T) {
+	typ := reflect.TypeOf(GatedHead{})
+	for i := range typ.NumField() {
+		if f := typ.Field(i); f.IsExported() {
+			t.Errorf("GatedHead.%s is exported; the capability must be unforgeable and immutable outside the package", f.Name)
+		}
+	}
+	for _, name := range []string{"Repo", "BaseRef", "SourceHeadSHA"} {
+		m, ok := typ.MethodByName(name)
+		if !ok {
+			t.Errorf("GatedHead has no %s accessor", name)
+			continue
+		}
+		if m.Type.NumOut() != 1 || m.Type.Out(0).Kind() != reflect.String {
+			t.Errorf("GatedHead.%s does not read a single string", name)
+		}
+	}
+	// Identity is the one non-string accessor: it must hand back the
+	// sealed Identity value, never anything a holder could mutate into a
+	// different branch derivation.
+	m, ok := typ.MethodByName("Identity")
+	if !ok || m.Type.NumOut() != 1 || m.Type.Out(0) != reflect.TypeOf(Identity{}) {
+		t.Errorf("GatedHead.Identity does not read a single Identity")
+	}
+}
+
+// TestNoExportedGatedHeadMint is the half of the seal reflection cannot
+// see. Sealing the fields stops a caller from building a GatedHead, but
+// an exported function that returns one would hand out the capability
+// just as effectively, and no property of the type would change. So read
+// the package's own production sources and fail on any exported function
+// or method yielding a GatedHead. This has to hold for every future
+// change to the package, not only for the one that introduced it, which
+// is why it is a test and not a review habit: an added exported mint
+// otherwise leaves the whole suite green.
+func TestNoExportedGatedHeadMint(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	scanned := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		scanned++
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || !fn.Name.IsExported() || fn.Type.Results == nil {
+				continue
+			}
+			// A method on an unexported receiver is unreachable from
+			// outside the package, so it cannot hand anything out.
+			if fn.Recv != nil && !exportedReceiver(fn.Recv) {
+				continue
+			}
+			for _, res := range fn.Type.Results.List {
+				if mentionsGatedHead(res.Type) {
+					t.Errorf(
+						"%s: exported %s returns a GatedHead; the capability must be mintable only on the gated publication path",
+						fset.Position(fn.Pos()), fn.Name.Name,
+					)
+				}
+			}
+		}
+	}
+	// A silent zero-file scan would make this test vacuously pass.
+	if scanned == 0 {
+		t.Fatal("scanned no production sources")
+	}
+}
+
+// exportedReceiver reports whether a method's receiver type is reachable
+// from outside the package.
+func exportedReceiver(recv *ast.FieldList) bool {
+	if len(recv.List) == 0 {
+		return false
+	}
+	found := false
+	ast.Inspect(recv.List[0].Type, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			found = id.IsExported()
+		}
+		return !found
+	})
+	return found
+}
+
+// mentionsGatedHead reports whether a result type names GatedHead
+// anywhere in it, so a pointer, slice, map, or channel of the capability
+// counts as handing it out.
+func mentionsGatedHead(expr ast.Expr) bool {
+	found := false
+	ast.Inspect(expr, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == "GatedHead" {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 // TestPushHeadRefusesUnboundCheckout is the reconstruction
@@ -455,11 +638,11 @@ func TestPushHeadRefusesUnboundCheckout(t *testing.T) {
 	gitOut(t, stray, "add", "x.txt")
 	gitOut(t, stray, "commit", "-m", "stray")
 	strayHead := gitOut(t, stray, "rev-parse", "HEAD")
-	if _, err := remote.transport.PushHead(t.Context(), Checkout{dir: stray, baseSHA: strayHead}, testIdentityInput(remote.repo, strayHead)); err == nil {
+	if _, err := remote.transport.PushHead(t.Context(), Checkout{dir: stray, baseSHA: strayHead}, testGatedHead(t, remote.transport, testIdentityInput(remote.repo, strayHead))); err == nil {
 		t.Error("PushHead accepted a checkout the transport never minted")
 	}
 	forged := Checkout{dir: stray, baseSHA: strayHead, baseRef: "main", repo: remote.repo, owner: remote.transport}
-	if _, err := remote.transport.PushHead(t.Context(), forged, testIdentityInput(remote.repo, strayHead)); err == nil {
+	if _, err := remote.transport.PushHead(t.Context(), forged, testGatedHead(t, remote.transport, testIdentityInput(remote.repo, strayHead))); err == nil {
 		t.Error("PushHead accepted a repository without the transport's repo binding")
 	}
 }
@@ -473,7 +656,7 @@ func TestPushHeadRefusesCheckoutBoundToOtherRepo(t *testing.T) {
 	head := candidateHead(t, co)
 	// The identity targets a repository this checkout was not
 	// materialized from; the stamped binding must refuse the push.
-	if _, err := remote.transport.PushHead(t.Context(), co, testIdentityInput("owner/other", head)); err == nil {
+	if _, err := remote.transport.PushHead(t.Context(), co, testGatedHead(t, remote.transport, testIdentityInput("owner/other", head))); err == nil {
 		t.Error("PushHead pushed to a repository the checkout is not bound to")
 	}
 }
@@ -491,7 +674,7 @@ func TestPushHeadRefusesIdentityOffTheFetchedBaseRef(t *testing.T) {
 	head := candidateHead(t, co)
 	in := testIdentityInput(remote.repo, head)
 	in.BaseRef = "release"
-	if _, err := remote.transport.PushHead(t.Context(), co, in); err == nil {
+	if _, err := remote.transport.PushHead(t.Context(), co, testGatedHead(t, remote.transport, in)); err == nil {
 		t.Error("PushHead accepted an identity whose base ref is not the fetched one")
 	}
 }
@@ -531,7 +714,7 @@ func TestPushHeadRefusesBaseMismatch(t *testing.T) {
 	// A Checkout claiming a base other than the one the checkout is
 	// actually bound to (HEAD) must fail the exact-base re-gate.
 	forged := Checkout{dir: co.Dir(), baseSHA: head, baseRef: "main", repo: remote.repo, owner: remote.transport}
-	if _, err := remote.transport.PushHead(t.Context(), forged, testIdentityInput(remote.repo, head)); err == nil {
+	if _, err := remote.transport.PushHead(t.Context(), forged, testGatedHead(t, remote.transport, testIdentityInput(remote.repo, head))); err == nil {
 		t.Error("PushHead accepted a checkout whose claimed base is not the enforced base")
 	}
 }
@@ -548,7 +731,7 @@ func TestPushHeadRefusesHeadOffTheBase(t *testing.T) {
 	}
 	tree := gitOut(t, co.Dir(), "rev-parse", co.BaseSHA()+"^{tree}")
 	orphan := gitOut(t, co.Dir(), "commit-tree", tree, "-m", "orphan")
-	if _, err := remote.transport.PushHead(t.Context(), co, testIdentityInput(remote.repo, orphan)); err == nil {
+	if _, err := remote.transport.PushHead(t.Context(), co, testGatedHead(t, remote.transport, testIdentityInput(remote.repo, orphan))); err == nil {
 		t.Error("PushHead accepted a head that does not descend from the enforced base")
 	}
 }

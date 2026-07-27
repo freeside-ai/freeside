@@ -102,10 +102,13 @@ func TestLiveTransportFetchPush(t *testing.T) {
 		t.Fatal(err)
 	}
 	branch := id.BranchName()
+	// This test drives the transport directly rather than through a
+	// Publisher, so it stands in for the one production mint site.
+	gated := publish.GateHeadForTest(t, tr, in)
 
 	client := &http.Client{Timeout: 30 * time.Second}
 
-	res, err := tr.PushHead(ctx, co, in)
+	res, err := tr.PushHead(ctx, co, gated)
 	if err != nil {
 		t.Fatalf("live PushHead: %v", err)
 	}
@@ -119,7 +122,7 @@ func TestLiveTransportFetchPush(t *testing.T) {
 	// branch, and deletes only a ref still at the head this run
 	// pushed: a live test must never remove a ref it did not create.
 	defer cleanupLiveBranch(t, client, "https://api.github.com", ts, repo, branch, head)
-	again, err := tr.PushHead(ctx, co, in)
+	again, err := tr.PushHead(ctx, co, gated)
 	if err != nil {
 		t.Fatalf("live re-push: %v", err)
 	}

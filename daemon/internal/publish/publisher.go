@@ -82,6 +82,12 @@ type Publisher struct {
 	authz         AuthorizationSource
 	storeDecision *storePublicationDecision
 	wiringErr     error
+	// transport is the one git transport this publisher's gate verdicts
+	// authorize. It is set only by Transport.AuthorizePublisher, which
+	// claims the transport's authority in the same step: the publisher
+	// cannot nominate itself, and a publisher that no transport claimed
+	// issues capabilities no transport accepts.
+	transport *Transport
 }
 
 // NewPublisher wires a Publisher. baseURL is the GitHub API root (real:
@@ -168,11 +174,98 @@ func (p *Publisher) VerifyOutcome(
 	return nil
 }
 
+// GatedHead is a capability, not a record: it says "this Publisher ran
+// every artifact, authorization, and trust-drift gate against this exact
+// candidate head and committed its publication intent", and only publish
+// can say it, at the one point where all of that is true. Every field is
+// unexported and read-only through accessors, so a caller outside this
+// package can construct only the zero value — which carries no gate — and
+// cannot alter one it holds. Transport.PushHead requires one, so a
+// candidate the gates would have refused cannot reach a remote ref (#288).
+//
+// The capability carries the derived Identity rather than the
+// IdentityInput it came from: IdentityInput.ArtifactDigests is a slice, so
+// handing that back would let a holder change which branch the push
+// derives after the gate ran. Every field here is a string or an Identity
+// (itself one unexported digest), so a copy is necessarily identical.
+//
+// A GatedHead proves the gates passed for this head, not that they still
+// pass at push time, and it does not expire. That window is the callback's
+// own — Publisher hands the capability straight to it — and the
+// create-only lease plus the gates re-running on every publication attempt
+// keep the outcome convergent. Making it single-use would require
+// Transport to share mint state with Publisher for no gain.
+type GatedHead struct {
+	identity Identity
+	repo     string
+	baseRef  string
+	headSHA  string
+	// issuer is the Publisher that minted this capability and owner the
+	// Transport it gates for. PushHead compares both against the authority
+	// the transport itself claimed, so neither field vouches for itself.
+	//
+	// Sealing the type alone proves only "some Publisher gated this head",
+	// which is weaker than it looks: Publisher's collaborators are
+	// exported interfaces and its approved-recipe set is a caller
+	// argument, so a caller holding a real Transport can stand up a second
+	// Publisher over permissive implementations, let its gates pass, and
+	// hand the capability to the real transport. Naming the issuer is what
+	// makes that verdict identifiable as not the daemon's.
+	issuer *Publisher
+	owner  *Transport
+	// gated is set only by gateHead below. Outside this package the zero
+	// value is the only constructible GatedHead, so false here means "no
+	// Publisher vouched for this head".
+	gated bool
+}
+
+// Identity is the publication identity derived from the gated candidate;
+// its BranchName is the only branch this capability authorizes.
+func (g GatedHead) Identity() Identity { return g.identity }
+
+// Repo is the managed repository the gated candidate publishes to.
+func (g GatedHead) Repo() string { return g.repo }
+
+// BaseRef is the base branch the gated candidate's publication targets.
+func (g GatedHead) BaseRef() string { return g.baseRef }
+
+// SourceHeadSHA is the exact candidate commit the gates passed for.
+func (g GatedHead) SourceHeadSHA() string { return g.headSHA }
+
+// gateHead mints the capability, stamped with the publisher issuing it
+// and the transport that publisher gates for. It has exactly one
+// production call site: after preparePublication commits the publication
+// intent, which is after every gate has passed. It derives the identity
+// itself rather than accepting one, so a capability whose branch belongs
+// to one candidate and whose repository or head belongs to another is
+// unrepresentable even in-package.
+func gateHead(in IdentityInput, issuer *Publisher) (GatedHead, error) {
+	identity, err := DeriveIdentity(in)
+	if err != nil {
+		return GatedHead{}, err
+	}
+	var owner *Transport
+	if issuer != nil {
+		owner = issuer.transport
+	}
+	return GatedHead{
+		identity: identity,
+		repo:     in.Repo,
+		baseRef:  in.BaseRef,
+		headSHA:  in.SourceHeadSHA,
+		issuer:   issuer,
+		owner:    owner,
+		gated:    true,
+	}, nil
+}
+
 // PublishAfterGate is the engine composition point for a daemon-side git
 // transport. It runs after every artifact, authorization, and fresh trust-drift
 // gate has passed and the publication intent is durable, but before Publisher
-// observes or creates the deterministic branch and PR. The callback must only
-// converge that exact candidate head onto its derived publication branch.
+// observes or creates the deterministic branch and PR. The callback receives
+// the GatedHead proving exactly that — the capability Transport.PushHead
+// requires — and must only converge that candidate head onto its derived
+// publication branch.
 //
 // A callback failure leaves the intent pending for recovery. A callback
 // success followed by a later failure is also safe to retry: the transport and
@@ -181,7 +274,7 @@ func (p *Publisher) PublishAfterGate(
 	ctx context.Context,
 	c Candidate,
 	approvedRecipes map[domain.Digest]bool,
-	publishHead func(context.Context, IdentityInput) error,
+	publishHead func(context.Context, GatedHead) error,
 ) (Result, error) {
 	if publishHead == nil {
 		return Result{}, errors.New("publish: nil after-gate head publisher")
@@ -198,7 +291,7 @@ func (p *Publisher) PublishAfterGateAndFinalize(
 	ctx context.Context,
 	c Candidate,
 	approvedRecipes map[domain.Digest]bool,
-	publishHead func(context.Context, IdentityInput) error,
+	publishHead func(context.Context, GatedHead) error,
 ) (Result, error) {
 	if p.storeDecision == nil {
 		return Result{}, errors.New("publish: finalization requires one shared store decision boundary")
@@ -219,7 +312,7 @@ func (p *Publisher) publish(
 	ctx context.Context,
 	c Candidate,
 	approvedRecipes map[domain.Digest]bool,
-	publishHead func(context.Context, IdentityInput) error,
+	publishHead func(context.Context, GatedHead) error,
 ) (Result, error) {
 	if p.wiringErr != nil {
 		return Result{}, p.wiringErr
@@ -274,7 +367,14 @@ func (p *Publisher) publish(
 		return Result{}, err
 	}
 	if publishHead != nil {
-		if err := publishHead(ctx, identityInput); err != nil {
+		// The gate is evaluated exactly once, here: the capability is
+		// minted only on this path, after preparePublication committed the
+		// intent, so the transport re-checks nothing the Publisher decided.
+		gated, err := gateHead(identityInput, p)
+		if err != nil {
+			return Result{}, fmt.Errorf("publish: gate candidate head: %w", err)
+		}
+		if err := publishHead(ctx, gated); err != nil {
 			return Result{}, fmt.Errorf("publish: publish candidate head after gate: %w", err)
 		}
 	}

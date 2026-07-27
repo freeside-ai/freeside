@@ -61,7 +61,7 @@ func TestTransportCarriesHostileHandoffCleanly(t *testing.T) {
 
 	in := testIdentityInput(remote.repo, res.CommitSHA)
 	branch := testBranch(t, in)
-	pushed, err := remote.transport.PushHead(t.Context(), co, in)
+	pushed, err := remote.transport.PushHead(t.Context(), co, testGatedHead(t, remote.transport, in))
 	if err != nil {
 		t.Fatalf("PushHead: %v", err)
 	}

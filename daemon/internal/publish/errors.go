@@ -161,6 +161,21 @@ var ErrPublicationConflict = errors.New("existing publication resource conflicts
 // intent is recorded or any GitHub request is made.
 var ErrInvocationReserved = errors.New("publication invocation is reserved by another owner")
 
+// ErrUngatedPublication is returned when Transport.PushHead is handed a
+// GatedHead the Publisher never minted: the candidate's authorization,
+// artifact, and trust-drift gates have not been evaluated, so the push
+// would create a ref those gates might have refused (#288). The refusal
+// costs nothing — it precedes every checkout observation and any token
+// mint.
+var ErrUngatedPublication = errors.New("candidate head did not pass the publication gate")
+
+// ErrTransportAuthorityClaimed is returned when a transport's single
+// publication authority is claimed a second time, or when a publisher
+// already gating for one transport is offered to another. The claim is
+// one-shot so that holding a transport does not confer the right to
+// nominate which publisher it trusts (#288, PR #322 review).
+var ErrTransportAuthorityClaimed = errors.New("publication authority is already claimed")
+
 // ErrForeignResource is returned when a pull request occupies the
 // publication branch without carrying this publication's identity
 // marker. It is not ours to converge, so the publication refuses

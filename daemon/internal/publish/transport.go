@@ -37,6 +37,13 @@ type Transport struct {
 	gitPath    string
 	remoteBase string
 	scheme     string
+	// publisher is the one authority whose gate verdicts this transport
+	// honours, claimed once by AuthorizePublisher and never replaceable.
+	// It lives here, on the credential-bearing side, precisely so that
+	// holding the transport does not confer the ability to nominate the
+	// authority: a caller who could set this could nominate a publisher
+	// of its own making, which is the whole bypass this closes.
+	publisher *Publisher
 }
 
 // TransportOptions carries the two injectable transport inputs.
@@ -107,6 +114,35 @@ func validRemoteBase(remoteBase string) error {
 	case parsed.Opaque != "":
 		return errors.New("transport remote base is not a hierarchical URL")
 	}
+	return nil
+}
+
+// AuthorizePublisher claims this transport's single publication
+// authority for p: from here on, PushHead honours a GatedHead only if p
+// issued it. The claim is one-shot by design. A caller holding the
+// transport must not be able to nominate its own authority — Publisher's
+// collaborators are exported interfaces and its approved-recipe set is a
+// caller argument, so a nominable authority is no authority at all — and
+// a re-bindable one is nominable by whoever binds last. First claim wins,
+// every later claim fails loudly, so a second publisher cannot displace
+// the daemon's own, and an attempt to claim it out from under the wiring
+// surfaces as a startup error rather than a silent takeover.
+//
+// Call it once, at wiring, before either party is used. A transport with
+// no claimed authority publishes nothing: PushHead refuses every
+// capability, so a wiring that forgets fails closed.
+func (t *Transport) AuthorizePublisher(p *Publisher) error {
+	if p == nil {
+		return errors.New("transport: nil publication authority")
+	}
+	if t.publisher != nil {
+		return fmt.Errorf("transport already serves a publication authority: %w", ErrTransportAuthorityClaimed)
+	}
+	if p.transport != nil {
+		return fmt.Errorf("publisher already gates for another transport: %w", ErrTransportAuthorityClaimed)
+	}
+	t.publisher = p
+	p.transport = t
 	return nil
 }
 
@@ -279,28 +315,51 @@ func (t *Transport) FetchBase(ctx context.Context, repo, baseRef, baseSHA, dir s
 // change.
 //
 // The target repository, the pushed commit, and the branch all come
-// from one IdentityInput: the repository is in.Repo, the head is
-// in.SourceHeadSHA, and the branch is the derived identity's
-// BranchName, so a branch belonging to some other candidate is
-// unrepresentable rather than merely checked. The identity's
-// repository and base ref must be the ones the Checkout capability
-// was actually fetched from, so a publication cannot target a branch
-// the enforced base was never reachable from.
+// from one GatedHead: the repository is its Repo, the head is its
+// SourceHeadSHA, and the branch is its identity's BranchName, so a
+// branch belonging to some other candidate is unrepresentable rather
+// than merely checked. That repository and base ref must be the ones
+// the Checkout capability was actually fetched from, so a publication
+// cannot target a branch the enforced base was never reachable from.
 //
 // PushHead is a transport, not an authorization boundary: it proves
 // what it can see (checkout provenance, repository, base, ancestry),
-// never that the candidate is publishable. Publisher.Publish owns the
-// authorization, artifact, and drift gates, and the engine composes
-// the two in that order (#236); calling PushHead for a candidate that
-// has not passed Publish's gates creates a ref those gates would have
-// refused.
-func (t *Transport) PushHead(ctx context.Context, co Checkout, in IdentityInput) (PushResult, error) {
-	id, err := DeriveIdentity(in)
-	if err != nil {
-		return PushResult{}, err
+// never that the candidate is publishable. Publisher owns the
+// authorization, artifact, and drift gates and evaluates them exactly
+// once; this call requires the GatedHead that path mints, so a
+// candidate those gates would have refused cannot reach a ref (#288).
+// Requiring the capability is not re-running the gates: PushHead reads
+// no policy and reaches no authorization state.
+//
+// Two capabilities, two distinct claims, both per-instance: the Checkout
+// says this transport fetched this base, the GatedHead says the publisher
+// bound to this transport cleared this head. Neither substitutes for the
+// other.
+func (t *Transport) PushHead(ctx context.Context, co Checkout, gh GatedHead) (PushResult, error) {
+	if !gh.gated {
+		return PushResult{}, ErrUngatedPublication
 	}
-	repo := in.Repo
-	headSHA := in.SourceHeadSHA
+	// Per-instance, exactly like the Checkout's provenance below: the only
+	// gate this transport honours is the one its claimed authority issued.
+	// Sealing the type alone would prove no more than "some Publisher
+	// gated this", and Publisher's collaborators are exported interfaces,
+	// so a caller could assemble a permissive one and have its verdict
+	// travel here. The authority is read from this transport, never from
+	// the capability, so a forged or foreign issuer cannot vouch for
+	// itself.
+	if t.publisher == nil {
+		return PushResult{}, fmt.Errorf(
+			"transport has no claimed publication authority: %w", ErrUngatedPublication,
+		)
+	}
+	if gh.issuer != t.publisher || gh.owner != t {
+		return PushResult{}, fmt.Errorf(
+			"publication gate was issued by a publisher this transport does not serve: %w",
+			ErrUngatedPublication,
+		)
+	}
+	repo := gh.repo
+	headSHA := gh.headSHA
 	ref, err := parseTransportRepo(repo)
 	if err != nil {
 		return PushResult{}, err
@@ -308,13 +367,13 @@ func (t *Transport) PushHead(ctx context.Context, co Checkout, in IdentityInput)
 	if co.owner != t {
 		return PushResult{}, errors.New("push: checkout was not materialized by this transport instance; run FetchBase on it")
 	}
-	if in.Repo != co.repo {
-		return PushResult{}, fmt.Errorf("identity targets repository %q, checkout was fetched from %q: %w", in.Repo, co.repo, ErrGitTransport)
+	if repo != co.repo {
+		return PushResult{}, fmt.Errorf("identity targets repository %q, checkout was fetched from %q: %w", repo, co.repo, ErrGitTransport)
 	}
-	if in.BaseRef != co.baseRef {
-		return PushResult{}, fmt.Errorf("identity targets base ref %q, checkout was fetched from %q: %w", in.BaseRef, co.baseRef, ErrGitTransport)
+	if gh.baseRef != co.baseRef {
+		return PushResult{}, fmt.Errorf("identity targets base ref %q, checkout was fetched from %q: %w", gh.baseRef, co.baseRef, ErrGitTransport)
 	}
-	branch := id.BranchName()
+	branch := gh.identity.BranchName()
 	if !validBranchName(branch) {
 		return PushResult{}, fmt.Errorf("branch %q is not a valid branch name", branch)
 	}

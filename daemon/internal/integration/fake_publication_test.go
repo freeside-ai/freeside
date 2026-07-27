@@ -327,16 +327,16 @@ func (tr *integrationTransport) fetchCount() int {
 func (tr *integrationTransport) PushHead(
 	_ context.Context,
 	checkout engine.PublicationCheckout,
-	in publish.IdentityInput,
+	gated publish.GatedHead,
 ) (publish.PushResult, error) {
 	sealed, ok := checkout.(integrationCheckout)
 	if !ok || sealed.owner != tr {
 		return publish.PushResult{}, engine.ErrForeignPublicationCheckout
 	}
-	identity, err := publish.DeriveIdentity(in)
-	if err != nil {
-		return publish.PushResult{}, err
-	}
+	// Branch and head come off the gate capability, as they do in the real
+	// transport: a double that took them from separately supplied input
+	// could stand in for a push the Publisher never cleared.
+	identity := gated.Identity()
 	tr.mu.Lock()
 	tr.pushes++
 	fail := tr.fail
@@ -345,7 +345,7 @@ func (tr *integrationTransport) PushHead(
 	if fail {
 		return publish.PushResult{}, errors.New("injected publication push failure")
 	}
-	conflict := tr.forge.setRef(identity.BranchName(), in.SourceHeadSHA)
+	conflict := tr.forge.setRef(identity.BranchName(), gated.SourceHeadSHA())
 	if conflict {
 		return publish.PushResult{}, errors.New("publication ref moved")
 	}

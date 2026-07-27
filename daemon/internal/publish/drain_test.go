@@ -18,7 +18,7 @@ import (
 type fakeResolver struct {
 	cand        publish.Candidate
 	approved    map[domain.Digest]bool
-	publishHead func(context.Context, publish.IdentityInput) error
+	publishHead func(context.Context, publish.GatedHead) error
 	err         error
 }
 
@@ -68,7 +68,7 @@ func resolverFor(t *testing.T, c publish.Candidate) fakeResolver {
 	t.Helper()
 	return fakeResolver{
 		cand: c, approved: testApprovedRecipes(),
-		publishHead: func(context.Context, publish.IdentityInput) error { return nil },
+		publishHead: func(context.Context, publish.GatedHead) error { return nil },
 	}
 }
 
@@ -217,14 +217,10 @@ func TestDrainRecoversHeadTransportBeforeForgeConvergence(t *testing.T) {
 
 	transportCalls := 0
 	resolver := resolverFor(t, cand)
-	resolver.publishHead = func(_ context.Context, input publish.IdentityInput) error {
+	resolver.publishHead = func(_ context.Context, gated publish.GatedHead) error {
 		transportCalls++
-		identity, err := publish.DeriveIdentity(input)
-		if err != nil {
-			return err
-		}
 		h.gh.mu.Lock()
-		h.gh.refs[identity.BranchName()] = cand.HeadSHA
+		h.gh.refs[gated.Identity().BranchName()] = cand.HeadSHA
 		h.gh.mu.Unlock()
 		return nil
 	}
@@ -254,13 +250,9 @@ func TestPublishAfterGateAndFinalizeDoesNotRegateReturnedResult(t *testing.T) {
 		ctx,
 		cand,
 		testApprovedRecipes(),
-		func(_ context.Context, input publish.IdentityInput) error {
-			identity, err := publish.DeriveIdentity(input)
-			if err != nil {
-				return err
-			}
+		func(_ context.Context, gated publish.GatedHead) error {
 			gh.mu.Lock()
-			gh.refs[identity.BranchName()] = cand.HeadSHA
+			gh.refs[gated.Identity().BranchName()] = cand.HeadSHA
 			gh.mu.Unlock()
 			// The external head now exists. A second pre-effect audit would
 			// reject this drift and strand the returned PR result.

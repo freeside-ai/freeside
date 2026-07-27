@@ -22,8 +22,16 @@ const testBaseSHA = "1111111111111111111111111111111111111111"
 // from the publishing invocation the candidate carries.
 func authorizingInput(t *testing.T) domain.CandidateAuthorizationInput {
 	t.Helper()
+	return authorizingInputAtHead(t, testHeadSHA)
+}
+
+// authorizingInputAtHead is authorizingInput over a caller-chosen
+// candidate head, for tests that publish a head which must really exist
+// in a git fixture rather than the fixed one.
+func authorizingInputAtHead(t *testing.T, headSHA string) domain.CandidateAuthorizationInput {
+	t.Helper()
 	evidenceDigest, err := domain.ComputeEvidenceSnapshotDigest(
-		[]domain.Artifact{testArtifact(t, testHeadSHA)},
+		[]domain.Artifact{testArtifact(t, headSHA)},
 	)
 	if err != nil {
 		t.Fatalf("ComputeEvidenceSnapshotDigest: %v", err)
@@ -31,7 +39,7 @@ func authorizingInput(t *testing.T) domain.CandidateAuthorizationInput {
 	return domain.CandidateAuthorizationInput{
 		Repo:                     testTrustRepo,
 		BaseSHA:                  testBaseSHA,
-		HeadSHA:                  testHeadSHA,
+		HeadSHA:                  headSHA,
 		ImportResultDigest:       "sha256:import-result-fixture",
 		VerificationRecipeDigest: testRecipe,
 		EvidenceSnapshotDigest:   evidenceDigest,
@@ -59,6 +67,13 @@ func newAuthorization(t *testing.T, in domain.CandidateAuthorizationInput) domai
 func testCandidateAuthorization(t *testing.T) domain.CandidateAuthorization {
 	t.Helper()
 	return newAuthorization(t, authorizingInput(t))
+}
+
+// testCandidateAuthorizationAtHead is the conformant record for a
+// candidate published at a caller-chosen head.
+func testCandidateAuthorizationAtHead(t *testing.T, headSHA string) domain.CandidateAuthorization {
+	t.Helper()
+	return newAuthorization(t, authorizingInputAtHead(t, headSHA))
 }
 
 // memoryAuthorizationSource is the in-memory AuthorizationSource fake,

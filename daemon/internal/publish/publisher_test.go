@@ -324,16 +324,24 @@ func testArtifact(t *testing.T, headSHA string) domain.Artifact {
 
 func testCandidate(t *testing.T) publish.Candidate {
 	t.Helper()
+	return testCandidateAtHead(t, testHeadSHA)
+}
+
+// testCandidateAtHead is testCandidate published at a caller-chosen
+// head, for tests whose head must be a commit that really exists in a
+// git fixture.
+func testCandidateAtHead(t *testing.T, headSHA string) publish.Candidate {
+	t.Helper()
 	recipe := testRecipe
 	profileDigest := testTrustProfileDigest(t)
-	authID := testCandidateAuthorization(t).ID
+	authID := testCandidateAuthorizationAtHead(t, headSHA).ID
 	return publish.Candidate{
 		Repo:               testTrustRepo,
 		BaseRef:            "main",
-		HeadSHA:            testHeadSHA,
+		HeadSHA:            headSHA,
 		Title:              "Candidate: evidence-backed change",
 		Body:               "Verified candidate publication.",
-		Artifacts:          []domain.Artifact{testArtifact(t, testHeadSHA)},
+		Artifacts:          []domain.Artifact{testArtifact(t, headSHA)},
 		RecipeDigest:       &recipe,
 		InvocationID:       "inv-0001",
 		AuthorizationID:    &authID,
@@ -416,7 +424,7 @@ func TestPublishAfterGateOrdersTransportBetweenIntentAndForge(t *testing.T) {
 		context.Background(),
 		candidate,
 		testApprovedRecipes(),
-		func(_ context.Context, input publish.IdentityInput) error {
+		func(_ context.Context, gated publish.GatedHead) error {
 			calls++
 			if len(ledger.keys) != 1 {
 				t.Fatalf("durable intents at transport callback = %d, want 1", len(ledger.keys))
@@ -424,12 +432,14 @@ func TestPublishAfterGateOrdersTransportBetweenIntentAndForge(t *testing.T) {
 			if requests := gh.requestLog(); len(requests) != 0 {
 				t.Fatalf("forge contacted before transport callback: %v", requests)
 			}
-			identity, err := publish.DeriveIdentity(input)
-			if err != nil {
-				return err
+			// The capability arrives already bound to the gated candidate:
+			// the callback derives nothing and can target nothing else.
+			if gated.SourceHeadSHA() != candidate.HeadSHA || gated.Repo() != candidate.Repo {
+				t.Fatalf("gated head = %s on %s, want %s on %s",
+					gated.SourceHeadSHA(), gated.Repo(), candidate.HeadSHA, candidate.Repo)
 			}
 			gh.mu.Lock()
-			gh.refs[identity.BranchName()] = candidate.HeadSHA
+			gh.refs[gated.Identity().BranchName()] = candidate.HeadSHA
 			gh.mu.Unlock()
 			return nil
 		},

@@ -48,11 +48,13 @@ var errPublicationOutcomeConflict = errors.New("outcome inbox key holds a differ
 // RecoveryCandidate carries every input needed to repeat the complete
 // publication effect after an intent-only crash. PublishHead must
 // idempotently transport this exact candidate head before Publisher asks the
-// forge to converge the pull request.
+// forge to converge the pull request. The drain re-runs the gates on the
+// recovered candidate, so PublishHead is handed a freshly minted GatedHead:
+// a crash never carries an old gate decision forward.
 type RecoveryCandidate struct {
 	Candidate       Candidate
 	ApprovedRecipes map[domain.Digest]bool
-	PublishHead     func(context.Context, IdentityInput) error
+	PublishHead     func(context.Context, GatedHead) error
 }
 
 // Resolve returns the candidate, current approved-recipe set, and the

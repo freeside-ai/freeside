@@ -60,10 +60,12 @@ type PublicationCheckout interface {
 }
 
 // PublicationTransport is the engine-facing composition seam over the
-// publish lane's sealed git transport.
+// publish lane's sealed git transport. PushHead takes a publish.GatedHead
+// rather than a bare identity: only Publisher's post-gate callback can
+// produce one, so the seam itself cannot express an ungated push (#288).
 type PublicationTransport interface {
 	FetchBase(ctx context.Context, repo, baseRef, baseSHA, dir string) (PublicationCheckout, error)
-	PushHead(ctx context.Context, checkout PublicationCheckout, in publish.IdentityInput) (publish.PushResult, error)
+	PushHead(ctx context.Context, checkout PublicationCheckout, gated publish.GatedHead) (publish.PushResult, error)
 }
 
 // GitPublicationTransport adapts publish.Transport's sealed Checkout to the
@@ -104,16 +106,20 @@ func (t *GitPublicationTransport) FetchBase(
 	return gitPublicationCheckout{checkout: checkout, owner: t}, nil
 }
 
+// PushHead forwards both capabilities to the sealed transport: the
+// adapter's own owner check keeps a foreign checkout out, and the
+// publish.GatedHead it passes through is the Publisher's gate proof, which
+// this adapter can neither mint nor weaken.
 func (t *GitPublicationTransport) PushHead(
 	ctx context.Context,
 	checkout PublicationCheckout,
-	in publish.IdentityInput,
+	gated publish.GatedHead,
 ) (publish.PushResult, error) {
 	sealed, ok := checkout.(gitPublicationCheckout)
 	if !ok || sealed.owner != t {
 		return publish.PushResult{}, ErrForeignPublicationCheckout
 	}
-	return t.transport.PushHead(ctx, sealed.checkout, in)
+	return t.transport.PushHead(ctx, sealed.checkout, gated)
 }
 
 // FakePublicationConfig supplies the already-reviewed deterministic and
@@ -1179,8 +1185,8 @@ func (w *fakePublicationWorkflow) reconcileTask(
 	candidate := fakePublicationCandidate(task, checkpoint)
 	w.candidates[task.PublicationInvocationID] = publish.RecoveryCandidate{
 		Candidate: candidate, ApprovedRecipes: maps.Clone(w.approvedRecipes),
-		PublishHead: func(ctx context.Context, identityInput publish.IdentityInput) error {
-			_, err := w.transport.PushHead(ctx, checkout, identityInput)
+		PublishHead: func(ctx context.Context, gated publish.GatedHead) error {
+			_, err := w.transport.PushHead(ctx, checkout, gated)
 			return err
 		},
 	}
@@ -1213,8 +1219,8 @@ func (w *fakePublicationWorkflow) reconcileTask(
 		ctx,
 		candidate,
 		w.approvedRecipes,
-		func(ctx context.Context, identityInput publish.IdentityInput) error {
-			_, err := w.transport.PushHead(ctx, checkout, identityInput)
+		func(ctx context.Context, gated publish.GatedHead) error {
+			_, err := w.transport.PushHead(ctx, checkout, gated)
 			return err
 		},
 	)
