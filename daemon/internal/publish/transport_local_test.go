@@ -109,9 +109,21 @@ type localRemote struct {
 
 func newLocalRemote(t *testing.T) *localRemote {
 	t.Helper()
+	return newLocalRemoteForRepo(t, "owner/example")
+}
+
+// newLocalRemoteForRepo builds the fixture under a caller-chosen
+// owner/name, so a test composing the transport with fixtures keyed to
+// another repository (the publisher's forge fake, its trust profile) can
+// have all of them name the same one.
+func newLocalRemoteForRepo(t *testing.T, repo string) *localRemote {
+	t.Helper()
 	root := t.TempDir()
-	repo := "owner/example"
-	bare := filepath.Join(root, "owner", "example.git")
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok {
+		t.Fatalf("fixture repo %q is not owner/name", repo)
+	}
+	bare := filepath.Join(root, owner, name+".git")
 	if err := os.MkdirAll(filepath.Dir(bare), 0o750); err != nil {
 		t.Fatal(err)
 	}

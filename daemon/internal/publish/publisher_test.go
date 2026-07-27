@@ -324,16 +324,24 @@ func testArtifact(t *testing.T, headSHA string) domain.Artifact {
 
 func testCandidate(t *testing.T) publish.Candidate {
 	t.Helper()
+	return testCandidateAtHead(t, testHeadSHA)
+}
+
+// testCandidateAtHead is testCandidate published at a caller-chosen
+// head, for tests whose head must be a commit that really exists in a
+// git fixture.
+func testCandidateAtHead(t *testing.T, headSHA string) publish.Candidate {
+	t.Helper()
 	recipe := testRecipe
 	profileDigest := testTrustProfileDigest(t)
-	authID := testCandidateAuthorization(t).ID
+	authID := testCandidateAuthorizationAtHead(t, headSHA).ID
 	return publish.Candidate{
 		Repo:               testTrustRepo,
 		BaseRef:            "main",
-		HeadSHA:            testHeadSHA,
+		HeadSHA:            headSHA,
 		Title:              "Candidate: evidence-backed change",
 		Body:               "Verified candidate publication.",
-		Artifacts:          []domain.Artifact{testArtifact(t, testHeadSHA)},
+		Artifacts:          []domain.Artifact{testArtifact(t, headSHA)},
 		RecipeDigest:       &recipe,
 		InvocationID:       "inv-0001",
 		AuthorizationID:    &authID,
