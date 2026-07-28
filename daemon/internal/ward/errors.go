@@ -108,6 +108,14 @@ const (
 	// (a held lease, an undeclared identity) surface as operational errors
 	// of the same fail-closed gate so their typed causes stay reachable.
 	CheckAuthStoreMutationLease Check = "auth_store_mutation_lease"
+	// CheckRecovery covers restart-safe recovery of a journalled handoff:
+	// adopt-or-teardown decided from the persisted record plus fresh
+	// runtime evidence, the ownership-label orphan audit, and the committed
+	// loss result. A recovery that cannot prove absence, release only a
+	// freshly verified export, or close the record fails here — and a
+	// CheckRecovery failure never commits a loss, so rerun stays unsafe
+	// until a later recovery proves otherwise.
+	CheckRecovery Check = "recovery"
 )
 
 // AllChecks lists every valid Check and is the enum's single registration
@@ -132,6 +140,7 @@ var AllChecks = []Check{
 	CheckWorkspaceSeeding,
 	CheckObservedBaseIdentity,
 	CheckAuthStoreMutationLease,
+	CheckRecovery,
 }
 
 func (c Check) valid() bool {
@@ -141,7 +150,8 @@ func (c Check) valid() bool {
 		CheckInExporterVerification, CheckExportVerification, CheckTeardown,
 		CheckWriterVolumeExclusion, CheckCredentialContainment,
 		CheckSameVMRefutation, CheckPreJobProbe, CheckNetworklessExport, CheckAgentEgress,
-		CheckWorkspaceSeeding, CheckObservedBaseIdentity, CheckAuthStoreMutationLease:
+		CheckWorkspaceSeeding, CheckObservedBaseIdentity, CheckAuthStoreMutationLease,
+		CheckRecovery:
 		return true
 	default:
 		return false
