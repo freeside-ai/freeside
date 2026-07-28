@@ -38,7 +38,8 @@ if [ "$#" -lt 1 ] || [ "$#" -gt 2 ] || [ -z "${1:-}" ] || [ -z "${2-container}" 
 fi
 case "$1" in
 -h | --help)
-	grep '^#' "$0" | sed 's/^# \{0,1\}//'
+	# Only the leading comment block is help; later comments are internal.
+	awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
 	exit 0
 	;;
 esac
@@ -52,6 +53,7 @@ command -v jq >/dev/null 2>&1 || {
 
 probe_container=""
 cidfile=""
+runtime_json=""
 ownership_label="ai.freeside.project-image.owner"
 # The token gates a force-delete, so it must be unguessable: a predictable
 # value would let a local process plant a container that passes the ownership
@@ -69,41 +71,122 @@ valid_container_id() {
 	esac
 }
 
+# Mirrors ward.RejectDuplicateJSONKeys (daemon/internal/ward/runtime_cli.go):
+# jq's parser is silently last-value-wins on duplicate object keys, so a
+# report with a duplicated initProcess, environment, or labels key could pass
+# the field comparison below while the daemon's gate rejects it, and could
+# steer the ownership checks that gate `delete --force` toward a container
+# this run does not own. `jq --stream` emits parse events before that
+# collapse, so this structural pass sees both occurrences: a leaf event
+# completes its path, a close event completes its parent, and any event whose
+# path (or a prefix of it) is already completed is a duplicate key or a
+# second top-level value. Keys are folded with ascii_downcase to approximate
+# the daemon's Unicode simple fold (foldJSONKey; its Go decoder matches
+# struct fields case-insensitively); runtime JSON keys are ASCII, so the
+# narrower fold covers the same input space. Empty input is rejected like the
+# daemon's immediate EOF, and malformed or trailing input fails jq itself.
+# Takes the evidence as a FILE, never a shell variable: command substitution
+# silently strips raw NUL bytes, which can transform invalid runtime JSON
+# into a valid-looking document before any validator sees it, so runtime
+# output must land in a file and be validated from that file.
+# Returns 0 only for one unambiguous top-level value.
+reject_duplicate_json_keys() {
+	jq -n --stream -e <"$1" '
+		def fold: map(if type == "string" then ascii_downcase else . end);
+		reduce inputs as $e (
+			{done: {}, dup: false, n: 0};
+			if .dup then .
+			else
+				.n += 1
+				| ($e[0] | fold) as $p
+				| . as $st
+				| if ($e | length) == 2 then
+					if any(range(0; ($p | length) + 1);
+						$st.done[($p[0:.] | tojson)] != null)
+					then .dup = true
+					else .done[($p | tojson)] = true
+					end
+				else
+					($p[0:(($p | length) - 1)]) as $q |
+					if any(range(0; ($q | length) + 1);
+						$st.done[($q[0:.] | tojson)] != null)
+					then .dup = true
+					else .done[($q | tojson)] = true
+					end
+				end
+			end
+		) | (.dup | not) and .n > 0' >/dev/null 2>&1
+}
+
+# Bounded runtime capture, mirroring the daemon's maxRuntimeOutput cap: a
+# wedged runtime must not fill the TMPDIR filesystem through an uncapped
+# redirect. head stops reading at the cap plus one byte (a wedged writer
+# then takes SIGPIPE), so overflow is detectable by size. Every pipeline
+# status is checked, not just the writer's: a full filesystem, quota, or
+# file-size limit fails the sink after a truncated prefix that can look
+# like complete evidence, while the writer still exits 0. Overflow, a
+# failed command, or a failed sink fails the capture, and the caller
+# treats each like any other runtime failure.
+runtime_json_cap=16777216
+capture_runtime_json() { # <file> <command...>
+	capture_file=$1
+	shift
+	"$@" | head -c "$((runtime_json_cap + 1))" >"$capture_file"
+	capture_status=("${PIPESTATUS[@]}")
+	capture_size=$(wc -c <"$capture_file")
+	if [ "${capture_status[0]}" -ne 0 ] || [ "${capture_status[1]}" -ne 0 ] ||
+		[ "$capture_size" -gt "$runtime_json_cap" ]; then
+		return 1
+	fi
+}
+
+# The single definition of the ownership predicate: reads the inspection
+# in $runtime_json and prints the id only when it is exactly one entry
+# whose id, configuration id, and ownership-token label all match. Every
+# `delete --force` in this script is gated on this predicate.
+inspected_owned_id() { # <expected-id>
+	jq -er <"$runtime_json" --arg id "$1" \
+		--arg label "$ownership_label" \
+		--arg token "$ownership_token" '
+		if length == 1
+			and .[0].id == $id
+			and .[0].configuration.id == $id
+			and .[0].configuration.labels[$label] == $token
+		then .[0].id
+		else empty
+		end' 2>/dev/null
+}
+
 cleanup() {
 	status=$?
 	trap - EXIT
 	cleanup_failed=0
 	if [ -z "$probe_container" ] && [ -n "$cidfile" ] && [ -f "$cidfile" ]; then
-		recovered_id=$(tr -d '\r\n' <"$cidfile" 2>/dev/null) || recovered_id=""
+		# Bounded like the JSON captures; any identity past the cap is
+		# invalid anyway, and a truncated one fails the inspection gate.
+		recovered_id=$(head -c 4096 "$cidfile" 2>/dev/null | tr -d '\r\n') || recovered_id=""
 		if valid_container_id "$recovered_id"; then
 			probe_container="$recovered_id"
 		fi
 	fi
 	if [ -n "$probe_container" ]; then
-		inspection=""
-		if inspection=$("$container_bin" inspect "$probe_container" 2>/dev/null); then
-			owned_id=$(
-				printf '%s' "$inspection" |
-					jq -er --arg id "$probe_container" \
-						--arg label "$ownership_label" \
-						--arg token "$ownership_token" '
-						if length == 1
-							and .[0].id == $id
-							and .[0].configuration.id == $id
-							and .[0].configuration.labels[$label] == $token
-						then .[0].id
-						else empty
-						end
-					' 2>/dev/null
-			) || owned_id=""
-			if [ "$owned_id" = "$probe_container" ]; then
-				if ! "$container_bin" delete --force "$owned_id" >/dev/null 2>&1; then
-					echo "check-agent-image: could not remove probe container ${owned_id}" >&2
+		if [ -n "$runtime_json" ] &&
+			capture_runtime_json "$runtime_json" \
+				"$container_bin" inspect "$probe_container" 2>/dev/null; then
+			if ! reject_duplicate_json_keys "$runtime_json"; then
+				echo "check-agent-image: refusing to remove probe container ${probe_container}: ambiguous runtime JSON" >&2
+				cleanup_failed=1
+			else
+				owned_id=$(inspected_owned_id "$probe_container") || owned_id=""
+				if [ "$owned_id" = "$probe_container" ]; then
+					if ! "$container_bin" delete --force "$owned_id" >/dev/null 2>&1; then
+						echo "check-agent-image: could not remove probe container ${owned_id}" >&2
+						cleanup_failed=1
+					fi
+				else
+					echo "check-agent-image: refusing to remove unowned probe container ${probe_container}" >&2
 					cleanup_failed=1
 				fi
-			else
-				echo "check-agent-image: refusing to remove unowned probe container ${probe_container}" >&2
-				cleanup_failed=1
 			fi
 		else
 			echo "check-agent-image: could not inspect probe container ${probe_container} for cleanup" >&2
@@ -112,6 +195,10 @@ cleanup() {
 	fi
 	if [ -n "$cidfile" ] && ! rm -f "$cidfile"; then
 		echo "check-agent-image: could not remove probe identity file" >&2
+		cleanup_failed=1
+	fi
+	if [ -n "$runtime_json" ] && ! rm -f "$runtime_json"; then
+		echo "check-agent-image: could not remove runtime evidence file" >&2
 		cleanup_failed=1
 	fi
 	if [ "$cleanup_failed" -ne 0 ] && [ "$status" -eq 0 ]; then
@@ -124,6 +211,10 @@ trap 'exit 130' HUP INT TERM
 
 cidfile=$(mktemp "${TMPDIR:-/tmp}/freeside-image-checker-id.XXXXXX")
 rm -f "$cidfile"
+# Runtime JSON evidence lands here, never in a shell variable: command
+# substitution strips raw NUL bytes, which would let malformed runtime
+# output masquerade as valid JSON (see reject_duplicate_json_keys).
+runtime_json=$(mktemp "${TMPDIR:-/tmp}/freeside-image-checker-json.XXXXXX")
 
 # The container is created, never started: the allowlist is verified on a
 # stopped container, exactly as the gate does it.
@@ -131,14 +222,21 @@ echo "check-agent-image: creating a probe container from ${image_ref}" >&2
 "$container_bin" create --cidfile "$cidfile" \
 	--label "${ownership_label}=${ownership_token}" \
 	-- "$image_ref" sh -c true >&2
-runtime_id=$(tr -d '\r\n' <"$cidfile")
+runtime_id=$(head -c 4096 "$cidfile" | tr -d '\r\n')
 if ! valid_container_id "$runtime_id"; then
 	echo "check-agent-image: runtime returned invalid probe container ID" >&2
 	exit 1
 fi
 probe_container="$runtime_id"
 
-report=$("$container_bin" inspect "$probe_container")
+if ! capture_runtime_json "$runtime_json" "$container_bin" inspect "$probe_container"; then
+	echo "check-agent-image: could not capture the probe inspection (runtime failure or output past the ${runtime_json_cap}-byte cap)" >&2
+	exit 1
+fi
+if ! reject_duplicate_json_keys "$runtime_json"; then
+	echo "check-agent-image: runtime inspection JSON is ambiguous (duplicate keys, empty, or malformed); not comparing fields" >&2
+	exit 1
+fi
 
 failures=0
 fail() {
@@ -158,7 +256,7 @@ fail() {
 # explicit JSON null is an absent field there and must be one here too.
 IFS=$'\t' read -r image_reference env_count env_first working_dir command_line \
 	ssh publications networks mount_count <<EOF
-$(printf '%s' "$report" | jq -r '
+$(jq -r <"$runtime_json" '
 	.[0].configuration as $c |
 	$c.initProcess as $p |
 	[
