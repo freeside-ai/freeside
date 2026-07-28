@@ -108,6 +108,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["RunnerCapability"] = append(valids["RunnerCapability"], v.valid)
 	}
 	invalids["RunnerCapability"] = RunnerCapability("").valid
+	for _, v := range AllRunnerBackendClasses {
+		valids["RunnerBackendClass"] = append(valids["RunnerBackendClass"], v.valid)
+	}
+	invalids["RunnerBackendClass"] = RunnerBackendClass("").valid
 	for _, v := range AllOperatingModes {
 		valids["OperatingMode"] = append(valids["OperatingMode"], v.valid)
 	}

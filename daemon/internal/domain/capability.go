@@ -24,6 +24,12 @@ const (
 	CapCredentialVolumeDetach RunnerCapability = "supports_credential_volume_detach"
 	CapWorkspaceSnapshot      RunnerCapability = "supports_workspace_snapshot"
 	CapNetworklessExport      RunnerCapability = "supports_networkless_export"
+	// CapEnforcedProviderEgress is the proven writer-egress boundary (§5.7,
+	// issue #327): the agent workspace reaches only the declared provider
+	// authorities through the daemon's CONNECT proxy on a host-only network,
+	// with DNS and direct connections refuted by live probes. It attests the
+	// enforcement #302 built, distinct from the *requested* EgressProfile.
+	CapEnforcedProviderEgress RunnerCapability = "supports_enforced_provider_egress"
 )
 
 // AllRunnerCapabilities lists every valid RunnerCapability; it drives
@@ -35,12 +41,14 @@ var AllRunnerCapabilities = []RunnerCapability{
 	CapCredentialVolumeDetach,
 	CapWorkspaceSnapshot,
 	CapNetworklessExport,
+	CapEnforcedProviderEgress,
 }
 
 func (c RunnerCapability) valid() bool {
 	switch c {
 	case CapDetachableWorkspace, CapPostExitExport, CapReadOnlyRemount,
-		CapCredentialVolumeDetach, CapWorkspaceSnapshot, CapNetworklessExport:
+		CapCredentialVolumeDetach, CapWorkspaceSnapshot, CapNetworklessExport,
+		CapEnforcedProviderEgress:
 		return true
 	default:
 		return false

@@ -35,6 +35,7 @@ var (
 	ErrInvalidFindingOrigin      = errors.New("invalid candidate finding origin")
 	ErrInvalidOutcome            = errors.New("invalid verification outcome")
 	ErrInvalidRunnerCapability   = errors.New("invalid runner capability")
+	ErrInvalidRunnerBackendClass = errors.New("invalid runner backend class")
 	ErrInvalidOperatingMode      = errors.New("invalid operating mode")
 	ErrInvalidCredentialMode     = errors.New("invalid credential mode")
 	ErrInvalidEgressProfile      = errors.New("invalid egress profile")

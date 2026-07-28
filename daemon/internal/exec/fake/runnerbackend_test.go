@@ -37,6 +37,7 @@ func TestRunnerBackendCapabilityCheck(t *testing.T) {
 	wantMissing := []exec.Capability{
 		exec.CapCredentialVolumeDetach,
 		exec.CapDetachableWorkspace,
+		exec.CapEnforcedProviderEgress,
 		exec.CapNetworklessExport,
 		exec.CapWorkspaceSnapshot,
 	}

@@ -30,6 +30,7 @@ const (
 	CapCredentialVolumeDetach = domain.CapCredentialVolumeDetach
 	CapWorkspaceSnapshot      = domain.CapWorkspaceSnapshot
 	CapNetworklessExport      = domain.CapNetworklessExport
+	CapEnforcedProviderEgress = domain.CapEnforcedProviderEgress
 )
 
 // AllCapabilities lists every valid Capability; it drives table-driven tests
