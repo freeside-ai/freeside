@@ -71,18 +71,25 @@ type Options struct {
 	TempDir       string
 	Log           io.Writer
 	Record        func(context.Context, domain.ProjectImage) error
+	// LookupRecordedRef reports whether a published image reference already
+	// backs a durably recorded ProjectImage row. Failure-path residue
+	// removal consults it before deleting, so a rebuild that reproduces an
+	// already-recorded digest cannot destroy the prior row's artifact; nil
+	// skips the guard (no store implies no rows to protect).
+	LookupRecordedRef func(context.Context, string) (bool, error)
 }
 
 // Builder owns source materialization and image-runtime orchestration. The
 // interfaces are deliberately narrow so unit tests can refute sequencing and
 // returned-object trust without invoking the host runtime.
 type Builder struct {
-	source   source
-	resolver repositoryResolver
-	backend  backend
-	record   func(context.Context, domain.ProjectImage) error
-	tempDir  string
-	log      io.Writer
+	source            source
+	resolver          repositoryResolver
+	backend           backend
+	record            func(context.Context, domain.ProjectImage) error
+	lookupRecordedRef func(context.Context, string) (bool, error)
+	tempDir           string
+	log               io.Writer
 }
 
 type source interface {
@@ -144,11 +151,13 @@ type publishSpec struct {
 	RefTag            string
 	Registry          string
 	LocalRegistryPort int
+	RefRecorded       func(context.Context, string) (bool, error)
 }
 
 type publication struct {
 	Ref     domain.ImageRef
 	cleanup func(context.Context) error
+	discard func(context.Context) error
 	release func() error
 }
 
@@ -167,12 +176,13 @@ func New(opts Options) (*Builder, error) {
 		return nil, fmt.Errorf("project image recorder is required: %w", ErrInvalidRequest)
 	}
 	return &Builder{
-		source:   gitSource{gitPath: git, runner: runner},
-		resolver: defaultRepositoryResolver(),
-		backend:  appleBackend{containerPath: container, runner: runner},
-		record:   opts.Record,
-		tempDir:  opts.TempDir,
-		log:      opts.Log,
+		source:            gitSource{gitPath: git, runner: runner},
+		resolver:          defaultRepositoryResolver(),
+		backend:           appleBackend{containerPath: container, runner: runner},
+		record:            opts.Record,
+		lookupRecordedRef: opts.LookupRecordedRef,
+		tempDir:           opts.TempDir,
+		log:               opts.Log,
 	}, nil
 }
 
@@ -310,6 +320,7 @@ func (b *Builder) Build(
 		LocalRef: localRef, Digest: localDigest, ImageName: normalized.ImageName,
 		RefTag: normalized.RefTag, Registry: normalized.Registry,
 		LocalRegistryPort: normalized.LocalRegistryPort,
+		RefRecorded:       b.lookupRecordedRef,
 	})
 	if err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("publish project image: %w", err)
@@ -332,6 +343,19 @@ func (b *Builder) Build(
 		if cleanupErr := published.cleanup(context.WithoutCancel(ctx)); cleanupErr != nil {
 			result = domain.ProjectImage{}
 			err = errors.Join(err, fmt.Errorf("clean unpublished project image: %w", cleanupErr))
+		}
+	}()
+	// Registered after cleanup so LIFO order discards residue while any
+	// owned registry is still alive and the same-port lease is still held;
+	// unlike cleanup, discard also runs for a reused registry this
+	// invocation does not own.
+	defer func() {
+		if published.discard == nil {
+			return
+		}
+		if discardErr := published.discard(context.WithoutCancel(ctx)); discardErr != nil {
+			result = domain.ProjectImage{}
+			err = errors.Join(err, fmt.Errorf("discard unpublished project image: %w", discardErr))
 		}
 	}()
 	ref := published.Ref
@@ -357,6 +381,7 @@ func (b *Builder) Build(
 		return domain.ProjectImage{}, fmt.Errorf("record project image: %w", err)
 	}
 	published.cleanup = nil
+	published.discard = nil
 	return result, nil
 }
 

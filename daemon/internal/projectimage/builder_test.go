@@ -83,6 +83,7 @@ type fakeBackend struct {
 	removeLocalErr error
 	containerfile  string
 	cleanups       int
+	discards       int
 	leaseReleases  int
 	publicationLog []string
 }
@@ -159,6 +160,11 @@ func (f *fakeBackend) Publish(_ context.Context, spec publishSpec) (publication,
 		cleanup: func(context.Context) error {
 			f.cleanups++
 			f.publicationLog = append(f.publicationLog, "cleanup")
+			return nil
+		},
+		discard: func(context.Context) error {
+			f.discards++
+			f.publicationLog = append(f.publicationLog, "discard")
 			return nil
 		},
 		release: func() error {
@@ -265,8 +271,9 @@ func TestBuildBindsExactInputsAndProvesEveryFreshWorkspace(t *testing.T) {
 	if len(backend.publishes) != 1 || backend.publishes[0].Digest != testImageDigest {
 		t.Fatalf("publish = %+v", backend.publishes)
 	}
-	if records != 1 || backend.cleanups != 0 {
-		t.Fatalf("records/cleanups = %d/%d, want durable retain", records, backend.cleanups)
+	if records != 1 || backend.cleanups != 0 || backend.discards != 0 {
+		t.Fatalf("records/cleanups/discards = %d/%d/%d, want durable retain",
+			records, backend.cleanups, backend.discards)
 	}
 
 	for _, forbidden := range []string{"\nENV ", "\nWORKDIR ", "\nENTRYPOINT ", "\nCMD ", "\nUSER ", "\nVOLUME "} {
@@ -405,20 +412,60 @@ func TestBuildCleansPublicationWhenDurableRecordingFails(t *testing.T) {
 		!strings.Contains(err.Error(), "record project image") {
 		t.Fatalf("Build = %+v, %v; want recording failure", got, err)
 	}
-	if backend.cleanups != 1 {
-		t.Fatalf("publication cleanups = %d, want 1", backend.cleanups)
+	if backend.cleanups != 1 || backend.discards != 1 {
+		t.Fatalf("publication cleanups/discards = %d/%d, want 1/1",
+			backend.cleanups, backend.discards)
 	}
 	if backend.leaseReleases != 1 {
 		t.Fatalf("publication lease releases = %d, want 1", backend.leaseReleases)
 	}
-	if !slices.Equal(backend.publicationLog, []string{"record", "cleanup", "release"}) {
+	if !slices.Equal(backend.publicationLog, []string{"record", "discard", "cleanup", "release"}) {
 		t.Fatalf(
-			"publication lifecycle = %v, want record then cleanup then release",
+			"publication lifecycle = %v, want record then discard then cleanup then release",
 			backend.publicationLog,
 		)
 	}
 	if !slices.Contains(backend.releases, backend.builds[0].LocalRef) {
 		t.Fatalf("image removals = %v, want local build removed", backend.releases)
+	}
+}
+
+func TestBuildDiscardsSeededPublicationWhenPublishedProofFails(t *testing.T) {
+	backend := newFakeBackend()
+	backend.published = domain.ImageRef("example.test/project@sha256:" + strings.Repeat("c", 64))
+	got, err := newBuilder(&fakeSource{}, backend, t.TempDir()).Build(t.Context(), validRequest())
+	if !errors.Is(err, ErrProofFailed) || got.ID != "" {
+		t.Fatalf("Build = %+v, %v; want published-proof failure", got, err)
+	}
+	if backend.discards != 1 || backend.cleanups != 1 {
+		t.Fatalf("publication discards/cleanups = %d/%d, want 1/1",
+			backend.discards, backend.cleanups)
+	}
+	if !slices.Equal(backend.publicationLog, []string{"discard", "cleanup", "release"}) {
+		t.Fatalf(
+			"publication lifecycle = %v, want discard then cleanup then release",
+			backend.publicationLog,
+		)
+	}
+}
+
+func TestBuildThreadsRecordedRefLookupIntoPublish(t *testing.T) {
+	backend := newFakeBackend()
+	builder := newBuilder(&fakeSource{}, backend, t.TempDir())
+	lookups := 0
+	builder.lookupRecordedRef = func(context.Context, string) (bool, error) {
+		lookups++
+		return true, nil
+	}
+	if _, err := builder.Build(t.Context(), validRequest()); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(backend.publishes) != 1 || backend.publishes[0].RefRecorded == nil {
+		t.Fatal("Build did not hand the recorded-reference guard to Publish")
+	}
+	if recorded, err := backend.publishes[0].RefRecorded(t.Context(), "ref"); err != nil ||
+		!recorded || lookups != 1 {
+		t.Fatalf("RefRecorded = %v, %v (lookups %d), want the builder's lookup", recorded, err, lookups)
 	}
 }
 
