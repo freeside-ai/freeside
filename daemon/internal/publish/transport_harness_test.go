@@ -29,8 +29,12 @@ func stubGit(t *testing.T, recPath string, extra string, exit int) string {
 
 const stubTokenValue = "stub-installation-token-bytes"
 
+// stubRepositoryID is the canonical numeric identity the stub trusted
+// binding resolves every fixture repository to.
+const stubRepositoryID int64 = 8675309
+
 func stubToken() InstallationToken {
-	return InstallationToken{Token: Secret(stubTokenValue)}
+	return InstallationToken{Token: Secret(stubTokenValue), RepositoryID: stubRepositoryID}
 }
 
 // stubTokenForms are every rendering of the token that could leak: the

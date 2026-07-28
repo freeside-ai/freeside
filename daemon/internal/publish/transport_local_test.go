@@ -647,6 +647,142 @@ func TestPushHeadRefusesUnboundCheckout(t *testing.T) {
 	}
 }
 
+// TestFetchBaseStampsRepositoryIDBinding pins the producer half of the
+// canonical-identity binding: the stamp is byte-for-byte the canonical
+// decimal (one trailing newline) that this package's re-gate and ward's
+// seeding gate both parse, and the capability carries the same ID.
+func TestFetchBaseStampsRepositoryIDBinding(t *testing.T) {
+	remote := newLocalRemote(t)
+	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if co.RepositoryID() != stubRepositoryID {
+		t.Errorf("checkout repository id = %d, want %d", co.RepositoryID(), stubRepositoryID)
+	}
+	stamp, err := os.ReadFile(filepath.Join(co.Dir(), ".git", "freeside-repository-id"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "8675309\n"; string(stamp) != want {
+		t.Errorf("stamp = %q, want %q", stamp, want)
+	}
+}
+
+// TestFetchBaseRefusesTokenWithoutRepositoryID keeps the stamp
+// fail-closed at its source: a trusted binding that names no canonical
+// identity cannot materialize a checkout that would only be refused at
+// every re-gate downstream.
+func TestFetchBaseRefusesTokenWithoutRepositoryID(t *testing.T) {
+	remote := newLocalRemote(t)
+	remote.transport.tokens = staticTokenSource{tok: InstallationToken{Token: Secret(stubTokenValue)}}
+	dir := checkoutDir(t)
+	if _, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, dir); err == nil {
+		t.Fatal("FetchBase materialized a checkout with no canonical repository id")
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("failed FetchBase left the claimed directory behind: %v", err)
+	}
+}
+
+// TestPushHeadRefusesBrokenRepositoryIDBinding drives the stamp-
+// integrity re-gate across the rejection classes: an absent binding (a
+// checkout materialized before the stamp existed — staleness must not
+// bypass the tightening), non-canonical or oversized content, and a
+// well-formed stamp naming a different repository. No refusal may echo
+// the file's bytes: the checkout is a directory later pipeline stages
+// write into, so rejected content is not safe error material.
+func TestPushHeadRefusesBrokenRepositoryIDBinding(t *testing.T) {
+	const canary = "credential-canary"
+	cases := []struct {
+		name   string
+		remove bool
+		stamp  string
+	}{
+		{name: "absent", remove: true},
+		{name: "empty", stamp: ""},
+		{name: "not a decimal", stamp: canary + "\n"},
+		{name: "nul byte", stamp: "\x00" + canary + "\n"},
+		{name: "zero", stamp: "0\n"},
+		{name: "negative", stamp: "-8675309\n"},
+		{name: "plus sign", stamp: "+8675309\n"},
+		{name: "leading zero", stamp: "08675309\n"},
+		{name: "trailing space", stamp: "8675309 \n"},
+		{name: "double newline", stamp: "8675309\n\n"},
+		{name: "trailing junk", stamp: "8675309" + canary + "\n"},
+		{name: "oversized", stamp: strings.Repeat("8675309", 12) + "\n"},
+		{name: "different repository", stamp: "424242\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			remote := newLocalRemote(t)
+			co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			head := candidateHead(t, co)
+			path := filepath.Join(co.Dir(), ".git", "freeside-repository-id")
+			if tc.remove {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(path, []byte(tc.stamp), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err = remote.transport.PushHead(t.Context(), co, testGatedHead(t, remote.transport, testIdentityInput(remote.repo, head)))
+			if !errors.Is(err, ErrGitTransport) {
+				t.Fatalf("PushHead on a broken repository id binding: %v", err)
+			}
+			if strings.Contains(err.Error(), canary) {
+				t.Errorf("refusal echoes the rejected binding content: %v", err)
+			}
+		})
+	}
+}
+
+// TestPushHeadRefusesRebindTrustedRepositoryID is the reused-name
+// scenario the binding exists for: between fetch and push the trusted
+// binding resolves the same owner/name to a different repository (the
+// name was transferred and reused), and the push must refuse rather
+// than follow the name onto that repository.
+func TestPushHeadRefusesRebindTrustedRepositoryID(t *testing.T) {
+	remote := newLocalRemote(t)
+	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := candidateHead(t, co)
+	rebound := stubToken()
+	rebound.RepositoryID = stubRepositoryID + 1
+	remote.transport.tokens = staticTokenSource{tok: rebound}
+	if _, err := remote.transport.PushHead(t.Context(), co, testGatedHead(t, remote.transport, testIdentityInput(remote.repo, head))); !errors.Is(err, ErrGitTransport) {
+		t.Errorf("PushHead under a rebound trusted repository id: %v", err)
+	}
+}
+
+// TestPushHeadRefusedStampMintsNoToken extends the token-after-gates
+// ordering to the stamp-integrity re-gate: a checkout refused on its
+// own binding state never reaches the token source.
+func TestPushHeadRefusedStampMintsNoToken(t *testing.T) {
+	remote := newLocalRemote(t)
+	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := candidateHead(t, co)
+	if err := os.Remove(filepath.Join(co.Dir(), ".git", "freeside-repository-id")); err != nil {
+		t.Fatal(err)
+	}
+	counter := &countingTokenSource{}
+	remote.transport.tokens = counter
+	if _, err := remote.transport.PushHead(t.Context(), co, testGatedHead(t, remote.transport, testIdentityInput(remote.repo, head))); err == nil {
+		t.Fatal("unstamped checkout accepted")
+	}
+	if counter.mints != 0 {
+		t.Errorf("refused stamp minted %d tokens, want 0", counter.mints)
+	}
+}
+
 func TestPushHeadRefusesCheckoutBoundToOtherRepo(t *testing.T) {
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
@@ -702,6 +838,11 @@ func TestCheckoutIsSealed(t *testing.T) {
 			t.Errorf("Checkout.%s does not read a single string", name)
 		}
 	}
+	if m, ok := typ.MethodByName("RepositoryID"); !ok {
+		t.Error("Checkout has no RepositoryID accessor")
+	} else if m.Type.NumOut() != 1 || m.Type.Out(0).Kind() != reflect.Int64 {
+		t.Error("Checkout.RepositoryID does not read a single int64")
+	}
 }
 
 func TestPushHeadRefusesBaseMismatch(t *testing.T) {
@@ -713,7 +854,7 @@ func TestPushHeadRefusesBaseMismatch(t *testing.T) {
 	head := candidateHead(t, co)
 	// A Checkout claiming a base other than the one the checkout is
 	// actually bound to (HEAD) must fail the exact-base re-gate.
-	forged := Checkout{dir: co.Dir(), baseSHA: head, baseRef: "main", repo: remote.repo, owner: remote.transport}
+	forged := Checkout{dir: co.Dir(), baseSHA: head, baseRef: "main", repo: remote.repo, repositoryID: stubRepositoryID, owner: remote.transport}
 	if _, err := remote.transport.PushHead(t.Context(), forged, testGatedHead(t, remote.transport, testIdentityInput(remote.repo, head))); err == nil {
 		t.Error("PushHead accepted a checkout whose claimed base is not the enforced base")
 	}

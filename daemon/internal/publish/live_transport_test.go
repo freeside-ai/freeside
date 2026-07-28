@@ -83,6 +83,19 @@ func TestLiveTransportFetchPush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("live FetchBase: %v", err)
 	}
+	// The canonical-identity stamp against the real trusted binding: the
+	// checkout carries the live repository's numeric ID in the exact
+	// canonical form the re-gates (and ward's seeding gate) parse back.
+	if co.RepositoryID() <= 0 {
+		t.Fatalf("live checkout repository id = %d", co.RepositoryID())
+	}
+	stamp, err := os.ReadFile(filepath.Join(co.Dir(), ".git", "freeside-repository-id")) //nolint:gosec // G703: checkout under this test's TempDir
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("%d\n", co.RepositoryID()); string(stamp) != want {
+		t.Errorf("live repository id stamp = %q, want %q", stamp, want)
+	}
 
 	// An explicit per-run nonce in the commit message makes the head
 	// SHA (and therefore the derived branch) unique even when two runs
