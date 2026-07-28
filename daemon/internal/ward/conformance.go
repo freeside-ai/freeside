@@ -18,9 +18,15 @@ const fixedContainerPathEnv = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/us
 // Check 1 (credential_separation): the workspace is its own named volume,
 // mounted read-write at exactly the configured target; every credential is a
 // different named volume, read-only, at its own absolute target outside the
-// workspace. The spec vocabulary cannot place a credential in the root
-// filesystem image; a mount that tries (target "/", or a path under the
-// workspace) is rejected here.
+// workspace. The one exception is writableCredentialTarget: when non-empty,
+// exactly one credential mount sits at that target and is read-write — the
+// leased auth-store mount (§5.4), granted only after HandoffSpec.validate
+// tied it to an AuthStoreLease claim. Both directions are enforced: a
+// read-only mount at the leased target would silently deliver a writer that
+// cannot refresh its store, and a writable mount anywhere else is the
+// original violation. The spec vocabulary cannot place a credential in the
+// root filesystem image; a mount that tries (target "/", or a path under
+// the workspace) is rejected here.
 //
 // Check 2 (control_plane_isolation): no host bind of any kind, so no host
 // CLI, runtime socket, daemon state, SSH agent, home directory, or registry
@@ -28,7 +34,7 @@ const fixedContainerPathEnv = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/us
 // or published sockets at all. Environment content is not scanned: a
 // credential smuggled into Env is not mechanically detectable, and §5.4
 // scanning of the export is the honest downstream control.
-func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume string) error {
+func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume, writableCredentialTarget string) error {
 	// A bare-key env entry makes the CLI inherit the host's value, pulling a
 	// host credential into the writer VM (check 2); every entry must set an
 	// explicit value.
@@ -47,6 +53,7 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume string) e
 
 	seenTargets := make(map[string]bool, len(spec.Mounts))
 	workspaceMounts := 0
+	writableMounts := 0
 	for _, m := range spec.Mounts {
 		if !m.Type.valid() {
 			return failf(CheckControlPlaneIsolation, "agent spec carries an unknown mount type")
@@ -90,12 +97,23 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume string) e
 		if m.Source == workspaceVolume {
 			return failf(CheckCredentialSeparation, "credential mount reuses the workspace volume")
 		}
+		if writableCredentialTarget != "" && m.Target == writableCredentialTarget {
+			if m.ReadOnly {
+				return failf(CheckCredentialSeparation,
+					"leased credential mount is read-only; the auth-store lease grants a writable mount")
+			}
+			writableMounts++
+			continue
+		}
 		if !m.ReadOnly {
 			return failf(CheckCredentialSeparation, "credential mount is not read-only")
 		}
 	}
 	if workspaceMounts != 1 {
 		return failf(CheckCredentialSeparation, "agent spec does not carry exactly one workspace mount")
+	}
+	if writableCredentialTarget != "" && writableMounts != 1 {
+		return failf(CheckCredentialSeparation, "agent spec does not carry the leased writable credential mount")
 	}
 	return nil
 }

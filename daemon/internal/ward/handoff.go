@@ -242,7 +242,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// network exists; a syntactically valid placeholder exercises the same
 	// mount, environment-key, and explicit-network checks.
 	preflightAgentSpec := buildAgentSpec(b.cfg, hs, names, ownershipLabel, "http://127.0.0.1:1")
-	if err := validateAgentSpec(b.cfg, preflightAgentSpec, names.Workspace); err != nil {
+	if err := validateAgentSpec(b.cfg, preflightAgentSpec, names.Workspace, hs.writableCredentialTarget()); err != nil {
 		return nil, err
 	}
 
@@ -295,7 +295,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// not trusted, after the runtime supplies the host-only gateway the proxy
 	// address is derived from.
 	agentSpec := buildAgentSpec(b.cfg, hs, names, ownershipLabel, proxyURL)
-	if err := validateAgentSpec(b.cfg, agentSpec, names.Workspace); err != nil {
+	if err := validateAgentSpec(b.cfg, agentSpec, names.Workspace, hs.writableCredentialTarget()); err != nil {
 		return nil, err
 	}
 

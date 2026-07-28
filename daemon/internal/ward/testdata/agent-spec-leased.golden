@@ -1,0 +1,44 @@
+{
+  "name": "freeside-handoff-golden-run-agent",
+  "image": "example.test/agent@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "command": [
+    "sh",
+    "-c",
+    "true"
+  ],
+  "env": [
+    "AGENT_MODE=fixture",
+    "HTTP_PROXY=http://127.0.0.1:12345",
+    "HTTPS_PROXY=http://127.0.0.1:12345",
+    "http_proxy=http://127.0.0.1:12345",
+    "https_proxy=http://127.0.0.1:12345",
+    "NO_PROXY=",
+    "no_proxy="
+  ],
+  "mounts": [
+    {
+      "type": "volume",
+      "source": "freeside-handoff-golden-run-ws",
+      "target": "/workspace",
+      "read_only": false
+    },
+    {
+      "type": "volume",
+      "source": "provider-cred",
+      "target": "/credentials",
+      "read_only": false
+    }
+  ],
+  "labels": [
+    {
+      "key": "freeside.handoff",
+      "value": "golden-run"
+    },
+    {
+      "key": "freeside.handoff-owner",
+      "value": "00000000000000000000000000000000"
+    }
+  ],
+  "network": "freeside-handoff-golden-run-egress",
+  "network_disabled": false
+}

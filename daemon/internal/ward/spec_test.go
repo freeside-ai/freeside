@@ -77,6 +77,28 @@ func TestHandoffSpecValidate(t *testing.T) {
 		// must reach ErrInvalidHandoffSpec through HandoffSpec.validate too.
 		{"unset seed mode", func(s *HandoffSpec) { s.Seed = WorkspaceSeed{} }},
 		{"unknown seed mode", func(s *HandoffSpec) { s.Seed = WorkspaceSeed{Mode: SeedMode("copy")} }},
+		// The writable mount and the lease claim travel together, both ways;
+		// every one-sided or malformed combination is a caller error.
+		{"writable mount without lease", func(s *HandoffSpec) {
+			s.Agent.CredentialMounts[0].Writable = true
+		}},
+		{"lease without writable mount", func(s *HandoffSpec) {
+			s.AuthStoreLease = &AuthStoreLeaseClaim{AuthIdentityID: "id", Holder: "holder"}
+		}},
+		{"lease with empty identity", func(s *HandoffSpec) {
+			s.Agent.CredentialMounts[0].Writable = true
+			s.AuthStoreLease = &AuthStoreLeaseClaim{Holder: "holder"}
+		}},
+		{"lease with empty holder", func(s *HandoffSpec) {
+			s.Agent.CredentialMounts[0].Writable = true
+			s.AuthStoreLease = &AuthStoreLeaseClaim{AuthIdentityID: "id"}
+		}},
+		{"lease with two writable mounts", func(s *HandoffSpec) {
+			s.Agent.CredentialMounts[0].Writable = true
+			s.Agent.CredentialMounts = append(s.Agent.CredentialMounts,
+				CredentialMount{Volume: "second-cred", Target: "/second", Writable: true})
+			s.AuthStoreLease = &AuthStoreLeaseClaim{AuthIdentityID: "id", Holder: "holder"}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -478,7 +500,65 @@ func TestBuildAgentSpec(t *testing.T) {
 		t.Errorf("credential mount = %+v, want provider-cred ro at /credentials", cred)
 	}
 	// The generated spec passes its own gate.
-	if err := validateAgentSpec(cfg, spec, names.Workspace); err != nil {
+	if err := validateAgentSpec(cfg, spec, names.Workspace, ""); err != nil {
 		t.Errorf("validateAgentSpec(generated) = %v, want nil", err)
 	}
+}
+
+// testLeasedHandoffSpec is the fixture with the auth-store lease claim and
+// its one writable credential mount, the §5.4 mutation-window shape.
+func testLeasedHandoffSpec() HandoffSpec {
+	hs := testHandoffSpec()
+	hs.Agent.CredentialMounts[0].Writable = true
+	hs.AuthStoreLease = &AuthStoreLeaseClaim{
+		AuthIdentityID: "identity-fixture",
+		Holder:         "holder-fixture",
+	}
+	return hs
+}
+
+// TestBuildAgentSpecLeasedWritableMount pins the one sanctioned read-write
+// credential shape: the leased mount and only the leased mount loses
+// ReadOnly, and the generated spec still passes its own gate with the
+// writable target declared.
+func TestBuildAgentSpecLeasedWritableMount(t *testing.T) {
+	cfg := testConfig()
+	hs := testLeasedHandoffSpec()
+	hs.Agent.CredentialMounts = append(hs.Agent.CredentialMounts,
+		CredentialMount{Volume: "other-cred", Target: "/other-credentials"})
+	if err := hs.validate(); err != nil {
+		t.Fatalf("leased fixture: validate() = %v, want nil", err)
+	}
+	names := namesFor(hs.RunID)
+	spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
+
+	if len(spec.Mounts) != 3 {
+		t.Fatalf("len(Mounts) = %d, want 3", len(spec.Mounts))
+	}
+	if leased := spec.Mounts[1]; leased.ReadOnly {
+		t.Errorf("leased credential mount = %+v, want read-write", leased)
+	}
+	if other := spec.Mounts[2]; !other.ReadOnly {
+		t.Errorf("non-leased credential mount = %+v, want read-only", other)
+	}
+	if got, want := hs.writableCredentialTarget(), "/credentials"; got != want {
+		t.Errorf("writableCredentialTarget() = %q, want %q", got, want)
+	}
+	if err := validateAgentSpec(cfg, spec, names.Workspace, hs.writableCredentialTarget()); err != nil {
+		t.Errorf("validateAgentSpec(generated leased) = %v, want nil", err)
+	}
+}
+
+// TestAgentSpecLeasedGolden pins the leased writer allowlist: the writable
+// credential mount is the §5.4 residual surface, so its generated shape must
+// be a reviewed diff.
+func TestAgentSpecLeasedGolden(t *testing.T) {
+	cfg := testConfig()
+	hs := testLeasedHandoffSpec()
+	spec := buildAgentSpec(cfg, hs, namesFor(hs.RunID), testOwnershipLabel(), "http://127.0.0.1:12345")
+	got, err := json.MarshalIndent(spec, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal leased agent spec: %v", err)
+	}
+	golden.Assert(t, "agent-spec-leased", append(got, '\n'))
 }

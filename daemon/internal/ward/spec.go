@@ -81,15 +81,21 @@ func splitImageRef(ref string) (name, digest string, ok bool) {
 	return name, digest, true
 }
 
-// CredentialMount places one existing credential volume into the agent VM,
-// read-only, at Target. The volume is caller-owned: the gate mounts it into
-// the writer and proves it absent from everything downstream; it never
-// creates or deletes it.
+// CredentialMount places one existing credential volume into the agent VM at
+// Target: read-only unless Writable. The volume is caller-owned: the gate
+// mounts it into the writer and proves it absent from everything downstream;
+// it never creates or deletes it.
 type CredentialMount struct {
 	// Volume is the existing named volume holding the provider credential.
 	Volume string
 	// Target is the absolute mount path inside the agent VM.
 	Target string
+	// Writable mounts the volume read-write so the contained vendor CLI can
+	// mutate its own auth store (§5.4: refresh, login state, configuration
+	// writes, store replacement). It is valid only on the single mount the
+	// spec's AuthStoreLease covers; every other credential mount stays
+	// read-only, and a writable mount without the lease claim is refused.
+	Writable bool
 }
 
 // AgentSpec describes the credential-bearing writer container.
@@ -190,6 +196,22 @@ func (s WorkspaceSeed) validate() error {
 	return nil
 }
 
+// AuthStoreLeaseClaim names the identity whose auth-store mutation window
+// this handoff runs inside, and the holder the gate acquires the lease as.
+// The claim is a request, not evidence: the gate acquires and verifies the
+// per-identity domain.AuthStoreMutationLease itself before the writer can
+// start, so a caller cannot satisfy §5.4's serialization by asserting it.
+type AuthStoreLeaseClaim struct {
+	// AuthIdentityID is the identity whose auth store the writable mount
+	// carries. The identity must declare auth_store_mutation_lease; the
+	// store refuses acquisition for one that does not.
+	AuthIdentityID domain.AuthIdentityID
+	// Holder is the lease holder recorded for this run, so an abandoned
+	// window can be traced back to what abandoned it (§5.4 does not bind it
+	// to a recorded agent invocation; see domain.AuthStoreMutationLease).
+	Holder domain.InvocationID
+}
+
 // HandoffSpec is one full handoff request: seed a fresh workspace volume at a
 // declared exact base, run the agent against it, prove its VM terminated, and
 // export the workspace through the read-only exporter.
@@ -204,6 +226,10 @@ type HandoffSpec struct {
 	Seed WorkspaceSeed
 	// Agent is the writer container.
 	Agent AgentSpec
+	// AuthStoreLease is required exactly when one credential mount is
+	// Writable: the mutation window the writable mount rides in. Nil means
+	// every credential mount is read-only.
+	AuthStoreLease *AuthStoreLeaseClaim
 }
 
 // validate reports the first caller error in the spec. Mount-topology rules
@@ -224,7 +250,54 @@ func (s HandoffSpec) validate() error {
 	case s.Agent.EgressProfile != domain.EgressProviderOnly:
 		return fmt.Errorf("%w: Agent.EgressProfile %q is not enforceable by this backend", ErrInvalidHandoffSpec, s.Agent.EgressProfile)
 	}
+	// A writable credential mount and the lease claim travel together, both
+	// ways. A writable mount without the claim would mutate an auth store
+	// outside any §5.4 window; a claim without a writable mount is an
+	// ambiguous request (the caller either meant to mark a mount writable or
+	// is reserving a window nothing uses), refused rather than silently
+	// resolved in one direction — the same posture as a blank seed carrying
+	// a source. One mount per claim: the lease serializes one identity's
+	// store, so a second writable volume would ride a window that does not
+	// cover it.
+	writable := 0
+	for _, cm := range s.Agent.CredentialMounts {
+		if cm.Writable {
+			writable++
+		}
+	}
+	if s.AuthStoreLease == nil {
+		if writable != 0 {
+			return fmt.Errorf("%w: a writable credential mount requires AuthStoreLease", ErrInvalidHandoffSpec)
+		}
+		return s.Seed.validate()
+	}
+	if s.AuthStoreLease.AuthIdentityID == "" {
+		return fmt.Errorf("%w: AuthStoreLease.AuthIdentityID is required", ErrInvalidHandoffSpec)
+	}
+	if s.AuthStoreLease.Holder == "" {
+		return fmt.Errorf("%w: AuthStoreLease.Holder is required", ErrInvalidHandoffSpec)
+	}
+	if writable != 1 {
+		return fmt.Errorf("%w: AuthStoreLease requires exactly one writable credential mount, got %d",
+			ErrInvalidHandoffSpec, writable)
+	}
 	return s.Seed.validate()
+}
+
+// writableCredentialTarget is the target of the one leased writable
+// credential mount, or "" when every credential mount is read-only. It is
+// meaningful only on a spec validate() accepted, which ties the writable
+// mount to the lease claim in both directions.
+func (s HandoffSpec) writableCredentialTarget() string {
+	if s.AuthStoreLease == nil {
+		return ""
+	}
+	for _, cm := range s.Agent.CredentialMounts {
+		if cm.Writable {
+			return cm.Target
+		}
+	}
+	return ""
 }
 
 // handoffNames are the runtime object names one run owns.
@@ -261,8 +334,9 @@ func runLabels(runID string) []Label {
 }
 
 // buildAgentSpec generates the writer container: the workspace volume
-// read-write at the configured target, every credential volume read-only at
-// its own target, nothing else. validateAgentSpec re-verifies the result
+// read-write at the configured target, every credential volume at its own
+// target — read-only except the single leased writable mount, when the spec
+// declares one — nothing else. validateAgentSpec re-verifies the result
 // rather than trusting this construction.
 func buildAgentSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label, proxyURL string) ContainerSpec {
 	mounts := []Mount{{
@@ -275,7 +349,7 @@ func buildAgentSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLab
 			Type:     MountVolume,
 			Source:   cm.Volume,
 			Target:   cm.Target,
-			ReadOnly: true,
+			ReadOnly: !cm.Writable,
 		})
 	}
 	return ContainerSpec{

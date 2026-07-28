@@ -128,7 +128,7 @@ func TestValidateAgentSpecViolations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 			tc.mutate(&spec)
-			err := validateAgentSpec(cfg, spec, names.Workspace)
+			err := validateAgentSpec(cfg, spec, names.Workspace, "")
 			if !errors.Is(err, ErrConformance) {
 				t.Fatalf("validateAgentSpec = %v, want ErrConformance", err)
 			}
@@ -138,6 +138,55 @@ func TestValidateAgentSpecViolations(t *testing.T) {
 			}
 			if cf.Check != tc.wantCheck {
 				t.Errorf("Check = %q, want %q (reason: %s)", cf.Check, tc.wantCheck, cf.Reason)
+			}
+		})
+	}
+}
+
+// TestValidateAgentSpecLeasedViolations enumerates the writable-mount input
+// space with the leased target declared: the leased mount must actually be
+// writable, must exist, and must be the only writable mount. The
+// no-declared-target direction (a writable mount under an empty
+// writableCredentialTarget) is the existing "credential mount read-write"
+// case above.
+func TestValidateAgentSpecLeasedViolations(t *testing.T) {
+	cfg := testConfig()
+	hs := testLeasedHandoffSpec()
+	names := namesFor(hs.RunID)
+	target := hs.writableCredentialTarget()
+
+	cases := []struct {
+		name   string
+		mutate func(*ContainerSpec)
+	}{
+		{"leased mount observed read-only", func(s *ContainerSpec) { s.Mounts[1].ReadOnly = true }},
+		{"leased mount missing", func(s *ContainerSpec) { s.Mounts = s.Mounts[:1] }},
+		{"second writable mount beside the leased one", func(s *ContainerSpec) {
+			s.Mounts = append(s.Mounts, Mount{
+				Type: MountVolume, Source: "other-cred", Target: "/other-credentials",
+			})
+		}},
+		{"leased mount inside the workspace", func(s *ContainerSpec) {
+			s.Mounts[1].Target = cfg.WorkspaceTarget + "/creds"
+		}},
+		{"leased mount reuses the workspace volume", func(s *ContainerSpec) {
+			s.Mounts[1].Source = names.Workspace
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
+			tc.mutate(&spec)
+			err := validateAgentSpec(cfg, spec, names.Workspace, target)
+			if !errors.Is(err, ErrConformance) {
+				t.Fatalf("validateAgentSpec = %v, want ErrConformance", err)
+			}
+			var cf *ConformanceFailure
+			if !errors.As(err, &cf) {
+				t.Fatalf("error %v is not a *ConformanceFailure", err)
+			}
+			if cf.Check != CheckCredentialSeparation {
+				t.Errorf("Check = %q, want %q (reason: %s)", cf.Check, CheckCredentialSeparation, cf.Reason)
 			}
 		})
 	}
@@ -159,7 +208,7 @@ func TestValidateAgentSpecRedactsMalformedEnv(t *testing.T) {
 		t.Run(redactPath(entry), func(t *testing.T) {
 			spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 			spec.Env = append(spec.Env, entry)
-			err := validateAgentSpec(cfg, spec, names.Workspace)
+			err := validateAgentSpec(cfg, spec, names.Workspace, "")
 			if !errors.Is(err, ErrConformance) {
 				t.Fatalf("validateAgentSpec = %v, want ErrConformance", err)
 			}
@@ -476,7 +525,7 @@ func TestConformanceReasonsRedactUntrustedFields(t *testing.T) {
 	names := namesFor(hs.RunID)
 	agent := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 	agent.Mounts[1].Target = secret
-	if err := validateAgentSpec(cfg, agent, names.Workspace); err == nil || strings.Contains(err.Error(), secret) {
+	if err := validateAgentSpec(cfg, agent, names.Workspace, ""); err == nil || strings.Contains(err.Error(), secret) {
 		t.Errorf("agent conformance failure leaked or accepted an untrusted field: %v", err)
 	}
 	rep := exporterReport(cfg, names.Exporter, names.Workspace)
@@ -553,7 +602,7 @@ func TestValidateAgentSpecNoCredentials(t *testing.T) {
 	hs := testHandoffSpec()
 	hs.Agent.CredentialMounts = nil
 	names := namesFor(hs.RunID)
-	if err := validateAgentSpec(cfg, buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345"), names.Workspace); err != nil {
+	if err := validateAgentSpec(cfg, buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345"), names.Workspace, ""); err != nil {
 		t.Errorf("credential-free agent spec: %v, want nil", err)
 	}
 }
