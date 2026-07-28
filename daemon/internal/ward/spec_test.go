@@ -222,7 +222,7 @@ func TestObserverScriptCreatesProofParent(t *testing.T) {
 }
 
 func TestObserverGitScriptComparesAgainstCommit(t *testing.T) {
-	run := func(t *testing.T, checkout string) (string, string, string) {
+	runWith := func(t *testing.T, checkout string, env []string) (string, string, string) {
 		t.Helper()
 		scratch := t.TempDir()
 		script := "h=\"$(cat " + shellQuote(filepath.Join(checkout, ".git", "HEAD")) + ")\"; " +
@@ -236,7 +236,7 @@ func TestObserverGitScriptComparesAgainstCommit(t *testing.T) {
 			shell = dash
 		}
 		cmd := osexec.Command(shell, "-c", script) //nolint:gosec // fixed shell and test-owned script
-		cmd.Env = scrubbedLiveGitEnv()
+		cmd.Env = env
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("observer git script: %v: %s", err, out)
@@ -246,6 +246,10 @@ func TestObserverGitScriptComparesAgainstCommit(t *testing.T) {
 			t.Fatalf("observer git output = %q, want sha, worktree state, and replacement state", out)
 		}
 		return lines[0], lines[1], lines[2]
+	}
+	run := func(t *testing.T, checkout string) (string, string, string) {
+		t.Helper()
+		return runWith(t, checkout, scrubbedLiveGitEnv())
 	}
 
 	root := t.TempDir()
@@ -356,6 +360,26 @@ func TestObserverGitScriptComparesAgainstCommit(t *testing.T) {
 	emptyBase := commitLiveSeedCheckout(t, empty)
 	if sha, state, replacements := run(t, empty); sha != emptyBase.BaseSHA || state != "clean" || replacements != "absent" {
 		t.Errorf("empty commit = (%q, %q, %q), want (%q, clean, absent)", sha, state, replacements, emptyBase.BaseSHA)
+	}
+
+	// The failed live observation from #349: a guest that cannot run git at
+	// all must leave every git-derived value at its initialized failure state
+	// rather than fabricate any of them, even over a pristine checkout.
+	// base_sha=none is the shape the host gate then refuses; this pins the
+	// emitter half of that refusal.
+	stubBin := t.TempDir()
+	//nolint:gosec // the stub must be executable to shadow git on PATH
+	if err := os.WriteFile(filepath.Join(stubBin, "git"), []byte("#!/bin/sh\nexit 127\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := scrubbedLiveGitEnv()
+	for i, entry := range env {
+		if strings.HasPrefix(entry, "PATH=") {
+			env[i] = "PATH=" + stubBin + string(os.PathListSeparator) + strings.TrimPrefix(entry, "PATH=")
+		}
+	}
+	if sha, state, replacements := runWith(t, empty, env); sha != "none" || state != "error" || replacements != "error" {
+		t.Errorf("git-less guest = (%q, %q, %q), want (none, error, error)", sha, state, replacements)
 	}
 }
 

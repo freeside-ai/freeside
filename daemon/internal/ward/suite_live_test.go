@@ -115,6 +115,7 @@ func TestLiveConformanceSuite(t *testing.T) {
 		SeedRoot:          seedRoot,
 		Scanner:           scanner,
 	}
+	requireExporterGit(t, bin, cfg.ExporterImage)
 	b, err := New(rt, cfg)
 	if err != nil {
 		t.Fatal(err)

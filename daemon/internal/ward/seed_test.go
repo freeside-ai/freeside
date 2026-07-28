@@ -228,6 +228,10 @@ func TestVerifyBaseProof(t *testing.T) {
 		// altered copy that still carries the right HEAD.
 		{"tree digest mismatch", proofWith(map[string]string{baseProofTreeKey: strings.Repeat("a", 64)})},
 		{"tree digest unset", proofWith(map[string]string{baseProofTreeKey: "none"})},
+		// The observer initializes base_sha to none and only a successful git
+		// resolution overwrites it, so "none" is the exact wire value an image
+		// that cannot run git reports (#349's live failure).
+		{"unresolved sha", proofWith(map[string]string{baseProofSHAKey: "none"})},
 		{"abbreviated sha", proofWith(map[string]string{baseProofSHAKey: testBaseSHA[:12]})},
 		{"uppercase sha", proofWith(map[string]string{baseProofSHAKey: strings.ToUpper(testBaseSHA)})},
 		{"ref-shaped sha", proofWith(map[string]string{baseProofSHAKey: "ref: refs/heads/main"})},
