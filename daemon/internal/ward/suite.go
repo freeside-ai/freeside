@@ -48,6 +48,57 @@ type Suite struct {
 	b            *Backend
 	fx           SuiteFixture
 	agentCommand []string
+	// recorder receives the durable conformance record of every completed,
+	// generation-current Full pass. Nil is allowed and fails closed twice
+	// over: a recorderless pass never declares the suite-earned capabilities
+	// (Full's publish defer), and with no record of its own the store's
+	// admission gate refuses anyway — a caller that forgets the recorder
+	// loses unattended admission, never gains it, even when an earlier
+	// recorded pass left a stale passed row behind.
+	recorder ConformanceRecorder
+}
+
+// ConformanceRecorder persists a completed pass's BackendConformance record.
+// Ward defines the interface rather than importing the store (domain and
+// store must not import ward), and the caller that runs the suite supplies
+// the store-backed implementation.
+type ConformanceRecorder interface {
+	RecordBackendConformance(ctx context.Context, record domain.BackendConformance) error
+}
+
+// SuiteOption configures optional Suite collaborators.
+type SuiteOption func(*Suite)
+
+// WithConformanceRecorder makes every completed, generation-current Full pass
+// durably record its outcome through r.
+func WithConformanceRecorder(r ConformanceRecorder) SuiteOption {
+	return func(s *Suite) { s.recorder = r }
+}
+
+// recordStep returns the durable-record step the generation guard runs
+// (beginConformanceProof for the superseding marker,
+// concludeConformanceProof for the outcome), or nil when no recorder is
+// configured. Only a passed outcome carries capabilities: the explicit
+// proven set, never the live flags.
+func (s *Suite) recordStep(ctx context.Context, outcome domain.ConformanceOutcome) func() error {
+	if s.recorder == nil {
+		return nil
+	}
+	return func() error {
+		in := domain.BackendConformanceInput{
+			Backend:  domain.BackendFreshVMReadOnlyVolumeHandoff,
+			Outcome:  outcome,
+			ProvedAt: time.Now().UTC(),
+		}
+		if outcome == domain.ConformancePassed {
+			in.Capabilities = domain.NewCapabilitySnapshot(provenCapabilities()...)
+		}
+		record, err := domain.NewBackendConformance(in)
+		if err != nil {
+			return err
+		}
+		return s.recorder.RecordBackendConformance(ctx, record)
+	}
 }
 
 // SuiteFixture parameterizes the synthetic handoff and probes with inert,
@@ -425,7 +476,7 @@ func (fx SuiteFixture) validate() error {
 // NewSuite builds a conformance suite over an initialized backend. The
 // fixture must carry a digest-pinned agent image, a credential marker, a
 // base-checkout seed, and a valid run ID; other fields default.
-func NewSuite(b *Backend, fx SuiteFixture) (*Suite, error) {
+func NewSuite(b *Backend, fx SuiteFixture, opts ...SuiteOption) (*Suite, error) {
 	if b == nil || !b.initialized {
 		return nil, fmt.Errorf("%w: Suite requires an initialized Backend", ErrInvalidConfig)
 	}
@@ -465,7 +516,11 @@ func NewSuite(b *Backend, fx SuiteFixture) (*Suite, error) {
 	if bytes.Contains(metadata, []byte(fx.CredentialMarker)) {
 		return nil, fmt.Errorf("%w: SuiteFixture.CredentialMarker %q collides with generated export metadata", ErrInvalidConfig, fx.CredentialMarker)
 	}
-	return &Suite{b: b, fx: fx, agentCommand: fx.agentCommand(b.cfg)}, nil
+	s := &Suite{b: b, fx: fx, agentCommand: fx.agentCommand(b.cfg)}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s, nil
 }
 
 // conformanceObjectName builds a probe object's runtime name from the run ID
@@ -735,22 +790,60 @@ func (r *suiteRun) verifyReaped(ctx context.Context) error {
 // the networkless-export capability probe. It is fail-closed and self-cleaning:
 // it reaps every object it
 // creates on every path. A non-nil error means the backend is not proven
-// conformant and the caller must not run unattended.
+// conformant and the caller must not run unattended. When a
+// ConformanceRecorder is configured, a completed, generation-current pass
+// also records its outcome durably (see the package doc); a superseded pass
+// records nothing.
 func (s *Suite) Full(ctx context.Context) (err error) {
-	// A new full pass supersedes the prior runtime proof. Do not keep declaring
-	// the capability while a recheck is pending or after any failed recheck.
-	proofGeneration := s.b.beginNetworklessProof()
+	// A new full pass supersedes the prior runtime proof, in memory and
+	// durably in one guarded step: the superseding marker stops the previous
+	// pass's row admitting while this recheck is pending, exactly as the
+	// cleared flags stop new spawn-time freezes. A recheck whose supersession
+	// cannot be made durable does not run.
+	proofGeneration, beginErr := s.b.beginConformanceProof(
+		s.recordStep(ctx, domain.ConformanceSuperseded))
+	if beginErr != nil {
+		return fmt.Errorf("record superseding conformance marker: %w", beginErr)
+	}
 	proved := false
+	// The publish defer runs after the suite-budget cancel below (defers are
+	// LIFO), so the recorder gets the caller's context, not the cancelled one.
+	callerCtx := ctx
 	// Publish from the final named result, after later-registered cleanup and
 	// absence-proof defers have had the chance to turn a nominal pass into a
 	// failure. A newer pass supersedes this generation even if this older pass
-	// finishes last.
+	// finishes last, and only a still-current pass records durably, so the
+	// durable latest record always describes the same pass as the in-memory
+	// declaration.
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			s.b.finishNetworklessProof(proofGeneration, false)
+			// Best-effort record: the panic is the primary failure and is
+			// re-raised regardless; an unrecorded failure is safe because
+			// absence and failure both close admission.
+			_, _ = s.b.concludeConformanceProof(proofGeneration, false,
+				s.recordStep(callerCtx, domain.ConformanceFailed))
 			panic(recovered)
 		}
-		s.b.finishNetworklessProof(proofGeneration, proved && err == nil)
+		outcome := proved && err == nil
+		// The durable append and the publication are one generation-guarded
+		// critical section (concludeConformanceProof), persisted first: a
+		// superseded pass records nothing, and the capabilities become
+		// observable only after the pass's own row is durable-latest, so a
+		// record failure leaves them undeclared and fails the pass. A pass
+		// with no recorder likewise never declares (it still supersedes):
+		// declaring from an unrecorded pass would let admission ride the
+		// fresh flags while the store gates against whatever stale row an
+		// earlier recorded pass left behind.
+		declare := outcome && s.recorder != nil
+		result := domain.ConformanceFailed
+		if outcome {
+			result = domain.ConformancePassed
+		}
+		published, recordErr := s.b.concludeConformanceProof(
+			proofGeneration, declare, s.recordStep(callerCtx, result))
+		if published && recordErr != nil {
+			err = errors.Join(err, fmt.Errorf("record backend conformance: %w", recordErr))
+		}
 	}()
 	// Bound the whole pass so a runtime that wedges inside a side-effecting
 	// call (e.g. after launching a probe VM but before StartContainer returns)

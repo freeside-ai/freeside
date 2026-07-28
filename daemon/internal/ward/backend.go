@@ -16,11 +16,16 @@ type Backend struct {
 	rt          Runtime
 	cfg         Config
 	initialized bool
-	networkless atomic.Bool
-	// networklessMu makes the generation check and capability publication one
+	// networkless and providerEgress are the two suite-earned capability
+	// flags. Both proofs come from the same Full pass, so one generation
+	// guards them jointly: a pass is all-or-nothing, and a split publication
+	// would declare a capability the pass did not finish proving.
+	networkless    atomic.Bool
+	providerEgress atomic.Bool
+	// proofMu makes the generation check and capability publication one
 	// atomic decision across overlapping Full passes.
-	networklessMu         sync.Mutex
-	networklessGeneration uint64
+	proofMu         sync.Mutex
+	proofGeneration uint64
 }
 
 // Compile-time contract assertion (exec package convention).
@@ -46,20 +51,68 @@ func New(rt Runtime, cfg Config) (*Backend, error) {
 // Name identifies the backend in policy, refusals, and audit records.
 func (b *Backend) Name() string { return BackendName }
 
-func (b *Backend) beginNetworklessProof() uint64 {
-	b.networklessMu.Lock()
-	defer b.networklessMu.Unlock()
-	b.networklessGeneration++
+// beginConformanceProof starts a new proof generation: it clears the
+// declaration and, still under the guard, runs the durable superseding step
+// (nil when no recorder is configured). Durable-first mirrors
+// concludeConformanceProof's persist-then-publish: the previous pass's row
+// must stop admitting before this recheck runs a single probe, or an
+// admission whose snapshot froze just before this begin would ride the old
+// row for the recheck's whole duration. A failed superseding append aborts
+// the begin (the declaration stays cleared, which is the safe direction).
+func (b *Backend) beginConformanceProof(record func() error) (uint64, error) {
+	b.proofMu.Lock()
+	defer b.proofMu.Unlock()
+	b.proofGeneration++
 	b.networkless.Store(false)
-	return b.networklessGeneration
+	b.providerEgress.Store(false)
+	if record != nil {
+		if err := record(); err != nil {
+			return 0, err
+		}
+	}
+	return b.proofGeneration, nil
 }
 
-func (b *Backend) finishNetworklessProof(generation uint64, proved bool) {
-	b.networklessMu.Lock()
-	defer b.networklessMu.Unlock()
-	if generation == b.networklessGeneration {
-		b.networkless.Store(proved)
+// concludeConformanceProof runs a pass's durable record step and then
+// publishes its result, all while holding the currency judgment. A
+// superseded generation publishes and records nothing, so an older
+// overlapping pass that finishes last cannot resurrect a superseded proof.
+// The record callback runs under proofMu on purpose: releasing the mutex
+// between the currency check and the append would let a newer pass begin,
+// fail, and append its row first, leaving the older pass's stale success as
+// durable-latest and inverting the append-only log's supersession order. The
+// cost is that a concurrent begin blocks for one store append, which is
+// nothing against a suite pass.
+//
+// Persist-then-publish ordering is load-bearing: the flags have been clear
+// since beginConformanceProof, and they must stay unobservable until the
+// pass's own row is durable-latest. Publishing first would open a window
+// where a concurrent admission is enabled by the fresh declaration yet gated
+// against the previous pass's stale row; if the append then failed, that
+// admission would stand on evidence this pass never persisted. A failed
+// append therefore publishes false: an unpersisted proof is never declared.
+func (b *Backend) concludeConformanceProof(
+	generation uint64, proved bool, record func() error,
+) (published bool, recordErr error) {
+	b.proofMu.Lock()
+	defer b.proofMu.Unlock()
+	if generation != b.proofGeneration {
+		return false, nil
 	}
+	if record != nil {
+		recordErr = record()
+	}
+	proved = proved && recordErr == nil
+	b.networkless.Store(proved)
+	b.providerEgress.Store(proved)
+	return true, recordErr
+}
+
+// finishConformanceProof is concludeConformanceProof with no durable record
+// step, for callers and tests that only publish.
+func (b *Backend) finishConformanceProof(generation uint64, proved bool) bool {
+	published, _ := b.concludeConformanceProof(generation, proved, nil)
+	return published
 }
 
 // Capabilities returns the backend's declared capability set, freshly built
@@ -78,8 +131,11 @@ func (b *Backend) finishNetworklessProof(generation uint64, proved bool) {
 //   - supports_read_only_remount: the same volume mounts rw in the writer
 //     and ro in the exporter.
 //
-// supports_networkless_export is added only after Suite.Full has passed its
-// runtime-observed empty-network check and DNS/direct-connect probe. A new or
+// supports_networkless_export and supports_enforced_provider_egress are
+// added only after Suite.Full has passed: the runtime-observed empty-network
+// check with its DNS/direct-connect probe, and the in-writer egress probes
+// (declared-provider CONNECT success, undeclared-authority refusal, DNS and
+// direct-IP refusal). A new or
 // failed backend therefore refuses an unattended policy minimum until the
 // proof has run. supports_credential_volume_detach and
 // supports_workspace_snapshot are refuted on this runtime and are never
@@ -98,5 +154,24 @@ func (b *Backend) Capabilities() exec.CapabilitySet {
 	if b.networkless.Load() {
 		caps[exec.CapNetworklessExport] = struct{}{}
 	}
+	if b.providerEgress.Load() {
+		caps[exec.CapEnforcedProviderEgress] = struct{}{}
+	}
 	return caps
+}
+
+// provenCapabilities is the exact set a green Full pass proves: the frozen
+// base declaration plus both suite-earned capabilities. It is spelled out
+// rather than read back from the live declaration so the durable conformance
+// record states what the pass proved, not whatever the flags happen to say
+// when the record is built; a drift test binds it to the domain's class
+// ceiling.
+func provenCapabilities() []exec.Capability {
+	return []exec.Capability{
+		exec.CapDetachableWorkspace,
+		exec.CapPostExitExport,
+		exec.CapReadOnlyRemount,
+		exec.CapNetworklessExport,
+		exec.CapEnforcedProviderEgress,
+	}
 }
