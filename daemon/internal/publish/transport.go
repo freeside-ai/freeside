@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -160,6 +162,12 @@ type Checkout struct {
 	baseSHA string
 	baseRef string
 	repo    string
+	// repositoryID is the canonical numeric identity the trusted binding
+	// held for repo when the checkout was materialized. The owner/name
+	// alone is not identity: a name can be transferred and reused, so a
+	// policy decision keyed on it can silently follow the name onto a
+	// different repository (domain.BaseRevision records the same rule).
+	repositoryID int64
 	// owner is the Transport that minted this checkout. Provenance is
 	// per-instance, not merely "some transport": two Transports can
 	// point at different endpoints, and a checkout fetched from one
@@ -181,6 +189,60 @@ func (c Checkout) BaseRef() string { return c.baseRef }
 // Repo is the managed repository the checkout was materialized from.
 func (c Checkout) Repo() string { return c.repo }
 
+// RepositoryID is the canonical numeric repository identity the trusted
+// binding held for Repo when the checkout was materialized.
+func (c Checkout) RepositoryID() int64 { return c.repositoryID }
+
+// transportRepoIDPath is where FetchBase stamps the canonical numeric
+// repository ID, beside the owner/name mark in the checkout's config.
+// The ID is a separate file rather than a config key because every
+// consumer's config gate is an exact-key allowlist (assertPristineConfig
+// here, and independently the ward seeding gate, which deliberately
+// duplicates these literals rather than importing this package); the
+// file influences no git behavior, so its integrity is proved by the
+// explicit re-gates that read it, not by config hygiene.
+const transportRepoIDPath = ".git/freeside-repository-id"
+
+// maxTransportRepoIDBytes bounds the ID binding read: an int64's
+// canonical decimal fits well inside it, so anything larger is not a
+// daemon-authored stamp.
+const maxTransportRepoIDBytes = 64
+
+// stampRepoIDBinding writes the canonical decimal form the re-gates
+// (and ward's seeding gate) parse back: one line, one trailing newline.
+func stampRepoIDBinding(dir string, id int64) error {
+	path := filepath.Join(dir, filepath.FromSlash(transportRepoIDPath))
+	if err := os.WriteFile(path, []byte(strconv.FormatInt(id, 10)+"\n"), 0o600); err != nil {
+		return fmt.Errorf("stamp repository id binding: %w", err)
+	}
+	return nil
+}
+
+// readRepoIDBinding re-reads a checkout's stamped repository ID,
+// failing closed on an absent, oversized, or non-canonical binding. A
+// checkout materialized before the stamp existed therefore cannot pass
+// on its name alone. No refusal echoes the file's content or the parse
+// error (whose prose embeds the input): the file lives in a directory
+// later pipeline stages write into, so rejected bytes are not safe
+// error material.
+func readRepoIDBinding(dir string) (int64, error) {
+	f, err := os.Open(filepath.Join(dir, filepath.FromSlash(transportRepoIDPath))) //nolint:gosec // daemon-owned checkout path
+	if err != nil {
+		return 0, fmt.Errorf("checkout %s carries no repository id binding: %w", dir, ErrGitTransport)
+	}
+	defer f.Close() //nolint:errcheck // read-only handle
+	data, err := io.ReadAll(io.LimitReader(f, maxTransportRepoIDBytes+1))
+	if err != nil || len(data) > maxTransportRepoIDBytes {
+		return 0, fmt.Errorf("checkout %s repository id binding could not be read: %w", dir, ErrGitTransport)
+	}
+	text := strings.TrimSuffix(string(data), "\n")
+	id, err := strconv.ParseInt(text, 10, 64)
+	if err != nil || id <= 0 || text != strconv.FormatInt(id, 10) {
+		return 0, fmt.Errorf("checkout %s carries a malformed repository id binding: %w", dir, ErrGitTransport)
+	}
+	return id, nil
+}
+
 // PushResult reports one PushHead outcome. Created is false when the
 // remote already held the identical head, so the call had no remote
 // effect (the effectively-once property the publication drain
@@ -196,7 +258,8 @@ type PushResult struct {
 // concurrent calls on one path cannot interleave and a failed call
 // removes only what it claimed. The result has the shape the
 // importer's base enforcement expects: HEAD detached at the base, no
-// working-tree content, the base anchored against gc.
+// working-tree content, the base anchored against gc — stamped with the
+// managed repository's name and canonical numeric identity.
 func (t *Transport) FetchBase(ctx context.Context, repo, baseRef, baseSHA, dir string) (Checkout, error) {
 	ref, err := parseTransportRepo(repo)
 	if err != nil {
@@ -255,10 +318,19 @@ func (t *Transport) FetchBase(ctx context.Context, repo, baseRef, baseSHA, dir s
 		return Checkout{}, err
 	}
 	// The token is minted only after every local gate has passed, so a
-	// rejected call never causes an audited mint or a live credential.
+	// call rejected on its own arguments never causes an audited mint or
+	// a live credential. The identity check below necessarily follows
+	// the mint (the trusted binding arrives with the token); its refusal
+	// still precedes every authenticated operation.
 	tok, err := t.tokens.Token(ctx, repo)
 	if err != nil {
 		return Checkout{}, err
+	}
+	// The trusted binding must name the repository's canonical identity;
+	// a checkout stamped without one would later be refused anyway, so
+	// fail before the network fetch spends anything.
+	if tok.RepositoryID <= 0 {
+		return Checkout{}, fmt.Errorf("trusted binding for %s carries no canonical repository id: %w", repo, ErrGitTransport)
 	}
 	url := t.repoURL(ref)
 	remoteRef := "refs/heads/" + baseRef
@@ -297,12 +369,18 @@ func (t *Transport) FetchBase(ctx context.Context, repo, baseRef, baseSHA, dir s
 	}
 	// The repo binding PushHead re-gates against: a daemon-authored
 	// mark in the checkout's own config naming the managed repository
-	// this checkout was materialized from.
+	// this checkout was materialized from, plus the canonical numeric
+	// identity the trusted binding resolved that name to, so a name
+	// later transferred onto a different repository cannot satisfy the
+	// re-gates on the name alone.
 	if _, _, err := r.run(ctx, nil, "config", transportRepoKey, repo); err != nil {
 		return Checkout{}, err
 	}
+	if err := stampRepoIDBinding(dir, tok.RepositoryID); err != nil {
+		return Checkout{}, err
+	}
 	materialized = true
-	return Checkout{dir: dir, baseSHA: baseSHA, baseRef: baseRef, repo: repo, owner: t}, nil
+	return Checkout{dir: dir, baseSHA: baseSHA, baseRef: baseRef, repo: repo, repositoryID: tok.RepositoryID, owner: t}, nil
 }
 
 // PushHead places the candidate head on the managed repository's
@@ -402,6 +480,20 @@ func (t *Transport) PushHead(ctx context.Context, co Checkout, gh GatedHead) (Pu
 	if got := strings.TrimSpace(string(bound)); got != repo {
 		return PushResult{}, fmt.Errorf("checkout is bound to repository %q, push targets %q: %w", got, repo, ErrGitTransport)
 	}
+	// Stamp integrity: the ID on disk must be the one this transport
+	// stamped into the capability. Disk alone would trust whatever a
+	// later pipeline stage wrote there; the capability alone would leave
+	// the artifact ward's seeding gate consumes unchecked.
+	stampedID, err := readRepoIDBinding(co.dir)
+	if err != nil {
+		return PushResult{}, err
+	}
+	if stampedID != co.repositoryID {
+		return PushResult{}, fmt.Errorf(
+			"checkout is stamped with repository id %d, transport fetched it as %d: %w",
+			stampedID, co.repositoryID, ErrGitTransport,
+		)
+	}
 	head, _, err := r.run(ctx, nil, "rev-parse", "HEAD")
 	if err != nil {
 		return PushResult{}, err
@@ -422,12 +514,30 @@ func (t *Transport) PushHead(ctx context.Context, co Checkout, gh GatedHead) (Pu
 	if err := r.assertPristineConfig(ctx); err != nil {
 		return PushResult{}, err
 	}
-	// The token is minted only after every checkout re-gate has
-	// passed, so a rejected checkout never causes an audited mint or a
-	// live credential.
+	// The token is acquired only after every local checkout re-gate has
+	// passed, so a checkout rejected on its own state never causes an
+	// audited mint or a live credential. The one re-gate after it is
+	// trust continuity below, which cannot run earlier: the trusted
+	// binding arrives with the token. A refusal there still precedes
+	// every authenticated network operation, so the credential is never
+	// exposed for a refused push.
 	tok, err := t.tokens.Token(ctx, repo)
 	if err != nil {
 		return PushResult{}, err
+	}
+	// Trust continuity: the identity the checkout was fetched under must
+	// still be the one the trusted binding resolves the name to. A name
+	// transferred and reused between fetch and push resolves to a
+	// different repository's ID and is refused here, instead of the push
+	// silently following the name onto that repository.
+	if tok.RepositoryID <= 0 {
+		return PushResult{}, fmt.Errorf("trusted binding for %s carries no canonical repository id: %w", repo, ErrGitTransport)
+	}
+	if co.repositoryID != tok.RepositoryID {
+		return PushResult{}, fmt.Errorf(
+			"checkout is bound to repository id %d, trusted binding for %q is %d: %w",
+			co.repositoryID, repo, tok.RepositoryID, ErrGitTransport,
+		)
 	}
 	url := t.repoURL(ref)
 	remoteRef := "refs/heads/" + branch
