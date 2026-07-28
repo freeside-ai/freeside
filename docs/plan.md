@@ -382,8 +382,8 @@ to artifact IDs, not live web state.
 
 Provider concurrency has two independent controls:
 
-`AuthIdentity {auth_store_mutation_lease, max_parallel_executions,
-refresh_strategy, supports_read_only_auth_snapshot}`
+`AuthIdentity {auth_store_mutation_lease, auth_store_volume,
+max_parallel_executions, refresh_strategy, supports_read_only_auth_snapshot}`
 
 1. Auth-store mutation, including refresh, login state, configuration writes,
    and store replacement, is serialized per identity.

@@ -2,6 +2,7 @@
   "id": "auth-claude-owner",
   "provider": "claude",
   "auth_store_mutation_lease": true,
+  "auth_store_volume": "claude-owner-credentials",
   "max_parallel_executions": 1,
   "refresh_strategy": "refresh_on_demand",
   "supports_read_only_auth_snapshot": false

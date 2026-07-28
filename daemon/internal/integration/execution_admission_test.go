@@ -22,6 +22,7 @@ var (
 	agentImage   = domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32))
 	testIdentity = domain.AuthIdentity{
 		ID: "auth-claude-owner", Provider: "claude", AuthStoreMutationLease: true,
+		AuthStoreVolume:       "claude-owner-credentials",
 		MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
 	}
 )

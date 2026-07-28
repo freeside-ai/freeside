@@ -222,6 +222,11 @@ type runState struct {
 	// journalOpen records that Begin durably opened this run's journal
 	// record; the deferred close acts only while it is set.
 	journalOpen bool
+	// journalRecoverOnly is set when an atomic leased open committed but the
+	// returned lease failed the gate's trust checks. The durable record, not
+	// this process, owns reconciliation from there; the ordinary defer must
+	// not close it as loss over a window it could not safely identify.
+	journalRecoverOnly bool
 }
 
 // Handoff runs one full workspace handoff: admit against the capability
@@ -287,7 +292,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		// completed-close voids the delivery (§5.7: release follows the
 		// durable append), and the cleanup below removes the unreleased
 		// output.
-		if st.journalOpen {
+		if st.journalOpen && !st.journalRecoverOnly {
 			jctx, jcancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
 			switch {
 			case st.succeeded && err == nil:
@@ -329,10 +334,10 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		}
 	}()
 
-	// §5.4: the writable credential mount rides inside an acquired, verified
-	// mutation window. Acquired before any runtime object exists — a busy
-	// identity refuses the run before it costs a volume — and after the
-	// teardown defer, so every later refusal still releases it.
+	// §5.4: the one writable credential mount must be the exact volume bound
+	// to the claimed identity in trusted state. The caller supplies the spec,
+	// so agreement between its claim and its mount is not evidence; the
+	// leaser's identity read is.
 	if hs.AuthStoreLease != nil {
 		// The credential observers mount the leased volume read-only at its
 		// declared target and write their proof to the configured proof
@@ -349,8 +354,20 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 			return nil, fmt.Errorf("%w: writable credential target %q overlaps the configured credential proof path",
 				ErrInvalidHandoffSpec, t)
 		}
-		if err := b.acquireAuthStoreLease(ctx, *hs.AuthStoreLease, st); err != nil {
-			return nil, err
+		if b.cfg.AuthStoreLeaser == nil {
+			return nil, failf(CheckAuthStoreMutationLease,
+				"spec claims the auth-store mutation lease for identity %q but no leaser is configured",
+				hs.AuthStoreLease.AuthIdentityID)
+		}
+		boundVolume, verr := b.cfg.AuthStoreLeaser.AuthStoreVolume(ctx, hs.AuthStoreLease.AuthIdentityID)
+		if verr != nil {
+			return nil, fmt.Errorf("read auth-store volume for identity %q: %w",
+				hs.AuthStoreLease.AuthIdentityID, verr)
+		}
+		if mounted := hs.writableCredentialVolume(); boundVolume != mounted {
+			return nil, failf(CheckAuthStoreMutationLease,
+				"identity %q is bound to auth-store volume %q, not writable mount %q",
+				hs.AuthStoreLease.AuthIdentityID, boundVolume, mounted)
 		}
 	}
 
@@ -364,30 +381,38 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	}
 
 	// Intent-before-create: the journal record is durable before the first
-	// runtime object can exist, so no object can outlive the daemon
-	// unrecorded. It opens after the syntactic and preflight refusals — a
-	// spec the gate would never run needs no record — and a run that cannot
-	// be journalled is refused.
+	// runtime object. For a leased journalled handoff, the journal open and
+	// lease acquisition are one production transaction, so a crash observes
+	// neither or both. Journalless one-shot operation retains the standalone
+	// lease path and deliberately offers no restart recovery.
+	var rec HandoffJournalRecord
 	if b.cfg.Journal != nil {
 		digest, derr := specDigest(hs)
 		if derr != nil {
 			return nil, derr
 		}
-		rec := HandoffJournalRecord{
+		rec = HandoffJournalRecord{
 			RunID:          hs.RunID,
 			OwnershipToken: ownershipLabel.Value,
 			SpecDigest:     digest,
 			OpenedAt:       b.cfg.Now(),
 		}
-		if st.leaseHeld {
-			rec.Lease = &HandoffJournalLease{
-				AuthIdentityID: st.lease.AuthIdentityID,
-				Holder:         st.lease.Holder,
-				Fence:          st.lease.Fence,
-				AcquiredAt:     st.lease.AcquiredAt,
-				ExpiresAt:      st.lease.ExpiresAt,
-			}
+	}
+	switch {
+	case hs.AuthStoreLease != nil && b.cfg.Journal != nil:
+		opener, ok := b.cfg.Journal.(LeasedHandoffOpener)
+		if !ok {
+			return nil, failf(CheckAuthStoreMutationLease,
+				"journal does not support atomic leased handoff open")
 		}
+		if err := b.beginLeasedHandoff(ctx, opener, rec, *hs.AuthStoreLease, st); err != nil {
+			return nil, err
+		}
+	case hs.AuthStoreLease != nil:
+		if err := b.acquireAuthStoreLease(ctx, *hs.AuthStoreLease, st); err != nil {
+			return nil, err
+		}
+	case b.cfg.Journal != nil:
 		if err := b.cfg.Journal.Begin(ctx, rec); err != nil {
 			return nil, fmt.Errorf("journal begin: %w", err)
 		}
@@ -842,6 +867,35 @@ func (b *Backend) materializeRootFS(ctx context.Context, id, tarPath string, c C
 // outside the window).
 const leaseWindowMargin = time.Minute
 
+// beginLeasedHandoff reserves the process-local identity slot, then asks the
+// production opener to commit the journal record and lease in one transaction.
+// A successful commit marks the record recover-only until the returned lease
+// passes the same trust checks as the standalone acquisition path.
+func (b *Backend) beginLeasedHandoff(
+	ctx context.Context,
+	opener LeasedHandoffOpener,
+	rec HandoffJournalRecord,
+	claim AuthStoreLeaseClaim,
+	st *runState,
+) error {
+	if err := b.reserveAuthStoreLeaseSlot(claim.AuthIdentityID, st); err != nil {
+		return err
+	}
+	now, wantExpiry := b.authStoreLeaseWindow()
+	rec.OpenedAt = now
+	lease, err := opener.BeginLeased(ctx, rec, claim, now, wantExpiry)
+	if err != nil {
+		return fmt.Errorf("begin leased handoff journal for identity %q: %w", claim.AuthIdentityID, err)
+	}
+	st.journalOpen = true
+	st.journalRecoverOnly = true
+	if err := b.acceptAuthStoreLease(ctx, claim, now, wantExpiry, lease, st); err != nil {
+		return err
+	}
+	st.journalRecoverOnly = false
+	return nil
+}
+
 // acquireAuthStoreLease takes the claimed identity's §5.4 mutation lease and
 // verifies the granted window covers this run's whole budget. The gate sizes
 // and verifies the window itself: only it knows the handoff deadline and
@@ -856,6 +910,18 @@ func (b *Backend) acquireAuthStoreLease(ctx context.Context, claim AuthStoreLeas
 		return failf(CheckAuthStoreMutationLease,
 			"spec claims the auth-store mutation lease for identity %q but no leaser is configured", claim.AuthIdentityID)
 	}
+	if err := b.reserveAuthStoreLeaseSlot(claim.AuthIdentityID, st); err != nil {
+		return err
+	}
+	now, wantExpiry := b.authStoreLeaseWindow()
+	lease, err := b.cfg.AuthStoreLeaser.Acquire(ctx, claim.AuthIdentityID, claim.Holder, now, wantExpiry)
+	if err != nil {
+		return fmt.Errorf("acquire auth store mutation lease for identity %q: %w", claim.AuthIdentityID, err)
+	}
+	return b.acceptAuthStoreLease(ctx, claim, now, wantExpiry, lease, st)
+}
+
+func (b *Backend) reserveAuthStoreLeaseSlot(id domain.AuthIdentityID, st *runState) error {
 	// The store serializes distinct holders; two concurrent handoffs reusing
 	// one holder ID would instead converge on one window and both write the
 	// same store. The gate's stated posture is that a caller cannot break
@@ -863,21 +929,31 @@ func (b *Backend) acquireAuthStoreLease(ctx context.Context, claim AuthStoreLeas
 	// in-process slot per identity (freed when the run ends; the store's
 	// window remains the cross-restart authority).
 	b.leaseMu.Lock()
-	if b.activeLeases[claim.AuthIdentityID] {
+	if b.activeLeases[id] {
 		b.leaseMu.Unlock()
 		return failf(CheckAuthStoreMutationLease,
-			"identity %q already has a live leased handoff in this process", claim.AuthIdentityID)
+			"identity %q already has a live leased handoff in this process", id)
 	}
-	b.activeLeases[claim.AuthIdentityID] = true
+	b.activeLeases[id] = true
 	b.leaseMu.Unlock()
 	st.leaseSlot = true
-	st.leaseIdentity = claim.AuthIdentityID
+	st.leaseIdentity = id
+	return nil
+}
+
+func (b *Backend) authStoreLeaseWindow() (time.Time, time.Time) {
 	now := b.cfg.Now()
 	wantExpiry := now.Add(b.cfg.HandoffTimeout + b.cfg.TeardownTimeout + leaseWindowMargin)
-	lease, err := b.cfg.AuthStoreLeaser.Acquire(ctx, claim.AuthIdentityID, claim.Holder, now, wantExpiry)
-	if err != nil {
-		return fmt.Errorf("acquire auth store mutation lease for identity %q: %w", claim.AuthIdentityID, err)
-	}
+	return now, wantExpiry
+}
+
+func (b *Backend) acceptAuthStoreLease(
+	ctx context.Context,
+	claim AuthStoreLeaseClaim,
+	now, wantExpiry time.Time,
+	lease domain.AuthStoreMutationLease,
+	st *runState,
+) error {
 	// The returned lease is store output, not gate state: re-verify it names
 	// this claim and actually covers the budget before anything trusts it. A
 	// same-holder re-acquire converges on an existing window without
@@ -910,6 +986,12 @@ func (b *Backend) acquireAuthStoreLease(ctx context.Context, claim AuthStoreLeas
 			claim.AuthIdentityID, lease.ExpiresAt)
 		if problems := b.releaseAuthStoreLease(ctx, st); len(problems) > 0 {
 			reason += "; " + strings.Join(problems, "; ")
+		}
+		// This rejection occurs only after the lease was proven freshly ours
+		// and the release converged, so an atomically opened journal may close
+		// as loss instead of waiting for recovery.
+		if !st.leaseHeld {
+			st.journalRecoverOnly = false
 		}
 		return failf(CheckAuthStoreMutationLease, "%s", reason)
 	}

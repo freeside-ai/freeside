@@ -11,6 +11,7 @@ import (
 func authIdentity() domain.AuthIdentity {
 	return domain.AuthIdentity{
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
+		AuthStoreVolume:       "provider-cred",
 		MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
 	}
 }
@@ -24,6 +25,9 @@ func TestAuthIdentityValidate(t *testing.T) {
 		{"valid", func(*domain.AuthIdentity) {}, nil},
 		{"no id", func(i *domain.AuthIdentity) { i.ID = "" }, domain.ErrEmptyID},
 		{"no provider", func(i *domain.AuthIdentity) { i.Provider = "" }, domain.ErrEmptyField},
+		{"leased without auth-store volume", func(i *domain.AuthIdentity) {
+			i.AuthStoreVolume = ""
+		}, domain.ErrEmptyField},
 		{"zero parallelism", func(i *domain.AuthIdentity) { i.MaxParallelExecutions = 0 }, domain.ErrNonPositive},
 		{"unknown refresh strategy", func(i *domain.AuthIdentity) {
 			i.RefreshStrategy = domain.RefreshStrategy("magic")
@@ -56,6 +60,9 @@ func TestValidateAuthIdentityTransition(t *testing.T) {
 		{"restrategized refresh", func(i *domain.AuthIdentity) { i.RefreshStrategy = domain.RefreshExternal }, nil},
 		{"other identity", func(i *domain.AuthIdentity) { i.ID = "auth-2" }, domain.ErrImmutableTransition},
 		{"other provider", func(i *domain.AuthIdentity) { i.Provider = "openai" }, domain.ErrImmutableTransition},
+		{"other auth-store volume", func(i *domain.AuthIdentity) {
+			i.AuthStoreVolume = "other-provider-cred"
+		}, domain.ErrImmutableTransition},
 		{
 			// Retiring the serialization point while a holder still believes
 			// it holds a lease is the failure this rule exists to refuse.

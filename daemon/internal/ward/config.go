@@ -29,6 +29,10 @@ import (
 var ErrLeaseWindowEnded = errors.New("auth store mutation lease window already ended")
 
 type AuthStoreLeaser interface {
+	// AuthStoreVolume returns the immutable trusted volume binding for this
+	// identity. Handoff compares it with the one writable credential mount
+	// before opening a mutation window.
+	AuthStoreVolume(ctx context.Context, id domain.AuthIdentityID) (string, error)
 	// Acquire takes or converges on the identity's lease for holder, with
 	// the given window. A live lease held by anyone else refuses; re-acquire
 	// by the same holder returns the existing lease unchanged, without

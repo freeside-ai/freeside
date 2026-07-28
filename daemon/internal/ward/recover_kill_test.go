@@ -109,7 +109,7 @@ func TestRecoverKillBoundaries(t *testing.T) {
 		want RecoveryOutcome
 	}
 	points := []killPoint{
-		{"begin committed, no runtime object", func(fx *handoffFixture, _ *fakeJournal, _ handoffNames, capture func()) {
+		{"lease and begin committed, no runtime object", func(fx *handoffFixture, _ *fakeJournal, _ handoffNames, capture func()) {
 			fx.rt.onCreateVolume = func(string) error { capture(); return nil }
 		}, RecoveryLoss},
 		{"workspace created", func(fx *handoffFixture, _ *fakeJournal, _ handoffNames, capture func()) {

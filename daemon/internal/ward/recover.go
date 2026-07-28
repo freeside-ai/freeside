@@ -114,7 +114,7 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 	if rec.RunID != runID {
 		return nil, fmt.Errorf("%w: journal returned record for run %q, asked for %q", ErrInvalidJournalRecord, rec.RunID, runID)
 	}
-	if err := rec.validate(); err != nil {
+	if err := rec.Validate(); err != nil {
 		return nil, err
 	}
 	if rec.Outcome != nil {
@@ -174,6 +174,18 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 	if rec.ObservedBaseSHA != "" &&
 		(hs.Seed.Mode != SeedBaseCheckout || rec.ObservedBaseSHA != hs.Seed.Base.BaseSHA) {
 		return nil, fmt.Errorf("%w: record's observed base does not match the spec's declared base", ErrInvalidJournalRecord)
+	}
+	if rec.Lease != nil {
+		boundVolume, verr := b.cfg.AuthStoreLeaser.AuthStoreVolume(ctx, rec.Lease.AuthIdentityID)
+		if verr != nil {
+			return nil, fmt.Errorf("re-gate auth-store volume for identity %q: %w",
+				rec.Lease.AuthIdentityID, verr)
+		}
+		if mounted := hs.writableCredentialVolume(); boundVolume != mounted {
+			return nil, fmt.Errorf(
+				"%w: identity %q is bound to auth-store volume %q, not the record's writable mount %q",
+				ErrInvalidJournalRecord, rec.Lease.AuthIdentityID, boundVolume, mounted)
+		}
 	}
 	// Base capabilities only: suite-earned flags were cleared by the restart
 	// and must not be assumed (§5.7 reconstructs gating state from persisted

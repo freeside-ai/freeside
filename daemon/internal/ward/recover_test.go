@@ -226,6 +226,24 @@ func TestRecoverRefusals(t *testing.T) {
 	}
 }
 
+func TestRecoverRefusesMismatchedBoundAuthStoreVolume(t *testing.T) {
+	fx := newRecoveryFixture(t)
+	hs := testLeasedHandoffSpec()
+	fx.openRecord(t, hs)
+	fx.l.volume = "other-provider-cred"
+
+	_, err := fx.recover(t, hs.RunID, hs)
+	if !errors.Is(err, ErrInvalidJournalRecord) {
+		t.Fatalf("Recover = %v, want ErrInvalidJournalRecord", err)
+	}
+	for _, call := range fx.rt.calls {
+		if strings.HasPrefix(call, "journal-") || strings.HasPrefix(call, "identity-volume ") {
+			continue
+		}
+		t.Errorf("runtime call %q happened after the binding refusal", call)
+	}
+}
+
 // deadlineJournal asserts recovery's budget is in force before the first
 // durable read: a stalling adapter must be bounded by the recovery deadline.
 type deadlineJournal struct {

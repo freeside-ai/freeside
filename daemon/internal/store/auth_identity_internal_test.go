@@ -137,6 +137,7 @@ func TestAuthIdentityFieldsCrossChecked(t *testing.T) {
 			t.Cleanup(func() { _ = s.Close() })
 			identity := domain.AuthIdentity{
 				ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
+				AuthStoreVolume:       "provider-cred",
 				MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
 			}
 			if err := s.WriteInternal(ctx, func(tx *InternalTx) error {

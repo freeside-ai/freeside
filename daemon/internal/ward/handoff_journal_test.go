@@ -31,7 +31,7 @@ func TestHandoffJournalledSuccess(t *testing.T) {
 		t.Fatalf("Handoff = %v, want success", err)
 	}
 
-	begin := fx.rt.callIndex("journal-begin " + hs.RunID)
+	begin := fx.rt.callIndex("journal-begin-leased " + hs.RunID)
 	firstObject := fx.rt.callIndex("create-volume " + names.Workspace)
 	writerComplete := fx.rt.callIndex("journal-writer-complete " + hs.RunID)
 	writerDelete := fx.rt.callIndex("delete-container " + names.Agent)
@@ -77,6 +77,39 @@ func TestHandoffJournalledSuccess(t *testing.T) {
 		t.Errorf("record export dir %q, want the released %q", rec.ExportDir, res.ExportDir)
 	}
 	fx.assertReaped(t)
+}
+
+// TestHandoffLeasedJournalOpenIsAtomicAtTheKillBoundary observes the fake
+// production transaction immediately before commit. Neither the lease nor
+// the journal row is visible there; the first post-commit runtime boundary
+// therefore sees both, which is the state Recover can reconcile.
+func TestHandoffLeasedJournalOpenIsAtomicAtTheKillBoundary(t *testing.T) {
+	fx := newHandoffFixture(t)
+	j := fx.journalled()
+	hs, l := fx.leased(t)
+	var (
+		observed      bool
+		recordVisible bool
+		leaseVisible  bool
+	)
+	j.onCall = func(call string) {
+		if call != "journal-begin-leased "+hs.RunID {
+			return
+		}
+		observed = true
+		_, recordVisible = j.records[hs.RunID]
+		leaseVisible = l.lease.AuthIdentityID != ""
+	}
+
+	if _, err := fx.runSpec(t, hs); err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+	if !observed {
+		t.Fatal("atomic begin boundary was not observed")
+	}
+	if recordVisible || leaseVisible {
+		t.Fatalf("pre-commit state: record=%v lease=%v, want neither visible", recordVisible, leaseVisible)
+	}
 }
 
 // TestHandoffJournalledFailureClosesLoss: a failed run whose teardown proved

@@ -92,19 +92,20 @@ func (e *LeaseHeldError) Unwrap() error { return ErrLeaseHeld }
 const (
 	recordAuthIdentitySQL = `
 INSERT INTO auth_identities
-    (id, provider, auth_store_mutation_lease, max_parallel_executions,
+    (id, provider, auth_store_mutation_lease, auth_store_volume, max_parallel_executions,
      refresh_strategy, supports_read_only_auth_snapshot, recorded_at, body)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     provider                         = excluded.provider,
     auth_store_mutation_lease        = excluded.auth_store_mutation_lease,
+    auth_store_volume                = excluded.auth_store_volume,
     max_parallel_executions          = excluded.max_parallel_executions,
     refresh_strategy                 = excluded.refresh_strategy,
     supports_read_only_auth_snapshot = excluded.supports_read_only_auth_snapshot,
     recorded_at                      = excluded.recorded_at,
     body                             = excluded.body`
 	getAuthIdentitySQL = `
-SELECT provider, auth_store_mutation_lease, max_parallel_executions,
+SELECT provider, auth_store_mutation_lease, auth_store_volume, max_parallel_executions,
        refresh_strategy, supports_read_only_auth_snapshot, recorded_at, body
 FROM auth_identities WHERE id = ?`
 
@@ -160,7 +161,7 @@ func (tx *InternalTx) RecordAuthIdentity(ctx context.Context, identity domain.Au
 	}
 	if _, err := tx.tx.ExecContext(ctx, recordAuthIdentitySQL,
 		identity.ID, identity.Provider, identity.AuthStoreMutationLease,
-		identity.MaxParallelExecutions, identity.RefreshStrategy,
+		identity.AuthStoreVolume, identity.MaxParallelExecutions, identity.RefreshStrategy,
 		identity.SupportsReadOnlyAuthSnapshot, formatTime(recordedAt), body); err != nil {
 		return fmt.Errorf("record auth identity %q: %w", identity.ID, err)
 	}
@@ -222,6 +223,7 @@ func (tx *ReadTx) getAuthIdentityRecord(
 	var (
 		provider   string
 		lease      bool
+		volume     sql.NullString
 		parallel   int
 		refresh    string
 		snapshots  bool
@@ -229,7 +231,7 @@ func (tx *ReadTx) getAuthIdentityRecord(
 		body       []byte
 	)
 	err := tx.tx.QueryRowContext(ctx, getAuthIdentitySQL, id).
-		Scan(&provider, &lease, &parallel, &refresh, &snapshots, &recordedAt, &body)
+		Scan(&provider, &lease, &volume, &parallel, &refresh, &snapshots, &recordedAt, &body)
 	if err != nil {
 		return domain.AuthIdentity{}, time.Time{}, fmt.Errorf("get auth identity %q: %w", id, notFoundOr(err))
 	}
@@ -240,6 +242,7 @@ func (tx *ReadTx) getAuthIdentityRecord(
 	identity := record.Identity
 	if identity.ID != id || identity.Provider != provider ||
 		identity.AuthStoreMutationLease != lease ||
+		identity.AuthStoreVolume != volume.String ||
 		identity.MaxParallelExecutions != parallel ||
 		string(identity.RefreshStrategy) != refresh ||
 		identity.SupportsReadOnlyAuthSnapshot != snapshots ||

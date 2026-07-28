@@ -1,0 +1,141 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/migrations"
+)
+
+func TestHandoffJournalColumnsAreCrossChecked(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		stmt string
+	}{
+		{
+			"ownership token body only",
+			`UPDATE handoff_journal_records
+			 SET body = json_set(body, '$.ownership_token', 'ffffffffffffffffffffffffffffffff')
+			 WHERE run_id = 'journal-run'`,
+		},
+		{
+			"writer complete column only",
+			`UPDATE handoff_journal_records SET writer_complete = 1 WHERE run_id = 'journal-run'`,
+		},
+		{
+			"lease fence body only",
+			`UPDATE handoff_journal_records
+			 SET body = json_set(body, '$.lease.fence', 8) WHERE run_id = 'journal-run'`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			t.Cleanup(func() { _ = s.Close() })
+			identity := domain.AuthIdentity{
+				ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
+				AuthStoreVolume:       "provider-cred",
+				MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
+			}
+			at := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+			if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+				if err := tx.RecordAuthIdentity(ctx, identity, at); err != nil {
+					return err
+				}
+				_, err := tx.BeginLeasedHandoffJournal(ctx, HandoffJournalRecord{
+					RunID:          "journal-run",
+					OwnershipToken: "00112233445566778899aabbccddeeff",
+					SpecDigest:     strings.Repeat("ab", 32),
+					OpenedAt:       at,
+				}, identity.ID, "inv-1", at, at.Add(time.Hour))
+				return err
+			}); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+			if _, err := s.db.ExecContext(ctx, tc.stmt); err != nil {
+				t.Fatalf("tamper: %v", err)
+			}
+			err = s.Read(ctx, func(tx *ReadTx) error {
+				_, err := tx.GetHandoffJournal(ctx, "journal-run")
+				return err
+			})
+			if !errors.Is(err, errRowInconsistent) {
+				t.Fatalf("tampered read = %v, want %v", err, errRowInconsistent)
+			}
+		})
+	}
+}
+
+func TestHandoffMigrationLeavesLegacyLeasedIdentitiesUnboundAndRefused(t *testing.T) {
+	ctx := context.Background()
+	db := openRaw(t)
+	migrateThrough(t, ctx, db, "0019_")
+	recordedAt := "2026-07-28T12:00:00Z"
+	identityBody := `{"identity":{"id":"auth-legacy","provider":"claude","auth_store_mutation_lease":true,"max_parallel_executions":1,"refresh_strategy":"refresh_on_demand","supports_read_only_auth_snapshot":false},"recorded_at":"2026-07-28T12:00:00Z"}`
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO auth_identities
+    (id, provider, auth_store_mutation_lease, max_parallel_executions,
+     refresh_strategy, supports_read_only_auth_snapshot, recorded_at, body)
+VALUES ('auth-legacy', 'claude', 1, 1, 'refresh_on_demand', 0, ?, ?)`,
+		recordedAt, identityBody); err != nil {
+		t.Fatalf("seed legacy identity: %v", err)
+	}
+	leaseBody := `{"auth_identity_id":"auth-legacy","holder":"inv-legacy","fence":1,"acquired_at":"2026-07-28T12:00:00Z","expires_at":"2026-07-28T13:00:00Z","released_at":null}`
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO auth_store_mutation_leases
+    (auth_identity_id, holder, fence, acquired_at, expires_at,
+     expires_at_unix_nano, released_at, body)
+VALUES ('auth-legacy', 'inv-legacy', 1, '2026-07-28T12:00:00Z',
+        '2026-07-28T13:00:00Z', ?, NULL, ?)`,
+		time.Date(2026, 7, 28, 13, 0, 0, 0, time.UTC).UnixNano(), leaseBody); err != nil {
+		t.Fatalf("seed legacy lease: %v", err)
+	}
+
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate to head: %v", err)
+	}
+	var (
+		identityRows int
+		leaseRows    int
+		volume       sql.NullString
+	)
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*), auth_store_volume FROM auth_identities WHERE id = 'auth-legacy'`).
+		Scan(&identityRows, &volume); err != nil {
+		t.Fatalf("read migrated identity: %v", err)
+	}
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM auth_store_mutation_leases WHERE auth_identity_id = 'auth-legacy'`).
+		Scan(&leaseRows); err != nil {
+		t.Fatalf("read migrated lease: %v", err)
+	}
+	if identityRows != 1 || leaseRows != 1 || volume.Valid {
+		t.Fatalf("migrated legacy rows: identity=%d lease=%d volume=%v, want 1/1/NULL",
+			identityRows, leaseRows, volume)
+	}
+
+	s := &Store{db: db}
+	err := s.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.GetAuthIdentity(ctx, "auth-legacy")
+		return err
+	})
+	if err == nil {
+		t.Fatal("legacy leased identity without a volume binding reconstructed")
+	}
+	err = s.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.GetAuthStoreMutationLease(ctx, "auth-legacy")
+		return err
+	})
+	if err == nil {
+		t.Fatal("legacy lease behind an unbound identity reconstructed")
+	}
+}

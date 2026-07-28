@@ -84,11 +84,12 @@ type HandoffJournalLease struct {
 	ExpiresAt      time.Time             `json:"expires_at"`
 }
 
-// HandoffJournalRecord is one handoff's durable record. Begin writes it
-// before the first runtime object exists (intent-before-create: a run that
-// cannot be journalled is refused, so no object can outlive the daemon
-// unrecorded); the amendments below add the unreconstructible proofs as they
-// are earned; Close ends it.
+// HandoffJournalRecord is one handoff's durable record. Begin, or
+// LeasedHandoffOpener.BeginLeased for a leased run, writes it before the first
+// runtime object exists (intent-before-create: a run that cannot be
+// journalled is refused, so no object can outlive the daemon unrecorded); the
+// amendments below add the unreconstructible proofs as they are earned; Close
+// ends it.
 //
 // A record read back after a restart is a trust boundary: recovery re-gates
 // every field's shape (validate), re-derives the spec digest from the
@@ -136,11 +137,11 @@ type HandoffJournalRecord struct {
 // bytes, lowercase hex.
 var ownershipTokenPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
-// validate re-gates a record's shape at the reconstruction boundary. It
+// Validate re-gates a record's shape at the reconstruction boundary. It
 // checks shapes only — whether the record's claims hold is decided against
 // the re-supplied spec (digest) and the live runtime world (everything
 // else), never by believing the record.
-func (r HandoffJournalRecord) validate() error {
+func (r HandoffJournalRecord) Validate() error {
 	if !runIDPattern.MatchString(r.RunID) {
 		return fmt.Errorf("%w: journal record run id does not match %s", ErrInvalidJournalRecord, runIDPattern)
 	}
@@ -190,9 +191,10 @@ func (r HandoffJournalRecord) validate() error {
 // the unpersisted proof §5.7 rejects — and every error fails the handoff
 // closed.
 type HandoffJournal interface {
-	// Begin durably opens the record, before any runtime object exists.
-	// Opening a run id whose record is already open or closed must fail:
-	// one record per run, ever, is what makes double recovery refusable.
+	// Begin durably opens an unleased record, before any runtime object
+	// exists. A leased run uses LeasedHandoffOpener.BeginLeased instead.
+	// Opening a run id whose record is already open or closed must fail: one
+	// record per run, ever, is what makes double recovery refusable.
 	Begin(ctx context.Context, rec HandoffJournalRecord) error
 	// Get reconstructs the run's current durable record; a run with no
 	// record errors. Recover reads the row through this itself rather than
@@ -213,6 +215,24 @@ type HandoffJournal interface {
 	// Close durably ends the record with its outcome. Closing an already
 	// closed record must fail.
 	Close(ctx context.Context, runID string, outcome HandoffJournalOutcome) error
+}
+
+// LeasedHandoffOpener is the additional production transaction seam for a
+// leased journalled handoff. It atomically acquires the mutation lease and
+// opens rec with that exact lease reference. Returning success means both are
+// durable; returning an error means neither is. This closes the crash window a
+// separate AuthStoreLeaser.Acquire followed by HandoffJournal.Begin creates.
+//
+// Handoff requires its configured Journal to implement this interface for a
+// leased run. Journalless one-shot test/development operation keeps the
+// standalone AuthStoreLeaser path.
+type LeasedHandoffOpener interface {
+	BeginLeased(
+		ctx context.Context,
+		rec HandoffJournalRecord,
+		claim AuthStoreLeaseClaim,
+		now, expiresAt time.Time,
+	) (domain.AuthStoreMutationLease, error)
 }
 
 // specDigest canonically digests the frozen HandoffSpec so a journal record
