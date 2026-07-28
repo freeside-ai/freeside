@@ -161,6 +161,16 @@ type runState struct {
 	// unwind (where err is still nil, e.g. a typed-nil scanner) does not leave
 	// the unscanned output on the host.
 	succeeded bool
+	// lease is the acquired §5.4 mutation window when the spec carries an
+	// AuthStoreLease claim; leaseHeld records that this run acquired it and
+	// still owes the release teardown performs once the writer is provably
+	// gone. leaseSlot and leaseIdentity track the backend's in-process
+	// per-identity slot, freed when the run ends regardless of how the
+	// window itself ended.
+	lease         domain.AuthStoreMutationLease
+	leaseHeld     bool
+	leaseSlot     bool
+	leaseIdentity domain.AuthIdentityID
 }
 
 // Handoff runs one full workspace handoff: admit against the capability
@@ -236,6 +246,16 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 			_ = os.RemoveAll(st.exportDir)
 		}
 	}()
+
+	// §5.4: the writable credential mount rides inside an acquired, verified
+	// mutation window. Acquired before any runtime object exists — a busy
+	// identity refuses the run before it costs a volume — and after the
+	// teardown defer, so every later refusal still releases it.
+	if hs.AuthStoreLease != nil {
+		if err := b.acquireAuthStoreLease(ctx, *hs.AuthStoreLease, st); err != nil {
+			return nil, err
+		}
+	}
 
 	// Reject every caller-controlled writer-shape violation before acquiring
 	// any runtime object. The real proxy URL is not known until the host-only
@@ -340,6 +360,15 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	st.agent.fingerprint, err = ownedFingerprint(agentRep.CreationDate, agentRep.Labels, agentRep.LabelsObserved, ownershipLabel)
 	if err != nil {
 		return nil, failf(CheckControlPlaneIsolation, "agent container %q: %v", names.Agent, err)
+	}
+	// Re-verify the lease at the last instant before mutation ability exists:
+	// a takeover (bumped fence) or lapse between acquisition and here means
+	// another holder may already be mutating the store, and starting the
+	// writer would break §5.4's serialization the moment it refreshes.
+	if hs.AuthStoreLease != nil {
+		if err := b.verifyAuthStoreLeaseLive(ctx, st); err != nil {
+			return nil, err
+		}
 	}
 	if err := b.rt.StartContainer(ctx, names.Agent); err != nil {
 		return nil, fmt.Errorf("start agent container: %w", err)
@@ -506,6 +535,159 @@ func (b *Backend) materializeRootFS(ctx context.Context, id, tarPath string, c C
 	return nil
 }
 
+// leaseWindowMargin pads the acquired mutation window past the handoff and
+// teardown budgets, so the release stamp of a run that spends its entire
+// budget still lands inside the window it ends (the store refuses a release
+// outside the window).
+const leaseWindowMargin = time.Minute
+
+// acquireAuthStoreLease takes the claimed identity's §5.4 mutation lease and
+// verifies the granted window covers this run's whole budget. The gate sizes
+// and verifies the window itself: only it knows the handoff deadline and
+// when the writer is provably absent, so a caller-estimated window could
+// lapse mid-run and hand the serialization point to a second holder while
+// this run's writer can still mutate the store. Store refusals (a held
+// lease, an undeclared identity) are wrapped operational errors, so their
+// typed causes stay reachable with errors.Is; the gate's own verification
+// refusals are CheckAuthStoreMutationLease conformance failures.
+func (b *Backend) acquireAuthStoreLease(ctx context.Context, claim AuthStoreLeaseClaim, st *runState) error {
+	if b.cfg.AuthStoreLeaser == nil {
+		return failf(CheckAuthStoreMutationLease,
+			"spec claims the auth-store mutation lease for identity %q but no leaser is configured", claim.AuthIdentityID)
+	}
+	// The store serializes distinct holders; two concurrent handoffs reusing
+	// one holder ID would instead converge on one window and both write the
+	// same store. The gate's stated posture is that a caller cannot break
+	// §5.4 serialization by what it asserts, so the backend holds one
+	// in-process slot per identity (freed when the run ends; the store's
+	// window remains the cross-restart authority).
+	b.leaseMu.Lock()
+	if b.activeLeases[claim.AuthIdentityID] {
+		b.leaseMu.Unlock()
+		return failf(CheckAuthStoreMutationLease,
+			"identity %q already has a live leased handoff in this process", claim.AuthIdentityID)
+	}
+	b.activeLeases[claim.AuthIdentityID] = true
+	b.leaseMu.Unlock()
+	st.leaseSlot = true
+	st.leaseIdentity = claim.AuthIdentityID
+	now := b.cfg.Now()
+	wantExpiry := now.Add(b.cfg.HandoffTimeout + b.cfg.TeardownTimeout + leaseWindowMargin)
+	lease, err := b.cfg.AuthStoreLeaser.Acquire(ctx, claim.AuthIdentityID, claim.Holder, now, wantExpiry)
+	if err != nil {
+		return fmt.Errorf("acquire auth store mutation lease for identity %q: %w", claim.AuthIdentityID, err)
+	}
+	// The returned lease is store output, not gate state: re-verify it names
+	// this claim and actually covers the budget before anything trusts it. A
+	// same-holder re-acquire converges on an existing window without
+	// extending it, so a reused holder ID with a shorter window lands here.
+	if err := lease.Validate(); err != nil {
+		return failf(CheckAuthStoreMutationLease, "acquired lease for identity %q is malformed: %v", claim.AuthIdentityID, err)
+	}
+	if lease.AuthIdentityID != claim.AuthIdentityID || lease.Holder != claim.Holder {
+		return failf(CheckAuthStoreMutationLease,
+			"acquired lease does not name the claimed identity %q and holder", claim.AuthIdentityID)
+	}
+	if !lease.HeldAt(now) {
+		return failf(CheckAuthStoreMutationLease, "acquired lease for identity %q is not live at acquisition", claim.AuthIdentityID)
+	}
+	// A window acquired at any earlier instant is a same-holder convergence
+	// on a still-live lease (a crashed run's window, or a concurrent run
+	// under a reused holder ID): this run did not open it and must not ride
+	// it. Recovery or expiry ends the old window first.
+	if !lease.AcquiredAt.Equal(now) {
+		return failf(CheckAuthStoreMutationLease,
+			"identity %q already holds a mutation window from an earlier acquisition", claim.AuthIdentityID)
+	}
+	if lease.ExpiresAt.Before(wantExpiry) {
+		// Every earlier rejection refuses a window this run cannot prove it
+		// opened; this one comes after the freshness check, so the short
+		// window is provably ours and is released rather than abandoned
+		// held until its expiry blocks other holders.
+		st.lease, st.leaseHeld = lease, true
+		reason := fmt.Sprintf("acquired lease for identity %q ends at %s, before the run's budget needs it",
+			claim.AuthIdentityID, lease.ExpiresAt)
+		if problems := b.releaseAuthStoreLease(ctx, st); len(problems) > 0 {
+			reason += "; " + strings.Join(problems, "; ")
+		}
+		return failf(CheckAuthStoreMutationLease, "%s", reason)
+	}
+	st.lease = lease
+	st.leaseHeld = true
+	return nil
+}
+
+// verifyAuthStoreLeaseLive re-reads the lease immediately before the writer
+// starts: the row must be the acquired window exactly, and still live. The
+// window was sized to cover the whole budget, so a failure here is a
+// takeover or an incoherent store row, not an expected lapse; either way the
+// writer must not start. The re-read row crosses the same trust boundary as
+// the acquisition's return, so it is held to the same gate: validated shape
+// and the exact acquired window, never just the holder and fence — a row
+// naming another identity, or a same-holder-and-fence row with a moved
+// window, is store output contradicting gate state, and the writer must not
+// start over it.
+func (b *Backend) verifyAuthStoreLeaseLive(ctx context.Context, st *runState) error {
+	current, err := b.cfg.AuthStoreLeaser.Get(ctx, st.lease.AuthIdentityID)
+	if err != nil {
+		return fmt.Errorf("re-verify auth store mutation lease for identity %q: %w", st.lease.AuthIdentityID, err)
+	}
+	if verr := current.Validate(); verr != nil {
+		return failf(CheckAuthStoreMutationLease,
+			"re-read lease for identity %q is malformed: %v", st.lease.AuthIdentityID, verr)
+	}
+	if current.AuthIdentityID != st.lease.AuthIdentityID {
+		return failf(CheckAuthStoreMutationLease,
+			"re-read lease names identity %q, not the acquired %q", current.AuthIdentityID, st.lease.AuthIdentityID)
+	}
+	if current.Holder != st.lease.Holder || current.Fence != st.lease.Fence ||
+		!current.AcquiredAt.Equal(st.lease.AcquiredAt) || !current.ExpiresAt.Equal(st.lease.ExpiresAt) {
+		return failf(CheckAuthStoreMutationLease,
+			"lease for identity %q was taken over before the writer started", st.lease.AuthIdentityID)
+	}
+	if !current.HeldAt(b.cfg.Now()) {
+		return failf(CheckAuthStoreMutationLease,
+			"lease for identity %q is no longer live before the writer started", st.lease.AuthIdentityID)
+	}
+	return nil
+}
+
+// releaseAuthStoreLease ends the run's §5.4 mutation window; teardown calls
+// it once the writer is provably gone (or was never created). A failed
+// release is a teardown problem, never silent: until the row is released or
+// expires, the identity stays serialized against every other holder. A crash
+// that skips teardown leaves the persisted store row for recovery to release,
+// or expiry to lapse.
+func (b *Backend) releaseAuthStoreLease(ctx context.Context, st *runState) []string {
+	if !st.leaseHeld {
+		return nil
+	}
+	// The release must reach the store even when the run's context is
+	// already cancelled or past its deadline: a window outliving the run
+	// blocks the identity until expiry, so the one call that ends it runs
+	// detached, bounded by its own teardown-sized budget (teardown detaches
+	// the same way, so its calls re-bound harmlessly).
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
+	defer cancel()
+	if err := b.cfg.AuthStoreLeaser.Release(ctx, st.lease.AuthIdentityID, st.lease.Holder, st.lease.Fence, b.cfg.Now()); err != nil {
+		return []string{fmt.Sprintf("release auth store mutation lease for identity %q: %v", st.lease.AuthIdentityID, err)}
+	}
+	st.leaseHeld = false
+	return nil
+}
+
+// freeLeaseSlot returns the run's in-process per-identity slot; a no-op for
+// runs that never took one.
+func (b *Backend) freeLeaseSlot(st *runState) {
+	if !st.leaseSlot {
+		return
+	}
+	b.leaseMu.Lock()
+	delete(b.activeLeases, st.leaseIdentity)
+	b.leaseMu.Unlock()
+	st.leaseSlot = false
+}
+
 func newOwnershipLabel() (Label, error) {
 	var token [16]byte
 	if _, err := rand.Read(token[:]); err != nil {
@@ -627,12 +809,24 @@ func (b *Backend) verifyContainerAbsent(ctx context.Context, id string, claim ob
 // still reaped, under its own deadline so a wedged runtime call cannot hang
 // Handoff.
 func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState) error {
-	// Before the first create attempt this invocation owns no runtime object.
-	if !st.workspace.attempted {
-		return nil
-	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
 	defer cancel()
+	// The in-process per-identity slot frees when this run ends, however the
+	// window itself ended: cross-run serialization is the store's (a live
+	// window refuses other holders; a same-holder convergence is refused at
+	// acquisition), so holding the slot past the run would only wedge the
+	// identity in-process.
+	defer b.freeLeaseSlot(st)
+	// Before the first create attempt this invocation owns no runtime
+	// object, but it may already hold the §5.4 lease: acquisition precedes
+	// the first create so the window covers everything, and an early refusal
+	// must not leave the identity serialized until expiry.
+	if !st.workspace.attempted {
+		if problems := b.releaseAuthStoreLease(ctx, st); len(problems) > 0 {
+			return failf(CheckTeardown, "%s", strings.Join(problems, "; "))
+		}
+		return nil
+	}
 	var problems []string
 	if st.proxy != nil {
 		if err := st.proxy.Close(); err != nil {
@@ -774,6 +968,12 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	// same-name row classified foreign is a replacement that appeared after
 	// this run's object was reaped: it counts as absent and is never
 	// re-reaped; only an unprovable row still fails the proof.
+	//
+	// writerGone tracks whether the credential-bearing writer is provably
+	// absent on this pass's fresh evidence: an agent claim cleared mid-flow
+	// was already proven absent there, and an attempted one must be proven
+	// here. The §5.4 lease release below keys off it.
+	writerGone := !st.agent.attempted
 	if anyContainerAttempted {
 		if ctrs, err := b.rt.ListContainers(ctx); err != nil {
 			problems = append(problems, fmt.Sprintf("re-list containers: %v", err))
@@ -788,6 +988,9 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 					continue
 				}
 				if !found {
+					if c.id == names.Agent {
+						writerGone = true
+					}
 					continue
 				}
 				ev, eerr := b.containerEvidence(ctx, candidate, c.claim, st.ownershipLabel)
@@ -800,6 +1003,9 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 					problems = append(problems, fmt.Sprintf("container %q survived teardown", c.id))
 				case evidenceForeign:
 					// A replacement, not a survivor.
+					if c.id == names.Agent {
+						writerGone = true
+					}
 				case evidenceUnprovable:
 					problems = append(problems, fmt.Sprintf("container %q survival unprovable after teardown", c.id))
 				}
@@ -825,6 +1031,19 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 				problems = append(problems, fmt.Sprintf("volume %q survival unprovable after teardown", v.Name))
 			}
 		}
+	}
+
+	// The lease releases last, after the reap and the survival re-proof: the
+	// §5.4 window must outlive every state in which this run's writer could
+	// still mutate the store. A writer whose absence this pass could not
+	// prove keeps the window held — releasing it would invite a second
+	// holder to mutate beside a possibly-live writer — and the held window
+	// is recorded as its own teardown problem; expiry remains the backstop.
+	if writerGone {
+		problems = append(problems, b.releaseAuthStoreLease(ctx, st)...)
+	} else if st.leaseHeld {
+		problems = append(problems, fmt.Sprintf(
+			"auth store mutation lease for identity %q kept held: writer absence unproven", st.lease.AuthIdentityID))
 	}
 
 	if len(problems) > 0 {

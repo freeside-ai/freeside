@@ -7,8 +7,33 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
+
+// AuthStoreLeaser is ward's seam to the store's per-identity auth-store
+// mutation lease (plan §5.4). The gate acquires, re-verifies, and releases
+// the lease itself, so the mutation window brackets the writer's actual
+// runtime rather than a caller's estimate of it. The store-backed
+// implementation is wired by the daemon (the ConformanceRecorder posture:
+// domain and store must not import ward, so ward declares the interface it
+// needs); the signatures mirror the store's lease methods one-for-one, so
+// that adapter is a transaction wrapper and nothing else.
+type AuthStoreLeaser interface {
+	// Acquire takes or converges on the identity's lease for holder, with
+	// the given window. A live lease held by anyone else refuses; re-acquire
+	// by the same holder returns the existing lease unchanged, without
+	// extending it.
+	Acquire(ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
+		now, expiresAt time.Time) (domain.AuthStoreMutationLease, error)
+	// Get reconstructs the identity's current lease row; liveness is the
+	// caller's HeldAt question, never the row's claim.
+	Get(ctx context.Context, id domain.AuthIdentityID) (domain.AuthStoreMutationLease, error)
+	// Release ends the lease the caller holds, identified by holder and
+	// fence; a non-holder or a left-behind fence is refused.
+	Release(ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
+		fence int64, releasedAt time.Time) error
+}
 
 // OutputScanner is check 7's §5.4 scanning hook: it inspects the verified
 // export directory and returns an error to block the handoff. Scanning
@@ -146,6 +171,13 @@ type Config struct {
 	MaxManifestBytes int64
 	// Scanner is the required check-7 scanning hook.
 	Scanner OutputScanner
+	// AuthStoreLeaser acquires and releases §5.4 auth-store mutation leases.
+	// It is required only by handoffs whose spec carries an AuthStoreLease
+	// claim; a leased handoff under a nil leaser fails closed.
+	AuthStoreLeaser AuthStoreLeaser
+	// Now supplies the current instant for lease windows and release stamps;
+	// tests inject a fixed clock. Nil defaults to time.Now.
+	Now func() time.Time
 	// Sleep waits between state polls; tests inject a recording stub. Nil
 	// defaults to a context-aware real sleep.
 	Sleep func(context.Context, time.Duration) error
@@ -218,6 +250,9 @@ func (cfg Config) withDefaults() Config {
 	}
 	if cfg.MaxManifestBytes == 0 {
 		cfg.MaxManifestBytes = export.DefaultMaxCommitPlanBytes
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
 	}
 	if cfg.Sleep == nil {
 		cfg.Sleep = sleepContext

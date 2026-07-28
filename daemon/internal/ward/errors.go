@@ -80,8 +80,9 @@ const (
 )
 
 // Gate assertions that extend the spike's seven contract checks. The spike
-// proved a handoff over a blank workspace; a real run starts from a declared
-// exact base (plan §5.9), and these name the two claims that addition makes.
+// proved a handoff over a blank workspace with read-only credentials; a real
+// run starts from a declared exact base (plan §5.9) and may carry the §5.4
+// leased auth-store mount, and these name the claims those additions make.
 const (
 	// CheckWorkspaceSeeding covers everything up to the point the workspace
 	// holds the declared base: the seed source was daemon-owned and
@@ -98,6 +99,15 @@ const (
 	// reported success and produced the wrong workspace — and a caller has to
 	// be able to tell those apart.
 	CheckObservedBaseIdentity Check = "observed_base_identity"
+	// CheckAuthStoreMutationLease covers §5.4's serialization for the leased
+	// writable credential mount: the gate acquired the identity's mutation
+	// lease itself, verified the returned window covers the whole handoff
+	// and teardown budget, and re-verified the same holder and fence
+	// immediately before the writer started. A takeover, expiry, window
+	// shortfall, or missing leaser fails here; the store's own refusals
+	// (a held lease, an undeclared identity) surface as operational errors
+	// of the same fail-closed gate so their typed causes stay reachable.
+	CheckAuthStoreMutationLease Check = "auth_store_mutation_lease"
 )
 
 // AllChecks lists every valid Check and is the enum's single registration
@@ -121,6 +131,7 @@ var AllChecks = []Check{
 	CheckAgentEgress,
 	CheckWorkspaceSeeding,
 	CheckObservedBaseIdentity,
+	CheckAuthStoreMutationLease,
 }
 
 func (c Check) valid() bool {
@@ -130,7 +141,7 @@ func (c Check) valid() bool {
 		CheckInExporterVerification, CheckExportVerification, CheckTeardown,
 		CheckWriterVolumeExclusion, CheckCredentialContainment,
 		CheckSameVMRefutation, CheckPreJobProbe, CheckNetworklessExport, CheckAgentEgress,
-		CheckWorkspaceSeeding, CheckObservedBaseIdentity:
+		CheckWorkspaceSeeding, CheckObservedBaseIdentity, CheckAuthStoreMutationLease:
 		return true
 	default:
 		return false
