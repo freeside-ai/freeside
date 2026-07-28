@@ -21,6 +21,11 @@
 # Built with Apple `container` (ward's runtime); its content store is what ward
 # resolves against. An external registry remains supported for shared images.
 #
+# With HTTPS_PROXY set, the build forwards it (and HTTP_PROXY, defaulting to
+# HTTPS_PROXY) into RUN steps as the predefined proxy build args; unset, the
+# invocation is unchanged. See images/README.md (Building Behind a VPN) for the
+# host-proxy recipe a guest-NAT-blocking VPN requires.
+#
 # Usage:
 #   scripts/build-exporter-image.sh [--tag NAME]
 #       [--registry HOST[/PATH] | --local-registry-port PORT] [--ref-tag TAG]
@@ -145,8 +150,18 @@ digest_of() {
 		head -n 1 | grep -o 'sha256:[0-9a-f]\{64\}'
 }
 
+# Forward standard proxy environment into RUN steps as the predefined proxy
+# build args: `container build` does not auto-forward its own environment, and
+# behind a guest-NAT-blocking VPN the proxy is the only egress a RUN step has
+# (see images/README.md, Building Behind a VPN).
+proxy_args=()
+if [ -n "${HTTPS_PROXY:-}" ]; then
+	proxy_args+=(--build-arg "HTTPS_PROXY=$HTTPS_PROXY" \
+		--build-arg "HTTP_PROXY=${HTTP_PROXY:-$HTTPS_PROXY}")
+fi
+
 echo "build-exporter-image: building with Apple container" >&2
-container build --tag "$image_name:local" "$context" >&2
+container build ${proxy_args[@]+"${proxy_args[@]}"} --tag "$image_name:local" "$context" >&2
 
 digest=$(digest_of "$image_name:local")
 [ -n "${digest:-}" ] || { echo "build-exporter-image: could not read the built image digest" >&2; exit 1; }
