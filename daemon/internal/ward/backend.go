@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
 
@@ -26,6 +27,13 @@ type Backend struct {
 	// atomic decision across overlapping Full passes.
 	proofMu         sync.Mutex
 	proofGeneration uint64
+	// leaseMu guards activeLeases: the identities whose §5.4 mutation
+	// window a handoff in this process currently holds. The store
+	// serializes distinct holders; this closes the residual same-holder
+	// hole, where a caller reusing one holder ID for two concurrent
+	// handoffs would converge on one window (see acquireAuthStoreLease).
+	leaseMu      sync.Mutex
+	activeLeases map[domain.AuthIdentityID]bool
 }
 
 // Compile-time contract assertion (exec package convention).
@@ -45,7 +53,7 @@ func New(rt Runtime, cfg Config) (*Backend, error) {
 	// the expected allowlist that runtime-observed state is compared against.
 	cfg.ExporterCommand = slices.Clone(cfg.ExporterCommand)
 	cfg.ProviderEndpoints = slices.Clone(cfg.ProviderEndpoints)
-	return &Backend{rt: rt, cfg: cfg, initialized: true}, nil
+	return &Backend{rt: rt, cfg: cfg, initialized: true, activeLeases: map[domain.AuthIdentityID]bool{}}, nil
 }
 
 // Name identifies the backend in policy, refusals, and audit records.

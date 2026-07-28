@@ -896,3 +896,151 @@ func waitLiveStopped(t *testing.T, rt Runtime, id string) {
 		time.Sleep(500 * time.Millisecond)
 	}
 }
+
+// TestLiveLeasedMutationAndReadOnlyProbe proves the §5.4 leased path on the
+// reference runtime, both directions at once: the leased writable mount
+// accepts the writer's auth-store mutation and the observers attest it, while
+// a second, non-leased credential mount in the same run remains provably
+// read-only (the writer's own write attempt fails and the recorded outcome is
+// read back from the verified export). The mutated store never reaches the
+// export: the scanner refuses both the original and the rewritten secret.
+//
+//	FREESIDE_WARD_LIVE_TEST=1 go test ./internal/ward -run TestLiveLeasedMutationAndReadOnlyProbe -v
+func TestLiveLeasedMutationAndReadOnlyProbe(t *testing.T) {
+	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
+		t.Skip("live leased-mutation test skipped: set FREESIDE_WARD_LIVE_TEST=1 (requires macOS, Apple container 1.1.0, `container system start`, and the pinned alpine:3.22 image)")
+	}
+	bin, err := osexec.LookPath("container")
+	if err != nil {
+		t.Fatalf("container CLI not on PATH: %v", err)
+	}
+	if out, err := osexec.Command(bin, "image", "pull", liveImage).CombinedOutput(); err != nil { //nolint:gosec // fixed args, resolved CLI path
+		t.Logf("image pull (continuing; may be cached): %v: %s", err, out)
+	}
+
+	ctx := context.Background()
+	rt := NewCLIRuntime(bin)
+	runID := fmt.Sprintf("live-lease-%d", time.Now().Unix())
+	names := namesFor(runID)
+	leasedVolume := "freeside-ward-live-lease-" + runID
+	roVolume := "freeside-ward-live-ro-" + runID
+	seedName := "freeside-ward-live-seed-" + runID
+	const rewrittenMarker = "FREESIDE_FAKE_REFRESHED_CREDENTIAL_DO_NOT_EXPORT"
+	t.Cleanup(func() {
+		for _, c := range []string{names.Agent, names.Exporter, names.CredObsPre, names.CredObsPost, seedName} {
+			_ = rt.StopContainer(ctx, c)
+			_ = rt.DeleteContainer(ctx, c)
+		}
+		_ = rt.DeleteNetwork(ctx, names.Network)
+		_ = rt.DeleteVolume(ctx, names.Workspace)
+		_ = rt.DeleteVolume(ctx, leasedVolume)
+		_ = rt.DeleteVolume(ctx, roVolume)
+	})
+
+	// Seed both caller-owned credential volumes with the inert marker.
+	for _, vol := range []string{leasedVolume, roVolume} {
+		if err := rt.CreateVolume(ctx, vol, 8, []Label{{Key: "freeside.ward-live", Value: runID}}); err != nil {
+			t.Fatalf("create credential volume %s: %v", vol, err)
+		}
+	}
+	if err := rt.CreateContainer(ctx, ContainerSpec{
+		Name:  seedName,
+		Image: liveImage,
+		Command: []string{
+			"sh", "-c",
+			"printf " + liveMarker + " > /lease/token && printf " + liveMarker + " > /ro/token",
+		},
+		Mounts: []Mount{
+			{Type: MountVolume, Source: leasedVolume, Target: "/lease"},
+			{Type: MountVolume, Source: roVolume, Target: "/ro"},
+		},
+		NetworkDisabled: true,
+	}); err != nil {
+		t.Fatalf("create seed container: %v", err)
+	}
+	if err := rt.StartContainer(ctx, seedName); err != nil {
+		t.Fatalf("start seed container: %v", err)
+	}
+	waitLiveStopped(t, rt, seedName)
+	if err := rt.DeleteContainer(ctx, seedName); err != nil {
+		t.Fatalf("delete seed container: %v", err)
+	}
+
+	scanner := scannerFunc(func(_ context.Context, dir string) error {
+		return filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			data, err := os.ReadFile(p) //nolint:gosec // walking the gate-owned verified output
+			if err != nil {
+				return err
+			}
+			if bytes.Contains(data, []byte(liveMarker)) || bytes.Contains(data, []byte(rewrittenMarker)) {
+				return fmt.Errorf("credential marker found in %s", p)
+			}
+			return nil
+		})
+	})
+
+	leaser := &fakeLeaser{}
+	cfg := Config{
+		ProviderEndpoints: []string{"api.anthropic.com:443"},
+		ExporterImage:     liveExporterImage(t),
+		ExporterCommand:   export.HelperCommand(),
+		WriterStopTimeout: 3 * time.Minute,
+		ExporterTimeout:   3 * time.Minute,
+		Scanner:           scanner,
+		AuthStoreLeaser:   leaser,
+	}
+	b, err := New(rt, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := b.Handoff(ctx, HandoffSpec{
+		RunID:           runID,
+		WorkspaceSizeMB: 64,
+		Seed:            WorkspaceSeed{Mode: SeedBlank},
+		AuthStoreLease:  &AuthStoreLeaseClaim{AuthIdentityID: "live-identity", Holder: "live-holder"},
+		Agent: AgentSpec{
+			Image:         liveImage,
+			EgressProfile: domain.EgressProviderOnly,
+			Command: []string{
+				"sh", "-c",
+				// The leased store is readable and writable: refresh it. The
+				// non-leased mount must refuse the same write; the outcome is
+				// recorded in the workspace, where the export carries it out.
+				"set -eu; " +
+					"cat /lease/token > /dev/null && " +
+					"printf " + rewrittenMarker + " > /lease/token && sync && " +
+					"if printf probe > /ro/probe 2>/dev/null; then echo writable > /workspace/ro-probe.txt; " +
+					"else echo read-only > /workspace/ro-probe.txt; fi && " +
+					"echo agent-output > /workspace/result.txt",
+			},
+			CredentialMounts: []CredentialMount{
+				{Volume: leasedVolume, Target: "/lease", Writable: true},
+				{Volume: roVolume, Target: "/ro"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(res.ExportDir) })
+
+	// The mutation is attested, not assumed: the two observer VMs digested
+	// the leased volume through read-only mounts before and after the writer.
+	obs := res.AuthStore
+	if !obs.Leased || !obs.Mutated || obs.PreDigest == obs.PostDigest {
+		t.Errorf("AuthStore = %+v, want an attested mutation", obs)
+	}
+	if !leaser.released {
+		t.Error("lease was not released after the writer was proven absent")
+	}
+	// The non-leased mount was provably read-only inside the writer VM: the
+	// probe's outcome comes back through the verified export.
+	probe := readManifestBlob(t, res, "ro-probe.txt")
+	if string(probe) != "read-only\n" {
+		t.Errorf("ro-probe.txt = %q, want the refused write recorded as read-only", probe)
+	}
+}

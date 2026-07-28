@@ -8,6 +8,7 @@ import (
 	osexec "os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -77,6 +78,28 @@ func TestHandoffSpecValidate(t *testing.T) {
 		// must reach ErrInvalidHandoffSpec through HandoffSpec.validate too.
 		{"unset seed mode", func(s *HandoffSpec) { s.Seed = WorkspaceSeed{} }},
 		{"unknown seed mode", func(s *HandoffSpec) { s.Seed = WorkspaceSeed{Mode: SeedMode("copy")} }},
+		// The writable mount and the lease claim travel together, both ways;
+		// every one-sided or malformed combination is a caller error.
+		{"writable mount without lease", func(s *HandoffSpec) {
+			s.Agent.CredentialMounts[0].Writable = true
+		}},
+		{"lease without writable mount", func(s *HandoffSpec) {
+			s.AuthStoreLease = &AuthStoreLeaseClaim{AuthIdentityID: "id", Holder: "holder"}
+		}},
+		{"lease with empty identity", func(s *HandoffSpec) {
+			s.Agent.CredentialMounts[0].Writable = true
+			s.AuthStoreLease = &AuthStoreLeaseClaim{Holder: "holder"}
+		}},
+		{"lease with empty holder", func(s *HandoffSpec) {
+			s.Agent.CredentialMounts[0].Writable = true
+			s.AuthStoreLease = &AuthStoreLeaseClaim{AuthIdentityID: "id"}
+		}},
+		{"lease with two writable mounts", func(s *HandoffSpec) {
+			s.Agent.CredentialMounts[0].Writable = true
+			s.Agent.CredentialMounts = append(s.Agent.CredentialMounts,
+				CredentialMount{Volume: "second-cred", Target: "/second", Writable: true})
+			s.AuthStoreLease = &AuthStoreLeaseClaim{AuthIdentityID: "id", Holder: "holder"}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,12 +115,14 @@ func TestHandoffSpecValidate(t *testing.T) {
 func TestNamesFor(t *testing.T) {
 	n := namesFor("run-1")
 	want := handoffNames{
-		Workspace: "freeside-handoff-run-1-ws",
-		Seeder:    "freeside-handoff-run-1-seeder",
-		Observer:  "freeside-handoff-run-1-observer",
-		Agent:     "freeside-handoff-run-1-agent",
-		Exporter:  "freeside-handoff-run-1-exporter",
-		Network:   "freeside-handoff-run-1-egress",
+		Workspace:   "freeside-handoff-run-1-ws",
+		Seeder:      "freeside-handoff-run-1-seeder",
+		Observer:    "freeside-handoff-run-1-observer",
+		CredObsPre:  "freeside-handoff-run-1-cred-pre",
+		CredObsPost: "freeside-handoff-run-1-cred-post",
+		Agent:       "freeside-handoff-run-1-agent",
+		Exporter:    "freeside-handoff-run-1-exporter",
+		Network:     "freeside-handoff-run-1-egress",
 	}
 	if n != want {
 		t.Errorf("namesFor(run-1) = %+v, want %+v", n, want)
@@ -110,8 +135,8 @@ func TestNamesFor(t *testing.T) {
 // TestNamesForFitsRuntimeIDLimit pins every role name against the longest
 // valid run ID: Apple container 1.1.0 refuses an ID over 64 bytes, and the
 // networkless-export work already had to shorten a role prefix once for
-// exactly this reason. "observer" is the longest suffix, so a new role longer
-// than it must re-check this bound.
+// exactly this reason. "cred-post" is the longest suffix, so a new role
+// longer than it must re-check this bound.
 func TestNamesForFitsRuntimeIDLimit(t *testing.T) {
 	const runtimeIDLimit = 64
 	longest := "a" + strings.Repeat("b", 31) // the max runIDPattern admits
@@ -121,6 +146,7 @@ func TestNamesForFitsRuntimeIDLimit(t *testing.T) {
 	n := namesFor(longest)
 	for role, name := range map[string]string{
 		"workspace": n.Workspace, "seeder": n.Seeder, "observer": n.Observer,
+		"cred-pre": n.CredObsPre, "cred-post": n.CredObsPost,
 		"agent": n.Agent, "exporter": n.Exporter,
 	} {
 		if len(name) > runtimeIDLimit {
@@ -478,7 +504,256 @@ func TestBuildAgentSpec(t *testing.T) {
 		t.Errorf("credential mount = %+v, want provider-cred ro at /credentials", cred)
 	}
 	// The generated spec passes its own gate.
-	if err := validateAgentSpec(cfg, spec, names.Workspace); err != nil {
+	if err := validateAgentSpec(cfg, spec, names.Workspace, ""); err != nil {
 		t.Errorf("validateAgentSpec(generated) = %v, want nil", err)
 	}
+}
+
+// testLeasedHandoffSpec is the fixture with the auth-store lease claim and
+// its one writable credential mount, the §5.4 mutation-window shape.
+func testLeasedHandoffSpec() HandoffSpec {
+	hs := testHandoffSpec()
+	hs.Agent.CredentialMounts[0].Writable = true
+	hs.AuthStoreLease = &AuthStoreLeaseClaim{
+		AuthIdentityID: "identity-fixture",
+		Holder:         "holder-fixture",
+	}
+	return hs
+}
+
+// TestBuildAgentSpecLeasedWritableMount pins the one sanctioned read-write
+// credential shape: the leased mount and only the leased mount loses
+// ReadOnly, and the generated spec still passes its own gate with the
+// writable target declared.
+func TestBuildAgentSpecLeasedWritableMount(t *testing.T) {
+	cfg := testConfig()
+	hs := testLeasedHandoffSpec()
+	hs.Agent.CredentialMounts = append(hs.Agent.CredentialMounts,
+		CredentialMount{Volume: "other-cred", Target: "/other-credentials"})
+	if err := hs.validate(); err != nil {
+		t.Fatalf("leased fixture: validate() = %v, want nil", err)
+	}
+	names := namesFor(hs.RunID)
+	spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
+
+	if len(spec.Mounts) != 3 {
+		t.Fatalf("len(Mounts) = %d, want 3", len(spec.Mounts))
+	}
+	if leased := spec.Mounts[1]; leased.ReadOnly {
+		t.Errorf("leased credential mount = %+v, want read-write", leased)
+	}
+	if other := spec.Mounts[2]; !other.ReadOnly {
+		t.Errorf("non-leased credential mount = %+v, want read-only", other)
+	}
+	if got, want := hs.writableCredentialTarget(), "/credentials"; got != want {
+		t.Errorf("writableCredentialTarget() = %q, want %q", got, want)
+	}
+	if err := validateAgentSpec(cfg, spec, names.Workspace, hs.writableCredentialTarget()); err != nil {
+		t.Errorf("validateAgentSpec(generated leased) = %v, want nil", err)
+	}
+}
+
+// TestCredObserverSpecGolden pins the credential observer's allowlist and
+// proof-writing command: it is the container whose word the §5.4 mutation
+// attestation rests on, so neither its topology nor its script may drift
+// unreviewed.
+func TestCredObserverSpecGolden(t *testing.T) {
+	cfg := testConfig()
+	hs := testLeasedHandoffSpec()
+	names := namesFor(hs.RunID)
+	spec := buildCredentialObserverSpec(cfg, hs, names.CredObsPre, testOwnershipLabel())
+	got, err := json.MarshalIndent(spec, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal credential observer spec: %v", err)
+	}
+	golden.Assert(t, "cred-observer-spec", append(got, '\n'))
+}
+
+// TestCredObserverSpecReadsOnly is the credential observer's whole argument
+// in one assertion: it holds the leased volume read-only, so it cannot write
+// the store whose digest it attests.
+func TestCredObserverSpecReadsOnly(t *testing.T) {
+	cfg := testConfig()
+	hs := testLeasedHandoffSpec()
+	names := namesFor(hs.RunID)
+	spec := buildCredentialObserverSpec(cfg, hs, names.CredObsPost, testOwnershipLabel())
+
+	if len(spec.Mounts) != 1 {
+		t.Fatalf("Mounts = %+v, want exactly the leased volume", spec.Mounts)
+	}
+	m := spec.Mounts[0]
+	if !m.ReadOnly {
+		t.Error("credential observer mount is read-write; it must be read-only")
+	}
+	if m.Source != "provider-cred" || m.Target != "/credentials" {
+		t.Errorf("credential observer mounts %q at %q, want the leased volume at its target", m.Source, m.Target)
+	}
+	if !spec.NetworkDisabled || len(spec.Env) != 0 {
+		t.Errorf("credential observer is not credential-free and network-free: env=%q networkDisabled=%v",
+			spec.Env, spec.NetworkDisabled)
+	}
+}
+
+// TestCredObserverScriptAttestsSymlinks: the leased store is the writer's to
+// mutate, so a symlink created, removed, or retargeted is store content; each
+// transition must move the tree digest, and an unchanged store must not.
+func TestCredObserverScriptAttestsSymlinks(t *testing.T) {
+	shell := "sh"
+	if dash, err := osexec.LookPath("dash"); err == nil {
+		// macOS sh accepts extensions that Ubuntu's dash rejects. Prefer
+		// dash when available so the generated command stays portable.
+		shell = dash
+	}
+	cfg := testConfig()
+	digest := func(t *testing.T, store string) string {
+		t.Helper()
+		cfg.CredProofPath = filepath.Join(t.TempDir(), "proof.txt")
+		script := credObserverScript(cfg, testOwnershipLabel().Value, store)
+		cmd := osexec.Command(shell, "-c", script) //nolint:gosec // fixed shell and test-owned script
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("credential observer script: %v: %s", err, out)
+		}
+		proof, err := os.ReadFile(cfg.CredProofPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(proof)), "\n") {
+			if v, ok := strings.CutPrefix(line, credProofTreeKey+"="); ok {
+				return v
+			}
+		}
+		t.Fatalf("proof %q carries no %s", proof, credProofTreeKey)
+		return ""
+	}
+
+	store := t.TempDir()
+	if err := os.WriteFile(filepath.Join(store, "token.txt"), []byte("credential-fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := digest(t, store)
+	if again := digest(t, store); again != base {
+		t.Fatalf("unchanged store digested %q then %q", base, again)
+	}
+
+	link := filepath.Join(store, "current")
+	if err := os.Symlink("token.txt", link); err != nil {
+		t.Fatal(err)
+	}
+	created := digest(t, store)
+	if created == base {
+		t.Error("symlink creation left the digest unchanged")
+	}
+
+	// A retarget keeps the path set identical; only the target moves.
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("rotated.txt", link); err != nil {
+		t.Fatal(err)
+	}
+	retargeted := digest(t, store)
+	if retargeted == created {
+		t.Error("symlink retarget left the digest unchanged")
+	}
+
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if removed := digest(t, store); removed != base {
+		t.Errorf("symlink removal digested %q, want the pre-link digest %q", removed, base)
+	}
+
+	// Special nodes are store content too: a FIFO's creation and removal
+	// must move the digest the same way (the fifth pass).
+	fifo := filepath.Join(store, "agent.sock.fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withFifo := digest(t, store)
+	if withFifo == base {
+		t.Error("FIFO creation left the digest unchanged")
+	}
+	if err := os.Remove(fifo); err != nil {
+		t.Fatal(err)
+	}
+	if removed := digest(t, store); removed != base {
+		t.Errorf("FIFO removal digested %q, want the pre-node digest %q", removed, base)
+	}
+
+	// A permission change that leaves bytes, paths, and the owner-execute
+	// bit intact is store state too (the sixth pass).
+	if err := os.Chmod(filepath.Join(store, "token.txt"), 0o640); err != nil { //nolint:gosec // fixture mode change is what the pass must detect
+		t.Fatal(err)
+	}
+	remoded := digest(t, store)
+	if remoded == base {
+		t.Error("a mode change left the digest unchanged")
+	}
+	if err := os.Chmod(filepath.Join(store, "token.txt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if restored := digest(t, store); restored != base {
+		t.Errorf("mode restoration digested %q, want the original %q", restored, base)
+	}
+
+	// Hard-link topology is store state too: replacing an identical copy
+	// with a hard link changes no bytes, paths, or modes, only the link
+	// count the sixth pass records.
+	hard := filepath.Join(store, "token-link.txt")
+	if err := os.Link(filepath.Join(store, "token.txt"), hard); err != nil {
+		t.Fatal(err)
+	}
+	linked := digest(t, store)
+	if linked == base {
+		t.Error("hard-link creation left the digest unchanged")
+	}
+	if err := os.Remove(hard); err != nil {
+		t.Fatal(err)
+	}
+	if unlinked := digest(t, store); unlinked != base {
+		t.Errorf("hard-link removal digested %q, want the original %q", unlinked, base)
+	}
+
+	// Link topology, not just counts: {a,b},{c,d} relinked as {a,d},{c,b}
+	// keeps every path, byte, mode, and count identical; only the inode
+	// identity the sixth pass records distinguishes the pairings.
+	pair := func(src, dst string) {
+		t.Helper()
+		if err := os.Link(filepath.Join(store, src), filepath.Join(store, dst)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(store, "a"), []byte("same-bytes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, "c"), []byte("same-bytes\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pair("a", "b")
+	pair("c", "d")
+	paired := digest(t, store)
+	for _, name := range []string{"b", "d"} {
+		if err := os.Remove(filepath.Join(store, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pair("a", "d")
+	pair("c", "b")
+	if relinked := digest(t, store); relinked == paired {
+		t.Error("a count-preserving relinking left the digest unchanged")
+	}
+}
+
+// TestAgentSpecLeasedGolden pins the leased writer allowlist: the writable
+// credential mount is the §5.4 residual surface, so its generated shape must
+// be a reviewed diff.
+func TestAgentSpecLeasedGolden(t *testing.T) {
+	cfg := testConfig()
+	hs := testLeasedHandoffSpec()
+	spec := buildAgentSpec(cfg, hs, namesFor(hs.RunID), testOwnershipLabel(), "http://127.0.0.1:12345")
+	got, err := json.MarshalIndent(spec, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal leased agent spec: %v", err)
+	}
+	golden.Assert(t, "agent-spec-leased", append(got, '\n'))
 }

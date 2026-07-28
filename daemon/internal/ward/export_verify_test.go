@@ -319,6 +319,51 @@ func TestVerifyExportEvidenceViolations(t *testing.T) {
 // archive and asserts each fails closed with the right check (acceptance 2 for
 // check 7). Check 5's proof is no longer part of this path: it is attested by
 // the conformance probe (TestSuiteInExporterProbe), not per handoff.
+// TestVerifyBlobClassifiesMismatchVsIO: only verified content facts
+// (missing, wrong size, wrong digest) carry the mismatch mark; a present
+// but unreadable blob is host I/O and must stay unmarked, so recovery
+// never converts it into a committed loss.
+// TestVerifyManifestMissingIsContentEvidence: a verified export with no
+// required manifest is a deterministic fact about the output — the helper
+// never emitted one — so it carries the evidence mark and recovery can
+// commit loss instead of retrying forever.
+func TestVerifyManifestMissingIsContentEvidence(t *testing.T) {
+	b := &Backend{cfg: testConfig()}
+	_, _, err := b.verifyManifest(t.TempDir())
+	if err == nil || !errors.Is(err, errContentEvidence) {
+		t.Fatalf("missing manifest = %v, want the content-evidence mark", err)
+	}
+}
+
+func TestVerifyBlobClassifiesMismatchVsIO(t *testing.T) {
+	dir := t.TempDir()
+	blob := filepath.Join(dir, "b")
+	if err := os.WriteFile(blob, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte("data"))
+	want := hex.EncodeToString(sum[:])
+	if err := verifyBlob(blob, want, 4); err != nil {
+		t.Fatalf("valid blob: %v", err)
+	}
+	if err := verifyBlob(filepath.Join(dir, "absent"), want, 4); !errors.Is(err, errBlobMismatch) {
+		t.Errorf("missing blob = %v, want the mismatch mark", err)
+	}
+	if err := verifyBlob(blob, want, 5); !errors.Is(err, errBlobMismatch) {
+		t.Errorf("size mismatch = %v, want the mismatch mark", err)
+	}
+	if err := verifyBlob(blob, strings.Repeat("0", 64), 4); !errors.Is(err, errBlobMismatch) {
+		t.Errorf("digest mismatch = %v, want the mismatch mark", err)
+	}
+	if err := os.Chmod(blob, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blob, 0o600) })
+	if err := verifyBlob(blob, want, 4); err == nil || errors.Is(err, errBlobMismatch) {
+		t.Errorf("unreadable blob = %v, want an unmarked operational error", err)
+	}
+}
+
 func TestVerifyExportViolations(t *testing.T) {
 	_, wantHex := fixtureManifest(t, fixtureBlob)
 

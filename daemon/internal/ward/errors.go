@@ -80,8 +80,9 @@ const (
 )
 
 // Gate assertions that extend the spike's seven contract checks. The spike
-// proved a handoff over a blank workspace; a real run starts from a declared
-// exact base (plan §5.9), and these name the two claims that addition makes.
+// proved a handoff over a blank workspace with read-only credentials; a real
+// run starts from a declared exact base (plan §5.9) and may carry the §5.4
+// leased auth-store mount, and these name the claims those additions make.
 const (
 	// CheckWorkspaceSeeding covers everything up to the point the workspace
 	// holds the declared base: the seed source was daemon-owned and
@@ -98,6 +99,23 @@ const (
 	// reported success and produced the wrong workspace — and a caller has to
 	// be able to tell those apart.
 	CheckObservedBaseIdentity Check = "observed_base_identity"
+	// CheckAuthStoreMutationLease covers §5.4's serialization for the leased
+	// writable credential mount: the gate acquired the identity's mutation
+	// lease itself, verified the returned window covers the whole handoff
+	// and teardown budget, and re-verified the same holder and fence
+	// immediately before the writer started. A takeover, expiry, window
+	// shortfall, or missing leaser fails here; the store's own refusals
+	// (a held lease, an undeclared identity) surface as operational errors
+	// of the same fail-closed gate so their typed causes stay reachable.
+	CheckAuthStoreMutationLease Check = "auth_store_mutation_lease"
+	// CheckRecovery covers restart-safe recovery of a journalled handoff:
+	// adopt-or-teardown decided from the persisted record plus fresh
+	// runtime evidence, the ownership-label orphan audit, and the committed
+	// loss result. A recovery that cannot prove absence, release only a
+	// freshly verified export, or close the record fails here — and a
+	// CheckRecovery failure never commits a loss, so rerun stays unsafe
+	// until a later recovery proves otherwise.
+	CheckRecovery Check = "recovery"
 )
 
 // AllChecks lists every valid Check and is the enum's single registration
@@ -121,6 +139,8 @@ var AllChecks = []Check{
 	CheckAgentEgress,
 	CheckWorkspaceSeeding,
 	CheckObservedBaseIdentity,
+	CheckAuthStoreMutationLease,
+	CheckRecovery,
 }
 
 func (c Check) valid() bool {
@@ -130,7 +150,8 @@ func (c Check) valid() bool {
 		CheckInExporterVerification, CheckExportVerification, CheckTeardown,
 		CheckWriterVolumeExclusion, CheckCredentialContainment,
 		CheckSameVMRefutation, CheckPreJobProbe, CheckNetworklessExport, CheckAgentEgress,
-		CheckWorkspaceSeeding, CheckObservedBaseIdentity:
+		CheckWorkspaceSeeding, CheckObservedBaseIdentity, CheckAuthStoreMutationLease,
+		CheckRecovery:
 		return true
 	default:
 		return false
@@ -154,6 +175,9 @@ type ConformanceFailure struct {
 	Check Check
 	// Reason states the observed violation.
 	Reason string
+	// ContentEvidence marks a refusal that derives deterministically from
+	// the verified content itself; see errContentEvidence.
+	ContentEvidence bool
 }
 
 func (e *ConformanceFailure) Error() string {
@@ -161,8 +185,23 @@ func (e *ConformanceFailure) Error() string {
 		e.Backend, e.Check, e.Reason)
 }
 
-// Unwrap makes errors.Is(err, ErrConformance) match the failure class.
-func (e *ConformanceFailure) Unwrap() error { return ErrConformance }
+// errContentEvidence marks a conformance failure whose refusal derives
+// deterministically from the verified content itself (a digest mismatch, a
+// malformed manifest, a stray, a scan refusal): the one class a retry would
+// refuse identically, so the one class recovery may convert into a
+// committed loss. Everything unmarked — including operational I/O a shared
+// path wraps in the conformance class, and any failure site added later —
+// defaults to retryable in recovery; the destructive direction is opt-in.
+var errContentEvidence = errors.New("content evidence")
+
+// Unwrap makes errors.Is(err, ErrConformance) match the failure class, and
+// errors.Is(err, errContentEvidence) match the evidence-marked subset.
+func (e *ConformanceFailure) Unwrap() []error {
+	if e.ContentEvidence {
+		return []error{ErrConformance, errContentEvidence}
+	}
+	return []error{ErrConformance}
+}
 
 // failf builds a ConformanceFailure for check c with a formatted reason.
 func failf(c Check, format string, args ...any) error {
@@ -170,5 +209,17 @@ func failf(c Check, format string, args ...any) error {
 		Backend: BackendName,
 		Check:   c,
 		Reason:  fmt.Sprintf(format, args...),
+	}
+}
+
+// evidencef is failf plus the content-evidence mark; use it only where the
+// refusal is a deterministic fact about the verified content, never for
+// host or runtime I/O on the way to establishing one.
+func evidencef(c Check, format string, args ...any) error {
+	return &ConformanceFailure{
+		Backend:         BackendName,
+		Check:           c,
+		Reason:          fmt.Sprintf(format, args...),
+		ContentEvidence: true,
 	}
 }

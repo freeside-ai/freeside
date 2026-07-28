@@ -65,6 +65,44 @@ type HandoffResult struct {
 	// topology echoed back. Profile is the gate's resulting classification;
 	// Network and HostOnly come from the attested runtime report.
 	Egress EgressObservation
+	// AuthStore records the §5.4 mutation window and the observed
+	// credential-store digests for a leased run; zero when the spec carried
+	// no lease claim.
+	AuthStore AuthStoreObservation
+}
+
+// AuthStoreObservation is the audit record of one leased run's §5.4 window:
+// the lease the gate held, and the credential volume's content digests
+// observed before the writer started and after it was proven absent. It
+// attests that the store changed (or did not), never what changed: the
+// digests are hashes read by a VM that cannot write the store, and the §5.4
+// export scan remains the content control.
+type AuthStoreObservation struct {
+	// Leased distinguishes a real zero-observation (no lease claim) from a
+	// leased run; every other field is meaningful only when it is true.
+	Leased         bool
+	AuthIdentityID domain.AuthIdentityID
+	Holder         domain.InvocationID
+	Fence          int64
+	AcquiredAt     time.Time
+	ExpiresAt      time.Time
+	// PreDigest and PostDigest are the volume's six-pass content digests
+	// (content hashes, executable bits, directories, symlinks, the
+	// remaining node kinds, and every entry's mode, hard-link count, and
+	// ownership) before and after the writer.
+	PreDigest  string
+	PostDigest string
+	// PostAttested records that PostDigest was taken inside this run's own
+	// still-held window, so Mutated attributes the change to this run's
+	// writer. Recovery after the window lapsed cannot recreate that
+	// observation — later holders may have written since, and no fresh
+	// serialization can restore the state the writer left — so it reports
+	// the post-write attestation as lost (false, PostDigest empty) rather
+	// than attributing an intervening holder's mutation to this run.
+	PostAttested bool
+	// Mutated reports PreDigest != PostDigest: the writer changed its auth
+	// store inside the window. Meaningful only while PostAttested is true.
+	Mutated bool
 }
 
 type EgressObservation struct {
@@ -130,6 +168,8 @@ type runState struct {
 	workspace      objectClaim
 	seeder         objectClaim
 	observer       objectClaim
+	credObsPre     objectClaim
+	credObsPost    objectClaim
 	agent          objectClaim
 	exporter       objectClaim
 	network        objectClaim
@@ -151,6 +191,10 @@ type runState struct {
 	// only inside that window; the deferred cleanup removes whatever it names
 	// if the run unwinds mid-read.
 	baseArchiveDir string
+	// credArchiveDir is the credential observer's counterpart to
+	// baseArchiveDir, its own field so the two proof reads can never orphan
+	// or double-remove each other's scratch.
+	credArchiveDir string
 	// exportDir holds the extracted, verified output. It is returned to the
 	// caller only when the run ultimately succeeds; on any failure, including
 	// a teardown failure after a good export, it is removed here (the caller
@@ -161,6 +205,23 @@ type runState struct {
 	// unwind (where err is still nil, e.g. a typed-nil scanner) does not leave
 	// the unscanned output on the host.
 	succeeded bool
+	// lease is the acquired §5.4 mutation window when the spec carries an
+	// AuthStoreLease claim; leaseHeld records that this run acquired it and
+	// still owes the release teardown performs once the writer is provably
+	// gone. leaseSlot and leaseIdentity track the backend's in-process
+	// per-identity slot, freed when the run ends regardless of how the
+	// window itself ended.
+	lease         domain.AuthStoreMutationLease
+	leaseHeld     bool
+	leaseSlot     bool
+	leaseIdentity domain.AuthIdentityID
+	// credPreDigest is the leased credential volume's content digest observed
+	// before the writer started; the post-writer observation compares against
+	// it to attest whether the store mutated.
+	credPreDigest string
+	// journalOpen records that Begin durably opened this run's journal
+	// record; the deferred close acts only while it is set.
+	journalOpen bool
 }
 
 // Handoff runs one full workspace handoff: admit against the capability
@@ -217,6 +278,34 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 				err = errors.Join(err, terr)
 			}
 		}
+		// Close the journal record from proven state, on a detached bounded
+		// context (as teardown runs) so a cancelled run still records its
+		// end: completed only when the caller actually receives the export,
+		// loss only when teardown proved every object absent. A teardown
+		// failure leaves the record open — absence is unproven, so rerun is
+		// not yet safe, and recovery owns the record from here. A failed
+		// completed-close voids the delivery (§5.7: release follows the
+		// durable append), and the cleanup below removes the unreleased
+		// output.
+		if st.journalOpen {
+			jctx, jcancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
+			switch {
+			case st.succeeded && err == nil:
+				if cerr := b.cfg.Journal.Close(jctx, hs.RunID, HandoffCompleted); cerr != nil {
+					result = nil
+					err = fmt.Errorf("journal close completed: %w", cerr)
+				} else {
+					st.journalOpen = false
+				}
+			case terr == nil:
+				if cerr := b.cfg.Journal.Close(jctx, hs.RunID, HandoffLoss); cerr != nil {
+					err = errors.Join(err, fmt.Errorf("journal close loss: %w", cerr))
+				} else {
+					st.journalOpen = false
+				}
+			}
+			jcancel()
+		}
 		// The archive is transient once verified; the output dir is kept only
 		// when the caller actually receives it: the run reached its successful
 		// return and teardown left the result intact. Any other unwind removes
@@ -229,6 +318,9 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		if st.baseArchiveDir != "" {
 			_ = os.RemoveAll(st.baseArchiveDir)
 		}
+		if st.credArchiveDir != "" {
+			_ = os.RemoveAll(st.credArchiveDir)
+		}
 		if st.seedSnapshotDir != "" {
 			_ = os.RemoveAll(st.seedSnapshotDir)
 		}
@@ -237,13 +329,69 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		}
 	}()
 
+	// §5.4: the writable credential mount rides inside an acquired, verified
+	// mutation window. Acquired before any runtime object exists — a busy
+	// identity refuses the run before it costs a volume — and after the
+	// teardown defer, so every later refusal still releases it.
+	if hs.AuthStoreLease != nil {
+		// The credential observers mount the leased volume read-only at its
+		// declared target and write their proof to the configured proof
+		// path; overlap in either direction fails every leased handoff
+		// mid-run. A target covering the proof path shadows the proof
+		// write; a target nested beneath it forces the proof path to be a
+		// directory (the mount's ancestor), so the observer's file redirect
+		// can never land. Config validation cannot see the per-spec target,
+		// so both directions are refused here, before the lease is acquired
+		// or anything is created.
+		if t := hs.writableCredentialTarget(); b.cfg.CredProofPath == t ||
+			strings.HasPrefix(b.cfg.CredProofPath, t+"/") ||
+			strings.HasPrefix(t, b.cfg.CredProofPath+"/") {
+			return nil, fmt.Errorf("%w: writable credential target %q overlaps the configured credential proof path",
+				ErrInvalidHandoffSpec, t)
+		}
+		if err := b.acquireAuthStoreLease(ctx, *hs.AuthStoreLease, st); err != nil {
+			return nil, err
+		}
+	}
+
 	// Reject every caller-controlled writer-shape violation before acquiring
 	// any runtime object. The real proxy URL is not known until the host-only
 	// network exists; a syntactically valid placeholder exercises the same
 	// mount, environment-key, and explicit-network checks.
 	preflightAgentSpec := buildAgentSpec(b.cfg, hs, names, ownershipLabel, "http://127.0.0.1:1")
-	if err := validateAgentSpec(b.cfg, preflightAgentSpec, names.Workspace); err != nil {
+	if err := validateAgentSpec(b.cfg, preflightAgentSpec, names.Workspace, hs.writableCredentialTarget()); err != nil {
 		return nil, err
+	}
+
+	// Intent-before-create: the journal record is durable before the first
+	// runtime object can exist, so no object can outlive the daemon
+	// unrecorded. It opens after the syntactic and preflight refusals — a
+	// spec the gate would never run needs no record — and a run that cannot
+	// be journalled is refused.
+	if b.cfg.Journal != nil {
+		digest, derr := specDigest(hs)
+		if derr != nil {
+			return nil, derr
+		}
+		rec := HandoffJournalRecord{
+			RunID:          hs.RunID,
+			OwnershipToken: ownershipLabel.Value,
+			SpecDigest:     digest,
+			OpenedAt:       b.cfg.Now(),
+		}
+		if st.leaseHeld {
+			rec.Lease = &HandoffJournalLease{
+				AuthIdentityID: st.lease.AuthIdentityID,
+				Holder:         st.lease.Holder,
+				Fence:          st.lease.Fence,
+				AcquiredAt:     st.lease.AcquiredAt,
+				ExpiresAt:      st.lease.ExpiresAt,
+			}
+		}
+		if err := b.cfg.Journal.Begin(ctx, rec); err != nil {
+			return nil, fmt.Errorf("journal begin: %w", err)
+		}
+		st.journalOpen = true
 	}
 
 	// A successful workspace create establishes ownership of this workspace.
@@ -286,6 +434,29 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	if err != nil {
 		return nil, err
 	}
+	// The observed base is a pre-writer proof the world cannot re-attest
+	// once the agent runs (§5.7: an unpersisted proof is not a proof), so it
+	// is journalled the moment it is earned.
+	if st.journalOpen && observedBaseSHA != "" {
+		if err := b.cfg.Journal.MarkSeedObserved(ctx, hs.RunID, observedBaseSHA); err != nil {
+			return nil, fmt.Errorf("journal seed observation: %w", err)
+		}
+	}
+
+	// The leased credential store's pre-writer digest is a pre-writer fact
+	// like the base: once the agent runs it may legitimately mutate the
+	// store, so the "before" side must be attested now or never.
+	if hs.AuthStoreLease != nil {
+		st.credPreDigest, err = b.observeCredentialStore(ctx, hs, names.CredObsPre, st, &st.credObsPre)
+		if err != nil {
+			return nil, err
+		}
+		if st.journalOpen {
+			if err := b.cfg.Journal.MarkCredentialObserved(ctx, hs.RunID, st.credPreDigest); err != nil {
+				return nil, fmt.Errorf("journal credential observation: %w", err)
+			}
+		}
+	}
 
 	networkReport, proxyURL, err := b.prepareProviderEgress(ctx, hs, names, st)
 	if err != nil {
@@ -295,7 +466,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// not trusted, after the runtime supplies the host-only gateway the proxy
 	// address is derived from.
 	agentSpec := buildAgentSpec(b.cfg, hs, names, ownershipLabel, proxyURL)
-	if err := validateAgentSpec(b.cfg, agentSpec, names.Workspace); err != nil {
+	if err := validateAgentSpec(b.cfg, agentSpec, names.Workspace, hs.writableCredentialTarget()); err != nil {
 		return nil, err
 	}
 
@@ -341,6 +512,15 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	if err != nil {
 		return nil, failf(CheckControlPlaneIsolation, "agent container %q: %v", names.Agent, err)
 	}
+	// Re-verify the lease at the last instant before mutation ability exists:
+	// a takeover (bumped fence) or lapse between acquisition and here means
+	// another holder may already be mutating the store, and starting the
+	// writer would break §5.4's serialization the moment it refreshes.
+	if hs.AuthStoreLease != nil {
+		if err := b.verifyAuthStoreLeaseLive(ctx, st); err != nil {
+			return nil, err
+		}
+	}
 	if err := b.rt.StartContainer(ctx, names.Agent); err != nil {
 		return nil, fmt.Errorf("start agent container: %w", err)
 	}
@@ -367,56 +547,39 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		return nil, failf(CheckAgentEgress, "provider proxy failed while the writer ran: %v", err)
 	}
 	st.proxy = nil
-
-	// Check 4: create the exporter but inspect it against the generated
-	// allowlist before it ever executes.
-	exporterSpec := buildExporterSpec(b.cfg, hs, names, ownershipLabel)
-	st.exporter.attempted = true
-	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(exporterSpec)); err != nil {
-		return nil, fmt.Errorf("create exporter container: %w", err)
-	}
-	st.exporter.owned = true
-	rep, err := b.rt.Inspect(ctx, names.Exporter)
-	if err != nil {
-		return nil, failf(CheckExporterAllowlist, "inspect exporter before execution: %v", err)
-	}
-	// As with the agent: the allowlist's identity check runs before the
-	// fingerprint is captured from the same report.
-	if err := verifyExporterAllowlist(b.cfg, rep, names.Exporter, names.Workspace); err != nil {
-		return nil, err
-	}
-	st.exporter.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, ownershipLabel)
-	if err != nil {
-		return nil, failf(CheckExporterAllowlist, "exporter container %q: %v", names.Exporter, err)
-	}
-	if err := b.rt.StartContainer(ctx, names.Exporter); err != nil {
-		return nil, fmt.Errorf("start exporter container: %w", err)
-	}
-	if err := b.waitStopped(ctx, names.Exporter, st.exporter, st.ownershipLabel, b.cfg.ExporterTimeout); err != nil {
-		return nil, failf(CheckExportVerification, "exporter: %v", err)
+	// Writer-complete is the second unreconstructible proof: check 3's
+	// absence evidence plus the proxy health check above, which is
+	// process-local and dies with the daemon. Only a record carrying this
+	// mark may ever be adopted to a released export; everything earlier
+	// recovers as teardown plus a committed loss.
+	if st.journalOpen {
+		if err := b.cfg.Journal.MarkWriterComplete(ctx, hs.RunID); err != nil {
+			return nil, fmt.Errorf("journal writer completion: %w", err)
+		}
 	}
 
-	// Check 7: collect the stopped exporter's rootfs and verify both channels'
-	// manifests, digests, and the §5.4 scan before releasing anything. The
-	// archive and the extracted output are separate host-temp entities so the
-	// success path can hand the caller exactly the output directory with no
-	// leftover parent (teardown removes the archive; the output dir is the
-	// caller's once released).
-	st.archiveDir, err = os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-tar-")
-	if err != nil {
-		return nil, fmt.Errorf("create export archive dir: %w", err)
+	// The post-writer credential digest is taken only after the writer is
+	// proven absent, so what it attests is the store as the writer left it,
+	// read by a VM that could not have written it.
+	var credPostDigest string
+	if hs.AuthStoreLease != nil {
+		credPostDigest, err = b.observeCredentialStore(ctx, hs, names.CredObsPost, st, &st.credObsPost)
+		if err != nil {
+			return nil, err
+		}
 	}
-	st.exportDir, err = os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-out-")
-	if err != nil {
-		return nil, fmt.Errorf("create export output dir: %w", err)
-	}
-	tarPath := filepath.Join(st.archiveDir, "export.tar")
-	if err := b.materializeRootFS(ctx, names.Exporter, tarPath, CheckExportVerification); err != nil {
-		return nil, err
-	}
-	out, err := b.verifyExport(ctx, tarPath, st.exportDir)
+
+	out, err := b.runExporter(ctx, hs, names, st)
 	if err != nil {
 		return nil, err
+	}
+	// The export's location is durable before the completed close makes the
+	// outcome terminal: a crash between the two would otherwise leave a
+	// closed-completed record whose delivery nobody can locate.
+	if st.journalOpen {
+		if err := b.cfg.Journal.MarkExportMaterialized(ctx, hs.RunID, out.Dir); err != nil {
+			return nil, fmt.Errorf("journal export location: %w", err)
+		}
 	}
 	// Mark success only here, so the deferred cleanup keeps the output dir only
 	// on a real delivery; a panic before this point still removes it.
@@ -442,7 +605,174 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 			HostOnly:       networkReport.Mode == NetworkHostOnly,
 			ProxyAuthority: mustProxyAddress(proxyURL),
 		},
+		AuthStore: authStoreObservation(hs, st, credPostDigest),
 	}, nil
+}
+
+// authStoreObservation assembles the §5.4 audit record from the acquired
+// lease and the two observed digests; a run with no lease claim reports the
+// zero value.
+func authStoreObservation(hs HandoffSpec, st *runState, postDigest string) AuthStoreObservation {
+	if hs.AuthStoreLease == nil {
+		return AuthStoreObservation{}
+	}
+	return AuthStoreObservation{
+		Leased:         true,
+		AuthIdentityID: st.lease.AuthIdentityID,
+		Holder:         st.lease.Holder,
+		Fence:          st.lease.Fence,
+		AcquiredAt:     st.lease.AcquiredAt,
+		ExpiresAt:      st.lease.ExpiresAt,
+		PreDigest:      st.credPreDigest,
+		PostDigest:     postDigest,
+		PostAttested:   true,
+		Mutated:        st.credPreDigest != postDigest,
+	}
+}
+
+// observeCredentialStore runs one credential-store observer under the given
+// name and returns the digest its proof attests. The observation mirrors
+// observeSeededBase's discipline: taken by a different VM than any writer,
+// through a read-only mount, reaching the host as bytes in the observer's own
+// exported root filesystem, bound to this run by the unpredictable nonce, and
+// the observer is proven absent before the flow continues.
+func (b *Backend) observeCredentialStore(ctx context.Context, hs HandoffSpec, name string, st *runState, claim *objectClaim) (string, error) {
+	spec := buildCredentialObserverSpec(b.cfg, hs, name, st.ownershipLabel)
+	claim.attempted = true
+	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "create credential observer container: %v", err)
+	}
+	claim.owned = true
+	rep, err := b.rt.Inspect(ctx, name)
+	if err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "inspect credential observer before execution: %v", err)
+	}
+	if err := verifyCredentialObserverAllowlist(rep, spec); err != nil {
+		return "", err
+	}
+	claim.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel)
+	if err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "credential observer container %q: %v", name, err)
+	}
+	if err := b.rt.StartContainer(ctx, name); err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "start credential observer container: %v", err)
+	}
+	if err := b.waitStopped(ctx, name, *claim, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "credential observer: %v", err)
+	}
+
+	digest, err := b.readCredProof(ctx, hs.RunID, name, st)
+	if err != nil {
+		return "", err
+	}
+
+	if err := b.rt.DeleteContainer(ctx, name); err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "delete stopped credential observer: %v", err)
+	}
+	if err := b.verifyContainerAbsent(ctx, name, *claim, st.ownershipLabel, CheckAuthStoreMutationLease); err != nil {
+		return "", err
+	}
+	*claim = objectClaim{}
+	return digest, nil
+}
+
+// readCredProof collects the credential observer's proof out of its stopped
+// root filesystem and validates it, under the same byte cap and
+// evidence-not-output handling as the base proof.
+func (b *Backend) readCredProof(ctx context.Context, runID, id string, st *runState) (string, error) {
+	dir, err := os.MkdirTemp("", "freeside-handoff-"+runID+"-cred-")
+	if err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "create credential proof directory: %v", err)
+	}
+	st.credArchiveDir = dir
+	defer func() {
+		_ = os.RemoveAll(dir) // best-effort; the deferred teardown removes it again
+		st.credArchiveDir = ""
+	}()
+	tarPath := filepath.Join(dir, "observer.tar")
+	if err := b.materializeRootFS(ctx, id, tarPath, CheckAuthStoreMutationLease); err != nil {
+		return "", err
+	}
+	f, err := os.Open(tarPath) //nolint:gosec // gate-owned path under a fresh temp directory
+	if err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "open credential proof archive: %v", err)
+	}
+	defer f.Close() //nolint:errcheck // read-only handle on a temp file removed above
+	data, found, err := extractArchiveRegularFile(f, b.cfg.CredProofPath, maxBaseProofBytes)
+	if err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "read credential proof from observer rootfs: %v", err)
+	}
+	if !found {
+		return "", failf(CheckAuthStoreMutationLease, "credential observer produced no proof")
+	}
+	return verifyCredProof(data, st.ownershipLabel.Value)
+}
+
+// runExporter runs checks 4 and 7 over the run's workspace: create the
+// exporter, inspect it against the generated allowlist before it ever
+// executes, run it to observed-stopped, then collect its rootfs and verify
+// both channels' manifests, digests, and the §5.4 scan before releasing
+// anything. The archive and the extracted output are separate host-temp
+// entities so the success path can hand the caller exactly the output
+// directory with no leftover parent (teardown removes the archive; the
+// output dir is the caller's once released). Recovery earns every one of
+// these checks freshly through this same body: an exporter a dead process
+// started has an unpersisted pre-execution inspection, so it is never
+// trusted, only rerun.
+func (b *Backend) runExporter(ctx context.Context, hs HandoffSpec, names handoffNames, st *runState) (*exportOutput, error) {
+	tarPath, err := b.materializeExport(ctx, hs, names, st)
+	if err != nil {
+		return nil, err
+	}
+	return b.verifyExport(ctx, tarPath, st.exportDir)
+}
+
+// materializeExport is the exporter's container-lifecycle stage: it runs the
+// pinned helper behind the pre-execution allowlist inspection and lands the
+// rootfs archive on the host. Its failures are about the exporter role or
+// the runtime, never evidence about the workspace content — recovery relies
+// on that split to keep them retryable, while verifyExport's refusals are
+// the content evidence a committed loss may stand on.
+func (b *Backend) materializeExport(ctx context.Context, hs HandoffSpec, names handoffNames, st *runState) (string, error) {
+	exporterSpec := buildExporterSpec(b.cfg, hs, names, st.ownershipLabel)
+	st.exporter.attempted = true
+	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(exporterSpec)); err != nil {
+		return "", fmt.Errorf("create exporter container: %w", err)
+	}
+	st.exporter.owned = true
+	rep, err := b.rt.Inspect(ctx, names.Exporter)
+	if err != nil {
+		return "", failf(CheckExporterAllowlist, "inspect exporter before execution: %v", err)
+	}
+	// As with the agent: the allowlist's identity check runs before the
+	// fingerprint is captured from the same report.
+	if err := verifyExporterAllowlist(b.cfg, rep, names.Exporter, names.Workspace); err != nil {
+		return "", err
+	}
+	st.exporter.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel)
+	if err != nil {
+		return "", failf(CheckExporterAllowlist, "exporter container %q: %v", names.Exporter, err)
+	}
+	if err := b.rt.StartContainer(ctx, names.Exporter); err != nil {
+		return "", fmt.Errorf("start exporter container: %w", err)
+	}
+	if err := b.waitStopped(ctx, names.Exporter, st.exporter, st.ownershipLabel, b.cfg.ExporterTimeout); err != nil {
+		return "", failf(CheckExportVerification, "exporter: %v", err)
+	}
+
+	st.archiveDir, err = os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-tar-")
+	if err != nil {
+		return "", fmt.Errorf("create export archive dir: %w", err)
+	}
+	st.exportDir, err = os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-out-")
+	if err != nil {
+		return "", fmt.Errorf("create export output dir: %w", err)
+	}
+	tarPath := filepath.Join(st.archiveDir, "export.tar")
+	if err := b.materializeRootFS(ctx, names.Exporter, tarPath, CheckExportVerification); err != nil {
+		return "", err
+	}
+	return tarPath, nil
 }
 
 func mustProxyAddress(proxyURL string) string {
@@ -504,6 +834,167 @@ func (b *Backend) materializeRootFS(ctx context.Context, id, tarPath string, c C
 		return failf(c, "close bounded rootfs archive: %v", closeErr)
 	}
 	return nil
+}
+
+// leaseWindowMargin pads the acquired mutation window past the handoff and
+// teardown budgets, so the release stamp of a run that spends its entire
+// budget still lands inside the window it ends (the store refuses a release
+// outside the window).
+const leaseWindowMargin = time.Minute
+
+// acquireAuthStoreLease takes the claimed identity's §5.4 mutation lease and
+// verifies the granted window covers this run's whole budget. The gate sizes
+// and verifies the window itself: only it knows the handoff deadline and
+// when the writer is provably absent, so a caller-estimated window could
+// lapse mid-run and hand the serialization point to a second holder while
+// this run's writer can still mutate the store. Store refusals (a held
+// lease, an undeclared identity) are wrapped operational errors, so their
+// typed causes stay reachable with errors.Is; the gate's own verification
+// refusals are CheckAuthStoreMutationLease conformance failures.
+func (b *Backend) acquireAuthStoreLease(ctx context.Context, claim AuthStoreLeaseClaim, st *runState) error {
+	if b.cfg.AuthStoreLeaser == nil {
+		return failf(CheckAuthStoreMutationLease,
+			"spec claims the auth-store mutation lease for identity %q but no leaser is configured", claim.AuthIdentityID)
+	}
+	// The store serializes distinct holders; two concurrent handoffs reusing
+	// one holder ID would instead converge on one window and both write the
+	// same store. The gate's stated posture is that a caller cannot break
+	// §5.4 serialization by what it asserts, so the backend holds one
+	// in-process slot per identity (freed when the run ends; the store's
+	// window remains the cross-restart authority).
+	b.leaseMu.Lock()
+	if b.activeLeases[claim.AuthIdentityID] {
+		b.leaseMu.Unlock()
+		return failf(CheckAuthStoreMutationLease,
+			"identity %q already has a live leased handoff in this process", claim.AuthIdentityID)
+	}
+	b.activeLeases[claim.AuthIdentityID] = true
+	b.leaseMu.Unlock()
+	st.leaseSlot = true
+	st.leaseIdentity = claim.AuthIdentityID
+	now := b.cfg.Now()
+	wantExpiry := now.Add(b.cfg.HandoffTimeout + b.cfg.TeardownTimeout + leaseWindowMargin)
+	lease, err := b.cfg.AuthStoreLeaser.Acquire(ctx, claim.AuthIdentityID, claim.Holder, now, wantExpiry)
+	if err != nil {
+		return fmt.Errorf("acquire auth store mutation lease for identity %q: %w", claim.AuthIdentityID, err)
+	}
+	// The returned lease is store output, not gate state: re-verify it names
+	// this claim and actually covers the budget before anything trusts it. A
+	// same-holder re-acquire converges on an existing window without
+	// extending it, so a reused holder ID with a shorter window lands here.
+	if err := lease.Validate(); err != nil {
+		return failf(CheckAuthStoreMutationLease, "acquired lease for identity %q is malformed: %v", claim.AuthIdentityID, err)
+	}
+	if lease.AuthIdentityID != claim.AuthIdentityID || lease.Holder != claim.Holder {
+		return failf(CheckAuthStoreMutationLease,
+			"acquired lease does not name the claimed identity %q and holder", claim.AuthIdentityID)
+	}
+	if !lease.HeldAt(now) {
+		return failf(CheckAuthStoreMutationLease, "acquired lease for identity %q is not live at acquisition", claim.AuthIdentityID)
+	}
+	// A window acquired at any earlier instant is a same-holder convergence
+	// on a still-live lease (a crashed run's window, or a concurrent run
+	// under a reused holder ID): this run did not open it and must not ride
+	// it. Recovery or expiry ends the old window first.
+	if !lease.AcquiredAt.Equal(now) {
+		return failf(CheckAuthStoreMutationLease,
+			"identity %q already holds a mutation window from an earlier acquisition", claim.AuthIdentityID)
+	}
+	if lease.ExpiresAt.Before(wantExpiry) {
+		// Every earlier rejection refuses a window this run cannot prove it
+		// opened; this one comes after the freshness check, so the short
+		// window is provably ours and is released rather than abandoned
+		// held until its expiry blocks other holders.
+		st.lease, st.leaseHeld = lease, true
+		reason := fmt.Sprintf("acquired lease for identity %q ends at %s, before the run's budget needs it",
+			claim.AuthIdentityID, lease.ExpiresAt)
+		if problems := b.releaseAuthStoreLease(ctx, st); len(problems) > 0 {
+			reason += "; " + strings.Join(problems, "; ")
+		}
+		return failf(CheckAuthStoreMutationLease, "%s", reason)
+	}
+	st.lease = lease
+	st.leaseHeld = true
+	return nil
+}
+
+// verifyAuthStoreLeaseLive re-reads the lease immediately before the writer
+// starts: the row must be the acquired window exactly, and still live. The
+// window was sized to cover the whole budget, so a failure here is a
+// takeover or an incoherent store row, not an expected lapse; either way the
+// writer must not start. The re-read row crosses the same trust boundary as
+// the acquisition's return, so it is held to the same gate: validated shape
+// and the exact acquired window, never just the holder and fence — a row
+// naming another identity, or a same-holder-and-fence row with a moved
+// window, is store output contradicting gate state, and the writer must not
+// start over it.
+func (b *Backend) verifyAuthStoreLeaseLive(ctx context.Context, st *runState) error {
+	current, err := b.cfg.AuthStoreLeaser.Get(ctx, st.lease.AuthIdentityID)
+	if err != nil {
+		return fmt.Errorf("re-verify auth store mutation lease for identity %q: %w", st.lease.AuthIdentityID, err)
+	}
+	if verr := current.Validate(); verr != nil {
+		return failf(CheckAuthStoreMutationLease,
+			"re-read lease for identity %q is malformed: %v", st.lease.AuthIdentityID, verr)
+	}
+	if current.AuthIdentityID != st.lease.AuthIdentityID {
+		return failf(CheckAuthStoreMutationLease,
+			"re-read lease names identity %q, not the acquired %q", current.AuthIdentityID, st.lease.AuthIdentityID)
+	}
+	if current.Holder != st.lease.Holder || current.Fence != st.lease.Fence ||
+		!current.AcquiredAt.Equal(st.lease.AcquiredAt) || !current.ExpiresAt.Equal(st.lease.ExpiresAt) {
+		return failf(CheckAuthStoreMutationLease,
+			"lease for identity %q was taken over before the writer started", st.lease.AuthIdentityID)
+	}
+	if !current.HeldAt(b.cfg.Now()) {
+		return failf(CheckAuthStoreMutationLease,
+			"lease for identity %q is no longer live before the writer started", st.lease.AuthIdentityID)
+	}
+	return nil
+}
+
+// releaseAuthStoreLease ends the run's §5.4 mutation window; teardown calls
+// it once the writer is provably gone (or was never created). A failed
+// release is a teardown problem, never silent: until the row is released or
+// expires, the identity stays serialized against every other holder. A crash
+// that skips teardown leaves the persisted store row for recovery to release,
+// or expiry to lapse.
+func (b *Backend) releaseAuthStoreLease(ctx context.Context, st *runState) []string {
+	if !st.leaseHeld {
+		return nil
+	}
+	// The release must reach the store even when the run's context is
+	// already cancelled or past its deadline: a window outliving the run
+	// blocks the identity until expiry, so the one call that ends it runs
+	// detached, bounded by its own teardown-sized budget (teardown detaches
+	// the same way, so its calls re-bound harmlessly).
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
+	defer cancel()
+	if err := b.cfg.AuthStoreLeaser.Release(ctx, st.lease.AuthIdentityID, st.lease.Holder, st.lease.Fence, b.cfg.Now()); err != nil {
+		if errors.Is(err, ErrLeaseWindowEnded) {
+			// Nothing left to end: expiry is the crash backstop and a
+			// takeover means the store already moved on. Either way this
+			// run holds no window, which is the released state teardown
+			// wants; the store's lease row remains the audit trail.
+			st.leaseHeld = false
+			return nil
+		}
+		return []string{fmt.Sprintf("release auth store mutation lease for identity %q: %v", st.lease.AuthIdentityID, err)}
+	}
+	st.leaseHeld = false
+	return nil
+}
+
+// freeLeaseSlot returns the run's in-process per-identity slot; a no-op for
+// runs that never took one.
+func (b *Backend) freeLeaseSlot(st *runState) {
+	if !st.leaseSlot {
+		return
+	}
+	b.leaseMu.Lock()
+	delete(b.activeLeases, st.leaseIdentity)
+	b.leaseMu.Unlock()
+	st.leaseSlot = false
 }
 
 func newOwnershipLabel() (Label, error) {
@@ -627,12 +1118,24 @@ func (b *Backend) verifyContainerAbsent(ctx context.Context, id string, claim ob
 // still reaped, under its own deadline so a wedged runtime call cannot hang
 // Handoff.
 func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState) error {
-	// Before the first create attempt this invocation owns no runtime object.
-	if !st.workspace.attempted {
-		return nil
-	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
 	defer cancel()
+	// The in-process per-identity slot frees when this run ends, however the
+	// window itself ended: cross-run serialization is the store's (a live
+	// window refuses other holders; a same-holder convergence is refused at
+	// acquisition), so holding the slot past the run would only wedge the
+	// identity in-process.
+	defer b.freeLeaseSlot(st)
+	// Before the first create attempt this invocation owns no runtime
+	// object, but it may already hold the §5.4 lease: acquisition precedes
+	// the first create so the window covers everything, and an early refusal
+	// must not leave the identity serialized until expiry.
+	if !st.workspace.attempted {
+		if problems := b.releaseAuthStoreLease(ctx, st); len(problems) > 0 {
+			return failf(CheckTeardown, "%s", strings.Join(problems, "; "))
+		}
+		return nil
+	}
 	var problems []string
 	if st.proxy != nil {
 		if err := st.proxy.Close(); err != nil {
@@ -648,6 +1151,8 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	containerClaims := []containerClaim{
 		{id: names.Seeder, claim: st.seeder},
 		{id: names.Observer, claim: st.observer},
+		{id: names.CredObsPre, claim: st.credObsPre},
+		{id: names.CredObsPost, claim: st.credObsPost},
 		{id: names.Agent, claim: st.agent},
 		{id: names.Exporter, claim: st.exporter},
 	}
@@ -774,6 +1279,12 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	// same-name row classified foreign is a replacement that appeared after
 	// this run's object was reaped: it counts as absent and is never
 	// re-reaped; only an unprovable row still fails the proof.
+	//
+	// writerGone tracks whether the credential-bearing writer is provably
+	// absent on this pass's fresh evidence: an agent claim cleared mid-flow
+	// was already proven absent there, and an attempted one must be proven
+	// here. The §5.4 lease release below keys off it.
+	writerGone := !st.agent.attempted
 	if anyContainerAttempted {
 		if ctrs, err := b.rt.ListContainers(ctx); err != nil {
 			problems = append(problems, fmt.Sprintf("re-list containers: %v", err))
@@ -788,6 +1299,9 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 					continue
 				}
 				if !found {
+					if c.id == names.Agent {
+						writerGone = true
+					}
 					continue
 				}
 				ev, eerr := b.containerEvidence(ctx, candidate, c.claim, st.ownershipLabel)
@@ -800,6 +1314,9 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 					problems = append(problems, fmt.Sprintf("container %q survived teardown", c.id))
 				case evidenceForeign:
 					// A replacement, not a survivor.
+					if c.id == names.Agent {
+						writerGone = true
+					}
 				case evidenceUnprovable:
 					problems = append(problems, fmt.Sprintf("container %q survival unprovable after teardown", c.id))
 				}
@@ -825,6 +1342,19 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 				problems = append(problems, fmt.Sprintf("volume %q survival unprovable after teardown", v.Name))
 			}
 		}
+	}
+
+	// The lease releases last, after the reap and the survival re-proof: the
+	// §5.4 window must outlive every state in which this run's writer could
+	// still mutate the store. A writer whose absence this pass could not
+	// prove keeps the window held — releasing it would invite a second
+	// holder to mutate beside a possibly-live writer — and the held window
+	// is recorded as its own teardown problem; expiry remains the backstop.
+	if writerGone {
+		problems = append(problems, b.releaseAuthStoreLease(ctx, st)...)
+	} else if st.leaseHeld {
+		problems = append(problems, fmt.Sprintf(
+			"auth store mutation lease for identity %q kept held: writer absence unproven", st.lease.AuthIdentityID))
 	}
 
 	if len(problems) > 0 {
