@@ -41,7 +41,7 @@ public enum AttentionFixtures {
             .rerun_trust_evaluation, .choose_alternate_profile, .inspect_trust_failure, .stop,
         ],
         .run_proposal: [.start, .start_with_changes, .decline, .snooze],
-        .system_health: [.acknowledge, .run_doctor, .stop_unattended],
+        .system_health: [.acknowledge, .run_doctor, .stop_unattended, .resume_unattended],
         .blocked: [],
     ]
 
@@ -60,6 +60,7 @@ public enum AttentionFixtures {
         .open_pr, .return_to_agent, .mark_seen, .dismiss,
         .start, .start_with_changes, .decline, .snooze,
         .acknowledge, .run_doctor, .stop_unattended,
+        .resume_unattended,
     ]
 
     /// The default mock inbox: one open item per Phase 1 type.

@@ -42,6 +42,7 @@ func TestAllowedActionsByType(t *testing.T) {
 		},
 		domain.AttentionSystemHealth: {
 			domain.ActionAcknowledge, domain.ActionRunDoctor, domain.ActionStopUnattended,
+			domain.ActionResumeUnattended,
 		},
 		domain.AttentionBlocked: {},
 	}

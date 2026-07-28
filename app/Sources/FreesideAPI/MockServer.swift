@@ -809,16 +809,60 @@ public actor MockServer {
         revision += 1
         switch ActionOutcome.of(payload.action) {
         case .concludes(let status):
-            var applied = current
-            applied.entity_version += 1
-            applied.as_of_revision = revision
-            applied.item.item_version += 1
-            applied.item.status = status
-            // The concluding decision stamps the item's decision instant in
-            // the same mutation as the status flip (signet Submit, #171); a
-            // retry replays the recorded result above and never re-stamps.
-            applied.item.decided_at = Self.decidedInstant
-            itemsByID[payload.item_id] = applied
+            itemsByID[payload.item_id] = concluded(current, as: status)
+        case .stopsUnattended:
+            // The daemon's stop transaction (signet applyStopUnattended,
+            // #319): conclude the decided item and ensure exactly one open
+            // notice offers resume_unattended — a duplicate open notice
+            // would still block after the other one resumed, so a second
+            // stop converges on the existing one. The durable transition
+            // log itself has no API surface, so the item effects are the
+            // whole observable parity.
+            itemsByID[payload.item_id] = concluded(current, as: .resolved)
+            let alreadyOffered = itemsByID.values.contains {
+                $0.item.status == .open && $0.item._type == .system_health
+                    && $0.item.requested_decision.contains(.resume_unattended)
+            }
+            if !alreadyOffered {
+                let noticeID = "system-health-unattended-stopped-\(command.command_id)"
+                itemsByID[noticeID] = .init(
+                    as_of_revision: revision, entity_version: 1,
+                    item: .init(
+                        id: noticeID,
+                        project_id: current.item.project_id,
+                        subject: .system(
+                            .init(subject_type: .system, subject_id: "daemon", run_id: nil)),
+                        _type: .system_health,
+                        priority: .high,
+                        reason: "Unattended operation is stopped by operator decision "
+                            + "(item \(payload.item_id)). No new unattended work is admitted "
+                            + "until resume_unattended is accepted.",
+                        requested_decision: [.resume_unattended, .acknowledge],
+                        evidence_snapshot: [],
+                        agent_claims: [],
+                        artifact_digests: [],
+                        pr_head_sha: "",
+                        commit_plan_notice: nil,
+                        item_version: 1,
+                        interruption_class: .exceptional,
+                        conversation_id: nil,
+                        timing: .init(
+                            delivery_count: 0,
+                            first_submitted_at: nil,
+                            first_accepted_at: nil,
+                            first_opened_at: nil,
+                            submit_to_first_open: nil
+                        ),
+                        expires_when: nil,
+                        decided_at: nil,
+                        blocking_supersession: nil,
+                        status: .open
+                    ))
+            }
+        case .resumesUnattended:
+            // The daemon's resume transaction concludes the stopped notice;
+            // the operating-state effect has no API surface.
+            itemsByID[payload.item_id] = concluded(current, as: .resolved)
         case .records:
             // The command record is the whole server-side effect; the
             // item row is left untouched (signet outcomeRecords).
@@ -850,6 +894,23 @@ public actor MockServer {
         commandsByID[command.command_id] = NormalizedCommand(command)
         resultsByCommandID[command.command_id] = result
         return .ok(result)
+    }
+
+    /// The concluding decision's item side: version bump, terminal status,
+    /// and the decision instant stamped in the same mutation as the flip
+    /// (signet concludeItem, #171); a retry replays the recorded result and
+    /// never re-stamps.
+    private func concluded(
+        _ snapshot: Components.Schemas.AttentionItemSnapshot,
+        as status: Components.Schemas.ItemStatus
+    ) -> Components.Schemas.AttentionItemSnapshot {
+        var applied = snapshot
+        applied.entity_version += 1
+        applied.as_of_revision = revision
+        applied.item.item_version += 1
+        applied.item.status = status
+        applied.item.decided_at = Self.decidedInstant
+        return applied
     }
 
 }

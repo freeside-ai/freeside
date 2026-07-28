@@ -529,7 +529,7 @@ New in revision 18 (decider in parentheses):
    Rejected alternatives and revisit conditions live in the decision note.
    (User; devlog 2026-07-26-0957-1a2-chain-repair.md; #305.)
 
-## Revision 19 (current)
+## Revision 19
 
 Revision 19 makes the measured golden-image shape canonical, repairs the
 project-image dependency order exposed by removing the checked-in stand-in, and
@@ -558,3 +558,26 @@ New in revision 19 (decider in parentheses):
    example, not an eligibility rule.
    Rejected alternatives and revisit conditions live in the decision note.
    (User; devlog 2026-07-26-2330-phase1a-image-order.md; #325, #337.)
+
+---
+
+## Revision 20 (current)
+
+Revision 20 makes the operator stop of unattended operation a durable,
+command-bound transition with an explicit resume action, and defines the §4
+blocking/supersession semantic as durable typed state consulted in the
+admitting transaction (#319, #321).
+
+1. **Stopping unattended operation is a durable transition with an explicit
+   resume.** Accepting `stop_unattended` on a `system_health` item appends a
+   durable, command-bound operating transition and raises a notice offering
+   the new `resume_unattended` action — the only writer of the resumed state,
+   so a restart alone never resumes. The §4 blocking/supersession rule is
+   durable typed state on the item, re-validated against live configuration
+   at every unattended admission, and the whole operating-state gate is one
+   shared predicate consulted in the admitting transaction and before any
+   dispatch whose operating mode is unknowable.
+   Rejected alternatives and revisit conditions live in the decision note.
+   (User; devlog 2026-07-27-1846-durable-stop-and-supersession.md; #319,
+   #321.)
+

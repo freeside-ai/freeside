@@ -268,6 +268,53 @@ func TestValidateAttentionItemDecidedAtImmutable(t *testing.T) {
 	})
 }
 
+// TestValidateAttentionItemSupersessionImmutable pins the condition as fixed
+// at creation (issue #321): a later write may neither add, remove, nor
+// retarget it, while an advance that carries it unchanged is legal.
+func TestValidateAttentionItemSupersessionImmutable(t *testing.T) {
+	condIn := validItemInput(domain.AttentionSystemHealth)
+	condIn.BlockingSupersession = &domain.BlockingSupersession{
+		Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 42,
+	}
+	stored := mustItem(t, condIn)
+
+	t.Run("carrying it unchanged", func(t *testing.T) {
+		next := stored
+		next.ItemVersion = 2
+		if err := domain.ValidateAttentionItemTransition(stored, next); err != nil {
+			t.Fatalf("condition-preserving advance rejected: %v", err)
+		}
+	})
+	t.Run("removing it", func(t *testing.T) {
+		removedIn := validItemInput(domain.AttentionSystemHealth)
+		removedIn.ItemVersion = 2
+		err := domain.ValidateAttentionItemTransition(stored, mustItem(t, removedIn))
+		if !errors.Is(err, domain.ErrImmutableTransition) {
+			t.Fatalf("removing condition = %v, want ErrImmutableTransition", err)
+		}
+	})
+	t.Run("retargeting it", func(t *testing.T) {
+		movedIn := condIn
+		movedIn.ItemVersion = 2
+		movedIn.BlockingSupersession = &domain.BlockingSupersession{
+			Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 7,
+		}
+		err := domain.ValidateAttentionItemTransition(stored, mustItem(t, movedIn))
+		if !errors.Is(err, domain.ErrImmutableTransition) {
+			t.Fatalf("retargeting condition = %v, want ErrImmutableTransition", err)
+		}
+	})
+	t.Run("adding one later", func(t *testing.T) {
+		bare := mustItem(t, validItemInput(domain.AttentionSystemHealth))
+		addedIn := condIn
+		addedIn.ItemVersion = 2
+		err := domain.ValidateAttentionItemTransition(bare, mustItem(t, addedIn))
+		if !errors.Is(err, domain.ErrImmutableTransition) {
+			t.Fatalf("adding condition = %v, want ErrImmutableTransition", err)
+		}
+	})
+}
+
 func mustItem(t *testing.T, in domain.AttentionItemInput) domain.AttentionItem {
 	t.Helper()
 	item, err := domain.NewAttentionItem(in, nil)

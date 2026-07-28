@@ -407,9 +407,22 @@ import Testing
                 sensitivity_class: .normal
             ))
 
+        // blocking_supersession is a system_health-only typed condition with
+        // a positive repository id (#319/#321); the mock mirrors both
+        // representable halves of domain.AttentionItem.Validate's rule.
+        var supersessionWrongType = AttentionFixtures.fixture(type: .spec_approval)
+        supersessionWrongType.item.blocking_supersession = .init(
+            value1: .init(kind: .backup_encryption_waiver, repository_id: 424_242))
+
+        var supersessionBadPayload = AttentionFixtures.fixture(type: .system_health)
+        supersessionBadPayload.item.blocking_supersession = .init(
+            value1: .init(kind: .backup_encryption_waiver, repository_id: 0))
+
         for (label, seed) in [
             ("empty claim artifact_id", emptyClaimID),
             ("empty claim provenance invocation", claimEmptyInvocation),
+            ("supersession on a non-system_health item", supersessionWrongType),
+            ("non-positive supersession repository id", supersessionBadPayload),
             ("recipe-bound claim provenance", claimRecipeBound),
             ("text claim digest mismatch", textDigestMismatch),
             ("head-bound evidence off the item head", headMismatch),
@@ -714,6 +727,50 @@ import Testing
         #expect(after.item.status == .dismissed)
         // Dismiss is a concluding decision like resolve: it stamps (#171).
         #expect(after.item.decided_at != nil)
+    }
+
+    @Test func stopRaisesTheResumeNoticeAndResumeResolvesIt() async throws {
+        // Mirrors signet's stop/resume transactions (#319): accepting
+        // stop_unattended concludes the decided health item and raises the
+        // system-scoped notice offering resume_unattended; accepting the
+        // resume concludes that notice. The durable transition log has no
+        // API surface, so the item effects are the whole observable parity.
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        let health =
+            try await client
+            .getAttentionItem(path: .init(item_id: "item-system_health")).ok.body.json
+        _ =
+            try await client
+            .submitCommand(
+                body: .json(Self.command(id: "cmd-stop", against: health, action: .stop_unattended))
+            ).ok.body.json
+
+        let decided =
+            try await client
+            .getAttentionItem(path: .init(item_id: "item-system_health")).ok.body.json
+        #expect(decided.item.status == .resolved)
+
+        let noticeID = "system-health-unattended-stopped-cmd-stop"
+        let notice =
+            try await client
+            .getAttentionItem(path: .init(item_id: noticeID)).ok.body.json
+        #expect(notice.item.status == .open)
+        #expect(notice.item._type == .system_health)
+        #expect(notice.item.requested_decision == [.resume_unattended, .acknowledge])
+        #expect(notice.item.blocking_supersession == nil)
+
+        _ =
+            try await client
+            .submitCommand(
+                body: .json(
+                    Self.command(id: "cmd-resume", against: notice, action: .resume_unattended))
+            ).ok.body.json
+        let resolved =
+            try await client
+            .getAttentionItem(path: .init(item_id: noticeID)).ok.body.json
+        #expect(resolved.item.status == .resolved)
+        #expect(resolved.item.decided_at != nil)
     }
 
     static func command(

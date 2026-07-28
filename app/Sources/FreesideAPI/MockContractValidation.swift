@@ -46,6 +46,19 @@ enum MockContractValidation {
         // reason fails decode), and nil is a valid absence, so no check
         // remains to mirror.
         if item.item_version < 1 { return "non-positive item_version" }
+        // blocking_supersession mirrors the domain's typed §4 condition
+        // (#319/#321): legal only on system_health, and its payload must
+        // name a positive repository id. The generated closed kind enum
+        // makes the daemon's unknown-kind arm unrepresentable here (an
+        // unknown kind fails decode).
+        if let condition = item.blocking_supersession {
+            if item._type != .system_health {
+                return "blocking_supersession on a non-system_health item"
+            }
+            if condition.value1.repository_id < 1 {
+                return "non-positive blocking_supersession repository_id"
+            }
+        }
         // An empty requested_decision is structurally valid (#96): which
         // types must offer an action is signet policy (itemPolicyBreach).
         if let breach = timingBreach(item.timing) { return breach }

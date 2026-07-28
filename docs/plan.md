@@ -1,9 +1,9 @@
 ---
 title: Freeside Project Plan
-revision: 19
+revision: 20
 status: active
 phase: 1A
-updated: 2026-07-26
+updated: 2026-07-27
 ---
 
 # Freeside
@@ -253,7 +253,7 @@ Approval is not a universal action.
 | `publish_blocked` | Rerun trust evaluation, choose an approved alternate publication profile, inspect the trust failure, or stop. |
 | `ready_for_final_review` | Open the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. |
 | `run_proposal` | Start, **start with changes**, decline, or snooze. “Start with changes” creates a revised proposal artifact, supersedes the original item, creates a new item version, and starts the run from the exact revised digest. It never uses unversioned ad hoc parameters. Proposals are grouped under `proposal_batch_id` with per-candidate decisions. |
-| `system_health` | Acknowledge, run doctor, or stop unattended operation. Acknowledge means seen, never resolved. The item remains blocking until the diagnostic clears, unattended operation is explicitly stopped, or a validated configuration supersedes it. |
+| `system_health` | Acknowledge, run doctor, stop unattended operation, or — on the notice a stop raises — resume unattended operation. Acknowledge means seen, never resolved. The item remains blocking until the diagnostic clears, unattended operation is explicitly stopped, or a validated configuration supersedes it. A stop is a durable operating transition: only the explicit resume reopens unattended admission, and a restart alone never does. |
 | `blocked` | Consolidates external waits that exceed Section 5.12 thresholds. It is read-only. |
 
 Section 9 governs each type's presentation: what its card leads with and what
@@ -1739,27 +1739,20 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 19:
+Revision 20:
 
-1. **Golden agent and project images share one ward-enforced realized shape.**
-   Image metadata may not alter that shape; project images bake the exact
-   repository dependency closure and trusted recipe configuration, prove that
-   recipe verbatim without network, and reach ward only through
-   registry-resolvable digest references. A build-time tag is a measured Apple
-   `container` 1.1.0 compatibility hop whose exact base digest is verified and
-   recorded, not execution authority.
-2. **The reusable project-image builder precedes and survives onboarding
-   packaging.** It is manually proven before #237's real runs, then #238 invokes
-   the same primitive. A checked-in image for one repository would import
-   another project's dependency churn; a second onboarding implementation
-   would let the proof and packaged behavior diverge.
-3. **The first repository is selected by behavior, not language.**
-   `freeasinbird/gh-imgup` remains the selected target because its authority is
-   representable, its trusted recipe can run offline, and it has ordinary work
-   for the gauntlet. The prior Go and `go test`/`go vet` wording was a stale
-   example, not an eligibility rule.
+1. **Stopping unattended operation is a durable transition with an explicit
+   resume.** Accepting `stop_unattended` on a `system_health` item appends a
+   durable, command-bound operating transition and raises a notice offering
+   the new `resume_unattended` action — the only writer of the resumed state,
+   so a restart alone never resumes. The §4 blocking/supersession rule is
+   durable typed state on the item, re-validated against live configuration
+   at every unattended admission, and the whole operating-state gate is one
+   shared predicate consulted in the admitting transaction and before any
+   dispatch whose operating mode is unknowable.
    Rejected alternatives and revisit conditions live in the decision note.
-   (User; devlog 2026-07-26-2330-phase1a-image-order.md; #325, #337.)
+   (User; devlog 2026-07-27-1846-durable-stop-and-supersession.md; #319,
+   #321.)
 
 ## 14. Risks
 

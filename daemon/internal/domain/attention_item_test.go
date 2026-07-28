@@ -639,3 +639,114 @@ func TestNewAttentionItemRejects(t *testing.T) {
 		})
 	}
 }
+
+// TestBlockingSupersessionValidate covers the typed condition's structural
+// rules: a registered kind with a positive repository id is valid; the zero
+// kind and a non-positive payload are rejected (issue #321).
+func TestBlockingSupersessionValidate(t *testing.T) {
+	cases := []struct {
+		name    string
+		cond    domain.BlockingSupersession
+		wantErr error
+	}{
+		{
+			"valid waiver condition",
+			domain.BlockingSupersession{Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 42},
+			nil,
+		},
+		{
+			"zero kind",
+			domain.BlockingSupersession{RepositoryID: 42},
+			domain.ErrInvalidSupersessionKind,
+		},
+		{
+			"unknown kind",
+			domain.BlockingSupersession{Kind: "operator_snooze", RepositoryID: 42},
+			domain.ErrInvalidSupersessionKind,
+		},
+		{
+			"non-positive repository",
+			domain.BlockingSupersession{Kind: domain.SupersessionBackupEncryptionWaiver},
+			domain.ErrNonPositive,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cond.Validate()
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("Validate: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Validate = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestBlockingSupersessionSupersedes is the live re-validation rule (issue
+// #321): the stored condition holds exactly while the operator currently
+// configures the waiver for the condition's repository, so clearing or
+// retargeting the configuration re-blocks with no write, and a malformed
+// condition supersedes nothing.
+func TestBlockingSupersessionSupersedes(t *testing.T) {
+	cond := domain.BlockingSupersession{
+		Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 42,
+	}
+	configure := func(id int64) domain.AdmissionPolicy {
+		return domain.AdmissionPolicy{BackupEncryptionWaiverRepositoryID: &id}
+	}
+
+	if err := cond.Supersedes(configure(42)); err != nil {
+		t.Fatalf("configured waiver: %v", err)
+	}
+	if err := cond.Supersedes(domain.AdmissionPolicy{}); !errors.Is(err, domain.ErrWaiverNotConfigured) {
+		t.Fatalf("cleared waiver = %v, want %v", err, domain.ErrWaiverNotConfigured)
+	}
+	if err := cond.Supersedes(configure(7)); !errors.Is(err, domain.ErrWaiverNotConfigured) {
+		t.Fatalf("retargeted waiver = %v, want %v", err, domain.ErrWaiverNotConfigured)
+	}
+	malformed := domain.BlockingSupersession{Kind: "operator_snooze", RepositoryID: 42}
+	if err := malformed.Supersedes(configure(42)); !errors.Is(err, domain.ErrInvalidSupersessionKind) {
+		t.Fatalf("malformed condition = %v, want %v", err, domain.ErrInvalidSupersessionKind)
+	}
+}
+
+// TestAttentionItemBlockingSupersessionRules pins where the condition may
+// appear: only a system_health item carries one, its payload is validated on
+// the item, and construction detaches the caller's pointer so a later mutation
+// cannot retarget the validated condition.
+func TestAttentionItemBlockingSupersessionRules(t *testing.T) {
+	cond := domain.BlockingSupersession{
+		Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 42,
+	}
+
+	in := validItemInput(domain.AttentionSystemHealth)
+	in.BlockingSupersession = &cond
+	item, err := domain.NewAttentionItem(in, nil)
+	if err != nil {
+		t.Fatalf("system_health with condition: %v", err)
+	}
+	cond.RepositoryID = 7
+	if item.BlockingSupersession.RepositoryID != 42 {
+		t.Fatalf("constructed item aliases caller condition: repository %d", item.BlockingSupersession.RepositoryID)
+	}
+
+	wrongType := validItemInput(domain.AttentionSpecApproval)
+	wrongType.BlockingSupersession = &domain.BlockingSupersession{
+		Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 42,
+	}
+	if _, err := domain.NewAttentionItem(wrongType, nil); !errors.Is(err, domain.ErrSupersessionOutsideSystemHealth) {
+		t.Fatalf("non-system_health = %v, want %v", err, domain.ErrSupersessionOutsideSystemHealth)
+	}
+
+	malformed := validItemInput(domain.AttentionSystemHealth)
+	malformed.BlockingSupersession = &domain.BlockingSupersession{
+		Kind: domain.SupersessionBackupEncryptionWaiver,
+	}
+	if _, err := domain.NewAttentionItem(malformed, nil); !errors.Is(err, domain.ErrNonPositive) {
+		t.Fatalf("malformed payload = %v, want %v", err, domain.ErrNonPositive)
+	}
+}

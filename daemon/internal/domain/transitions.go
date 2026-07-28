@@ -117,6 +117,19 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 		return fmt.Errorf("attention item %s: recorded decided_at would change: %w",
 			updated.ID, ErrImmutableTransition)
 	}
+	// The supersession condition is part of what the item is about, fixed at
+	// creation like type and subject: a later write may neither add, remove,
+	// nor retarget it, or a stale copy could turn a conditionally non-blocking
+	// notice into an unconditional blocker (or the reverse) without any
+	// configuration change.
+	sameSupersession, err := jsonEqual(old.BlockingSupersession, updated.BlockingSupersession)
+	if err != nil {
+		return fmt.Errorf("attention item %s: %w", updated.ID, err)
+	}
+	if !sameSupersession {
+		return fmt.Errorf("attention item %s: blocking supersession would change: %w",
+			updated.ID, ErrImmutableTransition)
+	}
 	return nil
 }
 

@@ -538,67 +538,8 @@ func TestAcceptanceRegatesTheAdmission(t *testing.T) {
 // replay converges on the same item rather than raising a second one.
 func TestWaivedAdmissionSurfacesItsPosture(t *testing.T) {
 	ctx := context.Background()
-	floor := []exec.Capability{exec.CapPostExitExport}
-	waiverRepository := int64(424242)
-	profile := waivedTrustProfile(t)
-
-	env := admissionEnvironment()
-	env.OperatingMode = domain.ModeUnattended
-	env.Base.Repo, env.Base.RepositoryID = profile.Repo, profile.RepositoryID
-	env.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
-		RepositoryID: waiverRepository, Reason: "phase 1a.2 supervised runs",
-	}
-
-	root := t.TempDir()
-	st, err := store.Open(ctx, filepath.Join(root, "freeside.db"), store.Options{
-		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
-			domain.ModeUnattended: domain.NewCapabilitySnapshot(floor...),
-		},
-		ApprovedCredentialModes:            []domain.CredentialMode{domain.CredentialSubscriptionContained},
-		BackupEncryptionWaiverRepositoryID: &waiverRepository,
-		BackupHealthSource: store.BackupHealthSourceFunc(func(
-			context.Context, store.BackupHealthContext,
-		) (domain.BackupHealth, error) {
-			return domain.BackupHealth{
-				CheckpointCurrency: domain.BackupHealthHealthy,
-				ArtifactClosure:    domain.BackupHealthHealthy,
-				RestoreTestAge:     domain.BackupHealthHealthy,
-			}, nil
-		}),
-	})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		if err := tx.RecordAuthIdentity(ctx, testIdentity, admittedAt); err != nil {
-			return err
-		}
-		return tx.RecordTrustProfile(ctx, profile, admittedAt)
-	}); err != nil {
-		t.Fatalf("seed identity and profile: %v", err)
-	}
-	blobs, err := signet.NewBlobStore(filepath.Join(root, "blobs"))
-	if err != nil {
-		t.Fatalf("signet.NewBlobStore: %v", err)
-	}
-	attention := signet.NewService(st, signet.WithBlobStore(blobs))
-	driver, err := fake.NewStageDriverAt(filepath.Join(root, "driver"))
-	if err != nil {
-		t.Fatalf("fake.NewStageDriverAt: %v", err)
-	}
-	workflow, err := engine.New(st, attention, driver,
-		engine.WithAdmission(
-			fake.RunnerBackend{
-				BackendName: "fake_runner",
-				Caps:        exec.NewCapabilitySet(domain.AllRunnerCapabilities...),
-			},
-			floor, env, func() time.Time { return admittedAt }))
-	if err != nil {
-		t.Fatalf("engine.New: %v", err)
-	}
-
-	f := &workflowFixture{root: root, store: st, signet: attention, driver: driver, engine: workflow}
+	f := openWaivedUnattendedFixture(t)
+	attention := f.signet
 	invocationID, _, err := dispatchOneInvocation(t, f)
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)

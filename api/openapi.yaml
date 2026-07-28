@@ -1099,6 +1099,7 @@ components:
         - timing
         - expires_when
         - decided_at
+        - blocking_supersession
         - status
       properties:
         id:
@@ -1178,6 +1179,20 @@ components:
             and the status flip; the durable endpoint of the open-to-decision
             metric (plan §4). Never client-set; null while the item is open
             and for items concluded without a decision (expiry, supersession).
+        blocking_supersession:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/BlockingSupersession"
+          description: >
+            The typed condition under which this open system_health item does
+            not block unattended admission (plan §4, §5.7; mirrors
+            domain.AttentionItem.BlockingSupersession): set at creation by the
+            daemon from the validated configuration the item reports on, null
+            for every other item and for a health item that blocks
+            unconditionally. Never client-set, and never a verdict — the
+            daemon re-validates the condition against live policy at each
+            admission, so a cleared or retargeted configuration re-blocks the
+            still-open item.
         status:
           $ref: "#/components/schemas/ItemStatus"
       example:
@@ -1229,6 +1244,7 @@ components:
           submit_to_first_open: 300000000000
         expires_when: "2026-01-03T03:04:05Z"
         decided_at: null
+        blocking_supersession: null
         status: "open"
 
     Subject:
@@ -1983,6 +1999,7 @@ components:
         - acknowledge
         - run_doctor
         - stop_unattended
+        - resume_unattended
 
     Priority:
       type: string
@@ -2002,6 +2019,39 @@ components:
         - superseded
         - dismissed
         - expired
+
+    SupersessionKind:
+      type: string
+      description: >
+        The class of validated configuration that can supersede a
+        system_health item's blocking effect (plan §4; domain
+        attention_item.go).
+      enum:
+        - backup_encryption_waiver
+
+    BlockingSupersession:
+      type: object
+      description: >
+        The typed §4 blocking-supersession condition (mirrors
+        domain.BlockingSupersession). Daemon-derived and fixed at item
+        creation; holding is re-derived against live policy at each
+        admission, never read from this stored value.
+      required:
+        - kind
+        - repository_id
+      properties:
+        kind:
+          $ref: "#/components/schemas/SupersessionKind"
+        repository_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >
+            The exact trusted numeric repository ID the superseding waiver
+            must cover (backup_encryption_waiver).
+      example:
+        kind: "backup_encryption_waiver"
+        repository_id: 424242
 
     SensitivityClass:
       type: string
