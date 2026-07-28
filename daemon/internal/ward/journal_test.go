@@ -21,6 +21,10 @@ type fakeJournal struct {
 	mu      sync.Mutex
 	records map[string]*HandoffJournalRecord
 	calls   []string
+	// rt, when set, mirrors journal calls into the fake runtime's shared
+	// call log so tests can assert write ordering against runtime
+	// operations (intent-before-create).
+	rt *fakeRuntime
 
 	failBegin, failMark, failClose error
 }
@@ -29,7 +33,14 @@ func newFakeJournal() *fakeJournal {
 	return &fakeJournal{records: map[string]*HandoffJournalRecord{}}
 }
 
-func (j *fakeJournal) recordCall(s string) { j.calls = append(j.calls, s) }
+func (j *fakeJournal) recordCall(s string) {
+	j.calls = append(j.calls, s)
+	if j.rt != nil {
+		j.rt.mu.Lock()
+		j.rt.calls = append(j.rt.calls, s)
+		j.rt.mu.Unlock()
+	}
+}
 
 // snapshot returns a deep copy of the run's record, or nil.
 func (j *fakeJournal) snapshot(runID string) *HandoffJournalRecord {

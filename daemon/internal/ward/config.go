@@ -182,6 +182,12 @@ type Config struct {
 	// It is required only by handoffs whose spec carries an AuthStoreLease
 	// claim; a leased handoff under a nil leaser fails closed.
 	AuthStoreLeaser AuthStoreLeaser
+	// Journal durably records each handoff for restart-safe recovery. Nil
+	// preserves the one-shot semantics exactly: nothing is recorded, a
+	// crash strands objects as before, and Recover has nothing to work
+	// from. Requiring a journal is the caller's operating-mode policy, not
+	// the gate's.
+	Journal HandoffJournal
 	// Now supplies the current instant for lease windows and release stamps;
 	// tests inject a fixed clock. Nil defaults to time.Now.
 	Now func() time.Time

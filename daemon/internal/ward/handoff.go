@@ -219,6 +219,9 @@ type runState struct {
 	// before the writer started; the post-writer observation compares against
 	// it to attest whether the store mutated.
 	credPreDigest string
+	// journalOpen records that Begin durably opened this run's journal
+	// record; the deferred close acts only while it is set.
+	journalOpen bool
 }
 
 // Handoff runs one full workspace handoff: admit against the capability
@@ -274,6 +277,34 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 			} else {
 				err = errors.Join(err, terr)
 			}
+		}
+		// Close the journal record from proven state, on a detached bounded
+		// context (as teardown runs) so a cancelled run still records its
+		// end: completed only when the caller actually receives the export,
+		// loss only when teardown proved every object absent. A teardown
+		// failure leaves the record open — absence is unproven, so rerun is
+		// not yet safe, and recovery owns the record from here. A failed
+		// completed-close voids the delivery (§5.7: release follows the
+		// durable append), and the cleanup below removes the unreleased
+		// output.
+		if st.journalOpen {
+			jctx, jcancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
+			switch {
+			case st.succeeded && err == nil:
+				if cerr := b.cfg.Journal.Close(jctx, hs.RunID, HandoffCompleted); cerr != nil {
+					result = nil
+					err = fmt.Errorf("journal close completed: %w", cerr)
+				} else {
+					st.journalOpen = false
+				}
+			case terr == nil:
+				if cerr := b.cfg.Journal.Close(jctx, hs.RunID, HandoffLoss); cerr != nil {
+					err = errors.Join(err, fmt.Errorf("journal close loss: %w", cerr))
+				} else {
+					st.journalOpen = false
+				}
+			}
+			jcancel()
 		}
 		// The archive is transient once verified; the output dir is kept only
 		// when the caller actually receives it: the run reached its successful
@@ -332,6 +363,37 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		return nil, err
 	}
 
+	// Intent-before-create: the journal record is durable before the first
+	// runtime object can exist, so no object can outlive the daemon
+	// unrecorded. It opens after the syntactic and preflight refusals — a
+	// spec the gate would never run needs no record — and a run that cannot
+	// be journalled is refused.
+	if b.cfg.Journal != nil {
+		digest, derr := specDigest(hs)
+		if derr != nil {
+			return nil, derr
+		}
+		rec := HandoffJournalRecord{
+			RunID:          hs.RunID,
+			OwnershipToken: ownershipLabel.Value,
+			SpecDigest:     digest,
+			OpenedAt:       b.cfg.Now(),
+		}
+		if st.leaseHeld {
+			rec.Lease = &HandoffJournalLease{
+				AuthIdentityID: st.lease.AuthIdentityID,
+				Holder:         st.lease.Holder,
+				Fence:          st.lease.Fence,
+				AcquiredAt:     st.lease.AcquiredAt,
+				ExpiresAt:      st.lease.ExpiresAt,
+			}
+		}
+		if err := b.cfg.Journal.Begin(ctx, rec); err != nil {
+			return nil, fmt.Errorf("journal begin: %w", err)
+		}
+		st.journalOpen = true
+	}
+
 	// A successful workspace create establishes ownership of this workspace.
 	// If the call fails after creating the volume, teardown can still identify
 	// that one object by its per-invocation ownership label; an ordinary
@@ -372,6 +434,14 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	if err != nil {
 		return nil, err
 	}
+	// The observed base is a pre-writer proof the world cannot re-attest
+	// once the agent runs (§5.7: an unpersisted proof is not a proof), so it
+	// is journalled the moment it is earned.
+	if st.journalOpen && observedBaseSHA != "" {
+		if err := b.cfg.Journal.MarkSeedObserved(ctx, hs.RunID, observedBaseSHA); err != nil {
+			return nil, fmt.Errorf("journal seed observation: %w", err)
+		}
+	}
 
 	// The leased credential store's pre-writer digest is a pre-writer fact
 	// like the base: once the agent runs it may legitimately mutate the
@@ -380,6 +450,11 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		st.credPreDigest, err = b.observeCredentialStore(ctx, hs, names.CredObsPre, st, &st.credObsPre)
 		if err != nil {
 			return nil, err
+		}
+		if st.journalOpen {
+			if err := b.cfg.Journal.MarkCredentialObserved(ctx, hs.RunID, st.credPreDigest); err != nil {
+				return nil, fmt.Errorf("journal credential observation: %w", err)
+			}
 		}
 	}
 
@@ -472,6 +547,16 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		return nil, failf(CheckAgentEgress, "provider proxy failed while the writer ran: %v", err)
 	}
 	st.proxy = nil
+	// Writer-complete is the second unreconstructible proof: check 3's
+	// absence evidence plus the proxy health check above, which is
+	// process-local and dies with the daemon. Only a record carrying this
+	// mark may ever be adopted to a released export; everything earlier
+	// recovers as teardown plus a committed loss.
+	if st.journalOpen {
+		if err := b.cfg.Journal.MarkWriterComplete(ctx, hs.RunID); err != nil {
+			return nil, fmt.Errorf("journal writer completion: %w", err)
+		}
+	}
 
 	// The post-writer credential digest is taken only after the writer is
 	// proven absent, so what it attests is the store as the writer left it,
@@ -533,6 +618,14 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	out, err := b.verifyExport(ctx, tarPath, st.exportDir)
 	if err != nil {
 		return nil, err
+	}
+	// The export's location is durable before the completed close makes the
+	// outcome terminal: a crash between the two would otherwise leave a
+	// closed-completed record whose delivery nobody can locate.
+	if st.journalOpen {
+		if err := b.cfg.Journal.MarkExportMaterialized(ctx, hs.RunID, out.Dir); err != nil {
+			return nil, fmt.Errorf("journal export location: %w", err)
+		}
 	}
 	// Mark success only here, so the deferred cleanup keeps the output dir only
 	// on a real delivery; a panic before this point still removes it.
