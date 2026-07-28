@@ -25,6 +25,11 @@ type fakeJournal struct {
 	// call log so tests can assert write ordering against runtime
 	// operations (intent-before-create).
 	rt *fakeRuntime
+	// onCall, when set, observes each journal call before the method
+	// mutates state; the kill-boundary harness snapshots there, modeling a
+	// daemon that died with the write not yet durable. It runs on the
+	// handoff goroutine, so unlocked reads of test state are safe.
+	onCall func(call string)
 
 	failBegin, failMark, failClose error
 }
@@ -39,6 +44,9 @@ func (j *fakeJournal) recordCall(s string) {
 		j.rt.mu.Lock()
 		j.rt.calls = append(j.rt.calls, s)
 		j.rt.mu.Unlock()
+	}
+	if j.onCall != nil {
+		j.onCall(s)
 	}
 }
 
