@@ -175,6 +175,9 @@ type ConformanceFailure struct {
 	Check Check
 	// Reason states the observed violation.
 	Reason string
+	// ContentEvidence marks a refusal that derives deterministically from
+	// the verified content itself; see errContentEvidence.
+	ContentEvidence bool
 }
 
 func (e *ConformanceFailure) Error() string {
@@ -182,8 +185,23 @@ func (e *ConformanceFailure) Error() string {
 		e.Backend, e.Check, e.Reason)
 }
 
-// Unwrap makes errors.Is(err, ErrConformance) match the failure class.
-func (e *ConformanceFailure) Unwrap() error { return ErrConformance }
+// errContentEvidence marks a conformance failure whose refusal derives
+// deterministically from the verified content itself (a digest mismatch, a
+// malformed manifest, a stray, a scan refusal): the one class a retry would
+// refuse identically, so the one class recovery may convert into a
+// committed loss. Everything unmarked — including operational I/O a shared
+// path wraps in the conformance class, and any failure site added later —
+// defaults to retryable in recovery; the destructive direction is opt-in.
+var errContentEvidence = errors.New("content evidence")
+
+// Unwrap makes errors.Is(err, ErrConformance) match the failure class, and
+// errors.Is(err, errContentEvidence) match the evidence-marked subset.
+func (e *ConformanceFailure) Unwrap() []error {
+	if e.ContentEvidence {
+		return []error{ErrConformance, errContentEvidence}
+	}
+	return []error{ErrConformance}
+}
 
 // failf builds a ConformanceFailure for check c with a formatted reason.
 func failf(c Check, format string, args ...any) error {
@@ -191,5 +209,17 @@ func failf(c Check, format string, args ...any) error {
 		Backend: BackendName,
 		Check:   c,
 		Reason:  fmt.Sprintf(format, args...),
+	}
+}
+
+// evidencef is failf plus the content-evidence mark; use it only where the
+// refusal is a deterministic fact about the verified content, never for
+// host or runtime I/O on the way to establishing one.
+func evidencef(c Check, format string, args ...any) error {
+	return &ConformanceFailure{
+		Backend:         BackendName,
+		Check:           c,
+		Reason:          fmt.Sprintf(format, args...),
+		ContentEvidence: true,
 	}
 }

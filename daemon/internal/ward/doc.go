@@ -146,6 +146,41 @@
 // together bind the writer's starting tree to the declared commit; a
 // legitimately empty commit remains clean and is accepted.
 //
+// The §5.4 leased auth-store mutation path relaxes exactly one mount, under
+// evidence at every step. A spec may mark one credential mount Writable only
+// together with an AuthStoreLeaseClaim; the gate acquires the per-identity
+// mutation lease itself (only it knows the handoff deadline and when the
+// writer is provably absent), sizes the window past its whole budget,
+// re-verifies holder and fence at the last instant before the writer starts,
+// and releases in teardown only once the writer's absence is proven — an
+// unproven writer keeps the window held, with expiry as the backstop. The
+// mutation itself is attested, not assumed: two observer VMs digest the
+// leased volume through read-only mounts before the writer and after its
+// absence proof, under the base observer's exact proof discipline, and the
+// result records that the store changed, never what changed (the §5.4 export
+// scan remains the content control). Every other credential mount stays
+// read-only under the unchanged checks.
+//
+// Restart safety is the journal plus Recover. The journal (an injected seam,
+// like the lease and conformance recorders; the store adapter is the
+// daemon's) records identity and unreconstructible proofs only — the run's
+// unpredictable ownership token, the spec digest, the held lease, the two
+// pre-writer facts, and writer-complete — never per-stage progress: after a
+// restart the runtime world classified by the persisted token is the only
+// trustworthy account of progress, and a persisted progress bit would be a
+// decoded trust bit recovery would believe instead of re-observing. Begin is
+// durable before the first runtime object exists, so no object can outlive
+// the daemon unrecorded. Recover re-gates the record and the caller's
+// re-supplied spec (digest-bound), then adopts only a writer-complete run
+// whose workspace is provably its own — everything earlier lost its egress
+// proof with the process and is torn down — re-earning every release check
+// with a fresh exporter. Loss is prove-then-persist: teardown's absence
+// proofs, then a full-listing ownership-token audit, then the durable close;
+// a nil-error loss is the caller's rerun-safe signal, an error commits
+// nothing and is retryable, and no path releases an export that did not just
+// pass verification. Serializing Recover against a live Handoff for the same
+// run is the caller's contract.
+//
 // Layout, by concept:
 //
 //   - errors.go        the Check vocabulary and typed ConformanceFailure
@@ -162,8 +197,11 @@
 //     capability declaration
 //   - conformance.go   pure verifiers for checks 1, 2, 4, and 5, the seeding
 //     roles' allowlist, and the seeded-base proof
-//   - handoff.go       the gate lifecycle: seeding, checks 3-5 sequencing, and
-//     teardown
+//   - handoff.go       the gate lifecycle: seeding, checks 3-5 sequencing,
+//     the lease lifecycle and credential-store observation, and teardown
+//   - journal.go       the durable handoff record and HandoffJournal seam
+//   - recover.go       restart-safe recovery: adopt-or-loss, the orphan
+//     audit, and the committed outcome
 //   - export_verify.go check 7: safe archive extraction, manifest and digest
 //     verification, and the fail-closed output-scanner hook
 //   - suite.go         the invocable conformance suite: Full (checks 1-5, 7,

@@ -569,53 +569,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		}
 	}
 
-	// Check 4: create the exporter but inspect it against the generated
-	// allowlist before it ever executes.
-	exporterSpec := buildExporterSpec(b.cfg, hs, names, ownershipLabel)
-	st.exporter.attempted = true
-	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(exporterSpec)); err != nil {
-		return nil, fmt.Errorf("create exporter container: %w", err)
-	}
-	st.exporter.owned = true
-	rep, err := b.rt.Inspect(ctx, names.Exporter)
-	if err != nil {
-		return nil, failf(CheckExporterAllowlist, "inspect exporter before execution: %v", err)
-	}
-	// As with the agent: the allowlist's identity check runs before the
-	// fingerprint is captured from the same report.
-	if err := verifyExporterAllowlist(b.cfg, rep, names.Exporter, names.Workspace); err != nil {
-		return nil, err
-	}
-	st.exporter.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, ownershipLabel)
-	if err != nil {
-		return nil, failf(CheckExporterAllowlist, "exporter container %q: %v", names.Exporter, err)
-	}
-	if err := b.rt.StartContainer(ctx, names.Exporter); err != nil {
-		return nil, fmt.Errorf("start exporter container: %w", err)
-	}
-	if err := b.waitStopped(ctx, names.Exporter, st.exporter, st.ownershipLabel, b.cfg.ExporterTimeout); err != nil {
-		return nil, failf(CheckExportVerification, "exporter: %v", err)
-	}
-
-	// Check 7: collect the stopped exporter's rootfs and verify both channels'
-	// manifests, digests, and the §5.4 scan before releasing anything. The
-	// archive and the extracted output are separate host-temp entities so the
-	// success path can hand the caller exactly the output directory with no
-	// leftover parent (teardown removes the archive; the output dir is the
-	// caller's once released).
-	st.archiveDir, err = os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-tar-")
-	if err != nil {
-		return nil, fmt.Errorf("create export archive dir: %w", err)
-	}
-	st.exportDir, err = os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-out-")
-	if err != nil {
-		return nil, fmt.Errorf("create export output dir: %w", err)
-	}
-	tarPath := filepath.Join(st.archiveDir, "export.tar")
-	if err := b.materializeRootFS(ctx, names.Exporter, tarPath, CheckExportVerification); err != nil {
-		return nil, err
-	}
-	out, err := b.verifyExport(ctx, tarPath, st.exportDir)
+	out, err := b.runExporter(ctx, hs, names, st)
 	if err != nil {
 		return nil, err
 	}
@@ -752,6 +706,73 @@ func (b *Backend) readCredProof(ctx context.Context, runID, id string, st *runSt
 		return "", failf(CheckAuthStoreMutationLease, "credential observer produced no proof")
 	}
 	return verifyCredProof(data, st.ownershipLabel.Value)
+}
+
+// runExporter runs checks 4 and 7 over the run's workspace: create the
+// exporter, inspect it against the generated allowlist before it ever
+// executes, run it to observed-stopped, then collect its rootfs and verify
+// both channels' manifests, digests, and the §5.4 scan before releasing
+// anything. The archive and the extracted output are separate host-temp
+// entities so the success path can hand the caller exactly the output
+// directory with no leftover parent (teardown removes the archive; the
+// output dir is the caller's once released). Recovery earns every one of
+// these checks freshly through this same body: an exporter a dead process
+// started has an unpersisted pre-execution inspection, so it is never
+// trusted, only rerun.
+func (b *Backend) runExporter(ctx context.Context, hs HandoffSpec, names handoffNames, st *runState) (*exportOutput, error) {
+	tarPath, err := b.materializeExport(ctx, hs, names, st)
+	if err != nil {
+		return nil, err
+	}
+	return b.verifyExport(ctx, tarPath, st.exportDir)
+}
+
+// materializeExport is the exporter's container-lifecycle stage: it runs the
+// pinned helper behind the pre-execution allowlist inspection and lands the
+// rootfs archive on the host. Its failures are about the exporter role or
+// the runtime, never evidence about the workspace content — recovery relies
+// on that split to keep them retryable, while verifyExport's refusals are
+// the content evidence a committed loss may stand on.
+func (b *Backend) materializeExport(ctx context.Context, hs HandoffSpec, names handoffNames, st *runState) (string, error) {
+	exporterSpec := buildExporterSpec(b.cfg, hs, names, st.ownershipLabel)
+	st.exporter.attempted = true
+	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(exporterSpec)); err != nil {
+		return "", fmt.Errorf("create exporter container: %w", err)
+	}
+	st.exporter.owned = true
+	rep, err := b.rt.Inspect(ctx, names.Exporter)
+	if err != nil {
+		return "", failf(CheckExporterAllowlist, "inspect exporter before execution: %v", err)
+	}
+	// As with the agent: the allowlist's identity check runs before the
+	// fingerprint is captured from the same report.
+	if err := verifyExporterAllowlist(b.cfg, rep, names.Exporter, names.Workspace); err != nil {
+		return "", err
+	}
+	st.exporter.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel)
+	if err != nil {
+		return "", failf(CheckExporterAllowlist, "exporter container %q: %v", names.Exporter, err)
+	}
+	if err := b.rt.StartContainer(ctx, names.Exporter); err != nil {
+		return "", fmt.Errorf("start exporter container: %w", err)
+	}
+	if err := b.waitStopped(ctx, names.Exporter, st.exporter, st.ownershipLabel, b.cfg.ExporterTimeout); err != nil {
+		return "", failf(CheckExportVerification, "exporter: %v", err)
+	}
+
+	st.archiveDir, err = os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-tar-")
+	if err != nil {
+		return "", fmt.Errorf("create export archive dir: %w", err)
+	}
+	st.exportDir, err = os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-out-")
+	if err != nil {
+		return "", fmt.Errorf("create export output dir: %w", err)
+	}
+	tarPath := filepath.Join(st.archiveDir, "export.tar")
+	if err := b.materializeRootFS(ctx, names.Exporter, tarPath, CheckExportVerification); err != nil {
+		return "", err
+	}
+	return tarPath, nil
 }
 
 func mustProxyAddress(proxyURL string) string {
@@ -950,6 +971,14 @@ func (b *Backend) releaseAuthStoreLease(ctx context.Context, st *runState) []str
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
 	defer cancel()
 	if err := b.cfg.AuthStoreLeaser.Release(ctx, st.lease.AuthIdentityID, st.lease.Holder, st.lease.Fence, b.cfg.Now()); err != nil {
+		if errors.Is(err, ErrLeaseWindowEnded) {
+			// Nothing left to end: expiry is the crash backstop and a
+			// takeover means the store already moved on. Either way this
+			// run holds no window, which is the released state teardown
+			// wants; the store's lease row remains the audit trail.
+			st.leaseHeld = false
+			return nil
+		}
 		return []string{fmt.Sprintf("release auth store mutation lease for identity %q: %v", st.lease.AuthIdentityID, err)}
 	}
 	st.leaseHeld = false

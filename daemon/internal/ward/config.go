@@ -19,6 +19,15 @@ import (
 // domain and store must not import ward, so ward declares the interface it
 // needs); the signatures mirror the store's lease methods one-for-one, so
 // that adapter is a transaction wrapper and nothing else.
+// ErrLeaseWindowEnded reports a release refused because the window is
+// already over: released, expired past its bound, or taken over by a later
+// holder with a bumped fence. AuthStoreLeaser implementations map the
+// store's not-held and outside-window release refusals to this sentinel
+// (errors.Is), so the gate can treat an already-ended window as nothing left
+// to release — the case every crash recovery that outlives the window hits —
+// while any other release failure stays a loud teardown problem.
+var ErrLeaseWindowEnded = errors.New("auth store mutation lease window already ended")
+
 type AuthStoreLeaser interface {
 	// Acquire takes or converges on the identity's lease for holder, with
 	// the given window. A live lease held by anyone else refuses; re-acquire

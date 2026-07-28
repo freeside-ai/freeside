@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -37,6 +38,16 @@ func redactPath(p string) string {
 	sum := sha256.Sum256([]byte(p))
 	return "path:" + hex.EncodeToString(sum[:])[:16]
 }
+
+// errExtractionCap marks the handoff-output byte cap: a fact about the
+// content's size, refused identically on every retry, unlike the host I/O
+// errors that share its return path.
+var errExtractionCap = errors.New("extraction cap exhausted")
+
+// errBlobMismatch marks a blob verification failure that is a verified
+// content fact (missing, wrong size, wrong digest) rather than host I/O on
+// the way to establishing one; only the marked subset is content evidence.
+var errBlobMismatch = errors.New("blob mismatch")
 
 // exportOutput is a verified handoff export: the extracted output directory
 // and its decoded manifests, released only after check 7 passed.
@@ -90,7 +101,7 @@ func (b *Backend) verifyExport(ctx context.Context, tarPath, destDir string) (*e
 		// reasons must never carry credential material, so the detail is
 		// withheld here. A scanner that needs to record specifics logs them to
 		// its own audited sink.
-		return nil, failf(CheckExportVerification, "output scan refused the export (details withheld)")
+		return nil, evidencef(CheckExportVerification, "output scan refused the export (details withheld)")
 	}
 	return &exportOutput{Dir: destDir, Manifest: manifest, Evidence: evidence, EvidencePresent: evidencePresent, CommitPlanPresent: planPresent}, nil
 }
@@ -105,11 +116,15 @@ func (b *Backend) verifyCommitPlan(destDir string) (bool, error) {
 	}
 	defer f.Close() //nolint:errcheck // read-only handle
 	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		return false, failf(CheckExportVerification, "commit plan is not a regular file")
+	if err != nil {
+		// Host I/O on the way to the shape check, not a verified fact.
+		return false, failf(CheckExportVerification, "stat commit plan")
+	}
+	if !info.Mode().IsRegular() {
+		return false, evidencef(CheckExportVerification, "commit plan is not a regular file")
 	}
 	if info.Size() > b.cfg.MaxManifestBytes {
-		return false, failf(CheckExportVerification, "commit plan exceeds the byte cap")
+		return false, evidencef(CheckExportVerification, "commit plan exceeds the byte cap")
 	}
 	return true, nil
 }
@@ -146,11 +161,11 @@ func (b *Backend) extractHandoff(tarPath, destDir string) error {
 			return failf(CheckExportVerification, "read exported archive: %v", err)
 		}
 		if len(hdr.Name) > maxArchivePathBytes {
-			return failf(CheckExportVerification, "archive entry path exceeds the length cap")
+			return evidencef(CheckExportVerification, "archive entry path exceeds the length cap")
 		}
 		name := path.Clean(strings.TrimPrefix(hdr.Name, "./"))
 		if strings.HasPrefix(name, "/") || name == ".." || strings.HasPrefix(name, "../") {
-			return failf(CheckExportVerification, "archive entry %s escapes the archive root", redactPath(hdr.Name))
+			return evidencef(CheckExportVerification, "archive entry %s escapes the archive root", redactPath(hdr.Name))
 		}
 		// Only the handoff output crosses to the host filesystem; every other
 		// rootfs entry (OS files, a stray /handoff-proof.txt) is skipped.
@@ -160,7 +175,7 @@ func (b *Backend) extractHandoff(tarPath, destDir string) error {
 		rel := strings.TrimPrefix(strings.TrimPrefix(name, handoffRel), "/")
 		if rel == "" {
 			if hdr.Typeflag != tar.TypeDir {
-				return failf(CheckExportVerification, "handoff root is not a directory")
+				return evidencef(CheckExportVerification, "handoff root is not a directory")
 			}
 			continue
 		}
@@ -169,11 +184,11 @@ func (b *Backend) extractHandoff(tarPath, destDir string) error {
 			parent = ""
 		}
 		if _, ok := seenDirs[parent]; !ok {
-			return failf(CheckExportVerification, "handoff output parent directory was not declared")
+			return evidencef(CheckExportVerification, "handoff output parent directory was not declared")
 		}
 		outputEntries++
 		if outputEntries > b.cfg.MaxExportEntries {
-			return failf(CheckExportVerification, "handoff output exceeds the entry cap")
+			return evidencef(CheckExportVerification, "handoff output exceeds the entry cap")
 		}
 		dest := filepath.Join(destDir, filepath.FromSlash(rel))
 		switch hdr.Typeflag {
@@ -189,14 +204,20 @@ func (b *Backend) extractHandoff(tarPath, destDir string) error {
 			extracted += n
 			if err != nil {
 				// extractFile returns path-free category errors, safe to
-				// include; the entry name is redacted.
+				// include; the entry name is redacted. The byte cap is the
+				// one deterministic refusal on this path — the output's
+				// size is a fact about the content, refused identically on
+				// every retry — while the write errors are host I/O.
+				if errors.Is(err, errExtractionCap) {
+					return evidencef(CheckExportVerification, "extract entry %s: %v", redactPath(name), err)
+				}
 				return failf(CheckExportVerification, "extract entry %s: %v", redactPath(name), err)
 			}
 		default:
 			// A symlink, hardlink, or device inside the handoff output
 			// can redirect later reads or writes; the §5.6 output is
 			// regular files in directories, full stop.
-			return failf(CheckExportVerification,
+			return evidencef(CheckExportVerification,
 				"handoff output entry %s has non-regular type %q", redactPath(name), string(hdr.Typeflag))
 		}
 	}
@@ -210,7 +231,7 @@ func (b *Backend) extractHandoff(tarPath, destDir string) error {
 // name and this reports only what went wrong, never where.
 func extractFile(r io.Reader, dest string, budget int64) (int64, error) {
 	if budget < 0 {
-		return 0, errors.New("extraction cap exhausted")
+		return 0, errExtractionCap
 	}
 	f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // dest is joined under the gate-owned destDir
 	if err != nil {
@@ -229,7 +250,7 @@ func extractFile(r io.Reader, dest string, budget int64) (int64, error) {
 		// exactly filled the remaining budget; a byte proves overflow.
 		var probe [1]byte
 		if m, perr := io.ReadFull(r, probe[:]); m > 0 {
-			return n, errors.New("extraction cap exhausted")
+			return n, errExtractionCap
 		} else if perr != nil && !errors.Is(perr, io.EOF) {
 			return n, errors.New("read failed")
 		}
@@ -245,6 +266,13 @@ func (b *Backend) verifyManifest(destDir string) (export.Manifest, map[string]bo
 	var manifest export.Manifest
 	mf, err := os.Open(filepath.Join(destDir, export.ManifestFilename)) //nolint:gosec // gate-owned extraction dir
 	if err != nil {
+		// An absent required manifest is a verified content fact — the
+		// extraction just wrote this directory, so the helper never emitted
+		// one, identically on every retry — while any other open failure is
+		// host I/O.
+		if errors.Is(err, os.ErrNotExist) {
+			return manifest, nil, evidencef(CheckExportVerification, "manifest is missing")
+		}
 		return manifest, nil, failf(CheckExportVerification, "read manifest: %v", err)
 	}
 	defer mf.Close() //nolint:errcheck // read-only handle
@@ -257,7 +285,7 @@ func (b *Backend) verifyManifest(destDir string) (export.Manifest, map[string]bo
 		return manifest, nil, failf(CheckExportVerification, "read manifest: %v", err)
 	}
 	if int64(len(raw)) > b.cfg.MaxManifestBytes {
-		return manifest, nil, failf(CheckExportVerification, "manifest exceeds the %d-byte cap", b.cfg.MaxManifestBytes)
+		return manifest, nil, evidencef(CheckExportVerification, "manifest exceeds the %d-byte cap", b.cfg.MaxManifestBytes)
 	}
 	// The raw manifest bytes are the artifact released to the gauntlet, but
 	// encoding/json is last-value-wins on duplicate members, so a hostile
@@ -267,25 +295,25 @@ func (b *Backend) verifyManifest(destDir string) (export.Manifest, map[string]bo
 	// same structural gate the runtime decoders apply, so the validated view
 	// and the released bytes cannot disagree.
 	if err := RejectDuplicateJSONKeys(raw); err != nil {
-		return manifest, nil, failf(CheckExportVerification, "manifest is not canonical %s JSON", export.ManifestVersion)
+		return manifest, nil, evidencef(CheckExportVerification, "manifest is not canonical %s JSON", export.ManifestVersion)
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&manifest); err != nil {
 		// A decode error can quote an unknown field name or value from the
 		// manifest, which is workspace-derived; report the failure without it.
-		return manifest, nil, failf(CheckExportVerification, "manifest is not valid %s JSON", export.ManifestVersion)
+		return manifest, nil, evidencef(CheckExportVerification, "manifest is not valid %s JSON", export.ManifestVersion)
 	}
 	// Decode stops at the first JSON value; trailing bytes would be released
 	// in the output directory unchecked, and downstream consumes the bytes,
 	// not this struct. Require the manifest file to be exactly one value.
 	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
-		return manifest, nil, failf(CheckExportVerification, "manifest carries trailing bytes after the first JSON value")
+		return manifest, nil, evidencef(CheckExportVerification, "manifest carries trailing bytes after the first JSON value")
 	}
 	if err := manifest.Validate(); err != nil {
 		// A validation error names the offending entry path, which is
 		// workspace-derived; report the failure without it.
-		return manifest, nil, failf(CheckExportVerification, "manifest failed %s validation", export.ManifestVersion)
+		return manifest, nil, evidencef(CheckExportVerification, "manifest failed %s validation", export.ManifestVersion)
 	}
 
 	referenced := make(map[string]bool)
@@ -310,11 +338,14 @@ func (b *Backend) verifyManifest(destDir string) (export.Manifest, map[string]bo
 		}
 		verified[key] = true
 		if err := verifyBlob(filepath.Join(destDir, filepath.FromSlash(rel)), hexDigest, *e.Size); err != nil {
+			if !errors.Is(err, errBlobMismatch) {
+				return manifest, nil, failf(CheckExportVerification, "blob %s read failed: %v", redactPath(hexDigest), err)
+			}
 			// hexDigest is manifest-derived (attacker-influenced) and a regular
 			// entry's digest field could encode a credential as 64 hex chars;
 			// redact it to a stable token and rely on verifyBlob's value-free
 			// category error, so a refused export cannot echo the raw digest.
-			return manifest, nil, failf(CheckExportVerification, "blob %s failed verification: %v", redactPath(hexDigest), err)
+			return manifest, nil, evidencef(CheckExportVerification, "blob %s failed verification: %v", redactPath(hexDigest), err)
 		}
 	}
 	return manifest, referenced, nil
@@ -343,13 +374,13 @@ func (b *Backend) verifyEvidence(destDir string) (export.EvidenceManifest, bool,
 		return em, false, nil, failf(CheckExportVerification, "read evidence manifest: %v", err)
 	}
 	if int64(len(raw)) > b.cfg.MaxManifestBytes {
-		return em, false, nil, failf(CheckExportVerification, "evidence manifest exceeds the %d-byte cap", b.cfg.MaxManifestBytes)
+		return em, false, nil, evidencef(CheckExportVerification, "evidence manifest exceeds the %d-byte cap", b.cfg.MaxManifestBytes)
 	}
 	em, err = export.DecodeEvidenceManifest(raw)
 	if err != nil {
 		// A decode error can quote workspace-derived label/field bytes; report
 		// the failure without them.
-		return export.EvidenceManifest{}, false, nil, failf(CheckExportVerification, "evidence manifest is not valid %s", export.EvidenceManifestVersion)
+		return export.EvidenceManifest{}, false, nil, evidencef(CheckExportVerification, "evidence manifest is not valid %s", export.EvidenceManifestVersion)
 	}
 
 	referenced := make(map[string]bool)
@@ -365,7 +396,10 @@ func (b *Backend) verifyEvidence(destDir string) (export.EvidenceManifest, bool,
 		}
 		verified[key] = true
 		if err := verifyBlob(filepath.Join(destDir, filepath.FromSlash(rel)), hexDigest, e.Size); err != nil {
-			return export.EvidenceManifest{}, false, nil, failf(CheckExportVerification, "evidence blob %s failed verification: %v", redactPath(hexDigest), err)
+			if !errors.Is(err, errBlobMismatch) {
+				return export.EvidenceManifest{}, false, nil, failf(CheckExportVerification, "evidence blob %s read failed: %v", redactPath(hexDigest), err)
+			}
+			return export.EvidenceManifest{}, false, nil, evidencef(CheckExportVerification, "evidence blob %s failed verification: %v", redactPath(hexDigest), err)
 		}
 	}
 	return em, true, referenced, nil
@@ -379,8 +413,16 @@ func (b *Backend) verifyEvidence(destDir string) (export.EvidenceManifest, bool,
 func verifyBlob(blobPath, wantHex string, wantSize int64) error {
 	f, err := os.Open(blobPath) //nolint:gosec // path built from a validated manifest digest under the gate-owned dir
 	if err != nil {
-		// The os error embeds blobPath, which carries the manifest digest.
-		return errors.New("missing or unreadable")
+		// A missing blob is a verified content fact — extraction just wrote
+		// the output, so an absent referenced blob refuses identically on
+		// every retry — but a present-yet-unopenable one is host I/O; the
+		// two are split so only the former carries the evidence mark. The
+		// os error embeds blobPath, which carries the manifest digest, so
+		// neither message includes it.
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: missing", errBlobMismatch)
+		}
+		return errors.New("unreadable")
 	}
 	defer f.Close() //nolint:errcheck // read-only handle
 	h := sha256.New()
@@ -389,10 +431,10 @@ func verifyBlob(blobPath, wantHex string, wantSize int64) error {
 		return errors.New("read failed")
 	}
 	if n != wantSize {
-		return errors.New("size does not match the manifest")
+		return fmt.Errorf("%w: size does not match the manifest", errBlobMismatch)
 	}
 	if got := hex.EncodeToString(h.Sum(nil)); got != wantHex {
-		return errors.New("content does not match the manifest digest")
+		return fmt.Errorf("%w: content does not match the manifest digest", errBlobMismatch)
 	}
 	return nil
 }
@@ -427,7 +469,7 @@ func verifyNoStrays(destDir string, repoRef, evidenceRef map[string]bool, eviden
 			if allowedDirs[rel] {
 				return nil
 			}
-			return failf(CheckExportVerification, "output carries unreferenced directory %s", redactPath(rel))
+			return evidencef(CheckExportVerification, "output carries unreferenced directory %s", redactPath(rel))
 		}
 		if rel == export.ManifestFilename || repoRef[rel] {
 			return nil
@@ -439,6 +481,6 @@ func verifyNoStrays(destDir string, repoRef, evidenceRef map[string]bool, eviden
 			return nil
 		}
 		// rel is an attacker-derived output filename; redact it in the reason.
-		return failf(CheckExportVerification, "output carries unreferenced file %s", redactPath(rel))
+		return evidencef(CheckExportVerification, "output carries unreferenced file %s", redactPath(rel))
 	})
 }
