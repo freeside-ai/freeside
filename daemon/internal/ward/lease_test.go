@@ -30,6 +30,10 @@ type fakeLeaser struct {
 }
 
 func (l *fakeLeaser) recordCall(s string) {
+	if l.rt == nil {
+		// Live tests drive a real runtime; there is no shared call log.
+		return
+	}
 	l.rt.mu.Lock()
 	defer l.rt.mu.Unlock()
 	l.rt.calls = append(l.rt.calls, s)
