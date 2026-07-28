@@ -582,13 +582,14 @@ func waiverConfiguredFor(repositoryID int64, policy AdmissionPolicy) bool {
 
 // requiredCapabilities returns the floor a mode must clear: the configured
 // floor plus the capabilities the plan itself requires of the mode.
-// Unattended running demands networkless export (§5.7), so a misconfigured
-// floor cannot admit an unattended record without that proof. The switch omits
-// default so a new mode decides its own plan-mandated minimum.
+// Unattended running demands the networkless-export proof and the enforced
+// provider-egress proof (§5.7), so a misconfigured floor cannot admit an
+// unattended record without them. The switch omits default so a new mode
+// decides its own plan-mandated minimum.
 func requiredCapabilities(mode OperatingMode, floor CapabilitySnapshot) []RunnerCapability {
 	switch mode {
 	case ModeUnattended:
-		return append(floor.Clone(), CapNetworklessExport)
+		return append(floor.Clone(), CapNetworklessExport, CapEnforcedProviderEgress)
 	case ModeAttendedDev:
 		return floor
 	}

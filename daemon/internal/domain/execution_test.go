@@ -418,6 +418,26 @@ func TestAdmittedUnder(t *testing.T) {
 			domain.ErrCapabilityBelowFloor,
 		},
 		{
+			// §5.7 likewise requires the enforced provider-egress proof of an
+			// unattended run (issue #327): a snapshot carrying everything but
+			// it fails closed, whatever the configured floor says.
+			"unattended without enforced provider egress",
+			mustAdmission(t, func() domain.ExecutionAdmissionInput {
+				in := admissionInput()
+				in.OperatingMode = domain.ModeUnattended
+				in.Capabilities = domain.NewCapabilitySnapshot(
+					domain.CapDetachableWorkspace, domain.CapPostExitExport,
+					domain.CapReadOnlyRemount, domain.CapNetworklessExport)
+				in.TrustProfileDigest = &profile
+				in.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
+					RepositoryID: 424242, Reason: "1a.2",
+				}
+				return in
+			}()),
+			domain.AdmissionPolicy{Floors: floor, ApprovedCredentialModes: approved},
+			domain.ErrCapabilityBelowFloor,
+		},
+		{
 			"waiver matching the operator's", waived,
 			domain.AdmissionPolicy{
 				Floors: floor, ApprovedCredentialModes: approved,

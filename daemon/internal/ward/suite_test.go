@@ -47,6 +47,7 @@ func newSuiteTest(t *testing.T) (*Suite, *fakeRuntime) {
 	// PreJob cases model a backend whose startup Full already passed. Full
 	// itself clears this state on entry and earns it again only on success.
 	b.networkless.Store(true)
+	b.providerEgress.Store(true)
 	// The default writer emits this run's sentinel; a passing-path export must
 	// carry it (and not the credential marker) for Full's non-vacuousness check.
 	// Tests that assert a containment failure override this.
@@ -714,6 +715,15 @@ func TestSuiteFullOlderSuccessCannotOverrideNewerFailure(t *testing.T) {
 func TestSuitePreJobRequiresNetworklessProof(t *testing.T) {
 	s, rt := newSuiteTest(t)
 	s.b.networkless.Store(false)
+	wantCheckFailure(t, s.PreJob(context.Background()), CheckPreJobProbe)
+	if rt.callIndex("list-volumes") >= 0 {
+		t.Error("PreJob touched the runtime before refusing the missing capability")
+	}
+}
+
+func TestSuitePreJobRequiresEgressProof(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	s.b.providerEgress.Store(false)
 	wantCheckFailure(t, s.PreJob(context.Background()), CheckPreJobProbe)
 	if rt.callIndex("list-volumes") >= 0 {
 		t.Error("PreJob touched the runtime before refusing the missing capability")

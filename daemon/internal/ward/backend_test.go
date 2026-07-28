@@ -186,6 +186,21 @@ func TestConcludePersistsBeforePublishing(t *testing.T) {
 	}
 }
 
+// TestUnattendedFloorMatchesTheClassCeiling binds ward's hand-maintained
+// unattended floor to the domain's registered ceiling: for this backend
+// everything provable is required, so a capability added to either
+// registration point without the other is a drift this test catches.
+func TestUnattendedFloorMatchesTheClassCeiling(t *testing.T) {
+	ceiling, ok := domain.ProvableCapabilities(domain.BackendFreshVMReadOnlyVolumeHandoff)
+	if !ok {
+		t.Fatal("fresh-vm class has no registered ceiling")
+	}
+	floor := domain.NewCapabilitySnapshot(unattendedCapabilities...)
+	if !slices.Equal(floor, ceiling) {
+		t.Fatalf("unattendedCapabilities = %v, want the class ceiling %v", floor, ceiling)
+	}
+}
+
 // TestProvenCapabilitiesMatchTheClassCeiling binds ward's explicit proven set
 // to the domain's registered ceiling for its class: a capability added on one
 // side without the other is a drift this test catches, in both directions.
