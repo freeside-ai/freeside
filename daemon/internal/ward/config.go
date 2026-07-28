@@ -116,6 +116,11 @@ type Config struct {
 	// BaseProofPath is where the observer writes the seeded-base proof file on
 	// its root filesystem. Defaults to "/handoff-base.txt".
 	BaseProofPath string
+	// CredProofPath is where the credential-store observer writes its digest
+	// proof file on its own root filesystem. Defaults to "/handoff-cred.txt".
+	// It is distinct from BaseProofPath so the two observer roles stay
+	// distinguishable by the proof they produce.
+	CredProofPath string
 	// SeedTimeout bounds each seeding runtime call and the wait for the seeder
 	// and observer to reach observed state stopped. Defaults to 5 minutes.
 	SeedTimeout time.Duration
@@ -143,7 +148,9 @@ type Config struct {
 	// live indefinitely. This bounds every side-effecting call from one place;
 	// teardown detaches from it (context.WithoutCancel) and reaps what it
 	// interrupts. Defaults to WriterStopTimeout + ExporterTimeout +
-	// 4*SeedTimeout + 15 minutes.
+	// 6*SeedTimeout + 15 minutes: the four seed operations plus the two
+	// credential observers a leased run adds, each riding the SeedTimeout
+	// per-operation bound.
 	HandoffTimeout time.Duration
 	// PollInterval is the state-poll spacing. Defaults to 500ms.
 	PollInterval time.Duration
@@ -203,6 +210,9 @@ func (cfg Config) withDefaults() Config {
 	if cfg.BaseProofPath == "" {
 		cfg.BaseProofPath = "/handoff-base.txt"
 	}
+	if cfg.CredProofPath == "" {
+		cfg.CredProofPath = "/handoff-cred.txt"
+	}
 	if cfg.SeedTimeout == 0 {
 		cfg.SeedTimeout = 5 * time.Minute
 	}
@@ -234,7 +244,7 @@ func (cfg Config) withDefaults() Config {
 		// Seeding contributes four SeedTimeout-bounded operations, not two:
 		// the two staged copies as well as the seeder's and observer's waits.
 		// Counting only the waits would quietly spend the export slack.
-		cfg.HandoffTimeout = cfg.WriterStopTimeout + cfg.ExporterTimeout + 4*cfg.SeedTimeout + 15*time.Minute
+		cfg.HandoffTimeout = cfg.WriterStopTimeout + cfg.ExporterTimeout + 6*cfg.SeedTimeout + 15*time.Minute
 	}
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = 500 * time.Millisecond
@@ -285,6 +295,8 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: SeedReadyDir %q is not a clean absolute non-root path", ErrInvalidConfig, cfg.SeedReadyDir)
 	case !cleanAbs(cfg.BaseProofPath):
 		return fmt.Errorf("%w: BaseProofPath %q is not a clean absolute non-root path", ErrInvalidConfig, cfg.BaseProofPath)
+	case !cleanAbs(cfg.CredProofPath):
+		return fmt.Errorf("%w: CredProofPath %q is not a clean absolute non-root path", ErrInvalidConfig, cfg.CredProofPath)
 	case !copyPathSafe(cfg.SeedStageDir):
 		return fmt.Errorf("%w: SeedStageDir %q carries a container-reference delimiter", ErrInvalidConfig, cfg.SeedStageDir)
 	case !copyPathSafe(cfg.SeedReadyDir):
@@ -342,7 +354,7 @@ func (cfg Config) validate() error {
 	// would silently seed nothing. The gate leans on all of this, so it is
 	// asserted here rather than left to depend on the default values.
 	if err := disjointPaths(cfg.WorkspaceTarget, cfg.HandoffDir, cfg.ProofPath,
-		cfg.SeedStageDir, cfg.SeedReadyDir, cfg.BaseProofPath); err != nil {
+		cfg.SeedStageDir, cfg.SeedReadyDir, cfg.BaseProofPath, cfg.CredProofPath); err != nil {
 		return err
 	}
 	// WorkspaceTarget is phrased into the exporter's --mount value; a comma or

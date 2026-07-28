@@ -365,6 +365,130 @@ func verifySeedRoleAllowlist(cfg Config, rep InspectReport, spec ContainerSpec, 
 	return nil
 }
 
+// verifyCredentialObserverAllowlist approves one credential-store observer
+// from its runtime-observed configuration, before it executes.
+//
+// Deliberately separate from verifySeedRoleAllowlist for the same reason that
+// is separate from verifyExporterAllowlist: each is a frozen contract
+// surface, and divergence between them should be a deliberate, reviewed one.
+// The differences here: the single mount is the leased credential volume at
+// its declared target rather than the workspace, always read-only (this
+// container attests the store; only the writer, under the lease, may mutate
+// it).
+func verifyCredentialObserverAllowlist(rep InspectReport, spec ContainerSpec) error {
+	if len(spec.Mounts) != 1 {
+		// The gate generates these specs, so a caller cannot reach this. It is
+		// asserted rather than assumed so the mount indexing below is total.
+		return failf(CheckAuthStoreMutationLease, "credential observer spec does not carry exactly one mount")
+	}
+	if rep.ID != spec.Name {
+		return failf(CheckAuthStoreMutationLease, "credential observer inspection identified the wrong container")
+	}
+	if !rep.AllowlistFieldsObserved {
+		return failf(CheckAuthStoreMutationLease, "credential observer inspection omitted required configuration")
+	}
+	if !sameImage(spec.Image, rep.ImageReference) {
+		return failf(CheckAuthStoreMutationLease, "credential observer inspection reported the wrong image")
+	}
+	if !slices.Equal(rep.Command, spec.Command) {
+		return failf(CheckAuthStoreMutationLease, "credential observer inspection reported the wrong command")
+	}
+	if rep.WorkingDirectory != "/" {
+		return failf(CheckAuthStoreMutationLease, "credential observer working directory is not the fixed image root")
+	}
+	// Inspect-before-execution, as for every other role: a container observed
+	// in any other state may already have run before the gate approved it.
+	if rep.State != StateStopped {
+		return failf(CheckAuthStoreMutationLease, "credential observer was not observed stopped before execution")
+	}
+	if n := len(rep.Mounts); n != 1 {
+		return failf(CheckAuthStoreMutationLease, "credential observer does not carry exactly one persistent mount")
+	}
+	m := rep.Mounts[0]
+	switch {
+	case m.AccessConflict:
+		return failf(CheckAuthStoreMutationLease, "credential observer mount reports contradictory ro/rw access")
+	case m.Type != MountVolume:
+		return failf(CheckAuthStoreMutationLease, "credential observer persistent mount is not a volume")
+	case m.Source != spec.Mounts[0].Source:
+		return failf(CheckAuthStoreMutationLease, "credential observer mounts the wrong volume")
+	case m.Target != spec.Mounts[0].Target:
+		return failf(CheckAuthStoreMutationLease, "credential observer mounts the volume at the wrong target")
+	case !m.ReadOnly:
+		return failf(CheckAuthStoreMutationLease, "credential observer mount is not read-only")
+	}
+	if rep.SSH {
+		return failf(CheckAuthStoreMutationLease, "credential observer has SSH forwarding configured")
+	}
+	if n := len(rep.PublishedSockets); n > 0 {
+		return failf(CheckAuthStoreMutationLease, "credential observer publishes %d sockets, want 0", n)
+	}
+	if n := len(rep.PublishedPorts); n > 0 {
+		return failf(CheckAuthStoreMutationLease, "credential observer publishes %d ports, want 0", n)
+	}
+	if !rep.NetworksObserved {
+		return failf(CheckAuthStoreMutationLease, "credential observer inspection omitted network attachments")
+	}
+	if rep.NetworkAttachmentCount != 0 {
+		return failf(CheckAuthStoreMutationLease, "credential observer has %d network attachments, want 0", rep.NetworkAttachmentCount)
+	}
+	if !sameEnvironment(rep.Env, []string{fixedContainerPathEnv}) {
+		return failf(CheckAuthStoreMutationLease, "credential observer environment does not match the fixed PATH allowlist")
+	}
+	return nil
+}
+
+// verifyCredProof reads the credential observer's proof file and returns the
+// observed tree digest. Held to verifyBaseProof's line: the proof comes out
+// of an archive nothing has scanned, so it is parsed strictly and never
+// echoed — every required key exactly once, no unknown key, the nonce must be
+// this invocation's unpredictable token (that is what makes the proof this
+// run's, not a file the image shipped or an earlier run left), and the digest
+// must be shaped like one before anything compares it.
+func verifyCredProof(data []byte, nonce string) (string, error) {
+	seen := map[string]bool{}
+	var digest string
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	for sc.Scan() {
+		line := strings.TrimRight(sc.Text(), "\r")
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			return "", failf(CheckAuthStoreMutationLease, "credential proof carries a line that is not key=value")
+		}
+		if seen[key] {
+			return "", failf(CheckAuthStoreMutationLease, "credential proof repeats a required key")
+		}
+		seen[key] = true
+		switch key {
+		case credProofNonceKey:
+			if value != nonce {
+				// Categorical: naming the mismatch would confirm a guessed
+				// token to whoever produced the file.
+				return "", failf(CheckAuthStoreMutationLease, "credential proof reports an unexpected value for a required key")
+			}
+		case credProofTreeKey:
+			if !sha256HexPattern.MatchString(value) {
+				return "", failf(CheckAuthStoreMutationLease, "credential proof reports a value that is not a tree digest")
+			}
+			digest = value
+		default:
+			return "", failf(CheckAuthStoreMutationLease, "credential proof carries an unknown key")
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "credential proof unreadable")
+	}
+	for _, key := range []string{credProofNonceKey, credProofTreeKey} {
+		if !seen[key] {
+			return "", failf(CheckAuthStoreMutationLease, "credential proof omits a required key")
+		}
+	}
+	return digest, nil
+}
+
 // verifyBaseProof reads the observer's proof file and returns the base the
 // workspace was observed to hold.
 //

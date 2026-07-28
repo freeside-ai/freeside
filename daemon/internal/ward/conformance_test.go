@@ -192,6 +192,60 @@ func TestValidateAgentSpecLeasedViolations(t *testing.T) {
 	}
 }
 
+// TestVerifyCredProof enumerates the credential proof's input space: the
+// proof comes out of an unscanned archive, so every malformed, incomplete,
+// duplicated, or forged shape is refused and nothing from it is echoed.
+func TestVerifyCredProof(t *testing.T) {
+	const nonce = "00000000000000000000000000000000"
+	digest := strings.Repeat("ab", 32)
+	valid := "nonce=" + nonce + "\ncred_tree=" + digest + "\n"
+
+	got, err := verifyCredProof([]byte(valid), nonce)
+	if err != nil || got != digest {
+		t.Fatalf("verifyCredProof(valid) = %q, %v; want digest, nil", got, err)
+	}
+	// Order independence and CRLF tolerance, the only laxities the parser has.
+	if _, err := verifyCredProof([]byte("cred_tree="+digest+"\r\nnonce="+nonce+"\r\n"), nonce); err != nil {
+		t.Fatalf("verifyCredProof(reordered CRLF) = %v, want nil", err)
+	}
+
+	cases := []struct {
+		name  string
+		proof string
+	}{
+		{"empty", ""},
+		{"missing digest", "nonce=" + nonce + "\n"},
+		{"missing nonce", "cred_tree=" + digest + "\n"},
+		{"wrong nonce", "nonce=ffffffffffffffffffffffffffffffff\ncred_tree=" + digest + "\n"},
+		{"repeated nonce", "nonce=" + nonce + "\nnonce=" + nonce + "\ncred_tree=" + digest + "\n"},
+		{"repeated digest", valid + "cred_tree=" + digest + "\n"},
+		{"unknown key", valid + "extra=1\n"},
+		{"not key=value", valid + "garbage\n"},
+		{"short digest", "nonce=" + nonce + "\ncred_tree=" + strings.Repeat("ab", 20) + "\n"},
+		{"uppercase digest", "nonce=" + nonce + "\ncred_tree=" + strings.ToUpper(digest) + "\n"},
+		{"digest with suffix", "nonce=" + nonce + "\ncred_tree=" + digest + "x\n"},
+		{"nonce with prefix", "nonce=x" + nonce + "\ncred_tree=" + digest + "\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := verifyCredProof([]byte(tc.proof), nonce)
+			if !errors.Is(err, ErrConformance) {
+				t.Fatalf("verifyCredProof = %v, want ErrConformance", err)
+			}
+			var cf *ConformanceFailure
+			if !errors.As(err, &cf) {
+				t.Fatalf("error %v is not a *ConformanceFailure", err)
+			}
+			if cf.Check != CheckAuthStoreMutationLease {
+				t.Errorf("Check = %q, want %q", cf.Check, CheckAuthStoreMutationLease)
+			}
+			if strings.Contains(cf.Reason, nonce) || strings.Contains(cf.Reason, digest) {
+				t.Errorf("failure reason echoes proof content: %s", cf.Reason)
+			}
+		})
+	}
+}
+
 // TestValidateAgentSpecRedactsMalformedEnv proves the pre-create refusal
 // never echoes an environment entry. A malformed bare entry is untrusted
 // caller input and may itself be a credential copied into the list without

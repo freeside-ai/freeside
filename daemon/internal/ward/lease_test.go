@@ -36,7 +36,8 @@ func (l *fakeLeaser) recordCall(s string) {
 }
 
 func (l *fakeLeaser) Acquire(_ context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
-	now, expiresAt time.Time) (domain.AuthStoreMutationLease, error) {
+	now, expiresAt time.Time,
+) (domain.AuthStoreMutationLease, error) {
 	l.recordCall("lease-acquire " + string(id))
 	if l.onAcquire != nil {
 		return l.onAcquire(id, holder, now, expiresAt)
@@ -403,6 +404,126 @@ func TestHandoffLeasedEarlyRefusalStillReleases(t *testing.T) {
 	}
 }
 
+// TestHandoffLeasedMutationAttested: the writer mutates its store inside the
+// window, and the result attests it — digests differ, Mutated is true, and
+// the record carries the lease's identity, holder, fence, and window.
+func TestHandoffLeasedMutationAttested(t *testing.T) {
+	fx := newHandoffFixture(t)
+	hs, _ := fx.leased(t)
+	names := namesFor(hs.RunID)
+	vol := hs.Agent.CredentialMounts[0].Volume
+	fx.rt.onStart = func(id string) error {
+		if id == names.Agent {
+			fx.rt.credState[vol] = "mutated-by-writer"
+		}
+		return nil
+	}
+
+	res, err := fx.runSpec(t, hs)
+	if err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+	obs := res.AuthStore
+	if !obs.Leased || !obs.Mutated {
+		t.Errorf("AuthStore = %+v, want Leased and Mutated", obs)
+	}
+	if obs.PreDigest == obs.PostDigest {
+		t.Error("digests are equal despite the mutation")
+	}
+	if !sha256HexPattern.MatchString(obs.PreDigest) || !sha256HexPattern.MatchString(obs.PostDigest) {
+		t.Errorf("digests are not tree-digest shaped: pre=%q post=%q", obs.PreDigest, obs.PostDigest)
+	}
+	if obs.AuthIdentityID != "identity-fixture" || obs.Holder != "holder-fixture" || obs.Fence != 1 {
+		t.Errorf("AuthStore identity fields = %+v, want the acquired lease's", obs)
+	}
+	fx.assertReaped(t)
+}
+
+// TestHandoffLeasedUnchangedStoreAttestedUnmutated: a leased writer that
+// never touches its store yields equal digests and Mutated false — the
+// observation reports what happened, not what the lease allowed.
+func TestHandoffLeasedUnchangedStoreAttestedUnmutated(t *testing.T) {
+	fx := newHandoffFixture(t)
+	hs, _ := fx.leased(t)
+
+	res, err := fx.runSpec(t, hs)
+	if err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+	obs := res.AuthStore
+	if !obs.Leased || obs.Mutated {
+		t.Errorf("AuthStore = %+v, want Leased and not Mutated", obs)
+	}
+	if obs.PreDigest != obs.PostDigest || obs.PreDigest == "" {
+		t.Errorf("digests: pre=%q post=%q, want equal and non-empty", obs.PreDigest, obs.PostDigest)
+	}
+	fx.assertReaped(t)
+}
+
+// TestHandoffNonLeasedZeroAuthStoreObservation: a run with no lease claim
+// reports the zero observation, distinguishable by Leased.
+func TestHandoffNonLeasedZeroAuthStoreObservation(t *testing.T) {
+	fx := newHandoffFixture(t)
+	res, err := fx.run(t)
+	if err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+	if res.AuthStore != (AuthStoreObservation{}) {
+		t.Errorf("AuthStore = %+v, want zero", res.AuthStore)
+	}
+	names := namesFor(testHandoffSpec().RunID)
+	for _, id := range []string{names.CredObsPre, names.CredObsPost} {
+		if fx.rt.callIndex("create-container "+id) != -1 {
+			t.Errorf("credential observer %q ran on a non-leased handoff", id)
+		}
+	}
+}
+
+// TestHandoffLeasedTamperedCredProofRefused: a proof carrying a wrong nonce
+// is a file anyone could have left; the observation is refused, categorically.
+func TestHandoffLeasedTamperedCredProofRefused(t *testing.T) {
+	fx := newHandoffFixture(t)
+	hs, _ := fx.leased(t)
+	names := namesFor(hs.RunID)
+	fx.rt.observerProof = func(id string, proof []byte) []byte {
+		if id == names.CredObsPre {
+			return credProofFor("0000feedbeef0000feedbeef0000feed", credStateDigest("forged"))
+		}
+		return proof
+	}
+
+	_, err := fx.runSpec(t, hs)
+	wantCheckFailure(t, err, CheckAuthStoreMutationLease)
+	fx.assertReaped(t)
+}
+
+// TestHandoffLeasedRuntimeReadOnlyLeasedMountRefused: the runtime realizing
+// the leased mount read-only would deliver a writer that cannot refresh; the
+// mount-topology comparison catches the divergence before the writer starts.
+func TestHandoffLeasedRuntimeReadOnlyLeasedMountRefused(t *testing.T) {
+	fx := newHandoffFixture(t)
+	hs, _ := fx.leased(t)
+	names := namesFor(hs.RunID)
+	target := hs.writableCredentialTarget()
+	fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+		if id == names.Agent {
+			for i, m := range rep.Mounts {
+				if m.Target == target {
+					rep.Mounts[i].ReadOnly = true
+				}
+			}
+		}
+		return rep, nil
+	}
+
+	_, err := fx.runSpec(t, hs)
+	wantCheckFailure(t, err, CheckCredentialSeparation)
+	if fx.rt.callIndex("start-container "+names.Agent) != -1 {
+		t.Fatal("writer started with a diverged mount topology")
+	}
+	fx.assertReaped(t)
+}
+
 // TestHandoffLeasedWriterSurvivalKeepsLease: when teardown cannot prove the
 // writer absent, releasing the window would invite a second holder to mutate
 // beside a possibly-live writer. The lease stays held and the gate says so.
@@ -452,5 +573,41 @@ func TestHandoffLeasedWriterSurvivalKeepsLease(t *testing.T) {
 	}
 	if fx.rt.callIndex("lease-release identity-fixture") != -1 {
 		t.Error("release was attempted despite the surviving writer")
+	}
+}
+
+// TestHandoffLeasedTargetCoveringProofPathRefused: a writable credential
+// target overlapping the configured credential proof path in either
+// direction fails every leased handoff mid-run — covering it shadows the
+// proof write; nested beneath it, the proof path is forced to be a
+// directory the observer's file redirect can never land on. Both are
+// refused up front, before the lease or any object.
+func TestHandoffLeasedTargetCoveringProofPathRefused(t *testing.T) {
+	for _, target := range []string{"/handoff-cred.txt", "/handoff-cred.txt/store", "/handoff-cred.txt/nested-under-proof"} {
+		t.Run(target, func(t *testing.T) {
+			fx := newHandoffFixture(t)
+			hs, _ := fx.leased(t)
+			switch target {
+			case "/handoff-cred.txt/store":
+				// The covering direction: the proof path sits under the target.
+				fx.cfg.CredProofPath = "/handoff-cred.txt/store/proof.txt"
+				hs.Agent.CredentialMounts[0].Target = "/handoff-cred.txt/store"
+			default:
+				// Equal, and the inverse direction: the target sits under the
+				// configured proof path.
+				hs.Agent.CredentialMounts[0].Target = target
+			}
+
+			_, err := fx.runSpec(t, hs)
+			if !errors.Is(err, ErrInvalidHandoffSpec) {
+				t.Fatalf("Handoff = %v, want ErrInvalidHandoffSpec", err)
+			}
+			if len(fx.rt.calls) != 0 {
+				t.Errorf("runtime saw calls before the refusal: %v", fx.rt.calls)
+			}
+			if fx.rt.callIndex("lease-acquire identity-fixture") != -1 {
+				t.Error("lease acquired despite the covered proof path")
+			}
+		})
 	}
 }

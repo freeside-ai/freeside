@@ -65,6 +65,44 @@ type HandoffResult struct {
 	// topology echoed back. Profile is the gate's resulting classification;
 	// Network and HostOnly come from the attested runtime report.
 	Egress EgressObservation
+	// AuthStore records the §5.4 mutation window and the observed
+	// credential-store digests for a leased run; zero when the spec carried
+	// no lease claim.
+	AuthStore AuthStoreObservation
+}
+
+// AuthStoreObservation is the audit record of one leased run's §5.4 window:
+// the lease the gate held, and the credential volume's content digests
+// observed before the writer started and after it was proven absent. It
+// attests that the store changed (or did not), never what changed: the
+// digests are hashes read by a VM that cannot write the store, and the §5.4
+// export scan remains the content control.
+type AuthStoreObservation struct {
+	// Leased distinguishes a real zero-observation (no lease claim) from a
+	// leased run; every other field is meaningful only when it is true.
+	Leased         bool
+	AuthIdentityID domain.AuthIdentityID
+	Holder         domain.InvocationID
+	Fence          int64
+	AcquiredAt     time.Time
+	ExpiresAt      time.Time
+	// PreDigest and PostDigest are the volume's six-pass content digests
+	// (content hashes, executable bits, directories, symlinks, the
+	// remaining node kinds, and every entry's mode, hard-link count, and
+	// ownership) before and after the writer.
+	PreDigest  string
+	PostDigest string
+	// PostAttested records that PostDigest was taken inside this run's own
+	// still-held window, so Mutated attributes the change to this run's
+	// writer. Recovery after the window lapsed cannot recreate that
+	// observation — later holders may have written since, and no fresh
+	// serialization can restore the state the writer left — so it reports
+	// the post-write attestation as lost (false, PostDigest empty) rather
+	// than attributing an intervening holder's mutation to this run.
+	PostAttested bool
+	// Mutated reports PreDigest != PostDigest: the writer changed its auth
+	// store inside the window. Meaningful only while PostAttested is true.
+	Mutated bool
 }
 
 type EgressObservation struct {
@@ -130,6 +168,8 @@ type runState struct {
 	workspace      objectClaim
 	seeder         objectClaim
 	observer       objectClaim
+	credObsPre     objectClaim
+	credObsPost    objectClaim
 	agent          objectClaim
 	exporter       objectClaim
 	network        objectClaim
@@ -151,6 +191,10 @@ type runState struct {
 	// only inside that window; the deferred cleanup removes whatever it names
 	// if the run unwinds mid-read.
 	baseArchiveDir string
+	// credArchiveDir is the credential observer's counterpart to
+	// baseArchiveDir, its own field so the two proof reads can never orphan
+	// or double-remove each other's scratch.
+	credArchiveDir string
 	// exportDir holds the extracted, verified output. It is returned to the
 	// caller only when the run ultimately succeeds; on any failure, including
 	// a teardown failure after a good export, it is removed here (the caller
@@ -171,6 +215,10 @@ type runState struct {
 	leaseHeld     bool
 	leaseSlot     bool
 	leaseIdentity domain.AuthIdentityID
+	// credPreDigest is the leased credential volume's content digest observed
+	// before the writer started; the post-writer observation compares against
+	// it to attest whether the store mutated.
+	credPreDigest string
 }
 
 // Handoff runs one full workspace handoff: admit against the capability
@@ -239,6 +287,9 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		if st.baseArchiveDir != "" {
 			_ = os.RemoveAll(st.baseArchiveDir)
 		}
+		if st.credArchiveDir != "" {
+			_ = os.RemoveAll(st.credArchiveDir)
+		}
 		if st.seedSnapshotDir != "" {
 			_ = os.RemoveAll(st.seedSnapshotDir)
 		}
@@ -252,6 +303,21 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// identity refuses the run before it costs a volume — and after the
 	// teardown defer, so every later refusal still releases it.
 	if hs.AuthStoreLease != nil {
+		// The credential observers mount the leased volume read-only at its
+		// declared target and write their proof to the configured proof
+		// path; overlap in either direction fails every leased handoff
+		// mid-run. A target covering the proof path shadows the proof
+		// write; a target nested beneath it forces the proof path to be a
+		// directory (the mount's ancestor), so the observer's file redirect
+		// can never land. Config validation cannot see the per-spec target,
+		// so both directions are refused here, before the lease is acquired
+		// or anything is created.
+		if t := hs.writableCredentialTarget(); b.cfg.CredProofPath == t ||
+			strings.HasPrefix(b.cfg.CredProofPath, t+"/") ||
+			strings.HasPrefix(t, b.cfg.CredProofPath+"/") {
+			return nil, fmt.Errorf("%w: writable credential target %q overlaps the configured credential proof path",
+				ErrInvalidHandoffSpec, t)
+		}
 		if err := b.acquireAuthStoreLease(ctx, *hs.AuthStoreLease, st); err != nil {
 			return nil, err
 		}
@@ -305,6 +371,16 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	observedBaseSHA, err := b.observeSeededBase(ctx, hs, names, st)
 	if err != nil {
 		return nil, err
+	}
+
+	// The leased credential store's pre-writer digest is a pre-writer fact
+	// like the base: once the agent runs it may legitimately mutate the
+	// store, so the "before" side must be attested now or never.
+	if hs.AuthStoreLease != nil {
+		st.credPreDigest, err = b.observeCredentialStore(ctx, hs, names.CredObsPre, st, &st.credObsPre)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	networkReport, proxyURL, err := b.prepareProviderEgress(ctx, hs, names, st)
@@ -397,6 +473,17 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	}
 	st.proxy = nil
 
+	// The post-writer credential digest is taken only after the writer is
+	// proven absent, so what it attests is the store as the writer left it,
+	// read by a VM that could not have written it.
+	var credPostDigest string
+	if hs.AuthStoreLease != nil {
+		credPostDigest, err = b.observeCredentialStore(ctx, hs, names.CredObsPost, st, &st.credObsPost)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// Check 4: create the exporter but inspect it against the generated
 	// allowlist before it ever executes.
 	exporterSpec := buildExporterSpec(b.cfg, hs, names, ownershipLabel)
@@ -471,7 +558,107 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 			HostOnly:       networkReport.Mode == NetworkHostOnly,
 			ProxyAuthority: mustProxyAddress(proxyURL),
 		},
+		AuthStore: authStoreObservation(hs, st, credPostDigest),
 	}, nil
+}
+
+// authStoreObservation assembles the §5.4 audit record from the acquired
+// lease and the two observed digests; a run with no lease claim reports the
+// zero value.
+func authStoreObservation(hs HandoffSpec, st *runState, postDigest string) AuthStoreObservation {
+	if hs.AuthStoreLease == nil {
+		return AuthStoreObservation{}
+	}
+	return AuthStoreObservation{
+		Leased:         true,
+		AuthIdentityID: st.lease.AuthIdentityID,
+		Holder:         st.lease.Holder,
+		Fence:          st.lease.Fence,
+		AcquiredAt:     st.lease.AcquiredAt,
+		ExpiresAt:      st.lease.ExpiresAt,
+		PreDigest:      st.credPreDigest,
+		PostDigest:     postDigest,
+		PostAttested:   true,
+		Mutated:        st.credPreDigest != postDigest,
+	}
+}
+
+// observeCredentialStore runs one credential-store observer under the given
+// name and returns the digest its proof attests. The observation mirrors
+// observeSeededBase's discipline: taken by a different VM than any writer,
+// through a read-only mount, reaching the host as bytes in the observer's own
+// exported root filesystem, bound to this run by the unpredictable nonce, and
+// the observer is proven absent before the flow continues.
+func (b *Backend) observeCredentialStore(ctx context.Context, hs HandoffSpec, name string, st *runState, claim *objectClaim) (string, error) {
+	spec := buildCredentialObserverSpec(b.cfg, hs, name, st.ownershipLabel)
+	claim.attempted = true
+	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "create credential observer container: %v", err)
+	}
+	claim.owned = true
+	rep, err := b.rt.Inspect(ctx, name)
+	if err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "inspect credential observer before execution: %v", err)
+	}
+	if err := verifyCredentialObserverAllowlist(rep, spec); err != nil {
+		return "", err
+	}
+	claim.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel)
+	if err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "credential observer container %q: %v", name, err)
+	}
+	if err := b.rt.StartContainer(ctx, name); err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "start credential observer container: %v", err)
+	}
+	if err := b.waitStopped(ctx, name, *claim, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "credential observer: %v", err)
+	}
+
+	digest, err := b.readCredProof(ctx, hs.RunID, name, st)
+	if err != nil {
+		return "", err
+	}
+
+	if err := b.rt.DeleteContainer(ctx, name); err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "delete stopped credential observer: %v", err)
+	}
+	if err := b.verifyContainerAbsent(ctx, name, *claim, st.ownershipLabel, CheckAuthStoreMutationLease); err != nil {
+		return "", err
+	}
+	*claim = objectClaim{}
+	return digest, nil
+}
+
+// readCredProof collects the credential observer's proof out of its stopped
+// root filesystem and validates it, under the same byte cap and
+// evidence-not-output handling as the base proof.
+func (b *Backend) readCredProof(ctx context.Context, runID, id string, st *runState) (string, error) {
+	dir, err := os.MkdirTemp("", "freeside-handoff-"+runID+"-cred-")
+	if err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "create credential proof directory: %v", err)
+	}
+	st.credArchiveDir = dir
+	defer func() {
+		_ = os.RemoveAll(dir) // best-effort; the deferred teardown removes it again
+		st.credArchiveDir = ""
+	}()
+	tarPath := filepath.Join(dir, "observer.tar")
+	if err := b.materializeRootFS(ctx, id, tarPath, CheckAuthStoreMutationLease); err != nil {
+		return "", err
+	}
+	f, err := os.Open(tarPath) //nolint:gosec // gate-owned path under a fresh temp directory
+	if err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "open credential proof archive: %v", err)
+	}
+	defer f.Close() //nolint:errcheck // read-only handle on a temp file removed above
+	data, found, err := extractArchiveRegularFile(f, b.cfg.CredProofPath, maxBaseProofBytes)
+	if err != nil {
+		return "", failf(CheckAuthStoreMutationLease, "read credential proof from observer rootfs: %v", err)
+	}
+	if !found {
+		return "", failf(CheckAuthStoreMutationLease, "credential observer produced no proof")
+	}
+	return verifyCredProof(data, st.ownershipLabel.Value)
 }
 
 func mustProxyAddress(proxyURL string) string {
@@ -842,6 +1029,8 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	containerClaims := []containerClaim{
 		{id: names.Seeder, claim: st.seeder},
 		{id: names.Observer, claim: st.observer},
+		{id: names.CredObsPre, claim: st.credObsPre},
+		{id: names.CredObsPost, claim: st.credObsPost},
 		{id: names.Agent, claim: st.agent},
 		{id: names.Exporter, claim: st.exporter},
 	}

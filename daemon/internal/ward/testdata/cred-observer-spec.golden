@@ -1,0 +1,29 @@
+{
+  "name": "freeside-handoff-golden-run-cred-pre",
+  "image": "example.test/exporter@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "command": [
+    "sh",
+    "-c",
+    "LC_ALL=C; export LC_ALL; tc=\"$(cd '/credentials' 2\u003e/dev/null \u0026\u0026 find . -type f -exec sha256sum {} + 2\u003e/dev/null | sort | sha256sum | cut -d' ' -f1)\"; tx=\"$(cd '/credentials' 2\u003e/dev/null \u0026\u0026 find . -type f -perm -u+x -print 2\u003e/dev/null | sort | sha256sum | cut -d' ' -f1)\"; td=\"$(cd '/credentials' 2\u003e/dev/null \u0026\u0026 find . -type d -print 2\u003e/dev/null | sort | sha256sum | cut -d' ' -f1)\"; tl=\"$(cd '/credentials' 2\u003e/dev/null \u0026\u0026 find . -type l -exec sh -c 'for p; do printf \"%s %s\\n\" \"$(printf \"%s\" \"$p\" | sha256sum | cut -d\" \" -f1)\" \"$(readlink \"$p\" | sha256sum | cut -d\" \" -f1)\"; done' sh {} + 2\u003e/dev/null | sort | sha256sum | cut -d' ' -f1)\"; tn=\"$(cd '/credentials' 2\u003e/dev/null \u0026\u0026 find . ! -type f ! -type d ! -type l -exec sh -c 'for p; do k=other; [ -p \"$p\" ] \u0026\u0026 k=fifo; [ -S \"$p\" ] \u0026\u0026 k=socket; [ -b \"$p\" ] \u0026\u0026 k=block; [ -c \"$p\" ] \u0026\u0026 k=char; printf \"%s %s\\n\" \"$k\" \"$(printf \"%s\" \"$p\" | sha256sum | cut -d\" \" -f1)\"; done' sh {} + 2\u003e/dev/null | sort | sha256sum | cut -d' ' -f1)\"; tm=\"$(cd '/credentials' 2\u003e/dev/null \u0026\u0026 find . -exec sh -c 'for p; do set -- $(ls -ldi \"$p\" 2\u003e/dev/null) _ _ _ _ _; printf \"%s:%s:%s:%s:%s %s\\n\" \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" \"$(printf \"%s\" \"$p\" | sha256sum | cut -d\" \" -f1)\"; done' sh {} + 2\u003e/dev/null | sort | sha256sum | cut -d' ' -f1)\"; t=\"$(printf '%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n' \"$tc\" \"$tx\" \"$td\" \"$tl\" \"$tn\" \"$tm\" | sha256sum | cut -d' ' -f1)\"; printf 'nonce=%s\\ncred_tree=%s\\n' '00000000000000000000000000000000' \"$t\" \u003e '/handoff-cred.txt'; sync"
+  ],
+  "env": null,
+  "mounts": [
+    {
+      "type": "volume",
+      "source": "provider-cred",
+      "target": "/credentials",
+      "read_only": true
+    }
+  ],
+  "labels": [
+    {
+      "key": "freeside.handoff",
+      "value": "golden-run"
+    },
+    {
+      "key": "freeside.handoff-owner",
+      "value": "00000000000000000000000000000000"
+    }
+  ],
+  "network_disabled": true
+}

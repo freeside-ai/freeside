@@ -3,6 +3,8 @@ package ward
 import (
 	"archive/tar"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -96,6 +98,13 @@ type fakeRuntime struct {
 	// baseProofPath is where the observer's proof lands in its rootfs; it
 	// mirrors Config.BaseProofPath, which the fake cannot see.
 	baseProofPath string
+	// credProofPath mirrors Config.CredProofPath the same way; a container
+	// whose command writes it is a credential-store observer.
+	credProofPath string
+	// credState is each credential volume's simulated store content; the
+	// synthesized credential proof digests it, so a test mutates the store by
+	// changing the state string (e.g. from an agent onStart hook).
+	credState map[string]string
 	// observerProof rewrites the synthesized proof bytes before they are
 	// archived, so a test can corrupt, truncate, or replay one.
 	observerProof func(id string, proof []byte) []byte
@@ -169,7 +178,7 @@ type fakeCopy struct {
 
 func newFakeRuntime(t *testing.T) *fakeRuntime {
 	t.Helper()
-	return &fakeRuntime{
+	return &fakeRuntime{ //nolint:gosec // credProofPath is a proof-file path, not a credential
 		t:               t,
 		nets:            map[string]*fakeNetwork{},
 		vols:            map[string]*fakeVol{},
@@ -178,6 +187,8 @@ func newFakeRuntime(t *testing.T) *fakeRuntime {
 		volTree:         map[string]string{},
 		staged:          map[string]string{},
 		baseProofPath:   "/handoff-base.txt",
+		credProofPath:   "/handoff-cred.txt",
+		credState:       map[string]string{},
 		runningInspects: map[string]int{},
 		exportTarPath:   buildTar(t, fixtureArchive(t)),
 	}
@@ -316,6 +327,20 @@ func (c *fakeCtr) ownershipToken() string {
 		}
 	}
 	return ""
+}
+
+// credProofFor renders the proof the pinned credential observer would write.
+func credProofFor(nonce, digest string) []byte {
+	return fmt.Appendf(nil, "%s=%s\n%s=%s\n",
+		credProofNonceKey, nonce, credProofTreeKey, digest)
+}
+
+// credStateDigest hashes the simulated store content into the proof's
+// digest shape; distinct states yield distinct digests, which is all the
+// mutation attestation compares.
+func credStateDigest(state string) string {
+	sum := sha256.Sum256([]byte(state))
+	return hex.EncodeToString(sum[:])
 }
 
 // baseProofFor renders the proof the pinned observer image would write for a
@@ -795,6 +820,16 @@ func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Write
 			proof = f.observerProof(id, proof)
 		}
 		return writeProofTar(dest, f.baseProofPath, proof)
+	}
+	// A credential-store observer's rootfs carries its digest proof: the
+	// simulated store content is credState (empty state digests too, like an
+	// empty volume), so a test mutates the store by changing the string.
+	if vol, isCredObserver := c.observedVolume(f.credProofPath); isCredObserver {
+		proof := credProofFor(c.ownershipToken(), credStateDigest(f.credState[vol]))
+		if f.observerProof != nil {
+			proof = f.observerProof(id, proof)
+		}
+		return writeProofTar(dest, f.credProofPath, proof)
 	}
 	src, err := os.Open(f.exportTarPath)
 	if err != nil {

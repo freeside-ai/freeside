@@ -49,6 +49,10 @@ var (
 	// a full lowercase observation for reasons that have nothing to do with the
 	// bases differing.
 	commitSHAPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	// sha256HexPattern is the exact shape of the credential observer's tree
+	// digest: proof content is unscanned archive output, so the digest is
+	// shape-checked before anything compares or reports it.
+	sha256HexPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 // splitImageRef parses an OCI image reference into its name and its pinned
@@ -302,22 +306,26 @@ func (s HandoffSpec) writableCredentialTarget() string {
 
 // handoffNames are the runtime object names one run owns.
 type handoffNames struct {
-	Workspace string
-	Seeder    string
-	Observer  string
-	Agent     string
-	Exporter  string
-	Network   string
+	Workspace   string
+	Seeder      string
+	Observer    string
+	CredObsPre  string
+	CredObsPost string
+	Agent       string
+	Exporter    string
+	Network     string
 }
 
 func namesFor(runID string) handoffNames {
 	return handoffNames{
-		Workspace: "freeside-handoff-" + runID + "-ws",
-		Seeder:    "freeside-handoff-" + runID + "-seeder",
-		Observer:  "freeside-handoff-" + runID + "-observer",
-		Agent:     "freeside-handoff-" + runID + "-agent",
-		Exporter:  "freeside-handoff-" + runID + "-exporter",
-		Network:   "freeside-handoff-" + runID + "-egress",
+		Workspace:   "freeside-handoff-" + runID + "-ws",
+		Seeder:      "freeside-handoff-" + runID + "-seeder",
+		Observer:    "freeside-handoff-" + runID + "-observer",
+		CredObsPre:  "freeside-handoff-" + runID + "-cred-pre",
+		CredObsPost: "freeside-handoff-" + runID + "-cred-post",
+		Agent:       "freeside-handoff-" + runID + "-agent",
+		Exporter:    "freeside-handoff-" + runID + "-exporter",
+		Network:     "freeside-handoff-" + runID + "-egress",
 	}
 }
 
@@ -708,6 +716,104 @@ func observerGitScript(workspace, scratchPrefix string) string {
 		" || ! cmp -s " + expectedHashFile + " " + actualHashFile +
 		" || ! cmp -s " + expectedExecFile + " " + actualExecFile + "; }; then w=dirty; fi; " +
 		"fi; fi; " + cleanup
+}
+
+// Proof keys the credential-store observer emits, in the same key=value shape
+// as the base and check-5 proofs.
+const (
+	credProofNonceKey = "nonce"
+	credProofTreeKey  = "cred_tree"
+)
+
+// buildCredentialObserverSpec generates the container that attests the leased
+// credential volume's content digest: once before the writer starts and once
+// after it is proven absent, under the given per-instant name. Same position
+// as the base observer — the pinned exporter image, network-free, the
+// observed volume READ-ONLY, nothing else — and for the same reason: the
+// observation must come from a VM that cannot write what it attests and did
+// not run the writer. The digest is content evidence, never content: the §5.4
+// residual is that the store mutated, and the proof carries a hash, not the
+// store.
+func buildCredentialObserverSpec(cfg Config, hs HandoffSpec, name string, ownershipLabel Label) ContainerSpec {
+	var volume string
+	for _, cm := range hs.Agent.CredentialMounts {
+		if cm.Writable {
+			volume = cm.Volume
+			break
+		}
+	}
+	return ContainerSpec{
+		Name:            name,
+		Image:           cfg.ExporterImage,
+		Command:         credObserverCommand(cfg, ownershipLabel.Value, hs.writableCredentialTarget()),
+		NetworkDisabled: true,
+		Mounts: []Mount{{
+			Type:     MountVolume,
+			Source:   volume,
+			Target:   hs.writableCredentialTarget(),
+			ReadOnly: true,
+		}},
+		Labels: append(runLabels(hs.RunID), ownershipLabel),
+	}
+}
+
+func credObserverCommand(cfg Config, nonce, target string) []string {
+	return []string{"sh", "-c", credObserverScript(cfg, nonce, target)}
+}
+
+// credObserverScript digests the mounted credential volume and writes the
+// proof, with this invocation's unpredictable nonce, to the observer's own
+// root filesystem. The digest extends the base observer's three-pass shape
+// (content hashes, executable bits, directories, each from bytewise-sorted
+// lines, hashed together; LC_ALL=C makes the sorts byte-ordered) with a
+// fourth pass over symlinks, a fifth over every remaining node kind
+// (FIFOs, sockets, devices), and a sixth over every entry's inode, mode,
+// hard-link count, owner, and group (ls -ldi's corresponding fields; both
+// observations read the same volume with the same observer image, so
+// inode values and name resolution are stable between them): the seeded
+// workspace refuses non-file entries outright, but the leased store is
+// the writer's to mutate, so any node created, removed, retargeted,
+// re-kinded, re-moded, re-owned, or re-linked is store content and must
+// move the digest — the inode binds each path to its identity, so even a
+// count-preserving relinking of equivalence classes moves it. Each link is recorded as the hash of its path beside
+// the hash of its target, hashed separately so a writer-chosen name
+// embedding a separator cannot alias two different link sets into one
+// record; each remaining node as its kind beside the hash of its path. As
+// with the base observer, every branch reaches the proof write.
+// Readability is deliberately not attested: an unreadable volume digests
+// identically to an empty one (a failed cd feeds all six passes empty
+// input, and per-file read errors digest the readable subset), so Mutated
+// compares content identity between the two observations, nothing more —
+// it is an audit record, never a release gate.
+func credObserverScript(cfg Config, nonce, target string) string {
+	tgt := shellQuote(target)
+	proof := shellQuote(cfg.CredProofPath)
+	mkProofDir := ""
+	if parent := path.Dir(cfg.CredProofPath); parent != "/" && parent != "." {
+		mkProofDir = "mkdir -p " + shellQuote(parent) + "; "
+	}
+	return "LC_ALL=C; export LC_ALL; " + mkProofDir +
+		"tc=\"$(cd " + tgt + " 2>/dev/null && find . -type f -exec sha256sum {} + 2>/dev/null " +
+		"| sort | sha256sum | cut -d' ' -f1)\"; " +
+		"tx=\"$(cd " + tgt + " 2>/dev/null && find . -type f -perm -u+x -print 2>/dev/null " +
+		"| sort | sha256sum | cut -d' ' -f1)\"; " +
+		"td=\"$(cd " + tgt + " 2>/dev/null && find . -type d -print 2>/dev/null " +
+		"| sort | sha256sum | cut -d' ' -f1)\"; " +
+		"tl=\"$(cd " + tgt + " 2>/dev/null && find . -type l -exec sh -c " +
+		"'for p; do printf \"%s %s\\n\" \"$(printf \"%s\" \"$p\" | sha256sum | cut -d\" \" -f1)\" " +
+		"\"$(readlink \"$p\" | sha256sum | cut -d\" \" -f1)\"; done' sh {} + 2>/dev/null " +
+		"| sort | sha256sum | cut -d' ' -f1)\"; " +
+		"tn=\"$(cd " + tgt + " 2>/dev/null && find . ! -type f ! -type d ! -type l -exec sh -c " +
+		"'for p; do k=other; [ -p \"$p\" ] && k=fifo; [ -S \"$p\" ] && k=socket; [ -b \"$p\" ] && k=block; [ -c \"$p\" ] && k=char; " +
+		"printf \"%s %s\\n\" \"$k\" \"$(printf \"%s\" \"$p\" | sha256sum | cut -d\" \" -f1)\"; done' sh {} + 2>/dev/null " +
+		"| sort | sha256sum | cut -d' ' -f1)\"; " +
+		"tm=\"$(cd " + tgt + " 2>/dev/null && find . -exec sh -c " +
+		"'for p; do set -- $(ls -ldi \"$p\" 2>/dev/null) _ _ _ _ _; " +
+		"printf \"%s:%s:%s:%s:%s %s\\n\" \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" \"$(printf \"%s\" \"$p\" | sha256sum | cut -d\" \" -f1)\"; done' sh {} + 2>/dev/null " +
+		"| sort | sha256sum | cut -d' ' -f1)\"; " +
+		"t=\"$(printf '%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n' \"$tc\" \"$tx\" \"$td\" \"$tl\" \"$tn\" \"$tm\" | sha256sum | cut -d' ' -f1)\"; " +
+		"printf '" + credProofNonceKey + "=%s\\n" + credProofTreeKey + "=%s\\n' " +
+		shellQuote(nonce) + " \"$t\" > " + proof + "; sync"
 }
 
 // cloneContainerSpec detaches every reference field before a spec crosses the
