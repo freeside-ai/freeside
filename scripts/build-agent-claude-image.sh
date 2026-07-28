@@ -31,6 +31,11 @@
 # means pinned inputs plus a recorded digest, not a bit-identical image: the
 # script captures and verifies the exact digest produced by this invocation.
 #
+# With HTTPS_PROXY set, the build forwards it (and HTTP_PROXY, defaulting to
+# HTTPS_PROXY) into RUN steps as the predefined proxy build args; unset, the
+# invocation is unchanged. See images/README.md (Building Behind a VPN) for the
+# host-proxy recipe a guest-NAT-blocking VPN requires.
+#
 # Usage:
 #   scripts/build-agent-claude-image.sh [--tag NAME] [--claude-version VERSION]
 #       [--registry HOST[/PATH] | --local-registry-port PORT] [--ref-tag TAG]
@@ -175,8 +180,18 @@ digest_of() {
 		head -n 1 | grep -o 'sha256:[0-9a-f]\{64\}'
 }
 
+# Forward standard proxy environment into RUN steps as the predefined proxy
+# build args: `container build` does not auto-forward its own environment, and
+# behind a guest-NAT-blocking VPN the proxy is the only egress a RUN step has
+# (see images/README.md, Building Behind a VPN).
+proxy_args=()
+if [ -n "${HTTPS_PROXY:-}" ]; then
+	proxy_args+=(--build-arg "HTTPS_PROXY=$HTTPS_PROXY" \
+		--build-arg "HTTP_PROXY=${HTTP_PROXY:-$HTTPS_PROXY}")
+fi
+
 echo "build-agent-claude-image: building with Apple container (Claude CLI ${claude_version})" >&2
-container build ${dns_args[@]+"${dns_args[@]}"} \
+container build ${dns_args[@]+"${dns_args[@]}"} ${proxy_args[@]+"${proxy_args[@]}"} \
 	--build-arg "CLAUDE_CODE_VERSION=${claude_version}" \
 	--tag "$image_name:local" "$context" >&2
 

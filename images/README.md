@@ -25,6 +25,45 @@ registry (Apple `container` 1.1.0 does not resolve a local-only digest), so a
 live-usable reference comes from pushing to a registry, real or the script's
 temporary loopback one.
 
+## Building Behind a VPN
+
+A VPN that breaks Apple container guest NAT egress (observed with Mullvad,
+container 1.1.0) leaves `RUN` steps with no network: guest DNS to the vmnet
+gateway is refused and direct-IP TCP is dead. Only builds are affected;
+`container image pull` and ward's runtime egress proxy keep working, because
+they egress from host processes through the tunnel.
+
+The recipe: run a CONNECT-capable HTTP proxy on the host, reachable from
+guests at the vmnet gateway address (192.168.64.1 by default; a guest cannot
+reach the host's 127.0.0.1), and set `HTTPS_PROXY` (and optionally
+`HTTP_PROXY`, which defaults to `HTTPS_PROXY`) when invoking a build script.
+The scripts forward them to `container build` as the predefined proxy build
+args, which is required: plain environment on the `container build` process is
+not auto-forwarded into `RUN` steps. The runtime injects both the uppercase
+and lowercase forms of a predefined proxy arg into `RUN` steps (verified on
+container 1.1.0), so tools that read only the lowercase `http_proxy`, such as
+`apt`, are covered by the uppercase args the scripts pass. Proxy egress exits
+the host through the tunnel, so the VPN posture is preserved. The proxy must
+forward both request forms: CONNECT tunnels for the HTTPS fetches (the
+exporter's `apk` packages, the agent image's Node tarball and npm registry),
+and ordinary absolute-URI HTTP requests for the agent image's `apt-get`
+steps, whose pinned Debian base's sources are plain `http://deb.debian.org`.
+A CONNECT-only proxy
+therefore serves the exporter build but fails the agent build; BusyBox `wget`
+likewise sends absolute-URI requests rather than CONNECT.
+
+The proxy is a build-time tool, and leaving it up is a trust hole: a
+guest-reachable forwarder still running during agent execution is an
+undeclared host service on the agent VM's network neighborhood, and its
+unrestricted forwarding would bypass ward's allowlisting egress proxy
+(`docs/plan.md` §5.4 provider_only expects every other host service to carry
+a declared binding policy). Stop it once the build finishes, and never leave
+it running across a credential-bearing agent run; a proxy that must persist
+has to restrict accepted client sources to the build network's subnet so
+ward's per-run writer networks cannot reach it. The recorded project-image
+verification (devlog 2026-07-27-1030) ran with the build proxy absent during
+execution; that absence is part of what it proved.
+
 ## exporter/
 
 The digest-pinned image ward runs in the fresh, credential-free exporter VM
