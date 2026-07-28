@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -842,6 +844,12 @@ func TestApplePublishRetainsLocalRegistryBackingBeforeReturning(t *testing.T) {
 	}) {
 		t.Fatal("Publish retained its temporary local publication tag")
 	}
+	if !slices.ContainsFunc(runner.specs, func(spec commandSpec) bool {
+		return len(spec.Args) > 0 && spec.Args[0] == "run" &&
+			slices.Contains(spec.Args, "REGISTRY_STORAGE_DELETE_ENABLED=true")
+	}) {
+		t.Fatal("Publish created a registry without manifest deletion enabled")
+	}
 	if err := published.cleanup(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -908,12 +916,17 @@ func TestApplePublishReusesRetainedLocalRegistry(t *testing.T) {
 			return commandOutput{}, nil
 		}
 	}}
+	var manifestDeletes []string
 	backend := appleBackend{
 		containerPath: "container", runner: runner, registryLockDir: t.TempDir(),
 		probeRegistry: func(_ context.Context, url string) error {
 			if url != "http://127.0.0.1:5101/v2/" {
 				return fmt.Errorf("unexpected readiness URL %q", url)
 			}
+			return nil
+		},
+		deleteManifest: func(_ context.Context, url string) error {
+			manifestDeletes = append(manifestDeletes, url)
 			return nil
 		},
 	}
@@ -939,6 +952,24 @@ func TestApplePublishReusesRetainedLocalRegistry(t *testing.T) {
 	want := fmt.Sprintf("127.0.0.1:%d/project@%s", port, testImageDigest)
 	if string(published.Ref) != want {
 		t.Fatalf("ref = %q, want %q", published.Ref, want)
+	}
+	if published.discard == nil {
+		t.Fatal("Publish did not transfer residue discard")
+	}
+	if len(manifestDeletes) != 0 {
+		t.Fatalf("manifest deletes before discard = %v, want none", manifestDeletes)
+	}
+	if err := published.discard(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	wantURL := fmt.Sprintf("http://127.0.0.1:%d/v2/project/manifests/%s", port, testImageDigest)
+	if !slices.Equal(manifestDeletes, []string{wantURL}) {
+		t.Fatalf("manifest deletes = %v, want exactly %q", manifestDeletes, wantURL)
+	}
+	if !slices.ContainsFunc(runner.specs, func(spec commandSpec) bool {
+		return slices.Equal(spec.Args, []string{"image", "delete", want})
+	}) {
+		t.Fatal("discard did not remove the seeded digest reference")
 	}
 }
 
@@ -1102,6 +1133,376 @@ func TestApplePublishCleansRegistryWhenPushFails(t *testing.T) {
 		return slices.Equal(spec.Args, []string{"image", "delete", tagRef})
 	}) {
 		t.Fatal("push failure retained its temporary local publication tag")
+	}
+}
+
+func TestApplePublishRemovesSeededImageWhenDigestProofFails(t *testing.T) {
+	const port = 5103
+	digestRef := fmt.Sprintf("127.0.0.1:%d/project@%s", port, testImageDigest)
+	wrongDigest := "sha256:" + strings.Repeat("c", 64)
+	runner := &managedRunner{next: func(_ context.Context, spec commandSpec) (commandOutput, error) {
+		switch {
+		case slices.Equal(spec.Args, []string{"list", "--all", "--format", "json"}):
+			return commandOutput{bytes: []byte("[]")}, nil
+		case slices.Equal(spec.Args, []string{"image", "inspect", registryImage}):
+			return inspectOutputFor(registryImage, registryImageDigest), nil
+		case slices.Equal(spec.Args, []string{"image", "inspect", digestRef}):
+			return inspectOutputFor(digestRef, wrongDigest), nil
+		case len(spec.Args) == 3 && spec.Args[0] == "image" && spec.Args[1] == "inspect":
+			return inspectOutputFor(spec.Args[2], testImageDigest), nil
+		default:
+			return commandOutput{}, nil
+		}
+	}}
+	var manifestDeletes []string
+	backend := appleBackend{
+		containerPath: "container", runner: runner, registryLockDir: t.TempDir(),
+		probeRegistry: func(context.Context, string) error {
+			return errors.New("registry is not running")
+		},
+		waitRegistry: func(context.Context, string) error { return nil },
+		deleteManifest: func(_ context.Context, url string) error {
+			manifestDeletes = append(manifestDeletes, url)
+			return nil
+		},
+	}
+	published, err := backend.Publish(t.Context(), publishSpec{
+		LocalRef: "project:local", Digest: testImageDigest,
+		ImageName: "project", RefTag: "v1", LocalRegistryPort: port,
+	})
+	if err == nil || published.Ref != "" ||
+		!strings.Contains(err.Error(), "does not match built digest") {
+		t.Fatalf("Publish = %q, %v; want seeded-digest mismatch", published.Ref, err)
+	}
+	imageDeleteIndex := slices.IndexFunc(runner.specs, func(spec commandSpec) bool {
+		return slices.Equal(spec.Args, []string{"image", "delete", digestRef})
+	})
+	if imageDeleteIndex == -1 {
+		t.Fatal("digest-proof failure retained the seeded exact-digest image")
+	}
+	containerDeleteIndex := slices.IndexFunc(runner.specs, func(spec commandSpec) bool {
+		return len(spec.Args) == 3 && spec.Args[0] == "delete"
+	})
+	if containerDeleteIndex != -1 && imageDeleteIndex > containerDeleteIndex {
+		t.Fatal("residue discard ran after the owned registry was deleted")
+	}
+	if runner.deletes != 1 {
+		t.Fatal("digest-proof failure left the owned temporary registry running")
+	}
+	if len(manifestDeletes) != 0 {
+		t.Fatalf("manifest deletes = %v, want none for an owned registry", manifestDeletes)
+	}
+}
+
+func TestApplePublishDeletesReusedRegistryManifestOnAmbiguousPushFailure(t *testing.T) {
+	const port = 5101
+	const id = "runtime-registry-id"
+	retained := registryContainer(id, "retained-token", port)
+	var listed containerInspect
+	listed.ID = id
+	listed.Configuration.ID = id
+	listed.Status.State = "running"
+	runner := &recordingRunner{run: func(spec commandSpec) (commandOutput, error) {
+		switch {
+		case slices.Equal(spec.Args, []string{"list", "--all", "--format", "json"}):
+			return containerInspectOutput(listed), nil
+		case slices.Equal(spec.Args, []string{"inspect", id}):
+			return containerInspectOutput(retained), nil
+		case len(spec.Args) >= 2 && spec.Args[0] == "image" && spec.Args[1] == "push":
+			return commandOutput{bytes: []byte("connection reset mid-push")}, errors.New("exit status 1")
+		case len(spec.Args) == 3 && spec.Args[0] == "image" && spec.Args[1] == "inspect":
+			return inspectOutputFor(spec.Args[2], testImageDigest), nil
+		default:
+			return commandOutput{}, nil
+		}
+	}}
+	var manifestDeletes []string
+	backend := appleBackend{
+		containerPath: "container", runner: runner, registryLockDir: t.TempDir(),
+		probeRegistry: func(context.Context, string) error { return nil },
+		deleteManifest: func(_ context.Context, url string) error {
+			manifestDeletes = append(manifestDeletes, url)
+			return nil
+		},
+	}
+	published, err := backend.Publish(t.Context(), publishSpec{
+		LocalRef: "project:local", Digest: testImageDigest,
+		ImageName: "project", RefTag: "v1", LocalRegistryPort: port,
+	})
+	if err == nil || published.Ref != "" {
+		t.Fatalf("Publish = %q, %v; want push failure", published.Ref, err)
+	}
+	// A failed push may still have committed the manifest (the error can be
+	// the response connection, not the upload), so the guarded delete runs;
+	// 404 makes the never-committed case a no-op.
+	wantURL := fmt.Sprintf("http://127.0.0.1:%d/v2/project/manifests/%s", port, testImageDigest)
+	if !slices.Equal(manifestDeletes, []string{wantURL}) {
+		t.Fatalf("manifest deletes = %v, want exactly %q", manifestDeletes, wantURL)
+	}
+	digestRef := fmt.Sprintf("127.0.0.1:%d/project@%s", port, testImageDigest)
+	if slices.ContainsFunc(runner.specs, func(spec commandSpec) bool {
+		return slices.Equal(spec.Args, []string{"image", "delete", digestRef})
+	}) {
+		t.Fatal("push failure deleted a digest image it never seeded")
+	}
+}
+
+func TestApplePublishSkipsManifestDeleteWhenTagFails(t *testing.T) {
+	const port = 5101
+	const id = "runtime-registry-id"
+	retained := registryContainer(id, "retained-token", port)
+	var listed containerInspect
+	listed.ID = id
+	listed.Configuration.ID = id
+	listed.Status.State = "running"
+	runner := &recordingRunner{run: func(spec commandSpec) (commandOutput, error) {
+		switch {
+		case slices.Equal(spec.Args, []string{"list", "--all", "--format", "json"}):
+			return containerInspectOutput(listed), nil
+		case slices.Equal(spec.Args, []string{"inspect", id}):
+			return containerInspectOutput(retained), nil
+		case len(spec.Args) >= 2 && spec.Args[0] == "image" && spec.Args[1] == "tag":
+			return commandOutput{bytes: []byte("tag failed")}, errors.New("exit status 1")
+		case len(spec.Args) == 3 && spec.Args[0] == "image" && spec.Args[1] == "inspect":
+			return inspectOutputFor(spec.Args[2], testImageDigest), nil
+		default:
+			return commandOutput{}, nil
+		}
+	}}
+	var manifestDeletes []string
+	backend := appleBackend{
+		containerPath: "container", runner: runner, registryLockDir: t.TempDir(),
+		probeRegistry: func(context.Context, string) error { return nil },
+		deleteManifest: func(_ context.Context, url string) error {
+			manifestDeletes = append(manifestDeletes, url)
+			return nil
+		},
+	}
+	published, err := backend.Publish(t.Context(), publishSpec{
+		LocalRef: "project:local", Digest: testImageDigest,
+		ImageName: "project", RefTag: "v1", LocalRegistryPort: port,
+	})
+	if err == nil || published.Ref != "" {
+		t.Fatalf("Publish = %q, %v; want tag failure", published.Ref, err)
+	}
+	if len(manifestDeletes) != 0 {
+		t.Fatalf("manifest deletes = %v, want none before any push attempt", manifestDeletes)
+	}
+	digestRef := fmt.Sprintf("127.0.0.1:%d/project@%s", port, testImageDigest)
+	if slices.ContainsFunc(runner.specs, func(spec commandSpec) bool {
+		return slices.Equal(spec.Args, []string{"image", "delete", digestRef})
+	}) {
+		t.Fatal("tag failure deleted a digest image it never seeded")
+	}
+}
+
+func TestApplePublishDeletesReusedRegistryManifestOnPostPushFailure(t *testing.T) {
+	const port = 5101
+	const id = "runtime-registry-id"
+	retained := registryContainer(id, "retained-token", port)
+	var listed containerInspect
+	listed.ID = id
+	listed.Configuration.ID = id
+	listed.Status.State = "running"
+	runner := &recordingRunner{run: func(spec commandSpec) (commandOutput, error) {
+		switch {
+		case slices.Equal(spec.Args, []string{"list", "--all", "--format", "json"}):
+			return containerInspectOutput(listed), nil
+		case slices.Equal(spec.Args, []string{"inspect", id}):
+			return containerInspectOutput(retained), nil
+		case len(spec.Args) >= 2 && spec.Args[0] == "image" && spec.Args[1] == "pull":
+			return commandOutput{bytes: []byte("pull refused")}, errors.New("exit status 1")
+		case len(spec.Args) == 3 && spec.Args[0] == "image" && spec.Args[1] == "inspect":
+			return inspectOutputFor(spec.Args[2], testImageDigest), nil
+		default:
+			return commandOutput{}, nil
+		}
+	}}
+	var manifestDeletes []string
+	backend := appleBackend{
+		containerPath: "container", runner: runner, registryLockDir: t.TempDir(),
+		probeRegistry: func(context.Context, string) error { return nil },
+		deleteManifest: func(_ context.Context, url string) error {
+			manifestDeletes = append(manifestDeletes, url)
+			return nil
+		},
+	}
+	published, err := backend.Publish(t.Context(), publishSpec{
+		LocalRef: "project:local", Digest: testImageDigest,
+		ImageName: "project", RefTag: "v1", LocalRegistryPort: port,
+	})
+	if err == nil || published.Ref != "" {
+		t.Fatalf("Publish = %q, %v; want pull failure", published.Ref, err)
+	}
+	wantURL := fmt.Sprintf("http://127.0.0.1:%d/v2/project/manifests/%s", port, testImageDigest)
+	if !slices.Equal(manifestDeletes, []string{wantURL}) {
+		t.Fatalf("manifest deletes = %v, want exactly %q", manifestDeletes, wantURL)
+	}
+	digestRef := fmt.Sprintf("127.0.0.1:%d/project@%s", port, testImageDigest)
+	for _, spec := range runner.specs {
+		if slices.Equal(spec.Args, []string{"image", "delete", digestRef}) {
+			t.Fatal("pull failure deleted a digest image it never seeded")
+		}
+		if len(spec.Args) > 0 && spec.Args[0] == "delete" {
+			t.Fatalf("pull failure deleted the reused retained registry: %q", spec.Args)
+		}
+	}
+}
+
+func TestApplePublishRetainsResidueWhenReferenceRecordedOrLookupFails(t *testing.T) {
+	cases := []struct {
+		name        string
+		recorded    bool
+		lookupErr   error
+		wantErrPart string
+	}{
+		{"recorded reference", true, nil, "does not match built digest"},
+		{
+			"lookup failure", false, errors.New("store closed"),
+			"check recorded project-image reference",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			const port = 5101
+			const id = "runtime-registry-id"
+			digestRef := fmt.Sprintf("127.0.0.1:%d/project@%s", port, testImageDigest)
+			wrongDigest := "sha256:" + strings.Repeat("c", 64)
+			retained := registryContainer(id, "retained-token", port)
+			var listed containerInspect
+			listed.ID = id
+			listed.Configuration.ID = id
+			listed.Status.State = "running"
+			runner := &recordingRunner{run: func(spec commandSpec) (commandOutput, error) {
+				switch {
+				case slices.Equal(spec.Args, []string{"list", "--all", "--format", "json"}):
+					return containerInspectOutput(listed), nil
+				case slices.Equal(spec.Args, []string{"inspect", id}):
+					return containerInspectOutput(retained), nil
+				case slices.Equal(spec.Args, []string{"image", "inspect", digestRef}):
+					return inspectOutputFor(digestRef, wrongDigest), nil
+				case len(spec.Args) == 3 && spec.Args[0] == "image" && spec.Args[1] == "inspect":
+					return inspectOutputFor(spec.Args[2], testImageDigest), nil
+				default:
+					return commandOutput{}, nil
+				}
+			}}
+			var manifestDeletes []string
+			var lookups []string
+			backend := appleBackend{
+				containerPath: "container", runner: runner, registryLockDir: t.TempDir(),
+				probeRegistry: func(context.Context, string) error { return nil },
+				deleteManifest: func(_ context.Context, url string) error {
+					manifestDeletes = append(manifestDeletes, url)
+					return nil
+				},
+			}
+			published, err := backend.Publish(t.Context(), publishSpec{
+				LocalRef: "project:local", Digest: testImageDigest,
+				ImageName: "project", RefTag: "v1", LocalRegistryPort: port,
+				RefRecorded: func(_ context.Context, ref string) (bool, error) {
+					lookups = append(lookups, ref)
+					return tc.recorded, tc.lookupErr
+				},
+			})
+			if err == nil || published.Ref != "" ||
+				!strings.Contains(err.Error(), tc.wantErrPart) {
+				t.Fatalf("Publish = %q, %v; want %q", published.Ref, err, tc.wantErrPart)
+			}
+			if !slices.Equal(lookups, []string{digestRef}) {
+				t.Fatalf("recorded-reference lookups = %v, want exactly the published ref", lookups)
+			}
+			if len(manifestDeletes) != 0 {
+				t.Fatalf("manifest deletes = %v, want retention", manifestDeletes)
+			}
+			for _, spec := range runner.specs {
+				if slices.Equal(spec.Args, []string{"image", "delete", digestRef}) {
+					t.Fatal("guard did not retain the possibly recorded digest image")
+				}
+			}
+		})
+	}
+}
+
+func TestApplePublishTransfersSeededImageDiscardBeforeReturning(t *testing.T) {
+	const port = 5104
+	digestRef := fmt.Sprintf("127.0.0.1:%d/project@%s", port, testImageDigest)
+	runner := &managedRunner{next: func(_ context.Context, spec commandSpec) (commandOutput, error) {
+		switch {
+		case slices.Equal(spec.Args, []string{"list", "--all", "--format", "json"}):
+			return commandOutput{bytes: []byte("[]")}, nil
+		case slices.Equal(spec.Args, []string{"image", "inspect", registryImage}):
+			return inspectOutputFor(registryImage, registryImageDigest), nil
+		case len(spec.Args) == 3 && spec.Args[0] == "image" && spec.Args[1] == "inspect":
+			return inspectOutputFor(spec.Args[2], testImageDigest), nil
+		default:
+			return commandOutput{}, nil
+		}
+	}}
+	var manifestDeletes []string
+	backend := appleBackend{
+		containerPath: "container", runner: runner, registryLockDir: t.TempDir(),
+		probeRegistry: func(context.Context, string) error {
+			return errors.New("registry is not running")
+		},
+		waitRegistry: func(context.Context, string) error { return nil },
+		deleteManifest: func(_ context.Context, url string) error {
+			manifestDeletes = append(manifestDeletes, url)
+			return nil
+		},
+	}
+	published, err := backend.Publish(t.Context(), publishSpec{
+		LocalRef: "project:local", Digest: testImageDigest,
+		ImageName: "project", RefTag: "v1", LocalRegistryPort: port,
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if published.discard == nil {
+		t.Fatal("Publish did not transfer residue discard")
+	}
+	if slices.ContainsFunc(runner.specs, func(spec commandSpec) bool {
+		return slices.Equal(spec.Args, []string{"image", "delete", digestRef})
+	}) {
+		t.Fatal("Publish removed the seeded digest reference on success")
+	}
+	if err := published.discard(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(runner.specs, func(spec commandSpec) bool {
+		return slices.Equal(spec.Args, []string{"image", "delete", digestRef})
+	}) {
+		t.Fatal("discard did not remove the seeded digest reference")
+	}
+	if len(manifestDeletes) != 0 {
+		t.Fatalf("manifest deletes = %v, want none while the owned registry dies whole",
+			manifestDeletes)
+	}
+}
+
+func TestDeleteRegistryManifestAcceptsDisabledDeleteAsRetention(t *testing.T) {
+	for _, tc := range []struct {
+		status  int
+		wantErr bool
+	}{
+		{http.StatusAccepted, false},
+		{http.StatusNotFound, false},
+		{http.StatusMethodNotAllowed, false},
+		{http.StatusInternalServerError, true},
+	} {
+		var method, path string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			method, path = r.Method, r.URL.Path
+			w.WriteHeader(tc.status)
+		}))
+		err := deleteRegistryManifest(t.Context(), server.URL+"/v2/project/manifests/"+testImageDigest)
+		server.Close()
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("status %d: err = %v, wantErr %v", tc.status, err, tc.wantErr)
+		}
+		if method != http.MethodDelete || path != "/v2/project/manifests/"+testImageDigest {
+			t.Fatalf("request = %s %s, want DELETE of the manifest path", method, path)
+		}
 	}
 }
 

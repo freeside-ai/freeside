@@ -77,6 +77,7 @@ type appleBackend struct {
 	inspectAllowlist func(context.Context, string) (ward.InspectReport, error)
 	probeRegistry    func(context.Context, string) error
 	waitRegistry     func(context.Context, string) error
+	deleteManifest   func(context.Context, string) error
 	readEvidence     func(context.Context, string, string, bool) (ociEvidence, error)
 }
 
@@ -422,6 +423,7 @@ func (a appleBackend) Publish(
 	scheme := "auto"
 	registryContainer := ""
 	registryToken := ""
+	reusedRegistry := false
 	var releaseRegistryLease func() error
 	cleanup := func() error {
 		if registryContainer == "" {
@@ -499,6 +501,7 @@ func (a appleBackend) Publish(
 			// service, so it must not inherit cleanup ownership.
 			registryContainer = ""
 			registryToken = ""
+			reusedRegistry = true
 		} else if probeErr == nil {
 			return publication{}, fmt.Errorf(
 				"loopback registry port %d is occupied by an unmanaged service",
@@ -526,6 +529,10 @@ func (a appleBackend) Publish(
 					"--label", ownershipLabel + "=" + token,
 					"--label", registryPortLabel + "=" +
 						strconv.Itoa(spec.LocalRegistryPort),
+					// Manifest deletion must be enabled at creation so a later
+					// build reusing this retained registry can remove the
+					// residue of its own failed publication (#352).
+					"--env", "REGISTRY_STORAGE_DELETE_ENABLED=true",
 					"--publish", registry + ":5000", registryImage,
 				},
 			})
@@ -561,6 +568,28 @@ func (a appleBackend) Publish(
 	tagRef := registry + "/" + spec.ImageName + ":" +
 		temporaryPublicationTag(spec.RefTag, tagToken)
 	digestRef := domain.ImageRef(registry + "/" + spec.ImageName + "@" + spec.Digest)
+	manifestPushAttempted := false
+	seededLocally := false
+	discardTransferred := false
+	discardResidue := func(discardCtx context.Context) error {
+		return a.discardPublicationResidue(discardCtx, spec, registry,
+			string(digestRef), seededLocally,
+			manifestPushAttempted && reusedRegistry && spec.LocalRegistryPort != 0)
+	}
+	// Registered before the tag defer so LIFO order discards residue while
+	// the same-port lease is still held: the lease is what keeps the
+	// recorded-reference guard's answer valid against a concurrent build.
+	// The transfer flag, not the error, gates the discard so a panic after
+	// a residue exists still removes it.
+	defer func() {
+		if discardTransferred {
+			return
+		}
+		if discardErr := discardResidue(context.WithoutCancel(ctx)); discardErr != nil {
+			err = errors.Join(err, discardErr)
+			published = publication{}
+		}
+	}()
 	output, runErr := a.runner.Run(ctx, commandSpec{
 		Path: a.containerPath, Args: []string{"image", "tag", spec.LocalRef, tagRef},
 	})
@@ -577,6 +606,20 @@ func (a appleBackend) Publish(
 			published = publication{}
 		}
 	}()
+	// The one-shot tag this push creates stays behind in a retained registry
+	// after a successful build: registry:2 cannot delete a tag without
+	// deleting its manifest, and on success that manifest is the durably
+	// recorded artifact. That bounded retention (one tag per successful
+	// publication) is an accepted decision (#352). A failed build's manifest
+	// deletion removes its tags with the manifest, except when the
+	// recorded-reference guard retains the manifest: its tag link then stays
+	// too, an accepted corner recorded in the decision note.
+	//
+	// Armed before the attempt: a push whose connection dies after the
+	// registry commits the manifest still reports failure, so an attempted
+	// push must count as potentially committed. The 404 disposition makes
+	// deleting a never-committed manifest a no-op.
+	manifestPushAttempted = true
 	output, runErr = a.runner.Run(ctx, commandSpec{
 		Path: a.containerPath, Args: []string{"image", "push", "--scheme", scheme, tagRef},
 	})
@@ -589,6 +632,7 @@ func (a appleBackend) Publish(
 	if runErr != nil {
 		return publication{}, runError("seed exact project-image reference", output, runErr)
 	}
+	seededLocally = true
 	seeded, digestErr := a.ImageDigest(ctx, string(digestRef))
 	if digestErr != nil {
 		return publication{}, digestErr
@@ -612,9 +656,57 @@ func (a appleBackend) Publish(
 		registryContainer = ""
 		registryToken = ""
 	}
+	// Both residue flags are true here, so the transferred discard covers
+	// the builder's post-publication failures (validate, allowlist, record)
+	// until the recorder disarms it.
+	published.discard = discardResidue
+	discardTransferred = true
 	published.release = releaseRegistryLease
 	releaseRegistryLease = nil
 	return published, nil
+}
+
+// discardPublicationResidue removes what a failed publication left behind:
+// the locally seeded exact-digest image and, for a reused loopback registry
+// this invocation does not own (an owned registry is deleted whole by its
+// cleanup), the pushed manifest. The recorded-reference guard fails toward
+// retention: a rebuild that reproduces an already-recorded digest must not
+// destroy the prior row's durable artifact (#352).
+func (a appleBackend) discardPublicationResidue(
+	ctx context.Context,
+	spec publishSpec,
+	registry, digestRef string,
+	removeSeeded, dropManifest bool,
+) error {
+	if !removeSeeded && !dropManifest {
+		return nil
+	}
+	if spec.RefRecorded != nil {
+		recorded, lookupErr := spec.RefRecorded(ctx, digestRef)
+		if lookupErr != nil {
+			return fmt.Errorf("check recorded project-image reference before discard: %w", lookupErr)
+		}
+		if recorded {
+			return nil
+		}
+	}
+	var errs []error
+	if removeSeeded {
+		if removeErr := a.RemoveImage(ctx, digestRef); removeErr != nil {
+			errs = append(errs, fmt.Errorf("remove seeded project-image reference: %w", removeErr))
+		}
+	}
+	if dropManifest {
+		remove := a.deleteManifest
+		if remove == nil {
+			remove = deleteRegistryManifest
+		}
+		url := "http://" + registry + "/v2/" + spec.ImageName + "/manifests/" + spec.Digest
+		if deleteErr := remove(ctx, url); deleteErr != nil {
+			errs = append(errs, fmt.Errorf("delete published project-image manifest: %w", deleteErr))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func acquireLocalRegistryLease(
@@ -1398,4 +1490,27 @@ func probeRegistry(ctx context.Context, url string) error {
 		return fmt.Errorf("registry readiness probe returned %s", response.Status)
 	}
 	return nil
+}
+
+// deleteRegistryManifest removes a failed publication's manifest, and with
+// it any tags, from a loopback registry. Deletion support is a creation-time
+// registry property: a retained registry created before the builder enabled
+// it answers 405, which is accepted retention rather than an error, so one
+// legacy registry cannot poison every later failure path on its port (#352).
+// 404 means the residue is already gone.
+func deleteRegistryManifest(ctx context.Context, url string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close() //nolint:errcheck // deletion status is primary
+	switch response.StatusCode {
+	case http.StatusAccepted, http.StatusNotFound, http.StatusMethodNotAllowed:
+		return nil
+	}
+	return fmt.Errorf("registry manifest deletion returned %s", response.Status)
 }
