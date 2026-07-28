@@ -79,6 +79,23 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 				return tx.RecordProjectImage(recordCtx, image)
 			})
 		},
+		LookupRecordedRef: func(lookupCtx context.Context, ref string) (bool, error) {
+			recorded := false
+			err := s.Read(lookupCtx, func(tx *store.ReadTx) error {
+				images, listErr := tx.ListProjectImages(lookupCtx, cfg.RepositoryID)
+				if listErr != nil {
+					return listErr
+				}
+				for _, image := range images {
+					if string(image.ImageRef) == ref {
+						recorded = true
+						return nil
+					}
+				}
+				return nil
+			})
+			return recorded, err
+		},
 	})
 	if err != nil {
 		return err
