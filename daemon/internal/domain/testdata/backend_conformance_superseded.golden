@@ -1,0 +1,7 @@
+{
+  "backend": "fresh_vm_read_only_volume_handoff",
+  "outcome": "superseded",
+  "capabilities": null,
+  "generation": 9,
+  "proved_at": "2026-07-27T09:20:00Z"
+}

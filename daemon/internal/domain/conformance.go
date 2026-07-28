@@ -1,5 +1,10 @@
 package domain
 
+import (
+	"fmt"
+	"time"
+)
+
 // RunnerBackendClass names an isolation class a runner backend realizes and
 // declares as its identity (plan §5.7: "the name is the runner backend's
 // declared identity"). The vocabulary lives here rather than in ward because
@@ -56,6 +61,132 @@ func ProvableCapabilities(class RunnerBackendClass) (CapabilitySnapshot, bool) {
 		), true
 	}
 	return nil, false
+}
+
+// ConformanceOutcome is the durable state one conformance-log append records
+// (§5.7): the outcome of a completed full pass, or the superseding marker a
+// beginning recheck writes. The marker exists because the in-memory
+// generation guard clears the declaration the instant a recheck begins, and
+// the durable log must not lag it: an admission whose snapshot froze just
+// before the recheck began would otherwise still be admitted against the
+// previous pass's row for as long as the recheck runs.
+type ConformanceOutcome string
+
+const (
+	ConformancePassed ConformanceOutcome = "passed"
+	ConformanceFailed ConformanceOutcome = "failed"
+	// ConformanceSuperseded is the durable form of beginConformanceProof: a
+	// recheck has begun, so the previous declaration no longer admits. The
+	// recheck's own completed outcome supersedes it in turn.
+	ConformanceSuperseded ConformanceOutcome = "superseded"
+)
+
+// AllConformanceOutcomes lists every valid ConformanceOutcome.
+var AllConformanceOutcomes = []ConformanceOutcome{
+	ConformancePassed, ConformanceFailed, ConformanceSuperseded,
+}
+
+func (o ConformanceOutcome) valid() bool {
+	switch o {
+	case ConformancePassed, ConformanceFailed, ConformanceSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+// BackendConformance is the durable record of what a named backend's last
+// completed full conformance pass proved (§5.7, issues #327/#320): the class,
+// the proven capability declaration, and when the proof completed. The store
+// appends one per completed pass and the newest record per backend is the
+// backend's current declaration; an unattended admission is gated against it
+// at the write boundary, so a writer's in-process claim is never the thing
+// that admits.
+//
+// The record is a ceiling, never a grant: holding a passed record admits
+// nothing by itself, because the live capability floor still has to be met by
+// the backend's in-memory declaration, which an unfinished or failed recheck
+// has already cleared.
+type BackendConformance struct {
+	Backend RunnerBackendClass `json:"backend"`
+	Outcome ConformanceOutcome `json:"outcome"`
+	// Capabilities is the proven declaration of a passed pass, and nil exactly
+	// when the pass failed: a failed pass proves nothing, and letting it keep
+	// a base set would let a broken backend keep admitting.
+	Capabilities CapabilitySnapshot `json:"capabilities"`
+	// Generation is the store-assigned, per-backend-monotonic proof
+	// generation: zero on a record that has not been persisted yet, and the
+	// row identity once it has. The store stamps it at append and range-checks
+	// it at reconstruction; no caller-supplied value is ever trusted.
+	Generation uint64 `json:"generation"`
+	// ProvedAt is the UTC instant the pass completed. It is recorded for
+	// audit; supersession is decided by Generation, never by comparing
+	// timestamps.
+	ProvedAt time.Time `json:"proved_at"`
+}
+
+// BackendConformanceInput carries the caller-supplied fields of a
+// BackendConformance. It has no Generation field: the generation is the
+// store's append identity, so no input path can set it.
+type BackendConformanceInput struct {
+	Backend      RunnerBackendClass
+	Outcome      ConformanceOutcome
+	Capabilities CapabilitySnapshot
+	ProvedAt     time.Time
+}
+
+// NewBackendConformance builds a validated record in canonical form: the
+// capability snapshot is canonicalized and detached from the caller's slice
+// and the timestamp is normalized to UTC.
+func NewBackendConformance(in BackendConformanceInput) (BackendConformance, error) {
+	c := BackendConformance{
+		Backend:      in.Backend,
+		Outcome:      in.Outcome,
+		Capabilities: NewCapabilitySnapshot(in.Capabilities...),
+		ProvedAt:     in.ProvedAt.UTC(),
+	}
+	if err := c.Validate(); err != nil {
+		return BackendConformance{}, err
+	}
+	return c, nil
+}
+
+// Validate checks structure and the class ceiling. The ceiling lives here
+// rather than in a transaction-scoped gate because it is compiled-in
+// vocabulary, not live policy: no store state can change what a class's suite
+// could ever prove, so every boundary that decodes or accepts a record
+// enforces it identically. Generation is deliberately unconstrained: zero
+// means not yet persisted, and the store stamps and range-checks the
+// persisted value itself.
+func (c BackendConformance) Validate() error {
+	if !c.Backend.valid() {
+		return fmt.Errorf("backend conformance class %q: %w", c.Backend, ErrInvalidRunnerBackendClass)
+	}
+	if !c.Outcome.valid() {
+		return fmt.Errorf("backend conformance outcome %q: %w", c.Outcome, ErrInvalidConformanceOutcome)
+	}
+	if err := c.Capabilities.Validate(); err != nil {
+		return fmt.Errorf("backend conformance capabilities: %w", err)
+	}
+	if c.Outcome != ConformancePassed && c.Capabilities != nil {
+		return fmt.Errorf("backend conformance for %q: %w", c.Backend, ErrConformanceCapabilitiesWithoutPass)
+	}
+	ceiling, ok := ProvableCapabilities(c.Backend)
+	if !ok {
+		// valid() passed but the class has no registered ceiling: a drift
+		// between the two registration points fails closed rather than
+		// admitting an unbounded claim.
+		return fmt.Errorf("backend conformance class %q has no registered ceiling: %w",
+			c.Backend, ErrInvalidRunnerBackendClass)
+	}
+	if excess := ExcessCapabilities(c.Capabilities, ceiling); len(excess) > 0 {
+		return fmt.Errorf("backend conformance for %q claims %v beyond the class ceiling: %w",
+			c.Backend, excess, ErrConformanceOverclaim)
+	}
+	if c.ProvedAt.IsZero() {
+		return fmt.Errorf("backend conformance proved_at: %w", ErrMissingTimestamp)
+	}
+	return nil
 }
 
 // ExcessCapabilities returns the members of claimed that allowed does not

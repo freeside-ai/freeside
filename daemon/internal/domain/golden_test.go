@@ -457,6 +457,41 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	conformanceCeiling, ok := domain.ProvableCapabilities(domain.BackendFreshVMReadOnlyVolumeHandoff)
+	if !ok {
+		t.Fatal("fresh-vm class has no registered ceiling")
+	}
+	backendConformance, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+		Backend:      domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:      domain.ConformancePassed,
+		Capabilities: conformanceCeiling,
+		ProvedAt:     time.Date(2026, 7, 27, 8, 30, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The store stamps the generation at append; the golden pins the
+	// reconstructed render.
+	backendConformance.Generation = 7
+	failedConformance, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+		Backend:  domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:  domain.ConformanceFailed,
+		ProvedAt: time.Date(2026, 7, 27, 9, 15, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedConformance.Generation = 8
+	supersededConformance, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+		Backend:  domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:  domain.ConformanceSuperseded,
+		ProvedAt: time.Date(2026, 7, 27, 9, 20, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	supersededConformance.Generation = 9
+
 	cases := []struct {
 		name  string
 		value any
@@ -502,6 +537,9 @@ func TestGolden(t *testing.T) {
 		{"execution_admission_waived", waivedAdmission},
 		{"execution_export", export},
 		{"project_image", projectImage},
+		{"backend_conformance", backendConformance},
+		{"backend_conformance_failed", failedConformance},
+		{"backend_conformance_superseded", supersededConformance},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

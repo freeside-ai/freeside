@@ -1,0 +1,13 @@
+{
+  "backend": "fresh_vm_read_only_volume_handoff",
+  "outcome": "passed",
+  "capabilities": [
+    "supports_detachable_workspace",
+    "supports_enforced_provider_egress",
+    "supports_networkless_export",
+    "supports_post_exit_export",
+    "supports_read_only_remount"
+  ],
+  "generation": 7,
+  "proved_at": "2026-07-27T08:30:00Z"
+}
