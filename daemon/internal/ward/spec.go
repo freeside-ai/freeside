@@ -15,8 +15,10 @@ import (
 
 // BackendName is the backend's name in policy, refusals, and audit records:
 // the isolation class the workspace-handoff spike proved on Apple container
-// 1.1.0 and this backend realizes.
-const BackendName = "fresh_vm_read_only_volume_handoff"
+// 1.1.0 and this backend realizes. It derives from the domain's registered
+// class so the name the store gates conformance records under (#320) and the
+// name this backend admits under cannot drift.
+const BackendName = string(domain.BackendFreshVMReadOnlyVolumeHandoff)
 
 // labelKey marks every volume and container a handoff creates with its run
 // ID for inspection. Teardown does not infer ownership from this label:

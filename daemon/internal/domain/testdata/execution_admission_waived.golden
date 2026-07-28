@@ -1,5 +1,5 @@
 {
-  "id": "sha256:16fbf385cd2b64d60b7b944dec37576217287afa7628ae259b74d2787df78976",
+  "id": "sha256:b2770bed5d284e82765bdb7a5ba2447de1f6141673e6321259ee6fa575dc5e6e",
   "invocation_id": "inv-2",
   "run_id": "run-1",
   "stage_id": "stage-1",
@@ -8,6 +8,7 @@
   "capabilities": [
     "supports_credential_volume_detach",
     "supports_detachable_workspace",
+    "supports_enforced_provider_egress",
     "supports_networkless_export",
     "supports_post_exit_export",
     "supports_read_only_remount",

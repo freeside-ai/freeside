@@ -29,12 +29,16 @@ var requiredCapabilities = []exec.Capability{
 
 // unattendedCapabilities is the policy floor PreJob protects. The handoff
 // itself remains usable in attended_dev before the expensive full suite runs,
-// but unattended admission must also carry the networkless-export proof.
+// but unattended admission must also carry both suite-earned proofs: the
+// networkless exporter boundary and the enforced provider-egress writer
+// boundary (§5.7, issue #327). Mirrors the plan-mandated minimum
+// domain.requiredCapabilities appends for ModeUnattended.
 var unattendedCapabilities = []exec.Capability{
 	exec.CapDetachableWorkspace,
 	exec.CapPostExitExport,
 	exec.CapReadOnlyRemount,
 	exec.CapNetworklessExport,
+	exec.CapEnforcedProviderEgress,
 }
 
 // HandoffResult is a completed, gate-passed handoff.

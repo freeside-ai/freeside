@@ -35,6 +35,8 @@ var (
 	ErrInvalidFindingOrigin      = errors.New("invalid candidate finding origin")
 	ErrInvalidOutcome            = errors.New("invalid verification outcome")
 	ErrInvalidRunnerCapability   = errors.New("invalid runner capability")
+	ErrInvalidRunnerBackendClass = errors.New("invalid runner backend class")
+	ErrInvalidConformanceOutcome = errors.New("invalid conformance outcome")
 	ErrInvalidOperatingMode      = errors.New("invalid operating mode")
 	ErrInvalidCredentialMode     = errors.New("invalid credential mode")
 	ErrInvalidEgressProfile      = errors.New("invalid egress profile")
@@ -115,6 +117,14 @@ var (
 	ErrStageInputDigestMismatch    = errors.New("stage input snapshot digest does not match its content")
 	ErrNonWaivableFinding          = errors.New("finding class is non-waivable")
 	ErrAgentWaiver                 = errors.New("an agent cannot author a waiver")
+
+	// Backend-conformance failures (issues #327, #320).
+	ErrConformanceOverclaim = errors.New(
+		"conformance record claims capabilities beyond the backend class's provable ceiling")
+	ErrConformanceCapabilitiesWithoutPass = errors.New(
+		"only a passed conformance record can carry a proven capability set")
+	ErrAdmissionExceedsConformance = errors.New(
+		"admission capability snapshot exceeds the backend's proven conformance declaration")
 
 	// Unattended operating-state and §4 blocking failures (issues #319, #321).
 	ErrInvalidUnattendedOperationState = errors.New("unknown unattended operation state")

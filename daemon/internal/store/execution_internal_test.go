@@ -110,7 +110,11 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 	var profileDigest *domain.Digest
 	if waiver != nil {
 		mode = domain.ModeUnattended
-		caps = domain.NewCapabilitySnapshot(domain.AllRunnerCapabilities...)
+		ceiling, ok := domain.ProvableCapabilities(domain.BackendFreshVMReadOnlyVolumeHandoff)
+		if !ok {
+			t.Fatal("fresh-vm class has no registered ceiling")
+		}
+		caps = ceiling
 		digest := tamperTrustProfile(t, "owner/repo", 424242).ProfileDigest
 		profileDigest = &digest
 	}
@@ -147,6 +151,20 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 			MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
 		}, admission.AdmittedAt); err != nil {
 			return err
+		}
+		if admission.OperatingMode == domain.ModeUnattended {
+			conformance, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+				Backend:      domain.BackendFreshVMReadOnlyVolumeHandoff,
+				Outcome:      domain.ConformancePassed,
+				Capabilities: admission.Capabilities,
+				ProvedAt:     admission.AdmittedAt,
+			})
+			if err != nil {
+				return err
+			}
+			if _, err := tx.RecordBackendConformance(ctx, conformance); err != nil {
+				return err
+			}
 		}
 		return tx.RecordExecutionAdmission(ctx, admission)
 	}); err != nil {

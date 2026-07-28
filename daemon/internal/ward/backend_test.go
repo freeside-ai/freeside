@@ -3,8 +3,11 @@ package ward
 import (
 	"errors"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
 
@@ -18,7 +21,10 @@ var declaredCapabilities = []exec.Capability{
 
 // conformancePendingCapabilities are valid vocabulary members this backend
 // declares only after their live probe passes.
-var conformancePendingCapabilities = []exec.Capability{exec.CapNetworklessExport}
+var conformancePendingCapabilities = []exec.Capability{
+	exec.CapNetworklessExport,
+	exec.CapEnforcedProviderEgress,
+}
 
 // refusedCapabilities must never be declared: both are refuted on the
 // reference runtime (the same-VM fallback class and volume snapshots).
@@ -73,25 +79,142 @@ func TestNetworklessCapabilityRequiresConformance(t *testing.T) {
 		t.Fatalf("unproven networkless capability = %v, want ErrCapabilityRefused", err)
 	}
 	b.networkless.Store(true)
-	if _, err := exec.CheckCapabilities(b, append(declaredCapabilities, conformancePendingCapabilities...)); err != nil {
+	if _, err := exec.CheckCapabilities(b, append(declaredCapabilities, exec.CapNetworklessExport)); err != nil {
 		t.Fatalf("proven networkless capability = %v, want admission", err)
 	}
 }
 
-func TestNetworklessCapabilityRejectsStaleProofGeneration(t *testing.T) {
+func TestConformanceProofRejectsStaleGeneration(t *testing.T) {
 	b := newTestBackend(t)
-	older := b.beginNetworklessProof()
-	newer := b.beginNetworklessProof()
-	b.finishNetworklessProof(newer, false)
-	b.finishNetworklessProof(older, true)
-	if b.Capabilities().Has(exec.CapNetworklessExport) {
-		t.Fatal("older successful proof overrode a newer failed proof")
+	older, _ := b.beginConformanceProof(nil)
+	newer, _ := b.beginConformanceProof(nil)
+	if !b.finishConformanceProof(newer, false) {
+		t.Fatal("current generation reported itself superseded")
+	}
+	if b.finishConformanceProof(older, true) {
+		t.Fatal("superseded generation reported itself current")
+	}
+	for _, c := range conformancePendingCapabilities {
+		if b.Capabilities().Has(c) {
+			t.Fatalf("older successful proof overrode a newer failed proof for %q", c)
+		}
 	}
 
-	latest := b.beginNetworklessProof()
-	b.finishNetworklessProof(latest, true)
-	if !b.Capabilities().Has(exec.CapNetworklessExport) {
-		t.Fatal("latest successful proof did not publish the capability")
+	latest, _ := b.beginConformanceProof(nil)
+	if !b.finishConformanceProof(latest, true) {
+		t.Fatal("latest proof reported itself superseded")
+	}
+	for _, c := range conformancePendingCapabilities {
+		if !b.Capabilities().Has(c) {
+			t.Fatalf("latest successful proof did not publish %q", c)
+		}
+	}
+}
+
+// TestConcludeHoldsTheGuardAcrossTheRecordStep pins the publish/record
+// atomicity: a new pass cannot begin (and so cannot append its own record)
+// while an earlier pass's conclude is still inside its record step, so the
+// durable append order can never invert the supersession order.
+func TestConcludeHoldsTheGuardAcrossTheRecordStep(t *testing.T) {
+	b := newTestBackend(t)
+	gen, _ := b.beginConformanceProof(nil)
+
+	var mu sync.Mutex
+	var order []string
+	recordEntered := make(chan struct{})
+	releaseRecord := make(chan struct{})
+	concludeDone := make(chan struct{})
+	go func() {
+		defer close(concludeDone)
+		published, err := b.concludeConformanceProof(gen, true, func() error {
+			close(recordEntered)
+			<-releaseRecord
+			mu.Lock()
+			order = append(order, "record")
+			mu.Unlock()
+			return nil
+		})
+		if !published || err != nil {
+			t.Errorf("conclude = (%v, %v), want published with no error", published, err)
+		}
+	}()
+
+	<-recordEntered
+	beginDone := make(chan struct{})
+	go func() {
+		defer close(beginDone)
+		_, _ = b.beginConformanceProof(nil)
+		mu.Lock()
+		order = append(order, "begin")
+		mu.Unlock()
+	}()
+	// Give a broken (guard-released) implementation the chance to let begin
+	// overtake the in-flight record step; a correct one blocks begin until
+	// the record completes, whatever the scheduler does here.
+	time.Sleep(20 * time.Millisecond)
+	close(releaseRecord)
+	<-concludeDone
+	<-beginDone
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(order, []string{"record", "begin"}) {
+		t.Fatalf("order = %v, want the record step to complete before a new pass begins", order)
+	}
+}
+
+// TestConcludePersistsBeforePublishing pins the persist-then-publish order:
+// the capabilities must stay unobservable while the durable append is in
+// flight, or a concurrent admission could be enabled by the fresh
+// declaration while gated against the previous pass's stale row.
+func TestConcludePersistsBeforePublishing(t *testing.T) {
+	b := newTestBackend(t)
+	gen, _ := b.beginConformanceProof(nil)
+	var observed []bool
+	published, recordErr := b.concludeConformanceProof(gen, true, func() error {
+		observed = append(observed, b.networkless.Load(), b.providerEgress.Load())
+		return nil
+	})
+	if !published || recordErr != nil {
+		t.Fatalf("conclude = (%v, %v), want published with no error", published, recordErr)
+	}
+	if slices.Contains(observed, true) {
+		t.Fatal("capabilities were observable while the durable append was in flight")
+	}
+	if !b.Capabilities().Has(exec.CapEnforcedProviderEgress) {
+		t.Fatal("publication missing after a successful append")
+	}
+}
+
+// TestUnattendedFloorMatchesTheClassCeiling binds ward's hand-maintained
+// unattended floor to the domain's registered ceiling: for this backend
+// everything provable is required, so a capability added to either
+// registration point without the other is a drift this test catches.
+func TestUnattendedFloorMatchesTheClassCeiling(t *testing.T) {
+	ceiling, ok := domain.ProvableCapabilities(domain.BackendFreshVMReadOnlyVolumeHandoff)
+	if !ok {
+		t.Fatal("fresh-vm class has no registered ceiling")
+	}
+	floor := domain.NewCapabilitySnapshot(unattendedCapabilities...)
+	if !slices.Equal(floor, ceiling) {
+		t.Fatalf("unattendedCapabilities = %v, want the class ceiling %v", floor, ceiling)
+	}
+}
+
+// TestProvenCapabilitiesMatchTheClassCeiling binds ward's explicit proven set
+// to the domain's registered ceiling for its class: a capability added on one
+// side without the other is a drift this test catches, in both directions.
+func TestProvenCapabilitiesMatchTheClassCeiling(t *testing.T) {
+	ceiling, ok := domain.ProvableCapabilities(domain.BackendFreshVMReadOnlyVolumeHandoff)
+	if !ok {
+		t.Fatal("fresh-vm class has no registered ceiling")
+	}
+	proven := domain.NewCapabilitySnapshot(provenCapabilities()...)
+	if excess := domain.ExcessCapabilities(proven, ceiling); len(excess) > 0 {
+		t.Errorf("ward proves %v beyond the domain ceiling", excess)
+	}
+	if missing := domain.MissingCapabilities(proven, ceiling); len(missing) > 0 {
+		t.Errorf("domain ceiling holds %v that ward's pass never proves", missing)
 	}
 }
 

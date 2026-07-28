@@ -51,8 +51,16 @@
 // volume, so its absence was mount omission, not deletion). A separate
 // networkless-export probe verifies an explicit empty runtime attachment set
 // before start, then deliberately attempts DNS and a direct-IP connection;
-// only a complete green Full pass adds supports_networkless_export to the
-// backend declaration. The third handoff-spike probe
+// only a complete green Full pass adds supports_networkless_export and
+// supports_enforced_provider_egress to the backend declaration, and a
+// completed, generation-current pass also records its outcome durably
+// through the suite's ConformanceRecorder (issues #327/#320): a passed
+// record carries the explicit proven set, a failed record proves nothing,
+// and the capabilities are published only after the pass's own row is
+// durable (an unpersisted proof is never declared: a record failure fails
+// the pass, and a pass run with no recorder proves but declares nothing),
+// since the store gates unattended admission on the durable record, not on
+// process state. The third handoff-spike probe
 // (same-VM guest unmount is not a detach) needs a CAP_SYS_ADMIN guest
 // process, which the gate's ContainerSpec vocabulary deliberately cannot
 // express — that minimality is checks 1-2's isolation argument — so it is a
@@ -66,8 +74,8 @@
 // which never auto-promotes or offers a bypass).
 //
 // Suite.PreJob is the lightweight probe run before each unattended job. It
-// verifies only cheap preconditions — including the Full-earned networkless
-// capability declaration —
+// verifies only cheap preconditions — including the Full-earned capability
+// declarations —
 // the images are digest-pinned, the runtime is reachable, and a
 // create→inspect→delete liveness round-trips — and boots no VM, copies no
 // workspace, and exports nothing. It deliberately does NOT re-verify the

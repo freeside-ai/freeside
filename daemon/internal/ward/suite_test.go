@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
@@ -46,6 +47,7 @@ func newSuiteTest(t *testing.T) (*Suite, *fakeRuntime) {
 	// PreJob cases model a backend whose startup Full already passed. Full
 	// itself clears this state on entry and earns it again only on success.
 	b.networkless.Store(true)
+	b.providerEgress.Store(true)
 	// The default writer emits this run's sentinel; a passing-path export must
 	// carry it (and not the credential marker) for Full's non-vacuousness check.
 	// Tests that assert a containment failure override this.
@@ -276,8 +278,14 @@ func TestSuiteFullSuccess(t *testing.T) {
 	if seedCopies != 2 {
 		t.Errorf("Full made %d workspace-seed copies, want staged tree and sentinel", seedCopies)
 	}
-	if !s.b.Capabilities().Has(exec.CapNetworklessExport) {
-		t.Error("successful Full did not declare supports_networkless_export")
+	// A recorderless pass proves but never declares: without its own durable
+	// record, fresh flags could enable admission against a stale row an
+	// earlier recorded pass left behind. Declaration-with-recorder is pinned
+	// in TestSuiteFullRecordsPassedConformance.
+	for _, c := range conformancePendingCapabilities {
+		if s.b.Capabilities().Has(c) {
+			t.Errorf("recorderless Full declared %q", c)
+		}
 	}
 	s.assertReaped(t, rt)
 }
@@ -650,21 +658,22 @@ func TestSuiteFullOlderSuccessCannotOverrideNewerFailure(t *testing.T) {
 		return nil
 	})
 	b := fx.backend(t)
-	newSuite := func(runID string) *Suite {
+	newSuite := func(runID string, rec ConformanceRecorder) *Suite {
 		t.Helper()
 		s, err := NewSuite(b, SuiteFixture{
 			AgentImage:       "example.test/agent@sha256:" + strings.Repeat("1", 64),
 			CredentialMarker: suiteMarker,
 			RunID:            runID,
 			Seed:             seed,
-		})
+		}, WithConformanceRecorder(rec))
 		if err != nil {
 			t.Fatalf("NewSuite(%q): %v", runID, err)
 		}
 		return s
 	}
-	older := newSuite("older-run")
-	newer := newSuite("newer-run")
+	olderRec, newerRec := &recordingConformance{}, &recordingConformance{}
+	older := newSuite("older-run", olderRec)
+	newer := newSuite("newer-run", newerRec)
 	fx.rt.exportTarPath = buildTar(t, writerArchive(t, older.fx.RunID))
 	scriptHappyProbes(older, fx.rt)
 	newerCredential := newer.conformanceName("cred")
@@ -690,12 +699,31 @@ func TestSuiteFullOlderSuccessCannotOverrideNewerFailure(t *testing.T) {
 	if b.Capabilities().Has(exec.CapNetworklessExport) {
 		t.Fatal("older successful Full overrode the newer failed generation")
 	}
+	// The durable log follows the same discipline: the superseded pass left
+	// only its begin marker (its success never published or recorded an
+	// outcome), so the newest record is the newer pass's failure and
+	// durable-latest agrees with the in-memory declaration.
+	if len(olderRec.records) != 1 || olderRec.records[0].Outcome != domain.ConformanceSuperseded {
+		t.Errorf("superseded pass recorded %+v, want only its begin marker", olderRec.records)
+	}
+	if len(newerRec.records) != 2 || newerRec.records[1].Outcome != domain.ConformanceFailed {
+		t.Errorf("newer pass recorded %+v, want its marker then one failed record", newerRec.records)
+	}
 	fx.assertReaped(t)
 }
 
 func TestSuitePreJobRequiresNetworklessProof(t *testing.T) {
 	s, rt := newSuiteTest(t)
 	s.b.networkless.Store(false)
+	wantCheckFailure(t, s.PreJob(context.Background()), CheckPreJobProbe)
+	if rt.callIndex("list-volumes") >= 0 {
+		t.Error("PreJob touched the runtime before refusing the missing capability")
+	}
+}
+
+func TestSuitePreJobRequiresEgressProof(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	s.b.providerEgress.Store(false)
 	wantCheckFailure(t, s.PreJob(context.Background()), CheckPreJobProbe)
 	if rt.callIndex("list-volumes") >= 0 {
 		t.Error("PreJob touched the runtime before refusing the missing capability")
