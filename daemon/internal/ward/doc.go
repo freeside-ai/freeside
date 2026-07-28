@@ -148,10 +148,11 @@
 //
 // The §5.4 leased auth-store mutation path relaxes exactly one mount, under
 // evidence at every step. A spec may mark one credential mount Writable only
-// together with an AuthStoreLeaseClaim; the gate acquires the per-identity
-// mutation lease itself (only it knows the handoff deadline and when the
-// writer is provably absent), sizes the window past its whole budget,
-// re-verifies holder and fence at the last instant before the writer starts,
+// together with an AuthStoreLeaseClaim; the gate first requires its source to
+// match the claimed identity's immutable trusted volume binding, then acquires
+// the per-identity mutation lease itself (only it knows the handoff deadline
+// and when the writer is provably absent), sizes the window past its whole
+// budget, re-verifies holder and fence at the last instant before the writer starts,
 // and releases in teardown only once the writer's absence is proven — an
 // unproven writer keeps the window held, with expiry as the backstop. The
 // mutation itself is attested, not assumed: two observer VMs digest the
@@ -169,8 +170,10 @@
 // restart the runtime world classified by the persisted token is the only
 // trustworthy account of progress, and a persisted progress bit would be a
 // decoded trust bit recovery would believe instead of re-observing. Begin is
-// durable before the first runtime object exists, so no object can outlive
-// the daemon unrecorded. Recover re-gates the record and the caller's
+// durable before the first runtime object exists; for a leased production run
+// it commits with lease acquisition in one store transaction, so neither an
+// object nor a mutation window can outlive the daemon unrecorded. Recover
+// re-gates the record, the identity-volume binding, and the caller's
 // re-supplied spec (digest-bound), then adopts only a writer-complete run
 // whose workspace is provably its own — everything earlier lost its egress
 // proof with the process and is torn down — re-earning every release check

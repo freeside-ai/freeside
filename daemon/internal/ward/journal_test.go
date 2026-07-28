@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 )
 
@@ -30,6 +31,10 @@ type fakeJournal struct {
 	// daemon that died with the write not yet durable. It runs on the
 	// handoff goroutine, so unlocked reads of test state are safe.
 	onCall func(call string)
+	// leaser is set by the leased fixture so BeginLeased can model the
+	// production transaction: the journal row and lease become visible
+	// together after the pre-commit hook.
+	leaser *fakeLeaser
 
 	failBegin, failMark, failClose error
 }
@@ -101,6 +106,58 @@ func (j *fakeJournal) Begin(_ context.Context, rec HandoffJournalRecord) error {
 	cp := rec
 	j.records[rec.RunID] = &cp
 	return nil
+}
+
+func (j *fakeJournal) BeginLeased(
+	_ context.Context,
+	rec HandoffJournalRecord,
+	claim AuthStoreLeaseClaim,
+	now, expiresAt time.Time,
+) (domain.AuthStoreMutationLease, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.recordCall("journal-begin-leased " + rec.RunID)
+	if j.failBegin != nil {
+		return domain.AuthStoreMutationLease{}, j.failBegin
+	}
+	if _, exists := j.records[rec.RunID]; exists {
+		return domain.AuthStoreMutationLease{}, errors.New("fake journal: record already exists for run")
+	}
+	if j.leaser == nil {
+		return domain.AuthStoreMutationLease{}, errors.New("fake journal: no leaser for atomic begin")
+	}
+	var (
+		lease domain.AuthStoreMutationLease
+		err   error
+	)
+	if j.leaser.onAcquire != nil {
+		lease, err = j.leaser.onAcquire(claim.AuthIdentityID, claim.Holder, now, expiresAt)
+		if err != nil {
+			return domain.AuthStoreMutationLease{}, err
+		}
+	} else {
+		lease = domain.AuthStoreMutationLease{
+			AuthIdentityID: claim.AuthIdentityID,
+			Holder:         claim.Holder,
+			Fence:          1,
+			AcquiredAt:     now,
+			ExpiresAt:      expiresAt,
+		}
+	}
+	rec.Lease = &HandoffJournalLease{
+		AuthIdentityID: lease.AuthIdentityID,
+		Holder:         lease.Holder,
+		Fence:          lease.Fence,
+		AcquiredAt:     lease.AcquiredAt,
+		ExpiresAt:      lease.ExpiresAt,
+	}
+	if err := rec.Validate(); err != nil {
+		return domain.AuthStoreMutationLease{}, err
+	}
+	cp := rec
+	j.records[rec.RunID] = &cp
+	j.leaser.lease = lease
+	return lease, nil
 }
 
 func (j *fakeJournal) open(runID string) (*HandoffJournalRecord, error) {
@@ -292,7 +349,7 @@ func TestHandoffJournalRecordGolden(t *testing.T) {
 // record read back after a restart is untrusted input, and every malformed
 // shape is refused before it can steer recovery.
 func TestHandoffJournalRecordValidate(t *testing.T) {
-	if err := testJournalRecord().validate(); err != nil {
+	if err := testJournalRecord().Validate(); err != nil {
 		t.Fatalf("valid fixture: validate() = %v, want nil", err)
 	}
 
@@ -335,7 +392,7 @@ func TestHandoffJournalRecordValidate(t *testing.T) {
 			lease := *r.Lease
 			r.Lease = &lease
 			tc.mutate(&r)
-			if err := r.validate(); !errors.Is(err, ErrInvalidJournalRecord) {
+			if err := r.Validate(); !errors.Is(err, ErrInvalidJournalRecord) {
 				t.Errorf("validate() = %v, want ErrInvalidJournalRecord", err)
 			}
 		})
@@ -351,7 +408,7 @@ func TestHandoffJournalRecordValidate(t *testing.T) {
 	open.Lease = nil
 	open.ExportDir = ""
 	open.Outcome = nil
-	if err := open.validate(); err != nil {
+	if err := open.Validate(); err != nil {
 		t.Errorf("open record: validate() = %v, want nil", err)
 	}
 }

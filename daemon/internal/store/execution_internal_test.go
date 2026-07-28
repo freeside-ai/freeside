@@ -148,6 +148,7 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 		}
 		if err := tx.RecordAuthIdentity(ctx, domain.AuthIdentity{
 			ID: identityID, Provider: "claude", AuthStoreMutationLease: true,
+			AuthStoreVolume:       "provider-cred",
 			MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
 		}, admission.AdmittedAt); err != nil {
 			return err

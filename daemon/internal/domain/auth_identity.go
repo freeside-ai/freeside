@@ -23,6 +23,11 @@ type AuthIdentity struct {
 	// be mutated under a lease. An identity that declares no lease cannot take
 	// one: the store refuses, rather than treating the declaration as advice.
 	AuthStoreMutationLease bool `json:"auth_store_mutation_lease"`
+	// AuthStoreVolume is the trusted runtime volume that carries this
+	// identity's auth store. Every lease-declaring identity binds one exact
+	// volume, so a caller cannot lease identity A while mounting identity B's
+	// writable store.
+	AuthStoreVolume string `json:"auth_store_volume"`
 	// MaxParallelExecutions is the inference-execution limit, independent of
 	// the mutation lease (§5.4). 1B establishes it experimentally; it is at
 	// least one, since an identity that can run nothing is not an identity.
@@ -38,6 +43,9 @@ func (i AuthIdentity) Validate() error {
 	}
 	if i.Provider == "" {
 		return fmt.Errorf("auth identity %s provider: %w", i.ID, ErrEmptyField)
+	}
+	if i.AuthStoreMutationLease && i.AuthStoreVolume == "" {
+		return fmt.Errorf("auth identity %s auth_store_volume: %w", i.ID, ErrEmptyField)
 	}
 	if i.MaxParallelExecutions < 1 {
 		return fmt.Errorf("auth identity %s max_parallel_executions %d: %w",
@@ -129,18 +137,19 @@ func (l AuthStoreMutationLease) HeldAt(now time.Time) bool {
 }
 
 // ValidateAuthIdentityTransition reports whether updated is a legal successor
-// to the stored identity old. The identity's key and provider are fixed, and
-// so is whether its auth store requires a lease: dropping that requirement
-// would retire the serialization point while a holder still believes it holds
-// one, so a different answer is a different identity. The parallelism limit
-// and snapshot support may change, since 1B measures the limit and a provider
-// can gain read-only snapshot support.
+// to the stored identity old. The identity's key, provider, auth-store volume,
+// and lease declaration are fixed: changing either store binding would let a
+// holder keep a lease over a different volume than the writer now mutates.
+// The parallelism limit and snapshot support may change, since 1B measures the
+// limit and a provider can gain read-only snapshot support.
 func ValidateAuthIdentityTransition(old, updated AuthIdentity) error {
 	if updated.ID != old.ID {
 		return fmt.Errorf("auth identity %s: identity would change from %s: %w",
 			updated.ID, old.ID, ErrImmutableTransition)
 	}
-	if updated.Provider != old.Provider || updated.AuthStoreMutationLease != old.AuthStoreMutationLease {
+	if updated.Provider != old.Provider ||
+		updated.AuthStoreMutationLease != old.AuthStoreMutationLease ||
+		updated.AuthStoreVolume != old.AuthStoreVolume {
 		return fmt.Errorf("auth identity %s: fixed bindings would change: %w",
 			updated.ID, ErrImmutableTransition)
 	}

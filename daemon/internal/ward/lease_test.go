@@ -20,6 +20,7 @@ type fakeLeaser struct {
 	rt       *fakeRuntime
 	lease    domain.AuthStoreMutationLease
 	released bool
+	volume   string
 	// releaseCtxErr records the context state Release observed, so tests can
 	// prove the release ran detached from an already-cancelled run context.
 	releaseCtxErr error
@@ -27,6 +28,7 @@ type fakeLeaser struct {
 	onAcquire func(id domain.AuthIdentityID, holder domain.InvocationID, now, expiresAt time.Time) (domain.AuthStoreMutationLease, error)
 	onGet     func(current domain.AuthStoreMutationLease) (domain.AuthStoreMutationLease, error)
 	onRelease func(id domain.AuthIdentityID, holder domain.InvocationID, fence int64, releasedAt time.Time) error
+	onVolume  func(id domain.AuthIdentityID) (string, error)
 }
 
 func (l *fakeLeaser) recordCall(s string) {
@@ -37,6 +39,19 @@ func (l *fakeLeaser) recordCall(s string) {
 	l.rt.mu.Lock()
 	defer l.rt.mu.Unlock()
 	l.rt.calls = append(l.rt.calls, s)
+}
+
+func (l *fakeLeaser) AuthStoreVolume(
+	_ context.Context, id domain.AuthIdentityID,
+) (string, error) {
+	l.recordCall("identity-volume " + string(id))
+	if l.onVolume != nil {
+		return l.onVolume(id)
+	}
+	if l.volume == "" {
+		return "provider-cred", nil
+	}
+	return l.volume, nil
 }
 
 func (l *fakeLeaser) Acquire(_ context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
@@ -84,6 +99,9 @@ func (fx *handoffFixture) leased(t *testing.T) (HandoffSpec, *fakeLeaser) {
 	fx.cfg.Now = func() time.Time { return base }
 	l := &fakeLeaser{rt: fx.rt}
 	fx.cfg.AuthStoreLeaser = l
+	if j, ok := fx.cfg.Journal.(*fakeJournal); ok {
+		j.leaser = l
+	}
 	return testLeasedHandoffSpec(), l
 }
 
@@ -162,10 +180,29 @@ func TestHandoffLeasedAcquireRefusalStopsRun(t *testing.T) {
 		t.Error("store refusal was converted into a conformance failure; it must stay an operational error")
 	}
 	for _, c := range fx.rt.calls {
-		if c == "lease-acquire identity-fixture" {
+		if c == "identity-volume identity-fixture" || c == "lease-acquire identity-fixture" {
 			continue
 		}
 		t.Errorf("runtime call %q happened despite the acquire refusal", c)
+	}
+}
+
+// TestHandoffLeasedWrongBoundVolumeRefused proves the writable mount is gated
+// by trusted identity state, not by agreement between two caller fields.
+func TestHandoffLeasedWrongBoundVolumeRefused(t *testing.T) {
+	fx := newHandoffFixture(t)
+	hs, l := fx.leased(t)
+	l.volume = "other-provider-cred"
+
+	_, err := fx.runSpec(t, hs)
+	wantCheckFailure(t, err, CheckAuthStoreMutationLease)
+	if fx.rt.callIndex("lease-acquire identity-fixture") != -1 {
+		t.Error("lease acquired despite the identity-to-volume mismatch")
+	}
+	for _, call := range fx.rt.calls {
+		if call != "identity-volume identity-fixture" {
+			t.Errorf("call %q happened after the binding refusal", call)
+		}
 	}
 }
 
@@ -388,14 +425,13 @@ func TestHandoffLeasedReleaseFailureFailsGate(t *testing.T) {
 	fx.assertReaped(t)
 }
 
-// TestHandoffLeasedEarlyRefusalStillReleases: a refusal after acquisition but
-// before the first runtime object (here: a preflight spec violation) must not
-// leave the identity serialized until expiry.
-func TestHandoffLeasedEarlyRefusalStillReleases(t *testing.T) {
+// TestHandoffLeasedPreflightRefusalOpensNoWindow: caller-controlled shape
+// refusals run before the mutation window, so no lease needs cleanup.
+func TestHandoffLeasedPreflightRefusalOpensNoWindow(t *testing.T) {
 	fx := newHandoffFixture(t)
 	hs, l := fx.leased(t)
-	// Force a preflight refusal after the acquire: an extra read-only mount
-	// colliding with the workspace target fails validateAgentSpec.
+	// An extra read-only mount colliding with the workspace target fails
+	// validateAgentSpec.
 	hs.Agent.CredentialMounts = append(hs.Agent.CredentialMounts,
 		CredentialMount{Volume: "collide", Target: fx.cfg.withDefaults().WorkspaceTarget})
 
@@ -403,8 +439,8 @@ func TestHandoffLeasedEarlyRefusalStillReleases(t *testing.T) {
 	if err == nil {
 		t.Fatal("Handoff succeeded; fixture meant to fail preflight")
 	}
-	if !l.released {
-		t.Error("lease survived an early preflight refusal")
+	if l.lease.AuthIdentityID != "" || l.released {
+		t.Errorf("preflight refusal touched the lease: lease=%+v released=%v", l.lease, l.released)
 	}
 }
 

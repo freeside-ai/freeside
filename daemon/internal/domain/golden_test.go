@@ -335,6 +335,7 @@ func TestGolden(t *testing.T) {
 	// its auth store.
 	identity := domain.AuthIdentity{
 		ID: "auth-claude-owner", Provider: "claude", AuthStoreMutationLease: true,
+		AuthStoreVolume:       "claude-owner-credentials",
 		MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
 	}
 	mutationLease := domain.AuthStoreMutationLease{

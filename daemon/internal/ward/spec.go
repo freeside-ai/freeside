@@ -304,6 +304,21 @@ func (s HandoffSpec) writableCredentialTarget() string {
 	return ""
 }
 
+// writableCredentialVolume is the runtime volume of the one leased writable
+// credential mount. The trusted identity binding is compared with this value
+// before the mutation window is opened.
+func (s HandoffSpec) writableCredentialVolume() string {
+	if s.AuthStoreLease == nil {
+		return ""
+	}
+	for _, cm := range s.Agent.CredentialMounts {
+		if cm.Writable {
+			return cm.Volume
+		}
+	}
+	return ""
+}
+
 // handoffNames are the runtime object names one run owns.
 type handoffNames struct {
 	Workspace   string
