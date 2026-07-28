@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 20
+revision: 21
 status: active
 phase: 1A
 updated: 2026-07-27
@@ -579,8 +579,13 @@ silently downgrades. Named capabilities are:
 - `supports_post_exit_export`;
 - `supports_read_only_remount`;
 - `supports_credential_volume_detach`;
-- `supports_workspace_snapshot`; and
-- `supports_networkless_export`.
+- `supports_workspace_snapshot`;
+- `supports_networkless_export`; and
+- `supports_enforced_provider_egress` — the proven writer-egress boundary:
+  the agent workspace reaches only the declared provider authorities through
+  the daemon's CONNECT proxy on a host-only network, with DNS and direct
+  connections refuted by live in-writer probes. It attests the enforcement
+  mechanism, distinct from the *requested* egress profile (Section 5.4).
 
 #### The first ward gate
 
@@ -662,11 +667,25 @@ registry-resolved digest reference.
 | Mode | Requirements and limits |
 | --- | --- |
 | `attended_dev` | May use a weaker runner class. Disables `auto_start`, automatic publication, and unattended escalation. Reports its isolation class honestly. |
-| `unattended` | Requires successful conformance including the handoff gate, a valid trust profile, an approved credential mode, all runner minimums including the proven `supports_networkless_export` exporter boundary, current backup health including encryption status, and no blocking `system_health` item. |
+| `unattended` | Requires successful conformance including the handoff gate, a valid trust profile, an approved credential mode, all runner minimums including the proven `supports_networkless_export` exporter boundary and the proven `supports_enforced_provider_egress` writer egress boundary, current backup health including encryption status, and no blocking `system_health` item. |
 
 Run the full conformance suite at startup, after configuration changes, and on
 the doctor's schedule. Run a lightweight probe before every unattended job.
 Golden images pin CLI versions. Workspaces use VM-local disk.
+
+Each completed, generation-current full pass durably records the backend's
+proven class and capabilities with a monotonic proof generation and time; a
+beginning recheck first durably supersedes the previous declaration, so it
+cannot admit while the recheck is pending; a
+failed pass records the failure and invalidates the declaration, and an
+unpersisted proof is not a proof (the pass fails and the capabilities are
+never declared: publication follows the durable append). A recorded declaration can never exceed its class's registered
+provable ceiling, and an unattended admission is refused at the write
+boundary unless its capability snapshot sits within the named backend's
+current durable conformance record; a conformance lapse closes new admission
+without making recorded history unreadable. The declaration a new unattended
+admission is gated against is therefore reconstructed from persisted
+conformance evidence, never from transient process state.
 
 Phase 1A.2 exception (owner decision, 2026-07-26): unattended admission may
 waive the encryption-state dimension of backup health, and only that
