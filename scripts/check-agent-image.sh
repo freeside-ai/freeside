@@ -54,6 +54,7 @@ command -v jq >/dev/null 2>&1 || {
 probe_container=""
 cidfile=""
 runtime_json=""
+create_attempted=0
 ownership_label="ai.freeside.project-image.owner"
 # The token gates a force-delete, so it must be unguessable: a predictable
 # value would let a local process plant a container that passes the ownership
@@ -157,6 +158,107 @@ inspected_owned_id() { # <expected-id>
 		end' 2>/dev/null
 }
 
+# Mirrors deleteOwnedContainer (daemon/internal/projectimage/apple.go): the
+# ownership evidence that selected a recovery candidate is re-verified by a
+# fresh inspection immediately before the destructive act, shrinking the
+# window in which a replacement under the same runtime ID could be deleted
+# on stale evidence.
+recovery_delete_owned() { # <id>
+	if ! capture_runtime_json "$runtime_json" \
+		"$container_bin" inspect "$1" </dev/null 2>/dev/null; then
+		echo "check-agent-image: could not re-inspect container $1 before recovery deletion" >&2
+		return 1
+	fi
+	if ! reject_duplicate_json_keys "$runtime_json"; then
+		echo "check-agent-image: refusing recovery deletion of container $1: ambiguous runtime JSON" >&2
+		return 1
+	fi
+	confirmed_id=$(inspected_owned_id "$1") || confirmed_id=""
+	if [ "$confirmed_id" != "$1" ]; then
+		echo "check-agent-image: refusing recovery deletion of container $1: ownership no longer verified" >&2
+		return 1
+	fi
+	if ! "$container_bin" delete --force "$1" </dev/null >/dev/null 2>&1; then
+		echo "check-agent-image: could not remove recovered probe container $1" >&2
+		return 1
+	fi
+}
+
+# Mirrors appleBackend.recoverOwnedContainer (daemon/internal/projectimage/
+# apple.go): when `container create` registers the probe but terminates
+# before producing the cidfile, the ownership token is the only remaining
+# binding to the orphan. Apple container's list output omits labels, so
+# ownership is read per candidate from its own inspection, and deletion
+# re-gates through recovery_delete_owned's fresh inspection; anything
+# unparseable refuses deletion rather than guessing. Returns nonzero when
+# any step failed.
+recover_owned_containers() {
+	recovery_failed=0
+	if [ -z "$runtime_json" ] ||
+		! capture_runtime_json "$runtime_json" \
+			"$container_bin" list --all --format json 2>/dev/null; then
+		echo "check-agent-image: could not list containers for ownership recovery" >&2
+		return 1
+	fi
+	if ! reject_duplicate_json_keys "$runtime_json"; then
+		echo "check-agent-image: refusing ownership recovery on ambiguous container listing" >&2
+		return 1
+	fi
+	# A non-array listing (the daemon's decodeStrictJSON rejects those at the
+	# type level) fails jq and refuses recovery outright; non-object entries,
+	# non-string identities, and identities carrying an escaped NUL (which a
+	# shell variable cannot hold losslessly) project to empty fields, which
+	# the per-line identity checks below flag.
+	candidates=$(jq -r <"$runtime_json" '
+		def usable: type == "string" and (contains("\u0000") | not);
+		(if type == "array" then . else error("not an array") end)
+		| .[]
+		| (if type == "object" then . else {} end)
+		| [
+			(.id | if usable then . else "" end),
+			(.configuration
+				| if type == "object" then .id else null end
+				| if usable then . else "" end)
+		]
+		| @tsv' 2>/dev/null) || {
+		echo "check-agent-image: container listing returned an unexpected object" >&2
+		return 1
+	}
+	[ -n "$candidates" ] || return 0
+	# The runtime calls inside the loop read /dev/null explicitly: the loop's
+	# stdin is the candidate list, and a runtime that drains stdin would
+	# otherwise swallow the remaining candidates.
+	while IFS=$'\t' read -r candidate_id config_id; do
+		if ! valid_container_id "$candidate_id" || [ "$candidate_id" != "$config_id" ]; then
+			echo "check-agent-image: ownership recovery listed an invalid container identity" >&2
+			recovery_failed=1
+			continue
+		fi
+		if ! capture_runtime_json "$runtime_json" \
+			"$container_bin" inspect "$candidate_id" </dev/null 2>/dev/null; then
+			echo "check-agent-image: could not inspect container ${candidate_id} for ownership recovery" >&2
+			recovery_failed=1
+			continue
+		fi
+		if ! reject_duplicate_json_keys "$runtime_json"; then
+			echo "check-agent-image: refusing to judge ownership of container ${candidate_id} from ambiguous runtime JSON" >&2
+			recovery_failed=1
+			continue
+		fi
+		owned_id=$(inspected_owned_id "$candidate_id") || owned_id=""
+		if [ "$owned_id" = "$candidate_id" ]; then
+			if recovery_delete_owned "$candidate_id"; then
+				echo "check-agent-image: recovered orphaned probe container ${candidate_id}" >&2
+			else
+				recovery_failed=1
+			fi
+		fi
+	done <<EOF
+$candidates
+EOF
+	return "$recovery_failed"
+}
+
 cleanup() {
 	status=$?
 	trap - EXIT
@@ -192,6 +294,10 @@ cleanup() {
 			echo "check-agent-image: could not inspect probe container ${probe_container} for cleanup" >&2
 			cleanup_failed=1
 		fi
+	elif [ "$create_attempted" -ne 0 ]; then
+		if ! recover_owned_containers; then
+			cleanup_failed=1
+		fi
 	fi
 	if [ -n "$cidfile" ] && ! rm -f "$cidfile"; then
 		echo "check-agent-image: could not remove probe identity file" >&2
@@ -219,6 +325,7 @@ runtime_json=$(mktemp "${TMPDIR:-/tmp}/freeside-image-checker-json.XXXXXX")
 # The container is created, never started: the allowlist is verified on a
 # stopped container, exactly as the gate does it.
 echo "check-agent-image: creating a probe container from ${image_ref}" >&2
+create_attempted=1
 "$container_bin" create --cidfile "$cidfile" \
 	--label "${ownership_label}=${ownership_token}" \
 	-- "$image_ref" sh -c true >&2
