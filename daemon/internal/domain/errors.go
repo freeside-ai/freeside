@@ -123,6 +123,8 @@ var (
 		"conformance record claims capabilities beyond the backend class's provable ceiling")
 	ErrConformanceCapabilitiesWithoutPass = errors.New(
 		"only a passed conformance record can carry a proven capability set")
+	ErrAdmissionExceedsConformance = errors.New(
+		"admission capability snapshot exceeds the backend's proven conformance declaration")
 
 	// Unattended operating-state and §4 blocking failures (issues #319, #321).
 	ErrInvalidUnattendedOperationState = errors.New("unknown unattended operation state")

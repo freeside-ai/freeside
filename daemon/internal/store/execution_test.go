@@ -62,6 +62,40 @@ func newAdmissionFixture(t *testing.T, mutate func(*domain.ExecutionAdmissionInp
 	return admissionFixture{run: run, identity: identity, admission: admission}
 }
 
+// conformantCapabilities is the fresh-vm class ceiling: the widest snapshot a
+// backend-conformance record can back, and therefore the widest an unattended
+// admission fixture may claim (#320).
+func conformantCapabilities(t *testing.T) domain.CapabilitySnapshot {
+	t.Helper()
+	ceiling, ok := domain.ProvableCapabilities(domain.BackendFreshVMReadOnlyVolumeHandoff)
+	if !ok {
+		t.Fatal("fresh-vm class has no registered ceiling")
+	}
+	return ceiling
+}
+
+// seedBackendConformance records a passed conformance record at the fresh-vm
+// ceiling, so unattended fixtures isolate the gate under test rather than the
+// missing-conformance refusal.
+func seedBackendConformance(t *testing.T, s *store.Store) {
+	t.Helper()
+	record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+		Backend:      domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:      domain.ConformancePassed,
+		Capabilities: conformantCapabilities(t),
+		ProvedAt:     admissionEpoch,
+	})
+	if err != nil {
+		t.Fatalf("NewBackendConformance: %v", err)
+	}
+	if err := s.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
+		_, err := tx.RecordBackendConformance(context.Background(), record)
+		return err
+	}); err != nil {
+		t.Fatalf("seed backend conformance: %v", err)
+	}
+}
+
 func attendedFloors() map[domain.OperatingMode]domain.CapabilitySnapshot {
 	return map[domain.OperatingMode]domain.CapabilitySnapshot{
 		domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
@@ -102,6 +136,7 @@ func openWithFixture(t *testing.T, f admissionFixture, opts store.Options) *stor
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	seedBackendConformance(t, s)
 	return s
 }
 
@@ -239,7 +274,7 @@ func TestExecutionAdmissionWaiverRegatedAgainstTheOperator(t *testing.T) {
 		// §5.7's exception belongs to unattended running, which also names the
 		// profile revision it was admitted under.
 		in.OperatingMode = domain.ModeUnattended
-		in.Capabilities = domain.NewCapabilitySnapshot(domain.AllRunnerCapabilities...)
+		in.Capabilities = conformantCapabilities(t)
 		in.TrustProfileDigest = &activeProfile
 		in.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
 			RepositoryID: 424242, Reason: "phase 1a.2 supervised runs",
@@ -411,7 +446,7 @@ func TestUnattendedAdmissionRequiresATrustedRepository(t *testing.T) {
 	waiverRepository := int64(424242)
 	unattended := func(in *domain.ExecutionAdmissionInput) {
 		in.OperatingMode = domain.ModeUnattended
-		in.Capabilities = domain.NewCapabilitySnapshot(domain.AllRunnerCapabilities...)
+		in.Capabilities = conformantCapabilities(t)
 		in.TrustProfileDigest = &activeProfile
 		// §5.7: unattended admission without the waiver fails closed, and no
 		// encrypted checkpoint exists yet to offer the other path.
@@ -484,7 +519,7 @@ func TestUnattendedAdmissionRequiresBackupAuthorization(t *testing.T) {
 	active := testTrustProfile(t, "owner/repo", 424242).ProfileDigest
 	f := newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
 		in.OperatingMode = domain.ModeUnattended
-		in.Capabilities = domain.NewCapabilitySnapshot(domain.AllRunnerCapabilities...)
+		in.Capabilities = conformantCapabilities(t)
 		in.TrustProfileDigest = &active
 	})
 	s := openWithFixture(t, f, store.Options{
@@ -542,7 +577,7 @@ func TestUnattendedAdmissionRegatesEveryBackupHealthDimension(t *testing.T) {
 	waiverRepository := int64(424242)
 	f := newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
 		in.OperatingMode = domain.ModeUnattended
-		in.Capabilities = domain.NewCapabilitySnapshot(domain.AllRunnerCapabilities...)
+		in.Capabilities = conformantCapabilities(t)
 		in.TrustProfileDigest = &active
 		in.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
 			RepositoryID: waiverRepository, Reason: "phase 1a.2 supervised runs",
@@ -638,7 +673,7 @@ func TestUnattendedAdmissionWithNoBackupHealthSourceFailsClosed(t *testing.T) {
 	waiverRepository := int64(424242)
 	f := newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
 		in.OperatingMode = domain.ModeUnattended
-		in.Capabilities = domain.NewCapabilitySnapshot(domain.AllRunnerCapabilities...)
+		in.Capabilities = conformantCapabilities(t)
 		in.TrustProfileDigest = &active
 		in.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
 			RepositoryID: waiverRepository, Reason: "phase 1a.2 supervised runs",
@@ -664,7 +699,7 @@ func TestListUnattendedAdmissionsEvaluatesBackupHealthOnce(t *testing.T) {
 	waiverRepository := int64(424242)
 	unattended := func(in *domain.ExecutionAdmissionInput) {
 		in.OperatingMode = domain.ModeUnattended
-		in.Capabilities = domain.NewCapabilitySnapshot(domain.AllRunnerCapabilities...)
+		in.Capabilities = conformantCapabilities(t)
 		in.TrustProfileDigest = &active
 		in.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
 			RepositoryID: waiverRepository, Reason: "phase 1a.2 supervised runs",
@@ -732,7 +767,7 @@ func TestAdmissionBoundToTheActiveTrustProfileRevision(t *testing.T) {
 	waiverRepository := int64(424242)
 	f := newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
 		in.OperatingMode = domain.ModeUnattended
-		in.Capabilities = domain.NewCapabilitySnapshot(domain.AllRunnerCapabilities...)
+		in.Capabilities = conformantCapabilities(t)
 		in.TrustProfileDigest = &active
 		in.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
 			RepositoryID: waiverRepository, Reason: "phase 1a.2 supervised runs",

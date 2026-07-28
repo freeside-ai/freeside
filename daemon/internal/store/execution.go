@@ -102,6 +102,9 @@ func (tx *InternalTx) RecordExecutionAdmission(ctx context.Context, admission do
 	if err := tx.RequireUnattendedAdmissible(ctx, admission); err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
+	if err := tx.RequireBackendConformant(ctx, admission); err != nil {
+		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
+	}
 	if err := tx.requireRecordedAttempt(ctx, admission); err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}

@@ -14,6 +14,18 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
+// conformantCeiling is the fresh-vm class's provable ceiling: the widest
+// declaration a durable conformance record can back (#320), and what the
+// unattended fixture backend declares.
+func conformantCeiling(t *testing.T) domain.CapabilitySnapshot {
+	t.Helper()
+	ceiling, ok := domain.ProvableCapabilities(domain.BackendFreshVMReadOnlyVolumeHandoff)
+	if !ok {
+		t.Fatal("fresh-vm class has no registered ceiling")
+	}
+	return ceiling
+}
+
 // openWaivedUnattendedFixture is the §5.7 Phase 1A.2 test bed: an unattended
 // engine admitting under the backup-encryption waiver, against a store whose
 // operator configuration holds that waiver, with healthy local backup
@@ -57,9 +69,25 @@ func openWaivedUnattendedFixture(t *testing.T) *workflowFixture {
 		if err := tx.RecordAuthIdentity(ctx, testIdentity, admittedAt); err != nil {
 			return err
 		}
-		return tx.RecordTrustProfile(ctx, profile, admittedAt)
+		if err := tx.RecordTrustProfile(ctx, profile, admittedAt); err != nil {
+			return err
+		}
+		// The unattended write gate requires the named backend's durable
+		// conformance record (#320); the fixture backend therefore carries the
+		// registered fresh-vm class and a passed record at its ceiling.
+		conformance, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+			Backend:      domain.BackendFreshVMReadOnlyVolumeHandoff,
+			Outcome:      domain.ConformancePassed,
+			Capabilities: conformantCeiling(t),
+			ProvedAt:     admittedAt,
+		})
+		if err != nil {
+			return err
+		}
+		_, err = tx.RecordBackendConformance(ctx, conformance)
+		return err
 	}); err != nil {
-		t.Fatalf("seed identity and profile: %v", err)
+		t.Fatalf("seed identity, profile, and conformance: %v", err)
 	}
 	blobs, err := signet.NewBlobStore(filepath.Join(root, "blobs"))
 	if err != nil {
@@ -73,8 +101,8 @@ func openWaivedUnattendedFixture(t *testing.T) *workflowFixture {
 	workflow, err := engine.New(st, attention, driver,
 		engine.WithAdmission(
 			fake.RunnerBackend{
-				BackendName: "fake_runner",
-				Caps:        exec.NewCapabilitySet(domain.AllRunnerCapabilities...),
+				BackendName: string(domain.BackendFreshVMReadOnlyVolumeHandoff),
+				Caps:        exec.NewCapabilitySet(conformantCeiling(t)...),
 			},
 			floor, env, func() time.Time { return admittedAt }))
 	if err != nil {

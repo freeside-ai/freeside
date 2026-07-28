@@ -502,11 +502,12 @@ func AdmittedUnder(a ExecutionAdmission, policy AdmissionPolicy) error {
 			a.InvocationID, a.OperatingMode, ErrUnknownAdmissionFloor)
 	}
 	// This compares the recorded snapshot against the floor, not against what
-	// the named backend was ever proven to declare: nothing persists a
-	// backend's conformance result, so a writer that over-claims the class is
-	// not caught here (#320). The re-gate keeps a snapshot honest about
-	// *policy drift*, which is what it was built for; it is not proof that the
-	// backend earned the class.
+	// the named backend was ever proven to declare. The conformance half lives
+	// at the write boundary instead (the store's RequireBackendConformant,
+	// #320): a new unattended admission must sit within the backend's current
+	// durable BackendConformance record, while this re-gate keeps a snapshot
+	// honest about *policy drift* without turning recorded history unreadable
+	// when conformance later lapses.
 	if missing := MissingCapabilities(a.Capabilities, requiredCapabilities(a.OperatingMode, floor)); len(missing) > 0 {
 		return fmt.Errorf("execution admission %s lacks %v: %w", a.InvocationID, missing, ErrCapabilityBelowFloor)
 	}

@@ -18,7 +18,7 @@ func unattendedAdmissionFixture(t *testing.T) admissionFixture {
 	activeProfile := testTrustProfile(t, "owner/repo", 424242).ProfileDigest
 	return newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
 		in.OperatingMode = domain.ModeUnattended
-		in.Capabilities = domain.NewCapabilitySnapshot(domain.AllRunnerCapabilities...)
+		in.Capabilities = conformantCapabilities(t)
 		in.TrustProfileDigest = &activeProfile
 		in.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
 			RepositoryID: 424242, Reason: "phase 1a.2 supervised runs",
@@ -220,6 +220,7 @@ func TestStopClosesUnattendedAdmission(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
+	seedBackendConformance(t, s)
 
 	recordTransition(t, s, stoppedAt(admissionEpoch, "cmd-stop-a"))
 	if err := recordAdmission(t, s, f.admission); !errors.Is(err, domain.ErrUnattendedOperationStopped) {
