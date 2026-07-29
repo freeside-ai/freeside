@@ -75,6 +75,13 @@ func (f *repositoryIDFlag) Value() *int64 {
 }
 
 func main() {
+	// `freesided submit` is the first §10 verb; everything else stays the
+	// original flag-mode interface. A verb never collides with a flag
+	// invocation, since flags begin with '-'.
+	if len(os.Args) > 1 && os.Args[1] == "submit" {
+		runSubmitMain(os.Args[2:])
+		return
+	}
 	flags := flag.NewFlagSet("freesided", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	dbPath := flags.String("db", "", "SQLite database path (required; created if absent)")
