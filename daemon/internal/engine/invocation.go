@@ -52,8 +52,9 @@ func (e *Engine) reconcileInvocations(ctx context.Context) (int, int, error) {
 // undiscoverable after a daemon restart.
 func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 	var (
-		pending []store.QueueEntry
-		held    bool
+		pending           []store.QueueEntry
+		pendingProduction []store.QueueEntry
+		held              bool
 	)
 	err := e.store.Read(ctx, func(tx *store.ReadTx) error {
 		// An engine that is not explicitly configured attended_dev honours
@@ -85,6 +86,10 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		}
 		var err error
 		pending, err = tx.ListPendingOutbox(ctx, kindAgentInvocationRequested)
+		if err != nil {
+			return err
+		}
+		pendingProduction, err = tx.ListPendingOutbox(ctx, KindProductionInvocationRequested)
 		return err
 	})
 	if err != nil {
@@ -108,64 +113,185 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			return started, fmt.Errorf("intent %q: run %q has no feedback stage",
 				entry.IdempotencyKey, binding.run.ID)
 		}
-		// Durable state decides first. The run snapshot already says whether
-		// this invocation has an attempt, and a recorded attempt starts under
-		// the admission stored beside it, so the live capability gate runs
-		// only for an attempt that does not exist yet. Admitting first would
-		// let a backend that no longer clears the floor strand work that was
-		// already admitted, which is the same mistake as letting the current
-		// configuration decide whether to read the record at all.
-		var fresh *domain.ExecutionAdmission
-		if !attemptRecorded(binding.run, request.InvocationID) {
-			admission, admitted, err := e.admitAttempt(ctx, binding, stage, request.InvocationID)
-			if err != nil {
-				// A backend below the floor is a typed refusal (§5.7): nothing
-				// is appended and nothing is started, so the intent stays
-				// pending for a pass under a backend that clears the floor.
-				return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
-			}
-			if admitted {
-				fresh = &admission
-			}
-		}
-		// recordAttempt reports the admission that is actually durable: on a
-		// replay it is the stored one, not a freshly built value whose
-		// admission instant (and therefore identity) has moved since. Starting
-		// under a fresh id would hand the driver an admission no reader can
-		// reconstruct.
-		_, effective, bound, err := e.recordAttempt(ctx, binding.run.ID, request.InvocationID, fresh)
+		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
+		started += boolCount(startedNow)
 		if err != nil {
-			// The admitting transaction's operating-state refusal (a stop or a
-			// blocking system_health item committed since the pass began) is
-			// the pre-check's race-free backstop: hold the remaining intents
-			// for a later pass instead of failing the loop. The operator
-			// already sees why — the stop notice or the blocking item is open
-			// in signet.
-			if errors.Is(err, domain.ErrUnattendedOperationStopped) ||
-				errors.Is(err, domain.ErrBlockingSystemHealth) {
+			if invocationDispatchHold(err) {
+				continue
+			}
+			if unattendedDispatchRefusal(err) {
 				return started, nil
 			}
 			return started, err
 		}
-
-		startSpec := exec.StartSpec{RunID: binding.run.ID, StageID: stage.ID}
-		if bound {
-			startSpec = exec.StartSpecFromAdmission(effective)
+		if hold {
+			return started, nil
 		}
-		if err := e.driver.Start(ctx, request.InvocationID, startSpec); err != nil {
-			if !errors.Is(err, exec.ErrDuplicateStart) {
-				return started, fmt.Errorf("intent %q: start: %w", entry.IdempotencyKey, err)
+	}
+	for _, entry := range pendingProduction {
+		// The production kind is engine-owned, so a malformed row is broken
+		// owned state, never another workflow's: fail loudly instead of
+		// skipping it as foreign.
+		request, err := decodeProductionRequest(entry)
+		if err != nil {
+			return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
+		}
+		// An unadmitted production start would hand the materializing driver
+		// a zero spec; unlike the walking skeleton there is no meaning to a
+		// production dispatch without its audited admission. Hold the intent
+		// rather than ending the loop: a daemon composed without production
+		// admission is not configured for this lane, and failing here would
+		// let one pending production intent brick every restart of that
+		// daemon, taking the other lanes down with it. A daemon that is
+		// configured picks the same row up untouched.
+		if e.admission == nil {
+			return started, nil
+		}
+		binding, err := e.loadProductionBinding(ctx, request)
+		if err != nil {
+			return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
+		}
+		stage, ok := findProductionStage(binding.run)
+		if !ok {
+			return started, fmt.Errorf("intent %q: run %q has no %s stage",
+				entry.IdempotencyKey, binding.run.ID, productionStageName)
+		}
+		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
+		started += boolCount(startedNow)
+		if err != nil {
+			// Input materialization is scoped to this invocation. Preserve its
+			// pending row, but continue so one unavailable blob cannot starve
+			// every later healthy submission in the ordered outbox.
+			if invocationDispatchHold(err) {
+				continue
 			}
-		} else {
-			started++
+			// A backend below the floor holds unattended work instead of
+			// ending the daemon's reconcile loop. The refusal is already a
+			// typed no-op — nothing appended, nothing started — and its own
+			// contract is that the intent stays pending for a pass under a
+			// conformant backend. Exiting here would mean a daemon started
+			// before its conformance record was produced could never pick the
+			// work up, which is the opposite of running unattended.
+			if unattendedDispatchRefusal(err) {
+				return started, nil
+			}
+			return started, err
 		}
-		if err := e.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-			return tx.MarkOutboxDispatched(ctx, entry.IdempotencyKey)
-		}); err != nil {
-			return started, fmt.Errorf("intent %q: mark dispatched: %w", entry.IdempotencyKey, err)
+		if hold {
+			return started, nil
 		}
 	}
 	return started, nil
+}
+
+func unattendedDispatchRefusal(err error) bool {
+	return errors.Is(err, exec.ErrCapabilityRefused) ||
+		errors.Is(err, exec.ErrPreJobRefused) ||
+		MutableAdmissionPolicyRefusal(err)
+}
+
+func invocationDispatchHold(err error) bool {
+	return errors.Is(err, exec.ErrInputUnavailable)
+}
+
+// MutableAdmissionPolicyRefusal identifies a fail-closed current-policy
+// verdict that can change without changing the recorded attempt. These
+// verdicts hold work for a later reconcile pass. Immutable-record corruption,
+// identity inconsistencies, and binding errors are deliberately absent: those
+// remain fatal correctness failures.
+func MutableAdmissionPolicyRefusal(err error) bool {
+	return backendConformanceRefusal(err) ||
+		errors.Is(err, domain.ErrUnknownAdmissionFloor) ||
+		errors.Is(err, domain.ErrCapabilityBelowFloor) ||
+		errors.Is(err, domain.ErrCredentialModeNotApproved) ||
+		errors.Is(err, domain.ErrWaiverNotConfigured) ||
+		errors.Is(err, domain.ErrBackupHealthUnavailable) ||
+		errors.Is(err, domain.ErrCheckpointNotCurrent) ||
+		errors.Is(err, domain.ErrArtifactClosureIncomplete) ||
+		errors.Is(err, domain.ErrRestoreTestStale) ||
+		errors.Is(err, domain.ErrInvalidBackupHealthStatus) ||
+		errors.Is(err, store.ErrRepositoryUntrusted) ||
+		errors.Is(err, domain.ErrRepositoryIdentityMismatch) ||
+		errors.Is(err, domain.ErrPathBoundaryMismatch) ||
+		errors.Is(err, domain.ErrTrustProfileSuperseded)
+}
+
+func backendConformanceRefusal(err error) bool {
+	return errors.Is(err, store.ErrBackendNotConformant) ||
+		errors.Is(err, domain.ErrConformanceConfigurationUnbound) ||
+		errors.Is(err, domain.ErrAdmissionConfigurationMismatch) ||
+		errors.Is(err, domain.ErrAdmissionExceedsConformance)
+}
+
+// dispatchIntent runs the lane-independent half of one dispatch: admit if no
+// attempt exists, record attempt and admission durably, start the driver, and
+// mark the intent dispatched. hold reports the operating-state refusal that
+// should quietly end the pass (see the callers' pre-check).
+func (e *Engine) dispatchIntent(
+	ctx context.Context, entry store.QueueEntry, binding invocationBinding,
+	stage domain.Stage, invocationID domain.InvocationID,
+) (bool, bool, error) {
+	// Durable state decides first. The run snapshot already says whether
+	// this invocation has an attempt, and a recorded attempt starts under
+	// the admission stored beside it, so the live capability gate runs
+	// only for an attempt that does not exist yet. Admitting first would
+	// let a backend that no longer clears the floor strand work that was
+	// already admitted, which is the same mistake as letting the current
+	// configuration decide whether to read the record at all.
+	var fresh *domain.ExecutionAdmission
+	if !attemptRecorded(binding.run, invocationID) {
+		admission, admitted, err := e.admitAttempt(ctx, binding, stage, invocationID)
+		if err != nil {
+			// A backend below the floor is a typed refusal (§5.7): nothing
+			// is appended and nothing is started, so the intent stays
+			// pending for a pass under a backend that clears the floor.
+			return false, false, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
+		}
+		if admitted {
+			fresh = &admission
+		}
+	}
+	// recordAttempt reports the admission that is actually durable: on a
+	// replay it is the stored one, not a freshly built value whose
+	// admission instant (and therefore identity) has moved since. Starting
+	// under a fresh id would hand the driver an admission no reader can
+	// reconstruct.
+	_, effective, bound, err := e.recordAttempt(ctx, binding.run.ID, stage.ID, invocationID, fresh)
+	if err != nil {
+		// The admitting transaction's operating-state refusal (a stop or a
+		// blocking system_health item committed since the pass began) is
+		// the pre-check's race-free backstop: hold the remaining intents
+		// for a later pass instead of failing the loop. The operator
+		// already sees why — the stop notice or the blocking item is open
+		// in signet.
+		if errors.Is(err, domain.ErrUnattendedOperationStopped) ||
+			errors.Is(err, domain.ErrBlockingSystemHealth) {
+			return false, true, nil
+		}
+		return false, false, err
+	}
+
+	startSpec := exec.StartSpec{RunID: binding.run.ID, StageID: stage.ID}
+	if bound {
+		startSpec = exec.StartSpecFromAdmission(effective)
+	}
+	startedNow := false
+	if err := e.driver.Start(ctx, invocationID, startSpec); err != nil {
+		if !errors.Is(err, exec.ErrDuplicateStart) {
+			return false, false, fmt.Errorf("intent %q: start: %w", entry.IdempotencyKey, err)
+		}
+	} else {
+		startedNow = true
+	}
+	if err := e.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.MarkOutboxDispatched(ctx, entry.IdempotencyKey)
+	}); err != nil {
+		// The start already happened, so it counts even though the
+		// bookkeeping mark failed; the caller adds startedNow before
+		// returning the error.
+		return startedNow, false, fmt.Errorf("intent %q: mark dispatched: %w", entry.IdempotencyKey, err)
+	}
+	return startedNow, false, nil
 }
 
 func (e *Engine) acceptCompletedInvocations(ctx context.Context) (int, error) {
@@ -186,15 +312,33 @@ func (e *Engine) acceptCompletedInvocations(ctx context.Context) (int, error) {
 		if err != nil {
 			return accepted, err
 		}
-		if !owned {
+		if owned {
+			stage, ok := findFeedbackStage(run)
+			if !ok {
+				continue
+			}
+			for _, attempt := range stage.Attempts {
+				didAccept, err := e.acceptAttempt(ctx, run, attempt)
+				if err != nil {
+					return accepted, fmt.Errorf("run %q invocation %q: %w", run.ID, attempt.InvocationID, err)
+				}
+				accepted += boolCount(didAccept)
+			}
 			continue
 		}
-		stage, ok := findFeedbackStage(run)
+		ownedProduction, err := e.ownsProductionRun(ctx, run)
+		if err != nil {
+			return accepted, err
+		}
+		if !ownedProduction {
+			continue
+		}
+		stage, ok := findProductionStage(run)
 		if !ok {
 			continue
 		}
 		for _, attempt := range stage.Attempts {
-			didAccept, err := e.acceptAttempt(ctx, run, attempt)
+			didAccept, err := e.acceptProductionAttempt(ctx, run, attempt)
 			if err != nil {
 				return accepted, fmt.Errorf("run %q invocation %q: %w", run.ID, attempt.InvocationID, err)
 			}
@@ -224,6 +368,44 @@ func (e *Engine) acceptAttempt(ctx context.Context, run domain.Run, attempt doma
 		return false, nil
 	}
 
+	result, ready, err := e.collectTerminal(ctx, attempt)
+	if err != nil {
+		return false, err
+	}
+	if !ready {
+		return false, nil
+	}
+	if result.Status != exec.StatusCompleted {
+		return false, fmt.Errorf("result status %q: %w", result.Status, ErrInvocationUnsuccessful)
+	}
+
+	// Re-gated here rather than before Inspect/Collect: a verdict taken before
+	// I/O and carried across it is a verdict about the past, and the trust
+	// profile an unattended or waived admission is anchored to can change
+	// while a driver call is in flight. This is the last point the engine
+	// controls before the acceptance commits.
+	//
+	// It is still not inside the accepting transaction, which signet owns
+	// (#316): a profile retired in the remaining window is not caught here.
+	if err := e.requireAdmissible(ctx, attempt.InvocationID); err != nil {
+		return false, err
+	}
+	if err := e.signet.AcceptAgentCompletion(ctx, attempt.InvocationID, signet.AgentReply{
+		Body: result.Summary, Attachments: result.Artifacts,
+	}); err != nil {
+		return false, fmt.Errorf("accept result: %w", err)
+	}
+	return true, nil
+}
+
+// collectTerminal inspects one attempt and collects its terminal result:
+// the lane-independent half of acceptance. ready is false while the
+// invocation is still pending or running, or while an unknown invocation's
+// intent is still pending dispatch. A gone session without a committed
+// result returns an error wrapping ErrInvocationLost; the lanes decide
+// whether that is a loop failure (walking skeleton) or a terminal outcome
+// to record (production).
+func (e *Engine) collectTerminal(ctx context.Context, attempt domain.Attempt) (exec.StageResult, bool, error) {
 	status, err := e.driver.Inspect(ctx, attempt.InvocationID)
 	if err != nil {
 		// An invocation the driver does not know is ambiguous: a pending
@@ -248,62 +430,42 @@ func (e *Engine) acceptAttempt(ctx context.Context, run domain.Run, attempt doma
 				pendingDispatch = !entry.Dispatched()
 				return nil
 			}); outboxErr != nil {
-				return false, fmt.Errorf("outbox intent: %w", outboxErr)
+				return exec.StageResult{}, false, fmt.Errorf("outbox intent: %w", outboxErr)
 			}
 			if pendingDispatch {
-				return false, nil
+				return exec.StageResult{}, false, nil
 			}
 		}
-		return false, fmt.Errorf("inspect: %w", err)
+		return exec.StageResult{}, false, fmt.Errorf("inspect: %w", err)
 	}
 	switch status {
 	case exec.StatusPending, exec.StatusRunning:
-		return false, nil
+		return exec.StageResult{}, false, nil
 	case exec.StatusCompleted, exec.StatusFailed, exec.StatusCanceled, exec.StatusGone:
 		// Collect below. A gone session may still carry a committed result.
 	default:
-		return false, fmt.Errorf("inspect returned status %q: %w", status, exec.ErrInvalidStatus)
+		return exec.StageResult{}, false, fmt.Errorf("inspect returned status %q: %w", status, exec.ErrInvalidStatus)
 	}
 
 	result, err := e.driver.Collect(ctx, attempt.InvocationID)
 	if err != nil {
 		if status == exec.StatusGone && errors.Is(err, exec.ErrNoResult) {
-			return false, fmt.Errorf("%w: %w", ErrInvocationLost, err)
+			return exec.StageResult{}, false, fmt.Errorf("%w: %w", ErrInvocationLost, err)
 		}
-		return false, fmt.Errorf("collect: %w", err)
+		return exec.StageResult{}, false, fmt.Errorf("collect: %w", err)
 	}
 	if err := result.Validate(); err != nil {
-		return false, fmt.Errorf("validate collected result: %w", err)
+		return exec.StageResult{}, false, fmt.Errorf("validate collected result: %w", err)
 	}
 	if result.InvocationID != attempt.InvocationID {
-		return false, fmt.Errorf("collected invocation_id %q, want %q: %w",
+		return exec.StageResult{}, false, fmt.Errorf("collected invocation_id %q, want %q: %w",
 			result.InvocationID, attempt.InvocationID, domain.ErrParentKeyMismatch)
 	}
 	if status != exec.StatusGone && result.Status != status {
-		return false, fmt.Errorf("collected status %q disagrees with inspected %q: %w",
+		return exec.StageResult{}, false, fmt.Errorf("collected status %q disagrees with inspected %q: %w",
 			result.Status, status, exec.ErrInvalidStatus)
 	}
-	if result.Status != exec.StatusCompleted {
-		return false, fmt.Errorf("result status %q: %w", result.Status, ErrInvocationUnsuccessful)
-	}
-
-	// Re-gated here rather than before Inspect/Collect: a verdict taken before
-	// I/O and carried across it is a verdict about the past, and the trust
-	// profile an unattended or waived admission is anchored to can change
-	// while a driver call is in flight. This is the last point the engine
-	// controls before the acceptance commits.
-	//
-	// It is still not inside the accepting transaction, which signet owns
-	// (#316): a profile retired in the remaining window is not caught here.
-	if err := e.requireAdmissible(ctx, attempt.InvocationID); err != nil {
-		return false, err
-	}
-	if err := e.signet.AcceptAgentCompletion(ctx, attempt.InvocationID, signet.AgentReply{
-		Body: result.Summary, Attachments: result.Artifacts,
-	}); err != nil {
-		return false, fmt.Errorf("accept result: %w", err)
-	}
-	return true, nil
+	return result, true, nil
 }
 
 func (e *Engine) loadInvocationRequest(ctx context.Context, entry store.QueueEntry) (invocationRequest, invocationBinding, error) {
@@ -502,8 +664,8 @@ func decodeInvocationRequest(payload []byte) (invocationRequest, error) {
 // with no audited class or an admission for an attempt that was never
 // appended, and a crash between them is exactly when the record matters.
 func (e *Engine) recordAttempt(
-	ctx context.Context, runID domain.RunID, invocationID domain.InvocationID,
-	fresh *domain.ExecutionAdmission,
+	ctx context.Context, runID domain.RunID, stageID domain.StageID,
+	invocationID domain.InvocationID, fresh *domain.ExecutionAdmission,
 ) (bool, domain.ExecutionAdmission, bool, error) {
 	added := false
 	var effective domain.ExecutionAdmission
@@ -520,7 +682,7 @@ func (e *Engine) recordAttempt(
 		for i, stage := range run.Stages {
 			for _, attempt := range stage.Attempts {
 				if attempt.InvocationID == invocationID {
-					if stage.ID != feedbackStageID(runID) ||
+					if stage.ID != stageID ||
 						attempt.ID != attemptIDFor(invocationID) {
 						return fmt.Errorf("invocation %q is already bound to attempt %q in stage %q: %w",
 							invocationID, attempt.ID, stage.ID, domain.ErrParentKeyMismatch)
@@ -572,12 +734,12 @@ func (e *Engine) recordAttempt(
 					return errReplay
 				}
 			}
-			if stage.ID == feedbackStageID(runID) {
+			if stage.ID == stageID {
 				stageIndex = i
 			}
 		}
 		if stageIndex < 0 {
-			return fmt.Errorf("run %q has no feedback stage", runID)
+			return fmt.Errorf("run %q has no stage %q", runID, stageID)
 		}
 		stage := run.Stages[stageIndex]
 		stage.Attempts = append(stage.Attempts, domain.Attempt{

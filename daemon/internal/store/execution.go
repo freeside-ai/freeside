@@ -165,6 +165,27 @@ func (tx *ReadTx) GetExecutionAdmission(ctx context.Context, id domain.Invocatio
 	return admission, nil
 }
 
+// GetExecutionAdmissionRecord authenticates the immutable recorded admission
+// without re-applying mutable current admission policy. It is for terminal
+// history and backup closure only; any path that may still start, recover, or
+// accept work must use GetExecutionAdmission.
+func (tx *ReadTx) GetExecutionAdmissionRecord(
+	ctx context.Context, id domain.InvocationID,
+) (domain.ExecutionAdmission, error) {
+	admission, err := scanExecutionAdmissionRecord(
+		tx.tx.QueryRowContext(ctx, getExecutionAdmissionSQL, id),
+	)
+	if err != nil {
+		return domain.ExecutionAdmission{}, fmt.Errorf(
+			"get execution admission record %q: %w", id, notFoundOr(err))
+	}
+	if admission.InvocationID != id {
+		return domain.ExecutionAdmission{}, fmt.Errorf(
+			"get execution admission record %q: %w", id, errRowInconsistent)
+	}
+	return admission, nil
+}
+
 // ListRunExecutionAdmissions reconstructs every admission recorded for a run,
 // in insertion order. It reuses the same reconstruction function as the
 // single-record Get, so the re-gate cannot be missed on one path.

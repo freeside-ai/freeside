@@ -114,17 +114,27 @@ var (
 	ErrArtifactClosureIncomplete   = errors.New("backup artifact closure is incomplete")
 	ErrRestoreTestStale            = errors.New("backup restore test is stale")
 	ErrRepositoryIdentityMismatch  = errors.New("recorded repository identity does not match the repository's trusted profile")
-	ErrStageInputDigestMismatch    = errors.New("stage input snapshot digest does not match its content")
-	ErrNonWaivableFinding          = errors.New("finding class is non-waivable")
-	ErrAgentWaiver                 = errors.New("an agent cannot author a waiver")
+	// ErrPathBoundaryMismatch is a current-configuration verdict, not record
+	// corruption: the run's durable declared paths and the containment
+	// boundary this runner is configured to enforce disagree, which a
+	// reconfigured daemon resolves without touching the recorded attempt.
+	ErrPathBoundaryMismatch     = errors.New("resolved run policy's declared paths disagree with the configured containment boundary")
+	ErrStageInputDigestMismatch = errors.New("stage input snapshot digest does not match its content")
+	ErrNonWaivableFinding       = errors.New("finding class is non-waivable")
+	ErrAgentWaiver              = errors.New("an agent cannot author a waiver")
 
 	// Backend-conformance failures (issues #327, #320).
 	ErrConformanceOverclaim = errors.New(
 		"conformance record claims capabilities beyond the backend class's provable ceiling")
 	ErrConformanceCapabilitiesWithoutPass = errors.New(
 		"only a passed conformance record can carry a proven capability set")
+	ErrConformanceConfigurationUnbound = errors.New(
+		"conformance record is not bound to a backend configuration")
 	ErrAdmissionExceedsConformance = errors.New(
 		"admission capability snapshot exceeds the backend's proven conformance declaration")
+
+	ErrAdmissionConfigurationMismatch = errors.New(
+		"admission backend configuration differs from the current conformance proof")
 
 	// Unattended operating-state and §4 blocking failures (issues #319, #321).
 	ErrInvalidUnattendedOperationState = errors.New("unknown unattended operation state")
