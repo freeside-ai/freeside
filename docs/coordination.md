@@ -1,0 +1,175 @@
+# Coordination Protocol
+
+The mechanics behind AGENTS.md's coordination gates: the lane glossary, the
+claim-lease protocol, the session-start queries, session end, and deferral
+escalation. Read this file before claiming a unit, filing a deferral, or
+starting an issue-backed session.
+
+AGENTS.md holds the binding gates and is the authority where the two
+disagree; this file carries only the procedure that implements them. Section
+names cited below that do not appear in this file (Branches, Commits, Work
+units, Decision notes, the finish line, Monorepo scope discipline) refer to
+AGENTS.md.
+
+## Lane Glossary (Canonical)
+
+Lane names are search keys and territory labels, defined canonically here;
+subsystem-derived lane names (signet, gauntlet, publish is functional, ward)
+also appear in docs/plan.md §15, which defines saddle and spine as
+coordination vocabulary outside the subsystem register. They never appear in
+code identifiers, package names, or API vocabulary, which stay functional
+(the attention type is AttentionItem, not SignetItem).
+
+| Lane | What it is | Owns (paths) | Plan |
+|---|---|---|---|
+| signet | Attention service: items, deliveries, conversations, sync, devices | daemon/internal/signet (api/ is shared contract territory: changes are `kind:contract`, drafted by the signet/saddle pair) | §4, §5.14 |
+| gauntlet | Candidate path: export helper, hostile importer, clean verifier, evidence channel | daemon/internal/export, daemon/internal/importer, daemon/internal/verify | §5.6, §5.15 |
+| publish | GitHub App auth, deterministic identities, reconciliation, EvidencePublisher | daemon/internal/publish | §5.5, §5.9, §5.11, §5.15 |
+| ward | Runner backends, workspace-handoff gate, conformance, operating modes | daemon/internal/ward | §5.7 |
+| saddle | SwiftUI clients (pipeline-exempt) | app/ | §5.14, §11 |
+| spine | A ROLE, not a territory: serialized shared-contract changes (domain, migrations, interfaces, api/) and Wave 2 integration (workflow engine) | daemon/internal/domain, daemon/internal/store, daemon/internal/exec, daemon/internal/engine, daemon/migrations/, api/ | §11 |
+
+## Claiming
+
+A claim records occupancy only; authorization comes from scheduling or
+fiat (see Pickup), never from the claim itself. Issue-backed work is
+claimed with an issue-comment lease that hands off to a real PR. Direct
+no-issue work needs no claim: it is not eligible for concurrent or
+multi-session execution, and gets promoted to an issue before that
+changes (see Work units).
+
+To claim a unit:
+
+1. Confirm the issue is authorized (scheduled or fiat-assigned) and has
+   no active claim: a full paginated read of its comments plus the
+   open-PR check below.
+2. Choose the branch name (per the Branches section) and post a claim
+   comment on the issue: the versioned marker line plus one visible
+   `Claim:` line naming that branch.
+
+   ```text
+   <!-- freeside-work-claim:v1 -->
+   Claim: feat/example-slug
+   ```
+
+3. Re-read all of the issue's comments with pagination. Among
+   non-expired, unreleased claim comments, the earliest `created_at`
+   wins; the numeric comment ID is the deterministic tie-breaker (lower
+   wins). Ordering is by creation time; comment edits do not reorder
+   claims.
+4. A losing claimant posts a release comment bound to its own claim and
+   stops (it may re-claim later with a new comment). A release comment
+   releases exactly the claim comment whose numeric ID its
+   `Releases-claim:` line names, never other claims: branch names do not
+   identify a claim, since concurrent claimants following the same slug
+   convention can choose the same one. The `Release:` line repeats the
+   branch for human readability only.
+
+   ```text
+   <!-- freeside-work-release:v1 -->
+   Release: feat/example-slug
+   Releases-claim: 1234567890
+   ```
+
+5. The winner creates its dedicated worktree/branch from the freshly
+   updated default-branch tip (per Branches) and begins work. No empty
+   claim commit: the branch's first commit is real work.
+
+The lease expires 48 hours after the claim comment's creation if no open
+PR from the claimed branch carries the issue's close keyword by then; an
+expired lease is dead, and re-claiming needs a new comment. Once an open
+PR from the same branch contains the close keyword, that PR is the
+active claim and the comment lease is subsumed (no further expiry).
+Closing that PR unmerged releases the claim; merging closes the issue
+normally.
+
+The active claim for a unit is therefore: a non-expired, unreleased
+comment lease; or an open PR from the lease's branch with the issue's
+close keyword; or, during the transition from the previous protocol, a
+legacy open PR claiming the unit with a `Claim #N` commit or close
+keyword. A bare cross-reference (`Refs #N`) is never a claim. One claim
+per unit: if an active claim exists, pick another unit. Do not create
+new empty claim commits; drop any legacy one in the next branch rewrite
+(the fold-fix rules under Commits). Claim state is verified, never
+assumed: a comment or PR API read or write failure at any step fails
+closed, and work does not begin (or continue past the failed step) while
+claim state cannot be verified. Collaborator comments are trusted;
+adversarial comment editing is outside this protocol's threat model.
+
+`needs-human` deferrals use the fiat door defined under Deferral escalation,
+never self-selection: after the maintainer acts, fiat assigns the issue to a
+session; the session verifies the external state and records the audit
+diff in the ordinary close-keyword PR, adding a decision note only when
+the outcome hits a Decision notes trigger or the mandatory-note list.
+
+## Session Start
+
+1. Read docs/plan.md front-matter (revision, phase) and the sections your
+   unit's Affected interfaces/contracts field cites.
+2. When resuming an existing unit, read its issue or PR and any decision
+   note it links (Decision notes section).
+3. Status queries:
+   - open PRs and their declared paths: overlap with yours means stop and
+     coordinate via issue comment before claiming;
+   - active claims on any unit you intend to claim: the paginated
+     comment-lease read plus open-PR check under Claiming;
+   - the current wave's pinned tracking issue;
+   - open `kind:contract` issues, ignoring a `deferral` issue until it is
+     scheduled or has an active claim, then excluding the unit you are claiming
+     and any unit whose Dependencies chain includes it (a
+     dependency-ordered chain of contract units keeps at most one
+     claimable at a time, so downstream chain members may stay filed
+     without blocking their chain head): among the remainder, if one
+     touches your Affected interfaces/contracts, block on it; when claiming a
+     `kind:contract` unit, block on every other remaining open contract unit
+     (contract work is serialized).
+4. Verify each dependency's PR is merged.
+
+## Session End
+
+Write or update the unit's decision note only when a Decision notes
+trigger or the mandatory-note list applies. Additionally: deferrals
+discovered mid-unit follow Deferral escalation below; tick your unit on
+the wave tracking issue when your PR merges (or note partial state on
+the issue).
+
+## Deferral Escalation
+
+Actionable work deferred out of a unit's scope gets a tracker issue
+before handoff (per the finish line); the escalation follows these
+rules:
+
+- **Provenance when a note exists**: the issue form's optional
+  `Source devlog entry` field cites the originating decision note's
+  filename; the note may carry a plain `Follow-up: #N` historical link.
+  Most escalations originate in the work itself and leave the field
+  blank. Historical entries are frozen: never write markers or other
+  mutations back to them.
+- **Lane label routes by owner, not discoverer**: the lane whose Scope /
+  declared paths contain the work. Shared-package needs use
+  `kind:contract` plus the **`deferral`** origin label.
+- **For non-contract work, `kind:*` by the work's nature** (deferred scope:
+  feature; known gap: fix; hygiene: chore), plus the **`deferral`** origin
+  label.
+- **Maintainer-only actions** (repo settings, credentials, App
+  administration) get **`needs-human`** and no lane label. Self-selecting
+  sessions and future scan initiators never pick up `needs-human` issues.
+- **No milestone at escalation.** Open + `deferral` + no milestone is the
+  unscheduled queue; the spine schedules eligible items during wave planning's
+  deferral sweep and skips `needs-human`, which remains unmilestoned and
+  fiat-only. Do not add status labels; milestone presence is the status.
+- Closure is ordinary: a work-unit PR with a close keyword; the issue
+  carries the item's whole status lifecycle.
+
+**Pickup: labels never authorize work.** An issue (deferral, adversarial
+finding, or anything else except `needs-human`) becomes agent-actionable
+through exactly two doors: **scheduling** (a spine sweep assigns its
+milestone and lists it on the current tracking issue, from which sessions
+self-select) or **fiat** (the human hands its number to a work-unit session,
+which covers urgent items). A `needs-human` issue uses only fiat after the
+maintainer acts, as Claiming defines. A session must never select work
+directly by label or by browsing open issues. Sweep cadence: at every
+planning session while waves exist; at phase boundaries after; ad hoc
+whenever the human runs one. Between sweeps the unscheduled queue is dormant
+by design; the Phase 1B scan initiator is the intended replacement for
+human-cadence sweeping.
