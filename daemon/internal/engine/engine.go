@@ -46,6 +46,9 @@ type Engine struct {
 	// (see WithAdmission); nil leaves dispatch exactly as it was before a
 	// runner backend existed to admit against.
 	admission *admitter
+	// derive supplies the per-attempt workspace and base when configured
+	// (see WithAdmissionDerivation); nil keeps the static environment.
+	derive AdmissionDerivation
 }
 
 // Option configures an optional engine workflow without changing the shared

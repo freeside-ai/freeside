@@ -161,6 +161,29 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 	}
 }
 
+// AdmissionDerivation derives the per-attempt half of the admission
+// environment: the workspace reference and the exact base revision this
+// attempt runs against. The static AdmissionEnvironment cannot carry either
+// once more than one run flows through a daemon (each handoff owns its
+// workspace volume, and the trusted base tip moves between submissions), and
+// the composition, not the engine, knows the ward's workspace naming scheme
+// and how the operator resolves a base (#237).
+type AdmissionDerivation func(ctx context.Context, invocationID domain.InvocationID) (workspace string, base domain.BaseRevision, err error)
+
+// WithAdmissionDerivation configures per-attempt workspace and base
+// derivation. The derived values replace the environment's Workspace and
+// Base for every admission this engine records; everything else stays the
+// configured static environment.
+func WithAdmissionDerivation(derive AdmissionDerivation) Option {
+	return func(e *Engine) error {
+		if derive == nil {
+			return errors.New("with admission derivation: nil derivation")
+		}
+		e.derive = derive
+		return nil
+	}
+}
+
 // admitAttempt runs the capability gate and builds the durable record for one
 // attempt, or reports that no admitter is configured. The input digest is the
 // content address of the invocation's own binding, so the record names the
@@ -180,6 +203,14 @@ func (e *Engine) admitAttempt(
 		return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
 	}
 	env := e.admission.environment
+	if e.derive != nil {
+		workspace, base, err := e.derive(ctx, invocationID)
+		if err != nil {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q: derive environment: %w", invocationID, err)
+		}
+		env.Workspace, env.Base = workspace, base
+	}
 	stageInputs, err := e.stageInputSnapshot(ctx, binding, inputDigest)
 	if err != nil {
 		return domain.ExecutionAdmission{}, false, fmt.Errorf(
