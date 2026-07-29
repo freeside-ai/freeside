@@ -1851,7 +1851,7 @@ The full identity system and rejected alternatives are in
 Coordination vocabulary sits outside the subsystem register. A lane takes a
 subsystem name where one exists. The client lane is informally the **saddle**.
 The integration role is the **spine**, a role rather than a territory.
-`AGENTS.md` owns the canonical lane glossary.
+`docs/coordination.md` owns the canonical lane glossary.
 
 ### Reference shelf
 
