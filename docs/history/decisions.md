@@ -583,7 +583,7 @@ admitting transaction (#319, #321).
 
 ---
 
-## Revision 21 (current)
+## Revision 21
 
 Revision 21 admits one operator-host instruction file as a snapshot-at-admission
 control-plane source while preserving the rule that no agent-writable surface
@@ -606,3 +606,57 @@ New in revision 21 (decider in parentheses):
    immutable digest makes drift observable and replay-stable. Rejected
    alternatives and revisit conditions live in the decision note.
    (User; devlog 2026-07-28-1908-host-vendor-instructions.md; #375.)
+
+---
+
+## Revision 22 (current)
+
+Revision 22 resolves the Claude credential-delivery and writer-outcome
+topology after the production driver's gate failure (#380), replacing the
+refuted credential-store and instruction-mount hypotheses with a
+launcher-mediated contract proved by execution on the pinned image.
+
+Held from revision 21: every decision, with one realization amended: the
+pinned CLI co-locates user instructions with writable session state, so
+revision 21's read-only vendor-native overlay becomes a read-only explicit
+instruction bundle under `--safe-mode`, separate from the narrow writable
+resume and shell-initialization subtrees; the admitted digest remains the
+trust anchor.
+
+New in revision 22 (decider in parentheses):
+
+1. **The Claude setup token is launcher-delivered, never spec-borne.** A
+   per-identity read-only token volume is the only identity-persistent mount;
+   no per-identity writable Claude state enters execution. The launcher argv
+   reads the token into the CLI process environment at exec, the writer's
+   spec environment is empty, and the value never enters argv text, inspect
+   reports, ward journals, or driver state. Process-tree ambience is the
+   documented `subscription_contained` residual.
+   (User; devlog 2026-07-29-1750-claude-credential-topology.md; #380.)
+2. **Writer outcome authority is a gate-authored nonce marker with a
+   journalled crash bridge.** `ExecutionOutcome` is canonical for failed,
+   canceled, and lost invocations; `ExecutionExport` is canonical for
+   completion. Before cleanup can erase marker or workspace evidence, ward
+   durably records cancellation intent or a validated nonzero status, then
+   closes canceled or failed only after required capture and teardown. A
+   live daemon sets `WriterComplete` only after stopped or absent, matching
+   nonce, zero status, and proxy-health-throughout all hold. Recovery never
+   synthesizes that bit. Cancellation intent outranks a durable failure
+   status, which in turn outranks marker state; marker classification runs
+   only when neither amendment exists. Missing, malformed, or mismatched
+   evidence, and zero without an already-durable completion bit, fail closed
+   as lost after absence proof and teardown. A
+   canceled invocation remains terminal; continuation starts a new attempt
+   from the restored workspace as untrusted input.
+   (User; devlog 2026-07-29-1750-claude-credential-topology.md; #380.)
+3. **Phase 1A isolates executable Claude configuration while retaining exact
+   provider resume.** Every gate-mediated launch gets a verified read-only
+   config root, fresh `session-env` scratch, `--safe-mode`, and a read-only
+   explicit bundle composed from admitted host and trusted-base repository
+   instructions. Only the invocation's `projects/` continuity volume crosses
+   launches. Startup and forked resume use daemon-generated, pre-journalled
+   exact session IDs; resume proves predecessor absence and retains the
+   credential lease and fence. Recovery adopts or reaps the exact existing
+   launch and never duplicates it. `InvocationChild` remains unavailable; a
+   CLI process the agent itself spawns is untrusted agent activity.
+   (User; devlog 2026-07-29-1750-claude-credential-topology.md; #380.)
