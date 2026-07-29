@@ -8,7 +8,39 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
-const stageInputEncodingVersion = "freeside.stage.inputs/v1"
+const (
+	stageInputEncodingVersion       = "freeside.stage.inputs/v1"
+	vendorStageInputEncodingVersion = "freeside.stage.inputs/v2"
+	// MaxVendorInstructionBytes is the admission and ward ceiling for one
+	// vendor-native host instruction file.
+	MaxVendorInstructionBytes int64 = 1 << 20
+)
+
+// VendorInstructionSnapshot binds one vendor-native instruction input. A nil
+// Digest is explicit absence: admission looked at the configured host path and
+// found no file. That differs from a nil *VendorInstructionSnapshot, which is a
+// historical pre-v2 stage-input record that made no vendor-instruction claim.
+type VendorInstructionSnapshot struct {
+	Vendor AgentVendor `json:"vendor"`
+	Digest *Digest     `json:"digest"`
+}
+
+func (s VendorInstructionSnapshot) validate() error {
+	if !s.Vendor.valid() {
+		return fmt.Errorf("vendor instruction snapshot vendor %q: %w",
+			s.Vendor, ErrStageInputsNotCanonical)
+	}
+	if s.Digest != nil && !contentaddr.Valid(string(*s.Digest)) {
+		return fmt.Errorf("vendor instruction snapshot digest %q: %w",
+			*s.Digest, ErrStageInputsNotCanonical)
+	}
+	return nil
+}
+
+func (s VendorInstructionSnapshot) clone() VendorInstructionSnapshot {
+	s.Digest = clonePtr(s.Digest)
+	return s
+}
 
 // StageInputSnapshot is the immutable content identity of one stage's inputs.
 // The roles stay distinct in the digest so the same bytes used as a prompt and
@@ -19,14 +51,15 @@ const stageInputEncodingVersion = "freeside.stage.inputs/v1"
 // content bytes live in the artifact store; this record is the admitted map
 // from roles to content addresses that restart recovery replays.
 type StageInputSnapshot struct {
-	ID                   Digest   `json:"id"`
-	InputDigest          Digest   `json:"input_digest"`
-	SpecificationDigest  Digest   `json:"specification_digest"`
-	PromptPackageDigest  Digest   `json:"prompt_package_digest"`
-	PolicyDigest         Digest   `json:"policy_digest"`
-	ConversationDigest   *Digest  `json:"conversation_digest,omitempty"`
-	PriorArtifactDigests []Digest `json:"prior_artifact_digests"`
-	ImageInputDigests    []Digest `json:"image_input_digests"`
+	ID                   Digest                     `json:"id"`
+	InputDigest          Digest                     `json:"input_digest"`
+	SpecificationDigest  Digest                     `json:"specification_digest"`
+	PromptPackageDigest  Digest                     `json:"prompt_package_digest"`
+	PolicyDigest         Digest                     `json:"policy_digest"`
+	VendorInstructions   *VendorInstructionSnapshot `json:"vendor_instructions,omitempty"`
+	ConversationDigest   *Digest                    `json:"conversation_digest,omitempty"`
+	PriorArtifactDigests []Digest                   `json:"prior_artifact_digests"`
+	ImageInputDigests    []Digest                   `json:"image_input_digests"`
 }
 
 // StageInputSnapshotInput carries the caller-supplied fields. It has no ID:
@@ -36,6 +69,7 @@ type StageInputSnapshotInput struct {
 	SpecificationDigest  Digest
 	PromptPackageDigest  Digest
 	PolicyDigest         Digest
+	VendorInstructions   *VendorInstructionSnapshot
 	ConversationDigest   *Digest
 	PriorArtifactDigests []Digest
 	ImageInputDigests    []Digest
@@ -52,6 +86,18 @@ type canonicalStageInputSnapshot struct {
 	ImageInputDigests    []Digest `json:"image_input_digests"`
 }
 
+type canonicalVendorStageInputSnapshot struct {
+	Version              string                    `json:"version"`
+	InputDigest          Digest                    `json:"input_digest"`
+	SpecificationDigest  Digest                    `json:"specification_digest"`
+	PromptPackageDigest  Digest                    `json:"prompt_package_digest"`
+	PolicyDigest         Digest                    `json:"policy_digest"`
+	VendorInstructions   VendorInstructionSnapshot `json:"vendor_instructions"`
+	ConversationDigest   *Digest                   `json:"conversation_digest,omitempty"`
+	PriorArtifactDigests []Digest                  `json:"prior_artifact_digests"`
+	ImageInputDigests    []Digest                  `json:"image_input_digests"`
+}
+
 // NewStageInputSnapshot builds the canonical, detached snapshot admitted for a
 // stage. Empty collections become non-nil arrays so one semantic input set has
 // one serialized form and therefore one identity.
@@ -61,6 +107,7 @@ func NewStageInputSnapshot(in StageInputSnapshotInput) (StageInputSnapshot, erro
 		SpecificationDigest:  in.SpecificationDigest,
 		PromptPackageDigest:  in.PromptPackageDigest,
 		PolicyDigest:         in.PolicyDigest,
+		VendorInstructions:   cloneVendorInstructionSnapshot(in.VendorInstructions),
 		ConversationDigest:   clonePtr(in.ConversationDigest),
 		PriorArtifactDigests: append([]Digest{}, in.PriorArtifactDigests...),
 		ImageInputDigests:    append([]Digest{}, in.ImageInputDigests...),
@@ -80,16 +127,32 @@ func NewStageInputSnapshot(in StageInputSnapshotInput) (StageInputSnapshot, erro
 // map. It does not hash the referenced bytes again; each referenced digest is
 // verified against its bytes when the snapshot is materialized.
 func (s StageInputSnapshot) ComputeID() (Digest, error) {
-	body, err := json.Marshal(canonicalStageInputSnapshot{
-		Version:              stageInputEncodingVersion,
-		InputDigest:          s.InputDigest,
-		SpecificationDigest:  s.SpecificationDigest,
-		PromptPackageDigest:  s.PromptPackageDigest,
-		PolicyDigest:         s.PolicyDigest,
-		ConversationDigest:   clonePtr(s.ConversationDigest),
-		PriorArtifactDigests: s.PriorArtifactDigests,
-		ImageInputDigests:    s.ImageInputDigests,
-	})
+	var canonical any
+	if s.VendorInstructions == nil {
+		canonical = canonicalStageInputSnapshot{
+			Version:              stageInputEncodingVersion,
+			InputDigest:          s.InputDigest,
+			SpecificationDigest:  s.SpecificationDigest,
+			PromptPackageDigest:  s.PromptPackageDigest,
+			PolicyDigest:         s.PolicyDigest,
+			ConversationDigest:   clonePtr(s.ConversationDigest),
+			PriorArtifactDigests: s.PriorArtifactDigests,
+			ImageInputDigests:    s.ImageInputDigests,
+		}
+	} else {
+		canonical = canonicalVendorStageInputSnapshot{
+			Version:              vendorStageInputEncodingVersion,
+			InputDigest:          s.InputDigest,
+			SpecificationDigest:  s.SpecificationDigest,
+			PromptPackageDigest:  s.PromptPackageDigest,
+			PolicyDigest:         s.PolicyDigest,
+			VendorInstructions:   s.VendorInstructions.clone(),
+			ConversationDigest:   clonePtr(s.ConversationDigest),
+			PriorArtifactDigests: s.PriorArtifactDigests,
+			ImageInputDigests:    s.ImageInputDigests,
+		}
+	}
+	body, err := json.Marshal(canonical)
 	if err != nil {
 		return "", fmt.Errorf("stage input snapshot id: %w", err)
 	}
@@ -120,6 +183,11 @@ func (s StageInputSnapshot) Validate() error {
 		!contentaddr.Valid(string(*s.ConversationDigest)) {
 		return fmt.Errorf("stage input snapshot conversation_digest %q: %w",
 			*s.ConversationDigest, ErrStageInputsNotCanonical)
+	}
+	if s.VendorInstructions != nil {
+		if err := s.VendorInstructions.validate(); err != nil {
+			return err
+		}
 	}
 	if s.PriorArtifactDigests == nil || s.ImageInputDigests == nil {
 		return fmt.Errorf("stage input snapshot collections: %w", ErrStageInputsNotCanonical)
@@ -158,8 +226,19 @@ func validateStageInputDigests(name string, digests []Digest) error {
 }
 
 func (s StageInputSnapshot) clone() StageInputSnapshot {
+	s.VendorInstructions = cloneVendorInstructionSnapshot(s.VendorInstructions)
 	s.ConversationDigest = clonePtr(s.ConversationDigest)
 	s.PriorArtifactDigests = append([]Digest{}, s.PriorArtifactDigests...)
 	s.ImageInputDigests = append([]Digest{}, s.ImageInputDigests...)
 	return s
+}
+
+func cloneVendorInstructionSnapshot(
+	in *VendorInstructionSnapshot,
+) *VendorInstructionSnapshot {
+	if in == nil {
+		return nil
+	}
+	cloned := in.clone()
+	return &cloned
 }

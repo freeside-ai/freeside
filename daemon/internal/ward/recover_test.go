@@ -2,6 +2,7 @@ package ward
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -61,6 +62,27 @@ func (fx *recoveryFixture) openRecord(t *testing.T, hs HandoffSpec) HandoffJourn
 			AcquiredAt:     rec.OpenedAt.Add(-time.Hour),
 			ExpiresAt:      rec.OpenedAt.Add(100 * time.Hour),
 		}
+	}
+	if err := fx.j.Begin(context.Background(), rec); err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
+// openLegacyRecord reproduces a journal opened by the pre-vendor-instruction
+// daemon. The record has no version field; only its historical spec digest
+// distinguishes it from a current record.
+func (fx *recoveryFixture) openLegacyRecord(t *testing.T, hs HandoffSpec) HandoffJournalRecord {
+	t.Helper()
+	digest, err := legacySpecDigest(hs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := HandoffJournalRecord{
+		RunID:          hs.RunID,
+		OwnershipToken: testRecoveryToken,
+		SpecDigest:     digest,
+		OpenedAt:       time.Date(2026, 7, 1, 11, 0, 0, 0, time.UTC),
 	}
 	if err := fx.j.Begin(context.Background(), rec); err != nil {
 		t.Fatal(err)
@@ -164,6 +186,19 @@ func TestRecoverRefusals(t *testing.T) {
 			diverged := hs
 			diverged.Agent.Command = []string{"sh", "-c", "false"}
 			return hs.RunID, diverged
+		}, ErrInvalidJournalRecord},
+		{"legacy spec cannot authorize present vendor instructions", func(t *testing.T, fx *recoveryFixture) (string, HandoffSpec) {
+			hs := testHandoffSpec()
+			fx.openLegacyRecord(t, hs)
+			body := []byte("unbound legacy instructions")
+			sum := sha256.Sum256(body)
+			hs.Agent.VendorInstructions = VendorInstructions{
+				Vendor:  domain.AgentVendorClaude,
+				Present: true,
+				Digest:  domain.Digest(fmt.Sprintf("sha256:%x", sum)),
+				Body:    body,
+			}
+			return hs.RunID, hs
 		}, ErrInvalidJournalRecord},
 		{"spec names another run", func(t *testing.T, fx *recoveryFixture) (string, HandoffSpec) {
 			hs := testHandoffSpec()
@@ -357,6 +392,32 @@ func TestRecoverPreWriterCompleteTearsDownAndCommitsLoss(t *testing.T) {
 	fx.assertReaped(t)
 }
 
+// TestRecoverLegacyPreWriterCompleteCommitsLoss proves an open journal from
+// the pre-upgrade digest encoding remains tear-downable. The caller supplies
+// the only safe current-only values: explicit vendor-instruction absence and
+// the exhaustive trusted-base instruction policy.
+func TestRecoverLegacyPreWriterCompleteCommitsLoss(t *testing.T) {
+	fx := newRecoveryFixture(t)
+	hs := testHandoffSpec()
+	fx.openLegacyRecord(t, hs)
+	names := namesFor(hs.RunID)
+	labels := fx.runLabels(hs.RunID)
+	fx.worldVolume(t, names.Workspace, labels)
+	fx.worldContainer(t, ContainerSpec{
+		Name: names.Agent, Image: hs.Agent.Image, Command: hs.Agent.Command, Labels: labels,
+	}, true)
+
+	res, err := fx.recover(t, hs.RunID, hs)
+	if err != nil {
+		t.Fatalf("Recover legacy record = %v, want committed loss", err)
+	}
+	if res.Outcome != RecoveryLoss {
+		t.Fatalf("Outcome = %q, want loss", res.Outcome)
+	}
+	fx.wantClosed(t, hs.RunID, HandoffLoss)
+	fx.assertReaped(t)
+}
+
 // TestRecoverWriterCompleteAdoptsToVerifiedExport: with the writer-complete
 // mark and a provably-owned workspace, recovery runs a fresh exporter and
 // releases a freshly verified export; the record closes completed.
@@ -383,6 +444,30 @@ func TestRecoverWriterCompleteAdoptsToVerifiedExport(t *testing.T) {
 	}
 	if _, err := os.Stat(res.ExportDir); err != nil {
 		t.Errorf("released output dir: %v", err)
+	}
+	fx.wantClosed(t, hs.RunID, HandoffCompleted)
+	fx.assertReaped(t)
+}
+
+// TestRecoverLegacyWriterCompleteAdoptsToVerifiedExport proves the historical
+// digest path preserves the other recovery outcome: a completed writer's
+// owned workspace is still adopted, verified, and released.
+func TestRecoverLegacyWriterCompleteAdoptsToVerifiedExport(t *testing.T) {
+	fx := newRecoveryFixture(t)
+	hs := testHandoffSpec()
+	fx.openLegacyRecord(t, hs)
+	names := namesFor(hs.RunID)
+	if err := fx.j.MarkWriterComplete(context.Background(), hs.RunID); err != nil {
+		t.Fatal(err)
+	}
+	fx.worldVolume(t, names.Workspace, fx.runLabels(hs.RunID))
+
+	res, err := fx.recover(t, hs.RunID, hs)
+	if err != nil {
+		t.Fatalf("Recover legacy record = %v, want adoption", err)
+	}
+	if res.Outcome != RecoveryExported {
+		t.Fatalf("Outcome = %q (loss cause %q), want exported", res.Outcome, res.LossCause)
 	}
 	fx.wantClosed(t, hs.RunID, HandoffCompleted)
 	fx.assertReaped(t)

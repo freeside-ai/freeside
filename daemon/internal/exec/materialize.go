@@ -156,13 +156,34 @@ func (c MaterializedContent) Reader() io.Reader { return bytes.NewReader(c.body)
 // StageInputs is the fully materialized input bundle a real driver consumes.
 // Accessors return values or detached slices; no mutable content is exposed.
 type StageInputs struct {
-	digest         domain.Digest
-	specification  MaterializedContent
-	promptPackage  MaterializedContent
-	policy         MaterializedContent
-	conversation   *MaterializedContent
-	priorArtifacts []MaterializedContent
-	imageInputs    []MaterializedContent
+	digest             domain.Digest
+	specification      MaterializedContent
+	promptPackage      MaterializedContent
+	policy             MaterializedContent
+	vendorInstructions *MaterializedVendorInstructions
+	conversation       *MaterializedContent
+	priorArtifacts     []MaterializedContent
+	imageInputs        []MaterializedContent
+}
+
+// MaterializedVendorInstructions is the verified vendor-native instruction
+// input for one admitted execution. A nil content value is the explicit
+// snapshot of a missing host file, not a lookup to perform later.
+type MaterializedVendorInstructions struct {
+	vendor  domain.AgentVendor
+	content *MaterializedContent
+}
+
+// Vendor identifies the native instruction mechanism this input targets.
+func (i MaterializedVendorInstructions) Vendor() domain.AgentVendor { return i.vendor }
+
+// Content returns the verified instruction bytes, or false for admitted
+// absence.
+func (i MaterializedVendorInstructions) Content() (MaterializedContent, bool) {
+	if i.content == nil {
+		return MaterializedContent{}, false
+	}
+	return *i.content, true
 }
 
 // Digest returns the admitted identity of the complete role-to-content map.
@@ -176,6 +197,16 @@ func (s StageInputs) PromptPackage() MaterializedContent { return s.promptPackag
 
 // Policy returns the verified resolved policy snapshot.
 func (s StageInputs) Policy() MaterializedContent { return s.policy }
+
+// VendorInstructions returns the admitted vendor-instruction role. False
+// means a historical pre-v2 snapshot that carried no such role; an admitted
+// missing host file returns a value whose Content reports false.
+func (s StageInputs) VendorInstructions() (MaterializedVendorInstructions, bool) {
+	if s.vendorInstructions == nil {
+		return MaterializedVendorInstructions{}, false
+	}
+	return *s.vendorInstructions, true
+}
 
 // ConversationPrefix returns the verified immutable conversation prefix when
 // the invocation was conversation-bound.
@@ -205,6 +236,14 @@ func (m *Materializer) Materialize(ctx context.Context, spec StartSpec) (StageIn
 		return StageInputs{}, ErrStageInputsMissing
 	}
 	snapshot := *spec.StageInputs
+	if spec.StageInputs.VendorInstructions != nil {
+		vendor := *spec.StageInputs.VendorInstructions
+		if spec.StageInputs.VendorInstructions.Digest != nil {
+			digest := *spec.StageInputs.VendorInstructions.Digest
+			vendor.Digest = &digest
+		}
+		snapshot.VendorInstructions = &vendor
+	}
 	if spec.StageInputs.ConversationDigest != nil {
 		digest := *spec.StageInputs.ConversationDigest
 		snapshot.ConversationDigest = &digest
@@ -243,6 +282,21 @@ func (m *Materializer) Materialize(ctx context.Context, spec StartSpec) (StageIn
 	if err != nil {
 		return StageInputs{}, err
 	}
+	var vendorInstructions *MaterializedVendorInstructions
+	if snapshot.VendorInstructions != nil {
+		vendorInstructions = &MaterializedVendorInstructions{
+			vendor: snapshot.VendorInstructions.Vendor,
+		}
+		if snapshot.VendorInstructions.Digest != nil {
+			content, err := load(
+				"vendor instructions", *snapshot.VendorInstructions.Digest,
+			)
+			if err != nil {
+				return StageInputs{}, err
+			}
+			vendorInstructions.content = &content
+		}
+	}
 	var conversation *MaterializedContent
 	if snapshot.ConversationDigest != nil {
 		content, err := load("conversation prefix", *snapshot.ConversationDigest)
@@ -261,7 +315,7 @@ func (m *Materializer) Materialize(ctx context.Context, spec StartSpec) (StageIn
 	}
 	return StageInputs{
 		digest: snapshot.ID, specification: specification, promptPackage: prompt,
-		policy: policy, conversation: conversation,
+		policy: policy, vendorInstructions: vendorInstructions, conversation: conversation,
 		priorArtifacts: prior, imageInputs: images,
 	}, nil
 }

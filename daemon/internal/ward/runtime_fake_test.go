@@ -93,6 +93,10 @@ type fakeRuntime struct {
 	volBase map[string]string
 	// volTree is the tree digest the simulated seeder placed alongside it.
 	volTree map[string]string
+	// instructionState holds the exact CLAUDE.md bytes the instruction seeder
+	// placed in each volume. A present map entry with nil content represents
+	// the admitted empty overlay.
+	instructionState map[string][]byte
 	// staged is the host directory most recently staged into each container.
 	staged map[string]string
 	// baseProofPath is where the observer's proof lands in its rootfs; it
@@ -179,18 +183,19 @@ type fakeCopy struct {
 func newFakeRuntime(t *testing.T) *fakeRuntime {
 	t.Helper()
 	return &fakeRuntime{ //nolint:gosec // credProofPath is a proof-file path, not a credential
-		t:               t,
-		nets:            map[string]*fakeNetwork{},
-		vols:            map[string]*fakeVol{},
-		ctrs:            map[string]*fakeCtr{},
-		volBase:         map[string]string{},
-		volTree:         map[string]string{},
-		staged:          map[string]string{},
-		baseProofPath:   "/handoff-base.txt",
-		credProofPath:   "/handoff-cred.txt",
-		credState:       map[string]string{},
-		runningInspects: map[string]int{},
-		exportTarPath:   buildTar(t, fixtureArchive(t)),
+		t:                t,
+		nets:             map[string]*fakeNetwork{},
+		vols:             map[string]*fakeVol{},
+		ctrs:             map[string]*fakeCtr{},
+		volBase:          map[string]string{},
+		volTree:          map[string]string{},
+		instructionState: map[string][]byte{},
+		staged:           map[string]string{},
+		baseProofPath:    "/handoff-base.txt",
+		credProofPath:    "/handoff-cred.txt",
+		credState:        map[string]string{},
+		runningInspects:  map[string]int{},
+		exportTarPath:    buildTar(t, fixtureArchive(t)),
 	}
 }
 
@@ -741,7 +746,15 @@ func (f *fakeRuntime) CopyIntoContainer(ctx context.Context, id, hostDir, target
 	}
 	head, err := os.ReadFile(filepath.Join(src, ".git", "HEAD")) //nolint:gosec // test fixture path
 	if err != nil {
-		return nil //nolint:nilerr // a stage without a HEAD seeds nothing, and the copy itself still succeeded
+		body, readErr := os.ReadFile(filepath.Join(src, instructionFileName)) //nolint:gosec // test fixture path
+		switch {
+		case readErr == nil:
+			f.instructionState[vol] = make([]byte, len(body))
+			copy(f.instructionState[vol], body)
+		case errors.Is(readErr, os.ErrNotExist):
+			f.instructionState[vol] = nil
+		}
+		return nil
 	}
 	f.volBase[vol] = strings.TrimSpace(string(head))
 	// The volume receives the staged tree, so the digest the observer reports
@@ -831,6 +844,14 @@ func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Write
 		}
 		return writeProofTar(dest, f.credProofPath, proof)
 	}
+	if vol, isInstructionObserver := c.observedVolume(instructionProofPath); isInstructionObserver {
+		body, seeded := f.instructionState[vol]
+		proof := instructionProofFor(c.ownershipToken(), body, seeded)
+		if f.observerProof != nil {
+			proof = f.observerProof(id, proof)
+		}
+		return writeProofTar(dest, instructionProofPath, proof)
+	}
 	src, err := os.Open(f.exportTarPath)
 	if err != nil {
 		return err
@@ -838,4 +859,20 @@ func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Write
 	defer src.Close() //nolint:errcheck // read-only test fixture
 	_, err = io.Copy(dest, src)
 	return err
+}
+
+func instructionProofFor(nonce string, body []byte, seeded bool) []byte {
+	present, digest, contents := "no", "none", "dirty"
+	if seeded {
+		contents = "clean"
+		if body != nil {
+			sum := sha256.Sum256(body)
+			present = "yes"
+			digest = fmt.Sprintf("%x", sum)
+		}
+	}
+	return []byte(fmt.Sprintf(
+		"nonce=%s\npresent=%s\ndigest=%s\ncontents=%s\n",
+		nonce, present, digest, contents,
+	))
 }

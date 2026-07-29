@@ -123,6 +123,10 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 	hs.Agent.Command = slices.Clone(hs.Agent.Command)
 	hs.Agent.Env = slices.Clone(hs.Agent.Env)
 	hs.Agent.CredentialMounts = slices.Clone(hs.Agent.CredentialMounts)
+	hs.Agent.VendorInstructions.Body = slices.Clone(hs.Agent.VendorInstructions.Body)
+	hs.Agent.InstructionPolicy.Boundaries = slices.Clone(
+		hs.Agent.InstructionPolicy.Boundaries,
+	)
 	if err := hs.validate(); err != nil {
 		return nil, err
 	}
@@ -134,7 +138,23 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		return nil, err
 	}
 	if digest != rec.SpecDigest {
-		return nil, fmt.Errorf("%w: re-supplied spec does not match the record's spec digest", ErrInvalidJournalRecord)
+		legacyDigest, lerr := legacySpecDigest(hs)
+		if lerr != nil {
+			return nil, lerr
+		}
+		if legacyDigest != rec.SpecDigest {
+			return nil, fmt.Errorf("%w: re-supplied spec does not match the record's spec digest", ErrInvalidJournalRecord)
+		}
+		// The legacy digest did not bind vendor bytes. Only the one safe
+		// compatibility value is admissible: an explicit empty overlay that
+		// masks any image-baked instruction. InstructionPolicy has only one
+		// valid semantic value, already enforced by hs.validate above.
+		if hs.Agent.VendorInstructions.Present {
+			return nil, fmt.Errorf(
+				"%w: legacy spec digest cannot authorize present vendor instructions",
+				ErrInvalidJournalRecord,
+			)
+		}
 	}
 	if (hs.AuthStoreLease == nil) != (rec.Lease == nil) {
 		return nil, fmt.Errorf("%w: record and spec disagree on the auth-store lease", ErrInvalidJournalRecord)
@@ -203,7 +223,9 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 	// audit rather than teardown's name-keyed writer check (see the defer).
 	st := &runState{ownershipLabel: Label{Key: ownershipLabelKey, Value: rec.OwnershipToken}}
 	for _, claim := range []*objectClaim{
-		&st.workspace, &st.seeder, &st.observer, &st.credObsPre, &st.credObsPost, &st.agent, &st.exporter, &st.network,
+		&st.workspace, &st.instructions,
+		&st.seeder, &st.observer, &st.instructionSeeder, &st.instructionObserver,
+		&st.credObsPre, &st.credObsPost, &st.agent, &st.exporter, &st.network,
 	} {
 		claim.attempted = true
 	}
@@ -252,7 +274,13 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		// here would trade a still-adoptable workspace for a transient
 		// failure that said nothing about it.
 		if result == nil {
-			for _, dir := range []string{st.archiveDir, st.baseArchiveDir, st.credArchiveDir, st.exportDir} {
+			for _, dir := range []string{
+				st.archiveDir,
+				st.baseArchiveDir,
+				st.instructionArchiveDir,
+				st.credArchiveDir,
+				st.exportDir,
+			} {
 				if dir != "" {
 					_ = os.RemoveAll(dir)
 				}
@@ -324,6 +352,9 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		if st.baseArchiveDir != "" {
 			_ = os.RemoveAll(st.baseArchiveDir)
 		}
+		if st.instructionArchiveDir != "" {
+			_ = os.RemoveAll(st.instructionArchiveDir)
+		}
 		if st.credArchiveDir != "" {
 			_ = os.RemoveAll(st.credArchiveDir)
 		}
@@ -375,6 +406,16 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		return nil, err
 	}
 	if err := b.reapRecoveredContainer(ctx, names.Observer, &st.observer, st.ownershipLabel); err != nil {
+		return nil, err
+	}
+	if err := b.reapRecoveredContainer(
+		ctx, names.InstructionSeeder, &st.instructionSeeder, st.ownershipLabel,
+	); err != nil {
+		return nil, err
+	}
+	if err := b.reapRecoveredContainer(
+		ctx, names.InstructionObserver, &st.instructionObserver, st.ownershipLabel,
+	); err != nil {
 		return nil, err
 	}
 	if err := b.reapRecoveredContainer(ctx, names.CredObsPre, &st.credObsPre, st.ownershipLabel); err != nil {

@@ -36,6 +36,10 @@ func admissionEnvironment() engine.AdmissionEnvironment {
 		ImageRef:       agentImage,
 		PromptPackageDigest: domain.Digest(
 			"sha256:037aa38647518d5b7d034a92109df888dda8247b1772d509e7c4d77b517ddacd"),
+		VendorInstructions: engine.VendorInstructionConfig{
+			Vendor:   domain.AgentVendorClaude,
+			HostPath: "/nonexistent/freeside-test-claude-instructions",
+		},
 		Base: domain.BaseRevision{
 			Repo: "freeside-ai/candidate-repo", RepositoryID: 424242,
 			BaseRef: "refs/heads/main", BaseSHA: "deadbeef",

@@ -164,16 +164,19 @@ type objectClaim struct {
 // workspace carrying this invocation's unpredictable ownershipLabel; an
 // ordinary already-exists collision does not carry it and is left untouched.
 type runState struct {
-	ownershipLabel Label
-	workspace      objectClaim
-	seeder         objectClaim
-	observer       objectClaim
-	credObsPre     objectClaim
-	credObsPost    objectClaim
-	agent          objectClaim
-	exporter       objectClaim
-	network        objectClaim
-	proxy          *connectProxy
+	ownershipLabel      Label
+	workspace           objectClaim
+	instructions        objectClaim
+	seeder              objectClaim
+	observer            objectClaim
+	instructionSeeder   objectClaim
+	instructionObserver objectClaim
+	credObsPre          objectClaim
+	credObsPost         objectClaim
+	agent               objectClaim
+	exporter            objectClaim
+	network             objectClaim
+	proxy               *connectProxy
 	// archiveDir holds the exported rootfs archive; always removed once
 	// verification is done or the run fails (the archive is never returned).
 	archiveDir string
@@ -186,11 +189,15 @@ type runState struct {
 	// what gets staged into the seeder, so nothing outside the gate can mutate
 	// the tree between verification and the copy.
 	seedSnapshotDir string
+	// instructionSnapshotDir is the gate-authored directory containing either
+	// the one admitted instruction file or no entries for explicit absence.
+	instructionSnapshotDir string
 	// baseArchiveDir holds the observer's rootfs archive while its proof is
 	// read. It is cleared as soon as that read finishes, so it is non-empty
 	// only inside that window; the deferred cleanup removes whatever it names
 	// if the run unwinds mid-read.
-	baseArchiveDir string
+	baseArchiveDir        string
+	instructionArchiveDir string
 	// credArchiveDir is the credential observer's counterpart to
 	// baseArchiveDir, its own field so the two proof reads can never orphan
 	// or double-remove each other's scratch.
@@ -251,6 +258,10 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	hs.Agent.Command = slices.Clone(hs.Agent.Command)
 	hs.Agent.Env = slices.Clone(hs.Agent.Env)
 	hs.Agent.CredentialMounts = slices.Clone(hs.Agent.CredentialMounts)
+	hs.Agent.VendorInstructions.Body = slices.Clone(hs.Agent.VendorInstructions.Body)
+	hs.Agent.InstructionPolicy.Boundaries = slices.Clone(
+		hs.Agent.InstructionPolicy.Boundaries,
+	)
 	if err := hs.validate(); err != nil {
 		return nil, err
 	}
@@ -328,6 +339,12 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		}
 		if st.seedSnapshotDir != "" {
 			_ = os.RemoveAll(st.seedSnapshotDir)
+		}
+		if st.instructionSnapshotDir != "" {
+			_ = os.RemoveAll(st.instructionSnapshotDir)
+		}
+		if st.instructionArchiveDir != "" {
+			_ = os.RemoveAll(st.instructionArchiveDir)
 		}
 		if st.exportDir != "" && (!st.succeeded || err != nil) {
 			_ = os.RemoveAll(st.exportDir)
@@ -446,6 +463,30 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	if err != nil {
 		return nil, fmt.Errorf("workspace volume %q: %w", names.Workspace, err)
 	}
+	st.instructions.attempted = true
+	instructionLabels := append(runLabels(hs.RunID), ownershipLabel)
+	if err := b.rt.CreateVolume(
+		ctx, names.Instructions, instructionVolumeSizeMB, slices.Clone(instructionLabels),
+	); err != nil {
+		return nil, fmt.Errorf("create vendor-instruction volume: %w", err)
+	}
+	st.instructions.owned = true
+	instructionView, err := b.rt.InspectVolume(ctx, names.Instructions)
+	if err != nil {
+		return nil, fmt.Errorf("observe vendor-instruction volume identity: %w", err)
+	}
+	if instructionView.Name != names.Instructions {
+		return nil, fmt.Errorf("vendor-instruction volume observation returned the wrong identity")
+	}
+	st.instructions.fingerprint, err = ownedFingerprint(
+		instructionView.CreationDate,
+		instructionView.Labels,
+		instructionView.LabelsObserved,
+		ownershipLabel,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("vendor-instruction volume %q: %w", names.Instructions, err)
+	}
 
 	// Seed the workspace at the declared base and prove the seeder gone before
 	// the writer can attach, then attest what the volume actually holds from a
@@ -466,6 +507,12 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		if err := b.cfg.Journal.MarkSeedObserved(ctx, hs.RunID, observedBaseSHA); err != nil {
 			return nil, fmt.Errorf("journal seed observation: %w", err)
 		}
+	}
+	if err := b.seedVendorInstructions(ctx, hs, names, st); err != nil {
+		return nil, err
+	}
+	if err := b.observeVendorInstructions(ctx, hs, names, st); err != nil {
+		return nil, err
 	}
 
 	// The leased credential store's pre-writer digest is a pre-writer fact
@@ -1233,6 +1280,8 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	containerClaims := []containerClaim{
 		{id: names.Seeder, claim: st.seeder},
 		{id: names.Observer, claim: st.observer},
+		{id: names.InstructionSeeder, claim: st.instructionSeeder},
+		{id: names.InstructionObserver, claim: st.instructionObserver},
 		{id: names.CredObsPre, claim: st.credObsPre},
 		{id: names.CredObsPost, claim: st.credObsPost},
 		{id: names.Agent, claim: st.agent},
@@ -1300,53 +1349,75 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 			}
 		}
 	}
-	// The workspace follows the same evidence rule: a successful create alone
-	// no longer authorizes a name-addressed delete, the volume observed at
-	// teardown must still prove it is the one this run made.
+	type volumeClaim struct {
+		name  string
+		claim objectClaim
+	}
+	volumeClaims := []volumeClaim{
+		{name: names.Workspace, claim: st.workspace},
+		{name: names.Instructions, claim: st.instructions},
+	}
+	// Both run-owned volumes follow the same evidence rule: a successful
+	// create alone no longer authorizes a name-addressed delete; the volume
+	// observed at teardown must still prove it is the one this run made.
 	if vols, err := b.rt.ListVolumes(ctx); err != nil {
 		problems = append(problems, fmt.Sprintf("list volumes: %v", err))
 		// As with containers, an unrelated malformed row must not suppress
-		// cleanup of the workspace name this invocation created: owned and
-		// ambiguous claims alike fall back to the per-object inspect, which
-		// supplies the evidence the list could not (an ambiguous claim has no
-		// fingerprint, so only the fresh token can authorize the delete).
-		if st.workspace.attempted {
-			v, verr := b.rt.InspectVolume(ctx, names.Workspace)
+		// cleanup of a volume this invocation created. Each attempted claim
+		// falls back to a per-object inspection.
+		for _, vc := range volumeClaims {
+			if !vc.claim.attempted {
+				continue
+			}
+			v, verr := b.rt.InspectVolume(ctx, vc.name)
 			switch {
 			case verr != nil:
-				problems = append(problems, fmt.Sprintf("inspect volume %q after list failure: %v", names.Workspace, verr))
-			case v.Name != names.Workspace:
-				problems = append(problems, fmt.Sprintf("inspect volume %q after list failure returned the wrong identity", names.Workspace))
+				problems = append(problems, fmt.Sprintf(
+					"inspect volume %q after list failure: %v", vc.name, verr))
+			case v.Name != vc.name:
+				problems = append(problems, fmt.Sprintf(
+					"inspect volume %q after list failure returned the wrong identity", vc.name))
 			default:
-				switch classifyEvidence(st.workspace, st.ownershipLabel, v.CreationDate, v.Labels, v.LabelsObserved) {
+				switch classifyEvidence(
+					vc.claim, st.ownershipLabel, v.CreationDate, v.Labels, v.LabelsObserved,
+				) {
 				case evidenceOurs:
-					if derr := b.rt.DeleteVolume(ctx, names.Workspace); derr != nil {
-						problems = append(problems, fmt.Sprintf("delete volume %q after list failure: %v", names.Workspace, derr))
+					if derr := b.rt.DeleteVolume(ctx, vc.name); derr != nil {
+						problems = append(problems, fmt.Sprintf(
+							"delete volume %q after list failure: %v", vc.name, derr))
 					}
 				case evidenceForeign:
 					// Not this run's volume; leave it.
 				case evidenceUnprovable:
-					problems = append(problems, fmt.Sprintf("volume %q ownership unprovable after list failure; not deleting", names.Workspace))
+					problems = append(problems, fmt.Sprintf(
+						"volume %q ownership unprovable after list failure; not deleting", vc.name))
 				}
 			}
 		}
 	} else {
-		v, found, ferr := uniqueVolume(vols, names.Workspace)
-		if ferr != nil {
-			problems = append(problems, ferr.Error())
-		} else if found {
-			ev, eerr := b.volumeEvidence(ctx, v, st.workspace, st.ownershipLabel)
-			switch {
-			case eerr != nil:
-				problems = append(problems, eerr.Error())
-			case ev == evidenceOurs:
-				if derr := b.rt.DeleteVolume(ctx, v.Name); derr != nil {
-					problems = append(problems, fmt.Sprintf("delete volume %q: %v", v.Name, derr))
+		for _, vc := range volumeClaims {
+			if !vc.claim.attempted {
+				continue
+			}
+			v, found, ferr := uniqueVolume(vols, vc.name)
+			if ferr != nil {
+				problems = append(problems, ferr.Error())
+			} else if found {
+				ev, eerr := b.volumeEvidence(ctx, v, vc.claim, st.ownershipLabel)
+				switch {
+				case eerr != nil:
+					problems = append(problems, eerr.Error())
+				case ev == evidenceOurs:
+					if derr := b.rt.DeleteVolume(ctx, v.Name); derr != nil {
+						problems = append(problems, fmt.Sprintf(
+							"delete volume %q: %v", v.Name, derr))
+					}
+				case ev == evidenceForeign:
+					// Not this run's volume; leave it.
+				case ev == evidenceUnprovable:
+					problems = append(problems, fmt.Sprintf(
+						"volume %q ownership unprovable; not deleting", v.Name))
 				}
-			case ev == evidenceForeign:
-				// Not this run's volume; leave it.
-			case ev == evidenceUnprovable:
-				problems = append(problems, fmt.Sprintf("volume %q ownership unprovable; not deleting", v.Name))
 			}
 		}
 	}
@@ -1408,20 +1479,27 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	if vols, err := b.rt.ListVolumes(ctx); err != nil {
 		problems = append(problems, fmt.Sprintf("re-list volumes: %v", err))
 	} else {
-		v, found, ferr := uniqueVolume(vols, names.Workspace)
-		if ferr != nil {
-			problems = append(problems, "re-list "+ferr.Error())
-		} else if found {
-			ev, eerr := b.volumeEvidence(ctx, v, st.workspace, st.ownershipLabel)
-			switch {
-			case eerr != nil:
-				problems = append(problems, "re-list "+eerr.Error())
-			case ev == evidenceOurs:
-				problems = append(problems, fmt.Sprintf("volume %q survived teardown", v.Name))
-			case ev == evidenceForeign:
-				// A replacement, not a survivor.
-			case ev == evidenceUnprovable:
-				problems = append(problems, fmt.Sprintf("volume %q survival unprovable after teardown", v.Name))
+		for _, vc := range volumeClaims {
+			if !vc.claim.attempted {
+				continue
+			}
+			v, found, ferr := uniqueVolume(vols, vc.name)
+			if ferr != nil {
+				problems = append(problems, "re-list "+ferr.Error())
+			} else if found {
+				ev, eerr := b.volumeEvidence(ctx, v, vc.claim, st.ownershipLabel)
+				switch {
+				case eerr != nil:
+					problems = append(problems, "re-list "+eerr.Error())
+				case ev == evidenceOurs:
+					problems = append(problems, fmt.Sprintf(
+						"volume %q survived teardown", v.Name))
+				case ev == evidenceForeign:
+					// A replacement, not a survivor.
+				case ev == evidenceUnprovable:
+					problems = append(problems, fmt.Sprintf(
+						"volume %q survival unprovable after teardown", v.Name))
+				}
 			}
 		}
 	}

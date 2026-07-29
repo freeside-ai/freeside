@@ -16,9 +16,11 @@ const fixedContainerPathEnv = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/us
 // violates the contract fails here, not in review.
 //
 // Check 1 (credential_separation): the workspace is its own named volume,
-// mounted read-write at exactly the configured target; every credential is a
-// different named volume, read-only, at its own absolute target outside the
-// workspace. The one exception is writableCredentialTarget: when non-empty,
+// mounted read-write at exactly the configured target; the vendor-instruction
+// overlay is a second distinct volume, read-only at the native user
+// instruction directory; every credential is a different named volume,
+// read-only, at its own absolute target outside both. The one exception is
+// writableCredentialTarget: when non-empty,
 // exactly one credential mount sits at that target and is read-write — the
 // leased auth-store mount (§5.4), granted only after HandoffSpec.validate
 // tied it to an AuthStoreLease claim. Both directions are enforced: a
@@ -53,6 +55,7 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume, writable
 
 	seenTargets := make(map[string]bool, len(spec.Mounts))
 	workspaceMounts := 0
+	instructionMounts := 0
 	writableMounts := 0
 	for _, m := range spec.Mounts {
 		if !m.Type.valid() {
@@ -78,6 +81,12 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume, writable
 		}
 		seenTargets[m.Target] = true
 
+		if m.Target != claudeInstructionMountTarget &&
+			(strings.HasPrefix(m.Target, claudeInstructionMountTarget+"/") ||
+				strings.HasPrefix(claudeInstructionMountTarget, m.Target+"/")) {
+			return failf(CheckCredentialSeparation,
+				"agent mount overlaps the vendor-instruction directory")
+		}
 		if m.Target == cfg.WorkspaceTarget {
 			workspaceMounts++
 			if m.Source != workspaceVolume {
@@ -89,8 +98,20 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume, writable
 			}
 			continue
 		}
+		if m.Target == claudeInstructionMountTarget {
+			instructionMounts++
+			if m.Source == workspaceVolume {
+				return failf(CheckCredentialSeparation,
+					"vendor-instruction mount reuses the workspace volume")
+			}
+			if !m.ReadOnly {
+				return failf(CheckControlPlaneIsolation,
+					"vendor-instruction mount is not read-only")
+			}
+			continue
+		}
 
-		// Every non-workspace mount is a credential mount.
+		// Every other mount is a credential mount.
 		if strings.HasPrefix(m.Target, cfg.WorkspaceTarget+"/") {
 			return failf(CheckCredentialSeparation, "credential mount is inside the workspace")
 		}
@@ -111,6 +132,10 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume, writable
 	}
 	if workspaceMounts != 1 {
 		return failf(CheckCredentialSeparation, "agent spec does not carry exactly one workspace mount")
+	}
+	if instructionMounts != 1 {
+		return failf(CheckControlPlaneIsolation,
+			"agent spec does not carry exactly one vendor-instruction mount")
 	}
 	if writableCredentialTarget != "" && writableMounts != 1 {
 		return failf(CheckCredentialSeparation, "agent spec does not carry the leased writable credential mount")
@@ -301,7 +326,12 @@ func verifyExporterAllowlist(cfg Config, rep InspectReport, exporterID, workspac
 // access: the seeder holds it read-write to place the checkout, the observer
 // read-only to attest it. Everything else is the same allowlist, because these
 // containers run in the same credential-free, network-free position.
-func verifySeedRoleAllowlist(cfg Config, rep InspectReport, spec ContainerSpec, workspaceVolume string, c Check) error {
+func verifySeedRoleAllowlist(
+	rep InspectReport,
+	spec ContainerSpec,
+	volume, target string,
+	c Check,
+) error {
 	if len(spec.Mounts) != 1 {
 		// The gate generates these specs, so a caller cannot reach this. It is
 		// asserted rather than assumed so the mount indexing below is total.
@@ -337,10 +367,10 @@ func verifySeedRoleAllowlist(cfg Config, rep InspectReport, spec ContainerSpec, 
 		return failf(c, "seeding container workspace mount reports contradictory ro/rw access")
 	case m.Type != MountVolume:
 		return failf(c, "seeding container persistent mount is not a volume")
-	case m.Source != workspaceVolume:
+	case m.Source != volume:
 		return failf(c, "seeding container mounts the wrong volume")
-	case m.Target != cfg.WorkspaceTarget:
-		return failf(c, "seeding container mounts the workspace at the wrong target")
+	case m.Target != target:
+		return failf(c, "seeding container mounts the volume at the wrong target")
 	case m.ReadOnly != spec.Mounts[0].ReadOnly:
 		return failf(c, "seeding container workspace mount access does not match its approved access")
 	}

@@ -14,11 +14,16 @@ func stageDigest(fill string) domain.Digest {
 }
 
 func stageInputSnapshotInput() domain.StageInputSnapshotInput {
+	vendorDigest := stageDigest("8")
 	return domain.StageInputSnapshotInput{
-		InputDigest:          stageDigest("1"),
-		SpecificationDigest:  stageDigest("2"),
-		PromptPackageDigest:  stageDigest("3"),
-		PolicyDigest:         stageDigest("4"),
+		InputDigest:         stageDigest("1"),
+		SpecificationDigest: stageDigest("2"),
+		PromptPackageDigest: stageDigest("3"),
+		PolicyDigest:        stageDigest("4"),
+		VendorInstructions: &domain.VendorInstructionSnapshot{
+			Vendor: domain.AgentVendorClaude,
+			Digest: &vendorDigest,
+		},
 		PriorArtifactDigests: []domain.Digest{stageDigest("5"), stageDigest("6")},
 		ImageInputDigests:    []domain.Digest{stageDigest("7")},
 	}
@@ -41,8 +46,10 @@ func TestNewStageInputSnapshotCanonicalAndDetached(t *testing.T) {
 	}
 	in.PriorArtifactDigests[0] = "sha256:changed"
 	in.ImageInputDigests[0] = "sha256:changed"
+	*in.VendorInstructions.Digest = "sha256:changed"
 	if snapshot.PriorArtifactDigests[0] != stageDigest("5") ||
-		snapshot.ImageInputDigests[0] != stageDigest("7") {
+		snapshot.ImageInputDigests[0] != stageDigest("7") ||
+		*snapshot.VendorInstructions.Digest != stageDigest("8") {
 		t.Fatal("snapshot followed caller-owned input slices")
 	}
 
@@ -66,6 +73,26 @@ func TestNewStageInputSnapshotCanonicalAndDetached(t *testing.T) {
 	if empty.PriorArtifactDigests == nil || empty.ImageInputDigests == nil {
 		t.Fatal("empty input collections must be non-nil")
 	}
+	if empty.VendorInstructions != nil {
+		t.Fatal("legacy constructor input unexpectedly claimed vendor instructions")
+	}
+
+	absentInput := stageInputSnapshotInput()
+	absentInput.VendorInstructions.Digest = nil
+	absent, err := domain.NewStageInputSnapshot(absentInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	absentBody, err := json.Marshal(absent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(absentBody), `"vendor_instructions":{"vendor":"claude","digest":null}`) {
+		t.Fatalf("explicit absence is not serialized: %s", absentBody)
+	}
+	if absent.ID == empty.ID {
+		t.Fatal("explicit vendor-instruction absence collapsed onto a legacy snapshot")
+	}
 
 	repeated := stageInputSnapshotInput()
 	repeated.PriorArtifactDigests = append(
@@ -86,6 +113,13 @@ func TestStageInputSnapshotValidate(t *testing.T) {
 		{"missing prompt", func(s *domain.StageInputSnapshot) {
 			s.PromptPackageDigest = ""
 		}, domain.ErrEmptyField},
+		{"unknown vendor", func(s *domain.StageInputSnapshot) {
+			s.VendorInstructions.Vendor = "unknown"
+		}, domain.ErrStageInputsNotCanonical},
+		{"malformed vendor digest", func(s *domain.StageInputSnapshot) {
+			digest := domain.Digest("sha256:not-hex")
+			s.VendorInstructions.Digest = &digest
+		}, domain.ErrStageInputsNotCanonical},
 		{"nil prior artifacts", func(s *domain.StageInputSnapshot) {
 			s.PriorArtifactDigests = nil
 		}, domain.ErrStageInputsNotCanonical},
@@ -107,6 +141,10 @@ func TestStageInputSnapshotValidate(t *testing.T) {
 			snapshot := valid
 			snapshot.PriorArtifactDigests = append([]domain.Digest{}, valid.PriorArtifactDigests...)
 			snapshot.ImageInputDigests = append([]domain.Digest{}, valid.ImageInputDigests...)
+			vendor := *valid.VendorInstructions
+			digest := *valid.VendorInstructions.Digest
+			vendor.Digest = &digest
+			snapshot.VendorInstructions = &vendor
 			tc.edit(&snapshot)
 			if err := snapshot.Validate(); !errors.Is(err, tc.wantErr) {
 				t.Fatalf("Validate() = %v, want %v", err, tc.wantErr)

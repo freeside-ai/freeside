@@ -561,7 +561,7 @@ New in revision 19 (decider in parentheses):
 
 ---
 
-## Revision 20 (current)
+## Revision 20
 
 Revision 20 makes the operator stop of unattended operation a durable,
 command-bound transition with an explicit resume action, and defines the §4
@@ -581,3 +581,28 @@ admitting transaction (#319, #321).
    (User; devlog 2026-07-27-1846-durable-stop-and-supersession.md; #319,
    #321.)
 
+---
+
+## Revision 21 (current)
+
+Revision 21 admits one operator-host instruction file as a snapshot-at-admission
+control-plane source while preserving the rule that no agent-writable surface
+feeds behavioral authority (#375).
+
+Held from revision 20: every decision.
+
+New in revision 21 (decider in parentheses):
+
+1. **Vendor instructions mirror the operator host through an immutable
+   per-run snapshot.** Admission dereferences the configured vendor instruction
+   path once, records exact bytes or explicit absence, binds present content by
+   digest separately from the stage prompt, and closes it under backup. Ward
+   injects only that materialized file through a read-only vendor-native
+   overlay; it never mounts the live host directory or inherits neighboring
+   configuration. Repository auto-loaded instructions remain trusted-base
+   content, and the launch contract reapplies that source at startup, recovery,
+   resume, and child invocation. The host file intentionally has no repository
+   approval gate or history: the operator already controls it, and each run's
+   immutable digest makes drift observable and replay-stable. Rejected
+   alternatives and revisit conditions live in the decision note.
+   (User; devlog 2026-07-28-1908-host-vendor-instructions.md; #375.)

@@ -202,11 +202,16 @@ func TestLocalCheckpointHealthIncludesEveryStageInputRole(t *testing.T) {
 	conversationDigest := digest("5")
 	priorDigest := digest("6")
 	imageDigest := digest("7")
+	vendorDigest := digest("8")
 	stageInputs, err := domain.NewStageInputSnapshot(domain.StageInputSnapshotInput{
-		InputDigest:          inputDigest,
-		SpecificationDigest:  specDigest,
-		PromptPackageDigest:  promptDigest,
-		PolicyDigest:         policyDigest,
+		InputDigest:         inputDigest,
+		SpecificationDigest: specDigest,
+		PromptPackageDigest: promptDigest,
+		PolicyDigest:        policyDigest,
+		VendorInstructions: &domain.VendorInstructionSnapshot{
+			Vendor: domain.AgentVendorClaude,
+			Digest: &vendorDigest,
+		},
 		ConversationDigest:   &conversationDigest,
 		PriorArtifactDigests: []domain.Digest{priorDigest},
 		ImageInputDigests:    []domain.Digest{imageDigest},
@@ -232,7 +237,8 @@ func TestLocalCheckpointHealthIncludesEveryStageInputRole(t *testing.T) {
 	}
 
 	stageInputDigests := []domain.Digest{
-		specDigest, promptDigest, policyDigest, conversationDigest, priorDigest, imageDigest,
+		specDigest, promptDigest, policyDigest, vendorDigest,
+		conversationDigest, priorDigest, imageDigest,
 	}
 	artifacts := backupArtifactSet{}
 	for _, stageInputDigest := range stageInputDigests {
