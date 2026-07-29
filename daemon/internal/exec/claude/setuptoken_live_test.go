@@ -3,9 +3,12 @@ package claude
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -63,25 +66,35 @@ func TestPinnedCLIVersionMatchesTheImagePin(t *testing.T) {
 // TestSetupTokenBuysInferenceOnly is the scope contract: the token completes
 // a real inference through the pinned CLI, and is refused by the
 // non-inference API surfaces an escaped credential would be worth stealing
-// for. Only status codes are asserted, and the token is never logged.
+// for. The token is never logged.
 func TestSetupTokenBuysInferenceOnly(t *testing.T) {
 	token := liveToken(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
 	t.Run("inference completes", func(t *testing.T) {
-		cmd := exec.CommandContext(ctx, "claude", "-p",
-			"Reply with exactly the word: ok", "--output-format", "json")
-		cmd.Env = append(os.Environ(), tokenEnv+"="+token)
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &stdout, &stderr
-		if err := cmd.Run(); err != nil {
-			t.Fatalf("inference through the pinned CLI failed: %v (stderr: %s)",
-				err, strings.TrimSpace(stderr.String()))
+		home := t.TempDir()
+		configDir := filepath.Join(home, ".claude")
+		if err := os.Mkdir(configDir, 0o700); err != nil {
+			t.Fatalf("create isolated Claude config directory: %v", err)
 		}
-		if !strings.Contains(stdout.String(), `"is_error":false`) &&
-			strings.Contains(stdout.String(), `"is_error":true`) {
-			t.Fatalf("CLI reported an error result: %s", strings.TrimSpace(stdout.String()))
+		baseEnv := isolatedClaudeEnv(home, configDir)
+
+		status, err := readAuthStatus(ctx, baseEnv)
+		if err != nil {
+			t.Fatalf("read isolated negative-control auth status: %v", err)
+		}
+		if status.LoggedIn || status.AuthMethod != "none" {
+			t.Fatalf("isolated negative control found ambient authentication method %q",
+				status.AuthMethod)
+		}
+
+		isError, err := runInference(ctx, append(baseEnv, tokenEnv+"="+token))
+		if err != nil {
+			t.Fatalf("inference through the pinned CLI failed: %v", err)
+		}
+		if isError {
+			t.Fatal("CLI reported an error result for setup-token inference")
 		}
 	})
 
@@ -122,10 +135,129 @@ func TestSetupTokenBuysInferenceOnly(t *testing.T) {
 			defer func() { _ = resp.Body.Close() }()
 			// Status only: a response body from an authorization surface can
 			// carry organization detail this test has no reason to record.
-			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				t.Fatalf("%s %s returned %d: the setup token reaches a non-inference surface",
+			if !scopeAuthorizationRefused(resp.StatusCode) {
+				t.Fatalf(
+					"%s %s returned %d, want an authorization refusal (401 or 403); "+
+						"availability, routing, and throttling failures are not scope evidence",
 					tc.method, tc.path, resp.StatusCode)
 			}
 		})
+	}
+}
+
+func scopeAuthorizationRefused(status int) bool {
+	return status == http.StatusUnauthorized || status == http.StatusForbidden
+}
+
+func TestScopeProbeRequiresAuthorizationRefusal(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{
+		http.StatusOK,
+		http.StatusNotFound,
+		http.StatusMethodNotAllowed,
+		http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+	} {
+		if scopeAuthorizationRefused(status) {
+			t.Errorf("status %d was accepted as an authorization refusal", status)
+		}
+	}
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		if !scopeAuthorizationRefused(status) {
+			t.Errorf("status %d was not accepted as an authorization refusal", status)
+		}
+	}
+}
+
+type inferenceResult struct {
+	IsError *bool `json:"is_error"`
+}
+
+type authStatus struct {
+	LoggedIn   bool   `json:"loggedIn"`
+	AuthMethod string `json:"authMethod"`
+}
+
+func readAuthStatus(ctx context.Context, env []string) (authStatus, error) {
+	cmd := exec.CommandContext(ctx, "claude", "auth", "status", "--json")
+	cmd.Env = env
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &bytes.Buffer{}
+	runErr := cmd.Run()
+	var status authStatus
+	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
+		if runErr != nil {
+			return authStatus{}, fmt.Errorf("%w; decode CLI auth status: %v "+
+				"(CLI stderr suppressed)", runErr, err)
+		}
+		return authStatus{}, fmt.Errorf("decode CLI auth status: %w", err)
+	}
+	return status, nil
+}
+
+func runInference(ctx context.Context, env []string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "claude", "-p",
+		"Reply with exactly the word: ok", "--output-format", "json")
+	cmd.Env = env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return false, fmt.Errorf("%w (CLI stderr suppressed)", err)
+	}
+	var result inferenceResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		return false, fmt.Errorf("decode CLI JSON result: %w", err)
+	}
+	if result.IsError == nil {
+		return false, fmt.Errorf("CLI JSON result omitted is_error")
+	}
+	return *result.IsError, nil
+}
+
+func isolatedClaudeEnv(home, configDir string) []string {
+	return isolatedClaudeEnvFrom(os.Environ(), home, configDir)
+}
+
+func isolatedClaudeEnvFrom(source []string, home, configDir string) []string {
+	env := make([]string, 0, len(source)+2)
+	for _, value := range source {
+		name, _, _ := strings.Cut(value, "=")
+		switch name {
+		case "HOME", "CLAUDE_CONFIG_DIR",
+			"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+			tokenEnv, "CLAUDE_CODE_OAUTH_REFRESH_TOKEN", "CLAUDE_CODE_OAUTH_SCOPES",
+			"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+			"CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_MANTLE":
+			continue
+		}
+		env = append(env, value)
+	}
+	return append(env, "HOME="+home, "CLAUDE_CONFIG_DIR="+configDir)
+}
+
+func TestIsolatedClaudeEnvDropsAmbientCredentials(t *testing.T) {
+	source := []string{
+		"PATH=/bin",
+		"HOME=/real-home",
+		"CLAUDE_CONFIG_DIR=/real-config",
+		"ANTHROPIC_API_KEY=api-key",
+		"ANTHROPIC_AUTH_TOKEN=auth-token",
+		"ANTHROPIC_BASE_URL=https://proxy.invalid",
+		tokenEnv + "=setup-token",
+		"CLAUDE_CODE_OAUTH_REFRESH_TOKEN=refresh-token",
+		"CLAUDE_CODE_OAUTH_SCOPES=user:inference",
+		"CLAUDE_CODE_USE_BEDROCK=1",
+		"KEEP=value",
+	}
+	got := isolatedClaudeEnvFrom(source, "/isolated-home", "/isolated-config")
+	want := []string{
+		"PATH=/bin",
+		"KEEP=value",
+		"HOME=/isolated-home",
+		"CLAUDE_CONFIG_DIR=/isolated-config",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("isolated environment = %q, want %q", got, want)
 	}
 }
