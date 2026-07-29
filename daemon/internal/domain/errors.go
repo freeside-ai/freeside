@@ -42,6 +42,7 @@ var (
 	ErrInvalidEgressProfile      = errors.New("invalid egress profile")
 	ErrInvalidRefreshStrategy    = errors.New("invalid refresh strategy")
 	ErrInvalidBackupHealthStatus = errors.New("invalid backup health status")
+	ErrInvalidExecOutcome        = errors.New("invalid execution outcome status")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")
@@ -87,6 +88,7 @@ var (
 	ErrAuthIdentityInconsistent = errors.New("auth identity is inconsistent with the stage's egress profile")
 	ErrExportBaseMismatch       = errors.New("observed export base does not match the admitted base")
 	ErrStageInputsNotCanonical  = errors.New("stage input snapshot must use canonical digest and array forms")
+	ErrOutcomeInconsistent      = errors.New("execution outcome fields are internally inconsistent")
 
 	// Trust-boundary failures.
 	ErrPlaintextCredential         = errors.New("credential material must be a sha256 digest, never plaintext")

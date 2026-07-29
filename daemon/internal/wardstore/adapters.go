@@ -162,6 +162,10 @@ func (a *Journal) Get(
 		return err
 	})
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return ward.HandoffJournalRecord{}, fmt.Errorf(
+				"%w: %w", ward.ErrJournalRecordNotFound, err)
+		}
 		return ward.HandoffJournalRecord{}, err
 	}
 	converted := fromStoreRecord(rec)
@@ -185,10 +189,68 @@ func (a *Journal) MarkCredentialObserved(ctx context.Context, runID, preDigest s
 	})
 }
 
+// MarkStatePrepared commits the lifecycle-scoped state-volume binding.
+func (a *Journal) MarkStatePrepared(
+	ctx context.Context,
+	runID string,
+	state ward.HandoffJournalState,
+) error {
+	return a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.MarkHandoffStatePrepared(ctx, runID, store.HandoffJournalState{
+			ConfigRootFingerprint:     state.ConfigRootFingerprint,
+			ContinuityFingerprint:     state.ContinuityFingerprint,
+			SessionScratchFingerprint: state.SessionScratchFingerprint,
+			ConfigRootTarget:          state.ConfigRootTarget,
+			ContinuityTarget:          state.ContinuityTarget,
+			SessionScratchTarget:      state.SessionScratchTarget,
+			ConfigRootReadOnly:        state.ConfigRootReadOnly,
+			ContinuityReadOnly:        state.ContinuityReadOnly,
+			SessionScratchReadOnly:    state.SessionScratchReadOnly,
+			ConfigRootDigest:          state.ConfigRootDigest,
+			ContinuityDigest:          state.ContinuityDigest,
+			SessionScratchDigest:      state.SessionScratchDigest,
+		})
+	})
+}
+
+// MarkInstructionsPrepared commits the explicit instruction-bundle binding.
+func (a *Journal) MarkInstructionsPrepared(
+	ctx context.Context,
+	runID string,
+	instructions ward.HandoffJournalInstructions,
+) error {
+	return a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.MarkHandoffInstructionsPrepared(
+			ctx,
+			runID,
+			store.HandoffJournalInstructions{
+				CompositionVersion:       instructions.CompositionVersion,
+				HostDigest:               instructions.HostDigest,
+				RepositoryManifestDigest: instructions.RepositoryManifestDigest,
+				BundleDigest:             instructions.BundleDigest,
+			},
+		)
+	})
+}
+
 // MarkWriterComplete commits the writer-complete proof.
 func (a *Journal) MarkWriterComplete(ctx context.Context, runID string) error {
 	return a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.MarkHandoffWriterComplete(ctx, runID)
+	})
+}
+
+// MarkCancellationRequested commits daemon cancellation intent.
+func (a *Journal) MarkCancellationRequested(ctx context.Context, runID string) error {
+	return a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.MarkHandoffCancellationRequested(ctx, runID)
+	})
+}
+
+// MarkWriterFailed commits the authenticated nonzero launcher status.
+func (a *Journal) MarkWriterFailed(ctx context.Context, runID string, status int) error {
+	return a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.MarkHandoffWriterFailed(ctx, runID, status)
 	})
 }
 
@@ -210,14 +272,16 @@ func (a *Journal) Close(
 
 func toStoreRecord(rec ward.HandoffJournalRecord) store.HandoffJournalRecord {
 	converted := store.HandoffJournalRecord{
-		RunID:               rec.RunID,
-		OwnershipToken:      rec.OwnershipToken,
-		SpecDigest:          rec.SpecDigest,
-		ObservedBaseSHA:     rec.ObservedBaseSHA,
-		CredentialPreDigest: rec.CredentialPreDigest,
-		WriterComplete:      rec.WriterComplete,
-		ExportDir:           rec.ExportDir,
-		OpenedAt:            rec.OpenedAt.UTC(),
+		RunID:                 rec.RunID,
+		OwnershipToken:        rec.OwnershipToken,
+		SpecDigest:            rec.SpecDigest,
+		ObservedBaseSHA:       rec.ObservedBaseSHA,
+		CredentialPreDigest:   rec.CredentialPreDigest,
+		WriterComplete:        rec.WriterComplete,
+		CancellationRequested: rec.CancellationRequested,
+		WriterFailureStatus:   rec.WriterFailureStatus,
+		ExportDir:             rec.ExportDir,
+		OpenedAt:              rec.OpenedAt.UTC(),
 	}
 	if rec.Lease != nil {
 		converted.Lease = &store.HandoffJournalLease{
@@ -226,6 +290,30 @@ func toStoreRecord(rec ward.HandoffJournalRecord) store.HandoffJournalRecord {
 			Fence:          rec.Lease.Fence,
 			AcquiredAt:     rec.Lease.AcquiredAt.UTC(),
 			ExpiresAt:      rec.Lease.ExpiresAt.UTC(),
+		}
+	}
+	if rec.State != nil {
+		converted.State = &store.HandoffJournalState{
+			ConfigRootFingerprint:     rec.State.ConfigRootFingerprint,
+			ContinuityFingerprint:     rec.State.ContinuityFingerprint,
+			SessionScratchFingerprint: rec.State.SessionScratchFingerprint,
+			ConfigRootTarget:          rec.State.ConfigRootTarget,
+			ContinuityTarget:          rec.State.ContinuityTarget,
+			SessionScratchTarget:      rec.State.SessionScratchTarget,
+			ConfigRootReadOnly:        rec.State.ConfigRootReadOnly,
+			ContinuityReadOnly:        rec.State.ContinuityReadOnly,
+			SessionScratchReadOnly:    rec.State.SessionScratchReadOnly,
+			ConfigRootDigest:          rec.State.ConfigRootDigest,
+			ContinuityDigest:          rec.State.ContinuityDigest,
+			SessionScratchDigest:      rec.State.SessionScratchDigest,
+		}
+	}
+	if rec.Instructions != nil {
+		converted.Instructions = &store.HandoffJournalInstructions{
+			CompositionVersion:       rec.Instructions.CompositionVersion,
+			HostDigest:               rec.Instructions.HostDigest,
+			RepositoryManifestDigest: rec.Instructions.RepositoryManifestDigest,
+			BundleDigest:             rec.Instructions.BundleDigest,
 		}
 	}
 	if rec.Outcome != nil {
@@ -237,14 +325,16 @@ func toStoreRecord(rec ward.HandoffJournalRecord) store.HandoffJournalRecord {
 
 func fromStoreRecord(rec store.HandoffJournalRecord) ward.HandoffJournalRecord {
 	converted := ward.HandoffJournalRecord{
-		RunID:               rec.RunID,
-		OwnershipToken:      rec.OwnershipToken,
-		SpecDigest:          rec.SpecDigest,
-		ObservedBaseSHA:     rec.ObservedBaseSHA,
-		CredentialPreDigest: rec.CredentialPreDigest,
-		WriterComplete:      rec.WriterComplete,
-		ExportDir:           rec.ExportDir,
-		OpenedAt:            rec.OpenedAt,
+		RunID:                 rec.RunID,
+		OwnershipToken:        rec.OwnershipToken,
+		SpecDigest:            rec.SpecDigest,
+		ObservedBaseSHA:       rec.ObservedBaseSHA,
+		CredentialPreDigest:   rec.CredentialPreDigest,
+		WriterComplete:        rec.WriterComplete,
+		CancellationRequested: rec.CancellationRequested,
+		WriterFailureStatus:   rec.WriterFailureStatus,
+		ExportDir:             rec.ExportDir,
+		OpenedAt:              rec.OpenedAt,
 	}
 	if rec.Lease != nil {
 		converted.Lease = &ward.HandoffJournalLease{
@@ -253,6 +343,30 @@ func fromStoreRecord(rec store.HandoffJournalRecord) ward.HandoffJournalRecord {
 			Fence:          rec.Lease.Fence,
 			AcquiredAt:     rec.Lease.AcquiredAt,
 			ExpiresAt:      rec.Lease.ExpiresAt,
+		}
+	}
+	if rec.State != nil {
+		converted.State = &ward.HandoffJournalState{
+			ConfigRootFingerprint:     rec.State.ConfigRootFingerprint,
+			ContinuityFingerprint:     rec.State.ContinuityFingerprint,
+			SessionScratchFingerprint: rec.State.SessionScratchFingerprint,
+			ConfigRootTarget:          rec.State.ConfigRootTarget,
+			ContinuityTarget:          rec.State.ContinuityTarget,
+			SessionScratchTarget:      rec.State.SessionScratchTarget,
+			ConfigRootReadOnly:        rec.State.ConfigRootReadOnly,
+			ContinuityReadOnly:        rec.State.ContinuityReadOnly,
+			SessionScratchReadOnly:    rec.State.SessionScratchReadOnly,
+			ConfigRootDigest:          rec.State.ConfigRootDigest,
+			ContinuityDigest:          rec.State.ContinuityDigest,
+			SessionScratchDigest:      rec.State.SessionScratchDigest,
+		}
+	}
+	if rec.Instructions != nil {
+		converted.Instructions = &ward.HandoffJournalInstructions{
+			CompositionVersion:       rec.Instructions.CompositionVersion,
+			HostDigest:               rec.Instructions.HostDigest,
+			RepositoryManifestDigest: rec.Instructions.RepositoryManifestDigest,
+			BundleDigest:             rec.Instructions.BundleDigest,
 		}
 	}
 	if rec.Outcome != nil {

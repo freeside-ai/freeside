@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -107,6 +109,11 @@ type Config struct {
 	// never accepted, because a seed source is copied into a volume the writer
 	// then holds read-write.
 	SeedRoot string
+	// ExportRoot is the daemon-owned durable directory for verified handoff
+	// payloads after the exporter VM stops. Production must place it outside
+	// volatile temporary storage so a completed journal remains recoverable
+	// across a host reboot. Tests and one-shot callers default to os.TempDir.
+	ExportRoot string
 	// SeedStageDir is where the seeder receives the staged checkout on its own
 	// root filesystem, before it copies the tree onto the workspace volume.
 	// Defaults to "/seed".
@@ -211,6 +218,9 @@ type Config struct {
 
 // withDefaults returns cfg with unset optional fields filled.
 func (cfg Config) withDefaults() Config {
+	if cfg.ExportRoot == "" {
+		cfg.ExportRoot = filepath.Clean(os.TempDir())
+	}
 	if cfg.WorkspaceTarget == "" {
 		cfg.WorkspaceTarget = export.HelperWorkspaceDir
 	}
@@ -322,6 +332,8 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: SeedReadyDir %q carries a container-reference delimiter", ErrInvalidConfig, cfg.SeedReadyDir)
 	case cfg.SeedRoot != "" && !cleanAbs(cfg.SeedRoot):
 		return fmt.Errorf("%w: SeedRoot %q is not a clean absolute non-root path", ErrInvalidConfig, cfg.SeedRoot)
+	case !cleanAbs(cfg.ExportRoot):
+		return fmt.Errorf("%w: ExportRoot %q is not a clean absolute non-root path", ErrInvalidConfig, cfg.ExportRoot)
 	case cfg.SeedTimeout < 0:
 		return fmt.Errorf("%w: SeedTimeout %s is negative", ErrInvalidConfig, cfg.SeedTimeout)
 	case cfg.MaxSeedBytes < 0:

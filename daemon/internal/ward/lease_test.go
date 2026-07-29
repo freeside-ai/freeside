@@ -433,7 +433,10 @@ func TestHandoffLeasedPreflightRefusalOpensNoWindow(t *testing.T) {
 	// An extra read-only mount colliding with the workspace target fails
 	// validateAgentSpec.
 	hs.Agent.CredentialMounts = append(hs.Agent.CredentialMounts,
-		CredentialMount{Volume: "collide", Target: fx.cfg.withDefaults().WorkspaceTarget})
+		CredentialMount{
+			Volume: "collide", Target: fx.cfg.withDefaults().WorkspaceTarget,
+			Manifest: CredentialManifestOpaque,
+		})
 
 	_, err := fx.runSpec(t, hs)
 	if err == nil {

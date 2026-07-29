@@ -713,3 +713,80 @@ func ValidateExportBinding(a ExecutionAdmission, x ExecutionExport) error {
 	}
 	return nil
 }
+
+// ExecutionOutcomeStatus is a non-export terminal class. Completed work is
+// authenticated by ExecutionExport instead; keeping it out of this vocabulary
+// makes the two authorities disjoint.
+type ExecutionOutcomeStatus string
+
+const (
+	ExecutionOutcomeFailed   ExecutionOutcomeStatus = "failed"
+	ExecutionOutcomeCanceled ExecutionOutcomeStatus = "canceled"
+	ExecutionOutcomeLost     ExecutionOutcomeStatus = "lost"
+)
+
+// AllExecutionOutcomeStatuses is the single registration point for durable
+// non-export outcomes.
+var AllExecutionOutcomeStatuses = []ExecutionOutcomeStatus{
+	ExecutionOutcomeFailed,
+	ExecutionOutcomeCanceled,
+	ExecutionOutcomeLost,
+}
+
+func (s ExecutionOutcomeStatus) valid() bool {
+	switch s {
+	case ExecutionOutcomeFailed, ExecutionOutcomeCanceled, ExecutionOutcomeLost:
+		return true
+	default:
+		return false
+	}
+}
+
+// ExecutionOutcome is the trusted, write-once authority for a failed,
+// canceled, or proven-lost attempt. Private driver state may replay it but
+// cannot mint one.
+type ExecutionOutcome struct {
+	InvocationID InvocationID           `json:"invocation_id"`
+	AdmissionID  Digest                 `json:"admission_id"`
+	Status       ExecutionOutcomeStatus `json:"status"`
+	Summary      string                 `json:"summary,omitempty"`
+	RecordedAt   time.Time              `json:"recorded_at"`
+}
+
+func (x ExecutionOutcome) Validate() error {
+	if x.InvocationID == "" {
+		return fmt.Errorf("execution outcome invocation_id: %w", ErrEmptyID)
+	}
+	if x.AdmissionID == "" {
+		return fmt.Errorf("execution outcome %s admission_id: %w", x.InvocationID, ErrEmptyID)
+	}
+	if !x.Status.valid() {
+		return fmt.Errorf("execution outcome %s status %q: %w",
+			x.InvocationID, x.Status, ErrInvalidExecOutcome)
+	}
+	if x.Status == ExecutionOutcomeLost && x.Summary != "" {
+		return fmt.Errorf("execution outcome %s lost with summary: %w",
+			x.InvocationID, ErrOutcomeInconsistent)
+	}
+	if x.RecordedAt.IsZero() {
+		return fmt.Errorf("execution outcome %s recorded_at: %w", x.InvocationID, ErrMissingTimestamp)
+	}
+	if x.RecordedAt.Location() != time.UTC {
+		return fmt.Errorf("execution outcome %s recorded_at: %w", x.InvocationID, ErrTimestampNotUTC)
+	}
+	return nil
+}
+
+// ValidateOutcomeBinding requires the same invocation and admission, and
+// forward-moving time, as the trusted admission that authorized the attempt.
+func ValidateOutcomeBinding(a ExecutionAdmission, x ExecutionOutcome) error {
+	if x.InvocationID != a.InvocationID || x.AdmissionID != a.ID {
+		return fmt.Errorf("execution outcome %s disagrees with admission %s: %w",
+			x.InvocationID, a.InvocationID, ErrParentKeyMismatch)
+	}
+	if x.RecordedAt.Before(a.AdmittedAt) {
+		return fmt.Errorf("execution outcome %s recorded %s, admitted %s: %w",
+			x.InvocationID, x.RecordedAt, a.AdmittedAt, ErrTimestampOutOfOrder)
+	}
+	return nil
+}

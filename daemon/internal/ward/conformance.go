@@ -36,7 +36,15 @@ const fixedContainerPathEnv = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/us
 // or published sockets at all. Environment content is not scanned: a
 // credential smuggled into Env is not mechanically detectable, and §5.4
 // scanning of the export is the honest downstream control.
-func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume, writableCredentialTarget string) error {
+func validateAgentSpec(
+	cfg Config,
+	spec ContainerSpec,
+	names handoffNames,
+	leasedCredentialTarget string,
+	leasedCredentialWritable bool,
+	statePolicy LaunchStatePolicy,
+) error {
+	workspaceVolume := names.Workspace
 	// A bare-key env entry makes the CLI inherit the host's value, pulling a
 	// host credential into the writer VM (check 2); every entry must set an
 	// explicit value.
@@ -56,7 +64,13 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume, writable
 	seenTargets := make(map[string]bool, len(spec.Mounts))
 	workspaceMounts := 0
 	instructionMounts := 0
-	writableMounts := 0
+	leasedMounts := 0
+	stateMounts := 0
+	stateVolumes := map[string]bool{
+		names.ConfigRoot:     true,
+		names.Continuity:     true,
+		names.SessionScratch: true,
+	}
 	for _, m := range spec.Mounts {
 		if !m.Type.valid() {
 			return failf(CheckControlPlaneIsolation, "agent spec carries an unknown mount type")
@@ -110,6 +124,36 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume, writable
 			}
 			continue
 		}
+		if statePolicy == LaunchStateClaudeClean {
+			switch m.Target {
+			case ClaudeConfigRootTarget:
+				stateMounts++
+				if m.Source != names.ConfigRoot || !m.ReadOnly {
+					return failf(CheckControlPlaneIsolation,
+						"Claude config root does not use the expected read-only volume")
+				}
+				continue
+			case ClaudeContinuityTarget:
+				stateMounts++
+				if m.Source != names.Continuity || m.ReadOnly {
+					return failf(CheckControlPlaneIsolation,
+						"Claude continuity does not use the expected read-write volume")
+				}
+				continue
+			case ClaudeSessionScratchTarget:
+				stateMounts++
+				if m.Source != names.SessionScratch || m.ReadOnly {
+					return failf(CheckControlPlaneIsolation,
+						"Claude session scratch does not use the expected read-write volume")
+				}
+				continue
+			}
+			if strings.HasPrefix(m.Target, ClaudeConfigRootTarget+"/") ||
+				strings.HasPrefix(ClaudeConfigRootTarget, m.Target+"/") {
+				return failf(CheckControlPlaneIsolation,
+					"agent mount overlaps the Claude config root outside an allowed state target")
+			}
+		}
 
 		// Every other mount is a credential mount.
 		if strings.HasPrefix(m.Target, cfg.WorkspaceTarget+"/") {
@@ -118,12 +162,16 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume, writable
 		if m.Source == workspaceVolume {
 			return failf(CheckCredentialSeparation, "credential mount reuses the workspace volume")
 		}
-		if writableCredentialTarget != "" && m.Target == writableCredentialTarget {
-			if m.ReadOnly {
+		if stateVolumes[m.Source] {
+			return failf(CheckCredentialSeparation,
+				"credential mount reuses a lifecycle-scoped state volume")
+		}
+		if leasedCredentialTarget != "" && m.Target == leasedCredentialTarget {
+			leasedMounts++
+			if m.ReadOnly == leasedCredentialWritable {
 				return failf(CheckCredentialSeparation,
-					"leased credential mount is read-only; the auth-store lease grants a writable mount")
+					"leased credential mount read-only bit disagrees with the admitted lease")
 			}
-			writableMounts++
 			continue
 		}
 		if !m.ReadOnly {
@@ -137,8 +185,12 @@ func validateAgentSpec(cfg Config, spec ContainerSpec, workspaceVolume, writable
 		return failf(CheckControlPlaneIsolation,
 			"agent spec does not carry exactly one vendor-instruction mount")
 	}
-	if writableCredentialTarget != "" && writableMounts != 1 {
-		return failf(CheckCredentialSeparation, "agent spec does not carry the leased writable credential mount")
+	if leasedCredentialTarget != "" && leasedMounts != 1 {
+		return failf(CheckCredentialSeparation, "agent spec does not carry the leased credential mount")
+	}
+	if statePolicy == LaunchStateClaudeClean && stateMounts != 3 {
+		return failf(CheckControlPlaneIsolation,
+			"agent spec does not carry the complete Claude launch-state topology")
 	}
 	return nil
 }
@@ -475,7 +527,11 @@ func verifyCredentialObserverAllowlist(rep InspectReport, spec ContainerSpec) er
 // this invocation's unpredictable token (that is what makes the proof this
 // run's, not a file the image shipped or an earlier run left), and the digest
 // must be shaped like one before anything compares it.
-func verifyCredProof(data []byte, nonce string) (string, error) {
+func verifyCredProof(
+	data []byte,
+	nonce string,
+	manifest CredentialManifestPolicy,
+) (string, error) {
 	seen := map[string]bool{}
 	var digest string
 	sc := bufio.NewScanner(bytes.NewReader(data))
@@ -504,6 +560,10 @@ func verifyCredProof(data []byte, nonce string) (string, error) {
 				return "", failf(CheckAuthStoreMutationLease, "credential proof reports a value that is not a tree digest")
 			}
 			digest = value
+		case credProofManifestKey:
+			if manifest != CredentialManifestSetupToken || value != "setup_token" {
+				return "", failf(CheckAuthStoreMutationLease, "credential proof reports an unexpected value for a required key")
+			}
 		default:
 			return "", failf(CheckAuthStoreMutationLease, "credential proof carries an unknown key")
 		}
@@ -511,7 +571,11 @@ func verifyCredProof(data []byte, nonce string) (string, error) {
 	if err := sc.Err(); err != nil {
 		return "", failf(CheckAuthStoreMutationLease, "credential proof unreadable")
 	}
-	for _, key := range []string{credProofNonceKey, credProofTreeKey} {
+	required := []string{credProofNonceKey, credProofTreeKey}
+	if manifest == CredentialManifestSetupToken {
+		required = append(required, credProofManifestKey)
+	}
+	for _, key := range required {
 		if !seen[key] {
 			return "", failf(CheckAuthStoreMutationLease, "credential proof omits a required key")
 		}

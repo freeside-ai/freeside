@@ -918,11 +918,15 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 		WorkspaceSizeMB: s.fx.WorkspaceSizeMB,
 		Seed:            s.fx.Seed,
 		Agent: AgentSpec{
-			Image:            s.fx.AgentImage,
-			Command:          s.agentCommand,
-			Env:              []string{"FREESIDE_CONFORMANCE_A=1", "FREESIDE_CONFORMANCE_B=2"},
-			EgressProfile:    domain.EgressProviderOnly,
-			CredentialMounts: []CredentialMount{{Volume: credVolume, Target: s.fx.CredentialTarget}},
+			Image:         s.fx.AgentImage,
+			Command:       s.agentCommand,
+			Env:           []string{"FREESIDE_CONFORMANCE_A=1", "FREESIDE_CONFORMANCE_B=2"},
+			EgressProfile: domain.EgressProviderOnly,
+			LaunchState:   LaunchStateNone,
+			CredentialMounts: []CredentialMount{{
+				Volume: credVolume, Target: s.fx.CredentialTarget,
+				Manifest: CredentialManifestOpaque,
+			}},
 			VendorInstructions: VendorInstructions{
 				Vendor: domain.AgentVendorClaude,
 			},

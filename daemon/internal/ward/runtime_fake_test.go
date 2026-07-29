@@ -97,6 +97,9 @@ type fakeRuntime struct {
 	// placed in each volume. A present map entry with nil content represents
 	// the admitted empty overlay.
 	instructionState map[string][]byte
+	// stateManifest records config roots the state seeder prepared. Volumes
+	// absent from this map remain freshly empty.
+	stateManifest map[string]stateManifestKind
 	// staged is the host directory most recently staged into each container.
 	staged map[string]string
 	// baseProofPath is where the observer's proof lands in its rootfs; it
@@ -105,6 +108,12 @@ type fakeRuntime struct {
 	// credProofPath mirrors Config.CredProofPath the same way; a container
 	// whose command writes it is a credential-store observer.
 	credProofPath string
+	// writerOutcomeProofPath mirrors the credential-free marker observer's
+	// rootfs proof path.
+	writerOutcomeProofPath string
+	// writerStatus is the launcher status synthesized for the workspace
+	// marker. Zero is the successful default.
+	writerStatus int
 	// credState is each credential volume's simulated store content; the
 	// synthesized credential proof digests it, so a test mutates the store by
 	// changing the state string (e.g. from an agent onStart hook).
@@ -183,19 +192,21 @@ type fakeCopy struct {
 func newFakeRuntime(t *testing.T) *fakeRuntime {
 	t.Helper()
 	return &fakeRuntime{ //nolint:gosec // credProofPath is a proof-file path, not a credential
-		t:                t,
-		nets:             map[string]*fakeNetwork{},
-		vols:             map[string]*fakeVol{},
-		ctrs:             map[string]*fakeCtr{},
-		volBase:          map[string]string{},
-		volTree:          map[string]string{},
-		instructionState: map[string][]byte{},
-		staged:           map[string]string{},
-		baseProofPath:    "/handoff-base.txt",
-		credProofPath:    "/handoff-cred.txt",
-		credState:        map[string]string{},
-		runningInspects:  map[string]int{},
-		exportTarPath:    buildTar(t, fixtureArchive(t)),
+		t:                      t,
+		nets:                   map[string]*fakeNetwork{},
+		vols:                   map[string]*fakeVol{},
+		ctrs:                   map[string]*fakeCtr{},
+		volBase:                map[string]string{},
+		volTree:                map[string]string{},
+		instructionState:       map[string][]byte{},
+		stateManifest:          map[string]stateManifestKind{},
+		staged:                 map[string]string{},
+		baseProofPath:          "/handoff-base.txt",
+		credProofPath:          "/handoff-cred.txt",
+		writerOutcomeProofPath: writerOutcomeProofPath,
+		credState:              map[string]string{},
+		runningInspects:        map[string]int{},
+		exportTarPath:          buildTar(t, fixtureArchive(t)),
 	}
 }
 
@@ -548,6 +559,11 @@ func (f *fakeRuntime) StartContainer(ctx context.Context, id string) error {
 		return fmt.Errorf("container %q not found", id)
 	}
 	c.started = true
+	if strings.HasSuffix(id, "-cfg-seed") {
+		if volume, ok := c.rwVolume(); ok {
+			f.stateManifest[volume] = stateManifestConfigRoot
+		}
+	}
 	return nil
 }
 
@@ -852,6 +868,30 @@ func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Write
 		}
 		return writeProofTar(dest, instructionProofPath, proof)
 	}
+	if vol, isStateObserver := c.observedVolume(stateProofPath); isStateObserver {
+		kind := stateManifestEmpty
+		for _, arg := range c.spec.Command {
+			if strings.Contains(arg, "'config_root'") {
+				kind = stateManifestConfigRoot
+			}
+		}
+		valid := kind == stateManifestEmpty
+		if kind == stateManifestConfigRoot {
+			valid = f.stateManifest[vol] == stateManifestConfigRoot
+		}
+		proof := stateProofFor(c.ownershipToken(), kind, valid)
+		if f.observerProof != nil {
+			proof = f.observerProof(id, proof)
+		}
+		return writeProofTar(dest, stateProofPath, proof)
+	}
+	if _, isWriterObserver := c.observedVolume(f.writerOutcomeProofPath); isWriterObserver {
+		proof := fmt.Appendf(nil, "%s %d\n", c.ownershipToken(), f.writerStatus)
+		if f.observerProof != nil {
+			proof = f.observerProof(id, proof)
+		}
+		return writeProofTar(dest, f.writerOutcomeProofPath, proof)
+	}
 	src, err := os.Open(f.exportTarPath)
 	if err != nil {
 		return err
@@ -875,4 +915,23 @@ func instructionProofFor(nonce string, body []byte, seeded bool) []byte {
 		"nonce=%s\npresent=%s\ndigest=%s\ncontents=%s\n",
 		nonce, present, digest, contents,
 	))
+}
+
+func stateProofFor(
+	nonce string,
+	kind stateManifestKind,
+	valid bool,
+) []byte {
+	contents := "invalid"
+	if valid {
+		contents = "valid"
+	}
+	return fmt.Appendf(
+		nil,
+		"nonce=%s\nkind=%s\ncontents=%s\ndigest=%s\n",
+		nonce,
+		kind,
+		contents,
+		credStateDigest(string(kind)+":"+contents),
+	)
 }

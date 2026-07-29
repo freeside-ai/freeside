@@ -11,7 +11,7 @@
   "claims": [
     {
       "label": "after-shot",
-      "artifact_id": "sha256:7ee2fb7588299839205ebdb5322fd3955dd5f668c3d72661f0e581575bfe7ffe",
+      "artifact_id": "agent:38bc09020f7fde4edc829e0c55c0a6bf1c0adc37b3861aa822fae8d405121380",
       "digest": "sha256:7ee2fb7588299839205ebdb5322fd3955dd5f668c3d72661f0e581575bfe7ffe",
       "provenance": {
         "producer_class": "agent",
@@ -24,7 +24,7 @@
     },
     {
       "label": "before-shot",
-      "artifact_id": "sha256:d303b4e45f0765c212dad6a6edda3e025d4d52299fee4abb0ca54bbfb2118c27",
+      "artifact_id": "agent:5bd422ec3aaefe9f19b904976df449fcf4ace3c0d0a610eb34ca3ae1d4497fe7",
       "digest": "sha256:d303b4e45f0765c212dad6a6edda3e025d4d52299fee4abb0ca54bbfb2118c27",
       "provenance": {
         "producer_class": "agent",

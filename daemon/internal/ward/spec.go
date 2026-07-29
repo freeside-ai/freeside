@@ -97,6 +97,11 @@ type CredentialMount struct {
 	Volume string
 	// Target is the absolute mount path inside the agent VM.
 	Target string
+	// Manifest declares the credential shape the networkless observer must
+	// prove before the writer starts and after it is absent. The policy is
+	// explicit because a generic mutable vendor store and a launcher-only
+	// setup-token volume have different admissible contents.
+	Manifest CredentialManifestPolicy
 	// Writable mounts the volume read-write so the contained vendor CLI can
 	// mutate its own auth store (§5.4: refresh, login state, configuration
 	// writes, store replacement). It is valid only on the single mount the
@@ -105,27 +110,106 @@ type CredentialMount struct {
 	Writable bool
 }
 
+// CredentialManifestPolicy is the manifest contract a credential observer
+// enforces. The zero value is invalid by design.
+type CredentialManifestPolicy string
+
+const (
+	// CredentialManifestOpaque permits a vendor-owned store of arbitrary
+	// shape; the observer still binds its complete tree before and after use.
+	CredentialManifestOpaque CredentialManifestPolicy = "opaque"
+	// CredentialManifestSetupToken requires exactly one root-owned, 0400,
+	// nonempty regular file named token and no other entries.
+	CredentialManifestSetupToken CredentialManifestPolicy = "setup_token"
+)
+
+// AllCredentialManifestPolicies is the single registration point for
+// credential manifest contracts.
+var AllCredentialManifestPolicies = []CredentialManifestPolicy{
+	CredentialManifestOpaque,
+	CredentialManifestSetupToken,
+}
+
+func (p CredentialManifestPolicy) valid() bool {
+	switch p {
+	case CredentialManifestOpaque, CredentialManifestSetupToken:
+		return true
+	default:
+		return false
+	}
+}
+
+// LaunchStatePolicy selects the lifecycle-scoped provider state topology the
+// ward realizes. The zero value is invalid by design.
+type LaunchStatePolicy string
+
+const (
+	// LaunchStateNone is the explicit state-free shape used by synthetic
+	// conformance writers that do not run a provider CLI.
+	LaunchStateNone LaunchStatePolicy = "none"
+	// LaunchStateClaudeClean gives a Claude launch a freshly verified
+	// read-only config root, invocation continuity, and launch scratch.
+	LaunchStateClaudeClean LaunchStatePolicy = "claude_clean"
+)
+
+// AllLaunchStatePolicies is the single registration point for launch-state
+// topologies.
+var AllLaunchStatePolicies = []LaunchStatePolicy{
+	LaunchStateNone,
+	LaunchStateClaudeClean,
+}
+
+func (p LaunchStatePolicy) valid() bool {
+	switch p {
+	case LaunchStateNone, LaunchStateClaudeClean:
+		return true
+	default:
+		return false
+	}
+}
+
+// Claude's clean state topology is fixed by the pinned-CLI gate. Exported so
+// the production launcher and ward mount contract cannot spell it differently.
+const (
+	ClaudeConfigRootTarget       = "/var/lib/freeside/claude-config"
+	ClaudeContinuityTarget       = ClaudeConfigRootTarget + "/projects"
+	ClaudeSessionScratchTarget   = ClaudeConfigRootTarget + "/session-env"
+	claudeConfigRootVolumeTarget = "/claude-config-root"
+	stateObserverVolumeTarget    = "/observed-state"
+	stateProofPath               = "/state-proof.txt"
+)
+
 // AgentSpec describes the credential-bearing writer container.
 type AgentSpec struct {
 	Image         string
 	Command       []string
 	Env           []string
 	EgressProfile domain.EgressProfile
+	// OutcomeMarkerPath is the absolute path in the workspace where the
+	// launcher writes "<nonce> <status>\n" as its final act. Empty retains
+	// the legacy ward-only command shape; production drivers set it and put
+	// WriterNoncePlaceholder exactly once in Command for ward to replace
+	// with the journalled per-run nonce.
+	OutcomeMarkerPath string
 	// CredentialMounts lists every provider credential the agent gets. Each
 	// is its own mount, distinct from the workspace (spike check 1); the
 	// spec vocabulary cannot express a credential inside the root filesystem
 	// or workspace.
 	CredentialMounts []CredentialMount
+	// LaunchState declares the ward-owned lifecycle topology for provider
+	// state. Claude production launches require LaunchStateClaudeClean.
+	LaunchState LaunchStatePolicy
 	// VendorInstructions is the already-materialized instruction role from
-	// exec.StageInputs. The gate writes only these declared bytes into a
-	// dedicated volume and mounts that volume read-only at the vendor-native
-	// user-instruction directory. Present=false is an explicit empty overlay
-	// that masks any instruction file baked into the image.
+	// exec.StageInputs. State-free synthetic writers receive those exact
+	// bytes; a clean Claude launch deterministically composes them with every
+	// path-scoped CLAUDE.md from the gate's exact trusted-base snapshot. The
+	// resulting bundle is independently observed, journal-bound, and mounted
+	// read-only at the vendor-native user-instruction directory.
 	VendorInstructions VendorInstructions
 	// InstructionPolicy binds every process-entry shape the production driver
 	// may use to repository instructions from the exact trusted base. The ward
-	// rejects a policy that omits startup, recovery, resume, or child launch,
-	// or that names the writable workspace as behavioral authority.
+	// rejects a policy that omits startup, recovery, or resume, or that names
+	// the writable workspace as behavioral authority.
 	InstructionPolicy InvocationInstructionPolicy
 }
 
@@ -138,7 +222,6 @@ const (
 	InvocationStartup  InvocationBoundary = "startup"
 	InvocationRecovery InvocationBoundary = "recovery"
 	InvocationResume   InvocationBoundary = "resume"
-	InvocationChild    InvocationBoundary = "child"
 )
 
 // AllInvocationBoundaries is the single registration point for process-entry
@@ -147,12 +230,11 @@ var AllInvocationBoundaries = []InvocationBoundary{
 	InvocationStartup,
 	InvocationRecovery,
 	InvocationResume,
-	InvocationChild,
 }
 
 func (b InvocationBoundary) valid() bool {
 	switch b {
-	case InvocationStartup, InvocationRecovery, InvocationResume, InvocationChild:
+	case InvocationStartup, InvocationRecovery, InvocationResume:
 		return true
 	default:
 		return false
@@ -385,6 +467,13 @@ type WorkspaceSeed struct {
 	// SeedBaseCheckout and empty otherwise. It must resolve under
 	// Config.SeedRoot and carry the daemon-authored canonical repository
 	// name/ID binding; the gate never accepts an arbitrary host path.
+	//
+	// It must also carry the working tree, not only the repository. The
+	// observer proves the seeded workspace's raw worktree against HEAD, so a
+	// fetched-but-unchecked-out directory is refused as dirty (every tracked
+	// path missing) with no writer ever starting: callers materialize it
+	// (publish.Transport.FetchBaseWorktree), never the repository-only fetch
+	// the import lane uses.
 	SourceDir string
 	// Base is the exact revision SourceDir is declared to hold.
 	Base domain.BaseRevision
@@ -480,25 +569,52 @@ func (s HandoffSpec) validate() error {
 	case s.Agent.EgressProfile != domain.EgressProviderOnly:
 		return fmt.Errorf("%w: Agent.EgressProfile %q is not enforceable by this backend", ErrInvalidHandoffSpec, s.Agent.EgressProfile)
 	}
+	if s.Agent.OutcomeMarkerPath != "" {
+		if !strings.HasPrefix(s.Agent.OutcomeMarkerPath, "/") {
+			return fmt.Errorf("%w: Agent.OutcomeMarkerPath must be absolute", ErrInvalidHandoffSpec)
+		}
+		occurrences := 0
+		for _, arg := range s.Agent.Command {
+			occurrences += strings.Count(arg, WriterNoncePlaceholder)
+		}
+		if occurrences != 1 {
+			return fmt.Errorf("%w: marker-bearing Agent.Command must carry WriterNoncePlaceholder exactly once, got %d",
+				ErrInvalidHandoffSpec, occurrences)
+		}
+	}
 	if err := s.Agent.VendorInstructions.validate(); err != nil {
 		return err
 	}
 	if err := s.Agent.InstructionPolicy.validate(); err != nil {
 		return err
 	}
-	// A writable credential mount and the lease claim travel together, both
-	// ways. A writable mount without the claim would mutate an auth store
-	// outside any §5.4 window; a claim without a writable mount is an
-	// ambiguous request (the caller either meant to mark a mount writable or
-	// is reserving a window nothing uses), refused rather than silently
-	// resolved in one direction — the same posture as a blank seed carrying
-	// a source. One mount per claim: the lease serializes one identity's
-	// store, so a second writable volume would ride a window that does not
-	// cover it.
+	if !s.Agent.LaunchState.valid() {
+		return fmt.Errorf("%w: unsupported launch-state policy %q",
+			ErrInvalidHandoffSpec, s.Agent.LaunchState)
+	}
+	if s.Agent.LaunchState == LaunchStateClaudeClean &&
+		s.Seed.Mode != SeedBaseCheckout {
+		return fmt.Errorf(
+			"%w: clean Claude launch state requires an exact-base workspace seed",
+			ErrInvalidHandoffSpec,
+		)
+	}
+	// A writable credential mount still requires a lease. A lease claim is
+	// also valid for exactly one read-only identity token mount: #383 keeps
+	// the identity unavailable for the whole invocation while forbidding the
+	// CLI from persisting state beside the token.
 	writable := 0
 	for _, cm := range s.Agent.CredentialMounts {
+		if !cm.Manifest.valid() {
+			return fmt.Errorf("%w: unsupported credential manifest policy %q",
+				ErrInvalidHandoffSpec, cm.Manifest)
+		}
 		if cm.Writable {
 			writable++
+			if cm.Manifest == CredentialManifestSetupToken {
+				return fmt.Errorf("%w: setup-token credential mount must be read-only",
+					ErrInvalidHandoffSpec)
+			}
 		}
 	}
 	if s.AuthStoreLease == nil {
@@ -513,9 +629,9 @@ func (s HandoffSpec) validate() error {
 	if s.AuthStoreLease.Holder == "" {
 		return fmt.Errorf("%w: AuthStoreLease.Holder is required", ErrInvalidHandoffSpec)
 	}
-	if writable != 1 {
-		return fmt.Errorf("%w: AuthStoreLease requires exactly one writable credential mount, got %d",
-			ErrInvalidHandoffSpec, writable)
+	if len(s.Agent.CredentialMounts) == 0 || writable > 1 {
+		return fmt.Errorf("%w: AuthStoreLease requires a single identity-bound credential mount",
+			ErrInvalidHandoffSpec)
 	}
 	return s.Seed.validate()
 }
@@ -536,10 +652,41 @@ func (s HandoffSpec) writableCredentialTarget() string {
 	return ""
 }
 
-// writableCredentialVolume is the runtime volume of the one leased writable
-// credential mount. The trusted identity binding is compared with this value
-// before the mutation window is opened.
-func (s HandoffSpec) writableCredentialVolume() string {
+// leasedCredentialTarget is the target of the one identity-bound credential
+// mount. It is meaningful only after validate accepts the lease/mount pair.
+func (s HandoffSpec) leasedCredentialTarget() string {
+	if s.AuthStoreLease == nil {
+		return ""
+	}
+	for _, cm := range s.Agent.CredentialMounts {
+		if cm.Writable {
+			return cm.Target
+		}
+	}
+	return s.Agent.CredentialMounts[0].Target
+}
+
+// leasedCredentialWritable is the read-write bit the admitted spec declares
+// for the leased mount. Conformance re-verifies the observed mount against it
+// instead of exempting the leased target: this is the one credential mount
+// whose writability can legitimately be true, so it is exactly the mount a
+// construction bug could hand the writer read-write while every other
+// credential mount stays checked.
+func (s HandoffSpec) leasedCredentialWritable() bool {
+	if s.AuthStoreLease == nil {
+		return false
+	}
+	target := s.leasedCredentialTarget()
+	for _, cm := range s.Agent.CredentialMounts {
+		if cm.Target == target {
+			return cm.Writable
+		}
+	}
+	return false
+}
+
+// leasedCredentialVolume is the runtime volume bound to the claimed identity.
+func (s HandoffSpec) leasedCredentialVolume() string {
 	if s.AuthStoreLease == nil {
 		return ""
 	}
@@ -548,17 +695,44 @@ func (s HandoffSpec) writableCredentialVolume() string {
 			return cm.Volume
 		}
 	}
-	return ""
+	return s.Agent.CredentialMounts[0].Volume
 }
+
+// leasedCredentialManifest is the manifest contract for the identity-bound
+// credential mount. It is meaningful only after validate accepts the
+// lease/mount pair.
+func (s HandoffSpec) leasedCredentialManifest() CredentialManifestPolicy {
+	if s.AuthStoreLease == nil {
+		return ""
+	}
+	for _, cm := range s.Agent.CredentialMounts {
+		if cm.Writable {
+			return cm.Manifest
+		}
+	}
+	return s.Agent.CredentialMounts[0].Manifest
+}
+
+// WriterNoncePlaceholder is the non-secret launch-template token ward replaces
+// with the durable per-run nonce after the journal opens and before create.
+const WriterNoncePlaceholder = "{{FREESIDE_WRITER_NONCE}}"
 
 // handoffNames are the runtime object names one run owns.
 type handoffNames struct {
 	Workspace           string
 	Instructions        string
+	ConfigRoot          string
+	Continuity          string
+	SessionScratch      string
 	Seeder              string
 	Observer            string
 	InstructionSeeder   string
 	InstructionObserver string
+	ConfigRootSeeder    string
+	ConfigRootObserver  string
+	ContinuityObserver  string
+	ScratchObserver     string
+	WriterObserver      string
 	CredObsPre          string
 	CredObsPost         string
 	Agent               string
@@ -570,10 +744,18 @@ func namesFor(runID string) handoffNames {
 	return handoffNames{
 		Workspace:           "freeside-handoff-" + runID + "-ws",
 		Instructions:        "freeside-handoff-" + runID + "-ins",
+		ConfigRoot:          "freeside-handoff-" + runID + "-cfg",
+		Continuity:          "freeside-handoff-" + runID + "-projects",
+		SessionScratch:      "freeside-handoff-" + runID + "-session-env",
 		Seeder:              "freeside-handoff-" + runID + "-seeder",
 		Observer:            "freeside-handoff-" + runID + "-observer",
 		InstructionSeeder:   "freeside-handoff-" + runID + "-ins-seed",
 		InstructionObserver: "freeside-handoff-" + runID + "-ins-check",
+		ConfigRootSeeder:    "freeside-handoff-" + runID + "-cfg-seed",
+		ConfigRootObserver:  "freeside-handoff-" + runID + "-cfg-check",
+		ContinuityObserver:  "freeside-handoff-" + runID + "-projects-check",
+		ScratchObserver:     "freeside-handoff-" + runID + "-sess-check",
+		WriterObserver:      "freeside-handoff-" + runID + "-writer-check",
 		CredObsPre:          "freeside-handoff-" + runID + "-cred-pre",
 		CredObsPost:         "freeside-handoff-" + runID + "-cred-post",
 		Agent:               "freeside-handoff-" + runID + "-agent",
@@ -599,7 +781,18 @@ func runLabels(runID string) []Label {
 // target — read-only except the single leased writable mount, when the spec
 // declares one — nothing else. validateAgentSpec re-verifies the result
 // rather than trusting this construction.
-func buildAgentSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label, proxyURL string) ContainerSpec {
+func buildAgentSpec(
+	cfg Config,
+	hs HandoffSpec,
+	names handoffNames,
+	ownershipLabel Label,
+	proxyURL string,
+	writerNonces ...string,
+) ContainerSpec {
+	writerNonce := ""
+	if len(writerNonces) == 1 {
+		writerNonce = writerNonces[0]
+	}
 	mounts := []Mount{{
 		Type:   MountVolume,
 		Source: names.Workspace,
@@ -619,14 +812,65 @@ func buildAgentSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLab
 		Target:   vendorInstructionMountTarget(hs.Agent.VendorInstructions.Vendor),
 		ReadOnly: true,
 	})
+	if hs.Agent.LaunchState == LaunchStateClaudeClean {
+		mounts = append(mounts,
+			Mount{
+				Type: MountVolume, Source: names.ConfigRoot,
+				Target: ClaudeConfigRootTarget, ReadOnly: true,
+			},
+			Mount{
+				Type: MountVolume, Source: names.Continuity,
+				Target: ClaudeContinuityTarget,
+			},
+			Mount{
+				Type: MountVolume, Source: names.SessionScratch,
+				Target: ClaudeSessionScratchTarget,
+			},
+		)
+	}
 	return ContainerSpec{
 		Name:    names.Agent,
 		Image:   hs.Agent.Image,
-		Command: hs.Agent.Command,
+		Command: replaceWriterNonce(hs.Agent.Command, writerNonce),
 		Env:     append(slices.Clone(hs.Agent.Env), proxyEnvironment(proxyURL)...),
 		Mounts:  mounts,
 		Labels:  append(runLabels(hs.RunID), ownershipLabel),
 		Network: names.Network,
+	}
+}
+
+func replaceWriterNonce(command []string, nonce string) []string {
+	replaced := slices.Clone(command)
+	if nonce == "" {
+		return replaced
+	}
+	for i := range replaced {
+		replaced[i] = strings.ReplaceAll(replaced[i], WriterNoncePlaceholder, nonce)
+	}
+	return replaced
+}
+
+const writerOutcomeProofPath = "/freeside-writer-outcome.txt"
+
+func buildWriterOutcomeObserverSpec(
+	cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label,
+) ContainerSpec {
+	return ContainerSpec{
+		Name:  names.WriterObserver,
+		Image: cfg.ExporterImage,
+		Command: []string{
+			"sh", "-c",
+			"set -eu; cat " + shellQuote(hs.Agent.OutcomeMarkerPath) +
+				" > " + shellQuote(writerOutcomeProofPath) + "; sync",
+		},
+		NetworkDisabled: true,
+		Mounts: []Mount{{
+			Type:     MountVolume,
+			Source:   names.Workspace,
+			Target:   cfg.WorkspaceTarget,
+			ReadOnly: true,
+		}},
+		Labels: append(runLabels(hs.RunID), ownershipLabel),
 	}
 }
 
@@ -649,6 +893,7 @@ func buildInstructionSeederSpec(
 
 func instructionSeederCommand(cfg Config) []string {
 	ticks := seederScriptTicks(cfg)
+	instructionFile := instructionVolumeTarget + "/" + instructionFileName
 	script := "set -eu; n=0; while [ ! -f " + shellQuote(
 		instructionReadyDir+"/"+seedReadyFile,
 	) + " ]; do n=$((n+1)); [ \"$n\" -le " + strconv.Itoa(ticks) +
@@ -656,7 +901,14 @@ func instructionSeederCommand(cfg Config) []string {
 		"find " + shellQuote(instructionVolumeTarget) +
 		" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; " +
 		"cp -a " + shellQuote(instructionStageDir) + "/. " +
-		shellQuote(instructionVolumeTarget) + "/; sync"
+		shellQuote(instructionVolumeTarget) + "/; " +
+		// cp -a preserves the private 0600 host snapshot mode, but the
+		// writer reads this bundle after dropping to an unprivileged UID
+		// from a read-only mount it cannot chmod. World-readable is the
+		// only mode that reaches the writer; the bundle carries composed
+		// instructions, never credentials.
+		"if [ -f " + shellQuote(instructionFile) + " ]; then " +
+		"chmod 0644 " + shellQuote(instructionFile) + "; fi; sync"
 	return []string{"sh", "-c", script}
 }
 
@@ -1043,8 +1295,9 @@ func observerGitScript(workspace, scratchPrefix string) string {
 // Proof keys the credential-store observer emits, in the same key=value shape
 // as the base and check-5 proofs.
 const (
-	credProofNonceKey = "nonce"
-	credProofTreeKey  = "cred_tree"
+	credProofNonceKey    = "nonce"
+	credProofTreeKey     = "cred_tree"
+	credProofManifestKey = "cred_manifest"
 )
 
 // buildCredentialObserverSpec generates the container that attests the leased
@@ -1057,30 +1310,31 @@ const (
 // residual is that the store mutated, and the proof carries a hash, not the
 // store.
 func buildCredentialObserverSpec(cfg Config, hs HandoffSpec, name string, ownershipLabel Label) ContainerSpec {
-	var volume string
-	for _, cm := range hs.Agent.CredentialMounts {
-		if cm.Writable {
-			volume = cm.Volume
-			break
-		}
-	}
+	volume := hs.leasedCredentialVolume()
+	target := hs.leasedCredentialTarget()
 	return ContainerSpec{
-		Name:            name,
-		Image:           cfg.ExporterImage,
-		Command:         credObserverCommand(cfg, ownershipLabel.Value, hs.writableCredentialTarget()),
+		Name:  name,
+		Image: cfg.ExporterImage,
+		Command: credObserverCommand(
+			cfg, ownershipLabel.Value, target, hs.leasedCredentialManifest(),
+		),
 		NetworkDisabled: true,
 		Mounts: []Mount{{
 			Type:     MountVolume,
 			Source:   volume,
-			Target:   hs.writableCredentialTarget(),
+			Target:   target,
 			ReadOnly: true,
 		}},
 		Labels: append(runLabels(hs.RunID), ownershipLabel),
 	}
 }
 
-func credObserverCommand(cfg Config, nonce, target string) []string {
-	return []string{"sh", "-c", credObserverScript(cfg, nonce, target)}
+func credObserverCommand(
+	cfg Config,
+	nonce, target string,
+	manifest CredentialManifestPolicy,
+) []string {
+	return []string{"sh", "-c", credObserverScript(cfg, nonce, target, manifest)}
 }
 
 // credObserverScript digests the mounted credential volume and writes the
@@ -1102,19 +1356,38 @@ func credObserverCommand(cfg Config, nonce, target string) []string {
 // embedding a separator cannot alias two different link sets into one
 // record; each remaining node as its kind beside the hash of its path. As
 // with the base observer, every branch reaches the proof write.
-// Readability is deliberately not attested: an unreadable volume digests
-// identically to an empty one (a failed cd feeds all six passes empty
-// input, and per-file read errors digest the readable subset), so Mutated
-// compares content identity between the two observations, nothing more —
-// it is an audit record, never a release gate.
-func credObserverScript(cfg Config, nonce, target string) string {
+// Under the opaque policy, readability is deliberately not attested: an
+// unreadable volume digests identically to an empty one (a failed cd feeds
+// all six passes empty input, and per-file read errors digest the readable
+// subset), so Mutated compares content identity between observations. The
+// setup-token policy is stricter: it additionally proves the exact readable
+// one-file manifest and is a release gate.
+func credObserverScript(
+	cfg Config,
+	nonce, target string,
+	manifest CredentialManifestPolicy,
+) string {
 	tgt := shellQuote(target)
 	proof := shellQuote(cfg.CredProofPath)
 	mkProofDir := ""
 	if parent := path.Dir(cfg.CredProofPath); parent != "/" && parent != "." {
 		mkProofDir = "mkdir -p " + shellQuote(parent) + "; "
 	}
+	manifestCheck := ""
+	manifestFormat := ""
+	manifestArgument := ""
+	if manifest == CredentialManifestSetupToken {
+		manifestCheck = "m=invalid; if entries=\"$(cd " + tgt +
+			" 2>/dev/null && find . ! -name . -print 2>/dev/null | sort)\" && " +
+			"[ \"$entries\" = './token' ] && [ -f " + tgt +
+			"/token ] && [ ! -L " + tgt + "/token ] && [ -s " + tgt +
+			"/token ] && [ \"$(stat -c '%a:%u:%g' " + tgt +
+			"/token 2>/dev/null)\" = '400:0:0' ]; then m=setup_token; fi; "
+		manifestFormat = credProofManifestKey + "=%s\\n"
+		manifestArgument = " \"$m\""
+	}
 	return "LC_ALL=C; export LC_ALL; " + mkProofDir +
+		manifestCheck +
 		"tc=\"$(cd " + tgt + " 2>/dev/null && find . -type f -exec sha256sum {} + 2>/dev/null " +
 		"| sort | sha256sum | cut -d' ' -f1)\"; " +
 		"tx=\"$(cd " + tgt + " 2>/dev/null && find . -type f -perm -u+x -print 2>/dev/null " +
@@ -1134,8 +1407,9 @@ func credObserverScript(cfg Config, nonce, target string) string {
 		"printf \"%s:%s:%s:%s:%s %s\\n\" \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" \"$(printf \"%s\" \"$p\" | sha256sum | cut -d\" \" -f1)\"; done' sh {} + 2>/dev/null " +
 		"| sort | sha256sum | cut -d' ' -f1)\"; " +
 		"t=\"$(printf '%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n' \"$tc\" \"$tx\" \"$td\" \"$tl\" \"$tn\" \"$tm\" | sha256sum | cut -d' ' -f1)\"; " +
-		"printf '" + credProofNonceKey + "=%s\\n" + credProofTreeKey + "=%s\\n' " +
-		shellQuote(nonce) + " \"$t\" > " + proof + "; sync"
+		"printf '" + credProofNonceKey + "=%s\\n" + credProofTreeKey + "=%s\\n" +
+		manifestFormat + "' " + shellQuote(nonce) + " \"$t\"" + manifestArgument +
+		" > " + proof + "; sync"
 }
 
 // cloneContainerSpec detaches every reference field before a spec crosses the

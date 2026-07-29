@@ -319,8 +319,7 @@ func TestValidateEvidenceType(t *testing.T) {
 
 // TestImportEvidenceCleanEndToEnd is the happy path: a repo change plus a valid
 // two-entry evidence channel (both head-binding modes, two image types) imports
-// to a clean commit with two labeled agent claims and no findings. The claim's
-// artifact id is the content digest.
+// to a clean commit with two labeled agent claims and no findings.
 func TestImportEvidenceCleanEndToEnd(t *testing.T) {
 	clone, base, handoff := evidenceFixture(t, map[string]string{"a.txt": "new\n"})
 	em := evidenceManifest(
@@ -347,11 +346,60 @@ func TestImportEvidenceCleanEndToEnd(t *testing.T) {
 		t.Fatalf("claims = %d, want 2", len(res.Claims))
 	}
 	for _, c := range res.Claims {
-		if string(c.Artifact) != string(c.Digest) {
-			t.Errorf("claim %q artifact id %q != digest %q", c.Label, c.Artifact, c.Digest)
+		want := agentArtifactID(c.Provenance, export.Digest(c.Digest))
+		if c.Artifact != want {
+			t.Errorf("claim %q artifact id %q != %q", c.Label, c.Artifact, want)
 		}
 	}
 	goldenResult(t, "import_evidence_result", res)
+}
+
+func TestAgentArtifactIdentityIncludesCompleteProvenance(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "same.png")
+	if err := os.WriteFile(path, []byte(pngContent), 0o600); err != nil {
+		t.Fatalf("write evidence fixture: %v", err)
+	}
+	entry := evidenceEntry("shot", "image/png", pngContent)
+	blobs := map[export.Digest]blobInfo{
+		entry.Digest: {size: entry.Size, verifiedPath: path},
+	}
+	first, err := buildClaims(
+		evidenceManifest(entry), blobs, Policy{},
+	)
+	if err != nil {
+		t.Fatalf("build first claim: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*export.EvidenceProvenance)
+	}{
+		{"producer invocation", func(p *export.EvidenceProvenance) {
+			p.ProducerInvocationID = "inv-other"
+		}},
+		{"head binding and source", func(p *export.EvidenceProvenance) {
+			p.HeadBinding = export.EvidenceHeadBound
+			p.SourceHeadSHA = evidenceSourceHead
+		}},
+		{"sensitivity", func(p *export.EvidenceProvenance) {
+			p.SensitivityClass = export.EvidenceSensitivitySensitive
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := entry
+			tc.mutate(&changed.Provenance)
+			second, err := buildClaims(evidenceManifest(changed), blobs, Policy{})
+			if err != nil {
+				t.Fatalf("build changed claim: %v", err)
+			}
+			if first[0].Digest != second[0].Digest {
+				t.Fatal("identical evidence bytes produced different content digests")
+			}
+			if first[0].Artifact == second[0].Artifact {
+				t.Fatal("different artifact provenance reused one immutable artifact id")
+			}
+		})
+	}
 }
 
 // TestImportNoEvidenceChannel proves the channel is optional: a handoff with no

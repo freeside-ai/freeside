@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -20,6 +21,12 @@ const (
 	// RecoveryExported: the handoff was adopted to completion and a freshly
 	// verified export released.
 	RecoveryExported RecoveryOutcome = "exported"
+	// RecoveryFailed: a durable nonce-authenticated nonzero writer status was
+	// recovered and teardown was proven.
+	RecoveryFailed RecoveryOutcome = "failed"
+	// RecoveryCanceled: durable daemon cancellation intent outranked marker
+	// classification and teardown was proven.
+	RecoveryCanceled RecoveryOutcome = "canceled"
 	// RecoveryLoss: every runtime object was proven absent, the loss is
 	// durably committed, and the caller may rerun the stage from its
 	// durable admission.
@@ -27,11 +34,13 @@ const (
 )
 
 // AllRecoveryOutcomes lists every valid RecoveryOutcome.
-var AllRecoveryOutcomes = []RecoveryOutcome{RecoveryExported, RecoveryLoss}
+var AllRecoveryOutcomes = []RecoveryOutcome{
+	RecoveryExported, RecoveryCanceled, RecoveryFailed, RecoveryLoss,
+}
 
 func (o RecoveryOutcome) valid() bool {
 	switch o {
-	case RecoveryExported, RecoveryLoss:
+	case RecoveryExported, RecoveryCanceled, RecoveryFailed, RecoveryLoss:
 		return true
 	default:
 		return false
@@ -48,6 +57,8 @@ type RecoveryResult struct {
 	// attempt; empty for a straight pre-writer-complete loss and for
 	// exported outcomes.
 	LossCause string
+	// FailureStatus is populated only for RecoveryFailed.
+	FailureStatus int
 	// ExportDir holds the freshly verified manifest and blobs; the caller
 	// owns the directory and removes it when done.
 	ExportDir         string
@@ -117,9 +128,6 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 	if err := rec.Validate(); err != nil {
 		return nil, err
 	}
-	if rec.Outcome != nil {
-		return nil, fmt.Errorf("%w: record is already closed as %q", ErrInvalidJournalRecord, *rec.Outcome)
-	}
 	hs.Agent.Command = slices.Clone(hs.Agent.Command)
 	hs.Agent.Env = slices.Clone(hs.Agent.Env)
 	hs.Agent.CredentialMounts = slices.Clone(hs.Agent.CredentialMounts)
@@ -186,6 +194,36 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		// workspace whose exact-base evidence is missing.
 		return nil, fmt.Errorf("%w: writer-complete seeded record carries no observed base", ErrInvalidJournalRecord)
 	}
+	postPreparation := rec.CredentialPreDigest != "" ||
+		rec.WriterComplete || rec.WriterFailureStatus != nil
+	if hs.Agent.LaunchState == LaunchStateClaudeClean &&
+		rec.State != nil && rec.Instructions == nil {
+		return nil, fmt.Errorf(
+			"%w: Claude state binding precedes no prepared instruction binding",
+			ErrInvalidJournalRecord,
+		)
+	}
+	if hs.Agent.LaunchState == LaunchStateClaudeClean &&
+		postPreparation && rec.State == nil {
+		return nil, fmt.Errorf(
+			"%w: post-preparation Claude record carries no prepared state binding",
+			ErrInvalidJournalRecord,
+		)
+	}
+	if hs.Agent.LaunchState == LaunchStateClaudeClean &&
+		postPreparation && rec.Instructions == nil {
+		return nil, fmt.Errorf(
+			"%w: post-preparation Claude record carries no prepared instruction binding",
+			ErrInvalidJournalRecord,
+		)
+	}
+	if hs.Agent.LaunchState == LaunchStateNone &&
+		(rec.State != nil || rec.Instructions != nil) {
+		return nil, fmt.Errorf(
+			"%w: state-free spec carries prepared Claude launch bindings",
+			ErrInvalidJournalRecord,
+		)
+	}
 	// A present observation must be the digest-bound declared base, exactly:
 	// the live path refuses a mismatch before ever journalling it, so any
 	// other value — including a syntactically valid SHA on a blank-seed
@@ -201,9 +239,9 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 			return nil, fmt.Errorf("re-gate auth-store volume for identity %q: %w",
 				rec.Lease.AuthIdentityID, verr)
 		}
-		if mounted := hs.writableCredentialVolume(); boundVolume != mounted {
+		if mounted := hs.leasedCredentialVolume(); boundVolume != mounted {
 			return nil, fmt.Errorf(
-				"%w: identity %q is bound to auth-store volume %q, not the record's writable mount %q",
+				"%w: identity %q is bound to auth-store volume %q, not the record's credential mount %q",
 				ErrInvalidJournalRecord, rec.Lease.AuthIdentityID, boundVolume, mounted)
 		}
 	}
@@ -213,6 +251,57 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 	adm, err := exec.CheckCapabilities(b, requiredCapabilities)
 	if err != nil {
 		return nil, err
+	}
+	if rec.Outcome != nil {
+		switch *rec.Outcome {
+		case HandoffLoss:
+			return &RecoveryResult{Outcome: RecoveryLoss, Admission: adm}, nil
+		case HandoffFailed:
+			if rec.WriterFailureStatus == nil {
+				return nil, fmt.Errorf("%w: failed record lacks writer status",
+					ErrInvalidJournalRecord)
+			}
+			return &RecoveryResult{
+				Outcome: RecoveryFailed, Admission: adm,
+				FailureStatus: *rec.WriterFailureStatus,
+			}, nil
+		case HandoffCanceled:
+			if !rec.CancellationRequested {
+				return nil, fmt.Errorf("%w: canceled record lacks cancellation intent",
+					ErrInvalidJournalRecord)
+			}
+			return &RecoveryResult{Outcome: RecoveryCanceled, Admission: adm}, nil
+		case HandoffCompleted:
+			if !rec.WriterComplete || rec.ExportDir == "" {
+				return nil, fmt.Errorf(
+					"%w: completed record lacks writer completion or export location",
+					ErrInvalidJournalRecord,
+				)
+			}
+			if err := validateMaterializedExportPath(
+				b.cfg.ExportRoot, rec.RunID, rec.ExportDir,
+			); err != nil {
+				return nil, err
+			}
+			out, err := b.verifyMaterializedExport(ctx, rec.ExportDir)
+			if err != nil {
+				return nil, fmt.Errorf("re-verify completed handoff: %w", err)
+			}
+			return &RecoveryResult{
+				Outcome:           RecoveryExported,
+				Admission:         adm,
+				ExportDir:         out.Dir,
+				Manifest:          out.Manifest,
+				Evidence:          out.Evidence,
+				EvidencePresent:   out.EvidencePresent,
+				CommitPlanPresent: out.CommitPlanPresent,
+				Workspace: WorkspaceObservation{
+					Volume:          namesFor(rec.RunID).Workspace,
+					Seeded:          rec.ObservedBaseSHA != "",
+					ObservedBaseSHA: rec.ObservedBaseSHA,
+				},
+			}, nil
+		}
 	}
 
 	names := namesFor(rec.RunID)
@@ -228,6 +317,22 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		&st.credObsPre, &st.credObsPost, &st.agent, &st.exporter, &st.network,
 	} {
 		claim.attempted = true
+	}
+	if hs.Agent.LaunchState == LaunchStateClaudeClean {
+		for _, claim := range []*objectClaim{
+			&st.configRoot, &st.continuity, &st.sessionScratch,
+			&st.configRootSeeder, &st.configRootObserver,
+			&st.continuityObserver, &st.scratchObserver,
+		} {
+			claim.attempted = true
+		}
+		if rec.State != nil {
+			st.preparedState = rec.State
+			st.configRoot.fingerprint = rec.State.ConfigRootFingerprint
+			st.continuity.fingerprint = rec.State.ContinuityFingerprint
+			st.sessionScratch.fingerprint = rec.State.SessionScratchFingerprint
+		}
+		st.preparedInstructions = rec.Instructions
 	}
 	if rec.Lease != nil {
 		// Re-gate the recorded window against the live store row before any
@@ -278,7 +383,9 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 				st.archiveDir,
 				st.baseArchiveDir,
 				st.instructionArchiveDir,
+				st.stateArchiveDir,
 				st.credArchiveDir,
+				st.writerArchiveDir,
 				st.exportDir,
 			} {
 				if dir != "" {
@@ -336,8 +443,14 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		// journal row does.
 		if err == nil && result != nil {
 			outcome := HandoffLoss
-			if result.Outcome == RecoveryExported {
+			switch result.Outcome {
+			case RecoveryExported:
 				outcome = HandoffCompleted
+			case RecoveryCanceled:
+				outcome = HandoffCanceled
+			case RecoveryFailed:
+				outcome = HandoffFailed
+			case RecoveryLoss:
 			}
 			jctx, jcancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
 			if cerr := b.cfg.Journal.Close(jctx, rec.RunID, outcome); cerr != nil {
@@ -355,15 +468,69 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		if st.instructionArchiveDir != "" {
 			_ = os.RemoveAll(st.instructionArchiveDir)
 		}
+		if st.stateArchiveDir != "" {
+			_ = os.RemoveAll(st.stateArchiveDir)
+		}
 		if st.credArchiveDir != "" {
 			_ = os.RemoveAll(st.credArchiveDir)
+		}
+		if st.writerArchiveDir != "" {
+			_ = os.RemoveAll(st.writerArchiveDir)
 		}
 		if st.exportDir != "" && (!st.succeeded || err != nil) {
 			_ = os.RemoveAll(st.exportDir)
 		}
 	}()
 
+	if rec.CancellationRequested {
+		return &RecoveryResult{Outcome: RecoveryCanceled, Admission: adm}, nil
+	}
+	if rec.WriterFailureStatus != nil {
+		return &RecoveryResult{
+			Outcome: RecoveryFailed, Admission: adm,
+			FailureStatus: *rec.WriterFailureStatus,
+		}, nil
+	}
 	if !rec.WriterComplete {
+		if hs.Agent.OutcomeMarkerPath != "" {
+			// A dead daemon cannot recover the proxy-health half of success,
+			// but it can still classify failure. Quiesce the exact recorded
+			// writer, then authenticate the durable workspace marker.
+			if err := b.reapRecoveredContainer(
+				ctx, names.Agent, &st.agent, st.ownershipLabel,
+			); err != nil {
+				return nil, err
+			}
+			ours, werr := b.workspaceOurs(ctx, names.Workspace, st)
+			if werr != nil {
+				return nil, werr
+			}
+			if ours {
+				if err := b.reapRecoveredContainer(
+					ctx, names.WriterObserver, &st.writerObserver, st.ownershipLabel,
+				); err != nil {
+					return nil, err
+				}
+				status, oerr := b.observeWriterOutcome(ctx, hs, names, st)
+				if oerr == nil && status != 0 {
+					if jerr := b.cfg.Journal.MarkWriterFailed(
+						ctx, rec.RunID, status,
+					); jerr != nil {
+						return nil, fmt.Errorf("journal recovered writer failure: %w", jerr)
+					}
+					return &RecoveryResult{
+						Outcome: RecoveryFailed, Admission: adm,
+						FailureStatus: status,
+					}, nil
+				}
+				if oerr != nil {
+					var cf *ConformanceFailure
+					if !errors.As(oerr, &cf) {
+						return nil, oerr
+					}
+				}
+			}
+		}
 		return &RecoveryResult{Outcome: RecoveryLoss, Admission: adm}, nil
 	}
 
@@ -399,6 +566,11 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 	if err := b.reapRecoveredContainer(ctx, names.CredObsPost, &st.credObsPost, st.ownershipLabel); err != nil {
 		return nil, err
 	}
+	if err := b.reapRecoveredContainer(
+		ctx, names.WriterObserver, &st.writerObserver, st.ownershipLabel,
+	); err != nil {
+		return nil, err
+	}
 	// A damaged or interrupted world can also leave the pre-writer roles
 	// standing; they are this run's deterministic-name leftovers, reaped on
 	// the same fresh ownership evidence before anything is re-earned.
@@ -417,6 +589,21 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		ctx, names.InstructionObserver, &st.instructionObserver, st.ownershipLabel,
 	); err != nil {
 		return nil, err
+	}
+	for _, recovered := range []struct {
+		name  string
+		claim *objectClaim
+	}{
+		{names.ConfigRootSeeder, &st.configRootSeeder},
+		{names.ConfigRootObserver, &st.configRootObserver},
+		{names.ContinuityObserver, &st.continuityObserver},
+		{names.ScratchObserver, &st.scratchObserver},
+	} {
+		if err := b.reapRecoveredContainer(
+			ctx, recovered.name, recovered.claim, st.ownershipLabel,
+		); err != nil {
+			return nil, err
+		}
 	}
 	if err := b.reapRecoveredContainer(ctx, names.CredObsPre, &st.credObsPre, st.ownershipLabel); err != nil {
 		return nil, err
@@ -535,6 +722,30 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		},
 		AuthStore: authStore,
 	}, nil
+}
+
+// validateMaterializedExportPath proves a journal-decoded path has the exact
+// shape ward itself creates before it is allowed to steer filesystem reads.
+// Content is then re-verified independently by verifyMaterializedExport.
+func validateMaterializedExportPath(exportRoot, runID, dir string) error {
+	clean := filepath.Clean(dir)
+	prefix := "freeside-handoff-" + runID + "-out-"
+	if clean != dir || filepath.Dir(clean) != filepath.Clean(exportRoot) ||
+		!strings.HasPrefix(filepath.Base(clean), prefix) ||
+		len(filepath.Base(clean)) == len(prefix) {
+		return fmt.Errorf("%w: completed record export location is not a gate-owned path",
+			ErrInvalidJournalRecord)
+	}
+	info, err := os.Lstat(clean)
+	if err != nil {
+		return fmt.Errorf("%w: completed record export location is unavailable",
+			ErrInvalidJournalRecord)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: completed record export location is not a directory",
+			ErrInvalidJournalRecord)
+	}
+	return nil
 }
 
 // workspaceOurs reports whether the run's workspace volume still exists and

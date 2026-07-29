@@ -153,7 +153,7 @@ func TestValidateAgentSpecViolations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 			tc.mutate(&spec)
-			err := validateAgentSpec(cfg, spec, names.Workspace, "")
+			err := validateAgentSpec(cfg, spec, names, "", false, hs.Agent.LaunchState)
 			if !errors.Is(err, ErrConformance) {
 				t.Fatalf("validateAgentSpec = %v, want ErrConformance", err)
 			}
@@ -210,29 +210,26 @@ func TestValidateAgentSpecInstructionPathOverlaps(t *testing.T) {
 			)
 			tc.mutate(&spec)
 
-			err := validateAgentSpec(cfg, spec, names.Workspace, "")
+			err := validateAgentSpec(cfg, spec, names, "", false, hs.Agent.LaunchState)
 			wantCheckFailure(t, err, CheckCredentialSeparation)
 		})
 	}
 }
 
-// TestValidateAgentSpecLeasedViolations enumerates the writable-mount input
-// space with the leased target declared: the leased mount must actually be
-// writable, must exist, and must be the only writable mount. The
-// no-declared-target direction (a writable mount under an empty
-// writableCredentialTarget) is the existing "credential mount read-write"
-// case above.
+// TestValidateAgentSpecLeasedViolations enumerates the leased-mount input
+// space: the identity-bound mount may be read-only (#383), but must exist,
+// remain separated from the workspace, and be the only writable credential
+// mount when a legacy mutable-store caller requests one.
 func TestValidateAgentSpecLeasedViolations(t *testing.T) {
 	cfg := testConfig()
 	hs := testLeasedHandoffSpec()
 	names := namesFor(hs.RunID)
-	target := hs.writableCredentialTarget()
+	target := hs.leasedCredentialTarget()
 
 	cases := []struct {
 		name   string
 		mutate func(*ContainerSpec)
 	}{
-		{"leased mount observed read-only", func(s *ContainerSpec) { s.Mounts[1].ReadOnly = true }},
 		{"leased mount missing", func(s *ContainerSpec) {
 			s.Mounts = append(s.Mounts[:1], s.Mounts[2:]...)
 		}},
@@ -247,12 +244,19 @@ func TestValidateAgentSpecLeasedViolations(t *testing.T) {
 		{"leased mount reuses the workspace volume", func(s *ContainerSpec) {
 			s.Mounts[1].Source = names.Workspace
 		}},
+		// The leased identity volume is the one credential mount whose
+		// writability may legitimately be true, so an exempt leased target
+		// would be the one place a construction bug could hand the writer a
+		// read-write credential volume unchecked.
+		{"leased mount flips the admitted read-only bit", func(s *ContainerSpec) {
+			s.Mounts[1].ReadOnly = !s.Mounts[1].ReadOnly
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 			tc.mutate(&spec)
-			err := validateAgentSpec(cfg, spec, names.Workspace, target)
+			err := validateAgentSpec(cfg, spec, names, target, hs.leasedCredentialWritable(), hs.Agent.LaunchState)
 			if !errors.Is(err, ErrConformance) {
 				t.Fatalf("validateAgentSpec = %v, want ErrConformance", err)
 			}
@@ -275,12 +279,16 @@ func TestVerifyCredProof(t *testing.T) {
 	digest := strings.Repeat("ab", 32)
 	valid := "nonce=" + nonce + "\ncred_tree=" + digest + "\n"
 
-	got, err := verifyCredProof([]byte(valid), nonce)
+	got, err := verifyCredProof([]byte(valid), nonce, CredentialManifestOpaque)
 	if err != nil || got != digest {
 		t.Fatalf("verifyCredProof(valid) = %q, %v; want digest, nil", got, err)
 	}
 	// Order independence and CRLF tolerance, the only laxities the parser has.
-	if _, err := verifyCredProof([]byte("cred_tree="+digest+"\r\nnonce="+nonce+"\r\n"), nonce); err != nil {
+	if _, err := verifyCredProof(
+		[]byte("cred_tree="+digest+"\r\nnonce="+nonce+"\r\n"),
+		nonce,
+		CredentialManifestOpaque,
+	); err != nil {
 		t.Fatalf("verifyCredProof(reordered CRLF) = %v, want nil", err)
 	}
 
@@ -303,7 +311,11 @@ func TestVerifyCredProof(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := verifyCredProof([]byte(tc.proof), nonce)
+			_, err := verifyCredProof(
+				[]byte(tc.proof),
+				nonce,
+				CredentialManifestOpaque,
+			)
 			if !errors.Is(err, ErrConformance) {
 				t.Fatalf("verifyCredProof = %v, want ErrConformance", err)
 			}
@@ -318,6 +330,35 @@ func TestVerifyCredProof(t *testing.T) {
 				t.Errorf("failure reason echoes proof content: %s", cf.Reason)
 			}
 		})
+	}
+
+	setupTokenValid := valid + "cred_manifest=setup_token\n"
+	if got, err := verifyCredProof(
+		[]byte(setupTokenValid),
+		nonce,
+		CredentialManifestSetupToken,
+	); err != nil || got != digest {
+		t.Fatalf("verifyCredProof(valid setup token) = %q, %v; want digest, nil", got, err)
+	}
+	for _, proof := range []string{
+		valid,
+		valid + "cred_manifest=invalid\n",
+		setupTokenValid + "cred_manifest=setup_token\n",
+	} {
+		if _, err := verifyCredProof(
+			[]byte(proof),
+			nonce,
+			CredentialManifestSetupToken,
+		); !errors.Is(err, ErrConformance) {
+			t.Errorf("verifyCredProof(setup-token malformed) = %v, want ErrConformance", err)
+		}
+	}
+	if _, err := verifyCredProof(
+		[]byte(setupTokenValid),
+		nonce,
+		CredentialManifestOpaque,
+	); !errors.Is(err, ErrConformance) {
+		t.Errorf("verifyCredProof(opaque with manifest) = %v, want ErrConformance", err)
 	}
 }
 
@@ -337,7 +378,7 @@ func TestValidateAgentSpecRedactsMalformedEnv(t *testing.T) {
 		t.Run(redactPath(entry), func(t *testing.T) {
 			spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 			spec.Env = append(spec.Env, entry)
-			err := validateAgentSpec(cfg, spec, names.Workspace, "")
+			err := validateAgentSpec(cfg, spec, names, "", false, hs.Agent.LaunchState)
 			if !errors.Is(err, ErrConformance) {
 				t.Fatalf("validateAgentSpec = %v, want ErrConformance", err)
 			}
@@ -654,7 +695,9 @@ func TestConformanceReasonsRedactUntrustedFields(t *testing.T) {
 	names := namesFor(hs.RunID)
 	agent := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 	agent.Mounts[1].Target = secret
-	if err := validateAgentSpec(cfg, agent, names.Workspace, ""); err == nil || strings.Contains(err.Error(), secret) {
+	if err := validateAgentSpec(
+		cfg, agent, names, "", false, hs.Agent.LaunchState,
+	); err == nil || strings.Contains(err.Error(), secret) {
 		t.Errorf("agent conformance failure leaked or accepted an untrusted field: %v", err)
 	}
 	rep := exporterReport(cfg, names.Exporter, names.Workspace)
@@ -731,7 +774,14 @@ func TestValidateAgentSpecNoCredentials(t *testing.T) {
 	hs := testHandoffSpec()
 	hs.Agent.CredentialMounts = nil
 	names := namesFor(hs.RunID)
-	if err := validateAgentSpec(cfg, buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345"), names.Workspace, ""); err != nil {
+	if err := validateAgentSpec(
+		cfg,
+		buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345"),
+		names,
+		"",
+		false,
+		hs.Agent.LaunchState,
+	); err != nil {
 		t.Errorf("credential-free agent spec: %v, want nil", err)
 	}
 }

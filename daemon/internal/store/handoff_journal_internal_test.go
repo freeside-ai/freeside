@@ -30,6 +30,80 @@ func TestHandoffJournalColumnsAreCrossChecked(t *testing.T) {
 			`UPDATE handoff_journal_records SET writer_complete = 1 WHERE run_id = 'journal-run'`,
 		},
 		{
+			"cancellation column only",
+			`UPDATE handoff_journal_records SET cancellation_requested = 1 WHERE run_id = 'journal-run'`,
+		},
+		{
+			"writer failure body only",
+			`UPDATE handoff_journal_records
+			 SET body = json_set(body, '$.writer_failure_status', 7)
+			 WHERE run_id = 'journal-run'`,
+		},
+		{
+			"writer failure column only",
+			`UPDATE handoff_journal_records SET writer_failure_status = 7 WHERE run_id = 'journal-run'`,
+		},
+		{
+			"state binding body only",
+			`UPDATE handoff_journal_records
+			 SET body = json_set(body, '$.state', json('{
+			   "config_root_fingerprint":"root",
+			   "continuity_fingerprint":"continuity",
+			   "session_scratch_fingerprint":"scratch",
+			   "config_root_target":"/var/lib/freeside/claude-config",
+			   "continuity_target":"/var/lib/freeside/claude-config/projects",
+			   "session_scratch_target":"/var/lib/freeside/claude-config/session-env",
+			   "config_root_read_only":true,
+			   "continuity_read_only":false,
+			   "session_scratch_read_only":false,
+			   "config_root_digest":"aa",
+			   "continuity_digest":"bb",
+			   "session_scratch_digest":"cc"
+			 }'))
+			 WHERE run_id = 'journal-run'`,
+		},
+		{
+			"state binding column only",
+			`UPDATE handoff_journal_records
+			 SET state_preparation = '{
+			   "config_root_fingerprint":"root",
+			   "continuity_fingerprint":"continuity",
+			   "session_scratch_fingerprint":"scratch",
+			   "config_root_target":"/var/lib/freeside/claude-config",
+			   "continuity_target":"/var/lib/freeside/claude-config/projects",
+			   "session_scratch_target":"/var/lib/freeside/claude-config/session-env",
+			   "config_root_read_only":true,
+			   "continuity_read_only":false,
+			   "session_scratch_read_only":false,
+			   "config_root_digest":"aa",
+			   "continuity_digest":"bb",
+			   "session_scratch_digest":"cc"
+			 }'
+			 WHERE run_id = 'journal-run'`,
+		},
+		{
+			"instruction binding body only",
+			`UPDATE handoff_journal_records
+			 SET body = json_set(body, '$.instructions', json('{
+			   "composition_version":"claude_explicit_bundle_v1",
+			   "host_digest":"absent",
+			   "repository_manifest_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			   "bundle_digest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+			 }'))
+			 WHERE run_id = 'journal-run'`,
+		},
+		{
+			"instruction binding column only",
+			`UPDATE handoff_journal_records
+			 SET instruction_preparation = '{
+			   "composition_version":"claude_explicit_bundle_v1",
+			   "host_digest":"absent",
+			   "repository_manifest_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			   "bundle_digest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+			 }'
+			 WHERE run_id = 'journal-run'`,
+		},
+		{
 			"lease fence body only",
 			`UPDATE handoff_journal_records
 			 SET body = json_set(body, '$.lease.fence', 8) WHERE run_id = 'journal-run'`,
@@ -137,5 +211,61 @@ VALUES ('auth-legacy', 'inv-legacy', 1, '2026-07-28T12:00:00Z',
 	})
 	if err == nil {
 		t.Fatal("legacy lease behind an unbound identity reconstructed")
+	}
+}
+
+func TestFailedHandoffOutcomeMigrationAppliesFromPriorHead(t *testing.T) {
+	ctx := context.Background()
+	db := openRaw(t)
+	migrateThrough(t, ctx, db, "0022_")
+
+	const (
+		runID = "journal-before-failed-outcome"
+		body  = `{"version":1,"outcome":"completed"}`
+	)
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO handoff_journal_records (
+    run_id, ownership_token, spec_digest, observed_base_sha,
+    credential_pre_digest, writer_complete, export_dir, outcome,
+    opened_at, body
+) VALUES (?, '00112233445566778899aabbccddeeff', ?, ?, ?, 1, ?, 'completed', ?, ?)`,
+		runID, strings.Repeat("ab", 32), strings.Repeat("c", 40),
+		strings.Repeat("de", 32), "/tmp/export",
+		"2026-07-29T12:00:00Z", body); err != nil {
+		t.Fatalf("seed prior-head handoff journal: %v", err)
+	}
+
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate to head: %v", err)
+	}
+
+	var (
+		gotOutcome      string
+		gotInstructions string
+		gotBody         string
+	)
+	if err := db.QueryRowContext(ctx, `
+SELECT outcome, instruction_preparation, body
+FROM handoff_journal_records
+WHERE run_id = ?`, runID).Scan(&gotOutcome, &gotInstructions, &gotBody); err != nil {
+		t.Fatalf("read migrated handoff journal: %v", err)
+	}
+	if gotOutcome != "completed" || gotInstructions != "" || gotBody != body {
+		t.Fatalf(
+			"migrated row = outcome %q instructions %q body %q, want completed, empty, original",
+			gotOutcome,
+			gotInstructions,
+			gotBody,
+		)
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE handoff_journal_records SET outcome = 'failed' WHERE run_id = ?`,
+		runID); err != nil {
+		t.Fatalf("set failed outcome under migrated constraint: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE handoff_journal_records SET outcome = 'unknown' WHERE run_id = ?`,
+		runID); err == nil {
+		t.Fatal("invalid outcome accepted under migrated constraint")
 	}
 }

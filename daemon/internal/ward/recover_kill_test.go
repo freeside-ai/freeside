@@ -276,6 +276,10 @@ func TestRecoverKillBoundaries(t *testing.T) {
 				if final == nil || final.Outcome == nil || *final.Outcome != HandoffCompleted {
 					t.Errorf("record = %+v, want closed as completed", final)
 				}
+			case RecoveryFailed:
+				t.Fatal("kill-boundary fixture unexpectedly requested failed recovery")
+			case RecoveryCanceled:
+				t.Fatal("kill-boundary fixture unexpectedly requested canceled recovery")
 			}
 			// No orphan survives recovery, whichever way it ended.
 			fx2.assertReaped(t)

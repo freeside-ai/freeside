@@ -41,6 +41,7 @@ func TestConfigValidate(t *testing.T) {
 		{"missing exporter command", func(c *Config) { c.ExporterCommand = nil }},
 		{"relative workspace target", func(c *Config) { c.WorkspaceTarget = "workspace" }},
 		{"relative handoff dir", func(c *Config) { c.HandoffDir = "handoff" }},
+		{"relative export root", func(c *Config) { c.ExportRoot = "exports" }},
 		{"relative proof path", func(c *Config) { c.ProofPath = "handoff-proof.txt" }},
 		{"trailing slash handoff dir", func(c *Config) { c.HandoffDir = "/handoff/" }},
 		{"dotdot in workspace target", func(c *Config) { c.WorkspaceTarget = "/workspace/../etc" }},

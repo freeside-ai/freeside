@@ -787,7 +787,6 @@ func TestAdmissionBoundToTheActiveTrustProfileRevision(t *testing.T) {
 	if err := recordAdmission(t, s, f.admission); err != nil {
 		t.Fatalf("record under the active revision: %v", err)
 	}
-
 	// The operator approves and activates a revised profile for the same
 	// repository: same numeric id, different content, different digest.
 	revised, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
@@ -813,6 +812,15 @@ func TestAdmissionBoundToTheActiveTrustProfileRevision(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("activate the revision: %v", err)
 	}
+	outcome := domain.ExecutionOutcome{
+		InvocationID: f.admission.InvocationID, AdmissionID: f.admission.ID,
+		Status: domain.ExecutionOutcomeLost, RecordedAt: admissionEpoch.Add(2 * time.Hour),
+	}
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordExecutionOutcome(ctx, outcome)
+	}); err != nil {
+		t.Fatalf("record terminal outcome after policy revision: %v", err)
+	}
 
 	err = s.Read(ctx, func(tx *store.ReadTx) error {
 		_, err := tx.GetExecutionAdmission(ctx, f.admission.InvocationID)
@@ -820,6 +828,26 @@ func TestAdmissionBoundToTheActiveTrustProfileRevision(t *testing.T) {
 	})
 	if !errors.Is(err, domain.ErrTrustProfileSuperseded) {
 		t.Fatalf("read under a revised profile = %v, want %v", err, domain.ErrTrustProfileSuperseded)
+	}
+	err = s.Read(ctx, func(tx *store.ReadTx) error {
+		admission, err := tx.GetExecutionAdmissionRecord(ctx, f.admission.InvocationID)
+		if err != nil {
+			return err
+		}
+		if admission.ID != f.admission.ID {
+			t.Errorf("historical admission id = %q, want %q", admission.ID, f.admission.ID)
+		}
+		got, err := tx.GetExecutionOutcomeRecord(ctx, f.admission.InvocationID)
+		if err != nil {
+			return err
+		}
+		if got.Status != domain.ExecutionOutcomeLost || got.AdmissionID != f.admission.ID {
+			t.Errorf("historical outcome = %#v, want lost under admission %s", got, f.admission.ID)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("read immutable terminal history under a revised profile: %v", err)
 	}
 }
 
@@ -966,6 +994,129 @@ func TestExecutionExportBinding(t *testing.T) {
 	}
 	if err := record(baseDrift); !errors.Is(err, domain.ErrExportBaseMismatch) {
 		t.Fatalf("export at another base = %v, want %v", err, domain.ErrExportBaseMismatch)
+	}
+}
+
+func TestExecutionOutcomeBinding(t *testing.T) {
+	ctx := context.Background()
+	f := newAdmissionFixture(t, nil)
+	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
+	if err := recordAdmission(t, s, f.admission); err != nil {
+		t.Fatalf("record admission: %v", err)
+	}
+	outcome := domain.ExecutionOutcome{
+		InvocationID: "inv-1",
+		AdmissionID:  f.admission.ID,
+		Status:       domain.ExecutionOutcomeFailed,
+		Summary:      "writer failed",
+		RecordedAt:   admissionEpoch.Add(time.Hour),
+	}
+	record := func(x domain.ExecutionOutcome) error {
+		return s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			return tx.RecordExecutionOutcome(ctx, x)
+		})
+	}
+	if err := record(outcome); err != nil {
+		t.Fatalf("record outcome: %v", err)
+	}
+	if err := record(outcome); err != nil {
+		t.Fatalf("identical replay must converge: %v", err)
+	}
+	var got domain.ExecutionOutcome
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		got, err = tx.GetExecutionOutcome(ctx, "inv-1")
+		return err
+	}); err != nil {
+		t.Fatalf("GetExecutionOutcome: %v", err)
+	}
+	if got.Status != domain.ExecutionOutcomeFailed || got.Summary != "writer failed" {
+		t.Fatalf("round-tripped outcome = %+v", got)
+	}
+	changed := outcome
+	changed.Status = domain.ExecutionOutcomeCanceled
+	if err := record(changed); !errors.Is(err, store.ErrImmutableConflict) {
+		t.Fatalf("changed outcome = %v, want immutable conflict", err)
+	}
+}
+
+func TestExecutionExportAndOutcomeAreMutuallyExclusive(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name        string
+		recordFirst func(
+			context.Context, *store.InternalTx,
+			domain.ExecutionExport, domain.ExecutionOutcome,
+		) error
+		recordSecond func(
+			context.Context, *store.InternalTx,
+			domain.ExecutionExport, domain.ExecutionOutcome,
+		) error
+	}{
+		{
+			name: "export then outcome",
+			recordFirst: func(
+				ctx context.Context, tx *store.InternalTx,
+				export domain.ExecutionExport, _ domain.ExecutionOutcome,
+			) error {
+				return tx.RecordExecutionExport(ctx, export)
+			},
+			recordSecond: func(
+				ctx context.Context, tx *store.InternalTx,
+				_ domain.ExecutionExport, outcome domain.ExecutionOutcome,
+			) error {
+				return tx.RecordExecutionOutcome(ctx, outcome)
+			},
+		},
+		{
+			name: "outcome then export",
+			recordFirst: func(
+				ctx context.Context, tx *store.InternalTx,
+				_ domain.ExecutionExport, outcome domain.ExecutionOutcome,
+			) error {
+				return tx.RecordExecutionOutcome(ctx, outcome)
+			},
+			recordSecond: func(
+				ctx context.Context, tx *store.InternalTx,
+				export domain.ExecutionExport, _ domain.ExecutionOutcome,
+			) error {
+				return tx.RecordExecutionExport(ctx, export)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newAdmissionFixture(t, nil)
+			s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
+			if err := recordAdmission(t, s, f.admission); err != nil {
+				t.Fatalf("record admission: %v", err)
+			}
+			export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+				InvocationID: "inv-1", AdmissionID: f.admission.ID,
+				ObservedBaseSHA: f.admission.Base.BaseSHA, HeadSHA: "cafebabe",
+				ManifestDigest: "sha256:manifest",
+				RecordedAt:     admissionEpoch.Add(time.Hour),
+			})
+			if err != nil {
+				t.Fatalf("NewExecutionExport: %v", err)
+			}
+			outcome := domain.ExecutionOutcome{
+				InvocationID: "inv-1", AdmissionID: f.admission.ID,
+				Status: domain.ExecutionOutcomeFailed, Summary: "failed",
+				RecordedAt: admissionEpoch.Add(time.Hour),
+			}
+			if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				return tc.recordFirst(ctx, tx, export, outcome)
+			}); err != nil {
+				t.Fatalf("record first authority: %v", err)
+			}
+			if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				return tc.recordSecond(ctx, tx, export, outcome)
+			}); !errors.Is(err, store.ErrImmutableConflict) {
+				t.Fatalf("record contradictory authority = %v, want immutable conflict", err)
+			}
+		})
 	}
 }
 
