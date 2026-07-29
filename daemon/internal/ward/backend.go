@@ -1,7 +1,11 @@
 package ward
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -14,9 +18,18 @@ import (
 // a Runtime. Construct it with New; the zero value declares nothing and
 // gates nothing.
 type Backend struct {
-	rt          Runtime
-	cfg         Config
-	initialized bool
+	rt  Runtime
+	cfg Config
+	// daemonIdentity binds restored conformance to the exact freesided/ward
+	// executable that earned it. Rebuilding any gate implementation changes
+	// the binary identity and requires a fresh Full pass.
+	daemonIdentity string
+	// runtimeIdentity binds conformance to the executable bytes observed at
+	// backend construction. PreJob recomputes it before every real dispatch,
+	// so replacing a CLI in place clears the practical admission path even
+	// though its filesystem path is unchanged.
+	runtimeIdentity string
+	initialized     bool
 	// networkless and providerEgress are the two suite-earned capability
 	// flags. Both proofs come from the same Full pass, so one generation
 	// guards them jointly: a pass is all-or-nothing, and a split publication
@@ -36,6 +49,25 @@ type Backend struct {
 	activeLeases map[domain.AuthIdentityID]bool
 }
 
+type conformanceConfiguration struct {
+	Version           string   `json:"version"`
+	Daemon            string   `json:"daemon"`
+	Runtime           string   `json:"runtime"`
+	AgentImage        string   `json:"agent_image"`
+	ProviderEndpoints []string `json:"provider_endpoints"`
+	ExporterImage     string   `json:"exporter_image"`
+	ExporterCommand   []string `json:"exporter_command"`
+	SeedRoot          string   `json:"seed_root"`
+	ExportRoot        string   `json:"export_root"`
+	WorkspaceTarget   string   `json:"workspace_target"`
+	HandoffDir        string   `json:"handoff_dir"`
+	ProofPath         string   `json:"proof_path"`
+	SeedStageDir      string   `json:"seed_stage_dir"`
+	SeedReadyDir      string   `json:"seed_ready_dir"`
+	BaseProofPath     string   `json:"base_proof_path"`
+	CredProofPath     string   `json:"cred_proof_path"`
+}
+
 // Compile-time contract assertion (exec package convention).
 var _ exec.RunnerBackend = (*Backend)(nil)
 
@@ -49,11 +81,128 @@ func New(rt Runtime, cfg Config) (*Backend, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+	runtimeIdentity, err := runtimeConfigurationIdentity(rt)
+	if err != nil {
+		return nil, fmt.Errorf("%w: Runtime executable identity: %w", ErrInvalidConfig, err)
+	}
+	daemonIdentity, err := daemonConfigurationIdentity()
+	if err != nil {
+		return nil, fmt.Errorf("%w: daemon executable identity: %w", ErrInvalidConfig, err)
+	}
 	// Config is caller-owned. Freeze every reference field before it becomes
 	// the expected allowlist that runtime-observed state is compared against.
 	cfg.ExporterCommand = slices.Clone(cfg.ExporterCommand)
 	cfg.ProviderEndpoints = slices.Clone(cfg.ProviderEndpoints)
-	return &Backend{rt: rt, cfg: cfg, initialized: true, activeLeases: map[domain.AuthIdentityID]bool{}}, nil
+	return &Backend{
+		rt: rt, cfg: cfg,
+		daemonIdentity:  daemonIdentity,
+		runtimeIdentity: runtimeIdentity,
+		initialized:     true,
+		activeLeases:    map[domain.AuthIdentityID]bool{},
+	}, nil
+}
+
+// RestoreConformance republishes the suite-earned capabilities from the
+// durable latest proof after a daemon restart. The record is accepted only
+// before this backend has begun a live proof: once a recheck starts, its
+// generation and cleared declaration are authoritative, and an older
+// persisted success must never resurrect them.
+func (b *Backend) RestoreConformance(record domain.BackendConformance) error {
+	if b == nil || !b.initialized {
+		return fmt.Errorf("%w: backend is not initialized", ErrInvalidConfig)
+	}
+	if err := record.Validate(); err != nil {
+		return fmt.Errorf("restore backend conformance: %w", err)
+	}
+	if record.Backend != domain.BackendFreshVMReadOnlyVolumeHandoff {
+		return fmt.Errorf("restore backend conformance for %q on %q",
+			record.Backend, BackendName)
+	}
+	if record.Outcome != domain.ConformancePassed {
+		return fmt.Errorf("restore backend conformance generation %d with outcome %q",
+			record.Generation, record.Outcome)
+	}
+	if record.Generation == 0 {
+		return fmt.Errorf("restore unpersisted backend conformance generation")
+	}
+	if record.ConfigurationDigest != b.ConfigurationDigest() {
+		return fmt.Errorf(
+			"restore backend conformance generation %d for configuration %s on active %s",
+			record.Generation, record.ConfigurationDigest, b.ConfigurationDigest())
+	}
+
+	b.proofMu.Lock()
+	defer b.proofMu.Unlock()
+	if b.proofGeneration != 0 {
+		return fmt.Errorf("restore backend conformance generation %d after live generation %d began",
+			record.Generation, b.proofGeneration)
+	}
+	b.proofGeneration = record.Generation
+	b.networkless.Store(record.Capabilities.Has(domain.CapNetworklessExport))
+	b.providerEgress.Store(record.Capabilities.Has(domain.CapEnforcedProviderEgress))
+	return nil
+}
+
+// ConfigurationDigest is the stable identity of the runtime configuration a
+// Full conformance pass proves. It deliberately excludes collaborators and
+// operational budgets that do not change the runtime topology under proof.
+func (b *Backend) ConfigurationDigest() domain.Digest {
+	if b == nil || !b.initialized {
+		return ""
+	}
+	endpoints := slices.Clone(b.cfg.ProviderEndpoints)
+	slices.Sort(endpoints)
+	body, err := json.Marshal(conformanceConfiguration{
+		Version:           "freeside.ward.conformance-configuration/v4",
+		Daemon:            b.daemonIdentity,
+		Runtime:           b.runtimeIdentity,
+		AgentImage:        b.cfg.AgentImage,
+		ProviderEndpoints: endpoints,
+		ExporterImage:     b.cfg.ExporterImage,
+		ExporterCommand:   b.cfg.ExporterCommand,
+		SeedRoot:          b.cfg.SeedRoot,
+		ExportRoot:        b.cfg.ExportRoot,
+		WorkspaceTarget:   b.cfg.WorkspaceTarget,
+		HandoffDir:        b.cfg.HandoffDir,
+		ProofPath:         b.cfg.ProofPath,
+		SeedStageDir:      b.cfg.SeedStageDir,
+		SeedReadyDir:      b.cfg.SeedReadyDir,
+		BaseProofPath:     b.cfg.BaseProofPath,
+		CredProofPath:     b.cfg.CredProofPath,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("marshal ward conformance configuration: %v", err))
+	}
+	return domain.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body)))
+}
+
+func runtimeConfigurationIdentity(rt Runtime) (string, error) {
+	cli, ok := rt.(*CLIRuntime)
+	if !ok {
+		return fmt.Sprintf("%T", rt), nil
+	}
+	return executableIdentity(cli.bin)
+}
+
+func daemonConfigurationIdentity() (string, error) {
+	path, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return executableIdentity(path)
+}
+
+func executableIdentity(path string) (string, error) {
+	f, err := os.Open(path) //nolint:gosec // G304: hashes the validated runtime path or this process's executable
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s@sha256:%x", path, h.Sum(nil)), nil
 }
 
 // Name identifies the backend in policy, refusals, and audit records.

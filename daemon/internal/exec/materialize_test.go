@@ -115,6 +115,20 @@ func (r *lateReadCloser) Read(p []byte) (int, error) {
 
 func (*lateReadCloser) Close() error { return nil }
 
+type failingInputBody struct {
+	readErr  error
+	closeErr error
+}
+
+func (b failingInputBody) Read([]byte) (int, error) {
+	if b.readErr != nil {
+		return 0, b.readErr
+	}
+	return 0, io.EOF
+}
+
+func (b failingInputBody) Close() error { return b.closeErr }
+
 func contentDigest(body []byte) domain.Digest {
 	return domain.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body)))
 }
@@ -544,6 +558,33 @@ func TestMaterializingStageDriverStartsOnlyAfterVerification(t *testing.T) {
 	}
 	if process.started != 1 {
 		t.Fatalf("process started after failed materialization: %d starts", process.started)
+	}
+}
+
+func TestMaterializeClassifiesOpenedInputIOAsRetryable(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		body failingInputBody
+	}{
+		{"read", failingInputBody{readErr: errors.New("fixture read failure")}},
+		{"close", failingInputBody{closeErr: errors.New("fixture close failure")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newMaterializeFixture(t)
+			source := inputSourceFunc(func(context.Context, domain.Digest) (io.ReadCloser, error) {
+				return tc.body, nil
+			})
+			materializer, err := exec.NewMaterializer(source, exec.MaterializerOptions{
+				MaxInputBytes: 4 << 20, MaxTotalBytes: 32 << 20,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := materializer.Materialize(t.Context(), fixture.spec); !errors.Is(err, exec.ErrInputUnavailable) {
+				t.Fatalf("Materialize = %v, want retryable input class", err)
+			}
+		})
 	}
 }
 

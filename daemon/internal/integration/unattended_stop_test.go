@@ -43,6 +43,10 @@ func openWaivedUnattendedFixture(t *testing.T) *workflowFixture {
 	env.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
 		RepositoryID: waiverRepository, Reason: "phase 1a.2 supervised runs",
 	}
+	backend := fake.RunnerBackend{
+		BackendName: string(domain.BackendFreshVMReadOnlyVolumeHandoff),
+		Caps:        exec.NewCapabilitySet(conformantCeiling(t)...),
+	}
 
 	root := t.TempDir()
 	st, err := store.Open(ctx, filepath.Join(root, "freeside.db"), store.Options{
@@ -76,10 +80,11 @@ func openWaivedUnattendedFixture(t *testing.T) *workflowFixture {
 		// conformance record (#320); the fixture backend therefore carries the
 		// registered fresh-vm class and a passed record at its ceiling.
 		conformance, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-			Backend:      domain.BackendFreshVMReadOnlyVolumeHandoff,
-			Outcome:      domain.ConformancePassed,
-			Capabilities: conformantCeiling(t),
-			ProvedAt:     admittedAt,
+			Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+			Outcome:             domain.ConformancePassed,
+			ConfigurationDigest: backend.ConfigurationDigest(),
+			Capabilities:        conformantCeiling(t),
+			ProvedAt:            admittedAt,
 		})
 		if err != nil {
 			return err
@@ -99,12 +104,7 @@ func openWaivedUnattendedFixture(t *testing.T) *workflowFixture {
 		t.Fatalf("fake.NewStageDriverAt: %v", err)
 	}
 	workflow, err := engine.New(st, attention, driver,
-		engine.WithAdmission(
-			fake.RunnerBackend{
-				BackendName: string(domain.BackendFreshVMReadOnlyVolumeHandoff),
-				Caps:        exec.NewCapabilitySet(conformantCeiling(t)...),
-			},
-			floor, env, func() time.Time { return admittedAt }))
+		engine.WithAdmission(backend, floor, env, func() time.Time { return admittedAt }))
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
 	}

@@ -224,15 +224,20 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 		digest := tamperTrustProfile(t, "owner/repo", 424242).ProfileDigest
 		profileDigest = &digest
 	}
+	backendConfigurationDigest := domain.Digest("")
+	if mode == domain.ModeUnattended {
+		backendConfigurationDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	}
 	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
 		InvocationID: "inv-1", RunID: run.ID, StageID: "stage-1", AttemptID: "attempt-1",
-		Backend:        "fresh_vm_read_only_volume_handoff",
-		Capabilities:   caps,
-		OperatingMode:  mode,
-		CredentialMode: domain.CredentialSubscriptionContained,
-		EgressProfile:  domain.EgressProviderOnly,
-		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
-		SpecDigest:     run.SpecDigest, PolicyDigest: run.PolicyDigest, InputDigest: "sha256:input",
+		Backend:                    "fresh_vm_read_only_volume_handoff",
+		BackendConfigurationDigest: backendConfigurationDigest,
+		Capabilities:               caps,
+		OperatingMode:              mode,
+		CredentialMode:             domain.CredentialSubscriptionContained,
+		EgressProfile:              domain.EgressProviderOnly,
+		ImageRef:                   domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
+		SpecDigest:                 run.SpecDigest, PolicyDigest: run.PolicyDigest, InputDigest: "sha256:input",
 		Base:      domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
 		Workspace: "ws-1", AuthIdentityID: &identityID,
 		TrustProfileDigest:     profileDigest,
@@ -261,10 +266,11 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 		}
 		if admission.OperatingMode == domain.ModeUnattended {
 			conformance, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-				Backend:      domain.BackendFreshVMReadOnlyVolumeHandoff,
-				Outcome:      domain.ConformancePassed,
-				Capabilities: admission.Capabilities,
-				ProvedAt:     admission.AdmittedAt,
+				Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+				Outcome:             domain.ConformancePassed,
+				ConfigurationDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+				Capabilities:        admission.Capabilities,
+				ProvedAt:            admission.AdmittedAt,
 			})
 			if err != nil {
 				return err
@@ -278,6 +284,49 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 		t.Fatalf("seed: %v", err)
 	}
 	return s, admission
+}
+
+// TestLegacyUnboundUnattendedAdmissionReconstructs proves that adding the
+// backend-configuration binding does not make pre-binding durable history
+// unreadable. The historical record reconstructs under its original content
+// address, but the live conformance gate still refuses to dispatch it.
+func TestLegacyUnboundUnattendedAdmissionReconstructs(t *testing.T) {
+	ctx := context.Background()
+	s, admission := seedAdmission(t, &domain.BackupEncryptionWaiver{
+		RepositoryID: 424242,
+		Reason:       "pre-binding fixture",
+	})
+
+	admission.BackendConfigurationDigest = ""
+	id, err := admission.ComputeID()
+	if err != nil {
+		t.Fatalf("compute legacy admission id: %v", err)
+	}
+	admission.ID = id
+	body, err := encode(admission)
+	if err != nil {
+		t.Fatalf("encode legacy admission: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE execution_admissions SET id = ?, body = ? WHERE invocation_id = ?`,
+		admission.ID, body, admission.InvocationID,
+	); err != nil {
+		t.Fatalf("rewrite as legacy admission: %v", err)
+	}
+
+	err = s.Read(ctx, func(tx *ReadTx) error {
+		got, err := tx.GetExecutionAdmission(ctx, admission.InvocationID)
+		if err != nil {
+			return err
+		}
+		if got.BackendConfigurationDigest != "" {
+			t.Errorf("legacy backend configuration digest = %q, want empty", got.BackendConfigurationDigest)
+		}
+		return tx.RequireBackendConformant(ctx, got)
+	})
+	if !errors.Is(err, domain.ErrAdmissionConfigurationMismatch) {
+		t.Fatalf("legacy dispatch gate = %v, want %v", err, domain.ErrAdmissionConfigurationMismatch)
+	}
 }
 
 // tamperTrustProfile is the approved profile a waived fixture is gated
@@ -379,7 +428,8 @@ func TestForgedWaiverRowFailsClosed(t *testing.T) {
 	other, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
 		InvocationID: admission.InvocationID, RunID: admission.RunID, StageID: admission.StageID,
 		AttemptID: admission.AttemptID, Backend: admission.Backend,
-		Capabilities: admission.Capabilities, OperatingMode: admission.OperatingMode,
+		BackendConfigurationDigest: admission.BackendConfigurationDigest,
+		Capabilities:               admission.Capabilities, OperatingMode: admission.OperatingMode,
 		CredentialMode: admission.CredentialMode, EgressProfile: admission.EgressProfile,
 		ImageRef: admission.ImageRef, SpecDigest: admission.SpecDigest,
 		PolicyDigest: admission.PolicyDigest, InputDigest: admission.InputDigest,

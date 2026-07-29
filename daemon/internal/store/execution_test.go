@@ -56,6 +56,10 @@ func newAdmissionFixture(t *testing.T, mutate func(*domain.ExecutionAdmissionInp
 	if mutate != nil {
 		mutate(&in)
 	}
+	if in.OperatingMode == domain.ModeUnattended &&
+		in.BackendConfigurationDigest == "" {
+		in.BackendConfigurationDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	}
 	admission, err := domain.NewExecutionAdmission(in)
 	if err != nil {
 		t.Fatalf("NewExecutionAdmission: %v", err)
@@ -81,10 +85,11 @@ func conformantCapabilities(t *testing.T) domain.CapabilitySnapshot {
 func seedBackendConformance(t *testing.T, s *store.Store) {
 	t.Helper()
 	record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-		Backend:      domain.BackendFreshVMReadOnlyVolumeHandoff,
-		Outcome:      domain.ConformancePassed,
-		Capabilities: conformantCapabilities(t),
-		ProvedAt:     admissionEpoch,
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformancePassed,
+		ConfigurationDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		Capabilities:        conformantCapabilities(t),
+		ProvedAt:            admissionEpoch,
 	})
 	if err != nil {
 		t.Fatalf("NewBackendConformance: %v", err)

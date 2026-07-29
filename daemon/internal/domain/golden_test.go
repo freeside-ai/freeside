@@ -391,13 +391,14 @@ func TestGolden(t *testing.T) {
 	// explicitly, so neither discriminator goes unpinned.
 	waivedAdmission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
 		InvocationID: "inv-2", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-2",
-		Backend:        "fresh_vm_read_only_volume_handoff",
-		Capabilities:   domain.CapabilitySnapshot(domain.AllRunnerCapabilities),
-		OperatingMode:  domain.ModeUnattended,
-		CredentialMode: domain.CredentialSubscriptionContained,
-		EgressProfile:  domain.EgressCleanVerification,
-		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/verifier@sha256:" + strings.Repeat("cd", 32)),
-		SpecDigest:     stageDigest("2"), PolicyDigest: resolvedPolicy.Digest, InputDigest: stageDigest("1"),
+		Backend:                    "fresh_vm_read_only_volume_handoff",
+		BackendConfigurationDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		Capabilities:               domain.CapabilitySnapshot(domain.AllRunnerCapabilities),
+		OperatingMode:              domain.ModeUnattended,
+		CredentialMode:             domain.CredentialSubscriptionContained,
+		EgressProfile:              domain.EgressCleanVerification,
+		ImageRef:                   domain.ImageRef("ghcr.io/freeside-ai/verifier@sha256:" + strings.Repeat("cd", 32)),
+		SpecDigest:                 stageDigest("2"), PolicyDigest: resolvedPolicy.Digest, InputDigest: stageDigest("1"),
 		StageInputs:        &stageInputs,
 		Base:               domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
 		Workspace:          "freeside-handoff-run-1-ws",
@@ -468,10 +469,11 @@ func TestGolden(t *testing.T) {
 		t.Fatal("fresh-vm class has no registered ceiling")
 	}
 	backendConformance, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-		Backend:      domain.BackendFreshVMReadOnlyVolumeHandoff,
-		Outcome:      domain.ConformancePassed,
-		Capabilities: conformanceCeiling,
-		ProvedAt:     time.Date(2026, 7, 27, 8, 30, 0, 0, time.UTC),
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformancePassed,
+		ConfigurationDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		Capabilities:        conformanceCeiling,
+		ProvedAt:            time.Date(2026, 7, 27, 8, 30, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -480,18 +482,20 @@ func TestGolden(t *testing.T) {
 	// reconstructed render.
 	backendConformance.Generation = 7
 	failedConformance, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-		Backend:  domain.BackendFreshVMReadOnlyVolumeHandoff,
-		Outcome:  domain.ConformanceFailed,
-		ProvedAt: time.Date(2026, 7, 27, 9, 15, 0, 0, time.UTC),
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformanceFailed,
+		ConfigurationDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		ProvedAt:            time.Date(2026, 7, 27, 9, 15, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	failedConformance.Generation = 8
 	supersededConformance, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-		Backend:  domain.BackendFreshVMReadOnlyVolumeHandoff,
-		Outcome:  domain.ConformanceSuperseded,
-		ProvedAt: time.Date(2026, 7, 27, 9, 20, 0, 0, time.UTC),
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformanceSuperseded,
+		ConfigurationDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		ProvedAt:            time.Date(2026, 7, 27, 9, 20, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatal(err)

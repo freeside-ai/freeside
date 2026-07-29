@@ -113,10 +113,11 @@ func waivedPostureItem(
 
 // admitter holds the configured admission inputs.
 type admitter struct {
-	backend     exec.RunnerBackend
-	floor       []exec.Capability
-	environment AdmissionEnvironment
-	now         func() time.Time
+	backend                    exec.RunnerBackend
+	backendConfigurationDigest domain.Digest
+	floor                      []exec.Capability
+	environment                AdmissionEnvironment
+	now                        func() time.Time
 }
 
 // WithAdmission makes the engine admit every dispatched attempt against
@@ -140,6 +141,19 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 		if now == nil {
 			return errors.New("with admission: nil clock")
 		}
+		var backendConfigurationDigest domain.Digest
+		if env.OperatingMode == domain.ModeUnattended {
+			bound, ok := backend.(exec.ConfigurationBoundBackend)
+			if !ok {
+				return errors.New("with admission: unattended backend has no configuration digest")
+			}
+			backendConfigurationDigest = bound.ConfigurationDigest()
+			if !contentaddr.Valid(string(backendConfigurationDigest)) ||
+				backendConfigurationDigest == domain.UnboundBackendConfigurationDigest {
+				return fmt.Errorf("with admission: unattended backend configuration digest %q is not bound",
+					backendConfigurationDigest)
+			}
+		}
 		if !contentaddr.Valid(string(env.PromptPackageDigest)) {
 			return fmt.Errorf("with admission: prompt package digest %q is not canonical",
 				env.PromptPackageDigest)
@@ -152,10 +166,11 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 		// could weaken the gate, or retarget the credential and waiver
 		// bindings a record attests to, long after engine.New returned.
 		e.admission = &admitter{
-			backend:     backend,
-			floor:       slices.Clone(floor),
-			environment: env.clone(),
-			now:         now,
+			backend:                    backend,
+			backendConfigurationDigest: backendConfigurationDigest,
+			floor:                      slices.Clone(floor),
+			environment:                env.clone(),
+			now:                        now,
 		}
 		return nil
 	}
@@ -239,26 +254,27 @@ func (e *Engine) admitAttempt(
 		}
 	}
 	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
-		InvocationID:           invocationID,
-		RunID:                  binding.run.ID,
-		StageID:                stage.ID,
-		AttemptID:              attemptIDFor(invocationID),
-		Backend:                snapshot.Backend,
-		Capabilities:           snapshot.Declared.Snapshot(),
-		OperatingMode:          env.OperatingMode,
-		CredentialMode:         env.CredentialMode,
-		EgressProfile:          env.EgressProfile,
-		ImageRef:               env.ImageRef,
-		SpecDigest:             binding.run.SpecDigest,
-		PolicyDigest:           binding.run.PolicyDigest,
-		InputDigest:            inputDigest,
-		StageInputs:            &stageInputs,
-		Base:                   env.Base,
-		Workspace:              env.Workspace,
-		AuthIdentityID:         env.AuthIdentityID,
-		TrustProfileDigest:     profileDigest,
-		BackupEncryptionWaiver: env.BackupEncryptionWaiver,
-		AdmittedAt:             e.admission.now(),
+		InvocationID:               invocationID,
+		RunID:                      binding.run.ID,
+		StageID:                    stage.ID,
+		AttemptID:                  attemptIDFor(invocationID),
+		Backend:                    snapshot.Backend,
+		Capabilities:               snapshot.Declared.Snapshot(),
+		BackendConfigurationDigest: e.admission.backendConfigurationDigest,
+		OperatingMode:              env.OperatingMode,
+		CredentialMode:             env.CredentialMode,
+		EgressProfile:              env.EgressProfile,
+		ImageRef:                   env.ImageRef,
+		SpecDigest:                 binding.run.SpecDigest,
+		PolicyDigest:               binding.run.PolicyDigest,
+		InputDigest:                inputDigest,
+		StageInputs:                &stageInputs,
+		Base:                       env.Base,
+		Workspace:                  env.Workspace,
+		AuthIdentityID:             env.AuthIdentityID,
+		TrustProfileDigest:         profileDigest,
+		BackupEncryptionWaiver:     env.BackupEncryptionWaiver,
+		AdmittedAt:                 e.admission.now(),
 	})
 	if err != nil {
 		return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)

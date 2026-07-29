@@ -248,3 +248,18 @@ func TestValidateRepository(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateCommitSHA(t *testing.T) {
+	t.Parallel()
+	if err := ValidateCommitSHA("0123456789abcdef0123456789abcdef01234567"); err != nil {
+		t.Fatalf("ValidateCommitSHA(valid) = %v", err)
+	}
+	for _, sha := range []string{
+		"", "0123456789ab", "0123456789abcdef0123456789abcdef0123456g",
+		"0123456789ABCDEF0123456789ABCDEF01234567",
+	} {
+		if err := ValidateCommitSHA(sha); err == nil {
+			t.Errorf("ValidateCommitSHA(%q) accepted", sha)
+		}
+	}
+}

@@ -1,6 +1,7 @@
 {
   "backend": "fresh_vm_read_only_volume_handoff",
   "outcome": "passed",
+  "configuration_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "capabilities": [
     "supports_detachable_workspace",
     "supports_enforced_provider_egress",

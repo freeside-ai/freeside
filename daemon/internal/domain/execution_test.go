@@ -11,7 +11,10 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
-const testImage = "ghcr.io/freeside-ai/agent@sha256:abababababababababababababababababababababababababababababababab"
+const (
+	testImage                = "ghcr.io/freeside-ai/agent@sha256:abababababababababababababababababababababababababababababababab"
+	testBackendConfiguration = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+)
 
 func admissionInput() domain.ExecutionAdmissionInput {
 	identity := domain.AuthIdentityID("auth-1")
@@ -28,7 +31,8 @@ func admissionInput() domain.ExecutionAdmissionInput {
 	}
 	return domain.ExecutionAdmissionInput{
 		InvocationID: "inv-1", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-1",
-		Backend: "fresh_vm_read_only_volume_handoff",
+		Backend:                    "fresh_vm_read_only_volume_handoff",
+		BackendConfigurationDigest: testBackendConfiguration,
 		Capabilities: domain.CapabilitySnapshot{
 			domain.CapPostExitExport, domain.CapDetachableWorkspace,
 		},
@@ -219,6 +223,14 @@ func TestExecutionAdmissionValidate(t *testing.T) {
 			}, domain.ErrEmptyField,
 		},
 		{
+			"unattended without a backend configuration", func(in *domain.ExecutionAdmissionInput) {
+				in.OperatingMode = domain.ModeUnattended
+				profile := domain.Digest("sha256:profile-v1")
+				in.TrustProfileDigest = &profile
+				in.BackendConfigurationDigest = ""
+			}, domain.ErrConformanceConfigurationUnbound,
+		},
+		{
 			"trust profile named where none is required", func(in *domain.ExecutionAdmissionInput) {
 				digest := domain.Digest("sha256:profile-v1")
 				in.TrustProfileDigest = &digest
@@ -277,6 +289,28 @@ func TestExecutionAdmissionValidate(t *testing.T) {
 				t.Fatalf("NewExecutionAdmission = %v, want %v", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestLegacyUnboundUnattendedAdmissionRemainsReconstructable(t *testing.T) {
+	t.Parallel()
+	in := admissionInput()
+	in.OperatingMode = domain.ModeUnattended
+	profile := domain.Digest("sha256:" + strings.Repeat("77", 32))
+	in.TrustProfileDigest = &profile
+	admission := mustAdmission(t, in)
+
+	// Admissions written before the configuration-binding encoding have no
+	// field and resolve under v2. They remain readable audit history, but the
+	// constructor above still refuses to mint another one.
+	admission.BackendConfigurationDigest = ""
+	id, err := admission.ComputeID()
+	if err != nil {
+		t.Fatalf("legacy ComputeID: %v", err)
+	}
+	admission.ID = id
+	if err := admission.Validate(); err != nil {
+		t.Fatalf("legacy unattended admission is not reconstructable: %v", err)
 	}
 }
 

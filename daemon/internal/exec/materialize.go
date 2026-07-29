@@ -102,7 +102,8 @@ func (d *MaterializingStageDriver) Start(
 			return StageInputs{}, err
 		}
 		if err := ctx.Err(); err != nil {
-			return StageInputs{}, err
+			return StageInputs{}, fmt.Errorf("materialized inputs canceled: %w",
+				errors.Join(ErrInputUnavailable, err))
 		}
 		return inputs, nil
 	})
@@ -354,13 +355,14 @@ func (m *Materializer) load(
 	if err := ctx.Err(); err != nil {
 		closeErr := body.Close()
 		return MaterializedContent{}, fmt.Errorf("materialize %s %s: %w",
-			role, digest, errors.Join(err, closeErr))
+			role, digest, errors.Join(ErrInputUnavailable, err, closeErr))
 	}
 	limit := min(m.opts.MaxInputBytes, totalRemaining)
 	content, readErr := io.ReadAll(io.LimitReader(contextReader{ctx: ctx, reader: body}, limit+1))
 	closeErr := body.Close()
 	if err := errors.Join(readErr, closeErr); err != nil {
-		return MaterializedContent{}, fmt.Errorf("materialize %s %s: %w", role, digest, err)
+		return MaterializedContent{}, fmt.Errorf("materialize %s %s: %w",
+			role, digest, errors.Join(ErrInputUnavailable, err))
 	}
 	if int64(len(content)) > limit {
 		return MaterializedContent{}, fmt.Errorf("materialize %s %s exceeds byte limit: %w",

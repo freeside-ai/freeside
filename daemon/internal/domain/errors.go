@@ -134,7 +134,6 @@ var (
 		"conformance record is not bound to a backend configuration")
 	ErrAdmissionExceedsConformance = errors.New(
 		"admission capability snapshot exceeds the backend's proven conformance declaration")
-
 	ErrAdmissionConfigurationMismatch = errors.New(
 		"admission backend configuration differs from the current conformance proof")
 

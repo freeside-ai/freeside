@@ -17,10 +17,11 @@ func validPassedConformance(t *testing.T) domain.BackendConformance {
 	t.Helper()
 	ceiling, _ := domain.ProvableCapabilities(domain.BackendFreshVMReadOnlyVolumeHandoff)
 	c, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-		Backend:      domain.BackendFreshVMReadOnlyVolumeHandoff,
-		Outcome:      domain.ConformancePassed,
-		Capabilities: ceiling,
-		ProvedAt:     provedAt,
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformancePassed,
+		ConfigurationDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		Capabilities:        ceiling,
+		ProvedAt:            provedAt,
 	})
 	if err != nil {
 		t.Fatalf("NewBackendConformance: %v", err)
@@ -35,9 +36,10 @@ func TestBackendConformanceValidate(t *testing.T) {
 	}
 
 	failed, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-		Backend:  domain.BackendFreshVMReadOnlyVolumeHandoff,
-		Outcome:  domain.ConformanceFailed,
-		ProvedAt: provedAt,
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformanceFailed,
+		ConfigurationDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		ProvedAt:            provedAt,
 	})
 	if err != nil {
 		t.Fatalf("failed record with nil capabilities: %v", err)
@@ -65,6 +67,13 @@ func TestBackendConformanceValidate(t *testing.T) {
 			name:    "unknown outcome",
 			mutate:  func(c *domain.BackendConformance) { c.Outcome = "pending" },
 			wantErr: domain.ErrInvalidConformanceOutcome,
+		},
+		{
+			name: "invalid configuration digest",
+			mutate: func(c *domain.BackendConformance) {
+				c.ConfigurationDigest = "sha256:not-a-digest"
+			},
+			wantErr: domain.ErrConformanceConfigurationUnbound,
 		},
 		{
 			name: "failed pass carrying a capability set",

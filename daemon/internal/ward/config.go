@@ -70,6 +70,12 @@ var ErrInvalidConfig = errors.New("invalid ward backend config")
 // (check 6), while everything the gate enforces about the exporter (checks 4,
 // 5, 7) comes from here.
 type Config struct {
+	// AgentImage is the digest-pinned writer image whose realized topology
+	// Suite.Full proves and whose liveness PreJob checks. It is optional for
+	// one-shot library users that never restore or run production
+	// conformance, but production composition must set it. When set,
+	// NewSuite refuses a fixture for any other image.
+	AgentImage string
 	// ProviderEndpoints is the exact CONNECT authority allowlist for
 	// provider_only writer egress. Each entry is a canonical lowercase
 	// TLS DNS-name:port pair; no wildcard, IP literal, or implicit port is
@@ -304,6 +310,8 @@ func (cfg Config) validate() error {
 	switch {
 	case len(cfg.ProviderEndpoints) == 0:
 		return fmt.Errorf("%w: ProviderEndpoints is required for provider_only egress", ErrInvalidConfig)
+	case cfg.AgentImage != "" && !digestPinnedImagePattern.MatchString(cfg.AgentImage):
+		return fmt.Errorf("%w: AgentImage %q is not digest-pinned", ErrInvalidConfig, cfg.AgentImage)
 	case cfg.EgressProxyTimeout < 0:
 		return fmt.Errorf("%w: EgressProxyTimeout %s is negative", ErrInvalidConfig, cfg.EgressProxyTimeout)
 	case cfg.ExporterImage == "":

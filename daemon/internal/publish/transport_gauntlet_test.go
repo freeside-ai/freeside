@@ -89,3 +89,54 @@ func TestTransportCarriesHostileHandoffCleanly(t *testing.T) {
 		t.Error("the remote repository's config changed during the flow")
 	}
 }
+
+// The workspace-seed shape, and the reason it is a separate method. Ward
+// seeds a writer's workspace from this directory and its in-VM observer
+// compares the raw worktree with HEAD, so the repository-only shape above is
+// dirty (every tracked path missing) and the run is refused before any writer
+// starts. This pins the three properties that observer checks: the tracked
+// files exist with their committed bytes, nothing differs from HEAD, and HEAD
+// is still detached at the exact base.
+func TestFetchBaseWorktreeMaterializesTheCommittedTree(t *testing.T) {
+	remote := newLocalRemote(t)
+	dir := checkoutDir(t)
+	co, err := remote.transport.FetchBaseWorktree(
+		t.Context(), remote.repo, "main", remote.baseSHA, dir,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(co.Dir(), "a.txt"))
+	if err != nil {
+		t.Fatalf("tracked file is missing from the seeded worktree: %v", err)
+	}
+	if string(body) != "one\n" {
+		t.Errorf("seeded a.txt = %q, want the committed bytes", body)
+	}
+	if status := gitOut(t, co.Dir(), "status", "--porcelain"); status != "" {
+		t.Errorf("seeded worktree is dirty:\n%s", status)
+	}
+	if head := gitOut(t, co.Dir(), "rev-parse", "HEAD"); head != remote.baseSHA {
+		t.Errorf("seeded HEAD = %s, want the exact base %s", head, remote.baseSHA)
+	}
+	if ref := gitOut(t, co.Dir(), "rev-parse", "--symbolic-full-name", "HEAD"); ref != "HEAD" {
+		t.Errorf("seeded HEAD is attached to %s, want detached", ref)
+	}
+}
+
+// The import lane keeps the repository-only shape: it applies an export over
+// the checkout, so files nobody put there would be inherited into the
+// candidate commit. Pinning both shapes is what keeps the two lanes from
+// silently collapsing into one.
+func TestFetchBaseLeavesTheWorktreeUnmaterialized(t *testing.T) {
+	remote := newLocalRemote(t)
+	co, err := remote.transport.FetchBase(
+		t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(co.Dir(), "a.txt")); !os.IsNotExist(err) {
+		t.Errorf("import checkout materialized a tracked file: %v", err)
+	}
+}

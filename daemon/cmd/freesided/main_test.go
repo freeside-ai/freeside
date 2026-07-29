@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -13,10 +14,15 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -52,6 +58,204 @@ func TestRunServesSignetAndStops(t *testing.T) {
 	cancel()
 	if err := h.Wait(ctx); err != nil {
 		t.Fatalf("Wait after cancellation: %v", err)
+	}
+}
+
+func TestHoldRetryableClaudeRecovery(t *testing.T) {
+	t.Parallel()
+	for _, held := range []error{
+		fmt.Errorf("journal unavailable: %w", claude.ErrRecoveryRetryable),
+		fmt.Errorf("checkpoint drift: %w", domain.ErrCheckpointNotCurrent),
+		fmt.Errorf("conformance drift: %w", domain.ErrAdmissionConfigurationMismatch),
+	} {
+		if err := holdRetryableClaudeRecovery(held); err != nil {
+			t.Fatalf("held recovery remained startup-fatal: %v", err)
+		}
+	}
+	permanent := errors.New("intent authentication failed")
+	if err := holdRetryableClaudeRecovery(permanent); !errors.Is(err, permanent) {
+		t.Fatalf("permanent recovery error = %v, want %v", err, permanent)
+	}
+}
+
+func TestStoreConformanceRecorderPersistsConfigurationBoundPass(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+		Backend: domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome: domain.ConformancePassed,
+		Capabilities: domain.NewCapabilitySnapshot(
+			exec.CapDetachableWorkspace,
+			exec.CapPostExitExport,
+			exec.CapReadOnlyRemount,
+			exec.CapNetworklessExport,
+			exec.CapEnforcedProviderEgress,
+		),
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("ab", 32)),
+		ProvedAt:            time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("NewBackendConformance: %v", err)
+	}
+	if err := (storeConformanceRecorder{store: st}).RecordBackendConformance(ctx, record); err != nil {
+		t.Fatalf("RecordBackendConformance: %v", err)
+	}
+
+	var (
+		got   domain.BackendConformance
+		found bool
+	)
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		got, found, err = tx.LatestBackendConformance(
+			ctx, domain.BackendFreshVMReadOnlyVolumeHandoff,
+		)
+		return err
+	}); err != nil {
+		t.Fatalf("LatestBackendConformance: %v", err)
+	}
+	if !found || got.Generation == 0 || got.ConfigurationDigest != record.ConfigurationDigest ||
+		got.Outcome != domain.ConformancePassed {
+		t.Fatalf("stored conformance = (%+v, found=%v), want configuration-bound pass", got, found)
+	}
+}
+
+func TestResolvedPathAllowlistBindsTheAdmittedPolicy(t *testing.T) {
+	t.Parallel()
+	newPolicy := func(t *testing.T, key, value string) domain.ResolvedPolicy {
+		t.Helper()
+		policy, err := domain.NewResolvedPolicy("run-policy", []domain.PolicyKey{{
+			Key: key, Value: value,
+			Provenance: domain.KeyProvenance{
+				Source: domain.ProvenanceOverride,
+				Digest: domain.Digest("sha256:" + strings.Repeat("ab", 32)),
+			},
+		}})
+		if err != nil {
+			t.Fatalf("NewResolvedPolicy: %v", err)
+		}
+		return policy
+	}
+
+	canonical := newPolicy(t, "paths", "daemon/**, docs/**")
+	got, err := resolvedPathAllowlist(
+		canonical, canonical.Digest, []string{"daemon/**", "docs/**"},
+	)
+	if err != nil {
+		t.Fatalf("canonical allowlist: %v", err)
+	}
+	if !slices.Equal(got, []string{"daemon/**", "docs/**"}) {
+		t.Fatalf("canonical allowlist = %q", got)
+	}
+	missingPaths := newPolicy(t, "egress", "provider_only")
+	matchEverything := newPolicy(t, "paths", "**/*")
+
+	// A digest substitution is record corruption and must stay fatal. Every
+	// other refusal compares the durable policy against this daemon's own
+	// -allowed-paths, so it must be a mutable policy verdict the engine holds
+	// on: dispatch returns the error up to Engine.Run, and a fatal one there
+	// ends the reconcile loop, so a single mismatched work item would exit
+	// the daemon on every restart with no way to reconfigure out of it.
+	tests := []struct {
+		name       string
+		policy     domain.ResolvedPolicy
+		digest     domain.Digest
+		configured []string
+		want       error
+		holds      bool
+	}{
+		{"digest substitution", canonical, domain.Digest("sha256:" + strings.Repeat("cd", 32)), []string{"daemon/**", "docs/**"}, domain.ErrParentKeyMismatch, false},
+		{"broader daemon configuration", canonical, canonical.Digest, []string{"daemon/**", "docs/**", "scripts/**"}, domain.ErrPathBoundaryMismatch, true},
+		{"different run policy", canonical, canonical.Digest, []string{"daemon/**"}, domain.ErrPathBoundaryMismatch, true},
+		{"reordered run policy", canonical, canonical.Digest, []string{"docs/**", "daemon/**"}, domain.ErrPathBoundaryMismatch, true},
+		{"missing paths", missingPaths, missingPaths.Digest, []string{"daemon/**", "docs/**"}, domain.ErrPathBoundaryMismatch, true},
+		{"match everything", matchEverything, matchEverything.Digest, []string{"**/*"}, domain.ErrPathBoundaryMismatch, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := resolvedPathAllowlist(tc.policy, tc.digest, tc.configured)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("resolvedPathAllowlist error = %v, want %v", err, tc.want)
+			}
+			if got := engine.MutableAdmissionPolicyRefusal(err); got != tc.holds {
+				t.Errorf("engine holds dispatch = %v, want %v (fatal here exits the daemon)", got, tc.holds)
+			}
+		})
+	}
+}
+
+// A policy carrying no enforceable boundary is refused at the door. The start
+// gate can only hold on it, and no -allowed-paths value satisfies a policy
+// with no paths key, so a durable run built from one would be held forever.
+func TestSubmittedPathBoundaryRefusesAnUnenforceablePolicy(t *testing.T) {
+	t.Parallel()
+	key := func(t *testing.T, name, value string) domain.ResolvedPolicy {
+		t.Helper()
+		policy, err := domain.NewResolvedPolicy("run-boundary", []domain.PolicyKey{{
+			Key: name, Value: value,
+			Provenance: domain.KeyProvenance{
+				Source: domain.ProvenanceOverride,
+				Digest: domain.Digest("sha256:" + strings.Repeat("ab", 32)),
+			},
+		}})
+		if err != nil {
+			t.Fatalf("NewResolvedPolicy: %v", err)
+		}
+		return policy
+	}
+	if err := submittedPathBoundary(key(t, "paths", "daemon/**, docs/**")); err != nil {
+		t.Fatalf("explicit declared paths: %v", err)
+	}
+	for _, tc := range []struct{ name, keyName, value string }{
+		{"no paths key", "egress", "provider_only"},
+		{"match everything", "paths", "**/*"},
+		{"leading glob segment", "paths", "*/**"},
+		{"empty", "paths", ""},
+		{"malformed glob", "paths", "daemon/[abc"},
+		{"parent escape", "paths", "../outside/**"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := submittedPathBoundary(
+				key(t, tc.keyName, tc.value),
+			); !errors.Is(err, domain.ErrPathBoundaryMismatch) {
+				t.Errorf("submittedPathBoundary(%q) = %v, want ErrPathBoundaryMismatch",
+					tc.value, err)
+			}
+		})
+	}
+}
+
+type recordingSessionCloser struct {
+	calls int
+	err   error
+}
+
+func (c *recordingSessionCloser) Close(context.Context) error {
+	c.calls++
+	return c.err
+}
+
+func TestStartupSessionCleanupTransfersOnlyAfterSuccess(t *testing.T) {
+	t.Parallel()
+	closeErr := errors.New("session close failed")
+	failed := &recordingSessionCloser{err: closeErr}
+	if err := closeStartupSessions(false, failed); !errors.Is(err, closeErr) {
+		t.Fatalf("failed-start cleanup = %v, want %v", err, closeErr)
+	}
+	if failed.calls != 1 {
+		t.Fatalf("failed-start close calls = %d, want 1", failed.calls)
+	}
+
+	succeeded := &recordingSessionCloser{}
+	if err := closeStartupSessions(true, succeeded); err != nil {
+		t.Fatalf("successful-start cleanup = %v", err)
+	}
+	if succeeded.calls != 0 {
+		t.Fatalf("successful-start close calls = %d, want daemon ownership", succeeded.calls)
 	}
 }
 
@@ -536,4 +740,88 @@ func TestRunRefusesNonLoopbackBeforeCreatingState(t *testing.T) {
 			t.Errorf("unsafe listener startup created %q: stat error = %v", path, statErr)
 		}
 	}
+}
+
+func TestProductionInputSourceClassifiesOperationalErrorsOnly(t *testing.T) {
+	t.Parallel()
+	blobs, err := signet.NewBlobStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := productionInputSource{blobs: blobs}
+	digest := domain.Digest("sha256:" + strings.Repeat("a", 64))
+
+	if _, err := source.OpenContext(t.Context(), digest); !errors.Is(err, signet.ErrBlobNotFound) ||
+		errors.Is(err, exec.ErrInputUnavailable) {
+		t.Fatalf("missing input = %v, want permanent blob-not-found only", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := source.OpenContext(ctx, digest); !errors.Is(err, exec.ErrInputUnavailable) {
+		t.Fatalf("canceled input open = %v, want retryable input class", err)
+	}
+
+	readFailure := retryableInputReadCloser{ReadCloser: failingInputReadCloser{}}
+	if _, err := readFailure.Read(make([]byte, 1)); !errors.Is(err, exec.ErrInputUnavailable) {
+		t.Fatalf("input read = %v, want retryable input class", err)
+	}
+	if err := readFailure.Close(); !errors.Is(err, exec.ErrInputUnavailable) {
+		t.Fatalf("input close = %v, want retryable input class", err)
+	}
+}
+
+func TestClassifyTransportSeedError(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		err       error
+		retryable bool
+		refused   bool
+	}{
+		{"missing base", publish.ErrRemoteMissingBase, false, true},
+		{"git auth", &publish.TransportGitError{Refusal: publish.RefusalAuth}, false, true},
+		{"API unauthorized", &publish.APIError{Status: http.StatusUnauthorized}, false, true},
+		{"API forbidden", &publish.APIError{Status: http.StatusForbidden}, false, true},
+		{"API missing", &publish.APIError{Status: http.StatusNotFound}, false, true},
+		{"API rate limit", &publish.APIError{Status: http.StatusTooManyRequests}, true, false},
+		{"API server failure", &publish.APIError{Status: http.StatusInternalServerError}, true, false},
+		{"ambiguous transport failure", errors.New("temporary network failure"), true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := classifyTransportSeedError(tc.err)
+			if got := errors.Is(err, claude.ErrSeedRetryable); got != tc.retryable {
+				t.Fatalf("classifyTransportSeedError(%v) retryable = %v, want %v",
+					tc.err, got, tc.retryable)
+			}
+			if got := errors.Is(err, claude.ErrSeedRefused); got != tc.refused {
+				t.Fatalf("classifyTransportSeedError(%v) refused = %v, want %v",
+					tc.err, got, tc.refused)
+			}
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("classified error %v does not retain %v", err, tc.err)
+			}
+		})
+	}
+	for _, permanent := range []error{
+		publish.ErrNoAppCredentials,
+		publish.ErrCredentialPermissions,
+		publish.ErrNoInstallation,
+		publish.ErrInstallationGrantUntrusted,
+		publish.ErrGrantMismatch,
+	} {
+		if err := classifyTransportSeedError(permanent); !errors.Is(err, claude.ErrSeedRefused) {
+			t.Errorf("credential error %v classified as %v, want definitive refusal",
+				permanent, err)
+		}
+	}
+}
+
+type failingInputReadCloser struct{}
+
+func (failingInputReadCloser) Read([]byte) (int, error) {
+	return 0, errors.New("fixture read failure")
+}
+
+func (failingInputReadCloser) Close() error {
+	return errors.New("fixture close failure")
 }

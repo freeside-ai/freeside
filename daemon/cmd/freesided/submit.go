@@ -161,6 +161,14 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: validate resolved policy: %w", err)
 	}
+	// The declared-path boundary is what the runner enforces, and it is
+	// refused at start when it is absent or not an explicit allowlist. Refuse
+	// it here instead: submission is the operator's door and can still say
+	// no, while a run durable without one is a work item the daemon holds
+	// with no configuration change that could ever release it.
+	if err := submittedPathBoundary(resolvedPolicy); err != nil {
+		return submitResult{}, fmt.Errorf("submit: %w", err)
+	}
 	policyBody, err := json.Marshal(resolvedPolicy.Keys)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: encode resolved policy keys: %w", err)

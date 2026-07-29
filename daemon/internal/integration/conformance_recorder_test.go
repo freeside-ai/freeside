@@ -44,10 +44,11 @@ func TestStoreBackedConformanceRecorder(t *testing.T) {
 		t.Fatal("fresh-vm class has no registered ceiling")
 	}
 	record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-		Backend:      domain.BackendFreshVMReadOnlyVolumeHandoff,
-		Outcome:      domain.ConformancePassed,
-		Capabilities: ceiling,
-		ProvedAt:     time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC),
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformancePassed,
+		ConfigurationDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		Capabilities:        ceiling,
+		ProvedAt:            time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatalf("NewBackendConformance: %v", err)
@@ -66,7 +67,8 @@ func TestStoreBackedConformanceRecorder(t *testing.T) {
 		if !found {
 			t.Fatal("recorded conformance not found")
 		}
-		if got.Generation != 1 || got.Outcome != domain.ConformancePassed {
+		if got.Generation != 1 || got.Outcome != domain.ConformancePassed ||
+			got.ConfigurationDigest != record.ConfigurationDigest {
 			t.Errorf("reconstructed record = %+v, want generation 1, passed", got)
 		}
 		return nil

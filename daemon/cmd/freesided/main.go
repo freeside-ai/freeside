@@ -27,6 +27,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -104,6 +105,24 @@ func main() {
 	publicationProjectID := flags.String("publication-project-id", "project-fake-publication", "publication project id")
 	publicationTitle := flags.String("publication-title", "Publish attended fake candidate", "pull request title")
 	publicationBody := flags.String("publication-body", "", "pull request body")
+	driverMode := flags.String("driver", "fake", "stage driver: fake (1A.0 walking skeleton) or claude (production, #237)")
+	agentImage := flags.String("agent-image", "", "digest-pinned Claude agent image")
+	exporterImage := flags.String("exporter-image", "", "digest-pinned export helper image")
+	containerBin := flags.String("container-bin", "container", "Apple container CLI path")
+	seedRoot := flags.String("seed-root", "", "daemon-owned exact-base checkout root")
+	stateDir := flags.String("state-dir", "", "production driver state directory")
+	providerEndpoints := flags.String("provider-endpoints", "api.anthropic.com:443", "comma-separated provider host:port allowlist")
+	promptPackage := flags.String("prompt-package", "", "trusted prompt-package file (ingested into the artifact store at startup)")
+	vendorInstructions := flags.String("vendor-instructions", "", "host vendor-instruction file (CLAUDE.md)")
+	repo := flags.String("repo", "", "managed owner/name repository")
+	baseRef := flags.String("base-ref", "", "managed repository base branch")
+	baseSHA := flags.String("base-sha", "", "exact 40-character base commit work items run against")
+	allowedPaths := flags.String("allowed-paths", "", "comma-separated candidate path allowlist (required in claude driver mode)")
+	authIdentity := flags.String("auth-identity", "", "provider auth identity work items run under")
+	runConformance := flags.Bool("run-conformance", false,
+		"run and durably record the full ward suite for this exact Claude configuration before admission")
+	var repositoryID repositoryIDFlag
+	flags.Var(&repositoryID, "repository-id", "canonical numeric identity of the managed repository")
 	var backupEncryptionWaiverRepositoryID repositoryIDFlag
 	flags.Var(&backupEncryptionWaiverRepositoryID, "backup-encryption-waiver-repository-id",
 		"temporary Phase 1A.2 backup-encryption waiver for this exact trusted numeric repository ID")
@@ -136,11 +155,38 @@ func main() {
 		}
 		return
 	}
-	h, err := run(ctx, config{
+	daemonConfig := config{
 		DBPath: *dbPath, FakeDriverDir: *driverDir,
 		ListenAddr: *listenAddr, NtfyURL: *ntfyURL, ReconcileInterval: *interval,
 		BackupEncryptionWaiverRepositoryID: backupEncryptionWaiverRepositoryID.Value(),
-	})
+	}
+	switch *driverMode {
+	case "fake":
+	case "claude":
+		id := int64(0)
+		if v := repositoryID.Value(); v != nil {
+			id = *v
+		}
+		daemonConfig.Claude = &claudeDriverConfig{
+			AgentImage: domain.ImageRef(*agentImage), ExporterImage: *exporterImage,
+			ContainerBin: *containerBin, SeedRoot: *seedRoot,
+			StateDir:           *stateDir,
+			ProviderEndpoints:  strings.Split(*providerEndpoints, ","),
+			PromptPackageFile:  *promptPackage,
+			VendorInstructions: *vendorInstructions,
+			Repo:               *repo, RepositoryID: id,
+			BaseRef: *baseRef, BaseSHA: *baseSHA,
+			AuthIdentityID: domain.AuthIdentityID(*authIdentity),
+			AllowedPaths:   splitNonEmpty(*allowedPaths),
+			RunConformance: *runConformance,
+			StateRoot:      *publicationStateDir, CredentialsDir: *publicationCredentialsDir,
+			OperatingMode: domain.ModeUnattended,
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "freesided: -driver %q is not fake or claude\n", *driverMode)
+		os.Exit(2)
+	}
+	h, err := run(ctx, daemonConfig)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
 		os.Exit(1)
@@ -159,6 +205,18 @@ func main() {
 	}
 }
 
+// splitNonEmpty splits a comma-separated flag into its non-empty members,
+// so an unset flag yields no members rather than one empty one.
+func splitNonEmpty(value string) []string {
+	out := []string{}
+	for _, part := range strings.Split(value, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
 type config struct {
 	DBPath                             string
 	FakeDriverDir                      string
@@ -166,18 +224,35 @@ type config struct {
 	NtfyURL                            string
 	ReconcileInterval                  time.Duration
 	BackupEncryptionWaiverRepositoryID *int64
+	// Claude, when set, replaces the permanent fake stage driver with the
+	// production Claude driver and its ward gate (#237). Nil keeps the 1A.0
+	// walking-skeleton composition byte-for-byte.
+	Claude *claudeDriverConfig
 }
 
 func (cfg config) storeOptions() (store.Options, error) {
-	if cfg.BackupEncryptionWaiverRepositoryID == nil {
-		return store.Options{}, nil
+	opts := store.Options{}
+	if cfg.BackupEncryptionWaiverRepositoryID != nil {
+		repositoryID := *cfg.BackupEncryptionWaiverRepositoryID
+		if repositoryID <= 0 {
+			return store.Options{}, fmt.Errorf(
+				"-backup-encryption-waiver-repository-id must be positive, got %d", repositoryID)
+		}
+		opts.BackupEncryptionWaiverRepositoryID = &repositoryID
 	}
-	repositoryID := *cfg.BackupEncryptionWaiverRepositoryID
-	if repositoryID <= 0 {
-		return store.Options{}, fmt.Errorf(
-			"-backup-encryption-waiver-repository-id must be positive, got %d", repositoryID)
+	if cfg.Claude == nil {
+		return opts, nil
 	}
-	return store.Options{BackupEncryptionWaiverRepositoryID: &repositoryID}, nil
+	// The store re-gates every recorded admission against the operator's
+	// policy, so a claude-mode daemon has to configure that policy or its own
+	// admissions are refused at persistence: an unset floor is "no policy
+	// configured", which fails closed, not "no minimum". The floor here is
+	// the same §5.7 unattended minimum the engine admits against.
+	opts.AdmissionFloors = map[domain.OperatingMode]domain.CapabilitySnapshot{
+		cfg.Claude.OperatingMode: unattendedCapabilitySnapshot(),
+	}
+	opts.ApprovedCredentialModes = []domain.CredentialMode{domain.CredentialSubscriptionContained}
+	return opts, nil
 }
 
 type readiness struct {
@@ -185,19 +260,24 @@ type readiness struct {
 	PairingCode string `json:"pairing_code"`
 }
 
+type sessionCloser interface {
+	Close(context.Context) error
+}
+
 type daemon struct {
-	store       *store.Store
-	attention   *signet.Service
-	workflow    *engine.Engine
-	driver      *fake.StageDriver
-	listener    net.Listener
-	server      *http.Server
-	cancel      context.CancelFunc
-	errs        chan error
-	wg          sync.WaitGroup
-	closeOnce   sync.Once
-	closeErr    error
-	pairingCode string
+	store         *store.Store
+	attention     *signet.Service
+	workflow      *engine.Engine
+	driver        *fake.StageDriver
+	listener      net.Listener
+	server        *http.Server
+	cancel        context.CancelFunc
+	sessionCloser sessionCloser
+	errs          chan error
+	wg            sync.WaitGroup
+	closeOnce     sync.Once
+	closeErr      error
+	pairingCode   string
 }
 
 func run(parent context.Context, cfg config) (_ *daemon, err error) {
@@ -230,6 +310,12 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 			_ = listener.Close()
 		}
 	}()
+	ctx, cancel := context.WithCancel(parent)
+	defer func() {
+		if !success {
+			cancel()
+		}
+	}()
 
 	_, statErr := os.Stat(cfg.DBPath)
 	storePreexisting := statErr == nil
@@ -259,6 +345,7 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 			engine.FakePublicationTaskKind:            engine.FakePublicationBackupPayloadDigests,
 			engine.FakePublicationInvocationOwnerKind: engine.FakePublicationInvocationOwnerBackupPayloadDigests,
 			signet.AgentInvocationRequestedKind:       signet.AgentInvocationBackupPayloadDigests,
+			engine.KindProductionInvocationRequested:  engine.ProductionInvocationBackupPayloadDigests,
 			publish.IntentKindReservation:             publish.ReservationBackupPayloadDigests,
 			publish.IntentKindPublication:             publish.PublicationBackupPayloadDigests,
 		})
@@ -275,9 +362,19 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 			_ = st.Close()
 		}
 	}()
-	driver, err := fake.NewStageDriverAt(cfg.FakeDriverDir)
-	if err != nil {
-		return nil, fmt.Errorf("open fake stage driver: %w", err)
+	var startupSessionCloser sessionCloser
+	defer func() {
+		err = errors.Join(err, closeStartupSessions(success, startupSessionCloser))
+	}()
+	// The fake driver's state directory is only claimed in fake mode: the
+	// production composition must not require walking-skeleton state on a
+	// fresh operator machine.
+	var driver *fake.StageDriver
+	if cfg.Claude == nil {
+		driver, err = fake.NewStageDriverAt(cfg.FakeDriverDir)
+		if err != nil {
+			return nil, fmt.Errorf("open fake stage driver: %w", err)
+		}
 	}
 	attention := signet.NewService(st,
 		signet.WithPairingKey(pairingKey),
@@ -291,15 +388,60 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("mint startup pairing code: %w", err)
 	}
-	workflow, err := engine.New(st, attention, autoScriptStageDriver{StageDriver: driver})
-	if err != nil {
-		return nil, err
-	}
-	if _, err := workflow.StartFakeRun(parent, engine.FakeRunSpec{
-		RunID: defaultFakeRunID, ProjectID: defaultFakeProjectID,
-		SpecDigest: "sha256:walking-skeleton-spec", PolicyDigest: "sha256:walking-skeleton-policy",
-	}); err != nil {
-		return nil, fmt.Errorf("seed walking-skeleton run: %w", err)
+	var (
+		workflow     *engine.Engine
+		claudeWiring *claudeComposition
+	)
+	if cfg.Claude == nil {
+		workflow, err = engine.New(st, attention, autoScriptStageDriver{StageDriver: driver})
+		if err != nil {
+			return nil, err
+		}
+		if _, err := workflow.StartFakeRun(parent, engine.FakeRunSpec{
+			RunID: defaultFakeRunID, ProjectID: defaultFakeProjectID,
+			SpecDigest: "sha256:walking-skeleton-spec", PolicyDigest: "sha256:walking-skeleton-policy",
+		}); err != nil {
+			return nil, fmt.Errorf("seed walking-skeleton run: %w", err)
+		}
+	} else {
+		// The waiver is claimed only when the operator configured one for
+		// exactly this repository: the store re-gates it against that same
+		// configuration, so a mismatched claim fails admission rather than
+		// silently proceeding under an exception the operator did not grant.
+		var waiver *domain.BackupEncryptionWaiver
+		if id := cfg.BackupEncryptionWaiverRepositoryID; id != nil && *id == cfg.Claude.RepositoryID {
+			waiver = &domain.BackupEncryptionWaiver{
+				RepositoryID: *id,
+				Reason:       "Phase 1A.2 unattended execution ahead of the encrypted checkpoint (#305).",
+			}
+		}
+		claudeWiring, err = composeClaudeDriver(ctx, st, blobs, *cfg.Claude, waiver)
+		if err != nil {
+			return nil, err
+		}
+		// Reconcile below can resume credential-bearing sessions before every
+		// later startup step has succeeded. Register their awaited cleanup
+		// immediately, while the store they need is still open.
+		startupSessionCloser = claudeWiring.driver
+		stageDriver, err := claudeWiring.stageDriver(blobs)
+		if err != nil {
+			return nil, err
+		}
+		workflow, err = engine.New(st, attention, stageDriver,
+			engine.WithAdmission(claudeWiring.backend, unattendedAdmissionFloor,
+				claudeWiring.env, func() time.Time { return time.Now().UTC() }),
+			engine.WithAdmissionDerivation(claudeWiring.derive),
+		)
+		if err != nil {
+			return nil, err
+		}
+		// Give every orphan its first adoption attempt before the engine loop.
+		// A permanent reconstruction failure stops startup; an operational
+		// retry leaves the intent running so the attempt's later Inspect pass
+		// drives the same recovery again without a process restart.
+		if err := holdRetryableClaudeRecovery(claudeWiring.driver.Reconcile(ctx)); err != nil {
+			return nil, fmt.Errorf("reconcile orphaned handoffs: %w", err)
+		}
 	}
 	localBackups, err := localBackupFiles.NewProducer(st)
 	if err != nil {
@@ -309,7 +451,6 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithCancel(parent)
 	d := &daemon{
 		store: st, attention: attention, workflow: workflow, driver: driver,
 		listener: listener, cancel: cancel, errs: make(chan error, 3), pairingCode: pairingCode,
@@ -317,6 +458,9 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 			Handler:           signet.NewHTTPHandler(attention, signet.NewRequestAuthorizer(st)),
 			ReadHeaderTimeout: 5 * time.Second,
 		},
+	}
+	if claudeWiring != nil {
+		d.sessionCloser = claudeWiring.driver
 	}
 	d.wg.Add(3)
 	go func() {
@@ -337,6 +481,21 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 	}()
 	success = true
 	return d, nil
+}
+
+func closeStartupSessions(success bool, closer sessionCloser) error {
+	if success || closer == nil {
+		return nil
+	}
+	return closer.Close(context.Background())
+}
+
+func holdRetryableClaudeRecovery(err error) error {
+	if errors.Is(err, claude.ErrRecoveryRetryable) ||
+		engine.MutableAdmissionPolicyRefusal(err) {
+		return nil
+	}
+	return err
 }
 
 // autoScriptStageDriver gives the standalone 1A.0 daemon a complete fake
@@ -401,11 +560,18 @@ func (d *daemon) Wait(ctx context.Context) error {
 func (d *daemon) Close() error {
 	d.closeOnce.Do(func() {
 		d.cancel()
+		var driverErr error
+		if d.sessionCloser != nil {
+			// A credential-bearing external writer is more important than
+			// bounded process-exit latency. Ward owns bounded teardown; do not
+			// close its store or exit while a session still uses its lease.
+			driverErr = d.sessionCloser.Close(context.Background())
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		shutdownErr := d.server.Shutdown(ctx)
 		d.wg.Wait()
-		d.closeErr = errors.Join(shutdownErr, d.store.Close())
+		d.closeErr = errors.Join(driverErr, shutdownErr, d.store.Close())
 	})
 	return d.closeErr
 }

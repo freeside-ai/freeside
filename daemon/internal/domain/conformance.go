@@ -3,6 +3,8 @@ package domain
 import (
 	"fmt"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 // RunnerBackendClass names an isolation class a runner backend realizes and
@@ -97,11 +99,11 @@ func (o ConformanceOutcome) valid() bool {
 
 // BackendConformance is the durable record of what a named backend's last
 // completed full conformance pass proved (§5.7, issues #327/#320): the class,
-// the proven capability declaration, and when the proof completed. The store
-// appends one per completed pass and the newest record per backend is the
-// backend's current declaration; an unattended admission is gated against it
-// at the write boundary, so a writer's in-process claim is never the thing
-// that admits.
+// exact normalized backend configuration, proven capability declaration, and
+// completion time. The store appends one per completed pass and the newest
+// record per backend is the backend's current declaration; an unattended
+// admission is gated against it at the write boundary, so a writer's
+// in-process claim is never the thing that admits.
 //
 // The record is a ceiling, never a grant: holding a passed record admits
 // nothing by itself, because the live capability floor still has to be met by
@@ -110,6 +112,12 @@ func (o ConformanceOutcome) valid() bool {
 type BackendConformance struct {
 	Backend RunnerBackendClass `json:"backend"`
 	Outcome ConformanceOutcome `json:"outcome"`
+	// ConfigurationDigest binds the proof to the normalized runtime,
+	// exporter, endpoint, and mount-path configuration the suite exercised.
+	// The all-zero digest is reserved for rows migrated from the pre-binding
+	// schema; those rows remain readable audit history but cannot admit or
+	// restore a backend.
+	ConfigurationDigest Digest `json:"configuration_digest"`
 	// Capabilities is the proven declaration of a passed pass, and nil exactly
 	// when the pass failed: a failed pass proves nothing, and letting it keep
 	// a base set would let a broken backend keep admitting.
@@ -129,41 +137,65 @@ type BackendConformance struct {
 // BackendConformance. It has no Generation field: the generation is the
 // store's append identity, so no input path can set it.
 type BackendConformanceInput struct {
-	Backend      RunnerBackendClass
-	Outcome      ConformanceOutcome
-	Capabilities CapabilitySnapshot
-	ProvedAt     time.Time
+	Backend             RunnerBackendClass
+	Outcome             ConformanceOutcome
+	ConfigurationDigest Digest
+	Capabilities        CapabilitySnapshot
+	ProvedAt            time.Time
 }
 
+// UnboundBackendConfigurationDigest marks conformance rows migrated from the
+// schema that predated configuration binding. It is a valid content-address
+// shape so old audit rows remain reconstructable, but constructors and write
+// boundaries refuse it as authority.
+const UnboundBackendConfigurationDigest Digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
 // NewBackendConformance builds a validated record in canonical form: the
-// capability snapshot is canonicalized and detached from the caller's slice
-// and the timestamp is normalized to UTC.
+// capability snapshot is canonicalized and detached from the caller's slice,
+// the configuration must be concretely bound, and the timestamp is normalized
+// to UTC.
 func NewBackendConformance(in BackendConformanceInput) (BackendConformance, error) {
 	c := BackendConformance{
-		Backend:      in.Backend,
-		Outcome:      in.Outcome,
-		Capabilities: NewCapabilitySnapshot(in.Capabilities...),
-		ProvedAt:     in.ProvedAt.UTC(),
+		Backend:             in.Backend,
+		Outcome:             in.Outcome,
+		ConfigurationDigest: in.ConfigurationDigest,
+		Capabilities:        NewCapabilitySnapshot(in.Capabilities...),
+		ProvedAt:            in.ProvedAt.UTC(),
 	}
 	if err := c.Validate(); err != nil {
 		return BackendConformance{}, err
 	}
+	if !c.ConfigurationBound() {
+		return BackendConformance{}, fmt.Errorf(
+			"backend conformance configuration: %w", ErrConformanceConfigurationUnbound)
+	}
 	return c, nil
 }
 
-// Validate checks structure and the class ceiling. The ceiling lives here
-// rather than in a transaction-scoped gate because it is compiled-in
-// vocabulary, not live policy: no store state can change what a class's suite
-// could ever prove, so every boundary that decodes or accepts a record
-// enforces it identically. Generation is deliberately unconstrained: zero
-// means not yet persisted, and the store stamps and range-checks the
-// persisted value itself.
+// ConfigurationBound distinguishes a proof produced for a concrete active
+// backend configuration from migrated pre-binding audit history.
+func (c BackendConformance) ConfigurationBound() bool {
+	return c.ConfigurationDigest != "" &&
+		c.ConfigurationDigest != UnboundBackendConfigurationDigest
+}
+
+// Validate checks structure, configuration-digest shape, and the class
+// ceiling. The ceiling lives here rather than in a transaction-scoped gate
+// because it is compiled-in vocabulary, not live policy: no store state can
+// change what a class's suite could ever prove, so every boundary that decodes
+// or accepts a record enforces it identically. Generation is deliberately
+// unconstrained: zero means not yet persisted, and the store stamps and
+// range-checks the persisted value itself.
 func (c BackendConformance) Validate() error {
 	if !c.Backend.valid() {
 		return fmt.Errorf("backend conformance class %q: %w", c.Backend, ErrInvalidRunnerBackendClass)
 	}
 	if !c.Outcome.valid() {
 		return fmt.Errorf("backend conformance outcome %q: %w", c.Outcome, ErrInvalidConformanceOutcome)
+	}
+	if !contentaddr.Valid(string(c.ConfigurationDigest)) {
+		return fmt.Errorf("backend conformance configuration digest %q: %w",
+			c.ConfigurationDigest, ErrConformanceConfigurationUnbound)
 	}
 	if err := c.Capabilities.Validate(); err != nil {
 		return fmt.Errorf("backend conformance capabilities: %w", err)
