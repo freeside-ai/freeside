@@ -430,11 +430,28 @@ func TestSpecDigest(t *testing.T) {
 	if !sha256HexPattern.MatchString(a) {
 		t.Errorf("digest %q is not sha256 hex", a)
 	}
+	legacy, err := legacySpecDigest(testHandoffSpec())
+	if err != nil {
+		t.Fatalf("legacySpecDigest: %v", err)
+	}
+	const historicalFixtureDigest = "6e54b3fbe20c79fd90695024d574c07719b8aba035085725662814836e3b00dc"
+	if legacy != historicalFixtureDigest {
+		t.Errorf("legacy digest = %q, want historical fixture %q", legacy, historicalFixtureDigest)
+	}
+	if legacy == a {
+		t.Error("current and historical fixture encodings digest identically")
+	}
 
 	mutations := map[string]func(*HandoffSpec){
 		"run id":         func(s *HandoffSpec) { s.RunID = "other-run" },
 		"agent command":  func(s *HandoffSpec) { s.Agent.Command = []string{"sh", "-c", "false"} },
 		"mount writable": func(s *HandoffSpec) { s.Agent.CredentialMounts[0].Writable = true },
+		"vendor instructions": func(s *HandoffSpec) {
+			s.Agent.VendorInstructions.Body = []byte("changed after admission")
+		},
+		"instruction boundary": func(s *HandoffSpec) {
+			s.Agent.InstructionPolicy.Boundaries = []InvocationBoundary{InvocationStartup}
+		},
 		"lease claim": func(s *HandoffSpec) {
 			s.AuthStoreLease = &AuthStoreLeaseClaim{AuthIdentityID: "id", Holder: "h"}
 		},

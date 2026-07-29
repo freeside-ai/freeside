@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,7 +27,13 @@ func (stageInputBackend) Capabilities() exec.CapabilitySet {
 func TestWithAdmissionRejectsNonCanonicalPromptDigest(t *testing.T) {
 	option := WithAdmission(
 		stageInputBackend{}, nil,
-		AdmissionEnvironment{PromptPackageDigest: "sha256:not-hex"},
+		AdmissionEnvironment{
+			PromptPackageDigest: "sha256:not-hex",
+			VendorInstructions: VendorInstructionConfig{
+				Vendor:   domain.AgentVendorClaude,
+				HostPath: "/nonexistent/freeside-test-claude-instructions",
+			},
+		},
 		time.Now,
 	)
 	if err := option(&Engine{}); err == nil {
@@ -97,6 +104,11 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 		t.Fatal(err)
 	}
 	identity := domain.AuthIdentityID("auth-1")
+	vendorBody := []byte("# Host instructions\nStay inside the declared scope.\n")
+	vendorPath := filepath.Join(t.TempDir(), "CLAUDE.md")
+	if err := os.WriteFile(vendorPath, vendorBody, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	e := &Engine{
 		store: st, signet: attention,
 		admission: &admitter{
@@ -108,6 +120,10 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 				EgressProfile:       domain.EgressProviderOnly,
 				ImageRef:            domain.ImageRef("agent@sha256:" + strings.Repeat("ab", 32)),
 				PromptPackageDigest: digest("3"),
+				VendorInstructions: VendorInstructionConfig{
+					Vendor:   domain.AgentVendorClaude,
+					HostPath: vendorPath,
+				},
 				Base: domain.BaseRevision{
 					Repo: "owner/repo", RepositoryID: 1,
 					BaseRef: "refs/heads/main", BaseSHA: "deadbeef",
@@ -144,6 +160,35 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 	}
 	if admission.StageInputs.ConversationDigest == nil {
 		t.Fatal("conversation-bound admission has no conversation digest")
+	}
+	if admission.StageInputs.VendorInstructions == nil ||
+		admission.StageInputs.VendorInstructions.Digest == nil {
+		t.Fatal("admission did not bind the configured host vendor instructions")
+	}
+	vendorReader, err := blobs.Open(*admission.StageInputs.VendorInstructions.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedVendor, readErr := io.ReadAll(vendorReader)
+	if err := errors.Join(readErr, vendorReader.Close()); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(storedVendor, vendorBody) {
+		t.Fatal("stored vendor instructions differ from admitted host bytes")
+	}
+	if err := os.WriteFile(vendorPath, []byte("changed after admission\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	replayedVendor, err := blobs.Open(*admission.StageInputs.VendorInstructions.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayedBody, readErr := io.ReadAll(replayedVendor)
+	if err := errors.Join(readErr, replayedVendor.Close()); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(replayedBody, vendorBody) {
+		t.Fatal("host drift changed the admitted vendor-instruction replay")
 	}
 	wantDigest, wantBody, err := conversation.PrefixContent(1)
 	if err != nil {

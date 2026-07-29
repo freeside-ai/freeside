@@ -710,7 +710,7 @@ before the Phase 1A exit; the doctor (§10) packages its encryption check.
 Bootstrap exception: SwiftUI work is exempt until a macOS execution class
 exists.
 
-### 5.8 Control-plane trust
+### 5.8 Control-Plane Trust
 
 The following are control-plane content:
 
@@ -721,12 +721,28 @@ The following are control-plane content:
 - materiality rules; and
 - vendor auto-loaded instructions.
 
-Freeside loads them only from an approved default-branch commit. Every running
-stage snapshots the trusted configuration digests. Copies inside an agent
-workspace are untrusted data.
+Freeside loads every class except host vendor instructions only from an
+approved default-branch commit. Every running stage snapshots the trusted
+configuration digests. Copies inside an agent workspace are untrusted data.
 
-Vendor instructions use overlays from the trusted base. Agent-modified
-instruction files remain candidate diff content and are always risk-flagged.
+Host vendor instructions are the narrow second trust class. At admission,
+Freeside snapshots the exact regular-file bytes reached through the configured
+operator-host path (the final path may be a symlink), records their content
+digest as a role distinct from the stage prompt, and stores those bytes in the
+artifact closure. A genuinely missing path records explicit absence; a
+dangling, unreadable, non-regular, unstable, or oversized source fails
+admission. The live host path is never mounted. Materialization re-verifies the
+recorded digest, then ward places only the admitted file, or an empty overlay
+for admitted absence, read-only at the vendor-native user-instruction path
+outside the workspace. No neighboring host configuration, credentials,
+settings, hooks, tools, or permissions inherit this trust.
+
+Repository vendor instructions remain default-branch control-plane content.
+The invocation contract resolves every auto-loaded repository instruction from
+the exact trusted base on startup, recovery, resume, and child-process launch;
+the writable candidate workspace is not a valid instruction source at any of
+those boundaries. Agent-modified instruction files remain candidate diff
+content and are always risk-flagged.
 
 **Reviewer-instruction poisoning is publish-blocking.** In the ordinary
 workflow, Freeside blocks every reviewer-instruction path, including

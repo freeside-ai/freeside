@@ -18,6 +18,7 @@ package ward
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -399,6 +400,12 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 	egressProbe := providerEgressProbeScript(cfg.ProviderEndpoints)
 	liveDaemon := startLiveFreesided(t)
 	hostIsolationProbe := hostServiceIsolationProbeScript(liveDaemon.port)
+	instructionBody := []byte("FREESIDE_VENDOR_INSTRUCTION_SENTINEL\n")
+	instructionSum := sha256.Sum256(instructionBody)
+	instructionProbe := "test \"$(cat /root/.claude/CLAUDE.md)\" = " +
+		shellQuote(strings.TrimSpace(string(instructionBody))) + " && " +
+		"test \"$(find /root/.claude -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')\" = 1 && " +
+		"if printf poisoned > /root/.claude/CLAUDE.md 2>/dev/null; then exit 31; fi; "
 
 	res, err := b.Handoff(ctx, HandoffSpec{
 		RunID:           runID,
@@ -407,9 +414,16 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 		Agent: AgentSpec{
 			Image:         liveImage,
 			EgressProfile: domain.EgressProviderOnly,
+			VendorInstructions: VendorInstructions{
+				Vendor:  domain.AgentVendorClaude,
+				Present: true,
+				Digest:  domain.Digest(fmt.Sprintf("sha256:%x", instructionSum)),
+				Body:    instructionBody,
+			},
+			InstructionPolicy: ClaudeInvocationInstructionPolicy(),
 			Command: []string{
 				"sh", "-c",
-				"set -eu; " + hostIsolationProbe + egressProbe +
+				"set -eu; " + hostIsolationProbe + egressProbe + instructionProbe +
 					"cat /credentials/token > /dev/null && " +
 					"echo agent-output > /workspace/result.txt && " +
 					"mkdir -p /workspace/nested && " +
@@ -732,7 +746,13 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 		RunID:           runID,
 		WorkspaceSizeMB: 64,
 		Seed:            WorkspaceSeed{Mode: SeedBaseCheckout, SourceDir: checkout, Base: base},
-		Agent:           AgentSpec{Image: liveImage, Command: []string{"sh", "-c", "true"}, EgressProfile: domain.EgressProviderOnly},
+		Agent: AgentSpec{
+			Image:              liveImage,
+			Command:            []string{"sh", "-c", "true"},
+			EgressProfile:      domain.EgressProviderOnly,
+			VendorInstructions: VendorInstructions{Vendor: domain.AgentVendorClaude},
+			InstructionPolicy:  ClaudeInvocationInstructionPolicy(),
+		},
 	}
 	label, err := newOwnershipLabel()
 	if err != nil {
@@ -1005,6 +1025,10 @@ func TestLiveLeasedMutationAndReadOnlyProbe(t *testing.T) {
 		Agent: AgentSpec{
 			Image:         liveImage,
 			EgressProfile: domain.EgressProviderOnly,
+			VendorInstructions: VendorInstructions{
+				Vendor: domain.AgentVendorClaude,
+			},
+			InstructionPolicy: ClaudeInvocationInstructionPolicy(),
 			Command: []string{
 				"sh", "-c",
 				// The leased store is readable and writable: refresh it. The

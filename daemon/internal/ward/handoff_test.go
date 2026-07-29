@@ -3,6 +3,7 @@ package ward
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 // handoffFixture wires a fake runtime to a backend with deterministic
@@ -143,6 +146,78 @@ func TestHandoffSuccess(t *testing.T) {
 	fx.assertReaped(t)
 }
 
+func TestHandoffVendorInstructionTopology(t *testing.T) {
+	fx := newHandoffFixture(t)
+	hs := testHandoffSpec()
+	body := []byte("# Host working principles\nOnly the admitted bytes.\n")
+	sum := sha256.Sum256(body)
+	hs.Agent.VendorInstructions = VendorInstructions{
+		Vendor:  domain.AgentVendorClaude,
+		Present: true,
+		Digest:  domain.Digest(fmt.Sprintf("sha256:%x", sum)),
+		Body:    body,
+	}
+	names := namesFor(hs.RunID)
+	var agentSpec, exporterSpec ContainerSpec
+	fx.rt.onCreateContainer = func(spec ContainerSpec) error {
+		switch spec.Name {
+		case names.Agent:
+			agentSpec = cloneContainerSpec(spec)
+		case names.Exporter:
+			exporterSpec = cloneContainerSpec(spec)
+		}
+		return nil
+	}
+	fx.rt.onCopyIntoContainer = func(id, hostDir, targetDir string) error {
+		if id != names.InstructionSeeder || targetDir != instructionStageDir {
+			return nil
+		}
+		entries, err := os.ReadDir(hostDir)
+		if err != nil {
+			return err
+		}
+		if len(entries) != 1 || entries[0].Name() != instructionFileName {
+			return fmt.Errorf("instruction snapshot entries = %v, want only %s",
+				entries, instructionFileName)
+		}
+		got, err := os.ReadFile( //nolint:gosec // fake-runtime callback receives a gate-owned test directory
+			filepath.Join(hostDir, instructionFileName),
+		)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(got, body) {
+			return fmt.Errorf("instruction snapshot bytes changed")
+		}
+		return nil
+	}
+
+	res, err := fx.backend(t).Handoff(context.Background(), hs)
+	if err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(res.ExportDir) })
+
+	if len(agentSpec.Mounts) != 3 {
+		t.Fatalf("agent mounts = %+v, want workspace, credential, instructions", agentSpec.Mounts)
+	}
+	instructions := agentSpec.Mounts[2]
+	if instructions.Source != names.Instructions ||
+		instructions.Target != claudeInstructionMountTarget ||
+		!instructions.ReadOnly {
+		t.Errorf("instruction mount = %+v, want admitted volume read-only at %s",
+			instructions, claudeInstructionMountTarget)
+	}
+	if len(exporterSpec.Mounts) != 1 ||
+		exporterSpec.Mounts[0].Source != names.Workspace {
+		t.Errorf("exporter mounts = %+v, want only the candidate workspace", exporterSpec.Mounts)
+	}
+	if got := fx.rt.instructionState[names.Instructions]; !bytes.Equal(got, body) {
+		t.Errorf("materialized instruction bytes = %q, want exact admitted bytes", got)
+	}
+	fx.assertReaped(t)
+}
+
 func TestHandoffRejectsUnenforcedEgress(t *testing.T) {
 	fx := newHandoffFixture(t)
 	fx.rt.onInspectNetwork = func(_ string, report NetworkReport) (NetworkReport, error) {
@@ -247,7 +322,7 @@ func TestArchiveCapWriterBoundary(t *testing.T) {
 
 func TestHandoffRootFSArchiveCap(t *testing.T) {
 	fx := newHandoffFixture(t)
-	fx.cfg.MaxArchiveBytes = 1024
+	fx.cfg.MaxArchiveBytes = 2048
 	_, err := fx.run(t)
 	wantCheckFailure(t, err, CheckExportVerification)
 	fx.assertReaped(t)
@@ -374,7 +449,12 @@ func TestHandoffSeedsBeforeTheWriterStarts(t *testing.T) {
 	// Both copies land between the seeder's start and its stop, in order: the
 	// checkout first, the completion sentinel only once it is whole.
 	fx.rt.mu.Lock()
-	copies := append([]fakeCopy(nil), fx.rt.copies...)
+	var copies []fakeCopy
+	for _, copy := range fx.rt.copies {
+		if copy.id == names.Seeder {
+			copies = append(copies, copy)
+		}
+	}
 	fx.rt.mu.Unlock()
 	if len(copies) != 2 {
 		t.Fatalf("recorded %d copies, want 2 (staged checkout, then sentinel)", len(copies))
@@ -418,7 +498,12 @@ func TestHandoffBlankSeedTouchesNoSeeder(t *testing.T) {
 		}
 	}
 	fx.rt.mu.Lock()
-	n := len(fx.rt.copies)
+	n := 0
+	for _, copy := range fx.rt.copies {
+		if copy.id == names.Seeder {
+			n++
+		}
+	}
 	fx.rt.mu.Unlock()
 	if n != 0 {
 		t.Errorf("blank seed performed %d copies, want 0", n)
@@ -1099,8 +1184,13 @@ func TestHandoffUnrelatedDuplicateSummariesDoNotBlockTeardown(t *testing.T) {
 // the runtime cannot be listed, rather than trusting the delete call.
 func TestHandoffListContainersError(t *testing.T) {
 	fx := newHandoffFixture(t)
+	listCalls := 0
 	fx.rt.onListContainers = func([]ContainerSummary) ([]ContainerSummary, error) {
-		return nil, errors.New("apiserver down")
+		listCalls++
+		if listCalls == 3 {
+			return nil, errors.New("apiserver down")
+		}
+		return []ContainerSummary{}, nil
 	}
 	_, err := fx.run(t)
 	wantCheckFailure(t, err, CheckWriterTermination)
@@ -1683,11 +1773,11 @@ func TestHandoffOwnedContainerReapedWhenListFails(t *testing.T) {
 		unknownState       bool
 		stopErrorAfterStop bool
 	}{
-		{name: "agent unknown state", containerID: names.Agent, failListCall: 1, unknownState: true},
-		// The agent's ordinary absence proof is the first list call; the
-		// exporter teardown listing is the second.
-		{name: "exporter unknown state", containerID: names.Exporter, failListCall: 2, unknownState: true},
-		{name: "stop errors after stopping", containerID: names.Agent, failListCall: 1, stopErrorAfterStop: true},
+		{name: "agent unknown state", containerID: names.Agent, failListCall: 3, unknownState: true},
+		// The two instruction-role absence proofs precede the agent's
+		// ordinary absence proof; the exporter teardown listing follows it.
+		{name: "exporter unknown state", containerID: names.Exporter, failListCall: 4, unknownState: true},
+		{name: "stop errors after stopping", containerID: names.Agent, failListCall: 3, stopErrorAfterStop: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1752,11 +1842,10 @@ func TestHandoffAmbiguousContainerReapedWhenListFails(t *testing.T) {
 		id           string
 		failListCall int
 	}{
-		// The agent's ambiguous create fails before any gate listing, so the
-		// teardown reap list is the first. The exporter's create follows the
-		// writer-absence listing, so the reap list is the second.
-		{id: names.Agent, failListCall: 1},
-		{id: names.Exporter, failListCall: 2},
+		// Two instruction-role absence proofs precede the writer. The
+		// exporter's create additionally follows the writer-absence listing.
+		{id: names.Agent, failListCall: 3},
+		{id: names.Exporter, failListCall: 4},
 	}
 	for _, tc := range cases {
 		t.Run(tc.id, func(t *testing.T) {
@@ -1803,7 +1892,7 @@ func TestHandoffAmbiguousContainerLeftWhenListFailsAndUnowned(t *testing.T) {
 	listCalls := 0
 	fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
 		listCalls++
-		if listCalls == 1 {
+		if listCalls == 3 {
 			return nil, errors.New("unrelated malformed list row")
 		}
 		// Strip our label from every later view so the object reads as foreign
@@ -1853,7 +1942,7 @@ func TestHandoffAgentOwnershipDowngradedAfterDeleteUncertainty(t *testing.T) {
 	listCalls := 0
 	fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
 		listCalls++
-		if listCalls == 1 {
+		if listCalls == 3 {
 			// Writer-absence verify: our delete already succeeded, but the full
 			// list errors, so absence cannot be proven this call.
 			return nil, errors.New("unrelated malformed list row")
@@ -2217,7 +2306,7 @@ func TestHandoffReplacementSparedWhenListFails(t *testing.T) {
 		listCalls := 0
 		fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
 			listCalls++
-			if listCalls == 1 {
+			if listCalls == 3 {
 				// The list fails, and the lingering writer's name is replaced
 				// before the fallback inspect observes it.
 				fx.rt.ctrs[names.Agent] = &fakeCtr{created: "external-replacement"}
@@ -2247,7 +2336,7 @@ func TestHandoffReplacementSparedWhenListFails(t *testing.T) {
 		listCalls := 0
 		fx.rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
 			listCalls++
-			if listCalls == 1 {
+			if listCalls == 3 {
 				return nil, errors.New("unrelated malformed list row")
 			}
 			return list, nil
@@ -2401,8 +2490,8 @@ func TestHandoffSleepBudget(t *testing.T) {
 	if _, err := fx.run(t); err != nil {
 		t.Fatalf("Handoff = %v", err)
 	}
-	if *fx.sleeps != 4 {
-		t.Errorf("sleeps = %d, want 4", *fx.sleeps)
+	if *fx.sleeps != 6 {
+		t.Errorf("sleeps = %d, want 6", *fx.sleeps)
 	}
 }
 

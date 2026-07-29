@@ -347,11 +347,16 @@ func TestGolden(t *testing.T) {
 	// unsorted to exercise the constructor's canonicalization.
 	authIdentity := identity.ID
 	conversationDigest := stageDigest("7")
+	vendorDigest := stageDigest("8")
 	stageInputs, err := domain.NewStageInputSnapshot(domain.StageInputSnapshotInput{
-		InputDigest:          stageDigest("1"),
-		SpecificationDigest:  stageDigest("2"),
-		PromptPackageDigest:  stageDigest("3"),
-		PolicyDigest:         resolvedPolicy.Digest,
+		InputDigest:         stageDigest("1"),
+		SpecificationDigest: stageDigest("2"),
+		PromptPackageDigest: stageDigest("3"),
+		PolicyDigest:        resolvedPolicy.Digest,
+		VendorInstructions: &domain.VendorInstructionSnapshot{
+			Vendor: domain.AgentVendorClaude,
+			Digest: &vendorDigest,
+		},
 		ConversationDigest:   &conversationDigest,
 		PriorArtifactDigests: []domain.Digest{stageDigest("4"), stageDigest("5")},
 		ImageInputDigests:    []domain.Digest{stageDigest("6")},

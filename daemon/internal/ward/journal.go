@@ -246,3 +246,45 @@ func specDigest(hs HandoffSpec) (string, error) {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
 }
+
+// legacyAgentSpec and legacyHandoffSpec reproduce the exact exported-field
+// shape and order used before vendor instructions and invocation policy joined
+// AgentSpec. Open records have no explicit schema version, so recovery tests
+// the current digest first and this historical projection second.
+type legacyAgentSpec struct {
+	Image            string
+	Command          []string
+	Env              []string
+	EgressProfile    domain.EgressProfile
+	CredentialMounts []CredentialMount
+}
+
+type legacyHandoffSpec struct {
+	RunID           string
+	WorkspaceSizeMB int64
+	Seed            WorkspaceSeed
+	Agent           legacyAgentSpec
+	AuthStoreLease  *AuthStoreLeaseClaim
+}
+
+func legacySpecDigest(hs HandoffSpec) (string, error) {
+	legacy := legacyHandoffSpec{
+		RunID:           hs.RunID,
+		WorkspaceSizeMB: hs.WorkspaceSizeMB,
+		Seed:            hs.Seed,
+		Agent: legacyAgentSpec{
+			Image:            hs.Agent.Image,
+			Command:          hs.Agent.Command,
+			Env:              hs.Agent.Env,
+			EgressProfile:    hs.Agent.EgressProfile,
+			CredentialMounts: hs.Agent.CredentialMounts,
+		},
+		AuthStoreLease: hs.AuthStoreLease,
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		return "", fmt.Errorf("digest legacy handoff spec: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}

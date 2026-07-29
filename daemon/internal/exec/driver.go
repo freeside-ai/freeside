@@ -119,6 +119,14 @@ func cloneStageInputSnapshot(in *domain.StageInputSnapshot) *domain.StageInputSn
 		return nil
 	}
 	cloned := *in
+	if in.VendorInstructions != nil {
+		vendor := *in.VendorInstructions
+		if in.VendorInstructions.Digest != nil {
+			digest := *in.VendorInstructions.Digest
+			vendor.Digest = &digest
+		}
+		cloned.VendorInstructions = &vendor
+	}
 	if in.ConversationDigest != nil {
 		digest := *in.ConversationDigest
 		cloned.ConversationDigest = &digest

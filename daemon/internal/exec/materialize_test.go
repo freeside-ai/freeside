@@ -187,6 +187,7 @@ func newMaterializeFixture(t *testing.T) materializeFixture {
 		"spec":         []byte("# Approved specification\nImplement the feature.\n"),
 		"prompt":       prompt,
 		"policy":       []byte("scope: daemon/internal/exec\n"),
+		"vendor":       []byte("# Host instructions\nPreserve existing work.\n"),
 		"conversation": []byte(`{"version":"freeside.conversation.prefix/v1","conversation_id":"conv-1","through_sequence":1,"messages":[]}`),
 		"prior":        []byte("prior evidence\n"),
 		"image":        {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'},
@@ -197,11 +198,16 @@ func newMaterializeFixture(t *testing.T) materializeFixture {
 	}
 	inputDigest := contentDigest([]byte("logical invocation inputs"))
 	conversationDigest := contentDigest(bodies["conversation"])
+	vendorDigest := contentDigest(bodies["vendor"])
 	snapshot, err := domain.NewStageInputSnapshot(domain.StageInputSnapshotInput{
-		InputDigest:          inputDigest,
-		SpecificationDigest:  contentDigest(bodies["spec"]),
-		PromptPackageDigest:  contentDigest(bodies["prompt"]),
-		PolicyDigest:         contentDigest(bodies["policy"]),
+		InputDigest:         inputDigest,
+		SpecificationDigest: contentDigest(bodies["spec"]),
+		PromptPackageDigest: contentDigest(bodies["prompt"]),
+		PolicyDigest:        contentDigest(bodies["policy"]),
+		VendorInstructions: &domain.VendorInstructionSnapshot{
+			Vendor: domain.AgentVendorClaude,
+			Digest: &vendorDigest,
+		},
 		ConversationDigest:   &conversationDigest,
 		PriorArtifactDigests: []domain.Digest{contentDigest(bodies["prior"])},
 		ImageInputDigests:    []domain.Digest{contentDigest(bodies["image"])},
@@ -268,6 +274,14 @@ func TestMaterializeStageInputs(t *testing.T) {
 		!bytes.Equal(bundle.Policy().Bytes(), fixture.bodies["policy"]) {
 		t.Fatal("materialized core input differs from admitted bytes")
 	}
+	vendor, ok := bundle.VendorInstructions()
+	if !ok || vendor.Vendor() != domain.AgentVendorClaude {
+		t.Fatal("materialized bundle lost its vendor-instruction role")
+	}
+	vendorContent, ok := vendor.Content()
+	if !ok || !bytes.Equal(vendorContent.Bytes(), fixture.bodies["vendor"]) {
+		t.Fatal("materialized vendor instructions differ from admitted bytes")
+	}
 	conversation, ok := bundle.ConversationPrefix()
 	if !ok || !bytes.Equal(conversation.Bytes(), fixture.bodies["conversation"]) {
 		t.Fatal("materialized conversation prefix differs from admitted bytes")
@@ -288,12 +302,63 @@ func TestMaterializeStageInputs(t *testing.T) {
 	}
 }
 
+func TestMaterializeExplicitVendorInstructionAbsence(t *testing.T) {
+	fixture := newMaterializeFixture(t)
+	snapshot := *fixture.spec.StageInputs
+	vendor := *snapshot.VendorInstructions
+	vendor.Digest = nil
+	snapshot.VendorInstructions = &vendor
+	id, err := snapshot.ComputeID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.ID = id
+	fixture.spec.StageInputs = &snapshot
+
+	bundle, err := newTestMaterializer(t, fixture.source).Materialize(
+		t.Context(), fixture.spec,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instructions, ok := bundle.VendorInstructions()
+	if !ok {
+		t.Fatal("explicit vendor-instruction absence became a legacy snapshot")
+	}
+	if _, present := instructions.Content(); present {
+		t.Fatal("explicitly absent vendor instructions materialized content")
+	}
+}
+
 func TestMaterializeMissingContentFailsClosed(t *testing.T) {
 	fixture := newMaterializeFixture(t)
 	delete(fixture.source, fixture.spec.StageInputs.PromptPackageDigest)
 	_, err := newTestMaterializer(t, fixture.source).Materialize(t.Context(), fixture.spec)
 	if !errors.Is(err, errInputMissing) {
 		t.Fatalf("Materialize = %v, want missing input", err)
+	}
+}
+
+func TestMaterializeMissingVendorInstructionsFailsClosed(t *testing.T) {
+	fixture := newMaterializeFixture(t)
+	delete(fixture.source, *fixture.spec.StageInputs.VendorInstructions.Digest)
+	_, err := newTestMaterializer(t, fixture.source).Materialize(
+		t.Context(), fixture.spec,
+	)
+	if !errors.Is(err, errInputMissing) {
+		t.Fatalf("Materialize = %v, want missing vendor instructions", err)
+	}
+}
+
+func TestMaterializeCorruptVendorInstructionsFailsClosed(t *testing.T) {
+	fixture := newMaterializeFixture(t)
+	vendorDigest := *fixture.spec.StageInputs.VendorInstructions.Digest
+	fixture.source[vendorDigest] = []byte("mutated vendor instructions\n")
+	_, err := newTestMaterializer(t, fixture.source).Materialize(
+		t.Context(), fixture.spec,
+	)
+	if !errors.Is(err, exec.ErrInputDigestMismatch) {
+		t.Fatalf("Materialize = %v, want %v", err, exec.ErrInputDigestMismatch)
 	}
 }
 

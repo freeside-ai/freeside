@@ -38,8 +38,12 @@ type AdmissionEnvironment struct {
 	// every stage this environment admits. It is configuration because the
 	// prompt package is control-plane authority, not invocation-owned input.
 	PromptPackageDigest domain.Digest
-	Base                domain.BaseRevision
-	Workspace           string
+	// VendorInstructions names the host file whose dereferenced regular-file
+	// bytes are snapshotted at admission. Missing is an explicit admitted
+	// absence; every other source failure refuses admission.
+	VendorInstructions VendorInstructionConfig
+	Base               domain.BaseRevision
+	Workspace          string
 	// AuthIdentityID is the provider identity the stage runs under; nil only
 	// for a clean-verification stage, which reaches no provider.
 	AuthIdentityID *domain.AuthIdentityID
@@ -140,6 +144,9 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 			return fmt.Errorf("with admission: prompt package digest %q is not canonical",
 				env.PromptPackageDigest)
 		}
+		if err := env.VendorInstructions.validate(); err != nil {
+			return fmt.Errorf("with admission: %w", err)
+		}
 		// Detached from the caller's values before they become live
 		// configuration: an environment or floor that followed later edits
 		// could weaken the gate, or retarget the credential and waiver
@@ -235,6 +242,12 @@ const imageInputArtifactType = "image"
 func (e *Engine) stageInputSnapshot(
 	ctx context.Context, binding invocationBinding, inputDigest domain.Digest,
 ) (domain.StageInputSnapshot, error) {
+	vendorInstructions, vendorBody, err := snapshotVendorInstructions(
+		ctx, e.admission.environment.VendorInstructions,
+	)
+	if err != nil {
+		return domain.StageInputSnapshot{}, err
+	}
 	priorArtifacts := make([]domain.Digest, 0, len(binding.invocation.InputIDs))
 	imageInputs := make([]domain.Digest, 0, len(binding.invocation.InputIDs))
 	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -277,12 +290,19 @@ func (e *Engine) stageInputSnapshot(
 		SpecificationDigest:  binding.run.SpecDigest,
 		PromptPackageDigest:  e.admission.environment.PromptPackageDigest,
 		PolicyDigest:         binding.run.PolicyDigest,
+		VendorInstructions:   &vendorInstructions,
 		ConversationDigest:   conversationDigest,
 		PriorArtifactDigests: priorArtifacts,
 		ImageInputDigests:    imageInputs,
 	})
 	if err != nil {
 		return domain.StageInputSnapshot{}, err
+	}
+	if vendorInstructions.Digest != nil {
+		if err := e.signet.PutStageInput(ctx, *vendorInstructions.Digest, vendorBody); err != nil {
+			return domain.StageInputSnapshot{}, fmt.Errorf(
+				"store vendor instructions %s: %w", *vendorInstructions.Digest, err)
+		}
 	}
 	if conversationDigest != nil {
 		if err := e.signet.PutStageInput(ctx, *conversationDigest, conversationBody); err != nil {

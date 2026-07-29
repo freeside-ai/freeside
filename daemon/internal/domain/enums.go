@@ -100,6 +100,28 @@ func (c ProducerClass) valid() bool {
 	}
 }
 
+// AgentVendor names the vendor-native instruction mechanism one admitted
+// execution uses. The vocabulary is intentionally narrower than the future
+// driver set: adding a driver also adds its exact native instruction target
+// and conformance proof rather than silently treating vendors as equivalent.
+type AgentVendor string
+
+const (
+	AgentVendorClaude AgentVendor = "claude"
+)
+
+// AllAgentVendors lists every valid AgentVendor.
+var AllAgentVendors = []AgentVendor{AgentVendorClaude}
+
+func (v AgentVendor) valid() bool {
+	switch v {
+	case AgentVendorClaude:
+		return true
+	default:
+		return false
+	}
+}
+
 // ClaimMediaType names the renderable media type of a text claim's inline
 // content (plan §9's summary carrier). The set is deliberately closed to
 // seconds-readable prose: images and other binary artifacts stay on the

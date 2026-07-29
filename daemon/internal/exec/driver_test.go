@@ -17,11 +17,16 @@ func execStageDigest(fill string) domain.Digest {
 func fullAdmission(t *testing.T, identity *domain.AuthIdentityID, egress domain.EgressProfile) domain.ExecutionAdmission {
 	t.Helper()
 	conversationDigest := execStageDigest("7")
+	vendorDigest := execStageDigest("8")
 	stageInputs, err := domain.NewStageInputSnapshot(domain.StageInputSnapshotInput{
-		InputDigest:          execStageDigest("1"),
-		SpecificationDigest:  execStageDigest("2"),
-		PromptPackageDigest:  execStageDigest("3"),
-		PolicyDigest:         execStageDigest("4"),
+		InputDigest:         execStageDigest("1"),
+		SpecificationDigest: execStageDigest("2"),
+		PromptPackageDigest: execStageDigest("3"),
+		PolicyDigest:        execStageDigest("4"),
+		VendorInstructions: &domain.VendorInstructionSnapshot{
+			Vendor: domain.AgentVendorClaude,
+			Digest: &vendorDigest,
+		},
 		ConversationDigest:   &conversationDigest,
 		PriorArtifactDigests: []domain.Digest{execStageDigest("5")},
 		ImageInputDigests:    []domain.Digest{execStageDigest("6")},
@@ -95,10 +100,12 @@ func TestStartSpecFromAdmissionDetachesStageInputs(t *testing.T) {
 	identity := domain.AuthIdentityID("auth-1")
 	admission := fullAdmission(t, &identity, domain.EgressProviderOnly)
 	spec := exec.StartSpecFromAdmission(admission)
+	*admission.StageInputs.VendorInstructions.Digest = execStageDigest("e")
 	*admission.StageInputs.ConversationDigest = execStageDigest("f")
 	admission.StageInputs.PriorArtifactDigests[0] = "sha256:changed"
 	admission.StageInputs.ImageInputDigests[0] = "sha256:changed"
-	if *spec.StageInputs.ConversationDigest != execStageDigest("7") ||
+	if *spec.StageInputs.VendorInstructions.Digest != execStageDigest("8") ||
+		*spec.StageInputs.ConversationDigest != execStageDigest("7") ||
 		spec.StageInputs.PriorArtifactDigests[0] != execStageDigest("5") ||
 		spec.StageInputs.ImageInputDigests[0] != execStageDigest("6") {
 		t.Fatal("start spec followed mutable admission slice storage")

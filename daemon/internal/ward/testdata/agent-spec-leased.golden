@@ -27,6 +27,12 @@
       "source": "provider-cred",
       "target": "/credentials",
       "read_only": false
+    },
+    {
+      "type": "volume",
+      "source": "freeside-handoff-golden-run-ins",
+      "target": "/root/.claude",
+      "read_only": true
     }
   ],
   "labels": [

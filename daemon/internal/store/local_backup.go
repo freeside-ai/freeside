@@ -359,6 +359,10 @@ func checkpointArtifactDigests(
 		digests[stageInputs.SpecificationDigest] = struct{}{}
 		digests[stageInputs.PromptPackageDigest] = struct{}{}
 		digests[stageInputs.PolicyDigest] = struct{}{}
+		if stageInputs.VendorInstructions != nil &&
+			stageInputs.VendorInstructions.Digest != nil {
+			digests[*stageInputs.VendorInstructions.Digest] = struct{}{}
+		}
 		if stageInputs.ConversationDigest != nil {
 			digests[*stageInputs.ConversationDigest] = struct{}{}
 		}

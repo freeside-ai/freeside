@@ -2,11 +2,14 @@ package ward
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -43,6 +46,10 @@ func testHandoffSpec() HandoffSpec {
 			Command:       []string{"sh", "-c", "true"},
 			Env:           []string{"AGENT_MODE=fixture"},
 			EgressProfile: domain.EgressProviderOnly,
+			VendorInstructions: VendorInstructions{
+				Vendor: domain.AgentVendorClaude,
+			},
+			InstructionPolicy: ClaudeInvocationInstructionPolicy(),
 			CredentialMounts: []CredentialMount{
 				{Volume: "provider-cred", Target: "/credentials"},
 			},
@@ -74,6 +81,46 @@ func TestHandoffSpecValidate(t *testing.T) {
 		{"missing agent command", func(s *HandoffSpec) { s.Agent.Command = nil }},
 		{"missing egress profile", func(s *HandoffSpec) { s.Agent.EgressProfile = "" }},
 		{"unenforceable wider egress profile", func(s *HandoffSpec) { s.Agent.EgressProfile = domain.EgressProviderWebRead }},
+		{"workspace repository instructions", func(s *HandoffSpec) {
+			s.Agent.InstructionPolicy.RepositorySource = "workspace"
+		}},
+		{"missing invocation boundary", func(s *HandoffSpec) {
+			s.Agent.InstructionPolicy.Boundaries = s.Agent.InstructionPolicy.Boundaries[:3]
+		}},
+		{"repeated invocation boundary", func(s *HandoffSpec) {
+			s.Agent.InstructionPolicy.Boundaries[3] = InvocationStartup
+		}},
+		{"unknown invocation boundary", func(s *HandoffSpec) {
+			s.Agent.InstructionPolicy.Boundaries[3] = "fork"
+		}},
+		{"unsupported instruction vendor", func(s *HandoffSpec) {
+			s.Agent.VendorInstructions.Vendor = "codex"
+		}},
+		{"absent instructions with digest", func(s *HandoffSpec) {
+			s.Agent.VendorInstructions.Digest = domain.Digest(
+				"sha256:" + strings.Repeat("a", 64),
+			)
+		}},
+		{"present instructions without digest", func(s *HandoffSpec) {
+			s.Agent.VendorInstructions.Present = true
+			s.Agent.VendorInstructions.Body = []byte("instructions")
+		}},
+		{"instruction digest mismatch", func(s *HandoffSpec) {
+			s.Agent.VendorInstructions.Present = true
+			s.Agent.VendorInstructions.Digest = domain.Digest(
+				"sha256:" + strings.Repeat("a", 64),
+			)
+			s.Agent.VendorInstructions.Body = []byte("instructions")
+		}},
+		{"oversized instructions", func(s *HandoffSpec) {
+			s.Agent.VendorInstructions.Present = true
+			s.Agent.VendorInstructions.Digest = domain.Digest(
+				"sha256:" + strings.Repeat("a", 64),
+			)
+			s.Agent.VendorInstructions.Body = make(
+				[]byte, domain.MaxVendorInstructionBytes+1,
+			)
+		}},
 		// The seed is part of the spec's caller-error surface, so its rejections
 		// must reach ErrInvalidHandoffSpec through HandoffSpec.validate too.
 		{"unset seed mode", func(s *HandoffSpec) { s.Seed = WorkspaceSeed{} }},
@@ -112,17 +159,87 @@ func TestHandoffSpecValidate(t *testing.T) {
 	}
 }
 
+func TestRepositoryInstructionBasePinsEveryInvocationBoundary(t *testing.T) {
+	spec := testHandoffSpec()
+	spec.Seed = WorkspaceSeed{
+		Mode:      SeedBaseCheckout,
+		SourceDir: "/trusted/base",
+		Base:      testBaseRevision(),
+	}
+	for _, boundary := range AllInvocationBoundaries {
+		got, err := spec.RepositoryInstructionBase(boundary)
+		if err != nil {
+			t.Fatalf("RepositoryInstructionBase(%s) = %v, want exact base", boundary, err)
+		}
+		if got != spec.Seed.Base {
+			t.Errorf("RepositoryInstructionBase(%s) = %+v, want %+v",
+				boundary, got, spec.Seed.Base)
+		}
+	}
+
+	poisoned := spec
+	poisoned.Agent.InstructionPolicy.RepositorySource = "workspace"
+	for _, boundary := range AllInvocationBoundaries {
+		if _, err := poisoned.RepositoryInstructionBase(boundary); err == nil {
+			t.Errorf("RepositoryInstructionBase(%s) accepted writable-workspace authority", boundary)
+		}
+	}
+	if _, err := spec.RepositoryInstructionBase("fork"); err == nil {
+		t.Error("RepositoryInstructionBase accepted an undeclared child shape")
+	}
+}
+
+func TestVerifyInstructionProofFailsClosed(t *testing.T) {
+	const nonce = "00000000000000000000000000000000"
+	body := []byte("host instructions\n")
+	sum := sha256.Sum256(body)
+	present := VendorInstructions{
+		Vendor:  domain.AgentVendorClaude,
+		Present: true,
+		Digest:  domain.Digest(fmt.Sprintf("sha256:%x", sum)),
+		Body:    body,
+	}
+	valid := instructionProofFor(nonce, body, true)
+	if err := verifyInstructionProof(valid, nonce, present); err != nil {
+		t.Fatalf("verifyInstructionProof(valid) = %v, want nil", err)
+	}
+	if err := verifyInstructionProof(
+		instructionProofFor(nonce, nil, true),
+		nonce,
+		VendorInstructions{Vendor: domain.AgentVendorClaude},
+	); err != nil {
+		t.Fatalf("verifyInstructionProof(absent) = %v, want nil", err)
+	}
+
+	cases := [][]byte{
+		setProofValue(valid, "nonce", strings.Repeat("f", 32)),
+		setProofValue(valid, "digest", strings.Repeat("0", 64)),
+		setProofValue(valid, "contents", "dirty"),
+		append(slices.Clone(valid), []byte("neighbor=settings.json\n")...),
+		append(slices.Clone(valid), []byte("digest="+strings.Repeat("0", 64)+"\n")...),
+		[]byte("not-key-value\n"),
+	}
+	for i, proof := range cases {
+		if err := verifyInstructionProof(proof, nonce, present); err == nil {
+			t.Errorf("verifyInstructionProof(corrupt case %d) = nil", i)
+		}
+	}
+}
+
 func TestNamesFor(t *testing.T) {
 	n := namesFor("run-1")
 	want := handoffNames{
-		Workspace:   "freeside-handoff-run-1-ws",
-		Seeder:      "freeside-handoff-run-1-seeder",
-		Observer:    "freeside-handoff-run-1-observer",
-		CredObsPre:  "freeside-handoff-run-1-cred-pre",
-		CredObsPost: "freeside-handoff-run-1-cred-post",
-		Agent:       "freeside-handoff-run-1-agent",
-		Exporter:    "freeside-handoff-run-1-exporter",
-		Network:     "freeside-handoff-run-1-egress",
+		Workspace:           "freeside-handoff-run-1-ws",
+		Instructions:        "freeside-handoff-run-1-ins",
+		Seeder:              "freeside-handoff-run-1-seeder",
+		Observer:            "freeside-handoff-run-1-observer",
+		InstructionSeeder:   "freeside-handoff-run-1-ins-seed",
+		InstructionObserver: "freeside-handoff-run-1-ins-check",
+		CredObsPre:          "freeside-handoff-run-1-cred-pre",
+		CredObsPost:         "freeside-handoff-run-1-cred-post",
+		Agent:               "freeside-handoff-run-1-agent",
+		Exporter:            "freeside-handoff-run-1-exporter",
+		Network:             "freeside-handoff-run-1-egress",
 	}
 	if n != want {
 		t.Errorf("namesFor(run-1) = %+v, want %+v", n, want)
@@ -492,8 +609,8 @@ func TestBuildAgentSpec(t *testing.T) {
 	if spec.Name != names.Agent {
 		t.Errorf("Name = %q, want %q", spec.Name, names.Agent)
 	}
-	if len(spec.Mounts) != 2 {
-		t.Fatalf("len(Mounts) = %d, want 2", len(spec.Mounts))
+	if len(spec.Mounts) != 3 {
+		t.Fatalf("len(Mounts) = %d, want 3", len(spec.Mounts))
 	}
 	ws := spec.Mounts[0]
 	if ws.Source != names.Workspace || ws.Target != cfg.WorkspaceTarget || ws.ReadOnly {
@@ -502,6 +619,13 @@ func TestBuildAgentSpec(t *testing.T) {
 	cred := spec.Mounts[1]
 	if cred.Source != "provider-cred" || cred.Target != "/credentials" || !cred.ReadOnly {
 		t.Errorf("credential mount = %+v, want provider-cred ro at /credentials", cred)
+	}
+	instructions := spec.Mounts[2]
+	if instructions.Source != names.Instructions ||
+		instructions.Target != claudeInstructionMountTarget ||
+		!instructions.ReadOnly {
+		t.Errorf("instruction mount = %+v, want %q ro at %q",
+			instructions, names.Instructions, claudeInstructionMountTarget)
 	}
 	// The generated spec passes its own gate.
 	if err := validateAgentSpec(cfg, spec, names.Workspace, ""); err != nil {
@@ -536,14 +660,17 @@ func TestBuildAgentSpecLeasedWritableMount(t *testing.T) {
 	names := namesFor(hs.RunID)
 	spec := buildAgentSpec(cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345")
 
-	if len(spec.Mounts) != 3 {
-		t.Fatalf("len(Mounts) = %d, want 3", len(spec.Mounts))
+	if len(spec.Mounts) != 4 {
+		t.Fatalf("len(Mounts) = %d, want 4", len(spec.Mounts))
 	}
 	if leased := spec.Mounts[1]; leased.ReadOnly {
 		t.Errorf("leased credential mount = %+v, want read-write", leased)
 	}
 	if other := spec.Mounts[2]; !other.ReadOnly {
 		t.Errorf("non-leased credential mount = %+v, want read-only", other)
+	}
+	if instructions := spec.Mounts[3]; !instructions.ReadOnly {
+		t.Errorf("instruction mount = %+v, want read-only", instructions)
 	}
 	if got, want := hs.writableCredentialTarget(), "/credentials"; got != want {
 		t.Errorf("writableCredentialTarget() = %q, want %q", got, want)

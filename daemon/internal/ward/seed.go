@@ -611,7 +611,9 @@ func (b *Backend) seedWorkspace(ctx context.Context, hs HandoffSpec, names hando
 	// The fingerprint is captured only after the allowlist verified the
 	// report's identity, as for the agent and exporter: a fingerprint bound to
 	// the wrong object would make cleanup misclassify this run's own seeder.
-	if err := verifySeedRoleAllowlist(b.cfg, rep, spec, names.Workspace, CheckWorkspaceSeeding); err != nil {
+	if err := verifySeedRoleAllowlist(
+		rep, spec, names.Workspace, b.cfg.WorkspaceTarget, CheckWorkspaceSeeding,
+	); err != nil {
 		return err
 	}
 	st.seeder.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel)
@@ -672,7 +674,9 @@ func (b *Backend) observeSeededBase(ctx context.Context, hs HandoffSpec, names h
 	if err != nil {
 		return "", failf(CheckObservedBaseIdentity, "inspect base observer before execution: %v", err)
 	}
-	if err := verifySeedRoleAllowlist(b.cfg, rep, spec, names.Workspace, CheckObservedBaseIdentity); err != nil {
+	if err := verifySeedRoleAllowlist(
+		rep, spec, names.Workspace, b.cfg.WorkspaceTarget, CheckObservedBaseIdentity,
+	); err != nil {
 		return "", err
 	}
 	st.observer.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel)

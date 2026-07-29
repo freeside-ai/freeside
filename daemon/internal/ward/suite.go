@@ -923,6 +923,10 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 			Env:              []string{"FREESIDE_CONFORMANCE_A=1", "FREESIDE_CONFORMANCE_B=2"},
 			EgressProfile:    domain.EgressProviderOnly,
 			CredentialMounts: []CredentialMount{{Volume: credVolume, Target: s.fx.CredentialTarget}},
+			VendorInstructions: VendorInstructions{
+				Vendor: domain.AgentVendorClaude,
+			},
+			InstructionPolicy: ClaudeInvocationInstructionPolicy(),
 		},
 	})
 	if err != nil {

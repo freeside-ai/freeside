@@ -94,6 +94,31 @@ func TestValidateAgentSpecViolations(t *testing.T) {
 			CheckCredentialSeparation,
 		},
 		{
+			"instruction mount read-write",
+			func(s *ContainerSpec) { s.Mounts[2].ReadOnly = false },
+			CheckControlPlaneIsolation,
+		},
+		{
+			"instruction mount inside workspace",
+			func(s *ContainerSpec) { s.Mounts[2].Target = cfg.WorkspaceTarget + "/.claude" },
+			CheckCredentialSeparation,
+		},
+		{
+			"instruction mount reuses workspace volume",
+			func(s *ContainerSpec) { s.Mounts[2].Source = names.Workspace },
+			CheckCredentialSeparation,
+		},
+		{
+			"instruction mount missing",
+			func(s *ContainerSpec) { s.Mounts = s.Mounts[:2] },
+			CheckControlPlaneIsolation,
+		},
+		{
+			"second instruction mount",
+			func(s *ContainerSpec) { s.Mounts = append(s.Mounts, s.Mounts[2]) },
+			CheckCredentialSeparation,
+		},
+		{
 			"no workspace mount",
 			func(s *ContainerSpec) { s.Mounts = s.Mounts[1:] },
 			CheckCredentialSeparation,
@@ -143,6 +168,54 @@ func TestValidateAgentSpecViolations(t *testing.T) {
 	}
 }
 
+// TestValidateAgentSpecInstructionPathOverlaps rejects both nesting
+// directions for both caller-controlled mount classes. Exact equality is
+// reserved for the one gate-authored instruction mount and remains covered by
+// the duplicate-target check.
+func TestValidateAgentSpecInstructionPathOverlaps(t *testing.T) {
+	cases := []struct {
+		name   string
+		config func(*Config)
+		mutate func(*ContainerSpec)
+	}{
+		{
+			"workspace is instruction ancestor",
+			func(cfg *Config) { cfg.WorkspaceTarget = "/root" },
+			func(*ContainerSpec) {},
+		},
+		{
+			"workspace is instruction descendant",
+			func(cfg *Config) { cfg.WorkspaceTarget = "/root/.claude/workspace" },
+			func(*ContainerSpec) {},
+		},
+		{
+			"credential is instruction ancestor",
+			func(*Config) {},
+			func(spec *ContainerSpec) { spec.Mounts[1].Target = "/root" },
+		},
+		{
+			"credential is instruction descendant",
+			func(*Config) {},
+			func(spec *ContainerSpec) { spec.Mounts[1].Target = "/root/.claude/credentials" },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfig()
+			tc.config(&cfg)
+			hs := testHandoffSpec()
+			names := namesFor(hs.RunID)
+			spec := buildAgentSpec(
+				cfg, hs, names, testOwnershipLabel(), "http://127.0.0.1:12345",
+			)
+			tc.mutate(&spec)
+
+			err := validateAgentSpec(cfg, spec, names.Workspace, "")
+			wantCheckFailure(t, err, CheckCredentialSeparation)
+		})
+	}
+}
+
 // TestValidateAgentSpecLeasedViolations enumerates the writable-mount input
 // space with the leased target declared: the leased mount must actually be
 // writable, must exist, and must be the only writable mount. The
@@ -160,7 +233,9 @@ func TestValidateAgentSpecLeasedViolations(t *testing.T) {
 		mutate func(*ContainerSpec)
 	}{
 		{"leased mount observed read-only", func(s *ContainerSpec) { s.Mounts[1].ReadOnly = true }},
-		{"leased mount missing", func(s *ContainerSpec) { s.Mounts = s.Mounts[:1] }},
+		{"leased mount missing", func(s *ContainerSpec) {
+			s.Mounts = append(s.Mounts[:1], s.Mounts[2:]...)
+		}},
 		{"second writable mount beside the leased one", func(s *ContainerSpec) {
 			s.Mounts = append(s.Mounts, Mount{
 				Type: MountVolume, Source: "other-cred", Target: "/other-credentials",
@@ -408,7 +483,7 @@ func TestVerifySeedRoleAllowlistViolations(t *testing.T) {
 	names := namesFor(hs.RunID)
 	spec := buildSeederSpec(cfg, hs, names, testOwnershipLabel())
 
-	if err := verifySeedRoleAllowlist(cfg, seedRoleReport(cfg, spec), spec, names.Workspace, CheckWorkspaceSeeding); err != nil {
+	if err := verifySeedRoleAllowlist(seedRoleReport(cfg, spec), spec, names.Workspace, cfg.WorkspaceTarget, CheckWorkspaceSeeding); err != nil {
 		t.Fatalf("conforming report: %v, want nil", err)
 	}
 	imageName, imageDigest, _ := strings.Cut(cfg.ExporterImage, "@")
@@ -453,7 +528,7 @@ func TestVerifySeedRoleAllowlistViolations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rep := seedRoleReport(cfg, spec)
 			tc.mutate(&rep)
-			err := verifySeedRoleAllowlist(cfg, rep, spec, names.Workspace, CheckWorkspaceSeeding)
+			err := verifySeedRoleAllowlist(rep, spec, names.Workspace, cfg.WorkspaceTarget, CheckWorkspaceSeeding)
 			wantCheckFailure(t, err, CheckWorkspaceSeeding)
 		})
 	}
@@ -471,7 +546,7 @@ func TestVerifySeedRoleAllowlistRedactsValues(t *testing.T) {
 	const secret = "super-secret-fixture-value"
 	rep.Env = append(rep.Env, "PROVIDER_TOKEN="+secret)
 
-	err := verifySeedRoleAllowlist(cfg, rep, spec, names.Workspace, CheckWorkspaceSeeding)
+	err := verifySeedRoleAllowlist(rep, spec, names.Workspace, cfg.WorkspaceTarget, CheckWorkspaceSeeding)
 	if err == nil {
 		t.Fatal("extra environment accepted, want a failure")
 	}

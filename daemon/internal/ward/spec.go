@@ -1,6 +1,7 @@
 package ward
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"path"
@@ -10,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
 
 // BackendName is the backend's name in policy, refusals, and audit records:
@@ -113,6 +116,229 @@ type AgentSpec struct {
 	// spec vocabulary cannot express a credential inside the root filesystem
 	// or workspace.
 	CredentialMounts []CredentialMount
+	// VendorInstructions is the already-materialized instruction role from
+	// exec.StageInputs. The gate writes only these declared bytes into a
+	// dedicated volume and mounts that volume read-only at the vendor-native
+	// user-instruction directory. Present=false is an explicit empty overlay
+	// that masks any instruction file baked into the image.
+	VendorInstructions VendorInstructions
+	// InstructionPolicy binds every process-entry shape the production driver
+	// may use to repository instructions from the exact trusted base. The ward
+	// rejects a policy that omits startup, recovery, resume, or child launch,
+	// or that names the writable workspace as behavioral authority.
+	InstructionPolicy InvocationInstructionPolicy
+}
+
+// InvocationBoundary is a Claude process-entry shape that must reapply the
+// instruction-source contract. A resumed provider session is not sufficient:
+// recovery may need a new local process, and children are fresh CLI processes.
+type InvocationBoundary string
+
+const (
+	InvocationStartup  InvocationBoundary = "startup"
+	InvocationRecovery InvocationBoundary = "recovery"
+	InvocationResume   InvocationBoundary = "resume"
+	InvocationChild    InvocationBoundary = "child"
+)
+
+// AllInvocationBoundaries is the single registration point for process-entry
+// shapes covered by the instruction contract.
+var AllInvocationBoundaries = []InvocationBoundary{
+	InvocationStartup,
+	InvocationRecovery,
+	InvocationResume,
+	InvocationChild,
+}
+
+func (b InvocationBoundary) valid() bool {
+	switch b {
+	case InvocationStartup, InvocationRecovery, InvocationResume, InvocationChild:
+		return true
+	default:
+		return false
+	}
+}
+
+// RepositoryInstructionSource says which tree may supply vendor-auto-loaded
+// repository instructions. The writable workspace is deliberately
+// unrepresentable as a valid source.
+type RepositoryInstructionSource string
+
+const RepositoryInstructionsTrustedBase RepositoryInstructionSource = "trusted_base"
+
+// AllRepositoryInstructionSources is the single registration point for
+// repository instruction authorities.
+var AllRepositoryInstructionSources = []RepositoryInstructionSource{
+	RepositoryInstructionsTrustedBase,
+}
+
+func (s RepositoryInstructionSource) valid() bool {
+	switch s {
+	case RepositoryInstructionsTrustedBase:
+		return true
+	default:
+		return false
+	}
+}
+
+// InvocationInstructionPolicy is the ward-to-driver contract that the
+// production driver must realize at each declared process boundary. The exact
+// trusted base is HandoffSpec.Seed.Base; this value cannot nominate another
+// revision or the candidate workspace.
+type InvocationInstructionPolicy struct {
+	RepositorySource RepositoryInstructionSource
+	Boundaries       []InvocationBoundary
+}
+
+// ClaudeInvocationInstructionPolicy returns the complete Phase 1A policy.
+func ClaudeInvocationInstructionPolicy() InvocationInstructionPolicy {
+	return InvocationInstructionPolicy{
+		RepositorySource: RepositoryInstructionsTrustedBase,
+		Boundaries:       slices.Clone(AllInvocationBoundaries),
+	}
+}
+
+func (p InvocationInstructionPolicy) validate() error {
+	if !p.RepositorySource.valid() {
+		return fmt.Errorf("%w: unsupported repository instruction source %q",
+			ErrInvalidHandoffSpec, p.RepositorySource)
+	}
+	if len(p.Boundaries) != len(AllInvocationBoundaries) {
+		return fmt.Errorf("%w: instruction policy must cover every invocation boundary",
+			ErrInvalidHandoffSpec)
+	}
+	seen := make(map[InvocationBoundary]struct{}, len(p.Boundaries))
+	for _, boundary := range p.Boundaries {
+		if !boundary.valid() {
+			return fmt.Errorf("%w: unsupported instruction invocation boundary %q",
+				ErrInvalidHandoffSpec, boundary)
+		}
+		if _, duplicate := seen[boundary]; duplicate {
+			return fmt.Errorf("%w: repeated instruction invocation boundary %q",
+				ErrInvalidHandoffSpec, boundary)
+		}
+		seen[boundary] = struct{}{}
+	}
+	for _, required := range AllInvocationBoundaries {
+		if _, ok := seen[required]; !ok {
+			return fmt.Errorf("%w: instruction policy omits invocation boundary %q",
+				ErrInvalidHandoffSpec, required)
+		}
+	}
+	return nil
+}
+
+// RepositoryInstructionBase resolves one process boundary to its behavioral
+// authority. Production drivers call this for every local Claude process they
+// start; the method returns only the exact base already bound to the ward seed.
+// A blank synthetic seed has no repository authority and is refused here.
+func (s HandoffSpec) RepositoryInstructionBase(
+	boundary InvocationBoundary,
+) (domain.BaseRevision, error) {
+	if err := s.Agent.InstructionPolicy.validate(); err != nil {
+		return domain.BaseRevision{}, err
+	}
+	if !boundary.valid() {
+		return domain.BaseRevision{}, fmt.Errorf(
+			"%w: unsupported instruction invocation boundary %q",
+			ErrInvalidHandoffSpec, boundary,
+		)
+	}
+	if s.Seed.Mode != SeedBaseCheckout {
+		return domain.BaseRevision{}, fmt.Errorf(
+			"%w: repository instructions require an exact-base workspace seed",
+			ErrInvalidHandoffSpec,
+		)
+	}
+	if err := s.Seed.validate(); err != nil {
+		return domain.BaseRevision{}, err
+	}
+	return s.Seed.Base, nil
+}
+
+// VendorInstructions is the ward-facing form of one materialized
+// vendor-instruction role. Body is detached at Handoff entry and re-hashed
+// before any runtime object is created.
+type VendorInstructions struct {
+	Vendor  domain.AgentVendor
+	Present bool
+	Digest  domain.Digest
+	Body    []byte
+}
+
+// VendorInstructionsFromStageInputs converts the verified execution-input
+// role into the ward contract. A historical snapshot with no role cannot run
+// through the production ward path.
+func VendorInstructionsFromStageInputs(inputs exec.StageInputs) (VendorInstructions, error) {
+	materialized, ok := inputs.VendorInstructions()
+	if !ok {
+		return VendorInstructions{}, fmt.Errorf(
+			"%w: stage inputs carry no vendor-instruction snapshot",
+			ErrInvalidHandoffSpec,
+		)
+	}
+	out := VendorInstructions{Vendor: materialized.Vendor()}
+	content, present := materialized.Content()
+	if !present {
+		return out, nil
+	}
+	out.Present = true
+	out.Digest = content.Digest()
+	out.Body = content.Bytes()
+	return out, nil
+}
+
+func (i VendorInstructions) validate() error {
+	switch i.Vendor {
+	case domain.AgentVendorClaude:
+		// Claude is the only Phase 1A agent vendor. A later vendor adds its
+		// own target in vendorInstructionMountTarget rather than inheriting
+		// Claude's path accidentally.
+	default:
+		return fmt.Errorf("%w: unsupported vendor instructions %q",
+			ErrInvalidHandoffSpec, i.Vendor)
+	}
+	if !i.Present {
+		if i.Digest != "" || len(i.Body) != 0 {
+			return fmt.Errorf(
+				"%w: absent vendor instructions carry content or a digest",
+				ErrInvalidHandoffSpec,
+			)
+		}
+		return nil
+	}
+	if !contentaddr.Valid(string(i.Digest)) {
+		return fmt.Errorf("%w: vendor instruction digest %q is not canonical",
+			ErrInvalidHandoffSpec, i.Digest)
+	}
+	if int64(len(i.Body)) > domain.MaxVendorInstructionBytes {
+		return fmt.Errorf("%w: vendor instructions are %d bytes, limit %d",
+			ErrInvalidHandoffSpec, len(i.Body), domain.MaxVendorInstructionBytes)
+	}
+	sum := sha256.Sum256(i.Body)
+	if got := domain.Digest(fmt.Sprintf("sha256:%x", sum)); got != i.Digest {
+		return fmt.Errorf("%w: vendor instruction body hashes to %s, not %s",
+			ErrInvalidHandoffSpec, got, i.Digest)
+	}
+	return nil
+}
+
+const (
+	claudeInstructionMountTarget       = "/root/.claude"
+	instructionVolumeTarget            = "/instructions"
+	instructionStageDir                = "/instruction-seed"
+	instructionReadyDir                = "/instruction-ready"
+	instructionFileName                = "CLAUDE.md"
+	instructionProofPath               = "/instruction-proof.txt"
+	instructionVolumeSizeMB      int64 = 2
+)
+
+func vendorInstructionMountTarget(vendor domain.AgentVendor) string {
+	switch vendor {
+	case domain.AgentVendorClaude:
+		return claudeInstructionMountTarget
+	}
+	return ""
 }
 
 // SeedMode is how a run's workspace volume is populated before the writer
@@ -254,6 +480,12 @@ func (s HandoffSpec) validate() error {
 	case s.Agent.EgressProfile != domain.EgressProviderOnly:
 		return fmt.Errorf("%w: Agent.EgressProfile %q is not enforceable by this backend", ErrInvalidHandoffSpec, s.Agent.EgressProfile)
 	}
+	if err := s.Agent.VendorInstructions.validate(); err != nil {
+		return err
+	}
+	if err := s.Agent.InstructionPolicy.validate(); err != nil {
+		return err
+	}
 	// A writable credential mount and the lease claim travel together, both
 	// ways. A writable mount without the claim would mutate an auth store
 	// outside any §5.4 window; a claim without a writable mount is an
@@ -321,26 +553,32 @@ func (s HandoffSpec) writableCredentialVolume() string {
 
 // handoffNames are the runtime object names one run owns.
 type handoffNames struct {
-	Workspace   string
-	Seeder      string
-	Observer    string
-	CredObsPre  string
-	CredObsPost string
-	Agent       string
-	Exporter    string
-	Network     string
+	Workspace           string
+	Instructions        string
+	Seeder              string
+	Observer            string
+	InstructionSeeder   string
+	InstructionObserver string
+	CredObsPre          string
+	CredObsPost         string
+	Agent               string
+	Exporter            string
+	Network             string
 }
 
 func namesFor(runID string) handoffNames {
 	return handoffNames{
-		Workspace:   "freeside-handoff-" + runID + "-ws",
-		Seeder:      "freeside-handoff-" + runID + "-seeder",
-		Observer:    "freeside-handoff-" + runID + "-observer",
-		CredObsPre:  "freeside-handoff-" + runID + "-cred-pre",
-		CredObsPost: "freeside-handoff-" + runID + "-cred-post",
-		Agent:       "freeside-handoff-" + runID + "-agent",
-		Exporter:    "freeside-handoff-" + runID + "-exporter",
-		Network:     "freeside-handoff-" + runID + "-egress",
+		Workspace:           "freeside-handoff-" + runID + "-ws",
+		Instructions:        "freeside-handoff-" + runID + "-ins",
+		Seeder:              "freeside-handoff-" + runID + "-seeder",
+		Observer:            "freeside-handoff-" + runID + "-observer",
+		InstructionSeeder:   "freeside-handoff-" + runID + "-ins-seed",
+		InstructionObserver: "freeside-handoff-" + runID + "-ins-check",
+		CredObsPre:          "freeside-handoff-" + runID + "-cred-pre",
+		CredObsPost:         "freeside-handoff-" + runID + "-cred-post",
+		Agent:               "freeside-handoff-" + runID + "-agent",
+		Exporter:            "freeside-handoff-" + runID + "-exporter",
+		Network:             "freeside-handoff-" + runID + "-egress",
 	}
 }
 
@@ -375,6 +613,12 @@ func buildAgentSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLab
 			ReadOnly: !cm.Writable,
 		})
 	}
+	mounts = append(mounts, Mount{
+		Type:     MountVolume,
+		Source:   names.Instructions,
+		Target:   vendorInstructionMountTarget(hs.Agent.VendorInstructions.Vendor),
+		ReadOnly: true,
+	})
 	return ContainerSpec{
 		Name:    names.Agent,
 		Image:   hs.Agent.Image,
@@ -384,6 +628,69 @@ func buildAgentSpec(cfg Config, hs HandoffSpec, names handoffNames, ownershipLab
 		Labels:  append(runLabels(hs.RunID), ownershipLabel),
 		Network: names.Network,
 	}
+}
+
+func buildInstructionSeederSpec(
+	cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label,
+) ContainerSpec {
+	return ContainerSpec{
+		Name:            names.InstructionSeeder,
+		Image:           cfg.ExporterImage,
+		Command:         instructionSeederCommand(cfg),
+		NetworkDisabled: true,
+		Mounts: []Mount{{
+			Type:   MountVolume,
+			Source: names.Instructions,
+			Target: instructionVolumeTarget,
+		}},
+		Labels: append(runLabels(hs.RunID), ownershipLabel),
+	}
+}
+
+func instructionSeederCommand(cfg Config) []string {
+	ticks := seederScriptTicks(cfg)
+	script := "set -eu; n=0; while [ ! -f " + shellQuote(
+		instructionReadyDir+"/"+seedReadyFile,
+	) + " ]; do n=$((n+1)); [ \"$n\" -le " + strconv.Itoa(ticks) +
+		" ] || exit 1; sleep 1; done; " +
+		"find " + shellQuote(instructionVolumeTarget) +
+		" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; " +
+		"cp -a " + shellQuote(instructionStageDir) + "/. " +
+		shellQuote(instructionVolumeTarget) + "/; sync"
+	return []string{"sh", "-c", script}
+}
+
+func buildInstructionObserverSpec(
+	cfg Config, hs HandoffSpec, names handoffNames, ownershipLabel Label,
+) ContainerSpec {
+	return ContainerSpec{
+		Name:  names.InstructionObserver,
+		Image: cfg.ExporterImage,
+		Command: []string{"sh", "-c", instructionObserverScript(
+			ownershipLabel.Value,
+		)},
+		NetworkDisabled: true,
+		Mounts: []Mount{{
+			Type:     MountVolume,
+			Source:   names.Instructions,
+			Target:   instructionVolumeTarget,
+			ReadOnly: true,
+		}},
+		Labels: append(runLabels(hs.RunID), ownershipLabel),
+	}
+}
+
+func instructionObserverScript(nonce string) string {
+	root := shellQuote(instructionVolumeTarget)
+	file := shellQuote(instructionVolumeTarget + "/" + instructionFileName)
+	proof := shellQuote(instructionProofPath)
+	return "LC_ALL=C; export LC_ALL; p=no; d=none; c=dirty; " +
+		"if [ -f " + file + " ] && [ ! -L " + file + " ]; then " +
+		"p=yes; d=\"$(sha256sum " + file + " | cut -d' ' -f1)\"; fi; " +
+		"n=\"$(find " + root + " -mindepth 1 -maxdepth 1 -print 2>/dev/null | wc -l | tr -d ' ')\"; " +
+		"if { [ \"$p\" = yes ] && [ \"$n\" = 1 ]; } || { [ \"$p\" = no ] && [ \"$n\" = 0 ]; }; then c=clean; fi; " +
+		"printf 'nonce=%s\\npresent=%s\\ndigest=%s\\ncontents=%s\\n' " +
+		shellQuote(nonce) + " \"$p\" \"$d\" \"$c\" > " + proof + "; sync"
 }
 
 // buildExporterSpec generates the exporter container and, with it, check 4's

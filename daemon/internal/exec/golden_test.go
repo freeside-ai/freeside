@@ -45,11 +45,16 @@ func TestGolden(t *testing.T) {
 	// added to the record and forgotten here shows up as a golden diff.
 	identity := domain.AuthIdentityID("auth-claude-owner")
 	conversationDigest := execStageDigest("7")
+	vendorDigest := execStageDigest("8")
 	stageInputs, err := domain.NewStageInputSnapshot(domain.StageInputSnapshotInput{
-		InputDigest:          execStageDigest("1"),
-		SpecificationDigest:  execStageDigest("2"),
-		PromptPackageDigest:  execStageDigest("3"),
-		PolicyDigest:         execStageDigest("4"),
+		InputDigest:         execStageDigest("1"),
+		SpecificationDigest: execStageDigest("2"),
+		PromptPackageDigest: execStageDigest("3"),
+		PolicyDigest:        execStageDigest("4"),
+		VendorInstructions: &domain.VendorInstructionSnapshot{
+			Vendor: domain.AgentVendorClaude,
+			Digest: &vendorDigest,
+		},
 		ConversationDigest:   &conversationDigest,
 		PriorArtifactDigests: []domain.Digest{execStageDigest("5")},
 		ImageInputDigests:    []domain.Digest{execStageDigest("6")},
