@@ -1,9 +1,9 @@
 ---
 title: Freeside Project Plan
-revision: 21
+revision: 22
 status: active
 phase: 1A
-updated: 2026-07-27
+updated: 2026-07-29
 ---
 
 # Freeside
@@ -358,6 +358,30 @@ Every run declares and records one credential mode:
 | `api_key_isolated` | Supported in Phase 2. |
 | `local_trusted` | Permitted only for explicitly trusted inputs. |
 
+**Credential delivery under `subscription_contained` (Claude).** The setup
+token lives as a single read-only file on a per-identity credential volume
+authored or replaced by a daemon-owned enrollment transaction while no
+execution can use that identity. Phase 1A mounts no per-identity writable
+Claude state. Ward instead supplies a read-only clean
+`CLAUDE_CONFIG_DIR`, a narrow per-invocation continuity mount, and
+per-launch scratch state (§5.8); none is credential state or reusable by a
+different invocation. Serializing writers on one shared directory would not
+isolate a later invocation from settings or hooks an earlier writer
+persisted.
+
+The daemon-supplied launcher argv reads the token file into the vendor's
+environment variable at exec; the writer's spec environment carries no
+credential and the driver's fixed environment rides the launcher, not the
+spec. The token value never appears in argv text, inspect reports, ward
+journals, or driver state; the credential mount path and the launcher text
+are the only durable traces. The credential remains ambient in the writer
+process tree (children inherit it; the mounted file is readable at agent
+privilege): that is the documented residual this mode accepts, backstopped
+by `provider_only` egress and export secret scanning. Vendor behaviors this
+path depends on are pinned-CLI empirical contracts, re-proved on every CLI
+version bump, not vendor-documented guarantees; the work unit's decision
+note enumerates them.
+
 Secret scanning is intentionally described as **best effort**. It covers
 supported text formats. Size, type, provenance, and publication controls govern
 opaque artifacts. Universal detection across arbitrary encodings and images is
@@ -610,6 +634,71 @@ weaker: release 1.1.0 exposes no host hot-detach, and a guest unmount is not a
 credential-device detach; the credential block device stays attached and
 remountable. Freeside must not implement or declare that class.
 
+#### Writer Outcome Authority
+
+Apple container 1.1.0 exposes no process exit status: the runtime models
+only running and stopped, so a stopped writer is indistinguishable from a
+crashed one at the inspection surface. The exit status's value is
+agent-controlled under every delivery mechanism (an agent process chooses
+its own exit code), so exit status is crash and refusal detection, never
+adversarial proof; acceptance authority stays with output verification and
+the export gates. What the gate trusts is freshness and delivery: it
+authors a per-invocation nonce, journals it before start, and passes it in
+the launcher argv; the launcher's final act writes the nonce and the CLI's
+exit status to a fixed evidence path and exits with that status.
+
+The write-once `ExecutionOutcome` is canonical terminal authority for a
+failed, canceled, or lost invocation; `ExecutionExport` is canonical
+completed authority. The ward journal is the crash bridge and cleanup
+authority, not a competing execution result. In addition to the nonce and
+`WriterComplete`, its open record can carry a durable
+`CancellationIntent {reason, recovery_capture_required}`, an optional
+validated nonzero `WriterFailureStatus`, and an optional
+`RecoveryCaptureDigest`; its terminal outcomes include `completed`,
+`failed`, `canceled`, and `loss`. After restart as well as in the live path,
+the driver idempotently maps `completed` to `ExecutionExport` and every
+other closed outcome to the corresponding `ExecutionOutcome`.
+
+`WriterComplete` is the successful release predicate: the writer is stopped
+or proven absent, the marker is present with the journalled nonce and status
+zero, and the live daemon observed the proxy healthy throughout the writer's
+life. Only that live daemon may set the bit after all four facts hold.
+Recovery never reconstructs the lost proxy-health observation from a zero
+marker.
+
+A daemon-commanded cancellation durably records `CancellationIntent` before
+issuing stop, and that intent takes precedence over marker classification.
+After proving quiescence and satisfying any capture requirement, ward
+completes teardown and closes `canceled`; the driver then converges
+`ExecutionOutcomeCanceled`. Cancellation never makes the partial workspace
+a publication candidate or clean-verifier input. For graceful portable
+handoff, the intent sets `recovery_capture_required`; after quiescence,
+§5.10's normalized encrypted workspace capture completes and its verified
+digest is durable in the ward journal before cleanup can erase its source or
+the ward can close `canceled`. Restore exposes that recovery object only as
+untrusted input to a new attempt.
+
+For an uncommanded stop, a matching nonzero marker is terminal failure.
+Ward validates the nonce and status, persists `WriterFailureStatus` before
+any cleanup can erase the marker-bearing workspace, completes teardown,
+and closes `failed`; export is refused even when partial edits exist.
+Recovery dispatches durable amendments before inspecting marker state:
+`CancellationIntent` takes first precedence, then an existing
+`WriterFailureStatus` remains the failure classification while recovery
+finishes teardown and closes `failed`, even when cleanup already erased the
+marker. Marker classification runs only when neither amendment exists. After
+stopped or absence proof, a missing, malformed, or mismatched marker
+classifies loss; ward completes teardown before closing `loss`. A matching
+zero marker permits recovery adoption only when `WriterComplete` was already
+durable: recovery revalidates the surviving marker and absence facts but
+never synthesizes the bit. Zero without that bit classifies loss and follows
+the same teardown-before-close ordering; nonzero closes `failed` even if a
+stale or legacy completion bit exists. If any required amendment, capture,
+teardown, or close fails, the journal remains open for recovery to retry.
+The writer's transcript is evidence, never an outcome signal: the pinned
+CLI's terminal stream event can report success alongside an authentication
+error, and only the exit status distinguishes them.
+
 #### Golden Agent and Project Images
 
 Golden images split into reusable agent bases, which carry a pinned vendor CLI,
@@ -733,16 +822,84 @@ artifact closure. A genuinely missing path records explicit absence; a
 dangling, unreadable, non-regular, unstable, or oversized source fails
 admission. The live host path is never mounted. Materialization re-verifies the
 recorded digest, then ward places only the admitted file, or an empty overlay
-for admitted absence, read-only at the vendor-native user-instruction path
-outside the workspace. No neighboring host configuration, credentials,
-settings, hooks, tools, or permissions inherit this trust.
+for admitted absence, read-only at a fixed staging mount outside the
+workspace.
 
-Repository vendor instructions remain default-branch control-plane content.
-The invocation contract resolves every auto-loaded repository instruction from
-the exact trusted base on startup, recovery, resume, and child-process launch;
-the writable candidate workspace is not a valid instruction source at any of
-those boundaries. Agent-modified instruction files remain candidate diff
-content and are always risk-flagged.
+The pinned Claude CLI co-locates instructions, executable configuration, and
+session data under `CLAUDE_CONFIG_DIR`. Phase 1A therefore never mounts a
+shared identity directory there. For each gate-mediated launch, ward creates
+a fresh clean config-root volume with exactly two pre-created empty mountpoint
+directories, `projects/` and `session-env/`. Before the credential enters or
+a writer process exists, a networkless, credential-free observer verifies the
+complete root manifest, including ownership, modes, entry types, and absence
+of unknown entries, links, or special files, then records its digest and
+binding in the open ward journal. Observation failure refuses launch. The
+config root is mounted read-only, including against root in the writer.
+
+Only two nested paths are writable. A `projects/` continuity volume is created
+for one invocation, mounted at `$CLAUDE_CONFIG_DIR/projects`, and never reused
+by another invocation. A fresh per-launch scratch volume is mounted at
+`$CLAUDE_CONFIG_DIR/session-env` and never carried to a later launch. No other
+config path is writable. Both surfaces are untrusted activity: the continuity
+volume is retained only because the provider transcript is needed for an
+exact same-invocation resume, while the scratch volume carries shell
+initialization needed by that process.
+
+Ward creates every state volume under a non-reusable opaque identity and
+refuses a pre-existing or ambiguous object. A credential-free observer proves
+the continuity volume empty before its invocation's first launch and each
+scratch volume empty before its sole launch, then journals their runtime
+fingerprints, lifecycle bindings, exact mount targets, and expected options.
+Immediately before every writer start, runtime inspection must match the
+journalled root, continuity, and scratch fingerprints; exact source objects,
+targets, and read-only/read-write options; and absence of any extra mount.
+Resume permits the bound continuity volume's now-untrusted contents but
+re-verifies that it is the same invocation object. Pre-existence,
+substitution, unexpected initial scratch or continuity contents, an
+uninspectable object, or any mismatch fails closed before credential delivery.
+
+Every gate-mediated launch uses the pinned CLI's `--safe-mode`, which disables
+user and project instructions, hooks, plugins, MCP configuration, skills,
+commands, agents, styles, workflows, themes, and keybindings while retaining
+the image-owned administrator policy at
+`/etc/claude-code/managed-settings.json`. Ward separately mounts a
+digest-bound instruction bundle read-only and passes it explicitly with
+`--append-system-prompt-file`. That bundle deterministically composes the
+admitted host instruction (including explicit absence) with the repository
+vendor instructions resolved from the exact trusted base, preserving their
+path scopes and precedence. Its source digests, composition version, and
+result digest are journalled before launch. Agent-modified instruction files
+remain candidate diff content and are always risk-flagged, never launch
+authority.
+
+An initial launch uses a daemon-generated UUID supplied with `--session-id`
+and journalled before process creation. Provider resume is a separate
+ward-owned launch generation in the same invocation: ward proves predecessor
+absence while retaining the credential lease and fence, supplies a fresh
+verified config root, fresh `session-env` scratch, and freshly materialized
+instruction bundle, remounts only that invocation's `projects/` continuity,
+and starts `--fork-session --resume <exact-predecessor-id> --session-id
+<journalled-successor-id>`. Ambient `--continue`, a non-forking resume, an
+unjournalled session ID, cross-invocation continuity, and a second process
+while the predecessor may exist are forbidden. Forking is load-bearing: the
+pinned CLI retained the predecessor's system prompt on an ordinary resume,
+whereas a fork accepted the fresh explicit bundle while preserving
+conversation continuity.
+
+A replay of an already-journalled launch adopts or reaps that exact process;
+it never substitutes a resume or starts a duplicate. A resume generation
+whose predecessor-absence proof, bindings, or prepared volumes cannot be
+reconciled fails closed. After each launch is absent, ward deletes its clean
+root and scratch volumes. After terminal invocation capture, it also deletes
+the continuity volume before close; cleanup failure leaves the journal open
+for recovery. A CLI process the agent itself spawns inside the writer is
+untrusted agent activity, not a gate-mediated launch, and the export gates
+bound its effects.
+
+This topology is a pinned-CLI empirical contract. The exact image must pass
+the minimal-writable-state, workspace/config poison, exact-resume,
+fresh-invocation isolation, crash-matrix, and live-race probes before a CLI
+version change may enter the image.
 
 **Reviewer-instruction poisoning is publish-blocking.** In the ordinary
 workflow, Freeside blocks every reviewer-instruction path, including
@@ -917,8 +1074,11 @@ Takeover restores a complete frontier; there is no partial mode:
   the resulting frontier. One conditional head write then both names that
   frontier and names the successor host while advancing the active epoch,
   transferring the seat atomically. The successor restores the resulting head
-  and records explicit adoption events for in-flight attempts before resuming
-  them.
+  and records explicit adoption events for in-flight attempts. An attempt whose
+  writer committed a terminal result reconciles that result. In particular, a
+  canceled invocation remains terminal and is never restarted or resumed;
+  continuation requires a new attempt seeded from the recovered workspace as
+  untrusted input.
 - **Crash takeover:** the successor conditionally rewrites the remote head to
   name itself and advance the active epoch while retaining the last complete
   frontier, restores that frontier, records the same adoption events, proves or
@@ -1774,20 +1934,43 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 20:
+Revision 22:
 
-1. **Stopping unattended operation is a durable transition with an explicit
-   resume.** Accepting `stop_unattended` on a `system_health` item appends a
-   durable, command-bound operating transition and raises a notice offering
-   the new `resume_unattended` action — the only writer of the resumed state,
-   so a restart alone never resumes. The §4 blocking/supersession rule is
-   durable typed state on the item, re-validated against live configuration
-   at every unattended admission, and the whole operating-state gate is one
-   shared predicate consulted in the admitting transaction and before any
-   dispatch whose operating mode is unknowable.
+1. **The Claude setup token is launcher-delivered, never spec-borne.** The
+   token lives as a single read-only file on a per-identity credential
+   volume. No per-identity writable Claude state is mounted during execution;
+   `CLAUDE_CONFIG_DIR` is a fresh read-only ward-owned root with only
+   invocation-scoped continuity and per-launch scratch mounted beneath it.
+   The daemon-supplied launcher argv reads the token into the CLI process
+   environment at exec, and the writer's spec environment carries no
+   credential. The value never enters argv text, inspect reports, ward
+   journals, or driver state; process-tree ambience is the documented
+   `subscription_contained` residual (§5.4).
+2. **Writer outcome authority is a gate-authored nonce marker with a
+   journalled crash bridge.** `ExecutionOutcome` remains canonical for
+   failed, canceled, and lost invocations, while `ExecutionExport` remains
+   canonical for completion. Before cleanup can erase its source, ward
+   durably records cancellation intent or a validated nonzero status, then
+   closes canceled or failed after required capture and teardown. A live
+   daemon sets `WriterComplete` only after stopped or absent, matching nonce,
+   zero status, and proxy-health-throughout all hold; recovery never
+   synthesizes it. On recovery, cancellation intent outranks a durable
+   failure status, which in turn outranks marker state; marker classification
+   runs only when neither amendment exists. Missing, malformed, or mismatched
+   evidence, and zero without an already-durable completion bit, fail closed
+   as lost after absence proof and teardown (§5.7 Writer Outcome Authority).
+3. **Phase 1A isolates Claude configuration while retaining exact provider
+   resume.** Every gate-mediated launch gets a verified read-only config
+   root, fresh `session-env` scratch, `--safe-mode`, and a read-only explicit
+   bundle composed from admitted host and trusted-base repository
+   instructions. Only `projects/` continuity crosses launches within one
+   invocation. Startup and forked resume use daemon-generated, pre-journalled
+   exact session IDs; resume proves predecessor absence and retains the
+   credential lease and fence. Recovery adopts or reaps an existing launch
+   and never duplicates it. `InvocationChild` remains unavailable; a
+   directly agent-spawned CLI is untrusted agent activity (§5.8).
    Rejected alternatives and revisit conditions live in the decision note.
-   (User; devlog 2026-07-27-1846-durable-stop-and-supersession.md; #319,
-   #321.)
+   (User; devlog 2026-07-29-1750-claude-credential-topology.md; #380.)
 
 ## 14. Risks
 
