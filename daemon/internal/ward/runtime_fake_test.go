@@ -561,7 +561,11 @@ func (f *fakeRuntime) StartContainer(ctx context.Context, id string) error {
 	c.started = true
 	if strings.HasSuffix(id, "-cfg-seed") {
 		if volume, ok := c.rwVolume(); ok {
-			f.stateManifest[volume] = stateManifestConfigRoot
+			if c.spec.Mounts[0].Target == claudeConfigRootVolumeTarget {
+				f.stateManifest[volume] = stateManifestConfigRoot
+			} else {
+				f.stateManifest[volume] = stateManifestEmpty
+			}
 		}
 	}
 	return nil

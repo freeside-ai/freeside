@@ -264,12 +264,23 @@ func TestVerifyInstructionProofFailsClosed(t *testing.T) {
 // at 0711.
 func TestInstructionSeederPublishesAWriterReadableBundle(t *testing.T) {
 	script := strings.Join(instructionSeederCommand(Config{}.withDefaults()), " ")
+	root := shellQuote(instructionVolumeTarget)
 	quoted := shellQuote(instructionVolumeTarget + "/" + instructionFileName)
+	for _, required := range []string{"chown 0:0 " + root, "chmod 0755 " + root} {
+		if !strings.Contains(script, required) {
+			t.Errorf("instruction seeder never makes its root traversable: missing %q", required)
+		}
+	}
 	if !strings.Contains(script, "chmod 0644 "+quoted) {
 		t.Errorf("instruction seeder never relaxes the bundle mode: %s", script)
 	}
 	if strings.Index(script, "cp -a") > strings.Index(script, "chmod 0644") {
 		t.Error("instruction seeder chmods before cp -a restores the 0600 mode")
+	}
+	observer := instructionObserverScript("nonce")
+	if !strings.Contains(observer, `"$(stat -c '%a:%u:%g' `+root) ||
+		!strings.Contains(observer, `" = '755:0:0'`) {
+		t.Error("instruction observer does not attest the traversable root metadata")
 	}
 }
 

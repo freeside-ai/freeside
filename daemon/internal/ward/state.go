@@ -46,8 +46,21 @@ func (b *Backend) prepareLaunchState(
 			return err
 		}
 	}
-	if err := b.seedConfigRoot(ctx, hs.RunID, names, st); err != nil {
-		return err
+	for _, volume := range []struct {
+		name   string
+		target string
+		kind   stateManifestKind
+	}{
+		{names.ConfigRoot, claudeConfigRootVolumeTarget, stateManifestConfigRoot},
+		{names.Continuity, ClaudeContinuityTarget, stateManifestEmpty},
+		{names.SessionScratch, ClaudeSessionScratchTarget, stateManifestEmpty},
+	} {
+		if err := b.seedLaunchStateVolume(
+			ctx, hs.RunID, names.ConfigRootSeeder,
+			volume.name, volume.target, volume.kind, st,
+		); err != nil {
+			return err
+		}
 	}
 	configDigest, err := b.observeStateVolume(
 		ctx, hs.RunID, names.ConfigRootObserver, names.ConfigRoot,
@@ -120,45 +133,34 @@ func (b *Backend) createStateVolume(
 	return nil
 }
 
-func (b *Backend) seedConfigRoot(
+func (b *Backend) seedLaunchStateVolume(
 	ctx context.Context,
 	runID string,
-	names handoffNames,
+	seederName, volume, target string,
+	kind stateManifestKind,
 	st *runState,
 ) error {
 	spec := ContainerSpec{
-		Name:  names.ConfigRootSeeder,
-		Image: b.cfg.ExporterImage,
-		Command: []string{
-			"sh", "-c",
-			"set -eu; umask 022; mkdir -p " +
-				claudeConfigRootVolumeTarget + "/projects " +
-				claudeConfigRootVolumeTarget + "/session-env; " +
-				"chown 0:0 " + claudeConfigRootVolumeTarget + " " +
-				claudeConfigRootVolumeTarget + "/projects " +
-				claudeConfigRootVolumeTarget + "/session-env; " +
-				"chmod 0755 " + claudeConfigRootVolumeTarget + " " +
-				claudeConfigRootVolumeTarget + "/projects " +
-				claudeConfigRootVolumeTarget + "/session-env; sync",
-		},
+		Name:            seederName,
+		Image:           b.cfg.ExporterImage,
+		Command:         []string{"sh", "-c", stateSeederScript(target, kind)},
 		NetworkDisabled: true,
 		Mounts: []Mount{{
-			Type: MountVolume, Source: names.ConfigRoot,
-			Target: claudeConfigRootVolumeTarget,
+			Type: MountVolume, Source: volume, Target: target,
 		}},
 		Labels: append(runLabels(runID), st.ownershipLabel),
 	}
 	st.configRootSeeder.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return failf(CheckControlPlaneIsolation, "create config-root seeder: %v", err)
+		return failf(CheckControlPlaneIsolation, "create launch-state seeder: %v", err)
 	}
 	st.configRootSeeder.owned = true
-	rep, err := b.rt.Inspect(ctx, names.ConfigRootSeeder)
+	rep, err := b.rt.Inspect(ctx, seederName)
 	if err != nil {
-		return failf(CheckControlPlaneIsolation, "inspect config-root seeder: %v", err)
+		return failf(CheckControlPlaneIsolation, "inspect launch-state seeder: %v", err)
 	}
 	if err := verifySeedRoleAllowlist(
-		rep, spec, names.ConfigRoot, claudeConfigRootVolumeTarget,
+		rep, spec, volume, target,
 		CheckControlPlaneIsolation,
 	); err != nil {
 		return err
@@ -167,28 +169,45 @@ func (b *Backend) seedConfigRoot(
 		rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel,
 	)
 	if err != nil {
-		return failf(CheckControlPlaneIsolation, "config-root seeder ownership: %v", err)
+		return failf(CheckControlPlaneIsolation, "launch-state seeder ownership: %v", err)
 	}
-	if err := b.rt.StartContainer(ctx, names.ConfigRootSeeder); err != nil {
-		return failf(CheckControlPlaneIsolation, "start config-root seeder: %v", err)
+	if err := b.rt.StartContainer(ctx, seederName); err != nil {
+		return failf(CheckControlPlaneIsolation, "start launch-state seeder: %v", err)
 	}
 	if err := b.waitStopped(
-		ctx, names.ConfigRootSeeder, st.configRootSeeder,
+		ctx, seederName, st.configRootSeeder,
 		st.ownershipLabel, b.cfg.SeedTimeout,
 	); err != nil {
-		return failf(CheckControlPlaneIsolation, "config-root seeder: %v", err)
+		return failf(CheckControlPlaneIsolation, "launch-state seeder: %v", err)
 	}
-	if err := b.rt.DeleteContainer(ctx, names.ConfigRootSeeder); err != nil {
-		return failf(CheckControlPlaneIsolation, "delete config-root seeder: %v", err)
+	if err := b.rt.DeleteContainer(ctx, seederName); err != nil {
+		return failf(CheckControlPlaneIsolation, "delete launch-state seeder: %v", err)
 	}
 	if err := b.verifyContainerAbsent(
-		ctx, names.ConfigRootSeeder, st.configRootSeeder,
+		ctx, seederName, st.configRootSeeder,
 		st.ownershipLabel, CheckControlPlaneIsolation,
 	); err != nil {
 		return err
 	}
 	st.configRootSeeder = objectClaim{}
 	return nil
+}
+
+func stateSeederScript(target string, kind stateManifestKind) string {
+	root := shellQuote(target)
+	lostFound := shellQuote(target + "/lost+found")
+	script := "set -eu; " +
+		"if [ -e " + lostFound + " ]; then " +
+		"test -d " + lostFound + "; test ! -L " + lostFound + "; " +
+		"test \"$(stat -c '%a:%u:%g' " + lostFound + ")\" = '700:0:0'; " +
+		"test -z \"$(find " + lostFound + " -mindepth 1 -maxdepth 1 -print -quit)\"; " +
+		"rmdir " + lostFound + "; fi; "
+	if kind == stateManifestConfigRoot {
+		script += "umask 022; mkdir -p " + root + "/projects " + root + "/session-env; " +
+			"chown 0:0 " + root + " " + root + "/projects " + root + "/session-env; " +
+			"chmod 0755 " + root + " " + root + "/projects " + root + "/session-env; "
+	}
+	return script + "sync"
 }
 
 func buildStateObserverSpec(

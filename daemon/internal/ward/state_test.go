@@ -66,6 +66,63 @@ func TestClaudeLaunchStateTopologyIsPreparedAndJournalled(t *testing.T) {
 	fx.assertReaped(t)
 }
 
+func TestLaunchStateSeederNormalizesEveryFilesystemRoot(t *testing.T) {
+	fx := newHandoffFixture(t)
+	hs := fx.seed(t)
+	hs.Agent.LaunchState = LaunchStateClaudeClean
+	names := namesFor(hs.RunID)
+	var seeded []ContainerSpec
+	fx.rt.onCreateContainer = func(spec ContainerSpec) error {
+		if spec.Name == names.ConfigRootSeeder {
+			seeded = append(seeded, cloneContainerSpec(spec))
+		}
+		return nil
+	}
+
+	result, err := fx.backend(t).Handoff(context.Background(), hs)
+	if err != nil {
+		t.Fatalf("Handoff = %v, want success", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(result.ExportDir) })
+
+	if len(seeded) != 3 {
+		t.Fatalf("launch-state seeders = %d, want 3", len(seeded))
+	}
+	want := []struct {
+		volume string
+		target string
+	}{
+		{names.ConfigRoot, claudeConfigRootVolumeTarget},
+		{names.Continuity, ClaudeContinuityTarget},
+		{names.SessionScratch, ClaudeSessionScratchTarget},
+	}
+	for i, spec := range seeded {
+		if len(spec.Mounts) != 1 ||
+			spec.Mounts[0].Source != want[i].volume ||
+			spec.Mounts[0].Target != want[i].target {
+			t.Errorf("seeder %d mounts = %+v, want %s at %s",
+				i, spec.Mounts, want[i].volume, want[i].target)
+		}
+		script := spec.Command[2]
+		lostFound := shellQuote(want[i].target + "/lost+found")
+		for _, required := range []string{
+			"test -d " + lostFound,
+			"test ! -L " + lostFound,
+			"'700:0:0'",
+			"-mindepth 1 -maxdepth 1 -print -quit",
+			"rmdir " + lostFound,
+		} {
+			if !strings.Contains(script, required) {
+				t.Errorf("seeder %d omits %q: %s", i, required, script)
+			}
+		}
+		if strings.Contains(script, "rm -") {
+			t.Errorf("seeder %d uses recursive or forced deletion: %s", i, script)
+		}
+	}
+	fx.assertReaped(t)
+}
+
 func TestVerifyStateProofRejectsEveryUntrustedShape(t *testing.T) {
 	const nonce = "00112233445566778899aabbccddeeff"
 	digest := strings.Repeat("ab", 32)
