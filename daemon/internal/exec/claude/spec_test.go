@@ -1,10 +1,14 @@
 package claude
 
 import (
+	"os"
+	"os/exec"
 	"path"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -25,7 +29,7 @@ import (
 // matching the whole script, so ordinary edits stay cheap.
 func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 	t.Parallel()
-	script := strings.Join(agentCommand("do the work", "session-1"), " ")
+	script := strings.Join(agentCommand("do the work", "session-1", "inv-1"), " ")
 	evidenceDir := path.Dir(transcriptPath)
 	controlDir := path.Dir(writerOutcomePath)
 
@@ -68,6 +72,7 @@ func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 	}
 
 	marker := at("> '" + writerOutcomePath + "'")
+	dependencyCleanup := at("rm -rf -- '" + workspaceDir + "/node_modules'")
 	if !strings.Contains(script, ward.WriterNoncePlaceholder) {
 		t.Error("agent command carries no writer nonce placeholder for ward to substitute")
 	}
@@ -82,7 +87,58 @@ func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 	if marker < drop {
 		t.Error("the outcome marker is written before the writer runs")
 	}
+	if dependencyCleanup < drop || dependencyCleanup > marker {
+		t.Error("the runtime dependency tree is not removed after the writer and before its outcome marker")
+	}
 	if privateControl < stickyEvidence {
 		t.Error("the control directory is created before its sticky parent, so its mode is not the one that survives")
+	}
+	descriptor := at("> '" + transcriptDescriptorPath + "'")
+	if descriptor > drop {
+		t.Error("the transcript evidence descriptor is not fixed before the writer runs")
+	}
+	for _, field := range []string{
+		export.EvidenceSourceVersion, `"label":"agent-transcript"`,
+		`"path":"` + transcriptEvidencePath + `"`,
+		`"sensitivity_class":"sensitive"`,
+		`"producer_invocation_id":"inv-1"`,
+	} {
+		if !strings.Contains(script, field) {
+			t.Errorf("transcript descriptor omits %q", field)
+		}
+	}
+}
+
+func TestRuntimeDependencyCleanupDoesNotFollowReplacementSymlink(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(workspace, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(outside, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dependencies := filepath.Join(workspace, "node_modules")
+	if err := os.Symlink(outside, dependencies); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command( //nolint:gosec // G204: fixed shell snippet with a test-owned temp path
+		"sh", "-c", `rm -rf -- "$1"`, "sh", dependencies,
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("dependency cleanup: %v: %s", err, output)
+	}
+	if _, err := os.Lstat(dependencies); !os.IsNotExist(err) {
+		t.Fatalf("replacement symlink survived cleanup: %v", err)
+	}
+	body, err := os.ReadFile(sentinel) //nolint:gosec // G304: test-owned path under t.TempDir
+	if err != nil || string(body) != "keep" {
+		t.Fatalf("cleanup followed replacement symlink: body=%q err=%v", body, err)
 	}
 }

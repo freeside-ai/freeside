@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"path"
 	"unicode/utf8"
@@ -76,9 +77,22 @@ const (
 
 // agentCommand is the pinned CLI's unattended argv. The workspace is the
 // working directory, and the transcript goes to the §5.6 evidence subtree,
-// the agent-output channel the repo walk skips: the gate deletes the writer
-// before any caller sees it, so nothing written elsewhere survives.
-func agentCommand(prompt, sessionID string) []string {
+// which the repo walk skips. The root launcher declares that transcript as
+// sensitive evidence before dropping privilege, so it crosses only through
+// the evidence channel after the writer is gone.
+func agentCommand(prompt, sessionID string, invocationID domain.InvocationID) []string {
+	descriptor, err := json.Marshal(export.EvidenceSourceManifest{
+		Version: export.EvidenceSourceVersion,
+		Sources: []export.EvidenceSource{{
+			Label: "agent-transcript", MediaType: "application/jsonl",
+			Path: transcriptEvidencePath, HeadBinding: export.EvidenceHeadIndependent,
+			SensitivityClass:     export.EvidenceSensitivitySensitive,
+			ProducerInvocationID: string(invocationID),
+		}},
+	})
+	if err != nil {
+		panic("marshal fixed Claude transcript descriptor: " + err.Error())
+	}
 	return []string{"sh", "-c", fmt.Sprintf(
 		"set -eu; "+
 			"chmod 0711 /root; "+
@@ -87,6 +101,7 @@ func agentCommand(prompt, sessionID string) []string {
 			"chown 0:0 %s; chmod 1777 %s; "+
 			"mkdir -p %s; chown 0:0 %s; chmod 1777 %s; "+
 			"mkdir -p %s; chown 0:0 %s; chmod 0700 %s; "+
+			"printf '%%s\\n' %s > %s; chown 0:0 %s; chmod 0644 %s; "+
 			"chown %s:%s %s %s; chmod 0700 %s %s; "+
 			"cd %s; status=86; "+
 			"if [ -s %s ] && token=$(cat %s); then "+
@@ -100,6 +115,7 @@ func agentCommand(prompt, sessionID string) []string {
 			"--output-format stream-json --verbose --dangerously-skip-permissions "+
 			"--safe-mode --session-id %s --append-system-prompt-file %s "+
 			"> %s 2>&1; status=$?; set -e; unset token; fi; "+
+			"rm -rf -- %s; "+
 			"printf '%%s %%s\\n' %s \"$status\" > %s; sync; exit \"$status\"",
 		shellQuote(path.Dir(transcriptPath)), shellQuote(workspaceDir),
 		agentUID, agentGID,
@@ -108,6 +124,8 @@ func agentCommand(prompt, sessionID string) []string {
 		shellQuote(path.Dir(transcriptPath)),
 		shellQuote(path.Dir(writerOutcomePath)), shellQuote(path.Dir(writerOutcomePath)),
 		shellQuote(path.Dir(writerOutcomePath)),
+		shellQuote(string(descriptor)), shellQuote(transcriptDescriptorPath),
+		shellQuote(transcriptDescriptorPath), shellQuote(transcriptDescriptorPath),
 		agentUID, agentGID,
 		shellQuote(ward.ClaudeContinuityTarget), shellQuote(ward.ClaudeSessionScratchTarget),
 		shellQuote(ward.ClaudeContinuityTarget), shellQuote(ward.ClaudeSessionScratchTarget),
@@ -115,7 +133,8 @@ func agentCommand(prompt, sessionID string) []string {
 		shellQuote(credentialTokenPath), shellQuote(credentialTokenPath),
 		shellQuote(ward.ClaudeConfigRootTarget), agentUID, agentGID, shellQuote(prompt),
 		shellQuote(sessionID), shellQuote(instructionBundlePath),
-		shellQuote(transcriptPath), shellQuote(ward.WriterNoncePlaceholder),
+		shellQuote(transcriptPath), shellQuote(workspaceDir+"/node_modules"),
+		shellQuote(ward.WriterNoncePlaceholder),
 		shellQuote(writerOutcomePath),
 	)}
 }
@@ -218,7 +237,7 @@ func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, 
 		},
 		Agent: ward.AgentSpec{
 			Image:             string(spec.ImageRef),
-			Command:           agentCommand(in.Prompt, sessionIDFor(id)),
+			Command:           agentCommand(in.Prompt, sessionIDFor(id), id),
 			Env:               agentEnv(),
 			EgressProfile:     spec.EgressProfile,
 			OutcomeMarkerPath: writerOutcomePath,
@@ -247,8 +266,12 @@ func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, 
 
 // transcriptPath is where the CLI's stream-json transcript lands: inside the
 // reserved evidence subtree, which the repo-change walk skips entirely, so
-// the transcript can only leave through a declared evidence descriptor
-// (the prompt package's job) and never pollutes the candidate commit.
-const transcriptPath = workspaceDir + "/" + export.EvidenceWorkspaceDir + "/agent-transcript.jsonl"
+// the transcript can only leave through the root launcher's declared evidence
+// descriptor and never pollutes the candidate commit.
+const (
+	transcriptEvidencePath   = export.EvidenceWorkspaceDir + "/agent-transcript.jsonl"
+	transcriptPath           = workspaceDir + "/" + transcriptEvidencePath
+	transcriptDescriptorPath = workspaceDir + "/" + export.EvidenceDescriptorPath
+)
 
 const writerOutcomePath = workspaceDir + "/" + export.EvidenceWorkspaceDir + "/.control/writer-outcome"

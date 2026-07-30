@@ -424,6 +424,7 @@ func TestPromptLimitLeavesLinuxArgumentHeadroom(t *testing.T) {
 	command := agentCommand(
 		strings.Repeat("'", maxPromptBytes),
 		"00000000-0000-4000-8000-000000000000",
+		"inv-headroom",
 	)[2]
 	if len(command) >= linuxMaxArgumentBytes {
 		t.Fatalf("max prompt produces %d-byte sh argument, Linux limit is %d",
