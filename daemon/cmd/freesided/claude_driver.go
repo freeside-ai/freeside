@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -535,6 +536,8 @@ type claudeComposition struct {
 	backend *ward.Backend
 	env     engine.AdmissionEnvironment
 	derive  engine.AdmissionDerivation
+	closer  sessionCloser
+	janitor *janitorSession
 }
 
 // composeClaudeDriver builds the production ward gate and Claude driver.
@@ -544,7 +547,7 @@ type claudeComposition struct {
 func composeClaudeDriver(
 	ctx context.Context, st *store.Store, blobs *signet.BlobStore, cfg claudeDriverConfig,
 	waiver *domain.BackupEncryptionWaiver,
-) (*claudeComposition, error) {
+) (_ *claudeComposition, err error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -563,10 +566,15 @@ func composeClaudeDriver(
 	if err != nil {
 		return nil, err
 	}
-	transport, err := claudeTransport(st, cfg)
+	transport, janitor, err := claudeTransport(ctx, st, cfg)
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, janitor.Close(context.Background()))
+		}
+	}()
 	adapters, adapterErr := wardstore.New(st)
 	if adapterErr != nil {
 		return nil, fmt.Errorf("compose ward store adapters: %w", adapterErr)
@@ -655,11 +663,14 @@ func composeClaudeDriver(
 		AuthIdentityID:         &identity,
 		BackupEncryptionWaiver: waiver,
 	}
-	return &claudeComposition{
+	composition := &claudeComposition{
 		driver: driver, backend: backend,
-		env:    env,
-		derive: claudeAdmissionDerivation(cfg),
-	}, nil
+		env:     env,
+		derive:  claudeAdmissionDerivation(cfg),
+		closer:  sessionGroup{driver, janitor},
+		janitor: janitor,
+	}
+	return composition, nil
 }
 
 type storeConformanceRecorder struct {
@@ -754,38 +765,162 @@ func claudeAdmissionDerivation(cfg claudeDriverConfig) engine.AdmissionDerivatio
 // lane's App-authority chain: one credential path, one janitor, one set of
 // minted installation tokens, rather than a second way to reach the same
 // repository.
-func claudeTransport(st *store.Store, cfg claudeDriverConfig) (*publish.Transport, error) {
+func claudeTransport(
+	ctx context.Context,
+	st *store.Store,
+	cfg claudeDriverConfig,
+) (*publish.Transport, *janitorSession, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	keystore, err := publish.NewKeystore(cfg.CredentialsDir, cfg.StateRoot)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	authority, err := publish.NewInstallationAuthorityStore(cfg.StateRoot)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	janitor, err := publish.NewInstallationJanitor(
 		keystore, client, defaultGitHubAPIBase, authority, authority, time.Now,
 		defaultJanitorRemovalBound,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	recorder, err := publish.NewStoreRecorder(st)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	trust, err := publish.NewStoreTrustSource(st)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	minter := publish.NewMinterWithJanitor(
 		keystore, client, defaultGitHubAPIBase, recorder, trust, time.Now, janitor,
 	)
-	return publish.NewTransport(
+	transport, err := publish.NewTransport(
 		publish.NewCachedTokenSource(minter, time.Now),
 		publish.TransportOptions{RemoteBase: defaultGitHubRemoteBase},
 	)
+	if err != nil {
+		return nil, nil, err
+	}
+	apps, err := keystore.ListApps()
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(apps) == 0 {
+		return nil, nil, publish.ErrNoAppCredentials
+	}
+	registrationIDs := make([]int64, 0, len(apps))
+	for _, app := range apps {
+		registrationIDs = append(registrationIDs, app.AppID)
+	}
+	session, err := startJanitorSession(
+		ctx, janitor, registrationIDs, defaultJanitorInterval,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("start installation janitor: %w", err)
+	}
+	return transport, session, nil
+}
+
+const janitorStartupTimeout = 2 * time.Minute
+
+type janitorRunner interface {
+	Run(context.Context, time.Duration) error
+	ActiveFor(int64) bool
+}
+
+type janitorSession struct {
+	cancel   context.CancelFunc
+	finished chan struct{}
+	stopOnce sync.Once
+	runErr   error
+}
+
+func startJanitorSession(
+	parent context.Context,
+	janitor janitorRunner,
+	registrationIDs []int64,
+	interval time.Duration,
+) (*janitorSession, error) {
+	if janitor == nil {
+		return nil, errors.New("nil installation janitor")
+	}
+	if len(registrationIDs) == 0 {
+		return nil, publish.ErrNoAppCredentials
+	}
+	runCtx, cancel := context.WithCancel(parent)
+	session := &janitorSession{cancel: cancel, finished: make(chan struct{})}
+	go func() {
+		session.runErr = janitor.Run(runCtx, interval)
+		close(session.finished)
+	}()
+
+	startupCtx, stopWaiting := context.WithTimeout(parent, janitorStartupTimeout)
+	defer stopWaiting()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		active := true
+		for _, registrationID := range registrationIDs {
+			if !janitor.ActiveFor(registrationID) {
+				active = false
+				break
+			}
+		}
+		if active {
+			return session, nil
+		}
+		select {
+		case <-session.finished:
+			if session.runErr != nil {
+				return nil, session.runErr
+			}
+			return nil, errors.New("installation janitor stopped before publishing coverage")
+		case <-startupCtx.Done():
+			cancel()
+			<-session.finished
+			return nil, errors.Join(
+				fmt.Errorf("installation janitor did not publish coverage: %w", startupCtx.Err()),
+				session.runErr,
+			)
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *janitorSession) Close(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	s.stopOnce.Do(s.cancel)
+	select {
+	case <-s.finished:
+		return s.runErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *janitorSession) Result() error {
+	if s == nil {
+		return nil
+	}
+	<-s.finished
+	return s.runErr
+}
+
+type sessionGroup []sessionCloser
+
+func (g sessionGroup) Close(ctx context.Context) error {
+	var result error
+	for _, session := range g {
+		if session != nil {
+			result = errors.Join(result, session.Close(ctx))
+		}
+	}
+	return result
 }
 
 // stageDriver wraps the Claude driver in the production materializing seam,
