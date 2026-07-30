@@ -112,6 +112,24 @@ func TestAdaptersRoundTripAcrossStoreReopen(t *testing.T) {
 	}
 }
 
+func TestJournalMapsMissingRecordToWardSentinel(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	adapters, err := wardstore.New(st)
+	if err != nil {
+		t.Fatalf("wardstore.New: %v", err)
+	}
+	_, err = adapters.Journal.Get(ctx, "missing-run")
+	if !errors.Is(err, ward.ErrJournalRecordNotFound) {
+		t.Fatalf("Journal.Get missing = %v, want ErrJournalRecordNotFound", err)
+	}
+}
+
 func TestLeaserMapsEndedWindowForWardConvergence(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})

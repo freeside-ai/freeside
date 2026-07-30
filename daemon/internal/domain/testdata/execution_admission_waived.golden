@@ -1,5 +1,5 @@
 {
-  "id": "sha256:ff8ebc143b084f6a00fbe75f387c89495142fa91bb654ab4f8108cf59f565471",
+  "id": "sha256:16bbc247d1b07e916e67c74c64d3f27af3bced486a85643eb8ac87496338fd03",
   "invocation_id": "inv-2",
   "run_id": "run-1",
   "stage_id": "stage-1",
@@ -14,6 +14,7 @@
     "supports_read_only_remount",
     "supports_workspace_snapshot"
   ],
+  "backend_configuration_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "operating_mode": "unattended",
   "credential_mode": "subscription_contained",
   "egress_profile": "clean_verification",

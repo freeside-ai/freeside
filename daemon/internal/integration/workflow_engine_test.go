@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"reflect"
@@ -31,6 +32,17 @@ type workflowFixture struct {
 	signet *signet.Service
 	driver *fake.StageDriver
 	engine *engine.Engine
+}
+
+type startRefusingDriver struct {
+	exec.StageDriver
+	err error
+}
+
+func (d startRefusingDriver) Start(
+	context.Context, domain.InvocationID, exec.StartSpec,
+) error {
+	return d.err
 }
 
 func openWorkflowFixture(t *testing.T, root string) *workflowFixture {
@@ -295,6 +307,38 @@ func TestWorkflowEngineFakeFlow(t *testing.T) {
 		t.Fatalf("Reconcile result = %#v, want one start and one acceptance", result)
 	}
 	assertCompletedOnce(t, f, invocationID)
+}
+
+func TestLegacyInvocationRefusalHoldsAndResumes(t *testing.T) {
+	f := openWorkflowFixture(t, t.TempDir())
+	f.seed(t)
+	f.approve(t)
+	feedback := f.openFeedback(t)
+	invocationID := f.discuss(t, feedback)
+
+	refusing, err := engine.New(f.store, f.signet, startRefusingDriver{
+		StageDriver: f.driver,
+		err:         fmt.Errorf("pre-job probe: %w", exec.ErrPreJobRefused),
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	held, err := refusing.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("legacy refusal stopped reconciliation: %v", err)
+	}
+	if held.InvocationsStarted != 0 {
+		t.Fatalf("legacy refusal started %d invocations, want 0", held.InvocationsStarted)
+	}
+
+	f.scriptCompletion(invocationID, fake.OutcomeComplete)
+	resumed, err := f.engine.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("healthy legacy reconcile did not resume: %v", err)
+	}
+	if resumed.InvocationsStarted != 1 || resumed.ResultsAccepted != 1 {
+		t.Fatalf("healthy legacy reconcile = %#v, want one start and acceptance", resumed)
+	}
 }
 
 // TestWorkflowEngineIgnoresUnmarkedRun prevents the concrete 1A.0 state

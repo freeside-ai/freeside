@@ -607,18 +607,18 @@ func waivedTrustProfile(t *testing.T) domain.AutomationTrustProfile {
 	return profile
 }
 
-// TestAdmissionRefusalStartsNothing is §5.7's no-silent-downgrade rule at the
-// dispatch boundary: a backend below the floor leaves no attempt, no record,
-// and no started invocation, so the intent is still there for a pass under a
-// backend that clears the floor.
-func TestAdmissionRefusalStartsNothing(t *testing.T) {
+// TestAdmissionRefusalHoldsWithoutStarting is §5.7's no-silent-downgrade rule
+// at the dispatch boundary: a backend below the floor is an operating-state
+// hold, leaving no attempt, record, or started invocation and preserving the
+// intent for a pass under a backend that clears the floor.
+func TestAdmissionRefusalHoldsWithoutStarting(t *testing.T) {
 	floor := []exec.Capability{exec.CapNetworklessExport}
 	f := openAdmittingFixture(t,
 		[]exec.Capability{exec.CapPostExitExport}, floor, domain.NewCapabilitySnapshot(floor...))
 
 	invocationID, _, err := dispatchOneInvocation(t, f)
-	if !errors.Is(err, exec.ErrCapabilityRefused) {
-		t.Fatalf("Reconcile = %v, want %v", err, exec.ErrCapabilityRefused)
+	if err != nil {
+		t.Fatalf("Reconcile refusal = %v, want a quiet hold", err)
 	}
 
 	assertNoAttemptRecorded(t, f, invocationID)
@@ -631,18 +631,51 @@ func TestAdmissionRefusalStartsNothing(t *testing.T) {
 // re-gate rejecting the record must also roll back the attempt, or a crash-free
 // refusal would still leave an attempt with no audited class. The engine floor
 // is satisfied here and the store's is not, which is exactly the drift the two
-// independent authorities exist to catch.
+// independent authorities exist to catch. Mutable drift holds the intent, and
+// a later pass under matching policy records both authorities and starts it.
 func TestAdmissionAndAttemptShareOneTransaction(t *testing.T) {
+	ctx := context.Background()
 	f := openAdmittingFixture(t,
 		[]exec.Capability{exec.CapPostExitExport},
 		[]exec.Capability{exec.CapPostExitExport},
 		domain.NewCapabilitySnapshot(exec.CapNetworklessExport))
 
-	invocationID, _, err := dispatchOneInvocation(t, f)
-	if !errors.Is(err, domain.ErrCapabilityBelowFloor) {
-		t.Fatalf("Reconcile = %v, want %v", err, domain.ErrCapabilityBelowFloor)
+	invocationID, held, err := dispatchOneInvocation(t, f)
+	if err != nil {
+		t.Fatalf("Reconcile policy drift = %v, want a quiet hold", err)
+	}
+	if held.InvocationsStarted != 0 {
+		t.Fatalf("policy-drift pass started %d invocations, want 0", held.InvocationsStarted)
 	}
 	assertNoAttemptRecorded(t, f, invocationID)
+
+	floor := domain.NewCapabilitySnapshot(exec.CapPostExitExport)
+	reopened := reopenWithFloor(t, f, floor)
+	blobs, err := signet.NewBlobStore(filepath.Join(f.root, "blobs"))
+	if err != nil {
+		t.Fatalf("signet.NewBlobStore: %v", err)
+	}
+	attention := signet.NewService(reopened, signet.WithBlobStore(blobs))
+	restarted, err := engine.New(reopened, attention, f.driver,
+		engine.WithAdmission(
+			fake.RunnerBackend{
+				BackendName: "fake_runner",
+				Caps:        exec.NewCapabilitySet(exec.CapPostExitExport),
+			},
+			[]exec.Capability{exec.CapPostExitExport},
+			admissionEnvironment(),
+			func() time.Time { return admittedAt.Add(time.Hour) },
+		))
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	resumed, err := restarted.Reconcile(ctx)
+	if err != nil {
+		t.Fatalf("Reconcile after policy recovery: %v", err)
+	}
+	if resumed.InvocationsStarted != 1 {
+		t.Fatalf("recovered pass started %d invocations, want 1", resumed.InvocationsStarted)
+	}
 }
 
 // reopenWithFloor reopens the fixture'"'"'s database under a different admission

@@ -93,6 +93,43 @@ func TestHandoffJournalDurableLifecycle(t *testing.T) {
 	}
 }
 
+func TestHandoffJournalCancellationOutranksWriterFailure(t *testing.T) {
+	ctx := context.Background()
+	s := openWithIdentity(t, testAuthIdentity())
+	rec := journalRecord("canceled-journal-run")
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.BeginHandoffJournal(ctx, rec); err != nil {
+			return err
+		}
+		if err := tx.MarkHandoffCancellationRequested(ctx, rec.RunID); err != nil {
+			return err
+		}
+		if err := tx.MarkHandoffCancellationRequested(ctx, rec.RunID); err != nil {
+			return err
+		}
+		if err := tx.MarkHandoffWriterFailed(ctx, rec.RunID, 143); err != nil {
+			return err
+		}
+		return tx.CloseHandoffJournal(ctx, rec.RunID, store.HandoffCanceled)
+	}); err != nil {
+		t.Fatalf("record canceled lifecycle: %v", err)
+	}
+
+	var got store.HandoffJournalRecord
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		got, err = tx.GetHandoffJournal(ctx, rec.RunID)
+		return err
+	}); err != nil {
+		t.Fatalf("GetHandoffJournal: %v", err)
+	}
+	if !got.CancellationRequested || got.WriterFailureStatus == nil ||
+		*got.WriterFailureStatus != 143 ||
+		got.Outcome == nil || *got.Outcome != store.HandoffCanceled {
+		t.Fatalf("record = %+v, want cancellation intent to outrank status 143", got)
+	}
+}
+
 func TestBeginLeasedHandoffRollsBackBothSidesOnJournalConflict(t *testing.T) {
 	ctx := context.Background()
 	s := openWithIdentity(t, testAuthIdentity())

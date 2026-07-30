@@ -37,7 +37,7 @@ func TestExecutionRecordsMigrationAppliesFromHead(t *testing.T) {
 	if runs != 1 {
 		t.Errorf("pre-migration run count = %d, want 1", runs)
 	}
-	for _, table := range []string{"execution_admissions", "execution_exports"} {
+	for _, table := range []string{"execution_admissions", "execution_exports", "execution_outcomes"} {
 		var rows int
 		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&rows); err != nil {
 			t.Fatalf("count %s: %v", table, err)
@@ -62,6 +62,112 @@ func TestExecutionRecordsMigrationAppliesFromHead(t *testing.T) {
 		 VALUES ('inv-ghost', 'sha256:a', 'cafebabe', 'sha256:m', '2026-01-02T03:04:05Z', '{}')`)
 	if err == nil {
 		t.Error("an export with no admission was accepted")
+	}
+}
+
+func TestExecutionAuthorityTriggersRejectOverlap(t *testing.T) {
+	ctx := context.Background()
+	t.Run("outcome after export", func(t *testing.T) {
+		s, admission := seedAdmission(t, nil)
+		export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+			InvocationID: admission.InvocationID, AdmissionID: admission.ID,
+			ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: "cafebabe",
+			ManifestDigest: "sha256:manifest",
+			RecordedAt:     admission.AdmittedAt.Add(time.Hour),
+		})
+		if err != nil {
+			t.Fatalf("NewExecutionExport: %v", err)
+		}
+		if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+			return tx.RecordExecutionExport(ctx, export)
+		}); err != nil {
+			t.Fatalf("record export: %v", err)
+		}
+
+		_, err = s.db.ExecContext(ctx,
+			`INSERT INTO execution_outcomes
+			   (invocation_id, admission_id, status, summary, recorded_at, body)
+			 VALUES (?, ?, 'failed', 'forged', ?, '{}')`,
+			admission.InvocationID, admission.ID, formatTime(admission.AdmittedAt.Add(time.Hour)))
+		if err == nil {
+			t.Fatal("raw outcome beside an export was accepted")
+		}
+
+		seedRawAdmission(t, ctx, s, admission)
+		if _, err := s.db.ExecContext(ctx,
+			`INSERT INTO execution_outcomes
+			   (invocation_id, admission_id, status, summary, recorded_at, body)
+			 VALUES ('inv-2', 'sha256:other', 'failed', 'forged', ?, '{}')`,
+			formatTime(admission.AdmittedAt.Add(time.Hour))); err != nil {
+			t.Fatalf("seed raw outcome: %v", err)
+		}
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE execution_outcomes
+			 SET invocation_id = ?, admission_id = ?
+			 WHERE invocation_id = 'inv-2'`,
+			admission.InvocationID, admission.ID); err == nil {
+			t.Fatal("raw outcome moved beside an export was accepted")
+		}
+	})
+
+	t.Run("export after outcome", func(t *testing.T) {
+		s, admission := seedAdmission(t, nil)
+		outcome := domain.ExecutionOutcome{
+			InvocationID: admission.InvocationID, AdmissionID: admission.ID,
+			Status: domain.ExecutionOutcomeFailed, Summary: "failed",
+			RecordedAt: admission.AdmittedAt.Add(time.Hour),
+		}
+		if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+			return tx.RecordExecutionOutcome(ctx, outcome)
+		}); err != nil {
+			t.Fatalf("record outcome: %v", err)
+		}
+
+		_, err := s.db.ExecContext(ctx,
+			`INSERT INTO execution_exports
+			   (invocation_id, admission_id, observed_base_sha, head_sha, manifest_digest,
+			    commit_plan_present, recorded_at, body)
+			 VALUES (?, ?, ?, 'cafebabe', 'sha256:manifest', 0, ?, '{}')`,
+			admission.InvocationID, admission.ID, admission.Base.BaseSHA,
+			formatTime(admission.AdmittedAt.Add(time.Hour)))
+		if err == nil {
+			t.Fatal("raw export beside an outcome was accepted")
+		}
+
+		seedRawAdmission(t, ctx, s, admission)
+		if _, err := s.db.ExecContext(ctx,
+			`INSERT INTO execution_exports
+			   (invocation_id, admission_id, observed_base_sha, head_sha, manifest_digest,
+			    commit_plan_present, recorded_at, body)
+			 VALUES ('inv-2', 'sha256:other', ?, 'cafebabe', 'sha256:manifest', 0, ?, '{}')`,
+			admission.Base.BaseSHA, formatTime(admission.AdmittedAt.Add(time.Hour))); err != nil {
+			t.Fatalf("seed raw export: %v", err)
+		}
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE execution_exports
+			 SET invocation_id = ?, admission_id = ?
+			 WHERE invocation_id = 'inv-2'`,
+			admission.InvocationID, admission.ID); err == nil {
+			t.Fatal("raw export moved beside an outcome was accepted")
+		}
+	})
+}
+
+func seedRawAdmission(
+	t *testing.T, ctx context.Context, s *Store, admission domain.ExecutionAdmission,
+) {
+	t.Helper()
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO execution_admissions
+		   (invocation_id, id, run_id, stage_id, attempt_id, operating_mode,
+		    auth_identity_id, admitted_at, body)
+		 SELECT 'inv-2', 'sha256:other', run_id, 'stage-2', 'attempt-2', operating_mode,
+		        auth_identity_id, admitted_at, '{}'
+		 FROM execution_admissions
+		 WHERE invocation_id = ?`,
+		admission.InvocationID)
+	if err != nil {
+		t.Fatalf("seed raw admission: %v", err)
 	}
 }
 
@@ -118,15 +224,20 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 		digest := tamperTrustProfile(t, "owner/repo", 424242).ProfileDigest
 		profileDigest = &digest
 	}
+	backendConfigurationDigest := domain.Digest("")
+	if mode == domain.ModeUnattended {
+		backendConfigurationDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	}
 	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
 		InvocationID: "inv-1", RunID: run.ID, StageID: "stage-1", AttemptID: "attempt-1",
-		Backend:        "fresh_vm_read_only_volume_handoff",
-		Capabilities:   caps,
-		OperatingMode:  mode,
-		CredentialMode: domain.CredentialSubscriptionContained,
-		EgressProfile:  domain.EgressProviderOnly,
-		ImageRef:       domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
-		SpecDigest:     run.SpecDigest, PolicyDigest: run.PolicyDigest, InputDigest: "sha256:input",
+		Backend:                    "fresh_vm_read_only_volume_handoff",
+		BackendConfigurationDigest: backendConfigurationDigest,
+		Capabilities:               caps,
+		OperatingMode:              mode,
+		CredentialMode:             domain.CredentialSubscriptionContained,
+		EgressProfile:              domain.EgressProviderOnly,
+		ImageRef:                   domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32)),
+		SpecDigest:                 run.SpecDigest, PolicyDigest: run.PolicyDigest, InputDigest: "sha256:input",
 		Base:      domain.BaseRevision{Repo: "owner/repo", RepositoryID: 424242, BaseRef: "refs/heads/main", BaseSHA: "deadbeef"},
 		Workspace: "ws-1", AuthIdentityID: &identityID,
 		TrustProfileDigest:     profileDigest,
@@ -155,10 +266,11 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 		}
 		if admission.OperatingMode == domain.ModeUnattended {
 			conformance, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-				Backend:      domain.BackendFreshVMReadOnlyVolumeHandoff,
-				Outcome:      domain.ConformancePassed,
-				Capabilities: admission.Capabilities,
-				ProvedAt:     admission.AdmittedAt,
+				Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+				Outcome:             domain.ConformancePassed,
+				ConfigurationDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+				Capabilities:        admission.Capabilities,
+				ProvedAt:            admission.AdmittedAt,
 			})
 			if err != nil {
 				return err
@@ -172,6 +284,49 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 		t.Fatalf("seed: %v", err)
 	}
 	return s, admission
+}
+
+// TestLegacyUnboundUnattendedAdmissionReconstructs proves that adding the
+// backend-configuration binding does not make pre-binding durable history
+// unreadable. The historical record reconstructs under its original content
+// address, but the live conformance gate still refuses to dispatch it.
+func TestLegacyUnboundUnattendedAdmissionReconstructs(t *testing.T) {
+	ctx := context.Background()
+	s, admission := seedAdmission(t, &domain.BackupEncryptionWaiver{
+		RepositoryID: 424242,
+		Reason:       "pre-binding fixture",
+	})
+
+	admission.BackendConfigurationDigest = ""
+	id, err := admission.ComputeID()
+	if err != nil {
+		t.Fatalf("compute legacy admission id: %v", err)
+	}
+	admission.ID = id
+	body, err := encode(admission)
+	if err != nil {
+		t.Fatalf("encode legacy admission: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE execution_admissions SET id = ?, body = ? WHERE invocation_id = ?`,
+		admission.ID, body, admission.InvocationID,
+	); err != nil {
+		t.Fatalf("rewrite as legacy admission: %v", err)
+	}
+
+	err = s.Read(ctx, func(tx *ReadTx) error {
+		got, err := tx.GetExecutionAdmission(ctx, admission.InvocationID)
+		if err != nil {
+			return err
+		}
+		if got.BackendConfigurationDigest != "" {
+			t.Errorf("legacy backend configuration digest = %q, want empty", got.BackendConfigurationDigest)
+		}
+		return tx.RequireBackendConformant(ctx, got)
+	})
+	if !errors.Is(err, domain.ErrAdmissionConfigurationMismatch) {
+		t.Fatalf("legacy dispatch gate = %v, want %v", err, domain.ErrAdmissionConfigurationMismatch)
+	}
 }
 
 // tamperTrustProfile is the approved profile a waived fixture is gated
@@ -273,7 +428,8 @@ func TestForgedWaiverRowFailsClosed(t *testing.T) {
 	other, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
 		InvocationID: admission.InvocationID, RunID: admission.RunID, StageID: admission.StageID,
 		AttemptID: admission.AttemptID, Backend: admission.Backend,
-		Capabilities: admission.Capabilities, OperatingMode: admission.OperatingMode,
+		BackendConfigurationDigest: admission.BackendConfigurationDigest,
+		Capabilities:               admission.Capabilities, OperatingMode: admission.OperatingMode,
 		CredentialMode: admission.CredentialMode, EgressProfile: admission.EgressProfile,
 		ImageRef: admission.ImageRef, SpecDigest: admission.SpecDigest,
 		PolicyDigest: admission.PolicyDigest, InputDigest: admission.InputDigest,

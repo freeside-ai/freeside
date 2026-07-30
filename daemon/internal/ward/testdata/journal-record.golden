@@ -5,6 +5,10 @@
   "observed_base_sha": "1212121212121212121212121212121212121212",
   "credential_pre_digest": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
   "writer_complete": true,
+  "cancellation_requested": false,
+  "writer_failure_status": null,
+  "state": null,
+  "instructions": null,
   "lease": {
     "auth_identity_id": "identity-fixture",
     "holder": "holder-fixture",

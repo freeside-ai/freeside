@@ -39,9 +39,18 @@ var (
 	// ErrInputDigestInvalid: an admitted input is not a canonical sha256
 	// content address and therefore cannot be passed to a source.
 	ErrInputDigestInvalid = errors.New("stage input digest is not canonical sha256")
+	// ErrInputUnavailable: input materialization hit operational I/O or
+	// cancellation before a process started. The durable outbox intent remains
+	// pending and may be retried; missing or corrupt admitted bytes use their
+	// permanent integrity classes instead.
+	ErrInputUnavailable = errors.New("stage input is temporarily unavailable")
 	// ErrMaterializerMissing: the production driver adapter has no input
 	// materializer.
 	ErrMaterializerMissing = errors.New("stage input materializer is missing")
 	// ErrMaterializedDriverMissing: the adapter has no process-facing driver.
 	ErrMaterializedDriverMissing = errors.New("materialized stage driver is missing")
+	// ErrPreJobRefused: the backend's lightweight pre-job gate failed before
+	// process start. The outbox intent remains pending for a later healthy
+	// reconcile pass; this operating-state refusal must not stop the daemon.
+	ErrPreJobRefused = errors.New("backend pre-job gate refused dispatch")
 )

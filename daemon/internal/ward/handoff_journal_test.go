@@ -1,10 +1,89 @@
 package ward
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 )
+
+func TestHandoffJournalsCancellationBeforeStoppingWriter(t *testing.T) {
+	fx := newHandoffFixture(t)
+	j := fx.journalled()
+	hs := testHandoffSpec()
+	names := namesFor(hs.RunID)
+	fx.rt.runningInspects[names.Agent] = 100
+	ctx, cancel := context.WithCancel(context.Background())
+	fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+		if id == names.Agent && rep.State == StateRunning {
+			cancel()
+		}
+		return rep, nil
+	}
+
+	backend := fx.backend(t)
+	_, err := backend.Handoff(ctx, hs)
+	if !errors.Is(err, ErrHandoffCanceled) {
+		t.Fatalf("Handoff = %v, want ErrHandoffCanceled", err)
+	}
+	rec := j.snapshot(hs.RunID)
+	if rec == nil || !rec.CancellationRequested ||
+		rec.Outcome == nil || *rec.Outcome != HandoffCanceled {
+		t.Fatalf("record = %+v, want durable canceled outcome", rec)
+	}
+	mark := fx.rt.callIndex("journal-cancellation-requested " + hs.RunID)
+	stop := fx.rt.callIndex("stop-container " + names.Agent)
+	if mark == -1 || stop == -1 || mark > stop {
+		t.Fatalf("cancellation mark=%d stop=%d, want durable mark before stop", mark, stop)
+	}
+	fx.assertReaped(t)
+}
+
+func TestCancellationJournalFailureStillReapsWriter(t *testing.T) {
+	fx := newHandoffFixture(t)
+	j := fx.journalled()
+	inject := errors.New("fixture: cancellation journal unavailable")
+	j.failCancellation = inject
+	hs, leaser := fx.leased(t)
+	names := namesFor(hs.RunID)
+	fx.rt.runningInspects[names.Agent] = 100
+	ctx, cancel := context.WithCancel(context.Background())
+	fx.rt.onInspect = func(id string, rep InspectReport) (InspectReport, error) {
+		if id == names.Agent && rep.State == StateRunning {
+			cancel()
+		}
+		return rep, nil
+	}
+
+	backend := fx.backend(t)
+	_, err := backend.Handoff(ctx, hs)
+	if !errors.Is(err, inject) {
+		t.Fatalf("Handoff = %v, want cancellation journal failure", err)
+	}
+	rec := j.snapshot(hs.RunID)
+	if rec == nil || rec.CancellationRequested || rec.Outcome != nil {
+		t.Fatalf("record = %+v, want open without unearned cancellation", rec)
+	}
+	if fx.rt.callIndex("stop-container "+names.Agent) == -1 {
+		t.Fatal("writer was not stopped after cancellation journaling failed")
+	}
+	if !leaser.released {
+		t.Fatal("writer was reaped without releasing its mutation lease")
+	}
+	fx.assertReaped(t)
+
+	recovered, err := backend.Recover(context.Background(), hs.RunID, hs)
+	if err != nil {
+		t.Fatalf("Recover reaped open record: %v", err)
+	}
+	if recovered.Outcome != RecoveryLoss {
+		t.Fatalf("recovery outcome = %q, want loss", recovered.Outcome)
+	}
+	rec = j.snapshot(hs.RunID)
+	if rec == nil || rec.Outcome == nil || *rec.Outcome != HandoffLoss {
+		t.Fatalf("recovered record = %+v, want durable loss", rec)
+	}
+}
 
 // journalled wires a fake journal into the fixture, mirroring its calls into
 // the runtime call log.
@@ -136,6 +215,45 @@ func TestHandoffJournalledFailureClosesLoss(t *testing.T) {
 	}
 	if rec.WriterComplete {
 		t.Error("record carries writer-complete for a writer that never ran")
+	}
+	fx.assertReaped(t)
+}
+
+// TestHandoffJournalledWriterFailureClosesFailed proves a stopped process is
+// not success: ward authenticates the launcher's nonce marker, persists the
+// nonzero status before cleanup, refuses export, and closes failed.
+func TestHandoffJournalledWriterFailureClosesFailed(t *testing.T) {
+	fx := newHandoffFixture(t)
+	j := fx.journalled()
+	hs := testHandoffSpec()
+	hs.Agent.OutcomeMarkerPath = fx.cfg.WorkspaceTarget + "/.freeside/evidence/writer-outcome"
+	hs.Agent.Command = []string{
+		"sh", "-c", "printf '%s 7\\n' " + WriterNoncePlaceholder + " > " + hs.Agent.OutcomeMarkerPath,
+	}
+	fx.rt.writerStatus = 7
+	names := namesFor(hs.RunID)
+
+	_, err := fx.runSpec(t, hs)
+	if !errors.Is(err, ErrWriterFailed) {
+		t.Fatalf("Handoff error = %v, want ErrWriterFailed", err)
+	}
+	rec := j.snapshot(hs.RunID)
+	if rec == nil || rec.WriterFailureStatus == nil || *rec.WriterFailureStatus != 7 {
+		t.Fatalf("record = %+v, want durable writer status 7", rec)
+	}
+	if rec.WriterComplete {
+		t.Error("failed writer carries writer-complete")
+	}
+	if rec.Outcome == nil || *rec.Outcome != HandoffFailed {
+		t.Fatalf("record outcome = %v, want failed", rec.Outcome)
+	}
+	if failed := fx.rt.callIndex("journal-writer-failed " + hs.RunID); failed == -1 {
+		t.Fatal("writer failure was not journalled")
+	} else if deleted := fx.rt.callIndex("delete-volume " + names.Workspace); deleted != -1 && failed > deleted {
+		t.Errorf("writer failure journalled at %d after workspace deletion at %d", failed, deleted)
+	}
+	if fx.rt.callIndex("create-container "+names.Exporter) != -1 {
+		t.Error("exporter ran for a failed writer")
 	}
 	fx.assertReaped(t)
 }

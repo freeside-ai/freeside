@@ -52,8 +52,9 @@ func conformanceAt(t *testing.T, outcome domain.ConformanceOutcome,
 ) domain.BackendConformance {
 	t.Helper()
 	record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
-		Backend: domain.BackendFreshVMReadOnlyVolumeHandoff,
-		Outcome: outcome, Capabilities: caps, ProvedAt: at,
+		Backend: domain.BackendFreshVMReadOnlyVolumeHandoff, Outcome: outcome,
+		ConfigurationDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		Capabilities:        caps, ProvedAt: at,
 	})
 	if err != nil {
 		t.Fatalf("NewBackendConformance: %v", err)
@@ -143,6 +144,43 @@ func TestUnattendedAdmissionExceedingConformanceRefused(t *testing.T) {
 	}
 }
 
+// TestUnattendedAdmissionRequiresTheCurrentBackendConfiguration closes the
+// cross-daemon race: a still-running daemon configured for A may not combine
+// its in-memory capability declaration with the newest durable proof for B.
+func TestUnattendedAdmissionRequiresTheCurrentBackendConfiguration(t *testing.T) {
+	s, f := openUnattendedNoConformance(t)
+	recordConformance(t, s, conformanceAt(
+		t, domain.ConformancePassed, conformantCapabilities(t), admissionEpoch))
+	if err := recordAdmission(t, s, f.admission); err != nil {
+		t.Fatalf("record admission under configuration A: %v", err)
+	}
+
+	record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformancePassed,
+		ConfigurationDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+		Capabilities:        conformantCapabilities(t),
+		ProvedAt:            admissionEpoch,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordConformance(t, s, record)
+
+	if err := s.Read(context.Background(), func(tx *store.ReadTx) error {
+		admission, err := tx.GetExecutionAdmission(context.Background(), f.admission.InvocationID)
+		if err != nil {
+			return err
+		}
+		return tx.RequireBackendConformant(context.Background(), admission)
+	}); !errors.Is(
+		err, domain.ErrAdmissionConfigurationMismatch,
+	) {
+		t.Fatalf("replayed admission for configuration A under proof B = %v, want %v",
+			err, domain.ErrAdmissionConfigurationMismatch)
+	}
+}
+
 // TestAttendedAdmissionNeedsNoConformance is the owner-ratified scope
 // reading: §5.7 admits a weaker, unproven runner class for attended_dev, so
 // the conformance gate applies to unattended admission only.
@@ -181,8 +219,9 @@ func TestRecordBackendConformanceRefusals(t *testing.T) {
 	}
 
 	overclaim := domain.BackendConformance{
-		Backend: domain.BackendFreshVMReadOnlyVolumeHandoff,
-		Outcome: domain.ConformancePassed,
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformancePassed,
+		ConfigurationDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
 		Capabilities: domain.NewCapabilitySnapshot(
 			domain.CapPostExitExport, domain.CapCredentialVolumeDetach),
 		ProvedAt: admissionEpoch,
@@ -199,10 +238,11 @@ func TestRecordBackendConformanceRefusals(t *testing.T) {
 	}
 
 	failedWithCaps := domain.BackendConformance{
-		Backend:      domain.BackendFreshVMReadOnlyVolumeHandoff,
-		Outcome:      domain.ConformanceFailed,
-		Capabilities: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
-		ProvedAt:     admissionEpoch,
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformanceFailed,
+		ConfigurationDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		Capabilities:        domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		ProvedAt:            admissionEpoch,
 	}
 	if err := record(failedWithCaps); !errors.Is(err, domain.ErrConformanceCapabilitiesWithoutPass) {
 		t.Errorf("failed record with capabilities = %v, want %v",
@@ -213,6 +253,13 @@ func TestRecordBackendConformanceRefusals(t *testing.T) {
 	forgedGeneration.Generation = 41
 	if err := record(forgedGeneration); !errors.Is(err, store.ErrConformanceGenerationSupplied) {
 		t.Errorf("caller-supplied generation = %v, want %v", err, store.ErrConformanceGenerationSupplied)
+	}
+
+	unbound := conformanceAt(t, domain.ConformancePassed, conformantCapabilities(t), admissionEpoch)
+	unbound.ConfigurationDigest = domain.UnboundBackendConfigurationDigest
+	if err := record(unbound); !errors.Is(err, domain.ErrConformanceConfigurationUnbound) {
+		t.Errorf("unbound configuration = %v, want %v",
+			err, domain.ErrConformanceConfigurationUnbound)
 	}
 }
 

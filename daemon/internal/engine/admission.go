@@ -113,10 +113,11 @@ func waivedPostureItem(
 
 // admitter holds the configured admission inputs.
 type admitter struct {
-	backend     exec.RunnerBackend
-	floor       []exec.Capability
-	environment AdmissionEnvironment
-	now         func() time.Time
+	backend                    exec.RunnerBackend
+	backendConfigurationDigest domain.Digest
+	floor                      []exec.Capability
+	environment                AdmissionEnvironment
+	now                        func() time.Time
 }
 
 // WithAdmission makes the engine admit every dispatched attempt against
@@ -140,6 +141,19 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 		if now == nil {
 			return errors.New("with admission: nil clock")
 		}
+		var backendConfigurationDigest domain.Digest
+		if env.OperatingMode == domain.ModeUnattended {
+			bound, ok := backend.(exec.ConfigurationBoundBackend)
+			if !ok {
+				return errors.New("with admission: unattended backend has no configuration digest")
+			}
+			backendConfigurationDigest = bound.ConfigurationDigest()
+			if !contentaddr.Valid(string(backendConfigurationDigest)) ||
+				backendConfigurationDigest == domain.UnboundBackendConfigurationDigest {
+				return fmt.Errorf("with admission: unattended backend configuration digest %q is not bound",
+					backendConfigurationDigest)
+			}
+		}
 		if !contentaddr.Valid(string(env.PromptPackageDigest)) {
 			return fmt.Errorf("with admission: prompt package digest %q is not canonical",
 				env.PromptPackageDigest)
@@ -152,11 +166,35 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 		// could weaken the gate, or retarget the credential and waiver
 		// bindings a record attests to, long after engine.New returned.
 		e.admission = &admitter{
-			backend:     backend,
-			floor:       slices.Clone(floor),
-			environment: env.clone(),
-			now:         now,
+			backend:                    backend,
+			backendConfigurationDigest: backendConfigurationDigest,
+			floor:                      slices.Clone(floor),
+			environment:                env.clone(),
+			now:                        now,
 		}
+		return nil
+	}
+}
+
+// AdmissionDerivation derives the per-attempt half of the admission
+// environment: the workspace reference and the exact base revision this
+// attempt runs against. The static AdmissionEnvironment cannot carry either
+// once more than one run flows through a daemon (each handoff owns its
+// workspace volume, and the trusted base tip moves between submissions), and
+// the composition, not the engine, knows the ward's workspace naming scheme
+// and how the operator resolves a base (#237).
+type AdmissionDerivation func(ctx context.Context, invocationID domain.InvocationID) (workspace string, base domain.BaseRevision, err error)
+
+// WithAdmissionDerivation configures per-attempt workspace and base
+// derivation. The derived values replace the environment's Workspace and
+// Base for every admission this engine records; everything else stays the
+// configured static environment.
+func WithAdmissionDerivation(derive AdmissionDerivation) Option {
+	return func(e *Engine) error {
+		if derive == nil {
+			return errors.New("with admission derivation: nil derivation")
+		}
+		e.derive = derive
 		return nil
 	}
 }
@@ -180,6 +218,14 @@ func (e *Engine) admitAttempt(
 		return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
 	}
 	env := e.admission.environment
+	if e.derive != nil {
+		workspace, base, err := e.derive(ctx, invocationID)
+		if err != nil {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q: derive environment: %w", invocationID, err)
+		}
+		env.Workspace, env.Base = workspace, base
+	}
 	stageInputs, err := e.stageInputSnapshot(ctx, binding, inputDigest)
 	if err != nil {
 		return domain.ExecutionAdmission{}, false, fmt.Errorf(
@@ -208,26 +254,27 @@ func (e *Engine) admitAttempt(
 		}
 	}
 	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
-		InvocationID:           invocationID,
-		RunID:                  binding.run.ID,
-		StageID:                stage.ID,
-		AttemptID:              attemptIDFor(invocationID),
-		Backend:                snapshot.Backend,
-		Capabilities:           snapshot.Declared.Snapshot(),
-		OperatingMode:          env.OperatingMode,
-		CredentialMode:         env.CredentialMode,
-		EgressProfile:          env.EgressProfile,
-		ImageRef:               env.ImageRef,
-		SpecDigest:             binding.run.SpecDigest,
-		PolicyDigest:           binding.run.PolicyDigest,
-		InputDigest:            inputDigest,
-		StageInputs:            &stageInputs,
-		Base:                   env.Base,
-		Workspace:              env.Workspace,
-		AuthIdentityID:         env.AuthIdentityID,
-		TrustProfileDigest:     profileDigest,
-		BackupEncryptionWaiver: env.BackupEncryptionWaiver,
-		AdmittedAt:             e.admission.now(),
+		InvocationID:               invocationID,
+		RunID:                      binding.run.ID,
+		StageID:                    stage.ID,
+		AttemptID:                  attemptIDFor(invocationID),
+		Backend:                    snapshot.Backend,
+		Capabilities:               snapshot.Declared.Snapshot(),
+		BackendConfigurationDigest: e.admission.backendConfigurationDigest,
+		OperatingMode:              env.OperatingMode,
+		CredentialMode:             env.CredentialMode,
+		EgressProfile:              env.EgressProfile,
+		ImageRef:                   env.ImageRef,
+		SpecDigest:                 binding.run.SpecDigest,
+		PolicyDigest:               binding.run.PolicyDigest,
+		InputDigest:                inputDigest,
+		StageInputs:                &stageInputs,
+		Base:                       env.Base,
+		Workspace:                  env.Workspace,
+		AuthIdentityID:             env.AuthIdentityID,
+		TrustProfileDigest:         profileDigest,
+		BackupEncryptionWaiver:     env.BackupEncryptionWaiver,
+		AdmittedAt:                 e.admission.now(),
 	})
 	if err != nil {
 		return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)

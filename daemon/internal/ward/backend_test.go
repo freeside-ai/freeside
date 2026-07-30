@@ -2,7 +2,10 @@ package ward
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -81,6 +84,258 @@ func TestNetworklessCapabilityRequiresConformance(t *testing.T) {
 	b.networkless.Store(true)
 	if _, err := exec.CheckCapabilities(b, append(declaredCapabilities, exec.CapNetworklessExport)); err != nil {
 		t.Fatalf("proven networkless capability = %v, want admission", err)
+	}
+}
+
+func TestRestoreConformancePublishesDurableCapabilitiesOnce(t *testing.T) {
+	b := newTestBackend(t)
+	record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformancePassed,
+		ConfigurationDigest: b.ConfigurationDigest(),
+		Capabilities: domain.NewCapabilitySnapshot(
+			domain.CapDetachableWorkspace,
+			domain.CapPostExitExport,
+			domain.CapReadOnlyRemount,
+			domain.CapNetworklessExport,
+			domain.CapEnforcedProviderEgress,
+		),
+		ProvedAt: time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("NewBackendConformance: %v", err)
+	}
+	record.Generation = 7
+	if err := b.RestoreConformance(record); err != nil {
+		t.Fatalf("RestoreConformance: %v", err)
+	}
+	for _, capability := range conformancePendingCapabilities {
+		if !b.Capabilities().Has(capability) {
+			t.Errorf("restored backend does not declare %q", capability)
+		}
+	}
+
+	if _, err := b.beginConformanceProof(nil); err != nil {
+		t.Fatalf("begin proof: %v", err)
+	}
+	if err := b.RestoreConformance(record); err == nil {
+		t.Fatal("durable success was restored after a live proof began")
+	}
+	for _, capability := range conformancePendingCapabilities {
+		if b.Capabilities().Has(capability) {
+			t.Errorf("stale restore resurrected %q after a live proof began", capability)
+		}
+	}
+}
+
+func TestRestoreConformanceRejectsUnpersistedOrFailedRecords(t *testing.T) {
+	t.Parallel()
+	configurationDigest := newTestBackend(t).ConfigurationDigest()
+	passed, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformancePassed,
+		ConfigurationDigest: configurationDigest,
+		Capabilities: domain.NewCapabilitySnapshot(
+			domain.CapDetachableWorkspace,
+			domain.CapPostExitExport,
+			domain.CapReadOnlyRemount,
+			domain.CapNetworklessExport,
+			domain.CapEnforcedProviderEgress,
+		),
+		ProvedAt: time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("NewBackendConformance(passed): %v", err)
+	}
+	failed, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformanceFailed,
+		ConfigurationDigest: configurationDigest,
+		ProvedAt:            time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("NewBackendConformance(failed): %v", err)
+	}
+	failed.Generation = 8
+
+	for _, tc := range []struct {
+		name   string
+		record domain.BackendConformance
+	}{
+		{"unpersisted", passed},
+		{"failed", failed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newTestBackend(t)
+			if err := b.RestoreConformance(tc.record); err == nil {
+				t.Fatal("RestoreConformance accepted a record that cannot grant capabilities")
+			}
+			for _, capability := range conformancePendingCapabilities {
+				if b.Capabilities().Has(capability) {
+					t.Errorf("rejected record published %q", capability)
+				}
+			}
+		})
+	}
+}
+
+func TestRestoreConformanceRejectsAnotherBackendConfiguration(t *testing.T) {
+	t.Parallel()
+	proved := newTestBackend(t)
+	record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformancePassed,
+		ConfigurationDigest: proved.ConfigurationDigest(),
+		Capabilities:        domain.NewCapabilitySnapshot(provenCapabilities()...),
+		ProvedAt:            time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("NewBackendConformance: %v", err)
+	}
+	record.Generation = 7
+
+	cfg := testConfig()
+	cfg.ExporterImage = "example.test/other-exporter@sha256:" + strings.Repeat("2", 64)
+	active, err := New(stubRuntime{}, cfg)
+	if err != nil {
+		t.Fatalf("New(active): %v", err)
+	}
+	if err := active.RestoreConformance(record); err == nil {
+		t.Fatal("proof from another exporter configuration was restored")
+	}
+	for _, capability := range conformancePendingCapabilities {
+		if active.Capabilities().Has(capability) {
+			t.Errorf("mismatched configuration published %q", capability)
+		}
+	}
+}
+
+func TestConfigurationDigestTracksConformanceSurfaces(t *testing.T) {
+	t.Parallel()
+	binDir := t.TempDir()
+	binA := filepath.Join(binDir, "container-a")
+	binB := filepath.Join(binDir, "container-b")
+	for path, body := range map[string]string{binA: "runtime-a", binB: "runtime-b"} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write runtime fixture: %v", err)
+		}
+	}
+	cfg := testConfig()
+	cfg.ProviderEndpoints = []string{"api.anthropic.com:443", "console.anthropic.com:443"}
+	base, err := New(NewCLIRuntime(binA), cfg)
+	if err != nil {
+		t.Fatalf("New(base): %v", err)
+	}
+	reordered := cfg
+	reordered.ProviderEndpoints = []string{"console.anthropic.com:443", "api.anthropic.com:443"}
+	same, err := New(NewCLIRuntime(binA), reordered)
+	if err != nil {
+		t.Fatalf("New(reordered): %v", err)
+	}
+	if same.ConfigurationDigest() != base.ConfigurationDigest() {
+		t.Fatal("endpoint ordering changed a set-valued configuration identity")
+	}
+	baseDigest := base.ConfigurationDigest()
+	originalDaemonIdentity := base.daemonIdentity
+	base.daemonIdentity = "freesided@sha256:" + strings.Repeat("9", 64)
+	if base.ConfigurationDigest() == baseDigest {
+		t.Fatal("daemon executable replacement retained the conformance digest")
+	}
+	base.daemonIdentity = originalDaemonIdentity
+
+	tests := []struct {
+		name string
+		rt   Runtime
+		cfg  Config
+	}{
+		{"runtime command", NewCLIRuntime(binB), cfg},
+		{"agent image", NewCLIRuntime(binA), func() Config {
+			changed := cfg
+			changed.AgentImage = "example.test/agent@sha256:" + strings.Repeat("3", 64)
+			return changed
+		}()},
+		{"exporter image", NewCLIRuntime(binA), func() Config {
+			changed := cfg
+			changed.ExporterImage = "example.test/other-exporter@sha256:" + strings.Repeat("2", 64)
+			return changed
+		}()},
+		{"provider endpoint", NewCLIRuntime(binA), func() Config {
+			changed := cfg
+			changed.ProviderEndpoints = []string{"api.anthropic.com:443"}
+			return changed
+		}()},
+		{"seed root", NewCLIRuntime(binA), func() Config {
+			changed := cfg
+			changed.SeedRoot = "/different/seed-root"
+			return changed
+		}()},
+		{"export root", NewCLIRuntime(binA), func() Config {
+			changed := cfg
+			changed.ExportRoot = "/different/export-root"
+			return changed
+		}()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			changed, err := New(tc.rt, tc.cfg)
+			if err != nil {
+				t.Fatalf("New(changed): %v", err)
+			}
+			if changed.ConfigurationDigest() == base.ConfigurationDigest() {
+				t.Fatal("conformance-relevant configuration change retained the same digest")
+			}
+		})
+	}
+}
+
+func TestDaemonConfigurationIdentityHashesExecutableBytes(t *testing.T) {
+	t.Parallel()
+	bin := filepath.Join(t.TempDir(), "freesided")
+	if err := os.WriteFile(bin, []byte("daemon-v1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first, err := executableIdentity(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("daemon-v2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := executableIdentity(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("in-place daemon replacement retained its executable identity")
+	}
+}
+
+func TestConfigurationDigestTracksRuntimeExecutableBytes(t *testing.T) {
+	t.Parallel()
+	bin := t.TempDir() + "/container"
+	if err := os.WriteFile(bin, []byte("runtime-v1"), 0o600); err != nil {
+		t.Fatalf("write runtime v1: %v", err)
+	}
+	first, err := New(NewCLIRuntime(bin), testConfig())
+	if err != nil {
+		t.Fatalf("New(first): %v", err)
+	}
+	if err := os.WriteFile(bin, []byte("runtime-v2"), 0o600); err != nil {
+		t.Fatalf("write runtime v2: %v", err)
+	}
+	second, err := New(NewCLIRuntime(bin), testConfig())
+	if err != nil {
+		t.Fatalf("New(second): %v", err)
+	}
+	if first.ConfigurationDigest() == second.ConfigurationDigest() {
+		t.Fatal("in-place runtime replacement retained the conformance digest")
+	}
+	current, err := runtimeConfigurationIdentity(first.rt)
+	if err != nil {
+		t.Fatalf("current runtime identity: %v", err)
+	}
+	if current == first.runtimeIdentity {
+		t.Fatal("an existing backend did not detect in-place runtime replacement")
 	}
 }
 

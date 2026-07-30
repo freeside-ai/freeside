@@ -41,6 +41,24 @@ func TestWithAdmissionRejectsNonCanonicalPromptDigest(t *testing.T) {
 	}
 }
 
+func TestWithAdmissionRequiresConfigurationBoundUnattendedBackend(t *testing.T) {
+	option := WithAdmission(
+		stageInputBackend{}, nil,
+		AdmissionEnvironment{
+			OperatingMode:       domain.ModeUnattended,
+			PromptPackageDigest: domain.Digest("sha256:" + strings.Repeat("1", 64)),
+			VendorInstructions: VendorInstructionConfig{
+				Vendor:   domain.AgentVendorClaude,
+				HostPath: "/nonexistent/freeside-test-claude-instructions",
+			},
+		},
+		time.Now,
+	)
+	if err := option(&Engine{}); err == nil {
+		t.Fatal("WithAdmission accepted an unattended backend with no configuration identity")
+	}
+}
+
 func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 	ctx := t.Context()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})

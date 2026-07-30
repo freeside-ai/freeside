@@ -81,6 +81,86 @@ func (b *Backend) verifyExport(ctx context.Context, tarPath, destDir string) (*e
 	if err := b.extractHandoff(tarPath, destDir); err != nil {
 		return nil, err
 	}
+	out, err := b.verifyMaterializedExport(ctx, destDir)
+	if err != nil {
+		return nil, err
+	}
+	if err := syncMaterializedExport(destDir); err != nil {
+		return nil, failf(CheckExportVerification, "make verified export durable: %v", err)
+	}
+	return out, nil
+}
+
+func prepareExportRoot(root string) error {
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return fmt.Errorf("create export root: %w", err)
+	}
+	info, err := os.Lstat(root)
+	if err != nil {
+		return fmt.Errorf("inspect export root: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("export root is not a daemon-owned directory")
+	}
+	if err := syncDir(root); err != nil {
+		return fmt.Errorf("sync export root: %w", err)
+	}
+	if err := syncDir(filepath.Dir(root)); err != nil {
+		return fmt.Errorf("sync export root parent: %w", err)
+	}
+	return nil
+}
+
+// syncMaterializedExport makes every verified byte and directory entry
+// durable before the journal records the path and closes completed. The
+// reverse directory walk syncs children before their parents.
+func syncMaterializedExport(root string) error {
+	var dirs []string
+	if err := filepath.WalkDir(root, func(
+		path string, entry fs.DirEntry, walkErr error,
+	) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			dirs = append(dirs, path)
+			return nil
+		}
+		file, err := os.Open(path) //nolint:gosec // verified gate-owned output
+		if err != nil {
+			return err
+		}
+		syncErr := file.Sync()
+		closeErr := file.Close()
+		return errors.Join(syncErr, closeErr)
+	}); err != nil {
+		return err
+	}
+	for i := len(dirs) - 1; i >= 0; i-- {
+		if err := syncDir(dirs[i]); err != nil {
+			return err
+		}
+	}
+	return syncDir(filepath.Dir(root))
+}
+
+func syncDir(path string) error {
+	dir, err := os.Open(path) //nolint:gosec // daemon-owned configured path
+	if err != nil {
+		return err
+	}
+	syncErr := dir.Sync()
+	closeErr := dir.Close()
+	return errors.Join(syncErr, closeErr)
+}
+
+// verifyMaterializedExport re-runs the complete content gate over an existing
+// gate-owned output directory. Recovery uses it only after the journal has
+// authenticated the exact path for a closed completed handoff.
+func (b *Backend) verifyMaterializedExport(ctx context.Context, destDir string) (*exportOutput, error) {
+	if err := verifyMaterializedTree(destDir); err != nil {
+		return nil, err
+	}
 	manifest, repoRef, err := b.verifyManifest(destDir)
 	if err != nil {
 		return nil, err
@@ -104,6 +184,25 @@ func (b *Backend) verifyExport(ctx context.Context, tarPath, destDir string) (*e
 		return nil, evidencef(CheckExportVerification, "output scan refused the export (details withheld)")
 	}
 	return &exportOutput{Dir: destDir, Manifest: manifest, Evidence: evidence, EvidencePresent: evidencePresent, CommitPlanPresent: planPresent}, nil
+}
+
+// verifyMaterializedTree rejects links and special nodes before any member is
+// opened. This is redundant for a freshly extracted archive, but load-bearing
+// when replaying a directory that survived a process crash.
+func verifyMaterializedTree(destDir string) error {
+	return filepath.WalkDir(destDir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return failf(CheckExportVerification, "walk output failed")
+		}
+		if p == destDir || d.IsDir() {
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return evidencef(CheckExportVerification, "output carries non-regular member %s",
+				redactPath(filepath.ToSlash(filepath.Base(p))))
+		}
+		return nil
+	})
 }
 
 func (b *Backend) verifyCommitPlan(destDir string) (bool, error) {
@@ -470,6 +569,9 @@ func verifyNoStrays(destDir string, repoRef, evidenceRef map[string]bool, eviden
 				return nil
 			}
 			return evidencef(CheckExportVerification, "output carries unreferenced directory %s", redactPath(rel))
+		}
+		if !d.Type().IsRegular() {
+			return evidencef(CheckExportVerification, "output carries non-regular member %s", redactPath(rel))
 		}
 		if rel == export.ManifestFilename || repoRef[rel] {
 			return nil

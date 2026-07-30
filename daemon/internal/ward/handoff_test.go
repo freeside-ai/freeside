@@ -31,6 +31,7 @@ func newHandoffFixture(t *testing.T) *handoffFixture {
 	t.Helper()
 	sleeps := 0
 	cfg := testConfig()
+	cfg.ExportRoot = t.TempDir()
 	cfg.PollInterval = 100 * time.Millisecond
 	cfg.WriterStopTimeout = time.Second // 10 poll attempts, with a non-flaky real deadline
 	cfg.ExporterTimeout = time.Second
@@ -135,6 +136,10 @@ func TestHandoffSuccess(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(res.ExportDir, "manifest.json")); err != nil {
 		t.Errorf("released output dir: %v", err)
+	}
+	if filepath.Dir(res.ExportDir) != fx.cfg.ExportRoot {
+		t.Errorf("released output parent = %q, want durable root %q",
+			filepath.Dir(res.ExportDir), fx.cfg.ExportRoot)
 	}
 	// Only the returned output dir survives: the archive scratch dir is
 	// removed, and no other handoff temp dir for this run lingers.
@@ -1630,7 +1635,9 @@ func TestHandoffNoReapBeforeClaim(t *testing.T) {
 	spec := testHandoffSpec()
 	// A relative credential target passes HandoffSpec.validate but fails
 	// validateAgentSpec, which runs before anything is created.
-	spec.Agent.CredentialMounts = []CredentialMount{{Volume: "cred", Target: "relative"}}
+	spec.Agent.CredentialMounts = []CredentialMount{{
+		Volume: "cred", Target: "relative", Manifest: CredentialManifestOpaque,
+	}}
 	_, err := fx.backend(t).Handoff(context.Background(), spec)
 	if !errors.Is(err, ErrConformance) {
 		t.Fatalf("Handoff = %v, want a conformance failure before any create", err)

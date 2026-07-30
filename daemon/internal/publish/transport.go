@@ -261,6 +261,38 @@ type PushResult struct {
 // working-tree content, the base anchored against gc — stamped with the
 // managed repository's name and canonical numeric identity.
 func (t *Transport) FetchBase(ctx context.Context, repo, baseRef, baseSHA, dir string) (Checkout, error) {
+	return t.fetchBase(ctx, repo, baseRef, baseSHA, dir, false)
+}
+
+// FetchBaseWorktree is FetchBase plus the materialized working tree, for the
+// one consumer that needs the files rather than the objects: ward seeds a
+// writer's workspace from this directory and its observer proves the raw
+// worktree byte-for-byte against HEAD, so the repository-only shape FetchBase
+// produces is rejected as dirty (every tracked path missing) before any writer
+// starts. The import lane keeps the lighter shape: it applies an export over
+// the checkout and must not inherit files nobody put there.
+func (t *Transport) FetchBaseWorktree(ctx context.Context, repo, baseRef, baseSHA, dir string) (Checkout, error) {
+	return t.fetchBase(ctx, repo, baseRef, baseSHA, dir, true)
+}
+
+// withoutGitIndexFile drops every GIT_INDEX_FILE entry so a replacement is
+// unambiguous: duplicate keys in one environment resolve differently across
+// libc implementations, and the wrong index here would leave the seeded
+// worktree looking dirty to the writer.
+func withoutGitIndexFile(env []string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, e := range env {
+		if strings.HasPrefix(e, "GIT_INDEX_FILE=") {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+func (t *Transport) fetchBase(
+	ctx context.Context, repo, baseRef, baseSHA, dir string, materializeWorktree bool,
+) (Checkout, error) {
 	ref, err := parseTransportRepo(repo)
 	if err != nil {
 		return Checkout{}, err
@@ -378,6 +410,22 @@ func (t *Transport) FetchBase(ctx context.Context, repo, baseRef, baseSHA, dir s
 	}
 	if err := stampRepoIDBinding(dir, tok.RepositoryID); err != nil {
 		return Checkout{}, err
+	}
+	if materializeWorktree {
+		// The index belongs inside this repository, not in the scratch the
+		// call removes: ward's observer ignores a copied index and compares
+		// raw worktree bytes with HEAD, but the writer that later works in
+		// this tree needs one, or its first `git status` reports every
+		// tracked path deleted and untracked at once. Restore the runner's
+		// own index afterwards so nothing later in the call writes here.
+		scratchEnv := r.env
+		r.env = append(withoutGitIndexFile(r.env),
+			"GIT_INDEX_FILE="+filepath.Join(dir, ".git", "index"))
+		_, _, resetErr := r.run(ctx, nil, "--work-tree", dir, "reset", "--hard", baseSHA)
+		r.env = scratchEnv
+		if resetErr != nil {
+			return Checkout{}, resetErr
+		}
 	}
 	materialized = true
 	return Checkout{dir: dir, baseSHA: baseSHA, baseRef: baseRef, repo: repo, repositoryID: tok.RepositoryID, owner: t}, nil
@@ -668,6 +716,15 @@ func validCommitSHA(s string) bool {
 		}
 	}
 	return true
+}
+
+// ValidateCommitSHA applies the exact full lowercase SHA-1 grammar before a
+// caller commits durable work that will later require FetchBase.
+func ValidateCommitSHA(sha string) error {
+	if !validCommitSHA(sha) {
+		return errors.New("not a full lowercase commit SHA")
+	}
+	return nil
 }
 
 // validBranchName is the transport's refname gate: argument-vector

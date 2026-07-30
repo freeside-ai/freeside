@@ -205,13 +205,13 @@ The daemon (Wave 0 unit 1) and the API spec (Wave 0 unit 5) are initialized; the
 
 | Component     | Toolchain      | Commands                                      |
 | ------------- | -------------- | --------------------------------------------- |
-| `daemon/`     | Go             | `cd daemon`; `go build ./...`; `go test ./...`; `go vet ./...`; `golangci-lint run` |
+| `daemon/`     | Go             | `cd daemon`; `go build ./...`; `go test ./...`; `go vet ./...`; `golangci-lint run`; opt-in live suites are skipped by default and CI-blind (`FREESIDE_PUBLISH_LIVE_TEST`, `FREESIDE_WARD_LIVE_TEST`, `FREESIDE_CLAUDE_TOKEN_LIVE_TEST`, `FREESIDE_REAL_RUN_LIVE_TEST`; each test's skip message lists the rest of its environment) |
 | `app/`        | Xcode / SPM    | `cd app`; `./scripts/generate-api-client.sh`; `swift test`; `xcrun swift-format lint --strict --recursive Sources Tests Apps Package.swift`; `xcodebuild -project Freeside.xcodeproj -scheme FreesideMac -destination 'platform=macOS' -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO build`; `xcodebuild -project Freeside.xcodeproj -scheme FreesideIOS -destination 'generic/platform=iOS Simulator' -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO build`; `bash scripts/run-convergence.sh` (repo root; §5.14 real-daemon convergence, builds the daemon harness) |
 | `api/`        | OpenAPI (spec) | `go run github.com/daveshanley/vacuum@v0.29.9 lint -r api/vacuum.ruleset.yaml --details --fail-severity warn api/openapi.yaml` (from repo root; see api/README.md) |
 | `prompts/`    | prompt text    | not yet initialized; see docs/plan.md roadmap |
 | `policy/`     | YAML (policy)  | not yet initialized; see docs/plan.md roadmap |
 | `images/`     | OCI images     | `bash scripts/build-exporter-image.sh`; `bash scripts/build-agent-claude-image.sh` then `bash scripts/check-agent-image.sh <ref>` (both need Apple `container`, and the build needs container egress); `agent-codex` not yet initialized; per-project images are runtime artifacts from the reusable builder (#334), manually proven before #237 and later invoked by `freesided onboard` (#238), not built from this directory |
-| `scripts/`    | Bash           | `bash -n scripts/*.sh app/scripts/*.sh`; `shellcheck scripts/*.sh app/scripts/*.sh`; `bash scripts/test-merge-result-audit.sh`; `bash scripts/test-check-agent-image.sh` (CI pins shellcheck in `.github/workflows/scripts-ci.yml`) |
+| `scripts/`    | Bash           | `bash -n scripts/*.sh app/scripts/*.sh`; `shellcheck scripts/*.sh app/scripts/*.sh`; `bash scripts/test-merge-result-audit.sh`; `bash scripts/test-check-agent-image.sh` (CI pins shellcheck in `.github/workflows/scripts-ci.yml`); `bash scripts/run-real-work.sh <spec> <policy>` is the §11 1A.2 real unattended run and needs Apple `container` plus the operator preconditions its header lists |
 
 Lint/format and CI are established with the first component that carries code: the daemon does so here via `daemon/.golangci.yml` and `.github/workflows/daemon-ci.yml` (Linux runs build/test/vet/lint, macOS runs build/test). Later components add their own on the same pattern.
 

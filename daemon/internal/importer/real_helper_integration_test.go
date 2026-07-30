@@ -97,8 +97,9 @@ func TestImportRealHelperEvidenceToClaims(t *testing.T) {
 	got := map[string]string{}
 	for _, c := range res.Claims {
 		got[c.Label] = string(c.Digest)
-		if string(c.Artifact) != string(c.Digest) {
-			t.Errorf("claim %q artifact %q != digest %q", c.Label, c.Artifact, c.Digest)
+		want := agentArtifactID(c.Provenance, export.Digest(c.Digest))
+		if c.Artifact != want {
+			t.Errorf("claim %q artifact %q != %q", c.Label, c.Artifact, want)
 		}
 	}
 	if got["after-shot"] != sha256Hex(pngBytes) {

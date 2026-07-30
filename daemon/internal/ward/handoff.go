@@ -27,6 +27,10 @@ var requiredCapabilities = []exec.Capability{
 	exec.CapReadOnlyRemount,
 }
 
+// ErrHandoffCanceled reports a handoff whose daemon cancellation intent was
+// durable before ward stopped the writer and closed the journal canceled.
+var ErrHandoffCanceled = errors.New("handoff canceled")
+
 // unattendedCapabilities is the policy floor PreJob protects. The handoff
 // itself remains usable in attended_dev before the expensive full suite runs,
 // but unattended admission must also carry both suite-earned proofs: the
@@ -167,10 +171,18 @@ type runState struct {
 	ownershipLabel      Label
 	workspace           objectClaim
 	instructions        objectClaim
+	configRoot          objectClaim
+	continuity          objectClaim
+	sessionScratch      objectClaim
 	seeder              objectClaim
 	observer            objectClaim
 	instructionSeeder   objectClaim
 	instructionObserver objectClaim
+	configRootSeeder    objectClaim
+	configRootObserver  objectClaim
+	continuityObserver  objectClaim
+	scratchObserver     objectClaim
+	writerObserver      objectClaim
 	credObsPre          objectClaim
 	credObsPost         objectClaim
 	agent               objectClaim
@@ -198,10 +210,15 @@ type runState struct {
 	// if the run unwinds mid-read.
 	baseArchiveDir        string
 	instructionArchiveDir string
+	// stateArchiveDir holds one launch-state observer proof archive.
+	stateArchiveDir string
 	// credArchiveDir is the credential observer's counterpart to
 	// baseArchiveDir, its own field so the two proof reads can never orphan
 	// or double-remove each other's scratch.
 	credArchiveDir string
+	// writerArchiveDir is the transient rootfs archive carrying the
+	// credential-free outcome observer's bounded proof.
+	writerArchiveDir string
 	// exportDir holds the extracted, verified output. It is returned to the
 	// caller only when the run ultimately succeeds; on any failure, including
 	// a teardown failure after a good export, it is removed here (the caller
@@ -226,6 +243,13 @@ type runState struct {
 	// before the writer started; the post-writer observation compares against
 	// it to attest whether the store mutated.
 	credPreDigest string
+	// preparedState is the exact state-volume identity and manifest record
+	// journalled before the writer can be created.
+	preparedState *HandoffJournalState
+	// preparedInstructions is the source and result binding for the explicit
+	// safe-mode bundle seeded from the admitted host bytes and trusted base.
+	preparedInstructions  *HandoffJournalInstructions
+	instructionBundleBody []byte
 	// journalOpen records that Begin durably opened this run's journal
 	// record; the deferred close acts only while it is set.
 	journalOpen bool
@@ -234,6 +258,20 @@ type runState struct {
 	// this process, owns reconciliation from there; the ordinary defer must
 	// not close it as loss over a window it could not safely identify.
 	journalRecoverOnly bool
+	// leaveJournalOpen withholds a terminal close after an amendment failed.
+	// Unlike preserveForRecovery it does not suppress teardown: cancellation
+	// must still stop and reap a possibly live credential-bearing writer.
+	leaveJournalOpen bool
+	// writerFailureStatus is set only after the nonzero marker amendment is
+	// durable; teardown may then erase the marker and close failed.
+	writerFailureStatus *int
+	// cancellationRequested is set only after the journal amendment is
+	// durable. It outranks any marker emitted by the commanded stop.
+	cancellationRequested bool
+	// preserveForRecovery prevents teardown when the failure amendment could
+	// not be made durable. The workspace marker and lease remain for a later
+	// recovery attempt instead of being erased first.
+	preserveForRecovery bool
 }
 
 // Handoff runs one full workspace handoff: admit against the capability
@@ -253,6 +291,7 @@ type runState struct {
 // contract check, and any other error is an operational failure of the same
 // fail-closed gate.
 func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffResult, err error) {
+	callerCtx := ctx
 	// The request is caller-owned. Freeze its slices before they feed either
 	// expected allowlists or a Runtime call.
 	hs.Agent.Command = slices.Clone(hs.Agent.Command)
@@ -285,7 +324,22 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	defer cancel()
 	st := &runState{ownershipLabel: ownershipLabel}
 	defer func() {
-		terr := b.teardown(ctx, names, st)
+		var terr error
+		if st.journalOpen && callerCtx.Err() != nil {
+			jctx, jcancel := context.WithTimeout(
+				context.WithoutCancel(ctx), b.cfg.TeardownTimeout,
+			)
+			if jerr := b.cfg.Journal.MarkCancellationRequested(jctx, hs.RunID); jerr != nil {
+				st.leaveJournalOpen = true
+				err = errors.Join(err, fmt.Errorf("journal cancellation intent: %w", jerr))
+			} else {
+				st.cancellationRequested = true
+			}
+			jcancel()
+		}
+		if !st.preserveForRecovery {
+			terr = b.teardown(ctx, names, st)
+		}
 		if terr != nil {
 			result = nil
 			if err == nil {
@@ -303,9 +357,16 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		// completed-close voids the delivery (§5.7: release follows the
 		// durable append), and the cleanup below removes the unreleased
 		// output.
-		if st.journalOpen && !st.journalRecoverOnly {
+		if st.journalOpen && !st.journalRecoverOnly && !st.leaveJournalOpen {
 			jctx, jcancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
 			switch {
+			case terr == nil && st.cancellationRequested:
+				if cerr := b.cfg.Journal.Close(jctx, hs.RunID, HandoffCanceled); cerr != nil {
+					err = errors.Join(err, fmt.Errorf("journal close canceled: %w", cerr))
+				} else {
+					st.journalOpen = false
+					err = errors.Join(err, ErrHandoffCanceled)
+				}
 			case st.succeeded && err == nil:
 				if cerr := b.cfg.Journal.Close(jctx, hs.RunID, HandoffCompleted); cerr != nil {
 					result = nil
@@ -313,7 +374,13 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 				} else {
 					st.journalOpen = false
 				}
-			case terr == nil:
+			case terr == nil && st.writerFailureStatus != nil:
+				if cerr := b.cfg.Journal.Close(jctx, hs.RunID, HandoffFailed); cerr != nil {
+					err = errors.Join(err, fmt.Errorf("journal close failed: %w", cerr))
+				} else {
+					st.journalOpen = false
+				}
+			case terr == nil && !st.preserveForRecovery:
 				if cerr := b.cfg.Journal.Close(jctx, hs.RunID, HandoffLoss); cerr != nil {
 					err = errors.Join(err, fmt.Errorf("journal close loss: %w", cerr))
 				} else {
@@ -337,6 +404,9 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		if st.credArchiveDir != "" {
 			_ = os.RemoveAll(st.credArchiveDir)
 		}
+		if st.writerArchiveDir != "" {
+			_ = os.RemoveAll(st.writerArchiveDir)
+		}
 		if st.seedSnapshotDir != "" {
 			_ = os.RemoveAll(st.seedSnapshotDir)
 		}
@@ -345,6 +415,9 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		}
 		if st.instructionArchiveDir != "" {
 			_ = os.RemoveAll(st.instructionArchiveDir)
+		}
+		if st.stateArchiveDir != "" {
+			_ = os.RemoveAll(st.stateArchiveDir)
 		}
 		if st.exportDir != "" && (!st.succeeded || err != nil) {
 			_ = os.RemoveAll(st.exportDir)
@@ -365,7 +438,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		// can never land. Config validation cannot see the per-spec target,
 		// so both directions are refused here, before the lease is acquired
 		// or anything is created.
-		if t := hs.writableCredentialTarget(); b.cfg.CredProofPath == t ||
+		if t := hs.leasedCredentialTarget(); b.cfg.CredProofPath == t ||
 			strings.HasPrefix(b.cfg.CredProofPath, t+"/") ||
 			strings.HasPrefix(t, b.cfg.CredProofPath+"/") {
 			return nil, fmt.Errorf("%w: writable credential target %q overlaps the configured credential proof path",
@@ -381,9 +454,9 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 			return nil, fmt.Errorf("read auth-store volume for identity %q: %w",
 				hs.AuthStoreLease.AuthIdentityID, verr)
 		}
-		if mounted := hs.writableCredentialVolume(); boundVolume != mounted {
+		if mounted := hs.leasedCredentialVolume(); boundVolume != mounted {
 			return nil, failf(CheckAuthStoreMutationLease,
-				"identity %q is bound to auth-store volume %q, not writable mount %q",
+				"identity %q is bound to auth-store volume %q, not credential mount %q",
 				hs.AuthStoreLease.AuthIdentityID, boundVolume, mounted)
 		}
 	}
@@ -392,8 +465,13 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// any runtime object. The real proxy URL is not known until the host-only
 	// network exists; a syntactically valid placeholder exercises the same
 	// mount, environment-key, and explicit-network checks.
-	preflightAgentSpec := buildAgentSpec(b.cfg, hs, names, ownershipLabel, "http://127.0.0.1:1")
-	if err := validateAgentSpec(b.cfg, preflightAgentSpec, names.Workspace, hs.writableCredentialTarget()); err != nil {
+	preflightAgentSpec := buildAgentSpec(
+		b.cfg, hs, names, ownershipLabel, "http://127.0.0.1:1", ownershipLabel.Value,
+	)
+	if err := validateAgentSpec(
+		b.cfg, preflightAgentSpec, names, hs.leasedCredentialTarget(), hs.leasedCredentialWritable(),
+		hs.Agent.LaunchState,
+	); err != nil {
 		return nil, err
 	}
 
@@ -514,6 +592,12 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	if err := b.observeVendorInstructions(ctx, hs, names, st); err != nil {
 		return nil, err
 	}
+	// Claude state is created, seeded, and observed before the credential
+	// volume is mounted anywhere. Its three object identities and manifests
+	// become durable before the writer container can exist.
+	if err := b.prepareLaunchState(ctx, hs, names, st); err != nil {
+		return nil, err
+	}
 
 	// The leased credential store's pre-writer digest is a pre-writer fact
 	// like the base: once the agent runs it may legitimately mutate the
@@ -537,8 +621,13 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	// Checks 1-2 plus provider_only: the generated writer spec is re-verified,
 	// not trusted, after the runtime supplies the host-only gateway the proxy
 	// address is derived from.
-	agentSpec := buildAgentSpec(b.cfg, hs, names, ownershipLabel, proxyURL)
-	if err := validateAgentSpec(b.cfg, agentSpec, names.Workspace, hs.writableCredentialTarget()); err != nil {
+	agentSpec := buildAgentSpec(
+		b.cfg, hs, names, ownershipLabel, proxyURL, ownershipLabel.Value,
+	)
+	if err := validateAgentSpec(
+		b.cfg, agentSpec, names, hs.leasedCredentialTarget(), hs.leasedCredentialWritable(),
+		hs.Agent.LaunchState,
+	); err != nil {
 		return nil, err
 	}
 
@@ -584,6 +673,9 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	if err != nil {
 		return nil, failf(CheckControlPlaneIsolation, "agent container %q: %v", names.Agent, err)
 	}
+	if err := b.verifyPreparedLaunchState(ctx, hs, names, st); err != nil {
+		return nil, err
+	}
 	// Re-verify the lease at the last instant before mutation ability exists:
 	// a takeover (bumped fence) or lapse between acquisition and here means
 	// another holder may already be mutating the store, and starting the
@@ -619,6 +711,26 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		return nil, failf(CheckAgentEgress, "provider proxy failed while the writer ran: %v", err)
 	}
 	st.proxy = nil
+	if hs.Agent.OutcomeMarkerPath != "" {
+		status, oerr := b.observeWriterOutcome(ctx, hs, names, st)
+		if oerr != nil {
+			return nil, oerr
+		}
+		if status != 0 {
+			if st.journalOpen {
+				// From this point cleanup is forbidden until the amendment is
+				// durable. A failed store write leaves the marker and lease
+				// intact for recovery to classify.
+				st.preserveForRecovery = true
+				if jerr := b.cfg.Journal.MarkWriterFailed(ctx, hs.RunID, status); jerr != nil {
+					return nil, fmt.Errorf("journal writer failure: %w", jerr)
+				}
+				st.preserveForRecovery = false
+			}
+			st.writerFailureStatus = &status
+			return nil, writerFailureError(status)
+		}
+	}
 	// Writer-complete is the second unreconstructible proof: check 3's
 	// absence evidence plus the proxy health check above, which is
 	// process-local and dies with the daemon. Only a record carrying this
@@ -733,7 +845,13 @@ func (b *Backend) observeCredentialStore(ctx context.Context, hs HandoffSpec, na
 		return "", failf(CheckAuthStoreMutationLease, "credential observer: %v", err)
 	}
 
-	digest, err := b.readCredProof(ctx, hs.RunID, name, st)
+	digest, err := b.readCredProof(
+		ctx,
+		hs.RunID,
+		name,
+		st,
+		hs.leasedCredentialManifest(),
+	)
 	if err != nil {
 		return "", err
 	}
@@ -751,7 +869,12 @@ func (b *Backend) observeCredentialStore(ctx context.Context, hs HandoffSpec, na
 // readCredProof collects the credential observer's proof out of its stopped
 // root filesystem and validates it, under the same byte cap and
 // evidence-not-output handling as the base proof.
-func (b *Backend) readCredProof(ctx context.Context, runID, id string, st *runState) (string, error) {
+func (b *Backend) readCredProof(
+	ctx context.Context,
+	runID, id string,
+	st *runState,
+	manifest CredentialManifestPolicy,
+) (string, error) {
 	dir, err := os.MkdirTemp("", "freeside-handoff-"+runID+"-cred-")
 	if err != nil {
 		return "", failf(CheckAuthStoreMutationLease, "create credential proof directory: %v", err)
@@ -777,7 +900,11 @@ func (b *Backend) readCredProof(ctx context.Context, runID, id string, st *runSt
 	if !found {
 		return "", failf(CheckAuthStoreMutationLease, "credential observer produced no proof")
 	}
-	return verifyCredProof(data, st.ownershipLabel.Value)
+	return verifyCredProof(
+		data,
+		st.ownershipLabel.Value,
+		manifest,
+	)
 }
 
 // runExporter runs checks 4 and 7 over the run's workspace: create the
@@ -836,9 +963,17 @@ func (b *Backend) materializeExport(ctx context.Context, hs HandoffSpec, names h
 	if err != nil {
 		return "", fmt.Errorf("create export archive dir: %w", err)
 	}
-	st.exportDir, err = os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-out-")
+	if err := prepareExportRoot(b.cfg.ExportRoot); err != nil {
+		return "", err
+	}
+	st.exportDir, err = os.MkdirTemp(
+		b.cfg.ExportRoot, "freeside-handoff-"+hs.RunID+"-out-",
+	)
 	if err != nil {
 		return "", fmt.Errorf("create export output dir: %w", err)
+	}
+	if err := syncDir(b.cfg.ExportRoot); err != nil {
+		return "", fmt.Errorf("sync export root after output creation: %w", err)
 	}
 	tarPath := filepath.Join(st.archiveDir, "export.tar")
 	if err := b.materializeRootFS(ctx, names.Exporter, tarPath, CheckExportVerification); err != nil {
@@ -1282,6 +1417,11 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 		{id: names.Observer, claim: st.observer},
 		{id: names.InstructionSeeder, claim: st.instructionSeeder},
 		{id: names.InstructionObserver, claim: st.instructionObserver},
+		{id: names.ConfigRootSeeder, claim: st.configRootSeeder},
+		{id: names.ConfigRootObserver, claim: st.configRootObserver},
+		{id: names.ContinuityObserver, claim: st.continuityObserver},
+		{id: names.ScratchObserver, claim: st.scratchObserver},
+		{id: names.WriterObserver, claim: st.writerObserver},
 		{id: names.CredObsPre, claim: st.credObsPre},
 		{id: names.CredObsPost, claim: st.credObsPost},
 		{id: names.Agent, claim: st.agent},
@@ -1356,6 +1496,9 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	volumeClaims := []volumeClaim{
 		{name: names.Workspace, claim: st.workspace},
 		{name: names.Instructions, claim: st.instructions},
+		{name: names.ConfigRoot, claim: st.configRoot},
+		{name: names.Continuity, claim: st.continuity},
+		{name: names.SessionScratch, claim: st.sessionScratch},
 	}
 	// Both run-owned volumes follow the same evidence rule: a successful
 	// create alone no longer authorizes a name-addressed delete; the volume

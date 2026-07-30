@@ -65,6 +65,16 @@ ON CONFLICT (invocation_id) DO NOTHING`
 SELECT invocation_id, admission_id, observed_base_sha, head_sha, manifest_digest,
        evidence_manifest_digest, commit_plan_present, recorded_at, body
 FROM execution_exports WHERE invocation_id = ?`
+
+	recordExecutionOutcomeSQL = `
+INSERT INTO execution_outcomes
+    (invocation_id, admission_id, status, summary, recorded_at, body)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (invocation_id) DO NOTHING`
+	selectExecutionOutcomeBodySQL = `SELECT body FROM execution_outcomes WHERE invocation_id = ?`
+	getExecutionOutcomeSQL        = `
+SELECT invocation_id, admission_id, status, summary, recorded_at, body
+FROM execution_outcomes WHERE invocation_id = ?`
 )
 
 // RecordExecutionAdmission persists the spawn-time record for one attempt. It
@@ -161,6 +171,27 @@ func (tx *ReadTx) GetExecutionAdmission(ctx context.Context, id domain.Invocatio
 	}
 	if !found {
 		return domain.ExecutionAdmission{}, fmt.Errorf("get execution admission %q: %w", id, ErrNotFound)
+	}
+	return admission, nil
+}
+
+// GetExecutionAdmissionRecord authenticates the immutable recorded admission
+// without re-applying mutable current admission policy. It is for terminal
+// history and backup closure only; any path that may still start, recover, or
+// accept work must use GetExecutionAdmission.
+func (tx *ReadTx) GetExecutionAdmissionRecord(
+	ctx context.Context, id domain.InvocationID,
+) (domain.ExecutionAdmission, error) {
+	admission, err := scanExecutionAdmissionRecord(
+		tx.tx.QueryRowContext(ctx, getExecutionAdmissionSQL, id),
+	)
+	if err != nil {
+		return domain.ExecutionAdmission{}, fmt.Errorf(
+			"get execution admission record %q: %w", id, notFoundOr(err))
+	}
+	if admission.InvocationID != id {
+		return domain.ExecutionAdmission{}, fmt.Errorf(
+			"get execution admission record %q: %w", id, errRowInconsistent)
 	}
 	return admission, nil
 }
@@ -453,6 +484,11 @@ func (tx *InternalTx) RecordExecutionExport(ctx context.Context, export domain.E
 	if err := domain.ValidateExportBinding(admission, export); err != nil {
 		return fmt.Errorf("record execution export %q: %w", export.InvocationID, err)
 	}
+	if err := tx.requireExecutionAuthorityAbsent(
+		ctx, selectExecutionOutcomeBodySQL, export.InvocationID, "outcome",
+	); err != nil {
+		return fmt.Errorf("record execution export %q: %w", export.InvocationID, err)
+	}
 	var evidence any
 	if export.EvidenceManifestDigest != nil {
 		evidence = string(*export.EvidenceManifestDigest)
@@ -474,6 +510,20 @@ func (tx *InternalTx) RecordExecutionExport(ctx context.Context, export domain.E
 // record too, so a read of an export cannot succeed while the run it belongs
 // to is no longer admissible.
 func (tx *ReadTx) GetExecutionExport(ctx context.Context, id domain.InvocationID) (domain.ExecutionExport, error) {
+	return tx.getExecutionExport(ctx, id, true)
+}
+
+// GetExecutionExportRecord authenticates immutable terminal history without
+// re-applying mutable current admission policy.
+func (tx *ReadTx) GetExecutionExportRecord(
+	ctx context.Context, id domain.InvocationID,
+) (domain.ExecutionExport, error) {
+	return tx.getExecutionExport(ctx, id, false)
+}
+
+func (tx *ReadTx) getExecutionExport(
+	ctx context.Context, id domain.InvocationID, requireCurrent bool,
+) (domain.ExecutionExport, error) {
 	var (
 		invocationID    string
 		admissionID     string
@@ -504,7 +554,12 @@ func (tx *ReadTx) GetExecutionExport(ctx context.Context, id domain.InvocationID
 		!timeColumnEqual(recordedAt, export.RecordedAt) {
 		return domain.ExecutionExport{}, fmt.Errorf("get execution export %q: %w", id, errRowInconsistent)
 	}
-	admission, err := tx.GetExecutionAdmission(ctx, id)
+	var admission domain.ExecutionAdmission
+	if requireCurrent {
+		admission, err = tx.GetExecutionAdmission(ctx, id)
+	} else {
+		admission, err = tx.GetExecutionAdmissionRecord(ctx, id)
+	}
 	if err != nil {
 		return domain.ExecutionExport{}, fmt.Errorf("get execution export %q: %w", id, err)
 	}
@@ -512,4 +567,120 @@ func (tx *ReadTx) GetExecutionExport(ctx context.Context, id domain.InvocationID
 		return domain.ExecutionExport{}, fmt.Errorf("get execution export %q: %w", id, err)
 	}
 	return export, nil
+}
+
+// RecordExecutionOutcome persists a trusted non-export terminal outcome.
+// The admission binding is checked in the same transaction, and the row is
+// write-once so a replay converges while a changed status or summary refuses.
+func (tx *InternalTx) RecordExecutionOutcome(
+	ctx context.Context, outcome domain.ExecutionOutcome,
+) error {
+	body, err := encode(outcome)
+	if err != nil {
+		return fmt.Errorf("record execution outcome %q: %w", outcome.InvocationID, err)
+	}
+	// A non-export outcome closes an invocation; it does not authorize more
+	// work. Bind it to the immutable admission record so policy changing
+	// while an attempt runs cannot make failed, canceled, or lost terminal
+	// history impossible to persist.
+	admission, err := tx.GetExecutionAdmissionRecord(ctx, outcome.InvocationID)
+	if err != nil {
+		return fmt.Errorf("record execution outcome %q: %w", outcome.InvocationID, err)
+	}
+	if err := domain.ValidateOutcomeBinding(admission, outcome); err != nil {
+		return fmt.Errorf("record execution outcome %q: %w", outcome.InvocationID, err)
+	}
+	if err := tx.requireExecutionAuthorityAbsent(
+		ctx, selectExecutionExportBodySQL, outcome.InvocationID, "export",
+	); err != nil {
+		return fmt.Errorf("record execution outcome %q: %w", outcome.InvocationID, err)
+	}
+	if err := tx.putImmutable(ctx, recordExecutionOutcomeSQL,
+		[]any{
+			outcome.InvocationID, outcome.AdmissionID, outcome.Status,
+			outcome.Summary, formatTime(outcome.RecordedAt), body,
+		},
+		selectExecutionOutcomeBodySQL, []any{outcome.InvocationID}, body); err != nil {
+		return fmt.Errorf("record execution outcome %q: %w", outcome.InvocationID, err)
+	}
+	return nil
+}
+
+// requireExecutionAuthorityAbsent enforces that completed-export and
+// non-export terminal authority stay mutually exclusive. It runs in the same
+// write transaction as the eventual insert; SQLite serializes writers, and
+// migration triggers repeat the invariant for raw database writes.
+func (tx *InternalTx) requireExecutionAuthorityAbsent(
+	ctx context.Context, query string, id domain.InvocationID, authority string,
+) error {
+	var body []byte
+	err := tx.tx.QueryRowContext(ctx, query, id).Scan(&body)
+	switch {
+	case err == nil:
+		return fmt.Errorf("execution %s already exists: %w",
+			authority, ErrImmutableConflict)
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	default:
+		return fmt.Errorf("check execution %s: %w", authority, err)
+	}
+}
+
+// GetExecutionOutcome reconstructs a non-export terminal outcome and
+// re-checks every extracted column plus its current admission binding.
+func (tx *ReadTx) GetExecutionOutcome(
+	ctx context.Context, id domain.InvocationID,
+) (domain.ExecutionOutcome, error) {
+	return tx.getExecutionOutcome(ctx, id, true)
+}
+
+// GetExecutionOutcomeRecord authenticates immutable terminal history without
+// re-applying mutable current admission policy.
+func (tx *ReadTx) GetExecutionOutcomeRecord(
+	ctx context.Context, id domain.InvocationID,
+) (domain.ExecutionOutcome, error) {
+	return tx.getExecutionOutcome(ctx, id, false)
+}
+
+func (tx *ReadTx) getExecutionOutcome(
+	ctx context.Context, id domain.InvocationID, requireCurrent bool,
+) (domain.ExecutionOutcome, error) {
+	var (
+		invocationID string
+		admissionID  string
+		status       string
+		summary      string
+		recordedAt   string
+		body         []byte
+	)
+	err := tx.tx.QueryRowContext(ctx, getExecutionOutcomeSQL, id).
+		Scan(&invocationID, &admissionID, &status, &summary, &recordedAt, &body)
+	if err != nil {
+		return domain.ExecutionOutcome{}, fmt.Errorf(
+			"get execution outcome %q: %w", id, notFoundOr(err))
+	}
+	outcome, err := decode[domain.ExecutionOutcome](body)
+	if err != nil {
+		return domain.ExecutionOutcome{}, fmt.Errorf("get execution outcome %q: %w", id, err)
+	}
+	if outcome.InvocationID != id || invocationID != string(outcome.InvocationID) ||
+		admissionID != string(outcome.AdmissionID) ||
+		status != string(outcome.Status) || summary != outcome.Summary ||
+		!timeColumnEqual(recordedAt, outcome.RecordedAt) {
+		return domain.ExecutionOutcome{}, fmt.Errorf(
+			"get execution outcome %q: %w", id, errRowInconsistent)
+	}
+	var admission domain.ExecutionAdmission
+	if requireCurrent {
+		admission, err = tx.GetExecutionAdmission(ctx, id)
+	} else {
+		admission, err = tx.GetExecutionAdmissionRecord(ctx, id)
+	}
+	if err != nil {
+		return domain.ExecutionOutcome{}, fmt.Errorf("get execution outcome %q: %w", id, err)
+	}
+	if err := domain.ValidateOutcomeBinding(admission, outcome); err != nil {
+		return domain.ExecutionOutcome{}, fmt.Errorf("get execution outcome %q: %w", id, err)
+	}
+	return outcome, nil
 }

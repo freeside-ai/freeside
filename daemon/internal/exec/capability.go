@@ -91,6 +91,16 @@ type RunnerBackend interface {
 	Capabilities() CapabilitySet
 }
 
+// ConfigurationBoundBackend is a RunnerBackend that can identify the exact
+// normalized configuration its conformance suite proves. Unattended admission
+// requires this stronger contract so a still-running daemon configured for A
+// cannot combine its live capability declaration with a newer durable proof
+// for configuration B.
+type ConfigurationBoundBackend interface {
+	RunnerBackend
+	ConfigurationDigest() domain.Digest
+}
+
 // ErrCapabilityRefused is the class sentinel for capability refusals;
 // CapabilityRefusal unwraps to it so errors.Is matches the class while
 // errors.As reaches the details.

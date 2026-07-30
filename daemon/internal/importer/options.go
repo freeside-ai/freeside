@@ -259,10 +259,23 @@ func (o Options) validate() error {
 		o.Policy.ExtraEgressTrustPatterns,
 		o.Policy.ExtraMaterialityRulesPatterns,
 	} {
-		for _, pat := range group {
-			if err := validGlob(pat); err != nil {
-				return fmt.Errorf("policy pattern %q: %w: %w", pat, err, ErrInvalidOptions)
-			}
+		if err := ValidatePathPatterns(group); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ValidatePathPatterns compiles every slash-separated importer glob without
+// applying it. Production composition uses it before a writer starts, so a
+// malformed operator allowlist cannot strand a finished export in a
+// permanently retrying import phase.
+func ValidatePathPatterns(patterns []string) error {
+	for _, pattern := range patterns {
+		if err := validGlob(pattern); err != nil {
+			return fmt.Errorf(
+				"policy pattern %q: %w: %w", pattern, err, ErrInvalidOptions,
+			)
 		}
 	}
 	return nil

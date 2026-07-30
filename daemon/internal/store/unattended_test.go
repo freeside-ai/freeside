@@ -18,6 +18,7 @@ func unattendedAdmissionFixture(t *testing.T) admissionFixture {
 	activeProfile := testTrustProfile(t, "owner/repo", 424242).ProfileDigest
 	return newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
 		in.OperatingMode = domain.ModeUnattended
+		in.BackendConfigurationDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 		in.Capabilities = conformantCapabilities(t)
 		in.TrustProfileDigest = &activeProfile
 		in.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{

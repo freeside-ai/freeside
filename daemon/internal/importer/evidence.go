@@ -2,6 +2,7 @@ package importer
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -181,10 +182,10 @@ func skipUntilJSONClose(dec *json.Decoder) error {
 // after verifyBlobs has bytes-verified every entry's blob, so it validates the
 // declared media type against the blob's magic bytes (§5.15 rule 3: the daemon
 // validates magic/type/size and treats images as opaque), maps the typed
-// provenance into the domain shape, and pins the content address as the claim's
-// artifact id. Any failure returns a typed error and no claims: bad evidence
-// fails the whole import closed, exactly as the repo channel's integrity
-// violations do.
+// provenance into the domain shape, and derives an invocation-scoped artifact
+// id while retaining the content address in the claim's digest. Any failure
+// returns a typed error and no claims: bad evidence fails the whole import
+// closed, exactly as the repo channel's integrity violations do.
 func buildClaims(em export.EvidenceManifest, blobs map[export.Digest]blobInfo, _ Policy) ([]domain.AgentClaim, error) {
 	claims := make([]domain.AgentClaim, 0, len(em.Entries))
 	for _, e := range em.Entries {
@@ -201,12 +202,9 @@ func buildClaims(em export.EvidenceManifest, blobs map[export.Digest]blobInfo, _
 		if err != nil {
 			return nil, err
 		}
-		// The sha256 content address is the claim's artifact id: deterministic,
-		// and consistent with the domain rule that an artifact id addresses one
-		// digest (distinct labels may still share one id and digest).
 		claim := domain.AgentClaim{
 			Label:      e.Label,
-			Artifact:   domain.ArtifactID(string(e.Digest)),
+			Artifact:   agentArtifactID(prov, e.Digest),
 			Digest:     domain.Digest(string(e.Digest)),
 			Provenance: prov,
 		}
@@ -218,6 +216,30 @@ func buildClaims(em export.EvidenceManifest, blobs map[export.Digest]blobInfo, _
 		claims = append(claims, claim)
 	}
 	return claims, nil
+}
+
+// agentArtifactID is stable for one complete immutable artifact row. Labels
+// may share an artifact, but any provenance field that changes the row gets a
+// distinct identity even when the producer and content bytes are identical.
+func agentArtifactID(prov domain.Provenance, digest export.Digest) domain.ArtifactID {
+	recipe := ""
+	if prov.VerificationRecipeDigest != nil {
+		recipe = string(*prov.VerificationRecipeDigest)
+	}
+	h := sha256.New()
+	for _, field := range []string{
+		string(digest),
+		string(prov.ProducerClass),
+		string(prov.ProducerInvocationID),
+		string(prov.HeadBinding),
+		prov.SourceHeadSHA,
+		recipe,
+		string(prov.SensitivityClass),
+	} {
+		_, _ = fmt.Fprintf(h, "%d:", len(field))
+		_, _ = h.Write([]byte(field))
+	}
+	return domain.ArtifactID(fmt.Sprintf("agent:%x", h.Sum(nil)))
 }
 
 // mapEvidenceProvenance converts the export channel's typed provenance into the

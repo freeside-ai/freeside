@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
 const testRecoveryToken = "00112233445566778899aabbccddeeff"
@@ -155,7 +157,7 @@ func TestRecoveryOutcomeEnum(t *testing.T) {
 }
 
 // TestRecoverRefusals enumerates the reconstruction re-gate: every
-// malformed, closed, diverged, or unsupported durable record refuses typed,
+// malformed, diverged, or unsupported durable record refuses typed,
 // with no destructive action, no runtime call, and no loss commit. The
 // records are tampered in the journal itself — Recover reads the row, so the
 // row is the trust boundary.
@@ -173,10 +175,20 @@ func TestRecoverRefusals(t *testing.T) {
 			fx.j.put(rec)
 			return hs.RunID, hs
 		}, ErrInvalidJournalRecord},
-		{"closed record", func(t *testing.T, fx *recoveryFixture) (string, HandoffSpec) {
+		{"completed record without writer proof", func(t *testing.T, fx *recoveryFixture) (string, HandoffSpec) {
 			hs := testHandoffSpec()
 			rec := fx.openRecord(t, hs)
 			rec.Outcome = &completed
+			rec.ExportDir = filepath.Join(os.TempDir(), "freeside-handoff-"+hs.RunID+"-out-fixture")
+			fx.j.put(rec)
+			return hs.RunID, hs
+		}, ErrInvalidJournalRecord},
+		{"completed record with foreign export path", func(t *testing.T, fx *recoveryFixture) (string, HandoffSpec) {
+			hs := testHandoffSpec()
+			rec := fx.openRecord(t, hs)
+			rec.Outcome = &completed
+			rec.WriterComplete = true
+			rec.ExportDir = t.TempDir()
 			fx.j.put(rec)
 			return hs.RunID, hs
 		}, ErrInvalidJournalRecord},
@@ -392,6 +404,37 @@ func TestRecoverPreWriterCompleteTearsDownAndCommitsLoss(t *testing.T) {
 	fx.assertReaped(t)
 }
 
+// TestRecoverUnamendedNonzeroMarkerCommitsFailure closes the crash window
+// after writer exit but before the live daemon amended the journal.
+func TestRecoverUnamendedNonzeroMarkerCommitsFailure(t *testing.T) {
+	fx := newRecoveryFixture(t)
+	hs := testHandoffSpec()
+	hs.Agent.OutcomeMarkerPath = fx.cfg.WorkspaceTarget + "/.freeside/evidence/writer-outcome"
+	hs.Agent.Command = []string{"sh", "-c", "run; echo " + WriterNoncePlaceholder}
+	fx.openRecord(t, hs)
+	names := namesFor(hs.RunID)
+	labels := fx.runLabels(hs.RunID)
+	fx.worldVolume(t, names.Workspace, labels)
+	fx.worldContainer(t, ContainerSpec{
+		Name: names.Agent, Image: hs.Agent.Image, Command: hs.Agent.Command, Labels: labels,
+	}, false)
+	fx.rt.writerStatus = 9
+
+	res, err := fx.recover(t, hs.RunID, hs)
+	if err != nil {
+		t.Fatalf("Recover = %v, want committed failure", err)
+	}
+	if res.Outcome != RecoveryFailed || res.FailureStatus != 9 {
+		t.Fatalf("result = %+v, want failed status 9", res)
+	}
+	rec := fx.j.snapshot(hs.RunID)
+	if rec.WriterFailureStatus == nil || *rec.WriterFailureStatus != 9 {
+		t.Fatalf("record = %+v, want durable status 9", rec)
+	}
+	fx.wantClosed(t, hs.RunID, HandoffFailed)
+	fx.assertReaped(t)
+}
+
 // TestRecoverLegacyPreWriterCompleteCommitsLoss proves an open journal from
 // the pre-upgrade digest encoding remains tear-downable. The caller supplies
 // the only safe current-only values: explicit vendor-instruction absence and
@@ -447,6 +490,48 @@ func TestRecoverWriterCompleteAdoptsToVerifiedExport(t *testing.T) {
 	}
 	fx.wantClosed(t, hs.RunID, HandoffCompleted)
 	fx.assertReaped(t)
+
+	callsBefore := len(fx.rt.calls)
+	replayed, err := fx.recover(t, hs.RunID, hs)
+	if err != nil {
+		t.Fatalf("Recover closed completed record = %v, want replay", err)
+	}
+	if replayed.Outcome != RecoveryExported || replayed.ExportDir != res.ExportDir ||
+		len(replayed.Manifest.Entries) != 1 {
+		t.Fatalf("replayed result = %#v, want authenticated completed export", replayed)
+	}
+	for _, c := range fx.rt.calls[callsBefore:] {
+		if !strings.HasPrefix(c, "journal-") {
+			t.Errorf("completed replay touched the runtime: %q", c)
+		}
+	}
+	manifestPath := filepath.Join(res.ExportDir, export.ManifestFilename)
+	validManifest, err := os.ReadFile(manifestPath) //nolint:gosec // G304: fixed leaf under the ward-owned fixture export
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.recover(t, hs.RunID, hs); !errors.Is(err, ErrConformance) {
+		t.Fatalf("Recover tampered completed export = %v, want conformance refusal", err)
+	}
+	externalManifest := filepath.Join(t.TempDir(), "manifest.json")
+	if err := os.WriteFile(externalManifest, validManifest, 0o600); err != nil { //nolint:gosec // G703: fixed leaf under t.TempDir
+		t.Fatal(err)
+	}
+	if err := os.Remove(manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(externalManifest, manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.recover(t, hs.RunID, hs); !errors.Is(err, ErrConformance) {
+		t.Fatalf("Recover symlinked completed export = %v, want conformance refusal", err)
+	}
+	if _, err := os.Stat(res.ExportDir); err != nil {
+		t.Fatalf("tampered completed export was removed: %v", err)
+	}
 }
 
 // TestRecoverLegacyWriterCompleteAdoptsToVerifiedExport proves the historical
@@ -581,9 +666,9 @@ func TestRecoverTokenOrphanFailsAudit(t *testing.T) {
 	}
 }
 
-// TestRecoverDoubleRecoveryRefused: the first recovery closes the record;
-// replaying it against the closed record refuses without touching anything.
-func TestRecoverDoubleRecoveryRefused(t *testing.T) {
+// TestRecoverClosedLossIsIdempotent: the first recovery closes the record;
+// replaying its durable loss is safe and touches no runtime object.
+func TestRecoverClosedLossIsIdempotent(t *testing.T) {
 	fx := newRecoveryFixture(t)
 	hs := testHandoffSpec()
 	fx.openRecord(t, hs)
@@ -592,9 +677,9 @@ func TestRecoverDoubleRecoveryRefused(t *testing.T) {
 		t.Fatalf("first Recover = %v, want committed loss", err)
 	}
 	callsBefore := len(fx.rt.calls)
-	_, err := fx.recover(t, hs.RunID, hs)
-	if !errors.Is(err, ErrInvalidJournalRecord) {
-		t.Fatalf("second Recover = %v, want closed-record refusal", err)
+	replayed, err := fx.recover(t, hs.RunID, hs)
+	if err != nil || replayed.Outcome != RecoveryLoss {
+		t.Fatalf("second Recover = (%#v, %v), want durable loss replay", replayed, err)
 	}
 	for _, c := range fx.rt.calls[callsBefore:] {
 		if !strings.HasPrefix(c, "journal-") {

@@ -36,7 +36,7 @@ type fakeJournal struct {
 	// together after the pre-commit hook.
 	leaser *fakeLeaser
 
-	failBegin, failMark, failClose error
+	failBegin, failMark, failCancellation, failClose error
 }
 
 func newFakeJournal() *fakeJournal {
@@ -72,6 +72,18 @@ func (j *fakeJournal) snapshot(runID string) *HandoffJournalRecord {
 		outcome := *rec.Outcome
 		cp.Outcome = &outcome
 	}
+	if rec.WriterFailureStatus != nil {
+		status := *rec.WriterFailureStatus
+		cp.WriterFailureStatus = &status
+	}
+	if rec.State != nil {
+		state := *rec.State
+		cp.State = &state
+	}
+	if rec.Instructions != nil {
+		instructions := *rec.Instructions
+		cp.Instructions = &instructions
+	}
 	return &cp
 }
 
@@ -79,7 +91,7 @@ func (j *fakeJournal) Get(_ context.Context, runID string) (HandoffJournalRecord
 	j.recordCall("journal-get " + runID)
 	rec := j.snapshot(runID)
 	if rec == nil {
-		return HandoffJournalRecord{}, errors.New("fake journal: no record for run")
+		return HandoffJournalRecord{}, ErrJournalRecordNotFound
 	}
 	return *rec, nil
 }
@@ -201,6 +213,46 @@ func (j *fakeJournal) MarkCredentialObserved(_ context.Context, runID, preDigest
 	return nil
 }
 
+func (j *fakeJournal) MarkStatePrepared(
+	_ context.Context,
+	runID string,
+	state HandoffJournalState,
+) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.recordCall("journal-state-prepared " + runID)
+	if j.failMark != nil {
+		return j.failMark
+	}
+	rec, err := j.open(runID)
+	if err != nil {
+		return err
+	}
+	copied := state
+	rec.State = &copied
+	return nil
+}
+
+func (j *fakeJournal) MarkInstructionsPrepared(
+	_ context.Context,
+	runID string,
+	instructions HandoffJournalInstructions,
+) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.recordCall("journal-instructions-prepared " + runID)
+	if j.failMark != nil {
+		return j.failMark
+	}
+	rec, err := j.open(runID)
+	if err != nil {
+		return err
+	}
+	copied := instructions
+	rec.Instructions = &copied
+	return nil
+}
+
 func (j *fakeJournal) MarkWriterComplete(_ context.Context, runID string) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -213,6 +265,39 @@ func (j *fakeJournal) MarkWriterComplete(_ context.Context, runID string) error 
 		return err
 	}
 	rec.WriterComplete = true
+	return nil
+}
+
+func (j *fakeJournal) MarkCancellationRequested(_ context.Context, runID string) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.recordCall("journal-cancellation-requested " + runID)
+	if j.failCancellation != nil {
+		return j.failCancellation
+	}
+	if j.failMark != nil {
+		return j.failMark
+	}
+	rec, err := j.open(runID)
+	if err != nil {
+		return err
+	}
+	rec.CancellationRequested = true
+	return nil
+}
+
+func (j *fakeJournal) MarkWriterFailed(_ context.Context, runID string, status int) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.recordCall("journal-writer-failed " + runID)
+	if j.failMark != nil {
+		return j.failMark
+	}
+	rec, err := j.open(runID)
+	if err != nil {
+		return err
+	}
+	rec.WriterFailureStatus = &status
 	return nil
 }
 
@@ -334,6 +419,63 @@ func testJournalRecord() HandoffJournalRecord {
 	}
 }
 
+func TestAuthenticateReleasedExportUsesClosedJournalAsExactAuthority(t *testing.T) {
+	t.Parallel()
+	journal := newFakeJournal()
+	cfg := testConfig()
+	cfg.Journal = journal
+	backend, err := New(stubRuntime{}, cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	record := testJournalRecord()
+	journal.put(record)
+
+	if err := backend.AuthenticateReleasedExport(
+		context.Background(), record.RunID, record.ExportDir,
+	); err != nil {
+		t.Fatalf("AuthenticateReleasedExport(exact): %v", err)
+	}
+	if err := backend.AuthenticateReleasedExport(
+		context.Background(), record.RunID, record.ExportDir+"-counterfeit",
+	); !errors.Is(err, ErrInvalidJournalRecord) {
+		t.Fatalf("AuthenticateReleasedExport(counterfeit) = %v, want ErrInvalidJournalRecord", err)
+	}
+	open := record
+	open.Outcome = nil
+	journal.put(open)
+	if err := backend.AuthenticateReleasedExport(
+		context.Background(), record.RunID, record.ExportDir,
+	); !errors.Is(err, ErrInvalidJournalRecord) {
+		t.Fatalf("AuthenticateReleasedExport(open) = %v, want ErrInvalidJournalRecord", err)
+	}
+}
+
+func TestHandoffStartedDistinguishesAbsenceFromAuthority(t *testing.T) {
+	t.Parallel()
+	journal := newFakeJournal()
+	cfg := testConfig()
+	cfg.Journal = journal
+	backend, err := New(stubRuntime{}, cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx := context.Background()
+	if started, err := backend.HandoffStarted(ctx, "missing-run"); err != nil {
+		t.Fatalf("HandoffStarted(missing): %v", err)
+	} else if started {
+		t.Fatal("missing journal record reported a started handoff")
+	}
+
+	record := testJournalRecord()
+	journal.put(record)
+	if started, err := backend.HandoffStarted(ctx, record.RunID); err != nil {
+		t.Fatalf("HandoffStarted(recorded): %v", err)
+	} else if !started {
+		t.Fatal("authentic journal record did not report a started handoff")
+	}
+}
+
 // TestHandoffJournalRecordGolden pins the record's contract shape: it is the
 // vocabulary the #237 store adapter persists, so a drift must be a reviewed
 // diff.
@@ -368,6 +510,18 @@ func TestHandoffJournalRecordValidate(t *testing.T) {
 		{"short spec digest", func(r *HandoffJournalRecord) { r.SpecDigest = strings.Repeat("ab", 20) }},
 		{"malformed observed base", func(r *HandoffJournalRecord) { r.ObservedBaseSHA = "HEAD" }},
 		{"malformed credential pre-digest", func(r *HandoffJournalRecord) { r.CredentialPreDigest = "xyz" }},
+		{"unknown instruction composition", func(r *HandoffJournalRecord) {
+			r.Instructions = testJournalInstructions()
+			r.Instructions.CompositionVersion = "future"
+		}},
+		{"malformed host instruction digest", func(r *HandoffJournalRecord) {
+			r.Instructions = testJournalInstructions()
+			r.Instructions.HostDigest = "sha256:abc"
+		}},
+		{"malformed instruction bundle digest", func(r *HandoffJournalRecord) {
+			r.Instructions = testJournalInstructions()
+			r.Instructions.BundleDigest = "abc"
+		}},
 		{"lease without identity", func(r *HandoffJournalRecord) { r.Lease.AuthIdentityID = "" }},
 		{"lease without holder", func(r *HandoffJournalRecord) { r.Lease.Holder = "" }},
 		{"lease with zero fence", func(r *HandoffJournalRecord) { r.Lease.Fence = 0 }},
@@ -410,6 +564,15 @@ func TestHandoffJournalRecordValidate(t *testing.T) {
 	open.Outcome = nil
 	if err := open.Validate(); err != nil {
 		t.Errorf("open record: validate() = %v, want nil", err)
+	}
+}
+
+func testJournalInstructions() *HandoffJournalInstructions {
+	return &HandoffJournalInstructions{
+		CompositionVersion:       instructionCompositionVersion,
+		HostDigest:               instructionSourceAbsent,
+		RepositoryManifestDigest: strings.Repeat("12", 32),
+		BundleDigest:             strings.Repeat("34", 32),
 	}
 }
 

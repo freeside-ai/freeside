@@ -25,7 +25,12 @@ type CLIRuntime struct {
 
 // NewCLIRuntime returns a CLIRuntime invoking binPath (usually the absolute
 // path to the container CLI).
-func NewCLIRuntime(binPath string) *CLIRuntime { return &CLIRuntime{bin: binPath} }
+func NewCLIRuntime(binPath string) *CLIRuntime {
+	if resolved, err := osexec.LookPath(binPath); err == nil {
+		binPath = resolved
+	}
+	return &CLIRuntime{bin: binPath}
+}
 
 var _ Runtime = (*CLIRuntime)(nil)
 

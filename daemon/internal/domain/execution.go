@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"slices"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 // admissionEncodingVersion tags the canonical serialization
@@ -14,8 +16,9 @@ import (
 // to every admission's identity, so it is versioned explicitly rather than
 // left implicit in the struct's field order.
 const (
-	admissionEncodingVersion      = "freeside.execution.admission/v1"
-	admissionInputEncodingVersion = "freeside.execution.admission/v2"
+	admissionEncodingVersion              = "freeside.execution.admission/v1"
+	admissionInputEncodingVersion         = "freeside.execution.admission/v2"
+	admissionBackendConfigEncodingVersion = "freeside.execution.admission/v3"
 )
 
 // digestPinnedImage binds an image reference to one full lowercase sha256
@@ -123,15 +126,20 @@ type ExecutionAdmission struct {
 	// Backend and Capabilities are the exec.Admission snapshot: the admitting
 	// backend's name and the capability set it declared at that decision, not
 	// its live declaration now.
-	Backend        string             `json:"backend"`
-	Capabilities   CapabilitySnapshot `json:"capabilities"`
-	OperatingMode  OperatingMode      `json:"operating_mode"`
-	CredentialMode CredentialMode     `json:"credential_mode"`
-	EgressProfile  EgressProfile      `json:"egress_profile"`
-	ImageRef       ImageRef           `json:"image_ref"`
-	SpecDigest     Digest             `json:"spec_digest"`
-	PolicyDigest   Digest             `json:"policy_digest"`
-	InputDigest    Digest             `json:"input_digest"`
+	Backend      string             `json:"backend"`
+	Capabilities CapabilitySnapshot `json:"capabilities"`
+	// BackendConfigurationDigest binds an unattended admission to the exact
+	// normalized backend configuration whose latest durable conformance proof
+	// authorizes it. An attended admission may omit it because §5.7 permits
+	// that mode to run on an unproven backend class.
+	BackendConfigurationDigest Digest         `json:"backend_configuration_digest,omitempty"`
+	OperatingMode              OperatingMode  `json:"operating_mode"`
+	CredentialMode             CredentialMode `json:"credential_mode"`
+	EgressProfile              EgressProfile  `json:"egress_profile"`
+	ImageRef                   ImageRef       `json:"image_ref"`
+	SpecDigest                 Digest         `json:"spec_digest"`
+	PolicyDigest               Digest         `json:"policy_digest"`
+	InputDigest                Digest         `json:"input_digest"`
 	// StageInputs is nil on historical pre-materialization admissions. A real
 	// Phase 1A driver requires it: the snapshot binds every content role to
 	// the digest the materializer must verify before process start.
@@ -161,26 +169,27 @@ type ExecutionAdmission struct {
 // ExecutionAdmission. It has no ID field: the identity is a content address,
 // so no input path can set it.
 type ExecutionAdmissionInput struct {
-	InvocationID           InvocationID
-	RunID                  RunID
-	StageID                StageID
-	AttemptID              AttemptID
-	Backend                string
-	Capabilities           CapabilitySnapshot
-	OperatingMode          OperatingMode
-	CredentialMode         CredentialMode
-	EgressProfile          EgressProfile
-	ImageRef               ImageRef
-	SpecDigest             Digest
-	PolicyDigest           Digest
-	InputDigest            Digest
-	StageInputs            *StageInputSnapshot
-	Base                   BaseRevision
-	Workspace              string
-	AuthIdentityID         *AuthIdentityID
-	TrustProfileDigest     *Digest
-	BackupEncryptionWaiver *BackupEncryptionWaiver
-	AdmittedAt             time.Time
+	InvocationID               InvocationID
+	RunID                      RunID
+	StageID                    StageID
+	AttemptID                  AttemptID
+	Backend                    string
+	Capabilities               CapabilitySnapshot
+	BackendConfigurationDigest Digest
+	OperatingMode              OperatingMode
+	CredentialMode             CredentialMode
+	EgressProfile              EgressProfile
+	ImageRef                   ImageRef
+	SpecDigest                 Digest
+	PolicyDigest               Digest
+	InputDigest                Digest
+	StageInputs                *StageInputSnapshot
+	Base                       BaseRevision
+	Workspace                  string
+	AuthIdentityID             *AuthIdentityID
+	TrustProfileDigest         *Digest
+	BackupEncryptionWaiver     *BackupEncryptionWaiver
+	AdmittedAt                 time.Time
 }
 
 // NewExecutionAdmission builds a validated admission in canonical byte-form:
@@ -190,27 +199,34 @@ type ExecutionAdmissionInput struct {
 // makes a retried admission of the same facts converge on the stored body
 // instead of colliding under a false immutable conflict (the #33 lesson).
 func NewExecutionAdmission(in ExecutionAdmissionInput) (ExecutionAdmission, error) {
+	if in.BackendConfigurationDigest == UnboundBackendConfigurationDigest ||
+		(in.OperatingMode == ModeUnattended && in.BackendConfigurationDigest == "") {
+		return ExecutionAdmission{}, fmt.Errorf(
+			"new execution admission %s under mode %q backend configuration: %w",
+			in.InvocationID, in.OperatingMode, ErrConformanceConfigurationUnbound)
+	}
 	a := ExecutionAdmission{
-		InvocationID:           in.InvocationID,
-		RunID:                  in.RunID,
-		StageID:                in.StageID,
-		AttemptID:              in.AttemptID,
-		Backend:                in.Backend,
-		Capabilities:           NewCapabilitySnapshot(in.Capabilities...),
-		OperatingMode:          in.OperatingMode,
-		CredentialMode:         in.CredentialMode,
-		EgressProfile:          in.EgressProfile,
-		ImageRef:               in.ImageRef,
-		SpecDigest:             in.SpecDigest,
-		PolicyDigest:           in.PolicyDigest,
-		InputDigest:            in.InputDigest,
-		StageInputs:            cloneStageInputSnapshot(in.StageInputs),
-		Base:                   in.Base,
-		Workspace:              in.Workspace,
-		AuthIdentityID:         clonePtr(in.AuthIdentityID),
-		TrustProfileDigest:     clonePtr(in.TrustProfileDigest),
-		BackupEncryptionWaiver: clonePtr(in.BackupEncryptionWaiver),
-		AdmittedAt:             in.AdmittedAt.UTC(),
+		InvocationID:               in.InvocationID,
+		RunID:                      in.RunID,
+		StageID:                    in.StageID,
+		AttemptID:                  in.AttemptID,
+		Backend:                    in.Backend,
+		Capabilities:               NewCapabilitySnapshot(in.Capabilities...),
+		BackendConfigurationDigest: in.BackendConfigurationDigest,
+		OperatingMode:              in.OperatingMode,
+		CredentialMode:             in.CredentialMode,
+		EgressProfile:              in.EgressProfile,
+		ImageRef:                   in.ImageRef,
+		SpecDigest:                 in.SpecDigest,
+		PolicyDigest:               in.PolicyDigest,
+		InputDigest:                in.InputDigest,
+		StageInputs:                cloneStageInputSnapshot(in.StageInputs),
+		Base:                       in.Base,
+		Workspace:                  in.Workspace,
+		AuthIdentityID:             clonePtr(in.AuthIdentityID),
+		TrustProfileDigest:         clonePtr(in.TrustProfileDigest),
+		BackupEncryptionWaiver:     clonePtr(in.BackupEncryptionWaiver),
+		AdmittedAt:                 in.AdmittedAt.UTC(),
 	}
 	id, err := a.ComputeID()
 	if err != nil {
@@ -228,27 +244,28 @@ func NewExecutionAdmission(in ExecutionAdmissionInput) (ExecutionAdmission, erro
 // adding a field to the record without deciding whether it belongs in the
 // identity is a compile-visible choice, not an accident.
 type canonicalAdmission struct {
-	Version                string                  `json:"version"`
-	InvocationID           InvocationID            `json:"invocation_id"`
-	RunID                  RunID                   `json:"run_id"`
-	StageID                StageID                 `json:"stage_id"`
-	AttemptID              AttemptID               `json:"attempt_id"`
-	Backend                string                  `json:"backend"`
-	Capabilities           CapabilitySnapshot      `json:"capabilities"`
-	OperatingMode          OperatingMode           `json:"operating_mode"`
-	CredentialMode         CredentialMode          `json:"credential_mode"`
-	EgressProfile          EgressProfile           `json:"egress_profile"`
-	ImageRef               ImageRef                `json:"image_ref"`
-	SpecDigest             Digest                  `json:"spec_digest"`
-	PolicyDigest           Digest                  `json:"policy_digest"`
-	InputDigest            Digest                  `json:"input_digest"`
-	StageInputs            *StageInputSnapshot     `json:"stage_inputs,omitempty"`
-	Base                   BaseRevision            `json:"base"`
-	Workspace              string                  `json:"workspace"`
-	AuthIdentityID         *AuthIdentityID         `json:"auth_identity_id"`
-	TrustProfileDigest     *Digest                 `json:"trust_profile_digest"`
-	BackupEncryptionWaiver *BackupEncryptionWaiver `json:"backup_encryption_waiver"`
-	AdmittedAt             time.Time               `json:"admitted_at"`
+	Version                    string                  `json:"version"`
+	InvocationID               InvocationID            `json:"invocation_id"`
+	RunID                      RunID                   `json:"run_id"`
+	StageID                    StageID                 `json:"stage_id"`
+	AttemptID                  AttemptID               `json:"attempt_id"`
+	Backend                    string                  `json:"backend"`
+	Capabilities               CapabilitySnapshot      `json:"capabilities"`
+	BackendConfigurationDigest Digest                  `json:"backend_configuration_digest,omitempty"`
+	OperatingMode              OperatingMode           `json:"operating_mode"`
+	CredentialMode             CredentialMode          `json:"credential_mode"`
+	EgressProfile              EgressProfile           `json:"egress_profile"`
+	ImageRef                   ImageRef                `json:"image_ref"`
+	SpecDigest                 Digest                  `json:"spec_digest"`
+	PolicyDigest               Digest                  `json:"policy_digest"`
+	InputDigest                Digest                  `json:"input_digest"`
+	StageInputs                *StageInputSnapshot     `json:"stage_inputs,omitempty"`
+	Base                       BaseRevision            `json:"base"`
+	Workspace                  string                  `json:"workspace"`
+	AuthIdentityID             *AuthIdentityID         `json:"auth_identity_id"`
+	TrustProfileDigest         *Digest                 `json:"trust_profile_digest"`
+	BackupEncryptionWaiver     *BackupEncryptionWaiver `json:"backup_encryption_waiver"`
+	AdmittedAt                 time.Time               `json:"admitted_at"`
 }
 
 // ComputeID returns the content address of the admission: a sha256 over its
@@ -263,28 +280,32 @@ func (a ExecutionAdmission) ComputeID() (Digest, error) {
 		cloned := a.StageInputs.clone()
 		stageInputs = &cloned
 	}
+	if a.BackendConfigurationDigest != "" {
+		version = admissionBackendConfigEncodingVersion
+	}
 	body, err := json.Marshal(canonicalAdmission{
-		Version:                version,
-		InvocationID:           a.InvocationID,
-		RunID:                  a.RunID,
-		StageID:                a.StageID,
-		AttemptID:              a.AttemptID,
-		Backend:                a.Backend,
-		Capabilities:           NewCapabilitySnapshot(a.Capabilities...),
-		OperatingMode:          a.OperatingMode,
-		CredentialMode:         a.CredentialMode,
-		EgressProfile:          a.EgressProfile,
-		ImageRef:               a.ImageRef,
-		SpecDigest:             a.SpecDigest,
-		PolicyDigest:           a.PolicyDigest,
-		InputDigest:            a.InputDigest,
-		StageInputs:            stageInputs,
-		Base:                   a.Base,
-		Workspace:              a.Workspace,
-		AuthIdentityID:         a.AuthIdentityID,
-		TrustProfileDigest:     a.TrustProfileDigest,
-		BackupEncryptionWaiver: a.BackupEncryptionWaiver,
-		AdmittedAt:             a.AdmittedAt,
+		Version:                    version,
+		InvocationID:               a.InvocationID,
+		RunID:                      a.RunID,
+		StageID:                    a.StageID,
+		AttemptID:                  a.AttemptID,
+		Backend:                    a.Backend,
+		Capabilities:               NewCapabilitySnapshot(a.Capabilities...),
+		BackendConfigurationDigest: a.BackendConfigurationDigest,
+		OperatingMode:              a.OperatingMode,
+		CredentialMode:             a.CredentialMode,
+		EgressProfile:              a.EgressProfile,
+		ImageRef:                   a.ImageRef,
+		SpecDigest:                 a.SpecDigest,
+		PolicyDigest:               a.PolicyDigest,
+		InputDigest:                a.InputDigest,
+		StageInputs:                stageInputs,
+		Base:                       a.Base,
+		Workspace:                  a.Workspace,
+		AuthIdentityID:             a.AuthIdentityID,
+		TrustProfileDigest:         a.TrustProfileDigest,
+		BackupEncryptionWaiver:     a.BackupEncryptionWaiver,
+		AdmittedAt:                 a.AdmittedAt,
 	})
 	if err != nil {
 		return "", fmt.Errorf("execution admission id: %w", err)
@@ -316,6 +337,15 @@ func (a ExecutionAdmission) Validate() error {
 	}
 	if err := a.Capabilities.Validate(); err != nil {
 		return fmt.Errorf("execution admission %s: %w", a.InvocationID, err)
+	}
+	if a.BackendConfigurationDigest != "" &&
+		!contentaddr.Valid(string(a.BackendConfigurationDigest)) {
+		return fmt.Errorf("execution admission %s backend_configuration_digest %q: %w",
+			a.InvocationID, a.BackendConfigurationDigest, ErrConformanceConfigurationUnbound)
+	}
+	if a.BackendConfigurationDigest == UnboundBackendConfigurationDigest {
+		return fmt.Errorf("execution admission %s backend configuration: %w",
+			a.InvocationID, ErrConformanceConfigurationUnbound)
 	}
 	if !a.OperatingMode.valid() {
 		return fmt.Errorf("execution admission %s operating_mode %q: %w",
@@ -709,6 +739,83 @@ func ValidateExportBinding(a ExecutionAdmission, x ExecutionExport) error {
 	// clock skew to tolerate; it is an audit trail that reads backwards.
 	if x.RecordedAt.Before(a.AdmittedAt) {
 		return fmt.Errorf("execution export %s recorded %s, admitted %s: %w",
+			x.InvocationID, x.RecordedAt, a.AdmittedAt, ErrTimestampOutOfOrder)
+	}
+	return nil
+}
+
+// ExecutionOutcomeStatus is a non-export terminal class. Completed work is
+// authenticated by ExecutionExport instead; keeping it out of this vocabulary
+// makes the two authorities disjoint.
+type ExecutionOutcomeStatus string
+
+const (
+	ExecutionOutcomeFailed   ExecutionOutcomeStatus = "failed"
+	ExecutionOutcomeCanceled ExecutionOutcomeStatus = "canceled"
+	ExecutionOutcomeLost     ExecutionOutcomeStatus = "lost"
+)
+
+// AllExecutionOutcomeStatuses is the single registration point for durable
+// non-export outcomes.
+var AllExecutionOutcomeStatuses = []ExecutionOutcomeStatus{
+	ExecutionOutcomeFailed,
+	ExecutionOutcomeCanceled,
+	ExecutionOutcomeLost,
+}
+
+func (s ExecutionOutcomeStatus) valid() bool {
+	switch s {
+	case ExecutionOutcomeFailed, ExecutionOutcomeCanceled, ExecutionOutcomeLost:
+		return true
+	default:
+		return false
+	}
+}
+
+// ExecutionOutcome is the trusted, write-once authority for a failed,
+// canceled, or proven-lost attempt. Private driver state may replay it but
+// cannot mint one.
+type ExecutionOutcome struct {
+	InvocationID InvocationID           `json:"invocation_id"`
+	AdmissionID  Digest                 `json:"admission_id"`
+	Status       ExecutionOutcomeStatus `json:"status"`
+	Summary      string                 `json:"summary,omitempty"`
+	RecordedAt   time.Time              `json:"recorded_at"`
+}
+
+func (x ExecutionOutcome) Validate() error {
+	if x.InvocationID == "" {
+		return fmt.Errorf("execution outcome invocation_id: %w", ErrEmptyID)
+	}
+	if x.AdmissionID == "" {
+		return fmt.Errorf("execution outcome %s admission_id: %w", x.InvocationID, ErrEmptyID)
+	}
+	if !x.Status.valid() {
+		return fmt.Errorf("execution outcome %s status %q: %w",
+			x.InvocationID, x.Status, ErrInvalidExecOutcome)
+	}
+	if x.Status == ExecutionOutcomeLost && x.Summary != "" {
+		return fmt.Errorf("execution outcome %s lost with summary: %w",
+			x.InvocationID, ErrOutcomeInconsistent)
+	}
+	if x.RecordedAt.IsZero() {
+		return fmt.Errorf("execution outcome %s recorded_at: %w", x.InvocationID, ErrMissingTimestamp)
+	}
+	if x.RecordedAt.Location() != time.UTC {
+		return fmt.Errorf("execution outcome %s recorded_at: %w", x.InvocationID, ErrTimestampNotUTC)
+	}
+	return nil
+}
+
+// ValidateOutcomeBinding requires the same invocation and admission, and
+// forward-moving time, as the trusted admission that authorized the attempt.
+func ValidateOutcomeBinding(a ExecutionAdmission, x ExecutionOutcome) error {
+	if x.InvocationID != a.InvocationID || x.AdmissionID != a.ID {
+		return fmt.Errorf("execution outcome %s disagrees with admission %s: %w",
+			x.InvocationID, a.InvocationID, ErrParentKeyMismatch)
+	}
+	if x.RecordedAt.Before(a.AdmittedAt) {
+		return fmt.Errorf("execution outcome %s recorded %s, admitted %s: %w",
 			x.InvocationID, x.RecordedAt, a.AdmittedAt, ErrTimestampOutOfOrder)
 	}
 	return nil

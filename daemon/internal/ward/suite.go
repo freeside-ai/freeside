@@ -86,9 +86,10 @@ func (s *Suite) recordStep(ctx context.Context, outcome domain.ConformanceOutcom
 	}
 	return func() error {
 		in := domain.BackendConformanceInput{
-			Backend:  domain.BackendFreshVMReadOnlyVolumeHandoff,
-			Outcome:  outcome,
-			ProvedAt: time.Now().UTC(),
+			Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+			Outcome:             outcome,
+			ConfigurationDigest: s.b.ConfigurationDigest(),
+			ProvedAt:            time.Now().UTC(),
 		}
 		if outcome == domain.ConformancePassed {
 			in.Capabilities = domain.NewCapabilitySnapshot(provenCapabilities()...)
@@ -483,6 +484,11 @@ func NewSuite(b *Backend, fx SuiteFixture, opts ...SuiteOption) (*Suite, error) 
 	fx = fx.withDefaults()
 	if err := fx.validate(); err != nil {
 		return nil, err
+	}
+	if b.cfg.AgentImage != "" && fx.AgentImage != b.cfg.AgentImage {
+		return nil, fmt.Errorf(
+			"%w: SuiteFixture.AgentImage %q disagrees with configured AgentImage %q",
+			ErrInvalidConfig, fx.AgentImage, b.cfg.AgentImage)
 	}
 	// The credential mounts alongside the workspace in the writer; a target
 	// equal to or nested under the workspace (or the reverse) collides with
@@ -918,11 +924,15 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 		WorkspaceSizeMB: s.fx.WorkspaceSizeMB,
 		Seed:            s.fx.Seed,
 		Agent: AgentSpec{
-			Image:            s.fx.AgentImage,
-			Command:          s.agentCommand,
-			Env:              []string{"FREESIDE_CONFORMANCE_A=1", "FREESIDE_CONFORMANCE_B=2"},
-			EgressProfile:    domain.EgressProviderOnly,
-			CredentialMounts: []CredentialMount{{Volume: credVolume, Target: s.fx.CredentialTarget}},
+			Image:         s.fx.AgentImage,
+			Command:       s.agentCommand,
+			Env:           []string{"FREESIDE_CONFORMANCE_A=1", "FREESIDE_CONFORMANCE_B=2"},
+			EgressProfile: domain.EgressProviderOnly,
+			LaunchState:   LaunchStateNone,
+			CredentialMounts: []CredentialMount{{
+				Volume: credVolume, Target: s.fx.CredentialTarget,
+				Manifest: CredentialManifestOpaque,
+			}},
 			VendorInstructions: VendorInstructions{
 				Vendor: domain.AgentVendorClaude,
 			},
@@ -1049,7 +1059,33 @@ func (s *Suite) Full(ctx context.Context) (err error) {
 // PreJob means the backend is plausibly still operable; only Full proves it
 // conformant. Run Full at startup, after configuration changes, and on the
 // doctor schedule; run PreJob before each job.
-func (s *Suite) PreJob(ctx context.Context) (err error) {
+func (s *Suite) PreJob(ctx context.Context) error {
+	return s.preJob(ctx)
+}
+
+// PreJob runs the lightweight production probe against the exact writer
+// image bound into this backend's conformance identity. runID is a
+// caller-derived, collision-resistant runtime-object namespace.
+func (b *Backend) PreJob(ctx context.Context, runID string) error {
+	if b == nil || !b.initialized {
+		return fmt.Errorf("%w: backend is not initialized", ErrInvalidConfig)
+	}
+	if b.cfg.AgentImage == "" {
+		return failf(CheckPreJobProbe, "configured agent image is missing")
+	}
+	if !runIDPattern.MatchString(runID) {
+		return failf(CheckPreJobProbe, "run id does not match %s", runIDPattern)
+	}
+	return (&Suite{
+		b: b,
+		fx: SuiteFixture{
+			AgentImage: b.cfg.AgentImage,
+			RunID:      runID,
+		},
+	}).preJob(ctx)
+}
+
+func (s *Suite) preJob(ctx context.Context) (err error) {
 	// Bound the probe so a wedged runtime call fails closed rather than hanging
 	// a long-lived doctor/startup context. PreJob boots no VM, so the teardown
 	// timeout is a generous ceiling for its create/inspect/delete round-trip.
@@ -1073,6 +1109,13 @@ func (s *Suite) PreJob(ctx context.Context) (err error) {
 	}
 	if !digestPinnedImagePattern.MatchString(s.fx.AgentImage) {
 		return failf(CheckPreJobProbe, "fixture agent image is not digest-pinned")
+	}
+	currentRuntime, err := runtimeConfigurationIdentity(s.b.rt)
+	if err != nil {
+		return failf(CheckPreJobProbe, "runtime executable identity unavailable")
+	}
+	if currentRuntime != s.b.runtimeIdentity {
+		return failf(CheckPreJobProbe, "runtime executable changed since conformance restoration")
 	}
 	// Runtime reachable (cheap, no VM): a listing round-trips.
 	if _, err := s.b.rt.ListVolumes(ctx); err != nil {

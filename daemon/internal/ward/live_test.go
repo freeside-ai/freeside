@@ -414,6 +414,7 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 		Agent: AgentSpec{
 			Image:         liveImage,
 			EgressProfile: domain.EgressProviderOnly,
+			LaunchState:   LaunchStateNone,
 			VendorInstructions: VendorInstructions{
 				Vendor:  domain.AgentVendorClaude,
 				Present: true,
@@ -430,7 +431,10 @@ func TestLiveHandoffLifecycle(t *testing.T) {
 					"echo durable-workspace > /workspace/nested/state.txt && " +
 					liveAgentControlStaging,
 			},
-			CredentialMounts: []CredentialMount{{Volume: credVolume, Target: "/credentials"}},
+			CredentialMounts: []CredentialMount{{
+				Volume: credVolume, Target: "/credentials",
+				Manifest: CredentialManifestOpaque,
+			}},
 		},
 	})
 	if err != nil {
@@ -750,6 +754,7 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 			Image:              liveImage,
 			Command:            []string{"sh", "-c", "true"},
 			EgressProfile:      domain.EgressProviderOnly,
+			LaunchState:        LaunchStateNone,
 			VendorInstructions: VendorInstructions{Vendor: domain.AgentVendorClaude},
 			InstructionPolicy:  ClaudeInvocationInstructionPolicy(),
 		},
@@ -1025,6 +1030,7 @@ func TestLiveLeasedMutationAndReadOnlyProbe(t *testing.T) {
 		Agent: AgentSpec{
 			Image:         liveImage,
 			EgressProfile: domain.EgressProviderOnly,
+			LaunchState:   LaunchStateNone,
 			VendorInstructions: VendorInstructions{
 				Vendor: domain.AgentVendorClaude,
 			},
@@ -1042,8 +1048,14 @@ func TestLiveLeasedMutationAndReadOnlyProbe(t *testing.T) {
 					"echo agent-output > /workspace/result.txt",
 			},
 			CredentialMounts: []CredentialMount{
-				{Volume: leasedVolume, Target: "/lease", Writable: true},
-				{Volume: roVolume, Target: "/ro"},
+				{
+					Volume: leasedVolume, Target: "/lease",
+					Manifest: CredentialManifestOpaque, Writable: true,
+				},
+				{
+					Volume: roVolume, Target: "/ro",
+					Manifest: CredentialManifestOpaque,
+				},
 			},
 		},
 	})

@@ -1518,6 +1518,16 @@ func TestSuitePreJobSuccess(t *testing.T) {
 	}
 }
 
+func TestBackendPreJobUsesConfiguredAgentImage(t *testing.T) {
+	s, _ := newSuiteTest(t)
+	s.b.cfg.AgentImage = s.fx.AgentImage
+	if err := s.b.PreJob(context.Background(), "job-1"); err != nil {
+		t.Fatalf("Backend.PreJob = %v, want nil", err)
+	}
+	s.b.cfg.AgentImage = ""
+	wantCheckFailure(t, s.b.PreJob(context.Background(), "job-2"), CheckPreJobProbe)
+}
+
 func TestSuitePreJobFailures(t *testing.T) {
 	cases := []struct {
 		name   string

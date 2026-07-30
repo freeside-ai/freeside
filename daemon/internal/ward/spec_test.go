@@ -46,12 +46,17 @@ func testHandoffSpec() HandoffSpec {
 			Command:       []string{"sh", "-c", "true"},
 			Env:           []string{"AGENT_MODE=fixture"},
 			EgressProfile: domain.EgressProviderOnly,
+			LaunchState:   LaunchStateNone,
 			VendorInstructions: VendorInstructions{
 				Vendor: domain.AgentVendorClaude,
 			},
 			InstructionPolicy: ClaudeInvocationInstructionPolicy(),
 			CredentialMounts: []CredentialMount{
-				{Volume: "provider-cred", Target: "/credentials"},
+				{
+					Volume:   "provider-cred",
+					Target:   "/credentials",
+					Manifest: CredentialManifestOpaque,
+				},
 			},
 		},
 	}
@@ -81,17 +86,19 @@ func TestHandoffSpecValidate(t *testing.T) {
 		{"missing agent command", func(s *HandoffSpec) { s.Agent.Command = nil }},
 		{"missing egress profile", func(s *HandoffSpec) { s.Agent.EgressProfile = "" }},
 		{"unenforceable wider egress profile", func(s *HandoffSpec) { s.Agent.EgressProfile = domain.EgressProviderWebRead }},
+		{"missing launch state", func(s *HandoffSpec) { s.Agent.LaunchState = "" }},
+		{"unknown launch state", func(s *HandoffSpec) { s.Agent.LaunchState = "shared" }},
 		{"workspace repository instructions", func(s *HandoffSpec) {
 			s.Agent.InstructionPolicy.RepositorySource = "workspace"
 		}},
 		{"missing invocation boundary", func(s *HandoffSpec) {
-			s.Agent.InstructionPolicy.Boundaries = s.Agent.InstructionPolicy.Boundaries[:3]
+			s.Agent.InstructionPolicy.Boundaries = s.Agent.InstructionPolicy.Boundaries[:2]
 		}},
 		{"repeated invocation boundary", func(s *HandoffSpec) {
-			s.Agent.InstructionPolicy.Boundaries[3] = InvocationStartup
+			s.Agent.InstructionPolicy.Boundaries[2] = InvocationStartup
 		}},
 		{"unknown invocation boundary", func(s *HandoffSpec) {
-			s.Agent.InstructionPolicy.Boundaries[3] = "fork"
+			s.Agent.InstructionPolicy.Boundaries[2] = "fork"
 		}},
 		{"unsupported instruction vendor", func(s *HandoffSpec) {
 			s.Agent.VendorInstructions.Vendor = "codex"
@@ -125,12 +132,20 @@ func TestHandoffSpecValidate(t *testing.T) {
 		// must reach ErrInvalidHandoffSpec through HandoffSpec.validate too.
 		{"unset seed mode", func(s *HandoffSpec) { s.Seed = WorkspaceSeed{} }},
 		{"unknown seed mode", func(s *HandoffSpec) { s.Seed = WorkspaceSeed{Mode: SeedMode("copy")} }},
-		// The writable mount and the lease claim travel together, both ways;
-		// every one-sided or malformed combination is a caller error.
+		// A writable mount requires the lease; #383 also permits the lease to
+		// hold an identity unavailable while its token mount stays read-only.
 		{"writable mount without lease", func(s *HandoffSpec) {
 			s.Agent.CredentialMounts[0].Writable = true
 		}},
-		{"lease without writable mount", func(s *HandoffSpec) {
+		{"missing credential manifest", func(s *HandoffSpec) {
+			s.Agent.CredentialMounts[0].Manifest = ""
+		}},
+		{"unknown credential manifest", func(s *HandoffSpec) {
+			s.Agent.CredentialMounts[0].Manifest = "anything"
+		}},
+		{"writable setup token", func(s *HandoffSpec) {
+			s.Agent.CredentialMounts[0].Manifest = CredentialManifestSetupToken
+			s.Agent.CredentialMounts[0].Writable = true
 			s.AuthStoreLease = &AuthStoreLeaseClaim{AuthIdentityID: "id", Holder: "holder"}
 		}},
 		{"lease with empty identity", func(s *HandoffSpec) {
@@ -144,7 +159,10 @@ func TestHandoffSpecValidate(t *testing.T) {
 		{"lease with two writable mounts", func(s *HandoffSpec) {
 			s.Agent.CredentialMounts[0].Writable = true
 			s.Agent.CredentialMounts = append(s.Agent.CredentialMounts,
-				CredentialMount{Volume: "second-cred", Target: "/second", Writable: true})
+				CredentialMount{
+					Volume: "second-cred", Target: "/second",
+					Manifest: CredentialManifestOpaque, Writable: true,
+				})
 			s.AuthStoreLease = &AuthStoreLeaseClaim{AuthIdentityID: "id", Holder: "holder"}
 		}},
 	}
@@ -156,6 +174,17 @@ func TestHandoffSpecValidate(t *testing.T) {
 				t.Errorf("validate() = %v, want ErrInvalidHandoffSpec", err)
 			}
 		})
+	}
+}
+
+func TestLaunchStatePolicyEnum(t *testing.T) {
+	for _, policy := range AllLaunchStatePolicies {
+		if !policy.valid() {
+			t.Errorf("registered launch-state policy %q reports invalid", policy)
+		}
+	}
+	if LaunchStatePolicy("").valid() {
+		t.Error("zero launch-state policy reports valid")
 	}
 }
 
@@ -226,15 +255,41 @@ func TestVerifyInstructionProofFailsClosed(t *testing.T) {
 	}
 }
 
+// The writer reads the composed bundle after setpriv drops it to an
+// unprivileged UID, from a read-only mount it cannot chmod. cp -a preserves
+// the private 0600 host snapshot mode, so without this relaxation the pinned
+// image's `claude --append-system-prompt-file` gets EACCES on every
+// production run. Proven against Apple container: a 0600 root-owned file on a
+// volume mounted at /root/.claude is unreadable by UID 1001 even with /root
+// at 0711.
+func TestInstructionSeederPublishesAWriterReadableBundle(t *testing.T) {
+	script := strings.Join(instructionSeederCommand(Config{}.withDefaults()), " ")
+	quoted := shellQuote(instructionVolumeTarget + "/" + instructionFileName)
+	if !strings.Contains(script, "chmod 0644 "+quoted) {
+		t.Errorf("instruction seeder never relaxes the bundle mode: %s", script)
+	}
+	if strings.Index(script, "cp -a") > strings.Index(script, "chmod 0644") {
+		t.Error("instruction seeder chmods before cp -a restores the 0600 mode")
+	}
+}
+
 func TestNamesFor(t *testing.T) {
 	n := namesFor("run-1")
 	want := handoffNames{
 		Workspace:           "freeside-handoff-run-1-ws",
 		Instructions:        "freeside-handoff-run-1-ins",
+		ConfigRoot:          "freeside-handoff-run-1-cfg",
+		Continuity:          "freeside-handoff-run-1-projects",
+		SessionScratch:      "freeside-handoff-run-1-session-env",
 		Seeder:              "freeside-handoff-run-1-seeder",
 		Observer:            "freeside-handoff-run-1-observer",
 		InstructionSeeder:   "freeside-handoff-run-1-ins-seed",
 		InstructionObserver: "freeside-handoff-run-1-ins-check",
+		ConfigRootSeeder:    "freeside-handoff-run-1-cfg-seed",
+		ConfigRootObserver:  "freeside-handoff-run-1-cfg-check",
+		ContinuityObserver:  "freeside-handoff-run-1-projects-check",
+		ScratchObserver:     "freeside-handoff-run-1-sess-check",
+		WriterObserver:      "freeside-handoff-run-1-writer-check",
 		CredObsPre:          "freeside-handoff-run-1-cred-pre",
 		CredObsPost:         "freeside-handoff-run-1-cred-post",
 		Agent:               "freeside-handoff-run-1-agent",
@@ -252,8 +307,8 @@ func TestNamesFor(t *testing.T) {
 // TestNamesForFitsRuntimeIDLimit pins every role name against the longest
 // valid run ID: Apple container 1.1.0 refuses an ID over 64 bytes, and the
 // networkless-export work already had to shorten a role prefix once for
-// exactly this reason. "cred-post" is the longest suffix, so a new role
-// longer than it must re-check this bound.
+// exactly this reason. Every role is enumerated so a longer suffix cannot
+// silently exceed the bound.
 func TestNamesForFitsRuntimeIDLimit(t *testing.T) {
 	const runtimeIDLimit = 64
 	longest := "a" + strings.Repeat("b", 31) // the max runIDPattern admits
@@ -262,9 +317,19 @@ func TestNamesForFitsRuntimeIDLimit(t *testing.T) {
 	}
 	n := namesFor(longest)
 	for role, name := range map[string]string{
-		"workspace": n.Workspace, "seeder": n.Seeder, "observer": n.Observer,
-		"cred-pre": n.CredObsPre, "cred-post": n.CredObsPost,
-		"agent": n.Agent, "exporter": n.Exporter,
+		"workspace": n.Workspace, "instructions": n.Instructions,
+		"config-root": n.ConfigRoot, "continuity": n.Continuity,
+		"session-scratch": n.SessionScratch,
+		"seeder":          n.Seeder, "observer": n.Observer,
+		"instruction-seeder":   n.InstructionSeeder,
+		"instruction-observer": n.InstructionObserver,
+		"config-root-seeder":   n.ConfigRootSeeder,
+		"config-root-observer": n.ConfigRootObserver,
+		"continuity-observer":  n.ContinuityObserver,
+		"scratch-observer":     n.ScratchObserver,
+		"cred-pre":             n.CredObsPre, "cred-post": n.CredObsPost,
+		"writer-observer": n.WriterObserver, "agent": n.Agent,
+		"exporter": n.Exporter, "network": n.Network,
 	} {
 		if len(name) > runtimeIDLimit {
 			t.Errorf("%s name %q is %d bytes, over the runtime's %d-byte limit", role, name, len(name), runtimeIDLimit)
@@ -628,7 +693,7 @@ func TestBuildAgentSpec(t *testing.T) {
 			instructions, names.Instructions, claudeInstructionMountTarget)
 	}
 	// The generated spec passes its own gate.
-	if err := validateAgentSpec(cfg, spec, names.Workspace, ""); err != nil {
+	if err := validateAgentSpec(cfg, spec, names, "", false, hs.Agent.LaunchState); err != nil {
 		t.Errorf("validateAgentSpec(generated) = %v, want nil", err)
 	}
 }
@@ -653,7 +718,10 @@ func TestBuildAgentSpecLeasedWritableMount(t *testing.T) {
 	cfg := testConfig()
 	hs := testLeasedHandoffSpec()
 	hs.Agent.CredentialMounts = append(hs.Agent.CredentialMounts,
-		CredentialMount{Volume: "other-cred", Target: "/other-credentials"})
+		CredentialMount{
+			Volume: "other-cred", Target: "/other-credentials",
+			Manifest: CredentialManifestOpaque,
+		})
 	if err := hs.validate(); err != nil {
 		t.Fatalf("leased fixture: validate() = %v, want nil", err)
 	}
@@ -675,7 +743,9 @@ func TestBuildAgentSpecLeasedWritableMount(t *testing.T) {
 	if got, want := hs.writableCredentialTarget(), "/credentials"; got != want {
 		t.Errorf("writableCredentialTarget() = %q, want %q", got, want)
 	}
-	if err := validateAgentSpec(cfg, spec, names.Workspace, hs.writableCredentialTarget()); err != nil {
+	if err := validateAgentSpec(
+		cfg, spec, names, hs.writableCredentialTarget(), true, hs.Agent.LaunchState,
+	); err != nil {
 		t.Errorf("validateAgentSpec(generated leased) = %v, want nil", err)
 	}
 }
@@ -735,7 +805,12 @@ func TestCredObserverScriptAttestsSymlinks(t *testing.T) {
 	digest := func(t *testing.T, store string) string {
 		t.Helper()
 		cfg.CredProofPath = filepath.Join(t.TempDir(), "proof.txt")
-		script := credObserverScript(cfg, testOwnershipLabel().Value, store)
+		script := credObserverScript(
+			cfg,
+			testOwnershipLabel().Value,
+			store,
+			CredentialManifestOpaque,
+		)
 		cmd := osexec.Command(shell, "-c", script) //nolint:gosec // fixed shell and test-owned script
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("credential observer script: %v: %s", err, out)
