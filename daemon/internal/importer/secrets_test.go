@@ -11,26 +11,52 @@ import (
 // fakeSecrets are structurally valid but non-live tokens: the scanner
 // keys on structure, so these exercise every rule without being real
 // credentials.
-var fakeSecrets = map[string]string{
-	"github_token":            "ghp_" + strings.Repeat("A", 36),
-	"github_pat":              "github_pat_" + strings.Repeat("B", 30),
-	"aws_access_key_id":       "AKIA" + strings.Repeat("Q", 16),
-	"slack_token":             "xoxb-" + strings.Repeat("1", 20),
-	"pem_private_key":         "-----BEGIN OPENSSH PRIVATE KEY-----",
-	"gcp_service_account_key": `"private_key_id": "` + strings.Repeat("a", 40) + `"`,
+var fakeSecrets = []struct {
+	name  string
+	rule  string
+	token string
+}{
+	{"anthropic API key", "anthropic_token", "sk-ant-api03-" + strings.Repeat("A", 40)},
+	{"anthropic setup token", "anthropic_token", "sk-ant-oat01-" + strings.Repeat("B", 40)},
+	{"GitHub token", "github_token", "ghp_" + strings.Repeat("A", 36)},
+	{"GitHub fine-grained token", "github_pat", "github_pat_" + strings.Repeat("B", 30)},
+	{"AWS access key id", "aws_access_key_id", "AKIA" + strings.Repeat("Q", 16)},
+	{"Slack token", "slack_token", "xoxb-" + strings.Repeat("1", 20)},
+	{"PEM private key", "pem_private_key", "-----BEGIN OPENSSH PRIVATE KEY-----"},
+	{"GCP service account key", "gcp_service_account_key", `"private_key_id": "` + strings.Repeat("a", 40) + `"`},
 }
 
 func TestScanTextRules(t *testing.T) {
-	for rule, token := range fakeSecrets {
-		content := []byte("prefix line\nvalue = " + token + "\ntrailer\n")
-		findings := scanText("config.txt", content)
-		if len(findings) != 1 {
-			t.Fatalf("rule %s: got %d findings, want 1: %+v", rule, len(findings), findings)
-		}
-		f := findings[0]
-		if f.Rule != rule || f.Line != 2 || f.Kind != FindingSecret {
-			t.Errorf("rule %s finding = %+v, want rule=%s line=2", rule, f, rule)
-		}
+	for _, fixture := range fakeSecrets {
+		t.Run(fixture.name, func(t *testing.T) {
+			content := []byte("prefix line\nvalue = " + fixture.token + "\ntrailer\n")
+			findings := scanText("config.txt", content)
+			if len(findings) != 1 {
+				t.Fatalf("rule %s: got %d findings, want 1: %+v", fixture.rule, len(findings), findings)
+			}
+			f := findings[0]
+			if f.Rule != fixture.rule || f.Line != 2 || f.Kind != FindingSecret {
+				t.Errorf("rule %s finding = %+v, want rule=%s line=2", fixture.rule, f, fixture.rule)
+			}
+		})
+	}
+}
+
+func TestScanTextAnthropicTokenWithoutWordBoundaries(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"preceded by a word byte", "prefixsk-ant-oat01-" + strings.Repeat("C", 40)},
+		{"ending in a hyphen", "sk-ant-api03-" + strings.Repeat("D", 9) + "-"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			findings := scanText("config.txt", []byte(tc.content))
+			if len(findings) != 1 || findings[0].Rule != "anthropic_token" {
+				t.Fatalf("boundary-adjacent Anthropic token must be found: %+v", findings)
+			}
+		})
 	}
 }
 
@@ -63,9 +89,22 @@ func TestSplitLinesNoLimit(t *testing.T) {
 }
 
 func TestScanTextNoFalsePositive(t *testing.T) {
-	content := []byte("The API returns a token; set GITHUB_TOKEN in CI.\nghp_short\n")
-	if findings := scanText("readme.md", content); len(findings) != 0 {
-		t.Errorf("mentions must not match: %+v", findings)
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"credential vocabulary", "The API returns a token; set GITHUB_TOKEN in CI.\n"},
+		{"short GitHub token", "ghp_short\n"},
+		{"redacted Anthropic token", "sk-ant-oat01-...\n"},
+		{"short Anthropic token", "sk-ant-api03-" + strings.Repeat("A", 9) + "\n"},
+		{"wrong Anthropic separator", "sk_ant_oat01_" + strings.Repeat("C", 40) + "\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if findings := scanText("readme.md", []byte(tc.content)); len(findings) != 0 {
+				t.Errorf("mention or malformed token must not match: %+v", findings)
+			}
+		})
 	}
 }
 
@@ -148,8 +187,9 @@ func TestImportSecretScanReplaysDeduplicatedBlobFindings(t *testing.T) {
 
 // TestImportSecretScanOverCapSurfaced is the Codex round-4 regression:
 // an added file over the scan cap but under the size policy is not
-// silently skipped; it produces a non-blocking secret_scan_skipped
-// finding so a clean import never hides an unscanned file.
+// silently skipped; it produces a publish-blocking secret_scan_skipped
+// finding without withholding commit construction, so a clean import never
+// hides an unscanned file.
 func TestImportSecretScanOverCapSurfaced(t *testing.T) {
 	checkout, base := initBaseRepo(t, map[string]string{"a.txt": "old\n"})
 	big := strings.Repeat("x", 4096) + "\n"
@@ -173,7 +213,7 @@ func TestImportSecretScanOverCapSurfaced(t *testing.T) {
 		t.Fatalf("expected one secret_scan_skipped finding for big.txt, got %+v", res.Findings)
 	}
 	if res.CommitSHA == "" {
-		t.Fatal("an unscanned-file finding is non-blocking; the commit must still exist")
+		t.Fatal("an unscanned-file finding must not withhold commit construction")
 	}
 }
 
