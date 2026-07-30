@@ -24,6 +24,7 @@ type secretRule struct {
 // secretRules are compiled once. Each id names the credential class; the
 // pattern anchors on the vendor's own token structure.
 var secretRules = []secretRule{
+	{"anthropic_token", regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{16,}`)},
 	{"github_token", regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}\b`)},
 	{"github_pat", regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9_]{22,}\b`)},
 	{"aws_access_key_id", regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`)},
@@ -63,7 +64,8 @@ func scanSecrets(blobs map[export.Digest]blobInfo, changes []plannedChange, maxS
 		if maxScanBytes > 0 && c.size > maxScanBytes {
 			// Too large to scan: surface the gap as a finding rather than
 			// skip silently, so a findings-free import never hides an
-			// unscanned file. Non-blocking, like every secret finding.
+			// unscanned file. Like every import finding, it is
+			// publish-blocking at emission.
 			findings = append(findings, Finding{
 				Path: c.path, Kind: FindingSecretScanSkipped,
 				Detail: fmt.Sprintf("%d bytes exceed the %d-byte scan cap; not scanned", c.size, maxScanBytes),
