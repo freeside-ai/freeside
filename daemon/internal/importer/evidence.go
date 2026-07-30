@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
@@ -310,12 +312,11 @@ func mapSensitivityClass(c export.EvidenceSensitivityClass) (domain.SensitivityC
 // the longest signature checked (WEBP needs RIFF at 0 and WEBP at 8).
 const evidenceMagicPeek = 12
 
-// evidenceMediaMagic is the allow-set of evidence media types and each type's
-// magic-byte matcher. Images only: plan §5.15 rule 3 has the daemon validate
+// evidenceMediaMagic is the allow-set of opaque image media types and each
+// type's magic-byte matcher. Plan §5.15 rule 3 has the daemon validate
 // magic/type/size and treat agent images as opaque blobs. SVG (scriptable XML,
 // an exfiltration/stored-script vector when a claim is rendered) and text/plain
-// (no reliable magic, so any bytes would "match") are excluded by design; the
-// set widens only when a concrete need and its magic check land together.
+// (no reliable magic, so any bytes would "match") are excluded by design.
 var evidenceMediaMagic = map[string]func([]byte) bool{
 	"image/png":  hasPrefix([]byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}),
 	"image/jpeg": hasPrefix([]byte{0xFF, 0xD8, 0xFF}),
@@ -331,14 +332,25 @@ func hasPrefix(prefix []byte) func([]byte) bool {
 	return func(b []byte) bool { return bytes.HasPrefix(b, prefix) }
 }
 
-// validateEvidenceType enforces §5.15 rule 3 for one entry: the declared
-// media_type must be in the allow-set, and the blob's leading bytes must carry
-// that type's magic signature. media_type is agent-declared and untrusted, so a
-// forged or unlisted type, or content that does not match its declared type,
-// fails the import closed (ErrEvidenceMediaMismatch). The header is read from
-// the daemon-private verified snapshot, never the handoff path, so no handoff
-// inode is re-resolved after the blob audit.
+// validateEvidenceType enforces the evidence media allow-set. Images use their
+// magic signatures under §5.15 rule 3; a JSON Lines transcript must consist
+// entirely of non-empty, individually valid JSON records. media_type is
+// agent-declared and untrusted, so an unlisted type or content that does not
+// match its declared type fails the import closed (ErrEvidenceMediaMismatch).
+// Validation reads the daemon-private verified snapshot, never the handoff
+// path, so no handoff inode is re-resolved after the blob audit.
 func validateEvidenceType(entry export.EvidenceEntry, verifiedPath string) error {
+	if entry.MediaType == "application/jsonl" {
+		if err := validateJSONLines(verifiedPath, entry.Size); err != nil {
+			if !errors.Is(err, ErrEvidenceMediaMismatch) {
+				return fmt.Errorf("validate evidence entry %q as %q: %w",
+					entry.Label, entry.MediaType, err)
+			}
+			return fmt.Errorf("evidence entry %q content does not match declared media_type %q: %w",
+				entry.Label, entry.MediaType, ErrEvidenceMediaMismatch)
+		}
+		return nil
+	}
 	matcher, ok := evidenceMediaMagic[entry.MediaType]
 	if !ok {
 		return fmt.Errorf("evidence entry %q media_type %q is not an allowed type: %w", entry.Label, entry.MediaType, ErrEvidenceMediaMismatch)
@@ -349,6 +361,40 @@ func validateEvidenceType(entry export.EvidenceEntry, verifiedPath string) error
 	}
 	if !matcher(header) {
 		return fmt.Errorf("evidence entry %q content does not match declared media_type %q: %w", entry.Label, entry.MediaType, ErrEvidenceMediaMismatch)
+	}
+	return nil
+}
+
+// validateJSONLines checks one complete record per line. Scanner memory is
+// bounded by the already-verified manifest size for this blob; that size has
+// already passed the evidence per-blob cap before this function runs.
+func validateJSONLines(verifiedPath string, size int64) error {
+	f, err := os.Open(verifiedPath) //nolint:gosec // G304: daemon-private verified-snapshot path
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	maxInt := int(^uint(0) >> 1)
+	if size <= 0 || size > int64(maxInt-1) {
+		return ErrEvidenceMediaMismatch
+	}
+	maxToken := int(size) + 1
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, min(maxToken, 64<<10)), maxToken)
+	records := 0
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 || !utf8.Valid(line) || !json.Valid(line) {
+			return ErrEvidenceMediaMismatch
+		}
+		records++
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	if records == 0 {
+		return ErrEvidenceMediaMismatch
 	}
 	return nil
 }

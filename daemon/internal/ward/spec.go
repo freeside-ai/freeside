@@ -902,6 +902,8 @@ func instructionSeederCommand(cfg Config) []string {
 		" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; " +
 		"cp -a " + shellQuote(instructionStageDir) + "/. " +
 		shellQuote(instructionVolumeTarget) + "/; " +
+		"chown 0:0 " + shellQuote(instructionVolumeTarget) + "; " +
+		"chmod 0755 " + shellQuote(instructionVolumeTarget) + "; " +
 		// cp -a preserves the private 0600 host snapshot mode, but the
 		// writer reads this bundle after dropping to an unprivileged UID
 		// from a read-only mount it cannot chmod. World-readable is the
@@ -940,7 +942,10 @@ func instructionObserverScript(nonce string) string {
 		"if [ -f " + file + " ] && [ ! -L " + file + " ]; then " +
 		"p=yes; d=\"$(sha256sum " + file + " | cut -d' ' -f1)\"; fi; " +
 		"n=\"$(find " + root + " -mindepth 1 -maxdepth 1 -print 2>/dev/null | wc -l | tr -d ' ')\"; " +
-		"if { [ \"$p\" = yes ] && [ \"$n\" = 1 ]; } || { [ \"$p\" = no ] && [ \"$n\" = 0 ]; }; then c=clean; fi; " +
+		"r=\"$(stat -c '%a:%u:%g' " + root + " 2>/dev/null || true)\"; " +
+		"if [ \"$r\" = '755:0:0' ] && " +
+		"{ { [ \"$p\" = yes ] && [ \"$n\" = 1 ]; } || { [ \"$p\" = no ] && [ \"$n\" = 0 ]; }; }; " +
+		"then c=clean; fi; " +
 		"printf 'nonce=%s\\npresent=%s\\ndigest=%s\\ncontents=%s\\n' " +
 		shellQuote(nonce) + " \"$p\" \"$d\" \"$c\" > " + proof + "; sync"
 }

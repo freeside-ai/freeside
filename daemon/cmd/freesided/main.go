@@ -422,7 +422,7 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 		// Reconcile below can resume credential-bearing sessions before every
 		// later startup step has succeeded. Register their awaited cleanup
 		// immediately, while the store they need is still open.
-		startupSessionCloser = claudeWiring.driver
+		startupSessionCloser = claudeWiring.closer
 		stageDriver, err := claudeWiring.stageDriver(blobs)
 		if err != nil {
 			return nil, err
@@ -453,14 +453,14 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 
 	d := &daemon{
 		store: st, attention: attention, workflow: workflow, driver: driver,
-		listener: listener, cancel: cancel, errs: make(chan error, 3), pairingCode: pairingCode,
+		listener: listener, cancel: cancel, errs: make(chan error, 4), pairingCode: pairingCode,
 		server: &http.Server{
 			Handler:           signet.NewHTTPHandler(attention, signet.NewRequestAuthorizer(st)),
 			ReadHeaderTimeout: 5 * time.Second,
 		},
 	}
 	if claudeWiring != nil {
-		d.sessionCloser = claudeWiring.driver
+		d.sessionCloser = claudeWiring.closer
 	}
 	d.wg.Add(3)
 	go func() {
@@ -479,6 +479,22 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 		defer d.wg.Done()
 		d.errs <- localBackups.Run(ctx)
 	}()
+	if claudeWiring != nil {
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			<-claudeWiring.janitor.finished
+			if ctx.Err() != nil {
+				d.errs <- nil
+				return
+			}
+			if err := claudeWiring.janitor.Result(); err != nil {
+				d.errs <- fmt.Errorf("installation janitor: %w", err)
+				return
+			}
+			d.errs <- errors.New("installation janitor stopped")
+		}()
+	}
 	success = true
 	return d, nil
 }

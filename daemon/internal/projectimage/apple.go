@@ -754,6 +754,12 @@ func containerInspectionAbsent(output commandOutput) bool {
 	return strings.Contains(strings.ToLower(string(output.bytes)), "container not found:")
 }
 
+func containerDeletionAbsent(output commandOutput, id string) bool {
+	text := strings.ToLower(string(output.bytes))
+	return strings.Contains(text, "notfound:") &&
+		strings.Contains(text, "container with id "+strings.ToLower(id)+" not found")
+}
+
 type containerInspect struct {
 	ID            string `json:"id"`
 	Configuration struct {
@@ -858,6 +864,12 @@ func (a appleBackend) deleteOwnedContainer(ctx context.Context, id, token string
 		Path: a.containerPath, Args: []string{"delete", "--force", report.ID},
 	})
 	if err != nil {
+		// `container run --rm` removes a successful process asynchronously.
+		// It can disappear after the ownership inspection but before this
+		// defensive delete; exact-ID absence is the intended end state.
+		if containerDeletionAbsent(output, report.ID) {
+			return nil
+		}
 		return runError("delete owned temporary container "+id, output, err)
 	}
 	return nil

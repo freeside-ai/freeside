@@ -25,8 +25,8 @@ Apple `container` on Apple silicon is the Phase 1A runtime.
 | Node | v24.18.0, official `linux-arm64` tarball, sha256 literal in the Containerfile |
 | Claude CLI | `@anthropic-ai/claude-code@2.1.220` |
 
-`git` and `ca-certificates` come from Debian's archive and are **recorded, not
-pinned**: their observed versions are written into
+`busybox-static`, `git`, and `ca-certificates` come from Debian's archive and
+are **recorded, not pinned**: their observed versions are written into
 `/usr/local/share/freeside/image-manifest.txt` in the image, along with the
 resolved Node, npm, and Claude versions. An exact apt pin turns unbuildable once
 Debian drops the superseded version from its mirror.
@@ -77,5 +77,9 @@ What the runtime supplies, and what the daemon must:
   mutation of the auth store the mode needs, are the driver's decisions
   (issues #237, #303), not the image's.
 - **Egress is the stage's declared profile** (`provider_only` by default, plan
-  §5.4). The image ships no downloader; `curl` and `xz-utils` exist only in the
-  build stage.
+  §5.4). The image exposes BusyBox `nslookup`, `nc`, and `wget` as ward's
+  behavioral witnesses: provider traffic must traverse the allowlisting proxy,
+  while undeclared CONNECT authorities, direct-IP connections, and DNS fail.
+  Their presence grants no additional route; ward verifies the realized
+  network boundary before credentials are admitted. `curl` and `xz-utils`
+  remain build-only.

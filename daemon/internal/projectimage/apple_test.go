@@ -1538,3 +1538,48 @@ func TestDeleteOwnedContainerRefusesForeignRuntimeInstance(t *testing.T) {
 		t.Fatal("ownership mismatch deleted a foreign runtime instance")
 	}
 }
+
+func TestDeleteOwnedContainerAcceptsAutoRemovalAfterOwnershipCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		output  string
+		wantErr bool
+	}{
+		{
+			name: "runtime reports exact id absent",
+			output: `Error: internalError: "failed to delete container" (` +
+				`cause: "notFound: \"container with ID runtime-generated-id not found\"")`,
+		},
+		{
+			name:    "unrelated delete failure remains visible",
+			output:  "Error: internalError: storage not found",
+			wantErr: true,
+		},
+		{
+			name: "different container id remains visible",
+			output: `Error: internalError: "failed to delete container" (` +
+				`cause: "notFound: \"container with ID other-id not found\"")`,
+			wantErr: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &recordingRunner{run: func(spec commandSpec) (commandOutput, error) {
+				switch {
+				case len(spec.Args) == 2 && spec.Args[0] == "inspect":
+					return containerInspectOutput(
+						tidyContainer(spec.Args[1], "ours"),
+					), nil
+				case len(spec.Args) == 3 && spec.Args[0] == "delete":
+					return commandOutput{bytes: []byte(tc.output)}, errors.New("delete failed")
+				default:
+					return commandOutput{}, nil
+				}
+			}}
+			err := (appleBackend{containerPath: "container", runner: runner}).
+				deleteOwnedContainer(t.Context(), "runtime-generated-id", "ours")
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("deleteOwnedContainer error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}

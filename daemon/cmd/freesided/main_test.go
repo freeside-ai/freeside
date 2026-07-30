@@ -825,3 +825,55 @@ func (failingInputReadCloser) Read([]byte) (int, error) {
 func (failingInputReadCloser) Close() error {
 	return errors.New("fixture close failure")
 }
+
+type stubJanitorRunner struct {
+	active chan struct{}
+	runErr error
+}
+
+func (j *stubJanitorRunner) Run(ctx context.Context, _ time.Duration) error {
+	if j.runErr != nil {
+		return j.runErr
+	}
+	close(j.active)
+	<-ctx.Done()
+	return nil
+}
+
+func (j *stubJanitorRunner) ActiveFor(int64) bool {
+	select {
+	case <-j.active:
+		return true
+	default:
+		return false
+	}
+}
+
+func TestJanitorSessionPublishesCoverageAndStops(t *testing.T) {
+	janitor := &stubJanitorRunner{active: make(chan struct{})}
+	session, err := startJanitorSession(
+		t.Context(), janitor, []int64{4385298}, time.Hour,
+	)
+	if err != nil {
+		t.Fatalf("startJanitorSession: %v", err)
+	}
+	if !janitor.ActiveFor(4385298) {
+		t.Fatal("startJanitorSession returned before coverage was active")
+	}
+	if err := session.Close(t.Context()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestJanitorSessionReturnsStartupFailure(t *testing.T) {
+	want := errors.New("janitor failed")
+	_, err := startJanitorSession(
+		t.Context(),
+		&stubJanitorRunner{active: make(chan struct{}), runErr: want},
+		[]int64{4385298},
+		time.Hour,
+	)
+	if !errors.Is(err, want) {
+		t.Fatalf("startJanitorSession error = %v, want %v", err, want)
+	}
+}

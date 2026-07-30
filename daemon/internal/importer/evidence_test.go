@@ -21,6 +21,7 @@ const (
 	jpegContent   = "\xff\xd8\xff\xe0freeside-fake-jpeg-body"
 	gifContent    = "GIF89afreeside-fake-gif-body"
 	webpContent   = "RIFF\x2c\x00\x00\x00WEBPfreeside-fake-webp-body"
+	jsonlContent  = "{\"type\":\"assistant\"}\n{\"type\":\"result\",\"subtype\":\"success\"}\n"
 	scriptContent = "#!/bin/sh\necho not-an-image\n"
 )
 
@@ -280,9 +281,10 @@ func dupEntriesKeyJSON(t *testing.T, a, b export.EvidenceEntry) []byte {
 	return []byte(`{"version":"` + export.EvidenceManifestVersion + `","entries":[` + string(ab) + `],"entries":[` + string(bb) + `]}`)
 }
 
-// TestValidateEvidenceType pins the §5.15 rule-3 magic/type allow-set: each
-// supported image type validates against its magic, and a mismatched, unlisted,
-// scriptable, or truncated blob fails closed.
+// TestValidateEvidenceType pins the evidence media allow-set: each supported
+// image validates against its magic, JSON Lines validates record by record,
+// and mismatched, malformed, unlisted, scriptable, or truncated content fails
+// closed.
 func TestValidateEvidenceType(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -294,7 +296,14 @@ func TestValidateEvidenceType(t *testing.T) {
 		{"jpeg", "image/jpeg", jpegContent, false},
 		{"gif", "image/gif", gifContent, false},
 		{"webp", "image/webp", webpContent, false},
+		{"json lines transcript", "application/jsonl", jsonlContent, false},
+		{"json lines final newline optional", "application/jsonl", `{"type":"result"}`, false},
+		{"json lines malformed record", "application/jsonl", "{\"type\":\"assistant\"}\nnot-json\n", true},
+		{"json lines blank record", "application/jsonl", "{\"type\":\"assistant\"}\n\n", true},
+		{"json lines empty", "application/jsonl", "", true},
+		{"json lines invalid utf8", "application/jsonl", "{\"text\":\"\xff\"}\n", true},
 		{"png declared but script content", "image/png", scriptContent, true},
+		{"json lines declared but png content", "application/jsonl", pngContent, true},
 		{"unlisted media type", "application/zip", pngContent, true},
 		{"svg excluded", "image/svg+xml", "<svg/>", true},
 		{"truncated below magic", "image/png", "\x89PN", true},
