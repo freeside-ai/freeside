@@ -45,8 +45,8 @@ ARG NODE_VERSION
 ARG NODE_SHA256
 ARG CLAUDE_CODE_VERSION
 
-# curl and xz-utils exist only in this stage: the credential-bearing agent VM
-# has no reason to carry a downloader.
+# curl and xz-utils are build-only. The final image's BusyBox applets are
+# runtime witnesses for ward's egress conformance, not build inputs.
 RUN set -eux; \
 	apt-get update; \
 	apt-get install -y --no-install-recommends ca-certificates curl xz-utils; \
@@ -78,13 +78,21 @@ ARG CLAUDE_CODE_VERSION
 
 # git is a workspace tool: the agent commits normally, and nothing of its .git
 # is ever imported as git state (plan §5.6). ca-certificates serves the
-# provider API under the `provider_only` egress profile. Their versions are
-# recorded in the manifest below rather than pinned: Debian drops superseded
-# versions from the mirror, so an exact pin turns into an unbuildable image.
+# provider API under the `provider_only` egress profile. BusyBox supplies the
+# nslookup, nc, and wget applets whose exact behavior ward uses to witness that
+# provider-only egress is realized. Package versions are recorded in the
+# manifest below rather than pinned: Debian drops superseded versions from the
+# mirror, so an exact pin turns into an unbuildable image.
 RUN set -eux; \
 	apt-get update; \
-	apt-get install -y --no-install-recommends ca-certificates git; \
-	rm -rf /var/lib/apt/lists/*
+	apt-get install -y --no-install-recommends busybox-static ca-certificates git; \
+	rm -rf /var/lib/apt/lists/*; \
+	for applet in nc nslookup wget; do \
+		ln -s /bin/busybox "/usr/local/bin/${applet}"; \
+	done; \
+	nslookup --help 2>&1 | grep -F 'HOST [DNS_SERVER]'; \
+	nc -h 2>&1 | grep -F -- '-w SEC'; \
+	wget --help >/dev/null
 
 COPY --from=build /usr/local /usr/local
 
