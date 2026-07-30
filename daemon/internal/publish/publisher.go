@@ -60,6 +60,16 @@ type Candidate struct {
 	TrustProfileDigest *domain.Digest
 }
 
+// ExecutionCandidate is the production publication input: the candidate plus
+// the invocation whose durable ExecutionExport authenticated its source head.
+// It is intentionally distinct from Candidate because the attended fake
+// publication workflow predates execution exports and must not silently stand
+// in for the real execution-bound path.
+type ExecutionCandidate struct {
+	Candidate
+	ProducingInvocationID domain.InvocationID
+}
+
 // Result reports the converged publication: the one branch and PR the
 // identity names, and whether this call created them or found them.
 type Result struct {
@@ -125,7 +135,22 @@ func NewPublisher(ts TokenSource, client *http.Client, baseURL string, auditor W
 // retried at any point finds what the previous attempt created and
 // continues instead of duplicating (issue #81 acceptance 2, 4).
 func (p *Publisher) Publish(ctx context.Context, c Candidate, approvedRecipes map[domain.Digest]bool) (Result, error) {
-	return p.publish(ctx, c, approvedRecipes, nil)
+	return p.publish(ctx, c, approvedRecipes, nil, nil)
+}
+
+// PublishExecution publishes only after the producing invocation's frozen
+// admission/export chain is authenticated in the same transaction that
+// settles the publication reservation. The export head must equal the
+// candidate head; a missing or mismatching export leaves the reservation
+// untouched and reaches no forge effect.
+func (p *Publisher) PublishExecution(
+	ctx context.Context,
+	c ExecutionCandidate,
+	approvedRecipes map[domain.Digest]bool,
+) (Result, error) {
+	return p.publish(
+		ctx, c.Candidate, approvedRecipes, nil, &c.ProducingInvocationID,
+	)
 }
 
 // VerifyOutcome observes the identity's unique live pull request without
@@ -279,7 +304,7 @@ func (p *Publisher) PublishAfterGate(
 	if publishHead == nil {
 		return Result{}, errors.New("publish: nil after-gate head publisher")
 	}
-	return p.publish(ctx, c, approvedRecipes, publishHead)
+	return p.publish(ctx, c, approvedRecipes, publishHead, nil)
 }
 
 // PublishAfterGateAndFinalize performs the daemon-side transport publication
@@ -301,7 +326,38 @@ func (p *Publisher) PublishAfterGateAndFinalize(
 		return Result{}, err
 	}
 	if err := finalizePublicationResult(
-		ctx, p.storeDecision.store, c, result,
+		ctx, p.storeDecision.store, c, result, "",
+	); err != nil {
+		return Result{}, fmt.Errorf("publish: finalize returned result: %w", err)
+	}
+	return result, nil
+}
+
+// PublishExecutionAfterGateAndFinalize is the execution-bound form of
+// PublishAfterGateAndFinalize. It authenticates the producing export while
+// settling the reservation, then hands the resulting gate capability to the
+// daemon transport and records the returned publication outcome.
+func (p *Publisher) PublishExecutionAfterGateAndFinalize(
+	ctx context.Context,
+	c ExecutionCandidate,
+	approvedRecipes map[domain.Digest]bool,
+	publishHead func(context.Context, GatedHead) error,
+) (Result, error) {
+	if publishHead == nil {
+		return Result{}, errors.New("publish: nil after-gate head publisher")
+	}
+	if p.storeDecision == nil {
+		return Result{}, errors.New("publish: finalization requires one shared store decision boundary")
+	}
+	result, err := p.publish(
+		ctx, c.Candidate, approvedRecipes, publishHead, &c.ProducingInvocationID,
+	)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := finalizePublicationResult(
+		ctx, p.storeDecision.store, c.Candidate, result,
+		c.ProducingInvocationID,
 	); err != nil {
 		return Result{}, fmt.Errorf("publish: finalize returned result: %w", err)
 	}
@@ -313,9 +369,23 @@ func (p *Publisher) publish(
 	c Candidate,
 	approvedRecipes map[domain.Digest]bool,
 	publishHead func(context.Context, GatedHead) error,
+	producingInvocationID *domain.InvocationID,
 ) (Result, error) {
 	if p.wiringErr != nil {
 		return Result{}, p.wiringErr
+	}
+	if producingInvocationID != nil {
+		if *producingInvocationID == "" {
+			return Result{}, fmt.Errorf(
+				"publish: empty producing invocation: %w",
+				ErrExecutionExportMissing,
+			)
+		}
+		if p.storeDecision == nil {
+			return Result{}, errors.New(
+				"publish: execution-bound publication requires one shared store decision boundary",
+			)
+		}
 	}
 	if p.auditor == nil {
 		return Result{}, errors.New("publish: no workflow auditor")
@@ -363,7 +433,9 @@ func (p *Publisher) publish(
 	if err != nil {
 		return Result{}, fmt.Errorf("publish: fresh workflow audit: %w", err)
 	}
-	if err := p.preparePublication(ctx, c, audit, identity); err != nil {
+	if err := p.preparePublication(
+		ctx, c, audit, identity, producingInvocationID,
+	); err != nil {
 		return Result{}, err
 	}
 	if publishHead != nil {
@@ -569,8 +641,18 @@ func validateAuthorizationCandidate(c Candidate, auth domain.CandidateAuthorizat
 // the recorded row; a recorded intent naming a different identity
 // means the invocation ID was reused for different content, which
 // fails closed rather than publishing under a stale identity.
-func (p *Publisher) preparePublication(ctx context.Context, c Candidate, audit domain.WorkflowAudit, identity Identity) error {
-	intent, err := intentForCandidate(c, identity)
+func (p *Publisher) preparePublication(
+	ctx context.Context,
+	c Candidate,
+	audit domain.WorkflowAudit,
+	identity Identity,
+	producingInvocationID *domain.InvocationID,
+) error {
+	var sourceInvocationID domain.InvocationID
+	if producingInvocationID != nil {
+		sourceInvocationID = *producingInvocationID
+	}
+	intent, err := intentForCandidate(c, identity, sourceInvocationID)
 	if err != nil {
 		return fmt.Errorf("publish: %w", err)
 	}
@@ -589,7 +671,9 @@ func (p *Publisher) preparePublication(ctx context.Context, c Candidate, audit d
 	var prior []byte
 	var recorded bool
 	if p.storeDecision != nil {
-		prior, recorded, err = p.storeDecision.prepare(ctx, c, audit, key, payload, claim)
+		prior, recorded, err = p.storeDecision.prepare(
+			ctx, c, audit, key, payload, claim, producingInvocationID,
+		)
 	} else {
 		if claim != nil {
 			// Only a store-backed writer can see the reservation namespace, so

@@ -50,26 +50,42 @@ type IntentLedger interface {
 // identity divergence checks alone would not catch a resolver reconstructing
 // the same head under a different authorization. The drain fails closed when
 // the resolved candidate's AuthorizationID differs from this one.
+//
+// ProducingInvocationID and ReservationRunID are present together only for the
+// execution-bound production path. Persisting both makes the stronger
+// reservation/admission/export gate recoverable: the drain must reproduce the
+// exact source invocation and reserving run before any effect. Legacy and
+// attended-fake intents omit both and retain their existing recovery contract.
 type Intent struct {
-	Identity        domain.Digest       `json:"identity"`
-	InvocationID    domain.InvocationID `json:"invocation_id"`
-	Repo            string              `json:"repo"`
-	BaseRef         string              `json:"base_ref"`
-	SourceHeadSHA   string              `json:"source_head_sha"`
-	AuthorizationID domain.Digest       `json:"authorization_id"`
+	Identity              domain.Digest       `json:"identity"`
+	InvocationID          domain.InvocationID `json:"invocation_id"`
+	Repo                  string              `json:"repo"`
+	BaseRef               string              `json:"base_ref"`
+	SourceHeadSHA         string              `json:"source_head_sha"`
+	AuthorizationID       domain.Digest       `json:"authorization_id"`
+	ProducingInvocationID domain.InvocationID `json:"producing_invocation_id,omitempty"`
+	ReservationRunID      domain.RunID        `json:"reservation_run_id,omitempty"`
 }
 
-func intentForCandidate(c Candidate, identity Identity) (Intent, error) {
+func intentForCandidate(
+	c Candidate,
+	identity Identity,
+	producingInvocationID domain.InvocationID,
+) (Intent, error) {
 	if c.AuthorizationID == nil {
 		return Intent{}, fmt.Errorf("candidate carries no authorization binding: %w", ErrUnauthorizedPublication)
 	}
 	intent := Intent{
-		Identity:        identity.Digest(),
-		InvocationID:    c.InvocationID,
-		Repo:            c.Repo,
-		BaseRef:         c.BaseRef,
-		SourceHeadSHA:   c.HeadSHA,
-		AuthorizationID: *c.AuthorizationID,
+		Identity:              identity.Digest(),
+		InvocationID:          c.InvocationID,
+		Repo:                  c.Repo,
+		BaseRef:               c.BaseRef,
+		SourceHeadSHA:         c.HeadSHA,
+		AuthorizationID:       *c.AuthorizationID,
+		ProducingInvocationID: producingInvocationID,
+	}
+	if producingInvocationID != "" {
+		intent.ReservationRunID = c.RunID
 	}
 	if err := intent.Validate(); err != nil {
 		return Intent{}, err
@@ -102,6 +118,11 @@ func (i Intent) Validate() error {
 	// the publication committed under, so the drain must not act on it.
 	if !validIdentityDigest(string(i.AuthorizationID)) {
 		return fmt.Errorf("intent authorization_id %q is not a digest", i.AuthorizationID)
+	}
+	if (i.ProducingInvocationID == "") != (i.ReservationRunID == "") {
+		return errors.New(
+			"intent: producing invocation and reservation run must be present together",
+		)
 	}
 	return nil
 }

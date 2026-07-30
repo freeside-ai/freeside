@@ -35,9 +35,9 @@ var errPublicationIntentDiverged = errors.New("resolved candidate does not match
 var errPublicationOutcomeConflict = errors.New("outcome inbox key holds a different record")
 
 // CandidateResolver reconstructs the full publication candidate for a
-// recorded intent. The outbox intent carries only the identity-relevant
-// coordinates (identity, invocation, repo, base, head), not the evidence
-// artifacts or PR prose a re-converge needs, so the drain asks the
+// recorded intent. The outbox intent carries the identity-relevant
+// coordinates plus the optional producing execution invocation, not the
+// evidence artifacts or PR prose a re-converge needs, so the drain asks the
 // resolver for the rest. In production the Wave 2 engine implements it,
 // reloading the candidate from durable workflow state; the kill-test
 // harness stands in for the engine, holding the candidate across the
@@ -48,13 +48,15 @@ var errPublicationOutcomeConflict = errors.New("outcome inbox key holds a differ
 // RecoveryCandidate carries every input needed to repeat the complete
 // publication effect after an intent-only crash. PublishHead must
 // idempotently transport this exact candidate head before Publisher asks the
-// forge to converge the pull request. The drain re-runs the gates on the
-// recovered candidate, so PublishHead is handed a freshly minted GatedHead:
-// a crash never carries an old gate decision forward.
+// forge to converge the pull request. ProducingInvocationID must reproduce the
+// intent's exact optional execution binding. The drain re-runs the gates on
+// the recovered candidate, so PublishHead is handed a freshly minted
+// GatedHead: a crash never carries an old gate decision forward.
 type RecoveryCandidate struct {
-	Candidate       Candidate
-	ApprovedRecipes map[domain.Digest]bool
-	PublishHead     func(context.Context, GatedHead) error
+	Candidate             Candidate
+	ProducingInvocationID domain.InvocationID
+	ApprovedRecipes       map[domain.Digest]bool
+	PublishHead           func(context.Context, GatedHead) error
 }
 
 // Resolve returns the candidate, current approved-recipe set, and the
@@ -109,12 +111,15 @@ func finalizePublicationResult(
 	s *store.Store,
 	candidate Candidate,
 	result Result,
+	producingInvocationID domain.InvocationID,
 ) error {
 	identity, err := deriveCandidateIdentity(candidate)
 	if err != nil {
 		return fmt.Errorf("derive candidate identity: %w", err)
 	}
-	expected, err := intentForCandidate(candidate, identity)
+	expected, err := intentForCandidate(
+		candidate, identity, producingInvocationID,
+	)
 	if err != nil {
 		return err
 	}
@@ -209,6 +214,20 @@ func drainPendingPublications(
 			return dispatched, fmt.Errorf("drain publications: intent %q committed authorization %s, resolved candidate carries %s: %w",
 				entry.IdempotencyKey, intent.AuthorizationID, derefDigest(cand.AuthorizationID), errPublicationIntentDiverged)
 		}
+		if recovered.ProducingInvocationID != intent.ProducingInvocationID {
+			return dispatched, fmt.Errorf(
+				"drain publications: intent %q committed producing invocation %q, resolved candidate carries %q: %w",
+				entry.IdempotencyKey, intent.ProducingInvocationID,
+				recovered.ProducingInvocationID, errPublicationIntentDiverged,
+			)
+		}
+		if intent.ReservationRunID != "" && cand.RunID != intent.ReservationRunID {
+			return dispatched, fmt.Errorf(
+				"drain publications: intent %q committed reserving run %q, resolved candidate carries %q: %w",
+				entry.IdempotencyKey, intent.ReservationRunID,
+				cand.RunID, errPublicationIntentDiverged,
+			)
+		}
 		if recovered.PublishHead == nil {
 			return dispatched, fmt.Errorf(
 				"drain publications: resolve %q returned no head transport",
@@ -216,9 +235,18 @@ func drainPendingPublications(
 			)
 		}
 
-		result, err := p.PublishAfterGate(
-			ctx, cand, recovered.ApprovedRecipes, recovered.PublishHead,
-		)
+		var result Result
+		if intent.ProducingInvocationID == "" {
+			result, err = p.PublishAfterGate(
+				ctx, cand, recovered.ApprovedRecipes, recovered.PublishHead,
+			)
+		} else {
+			source := intent.ProducingInvocationID
+			result, err = p.publish(
+				ctx, cand, recovered.ApprovedRecipes,
+				recovered.PublishHead, &source,
+			)
+		}
 		if err != nil {
 			return dispatched, fmt.Errorf("drain publications: publish %q: %w", entry.IdempotencyKey, err)
 		}

@@ -3,8 +3,11 @@ package publish_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -17,6 +20,7 @@ import (
 // reload it from workflow state. err injects a resolution failure.
 type fakeResolver struct {
 	cand        publish.Candidate
+	producing   domain.InvocationID
 	approved    map[domain.Digest]bool
 	publishHead func(context.Context, publish.GatedHead) error
 	err         error
@@ -24,7 +28,10 @@ type fakeResolver struct {
 
 func (r fakeResolver) Resolve(context.Context, publish.Intent) (publish.RecoveryCandidate, error) {
 	return publish.RecoveryCandidate{
-		Candidate: r.cand, ApprovedRecipes: r.approved, PublishHead: r.publishHead,
+		Candidate:             r.cand,
+		ProducingInvocationID: r.producing,
+		ApprovedRecipes:       r.approved,
+		PublishHead:           r.publishHead,
 	}, r.err
 }
 
@@ -189,6 +196,133 @@ func TestDrainConvergesPendingIntent(t *testing.T) {
 		PRNumber:         101,
 		EvidenceEligible: true,
 	})
+}
+
+func TestDrainExecutionIntentReauthenticatesRecordedExport(t *testing.T) {
+	ctx := t.Context()
+	storePath := filepath.Join(t.TempDir(), "store.db")
+	s, err := store.Open(
+		ctx,
+		storePath,
+		executionStoreOptions(fixtureRepositoryID),
+	)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Errorf("store.Close: %v", err)
+		}
+	})
+	seedDecisionRecords(t, s)
+	head := testHeadSHA
+	reservation := seedExecutionPublicationChain(
+		t, s, executionChainOptions{exportHead: &head},
+	)
+	gh := newFakeGitHub(t)
+	pub := storeBackedPublisher(
+		t, s, gh, fixedWorkflowAuditor{audit: testWorkflowAudit(t)},
+	)
+	candidate := testCandidate(t)
+	candidate.RunID = reservation.RunID
+	execution := publish.ExecutionCandidate{
+		Candidate:             candidate,
+		ProducingInvocationID: testProducingInvocationID,
+	}
+	errAfterIntent := errors.New("stop after execution intent")
+	if _, err := pub.PublishExecutionAfterGateAndFinalize(
+		ctx, execution, testApprovedRecipes(),
+		func(context.Context, publish.GatedHead) error {
+			return errAfterIntent
+		},
+	); !errors.Is(err, errAfterIntent) {
+		t.Fatalf("seed pending execution intent = %v, want callback failure", err)
+	}
+	pending := pendingPublications(t, s)
+	if len(pending) != 1 {
+		t.Fatalf("pending execution intents = %d, want 1", len(pending))
+	}
+	intent, err := publish.DecodeIntent(pending[0].Payload)
+	if err != nil {
+		t.Fatalf("decode pending execution intent: %v", err)
+	}
+	if intent.ProducingInvocationID != testProducingInvocationID {
+		t.Fatalf("pending intent producing invocation = %q, want %q",
+			intent.ProducingInvocationID, testProducingInvocationID)
+	}
+	if intent.ReservationRunID != candidate.RunID {
+		t.Fatalf("pending intent reservation run = %q, want %q",
+			intent.ReservationRunID, candidate.RunID)
+	}
+
+	withoutSource := resolverFor(t, candidate)
+	if _, err := publish.DrainPendingPublications(
+		ctx, s, pub, withoutSource,
+	); err == nil {
+		t.Fatal("drain accepted a resolver that dropped the producing invocation")
+	}
+	if requests := gh.requestLog(); len(requests) != 0 {
+		t.Fatalf("dropped producing invocation reached forge: %v", requests)
+	}
+	if got := len(pendingPublications(t, s)); got != 1 {
+		t.Fatalf("pending after source-binding refusal = %d, want 1", got)
+	}
+
+	wrongRun := resolverFor(t, candidate)
+	wrongRun.producing = testProducingInvocationID
+	wrongRun.cand.RunID = "run-other"
+	if _, err := publish.DrainPendingPublications(
+		ctx, s, pub, wrongRun,
+	); err == nil {
+		t.Fatal("drain accepted a resolver that changed the reserving run")
+	}
+	if requests := gh.requestLog(); len(requests) != 0 {
+		t.Fatalf("changed reserving run reached forge: %v", requests)
+	}
+	if got := len(pendingPublications(t, s)); got != 1 {
+		t.Fatalf("pending after run-binding refusal = %d, want 1", got)
+	}
+
+	// Refute recovery with the terminal authority removed after the intent
+	// committed. The drain must read the persisted producing invocation and
+	// re-run its export gate before calling the transport or forge.
+	raw, err := sql.Open("sqlite", storePath)
+	if err != nil {
+		t.Fatalf("open raw test database: %v", err)
+	}
+	if _, err := raw.ExecContext(
+		ctx,
+		`DELETE FROM execution_exports WHERE invocation_id = ?`,
+		testProducingInvocationID,
+	); err != nil {
+		_ = raw.Close()
+		t.Fatalf("remove execution export: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw test database: %v", err)
+	}
+
+	transportCalls := 0
+	resolver := resolverFor(t, candidate)
+	resolver.producing = testProducingInvocationID
+	resolver.publishHead = func(context.Context, publish.GatedHead) error {
+		transportCalls++
+		return nil
+	}
+	if _, err := publish.DrainPendingPublications(
+		ctx, s, pub, resolver,
+	); !errors.Is(err, publish.ErrExecutionExportMissing) {
+		t.Fatalf("drain without execution export = %v, want missing export", err)
+	}
+	if transportCalls != 0 {
+		t.Fatalf("missing export reached recovered transport %d time(s)", transportCalls)
+	}
+	if requests := gh.requestLog(); len(requests) != 0 {
+		t.Fatalf("missing export reached forge during recovery: %v", requests)
+	}
+	if got := len(pendingPublications(t, s)); got != 1 {
+		t.Fatalf("pending after refused recovery = %d, want 1", got)
+	}
 }
 
 func TestDrainRecoversHeadTransportBeforeForgeConvergence(t *testing.T) {

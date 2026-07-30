@@ -146,6 +146,17 @@ var ErrInstallationAuthoritySnapshot = errors.New("installation authority snapsh
 // publication fails before any external effect.
 var ErrHeadMismatch = errors.New("artifact head binding does not match the candidate head")
 
+// ErrExecutionExportMissing is returned when an execution-bound publication
+// cannot reconstruct the producing invocation's durable ExecutionExport. A
+// completed head without that record has no trusted execution authority, so
+// the publication reservation remains unsettled.
+var ErrExecutionExportMissing = errors.New("publication source has no execution export")
+
+// ErrExecutionExportHeadMismatch is returned when an execution-bound
+// publication's candidate head differs from the head authenticated by the
+// producing invocation's durable ExecutionExport.
+var ErrExecutionExportHeadMismatch = errors.New("publication source head does not match the execution export")
+
 // ErrPublicationConflict is returned when an existing external
 // resource under this publication's deterministic identity disagrees
 // with the candidate: the branch exists at a different commit, the

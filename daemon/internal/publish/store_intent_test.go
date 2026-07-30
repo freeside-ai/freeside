@@ -86,6 +86,134 @@ func TestStoreLedgerRefusesReservedInvocationWithoutClaim(t *testing.T) {
 	}
 }
 
+func TestStoreLedgerRefusesExecutionIntentWithoutDurableReservation(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	claim := fixtureReservation(t)
+	key := reservationKey(t, claim)
+	intent := fixtureIntent()
+	intent.ProducingInvocationID = "inv-producing-0001"
+	intent.ReservationRunID = claim.RunID
+	payload, err := intent.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := publish.NewStoreLedger(s)
+	if err != nil {
+		t.Fatalf("NewStoreLedger: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		claim *publish.Reservation
+	}{
+		{name: "no claim"},
+		{name: "caller-derived claim", claim: &claim},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := ledger.Record(
+				ctx, key, publish.IntentKindPublication, payload, tc.claim,
+			); !errors.Is(err, publish.ErrInvocationReserved) {
+				t.Fatalf("Record error = %v, want ErrInvocationReserved", err)
+			}
+			if err := s.Read(ctx, func(tx *store.ReadTx) error {
+				_, err := tx.GetOutbox(ctx, key)
+				return err
+			}); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("free execution key read = %v, want not found", err)
+			}
+		})
+	}
+}
+
+func TestStoreLedgerBindsExecutionIntentToExactReservation(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	owner := fixtureReservation(t)
+	key := reserveFor(t, s, owner)
+	before := outboxRow(t, s, key)
+	ledger, err := publish.NewStoreLedger(s)
+	if err != nil {
+		t.Fatalf("NewStoreLedger: %v", err)
+	}
+
+	wrongRun := fixtureIntent()
+	wrongRun.ProducingInvocationID = "inv-producing-0001"
+	wrongRun.ReservationRunID = "run-other"
+	wrongRunPayload, err := wrongRun.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ledger.Record(
+		ctx, key, publish.IntentKindPublication, wrongRunPayload, &owner,
+	); !errors.Is(err, publish.ErrInvocationReserved) {
+		t.Fatalf("mismatched run Record error = %v, want ErrInvocationReserved", err)
+	}
+	after := outboxRow(t, s, key)
+	if after.ID != before.ID || after.Kind != publish.IntentKindReservation ||
+		!bytes.Equal(after.Payload, before.Payload) {
+		t.Fatalf("mismatched execution run moved reservation: %+v", after)
+	}
+
+	otherInvocation, err := publish.NewReservation("inv-other", owner.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherKey := reservationKey(t, otherInvocation)
+	otherIntent := fixtureIntent()
+	otherIntent.InvocationID = otherInvocation.InvocationID
+	otherIntent.ProducingInvocationID = "inv-producing-0001"
+	otherIntent.ReservationRunID = owner.RunID
+	otherPayload, err := otherIntent.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ledger.Record(
+		ctx, otherKey, publish.IntentKindPublication, otherPayload, &owner,
+	); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("cross-key claim Record error = %v, want parent-key mismatch", err)
+	}
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetOutbox(ctx, otherKey)
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cross-key execution row read = %v, want not found", err)
+	}
+}
+
+func TestStoreLedgerExecutionRetryRequiresPersistedOwner(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	owner := fixtureReservation(t)
+	key := reserveFor(t, s, owner)
+	ledger, err := publish.NewStoreLedger(s)
+	if err != nil {
+		t.Fatalf("NewStoreLedger: %v", err)
+	}
+	intent := fixtureIntent()
+	intent.ProducingInvocationID = "inv-producing-0001"
+	intent.ReservationRunID = owner.RunID
+	payload, err := intent.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ledger.Record(
+		ctx, key, publish.IntentKindPublication, payload, &owner,
+	); err != nil {
+		t.Fatalf("settle execution intent: %v", err)
+	}
+
+	foreign, err := publish.NewReservation(owner.InvocationID, "run-other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ledger.Record(
+		ctx, key, publish.IntentKindPublication, payload, &foreign,
+	); !errors.Is(err, publish.ErrInvocationReserved) {
+		t.Fatalf("foreign retry Record error = %v, want ErrInvocationReserved", err)
+	}
+}
+
 // TestStoreLedgerSettlesItsOwnReservation: the owner's intent replaces the
 // reservation on the same row, so nothing ever released the key, and the
 // settled intent is pending — the recovery scan must still find it.
