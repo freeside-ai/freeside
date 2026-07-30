@@ -65,6 +65,7 @@ func TestHoldRetryableClaudeRecovery(t *testing.T) {
 	t.Parallel()
 	for _, held := range []error{
 		fmt.Errorf("journal unavailable: %w", claude.ErrRecoveryRetryable),
+		fmt.Errorf("encrypted checkpoint pending: %w", domain.ErrCheckpointNotEncrypted),
 		fmt.Errorf("checkpoint drift: %w", domain.ErrCheckpointNotCurrent),
 		fmt.Errorf("conformance drift: %w", domain.ErrAdmissionConfigurationMismatch),
 	} {
@@ -431,28 +432,13 @@ func TestConfigStoreOptions(t *testing.T) {
 		t.Fatalf("storeOptions with no waiver: %v", err)
 	}
 	if options.BackupEncryptionWaiverRepositoryID != nil {
-		t.Fatalf("missing waiver configured repository %d", *options.BackupEncryptionWaiverRepositoryID)
+		t.Fatalf("no-waiver options configured repository %d", *options.BackupEncryptionWaiverRepositoryID)
 	}
 
 	repositoryID := int64(424242)
-	options, err = (config{BackupEncryptionWaiverRepositoryID: &repositoryID}).storeOptions()
-	if err != nil {
-		t.Fatalf("storeOptions with waiver: %v", err)
-	}
-	if options.BackupEncryptionWaiverRepositoryID == nil ||
-		*options.BackupEncryptionWaiverRepositoryID != repositoryID {
-		t.Fatalf("configured waiver = %v, want %d", options.BackupEncryptionWaiverRepositoryID, repositoryID)
-	}
-	repositoryID = 7
-	if *options.BackupEncryptionWaiverRepositoryID != 424242 {
-		t.Fatalf("configured waiver followed caller mutation: %d", *options.BackupEncryptionWaiverRepositoryID)
-	}
-
-	for _, invalid := range []int64{0, -1} {
-		invalid := invalid
-		if _, err := (config{BackupEncryptionWaiverRepositoryID: &invalid}).storeOptions(); err == nil {
-			t.Errorf("storeOptions accepted repository ID %d", invalid)
-		}
+	if _, err := (config{BackupEncryptionWaiverRepositoryID: &repositoryID}).storeOptions(); !errors.Is(err, domain.ErrBackupEncryptionWaiverUnsupported) {
+		t.Fatalf("storeOptions with retired waiver = %v, want %v",
+			err, domain.ErrBackupEncryptionWaiverUnsupported)
 	}
 }
 
@@ -503,7 +489,8 @@ func TestRunDrivesFakeWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("production backup-health source: %v", err)
 	}
-	if health.CheckpointCurrency != domain.BackupHealthHealthy ||
+	if health.Encryption != domain.BackupHealthHealthy ||
+		health.CheckpointCurrency != domain.BackupHealthHealthy ||
 		health.ArtifactClosure != domain.BackupHealthHealthy ||
 		health.RestoreTestAge != domain.BackupHealthHealthy {
 		t.Fatalf("produced local checkpoint health = %+v, want every dimension healthy", health)

@@ -2,14 +2,16 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
-	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 const (
@@ -25,13 +27,13 @@ const (
 	DefaultLocalBackupPollInterval = time.Hour
 )
 
-// LocalBackupProducer maintains the provisional owner-only checkpoint and its
-// restored test copy. The encrypted checkpoint can replace this producer
-// without changing BackupHealthSource or admission policy.
+// LocalBackupProducer maintains the encrypted, digest-bound owner-only
+// checkpoint and its authenticated restore-test timestamp.
 type LocalBackupProducer struct {
 	store *Store
 	files *LocalBackupFiles
 	now   func() time.Time
+	mu    sync.Mutex
 }
 
 // NewProducer builds the producer paired with this file set's health source.
@@ -48,9 +50,16 @@ func (f *LocalBackupFiles) NewProducer(store *Store) (*LocalBackupProducer, erro
 }
 
 // Maintain refreshes evidence that is missing, incompatible with the live
-// store, or beyond its safety-margin interval.
+// store, or beyond its safety-margin interval. Every successful pass also
+// reasserts the absence of legacy plaintext backup files.
 func (p *LocalBackupProducer) Maintain(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if err := ensurePrivateBackupDirectory(p.files.dir); err != nil {
+		return fmt.Errorf("local backup producer: %w", err)
+	}
+	if err := removeStaleCheckpointTemps(p.files.dir); err != nil {
 		return fmt.Errorf("local backup producer: %w", err)
 	}
 	var current BackupHealthContext
@@ -62,51 +71,57 @@ func (p *LocalBackupProducer) Maintain(ctx context.Context) error {
 		return fmt.Errorf("local backup producer: read live state: %w", err)
 	}
 
-	checkpoint, found, err := inspectBackupDatabase(
-		ctx, p.files.checkpointPath, false, nil, nil)
+	checkpoint, metadata, found, err := inspectEncryptedCheckpoint(
+		ctx,
+		p.files,
+		true,
+		p.files.approvedRecipes,
+		p.files.payloadExtractors,
+	)
+	if errors.Is(err, errCheckpointManifestMismatch) {
+		found, err = false, nil
+	}
 	if err != nil {
 		return fmt.Errorf("local backup producer: inspect checkpoint: %w", err)
 	}
 	if !found || backupSnapshotDue(
 		checkpoint, current, p.now(), DefaultLocalCheckpointRefreshInterval,
 	) {
-		tempPath, err := p.produceCheckpoint(ctx)
+		plaintext, next, err := p.produceCheckpoint(ctx)
 		if err != nil {
 			return err
 		}
-		defer removeSQLiteFiles(tempPath)
+		body, err := sealEncryptedCheckpoint(plaintext, next, p.files.encryptionKey)
+		if err != nil {
+			return fmt.Errorf("local backup producer: %w", err)
+		}
 
 		p.files.mu.Lock()
 		defer p.files.mu.Unlock()
-		if err := p.installCheckpoint(tempPath); err != nil {
+		if err := installEncryptedCheckpoint(
+			p.files.dir, p.files.checkpointPath, body,
+		); err != nil {
 			return err
 		}
-		_, found, err = inspectBackupDatabase(
-			ctx, p.files.checkpointPath, false, nil, nil)
+		_, _, found, err = inspectEncryptedCheckpoint(
+			ctx, p.files, true, p.files.approvedRecipes, p.files.payloadExtractors)
 		if err != nil {
 			return fmt.Errorf("local backup producer: inspect produced checkpoint: %w", err)
 		}
 		if !found {
 			return errors.New("local backup producer: produced checkpoint is unavailable")
 		}
-		return p.writeRestoreTest(ctx)
-	}
-
-	restored, found, err := inspectBackupDatabase(
-		ctx, p.files.restoreTestPath, false, nil, nil)
-	if err != nil {
-		return fmt.Errorf("local backup producer: inspect restore test: %w", err)
-	}
-	if !found || restoredSnapshotDue(
-		restored, checkpoint, p.now(), DefaultLocalRestoreTestRefreshInterval,
-	) {
+		if err := p.writeRestoreTest(ctx); err != nil {
+			return err
+		}
+	} else if restoredSnapshotDue(metadata, p.now(), DefaultLocalRestoreTestRefreshInterval) {
 		p.files.mu.Lock()
 		defer p.files.mu.Unlock()
 		if err := p.writeRestoreTest(ctx); err != nil {
 			return err
 		}
 	}
-	return nil
+	return removeLegacyLocalBackupFiles(p.files)
 }
 
 // Run maintains local backup evidence until ctx is canceled or maintenance
@@ -143,103 +158,100 @@ func backupSnapshotDue(
 }
 
 func restoredSnapshotDue(
-	restored backupDatabaseSnapshot,
-	checkpoint backupDatabaseSnapshot,
+	checkpoint domain.BackupCheckpoint,
 	now time.Time,
 	refreshInterval time.Duration,
 ) bool {
-	age := now.Sub(restored.restoredAt)
-	return restored.schemaVersion != checkpoint.schemaVersion ||
-		restored.restoreCheckpointDigest != checkpoint.fileDigest ||
-		age < 0 || age >= refreshInterval
+	if checkpoint.RestoreTestedAt == nil {
+		return true
+	}
+	age := now.Sub(*checkpoint.RestoreTestedAt)
+	return age < 0 || age >= refreshInterval
 }
 
-func (p *LocalBackupProducer) produceCheckpoint(ctx context.Context) (string, error) {
-	tempPath, err := unusedTemporaryPath(p.files.dir, ".latest-*.db")
+func (p *LocalBackupProducer) produceCheckpoint(
+	ctx context.Context,
+) ([]byte, domain.BackupCheckpoint, error) {
+	plaintext, err := serializeStoreCheckpoint(ctx, p.store)
 	if err != nil {
-		return "", fmt.Errorf("local backup producer: reserve checkpoint: %w", err)
+		return nil, domain.BackupCheckpoint{},
+			fmt.Errorf("local backup producer: %w", err)
 	}
-	success := false
-	defer func() {
-		if !success {
-			removeSQLiteFiles(tempPath)
-		}
-	}()
-	if err := p.store.Checkpoint(ctx, tempPath); err != nil {
-		return "", fmt.Errorf("local backup producer: %w", err)
-	}
-	if err := writeLocalBackupCheckpointMarker(ctx, tempPath, p.now().UTC()); err != nil {
-		return "", fmt.Errorf("local backup producer: record checkpoint time: %w", err)
-	}
-	success = true
-	return tempPath, nil
-}
-
-func (p *LocalBackupProducer) installCheckpoint(tempPath string) error {
-	if err := os.Rename(tempPath, p.files.checkpointPath); err != nil {
-		return fmt.Errorf("local backup producer: install checkpoint: %w", err)
-	}
-	if err := syncLocalBackupDirectory(p.files.dir); err != nil {
-		return fmt.Errorf("local backup producer: sync checkpoint directory: %w", err)
-	}
-	return nil
-}
-
-func writeLocalBackupCheckpointMarker(ctx context.Context, path string, generatedAt time.Time) error {
-	dsn := "file:" + (&url.URL{Path: path}).EscapedPath()
-	db, err := sql.Open("sqlite", dsn)
+	db, conn, err := openDeserializedBackupDatabase(ctx, plaintext)
 	if err != nil {
-		return err
+		return nil, domain.BackupCheckpoint{}, err
 	}
-	_, writeErr := db.ExecContext(ctx,
-		`INSERT INTO local_backup_checkpoint_marker (id, generated_at)
-		 VALUES (1, ?)
-		 ON CONFLICT (id) DO UPDATE SET generated_at = excluded.generated_at`,
-		generatedAt.Format(time.RFC3339Nano))
-	return errors.Join(writeErr, db.Close())
+	defer closeDeserializedBackupDatabase(db, conn)
+	snapshot, err := inspectBackupDB(
+		ctx,
+		conn,
+		digestBytes(plaintext),
+		true,
+		p.files.approvedRecipes,
+		p.files.payloadExtractors,
+	)
+	if err != nil {
+		return nil, domain.BackupCheckpoint{},
+			fmt.Errorf("local backup producer: inspect new checkpoint: %w", err)
+	}
+	checkpointID, err := randomEpoch()
+	if err != nil {
+		return nil, domain.BackupCheckpoint{},
+			fmt.Errorf("local backup producer: generate checkpoint id: %w", err)
+	}
+	createdAt := p.now().UTC()
+	checkpoint := domain.BackupCheckpoint{
+		CheckpointID:           checkpointID,
+		SyncEpoch:              snapshot.state.SyncEpoch,
+		ServerRevision:         snapshot.state.Revision,
+		SQLiteSnapshotDigest:   snapshot.fileDigest,
+		ArtifactManifestDigest: artifactManifestDigest(snapshot.digests),
+		CreatedAt:              createdAt,
+		CompletedAt:            createdAt,
+	}
+	if err := checkpoint.Validate(); err != nil {
+		return nil, domain.BackupCheckpoint{},
+			fmt.Errorf("local backup producer: checkpoint metadata: %w", err)
+	}
+	return plaintext, checkpoint, nil
 }
 
 func (p *LocalBackupProducer) writeRestoreTest(ctx context.Context) error {
-	checkpointDigest, err := localBackupFileDigest(p.files.checkpointPath)
+	plaintext, checkpoint, err := openEncryptedCheckpoint(
+		p.files.checkpointPath, p.files.encryptionKey)
 	if err != nil {
-		return fmt.Errorf("local backup producer: hash checkpoint for restore test: %w", err)
+		return fmt.Errorf("local backup producer: decrypt restore test: %w", err)
 	}
-	tempPath, err := unusedTemporaryPath(p.files.dir, ".restore-test-*.db")
+	sourceDB, source, err := openDeserializedBackupDatabase(ctx, plaintext)
 	if err != nil {
-		return fmt.Errorf("local backup producer: reserve restore test: %w", err)
+		return fmt.Errorf("local backup producer: open restore source: %w", err)
 	}
-	defer removeSQLiteFiles(tempPath)
+	defer closeDeserializedBackupDatabase(sourceDB, source)
 
-	restored, err := Open(ctx, tempPath, Options{})
+	restored, err := Open(ctx, ":memory:", Options{
+		ApprovedRecipes: p.files.approvedRecipes,
+	})
 	if err != nil {
 		return fmt.Errorf("local backup producer: open restore test: %w", err)
 	}
-	_, restoreErr := restored.Restore(ctx, p.files.checkpointPath)
-	var markerErr error
-	if restoreErr == nil {
-		_, markerErr = restored.db.ExecContext(ctx,
-			`INSERT INTO local_backup_restore_marker
-			    (id, checkpoint_digest, restored_at)
-			 VALUES (1, ?, ?)
-			 ON CONFLICT (id) DO UPDATE SET
-			    checkpoint_digest = excluded.checkpoint_digest,
-			    restored_at = excluded.restored_at`,
-			checkpointDigest, p.now().UTC().Format(time.RFC3339Nano))
+	state, restoreErr := restored.restoreFromDatabase(ctx, source)
+	var verifyErr error
+	if restoreErr == nil && state.Revision != checkpoint.ServerRevision {
+		verifyErr = fmt.Errorf(
+			"restored revision %d does not match checkpoint revision %d",
+			state.Revision, checkpoint.ServerRevision)
 	}
 	closeErr := restored.Close()
-	if err := errors.Join(restoreErr, markerErr, closeErr); err != nil {
+	if err := errors.Join(restoreErr, verifyErr, closeErr); err != nil {
 		return fmt.Errorf("local backup producer: restore test: %w", err)
 	}
-	if err := os.Chmod(tempPath, 0o600); err != nil {
-		return fmt.Errorf("local backup producer: restrict restore test: %w", err)
+	restoreTestedAt := p.now().UTC()
+	checkpoint.RestoreTestedAt = &restoreTestedAt
+	body, err := sealEncryptedCheckpoint(plaintext, checkpoint, p.files.encryptionKey)
+	if err != nil {
+		return fmt.Errorf("local backup producer: record restore test: %w", err)
 	}
-	if err := os.Rename(tempPath, p.files.restoreTestPath); err != nil {
-		return fmt.Errorf("local backup producer: install restore test: %w", err)
-	}
-	if err := syncLocalBackupDirectory(p.files.dir); err != nil {
-		return fmt.Errorf("local backup producer: sync restore-test directory: %w", err)
-	}
-	return nil
+	return installEncryptedCheckpoint(p.files.dir, p.files.checkpointPath, body)
 }
 
 func defaultLocalBackupPaths(dbPath string) (dir, checkpointPath, restoreTestPath string, err error) {
@@ -247,7 +259,57 @@ func defaultLocalBackupPaths(dbPath string) (dir, checkpointPath, restoreTestPat
 		return "", "", "", errors.New("local backup: empty database path")
 	}
 	dir = dbPath + ".checkpoints"
-	return dir, filepath.Join(dir, "latest.db"), filepath.Join(dir, "restore-test.db"), nil
+	return dir,
+		filepath.Join(dir, encryptedCheckpointFilename),
+		filepath.Join(dir, legacyRestoreTestFilename),
+		nil
+}
+
+func removeLegacyLocalBackupFiles(files *LocalBackupFiles) error {
+	for _, path := range []string{
+		filepath.Join(files.dir, legacyCheckpointFilename),
+		files.restoreTestPath,
+	} {
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			if err := os.Remove(path + suffix); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return fmt.Errorf("local backup producer: remove legacy plaintext %s: %w",
+					path+suffix, err)
+			}
+		}
+	}
+	return syncLocalBackupDirectory(files.dir)
+}
+
+func removeStaleCheckpointTemps(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("read checkpoint directory for stale temporary files: %w", err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		legacySQLiteTemp := (strings.HasPrefix(name, ".latest-") ||
+			strings.HasPrefix(name, ".restore-test-")) &&
+			(strings.HasSuffix(name, ".db") ||
+				strings.HasSuffix(name, ".db-wal") ||
+				strings.HasSuffix(name, ".db-shm"))
+		encryptedCheckpointTemp := strings.HasPrefix(name, ".latest-") &&
+			strings.HasSuffix(name, ".backup")
+		if !legacySQLiteTemp && !encryptedCheckpointTemp {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return fmt.Errorf("stat stale checkpoint temporary %s: %w", path, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("stale checkpoint temporary %s is not a regular file", path)
+		}
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("remove stale checkpoint temporary %s: %w", path, err)
+		}
+	}
+	return nil
 }
 
 func ensurePrivateBackupDirectory(path string) error {
@@ -265,24 +327,6 @@ func ensurePrivateBackupDirectory(path string) error {
 		return fmt.Errorf("%s permissions are %04o, want owner-only", path, info.Mode().Perm())
 	}
 	return nil
-}
-
-func unusedTemporaryPath(dir, pattern string) (string, error) {
-	file, err := os.CreateTemp(dir, pattern)
-	if err != nil {
-		return "", err
-	}
-	path := file.Name()
-	if err := errors.Join(file.Close(), os.Remove(path)); err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
-func removeSQLiteFiles(path string) {
-	_ = os.Remove(path)
-	_ = os.Remove(path + "-shm")
-	_ = os.Remove(path + "-wal")
 }
 
 func syncLocalBackupDirectory(path string) error {

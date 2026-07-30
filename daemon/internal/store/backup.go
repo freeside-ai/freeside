@@ -8,17 +8,17 @@ import (
 )
 
 // BackupHealthContext is the live state a source compares with its checkpoint.
-// It deliberately excludes representation details so the encrypted checkpoint
-// can replace the provisional local evaluator behind the same interface.
+// It deliberately excludes representation details so local and later portable
+// encrypted checkpoint evaluators share one interface.
 type BackupHealthContext struct {
 	ServerState
 	SchemaVersion int
 }
 
 // BackupHealthSource supplies the live, representation-independent backup
-// health signal consumed by unattended admission. A Phase 1A.2 implementation
-// evaluates the local owner-only checkpoint; the encrypted checkpoint can
-// replace it behind this seam without changing the gate.
+// health signal consumed by unattended admission. Phase 1A evaluates the local
+// encrypted owner-only checkpoint; later portable backup can replace that
+// source without changing the gate.
 //
 // Implementations must not call back into the Store whose transaction is
 // querying them. Admission checks run inside the write or reconstruction

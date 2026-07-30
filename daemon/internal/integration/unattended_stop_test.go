@@ -26,23 +26,18 @@ func conformantCeiling(t *testing.T) domain.CapabilitySnapshot {
 	return ceiling
 }
 
-// openWaivedUnattendedFixture is the §5.7 Phase 1A.2 test bed: an unattended
-// engine admitting under the backup-encryption waiver, against a store whose
-// operator configuration holds that waiver, with healthy local backup
-// evidence and the approved trust profile the waiver is anchored to.
-func openWaivedUnattendedFixture(t *testing.T) *workflowFixture {
+// openUnattendedFixture is the §5.7 test bed: an unattended
+// engine admitting under healthy encrypted backup evidence and the approved
+// trust profile.
+func openUnattendedFixture(t *testing.T) *workflowFixture {
 	t.Helper()
 	ctx := context.Background()
 	floor := []exec.Capability{exec.CapPostExitExport}
-	waiverRepository := int64(424242)
-	profile := waivedTrustProfile(t)
+	profile := unattendedTrustProfile(t)
 
 	env := admissionEnvironment()
 	env.OperatingMode = domain.ModeUnattended
 	env.Base.Repo, env.Base.RepositoryID = profile.Repo, profile.RepositoryID
-	env.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
-		RepositoryID: waiverRepository, Reason: "phase 1a.2 supervised runs",
-	}
 	backend := fake.RunnerBackend{
 		BackendName: string(domain.BackendFreshVMReadOnlyVolumeHandoff),
 		Caps:        exec.NewCapabilitySet(conformantCeiling(t)...),
@@ -53,12 +48,12 @@ func openWaivedUnattendedFixture(t *testing.T) *workflowFixture {
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeUnattended: domain.NewCapabilitySnapshot(floor...),
 		},
-		ApprovedCredentialModes:            []domain.CredentialMode{domain.CredentialSubscriptionContained},
-		BackupEncryptionWaiverRepositoryID: &waiverRepository,
+		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
 		BackupHealthSource: store.BackupHealthSourceFunc(func(
 			context.Context, store.BackupHealthContext,
 		) (domain.BackupHealth, error) {
 			return domain.BackupHealth{
+				Encryption:         domain.BackupHealthHealthy,
 				CheckpointCurrency: domain.BackupHealthHealthy,
 				ArtifactClosure:    domain.BackupHealthHealthy,
 				RestoreTestAge:     domain.BackupHealthHealthy,
@@ -182,16 +177,15 @@ func submitOn(t *testing.T, f *workflowFixture, itemID domain.ItemID, commandID 
 }
 
 // TestStopUnattendedHoldsDispatchUntilResume is the #319 acceptance flow end
-// to end: a waived unattended admission surfaces its notice, the notice's
-// offered stop_unattended durably closes admission (the pending intent is
-// held with no error, so attended reconciliation keeps running), and only the
-// explicit resume_unattended reopens dispatch — after which the held intent
-// is admitted on its own merits.
+// to end: an operator decision durably closes admission (the pending intent
+// is held with no error, so attended reconciliation keeps running), and only
+// the explicit resume_unattended reopens dispatch, after which the held
+// intent is admitted on its own merits.
 func TestStopUnattendedHoldsDispatchUntilResume(t *testing.T) {
 	ctx := context.Background()
-	f := openWaivedUnattendedFixture(t)
+	f := openUnattendedFixture(t)
 
-	first, _, err := dispatchOneInvocation(t, f)
+	_, _, err := dispatchOneInvocation(t, f)
 	if err != nil {
 		t.Fatalf("first dispatch: %v", err)
 	}
@@ -199,20 +193,6 @@ func TestStopUnattendedHoldsDispatchUntilResume(t *testing.T) {
 	// for the next discuss.
 	if _, err := f.engine.Reconcile(ctx); err != nil {
 		t.Fatalf("accept first turn: %v", err)
-	}
-
-	// The waived-posture notice now honestly offers stop_unattended (#319).
-	noticeID := domain.ItemID("system-health-backup-waiver-" + string(first))
-	notice, err := f.signet.GetAttentionItem(ctx, noticeID)
-	if err != nil {
-		t.Fatalf("get waived-posture notice: %v", err)
-	}
-	if !notice.Item.Offers(domain.ActionStopUnattended) {
-		t.Fatalf("waived notice offers %v, want stop_unattended offered", notice.Item.RequestedDecision)
-	}
-	if notice.Item.BlockingSupersession == nil ||
-		notice.Item.BlockingSupersession.RepositoryID != 424242 {
-		t.Fatalf("waived notice condition = %+v, want the waived repository", notice.Item.BlockingSupersession)
 	}
 
 	// Enqueue the next agent turn, then stop before it dispatches.
@@ -233,7 +213,7 @@ func TestStopUnattendedHoldsDispatchUntilResume(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("second discuss: %v", err)
 	}
-	submitOn(t, f, noticeID, "stop-1", domain.ActionStopUnattended)
+	stopOperations(t, f, "stop-1")
 
 	// The held pass: no error (the Run loop must keep ticking), nothing
 	// started, nothing admitted, the intent still pending.
@@ -314,7 +294,7 @@ func TestStopUnattendedHoldsDispatchUntilResume(t *testing.T) {
 // it only after the explicit resume.
 func TestStopHoldsAReplayedRecordedAdmission(t *testing.T) {
 	ctx := context.Background()
-	f := openWaivedUnattendedFixture(t)
+	f := openUnattendedFixture(t)
 
 	// An unscripted driver makes the first dispatch record the attempt and
 	// its admission, then fail the start: exactly the recorded-but-unstarted
@@ -374,7 +354,7 @@ func TestStopHoldsAReplayedRecordedAdmission(t *testing.T) {
 // what distinguishes an unstarted launch from an unmarked one.
 func TestStopDoesNotHoldAcceptanceOfStartedWork(t *testing.T) {
 	ctx := context.Background()
-	f := openWaivedUnattendedFixture(t)
+	f := openUnattendedFixture(t)
 
 	// Record the attempt and admission with the start failing (unscripted
 	// driver), then start the driver directly under the stored admission:
@@ -422,7 +402,7 @@ func TestStopDoesNotHoldAcceptanceOfStartedWork(t *testing.T) {
 // unknowable operating mode as unattended (fail closed) rather than skip it.
 func TestStopHoldsAFreshDispatchUnderAnUnconfiguredEngine(t *testing.T) {
 	ctx := context.Background()
-	f := openWaivedUnattendedFixture(t)
+	f := openUnattendedFixture(t)
 
 	// Enqueue the intent without any dispatch pass touching it: no attempt,
 	// no admission, just the pending outbox row.
@@ -463,12 +443,10 @@ func TestStopHoldsAFreshDispatchUnderAnUnconfiguredEngine(t *testing.T) {
 // half of the unknown-mode rule: the per-pass check is the one shared
 // operating-state predicate, so an unconfigured engine fails closed against
 // a blocking system_health item exactly as it does against a stop — not just
-// against whichever half was remembered. A superseded notice (the waived
-// posture, whose condition validates against the store's live policy) does
-// not hold it.
+// against whichever half was remembered.
 func TestBlockingItemHoldsAFreshDispatchUnderAnUnconfiguredEngine(t *testing.T) {
 	ctx := context.Background()
-	f := openWaivedUnattendedFixture(t)
+	f := openUnattendedFixture(t)
 
 	f.seed(t)
 	f.approve(t)
@@ -540,7 +518,7 @@ func TestBlockingItemHoldsAFreshDispatchUnderAnUnconfiguredEngine(t *testing.T) 
 // stopped. Without it, exactly one last launch would leak here.
 func TestStopHoldsAReplayUnderAnUnconfiguredEngine(t *testing.T) {
 	ctx := context.Background()
-	f := openWaivedUnattendedFixture(t)
+	f := openUnattendedFixture(t)
 
 	f.seed(t)
 	f.approve(t)

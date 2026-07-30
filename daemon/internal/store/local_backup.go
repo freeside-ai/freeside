@@ -11,6 +11,8 @@ import (
 	"maps"
 	"net/url"
 	"os"
+	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -35,7 +37,7 @@ const (
 	DefaultLocalCheckpointMaxAge = 24 * time.Hour
 	// DefaultLocalRestoreTestMaxAge requires a successful restored copy at
 	// least monthly. #238 can expose these policy values operationally without
-	// changing the three health dimensions.
+	// changing the non-encryption health dimensions.
 	DefaultLocalRestoreTestMaxAge = 30 * 24 * time.Hour
 )
 
@@ -56,10 +58,14 @@ type LocalCheckpointHealthOptions struct {
 // LocalBackupFiles owns the paired checkpoint and restore-test paths plus the
 // in-process lease that keeps health evaluation on one installed generation.
 type LocalBackupFiles struct {
-	dir             string
-	checkpointPath  string
-	restoreTestPath string
-	mu              sync.RWMutex
+	dir               string
+	checkpointPath    string
+	restoreTestPath   string
+	encryptionKey     []byte
+	artifacts         BackupArtifactStore
+	approvedRecipes   map[domain.Digest]bool
+	payloadExtractors map[string]BackupPayloadDigestExtractor
+	mu                sync.RWMutex
 }
 
 type localCheckpointHealthSource struct {
@@ -79,29 +85,64 @@ func NewDefaultLocalBackupFiles(dbPath string) (*LocalBackupFiles, error) {
 	if err != nil {
 		return nil, fmt.Errorf("local backup files: %w", err)
 	}
+	key, err := loadOrCreateBackupEncryptionKey(dbPath, checkpointPath)
+	if err != nil {
+		return nil, fmt.Errorf("local backup files: %w", err)
+	}
 	return &LocalBackupFiles{
 		dir: dir, checkpointPath: checkpointPath, restoreTestPath: restoreTestPath,
+		encryptionKey: key,
+	}, nil
+}
+
+// NewEncryptedLocalBackupFiles builds an encrypted checkpoint file set around
+// an externally supplied data key. The key is copied and never persisted by
+// this constructor; production uses NewDefaultLocalBackupFiles, whose
+// host-local key is stored outside the checkpoint directory.
+func NewEncryptedLocalBackupFiles(
+	checkpointPath string, encryptionKey []byte,
+) (*LocalBackupFiles, error) {
+	if checkpointPath == "" {
+		return nil, errors.New("encrypted local backup files: empty checkpoint path")
+	}
+	if len(encryptionKey) != backupEncryptionKeySize {
+		return nil, fmt.Errorf("encrypted local backup files: key is %d bytes, want %d",
+			len(encryptionKey), backupEncryptionKeySize)
+	}
+	dir := filepath.Dir(checkpointPath)
+	return &LocalBackupFiles{
+		dir:             dir,
+		checkpointPath:  checkpointPath,
+		restoreTestPath: filepath.Join(dir, legacyRestoreTestFilename),
+		encryptionKey:   slices.Clone(encryptionKey),
 	}, nil
 }
 
 // NewCheckpointHealthSource builds the health evaluator paired with this
-// file set. The producer installs latest.db and restore-test.db under the same
-// lease that this source holds while inspecting both.
+// encrypted checkpoint file set. The producer and evaluator share a lease so
+// each health query sees one complete authenticated generation.
 func (f *LocalBackupFiles) NewCheckpointHealthSource(
 	artifacts BackupArtifactStore,
 	approvedRecipes map[domain.Digest]bool,
 	payloadExtractors map[string]BackupPayloadDigestExtractor,
 ) (BackupHealthSource, error) {
-	return newLocalCheckpointHealthSource(LocalCheckpointHealthOptions{
+	opts := LocalCheckpointHealthOptions{
 		Artifacts:         artifacts,
 		ApprovedRecipes:   approvedRecipes,
 		PayloadExtractors: payloadExtractors,
-	}, f)
+	}
+	if f == nil || len(f.encryptionKey) == 0 {
+		return nil, errors.New("encrypted checkpoint health: missing encryption key")
+	}
+	f.artifacts = artifacts
+	f.approvedRecipes = maps.Clone(approvedRecipes)
+	f.payloadExtractors = maps.Clone(payloadExtractors)
+	return newEncryptedCheckpointHealthSource(opts, f)
 }
 
-// NewLocalCheckpointHealthSource builds the provisional Phase 1A.2 evaluator.
-// The paths are an implementation detail behind BackupHealthSource; #305 can
-// replace it with the encrypted checkpoint without changing admission.
+// NewLocalCheckpointHealthSource retains the pre-encryption evaluator for
+// compatibility tests. It always reports encryption unhealthy, so it cannot
+// admit unattended work in this build.
 func NewLocalCheckpointHealthSource(opts LocalCheckpointHealthOptions) (BackupHealthSource, error) {
 	return newLocalCheckpointHealthSource(opts, &LocalBackupFiles{
 		checkpointPath:  opts.CheckpointPath,
@@ -156,8 +197,14 @@ type backupDatabaseSnapshot struct {
 	restoredAt              time.Time
 }
 
+type backupDatabaseReader interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+}
+
 func unhealthyBackupHealth() domain.BackupHealth {
 	return domain.BackupHealth{
+		Encryption:         domain.BackupHealthUnhealthy,
 		CheckpointCurrency: domain.BackupHealthUnhealthy,
 		ArtifactClosure:    domain.BackupHealthUnhealthy,
 		RestoreTestAge:     domain.BackupHealthUnhealthy,
@@ -244,18 +291,35 @@ func inspectBackupDatabase(
 	if err != nil {
 		return backupDatabaseSnapshot{}, false, fmt.Errorf("hash %s: %w", path, err)
 	}
+	snapshot, err := inspectBackupDB(
+		ctx, db, fileDigest, collectDigests, approvedRecipes, payloadExtractors)
+	if err != nil {
+		return backupDatabaseSnapshot{}, false, fmt.Errorf("read %s: %w", path, err)
+	}
+	return snapshot, true, nil
+}
+
+func inspectBackupDB(
+	ctx context.Context,
+	db backupDatabaseReader,
+	fileDigest domain.Digest,
+	collectDigests bool,
+	approvedRecipes map[domain.Digest]bool,
+	payloadExtractors map[string]BackupPayloadDigestExtractor,
+) (backupDatabaseSnapshot, error) {
 	snapshot := backupDatabaseSnapshot{fileDigest: fileDigest}
 	if err := db.QueryRowContext(ctx,
 		`SELECT sync_epoch, revision FROM server_state WHERE id = 1`).
 		Scan(&snapshot.state.SyncEpoch, &snapshot.state.Revision); err != nil {
-		return backupDatabaseSnapshot{}, false, fmt.Errorf("read %s server state: %w", path, err)
+		return backupDatabaseSnapshot{}, fmt.Errorf("server state: %w", err)
 	}
 	if err := db.QueryRowContext(ctx,
 		`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).
 		Scan(&snapshot.schemaVersion); err != nil {
-		return backupDatabaseSnapshot{}, false, fmt.Errorf("read %s schema version: %w", path, err)
+		return backupDatabaseSnapshot{}, fmt.Errorf("schema version: %w", err)
 	}
 	if snapshot.schemaVersion >= localBackupMarkerSchemaVersion {
+		var err error
 		var generatedAt string
 		err = db.QueryRowContext(ctx,
 			`SELECT generated_at
@@ -264,13 +328,11 @@ func inspectBackupDatabase(
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 		case err != nil:
-			return backupDatabaseSnapshot{}, false,
-				fmt.Errorf("read %s checkpoint marker: %w", path, err)
+			return backupDatabaseSnapshot{}, fmt.Errorf("checkpoint marker: %w", err)
 		default:
 			snapshot.generatedAt, err = time.Parse(time.RFC3339Nano, generatedAt)
 			if err != nil {
-				return backupDatabaseSnapshot{}, false,
-					fmt.Errorf("read %s checkpoint marker time: %w", path, err)
+				return backupDatabaseSnapshot{}, fmt.Errorf("checkpoint marker time: %w", err)
 			}
 		}
 
@@ -282,12 +344,11 @@ func inspectBackupDatabase(
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 		case err != nil:
-			return backupDatabaseSnapshot{}, false, fmt.Errorf("read %s restore marker: %w", path, err)
+			return backupDatabaseSnapshot{}, fmt.Errorf("restore marker: %w", err)
 		default:
 			snapshot.restoredAt, err = time.Parse(time.RFC3339Nano, restoredAt)
 			if err != nil {
-				return backupDatabaseSnapshot{}, false,
-					fmt.Errorf("read %s restore marker time: %w", path, err)
+				return backupDatabaseSnapshot{}, fmt.Errorf("restore marker time: %w", err)
 			}
 		}
 	}
@@ -295,16 +356,16 @@ func inspectBackupDatabase(
 		digests, err := checkpointArtifactDigests(
 			ctx, db, approvedRecipes, payloadExtractors)
 		if err != nil {
-			return backupDatabaseSnapshot{}, false, fmt.Errorf("read %s artifact closure: %w", path, err)
+			return backupDatabaseSnapshot{}, fmt.Errorf("artifact closure: %w", err)
 		}
 		snapshot.digests = digests
 	}
-	return snapshot, true, nil
+	return snapshot, nil
 }
 
 func checkpointArtifactDigests(
 	ctx context.Context,
-	db *sql.DB,
+	db backupDatabaseReader,
 	approvedRecipes map[domain.Digest]bool,
 	payloadExtractors map[string]BackupPayloadDigestExtractor,
 ) ([]domain.Digest, error) {

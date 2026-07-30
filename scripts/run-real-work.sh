@@ -34,10 +34,6 @@
 #   FREESIDE_REAL_RUN_ALLOWED_PATHS  comma-separated declared path scope the
 #                                    agent may rewrite (no match-everything
 #                                    default: it is a containment control)
-#   FREESIDE_REAL_RUN_WAIVER_REPO_ID repository id the §5.7 Phase 1A.2
-#                                    backup-encryption waiver covers; unattended
-#                                    admission has no other backup authorization
-#                                    until the encrypted checkpoint lands (#305)
 #
 # Requires: Go, Apple `container` running, macOS, and an authenticated
 # credential volume for the named identity. The harness runs and durably
@@ -64,7 +60,7 @@ required=(
   FREESIDE_REAL_RUN_REPO FREESIDE_REAL_RUN_REPOSITORY_ID FREESIDE_REAL_RUN_BASE_REF
   FREESIDE_REAL_RUN_BASE_SHA FREESIDE_REAL_RUN_PROMPT_PACKAGE FREESIDE_REAL_RUN_INSTRUCTIONS
   FREESIDE_REAL_RUN_APP_STATE FREESIDE_REAL_RUN_APP_CREDS FREESIDE_REAL_RUN_PROJECT
-  FREESIDE_REAL_RUN_ALLOWED_PATHS FREESIDE_REAL_RUN_WAIVER_REPO_ID
+  FREESIDE_REAL_RUN_ALLOWED_PATHS
 )
 missing=()
 for name in "${required[@]}"; do
@@ -74,19 +70,6 @@ for name in "${required[@]}"; do
 done
 if (( ${#missing[@]} > 0 )); then
   echo "run-real-work: missing required environment: ${missing[*]}" >&2
-  exit 2
-fi
-
-# The verifier opens the store with the waiver bound to the repository id, so
-# a daemon started under a different one admits and exports successfully while
-# every verify re-gate refuses the admission. The poll cannot tell that from
-# "not finished yet", so it would burn the whole deadline and then report a
-# failure for a run that actually completed. Same reason as the checks below:
-# fail on the configuration mistake now.
-if [[ "$FREESIDE_REAL_RUN_WAIVER_REPO_ID" != "$FREESIDE_REAL_RUN_REPOSITORY_ID" ]]; then
-  echo "run-real-work: FREESIDE_REAL_RUN_WAIVER_REPO_ID ($FREESIDE_REAL_RUN_WAIVER_REPO_ID)" \
-    "must equal FREESIDE_REAL_RUN_REPOSITORY_ID ($FREESIDE_REAL_RUN_REPOSITORY_ID);" \
-    "the verifier binds the backup-encryption waiver to the repository id" >&2
   exit 2
 fi
 
@@ -183,7 +166,6 @@ echo "starting the daemon with the production Claude driver" >&2
   -auth-identity "$FREESIDE_REAL_RUN_AUTH_IDENTITY" \
   -run-conformance \
   -allowed-paths "$FREESIDE_REAL_RUN_ALLOWED_PATHS" \
-  -backup-encryption-waiver-repository-id "$FREESIDE_REAL_RUN_WAIVER_REPO_ID" \
   -publication-state-dir "$FREESIDE_REAL_RUN_APP_STATE" \
   -publication-credentials-dir "$FREESIDE_REAL_RUN_APP_CREDS" \
   > "$workdir/daemon.log" 2>&1 &

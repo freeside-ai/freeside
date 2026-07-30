@@ -51,18 +51,17 @@ type Options struct {
 	// unattended admission fails closed; attended_dev is not held to it.
 	ApprovedCredentialModes []domain.CredentialMode
 
-	// BackupEncryptionWaiverRepositoryID is the exact trusted numeric
-	// repository ID the operator waived §5.7's backup-encryption dimension
-	// for, or nil when no waiver is configured. An admission claiming a waiver
-	// this does not match fails closed at the boundary, so the waiver cannot
-	// be forged into a row.
+	// BackupEncryptionWaiverRepositoryID is retained only for reconstructing
+	// legacy waiver-posture notices in tests and migrations. Production
+	// configuration rejects every non-nil value before Open, and the write
+	// boundary rejects new waiver-bearing admissions.
 	BackupEncryptionWaiverRepositoryID *int64
 
-	// BackupHealthSource evaluates the three non-encryption backup-health
-	// dimensions that §5.7 requires of unattended running. Nil admits nothing
-	// unattended. The source is queried on every admission write and
-	// reconstruction rather than snapshotted at Open, so a stale checkpoint or
-	// restore test closes the gate for already-recorded work too.
+	// BackupHealthSource evaluates the four backup-health dimensions §5.7
+	// requires of unattended running. Nil admits nothing unattended. The
+	// source is queried on every admission write and reconstruction rather
+	// than snapshotted at Open, so stale or unencrypted evidence closes the
+	// gate for already-recorded work too.
 	BackupHealthSource BackupHealthSource
 }
 
@@ -109,7 +108,8 @@ func Open(ctx context.Context, path string, opts Options) (*Store, error) {
 }
 
 // cloneAdmissionPolicy detaches the admission policy from the caller's
-// options: the floors map, each floor slice, and the waiver pointer.
+// options: the floors map, each floor slice, and the historical waiver
+// pointer used only when reconstructing pre-encryption audit records.
 func cloneAdmissionPolicy(opts Options) domain.AdmissionPolicy {
 	policy := domain.AdmissionPolicy{}
 	if opts.AdmissionFloors != nil {

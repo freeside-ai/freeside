@@ -10,9 +10,8 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
-// unattendedAdmissionFixture is the waived unattended admission the §5.7
-// operating-state tests start from: the same run/identity fixture, admitted
-// unattended under the Phase 1A.2 waiver and the active trust profile.
+// unattendedAdmissionFixture is the encrypted-backup unattended admission the
+// §5.7 operating-state tests start from.
 func unattendedAdmissionFixture(t *testing.T) admissionFixture {
 	t.Helper()
 	activeProfile := testTrustProfile(t, "owner/repo", 424242).ProfileDigest
@@ -21,25 +20,20 @@ func unattendedAdmissionFixture(t *testing.T) admissionFixture {
 		in.BackendConfigurationDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 		in.Capabilities = conformantCapabilities(t)
 		in.TrustProfileDigest = &activeProfile
-		in.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
-			RepositoryID: 424242, Reason: "phase 1a.2 supervised runs",
-		}
 	})
 }
 
 // unattendedOptions is the operator configuration under which the fixture
 // admission is valid on its own merits, so a refusal in these tests isolates
-// the operating-state gate rather than a missing floor or waiver.
+// the operating-state gate rather than missing backup evidence.
 func unattendedOptions() store.Options {
-	configured := int64(424242)
 	return store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 			domain.ModeUnattended:  domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		},
-		ApprovedCredentialModes:            []domain.CredentialMode{domain.CredentialSubscriptionContained},
-		BackupEncryptionWaiverRepositoryID: &configured,
-		BackupHealthSource:                 healthyBackupHealthSource(),
+		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
+		BackupHealthSource:      healthyBackupHealthSource(),
 	}
 }
 
@@ -291,10 +285,9 @@ func TestStopDoesNotPoisonRecordedHistory(t *testing.T) {
 
 // TestBlockingSystemHealthRefusesUnattendedAdmission is #321's core rule in
 // the admitting transaction: an open system_health item with no supersession
-// condition blocks unattended admission; one whose condition validates against
-// the live waiver configuration does not; one whose condition names a
-// repository the operator's waiver does not cover blocks again. attended_dev
-// never consults the rule.
+// condition blocks unattended admission; an old waiver-posture notice is
+// superseded by healthy encrypted backup evidence. attended_dev never consults
+// the rule.
 func TestBlockingSystemHealthRefusesUnattendedAdmission(t *testing.T) {
 	f := unattendedAdmissionFixture(t)
 
@@ -313,7 +306,7 @@ func TestBlockingSystemHealthRefusesUnattendedAdmission(t *testing.T) {
 		}
 	})
 
-	t.Run("validated waiver supersedes only its notice", func(t *testing.T) {
+	t.Run("encrypted backup supersedes a legacy waiver notice", func(t *testing.T) {
 		s := openWithFixture(t, f, unattendedOptions())
 		seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
 		putItem(t, s, healthItem(t, "waiver-notice", &domain.BlockingSupersession{
@@ -339,21 +332,6 @@ func TestBlockingSystemHealthRefusesUnattendedAdmission(t *testing.T) {
 		}
 	})
 
-	t.Run("retargeted waiver re-blocks a stale notice", func(t *testing.T) {
-		// A notice recorded when the waiver covered repository 999: the
-		// operator's waiver now covers 424242, so the stored condition no
-		// longer holds and the still-open notice blocks, with no write in
-		// between.
-		s := openWithFixture(t, f, unattendedOptions())
-		seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
-		putItem(t, s, healthItem(t, "stale-notice", &domain.BlockingSupersession{
-			Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 999,
-		}))
-		if err := recordAdmission(t, s, f.admission); !errors.Is(err, domain.ErrBlockingSystemHealth) {
-			t.Fatalf("admission under stale notice = %v, want %v", err, domain.ErrBlockingSystemHealth)
-		}
-	})
-
 	t.Run("resolved item stops blocking", func(t *testing.T) {
 		s := openWithFixture(t, f, unattendedOptions())
 		seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
@@ -374,16 +352,17 @@ func TestBlockingSystemHealthRefusesUnattendedAdmission(t *testing.T) {
 	})
 }
 
-// TestRequireUnattendedAdmissibleClearedWaiver exercises the supersession
-// re-derivation in isolation: under a policy with no configured waiver, the
-// stored condition no longer holds and the notice blocks. The full admission
-// path cannot isolate this case because a waived admission fails its own
-// waiver clause first under the same cleared policy.
-func TestRequireUnattendedAdmissibleClearedWaiver(t *testing.T) {
+func TestRequireUnattendedAdmissibleLegacyNoticeNeedsHealthyEncryption(t *testing.T) {
 	ctx := context.Background()
 	f := unattendedAdmissionFixture(t)
 	cleared := unattendedOptions()
-	cleared.BackupEncryptionWaiverRepositoryID = nil
+	unhealthy := healthyBackupHealth()
+	unhealthy.Encryption = domain.BackupHealthUnhealthy
+	cleared.BackupHealthSource = store.BackupHealthSourceFunc(func(
+		context.Context, store.BackupHealthContext,
+	) (domain.BackupHealth, error) {
+		return unhealthy, nil
+	})
 	s := openWithFixture(t, f, cleared)
 	putItem(t, s, healthItem(t, "waiver-notice", &domain.BlockingSupersession{
 		Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 424242,
@@ -392,8 +371,8 @@ func TestRequireUnattendedAdmissibleClearedWaiver(t *testing.T) {
 	err := s.Read(ctx, func(tx *store.ReadTx) error {
 		return tx.RequireUnattendedAdmissible(ctx, f.admission)
 	})
-	if !errors.Is(err, domain.ErrBlockingSystemHealth) || !errors.Is(err, domain.ErrWaiverNotConfigured) {
-		t.Fatalf("cleared waiver = %v, want %v wrapping %v",
-			err, domain.ErrBlockingSystemHealth, domain.ErrWaiverNotConfigured)
+	if !errors.Is(err, domain.ErrBlockingSystemHealth) || !errors.Is(err, domain.ErrCheckpointNotEncrypted) {
+		t.Fatalf("unhealthy encryption = %v, want %v wrapping %v",
+			err, domain.ErrBlockingSystemHealth, domain.ErrCheckpointNotEncrypted)
 	}
 }

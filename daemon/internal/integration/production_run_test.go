@@ -496,7 +496,7 @@ func TestProductionRunDispatchesAndAcceptsOnce(t *testing.T) {
 func TestProductionCompletionHoldsAfterCurrentPolicyDrifts(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	f := openWaivedUnattendedFixture(t)
+	f := openUnattendedFixture(t)
 	spec, policy, resolved := registerSubmissionArtifacts(t, f.store, "run-prod-policy-hold")
 	submitted, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
 		RunID: "run-prod-policy-hold", ProjectID: "proj-prod",
@@ -534,7 +534,7 @@ func TestProductionCompletionHoldsAfterCurrentPolicyDrifts(t *testing.T) {
 func TestRecordedProductionTerminalReplaysAfterCurrentPolicyDrifts(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	f := openWaivedUnattendedFixture(t)
+	f := openUnattendedFixture(t)
 	spec, policy, resolved := registerSubmissionArtifacts(t, f.store, "run-prod-policy-replay")
 	submitted, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
 		RunID: "run-prod-policy-replay", ProjectID: "proj-prod",

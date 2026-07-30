@@ -153,10 +153,10 @@ func (tx *ReadTx) LatestUnattendedOperationTransition(
 // system_health item blocks unless it carries a BlockingSupersession whose
 // condition holds against this transaction's live policy (plan §4: "a
 // validated configuration supersedes it"). The stored condition is a claim,
-// not a verdict — Supersedes re-derives it, so clearing or retargeting the
-// waiver re-blocks every notice it covered with no write. Matched rows are
-// fully reconstructed and re-gated (scanAttentionItemSnapshot) before they
-// can block or be skipped; the extracted columns only select candidates.
+// not a verdict. Supersedes re-derives whether healthy encrypted backup
+// evidence has retired a legacy waived-posture notice. Matched rows are fully
+// reconstructed and re-gated (scanAttentionItemSnapshot) before they can
+// block or be skipped; the extracted columns only select candidates.
 func (tx *ReadTx) RequireUnattendedAdmissible(
 	ctx context.Context, admission domain.ExecutionAdmission,
 ) error {
@@ -188,11 +188,21 @@ func (tx *ReadTx) RequireUnattendedOperationOpen(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	policy := tx.admissionPolicy
+	backupHealthLoaded := false
 	for _, item := range items {
 		if item.BlockingSupersession == nil {
 			return fmt.Errorf("item %q: %w", item.ID, domain.ErrBlockingSystemHealth)
 		}
-		if err := item.BlockingSupersession.Supersedes(tx.admissionPolicy); err != nil {
+		if !backupHealthLoaded {
+			health, healthErr := tx.transactionBackupHealth(ctx)
+			if healthErr != nil {
+				return fmt.Errorf("item %q: backup health: %w", item.ID, healthErr)
+			}
+			policy.BackupHealth = health
+			backupHealthLoaded = true
+		}
+		if err := item.BlockingSupersession.Supersedes(policy); err != nil {
 			return fmt.Errorf("item %q: %w: %w", item.ID, domain.ErrBlockingSystemHealth, err)
 		}
 	}

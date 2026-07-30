@@ -214,9 +214,9 @@ func (s BlockingSupersession) Validate() error {
 }
 
 // Supersedes reports whether the condition currently holds under policy: the
-// item's blocking effect is superseded exactly while the operator's validated
-// configuration covers it (§5.7: "whose blocking state the validated waiver
-// configuration supersedes"). The stored condition names what must hold; this
+// item's blocking effect is superseded by healthy encrypted backup evidence,
+// or, during legacy reconstruction only, while the old waiver configuration
+// covers it. The stored condition names the obsolete risk, not a verdict; this
 // re-derivation against live policy is what makes it hold, so a decoded item
 // can never assert its own non-blocking state. It fails closed: an invalid
 // condition supersedes nothing.
@@ -226,6 +226,13 @@ func (s BlockingSupersession) Supersedes(policy AdmissionPolicy) error {
 	}
 	switch s.Kind {
 	case SupersessionBackupEncryptionWaiver:
+		if policy.BackupHealth != nil {
+			if err := policy.BackupHealth.RequireHealthy(); err != nil {
+				return fmt.Errorf("blocking supersession names repository %d under unhealthy encrypted backup: %w",
+					s.RepositoryID, err)
+			}
+			return nil
+		}
 		if !waiverConfiguredFor(s.RepositoryID, policy) {
 			return fmt.Errorf("blocking supersession names repository %d: %w",
 				s.RepositoryID, ErrWaiverNotConfigured)
