@@ -139,6 +139,17 @@ func validateExecutionReservation(
 	if err != nil {
 		return fmt.Errorf("authenticate execution publication reservation: %w", err)
 	}
+	return validateExecutionReservationState(
+		state, entry, *claim, producingInvocationID,
+	)
+}
+
+func validateExecutionReservationState(
+	state invocationState,
+	entry store.QueueEntry,
+	claim Reservation,
+	producingInvocationID domain.InvocationID,
+) error {
 	switch state {
 	case invocationFree:
 		return fmt.Errorf(
@@ -160,8 +171,9 @@ func validateExecutionReservation(
 				entry.IdempotencyKey, claim.RunID, ErrInvocationReserved,
 			)
 		}
+		return nil
 	case invocationReserved:
 		return nil
 	}
-	return nil
+	return unhandledInvocationState(state)
 }
