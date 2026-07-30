@@ -94,6 +94,12 @@ func TestIntentValidation(t *testing.T) {
 		"empty repo":          func(i *publish.Intent) { i.Repo = "" },
 		"empty base ref":      func(i *publish.Intent) { i.BaseRef = "" },
 		"empty source head":   func(i *publish.Intent) { i.SourceHeadSHA = "" },
+		"source without run": func(i *publish.Intent) {
+			i.ProducingInvocationID = "inv-producing"
+		},
+		"run without source": func(i *publish.Intent) {
+			i.ReservationRunID = "run-producing"
+		},
 	}
 	for name, mutate := range cases {
 		i := fixtureIntent()

@@ -3,6 +3,7 @@ package publish
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -34,6 +35,29 @@ func commitReservedIntent(
 	payload []byte,
 	claim *Reservation,
 ) (prior []byte, recorded bool, err error) {
+	if kind == IntentKindPublication {
+		var marker struct {
+			ProducingInvocationID domain.InvocationID `json:"producing_invocation_id"`
+		}
+		if err := json.Unmarshal(payload, &marker); err == nil &&
+			marker.ProducingInvocationID != "" {
+			settling, err := DecodeIntent(payload)
+			if err != nil {
+				return nil, false, fmt.Errorf("decode execution publication intent %q: %w", key, err)
+			}
+			if claim == nil || settling.ReservationRunID != claim.RunID {
+				return nil, false, fmt.Errorf(
+					"execution publication intent %q has no matching reservation owner: %w",
+					key, ErrInvocationReserved,
+				)
+			}
+			if err := validateExecutionReservation(
+				ctx, tx, key, claim, settling.ProducingInvocationID,
+			); err != nil {
+				return nil, false, err
+			}
+		}
+	}
 	entry, inserted, err := tx.EnqueueOutbox(ctx, key, kind, payload)
 	if err != nil {
 		return nil, false, err

@@ -18,7 +18,15 @@ type storePublicationDecision struct {
 	store *store.Store
 }
 
-func (d *storePublicationDecision) prepare(ctx context.Context, c Candidate, audit domain.WorkflowAudit, key string, payload []byte, claim *Reservation) ([]byte, bool, error) {
+func (d *storePublicationDecision) prepare(
+	ctx context.Context,
+	c Candidate,
+	audit domain.WorkflowAudit,
+	key string,
+	payload []byte,
+	claim *Reservation,
+	producingInvocationID *domain.InvocationID,
+) ([]byte, bool, error) {
 	var (
 		prior       []byte
 		recorded    bool
@@ -55,6 +63,15 @@ func (d *storePublicationDecision) prepare(ctx context.Context, c Candidate, aud
 		if err := validateAuthorizationCandidate(c, auth); err != nil {
 			decisionErr = err
 			return nil
+		}
+		if producingInvocationID != nil {
+			if err := validateExecutionCandidate(
+				ctx, tx, c, claim, *producingInvocationID,
+				profile.RepositoryID, auth.BaseSHA,
+			); err != nil {
+				decisionErr = err
+				return nil
+			}
 		}
 		stored, inserted, err := commitReservedIntent(ctx, tx, key, IntentKindPublication, payload, claim)
 		if err != nil {

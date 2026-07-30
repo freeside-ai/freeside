@@ -90,7 +90,7 @@ func TestFinalizeRejectsSubstitutedIntentCoordinates(t *testing.T) {
 
 	err = finalizePublicationResult(ctx, s, candidate, Result{
 		Identity: identity, Branch: identity.BranchName(), PRNumber: 101,
-	})
+	}, "")
 	if !errors.Is(err, errPublicationIntentDiverged) {
 		t.Fatalf("finalize substituted intent error = %v", err)
 	}
