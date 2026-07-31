@@ -173,6 +173,32 @@ func TestGitHubWorkflowAuditorProducesFreshObservation(t *testing.T) {
 	if audit.PullRequestTarget || audit.ReusableWorkflows {
 		t.Fatalf("unexpected audit privileges = %+v", audit)
 	}
+	if audit.Evidence == nil {
+		t.Fatal("audit omitted digest-bound evidence")
+	}
+	if err := audit.Evidence.ValidateBinding(audit.Repo, audit.WorkflowAuditDigest); err != nil {
+		t.Fatalf("evidence binding: %v", err)
+	}
+	evidenceBody := string(audit.Evidence.Bytes())
+	for _, want := range []string{
+		`"dynamic_workflows":[]`,
+		`"path":".github/workflows/publish.yml"`,
+		`"sha":"workflow-blob"`,
+		`"branch_protection"`,
+		`"rulesets"`,
+		`"protection_rules"`,
+	} {
+		if !strings.Contains(evidenceBody, want) {
+			t.Errorf("retained evidence omitted %q", want)
+		}
+	}
+	encodedWorkflow := base64.StdEncoding.EncodeToString([]byte(auditedWorkflowYAML))
+	if !strings.Contains(evidenceBody, encodedWorkflow) {
+		t.Error("retained evidence omitted workflow contents")
+	}
+	if rendered := fmt.Sprintf("%+v", audit); strings.Contains(rendered, encodedWorkflow) {
+		t.Fatalf("formatted audit leaked workflow content: %s", rendered)
+	}
 	if fixture.refCalls != 4 {
 		t.Fatalf("ref calls = %d, want 4 for one unstable and one stable collection", fixture.refCalls)
 	}
@@ -242,6 +268,7 @@ func TestGitHubWorkflowAuditorAcceptsDynamicWorkflowRows(t *testing.T) {
 		t.Fatalf("dynamic row retained digest %q", audit.WorkflowAuditDigest)
 	}
 	baseline.WorkflowAuditDigest, audit.WorkflowAuditDigest = "", ""
+	baseline.Evidence, audit.Evidence = nil, nil
 	baseline.AuditedAt, audit.AuditedAt = time.Time{}, time.Time{}
 	if audit != baseline {
 		t.Fatalf("dynamic row changed derived facts: %+v != %+v", audit, baseline)

@@ -356,13 +356,17 @@ func (p AutomationTrustProfile) Validate() error {
 // the audited automation-control surface; two identical audits at different
 // times are two real observations.
 type WorkflowAudit struct {
-	Repo                string               `json:"repo"`
-	AuditedCommitSHA    string               `json:"audited_commit_sha"`
-	AuditedAt           time.Time            `json:"audited_at"`
-	WorkflowAuditDigest Digest               `json:"workflow_audit_digest"`
-	EffectiveTokenPerms TokenPermissionsMode `json:"effective_token_permissions"`
-	OIDCAvailable       bool                 `json:"oidc_available"`
-	EnvironmentSecrets  bool                 `json:"environment_secrets"`
+	Repo                string    `json:"repo"`
+	AuditedCommitSHA    string    `json:"audited_commit_sha"`
+	AuditedAt           time.Time `json:"audited_at"`
+	WorkflowAuditDigest Digest    `json:"workflow_audit_digest"`
+	// Evidence is the sensitive canonical body addressed by
+	// WorkflowAuditDigest. It is retained separately from the append-only
+	// observation facts and omitted from ordinary audit serialization.
+	Evidence            *WorkflowAuditEvidence `json:"-"`
+	EffectiveTokenPerms TokenPermissionsMode   `json:"effective_token_permissions"`
+	OIDCAvailable       bool                   `json:"oidc_available"`
+	EnvironmentSecrets  bool                   `json:"environment_secrets"`
 	// SecretBearingPRJobs and PullRequestTarget attest the two highest-risk
 	// PR-job privileges the profile gates (allow_secret_bearing_pr_jobs,
 	// allow_pull_request_target): every profile allow_* axis has an attested
@@ -393,6 +397,11 @@ func (a WorkflowAudit) Validate() error {
 	}
 	if a.WorkflowAuditDigest == "" {
 		return fmt.Errorf("workflow audit %s workflow_audit_digest: %w", a.Repo, ErrEmptyField)
+	}
+	if a.Evidence != nil {
+		if err := a.Evidence.ValidateBinding(a.Repo, a.WorkflowAuditDigest); err != nil {
+			return err
+		}
 	}
 	if !a.EffectiveTokenPerms.valid() {
 		return fmt.Errorf("workflow audit %s effective_token_permissions %q: %w", a.Repo, a.EffectiveTokenPerms, ErrInvalidTokenPermissions)

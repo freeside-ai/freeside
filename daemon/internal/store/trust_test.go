@@ -2,6 +2,9 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -56,6 +59,18 @@ func authorizationFixture(t *testing.T, profile domain.AutomationTrustProfile, i
 		t.Fatalf("authorization fixture: %v", err)
 	}
 	return a
+}
+
+func workflowAuditEvidenceFixture(t *testing.T, repo, marker string) domain.WorkflowAuditEvidence {
+	t.Helper()
+	evidence, err := domain.NewWorkflowAuditEvidence([]byte(
+		`{"version":"freeside-workflow-audit/test","repo":"` + repo +
+			`","workflows":[{"path":".github/workflows/` + marker + `.yml"}]}`,
+	))
+	if err != nil {
+		t.Fatalf("workflow audit evidence fixture: %v", err)
+	}
+	return evidence
 }
 
 // TestTrustProfileRoundTrip: a recorded profile reads back identical by
@@ -198,11 +213,13 @@ func TestTrustProfileExactReactivation(t *testing.T) {
 func TestWorkflowAuditAppendOnly(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
+	evidence := workflowAuditEvidenceFixture(t, "freeside-ai/candidate-repo", "ci")
 	audit := domain.WorkflowAudit{
 		Repo:                "freeside-ai/candidate-repo",
 		AuditedCommitSHA:    "cafebabe",
 		AuditedAt:           time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC),
-		WorkflowAuditDigest: "sha256:workflow-audit",
+		WorkflowAuditDigest: evidence.Digest(),
+		Evidence:            &evidence,
 		EffectiveTokenPerms: domain.TokenPermissionsReadWrite,
 		SelfHostedRunners:   true,
 	}
@@ -241,6 +258,7 @@ func TestWorkflowAuditAppendOnly(t *testing.T) {
 				t.Errorf("audit %d: audited_at %v, want %v", i, rec.Audit.AuditedAt, audit.AuditedAt)
 			}
 			got, want := rec.Audit, audit
+			got.Evidence, want.Evidence = nil, nil
 			got.AuditedAt, want.AuditedAt = time.Time{}, time.Time{}
 			if got != want {
 				t.Errorf("audit %d round-trip mismatch:\ngot  %+v\nwant %+v", i, got, want)
@@ -250,6 +268,138 @@ func TestWorkflowAuditAppendOnly(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("read: %v", err)
+	}
+}
+
+func TestWorkflowAuditReviewRetentionAndDeletion(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	const (
+		repo   = "freeside-ai/candidate-repo"
+		needle = "workflow-review-only-needle"
+	)
+	approvedEvidence, err := domain.NewWorkflowAuditEvidence([]byte(
+		`{"version":"freeside-workflow-audit/v2","repo":"` + repo +
+			`","workflows":[{"path":".github/workflows/ci.yml","content":"` + needle +
+			`"}],"dynamic_workflows":[],"branch_protection":{"enforced":true}}`,
+	))
+	if err != nil {
+		t.Fatalf("approved evidence: %v", err)
+	}
+	intermediateEvidence, err := domain.NewWorkflowAuditEvidence([]byte(
+		`{"version":"freeside-workflow-audit/v2","repo":"` + repo +
+			`","workflows":[{"path":".github/workflows/ci.yml","content":"` + needle +
+			`"}],"dynamic_workflows":[{"path":"dynamic/old","state":"active"}],"branch_protection":{"enforced":true}}`,
+	))
+	if err != nil {
+		t.Fatalf("intermediate evidence: %v", err)
+	}
+	observedEvidence, err := domain.NewWorkflowAuditEvidence([]byte(
+		`{"version":"freeside-workflow-audit/v2","repo":"` + repo +
+			`","workflows":[{"path":".github/workflows/ci.yml","content":"` + needle +
+			`"}],"dynamic_workflows":[{"path":"dynamic/codeql","state":"active"}],"branch_protection":{"enforced":false}}`,
+	))
+	if err != nil {
+		t.Fatalf("observed evidence: %v", err)
+	}
+	audit := func(at time.Time, evidence *domain.WorkflowAuditEvidence) domain.WorkflowAudit {
+		return domain.WorkflowAudit{
+			Repo: repo, AuditedCommitSHA: fmt.Sprintf("commit-%d", at.Minute()),
+			AuditedAt: at, WorkflowAuditDigest: evidence.Digest(), Evidence: evidence,
+			EffectiveTokenPerms: domain.TokenPermissionsReadOnly,
+		}
+	}
+	t0 := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	approvedAudit := audit(t0, &approvedEvidence)
+	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: repo, RepositoryID: 123456789,
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
+		WorkflowAuditDigest:        approvedEvidence.Digest(),
+		Review: domain.ReviewSettings{
+			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+		},
+	})
+	if err != nil {
+		t.Fatalf("profile: %v", err)
+	}
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, err := tx.RecordWorkflowAudit(ctx, approvedAudit)
+		return err
+	}); err != nil {
+		t.Fatalf("record proposed-profile audit: %v", err)
+	}
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		proposed, err := tx.WorkflowAuditReviewForProfile(ctx, profile)
+		if err == nil && (proposed.Approved.Audit.ID != proposed.Observed.Audit.ID ||
+			len(proposed.ChangedFields) != 0) {
+			t.Fatalf("proposed review = %+v, want one unchanged digest-bound observation", proposed)
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("proposed profile review: %v", err)
+	}
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.RecordTrustProfile(ctx, profile, t0); err != nil {
+			return err
+		}
+		if _, err := tx.RecordWorkflowAudit(ctx, audit(t0.Add(time.Minute), &intermediateEvidence)); err != nil {
+			return err
+		}
+		_, err := tx.RecordWorkflowAudit(ctx, audit(t0.Add(2*time.Minute), &observedEvidence))
+		return err
+	}); err != nil {
+		t.Fatalf("seed review: %v", err)
+	}
+
+	var review store.WorkflowAuditReview
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		review, err = tx.WorkflowAuditReview(ctx, repo)
+		return err
+	}); err != nil {
+		t.Fatalf("WorkflowAuditReview: %v", err)
+	}
+	if review.Approved.Audit.Audit.WorkflowAuditDigest != approvedEvidence.Digest() ||
+		review.Observed.Audit.Audit.WorkflowAuditDigest != observedEvidence.Digest() {
+		t.Fatalf("review selected wrong sides: %+v", review)
+	}
+	if want := []string{"branch_protection", "dynamic_workflows"}; !reflect.DeepEqual(review.ChangedFields, want) {
+		t.Fatalf("changed fields = %v, want %v", review.ChangedFields, want)
+	}
+	projected, err := json.Marshal(review)
+	if err != nil {
+		t.Fatalf("marshal review: %v", err)
+	}
+	if !strings.Contains(string(projected), needle) {
+		t.Fatalf("review JSON omitted evidence: %s", projected)
+	}
+	if rendered := fmt.Sprintf("%+v", review); strings.Contains(rendered, needle) {
+		t.Fatalf("ordinary review formatting leaked evidence: %s", rendered)
+	}
+
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.DeleteWorkflowAuditEvidence(ctx, repo)
+	}); err != nil {
+		t.Fatalf("delete evidence: %v", err)
+	}
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.WorkflowAuditReview(ctx, repo)
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("review after deletion error = %v, want ErrNotFound", err)
+	}
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		audits, err := tx.ListWorkflowAudits(ctx, repo)
+		if err == nil && len(audits) != 3 {
+			t.Fatalf("audit ledger rows = %d, want 3 after evidence deletion", len(audits))
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("audit ledger after deletion: %v", err)
 	}
 }
 
