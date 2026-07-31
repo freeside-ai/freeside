@@ -1,9 +1,9 @@
 ---
 title: Freeside Project Plan
-revision: 22
+revision: 23
 status: active
 phase: 1A
-updated: 2026-07-29
+updated: 2026-07-30
 ---
 
 # Freeside
@@ -291,7 +291,7 @@ GitHub  <── reconciliation and publication ──>  freesided
 | **Workflow engine** | Runs code-defined state machines using policy from configuration. It records the resolved rein-policy digest and separate active, elapsed, and waiting clocks for each run. |
 | **signet** | Owns AttentionItems, deliveries, conversations, synchronization, device pairing, and ntfy integration. |
 | **Research fetcher** | Retrieves immutable, digest-addressed research artifacts for agents. |
-| **StageDriver** | Runs bounded Claude batch jobs. A permanent fake supports deterministic tests. |
+| **StageDriver** | Runs bounded local agent batch jobs: Claude in 1A, joined by Codex in 1B (Section 11). A permanent fake supports deterministic tests. |
 | **ReviewSource** | Integrates Codex GitHub review. A permanent fake supports deterministic tests. |
 | **Finding classifier** | Adds versioned annotations to immutable raw review findings. |
 | **ward** | Provides runner capability classes, workspace-handoff capabilities, per-stage egress, operating modes, and conformance checks. |
@@ -327,7 +327,9 @@ accepted result. The workflow never advances twice.
 
 Phase 1 uses:
 
-- one local driver, **Claude**;
+- one local driver, **Claude**, in 1A; a second local driver, **Codex**,
+  joins in 1B as an execution capacity hedge (Section 11), blocked on its
+  pre-adoption gates (#401);
 - one primary review source, **CodexGitHubReview**; and
 - permanent fakes of both interfaces.
 
@@ -1389,6 +1391,12 @@ Routing comparisons use accumulated traces, including the 1B Claude shadow
 arm. Shadow findings are recorded but never routed, and comparisons are
 adjudicated blind where practical.
 
+Scheduled Codex execution (Section 11) will make Codex-executes plus
+Codex-reviews a same-vendor pairing, weakening the independence this section
+targets and raising the later value of a selectable Claude ReviewSource. That
+promotion stays deferred, not scheduled (#397); shadow findings remain
+recorded and never routed.
+
 The classifier is never the sole safety gate:
 
 - A raw shadow finding that claims critical or high severity and receives a
@@ -1829,7 +1837,14 @@ Phase 1B adds:
 - convergence policy and the shadow arm;
 - provenance-gated EvidencePublisher;
 - experimental `max_parallel_executions` per auth identity, visible to
-  scheduling; and
+  scheduling;
+- the Codex execution driver, an execution capacity hedge against
+  single-provider stalls (Section 14): the `agent-codex` agent base, the
+  project images the reusable builder derives from it (Section 5.7),
+  ward's second vendor topology, the `codex` driver binding, and the
+  driver-selection contract land as separate follow-on units, sequenced
+  after the 1A.2 exit and blocked on the #401 pre-adoption gates; driver
+  selection stays explicit, with no automatic fallback; and
 - the run timeline screen.
 
 Use the real backlog immediately.
@@ -1866,7 +1881,6 @@ Expand beyond the first constrained path:
 
 - a second repository and workflow shape;
 - scan initiators and chaining;
-- a local Codex driver, if useful;
 - `api_key_isolated`;
 - full failure-injection and restore drills;
 - generalized but bounded CI-audit tooling;
@@ -1934,43 +1948,22 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 22:
+Revision 23:
 
-1. **The Claude setup token is launcher-delivered, never spec-borne.** The
-   token lives as a single read-only file on a per-identity credential
-   volume. No per-identity writable Claude state is mounted during execution;
-   `CLAUDE_CONFIG_DIR` is a fresh read-only ward-owned root with only
-   invocation-scoped continuity and per-launch scratch mounted beneath it.
-   The daemon-supplied launcher argv reads the token into the CLI process
-   environment at exec, and the writer's spec environment carries no
-   credential. The value never enters argv text, inspect reports, ward
-   journals, or driver state; process-tree ambience is the documented
-   `subscription_contained` residual (§5.4).
-2. **Writer outcome authority is a gate-authored nonce marker with a
-   journalled crash bridge.** `ExecutionOutcome` remains canonical for
-   failed, canceled, and lost invocations, while `ExecutionExport` remains
-   canonical for completion. Before cleanup can erase its source, ward
-   durably records cancellation intent or a validated nonzero status, then
-   closes canceled or failed after required capture and teardown. A live
-   daemon sets `WriterComplete` only after stopped or absent, matching nonce,
-   zero status, and proxy-health-throughout all hold; recovery never
-   synthesizes it. On recovery, cancellation intent outranks a durable
-   failure status, which in turn outranks marker state; marker classification
-   runs only when neither amendment exists. Missing, malformed, or mismatched
-   evidence, and zero without an already-durable completion bit, fail closed
-   as lost after absence proof and teardown (§5.7 Writer Outcome Authority).
-3. **Phase 1A isolates Claude configuration while retaining exact provider
-   resume.** Every gate-mediated launch gets a verified read-only config
-   root, fresh `session-env` scratch, `--safe-mode`, and a read-only explicit
-   bundle composed from admitted host and trusted-base repository
-   instructions. Only `projects/` continuity crosses launches within one
-   invocation. Startup and forked resume use daemon-generated, pre-journalled
-   exact session IDs; resume proves predecessor absence and retains the
-   credential lease and fence. Recovery adopts or reaps an existing launch
-   and never duplicates it. `InvocationChild` remains unavailable; a
-   directly agent-spawned CLI is untrusted agent activity (§5.8).
-   Rejected alternatives and revisit conditions live in the decision note.
-   (User; devlog 2026-07-29-1750-claude-credential-topology.md; #380.)
+1. **The Codex execution driver is scheduled 1B work, an execution capacity
+   hedge.** Changed assumption: its Phase-2 "if useful" placement rested on
+   Claude execution capacity being sufficient, and operator experience shows
+   usage limits stall real work, so availability, not provider comparison,
+   motivates the driver; the shadow-review experiment cannot answer a
+   capacity problem. Overturns "Claude is the only local driver in Phase 1"
+   (revision 3) and the Phase-2 placement. Grounded in the #395 spike's go
+   verdict; adoption stays blocked on the #401 pre-adoption gates. The build
+   chain (the `agent-codex` base and its derived project images, ward's
+   second vendor topology, the driver binding, the selection contract)
+   lands as follow-on 1B units after the 1A.2 exit. Single-provider execution capacity joins the Section 14 risk
+   register. Unchanged: no automatic provider fallback (non-goal 5), and
+   shadow findings stay recorded, never routed (Section 7).
+   (User; devlog 2026-07-30-1942-codex-capacity-hedge.md; #396.)
 
 ## 14. Risks
 
@@ -1981,6 +1974,7 @@ Revision 22:
 | Reviewer-instruction poisoning | Treat instruction paths as control-plane content and block candidate changes in the ordinary publication path. |
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section 5.7); the same-VM fallback is refuted by execution, never implemented or declared. |
 | Codex cloud review as a load-bearing dependency | Use the shadow arm to dry-run the hedge. |
+| Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section 11); keep driver selection explicit with no automatic fallback; usage remains observed telemetry (Section 8). |
 | Classifier mislabeling | Preserve immutable raw findings; require second adjudication for the safety case; enforce ceilings. |
 | Subscription-terms drift | Keep it as an explicit operating risk. |
 | Apple container immaturity | Prove actual runner capabilities and retain honest fallback classes. |

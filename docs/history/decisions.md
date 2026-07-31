@@ -609,7 +609,7 @@ New in revision 21 (decider in parentheses):
 
 ---
 
-## Revision 22 (current)
+## Revision 22
 
 Revision 22 resolves the Claude credential-delivery and writer-outcome
 topology after the production driver's gate failure (#380), replacing the
@@ -660,3 +660,33 @@ New in revision 22 (decider in parentheses):
    launch and never duplicates it. `InvocationChild` remains unavailable; a
    CLI process the agent itself spawns is untrusted agent activity.
    (User; devlog 2026-07-29-1750-claude-credential-topology.md; #380.)
+
+---
+
+## Revision 23 (current)
+
+Revision 23 reschedules the local Codex execution driver from Phase 2 "if
+useful" to committed 1B work, on the #395 feasibility spike's go verdict:
+single-provider execution capacity is a demonstrated availability risk, not
+a Phase-2 hypothesis.
+
+Held from revision 22: every decision except the two this revision
+overturns: revision 3's "Claude is the only local driver in Phase 1"
+(item 8) and the Phase-2 optional placement of the Codex driver.
+
+New in revision 23 (decider in parentheses):
+
+1. **The Codex execution driver is scheduled 1B work, an execution capacity
+   hedge.** Changed assumption: its Phase-2 "if useful" placement rested on
+   Claude execution capacity being sufficient, and operator experience shows
+   usage limits stall real work, so availability, not provider comparison,
+   motivates the driver; the shadow-review experiment cannot answer a
+   capacity problem. Overturns "Claude is the only local driver in Phase 1"
+   (revision 3) and the Phase-2 placement. Grounded in the #395 spike's go
+   verdict; adoption stays blocked on the #401 pre-adoption gates. The build
+   chain (the `agent-codex` base and its derived project images, ward's
+   second vendor topology, the driver binding, the selection contract)
+   lands as follow-on 1B units after the 1A.2 exit. Single-provider execution capacity joins the Section 14 risk
+   register. Unchanged: no automatic provider fallback (non-goal 5), and
+   shadow findings stay recorded, never routed (Section 7).
+   (User; devlog 2026-07-30-1942-codex-capacity-hedge.md; #396.)
