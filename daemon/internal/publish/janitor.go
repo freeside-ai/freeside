@@ -831,8 +831,13 @@ type grantReadMintRequest struct {
 	Permissions Permissions `json:"permissions"`
 }
 
+// grantReadMintResponse decodes the janitor's own 201. It decodes
+// expires_at for the same reason the worker-bound mint does: the
+// enumeration credential's lifetime is returned data, and an
+// unverified one cannot be reasoned about when revocation fails.
 type grantReadMintResponse struct {
 	Token               Secret            `json:"token"`
+	ExpiresAt           Secret            `json:"expires_at"`
 	Permissions         map[string]string `json:"permissions"`
 	RepositorySelection string            `json:"repository_selection"`
 }
@@ -862,10 +867,13 @@ func (j *InstallationJanitor) enumerateRepositoryGrants(
 	defer cancel()
 	revokeErr := j.revokeInstallationToken(revokeCtx, token)
 	if revokeErr != nil {
-		// A token the janitor minted and could not revoke stays live for an
-		// hour. Faulting the registration would re-mint one every pass, so an
-		// unrevoked token stops the pass instead: the daemon must not keep
-		// issuing credentials it has just proven it cannot take back.
+		// A token the janitor minted and could not revoke outlives the pass.
+		// Its lifetime is bounded only when the mint's expiry check passed,
+		// and unknown when the response never got that far, which is why an
+		// unrevoked token is never merely waited out. Faulting the
+		// registration would re-mint one every pass, so an unrevoked token
+		// stops the pass instead: the daemon must not keep issuing
+		// credentials it has just proven it cannot take back.
 		revokeErr = fmt.Errorf("%w: %w", errJanitorUnsafe, revokeErr)
 	}
 	if mintErr != nil {
@@ -902,8 +910,9 @@ func (j *InstallationJanitor) mintGrantReadToken(
 	req.Header.Set("Content-Type", "application/json")
 	// Minting is not idempotent, so from here on an error that leaves the
 	// outcome unknown must not be retried: the token GitHub may have created
-	// is live for an hour and this daemon never learned its value, so it can
-	// never be revoked. Only a refusal proves nothing was created.
+	// is live for GitHub's declared lifetime and this daemon never learned
+	// its value, so it can never be revoked. Only a refusal proves nothing
+	// was created.
 	resp, err := j.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("mint grant-read token: %w: %w", errJanitorUnsafe, err)
@@ -936,6 +945,14 @@ func (j *InstallationJanitor) mintGrantReadToken(
 	if !maps.Equal(minted.Permissions, grantReadPermissionScopes) ||
 		minted.RepositorySelection != "selected" {
 		return minted.Token, fmt.Errorf("mint grant-read token: returned grant differs from request: %w", ErrGrantMismatch)
+	}
+	// Bound the expiry before the token is used for anything, after the
+	// scope comparison so an over-broad grant keeps its own error. The
+	// token still travels out with the error so the caller can revoke
+	// it: a credential this daemon holds and will not use is exactly the
+	// one that must be taken back.
+	if _, err := checkInstallationTokenExpiry(minted.ExpiresAt, j.now()); err != nil {
+		return minted.Token, fmt.Errorf("mint grant-read token: %w", err)
 	}
 	return minted.Token, nil
 }

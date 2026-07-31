@@ -49,7 +49,7 @@ func TestInstallationJanitorQuarantinesGrantDrift(t *testing.T) {
 			events = append(events, "mint")
 			w.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(w,
-				`{"token":"`+fixtureTokenValue+`","permissions":{"metadata":"read"},"repository_selection":"selected"}`)
+				grantReadMintBody)
 		case r.Method == http.MethodGet && r.URL.Path == "/installation/repositories":
 			events = append(events, "list")
 			_, _ = io.WriteString(w,
@@ -192,7 +192,7 @@ func TestInstallationJanitorRejectsUntrustedRepositoryPages(t *testing.T) {
 				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/access_tokens"):
 					w.WriteHeader(http.StatusCreated)
 					_, _ = io.WriteString(w,
-						`{"token":"`+fixtureTokenValue+`","permissions":{"metadata":"read"},"repository_selection":"selected"}`)
+						grantReadMintBody)
 				case r.Method == http.MethodGet && r.URL.Path == "/installation/repositories":
 					_, _ = io.WriteString(w, tc.body)
 				case r.Method == http.MethodDelete && r.URL.Path == "/installation/token":
@@ -247,15 +247,19 @@ func TestInstallationJanitorTokenFailuresNeverPublishCoverage(t *testing.T) {
 		{
 			name:       "broader returned permissions",
 			mintStatus: http.StatusCreated,
+			// Conformant everywhere except the grant, so this case
+			// reaches the scope comparison rather than stopping at an
+			// earlier gate.
 			mintBody: `{"token":"` + fixtureTokenValue +
-				`","permissions":{"metadata":"read","contents":"read"},"repository_selection":"selected"}`,
+				`","expires_at":"2026-07-16T13:00:00Z",` +
+				`"permissions":{"metadata":"read","contents":"read"},"repository_selection":"selected"}`,
 			revokeStatus: http.StatusNoContent,
 			wantRevoke:   1,
 		},
 		{
 			name:         "revoke failure",
 			mintStatus:   http.StatusCreated,
-			mintBody:     `{"token":"` + fixtureTokenValue + `","permissions":{"metadata":"read"},"repository_selection":"selected"}`,
+			mintBody:     grantReadMintBody,
 			revokeStatus: http.StatusInternalServerError,
 			wantRevoke:   1,
 		},
@@ -636,7 +640,7 @@ func TestPendingEnvelopeNeverAuthorizesMint(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(w,
-				`{"token":"`+fixtureTokenValue+`","permissions":{"metadata":"read"},"repository_selection":"selected"}`)
+				grantReadMintBody)
 		case r.Method == http.MethodGet && r.URL.Path == "/installation/repositories":
 			_, _ = io.WriteString(w,
 				`{"total_count":1,"repositories":[{"id":990011}]}`)

@@ -103,6 +103,11 @@ func onboardingMintBody(member string) string {
 		`"repository_selection":"selected","repositories":[{"id":990011,"name":"evidence-repo"}]}`
 }
 
+func grantReadBody(member string) string {
+	return `{"token":"` + fixtureTokenValue + `"` + jsonMember(member) + `,` +
+		`"permissions":{"metadata":"read"},"repository_selection":"selected"}`
+}
+
 // assertNoExpiryLeak asserts the rejection carries neither the token nor
 // the attacker-chosen expiry text: both are response fields a proxy
 // chooses, and the error is rendered beside audit output.
@@ -248,6 +253,41 @@ func TestMintKeepsGrantMismatchForAnOverLongGrant(t *testing.T) {
 	}
 }
 
+// TestInstallationJanitorKeepsGrantMismatchForAnOverLongGrant is the
+// same ordering guarantee on the grant-read mint.
+func TestInstallationJanitorKeepsGrantMismatchForAnOverLongGrant(t *testing.T) {
+	ks := publicJanitorKeystore(t)
+	recorder := &removalRecorder{}
+	revokes := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
+			_, _ = io.WriteString(w,
+				`[{"id":701,"app_id":501,"target_id":101,`+
+					`"repository_selection":"selected","account":{"login":"operator","id":101}}]`)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/access_tokens"):
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{"token":"`+fixtureTokenValue+`",`+overLongExpiry+`,`+
+				`"permissions":{"metadata":"read","contents":"read"},"repository_selection":"selected"}`)
+		case r.Method == http.MethodDelete && r.URL.Path == "/installation/token":
+			revokes++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	janitor := newJanitor(t, ks, srv, trustedPublicBinding(fixtureRepositoryID), recorder, 1)
+	_, err := janitor.RunCycle(context.Background())
+	if !errors.Is(err, publish.ErrGrantMismatch) {
+		t.Fatalf("err = %v, want ErrGrantMismatch", err)
+	}
+	if revokes != 1 || len(recorder.snapshot()) != 0 {
+		t.Errorf("revokes = %d, records = %d", revokes, len(recorder.snapshot()))
+	}
+}
+
 // newOnboardingSource wires the read-only onboarding token source against
 // server, with the janitor gate already reporting the pending
 // installation reconciled.
@@ -317,6 +357,55 @@ func TestOnboardingTokenSourceRejectsExpiryOutsideTheDeclaredBound(t *testing.T)
 			}
 			if len(rec.records) != 0 {
 				t.Errorf("rejected mints recorded %d audit rows, want 0", len(rec.records))
+			}
+		})
+	}
+}
+
+// TestInstallationJanitorRejectsGrantReadExpiryOutsideTheDeclaredBound
+// closes the janitor half of #413: the grant-read credential's expiry is
+// decoded and bounded before enumeration, the refused token is still
+// revoked, and the pass publishes no coverage and performs no removal.
+func TestInstallationJanitorRejectsGrantReadExpiryOutsideTheDeclaredBound(t *testing.T) {
+	ks := publicJanitorKeystore(t)
+	for _, tc := range rejectedExpiries {
+		t.Run(tc.name, func(t *testing.T) {
+			var lists, revokes, destructive int
+			recorder := &removalRecorder{}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
+					_, _ = io.WriteString(w,
+						`[{"id":701,"app_id":501,"target_id":101,`+
+							`"repository_selection":"selected","account":{"login":"operator","id":101}}]`)
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/access_tokens"):
+					w.WriteHeader(http.StatusCreated)
+					_, _ = io.WriteString(w, grantReadBody(tc.member))
+				case r.Method == http.MethodGet && r.URL.Path == "/installation/repositories":
+					lists++
+					_, _ = io.WriteString(w, `{"total_count":1,"repositories":[{"id":990011}]}`)
+				case r.Method == http.MethodDelete && r.URL.Path == "/installation/token":
+					revokes++
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					destructive++
+					w.WriteHeader(http.StatusNoContent)
+				}
+			}))
+			defer srv.Close()
+
+			janitor := newJanitor(t, ks, srv, trustedPublicBinding(fixtureRepositoryID), recorder, 1)
+			_, err := janitor.RunCycle(context.Background())
+			assertNoExpiryLeak(t, err, tc)
+			if lists != 0 {
+				t.Errorf("enumeration ran %d times on a rejected token, want 0", lists)
+			}
+			if revokes != 1 {
+				t.Errorf("revokes = %d, want the rejected token revoked once", revokes)
+			}
+			if destructive != 0 || len(recorder.snapshot()) != 0 || janitor.ActiveFor(501) {
+				t.Errorf("destructive = %d, records = %d, active = %t",
+					destructive, len(recorder.snapshot()), janitor.ActiveFor(501))
 			}
 		})
 	}
