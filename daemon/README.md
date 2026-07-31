@@ -71,11 +71,38 @@ single-directory layout and the canonical empty installation-authority
 document. The default is `~/.freeside`; `-config-dir` selects another root.
 The first pass returns GitHub's manifest form for the operator's public
 personal App. After GitHub returns the one-time code, repeat setup with
-`-registration-code <code>`; Freeside verifies GitHub's canonical App,
+`-registration-code-stdin` and supply the code only on standard input. For an
+interactive shell, capture it without echo and pipe it through the shell's
+built-in `printf`:
+
+```sh
+(
+  set +x
+  unset FREESIDE_MANIFEST_CODE
+  read -r -s FREESIDE_MANIFEST_CODE
+  printf '\n'
+  printf '%s\n' "$FREESIDE_MANIFEST_CODE" | freesided setup \
+    -operator <login> -operator-id <id> -registration-code-stdin
+  unset FREESIDE_MANIFEST_CODE
+)
+```
+
+Non-interactive automation can redirect an owner-only secret file or
+secret-manager descriptor instead:
+
+```sh
+freesided setup -operator <login> -operator-id <id> \
+  -registration-code-stdin < /run/secrets/github-app-manifest-code
+```
+
+Neither form places the code in the `freesided` argument vector, environment,
+command history, or shell trace. Freeside verifies GitHub's canonical App,
 visibility, permissions, and owner identity, stores the private key directly
-in the protected keystore, and creates the registration's fail-closed
-authority entry. A replay validates existing authority without overwriting it,
-and existing credentials without matching authority fail closed rather than
+in the protected keystore, and creates the registration's fail-closed authority
+entry. If setup is interrupted after conversion, rerun it without a code or
+registration-code flag; the pending-authority marker resumes only that exact
+conversion. A replay validates existing authority without overwriting it, and
+existing credentials without matching authority fail closed rather than
 silently authoring an empty destructive installation set.
 
 Every state directory is owner-only, including the corrected

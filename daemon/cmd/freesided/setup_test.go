@@ -10,10 +10,14 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -32,6 +36,7 @@ func TestSetupCommandCreatesCorrectedFakeDriverDirectory(t *testing.T) {
 			"-operator", "example",
 			"-operator-id", "42",
 		},
+		strings.NewReader(""),
 		&stdout,
 		&stderr,
 	); err != nil {
@@ -100,12 +105,13 @@ func TestSetupCommandRegistersAppAndInitializesAuthority(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "freeside")
 	authorityPath := filepath.Join(root, "state", "installation-authority.json")
 	savedAuthorityPath := authorityPath + ".saved"
+	const manifestCode = "FREESIDE_TEST_MANIFEST_CODE"
 	var conversionCalls atomic.Int32
 	var interruptAuthority atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost &&
-			r.URL.Path == "/app-manifests/manifest-code/conversions":
+			r.URL.Path == "/app-manifests/"+manifestCode+"/conversions":
 			if conversionCalls.Add(1) != 1 {
 				http.Error(w, "manifest code already consumed", http.StatusGone)
 				return
@@ -150,7 +156,7 @@ func TestSetupCommandRegistersAppAndInitializesAuthority(t *testing.T) {
 	}
 	var firstOut, firstErr bytes.Buffer
 	if err := runSetupCommand(
-		context.Background(), args, &firstOut, &firstErr,
+		context.Background(), args, strings.NewReader(""), &firstOut, &firstErr,
 		server.Client(), server.URL, "https://github.example",
 	); err != nil {
 		t.Fatalf("registration form: %v", err)
@@ -165,20 +171,24 @@ func TestSetupCommandRegistersAppAndInitializesAuthority(t *testing.T) {
 		t.Fatalf("registration form = %+v", first)
 	}
 
-	completionArgs := append(args, "-registration-code", "manifest-code")
+	completionArgs := append(args, "-registration-code-stdin")
 	interruptAuthority.Store(true)
 	var interruptedOut, interruptedErr bytes.Buffer
-	if err := runSetupCommand(
+	interruptedRunErr := runSetupCommand(
 		context.Background(),
 		completionArgs,
+		strings.NewReader(manifestCode+"\n"),
 		&interruptedOut,
 		&interruptedErr,
 		server.Client(),
 		server.URL,
 		"https://github.example",
-	); err == nil {
+	)
+	if interruptedRunErr == nil {
 		t.Fatal("registration completion survived blocked authority path")
 	}
+	assertSecretAbsent(t, manifestCode, interruptedOut.String(), interruptedErr.String(), interruptedRunErr.Error())
+	assertSecretAbsentFromRegularFiles(t, root, manifestCode)
 	keystore, err := publish.NewKeystore(first.CredentialsDir, first.StateDir)
 	if err != nil {
 		t.Fatal(err)
@@ -200,7 +210,8 @@ func TestSetupCommandRegistersAppAndInitializesAuthority(t *testing.T) {
 	var secondOut, secondErr bytes.Buffer
 	if err := runSetupCommand(
 		context.Background(),
-		completionArgs,
+		args,
+		strings.NewReader(""),
 		&secondOut,
 		&secondErr,
 		server.Client(),
@@ -212,6 +223,8 @@ func TestSetupCommandRegistersAppAndInitializesAuthority(t *testing.T) {
 	if conversionCalls.Load() != 1 {
 		t.Fatalf("manifest conversion calls = %d, want one", conversionCalls.Load())
 	}
+	assertSecretAbsentFromRegularFiles(t, root, manifestCode)
+	assertSecretAbsent(t, manifestCode, secondOut.String(), secondErr.String())
 	if apps, listErr := keystore.ListApps(); listErr != nil ||
 		len(apps) != 1 || apps[0].AuthorityPending {
 		t.Fatalf("credentials after recovery = (%+v, %v), want finalized", apps, listErr)
@@ -285,6 +298,7 @@ func TestSetupCommandDoesNotCreateAuthorityForExistingCredentials(t *testing.T) 
 			"-operator", "example",
 			"-operator-id", "42",
 		},
+		strings.NewReader(""),
 		&stdout,
 		&stderr,
 		&http.Client{},
@@ -309,8 +323,9 @@ func TestSetupCommandDoesNotCreateAuthorityForExistingCredentials(t *testing.T) 
 			"-config-dir", root,
 			"-operator", "example",
 			"-operator-id", "42",
-			"-registration-code", "unrelated-code",
+			"-registration-code-stdin",
 		},
+		strings.NewReader("FREESIDE_UNRELATED_MANIFEST_CODE\n"),
 		&stdout,
 		&stderr,
 		&http.Client{},
@@ -373,6 +388,7 @@ func TestSetupCommandSelectsOperatorRegistrationFromMultipleApps(t *testing.T) {
 			"-operator", "example",
 			"-operator-id", "42",
 		},
+		strings.NewReader(""),
 		&stdout,
 		&stderr,
 		&http.Client{},
@@ -400,7 +416,7 @@ func TestSetupCommandNeverOverwritesMalformedAuthority(t *testing.T) {
 	}
 	var firstOut, firstErr bytes.Buffer
 	if err := runSetupCommand(
-		context.Background(), args, &firstOut, &firstErr,
+		context.Background(), args, strings.NewReader(""), &firstOut, &firstErr,
 		&http.Client{}, "https://api.github.example", "https://github.example",
 	); err != nil {
 		t.Fatal(err)
@@ -415,7 +431,7 @@ func TestSetupCommandNeverOverwritesMalformedAuthority(t *testing.T) {
 	}
 	var replayOut, replayErr bytes.Buffer
 	if err := runSetupCommand(
-		context.Background(), args, &replayOut, &replayErr,
+		context.Background(), args, strings.NewReader(""), &replayOut, &replayErr,
 		&http.Client{}, "https://api.github.example", "https://github.example",
 	); err == nil {
 		t.Fatal("setup accepted malformed existing authority")
@@ -426,6 +442,228 @@ func TestSetupCommandNeverOverwritesMalformedAuthority(t *testing.T) {
 	}
 	if string(payload) != malformed {
 		t.Fatalf("setup replaced malformed authority with %q", payload)
+	}
+}
+
+func TestSetupCommandKeepsRegistrationCodeOutOfProcessArgumentsAndOutput(t *testing.T) {
+	if os.Getenv("FREESIDE_SETUP_PROCESS_HELPER") == "1" {
+		err := runSetupCommand(
+			context.Background(),
+			setupProcessHelperArgs(t),
+			os.Stdin,
+			os.Stdout,
+			os.Stderr,
+			&http.Client{},
+			os.Getenv("FREESIDE_SETUP_PROCESS_API"),
+			"https://github.example",
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+
+	keyPEM := pem.EncodeToMemory(&pem.Block{
+		Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(setupTestKey(t)),
+	})
+	const manifestCode = "FREESIDE_PROCESS_LIST_MANIFEST_CODE"
+	var conversionCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			r.URL.Path == "/app-manifests/"+manifestCode+"/conversions":
+			conversionCalls.Add(1)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": 91, "name": "Freeside Example", "slug": "freeside-example",
+				"client_id": "Iv1.example",
+				"permissions": map[string]string{
+					"actions": "read", "administration": "read", "contents": "write",
+					"environments": "read", "pull_requests": "write", "metadata": "read",
+				},
+				"pem":   string(keyPEM),
+				"owner": map[string]any{"login": "example", "id": 42, "type": "User"},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/apps/freeside-example":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 91})
+		default:
+			http.Error(w, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	configDir := filepath.Join(t.TempDir(), "freeside")
+	cmd := exec.Command( //nolint:gosec // G204: the test reexecutes its own binary with fixed setup flags and a test temp path.
+		os.Args[0],
+		"-test.run=^TestSetupCommandKeepsRegistrationCodeOutOfProcessArgumentsAndOutput$",
+		"--",
+		"setup",
+		"-config-dir", configDir,
+		"-operator", "example",
+		"-operator-id", "42",
+		"-registration-code-stdin",
+	)
+	cmd.Env = append(os.Environ(),
+		"FREESIDE_SETUP_PROCESS_HELPER=1",
+		"FREESIDE_SETUP_PROCESS_API="+server.URL,
+	)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(stdin, manifestCode+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	commandLine, psErr := exec.Command( //nolint:gosec // G204: ps is fixed and the PID comes from the child process started above.
+		"ps", "-ww", "-o", "command=", "-p", fmt.Sprint(cmd.Process.Pid),
+	).CombinedOutput()
+	if psErr != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("inspect setup process arguments: %v: %s", psErr, commandLine)
+	}
+	if err := stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("setup process: %v\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	}
+	if conversionCalls.Load() != 1 {
+		t.Fatalf("manifest conversion calls = %d, want one", conversionCalls.Load())
+	}
+	assertSecretAbsent(t, manifestCode, string(commandLine), stdout.String(), stderr.String())
+	assertSecretAbsentFromRegularFiles(t, configDir, manifestCode)
+}
+
+func TestSetupCommandRejectsArgvCodesWithoutRenderingThem(t *testing.T) {
+	const manifestCode = "FREESIDE_LEGACY_ARGV_MANIFEST_CODE"
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "separate-legacy-flag", args: []string{"-registration-code", manifestCode}},
+		{name: "joined-legacy-flag", args: []string{"-registration-code=" + manifestCode}},
+		{name: "joined-stdin-flag", args: []string{"-registration-code-stdin=" + manifestCode}},
+		{name: "joined-double-dash-stdin-flag", args: []string{"--registration-code-stdin=" + manifestCode}},
+		{name: "positional", args: []string{
+			"-operator", "example", "-operator-id", "42", manifestCode,
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			err := runSetupCommand(
+				context.Background(),
+				tt.args,
+				strings.NewReader(""),
+				&stdout,
+				&stderr,
+				&http.Client{},
+				"https://api.github.example",
+				"https://github.example",
+			)
+			if err == nil {
+				t.Fatal("setup accepted a code from process arguments")
+			}
+			assertSecretAbsent(t, manifestCode, stdout.String(), stderr.String(), err.Error())
+		})
+	}
+}
+
+func TestReadRegistrationCodeValidatesBoundedSingleLine(t *testing.T) {
+	tests := []struct {
+		name    string
+		stdin   io.Reader
+		want    string
+		wantErr bool
+	}{
+		{name: "no-newline", stdin: strings.NewReader("code"), want: "code"},
+		{name: "line-feed", stdin: strings.NewReader("code\n"), want: "code"},
+		{name: "crlf", stdin: strings.NewReader("code\r\n"), want: "code"},
+		{name: "empty", stdin: strings.NewReader(""), wantErr: true},
+		{name: "multiple-lines", stdin: strings.NewReader("code\nother"), wantErr: true},
+		{name: "oversized", stdin: strings.NewReader(strings.Repeat("x", maxRegistrationCodeBytes+1)), wantErr: true},
+		{name: "unavailable", stdin: nil, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := readRegistrationCode(tt.stdin)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("readRegistrationCode error = %v, wantErr %t", err, tt.wantErr)
+			}
+			if got != publish.Secret(tt.want) {
+				t.Fatalf("readRegistrationCode = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReadRegistrationCodeRedactsReaderErrors(t *testing.T) {
+	const manifestCode = "FREESIDE_READER_ERROR_MANIFEST_CODE"
+	_, err := readRegistrationCode(errorReader{err: errors.New(manifestCode)})
+	if err == nil {
+		t.Fatal("readRegistrationCode accepted a failing reader")
+	}
+	assertSecretAbsent(t, manifestCode, err.Error())
+}
+
+type errorReader struct {
+	err error
+}
+
+func (r errorReader) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+func setupProcessHelperArgs(t *testing.T) []string {
+	t.Helper()
+	for i, arg := range os.Args {
+		if arg != "--" {
+			continue
+		}
+		if i+1 >= len(os.Args) || os.Args[i+1] != "setup" {
+			t.Fatal("setup process helper received malformed arguments")
+		}
+		return os.Args[i+2:]
+	}
+	t.Fatal("setup process helper received no command arguments")
+	return nil
+}
+
+func assertSecretAbsent(t *testing.T, secret string, values ...string) {
+	t.Helper()
+	for _, value := range values {
+		if strings.Contains(value, secret) {
+			t.Fatalf("secret appeared in output: %q", value)
+		}
+	}
+}
+
+func assertSecretAbsentFromRegularFiles(t *testing.T, root, secret string) {
+	t.Helper()
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type().IsRegular() {
+			payload, err := os.ReadFile(path) //nolint:gosec // G304: WalkDir constrains paths to the test-owned config root.
+			if err != nil {
+				return err
+			}
+			if bytes.Contains(payload, []byte(secret)) {
+				return fmt.Errorf("secret persisted in %s", path)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
