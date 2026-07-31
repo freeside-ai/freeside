@@ -1,0 +1,15 @@
+{
+  "config_dir": "/home/operator/.freeside",
+  "db_path": "/home/operator/.freeside/state/freeside.db",
+  "state_dir": "/home/operator/.freeside/state",
+  "credentials_dir": "/home/operator/.freeside/credentials",
+  "fake_driver_dir": "/home/operator/.freeside/state/freeside.db.fake-stage-driver",
+  "authority_path": "/home/operator/.freeside/state/installation-authority.json",
+  "status": "registration_required",
+  "manifest_action": "https://github.com/settings/apps/new",
+  "manifest_fields": {
+    "manifest": [
+      "{\"name\":\"freeside-operator\"}"
+    ]
+  }
+}

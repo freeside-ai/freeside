@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
@@ -64,13 +65,30 @@ type Request struct {
 	BuildProxy        string
 }
 
+// NormalizeRequest applies the builder's stable defaults so callers can bind
+// approval and provenance to the exact request the builder will execute.
+func NormalizeRequest(request Request) Request {
+	if request.ImageName == "" {
+		replacer := strings.NewReplacer("/", "-", "_", "-", ".", "-")
+		request.ImageName = "freeside-project-" + replacer.Replace(strings.ToLower(request.Repository))
+	}
+	if request.RefTag == "" {
+		request.RefTag = "v1"
+	}
+	return request
+}
+
 // Options configures the concrete Apple-container builder.
 type Options struct {
 	GitPath       string
 	ContainerPath string
 	TempDir       string
 	Log           io.Writer
-	Record        func(context.Context, domain.ProjectImage) error
+	// Tokens authenticates private-repository identity and clone requests.
+	// It must return the exact read-only onboarding permission set; nil keeps
+	// the standalone public-repository builder anonymous.
+	Tokens publish.TokenSource
+	Record func(context.Context, domain.ProjectImage) error
 	// LookupRecordedRef reports whether a published image reference already
 	// backs a durably recorded ProjectImage row. Failure-path residue
 	// removal consults it before deleting, so a rebuild that reproduces an
@@ -93,7 +111,7 @@ type Builder struct {
 }
 
 type source interface {
-	Fetch(context.Context, string, string, string) error
+	Fetch(context.Context, string, int64, string, string) error
 	Copy(context.Context, string, string, string) error
 }
 
@@ -176,8 +194,8 @@ func New(opts Options) (*Builder, error) {
 		return nil, fmt.Errorf("project image recorder is required: %w", ErrInvalidRequest)
 	}
 	return &Builder{
-		source:            gitSource{gitPath: git, runner: runner},
-		resolver:          defaultRepositoryResolver(),
+		source:            gitSource{gitPath: git, runner: runner, tokens: opts.Tokens},
+		resolver:          defaultRepositoryResolver(opts.Tokens),
 		backend:           appleBackend{containerPath: container, runner: runner},
 		record:            opts.Record,
 		lookupRecordedRef: opts.LookupRecordedRef,
@@ -214,7 +232,10 @@ func (b *Builder) Build(
 	defer os.RemoveAll(scratch) //nolint:errcheck // private scratch, best-effort after all handles close
 
 	repositoryDir := filepath.Join(scratch, "repository.git")
-	if err := b.source.Fetch(ctx, normalized.Repository, normalized.CommitSHA, repositoryDir); err != nil {
+	if err := b.source.Fetch(
+		ctx, normalized.Repository, normalized.RepositoryID,
+		normalized.CommitSHA, repositoryDir,
+	); err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("materialize %s at %s: %w",
 			normalized.Repository, normalized.CommitSHA, err)
 	}
@@ -359,9 +380,10 @@ func (b *Builder) Build(
 		}
 	}()
 	ref := published.Ref
-	if err := ref.Validate(); err != nil || imageDigest(ref) != localDigest {
+	if err := ValidatePublishedRef(normalized, ref); err != nil ||
+		imageDigest(ref) != localDigest {
 		return domain.ProjectImage{}, fmt.Errorf(
-			"published reference %q does not preserve built digest %s: %w",
+			"published reference %q does not match the approved destination and built digest %s: %w",
 			ref, localDigest, ErrProofFailed)
 	}
 	if err := b.backend.CheckAllowlist(ctx, string(ref)); err != nil {
@@ -383,6 +405,32 @@ func (b *Builder) Build(
 	published.cleanup = nil
 	published.discard = nil
 	return result, nil
+}
+
+// ValidatePublishedRef proves that ref names the exact registry and image
+// destination selected by request. A digest-pinned reference under a different
+// destination is a different artifact, even when every build input matches.
+func ValidatePublishedRef(request Request, ref domain.ImageRef) error {
+	normalized, _, _, err := validateRequest(request)
+	if err != nil {
+		return err
+	}
+	if err := ref.Validate(); err != nil {
+		return fmt.Errorf("published reference %q: %w", ref, ErrProofFailed)
+	}
+	registry := strings.TrimSuffix(normalized.Registry, "/")
+	if normalized.LocalRegistryPort != 0 {
+		registry = "127.0.0.1:" + strconv.Itoa(normalized.LocalRegistryPort)
+	}
+	repository, _, ok := strings.Cut(string(ref), "@")
+	expected := registry + "/" + normalized.ImageName
+	if !ok || repository != expected {
+		return fmt.Errorf(
+			"published reference %q targets %q, want %q: %w",
+			ref, repository, expected, ErrProofFailed,
+		)
+	}
+	return nil
 }
 
 func (b *Builder) proveOffline(
@@ -448,6 +496,7 @@ func (b *Builder) proveOffline(
 }
 
 func validateRequest(request Request) (Request, verify.Recipe, domain.Digest, error) {
+	request = NormalizeRequest(request)
 	if !repositoryPattern.MatchString(request.Repository) || strings.Contains(request.Repository, "..") {
 		return Request{}, verify.Recipe{}, "", fmt.Errorf("repository %q: %w", request.Repository, ErrInvalidRequest)
 	}
@@ -494,15 +543,8 @@ func validateRequest(request Request) (Request, verify.Recipe, domain.Digest, er
 		return Request{}, verify.Recipe{}, "", fmt.Errorf("local registry port %d: %w",
 			request.LocalRegistryPort, ErrInvalidRequest)
 	}
-	if request.ImageName == "" {
-		replacer := strings.NewReplacer("/", "-", "_", "-", ".", "-")
-		request.ImageName = "freeside-project-" + replacer.Replace(strings.ToLower(request.Repository))
-	}
 	if !imageNamePattern.MatchString(request.ImageName) {
 		return Request{}, verify.Recipe{}, "", fmt.Errorf("image name %q: %w", request.ImageName, ErrInvalidRequest)
-	}
-	if request.RefTag == "" {
-		request.RefTag = "v1"
 	}
 	if !refTagPattern.MatchString(request.RefTag) {
 		return Request{}, verify.Recipe{}, "", fmt.Errorf("reference tag %q: %w", request.RefTag, ErrInvalidRequest)

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 )
 
 const maxRepositoryIdentityBytes = 1 << 20
@@ -22,6 +24,7 @@ type repositoryResolver interface {
 type githubRepositoryResolver struct {
 	client   *http.Client
 	endpoint string
+	tokens   publish.TokenSource
 }
 
 func (r githubRepositoryResolver) Verify(
@@ -37,7 +40,18 @@ func (r githubRepositoryResolver) Verify(
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	request.Header.Set("User-Agent", "freeside-project-image-builder")
-	response, err := r.client.Do(request)
+	if r.tokens != nil {
+		token, tokenErr := repositoryToken(ctx, r.tokens, repository, repositoryID)
+		if tokenErr != nil {
+			return tokenErr
+		}
+		request.Header.Set("Authorization", "Bearer "+token.Token.Reveal())
+	}
+	client := *r.client
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return fmt.Errorf("resolve canonical repository identity: %w", err)
 	}
@@ -72,9 +86,10 @@ type trustedRepositoryResolver struct{}
 
 func (trustedRepositoryResolver) Verify(context.Context, string, int64) error { return nil }
 
-func defaultRepositoryResolver() repositoryResolver {
+func defaultRepositoryResolver(tokens publish.TokenSource) repositoryResolver {
 	return githubRepositoryResolver{
 		client:   &http.Client{Timeout: 15 * time.Second},
 		endpoint: "https://api.github.com",
+		tokens:   tokens,
 	}
 }

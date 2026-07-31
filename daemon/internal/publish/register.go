@@ -210,6 +210,26 @@ func (r *Registrar) ExchangeCode(
 	code string,
 	target RegistrationTarget,
 ) (AppCredentials, error) {
+	return r.exchangeCode(ctx, code, target, r.keystore.SaveApp)
+}
+
+// ExchangeCodePendingAuthority persists the converted credential and setup's
+// recovery marker in one keystore swap. Runtime consumers fail closed until
+// setup commits the matching authority and finalizes the marker.
+func (r *Registrar) ExchangeCodePendingAuthority(
+	ctx context.Context,
+	code string,
+	target RegistrationTarget,
+) (AppCredentials, error) {
+	return r.exchangeCode(ctx, code, target, r.keystore.SaveAppPendingAuthority)
+}
+
+func (r *Registrar) exchangeCode(
+	ctx context.Context,
+	code string,
+	target RegistrationTarget,
+	save func(AppCredentials) error,
+) (AppCredentials, error) {
 	if code == "" {
 		return AppCredentials{}, ErrRegistrationDenied
 	}
@@ -308,7 +328,7 @@ func (r *Registrar) ExchangeCode(
 	if err != nil {
 		return AppCredentials{}, fmt.Errorf("register: %w", err)
 	}
-	if err := r.keystore.SaveApp(creds); err != nil {
+	if err := save(creds); err != nil {
 		return AppCredentials{}, fmt.Errorf("register: %w", err)
 	}
 	return creds, nil

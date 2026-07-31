@@ -1,0 +1,17 @@
+{
+  "healthy": false,
+  "operating_mode": "unattended",
+  "isolation_class": "fresh_vm_read_only_volume_handoff",
+  "findings": [
+    {
+      "code": "conformance",
+      "healthy": true,
+      "detail": "generation 7 passed"
+    },
+    {
+      "code": "artifact_closure",
+      "healthy": false,
+      "detail": "unhealthy"
+    }
+  ]
+}

@@ -18,8 +18,10 @@ ON CONFLICT (image_ref) DO NOTHING`
 	getProjectImageSQL = `
 SELECT id, repository, repository_id, commit_sha, recipe_digest, base_image_ref, image_ref, body
 FROM project_images WHERE id = ?`
-	getProjectImageBodySQL = `SELECT body FROM project_images WHERE image_ref = ?`
-	listProjectImagesSQL   = `
+	getProjectImageBodySQL     = `SELECT body FROM project_images WHERE image_ref = ?`
+	projectImageRefRecordedSQL = `SELECT EXISTS(
+SELECT 1 FROM project_images WHERE image_ref = ?)`
+	listProjectImagesSQL = `
 SELECT id, repository, repository_id, commit_sha, recipe_digest, base_image_ref, image_ref, body
 FROM project_images WHERE repository_id = ? ORDER BY rowid`
 )
@@ -39,6 +41,23 @@ func (tx *InternalTx) RecordProjectImage(ctx context.Context, image domain.Proje
 		return fmt.Errorf("record project image %q: %w", image.ID, err)
 	}
 	return nil
+}
+
+// ProjectImageRefRecorded reports whether any repository has durably claimed
+// an image reference. Failure cleanup uses this global ownership check before
+// deleting content-addressed image state shared across repository builds.
+func (tx *ReadTx) ProjectImageRefRecorded(
+	ctx context.Context, imageRef domain.ImageRef,
+) (bool, error) {
+	if imageRef == "" {
+		return false, fmt.Errorf("lookup project image ref: empty image_ref")
+	}
+	var recorded bool
+	if err := tx.tx.QueryRowContext(ctx, projectImageRefRecordedSQL, imageRef).
+		Scan(&recorded); err != nil {
+		return false, fmt.Errorf("lookup project image ref %q: %w", imageRef, err)
+	}
+	return recorded, nil
 }
 
 // GetProjectImage reconstructs one immutable project-image result.

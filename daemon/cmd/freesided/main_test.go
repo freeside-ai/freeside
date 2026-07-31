@@ -79,6 +79,48 @@ func TestHoldRetryableClaudeRecovery(t *testing.T) {
 	}
 }
 
+func TestScheduledDoctorPassRefreshesConformanceBeforeReporting(t *testing.T) {
+	t.Parallel()
+	t.Run("reports failures", func(t *testing.T) {
+		var calls []string
+		conformanceErr := errors.New("conformance failed")
+		doctorErr := errors.New("doctor failed")
+		err := runScheduledDoctorPass(
+			context.Background(),
+			func(context.Context) error {
+				calls = append(calls, "conformance")
+				return conformanceErr
+			},
+			func(context.Context) error {
+				calls = append(calls, "doctor")
+				return doctorErr
+			},
+		)
+		if !slices.Equal(calls, []string{"conformance", "doctor"}) {
+			t.Fatalf("calls = %v, want conformance then doctor", calls)
+		}
+		if !errors.Is(err, conformanceErr) || !errors.Is(err, doctorErr) {
+			t.Fatalf("error = %v, want both conformance and doctor failures", err)
+		}
+	})
+	t.Run("cancellation is shutdown", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		err := runScheduledDoctorPass(
+			ctx,
+			func(context.Context) error {
+				cancel()
+				return context.Canceled
+			},
+			func(context.Context) error {
+				return context.Canceled
+			},
+		)
+		if err != nil {
+			t.Fatalf("canceled pass = %v, want graceful shutdown", err)
+		}
+	})
+}
+
 func TestStoreConformanceRecorderPersistsConfigurationBoundPass(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
@@ -439,6 +481,97 @@ func TestConfigStoreOptions(t *testing.T) {
 	if _, err := (config{BackupEncryptionWaiverRepositoryID: &repositoryID}).storeOptions(); !errors.Is(err, domain.ErrBackupEncryptionWaiverUnsupported) {
 		t.Fatalf("storeOptions with retired waiver = %v, want %v",
 			err, domain.ErrBackupEncryptionWaiverUnsupported)
+	}
+}
+
+func TestConfigStoreOptionsCarryDoctorRecipePolicy(t *testing.T) {
+	ctx := context.Background()
+	recipe := domain.Digest("sha256:" + strings.Repeat("a", 64))
+	cfg := config{ApprovedRecipes: map[domain.Digest]bool{recipe: true}}
+	options, err := cfg.storeOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !options.ApprovedRecipes[recipe] {
+		t.Fatal("production store options dropped the approved recipe")
+	}
+	delete(options.ApprovedRecipes, recipe)
+	if !cfg.ApprovedRecipes[recipe] {
+		t.Fatal("store options retained the caller's mutable recipe map")
+	}
+	options, err = cfg.storeOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactBody := "approved verifier artifact"
+	artifactDigest := (domain.ClaimText{Content: artifactBody}).ComputeDigest()
+	artifact, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: "artifact-doctor-policy", Type: "verify_log",
+		Digest: artifactDigest,
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerVerifier, ProducerInvocationID: "invocation-doctor-policy",
+			HeadBinding: domain.HeadBound, SourceHeadSHA: strings.Repeat("c", 40),
+			VerificationRecipeDigest: &recipe, SensitivityClass: domain.SensitivityNormal,
+		},
+	}, options.ApprovedRecipes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	blobs, err := signet.NewBlobStore(path + ".blobs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blobs.Put(artifactDigest, strings.NewReader(artifactBody)); err != nil {
+		t.Fatal(err)
+	}
+	backupFiles, err := store.NewDefaultLocalBackupFiles(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthSource, err := backupFiles.NewCheckpointHealthSource(
+		blobs, options.ApprovedRecipes, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.BackupHealthSource = healthSource
+	st, err := store.Open(ctx, path, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutArtifact(ctx, artifact)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	producer, err := backupFiles.NewProducer(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.Maintain(ctx); err != nil {
+		t.Fatalf("produce checkpoint under approved recipe policy: %v", err)
+	}
+	if _, err := st.BackupHealth(ctx); err != nil {
+		t.Fatalf("inspect checkpoint under approved recipe policy: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopenOptions, err := cfg.storeOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(ctx, path, reopenOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close() //nolint:errcheck // Test cleanup cannot affect the assertion.
+	if err := reopened.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetArtifact(ctx, artifact.ID)
+		return err
+	}); err != nil {
+		t.Fatalf("reconstruct approved persisted artifact: %v", err)
 	}
 }
 
@@ -814,8 +947,9 @@ func (failingInputReadCloser) Close() error {
 }
 
 type stubJanitorRunner struct {
-	active chan struct{}
-	runErr error
+	active         chan struct{}
+	runErr         error
+	stableCoverage int
 }
 
 func (j *stubJanitorRunner) Run(ctx context.Context, _ time.Duration) error {
@@ -836,6 +970,11 @@ func (j *stubJanitorRunner) ActiveFor(int64) bool {
 	}
 }
 
+func (j *stubJanitorRunner) WithStableCoverage(fn func() error) error {
+	j.stableCoverage++
+	return fn()
+}
+
 func TestJanitorSessionPublishesCoverageAndStops(t *testing.T) {
 	janitor := &stubJanitorRunner{active: make(chan struct{})}
 	session, err := startJanitorSession(
@@ -846,6 +985,12 @@ func TestJanitorSessionPublishesCoverageAndStops(t *testing.T) {
 	}
 	if !janitor.ActiveFor(4385298) {
 		t.Fatal("startJanitorSession returned before coverage was active")
+	}
+	if err := session.WithStableCoverage(func() error { return nil }); err != nil {
+		t.Fatalf("WithStableCoverage: %v", err)
+	}
+	if janitor.stableCoverage != 1 {
+		t.Fatalf("stable coverage calls = %d, want 1", janitor.stableCoverage)
 	}
 	if err := session.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)

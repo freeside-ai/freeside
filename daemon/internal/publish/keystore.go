@@ -32,9 +32,10 @@ import (
 // the work unit's decision note).
 
 const (
-	appDirName   = "github-app"
-	keyFileName  = "app.pem"
-	metaFileName = "app.json"
+	appDirName               = "github-app"
+	keyFileName              = "app.pem"
+	metaFileName             = "app.json"
+	authorityPendingFileName = "authority.pending"
 
 	// quarantineDirSuffix names the sibling directory holding records the
 	// operator has withdrawn from this host. It is deliberately not one of
@@ -123,10 +124,23 @@ func (k *Keystore) SaveApp(creds AppCredentials) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
-	return k.saveAppLocked(creds, false)
+	return k.saveAppLocked(creds, false, false)
 }
 
-func (k *Keystore) saveAppLocked(creds AppCredentials, allowLegacy bool) error {
+// SaveAppPendingAuthority atomically binds the converted credentials to a
+// recovery marker. Ordinary keystore consumers refuse the record until setup
+// commits the matching authority and removes the marker.
+func (k *Keystore) SaveAppPendingAuthority(creds AppCredentials) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
+	return k.saveAppLocked(creds, false, true)
+}
+
+func (k *Keystore) saveAppLocked(
+	creds AppCredentials,
+	allowLegacy, authorityPending bool,
+) error {
 	if creds.Key == nil {
 		return errors.New("keystore: refusing to save credentials without a private key")
 	}
@@ -192,13 +206,13 @@ func (k *Keystore) saveAppLocked(creds AppCredentials, allowLegacy bool) error {
 		return err
 	}
 
-	// Replacement is a recoverable journaled swap: both files land in a
-	// fresh staging directory (each write fsynced), the old directory is
-	// renamed aside, and the staged directory is activated. An activation
-	// failure rolls the old directory back immediately; a crash between
-	// the two renames is recovered by LoadApp or the next SaveApp before
-	// any caller observes the store. The mutex serializes loads with that
-	// short rename window in this daemon process.
+	// Replacement is a recoverable journaled swap: the credential files and
+	// optional recovery marker land in a fresh staging directory (each write
+	// fsynced), the old directory is renamed aside, and the staged directory
+	// is activated. An activation failure rolls the old directory back
+	// immediately; a crash between the two renames is recovered by LoadApp
+	// or the next SaveApp before any caller observes the store. The mutex
+	// serializes loads with that short rename window in this daemon process.
 	staging, old := appDir+".staging", appDir+".old"
 	for _, leftover := range []string{staging, old} {
 		if _, err := removeSwapLeftover(leftover); err != nil {
@@ -210,6 +224,17 @@ func (k *Keystore) saveAppLocked(creds AppCredentials, allowLegacy bool) error {
 	}
 	if err := syncDir(k.dir); err != nil {
 		return fmt.Errorf("keystore: sync staging entry: %w", err)
+	}
+
+	// The recovery marker lands first. A crash before it leaves an empty
+	// incomplete stage; a crash after it can never leave complete credentials
+	// that recovery mistakes for an ordinary finalized SaveApp.
+	if authorityPending {
+		if err := writeFileExclSync(
+			filepath.Join(staging, authorityPendingFileName), nil,
+		); err != nil {
+			return fmt.Errorf("keystore: write pending authority marker: %w", err)
+		}
 	}
 
 	keyPEM := pem.EncodeToMemory(&pem.Block{
@@ -252,7 +277,6 @@ func (k *Keystore) saveAppLocked(creds AppCredentials, allowLegacy bool) error {
 	if err := writeFileExclSync(filepath.Join(staging, metaFileName), meta); err != nil {
 		return fmt.Errorf("keystore: write metadata: %w", err)
 	}
-
 	hadOld := false
 	if _, err := os.Lstat(appDir); err == nil {
 		if err := os.Rename(appDir, old); err != nil {
@@ -348,6 +372,11 @@ func (k *Keystore) LoadApp(ownerID int64) (AppCredentials, error) {
 	if creds.OwnerID != ownerID {
 		return AppCredentials{}, fmt.Errorf("keystore: registration owner id %d does not match lookup %d", creds.OwnerID, ownerID)
 	}
+	if creds.AuthorityPending {
+		return AppCredentials{}, fmt.Errorf(
+			"keystore: registration %d: %w", creds.AppID, ErrPendingAppAuthority,
+		)
+	}
 	if err := k.clearSwapLeftovers(appDir); err != nil {
 		return AppCredentials{}, err
 	}
@@ -363,6 +392,63 @@ func (k *Keystore) LoadApp(ownerID int64) (AppCredentials, error) {
 // are excluded from that skip whatever their kind. skippableEntry holds the
 // rule, and UnexpectedEntries reports what it passed over.
 func (k *Keystore) ListApps() ([]AppCredentials, error) {
+	apps, err := k.listApps()
+	if err != nil {
+		return nil, err
+	}
+	for _, app := range apps {
+		if app.AuthorityPending {
+			return nil, fmt.Errorf(
+				"keystore: registration %d: %w", app.AppID, ErrPendingAppAuthority,
+			)
+		}
+	}
+	return apps, nil
+}
+
+// ListAppsIncludingPendingAuthority is setup's recovery-only enumeration.
+// Runtime consumers use ListApps, which fails closed on an unfinalized record.
+func (k *Keystore) ListAppsIncludingPendingAuthority() ([]AppCredentials, error) {
+	return k.listApps()
+}
+
+// FinalizeAppAuthority removes setup's recovery marker only after the caller
+// has committed authority for the exact canonical registration.
+func (k *Keystore) FinalizeAppAuthority(registration AppRegistration) error {
+	if err := registration.validate(); err != nil {
+		return err
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
+	ownerKey, err := appOwnerKey(registration.OwnerID)
+	if err != nil {
+		return err
+	}
+	appDir := filepath.Join(k.dir, ownerKey)
+	if err := k.recoverSwap(appDir, true); err != nil {
+		return err
+	}
+	creds, err := k.loadRegistrationAt(appDir, registration.OwnerID)
+	if err != nil {
+		return err
+	}
+	if creds.Registration() != registration {
+		return errors.New("keystore: pending authority registration identity changed")
+	}
+	if !creds.AuthorityPending {
+		return nil
+	}
+	if err := os.Remove(filepath.Join(appDir, authorityPendingFileName)); err != nil {
+		return fmt.Errorf("keystore: finalize pending authority: %w", err)
+	}
+	if err := syncDir(appDir); err != nil {
+		return fmt.Errorf("keystore: sync finalized authority marker: %w", err)
+	}
+	return nil
+}
+
+func (k *Keystore) listApps() ([]AppCredentials, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
@@ -868,6 +954,13 @@ func (k *Keystore) MigrateLegacyApp(owner string, ownerID int64, visibility AppV
 	}
 	if len(apps) == 1 {
 		existing := apps[0]
+		if existing.AuthorityPending {
+			return AppCredentials{}, fmt.Errorf(
+				"keystore: registration %d: %w",
+				existing.AppID,
+				ErrPendingAppAuthority,
+			)
+		}
 		if existing.AppID != creds.AppID || existing.KeyID != creds.KeyID {
 			return AppCredentials{}, errors.New("keystore: legacy migration journal conflicts with an existing registration")
 		}
@@ -884,7 +977,7 @@ func (k *Keystore) MigrateLegacyApp(owner string, ownerID int64, visibility AppV
 		}
 		return existing, nil
 	}
-	if err := k.saveAppLocked(creds, true); err != nil {
+	if err := k.saveAppLocked(creds, true, false); err != nil {
 		return AppCredentials{}, err
 	}
 	if err := k.clearLegacyJournals(); err != nil {
@@ -950,19 +1043,32 @@ func (k *Keystore) loadAppFrom(dir string) (AppCredentials, error) {
 	if meta.KeyID == "" || meta.KeyID != keyID {
 		return AppCredentials{}, errors.New("keystore: persisted key id does not match the private key")
 	}
+	authorityPending := false
+	pendingPath := filepath.Join(dir, authorityPendingFileName)
+	if info, err := os.Lstat(pendingPath); err == nil {
+		if !info.Mode().IsRegular() || info.Size() != 0 {
+			return AppCredentials{}, fmt.Errorf(
+				"keystore: invalid pending authority marker: %w", ErrCredentialPermissions,
+			)
+		}
+		authorityPending = true
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return AppCredentials{}, fmt.Errorf("keystore: inspect pending authority marker: %w", err)
+	}
 
 	return AppCredentials{
-		Owner:         meta.Owner,
-		OwnerID:       meta.OwnerID,
-		Visibility:    meta.Visibility,
-		KeyID:         meta.KeyID,
-		AppID:         meta.AppID,
-		Name:          meta.Name,
-		Slug:          meta.Slug,
-		ClientID:      meta.ClientID,
-		Key:           key,
-		WebhookSecret: meta.WebhookSecret,
-		ClientSecret:  meta.ClientSecret,
+		Owner:            meta.Owner,
+		OwnerID:          meta.OwnerID,
+		Visibility:       meta.Visibility,
+		KeyID:            meta.KeyID,
+		AppID:            meta.AppID,
+		Name:             meta.Name,
+		Slug:             meta.Slug,
+		ClientID:         meta.ClientID,
+		Key:              key,
+		WebhookSecret:    meta.WebhookSecret,
+		ClientSecret:     meta.ClientSecret,
+		AuthorityPending: authorityPending,
 	}, nil
 }
 
@@ -1097,7 +1203,7 @@ func (k *Keystore) assertPermissionsAt(appDir string) error {
 			return err
 		}
 	}
-	for _, name := range []string{keyFileName, metaFileName} {
+	for _, name := range []string{keyFileName, metaFileName, authorityPendingFileName} {
 		path := filepath.Join(appDir, name)
 		if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -1490,6 +1596,9 @@ type AppCredentials struct {
 	Key           *rsa.PrivateKey
 	WebhookSecret Secret
 	ClientSecret  Secret
+	// AuthorityPending is a durable setup recovery marker. Runtime consumers
+	// receive ErrPendingAppAuthority instead of credentials while it is true.
+	AuthorityPending bool
 }
 
 // String renders the public identity only; the key and secrets redact.

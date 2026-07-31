@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -29,6 +30,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -38,6 +40,8 @@ import (
 const defaultReconcileInterval = 100 * time.Millisecond
 
 const defaultNtfyURL = "https://ntfy.sh"
+
+const defaultDoctorInterval = 24 * time.Hour
 
 const (
 	defaultFakeRunID     domain.RunID     = "run-walking-skeleton"
@@ -76,12 +80,24 @@ func (f *repositoryIDFlag) Value() *int64 {
 }
 
 func main() {
-	// `freesided submit` is the first §10 verb; everything else stays the
-	// original flag-mode interface. A verb never collides with a flag
-	// invocation, since flags begin with '-'.
-	if len(os.Args) > 1 && os.Args[1] == "submit" {
-		runSubmitMain(os.Args[2:])
-		return
+	// §10 verbs never collide with the original flag-mode invocation because
+	// flags begin with '-'. Keeping dispatch here preserves compatibility with
+	// the already-proven daemon command line while packaging operations.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "setup":
+			runSetupMain(os.Args[2:])
+			return
+		case "onboard":
+			runOnboardMain(os.Args[2:])
+			return
+		case "doctor":
+			runDoctorMain(os.Args[2:])
+			return
+		case "submit":
+			runSubmitMain(os.Args[2:])
+			return
+		}
 	}
 	flags := flag.NewFlagSet("freesided", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
@@ -121,6 +137,15 @@ func main() {
 	authIdentity := flags.String("auth-identity", "", "provider auth identity work items run under")
 	runConformance := flags.Bool("run-conformance", false,
 		"run and durably record the full ward suite for this exact Claude configuration before admission")
+	operatingMode := flags.String(
+		"operating-mode", string(domain.ModeAttendedDev),
+		"operating mode: attended_dev (default) or unattended")
+	doctorInterval := flags.Duration(
+		"doctor-interval", defaultDoctorInterval,
+		"scheduled operational-health cadence in production driver mode")
+	approvedRecipes := digestSetFlag{}
+	flags.Var(&approvedRecipes, "approved-recipe",
+		"approved verification-recipe digest for persistence and doctor (repeatable)")
 	var repositoryID repositoryIDFlag
 	flags.Var(&repositoryID, "repository-id", "canonical numeric identity of the managed repository")
 	var backupEncryptionWaiverRepositoryID repositoryIDFlag
@@ -158,7 +183,14 @@ func main() {
 	daemonConfig := config{
 		DBPath: *dbPath, FakeDriverDir: *driverDir,
 		ListenAddr: *listenAddr, NtfyURL: *ntfyURL, ReconcileInterval: *interval,
+		DoctorInterval:                     *doctorInterval,
+		ApprovedRecipes:                    approvedRecipes,
 		BackupEncryptionWaiverRepositoryID: backupEncryptionWaiverRepositoryID.Value(),
+	}
+	mode, err := parseOperatingMode(*operatingMode)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "freesided: -operating-mode %q is not attended_dev or unattended\n", *operatingMode)
+		os.Exit(2)
 	}
 	switch *driverMode {
 	case "fake":
@@ -180,7 +212,7 @@ func main() {
 			AllowedPaths:   splitNonEmpty(*allowedPaths),
 			RunConformance: *runConformance,
 			StateRoot:      *publicationStateDir, CredentialsDir: *publicationCredentialsDir,
-			OperatingMode: domain.ModeUnattended,
+			OperatingMode: mode,
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "freesided: -driver %q is not fake or claude\n", *driverMode)
@@ -223,6 +255,8 @@ type config struct {
 	ListenAddr                         string
 	NtfyURL                            string
 	ReconcileInterval                  time.Duration
+	DoctorInterval                     time.Duration
+	ApprovedRecipes                    map[domain.Digest]bool
 	BackupEncryptionWaiverRepositoryID *int64
 	// Claude, when set, replaces the permanent fake stage driver with the
 	// production Claude driver and its ward gate (#237). Nil keeps the 1A.0
@@ -231,7 +265,7 @@ type config struct {
 }
 
 func (cfg config) storeOptions() (store.Options, error) {
-	opts := store.Options{}
+	opts := store.Options{ApprovedRecipes: maps.Clone(cfg.ApprovedRecipes)}
 	if cfg.BackupEncryptionWaiverRepositoryID != nil {
 		return store.Options{}, fmt.Errorf(
 			"-backup-encryption-waiver-repository-id: %w",
@@ -244,12 +278,24 @@ func (cfg config) storeOptions() (store.Options, error) {
 	// policy, so a claude-mode daemon has to configure that policy or its own
 	// admissions are refused at persistence: an unset floor is "no policy
 	// configured", which fails closed, not "no minimum". The floor here is
-	// the same §5.7 unattended minimum the engine admits against.
+	// the same mode-specific minimum the engine admits against.
 	opts.AdmissionFloors = map[domain.OperatingMode]domain.CapabilitySnapshot{
-		cfg.Claude.OperatingMode: unattendedCapabilitySnapshot(),
+		cfg.Claude.OperatingMode: admissionCapabilitySnapshot(cfg.Claude.OperatingMode),
 	}
 	opts.ApprovedCredentialModes = []domain.CredentialMode{domain.CredentialSubscriptionContained}
 	return opts, nil
+}
+
+func runScheduledDoctorPass(
+	ctx context.Context,
+	runConformance, runDoctor func(context.Context) error,
+) error {
+	conformanceErr := runConformance(ctx)
+	doctorErr := runDoctor(ctx)
+	if ctx.Err() != nil {
+		return nil
+	}
+	return errors.Join(conformanceErr, doctorErr)
 }
 
 type readiness struct {
@@ -289,6 +335,12 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 	}
 	if cfg.ReconcileInterval < 0 {
 		return nil, fmt.Errorf("negative reconcile interval %s", cfg.ReconcileInterval)
+	}
+	if cfg.DoctorInterval == 0 {
+		cfg.DoctorInterval = defaultDoctorInterval
+	}
+	if cfg.DoctorInterval < 0 {
+		return nil, fmt.Errorf("negative doctor interval %s", cfg.DoctorInterval)
 	}
 	if cfg.NtfyURL == "" {
 		cfg.NtfyURL = defaultNtfyURL
@@ -414,7 +466,7 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 			return nil, err
 		}
 		workflow, err = engine.New(st, attention, stageDriver,
-			engine.WithAdmission(claudeWiring.backend, unattendedAdmissionFloor,
+			engine.WithAdmission(claudeWiring.backend, admissionFloor(cfg.Claude.OperatingMode),
 				claudeWiring.env, func() time.Time { return time.Now().UTC() }),
 			engine.WithAdmissionDerivation(claudeWiring.derive),
 		)
@@ -436,10 +488,26 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 	if err := localBackups.Maintain(parent); err != nil {
 		return nil, err
 	}
+	runDoctor := func(runCtx context.Context) error {
+		if cfg.Claude == nil {
+			return nil
+		}
+		_, err := (operations.Doctor{
+			Store: st, Attention: attention,
+			ProjectID:           domain.ProjectID("project-system"),
+			Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+			ConfigurationDigest: claudeWiring.backend.ConfigurationDigest(),
+			Mode:                cfg.Claude.OperatingMode,
+		}).Run(runCtx)
+		return err
+	}
+	if err := runDoctor(parent); err != nil {
+		return nil, fmt.Errorf("initial doctor pass: %w", err)
+	}
 
 	d := &daemon{
 		store: st, attention: attention, workflow: workflow, driver: driver,
-		listener: listener, cancel: cancel, errs: make(chan error, 4), pairingCode: pairingCode,
+		listener: listener, cancel: cancel, errs: make(chan error, 6), pairingCode: pairingCode,
 		server: &http.Server{
 			Handler:           signet.NewHTTPHandler(attention, signet.NewRequestAuthorizer(st)),
 			ReadHeaderTimeout: 5 * time.Second,
@@ -466,7 +534,7 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 		d.errs <- localBackups.Run(ctx)
 	}()
 	if claudeWiring != nil {
-		d.wg.Add(1)
+		d.wg.Add(2)
 		go func() {
 			defer d.wg.Done()
 			<-claudeWiring.janitor.finished
@@ -480,9 +548,39 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 			}
 			d.errs <- errors.New("installation janitor stopped")
 		}()
+		go func() {
+			defer d.wg.Done()
+			ticker := time.NewTicker(cfg.DoctorInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					d.errs <- nil
+					return
+				case <-ticker.C:
+					if err := runScheduledDoctorPass(
+						ctx, claudeWiring.runConformance, runDoctor,
+					); err != nil {
+						d.errs <- fmt.Errorf("scheduled doctor pass: %w", err)
+						return
+					}
+				}
+			}
+		}()
 	}
 	success = true
 	return d, nil
+}
+
+func parseOperatingMode(raw string) (domain.OperatingMode, error) {
+	switch domain.OperatingMode(raw) {
+	case domain.ModeAttendedDev:
+		return domain.ModeAttendedDev, nil
+	case domain.ModeUnattended:
+		return domain.ModeUnattended, nil
+	default:
+		return "", fmt.Errorf("invalid operating mode %q", raw)
+	}
 }
 
 func closeStartupSessions(success bool, closer sessionCloser) error {
