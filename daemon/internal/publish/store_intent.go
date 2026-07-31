@@ -51,7 +51,7 @@ func commitReservedIntent(
 					key, ErrInvocationReserved,
 				)
 			}
-			if err := validateExecutionReservation(
+			if _, err := validateExecutionReservation(
 				ctx, tx, key, claim, settling.ProducingInvocationID,
 			); err != nil {
 				return nil, false, err

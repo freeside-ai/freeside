@@ -97,6 +97,13 @@ func seedDecisionRecords(t *testing.T, s *store.Store) {
 	}
 }
 
+func executionWorkflowAudit(t *testing.T) domain.WorkflowAudit {
+	t.Helper()
+	audit := testWorkflowAudit(t)
+	audit.AuditedCommitSHA = testBaseSHA
+	return audit
+}
+
 const testProducingInvocationID = domain.InvocationID("inv-producing-0001")
 
 type executionChainOptions struct {
@@ -452,7 +459,7 @@ func TestPublishExecutionHoldsSourceHeadAgainstRecordedExport(t *testing.T) {
 			reservation := seedExecutionPublicationChain(t, s, tt.source)
 			gh := newFakeGitHub(t)
 			p := storeBackedPublisher(
-				t, s, gh, fixedWorkflowAuditor{audit: testWorkflowAudit(t)},
+				t, s, gh, fixedWorkflowAuditor{audit: executionWorkflowAudit(t)},
 			)
 			candidate := testCandidate(t)
 			candidate.RunID = reservation.RunID
@@ -545,6 +552,91 @@ func TestPublishExecutionHoldsSourceHeadAgainstRecordedExport(t *testing.T) {
 	}
 }
 
+func TestPublishExecutionRefusesAdvancedTargetBeforeIntent(t *testing.T) {
+	head := testHeadSHA
+	s := newExecutionBoundStore(t, executionChainOptions{exportHead: &head})
+	seedDecisionRecords(t, s)
+	reservation := seedExecutionPublicationChain(
+		t, s, executionChainOptions{exportHead: &head},
+	)
+	audit := executionWorkflowAudit(t)
+	audit.AuditedCommitSHA = testOtherSHA
+	gh := newFakeGitHub(t)
+	p := storeBackedPublisher(t, s, gh, fixedWorkflowAuditor{audit: audit})
+	candidate := testCandidate(t)
+	candidate.RunID = reservation.RunID
+
+	_, err := p.PublishExecution(t.Context(), publish.ExecutionCandidate{
+		Candidate: candidate, ProducingInvocationID: testProducingInvocationID,
+	}, testApprovedRecipes())
+	if !errors.Is(err, publish.ErrTargetBaseAdvanced) {
+		t.Fatalf("PublishExecution error = %v, want ErrTargetBaseAdvanced", err)
+	}
+	assertDecisionRows(t, s, 1, 0)
+	if requests := gh.requestLog(); len(requests) != 0 {
+		t.Fatalf("advanced target reached forge: %v", requests)
+	}
+	key, err := reservation.Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Read(t.Context(), func(tx *store.ReadTx) error {
+		entry, err := tx.GetOutbox(t.Context(), key)
+		if err != nil {
+			return err
+		}
+		if entry.Kind != publish.IntentKindReservation {
+			t.Errorf("advanced target changed reservation to %q", entry.Kind)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPublishExecutionRecoversCommittedIntentAfterTargetAdvances(t *testing.T) {
+	head := testHeadSHA
+	s := newExecutionBoundStore(t, executionChainOptions{exportHead: &head})
+	seedDecisionRecords(t, s)
+	reservation := seedExecutionPublicationChain(
+		t, s, executionChainOptions{exportHead: &head},
+	)
+	audit := executionWorkflowAudit(t)
+	auditor := &fixedWorkflowAuditor{audit: audit}
+	gh := newFakeGitHub(t)
+	p := storeBackedPublisher(t, s, gh, auditor)
+	candidate := testCandidate(t)
+	candidate.RunID = reservation.RunID
+	execution := publish.ExecutionCandidate{
+		Candidate: candidate, ProducingInvocationID: testProducingInvocationID,
+	}
+	interrupt := errors.New("interrupt after intent")
+	if _, err := p.PublishExecutionAfterGateAndFinalize(
+		t.Context(), execution, testApprovedRecipes(),
+		func(context.Context, publish.GatedHead) error { return interrupt },
+	); !errors.Is(err, interrupt) {
+		t.Fatalf("first publication = %v, want interruption", err)
+	}
+	assertDecisionRows(t, s, 1, 1)
+
+	auditor.audit.AuditedCommitSHA = testOtherSHA
+	result, err := p.PublishExecutionAfterGateAndFinalize(
+		t.Context(), execution, testApprovedRecipes(),
+		func(_ context.Context, gated publish.GatedHead) error {
+			gh.mu.Lock()
+			gh.refs[gated.Identity().BranchName()] = gated.SourceHeadSHA()
+			gh.mu.Unlock()
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("committed-intent recovery after target advance: %v", err)
+	}
+	if !result.PRCreated || result.PRNumber == 0 {
+		t.Fatalf("recovery result = %+v, want created PR", result)
+	}
+}
+
 func TestPublishExecutionAuthenticatesFrozenAdmissionAndExport(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "store.db")
 	initial, err := store.Open(
@@ -588,7 +680,7 @@ func TestPublishExecutionAuthenticatesFrozenAdmissionAndExport(t *testing.T) {
 
 	gh := newFakeGitHub(t)
 	p := storeBackedPublisher(
-		t, current, gh, fixedWorkflowAuditor{audit: testWorkflowAudit(t)},
+		t, current, gh, fixedWorkflowAuditor{audit: executionWorkflowAudit(t)},
 	)
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID

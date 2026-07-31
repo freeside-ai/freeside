@@ -14,9 +14,11 @@ import (
 	"slices"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -108,6 +110,13 @@ func (i intent) validate() error {
 		return fmt.Errorf("driver intent %q is committed without a result", i.InvocationID)
 	case i.Phase != phaseCommitted && i.Result != nil:
 		return fmt.Errorf("driver intent %q carries a result in phase %q", i.InvocationID, i.Phase)
+	case i.Export != nil && i.Export.Replay != nil &&
+		i.Export.CommitPlanPresent != (i.Export.Replay.CommitPlanDigest != nil):
+		return fmt.Errorf("driver intent %q replay disagrees with commit-plan presence", i.InvocationID)
+	}
+	if i.Export != nil && i.Export.Replay != nil && i.Export.Replay.CommitPlanDigest != nil &&
+		!contentaddr.Valid(string(*i.Export.Replay.CommitPlanDigest)) {
+		return fmt.Errorf("driver intent %q replay commit-plan digest is invalid", i.InvocationID)
 	}
 	if i.Result != nil {
 		return i.Result.Validate()
@@ -136,6 +145,33 @@ type releasedExport struct {
 	EvidencePresent   bool                    `json:"evidence_present"`
 	CommitPlanPresent bool                    `json:"commit_plan_present"`
 	ObservedBaseSHA   string                  `json:"observed_base_sha"`
+	Replay            *executionReplay        `json:"replay,omitempty"`
+}
+
+// executionReplay marks that every byte needed to reconstruct an imported
+// candidate has crossed into the durable blob store. The manifest already
+// carries every repository blob address; only the optional commit plan needs
+// an additional address. This record is replay data, never publication
+// authority: consumers re-import it and require the resulting head to match
+// the immutable ExecutionExport.
+type executionReplay struct {
+	CommitPlanDigest *domain.Digest `json:"commit_plan_digest,omitempty"`
+}
+
+// ExecutionReplay is the authenticated, directory-free description of one
+// completed Claude export. It deliberately returns content addresses rather
+// than bytes: the production composer materializes them through the same
+// durable blob store and re-runs the hostile importer before verification.
+type ExecutionReplay struct {
+	InvocationID           domain.InvocationID
+	ObservedBaseSHA        string
+	HeadSHA                string
+	Manifest               export.Manifest
+	ManifestDigest         domain.Digest
+	Evidence               export.EvidenceManifest
+	EvidenceManifestDigest *domain.Digest
+	CommitPlanDigest       *domain.Digest
+	ImportOptions          importer.Options
 }
 
 func (r releasedExport) outcome() exportOutcome {

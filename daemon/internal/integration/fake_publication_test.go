@@ -72,11 +72,12 @@ type integrationPR struct {
 type integrationForge struct {
 	t *testing.T
 
-	mu          sync.Mutex
-	refs        map[string]string
-	prs         []integrationPR
-	nextPR      int
-	writeCounts map[string]int
+	mu                   sync.Mutex
+	refs                 map[string]string
+	prs                  []integrationPR
+	nextPR               int
+	writeCounts          map[string]int
+	failPRCreateResponse bool
 }
 
 func newIntegrationForge(t *testing.T) (*integrationForge, *httptest.Server) {
@@ -157,6 +158,11 @@ func (f *integrationForge) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		f.nextPR++
 		f.prs = append(f.prs, pr)
+		if f.failPRCreateResponse {
+			f.failPRCreateResponse = false
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(integrationPRJSON(pr))
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, root+"/pulls/"):
@@ -224,10 +230,28 @@ func (f *integrationForge) setRef(branch, sha string) bool {
 	return false
 }
 
+func (f *integrationForge) clearRefs() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	clear(f.refs)
+}
+
 func (f *integrationForge) counts() (refs, prs int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.refs), len(f.prs)
+}
+
+func (f *integrationForge) pullRequests() []integrationPR {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]integrationPR(nil), f.prs...)
+}
+
+func (f *integrationForge) failAfterNextPRCreate() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failPRCreateResponse = true
 }
 
 type integrationCheckout struct {
@@ -264,6 +288,7 @@ type integrationTransport struct {
 	fetchErr error
 	pushes   int
 	fail     bool
+	conflict bool
 }
 
 func (tr *integrationTransport) FetchBase(
@@ -341,15 +366,28 @@ func (tr *integrationTransport) PushHead(
 	tr.pushes++
 	fail := tr.fail
 	tr.fail = false
+	injectConflict := tr.conflict
+	tr.conflict = false
 	tr.mu.Unlock()
 	if fail {
-		return publish.PushResult{}, errors.New("injected publication push failure")
+		return publish.PushResult{}, &publish.TransportGitError{
+			Args: []string{"push"}, ExitCode: -1,
+			Refusal: publish.RefusalUnknown, Err: context.DeadlineExceeded,
+		}
 	}
-	conflict := tr.forge.setRef(identity.BranchName(), gated.SourceHeadSHA())
-	if conflict {
-		return publish.PushResult{}, errors.New("publication ref moved")
+	if injectConflict {
+		tr.forge.setRef(identity.BranchName(), strings.Repeat("9", 40))
+		return publish.PushResult{}, fmt.Errorf(
+			"injected publication ref conflict: %w", publish.ErrPublicationConflict,
+		)
 	}
-	return publish.PushResult{Created: !conflict}, nil
+	refConflict := tr.forge.setRef(identity.BranchName(), gated.SourceHeadSHA())
+	if refConflict {
+		return publish.PushResult{}, fmt.Errorf(
+			"publication ref moved: %w", publish.ErrPublicationConflict,
+		)
+	}
+	return publish.PushResult{Created: !refConflict}, nil
 }
 
 func (tr *integrationTransport) pushCount() int {
@@ -362,6 +400,12 @@ func (tr *integrationTransport) failNextPush() {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	tr.fail = true
+}
+
+func (tr *integrationTransport) conflictNextPush() {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.conflict = true
 }
 
 type publicationHarness struct {
@@ -433,6 +477,19 @@ func newPublicationHarness(t *testing.T) *publicationHarness {
 	}
 	st, err := store.Open(ctx, dbPath, store.Options{
 		ApprovedRecipes: map[domain.Digest]bool{recipeDigest: true},
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeAttendedDev: {},
+			domain.ModeUnattended:  {},
+		},
+		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
+		BackupHealthSource: store.BackupHealthSourceFunc(func(
+			context.Context, store.BackupHealthContext,
+		) (domain.BackupHealth, error) {
+			return domain.BackupHealth{
+				Encryption: domain.BackupHealthHealthy, CheckpointCurrency: domain.BackupHealthHealthy,
+				ArtifactClosure: domain.BackupHealthHealthy, RestoreTestAge: domain.BackupHealthHealthy,
+			}, nil
+		}),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -23,50 +23,51 @@ func validateExecutionCandidate(
 	producingInvocationID domain.InvocationID,
 	targetRepositoryID int64,
 	authorizedBaseSHA string,
-) error {
+) (invocationState, error) {
 	if claim == nil || claim.RunID != c.RunID {
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"execution-bound publication has no matching run reservation: %w",
 			ErrInvocationReserved,
 		)
 	}
 	if producingInvocationID == "" {
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"execution-bound publication has an empty producing invocation: %w",
 			ErrExecutionExportMissing,
 		)
 	}
 	key, err := claim.Key()
 	if err != nil {
-		return err
+		return "", err
 	}
-	if err := validateExecutionReservation(
+	reservationState, err := validateExecutionReservation(
 		ctx, tx, key, claim, producingInvocationID,
-	); err != nil {
-		return err
+	)
+	if err != nil {
+		return "", err
 	}
 	admission, err := tx.GetExecutionAdmissionRecord(ctx, producingInvocationID)
 	if errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"producing invocation %q has no execution admission: %w",
 			producingInvocationID, ErrExecutionExportMissing,
 		)
 	}
 	if err != nil {
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"authenticate producing invocation %q admission: %w",
 			producingInvocationID, err,
 		)
 	}
 	if admission.OperatingMode != domain.ModeUnattended {
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"producing invocation %q ran under mode %q, not unattended: %w",
 			producingInvocationID, admission.OperatingMode,
 			ErrUnauthorizedPublication,
 		)
 	}
 	if admission.RunID != claim.RunID {
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"producing invocation %q belongs to run %q, reservation belongs to %q: %w",
 			producingInvocationID, admission.RunID, claim.RunID,
 			domain.ErrParentKeyMismatch,
@@ -76,7 +77,7 @@ func validateExecutionCandidate(
 		admission.Base.RepositoryID != targetRepositoryID ||
 		admission.Base.BaseRef != c.BaseRef ||
 		admission.Base.BaseSHA != authorizedBaseSHA {
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"producing invocation %q ran against %s (%d) at %s=%s, candidate publishes to %s (%d) at %s=%s: %w",
 			producingInvocationID,
 			admission.Base.Repo, admission.Base.RepositoryID,
@@ -87,25 +88,25 @@ func validateExecutionCandidate(
 	}
 	export, err := tx.GetExecutionExportRecord(ctx, producingInvocationID)
 	if errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"producing invocation %q has no execution export: %w",
 			producingInvocationID, ErrExecutionExportMissing,
 		)
 	}
 	if err != nil {
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"authenticate producing invocation %q export: %w",
 			producingInvocationID, err,
 		)
 	}
 	if export.HeadSHA != c.HeadSHA {
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"candidate head %s, execution export %q records %s: %w",
 			c.HeadSHA, producingInvocationID, export.HeadSHA,
 			ErrExecutionExportHeadMismatch,
 		)
 	}
-	return nil
+	return reservationState, nil
 }
 
 // validateExecutionReservation requires the durable state that distinguishes
@@ -118,30 +119,33 @@ func validateExecutionReservation(
 	key string,
 	claim *Reservation,
 	producingInvocationID domain.InvocationID,
-) error {
+) (invocationState, error) {
 	if claim == nil {
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"execution-bound publication has no reservation claim: %w",
 			ErrInvocationReserved,
 		)
 	}
 	claimKey, err := claim.Key()
 	if err != nil {
-		return err
+		return "", err
 	}
 	if claimKey != key {
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"execution publication reservation for %q presented at %q: %w",
 			claimKey, key, domain.ErrParentKeyMismatch,
 		)
 	}
 	state, entry, err := classifyInvocation(ctx, tx, *claim)
 	if err != nil {
-		return fmt.Errorf("authenticate execution publication reservation: %w", err)
+		return "", fmt.Errorf("authenticate execution publication reservation: %w", err)
 	}
-	return validateExecutionReservationState(
+	if err := validateExecutionReservationState(
 		state, entry, *claim, producingInvocationID,
-	)
+	); err != nil {
+		return "", err
+	}
+	return state, nil
 }
 
 func validateExecutionReservationState(

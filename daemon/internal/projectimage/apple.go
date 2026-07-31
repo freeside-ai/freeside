@@ -237,7 +237,7 @@ func (a appleBackend) CheckProvenance(ctx context.Context, ref string, want prov
 		}
 	}
 	files := projectEvidence.Files
-	recipeBytes, recipeFound := files["/usr/local/share/freeside/project-recipe.json"]
+	recipeBytes, recipeFound := files[ward.ProjectRecipePath]
 	prepareBytes, prepareFound := files[PreparationPath]
 	if !recipeFound || !prepareFound {
 		return fmt.Errorf("exported rootfs omitted embedded provenance files")
@@ -1136,8 +1136,8 @@ func readOCIEvidence(
 		return evidence, nil
 	}
 	wanted := map[string]int64{
-		"/usr/local/share/freeside/project-recipe.json": maxRecipeBytes,
-		PreparationPath: maxPrepareBytes,
+		ward.ProjectRecipePath: maxRecipeBytes,
+		PreparationPath:        maxPrepareBytes,
 	}
 	files := make(map[string][]byte, len(wanted))
 	for index := len(manifest.Layers) - 1; index >= 0; index-- {

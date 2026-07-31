@@ -46,6 +46,20 @@ func TestIdentityGolden(t *testing.T) {
 	golden.Assert(t, "publication-identity", append(got, '\n'))
 }
 
+func TestValidateCandidateBodyReservesIdentityMarker(t *testing.T) {
+	id, err := publish.DeriveIdentity(fixtureIdentityInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxProseBytes := (64 << 10) - len("\n\n") - len(id.Marker())
+	if err := publish.ValidateCandidateBody(strings.Repeat("x", maxProseBytes)); err != nil {
+		t.Fatalf("exact composed body limit: %v", err)
+	}
+	if err := publish.ValidateCandidateBody(strings.Repeat("x", maxProseBytes+1)); err == nil {
+		t.Fatal("candidate body consumed the identity marker reserve")
+	}
+}
+
 // TestDeriveIdentityDeterministic: the same candidate always derives
 // the same identity, independent of artifact-digest order.
 func TestDeriveIdentityDeterministic(t *testing.T) {

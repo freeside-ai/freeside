@@ -97,6 +97,11 @@ var ErrAmbiguousAppRegistration = errors.New("multiple GitHub App registrations 
 // App strings are deliberately omitted from the error.
 var ErrAppRegistrationMismatch = errors.New("GitHub App registration metadata does not match the canonical App")
 
+// ErrAppBotIdentityMismatch reports that the public bot account resolved for
+// the App selected to publish does not match its canonical local registration
+// or the durable commit attribution requested for the run.
+var ErrAppBotIdentityMismatch = errors.New("GitHub App bot identity does not match the selected registration")
+
 // ErrAppVisibilityMismatch reports that the locally recorded public/private
 // posture disagrees with GitHub's independently observed visibility.
 var ErrAppVisibilityMismatch = errors.New("GitHub App visibility does not match the recorded registration")
@@ -162,6 +167,12 @@ var ErrExecutionExportMissing = errors.New("publication source has no execution 
 // publication's candidate head differs from the head authenticated by the
 // producing invocation's durable ExecutionExport.
 var ErrExecutionExportHeadMismatch = errors.New("publication source head does not match the execution export")
+
+// ErrTargetBaseAdvanced is returned when the fresh workflow audit observes a
+// different target-branch tip than the immutable base authorized for a new
+// execution publication. The candidate must be rerun and reverified; recovery
+// of an already-committed publication intent remains allowed to converge.
+var ErrTargetBaseAdvanced = errors.New("publication target base advanced after execution admission")
 
 // ErrPublicationConflict is returned when an existing external
 // resource under this publication's deterministic identity disagrees

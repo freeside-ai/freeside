@@ -529,10 +529,43 @@ func (tx *ReadTx) GetAttentionItemSnapshot(ctx context.Context, id domain.ItemID
 	return item, snap, nil
 }
 
+// GetAttentionItemRecord authenticates immutable item history without
+// re-applying mutable current recipe approval. It is for terminal workflow
+// recovery only: any path that presents an item's evidence as currently
+// trusted must use GetAttentionItem or GetAttentionItemSnapshot.
+func (tx *ReadTx) GetAttentionItemRecord(
+	ctx context.Context,
+	id domain.ItemID,
+) (domain.AttentionItem, error) {
+	item, _, err := scanAttentionItemRecord(tx.tx.QueryRowContext(ctx,
+		`SELECT id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
+	if err != nil {
+		return domain.AttentionItem{}, fmt.Errorf("get attention item record %q: %w", id, notFoundOr(err))
+	}
+	if item.ID != id {
+		return domain.AttentionItem{}, fmt.Errorf("get attention item record %q: %w", id, errRowInconsistent)
+	}
+	return item, nil
+}
+
 // scanAttentionItemSnapshot reconstructs one attention_items row (see the
 // scanner doc for the shared gate sequence), including the evidence policy
 // re-gate.
 func (tx *ReadTx) scanAttentionItemSnapshot(sc scanner) (domain.AttentionItem, Snapshot, error) {
+	item, snap, err := scanAttentionItemRecord(sc)
+	if err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
+	// Reconstruction re-runs the evidence gate: decode's Validate cannot check
+	// recipe approval, so an item carrying evidence under a now-unapproved (or
+	// forged) recipe fails closed rather than reconstructing as valid.
+	if err := tx.gateEvidence(item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
+	return item, snap, nil
+}
+
+func scanAttentionItemRecord(sc scanner) (domain.AttentionItem, Snapshot, error) {
 	var (
 		id             string
 		projectID      string
@@ -567,12 +600,6 @@ func (tx *ReadTx) scanAttentionItemSnapshot(sc scanner) (domain.AttentionItem, S
 	consistent = consistent && snap.EntityVersion >= 1 && snap.AsOfRevision >= 1
 	if !consistent {
 		return domain.AttentionItem{}, Snapshot{}, errRowInconsistent
-	}
-	// Reconstruction re-runs the evidence gate: decode's Validate cannot check
-	// recipe approval, so an item carrying evidence under a now-unapproved (or
-	// forged) recipe fails closed rather than reconstructing as valid.
-	if err := tx.gateEvidence(item); err != nil {
-		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	return item, snap, nil
 }

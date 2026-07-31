@@ -189,12 +189,27 @@ var unattendedAdmissionFloor = []exec.Capability{
 // exportRecorder adapts the store's internal-transaction export seam to the
 // driver's port (the wardstore adapter precedent: the driver holds no store
 // handle, and RecordExecutionExport is not client-visible state).
-type exportRecorder struct{ store *store.Store }
+type exportRecorder struct {
+	store *store.Store
+}
 
-func (r exportRecorder) RecordExecutionExport(ctx context.Context, record domain.ExecutionExport) error {
-	return r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		return tx.RecordExecutionExport(ctx, record)
+func (r exportRecorder) RecordExecutionExport(
+	ctx context.Context,
+	record domain.ExecutionExport,
+	replay claude.ExecutionReplay,
+) error {
+	err := engine.RecordExecutionExport(ctx, r.store, record, engine.ProductionReplay{
+		InvocationID: replay.InvocationID, ObservedBaseSHA: replay.ObservedBaseSHA,
+		HeadSHA: replay.HeadSHA, Manifest: replay.Manifest,
+		ManifestDigest: replay.ManifestDigest, Evidence: replay.Evidence,
+		EvidenceManifestDigest: replay.EvidenceManifestDigest,
+		CommitPlanDigest:       replay.CommitPlanDigest,
+		ImportOptions:          replay.ImportOptions,
 	})
+	if errors.Is(err, store.ErrImmutableConflict) {
+		return errors.Join(err, domain.ErrImmutableTransition)
+	}
+	return err
 }
 
 // storeAdmissionAuthority binds private driver state back to the durable
@@ -203,8 +218,66 @@ func (r exportRecorder) RecordExecutionExport(ctx context.Context, record domain
 // currently active profile. The state file is replay data, not an
 // authorization source.
 type storeAdmissionAuthority struct {
-	store        *store.Store
-	allowedPaths []string
+	store                     *store.Store
+	allowedPaths              []string
+	commitAuthors             productionCommitAuthorResolver
+	authenticatedStartAuthors *productionCommitAuthorAuthenticationCache
+}
+
+type productionCommitAuthorResolver interface {
+	Resolve(context.Context, string) (publish.AppBotIdentity, error)
+	Revalidate(context.Context, string) (publish.AppBotIdentity, error)
+}
+
+const maxProductionCommitAuthorAuthentications = 1024
+
+type productionCommitAuthorAuthenticationBinding struct {
+	repo      string
+	appSlug   string
+	botUserID int64
+}
+
+type productionCommitAuthorAuthenticationCache struct {
+	mu      sync.Mutex
+	entries map[domain.InvocationID]productionCommitAuthorAuthenticationBinding
+}
+
+func newProductionCommitAuthorAuthenticationCache() *productionCommitAuthorAuthenticationCache {
+	return &productionCommitAuthorAuthenticationCache{
+		entries: map[domain.InvocationID]productionCommitAuthorAuthenticationBinding{},
+	}
+}
+
+func (c *productionCommitAuthorAuthenticationCache) authenticate(
+	id domain.InvocationID,
+	binding productionCommitAuthorAuthenticationBinding,
+	authenticate func() error,
+) error {
+	if c == nil {
+		return authenticate()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cached, ok := c.entries[id]; ok && cached == binding {
+		return nil
+	}
+	if err := authenticate(); err != nil {
+		return err
+	}
+	if _, exists := c.entries[id]; !exists && len(c.entries) >= maxProductionCommitAuthorAuthentications {
+		clear(c.entries)
+	}
+	c.entries[id] = binding
+	return nil
+}
+
+func (c *productionCommitAuthorAuthenticationCache) forget(id domain.InvocationID) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, id)
 }
 
 func (a storeAdmissionAuthority) admission(
@@ -230,16 +303,19 @@ func (a storeAdmissionAuthority) admission(
 			if err := tx.RequireBackendConformant(ctx, admission); err != nil {
 				return err
 			}
-			policy, err := tx.GetResolvedPolicy(ctx, admission.RunID)
-			if err != nil {
-				return err
-			}
+		}
+		policy, err := tx.GetResolvedPolicy(ctx, admission.RunID)
+		if err != nil {
+			return err
+		}
+		if requireCurrent {
 			allowedPaths, err = resolvedPathAllowlist(
 				policy, admission.PolicyDigest, a.allowedPaths,
 			)
-			return err
+		} else {
+			allowedPaths, err = recordedPathAllowlist(policy, admission.PolicyDigest)
 		}
-		return nil
+		return err
 	})
 	if err != nil {
 		return domain.ExecutionAdmission{}, nil, err
@@ -318,6 +394,34 @@ func resolvedPathAllowlist(
 	)
 }
 
+func recordedPathAllowlist(
+	policy domain.ResolvedPolicy,
+	admittedDigest domain.Digest,
+) ([]string, error) {
+	if policy.Digest != admittedDigest {
+		return nil, fmt.Errorf(
+			"resolved policy digest %q disagrees with admitted %q: %w",
+			policy.Digest, admittedDigest, domain.ErrParentKeyMismatch,
+		)
+	}
+	for _, key := range policy.Keys {
+		if key.Key != "paths" {
+			continue
+		}
+		paths := splitNonEmpty(key.Value)
+		if !explicitAllowedPaths(paths) {
+			return nil, fmt.Errorf(
+				"recorded resolved paths are not an explicit allowlist: %w",
+				domain.ErrPathBoundaryMismatch,
+			)
+		}
+		return slices.Clone(paths), nil
+	}
+	return nil, fmt.Errorf(
+		"resolved policy has no paths key: %w", domain.ErrPathBoundaryMismatch,
+	)
+}
+
 func (a storeAdmissionAuthority) AuthenticateAdmission(
 	ctx context.Context, id domain.InvocationID, spec exec.StartSpec,
 ) error {
@@ -328,7 +432,13 @@ func (a storeAdmissionAuthority) AuthenticateAdmission(
 func (a storeAdmissionAuthority) AuthenticateStart(
 	ctx context.Context, id domain.InvocationID, spec exec.StartSpec,
 ) error {
-	_, _, err := a.admission(ctx, id, spec, true)
+	admission, _, err := a.admission(ctx, id, spec, true)
+	if err != nil {
+		return err
+	}
+	_, _, err = a.authenticateProductionCommitAuthorForStart(
+		ctx, id, admission.OperatingMode, spec.Base.Repo,
+	)
 	return err
 }
 
@@ -353,7 +463,181 @@ func (a storeAdmissionAuthority) ImportOptions(
 		return importer.Options{}, err
 	}
 	opts.Policy.Allowlist = allowedPaths
+	author, production, err := a.authenticateProductionCommitAuthorRevalidated(
+		ctx, id, admission.OperatingMode, spec.Base.Repo,
+	)
+	if err != nil {
+		return importer.Options{}, err
+	}
+	if production {
+		opts.AuthorName, opts.AuthorEmail = author.Name(), author.Email()
+	}
+	a.authenticatedStartAuthors.forget(id)
 	return opts, nil
+}
+
+func (a storeAdmissionAuthority) ImportOptionsRecord(
+	ctx context.Context, id domain.InvocationID, spec exec.StartSpec, opts importer.Options,
+) (importer.Options, error) {
+	admission, allowedPaths, err := a.admission(ctx, id, spec, false)
+	if err != nil {
+		return importer.Options{}, err
+	}
+	profile, err := a.importTrustProfile(ctx, admission)
+	if err != nil {
+		return importer.Options{}, err
+	}
+	if profile.Repo != spec.Base.Repo || profile.RepositoryID != spec.Base.RepositoryID {
+		return importer.Options{}, fmt.Errorf(
+			"trust profile repository disagrees with admitted base: %w",
+			domain.ErrParentKeyMismatch)
+	}
+	opts.Policy, err = opts.Policy.WithProtectedPaths(profile)
+	if err != nil {
+		return importer.Options{}, err
+	}
+	opts.Policy.Allowlist = allowedPaths
+	// This reconstructs an already-completed import from immutable records.
+	// App attribution was authenticated before the actual import; requiring
+	// live GitHub authority here would strand terminal replay after a restart.
+	author, production, err := a.productionCommitAuthor(ctx, id, admission.OperatingMode)
+	if err != nil {
+		return importer.Options{}, err
+	}
+	if production {
+		opts.AuthorName, opts.AuthorEmail = author.Name(), author.Email()
+	}
+	return opts, nil
+}
+
+func (a storeAdmissionAuthority) productionCommitAuthor(
+	ctx context.Context,
+	id domain.InvocationID,
+	mode domain.OperatingMode,
+) (engine.ProductionCommitAuthor, bool, error) {
+	var entry store.QueueEntry
+	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		entry, err = tx.GetOutbox(ctx, string(id))
+		return err
+	})
+	if mode != domain.ModeUnattended && errors.Is(err, store.ErrNotFound) {
+		return engine.ProductionCommitAuthor{}, false, nil
+	}
+	if err != nil {
+		return engine.ProductionCommitAuthor{}, false, fmt.Errorf("load production commit author: %w", err)
+	}
+	if entry.Kind != engine.KindProductionInvocationRequested {
+		if mode != domain.ModeUnattended {
+			return engine.ProductionCommitAuthor{}, false, nil
+		}
+		return engine.ProductionCommitAuthor{}, false, fmt.Errorf(
+			"unattended invocation %q has no production ownership marker: %w",
+			id, domain.ErrParentKeyMismatch,
+		)
+	}
+	publication, present, err := engine.ProductionInvocationPublication(entry)
+	if err != nil {
+		return engine.ProductionCommitAuthor{}, false, fmt.Errorf("authenticate production commit author: %w", err)
+	}
+	if !present {
+		return engine.ProductionCommitAuthor{}, false, nil
+	}
+	return publication.CommitAuthor, true, nil
+}
+
+func (a storeAdmissionAuthority) authenticateProductionCommitAuthor(
+	ctx context.Context,
+	id domain.InvocationID,
+	mode domain.OperatingMode,
+	repo string,
+) (engine.ProductionCommitAuthor, bool, error) {
+	return a.authenticateProductionCommitAuthorWith(
+		ctx, id, mode, repo, false,
+	)
+}
+
+func (a storeAdmissionAuthority) authenticateProductionCommitAuthorForStart(
+	ctx context.Context,
+	id domain.InvocationID,
+	mode domain.OperatingMode,
+	repo string,
+) (engine.ProductionCommitAuthor, bool, error) {
+	claimed, production, err := a.productionCommitAuthor(ctx, id, mode)
+	if err != nil || !production {
+		return claimed, production, err
+	}
+	binding := productionCommitAuthorAuthenticationBinding{
+		repo: repo, appSlug: claimed.AppSlug, botUserID: claimed.BotUserID,
+	}
+	err = a.authenticatedStartAuthors.authenticate(id, binding, func() error {
+		return a.authenticateProductionCommitAuthorClaim(ctx, repo, claimed, false)
+	})
+	if err != nil {
+		return engine.ProductionCommitAuthor{}, false, err
+	}
+	return claimed, true, nil
+}
+
+func (a storeAdmissionAuthority) authenticateProductionCommitAuthorRevalidated(
+	ctx context.Context,
+	id domain.InvocationID,
+	mode domain.OperatingMode,
+	repo string,
+) (engine.ProductionCommitAuthor, bool, error) {
+	return a.authenticateProductionCommitAuthorWith(
+		ctx, id, mode, repo, true,
+	)
+}
+
+func (a storeAdmissionAuthority) authenticateProductionCommitAuthorWith(
+	ctx context.Context,
+	id domain.InvocationID,
+	mode domain.OperatingMode,
+	repo string,
+	revalidate bool,
+) (engine.ProductionCommitAuthor, bool, error) {
+	claimed, production, err := a.productionCommitAuthor(ctx, id, mode)
+	if err != nil || !production {
+		return claimed, production, err
+	}
+	if err := a.authenticateProductionCommitAuthorClaim(ctx, repo, claimed, revalidate); err != nil {
+		return engine.ProductionCommitAuthor{}, false, err
+	}
+	return claimed, true, nil
+}
+
+func (a storeAdmissionAuthority) authenticateProductionCommitAuthorClaim(
+	ctx context.Context,
+	repo string,
+	claimed engine.ProductionCommitAuthor,
+	revalidate bool,
+) error {
+	if a.commitAuthors == nil {
+		return fmt.Errorf(
+			"authenticate production commit author: no App identity resolver: %w",
+			publish.ErrAppBotIdentityMismatch,
+		)
+	}
+	var resolved publish.AppBotIdentity
+	var err error
+	if revalidate {
+		resolved, err = a.commitAuthors.Revalidate(ctx, repo)
+	} else {
+		resolved, err = a.commitAuthors.Resolve(ctx, repo)
+	}
+	if err != nil {
+		return fmt.Errorf(
+			"authenticate production commit author: %w", err,
+		)
+	}
+	if claimed.AppSlug != resolved.AppSlug || claimed.BotUserID != resolved.BotUserID {
+		return fmt.Errorf(
+			"authenticate production commit author: durable attribution disagrees with selected App: %w",
+			publish.ErrAppBotIdentityMismatch,
+		)
+	}
+	return nil
 }
 
 func (a storeAdmissionAuthority) importTrustProfile(
@@ -566,13 +850,16 @@ func isPermanentSeedCredentialError(err error) bool {
 // matching prior pass is restored. The daemon keeps the same conformance
 // closure for every scheduled doctor pass.
 type claudeComposition struct {
-	driver         *claude.Driver
-	backend        *ward.Backend
-	env            engine.AdmissionEnvironment
-	derive         engine.AdmissionDerivation
-	runConformance func(context.Context) error
-	closer         sessionCloser
-	janitor        *janitorSession
+	driver               *claude.Driver
+	backend              *ward.Backend
+	publicationTransport engine.PublicationTransport
+	publisher            *publish.Publisher
+	containerBin         string
+	env                  engine.AdmissionEnvironment
+	derive               engine.AdmissionDerivation
+	runConformance       func(context.Context) error
+	closer               sessionCloser
+	janitor              *janitorSession
 }
 
 // composeClaudeDriver builds the production ward gate and Claude driver.
@@ -589,7 +876,11 @@ func composeClaudeDriver(
 	if err != nil {
 		return nil, err
 	}
-	transport, janitor, err := claudeTransport(ctx, st, cfg)
+	transport, publisher, commitAuthors, janitor, err := claudeTransport(ctx, st, cfg)
+	if err != nil {
+		return nil, err
+	}
+	publicationTransport, err := engine.NewGitPublicationTransport(transport)
 	if err != nil {
 		return nil, err
 	}
@@ -656,6 +947,8 @@ func composeClaudeDriver(
 		Outcomes:   exportRecorder{store: st},
 		Authority: storeAdmissionAuthority{
 			store: st, allowedPaths: slices.Clone(cfg.AllowedPaths),
+			commitAuthors:             commitAuthors,
+			authenticatedStartAuthors: newProductionCommitAuthorAuthenticationCache(),
 		},
 		Artifacts: artifactStore{blobs: blobs, store: st},
 		Volumes:   adapters.Leaser,
@@ -689,6 +982,8 @@ func composeClaudeDriver(
 	}
 	composition := &claudeComposition{
 		driver: driver, backend: backend,
+		publicationTransport: publicationTransport,
+		publisher:            publisher, containerBin: cfg.ContainerBin,
 		env:    env,
 		derive: claudeAdmissionDerivation(cfg),
 		runConformance: func(runCtx context.Context) error {
@@ -804,47 +1099,74 @@ func claudeTransport(
 	ctx context.Context,
 	st *store.Store,
 	cfg claudeDriverConfig,
-) (*publish.Transport, *janitorSession, error) {
+) (*publish.Transport, *publish.Publisher, *publish.GitHubAppBotIdentityResolver, *janitorSession, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	keystore, err := publish.NewKeystore(cfg.CredentialsDir, cfg.StateRoot)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	authority, err := publish.NewInstallationAuthorityStore(cfg.StateRoot)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	janitor, err := publish.NewInstallationJanitor(
 		keystore, client, defaultGitHubAPIBase, authority, authority, time.Now,
 		defaultJanitorRemovalBound,
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	recorder, err := publish.NewStoreRecorder(st)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	trust, err := publish.NewStoreTrustSource(st)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	minter := publish.NewMinterWithJanitor(
 		keystore, client, defaultGitHubAPIBase, recorder, trust, time.Now, janitor,
 	)
+	tokens := publish.NewCachedTokenSource(minter, time.Now)
+	commitAuthors, err := publish.NewGitHubAppBotIdentityResolver(
+		tokens, keystore, client, defaultGitHubAPIBase, time.Now,
+	)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
 	transport, err := publish.NewTransport(
-		publish.NewCachedTokenSource(minter, time.Now),
+		tokens,
 		publish.TransportOptions{RemoteBase: defaultGitHubRemoteBase},
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
+	}
+	auditor, err := publish.NewGitHubWorkflowAuditor(
+		tokens, client, defaultGitHubAPIBase, time.Now,
+	)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	ledger, err := publish.NewStoreLedger(st)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	authorizations, err := publish.NewStoreAuthorizationSource(st)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	publisher := publish.NewPublisher(
+		tokens, client, defaultGitHubAPIBase, auditor, ledger, trust, authorizations,
+	)
+	if err := transport.AuthorizePublisher(publisher); err != nil {
+		return nil, nil, nil, nil, err
 	}
 	apps, err := keystore.ListApps()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	if len(apps) == 0 {
-		return nil, nil, publish.ErrNoAppCredentials
+		return nil, nil, nil, nil, publish.ErrNoAppCredentials
 	}
 	registrationIDs := make([]int64, 0, len(apps))
 	for _, app := range apps {
@@ -854,9 +1176,9 @@ func claudeTransport(
 		ctx, janitor, registrationIDs, defaultJanitorInterval,
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("start installation janitor: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("start installation janitor: %w", err)
 	}
-	return transport, session, nil
+	return transport, publisher, commitAuthors, session, nil
 }
 
 const janitorStartupTimeout = 2 * time.Minute

@@ -10,6 +10,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -136,15 +137,13 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		if err != nil {
 			return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
 		}
-		// An unadmitted production start would hand the materializing driver
-		// a zero spec; unlike the walking skeleton there is no meaning to a
-		// production dispatch without its audited admission. Hold the intent
-		// rather than ending the loop: a daemon composed without production
-		// admission is not configured for this lane, and failing here would
-		// let one pending production intent brick every restart of that
-		// daemon, taking the other lanes down with it. A daemon that is
-		// configured picks the same row up untouched.
-		if e.admission == nil {
+		// The production lane is real unattended execution. A missing or
+		// attended admission composition keeps the intent durable and pending;
+		// starting it would either hand the driver a zero spec or violate
+		// attended_dev's prohibition on automatic publication. Hold rather than
+		// fail so the daemon's other lanes remain healthy and an unattended
+		// composition can pick up the same row untouched.
+		if e.admission == nil || e.admission.environment.OperatingMode != domain.ModeUnattended {
 			return started, nil
 		}
 		binding, err := e.loadProductionBinding(ctx, request)
@@ -212,6 +211,7 @@ func MutableAdmissionPolicyRefusal(err error) bool {
 		errors.Is(err, domain.ErrRestoreTestStale) ||
 		errors.Is(err, domain.ErrInvalidBackupHealthStatus) ||
 		errors.Is(err, store.ErrRepositoryUntrusted) ||
+		errors.Is(err, publish.ErrJanitorInactive) ||
 		errors.Is(err, domain.ErrRepositoryIdentityMismatch) ||
 		errors.Is(err, domain.ErrPathBoundaryMismatch) ||
 		errors.Is(err, domain.ErrTrustProfileSuperseded)

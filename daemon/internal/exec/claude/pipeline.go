@@ -220,12 +220,26 @@ func (d *Driver) finish(ctx context.Context, in intent, out exportOutcome) (exec
 	if err != nil {
 		return exec.StageResult{}, err
 	}
-	// The two manifests the record names are stored before it is written:
-	// an ExecutionExport whose manifest digests resolve to nothing would
-	// leave the audit trail asserting objects no consumer can fetch, which
-	// is the same defect as naming unresolvable evidence.
-	artifacts, err := d.persistReleasedExport(ctx, in, out, record, imported.Claims)
+	// Every byte needed to reconstruct the exact candidate lands before the
+	// immutable export row. A crash can leave unreferenced content-addressed
+	// bytes, but never an ExecutionExport whose source material disappeared
+	// with the released directory.
+	artifacts, replay, err := d.persistReleasedMaterial(ctx, in, out, record, imported.Claims)
 	if err != nil {
+		return exec.StageResult{}, err
+	}
+	if err := d.recordExecutionReplay(in, replay); err != nil {
+		return exec.StageResult{}, err
+	}
+	durableReplay := ExecutionReplay{
+		InvocationID: in.InvocationID, ObservedBaseSHA: record.ObservedBaseSHA,
+		HeadSHA: record.HeadSHA, Manifest: out.manifest,
+		ManifestDigest: record.ManifestDigest, Evidence: out.evidence,
+		EvidenceManifestDigest: cloneDigest(record.EvidenceManifestDigest),
+		CommitPlanDigest:       cloneDigest(replay.CommitPlanDigest),
+		ImportOptions:          opts,
+	}
+	if err := d.recordExport(ctx, record, durableReplay); err != nil {
 		return exec.StageResult{}, err
 	}
 	return exec.StageResult{
@@ -301,27 +315,98 @@ func validateImportResult(imported importer.Result) error {
 	return nil
 }
 
-func (d *Driver) persistReleasedExport(
+func (d *Driver) persistReleasedMaterial(
 	ctx context.Context,
 	in intent,
 	out exportOutcome,
 	record domain.ExecutionExport,
 	claims []domain.AgentClaim,
-) ([]domain.Digest, error) {
+) ([]domain.Digest, executionReplay, error) {
 	if err := d.persistManifests(ctx, out, record); err != nil {
-		return nil, err
+		return nil, executionReplay{}, err
+	}
+	if err := d.persistRepositoryBlobs(ctx, out); err != nil {
+		return nil, executionReplay{}, err
 	}
 	// Evidence lands before the export record: the released blobs live only
 	// under this directory, and a durable row is an assertion that every
 	// object it implies can already be resolved.
 	artifacts, err := d.persistEvidence(ctx, in, out, claims)
 	if err != nil {
+		return nil, executionReplay{}, err
+	}
+	planDigest, err := d.persistCommitPlan(ctx, out)
+	if err != nil {
+		return nil, executionReplay{}, err
+	}
+	return artifacts, executionReplay{CommitPlanDigest: planDigest}, nil
+}
+
+// persistRepositoryBlobs copies every regular repository blob named by the
+// manifest into durable content-addressed storage. A successful importer
+// cannot have accepted an omitted blob, but this boundary rejects one
+// explicitly rather than depending on that earlier conclusion.
+func (d *Driver) persistRepositoryBlobs(ctx context.Context, out exportOutcome) error {
+	for _, entry := range out.manifest.Entries {
+		if entry.Kind != export.EntryRegular {
+			continue
+		}
+		if entry.BlobOmitted || entry.Digest == nil {
+			return fmt.Errorf("persist repository blob for %q: manifest content is unavailable", entry.Path)
+		}
+		digest := domain.Digest(*entry.Digest)
+		hexDigits, ok := contentaddr.Parse(string(digest))
+		if !ok {
+			return fmt.Errorf("persist repository blob for %q: digest %q is not canonical", entry.Path, digest)
+		}
+		body, err := readDigestedFile(filepath.Join(out.dir, "blobs", "sha256", hexDigits), digest)
+		if err != nil {
+			return fmt.Errorf("persist repository blob for %q: %w", entry.Path, err)
+		}
+		if err := d.artifacts.PutBlob(ctx, digest, body); err != nil {
+			return fmt.Errorf("persist repository blob for %q: %w", entry.Path, err)
+		}
+	}
+	return nil
+}
+
+func (d *Driver) persistCommitPlan(
+	ctx context.Context, out exportOutcome,
+) (*domain.Digest, error) {
+	if !out.commitPlanPresent {
+		return nil, nil
+	}
+	path := filepath.Join(out.dir, export.CommitPlanFilename)
+	digest, err := fileDigest(path)
+	if err != nil {
 		return nil, err
 	}
-	if err := d.recordExport(ctx, record); err != nil {
+	body, err := readDigestedFile(path, digest)
+	if err != nil {
 		return nil, err
 	}
-	return artifacts, nil
+	if err := d.artifacts.PutBlob(ctx, digest, body); err != nil {
+		return nil, fmt.Errorf("persist commit plan: %w", err)
+	}
+	return &digest, nil
+}
+
+// recordExecutionReplay closes the durable-export/source-material crash
+// window. It advances no lifecycle phase: it only enriches phaseExported with
+// independently re-auditable replay data before the authoritative export row
+// is allowed to commit.
+func (d *Driver) recordExecutionReplay(in intent, replay executionReplay) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if in.Phase != phaseExported || in.Export == nil {
+		return fmt.Errorf("record execution replay from phase %q: %w", in.Phase, ErrUnsupportedStart)
+	}
+	copyReplay := replay
+	in.Export.Replay = &copyReplay
+	if err := d.saveIntent(in); err != nil {
+		return fmt.Errorf("record execution replay: %w", err)
+	}
+	return nil
 }
 
 // validateReleasedExport re-authenticates every field returned by the gate or
@@ -580,41 +665,19 @@ func readEvidenceBlob(dir string, digest domain.Digest) ([]byte, error) {
 // recordExport writes the write-once export row, converging on an identical
 // stored record rather than failing a replay. A stored record that disagrees
 // is a real conflict: two different heads claiming one invocation.
-func (d *Driver) recordExport(ctx context.Context, record domain.ExecutionExport) error {
-	err := d.exports.RecordExecutionExport(ctx, record)
-	if err == nil {
-		return nil
-	}
-	stored, found, getErr := d.exports.LookupExecutionExport(ctx, record.InvocationID)
-	if getErr != nil {
-		return fmt.Errorf("record execution export: %w", errors.Join(err, getErr))
-	}
-	if !found {
-		return fmt.Errorf("record execution export: write failed and no stored record exists: %w", err)
-	}
-	if !sameExport(stored, record) {
-		return fmt.Errorf("%w: execution export for %s disagrees with the stored record: %w",
-			errExportAuthorityConflict, record.InvocationID,
-			domain.ErrImmutableTransition)
+func (d *Driver) recordExport(
+	ctx context.Context,
+	record domain.ExecutionExport,
+	replay ExecutionReplay,
+) error {
+	if err := d.exports.RecordExecutionExport(ctx, record, replay); err != nil {
+		if errors.Is(err, domain.ErrImmutableTransition) ||
+			errors.Is(err, domain.ErrParentKeyMismatch) {
+			return fmt.Errorf("%w: %w", errExportAuthorityConflict, err)
+		}
+		return fmt.Errorf("record execution export and replay: %w", err)
 	}
 	return nil
-}
-
-// sameExport compares two export records by value. ExecutionExport carries
-// an optional digest as a pointer, and both the constructor and the store's
-// decode allocate their own, so == would compare addresses and report every
-// evidence-carrying replay as a conflict — turning the crash window this
-// convergence exists to close into a durable failure.
-func sameExport(a, b domain.ExecutionExport) bool {
-	if (a.EvidenceManifestDigest == nil) != (b.EvidenceManifestDigest == nil) {
-		return false
-	}
-	if a.EvidenceManifestDigest != nil &&
-		*a.EvidenceManifestDigest != *b.EvidenceManifestDigest {
-		return false
-	}
-	a.EvidenceManifestDigest, b.EvidenceManifestDigest = nil, nil
-	return a == b
 }
 
 // seedBase materializes the daemon-owned checkout the gate seeds from. The
@@ -1285,6 +1348,56 @@ func (d *Driver) recoverExported(ctx context.Context, in intent) error {
 		return d.commitLost(ctx, in.InvocationID)
 	}
 	return d.commitRecordedExport(in, out, record)
+}
+
+// LoadExecutionReplay returns the authenticated durable source description
+// for a completed export. It reconstructs the import policy from the immutable
+// admission record; the caller must still independently authenticate those
+// options, import the durable bytes, compare the produced head with HeadSHA,
+// and apply current publication authority before any external effect.
+func (d *Driver) LoadExecutionReplay(
+	ctx context.Context, id domain.InvocationID,
+) (ExecutionReplay, error) {
+	in, err := d.loadIntentAdmission(ctx, id)
+	if err != nil {
+		return ExecutionReplay{}, err
+	}
+	if in.Phase != phaseCommitted || in.Result == nil ||
+		in.Result.Status != exec.StatusCompleted || in.Export == nil ||
+		in.Export.Replay == nil {
+		return ExecutionReplay{}, fmt.Errorf("invocation %s has no completed execution replay: %w",
+			id, ErrUnsupportedStart)
+	}
+	record, found, err := d.exports.LookupExecutionExportRecord(ctx, id)
+	if err != nil {
+		return ExecutionReplay{}, fmt.Errorf("load execution replay export: %w", err)
+	}
+	if !found || in.Result.HeadSHA != record.HeadSHA {
+		return ExecutionReplay{}, fmt.Errorf("execution replay for %s disagrees with durable export: %w",
+			id, domain.ErrParentKeyMismatch)
+	}
+	options, err := d.authority.ImportOptionsRecord(ctx, id, in.Spec, d.imports)
+	if err != nil {
+		return ExecutionReplay{}, fmt.Errorf("load execution replay import policy: %w", err)
+	}
+	options.BaseSHA = in.Spec.Base.BaseSHA
+	options.CommitDate = in.CommitDate
+	return ExecutionReplay{
+		InvocationID: id, ObservedBaseSHA: record.ObservedBaseSHA,
+		HeadSHA: record.HeadSHA, Manifest: in.Export.Manifest,
+		ManifestDigest: record.ManifestDigest, Evidence: in.Export.Evidence,
+		EvidenceManifestDigest: cloneDigest(record.EvidenceManifestDigest),
+		CommitPlanDigest:       cloneDigest(in.Export.Replay.CommitPlanDigest),
+		ImportOptions:          options,
+	}, nil
+}
+
+func cloneDigest(digest *domain.Digest) *domain.Digest {
+	if digest == nil {
+		return nil
+	}
+	copyDigest := *digest
+	return &copyDigest
 }
 
 func (d *Driver) commitRecordedExport(

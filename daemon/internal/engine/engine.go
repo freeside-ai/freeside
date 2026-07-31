@@ -38,10 +38,11 @@ var errReplay = errors.New("engine transition already committed")
 // execution driver. It is safe to call Reconcile repeatedly; the store ledger
 // and deterministic workflow identities collapse retries onto prior work.
 type Engine struct {
-	store       *store.Store
-	signet      *signet.Service
-	driver      exec.StageDriver
-	publication *fakePublicationWorkflow
+	store                 *store.Store
+	signet                *signet.Service
+	driver                exec.StageDriver
+	publication           *fakePublicationWorkflow
+	productionPublication *productionPublicationWorkflow
 	// admission is the configured capability gate and durable-record writer
 	// (see WithAdmission); nil leaves dispatch exactly as it was before a
 	// runner backend existed to admit against.
@@ -109,15 +110,29 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 		InvocationsStarted: started,
 		ResultsAccepted:    accepted,
 	}
-	if e.publication == nil {
-		return result, nil
+	var publicationErr error
+	if e.productionPublication != nil {
+		publication, err := e.productionPublication.reconcile(ctx)
+		result.ResultsAccepted += publication.accepted
+		result.PublicationTasksCompleted += publication.completed
+		result.ReadyItemsCreated += publication.ready
+		result.BlockedItemsCreated += publication.blocked
+		if publication.lastPR > 0 {
+			result.LastPRNumber = publication.lastPR
+		}
+		publicationErr = errors.Join(publicationErr, err)
 	}
-	publication, err := e.ReconcileFakePublications(ctx)
-	result.PublicationTasksCompleted = publication.PublicationTasksCompleted
-	result.ReadyItemsCreated = publication.ReadyItemsCreated
-	result.BlockedItemsCreated = publication.BlockedItemsCreated
-	result.LastPRNumber = publication.LastPRNumber
-	return result, err
+	if e.publication != nil {
+		publication, err := e.ReconcileFakePublications(ctx)
+		result.PublicationTasksCompleted += publication.PublicationTasksCompleted
+		result.ReadyItemsCreated += publication.ReadyItemsCreated
+		result.BlockedItemsCreated += publication.BlockedItemsCreated
+		if publication.LastPRNumber > 0 {
+			result.LastPRNumber = publication.LastPRNumber
+		}
+		publicationErr = errors.Join(publicationErr, err)
+	}
+	return result, publicationErr
 }
 
 // ReconcileFakePublications advances only the attended fake-publication lane.

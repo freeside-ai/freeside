@@ -649,7 +649,7 @@ func TestPostHandoffCrashFinishesFromTheRecordedExport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new execution export: %v", err)
 	}
-	if err := exports.RecordExecutionExport(ctx, record); err != nil {
+	if err := exports.RecordExecutionExport(ctx, record, ExecutionReplay{}); err != nil {
 		t.Fatalf("record export: %v", err)
 	}
 	// The released directory did not survive the crash.
@@ -657,7 +657,7 @@ func TestPostHandoffCrashFinishesFromTheRecordedExport(t *testing.T) {
 		Dir: filepath.Join(os.TempDir(),
 			"freeside-handoff-"+RunIDFor(testInvoke)+"-out-gone"),
 		Manifest: manifest, Evidence: evidence, EvidencePresent: true,
-		ObservedBaseSHA: testBase.BaseSHA,
+		ObservedBaseSHA: testBase.BaseSHA, Replay: &executionReplay{},
 	})
 
 	if err := d.Reconcile(ctx); err != nil {
@@ -670,6 +670,15 @@ func TestPostHandoffCrashFinishesFromTheRecordedExport(t *testing.T) {
 	if result.Status != exec.StatusCompleted || result.HeadSHA != head ||
 		len(result.Artifacts) != 1 || result.Artifacts[0] != artifactDigest {
 		t.Fatalf("recovered result = %#v, want the recorded head and evidence", result)
+	}
+	d.authority = stubAuthority{startErr: errors.New("current policy drift")}
+	replay, err := d.LoadExecutionReplay(ctx, testInvoke)
+	if err != nil {
+		t.Fatalf("LoadExecutionReplay after current drift: %v", err)
+	}
+	if replay.HeadSHA != head || replay.ManifestDigest != record.ManifestDigest ||
+		replay.EvidenceManifestDigest == nil || *replay.EvidenceManifestDigest != evidenceDigest {
+		t.Fatalf("execution replay = %#v, want the immutable recorded export", replay)
 	}
 
 	original, err := d.loadIntent(ctx, testInvoke)
@@ -740,7 +749,7 @@ func TestRecordedExportOutranksAStaleReleasedDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new execution export: %v", err)
 	}
-	if err := exports.RecordExecutionExport(ctx, record); err != nil {
+	if err := exports.RecordExecutionExport(ctx, record, ExecutionReplay{}); err != nil {
 		t.Fatalf("record export: %v", err)
 	}
 	dir, err := os.MkdirTemp("", "freeside-handoff-"+RunIDFor(testInvoke)+"-out-")
@@ -797,7 +806,7 @@ func TestConflictingDurableExportFailsRecoveryWithoutTerminalizing(t *testing.T)
 	if err != nil {
 		t.Fatalf("new conflicting export: %v", err)
 	}
-	if err := exports.RecordExecutionExport(ctx, record); err != nil {
+	if err := exports.RecordExecutionExport(ctx, record, ExecutionReplay{}); err != nil {
 		t.Fatalf("record conflicting export: %v", err)
 	}
 	orphan(t, d, phaseExported, &releasedExport{
@@ -849,7 +858,7 @@ func TestCommitResultPreservesTheDurableExportedIntent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new execution export: %v", err)
 	}
-	if err := exports.RecordExecutionExport(ctx, record); err != nil {
+	if err := exports.RecordExecutionExport(ctx, record, ExecutionReplay{}); err != nil {
 		t.Fatalf("record export: %v", err)
 	}
 	orphan(t, d, phaseExported, &releasedExport{

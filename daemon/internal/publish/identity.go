@@ -33,8 +33,11 @@ const branchDigestHexLen = 16
 // marker (plan §5.15 rule 4) that binds a pull request to its
 // publication identity.
 const (
-	markerPrefix = "<!-- freeside:publication-identity="
-	markerSuffix = " -->"
+	markerPrefix            = "<!-- freeside:publication-identity="
+	markerSuffix            = " -->"
+	maxPullRequestBodyBytes = 64 << 10
+	identityDigestBytes     = len("sha256:") + sha256.Size*2
+	maxCandidateBodyBytes   = maxPullRequestBodyBytes - len("\n\n") - len(markerPrefix) - identityDigestBytes - len(markerSuffix)
 )
 
 // IdentityInput is the candidate material a publication identity is
@@ -191,6 +194,15 @@ func ParseMarker(body string) (domain.Digest, bool) {
 // publication marker before the caller commits immutable workflow state. The
 // publisher appends the one authoritative marker itself.
 func ValidateCandidateBody(body string) error {
+	if len(body) > maxPullRequestBodyBytes {
+		return fmt.Errorf("candidate body exceeds %d bytes", maxPullRequestBodyBytes)
+	}
+	if prose := strings.TrimRight(body, "\n"); prose != "" && len(prose) > maxCandidateBodyBytes {
+		return fmt.Errorf(
+			"candidate body exceeds %d bytes after reserving the publication identity marker",
+			maxCandidateBodyBytes,
+		)
+	}
 	for line := range strings.Lines(body) {
 		if strings.HasPrefix(strings.TrimSpace(line), markerPrefix) {
 			return errors.New("candidate body contains a publication identity marker")

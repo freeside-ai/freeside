@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -16,9 +17,59 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
+
+func productionPublicationMetadata() engine.ProductionPublication {
+	return engine.ProductionPublication{
+		Title: "Test production work item",
+		Body:  "## Why\n\nExercise the production pipeline.\n",
+		CommitAuthor: engine.ProductionCommitAuthor{
+			AppSlug: "freeside-test", BotUserID: 12345,
+		},
+	}
+}
+
+func TestRealRunAttentionStateDetectsOpenPublicationBlock(t *testing.T) {
+	t.Parallel()
+	runID := domain.RunID("run-real-attention-state")
+	otherRunID := domain.RunID("run-other")
+	items := []store.Snapshotted[domain.AttentionItem]{
+		{Value: domain.AttentionItem{
+			ID: "ready-other", Type: domain.AttentionReadyForFinalReview,
+			Subject: domain.Subject{RunID: &otherRunID}, Status: domain.StatusOpen,
+		}},
+		{Value: domain.AttentionItem{
+			ID: "blocked-old", Type: domain.AttentionPublishBlocked,
+			Subject: domain.Subject{RunID: &runID}, Status: domain.StatusSuperseded,
+		}},
+		{Value: domain.AttentionItem{
+			ID: "blocked-current", Type: domain.AttentionPublishBlocked,
+			Subject: domain.Subject{RunID: &runID}, Status: domain.StatusOpen,
+		}},
+	}
+	ready, blocked, err := realRunAttentionState(items, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready.ID != "" || blocked.ID != "blocked-current" {
+		t.Fatalf("real-run attention state = ready %q, blocked %q", ready.ID, blocked.ID)
+	}
+	_, blocked, err = realRunAttentionState(items[:2], runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked.ID != "" {
+		t.Fatalf("superseded publication hold remained blocking: %q", blocked.ID)
+	}
+	items = append(items, items[len(items)-1])
+	if _, _, err := realRunAttentionState(items, runID); err == nil ||
+		!strings.Contains(err.Error(), "multiple open publish-blocked") {
+		t.Fatalf("duplicate open block error = %v", err)
+	}
+}
 
 // The production lane (#237): `freesided submit` persists a run whose
 // implement stage the engine dispatches from an artifact-bound invocation
@@ -102,6 +153,29 @@ func openProductionFixture(t *testing.T) *workflowFixture {
 	return &workflowFixture{root: root, store: st, signet: attention, driver: driver, engine: workflow}
 }
 
+func unattendedProductionOptions(t *testing.T) []engine.Option {
+	t.Helper()
+	profile := unattendedTrustProfile(t)
+	env := admissionEnvironment()
+	env.OperatingMode = domain.ModeUnattended
+	env.Base.Repo, env.Base.RepositoryID = profile.Repo, profile.RepositoryID
+	backend := fake.RunnerBackend{
+		BackendName: string(domain.BackendFreshVMReadOnlyVolumeHandoff),
+		Caps:        exec.NewCapabilitySet(conformantCeiling(t)...),
+	}
+	return []engine.Option{
+		engine.WithAdmission(
+			backend, []exec.Capability{exec.CapPostExitExport}, env,
+			func() time.Time { return admittedAt },
+		),
+		engine.WithAdmissionDerivation(func(
+			_ context.Context, invocationID domain.InvocationID,
+		) (string, domain.BaseRevision, error) {
+			return "freeside-handoff-" + string(invocationID) + "-ws", derivedBase, nil
+		}),
+	}
+}
+
 // submissionDigest derives a distinct canonical digest per run and role, so
 // retargeting tests exercise the run-level binding check rather than
 // colliding on shared fixture bytes.
@@ -114,6 +188,12 @@ func submissionDigest(runID, role string) domain.Digest {
 // policy artifacts submit binds a run to.
 func registerSubmissionArtifacts(
 	t *testing.T, st *store.Store, runID string,
+) (domain.Artifact, domain.Artifact, domain.ResolvedPolicy) {
+	return registerSubmissionArtifactsWithPaths(t, st, runID, "daemon/**")
+}
+
+func registerSubmissionArtifactsWithPaths(
+	t *testing.T, st *store.Store, runID, paths string,
 ) (domain.Artifact, domain.Artifact, domain.ResolvedPolicy) {
 	t.Helper()
 	ctx := context.Background()
@@ -129,7 +209,7 @@ func registerSubmissionArtifacts(
 		t.Fatalf("new spec artifact: %v", err)
 	}
 	resolved, err := domain.NewResolvedPolicy(domain.RunID(runID), []domain.PolicyKey{{
-		Key: "paths", Value: "daemon/**",
+		Key: "paths", Value: paths,
 		Provenance: domain.KeyProvenance{
 			Source: domain.ProvenanceOverride,
 			Digest: submissionDigest(runID, "policy-source"),
@@ -158,6 +238,54 @@ func registerSubmissionArtifacts(
 		t.Fatalf("register artifacts: %v", err)
 	}
 	return spec, policy, resolved
+}
+
+func seedLegacyProductionRun(
+	t *testing.T,
+	st *store.Store,
+	runID domain.RunID,
+	projectID domain.ProjectID,
+	spec domain.Artifact,
+	policy domain.Artifact,
+	resolved domain.ResolvedPolicy,
+) engine.ProductionRun {
+	t.Helper()
+	ctx := context.Background()
+	stageID := domain.StageID("implement-" + string(runID))
+	invocationID := domain.InvocationID("inv-implement-" + string(runID))
+	invocation, err := domain.NewAgentInvocation(invocationID, []domain.ArtifactID{spec.ID}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := domain.Run{
+		ID: runID, ProjectID: projectID, SpecDigest: spec.Digest, PolicyDigest: policy.Digest,
+		Stages: []domain.Stage{{ID: stageID, RunID: runID, Name: "implement", Attempts: []domain.Attempt{}}},
+	}
+	payload := []byte(fmt.Sprintf(
+		`{"invocation_id":%q,"run_id":%q,"stage_id":%q}`,
+		invocationID, runID, stageID,
+	))
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		if err := tx.PutResolvedPolicy(ctx, resolved); err != nil {
+			return err
+		}
+		if err := tx.PutAgentInvocation(ctx, invocation); err != nil {
+			return err
+		}
+		_, inserted, err := tx.EnqueueOutbox(
+			ctx, string(invocationID), engine.KindProductionInvocationRequested, payload,
+		)
+		if err == nil && !inserted {
+			return errors.New("legacy production marker already existed")
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("seed legacy production run: %v", err)
+	}
+	return engine.ProductionRun{Run: run, InvocationID: invocationID, StageID: stageID}
 }
 
 func reviseWaivedTrustProfile(t *testing.T, st *store.Store) {
@@ -194,7 +322,7 @@ func TestSubmitProductionRunConvergesAndRefusesRetargeting(t *testing.T) {
 	submission := engine.ProductionRunSpec{
 		RunID: "run-prod-submit", ProjectID: "proj-prod",
 		SpecArtifactID: spec.ID, PolicyArtifactID: policy.ID,
-		ResolvedPolicy: resolved,
+		ResolvedPolicy: resolved, Publication: productionPublicationMetadata(),
 	}
 	first, err := engine.SubmitProductionRun(ctx, f.store, submission)
 	if err != nil {
@@ -222,7 +350,7 @@ func TestSubmitProductionRunConvergesAndRefusesRetargeting(t *testing.T) {
 	_, err = engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
 		RunID: "run-prod-submit", ProjectID: "proj-prod",
 		SpecArtifactID: otherSpec.ID, PolicyArtifactID: otherPolicy.ID,
-		ResolvedPolicy: otherResolved,
+		ResolvedPolicy: otherResolved, Publication: productionPublicationMetadata(),
 	})
 	if !errors.Is(err, domain.ErrImmutableTransition) {
 		t.Fatalf("retargeting submit error = %v, want ErrImmutableTransition", err)
@@ -234,10 +362,66 @@ func TestSubmitProductionRunConvergesAndRefusesRetargeting(t *testing.T) {
 	_, err = engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
 		RunID: "run-prod-unregistered", ProjectID: "proj-prod",
 		SpecArtifactID: "artifact-missing", PolicyArtifactID: policy.ID,
-		ResolvedPolicy: unregisteredResolved,
+		ResolvedPolicy: unregisteredResolved, Publication: productionPublicationMetadata(),
 	})
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("unregistered submit error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestSubmitProductionRunRefusesPreexistingPublicationIntent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := openProductionFixture(t)
+	runID := "run-prod-occupied-publisher"
+	publicationID := domain.InvocationID("publish-production-" + runID)
+	intent := publish.Intent{
+		Identity:        submissionDigest(runID, "publication-identity"),
+		InvocationID:    publicationID,
+		Repo:            derivedBase.Repo,
+		BaseRef:         derivedBase.BaseRef,
+		SourceHeadSHA:   derivedBase.BaseSHA,
+		AuthorizationID: submissionDigest(runID, "authorization"),
+	}
+	payload, err := intent.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := publish.IntentKey(publicationID, publish.IntentKindPublication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, _, err := tx.EnqueueOutbox(ctx, key, publish.IntentKindPublication, payload)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	spec, policy, resolved := registerSubmissionArtifacts(t, f.store, runID)
+	_, err = engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
+		RunID: domain.RunID(runID), ProjectID: "proj-prod-occupied-publisher",
+		SpecArtifactID: spec.ID, PolicyArtifactID: policy.ID, ResolvedPolicy: resolved,
+		Publication: productionPublicationMetadata(),
+	})
+	if !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("submit with occupied publication key error = %v", err)
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.GetRun(ctx, domain.RunID(runID)); !errors.Is(err, store.ErrNotFound) {
+			if err == nil {
+				return errors.New("new run survived refused submission")
+			}
+			return fmt.Errorf("read run after refused submission: %w", err)
+		}
+		if _, err := tx.GetOutbox(ctx, "inv-implement-"+runID); !errors.Is(err, store.ErrNotFound) {
+			if err == nil {
+				return errors.New("new dispatch survived refused submission")
+			}
+			return fmt.Errorf("read dispatch after refused submission: %w", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -277,7 +461,7 @@ func TestSubmitProductionRunRejectsArtifactRoleSubstitution(t *testing.T) {
 			_, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
 				RunID: domain.RunID(runID), ProjectID: "proj-prod",
 				SpecArtifactID: spec.ID, PolicyArtifactID: policy.ID,
-				ResolvedPolicy: resolved,
+				ResolvedPolicy: resolved, Publication: productionPublicationMetadata(),
 			})
 			if !errors.Is(err, domain.ErrParentKeyMismatch) {
 				t.Fatalf("substituted %s error = %v, want ErrParentKeyMismatch", tc.name, err)
@@ -312,7 +496,7 @@ func TestSubmitProductionRunRefusesRetroactiveOwnership(t *testing.T) {
 		_, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
 			RunID: "run-prod-foreign", ProjectID: "proj-prod",
 			SpecArtifactID: spec.ID, PolicyArtifactID: policy.ID,
-			ResolvedPolicy: resolved,
+			ResolvedPolicy: resolved, Publication: productionPublicationMetadata(),
 		})
 		if !errors.Is(err, domain.ErrImmutableTransition) {
 			t.Fatalf("claim foreign run error = %v, want ErrImmutableTransition", err)
@@ -348,7 +532,7 @@ func TestSubmitProductionRunRefusesRetroactiveOwnership(t *testing.T) {
 		_, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
 			RunID: "run-prod-orphan-marker", ProjectID: "proj-prod",
 			SpecArtifactID: spec.ID, PolicyArtifactID: policy.ID,
-			ResolvedPolicy: resolved,
+			ResolvedPolicy: resolved, Publication: productionPublicationMetadata(),
 		})
 		if !errors.Is(err, domain.ErrImmutableTransition) {
 			t.Fatalf("adopt orphan marker error = %v, want ErrImmutableTransition", err)
@@ -382,7 +566,7 @@ func TestSubmitProductionRunRefusesRetroactiveOwnership(t *testing.T) {
 		_, err = engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
 			RunID: "run-prod-orphan-invocation", ProjectID: "proj-prod",
 			SpecArtifactID: spec.ID, PolicyArtifactID: policy.ID,
-			ResolvedPolicy: resolved,
+			ResolvedPolicy: resolved, Publication: productionPublicationMetadata(),
 		})
 		if !errors.Is(err, domain.ErrImmutableTransition) {
 			t.Fatalf("adopt orphan invocation error = %v, want ErrImmutableTransition", err)
@@ -396,7 +580,7 @@ func TestSubmitProductionRunRefusesRetroactiveOwnership(t *testing.T) {
 	})
 }
 
-func TestProductionRunDispatchesAndAcceptsOnce(t *testing.T) {
+func TestAttendedProductionRunRemainsPending(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := openProductionFixture(t)
@@ -405,13 +589,11 @@ func TestProductionRunDispatchesAndAcceptsOnce(t *testing.T) {
 	submitted, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
 		RunID: "run-prod-1", ProjectID: "proj-prod",
 		SpecArtifactID: spec.ID, PolicyArtifactID: policy.ID,
-		ResolvedPolicy: resolved,
+		ResolvedPolicy: resolved, Publication: productionPublicationMetadata(),
 	})
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	// One running inspect keeps the terminal result out of the dispatch pass,
-	// so acceptance is observable as its own reconcile transition.
 	f.driver.Script(submitted.InvocationID, fake.StageScript{
 		Outcome:         fake.OutcomeComplete,
 		RunningInspects: 1,
@@ -421,75 +603,209 @@ func TestProductionRunDispatchesAndAcceptsOnce(t *testing.T) {
 		},
 	})
 
+	result, err := f.engine.Reconcile(ctx)
+	if err != nil {
+		t.Fatalf("attended reconcile: %v", err)
+	}
+	if result.InvocationsStarted != 0 || result.ResultsAccepted != 0 {
+		t.Fatalf("attended production result = %#v, want durable hold", result)
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		pending, err := tx.ListPendingOutbox(ctx, engine.KindProductionInvocationRequested)
+		if err != nil {
+			return err
+		}
+		if len(pending) != 1 || pending[0].IdempotencyKey != string(submitted.InvocationID) {
+			t.Errorf("pending production intents = %#v, want submitted intent", pending)
+		}
+		admission, found, err := tx.LookupExecutionAdmission(ctx, submitted.InvocationID)
+		if err != nil {
+			return err
+		}
+		if found {
+			t.Errorf("attended production intent gained admission %#v", admission)
+		}
+		run, err := tx.GetRun(ctx, "run-prod-1")
+		if err != nil {
+			return err
+		}
+		if len(run.Stages) != 1 || len(run.Stages[0].Attempts) != 0 {
+			t.Errorf("attended production run gained attempts: %#v", run.Stages)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read attended hold: %v", err)
+	}
+	if replay, err := f.engine.Reconcile(ctx); err != nil || replay != (engine.ReconcileResult{}) {
+		t.Fatalf("attended hold replay = %#v, %v", replay, err)
+	}
+}
+
+func TestLegacyProductionRunFinishesWithoutPublicationAuthority(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := openUnattendedFixture(t)
+	runID := domain.RunID("run-prod-legacy-v1")
+	spec, policy, resolved := registerSubmissionArtifacts(t, f.store, string(runID))
+	submitted := seedLegacyProductionRun(t, f.store, runID, "proj-prod", spec, policy, resolved)
+	f.driver.Script(submitted.InvocationID, fake.StageScript{
+		Outcome: fake.OutcomeComplete, RunningInspects: 1,
+		Result: exec.StageResult{Summary: "completed legacy work", HeadSHA: "cafe1234"},
+	})
+
 	started, err := f.engine.Reconcile(ctx)
-	if err != nil {
-		t.Fatalf("dispatch reconcile: %v", err)
+	if err != nil || started.InvocationsStarted != 1 {
+		t.Fatalf("start legacy production = %#v, %v", started, err)
 	}
-	if started.InvocationsStarted != 1 {
-		t.Fatalf("InvocationsStarted = %d, want 1", started.InvocationsStarted)
+	var admission domain.ExecutionAdmission
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		admission, err = tx.GetExecutionAdmissionRecord(ctx, submitted.InvocationID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	executionExport, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+		InvocationID: submitted.InvocationID, AdmissionID: admission.ID,
+		ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: "cafe1234",
+		ManifestDigest: submissionDigest(string(runID), "manifest"), RecordedAt: admittedAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.RecordExecutionExport(ctx, f.store, executionExport, engine.ProductionReplay{}); err != nil {
+		t.Fatalf("record legacy export-only completion: %v", err)
 	}
 
-	// The recorded admission carries the artifact-bound (conversation-free)
-	// stage inputs and the derived per-attempt workspace and base.
-	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
-		admission, _, err := tx.LookupExecutionAdmission(ctx, submitted.InvocationID)
+	accepted := false
+	for range 3 {
+		result, err := f.engine.Reconcile(ctx)
 		if err != nil {
+			t.Fatalf("finish legacy production: %v", err)
+		}
+		accepted = accepted || result.ResultsAccepted == 1
+	}
+	if !accepted {
+		t.Fatal("legacy completion was not accepted")
+	}
+	reservation, err := publish.NewReservation(
+		domain.InvocationID("publish-production-"+string(runID)), runID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservationKey, err := reservation.Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.GetExecutionExportRecord(ctx, submitted.InvocationID); err != nil {
 			return err
 		}
-		wantWorkspace := "freeside-handoff-" + string(submitted.InvocationID) + "-ws"
-		if admission.Workspace != wantWorkspace {
-			t.Errorf("admission workspace = %q, want derived %q", admission.Workspace, wantWorkspace)
+		if _, err := tx.GetInbox(ctx, string(submitted.InvocationID)); err != nil {
+			return err
 		}
-		if admission.Base != derivedBase {
-			t.Errorf("admission base = %#v, want derived %#v", admission.Base, derivedBase)
+		if _, err := tx.GetOutbox(ctx, "production-publication/"+string(runID)); !errors.Is(err, store.ErrNotFound) {
+			if err == nil {
+				return errors.New("legacy run gained publication task")
+			}
+			return err
 		}
-		if admission.StageInputs == nil || admission.StageInputs.ConversationDigest != nil {
-			t.Errorf("stage inputs = %#v, want present with nil conversation digest", admission.StageInputs)
-		}
-		if admission.StageID != submitted.StageID {
-			t.Errorf("admission stage = %q, want %q", admission.StageID, submitted.StageID)
+		if _, err := tx.GetOutbox(ctx, reservationKey); !errors.Is(err, store.ErrNotFound) {
+			if err == nil {
+				return errors.New("legacy run gained publication reservation")
+			}
+			return err
 		}
 		return nil
 	}); err != nil {
-		t.Fatalf("read admission: %v", err)
+		t.Fatal(err)
+	}
+	emptyDriver, err := fake.NewStageDriverAt(filepath.Join(t.TempDir(), "empty-driver"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := engine.New(
+		f.store, f.signet, emptyDriver, unattendedProductionOptions(t)...,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := restarted.Reconcile(ctx); err != nil || result != (engine.ReconcileResult{}) {
+		t.Fatalf("legacy terminal replay without private driver = %#v, %v", result, err)
 	}
 
-	accepted, err := f.engine.Reconcile(ctx)
-	if err != nil {
-		t.Fatalf("accept reconcile: %v", err)
-	}
-	if accepted.ResultsAccepted != 1 {
-		t.Fatalf("ResultsAccepted = %d, want 1", accepted.ResultsAccepted)
-	}
-	replay, err := f.engine.Reconcile(ctx)
-	if err != nil {
-		t.Fatalf("replay reconcile: %v", err)
-	}
-	if replay.ResultsAccepted != 0 {
-		t.Fatalf("replayed ResultsAccepted = %d, want 0", replay.ResultsAccepted)
-	}
-
+	var original store.QueueEntry
 	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
-		entry, err := tx.GetInbox(ctx, string(submitted.InvocationID))
-		if err != nil {
-			return err
-		}
-		if entry.Kind != productionTerminalKind {
-			t.Errorf("inbox kind = %q, want %q", entry.Kind, productionTerminalKind)
-		}
-		var terminal struct {
-			Status  string `json:"status"`
-			HeadSHA string `json:"head_sha"`
-		}
-		if err := json.Unmarshal(entry.Payload, &terminal); err != nil {
-			return err
-		}
-		if terminal.Status != "completed" || terminal.HeadSHA != "cafe1234" {
-			t.Errorf("terminal record = %+v, want completed at cafe1234", terminal)
-		}
-		return nil
+		var err error
+		original, err = tx.GetOutbox(ctx, string(submitted.InvocationID))
+		return err
 	}); err != nil {
-		t.Fatalf("read terminal record: %v", err)
+		t.Fatal(err)
+	}
+	if _, err := engine.ProductionInvocationBackupPayloadDigests(original); err != nil {
+		t.Fatalf("legacy marker poisoned backup closure: %v", err)
+	}
+	if _, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
+		RunID: runID, ProjectID: "proj-prod", SpecArtifactID: spec.ID,
+		PolicyArtifactID: policy.ID, ResolvedPolicy: resolved,
+		Publication: productionPublicationMetadata(),
+	}); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("v2 metadata attached to legacy run: %v", err)
+	}
+	var current store.QueueEntry
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		current, err = tx.GetOutbox(ctx, string(submitted.InvocationID))
+		return err
+	}); err != nil || !reflect.DeepEqual(current, original) {
+		t.Fatalf("legacy marker changed after refused v2 retry: %#v, %v", current, err)
+	}
+}
+
+func TestLegacyCompletedTerminalWithoutExportStillRequiresDriverProof(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := openUnattendedFixture(t)
+	runID := domain.RunID("run-prod-legacy-forged-terminal")
+	spec, policy, resolved := registerSubmissionArtifacts(t, f.store, string(runID))
+	submitted := seedLegacyProductionRun(t, f.store, runID, "proj-prod", spec, policy, resolved)
+	f.driver.Script(submitted.InvocationID, fake.StageScript{
+		Outcome: fake.OutcomeComplete, RunningInspects: 1,
+		Result: exec.StageResult{Summary: "authentic legacy result", HeadSHA: "cafe1234"},
+	})
+	if _, err := f.engine.Reconcile(ctx); err != nil {
+		t.Fatalf("dispatch legacy production: %v", err)
+	}
+	if status, err := f.driver.Inspect(ctx, submitted.InvocationID); err != nil || status != exec.StatusCompleted {
+		t.Fatalf("advance legacy driver = %q, %v", status, err)
+	}
+	forged, err := json.Marshal(struct {
+		InvocationID domain.InvocationID `json:"invocation_id"`
+		RunID        domain.RunID        `json:"run_id"`
+		StageID      domain.StageID      `json:"stage_id"`
+		Status       exec.Status         `json:"status"`
+		HeadSHA      string              `json:"head_sha"`
+	}{
+		InvocationID: submitted.InvocationID, RunID: runID, StageID: submitted.StageID,
+		Status: exec.StatusCompleted, HeadSHA: "deadbeef",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, inserted, err := tx.RecordInbox(
+			ctx, string(submitted.InvocationID), productionTerminalKind, forged,
+		)
+		if err == nil && !inserted {
+			return errors.New("forged legacy terminal already existed")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.engine.Reconcile(ctx); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("legacy terminal without export = %v, want parent-key mismatch", err)
 	}
 }
 
@@ -501,7 +817,7 @@ func TestProductionCompletionHoldsAfterCurrentPolicyDrifts(t *testing.T) {
 	submitted, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
 		RunID: "run-prod-policy-hold", ProjectID: "proj-prod",
 		SpecArtifactID: spec.ID, PolicyArtifactID: policy.ID,
-		ResolvedPolicy: resolved,
+		ResolvedPolicy: resolved, Publication: productionPublicationMetadata(),
 	})
 	if err != nil {
 		t.Fatalf("submit: %v", err)
@@ -531,7 +847,7 @@ func TestProductionCompletionHoldsAfterCurrentPolicyDrifts(t *testing.T) {
 	}
 }
 
-func TestRecordedProductionTerminalReplaysAfterCurrentPolicyDrifts(t *testing.T) {
+func TestUnpublishedProductionCompletionNeverCreatesATerminal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := openUnattendedFixture(t)
@@ -539,7 +855,7 @@ func TestRecordedProductionTerminalReplaysAfterCurrentPolicyDrifts(t *testing.T)
 	submitted, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
 		RunID: "run-prod-policy-replay", ProjectID: "proj-prod",
 		SpecArtifactID: spec.ID, PolicyArtifactID: policy.ID,
-		ResolvedPolicy: resolved,
+		ResolvedPolicy: resolved, Publication: productionPublicationMetadata(),
 	})
 	if err != nil {
 		t.Fatalf("submit: %v", err)
@@ -551,53 +867,39 @@ func TestRecordedProductionTerminalReplaysAfterCurrentPolicyDrifts(t *testing.T)
 	if _, err := f.engine.Reconcile(ctx); err != nil {
 		t.Fatalf("dispatch reconcile: %v", err)
 	}
-	accepted, err := f.engine.Reconcile(ctx)
-	if err != nil {
-		t.Fatalf("accept reconcile: %v", err)
+	if accepted, err := f.engine.Reconcile(ctx); err == nil ||
+		!strings.Contains(err.Error(), "publication workflow is not configured") ||
+		accepted.ResultsAccepted != 0 {
+		t.Fatalf("unpublished completion = %#v, %v", accepted, err)
 	}
-	if accepted.ResultsAccepted != 1 {
-		t.Fatalf("ResultsAccepted = %d, want 1", accepted.ResultsAccepted)
-	}
-
-	reviseWaivedTrustProfile(t, f.store)
-	replay, err := f.engine.Reconcile(ctx)
-	if err != nil {
-		t.Fatalf("recorded terminal replay re-gated current policy: %v", err)
-	}
-	if replay.ResultsAccepted != 0 {
-		t.Fatalf("replayed ResultsAccepted = %d, want 0", replay.ResultsAccepted)
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetInbox(ctx, string(submitted.InvocationID))
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unpublished completion terminal = %v, want none", err)
 	}
 }
 
 func TestPreJobRefusalHoldsThePendingIntentWithoutStoppingReconcile(t *testing.T) {
 	ctx := context.Background()
-	f := openProductionFixture(t)
+	f := openUnattendedFixture(t)
 	spec, policy, resolved := registerSubmissionArtifacts(t, f.store, "run-prod-prejob")
 	submitted, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
 		RunID: "run-prod-prejob", ProjectID: "proj-prod",
 		SpecArtifactID: spec.ID, PolicyArtifactID: policy.ID,
-		ResolvedPolicy: resolved,
+		ResolvedPolicy: resolved, Publication: productionPublicationMetadata(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.driver.Script(submitted.InvocationID, fake.StageScript{
-		Outcome: fake.OutcomeComplete,
-		Result:  exec.StageResult{Summary: "completed after the pre-job recovered"},
+		Outcome: fake.OutcomeComplete, RunningInspects: 1,
+		Result: exec.StageResult{Summary: "completed after the pre-job recovered"},
 	})
 
-	backend := fake.RunnerBackend{
-		BackendName: "fake_runner",
-		Caps:        exec.NewCapabilitySet(exec.CapDetachableWorkspace, exec.CapPostExitExport),
-	}
 	refusing, err := engine.New(
 		f.store, f.signet, preJobRefusingDriver{StageDriver: f.driver},
-		engine.WithAdmission(backend, nil, admissionEnvironment(), func() time.Time { return admittedAt }),
-		engine.WithAdmissionDerivation(func(
-			_ context.Context, invocationID domain.InvocationID,
-		) (string, domain.BaseRevision, error) {
-			return "freeside-handoff-" + string(invocationID) + "-ws", derivedBase, nil
-		}),
+		unattendedProductionOptions(t)...,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -621,19 +923,19 @@ func TestPreJobRefusalHoldsThePendingIntentWithoutStoppingReconcile(t *testing.T
 
 func TestInputIORefusalHoldsThePendingIntentWithoutStoppingReconcile(t *testing.T) {
 	ctx := context.Background()
-	f := openProductionFixture(t)
+	f := openUnattendedFixture(t)
 	spec, policy, resolved := registerSubmissionArtifacts(t, f.store, "run-prod-input-io")
 	submitted, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
 		RunID: "run-prod-input-io", ProjectID: "proj-prod",
 		SpecArtifactID: spec.ID, PolicyArtifactID: policy.ID,
-		ResolvedPolicy: resolved,
+		ResolvedPolicy: resolved, Publication: productionPublicationMetadata(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.driver.Script(submitted.InvocationID, fake.StageScript{
-		Outcome: fake.OutcomeComplete,
-		Result:  exec.StageResult{Summary: "completed after input storage recovered"},
+		Outcome: fake.OutcomeComplete, RunningInspects: 1,
+		Result: exec.StageResult{Summary: "completed after input storage recovered"},
 	})
 
 	refusing, err := engine.New(
@@ -641,15 +943,7 @@ func TestInputIORefusalHoldsThePendingIntentWithoutStoppingReconcile(t *testing.
 			StageDriver: f.driver,
 			err:         fmt.Errorf("materialize policy: %w", exec.ErrInputUnavailable),
 		},
-		engine.WithAdmission(fake.RunnerBackend{
-			BackendName: "fake_runner",
-			Caps:        exec.NewCapabilitySet(exec.CapDetachableWorkspace, exec.CapPostExitExport),
-		}, nil, admissionEnvironment(), func() time.Time { return admittedAt }),
-		engine.WithAdmissionDerivation(func(
-			_ context.Context, invocationID domain.InvocationID,
-		) (string, domain.BaseRevision, error) {
-			return "freeside-handoff-" + string(invocationID) + "-ws", derivedBase, nil
-		}),
+		unattendedProductionOptions(t)...,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -673,12 +967,12 @@ func TestInputIORefusalHoldsThePendingIntentWithoutStoppingReconcile(t *testing.
 
 func TestInputIORefusalDoesNotStarveLaterProductionIntent(t *testing.T) {
 	ctx := context.Background()
-	f := openProductionFixture(t)
+	f := openUnattendedFixture(t)
 	spec1, policy1, resolved1 := registerSubmissionArtifacts(t, f.store, "run-prod-input-held")
 	held, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
 		RunID: "run-prod-input-held", ProjectID: "proj-prod",
 		SpecArtifactID: spec1.ID, PolicyArtifactID: policy1.ID,
-		ResolvedPolicy: resolved1,
+		ResolvedPolicy: resolved1, Publication: productionPublicationMetadata(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -687,15 +981,15 @@ func TestInputIORefusalDoesNotStarveLaterProductionIntent(t *testing.T) {
 	healthy, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
 		RunID: "run-prod-input-healthy", ProjectID: "proj-prod",
 		SpecArtifactID: spec2.ID, PolicyArtifactID: policy2.ID,
-		ResolvedPolicy: resolved2,
+		ResolvedPolicy: resolved2, Publication: productionPublicationMetadata(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []domain.InvocationID{held.InvocationID, healthy.InvocationID} {
 		f.driver.Script(id, fake.StageScript{
-			Outcome: fake.OutcomeComplete,
-			Result:  exec.StageResult{Summary: "completed after materialization"},
+			Outcome: fake.OutcomeComplete, RunningInspects: 3,
+			Result: exec.StageResult{Summary: "completed after materialization"},
 		})
 	}
 
@@ -704,15 +998,7 @@ func TestInputIORefusalDoesNotStarveLaterProductionIntent(t *testing.T) {
 			StageDriver: f.driver, invocationID: held.InvocationID,
 			err: fmt.Errorf("materialize policy: %w", exec.ErrInputUnavailable),
 		},
-		engine.WithAdmission(fake.RunnerBackend{
-			BackendName: "fake_runner",
-			Caps:        exec.NewCapabilitySet(exec.CapDetachableWorkspace, exec.CapPostExitExport),
-		}, nil, admissionEnvironment(), func() time.Time { return admittedAt }),
-		engine.WithAdmissionDerivation(func(
-			_ context.Context, invocationID domain.InvocationID,
-		) (string, domain.BaseRevision, error) {
-			return "freeside-handoff-" + string(invocationID) + "-ws", derivedBase, nil
-		}),
+		unattendedProductionOptions(t)...,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -729,8 +1015,8 @@ func TestInputIORefusalDoesNotStarveLaterProductionIntent(t *testing.T) {
 		t.Fatalf("held invocation inspect = %v, want not started", err)
 	}
 	if status, err := f.driver.Inspect(ctx, healthy.InvocationID); err != nil ||
-		status != exec.StatusCompleted {
-		t.Fatalf("healthy invocation = %q, %v, want completed", status, err)
+		status != exec.StatusRunning {
+		t.Fatalf("healthy invocation = %q, %v, want running", status, err)
 	}
 
 	resumed, err := f.engine.Reconcile(ctx)
@@ -745,12 +1031,12 @@ func TestInputIORefusalDoesNotStarveLaterProductionIntent(t *testing.T) {
 func TestProductionRunRefusesAWellShapedForgedTerminalRow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	f := openProductionFixture(t)
+	f := openUnattendedFixture(t)
 	spec, policy, resolved := registerSubmissionArtifacts(t, f.store, "run-prod-forged-terminal")
 	submitted, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
 		RunID: "run-prod-forged-terminal", ProjectID: "proj-prod",
 		SpecArtifactID: spec.ID, PolicyArtifactID: policy.ID,
-		ResolvedPolicy: resolved,
+		ResolvedPolicy: resolved, Publication: productionPublicationMetadata(),
 	})
 	if err != nil {
 		t.Fatalf("submit: %v", err)
@@ -817,13 +1103,13 @@ func TestProductionFailureSurfacesItemWithoutWedgingTheLoop(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := openProductionFixture(t)
+			f := openUnattendedFixture(t)
 			runID := "run-prod-" + strings.ReplaceAll(tc.name, " ", "-")
 			spec, policy, resolved := registerSubmissionArtifacts(t, f.store, runID)
 			submitted, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
 				RunID: domain.RunID(runID), ProjectID: "proj-prod",
 				SpecArtifactID: spec.ID, PolicyArtifactID: policy.ID,
-				ResolvedPolicy: resolved,
+				ResolvedPolicy: resolved, Publication: productionPublicationMetadata(),
 			})
 			if err != nil {
 				t.Fatalf("submit: %v", err)

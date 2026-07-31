@@ -7,6 +7,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -100,6 +101,7 @@ func TestMutableAdmissionPolicyRefusalIsAHold(t *testing.T) {
 		domain.ErrRestoreTestStale,
 		domain.ErrInvalidBackupHealthStatus,
 		store.ErrRepositoryUntrusted,
+		publish.ErrJanitorInactive,
 		domain.ErrRepositoryIdentityMismatch,
 		domain.ErrTrustProfileSuperseded,
 	} {

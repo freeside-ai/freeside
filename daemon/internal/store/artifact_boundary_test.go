@@ -222,4 +222,16 @@ func TestGetAttentionItemRejectsUnapprovedEvidence(t *testing.T) {
 	if !errors.Is(err, domain.ErrUnapprovedRecipe) {
 		t.Fatalf("GetAttentionItem under empty policy error = %v, want ErrUnapprovedRecipe", err)
 	}
+	var historical domain.AttentionItem
+	if err := closed.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		historical, err = tx.GetAttentionItemRecord(ctx, f.item.ID)
+		return err
+	}); err != nil {
+		t.Fatalf("GetAttentionItemRecord under empty policy: %v", err)
+	}
+	if historical.ID != f.item.ID || len(historical.EvidenceSnapshot) != 1 ||
+		historical.EvidenceSnapshot[0].Digest != f.item.EvidenceSnapshot[0].Digest {
+		t.Fatalf("historical attention record = %#v", historical)
+	}
 }

@@ -127,6 +127,7 @@ func backupPayloadExtractors() map[string]store.BackupPayloadDigestExtractor {
 		engine.FakePublicationInvocationOwnerKind: engine.FakePublicationInvocationOwnerBackupPayloadDigests,
 		signet.AgentInvocationRequestedKind:       signet.AgentInvocationBackupPayloadDigests,
 		engine.KindProductionInvocationRequested:  engine.ProductionInvocationBackupPayloadDigests,
+		engine.KindProductionPublicationRequested: engine.ProductionPublicationBackupPayloadDigests,
 		publish.IntentKindReservation:             publish.ReservationBackupPayloadDigests,
 		publish.IntentKindPublication:             publish.PublicationBackupPayloadDigests,
 	}

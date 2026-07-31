@@ -19,6 +19,7 @@ import (
 	"os"
 	osexec "os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +36,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 const defaultReconcileInterval = 100 * time.Millisecond
@@ -395,6 +397,7 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 			engine.FakePublicationInvocationOwnerKind: engine.FakePublicationInvocationOwnerBackupPayloadDigests,
 			signet.AgentInvocationRequestedKind:       signet.AgentInvocationBackupPayloadDigests,
 			engine.KindProductionInvocationRequested:  engine.ProductionInvocationBackupPayloadDigests,
+			engine.KindProductionPublicationRequested: engine.ProductionPublicationBackupPayloadDigests,
 			publish.IntentKindReservation:             publish.ReservationBackupPayloadDigests,
 			publish.IntentKindPublication:             publish.PublicationBackupPayloadDigests,
 		})
@@ -465,11 +468,22 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 		if err != nil {
 			return nil, err
 		}
-		workflow, err = engine.New(st, attention, stageDriver,
+		engineOptions := []engine.Option{
 			engine.WithAdmission(claudeWiring.backend, admissionFloor(cfg.Claude.OperatingMode),
 				claudeWiring.env, func() time.Time { return time.Now().UTC() }),
 			engine.WithAdmissionDerivation(claudeWiring.derive),
-		)
+		}
+		engineOptions = append(engineOptions, engine.WithProductionPublication(engine.ProductionPublicationConfig{
+			WorkDir:   filepath.Join(cfg.Claude.StateDir, "production-publication"),
+			Transport: claudeWiring.publicationTransport,
+			Publisher: claudeWiring.publisher, Artifacts: blobs,
+			ApprovedRecipes: cfg.ApprovedRecipes,
+			HoldOnly:        cfg.Claude.OperatingMode != domain.ModeUnattended,
+			NewRoom: func(image domain.ProjectImage) (engine.ProductionVerificationRoom, error) {
+				return ward.NewProjectImageRoom(claudeWiring.containerBin, image)
+			},
+		}))
+		workflow, err = engine.New(st, attention, stageDriver, engineOptions...)
 		if err != nil {
 			return nil, err
 		}

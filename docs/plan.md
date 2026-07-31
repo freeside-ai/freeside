@@ -1,9 +1,9 @@
 ---
 title: Freeside Project Plan
-revision: 23
+revision: 24
 status: active
 phase: 1A
-updated: 2026-07-30
+updated: 2026-07-31
 ---
 
 # Freeside
@@ -1685,13 +1685,17 @@ slug that Freeside stores. App names are thereafter effectively immutable
 policy because a rename churns the visible `[bot]` login; trust decisions
 continue to use only the numeric App ID.
 
-Daemon-authored agent commits carry a `Co-authored-by` trailer using the
-GitHub bot no-reply address
-`<bot-user-id>+<app-slug>[bot]@users.noreply.github.com`. Freeside resolves and
-records the bot account's numeric user ID from the canonical App slug; the bot
-user ID and slug are attribution metadata, not trust inputs. This
-human-readable provenance complements credential-level attribution and never
-substitutes for the App-ID, installation, repository, or token-mint checks.
+Daemon-authored agent commits use the selected GitHub App bot as their Git
+author and committer, with name `<app-slug>[bot]` and no-reply address
+`<bot-user-id>+<app-slug>[bot]@users.noreply.github.com`. This makes GitHub
+associate the commit with the same visible App principal and avatar that
+publishes it. Freeside resolves and records the bot account's numeric user ID
+from the canonical App slug and requires durable per-run attribution to match
+the registration selected by the repository-scoped installation token before
+execution or import. The bot user ID and slug are attribution metadata, not
+trust inputs. This human-readable provenance complements credential-level
+attribution and never substitutes for the App-ID, installation, repository,
+or token-mint checks.
 
 Defaults are hosted ntfy, embedded SQLite, one configuration directory, and
 `attended_dev` with honest isolation-class reporting.
@@ -1948,22 +1952,26 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 23:
+Revision 24:
 
-1. **The Codex execution driver is scheduled 1B work, an execution capacity
-   hedge.** Changed assumption: its Phase-2 "if useful" placement rested on
-   Claude execution capacity being sufficient, and operator experience shows
-   usage limits stall real work, so availability, not provider comparison,
-   motivates the driver; the shadow-review experiment cannot answer a
-   capacity problem. Overturns "Claude is the only local driver in Phase 1"
-   (revision 3) and the Phase-2 placement. Grounded in the #395 spike's go
-   verdict; adoption stays blocked on the #401 pre-adoption gates. The build
-   chain (the `agent-codex` base and its derived project images, ward's
-   second vendor topology, the driver binding, the selection contract)
-   lands as follow-on 1B units after the 1A.2 exit. Single-provider execution capacity joins the Section 14 risk
-   register. Unchanged: no automatic provider fallback (non-goal 5), and
-   shadow findings stay recorded, never routed (Section 7).
-   (User; devlog 2026-07-30-1942-codex-capacity-hedge.md; #396.)
+1. **Daemon-authored commits use the selected App bot as primary author and
+   committer.** This replaces revision 16's bot-user-ID-bearing
+   `Co-authored-by` trailer: GitHub associates the commit with the same visible
+   App principal and avatar that publishes it. Freeside resolves the canonical
+   bot account and durably binds each run's attribution to the registration
+   selected by the repository-scoped installation token before execution or
+   import. The slug and bot user ID remain attribution metadata; numeric App
+   ID, installation, repository, and token-mint checks remain authority.
+   (User; devlog 2026-07-31-0907-complete-production-pipeline.md; #411.)
+2. **Production-publication errors are contained per durable task.**
+   Environmental and mutable-authority failures retain the immutable task and
+   retry with bounded pacing; permanent external refusals create a durable
+   repair hold; malformed durable reconstruction and other state
+   contradictions remain fail-loud. A successful durable outcome survives a
+   later lock-release failure. This replaces per-call-site fatal propagation,
+   which let one external failure terminate the daemon and could only converge
+   by enumerating an open-ended error surface.
+   (User; devlog 2026-07-31-0907-complete-production-pipeline.md; #411.)
 
 ## 14. Risks
 
