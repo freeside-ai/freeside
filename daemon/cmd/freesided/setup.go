@@ -18,7 +18,7 @@ import (
 )
 
 func runSetupMain(args []string) {
-	if err := runSetup(context.Background(), args, os.Stdout, os.Stderr); err != nil {
+	if err := runSetup(context.Background(), args, os.Stdin, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "freesided setup:", err)
 		os.Exit(1)
 	}
@@ -32,9 +32,9 @@ type setupResult struct {
 	ManifestFields url.Values               `json:"manifest_fields,omitempty"`
 }
 
-func runSetup(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	return runSetupCommand(
-		ctx, args, stdout, stderr,
+		ctx, args, stdin, stdout, stderr,
 		&http.Client{Timeout: 30 * time.Second},
 		defaultGitHubAPIBase,
 		defaultGitHubRemoteBase,
@@ -44,18 +44,25 @@ func runSetup(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 func runSetupCommand(
 	ctx context.Context,
 	args []string,
+	stdin io.Reader,
 	stdout, stderr io.Writer,
 	client *http.Client,
 	apiBaseURL, webBaseURL string,
 ) error {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-registration-code-stdin=") ||
+			strings.HasPrefix(arg, "--registration-code-stdin=") {
+			return errors.New("-registration-code-stdin does not accept a value")
+		}
+	}
 	flags := flag.NewFlagSet("freesided setup", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configDir := flags.String("config-dir", "", "single owner-private Freeside configuration directory")
 	operator := flags.String("operator", "", "canonical personal GitHub login (required)")
 	operatorID := flags.Int64("operator-id", 0, "canonical numeric personal GitHub account ID (required)")
-	registrationCode := flags.String(
-		"registration-code", "",
-		"one-time GitHub App manifest conversion code from the registration form")
+	registrationCodeStdin := flags.Bool(
+		"registration-code-stdin", false,
+		"read the one-time GitHub App manifest conversion code from standard input")
 	registrationRetry := flags.Int(
 		"registration-retry", 0,
 		"App-name collision retry number used to regenerate the manifest")
@@ -63,7 +70,7 @@ func runSetupCommand(
 		return err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected positional arguments: %v", flags.Args())
+		return fmt.Errorf("unexpected positional arguments: %d", flags.NArg())
 	}
 	if *operator == "" || *operatorID <= 0 {
 		return errors.New("-operator and positive -operator-id are required")
@@ -145,10 +152,14 @@ func runSetupCommand(
 		}
 		result.Status = "complete"
 		result.Registration = &registration
-	} else if *registrationCode != "" {
+	} else if *registrationCodeStdin {
+		registrationCode, err := readRegistrationCode(stdin)
+		if err != nil {
+			return err
+		}
 		registrar := publish.NewRegistrar(keystore, client, apiBaseURL, webBaseURL)
 		credentials, err := registrar.ExchangeCodePendingAuthority(
-			ctx, *registrationCode, publish.RegistrationTarget{
+			ctx, registrationCode.Reveal(), publish.RegistrationTarget{
 				Owner: *operator, OwnerID: *operatorID, Visibility: publish.AppVisibilityPublic,
 			},
 		)
@@ -185,4 +196,30 @@ func runSetupCommand(
 		return fmt.Errorf("write setup result: %w", err)
 	}
 	return nil
+}
+
+const maxRegistrationCodeBytes = 4096
+
+func readRegistrationCode(stdin io.Reader) (publish.Secret, error) {
+	if stdin == nil {
+		return "", errors.New("registration code standard input is unavailable")
+	}
+	payload, err := io.ReadAll(io.LimitReader(stdin, maxRegistrationCodeBytes+1))
+	if err != nil {
+		// Reader errors are untrusted: some implementations include recently
+		// read bytes in the error, which would turn diagnostics into a leak.
+		return "", errors.New("read registration code from standard input")
+	}
+	if len(payload) > maxRegistrationCodeBytes {
+		return "", errors.New("registration code from standard input exceeds 4096 bytes")
+	}
+	code := strings.TrimSuffix(string(payload), "\n")
+	code = strings.TrimSuffix(code, "\r")
+	if code == "" {
+		return "", errors.New("registration code from standard input is empty")
+	}
+	if strings.ContainsAny(code, "\r\n") {
+		return "", errors.New("registration code from standard input must be one line")
+	}
+	return publish.Secret(code), nil
 }
