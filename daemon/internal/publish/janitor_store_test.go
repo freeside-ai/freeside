@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 )
@@ -63,6 +64,41 @@ func TestInstallationAuthorityStoreServesTheAuthoredEntry(t *testing.T) {
 	}
 }
 
+func TestInstallationAuthorityStoreInitializesCanonicalRegistrationAuthority(t *testing.T) {
+	_, store := newAuthorityStore(t, "")
+	if err := store.InitializeDocument(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	registration := publish.AppRegistration{
+		Owner: "operator", OwnerID: 4242, Visibility: publish.AppVisibilityPublic,
+		AppID: 91, Name: "freeside-operator", Slug: "freeside-operator",
+		ClientID: "Iv1.example",
+	}
+	if err := store.InitializeRegistration(t.Context(), registration); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.InitializeRegistration(t.Context(), registration); err != nil {
+		t.Fatalf("idempotent registration initialization: %v", err)
+	}
+	document, err := store.Document(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Registrations) != 1 {
+		t.Fatalf("registrations = %+v", document.Registrations)
+	}
+	entry := document.Registrations[0]
+	if entry.RegistrationID != registration.AppID ||
+		entry.ActiveEpoch != 1 || entry.DurableIntentRevision != 1 ||
+		len(entry.TrustedOwners) != 1 ||
+		entry.TrustedOwners[0].Login != registration.Owner ||
+		entry.TrustedOwners[0].ID != registration.OwnerID ||
+		entry.TrustedInstallations == nil ||
+		len(entry.TrustedInstallations) != 0 {
+		t.Fatalf("initial registration authority = %+v", entry)
+	}
+}
+
 func TestInstallationAuthorityStoreCopiesTheRegistrationIntoThePendingEnvelope(t *testing.T) {
 	payload := withPending(`"active_epoch": 2, "durable_intent_revision": 5,
       "expected_account": "example-org", "expected_account_id": 4242, "installation_id": 77,
@@ -76,6 +112,104 @@ func TestInstallationAuthorityStoreCopiesTheRegistrationIntoThePendingEnvelope(t
 	}
 	if authority.Pending == nil || authority.Pending.RegistrationID != 91 {
 		t.Fatalf("pending envelope is %+v, want registration 91", authority.Pending)
+	}
+}
+
+func TestInstallationAuthorityStoreDocumentReplacementIsValidatedAndAtomic(t *testing.T) {
+	_, store := newAuthorityStore(t, validAuthorityJSON)
+	document, err := store.Document(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.Registrations[0].DurableIntentRevision++
+	if err := store.UpdateDocument(
+		t.Context(),
+		func(current *publish.InstallationAuthorityDocument) error {
+			*current = document
+			return nil
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := store.Document(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Registrations[0].DurableIntentRevision != 6 {
+		t.Fatalf("revision = %d, want 6", reloaded.Registrations[0].DurableIntentRevision)
+	}
+	invalid := reloaded
+	invalid.Registrations[0].TrustedInstallations = nil
+	if err := store.UpdateDocument(
+		t.Context(),
+		func(current *publish.InstallationAuthorityDocument) error {
+			*current = invalid
+			return nil
+		},
+	); err == nil {
+		t.Fatal("UpdateDocument accepted an implicit destructive empty binding set")
+	}
+	unchanged, err := store.Document(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Registrations[0].DurableIntentRevision != 6 ||
+		unchanged.Registrations[0].TrustedInstallations == nil {
+		t.Fatalf("failed replacement changed document: %+v", unchanged)
+	}
+}
+
+func TestInstallationAuthorityStoreSerializesSeparateWriters(t *testing.T) {
+	dir, first := newAuthorityStore(t, validAuthorityJSON)
+	second, err := publish.NewInstallationAuthorityStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- first.UpdateDocument(
+			context.Background(),
+			func(document *publish.InstallationAuthorityDocument) error {
+				close(firstEntered)
+				<-releaseFirst
+				document.Registrations[0].DurableIntentRevision++
+				return nil
+			},
+		)
+	}()
+	<-firstEntered
+	secondEntered := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- second.UpdateDocument(
+			context.Background(),
+			func(document *publish.InstallationAuthorityDocument) error {
+				close(secondEntered)
+				document.Registrations[0].DurableIntentRevision += 10
+				return nil
+			},
+		)
+	}()
+	select {
+	case <-secondEntered:
+		t.Fatal("separate authority writer entered while the state lock was held")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatal(err)
+	}
+	document, err := first.Document(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := document.Registrations[0].DurableIntentRevision; got != 16 {
+		t.Fatalf("serialized revision = %d, want 16", got)
 	}
 }
 

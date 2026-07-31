@@ -95,6 +95,21 @@ func TestProjectImageRoundTripAndReplay(t *testing.T) {
 		if len(list) != 1 || list[0].ID != image.ID {
 			t.Fatalf("list = %+v, want one image %s", list, image.ID)
 		}
+		recorded, err := tx.ProjectImageRefRecorded(ctx, image.ImageRef)
+		if err != nil {
+			return err
+		}
+		if !recorded {
+			t.Fatalf("global image ref %q was not reported as recorded", image.ImageRef)
+		}
+		missing, err := tx.ProjectImageRefRecorded(
+			ctx, domain.ImageRef("example.test/project@sha256:"+strings.Repeat("d", 64)))
+		if err != nil {
+			return err
+		}
+		if missing {
+			t.Fatal("unrecorded global image ref was reported as recorded")
+		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)

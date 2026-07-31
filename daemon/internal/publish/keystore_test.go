@@ -118,6 +118,39 @@ func TestKeystoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPendingAuthorityCredentialsFailClosedUntilFinalized(t *testing.T) {
+	ks := newTestKeystore(t)
+	creds := testCredentials()
+	if err := ks.SaveAppPendingAuthority(creds); err != nil {
+		t.Fatalf("SaveAppPendingAuthority: %v", err)
+	}
+	if _, err := ks.LoadApp(creds.OwnerID); !errors.Is(err, publish.ErrPendingAppAuthority) {
+		t.Fatalf("LoadApp pending credentials = %v, want ErrPendingAppAuthority", err)
+	}
+	if _, err := ks.ListApps(); !errors.Is(err, publish.ErrPendingAppAuthority) {
+		t.Fatalf("ListApps pending credentials = %v, want ErrPendingAppAuthority", err)
+	}
+	pending, err := ks.ListAppsIncludingPendingAuthority()
+	if err != nil || len(pending) != 1 || !pending[0].AuthorityPending {
+		t.Fatalf("setup enumeration = (%+v, %v), want one pending registration", pending, err)
+	}
+	wrong := creds.Registration()
+	wrong.AppID++
+	if err := ks.FinalizeAppAuthority(wrong); err == nil {
+		t.Fatal("FinalizeAppAuthority accepted a changed canonical registration")
+	}
+	if _, err := ks.ListApps(); !errors.Is(err, publish.ErrPendingAppAuthority) {
+		t.Fatalf("changed-identity finalization cleared marker: %v", err)
+	}
+	if err := ks.FinalizeAppAuthority(creds.Registration()); err != nil {
+		t.Fatalf("FinalizeAppAuthority: %v", err)
+	}
+	apps, err := ks.ListApps()
+	if err != nil || len(apps) != 1 || apps[0].AuthorityPending {
+		t.Fatalf("finalized enumeration = (%+v, %v), want one usable registration", apps, err)
+	}
+}
+
 // TestKeystoreMultipleRegistrations pins the owner-keyed layout,
 // deterministic enumeration, metadata, and containment modes.
 func TestKeystoreMultipleRegistrations(t *testing.T) {
@@ -1199,6 +1232,29 @@ func TestLoadAppRecoversCompletedInitialStage(t *testing.T) {
 	}
 	if _, err := os.Lstat(appDir + ".staging"); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("staging directory survived recovery")
+	}
+}
+
+func TestPendingAuthorityPreCredentialStageIsNeverPromoted(t *testing.T) {
+	ks := newTestKeystore(t)
+	appDir := testAppDir(ks, testCredentials().OwnerID)
+	staging := appDir + ".staging"
+	if err := os.MkdirAll(staging, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "authority.pending"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	apps, err := ks.ListAppsIncludingPendingAuthority()
+	if err != nil {
+		t.Fatalf("ListAppsIncludingPendingAuthority: %v", err)
+	}
+	if len(apps) != 0 {
+		t.Fatalf("marker-only stage promoted as credentials: %+v", apps)
+	}
+	if _, err := os.Lstat(staging); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("marker-only stage survived recovery: %v", err)
 	}
 }
 

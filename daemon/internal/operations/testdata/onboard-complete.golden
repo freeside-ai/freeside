@@ -1,0 +1,181 @@
+{
+  "status": "complete",
+  "approval_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+  "profile": {
+    "repo": "example/repo",
+    "repository_id": 44,
+    "pr_execution": "audited_same_repo",
+    "candidate_automation_changes": "block",
+    "pr_github_token_permissions": "read_only",
+    "allow_oidc": false,
+    "allow_environment_secrets": false,
+    "allow_secret_bearing_pr_jobs": false,
+    "allow_self_hosted_ci": false,
+    "allow_pull_request_target": false,
+    "allow_reusable_workflows": false,
+    "allow_package_publishing": false,
+    "allow_artifact_consumers": false,
+    "commit_plan": "single_commit",
+    "message_ruleset": "github/1",
+    "workflow_audit_digest": "sha256:c1467a6321f458d7d21d1b1abf8800a03e581cf69f1f17a2cb96545001ba8132",
+    "review": {
+      "mode": "auto",
+      "config_digest": "sha256:review-config"
+    },
+    "protected_paths": {
+      "extra_automation_control_patterns": [
+        ".github/workflows/**"
+      ],
+      "extra_reviewer_instruction_patterns": [
+        "AGENTS.md"
+      ],
+      "extra_git_metadata_patterns": null,
+      "extra_verification_control_patterns": null,
+      "extra_prompts_and_policy_patterns": [
+        "prompts/**"
+      ],
+      "extra_egress_and_trust_patterns": null,
+      "extra_materiality_rules_patterns": null
+    },
+    "profile_digest": "sha256:165434153c7eb41c6e781720c3097822edc535c5760fad9fb2fe0c99b6ffe513"
+  },
+  "review": {
+    "profile": {
+      "repo": "example/repo",
+      "repository_id": 44,
+      "pr_execution": "audited_same_repo",
+      "candidate_automation_changes": "block",
+      "pr_github_token_permissions": "read_only",
+      "allow_oidc": false,
+      "allow_environment_secrets": false,
+      "allow_secret_bearing_pr_jobs": false,
+      "allow_self_hosted_ci": false,
+      "allow_pull_request_target": false,
+      "allow_reusable_workflows": false,
+      "allow_package_publishing": false,
+      "allow_artifact_consumers": false,
+      "commit_plan": "single_commit",
+      "message_ruleset": "github/1",
+      "workflow_audit_digest": "sha256:c1467a6321f458d7d21d1b1abf8800a03e581cf69f1f17a2cb96545001ba8132",
+      "review": {
+        "mode": "auto",
+        "config_digest": "sha256:review-config"
+      },
+      "protected_paths": {
+        "extra_automation_control_patterns": [
+          ".github/workflows/**"
+        ],
+        "extra_reviewer_instruction_patterns": [
+          "AGENTS.md"
+        ],
+        "extra_git_metadata_patterns": null,
+        "extra_verification_control_patterns": null,
+        "extra_prompts_and_policy_patterns": [
+          "prompts/**"
+        ],
+        "extra_egress_and_trust_patterns": null,
+        "extra_materiality_rules_patterns": null
+      },
+      "profile_digest": "sha256:165434153c7eb41c6e781720c3097822edc535c5760fad9fb2fe0c99b6ffe513"
+    },
+    "approved": {
+      "audit": {
+        "id": 7,
+        "audit": {
+          "repo": "example/repo",
+          "audited_commit_sha": "1111111111111111111111111111111111111111",
+          "audited_at": "2026-07-31T12:00:00Z",
+          "workflow_audit_digest": "sha256:c1467a6321f458d7d21d1b1abf8800a03e581cf69f1f17a2cb96545001ba8132",
+          "effective_token_permissions": "read_only",
+          "oidc_available": false,
+          "environment_secrets": false,
+          "secret_bearing_pr_jobs": false,
+          "pull_request_target": false,
+          "reusable_workflows": false,
+          "self_hosted_runners": false,
+          "package_publishing": false,
+          "artifact_consuming_workflows": false
+        }
+      },
+      "evidence": {
+        "version": "freeside-workflow-audit/v2",
+        "repo": "example/repo",
+        "workflows": []
+      }
+    },
+    "observed": {
+      "audit": {
+        "id": 7,
+        "audit": {
+          "repo": "example/repo",
+          "audited_commit_sha": "1111111111111111111111111111111111111111",
+          "audited_at": "2026-07-31T12:00:00Z",
+          "workflow_audit_digest": "sha256:c1467a6321f458d7d21d1b1abf8800a03e581cf69f1f17a2cb96545001ba8132",
+          "effective_token_permissions": "read_only",
+          "oidc_available": false,
+          "environment_secrets": false,
+          "secret_bearing_pr_jobs": false,
+          "pull_request_target": false,
+          "reusable_workflows": false,
+          "self_hosted_runners": false,
+          "package_publishing": false,
+          "artifact_consuming_workflows": false
+        }
+      },
+      "evidence": {
+        "version": "freeside-workflow-audit/v2",
+        "repo": "example/repo",
+        "workflows": []
+      }
+    },
+    "changed_fields": []
+  },
+  "installation": {
+    "registration_id": 11,
+    "installation_id": 22,
+    "account": "example",
+    "account_id": 33,
+    "repository_id": 44,
+    "pending": {
+      "active_epoch": 3,
+      "durable_intent_revision": 7,
+      "authored_installation_id": 0,
+      "current_repository_ids": [],
+      "expected_repository_ids": [
+        44
+      ],
+      "required_repository_mode": "selected",
+      "expires_at": "2026-07-31T13:00:00Z"
+    }
+  },
+  "image_request": {
+    "repository": "example/repo",
+    "repository_id": 44,
+    "commit_sha": "1111111111111111111111111111111111111111",
+    "recipe_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "base_image_ref": "ghcr.io/freeside-ai/agent@sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "base_build_ref": "localhost/freeside-agent:build",
+    "registry": "",
+    "local_registry_port": 5100,
+    "image_name": "example-repo",
+    "ref_tag": "v1",
+    "dns": [
+      "1.1.1.1"
+    ],
+    "build_proxy": "http://proxy.example.test"
+  },
+  "project_image": {
+    "id": "sha256:eea884f32f8b3ba13ca83bde42b1a0cff843ef36fdb64648232612b1b2687eb8",
+    "repository": "example/repo",
+    "repository_id": 44,
+    "commit_sha": "1111111111111111111111111111111111111111",
+    "recipe_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "preparation_command": [
+      "/usr/local/bin/freeside-project-prepare"
+    ],
+    "base_image_ref": "ghcr.io/freeside-ai/agent@sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "image_ref": "ghcr.io/freeside-ai/example-repo@sha256:4444444444444444444444444444444444444444444444444444444444444444"
+  },
+  "operating_mode": "attended_dev",
+  "isolation_class": "process_local"
+}

@@ -52,6 +52,12 @@ var ErrNoAppCredentials = errors.New("no GitHub App credentials in the keystore"
 // hiding which binding is absent.
 var ErrNoAppRegistration = errors.New("no GitHub App registration for owner")
 
+// ErrPendingAppAuthority reports credentials durably captured from a one-time
+// manifest conversion whose matching installation authority has not yet been
+// committed. Ordinary consumers fail closed; setup alone may resume and
+// finalize the exact pending record.
+var ErrPendingAppAuthority = errors.New("GitHub App registration is pending installation authority")
+
 // ErrLegacyAppMigrationRequired is returned while the former singleton
 // layout is present. Its metadata has no owner or visibility, so no load,
 // enumeration, or new save may silently attribute it; MigrateLegacyApp

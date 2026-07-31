@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -46,6 +47,7 @@ type realRunEnv struct {
 	baseSHA        string
 	promptPackage  string
 	instructions   string
+	approvedRecipe domain.Digest
 }
 
 func realRunEnvironment(t *testing.T) realRunEnv {
@@ -57,7 +59,8 @@ func realRunEnvironment(t *testing.T) realRunEnv {
 			"FREESIDE_REAL_RUN_AUTH_IDENTITY, FREESIDE_REAL_RUN_AUTH_VOLUME, " +
 			"FREESIDE_REAL_RUN_REPO (owner/name), FREESIDE_REAL_RUN_REPOSITORY_ID, " +
 			"FREESIDE_REAL_RUN_BASE_REF, FREESIDE_REAL_RUN_BASE_SHA, " +
-			"FREESIDE_REAL_RUN_PROMPT_PACKAGE (file), FREESIDE_REAL_RUN_INSTRUCTIONS (file)")
+			"FREESIDE_REAL_RUN_PROMPT_PACKAGE (file), FREESIDE_REAL_RUN_INSTRUCTIONS (file), " +
+			"FREESIDE_REAL_RUN_APPROVED_RECIPE (sha256 digest)")
 	}
 	env := realRunEnv{
 		stateRoot:      requireEnv(t, "FREESIDE_REAL_RUN_STATE_ROOT"),
@@ -71,6 +74,7 @@ func realRunEnvironment(t *testing.T) realRunEnv {
 		baseSHA:        requireEnv(t, "FREESIDE_REAL_RUN_BASE_SHA"),
 		promptPackage:  requireEnv(t, "FREESIDE_REAL_RUN_PROMPT_PACKAGE"),
 		instructions:   requireEnv(t, "FREESIDE_REAL_RUN_INSTRUCTIONS"),
+		approvedRecipe: domain.Digest(requireEnv(t, "FREESIDE_REAL_RUN_APPROVED_RECIPE")),
 	}
 	id, err := strconv.ParseInt(requireEnv(t, "FREESIDE_REAL_RUN_REPOSITORY_ID"), 10, 64)
 	if err != nil || id <= 0 {
@@ -84,6 +88,13 @@ func realRunEnvironment(t *testing.T) realRunEnv {
 		if !strings.Contains(ref, "@sha256:") {
 			t.Fatalf("image reference %q is not digest-pinned", ref)
 		}
+	}
+	encodedRecipe, ok := strings.CutPrefix(string(env.approvedRecipe), "sha256:")
+	if !ok || len(encodedRecipe) != 64 {
+		t.Fatalf("FREESIDE_REAL_RUN_APPROVED_RECIPE must be a canonical sha256 digest")
+	}
+	if _, err := hex.DecodeString(encodedRecipe); err != nil {
+		t.Fatalf("FREESIDE_REAL_RUN_APPROVED_RECIPE must be a canonical sha256 digest: %v", err)
 	}
 	return env
 }
@@ -115,6 +126,7 @@ func TestRealWorkItemProducesExecutionExport(t *testing.T) {
 			domain.ModeUnattended: {},
 		},
 		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
+		ApprovedRecipes:         map[domain.Digest]bool{env.approvedRecipe: true},
 	}
 	backupFiles, err := store.NewDefaultLocalBackupFiles(dbPath)
 	if err != nil {
@@ -124,7 +136,7 @@ func TestRealWorkItemProducesExecutionExport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open blob store: %v", err)
 	}
-	health, err := backupFiles.NewCheckpointHealthSource(blobs, nil,
+	health, err := backupFiles.NewCheckpointHealthSource(blobs, opts.ApprovedRecipes,
 		map[string]store.BackupPayloadDigestExtractor{
 			engine.FakePublicationTaskKind:            engine.FakePublicationBackupPayloadDigests,
 			engine.FakePublicationInvocationOwnerKind: engine.FakePublicationInvocationOwnerBackupPayloadDigests,

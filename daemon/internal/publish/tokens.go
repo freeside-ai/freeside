@@ -3,6 +3,9 @@ package publish
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -71,10 +74,161 @@ func (s *CachedTokenSource) Token(ctx context.Context, repo string) (Installatio
 	if tok, ok := s.tokens[key]; ok && tok.ExpiresAt.After(s.now().Add(tokenExpirySkew)) {
 		return tok, nil
 	}
-	tok, err := s.minter.mintResolved(ctx, binding, parsed, repositoryID)
+	tok, err := s.minter.mintResolved(
+		ctx, binding, parsed, repositoryID,
+		PublishPermissions, publishPermissionScopes,
+	)
 	if err != nil {
 		return InstallationToken{}, err
 	}
 	s.tokens[key] = tok
 	return tok, nil
+}
+
+// OnboardingGate exposes the janitor's two distinct reconciliation signals:
+// trusted bindings may operate, while a pending binding may only mint the
+// read-only audit token used to construct its one-time review.
+type OnboardingGate interface {
+	AllowsRepository(registrationID, installationID, repositoryID int64) bool
+	PendingReady(PendingInstallationEnvelope) (int64, bool)
+}
+
+// OnboardingTokenSource mints only the read-only token needed to audit one
+// repository during onboarding. It revalidates local authority and the
+// janitor's current exact grant observation before every cache hit.
+type OnboardingTokenSource struct {
+	minter         *Minter
+	authority      InstallationAuthoritySource
+	gate           OnboardingGate
+	registrationID int64
+	repositoryID   int64
+	now            func() time.Time
+
+	mu     sync.Mutex
+	tokens map[tokenCacheKey]InstallationToken
+}
+
+func NewOnboardingTokenSource(
+	minter *Minter,
+	authority InstallationAuthoritySource,
+	gate OnboardingGate,
+	registrationID, repositoryID int64,
+	now func() time.Time,
+) *OnboardingTokenSource {
+	return &OnboardingTokenSource{
+		minter: minter, authority: authority, gate: gate,
+		registrationID: registrationID, repositoryID: repositoryID, now: now,
+		tokens: map[tokenCacheKey]InstallationToken{},
+	}
+}
+
+func (s *OnboardingTokenSource) Token(
+	ctx context.Context,
+	repo string,
+) (InstallationToken, error) {
+	if s == nil || s.minter == nil || s.minter.keystore == nil ||
+		s.authority == nil || s.gate == nil || s.now == nil ||
+		s.registrationID <= 0 || s.repositoryID <= 0 {
+		return InstallationToken{}, errors.New("onboarding token: nil or invalid dependency")
+	}
+	parsed, err := parseRepo(repo)
+	if err != nil {
+		return InstallationToken{}, fmt.Errorf("onboarding token: %w", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	binding, err := s.resolve(ctx, parsed)
+	if err != nil {
+		return InstallationToken{}, err
+	}
+	key := tokenCacheKey{
+		registrationID: binding.RegistrationID,
+		installationID: binding.InstallationID,
+		repositoryID:   s.repositoryID,
+	}
+	if tok, ok := s.tokens[key]; ok &&
+		tok.ExpiresAt.After(s.now().Add(tokenExpirySkew)) {
+		return tok, nil
+	}
+	tok, err := s.minter.mintResolved(
+		ctx, binding, parsed, s.repositoryID,
+		WorkflowAuditPermissions, map[string]string{
+			"actions":        WorkflowAuditPermissions.Actions,
+			"administration": WorkflowAuditPermissions.Administration,
+			"contents":       WorkflowAuditPermissions.Contents,
+			"environments":   WorkflowAuditPermissions.Environments,
+			"metadata":       WorkflowAuditPermissions.Metadata,
+		},
+	)
+	if err != nil {
+		return InstallationToken{}, err
+	}
+	s.tokens[key] = tok
+	return tok, nil
+}
+
+func (s *OnboardingTokenSource) resolve(
+	ctx context.Context,
+	repo repoRef,
+) (InstallationBinding, error) {
+	apps, err := s.minter.keystore.ListApps()
+	if err != nil {
+		return InstallationBinding{}, fmt.Errorf("onboarding token: list registrations: %w", err)
+	}
+	var matches []AppCredentials
+	for _, app := range apps {
+		if app.AppID == s.registrationID {
+			matches = append(matches, app)
+		}
+	}
+	if len(matches) != 1 {
+		return InstallationBinding{}, fmt.Errorf(
+			"onboarding token: registration %d resolves to %d credentials",
+			s.registrationID, len(matches),
+		)
+	}
+	app := matches[0]
+	authority, err := s.authority.InstallationAuthority(ctx, s.registrationID)
+	if err != nil {
+		return InstallationBinding{}, fmt.Errorf("onboarding token: read authority: %w", err)
+	}
+	validated, err := validateInstallationAuthority(app, authority, s.now().UTC())
+	if err != nil {
+		return InstallationBinding{}, fmt.Errorf("onboarding token: validate authority: %w", err)
+	}
+	for installationID, candidate := range validated.trusted {
+		if !slices.Contains(candidate.repositoryIDs, s.repositoryID) {
+			continue
+		}
+		if candidate.account != strings.ToLower(repo.owner) ||
+			!s.gate.AllowsRepository(s.registrationID, installationID, s.repositoryID) {
+			return InstallationBinding{}, errors.New(
+				"onboarding token: trusted installation is not currently reconciled")
+		}
+		return InstallationBinding{
+			RegistrationID: s.registrationID, RegistrationOwner: app.Owner,
+			RegistrationOwnerID: app.OwnerID, InstallationID: installationID,
+			Account: candidate.account, AccountID: candidate.accountID,
+		}, nil
+	}
+	if validated.pending == nil || authority.Pending == nil ||
+		validated.pending.account != strings.ToLower(repo.owner) ||
+		!slices.Contains(validated.pending.repositoryIDs, s.repositoryID) ||
+		slices.Contains(validated.pending.allowedRepositoryIDs, s.repositoryID) {
+		return InstallationBinding{}, errors.New(
+			"onboarding token: repository has no current exact onboarding authority")
+	}
+	installationID, ready := s.gate.PendingReady(*authority.Pending)
+	if !ready || installationID <= 0 ||
+		(validated.pending.installationID > 0 &&
+			validated.pending.installationID != installationID) {
+		return InstallationBinding{}, errors.New(
+			"onboarding token: pending installation is not currently reconciled")
+	}
+	return InstallationBinding{
+		RegistrationID: s.registrationID, RegistrationOwner: app.Owner,
+		RegistrationOwnerID: app.OwnerID, InstallationID: installationID,
+		Account: validated.pending.account, AccountID: validated.pending.accountID,
+	}, nil
 }

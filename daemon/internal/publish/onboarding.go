@@ -22,13 +22,13 @@ const maxImportedPEMBytes = 64 << 10
 // reaches that machine; this package verifies it against GitHub before the
 // imported key can replace local credentials.
 type AppRegistration struct {
-	Owner      string
-	OwnerID    int64
-	Visibility AppVisibility
-	AppID      int64
-	Name       string
-	Slug       string
-	ClientID   string
+	Owner      string        `json:"owner"`
+	OwnerID    int64         `json:"owner_id"`
+	Visibility AppVisibility `json:"visibility"`
+	AppID      int64         `json:"app_id"`
+	Name       string        `json:"name"`
+	Slug       string        `json:"slug"`
+	ClientID   string        `json:"client_id"`
 }
 
 func (r AppRegistration) validate() error {

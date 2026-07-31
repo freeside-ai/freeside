@@ -1032,11 +1032,41 @@ func TestInstallationJanitorFaultsOutliveTheGateTheyExplain(t *testing.T) {
 	if janitor.ActiveFor(501) {
 		t.Error("coverage survived into the next pass")
 	}
+	awaited := make(chan bool, 1)
+	go func() {
+		awaited <- janitor.AwaitAllowsRepository(501, 701, fixtureRepositoryID)
+	}()
+	faulted := make(chan bool, 1)
+	go func() {
+		faulted <- janitor.AwaitAllowsRepository(601, 801, fixtureRepositoryID)
+	}()
+	pending := make(chan bool, 1)
+	go func() {
+		_, ready := janitor.AwaitPendingReady(publish.PendingInstallationEnvelope{
+			ActiveEpoch: 1, DurableIntentRevision: 1, RegistrationID: 501,
+			InstallationID: 701, ExpectedRepositoryIDs: []int64{fixtureRepositoryID},
+		})
+		pending <- ready
+	}()
+	select {
+	case <-awaited:
+		t.Fatal("coordinated onboarding gate observed transient pass withdrawal")
+	case <-time.After(20 * time.Millisecond):
+	}
 	faults := janitor.RegistrationFaults()
 	if len(faults) != 1 || faults[0].RegistrationID != 601 {
 		t.Errorf("faults = %+v mid-pass, want the last pass's fault for 601", faults)
 	}
 	close(release)
+	if allowed := <-awaited; !allowed {
+		t.Fatal("coordinated onboarding gate rejected the newly completed clean pass")
+	}
+	if allowed := <-faulted; allowed {
+		t.Fatal("coordinated onboarding gate retained coverage after a registration fault")
+	}
+	if ready := <-pending; ready {
+		t.Fatal("coordinated pending gate invented readiness after a completed pass")
+	}
 	assertShutdown(t, cancel, done)
 }
 

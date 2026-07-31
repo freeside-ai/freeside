@@ -72,12 +72,14 @@ type trustedOwnerKey struct {
 }
 
 type authorityCandidate struct {
-	pending              bool
-	installationID       int64
-	account              string
-	accountID            int64
-	repositoryIDs        []int64
-	allowedRepositoryIDs []int64
+	pending               bool
+	activeEpoch           int64
+	durableIntentRevision int64
+	installationID        int64
+	account               string
+	accountID             int64
+	repositoryIDs         []int64
+	allowedRepositoryIDs  []int64
 }
 
 type validatedInstallationAuthority struct {
@@ -221,12 +223,14 @@ func validateInstallationAuthority(
 		return validated, nil
 	}
 	validated.pending = &authorityCandidate{
-		pending:              true,
-		installationID:       pending.InstallationID,
-		account:              strings.ToLower(pending.ExpectedAccount),
-		accountID:            pending.ExpectedAccountID,
-		repositoryIDs:        expectedIDs,
-		allowedRepositoryIDs: currentIDs,
+		pending:               true,
+		activeEpoch:           pending.ActiveEpoch,
+		durableIntentRevision: pending.DurableIntentRevision,
+		installationID:        pending.InstallationID,
+		account:               strings.ToLower(pending.ExpectedAccount),
+		accountID:             pending.ExpectedAccountID,
+		repositoryIDs:         expectedIDs,
+		allowedRepositoryIDs:  currentIDs,
 	}
 	return validated, nil
 }

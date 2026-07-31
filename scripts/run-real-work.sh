@@ -28,6 +28,7 @@
 #   FREESIDE_REAL_RUN_BASE_SHA       exact 40-character base commit
 #   FREESIDE_REAL_RUN_PROMPT_PACKAGE trusted prompt-package file
 #   FREESIDE_REAL_RUN_INSTRUCTIONS   host vendor-instruction file (CLAUDE.md)
+#   FREESIDE_REAL_RUN_APPROVED_RECIPE exact recipe digest approved by onboarding
 #   FREESIDE_REAL_RUN_APP_STATE      GitHub App authority state directory
 #   FREESIDE_REAL_RUN_APP_CREDS      GitHub App credential directory
 #   FREESIDE_REAL_RUN_PROJECT        project id the run belongs to
@@ -59,6 +60,7 @@ required=(
   FREESIDE_REAL_RUN_SEED_ROOT FREESIDE_REAL_RUN_AUTH_IDENTITY FREESIDE_REAL_RUN_AUTH_VOLUME
   FREESIDE_REAL_RUN_REPO FREESIDE_REAL_RUN_REPOSITORY_ID FREESIDE_REAL_RUN_BASE_REF
   FREESIDE_REAL_RUN_BASE_SHA FREESIDE_REAL_RUN_PROMPT_PACKAGE FREESIDE_REAL_RUN_INSTRUCTIONS
+  FREESIDE_REAL_RUN_APPROVED_RECIPE
   FREESIDE_REAL_RUN_APP_STATE FREESIDE_REAL_RUN_APP_CREDS FREESIDE_REAL_RUN_PROJECT
   FREESIDE_REAL_RUN_ALLOWED_PATHS
 )
@@ -81,6 +83,10 @@ for ref in "$FREESIDE_REAL_RUN_AGENT_IMAGE" "$FREESIDE_WARD_EXPORTER_IMAGE"; do
     exit 2
   fi
 done
+if [[ ! "$FREESIDE_REAL_RUN_APPROVED_RECIPE" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "run-real-work: FREESIDE_REAL_RUN_APPROVED_RECIPE is not a canonical digest" >&2
+  exit 2
+fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workdir="$(mktemp -d)"
@@ -164,6 +170,8 @@ echo "starting the daemon with the production Claude driver" >&2
   -base-ref "$FREESIDE_REAL_RUN_BASE_REF" \
   -base-sha "$FREESIDE_REAL_RUN_BASE_SHA" \
   -auth-identity "$FREESIDE_REAL_RUN_AUTH_IDENTITY" \
+  -approved-recipe "$FREESIDE_REAL_RUN_APPROVED_RECIPE" \
+  -operating-mode unattended \
   -run-conformance \
   -allowed-paths "$FREESIDE_REAL_RUN_ALLOWED_PATHS" \
   -publication-state-dir "$FREESIDE_REAL_RUN_APP_STATE" \

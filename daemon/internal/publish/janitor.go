@@ -218,6 +218,82 @@ func (j *InstallationJanitor) AllowsRepository(registrationID, installationID, r
 	return ok
 }
 
+// AwaitAllowsRepository returns the latest completed pass's exact trusted
+// grant observation. If a pass is in progress, it waits for that pass to
+// publish or withdraw coverage rather than exposing the deliberate transient
+// withdrawal between those two events. Onboarding uses this coordinated view;
+// ordinary runtime gates retain the immediate fail-closed view above.
+func (j *InstallationJanitor) AwaitAllowsRepository(
+	registrationID, installationID, repositoryID int64,
+) bool {
+	if j == nil {
+		return false
+	}
+	j.cycleMu.Lock()
+	defer j.cycleMu.Unlock()
+	return j.AllowsRepository(registrationID, installationID, repositoryID)
+}
+
+// WithStableCoverage runs fn while no reconciliation pass can withdraw or
+// replace the latest complete coverage snapshot. It is reserved for bounded
+// operational probes, such as scheduled conformance, whose own authenticated
+// reads must not fail merely because the janitor starts a concurrent pass.
+// Ordinary runtime gates continue to use the immediate fail-closed view.
+func (j *InstallationJanitor) WithStableCoverage(fn func() error) error {
+	if j == nil || fn == nil {
+		return errors.New("installation janitor: nil stable-coverage dependency")
+	}
+	j.cycleMu.Lock()
+	defer j.cycleMu.Unlock()
+	return fn()
+}
+
+// PendingReady reports whether the latest complete pass observed the exact
+// selected-repository grant set named by the current pending envelope. It is
+// an onboarding transition signal, never runtime authority: pending
+// repositories remain absent from AllowsRepository until the operator-authored
+// document is promoted and a later pass covers the trusted binding.
+func (j *InstallationJanitor) PendingReady(
+	envelope PendingInstallationEnvelope,
+) (int64, bool) {
+	if j == nil || envelope.RegistrationID <= 0 || envelope.InstallationID < 0 ||
+		envelope.ActiveEpoch <= 0 || envelope.DurableIntentRevision <= 0 ||
+		len(envelope.ExpectedRepositoryIDs) == 0 {
+		return 0, false
+	}
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	coverage, ok := j.covered[envelope.RegistrationID]
+	if !ok || coverage.pendingReady == nil ||
+		(envelope.InstallationID > 0 &&
+			coverage.pendingReady.installationID != envelope.InstallationID) ||
+		coverage.pendingReady.activeEpoch != envelope.ActiveEpoch ||
+		coverage.pendingReady.durableIntentRevision != envelope.DurableIntentRevision ||
+		len(coverage.pendingReady.repositories) != len(envelope.ExpectedRepositoryIDs) {
+		return 0, false
+	}
+	for _, repositoryID := range envelope.ExpectedRepositoryIDs {
+		if _, ok := coverage.pendingReady.repositories[repositoryID]; !ok {
+			return 0, false
+		}
+	}
+	return coverage.pendingReady.installationID, true
+}
+
+// AwaitPendingReady is the pending-envelope counterpart to
+// AwaitAllowsRepository: it linearizes the onboarding transition gate after
+// any reconciliation pass already in progress.
+func (j *InstallationJanitor) AwaitPendingReady(
+	envelope PendingInstallationEnvelope,
+) (int64, bool) {
+	if j == nil {
+		return 0, false
+	}
+	j.cycleMu.Lock()
+	defer j.cycleMu.Unlock()
+	return j.PendingReady(envelope)
+}
+
 // RegistrationFaults reports the registrations the most recently completed
 // pass could not complete, ordered by registration ID. Faults outlive the gate
 // they explain: they stay published while the next pass runs, and are replaced
@@ -274,15 +350,18 @@ func (j *InstallationJanitor) Run(ctx context.Context, interval time.Duration) e
 		// not grants, and clearing them would leave a persistently failing or
 		// churning registration reporting as merely unvisited for as long as
 		// each pass takes.
+		j.cycleMu.Lock()
 		j.withdrawCoverage()
 		_, pass, err := j.runCycle(ctx)
 		if err != nil {
+			j.cycleMu.Unlock()
 			if errors.Is(err, context.Canceled) {
 				return nil
 			}
 			return err
 		}
 		j.publishPass(pass)
+		j.cycleMu.Unlock()
 
 		timer := time.NewTimer(interval)
 		select {
@@ -302,6 +381,8 @@ func (j *InstallationJanitor) RunCycle(ctx context.Context) (JanitorCycle, error
 	if j == nil {
 		return JanitorCycle{}, errors.New("installation janitor: nil janitor")
 	}
+	j.cycleMu.Lock()
+	defer j.cycleMu.Unlock()
 	j.mu.RLock()
 	running := j.running
 	j.mu.RUnlock()
@@ -341,9 +422,6 @@ func (j *InstallationJanitor) runCycle(
 		j.recorder == nil || j.now == nil || j.maxRemovals <= 0 {
 		return JanitorCycle{}, janitorPass{}, errors.New("installation janitor: nil or invalid dependency")
 	}
-	j.cycleMu.Lock()
-	defer j.cycleMu.Unlock()
-
 	apps, err := j.keystore.ListApps()
 	if err != nil {
 		return JanitorCycle{}, janitorPass{}, fmt.Errorf("installation janitor: %w", err)
@@ -488,6 +566,14 @@ func (j *InstallationJanitor) reconcileApp(
 type registrationCoverage struct {
 	registrationID int64
 	repositories   map[int64]map[int64]struct{}
+	pendingReady   *pendingCoverage
+}
+
+type pendingCoverage struct {
+	activeEpoch           int64
+	durableIntentRevision int64
+	installationID        int64
+	repositories          map[int64]struct{}
 }
 
 func (j *InstallationJanitor) reconcileRegistration(
@@ -609,6 +695,18 @@ func (j *InstallationJanitor) reconcileRegistration(
 					quarantine:            true,
 				})
 				continue
+			}
+			if candidate.pending && matchesExpected {
+				repositories := make(map[int64]struct{}, len(candidate.repositoryIDs))
+				for _, repositoryID := range candidate.repositoryIDs {
+					repositories[repositoryID] = struct{}{}
+				}
+				coverage.pendingReady = &pendingCoverage{
+					activeEpoch:           candidate.activeEpoch,
+					durableIntentRevision: candidate.durableIntentRevision,
+					installationID:        installation.ID,
+					repositories:          repositories,
+				}
 			}
 			if len(candidate.allowedRepositoryIDs) > 0 {
 				repositories := make(map[int64]struct{}, len(candidate.allowedRepositoryIDs))

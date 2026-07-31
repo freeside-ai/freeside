@@ -1,11 +1,36 @@
 package projectimage
 
 import (
+	"context"
+	"encoding/base64"
+	"errors"
 	"os"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 )
+
+type projectImageTokenSource struct {
+	token publish.InstallationToken
+	calls int
+}
+
+func (s *projectImageTokenSource) Token(
+	context.Context, string,
+) (publish.InstallationToken, error) {
+	s.calls++
+	return s.token, nil
+}
+
+func testProjectImageToken() publish.InstallationToken {
+	return publish.InstallationToken{
+		Token:          publish.Secret("private-repository-token"),
+		RegistrationID: 11, InstallationID: 22, RepositoryID: 1278475858,
+		Repo: "freeasinbird/gh-imgup", Permissions: publish.WorkflowAuditPermissions,
+	}
+}
 
 func TestExecRunnerReplacesAmbientEnvironmentAtTrustBoundary(t *testing.T) {
 	t.Setenv("FREESIDE_AMBIENT_SENTINEL", "must-not-leak")
@@ -39,7 +64,7 @@ func TestExecRunnerSeparatesHostExitStatusFromCommandOutput(t *testing.T) {
 func TestGitFetchScrubsAmbientConfigurationAndAllowsOnlyHTTPS(t *testing.T) {
 	runner := &recordingRunner{}
 	source := gitSource{gitPath: "/usr/bin/git", runner: runner}
-	if err := source.Fetch(t.Context(), "freeasinbird/gh-imgup", testCommit,
+	if err := source.Fetch(t.Context(), "freeasinbird/gh-imgup", 1278475858, testCommit,
 		t.TempDir()+"/repository.git"); err != nil {
 		t.Fatal(err)
 	}
@@ -67,6 +92,66 @@ func TestGitFetchScrubsAmbientConfigurationAndAllowsOnlyHTTPS(t *testing.T) {
 	} {
 		if !slices.Contains(spec.Env, required) {
 			t.Errorf("clone environment lacks %q", required)
+		}
+	}
+}
+
+func TestGitFetchUsesExactReadOnlyTokenWithoutLeakingFailures(t *testing.T) {
+	tokens := &projectImageTokenSource{token: testProjectImageToken()}
+	runner := &recordingRunner{
+		run: func(commandSpec) (commandOutput, error) {
+			return commandOutput{bytes: []byte(
+				"remote reflected private-repository-token",
+			)}, errors.New("private-repository-token")
+		},
+	}
+	source := gitSource{gitPath: "/usr/bin/git", runner: runner, tokens: tokens}
+	err := source.Fetch(
+		t.Context(), "freeasinbird/gh-imgup", 1278475858, testCommit,
+		t.TempDir()+"/repository.git",
+	)
+	if err == nil {
+		t.Fatal("authenticated clone failure succeeded")
+	}
+	basic := base64.StdEncoding.EncodeToString(
+		[]byte("x-access-token:private-repository-token"),
+	)
+	if strings.Contains(err.Error(), "private-repository-token") ||
+		strings.Contains(err.Error(), basic) {
+		t.Fatalf("authenticated clone error leaked credential: %v", err)
+	}
+	if tokens.calls != 1 || len(runner.specs) != 1 {
+		t.Fatalf("token calls = %d, clone calls = %d; want 1 each",
+			tokens.calls, len(runner.specs))
+	}
+	spec := runner.specs[0]
+	if strings.Contains(strings.Join(spec.Args, "\x00"), "private-repository-token") ||
+		!slices.Contains(spec.Args, "http.followRedirects=false") ||
+		!slices.Contains(spec.Env, "GIT_CONFIG_VALUE_0=Authorization: Basic "+basic) {
+		t.Fatalf("authenticated clone invocation = args %q env %q", spec.Args, spec.Env)
+	}
+}
+
+func TestGitFetchRejectsMismatchedOrWriteTokenBeforeClone(t *testing.T) {
+	for _, mutate := range []func(*publish.InstallationToken){
+		func(token *publish.InstallationToken) { token.RepositoryID++ },
+		func(token *publish.InstallationToken) { token.Permissions = publish.PublishPermissions },
+	} {
+		token := testProjectImageToken()
+		mutate(&token)
+		runner := &recordingRunner{}
+		source := gitSource{
+			gitPath: "/usr/bin/git", runner: runner,
+			tokens: &projectImageTokenSource{token: token},
+		}
+		if err := source.Fetch(
+			t.Context(), "freeasinbird/gh-imgup", 1278475858, testCommit,
+			t.TempDir()+"/repository.git",
+		); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("Fetch = %v, want ErrInvalidRequest", err)
+		}
+		if len(runner.specs) != 0 {
+			t.Fatal("invalid token reached git")
 		}
 	}
 }

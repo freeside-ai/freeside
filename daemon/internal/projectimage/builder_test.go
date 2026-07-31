@@ -25,9 +25,12 @@ type fakeSource struct {
 	copies  int
 }
 
-func (f *fakeSource) Fetch(_ context.Context, repository, commit, destination string) error {
+func (f *fakeSource) Fetch(
+	_ context.Context, repository string, repositoryID int64, commit, destination string,
+) error {
 	f.fetches++
-	if repository != "freeasinbird/gh-imgup" || commit != testCommit {
+	if repository != "freeasinbird/gh-imgup" || repositoryID != 1278475858 ||
+		commit != testCommit {
 		return errors.New("unexpected source identity")
 	}
 	return os.MkdirAll(destination, 0o700)
@@ -182,6 +185,60 @@ func validRequest() Request {
 		BaseImageRef:      domain.ImageRef("ghcr.io/freeside-ai/agent-claude@" + testBaseDigest),
 		BaseBuildRef:      "freeside-agent-claude:local",
 		LocalRegistryPort: 5100,
+	}
+}
+
+func TestValidatePublishedRefBindsApprovedDestination(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("c", 64)
+	for _, tc := range []struct {
+		name string
+		req  Request
+		ref  domain.ImageRef
+		ok   bool
+	}{
+		{
+			name: "local registry",
+			req:  validRequest(),
+			ref: domain.ImageRef(
+				"127.0.0.1:5100/freeside-project-freeasinbird-gh-imgup@" + digest,
+			),
+			ok: true,
+		},
+		{
+			name: "remote registry",
+			req: func() Request {
+				req := validRequest()
+				req.LocalRegistryPort = 0
+				req.Registry = "registry.example.test/team"
+				return req
+			}(),
+			ref: domain.ImageRef(
+				"registry.example.test/team/freeside-project-freeasinbird-gh-imgup@" + digest,
+			),
+			ok: true,
+		},
+		{
+			name: "foreign registry",
+			req:  validRequest(),
+			ref: domain.ImageRef(
+				"registry.example.test/freeside-project-freeasinbird-gh-imgup@" + digest,
+			),
+		},
+		{
+			name: "foreign image name",
+			req:  validRequest(),
+			ref:  domain.ImageRef("127.0.0.1:5100/other@" + digest),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidatePublishedRef(tc.req, tc.ref)
+			if tc.ok && err != nil {
+				t.Fatalf("ValidatePublishedRef: %v", err)
+			}
+			if !tc.ok && !errors.Is(err, ErrProofFailed) {
+				t.Fatalf("ValidatePublishedRef error = %v, want ErrProofFailed", err)
+			}
+		})
 	}
 }
 

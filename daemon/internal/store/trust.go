@@ -167,6 +167,47 @@ func (tx *InternalTx) RecordTrustProfile(ctx context.Context, profile domain.Aut
 	return nil
 }
 
+// RecordInactiveTrustProfile persists one reviewed profile revision without
+// making it current. Operational onboarding uses this as the recoverable first
+// phase before it promotes an installation binding; ActivateTrustProfile is
+// the explicit final commit. A byte-identical replay converges.
+func (tx *InternalTx) RecordInactiveTrustProfile(
+	ctx context.Context,
+	profile domain.AutomationTrustProfile,
+	recordedAt time.Time,
+) error {
+	body, err := encode(profile)
+	if err != nil {
+		return fmt.Errorf("record inactive trust profile %q: %w", profile.Repo, err)
+	}
+	if recordedAt.IsZero() {
+		return fmt.Errorf("record inactive trust profile %q: zero recorded_at", profile.Repo)
+	}
+	res, err := tx.tx.ExecContext(ctx, recordTrustProfileSQL,
+		profile.ProfileDigest, profile.Repo, formatTime(recordedAt.UTC()), body)
+	if err != nil {
+		return fmt.Errorf("record inactive trust profile %q: %w", profile.Repo, err)
+	}
+	inserted, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("record inactive trust profile %q: %w", profile.Repo, err)
+	}
+	if inserted != 0 {
+		return nil
+	}
+	var existing string
+	if err := tx.tx.QueryRowContext(ctx,
+		`SELECT body FROM trust_profiles WHERE profile_digest = ?`,
+		profile.ProfileDigest).Scan(&existing); err != nil {
+		return fmt.Errorf("record inactive trust profile %q: %w", profile.Repo, err)
+	}
+	if existing != body {
+		return fmt.Errorf("record inactive trust profile %q: %w",
+			profile.Repo, ErrImmutableConflict)
+	}
+	return nil
+}
+
 // ActivateTrustProfile explicitly selects a previously recorded profile as
 // current. It validates the addressed immutable row before appending the
 // decision, so a stale-encoding or cross-repository digest cannot become

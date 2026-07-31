@@ -1,0 +1,18 @@
+{
+  "config_dir": "/home/operator/.freeside",
+  "db_path": "/home/operator/.freeside/state/freeside.db",
+  "state_dir": "/home/operator/.freeside/state",
+  "credentials_dir": "/home/operator/.freeside/credentials",
+  "fake_driver_dir": "/home/operator/.freeside/state/freeside.db.fake-stage-driver",
+  "authority_path": "/home/operator/.freeside/state/installation-authority.json",
+  "status": "complete",
+  "registration": {
+    "owner": "operator",
+    "owner_id": 42,
+    "visibility": "public",
+    "app_id": 91,
+    "name": "Freeside Operator",
+    "slug": "freeside-operator",
+    "client_id": "Iv1.example"
+  }
+}

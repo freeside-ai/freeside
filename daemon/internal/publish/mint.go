@@ -40,6 +40,17 @@ var PublishPermissions = Permissions{
 	Metadata:       "read",
 }
 
+// WorkflowAuditPermissions is the read-only subset used before onboarding has
+// activated repository trust. The App registration can publish, but the
+// bootstrap token cannot: it exists only to observe the review payload.
+var WorkflowAuditPermissions = Permissions{
+	Actions:        "read",
+	Administration: "read",
+	Contents:       "read",
+	Environments:   "read",
+	Metadata:       "read",
+}
+
 // publishPermissionScopes is the lossless form the mint validates
 // grants against: the response's permission object decodes into a map,
 // so a grant carrying an unknown key (broader authority) cannot be
@@ -169,7 +180,10 @@ func (m *Minter) MintInstallationToken(ctx context.Context, repo string) (Instal
 	if err != nil {
 		return InstallationToken{}, err
 	}
-	return m.mintResolved(ctx, binding, parsed, repositoryID)
+	return m.mintResolved(
+		ctx, binding, parsed, repositoryID,
+		PublishPermissions, publishPermissionScopes,
+	)
 }
 
 func (m *Minter) resolveTrusted(ctx context.Context, repo string) (InstallationBinding, repoRef, int64, error) {
@@ -212,7 +226,14 @@ func (m *Minter) resolveTrusted(ctx context.Context, repo string) (InstallationB
 	return binding, parsed, current.Profile.RepositoryID, nil
 }
 
-func (m *Minter) mintResolved(ctx context.Context, binding InstallationBinding, repo repoRef, repositoryID int64) (InstallationToken, error) {
+func (m *Minter) mintResolved(
+	ctx context.Context,
+	binding InstallationBinding,
+	repo repoRef,
+	repositoryID int64,
+	permissions Permissions,
+	permissionScopes map[string]string,
+) (InstallationToken, error) {
 	creds, err := m.keystore.LoadApp(binding.RegistrationOwnerID)
 	if err != nil {
 		return InstallationToken{}, fmt.Errorf("mint: load registration: %w", err)
@@ -227,7 +248,10 @@ func (m *Minter) mintResolved(ctx context.Context, binding InstallationBinding, 
 		return InstallationToken{}, fmt.Errorf("mint: %w", err)
 	}
 
-	body, err := json.Marshal(mintRequest{RepositoryIDs: []int64{repositoryID}, Permissions: PublishPermissions})
+	body, err := json.Marshal(mintRequest{
+		RepositoryIDs: []int64{repositoryID},
+		Permissions:   permissions,
+	})
 	if err != nil {
 		return InstallationToken{}, fmt.Errorf("mint: encode request: %w", err)
 	}
@@ -268,7 +292,7 @@ func (m *Minter) mintResolved(ctx context.Context, binding InstallationBinding, 
 	// selection, or a different repository set — would circulate more
 	// authority than the audit row records. Scope names are not secret,
 	// so the errors may carry them.
-	if !maps.Equal(minted.Permissions, publishPermissionScopes) {
+	if !maps.Equal(minted.Permissions, permissionScopes) {
 		return InstallationToken{}, fmt.Errorf("mint: granted permissions differ from the request: %w", ErrGrantMismatch)
 	}
 	if minted.RepositorySelection != "selected" || len(minted.Repositories) != 1 ||
@@ -286,7 +310,7 @@ func (m *Minter) mintResolved(ctx context.Context, binding InstallationBinding, 
 	}
 
 	// The validation above proved the grant identical to the request,
-	// so the typed record and token carry PublishPermissions as both
+	// so the typed record and token carry the requested permissions as both
 	// requested and granted; any other grant never reaches this point.
 	if err := m.recorder.RecordMint(MintRecord{
 		MintedAt:       m.now().UTC(),
@@ -294,8 +318,8 @@ func (m *Minter) mintResolved(ctx context.Context, binding InstallationBinding, 
 		InstallationID: binding.InstallationID,
 		RepositoryID:   repositoryID,
 		Repo:           repo.path(),
-		Requested:      PublishPermissions,
-		Granted:        PublishPermissions,
+		Requested:      permissions,
+		Granted:        permissions,
 		ExpiresAt:      expiresAt,
 	}); err != nil {
 		return InstallationToken{}, fmt.Errorf("mint: %w", err)
@@ -308,7 +332,7 @@ func (m *Minter) mintResolved(ctx context.Context, binding InstallationBinding, 
 		InstallationID: binding.InstallationID,
 		RepositoryID:   repositoryID,
 		Repo:           repo.path(),
-		Permissions:    PublishPermissions,
+		Permissions:    permissions,
 	}, nil
 }
 

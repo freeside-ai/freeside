@@ -130,10 +130,20 @@ func explicitAllowedPaths(patterns []string) bool {
 	return true
 }
 
-// unattendedCapabilitySnapshot is the same floor as a durable snapshot, for
-// the store policy that re-gates every recorded admission.
-func unattendedCapabilitySnapshot() domain.CapabilitySnapshot {
-	return exec.NewCapabilitySet(unattendedAdmissionFloor...).Snapshot()
+// admissionCapabilitySnapshot is the selected mode's engine floor as a
+// durable snapshot, for the store policy that re-gates every admission.
+func admissionCapabilitySnapshot(mode domain.OperatingMode) domain.CapabilitySnapshot {
+	return exec.NewCapabilitySet(admissionFloor(mode)...).Snapshot()
+}
+
+func admissionFloor(mode domain.OperatingMode) []exec.Capability {
+	switch mode {
+	case domain.ModeAttendedDev:
+		return attendedAdmissionFloor
+	case domain.ModeUnattended:
+		return unattendedAdmissionFloor
+	}
+	return nil
 }
 
 // ingestPromptPackage stores the prompt package's bytes and returns their
@@ -155,10 +165,17 @@ func ingestPromptPackage(blobs *signet.BlobStore, path string) (domain.Digest, e
 	return digest, nil
 }
 
-// unattendedAdmissionFloor is the §5.7 minimum an unattended dispatch is
-// admitted against: the three handoff capabilities plus the two the full
-// conformance suite earns (the networkless exporter boundary and the
-// enforced provider-egress writer boundary). It mirrors ward's own
+// attendedAdmissionFloor is ward's honest base capability class before the
+// full conformance suite earns the two unattended-only proofs.
+var attendedAdmissionFloor = []exec.Capability{
+	exec.CapDetachableWorkspace,
+	exec.CapPostExitExport,
+	exec.CapReadOnlyRemount,
+}
+
+// unattendedAdmissionFloor is the §5.7 minimum for unattended dispatch: the
+// attended handoff floor plus the two capabilities the full conformance suite
+// earns. It mirrors ward's own
 // unattended floor; the store re-derives the same plan-mandated minimum on
 // every admission, so a drift here fails closed rather than admitting less.
 var unattendedAdmissionFloor = []exec.Capability{
@@ -181,8 +198,10 @@ func (r exportRecorder) RecordExecutionExport(ctx context.Context, record domain
 }
 
 // storeAdmissionAuthority binds private driver state back to the durable
-// admission and its exact trust profile. The state file is replay data, not
-// an authorization source.
+// admission and the trust profile its mode requires at import. Unattended
+// execution uses its exact admission-bound revision; attended_dev resolves the
+// currently active profile. The state file is replay data, not an
+// authorization source.
 type storeAdmissionAuthority struct {
 	store        *store.Store
 	allowedPaths []string
@@ -320,17 +339,7 @@ func (a storeAdmissionAuthority) ImportOptions(
 	if err != nil {
 		return importer.Options{}, err
 	}
-	if admission.TrustProfileDigest == nil {
-		return importer.Options{}, fmt.Errorf(
-			"admission %s carries no trust profile: %w",
-			admission.ID, domain.ErrEmptyField)
-	}
-	var profile domain.AutomationTrustProfile
-	err = a.store.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		profile, err = tx.GetTrustProfile(ctx, *admission.TrustProfileDigest)
-		return err
-	})
+	profile, err := a.importTrustProfile(ctx, admission)
 	if err != nil {
 		return importer.Options{}, err
 	}
@@ -345,6 +354,30 @@ func (a storeAdmissionAuthority) ImportOptions(
 	}
 	opts.Policy.Allowlist = allowedPaths
 	return opts, nil
+}
+
+func (a storeAdmissionAuthority) importTrustProfile(
+	ctx context.Context,
+	admission domain.ExecutionAdmission,
+) (domain.AutomationTrustProfile, error) {
+	var profile domain.AutomationTrustProfile
+	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		if admission.TrustProfileDigest != nil {
+			var err error
+			profile, err = tx.GetTrustProfile(ctx, *admission.TrustProfileDigest)
+			return err
+		}
+		if admission.OperatingMode != domain.ModeAttendedDev {
+			return fmt.Errorf(
+				"admission %s under mode %q carries no trust profile: %w",
+				admission.ID, admission.OperatingMode, domain.ErrEmptyField,
+			)
+		}
+		var err error
+		profile, err = tx.LatestTrustProfile(ctx, admission.Base.Repo)
+		return err
+	})
+	return profile, err
 }
 
 func (r exportRecorder) LookupExecutionExport(
@@ -529,15 +562,17 @@ func isPermanentSeedCredentialError(err error) bool {
 //
 // Unattended admission requires a durable, generation-current
 // backend-conformance record. The operator may request a fresh store-backed
-// pass for this exact composition with -run-conformance; without that flag,
-// only a matching prior pass is restored and missing evidence fails closed.
+// startup pass for this exact composition with -run-conformance; otherwise a
+// matching prior pass is restored. The daemon keeps the same conformance
+// closure for every scheduled doctor pass.
 type claudeComposition struct {
-	driver  *claude.Driver
-	backend *ward.Backend
-	env     engine.AdmissionEnvironment
-	derive  engine.AdmissionDerivation
-	closer  sessionCloser
-	janitor *janitorSession
+	driver         *claude.Driver
+	backend        *ward.Backend
+	env            engine.AdmissionEnvironment
+	derive         engine.AdmissionDerivation
+	runConformance func(context.Context) error
+	closer         sessionCloser
+	janitor        *janitorSession
 }
 
 // composeClaudeDriver builds the production ward gate and Claude driver.
@@ -597,7 +632,9 @@ func composeClaudeDriver(
 		return nil, fmt.Errorf("restore ward backend conformance: %w", err)
 	}
 	if cfg.RunConformance {
-		if err := runClaudeConformance(ctx, st, transport, backend, cfg); err != nil {
+		if err := runClaudeConformance(
+			ctx, st, transport, backend, cfg, janitor.WithStableCoverage,
+		); err != nil {
 			return nil, fmt.Errorf("run ward conformance: %w", err)
 		}
 	} else if haveConformance &&
@@ -652,8 +689,13 @@ func composeClaudeDriver(
 	}
 	composition := &claudeComposition{
 		driver: driver, backend: backend,
-		env:     env,
-		derive:  claudeAdmissionDerivation(cfg),
+		env:    env,
+		derive: claudeAdmissionDerivation(cfg),
+		runConformance: func(runCtx context.Context) error {
+			return runClaudeConformance(
+				runCtx, st, transport, backend, cfg, janitor.WithStableCoverage,
+			)
+		},
 		closer:  sessionGroup{driver, janitor},
 		janitor: janitor,
 	}
@@ -679,6 +721,7 @@ func runClaudeConformance(
 	transport *publish.Transport,
 	backend *ward.Backend,
 	cfg claudeDriverConfig,
+	withStableCoverage func(func() error) error,
 ) error {
 	var nonce [8]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -701,9 +744,14 @@ func runClaudeConformance(
 	// refused as dirty before conformance can pass. These are the only two
 	// production SeedBaseCheckout sources; the publication lane's fetches
 	// keep the repository-only shape on purpose.
-	if err := (transportSeeder{transport: transport}).FetchBaseWorktree(
-		ctx, cfg.Repo, cfg.BaseRef, cfg.BaseSHA, seedDir,
-	); err != nil {
+	if withStableCoverage == nil {
+		return errors.New("conformance: nil janitor coverage coordinator")
+	}
+	if err := withStableCoverage(func() error {
+		return (transportSeeder{transport: transport}).FetchBaseWorktree(
+			ctx, cfg.Repo, cfg.BaseRef, cfg.BaseSHA, seedDir,
+		)
+	}); err != nil {
 		return fmt.Errorf("fetch exact conformance base: %w", err)
 	}
 	suite, err := ward.NewSuite(backend, ward.SuiteFixture{ //nolint:gosec // G101: fixture carries an inert synthetic marker, never a credential
@@ -816,11 +864,13 @@ const janitorStartupTimeout = 2 * time.Minute
 type janitorRunner interface {
 	Run(context.Context, time.Duration) error
 	ActiveFor(int64) bool
+	WithStableCoverage(func() error) error
 }
 
 type janitorSession struct {
 	cancel   context.CancelFunc
 	finished chan struct{}
+	janitor  janitorRunner
 	stopOnce sync.Once
 	runErr   error
 }
@@ -838,7 +888,9 @@ func startJanitorSession(
 		return nil, publish.ErrNoAppCredentials
 	}
 	runCtx, cancel := context.WithCancel(parent)
-	session := &janitorSession{cancel: cancel, finished: make(chan struct{})}
+	session := &janitorSession{
+		cancel: cancel, finished: make(chan struct{}), janitor: janitor,
+	}
 	go func() {
 		session.runErr = janitor.Run(runCtx, interval)
 		close(session.finished)
@@ -875,6 +927,13 @@ func startJanitorSession(
 		case <-ticker.C:
 		}
 	}
+}
+
+func (s *janitorSession) WithStableCoverage(fn func() error) error {
+	if s == nil || s.janitor == nil {
+		return errors.New("nil installation janitor session")
+	}
+	return s.janitor.WithStableCoverage(fn)
 }
 
 func (s *janitorSession) Close(ctx context.Context) error {

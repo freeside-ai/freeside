@@ -538,7 +538,7 @@ func AdmittedUnder(a ExecutionAdmission, policy AdmissionPolicy) error {
 	// durable BackendConformance record, while this re-gate keeps a snapshot
 	// honest about *policy drift* without turning recorded history unreadable
 	// when conformance later lapses.
-	if missing := MissingCapabilities(a.Capabilities, requiredCapabilities(a.OperatingMode, floor)); len(missing) > 0 {
+	if missing := MissingCapabilities(a.Capabilities, RequiredCapabilities(a.OperatingMode, floor)); len(missing) > 0 {
 		return fmt.Errorf("execution admission %s lacks %v: %w", a.InvocationID, missing, ErrCapabilityBelowFloor)
 	}
 	// §5.7 requires an approved credential mode of an unattended run.
@@ -581,13 +581,13 @@ func waiverConfiguredFor(repositoryID int64, policy AdmissionPolicy) bool {
 	return configured != nil && *configured == repositoryID
 }
 
-// requiredCapabilities returns the floor a mode must clear: the configured
+// RequiredCapabilities returns the floor a mode must clear: the configured
 // floor plus the capabilities the plan itself requires of the mode.
 // Unattended running demands the networkless-export proof and the enforced
 // provider-egress proof (§5.7), so a misconfigured floor cannot admit an
 // unattended record without them. The switch omits default so a new mode
 // decides its own plan-mandated minimum.
-func requiredCapabilities(mode OperatingMode, floor CapabilitySnapshot) []RunnerCapability {
+func RequiredCapabilities(mode OperatingMode, floor CapabilitySnapshot) []RunnerCapability {
 	switch mode {
 	case ModeUnattended:
 		return append(floor.Clone(), CapNetworklessExport, CapEnforcedProviderEgress)

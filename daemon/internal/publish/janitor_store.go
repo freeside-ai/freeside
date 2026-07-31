@@ -1,6 +1,7 @@
 package publish
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -95,6 +96,91 @@ func NewInstallationAuthorityStore(stateDir string) (*InstallationAuthorityStore
 	return &InstallationAuthorityStore{dir: resolved}, nil
 }
 
+// InitializeDocument creates the canonical empty authority document exactly
+// once. Replays validate the existing document without replacing it: an
+// existing authority is operator policy, and setup must never narrow it back
+// to an empty registration set.
+func (s *InstallationAuthorityStore) InitializeDocument(ctx context.Context) error {
+	if s == nil {
+		return errors.New("installation authority: nil store")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockJournal()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	path := filepath.Join(s.dir, installationAuthorityFileName)
+	payload, err := (InstallationAuthorityDocument{
+		Version:       installationAuthoritySnapshotVersion,
+		Registrations: []InstallationAuthorityEntry{},
+	}).Encode()
+	if err != nil {
+		return err
+	}
+	if err := writeFileExclSync(path, payload); err == nil {
+		return nil
+	} else if !errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("installation authority: initialize: %w", err)
+	}
+	existing, err := s.readFile(installationAuthorityFileName, installationAuthorityMaxBytes)
+	if err != nil {
+		return fmt.Errorf(
+			"installation authority: %w: %w", err, ErrInstallationAuthoritySnapshot)
+	}
+	_, err = DecodeInstallationAuthorityDocument(existing)
+	return err
+}
+
+// InitializeRegistration adds the fail-closed starting authority for a newly
+// converted App. The caller must use the canonical registration returned by
+// GitHub's conversion endpoint, never command-line identity.
+func (s *InstallationAuthorityStore) InitializeRegistration(
+	ctx context.Context,
+	registration AppRegistration,
+) error {
+	if err := registration.validate(); err != nil {
+		return fmt.Errorf("installation authority: initialize registration: %w", err)
+	}
+	return s.UpdateDocument(ctx, func(document *InstallationAuthorityDocument) error {
+		for _, entry := range document.Registrations {
+			if entry.RegistrationID != registration.AppID {
+				continue
+			}
+			for _, owner := range entry.TrustedOwners {
+				if owner.ID == registration.OwnerID &&
+					strings.EqualFold(owner.Login, registration.Owner) {
+					return nil
+				}
+			}
+			return fmt.Errorf(
+				"installation authority: registration %d already has different owner authority",
+				registration.AppID,
+			)
+		}
+		document.Registrations = append(document.Registrations, InstallationAuthorityEntry{
+			RegistrationID:        registration.AppID,
+			ActiveEpoch:           1,
+			DurableIntentRevision: 1,
+			TrustedOwners: []TrustedOwnerRecord{{
+				Login: registration.Owner,
+				ID:    registration.OwnerID,
+			}},
+			TrustedInstallations: []TrustedInstallationRecord{},
+			Pending:              nil,
+		})
+		slices.SortFunc(document.Registrations, func(a, b InstallationAuthorityEntry) int {
+			return cmp.Compare(a.RegistrationID, b.RegistrationID)
+		})
+		return nil
+	})
+}
+
 // InstallationAuthority serves one registration's authority, with every
 // installation this daemon has quarantined withdrawn from it.
 //
@@ -144,6 +230,70 @@ func (s *InstallationAuthorityStore) InstallationAuthority(
 		return InstallationAuthority{}, err
 	}
 	return served.authority(), nil
+}
+
+// Document returns the complete operator-authored authority document through
+// the same strict decoder the janitor uses.
+func (s *InstallationAuthorityStore) Document(
+	ctx context.Context,
+) (InstallationAuthorityDocument, error) {
+	if s == nil {
+		return InstallationAuthorityDocument{}, errors.New("installation authority: nil store")
+	}
+	if err := ctx.Err(); err != nil {
+		return InstallationAuthorityDocument{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	payload, err := s.readFile(installationAuthorityFileName, installationAuthorityMaxBytes)
+	if err != nil {
+		return InstallationAuthorityDocument{}, fmt.Errorf(
+			"installation authority: %w: %w", err, ErrInstallationAuthoritySnapshot)
+	}
+	return DecodeInstallationAuthorityDocument(payload)
+}
+
+// UpdateDocument holds the authority-store lock across strict decode,
+// caller-supplied mutation, strict encode, and atomic replacement. The daemon
+// runtime never calls this path; setup/onboard owns authoring. Holding one lock
+// prevents onboarding from restoring a binding a concurrent quarantine removed.
+func (s *InstallationAuthorityStore) UpdateDocument(
+	ctx context.Context,
+	update func(*InstallationAuthorityDocument) error,
+) error {
+	if s == nil {
+		return errors.New("installation authority: nil store")
+	}
+	if update == nil {
+		return errors.New("installation authority: nil document update")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockJournal()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	payload, err := s.readFile(installationAuthorityFileName, installationAuthorityMaxBytes)
+	if err != nil {
+		return fmt.Errorf(
+			"installation authority: %w: %w", err, ErrInstallationAuthoritySnapshot)
+	}
+	document, err := DecodeInstallationAuthorityDocument(payload)
+	if err != nil {
+		return err
+	}
+	if err := update(&document); err != nil {
+		return err
+	}
+	replacement, err := document.Encode()
+	if err != nil {
+		return err
+	}
+	return s.writeFile(installationAuthorityFileName, replacement)
 }
 
 // RecordInstallationRemoval commits the audit barrier for a removal. A removal
@@ -204,14 +354,13 @@ func (s *InstallationAuthorityStore) record(action janitorAction, record Install
 	return s.writeFile(installationJanitorJournalFileName, payload)
 }
 
-// lockJournal takes an exclusive advisory lock for the journal's
-// read-modify-write. The in-process mutex belongs to one store value, and
-// nothing stops a composer from constructing one store per port, or a second
-// process from sharing the state directory; either would let two writers read
-// the same journal and have the later rename discard the earlier's withdrawal,
-// leaving an installation this daemon suspended and deleted trusted again on
-// restart. The lock is released by the kernel when the descriptor closes, so no
-// crash can leave it held.
+// lockJournal takes the exclusive advisory lock for authority and journal
+// read-modify-write operations. The in-process mutex belongs to one store
+// value, and nothing stops a composer from constructing one store per port or
+// a second process from sharing the state directory. Serializing both files
+// prevents either a journal withdrawal or an authority edit from overwriting
+// concurrent state. The kernel releases the lock when the descriptor closes,
+// so no crash can leave it held.
 func (s *InstallationAuthorityStore) lockJournal() (func(), error) {
 	if err := s.assertDirectory(); err != nil {
 		return nil, err
