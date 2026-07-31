@@ -28,6 +28,7 @@ func trustProfileForRepo(t *testing.T, repo string) domain.AutomationTrustProfil
 
 func trustProfileForRepoID(t *testing.T, repo string, repositoryID int64) domain.AutomationTrustProfile {
 	t.Helper()
+	evidence := workflowAuditEvidenceForRepo(t, repo)
 	p, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo:                       repo,
 		RepositoryID:               repositoryID,
@@ -36,7 +37,7 @@ func trustProfileForRepoID(t *testing.T, repo string, repositoryID int64) domain
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
 		CommitPlan:                 domain.CommitPlanSingleCommit,
 		MessageRuleset:             domain.MessageRulesetGitHub1,
-		WorkflowAuditDigest:        "sha256:workflow-audit-fixture",
+		WorkflowAuditDigest:        evidence.Digest(),
 		Review:                     domain.ReviewSettings{Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config"},
 	})
 	if err != nil {
@@ -50,13 +51,26 @@ func trustProfileForRepoID(t *testing.T, repo string, repositoryID int64) domain
 // privilege the profile does not allow.
 func workflowAuditForRepo(t *testing.T, repo string) domain.WorkflowAudit {
 	t.Helper()
+	evidence := workflowAuditEvidenceForRepo(t, repo)
 	return domain.WorkflowAudit{
 		Repo:                repo,
 		AuditedCommitSHA:    testHeadSHA,
 		AuditedAt:           time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
-		WorkflowAuditDigest: "sha256:workflow-audit-fixture",
+		WorkflowAuditDigest: evidence.Digest(),
+		Evidence:            &evidence,
 		EffectiveTokenPerms: domain.TokenPermissionsReadOnly,
 	}
+}
+
+func workflowAuditEvidenceForRepo(t *testing.T, repo string) domain.WorkflowAuditEvidence {
+	t.Helper()
+	evidence, err := domain.NewWorkflowAuditEvidence([]byte(
+		`{"version":"freeside-workflow-audit/test","repo":"` + repo + `","workflows":[]}`,
+	))
+	if err != nil {
+		t.Fatalf("workflow audit evidence: %v", err)
+	}
+	return evidence
 }
 
 func testTrustProfile(t *testing.T) domain.AutomationTrustProfile {
@@ -176,7 +190,7 @@ func TestStoreTrustSourceReturnsLatest(t *testing.T) {
 	if ct.Profile == nil || ct.Profile.ProfileDigest != digest {
 		t.Fatalf("current profile = %v, want digest %s", ct.Profile, digest)
 	}
-	if ct.Audit == nil || ct.Audit.WorkflowAuditDigest != "sha256:workflow-audit-fixture" {
+	if ct.Audit == nil || ct.Audit.WorkflowAuditDigest != workflowAuditForRepo(t, testTrustRepo).WorkflowAuditDigest {
 		t.Fatalf("current audit = %v, want the seeded audit", ct.Audit)
 	}
 }

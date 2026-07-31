@@ -155,6 +155,7 @@ func importControlPlaneCandidate(t *testing.T) (headSHA string, findings []impor
 // authorization gate, not the earlier trust gate.
 func conformantTrust(t *testing.T, headSHA string) (domain.AutomationTrustProfile, domain.WorkflowAudit) {
 	t.Helper()
+	evidence := integrationWorkflowAuditEvidence(t, testRepo, "publish-gate")
 	p, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo:                       testRepo,
 		RepositoryID:               123456789,
@@ -163,7 +164,7 @@ func conformantTrust(t *testing.T, headSHA string) (domain.AutomationTrustProfil
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
 		CommitPlan:                 domain.CommitPlanSingleCommit,
 		MessageRuleset:             domain.MessageRulesetGitHub1,
-		WorkflowAuditDigest:        "sha256:workflow-audit-fixture",
+		WorkflowAuditDigest:        evidence.Digest(),
 		Review:                     domain.ReviewSettings{Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config"},
 	})
 	if err != nil {
@@ -173,7 +174,8 @@ func conformantTrust(t *testing.T, headSHA string) (domain.AutomationTrustProfil
 		Repo:                testRepo,
 		AuditedCommitSHA:    headSHA,
 		AuditedAt:           fixtureTime,
-		WorkflowAuditDigest: "sha256:workflow-audit-fixture",
+		WorkflowAuditDigest: evidence.Digest(),
+		Evidence:            &evidence,
 		EffectiveTokenPerms: domain.TokenPermissionsReadOnly,
 	}
 	if err := domain.EvaluateTrustDrift(p, audit); err != nil {

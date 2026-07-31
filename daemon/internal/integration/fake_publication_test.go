@@ -403,13 +403,14 @@ func newPublicationHarness(t *testing.T) *publicationHarness {
 
 	recipe := []byte(`{"commands":[["/usr/bin/true"]],"capture":"none"}`)
 	recipeDigest := verify.RecipeDigest(recipe)
+	auditEvidence := integrationWorkflowAuditEvidence(t, fakePublicationRepo, "publish")
 	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo: fakePublicationRepo, RepositoryID: 123456789,
 		PRExecution:                domain.PRExecutionAuditedSameRepo,
 		CandidateAutomationChanges: domain.AutomationChangesBlocked,
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
 		CommitPlan:                 domain.CommitPlanPlanPreferred, MessageRuleset: domain.MessageRulesetGitHub1,
-		WorkflowAuditDigest: "sha256:workflow-audit",
+		WorkflowAuditDigest: auditEvidence.Digest(),
 		Review: domain.ReviewSettings{
 			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
 		},
@@ -420,6 +421,7 @@ func newPublicationHarness(t *testing.T) *publicationHarness {
 	audit := domain.WorkflowAudit{
 		Repo: fakePublicationRepo, AuditedCommitSHA: baseSHA,
 		AuditedAt: fakePublicationTime, WorkflowAuditDigest: profile.WorkflowAuditDigest,
+		Evidence:            &auditEvidence,
 		EffectiveTokenPerms: domain.TokenPermissionsReadOnly,
 	}
 	if err := domain.EvaluateTrustDrift(profile, audit); err != nil {

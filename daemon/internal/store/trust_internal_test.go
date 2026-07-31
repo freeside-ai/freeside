@@ -201,6 +201,61 @@ func TestCandidateAuthorizationV2MigrationArchivesV1Rows(t *testing.T) {
 	}
 }
 
+func TestWorkflowAuditEvidenceMigrationPreservesLegacyLedger(t *testing.T) {
+	ctx := context.Background()
+	db := openRaw(t)
+	files, err := fs.Glob(migrations.FS, "*.sql")
+	if err != nil {
+		t.Fatalf("glob migrations: %v", err)
+	}
+	prefix := fstest.MapFS{}
+	for _, name := range files {
+		if name >= "0023_" {
+			continue
+		}
+		body, err := fs.ReadFile(migrations.FS, name)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", name, err)
+		}
+		prefix[name] = &fstest.MapFile{Data: body}
+	}
+	if err := migrate(ctx, db, prefix); err != nil {
+		t.Fatalf("migrate through 0022: %v", err)
+	}
+	audit := domain.WorkflowAudit{
+		Repo: "freeside-ai/legacy-repo", AuditedCommitSHA: "cafebabe",
+		AuditedAt:           time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC),
+		WorkflowAuditDigest: "sha256:legacy-workflow-audit",
+		EffectiveTokenPerms: domain.TokenPermissionsReadOnly,
+	}
+	body, err := encode(audit)
+	if err != nil {
+		t.Fatalf("encode legacy audit: %v", err)
+	}
+	if _, err := db.ExecContext(
+		ctx,
+		`INSERT INTO workflow_audits (repo, audited_commit_sha, audited_at, workflow_audit_digest, body)
+		 VALUES (?, ?, ?, ?, ?)`,
+		audit.Repo, audit.AuditedCommitSHA, formatTime(audit.AuditedAt),
+		audit.WorkflowAuditDigest, body,
+	); err != nil {
+		t.Fatalf("insert legacy audit: %v", err)
+	}
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate through 0023: %v", err)
+	}
+	s := &Store{db: db}
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		audits, err := tx.ListWorkflowAudits(ctx, audit.Repo)
+		if err == nil && (len(audits) != 1 || audits[0].Audit.WorkflowAuditDigest != audit.WorkflowAuditDigest) {
+			t.Fatalf("legacy audits = %+v, want preserved row", audits)
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("read legacy audit: %v", err)
+	}
+}
+
 // TestTrustRowsTamperedBodyFailsClosed is the #52 re-gate for the trust
 // shapes at the persistence boundary: a row whose body was altered around
 // the store (raw SQL past the Record boundary) is rejected on read, because
@@ -498,6 +553,331 @@ func TestTrustRowsInconsistentColumnsFailClosed(t *testing.T) {
 	}
 }
 
+func TestWorkflowAuditEvidenceRetentionAndTamperGate(t *testing.T) {
+	ctx := context.Background()
+	db := openRaw(t)
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatalf("seedEpoch: %v", err)
+	}
+	s := &Store{db: db}
+	const repo = "freeside-ai/evidence-repo"
+	newEvidence := func(marker string) domain.WorkflowAuditEvidence {
+		t.Helper()
+		evidence, err := domain.NewWorkflowAuditEvidence([]byte(
+			`{"version":"freeside-workflow-audit/v2","repo":"` + repo +
+				`","workflows":[{"content":"` + marker + `"}]}`,
+		))
+		if err != nil {
+			t.Fatalf("evidence %s: %v", marker, err)
+		}
+		return evidence
+	}
+	approvedEvidence := newEvidence("approved-a")
+	reapprovedEvidence := newEvidence("approved-b")
+	observedEvidence := newEvidence("observed")
+	t0 := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	audit := func(sha string, at time.Time, evidence *domain.WorkflowAuditEvidence) domain.WorkflowAudit {
+		return domain.WorkflowAudit{
+			Repo: repo, AuditedCommitSHA: sha, AuditedAt: at,
+			WorkflowAuditDigest: evidence.Digest(), Evidence: evidence,
+			EffectiveTokenPerms: domain.TokenPermissionsReadOnly,
+		}
+	}
+	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: repo, RepositoryID: 123456789,
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
+		WorkflowAuditDigest:        approvedEvidence.Digest(),
+		Review: domain.ReviewSettings{
+			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+		},
+	})
+	if err != nil {
+		t.Fatalf("profile: %v", err)
+	}
+	reapprovedProfile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: repo, RepositoryID: 123456789,
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
+		WorkflowAuditDigest:        reapprovedEvidence.Digest(),
+		Review: domain.ReviewSettings{
+			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config-b",
+		},
+	})
+	if err != nil {
+		t.Fatalf("reapproved profile: %v", err)
+	}
+	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		if _, err := tx.RecordWorkflowAudit(ctx, audit("approved-sha", t0, &approvedEvidence)); err != nil {
+			return err
+		}
+		if err := tx.RecordTrustProfile(ctx, profile, t0); err != nil {
+			return err
+		}
+		if _, err := tx.RecordWorkflowAudit(ctx, audit("reapproved-sha", t0.Add(time.Minute), &reapprovedEvidence)); err != nil {
+			return err
+		}
+		return tx.RecordTrustProfile(ctx, reapprovedProfile, t0.Add(time.Minute))
+	}); err != nil {
+		t.Fatalf("activate retained evidence: %v", err)
+	}
+	var count int
+	if err := db.QueryRowContext(
+		ctx, `SELECT count(*) FROM workflow_audit_evidence WHERE repo = ?`, repo,
+	).Scan(&count); err != nil {
+		t.Fatalf("count evidence: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("retained evidence bodies after activation = %d, want one body serving both roles", count)
+	}
+	var supersededCount int
+	if err := db.QueryRowContext(
+		ctx,
+		`SELECT count(*) FROM workflow_audit_evidence WHERE repo = ? AND workflow_audit_digest = ?`,
+		repo, approvedEvidence.Digest(),
+	).Scan(&supersededCount); err != nil {
+		t.Fatalf("count superseded evidence: %v", err)
+	}
+	if supersededCount != 0 {
+		t.Fatalf("superseded approved evidence bodies = %d, want pruned on activation", supersededCount)
+	}
+	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		_, err := tx.RecordWorkflowAudit(ctx, audit("observed-sha", t0.Add(2*time.Minute), &observedEvidence))
+		return err
+	}); err != nil {
+		t.Fatalf("record observed evidence: %v", err)
+	}
+	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		return tx.ActivateTrustProfile(ctx, repo, profile.ProfileDigest, t0.Add(3*time.Minute))
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("activate profile with pruned evidence error = %v, want ErrNotFound", err)
+	}
+	if err := db.QueryRowContext(
+		ctx, `SELECT count(*) FROM workflow_audit_evidence WHERE repo = ?`, repo,
+	).Scan(&count); err != nil {
+		t.Fatalf("recount evidence: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("retained evidence bodies = %d, want active approved plus latest observed", count)
+	}
+
+	const tamperedNeedle = "tampered-workflow-content-must-not-leak"
+	tampered := []byte(
+		`{"version":"freeside-workflow-audit/v2","repo":"` + repo +
+			`","workflows":[{"content":"` + tamperedNeedle + `"}]}`,
+	)
+	if _, err := db.ExecContext(
+		ctx,
+		`UPDATE workflow_audit_evidence SET body = ? WHERE repo = ? AND workflow_audit_digest = ?`,
+		tampered, repo, observedEvidence.Digest(),
+	); err != nil {
+		t.Fatalf("tamper evidence: %v", err)
+	}
+	err = s.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.WorkflowAuditReview(ctx, repo)
+		return err
+	})
+	if !errors.Is(err, domain.ErrWorkflowAuditEvidenceMismatch) {
+		t.Fatalf("tampered review error = %v, want ErrWorkflowAuditEvidenceMismatch", err)
+	}
+	if strings.Contains(err.Error(), tamperedNeedle) {
+		t.Fatalf("tampered evidence leaked through error: %v", err)
+	}
+}
+
+func TestWorkflowAuditEvidencePruningRejectsUnauthenticatedBindings(t *testing.T) {
+	ctx := context.Background()
+	db := openRaw(t)
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatalf("seedEpoch: %v", err)
+	}
+	s := &Store{db: db}
+	const repo = "freeside-ai/evidence-repo"
+	newEvidence := func(marker string) domain.WorkflowAuditEvidence {
+		t.Helper()
+		evidence, err := domain.NewWorkflowAuditEvidence([]byte(
+			`{"version":"freeside-workflow-audit/v2","repo":"` + repo +
+				`","workflows":[{"content":"` + marker + `"}]}`,
+		))
+		if err != nil {
+			t.Fatalf("evidence %s: %v", marker, err)
+		}
+		return evidence
+	}
+	approved := newEvidence("approved")
+	intermediate := newEvidence("intermediate")
+	latest := newEvidence("latest")
+	t0 := time.Date(2026, 7, 31, 13, 0, 0, 0, time.UTC)
+	audit := func(sha string, at time.Time, evidence *domain.WorkflowAuditEvidence) domain.WorkflowAudit {
+		return domain.WorkflowAudit{
+			Repo: repo, AuditedCommitSHA: sha, AuditedAt: at,
+			WorkflowAuditDigest: evidence.Digest(), Evidence: evidence,
+			EffectiveTokenPerms: domain.TokenPermissionsReadOnly,
+		}
+	}
+	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: repo, RepositoryID: 123456789,
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
+		WorkflowAuditDigest:        approved.Digest(),
+		Review: domain.ReviewSettings{
+			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+		},
+	})
+	if err != nil {
+		t.Fatalf("profile: %v", err)
+	}
+	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		if _, err := tx.RecordWorkflowAudit(ctx, audit("approved", t0, &approved)); err != nil {
+			return err
+		}
+		if err := tx.RecordTrustProfile(ctx, profile, t0); err != nil {
+			return err
+		}
+		_, err := tx.RecordWorkflowAudit(ctx, audit("intermediate", t0.Add(time.Minute), &intermediate))
+		return err
+	}); err != nil {
+		t.Fatalf("seed evidence: %v", err)
+	}
+
+	var profileBody string
+	if err := db.QueryRowContext(
+		ctx, `SELECT body FROM trust_profiles WHERE profile_digest = ?`, profile.ProfileDigest,
+	).Scan(&profileBody); err != nil {
+		t.Fatalf("read active profile body: %v", err)
+	}
+	tamperedProfileBody := strings.Replace(
+		profileBody, string(approved.Digest()), string(intermediate.Digest()), 1,
+	)
+	if tamperedProfileBody == profileBody {
+		t.Fatal("profile tamper fixture did not change the body")
+	}
+	if _, err := db.ExecContext(
+		ctx, `UPDATE trust_profiles SET body = ? WHERE profile_digest = ?`,
+		tamperedProfileBody, profile.ProfileDigest,
+	); err != nil {
+		t.Fatalf("tamper active profile body: %v", err)
+	}
+	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		_, err := tx.RecordWorkflowAudit(ctx, audit("latest", t0.Add(2*time.Minute), &latest))
+		return err
+	}); err != nil {
+		t.Fatalf("record audit over tampered active profile: %v", err)
+	}
+	activationTampered := newEvidence("activation-tampered-latest")
+	if _, err := db.ExecContext(
+		ctx, `UPDATE trust_profiles SET body = ? WHERE profile_digest = ?`,
+		profileBody, profile.ProfileDigest,
+	); err != nil {
+		t.Fatalf("restore active profile body: %v", err)
+	}
+	if _, err := db.ExecContext(
+		ctx,
+		`UPDATE trust_profile_activations SET workflow_audit_digest = ?
+		 WHERE id = (SELECT max(id) FROM trust_profile_activations WHERE repo = ?)`,
+		intermediate.Digest(), repo,
+	); err != nil {
+		t.Fatalf("tamper activation binding: %v", err)
+	}
+	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		_, err := tx.RecordWorkflowAudit(
+			ctx, audit("activation-tampered-latest", t0.Add(3*time.Minute), &activationTampered),
+		)
+		return err
+	}); err != nil {
+		t.Fatalf("record audit over tampered activation: %v", err)
+	}
+	for _, tt := range []struct {
+		name   string
+		digest domain.Digest
+		want   int
+	}{
+		{"approved", approved.Digest(), 1},
+		{"intermediate", intermediate.Digest(), 1},
+		{"latest", latest.Digest(), 1},
+		{"activation-tampered latest", activationTampered.Digest(), 1},
+	} {
+		var count int
+		if err := db.QueryRowContext(
+			ctx,
+			`SELECT count(*) FROM workflow_audit_evidence
+			 WHERE repo = ? AND workflow_audit_digest = ?`,
+			repo, tt.digest,
+		).Scan(&count); err != nil {
+			t.Fatalf("count %s evidence: %v", tt.name, err)
+		}
+		if count != tt.want {
+			t.Fatalf("%s evidence count = %d, want %d", tt.name, count, tt.want)
+		}
+	}
+
+	if _, err := db.ExecContext(
+		ctx,
+		`UPDATE workflow_audits SET workflow_audit_digest = ?
+		 WHERE repo = ? AND audited_commit_sha = ?`,
+		intermediate.Digest(), repo, "activation-tampered-latest",
+	); err != nil {
+		t.Fatalf("tamper latest audit binding: %v", err)
+	}
+	err = s.WriteInternal(ctx, func(tx *InternalTx) error {
+		return tx.pruneWorkflowAuditEvidence(ctx, repo, approved.Digest())
+	})
+	if !errors.Is(err, errRowInconsistent) {
+		t.Fatalf("prune over tampered latest audit error = %v, want errRowInconsistent", err)
+	}
+	var retained int
+	if err := db.QueryRowContext(
+		ctx, `SELECT count(*) FROM workflow_audit_evidence WHERE repo = ?`, repo,
+	).Scan(&retained); err != nil {
+		t.Fatalf("count evidence after rejected prune: %v", err)
+	}
+	if retained != 4 {
+		t.Fatalf("evidence after rejected prune = %d, want all 4 bodies retained", retained)
+	}
+	if _, err := db.ExecContext(
+		ctx,
+		`UPDATE workflow_audits SET workflow_audit_digest = ?
+		 WHERE repo = ? AND audited_commit_sha = ?`,
+		activationTampered.Digest(), repo, "activation-tampered-latest",
+	); err != nil {
+		t.Fatalf("restore latest audit binding: %v", err)
+	}
+	if _, err := db.ExecContext(
+		ctx,
+		`UPDATE workflow_audits SET workflow_audit_digest = ?
+		 WHERE repo = ? AND audited_commit_sha = ?`,
+		intermediate.Digest(), repo, "approved",
+	); err != nil {
+		t.Fatalf("tamper approved audit binding: %v", err)
+	}
+	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		return tx.DeleteWorkflowAuditEvidence(ctx, repo)
+	}); err != nil {
+		t.Fatalf("delete evidence before reactivation: %v", err)
+	}
+	err = s.WriteInternal(ctx, func(tx *InternalTx) error {
+		return tx.ActivateTrustProfile(ctx, repo, profile.ProfileDigest, t0.Add(4*time.Minute))
+	})
+	if !errors.Is(err, errRowInconsistent) {
+		t.Fatalf("activate over tampered audit error = %v, want errRowInconsistent", err)
+	}
+}
+
 // TestLatestTrustProfileSurvivesStaleHistory is the recovery half of the
 // migration path (#222 review): once the owner records a re-approved current
 // profile, the current-binding read returns it even though the stale v2 row
@@ -522,14 +902,34 @@ func TestLatestTrustProfileSurvivesStaleHistory(t *testing.T) {
 		t.Fatalf("insert v2 row: %v", err)
 	}
 	if _, err := db.ExecContext(ctx,
-		`INSERT INTO trust_profile_activations (repo, profile_digest, activated_at) VALUES (?, ?, ?)`,
-		"freeside-ai/candidate-repo", staleV2ProfileDigest,
+		`INSERT INTO trust_profile_activations
+		 (repo, profile_digest, workflow_audit_digest, activated_at)
+		 VALUES (?, ?, ?, ?)`,
+		"freeside-ai/candidate-repo", staleV2ProfileDigest, "sha256:workflow-audit",
 		formatTime(time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC))); err != nil {
 		t.Fatalf("activate v2 row: %v", err)
 	}
+	freshEvidence, err := domain.NewWorkflowAuditEvidence([]byte(
+		`{"version":"freeside-workflow-audit/v2","repo":"freeside-ai/candidate-repo","workflows":[]}`,
+	))
+	if err != nil {
+		t.Fatalf("fresh evidence: %v", err)
+	}
+	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		_, err := tx.RecordWorkflowAudit(ctx, domain.WorkflowAudit{
+			Repo: "freeside-ai/candidate-repo", AuditedCommitSHA: "fresh-sha",
+			AuditedAt:           time.Date(2026, 7, 21, 12, 30, 0, 0, time.UTC),
+			WorkflowAuditDigest: freshEvidence.Digest(),
+			Evidence:            &freshEvidence,
+			EffectiveTokenPerms: domain.TokenPermissionsReadOnly,
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("record fresh audit over stale active profile: %v", err)
+	}
 
 	// Before re-approval the stale row is the newest: still fail closed.
-	err := s.Read(ctx, func(tx *ReadTx) error {
+	err = s.Read(ctx, func(tx *ReadTx) error {
 		_, err := tx.LatestTrustProfile(ctx, "freeside-ai/candidate-repo")
 		return err
 	})
@@ -647,5 +1047,20 @@ func TestTrustProfileActivationMigrationBackfillsLatestProfile(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Fatalf("read backfilled current profile: %v", err)
+	}
+	var workflowDigest domain.Digest
+	if err := db.QueryRowContext(
+		ctx,
+		`SELECT workflow_audit_digest FROM trust_profile_activations
+		 WHERE repo = ? ORDER BY id DESC LIMIT 1`,
+		profileA.Repo,
+	).Scan(&workflowDigest); err != nil {
+		t.Fatalf("read backfilled workflow-audit binding: %v", err)
+	}
+	if workflowDigest != profileB.WorkflowAuditDigest {
+		t.Fatalf(
+			"backfilled workflow-audit digest = %q, want %q",
+			workflowDigest, profileB.WorkflowAuditDigest,
+		)
 	}
 }

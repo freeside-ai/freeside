@@ -2,7 +2,6 @@ package publish
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -129,9 +128,14 @@ func (a *GitHubWorkflowAuditor) Audit(ctx context.Context, repoName, baseRef str
 			if err != nil {
 				return domain.WorkflowAudit{}, fmt.Errorf("workflow audit: encode evidence: %w", err)
 			}
+			retained, err := domain.NewWorkflowAuditEvidence(body)
+			if err != nil {
+				return domain.WorkflowAudit{}, fmt.Errorf("workflow audit: retain evidence: %w", err)
+			}
 			audit := domain.WorkflowAudit{
 				Repo: repoName, AuditedCommitSHA: before.SHA, AuditedAt: a.now().UTC(),
-				WorkflowAuditDigest: domain.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body))),
+				WorkflowAuditDigest: retained.Digest(),
+				Evidence:            &retained,
 				EffectiveTokenPerms: facts.EffectiveTokenPerms,
 				OIDCAvailable:       facts.OIDCAvailable, EnvironmentSecrets: facts.EnvironmentSecrets,
 				SecretBearingPRJobs: facts.SecretBearingPRJobs, PullRequestTarget: facts.PullRequestTarget,
