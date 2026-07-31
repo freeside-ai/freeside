@@ -546,21 +546,9 @@ type claudeComposition struct {
 // engine loop starts.
 func composeClaudeDriver(
 	ctx context.Context, st *store.Store, blobs *signet.BlobStore, cfg claudeDriverConfig,
-	waiver *domain.BackupEncryptionWaiver,
 ) (_ *claudeComposition, err error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
-	}
-	// Unattended admission has exactly one backup authorization in this
-	// build: the §5.7 Phase 1A.2 waiver (#305 supplies the ordinary path).
-	// Without it every attempt is refused at persistence, so a daemon that
-	// cannot present one refuses to start rather than accepting work it can
-	// never admit.
-	if cfg.OperatingMode == domain.ModeUnattended && waiver == nil {
-		return nil, fmt.Errorf(
-			"unattended claude mode requires -backup-encryption-waiver-repository-id %d "+
-				"(the Phase 1A.2 backup-encryption waiver for the managed repository)",
-			cfg.RepositoryID)
 	}
 	promptPackage, err := ingestPromptPackage(blobs, cfg.PromptPackageFile)
 	if err != nil {
@@ -660,8 +648,7 @@ func composeClaudeDriver(
 		// Base and Workspace are per-attempt and supplied by derive below;
 		// the static values here would be wrong the moment a second work item
 		// is submitted.
-		AuthIdentityID:         &identity,
-		BackupEncryptionWaiver: waiver,
+		AuthIdentityID: &identity,
 	}
 	composition := &claudeComposition{
 		driver: driver, backend: backend,

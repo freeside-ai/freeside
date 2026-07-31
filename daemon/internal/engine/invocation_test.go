@@ -94,6 +94,7 @@ func TestMutableAdmissionPolicyRefusalIsAHold(t *testing.T) {
 		domain.ErrCredentialModeNotApproved,
 		domain.ErrWaiverNotConfigured,
 		domain.ErrBackupHealthUnavailable,
+		domain.ErrCheckpointNotEncrypted,
 		domain.ErrCheckpointNotCurrent,
 		domain.ErrArtifactClosureIncomplete,
 		domain.ErrRestoreTestStale,

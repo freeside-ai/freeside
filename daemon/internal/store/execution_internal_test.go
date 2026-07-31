@@ -190,6 +190,7 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 			context.Context, BackupHealthContext,
 		) (domain.BackupHealth, error) {
 			return domain.BackupHealth{
+				Encryption:         domain.BackupHealthHealthy,
 				CheckpointCurrency: domain.BackupHealthHealthy,
 				ArtifactClosure:    domain.BackupHealthHealthy,
 				RestoreTestAge:     domain.BackupHealthHealthy,
@@ -279,6 +280,26 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 				return err
 			}
 		}
+		if waiver != nil {
+			// Seed a pre-#305 durable record without exercising the current
+			// write boundary, which correctly rejects all new waiver-bearing
+			// admissions. Reconstruction is the behavior these fixtures test.
+			body, err := encode(admission)
+			if err != nil {
+				return err
+			}
+			var identity any
+			if admission.AuthIdentityID != nil {
+				identity = *admission.AuthIdentityID
+			}
+			return tx.putImmutable(ctx, recordExecutionAdmissionSQL,
+				[]any{
+					admission.InvocationID, admission.ID, admission.RunID, admission.StageID,
+					admission.AttemptID, admission.OperatingMode, identity,
+					formatTime(admission.AdmittedAt), body,
+				},
+				selectExecutionAdmissionBodySQL, []any{admission.InvocationID}, body)
+		}
 		return tx.RecordExecutionAdmission(ctx, admission)
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -313,6 +334,9 @@ func TestLegacyUnboundUnattendedAdmissionReconstructs(t *testing.T) {
 	); err != nil {
 		t.Fatalf("rewrite as legacy admission: %v", err)
 	}
+	// The encrypted build cannot configure the retired waiver. Recovery must
+	// still reconstruct the old record once the four-part backup gate passes.
+	s.admissionPolicy.BackupEncryptionWaiverRepositoryID = nil
 
 	err = s.Read(ctx, func(tx *ReadTx) error {
 		got, err := tx.GetExecutionAdmission(ctx, admission.InvocationID)
@@ -456,8 +480,9 @@ func TestForgedWaiverRowFailsClosed(t *testing.T) {
 		_, err := tx.GetExecutionAdmission(ctx, "inv-1")
 		return err
 	})
-	if !errors.Is(err, domain.ErrWaiverNotConfigured) {
-		t.Fatalf("read of a self-consistent forged waiver = %v, want %v", err, domain.ErrWaiverNotConfigured)
+	if !errors.Is(err, domain.ErrWaiverRepositoryMismatch) {
+		t.Fatalf("read of a self-consistent forged waiver = %v, want %v",
+			err, domain.ErrWaiverRepositoryMismatch)
 	}
 }
 

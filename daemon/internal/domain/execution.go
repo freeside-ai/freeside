@@ -500,9 +500,9 @@ type AdmissionPolicy struct {
 	// Phase 2 api_key_isolated or the trusted-inputs-only local_trusted. An
 	// empty set approves nothing, so an unattended admission fails closed.
 	ApprovedCredentialModes []CredentialMode
-	// BackupEncryptionWaiverRepositoryID is the exact trusted numeric
-	// repository ID the operator waived §5.7's encryption dimension for, or
-	// nil when no waiver is configured.
+	// BackupEncryptionWaiverRepositoryID is retained only while reconstructing
+	// legacy waiver-posture notices. Encrypted-checkpoint builds reject new
+	// admissions that carry the waiver.
 	BackupEncryptionWaiverRepositoryID *int64
 	// BackupHealth is the latest evaluation supplied by the configured health
 	// source. Nil is not an implicit pass: unattended admission fails closed
@@ -549,39 +549,13 @@ func AdmittedUnder(a ExecutionAdmission, policy AdmissionPolicy) error {
 		return fmt.Errorf("execution admission %s runs unattended under credential mode %q: %w",
 			a.InvocationID, a.CredentialMode, ErrCredentialModeNotApproved)
 	}
-	// §5.7 gates unattended running on backup health, and its Phase 1A.2
-	// exception is explicit that "admission without the waiver fails closed as
-	// before". The waiver is therefore the only backup authorization this
-	// build can present: the encrypted, digest-bound BackupCheckpoint that
-	// would supply the ordinary path does not exist yet (#305), so a run
-	// admitted with neither would be admitted on no backup evidence at all.
-	//
-	// When that checkpoint lands, this becomes a choice between two trusted
-	// paths rather than one requirement — and the build carrying it must
-	// reject the waiver outright, which is how §5.7 retires the exception.
-	// The waiver covers only the encryption dimension. §5.7's other backup
-	// gates — checkpoint currency, artifact closure, restore-test age — are
-	// not enforced here because no queryable health signal exists yet (#305
-	// delivers it, #317 tracks wiring it into this gate). That is a real gap,
-	// not a subtlety: an unattended run can be admitted against a stale local
-	// checkpoint. It is recorded here so the next reader does not mistake this
-	// gate for full §5.7 backup conformance.
-	if a.OperatingMode == ModeUnattended && a.BackupEncryptionWaiver == nil {
-		return fmt.Errorf("execution admission %s runs unattended with no backup authorization: %w",
-			a.InvocationID, ErrBackupAuthorizationMissing)
-	}
+	// Historical records may still carry §5.7's Phase 1A.2 waiver. It is inert
+	// under the encrypted-checkpoint gate: RequireHealthy below includes
+	// encryption, while the record's own repository binding remains an
+	// internal-consistency check. The store write boundary rejects the field
+	// on every new admission.
 	if a.BackupEncryptionWaiver != nil {
-		// §5.7 waives the encryption dimension for one exact trusted
-		// repository, so both ends have to hold: the operator configured this
-		// numeric id, and the run actually targets that repository. Checking
-		// only the operator's side would let a waiver for repository 42
-		// authorize a run against any other repository that repeats the
-		// number.
 		waived := a.BackupEncryptionWaiver.RepositoryID
-		if !waiverConfiguredFor(waived, policy) {
-			return fmt.Errorf("execution admission %s claims a waiver for repository %d: %w",
-				a.InvocationID, waived, ErrWaiverNotConfigured)
-		}
 		if a.Base.RepositoryID != waived {
 			return fmt.Errorf("execution admission %s targets repository %d under a waiver for %d: %w",
 				a.InvocationID, a.Base.RepositoryID, waived, ErrWaiverRepositoryMismatch)
@@ -599,12 +573,9 @@ func AdmittedUnder(a ExecutionAdmission, policy AdmissionPolicy) error {
 	return nil
 }
 
-// waiverConfiguredFor reports whether current policy configures the §5.7
-// backup-encryption waiver for exactly repositoryID. It is the single
-// definition of "the operator holds this waiver": AdmittedUnder consumes it
-// for an admission that claims the waiver, and BlockingSupersession.Supersedes
-// consumes it for the degraded-posture notice that waiver supersedes, so the
-// two gates cannot drift apart (issue #321).
+// waiverConfiguredFor reports whether current policy configures the retired
+// §5.7 backup-encryption waiver for exactly repositoryID. Only reconstruction
+// of a legacy degraded-posture notice consumes it.
 func waiverConfiguredFor(repositoryID int64, policy AdmissionPolicy) bool {
 	configured := policy.BackupEncryptionWaiverRepositoryID
 	return configured != nil && *configured == repositoryID

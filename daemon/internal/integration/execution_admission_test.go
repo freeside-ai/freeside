@@ -536,37 +536,25 @@ func TestAcceptanceRegatesTheAdmission(t *testing.T) {
 	}
 }
 
-// TestWaivedAdmissionSurfacesItsPosture is §5.7's other half: a waived
-// admission must not only record the waiver but surface the degraded posture,
-// so an operator can see that unattended work is running on the temporary
-// encryption exception. The notice lands in the admitting transaction, and a
-// replay converges on the same item rather than raising a second one.
-func TestWaivedAdmissionSurfacesItsPosture(t *testing.T) {
+// TestEncryptedAdmissionDoesNotSurfaceRetiredWaiverPosture proves the
+// encrypted checkpoint gate replaces, rather than silently perpetuates, the
+// temporary plaintext-backup exception.
+func TestEncryptedAdmissionDoesNotSurfaceRetiredWaiverPosture(t *testing.T) {
 	ctx := context.Background()
-	f := openWaivedUnattendedFixture(t)
+	f := openUnattendedFixture(t)
 	attention := f.signet
 	invocationID, _, err := dispatchOneInvocation(t, f)
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 
-	notice, err := attention.GetAttentionItem(ctx,
-		domain.ItemID("system-health-backup-waiver-"+string(invocationID)))
-	if err != nil {
-		t.Fatalf("a waived admission must surface its posture: %v", err)
-	}
-	if notice.Item.Type != domain.AttentionSystemHealth {
-		t.Errorf("notice type = %q, want %q", notice.Item.Type, domain.AttentionSystemHealth)
-	}
-	if notice.Item.Status != domain.StatusOpen {
-		t.Errorf("notice status = %q, want it open", notice.Item.Status)
-	}
-	if !strings.Contains(notice.Item.Reason, "424242") {
-		t.Errorf("notice reason %q does not name the waived repository", notice.Item.Reason)
+	if _, err := attention.GetAttentionItem(ctx,
+		domain.ItemID("system-health-backup-waiver-"+string(invocationID)),
+	); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("retired waiver notice = %v, want %v", err, store.ErrNotFound)
 	}
 
-	// A second pass replays the dispatch; the notice converges rather than
-	// multiplying.
+	// A replay must not resurrect the retired posture.
 	if _, err := f.engine.Reconcile(ctx); err != nil {
 		t.Fatalf("replay Reconcile: %v", err)
 	}
@@ -580,14 +568,14 @@ func TestWaivedAdmissionSurfacesItsPosture(t *testing.T) {
 			health++
 		}
 	}
-	if health != 1 {
-		t.Fatalf("system_health items = %d, want exactly one", health)
+	if health != 0 {
+		t.Fatalf("system_health items = %d, want none", health)
 	}
 }
 
-// waivedTrustProfile is the approved profile a waived unattended admission is
+// unattendedTrustProfile is the approved profile an unattended admission is
 // anchored to.
-func waivedTrustProfile(t *testing.T) domain.AutomationTrustProfile {
+func unattendedTrustProfile(t *testing.T) domain.AutomationTrustProfile {
 	t.Helper()
 	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
 		Repo: "freeside-ai/candidate-repo", RepositoryID: 424242,

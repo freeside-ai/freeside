@@ -204,7 +204,7 @@ func TestDrainExecutionIntentReauthenticatesRecordedExport(t *testing.T) {
 	s, err := store.Open(
 		ctx,
 		storePath,
-		executionStoreOptions(fixtureRepositoryID),
+		executionStoreOptions(),
 	)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)

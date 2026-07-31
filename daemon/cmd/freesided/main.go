@@ -125,7 +125,7 @@ func main() {
 	flags.Var(&repositoryID, "repository-id", "canonical numeric identity of the managed repository")
 	var backupEncryptionWaiverRepositoryID repositoryIDFlag
 	flags.Var(&backupEncryptionWaiverRepositoryID, "backup-encryption-waiver-repository-id",
-		"temporary Phase 1A.2 backup-encryption waiver for this exact trusted numeric repository ID")
+		"retired Phase 1A.2 option; encrypted-checkpoint builds reject every supplied value")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
@@ -233,12 +233,9 @@ type config struct {
 func (cfg config) storeOptions() (store.Options, error) {
 	opts := store.Options{}
 	if cfg.BackupEncryptionWaiverRepositoryID != nil {
-		repositoryID := *cfg.BackupEncryptionWaiverRepositoryID
-		if repositoryID <= 0 {
-			return store.Options{}, fmt.Errorf(
-				"-backup-encryption-waiver-repository-id must be positive, got %d", repositoryID)
-		}
-		opts.BackupEncryptionWaiverRepositoryID = &repositoryID
+		return store.Options{}, fmt.Errorf(
+			"-backup-encryption-waiver-repository-id: %w",
+			domain.ErrBackupEncryptionWaiverUnsupported)
 	}
 	if cfg.Claude == nil {
 		return opts, nil
@@ -404,18 +401,7 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 			return nil, fmt.Errorf("seed walking-skeleton run: %w", err)
 		}
 	} else {
-		// The waiver is claimed only when the operator configured one for
-		// exactly this repository: the store re-gates it against that same
-		// configuration, so a mismatched claim fails admission rather than
-		// silently proceeding under an exception the operator did not grant.
-		var waiver *domain.BackupEncryptionWaiver
-		if id := cfg.BackupEncryptionWaiverRepositoryID; id != nil && *id == cfg.Claude.RepositoryID {
-			waiver = &domain.BackupEncryptionWaiver{
-				RepositoryID: *id,
-				Reason:       "Phase 1A.2 unattended execution ahead of the encrypted checkpoint (#305).",
-			}
-		}
-		claudeWiring, err = composeClaudeDriver(ctx, st, blobs, *cfg.Claude, waiver)
+		claudeWiring, err = composeClaudeDriver(ctx, st, blobs, *cfg.Claude)
 		if err != nil {
 			return nil, err
 		}

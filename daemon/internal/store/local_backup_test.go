@@ -94,8 +94,10 @@ func TestLocalCheckpointHealthEvaluatesEveryDimension(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BackupHealth: %v", err)
 	}
-	if health != healthyBackupHealth() {
-		t.Fatalf("healthy local checkpoint = %+v, want %+v", health, healthyBackupHealth())
+	wantLegacy := healthyBackupHealth()
+	wantLegacy.Encryption = domain.BackupHealthUnhealthy
+	if health != wantLegacy {
+		t.Fatalf("complete legacy checkpoint = %+v, want %+v", health, wantLegacy)
 	}
 	restoreDB, err = sql.Open("sqlite", restoreTestPath)
 	if err != nil {
@@ -344,6 +346,7 @@ func TestLocalCheckpointHealthReportsMissingEvidenceUnhealthy(t *testing.T) {
 		t.Fatalf("BackupHealth: %v", err)
 	}
 	want := domain.BackupHealth{
+		Encryption:         domain.BackupHealthUnhealthy,
 		CheckpointCurrency: domain.BackupHealthUnhealthy,
 		ArtifactClosure:    domain.BackupHealthUnhealthy,
 		RestoreTestAge:     domain.BackupHealthUnhealthy,
@@ -422,43 +425,28 @@ func TestLocalCheckpointHealthIncludesDurablePayloadBlobs(t *testing.T) {
 	}
 
 	artifacts[recipeDigest] = true
-	checkpointDB, err := sql.Open("sqlite", dbPath+".checkpoints/latest.db")
-	if err != nil {
-		t.Fatalf("open checkpoint for outbox-key substitution: %v", err)
-	}
-	_, updateErr := checkpointDB.Exec(
+	if err := store.MutateEncryptedCheckpointForTest(ctx, files,
 		`UPDATE outbox SET idempotency_key = 'durable-task-2'
-		  WHERE idempotency_key = 'durable-task-1'`)
-	if err := errors.Join(updateErr, checkpointDB.Close()); err != nil {
+		  WHERE idempotency_key = 'durable-task-1'`); err != nil {
 		t.Fatalf("substitute durable payload key: %v", err)
 	}
 	if _, err := s.BackupHealth(ctx); !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("substituted durable payload key error = %v, want ErrParentKeyMismatch", err)
 	}
 
-	checkpointDB, err = sql.Open("sqlite", dbPath+".checkpoints/latest.db")
-	if err != nil {
-		t.Fatalf("reopen checkpoint for outbox-kind substitution: %v", err)
-	}
-	_, updateErr = checkpointDB.Exec(
+	if err := store.MutateEncryptedCheckpointForTest(ctx, files,
 		`UPDATE outbox
 		    SET idempotency_key = 'durable-task-1', kind = 'backup.other'
-		  WHERE idempotency_key = 'durable-task-2'`)
-	if err := errors.Join(updateErr, checkpointDB.Close()); err != nil {
+		  WHERE idempotency_key = 'durable-task-2'`); err != nil {
 		t.Fatalf("substitute durable payload with known kind: %v", err)
 	}
 	if _, err := s.BackupHealth(ctx); !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("known substituted durable kind error = %v, want ErrParentKeyMismatch", err)
 	}
 
-	checkpointDB, err = sql.Open("sqlite", dbPath+".checkpoints/latest.db")
-	if err != nil {
-		t.Fatalf("reopen checkpoint for unknown outbox kind: %v", err)
-	}
-	_, updateErr = checkpointDB.Exec(
+	if err := store.MutateEncryptedCheckpointForTest(ctx, files,
 		`UPDATE outbox SET kind = 'backup.unknown'
-		  WHERE idempotency_key = 'durable-task-1'`)
-	if err := errors.Join(updateErr, checkpointDB.Close()); err != nil {
+		  WHERE idempotency_key = 'durable-task-1'`); err != nil {
 		t.Fatalf("substitute durable payload with unknown kind: %v", err)
 	}
 	if _, err := s.BackupHealth(ctx); err == nil {
@@ -576,22 +564,14 @@ func TestLocalCheckpointHealthRetainsExternalCommandBindings(t *testing.T) {
 		t.Fatalf("missing command-bound closure = %q, want unhealthy", health.ArtifactClosure)
 	}
 
-	checkpointDB, err := sql.Open("sqlite", dbPath+".checkpoints/latest.db")
-	if err != nil {
-		t.Fatalf("open checkpoint for classification corruption: %v", err)
-	}
-	if _, err := checkpointDB.Exec(
+	if err := store.MutateEncryptedCheckpointForTest(ctx, files,
 		`UPDATE commands
 		    SET body = json_set(
 		        body, '$.inline_claims',
 		        json_array(json_object('digest', ?, 'content', ?)))
 		  WHERE command_id = ?`,
 		externalClaim, externalContent, f.command.CommandID); err != nil {
-		_ = checkpointDB.Close()
 		t.Fatalf("forge external digest classification: %v", err)
-	}
-	if err := checkpointDB.Close(); err != nil {
-		t.Fatalf("close forged checkpoint: %v", err)
 	}
 	if _, err := s.BackupHealth(ctx); err == nil {
 		t.Fatal("BackupHealth accepted matching content injected into an immutable command binding")
@@ -656,16 +636,10 @@ func TestLocalCheckpointHealthRejectsDivergentClosureRows(t *testing.T) {
 				t.Fatalf("Maintain: %v", err)
 			}
 
-			checkpointDB, err := sql.Open("sqlite", dbPath+".checkpoints/latest.db")
-			if err != nil {
-				t.Fatalf("open checkpoint for corruption: %v", err)
-			}
-			if _, err := checkpointDB.Exec(tc.mutation); err != nil {
-				_ = checkpointDB.Close()
+			if err := store.MutateEncryptedCheckpointForTest(
+				ctx, files, tc.mutation,
+			); err != nil {
 				t.Fatalf("mutate checkpoint: %v", err)
-			}
-			if err := checkpointDB.Close(); err != nil {
-				t.Fatalf("close corrupt checkpoint: %v", err)
 			}
 			if _, err := s.BackupHealth(ctx); err == nil {
 				t.Fatal("BackupHealth accepted a divergent closure row")

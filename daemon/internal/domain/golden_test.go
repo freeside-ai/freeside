@@ -501,6 +501,17 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	supersededConformance.Generation = 9
+	restoreTestedAt := ts.Add(2 * time.Hour)
+	backupCheckpoint := domain.BackupCheckpoint{
+		CheckpointID:           "0123456789abcdef0123456789abcdef",
+		SyncEpoch:              "abcdef0123456789abcdef0123456789",
+		ServerRevision:         42,
+		SQLiteSnapshotDigest:   "sha256:snapshot",
+		ArtifactManifestDigest: "sha256:artifact-manifest",
+		CreatedAt:              ts,
+		CompletedAt:            ts.Add(time.Hour),
+		RestoreTestedAt:        &restoreTestedAt,
+	}
 
 	cases := []struct {
 		name  string
@@ -550,6 +561,7 @@ func TestGolden(t *testing.T) {
 		{"backend_conformance", backendConformance},
 		{"backend_conformance_failed", failedConformance},
 		{"backend_conformance_superseded", supersededConformance},
+		{"backup_checkpoint", backupCheckpoint},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

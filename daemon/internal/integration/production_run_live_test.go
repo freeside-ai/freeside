@@ -106,17 +106,15 @@ func TestRealWorkItemProducesExecutionExport(t *testing.T) {
 	defer cancel()
 
 	// The verifier must open the store under the same policy the daemon ran
-	// under. Reading an admission re-runs the current policy gate, so a
-	// handle missing the waiver or the backup-health source rejects the very
-	// record a real run wrote, and the harness could never report success on
-	// a run that actually completed.
+	// under. Reading an admission re-runs the current policy gate, so a handle
+	// missing the backup-health source rejects the very record a real run
+	// wrote, and the harness could never report success on a completed run.
 	dbPath := filepath.Join(env.stateRoot, "freeside.db")
 	opts := store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeUnattended: {},
 		},
-		ApprovedCredentialModes:            []domain.CredentialMode{domain.CredentialSubscriptionContained},
-		BackupEncryptionWaiverRepositoryID: &env.repositoryID,
+		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
 	}
 	backupFiles, err := store.NewDefaultLocalBackupFiles(dbPath)
 	if err != nil {

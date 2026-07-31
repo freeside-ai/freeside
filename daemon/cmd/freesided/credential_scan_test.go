@@ -17,11 +17,9 @@ import (
 // unset floor means "no policy configured", which fails closed.
 func TestClaudeStoreOptionsCarryTheUnattendedPolicy(t *testing.T) {
 	t.Parallel()
-	repositoryID := int64(84958515)
 	cfg := config{
-		DBPath:                             "/var/freeside/freeside.db",
-		BackupEncryptionWaiverRepositoryID: &repositoryID,
-		Claude:                             &claudeDriverConfig{OperatingMode: domain.ModeUnattended},
+		DBPath: "/var/freeside/freeside.db",
+		Claude: &claudeDriverConfig{OperatingMode: domain.ModeUnattended},
 	}
 	opts, err := cfg.storeOptions()
 	if err != nil {

@@ -353,14 +353,9 @@ func TestAdmittedUnder(t *testing.T) {
 	unattendedInput.OperatingMode = domain.ModeUnattended
 	unattendedInput.Capabilities = domain.NewCapabilitySnapshot(domain.AllRunnerCapabilities...)
 	unattendedInput.TrustProfileDigest = &profile
-	unattendedInput.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
-		RepositoryID: 424242, Reason: "1a.2",
-	}
 	unattended := mustAdmission(t, unattendedInput)
 
-	// The same run with no backup authorization at all: §5.7 says admission
-	// without the waiver fails closed, and no encrypted checkpoint exists yet
-	// to offer the other path.
+	// The same run evaluated without backup-health evidence.
 	unbackedInput := admissionInput()
 	unbackedInput.OperatingMode = domain.ModeUnattended
 	unbackedInput.Capabilities = domain.NewCapabilitySnapshot(domain.AllRunnerCapabilities...)
@@ -390,7 +385,6 @@ func TestAdmittedUnder(t *testing.T) {
 	}
 	approved := []domain.CredentialMode{domain.CredentialSubscriptionContained}
 	waiverID := int64(424242)
-	otherID := int64(43)
 	backupHealth := healthyBackupHealth()
 
 	cases := []struct {
@@ -425,15 +419,14 @@ func TestAdmittedUnder(t *testing.T) {
 			"unattended with the full class", unattended,
 			domain.AdmissionPolicy{
 				Floors: floor, ApprovedCredentialModes: approved,
-				BackupEncryptionWaiverRepositoryID: &waiverID,
-				BackupHealth:                       &backupHealth,
+				BackupHealth: &backupHealth,
 			},
 			nil,
 		},
 		{
-			"unattended with no backup authorization", unbacked,
+			"unattended with no backup health", unbacked,
 			domain.AdmissionPolicy{Floors: floor, ApprovedCredentialModes: approved},
-			domain.ErrBackupAuthorizationMissing,
+			domain.ErrBackupHealthUnavailable,
 		},
 		{
 			// §5.7 requires networkless export of an unattended run, whatever
@@ -443,9 +436,6 @@ func TestAdmittedUnder(t *testing.T) {
 				in := admissionInput()
 				in.OperatingMode = domain.ModeUnattended
 				in.TrustProfileDigest = &profile
-				in.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
-					RepositoryID: 424242, Reason: "1a.2",
-				}
 				return in
 			}()),
 			domain.AdmissionPolicy{Floors: floor, ApprovedCredentialModes: approved},
@@ -463,16 +453,13 @@ func TestAdmittedUnder(t *testing.T) {
 					domain.CapDetachableWorkspace, domain.CapPostExitExport,
 					domain.CapReadOnlyRemount, domain.CapNetworklessExport)
 				in.TrustProfileDigest = &profile
-				in.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{
-					RepositoryID: 424242, Reason: "1a.2",
-				}
 				return in
 			}()),
 			domain.AdmissionPolicy{Floors: floor, ApprovedCredentialModes: approved},
 			domain.ErrCapabilityBelowFloor,
 		},
 		{
-			"waiver matching the operator's", waived,
+			"historical waiver matching the operator's", waived,
 			domain.AdmissionPolicy{
 				Floors: floor, ApprovedCredentialModes: approved,
 				BackupEncryptionWaiverRepositoryID: &waiverID,
@@ -481,14 +468,12 @@ func TestAdmittedUnder(t *testing.T) {
 			nil,
 		},
 		{
-			"waiver the operator does not hold", waived,
-			domain.AdmissionPolicy{Floors: floor, ApprovedCredentialModes: approved},
-			domain.ErrWaiverNotConfigured,
-		},
-		{
-			"waiver for a different repository", waived,
-			domain.AdmissionPolicy{Floors: floor, ApprovedCredentialModes: approved, BackupEncryptionWaiverRepositoryID: &otherID},
-			domain.ErrWaiverNotConfigured,
+			"historical waiver is inert under encrypted health", waived,
+			domain.AdmissionPolicy{
+				Floors: floor, ApprovedCredentialModes: approved,
+				BackupHealth: &backupHealth,
+			},
+			nil,
 		},
 		{
 			// The operator waived repository 424242, and this run targets 999:
@@ -539,19 +524,16 @@ func TestAdmittedUnderDoesNotMutateTheFloor(t *testing.T) {
 	in.Capabilities = domain.NewCapabilitySnapshot(domain.AllRunnerCapabilities...)
 	profile := domain.Digest("sha256:profile-v1")
 	in.TrustProfileDigest = &profile
-	in.BackupEncryptionWaiver = &domain.BackupEncryptionWaiver{RepositoryID: 424242, Reason: "1a.2"}
 	record := mustAdmission(t, in)
 
 	configured := domain.NewCapabilitySnapshot(domain.CapPostExitExport, domain.CapDetachableWorkspace)
-	waiverRepository := int64(424242)
 	backupHealth := healthyBackupHealth()
 	policy := domain.AdmissionPolicy{
 		Floors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeUnattended: configured,
 		},
-		ApprovedCredentialModes:            []domain.CredentialMode{domain.CredentialSubscriptionContained},
-		BackupEncryptionWaiverRepositoryID: &waiverRepository,
-		BackupHealth:                       &backupHealth,
+		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
+		BackupHealth:            &backupHealth,
 	}
 	before := slices.Clone(configured)
 	if err := domain.AdmittedUnder(record, policy); err != nil {

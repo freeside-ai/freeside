@@ -114,10 +114,7 @@ const testBackendConfigurationDigest = domain.Digest(
 	"sha256:1111111111111111111111111111111111111111111111111111111111111111",
 )
 
-func executionStoreOptions(repositoryID int64) store.Options {
-	if repositoryID == 0 {
-		repositoryID = fixtureRepositoryID
-	}
+func executionStoreOptions() store.Options {
 	return store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
@@ -126,12 +123,12 @@ func executionStoreOptions(repositoryID int64) store.Options {
 		ApprovedCredentialModes: []domain.CredentialMode{
 			domain.CredentialSubscriptionContained,
 		},
-		BackupEncryptionWaiverRepositoryID: &repositoryID,
 		BackupHealthSource: store.BackupHealthSourceFunc(func(
 			context.Context,
 			store.BackupHealthContext,
 		) (domain.BackupHealth, error) {
 			return domain.BackupHealth{
+				Encryption:         domain.BackupHealthHealthy,
 				CheckpointCurrency: domain.BackupHealthHealthy,
 				ArtifactClosure:    domain.BackupHealthHealthy,
 				RestoreTestAge:     domain.BackupHealthHealthy,
@@ -156,7 +153,7 @@ func newExecutionBoundStore(t *testing.T, opts executionChainOptions) *store.Sto
 	s, err := store.Open(
 		t.Context(),
 		filepath.Join(t.TempDir(), "store.db"),
-		executionStoreOptions(opts.repositoryID),
+		executionStoreOptions(),
 	)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
@@ -217,10 +214,6 @@ func seedExecutionPublicationChain(
 	sourceProfile := trustProfileForRepoID(t, opts.repo, opts.repositoryID)
 	trustProfileDigest := sourceProfile.ProfileDigest
 	trustProfileBinding := &trustProfileDigest
-	waiver := &domain.BackupEncryptionWaiver{
-		RepositoryID: opts.repositoryID,
-		Reason:       "execution publication test fixture",
-	}
 	if opts.attended {
 		operatingMode = domain.ModeAttendedDev
 		capabilities = domain.NewCapabilitySnapshot(
@@ -229,7 +222,6 @@ func seedExecutionPublicationChain(
 		)
 		backendConfigurationDigest = ""
 		trustProfileBinding = nil
-		waiver = nil
 	}
 	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
 		InvocationID:               testProducingInvocationID,
@@ -251,11 +243,10 @@ func seedExecutionPublicationChain(
 			Repo: opts.repo, RepositoryID: opts.repositoryID,
 			BaseRef: opts.baseRef, BaseSHA: opts.baseSHA,
 		},
-		Workspace:              "workspace-producing-0001",
-		AuthIdentityID:         &identityID,
-		TrustProfileDigest:     trustProfileBinding,
-		BackupEncryptionWaiver: waiver,
-		AdmittedAt:             fixtureTime,
+		Workspace:          "workspace-producing-0001",
+		AuthIdentityID:     &identityID,
+		TrustProfileDigest: trustProfileBinding,
+		AdmittedAt:         fixtureTime,
 	})
 	if err != nil {
 		t.Fatalf("NewExecutionAdmission: %v", err)
@@ -559,7 +550,7 @@ func TestPublishExecutionAuthenticatesFrozenAdmissionAndExport(t *testing.T) {
 	initial, err := store.Open(
 		t.Context(),
 		storePath,
-		executionStoreOptions(fixtureRepositoryID),
+		executionStoreOptions(),
 	)
 	if err != nil {
 		t.Fatalf("open initial store: %v", err)
@@ -573,7 +564,7 @@ func TestPublishExecutionAuthenticatesFrozenAdmissionAndExport(t *testing.T) {
 		t.Fatalf("close initial store: %v", err)
 	}
 
-	currentOptions := executionStoreOptions(fixtureRepositoryID)
+	currentOptions := executionStoreOptions()
 	currentOptions.AdmissionFloors[domain.ModeUnattended] = domain.NewCapabilitySnapshot(domain.CapWorkspaceSnapshot)
 	current, err := store.Open(
 		t.Context(),

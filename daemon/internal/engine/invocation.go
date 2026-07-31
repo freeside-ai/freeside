@@ -206,6 +206,7 @@ func MutableAdmissionPolicyRefusal(err error) bool {
 		errors.Is(err, domain.ErrCredentialModeNotApproved) ||
 		errors.Is(err, domain.ErrWaiverNotConfigured) ||
 		errors.Is(err, domain.ErrBackupHealthUnavailable) ||
+		errors.Is(err, domain.ErrCheckpointNotEncrypted) ||
 		errors.Is(err, domain.ErrCheckpointNotCurrent) ||
 		errors.Is(err, domain.ErrArtifactClosureIncomplete) ||
 		errors.Is(err, domain.ErrRestoreTestStale) ||

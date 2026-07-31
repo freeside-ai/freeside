@@ -31,8 +31,8 @@ var ErrRepositoryUntrusted = errors.New("admission names a repository with no ap
 // edit that did not recompute the digest, not an actor with full write access
 // to the database, who could recompute it. The re-gate is the half that keeps
 // meaning: a snapshot admitted under an older, weaker floor stops reading as
-// admissible the moment policy raises it, and a waiver the operator does not
-// hold is refused however well-formed the row is.
+// admissible the moment policy raises it, while historical waiver-bearing
+// records remain readable only after the encrypted backup gate passes.
 
 const (
 	recordExecutionAdmissionSQL = `
@@ -93,6 +93,10 @@ FROM execution_outcomes WHERE invocation_id = ?`
 // second admission of the same invocation with different content fails with
 // ErrImmutableConflict.
 func (tx *InternalTx) RecordExecutionAdmission(ctx context.Context, admission domain.ExecutionAdmission) error {
+	if admission.BackupEncryptionWaiver != nil {
+		return fmt.Errorf("record execution admission %q: %w",
+			admission.InvocationID, domain.ErrBackupEncryptionWaiverUnsupported)
+	}
 	body, err := encode(admission)
 	if err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
@@ -103,12 +107,10 @@ func (tx *InternalTx) RecordExecutionAdmission(ctx context.Context, admission do
 	// The operating-state half runs only here and at dispatch, not in
 	// scanExecutionAdmission's re-gate: an operator stop or a blocking item
 	// closes new unattended operation without making recorded history
-	// unreadable (RequireUnattendedAdmissible). Ordering matters twice over:
-	// the engine writes the current admission's own waived-posture notice
-	// after this call in the same transaction, so an admission never blocks
-	// itself; and running before putImmutable means a byte-identical replay
-	// arriving after a stop refuses rather than converging — fail-closed, the
-	// run-level replay path re-dispatches after a resume.
+	// unreadable (RequireUnattendedAdmissible). Running before putImmutable
+	// means a byte-identical replay arriving after a stop refuses rather than
+	// converging, fail-closed; the run-level replay path re-dispatches after a
+	// resume.
 	if err := tx.RequireUnattendedAdmissible(ctx, admission); err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
@@ -139,8 +141,8 @@ func (tx *InternalTx) RecordExecutionAdmission(ctx context.Context, admission do
 //
 // The separation is the point. A caller deciding "does this attempt have an
 // audited class?" must not learn the answer by classifying an error, because
-// the gate itself can fail with a not-found (a waived admission whose trusted
-// profile is gone), and reading that as "no record" would accept work whose
+// the gate itself can fail with a not-found (an unattended admission whose
+// trusted profile is gone), and reading that as "no record" would accept work whose
 // reconstruction had explicitly failed closed. Here absence is a boolean and
 // every error is a failure.
 func (tx *ReadTx) LookupExecutionAdmission(
@@ -302,12 +304,11 @@ func evidenceDigestColumnEqual(column sql.NullString, want *domain.Digest) bool 
 // closed: an unconfigured floor admits nothing, exactly as a nil
 // approved-recipe set approves nothing.
 //
-// A record claiming the §5.7 waiver gets one more check, because the domain
-// gate can only compare the numbers the record itself carries: the repository
-// identity the record names must match the one the repository's approved trust
-// profile carries. That profile is human-approved state the record cannot
-// write, so the name-to-id pair stops being self-asserted, and a waiver cannot
-// follow a repository name onto a different repository.
+// A historical record carrying the retired §5.7 waiver still gets one
+// identity check: the repository identity the record names must match the one
+// the repository's approved trust profile carries. That profile is
+// human-approved state the record cannot write, so the name-to-id pair stops
+// being self-asserted and the legacy field cannot validate its own target.
 func (tx *ReadTx) gateAdmission(ctx context.Context, admission domain.ExecutionAdmission) error {
 	policy := tx.admissionPolicy
 	if admission.OperatingMode == domain.ModeUnattended {
@@ -320,12 +321,11 @@ func (tx *ReadTx) gateAdmission(ctx context.Context, admission domain.ExecutionA
 	if err := domain.AdmittedUnder(admission, policy); err != nil {
 		return err
 	}
-	// Two admissions must be anchored to a human-approved profile: one running
-	// unattended, because §5.7 lists a trust profile among the conformance an
-	// unattended run requires, and one claiming the §5.7 waiver, whose whole
-	// meaning is which repository it covers. For both, the record's own
+	// Unattended admissions must be anchored to a human-approved profile
+	// because §5.7 lists one among their required conformance. The record's own
 	// name-and-number pair is caller-supplied, so the profile is what makes it
-	// evidence rather than an assertion.
+	// evidence rather than an assertion. Historical waiver-bearing records
+	// remain a subset of this class.
 	// An admission naming a provider identity is only as good as that
 	// identity's declaration: the foreign key proves a row exists, not that it
 	// reconstructs. Reading it here means a record whose identity has a

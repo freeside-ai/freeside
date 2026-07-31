@@ -708,6 +708,10 @@ func TestBlockingSupersessionSupersedes(t *testing.T) {
 	if err := cond.Supersedes(configure(7)); !errors.Is(err, domain.ErrWaiverNotConfigured) {
 		t.Fatalf("retargeted waiver = %v, want %v", err, domain.ErrWaiverNotConfigured)
 	}
+	healthy := healthyBackupHealth()
+	if err := cond.Supersedes(domain.AdmissionPolicy{BackupHealth: &healthy}); err != nil {
+		t.Fatalf("healthy encrypted backup did not supersede legacy waiver notice: %v", err)
+	}
 	malformed := domain.BlockingSupersession{Kind: "operator_snooze", RepositoryID: 42}
 	if err := malformed.Supersedes(configure(42)); !errors.Is(err, domain.ErrInvalidSupersessionKind) {
 		t.Fatalf("malformed condition = %v, want %v", err, domain.ErrInvalidSupersessionKind)
