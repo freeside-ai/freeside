@@ -96,6 +96,15 @@ func (r *removalRecorder) quarantineSnapshot() []publish.InstallationRemovalReco
 	return append([]publish.InstallationRemovalRecord(nil), r.quarantines...)
 }
 
+// grantReadMintBody is the conformant janitor grant-read 201: a
+// metadata:read grant on a selected installation, carrying GitHub's
+// one-hour expiry measured from fixtureTime. Every janitor fixture
+// mints through it so a change to the accepted response shape has one
+// place to land.
+const grantReadMintBody = `{"token":"` + fixtureTokenValue +
+	`","expires_at":"2026-07-16T13:00:00Z",` +
+	`"permissions":{"metadata":"read"},"repository_selection":"selected"}`
+
 func publicJanitorKeystore(t *testing.T) *publish.Keystore {
 	t.Helper()
 	ks := newTestKeystore(t)
@@ -141,7 +150,7 @@ func handleExactGrant(w http.ResponseWriter, r *http.Request, repositoryIDs ...i
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/access_tokens"):
 		w.WriteHeader(http.StatusCreated)
 		_, _ = io.WriteString(w,
-			`{"token":"`+fixtureTokenValue+`","permissions":{"metadata":"read"},"repository_selection":"selected"}`)
+			grantReadMintBody)
 	case r.Method == http.MethodGet && r.URL.Path == "/installation/repositories":
 		repositories := make([]map[string]int64, len(repositoryIDs))
 		for index, repositoryID := range repositoryIDs {

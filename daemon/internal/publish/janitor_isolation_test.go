@@ -594,8 +594,7 @@ func TestInstallationJanitorStopsOnAnUnrevokedToken(t *testing.T) {
 			mints++
 			mintsMu.Unlock()
 			w.WriteHeader(http.StatusCreated)
-			_, _ = io.WriteString(w, `{"token":"`+fixtureTokenValue+
-				`","permissions":{"metadata":"read"},"repository_selection":"selected"}`)
+			_, _ = io.WriteString(w, grantReadMintBody)
 		case r.Method == http.MethodGet && r.URL.Path == "/installation/repositories":
 			_, _ = io.WriteString(w, `{"total_count":1,"repositories":[{"id":990011}]}`)
 		case r.Method == http.MethodDelete && r.URL.Path == "/installation/token":

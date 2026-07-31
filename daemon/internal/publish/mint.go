@@ -278,13 +278,6 @@ func (m *Minter) mintResolved(
 	if err := decodeResponse(resp.Body, &minted); err != nil {
 		return InstallationToken{}, fmt.Errorf("mint: decode response: %w", err)
 	}
-	expiresAt, err := time.Parse(time.RFC3339, minted.ExpiresAt.Reveal())
-	if err != nil {
-		// time.ParseError includes the rejected value. Treat the untrusted
-		// field as secret-shaped and return no response content: a proxy
-		// can place credential material in any string field.
-		return InstallationToken{}, errors.New("mint: response carries an invalid token expiry")
-	}
 	// Fail closed on any grant that differs from the request, in either
 	// direction: a narrower grant (an installation whose App
 	// permissions were narrowed) would fail the publish path halfway,
@@ -300,20 +293,32 @@ func (m *Minter) mintResolved(
 		return InstallationToken{}, fmt.Errorf("mint: granted repository scope differs from the request: %w", ErrGrantMismatch)
 	}
 	// Returned-object trust boundary: a syntactically valid 201 that
-	// omits the token or carries an unusable expiry must not advance
-	// the durable audit barrier or circulate as a credential.
+	// omits the token, or names an expiry the request could not have
+	// produced, must not advance the durable audit barrier or circulate
+	// as a credential.
 	if minted.Token.Reveal() == "" {
 		return InstallationToken{}, errors.New("mint: response carries no token")
 	}
-	if !expiresAt.After(m.now()) {
-		return InstallationToken{}, errors.New("mint: token expiry is not usable")
+	// The expiry is part of the returned grant, not a hint: missing,
+	// garbled, lapsed, or longer than GitHub's declared lifetime allows
+	// is discarded here, before the token is audited, cached, returned,
+	// or handed to git. checkInstallationTokenExpiry renders no response
+	// content, since a proxy can place credential material in any string
+	// field. It runs after the scope comparisons so a grant that is both
+	// over-broad and over-long still surfaces as ErrGrantMismatch, which
+	// is what callers classify on. The clock is read once, so the audit
+	// row below is stamped at the instant the expiry was judged against.
+	mintedAt := m.now()
+	expiresAt, err := checkInstallationTokenExpiry(minted.ExpiresAt, mintedAt)
+	if err != nil {
+		return InstallationToken{}, fmt.Errorf("mint: %w", err)
 	}
 
 	// The validation above proved the grant identical to the request,
 	// so the typed record and token carry the requested permissions as both
 	// requested and granted; any other grant never reaches this point.
 	if err := m.recorder.RecordMint(MintRecord{
-		MintedAt:       m.now().UTC(),
+		MintedAt:       mintedAt.UTC(),
 		RegistrationID: binding.RegistrationID,
 		InstallationID: binding.InstallationID,
 		RepositoryID:   repositoryID,
