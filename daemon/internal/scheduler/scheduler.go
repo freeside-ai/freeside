@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -116,6 +117,18 @@ func New(
 		inFlight: map[domain.ScheduleID]struct{}{},
 		errs:     make(chan error, 1),
 	}, nil
+}
+
+// RegisteredKinds enumerates the kinds this scheduler drives, sorted, for
+// composition coverage tests: the union is closed, so a composition that
+// owns every kind can prove it against domain.AllScheduleKinds.
+func (s *Scheduler) RegisteredKinds() []domain.ScheduleKind {
+	kinds := make([]domain.ScheduleKind, 0, len(s.kinds))
+	for kind := range s.kinds {
+		kinds = append(kinds, kind)
+	}
+	slices.Sort(kinds)
+	return kinds
 }
 
 // Arm converges the stored schedule onto desired within its own

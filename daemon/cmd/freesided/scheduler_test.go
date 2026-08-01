@@ -216,6 +216,35 @@ func TestBaseAdvanceWatchMaintainsFact(t *testing.T) {
 	}
 }
 
+// TestClaudeSchedulerRegistersEveryKind: the union is closed, and the
+// production composition must own a handler for every member, so a kind
+// added without a consumer registration fails here instead of sitting
+// silently undriven.
+func TestClaudeSchedulerRegistersEveryKind(t *testing.T) {
+	st := schedTestStore(t)
+	wiring := &claudeComposition{
+		janitor:        &janitorSession{janitor: &stubJanitorRunner{}},
+		observeBaseTip: staticBaseObserver,
+	}
+	cfg := config{Claude: &claudeDriverConfig{OperatingMode: domain.ModeAttendedDev}}
+	sched, err := newClaudeScheduler(st, cfg, wiring, func(context.Context) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered := map[domain.ScheduleKind]bool{}
+	for _, kind := range sched.RegisteredKinds() {
+		registered[kind] = true
+	}
+	for _, kind := range domain.AllScheduleKinds {
+		if !registered[kind] {
+			t.Errorf("kind %s has no registration in the production composition", kind)
+		}
+	}
+	if len(registered) != len(domain.AllScheduleKinds) {
+		t.Errorf("registered %d kinds, union has %d", len(registered), len(domain.AllScheduleKinds))
+	}
+}
+
 // TestDeadlineReArmsOnStaleSubjectVersion is the §5.16 handler recheck for
 // the deadline kinds: an event whose expected item version is stale (the
 // base watch's fact write bumped it) re-arms under a new generation with
