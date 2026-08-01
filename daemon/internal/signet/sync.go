@@ -56,6 +56,17 @@ type ConversationSnapshot struct {
 	Conversation  domain.Conversation `json:"conversation"`
 }
 
+// ScheduleSnapshot is a §5.16 Schedule with its store-stamped sync metadata,
+// matching api/openapi.yaml. The synced aggregate carries the binding,
+// cadence or deadline, and terminal resolution; the daemon-internal tick
+// bookkeeping (timers, occurrences) deliberately never rides sync
+// (migration 0025).
+type ScheduleSnapshot struct {
+	AsOfRevision  int64           `json:"as_of_revision"`
+	EntityVersion int64           `json:"entity_version"`
+	Schedule      domain.Schedule `json:"schedule"`
+}
+
 // BootstrapSnapshot is one canonical view of all synchronized resources.
 // Service.Bootstrap constructs every field inside one Store.Read callback, so
 // Revision is the upper bound for every resource's AsOfRevision and no write
@@ -67,6 +78,7 @@ type BootstrapSnapshot struct {
 	AttentionDeliveries []AttentionDeliverySnapshot `json:"attention_deliveries"`
 	Runs                []RunSnapshot               `json:"runs"`
 	Conversations       []ConversationSnapshot      `json:"conversations"`
+	Schedules           []ScheduleSnapshot          `json:"schedules"`
 }
 
 // Bootstrap returns the one response that advances a client's
@@ -98,6 +110,10 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 		if err != nil {
 			return err
 		}
+		schedules, err := tx.ListSchedules(ctx)
+		if err != nil {
+			return err
+		}
 
 		out = BootstrapSnapshot{
 			SyncEpoch: state.SyncEpoch, Revision: state.Revision,
@@ -105,6 +121,7 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 			AttentionDeliveries: make([]AttentionDeliverySnapshot, 0, len(deliveries)),
 			Runs:                make([]RunSnapshot, 0, len(runs)),
 			Conversations:       make([]ConversationSnapshot, 0, len(conversations)),
+			Schedules:           make([]ScheduleSnapshot, 0, len(schedules)),
 		}
 		for _, item := range items {
 			if err := validateSnapshot(state, item.Snapshot); err != nil {
@@ -132,6 +149,13 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 			}
 			out.Conversations = append(out.Conversations,
 				conversationSnapshot(conversation.Value, conversation.Snapshot))
+		}
+		for _, schedule := range schedules {
+			if err := validateSnapshot(state, schedule.Snapshot); err != nil {
+				return fmt.Errorf("schedule %q: %w", schedule.Value.ID, err)
+			}
+			out.Schedules = append(out.Schedules,
+				scheduleSnapshot(schedule.Value, schedule.Snapshot))
 		}
 		return nil
 	})
@@ -232,6 +256,23 @@ func (s *Service) ListAttentionItemDeliveries(ctx context.Context, id domain.Ite
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list attention item %q deliveries: %w", id, err)
+	}
+	return out, nil
+}
+
+// ListSchedules returns the current §5.16 schedule aggregates as partial
+// resource snapshots.
+func (s *Service) ListSchedules(ctx context.Context) ([]ScheduleSnapshot, error) {
+	state, values, err := readSnapshots(ctx, s.store, (*store.ReadTx).ListSchedules)
+	if err != nil {
+		return nil, fmt.Errorf("list schedules: %w", err)
+	}
+	out := make([]ScheduleSnapshot, 0, len(values))
+	for _, value := range values {
+		if err := validateSnapshot(state, value.Snapshot); err != nil {
+			return nil, fmt.Errorf("list schedules: schedule %q: %w", value.Value.ID, err)
+		}
+		out = append(out, scheduleSnapshot(value.Value, value.Snapshot))
 	}
 	return out, nil
 }
@@ -342,6 +383,12 @@ func deliverySnapshot(delivery domain.AttentionDelivery, snapshot store.Snapshot
 func runSnapshot(run domain.Run, snapshot store.Snapshot) RunSnapshot {
 	return RunSnapshot{
 		AsOfRevision: snapshot.AsOfRevision, EntityVersion: snapshot.EntityVersion, Run: normalizeRun(run),
+	}
+}
+
+func scheduleSnapshot(schedule domain.Schedule, snapshot store.Snapshot) ScheduleSnapshot {
+	return ScheduleSnapshot{
+		AsOfRevision: snapshot.AsOfRevision, EntityVersion: snapshot.EntityVersion, Schedule: schedule,
 	}
 }
 

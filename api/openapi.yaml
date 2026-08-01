@@ -56,6 +56,12 @@ tags:
     description: Attention items and their deliveries, read surface (plan §4).
   - name: runs
     description: Run, stage, and attempt state, read surface.
+  - name: schedules
+    description: >
+      Durable scheduler state, read surface (plan §5.16): the synchronized
+      schedule aggregates — binding, cadence or deadline, and terminal
+      resolution. The daemon-internal tick bookkeeping (timers, occurrence
+      ledger) is deliberately not synchronized.
   - name: conversations
     description: Conversations, whole-snapshot per conversation (Phase 1 semantics).
   - name: commands
@@ -289,6 +295,25 @@ paths:
                 $ref: "#/components/schemas/RunSnapshot"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /schedules:
+    get:
+      operationId: listSchedules
+      tags: [schedules]
+      summary: List durable schedules
+      description: >
+        Lists the durable scheduler's synchronized schedule aggregates
+        (plan §5.16). A partial fetch; it never marks the whole cache
+        current (plan §5.14).
+      responses:
+        "200":
+          description: Schedule snapshots.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ScheduleSnapshot"
 
   /conversations/{conversation_id}:
     get:
@@ -612,6 +637,7 @@ components:
         - attention_deliveries
         - runs
         - conversations
+        - schedules
       properties:
         sync_epoch:
           type: string
@@ -640,6 +666,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ConversationSnapshot"
+        schedules:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScheduleSnapshot"
 
     AttentionItemSnapshot:
       type: object
@@ -688,6 +718,220 @@ components:
           $ref: "#/components/schemas/EntityVersion"
         conversation:
           $ref: "#/components/schemas/Conversation"
+
+    ScheduleSnapshot:
+      type: object
+      description: A resource snapshot wrapping one durable schedule (plan §5.14, §5.16).
+      required: [as_of_revision, entity_version, schedule]
+      properties:
+        as_of_revision:
+          $ref: "#/components/schemas/AsOfRevision"
+        entity_version:
+          $ref: "#/components/schemas/EntityVersion"
+        schedule:
+          $ref: "#/components/schemas/Schedule"
+
+    ScheduleKind:
+      type: string
+      description: >
+        The closed union of durable schedule kinds (plan §5.16; mirrors
+        domain.ScheduleKind): the four 1B timer kinds and the permanent
+        trusted-config jobs. Widening it is a contract change.
+      enum:
+        - pr_checks_deadline
+        - review_wait_threshold
+        - base_advance_watch
+        - installation_poll
+        - doctor
+        - janitor
+
+    ScheduleStatus:
+      type: string
+      description: >
+        A schedule's lifecycle state (mirrors domain.ScheduleStatus): armed
+        is live; fired is a one-shot deadline that terminated
+        fired-and-handled; resolved was explicitly resolved (the awaited
+        condition arrived, or the subject concluded); expired ended with
+        its validity window.
+      enum: [armed, fired, resolved, expired]
+
+    ScheduleResolutionReason:
+      type: string
+      description: >
+        The closed vocabulary of terminal causes (mirrors
+        domain.ScheduleResolutionReason); a code, never free text.
+      enum: [deadline_elapsed, condition_satisfied, subject_concluded, intent_expired]
+
+    ScheduleResolution:
+      type: object
+      description: >
+        How and when a schedule's generation terminated; present exactly on
+        terminal schedules (mirrors domain.ScheduleResolution).
+      required: [reason, recorded_at]
+      properties:
+        reason:
+          $ref: "#/components/schemas/ScheduleResolutionReason"
+        recorded_at:
+          type: string
+          format: date-time
+
+    ScheduleSubjectType:
+      type: string
+      description: >
+        The class of durable subject a schedule is bound to (mirrors
+        domain.ScheduleSubjectType).
+      enum: [attention_item, installation_intent, trusted_config]
+
+    ScheduleSubject:
+      type: object
+      description: >
+        The schedule's subject binding and the expected subject version its
+        consuming handler rechecks (plan §5.16; mirrors
+        domain.ScheduleSubject). Fields are type-scoped: attention_item
+        subjects carry item_id and item_version; installation_intent
+        subjects carry the §5.9 activation coordinates (registration,
+        active epoch, durable intent revision); trusted_config subjects
+        carry neither.
+      required:
+        - type
+        - item_id
+        - item_version
+        - registration_id
+        - active_epoch
+        - durable_intent_revision
+      properties:
+        type:
+          $ref: "#/components/schemas/ScheduleSubjectType"
+        item_id:
+          type: string
+          minLength: 1
+          nullable: true
+        item_version:
+          type: integer
+          minimum: 1
+          nullable: true
+        registration_id:
+          type: integer
+          format: int64
+          minimum: 1
+          nullable: true
+        active_epoch:
+          type: integer
+          format: int64
+          minimum: 1
+          nullable: true
+        durable_intent_revision:
+          type: integer
+          format: int64
+          minimum: 1
+          nullable: true
+
+    ScheduleBaseWatch:
+      type: object
+      description: >
+        Kind-scoped detail of a base_advance_watch (mirrors
+        domain.ScheduleBaseWatch): the repository, target base ref, and the
+        base tip the publication was admitted against, daemon-recorded from
+        the trusted authorization.
+      required: [repo, base_ref, admitted_base_sha]
+      properties:
+        repo:
+          type: string
+          minLength: 1
+        base_ref:
+          type: string
+          minLength: 1
+        admitted_base_sha:
+          type: string
+          minLength: 1
+
+    Schedule:
+      type: object
+      description: >
+        One durable deferred check (plan §5.16; mirrors domain.Schedule):
+        the synchronized aggregate carrying the subject binding, cadence or
+        deadline, expiry, and terminal resolution. The rolling
+        next-nominal-fire clock and the occurrence ledger are
+        daemon-internal bookkeeping, deliberately absent from this surface.
+        fire_at is present exactly for one-shot kinds; interval_seconds
+        exactly for recurring kinds; base_watch exactly for
+        base_advance_watch; resolution exactly when status is terminal.
+      required:
+        - id
+        - project_id
+        - kind
+        - subject
+        - generation
+        - created_at
+        - fire_at
+        - interval_seconds
+        - expires_at
+        - base_watch
+        - status
+        - resolution
+      properties:
+        id:
+          type: string
+          minLength: 1
+        project_id:
+          type: string
+          minLength: 1
+        kind:
+          $ref: "#/components/schemas/ScheduleKind"
+        subject:
+          $ref: "#/components/schemas/ScheduleSubject"
+        generation:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Increments on every re-arm; occurrence identity binds to it.
+        created_at:
+          type: string
+          format: date-time
+        fire_at:
+          type: string
+          format: date-time
+          nullable: true
+        interval_seconds:
+          type: integer
+          format: int64
+          minimum: 1
+          nullable: true
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        base_watch:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ScheduleBaseWatch"
+        status:
+          $ref: "#/components/schemas/ScheduleStatus"
+        resolution:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ScheduleResolution"
+      example:
+        id: "schedule-pr_checks_deadline-item-1"
+        project_id: "project-1"
+        kind: "pr_checks_deadline"
+        subject:
+          type: "attention_item"
+          item_id: "item-1"
+          item_version: 1
+          registration_id: null
+          active_epoch: null
+          durable_intent_revision: null
+        generation: 1
+        created_at: "2026-01-02T03:04:05Z"
+        fire_at: "2026-01-02T03:34:05Z"
+        interval_seconds: null
+        expires_at: null
+        base_watch: null
+        status: "fired"
+        resolution:
+          reason: "deadline_elapsed"
+          recorded_at: "2026-01-02T03:35:05Z"
 
     ServerRevision:
       type: object
@@ -1093,6 +1337,7 @@ components:
         - artifact_digests
         - pr_head_sha
         - commit_plan_notice
+        - base_freshness
         - item_version
         - interruption_class
         - conversation_id
@@ -1154,6 +1399,18 @@ components:
             plan channel was consumed without a plan structuring the
             import, null otherwise. Classified by the daemon, never
             client-set; null until emission lands (#212).
+        base_freshness:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/BaseFreshness"
+          description: >
+            The base-advance staleness watch's maintained fact (plan §5.16;
+            mirrors domain.AttentionItem.BaseFreshness): the daemon's last
+            observation of the item's target base against the admitted
+            base. Present only on ready_for_final_review items once the
+            watch has observed the base; updated on material change only,
+            with the version bump that a real base advance implies. Never
+            client-set.
         item_version:
           type: integer
           minimum: 1
@@ -1233,6 +1490,7 @@ components:
         artifact_digests: ["sha256:img", "sha256:log"]
         pr_head_sha: "cafebabe"
         commit_plan_notice: "present_but_not_honored"
+        base_freshness: null
         item_version: 1
         interruption_class: "planned_gate"
         conversation_id: "conv-1"
@@ -2028,6 +2286,36 @@ components:
         attention_item.go).
       enum:
         - backup_encryption_waiver
+
+    BaseFreshness:
+      type: object
+      description: >
+        The base-advance staleness watch's fact (plan §5.16; mirrors
+        domain.BaseFreshness): advanced is derived (observed differs from
+        admitted) and revalidated by the daemon, so a fact cannot claim a
+        freshness its own coordinates contradict.
+      required: [base_ref, admitted_base_sha, observed_base_sha, advanced, observed_at]
+      properties:
+        base_ref:
+          type: string
+          minLength: 1
+        admitted_base_sha:
+          type: string
+          minLength: 1
+        observed_base_sha:
+          type: string
+          minLength: 1
+        advanced:
+          type: boolean
+        observed_at:
+          type: string
+          format: date-time
+      example:
+        base_ref: "main"
+        admitted_base_sha: "cafebabe"
+        observed_base_sha: "deadbeef"
+        advanced: true
+        observed_at: "2026-01-02T03:49:05Z"
 
     BlockingSupersession:
       type: object
