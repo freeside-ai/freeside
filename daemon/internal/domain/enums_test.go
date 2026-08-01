@@ -144,6 +144,22 @@ func TestEnumValidity(t *testing.T) {
 		valids["SupersessionKind"] = append(valids["SupersessionKind"], v.valid)
 	}
 	invalids["SupersessionKind"] = SupersessionKind("").valid
+	for _, v := range AllRunMilestoneKinds {
+		valids["RunMilestoneKind"] = append(valids["RunMilestoneKind"], v.valid)
+	}
+	invalids["RunMilestoneKind"] = RunMilestoneKind("").valid
+	for _, v := range AllObservedInvocationStatuses {
+		valids["ObservedInvocationStatus"] = append(valids["ObservedInvocationStatus"], v.valid)
+	}
+	invalids["ObservedInvocationStatus"] = ObservedInvocationStatus("").valid
+	for _, v := range AllRunHoldReasons {
+		valids["RunHoldReason"] = append(valids["RunHoldReason"], v.valid)
+	}
+	invalids["RunHoldReason"] = RunHoldReason("").valid
+	for _, v := range AllInvocationLivenesses {
+		valids["InvocationLiveness"] = append(valids["InvocationLiveness"], v.valid)
+	}
+	invalids["InvocationLiveness"] = InvocationLiveness("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {

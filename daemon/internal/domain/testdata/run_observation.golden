@@ -1,0 +1,48 @@
+{
+  "run_id": "run-1",
+  "milestones": [
+    {
+      "run_id": "run-1",
+      "kind": "run_submitted",
+      "invocation_id": "inv-1",
+      "terminal": null,
+      "outcome": null,
+      "reason": null,
+      "recorded_at": "2026-01-02T03:04:05Z"
+    },
+    {
+      "run_id": "run-1",
+      "kind": "execution_outcome_recorded",
+      "invocation_id": "inv-1",
+      "terminal": null,
+      "outcome": "failed",
+      "reason": null,
+      "recorded_at": "2026-01-02T03:13:05Z"
+    },
+    {
+      "run_id": "run-1",
+      "kind": "terminal_recorded",
+      "invocation_id": "inv-1",
+      "terminal": "failed",
+      "outcome": null,
+      "reason": null,
+      "recorded_at": "2026-01-02T03:14:05Z"
+    }
+  ],
+  "hold": {
+    "run_id": "run-1",
+    "invocation_id": "inv-1",
+    "reason": "operation_stopped",
+    "first_observed_at": "2026-01-02T03:05:05Z",
+    "last_observed_at": "2026-01-02T03:06:05Z"
+  },
+  "invocations": [
+    {
+      "invocation_id": "inv-1",
+      "run_id": "run-1",
+      "status": "running",
+      "live": true,
+      "observed_at": "2026-01-02T03:07:05Z"
+    }
+  ]
+}

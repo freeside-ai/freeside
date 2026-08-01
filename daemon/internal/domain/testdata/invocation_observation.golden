@@ -1,0 +1,7 @@
+{
+  "invocation_id": "inv-1",
+  "run_id": "run-1",
+  "status": "running",
+  "live": true,
+  "observed_at": "2026-01-02T03:07:05Z"
+}
