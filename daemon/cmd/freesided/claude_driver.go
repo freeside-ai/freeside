@@ -1172,9 +1172,7 @@ func claudeTransport(
 	for _, app := range apps {
 		registrationIDs = append(registrationIDs, app.AppID)
 	}
-	session, err := startJanitorSession(
-		ctx, janitor, registrationIDs, defaultJanitorInterval,
-	)
+	session, err := startJanitorSession(ctx, janitor, registrationIDs)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("start installation janitor: %w", err)
 	}
@@ -1184,24 +1182,28 @@ func claudeTransport(
 const janitorStartupTimeout = 2 * time.Minute
 
 type janitorRunner interface {
-	Run(context.Context, time.Duration) error
+	RunScheduledPass(context.Context) error
 	ActiveFor(int64) bool
 	WithStableCoverage(func() error) error
+	RegistrationFaults() []publish.JanitorRegistrationFault
 }
 
+// janitorSession exposes the daemon's janitor to the composition: the
+// stable-coverage coordinator conformance uses, and the scheduled pass the
+// §5.16 scheduler's janitor kind fires. The pre-1B always-on goroutine is
+// gone — startJanitorSession primes coverage with one synchronous pass (the
+// same coverage-before-ready startup gate the loop start used to provide)
+// and the durable scheduler owns every later pass; a pass failure there
+// stops the scheduler loop, which stays daemon-fatal exactly as a stopped
+// janitor was.
 type janitorSession struct {
-	cancel   context.CancelFunc
-	finished chan struct{}
-	janitor  janitorRunner
-	stopOnce sync.Once
-	runErr   error
+	janitor janitorRunner
 }
 
 func startJanitorSession(
 	parent context.Context,
 	janitor janitorRunner,
 	registrationIDs []int64,
-	interval time.Duration,
 ) (*janitorSession, error) {
 	if janitor == nil {
 		return nil, errors.New("nil installation janitor")
@@ -1209,46 +1211,32 @@ func startJanitorSession(
 	if len(registrationIDs) == 0 {
 		return nil, publish.ErrNoAppCredentials
 	}
-	runCtx, cancel := context.WithCancel(parent)
-	session := &janitorSession{
-		cancel: cancel, finished: make(chan struct{}), janitor: janitor,
-	}
-	go func() {
-		session.runErr = janitor.Run(runCtx, interval)
-		close(session.finished)
-	}()
-
 	startupCtx, stopWaiting := context.WithTimeout(parent, janitorStartupTimeout)
 	defer stopWaiting()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		active := true
-		for _, registrationID := range registrationIDs {
-			if !janitor.ActiveFor(registrationID) {
-				active = false
-				break
-			}
-		}
-		if active {
-			return session, nil
-		}
-		select {
-		case <-session.finished:
-			if session.runErr != nil {
-				return nil, session.runErr
-			}
-			return nil, errors.New("installation janitor stopped before publishing coverage")
-		case <-startupCtx.Done():
-			cancel()
-			<-session.finished
-			return nil, errors.Join(
-				fmt.Errorf("installation janitor did not publish coverage: %w", startupCtx.Err()),
-				session.runErr,
-			)
-		case <-ticker.C:
-		}
+	if err := janitor.RunScheduledPass(startupCtx); err != nil {
+		return nil, fmt.Errorf("installation janitor startup pass: %w", err)
 	}
+	for _, registrationID := range registrationIDs {
+		if janitor.ActiveFor(registrationID) {
+			continue
+		}
+		faultErrs := make([]error, 0, 1)
+		for _, fault := range janitor.RegistrationFaults() {
+			faultErrs = append(faultErrs, fault.Err)
+		}
+		return nil, errors.Join(fmt.Errorf(
+			"installation janitor did not publish coverage for registration %d",
+			registrationID), errors.Join(faultErrs...))
+	}
+	return &janitorSession{janitor: janitor}, nil
+}
+
+// RunScheduledPass is the scheduler-fired janitor pass (§5.16 janitor kind).
+func (s *janitorSession) RunScheduledPass(ctx context.Context) error {
+	if s == nil || s.janitor == nil {
+		return errors.New("nil installation janitor session")
+	}
+	return s.janitor.RunScheduledPass(ctx)
 }
 
 func (s *janitorSession) WithStableCoverage(fn func() error) error {
@@ -1258,25 +1246,10 @@ func (s *janitorSession) WithStableCoverage(fn func() error) error {
 	return s.janitor.WithStableCoverage(fn)
 }
 
-func (s *janitorSession) Close(ctx context.Context) error {
-	if s == nil {
-		return nil
-	}
-	s.stopOnce.Do(s.cancel)
-	select {
-	case <-s.finished:
-		return s.runErr
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (s *janitorSession) Result() error {
-	if s == nil {
-		return nil
-	}
-	<-s.finished
-	return s.runErr
+// Close is retained for the session-group shape; the janitor holds no
+// goroutine to stop, and the scheduler's context owns pass cancellation.
+func (s *janitorSession) Close(context.Context) error {
+	return nil
 }
 
 type sessionGroup []sessionCloser
