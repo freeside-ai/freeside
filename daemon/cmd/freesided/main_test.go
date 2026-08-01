@@ -1045,6 +1045,10 @@ func (j *stubJanitorRunner) RegistrationFaults() []publish.JanitorRegistrationFa
 	return j.faults
 }
 
+func (j *stubJanitorRunner) PendingReady(publish.PendingInstallationEnvelope) (int64, bool) {
+	return 0, false
+}
+
 func TestJanitorSessionPrimesCoverageSynchronously(t *testing.T) {
 	janitor := &stubJanitorRunner{}
 	session, err := startJanitorSession(t.Context(), janitor, []int64{4385298})

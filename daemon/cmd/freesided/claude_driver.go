@@ -852,6 +852,7 @@ func isPermanentSeedCredentialError(err error) bool {
 type claudeComposition struct {
 	driver               *claude.Driver
 	backend              *ward.Backend
+	authority            *publish.InstallationAuthorityStore
 	publicationTransport engine.PublicationTransport
 	publisher            *publish.Publisher
 	containerBin         string
@@ -876,7 +877,11 @@ func composeClaudeDriver(
 	if err != nil {
 		return nil, err
 	}
-	transport, publisher, commitAuthors, janitor, err := claudeTransport(ctx, st, cfg)
+	authority, err := publish.NewInstallationAuthorityStore(cfg.StateRoot)
+	if err != nil {
+		return nil, err
+	}
+	transport, publisher, commitAuthors, janitor, err := claudeTransport(ctx, st, cfg, authority)
 	if err != nil {
 		return nil, err
 	}
@@ -981,7 +986,7 @@ func composeClaudeDriver(
 		AuthIdentityID: &identity,
 	}
 	composition := &claudeComposition{
-		driver: driver, backend: backend,
+		driver: driver, backend: backend, authority: authority,
 		publicationTransport: publicationTransport,
 		publisher:            publisher, containerBin: cfg.ContainerBin,
 		env:    env,
@@ -1099,13 +1104,10 @@ func claudeTransport(
 	ctx context.Context,
 	st *store.Store,
 	cfg claudeDriverConfig,
+	authority *publish.InstallationAuthorityStore,
 ) (*publish.Transport, *publish.Publisher, *publish.GitHubAppBotIdentityResolver, *janitorSession, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	keystore, err := publish.NewKeystore(cfg.CredentialsDir, cfg.StateRoot)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	authority, err := publish.NewInstallationAuthorityStore(cfg.StateRoot)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -1186,6 +1188,7 @@ type janitorRunner interface {
 	ActiveFor(int64) bool
 	WithStableCoverage(func() error) error
 	RegistrationFaults() []publish.JanitorRegistrationFault
+	PendingReady(publish.PendingInstallationEnvelope) (int64, bool)
 }
 
 // janitorSession exposes the daemon's janitor to the composition: the
@@ -1244,6 +1247,17 @@ func (s *janitorSession) WithStableCoverage(fn func() error) error {
 		return errors.New("nil installation janitor session")
 	}
 	return s.janitor.WithStableCoverage(fn)
+}
+
+// PendingReady is the janitor's onboarding transition signal, exposed for
+// the installation-poll schedule kind.
+func (s *janitorSession) PendingReady(
+	envelope publish.PendingInstallationEnvelope,
+) (int64, bool) {
+	if s == nil || s.janitor == nil {
+		return 0, false
+	}
+	return s.janitor.PendingReady(envelope)
 }
 
 // Close is retained for the session-group shape; the janitor holds no

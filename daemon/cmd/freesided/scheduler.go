@@ -48,6 +48,10 @@ func newClaudeScheduler(
 			return scheduler.Consumption{Outcome: domain.OutcomeHandled}, nil
 		}},
 	}
+	// The installation-poll kind registers with the daemon too: a pending
+	// intent recorded by the onboarding CLI keeps its durable observation
+	// (and its expiry gets recorded) even when the operator never resumes.
+	kinds[domain.ScheduleInstallationPoll] = installPollRegistration(wiring.authority, wiring.janitor)
 	return scheduler.New(st, cfg.Claude.OperatingMode,
 		func() time.Time { return time.Now().UTC() }, kinds)
 }
