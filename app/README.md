@@ -57,6 +57,16 @@ Repeat with `-FreesideColorScheme dark` into `dark.png`, then compare the two `s
 - `Sources/FreesideAPI` owns the generated client surface, the stateful mock server and its transport, and the per-type attention fixtures. Apple Swift OpenAPI Generator produces client and type source at build time from the schema mirror in that target.
 - `Sources/FreesideCore` contains shared SwiftUI presentation code.
 - `Tests/FreesideAPITests` exercises the generated client through the mock server, with no network or daemon; `Tests/FreesideCoreTests` covers the inbox, decision, sync, pairing, and session models against the same mock, plus the cache and credential stores.
+- `Apps/macOS/Assets.xcassets` holds the app icon, the §15 signet mark on its ink tile. Only the macOS target carries one; iOS gains no icon here.
+
+The icon slots are **full-bleed**, not the design export's inset artwork, and that is deliberate: macOS 26 masks a full-bleed icon into its own superellipse but wraps a transparent-cornered one in a grey containment plate, so the exported tile would render as a mark inside two nested frames. The slots are derived from the export's 1024 canvas with
+
+```sh
+magick Freeside.iconset/icon_512x512@2x.png \
+  -resize 1274x1274 -gravity center -extent 1024x1024 master.png
+```
+
+which scales the 824-pixel art area out to the canvas edge (a slight overscan: contact at the edge midpoints alone still reads as inset), then resizes that master into each slot. Re-derive them the same way when the mark is re-exported. The export's dark variant is unused; an asset catalog cannot express a per-appearance macOS app icon, which needs an Icon Composer document (see the decision note).
 
 `Sources/FreesideAPI/openapi.yaml` is a mechanical mirror of the repository contract at `../api/openapi.yaml`. Refreshing it and rebuilding the generated client is one reproducible command:
 
