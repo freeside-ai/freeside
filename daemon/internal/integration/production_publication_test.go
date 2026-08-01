@@ -584,6 +584,22 @@ func TestAttendedRestartHoldsQueuedUnattendedPublication(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// The intentional pause is operator-visible run state (issue #394): the
+	// hold-only pass records the typed attended-mode hold for the queued
+	// task, without a revision bump (checked above) or any forge effect.
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		hold, found, err := tx.GetRunHold(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if !found || hold.Reason != domain.HoldAttendedModeActive {
+			t.Errorf("attended publication hold observation = %+v, %v; want %s",
+				hold, found, domain.HoldAttendedModeActive)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
 		t.Fatalf("resume held publication after unattended restart: %v", err)
@@ -591,6 +607,19 @@ func TestAttendedRestartHoldsQueuedUnattendedPublication(t *testing.T) {
 	p.assertReady(t)
 	if refs, prs := p.forge.counts(); refs != 1 || prs != 1 {
 		t.Fatalf("resumed publication effects = %d refs, %d PRs, want 1/1", refs, prs)
+	}
+	// Resuming and converging clears the hold through forward progress.
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		hold, found, err := tx.GetRunHold(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if found {
+			t.Errorf("resumed publication left the hold standing: %+v", hold)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
