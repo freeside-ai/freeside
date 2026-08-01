@@ -1,0 +1,21 @@
+{
+  "id": "schedule-janitor",
+  "project_id": "project-system",
+  "kind": "janitor",
+  "subject": {
+    "type": "trusted_config",
+    "item_id": null,
+    "item_version": null,
+    "registration_id": null,
+    "active_epoch": null,
+    "durable_intent_revision": null
+  },
+  "generation": 1,
+  "created_at": "2026-01-02T03:04:05Z",
+  "fire_at": null,
+  "interval_seconds": 30,
+  "expires_at": null,
+  "base_watch": null,
+  "status": "armed",
+  "resolution": null
+}

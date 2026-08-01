@@ -561,10 +561,105 @@ func TestGolden(t *testing.T) {
 		},
 	}
 
+	// Durable-scheduler fixtures (§5.16, #442): one schedule per shape class
+	// (a one-shot deadline, the base-advance watch with its kind-scoped
+	// detail, the expiring installation poll, a permanent trusted-config job,
+	// and a concluded deadline), plus an occurrence pair and the trusted
+	// event. The api/openapi.yaml examples are lifted from these.
+	itemID := domain.ItemID("item-1")
+	itemVersion := 1
+	deadlineAt := ts.Add(30 * time.Minute)
+	deadlineSchedule, err := domain.NewSchedule(domain.ScheduleInput{
+		ID: "schedule-pr_checks_deadline-item-1", ProjectID: "project-1",
+		Kind: domain.SchedulePRChecksDeadline,
+		Subject: domain.ScheduleSubject{
+			Type: domain.ScheduleSubjectAttentionItem, ItemID: &itemID, ItemVersion: &itemVersion,
+		},
+		CreatedAt: ts, FireAt: &deadlineAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	watchInterval := int64(900)
+	watchSchedule, err := domain.NewSchedule(domain.ScheduleInput{
+		ID: "schedule-base_advance_watch-item-1", ProjectID: "project-1",
+		Kind: domain.ScheduleBaseAdvanceWatch,
+		Subject: domain.ScheduleSubject{
+			Type: domain.ScheduleSubjectAttentionItem, ItemID: &itemID, ItemVersion: &itemVersion,
+		},
+		CreatedAt: ts, IntervalSeconds: &watchInterval,
+		BaseWatch: &domain.ScheduleBaseWatch{
+			Repo: "owner/repo", BaseRef: "main", AdmittedBaseSHA: "cafebabe",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registrationID := int64(4385298)
+	activeEpoch := int64(1)
+	intentRevision := int64(2)
+	pollInterval := int64(2)
+	pollExpiry := ts.Add(10 * time.Minute)
+	pollSchedule, err := domain.NewSchedule(domain.ScheduleInput{
+		ID: "schedule-installation_poll-4385298", ProjectID: "project-system",
+		Kind: domain.ScheduleInstallationPoll,
+		Subject: domain.ScheduleSubject{
+			Type:           domain.ScheduleSubjectInstallationIntent,
+			RegistrationID: &registrationID, ActiveEpoch: &activeEpoch,
+			DurableIntentRevision: &intentRevision,
+		},
+		CreatedAt: ts, IntervalSeconds: &pollInterval, ExpiresAt: &pollExpiry,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	janitorInterval := int64(30)
+	janitorSchedule, err := domain.NewSchedule(domain.ScheduleInput{
+		ID: "schedule-janitor", ProjectID: "project-system",
+		Kind:      domain.ScheduleJanitor,
+		Subject:   domain.ScheduleSubject{Type: domain.ScheduleSubjectTrustedConfig},
+		CreatedAt: ts, IntervalSeconds: &janitorInterval,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firedSchedule, err := deadlineSchedule.Concluded(
+		domain.ScheduleFired, domain.ResolutionDeadlineElapsed, ts.Add(31*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingOccurrence := domain.ScheduleOccurrence{
+		ScheduleID: deadlineSchedule.ID, Generation: deadlineSchedule.Generation,
+		NominalFireAt: deadlineAt, Status: domain.OccurrencePending,
+		CreatedAt: ts.Add(31 * time.Minute),
+		Gap: &domain.ScheduleFireGap{
+			MissedOccurrences: 1, EarliestMissedAt: deadlineAt.Add(-time.Minute),
+		},
+	}
+	occurrenceConsumedAt := ts.Add(32 * time.Minute)
+	consumedOutcome := domain.OutcomeHandled
+	consumedOccurrence := pendingOccurrence
+	consumedOccurrence.Status = domain.OccurrenceConsumed
+	consumedOccurrence.ConsumedAt = &occurrenceConsumedAt
+	consumedOccurrence.Outcome = &consumedOutcome
+	scheduleEvent, err := domain.NewScheduleEvent(
+		deadlineSchedule, pendingOccurrence, ts.Add(31*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	cases := []struct {
 		name  string
 		value any
 	}{
+		{"schedule_deadline", deadlineSchedule},
+		{"schedule_base_advance_watch", watchSchedule},
+		{"schedule_installation_poll", pollSchedule},
+		{"schedule_janitor", janitorSchedule},
+		{"schedule_fired", firedSchedule},
+		{"schedule_occurrence_pending", pendingOccurrence},
+		{"schedule_occurrence_consumed", consumedOccurrence},
+		{"schedule_event", scheduleEvent},
 		{"attention_item", item},
 		{"attention_item_blocked", blockedItem},
 		{"attention_item_decided", decidedItem},
