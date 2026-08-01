@@ -693,7 +693,7 @@ New in revision 23 (decider in parentheses):
 
 ---
 
-## Revision 24 (current)
+## Revision 24
 
 Revision 24 completes the real production publication path's visible Git
 identity and failure-containment contracts after the first authorized live
@@ -723,3 +723,93 @@ New in revision 24 (decider in parentheses):
    which let one external failure terminate the daemon and could only converge
    by enumerating an open-ended error surface.
    (User; devlog 2026-07-31-0907-complete-production-pipeline.md; #411.)
+
+---
+
+## Revision 25 (Current)
+
+Revision 25 lands the "World model, proposals, and judgment calls" revision
+(#420) with #427's review-stage change folded in at the owner's 2026-07-31
+reopen: daemon judgment calls with per-site authority contracts, the closed
+proposed-effect registry, human-gated follow-up issue filing, the durable
+scheduler, post-merge recompute and the frontier projection, the
+verification state algebra, the 1B restructure into internal exits
+1B.0/1B.1/1B.2 with UI surfaces, provisional contracts for deferred
+subsystems, and review as a durable Freeside-invoked, Freeside-orchestrated
+workflow stage.
+
+Held from revision 24: everything except the three statements this revision
+overturns — Section 4's GitHub-Projects-as-passive-all-work-view, Section
+11's Phase 3 initiative-view placement, and Section 5.3's "one primary
+review source, CodexGitHubReview" (with the 1B chain's
+control-plane-triggered Codex review step reshaped).
+
+New in revision 25 (decider in parentheses):
+
+1. **Daemon judgment calls are contract-bound** (Section 5.13): terminal
+   authority modes annotate / propose / explain / choose are exhaustive;
+   every call site carries exactly one per-site authority contract; advisory
+   output lives in a store structurally unreachable by policy evaluation;
+   daemon-side inference is its own contract, never a reuse of
+   `provider_only`. The control plane stays operable and fail-safe with
+   inference down.
+   (User; devlog 2026-07-31-1830-world-model-plan-revision.md; #420.)
+2. **Agent-requested real-world effects exist only as proposals into a
+   closed effect registry** (Section 5.13): fixed Go types, trusted
+   constructors, gates; daemon-generated proposal-instance IDs under stable
+   admission idempotency keys are the effect identity; semantic content
+   never defines occurrence identity. Trusted engine-run effects stay under
+   Section 5.9. (User; same devlog; #420.)
+3. **Follow-up issue filing lands human-gated** (Section 5.17): the
+   policy-approved path requires a complete enumerated issue-event authority
+   profile; Freeside-origin issues never `auto_start`; in a Freeside-seeded
+   repository without a current valid profile, all label intake demotes to
+   propose. (User; same devlog; #420.)
+4. **One durable scheduler owns every deferred check** (Section 5.16): a
+   closed kind union, fire-time validation, transactional consumption with
+   redelivery, no silent stale-event discard, and no authority from firing.
+   Only the scheduler gates first real-backlog use in 1B.0.
+   (User; same devlog; #420.)
+5. **Post-merge recompute and the frontier projection** (Section 5.18): a
+   merge completes a unit only through an exact daemon-recorded binding; the
+   projection derives from explicit declarations, renders staleness and
+   coverage honestly, and serializes unknown scope.
+   (User; same devlog; #420.)
+6. **The verification state algebra records honest degraded verdicts**
+   (Section 6): waivers exist only inside Failed/NotRun under a closed
+   granting-authority set; absent records block; ReadyClean and
+   ReadyDegraded never flatten into one boolean downstream.
+   (User; same devlog; #420.)
+7. **The initiative view ships minimal in 1B.2, and GitHub Projects is no
+   longer the all-work view.** Overturns the standing Section 4 statement
+   and the former Section 11 Phase 3 initiative-view placement, on lived
+   evidence from building Freeside with agents.
+   (User; same devlog; #420.)
+8. **Phase 1B restructures into internal exits 1B.0 / 1B.1 / 1B.2** with
+   real-backlog use beginning during 1B.0 as soon as the minimal loop
+   stands. (User; same devlog; #420.)
+9. **Provisional contracts are recorded for deferred subsystems** — scoped
+   consent grants, external findings ingestion, the pre-publication
+   adversarial pass, the readiness registry (Section 5.19) — each re-reviewed
+   at implementation. (User; same devlog; #420.)
+10. **Review is a durable, Freeside-invoked and Freeside-orchestrated stage
+    of the run workflow, with a local Codex invocation as the first
+    production ReviewSource; GitHub-native Codex review is demoted to
+    best-effort extra evidence that never satisfies the review requirement**
+    (Sections 5.3 and 7). Overturns "one primary review source,
+    CodexGitHubReview" and reshapes the 1B chain's control-plane-triggered
+    Codex review step, per the 2026-07-31 live-run trigger falsification: no
+    App-visible trigger path exists, and a human-PAT trigger was rejected as
+    a production dependency.
+    (User; same devlog; #420, #427.)
+11. **The review-anchor fork is carried open, deliberately unresolved**
+    (Section 7): pre-publication review versus the current PR-anchored
+    chain. Recorded lean: pre-publication with forge checks still gating
+    merge. (User; same devlog; #420, #427.)
+12. **Plain-English scheduling defers past the 1B exit**, CLI-first,
+    sequenced before any conversational surface.
+    (User; same devlog; #420.)
+13. **Smalls:** the stall heartbeat may only accelerate a stall notice and
+    never extends a budget (Section 5.12); CI spend joins the maintenance
+    accounting (Section 9); the doctor gains a stored-credential integrity
+    probe in 1B.1 (Section 10). (User; same devlog; #420.)
