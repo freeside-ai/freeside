@@ -561,6 +561,18 @@ func TestGolden(t *testing.T) {
 		},
 	}
 
+	// A ready item carrying the base-advance watch's maintained fact
+	// (§5.16): the api AttentionItem example's base_freshness branch.
+	freshItem := item
+	freshItem.ItemVersion = item.ItemVersion + 1
+	freshItem.BaseFreshness = &domain.BaseFreshness{
+		BaseRef: "main", AdmittedBaseSHA: "cafebabe", ObservedBaseSHA: "deadbeef",
+		Advanced: true, ObservedAt: ts.Add(45 * time.Minute),
+	}
+	if err := freshItem.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
 	// Durable-scheduler fixtures (§5.16, #442): one schedule per shape class
 	// (a one-shot deadline, the base-advance watch with its kind-scoped
 	// detail, the expiring installation poll, a permanent trusted-config job,
@@ -652,6 +664,7 @@ func TestGolden(t *testing.T) {
 		name  string
 		value any
 	}{
+		{"attention_item_base_freshness", freshItem},
 		{"schedule_deadline", deadlineSchedule},
 		{"schedule_base_advance_watch", watchSchedule},
 		{"schedule_installation_poll", pollSchedule},

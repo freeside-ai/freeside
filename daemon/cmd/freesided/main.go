@@ -580,6 +580,24 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 		defer d.wg.Done()
 		d.errs <- localBackups.Run(ctx)
 	}()
+	if claudeWiring == nil {
+		// The fake lane arms the §5.16 publication watches beside its ready
+		// items; the walking-skeleton composition runs the same watch kinds
+		// (with a static base observer) so both lanes share one behavior.
+		fakeSched, err := newFakeScheduler(st)
+		if err != nil {
+			return nil, err
+		}
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			if err := fakeSched.Run(ctx, cfg.SchedulerInterval); err != nil {
+				d.errs <- fmt.Errorf("durable scheduler: %w", err)
+				return
+			}
+			d.errs <- nil
+		}()
+	}
 	if claudeWiring != nil {
 		// The doctor and janitor cadences live on the §5.16 durable
 		// scheduler; their startup obligations (the synchronous initial

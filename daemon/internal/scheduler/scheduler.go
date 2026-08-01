@@ -118,63 +118,72 @@ func New(
 	}, nil
 }
 
-// Arm converges the stored schedule onto desired: absent creates it, an
+// Arm converges the stored schedule onto desired within its own
+// transaction; see Converge.
+func (s *Scheduler) Arm(ctx context.Context, desired domain.Schedule, firstFireAt time.Time) error {
+	return s.store.Write(ctx, func(tx *store.WriteTx) error {
+		return Converge(ctx, tx, desired, firstFireAt)
+	})
+}
+
+// Converge converges the stored schedule onto desired inside the caller's
+// transaction (so an arming can commit atomically with the state that
+// warrants it, e.g. an attention item's creation): absent creates it, an
 // armed row with the same shape is kept (its clock preserved across
 // restarts), and a terminal row or a shape change (a reconfigured interval,
 // a new subject binding) re-arms under the next generation. firstFireAt
 // seeds the recurring clock only when one is created or replaced.
-func (s *Scheduler) Arm(ctx context.Context, desired domain.Schedule, firstFireAt time.Time) error {
+func Converge(ctx context.Context, tx *store.WriteTx, desired domain.Schedule, firstFireAt time.Time) error {
 	if err := desired.Validate(); err != nil {
 		return fmt.Errorf("arm schedule: %w", err)
 	}
 	if desired.Status != domain.ScheduleArmed {
 		return fmt.Errorf("arm schedule %s: status %s", desired.ID, desired.Status)
 	}
-	return s.store.Write(ctx, func(tx *store.WriteTx) error {
-		existing, err := tx.GetSchedule(ctx, desired.ID)
-		switch {
-		case errors.Is(err, store.ErrNotFound):
-			if err := tx.PutSchedule(ctx, desired); err != nil {
+	existing, err := tx.GetSchedule(ctx, desired.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		if err := tx.PutSchedule(ctx, desired); err != nil {
+			return err
+		}
+		return seedTimer(ctx, tx, desired, firstFireAt)
+	case err != nil:
+		return err
+	}
+	if existing.Status == domain.ScheduleArmed && sameShape(existing, desired) {
+		// Keep the live generation and its clock; re-seed only a missing
+		// timer (a pre-crash row always committed with one, but converging
+		// here costs nothing and fails safe).
+		if !existing.Kind.OneShot() {
+			if _, _, ok, err := tx.GetScheduleTimer(ctx, existing.ID); err != nil {
 				return err
+			} else if !ok {
+				return tx.SetScheduleTimer(ctx, existing.ID, existing.Generation, firstFireAt)
 			}
-			return s.seedTimer(ctx, tx, desired, firstFireAt)
-		case err != nil:
-			return err
 		}
-		if existing.Status == domain.ScheduleArmed && sameShape(existing, desired) {
-			// Keep the live generation and its clock; re-seed only a missing
-			// timer (a pre-crash row always committed with one, but converging
-			// here costs nothing and fails safe).
-			if !existing.Kind.OneShot() {
-				if _, _, ok, err := tx.GetScheduleTimer(ctx, existing.ID); err != nil {
-					return err
-				} else if !ok {
-					return tx.SetScheduleTimer(ctx, existing.ID, existing.Generation, firstFireAt)
-				}
-			}
-			return nil
-		}
-		reArmed, err := existing.ReArmed(desired.Subject, desired.FireAt, desired.CreatedAt)
-		if err != nil {
-			return err
-		}
-		reArmed.IntervalSeconds = desired.IntervalSeconds
-		reArmed.ExpiresAt = desired.ExpiresAt
-		reArmed.BaseWatch = desired.BaseWatch
-		if err := reArmed.Validate(); err != nil {
-			return err
-		}
-		if err := tx.PutSchedule(ctx, reArmed); err != nil {
-			return err
-		}
-		if err := s.consumePending(ctx, &tx.InternalTx, reArmed.ID, domain.OutcomeStaleGeneration); err != nil {
-			return err
-		}
-		return s.seedTimer(ctx, tx, reArmed, firstFireAt)
-	})
+		return nil
+	}
+	reArmed, err := existing.ReArmed(desired.Subject, desired.FireAt, desired.CreatedAt)
+	if err != nil {
+		return err
+	}
+	reArmed.IntervalSeconds = desired.IntervalSeconds
+	reArmed.ExpiresAt = desired.ExpiresAt
+	reArmed.BaseWatch = desired.BaseWatch
+	if err := reArmed.Validate(); err != nil {
+		return err
+	}
+	if err := tx.PutSchedule(ctx, reArmed); err != nil {
+		return err
+	}
+	if err := settlePending(ctx, &tx.InternalTx, reArmed.ID,
+		domain.OutcomeStaleGeneration, desired.CreatedAt); err != nil {
+		return err
+	}
+	return seedTimer(ctx, tx, reArmed, firstFireAt)
 }
 
-func (s *Scheduler) seedTimer(
+func seedTimer(
 	ctx context.Context, tx *store.WriteTx, schedule domain.Schedule, firstFireAt time.Time,
 ) error {
 	if schedule.Kind.OneShot() {
@@ -625,11 +634,13 @@ func (s *Scheduler) consume(
 				if err := tx.DeleteScheduleTimer(ctx, c.Schedule.ID); err != nil {
 					return err
 				}
-				if err := s.consumePending(ctx, &tx.InternalTx, c.Schedule.ID, domain.OutcomeConditionNoLongerApplies); err != nil {
+				if err := settlePending(ctx, &tx.InternalTx, c.Schedule.ID,
+					domain.OutcomeConditionNoLongerApplies, now); err != nil {
 					return err
 				}
 			case c.Schedule.Generation != schedule.Generation:
-				if err := s.consumePending(ctx, &tx.InternalTx, c.Schedule.ID, domain.OutcomeStaleGeneration); err != nil {
+				if err := settlePending(ctx, &tx.InternalTx, c.Schedule.ID,
+					domain.OutcomeStaleGeneration, now); err != nil {
 					return err
 				}
 				if !c.Schedule.Kind.OneShot() {
@@ -689,27 +700,27 @@ func (s *Scheduler) conclude(ctx context.Context, concluded domain.Schedule, now
 		if err := tx.DeleteScheduleTimer(ctx, concluded.ID); err != nil {
 			return err
 		}
-		return s.consumePending(ctx, &tx.InternalTx, concluded.ID, domain.OutcomeConditionNoLongerApplies)
+		return settlePending(ctx, &tx.InternalTx, concluded.ID,
+			domain.OutcomeConditionNoLongerApplies, now)
 	})
 }
 
-// consumePending settles every pending occurrence of one schedule with the
+// settlePending settles every pending occurrence of one schedule with the
 // given proof outcome, inside the caller's transaction.
-func (s *Scheduler) consumePending(
+func settlePending(
 	ctx context.Context, tx *store.InternalTx, id domain.ScheduleID,
-	outcome domain.ScheduleOccurrenceOutcome,
+	outcome domain.ScheduleOccurrenceOutcome, now time.Time,
 ) error {
 	pending, err := tx.ListPendingScheduleOccurrences(ctx)
 	if err != nil {
 		return err
 	}
-	now := s.clock().UTC()
 	for _, occ := range pending {
 		if occ.ScheduleID != id {
 			continue
 		}
 		if _, err := tx.ConsumeScheduleOccurrence(ctx,
-			occ.ScheduleID, occ.Generation, occ.NominalFireAt, outcome, now); err != nil {
+			occ.ScheduleID, occ.Generation, occ.NominalFireAt, outcome, now.UTC()); err != nil {
 			return err
 		}
 	}
