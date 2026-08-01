@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -55,15 +57,35 @@ const productionPolicyArtifactType = "policy"
 
 const (
 	maxProductionPublicationTitleBytes = 256
-	productionInvocationRequestVersion = "freeside.production-invocation/v2"
+	// productionInvocationVersionNamespace is the marker version's namespace,
+	// and productionInvocationRequestVersionNumber the release this binary
+	// implements. They compose productionInvocationRequestVersion, and a test
+	// pins that composition so the three cannot drift apart.
+	productionInvocationVersionNamespace     = "freeside.production-invocation/v"
+	productionInvocationRequestVersionNumber = 2
+	productionInvocationRequestVersion       = "freeside.production-invocation/v2"
 )
 
 func productionStageID(runID domain.RunID) domain.StageID {
 	return domain.StageID("implement-" + string(runID))
 }
 
+const productionInvocationIDPrefix = "inv-implement-"
+
 func productionInvocationID(runID domain.RunID) domain.InvocationID {
-	return domain.InvocationID("inv-implement-" + string(runID))
+	return domain.InvocationID(productionInvocationIDPrefix + string(runID))
+}
+
+// productionRunIDFromInvocationID inverts productionInvocationID, reporting
+// false for a key this lane could not have derived. It attributes a marker row
+// to a run by the key the row is filed under, never by its payload: the
+// payload is exactly what has failed to reconstruct at the one call site.
+func productionRunIDFromInvocationID(id domain.InvocationID) (domain.RunID, bool) {
+	runID, ok := strings.CutPrefix(string(id), productionInvocationIDPrefix)
+	if !ok || runID == "" {
+		return "", false
+	}
+	return domain.RunID(runID), true
 }
 
 func productionVerificationInvocationID(runID domain.RunID) domain.InvocationID {
@@ -464,11 +486,90 @@ func ProductionInvocationPublication(entry store.QueueEntry) (ProductionPublicat
 	return request.Publication, true, nil
 }
 
-// decodeProductionRequest reconstructs and re-checks one production dispatch
+// errProductionMarkerUnsupportedVersion marks a stored marker written by a
+// newer daemon: its shape is a released contract this binary does not know,
+// so reconstruction is impossible here but succeeds again after an upgrade.
+// errProductionMarkerUnreadable marks every other reconstruction failure of a
+// marker row, which no upgrade repairs. Both classify one run out of this
+// daemon's production lane (see quarantineProductionMarker); neither loosens
+// a released version's canonical decode.
+var (
+	errProductionMarkerUnsupportedVersion = errors.New("production marker version is not supported")
+	errProductionMarkerUnreadable         = errors.New("production marker cannot be authenticated")
+)
+
+// authenticateProductionMarker authenticates one stored marker as run runID's,
+// classifying every failure so a caller can quarantine the run instead of
+// failing its whole reconcile pass. The gates are decodeProductionRequest's
+// unchanged ones plus the run the caller loaded the row under; classification
+// adds a wrapper, never a tolerance.
+func authenticateProductionMarker(
+	entry store.QueueEntry, runID domain.RunID,
+) (productionInvocationRequest, error) {
+	request, err := decodeProductionRequest(entry)
+	switch {
+	case errors.Is(err, errProductionMarkerUnsupportedVersion):
+		return productionInvocationRequest{}, err
+	case err != nil:
+		return productionInvocationRequest{}, fmt.Errorf("%w: %w", errProductionMarkerUnreadable, err)
+	}
+	if request.RunID != runID {
+		return productionInvocationRequest{}, fmt.Errorf(
+			"%w: production marker names run %q, loaded under %q: %w",
+			errProductionMarkerUnreadable, request.RunID, runID, domain.ErrParentKeyMismatch,
+		)
+	}
+	return request, nil
+}
+
+// unsupportedProductionMarkerVersion names the marker version this binary does
+// not know, or "" for anything it should decode strictly. It reads the version
+// envelope leniently and ahead of the strict decode, because a newer version
+// normally *adds* a field, and DisallowUnknownFields would otherwise reject
+// the payload before the version was ever read: the downgrade this lane exists
+// to survive would then be reported as a malformed marker, losing the one
+// diagnosis that tells an operator an upgrade repairs the hold.
+//
+// It is a classifier, never an acceptance path. Every payload it passes over
+// still goes through the unchanged strict decode and its gates, so nothing
+// this reports can widen what the daemon accepts: it can only decide which
+// refusal an operator reads.
+func unsupportedProductionMarkerVersion(payload []byte) string {
+	var envelope struct {
+		Version json.RawMessage `json:"version"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil || len(envelope.Version) == 0 {
+		return ""
+	}
+	version := ""
+	if err := json.Unmarshal(envelope.Version, &version); err != nil {
+		return ""
+	}
+	// Only a version in this lane's own namespace that orders *after* the
+	// release this binary implements is a newer daemon's. Anything else — a
+	// corrupt string, a foreign namespace, a non-canonical number — is an
+	// unreadable marker, and must not be told that an upgrade repairs it.
+	number, ok := strings.CutPrefix(version, productionInvocationVersionNamespace)
+	if !ok {
+		return ""
+	}
+	release, err := strconv.Atoi(number)
+	if err != nil || strconv.Itoa(release) != number ||
+		release <= productionInvocationRequestVersionNumber {
+		return ""
+	}
+	return version
+}
+
+// decodeProductionRequest reconstructs and re-checks one production dispatch// decodeProductionRequest reconstructs and re-checks one production dispatch
 // intent against its own row. Queue payloads are opaque to the store, so the
 // decoded intent is a reconstruction boundary (the same discipline as
 // signet's decodeBoundInvocationRequest).
 func decodeProductionRequest(entry store.QueueEntry) (productionInvocationRequest, error) {
+	if unsupported := unsupportedProductionMarkerVersion(entry.Payload); unsupported != "" {
+		return productionInvocationRequest{}, fmt.Errorf("decode payload: unsupported version %q: %w",
+			unsupported, errProductionMarkerUnsupportedVersion)
+	}
 	decoder := json.NewDecoder(bytes.NewReader(entry.Payload))
 	decoder.DisallowUnknownFields()
 	var wire productionInvocationRequestWire
@@ -514,7 +615,8 @@ func decodeProductionRequest(entry store.QueueEntry) (productionInvocationReques
 			return productionInvocationRequest{}, fmt.Errorf("decode payload: %w", err)
 		}
 	default:
-		return productionInvocationRequest{}, fmt.Errorf("decode payload: unsupported version %q", version)
+		return productionInvocationRequest{}, fmt.Errorf("decode payload: unsupported version %q: %w",
+			version, errProductionMarkerUnsupportedVersion)
 	}
 	if string(request.InvocationID) != entry.IdempotencyKey {
 		return productionInvocationRequest{}, fmt.Errorf(
@@ -572,6 +674,13 @@ func productionRequestFormat(request productionInvocationRequest) string {
 // authority too: trusting only the kind would let a malformed or retargeted
 // row classify a foreign run as production-owned before dispatch's stricter
 // decoder sees it.
+//
+// A marker that fails that authentication makes the run unowned here rather
+// than failing the pass. Every stored run is scanned, so one unreconstructable
+// row would otherwise end reconciliation on every pass and take the daemon's
+// unrelated runs down with it (#424, the shape #418 fixed for legacy rows).
+// Unowned is the safe answer, not a quiet one: the run is never dispatched or
+// accepted as production work, and quarantineProductionMarker records why.
 func (e *Engine) ownsProductionRun(ctx context.Context, run domain.Run) (bool, error) {
 	var entry store.QueueEntry
 	err := e.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -580,20 +689,35 @@ func (e *Engine) ownsProductionRun(ctx context.Context, run domain.Run) (bool, e
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {
-		return false, nil
+		// No marker row means the run is not this lane's, which is also how a
+		// repaired store looks after the bad row is removed: the hold a
+		// quarantine notice describes has ended either way.
+		return false, releaseProductionQuarantine(
+			ctx, e.store, e.signet, productionMarkerQuarantinePrefix, run.ID)
 	}
 	if err != nil {
 		return false, fmt.Errorf("find production marker for run %q: %w", run.ID, err)
 	}
-	request, err := decodeProductionRequest(entry)
-	if err != nil {
+	if _, err := authenticateProductionMarker(entry, run.ID); err != nil {
+		quarantined, quarantineErr := quarantineProductionMarker(
+			ctx, e.store, e.signet, run.ID, run.ProjectID, err)
+		if quarantineErr != nil {
+			return false, errors.Join(
+				fmt.Errorf("authenticate production marker for run %q: %w", run.ID, err),
+				quarantineErr)
+		}
+		if quarantined {
+			return false, nil
+		}
 		return false, fmt.Errorf("authenticate production marker for run %q: %w", run.ID, err)
 	}
-	if request.RunID != run.ID {
-		return false, fmt.Errorf(
-			"production marker names run %q, loaded under %q: %w",
-			request.RunID, run.ID, domain.ErrParentKeyMismatch,
-		)
+	// The marker reads again, so an earlier pass's quarantine no longer
+	// describes this run: the upgrade the notice asked for has happened, or
+	// the row was repaired. Retiring it here is what keeps the notice a
+	// notice rather than a permanent, contradicted claim.
+	if err := releaseProductionQuarantine(
+		ctx, e.store, e.signet, productionMarkerQuarantinePrefix, run.ID); err != nil {
+		return false, err
 	}
 	return true, nil
 }
@@ -1090,6 +1214,398 @@ func productionFailureItem(run domain.Run, terminal productionTerminalRecord) (d
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
 		Status: domain.StatusOpen,
 	}, nil)
+}
+
+// Quarantine reasons for a run whose durable production rows cannot be
+// reconstructed. Daemon-authored and fixed: the row is the untrusted input
+// here, so the decode error's text — which quotes the stored version, kind,
+// and identities — never reaches an operator-facing field (the ward and
+// finding rule: never echo the untrusted bytes in the reason). The classified
+// reason plus the item's run subject is what an operator needs; the full
+// error stays in the daemon's own error path.
+const (
+	productionQuarantineUnsupportedVersion = "A stored production marker was written by a newer daemon " +
+		"than this one. The run is held out of the production lane, and resumes by itself once a " +
+		"daemon that can read the marker runs again."
+	productionQuarantineUnreadable = "A stored production marker could not be authenticated. " +
+		"The run is held out of the production lane, and resumes by itself once the marker " +
+		"reconstructs again."
+	productionQuarantineUnreadableTask = "A stored production publication task could not be " +
+		"reconstructed by this daemon. The run's publication is held, and resumes by itself once a " +
+		"daemon that can read the task runs again."
+)
+
+// Quarantine notices are per run and per row class: the marker's notice is
+// retired when the marker reads again, so a task row's hold must not ride the
+// same identity and be retired with it.
+const (
+	productionMarkerQuarantinePrefix = "production-marker-quarantined-"
+	productionTaskQuarantinePrefix   = "production-task-quarantined-"
+)
+
+func productionQuarantineItemID(runID domain.RunID) domain.ItemID {
+	return productionQuarantineOccurrenceID(productionMarkerQuarantinePrefix, runID, 1)
+}
+
+// productionQuarantineReason classifies one marker failure into its operator
+// notice, reporting false for every error that is not a marker
+// reconstruction failure (a store fault stays loud and retryable).
+func productionQuarantineReason(err error) (string, bool) {
+	switch {
+	case errors.Is(err, errProductionMarkerUnsupportedVersion):
+		return productionQuarantineUnsupportedVersion, true
+	case errors.Is(err, errProductionMarkerUnreadable):
+		return productionQuarantineUnreadable, true
+	}
+	return "", false
+}
+
+// productionQuarantineItem is the §4 execution_failure notice for a run this
+// daemon cannot claim, following productionFailureItem: deterministic
+// identity and content, so a replayed pass converges instead of raising a
+// second item. Stop is the only action offered: nothing an operator can
+// decide repairs a stored marker (the repair is a daemon upgrade or the
+// row's own removal), retry would re-enter the same failed reconstruction,
+// and discuss rides a conversation channel a production run has none of, so
+// stop — the boundary's concluding action — is the one this can honour.
+func productionQuarantineItem(
+	itemID domain.ItemID, runID domain.RunID, projectID domain.ProjectID, reason string,
+) (domain.AttentionItem, error) {
+	subjectRunID := runID
+	return domain.NewAttentionItem(domain.AttentionItemInput{
+		ID:        itemID,
+		ProjectID: projectID,
+		Subject: domain.Subject{
+			Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &subjectRunID,
+		},
+		Type: domain.AttentionExecutionFailure, Priority: domain.PriorityHigh,
+		Reason:            reason,
+		RequestedDecision: []domain.Action{domain.ActionStop},
+		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
+		Status: domain.StatusOpen,
+	}, nil)
+}
+
+// quarantineProductionMarker records the durable notice that one run left the
+// production lane, and reports whether cause was a marker failure at all.
+// Quarantine is this daemon's own classification, deliberately not a stored
+// outbox status: its main cause is a downgrade past a newer marker version,
+// which the matching upgrade reverses, and a durable status change would
+// strand a marker that is authentic under the daemon that wrote it.
+//
+// The notice is written once and then left alone: a later pass that finds it
+// present writes nothing, so an operator's acknowledgement is never
+// overwritten and the item is never duplicated. A store fault while recording
+// it is returned, because a run must not leave the lane unrecorded.
+func quarantineProductionMarker(
+	ctx context.Context,
+	st *store.Store,
+	attention attentionService,
+	runID domain.RunID,
+	projectID domain.ProjectID,
+	cause error,
+) (bool, error) {
+	reason, ok := productionQuarantineReason(cause)
+	if !ok {
+		return false, nil
+	}
+	err := recordProductionQuarantine(
+		ctx, st, attention, productionMarkerQuarantinePrefix, runID, projectID, reason)
+	return true, err
+}
+
+// productionQuarantineOccurrenceID names the nth notice for one run and row
+// class. Deterministic, so a repeated pass converges on the occurrence it
+// already recorded, and distinct, because a concluded notice cannot reopen
+// (a terminal item_status is final) and reusing its identity would leave a
+// recurring quarantine holding a run behind nothing but a historical record.
+//
+// The occurrence sits between the class prefix and the run id, never appended
+// after it. A run id is validated only as non-empty, so appending would make
+// run "foo"'s second notice collide with run "foo-2"'s first, and the
+// mismatched subject that collision produces is an error on a path whose
+// whole purpose is to keep the reconcile loop running. Splitting on the first
+// "-" after a digit run is unambiguous, so this form is injective over
+// (occurrence, run id).
+func productionQuarantineOccurrenceID(
+	prefix string, runID domain.RunID, occurrence int,
+) domain.ItemID {
+	return domain.ItemID(fmt.Sprintf("%s%d-%s", prefix, occurrence, runID))
+}
+
+// recordProductionQuarantine writes one run's quarantine notice, converging
+// on the notice already there. An open notice for this run is the record, and
+// a later pass writes nothing, so an operator's decision is never overwritten
+// and the item is never duplicated; a *concluded* notice is history, and the
+// current hold gets its own. A store fault while recording it is returned,
+// because a run must not leave the lane unrecorded.
+func recordProductionQuarantine(
+	ctx context.Context,
+	st *store.Store,
+	attention attentionService,
+	prefix string,
+	runID domain.RunID,
+	projectID domain.ProjectID,
+	reason string,
+) error {
+	// The walk stops at the first slot that is free or open, so it only steps
+	// over notices an operator has concluded. That history grows one entry per
+	// repair, never per pass, so there is no cap: a bound here would have to
+	// choose between failing, which ends the reconcile loop this path exists
+	// to keep running, and holding the run behind no current notice at all.
+	for occurrence := 1; ; occurrence++ {
+		itemID := productionQuarantineOccurrenceID(prefix, runID, occurrence)
+		current, found, err := readProductionQuarantineItem(ctx, st, itemID)
+		if err != nil {
+			return fmt.Errorf("read quarantine item for run %q: %w", runID, err)
+		}
+		if found {
+			if current.Status == domain.StatusOpen {
+				return refreshProductionQuarantine(ctx, attention, current, runID, projectID, reason)
+			}
+			continue
+		}
+		item, err := productionQuarantineItem(itemID, runID, projectID, reason)
+		if err != nil {
+			return fmt.Errorf("construct quarantine item for run %q: %w", runID, err)
+		}
+		if err := attention.PutItem(ctx, item); err != nil {
+			if !errors.Is(err, store.ErrStaleWrite) && !errors.Is(err, store.ErrImmutableConflict) {
+				return fmt.Errorf("create quarantine item for run %q: %w", runID, err)
+			}
+			// A concurrent pass created this id first. Its content is not
+			// assumed to be the notice this one would have written: re-read
+			// and check what is actually stored, so a divergent item is never
+			// accepted as this run's quarantine record.
+			return confirmProductionQuarantineItem(ctx, st, itemID, item, err)
+		}
+		return nil
+	}
+}
+
+// refreshProductionQuarantine keeps the open notice describing the hold that
+// is actually current. The stored row is re-checked rather than trusted: it
+// carries this run's bindings or it is not this run's notice, and its reason
+// is rewritten when the condition changes class, so an operator is never left
+// reading that an upgrade will repair a marker that has since become
+// malformed instead.
+func refreshProductionQuarantine(
+	ctx context.Context,
+	attention attentionService,
+	current domain.AttentionItem,
+	runID domain.RunID,
+	projectID domain.ProjectID,
+	reason string,
+) error {
+	want, err := productionQuarantineItem(current.ID, runID, projectID, reason)
+	if err != nil {
+		return fmt.Errorf("construct quarantine item for run %q: %w", runID, err)
+	}
+	if !sameProductionQuarantineBinding(current, want) {
+		return fmt.Errorf("quarantine item %q disagrees with run %q: %w",
+			current.ID, runID, domain.ErrParentKeyMismatch)
+	}
+	if sameProductionQuarantineNotice(current, want) {
+		return nil
+	}
+	// Whole-shape rather than field-by-field: the stored row is a
+	// reconstruction, so every operator-facing field is re-derived from the
+	// current hold, and a row that drifted in priority, offered action, or
+	// interruption class is repaired rather than accepted as the record.
+	want.Status = domain.StatusOpen
+	want.ItemVersion = current.ItemVersion + 1
+	want.Timing = current.Timing
+	want.ConversationID = current.ConversationID
+	want.ExpiresWhen = current.ExpiresWhen
+	if err := attention.PutItem(ctx, want); err != nil {
+		// A decision or a sibling pass moved the notice on. Either way the
+		// repair is cosmetic next to keeping the loop running, and the next
+		// pass reconverges from whatever is stored.
+		if errors.Is(err, store.ErrStaleWrite) || errors.Is(err, store.ErrImmutableConflict) {
+			return nil
+		}
+		return fmt.Errorf("refresh quarantine item for run %q: %w", runID, err)
+	}
+	return nil
+}
+
+// sameProductionQuarantineBinding reports whether a stored row is bound to the
+// run and class the caller is asking about. These are the fields a notice can
+// never legitimately change, so a mismatch is a contradiction, not drift.
+func sameProductionQuarantineBinding(current, want domain.AttentionItem) bool {
+	return current.ProjectID == want.ProjectID && current.Type == want.Type &&
+		current.Subject.Type == want.Subject.Type && current.Subject.ID == want.Subject.ID
+}
+
+// sameProductionQuarantineNotice reports whether a stored row is the canonical
+// notice this lane would write for the current hold, ignoring only the
+// lifecycle fields a decision or a delivery legitimately advances. Comparing
+// the whole shape is what makes this check closed: a subset check can only
+// ever authenticate the fields someone thought to list.
+func sameProductionQuarantineNotice(current, want domain.AttentionItem) bool {
+	normalized := current
+	normalized.Status = want.Status
+	normalized.ItemVersion = want.ItemVersion
+	normalized.Timing = want.Timing
+	normalized.DecidedAt = want.DecidedAt
+	normalized.ExpiresWhen = want.ExpiresWhen
+	normalized.ConversationID = want.ConversationID
+	return reflect.DeepEqual(normalized, want)
+}
+
+// confirmProductionQuarantineItem accepts a concurrently created notice only
+// when the stored row is this run's quarantine notice: same bindings, one of
+// this lane's reasons, and still open. Anything else keeps the write's
+// original conflict.
+func confirmProductionQuarantineItem(
+	ctx context.Context,
+	st *store.Store,
+	itemID domain.ItemID,
+	want domain.AttentionItem,
+	conflict error,
+) error {
+	current, found, err := readProductionQuarantineItem(ctx, st, itemID)
+	if err != nil {
+		return errors.Join(conflict, err)
+	}
+	if !found {
+		return conflict
+	}
+	if !sameProductionQuarantineBinding(current, want) ||
+		current.Status != domain.StatusOpen ||
+		!sameProductionQuarantineNotice(current, want) {
+		return errors.Join(conflict, fmt.Errorf(
+			"quarantine item %q disagrees with this run's notice: %w",
+			itemID, domain.ErrParentKeyMismatch))
+	}
+	return nil
+}
+
+// productionQuarantineNoticeFor reports whether a reason is one this row
+// class writes. The class matters, not merely lane membership: a marker
+// release must not conclude the task row's notice or the reverse.
+func productionQuarantineNoticeFor(prefix, reason string) bool {
+	if prefix == productionTaskQuarantinePrefix {
+		return reason == productionQuarantineUnreadableTask
+	}
+	return reason == productionQuarantineUnsupportedVersion ||
+		reason == productionQuarantineUnreadable
+}
+
+func readProductionQuarantineItem(
+	ctx context.Context, st *store.Store, itemID domain.ItemID,
+) (domain.AttentionItem, bool, error) {
+	var item domain.AttentionItem
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		item, err = tx.GetAttentionItemRecord(ctx, itemID)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return domain.AttentionItem{}, false, nil
+	}
+	if err != nil {
+		return domain.AttentionItem{}, false, err
+	}
+	return item, true, nil
+}
+
+// releaseProductionQuarantine supersedes the open quarantine notice once the
+// hold it reported on has ended, following supersedeBlockedHold. It
+// supersedes rather than resolves: nothing was decided, the condition stopped
+// holding. A notice an operator already concluded is left alone, and one that
+// binds a different run or type is a contradiction, not this run's notice to
+// retire.
+func releaseProductionQuarantine(
+	ctx context.Context,
+	st *store.Store,
+	attention attentionService,
+	prefix string,
+	runID domain.RunID,
+) error {
+	// Bounded by the same concluded-notice history the recorder walks.
+	for occurrence := 1; ; occurrence++ {
+		itemID := productionQuarantineOccurrenceID(prefix, runID, occurrence)
+		item, found, err := readProductionQuarantineItem(ctx, st, itemID)
+		if err != nil {
+			return fmt.Errorf("read quarantine item for run %q: %w", runID, err)
+		}
+		if !found {
+			return nil
+		}
+		if item.Status != domain.StatusOpen {
+			continue
+		}
+		// An item under this id that is not this hold's notice is not this
+		// path's to conclude. Leaving it alone rather than erroring is the
+		// asymmetry with the recorder: there, a divergent item means the hold
+		// cannot be recorded and the run would be held silently, which must
+		// surface; here it means someone else's item sits at this id, and
+		// failing to retire a notice this lane does not own is harmless while
+		// erroring would end the reconcile loop.
+		if item.Type != domain.AttentionExecutionFailure ||
+			item.Subject.Type != domain.SubjectRun ||
+			item.Subject.ID != domain.SubjectID(runID) ||
+			!productionQuarantineNoticeFor(prefix, item.Reason) {
+			return nil
+		}
+		item.Status = domain.StatusSuperseded
+		item.ItemVersion++
+		if err := attention.PutItem(ctx, item); err != nil {
+			if !errors.Is(err, store.ErrStaleWrite) && !errors.Is(err, store.ErrImmutableConflict) {
+				return fmt.Errorf("retire quarantine item for run %q: %w", runID, err)
+			}
+			// An operator's decision committed between the read and this
+			// write. Their conclusion is the release: the notice is already
+			// off the operator's queue, and turning that race into an error
+			// would end the reconcile loop this whole path exists to keep
+			// running.
+			return confirmProductionQuarantineRelease(ctx, st, itemID, runID, err)
+		}
+		return nil
+	}
+}
+
+// confirmProductionQuarantineRelease treats a lost release race as converged
+// only when the stored notice is genuinely concluded; a still-open item means
+// the write failed for a reason the race does not explain.
+func confirmProductionQuarantineRelease(
+	ctx context.Context,
+	st *store.Store,
+	itemID domain.ItemID,
+	runID domain.RunID,
+	conflict error,
+) error {
+	current, found, err := readProductionQuarantineItem(ctx, st, itemID)
+	if err != nil {
+		return errors.Join(conflict, err)
+	}
+	if !found || current.Status == domain.StatusOpen {
+		return fmt.Errorf("retire quarantine item for run %q: %w", runID, conflict)
+	}
+	return nil
+}
+
+// quarantinePendingProductionMarker records the quarantine for a pending
+// dispatch intent, whose run the caller knows only by the row's key. A run
+// the store cannot produce is not quarantinable state — there is nothing to
+// hold out of the lane and no subject to file the notice under — so it
+// reports false and stays the caller's loud failure.
+func (e *Engine) quarantinePendingProductionMarker(
+	ctx context.Context, runID domain.RunID, cause error,
+) (bool, error) {
+	var run domain.Run
+	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(ctx, runID)
+		return err
+	}); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return quarantineProductionMarker(ctx, e.store, e.signet, run.ID, run.ProjectID, cause)
 }
 
 func findProductionStage(run domain.Run) (domain.Stage, bool) {

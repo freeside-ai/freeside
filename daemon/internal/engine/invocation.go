@@ -131,10 +131,25 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 	}
 	for _, entry := range pendingProduction {
 		// The production kind is engine-owned, so a malformed row is broken
-		// owned state, never another workflow's: fail loudly instead of
-		// skipping it as foreign.
-		request, err := decodeProductionRequest(entry)
+		// owned state, never another workflow's: it is quarantined behind an
+		// operator notice and skipped, never dispatched. Failing the pass
+		// instead would hold every later healthy intent in the ordered outbox
+		// behind one row that no pass can ever decode (#424). A row this lane
+		// could not have filed names no run to quarantine, so it stays loud.
+		markerRunID, attributable := productionRunIDFromInvocationID(
+			domain.InvocationID(entry.IdempotencyKey))
+		request, err := authenticateProductionMarker(entry, markerRunID)
 		if err != nil {
+			if attributable {
+				quarantined, quarantineErr := e.quarantinePendingProductionMarker(
+					ctx, markerRunID, err)
+				if quarantineErr != nil {
+					return started, quarantineErr
+				}
+				if quarantined {
+					continue
+				}
+			}
 			return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
 		}
 		// The production lane is real unattended execution. A missing or
