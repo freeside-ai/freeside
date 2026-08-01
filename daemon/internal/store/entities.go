@@ -164,25 +164,35 @@ type scanner interface{ Scan(dest ...any) error }
 // records (pairing codes) share it; the synchronized callers all hold a
 // WriteTx, whose statements stamp its as_of_revision.
 func (tx *InternalTx) putImmutable(ctx context.Context, insertSQL string, insertArgs []any, selectBodySQL string, keyArgs []any, body string) error {
+	_, err := tx.putImmutableInserted(ctx, insertSQL, insertArgs, selectBodySQL, keyArgs, body)
+	return err
+}
+
+// putImmutableInserted additionally reports whether this call inserted the
+// row (false on a byte-identical replay), for callers whose side effects
+// belong only to the first write — the observation milestones ride the
+// inserting transaction and must not be minted again by a replay against a
+// database that no longer has them (migration 0024's no-backfill rule).
+func (tx *InternalTx) putImmutableInserted(ctx context.Context, insertSQL string, insertArgs []any, selectBodySQL string, keyArgs []any, body string) (bool, error) {
 	res, err := tx.tx.ExecContext(ctx, insertSQL, insertArgs...)
 	if err != nil {
-		return err
+		return false, err
 	}
 	inserted, err := res.RowsAffected()
 	if err != nil {
-		return err
+		return false, err
 	}
 	if inserted > 0 {
-		return nil
+		return true, nil
 	}
 	var existing string
 	if err := tx.tx.QueryRowContext(ctx, selectBodySQL, keyArgs...).Scan(&existing); err != nil {
-		return err
+		return false, err
 	}
 	if existing != body {
-		return ErrImmutableConflict
+		return false, ErrImmutableConflict
 	}
-	return nil
+	return false, nil
 }
 
 // The statements below are deliberately spelled out per entity, as constants:

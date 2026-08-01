@@ -124,13 +124,29 @@ func (tx *InternalTx) RecordExecutionAdmission(ctx context.Context, admission do
 	if admission.AuthIdentityID != nil {
 		identity = *admission.AuthIdentityID
 	}
-	if err := tx.putImmutable(ctx, recordExecutionAdmissionSQL,
+	inserted, err := tx.putImmutableInserted(ctx, recordExecutionAdmissionSQL,
 		[]any{
 			admission.InvocationID, admission.ID, admission.RunID, admission.StageID,
 			admission.AttemptID, admission.OperatingMode, identity,
 			formatTime(admission.AdmittedAt), body,
 		},
-		selectExecutionAdmissionBodySQL, []any{admission.InvocationID}, body); err != nil {
+		selectExecutionAdmissionBodySQL, []any{admission.InvocationID}, body)
+	if err != nil {
+		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
+	}
+	// The observation milestone rides only the inserting transaction so every
+	// lane records it atomically with the fact; it is projection, not
+	// authority (issue #394), its instant is the admission's own, and a
+	// byte-identical replay against a pre-0024 database must not backfill it
+	// (the migration's no-backfill rule).
+	if !inserted {
+		return nil
+	}
+	invocation := admission.InvocationID
+	if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
+		RunID: admission.RunID, Kind: domain.MilestoneInvocationAdmitted,
+		InvocationID: &invocation, RecordedAt: admission.AdmittedAt,
+	}); err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
 	return nil
@@ -515,13 +531,27 @@ func (tx *InternalTx) recordExecutionExport(
 	if export.EvidenceManifestDigest != nil {
 		evidence = string(*export.EvidenceManifestDigest)
 	}
-	if err := tx.putImmutable(ctx, recordExecutionExportSQL,
+	inserted, err := tx.putImmutableInserted(ctx, recordExecutionExportSQL,
 		[]any{
 			export.InvocationID, export.AdmissionID, export.ObservedBaseSHA, export.HeadSHA,
 			export.ManifestDigest, evidence, export.CommitPlanPresent,
 			formatTime(export.RecordedAt), body,
 		},
-		selectExecutionExportBodySQL, []any{export.InvocationID}, body); err != nil {
+		selectExecutionExportBodySQL, []any{export.InvocationID}, body)
+	if err != nil {
+		return fmt.Errorf("record execution export %q: %w", export.InvocationID, err)
+	}
+	// Observation milestone beside the fact, only on the inserting
+	// transaction (the no-backfill rule); the instant is the export's own
+	// (issue #394).
+	if !inserted {
+		return nil
+	}
+	invocation := export.InvocationID
+	if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
+		RunID: admission.RunID, Kind: domain.MilestoneExecutionExportRecorded,
+		InvocationID: &invocation, RecordedAt: export.RecordedAt,
+	}); err != nil {
 		return fmt.Errorf("record execution export %q: %w", export.InvocationID, err)
 	}
 	return nil
@@ -617,12 +647,28 @@ func (tx *InternalTx) RecordExecutionOutcome(
 	); err != nil {
 		return fmt.Errorf("record execution outcome %q: %w", outcome.InvocationID, err)
 	}
-	if err := tx.putImmutable(ctx, recordExecutionOutcomeSQL,
+	inserted, err := tx.putImmutableInserted(ctx, recordExecutionOutcomeSQL,
 		[]any{
 			outcome.InvocationID, outcome.AdmissionID, outcome.Status,
 			outcome.Summary, formatTime(outcome.RecordedAt), body,
 		},
-		selectExecutionOutcomeBodySQL, []any{outcome.InvocationID}, body); err != nil {
+		selectExecutionOutcomeBodySQL, []any{outcome.InvocationID}, body)
+	if err != nil {
+		return fmt.Errorf("record execution outcome %q: %w", outcome.InvocationID, err)
+	}
+	// Observation milestone beside the fact, only on the inserting
+	// transaction (the no-backfill rule); the instant is the outcome's own,
+	// and only the closed status class crosses into the projection — never
+	// the summary text (issue #394).
+	if !inserted {
+		return nil
+	}
+	invocation := outcome.InvocationID
+	status := outcome.Status
+	if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
+		RunID: admission.RunID, Kind: domain.MilestoneExecutionOutcomeRecorded,
+		InvocationID: &invocation, Outcome: &status, RecordedAt: outcome.RecordedAt,
+	}); err != nil {
 		return fmt.Errorf("record execution outcome %q: %w", outcome.InvocationID, err)
 	}
 	return nil
