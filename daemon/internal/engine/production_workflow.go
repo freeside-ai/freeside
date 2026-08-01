@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -453,7 +454,20 @@ func SubmitProductionRun(ctx context.Context, st *store.Store, spec ProductionRu
 		if err := publish.ClaimInvocation(ctx, tx, publicationReservation); err != nil {
 			return err
 		}
-		return nil
+		// The submitted milestone rides only the creating transaction: the
+		// atomic creation makes it exact, and a replayed submission against
+		// a run persisted before migration 0024 must not backfill a
+		// submission instant that was never observed (the migration's
+		// no-backfill rule). A post-0024 replay converges on the row the
+		// creation already wrote.
+		if !runCreated {
+			return nil
+		}
+		observedInvocation := invocationID
+		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: spec.RunID, Kind: domain.MilestoneRunSubmitted,
+			InvocationID: &observedInvocation, RecordedAt: time.Now().UTC(),
+		})
 	})
 	if err != nil {
 		return ProductionRun{}, fmt.Errorf("submit production run %q: %w", spec.RunID, err)
@@ -914,7 +928,7 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 		}
 	}
 
-	result, ready, err := e.collectTerminal(ctx, attempt)
+	result, ready, err := e.collectTerminal(ctx, run.ID, attempt)
 	lost := false
 	switch {
 	case errors.Is(err, ErrInvocationLost):
@@ -1038,7 +1052,7 @@ func (e *Engine) authenticateProductionTerminal(
 	if err := e.requireProductionAdmissionRecord(ctx, attempt.InvocationID); err != nil {
 		return err
 	}
-	result, ready, err := e.collectTerminal(ctx, attempt)
+	result, ready, err := e.collectTerminal(ctx, run.ID, attempt)
 	lost := errors.Is(err, ErrInvocationLost)
 	if err != nil && !lost {
 		return err
@@ -1177,6 +1191,19 @@ func (e *Engine) recordProductionTerminalWithAuthority(
 				return err
 			}
 			if err := tx.PutAttentionItem(ctx, item); err != nil {
+				return err
+			}
+		}
+		// The terminal milestone rides the recording transaction; only the
+		// closed status class crosses into the projection, never the head,
+		// artifacts, or summary (issue #394).
+		if observed, ok := observedStatus(terminal.Status); ok {
+			invocation := terminal.InvocationID
+			if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
+				RunID: run.ID, Kind: domain.MilestoneTerminalRecorded,
+				InvocationID: &invocation, Terminal: &observed,
+				RecordedAt: time.Now().UTC(),
+			}); err != nil {
 				return err
 			}
 		}

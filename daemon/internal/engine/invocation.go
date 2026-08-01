@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
@@ -56,6 +57,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		pending           []store.QueueEntry
 		pendingProduction []store.QueueEntry
 		held              bool
+		holdReason        domain.RunHoldReason
 	)
 	err := e.store.Read(ctx, func(tx *store.ReadTx) error {
 		// An engine that is not explicitly configured attended_dev honours
@@ -77,12 +79,18 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		// transaction, mapped to the same quiet hold below.
 		if e.admission == nil || e.admission.environment.OperatingMode == domain.ModeUnattended {
 			if err := tx.RequireUnattendedOperationOpen(ctx); err != nil {
-				if errors.Is(err, domain.ErrUnattendedOperationStopped) ||
-					errors.Is(err, domain.ErrBlockingSystemHealth) {
-					held = true
-					return nil
+				// A held pass still lists the pending production intents so
+				// the hold and its typed cause are observable per run
+				// (issue #394); the listing is a read, and dispatch below is
+				// skipped exactly as before.
+				switch {
+				case errors.Is(err, domain.ErrUnattendedOperationStopped):
+					held, holdReason = true, domain.HoldOperationStopped
+				case errors.Is(err, domain.ErrBlockingSystemHealth):
+					held, holdReason = true, domain.HoldBlockingSystemHealth
+				default:
+					return err
 				}
-				return err
 			}
 		}
 		var err error
@@ -97,6 +105,16 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	if held {
+		for _, entry := range pendingProduction {
+			invocationID := domain.InvocationID(entry.IdempotencyKey)
+			runID, attributable := productionRunIDFromInvocationID(invocationID)
+			if !attributable {
+				continue
+			}
+			if err := e.observeRunHold(ctx, runID, invocationID, holdReason); err != nil {
+				return 0, err
+			}
+		}
 		return 0, nil
 	}
 
@@ -159,6 +177,32 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		// fail so the daemon's other lanes remain healthy and an unattended
 		// composition can pick up the same row untouched.
 		if e.admission == nil || e.admission.environment.OperatingMode != domain.ModeUnattended {
+			// Every queued production run is held by this composition, not
+			// just the entry that surfaced the condition, and the ordered
+			// outbox would stop each later pass on this same oldest row: so
+			// record the typed hold for this authenticated entry and every
+			// remaining attributable one (projection writes only; the
+			// remaining rows keep their ordinary authentication for the
+			// unattended composition that eventually dispatches them), then
+			// return exactly as before.
+			if err := e.observeRunHold(ctx, request.RunID, request.InvocationID,
+				domain.HoldAttendedModeActive); err != nil {
+				return started, err
+			}
+			for _, held := range pendingProduction {
+				if held.IdempotencyKey == entry.IdempotencyKey {
+					continue
+				}
+				invocationID := domain.InvocationID(held.IdempotencyKey)
+				runID, attributable := productionRunIDFromInvocationID(invocationID)
+				if !attributable {
+					continue
+				}
+				if err := e.observeRunHold(ctx, runID, invocationID,
+					domain.HoldAttendedModeActive); err != nil {
+					return started, err
+				}
+			}
 			return started, nil
 		}
 		binding, err := e.loadProductionBinding(ctx, request)
@@ -173,6 +217,15 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
 		started += boolCount(startedNow)
 		if err != nil {
+			// A classified hold or refusal is operator-visible run state:
+			// record its typed cause before taking the same quiet path as
+			// before (issue #394).
+			if reason, ok := dispatchHoldReason(err); ok &&
+				(invocationDispatchHold(err) || unattendedDispatchRefusal(err)) {
+				if obsErr := e.observeRunHold(ctx, request.RunID, request.InvocationID, reason); obsErr != nil {
+					return started, obsErr
+				}
+			}
 			// Input materialization is scoped to this invocation. Preserve its
 			// pending row, but continue so one unavailable blob cannot starve
 			// every later healthy submission in the ordered outbox.
@@ -282,6 +335,13 @@ func (e *Engine) dispatchIntent(
 		// in signet.
 		if errors.Is(err, domain.ErrUnattendedOperationStopped) ||
 			errors.Is(err, domain.ErrBlockingSystemHealth) {
+			if entry.Kind == KindProductionInvocationRequested {
+				if reason, ok := dispatchHoldReason(err); ok {
+					if obsErr := e.observeRunHold(ctx, binding.run.ID, invocationID, reason); obsErr != nil {
+						return false, false, obsErr
+					}
+				}
+			}
 			return false, true, nil
 		}
 		return false, false, err
@@ -300,7 +360,19 @@ func (e *Engine) dispatchIntent(
 		startedNow = true
 	}
 	if err := e.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		return tx.MarkOutboxDispatched(ctx, entry.IdempotencyKey)
+		if err := tx.MarkOutboxDispatched(ctx, entry.IdempotencyKey); err != nil {
+			return err
+		}
+		// The started milestone rides the dispatch bookkeeping transaction:
+		// it also converges for a replay whose Start already happened
+		// (ErrDuplicateStart above), because the fact being recorded is that
+		// the invocation was handed to the driver, not that it was handed
+		// over just now (issue #394).
+		invocation := invocationID
+		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: binding.run.ID, Kind: domain.MilestoneInvocationStarted,
+			InvocationID: &invocation, RecordedAt: time.Now().UTC(),
+		})
 	}); err != nil {
 		// The start already happened, so it counts even though the
 		// bookkeeping mark failed; the caller adds startedNow before
@@ -384,7 +456,7 @@ func (e *Engine) acceptAttempt(ctx context.Context, run domain.Run, attempt doma
 		return false, nil
 	}
 
-	result, ready, err := e.collectTerminal(ctx, attempt)
+	result, ready, err := e.collectTerminal(ctx, run.ID, attempt)
 	if err != nil {
 		return false, err
 	}
@@ -421,7 +493,7 @@ func (e *Engine) acceptAttempt(ctx context.Context, run domain.Run, attempt doma
 // result returns an error wrapping ErrInvocationLost; the lanes decide
 // whether that is a loop failure (walking skeleton) or a terminal outcome
 // to record (production).
-func (e *Engine) collectTerminal(ctx context.Context, attempt domain.Attempt) (exec.StageResult, bool, error) {
+func (e *Engine) collectTerminal(ctx context.Context, runID domain.RunID, attempt domain.Attempt) (exec.StageResult, bool, error) {
 	inspection, err := e.driver.Inspect(ctx, attempt.InvocationID)
 	if err != nil {
 		// An invocation the driver does not know is ambiguous: a pending
@@ -453,6 +525,19 @@ func (e *Engine) collectTerminal(ctx context.Context, attempt domain.Attempt) (e
 			}
 		}
 		return exec.StageResult{}, false, fmt.Errorf("inspect: %w", err)
+	}
+	// The inspection is a returned object: validate it before anything
+	// trusts its fields, so a driver reporting an impossible pair (a lost
+	// session claimed live) fails closed here instead of projecting a lost
+	// invocation as observed_live.
+	if err := inspection.Validate(); err != nil {
+		return exec.StageResult{}, false, fmt.Errorf("inspect: %w", err)
+	}
+	// Record the paced liveness observation before classifying: what the
+	// daemon just saw is observable state whether or not the pass advances
+	// (issue #394). Only the mirrored status and live bit cross over.
+	if err := e.observeInvocation(ctx, runID, attempt.InvocationID, inspection); err != nil {
+		return exec.StageResult{}, false, fmt.Errorf("record observation: %w", err)
 	}
 	status := inspection.Status
 	switch status {

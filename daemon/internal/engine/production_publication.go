@@ -141,19 +141,24 @@ type productionVerificationCheckpoint struct {
 }
 
 type productionPublicationWorkflow struct {
-	store                *store.Store
-	attention            attentionService
-	workDir              string
-	transport            PublicationTransport
-	publisher            *publish.Publisher
-	artifacts            ArtifactStore
-	approvedRecipes      map[domain.Digest]bool
-	newRoom              func(domain.ProjectImage) (ProductionVerificationRoom, error)
-	holdOnly             bool
-	recipeReadTimeout    time.Duration
-	holdRetryInterval    time.Duration
-	now                  func() time.Time
-	holdRetryAfter       map[domain.RunID]time.Time
+	store             *store.Store
+	attention         attentionService
+	workDir           string
+	transport         PublicationTransport
+	publisher         *publish.Publisher
+	artifacts         ArtifactStore
+	approvedRecipes   map[domain.Digest]bool
+	newRoom           func(domain.ProjectImage) (ProductionVerificationRoom, error)
+	holdOnly          bool
+	recipeReadTimeout time.Duration
+	holdRetryInterval time.Duration
+	now               func() time.Time
+	holdRetryAfter    map[domain.RunID]time.Time
+	// holdPace bounds this workflow's per-pass hold projection writes: the
+	// hold-only composition's observations, and the active composition's
+	// clear when it accepts a queued task (issue #394). Process state only,
+	// never authority.
+	holdPace             observationPace
 	afterVerification    func() error
 	afterPublication     func() error
 	afterReady           func() error
@@ -805,6 +810,13 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 	w.reconcileMu.Lock()
 	defer w.reconcileMu.Unlock()
 	if w.holdOnly {
+		// The hold-only composition deliberately pauses queued publication
+		// tasks (an attended daemon recognizing unattended work), which is a
+		// hold an operator should see per run, not a silent return: record
+		// the typed cause for each queued task before pausing (issue #394).
+		if err := w.recordAttendedPublicationHolds(ctx); err != nil {
+			return productionPublicationResult{}, err
+		}
 		return productionPublicationResult{}, nil
 	}
 	var pending []store.QueueEntry
@@ -876,13 +888,34 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 		}
 		lockDir := filepath.Join(w.workDir, "task-locks")
 		if err := os.MkdirAll(lockDir, 0o700); err != nil {
+			// A work directory the daemon cannot prepare pauses the task just
+			// as a retryable reconcile failure does, so it is the same
+			// operator-visible hold: without this the run is paused with no
+			// cause (or a stale one) on the read surface (issue #394).
+			if obsErr := w.recordPublicationEnvironmentHold(ctx, task); obsErr != nil {
+				joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, obsErr))
+			}
 			w.deferHeldTask(task)
 			continue
 		}
 		release, err := acquireFakePublicationLock(ctx, lockDir, entry.IdempotencyKey)
 		if err != nil {
+			if obsErr := w.recordPublicationEnvironmentHold(ctx, task); obsErr != nil {
+				joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, obsErr))
+			}
 			w.deferHeldTask(task)
 			continue
+		}
+		// The attempt starts here, so an attended daemon's pause of this
+		// queued task has ended: clearing it now keeps the read surface from
+		// reporting attended_mode_active through a long fetch, verification,
+		// and publication attempt (issue #394). Only that cause is cleared —
+		// a hold this attempt is about to re-record (a definitive block, an
+		// environmental back-off) keeps its row and its span. A failed
+		// projection write is joined loud but never stops the attempt: the
+		// observation surface has no authority over publication.
+		if obsErr := w.clearAttendedPublicationHold(ctx, task); obsErr != nil {
+			joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, obsErr))
 		}
 		outcome, reconcileErr := w.reconcileTask(ctx, task)
 		releaseErr := release()
@@ -896,6 +929,13 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 		}
 		if reconcileErr != nil {
 			if productionPublicationRetryableFailure(reconcileErr) {
+				// The environmental back-off is a hold an operator can see:
+				// record its typed cause beside the retry window (issue
+				// #394). A failed observation write is a store fault, joined
+				// loud like any other.
+				if obsErr := w.recordPublicationEnvironmentHold(ctx, task); obsErr != nil {
+					joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, obsErr))
+				}
 				w.deferHeldTask(task)
 			} else {
 				joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, reconcileErr))
@@ -1183,11 +1223,13 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		if isDefinitiveTrustRefusal(err) {
 			return w.holdBlockedTask(
 				ctx, task, importer.Result{CommitSHA: task.HeadSHA}, productionBlockTrust,
+				domain.HoldTrustBlocked,
 			)
 		}
 		if productionPublicationPermanentExternalFailure(err) {
 			return w.holdBlockedTask(
 				ctx, task, importer.Result{CommitSHA: task.HeadSHA}, productionBlockExternal,
+				domain.HoldExternalConflict,
 			)
 		}
 		if productionPublicationRetryableFailure(err) {
@@ -1266,10 +1308,11 @@ func (w *productionPublicationWorkflow) reconcileTask(
 				return w.holdBlockedTask(
 					ctx, task, imported,
 					"Publication is durably held because the external branch or pull request conflicts with the committed identity. Inspect and repair that external state to resume recovery.",
+					domain.HoldExternalConflict,
 				)
 			}
 			if productionPublicationPermanentExternalFailure(err) {
-				return w.holdBlockedTask(ctx, task, imported, productionBlockExternal)
+				return w.holdBlockedTask(ctx, task, imported, productionBlockExternal, domain.HoldExternalConflict)
 			}
 			return productionTaskOutcome{}, err
 		}
@@ -1286,6 +1329,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			return w.holdBlockedTask(
 				ctx, task, imported,
 				"Publication is durably held because current trust no longer approves the admitted project-image recipe. Restore that approval to recover the committed publication intent.",
+				domain.HoldRecipeRevoked,
 			)
 		}
 		return w.completeBlockedTask(
@@ -1320,10 +1364,11 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			return w.holdBlockedTask(
 				ctx, task, checkpoint.Imported,
 				"Publication is durably held because the external branch or pull request conflicts with the committed identity. Inspect and repair that external state to resume recovery.",
+				domain.HoldExternalConflict,
 			)
 		}
 		if productionPublicationPermanentExternalFailure(err) {
-			return w.holdBlockedTask(ctx, task, checkpoint.Imported, productionBlockExternal)
+			return w.holdBlockedTask(ctx, task, checkpoint.Imported, productionBlockExternal, domain.HoldExternalConflict)
 		}
 		return productionTaskOutcome{}, err
 	} else if found {
@@ -1346,10 +1391,11 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			return w.holdBlockedTask(
 				ctx, task, checkpoint.Imported,
 				"Publication is durably held because the external branch or pull request conflicts with the committed identity. Inspect and repair that external state to resume recovery.",
+				domain.HoldExternalConflict,
 			)
 		}
 		if productionPublicationPermanentExternalFailure(err) {
-			return w.holdBlockedTask(ctx, task, checkpoint.Imported, productionBlockExternal)
+			return w.holdBlockedTask(ctx, task, checkpoint.Imported, productionBlockExternal, domain.HoldExternalConflict)
 		}
 		if isDefinitiveTrustRefusal(err) {
 			pendingIntent, pendingErr := w.hasPendingPublicationIntent(ctx, task.PublicationID)
@@ -1360,6 +1406,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 				return w.holdBlockedTask(
 					ctx, task, checkpoint.Imported,
 					"Publication is durably held because current trust definitively refused the committed publication intent. Repair the trust failure to resume recovery.",
+					domain.HoldTrustBlocked,
 				)
 			}
 			reason := productionBlockTrust
@@ -1416,6 +1463,12 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		if err := w.attention.PutItem(ctx, ready); err != nil {
 			return productionTaskOutcome{}, err
 		}
+	}
+	// The ready milestone converges once the ready item durably exists; a
+	// crash between the two re-reaches this point through the readyExists
+	// branch and the first-observation-wins append (issue #394).
+	if err := w.appendPublicationMilestone(ctx, task, domain.MilestonePublicationReady, nil); err != nil {
+		return productionTaskOutcome{}, err
 	}
 	if w.afterReady != nil {
 		if err := w.afterReady(); err != nil {
@@ -1492,7 +1545,16 @@ func (w *productionPublicationWorkflow) holdBlockedTask(
 	task productionPublicationTask,
 	imported importer.Result,
 	reason string,
+	cause domain.RunHoldReason,
 ) (productionTaskOutcome, error) {
+	// The durable hold's typed cause is stated by each call site, never
+	// derived from the operator prose; the retry window paces the write
+	// (issue #394).
+	if err := w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return recordRunHold(ctx, tx, task.RunID, task.PublicationID, cause, w.now().UTC())
+	}); err != nil {
+		return productionTaskOutcome{}, err
+	}
 	item, err := w.blockedHoldItem(task, imported, reason)
 	if err != nil {
 		return productionTaskOutcome{}, err
@@ -1541,8 +1603,106 @@ func (w *productionPublicationWorkflow) holdBlockedTask(
 	return productionTaskOutcome{blocked: true}, nil
 }
 
+// recordAttendedPublicationHolds records the attended_mode_active hold for
+// every queued publication task the hold-only composition is pausing, paced
+// the same way as the engine's dispatch-side holds. A malformed task key
+// records nothing here: the unquarantined-row handling belongs to the
+// active composition, and the projection never widens its authority.
+func (w *productionPublicationWorkflow) recordAttendedPublicationHolds(ctx context.Context) error {
+	var pending []store.QueueEntry
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		pending, err = tx.ListPendingOutbox(ctx, KindProductionPublicationRequested)
+		return err
+	}); err != nil {
+		return err
+	}
+	for _, entry := range pending {
+		runID, ok := productionRunIDFromPublicationTaskKey(entry.IdempotencyKey)
+		if !ok {
+			continue
+		}
+		now := w.now().UTC()
+		if !w.holdPace.due("hold:"+string(runID), string(domain.HoldAttendedModeActive), now) {
+			continue
+		}
+		if err := w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			return recordRunHold(ctx, tx, runID,
+				productionPublicationInvocationID(runID),
+				domain.HoldAttendedModeActive, now)
+		}); err != nil {
+			w.holdPace.forget("hold:" + string(runID))
+			return err
+		}
+	}
+	return nil
+}
+
+// appendPublicationMilestone records one publication-lane milestone for the
+// task's run, keyed to the publication invocation. Projection only: it rides
+// its own bookkeeping transaction because the underlying facts (attention
+// items) commit through signet, and first-observation-wins convergence
+// covers the crash window between the two.
+func (w *productionPublicationWorkflow) appendPublicationMilestone(
+	ctx context.Context, task productionPublicationTask,
+	kind domain.RunMilestoneKind, cause *domain.RunHoldReason,
+) error {
+	return w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		invocation := task.PublicationID
+		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: task.RunID, Kind: kind,
+			InvocationID: &invocation, Reason: cause,
+			RecordedAt: w.now().UTC(),
+		})
+	})
+}
+
 func (w *productionPublicationWorkflow) deferHeldTask(task productionPublicationTask) {
 	w.holdRetryAfter[task.RunID] = w.now().Add(w.holdRetryInterval)
+}
+
+// recordPublicationEnvironmentHold states the typed cause behind every
+// environmental pause of one task: a work directory the daemon cannot
+// prepare, a lock it cannot take, or a retryable reconcile failure (issue
+// #394). The bounded retry window paces the write. A cancelled context is the
+// daemon stopping rather than a cause an operator can act on, so it records
+// nothing; any other write failure is a store fault the caller joins loud.
+func (w *productionPublicationWorkflow) recordPublicationEnvironmentHold(
+	ctx context.Context, task productionPublicationTask,
+) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+	return w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return recordRunHold(ctx, tx, task.RunID, task.PublicationID,
+			domain.HoldPublicationEnvironment, w.now().UTC())
+	})
+}
+
+// publicationAttemptPaceState paces the clear below on the hold key without
+// ever naming a hold reason: it is the pacer's record that this run's
+// attended-mode hold was already cleared, not an observation of a hold.
+const publicationAttemptPaceState = "attempt-accepted"
+
+// clearAttendedPublicationHold ends the hold-only composition's pause once an
+// active composition accepts the queued task. Cause-scoped, so a hold this
+// attempt is about to re-record keeps its row and its span, and paced like
+// the hold writes so the reconcile cadence does not turn an already-cleared
+// run into a delete per pass.
+func (w *productionPublicationWorkflow) clearAttendedPublicationHold(
+	ctx context.Context, task productionPublicationTask,
+) error {
+	key := "hold:" + string(task.RunID)
+	if !w.holdPace.due(key, publicationAttemptPaceState, w.now().UTC()) {
+		return nil
+	}
+	if err := w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.ClearRunHoldCause(ctx, task.RunID, domain.HoldAttendedModeActive)
+	}); err != nil {
+		w.holdPace.forget(key)
+		return err
+	}
+	return nil
 }
 
 func (w *productionPublicationWorkflow) supersedeBlockedHold(
@@ -2273,6 +2433,15 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 		return nil, fmt.Errorf("production blocked item %q disagrees with task: %w",
 			current.ID, domain.ErrParentKeyMismatch)
 	}
+	// The recovered definitive block projects the same milestone the live
+	// path records; current.Reason already passed the closed-set gate above
+	// (issue #394).
+	if cause, ok := productionBlockReason(current.Reason); ok {
+		if err := w.appendPublicationMilestone(
+			ctx, task, domain.MilestonePublicationBlocked, &cause); err != nil {
+			return nil, err
+		}
+	}
 	accepted, err := w.recordCompletedTerminal(ctx, binding.run, task)
 	if err != nil {
 		return nil, err
@@ -2296,6 +2465,18 @@ func (w *productionPublicationWorkflow) completeBlockedTask(
 		return productionTaskOutcome{}, err
 	}
 	if err := w.putTerminalItem(ctx, item); err != nil {
+		return productionTaskOutcome{}, err
+	}
+	// The definitive reasons are a closed set; an unmapped one is the same
+	// contract violation recovery fails on. Only the code crosses into the
+	// projection (issue #394).
+	cause, ok := productionBlockReason(reason)
+	if !ok {
+		return productionTaskOutcome{}, fmt.Errorf(
+			"production blocked reason %q has no observation code: %w",
+			reason, domain.ErrInvalidRunHoldReason)
+	}
+	if err := w.appendPublicationMilestone(ctx, task, domain.MilestonePublicationBlocked, &cause); err != nil {
 		return productionTaskOutcome{}, err
 	}
 	if w.afterBlocked != nil {
