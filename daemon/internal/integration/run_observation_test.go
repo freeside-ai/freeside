@@ -77,7 +77,7 @@ func (d streamRefusingDriver) Stream(context.Context, domain.InvocationID) (io.R
 func TestRunObservationTimelineForAPublishedRun(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatal(err)
 	}
 	p.assertReady(t)
@@ -108,7 +108,7 @@ func TestRunObservationTimelineForAPublishedRun(t *testing.T) {
 	}
 
 	// A converged replay adds nothing to the timeline.
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatal(err)
 	}
 	replayed := observeProductionRun(t, p.store, p.runID)
@@ -370,7 +370,7 @@ func TestPublicationEnvironmentHoldCoversLockSetup(t *testing.T) {
 	if err := os.WriteFile(lockDir, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	result, err := p.workflow.Reconcile(p.ctx)
+	result, err := p.reconcileLanes()
 	if err != nil || result != (engine.ReconcileResult{}) {
 		t.Fatalf("unpreparable lock directory reconcile = %#v, %v", result, err)
 	}
@@ -383,7 +383,7 @@ func TestPublicationEnvironmentHoldCoversLockSetup(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.now = p.now.Add(time.Minute)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("recover publication after lock setup failure: %v", err)
 	}
 	p.assertReady(t)
@@ -404,7 +404,7 @@ func TestAcceptedPublicationClearsTheAttendedHold(t *testing.T) {
 	p.workflow = p.newEngineForMode(
 		t, productionCrashSeams{}, true, nil, domain.ModeAttendedDev, true,
 	)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("attended publication hold: %v", err)
 	}
 	if observation := observeProductionRun(t, p.store, p.runID); observation.Hold == nil ||
@@ -415,7 +415,7 @@ func TestAcceptedPublicationClearsTheAttendedHold(t *testing.T) {
 	p.workflow = p.newEngine(t, productionCrashSeams{
 		afterVerification: func() error { return errors.New("stop after checkpoint") },
 	}, true)
-	if _, err := p.workflow.Reconcile(p.ctx); err == nil {
+	if _, err := p.reconcileLanes(); err == nil {
 		t.Fatal("verification seam did not stop the accepted attempt")
 	}
 	observation := observeProductionRun(t, p.store, p.runID)
@@ -438,7 +438,7 @@ func TestAcceptedPublicationKeepsOtherHoldCauses(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	p.transport.failFetch(&net.DNSError{Err: "temporary", Name: "github.com"})
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("transient publication reconcile: %v", err)
 	}
 	held := observeProductionRun(t, p.store, p.runID)
@@ -451,7 +451,7 @@ func TestAcceptedPublicationKeepsOtherHoldCauses(t *testing.T) {
 	p.workflow = p.newEngine(t, productionCrashSeams{
 		afterVerification: func() error { return errors.New("stop after checkpoint") },
 	}, true)
-	if _, err := p.workflow.Reconcile(p.ctx); err == nil {
+	if _, err := p.reconcileLanes(); err == nil {
 		t.Fatal("verification seam did not stop the accepted attempt")
 	}
 	observation := observeProductionRun(t, p.store, p.runID)
