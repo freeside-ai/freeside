@@ -231,8 +231,22 @@ func mapsClone[K comparable, V any](in map[K]V) map[K]V {
 	return out
 }
 
+const productionPublicationTaskKeyPrefix = "production-publication/"
+
 func productionPublicationTaskKey(runID domain.RunID) string {
-	return "production-publication/" + string(runID)
+	return productionPublicationTaskKeyPrefix + string(runID)
+}
+
+// productionRunIDFromPublicationTaskKey inverts productionPublicationTaskKey,
+// reporting false for a key this lane could not have filed. Like the marker's
+// inversion it attributes a row by its key, never by the payload that has
+// just failed to reconstruct.
+func productionRunIDFromPublicationTaskKey(key string) (domain.RunID, bool) {
+	runID, ok := strings.CutPrefix(key, productionPublicationTaskKeyPrefix)
+	if !ok || runID == "" {
+		return "", false
+	}
+	return domain.RunID(runID), true
 }
 
 func productionVerificationCheckpointKey(runID domain.RunID) string {
@@ -263,14 +277,26 @@ func (w *productionPublicationWorkflow) hasQueuedCompletion(
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {
-		return false, nil
+		// No task row: either none was ever written, or an operator repaired
+		// an unreadable one by removing it. Absence proves the hold a task
+		// notice describes has ended, and the pending scan can no longer
+		// reach that row to retire it.
+		return false, releaseProductionQuarantine(
+			ctx, w.store, w.attention, productionTaskQuarantinePrefix, run.ID)
 	}
 	if err != nil {
 		return false, err
 	}
 	task, err := decodeProductionPublicationTask(entry)
 	if err != nil {
-		return false, err
+		// The acceptance scan reaches this row too, so it needs the pending
+		// scan's hold: an unreadable task is a durable completion this daemon
+		// cannot read, which is a reason to leave the attempt alone, not to
+		// re-collect it or end the pass.
+		if holdErr := w.holdUnreadableTask(ctx, run, err); holdErr != nil {
+			return false, holdErr
+		}
+		return true, nil
 	}
 	if task.RunID != run.ID || task.ProjectID != run.ProjectID ||
 		task.ProducingInvocationID != invocationID {
@@ -281,7 +307,12 @@ func (w *productionPublicationWorkflow) hasQueuedCompletion(
 		return false, fmt.Errorf("production publication task dispatched without a terminal record: %w",
 			domain.ErrImmutableTransition)
 	}
-	return true, nil
+	// The acceptance scan runs in every operating mode, while the pending
+	// scan that also releases this notice returns early under a hold-only
+	// publication lane. Retiring it here too is what keeps a repaired task
+	// from leaving an open notice behind in attended_dev.
+	return true, releaseProductionQuarantine(
+		ctx, w.store, w.attention, productionTaskQuarantinePrefix, run.ID)
 }
 
 // authenticatesTerminal proves a completed terminal from the SQLite-backed
@@ -312,14 +343,24 @@ func (w *productionPublicationWorkflow) authenticatesTerminal(
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {
-		return false, nil
+		// Any of the three lookups may be the missing one, and only an absent
+		// task row proves a task notice's hold has ended: a missing admission
+		// or export record must not be read as a repair.
+		return false, w.releaseTaskQuarantineIfRowAbsent(ctx, run)
 	}
 	if err != nil {
 		return false, err
 	}
 	task, err := decodeProductionPublicationTask(entry)
 	if err != nil {
-		return false, err
+		// The acceptance scan reaches this row too, so it needs the pending
+		// scan's hold: an unreadable task is a durable completion this daemon
+		// cannot read, which is a reason to leave the attempt alone, not to
+		// re-collect it or end the pass.
+		if holdErr := w.holdUnreadableTask(ctx, run, err); holdErr != nil {
+			return false, holdErr
+		}
+		return true, nil
 	}
 	if run.ID != task.RunID || run.ProjectID != task.ProjectID ||
 		admission.RunID != task.RunID || admission.StageID != productionStageID(task.RunID) ||
@@ -338,7 +379,8 @@ func (w *productionPublicationWorkflow) authenticatesTerminal(
 		return false, fmt.Errorf("production terminal disagrees with durable publication task: %w",
 			domain.ErrParentKeyMismatch)
 	}
-	return true, nil
+	return true, releaseProductionQuarantine(
+		ctx, w.store, w.attention, productionTaskQuarantinePrefix, run.ID)
 }
 
 // RecordExecutionExport selects the persistence boundary from the immutable
@@ -521,6 +563,113 @@ func RecordProductionExecutionExport(
 	})
 }
 
+// quarantineTaskRow holds the run named by a publication task row this daemon
+// cannot reconstruct. The run comes from the row's key, so its project — which
+// the notice needs — is read from the store rather than from the payload that
+// just failed to decode. A run the store does not have is not quarantinable
+// state and stays the caller's loud failure.
+func (w *productionPublicationWorkflow) quarantineTaskRow(
+	ctx context.Context, runID domain.RunID,
+) (bool, error) {
+	var run domain.Run
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(ctx, runID)
+		return err
+	}); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, w.holdUnreadableTask(ctx, run, nil)
+}
+
+// releaseTaskQuarantineIfRowAbsent retires the task notice only when the task
+// row itself is gone, which is how an operator repairs an unreadable one that
+// the pending scan can no longer reach.
+func (w *productionPublicationWorkflow) releaseTaskQuarantineIfRowAbsent(
+	ctx context.Context, run domain.Run,
+) error {
+	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetOutbox(ctx, productionPublicationTaskKey(run.ID))
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return releaseProductionQuarantine(
+			ctx, w.store, w.attention, productionTaskQuarantinePrefix, run.ID)
+	}
+	return err
+}
+
+// holdUnreadableTask records one run's publication-task hold, keeping the
+// cause with any store fault so the failure that triggered it is not dropped.
+func (w *productionPublicationWorkflow) holdUnreadableTask(
+	ctx context.Context, run domain.Run, cause error,
+) error {
+	if err := recordProductionQuarantine(
+		ctx, w.store, w.attention, productionTaskQuarantinePrefix,
+		run.ID, run.ProjectID, productionQuarantineUnreadableTask,
+	); err != nil {
+		return errors.Join(cause, err)
+	}
+	return nil
+}
+
+// quarantineTaskMarker reports whether this task's run is held out of the lane
+// by its ownership marker. reconcileTask re-gates its own authority from the
+// store and never reads the marker, so without this the publication lane would
+// publish a run the dispatch and acceptance paths have already quarantined.
+// A task whose marker reads again retires the marker's notice, the same
+// release the ownership scan performs.
+func (w *productionPublicationWorkflow) quarantineTaskMarker(
+	ctx context.Context, task productionPublicationTask,
+) (bool, error) {
+	var entry store.QueueEntry
+	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		entry, err = tx.GetOutbox(ctx, string(productionInvocationID(task.RunID)))
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		// Marker presence is not this lane's gate; the task carries its own
+		// authority. Leave the pre-existing behaviour of a missing row alone,
+		// but retire the notice first: removing the bad row is one way an
+		// operator repairs the marker, and this task is about to publish.
+		return false, releaseProductionQuarantine(
+			ctx, w.store, w.attention, productionMarkerQuarantinePrefix, task.RunID)
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, authErr := authenticateProductionMarker(entry, task.RunID); authErr != nil {
+		// The project comes from the run row, not from the task payload: the
+		// notice must not be filed under a project a decoded field claims.
+		var run domain.Run
+		if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			run, err = tx.GetRun(ctx, task.RunID)
+			return err
+		}); err != nil {
+			return false, errors.Join(authErr, err)
+		}
+		quarantined, quarantineErr := quarantineProductionMarker(
+			ctx, w.store, w.attention, run.ID, run.ProjectID, authErr)
+		if quarantineErr != nil {
+			return false, errors.Join(authErr, quarantineErr)
+		}
+		if quarantined {
+			return true, nil
+		}
+		return false, authErr
+	}
+	if err := releaseProductionQuarantine(
+		ctx, w.store, w.attention, productionMarkerQuarantinePrefix, task.RunID); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
 func (w *productionPublicationWorkflow) loadProductionRequest(
 	ctx context.Context,
 	run domain.Run,
@@ -534,14 +683,9 @@ func (w *productionPublicationWorkflow) loadProductionRequest(
 	if err != nil {
 		return productionInvocationRequest{}, fmt.Errorf("load production submission metadata: %w", err)
 	}
-	request, err := decodeProductionRequest(entry)
+	request, err := authenticateProductionMarker(entry, run.ID)
 	if err != nil {
 		return productionInvocationRequest{}, fmt.Errorf("authenticate production submission metadata: %w", err)
-	}
-	if request.RunID != run.ID {
-		return productionInvocationRequest{}, fmt.Errorf(
-			"production submission metadata disagrees with run: %w", domain.ErrParentKeyMismatch,
-		)
 	}
 	return request, nil
 }
@@ -677,10 +821,51 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 	for _, entry := range pending {
 		task, err := decodeProductionPublicationTask(entry)
 		if err != nil {
+			// A task row this daemon cannot reconstruct is the marker's
+			// failure mode one row over: a newer daemon writes a newer task
+			// too, so joining the error here would end Engine.Run on every
+			// pass for as long as the row exists (#424). Quarantine the run
+			// it names and leave the row pending for a daemon that can read
+			// it. A row whose key this lane could not have filed names no
+			// run, so it stays loud.
+			if runID, ok := productionRunIDFromPublicationTaskKey(entry.IdempotencyKey); ok {
+				quarantined, quarantineErr := w.quarantineTaskRow(ctx, runID)
+				if quarantineErr != nil {
+					joined = errors.Join(joined, fmt.Errorf(
+						"task %q: %w", entry.IdempotencyKey, quarantineErr))
+					continue
+				}
+				if quarantined {
+					continue
+				}
+			}
 			joined = errors.Join(joined, fmt.Errorf(
 				"task %q cannot be reconstructed: %w: %w",
 				entry.IdempotencyKey, err, domain.ErrParentKeyMismatch,
 			))
+			continue
+		}
+		// The task reads again, so its own hold has ended. It has to be
+		// retired here, while the row is still pending: a task that completes
+		// leaves the pending scan, and no later pass would reach its notice.
+		if err := releaseProductionQuarantine(
+			ctx, w.store, w.attention,
+			productionTaskQuarantinePrefix, task.RunID,
+		); err != nil {
+			joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, err))
+			continue
+		}
+		// The publication lane holds a quarantined run too. reconcileTask
+		// re-gates its own authority from the store and never reads the
+		// marker, so without this check a run whose marker stopped
+		// authenticating would still import, verify, and open a real pull
+		// request while its notice claims it is held out of the lane.
+		markerQuarantined, err := w.quarantineTaskMarker(ctx, task)
+		if err != nil {
+			joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, err))
+			continue
+		}
+		if markerQuarantined {
 			continue
 		}
 		if retryAfter, held := w.holdRetryAfter[task.RunID]; held {

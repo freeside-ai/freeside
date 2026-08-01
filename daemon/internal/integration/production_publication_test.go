@@ -1746,3 +1746,325 @@ func TestProductionPublicationBackupBindsReplayBlobs(t *testing.T) {
 		t.Fatal("backup extractor accepted replay metadata whose role digest was tampered")
 	}
 }
+
+// TestDowngradedProductionMarkerQuarantinesOnlyItsRun is the #424 regression:
+// a marker written by a newer daemon (here, an unknown future version) must
+// not end reconciliation on every pass. The run behind it leaves the
+// production lane behind a durable notice, while the healthy run in the same
+// store still executes, verifies, and publishes.
+func TestDowngradedProductionMarkerQuarantinesOnlyItsRun(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	downgraded := domain.RunID("run-downgraded-marker")
+	futureVersion := "freeside.production-invocation/v9"
+	seedFutureVersionProductionRun(t, p, downgraded, futureVersion)
+
+	p.startAndRecordExport(t)
+	result, err := p.workflow.Reconcile(p.ctx)
+	if err != nil {
+		t.Fatalf("reconcile beside an unreadable marker: %v", err)
+	}
+	if result.ResultsAccepted != 1 || result.ReadyItemsCreated != 1 ||
+		result.PublicationTasksCompleted != 1 || result.LastPRNumber == 0 {
+		t.Fatalf("healthy run result = %#v", result)
+	}
+	p.assertReady(t)
+
+	item := productionQuarantineItem(t, p, downgraded)
+	if item.Type != domain.AttentionExecutionFailure || item.Status != domain.StatusOpen ||
+		item.Subject.Type != domain.SubjectRun || item.Subject.ID != domain.SubjectID(downgraded) {
+		t.Fatalf("quarantine item = %#v", item)
+	}
+	// The marker is the untrusted input: its stored text never reaches the
+	// operator-facing reason.
+	if strings.Contains(item.Reason, futureVersion) || strings.Contains(item.Reason, string(downgraded)) {
+		t.Fatalf("quarantine reason echoes marker payload: %q", item.Reason)
+	}
+
+	// The restart case: a later pass converges on the one notice and still
+	// reports no error.
+	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+		t.Fatalf("replayed reconcile beside an unreadable marker: %v", err)
+	}
+	if replayed := productionQuarantineItem(t, p, downgraded); replayed.ItemVersion != item.ItemVersion {
+		t.Fatalf("replayed pass rewrote the notice: %#v", replayed)
+	}
+}
+
+// seedFutureVersionProductionRun writes the run and ownership marker a newer
+// daemon would have committed: the lane's own key and kind, carrying a marker
+// version this binary does not know.
+func seedFutureVersionProductionRun(
+	t *testing.T, p *productionPublicationHarness, runID domain.RunID, version string,
+) {
+	t.Helper()
+	run := domain.Run{
+		ID: runID, ProjectID: p.projectID,
+		SpecDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		PolicyDigest: domain.Digest("sha256:" + strings.Repeat("e", 64)),
+		Stages: []domain.Stage{{
+			ID: domain.StageID("implement-" + string(runID)), RunID: runID,
+			Name: "implement", Attempts: []domain.Attempt{},
+		}},
+	}
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		return tx.PutRun(p.ctx, run)
+	}); err != nil {
+		t.Fatalf("seed downgraded run: %v", err)
+	}
+	payload := fmt.Sprintf(
+		`{"version":%q,"invocation_id":"inv-implement-%s","run_id":%q,"stage_id":"implement-%s"}`,
+		version, runID, runID, runID,
+	)
+	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+		_, _, err := tx.EnqueueOutbox(
+			p.ctx, "inv-implement-"+string(runID),
+			engine.KindProductionInvocationRequested, []byte(payload),
+		)
+		return err
+	}); err != nil {
+		t.Fatalf("seed downgraded marker: %v", err)
+	}
+}
+
+func productionQuarantineItem(
+	t *testing.T, p *productionPublicationHarness, runID domain.RunID,
+) domain.AttentionItem {
+	t.Helper()
+	var item domain.AttentionItem
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		item, err = tx.GetAttentionItemRecord(
+			p.ctx, domain.ItemID("production-marker-quarantined-1-"+string(runID)))
+		return err
+	}); err != nil {
+		t.Fatalf("read quarantine item for %q: %v", runID, err)
+	}
+	return item
+}
+
+// TestQuarantinedMarkerHoldsAndReleasesThePublicationLane covers the half of
+// #424 the reconcile loop reaches only after execution: a run whose marker
+// stops authenticating must not publish, because the publication lane
+// re-gates its own authority and never reads the marker. It also pins the
+// release: when the marker reads again, the run publishes and the notice is
+// retired rather than left contradicting the run's own outcome.
+func TestQuarantinedMarkerHoldsAndReleasesThePublicationLane(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	p.startAndRecordExport(t)
+
+	// Hold the publication lane so its task is committed and left pending.
+	p.workflow = p.newEngineForMode(
+		t, productionCrashSeams{}, true, nil, domain.ModeUnattended, true,
+	)
+	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+		t.Fatalf("accept under a held publication lane: %v", err)
+	}
+
+	markerKey := "inv-implement-" + string(p.runID)
+	original := readOutboxPayload(t, p, markerKey)
+	writeOutboxPayload(t, p, markerKey, []byte(fmt.Sprintf(
+		`{"version":"freeside.production-invocation/v9","invocation_id":%q,"run_id":%q,"stage_id":%q}`,
+		markerKey, p.runID, "implement-"+string(p.runID),
+	)))
+
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+		t.Fatalf("reconcile with a quarantined marker: %v", err)
+	}
+	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+		t.Fatalf("quarantined run published: %d refs/%d PRs", refs, prs)
+	}
+	held := productionQuarantineItem(t, p, p.runID)
+	if held.Status != domain.StatusOpen {
+		t.Fatalf("quarantine notice = %#v", held)
+	}
+
+	// The upgrade: the marker reconstructs again.
+	writeOutboxPayload(t, p, markerKey, original)
+	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+		t.Fatalf("reconcile after the marker reads again: %v", err)
+	}
+	p.assertReady(t)
+	released := productionQuarantineItem(t, p, p.runID)
+	if released.Status != domain.StatusSuperseded || released.ItemVersion <= held.ItemVersion {
+		t.Fatalf("quarantine notice after recovery = %#v", released)
+	}
+}
+
+// TestUnreadablePublicationTaskDoesNotEndTheEngineLoop is the sibling row of
+// the marker: a downgrade meets newer publication tasks too, and joining that
+// decode failure would end Engine.Run on every pass for as long as the row
+// exists.
+func TestUnreadablePublicationTaskDoesNotEndTheEngineLoop(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	stranded := domain.RunID("run-unreadable-task")
+	seedFutureVersionProductionRun(t, p, stranded, "freeside.production-invocation/v2")
+	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+		_, _, err := tx.EnqueueOutbox(
+			p.ctx, "production-publication/"+string(stranded),
+			engine.KindProductionPublicationRequested,
+			[]byte(`{"version":9,"run_id":"run-unreadable-task"}`),
+		)
+		return err
+	}); err != nil {
+		t.Fatalf("seed unreadable task: %v", err)
+	}
+
+	p.startAndRecordExport(t)
+	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+		t.Fatalf("reconcile beside an unreadable publication task: %v", err)
+	}
+	p.assertReady(t)
+
+	var item domain.AttentionItem
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		item, err = tx.GetAttentionItemRecord(
+			p.ctx, domain.ItemID("production-task-quarantined-1-"+string(stranded)))
+		return err
+	}); err != nil {
+		t.Fatalf("read task quarantine item: %v", err)
+	}
+	if item.Type != domain.AttentionExecutionFailure || item.Status != domain.StatusOpen {
+		t.Fatalf("task quarantine item = %#v", item)
+	}
+}
+
+func readOutboxPayload(t *testing.T, p *productionPublicationHarness, key string) []byte {
+	t.Helper()
+	raw, err := sql.Open("sqlite", p.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload []byte
+	err = raw.QueryRowContext(
+		p.ctx, `SELECT payload FROM outbox WHERE idempotency_key = ?`, key).Scan(&payload)
+	if closeErr := raw.Close(); err != nil || closeErr != nil {
+		t.Fatal(errors.Join(err, closeErr))
+	}
+	return payload
+}
+
+func writeOutboxPayload(t *testing.T, p *productionPublicationHarness, key string, payload []byte) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", p.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := raw.ExecContext(
+		p.ctx, `UPDATE outbox SET payload = ? WHERE idempotency_key = ?`, payload, key)
+	closeErr := raw.Close()
+	if err != nil || closeErr != nil {
+		t.Fatal(errors.Join(err, closeErr))
+	}
+	if updated, err := result.RowsAffected(); err != nil || updated != 1 {
+		t.Fatalf("rewrote %d marker rows, %v, want 1", updated, err)
+	}
+}
+
+// TestUnreadablePublicationTaskHoldsAndReleases: the task row's hold has the
+// same lifecycle as the marker's. Its notice must be retired while the row is
+// still pending, because a task that completes leaves the pending scan and no
+// later pass would reach it.
+func TestUnreadablePublicationTaskHoldsAndReleases(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	p.startAndRecordExport(t)
+	p.workflow = p.newEngineForMode(
+		t, productionCrashSeams{}, true, nil, domain.ModeUnattended, true,
+	)
+	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+		t.Fatalf("accept under a held publication lane: %v", err)
+	}
+
+	taskKey := "production-publication/" + string(p.runID)
+	original := readOutboxPayload(t, p, taskKey)
+	writeOutboxPayload(t, p, taskKey, []byte(`{"version":"freeside.production-publication/v9"}`))
+
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+		t.Fatalf("reconcile with an unreadable task: %v", err)
+	}
+	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+		t.Fatalf("unreadable task published: %d refs/%d PRs", refs, prs)
+	}
+	held := productionItemRecord(t, p, "production-task-quarantined-1-"+string(p.runID))
+	if held.Status != domain.StatusOpen {
+		t.Fatalf("task notice = %#v", held)
+	}
+
+	writeOutboxPayload(t, p, taskKey, original)
+	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+		t.Fatalf("reconcile after the task reads again: %v", err)
+	}
+	p.assertReady(t)
+	released := productionItemRecord(t, p, "production-task-quarantined-1-"+string(p.runID))
+	if released.Status != domain.StatusSuperseded {
+		t.Fatalf("task notice after recovery = %#v", released)
+	}
+}
+
+// TestRemovedMarkerRetiresTheQuarantineNotice: removing the bad row is the
+// other repair an operator can make. The run leaves the lane for good, so the
+// notice must not outlive the hold it describes while the already-durable
+// publication task finishes.
+func TestRemovedMarkerRetiresTheQuarantineNotice(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	p.startAndRecordExport(t)
+	p.workflow = p.newEngineForMode(
+		t, productionCrashSeams{}, true, nil, domain.ModeUnattended, true,
+	)
+	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+		t.Fatalf("accept under a held publication lane: %v", err)
+	}
+
+	markerKey := "inv-implement-" + string(p.runID)
+	writeOutboxPayload(t, p, markerKey, []byte(`{"run_id":"wrong"}`))
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+		t.Fatalf("reconcile with a quarantined marker: %v", err)
+	}
+	held := productionItemRecord(t, p, "production-marker-quarantined-1-"+string(p.runID))
+	if held.Status != domain.StatusOpen {
+		t.Fatalf("marker notice = %#v", held)
+	}
+
+	deleteOutboxRow(t, p, markerKey)
+	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+		t.Fatalf("reconcile after the marker row was removed: %v", err)
+	}
+	released := productionItemRecord(t, p, "production-marker-quarantined-1-"+string(p.runID))
+	if released.Status != domain.StatusSuperseded {
+		t.Fatalf("marker notice after repair = %#v", released)
+	}
+}
+
+func productionItemRecord(
+	t *testing.T, p *productionPublicationHarness, id string,
+) domain.AttentionItem {
+	t.Helper()
+	var item domain.AttentionItem
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		item, err = tx.GetAttentionItemRecord(p.ctx, domain.ItemID(id))
+		return err
+	}); err != nil {
+		t.Fatalf("read attention item %q: %v", id, err)
+	}
+	return item
+}
+
+func deleteOutboxRow(t *testing.T, p *productionPublicationHarness, key string) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", p.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := raw.ExecContext(p.ctx, `DELETE FROM outbox WHERE idempotency_key = ?`, key)
+	closeErr := raw.Close()
+	if err != nil || closeErr != nil {
+		t.Fatal(errors.Join(err, closeErr))
+	}
+	if removed, err := result.RowsAffected(); err != nil || removed != 1 {
+		t.Fatalf("removed %d rows, %v, want 1", removed, err)
+	}
+}
