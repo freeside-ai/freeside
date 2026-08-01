@@ -79,6 +79,38 @@ duplicate or reorder the timeline. Store-level embedding in
 facts so every lane (fake and Claude, live and recovery) records them
 atomically with the fact itself.
 
+**Hold causes are stated by the classifying site, never derived from
+prose.** The dispatch path classifies its sentinel errors through one
+mapping (`dispatchHoldReason`), tested total over the hold-classified
+sentinel set; the publication lane's durable holds take an explicit
+typed cause parameter at each `holdBlockedTask` call site, because the
+operator prose passed beside it is composed per situation and matching
+on it would silently drop holds when wording changes. The definitive
+block strings are a closed set recovery already fails closed on, so
+their mapping is total by the same contract. One deliberate behavior
+change rides this: a dispatch pass held by the operating-state gate now
+still lists pending production intents (a read) so each held run's
+typed cause is observable; dispatch remains skipped exactly as before.
+
+**A hold ends with the cause that raised it.** Three writers end a
+hold: a milestone that actually inserts (forward progress), the next
+classified cause replacing the row, and the attempt that accepts a
+queued publication task — which ends only the hold-only composition's
+`attended_mode_active` pause, so the read surface stops reporting an
+attended daemon's hold through a whole fetch, verification, and
+publication attempt. That clear is cause-scoped rather than a blanket
+delete because the accepting attempt is about to decide holds of its
+own: a definitive block and an environmental back-off are re-recorded
+on the retry cadence, so a blanket clear would blink a live cause out
+of the read surface once per retry cycle and restart its
+`first_observed_at` span. The cause stays a SQL delete predicate, so
+the decision still reads no projection row back. Symmetrically, every
+environmental pause of a publication task states the same typed cause
+(`publication_environment`), including the lock-setup branches that
+previously deferred with no observation; a cancelled context records
+nothing, because daemon shutdown is not a cause an operator can act
+on.
+
 ## Containment
 
 Monitoring never reads a live writer's stdout, stderr, filesystem, or
