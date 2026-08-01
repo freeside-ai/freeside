@@ -2124,3 +2124,130 @@ func deleteOutboxRow(t *testing.T, p *productionPublicationHarness, key string) 
 		t.Fatalf("removed %d rows, %v, want 1", removed, err)
 	}
 }
+
+// publicationBoundaryWait bounds the waits in the scheduling tests below. It
+// is a liveness cap, not a timing assertion: every wait is on a channel the
+// test itself closes, so a healthy run reaches it immediately.
+const publicationBoundaryWait = 30 * time.Second
+
+// submitUnrelatedRun queues a second production run against the same store and
+// driver, so a test can prove the reconcile loop advances work that has
+// nothing to do with the publication task it parked.
+func (p *productionPublicationHarness) submitUnrelatedRun(
+	t *testing.T, runID domain.RunID,
+) domain.InvocationID {
+	t.Helper()
+	spec, policy, resolved := registerSubmissionArtifactsWithPaths(
+		t, p.store, string(runID), "README.md",
+	)
+	submitted, err := engine.SubmitProductionRun(p.ctx, p.store, engine.ProductionRunSpec{
+		RunID: runID, ProjectID: p.projectID, SpecArtifactID: spec.ID,
+		PolicyArtifactID: policy.ID, ResolvedPolicy: resolved,
+		Publication: productionPublicationMetadata(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.driver.Script(submitted.InvocationID, fake.StageScript{
+		PendingInspects: 1, Outcome: fake.OutcomeComplete,
+		Result: exec.StageResult{HeadSHA: p.replay.HeadSHA, Summary: "Claude export completed."},
+	})
+	return submitted.InvocationID
+}
+
+// TestBlockedProductionPublicationLeavesTheReconcileLoopFree is the scheduling
+// guarantee behind splitting the lanes (issue #425): a publication parked in
+// an external boundary holds only its own loop, so the reconcile loop still
+// dispatches an unrelated invocation, and the parked task finishes normally
+// once the boundary returns.
+func TestBlockedProductionPublicationLeavesTheReconcileLoopFree(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	p.startAndRecordExport(t)
+	entered, release := p.transport.blockNextFetch()
+	publication := make(chan error, 1)
+	go func() {
+		_, err := p.workflow.ReconcileProductionPublications(p.ctx)
+		publication <- err
+	}()
+	select {
+	case <-entered:
+	case err := <-publication:
+		t.Fatalf("publication pass returned without reaching the transport: %v", err)
+	case <-time.After(publicationBoundaryWait):
+		t.Fatal("publication pass never reached the transport boundary")
+	}
+
+	unrelated := p.submitUnrelatedRun(t, "run-unrelated-production")
+	result, err := p.workflow.Reconcile(p.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.InvocationsStarted != 1 {
+		t.Fatalf("reconcile pass beside a parked publication = %#v", result)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetExecutionAdmissionRecord(p.ctx, unrelated)
+		return err
+	}); err != nil {
+		t.Fatalf("unrelated invocation %q did not advance: %v", unrelated, err)
+	}
+
+	release()
+	if err := <-publication; err != nil {
+		t.Fatal(err)
+	}
+	p.assertReady(t)
+}
+
+// TestShutdownEndsAParkedProductionPublicationWithoutLosingItsTask proves the
+// publication loop shuts down like the reconcile loop: cancellation ends the
+// parked worker, and the durable task survives for the next process to finish.
+func TestShutdownEndsAParkedProductionPublicationWithoutLosingItsTask(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	p.startAndRecordExport(t)
+	entered, release := p.transport.blockNextFetch()
+	t.Cleanup(release)
+	ctx, cancel := context.WithCancel(p.ctx)
+	loop := make(chan error, 1)
+	go func() {
+		loop <- p.workflow.RunProductionPublications(ctx, time.Millisecond)
+	}()
+	select {
+	case <-entered:
+	case err := <-loop:
+		t.Fatalf("publication loop returned without reaching the transport: %v", err)
+	case <-time.After(publicationBoundaryWait):
+		t.Fatal("publication loop never reached the transport boundary")
+	}
+
+	cancel()
+	select {
+	case err := <-loop:
+		if err != nil {
+			t.Fatalf("canceled publication loop = %v", err)
+		}
+	case <-time.After(publicationBoundaryWait):
+		t.Fatal("canceled publication loop leaked its worker")
+	}
+	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+		t.Fatalf("interrupted publication caused effects: %d refs, %d PRs", refs, prs)
+	}
+	var task store.QueueEntry
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		task, err = tx.GetOutbox(p.ctx, "production-publication/"+string(p.runID))
+		return err
+	}); err != nil {
+		t.Fatalf("publication task did not survive shutdown: %v", err)
+	}
+	if task.Dispatched() {
+		t.Fatal("interrupted publication dispatched its durable task")
+	}
+
+	// Restart: a fresh engine over the same store finishes the surviving task.
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	if _, err := p.workflow.ReconcileProductionPublications(p.ctx); err != nil {
+		t.Fatal(err)
+	}
+	p.assertReady(t)
+}
