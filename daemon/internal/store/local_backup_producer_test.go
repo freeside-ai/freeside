@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -393,6 +394,301 @@ func TestLocalBackupHealthPinsCheckpointAndRestoreGeneration(t *testing.T) {
 		t.Fatalf("concurrent Maintain: %v", err)
 	}
 	assertHealthyLocalBackup(t, s)
+}
+
+// A downgrade past a durable row a newer daemon wrote must leave every caller
+// working: maintenance reports the gap instead of failing the daemon, no
+// checkpoint claims a closure it could not compute, unattended admission is
+// refused while the gap holds, and the upgrade that repairs it needs no
+// operator step (#430).
+func TestLocalBackupProducerReportsUnreadableDurableRowAndRecovers(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	payloadDigest := domain.Digest("sha256:durable-task-payload")
+	upgraded := true
+	extractors := map[string]store.BackupPayloadDigestExtractor{
+		"backup.marker": func(store.QueueEntry) ([]domain.Digest, error) {
+			if !upgraded {
+				return nil, fmt.Errorf("unsupported marker version 2")
+			}
+			return []domain.Digest{payloadDigest}, nil
+		},
+	}
+	files, err := store.NewDefaultLocalBackupFiles(dbPath)
+	if err != nil {
+		t.Fatalf("NewDefaultLocalBackupFiles: %v", err)
+	}
+	source, err := files.NewCheckpointHealthSource(
+		backupArtifactSet{payloadDigest: true}, nil, extractors)
+	if err != nil {
+		t.Fatalf("NewCheckpointHealthSource: %v", err)
+	}
+	s := openStoreAt(t, dbPath, store.Options{BackupHealthSource: source})
+	producer, err := files.NewProducer(s)
+	if err != nil {
+		t.Fatalf("NewProducer: %v", err)
+	}
+	if err := producer.Maintain(ctx); err != nil {
+		t.Fatalf("Maintain before the unreadable row: %v", err)
+	}
+	assertHealthyLocalBackup(t, s)
+	checkpointPath := filepath.Join(dbPath+".checkpoints", "latest.backup")
+	provenCheckpoint, err := os.ReadFile(checkpointPath) //nolint:gosec // test-owned path
+	if err != nil {
+		t.Fatalf("read proven checkpoint: %v", err)
+	}
+
+	// The row lands after that checkpoint, so the checkpoint on disk stays
+	// verifiable: only the live database holds something this binary cannot
+	// describe, and the closure dimension alone must carry the refusal.
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, _, err := tx.EnqueueOutbox(ctx, "marker-1", "backup.marker", []byte("payload"))
+		return err
+	}); err != nil {
+		t.Fatalf("enqueue durable task: %v", err)
+	}
+	upgraded = false
+	err = producer.Maintain(ctx)
+	if !errors.Is(err, store.ErrBackupClosureIncomplete) {
+		t.Fatalf("Maintain = %v, want ErrBackupClosureIncomplete", err)
+	}
+	if !errors.Is(err, domain.ErrArtifactClosureIncomplete) {
+		t.Fatalf("Maintain = %v, want the admission boundary's closure refusal", err)
+	}
+	retained, err := os.ReadFile(checkpointPath) //nolint:gosec // test-owned path
+	if err != nil {
+		t.Fatalf("read checkpoint after the unreadable row: %v", err)
+	}
+	if !bytes.Equal(retained, provenCheckpoint) {
+		t.Fatal("an uncomputable closure replaced the last proven checkpoint")
+	}
+	health, err := s.BackupHealth(ctx)
+	if err != nil {
+		t.Fatalf("BackupHealth with an unreadable durable row: %v", err)
+	}
+	if health.ArtifactClosure != domain.BackupHealthUnhealthy {
+		t.Fatalf("closure = %q, want unhealthy", health.ArtifactClosure)
+	}
+	if health.Encryption != domain.BackupHealthHealthy {
+		t.Fatalf("encryption = %q, want the retained checkpoint still proven", health.Encryption)
+	}
+	if err := health.RequireHealthy(); !errors.Is(err, domain.ErrArtifactClosureIncomplete) {
+		t.Fatalf("unattended admission = %v, want the closure refusal", err)
+	}
+
+	// Restarting the same binary re-establishes the same verdict rather than
+	// inheriting a wedge, so the daemon that cannot read the row still runs.
+	restartedFiles, err := store.NewDefaultLocalBackupFiles(dbPath)
+	if err != nil {
+		t.Fatalf("NewDefaultLocalBackupFiles after restart: %v", err)
+	}
+	restartedSource, err := restartedFiles.NewCheckpointHealthSource(
+		backupArtifactSet{payloadDigest: true}, nil, extractors)
+	if err != nil {
+		t.Fatalf("NewCheckpointHealthSource after restart: %v", err)
+	}
+	restartedProducer, err := restartedFiles.NewProducer(s)
+	if err != nil {
+		t.Fatalf("NewProducer after restart: %v", err)
+	}
+	if err := restartedProducer.Maintain(ctx); !errors.Is(err, store.ErrBackupClosureIncomplete) {
+		t.Fatalf("Maintain after restart = %v, want ErrBackupClosureIncomplete", err)
+	}
+	restartedHealth, err := restartedSource.BackupHealth(ctx, store.BackupHealthContext{})
+	if err != nil {
+		t.Fatalf("BackupHealth after restart: %v", err)
+	}
+	if restartedHealth.ArtifactClosure != domain.BackupHealthUnhealthy {
+		t.Fatalf("closure after restart = %q, want unhealthy", restartedHealth.ArtifactClosure)
+	}
+
+	upgraded = true
+	if err := producer.Maintain(ctx); err != nil {
+		t.Fatalf("Maintain after the row becomes readable: %v", err)
+	}
+	if _, err := os.Lstat(checkpointPath); err != nil {
+		t.Fatalf("readable durable row produced no checkpoint: %v", err)
+	}
+	assertHealthyLocalBackup(t, s)
+}
+
+// A stored checkpoint holding a row this binary cannot read is unusable even
+// when its manifest still compares equal: the skipped row may contribute no
+// digest the rest of the scan lacks, so equality proves nothing. A daemon that
+// can read the live database repairs it instead of carrying it (#430).
+func TestLocalBackupProducerReplacesACheckpointItCannotVerify(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	files, err := store.NewDefaultLocalBackupFiles(dbPath)
+	if err != nil {
+		t.Fatalf("NewDefaultLocalBackupFiles: %v", err)
+	}
+	source, err := files.NewCheckpointHealthSource(backupArtifactSet{}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewCheckpointHealthSource: %v", err)
+	}
+	s := openStoreAt(t, dbPath, store.Options{BackupHealthSource: source})
+	producer, err := files.NewProducer(s)
+	if err != nil {
+		t.Fatalf("NewProducer: %v", err)
+	}
+	if err := producer.Maintain(ctx); err != nil {
+		t.Fatalf("Maintain: %v", err)
+	}
+	assertHealthyLocalBackup(t, s)
+
+	// The row exists only in the checkpoint, and contributes nothing to the
+	// manifest that checkpoint already carries, so the digest comparison alone
+	// cannot tell that the scan skipped it.
+	if err := store.MutateEncryptedCheckpointForTest(ctx, files,
+		`INSERT INTO outbox (idempotency_key, kind, payload, created_at)
+		 VALUES ('future-1', 'backup.kind-this-binary-lacks', x'00', ?)`,
+		time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("insert an unreadable row into the checkpoint: %v", err)
+	}
+	checkpointPath := filepath.Join(dbPath+".checkpoints", "latest.backup")
+	unverifiable, err := os.ReadFile(checkpointPath) //nolint:gosec // test-owned path
+	if err != nil {
+		t.Fatalf("read unverifiable checkpoint: %v", err)
+	}
+	if err := producer.Maintain(ctx); err != nil {
+		t.Fatalf("Maintain over an unverifiable checkpoint: %v", err)
+	}
+	repaired, err := os.ReadFile(checkpointPath) //nolint:gosec // test-owned path
+	if err != nil {
+		t.Fatalf("read repaired checkpoint: %v", err)
+	}
+	if bytes.Equal(repaired, unverifiable) {
+		t.Fatal("maintenance kept a checkpoint whose closure it could not compute")
+	}
+	assertHealthyLocalBackup(t, s)
+}
+
+// Startup admits work before it maintains backup evidence (orphan
+// reconciliation resumes writers through the unattended admission gate), so a
+// file set with a live database behind it must refuse the closure until a pass
+// has actually scanned that database. Answering from a valid pre-downgrade
+// checkpoint would open the gate this unit exists to hold (#430).
+func TestLocalBackupProducerRefusesClosureUntilItScansTheLiveStore(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	files, err := store.NewDefaultLocalBackupFiles(dbPath)
+	if err != nil {
+		t.Fatalf("NewDefaultLocalBackupFiles: %v", err)
+	}
+	source, err := files.NewCheckpointHealthSource(backupArtifactSet{}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewCheckpointHealthSource: %v", err)
+	}
+	s := openStoreAt(t, dbPath, store.Options{BackupHealthSource: source})
+	producer, err := files.NewProducer(s)
+	if err != nil {
+		t.Fatalf("NewProducer: %v", err)
+	}
+	if err := producer.Maintain(ctx); err != nil {
+		t.Fatalf("Maintain: %v", err)
+	}
+	assertHealthyLocalBackup(t, s)
+
+	// The daemon restarts: the proven checkpoint is still on disk, and on its
+	// own it answers healthy, which is exactly the answer that must not reach
+	// the admission gate before this process has read the live outbox.
+	state, err := s.ServerState(ctx)
+	if err != nil {
+		t.Fatalf("ServerState: %v", err)
+	}
+	schemaVersion, err := s.SchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("SchemaVersion: %v", err)
+	}
+	current := store.BackupHealthContext{ServerState: state, SchemaVersion: schemaVersion}
+	restarted, err := store.NewDefaultLocalBackupFiles(dbPath)
+	if err != nil {
+		t.Fatalf("NewDefaultLocalBackupFiles after restart: %v", err)
+	}
+	restartedSource, err := restarted.NewCheckpointHealthSource(backupArtifactSet{}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewCheckpointHealthSource after restart: %v", err)
+	}
+	evidenceOnly, err := restartedSource.BackupHealth(ctx, current)
+	if err != nil {
+		t.Fatalf("BackupHealth without a producer: %v", err)
+	}
+	if evidenceOnly.ArtifactClosure != domain.BackupHealthHealthy {
+		t.Fatalf("checkpoint-only closure = %q, want healthy; the fixture no longer "+
+			"reproduces the ordering the guard below closes", evidenceOnly.ArtifactClosure)
+	}
+	if _, err := restarted.NewProducer(s); err != nil {
+		t.Fatalf("NewProducer after restart: %v", err)
+	}
+	unscanned, err := restartedSource.BackupHealth(ctx, current)
+	if err != nil {
+		t.Fatalf("BackupHealth before the first pass: %v", err)
+	}
+	if unscanned.ArtifactClosure != domain.BackupHealthUnhealthy {
+		t.Fatalf("unscanned closure = %q, want unhealthy", unscanned.ArtifactClosure)
+	}
+}
+
+func TestLocalBackupProducerReportsAnUnregisteredDurableKind(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	files, err := store.NewDefaultLocalBackupFiles(dbPath)
+	if err != nil {
+		t.Fatalf("NewDefaultLocalBackupFiles: %v", err)
+	}
+	source, err := files.NewCheckpointHealthSource(backupArtifactSet{}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewCheckpointHealthSource: %v", err)
+	}
+	s := openStoreAt(t, dbPath, store.Options{BackupHealthSource: source})
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, _, err := tx.EnqueueOutbox(
+			ctx, "future-1", "backup.kind-this-binary-lacks", []byte("payload"))
+		return err
+	}); err != nil {
+		t.Fatalf("enqueue durable task: %v", err)
+	}
+	producer, err := files.NewProducer(s)
+	if err != nil {
+		t.Fatalf("NewProducer: %v", err)
+	}
+	// Deletion before proof: a pass that proves no checkpoint must leave the
+	// last legacy fallback in place, exactly as a failed inspection does.
+	checkpointDir := dbPath + ".checkpoints"
+	if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
+		t.Fatalf("create checkpoint directory: %v", err)
+	}
+	legacyFallbackPath := filepath.Join(checkpointDir, "latest.db")
+	if err := os.WriteFile(
+		legacyFallbackPath, []byte("legacy credential-bearing bytes"), 0o600,
+	); err != nil {
+		t.Fatalf("seed legacy fallback: %v", err)
+	}
+	err = producer.Maintain(ctx)
+	if !errors.Is(err, store.ErrBackupClosureIncomplete) {
+		t.Fatalf("Maintain = %v, want ErrBackupClosureIncomplete", err)
+	}
+	if !strings.Contains(err.Error(), "backup.kind-this-binary-lacks") {
+		t.Fatalf("Maintain = %v, want the unreadable row named", err)
+	}
+	if _, err := os.Lstat(legacyFallbackPath); err != nil {
+		t.Fatalf("an unprovable pass removed the legacy fallback: %v", err)
+	}
+	if _, err := os.Lstat(
+		filepath.Join(dbPath+".checkpoints", "latest.backup")); !os.IsNotExist(err) {
+		t.Fatalf("an unregistered kind produced a checkpoint: %v", err)
+	}
+	health, err := s.BackupHealth(ctx)
+	if err != nil {
+		t.Fatalf("BackupHealth with an unregistered durable kind: %v", err)
+	}
+	if health.ArtifactClosure != domain.BackupHealthUnhealthy {
+		t.Fatalf("closure = %q, want unhealthy", health.ArtifactClosure)
+	}
+	if err := health.RequireHealthy(); err == nil {
+		t.Fatal("unattended admission stayed open with an unreadable durable row")
+	}
 }
 
 func assertHealthyLocalBackup(t *testing.T, s *store.Store) {

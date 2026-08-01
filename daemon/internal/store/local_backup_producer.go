@@ -37,6 +37,11 @@ type LocalBackupProducer struct {
 }
 
 // NewProducer builds the producer paired with this file set's health source.
+// From here until its first pass, the artifact closure reports unhealthy: this
+// file set now has a live database behind it, and nothing has scanned it yet,
+// so the checkpoint's own verdict would answer a question about the store it
+// cannot see. That keeps the refusal from depending on where in a startup
+// sequence the first pass happens to sit.
 func (f *LocalBackupFiles) NewProducer(store *Store) (*LocalBackupProducer, error) {
 	if store == nil {
 		return nil, errors.New("local backup producer: nil store")
@@ -44,6 +49,7 @@ func (f *LocalBackupFiles) NewProducer(store *Store) (*LocalBackupProducer, erro
 	if f == nil {
 		return nil, errors.New("local backup producer: nil backup files")
 	}
+	f.liveClosureGap.Store(true)
 	return &LocalBackupProducer{
 		store: store, files: f, now: time.Now,
 	}, nil
@@ -62,13 +68,34 @@ func (p *LocalBackupProducer) Maintain(ctx context.Context) error {
 	if err := removeStaleCheckpointTemps(p.files.dir); err != nil {
 		return fmt.Errorf("local backup producer: %w", err)
 	}
-	var current BackupHealthContext
+	var (
+		current BackupHealthContext
+		live    artifactClosure
+	)
 	if err := p.store.Read(ctx, func(tx *ReadTx) error {
 		var err error
-		current, err = tx.backupHealthContext(ctx)
+		if current, err = tx.backupHealthContext(ctx); err != nil {
+			return err
+		}
+		live, err = outboxArtifactDigests(ctx, tx, p.files.payloadExtractors)
 		return err
 	}); err != nil {
 		return fmt.Errorf("local backup producer: read live state: %w", err)
+	}
+	// The live database, not the last checkpoint, is what a checkpoint has to
+	// describe, so the verdict is refreshed every pass: it closes unattended
+	// admission while the gap holds and reopens it once the row reads again,
+	// without waiting for the current checkpoint to age out.
+	p.files.liveClosureGap.Store(live.gap != nil)
+	if live.gap != nil {
+		// Producing here would seal a manifest that omits references the
+		// checkpoint must assert, so the pass ends without one; see
+		// ErrBackupClosureIncomplete for why that is reported, not fatal.
+		// Legacy plaintext cleanup stays behind the same deletion-before-proof
+		// rule every other failed pass follows: this pass proved no
+		// checkpoint, so it must not remove the last fallback under one.
+		return fmt.Errorf("local backup producer: %w: %w",
+			ErrBackupClosureIncomplete, live.gap)
 	}
 
 	checkpoint, metadata, found, err := inspectEncryptedCheckpoint(
@@ -78,7 +105,11 @@ func (p *LocalBackupProducer) Maintain(ctx context.Context) error {
 		p.files.approvedRecipes,
 		p.files.payloadExtractors,
 	)
-	if errors.Is(err, errCheckpointManifestMismatch) {
+	// A stored checkpoint this binary cannot verify is unusable, not fatal:
+	// both a manifest that no longer matches current policy and one whose
+	// closure this binary cannot recompute are replaced by production below.
+	if errors.Is(err, errCheckpointManifestMismatch) ||
+		errors.Is(err, ErrBackupClosureIncomplete) {
 		found, err = false, nil
 	}
 	if err != nil {
@@ -125,7 +156,10 @@ func (p *LocalBackupProducer) Maintain(ctx context.Context) error {
 }
 
 // Run maintains local backup evidence until ctx is canceled or maintenance
-// fails. A failure is terminal so the daemon reports the broken safety gate.
+// fails. A failure is terminal so the daemon reports the broken safety gate,
+// with one exception: an artifact closure this binary cannot compute is a
+// reported state, not a failed pass, and the loop keeps running so a later
+// pass recovers once the row reads again (see ErrBackupClosureIncomplete).
 func (p *LocalBackupProducer) Run(ctx context.Context) error {
 	ticker := time.NewTicker(DefaultLocalBackupPollInterval)
 	defer ticker.Stop()
@@ -137,6 +171,9 @@ func (p *LocalBackupProducer) Run(ctx context.Context) error {
 			if err := p.Maintain(ctx); err != nil {
 				if ctx.Err() != nil {
 					return nil
+				}
+				if errors.Is(err, ErrBackupClosureIncomplete) {
+					continue
 				}
 				return err
 			}
@@ -193,6 +230,16 @@ func (p *LocalBackupProducer) produceCheckpoint(
 	if err != nil {
 		return nil, domain.BackupCheckpoint{},
 			fmt.Errorf("local backup producer: inspect new checkpoint: %w", err)
+	}
+	if snapshot.closureGap != nil {
+		// Maintain refuses the gap before reaching here from the live
+		// database; this is the seal-time guard, so no manifest can ever be
+		// computed from a scan that describes less than its snapshot holds.
+		// Recording it keeps health closed if the two scans ever disagree.
+		p.files.liveClosureGap.Store(true)
+		return nil, domain.BackupCheckpoint{}, fmt.Errorf(
+			"local backup producer: seal checkpoint: %w: %w",
+			ErrBackupClosureIncomplete, snapshot.closureGap)
 	}
 	checkpointID, err := randomEpoch()
 	if err != nil {

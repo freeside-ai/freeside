@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -26,8 +27,45 @@ type BackupArtifactStore interface {
 }
 
 // BackupPayloadDigestExtractor validates one reconstructed durable task and
-// returns every blob digest needed to replay it after restore.
+// returns every blob digest needed to replay it after restore. An extractor
+// that rejects its row does not fail the scan around it; see
+// ErrBackupClosureIncomplete.
 type BackupPayloadDigestExtractor func(QueueEntry) ([]domain.Digest, error)
+
+// ErrBackupClosureIncomplete reports a durable outbox row whose blob
+// references this binary cannot compute: an unregistered kind, an extractor
+// that rejects the payload, or a row this store cannot reconstruct at all.
+// The dominant cause is a downgrade past a row a newer daemon wrote, which is
+// reversible, so the condition is reported rather than fatal: a daemon that
+// refuses to start cannot be upgraded in place, and the same intolerance
+// reached checkpoint production, backup health, and daemon startup alike.
+//
+// Reported means fail-closed but alive. Backup health reports the artifact
+// closure unhealthy, which is domain.ErrArtifactClosureIncomplete at the
+// admission boundary and holds unattended work until an operator acts, while
+// attended work continues. No checkpoint is sealed from a scan carrying the
+// gap and no checkpoint is verified against one, so a manifest never claims a
+// closure that was not computed.
+var ErrBackupClosureIncomplete = fmt.Errorf(
+	"%w: a durable task's references are not reconstructable by this binary",
+	domain.ErrArtifactClosureIncomplete)
+
+// artifactClosure is one artifact-closure scan: the blob digests the scanned
+// database needs after restore, plus the first row the scan could not read.
+// A non-nil gap means digests describes less than the database holds.
+type artifactClosure struct {
+	digests []domain.Digest
+	gap     error
+}
+
+// recordGap keeps the first unreadable row in outbox order. Later rows are
+// dropped rather than joined: one named row is what an operator acts on, and
+// a downgrade past a version boundary makes every row of that kind fail.
+func (c *artifactClosure) recordGap(gap error) {
+	if c.gap == nil {
+		c.gap = gap
+	}
+}
 
 const (
 	localBackupMarkerSchemaVersion = 15
@@ -66,6 +104,16 @@ type LocalBackupFiles struct {
 	approvedRecipes   map[domain.Digest]bool
 	payloadExtractors map[string]BackupPayloadDigestExtractor
 	mu                sync.RWMutex
+	// liveClosureGap carries the producer's last verdict on the live database
+	// to the health evaluator that shares this file set: true once a
+	// maintenance pass finds a durable row whose references this binary cannot
+	// compute (see ErrBackupClosureIncomplete). It is deliberately outside mu,
+	// which leases one installed checkpoint generation; this describes the
+	// live store, not the file, and a maintenance pass records it while
+	// holding no lease. NewProducer sets it until that first pass, so a file
+	// set with a live database behind it never answers from the checkpoint
+	// alone; a file set with no producer keeps the checkpoint-only verdict.
+	liveClosureGap atomic.Bool
 }
 
 type localCheckpointHealthSource struct {
@@ -188,9 +236,13 @@ func newLocalCheckpointHealthSource(
 }
 
 type backupDatabaseSnapshot struct {
-	state                   ServerState
-	schemaVersion           int
-	digests                 []domain.Digest
+	state         ServerState
+	schemaVersion int
+	digests       []domain.Digest
+	// closureGap names the first durable row whose blob references this scan
+	// could not compute, and is nil when the closure is complete. It is
+	// meaningful only for a scan that collected digests.
+	closureGap              error
 	fileDigest              domain.Digest
 	restoreCheckpointDigest domain.Digest
 	generatedAt             time.Time
@@ -235,7 +287,10 @@ func (s *localCheckpointHealthSource) BackupHealth(
 		health.CheckpointCurrency = domain.BackupHealthHealthy
 	}
 
-	closed := true
+	// No manifest binds a plaintext checkpoint, so the scan's own gap is the
+	// only evidence here that it described everything the file holds; the live
+	// gap is the same signal for the database the checkpoint protects.
+	closed := checkpoint.closureGap == nil && !s.files.liveClosureGap.Load()
 	for _, digest := range checkpoint.digests {
 		verified, err := s.artifacts.Verify(digest)
 		if err != nil {
@@ -353,12 +408,12 @@ func inspectBackupDB(
 		}
 	}
 	if collectDigests {
-		digests, err := checkpointArtifactDigests(
+		closure, err := checkpointArtifactDigests(
 			ctx, db, approvedRecipes, payloadExtractors)
 		if err != nil {
 			return backupDatabaseSnapshot{}, fmt.Errorf("artifact closure: %w", err)
 		}
-		snapshot.digests = digests
+		snapshot.digests, snapshot.closureGap = closure.digests, closure.gap
 	}
 	return snapshot, nil
 }
@@ -368,11 +423,11 @@ func checkpointArtifactDigests(
 	db backupDatabaseReader,
 	approvedRecipes map[domain.Digest]bool,
 	payloadExtractors map[string]BackupPayloadDigestExtractor,
-) ([]domain.Digest, error) {
+) (artifactClosure, error) {
 	digests := make(map[domain.Digest]struct{})
 	sqlTx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, err
+		return artifactClosure{}, err
 	}
 	defer func() { _ = sqlTx.Rollback() }()
 	readTx := &ReadTx{tx: sqlTx, approvedRecipes: approvedRecipes}
@@ -380,19 +435,19 @@ func checkpointArtifactDigests(
 	artifactIDs, err := checkpointIDs[domain.ArtifactID](
 		ctx, sqlTx, `SELECT id FROM artifacts ORDER BY id`)
 	if err != nil {
-		return nil, err
+		return artifactClosure{}, err
 	}
 	for _, id := range artifactIDs {
 		artifact, err := readTx.GetArtifact(ctx, id)
 		if err != nil {
-			return nil, err
+			return artifactClosure{}, err
 		}
 		digests[artifact.Digest] = struct{}{}
 	}
 
 	conversations, err := readTx.ListConversations(ctx)
 	if err != nil {
-		return nil, err
+		return artifactClosure{}, err
 	}
 	for _, snapshotted := range conversations {
 		conversation := snapshotted.Value
@@ -405,13 +460,13 @@ func checkpointArtifactDigests(
 
 	admissionRows, err := sqlTx.QueryContext(ctx, listExecutionAdmissionsSQL)
 	if err != nil {
-		return nil, err
+		return artifactClosure{}, err
 	}
 	for admissionRows.Next() {
 		admission, err := scanExecutionAdmissionRecord(admissionRows)
 		if err != nil {
 			_ = admissionRows.Close()
-			return nil, err
+			return artifactClosure{}, err
 		}
 		if admission.StageInputs == nil {
 			continue
@@ -435,12 +490,12 @@ func checkpointArtifactDigests(
 		}
 	}
 	if err := errors.Join(admissionRows.Err(), admissionRows.Close()); err != nil {
-		return nil, err
+		return artifactClosure{}, err
 	}
 
 	items, err := readTx.ListAttentionItems(ctx)
 	if err != nil {
-		return nil, err
+		return artifactClosure{}, err
 	}
 	for _, snapshotted := range items {
 		item := snapshotted.Value
@@ -457,12 +512,12 @@ func checkpointArtifactDigests(
 	commandIDs, err := checkpointIDs[string](
 		ctx, sqlTx, `SELECT command_id FROM commands ORDER BY command_id`)
 	if err != nil {
-		return nil, err
+		return artifactClosure{}, err
 	}
 	for _, commandID := range commandIDs {
 		command, inline, _, err := readTx.getStoredCommandSnapshot(ctx, commandID)
 		if err != nil {
-			return nil, err
+			return artifactClosure{}, err
 		}
 		for _, digest := range command.ArtifactDigests {
 			if _, carriedInline := inline[digest]; !carriedInline {
@@ -474,38 +529,66 @@ func checkpointArtifactDigests(
 		}
 	}
 
-	outboxKeys, err := checkpointIDs[string](
-		ctx, sqlTx, `SELECT idempotency_key FROM outbox ORDER BY id`)
+	outbox, err := outboxArtifactDigests(ctx, readTx, payloadExtractors)
 	if err != nil {
-		return nil, err
+		return artifactClosure{}, err
 	}
-	for _, key := range outboxKeys {
-		entry, err := readTx.GetOutbox(ctx, key)
-		if err != nil {
-			return nil, err
-		}
-		extract := payloadExtractors[entry.Kind]
-		if extract == nil {
-			return nil, fmt.Errorf(
-				"outbox %q backup references: unregistered kind %q", key, entry.Kind)
-		}
-		references, err := extract(entry)
-		if err != nil {
-			return nil, fmt.Errorf("outbox %q backup references: %w", key, err)
-		}
-		for _, digest := range references {
-			if digest == "" {
-				return nil, fmt.Errorf("outbox %q backup references: empty digest", key)
-			}
-			digests[digest] = struct{}{}
-		}
+	for _, digest := range outbox.digests {
+		digests[digest] = struct{}{}
 	}
 
 	out := make([]domain.Digest, 0, len(digests))
 	for digest := range digests {
 		out = append(out, digest)
 	}
-	return out, nil
+	return artifactClosure{digests: out, gap: outbox.gap}, nil
+}
+
+// outboxArtifactDigests reconstructs every durable task and returns the blob
+// digests they need after restore. Only this scan tolerates a row it cannot
+// read, because only here is the row a payload written by some binary's
+// version of the intent rather than state this store owns: a row this binary
+// cannot reconstruct is a closure gap (see ErrBackupClosureIncomplete), while
+// a queue read that fails is not. Broken owned state stays loud everywhere
+// else in the closure.
+func outboxArtifactDigests(
+	ctx context.Context,
+	tx *ReadTx,
+	payloadExtractors map[string]BackupPayloadDigestExtractor,
+) (artifactClosure, error) {
+	keys, err := checkpointIDs[string](
+		ctx, tx.tx, `SELECT idempotency_key FROM outbox ORDER BY id`)
+	if err != nil {
+		return artifactClosure{}, err
+	}
+	closure := artifactClosure{}
+	for _, key := range keys {
+		// A row this store cannot rebuild at all is the same gap one column
+		// over: a status or timestamp a newer daemon wrote wedges the scan
+		// exactly as an unreadable payload does, and has the same remedy.
+		entry, err := tx.GetOutbox(ctx, key)
+		if err != nil {
+			closure.recordGap(fmt.Errorf("outbox backup references: %w", err))
+			continue
+		}
+		extract := payloadExtractors[entry.Kind]
+		if extract == nil {
+			closure.recordGap(fmt.Errorf(
+				"outbox %q backup references: unregistered kind %q", key, entry.Kind))
+			continue
+		}
+		references, err := extract(entry)
+		if err != nil {
+			closure.recordGap(fmt.Errorf("outbox %q backup references: %w", key, err))
+			continue
+		}
+		if slices.Contains(references, "") {
+			closure.recordGap(fmt.Errorf("outbox %q backup references: empty digest", key))
+			continue
+		}
+		closure.digests = append(closure.digests, references...)
+	}
+	return closure, nil
 }
 
 func checkpointIDs[T ~string](

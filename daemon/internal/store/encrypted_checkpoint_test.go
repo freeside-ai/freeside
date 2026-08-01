@@ -126,6 +126,72 @@ func TestEncryptedCheckpointRoundTripAndPlaintextProbe(t *testing.T) {
 	}
 }
 
+// Restore is the one caller that must not tolerate a durable row it cannot
+// read: the daemon keeps running on an incomplete closure (#430), but an older
+// binary restoring a newer daemon's checkpoint would admit rows whose blobs it
+// never proved present.
+func TestRestoreFailsClosedOnACheckpointThisBinaryCannotScan(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	payloadDigest := domain.Digest("sha256:durable-task-payload")
+	artifacts := backupArtifactSet{payloadDigest: true}
+	files, err := store.NewDefaultLocalBackupFiles(dbPath)
+	if err != nil {
+		t.Fatalf("NewDefaultLocalBackupFiles: %v", err)
+	}
+	source, err := files.NewCheckpointHealthSource(artifacts, nil,
+		map[string]store.BackupPayloadDigestExtractor{
+			"backup.marker": func(store.QueueEntry) ([]domain.Digest, error) {
+				return []domain.Digest{payloadDigest}, nil
+			},
+		})
+	if err != nil {
+		t.Fatalf("NewCheckpointHealthSource: %v", err)
+	}
+	s := openStoreAt(t, dbPath, store.Options{BackupHealthSource: source})
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, _, err := tx.EnqueueOutbox(ctx, "marker-1", "backup.marker", []byte("payload"))
+		return err
+	}); err != nil {
+		t.Fatalf("enqueue durable task: %v", err)
+	}
+	producer, err := files.NewProducer(s)
+	if err != nil {
+		t.Fatalf("NewProducer: %v", err)
+	}
+	if err := producer.Maintain(ctx); err != nil {
+		t.Fatalf("Maintain: %v", err)
+	}
+
+	// The same checkpoint read by a binary that does not know the kind.
+	downgraded, err := store.NewDefaultLocalBackupFiles(dbPath)
+	if err != nil {
+		t.Fatalf("NewDefaultLocalBackupFiles for the downgrade: %v", err)
+	}
+	downgradedSource, err := downgraded.NewCheckpointHealthSource(artifacts, nil, nil)
+	if err != nil {
+		t.Fatalf("downgraded health source: %v", err)
+	}
+	if _, _, err := downgraded.RestoreCheckpoint(ctx, s); !errors.Is(
+		err, store.ErrBackupClosureIncomplete,
+	) {
+		t.Fatalf("RestoreCheckpoint = %v, want ErrBackupClosureIncomplete", err)
+	}
+	health, err := downgradedSource.BackupHealth(ctx, store.BackupHealthContext{})
+	if err != nil {
+		t.Fatalf("downgraded BackupHealth: %v", err)
+	}
+	unusable := domain.BackupHealth{
+		Encryption:         domain.BackupHealthUnhealthy,
+		CheckpointCurrency: domain.BackupHealthUnhealthy,
+		ArtifactClosure:    domain.BackupHealthUnhealthy,
+		RestoreTestAge:     domain.BackupHealthUnhealthy,
+	}
+	if health != unusable {
+		t.Fatalf("downgraded health = %+v, want %+v", health, unusable)
+	}
+}
+
 func TestEncryptedCheckpointFailsClosedOnWrongKeyTamperAndDigestMismatch(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

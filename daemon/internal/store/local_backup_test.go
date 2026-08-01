@@ -424,33 +424,38 @@ func TestLocalCheckpointHealthIncludesDurablePayloadBlobs(t *testing.T) {
 		t.Fatalf("missing durable payload closure = %q, want unhealthy", health.ArtifactClosure)
 	}
 
+	// A durable row this binary cannot reconstruct refuses the checkpoint
+	// without failing the evaluation: a substituted key, a substituted kind
+	// whose extractor rejects the payload, and an unregistered kind are the
+	// same unverifiable manifest, and each must report unhealthy rather than
+	// wedge the caller (#430).
 	artifacts[recipeDigest] = true
-	if err := store.MutateEncryptedCheckpointForTest(ctx, files,
-		`UPDATE outbox SET idempotency_key = 'durable-task-2'
-		  WHERE idempotency_key = 'durable-task-1'`); err != nil {
-		t.Fatalf("substitute durable payload key: %v", err)
-	}
-	if _, err := s.BackupHealth(ctx); !errors.Is(err, domain.ErrParentKeyMismatch) {
-		t.Fatalf("substituted durable payload key error = %v, want ErrParentKeyMismatch", err)
-	}
-
-	if err := store.MutateEncryptedCheckpointForTest(ctx, files,
-		`UPDATE outbox
-		    SET idempotency_key = 'durable-task-1', kind = 'backup.other'
-		  WHERE idempotency_key = 'durable-task-2'`); err != nil {
-		t.Fatalf("substitute durable payload with known kind: %v", err)
-	}
-	if _, err := s.BackupHealth(ctx); !errors.Is(err, domain.ErrParentKeyMismatch) {
-		t.Fatalf("known substituted durable kind error = %v, want ErrParentKeyMismatch", err)
-	}
-
-	if err := store.MutateEncryptedCheckpointForTest(ctx, files,
-		`UPDATE outbox SET kind = 'backup.unknown'
-		  WHERE idempotency_key = 'durable-task-1'`); err != nil {
-		t.Fatalf("substitute durable payload with unknown kind: %v", err)
-	}
-	if _, err := s.BackupHealth(ctx); err == nil {
-		t.Fatal("unknown durable payload kind passed backup closure")
+	for _, tamper := range []struct {
+		name     string
+		mutation string
+	}{
+		{"substituted durable payload key", `
+			UPDATE outbox SET idempotency_key = 'durable-task-2'
+			 WHERE idempotency_key = 'durable-task-1'`},
+		{"substituted durable payload kind", `
+			UPDATE outbox
+			   SET idempotency_key = 'durable-task-1', kind = 'backup.other'
+			 WHERE idempotency_key = 'durable-task-2'`},
+		{"unregistered durable payload kind", `
+			UPDATE outbox SET kind = 'backup.unknown'
+			 WHERE idempotency_key = 'durable-task-1'`},
+	} {
+		if err := store.MutateEncryptedCheckpointForTest(
+			ctx, files, tamper.mutation); err != nil {
+			t.Fatalf("%s: %v", tamper.name, err)
+		}
+		health, err := s.BackupHealth(ctx)
+		if err != nil {
+			t.Fatalf("BackupHealth after %s: %v", tamper.name, err)
+		}
+		if health.ArtifactClosure != domain.BackupHealthUnhealthy {
+			t.Fatalf("%s closure = %q, want unhealthy", tamper.name, health.ArtifactClosure)
+		}
 	}
 }
 
