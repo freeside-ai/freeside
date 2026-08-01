@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -183,6 +184,12 @@ func (a stubAuthority) ImportOptions(
 	return opts, a.err
 }
 
+func (a stubAuthority) ImportOptionsRecord(
+	_ context.Context, _ domain.InvocationID, _ exec.StartSpec, opts importer.Options,
+) (importer.Options, error) {
+	return opts, a.err
+}
+
 type stubVolumes struct {
 	volume string
 	err    error
@@ -218,6 +225,7 @@ func (v *secondLookupRefusingVolumes) AuthStoreVolume(
 type stubExports struct {
 	mu        sync.Mutex
 	records   map[domain.InvocationID]domain.ExecutionExport
+	replays   map[domain.InvocationID]ExecutionReplay
 	outcomes  map[domain.InvocationID]domain.ExecutionOutcome
 	lookupErr error
 }
@@ -225,23 +233,29 @@ type stubExports struct {
 func newStubExports() *stubExports {
 	return &stubExports{
 		records:  map[domain.InvocationID]domain.ExecutionExport{},
+		replays:  map[domain.InvocationID]ExecutionReplay{},
 		outcomes: map[domain.InvocationID]domain.ExecutionOutcome{},
 	}
 }
 
-func (e *stubExports) RecordExecutionExport(_ context.Context, record domain.ExecutionExport) error {
+func (e *stubExports) RecordExecutionExport(
+	_ context.Context,
+	record domain.ExecutionExport,
+	replay ExecutionReplay,
+) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if _, ok := e.outcomes[record.InvocationID]; ok {
 		return domain.ErrImmutableTransition
 	}
-	if _, ok := e.records[record.InvocationID]; ok {
-		// The store refuses a second write for one invocation regardless of
-		// content; convergence is the caller's read-back comparison, which is
-		// exactly what this stub must leave it to prove.
+	if stored, ok := e.records[record.InvocationID]; ok {
+		if reflect.DeepEqual(stored, record) && reflect.DeepEqual(e.replays[record.InvocationID], replay) {
+			return nil
+		}
 		return domain.ErrImmutableTransition
 	}
 	e.records[record.InvocationID] = record
+	e.replays[record.InvocationID] = replay
 	return nil
 }
 
@@ -1403,17 +1417,17 @@ func TestExportConvergenceAcceptsAnIdenticalReplay(t *testing.T) {
 		}
 		return record
 	}
-	if err := d.recordExport(ctx, build()); err != nil {
+	if err := d.recordExport(ctx, build(), ExecutionReplay{}); err != nil {
 		t.Fatalf("first record: %v", err)
 	}
-	if err := d.recordExport(ctx, build()); err != nil {
+	if err := d.recordExport(ctx, build(), ExecutionReplay{}); err != nil {
 		t.Fatalf("identical replay was rejected: %v", err)
 	}
 
 	// A genuinely different head for the same invocation is still a conflict.
 	conflicting := build()
 	conflicting.HeadSHA = strings.Repeat("d", 40)
-	if err := d.recordExport(ctx, conflicting); !errors.Is(err, domain.ErrImmutableTransition) ||
+	if err := d.recordExport(ctx, conflicting, ExecutionReplay{}); !errors.Is(err, domain.ErrImmutableTransition) ||
 		!errors.Is(err, errExportAuthorityConflict) {
 		t.Fatalf("conflicting export error = %v, want durable-authority conflict", err)
 	}

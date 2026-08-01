@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 const prepareScript = `#!/bin/sh
@@ -49,12 +50,13 @@ RUN set -eux; \
 	test "$(npm config get cache)" = "%s"
 
 COPY package.json package-lock.json /opt/freeside/project-seed/
-COPY recipe.json /usr/local/share/freeside/project-recipe.json
+COPY recipe.json %s
 COPY prepare %s
 
 # Cache warming executes no repository or dependency lifecycle scripts. The
-# fresh verification workspace later runs ordinary npm ci, with scripts, under
-# --network none using only these cached tarballs.
+# fresh verification workspace hydrates the same way: the image-owned
+# preparation helper runs npm ci --ignore-scripts under --network none using
+# only these cached tarballs.
 RUN set -eux; \
 	cd /opt/freeside/project-seed; \
 	NPM_CONFIG_GLOBALCONFIG=/usr/local/etc/npmrc \
@@ -68,6 +70,6 @@ LABEL org.opencontainers.image.title="freeside-project-image" \
 	ai.freeside.project.repository-id="${PROJECT_REPOSITORY_ID}" \
 	ai.freeside.project.commit="${PROJECT_COMMIT}" \
 	ai.freeside.project.recipe-digest="${PROJECT_RECIPE_DIGEST}"
-`, request.Repository, request.CommitSHA, NPMCachePath, NPMCachePath, PreparationPath) +
+`, request.Repository, request.CommitSHA, NPMCachePath, NPMCachePath, ward.ProjectRecipePath, PreparationPath) +
 		"# Bound recipe digest: " + string(recipeDigest) + "\n"
 }

@@ -42,8 +42,9 @@ func runSubmitMain(args []string) {
 	dbPath := flags.String("db", "", "SQLite database path (required)")
 	specPath := flags.String("spec", "", "operator-approved specification file (required)")
 	policyPath := flags.String("policy", "", "resolved per-run policy-key JSON array (required)")
+	publicationPath := flags.String("publication", "", "reviewer-facing pull-request metadata JSON file (required)")
 	projectID := flags.String("project", "", "project id the run belongs to (required)")
-	runID := flags.String("run-id", "", "run id (defaults from project, specification, and resolved policy so an exact re-submission converges)")
+	runID := flags.String("run-id", "", "run id (defaults from project, specification, resolved policy, and publication metadata so an exact re-submission converges)")
 	if err := flags.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -51,7 +52,8 @@ func runSubmitMain(args []string) {
 	defer stop()
 	result, err := runSubmitCommand(ctx, submitCommandConfig{
 		DBPath: *dbPath, SpecPath: *specPath, PolicyPath: *policyPath,
-		ProjectID: domain.ProjectID(*projectID), RunID: domain.RunID(*runID),
+		PublicationPath: *publicationPath,
+		ProjectID:       domain.ProjectID(*projectID), RunID: domain.RunID(*runID),
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
@@ -64,22 +66,24 @@ func runSubmitMain(args []string) {
 }
 
 type submitCommandConfig struct {
-	DBPath     string
-	SpecPath   string
-	PolicyPath string
-	ProjectID  domain.ProjectID
-	RunID      domain.RunID
+	DBPath          string
+	SpecPath        string
+	PolicyPath      string
+	PublicationPath string
+	ProjectID       domain.ProjectID
+	RunID           domain.RunID
 }
 
 type submitResult struct {
-	RunID            domain.RunID        `json:"run_id"`
-	ProjectID        domain.ProjectID    `json:"project_id"`
-	InvocationID     domain.InvocationID `json:"invocation_id"`
-	StageID          domain.StageID      `json:"stage_id"`
-	SpecDigest       domain.Digest       `json:"spec_digest"`
-	PolicyDigest     domain.Digest       `json:"policy_digest"`
-	SpecArtifactID   domain.ArtifactID   `json:"spec_artifact_id"`
-	PolicyArtifactID domain.ArtifactID   `json:"policy_artifact_id"`
+	RunID             domain.RunID        `json:"run_id"`
+	ProjectID         domain.ProjectID    `json:"project_id"`
+	InvocationID      domain.InvocationID `json:"invocation_id"`
+	StageID           domain.StageID      `json:"stage_id"`
+	SpecDigest        domain.Digest       `json:"spec_digest"`
+	PolicyDigest      domain.Digest       `json:"policy_digest"`
+	SpecArtifactID    domain.ArtifactID   `json:"spec_artifact_id"`
+	PolicyArtifactID  domain.ArtifactID   `json:"policy_artifact_id"`
+	PublicationDigest domain.Digest       `json:"publication_digest"`
 }
 
 type submissionFile struct {
@@ -106,11 +110,15 @@ func readSubmissionFile(path string) (submissionFile, error) {
 	if len(body) == 0 {
 		return submissionFile{}, fmt.Errorf("%s is empty", path)
 	}
+	return submissionBytes(body), nil
+}
+
+func submissionBytes(body []byte) submissionFile {
 	sum := sha256.Sum256(body)
 	return submissionFile{
 		digest: domain.Digest("sha256:" + hex.EncodeToString(sum[:])),
 		body:   body,
-	}, nil
+	}
 }
 
 func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResult, error) {
@@ -121,6 +129,8 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return submitResult{}, errors.New("submit: --spec is required")
 	case cfg.PolicyPath == "":
 		return submitResult{}, errors.New("submit: --policy is required")
+	case cfg.PublicationPath == "":
+		return submitResult{}, errors.New("submit: --publication is required")
 	case cfg.ProjectID == "":
 		return submitResult{}, errors.New("submit: --project is required")
 	}
@@ -133,6 +143,30 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: read policy: %w", err)
 	}
+	publicationFile, err := readSubmissionFile(cfg.PublicationPath)
+	if err != nil {
+		return submitResult{}, fmt.Errorf("submit: read publication metadata: %w", err)
+	}
+	if err := ward.RejectDuplicateJSONKeys(publicationFile.body); err != nil {
+		return submitResult{}, fmt.Errorf("submit: decode publication metadata: %w", err)
+	}
+	var publication engine.ProductionPublication
+	publicationDecoder := json.NewDecoder(bytes.NewReader(publicationFile.body))
+	publicationDecoder.DisallowUnknownFields()
+	if err := publicationDecoder.Decode(&publication); err != nil {
+		return submitResult{}, fmt.Errorf("submit: decode publication metadata: %w", err)
+	}
+	if err := publicationDecoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return submitResult{}, errors.New("submit: decode publication metadata: trailing JSON value")
+	}
+	if err := publication.Validate(); err != nil {
+		return submitResult{}, fmt.Errorf("submit: decode publication metadata: %w", err)
+	}
+	publicationBody, err := json.Marshal(publication)
+	if err != nil {
+		return submitResult{}, fmt.Errorf("submit: encode publication metadata: %w", err)
+	}
+	publicationFile = submissionBytes(publicationBody)
 
 	if err := ward.RejectDuplicateJSONKeys(policyFile.body); err != nil {
 		return submitResult{}, fmt.Errorf("submit: decode resolved policy keys: %w", err)
@@ -154,8 +188,9 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	if runID == "" {
 		// The default covers every immutable run binding so only an exact
 		// resubmission converges; shared specification bytes in another
-		// project or under another policy remain distinct work items.
-		runID = defaultSubmissionRunID(cfg.ProjectID, spec.digest, policyDigest)
+		// project, under another policy, or with different reviewer-facing
+		// metadata remain distinct work items.
+		runID = defaultSubmissionRunID(cfg.ProjectID, spec.digest, policyDigest, publicationFile.digest)
 	}
 	resolvedPolicy, err := domain.NewResolvedPolicy(runID, keys)
 	if err != nil {
@@ -223,7 +258,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	submitted, err := engine.SubmitProductionRun(ctx, st, engine.ProductionRunSpec{
 		RunID: runID, ProjectID: cfg.ProjectID,
 		SpecArtifactID: specArtifact.ID, PolicyArtifactID: policyArtifact.ID,
-		ResolvedPolicy: resolvedPolicy,
+		ResolvedPolicy: resolvedPolicy, Publication: publication,
 	})
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
@@ -233,13 +268,15 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		InvocationID: submitted.InvocationID, StageID: submitted.StageID,
 		SpecDigest: submitted.Run.SpecDigest, PolicyDigest: submitted.Run.PolicyDigest,
 		SpecArtifactID: specArtifact.ID, PolicyArtifactID: policyArtifact.ID,
+		PublicationDigest: publicationFile.digest,
 	}, nil
 }
 
 func defaultSubmissionRunID(
-	projectID domain.ProjectID, specDigest, policyDigest domain.Digest,
+	projectID domain.ProjectID, specDigest, policyDigest, publicationDigest domain.Digest,
 ) domain.RunID {
-	bindings := string(projectID) + "\x00" + string(specDigest) + "\x00" + string(policyDigest)
+	bindings := string(projectID) + "\x00" + string(specDigest) + "\x00" +
+		string(policyDigest) + "\x00" + string(publicationDigest)
 	sum := sha256.Sum256([]byte(bindings))
 	return domain.RunID("run-" + hex.EncodeToString(sum[:]))
 }

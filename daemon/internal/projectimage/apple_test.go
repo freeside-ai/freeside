@@ -489,8 +489,8 @@ func TestAppleCheckProvenanceBindsLabelsAndEmbeddedFiles(t *testing.T) {
 				return ociEvidence{}, errors.New("project evidence omitted rootfs proof")
 			}
 			return ociEvidence{Config: projectConfig, Files: map[string][]byte{
-				"/usr/local/share/freeside/project-recipe.json": []byte(testRecipe),
-				PreparationPath: []byte(prepareScript),
+				ward.ProjectRecipePath: []byte(testRecipe),
+				PreparationPath:        []byte(prepareScript),
 			}}, nil
 		},
 	}
@@ -676,12 +676,12 @@ func TestReadProvenanceArchiveRequiresUniqueRegularBoundedFiles(t *testing.T) {
 		return path
 	}
 	validEntries := []archiveEntry{
-		{"usr/local/share/freeside/project-recipe.json", testRecipe, tar.TypeReg},
+		{strings.TrimPrefix(ward.ProjectRecipePath, "/"), testRecipe, tar.TypeReg},
 		{"usr/local/bin/freeside-project-prepare", prepareScript, tar.TypeReg},
 	}
 	wanted := map[string]int64{
-		"/usr/local/share/freeside/project-recipe.json": maxRecipeBytes,
-		PreparationPath: maxPrepareBytes,
+		ward.ProjectRecipePath: maxRecipeBytes,
+		PreparationPath:        maxPrepareBytes,
 	}
 	files := map[string][]byte{}
 	err := readProvenanceLayer(

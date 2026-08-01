@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -50,6 +53,11 @@ const productionSpecificationArtifactType = "specification"
 // submit for the canonical resolved-policy bytes.
 const productionPolicyArtifactType = "policy"
 
+const (
+	maxProductionPublicationTitleBytes = 256
+	productionInvocationRequestVersion = "freeside.production-invocation/v2"
+)
+
 func productionStageID(runID domain.RunID) domain.StageID {
 	return domain.StageID("implement-" + string(runID))
 }
@@ -58,18 +66,105 @@ func productionInvocationID(runID domain.RunID) domain.InvocationID {
 	return domain.InvocationID("inv-implement-" + string(runID))
 }
 
+func productionVerificationInvocationID(runID domain.RunID) domain.InvocationID {
+	return domain.InvocationID("verify-production-" + string(runID))
+}
+
+func productionPublicationInvocationID(runID domain.RunID) domain.InvocationID {
+	return domain.InvocationID("publish-production-" + string(runID))
+}
+
 // productionInvocationRequest is the outbox payload for one production
 // dispatch intent. Unlike the conversation lane's request it carries the run
 // and stage directly: there is no attention item to resolve them through.
 type productionInvocationRequest struct {
+	Version      string                `json:"version"`
+	InvocationID domain.InvocationID   `json:"invocation_id"`
+	RunID        domain.RunID          `json:"run_id"`
+	StageID      domain.StageID        `json:"stage_id"`
+	Publication  ProductionPublication `json:"publication"`
+	Legacy       bool                  `json:"-"`
+}
+
+type productionInvocationRequestWire struct {
+	Version      json.RawMessage     `json:"version,omitempty"`
 	InvocationID domain.InvocationID `json:"invocation_id"`
 	RunID        domain.RunID        `json:"run_id"`
 	StageID      domain.StageID      `json:"stage_id"`
+	Publication  json.RawMessage     `json:"publication,omitempty"`
+}
+
+// ProductionPublication carries operator-authored, reviewer-facing pull-request
+// content plus claimed public commit attribution. It is deliberately separate
+// from the agent specification and driver summary: neither is a safe public-
+// content boundary. Production composition verifies CommitAuthor against the
+// App registration selected by the repository token before execution/import.
+type ProductionPublication struct {
+	Title        string                 `json:"title"`
+	Body         string                 `json:"body"`
+	CommitAuthor ProductionCommitAuthor `json:"commit_author"`
+}
+
+// ProductionCommitAuthor is the claimed public GitHub App bot identity used
+// for the daemon-authored import commit. Bot user ID and slug are attribution
+// metadata, not publication authority; the selected App installation remains
+// the token and forge authority and must authenticate this claim.
+type ProductionCommitAuthor struct {
+	AppSlug   string `json:"app_slug"`
+	BotUserID int64  `json:"bot_user_id"`
+}
+
+// Name is GitHub's canonical App bot login used as the Git author name.
+func (a ProductionCommitAuthor) Name() string { return a.AppSlug + "[bot]" }
+
+// Email is GitHub's canonical App bot no-reply address, which associates the
+// import commit with the App account and its avatar.
+func (a ProductionCommitAuthor) Email() string {
+	return fmt.Sprintf("%d+%s@users.noreply.github.com", a.BotUserID, a.Name())
+}
+
+func (a ProductionCommitAuthor) validate() error {
+	if a.BotUserID <= 0 || a.AppSlug == "" || len(a.AppSlug) > 34 {
+		return errors.New("production commit author requires a canonical App slug and positive bot user id")
+	}
+	for index, char := range a.AppSlug {
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') ||
+			(char == '-' && index > 0 && index < len(a.AppSlug)-1) {
+			continue
+		}
+		return fmt.Errorf("production commit author App slug %q is invalid", a.AppSlug)
+	}
+	return nil
+}
+
+// Validate rejects metadata that cannot be safely persisted as one GitHub
+// title and body. The publisher appends its identity marker itself.
+func (p ProductionPublication) Validate() error {
+	if !utf8.ValidString(p.Title) || !utf8.ValidString(p.Body) {
+		return errors.New("production publication metadata is not valid UTF-8")
+	}
+	if p.Title == "" || p.Title != strings.TrimSpace(p.Title) ||
+		strings.ContainsAny(p.Title, "\r\n") {
+		return errors.New("production publication title must be one non-empty trimmed line")
+	}
+	if len(p.Title) > maxProductionPublicationTitleBytes {
+		return fmt.Errorf("production publication title exceeds %d bytes", maxProductionPublicationTitleBytes)
+	}
+	if strings.TrimSpace(p.Body) == "" {
+		return errors.New("production publication body must be non-empty")
+	}
+	if err := publish.ValidateCandidateBody(p.Body); err != nil {
+		return fmt.Errorf("production publication body: %w", err)
+	}
+	if err := p.CommitAuthor.validate(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ProductionRunSpec is the fixed input `freesided submit` registers: the
-// operator-approved specification and resolved policy, already durable as
-// digest-addressed artifacts (§5.12).
+// operator-approved specification, resolved policy, and reviewer-facing
+// publication metadata (§5.12).
 type ProductionRunSpec struct {
 	RunID     domain.RunID
 	ProjectID domain.ProjectID
@@ -81,6 +176,7 @@ type ProductionRunSpec struct {
 	// ResolvedPolicy is persisted atomically with the run.
 	PolicyArtifactID domain.ArtifactID
 	ResolvedPolicy   domain.ResolvedPolicy
+	Publication      ProductionPublication
 }
 
 // ProductionRun reports the durable identities one submission converges on.
@@ -109,6 +205,9 @@ func SubmitProductionRun(ctx context.Context, st *store.Store, spec ProductionRu
 		return ProductionRun{}, fmt.Errorf("submit production run %q: spec and policy artifact ids are required: %w",
 			spec.RunID, domain.ErrEmptyID)
 	}
+	if err := spec.Publication.Validate(); err != nil {
+		return ProductionRun{}, fmt.Errorf("submit production run %q: %w", spec.RunID, err)
+	}
 	if err := spec.ResolvedPolicy.Validate(); err != nil {
 		return ProductionRun{}, fmt.Errorf("submit production run %q resolved policy: %w", spec.RunID, err)
 	}
@@ -121,7 +220,9 @@ func SubmitProductionRun(ctx context.Context, st *store.Store, spec ProductionRu
 	stageID := productionStageID(spec.RunID)
 	invocationID := productionInvocationID(spec.RunID)
 	payload, err := json.Marshal(productionInvocationRequest{
+		Version:      productionInvocationRequestVersion,
 		InvocationID: invocationID, RunID: spec.RunID, StageID: stageID,
+		Publication: spec.Publication,
 	})
 	if err != nil {
 		return ProductionRun{}, fmt.Errorf("submit production run %q: %w", spec.RunID, err)
@@ -131,6 +232,12 @@ func SubmitProductionRun(ctx context.Context, st *store.Store, spec ProductionRu
 	)
 	if err != nil {
 		return ProductionRun{}, fmt.Errorf("submit production run %q: %w", spec.RunID, err)
+	}
+	publicationReservation, err := publish.NewReservation(
+		productionPublicationInvocationID(spec.RunID), spec.RunID,
+	)
+	if err != nil {
+		return ProductionRun{}, fmt.Errorf("submit production run %q publication reservation: %w", spec.RunID, err)
 	}
 
 	var (
@@ -261,6 +368,13 @@ func SubmitProductionRun(ctx context.Context, st *store.Store, spec ProductionRu
 		}
 
 		if runCreated {
+			// A committed publisher intent at the derived production key is
+			// external history, not resumable state for a run that did not exist
+			// when this transaction began. Refuse it before this new run claims
+			// the key; the transaction rollback keeps every run-local row absent.
+			if err := publish.CheckInvocationAvailable(ctx, tx, publicationReservation); err != nil {
+				return err
+			}
 			// A newly created production run must create its invocation and
 			// policy and ownership marker in this transaction. Pre-existing
 			// lane keys are not partial production state: they belong to
@@ -310,6 +424,13 @@ func SubmitProductionRun(ctx context.Context, st *store.Store, spec ProductionRu
 				)
 			}
 		}
+		// Publication ownership is reserved in the same transaction as a new
+		// run and is re-checked on every converged submission. The producing
+		// export does not exist yet, so the reservation is the only safe durable
+		// claim until the execution-bound publisher promotes it.
+		if err := publish.ClaimInvocation(ctx, tx, publicationReservation); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
@@ -328,6 +449,21 @@ func ProductionInvocationBackupPayloadDigests(entry store.QueueEntry) ([]domain.
 	return nil, nil
 }
 
+// ProductionInvocationPublication reconstructs reviewer and commit-author
+// metadata from the durable production ownership marker. Present is false for
+// a released v1 marker, which owns execution but carries no publication
+// authority.
+func ProductionInvocationPublication(entry store.QueueEntry) (ProductionPublication, bool, error) {
+	request, err := decodeProductionRequest(entry)
+	if err != nil {
+		return ProductionPublication{}, false, err
+	}
+	if request.Legacy {
+		return ProductionPublication{}, false, nil
+	}
+	return request.Publication, true, nil
+}
+
 // decodeProductionRequest reconstructs and re-checks one production dispatch
 // intent against its own row. Queue payloads are opaque to the store, so the
 // decoded intent is a reconstruction boundary (the same discipline as
@@ -335,8 +471,8 @@ func ProductionInvocationBackupPayloadDigests(entry store.QueueEntry) ([]domain.
 func decodeProductionRequest(entry store.QueueEntry) (productionInvocationRequest, error) {
 	decoder := json.NewDecoder(bytes.NewReader(entry.Payload))
 	decoder.DisallowUnknownFields()
-	var request productionInvocationRequest
-	if err := decoder.Decode(&request); err != nil {
+	var wire productionInvocationRequestWire
+	if err := decoder.Decode(&wire); err != nil {
 		return productionInvocationRequest{}, fmt.Errorf("decode payload: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
@@ -346,8 +482,39 @@ func decodeProductionRequest(entry store.QueueEntry) (productionInvocationReques
 		return productionInvocationRequest{}, fmt.Errorf(
 			"intent %q has kind %q: %w", entry.IdempotencyKey, entry.Kind, domain.ErrParentKeyMismatch)
 	}
+	version := ""
+	if len(wire.Version) > 0 {
+		if err := json.Unmarshal(wire.Version, &version); err != nil || version == "" {
+			return productionInvocationRequest{}, errors.New("decode payload: version must be a non-empty string")
+		}
+	}
+	request := productionInvocationRequest{
+		Version: version, InvocationID: wire.InvocationID,
+		RunID: wire.RunID, StageID: wire.StageID,
+	}
 	if request.InvocationID == "" || request.RunID == "" || request.StageID == "" {
 		return productionInvocationRequest{}, fmt.Errorf("decode payload: required identity is empty: %w", domain.ErrEmptyID)
+	}
+	switch {
+	case len(wire.Version) == 0 && len(wire.Publication) == 0:
+		request.Legacy = true
+	case len(wire.Version) == 0 || version == productionInvocationRequestVersion:
+		if len(wire.Publication) == 0 || bytes.Equal(wire.Publication, []byte("null")) {
+			return productionInvocationRequest{}, errors.New("decode payload: publication is required")
+		}
+		publicationDecoder := json.NewDecoder(bytes.NewReader(wire.Publication))
+		publicationDecoder.DisallowUnknownFields()
+		if err := publicationDecoder.Decode(&request.Publication); err != nil {
+			return productionInvocationRequest{}, fmt.Errorf("decode payload publication: %w", err)
+		}
+		if err := publicationDecoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			return productionInvocationRequest{}, errors.New("decode payload publication: trailing JSON value")
+		}
+		if err := request.Publication.Validate(); err != nil {
+			return productionInvocationRequest{}, fmt.Errorf("decode payload: %w", err)
+		}
+	default:
+		return productionInvocationRequest{}, fmt.Errorf("decode payload: unsupported version %q", version)
 	}
 	if string(request.InvocationID) != entry.IdempotencyKey {
 		return productionInvocationRequest{}, fmt.Errorf(
@@ -360,7 +527,44 @@ func decodeProductionRequest(entry store.QueueEntry) (productionInvocationReques
 			"payload identities disagree with lane derivation for run %q: %w",
 			request.RunID, domain.ErrParentKeyMismatch)
 	}
+	canonical, err := canonicalProductionRequestPayload(request)
+	if err != nil {
+		return productionInvocationRequest{}, fmt.Errorf("encode canonical payload: %w", err)
+	}
+	if !bytes.Equal(entry.Payload, canonical) {
+		return productionInvocationRequest{}, fmt.Errorf(
+			"payload is not the canonical %s shape: %w", productionRequestFormat(request), domain.ErrParentKeyMismatch)
+	}
 	return request, nil
+}
+
+func canonicalProductionRequestPayload(request productionInvocationRequest) ([]byte, error) {
+	if request.Legacy {
+		return json.Marshal(struct {
+			InvocationID domain.InvocationID `json:"invocation_id"`
+			RunID        domain.RunID        `json:"run_id"`
+			StageID      domain.StageID      `json:"stage_id"`
+		}{request.InvocationID, request.RunID, request.StageID})
+	}
+	if request.Version == "" {
+		return json.Marshal(struct {
+			InvocationID domain.InvocationID   `json:"invocation_id"`
+			RunID        domain.RunID          `json:"run_id"`
+			StageID      domain.StageID        `json:"stage_id"`
+			Publication  ProductionPublication `json:"publication"`
+		}{request.InvocationID, request.RunID, request.StageID, request.Publication})
+	}
+	return json.Marshal(request)
+}
+
+func productionRequestFormat(request productionInvocationRequest) string {
+	if request.Legacy {
+		return "legacy v1"
+	}
+	if request.Version == "" {
+		return "unversioned publication preview"
+	}
+	return request.Version
 }
 
 // ownsProductionRun reports whether this run belongs to the production lane:
@@ -522,9 +726,14 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 		attempt.InvocationID != productionInvocationID(run.ID) {
 		return false, fmt.Errorf("attempt binding disagrees with run: %w", domain.ErrParentKeyMismatch)
 	}
+	request, err := (&productionPublicationWorkflow{store: e.store}).loadProductionRequest(ctx, run)
+	if err != nil {
+		return false, err
+	}
+	legacy := request.Legacy
 
 	var recorded *productionTerminalRecord
-	err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+	err = e.store.Read(ctx, func(tx *store.ReadTx) error {
 		entry, err := tx.GetInbox(ctx, string(attempt.InvocationID))
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
@@ -548,10 +757,37 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 		return false, err
 	}
 	if recorded != nil {
+		if legacy && recorded.Status == exec.StatusCompleted {
+			durable, err := e.authenticatesLegacyCompletedTerminal(ctx, run, attempt, *recorded)
+			if err != nil {
+				return false, err
+			}
+			if durable {
+				return false, nil
+			}
+		}
+		if !legacy && e.productionPublication != nil {
+			durable, err := e.productionPublication.authenticatesTerminal(ctx, run, *recorded)
+			if err != nil {
+				return false, err
+			}
+			if durable {
+				return false, nil
+			}
+		}
 		if err := e.authenticateProductionTerminal(ctx, run, attempt, *recorded); err != nil {
 			return false, err
 		}
 		return false, nil
+	}
+	if !legacy && e.productionPublication != nil {
+		queued, err := e.productionPublication.hasQueuedCompletion(ctx, run, attempt.InvocationID)
+		if err != nil {
+			return false, err
+		}
+		if queued {
+			return false, nil
+		}
 	}
 
 	result, ready, err := e.collectTerminal(ctx, attempt)
@@ -582,18 +818,94 @@ func (e *Engine) acceptProductionAttempt(ctx context.Context, run domain.Run, at
 		// acceptance commits, for the same reason acceptAttempt re-gates: the
 		// trust anchor of an unattended or waived admission can move while a
 		// driver call is in flight.
-		if err := e.requireProductionAdmissible(ctx, attempt.InvocationID); err != nil {
+		admission, err := e.productionAdmission(ctx, attempt.InvocationID)
+		if err != nil {
 			if MutableAdmissionPolicyRefusal(err) {
 				return false, nil
 			}
 			return false, err
 		}
+		if legacy {
+			accepted, err := e.recordProductionTerminal(ctx, run, terminal)
+			if MutableAdmissionPolicyRefusal(err) {
+				return false, nil
+			}
+			return accepted, err
+		}
+		switch admission.OperatingMode {
+		case domain.ModeAttendedDev:
+			// A prior build could start production work while attended. Preserve
+			// its authentic terminal result, but never turn that attended
+			// admission into an automatic publication candidate.
+			accepted, err := e.recordProductionTerminal(ctx, run, terminal)
+			if MutableAdmissionPolicyRefusal(err) {
+				return false, nil
+			}
+			return accepted, err
+		case domain.ModeUnattended:
+			if e.productionPublication == nil {
+				return false, errors.New("production publication workflow is not configured")
+			}
+			return false, fmt.Errorf(
+				"completed production invocation %q has no atomic publication task: %w",
+				attempt.InvocationID, domain.ErrParentKeyMismatch,
+			)
+		}
+		return false, fmt.Errorf("production invocation %q has invalid operating mode %q: %w",
+			attempt.InvocationID, admission.OperatingMode, domain.ErrInvalidOperatingMode)
 	}
 	accepted, err := e.recordProductionTerminal(ctx, run, terminal)
 	if MutableAdmissionPolicyRefusal(err) {
 		return false, nil
 	}
 	return accepted, err
+}
+
+func (e *Engine) authenticatesLegacyCompletedTerminal(
+	ctx context.Context,
+	run domain.Run,
+	attempt domain.Attempt,
+	recorded productionTerminalRecord,
+) (bool, error) {
+	// A completed export is an independent immutable handoff record. It lets a
+	// released v1 terminal remain inert after private driver state disappears,
+	// without treating the inbox row alone as proof or granting publication.
+	var (
+		marker    store.QueueEntry
+		admission domain.ExecutionAdmission
+		exported  domain.ExecutionExport
+	)
+	err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		marker, err = tx.GetOutbox(ctx, string(attempt.InvocationID))
+		if err != nil {
+			return err
+		}
+		admission, err = tx.GetExecutionAdmissionRecord(ctx, attempt.InvocationID)
+		if err != nil {
+			return err
+		}
+		exported, err = tx.GetExecutionExportRecord(ctx, attempt.InvocationID)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	request, err := decodeProductionRequest(marker)
+	if err != nil {
+		return false, err
+	}
+	if !request.Legacy || !marker.Dispatched() ||
+		request.RunID != run.ID || request.InvocationID != attempt.InvocationID ||
+		admission.RunID != run.ID || admission.StageID != attempt.StageID ||
+		exported.InvocationID != attempt.InvocationID || exported.HeadSHA != recorded.HeadSHA {
+		return false, fmt.Errorf("legacy completed terminal disagrees with immutable export history: %w",
+			domain.ErrParentKeyMismatch)
+	}
+	return true, nil
 }
 
 func (e *Engine) authenticateProductionTerminal(
@@ -659,21 +971,30 @@ func (e *Engine) requireProductionAdmissionRecord(
 func (e *Engine) requireProductionAdmissible(
 	ctx context.Context, invocationID domain.InvocationID,
 ) error {
+	_, err := e.productionAdmission(ctx, invocationID)
+	return err
+}
+
+func (e *Engine) productionAdmission(
+	ctx context.Context, invocationID domain.InvocationID,
+) (domain.ExecutionAdmission, error) {
 	found := false
+	var admission domain.ExecutionAdmission
 	err := e.store.Read(ctx, func(tx *store.ReadTx) error {
-		_, foundNow, err := tx.LookupExecutionAdmission(ctx, invocationID)
+		loaded, foundNow, err := tx.LookupExecutionAdmission(ctx, invocationID)
+		admission = loaded
 		found = foundNow
 		return err
 	})
 	if err != nil {
-		return fmt.Errorf("production invocation %q is no longer admissible: %w",
+		return domain.ExecutionAdmission{}, fmt.Errorf("production invocation %q is no longer admissible: %w",
 			invocationID, err)
 	}
 	if !found {
-		return fmt.Errorf("production invocation %q has no durable admission: %w",
+		return domain.ExecutionAdmission{}, fmt.Errorf("production invocation %q has no durable admission: %w",
 			invocationID, store.ErrNotFound)
 	}
-	return nil
+	return admission, nil
 }
 
 // recordProductionTerminal commits one terminal record and, for anything but
@@ -682,6 +1003,15 @@ func (e *Engine) requireProductionAdmissible(
 // writes nothing.
 func (e *Engine) recordProductionTerminal(
 	ctx context.Context, run domain.Run, terminal productionTerminalRecord,
+) (bool, error) {
+	return e.recordProductionTerminalWithAuthority(ctx, run, terminal, true)
+}
+
+func (e *Engine) recordProductionTerminalWithAuthority(
+	ctx context.Context,
+	run domain.Run,
+	terminal productionTerminalRecord,
+	requireCurrentAdmission bool,
 ) (bool, error) {
 	payload, err := json.Marshal(terminal)
 	if err != nil {
@@ -694,7 +1024,13 @@ func (e *Engine) recordProductionTerminal(
 			// transaction. The earlier check closes the driver-call window;
 			// this one prevents a trust-profile update from interleaving
 			// between that check and acceptance.
-			if _, err := tx.GetExecutionAdmission(ctx, terminal.InvocationID); err != nil {
+			var err error
+			if requireCurrentAdmission {
+				_, err = tx.GetExecutionAdmission(ctx, terminal.InvocationID)
+			} else {
+				_, err = tx.GetExecutionAdmissionRecord(ctx, terminal.InvocationID)
+			}
+			if err != nil {
 				return err
 			}
 		}

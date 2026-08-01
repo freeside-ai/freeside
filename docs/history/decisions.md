@@ -663,7 +663,7 @@ New in revision 22 (decider in parentheses):
 
 ---
 
-## Revision 23 (current)
+## Revision 23
 
 Revision 23 reschedules the local Codex execution driver from Phase 2 "if
 useful" to committed 1B work, on the #395 feasibility spike's go verdict:
@@ -690,3 +690,36 @@ New in revision 23 (decider in parentheses):
    register. Unchanged: no automatic provider fallback (non-goal 5), and
    shadow findings stay recorded, never routed (Section 7).
    (User; devlog 2026-07-30-1942-codex-capacity-hedge.md; #396.)
+
+---
+
+## Revision 24 (current)
+
+Revision 24 completes the real production publication path's visible Git
+identity and failure-containment contracts after the first authorized live
+proof exposed both as material gaps.
+
+Held from revision 23: every decision except revision 16's
+bot-user-ID-bearing `Co-authored-by` attribution choice, which this revision
+replaces. The numeric GitHub App authority model from revision 16 remains
+unchanged.
+
+New in revision 24 (decider in parentheses):
+
+1. **Daemon-authored commits use the selected App bot as primary author and
+   committer.** GitHub therefore associates the commit with the same visible
+   App principal and avatar that publishes it. Freeside resolves the canonical
+   bot account and durably binds each run's attribution to the registration
+   selected by the repository-scoped installation token before execution or
+   import. The slug and bot user ID remain attribution metadata; numeric App
+   ID, installation, repository, and token-mint checks remain authority.
+   (User; devlog 2026-07-31-0907-complete-production-pipeline.md; #411.)
+2. **Production-publication errors are contained per durable task.**
+   Environmental and mutable-authority failures retain the immutable task and
+   retry with bounded pacing; permanent external refusals create a durable
+   repair hold; malformed durable reconstruction and other state
+   contradictions remain fail-loud. A successful durable outcome survives a
+   later lock-release failure. This replaces per-call-site fatal propagation,
+   which let one external failure terminate the daemon and could only converge
+   by enumerating an open-ended error surface.
+   (User; devlog 2026-07-31-0907-complete-production-pipeline.md; #411.)

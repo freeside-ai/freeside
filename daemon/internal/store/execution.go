@@ -473,11 +473,33 @@ func (tx *InternalTx) requireBoundInputs(ctx context.Context, admission domain.E
 // Write-once: a byte-identical replay converges, and a second, different
 // export for one invocation fails with ErrImmutableConflict.
 func (tx *InternalTx) RecordExecutionExport(ctx context.Context, export domain.ExecutionExport) error {
+	return tx.recordExecutionExport(ctx, export, true)
+}
+
+// RecordExecutionExportRecord persists terminal export history against the
+// authenticated immutable admission without re-applying mutable admission
+// policy. It is the narrow store boundary used by the production workflow
+// after it has independently authenticated production ownership and replay;
+// callers accepting ordinary attended work use RecordExecutionExport.
+func (tx *InternalTx) RecordExecutionExportRecord(
+	ctx context.Context, export domain.ExecutionExport,
+) error {
+	return tx.recordExecutionExport(ctx, export, false)
+}
+
+func (tx *InternalTx) recordExecutionExport(
+	ctx context.Context, export domain.ExecutionExport, requireCurrent bool,
+) error {
 	body, err := encode(export)
 	if err != nil {
 		return fmt.Errorf("record execution export %q: %w", export.InvocationID, err)
 	}
-	admission, err := tx.GetExecutionAdmission(ctx, export.InvocationID)
+	var admission domain.ExecutionAdmission
+	if requireCurrent {
+		admission, err = tx.GetExecutionAdmission(ctx, export.InvocationID)
+	} else {
+		admission, err = tx.GetExecutionAdmissionRecord(ctx, export.InvocationID)
+	}
 	if err != nil {
 		return fmt.Errorf("record execution export %q: %w", export.InvocationID, err)
 	}

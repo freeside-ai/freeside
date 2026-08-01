@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -127,6 +128,60 @@ func TestEvidenceBlobMissingFromTheExportFailsTheStage(t *testing.T) {
 	}
 }
 
+func TestProductionReplayBytesOutliveTheReleasedDirectory(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	artifacts := newStubArtifacts()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	d.artifacts = artifacts
+	dir := t.TempDir()
+	body := []byte("candidate bytes\n")
+	sum := sha256.Sum256(body)
+	hexDigits := hex.EncodeToString(sum[:])
+	digest := domain.Digest("sha256:" + hexDigits)
+	blobDir := filepath.Join(dir, "blobs", "sha256")
+	if err := os.MkdirAll(blobDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blobDir, hexDigits), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mode := "100644"
+	size := int64(len(body))
+	exportDigest := export.Digest(digest)
+	out := exportOutcome{
+		dir: dir,
+		manifest: export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{{
+			Path: "README.md", Kind: export.EntryRegular,
+			Mode: &mode, Size: &size, Digest: &exportDigest,
+		}}},
+		commitPlanPresent: true,
+	}
+	plan := []byte(`{"commits":[{"message":"Keep replay exact","paths":["README.md"]}]}`)
+	if err := os.WriteFile(filepath.Join(dir, export.CommitPlanFilename), plan, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.persistRepositoryBlobs(ctx, out); err != nil {
+		t.Fatalf("persistRepositoryBlobs: %v", err)
+	}
+	planDigest, err := d.persistCommitPlan(ctx, out)
+	if err != nil {
+		t.Fatalf("persistCommitPlan: %v", err)
+	}
+	if planDigest == nil {
+		t.Fatal("commit plan digest was not retained")
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := artifacts.blobs[digest]; !bytes.Equal(got, body) {
+		t.Fatalf("stored repository blob = %q", got)
+	}
+	if got := artifacts.blobs[*planDigest]; !bytes.Equal(got, plan) {
+		t.Fatalf("stored commit plan = %q", got)
+	}
+}
+
 func TestEvidenceFailureLeavesNoExecutionExport(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -176,7 +231,7 @@ func TestEvidenceFailureLeavesNoExecutionExport(t *testing.T) {
 		t.Fatalf("new export: %v", err)
 	}
 	out := exportOutcome{dir: dir, manifest: manifest, evidence: evidence, evidencePresent: true}
-	if _, err := d.persistReleasedExport(ctx, intent{InvocationID: testInvoke}, out, record, nil); err == nil {
+	if _, _, err := d.persistReleasedMaterial(ctx, intent{InvocationID: testInvoke}, out, record, nil); err == nil {
 		t.Fatal("missing evidence was accepted")
 	}
 	if len(exports.records) != 0 {

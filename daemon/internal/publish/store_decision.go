@@ -65,11 +65,23 @@ func (d *storePublicationDecision) prepare(
 			return nil
 		}
 		if producingInvocationID != nil {
-			if err := validateExecutionCandidate(
+			reservationState, err := validateExecutionCandidate(
 				ctx, tx, c, claim, *producingInvocationID,
 				profile.RepositoryID, auth.BaseSHA,
-			); err != nil {
+			)
+			if err != nil {
 				decisionErr = err
+				return nil
+			}
+			// A newly settled execution publication must be fresh against the
+			// exact target tip observed by this audit. An already-committed
+			// intent may continue after a base advance: effects may have begun,
+			// and recovery must converge them instead of stranding a branch.
+			if reservationState == invocationReserved && audit.AuditedCommitSHA != auth.BaseSHA {
+				decisionErr = fmt.Errorf(
+					"fresh target %s is %s, execution was admitted at %s: %w",
+					c.BaseRef, audit.AuditedCommitSHA, auth.BaseSHA, ErrTargetBaseAdvanced,
+				)
 				return nil
 			}
 		}

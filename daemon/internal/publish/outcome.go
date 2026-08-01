@@ -117,8 +117,10 @@ func DecodeOutcome(payload []byte) (Outcome, error) {
 // unambiguously the publish lane's.
 const outcomeKeyPrefix = IntentKindOutcome + "/"
 
-// OutcomeVerifier independently verifies the persisted outcome against the
-// publication identity's live forge state before LoadOutcome returns it.
+// OutcomeVerifier independently verifies the persisted outcome before
+// LoadOutcome returns it. Ordinary recovery checks live forge state; recovery
+// after a terminal attention item committed may instead authenticate that
+// immutable lifecycle record, which was written only after live verification.
 type OutcomeVerifier func(context.Context, Candidate, Identity, Outcome) error
 
 // OutcomeKey returns the inbox idempotency key for a publication's
@@ -192,7 +194,7 @@ func LoadOutcome(
 	}
 	if err := verify(ctx, candidate, id, outcome); err != nil {
 		return Outcome{}, false, fmt.Errorf(
-			"publication outcome %q live verification: %w", key, err,
+			"publication outcome %q verification: %w", key, err,
 		)
 	}
 	return outcome, true, nil

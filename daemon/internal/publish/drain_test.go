@@ -221,7 +221,7 @@ func TestDrainExecutionIntentReauthenticatesRecordedExport(t *testing.T) {
 	)
 	gh := newFakeGitHub(t)
 	pub := storeBackedPublisher(
-		t, s, gh, fixedWorkflowAuditor{audit: testWorkflowAudit(t)},
+		t, s, gh, fixedWorkflowAuditor{audit: executionWorkflowAudit(t)},
 	)
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID

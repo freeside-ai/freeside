@@ -981,6 +981,16 @@ func validatePublicationCheckout(
 	requestedDir string,
 	requestedParent fs.FileInfo,
 ) (string, error) {
+	return validatePublicationCheckoutBinding(
+		checkout, task.Repo, task.BaseRef, task.BaseSHA, requestedDir, requestedParent,
+	)
+}
+
+func validatePublicationCheckoutBinding(
+	checkout PublicationCheckout,
+	repo, baseRef, baseSHA, requestedDir string,
+	requestedParent fs.FileInfo,
+) (string, error) {
 	value := reflect.ValueOf(checkout)
 	if checkout == nil ||
 		((value.Kind() == reflect.Chan || value.Kind() == reflect.Func ||
@@ -989,8 +999,8 @@ func validatePublicationCheckout(
 			value.IsNil()) {
 		return "", fmt.Errorf("transport returned a nil checkout: %w", domain.ErrParentKeyMismatch)
 	}
-	if checkout.Repo() != task.Repo || checkout.BaseRef() != task.BaseRef ||
-		checkout.BaseSHA() != task.BaseSHA {
+	if checkout.Repo() != repo || checkout.BaseRef() != baseRef ||
+		checkout.BaseSHA() != baseSHA {
 		return "", fmt.Errorf("transport checkout disagrees with task: %w", domain.ErrParentKeyMismatch)
 	}
 	parent, err := os.Stat(filepath.Dir(requestedDir))
@@ -3054,7 +3064,8 @@ func loadFakePublicationBlob(
 }
 
 func isDefinitiveTrustRefusal(err error) bool {
-	return errors.Is(err, publish.ErrTrustProfileDrift)
+	return errors.Is(err, publish.ErrTrustProfileDrift) ||
+		errors.Is(err, publish.ErrTargetBaseAdvanced)
 }
 
 var _ publish.CandidateResolver = (*fakePublicationWorkflow)(nil)

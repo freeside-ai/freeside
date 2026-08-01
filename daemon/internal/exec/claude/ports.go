@@ -53,7 +53,14 @@ type Seeder interface {
 // the composition supplies this adapter rather than the driver holding a
 // store handle.
 type ExportRecorder interface {
-	RecordExecutionExport(ctx context.Context, export domain.ExecutionExport) error
+	// RecordExecutionExport commits the export and its directory-free replay
+	// as one durable decision. Implementations must converge an identical
+	// retry and reject a differing replay for an existing invocation.
+	RecordExecutionExport(
+		ctx context.Context,
+		export domain.ExecutionExport,
+		replay ExecutionReplay,
+	) error
 	// LookupExecutionExport distinguishes confirmed absence from a read or
 	// reconstruction error. Recovery may declare a run lost only on absence.
 	LookupExecutionExport(
@@ -85,6 +92,11 @@ type AdmissionAuthority interface {
 	AuthenticateAdmission(context.Context, domain.InvocationID, exec.StartSpec) error
 	AuthenticateStart(context.Context, domain.InvocationID, exec.StartSpec) error
 	ImportOptions(context.Context, domain.InvocationID, exec.StartSpec, importer.Options) (importer.Options, error)
+	// ImportOptionsRecord reconstructs the exact policy of an already
+	// completed import from immutable admission and resolved-policy records.
+	// Mutable daemon configuration may block new work but cannot retarget or
+	// strand terminal replay before the publisher applies its current gates.
+	ImportOptionsRecord(context.Context, domain.InvocationID, exec.StartSpec, importer.Options) (importer.Options, error)
 }
 
 // Artifacts persists the evidence bytes an export released, and records the

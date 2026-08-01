@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# run-real-work.sh — the #237 real execution-export exercise.
+# run-real-work.sh — the §11 1A.2 complete unattended production exercise.
 #
-# Usage: run-real-work.sh <spec-file> <resolved-policy-keys.json>
+# Usage: run-real-work.sh <spec-file> <resolved-policy-keys.json> <publication.json>
 #
 # Submits one operator-approved work item through `freesided submit`,
 # runs the daemon with the production Claude driver until the run reaches
-# a terminal outcome, then verifies the durable execution record with the
-# real-run harness test. Its scope ends at the pre-publication slice: Claude →
-# digest-bound inputs → exact-base ward handoff → gauntlet → durable
-# `ExecutionExport`. #318 owns clean verification and publication binding.
+# a ready-for-review outcome, then verifies the durable export, networkless
+# verification evidence, publication outcome, and exact published head with
+# the real-run harness test.
 #
 # It never mints its own preconditions. Every binding below is the
 # operator's, supplied through the environment, because each one lands in
@@ -17,7 +16,7 @@
 #
 # Required environment:
 #   FREESIDE_REAL_RUN_STATE_ROOT     daemon state root (holds the SQLite store)
-#   FREESIDE_REAL_RUN_AGENT_IMAGE    digest-pinned Claude agent image
+#   FREESIDE_REAL_RUN_AGENT_IMAGE    digest-pinned admitted project image
 #   FREESIDE_WARD_EXPORTER_IMAGE     digest-pinned export helper image
 #   FREESIDE_REAL_RUN_SEED_ROOT      daemon-owned exact-base checkout root
 #   FREESIDE_REAL_RUN_AUTH_IDENTITY  provider auth identity id
@@ -40,15 +39,23 @@
 # credential volume for the named identity. The harness runs and durably
 # records the exact production configuration's ward conformance suite before
 # the daemon can admit the submitted work.
+# The publication JSON is durable operator input with this shape:
+#   {"title":"Imperative PR title","body":"Reviewer-ready PR body",
+#    "commit_author":{"app_slug":"canonical-app-slug","bot_user_id":123}}
+# The slug and bot user ID claim the selected GitHub App bot's public canonical
+# attribution fields. Before execution, the daemon resolves that account from
+# the App registration selected by its installation token and requires an
+# exact match. The fields contain no credential or publication authority.
 set -euo pipefail
 
 spec_file="${1:-}"
 policy_file="${2:-}"
-if [[ -z "$spec_file" || -z "$policy_file" ]]; then
-  echo "usage: run-real-work.sh <spec-file> <resolved-policy-keys.json>" >&2
+publication_file="${3:-}"
+if [[ -z "$spec_file" || -z "$policy_file" || -z "$publication_file" ]]; then
+  echo "usage: run-real-work.sh <spec-file> <resolved-policy-keys.json> <publication.json>" >&2
   exit 2
 fi
-for path in "$spec_file" "$policy_file"; do
+for path in "$spec_file" "$policy_file" "$publication_file"; do
   if [[ ! -f "$path" ]]; then
     echo "run-real-work: $path is not a file" >&2
     exit 2
@@ -126,6 +133,7 @@ submit_log="$workdir/submit.json"
   -db "$db_path" \
   --spec "$spec_file" \
   --policy "$policy_file" \
+  --publication "$publication_file" \
   --project "$FREESIDE_REAL_RUN_PROJECT" | tee "$submit_log"
 
 invocation_id="$(sed -n 's/.*"invocation_id":"\([^"]*\)".*/\1/p' "$submit_log")"
@@ -149,7 +157,7 @@ echo "submitted run=$run_id invocation=$invocation_id" >&2
 echo "recording the auth identity binding" >&2
 env -u FREESIDE_REAL_RUN_INVOCATION FREESIDE_REAL_RUN_LIVE_TEST=1 \
   go test -C "$repo_root/daemon" ./internal/integration/ \
-    -run TestRealWorkItemProducesExecutionExport -count=1 > "$workdir/seed.log" 2>&1 || {
+    -run TestRealWorkItemCompletesProductionPipeline -count=1 > "$workdir/seed.log" 2>&1 || {
   echo "run-real-work: could not record the auth identity binding" >&2
   cat "$workdir/seed.log" >&2
   exit 1
@@ -179,8 +187,8 @@ echo "starting the daemon with the production Claude driver" >&2
   > "$workdir/daemon.log" 2>&1 &
 daemon_pid=$!
 
-# Wait for the run to reach a terminal outcome. The export verifier below is
-# the authority on this slice's success; this loop only bounds the wait.
+# Wait for the run to reach the durable ready state. The verifier below is the
+# authority on success; this loop only bounds the wait.
 deadline=$(( SECONDS + ${FREESIDE_REAL_RUN_TIMEOUT_SECONDS:-2400} ))
 while (( SECONDS < deadline )); do
   if ! kill -0 "$daemon_pid" 2>/dev/null; then
@@ -189,12 +197,20 @@ while (( SECONDS < deadline )); do
     exit 1
   fi
   if FREESIDE_REAL_RUN_LIVE_TEST=1 FREESIDE_REAL_RUN_INVOCATION="$invocation_id" \
+    FREESIDE_REAL_RUN_RUN_ID="$run_id" \
     go test -C "$repo_root/daemon" ./internal/integration/ \
-    -run TestRealWorkItemProducesExecutionExport -count=1 > "$workdir/verify.log" 2>&1; then
+    -run TestRealWorkItemCompletesProductionPipeline -count=1 > "$workdir/verify.log" 2>&1; then
     break
   fi
   if grep -q "real run terminal outcome:" "$workdir/verify.log"; then
-    echo "run-real-work: the run reached a non-export terminal outcome" >&2
+    echo "run-real-work: the run reached a failed terminal outcome" >&2
+    cat "$workdir/verify.log" >&2
+    echo "daemon log:" >&2
+    tail -50 "$workdir/daemon.log" >&2
+    exit 1
+  fi
+  if grep -q "real run publication blocked:" "$workdir/verify.log"; then
+    echo "run-real-work: publication was durably blocked" >&2
     cat "$workdir/verify.log" >&2
     echo "daemon log:" >&2
     tail -50 "$workdir/daemon.log" >&2
@@ -211,12 +227,13 @@ daemon_pid=""
 # for a skipped test too, so require the harness's own success line.
 verify_log="$workdir/verify-final.log"
 FREESIDE_REAL_RUN_LIVE_TEST=1 FREESIDE_REAL_RUN_INVOCATION="$invocation_id" \
+  FREESIDE_REAL_RUN_RUN_ID="$run_id" \
   go test -C "$repo_root/daemon" ./internal/integration/ \
-    -run TestRealWorkItemProducesExecutionExport -count=1 -v 2>&1 | tee "$verify_log"
-if ! grep -q "real execution export verified: head" "$verify_log"; then
-  echo "run-real-work: the run did not reach a verified execution export" >&2
+    -run TestRealWorkItemCompletesProductionPipeline -count=1 -v 2>&1 | tee "$verify_log"
+if ! grep -q "real production pipeline verified: PR #" "$verify_log"; then
+  echo "run-real-work: the run did not reach a verified ready publication" >&2
   echo "daemon log:" >&2
   tail -50 "$workdir/daemon.log" >&2
   exit 1
 fi
-echo "run-real-work: verified execution export for run=$run_id invocation=$invocation_id" >&2
+echo "run-real-work: verified ready publication for run=$run_id invocation=$invocation_id" >&2

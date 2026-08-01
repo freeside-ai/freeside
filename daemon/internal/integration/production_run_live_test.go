@@ -19,18 +19,18 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
-// The #237 real execution-export harness: one work item submitted through the
-// production path and driven to a durable ExecutionExport, against the real
-// Apple container runtime, the pinned agent image, and the operator's managed
-// repository. Clean verification and publication remain #318's slice.
+// The §11 1A.2 real-run harness: one work item submitted through the complete
+// production path, against the real Apple container runtime, the admitted
+// project image, and the operator's managed repository.
 //
 // Opt-in and CI-blind: GitHub's macOS runners have no Apple container, and
 // the run spends real inference. CI records it as Not run; the ward live
 // suite (FREESIDE_WARD_LIVE_TEST) is the same tradition.
 //
 // What it proves that the in-process tests cannot: that the composition the
-// daemon actually builds admits, hands off, exports, imports, and records,
-// with every gate present rather than stubbed.
+// daemon actually builds admits, hands off, exports, reconstructs, verifies
+// networkless, publishes through the strong execution gate, and records a
+// durable ready result with every gate present rather than stubbed.
 
 const realRunLiveEnv = "FREESIDE_REAL_RUN_LIVE_TEST"
 
@@ -108,10 +108,9 @@ func requireEnv(t *testing.T, name string) string {
 	return value
 }
 
-// TestRealWorkItemProducesExecutionExport verifies that a work item driven by
-// scripts/run-real-work.sh reached a terminal production outcome and produced
-// the durable pre-publication record this slice owns.
-func TestRealWorkItemProducesExecutionExport(t *testing.T) {
+// TestRealWorkItemCompletesProductionPipeline verifies the durable output of
+// the full production composition driven by scripts/run-real-work.sh.
+func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 	env := realRunEnvironment(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
@@ -142,6 +141,7 @@ func TestRealWorkItemProducesExecutionExport(t *testing.T) {
 			engine.FakePublicationInvocationOwnerKind: engine.FakePublicationInvocationOwnerBackupPayloadDigests,
 			signet.AgentInvocationRequestedKind:       signet.AgentInvocationBackupPayloadDigests,
 			engine.KindProductionInvocationRequested:  engine.ProductionInvocationBackupPayloadDigests,
+			engine.KindProductionPublicationRequested: engine.ProductionPublicationBackupPayloadDigests,
 			publish.IntentKindReservation:             publish.ReservationBackupPayloadDigests,
 			publish.IntentKindPublication:             publish.PublicationBackupPayloadDigests,
 		})
@@ -188,11 +188,29 @@ func TestRealWorkItemProducesExecutionExport(t *testing.T) {
 				"activated profile names repository %d, FREESIDE_REAL_RUN_REPOSITORY_ID is %d",
 				profile.RepositoryID, env.repositoryID)
 		}
+		images, err := tx.ListProjectImages(ctx, env.repositoryID)
+		if err != nil {
+			return err
+		}
+		matching := 0
+		for _, image := range images {
+			if image.ImageRef != env.agentImage {
+				continue
+			}
+			matching++
+			if image.Repository != env.repo || image.RepositoryID != env.repositoryID ||
+				image.CommitSHA != env.baseSHA || image.RecipeDigest != env.approvedRecipe {
+				return fmt.Errorf("admitted project-image record disagrees with the real-run authority")
+			}
+		}
+		if matching != 1 {
+			return fmt.Errorf("found %d project-image records for admitted image %q, want exactly one", matching, env.agentImage)
+		}
 		return nil
 	}); err != nil {
-		t.Fatalf("no usable activated AutomationTrustProfile for %q: %v; "+
-			"activate one for this repository before the run, or unattended "+
-			"admission holds and the daemon never starts the writer", env.repo, err)
+		t.Fatalf("no usable production trust/image authority for %q: %v; "+
+			"activate its AutomationTrustProfile and onboard the digest-pinned project image before the run",
+			env.repo, err)
 	}
 
 	t.Log("preconditions recorded; submit the work item with `freesided submit` " +
@@ -209,17 +227,21 @@ func TestRealWorkItemProducesExecutionExport(t *testing.T) {
 		t.Skip("set FREESIDE_REAL_RUN_INVOCATION to the submitted run's invocation id " +
 			"to verify a completed run; scripts/run-real-work.sh sets it")
 	}
+	runID := domain.RunID(requireEnv(t, "FREESIDE_REAL_RUN_RUN_ID"))
 
 	var (
 		admission domain.ExecutionAdmission
 		export    domain.ExecutionExport
 		terminal  *domain.ExecutionOutcome
+		ready     domain.AttentionItem
+		blocked   domain.AttentionItem
+		outcome   publish.Outcome
 	)
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
-		outcome, outcomeErr := tx.GetExecutionOutcomeRecord(ctx, invocationID)
+		executionOutcome, outcomeErr := tx.GetExecutionOutcomeRecord(ctx, invocationID)
 		switch {
 		case outcomeErr == nil:
-			terminal = &outcome
+			terminal = &executionOutcome
 			return nil
 		case !errors.Is(outcomeErr, store.ErrNotFound):
 			return outcomeErr
@@ -230,9 +252,51 @@ func TestRealWorkItemProducesExecutionExport(t *testing.T) {
 			return err
 		}
 		export, err = tx.GetExecutionExport(ctx, invocationID)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.GetInbox(ctx, string(invocationID)); err != nil {
+			return err
+		}
+		items, err := tx.ListAttentionItems(ctx)
+		if err != nil {
+			return err
+		}
+		ready, blocked, err = realRunAttentionState(items, runID)
+		if err != nil {
+			return err
+		}
+		if blocked.ID != "" {
+			return nil
+		}
+		if ready.ID == "" {
+			return store.ErrNotFound
+		}
+		artifactDigests := make([]domain.Digest, len(ready.EvidenceSnapshot))
+		for index, artifact := range ready.EvidenceSnapshot {
+			artifactDigests[index] = artifact.Digest
+		}
+		identity, err := publish.DeriveIdentity(publish.IdentityInput{
+			Repo: env.repo, BaseRef: env.baseRef, SourceHeadSHA: ready.PRHeadSHA,
+			ArtifactDigests: artifactDigests, RecipeDigest: &env.approvedRecipe,
+		})
+		if err != nil {
+			return err
+		}
+		entry, err := tx.GetInbox(ctx, publish.OutcomeKey(identity))
+		if err != nil {
+			return err
+		}
+		if entry.Kind != publish.IntentKindOutcome {
+			return fmt.Errorf("publication outcome row has kind %q", entry.Kind)
+		}
+		outcome, err = publish.DecodeOutcome(entry.Payload)
 		return err
 	}); err != nil {
 		t.Fatalf("read durable execution record: %v", err)
+	}
+	if blocked.ID != "" {
+		t.Fatalf("real run publication blocked: %s", blocked.Reason)
 	}
 	if terminal != nil {
 		t.Fatalf(
@@ -240,6 +304,14 @@ func TestRealWorkItemProducesExecutionExport(t *testing.T) {
 			terminal.Status,
 			terminal.Summary,
 		)
+	}
+	if ready.Status != domain.StatusOpen || ready.PRHeadSHA != export.HeadSHA ||
+		len(ready.EvidenceSnapshot) == 0 {
+		t.Errorf("ready item = %#v, want open with verifier evidence at export head", ready)
+	}
+	if outcome.Repo != env.repo || outcome.BaseRef != env.baseRef ||
+		outcome.HeadSHA != export.HeadSHA || outcome.PRNumber <= 0 || !outcome.EvidenceEligible {
+		t.Errorf("publication outcome = %#v, want the exact verified export head", outcome)
 	}
 
 	// Admission: the unattended class the run was actually admitted under.
@@ -268,7 +340,8 @@ func TestRealWorkItemProducesExecutionExport(t *testing.T) {
 		t.Errorf("stage inputs = %#v, want present with no conversation digest", admission.StageInputs)
 	}
 
-	// Export: the binding #318 will refuse a publication without.
+	// Export: the strong production publisher refuses publication without this
+	// exact admission/base/head binding.
 	if export.HeadSHA == "" {
 		t.Error("execution export carries no head")
 	}
@@ -282,7 +355,8 @@ func TestRealWorkItemProducesExecutionExport(t *testing.T) {
 		t.Errorf("export does not bind to its admission: %v", err)
 	}
 
-	// Acceptance happened exactly once, and the run reported no failure item.
+	// Acceptance happened exactly once after publication, and the run reported
+	// no failure or publish-blocked item.
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		if _, err := tx.GetInbox(ctx, string(invocationID)); err != nil {
 			return err
@@ -295,10 +369,48 @@ func TestRealWorkItemProducesExecutionExport(t *testing.T) {
 		if !errors.Is(err, store.ErrNotFound) {
 			return err
 		}
+		items, err := tx.ListAttentionItems(ctx)
+		if err != nil {
+			return err
+		}
+		_, blocked, err := realRunAttentionState(items, runID)
+		if err != nil {
+			return err
+		}
+		if blocked.ID != "" {
+			t.Error("the run retains an open production publish-blocked item")
+		}
 		return nil
 	}); err != nil {
 		t.Fatalf("read acceptance state: %v", err)
 	}
 
-	t.Logf("real execution export verified: head %s over base %s", export.HeadSHA, export.ObservedBaseSHA)
+	t.Logf("real production pipeline verified: PR #%d at head %s over base %s",
+		outcome.PRNumber, export.HeadSHA, export.ObservedBaseSHA)
+}
+
+func realRunAttentionState(
+	items []store.Snapshotted[domain.AttentionItem], runID domain.RunID,
+) (domain.AttentionItem, domain.AttentionItem, error) {
+	var ready, blocked domain.AttentionItem
+	for _, item := range items {
+		if item.Value.Subject.RunID == nil || *item.Value.Subject.RunID != runID {
+			continue
+		}
+		switch {
+		case item.Value.Type == domain.AttentionReadyForFinalReview:
+			if ready.ID != "" {
+				return domain.AttentionItem{}, domain.AttentionItem{},
+					errors.New("multiple ready items name the real run")
+			}
+			ready = item.Value
+		case item.Value.Type == domain.AttentionPublishBlocked && item.Value.Status == domain.StatusOpen:
+			if blocked.ID != "" {
+				return domain.AttentionItem{}, domain.AttentionItem{},
+					errors.New("multiple open publish-blocked items name the real run")
+			}
+			blocked = item.Value
+		}
+	}
+	return ready, blocked, nil
 }
