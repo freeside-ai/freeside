@@ -309,8 +309,21 @@ func (w *productionPublicationWorkflow) hasQueuedCompletion(
 			domain.ErrParentKeyMismatch)
 	}
 	if entry.Dispatched() {
-		return false, fmt.Errorf("production publication task dispatched without a terminal record: %w",
-			domain.ErrImmutableTransition)
+		// The caller read the inbox in an earlier transaction, and the lane
+		// commits the terminal and dispatches the task in two of its own. Since
+		// the lane runs on its own loop (issue #425), this scan can read the
+		// inbox before the terminal commits and the outbox after the dispatch,
+		// which is a publication completing beside it, not a contradiction. The
+		// terminal write happens-before the dispatch, so re-reading the inbox
+		// here settles it: still absent proves the real violation.
+		recorded, err := w.hasRecordedTerminal(ctx, invocationID)
+		if err != nil {
+			return false, err
+		}
+		if !recorded {
+			return false, fmt.Errorf("production publication task dispatched without a terminal record: %w",
+				domain.ErrImmutableTransition)
+		}
 	}
 	// The acceptance scan runs in every operating mode, while the pending
 	// scan that also releases this notice returns early under a hold-only
@@ -318,6 +331,26 @@ func (w *productionPublicationWorkflow) hasQueuedCompletion(
 	// from leaving an open notice behind in attended_dev.
 	return true, releaseProductionQuarantine(
 		ctx, w.store, w.attention, productionTaskQuarantinePrefix, run.ID)
+}
+
+// hasRecordedTerminal reports whether this invocation's terminal row exists.
+// Presence is the whole question: whether the row authenticates against the
+// durable task is authenticatesTerminal's, on the pass that reads it as the
+// recorded terminal.
+func (w *productionPublicationWorkflow) hasRecordedTerminal(
+	ctx context.Context, invocationID domain.InvocationID,
+) (bool, error) {
+	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetInbox(ctx, string(invocationID))
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // authenticatesTerminal proves a completed terminal from the SQLite-backed

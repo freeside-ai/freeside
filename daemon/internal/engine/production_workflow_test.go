@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -1046,5 +1049,117 @@ func TestProductionQuarantineDiagnosesADowngrade(t *testing.T) {
 	}
 	if item := requireQuarantineItem(t, ctx, st, runID); item.Reason != productionQuarantineUnsupportedVersion {
 		t.Fatalf("quarantine reason = %q", item.Reason)
+	}
+}
+
+// validPublicationTask is the minimum durable task decodeProductionPublicationTask
+// accepts: it must survive full validation, because the acceptance scan reaches
+// the dispatched-row check only after the task reconstructs.
+func validPublicationTask(
+	t *testing.T, runID domain.RunID, projectID domain.ProjectID,
+) productionPublicationTask {
+	t.Helper()
+	head := strings.Repeat("a", 40)
+	base := strings.Repeat("b", 40)
+	blob := export.Digest("sha256:" + strings.Repeat("c", 64))
+	mode := "0644"
+	size := int64(3)
+	manifest := export.Manifest{
+		Version: export.ManifestVersion,
+		Entries: []export.Entry{{
+			Path: "README.md", Kind: export.EntryRegular,
+			Mode: &mode, Size: &size, Digest: &blob,
+		}},
+	}
+	encoded, err := manifest.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return productionPublicationTask{
+		Version: productionPublicationTaskVersion,
+		RunID:   runID, ProjectID: projectID,
+		ProducingInvocationID: productionInvocationID(runID),
+		VerificationID:        productionVerificationInvocationID(runID),
+		PublicationID:         productionPublicationInvocationID(runID),
+		HeadSHA:               head,
+		Replay: ProductionReplay{
+			InvocationID:    productionInvocationID(runID),
+			ObservedBaseSHA: base, HeadSHA: head,
+			Manifest: manifest, ManifestDigest: digestProductionBytes(encoded),
+			ImportOptions: importer.Options{
+				BaseSHA: base, CommitDate: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+			},
+		},
+		Publication: ProductionPublication{
+			Title: "Publish the production run", Body: "Produced by a production run.\n",
+			CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside", BotUserID: 42},
+		},
+	}
+}
+
+// TestQueuedCompletionToleratesAConcurrentPublicationDispatch: the publication
+// lane commits its terminal and dispatches its task in two transactions, and
+// since issue #425 it does so on its own loop. The acceptance scan can
+// therefore read the inbox before the terminal commits and the outbox after
+// the dispatch. That interleaving is a publication finishing beside the scan,
+// not the "dispatched without a terminal" violation; reading it as the
+// violation would stop Engine.Run at the successful end of a publication. The
+// real violation, a dispatched task with no terminal at all, must stay loud.
+func TestQueuedCompletionToleratesAConcurrentPublicationDispatch(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	run := domain.Run{ID: "run-concurrent-dispatch", ProjectID: "project-concurrent-dispatch"}
+	for _, tc := range []struct {
+		name     string
+		terminal bool
+	}{
+		{"terminal committed before the dispatch was observed", true},
+		{"no terminal at all", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			w := &productionPublicationWorkflow{store: st, attention: signet.NewService(st)}
+
+			task := validPublicationTask(t, run.ID, run.ProjectID)
+			payload, err := json.Marshal(task)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := productionPublicationTaskKey(run.ID)
+			if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				if _, _, err := tx.EnqueueOutbox(
+					ctx, key, KindProductionPublicationRequested, payload,
+				); err != nil {
+					return err
+				}
+				if tc.terminal {
+					if _, _, err := tx.RecordInbox(
+						ctx, string(task.ProducingInvocationID),
+						kindProductionStageTerminal, []byte(`{}`),
+					); err != nil {
+						return err
+					}
+				}
+				return tx.MarkOutboxDispatched(ctx, key)
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			queued, err := w.hasQueuedCompletion(ctx, run, task.ProducingInvocationID)
+			if tc.terminal {
+				if err != nil || !queued {
+					t.Fatalf("concurrent dispatch = %v, %v; want owned with no error", queued, err)
+				}
+				return
+			}
+			if !errors.Is(err, domain.ErrImmutableTransition) {
+				t.Fatalf("dispatch without a terminal = %v, %v; want ErrImmutableTransition", queued, err)
+			}
+		})
 	}
 }

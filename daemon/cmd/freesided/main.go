@@ -532,7 +532,7 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 
 	d := &daemon{
 		store: st, attention: attention, workflow: workflow, driver: driver,
-		listener: listener, cancel: cancel, errs: make(chan error, 6), pairingCode: pairingCode,
+		listener: listener, cancel: cancel, errs: make(chan error, 7), pairingCode: pairingCode,
 		server: &http.Server{
 			Handler:           signet.NewHTTPHandler(attention, signet.NewRequestAuthorizer(st)),
 			ReadHeaderTimeout: 5 * time.Second,
@@ -559,7 +559,15 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 		d.errs <- localBackups.Run(ctx)
 	}()
 	if claudeWiring != nil {
-		d.wg.Add(2)
+		d.wg.Add(3)
+		// The production publication lane gets its own loop: one task holds a
+		// clone, a containerized verification, and GitHub calls for minutes,
+		// which inside the reconcile loop would stall every other run,
+		// invocation, and attention item for that whole span (issue #425).
+		go func() {
+			defer d.wg.Done()
+			d.errs <- workflow.RunProductionPublications(ctx, cfg.ReconcileInterval)
+		}()
 		go func() {
 			defer d.wg.Done()
 			<-claudeWiring.janitor.finished

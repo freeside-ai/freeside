@@ -99,6 +99,11 @@ type ReconcileResult struct {
 // observed state permits. It never waits for a driver: unstarted work remains
 // in the outbox, while started work remains in the Run attempt history for a
 // later pass.
+//
+// The production publication lane is deliberately absent: its external
+// workflow blocks for minutes, so it advances on its own loop (see
+// ReconcileProductionPublications) instead of stalling every run, invocation,
+// and attention item behind one verification.
 func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 	runTransitions, err := e.reconcileRuns(ctx)
 	if err != nil {
@@ -113,18 +118,6 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 		InvocationsStarted: started,
 		ResultsAccepted:    accepted,
 	}
-	var publicationErr error
-	if e.productionPublication != nil {
-		publication, err := e.productionPublication.reconcile(ctx)
-		result.ResultsAccepted += publication.accepted
-		result.PublicationTasksCompleted += publication.completed
-		result.ReadyItemsCreated += publication.ready
-		result.BlockedItemsCreated += publication.blocked
-		if publication.lastPR > 0 {
-			result.LastPRNumber = publication.lastPR
-		}
-		publicationErr = errors.Join(publicationErr, err)
-	}
 	if e.publication != nil {
 		publication, err := e.ReconcileFakePublications(ctx)
 		result.PublicationTasksCompleted += publication.PublicationTasksCompleted
@@ -133,9 +126,34 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 		if publication.LastPRNumber > 0 {
 			result.LastPRNumber = publication.LastPRNumber
 		}
-		publicationErr = errors.Join(publicationErr, err)
+		return result, err
 	}
-	return result, publicationErr
+	return result, nil
+}
+
+// ReconcileProductionPublications advances only the production publication
+// lane: it clones the exact base, replays the export, verifies in a container,
+// and calls GitHub, so one pass can block for minutes at an external boundary.
+// Keeping it off Reconcile is what lets the rest of the engine keep its
+// cadence while a publication is stuck (issue #425). Per-task serialization is
+// unchanged: the lane holds its own mutex, and each task still takes its
+// on-disk lock.
+func (e *Engine) ReconcileProductionPublications(ctx context.Context) (ReconcileResult, error) {
+	if e.productionPublication == nil {
+		return ReconcileResult{}, errors.New("production publication workflow is not configured")
+	}
+	publication, err := e.productionPublication.reconcile(ctx)
+	result := ReconcileResult{
+		ResultsAccepted:           publication.accepted,
+		PublicationTasksCompleted: publication.completed,
+		ReadyItemsCreated:         publication.ready,
+		BlockedItemsCreated:       publication.blocked,
+		LastPRNumber:              publication.lastPR,
+	}
+	if err != nil {
+		return result, fmt.Errorf("reconcile production publications: %w", err)
+	}
+	return result, nil
 }
 
 // ReconcileFakePublications advances only the attended fake-publication lane.
@@ -184,14 +202,52 @@ func (e *Engine) ReconcileFakePublication(
 // Run reconciles immediately and then on interval until ctx is canceled. A
 // correctness error stops the loop instead of being hidden by retries; a
 // caller may restart after repairing the durable state or driver boundary.
+//
+// It does not advance the production publication lane; a composition that
+// configured one runs RunProductionPublications beside this loop.
 func (e *Engine) Run(ctx context.Context, interval time.Duration) error {
+	return runReconcileLoop(ctx, "run engine", interval, func(ctx context.Context) error {
+		_, err := e.Reconcile(ctx)
+		return err
+	})
+}
+
+// RunProductionPublications advances the production publication lane on its
+// own cadence until ctx is canceled. It is a separate loop from Run because a
+// single task holds an external boundary (clone, containerized verification,
+// GitHub) for minutes, and inside Run that would stall every unrelated run,
+// invocation, and attention item for the same span (issue #425).
+//
+// Cancellation stops the loop where Run's does: the in-flight task's own
+// context is canceled with it, so the caller's wait ends once the boundary
+// returns and the durable task stays pending for the next process.
+func (e *Engine) RunProductionPublications(ctx context.Context, interval time.Duration) error {
+	if e.productionPublication == nil {
+		return errors.New("production publication workflow is not configured")
+	}
+	return runReconcileLoop(ctx, "run production publications", interval,
+		func(ctx context.Context) error {
+			_, err := e.ReconcileProductionPublications(ctx)
+			return err
+		})
+}
+
+// runReconcileLoop runs pass immediately and then on interval until ctx is
+// canceled. A correctness error stops the loop instead of being hidden by
+// retries; cancellation during a pass is shutdown, not a failure.
+func runReconcileLoop(
+	ctx context.Context,
+	name string,
+	interval time.Duration,
+	pass func(context.Context) error,
+) error {
 	if interval <= 0 {
-		return fmt.Errorf("run engine: interval %s must be positive", interval)
+		return fmt.Errorf("%s: interval %s must be positive", name, interval)
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		if _, err := e.Reconcile(ctx); err != nil {
+		if err := pass(ctx); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}

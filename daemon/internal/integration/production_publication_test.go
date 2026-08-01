@@ -256,6 +256,27 @@ func (p *productionPublicationHarness) newPublisher(t *testing.T) *publish.Publi
 	)
 }
 
+// reconcileLanes makes one pass over both loops a daemon runs for this engine:
+// the reconcile loop (engine.Run) and the production publication loop
+// (engine.RunProductionPublications, issue #425). The lanes are independent,
+// so the combined result is their sum; a failing reconcile pass returns before
+// the publication pass, matching the loop that stops on a loud error.
+func (p *productionPublicationHarness) reconcileLanes() (engine.ReconcileResult, error) {
+	result, err := p.workflow.Reconcile(p.ctx)
+	if err != nil {
+		return result, err
+	}
+	publication, err := p.workflow.ReconcileProductionPublications(p.ctx)
+	result.ResultsAccepted += publication.ResultsAccepted
+	result.PublicationTasksCompleted += publication.PublicationTasksCompleted
+	result.ReadyItemsCreated += publication.ReadyItemsCreated
+	result.BlockedItemsCreated += publication.BlockedItemsCreated
+	if publication.LastPRNumber > 0 {
+		result.LastPRNumber = publication.LastPRNumber
+	}
+	return result, err
+}
+
 func (p *productionPublicationHarness) newEngine(
 	t *testing.T, seams productionCrashSeams, withPublication bool,
 ) *engine.Engine {
@@ -353,6 +374,9 @@ func (p *productionPublicationHarness) startExecutionExport(
 	headSHA string,
 ) domain.ExecutionExport {
 	t.Helper()
+	// Dispatch is reconcile-loop work, and no publication task exists yet, so
+	// this deliberately stays on the reconcile pass: a harness engine composed
+	// without the publication lane must still be able to start its invocation.
 	result, err := p.workflow.Reconcile(p.ctx)
 	if err != nil {
 		t.Fatalf("start production invocation: %v", err)
@@ -423,7 +447,7 @@ func (p *productionPublicationHarness) assertReadyWithEvidence(t *testing.T, wan
 func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
-	result, err := p.workflow.Reconcile(p.ctx)
+	result, err := p.reconcileLanes()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +463,7 @@ func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 		t.Fatalf("project-image recipe reads = %d, want 1", p.room.reads)
 	}
 	beforePushes := p.transport.pushCount()
-	if result, err := p.workflow.Reconcile(p.ctx); err != nil ||
+	if result, err := p.reconcileLanes(); err != nil ||
 		result.ResultsAccepted != 0 || result.PublicationTasksCompleted != 0 {
 		t.Fatalf("converged replay = %#v, %v", result, err)
 	}
@@ -460,7 +484,7 @@ func TestProductionVerificationRejectsRecipeNotBoundToProjectImage(t *testing.T)
 		},
 	)
 	p.startAndRecordExport(t)
-	if _, err := p.workflow.Reconcile(p.ctx); !errors.Is(err, domain.ErrParentKeyMismatch) {
+	if _, err := p.reconcileLanes(); !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("mismatched project-image recipe error = %v", err)
 	}
 	if p.room.reads != 1 || p.room.runs != 0 {
@@ -480,13 +504,13 @@ func TestProductionRecipeExtractionIsBounded(t *testing.T) {
 	}
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	p.startAndRecordExport(t)
-	if result, err := p.workflow.Reconcile(p.ctx); err != nil || result != (engine.ReconcileResult{}) {
+	if result, err := p.reconcileLanes(); err != nil || result != (engine.ReconcileResult{}) {
 		t.Fatalf("recipe extraction timeout = %#v, %v", result, err)
 	}
 	if p.room.reads != 1 || p.room.runs != 0 {
 		t.Fatalf("timed-out recipe reads/runs = %d/%d, want 1/0", p.room.reads, p.room.runs)
 	}
-	if replay, err := p.workflow.Reconcile(p.ctx); err != nil || replay != (engine.ReconcileResult{}) {
+	if replay, err := p.reconcileLanes(); err != nil || replay != (engine.ReconcileResult{}) {
 		t.Fatalf("immediate timed-out recipe replay = %#v, %v", replay, err)
 	}
 	if p.room.reads != 1 {
@@ -497,7 +521,7 @@ func TestProductionRecipeExtractionIsBounded(t *testing.T) {
 	}
 	p.room.read = nil
 	p.now = p.now.Add(time.Minute)
-	if result, err := p.workflow.Reconcile(p.ctx); err != nil ||
+	if result, err := p.reconcileLanes(); err != nil ||
 		result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
 		t.Fatalf("recipe extraction timeout recovery = %#v, %v", result, err)
 	}
@@ -527,11 +551,11 @@ func TestProductionPublicationRestartsAcrossDurableBoundaries(t *testing.T) {
 			p := newProductionPublicationHarness(t, "")
 			p.workflow = p.newEngine(t, tc.seams(errors.New("injected crash")), true)
 			p.startAndRecordExport(t)
-			if _, err := p.workflow.Reconcile(p.ctx); err == nil {
+			if _, err := p.reconcileLanes(); err == nil {
 				t.Fatal("crash seam did not interrupt reconciliation")
 			}
 			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-			if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+			if _, err := p.reconcileLanes(); err != nil {
 				t.Fatalf("restart reconciliation: %v", err)
 			}
 			p.assertReady(t)
@@ -556,7 +580,7 @@ func TestAttendedRestartHoldsQueuedUnattendedPublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result, err := p.workflow.Reconcile(p.ctx); err != nil || result != (engine.ReconcileResult{}) {
+	if result, err := p.reconcileLanes(); err != nil || result != (engine.ReconcileResult{}) {
 		t.Fatalf("attended publication hold = %#v, %v", result, err)
 	}
 	after, err := p.store.ServerState(p.ctx)
@@ -601,7 +625,7 @@ func TestAttendedRestartHoldsQueuedUnattendedPublication(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("resume held publication after unattended restart: %v", err)
 	}
 	p.assertReady(t)
@@ -666,18 +690,18 @@ func TestProductionPublicationRecoversWithoutPrivateDriverReplay(t *testing.T) {
 	}
 	p.driver = driver
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("SQLite-and-artifact recovery required private replay: %v", err)
 	}
 	p.assertReady(t)
-	if result, err := p.workflow.Reconcile(p.ctx); err != nil || result != (engine.ReconcileResult{}) {
+	if result, err := p.reconcileLanes(); err != nil || result != (engine.ReconcileResult{}) {
 		t.Fatalf("converged replay = %#v, %v", result, err)
 	}
 }
 
 func TestUnattendedExecutionExportUsesAtomicPathAfterAttendedRestart(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
-	result, err := p.workflow.Reconcile(p.ctx)
+	result, err := p.reconcileLanes()
 	if err != nil || result.InvocationsStarted != 1 {
 		t.Fatalf("start result = %#v, %v", result, err)
 	}
@@ -744,11 +768,11 @@ func TestProductionPublicationRestartsAcrossExternalEffectBoundaries(t *testing.
 			p := newProductionPublicationHarness(t, "")
 			p.startAndRecordExport(t)
 			tc.inject(p)
-			if result, err := p.workflow.Reconcile(p.ctx); err != nil || result != (engine.ReconcileResult{}) {
+			if result, err := p.reconcileLanes(); err != nil || result != (engine.ReconcileResult{}) {
 				t.Fatalf("contained external-effect failure = %#v, %v", result, err)
 			}
 			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-			if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+			if _, err := p.reconcileLanes(); err != nil {
 				t.Fatalf("restart reconciliation: %v", err)
 			}
 			p.assertReady(t)
@@ -765,12 +789,12 @@ func TestFinalizedProductionPublicationSurvivesLaterTrustDrift(t *testing.T) {
 		afterPublication: func() error { return errors.New("stop after durable publication outcome") },
 	}, true)
 	p.startAndRecordExport(t)
-	if _, err := p.workflow.Reconcile(p.ctx); err == nil {
+	if _, err := p.reconcileLanes(); err == nil {
 		t.Fatal("publication outcome seam did not interrupt reconciliation")
 	}
 	reviseWaivedTrustProfile(t, p.store)
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("finalize durable publication after trust drift: %v", err)
 	}
 	p.assertReady(t)
@@ -782,12 +806,12 @@ func TestReadyProductionPublicationWinsOverLaterExternalConflict(t *testing.T) {
 		afterReady: func() error { return errors.New("stop after durable ready item") },
 	}, true)
 	p.startAndRecordExport(t)
-	if _, err := p.workflow.Reconcile(p.ctx); err == nil {
+	if _, err := p.reconcileLanes(); err == nil {
 		t.Fatal("ready-item seam did not interrupt reconciliation")
 	}
 	p.forge.clearRefs()
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-	result, err := p.workflow.Reconcile(p.ctx)
+	result, err := p.reconcileLanes()
 	if err != nil || result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
 		t.Fatalf("recover ready publication after external conflict = %#v, %v", result, err)
 	}
@@ -799,7 +823,7 @@ func TestReadyProductionPublicationWinsOverLaterExternalConflict(t *testing.T) {
 	if refs, prs := p.forge.counts(); refs != 0 || prs != 1 {
 		t.Fatalf("ready recovery changed external effects: %d refs/%d PRs", refs, prs)
 	}
-	if replay, err := p.workflow.Reconcile(p.ctx); err != nil || replay != (engine.ReconcileResult{}) {
+	if replay, err := p.reconcileLanes(); err != nil || replay != (engine.ReconcileResult{}) {
 		t.Fatalf("ready-conflict replay = %#v, %v", replay, err)
 	}
 }
@@ -819,7 +843,7 @@ func TestReadyProductionPublicationMissingPrerequisiteFailsClosed(t *testing.T) 
 				afterReady: func() error { return errors.New("stop after durable ready item") },
 			}, true)
 			p.startAndRecordExport(t)
-			if _, err := p.workflow.Reconcile(p.ctx); err == nil {
+			if _, err := p.reconcileLanes(); err == nil {
 				t.Fatal("ready-item seam did not interrupt reconciliation")
 			}
 			arg := tc.arg
@@ -840,7 +864,7 @@ func TestReadyProductionPublicationMissingPrerequisiteFailsClosed(t *testing.T) 
 			}
 			p.forge.clearRefs()
 			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-			if _, err := p.workflow.Reconcile(p.ctx); !errors.Is(err, domain.ErrParentKeyMismatch) {
+			if _, err := p.reconcileLanes(); !errors.Is(err, domain.ErrParentKeyMismatch) {
 				t.Fatalf("orphaned ready recovery error = %v, want parent-key mismatch", err)
 			}
 			if _, err := p.attention.GetAttentionItem(
@@ -871,14 +895,14 @@ func TestFinalizedProductionPublicationSurvivesLaterRecipeRevocation(t *testing.
 			p := newProductionPublicationHarness(t, "")
 			p.workflow = p.newEngine(t, tc.seams, true)
 			p.startAndRecordExport(t)
-			if _, err := p.workflow.Reconcile(p.ctx); err == nil {
+			if _, err := p.reconcileLanes(); err == nil {
 				t.Fatal("publication seam did not interrupt reconciliation")
 			}
 			p.workflow = p.newEngineWithApprovedRecipes(
 				t, productionCrashSeams{}, true,
 				map[domain.Digest]bool{productionDigest([]byte("unrelated recipe")): true},
 			)
-			if result, err := p.workflow.Reconcile(p.ctx); err != nil ||
+			if result, err := p.reconcileLanes(); err != nil ||
 				result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
 				t.Fatalf("finalize durable publication after recipe revocation = %#v, %v", result, err)
 			}
@@ -900,7 +924,7 @@ func TestFinalizedProductionPublicationSurvivesLaterRecipeRevocation(t *testing.
 			afterPublication: func() error { return errors.New("stop after durable publication outcome") },
 		}, true)
 		p.startAndRecordExport(t)
-		if _, err := p.workflow.Reconcile(p.ctx); err == nil {
+		if _, err := p.reconcileLanes(); err == nil {
 			t.Fatal("publication outcome seam did not interrupt reconciliation")
 		}
 		revokedRecipes := map[domain.Digest]bool{
@@ -911,13 +935,13 @@ func TestFinalizedProductionPublicationSurvivesLaterRecipeRevocation(t *testing.
 			productionCrashSeams{afterReady: func() error { return errors.New("stop after redacted ready item") }},
 			true, revokedRecipes, domain.ModeUnattended, false,
 		)
-		if _, err := p.workflow.Reconcile(p.ctx); err == nil {
+		if _, err := p.reconcileLanes(); err == nil {
 			t.Fatal("redacted ready seam did not interrupt reconciliation")
 		}
 		p.workflow = p.newEngineWithApprovedRecipes(
 			t, productionCrashSeams{}, true, revokedRecipes,
 		)
-		if result, err := p.workflow.Reconcile(p.ctx); err != nil ||
+		if result, err := p.reconcileLanes(); err != nil ||
 			result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
 			t.Fatalf("recover redacted ready after recipe revocation = %#v, %v", result, err)
 		}
@@ -929,7 +953,7 @@ func TestProductionPublicationConflictIsDurablyHeld(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	p.transport.conflictNextPush()
-	result, err := p.workflow.Reconcile(p.ctx)
+	result, err := p.reconcileLanes()
 	if err != nil || result.PublicationTasksCompleted != 0 || result.BlockedItemsCreated != 1 {
 		t.Fatalf("conflicted publication hold = %#v, %v", result, err)
 	}
@@ -944,7 +968,7 @@ func TestProductionPublicationConflictIsDurablyHeld(t *testing.T) {
 		t.Fatalf("publication conflict hold = %#v", hold.Item)
 	}
 	fetchesBeforeReplay := p.transport.fetchCount()
-	if replay, err := p.workflow.Reconcile(p.ctx); err != nil ||
+	if replay, err := p.reconcileLanes(); err != nil ||
 		replay.PublicationTasksCompleted != 0 || replay.BlockedItemsCreated != 0 {
 		t.Fatalf("idempotent publication conflict hold = %#v, %v", replay, err)
 	}
@@ -957,7 +981,7 @@ func TestProductionPublicationConflictIsDurablyHeld(t *testing.T) {
 	}
 	p.forge.clearRefs()
 	p.now = p.now.Add(time.Minute)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("recover publication after conflict repair: %v", err)
 	}
 	p.assertReady(t)
@@ -977,14 +1001,14 @@ func TestProductionPublicationTransientFailureBacksOffWithoutStoppingEngine(t *t
 	p.startAndRecordExport(t)
 	p.transport.failFetch(&net.DNSError{Err: "temporary", Name: "github.com"})
 
-	result, err := p.workflow.Reconcile(p.ctx)
+	result, err := p.reconcileLanes()
 	if err != nil || result != (engine.ReconcileResult{}) {
 		t.Fatalf("transient publication reconcile = %#v, %v", result, err)
 	}
 	if fetches := p.transport.fetchCount(); fetches != 1 {
 		t.Fatalf("transient publication fetches = %d, want 1", fetches)
 	}
-	if replay, err := p.workflow.Reconcile(p.ctx); err != nil || replay != (engine.ReconcileResult{}) {
+	if replay, err := p.reconcileLanes(); err != nil || replay != (engine.ReconcileResult{}) {
 		t.Fatalf("immediate transient replay = %#v, %v", replay, err)
 	}
 	if fetches := p.transport.fetchCount(); fetches != 1 {
@@ -993,7 +1017,7 @@ func TestProductionPublicationTransientFailureBacksOffWithoutStoppingEngine(t *t
 
 	p.transport.failFetch(nil)
 	p.now = p.now.Add(time.Minute)
-	if result, err := p.workflow.Reconcile(p.ctx); err != nil ||
+	if result, err := p.reconcileLanes(); err != nil ||
 		result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
 		t.Fatalf("transient publication recovery = %#v, %v", result, err)
 	}
@@ -1006,7 +1030,7 @@ func TestProductionPublicationMutableAppAuthorityBacksOff(t *testing.T) {
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	p.startAndRecordExport(t)
 
-	if result, err := p.workflow.Reconcile(p.ctx); err != nil || result != (engine.ReconcileResult{}) {
+	if result, err := p.reconcileLanes(); err != nil || result != (engine.ReconcileResult{}) {
 		t.Fatalf("inactive App authority reconcile = %#v, %v", result, err)
 	}
 	if refs, prs := p.forge.counts(); refs != 1 || prs != 0 {
@@ -1015,7 +1039,7 @@ func TestProductionPublicationMutableAppAuthorityBacksOff(t *testing.T) {
 
 	p.tokens = integrationTokenSource{}
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-	if result, err := p.workflow.Reconcile(p.ctx); err != nil ||
+	if result, err := p.reconcileLanes(); err != nil ||
 		result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
 		t.Fatalf("restored App authority reconcile = %#v, %v", result, err)
 	}
@@ -1035,12 +1059,12 @@ func TestProductionPublicationPermanentFetchRefusalIsHeld(t *testing.T) {
 			p.startAndRecordExport(t)
 			p.transport.failFetch(fmt.Errorf("fetch refused: %w", tc.err))
 
-			if result, err := p.workflow.Reconcile(p.ctx); err != nil || result.BlockedItemsCreated != 1 {
+			if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 1 {
 				t.Fatalf("permanent fetch refusal reconcile = %#v, %v", result, err)
 			}
 			p.transport.failFetch(nil)
 			p.now = p.now.Add(time.Minute)
-			if result, err := p.workflow.Reconcile(p.ctx); err != nil ||
+			if result, err := p.reconcileLanes(); err != nil ||
 				result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
 				t.Fatalf("repaired permanent fetch refusal = %#v, %v", result, err)
 			}
@@ -1053,7 +1077,7 @@ func TestProductionPublicationHoldAdvancesToDefinitiveBlock(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	p.transport.failFetch(fmt.Errorf("base disappeared: %w", publish.ErrRemoteMissingBase))
-	if result, err := p.workflow.Reconcile(p.ctx); err != nil || result.BlockedItemsCreated != 1 {
+	if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 1 {
 		t.Fatalf("initial repairable hold = %#v, %v", result, err)
 	}
 	itemID := domain.ItemID("production-publish-blocked-" + string(p.runID))
@@ -1065,7 +1089,7 @@ func TestProductionPublicationHoldAdvancesToDefinitiveBlock(t *testing.T) {
 	p.transport.failFetch(nil)
 	p.room.fail = true
 	p.now = p.now.Add(time.Minute)
-	if result, err := p.workflow.Reconcile(p.ctx); err != nil ||
+	if result, err := p.reconcileLanes(); err != nil ||
 		result.PublicationTasksCompleted != 1 || result.BlockedItemsCreated != 1 {
 		t.Fatalf("definitive block after repaired hold = %#v, %v", result, err)
 	}
@@ -1095,7 +1119,7 @@ func TestProductionPublicationReleaseFailurePreservesOutcome(t *testing.T) {
 	}, true)
 	p.startAndRecordExport(t)
 
-	result, err := p.workflow.Reconcile(p.ctx)
+	result, err := p.reconcileLanes()
 	if err != nil || result.PublicationTasksCompleted != 1 ||
 		result.ReadyItemsCreated != 1 || result.LastPRNumber <= 0 {
 		t.Fatalf("release failure result = %#v, %v", result, err)
@@ -1121,7 +1145,7 @@ func TestProductionPublicationCorruptCheckpointStillFailsLoud(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := p.workflow.Reconcile(p.ctx); !errors.Is(err, domain.ErrParentKeyMismatch) {
+	if _, err := p.reconcileLanes(); !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("corrupt production checkpoint error = %v, want parent-key mismatch", err)
 	}
 	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
@@ -1142,14 +1166,14 @@ func TestProductionPublicationReadyPrecedesHoldSupersession(t *testing.T) {
 			p := newProductionPublicationHarness(t, "")
 			p.startAndRecordExport(t)
 			p.transport.conflictNextPush()
-			if result, err := p.workflow.Reconcile(p.ctx); err != nil || result.BlockedItemsCreated != 1 {
+			if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 1 {
 				t.Fatalf("conflicted publication hold = %#v, %v", result, err)
 			}
 			p.forge.clearRefs()
 			p.workflow = p.newEngine(t, productionCrashSeams{
 				afterReady: func() error { return errors.New("stop after durable ready item") },
 			}, true)
-			if _, err := p.workflow.Reconcile(p.ctx); err == nil {
+			if _, err := p.reconcileLanes(); err == nil {
 				t.Fatal("ready-item seam did not interrupt held-publication recovery")
 			}
 			hold, err := p.attention.GetAttentionItem(
@@ -1199,7 +1223,7 @@ func TestProductionPublicationReadyPrecedesHoldSupersession(t *testing.T) {
 			successor := ready.Item
 			p.forge.clearRefs()
 			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-			result, err := p.workflow.Reconcile(p.ctx)
+			result, err := p.reconcileLanes()
 			if err != nil || result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
 				t.Fatalf("recover ready publication after later conflict = %#v, %v", result, err)
 			}
@@ -1229,14 +1253,14 @@ func TestRecipeRevocationRetainsPendingPublicationIntent(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	p.transport.failNextPush()
-	if result, err := p.workflow.Reconcile(p.ctx); err != nil || result != (engine.ReconcileResult{}) {
+	if result, err := p.reconcileLanes(); err != nil || result != (engine.ReconcileResult{}) {
 		t.Fatalf("contained transport failure = %#v, %v", result, err)
 	}
 	p.workflow = p.newEngineWithApprovedRecipes(
 		t, productionCrashSeams{}, true,
 		map[domain.Digest]bool{productionDigest([]byte("unrelated recipe")): true},
 	)
-	if result, err := p.workflow.Reconcile(p.ctx); err != nil ||
+	if result, err := p.reconcileLanes(); err != nil ||
 		result.PublicationTasksCompleted != 0 || result.BlockedItemsCreated != 1 {
 		t.Fatalf("revoked recipe with pending intent = %#v, %v", result, err)
 	}
@@ -1270,12 +1294,12 @@ func TestRecipeRevocationRetainsPendingPublicationIntent(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if result, err := p.workflow.Reconcile(p.ctx); err != nil ||
+	if result, err := p.reconcileLanes(); err != nil ||
 		result.PublicationTasksCompleted != 0 || result.BlockedItemsCreated != 0 {
 		t.Fatalf("idempotent revoked-recipe hold = %#v, %v", result, err)
 	}
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("recover retained publication after recipe approval: %v", err)
 	}
 	p.assertReady(t)
@@ -1294,7 +1318,7 @@ func TestProductionPublicationHoldRefreshesWhenCauseChanges(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	p.transport.conflictNextPush()
-	if result, err := p.workflow.Reconcile(p.ctx); err != nil || result.BlockedItemsCreated != 1 {
+	if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 1 {
 		t.Fatalf("external-conflict hold = %#v, %v", result, err)
 	}
 	itemID := domain.ItemID("production-publish-blocked-" + string(p.runID))
@@ -1307,7 +1331,7 @@ func TestProductionPublicationHoldRefreshesWhenCauseChanges(t *testing.T) {
 		t, productionCrashSeams{}, true,
 		map[domain.Digest]bool{productionDigest([]byte("unrelated recipe")): true},
 	)
-	if result, err := p.workflow.Reconcile(p.ctx); err != nil || result != (engine.ReconcileResult{}) {
+	if result, err := p.reconcileLanes(); err != nil || result != (engine.ReconcileResult{}) {
 		t.Fatalf("recipe-revocation hold refresh = %#v, %v", result, err)
 	}
 	revoked, err := p.attention.GetAttentionItem(p.ctx, itemID)
@@ -1323,7 +1347,7 @@ func TestProductionPublicationHoldRefreshesWhenCauseChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result, err := p.workflow.Reconcile(p.ctx); err != nil || result != (engine.ReconcileResult{}) {
+	if result, err := p.reconcileLanes(); err != nil || result != (engine.ReconcileResult{}) {
 		t.Fatalf("idempotent refreshed hold = %#v, %v", result, err)
 	}
 	afterReplay, err := p.store.ServerState(p.ctx)
@@ -1339,6 +1363,9 @@ func TestProductionExportSurvivesUntilPublicationComposerReturns(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
 	p.workflow = p.newEngine(t, productionCrashSeams{}, false)
 	p.startAndRecordExport(t)
+	// The reconcile pass itself must refuse: acceptance of a production
+	// terminal is what needs the composed publication lane, so the refusal
+	// must not depend on the publication pass this engine cannot run.
 	if _, err := p.workflow.Reconcile(p.ctx); err == nil ||
 		!strings.Contains(err.Error(), "publication workflow is not configured") {
 		t.Fatalf("pre-publication completion error = %v", err)
@@ -1347,7 +1374,7 @@ func TestProductionExportSurvivesUntilPublicationComposerReturns(t *testing.T) {
 		t.Fatalf("uncomposed publication caused effects: %d/%d", refs, prs)
 	}
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatal(err)
 	}
 	p.assertReady(t)
@@ -1361,7 +1388,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 			afterBlocked: func() error { return errors.New("stop after blocked item") },
 		}, true)
 		p.startAndRecordExport(t)
-		if _, err := p.workflow.Reconcile(p.ctx); err == nil {
+		if _, err := p.reconcileLanes(); err == nil {
 			t.Fatal("blocked-item seam did not interrupt reconciliation")
 		}
 		blocked, err := p.attention.GetAttentionItem(
@@ -1390,7 +1417,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 			t.Fatalf("forged blocked rows = %d, %v", changed, err)
 		}
 		p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-		if _, err := p.workflow.Reconcile(p.ctx); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		if _, err := p.reconcileLanes(); !errors.Is(err, domain.ErrParentKeyMismatch) {
 			t.Fatalf("impossible blocked reason = %v, want parent-key mismatch", err)
 		}
 		if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
@@ -1405,7 +1432,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 			afterBlocked: func() error { return errors.New("stop after blocked item") },
 		}, true)
 		p.startAndRecordExport(t)
-		if _, err := p.workflow.Reconcile(p.ctx); err == nil {
+		if _, err := p.reconcileLanes(); err == nil {
 			t.Fatal("blocked-item seam did not interrupt reconciliation")
 		}
 		blocked, err := p.attention.GetAttentionItem(
@@ -1421,7 +1448,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 			t, productionCrashSeams{}, true,
 			map[domain.Digest]bool{productionDigest([]byte("unrelated recipe")): true},
 		)
-		result, err := p.workflow.Reconcile(p.ctx)
+		result, err := p.reconcileLanes()
 		if err != nil || result.ResultsAccepted != 1 || result.BlockedItemsCreated != 1 {
 			t.Fatalf("recover blocked item after recipe revocation = %#v, %v", result, err)
 		}
@@ -1444,7 +1471,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 			afterBlocked: func() error { return errors.New("stop after blocked item") },
 		}, true)
 		p.startAndRecordExport(t)
-		if _, err := p.workflow.Reconcile(p.ctx); err == nil {
+		if _, err := p.reconcileLanes(); err == nil {
 			t.Fatal("blocked-item seam did not interrupt reconciliation")
 		}
 		blocked, err := p.attention.GetAttentionItem(
@@ -1483,7 +1510,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 			t, productionCrashSeams{}, true,
 			map[domain.Digest]bool{productionDigest([]byte("unrelated recipe")): true},
 		)
-		result, err := p.workflow.Reconcile(p.ctx)
+		result, err := p.reconcileLanes()
 		if err != nil {
 			t.Fatalf("recover resolved blocked item: %v", err)
 		}
@@ -1520,7 +1547,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 		if !reflect.DeepEqual(current.Item, resolved) {
 			t.Fatalf("resolved blocked item changed on recovery: %#v", current.Item)
 		}
-		if replay, err := p.workflow.Reconcile(p.ctx); err != nil || replay != (engine.ReconcileResult{}) {
+		if replay, err := p.reconcileLanes(); err != nil || replay != (engine.ReconcileResult{}) {
 			t.Fatalf("resolved-block replay = %#v, %v", replay, err)
 		}
 	})
@@ -1529,7 +1556,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 		p := newProductionPublicationHarness(t, "")
 		p.room.fail = true
 		p.startAndRecordExport(t)
-		result, err := p.workflow.Reconcile(p.ctx)
+		result, err := p.reconcileLanes()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1574,7 +1601,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		if replay, err := p.workflow.Reconcile(p.ctx); err != nil || replay != (engine.ReconcileResult{}) {
+		if replay, err := p.reconcileLanes(); err != nil || replay != (engine.ReconcileResult{}) {
 			t.Fatalf("blocked replay = %#v, %v", replay, err)
 		}
 		afterReplay, err := p.store.ServerState(p.ctx)
@@ -1599,7 +1626,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 				p.workflow = p.newEngine(t, productionCrashSeams{
 					afterVerification: func() error { return errors.New("stop after checkpoint") },
 				}, true)
-				if _, err := p.workflow.Reconcile(p.ctx); err == nil {
+				if _, err := p.reconcileLanes(); err == nil {
 					t.Fatal("verification seam did not stop after checkpoint")
 				}
 			}
@@ -1608,7 +1635,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 				t, productionCrashSeams{}, true,
 				map[domain.Digest]bool{productionDigest([]byte("unrelated recipe")): true},
 			)
-			result, err := p.workflow.Reconcile(p.ctx)
+			result, err := p.reconcileLanes()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1634,7 +1661,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 			if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
 				t.Fatalf("revoked recipe caused effects: %d/%d", refs, prs)
 			}
-			if replay, err := p.workflow.Reconcile(p.ctx); err != nil || replay != (engine.ReconcileResult{}) {
+			if replay, err := p.reconcileLanes(); err != nil || replay != (engine.ReconcileResult{}) {
 				t.Fatalf("revoked-recipe replay = %#v, %v", replay, err)
 			}
 		})
@@ -1644,7 +1671,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 		p.audit.AuditedCommitSHA = strings.Repeat("9", 40)
 		p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 		p.startAndRecordExport(t)
-		result, err := p.workflow.Reconcile(p.ctx)
+		result, err := p.reconcileLanes()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1733,7 +1760,7 @@ func TestProductionPublicationBackupBindsReplayBlobs(t *testing.T) {
 	p.workflow = p.newEngine(t, productionCrashSeams{
 		afterVerification: func() error { return errors.New("stop after checkpoint") },
 	}, true)
-	if _, err := p.workflow.Reconcile(p.ctx); err == nil {
+	if _, err := p.reconcileLanes(); err == nil {
 		t.Fatal("verification seam did not stop")
 	}
 	var task store.QueueEntry
@@ -1788,7 +1815,7 @@ func TestDowngradedProductionMarkerQuarantinesOnlyItsRun(t *testing.T) {
 	seedFutureVersionProductionRun(t, p, downgraded, futureVersion)
 
 	p.startAndRecordExport(t)
-	result, err := p.workflow.Reconcile(p.ctx)
+	result, err := p.reconcileLanes()
 	if err != nil {
 		t.Fatalf("reconcile beside an unreadable marker: %v", err)
 	}
@@ -1811,7 +1838,7 @@ func TestDowngradedProductionMarkerQuarantinesOnlyItsRun(t *testing.T) {
 
 	// The restart case: a later pass converges on the one notice and still
 	// reports no error.
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("replayed reconcile beside an unreadable marker: %v", err)
 	}
 	if replayed := productionQuarantineItem(t, p, downgraded); replayed.ItemVersion != item.ItemVersion {
@@ -1885,7 +1912,7 @@ func TestQuarantinedMarkerHoldsAndReleasesThePublicationLane(t *testing.T) {
 	p.workflow = p.newEngineForMode(
 		t, productionCrashSeams{}, true, nil, domain.ModeUnattended, true,
 	)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("accept under a held publication lane: %v", err)
 	}
 
@@ -1897,7 +1924,7 @@ func TestQuarantinedMarkerHoldsAndReleasesThePublicationLane(t *testing.T) {
 	)))
 
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("reconcile with a quarantined marker: %v", err)
 	}
 	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
@@ -1910,7 +1937,7 @@ func TestQuarantinedMarkerHoldsAndReleasesThePublicationLane(t *testing.T) {
 
 	// The upgrade: the marker reconstructs again.
 	writeOutboxPayload(t, p, markerKey, original)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("reconcile after the marker reads again: %v", err)
 	}
 	p.assertReady(t)
@@ -1940,7 +1967,7 @@ func TestUnreadablePublicationTaskDoesNotEndTheEngineLoop(t *testing.T) {
 	}
 
 	p.startAndRecordExport(t)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("reconcile beside an unreadable publication task: %v", err)
 	}
 	p.assertReady(t)
@@ -2001,7 +2028,7 @@ func TestUnreadablePublicationTaskHoldsAndReleases(t *testing.T) {
 	p.workflow = p.newEngineForMode(
 		t, productionCrashSeams{}, true, nil, domain.ModeUnattended, true,
 	)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("accept under a held publication lane: %v", err)
 	}
 
@@ -2010,7 +2037,7 @@ func TestUnreadablePublicationTaskHoldsAndReleases(t *testing.T) {
 	writeOutboxPayload(t, p, taskKey, []byte(`{"version":"freeside.production-publication/v9"}`))
 
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("reconcile with an unreadable task: %v", err)
 	}
 	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
@@ -2022,7 +2049,7 @@ func TestUnreadablePublicationTaskHoldsAndReleases(t *testing.T) {
 	}
 
 	writeOutboxPayload(t, p, taskKey, original)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("reconcile after the task reads again: %v", err)
 	}
 	p.assertReady(t)
@@ -2042,14 +2069,14 @@ func TestRemovedMarkerRetiresTheQuarantineNotice(t *testing.T) {
 	p.workflow = p.newEngineForMode(
 		t, productionCrashSeams{}, true, nil, domain.ModeUnattended, true,
 	)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("accept under a held publication lane: %v", err)
 	}
 
 	markerKey := "inv-implement-" + string(p.runID)
 	writeOutboxPayload(t, p, markerKey, []byte(`{"run_id":"wrong"}`))
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("reconcile with a quarantined marker: %v", err)
 	}
 	held := productionItemRecord(t, p, "production-marker-quarantined-1-"+string(p.runID))
@@ -2058,7 +2085,7 @@ func TestRemovedMarkerRetiresTheQuarantineNotice(t *testing.T) {
 	}
 
 	deleteOutboxRow(t, p, markerKey)
-	if _, err := p.workflow.Reconcile(p.ctx); err != nil {
+	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("reconcile after the marker row was removed: %v", err)
 	}
 	released := productionItemRecord(t, p, "production-marker-quarantined-1-"+string(p.runID))
@@ -2096,4 +2123,131 @@ func deleteOutboxRow(t *testing.T, p *productionPublicationHarness, key string) 
 	if removed, err := result.RowsAffected(); err != nil || removed != 1 {
 		t.Fatalf("removed %d rows, %v, want 1", removed, err)
 	}
+}
+
+// publicationBoundaryWait bounds the waits in the scheduling tests below. It
+// is a liveness cap, not a timing assertion: every wait is on a channel the
+// test itself closes, so a healthy run reaches it immediately.
+const publicationBoundaryWait = 30 * time.Second
+
+// submitUnrelatedRun queues a second production run against the same store and
+// driver, so a test can prove the reconcile loop advances work that has
+// nothing to do with the publication task it parked.
+func (p *productionPublicationHarness) submitUnrelatedRun(
+	t *testing.T, runID domain.RunID,
+) domain.InvocationID {
+	t.Helper()
+	spec, policy, resolved := registerSubmissionArtifactsWithPaths(
+		t, p.store, string(runID), "README.md",
+	)
+	submitted, err := engine.SubmitProductionRun(p.ctx, p.store, engine.ProductionRunSpec{
+		RunID: runID, ProjectID: p.projectID, SpecArtifactID: spec.ID,
+		PolicyArtifactID: policy.ID, ResolvedPolicy: resolved,
+		Publication: productionPublicationMetadata(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.driver.Script(submitted.InvocationID, fake.StageScript{
+		PendingInspects: 1, Outcome: fake.OutcomeComplete,
+		Result: exec.StageResult{HeadSHA: p.replay.HeadSHA, Summary: "Claude export completed."},
+	})
+	return submitted.InvocationID
+}
+
+// TestBlockedProductionPublicationLeavesTheReconcileLoopFree is the scheduling
+// guarantee behind splitting the lanes (issue #425): a publication parked in
+// an external boundary holds only its own loop, so the reconcile loop still
+// dispatches an unrelated invocation, and the parked task finishes normally
+// once the boundary returns.
+func TestBlockedProductionPublicationLeavesTheReconcileLoopFree(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	p.startAndRecordExport(t)
+	entered, release := p.transport.blockNextFetch()
+	publication := make(chan error, 1)
+	go func() {
+		_, err := p.workflow.ReconcileProductionPublications(p.ctx)
+		publication <- err
+	}()
+	select {
+	case <-entered:
+	case err := <-publication:
+		t.Fatalf("publication pass returned without reaching the transport: %v", err)
+	case <-time.After(publicationBoundaryWait):
+		t.Fatal("publication pass never reached the transport boundary")
+	}
+
+	unrelated := p.submitUnrelatedRun(t, "run-unrelated-production")
+	result, err := p.workflow.Reconcile(p.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.InvocationsStarted != 1 {
+		t.Fatalf("reconcile pass beside a parked publication = %#v", result)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetExecutionAdmissionRecord(p.ctx, unrelated)
+		return err
+	}); err != nil {
+		t.Fatalf("unrelated invocation %q did not advance: %v", unrelated, err)
+	}
+
+	release()
+	if err := <-publication; err != nil {
+		t.Fatal(err)
+	}
+	p.assertReady(t)
+}
+
+// TestShutdownEndsAParkedProductionPublicationWithoutLosingItsTask proves the
+// publication loop shuts down like the reconcile loop: cancellation ends the
+// parked worker, and the durable task survives for the next process to finish.
+func TestShutdownEndsAParkedProductionPublicationWithoutLosingItsTask(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	p.startAndRecordExport(t)
+	entered, release := p.transport.blockNextFetch()
+	t.Cleanup(release)
+	ctx, cancel := context.WithCancel(p.ctx)
+	loop := make(chan error, 1)
+	go func() {
+		loop <- p.workflow.RunProductionPublications(ctx, time.Millisecond)
+	}()
+	select {
+	case <-entered:
+	case err := <-loop:
+		t.Fatalf("publication loop returned without reaching the transport: %v", err)
+	case <-time.After(publicationBoundaryWait):
+		t.Fatal("publication loop never reached the transport boundary")
+	}
+
+	cancel()
+	select {
+	case err := <-loop:
+		if err != nil {
+			t.Fatalf("canceled publication loop = %v", err)
+		}
+	case <-time.After(publicationBoundaryWait):
+		t.Fatal("canceled publication loop leaked its worker")
+	}
+	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+		t.Fatalf("interrupted publication caused effects: %d refs, %d PRs", refs, prs)
+	}
+	var task store.QueueEntry
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		task, err = tx.GetOutbox(p.ctx, "production-publication/"+string(p.runID))
+		return err
+	}); err != nil {
+		t.Fatalf("publication task did not survive shutdown: %v", err)
+	}
+	if task.Dispatched() {
+		t.Fatal("interrupted publication dispatched its durable task")
+	}
+
+	// Restart: a fresh engine over the same store finishes the surviving task.
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	if _, err := p.workflow.ReconcileProductionPublications(p.ctx); err != nil {
+		t.Fatal(err)
+	}
+	p.assertReady(t)
 }

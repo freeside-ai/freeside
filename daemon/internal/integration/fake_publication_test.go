@@ -283,16 +283,31 @@ type integrationTransport struct {
 	symlinkTarget  string
 	replaceParent  string
 
-	mu       sync.Mutex
-	fetches  int
-	fetchErr error
-	pushes   int
-	fail     bool
-	conflict bool
+	mu           sync.Mutex
+	fetches      int
+	fetchErr     error
+	fetchEntered chan struct{}
+	fetchRelease chan struct{}
+	pushes       int
+	fail         bool
+	conflict     bool
+}
+
+// blockNextFetch parks the next FetchBase inside the transport, which is how a
+// test holds the publication lane in a real external boundary. entered closes
+// once the fetch has arrived; release lets it proceed, and canceling the
+// fetch's context ends it too, the way a shutdown does.
+func (tr *integrationTransport) blockNextFetch() (entered <-chan struct{}, release func()) {
+	arrived := make(chan struct{})
+	proceed := make(chan struct{})
+	tr.mu.Lock()
+	tr.fetchEntered, tr.fetchRelease = arrived, proceed
+	tr.mu.Unlock()
+	return arrived, sync.OnceFunc(func() { close(proceed) })
 }
 
 func (tr *integrationTransport) FetchBase(
-	_ context.Context,
+	ctx context.Context,
 	repo, baseRef, baseSHA, dir string,
 ) (engine.PublicationCheckout, error) {
 	tr.mu.Lock()
@@ -300,7 +315,19 @@ func (tr *integrationTransport) FetchBase(
 	fetchErr := tr.fetchErr
 	symlinkTarget := tr.symlinkTarget
 	replaceParent := tr.replaceParent
+	// One-shot: taking the channels under the lock keeps a second fetch from
+	// closing an already-closed entered channel.
+	entered, release := tr.fetchEntered, tr.fetchRelease
+	tr.fetchEntered, tr.fetchRelease = nil, nil
 	tr.mu.Unlock()
+	if release != nil {
+		close(entered)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if fetchErr != nil {
 		return nil, fetchErr
 	}
