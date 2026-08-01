@@ -16,10 +16,26 @@ Launch arguments select the composition (`AppSession.fromEnvironment`):
 - `-FreesidePairingDemo YES`: the full pairing flow against an enforcing mock; the code is `483911`.
 - `-FreesideServerURL <url>`: a real daemon; the device credential lives in the Keychain and the cache on disk.
 
+`FreesideServerURL` is read from `UserDefaults`, so an installed app that is launched from the Dock (where nothing forwards launch arguments) takes it from its persisted preferences instead; `install-mac-app.sh --server-url` writes that preference. A launch argument still wins, because the argument domain outranks the persistent one.
+
+Build the daemon you point it at from the same commit as the client. The API schema moves with `api/openapi.yaml`, so a client from one commit and a daemon binary from another can connect, authenticate, and still fail every sync — visible only as the freshness banner, with no error naming the mismatch. `scripts/run-convergence.sh` avoids this by rebuilding the harness from source on every run; a hand-rolled daemon launch does not, and a rebase is enough to desynchronise the two.
+
 Launch arguments also pin the presentation per launch (`LaunchInputs`), so screenshot and testing workflows drive the app without UI automation. These are launch arguments rather than environment variables because `open --args` forwards only arguments, and `xcrun simctl launch` forwards them too:
 
 - `-FreesideColorScheme light|dark`: force an appearance without touching the system setting; unset follows the system.
 - `-FreesideSelect <item-id>`: select the given inbox item at launch. `AttentionFixtures.defaultInboxItemIDs()` is the source of truth for the accepted values, today the default mock inbox's ids: `item-spec_approval`, `item-execution_failure`, `item-agent_question`, `item-review_diminishing_returns`, `item-review_dispute`, `item-ready_for_final_review`, `item-publish_blocked`, `item-run_proposal`, `item-system_health`, `item-blocked`. An unknown id is ignored with a note on stderr.
+
+## Installing the Operator Client
+
+`scripts/install-mac-app.sh` makes FreesideMac the operator's actually-installed client rather than an Xcode-run artifact (plan §10). It builds Release, signs with a stable identity, and installs or replaces `~/Applications/Freeside.app`:
+
+```sh
+./scripts/install-mac-app.sh --server-url http://127.0.0.1:8080 --launch
+```
+
+Re-run it after a source change and it updates the installed app in place. The point of signing here is Keychain stability, not Gatekeeper: the device credential's access control names the application that created it, so as long as the bundle identifier, install path, and signing identity hold steady across updates, the paired device survives a rebuild. The script prints the designated requirement each run and warns loudly when an update changes it, because that change — not the rebuild — is what forces a re-pair.
+
+Signing needs an `Apple Development` identity, which Xcode mints from the free personal team once an Apple ID is added under Settings > Accounts. `FREESIDE_MAC_SIGNING_IDENTITY` overrides the choice; `-` selects ad-hoc signing, whose designated requirement is the code directory hash and therefore changes on every build. Ad-hoc is opt-in for that reason, not a silent fallback. `FREESIDE_MAC_INSTALL_DIR` and `FREESIDE_MAC_BUILD_DIR` move the install root and derived-data path.
 
 ## Capturing screenshots
 
