@@ -418,6 +418,24 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 	defer func() {
 		err = errors.Join(err, closeStartupSessions(success, startupSessionCloser))
 	}()
+	// Backup evidence is maintained before anything can admit work. Orphan
+	// reconciliation below resumes writers through the unattended admission
+	// gate, which reads backup health, so a pass that has not yet scanned the
+	// live database would let that gate see a stale checkpoint's verdict.
+	localBackups, err := localBackupFiles.NewProducer(st)
+	if err != nil {
+		return nil, err
+	}
+	if err := localBackups.Maintain(parent); err != nil {
+		// A durable row this binary cannot reconstruct is reported, never
+		// fatal: startup is the one pass an operator cannot retry past, and
+		// the dominant cause is a downgrade that starting is what lets them
+		// undo. Backup health carries the refusal (store.ErrBackupClosureIncomplete).
+		if !errors.Is(err, store.ErrBackupClosureIncomplete) {
+			return nil, err
+		}
+		fmt.Fprintln(os.Stderr, "freesided:", err)
+	}
 	// The fake driver's state directory is only claimed in fake mode: the
 	// production composition must not require walking-skeleton state on a
 	// fresh operator machine.
@@ -494,13 +512,6 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 		if err := holdRetryableClaudeRecovery(claudeWiring.driver.Reconcile(ctx)); err != nil {
 			return nil, fmt.Errorf("reconcile orphaned handoffs: %w", err)
 		}
-	}
-	localBackups, err := localBackupFiles.NewProducer(st)
-	if err != nil {
-		return nil, err
-	}
-	if err := localBackups.Maintain(parent); err != nil {
-		return nil, err
 	}
 	runDoctor := func(runCtx context.Context) error {
 		if cfg.Claude == nil {

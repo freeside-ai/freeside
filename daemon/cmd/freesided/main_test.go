@@ -61,6 +61,77 @@ func TestRunServesSignetAndStops(t *testing.T) {
 	}
 }
 
+// A durable row this binary cannot reconstruct, the shape a downgrade leaves
+// behind, must not stop the daemon from starting: startup is the one pass an
+// operator cannot retry past, and a daemon that will not start cannot be
+// upgraded in place (#430). Every attempt starts, and backup health carries
+// the refusal that holds unattended work.
+func TestRunStartsWithADurableRowItCannotReconstruct(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "freeside.db")
+	cfg := config{
+		DBPath:        dbPath,
+		FakeDriverDir: filepath.Join(root, "driver"),
+		ListenAddr:    "127.0.0.1:0", ReconcileInterval: 10 * time.Millisecond,
+	}
+	start := func(t *testing.T, attempt string) (*daemon, context.CancelFunc) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		h, err := run(ctx, cfg)
+		if err != nil {
+			cancel()
+			t.Fatalf("%s: run: %v", attempt, err)
+		}
+		return h, cancel
+	}
+	stop := func(t *testing.T, attempt string, h *daemon, cancel context.CancelFunc) {
+		t.Helper()
+		cancel()
+		if err := h.Wait(context.Background()); err != nil {
+			t.Fatalf("%s: Wait after cancellation: %v", attempt, err)
+		}
+		if err := h.Close(); err != nil {
+			t.Fatalf("%s: Close: %v", attempt, err)
+		}
+	}
+
+	// Establish the state a newer daemon leaves behind: a complete store, a
+	// proven checkpoint, and then a durable row of a kind this binary has no
+	// extractor for.
+	h, cancel := start(t, "clean start")
+	stop(t, "clean start", h, cancel)
+	seed, err := store.Open(context.Background(), dbPath, store.Options{})
+	if err != nil {
+		t.Fatalf("open store for seeding: %v", err)
+	}
+	seedErr := seed.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
+		_, _, err := tx.EnqueueOutbox(
+			context.Background(), "future-1", "backup.kind-this-binary-lacks", []byte("payload"))
+		return err
+	})
+	if err := errors.Join(seedErr, seed.Close()); err != nil {
+		t.Fatalf("seed unreadable durable row: %v", err)
+	}
+
+	for _, attempt := range []string{"first start", "restart"} {
+		h, cancel := start(t, attempt)
+		health, err := h.store.BackupHealth(context.Background())
+		if err != nil {
+			cancel()
+			t.Fatalf("%s: BackupHealth: %v", attempt, err)
+		}
+		if health.ArtifactClosure != domain.BackupHealthUnhealthy {
+			cancel()
+			t.Fatalf("%s: closure = %q, want unhealthy", attempt, health.ArtifactClosure)
+		}
+		if err := health.RequireHealthy(); err == nil {
+			cancel()
+			t.Fatalf("%s: unattended admission stayed open", attempt)
+		}
+		stop(t, attempt, h, cancel)
+	}
+}
+
 func TestHoldRetryableClaudeRecovery(t *testing.T) {
 	t.Parallel()
 	for _, held := range []error{

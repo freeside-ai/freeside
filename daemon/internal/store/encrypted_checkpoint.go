@@ -137,7 +137,11 @@ func (s *encryptedCheckpointHealthSource) BackupHealth(
 		health.CheckpointCurrency = domain.BackupHealthHealthy
 	}
 
-	closed := true
+	// The inspection above already refused a checkpoint whose own closure this
+	// binary cannot compute, so only the live half remains: a durable row the
+	// last maintenance pass could not read means no checkpoint can be proven
+	// from here on, whatever the one on disk still proves.
+	closed := !s.files.liveClosureGap.Load()
 	for _, digest := range snapshot.digests {
 		verified, verifyErr := s.artifacts.Verify(digest)
 		if verifyErr != nil {
@@ -205,6 +209,15 @@ func (f *LocalBackupFiles) RestoreCheckpoint(
 	if err != nil {
 		return domain.BackupCheckpoint{}, ServerState{},
 			fmt.Errorf("restore encrypted checkpoint: inspect: %w", err)
+	}
+	// Restore proves the closure before it overwrites a store, so a checkpoint
+	// this binary cannot fully scan fails closed here even though the daemon
+	// tolerates the same gap while running: an older binary restoring a newer
+	// daemon's checkpoint would admit rows whose blobs it never checked.
+	if snapshot.closureGap != nil {
+		return domain.BackupCheckpoint{}, ServerState{},
+			fmt.Errorf("restore encrypted checkpoint: %w: %w",
+				ErrBackupClosureIncomplete, snapshot.closureGap)
 	}
 	if snapshot.fileDigest != checkpoint.SQLiteSnapshotDigest ||
 		snapshot.state.SyncEpoch != checkpoint.SyncEpoch ||
@@ -277,6 +290,15 @@ func inspectEncryptedCheckpoint(
 		snapshot.state.Revision != checkpoint.ServerRevision {
 		return backupDatabaseSnapshot{}, domain.BackupCheckpoint{}, false,
 			domain.ErrCheckpointDigestMismatch
+	}
+	if collectDigests && snapshot.closureGap != nil {
+		// The manifest binds a closure this binary cannot recompute, so it can
+		// neither be confirmed nor refuted: the omitted rows may contribute no
+		// digest the rest of the scan lacks, making equality prove nothing.
+		// Unverifiable is unusable, one step before the comparison.
+		return backupDatabaseSnapshot{}, domain.BackupCheckpoint{}, false,
+			fmt.Errorf("%w: %w: %w",
+				domain.ErrCheckpointDigestMismatch, ErrBackupClosureIncomplete, snapshot.closureGap)
 	}
 	if collectDigests && artifactManifestDigest(snapshot.digests) != checkpoint.ArtifactManifestDigest {
 		return backupDatabaseSnapshot{}, domain.BackupCheckpoint{}, false,
