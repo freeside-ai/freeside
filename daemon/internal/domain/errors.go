@@ -43,6 +43,9 @@ var (
 	ErrInvalidRefreshStrategy    = errors.New("invalid refresh strategy")
 	ErrInvalidBackupHealthStatus = errors.New("invalid backup health status")
 	ErrInvalidExecOutcome        = errors.New("invalid execution outcome status")
+	ErrInvalidRunMilestoneKind   = errors.New("invalid run milestone kind")
+	ErrInvalidObservedStatus     = errors.New("invalid observed invocation status")
+	ErrInvalidRunHoldReason      = errors.New("invalid run hold reason")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")
@@ -89,6 +92,8 @@ var (
 	ErrExportBaseMismatch       = errors.New("observed export base does not match the admitted base")
 	ErrStageInputsNotCanonical  = errors.New("stage input snapshot must use canonical digest and array forms")
 	ErrOutcomeInconsistent      = errors.New("execution outcome fields are internally inconsistent")
+	ErrMilestoneDetailMismatch  = errors.New("milestone detail fields do not match the kind's contract")
+	ErrObservationInconsistent  = errors.New("invocation observation fields are internally inconsistent")
 
 	// Trust-boundary failures.
 	ErrPlaintextCredential               = errors.New("credential material must be a sha256 digest, never plaintext")

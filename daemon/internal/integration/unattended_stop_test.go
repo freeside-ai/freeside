@@ -31,6 +31,15 @@ func conformantCeiling(t *testing.T) domain.CapabilitySnapshot {
 // trust profile.
 func openUnattendedFixture(t *testing.T) *workflowFixture {
 	t.Helper()
+	return openUnattendedFixtureAt(t, t.TempDir(), true)
+}
+
+// openUnattendedFixtureAt opens the unattended fixture over an explicit
+// root. seed is false on a reopen of an already-seeded root (the restart
+// scenarios), where re-recording the trust and conformance fixtures would
+// append spurious generations.
+func openUnattendedFixtureAt(t *testing.T, root string, seed bool) *workflowFixture {
+	t.Helper()
 	ctx := context.Background()
 	floor := []exec.Capability{exec.CapPostExitExport}
 	profile := unattendedTrustProfile(t)
@@ -43,7 +52,6 @@ func openUnattendedFixture(t *testing.T) *workflowFixture {
 		Caps:        exec.NewCapabilitySet(conformantCeiling(t)...),
 	}
 
-	root := t.TempDir()
 	st, err := store.Open(ctx, filepath.Join(root, "freeside.db"), store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeUnattended: domain.NewCapabilitySnapshot(floor...),
@@ -65,6 +73,9 @@ func openUnattendedFixture(t *testing.T) *workflowFixture {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if !seed {
+			return nil
+		}
 		if err := tx.RecordAuthIdentity(ctx, testIdentity, admittedAt); err != nil {
 			return err
 		}

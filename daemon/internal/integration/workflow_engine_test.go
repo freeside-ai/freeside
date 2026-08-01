@@ -518,8 +518,8 @@ func TestWorkflowEngineRecoversCommittedResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("driver.Inspect: %v", err)
 	}
-	if status != exec.StatusGone {
-		t.Fatalf("driver status = %q, want gone with a committed result", status)
+	if status.Status != exec.StatusGone {
+		t.Fatalf("driver status = %q, want gone with a committed result", status.Status)
 	}
 	f.close(t)
 
@@ -557,8 +557,8 @@ func TestWorkflowEngineRecoversDispatchedResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("driver.Inspect: %v", err)
 	}
-	if status != exec.StatusGone {
-		t.Fatalf("driver status = %q, want gone with a committed result", status)
+	if status.Status != exec.StatusGone {
+		t.Fatalf("driver status = %q, want gone with a committed result", status.Status)
 	}
 	f.recordDispatchedAttempt(t, invocationID)
 	f.close(t)
@@ -580,8 +580,8 @@ func (foreignResultDriver) Start(context.Context, domain.InvocationID, exec.Star
 	return nil
 }
 
-func (foreignResultDriver) Inspect(context.Context, domain.InvocationID) (exec.Status, error) {
-	return exec.StatusCompleted, nil
+func (foreignResultDriver) Inspect(context.Context, domain.InvocationID) (exec.Inspection, error) {
+	return exec.Inspection{Status: exec.StatusCompleted}, nil
 }
 
 func (foreignResultDriver) Stream(context.Context, domain.InvocationID) (io.ReadCloser, error) {

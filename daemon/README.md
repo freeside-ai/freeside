@@ -165,3 +165,51 @@ Operational results always state the operating mode and isolation class.
 currently active trust profile at import, where its protected paths are
 applied; an unattended admission remains bound to the exact profile digest it
 recorded before execution.
+
+## Run Observation Contract
+
+The run-monitoring contract (issue #394; plan §8) lets an operator client
+follow an unattended run from submission through admission or hold,
+invocation start, terminal collection and import, and final outcome. The
+model lives in `internal/domain/observation.go`; the read surface is
+`store.ReadTx.ObserveRun`, consumed over the same direct-store transport as
+`freesided submit` (the client opens the daemon's SQLite database; the
+timeline is persisted, so reconnect and daemon restart preserve it).
+
+- **Milestones** are an append-only, first-observation-wins timeline of
+  typed events (`run_submitted` through `publication_ready` or
+  `publication_blocked`), written inside the transactions that commit the
+  underlying workflow facts.
+- **Holds** carry a closed reason-code vocabulary
+  (`domain.AllRunHoldReasons`). There is no free-text reason field by
+  design: codes are the entire operator-facing cause, so credentials,
+  provider output, specification and policy content, and paths are
+  unrepresentable in the observation surface (the `publish.MintRecord`
+  precedent). The richer prose stays on the separately gated attention
+  items.
+- **Liveness** is derived, never stored: `DeriveInvocationLiveness`
+  classifies the last observation (status, live bit, daemon-clock instant)
+  against a freshness window, so a stopped daemon or unobservable runtime
+  reads as `observation_gap` structurally, and elapsed time and last
+  observation derive from the timeline. No percentage-complete field exists
+  or can be added without a contract change.
+
+Security limitations, stated for the operator surface:
+
+- **No live writer output.** Monitoring consumes driver inspection
+  (status and liveness) and the daemon's own durable records only. The
+  writer's stdout, stderr, filesystem, and transcript are unreadable while
+  the writer lives (`claude.Driver.Stream` returns an empty reader by prior
+  decision); transcript drill-down remains on the post-teardown validated
+  evidence path.
+- **Observation is projection, never authority.** No recovery,
+  publication, or teardown decision reads these rows; recovery re-observes
+  runtime ownership and writer absence. Forging or deleting observation
+  rows changes what an operator sees, not what the daemon does; readers
+  re-validate every row and fail closed on anything the vocabulary cannot
+  express.
+- **The store transport implies local, daemon-equivalent access.** A
+  reader of the daemon's database can read everything the daemon persists;
+  the observation contract narrows what the *observation surface* carries,
+  not what raw database access could reach. Remote exposure arrives only
+  with the API unit that carries these shapes over `api/`.

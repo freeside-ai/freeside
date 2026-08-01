@@ -325,24 +325,30 @@ func (d *Driver) Close(ctx context.Context) error {
 	return errors.Join(closeErrs...)
 }
 
-// Inspect reports one invocation's status from durable state, so a restarted
-// daemon answers the same way the process that started it would have.
-func (d *Driver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Status, error) {
+// Inspect reports one invocation's inspection from durable state, so a
+// restarted daemon answers the same way the process that started it would
+// have. Liveness is the in-process pipeline observation: true only while
+// this daemon process is actively driving the invocation, so a restarted
+// daemon reports live=false until recovery re-observes the runtime — never
+// a synthesized liveness bit (issue #394). Inspection reads no writer
+// output: status derives from the durable intent and the driver's own
+// pipeline state, per the §5.6 containment guarantee.
+func (d *Driver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Inspection, error) {
 	in, live, err := d.inspectIntent(ctx, id)
 	if err != nil {
 		if errors.Is(err, ErrRecoveryRetryable) {
-			return exec.StatusRunning, nil
+			return exec.Inspection{Status: exec.StatusRunning}, nil
 		}
-		return "", err
+		return exec.Inspection{}, err
 	}
 	switch in.Phase {
 	case phaseCommitted:
-		return in.Result.Status, nil
+		return exec.Inspection{Status: in.Result.Status}, nil
 	case phaseLost:
-		return exec.StatusGone, nil
+		return exec.Inspection{Status: exec.StatusGone}, nil
 	case phaseSeeding, phaseRunning, phaseExported:
 		if live {
-			return exec.StatusRunning, nil
+			return exec.Inspection{Status: exec.StatusRunning, Live: true}, nil
 		}
 	}
 
@@ -353,27 +359,28 @@ func (d *Driver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Stat
 	// here so every later reconcile pass can retry recovery safely.
 	if err := d.reconcileIntent(ctx, in); err != nil {
 		if errors.Is(err, ErrRecoveryRetryable) {
-			return exec.StatusRunning, nil
+			return exec.Inspection{Status: exec.StatusRunning}, nil
 		}
-		return "", fmt.Errorf("reconcile invocation %s: %w", id, err)
+		return exec.Inspection{}, fmt.Errorf("reconcile invocation %s: %w", id, err)
 	}
 
-	in, _, err = d.inspectIntent(ctx, id)
+	in, live, err = d.inspectIntent(ctx, id)
 	if err != nil {
-		return "", err
+		return exec.Inspection{}, err
 	}
 	switch in.Phase {
 	case phaseCommitted:
-		return in.Result.Status, nil
+		return exec.Inspection{Status: in.Result.Status}, nil
 	case phaseLost:
-		return exec.StatusGone, nil
+		return exec.Inspection{Status: exec.StatusGone}, nil
 	case phaseSeeding, phaseRunning, phaseExported:
 		// Recovery can restart a pre-handoff pipeline asynchronously, or leave
 		// a running handoff pending another ward observation. Both are live
-		// workflow states, not proof that the invocation was lost.
-		return exec.StatusRunning, nil
+		// workflow states, not proof that the invocation was lost; liveness is
+		// whatever the recovery actually re-observed.
+		return exec.Inspection{Status: exec.StatusRunning, Live: live}, nil
 	}
-	return "", fmt.Errorf("invocation %s: phase %q: %w", id, in.Phase, exec.ErrInvalidStatus)
+	return exec.Inspection{}, fmt.Errorf("invocation %s: phase %q: %w", id, in.Phase, exec.ErrInvalidStatus)
 }
 
 func (d *Driver) inspectIntent(

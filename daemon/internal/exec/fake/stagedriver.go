@@ -227,25 +227,29 @@ func (d *StageDriver) StartSpec(id domain.InvocationID) (exec.StartSpec, bool) {
 	return spec, ok
 }
 
-// Inspect consumes one scripted step and reports the resulting status.
-func (d *StageDriver) Inspect(_ context.Context, id domain.InvocationID) (exec.Status, error) {
+// Inspect consumes one scripted step and reports the resulting inspection.
+// Liveness mirrors the real drivers: a running session is an observed live
+// execution, everything else (pending, lost, terminal) is not, and a
+// restart-reconstructed session is lost, so it reports live=false the way a
+// restarted daemon does until the runtime is re-observed.
+func (d *StageDriver) Inspect(_ context.Context, id domain.InvocationID) (exec.Inspection, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	s, ok := d.sessions[id]
 	if !ok {
-		return "", fmt.Errorf("fake stage driver inspect %s: %w", id, exec.ErrUnknownInvocation)
+		return exec.Inspection{}, fmt.Errorf("fake stage driver inspect %s: %w", id, exec.ErrUnknownInvocation)
 	}
 	switch {
 	case s.lost:
-		return exec.StatusGone, nil
+		return exec.Inspection{Status: exec.StatusGone}, nil
 	case s.finished:
-		return d.committed[id].Status, nil
+		return exec.Inspection{Status: d.committed[id].Status}, nil
 	case s.pending > 0:
 		s.pending--
-		return exec.StatusPending, nil
+		return exec.Inspection{Status: exec.StatusPending}, nil
 	case s.running > 0:
 		s.running--
-		return exec.StatusRunning, nil
+		return exec.Inspection{Status: exec.StatusRunning, Live: true}, nil
 	}
 
 	// Steps are spent: apply the outcome on this observing call. The three
@@ -264,7 +268,7 @@ func (d *StageDriver) Inspect(_ context.Context, id domain.InvocationID) (exec.S
 		status = exec.StatusFailed
 	case OutcomeCrashBeforeResult:
 		s.lost = true
-		return exec.StatusGone, nil
+		return exec.Inspection{Status: exec.StatusGone}, nil
 	case OutcomeCrashAfterResult:
 		s.lost = true
 		d.commit(id, s.script.Result, exec.StatusCompleted)
@@ -274,10 +278,10 @@ func (d *StageDriver) Inspect(_ context.Context, id domain.InvocationID) (exec.S
 	// new member to be handled). The invalid zero value and any unknown
 	// deserialized outcome fall through here: fail loud, never silently pass.
 	if !s.script.Outcome.valid() {
-		return "", fmt.Errorf("fake stage driver inspect %s: unknown outcome %q", id, s.script.Outcome)
+		return exec.Inspection{}, fmt.Errorf("fake stage driver inspect %s: unknown outcome %q", id, s.script.Outcome)
 	}
 	d.mustPersistLocked("inspect", id)
-	return status, nil
+	return exec.Inspection{Status: status}, nil
 }
 
 // commit stamps identity and status onto the scripted result and records it.

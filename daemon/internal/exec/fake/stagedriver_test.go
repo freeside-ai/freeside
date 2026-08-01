@@ -13,17 +13,25 @@ import (
 
 // inspectUntilTerminalOrGone drives Inspect and returns the observed status
 // sequence, stopping after a terminal or gone status (or limit calls, a
-// runaway guard for broken scripts).
+// runaway guard for broken scripts). Along the way it holds the driver to
+// the liveness contract (#394): every inspection validates, and liveness is
+// reported exactly while the scripted execution runs.
 func inspectUntilTerminalOrGone(t *testing.T, d *fake.StageDriver, id domain.InvocationID) []exec.Status {
 	t.Helper()
 	var seen []exec.Status
 	for range 32 {
-		status, err := d.Inspect(t.Context(), id)
+		inspection, err := d.Inspect(t.Context(), id)
 		if err != nil {
 			t.Fatalf("inspect %s: %v", id, err)
 		}
-		seen = append(seen, status)
-		if status.Terminal() || status == exec.StatusGone {
+		if err := inspection.Validate(); err != nil {
+			t.Fatalf("inspect %s returned a malformed inspection: %v", id, err)
+		}
+		if inspection.Live != (inspection.Status == exec.StatusRunning) {
+			t.Fatalf("inspect %s: live = %v with status %s", id, inspection.Live, inspection.Status)
+		}
+		seen = append(seen, inspection.Status)
+		if inspection.Status.Terminal() || inspection.Status == exec.StatusGone {
 			return seen
 		}
 	}
@@ -109,7 +117,7 @@ func TestStageDriverCrashBeforeResult(t *testing.T) {
 	// Gone stays gone, and there is no result to collect, now or later.
 	for range 2 {
 		status, err := d.Inspect(t.Context(), "inv-1")
-		if err != nil || status != exec.StatusGone {
+		if err != nil || status.Status != exec.StatusGone {
 			t.Errorf("inspect after crash = %v, %v; want gone", status, err)
 		}
 		if _, err := d.Collect(t.Context(), "inv-1"); !errors.Is(err, exec.ErrNoResult) {
@@ -234,13 +242,13 @@ func TestStageDriverCancel(t *testing.T) {
 	if err := d.Start(t.Context(), "inv-1", exec.StartSpec{}); err != nil {
 		t.Fatal(err)
 	}
-	if status, err := d.Inspect(t.Context(), "inv-1"); err != nil || status != exec.StatusPending {
+	if status, err := d.Inspect(t.Context(), "inv-1"); err != nil || status.Status != exec.StatusPending {
 		t.Fatalf("first inspect = %v, %v; want pending", status, err)
 	}
 	if err := d.Cancel(t.Context(), "inv-1"); err != nil {
 		t.Fatal(err)
 	}
-	if status, err := d.Inspect(t.Context(), "inv-1"); err != nil || status != exec.StatusCanceled {
+	if status, err := d.Inspect(t.Context(), "inv-1"); err != nil || status.Status != exec.StatusCanceled {
 		t.Errorf("inspect after cancel = %v, %v; want canceled", status, err)
 	}
 	result, err := d.Collect(t.Context(), "inv-1")

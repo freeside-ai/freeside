@@ -48,7 +48,7 @@ type MaterializedStageDriver interface {
 	StartWithInputs(
 		context.Context, domain.InvocationID, StartSpec, StageInputLoader,
 	) error
-	Inspect(context.Context, domain.InvocationID) (Status, error)
+	Inspect(context.Context, domain.InvocationID) (Inspection, error)
 	Stream(context.Context, domain.InvocationID) (io.ReadCloser, error)
 	Cancel(context.Context, domain.InvocationID) error
 	Collect(context.Context, domain.InvocationID) (StageResult, error)
@@ -115,7 +115,7 @@ func (d *MaterializingStageDriver) Start(
 
 func (d *MaterializingStageDriver) Inspect(
 	ctx context.Context, id domain.InvocationID,
-) (Status, error) {
+) (Inspection, error) {
 	return d.driver.Inspect(ctx, id)
 }
 

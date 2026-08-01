@@ -513,6 +513,54 @@ func TestGolden(t *testing.T) {
 		RestoreTestedAt:        &restoreTestedAt,
 	}
 
+	// Run observation fixtures (#394): the milestone timeline, hold, and
+	// liveness shapes an operator client consumes. The blocked milestone and
+	// the hold observation pin the closed reason-code render; the plain
+	// milestone pins the explicit-null render of every kind-scoped detail
+	// pointer.
+	obsInvocationID := domain.InvocationID("inv-1")
+	submittedMilestone := domain.RunMilestone{
+		RunID: "run-1", Kind: domain.MilestoneRunSubmitted,
+		InvocationID: &obsInvocationID, RecordedAt: ts,
+	}
+	observedTerminal := domain.ObservedStatusFailed
+	terminalMilestone := domain.RunMilestone{
+		RunID: "run-1", Kind: domain.MilestoneTerminalRecorded,
+		InvocationID: &obsInvocationID, Terminal: &observedTerminal,
+		RecordedAt: ts.Add(10 * time.Minute),
+	}
+	observedOutcome := domain.ExecutionOutcomeFailed
+	outcomeMilestone := domain.RunMilestone{
+		RunID: "run-1", Kind: domain.MilestoneExecutionOutcomeRecorded,
+		InvocationID: &obsInvocationID, Outcome: &observedOutcome,
+		RecordedAt: ts.Add(9 * time.Minute),
+	}
+	blockedReason := domain.HoldBaseAdvanced
+	blockedMilestone := domain.RunMilestone{
+		RunID: "run-1", Kind: domain.MilestonePublicationBlocked,
+		InvocationID: &obsInvocationID, Reason: &blockedReason,
+		RecordedAt: ts.Add(11 * time.Minute),
+	}
+	invocationObservation := domain.InvocationObservation{
+		InvocationID: "inv-1", RunID: "run-1",
+		Status: domain.ObservedStatusRunning, Live: true,
+		ObservedAt: ts.Add(3 * time.Minute),
+	}
+	holdObservation := domain.RunHoldObservation{
+		RunID: "run-1", InvocationID: &obsInvocationID,
+		Reason:          domain.HoldOperationStopped,
+		FirstObservedAt: ts.Add(time.Minute),
+		LastObservedAt:  ts.Add(2 * time.Minute),
+	}
+	runObservation := domain.RunObservation{
+		RunID:      "run-1",
+		Milestones: []domain.RunMilestone{submittedMilestone, outcomeMilestone, terminalMilestone},
+		Hold:       &holdObservation,
+		Invocations: []domain.InvocationObservation{
+			invocationObservation,
+		},
+	}
+
 	cases := []struct {
 		name  string
 		value any
@@ -562,6 +610,13 @@ func TestGolden(t *testing.T) {
 		{"backend_conformance_failed", failedConformance},
 		{"backend_conformance_superseded", supersededConformance},
 		{"backup_checkpoint", backupCheckpoint},
+		{"run_milestone", submittedMilestone},
+		{"run_milestone_terminal", terminalMilestone},
+		{"run_milestone_outcome", outcomeMilestone},
+		{"run_milestone_blocked", blockedMilestone},
+		{"invocation_observation", invocationObservation},
+		{"run_hold_observation", holdObservation},
+		{"run_observation", runObservation},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

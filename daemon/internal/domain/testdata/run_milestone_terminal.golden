@@ -1,0 +1,9 @@
+{
+  "run_id": "run-1",
+  "kind": "terminal_recorded",
+  "invocation_id": "inv-1",
+  "terminal": "failed",
+  "outcome": null,
+  "reason": null,
+  "recorded_at": "2026-01-02T03:14:05Z"
+}

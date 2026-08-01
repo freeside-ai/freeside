@@ -75,12 +75,12 @@ func TestStageDriverRestartAfterIntentBeforeResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	// One non-committing inspect, then the process dies.
-	if status, err := d.Inspect(t.Context(), "inv-1"); err != nil || status != exec.StatusRunning {
+	if status, err := d.Inspect(t.Context(), "inv-1"); err != nil || status.Status != exec.StatusRunning {
 		t.Fatalf("pre-restart inspect = %v, %v; want running", status, err)
 	}
 
 	d = reopenStageDriver(t, dir)
-	if status, err := d.Inspect(t.Context(), "inv-1"); err != nil || status != exec.StatusGone {
+	if status, err := d.Inspect(t.Context(), "inv-1"); err != nil || status.Status != exec.StatusGone {
 		t.Errorf("inspect after restart = %v, %v; want gone (session lost)", status, err)
 	}
 	if _, err := d.Collect(t.Context(), "inv-1"); !errors.Is(err, exec.ErrNoResult) {
@@ -124,7 +124,7 @@ func TestStageDriverRestartAfterResultBeforeAcceptance(t *testing.T) {
 
 	// Kill after the result, before the workflow recorded acceptance durably.
 	d = reopenStageDriver(t, dir)
-	if status, err := d.Inspect(t.Context(), "inv-1"); err != nil || status != exec.StatusGone {
+	if status, err := d.Inspect(t.Context(), "inv-1"); err != nil || status.Status != exec.StatusGone {
 		t.Errorf("inspect after restart = %v, %v; want gone (session lost, result durable)", status, err)
 	}
 	after, err := d.Collect(t.Context(), "inv-1")

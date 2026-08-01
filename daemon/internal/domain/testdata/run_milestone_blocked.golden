@@ -1,0 +1,9 @@
+{
+  "run_id": "run-1",
+  "kind": "publication_blocked",
+  "invocation_id": "inv-1",
+  "terminal": null,
+  "outcome": null,
+  "reason": "base_advanced",
+  "recorded_at": "2026-01-02T03:15:05Z"
+}

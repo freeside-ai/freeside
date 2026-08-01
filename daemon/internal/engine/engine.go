@@ -50,6 +50,9 @@ type Engine struct {
 	// derive supplies the per-attempt workspace and base when configured
 	// (see WithAdmissionDerivation); nil keeps the static environment.
 	derive AdmissionDerivation
+	// pace bounds the per-pass observation writes (issue #394); process
+	// state only, never authority.
+	pace observationPace
 }
 
 // Option configures an optional engine workflow without changing the shared

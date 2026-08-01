@@ -175,7 +175,7 @@ func completeInvocation(t *testing.T, f *convFixture, driver *fake.StageDriver, 
 		if err != nil {
 			t.Fatalf("Inspect: %v", err)
 		}
-		if status == exec.StatusCompleted {
+		if status.Status == exec.StatusCompleted {
 			break
 		}
 	}
