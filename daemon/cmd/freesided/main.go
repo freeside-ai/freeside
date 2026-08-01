@@ -99,6 +99,9 @@ func main() {
 		case "submit":
 			runSubmitMain(os.Args[2:])
 			return
+		case "follow":
+			runFollowMain(os.Args[2:])
+			return
 		}
 	}
 	flags := flag.NewFlagSet("freesided", flag.ContinueOnError)

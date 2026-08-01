@@ -159,6 +159,46 @@ proofs in addition to the attended handoff floor. Pass `-operating-mode
 unattended` to a one-shot doctor for an unattended daemon; the default is
 `attended_dev`.
 
+`freesided follow -db <path> -run <run-id>` follows one run's observed
+timeline: submission, admission or hold, invocation start, terminal
+collection and import, and final outcome. It prints each milestone as the
+daemon records it, plus a status block (current hold, per-invocation status
+and liveness, elapsed time, last observation) whenever the observed state
+changes. The timeline is durable, so a disconnected or restarted follow
+resumes with everything already observed; `-once` prints one snapshot instead
+of following. Liveness distinguishes an observed live invocation from an
+`observation_gap`: a stopped daemon leaves its last observation behind, and
+the reader's `-freshness-window` (30s by default) is what turns that stale
+observation into a gap rather than a claim. Holds and definitive blocks
+display the contract's closed reason codes; no free-text reason exists to
+show, and there is no percentage complete anywhere.
+
+The follow exits when the run's outcome is decided: `published`, `blocked`
+(with the block's reason code), `failed`, or `lost`. A completed execution is
+not yet an outcome, so a run awaiting publication (including one an attended
+daemon holds by design) keeps following until the operator interrupts, which
+reports the outcome as `pending`. Exit status reports whether the run could
+be observed, never the run's own verdict: following a blocked or failed run
+to its outcome succeeds.
+
+Following is a read of the daemon's own durable observation projection over
+the same direct-store transport as `freesided submit`. It never reads a live
+writer's filesystem, stdout, stderr, or transcript; see the Run Observation
+Contract below for that boundary and its limits.
+
+**Follow is the pull diagnostic, not the way a stall reaches an operator.**
+Freeside's premise is that nobody is watching: work that needs judgment
+raises an attention item, and a stalled run gets the ward- or daemon-observed
+stall heartbeat and its notice (plan §5.12, phase 1B.1). Follow answers a
+different question, the one a push channel structurally cannot: what is the
+state of *this* run right now, including the case where the daemon itself
+stopped and therefore raised nothing (`observation_gap` exists exactly for
+that). Reach for it after a notice, when an expected pull request has not
+appeared, or while bringing an unattended configuration up; `-once` is that
+question in its plainest form. It is not a substitute for the stall notice,
+and a stall an operator only learns about by watching a terminal is a gap in
+the notice path, not a use for this command.
+
 Operational results always state the operating mode and isolation class.
 `attended_dev` is the default; unattended operation is an explicit
 `-operating-mode unattended` choice. An attended admission resolves the
@@ -174,7 +214,16 @@ invocation start, terminal collection and import, and final outcome. The
 model lives in `internal/domain/observation.go`; the read surface is
 `store.ReadTx.ObserveRun`, consumed over the same direct-store transport as
 `freesided submit` (the client opens the daemon's SQLite database; the
-timeline is persisted, so reconnect and daemon restart preserve it).
+timeline is persisted, so reconnect and daemon restart preserve it). Its
+first consumer is `freesided follow` (issue #409), whose display lives in
+`internal/observe`. That package is the whole verb, and its imports are held
+to a closed allowlist that names no way to open a file, start a process, or
+open a socket, so the containment below is structural rather than a promise;
+the `cmd/freesided` file is a shim supplying streams, interrupt, and exit
+code. The database is reached only through `internal/observe/observedb`,
+whose exported surface is open, read one run's aggregate, and close, so no
+write, checkpoint, restore, or backup-file capability is in the follow path
+at all.
 
 - **Milestones** are an append-only, first-observation-wins timeline of
   typed events (`run_submitted` through `publication_ready` or
