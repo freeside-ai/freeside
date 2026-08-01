@@ -253,14 +253,14 @@ func TestLiveHandoffErrorRetriesRecoveryWithoutRestart(t *testing.T) {
 	}
 	waitSessionDone(t, d, testInvoke)
 
-	if status, err := d.Inspect(ctx, testInvoke); err != nil || status != exec.StatusRunning {
-		t.Fatalf("Inspect after transient recovery = %q, %v; want running", status, err)
+	if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
+		t.Fatalf("Inspect after transient recovery = %q, %v; want running", status.Status, err)
 	}
 	if recoveryCalls != 1 {
 		t.Fatalf("recovery calls after first Inspect = %d, want 1", recoveryCalls)
 	}
-	if status, err := d.Inspect(ctx, testInvoke); err != nil || status != exec.StatusGone {
-		t.Fatalf("Inspect after proven loss = %q, %v; want gone", status, err)
+	if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusGone {
+		t.Fatalf("Inspect after proven loss = %q, %v; want gone", status.Status, err)
 	}
 	if _, err := d.Collect(ctx, testInvoke); !errors.Is(err, exec.ErrNoResult) {
 		t.Fatalf("Collect after proven loss = %v, want ErrNoResult", err)
@@ -350,8 +350,8 @@ func TestHandoffReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.T
 	if err := os.Chmod(d.dir, 0o700); err != nil { //nolint:gosec // G302: state directory, not a file
 		t.Fatalf("restore driver state permissions: %v", err)
 	}
-	if status, err := d.Inspect(ctx, testInvoke); err != nil || status != exec.StatusRunning {
-		t.Fatalf("Inspect after persistence retry = %q, %v; want running", status, err)
+	if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
+		t.Fatalf("Inspect after persistence retry = %q, %v; want running", status.Status, err)
 	}
 	body, err := os.ReadFile(d.intentPath(testInvoke))
 	if err != nil {
@@ -430,8 +430,8 @@ func TestRecoveryReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.
 	if err := os.Chmod(d.dir, 0o700); err != nil { //nolint:gosec // G302: state directory, not a file
 		t.Fatalf("restore driver state permissions: %v", err)
 	}
-	if status, err := d.Inspect(ctx, testInvoke); err != nil || status != exec.StatusRunning {
-		t.Fatalf("Inspect after persistence retry = %q, %v; want running", status, err)
+	if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
+		t.Fatalf("Inspect after persistence retry = %q, %v; want running", status.Status, err)
 	}
 	body, err := os.ReadFile(d.intentPath(testInvoke))
 	if err != nil {
@@ -491,8 +491,8 @@ func TestPreHandoffCrashRerunsInsteadOfRecovering(t *testing.T) {
 
 	if status, err := d.Inspect(ctx, testInvoke); err != nil {
 		t.Fatalf("Inspect pre-journal refusal: %v", err)
-	} else if status != exec.StatusRunning {
-		t.Fatalf("Inspect status = %q, want running rerun", status)
+	} else if status.Status != exec.StatusRunning {
+		t.Fatalf("Inspect status = %q, want running rerun", status.Status)
 	}
 	waitSessionDone(t, d, testInvoke)
 	if recovered {

@@ -422,7 +422,7 @@ func (e *Engine) acceptAttempt(ctx context.Context, run domain.Run, attempt doma
 // whether that is a loop failure (walking skeleton) or a terminal outcome
 // to record (production).
 func (e *Engine) collectTerminal(ctx context.Context, attempt domain.Attempt) (exec.StageResult, bool, error) {
-	status, err := e.driver.Inspect(ctx, attempt.InvocationID)
+	inspection, err := e.driver.Inspect(ctx, attempt.InvocationID)
 	if err != nil {
 		// An invocation the driver does not know is ambiguous: a pending
 		// outbox intent is bookkeeping, not proof of an unstarted driver
@@ -454,6 +454,7 @@ func (e *Engine) collectTerminal(ctx context.Context, attempt domain.Attempt) (e
 		}
 		return exec.StageResult{}, false, fmt.Errorf("inspect: %w", err)
 	}
+	status := inspection.Status
 	switch status {
 	case exec.StatusPending, exec.StatusRunning:
 		return exec.StageResult{}, false, nil

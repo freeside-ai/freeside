@@ -163,8 +163,8 @@ func (d *recordingMaterializedDriver) StartWithInputs(
 
 func (d *recordingMaterializedDriver) Inspect(
 	context.Context, domain.InvocationID,
-) (exec.Status, error) {
-	return exec.StatusRunning, nil
+) (exec.Inspection, error) {
+	return exec.Inspection{Status: exec.StatusRunning, Live: true}, nil
 }
 
 func (d *recordingMaterializedDriver) Stream(

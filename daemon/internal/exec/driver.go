@@ -19,8 +19,13 @@ type StageDriver interface {
 	// once per id (§5.3), and a restart-after-crash reconciles via
 	// Inspect/Collect, never by starting again.
 	Start(ctx context.Context, id domain.InvocationID, spec StartSpec) error
-	// Inspect reports the invocation's current lifecycle status.
-	Inspect(ctx context.Context, id domain.InvocationID) (Status, error)
+	// Inspect reports the invocation's current lifecycle status and whether
+	// the driver currently observes the execution itself (issue #394). The
+	// inspection is derived from the driver's durable state and its own
+	// runtime observation only, never from live writer output: the §5.6
+	// containment guarantee applies to inspection exactly as it does to
+	// Stream.
+	Inspect(ctx context.Context, id domain.InvocationID) (Inspection, error)
 	// Stream returns a reader over the invocation's transcript so far. The
 	// transcript is durably recorded (§5.3 session durability), so the
 	// stream is replayable: each call reads from the beginning, and reading
@@ -38,6 +43,31 @@ type StageDriver interface {
 	// committed it returns ErrResultNotReady; if the session was lost before
 	// any result was committed it returns ErrNoResult.
 	Collect(ctx context.Context, id domain.InvocationID) (StageResult, error)
+}
+
+// Inspection is one StageDriver observation of an invocation: the lifecycle
+// status plus whether the driver observed the underlying execution (a
+// running container or process) at that instant, as opposed to deriving
+// status from durable records alone. Liveness is what separates "running
+// and watched" from "running as far as the records say" — a restarted
+// daemon reports live=false until the runtime is re-observed — and it is
+// deliberately the only runtime fact inspection carries: no output, no
+// transcript position, no completion fraction.
+type Inspection struct {
+	Status Status `json:"status"`
+	Live   bool   `json:"live"`
+}
+
+// Validate reports whether the inspection is well-formed: a valid status,
+// and liveness only for an invocation that could still be executing.
+func (i Inspection) Validate() error {
+	if !i.Status.valid() {
+		return fmt.Errorf("inspection status %q: %w", i.Status, ErrInvalidStatus)
+	}
+	if i.Live && (i.Status.Terminal() || i.Status == StatusGone) {
+		return fmt.Errorf("inspection status %q reported live: %w", i.Status, ErrInvalidStatus)
+	}
+	return nil
 }
 
 // StartSpec is what a driver needs to run one stage attempt: everything is

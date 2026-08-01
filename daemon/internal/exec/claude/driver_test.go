@@ -809,8 +809,8 @@ func TestPreJournalCancellationPersistenceFailureRetainsRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Inspect retry: %v", err)
 	}
-	if status != exec.StatusCanceled {
-		t.Fatalf("Inspect status = %q, want canceled", status)
+	if status.Status != exec.StatusCanceled {
+		t.Fatalf("Inspect status = %q, want canceled", status.Status)
 	}
 	result, err := d.Collect(context.Background(), testInvoke)
 	if err != nil {
@@ -905,8 +905,8 @@ func TestDefinitiveSeedRefusalOutranksConcurrentShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Inspect after cleanup became unavailable: %v", err)
 	}
-	if status != exec.StatusFailed {
-		t.Fatalf("Inspect status = %q, want failed", status)
+	if status.Status != exec.StatusFailed {
+		t.Fatalf("Inspect status = %q, want failed", status.Status)
 	}
 	result, err := d.Collect(context.Background(), testInvoke)
 	if err != nil {
@@ -1215,8 +1215,8 @@ func TestTerminalIntentPersistenceFailureRetainsAnInProcessRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Inspect did not retry the terminal commit: %v", err)
 	}
-	if status != exec.StatusFailed {
-		t.Fatalf("Inspect status = %q, want failed", status)
+	if status.Status != exec.StatusFailed {
+		t.Fatalf("Inspect status = %q, want failed", status.Status)
 	}
 	if _, err := d.Collect(ctx, testInvoke); err != nil {
 		t.Fatalf("Collect after retry: %v", err)
@@ -1577,8 +1577,8 @@ func TestRecoveryOfLostHandoffReportsNoResult(t *testing.T) {
 	if err := d.saveIntent(in); err != nil {
 		t.Fatalf("save orphan intent: %v", err)
 	}
-	if status, err := d.Inspect(ctx, testInvoke); err != nil || status != exec.StatusGone {
-		t.Fatalf("orphan Inspect = %q, %v; want gone", status, err)
+	if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusGone {
+		t.Fatalf("orphan Inspect = %q, %v; want gone", status.Status, err)
 	}
 	if err := d.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile: %v", err)

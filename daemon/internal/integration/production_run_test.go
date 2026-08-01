@@ -777,8 +777,8 @@ func TestLegacyCompletedTerminalWithoutExportStillRequiresDriverProof(t *testing
 	if _, err := f.engine.Reconcile(ctx); err != nil {
 		t.Fatalf("dispatch legacy production: %v", err)
 	}
-	if status, err := f.driver.Inspect(ctx, submitted.InvocationID); err != nil || status != exec.StatusCompleted {
-		t.Fatalf("advance legacy driver = %q, %v", status, err)
+	if status, err := f.driver.Inspect(ctx, submitted.InvocationID); err != nil || status.Status != exec.StatusCompleted {
+		t.Fatalf("advance legacy driver = %q, %v", status.Status, err)
 	}
 	forged, err := json.Marshal(struct {
 		InvocationID domain.InvocationID `json:"invocation_id"`
@@ -1015,8 +1015,8 @@ func TestInputIORefusalDoesNotStarveLaterProductionIntent(t *testing.T) {
 		t.Fatalf("held invocation inspect = %v, want not started", err)
 	}
 	if status, err := f.driver.Inspect(ctx, healthy.InvocationID); err != nil ||
-		status != exec.StatusRunning {
-		t.Fatalf("healthy invocation = %q, %v, want running", status, err)
+		status.Status != exec.StatusRunning {
+		t.Fatalf("healthy invocation = %q, %v, want running", status.Status, err)
 	}
 
 	resumed, err := f.engine.Reconcile(ctx)
@@ -1053,8 +1053,8 @@ func TestProductionRunRefusesAWellShapedForgedTerminalRow(t *testing.T) {
 	}
 	if status, err := f.driver.Inspect(ctx, submitted.InvocationID); err != nil {
 		t.Fatalf("advance scripted driver: %v", err)
-	} else if status != exec.StatusCompleted {
-		t.Fatalf("scripted driver status = %q, want completed before terminal collection", status)
+	} else if status.Status != exec.StatusCompleted {
+		t.Fatalf("scripted driver status = %q, want completed before terminal collection", status.Status)
 	}
 
 	forged, err := json.Marshal(struct {

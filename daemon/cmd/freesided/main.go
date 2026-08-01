@@ -654,17 +654,17 @@ func (d autoScriptStageDriver) Start(ctx context.Context, id domain.InvocationID
 	return killTestCheckpoint(killCheckpointAfterIntentAccepted)
 }
 
-func (d autoScriptStageDriver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Status, error) {
-	status, err := d.StageDriver.Inspect(ctx, id)
+func (d autoScriptStageDriver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Inspection, error) {
+	inspection, err := d.StageDriver.Inspect(ctx, id)
 	if err != nil {
-		return "", err
+		return exec.Inspection{}, err
 	}
-	if status == exec.StatusCompleted {
+	if inspection.Status == exec.StatusCompleted {
 		if err := killTestCheckpoint(killCheckpointAfterResultCommitted); err != nil {
-			return "", err
+			return exec.Inspection{}, err
 		}
 	}
-	return status, nil
+	return inspection, nil
 }
 
 func (d *daemon) readiness() readiness {
