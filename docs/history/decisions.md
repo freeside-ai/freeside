@@ -726,7 +726,7 @@ New in revision 24 (decider in parentheses):
 
 ---
 
-## Revision 25 (Current)
+## Revision 25
 
 Revision 25 lands the "World model, proposals, and judgment calls" revision
 (#420) with #427's review-stage change folded in at the owner's 2026-07-31
@@ -813,3 +813,45 @@ New in revision 25 (decider in parentheses):
     never extends a budget (Section 5.12); CI spend joins the maintenance
     accounting (Section 9); the doctor gains a stored-credential integrity
     probe in 1B.1 (Section 10). (User; same devlog; #420.)
+
+---
+
+## Revision 26 (Current)
+
+Revision 26 decomposes Phase 1B into build waves and records the operator
+client-access decisions. Held from revision 25: everything except the one
+statement this revision amends — "only the scheduler gates first
+real-backlog use in 1B.0" widens to include the Section 7 review-stage
+chain.
+
+New in revision 26 (decider in parentheses):
+
+1. **Phase 1B builds in six waves (3–8) mapped to its internal exits**
+   (Section 11's coordination table): loop foundations, the review stage,
+   loop depth, convergence and yield, operational closure, the initiative
+   view. The table records shape and sequencing; each wave's unit list
+   lives in its pinned tracking issue. Phase milestones stay whole:
+   internal exits are not sub-milestones.
+   (User; devlog 2026-08-01-1643-1b-wave-plan.md.)
+2. **The Codex review substrate fronts the build** because #427 depends on
+   it, verified against #401/#404/#406/#407 as written: #401 gates 1/2/4/5
+   and the #404 base image land in wave 3; a review-scoped selection
+   contract, the review ward-topology slice, and #427 land in wave 4, with
+   the spine rescoping #406/#407 into review cores and execution remainders
+   at wave-4 scheduling. The execution tail — #401 gate 3, the execution
+   remainders, #405 if outstanding, #397 by explicit owner decision on
+   shadow evidence, then #408 — closes in wave 7.
+   (User; same devlog; #397, #401, #404, #405, #406, #407, #408, #427.)
+3. **First real-backlog use gates on the review-stage chain as well as the
+   scheduler** (Sections 11 and 13, amending revision 25's scheduler-only
+   statement): revision 25 itself made review a required workflow stage,
+   and #427's declared substrate dependencies put the review chain on the
+   minimal loop's critical path. The state algebra and effect-registry
+   retrofit stay off that path.
+   (User; same devlog; #427.)
+4. **The operator client installs Mac-first** (Section 10): direct install
+   of a locally built, personal-team-signed FreesideMac with icon and real
+   pairing in wave 3; iOS follows mid-1B under free provisioning; the paid
+   Apple Developer Program defers to Phase 2 with APNs, because client
+   correctness never depends on push (Section 5.14).
+   (User; same devlog.)

@@ -1,9 +1,9 @@
 ---
 title: Freeside Project Plan
-revision: 25
+revision: 26
 status: active
 phase: 1A
-updated: 2026-07-31
+updated: 2026-08-01
 ---
 
 # Freeside
@@ -1979,6 +1979,14 @@ repository before the first real run, then `freesided onboard` packages the
 same primitive after the run path has survived real use. Onboarding must not
 carry a second image builder or a second copy of recipe semantics.
 
+The operator client installs Mac-first: a locally built, personal-team-signed
+FreesideMac with a direct install-and-update script, an icon from the Section
+15 visual identity, and real device pairing land with 1B's first wave
+(Section 11). The iOS client
+follows mid-1B under free provisioning; the paid Apple Developer Program is
+deferred until APNs arrives in Phase 2, because client correctness never
+depends on push (Section 5.14).
+
 ### GitHub App Agent Identity
 
 Each Freeside operator is a distinct agent principal and holds their own
@@ -2236,7 +2244,7 @@ yield history → human GitHub merge`
 Phase 1B adds:
 
 - the elaborator and research fetcher;
-- intake scanning;
+- label-initiator intake (scan-query initiators stay Phase 2);
 - the Freeside-invoked review stage (Section 7; implementation #427), with
   ReviewSource freshness verification and automatic re-review testing;
 - finding classification with sampled accuracy and second adjudication;
@@ -2266,11 +2274,13 @@ list (project-filterable, showing attached watches and deadlines) with the
 run timeline drill-down; and Section 5.18 capture hooks recording from the
 start.
 
-Contract sequencing inside 1B.0: only the scheduler gates first real-backlog
-use; the state algebra and the effect-registry retrofit of `run_proposal`
-land within 1B.0 behind it, serialized per contract discipline but off the
-loop's critical path. Real-backlog use begins during 1B.0 as soon as the
-minimal loop stands.
+Contract sequencing inside 1B.0: the scheduler and the Section 7
+review-stage chain (#427 and its substrate) gate first real-backlog use
+(revision 26, amending revision 25's scheduler-only statement); the state
+algebra and the effect-registry retrofit of `run_proposal` land within 1B.0
+behind them, serialized per contract discipline but off the loop's critical
+path. Real-backlog use begins during 1B.0 as soon as the minimal loop
+stands, at the close of wave 4 (this section's coordination table).
 
 #### 1B.1: Operational Closure
 
@@ -2322,11 +2332,19 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **0: foundations** | Serial | Module, dual-platform CI, domain package, schema and migrations, outbox, interfaces, fakes, and provisional API schema. Domain and migration PRs are exclusive. Shared-interface work is `kind:contract`. |
 | **1: subsystems** | Parallel lanes | signet, gauntlet, publish, ward, and the saddle pair. |
 | **2: convergence** | Integrated | Workflow engine, real driver, end-to-end fakes, and real work. The **spine** owns integration and contract adjudication. |
+| **3 (1B.0): loop foundations** | Parallel lanes | Spine, serialized: the Section 5.16 scheduler (four timer kinds, trusted-job ticker migration), then Section 5.18 capture-hook recording. Ward: #401 gates 1/2/4/5 as parallel probes, then the #404 base image pinned per gate 2's outcome. App: Mac-first operator access (Section 10). |
+| **4 (1B.0): the review stage** | Serial | The spine rescopes #406/#407 into review cores and execution remainders, then lands the review-selection contract core, the review ward-topology slice, #405 only if review needs a project-derived image, and #427 — anchored per the open Section 7 fork. Its close stands the minimal loop; real-backlog use begins. |
+| **5 (1B.0): loop depth** | Parallel lanes | Elaborator and daemon research fetching with the spec-approval gate; label-initiator intake; the Section 5.13 classifier and diagnostic sites; the provenance-gated EvidencePublisher; the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section 6 state algebra, then the effect-registry retrofit of `run_proposal`. |
+| **6 (1B.0): convergence and yield** | Integrated | Convergence policy; the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section 10). 1B.0 exit. |
+| **7 (1B.1): operational closure** | Parallel lanes | Human-gated follow-up filing with the `effect_proposal` card; the doctor credential-integrity probe; the stall heartbeat; the deferral drain (sweep-eligible open deferrals enumerated at this wave's planning; dormant contract units excluded unless the spine assigns chain positions). The execution tail closes in order: #401 gate 3, the #406/#407 execution remainders, #405 if outstanding, #397 by explicit owner decision on shadow evidence, then #408. |
+| **8 (1B.2): the initiative view** | Integrated | The Section 5.18 frontier projection and the deterministic initiative view. 1B exit evaluation. |
 
 Review bandwidth limits parallel width. Every wave ends with a fresh-context
 adversarial review by an agent given only the repository and its documents,
-never this design history. `AGENTS.md` defines the issue protocol. The 1A
-backlog also serves as elaborator fixtures.
+never this design history. `AGENTS.md` defines the issue protocol; each
+wave's unit list lives in its pinned tracking issue, while this table
+records shape and sequencing. The 1A backlog also serves as elaborator
+fixtures.
 
 ### Phase 2: breadth and hardening
 
@@ -2401,76 +2419,37 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 25 ("World model, proposals, and judgment calls"; the draft's review
-provenance and disposition ledgers live in the decision note):
+Revision 26 ("1B wave decomposition and operator access"):
 
-1. **Daemon judgment calls are contract-bound** (Section 5.13): terminal
-   authority modes annotate / propose / explain / choose are exhaustive;
-   every call site carries exactly one per-site authority contract; advisory
-   output lives in a store structurally unreachable by policy evaluation;
-   daemon-side inference is its own contract, never a reuse of
-   `provider_only`. The control plane stays operable and fail-safe with
-   inference down.
-   (User; devlog 2026-07-31-1830-world-model-plan-revision.md; #420.)
-2. **Agent-requested real-world effects exist only as proposals into a
-   closed effect registry** (Section 5.13): fixed Go types, trusted
-   constructors, gates; daemon-generated proposal-instance IDs under stable
-   admission idempotency keys are the effect identity; semantic content
-   never defines occurrence identity. Trusted engine-run effects stay under
-   Section 5.9. (User; same devlog; #420.)
-3. **Follow-up issue filing lands human-gated** (Section 5.17): the
-   policy-approved path requires a complete enumerated issue-event authority
-   profile; Freeside-origin issues never `auto_start`; in a Freeside-seeded
-   repository without a current valid profile, all label intake demotes to
-   propose. (User; same devlog; #420.)
-4. **One durable scheduler owns every deferred check** (Section 5.16): a
-   closed kind union, fire-time validation, transactional consumption with
-   redelivery, no silent stale-event discard, and no authority from firing.
-   Only the scheduler gates first real-backlog use in 1B.0.
-   (User; same devlog; #420.)
-5. **Post-merge recompute and the frontier projection** (Section 5.18): a
-   merge completes a unit only through an exact daemon-recorded binding; the
-   projection derives from explicit declarations, renders staleness and
-   coverage honestly, and serializes unknown scope.
-   (User; same devlog; #420.)
-6. **The verification state algebra records honest degraded verdicts**
-   (Section 6): waivers exist only inside Failed/NotRun under a closed
-   granting-authority set; absent records block; ReadyClean and
-   ReadyDegraded never flatten into one boolean downstream.
-   (User; same devlog; #420.)
-7. **The initiative view ships minimal in 1B.2, and GitHub Projects is no
-   longer the all-work view.** Overturns the standing Section 4 statement
-   and the former Section 11 Phase 3 initiative-view placement, on lived
-   evidence from building Freeside with agents.
-   (User; same devlog; #420.)
-8. **Phase 1B restructures into internal exits 1B.0 / 1B.1 / 1B.2** with
-   real-backlog use beginning during 1B.0 as soon as the minimal loop
-   stands. (User; same devlog; #420.)
-9. **Provisional contracts are recorded for deferred subsystems** — scoped
-   consent grants, external findings ingestion, the pre-publication
-   adversarial pass, the readiness registry (Section 5.19) — each re-reviewed
-   at implementation. (User; same devlog; #420.)
-10. **Review is a durable, Freeside-invoked and Freeside-orchestrated stage
-    of the run workflow, with a local Codex invocation as the first
-    production ReviewSource; GitHub-native Codex review is demoted to
-    best-effort extra evidence that never satisfies the review requirement**
-    (Sections 5.3 and 7). Overturns "one primary review source,
-    CodexGitHubReview" and reshapes the 1B chain's control-plane-triggered
-    Codex review step, per the 2026-07-31 live-run trigger falsification: no
-    App-visible trigger path exists, and a human-PAT trigger was rejected as
-    a production dependency.
-    (User; same devlog; #420, #427.)
-11. **The review-anchor fork is carried open, deliberately unresolved**
-    (Section 7): pre-publication review versus the current PR-anchored
-    chain. Recorded lean: pre-publication with forge checks still gating
-    merge. (User; same devlog; #420, #427.)
-12. **Plain-English scheduling defers past the 1B exit**, CLI-first,
-    sequenced before any conversational surface.
-    (User; same devlog; #420.)
-13. **Smalls:** the stall heartbeat may only accelerate a stall notice and
-    never extends a budget (Section 5.12); CI spend joins the maintenance
-    accounting (Section 9); the doctor gains a stored-credential integrity
-    probe in 1B.1 (Section 10). (User; same devlog; #420.)
+1. **Phase 1B builds in six waves (3–8) mapped to its internal exits**
+   (Section 11's coordination table): loop foundations, the review stage,
+   loop depth, convergence and yield, operational closure, the initiative
+   view. The table records shape and sequencing; each wave's unit list
+   lives in its pinned tracking issue. Phase milestones stay whole:
+   internal exits are not sub-milestones.
+   (User; devlog 2026-08-01-1643-1b-wave-plan.md.)
+2. **The Codex review substrate fronts the build** because #427 depends on
+   it, verified against #401/#404/#406/#407 as written: #401 gates 1/2/4/5
+   and the #404 base image land in wave 3; a review-scoped selection
+   contract, the review ward-topology slice, and #427 land in wave 4, with
+   the spine rescoping #406/#407 into review cores and execution remainders
+   at wave-4 scheduling. The execution tail — #401 gate 3, the execution
+   remainders, #405 if outstanding, #397 by explicit owner decision on
+   shadow evidence, then #408 — closes in wave 7.
+   (User; same devlog; #397, #401, #404, #405, #406, #407, #408, #427.)
+3. **First real-backlog use gates on the review-stage chain as well as the
+   scheduler** (Section 11's 1B.0, amending revision 25's scheduler-only
+   statement): revision 25 itself made review a required
+   workflow stage, and #427's declared substrate dependencies put the
+   review chain on the minimal loop's critical path. The state algebra and
+   effect-registry retrofit stay off that path.
+   (User; same devlog; #427.)
+4. **The operator client installs Mac-first** (Section 10): direct install
+   of a locally built, personal-team-signed FreesideMac with icon and real
+   pairing in wave 3; iOS follows mid-1B under free provisioning; the paid
+   Apple Developer Program defers to Phase 2 with APNs, because client
+   correctness never depends on push (Section 5.14).
+   (User; same devlog.)
 
 ## 14. Risks
 
