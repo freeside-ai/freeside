@@ -27,6 +27,8 @@ func TestScheduleSyncSurface(t *testing.T) {
 
 	itemID := f.item.ID
 	version := f.item.ItemVersion
+	runID := domain.RunID("run-1")
+	policyDigest := domain.Digest("sha256:policy")
 	fireAt := time.Date(2026, 1, 2, 4, 4, 5, 0, time.UTC)
 	schedule, err := domain.NewSchedule(domain.ScheduleInput{
 		ID:        "schedule-pr_checks_deadline-item-1",
@@ -35,12 +37,19 @@ func TestScheduleSyncSurface(t *testing.T) {
 			Type:   domain.ScheduleSubjectAttentionItem,
 			ItemID: &itemID, ItemVersion: &version,
 		},
+		RunID: &runID, PolicyDigest: &policyDigest,
 		CreatedAt: fireAt.Add(-30 * time.Minute), FireAt: &fireAt,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: runID, ProjectID: schedule.ProjectID,
+			SpecDigest: "sha256:spec", PolicyDigest: policyDigest,
+		}); err != nil {
+			return err
+		}
 		return tx.PutSchedule(ctx, schedule)
 	}); err != nil {
 		t.Fatal(err)

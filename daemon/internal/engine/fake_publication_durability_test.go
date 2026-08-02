@@ -38,6 +38,7 @@ func TestFakePublicationTerminalItemIDsUseWorkflowNamespace(t *testing.T) {
 
 type fakePublicationReconciliationFixture struct {
 	run     domain.Run
+	policy  domain.ResolvedPolicy
 	entries map[string]store.QueueEntry
 }
 
@@ -49,6 +50,16 @@ func (f fakePublicationReconciliationFixture) GetRun(
 		return domain.Run{}, store.ErrNotFound
 	}
 	return f.run, nil
+}
+
+func (f fakePublicationReconciliationFixture) GetResolvedPolicy(
+	_ context.Context,
+	runID domain.RunID,
+) (domain.ResolvedPolicy, error) {
+	if f.policy.RunID != runID {
+		return domain.ResolvedPolicy{}, store.ErrNotFound
+	}
+	return f.policy, nil
 }
 
 func (f fakePublicationReconciliationFixture) GetOutbox(
@@ -84,7 +95,7 @@ func TestFakePublicationReconciliationRevalidatesInvocationOwners(t *testing.T) 
 		}
 	}
 	valid := fakePublicationReconciliationFixture{
-		run: publicationRun(task), entries: entries,
+		run: publicationRun(task), policy: publicationPolicy(task), entries: entries,
 	}
 	if err := validateFakePublicationReconciliation(t.Context(), valid, task); err != nil {
 		t.Fatalf("valid reconciliation bindings: %v", err)
@@ -129,6 +140,213 @@ func TestFakePublicationReconciliationRevalidatesInvocationOwners(t *testing.T) 
 				t.Fatalf("incomplete invocation owner error = %v", err)
 			}
 		})
+	}
+}
+
+func TestFakePublicationReconciliationRevalidatesResolvedPolicy(t *testing.T) {
+	task := validFakePublicationTask(t)
+	valid := fakePublicationReconciliationFixture{
+		run: publicationRun(task), policy: publicationPolicy(task),
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*fakePublicationReconciliationFixture)
+	}{
+		{"missing", func(f *fakePublicationReconciliationFixture) {
+			f.policy = domain.ResolvedPolicy{}
+		}},
+		{"substituted", func(f *fakePublicationReconciliationFixture) {
+			f.policy.Keys[0].Value = "sha256:substituted"
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := valid
+			fixture.policy.Keys = append([]domain.PolicyKey(nil), valid.policy.Keys...)
+			test.mutate(&fixture)
+			if err := validateFakePublicationRun(t.Context(), fixture, task); err == nil {
+				t.Fatal("invalid publication policy passed reconciliation validation")
+			}
+		})
+	}
+}
+
+func TestEnsureFakePublicationPolicyConvergesLegacyV1Run(t *testing.T) {
+	ctx := t.Context()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	task := validFakePublicationTask(t)
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutRun(ctx, legacyPublicationRun(task))
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureFakePublicationPolicy(ctx, st, task); err != nil {
+		t.Fatalf("converge legacy publication policy: %v", err)
+	}
+	if err := ensureFakePublicationPolicy(ctx, st, task); err != nil {
+		t.Fatalf("repeat converged publication policy: %v", err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		return validateFakePublicationRun(ctx, tx, task)
+	}); err != nil {
+		t.Fatalf("validate converged publication run: %v", err)
+	}
+}
+
+// TestFakePublicationPendingLegacyRecoveryConvergesOwnedSchedule covers the
+// crash window after publication watches commit but before finishTask marks
+// their owning task dispatched. Startup recovery must authenticate that
+// pending owner's schedule before the scheduler can fire it.
+func TestFakePublicationPendingLegacyRecoveryConvergesOwnedSchedule(t *testing.T) {
+	ctx := t.Context()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	task := validFakePublicationTask(t)
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: FakePublicationReadyItemID(task.RunID), ProjectID: task.ProjectID,
+		Subject: domain.Subject{
+			Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &task.RunID,
+		},
+		Type: domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Reason: "published and verified", RequestedDecision: []domain.Action{domain.ActionOpenPR},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
+		Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	itemID, itemVersion := item.ID, item.ItemVersion
+	legacyDigest := task.TrustProfileDigest
+	fireAt := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	schedule, err := domain.NewSchedule(domain.ScheduleInput{
+		ID:        PublicationWatchScheduleID(domain.SchedulePRChecksDeadline, item.ID),
+		ProjectID: task.ProjectID, Kind: domain.SchedulePRChecksDeadline,
+		Subject: domain.ScheduleSubject{
+			Type:   domain.ScheduleSubjectAttentionItem,
+			ItemID: &itemID, ItemVersion: &itemVersion,
+		},
+		RunID: &task.RunID, PolicyDigest: &legacyDigest,
+		CreatedAt: fireAt.Add(-time.Hour), FireAt: &fireAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, legacyPublicationRun(task)); err != nil {
+			return err
+		}
+		if err := tx.PutAttentionItem(ctx, item); err != nil {
+			return err
+		}
+		return tx.PutSchedule(ctx, schedule)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, _, err := tx.EnqueueOutbox(
+			ctx, fakePublicationTaskKey(task.RunID),
+			fakePublicationTaskKind, mustEncodeFakePublicationTask(task),
+		)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	recovery := &fakePublicationPolicyRecovery{store: st}
+	if err := recovery.converge(ctx); err != nil {
+		t.Fatalf("pending legacy recovery: %v", err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		if err := validateFakePublicationRun(ctx, tx, task); err != nil {
+			return err
+		}
+		got, err := tx.GetSchedule(ctx, schedule.ID)
+		if err != nil {
+			return err
+		}
+		if got.PolicyDigest == nil || *got.PolicyDigest != publicationPolicy(task).Digest {
+			t.Fatalf("recovered schedule policy = %v", got.PolicyDigest)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFakePublicationDispatchedLegacyRecoveryRunsOncePerStoreEpoch(t *testing.T) {
+	ctx := t.Context()
+	tempDir := t.TempDir()
+	st, err := store.Open(ctx, filepath.Join(tempDir, "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	recovery := &fakePublicationPolicyRecovery{store: st}
+	engine := &Engine{fakePublicationPolicy: recovery}
+	if err := engine.ConvergeLegacyFakePublicationPolicies(ctx); err != nil {
+		t.Fatalf("initial recovery pass: %v", err)
+	}
+
+	const key = "engine.fake_publication/late-invalid-history"
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if _, _, err := tx.EnqueueOutbox(
+			ctx, key, fakePublicationTaskKind, []byte(`{}`),
+		); err != nil {
+			return err
+		}
+		return tx.MarkOutboxDispatched(ctx, key)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.ConvergeLegacyFakePublicationPolicies(ctx); err != nil {
+		t.Fatalf("steady-state reconciliation rescanned dispatched history: %v", err)
+	}
+
+	checkpointSource, err := store.Open(
+		ctx, filepath.Join(tempDir, "checkpoint-source.db"), store.Options{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkpointSource.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if _, _, err := tx.EnqueueOutbox(
+			ctx, key, fakePublicationTaskKind, []byte(`{}`),
+		); err != nil {
+			return err
+		}
+		return tx.MarkOutboxDispatched(ctx, key)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := filepath.Join(tempDir, "checkpoint.db")
+	if err := checkpointSource.Checkpoint(ctx, checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkpointSource.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restored, err := st.Restore(ctx, checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.SyncEpoch == recovery.epoch {
+		t.Fatal("restore did not rotate the recovery epoch")
+	}
+	if err := engine.ConvergeLegacyFakePublicationPolicies(ctx); err == nil {
+		t.Fatal("same workflow skipped dispatched recovery after in-place restore")
+	}
+	if err := engine.ConvergeLegacyFakePublicationPolicies(ctx); err == nil {
+		t.Fatal("failed restored recovery was not retried")
 	}
 }
 

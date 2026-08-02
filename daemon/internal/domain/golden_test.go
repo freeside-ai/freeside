@@ -580,6 +580,8 @@ func TestGolden(t *testing.T) {
 	// event. The api/openapi.yaml examples are lifted from these.
 	itemID := domain.ItemID("item-1")
 	itemVersion := 1
+	scheduleRunID := domain.RunID("run-1")
+	schedulePolicyDigest := resolvedPolicy.Digest
 	deadlineAt := ts.Add(30 * time.Minute)
 	deadlineSchedule, err := domain.NewSchedule(domain.ScheduleInput{
 		ID: "schedule-pr_checks_deadline-item-1", ProjectID: "project-1",
@@ -587,6 +589,7 @@ func TestGolden(t *testing.T) {
 		Subject: domain.ScheduleSubject{
 			Type: domain.ScheduleSubjectAttentionItem, ItemID: &itemID, ItemVersion: &itemVersion,
 		},
+		RunID: &scheduleRunID, PolicyDigest: &schedulePolicyDigest,
 		CreatedAt: ts, FireAt: &deadlineAt,
 	})
 	if err != nil {
@@ -599,6 +602,7 @@ func TestGolden(t *testing.T) {
 		Subject: domain.ScheduleSubject{
 			Type: domain.ScheduleSubjectAttentionItem, ItemID: &itemID, ItemVersion: &itemVersion,
 		},
+		RunID: &scheduleRunID, PolicyDigest: &schedulePolicyDigest,
 		CreatedAt: ts, IntervalSeconds: &watchInterval,
 		BaseWatch: &domain.ScheduleBaseWatch{
 			Repo: "owner/repo", BaseRef: "main", AdmittedBaseSHA: "cafebabe",

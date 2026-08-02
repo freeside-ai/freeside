@@ -18,13 +18,17 @@ import (
 // 0025 records the split's rationale.
 
 const putScheduleSQL = `
-INSERT INTO schedules (id, project_id, kind, status, generation, fire_at, entity_version, as_of_revision, body)
-VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+INSERT INTO schedules
+    (id, project_id, kind, status, generation, run_id, policy_digest,
+     fire_at, entity_version, as_of_revision, body)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     project_id     = excluded.project_id,
     kind           = excluded.kind,
     status         = excluded.status,
     generation     = excluded.generation,
+    run_id         = excluded.run_id,
+    policy_digest  = excluded.policy_digest,
     fire_at        = excluded.fire_at,
     entity_version = schedules.entity_version + 1,
     as_of_revision = excluded.as_of_revision,
@@ -51,14 +55,91 @@ func (tx *WriteTx) PutSchedule(ctx context.Context, schedule domain.Schedule) er
 			return fmt.Errorf("put schedule %q: %w", schedule.ID, mapTransition(err))
 		}
 	}
-	var fireAt any
+	var runID, policyDigest, fireAt any
+	if schedule.RunID != nil {
+		runID = *schedule.RunID
+	}
+	if schedule.PolicyDigest != nil {
+		policyDigest = *schedule.PolicyDigest
+	}
 	if schedule.FireAt != nil {
 		fireAt = schedule.FireAt.UnixNano()
 	}
 	if _, err := tx.tx.ExecContext(ctx, putScheduleSQL,
 		schedule.ID, schedule.ProjectID, schedule.Kind, schedule.Status,
-		schedule.Generation, fireAt, tx.asOfRevision, body); err != nil {
+		schedule.Generation, runID, policyDigest,
+		fireAt, tx.asOfRevision, body); err != nil {
 		return fmt.Errorf("put schedule %q: %w", schedule.ID, err)
+	}
+	return nil
+}
+
+// migrateLegacyRunPolicySchedules moves every schedule bound to the exact
+// legacy run digest with the run's authenticated policy migration. The
+// schedule contract keeps this binding immutable during ordinary operation;
+// this narrowly gated upgrade path is the only exception.
+func (tx *WriteTx) migrateLegacyRunPolicySchedules(
+	ctx context.Context,
+	legacy, updated domain.Run,
+) error {
+	rows, err := tx.tx.QueryContext(ctx, `
+SELECT id, project_id, kind, status, generation, run_id, policy_digest,
+       fire_at, entity_version, as_of_revision, body
+FROM schedules WHERE run_id = ? ORDER BY id`, legacy.ID)
+	if err != nil {
+		return fmt.Errorf("list schedules for legacy run %q: %w", legacy.ID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var schedules []domain.Schedule
+	for rows.Next() {
+		schedule, _, err := tx.scanScheduleSnapshot(rows)
+		if err != nil {
+			return fmt.Errorf("scan schedule for legacy run %q: %w", legacy.ID, err)
+		}
+		if schedule.ProjectID != legacy.ProjectID || schedule.RunID == nil ||
+			*schedule.RunID != legacy.ID || schedule.PolicyDigest == nil ||
+			*schedule.PolicyDigest != legacy.PolicyDigest {
+			return fmt.Errorf(
+				"schedule %q disagrees with legacy run policy: %w",
+				schedule.ID, domain.ErrImmutableTransition,
+			)
+		}
+		schedules = append(schedules, schedule)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("list schedules for legacy run %q: %w", legacy.ID, err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close schedules for legacy run %q: %w", legacy.ID, err)
+	}
+
+	for _, schedule := range schedules {
+		policyDigest := updated.PolicyDigest
+		schedule.PolicyDigest = &policyDigest
+		body, err := encode(schedule)
+		if err != nil {
+			return fmt.Errorf("migrate schedule %q run policy: %w", schedule.ID, err)
+		}
+		result, err := tx.tx.ExecContext(ctx, `
+UPDATE schedules
+SET policy_digest = ?, entity_version = entity_version + 1,
+    as_of_revision = ?, body = ?
+WHERE id = ? AND run_id = ? AND policy_digest = ?`,
+			updated.PolicyDigest, tx.asOfRevision, body,
+			schedule.ID, legacy.ID, legacy.PolicyDigest,
+		)
+		if err != nil {
+			return fmt.Errorf("migrate schedule %q run policy: %w", schedule.ID, err)
+		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("migrate schedule %q rows affected: %w", schedule.ID, err)
+		}
+		if changed != 1 {
+			return fmt.Errorf("migrate schedule %q changed %d rows: %w",
+				schedule.ID, changed, domain.ErrImmutableTransition)
+		}
 	}
 	return nil
 }
@@ -73,11 +154,13 @@ func (tx *ReadTx) scanScheduleSnapshot(sc scanner) (domain.Schedule, Snapshot, e
 		kind       string
 		status     string
 		generation int64
+		runID      sql.NullString
+		policy     sql.NullString
 		fireAt     sql.NullInt64
 		snap       Snapshot
 		body       []byte
 	)
-	if err := sc.Scan(&id, &projectID, &kind, &status, &generation, &fireAt,
+	if err := sc.Scan(&id, &projectID, &kind, &status, &generation, &runID, &policy, &fireAt,
 		&snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
 		return domain.Schedule{}, Snapshot{}, err
 	}
@@ -85,10 +168,15 @@ func (tx *ReadTx) scanScheduleSnapshot(sc scanner) (domain.Schedule, Snapshot, e
 	if err != nil {
 		return domain.Schedule{}, Snapshot{}, err
 	}
+	storedRunID := schedule.RunID != nil
+	storedPolicy := schedule.PolicyDigest != nil
 	storedFireAt := schedule.FireAt != nil
 	if schedule.ID != domain.ScheduleID(id) || schedule.ProjectID != domain.ProjectID(projectID) ||
 		schedule.Kind != domain.ScheduleKind(kind) || schedule.Status != domain.ScheduleStatus(status) ||
-		schedule.Generation != generation || storedFireAt != fireAt.Valid ||
+		schedule.Generation != generation || storedRunID != runID.Valid || storedPolicy != policy.Valid ||
+		(storedRunID && *schedule.RunID != domain.RunID(runID.String)) ||
+		(storedPolicy && *schedule.PolicyDigest != domain.Digest(policy.String)) ||
+		storedFireAt != fireAt.Valid ||
 		(storedFireAt && schedule.FireAt.UnixNano() != fireAt.Int64) ||
 		snap.EntityVersion < 1 || snap.AsOfRevision < 1 {
 		return domain.Schedule{}, Snapshot{}, errRowInconsistent
@@ -97,7 +185,8 @@ func (tx *ReadTx) scanScheduleSnapshot(sc scanner) (domain.Schedule, Snapshot, e
 }
 
 const getScheduleSQL = `
-SELECT id, project_id, kind, status, generation, fire_at, entity_version, as_of_revision, body
+SELECT id, project_id, kind, status, generation, run_id, policy_digest,
+       fire_at, entity_version, as_of_revision, body
 FROM schedules WHERE id = ?`
 
 // GetSchedule returns one schedule aggregate.
@@ -116,7 +205,8 @@ func (tx *ReadTx) GetScheduleSnapshot(ctx context.Context, id domain.ScheduleID)
 }
 
 const listSchedulesSQL = `
-SELECT id, project_id, kind, status, generation, fire_at, entity_version, as_of_revision, body
+SELECT id, project_id, kind, status, generation, run_id, policy_digest,
+       fire_at, entity_version, as_of_revision, body
 FROM schedules ORDER BY id`
 
 // ListSchedules enumerates every persisted schedule (List semantics in
@@ -138,11 +228,13 @@ type DueSchedule struct {
 }
 
 const listDueOneShotSQL = `
-SELECT id, project_id, kind, status, generation, fire_at, entity_version, as_of_revision, body
+SELECT id, project_id, kind, status, generation, run_id, policy_digest,
+       fire_at, entity_version, as_of_revision, body
 FROM schedules WHERE status = 'armed' AND fire_at IS NOT NULL AND fire_at <= ? ORDER BY id`
 
 const listDueRecurringSQL = `
-SELECT s.id, s.project_id, s.kind, s.status, s.generation, s.fire_at,
+SELECT s.id, s.project_id, s.kind, s.status, s.generation,
+       s.run_id, s.policy_digest, s.fire_at,
        s.entity_version, s.as_of_revision, s.body, t.generation, t.next_nominal_fire_at
 FROM schedules s JOIN schedule_timers t ON t.schedule_id = s.id
 WHERE s.status = 'armed' AND t.next_nominal_fire_at <= ? ORDER BY s.id`
@@ -182,18 +274,20 @@ func (tx *ReadTx) ListDueSchedules(ctx context.Context, now time.Time) ([]DueSch
 			kind            string
 			status          string
 			generation      int64
+			runID           sql.NullString
+			policy          sql.NullString
 			fireAt          sql.NullInt64
 			snap            Snapshot
 			body            []byte
 			timerGeneration int64
 			nextNominal     int64
 		)
-		if err := recurring.Scan(&id, &projectID, &kind, &status, &generation, &fireAt,
+		if err := recurring.Scan(&id, &projectID, &kind, &status, &generation, &runID, &policy, &fireAt,
 			&snap.EntityVersion, &snap.AsOfRevision, &body, &timerGeneration, &nextNominal); err != nil {
 			return nil, fmt.Errorf("list due schedules: %w", err)
 		}
 		schedule, _, err := tx.scanScheduleSnapshot(fixedRow{
-			id, projectID, kind, status, generation, fireAt,
+			id, projectID, kind, status, generation, runID, policy, fireAt,
 			snap.EntityVersion, snap.AsOfRevision, body,
 		})
 		if err != nil {
@@ -222,6 +316,8 @@ type fixedRow struct {
 	kind          string
 	status        string
 	generation    int64
+	runID         sql.NullString
+	policy        sql.NullString
 	fireAt        sql.NullInt64
 	entityVersion int64
 	asOfRevision  int64
@@ -229,18 +325,20 @@ type fixedRow struct {
 }
 
 func (r fixedRow) Scan(dest ...any) error {
-	if len(dest) != 9 {
-		return fmt.Errorf("fixed schedule row scans 9 columns, got %d", len(dest))
+	if len(dest) != 11 {
+		return fmt.Errorf("fixed schedule row scans 11 columns, got %d", len(dest))
 	}
 	*dest[0].(*string) = r.id
 	*dest[1].(*string) = r.projectID
 	*dest[2].(*string) = r.kind
 	*dest[3].(*string) = r.status
 	*dest[4].(*int64) = r.generation
-	*dest[5].(*sql.NullInt64) = r.fireAt
-	*dest[6].(*int64) = r.entityVersion
-	*dest[7].(*int64) = r.asOfRevision
-	*dest[8].(*[]byte) = r.body
+	*dest[5].(*sql.NullString) = r.runID
+	*dest[6].(*sql.NullString) = r.policy
+	*dest[7].(*sql.NullInt64) = r.fireAt
+	*dest[8].(*int64) = r.entityVersion
+	*dest[9].(*int64) = r.asOfRevision
+	*dest[10].(*[]byte) = r.body
 	return nil
 }
 

@@ -26,9 +26,19 @@ func watchTestStore(t *testing.T) *store.Store {
 
 func watchTestItem(t *testing.T, st *store.Store, status domain.ItemStatus) domain.AttentionItem {
 	t.Helper()
+	runID := domain.RunID("run-1")
+	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
+		Key: "driver", Value: "claude",
+		Provenance: domain.KeyProvenance{
+			Source: domain.ProvenanceOverride, Digest: "sha256:watch-test-policy",
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-ready-1", ProjectID: "project-1",
-		Subject: domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason:            "published and verified",
 		RequestedDecision: []domain.Action{domain.ActionOpenPR},
@@ -39,7 +49,17 @@ func watchTestItem(t *testing.T, st *store.Store, status domain.ItemStatus) doma
 		t.Fatal(err)
 	}
 	if err := st.Write(context.Background(), func(tx *store.WriteTx) error {
-		return tx.PutAttentionItem(context.Background(), item)
+		ctx := context.Background()
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: runID, ProjectID: item.ProjectID,
+			SpecDigest: "sha256:watch-test-spec", PolicyDigest: policy.Digest,
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
 	}); err != nil {
 		t.Fatal(err)
 	}

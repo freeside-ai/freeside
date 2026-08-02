@@ -42,6 +42,7 @@ type Engine struct {
 	signet                *signet.Service
 	driver                exec.StageDriver
 	publication           *fakePublicationWorkflow
+	fakePublicationPolicy *fakePublicationPolicyRecovery
 	productionPublication *productionPublicationWorkflow
 	// admission is the configured capability gate and durable-record writer
 	// (see WithAdmission); nil leaves dispatch exactly as it was before a
@@ -71,7 +72,10 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 	if driver == nil {
 		return nil, errors.New("new engine: nil stage driver")
 	}
-	e := &Engine{store: st, signet: attention, driver: driver}
+	e := &Engine{
+		store: st, signet: attention, driver: driver,
+		fakePublicationPolicy: &fakePublicationPolicyRecovery{store: st},
+	}
 	for _, opt := range opts {
 		if opt == nil {
 			return nil, errors.New("new engine: nil option")
@@ -105,6 +109,9 @@ type ReconcileResult struct {
 // ReconcileProductionPublications) instead of stalling every run, invocation,
 // and attention item behind one verification.
 func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
+	if err := e.ConvergeLegacyFakePublicationPolicies(ctx); err != nil {
+		return ReconcileResult{}, fmt.Errorf("converge legacy fake-publication policies: %w", err)
+	}
 	runTransitions, err := e.reconcileRuns(ctx)
 	if err != nil {
 		return ReconcileResult{}, fmt.Errorf("reconcile runs: %w", err)
@@ -162,6 +169,9 @@ func (e *Engine) ReconcileProductionPublications(ctx context.Context) (Reconcile
 func (e *Engine) ReconcileFakePublications(ctx context.Context) (ReconcileResult, error) {
 	if e.publication == nil {
 		return ReconcileResult{}, errors.New("fake publication workflow is not configured")
+	}
+	if err := e.ConvergeLegacyFakePublicationPolicies(ctx); err != nil {
+		return ReconcileResult{}, fmt.Errorf("converge legacy fake-publication policies: %w", err)
 	}
 	publication, err := e.publication.reconcile(ctx)
 	result := ReconcileResult{

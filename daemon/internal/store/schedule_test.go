@@ -15,6 +15,8 @@ func schedulePtr[T any](v T) *T { return &v }
 func deadlineSchedule(t *testing.T) domain.Schedule {
 	t.Helper()
 	ts := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
+	runID := domain.RunID("run-1")
+	policyDigest := domain.Digest("sha256:policy")
 	s, err := domain.NewSchedule(domain.ScheduleInput{
 		ID: "schedule-pr_checks_deadline-item-1", ProjectID: "project-1",
 		Kind: domain.SchedulePRChecksDeadline,
@@ -22,6 +24,7 @@ func deadlineSchedule(t *testing.T) domain.Schedule {
 			Type:   domain.ScheduleSubjectAttentionItem,
 			ItemID: schedulePtr(domain.ItemID("item-1")), ItemVersion: schedulePtr(1),
 		},
+		RunID: &runID, PolicyDigest: &policyDigest,
 		CreatedAt: ts, FireAt: schedulePtr(ts.Add(30 * time.Minute)),
 	})
 	if err != nil {
@@ -48,7 +51,16 @@ func janitorSchedule(t *testing.T) domain.Schedule {
 func putSchedule(t *testing.T, s *store.Store, schedule domain.Schedule) {
 	t.Helper()
 	if err := s.Write(context.Background(), func(tx *store.WriteTx) error {
-		return tx.PutSchedule(context.Background(), schedule)
+		ctx := context.Background()
+		if schedule.RunID != nil {
+			if err := tx.PutRun(ctx, domain.Run{
+				ID: *schedule.RunID, ProjectID: schedule.ProjectID,
+				SpecDigest: "sha256:spec", PolicyDigest: *schedule.PolicyDigest,
+			}); err != nil {
+				return err
+			}
+		}
+		return tx.PutSchedule(ctx, schedule)
 	}); err != nil {
 		t.Fatalf("PutSchedule: %v", err)
 	}

@@ -2884,6 +2884,168 @@ func publicationOutboxRow(t *testing.T, h *publicationHarness, key string) store
 	return entry
 }
 
+func downgradeFakePublicationPolicyToLegacy(
+	t *testing.T,
+	h *publicationHarness,
+	run domain.Run,
+) {
+	t.Helper()
+	legacy := run
+	legacy.PolicyDigest = h.profile.ProfileDigest
+	body, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", h.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	tx, err := raw.BeginTx(h.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(h.ctx,
+		`DELETE FROM resolved_policies WHERE run_id = ?`, run.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(h.ctx,
+		`UPDATE runs SET policy_digest = ?, body = ? WHERE id = ?`,
+		legacy.PolicyDigest, string(body), run.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(h.ctx, `
+UPDATE schedules
+SET policy_digest = ?, body = json_set(body, '$.policy_digest', ?)
+WHERE run_id = ?`, legacy.PolicyDigest, legacy.PolicyDigest, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertFakePublicationPolicyConverged(
+	t *testing.T,
+	h *publicationHarness,
+	want domain.Run,
+) {
+	t.Helper()
+	if err := h.store.Read(h.ctx, func(tx *store.ReadTx) error {
+		got, err := tx.GetRun(h.ctx, want.ID)
+		if err != nil {
+			return err
+		}
+		policy, err := tx.GetResolvedPolicy(h.ctx, want.ID)
+		if err != nil {
+			return err
+		}
+		if got.PolicyDigest != want.PolicyDigest || policy.Digest != want.PolicyDigest {
+			t.Fatalf("converged policy = run %q body %q, want %q",
+				got.PolicyDigest, policy.Digest, want.PolicyDigest)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertFakePublicationSchedulePoliciesConverged(
+	t *testing.T,
+	h *publicationHarness,
+	want domain.Run,
+) {
+	t.Helper()
+	if err := h.store.Read(h.ctx, func(tx *store.ReadTx) error {
+		schedules, err := tx.ListSchedules(h.ctx)
+		if err != nil {
+			return err
+		}
+		found := 0
+		for _, snapshot := range schedules {
+			schedule := snapshot.Value
+			if schedule.RunID == nil || *schedule.RunID != want.ID {
+				continue
+			}
+			found++
+			if schedule.PolicyDigest == nil || *schedule.PolicyDigest != want.PolicyDigest {
+				t.Fatalf("converged schedule %q policy = %v, want %q",
+					schedule.ID, schedule.PolicyDigest, want.PolicyDigest)
+			}
+		}
+		if found == 0 {
+			t.Fatal("dispatched publication created no run-bound schedules")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFakeCandidatePublicationReplayConvergesLegacyPolicy(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	writeFile(t, workspace, "candidate.txt", "verified\n")
+	workflow := h.engine()
+	spec := h.spec(workspace)
+	run, err := workflow.StartFakePublication(h.ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downgradeFakePublicationPolicyToLegacy(t, h, run)
+
+	replayed, err := workflow.StartFakePublication(h.ctx, spec)
+	if err != nil {
+		t.Fatalf("legacy StartFakePublication replay: %v", err)
+	}
+	if replayed.PolicyDigest != run.PolicyDigest {
+		t.Fatalf("replayed policy digest = %q, want %q", replayed.PolicyDigest, run.PolicyDigest)
+	}
+	assertFakePublicationPolicyConverged(t, h, run)
+
+	before, err := h.store.ServerState(h.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.StartFakePublication(h.ctx, spec); err != nil {
+		t.Fatalf("current-policy StartFakePublication replay: %v", err)
+	}
+	after, err := h.store.ServerState(h.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision != before.Revision {
+		t.Fatalf("current-policy replay revision = %d, want unchanged %d", after.Revision, before.Revision)
+	}
+}
+
+func TestFakeCandidatePublicationBulkRecoveryConvergesDispatchedLegacyPolicy(t *testing.T) {
+	h := newPublicationHarness(t)
+	workspace := t.TempDir()
+	writeFile(t, workspace, "README.md", "base\n")
+	writeFile(t, workspace, "candidate.txt", "verified\n")
+	workflow := h.engine()
+	spec := h.spec(workspace)
+	run, err := workflow.StartFakePublication(h.ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.ReconcileFakePublication(h.ctx, spec.RunID); err != nil {
+		t.Fatal(err)
+	}
+	downgradeFakePublicationPolicyToLegacy(t, h, run)
+
+	if _, err := workflow.Reconcile(h.ctx); err != nil {
+		t.Fatalf("bulk recovery: %v", err)
+	}
+	assertFakePublicationPolicyConverged(t, h, run)
+	assertFakePublicationSchedulePoliciesConverged(t, h, run)
+}
+
 // TestFakeCandidatePublicationSettlesAReservationWrittenBeforeRestart: the
 // reservation outlives the process that wrote it, so a daemon that restarts
 // between admission and reconciliation must read its own reservation as "not

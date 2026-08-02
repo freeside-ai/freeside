@@ -240,6 +240,12 @@ type fakePublicationWorkflow struct {
 	candidates  map[domain.InvocationID]publish.RecoveryCandidate
 }
 
+type fakePublicationPolicyRecovery struct {
+	store *store.Store
+	mu    sync.Mutex
+	epoch string
+}
+
 type attentionService interface {
 	PutItem(context.Context, domain.AttentionItem) error
 }
@@ -340,6 +346,17 @@ func (e *Engine) StartFakePublication(ctx context.Context, spec FakePublicationS
 	return e.publication.start(ctx, spec)
 }
 
+// ConvergeLegacyFakePublicationPolicies completes the epoch's one-time
+// dispatched-task policy upgrade. The daemon calls it synchronously before
+// starting the scheduler; reconciliation retains the same gate for restores
+// and callers that do not use the daemon composition root.
+func (e *Engine) ConvergeLegacyFakePublicationPolicies(ctx context.Context) error {
+	if e.fakePublicationPolicy == nil {
+		return nil
+	}
+	return e.fakePublicationPolicy.converge(ctx)
+}
+
 func (w *fakePublicationWorkflow) start(ctx context.Context, spec FakePublicationSpec) (domain.Run, error) {
 	task, explicitCommitDate, err := w.newTask(ctx, spec)
 	if err != nil {
@@ -414,6 +431,10 @@ func (w *fakePublicationWorkflow) start(ctx context.Context, spec FakePublicatio
 				return fmt.Errorf("task %q fixed bindings disagree with stored task: %w",
 					key, domain.ErrImmutableTransition)
 			}
+			migrated, err := convergeFakePublicationPolicyTx(ctx, tx, prior)
+			if err != nil {
+				return err
+			}
 			if err := validateFakePublicationRun(ctx, tx, prior); err != nil {
 				return err
 			}
@@ -421,10 +442,16 @@ func (w *fakePublicationWorkflow) start(ctx context.Context, spec FakePublicatio
 				return err
 			}
 			committed = prior
+			if migrated {
+				return nil
+			}
 			return errReplay
 		}
 		run := publicationRun(committed)
 		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		if err := tx.PutResolvedPolicy(ctx, publicationPolicy(committed)); err != nil {
 			return err
 		}
 		return nil
@@ -527,6 +554,9 @@ func (w *fakePublicationWorkflow) validateAndClaim(
 	ctx context.Context,
 	task fakePublicationTask,
 ) error {
+	if err := ensureFakePublicationPolicy(ctx, w.store, task); err != nil {
+		return err
+	}
 	reservation, err := fakePublicationReservation(task)
 	if err != nil {
 		return err
@@ -795,6 +825,63 @@ func (w *fakePublicationWorkflow) reconcile(ctx context.Context) (fakePublicatio
 	return result, taskErr
 }
 
+func (r *fakePublicationPolicyRecovery) converge(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var recoveryEpoch string
+	var owned []store.QueueEntry
+	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+		state, err := tx.ServerState(ctx)
+		if err != nil {
+			return err
+		}
+		recoveryEpoch = state.SyncEpoch
+		if r.epoch == recoveryEpoch {
+			return nil
+		}
+		pending, err := tx.ListPendingOutbox(ctx, fakePublicationTaskKind)
+		if err != nil {
+			return err
+		}
+		dispatched, err := tx.ListDispatchedOutbox(ctx, fakePublicationTaskKind)
+		if err != nil {
+			return err
+		}
+		owned = append(pending, dispatched...)
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	if r.epoch == recoveryEpoch {
+		return nil
+	}
+	var recoveryErr error
+	// Both pending and completed v1 tasks can own watches: publication arms them
+	// before marking the task dispatched, so a crash can persist either status.
+	// Converge all durable owners once per store epoch before processing new
+	// work. A restart or in-place restore gets a fresh pass, while steady-state
+	// reconciliation does not rescan unbounded history.
+	for _, entry := range owned {
+		task, err := decodeBoundFakePublicationTask(entry)
+		if err == nil {
+			err = ensureFakePublicationPolicy(ctx, r.store, task)
+		}
+		if err != nil {
+			recoveryErr = errors.Join(
+				recoveryErr,
+				fmt.Errorf("task %q policy convergence: %w", entry.IdempotencyKey, err),
+			)
+		}
+	}
+	if recoveryErr != nil {
+		return recoveryErr
+	}
+	r.epoch = recoveryEpoch
+	return nil
+}
+
 func (w *fakePublicationWorkflow) reconcileRun(
 	ctx context.Context,
 	runID domain.RunID,
@@ -828,6 +915,9 @@ func (w *fakePublicationWorkflow) reconcileRun(
 			return fakePublicationReconcileResult{}, fmt.Errorf(
 				"task %q names run %q: %w", key, task.RunID, domain.ErrParentKeyMismatch,
 			)
+		}
+		if err := ensureFakePublicationPolicy(ctx, w.store, task); err != nil {
+			return fakePublicationReconcileResult{}, err
 		}
 		if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 			return validateFakePublicationReconciliation(ctx, tx, task)
@@ -896,6 +986,96 @@ func (w *fakePublicationWorkflow) reconcileEntryLocked(
 
 type fakePublicationRunReader interface {
 	GetRun(context.Context, domain.RunID) (domain.Run, error)
+	GetResolvedPolicy(context.Context, domain.RunID) (domain.ResolvedPolicy, error)
+}
+
+// fakePublicationPolicyState recognizes exactly two representations: the
+// current authenticated policy body, or the pre-upgrade v1 run whose trust
+// profile digest stood in for policy and which has no policy row. Anything
+// else is corruption, never migration input.
+func fakePublicationPolicyState(
+	ctx context.Context,
+	reader fakePublicationRunReader,
+	task fakePublicationTask,
+) (bool, error) {
+	run, err := reader.GetRun(ctx, task.RunID)
+	if err != nil {
+		return false, fmt.Errorf("load publication run %q: %w", task.RunID, err)
+	}
+	if reflect.DeepEqual(run, publicationRun(task)) {
+		policy, err := reader.GetResolvedPolicy(ctx, task.RunID)
+		if err != nil {
+			return false, fmt.Errorf("load publication resolved policy %q: %w", task.RunID, err)
+		}
+		if !reflect.DeepEqual(policy, publicationPolicy(task)) {
+			return false, fmt.Errorf(
+				"publication resolved policy %q disagrees with task: %w",
+				task.RunID, domain.ErrParentKeyMismatch,
+			)
+		}
+		return false, nil
+	}
+	if !reflect.DeepEqual(run, legacyPublicationRun(task)) {
+		return false, fmt.Errorf(
+			"publication run %q disagrees with task: %w",
+			task.RunID, domain.ErrParentKeyMismatch,
+		)
+	}
+	if _, err := reader.GetResolvedPolicy(ctx, task.RunID); err == nil {
+		return false, fmt.Errorf(
+			"legacy publication run %q unexpectedly has a resolved policy: %w",
+			task.RunID, domain.ErrParentKeyMismatch,
+		)
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return false, fmt.Errorf("load legacy publication resolved policy %q: %w", task.RunID, err)
+	}
+	return true, nil
+}
+
+func convergeFakePublicationPolicyTx(
+	ctx context.Context,
+	tx *store.WriteTx,
+	task fakePublicationTask,
+) (bool, error) {
+	legacy, err := fakePublicationPolicyState(ctx, tx, task)
+	if err != nil || !legacy {
+		return false, err
+	}
+	if err := tx.MigrateLegacyTrustProfileRunPolicy(
+		ctx, legacyPublicationRun(task), publicationRun(task), publicationPolicy(task),
+	); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func ensureFakePublicationPolicy(
+	ctx context.Context,
+	st *store.Store,
+	task fakePublicationTask,
+) error {
+	legacy := false
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		legacy, err = fakePublicationPolicyState(ctx, tx, task)
+		return err
+	}); err != nil || !legacy {
+		return err
+	}
+	err := st.Write(ctx, func(tx *store.WriteTx) error {
+		migrated, err := convergeFakePublicationPolicyTx(ctx, tx, task)
+		if err != nil {
+			return err
+		}
+		if !migrated {
+			return errReplay
+		}
+		return nil
+	})
+	if errors.Is(err, errReplay) {
+		return nil
+	}
+	return err
 }
 
 type fakePublicationReconciliationReader interface {
@@ -969,6 +1149,16 @@ func validateFakePublicationRun(
 	if !reflect.DeepEqual(run, publicationRun(task)) {
 		return fmt.Errorf(
 			"publication run %q disagrees with task: %w",
+			task.RunID, domain.ErrParentKeyMismatch,
+		)
+	}
+	policy, err := reader.GetResolvedPolicy(ctx, task.RunID)
+	if err != nil {
+		return fmt.Errorf("load publication resolved policy %q: %w", task.RunID, err)
+	}
+	if !reflect.DeepEqual(policy, publicationPolicy(task)) {
+		return fmt.Errorf(
+			"publication resolved policy %q disagrees with task: %w",
 			task.RunID, domain.ErrParentKeyMismatch,
 		)
 	}
@@ -2463,7 +2653,7 @@ func publicationRun(task fakePublicationTask) domain.Run {
 	return domain.Run{
 		ID: task.RunID, ProjectID: task.ProjectID,
 		SpecDigest:   digestBytes(mustEncodeFakePublicationTask(task)),
-		PolicyDigest: task.TrustProfileDigest,
+		PolicyDigest: publicationPolicy(task).Digest,
 		Stages: []domain.Stage{{
 			ID: stageID, RunID: task.RunID, Name: fakePublicationStageName,
 			Attempts: []domain.Attempt{{
@@ -2472,6 +2662,27 @@ func publicationRun(task fakePublicationTask) domain.Run {
 			}},
 		}},
 	}
+}
+
+func legacyPublicationRun(task fakePublicationTask) domain.Run {
+	run := publicationRun(task)
+	run.PolicyDigest = task.TrustProfileDigest
+	return run
+}
+
+func publicationPolicy(task fakePublicationTask) domain.ResolvedPolicy {
+	policy, err := domain.NewResolvedPolicy(task.RunID, []domain.PolicyKey{{
+		Key:   "trust_profile_digest",
+		Value: string(task.TrustProfileDigest),
+		Provenance: domain.KeyProvenance{
+			Source: domain.ProvenanceOverride,
+			Digest: task.TrustProfileDigest,
+		},
+	}})
+	if err != nil {
+		panic(fmt.Sprintf("construct fake publication policy: %v", err))
+	}
+	return policy
 }
 
 func fakePublicationTaskKey(runID domain.RunID) string {
@@ -3015,11 +3226,19 @@ func loadFakePublicationReplayTask(
 			return fmt.Errorf("task %q names run %q: %w",
 				key, task.RunID, domain.ErrParentKeyMismatch)
 		}
-		return validateFakePublicationReconciliation(ctx, tx, task)
+		return nil
 	}); err != nil {
 		if !taskFound && errors.Is(err, store.ErrNotFound) {
 			return fakePublicationTask{}, store.QueueEntry{}, false, nil
 		}
+		return fakePublicationTask{}, store.QueueEntry{}, false, err
+	}
+	if err := ensureFakePublicationPolicy(ctx, st, task); err != nil {
+		return fakePublicationTask{}, store.QueueEntry{}, false, err
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		return validateFakePublicationReconciliation(ctx, tx, task)
+	}); err != nil {
 		return fakePublicationTask{}, store.QueueEntry{}, false, err
 	}
 	return task, entry, true, nil

@@ -551,6 +551,9 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 	if err := runDoctor(parent); err != nil {
 		return nil, fmt.Errorf("initial doctor pass: %w", err)
 	}
+	if err := workflow.ConvergeLegacyFakePublicationPolicies(parent); err != nil {
+		return nil, fmt.Errorf("converge legacy fake-publication policies: %w", err)
+	}
 
 	d := &daemon{
 		store: st, attention: attention, workflow: workflow, driver: driver,
