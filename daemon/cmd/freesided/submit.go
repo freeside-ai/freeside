@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -43,8 +44,9 @@ func runSubmitMain(args []string) {
 	specPath := flags.String("spec", "", "operator-approved specification file (required)")
 	policyPath := flags.String("policy", "", "resolved per-run policy-key JSON array (required)")
 	publicationPath := flags.String("publication", "", "reviewer-facing pull-request metadata JSON file (required)")
+	workUnitPath := flags.String("work-unit", "", "work-unit declaration JSON file (optional; §5.18 capture)")
 	projectID := flags.String("project", "", "project id the run belongs to (required)")
-	runID := flags.String("run-id", "", "run id (defaults from project, specification, resolved policy, and publication metadata so an exact re-submission converges)")
+	runID := flags.String("run-id", "", "run id (defaults from project, specification, resolved policy, publication metadata, and any work-unit declaration so an exact re-submission converges)")
 	if err := flags.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -52,8 +54,8 @@ func runSubmitMain(args []string) {
 	defer stop()
 	result, err := runSubmitCommand(ctx, submitCommandConfig{
 		DBPath: *dbPath, SpecPath: *specPath, PolicyPath: *policyPath,
-		PublicationPath: *publicationPath,
-		ProjectID:       domain.ProjectID(*projectID), RunID: domain.RunID(*runID),
+		PublicationPath: *publicationPath, WorkUnitPath: *workUnitPath,
+		ProjectID: domain.ProjectID(*projectID), RunID: domain.RunID(*runID),
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
@@ -70,8 +72,20 @@ type submitCommandConfig struct {
 	SpecPath        string
 	PolicyPath      string
 	PublicationPath string
+	WorkUnitPath    string
 	ProjectID       domain.ProjectID
 	RunID           domain.RunID
+}
+
+// submittedWorkUnit is the --work-unit file's wire shape: exactly the §5.18
+// declarations no other submitted input carries. The declared path scope is
+// deliberately absent — it derives from the resolved policy's paths key,
+// the same declaration the runner enforces, so the two cannot drift.
+type submittedWorkUnit struct {
+	CompletionCriterion domain.CompletionCriterionKind `json:"completion_criterion"`
+	BoundIssue          *int                           `json:"bound_issue,omitempty"`
+	DependsOnIssues     []int                          `json:"depends_on_issues,omitempty"`
+	ContractSerialized  bool                           `json:"contract_serialized,omitempty"`
 }
 
 type submitResult struct {
@@ -84,6 +98,7 @@ type submitResult struct {
 	SpecArtifactID    domain.ArtifactID   `json:"spec_artifact_id"`
 	PolicyArtifactID  domain.ArtifactID   `json:"policy_artifact_id"`
 	PublicationDigest domain.Digest       `json:"publication_digest"`
+	WorkUnitID        domain.WorkUnitID   `json:"work_unit_id,omitempty"`
 }
 
 type submissionFile struct {
@@ -184,13 +199,58 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: digest resolved policy keys: %w", err)
 	}
+
+	var (
+		workUnit       *domain.WorkUnitDeclarationInput
+		workUnitDigest domain.Digest
+	)
+	if cfg.WorkUnitPath != "" {
+		workUnitFile, err := readSubmissionFile(cfg.WorkUnitPath)
+		if err != nil {
+			return submitResult{}, fmt.Errorf("submit: read work-unit declaration: %w", err)
+		}
+		if err := ward.RejectDuplicateJSONKeys(workUnitFile.body); err != nil {
+			return submitResult{}, fmt.Errorf("submit: decode work-unit declaration: %w", err)
+		}
+		var declared submittedWorkUnit
+		workUnitDecoder := json.NewDecoder(bytes.NewReader(workUnitFile.body))
+		workUnitDecoder.DisallowUnknownFields()
+		if err := workUnitDecoder.Decode(&declared); err != nil {
+			return submitResult{}, fmt.Errorf("submit: decode work-unit declaration: %w", err)
+		}
+		if err := workUnitDecoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			return submitResult{}, errors.New("submit: decode work-unit declaration: trailing JSON value")
+		}
+		// Declared collections are canonicalized here, not refused: their
+		// order carries no meaning, and the canonical form is what makes
+		// replay convergence — and the run-id digest below — insensitive
+		// to restatements of the same declaration.
+		slices.Sort(declared.DependsOnIssues)
+		declared.DependsOnIssues = slices.Compact(declared.DependsOnIssues)
+		workUnit = &domain.WorkUnitDeclarationInput{
+			CompletionCriterion: declared.CompletionCriterion,
+			BoundIssue:          declared.BoundIssue,
+			DependsOnIssues:     declared.DependsOnIssues,
+			DeclaredPaths:       declaredPathScope(keys),
+			ContractSerialized:  declared.ContractSerialized,
+		}
+		canonicalBody, err := json.Marshal(declared)
+		if err != nil {
+			return submitResult{}, fmt.Errorf("submit: encode work-unit declaration: %w", err)
+		}
+		workUnitDigest = submissionBytes(canonicalBody).digest
+	}
+
 	runID := cfg.RunID
 	if runID == "" {
 		// The default covers every immutable run binding so only an exact
 		// resubmission converges; shared specification bytes in another
-		// project, under another policy, or with different reviewer-facing
-		// metadata remain distinct work items.
-		runID = defaultSubmissionRunID(cfg.ProjectID, spec.digest, policyDigest, publicationFile.digest)
+		// project, under another policy, with different reviewer-facing
+		// metadata, or under a different work-unit declaration remain
+		// distinct work items. An undeclared submission keeps the
+		// pre-capture derivation byte-for-byte.
+		runID = defaultSubmissionRunID(
+			cfg.ProjectID, spec.digest, policyDigest, publicationFile.digest, workUnitDigest)
 	}
 	resolvedPolicy, err := domain.NewResolvedPolicy(runID, keys)
 	if err != nil {
@@ -259,24 +319,43 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		RunID: runID, ProjectID: cfg.ProjectID,
 		SpecArtifactID: specArtifact.ID, PolicyArtifactID: policyArtifact.ID,
 		ResolvedPolicy: resolvedPolicy, Publication: publication,
+		WorkUnit: workUnit,
 	})
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
-	return submitResult{
+	result := submitResult{
 		RunID: submitted.Run.ID, ProjectID: submitted.Run.ProjectID,
 		InvocationID: submitted.InvocationID, StageID: submitted.StageID,
 		SpecDigest: submitted.Run.SpecDigest, PolicyDigest: submitted.Run.PolicyDigest,
 		SpecArtifactID: specArtifact.ID, PolicyArtifactID: policyArtifact.ID,
 		PublicationDigest: publicationFile.digest,
-	}, nil
+	}
+	if workUnit != nil {
+		result.WorkUnitID = domain.WorkUnitIDForRun(submitted.Run.ID)
+	}
+	return result, nil
+}
+
+// declaredPathScope extracts the resolved policy's paths key as the unit's
+// declared path scope, through the domain's single canonical definition —
+// the same one the store's declaration re-gate re-derives with, so the
+// recorded scope and the re-gate can never disagree. The submission gate
+// (submittedPathBoundary) has already refused a policy without an explicit
+// allowlist, so a declared unit always carries the scope the runner
+// enforces.
+func declaredPathScope(keys []domain.PolicyKey) []string {
+	return domain.CanonicalDeclaredPaths(domain.ResolvedPolicy{Keys: keys})
 }
 
 func defaultSubmissionRunID(
-	projectID domain.ProjectID, specDigest, policyDigest, publicationDigest domain.Digest,
+	projectID domain.ProjectID, specDigest, policyDigest, publicationDigest, workUnitDigest domain.Digest,
 ) domain.RunID {
 	bindings := string(projectID) + "\x00" + string(specDigest) + "\x00" +
 		string(policyDigest) + "\x00" + string(publicationDigest)
+	if workUnitDigest != "" {
+		bindings += "\x00" + string(workUnitDigest)
+	}
 	sum := sha256.Sum256([]byte(bindings))
 	return domain.RunID("run-" + hex.EncodeToString(sum[:]))
 }

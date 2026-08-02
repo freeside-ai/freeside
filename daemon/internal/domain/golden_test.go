@@ -660,6 +660,39 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	boundIssue := 443
+	unitDeclaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
+		CompletionCriterion: domain.CompletionBoundIssueClosedByMergedPR,
+		BoundIssue:          &boundIssue,
+		DependsOnIssues:     []int{440, 442},
+		DeclaredPaths:       []string{"daemon/", "devlog/"},
+		ContractSerialized:  true,
+	}, "run-1", "project-1", ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unitPRBinding := domain.WorkUnitPRBinding{
+		UnitID: unitDeclaration.ID, Repo: "owner/repo", RepositoryID: 84958515,
+		PRNumber: 450, BaseRef: "main", HeadSHA: "cafebabe",
+		RecordedAt: ts.Add(time.Hour),
+	}
+	pullMergeFact := domain.PullMergeFact{
+		Repo: "owner/repo", RepositoryID: 84958515, PRNumber: 450,
+		State: domain.PullRequestClosed, Merged: true,
+		MergeCommitSHA: "deadbeef", BaseRef: "main", HeadSHA: "cafebabe",
+		ObservedAt: ts.Add(2 * time.Hour),
+	}
+	issueStateFact := domain.IssueStateFact{
+		Repo: "owner/repo", RepositoryID: 84958515, IssueNumber: 443,
+		State: domain.IssueClosed, ClosedByCommitSHA: "deadbeef",
+		ObservedAt: ts.Add(2 * time.Hour),
+	}
+	unitCompletion, completed := domain.EvaluateWorkUnitCompletion(
+		unitDeclaration, unitPRBinding, pullMergeFact, &issueStateFact)
+	if !completed {
+		t.Fatal("golden completion fixture did not evaluate as completed")
+	}
+
 	cases := []struct {
 		name  string
 		value any
@@ -725,6 +758,11 @@ func TestGolden(t *testing.T) {
 		{"invocation_observation", invocationObservation},
 		{"run_hold_observation", holdObservation},
 		{"run_observation", runObservation},
+		{"work_unit_declaration", unitDeclaration},
+		{"work_unit_pr_binding", unitPRBinding},
+		{"pull_merge_fact", pullMergeFact},
+		{"issue_state_fact", issueStateFact},
+		{"work_unit_completion", unitCompletion},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

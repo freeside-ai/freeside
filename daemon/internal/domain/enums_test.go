@@ -184,6 +184,18 @@ func TestEnumValidity(t *testing.T) {
 		valids["ScheduleOccurrenceOutcome"] = append(valids["ScheduleOccurrenceOutcome"], v.valid)
 	}
 	invalids["ScheduleOccurrenceOutcome"] = ScheduleOccurrenceOutcome("").valid
+	for _, v := range AllCompletionCriterionKinds {
+		valids["CompletionCriterionKind"] = append(valids["CompletionCriterionKind"], v.valid)
+	}
+	invalids["CompletionCriterionKind"] = CompletionCriterionKind("").valid
+	for _, v := range AllPullRequestStates {
+		valids["PullRequestState"] = append(valids["PullRequestState"], v.valid)
+	}
+	invalids["PullRequestState"] = PullRequestState("").valid
+	for _, v := range AllIssueStates {
+		valids["IssueState"] = append(valids["IssueState"], v.valid)
+	}
+	invalids["IssueState"] = IssueState("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {

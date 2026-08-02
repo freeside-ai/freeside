@@ -1,0 +1,8 @@
+{
+  "repo": "owner/repo",
+  "repository_id": 84958515,
+  "issue_number": 443,
+  "state": "closed",
+  "closed_by_commit_sha": "deadbeef",
+  "observed_at": "2026-01-02T05:04:05Z"
+}

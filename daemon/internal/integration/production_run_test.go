@@ -1164,3 +1164,100 @@ func TestProductionFailureSurfacesItemWithoutWedgingTheLoop(t *testing.T) {
 		})
 	}
 }
+
+// TestSubmitProductionRunCapturesWorkUnitDeclaration (§5.18, issue #443):
+// a declared submission persists the operator's work-unit declaration in
+// the run's transaction, a converged replay re-states it, a disagreeing
+// re-declaration is refused like any other fixed binding, and an
+// undeclared submission records nothing.
+func TestSubmitProductionRunCapturesWorkUnitDeclaration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := openProductionFixture(t)
+	spec, policy, resolved := registerSubmissionArtifacts(t, f.store, "run-prod-declared")
+
+	boundIssue := 443
+	unit := domain.WorkUnitDeclarationInput{
+		CompletionCriterion: domain.CompletionBoundIssueClosedByMergedPR,
+		BoundIssue:          &boundIssue,
+		DependsOnIssues:     []int{440, 442},
+		// The engine records the input verbatim, and the store's read
+		// re-gate requires the declared scope to equal the resolved
+		// policy's paths key; the fixture policy declares daemon/**.
+		DeclaredPaths:      []string{"daemon/**"},
+		ContractSerialized: true,
+	}
+	submission := engine.ProductionRunSpec{
+		RunID: "run-prod-declared", ProjectID: "proj-prod",
+		SpecArtifactID: spec.ID, PolicyArtifactID: policy.ID,
+		ResolvedPolicy: resolved, Publication: productionPublicationMetadata(),
+		WorkUnit: &unit,
+	}
+	if _, err := engine.SubmitProductionRun(ctx, f.store, submission); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	var stored domain.WorkUnitDeclaration
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		stored, err = tx.GetWorkUnitDeclarationByRun(ctx, "run-prod-declared")
+		return err
+	}); err != nil {
+		t.Fatalf("read declaration: %v", err)
+	}
+	if stored.ID != domain.WorkUnitIDForRun("run-prod-declared") ||
+		stored.BoundIssue == nil || *stored.BoundIssue != 443 ||
+		len(stored.DependsOnIssues) != 2 || len(stored.DeclaredPaths) != 1 ||
+		!stored.ContractSerialized {
+		t.Fatalf("stored declaration = %+v", stored)
+	}
+
+	if _, err := engine.SubmitProductionRun(ctx, f.store, submission); err != nil {
+		t.Fatalf("declared replay must converge: %v", err)
+	}
+
+	changed := unit
+	changed.ContractSerialized = false
+	divergent := submission
+	divergent.WorkUnit = &changed
+	if _, err := engine.SubmitProductionRun(ctx, f.store, divergent); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("divergent re-declaration error = %v, want ErrImmutableTransition", err)
+	}
+
+	invalid := unit
+	invalid.BoundIssue = nil
+	malformed := submission
+	malformed.WorkUnit = &invalid
+	if _, err := engine.SubmitProductionRun(ctx, f.store, malformed); !errors.Is(err, domain.ErrWorkUnitInconsistent) {
+		t.Fatalf("criterion without bound issue error = %v, want ErrWorkUnitInconsistent", err)
+	}
+
+	otherSpec, otherPolicy, otherResolved := registerSubmissionArtifacts(t, f.store, "run-prod-undeclared")
+	if _, err := engine.SubmitProductionRun(ctx, f.store, engine.ProductionRunSpec{
+		RunID: "run-prod-undeclared", ProjectID: "proj-prod",
+		SpecArtifactID: otherSpec.ID, PolicyArtifactID: otherPolicy.ID,
+		ResolvedPolicy: otherResolved, Publication: productionPublicationMetadata(),
+	}); err != nil {
+		t.Fatalf("undeclared submit: %v", err)
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetWorkUnitDeclarationByRun(ctx, "run-prod-undeclared")
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("undeclared run's declaration read = %v, want ErrNotFound", err)
+	}
+
+	// Whether a run is declared is fixed at intake: re-submitting the
+	// stored undeclared run with a declaration is refused, so a run that
+	// may already be executing, published, or terminal can never gain a
+	// retroactive unit.
+	retroactive := engine.ProductionRunSpec{
+		RunID: "run-prod-undeclared", ProjectID: "proj-prod",
+		SpecArtifactID: otherSpec.ID, PolicyArtifactID: otherPolicy.ID,
+		ResolvedPolicy: otherResolved, Publication: productionPublicationMetadata(),
+		WorkUnit: &unit,
+	}
+	if _, err := engine.SubmitProductionRun(ctx, f.store, retroactive); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("retroactive declaration error = %v, want ErrImmutableTransition", err)
+	}
+}

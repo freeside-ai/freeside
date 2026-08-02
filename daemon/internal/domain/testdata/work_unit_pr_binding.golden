@@ -1,0 +1,9 @@
+{
+  "unit_id": "workunit-run-1",
+  "repo": "owner/repo",
+  "repository_id": 84958515,
+  "pr_number": 450,
+  "base_ref": "main",
+  "head_sha": "cafebabe",
+  "recorded_at": "2026-01-02T04:04:05Z"
+}

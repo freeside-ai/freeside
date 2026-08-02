@@ -179,15 +179,29 @@ type prState struct {
 	HeadRepo string
 	BaseRef  string
 	BaseRepo string
+	// BaseRepoID is the base repository's canonical numeric identity. The
+	// capture hooks key completion on it (plan §5.18): a repository name
+	// re-bound to a different repository is only detectable through the
+	// observed id, never the name the request was addressed by.
+	BaseRepoID int64
+	// Merged derives from merged_at, which both the single-PR and list
+	// responses carry (the single-PR-only `merged` bool would make the two
+	// read paths disagree). MergeCommitSHA is retained only when merged: on
+	// an unmerged PR the field names a test-merge commit, which is not a
+	// fact about the PR (plan §5.18 capture).
+	Merged         bool
+	MergeCommitSHA string
 }
 
 // prResponse is the wire shape a pull-request read decodes.
 type prResponse struct {
-	Number int    `json:"number"`
-	State  string `json:"state"`
-	Title  string `json:"title"`
-	Body   string `json:"body"`
-	Head   struct {
+	Number         int     `json:"number"`
+	State          string  `json:"state"`
+	Title          string  `json:"title"`
+	Body           string  `json:"body"`
+	MergedAt       *string `json:"merged_at"`
+	MergeCommitSHA string  `json:"merge_commit_sha"`
+	Head           struct {
 		Ref  string `json:"ref"`
 		SHA  string `json:"sha"`
 		Repo struct {
@@ -197,22 +211,31 @@ type prResponse struct {
 	Base struct {
 		Ref  string `json:"ref"`
 		Repo struct {
+			ID       int64  `json:"id"`
 			FullName string `json:"full_name"`
 		} `json:"repo"`
 	} `json:"base"`
 }
 
 func (r prResponse) state() prState {
+	merged := r.MergedAt != nil
+	mergeCommit := ""
+	if merged {
+		mergeCommit = r.MergeCommitSHA
+	}
 	return prState{
-		Number:   r.Number,
-		State:    r.State,
-		Title:    r.Title,
-		Body:     r.Body,
-		HeadRef:  r.Head.Ref,
-		HeadSHA:  r.Head.SHA,
-		HeadRepo: r.Head.Repo.FullName,
-		BaseRef:  r.Base.Ref,
-		BaseRepo: r.Base.Repo.FullName,
+		Number:         r.Number,
+		State:          r.State,
+		Title:          r.Title,
+		Body:           r.Body,
+		HeadRef:        r.Head.Ref,
+		HeadSHA:        r.Head.SHA,
+		HeadRepo:       r.Head.Repo.FullName,
+		BaseRef:        r.Base.Ref,
+		BaseRepo:       r.Base.Repo.FullName,
+		BaseRepoID:     r.Base.Repo.ID,
+		Merged:         merged,
+		MergeCommitSHA: mergeCommit,
 	}
 }
 
