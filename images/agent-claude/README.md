@@ -12,10 +12,11 @@ realized launch shape, and ward consumes only registry-resolvable digest
 references. This README records the Claude base's pins and the measured Apple
 `container` behavior that implements that contract.
 
-Build it, and print its digest reference, with
-`scripts/build-agent-claude-image.sh`; check it against the ward's post-create
-allowlist with `scripts/check-agent-image.sh`. The image is `linux/arm64` only:
-Apple `container` on Apple silicon is the Phase 1A runtime.
+Build it for local use, and print its digest reference, with
+`scripts/build-agent-claude-image.sh --local-registry-port 5000`; check it
+against the ward's post-create allowlist with `scripts/check-agent-image.sh`.
+Use `--registry HOST[/PATH]` instead for a shared image. The image is
+`linux/arm64` only: Apple `container` on Apple silicon is the Phase 1A runtime.
 
 ## Pinned Inputs
 
