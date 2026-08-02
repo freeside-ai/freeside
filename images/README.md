@@ -19,11 +19,12 @@ This directory may split to its own repo later if vendor-CLI version churn pollu
 - **Status:** `exporter/` (issue #170), `agent-claude/` (issue #304), and `agent-codex/` (issue #404) are initialized.
 
 Every image here is built and pinned the same way: a `scripts/build-*-image.sh`
-that prints a `name@sha256:<digest>` reference on stdout and everything else on
-stderr. As the plan contract requires, ward resolves a digest only through a
-registry (Apple `container` 1.1.0 does not resolve a local-only digest), so a
-live-usable reference comes from pushing to a registry, real or the script's
-temporary loopback one.
+that requires either `--registry HOST[/PATH]` or `--local-registry-port PORT`,
+prints the resulting registry-resolvable `name@sha256:<digest>` reference on
+stdout, and writes everything else to stderr. As the plan contract requires,
+ward resolves a digest only through a registry (Apple `container` 1.1.0 does
+not resolve a local-only digest). The scripts therefore fail before building
+when neither registry mode is selected.
 
 ## Building Behind a VPN
 
@@ -71,12 +72,12 @@ The digest-pinned image ward runs in the fresh, credential-free exporter VM
 observer. It ships the trusted static `freeside-export` helper at
 `/usr/local/bin/freeside-export`, the pinned Git used to compare a seeded
 worktree with its declared commit, and the pinned Alpine base whose BusyBox
-shell is required by the conformance probes. Build it and print its digest
-reference with `scripts/build-exporter-image.sh`; the copied `freeside-export`
-binary is a build artifact and is gitignored. Ward resolves a digest only
-through a registry (Apple `container` 1.1.0 does not resolve a local-only
-digest), so a live run pushes the image to a registry and pins the pushed
-digest; see the build script's header.
+shell is required by the conformance probes. Build it for local use and print
+its digest reference with `scripts/build-exporter-image.sh
+--local-registry-port 5000`; the copied `freeside-export` binary is a build
+artifact and is gitignored. Use `--registry HOST[/PATH]` instead for a shared
+image. Both modes push the image, pull and verify the exact digest, and only
+then print the reference.
 
 ## Agent Claude
 

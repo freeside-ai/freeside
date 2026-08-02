@@ -4,8 +4,8 @@
 # Cross-compiles the static freeside-export helper and assembles the OCI image
 # that ships it at the contracted path (images/exporter/Containerfile), together
 # with the pinned git used by ward's read-only base observer. Prints a
-# name@sha256:<digest> reference for ward's ExporterImage and the live
-# conformance tests (FREESIDE_WARD_EXPORTER_IMAGE).
+# registry-resolvable name@sha256:<digest> reference for ward's ExporterImage
+# and the live conformance tests (FREESIDE_WARD_EXPORTER_IMAGE).
 #
 # Resolving the digest: ward requires a digest-pinned image, but Apple
 # `container` 1.1.0 does not resolve a locally-built name@digest reference from
@@ -28,7 +28,7 @@
 #
 # Usage:
 #   scripts/build-exporter-image.sh [--tag NAME]
-#       [--registry HOST[/PATH] | --local-registry-port PORT] [--ref-tag TAG]
+#       {--registry HOST[/PATH] | --local-registry-port PORT} [--ref-tag TAG]
 #
 #   --registry HOST     tag as HOST/<name>:<ref-tag>, push via `container`, print
 #                       the pushed digest reference (HOST/<name>@sha256:...).
@@ -37,6 +37,9 @@
 #                       127.0.0.1 registry, then remove the registry (PORT must
 #                       be 1024-65535).
 #   --ref-tag TAG       tag used for the push reference (default: v1).
+#
+# One of --registry or --local-registry-port is required. A local-only digest
+# is not runnable by ward on the supported Apple container runtime.
 set -euo pipefail
 
 image_name=freeside-exporter
@@ -86,6 +89,10 @@ done
 
 if [ -n "$registry" ] && [ -n "$local_registry_port" ]; then
 	echo "build-exporter-image: --registry and --local-registry-port are mutually exclusive" >&2
+	exit 2
+fi
+if [ -z "$registry" ] && [ -z "$local_registry_port" ]; then
+	echo "build-exporter-image: one of --registry HOST[/PATH] or --local-registry-port PORT is required; local-only digests are not runnable by ward" >&2
 	exit 2
 fi
 if [ -n "$local_registry_port" ]; then
@@ -165,14 +172,6 @@ container build ${proxy_args[@]+"${proxy_args[@]}"} --tag "$image_name:local" "$
 
 digest=$(digest_of "$image_name:local")
 [ -n "${digest:-}" ] || { echo "build-exporter-image: could not read the built image digest" >&2; exit 1; }
-
-if [ -z "$registry" ] && [ -z "$local_registry_port" ]; then
-	# No registry: report the local build's digest. Ward cannot resolve this by
-	# digest from the local store alone on container 1.1.0 (see the header).
-	echo "build-exporter-image: built ${image_name}:local (${digest}); pass --local-registry-port for a live-usable local reference" >&2
-	echo "${image_name}@${digest}"
-	exit 0
-fi
 
 scheme=auto
 if [ -n "$local_registry_port" ]; then

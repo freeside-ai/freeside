@@ -3,8 +3,8 @@
 #
 # Assembles images/agent-claude/Containerfile: a pinned Debian slim base, a
 # pinned Node, and the pinned Claude CLI version plan §5.7 requires a golden
-# image to carry. Prints a name@sha256:<digest> reference for the agent stage's
-# ImageRef.
+# image to carry. Prints a registry-resolvable name@sha256:<digest> reference
+# for the agent stage's ImageRef.
 #
 # The pin is asserted, not assumed: after the build, the script runs
 # `claude --version` inside the built image with networking disabled and fails
@@ -38,7 +38,7 @@
 #
 # Usage:
 #   scripts/build-agent-claude-image.sh [--tag NAME] [--claude-version VERSION]
-#       [--registry HOST[/PATH] | --local-registry-port PORT] [--ref-tag TAG]
+#       {--registry HOST[/PATH] | --local-registry-port PORT} [--ref-tag TAG]
 #
 #   --claude-version VERSION
 #                       override the Claude CLI version pinned in the
@@ -55,6 +55,9 @@
 #                       127.0.0.1 registry, then remove the registry (PORT must
 #                       be 1024-65535).
 #   --ref-tag TAG       tag used for the push reference (default: v1).
+#
+# One of --registry or --local-registry-port is required. A local-only digest
+# is not runnable by ward on the supported Apple container runtime.
 set -euo pipefail
 
 image_name=freeside-agent-claude
@@ -116,6 +119,10 @@ done
 
 if [ -n "$registry" ] && [ -n "$local_registry_port" ]; then
 	echo "build-agent-claude-image: --registry and --local-registry-port are mutually exclusive" >&2
+	exit 2
+fi
+if [ -z "$registry" ] && [ -z "$local_registry_port" ]; then
+	echo "build-agent-claude-image: one of --registry HOST[/PATH] or --local-registry-port PORT is required; local-only digests are not runnable by ward" >&2
 	exit 2
 fi
 if [ -n "$local_registry_port" ]; then
@@ -215,14 +222,6 @@ digest=$(digest_of "$image_name:local")
 	echo "build-agent-claude-image: could not read the built image digest" >&2
 	exit 1
 }
-
-if [ -z "$registry" ] && [ -z "$local_registry_port" ]; then
-	# No registry: report the local build's digest. Ward cannot resolve this by
-	# digest from the local store alone on container 1.1.0 (see the header).
-	echo "build-agent-claude-image: built ${image_name}:local (${digest}); pass --local-registry-port for a live-usable reference" >&2
-	echo "${image_name}@${digest}"
-	exit 0
-fi
 
 scheme=auto
 if [ -n "$local_registry_port" ]; then

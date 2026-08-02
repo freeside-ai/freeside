@@ -14,10 +14,11 @@ details that implement that contract; the pinned-version behaviors it consumes
 were proven in `devlog/2026-07-30-1620-codex-driver-feasibility.md` (#395) and
 `devlog/2026-08-01-1850-codex-pre-adoption-gates.md` (#401).
 
-Build it, and print its digest reference, with
-`scripts/build-agent-codex-image.sh`; check it against the ward's post-create
-allowlist with `scripts/check-agent-image.sh`. The image is `linux/arm64` only:
-Apple `container` on Apple silicon is the Phase 1A runtime.
+Build it for local use, and print its digest reference, with
+`scripts/build-agent-codex-image.sh --local-registry-port 5000`; check it
+against the ward's post-create allowlist with `scripts/check-agent-image.sh`.
+Use `--registry HOST[/PATH]` instead for a shared image. The image is
+`linux/arm64` only: Apple `container` on Apple silicon is the Phase 1A runtime.
 
 ## Pinned Inputs
 
