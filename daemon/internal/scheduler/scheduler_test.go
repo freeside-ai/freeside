@@ -2,6 +2,8 @@ package scheduler_test
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -18,7 +20,12 @@ func ptr[T any](v T) *T { return &v }
 
 func openStore(t *testing.T) *store.Store {
 	t.Helper()
-	s, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "store.db"), store.Options{})
+	return openStoreAt(t, filepath.Join(t.TempDir(), "store.db"))
+}
+
+func openStoreAt(t *testing.T, path string) *store.Store {
+	t.Helper()
+	s, err := store.Open(context.Background(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -43,11 +50,26 @@ func (c *clock) Set(now time.Time) { c.now.Store(now.UTC()) }
 
 var epoch = time.Date(2026, 2, 3, 4, 0, 0, 0, time.UTC)
 
+func testResolvedPolicy(runID domain.RunID) domain.ResolvedPolicy {
+	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
+		Key: "driver", Value: "claude",
+		Provenance: domain.KeyProvenance{
+			Source: domain.ProvenanceOverride, Digest: "sha256:scheduler-test-policy",
+		},
+	}})
+	if err != nil {
+		panic(err)
+	}
+	return policy
+}
+
 func openItem(t *testing.T, st *store.Store, id domain.ItemID, project domain.ProjectID) domain.AttentionItem {
 	t.Helper()
+	runID := domain.RunID("run-" + string(id))
+	policy := testResolvedPolicy(runID)
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: id, ProjectID: project,
-		Subject: domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
 		Type:    domain.AttentionSystemHealth, Priority: domain.PriorityNormal,
 		Reason:            "scheduler test subject",
 		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
@@ -58,7 +80,17 @@ func openItem(t *testing.T, st *store.Store, id domain.ItemID, project domain.Pr
 		t.Fatal(err)
 	}
 	if err := st.Write(context.Background(), func(tx *store.WriteTx) error {
-		return tx.PutAttentionItem(context.Background(), item)
+		ctx := context.Background()
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: runID, ProjectID: project,
+			SpecDigest: "sha256:scheduler-test-spec", PolicyDigest: policy.Digest,
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +98,7 @@ func openItem(t *testing.T, st *store.Store, id domain.ItemID, project domain.Pr
 }
 
 func deadlineSchedule(item domain.AttentionItem, fireAt time.Time) domain.Schedule {
+	policy := testResolvedPolicy(*item.Subject.RunID)
 	s, err := domain.NewSchedule(domain.ScheduleInput{
 		ID: domain.ScheduleID("schedule-pr_checks_deadline-" + string(item.ID)), ProjectID: item.ProjectID,
 		Kind: domain.SchedulePRChecksDeadline,
@@ -73,6 +106,7 @@ func deadlineSchedule(item domain.AttentionItem, fireAt time.Time) domain.Schedu
 			Type:   domain.ScheduleSubjectAttentionItem,
 			ItemID: ptr(item.ID), ItemVersion: ptr(item.ItemVersion),
 		},
+		RunID: item.Subject.RunID, PolicyDigest: &policy.Digest,
 		CreatedAt: epoch, FireAt: ptr(fireAt),
 	})
 	if err != nil {
@@ -473,6 +507,253 @@ func TestExpiryTerminatesBeforeEventConstruction(t *testing.T) {
 	got := readSchedule(t, st, poll.ID)
 	if got.Status != domain.ScheduleExpired || got.Resolution.Reason != domain.ResolutionIntentExpired {
 		t.Fatalf("schedule = %+v", got)
+	}
+}
+
+// TestResolvedPolicyValidatedBeforeEventConstruction covers #461's full
+// fire-time authority matrix for workload schedules. Corruptions are written
+// past the normal store boundary to model damaged or adversarial persisted
+// state; every invalid case must fail before the trusted event reaches its
+// handler.
+func TestResolvedPolicyValidatedBeforeEventConstruction(t *testing.T) {
+	type mutateFunc func(*testing.T, *store.Store, *sql.DB, domain.AttentionItem)
+	cases := []struct {
+		name    string
+		mutate  mutateFunc
+		wantErr bool
+	}{
+		{name: "valid"},
+		{
+			name: "missing",
+			mutate: func(t *testing.T, _ *store.Store, db *sql.DB, item domain.AttentionItem) {
+				t.Helper()
+				if _, err := db.Exec(`DELETE FROM resolved_policies WHERE run_id = ?`, *item.Subject.RunID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "terminal-with-missing-policy",
+			mutate: func(t *testing.T, st *store.Store, db *sql.DB, item domain.AttentionItem) {
+				t.Helper()
+				resolved := item
+				resolved.ItemVersion++
+				resolved.Status = domain.StatusResolved
+				if err := st.Write(context.Background(), func(tx *store.WriteTx) error {
+					return tx.PutAttentionItem(context.Background(), resolved)
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.Exec(`DELETE FROM resolved_policies WHERE run_id = ?`, *item.Subject.RunID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "malformed",
+			mutate: func(t *testing.T, _ *store.Store, db *sql.DB, item domain.AttentionItem) {
+				t.Helper()
+				if _, err := db.Exec(`UPDATE resolved_policies SET body = '{' WHERE run_id = ?`, *item.Subject.RunID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "item-run-mismatched",
+			mutate: func(t *testing.T, _ *store.Store, db *sql.DB, item domain.AttentionItem) {
+				t.Helper()
+				item.Subject.ID = "run-other"
+				body, err := json.Marshal(item)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.Exec(`UPDATE attention_items SET body = ? WHERE id = ?`, string(body), item.ID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "cross-run",
+			mutate: func(t *testing.T, st *store.Store, db *sql.DB, item domain.AttentionItem) {
+				t.Helper()
+				var policy domain.ResolvedPolicy
+				if err := st.Read(context.Background(), func(tx *store.ReadTx) error {
+					var err error
+					policy, err = tx.GetResolvedPolicy(context.Background(), *item.Subject.RunID)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				policy.RunID = "run-other"
+				body, err := json.Marshal(policy)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.Exec(
+					`UPDATE resolved_policies SET body = ? WHERE run_id = ?`,
+					string(body), *item.Subject.RunID,
+				); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "retargeted-valid-run",
+			mutate: func(t *testing.T, st *store.Store, db *sql.DB, item domain.AttentionItem) {
+				t.Helper()
+				otherRunID := domain.RunID("run-other")
+				otherPolicy := testResolvedPolicy(otherRunID)
+				if err := st.Write(context.Background(), func(tx *store.WriteTx) error {
+					ctx := context.Background()
+					if err := tx.PutRun(ctx, domain.Run{
+						ID: otherRunID, ProjectID: item.ProjectID,
+						SpecDigest: "sha256:other-spec", PolicyDigest: otherPolicy.Digest,
+					}); err != nil {
+						return err
+					}
+					return tx.PutResolvedPolicy(ctx, otherPolicy)
+				}); err != nil {
+					t.Fatal(err)
+				}
+				item.Subject.ID = domain.SubjectID(otherRunID)
+				item.Subject.RunID = &otherRunID
+				body, err := json.Marshal(item)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.Exec(`UPDATE attention_items SET body = ? WHERE id = ?`, string(body), item.ID); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "digest-mismatched",
+			mutate: func(t *testing.T, st *store.Store, db *sql.DB, item domain.AttentionItem) {
+				t.Helper()
+				var run domain.Run
+				if err := st.Read(context.Background(), func(tx *store.ReadTx) error {
+					var err error
+					run, err = tx.GetRun(context.Background(), *item.Subject.RunID)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				run.PolicyDigest = "sha256:other-policy"
+				body, err := json.Marshal(run)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.Exec(
+					`UPDATE runs SET policy_digest = ?, body = ? WHERE id = ?`,
+					run.PolicyDigest, string(body), run.ID,
+				); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, kind := range []domain.ScheduleKind{
+		domain.SchedulePRChecksDeadline,
+		domain.ScheduleReviewWaitThreshold,
+		domain.ScheduleBaseAdvanceWatch,
+	} {
+		for _, tc := range cases {
+			t.Run(string(kind)+"/"+tc.name, func(t *testing.T) {
+				ctx := context.Background()
+				path := filepath.Join(t.TempDir(), "store.db")
+				st := openStoreAt(t, path)
+				item := openItem(t, st, "item-1", "project-1")
+				var sched domain.Schedule
+				if kind.OneShot() {
+					sched = deadlineSchedule(item, epoch)
+					sched.Kind = kind
+				} else {
+					interval := int64(60)
+					itemID, version := item.ID, item.ItemVersion
+					policy := testResolvedPolicy(*item.Subject.RunID)
+					var err error
+					sched, err = domain.NewSchedule(domain.ScheduleInput{
+						ID: "schedule-base_advance_watch-item-1", ProjectID: item.ProjectID,
+						Kind: kind, CreatedAt: epoch,
+						Subject: domain.ScheduleSubject{
+							Type:   domain.ScheduleSubjectAttentionItem,
+							ItemID: &itemID, ItemVersion: &version,
+						},
+						RunID: item.Subject.RunID, PolicyDigest: &policy.Digest,
+						IntervalSeconds: &interval,
+						BaseWatch: &domain.ScheduleBaseWatch{
+							Repo: "owner/repo", BaseRef: "main", AdmittedBaseSHA: "cafebabe",
+						},
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				if tc.mutate != nil {
+					db, err := sql.Open("sqlite", path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = db.Close() })
+					tc.mutate(t, st, db, item)
+				}
+
+				handled := 0
+				s := newScheduler(t, st, newClock(epoch), domain.ModeUnattended,
+					map[domain.ScheduleKind]scheduler.Registration{
+						kind: {Handle: func(
+							_ context.Context, ev domain.ScheduleEvent, sc domain.Schedule,
+						) (scheduler.Consumption, error) {
+							handled++
+							if !sc.Kind.OneShot() {
+								return scheduler.Consumption{Outcome: domain.OutcomeHandled}, nil
+							}
+							fired, err := sc.Concluded(
+								domain.ScheduleFired, domain.ResolutionDeadlineElapsed, ev.FiredAt)
+							return scheduler.Consumption{Outcome: domain.OutcomeHandled, Schedule: &fired}, err
+						}},
+					})
+				firstFire := epoch
+				if sched.FireAt != nil {
+					firstFire = *sched.FireAt
+				}
+				if err := s.Arm(ctx, sched, firstFire); err != nil {
+					t.Fatal(err)
+				}
+				err := s.RunOnce(ctx)
+				if tc.wantErr {
+					if err == nil {
+						t.Fatal("RunOnce succeeded under invalid policy authority")
+					}
+					if handled != 0 {
+						t.Fatalf("handler invoked %d times", handled)
+					}
+					if got := readSchedule(t, st, sched.ID); got.Status != domain.ScheduleArmed {
+						t.Fatalf("schedule status = %s, want armed", got.Status)
+					}
+					occurrenceErr := st.Read(ctx, func(tx *store.ReadTx) error {
+						_, err := tx.GetScheduleOccurrence(
+							ctx, sched.ID, sched.Generation, firstFire)
+						return err
+					})
+					if !errors.Is(occurrenceErr, store.ErrNotFound) {
+						t.Fatalf("occurrence read = %v, want ErrNotFound", occurrenceErr)
+					}
+					return
+				}
+				if err != nil || handled != 1 {
+					t.Fatalf("RunOnce = %v, handled = %d", err, handled)
+				}
+			})
+		}
 	}
 }
 

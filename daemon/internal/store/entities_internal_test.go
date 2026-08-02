@@ -175,6 +175,251 @@ func TestGetResolvedPolicyRejectsForgedDigest(t *testing.T) {
 	}
 }
 
+func TestMigrateLegacyTrustProfileRunPolicyIsExact(t *testing.T) {
+	ctx := t.Context()
+	db := openRaw(t)
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	st := &Store{db: db}
+	legacy := domain.Run{
+		ID: "run-legacy", ProjectID: "project-1",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:legacy-policy",
+	}
+	policy, err := domain.NewResolvedPolicy(legacy.ID, []domain.PolicyKey{{
+		Key: "trust_profile_digest", Value: string(legacy.PolicyDigest),
+		Provenance: domain.KeyProvenance{
+			Source: domain.ProvenanceOverride, Digest: legacy.PolicyDigest,
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := legacy
+	updated.PolicyDigest = policy.Digest
+	itemID, itemVersion := domain.ItemID("item-legacy"), 1
+	fireAt := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	deadline := func(id domain.ScheduleID) domain.Schedule {
+		schedule, err := domain.NewSchedule(domain.ScheduleInput{
+			ID: id, ProjectID: legacy.ProjectID,
+			Kind: domain.SchedulePRChecksDeadline,
+			Subject: domain.ScheduleSubject{
+				Type:   domain.ScheduleSubjectAttentionItem,
+				ItemID: &itemID, ItemVersion: &itemVersion,
+			},
+			RunID: &legacy.ID, PolicyDigest: &legacy.PolicyDigest,
+			CreatedAt: fireAt.Add(-time.Minute), FireAt: &fireAt,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return schedule
+	}
+	armed := deadline("schedule-armed")
+	fired, err := deadline("schedule-fired").Concluded(
+		domain.ScheduleFired, domain.ResolutionDeadlineElapsed, fireAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := deadline("schedule-resolved").Concluded(
+		domain.ScheduleResolved, domain.ResolutionSubjectConcluded, fireAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interval := int64(60)
+	expiresAt := fireAt.Add(time.Hour)
+	watch, err := domain.NewSchedule(domain.ScheduleInput{
+		ID: "schedule-expired", ProjectID: legacy.ProjectID,
+		Kind: domain.ScheduleBaseAdvanceWatch,
+		Subject: domain.ScheduleSubject{
+			Type:   domain.ScheduleSubjectAttentionItem,
+			ItemID: &itemID, ItemVersion: &itemVersion,
+		},
+		RunID: &legacy.ID, PolicyDigest: &legacy.PolicyDigest,
+		CreatedAt: fireAt.Add(-time.Minute), IntervalSeconds: &interval,
+		ExpiresAt: &expiresAt,
+		BaseWatch: &domain.ScheduleBaseWatch{
+			Repo: "freeside-ai/freeside", BaseRef: "main", AdmittedBaseSHA: "base-sha",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired, err := watch.Concluded(
+		domain.ScheduleExpired, domain.ResolutionIntentExpired, expiresAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedules := []domain.Schedule{armed, fired, resolved, expired}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		if err := tx.PutRun(ctx, legacy); err != nil {
+			return err
+		}
+		for _, schedule := range schedules {
+			if err := tx.PutSchedule(ctx, schedule); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	changedSpec := updated
+	changedSpec.SpecDigest = "sha256:changed-spec"
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		return tx.MigrateLegacyTrustProfileRunPolicy(ctx, legacy, changedSpec, policy)
+	}); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("migration with changed spec = %v, want ErrImmutableTransition", err)
+	}
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		run, err := tx.GetRun(ctx, legacy.ID)
+		if err != nil {
+			return err
+		}
+		if run.PolicyDigest != legacy.PolicyDigest {
+			t.Fatalf("failed migration changed run digest to %q", run.PolicyDigest)
+		}
+		stored, err := tx.ListSchedules(ctx)
+		if err != nil {
+			return err
+		}
+		if len(stored) != len(schedules) {
+			t.Fatalf("failed migration left %d schedules, want %d", len(stored), len(schedules))
+		}
+		for _, snapshot := range stored {
+			if snapshot.Value.PolicyDigest == nil ||
+				*snapshot.Value.PolicyDigest != legacy.PolicyDigest {
+				t.Fatalf("failed migration changed schedule %q policy to %v",
+					snapshot.Value.ID, snapshot.Value.PolicyDigest)
+			}
+		}
+		_, err = tx.GetResolvedPolicy(ctx, legacy.ID)
+		return err
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("failed migration policy read = %v, want ErrNotFound", err)
+	}
+	unrelated, err := domain.NewResolvedPolicy(legacy.ID, []domain.PolicyKey{{
+		Key: "driver", Value: "claude",
+		Provenance: domain.KeyProvenance{
+			Source: domain.ProvenanceOverride, Digest: legacy.PolicyDigest,
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelatedRun := legacy
+	unrelatedRun.PolicyDigest = unrelated.Digest
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		return tx.MigrateLegacyTrustProfileRunPolicy(ctx, legacy, unrelatedRun, unrelated)
+	}); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("migration to unrelated policy = %v, want ErrImmutableTransition", err)
+	}
+
+	conflicting := schedules[0]
+	conflictingDigest := domain.Digest("sha256:conflicting-policy")
+	conflicting.PolicyDigest = &conflictingDigest
+	conflictingBody, err := encode(conflicting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+UPDATE schedules SET policy_digest = ?, body = ? WHERE id = ?`,
+		conflictingDigest, conflictingBody, conflicting.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		return tx.MigrateLegacyTrustProfileRunPolicy(ctx, legacy, updated, policy)
+	}); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("migration with conflicting schedule = %v, want ErrImmutableTransition", err)
+	}
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		run, err := tx.GetRun(ctx, legacy.ID)
+		if err != nil {
+			return err
+		}
+		if run.PolicyDigest != legacy.PolicyDigest {
+			t.Fatalf("rolled-back migration left run policy %q", run.PolicyDigest)
+		}
+		got, err := tx.GetSchedule(ctx, conflicting.ID)
+		if err != nil {
+			return err
+		}
+		if got.PolicyDigest == nil || *got.PolicyDigest != conflictingDigest {
+			t.Fatalf("rolled-back migration changed conflicting schedule to %v", got.PolicyDigest)
+		}
+		_, err = tx.GetResolvedPolicy(ctx, legacy.ID)
+		return err
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("rolled-back migration policy read = %v, want ErrNotFound", err)
+	}
+	legacyBody, err := encode(schedules[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+UPDATE schedules SET policy_digest = ?, body = ? WHERE id = ?`,
+		legacy.PolicyDigest, legacyBody, conflicting.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		return tx.MigrateLegacyTrustProfileRunPolicy(ctx, legacy, updated, policy)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		run, err := tx.GetRun(ctx, legacy.ID)
+		if err != nil {
+			return err
+		}
+		gotPolicy, err := tx.GetResolvedPolicy(ctx, legacy.ID)
+		if err != nil {
+			return err
+		}
+		if run.PolicyDigest != policy.Digest || gotPolicy.Digest != policy.Digest {
+			t.Fatalf("migrated binding = run %q policy %q", run.PolicyDigest, gotPolicy.Digest)
+		}
+		stored, err := tx.ListSchedules(ctx)
+		if err != nil {
+			return err
+		}
+		if len(stored) != len(schedules) {
+			t.Fatalf("migrated schedules = %d, want %d", len(stored), len(schedules))
+		}
+		wantStatuses := map[domain.ScheduleStatus]bool{
+			domain.ScheduleArmed: false, domain.ScheduleFired: false,
+			domain.ScheduleResolved: false, domain.ScheduleExpired: false,
+		}
+		for _, snapshot := range stored {
+			schedule := snapshot.Value
+			if schedule.PolicyDigest == nil || *schedule.PolicyDigest != policy.Digest {
+				t.Fatalf("migrated schedule %q policy = %v, want %q",
+					schedule.ID, schedule.PolicyDigest, policy.Digest)
+			}
+			if snapshot.Snapshot.EntityVersion != 2 {
+				t.Fatalf("migrated schedule %q entity version = %d, want 2",
+					schedule.ID, snapshot.Snapshot.EntityVersion)
+			}
+			wantStatuses[schedule.Status] = true
+		}
+		for status, found := range wantStatuses {
+			if !found {
+				t.Fatalf("migration did not exercise %s schedule", status)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestGetRejectsForgedMetadata: runs, conversations, and deliveries share the
 // items' reconstruction convention (#91, extended by #98's shared scan
 // functions), so a store-impossible entity_version or as_of_revision fails

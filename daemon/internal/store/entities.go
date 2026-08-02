@@ -260,6 +260,95 @@ func (tx *WriteTx) PutRun(ctx context.Context, run domain.Run) error {
 	return nil
 }
 
+// MigrateLegacyTrustProfileRunPolicy atomically translates the exact legacy
+// fake-publication representation into an authenticated ResolvedPolicy
+// binding, including every schedule already bound to that run. The old run
+// digest must be preserved as the one trust-profile key's value and
+// provenance, every other run field must remain byte-for-byte unchanged, the
+// current row must still equal legacy, and no policy may already exist.
+// Ordinary run and schedule updates retain immutable policy bindings.
+func (tx *WriteTx) MigrateLegacyTrustProfileRunPolicy(
+	ctx context.Context,
+	legacy, updated domain.Run,
+	policy domain.ResolvedPolicy,
+) error {
+	if legacy.PolicyDigest == updated.PolicyDigest {
+		return fmt.Errorf("migrate run policy %q: digest did not change: %w",
+			legacy.ID, domain.ErrImmutableTransition)
+	}
+	expected := legacy
+	expected.PolicyDigest = updated.PolicyDigest
+	expectedBody, err := encode(expected)
+	if err != nil {
+		return fmt.Errorf("migrate run policy %q expected: %w", legacy.ID, err)
+	}
+	updatedBody, err := encode(updated)
+	if err != nil {
+		return fmt.Errorf("migrate run policy %q updated: %w", legacy.ID, err)
+	}
+	if expectedBody != updatedBody ||
+		policy.RunID != updated.ID || policy.Digest != updated.PolicyDigest {
+		return fmt.Errorf("migrate run policy %q changes more than its authenticated binding: %w",
+			legacy.ID, domain.ErrImmutableTransition)
+	}
+	if err := policy.Validate(); err != nil {
+		return fmt.Errorf("migrate run policy %q policy: %w", legacy.ID, err)
+	}
+	if len(policy.Keys) != 1 || policy.Keys[0].Key != "trust_profile_digest" ||
+		policy.Keys[0].Value != string(legacy.PolicyDigest) ||
+		policy.Keys[0].Provenance.Source != domain.ProvenanceOverride ||
+		policy.Keys[0].Provenance.Digest != legacy.PolicyDigest {
+		return fmt.Errorf("migrate run policy %q does not preserve the legacy trust profile: %w",
+			legacy.ID, domain.ErrImmutableTransition)
+	}
+	legacyBody, err := encode(legacy)
+	if err != nil {
+		return fmt.Errorf("migrate run policy %q legacy: %w", legacy.ID, err)
+	}
+	current, err := tx.GetRun(ctx, legacy.ID)
+	if err != nil {
+		return fmt.Errorf("migrate run policy %q current: %w", legacy.ID, err)
+	}
+	currentBody, err := encode(current)
+	if err != nil {
+		return fmt.Errorf("migrate run policy %q current: %w", legacy.ID, err)
+	}
+	if currentBody != legacyBody {
+		return fmt.Errorf("migrate run policy %q current run differs from legacy: %w",
+			legacy.ID, domain.ErrImmutableTransition)
+	}
+	if _, err := tx.GetResolvedPolicy(ctx, legacy.ID); err == nil {
+		return fmt.Errorf("migrate run policy %q already has a resolved policy: %w",
+			legacy.ID, ErrImmutableConflict)
+	} else if !errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("migrate run policy %q existing policy: %w", legacy.ID, err)
+	}
+
+	result, err := tx.tx.ExecContext(ctx, `
+UPDATE runs
+SET policy_digest = ?, entity_version = entity_version + 1,
+    as_of_revision = ?, body = ?
+WHERE id = ? AND policy_digest = ?`,
+		updated.PolicyDigest, tx.asOfRevision, updatedBody,
+		legacy.ID, legacy.PolicyDigest,
+	)
+	if err != nil {
+		return fmt.Errorf("migrate run policy %q: %w", legacy.ID, err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("migrate run policy %q rows affected: %w", legacy.ID, err)
+	}
+	if changed != 1 {
+		return fmt.Errorf("migrate run policy %q changed %d rows: %w",
+			legacy.ID, changed, domain.ErrImmutableTransition)
+	}
+	if err := tx.migrateLegacyRunPolicySchedules(ctx, legacy, updated); err != nil {
+		return err
+	}
+	return tx.PutResolvedPolicy(ctx, policy)
+}
+
 // scanRunSnapshot reconstructs one runs row (see the scanner doc for the
 // shared gate sequence). Errors are returned unwrapped; callers add the
 // entity/key context.

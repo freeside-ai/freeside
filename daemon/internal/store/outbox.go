@@ -61,7 +61,7 @@ ON CONFLICT (idempotency_key) DO NOTHING`
 	selectOutboxSQL = `
 SELECT id, idempotency_key, kind, payload, status, created_at
 FROM outbox WHERE idempotency_key = ?`
-	listPendingOutboxSQL = `
+	listOutboxByStatusSQL = `
 SELECT id, idempotency_key, kind, payload, status, created_at
 FROM outbox WHERE kind = ? AND status = ? ORDER BY id`
 	markOutboxDispatchedSQL = `
@@ -97,12 +97,27 @@ func (tx *InternalTx) EnqueueOutbox(ctx context.Context, key, kind string, paylo
 // "discuss commits and the daemon dies pre-invocation"). Dispatch then
 // re-hands each to its provider, whose durable intent record dedups a repeat.
 func (tx *ReadTx) ListPendingOutbox(ctx context.Context, kind string) ([]QueueEntry, error) {
+	return tx.listOutboxByStatus(ctx, kind, outboxStatusPending)
+}
+
+// ListDispatchedOutbox returns completed intents of one kind in insertion
+// order. Recovery uses it only when an upgrade must converge durable state
+// owned by already-dispatched work; ordinary dispatch loops use
+// ListPendingOutbox.
+func (tx *ReadTx) ListDispatchedOutbox(ctx context.Context, kind string) ([]QueueEntry, error) {
+	return tx.listOutboxByStatus(ctx, kind, outboxStatusDispatched)
+}
+
+func (tx *ReadTx) listOutboxByStatus(
+	ctx context.Context,
+	kind, status string,
+) ([]QueueEntry, error) {
 	if kind == "" {
-		return nil, errors.New("list pending outbox: empty kind")
+		return nil, errors.New("list outbox: empty kind")
 	}
-	rows, err := tx.tx.QueryContext(ctx, listPendingOutboxSQL, kind, outboxStatusPending)
+	rows, err := tx.tx.QueryContext(ctx, listOutboxByStatusSQL, kind, status)
 	if err != nil {
-		return nil, fmt.Errorf("list pending outbox %q: %w", kind, err)
+		return nil, fmt.Errorf("list outbox %q status %q: %w", kind, status, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var entries []QueueEntry
@@ -112,16 +127,16 @@ func (tx *ReadTx) ListPendingOutbox(ctx context.Context, kind string) ([]QueueEn
 			stored string
 		)
 		if err := rows.Scan(&entry.ID, &entry.IdempotencyKey, &entry.Kind, &entry.Payload, &entry.Status, &stored); err != nil {
-			return nil, fmt.Errorf("list pending outbox %q: %w", kind, err)
+			return nil, fmt.Errorf("list outbox %q status %q: %w", kind, status, err)
 		}
 		entry.CreatedAt, err = time.Parse(time.RFC3339Nano, stored)
 		if err != nil {
-			return nil, fmt.Errorf("list pending outbox %q: stored created_at invalid: %w", kind, err)
+			return nil, fmt.Errorf("list outbox %q status %q: stored created_at invalid: %w", kind, status, err)
 		}
 		entries = append(entries, entry)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list pending outbox %q: %w", kind, err)
+		return nil, fmt.Errorf("list outbox %q status %q: %w", kind, status, err)
 	}
 	return entries, nil
 }

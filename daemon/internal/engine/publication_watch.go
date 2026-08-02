@@ -50,40 +50,65 @@ func armPublicationWatches(
 	repo, baseRef, admittedBaseSHA string,
 	now time.Time,
 ) error {
-	if item.Status != domain.StatusOpen {
-		return nil
-	}
 	now = now.UTC()
-	itemID := item.ID
-	version := item.ItemVersion
-	subject := domain.ScheduleSubject{
-		Type:   domain.ScheduleSubjectAttentionItem,
-		ItemID: &itemID, ItemVersion: &version,
-	}
-	checksFireAt := now.Add(DefaultPRChecksDeadline)
-	reviewFireAt := now.Add(DefaultReviewWaitThreshold)
-	watchInterval := int64(DefaultBaseAdvanceInterval / time.Second)
-	inputs := []domain.ScheduleInput{
-		{
-			ID:        PublicationWatchScheduleID(domain.SchedulePRChecksDeadline, item.ID),
-			ProjectID: item.ProjectID, Kind: domain.SchedulePRChecksDeadline,
-			Subject: subject, CreatedAt: now, FireAt: &checksFireAt,
-		},
-		{
-			ID:        PublicationWatchScheduleID(domain.ScheduleReviewWaitThreshold, item.ID),
-			ProjectID: item.ProjectID, Kind: domain.ScheduleReviewWaitThreshold,
-			Subject: subject, CreatedAt: now, FireAt: &reviewFireAt,
-		},
-		{
-			ID:        PublicationWatchScheduleID(domain.ScheduleBaseAdvanceWatch, item.ID),
-			ProjectID: item.ProjectID, Kind: domain.ScheduleBaseAdvanceWatch,
-			Subject: subject, CreatedAt: now, IntervalSeconds: &watchInterval,
-			BaseWatch: &domain.ScheduleBaseWatch{
-				Repo: repo, BaseRef: baseRef, AdmittedBaseSHA: admittedBaseSHA,
-			},
-		},
-	}
 	return st.Write(ctx, func(tx *store.WriteTx) error {
+		current, err := tx.GetAttentionItem(ctx, item.ID)
+		if err != nil {
+			return fmt.Errorf("arm publication watches item %s: %w", item.ID, err)
+		}
+		if current.Status != domain.StatusOpen {
+			return nil
+		}
+		if current.Subject.Type != domain.SubjectRun || current.Subject.RunID == nil ||
+			current.Subject.ID != domain.SubjectID(*current.Subject.RunID) {
+			return fmt.Errorf("arm publication watches item %s has no exact run binding",
+				current.ID)
+		}
+		run, err := tx.GetRun(ctx, *current.Subject.RunID)
+		if err != nil {
+			return fmt.Errorf("arm publication watches run %s: %w", *current.Subject.RunID, err)
+		}
+		policy, err := tx.GetResolvedPolicy(ctx, run.ID)
+		if err != nil {
+			return fmt.Errorf("arm publication watches policy %s: %w", run.ID, err)
+		}
+		if run.ProjectID != current.ProjectID || policy.RunID != run.ID ||
+			policy.Digest != run.PolicyDigest {
+			return fmt.Errorf("arm publication watches item %s authority mismatch",
+				current.ID)
+		}
+		itemID, version := current.ID, current.ItemVersion
+		runID, policyDigest := run.ID, policy.Digest
+		subject := domain.ScheduleSubject{
+			Type:   domain.ScheduleSubjectAttentionItem,
+			ItemID: &itemID, ItemVersion: &version,
+		}
+		checksFireAt := now.Add(DefaultPRChecksDeadline)
+		reviewFireAt := now.Add(DefaultReviewWaitThreshold)
+		watchInterval := int64(DefaultBaseAdvanceInterval / time.Second)
+		inputs := []domain.ScheduleInput{
+			{
+				ID:        PublicationWatchScheduleID(domain.SchedulePRChecksDeadline, current.ID),
+				ProjectID: current.ProjectID, Kind: domain.SchedulePRChecksDeadline,
+				Subject: subject, RunID: &runID, PolicyDigest: &policyDigest,
+				CreatedAt: now, FireAt: &checksFireAt,
+			},
+			{
+				ID:        PublicationWatchScheduleID(domain.ScheduleReviewWaitThreshold, current.ID),
+				ProjectID: current.ProjectID, Kind: domain.ScheduleReviewWaitThreshold,
+				Subject: subject, RunID: &runID, PolicyDigest: &policyDigest,
+				CreatedAt: now, FireAt: &reviewFireAt,
+			},
+			{
+				ID:        PublicationWatchScheduleID(domain.ScheduleBaseAdvanceWatch, current.ID),
+				ProjectID: current.ProjectID, Kind: domain.ScheduleBaseAdvanceWatch,
+				Subject: subject, RunID: &runID, PolicyDigest: &policyDigest,
+				CreatedAt: now, IntervalSeconds: &watchInterval,
+				BaseWatch: &domain.ScheduleBaseWatch{
+					Repo: repo, BaseRef: baseRef, AdmittedBaseSHA: admittedBaseSHA,
+				},
+			},
+		}
 		for _, in := range inputs {
 			_, err := tx.GetSchedule(ctx, in.ID)
 			switch {

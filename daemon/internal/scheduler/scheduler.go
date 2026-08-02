@@ -2,10 +2,11 @@
 // every durable deferred check — PR watches, deadlines, subject-bound
 // polls — as fires over the closed domain.ScheduleKind union. It performs
 // fire-time validation (operating-mode eligibility, expiry, activation
-// state, subject existence, project binding) before constructing a trusted
-// domain.ScheduleEvent, coalesces missed fires to the latest nominal
-// occurrence with a recorded gap, and commits each occurrence's consumption
-// and its handler's durable outcome in one store transaction, so a crashed
+// state, subject existence, project binding, and resolved-policy authority)
+// before constructing a trusted domain.ScheduleEvent. It coalesces missed
+// fires to the latest nominal occurrence with a recorded gap, and commits
+// each occurrence's consumption and its handler's durable outcome in one
+// store transaction, so a crashed
 // or failed consumption leaves the occurrence durably pending for
 // redelivery.
 //
@@ -383,6 +384,15 @@ func (s *Scheduler) fire(
 		return nil
 	}
 
+	// Authority is reconstructed from durable state on every fire, before any
+	// terminal outcome can consume the schedule. Workload kinds must lead
+	// through their item to the exact run and authenticated resolved policy it
+	// is bound to; installation intent and permanent trusted-config jobs use
+	// their own closed authority classes instead of a per-run policy.
+	if err := s.validateFireAuthority(ctx, schedule); err != nil {
+		return err
+	}
+
 	// Expiry precedes event construction: an expired schedule terminates
 	// durably, and any pending fire is recorded as no longer applicable.
 	if schedule.ExpiresAt != nil && !now.Before(*schedule.ExpiresAt) {
@@ -432,6 +442,77 @@ func (s *Scheduler) fire(
 		}
 	}()
 	return nil
+}
+
+// validateFireAuthority proves the kind-specific authority immediately
+// before event construction. The switch is intentionally exhaustive: adding
+// a schedule kind must state whether its authority is a run-bound resolved
+// policy, the installation authority document, or daemon-owned trusted
+// configuration.
+func (s *Scheduler) validateFireAuthority(ctx context.Context, schedule domain.Schedule) error {
+	switch schedule.Kind {
+	case domain.SchedulePRChecksDeadline,
+		domain.ScheduleReviewWaitThreshold,
+		domain.ScheduleBaseAdvanceWatch:
+		return s.validateResolvedPolicy(ctx, schedule)
+	case domain.ScheduleInstallationPoll:
+		// subjectLive will revalidate the pending envelope's registration,
+		// active epoch, and durable intent revision before event construction.
+		// That authority document, not a workflow run, owns installation intent.
+		return nil
+	case domain.ScheduleDoctor, domain.ScheduleJanitor:
+		// These permanent jobs are armed only from daemon-owned trusted
+		// configuration and deliberately have no per-run authority.
+		return nil
+	}
+	return fmt.Errorf("schedule %s: kind %q has no authority class", schedule.ID, schedule.Kind)
+}
+
+// validateResolvedPolicy follows an attention-item schedule's immutable
+// subject binding to its run, then authenticates the stored policy content
+// and the run's digest binding. Every mismatch is corruption, not a dead
+// subject: fail loud without constructing or consuming an event.
+func (s *Scheduler) validateResolvedPolicy(ctx context.Context, schedule domain.Schedule) error {
+	return s.store.Read(ctx, func(tx *store.ReadTx) error {
+		item, err := tx.GetAttentionItem(ctx, *schedule.Subject.ItemID)
+		if err != nil {
+			return fmt.Errorf("schedule %s resolved-policy item: %w", schedule.ID, err)
+		}
+		if item.ProjectID != schedule.ProjectID {
+			return fmt.Errorf("schedule %s project %s binds item %s of project %s",
+				schedule.ID, schedule.ProjectID, item.ID, item.ProjectID)
+		}
+		if item.Subject.Type != domain.SubjectRun || item.Subject.RunID == nil ||
+			item.Subject.ID != domain.SubjectID(*item.Subject.RunID) {
+			return fmt.Errorf("schedule %s item %s does not identify one exact run",
+				schedule.ID, item.ID)
+		}
+		if *item.Subject.RunID != *schedule.RunID {
+			return fmt.Errorf("schedule %s run %s binds item %s retargeted to run %s",
+				schedule.ID, *schedule.RunID, item.ID, *item.Subject.RunID)
+		}
+		run, err := tx.GetRun(ctx, *item.Subject.RunID)
+		if err != nil {
+			return fmt.Errorf("schedule %s resolved-policy run %s: %w",
+				schedule.ID, *item.Subject.RunID, err)
+		}
+		if run.ProjectID != schedule.ProjectID {
+			return fmt.Errorf("schedule %s project %s binds run %s of project %s",
+				schedule.ID, schedule.ProjectID, run.ID, run.ProjectID)
+		}
+		policy, err := tx.GetResolvedPolicy(ctx, run.ID)
+		if err != nil {
+			return fmt.Errorf("schedule %s resolved policy for run %s: %w",
+				schedule.ID, run.ID, err)
+		}
+		if policy.RunID != run.ID || policy.Digest != run.PolicyDigest ||
+			run.PolicyDigest != *schedule.PolicyDigest {
+			return fmt.Errorf(
+				"schedule %s run %s policy binding mismatch: run digest %q, policy run %s digest %q",
+				schedule.ID, run.ID, run.PolicyDigest, policy.RunID, policy.Digest)
+		}
+		return nil
+	})
 }
 
 // convergeOccurrence produces the pending occurrence to deliver: the latest

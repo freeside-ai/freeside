@@ -28,11 +28,27 @@ func schedTestStore(t *testing.T) *store.Store {
 	return st
 }
 
+func schedTestResolvedPolicy(runID domain.RunID) domain.ResolvedPolicy {
+	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
+		Key: "driver", Value: "claude",
+		Provenance: domain.KeyProvenance{
+			Source: domain.ProvenanceOverride,
+			Digest: domain.Digest("sha256:" + strings.Repeat("ab", 32)),
+		},
+	}})
+	if err != nil {
+		panic(err)
+	}
+	return policy
+}
+
 func schedTestItem(t *testing.T, st *store.Store) domain.AttentionItem {
 	t.Helper()
+	runID := domain.RunID("run-ready-1")
+	policy := schedTestResolvedPolicy(runID)
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-ready-1", ProjectID: "project-1",
-		Subject: domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason:            "published and verified",
 		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionMarkSeen},
@@ -43,7 +59,17 @@ func schedTestItem(t *testing.T, st *store.Store) domain.AttentionItem {
 		t.Fatal(err)
 	}
 	if err := st.Write(context.Background(), func(tx *store.WriteTx) error {
-		return tx.PutAttentionItem(context.Background(), item)
+		ctx := context.Background()
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: runID, ProjectID: item.ProjectID,
+			SpecDigest: "sha256:scheduler-test-spec", PolicyDigest: policy.Digest,
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -68,6 +94,7 @@ func watchSchedule(t *testing.T, item domain.AttentionItem) domain.Schedule {
 	itemID := item.ID
 	version := item.ItemVersion
 	interval := int64(60)
+	policy := schedTestResolvedPolicy(*item.Subject.RunID)
 	s, err := domain.NewSchedule(domain.ScheduleInput{
 		ID:        domain.ScheduleID("schedule-base_advance_watch-" + string(item.ID)),
 		ProjectID: item.ProjectID, Kind: domain.ScheduleBaseAdvanceWatch,
@@ -75,6 +102,7 @@ func watchSchedule(t *testing.T, item domain.AttentionItem) domain.Schedule {
 			Type:   domain.ScheduleSubjectAttentionItem,
 			ItemID: &itemID, ItemVersion: &version,
 		},
+		RunID: item.Subject.RunID, PolicyDigest: &policy.Digest,
 		CreatedAt:       time.Date(2026, 2, 3, 4, 0, 0, 0, time.UTC),
 		IntervalSeconds: &interval,
 		BaseWatch: &domain.ScheduleBaseWatch{
@@ -263,6 +291,7 @@ func TestDeadlineReArmsOnStaleSubjectVersion(t *testing.T) {
 	version := item.ItemVersion
 	start := time.Date(2026, 2, 3, 4, 0, 0, 0, time.UTC)
 	fireAt := start.Add(30 * time.Minute)
+	policy := schedTestResolvedPolicy(*item.Subject.RunID)
 	sched, err := domain.NewSchedule(domain.ScheduleInput{
 		ID:        domain.ScheduleID("schedule-pr_checks_deadline-" + string(item.ID)),
 		ProjectID: item.ProjectID, Kind: domain.SchedulePRChecksDeadline,
@@ -270,6 +299,7 @@ func TestDeadlineReArmsOnStaleSubjectVersion(t *testing.T) {
 			Type:   domain.ScheduleSubjectAttentionItem,
 			ItemID: &itemID, ItemVersion: &version,
 		},
+		RunID: item.Subject.RunID, PolicyDigest: &policy.Digest,
 		CreatedAt: start, FireAt: &fireAt,
 	})
 	if err != nil {
@@ -340,6 +370,7 @@ func TestDeadlineRegistrationTerminatesFired(t *testing.T) {
 	version := item.ItemVersion
 	start := time.Date(2026, 2, 3, 4, 0, 0, 0, time.UTC)
 	fireAt := start.Add(30 * time.Minute)
+	policy := schedTestResolvedPolicy(*item.Subject.RunID)
 	sched, err := domain.NewSchedule(domain.ScheduleInput{
 		ID:        domain.ScheduleID("schedule-review_wait_threshold-" + string(item.ID)),
 		ProjectID: item.ProjectID, Kind: domain.ScheduleReviewWaitThreshold,
@@ -347,6 +378,7 @@ func TestDeadlineRegistrationTerminatesFired(t *testing.T) {
 			Type:   domain.ScheduleSubjectAttentionItem,
 			ItemID: &itemID, ItemVersion: &version,
 		},
+		RunID: item.Subject.RunID, PolicyDigest: &policy.Digest,
 		CreatedAt: start, FireAt: &fireAt,
 	})
 	if err != nil {

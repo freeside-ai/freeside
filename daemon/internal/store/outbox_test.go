@@ -217,6 +217,16 @@ func TestListPendingOutbox(t *testing.T) {
 	}
 	assertPending(t, "inv-2")
 	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		dispatched, err := tx.ListDispatchedOutbox(ctx, "agent_invocation_requested")
+		if err != nil {
+			return err
+		}
+		if len(dispatched) != 1 || dispatched[0].IdempotencyKey != "inv-1" {
+			t.Fatalf("dispatched entries = %+v, want inv-1", dispatched)
+		}
+		if _, err := tx.ListDispatchedOutbox(ctx, ""); err == nil {
+			t.Fatal("ListDispatchedOutbox accepted an empty kind")
+		}
 		entry, err := tx.GetOutbox(ctx, "inv-1")
 		if err != nil {
 			return err

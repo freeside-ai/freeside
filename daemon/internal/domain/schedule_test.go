@@ -17,6 +17,8 @@ func ptr[T any](v T) *T { return &v }
 // contract is what Validate enforces, so these double as its positive cases.
 func validScheduleInput(kind ScheduleKind) ScheduleInput {
 	ts := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
+	runID := RunID("run-1")
+	policyDigest := Digest("sha256:policy")
 	in := ScheduleInput{
 		ID:        ScheduleID("schedule-" + string(kind) + "-x"),
 		ProjectID: "project-1",
@@ -25,11 +27,13 @@ func validScheduleInput(kind ScheduleKind) ScheduleInput {
 	}
 	switch kind {
 	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold:
+		in.RunID, in.PolicyDigest = &runID, &policyDigest
 		in.Subject = ScheduleSubject{
 			Type: ScheduleSubjectAttentionItem, ItemID: ptr(ItemID("item-1")), ItemVersion: ptr(1),
 		}
 		in.FireAt = ptr(ts.Add(30 * time.Minute))
 	case ScheduleBaseAdvanceWatch:
+		in.RunID, in.PolicyDigest = &runID, &policyDigest
 		in.Subject = ScheduleSubject{
 			Type: ScheduleSubjectAttentionItem, ItemID: ptr(ItemID("item-1")), ItemVersion: ptr(1),
 		}
@@ -142,6 +146,10 @@ func TestScheduleValidateDetailContract(t *testing.T) {
 		{"wrong subject class", func(s *Schedule) {
 			s.Subject = ScheduleSubject{Type: ScheduleSubjectTrustedConfig}
 		}, ErrScheduleDetailMismatch},
+		{"workload without run", func(s *Schedule) { s.RunID = nil }, ErrScheduleDetailMismatch},
+		{"workload without policy", func(s *Schedule) { s.PolicyDigest = nil }, ErrScheduleDetailMismatch},
+		{"workload with empty run", func(s *Schedule) { s.RunID = ptr(RunID("")) }, ErrEmptyID},
+		{"workload with empty policy", func(s *Schedule) { s.PolicyDigest = ptr(Digest("")) }, ErrEmptyField},
 		{"non-UTC fire_at", func(s *Schedule) {
 			loc := time.FixedZone("x", 3600)
 			s.FireAt = ptr(s.FireAt.In(loc))
@@ -183,7 +191,36 @@ func TestScheduleValidateDetailContract(t *testing.T) {
 		}
 	})
 
+	t.Run("non-workload authority", func(t *testing.T) {
+		for _, kind := range []ScheduleKind{ScheduleInstallationPoll, ScheduleDoctor, ScheduleJanitor} {
+			s := mustSchedule(t, kind)
+			s.RunID = ptr(RunID("run-1"))
+			s.PolicyDigest = ptr(Digest("sha256:policy"))
+			if err := s.Validate(); !errors.Is(err, ErrScheduleDetailMismatch) {
+				t.Errorf("%s with run authority: %v", kind, err)
+			}
+		}
+	})
+
 	t.Run("expiry contract", func(t *testing.T) {
+		for _, kind := range []ScheduleKind{SchedulePRChecksDeadline, ScheduleReviewWaitThreshold} {
+			in := validScheduleInput(kind)
+			in.ExpiresAt = ptr(in.CreatedAt.Add(time.Hour))
+			if _, err := NewSchedule(in); !errors.Is(err, ErrScheduleDetailMismatch) {
+				t.Errorf("NewSchedule(%s) with expiry: %v", kind, err)
+			}
+			s := mustSchedule(t, kind)
+			s.ExpiresAt = ptr(s.CreatedAt.Add(time.Hour))
+			if err := s.Validate(); !errors.Is(err, ErrScheduleDetailMismatch) {
+				t.Errorf("%s with expiry: %v", kind, err)
+			}
+			s = mustSchedule(t, kind)
+			if _, err := s.Concluded(
+				ScheduleExpired, ResolutionIntentExpired, s.CreatedAt.Add(time.Hour),
+			); !errors.Is(err, ErrInvalidScheduleStatus) {
+				t.Errorf("%s concluded expired: %v", kind, err)
+			}
+		}
 		s := mustSchedule(t, ScheduleInstallationPoll)
 		s.ExpiresAt = nil
 		if err := s.Validate(); !errors.Is(err, ErrScheduleDetailMismatch) {
@@ -358,6 +395,16 @@ func TestValidateScheduleTransition(t *testing.T) {
 		{"identity change", armed, func() Schedule {
 			s := armed
 			s.ID = "schedule-other"
+			return s
+		}(), ErrImmutableTransition},
+		{"run binding change", armed, func() Schedule {
+			s := armed
+			s.RunID = ptr(RunID("run-2"))
+			return s
+		}(), ErrImmutableTransition},
+		{"policy binding change", armed, func() Schedule {
+			s := armed
+			s.PolicyDigest = ptr(Digest("sha256:other"))
 			return s
 		}(), ErrImmutableTransition},
 	}

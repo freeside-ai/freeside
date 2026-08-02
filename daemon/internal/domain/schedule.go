@@ -386,6 +386,11 @@ type Schedule struct {
 	ProjectID ProjectID       `json:"project_id"`
 	Kind      ScheduleKind    `json:"kind"`
 	Subject   ScheduleSubject `json:"subject"`
+	// RunID and PolicyDigest are the independent fire-time authority binding
+	// for attention-item workload kinds. They are fixed for the schedule's
+	// lifetime and absent for installation intent and trusted-config jobs.
+	RunID        *RunID  `json:"run_id"`
+	PolicyDigest *Digest `json:"policy_digest"`
 	// Generation increments on every re-arm; occurrence identity and event
 	// staleness checks bind to it.
 	Generation int64 `json:"generation"`
@@ -399,8 +404,9 @@ type Schedule struct {
 	// recurring kinds, positive.
 	IntervalSeconds *int64 `json:"interval_seconds"`
 	// ExpiresAt bounds the schedule's validity: required for
-	// installation_poll (the envelope's expiry), forbidden for permanent
-	// trusted-config jobs, optional otherwise.
+	// installation_poll (the envelope's expiry), optional for recurring
+	// workload watches, and forbidden for one-shot deadlines and permanent
+	// trusted-config jobs.
 	ExpiresAt *time.Time `json:"expires_at"`
 	// BaseWatch is present exactly for base_advance_watch.
 	BaseWatch *ScheduleBaseWatch `json:"base_watch"`
@@ -419,6 +425,8 @@ type ScheduleInput struct {
 	ProjectID       ProjectID
 	Kind            ScheduleKind
 	Subject         ScheduleSubject
+	RunID           *RunID
+	PolicyDigest    *Digest
 	CreatedAt       time.Time
 	FireAt          *time.Time
 	IntervalSeconds *int64
@@ -435,6 +443,8 @@ func NewSchedule(in ScheduleInput) (Schedule, error) {
 		ProjectID:       in.ProjectID,
 		Kind:            in.Kind,
 		Subject:         cloneSubject(in.Subject),
+		RunID:           clonePtr(in.RunID),
+		PolicyDigest:    clonePtr(in.PolicyDigest),
 		Generation:      1,
 		CreatedAt:       in.CreatedAt.UTC(),
 		FireAt:          cloneUTC(in.FireAt),
@@ -510,6 +520,25 @@ func (s Schedule) Validate() error {
 		return fmt.Errorf("schedule %s kind %s binds subject %s, want %s: %w",
 			s.ID, s.Kind, s.Subject.Type, s.Kind.subjectType(), ErrScheduleDetailMismatch)
 	}
+	requiresPolicy := false
+	switch s.Kind {
+	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold, ScheduleBaseAdvanceWatch:
+		requiresPolicy = true
+	case ScheduleInstallationPoll, ScheduleDoctor, ScheduleJanitor:
+		requiresPolicy = false
+	}
+	if err := requireOptionalBinding("run_id", s.RunID != nil, requiresPolicy); err != nil {
+		return fmt.Errorf("schedule %s kind %s: %w", s.ID, s.Kind, err)
+	}
+	if err := requireOptionalBinding("policy_digest", s.PolicyDigest != nil, requiresPolicy); err != nil {
+		return fmt.Errorf("schedule %s kind %s: %w", s.ID, s.Kind, err)
+	}
+	if s.RunID != nil && *s.RunID == "" {
+		return fmt.Errorf("schedule %s run_id: %w", s.ID, ErrEmptyID)
+	}
+	if s.PolicyDigest != nil && *s.PolicyDigest == "" {
+		return fmt.Errorf("schedule %s policy_digest: %w", s.ID, ErrEmptyField)
+	}
 	if s.Generation < 1 {
 		return fmt.Errorf("schedule %s generation %d: %w", s.ID, s.Generation, ErrNonPositive)
 	}
@@ -560,13 +589,19 @@ func (s Schedule) Validate() error {
 		if s.ExpiresAt == nil {
 			return fmt.Errorf("schedule %s kind %s requires expires_at: %w", s.ID, s.Kind, ErrScheduleDetailMismatch)
 		}
+	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold:
+		if s.ExpiresAt != nil {
+			return fmt.Errorf("schedule %s one-shot kind %s carries expires_at: %w",
+				s.ID, s.Kind, ErrScheduleDetailMismatch)
+		}
 	case ScheduleDoctor, ScheduleJanitor:
 		if s.ExpiresAt != nil {
 			return fmt.Errorf("schedule %s permanent trusted-config job carries expires_at: %w",
 				s.ID, ErrScheduleDetailMismatch)
 		}
-	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold, ScheduleBaseAdvanceWatch:
-		// Expiry optional: these live until their subject concludes.
+	case ScheduleBaseAdvanceWatch:
+		// A recurring workload watch may carry a validity bound; absent one,
+		// it lives until its subject concludes.
 	}
 	if s.Status.Terminal() != (s.Resolution != nil) {
 		return fmt.Errorf("schedule %s status %s resolution presence: %w",
@@ -592,6 +627,10 @@ func (s Schedule) Validate() error {
 		return fmt.Errorf("schedule %s recurring kind %s cannot terminate fired: %w",
 			s.ID, s.Kind, ErrInvalidScheduleStatus)
 	}
+	if s.Status == ScheduleExpired && s.Kind.OneShot() {
+		return fmt.Errorf("schedule %s one-shot kind %s cannot terminate expired: %w",
+			s.ID, s.Kind, ErrInvalidScheduleStatus)
+	}
 	if s.Status.Terminal() && s.Kind.TrustedConfigJob() {
 		return fmt.Errorf("schedule %s permanent trusted-config job cannot terminate: %w",
 			s.ID, ErrInvalidScheduleStatus)
@@ -606,7 +645,8 @@ func (s Schedule) Validate() error {
 // armed. Everything else is stale or immutable-violating.
 func ValidateScheduleTransition(old, new Schedule) error {
 	if old.ID != new.ID || old.Kind != new.Kind || old.ProjectID != new.ProjectID ||
-		old.Subject.Type != new.Subject.Type {
+		old.Subject.Type != new.Subject.Type || !ptrEqual(old.RunID, new.RunID) ||
+		!ptrEqual(old.PolicyDigest, new.PolicyDigest) {
 		return fmt.Errorf("schedule %s identity would change: %w", old.ID, ErrImmutableTransition)
 	}
 	switch new.Generation {
@@ -643,7 +683,8 @@ func ValidateScheduleTransition(old, new Schedule) error {
 
 func schedulesEqual(a, b Schedule) bool {
 	return a.ID == b.ID && a.ProjectID == b.ProjectID && a.Kind == b.Kind &&
-		subjectsEqual(a.Subject, b.Subject) && a.Generation == b.Generation &&
+		subjectsEqual(a.Subject, b.Subject) && ptrEqual(a.RunID, b.RunID) &&
+		ptrEqual(a.PolicyDigest, b.PolicyDigest) && a.Generation == b.Generation &&
 		a.CreatedAt.Equal(b.CreatedAt) &&
 		timePtrEqual(a.FireAt, b.FireAt) &&
 		int64PtrEqual(a.IntervalSeconds, b.IntervalSeconds) &&
@@ -692,6 +733,16 @@ func cloneSubject(s ScheduleSubject) ScheduleSubject {
 	s.ActiveEpoch = clonePtr(s.ActiveEpoch)
 	s.DurableIntentRevision = clonePtr(s.DurableIntentRevision)
 	return s
+}
+
+func requireOptionalBinding(name string, present, want bool) error {
+	if present == want {
+		return nil
+	}
+	if want {
+		return fmt.Errorf("requires %s: %w", name, ErrScheduleDetailMismatch)
+	}
+	return fmt.Errorf("carries %s: %w", name, ErrScheduleDetailMismatch)
 }
 
 func cloneUTC(t *time.Time) *time.Time {
