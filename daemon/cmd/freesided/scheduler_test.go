@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -105,7 +107,7 @@ func TestBaseAdvanceWatchMaintainsFact(t *testing.T) {
 			domain.ScheduleBaseAdvanceWatch: baseAdvanceRegistration(st,
 				func(context.Context, domain.ScheduleBaseWatch) (string, error) {
 					return observed, observeErr
-				}),
+				}, mergeCapture{}),
 		})
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +191,9 @@ func TestBaseAdvanceWatchMaintainsFact(t *testing.T) {
 	}
 
 	// A concluded item resolves the watch with recorded proof at the next
-	// fire instead of firing the handler.
+	// fire; the handler's concluded path (which also hosts the final
+	// capture pass) records the same subject_concluded proof the built-in
+	// check used to.
 	concluded := got
 	concluded.ItemVersion++
 	concluded.Status = domain.StatusResolved
@@ -403,7 +407,7 @@ func TestBaseAdvanceWatchRechecksSubjectOnObserveFailure(t *testing.T) {
 	s, err := scheduler.New(st, domain.ModeAttendedDev,
 		func() time.Time { return now },
 		map[domain.ScheduleKind]scheduler.Registration{
-			domain.ScheduleBaseAdvanceWatch: baseAdvanceRegistration(st, failing),
+			domain.ScheduleBaseAdvanceWatch: baseAdvanceRegistration(st, failing, mergeCapture{}),
 		})
 	if err != nil {
 		t.Fatal(err)
@@ -460,7 +464,7 @@ func TestBaseAdvanceWatchResolvesConcludedItemImmediately(t *testing.T) {
 	registration := baseAdvanceRegistration(st,
 		func(context.Context, domain.ScheduleBaseWatch) (string, error) {
 			return "cafebabe", nil
-		})
+		}, mergeCapture{})
 	registration.SubjectLive = func(context.Context, domain.Schedule) (bool, error) {
 		return true, nil
 	}
@@ -483,5 +487,533 @@ func TestBaseAdvanceWatchResolvesConcludedItemImmediately(t *testing.T) {
 	if got.Status != domain.ScheduleResolved ||
 		got.Resolution.Reason != domain.ResolutionSubjectConcluded {
 		t.Fatalf("schedule = %+v", got)
+	}
+}
+
+// capturedRun seeds the store with a declared, PR-bound work unit and
+// returns the ready item whose subject names its run, so the base-advance
+// watch's §5.18 capture pass has a unit to settle.
+// seedCaptureRun persists the run and resolved policy the declaration
+// re-gate re-derives from (an empty declared scope pairs with a policy
+// declaring no paths key), so capture fixtures satisfy the reconstruction
+// gates the production flow satisfies by construction.
+func seedCaptureRun(t *testing.T, st *store.Store, runID domain.RunID) {
+	t.Helper()
+	ctx := context.Background()
+	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
+		Key: "driver", Value: "claude",
+		Provenance: domain.KeyProvenance{Source: "override", Digest: domain.Digest("sha256:" + strings.Repeat("ab", 32))},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: runID, ProjectID: "project-1",
+			SpecDigest: "sha256:spec", PolicyDigest: policy.Digest,
+		}); err != nil {
+			return err
+		}
+		return tx.PutResolvedPolicy(ctx, policy)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func capturedRun(t *testing.T, st *store.Store) domain.AttentionItem {
+	t.Helper()
+	ctx := context.Background()
+	runID := domain.RunID("run-cap")
+	seedCaptureRun(t, st, runID)
+	boundIssue := 443
+	declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
+		CompletionCriterion: domain.CompletionBoundIssueClosedByMergedPR,
+		BoundIssue:          &boundIssue,
+	}, runID, "project-1", time.Date(2026, 2, 3, 3, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := domain.WorkUnitPRBinding{
+		UnitID: declaration.ID, Repo: "owner/repo", RepositoryID: 424242,
+		PRNumber: 450, BaseRef: "main", HeadSHA: "cafed00d",
+		RecordedAt: time.Date(2026, 2, 3, 3, 30, 0, 0, time.UTC),
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.RecordWorkUnitDeclaration(ctx, declaration); err != nil {
+			return err
+		}
+		return tx.RecordWorkUnitPRBinding(ctx, binding)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-ready-cap", ProjectID: "project-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Reason:            "published and verified",
+		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionMarkSeen},
+		// PRHeadSHA is the head anchor the capture pass verifies the
+		// binding against.
+		PRHeadSHA:   "cafed00d",
+		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
+		Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return item
+}
+
+func readCaptureState(t *testing.T, st *store.Store) ([]domain.PullMergeFact, []domain.IssueStateFact, *domain.WorkUnitCompletion) {
+	t.Helper()
+	ctx := context.Background()
+	var (
+		pulls      []domain.PullMergeFact
+		issues     []domain.IssueStateFact
+		completion *domain.WorkUnitCompletion
+	)
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		if pulls, err = tx.ListPullMergeFacts(ctx, 424242, 450); err != nil {
+			return err
+		}
+		if issues, err = tx.ListIssueStateFacts(ctx, 424242, 443); err != nil {
+			return err
+		}
+		c, err := tx.GetWorkUnitCompletion(ctx, domain.WorkUnitIDForRun("run-cap"))
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		completion = &c
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return pulls, issues, completion
+}
+
+// TestBaseAdvanceWatchCapturesMergeCompletion (§5.18, issue #443): the
+// watch's capture pass appends the bound PR's state on material change,
+// observes the bound issue once the PR merges, and records the write-once
+// completion exactly when the declared criterion is satisfied; a settled
+// unit stops observing.
+func TestBaseAdvanceWatchCapturesMergeCompletion(t *testing.T) {
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := capturedRun(t, st)
+	sched := watchSchedule(t, item)
+	start := sched.CreatedAt
+
+	pull := publish.PullObservation{Number: 450, State: "open", BaseRef: "main", BaseRepoID: 424242, HeadSHA: "cafed00d"}
+	issue := publish.IssueObservation{Number: 443, State: "open"}
+	pullCalls, issueCalls := 0, 0
+	capture := mergeCapture{
+		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			pullCalls++
+			return pull, nil
+		},
+		issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+			issueCalls++
+			return issue, nil
+		},
+	}
+	now := start
+	s, err := scheduler.New(st, domain.ModeAttendedDev,
+		func() time.Time { return now },
+		map[domain.ScheduleKind]scheduler.Registration{
+			domain.ScheduleBaseAdvanceWatch: baseAdvanceRegistration(st,
+				func(context.Context, domain.ScheduleBaseWatch) (string, error) {
+					return "cafebabe", nil
+				}, capture),
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Arm(ctx, sched, start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	// First fire: the open PR's state is recorded; the issue is not yet
+	// observed (the criterion evaluates it only against a merge).
+	now = start.Add(61 * time.Second)
+	if err := s.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pulls, issues, completion := readCaptureState(t, st)
+	if len(pulls) != 1 || pulls[0].Merged || pulls[0].State != domain.PullRequestOpen {
+		t.Fatalf("first capture pulls = %+v", pulls)
+	}
+	if len(issues) != 0 || completion != nil || issueCalls != 0 {
+		t.Fatalf("premature issue/completion capture: %v %v %d", issues, completion, issueCalls)
+	}
+
+	// Second fire, unchanged: no new fact rows.
+	now = start.Add(121 * time.Second)
+	if err := s.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if pulls, _, _ := readCaptureState(t, st); len(pulls) != 1 {
+		t.Fatalf("unchanged observation appended: %+v", pulls)
+	}
+
+	// The PR merges and the issue closes by that merge commit: the facts
+	// append and the completion records in the same consumption.
+	pull = publish.PullObservation{
+		Number: 450, State: "closed", BaseRef: "main", BaseRepoID: 424242,
+		HeadSHA: "cafed00d", Merged: true, MergeCommitSHA: "deadbeef",
+	}
+	issue = publish.IssueObservation{Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef"}
+	now = start.Add(181 * time.Second)
+	if err := s.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pulls, issues, completion = readCaptureState(t, st)
+	if len(pulls) != 2 || !pulls[1].Merged || pulls[1].MergeCommitSHA != "deadbeef" {
+		t.Fatalf("merged capture pulls = %+v", pulls)
+	}
+	if len(issues) != 1 || issues[0].State != domain.IssueClosed || issues[0].ClosedByCommitSHA != "deadbeef" {
+		t.Fatalf("issue capture = %+v", issues)
+	}
+	if completion == nil || completion.Criterion != domain.CompletionBoundIssueClosedByMergedPR ||
+		completion.MergeCommitSHA != "deadbeef" || completion.BoundIssue == nil || *completion.BoundIssue != 443 {
+		t.Fatalf("completion = %+v", completion)
+	}
+
+	// A settled unit stops observing: the next fire runs no capture reads
+	// and appends nothing.
+	before := pullCalls
+	now = start.Add(241 * time.Second)
+	if err := s.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if pullCalls != before {
+		t.Fatalf("settled unit was re-observed (%d -> %d)", before, pullCalls)
+	}
+	if pulls, issues, _ := readCaptureState(t, st); len(pulls) != 2 || len(issues) != 1 {
+		t.Fatalf("settled unit appended: %v %v", pulls, issues)
+	}
+}
+
+// TestBaseAdvanceWatchFinalCaptureOnConcludedItem: the operator merges and
+// immediately concludes the item; the watch's next fire is the final
+// capture pass. A failed observation leaves the schedule armed (the capture
+// is retried, not lost); the successful pass records the completion and
+// resolves the schedule in one consumption.
+func TestBaseAdvanceWatchFinalCaptureOnConcludedItem(t *testing.T) {
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := capturedRun(t, st)
+	concluded := item
+	concluded.ItemVersion++
+	concluded.Status = domain.StatusResolved
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, concluded)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sched := watchSchedule(t, item)
+	start := sched.CreatedAt
+
+	pullErr := errors.New("github unreachable")
+	capture := mergeCapture{
+		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			if pullErr != nil {
+				return publish.PullObservation{}, pullErr
+			}
+			return publish.PullObservation{
+				Number: 450, State: "closed", BaseRef: "main", BaseRepoID: 424242,
+				HeadSHA: "cafed00d", Merged: true, MergeCommitSHA: "deadbeef",
+			}, nil
+		},
+		issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+			return publish.IssueObservation{Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef"}, nil
+		},
+	}
+	now := start
+	s, err := scheduler.New(st, domain.ModeAttendedDev,
+		func() time.Time { return now },
+		map[domain.ScheduleKind]scheduler.Registration{
+			domain.ScheduleBaseAdvanceWatch: baseAdvanceRegistration(st,
+				func(context.Context, domain.ScheduleBaseWatch) (string, error) {
+					return "cafebabe", nil
+				}, capture),
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Arm(ctx, sched, start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Failed final observation: the schedule stays armed and retries
+	// rather than resolving uncaptured.
+	now = start.Add(61 * time.Second)
+	if err := s.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := readScheduleRow(t, st, sched.ID); got.Status != domain.ScheduleArmed {
+		t.Fatalf("schedule resolved uncaptured: %+v", got)
+	}
+
+	// Successful final observation: capture and resolution commit together.
+	pullErr = nil
+	now = start.Add(121 * time.Second)
+	if err := s.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := readScheduleRow(t, st, sched.ID); got.Status != domain.ScheduleResolved ||
+		got.Resolution.Reason != domain.ResolutionSubjectConcluded {
+		t.Fatalf("schedule = %+v", got)
+	}
+	pulls, issues, completion := readCaptureState(t, st)
+	if len(pulls) != 1 || len(issues) != 1 || completion == nil {
+		t.Fatalf("final capture state = %v %v %v", pulls, issues, completion)
+	}
+}
+
+// TestBaseAdvanceWatchCaptureRecordsForeignIdentityWithoutCompleting: a
+// repository name re-bound to a different repository (rename plus
+// name reuse) records the observed repository's facts under the OBSERVED
+// numeric identity, never completes the unit on them, and never reads the
+// bound issue through the unverified name.
+func TestBaseAdvanceWatchCaptureRecordsForeignIdentityWithoutCompleting(t *testing.T) {
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := capturedRun(t, st)
+	sched := watchSchedule(t, item)
+	start := sched.CreatedAt
+
+	issueCalls := 0
+	capture := mergeCapture{
+		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			// A merged PR with the right number and base ref, in a
+			// repository that is not the bound one.
+			return publish.PullObservation{
+				Number: 450, State: "closed", BaseRef: "main", BaseRepoID: 999,
+				HeadSHA: "cafed00d", Merged: true, MergeCommitSHA: "deadbeef",
+			}, nil
+		},
+		issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+			issueCalls++
+			return publish.IssueObservation{Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef"}, nil
+		},
+	}
+	now := start
+	s, err := scheduler.New(st, domain.ModeAttendedDev,
+		func() time.Time { return now },
+		map[domain.ScheduleKind]scheduler.Registration{
+			domain.ScheduleBaseAdvanceWatch: baseAdvanceRegistration(st,
+				func(context.Context, domain.ScheduleBaseWatch) (string, error) {
+					return "cafebabe", nil
+				}, capture),
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Arm(ctx, sched, start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	now = start.Add(61 * time.Second)
+	if err := s.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if issueCalls != 0 {
+		t.Fatalf("bound issue was read through an unverified repository name (%d calls)", issueCalls)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.GetWorkUnitCompletion(ctx, domain.WorkUnitIDForRun("run-cap")); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("foreign merge completed the unit: %v", err)
+		}
+		boundFacts, err := tx.ListPullMergeFacts(ctx, 424242, 450)
+		if err != nil {
+			return err
+		}
+		if len(boundFacts) != 0 {
+			t.Fatalf("foreign observation recorded under the bound identity: %+v", boundFacts)
+		}
+		observed, err := tx.ListPullMergeFacts(ctx, 999, 450)
+		if err != nil {
+			return err
+		}
+		if len(observed) != 1 || !observed[0].Merged {
+			t.Fatalf("observed facts = %+v, want the foreign repository's merge recorded honestly", observed)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestBaseAdvanceWatchDeclaredUnboundRetriesInsteadOfResolving: a declared
+// unit whose PR binding has not yet converged (the crash window between
+// publication passes) is never "nothing to record": the concluded item's
+// watch stays armed and retries until the binding lands, then captures and
+// resolves.
+func TestBaseAdvanceWatchDeclaredUnboundRetriesInsteadOfResolving(t *testing.T) {
+	ctx := context.Background()
+	st := schedTestStore(t)
+	runID := domain.RunID("run-cap")
+	seedCaptureRun(t, st, runID)
+	declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
+		CompletionCriterion: domain.CompletionBoundPRMerged,
+	}, runID, "project-1", time.Date(2026, 2, 3, 3, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordWorkUnitDeclaration(ctx, declaration)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-ready-cap", ProjectID: "project-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Reason:            "published and verified",
+		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionMarkSeen},
+		PRHeadSHA:         "cafed00d",
+		ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate,
+		Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item.ItemVersion++
+	item.Status = domain.StatusResolved
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sched := watchSchedule(t, item)
+	start := sched.CreatedAt
+
+	capture := mergeCapture{
+		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			return publish.PullObservation{
+				Number: 450, State: "closed", BaseRef: "main", BaseRepoID: 424242,
+				HeadSHA: "cafed00d", Merged: true, MergeCommitSHA: "deadbeef",
+			}, nil
+		},
+	}
+	now := start
+	s, err := scheduler.New(st, domain.ModeAttendedDev,
+		func() time.Time { return now },
+		map[domain.ScheduleKind]scheduler.Registration{
+			domain.ScheduleBaseAdvanceWatch: baseAdvanceRegistration(st,
+				func(context.Context, domain.ScheduleBaseWatch) (string, error) {
+					return "cafebabe", nil
+				}, capture),
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Arm(ctx, sched, start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Declared but unbound: the watch must not resolve.
+	now = start.Add(61 * time.Second)
+	if err := s.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := readScheduleRow(t, st, sched.ID); got.Status != domain.ScheduleArmed {
+		t.Fatalf("schedule resolved while the unit was unbound: %+v", got)
+	}
+
+	// The binding converges (a later publication pass); the next fire
+	// captures and resolves in one consumption.
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordWorkUnitPRBinding(ctx, domain.WorkUnitPRBinding{
+			UnitID: declaration.ID, Repo: "owner/repo", RepositoryID: 424242,
+			PRNumber: 450, BaseRef: "main", HeadSHA: "cafed00d",
+			RecordedAt: time.Date(2026, 2, 3, 3, 30, 0, 0, time.UTC),
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now = start.Add(121 * time.Second)
+	if err := s.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := readScheduleRow(t, st, sched.ID); got.Status != domain.ScheduleResolved {
+		t.Fatalf("schedule = %+v, want resolved after the bound capture", got)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetWorkUnitCompletion(ctx, declaration.ID)
+		return err
+	}); err != nil {
+		t.Fatalf("completion after bound capture: %v", err)
+	}
+}
+
+// TestBaseAdvanceWatchCaptureRefusesBindingOffTheAnchors: a reconstructed
+// binding that does not restate the pass's first-party anchors (here the
+// ready item's published head) fails the observation, so the concluded
+// item's watch retries rather than capturing through coordinates the
+// engine never published.
+func TestBaseAdvanceWatchCaptureRefusesBindingOffTheAnchors(t *testing.T) {
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := capturedRun(t, st)
+	// The item's published head moves off the binding's (a corrupt or
+	// foreign binding row would present the same disagreement).
+	mismatched := item
+	mismatched.ItemVersion++
+	mismatched.Status = domain.StatusResolved
+	mismatched.PRHeadSHA = "0ther5ha"
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, mismatched)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sched := watchSchedule(t, item)
+	start := sched.CreatedAt
+	pullCalls := 0
+	capture := mergeCapture{
+		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			pullCalls++
+			return publish.PullObservation{
+				Number: 450, State: "closed", BaseRef: "main", BaseRepoID: 424242,
+				HeadSHA: "cafed00d", Merged: true, MergeCommitSHA: "deadbeef",
+			}, nil
+		},
+	}
+	now := start
+	s, err := scheduler.New(st, domain.ModeAttendedDev,
+		func() time.Time { return now },
+		map[domain.ScheduleKind]scheduler.Registration{
+			domain.ScheduleBaseAdvanceWatch: baseAdvanceRegistration(st,
+				func(context.Context, domain.ScheduleBaseWatch) (string, error) {
+					return "cafebabe", nil
+				}, capture),
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Arm(ctx, sched, start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	now = start.Add(61 * time.Second)
+	if err := s.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if pullCalls != 0 {
+		t.Fatalf("the pass observed through an unanchored binding (%d pulls)", pullCalls)
+	}
+	if got := readScheduleRow(t, st, sched.ID); got.Status != domain.ScheduleArmed {
+		t.Fatalf("schedule resolved through an unanchored binding: %+v", got)
+	}
+	if pulls, _, completion := readCaptureState(t, st); len(pulls) != 0 || completion != nil {
+		t.Fatalf("unanchored binding recorded: %v %v", pulls, completion)
 	}
 }

@@ -865,6 +865,10 @@ type claudeComposition struct {
 	// through the publish reconciler (§5.11 conditional requests; §5.16
 	// base_advance_watch consumer).
 	observeBaseTip func(context.Context, domain.ScheduleBaseWatch) (string, error)
+	// observePull and observeIssue are the §5.18 merge-capture pass's
+	// conditional reads through the same reconciler.
+	observePull  pullObserver
+	observeIssue issueObserver
 }
 
 // composeClaudeDriver builds the production ward gate and Claude driver.
@@ -1000,6 +1004,12 @@ func composeClaudeDriver(
 				return "", fmt.Errorf("base ref %s/%s does not exist", watch.Repo, watch.BaseRef)
 			}
 			return obs.SHA, nil
+		},
+		observePull: func(obsCtx context.Context, repo string, number int) (publish.PullObservation, error) {
+			return reconciler.ReconcilePull(obsCtx, repo, number)
+		},
+		observeIssue: func(obsCtx context.Context, repo string, number int) (publish.IssueObservation, error) {
+			return reconciler.ReconcileIssue(obsCtx, repo, number)
 		},
 		publicationTransport: publicationTransport,
 		publisher:            publisher, containerBin: cfg.ContainerBin,
