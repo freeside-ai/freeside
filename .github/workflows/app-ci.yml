@@ -6,11 +6,13 @@ on:
     paths:
       - "app/**"
       - "api/openapi.yaml"
+      - "scripts/test-install-mac-app.sh"
       - ".github/workflows/app-ci.yml"
   pull_request:
     paths:
       - "app/**"
       - "api/openapi.yaml"
+      - "scripts/test-install-mac-app.sh"
       - ".github/workflows/app-ci.yml"
 
 permissions:
@@ -67,6 +69,8 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+      - name: Test Mac installer with the real exclusive rename
+        run: FREESIDE_TEST_REAL_RENAME=true bash scripts/test-install-mac-app.sh
       - name: Build macOS app
         working-directory: app
         run: >-
