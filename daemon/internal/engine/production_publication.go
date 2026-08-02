@@ -1497,12 +1497,17 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 			return productionTaskOutcome{}, err
 		}
 	}
+	// Every ready item receives a daemon-internal PR binding, whether or not
+	// the run carries an optional §5.18 work-unit declaration. The plain-ticker
+	// active-resource reconciler owns merge/close observation and must be able
+	// to resume from this exact identity after a restart.
+	if err := w.recordReadyItemPRBinding(ctx, task, binding, published); err != nil {
+		return productionTaskOutcome{}, err
+	}
 	// The §5.18 work-unit PR binding converges on every pass through the
-	// published state, write-once from first-party facts, and it commits
-	// BEFORE the watches arm: the base-advance watch hosts the merge-capture
-	// pass, so an armed watch whose unit had no binding yet could resolve a
-	// concluded item as "nothing to record" in the crash window and leave no
-	// observer for the binding a later pass records.
+	// published state, write-once from the same first-party facts. Both
+	// bindings commit before the durable watches arm, so a startup
+	// reconciliation pass never sees an active item with an ambiguous PR.
 	if err := w.recordWorkUnitPRBinding(ctx, task, binding, published); err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -1747,6 +1752,44 @@ func (w *productionPublicationWorkflow) recordWorkUnitPRBinding(
 			return nil
 		case errors.Is(err, store.ErrNotFound):
 			return tx.RecordWorkUnitPRBinding(ctx, record)
+		default:
+			return err
+		}
+	})
+}
+
+func (w *productionPublicationWorkflow) recordReadyItemPRBinding(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	published publish.Result,
+) error {
+	return w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		record := domain.ReadyItemPRBinding{
+			ItemID:                  productionReadyItemID(task.RunID),
+			RunID:                   task.RunID,
+			ProducingInvocationID:   task.ProducingInvocationID,
+			PublicationInvocationID: task.PublicationID,
+			PublicationIdentity:     published.Identity.Digest(),
+			Repo:                    binding.admission.Base.Repo,
+			RepositoryID:            binding.admission.Base.RepositoryID,
+			PRNumber:                published.PRNumber,
+			BaseRef:                 binding.admission.Base.BaseRef,
+			HeadSHA:                 task.HeadSHA,
+			RecordedAt:              w.now().UTC(),
+		}
+		existing, err := tx.GetReadyItemPRBinding(ctx, record.ItemID)
+		switch {
+		case err == nil:
+			want := record
+			want.RecordedAt = existing.RecordedAt
+			if want != existing {
+				return fmt.Errorf("stored ready-item pr binding disagrees with the published state: %w",
+					store.ErrImmutableConflict)
+			}
+			return nil
+		case errors.Is(err, store.ErrNotFound):
+			return tx.RecordReadyItemPRBinding(ctx, record)
 		default:
 			return err
 		}

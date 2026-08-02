@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 // Work-unit capture records (plan §5.18, issue #443): the explicit
@@ -289,6 +291,67 @@ type WorkUnitPRBinding struct {
 	BaseRef    string    `json:"base_ref"`
 	HeadSHA    string    `json:"head_sha"`
 	RecordedAt time.Time `json:"recorded_at"`
+}
+
+// ReadyItemPRBinding is the daemon-recorded resource identity behind one
+// ready_for_final_review item. Unlike WorkUnitPRBinding it exists for every
+// published ready item, including runs with no optional work-unit declaration,
+// so active-resource reconciliation can resume from durable state after a
+// restart without deriving coordinates from presentation text.
+type ReadyItemPRBinding struct {
+	ItemID                  ItemID       `json:"item_id"`
+	RunID                   RunID        `json:"run_id"`
+	ProducingInvocationID   InvocationID `json:"producing_invocation_id"`
+	PublicationInvocationID InvocationID `json:"publication_invocation_id"`
+	PublicationIdentity     Digest       `json:"publication_identity"`
+	Repo                    string       `json:"repo"`
+	RepositoryID            int64        `json:"repository_id"`
+	PRNumber                int          `json:"pr_number"`
+	BaseRef                 string       `json:"base_ref"`
+	HeadSHA                 string       `json:"head_sha"`
+	RecordedAt              time.Time    `json:"recorded_at"`
+}
+
+// Validate reports whether the ready resource binding is well-formed.
+func (b ReadyItemPRBinding) Validate() error {
+	if b.ItemID == "" {
+		return fmt.Errorf("ready item pr binding item_id: %w", ErrEmptyID)
+	}
+	if b.RunID == "" {
+		return fmt.Errorf("ready item pr binding run_id: %w", ErrEmptyID)
+	}
+	if b.ProducingInvocationID == "" {
+		return fmt.Errorf("ready item pr binding producing_invocation_id: %w", ErrEmptyID)
+	}
+	if b.PublicationInvocationID == "" {
+		return fmt.Errorf("ready item pr binding publication_invocation_id: %w", ErrEmptyID)
+	}
+	if !contentaddr.Valid(string(b.PublicationIdentity)) {
+		return fmt.Errorf("ready item pr binding publication_identity %q: %w",
+			b.PublicationIdentity, ErrEmptyField)
+	}
+	for name, value := range map[string]string{
+		"repo": b.Repo, "base_ref": b.BaseRef, "head_sha": b.HeadSHA,
+	} {
+		if value == "" {
+			return fmt.Errorf("ready item pr binding %s %s: %w", b.ItemID, name, ErrEmptyField)
+		}
+	}
+	if b.RepositoryID <= 0 {
+		return fmt.Errorf("ready item pr binding %s repository_id %d: %w",
+			b.ItemID, b.RepositoryID, ErrNonPositive)
+	}
+	if b.PRNumber <= 0 {
+		return fmt.Errorf("ready item pr binding %s pr_number %d: %w",
+			b.ItemID, b.PRNumber, ErrNonPositive)
+	}
+	if b.RecordedAt.IsZero() {
+		return fmt.Errorf("ready item pr binding %s recorded_at: %w", b.ItemID, ErrMissingTimestamp)
+	}
+	if b.RecordedAt.Location() != time.UTC {
+		return fmt.Errorf("ready item pr binding %s recorded_at: %w", b.ItemID, ErrTimestampNotUTC)
+	}
+	return nil
 }
 
 // Validate reports whether the binding is well-formed.

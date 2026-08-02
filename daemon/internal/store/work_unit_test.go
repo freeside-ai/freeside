@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -71,6 +72,133 @@ func openCaptureStore(t *testing.T) *store.Store {
 		t.Fatal(err)
 	}
 	return s
+}
+
+func TestReadyItemPRBindingAnchorsToReadyItem(t *testing.T) {
+	ctx := context.Background()
+	st := openCaptureStore(t)
+	runID := domain.RunID("run-1")
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-ready-1", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Reason: "published", RequestedDecision: []domain.Action{domain.ActionOpenPR},
+		PRHeadSHA: "cafebabe", ItemVersion: 1,
+		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	binding := domain.ReadyItemPRBinding{
+		ItemID: item.ID, RunID: runID, ProducingInvocationID: "inv-1",
+		PublicationInvocationID: "publish-production-run-1",
+		Repo:                    "owner/repo", RepositoryID: 424242,
+		PRNumber: 450, BaseRef: "refs/heads/main", HeadSHA: item.PRHeadSHA,
+		RecordedAt: time.Date(2026, 1, 2, 4, 0, 0, 0, time.UTC),
+	}
+	var run domain.Run
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(ctx, runID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fixture := newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
+		in.SpecDigest = run.SpecDigest
+		in.PolicyDigest = run.PolicyDigest
+	})
+	export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+		InvocationID: fixture.admission.InvocationID, AdmissionID: fixture.admission.ID,
+		ObservedBaseSHA: fixture.admission.Base.BaseSHA, HeadSHA: binding.HeadSHA,
+		ManifestDigest: "sha256:ready-manifest", RecordedAt: binding.RecordedAt.Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := publish.DeriveIdentity(publish.IdentityInput{
+		Repo: binding.Repo, BaseRef: binding.BaseRef, SourceHeadSHA: binding.HeadSHA,
+		ArtifactDigests: []domain.Digest{"sha256:ready-artifact"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.PublicationIdentity = identity.Digest()
+	outcomePayload, err := (publish.Outcome{
+		Identity: identity.Digest(), Repo: binding.Repo, BaseRef: binding.BaseRef,
+		HeadSHA: binding.HeadSHA, Branch: identity.BranchName(), PRNumber: binding.PRNumber,
+		EvidenceEligible: true,
+	}).Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentPayload, err := (publish.Intent{
+		Identity: identity.Digest(), InvocationID: binding.PublicationInvocationID,
+		Repo: binding.Repo, BaseRef: binding.BaseRef, SourceHeadSHA: binding.HeadSHA,
+		AuthorizationID:       domain.Digest("sha256:" + strings.Repeat("ef", 32)),
+		ProducingInvocationID: binding.ProducingInvocationID, ReservationRunID: binding.RunID,
+	}).Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentKey, err := publish.IntentKey(binding.PublicationInvocationID, publish.IntentKindPublication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.RecordExecutionAdmission(ctx, fixture.admission); err != nil {
+			return err
+		}
+		if err := tx.RecordExecutionExport(ctx, export); err != nil {
+			return err
+		}
+		if _, _, err := tx.EnqueueOutbox(ctx, intentKey, publish.IntentKindPublication, intentPayload); err != nil {
+			return err
+		}
+		if err := tx.MarkOutboxDispatched(ctx, intentKey); err != nil {
+			return err
+		}
+		_, _, err := tx.RecordInbox(ctx, publish.OutcomeKey(identity), publish.IntentKindOutcome, outcomePayload)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordReadyItemPRBinding(ctx, binding)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var got domain.ReadyItemPRBinding
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		got, err = tx.GetReadyItemPRBinding(ctx, item.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got != binding {
+		t.Fatalf("binding = %+v, want %+v", got, binding)
+	}
+
+	foreign := binding
+	foreign.ItemID = "item-ready-foreign"
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordReadyItemPRBinding(ctx, foreign)
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("foreign binding error = %v, want ErrNotFound", err)
+	}
+	mismatched := binding
+	mismatched.HeadSHA = "different"
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordReadyItemPRBinding(ctx, mismatched)
+	}); err == nil {
+		t.Fatal("binding with a foreign head was accepted")
+	}
 }
 
 func writeInternal(t *testing.T, s *store.Store, fn func(tx *store.InternalTx) error) error {

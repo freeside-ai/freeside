@@ -615,7 +615,7 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 		if err := armTrustedConfigJobs(parent, sched, cfg); err != nil {
 			return nil, err
 		}
-		d.wg.Add(2)
+		d.wg.Add(3)
 		// The production publication lane gets its own loop: one task holds a
 		// clone, a containerized verification, and GitHub calls for minutes,
 		// which inside the reconcile loop would stall every other run,
@@ -628,6 +628,22 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 			defer d.wg.Done()
 			if err := sched.Run(ctx, cfg.SchedulerInterval); err != nil {
 				d.errs <- fmt.Errorf("durable scheduler: %w", err)
+				return
+			}
+			d.errs <- nil
+		}()
+		go func() {
+			defer d.wg.Done()
+			reconciler := activeResourceReconciler{
+				store: st, pull: claudeWiring.observePull,
+				issue: claudeWiring.observeIssue,
+				now:   func() time.Time { return time.Now().UTC() },
+			}
+			err := reconciler.Run(ctx, defaultActiveResourceInterval, func(err error) {
+				fmt.Fprintln(os.Stderr, "freesided: active resource:", err)
+			})
+			if err != nil {
+				d.errs <- fmt.Errorf("active resource reconciler: %w", err)
 				return
 			}
 			d.errs <- nil

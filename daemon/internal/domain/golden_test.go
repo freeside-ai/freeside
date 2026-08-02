@@ -680,6 +680,14 @@ func TestGolden(t *testing.T) {
 		PRNumber: 450, BaseRef: "main", HeadSHA: "cafebabe",
 		RecordedAt: ts.Add(time.Hour),
 	}
+	readyItemPRBinding := domain.ReadyItemPRBinding{
+		ItemID: "item-ready-1", RunID: "run-1", ProducingInvocationID: "inv-1",
+		PublicationInvocationID: "publish-production-run-1",
+		PublicationIdentity:     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Repo:                    "owner/repo",
+		RepositoryID:            84958515, PRNumber: 450, BaseRef: "main",
+		HeadSHA: "cafebabe", RecordedAt: ts.Add(time.Hour),
+	}
 	pullMergeFact := domain.PullMergeFact{
 		Repo: "owner/repo", RepositoryID: 84958515, PRNumber: 450,
 		State: domain.PullRequestClosed, Merged: true,
@@ -764,6 +772,7 @@ func TestGolden(t *testing.T) {
 		{"run_observation", runObservation},
 		{"work_unit_declaration", unitDeclaration},
 		{"work_unit_pr_binding", unitPRBinding},
+		{"ready_item_pr_binding", readyItemPRBinding},
 		{"pull_merge_fact", pullMergeFact},
 		{"issue_state_fact", issueStateFact},
 		{"work_unit_completion", unitCompletion},
