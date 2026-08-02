@@ -16,7 +16,7 @@ This directory may split to its own repo later if vendor-CLI version churn pollu
 
 - **Toolchain:** OCI image definitions (devcontainer-spec shaped), pinned CLI + adapter versions.
 - **Scope boundary:** image definitions only.
-- **Status:** `exporter/` (issue #170) and `agent-claude/` (issue #304) are initialized; `agent-codex` lands with its phase.
+- **Status:** `exporter/` (issue #170), `agent-claude/` (issue #304), and `agent-codex/` (issue #404) are initialized.
 
 Every image here is built and pinned the same way: a `scripts/build-*-image.sh`
 that prints a `name@sha256:<digest>` reference on stdout and everything else on
@@ -87,3 +87,15 @@ README records this implementation's pins and measured runtime details; the plan
 is authoritative for why no contributed or inherited `ENV`, `WORKDIR`,
 `ENTRYPOINT`, `CMD`, `USER`, or `VOLUME` may change ward's required realized
 shape.
+
+## Agent Codex
+
+The agent base carrying the pinned Codex CLI, built by
+`scripts/build-agent-codex-image.sh` and checked by the same
+`scripts/check-agent-image.sh`. It shares the Claude base's pinned Debian base
+and every one of its shape prohibitions, and differs in what it ships: the Codex
+CLI is a static musl binary taken from the upstream release bundle, so the image
+carries no language runtime, and it adds `ripgrep`, which the CLI's file-search
+tool shells out to. The version pin is the one #401's gate probes closed on. Its
+README records the pins, the daemon-side contract those probes fixed, and the
+in-image behavior measured here.
