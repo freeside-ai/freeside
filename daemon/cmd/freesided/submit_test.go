@@ -445,3 +445,126 @@ func TestSubmissionArtifactIdentityRetainsFullDigest(t *testing.T) {
 		}
 	}
 }
+
+// TestSubmitCommandCapturesWorkUnitDeclaration (§5.18, issue #443): a
+// --work-unit submission persists the declaration with its path scope
+// derived from the resolved policy's paths key, joins the declaration into
+// the default run-id derivation (a different declaration is a different
+// run; an undeclared submission keeps the pre-capture derivation), and
+// refuses a declaration file with unknown fields.
+func TestSubmitCommandCapturesWorkUnitDeclaration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	specPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	workUnitPath := filepath.Join(root, "work-unit.json")
+	declaration := `{"completion_criterion":"bound_issue_closed_by_merged_pr","bound_issue":443,"depends_on_issues":[442,440,442],"contract_serialized":true}`
+	if err := os.WriteFile(workUnitPath, []byte(declaration), 0o600); err != nil {
+		t.Fatalf("write work-unit declaration: %v", err)
+	}
+	cfg := submitCommandConfig{
+		DBPath:   filepath.Join(root, "freeside.db"),
+		SpecPath: specPath, PolicyPath: policyPath, PublicationPath: publicationPath,
+		WorkUnitPath: workUnitPath,
+		ProjectID:    "proj-submit",
+	}
+
+	declared, err := runSubmitCommand(ctx, cfg)
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if declared.WorkUnitID != domain.WorkUnitIDForRun(declared.RunID) {
+		t.Fatalf("work unit id = %q, want derived from run %q", declared.WorkUnitID, declared.RunID)
+	}
+
+	st, err := store.Open(ctx, cfg.DBPath, store.Options{})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	var stored domain.WorkUnitDeclaration
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		stored, err = tx.GetWorkUnitDeclarationByRun(ctx, declared.RunID)
+		return err
+	}); err != nil {
+		t.Fatalf("read declaration: %v", err)
+	}
+	if stored.BoundIssue == nil || *stored.BoundIssue != 443 || !stored.ContractSerialized {
+		t.Fatalf("stored declaration = %+v", stored)
+	}
+	// The unsorted, duplicated dependency list canonicalized at intake.
+	if len(stored.DependsOnIssues) != 2 || stored.DependsOnIssues[0] != 440 || stored.DependsOnIssues[1] != 442 {
+		t.Fatalf("stored dependencies = %v, want canonical [440 442]", stored.DependsOnIssues)
+	}
+	// The declared path scope is the policy's paths key, never a second
+	// operator statement that could drift from what the runner enforces.
+	if len(stored.DeclaredPaths) != 1 || stored.DeclaredPaths[0] != "daemon/**" {
+		t.Fatalf("stored declared paths = %v, want the policy allowlist", stored.DeclaredPaths)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	// The declaration joins the default run-id derivation: the same inputs
+	// without it converge on a different (pre-capture) run id.
+	undeclared := cfg
+	undeclared.WorkUnitPath = ""
+	undeclared.DBPath = filepath.Join(root, "undeclared.db")
+	plain, err := runSubmitCommand(ctx, undeclared)
+	if err != nil {
+		t.Fatalf("undeclared submit: %v", err)
+	}
+	if plain.RunID == declared.RunID {
+		t.Fatal("declared and undeclared submissions converged on one run id")
+	}
+	if plain.WorkUnitID != "" {
+		t.Fatalf("undeclared submission reports work unit %q", plain.WorkUnitID)
+	}
+
+	// Unknown declaration fields are refused, not silently dropped.
+	badPath := filepath.Join(root, "bad-work-unit.json")
+	if err := os.WriteFile(badPath, []byte(`{"completion_criterion":"bound_pr_merged","declared_paths":["daemon/"]}`), 0o600); err != nil {
+		t.Fatalf("write bad declaration: %v", err)
+	}
+	bad := cfg
+	bad.WorkUnitPath = badPath
+	bad.DBPath = filepath.Join(root, "bad.db")
+	if _, err := runSubmitCommand(ctx, bad); err == nil ||
+		!strings.Contains(err.Error(), "decode work-unit declaration") {
+		t.Fatalf("unknown-field declaration error = %v", err)
+	}
+}
+
+// TestSubmitCommandEmptyDependencyDeclarationConverges: an explicit empty
+// depends_on_issues list survives the store's omitempty round-trip (empty
+// collections normalize to nil in the constructor), so an exact
+// re-submission converges instead of refusing its own stored declaration.
+func TestSubmitCommandEmptyDependencyDeclarationConverges(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	specPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	workUnitPath := filepath.Join(root, "work-unit.json")
+	declaration := `{"completion_criterion":"bound_pr_merged","depends_on_issues":[]}`
+	if err := os.WriteFile(workUnitPath, []byte(declaration), 0o600); err != nil {
+		t.Fatalf("write work-unit declaration: %v", err)
+	}
+	cfg := submitCommandConfig{
+		DBPath:   filepath.Join(root, "freeside.db"),
+		SpecPath: specPath, PolicyPath: policyPath, PublicationPath: publicationPath,
+		WorkUnitPath: workUnitPath,
+		ProjectID:    "proj-submit",
+	}
+	first, err := runSubmitCommand(ctx, cfg)
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	replay, err := runSubmitCommand(ctx, cfg)
+	if err != nil {
+		t.Fatalf("empty-dependency replay must converge: %v", err)
+	}
+	if replay.RunID != first.RunID || replay.WorkUnitID != first.WorkUnitID {
+		t.Fatalf("replay identities differ: %+v vs %+v", replay, first)
+	}
+}
