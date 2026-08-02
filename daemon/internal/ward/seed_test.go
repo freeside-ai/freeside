@@ -414,7 +414,8 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantConfig := "[core]\n\tbare = false\n[freeside \"transport\"]\n\trepo = " +
-		testBaseRevision().Repo + "\n"
+		testBaseRevision().Repo + "\n[user]\n\tname = " + seedWorkerGitName +
+		"\n\temail = " + seedWorkerGitEmail + "\n"
 	if got := string(canonicalConfig); got != wantConfig {
 		t.Errorf("canonical git config = %q, want %q", got, wantConfig)
 	}
@@ -553,6 +554,12 @@ func TestVerifySeedSourceFailsClosed(t *testing.T) {
 			dir := writeSeedCheckout(t, root, testBaseSHA)
 			writeGitConfig(t, dir, seedBindingConfig(testBaseRevision().Repo)+
 				"\n[credential]\n\thelper = inert-test-helper\n")
+			return dir
+		}},
+		{"config carries a caller-supplied identity", func(t *testing.T, root string, _ *Config) string {
+			dir := writeSeedCheckout(t, root, testBaseSHA)
+			writeGitConfig(t, dir, seedBindingConfig(testBaseRevision().Repo)+
+				"\n[user]\n\tname = Untrusted Worker\n\temail = untrusted@example.invalid\n")
 			return dir
 		}},
 		{"config carries a URL rewrite", func(t *testing.T, root string, _ *Config) string {

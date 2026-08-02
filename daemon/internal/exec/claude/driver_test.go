@@ -985,16 +985,17 @@ func TestHandoffSpecBindsContainmentAndInstructions(t *testing.T) {
 		t.Errorf("vendor instruction digest = %q, want the admitted %q",
 			hs.Agent.VendorInstructions.Digest, instructions.Digest)
 	}
-	// No credential material rides the recorded container environment, which
-	// is the surface ward inspects and the conformance check compares. It is
-	// not a containment claim about the writer: the launcher reads the token
-	// from its mounted file into the environment of the process it execs, so
-	// the model and every tool it spawns can read it from their own environ.
-	// Export credential scanning is the downstream control for that, not this.
-	for _, env := range hs.Agent.Env {
-		if strings.Contains(strings.ToUpper(env), "TOKEN") || strings.Contains(strings.ToUpper(env), "KEY") {
-			t.Errorf("agent env %q looks like credential material", env)
-		}
+	// Only the exact non-secret protected-config exception for ward's
+	// root-owned workspace rides the recorded container environment. The
+	// launcher reads the token from its mounted file into the environment of
+	// the process it execs, so no credential belongs on this inspected surface.
+	wantEnv := []string{
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=safe.directory",
+		"GIT_CONFIG_VALUE_0=" + workspaceDir,
+	}
+	if !reflect.DeepEqual(hs.Agent.Env, wantEnv) {
+		t.Errorf("agent env = %#v, want only %#v", hs.Agent.Env, wantEnv)
 	}
 }
 

@@ -850,6 +850,128 @@ func TestLiveWorkspaceSeeding(t *testing.T) {
 	}
 }
 
+// TestLiveWorkerGitIdentity runs an ordinary checkpoint commit in the two
+// shipped agent base images after ward has staged and attested the exact-base
+// workspace. The image references are explicit inputs because the gate accepts
+// only registry-resolvable digest references, never mutable local tags.
+//
+//	FREESIDE_WARD_LIVE_TEST=1 \
+//	FREESIDE_WARD_EXPORTER_IMAGE=<digest-ref> \
+//	FREESIDE_WARD_CLAUDE_AGENT_IMAGE=<digest-ref> \
+//	FREESIDE_WARD_CODEX_AGENT_IMAGE=<digest-ref> \
+//	go test ./internal/ward -run TestLiveWorkerGitIdentity -v
+func TestLiveWorkerGitIdentity(t *testing.T) {
+	const requirements = "set FREESIDE_WARD_LIVE_TEST=1, FREESIDE_WARD_EXPORTER_IMAGE, FREESIDE_WARD_CLAUDE_AGENT_IMAGE, and FREESIDE_WARD_CODEX_AGENT_IMAGE (requires macOS, Apple container 1.1.0, and `container system start`)"
+	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" ||
+		os.Getenv("FREESIDE_WARD_EXPORTER_IMAGE") == "" ||
+		os.Getenv("FREESIDE_WARD_CLAUDE_AGENT_IMAGE") == "" ||
+		os.Getenv("FREESIDE_WARD_CODEX_AGENT_IMAGE") == "" {
+		t.Skip("live worker Git identity test skipped: " + requirements)
+	}
+	bin, err := osexec.LookPath("container")
+	if err != nil {
+		t.Fatalf("container CLI not on PATH: %v", err)
+	}
+
+	providers := []struct {
+		name     string
+		imageEnv string
+	}{
+		{name: "claude", imageEnv: "FREESIDE_WARD_CLAUDE_AGENT_IMAGE"},
+		{name: "codex", imageEnv: "FREESIDE_WARD_CODEX_AGENT_IMAGE"},
+	}
+	for _, provider := range providers {
+		t.Run(provider.name, func(t *testing.T) {
+			agentImage := os.Getenv(provider.imageEnv)
+			rt := NewCLIRuntime(bin)
+			root := t.TempDir()
+			checkout := initLiveSeedCheckout(t, root)
+			if err := os.WriteFile(filepath.Join(checkout, "README.md"), []byte("fixture\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			base := commitLiveSeedCheckout(t, checkout)
+			cfg := testConfig()
+			cfg.ExporterImage = liveExporterImage(t)
+			requireExporterGit(t, bin, cfg.ExporterImage)
+			cfg.SeedRoot = root
+			cfg.PollInterval = 500 * time.Millisecond
+			cfg.WriterStopTimeout = 2 * time.Minute
+			cfg.ExporterTimeout = 2 * time.Minute
+			b, err := New(rt, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			workspace := shellQuote(cfg.WorkspaceTarget)
+			otherRepo := shellQuote("/other-repo")
+			otherProof := shellQuote("/tmp/freeside-other-repo-proof.txt")
+			workerCommand := "set -eu; " +
+				"if git -C " + otherRepo + " status > " + otherProof + " 2>&1; then exit 91; fi; " +
+				"grep -F 'detected dubious ownership' " + otherProof + " > /dev/null; " +
+				"printf '%s\\n' checkpoint > " + workspace + "/checkpoint.txt; " +
+				"git -C " + workspace + " add checkpoint.txt; " +
+				"git -C " + workspace + " commit -m 'worker checkpoint'; " +
+				"test \"$(git -C " + workspace + " log -1 --format=%an)\" = " + shellQuote(seedWorkerGitName) + "; " +
+				"test \"$(git -C " + workspace + " log -1 --format=%ae)\" = " + shellQuote(seedWorkerGitEmail)
+
+			runID := fmt.Sprintf(
+				"git-id-%s-%s",
+				provider.name,
+				strconv.FormatInt(time.Now().UnixNano(), 36),
+			)
+			result, err := b.Handoff(context.Background(), HandoffSpec{
+				RunID:           runID,
+				WorkspaceSizeMB: 64,
+				Seed: WorkspaceSeed{
+					Mode: SeedBaseCheckout, SourceDir: checkout, Base: base,
+				},
+				Agent: AgentSpec{
+					Image: agentImage,
+					// Duplicated from exec/claude.agentEnv: this live ward test
+					// cannot import its consumer without creating an import cycle.
+					Env: []string{
+						"GIT_CONFIG_COUNT=1",
+						"GIT_CONFIG_KEY_0=safe.directory",
+						"GIT_CONFIG_VALUE_0=" + cfg.WorkspaceTarget,
+					},
+					EgressProfile: domain.EgressProviderOnly,
+					LaunchState:   LaunchStateNone,
+					VendorInstructions: VendorInstructions{
+						Vendor: domain.AgentVendorClaude,
+					},
+					InstructionPolicy: ClaudeInvocationInstructionPolicy(),
+					Command: []string{
+						"sh", "-c",
+						// Mirror the production Claude ownership and privilege
+						// boundary: repository contents belong to UID 1001, while
+						// the sticky workspace root remains owned by root. A second
+						// root-owned repository refutes a broader safe-directory grant.
+						"set -eu; mkdir " + otherRepo + "; git -C " + otherRepo + " init -q; touch " + otherRepo + "/foreign.txt; " +
+							"find " + otherRepo + " -mindepth 1 -maxdepth 1 -exec chown -hR 1001:1001 {} +; " +
+							"chown 0:0 " + otherRepo + "; chmod 1777 " + otherRepo + "; " +
+							"find " + workspace + " -mindepth 1 -maxdepth 1 -exec chown -hR 1001:1001 {} +; " +
+							"chown 0:0 " + workspace + "; chmod 1777 " + workspace + "; " +
+							"setpriv --reuid=1001 --regid=1001 --clear-groups --inh-caps=-all --ambient-caps=-all " +
+							"--bounding-set=-all --no-new-privs sh -c " + shellQuote(workerCommand),
+					},
+				},
+			})
+			if err != nil {
+				t.Fatalf("gate-mediated commit in %s image: %v", provider.name, err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(result.ExportDir) })
+			checkpointExported := false
+			for _, entry := range result.Manifest.Entries {
+				if entry.Path == "checkpoint.txt" && entry.Kind == export.EntryRegular {
+					checkpointExported = true
+				}
+			}
+			if !checkpointExported {
+				t.Errorf("exported entries = %#v, want regular checkpoint.txt", result.Manifest.Entries)
+			}
+		})
+	}
+}
+
 // TestLiveSeedRefusesWorktreelessCheckout pins the case the intended producer
 // actually causes: publish.Transport.FetchBase moves HEAD to the base and
 // never checks anything out, so its directory carries a .git and no working
