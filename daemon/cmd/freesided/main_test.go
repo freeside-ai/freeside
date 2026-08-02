@@ -1018,50 +1018,58 @@ func (failingInputReadCloser) Close() error {
 }
 
 type stubJanitorRunner struct {
-	active         chan struct{}
+	active         bool
+	passes         int
 	runErr         error
 	stableCoverage int
+	faults         []publish.JanitorRegistrationFault
 }
 
-func (j *stubJanitorRunner) Run(ctx context.Context, _ time.Duration) error {
+func (j *stubJanitorRunner) RunScheduledPass(context.Context) error {
 	if j.runErr != nil {
 		return j.runErr
 	}
-	close(j.active)
-	<-ctx.Done()
+	j.passes++
+	j.active = true
 	return nil
 }
 
-func (j *stubJanitorRunner) ActiveFor(int64) bool {
-	select {
-	case <-j.active:
-		return true
-	default:
-		return false
-	}
-}
+func (j *stubJanitorRunner) ActiveFor(int64) bool { return j.active }
 
 func (j *stubJanitorRunner) WithStableCoverage(fn func() error) error {
 	j.stableCoverage++
 	return fn()
 }
 
-func TestJanitorSessionPublishesCoverageAndStops(t *testing.T) {
-	janitor := &stubJanitorRunner{active: make(chan struct{})}
-	session, err := startJanitorSession(
-		t.Context(), janitor, []int64{4385298}, time.Hour,
-	)
+func (j *stubJanitorRunner) RegistrationFaults() []publish.JanitorRegistrationFault {
+	return j.faults
+}
+
+func (j *stubJanitorRunner) PendingReady(publish.PendingInstallationEnvelope) (int64, bool) {
+	return 0, false
+}
+
+func TestJanitorSessionPrimesCoverageSynchronously(t *testing.T) {
+	janitor := &stubJanitorRunner{}
+	session, err := startJanitorSession(t.Context(), janitor, []int64{4385298})
 	if err != nil {
 		t.Fatalf("startJanitorSession: %v", err)
 	}
-	if !janitor.ActiveFor(4385298) {
-		t.Fatal("startJanitorSession returned before coverage was active")
+	if janitor.passes != 1 || !janitor.ActiveFor(4385298) {
+		t.Fatalf("startup pass = %d, active = %v", janitor.passes, janitor.active)
 	}
 	if err := session.WithStableCoverage(func() error { return nil }); err != nil {
 		t.Fatalf("WithStableCoverage: %v", err)
 	}
 	if janitor.stableCoverage != 1 {
 		t.Fatalf("stable coverage calls = %d, want 1", janitor.stableCoverage)
+	}
+	// The scheduler-fired pass reaches the same lifecycle.
+	if err := session.RunScheduledPass(t.Context()); err != nil {
+		t.Fatalf("RunScheduledPass: %v", err)
+	}
+	if janitor.passes != 2 {
+		t.Fatalf("passes = %d, want 2", janitor.passes)
 	}
 	if err := session.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -1071,12 +1079,30 @@ func TestJanitorSessionPublishesCoverageAndStops(t *testing.T) {
 func TestJanitorSessionReturnsStartupFailure(t *testing.T) {
 	want := errors.New("janitor failed")
 	_, err := startJanitorSession(
-		t.Context(),
-		&stubJanitorRunner{active: make(chan struct{}), runErr: want},
-		[]int64{4385298},
-		time.Hour,
+		t.Context(), &stubJanitorRunner{runErr: want}, []int64{4385298},
 	)
 	if !errors.Is(err, want) {
 		t.Fatalf("startJanitorSession error = %v, want %v", err, want)
 	}
 }
+
+func TestJanitorSessionReportsMissingCoverageWithFaults(t *testing.T) {
+	fault := errors.New("registration denied")
+	janitor := &stubJanitorRunner{
+		faults: []publish.JanitorRegistrationFault{{RegistrationID: 4385298, Err: fault}},
+	}
+	// The pass succeeds but publishes no coverage for the registration: the
+	// startup gate fails with the pass's fault attached.
+	janitor.runErr = nil
+	_, err := startJanitorSession(t.Context(), &faultyCoverageRunner{janitor}, []int64{4385298})
+	if err == nil || !errors.Is(err, fault) {
+		t.Fatalf("startJanitorSession error = %v, want fault %v", err, fault)
+	}
+}
+
+// faultyCoverageRunner completes its pass without activating coverage,
+// modeling a per-registration fault.
+type faultyCoverageRunner struct{ *stubJanitorRunner }
+
+func (j *faultyCoverageRunner) RunScheduledPass(context.Context) error { return nil }
+func (j *faultyCoverageRunner) ActiveFor(int64) bool                   { return false }

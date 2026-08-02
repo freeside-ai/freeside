@@ -45,6 +45,10 @@ const defaultNtfyURL = "https://ntfy.sh"
 
 const defaultDoctorInterval = 24 * time.Hour
 
+// defaultSchedulerInterval is the §5.16 scheduler's due-scan tick: how often
+// durable schedules are checked for due fires, not any schedule's cadence.
+const defaultSchedulerInterval = time.Second
+
 const (
 	defaultFakeRunID     domain.RunID     = "run-walking-skeleton"
 	defaultFakeProjectID domain.ProjectID = "project-walking-skeleton"
@@ -148,6 +152,9 @@ func main() {
 	doctorInterval := flags.Duration(
 		"doctor-interval", defaultDoctorInterval,
 		"scheduled operational-health cadence in production driver mode")
+	schedulerInterval := flags.Duration(
+		"scheduler-interval", defaultSchedulerInterval,
+		"durable-scheduler due-scan tick in production driver mode")
 	approvedRecipes := digestSetFlag{}
 	flags.Var(&approvedRecipes, "approved-recipe",
 		"approved verification-recipe digest for persistence and doctor (repeatable)")
@@ -189,6 +196,7 @@ func main() {
 		DBPath: *dbPath, FakeDriverDir: *driverDir,
 		ListenAddr: *listenAddr, NtfyURL: *ntfyURL, ReconcileInterval: *interval,
 		DoctorInterval:                     *doctorInterval,
+		SchedulerInterval:                  *schedulerInterval,
 		ApprovedRecipes:                    approvedRecipes,
 		BackupEncryptionWaiverRepositoryID: backupEncryptionWaiverRepositoryID.Value(),
 	}
@@ -261,6 +269,7 @@ type config struct {
 	NtfyURL                            string
 	ReconcileInterval                  time.Duration
 	DoctorInterval                     time.Duration
+	SchedulerInterval                  time.Duration
 	ApprovedRecipes                    map[domain.Digest]bool
 	BackupEncryptionWaiverRepositoryID *int64
 	// Claude, when set, replaces the permanent fake stage driver with the
@@ -344,8 +353,18 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 	if cfg.DoctorInterval == 0 {
 		cfg.DoctorInterval = defaultDoctorInterval
 	}
-	if cfg.DoctorInterval < 0 {
-		return nil, fmt.Errorf("negative doctor interval %s", cfg.DoctorInterval)
+	if cfg.DoctorInterval < time.Second || cfg.DoctorInterval%time.Second != 0 {
+		// Durable schedules carry whole-second cadences (§5.16): a
+		// sub-second doctor interval was never meaningful for a pass that
+		// runs conformance, and a fractional one would be silently truncated
+		// at arming.
+		return nil, fmt.Errorf("doctor interval %s must be a whole number of seconds", cfg.DoctorInterval)
+	}
+	if cfg.SchedulerInterval == 0 {
+		cfg.SchedulerInterval = defaultSchedulerInterval
+	}
+	if cfg.SchedulerInterval < 0 {
+		return nil, fmt.Errorf("negative scheduler interval %s", cfg.SchedulerInterval)
 	}
 	if cfg.NtfyURL == "" {
 		cfg.NtfyURL = defaultNtfyURL
@@ -561,8 +580,39 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 		defer d.wg.Done()
 		d.errs <- localBackups.Run(ctx)
 	}()
+	if claudeWiring == nil {
+		// The fake lane arms the §5.16 publication watches beside its ready
+		// items; the walking-skeleton composition runs the same watch kinds
+		// (with a static base observer) so both lanes share one behavior.
+		fakeSched, err := newFakeScheduler(st)
+		if err != nil {
+			return nil, err
+		}
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			if err := fakeSched.Run(ctx, cfg.SchedulerInterval); err != nil {
+				d.errs <- fmt.Errorf("durable scheduler: %w", err)
+				return
+			}
+			d.errs <- nil
+		}()
+	}
 	if claudeWiring != nil {
-		d.wg.Add(3)
+		// The doctor and janitor cadences live on the §5.16 durable
+		// scheduler; their startup obligations (the synchronous initial
+		// doctor pass above, the janitor's coverage-priming pass inside
+		// composeClaudeDriver) stay direct calls. A scheduler-loop failure —
+		// including a janitor pass failure — is daemon-fatal below, exactly
+		// as the stopped always-on janitor loop was.
+		sched, err := newClaudeScheduler(st, cfg, claudeWiring, runDoctor)
+		if err != nil {
+			return nil, err
+		}
+		if err := armTrustedConfigJobs(parent, sched, cfg); err != nil {
+			return nil, err
+		}
+		d.wg.Add(2)
 		// The production publication lane gets its own loop: one task holds a
 		// clone, a containerized verification, and GitHub calls for minutes,
 		// which inside the reconcile loop would stall every other run,
@@ -573,35 +623,11 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 		}()
 		go func() {
 			defer d.wg.Done()
-			<-claudeWiring.janitor.finished
-			if ctx.Err() != nil {
-				d.errs <- nil
+			if err := sched.Run(ctx, cfg.SchedulerInterval); err != nil {
+				d.errs <- fmt.Errorf("durable scheduler: %w", err)
 				return
 			}
-			if err := claudeWiring.janitor.Result(); err != nil {
-				d.errs <- fmt.Errorf("installation janitor: %w", err)
-				return
-			}
-			d.errs <- errors.New("installation janitor stopped")
-		}()
-		go func() {
-			defer d.wg.Done()
-			ticker := time.NewTicker(cfg.DoctorInterval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					d.errs <- nil
-					return
-				case <-ticker.C:
-					if err := runScheduledDoctorPass(
-						ctx, claudeWiring.runConformance, runDoctor,
-					); err != nil {
-						d.errs <- fmt.Errorf("scheduled doctor pass: %w", err)
-						return
-					}
-				}
-			}
+			d.errs <- nil
 		}()
 	}
 	success = true

@@ -44,6 +44,7 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer) http.Handler 
 	mux.Handle("GET /attention/items/{item_id}/deliveries", h.authenticated(h.listAttentionItemDeliveries))
 	mux.Handle("PUT /attention/items/{item_id}/deliveries/{channel}/{attempt}/opened", h.authenticated(h.reportDeliveryOpened))
 	mux.Handle("GET /runs", h.authenticated(h.listRuns))
+	mux.Handle("GET /schedules", h.authenticated(h.listSchedules))
 	mux.Handle("GET /runs/{run_id}", h.authenticated(h.getRun))
 	mux.Handle("GET /conversations/{conversation_id}", h.authenticated(h.getConversation))
 	mux.Handle("POST /commands", h.authenticated(h.submitCommand))
@@ -152,6 +153,15 @@ func (h httpHandler) listRuns(w http.ResponseWriter, r *http.Request, _ domain.D
 		return
 	}
 	writeJSON(w, http.StatusOK, runs)
+}
+
+func (h httpHandler) listSchedules(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {
+	schedules, err := h.service.ListSchedules(r.Context())
+	if err != nil {
+		writeReadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, schedules)
 }
 
 func (h httpHandler) getRun(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {

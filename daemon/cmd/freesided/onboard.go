@@ -167,6 +167,17 @@ func runOnboardCommand(
 			if err != nil {
 				return err
 			}
+			// The recorded intent gets its durable §5.16 poll schedule in the
+			// same session: --resume (or the daemon) drives it, and the
+			// envelope's expiry bounds it across sessions.
+			pollScheduler, err := newInstallPollScheduler(st, authority, noPendingReady{})
+			if err != nil {
+				return err
+			}
+			if err := armInstallationPoll(ctx, pollScheduler, intent.RegistrationID,
+				pending.ActiveEpoch, pending.DurableIntentRevision, pending.ExpiresAt); err != nil {
+				return err
+			}
 			return json.NewEncoder(stdout).Encode(struct {
 				Status          string                        `json:"status"`
 				Pending         publish.PendingEnvelopeRecord `json:"pending"`
@@ -271,30 +282,86 @@ func runOnboardCommand(
 			runOnboard,
 		)
 	}
-	intent := operations.InstallationIntentRequest{
-		RegistrationID: *registrationID,
-		Account:        *account,
-		AccountID:      *accountID,
-		InstallationID: *installationID,
-		RepositoryID:   *repositoryID,
-	}
-	return withInstallationJanitor(
-		ctx, authority, *credentialsDir, *stateDir, *installWait,
-		func(janitor *publish.InstallationJanitor) (bool, error) {
-			snapshot, snapshotErr := authority.InstallationAuthority(
-				ctx, intent.RegistrationID,
-			)
-			if snapshotErr != nil {
-				return false, snapshotErr
-			}
-			if snapshot.Pending == nil {
-				return false, errors.New("pending installation intent disappeared")
-			}
-			_, ready := janitor.PendingReady(*snapshot.Pending)
-			return ready, nil
-		},
-		runOnboard,
+	return withDurableInstallationPoll(
+		ctx, st, authority, *credentialsDir, *stateDir, *registrationID, runOnboard,
 	)
+}
+
+// withDurableInstallationPoll resumes a pending install-or-expansion intent
+// through its durable §5.16 poll schedule: the throwaway janitor still
+// reconciles coverage on its own bounded cadence (an operational probe, not
+// the daemon's job), while readiness is observed by scheduler-fired
+// occurrences whose expiry is the envelope's own bound, so the wait
+// survives sessions instead of restarting with each invocation.
+func withDurableInstallationPoll(
+	ctx context.Context,
+	st *store.Store,
+	authority *publish.InstallationAuthorityStore,
+	credentialsDir string,
+	stateDir string,
+	registrationID int64,
+	run func(*publish.InstallationJanitor, *publish.Keystore, *http.Client) error,
+) error {
+	keystore, err := publish.NewKeystore(credentialsDir, stateDir)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	janitor, err := publish.NewInstallationJanitor(
+		keystore, client, defaultGitHubAPIBase, authority, authority,
+		time.Now, defaultJanitorRemovalBound,
+	)
+	if err != nil {
+		return err
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- janitor.Run(runCtx, 500*time.Millisecond) }()
+	fail := func(err error) error {
+		cancel()
+		return errors.Join(err, <-done)
+	}
+
+	snapshot, err := authority.InstallationAuthority(ctx, registrationID)
+	if err != nil {
+		return fail(err)
+	}
+	if snapshot.Pending == nil {
+		return fail(errors.New("pending installation intent disappeared"))
+	}
+	sched, err := newInstallPollScheduler(st, authority, janitor)
+	if err != nil {
+		return fail(err)
+	}
+	if err := armInstallationPoll(ctx, sched, registrationID,
+		snapshot.Pending.ActiveEpoch, snapshot.Pending.DurableIntentRevision,
+		snapshot.Pending.ExpiresAt); err != nil {
+		return fail(err)
+	}
+
+	waitCtx, stopWait := context.WithCancel(runCtx)
+	defer stopWait()
+	waited := make(chan error, 1)
+	go func() {
+		waited <- awaitInstallationPoll(waitCtx, st, sched, installPollScheduleID(registrationID))
+	}()
+	select {
+	case err := <-done:
+		stopWait()
+		<-waited
+		if err == nil {
+			err = errors.New("installation janitor stopped before the grant matched")
+		}
+		return err
+	case err := <-waited:
+		if err != nil {
+			return fail(err)
+		}
+	}
+	runErr := run(janitor, keystore, client)
+	cancel()
+	return errors.Join(runErr, <-done)
 }
 
 func installationURLForRegistration(

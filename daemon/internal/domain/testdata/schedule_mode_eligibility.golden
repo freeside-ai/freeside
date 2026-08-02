@@ -1,0 +1,44 @@
+[
+  {
+    "kind": "pr_checks_deadline",
+    "eligible": {
+      "attended_dev": true,
+      "unattended": true
+    }
+  },
+  {
+    "kind": "review_wait_threshold",
+    "eligible": {
+      "attended_dev": true,
+      "unattended": true
+    }
+  },
+  {
+    "kind": "base_advance_watch",
+    "eligible": {
+      "attended_dev": true,
+      "unattended": true
+    }
+  },
+  {
+    "kind": "installation_poll",
+    "eligible": {
+      "attended_dev": true,
+      "unattended": true
+    }
+  },
+  {
+    "kind": "doctor",
+    "eligible": {
+      "attended_dev": true,
+      "unattended": true
+    }
+  },
+  {
+    "kind": "janitor",
+    "eligible": {
+      "attended_dev": true,
+      "unattended": true
+    }
+  }
+]

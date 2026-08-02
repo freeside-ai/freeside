@@ -20,6 +20,7 @@ type (
 	ArtifactID      string
 	ProposalBatchID string
 	AuthIdentityID  string
+	ScheduleID      string
 )
 
 // Digest is a content address (e.g. "sha256:..."); artifacts, specs, recipes,

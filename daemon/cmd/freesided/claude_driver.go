@@ -852,6 +852,7 @@ func isPermanentSeedCredentialError(err error) bool {
 type claudeComposition struct {
 	driver               *claude.Driver
 	backend              *ward.Backend
+	authority            *publish.InstallationAuthorityStore
 	publicationTransport engine.PublicationTransport
 	publisher            *publish.Publisher
 	containerBin         string
@@ -860,6 +861,10 @@ type claudeComposition struct {
 	runConformance       func(context.Context) error
 	closer               sessionCloser
 	janitor              *janitorSession
+	// observeBaseTip is the base-advance watch's conditional ref read
+	// through the publish reconciler (§5.11 conditional requests; §5.16
+	// base_advance_watch consumer).
+	observeBaseTip func(context.Context, domain.ScheduleBaseWatch) (string, error)
 }
 
 // composeClaudeDriver builds the production ward gate and Claude driver.
@@ -876,7 +881,11 @@ func composeClaudeDriver(
 	if err != nil {
 		return nil, err
 	}
-	transport, publisher, commitAuthors, janitor, err := claudeTransport(ctx, st, cfg)
+	authority, err := publish.NewInstallationAuthorityStore(cfg.StateRoot)
+	if err != nil {
+		return nil, err
+	}
+	transport, publisher, commitAuthors, janitor, reconciler, err := claudeTransport(ctx, st, cfg, authority)
 	if err != nil {
 		return nil, err
 	}
@@ -981,7 +990,17 @@ func composeClaudeDriver(
 		AuthIdentityID: &identity,
 	}
 	composition := &claudeComposition{
-		driver: driver, backend: backend,
+		driver: driver, backend: backend, authority: authority,
+		observeBaseTip: func(obsCtx context.Context, watch domain.ScheduleBaseWatch) (string, error) {
+			obs, err := reconciler.ReconcileRef(obsCtx, watch.Repo, watch.BaseRef)
+			if err != nil {
+				return "", err
+			}
+			if !obs.Exists {
+				return "", fmt.Errorf("base ref %s/%s does not exist", watch.Repo, watch.BaseRef)
+			}
+			return obs.SHA, nil
+		},
 		publicationTransport: publicationTransport,
 		publisher:            publisher, containerBin: cfg.ContainerBin,
 		env:    env,
@@ -1099,30 +1118,27 @@ func claudeTransport(
 	ctx context.Context,
 	st *store.Store,
 	cfg claudeDriverConfig,
-) (*publish.Transport, *publish.Publisher, *publish.GitHubAppBotIdentityResolver, *janitorSession, error) {
+	authority *publish.InstallationAuthorityStore,
+) (*publish.Transport, *publish.Publisher, *publish.GitHubAppBotIdentityResolver, *janitorSession, *publish.Reconciler, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	keystore, err := publish.NewKeystore(cfg.CredentialsDir, cfg.StateRoot)
 	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	authority, err := publish.NewInstallationAuthorityStore(cfg.StateRoot)
-	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	janitor, err := publish.NewInstallationJanitor(
 		keystore, client, defaultGitHubAPIBase, authority, authority, time.Now,
 		defaultJanitorRemovalBound,
 	)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	recorder, err := publish.NewStoreRecorder(st)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	trust, err := publish.NewStoreTrustSource(st)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	minter := publish.NewMinterWithJanitor(
 		keystore, client, defaultGitHubAPIBase, recorder, trust, time.Now, janitor,
@@ -1132,76 +1148,80 @@ func claudeTransport(
 		tokens, keystore, client, defaultGitHubAPIBase, time.Now,
 	)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	transport, err := publish.NewTransport(
 		tokens,
 		publish.TransportOptions{RemoteBase: defaultGitHubRemoteBase},
 	)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	auditor, err := publish.NewGitHubWorkflowAuditor(
 		tokens, client, defaultGitHubAPIBase, time.Now,
 	)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	ledger, err := publish.NewStoreLedger(st)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	authorizations, err := publish.NewStoreAuthorizationSource(st)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	publisher := publish.NewPublisher(
 		tokens, client, defaultGitHubAPIBase, auditor, ledger, trust, authorizations,
 	)
 	if err := transport.AuthorizePublisher(publisher); err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	apps, err := keystore.ListApps()
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	if len(apps) == 0 {
-		return nil, nil, nil, nil, publish.ErrNoAppCredentials
+		return nil, nil, nil, nil, nil, publish.ErrNoAppCredentials
 	}
 	registrationIDs := make([]int64, 0, len(apps))
 	for _, app := range apps {
 		registrationIDs = append(registrationIDs, app.AppID)
 	}
-	session, err := startJanitorSession(
-		ctx, janitor, registrationIDs, defaultJanitorInterval,
-	)
+	session, err := startJanitorSession(ctx, janitor, registrationIDs)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("start installation janitor: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("start installation janitor: %w", err)
 	}
-	return transport, publisher, commitAuthors, session, nil
+	return transport, publisher, commitAuthors, session,
+		publish.NewReconciler(tokens, client, defaultGitHubAPIBase), nil
 }
 
 const janitorStartupTimeout = 2 * time.Minute
 
 type janitorRunner interface {
-	Run(context.Context, time.Duration) error
+	RunScheduledPass(context.Context) error
 	ActiveFor(int64) bool
 	WithStableCoverage(func() error) error
+	RegistrationFaults() []publish.JanitorRegistrationFault
+	PendingReady(publish.PendingInstallationEnvelope) (int64, bool)
 }
 
+// janitorSession exposes the daemon's janitor to the composition: the
+// stable-coverage coordinator conformance uses, and the scheduled pass the
+// §5.16 scheduler's janitor kind fires. The pre-1B always-on goroutine is
+// gone — startJanitorSession primes coverage with one synchronous pass (the
+// same coverage-before-ready startup gate the loop start used to provide)
+// and the durable scheduler owns every later pass; a pass failure there
+// stops the scheduler loop, which stays daemon-fatal exactly as a stopped
+// janitor was.
 type janitorSession struct {
-	cancel   context.CancelFunc
-	finished chan struct{}
-	janitor  janitorRunner
-	stopOnce sync.Once
-	runErr   error
+	janitor janitorRunner
 }
 
 func startJanitorSession(
 	parent context.Context,
 	janitor janitorRunner,
 	registrationIDs []int64,
-	interval time.Duration,
 ) (*janitorSession, error) {
 	if janitor == nil {
 		return nil, errors.New("nil installation janitor")
@@ -1209,46 +1229,32 @@ func startJanitorSession(
 	if len(registrationIDs) == 0 {
 		return nil, publish.ErrNoAppCredentials
 	}
-	runCtx, cancel := context.WithCancel(parent)
-	session := &janitorSession{
-		cancel: cancel, finished: make(chan struct{}), janitor: janitor,
-	}
-	go func() {
-		session.runErr = janitor.Run(runCtx, interval)
-		close(session.finished)
-	}()
-
 	startupCtx, stopWaiting := context.WithTimeout(parent, janitorStartupTimeout)
 	defer stopWaiting()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		active := true
-		for _, registrationID := range registrationIDs {
-			if !janitor.ActiveFor(registrationID) {
-				active = false
-				break
-			}
-		}
-		if active {
-			return session, nil
-		}
-		select {
-		case <-session.finished:
-			if session.runErr != nil {
-				return nil, session.runErr
-			}
-			return nil, errors.New("installation janitor stopped before publishing coverage")
-		case <-startupCtx.Done():
-			cancel()
-			<-session.finished
-			return nil, errors.Join(
-				fmt.Errorf("installation janitor did not publish coverage: %w", startupCtx.Err()),
-				session.runErr,
-			)
-		case <-ticker.C:
-		}
+	if err := janitor.RunScheduledPass(startupCtx); err != nil {
+		return nil, fmt.Errorf("installation janitor startup pass: %w", err)
 	}
+	for _, registrationID := range registrationIDs {
+		if janitor.ActiveFor(registrationID) {
+			continue
+		}
+		faultErrs := make([]error, 0, 1)
+		for _, fault := range janitor.RegistrationFaults() {
+			faultErrs = append(faultErrs, fault.Err)
+		}
+		return nil, errors.Join(fmt.Errorf(
+			"installation janitor did not publish coverage for registration %d",
+			registrationID), errors.Join(faultErrs...))
+	}
+	return &janitorSession{janitor: janitor}, nil
+}
+
+// RunScheduledPass is the scheduler-fired janitor pass (§5.16 janitor kind).
+func (s *janitorSession) RunScheduledPass(ctx context.Context) error {
+	if s == nil || s.janitor == nil {
+		return errors.New("nil installation janitor session")
+	}
+	return s.janitor.RunScheduledPass(ctx)
 }
 
 func (s *janitorSession) WithStableCoverage(fn func() error) error {
@@ -1258,25 +1264,21 @@ func (s *janitorSession) WithStableCoverage(fn func() error) error {
 	return s.janitor.WithStableCoverage(fn)
 }
 
-func (s *janitorSession) Close(ctx context.Context) error {
-	if s == nil {
-		return nil
+// PendingReady is the janitor's onboarding transition signal, exposed for
+// the installation-poll schedule kind.
+func (s *janitorSession) PendingReady(
+	envelope publish.PendingInstallationEnvelope,
+) (int64, bool) {
+	if s == nil || s.janitor == nil {
+		return 0, false
 	}
-	s.stopOnce.Do(s.cancel)
-	select {
-	case <-s.finished:
-		return s.runErr
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return s.janitor.PendingReady(envelope)
 }
 
-func (s *janitorSession) Result() error {
-	if s == nil {
-		return nil
-	}
-	<-s.finished
-	return s.runErr
+// Close is retained for the session-group shape; the janitor holds no
+// goroutine to stop, and the scheduler's context owns pass cancellation.
+func (s *janitorSession) Close(context.Context) error {
+	return nil
 }
 
 type sessionGroup []sessionCloser

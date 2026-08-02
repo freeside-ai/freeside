@@ -474,8 +474,8 @@ public actor MockServer {
     /// One canonical snapshot of every synchronized resource from a
     /// single actor-isolated read, as the daemon's bootstrap is one
     /// Store.Read (plan §5.14): the cursor pair and the rows can never
-    /// be torn. Runs and conversations stay empty until their units seed
-    /// them; the envelope still carries all four collections, so a
+    /// be torn. Runs, conversations, and schedules stay empty until their
+    /// units seed them; the envelope still carries every collection, so a
     /// client decodes the real shape today.
     func bootstrapSnapshot() throws -> Components.Schemas.BootstrapSnapshot {
         .init(
@@ -484,7 +484,8 @@ public actor MockServer {
             attention_items: try listAttentionItems(),
             attention_deliveries: try listAttentionDeliveries(),
             runs: [],
-            conversations: []
+            conversations: [],
+            schedules: []
         )
     }
 

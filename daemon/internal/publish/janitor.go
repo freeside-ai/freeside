@@ -373,6 +373,36 @@ func (j *InstallationJanitor) Run(ctx context.Context, interval time.Duration) e
 	}
 }
 
+// RunScheduledPass performs one reconciliation pass with the always-on
+// loop's full coverage lifecycle — withdraw, reconcile, publish, under the
+// cycle mutex — for a caller that owns the cadence (the §5.16 durable
+// scheduler's janitor kind). The janitor keeps ownership of what a pass
+// means and what coverage it publishes; only the ticker moved out. Coverage
+// persists between scheduled passes exactly as it does between always-on
+// loop iterations, and a pass-wide failure is returned for the caller to
+// treat as fatally as the loop's own exit. It refuses to run while the
+// always-on loop is active, which would double-drive the lifecycle.
+func (j *InstallationJanitor) RunScheduledPass(ctx context.Context) error {
+	if j == nil {
+		return errors.New("installation janitor: nil janitor")
+	}
+	j.cycleMu.Lock()
+	defer j.cycleMu.Unlock()
+	j.mu.RLock()
+	running := j.running
+	j.mu.RUnlock()
+	if running {
+		return errors.New("installation janitor: always-on loop is already running")
+	}
+	j.withdrawCoverage()
+	_, pass, err := j.runCycle(ctx)
+	if err != nil {
+		return err
+	}
+	j.publishPass(pass)
+	return nil
+}
+
 // RunCycle performs one bounded pass without activating the runtime gate or
 // publishing diagnostics. A per-registration failure is an error here rather
 // than a recorded fault: the one-off form exists for operator diagnostics,

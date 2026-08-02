@@ -1,0 +1,363 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
+)
+
+// Durable-scheduler composition for the production (claude) daemon: the
+// §5.16 permanent trusted-config jobs. The doctor and janitor keep their
+// §10 obligations — including in attended_dev — with only their cadence
+// migrated off plain tickers; each keeps its synchronous startup pass
+// (main.go's initial doctor run, the janitor's coverage priming in
+// composeClaudeDriver) as a direct call, and a handler failure stops the
+// scheduler loop, which the daemon treats as fatal.
+
+const (
+	schedulerSystemProjectID = domain.ProjectID("project-system")
+	doctorScheduleID         = domain.ScheduleID("schedule-doctor")
+	janitorScheduleID        = domain.ScheduleID("schedule-janitor")
+)
+
+// baseTipObserver reads the current tip of a watch's target base ref. The
+// production composition observes through the publish reconciler's
+// conditional ref read; the fake lane's world holds no advancing base, so
+// its observer reports the admitted base unchanged.
+type baseTipObserver func(ctx context.Context, watch domain.ScheduleBaseWatch) (string, error)
+
+// deadlineRegistration wires a one-shot publication deadline
+// (pr_checks_deadline, review_wait_threshold). The handler first rechecks
+// the event's expected subject version (§5.16): a stale expectation — the
+// base-advance watch's fact write, say, bumped the item — re-arms under a
+// new generation with the corrected binding and the same nominal deadline,
+// so the elapsed wall time is never postponed and the deadline fires again
+// on the next pass against the current binding. A matching, still-open item
+// terminates fired-and-handled with deadline_elapsed on the synced
+// aggregate. Richer consumers (surfacing the elapsed deadline as attention,
+// binding to observed check runs) arrive with the §7 review stage (#427).
+func deadlineRegistration(st *store.Store) scheduler.Registration {
+	return scheduler.Registration{Handle: func(
+		ctx context.Context, ev domain.ScheduleEvent, sc domain.Schedule,
+	) (scheduler.Consumption, error) {
+		current, consumption, err := recheckItemSubject(ctx, st, ev, sc)
+		if err != nil || consumption != nil {
+			if consumption != nil {
+				return *consumption, err
+			}
+			return scheduler.Consumption{}, err
+		}
+		if current.Status != domain.StatusOpen {
+			// Concluded between fire-time validation and consumption: record
+			// the proof rather than a deadline that no longer applies.
+			resolved, err := sc.Concluded(
+				domain.ScheduleResolved, domain.ResolutionSubjectConcluded, ev.FiredAt)
+			if err != nil {
+				return scheduler.Consumption{}, err
+			}
+			return scheduler.Consumption{
+				Outcome: domain.OutcomeConditionNoLongerApplies, Schedule: &resolved,
+			}, nil
+		}
+		fired, err := sc.Concluded(domain.ScheduleFired, domain.ResolutionDeadlineElapsed, ev.FiredAt)
+		if err != nil {
+			return scheduler.Consumption{}, err
+		}
+		return scheduler.Consumption{
+			Outcome: domain.OutcomeHandled, Schedule: &fired,
+			Commit: func(ctx context.Context, tx *store.WriteTx) error {
+				// The decisive check re-runs inside the consuming transaction:
+				// an operator conclusion that serialized after the handler's
+				// read abandons this consumption, and the next pass records
+				// the subject's conclusion instead of a stale
+				// deadline_elapsed.
+				item, err := tx.GetAttentionItem(ctx, *sc.Subject.ItemID)
+				if errors.Is(err, store.ErrNotFound) {
+					return scheduler.ErrStaleConsumption
+				}
+				if err != nil {
+					return err
+				}
+				if item.Status != domain.StatusOpen || item.ItemVersion != *ev.Subject.ItemVersion {
+					return scheduler.ErrStaleConsumption
+				}
+				return nil
+			},
+		}, nil
+	}}
+}
+
+// recheckItemSubject is the consuming handler's §5.16 expectation recheck
+// for attention-item subjects, shared by the deadline and base-watch kinds:
+// a vanished item resolves with recorded proof, and a moved item version
+// re-arms with the corrected binding (the deadline keeps its nominal fire
+// instant, so the re-armed generation is due immediately). A nil
+// consumption with a nil error means the expectation held and the caller
+// proceeds with the current item.
+func recheckItemSubject(
+	ctx context.Context, st *store.Store, ev domain.ScheduleEvent, sc domain.Schedule,
+) (domain.AttentionItem, *scheduler.Consumption, error) {
+	var current domain.AttentionItem
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var readErr error
+		current, readErr = tx.GetAttentionItem(ctx, *sc.Subject.ItemID)
+		return readErr
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		resolved, err := sc.Concluded(
+			domain.ScheduleResolved, domain.ResolutionSubjectConcluded, ev.FiredAt)
+		if err != nil {
+			return domain.AttentionItem{}, nil, err
+		}
+		return domain.AttentionItem{}, &scheduler.Consumption{
+			Outcome: domain.OutcomeConditionNoLongerApplies, Schedule: &resolved,
+		}, nil
+	}
+	if err != nil {
+		return domain.AttentionItem{}, nil, err
+	}
+	if current.ItemVersion != *ev.Subject.ItemVersion {
+		version := current.ItemVersion
+		subject := sc.Subject
+		subject.ItemVersion = &version
+		reArmed, err := sc.ReArmed(subject, sc.FireAt, ev.FiredAt)
+		if err != nil {
+			return domain.AttentionItem{}, nil, err
+		}
+		return domain.AttentionItem{}, &scheduler.Consumption{
+			Outcome: domain.OutcomeReArmed, Schedule: &reArmed,
+		}, nil
+	}
+	return current, nil, nil
+}
+
+// baseAdvanceRegistration wires the base-advance staleness watch: observe
+// the base tip, and maintain the item's base-freshness fact on material
+// change only (first observation, or a changed tip), so a routine fire does
+// not churn item versions while a base advance correctly invalidates
+// commands prepared against the stale base claim. A transient observation
+// failure is an observe_failed outcome; the recurring watch retries at its
+// next nominal fire.
+func baseAdvanceRegistration(st *store.Store, observe baseTipObserver) scheduler.Registration {
+	return scheduler.Registration{Handle: func(
+		ctx context.Context, ev domain.ScheduleEvent, sc domain.Schedule,
+	) (scheduler.Consumption, error) {
+		// The subject recheck precedes the observation (§5.16): even a
+		// failed observation must not consume against a vanished, concluded,
+		// or version-moved subject.
+		var current domain.AttentionItem
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			var readErr error
+			current, readErr = tx.GetAttentionItem(ctx, *sc.Subject.ItemID)
+			return readErr
+		}); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				resolved, err := sc.Concluded(
+					domain.ScheduleResolved, domain.ResolutionSubjectConcluded, ev.FiredAt)
+				if err != nil {
+					return scheduler.Consumption{}, err
+				}
+				return scheduler.Consumption{
+					Outcome: domain.OutcomeConditionNoLongerApplies, Schedule: &resolved,
+				}, nil
+			}
+			return scheduler.Consumption{}, err
+		}
+		if current.Status != domain.StatusOpen {
+			// Concluded between fire-time validation and this read: record
+			// the proof now rather than re-arming a watch over a closed item.
+			resolved, err := sc.Concluded(
+				domain.ScheduleResolved, domain.ResolutionSubjectConcluded, ev.FiredAt)
+			if err != nil {
+				return scheduler.Consumption{}, err
+			}
+			return scheduler.Consumption{
+				Outcome: domain.OutcomeConditionNoLongerApplies, Schedule: &resolved,
+			}, nil
+		}
+		staleExpectation := current.ItemVersion != *ev.Subject.ItemVersion
+		observed, err := observe(ctx, *sc.BaseWatch)
+		if err != nil {
+			if staleExpectation {
+				// The observation failed, but the event's expectation is
+				// already stale: re-arm with the corrected binding rather
+				// than staying bound to old state until a later successful
+				// fire.
+				version := current.ItemVersion
+				subject := sc.Subject
+				subject.ItemVersion = &version
+				reArmed, err := sc.ReArmed(subject, nil, ev.FiredAt)
+				if err != nil {
+					return scheduler.Consumption{}, err
+				}
+				return scheduler.Consumption{
+					Outcome: domain.OutcomeReArmed, Schedule: &reArmed,
+				}, nil
+			}
+			return scheduler.Consumption{Outcome: domain.OutcomeObserveFailed}, nil
+		}
+		if current.BaseFreshness != nil && current.BaseFreshness.ObservedBaseSHA == observed {
+			if staleExpectation {
+				// No fact to write, but the event's expectation is stale
+				// (§5.16): re-arm with the corrected binding instead of
+				// silently consuming against it.
+				version := current.ItemVersion
+				subject := sc.Subject
+				subject.ItemVersion = &version
+				reArmed, err := sc.ReArmed(subject, nil, ev.FiredAt)
+				if err != nil {
+					return scheduler.Consumption{}, err
+				}
+				return scheduler.Consumption{
+					Outcome: domain.OutcomeReArmed, Schedule: &reArmed,
+				}, nil
+			}
+			return scheduler.Consumption{Outcome: domain.OutcomeHandled}, nil
+		}
+		// A material change: the fact write bumps the item version, so the
+		// same consumption re-arms the watch with the binding it is about to
+		// create, keeping the schedule's expectation current instead of
+		// leaving every later fire one version behind.
+		expected := current.ItemVersion + 1
+		subject := sc.Subject
+		subject.ItemVersion = &expected
+		reArmed, err := sc.ReArmed(subject, nil, ev.FiredAt)
+		if err != nil {
+			return scheduler.Consumption{}, err
+		}
+		fact := domain.BaseFreshness{
+			BaseRef:         sc.BaseWatch.BaseRef,
+			AdmittedBaseSHA: sc.BaseWatch.AdmittedBaseSHA,
+			ObservedBaseSHA: observed,
+			Advanced:        observed != sc.BaseWatch.AdmittedBaseSHA,
+			ObservedAt:      ev.FiredAt,
+		}
+		return scheduler.Consumption{
+			Outcome:  domain.OutcomeHandled,
+			Schedule: &reArmed,
+			Commit: func(ctx context.Context, tx *store.WriteTx) error {
+				// The consuming-transaction recheck (§5.16): the item is
+				// re-read here, so a version that moved since the event still
+				// receives the fact against its current state, and a
+				// concurrently concluded item receives nothing.
+				item, err := tx.GetAttentionItem(ctx, *sc.Subject.ItemID)
+				if errors.Is(err, store.ErrNotFound) {
+					return nil
+				}
+				if err != nil {
+					return err
+				}
+				if item.Status != domain.StatusOpen || item.ItemVersion != current.ItemVersion {
+					// A conclusion or any other item update serialized after
+					// the handler's read: abandon, so the fact and the
+					// re-armed subject binding (derived from that read) are
+					// never committed against a different version, and the
+					// next pass recomputes from the winning state.
+					return scheduler.ErrStaleConsumption
+				}
+				item.BaseFreshness = &fact
+				item.ItemVersion++
+				return tx.PutAttentionItem(ctx, item)
+			},
+		}, nil
+	}}
+}
+
+// publicationWatchRegistrations is the shared registration set for the three
+// §5.16 publication watch kinds, identical in both daemon compositions.
+func publicationWatchRegistrations(
+	st *store.Store, observe baseTipObserver,
+) map[domain.ScheduleKind]scheduler.Registration {
+	return map[domain.ScheduleKind]scheduler.Registration{
+		domain.SchedulePRChecksDeadline:    deadlineRegistration(st),
+		domain.ScheduleReviewWaitThreshold: deadlineRegistration(st),
+		domain.ScheduleBaseAdvanceWatch:    baseAdvanceRegistration(st, observe),
+	}
+}
+
+// staticBaseObserver is the fake lane's world: its base never advances.
+func staticBaseObserver(_ context.Context, watch domain.ScheduleBaseWatch) (string, error) {
+	return watch.AdmittedBaseSHA, nil
+}
+
+// newFakeScheduler runs the publication watch kinds for the walking-skeleton
+// composition, keeping fake-lane parity with the production wiring.
+func newFakeScheduler(st *store.Store) (*scheduler.Scheduler, error) {
+	return scheduler.New(st, domain.ModeAttendedDev,
+		func() time.Time { return time.Now().UTC() },
+		publicationWatchRegistrations(st, staticBaseObserver))
+}
+
+func newClaudeScheduler(
+	st *store.Store,
+	cfg config,
+	wiring *claudeComposition,
+	runDoctor func(context.Context) error,
+) (*scheduler.Scheduler, error) {
+	kinds := map[domain.ScheduleKind]scheduler.Registration{
+		domain.ScheduleDoctor: {Handle: func(
+			ctx context.Context, _ domain.ScheduleEvent, _ domain.Schedule,
+		) (scheduler.Consumption, error) {
+			if err := runScheduledDoctorPass(ctx, wiring.runConformance, runDoctor); err != nil {
+				return scheduler.Consumption{}, fmt.Errorf("scheduled doctor pass: %w", err)
+			}
+			return scheduler.Consumption{Outcome: domain.OutcomeHandled}, nil
+		}},
+		domain.ScheduleJanitor: {Handle: func(
+			ctx context.Context, _ domain.ScheduleEvent, _ domain.Schedule,
+		) (scheduler.Consumption, error) {
+			if err := wiring.janitor.RunScheduledPass(ctx); err != nil {
+				return scheduler.Consumption{}, fmt.Errorf("installation janitor: %w", err)
+			}
+			return scheduler.Consumption{Outcome: domain.OutcomeHandled}, nil
+		}},
+	}
+	// The installation-poll kind registers with the daemon too: a pending
+	// intent recorded by the onboarding CLI keeps its durable observation
+	// (and its expiry gets recorded) even when the operator never resumes.
+	kinds[domain.ScheduleInstallationPoll] = installPollRegistration(wiring.authority, wiring.janitor)
+	for kind, reg := range publicationWatchRegistrations(st, wiring.observeBaseTip) {
+		kinds[kind] = reg
+	}
+	return scheduler.New(st, cfg.Claude.OperatingMode,
+		func() time.Time { return time.Now().UTC() }, kinds)
+}
+
+// armTrustedConfigJobs converges the doctor and janitor schedules onto the
+// current configuration. An unchanged schedule keeps its durable clock, so
+// a restart preserves cadence (a missed fire coalesces with a recorded gap
+// rather than resetting); a reconfigured interval re-arms under the next
+// generation.
+func armTrustedConfigJobs(ctx context.Context, sched *scheduler.Scheduler, cfg config) error {
+	now := time.Now().UTC()
+	for _, job := range []struct {
+		id       domain.ScheduleID
+		kind     domain.ScheduleKind
+		interval time.Duration
+	}{
+		{doctorScheduleID, domain.ScheduleDoctor, cfg.DoctorInterval},
+		{janitorScheduleID, domain.ScheduleJanitor, defaultJanitorInterval},
+	} {
+		seconds := int64(job.interval / time.Second)
+		schedule, err := domain.NewSchedule(domain.ScheduleInput{
+			ID: job.id, ProjectID: schedulerSystemProjectID, Kind: job.kind,
+			Subject:   domain.ScheduleSubject{Type: domain.ScheduleSubjectTrustedConfig},
+			CreatedAt: now, IntervalSeconds: &seconds,
+		})
+		if err != nil {
+			return fmt.Errorf("arm %s: %w", job.id, err)
+		}
+		// The startup obligation already ran synchronously, so a fresh
+		// schedule's first fire is one interval out; an existing schedule
+		// keeps its own clock.
+		if err := sched.Arm(ctx, schedule, now.Add(job.interval)); err != nil {
+			return fmt.Errorf("arm %s: %w", job.id, err)
+		}
+	}
+	return nil
+}

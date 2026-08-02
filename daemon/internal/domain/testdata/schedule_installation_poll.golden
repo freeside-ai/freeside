@@ -1,0 +1,21 @@
+{
+  "id": "schedule-installation_poll-4385298",
+  "project_id": "project-system",
+  "kind": "installation_poll",
+  "subject": {
+    "type": "installation_intent",
+    "item_id": null,
+    "item_version": null,
+    "registration_id": 4385298,
+    "active_epoch": 1,
+    "durable_intent_revision": 2
+  },
+  "generation": 1,
+  "created_at": "2026-01-02T03:04:05Z",
+  "fire_at": null,
+  "interval_seconds": 2,
+  "expires_at": "2026-01-02T03:14:05Z",
+  "base_watch": null,
+  "status": "armed",
+  "resolution": null
+}

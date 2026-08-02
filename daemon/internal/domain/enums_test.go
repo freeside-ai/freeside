@@ -160,6 +160,30 @@ func TestEnumValidity(t *testing.T) {
 		valids["InvocationLiveness"] = append(valids["InvocationLiveness"], v.valid)
 	}
 	invalids["InvocationLiveness"] = InvocationLiveness("").valid
+	for _, v := range AllScheduleKinds {
+		valids["ScheduleKind"] = append(valids["ScheduleKind"], v.valid)
+	}
+	invalids["ScheduleKind"] = ScheduleKind("").valid
+	for _, v := range AllScheduleStatuses {
+		valids["ScheduleStatus"] = append(valids["ScheduleStatus"], v.valid)
+	}
+	invalids["ScheduleStatus"] = ScheduleStatus("").valid
+	for _, v := range AllScheduleResolutionReasons {
+		valids["ScheduleResolutionReason"] = append(valids["ScheduleResolutionReason"], v.valid)
+	}
+	invalids["ScheduleResolutionReason"] = ScheduleResolutionReason("").valid
+	for _, v := range AllScheduleSubjectTypes {
+		valids["ScheduleSubjectType"] = append(valids["ScheduleSubjectType"], v.valid)
+	}
+	invalids["ScheduleSubjectType"] = ScheduleSubjectType("").valid
+	for _, v := range AllScheduleOccurrenceStatuses {
+		valids["ScheduleOccurrenceStatus"] = append(valids["ScheduleOccurrenceStatus"], v.valid)
+	}
+	invalids["ScheduleOccurrenceStatus"] = ScheduleOccurrenceStatus("").valid
+	for _, v := range AllScheduleOccurrenceOutcomes {
+		valids["ScheduleOccurrenceOutcome"] = append(valids["ScheduleOccurrenceOutcome"], v.valid)
+	}
+	invalids["ScheduleOccurrenceOutcome"] = ScheduleOccurrenceOutcome("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {

@@ -1291,6 +1291,21 @@ func (w *fakePublicationWorkflow) completePublishedTask(
 	if err := w.putTerminalItem(ctx, ready); err != nil {
 		return taskOutcome{}, fmt.Errorf("create ready item: %w", err)
 	}
+	// The §5.16 publication watches converge beside the item, from its
+	// stored form (putTerminalItem may have converged onto an existing
+	// version), exactly as the production lane arms them.
+	var stored domain.AttentionItem
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		stored, err = tx.GetAttentionItem(ctx, readyItemID(task.RunID))
+		return err
+	}); err != nil {
+		return taskOutcome{}, fmt.Errorf("arm publication watches: %w", err)
+	}
+	if err := armPublicationWatches(ctx, w.store, stored,
+		task.Repo, task.BaseRef, task.BaseSHA, w.now()); err != nil {
+		return taskOutcome{}, fmt.Errorf("arm publication watches: %w", err)
+	}
 	if err := w.finishTask(ctx, task); err != nil {
 		return taskOutcome{}, err
 	}
@@ -2079,6 +2094,10 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	normalized.Status = expected.Status
 	normalized.DecidedAt = expected.DecidedAt
 	normalized.Timing = expected.Timing
+	// The base-advance watch maintains this fact after creation (§5.16), so
+	// like status and timing it never disqualifies an otherwise matching
+	// item during recovery.
+	normalized.BaseFreshness = expected.BaseFreshness
 	if !reflect.DeepEqual(normalized, expected) {
 		return false
 	}

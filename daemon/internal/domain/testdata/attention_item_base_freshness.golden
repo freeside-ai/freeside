@@ -52,8 +52,14 @@
   ],
   "pr_head_sha": "cafebabe",
   "commit_plan_notice": "present_but_not_honored",
-  "base_freshness": null,
-  "item_version": 1,
+  "base_freshness": {
+    "base_ref": "main",
+    "admitted_base_sha": "cafebabe",
+    "observed_base_sha": "deadbeef",
+    "advanced": true,
+    "observed_at": "2026-01-02T03:49:05Z"
+  },
+  "item_version": 2,
   "interruption_class": "planned_gate",
   "conversation_id": "conv-1",
   "timing": {

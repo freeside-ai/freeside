@@ -18,6 +18,7 @@
   "artifact_digests": [],
   "pr_head_sha": "",
   "commit_plan_notice": null,
+  "base_freshness": null,
   "item_version": 1,
   "interruption_class": "exceptional",
   "conversation_id": null,
