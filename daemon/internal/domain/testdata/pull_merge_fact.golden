@@ -1,0 +1,11 @@
+{
+  "repo": "owner/repo",
+  "repository_id": 84958515,
+  "pr_number": 450,
+  "state": "closed",
+  "merged": true,
+  "merge_commit_sha": "deadbeef",
+  "base_ref": "main",
+  "head_sha": "cafebabe",
+  "observed_at": "2026-01-02T05:04:05Z"
+}

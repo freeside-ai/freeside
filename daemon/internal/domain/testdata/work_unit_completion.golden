@@ -1,0 +1,8 @@
+{
+  "unit_id": "workunit-run-1",
+  "criterion": "bound_issue_closed_by_merged_pr",
+  "pr_number": 450,
+  "merge_commit_sha": "deadbeef",
+  "bound_issue": 443,
+  "recorded_at": "2026-01-02T05:04:05Z"
+}

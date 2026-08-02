@@ -21,6 +21,7 @@ type (
 	ProposalBatchID string
 	AuthIdentityID  string
 	ScheduleID      string
+	WorkUnitID      string
 )
 
 // Digest is a content address (e.g. "sha256:..."); artifacts, specs, recipes,

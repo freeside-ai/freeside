@@ -1,0 +1,17 @@
+{
+  "id": "workunit-run-1",
+  "run_id": "run-1",
+  "project_id": "project-1",
+  "completion_criterion": "bound_issue_closed_by_merged_pr",
+  "bound_issue": 443,
+  "depends_on_issues": [
+    440,
+    442
+  ],
+  "declared_paths": [
+    "daemon/",
+    "devlog/"
+  ],
+  "contract_serialized": true,
+  "declared_at": "2026-01-02T03:04:05Z"
+}
