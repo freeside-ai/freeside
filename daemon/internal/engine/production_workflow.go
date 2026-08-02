@@ -200,6 +200,11 @@ type ProductionRunSpec struct {
 	PolicyArtifactID domain.ArtifactID
 	ResolvedPolicy   domain.ResolvedPolicy
 	Publication      ProductionPublication
+	// WorkUnit, when present, is the operator's explicit §5.18 work-unit
+	// declaration, captured verbatim in the submission transaction; nil
+	// submits an undeclared run, which records nothing (capture stores
+	// explicit declarations only).
+	WorkUnit *domain.WorkUnitDeclarationInput
 }
 
 // ProductionRun reports the durable identities one submission converges on.
@@ -453,6 +458,46 @@ func SubmitProductionRun(ctx context.Context, st *store.Store, spec ProductionRu
 		// claim until the execution-bound publisher promotes it.
 		if err := publish.ClaimInvocation(ctx, tx, publicationReservation); err != nil {
 			return err
+		}
+		// The §5.18 work-unit declaration rides the run-creating transaction
+		// and only that one: whether a run is declared is fixed at intake. A
+		// converged re-submission must re-state the same declaration
+		// (compared modulo the stamped instant); a disagreeing one is
+		// refused like any other fixed binding, since a changed declaration
+		// is a different unit, never an update; and declaring an existing
+		// undeclared run is refused too — the run may already be executing,
+		// published, or terminal, where a retroactive declaration mints a
+		// unit no remaining pass can ever bind or complete (and a
+		// pre-capture run must not gain one, the migration's no-backfill
+		// rule).
+		if spec.WorkUnit != nil {
+			declared, err := domain.NewWorkUnitDeclaration(
+				*spec.WorkUnit, spec.RunID, spec.ProjectID, time.Now().UTC())
+			if err != nil {
+				return fmt.Errorf("work unit declaration: %w", err)
+			}
+			existing, declErr := tx.GetWorkUnitDeclarationByRun(ctx, spec.RunID)
+			switch {
+			case declErr == nil:
+				want := declared
+				want.DeclaredAt = existing.DeclaredAt
+				if !reflect.DeepEqual(want, existing) {
+					return fmt.Errorf(
+						"stored work-unit declaration disagrees with the submission: %w",
+						domain.ErrImmutableTransition)
+				}
+			case errors.Is(declErr, store.ErrNotFound):
+				if !runCreated {
+					return fmt.Errorf(
+						"stored run was submitted without a work-unit declaration: %w",
+						domain.ErrImmutableTransition)
+				}
+				if err := tx.RecordWorkUnitDeclaration(ctx, declared); err != nil {
+					return err
+				}
+			default:
+				return declErr
+			}
 		}
 		// The submitted milestone rides only the creating transaction: the
 		// atomic creation makes it exact, and a replayed submission against

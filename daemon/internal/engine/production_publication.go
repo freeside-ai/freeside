@@ -1497,6 +1497,15 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 			return productionTaskOutcome{}, err
 		}
 	}
+	// The §5.18 work-unit PR binding converges on every pass through the
+	// published state, write-once from first-party facts, and it commits
+	// BEFORE the watches arm: the base-advance watch hosts the merge-capture
+	// pass, so an armed watch whose unit had no binding yet could resolve a
+	// concluded item as "nothing to record" in the crash window and leave no
+	// observer for the binding a later pass records.
+	if err := w.recordWorkUnitPRBinding(ctx, task, binding, published); err != nil {
+		return productionTaskOutcome{}, err
+	}
 	// The §5.16 publication watches converge beside the item on every pass
 	// through here, so a crash between the item and its watches heals.
 	if err := w.armReadyItemWatches(ctx, task, binding); err != nil {
@@ -1692,6 +1701,55 @@ func (w *productionPublicationWorkflow) appendPublicationMilestone(
 			InvocationID: &invocation, Reason: cause,
 			RecordedAt: w.now().UTC(),
 		})
+	})
+}
+
+// recordWorkUnitPRBinding captures the §5.18 exact work-unit binding once
+// the run's PR durably exists: every coordinate is a first-party fact (the
+// admitted base revision, the publish result's PR number, the publication
+// task's head). An undeclared run records nothing. The record is
+// write-once; a converged re-pass must restate the same coordinates
+// (compared modulo the stamped instant), and a disagreement fails loud —
+// publication converges on exactly one PR, so a second binding is
+// corruption, never an update.
+func (w *productionPublicationWorkflow) recordWorkUnitPRBinding(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	published publish.Result,
+) error {
+	return w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, task.RunID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		record := domain.WorkUnitPRBinding{
+			UnitID:       declaration.ID,
+			Repo:         binding.admission.Base.Repo,
+			RepositoryID: binding.admission.Base.RepositoryID,
+			PRNumber:     published.PRNumber,
+			BaseRef:      binding.admission.Base.BaseRef,
+			HeadSHA:      task.HeadSHA,
+			RecordedAt:   w.now().UTC(),
+		}
+		existing, err := tx.GetWorkUnitPRBinding(ctx, declaration.ID)
+		switch {
+		case err == nil:
+			want := record
+			want.RecordedAt = existing.RecordedAt
+			if want != existing {
+				return fmt.Errorf("stored work-unit pr binding disagrees with the published state: %w",
+					store.ErrImmutableConflict)
+			}
+			return nil
+		case errors.Is(err, store.ErrNotFound):
+			return tx.RecordWorkUnitPRBinding(ctx, record)
+		default:
+			return err
+		}
 	})
 }
 

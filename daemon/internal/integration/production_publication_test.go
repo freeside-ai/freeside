@@ -2251,3 +2251,69 @@ func TestShutdownEndsAParkedProductionPublicationWithoutLosingItsTask(t *testing
 	}
 	p.assertReady(t)
 }
+
+// TestProductionPublicationRecordsWorkUnitPRBinding (§5.18, issue #443):
+// once a declared run's publication reaches its ready state, the daemon
+// records the unit's exact PR binding from first-party facts — the
+// admitted base revision, the published PR number, and the publication
+// head — and a converged re-pass restates the same record instead of
+// duplicating or conflicting.
+func TestProductionPublicationRecordsWorkUnitPRBinding(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	// Declaration capture at submission is covered in production_run_test.go;
+	// here the unit is declared for the already-submitted run so the ready
+	// pass has a binding to record.
+	boundIssue := 443
+	declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
+		CompletionCriterion: domain.CompletionBoundIssueClosedByMergedPR,
+		BoundIssue:          &boundIssue,
+		// The read re-gate requires the declared scope to equal the
+		// harness policy's paths key.
+		DeclaredPaths: []string{"README.md"},
+	}, p.runID, p.projectID, fakePublicationTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+		return tx.RecordWorkUnitDeclaration(p.ctx, declaration)
+	}); err != nil {
+		t.Fatalf("record declaration: %v", err)
+	}
+
+	p.startAndRecordExport(t)
+	result, err := p.reconcileLanes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.assertReady(t)
+	if result.LastPRNumber <= 0 {
+		t.Fatalf("reconcile result carries no PR number: %+v", result)
+	}
+
+	readBinding := func() domain.WorkUnitPRBinding {
+		t.Helper()
+		var binding domain.WorkUnitPRBinding
+		if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+			var err error
+			binding, err = tx.GetWorkUnitPRBinding(p.ctx, declaration.ID)
+			return err
+		}); err != nil {
+			t.Fatalf("read binding: %v", err)
+		}
+		return binding
+	}
+	binding := readBinding()
+	if binding.PRNumber != result.LastPRNumber || binding.Repo != fakePublicationRepo ||
+		binding.RepositoryID != p.profile.RepositoryID || binding.HeadSHA != p.replay.HeadSHA ||
+		binding.BaseRef == "" {
+		t.Fatalf("binding = %+v, want the published PR's first-party coordinates", binding)
+	}
+
+	// A converged replay of the published state restates the same record.
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	if again := readBinding(); again != binding {
+		t.Fatalf("replay churned the binding: %+v vs %+v", again, binding)
+	}
+}
