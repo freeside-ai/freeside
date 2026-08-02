@@ -130,6 +130,46 @@ func TestWorkUnitPRBindingValidate(t *testing.T) {
 	}
 }
 
+func TestReadyItemPRBindingValidate(t *testing.T) {
+	valid := domain.ReadyItemPRBinding{
+		ItemID: "item-ready-1", RunID: "run-1", ProducingInvocationID: "inv-1",
+		PublicationInvocationID: "publish-production-run-1",
+		PublicationIdentity:     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Repo:                    "owner/repo",
+		RepositoryID:            84958515, PRNumber: 450, BaseRef: "main",
+		HeadSHA: "cafebabe", RecordedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+	}
+	cases := []struct {
+		name    string
+		mutate  func(*domain.ReadyItemPRBinding)
+		wantErr error
+	}{
+		{"no item", func(b *domain.ReadyItemPRBinding) { b.ItemID = "" }, domain.ErrEmptyID},
+		{"no run", func(b *domain.ReadyItemPRBinding) { b.RunID = "" }, domain.ErrEmptyID},
+		{"no producing invocation", func(b *domain.ReadyItemPRBinding) { b.ProducingInvocationID = "" }, domain.ErrEmptyID},
+		{"no publication invocation", func(b *domain.ReadyItemPRBinding) { b.PublicationInvocationID = "" }, domain.ErrEmptyID},
+		{"invalid publication identity", func(b *domain.ReadyItemPRBinding) { b.PublicationIdentity = "bad" }, domain.ErrEmptyField},
+		{"no repo", func(b *domain.ReadyItemPRBinding) { b.Repo = "" }, domain.ErrEmptyField},
+		{"non-positive repository id", func(b *domain.ReadyItemPRBinding) { b.RepositoryID = 0 }, domain.ErrNonPositive},
+		{"non-positive pr number", func(b *domain.ReadyItemPRBinding) { b.PRNumber = 0 }, domain.ErrNonPositive},
+		{"no base ref", func(b *domain.ReadyItemPRBinding) { b.BaseRef = "" }, domain.ErrEmptyField},
+		{"no head sha", func(b *domain.ReadyItemPRBinding) { b.HeadSHA = "" }, domain.ErrEmptyField},
+		{"zero recorded_at", func(b *domain.ReadyItemPRBinding) { b.RecordedAt = time.Time{} }, domain.ErrMissingTimestamp},
+		{"non-UTC recorded_at", func(b *domain.ReadyItemPRBinding) {
+			b.RecordedAt = b.RecordedAt.In(time.FixedZone("PST", -8*3600))
+		}, domain.ErrTimestampNotUTC},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			binding := valid
+			tc.mutate(&binding)
+			if err := binding.Validate(); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Validate() = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestPullMergeFactValidate(t *testing.T) {
 	cases := []struct {
 		name    string

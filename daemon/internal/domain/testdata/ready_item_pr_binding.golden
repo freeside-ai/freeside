@@ -1,0 +1,13 @@
+{
+  "item_id": "item-ready-1",
+  "run_id": "run-1",
+  "producing_invocation_id": "inv-1",
+  "publication_invocation_id": "publish-production-run-1",
+  "publication_identity": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "repo": "owner/repo",
+  "repository_id": 84958515,
+  "pr_number": 450,
+  "base_ref": "main",
+  "head_sha": "cafebabe",
+  "recorded_at": "2026-01-02T04:04:05Z"
+}

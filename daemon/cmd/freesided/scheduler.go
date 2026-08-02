@@ -41,12 +41,10 @@ type (
 	issueObserver func(ctx context.Context, repo string, number int) (publish.IssueObservation, error)
 )
 
-// mergeCapture is the §5.18 merge-observation pass riding the base-advance
-// watch: the only production site that periodically polls GitHub beside a
-// live ready item — and a merge is a base advance. Observations run before
-// the consuming transaction (the §5.16 handler contract); the derived fact
-// appends and the completion record commit inside it, through the returned
-// commit closure.
+// mergeCapture is the former §5.18 base-watch capture hook. Production and
+// fake composition leave it unwired after #463 moved resource observation to
+// active_resource.go; it remains here only as a focused regression harness for
+// the scheduler/capture transaction seam while that older coverage is ported.
 type mergeCapture struct {
 	pull  pullObserver
 	issue issueObserver
@@ -387,12 +385,8 @@ func recheckItemSubject(
 // failure is an observe_failed outcome; the recurring watch retries at its
 // next nominal fire.
 //
-// The watch also hosts the §5.18 merge-capture pass (mergeCapture): while
-// the item is open the pass records the bound PR's (and, when the criterion
-// needs it, the bound issue's) observed state beside the base fact, and
-// when the item has concluded it takes one final observation before the
-// schedule resolves, so an operator who merges and immediately concludes
-// the item is still captured.
+// The optional mergeCapture argument is unwired in every daemon composition;
+// see its declaration for the narrow regression-test reason it remains.
 func baseAdvanceRegistration(st *store.Store, observe baseTipObserver, capture mergeCapture) scheduler.Registration {
 	return scheduler.Registration{
 		// The built-in open-item check would resolve a concluded item's
@@ -584,26 +578,12 @@ func staticBaseObserver(_ context.Context, watch domain.ScheduleBaseWatch) (stri
 	return watch.AdmittedBaseSHA, nil
 }
 
-// staticMergeCapture is the fake lane's world for the §5.18 capture pass:
-// PRs stay open and unmerged, issues stay open, so declared fake-lane runs
-// record open facts and never complete.
-func staticMergeCapture() mergeCapture {
-	return mergeCapture{
-		pull: func(_ context.Context, _ string, number int) (publish.PullObservation, error) {
-			return publish.PullObservation{Number: number, State: "open", BaseRef: "main"}, nil
-		},
-		issue: func(_ context.Context, _ string, number int) (publish.IssueObservation, error) {
-			return publish.IssueObservation{Number: number, State: "open"}, nil
-		},
-	}
-}
-
 // newFakeScheduler runs the publication watch kinds for the walking-skeleton
 // composition, keeping fake-lane parity with the production wiring.
 func newFakeScheduler(st *store.Store) (*scheduler.Scheduler, error) {
 	return scheduler.New(st, domain.ModeAttendedDev,
 		func() time.Time { return time.Now().UTC() },
-		publicationWatchRegistrations(st, staticBaseObserver, staticMergeCapture()))
+		publicationWatchRegistrations(st, staticBaseObserver, mergeCapture{}))
 }
 
 func newClaudeScheduler(
@@ -634,8 +614,9 @@ func newClaudeScheduler(
 	// intent recorded by the onboarding CLI keeps its durable observation
 	// (and its expiry gets recorded) even when the operator never resumes.
 	kinds[domain.ScheduleInstallationPoll] = installPollRegistration(wiring.authority, wiring.janitor)
-	capture := mergeCapture{pull: wiring.observePull, issue: wiring.observeIssue}
-	for kind, reg := range publicationWatchRegistrations(st, wiring.observeBaseTip, capture) {
+	// PR/issue capture has its own plain-ticker lifecycle (active_resource.go).
+	// The durable base watch observes only base freshness in production.
+	for kind, reg := range publicationWatchRegistrations(st, wiring.observeBaseTip, mergeCapture{}) {
 		kinds[kind] = reg
 	}
 	return scheduler.New(st, cfg.Claude.OperatingMode,
