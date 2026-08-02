@@ -252,3 +252,131 @@ func TestReconcileValidation(t *testing.T) {
 		t.Error("pull number 0 accepted, want error")
 	}
 }
+
+// TestReconcilePullMergeState (§5.18 capture, issue #443): a merged PR's
+// observation carries the merged bit, its merge commit, and the observed
+// base-repository identity; an unmerged PR never surfaces GitHub's
+// test-merge commit as a fact.
+func TestReconcilePullMergeState(t *testing.T) {
+	gh := newFakeGitHub(t)
+	gh.prs = []fakePR{
+		{
+			Number: 7, State: "closed", HeadRef: "feat/x", HeadSHA: testHeadSHA,
+			BaseRepoID: 84958515,
+			MergedAt:   "2026-01-02T03:04:05Z", MergeCommitSHA: testOtherSHA,
+		},
+		{
+			Number: 8, State: "open", HeadRef: "feat/y", HeadSHA: testHeadSHA,
+			MergeCommitSHA: testOtherSHA,
+		}, // GitHub's test-merge commit
+	}
+	r := newTestReconciler(t, gh)
+
+	merged, err := r.ReconcilePull(context.Background(), testRepo, 7)
+	if err != nil {
+		t.Fatalf("ReconcilePull(7): %v", err)
+	}
+	if !merged.Merged || merged.MergeCommitSHA != testOtherSHA || merged.BaseRepoID != 84958515 {
+		t.Errorf("merged PR observed as %+v", merged)
+	}
+
+	unmerged, err := r.ReconcilePull(context.Background(), testRepo, 8)
+	if err != nil {
+		t.Fatalf("ReconcilePull(8): %v", err)
+	}
+	if unmerged.Merged || unmerged.MergeCommitSHA != "" {
+		t.Errorf("unmerged PR surfaced a merge commit: %+v", unmerged)
+	}
+}
+
+// TestReconcileIssueConditional: the issue observation is conditional like
+// the pull's, and a closed issue's observation carries the closing commit
+// of its latest closed event ("" for a manual close).
+func TestReconcileIssueConditional(t *testing.T) {
+	gh := newFakeGitHub(t)
+	gh.issues[443] = fakeIssue{State: "open"}
+	r := newTestReconciler(t, gh)
+
+	first, err := r.ReconcileIssue(context.Background(), testRepo, 443)
+	if err != nil {
+		t.Fatalf("first ReconcileIssue: %v", err)
+	}
+	if first.State != "open" || first.ClosedByCommitSHA != "" || first.NotModified {
+		t.Errorf("first = %+v", first)
+	}
+
+	second, err := r.ReconcileIssue(context.Background(), testRepo, 443)
+	if err != nil {
+		t.Fatalf("second ReconcileIssue: %v", err)
+	}
+	if !second.NotModified || second.State != "open" {
+		t.Errorf("second = %+v", second)
+	}
+
+	commit := testOtherSHA
+	gh.mu.Lock()
+	gh.issues[443] = fakeIssue{State: "closed", Events: []fakeIssueEvent{
+		{Event: "labeled"},
+		{Event: "closed"}, // reopened later, no attribution
+		{Event: "reopened"},
+		{Event: "closed", CommitID: &commit}, // the operative closure
+	}}
+	gh.issueRevs[443]++
+	gh.mu.Unlock()
+
+	third, err := r.ReconcileIssue(context.Background(), testRepo, 443)
+	if err != nil {
+		t.Fatalf("third ReconcileIssue: %v", err)
+	}
+	if third.State != "closed" || third.ClosedByCommitSHA != commit {
+		t.Errorf("third = %+v", third)
+	}
+
+	gh.mu.Lock()
+	gh.issues[444] = fakeIssue{State: "closed", Events: []fakeIssueEvent{{Event: "closed"}}}
+	gh.mu.Unlock()
+	manual, err := r.ReconcileIssue(context.Background(), testRepo, 444)
+	if err != nil {
+		t.Fatalf("ReconcileIssue(444): %v", err)
+	}
+	if manual.State != "closed" || manual.ClosedByCommitSHA != "" {
+		t.Errorf("manually closed issue observed as %+v", manual)
+	}
+}
+
+// TestReconcileIssueEventPagination: the closing-commit walk follows
+// rel="next" pages, so the latest closed event on a later page wins.
+func TestReconcileIssueEventPagination(t *testing.T) {
+	gh := newFakeGitHub(t)
+	stale := testHeadSHA
+	commit := testOtherSHA
+	gh.issues[443] = fakeIssue{State: "closed", Events: []fakeIssueEvent{
+		{Event: "closed", CommitID: &stale},
+		{Event: "reopened"},
+		{Event: "labeled"},
+		{Event: "closed", CommitID: &commit},
+	}}
+	gh.issueEventsPageSize = 2
+	r := newTestReconciler(t, gh)
+
+	obs, err := r.ReconcileIssue(context.Background(), testRepo, 443)
+	if err != nil {
+		t.Fatalf("ReconcileIssue: %v", err)
+	}
+	if obs.ClosedByCommitSHA != commit {
+		t.Errorf("ClosedByCommitSHA = %q, want the last page's closed event %q", obs.ClosedByCommitSHA, commit)
+	}
+}
+
+// TestReconcileIssueRejectsPullRequest: a bound issue number that is
+// secretly a pull request fails the observation, so one resource cannot
+// impersonate the other.
+func TestReconcileIssueRejectsPullRequest(t *testing.T) {
+	gh := newFakeGitHub(t)
+	gh.issues[450] = fakeIssue{State: "open", IsPR: true}
+	r := newTestReconciler(t, gh)
+
+	if _, err := r.ReconcileIssue(context.Background(), testRepo, 450); err == nil {
+		t.Error("a PR observed through the issue surface, want error")
+	}
+}

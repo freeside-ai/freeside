@@ -47,6 +47,29 @@ type fakePR struct {
 	HeadSHA  string
 	HeadRepo string
 	BaseRef  string // empty means "main"
+	// BaseRepoID is the base repository's numeric identity; zero emits a
+	// response whose base repo carries id 0.
+	BaseRepoID int64
+	MergedAt   string // empty means unmerged
+	// MergeCommitSHA is emitted whenever set, merged or not: GitHub
+	// populates it with a test-merge commit on unmerged PRs, which is
+	// exactly what the reconciler must suppress.
+	MergeCommitSHA string
+}
+
+// fakeIssueEvent is one row of an issue's event list; CommitID nil is a
+// closure with no commit attribution (a manual close).
+type fakeIssueEvent struct {
+	Event    string
+	CommitID *string
+}
+
+type fakeIssue struct {
+	State  string
+	Events []fakeIssueEvent
+	// IsPR marks the number as secretly a pull request: the issues API
+	// serves both, flagged by a pull_request object.
+	IsPR bool
 }
 
 // fakeGitHub is a stateful in-memory GitHub for the endpoints the
@@ -61,6 +84,12 @@ type fakeGitHub struct {
 	prRevs   map[int]int // PR number -> revision, drives PR ETags
 	nextPR   int
 	requests []string // "METHOD path" plus " if-none-match" when conditional
+
+	issues    map[int]fakeIssue
+	issueRevs map[int]int // issue number -> revision, drives issue ETags
+	// issueEventsPageSize, when non-zero, paginates the issue event list
+	// with rel="next" Link headers (default: one page).
+	issueEventsPageSize int
 
 	// createHeadRepo, when set, is the head repository the fake reports
 	// for PRs created through it (simulating a head resolved to a fork).
@@ -81,7 +110,10 @@ type fakeGitHub struct {
 }
 
 func newFakeGitHub(t *testing.T) *fakeGitHub {
-	return &fakeGitHub{t: t, refs: map[string]string{}, prRevs: map[int]int{}, nextPR: 101}
+	return &fakeGitHub{
+		t: t, refs: map[string]string{}, prRevs: map[int]int{}, nextPR: 101,
+		issues: map[int]fakeIssue{}, issueRevs: map[int]int{},
+	}
 }
 
 func (g *fakeGitHub) server() *httptest.Server {
@@ -230,6 +262,71 @@ func (g *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNotFound)
 
+	case r.Method == http.MethodGet && strings.HasPrefix(path, testRepoPath+"/issues/") && strings.HasSuffix(path, "/events"):
+		trimmed := strings.TrimSuffix(strings.TrimPrefix(path, testRepoPath+"/issues/"), "/events")
+		number, err := strconv.Atoi(trimmed)
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		issue, ok := g.issues[number]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		events := issue.Events
+		pageSize := g.issueEventsPageSize
+		if pageSize <= 0 {
+			pageSize = len(events) + 1
+		}
+		page := 1
+		if p := r.URL.Query().Get("page"); p != "" {
+			if page, err = strconv.Atoi(p); err != nil || page < 1 {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+		}
+		start := (page - 1) * pageSize
+		end := min(start+pageSize, len(events))
+		if end < len(events) {
+			w.Header().Set("Link", fmt.Sprintf(`<http://%s%s/issues/%d/events?per_page=100&page=%d>; rel="next"`,
+				r.Host, testRepoPath, number, page+1))
+		}
+		out := []map[string]any{} // GitHub returns [], never null, for an empty page
+		if start < len(events) {
+			for _, ev := range events[start:end] {
+				row := map[string]any{"event": ev.Event, "commit_id": nil}
+				if ev.CommitID != nil {
+					row["commit_id"] = *ev.CommitID
+				}
+				out = append(out, row)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(out)
+
+	case r.Method == http.MethodGet && strings.HasPrefix(path, testRepoPath+"/issues/"):
+		number, err := strconv.Atoi(strings.TrimPrefix(path, testRepoPath+"/issues/"))
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		issue, ok := g.issues[number]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		etag := fmt.Sprintf(`"issue-%d-%d"`, number, g.issueRevs[number])
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		body := map[string]any{"number": number, "state": issue.State}
+		if issue.IsPR {
+			body["pull_request"] = map[string]any{"url": "http://" + r.Host + testRepoPath + "/pulls/" + strconv.Itoa(number)}
+		}
+		_ = json.NewEncoder(w).Encode(body)
+
 	case r.Method == http.MethodPatch && strings.HasPrefix(path, testRepoPath+"/pulls/"):
 		number, err := strconv.Atoi(strings.TrimPrefix(path, testRepoPath+"/pulls/"))
 		if err != nil {
@@ -270,11 +367,17 @@ func prJSON(pr fakePR) map[string]any {
 	if baseRef == "" {
 		baseRef = "main"
 	}
+	var mergedAt any
+	if pr.MergedAt != "" {
+		mergedAt = pr.MergedAt
+	}
 	return map[string]any{
-		"number": pr.Number,
-		"state":  pr.State,
-		"title":  pr.Title,
-		"body":   pr.Body,
+		"number":           pr.Number,
+		"state":            pr.State,
+		"title":            pr.Title,
+		"body":             pr.Body,
+		"merged_at":        mergedAt,
+		"merge_commit_sha": pr.MergeCommitSHA,
 		"head": map[string]any{
 			"ref":  pr.HeadRef,
 			"sha":  pr.HeadSHA,
@@ -282,7 +385,7 @@ func prJSON(pr fakePR) map[string]any {
 		},
 		"base": map[string]any{
 			"ref":  baseRef,
-			"repo": map[string]string{"full_name": "freeside-ai/evidence-repo"},
+			"repo": map[string]any{"id": pr.BaseRepoID, "full_name": "freeside-ai/evidence-repo"},
 		},
 	}
 }

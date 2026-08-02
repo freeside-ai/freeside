@@ -32,9 +32,10 @@ import (
 type Reconciler struct {
 	forge *forge
 
-	mu    sync.Mutex
-	refs  map[string]refCacheEntry
-	pulls map[string]pullCacheEntry
+	mu     sync.Mutex
+	refs   map[string]refCacheEntry
+	pulls  map[string]pullCacheEntry
+	issues map[string]issueCacheEntry
 }
 
 type refCacheEntry struct {
@@ -45,6 +46,11 @@ type refCacheEntry struct {
 type pullCacheEntry struct {
 	etag string
 	obs  PullObservation
+}
+
+type issueCacheEntry struct {
+	etag string
+	obs  IssueObservation
 }
 
 // RefObservation is the reconciled state of one branch ref.
@@ -65,25 +71,46 @@ type RefObservation struct {
 // validator and then confirm the change as "unchanged" on every later
 // 304.
 type PullObservation struct {
-	Number      int
-	State       string
-	Title       string
-	Body        string
-	HeadRef     string
-	HeadSHA     string
-	HeadRepo    string
-	BaseRef     string
-	BaseRepo    string
-	NotModified bool
+	Number   int
+	State    string
+	Title    string
+	Body     string
+	HeadRef  string
+	HeadSHA  string
+	HeadRepo string
+	BaseRef  string
+	BaseRepo string
+	// BaseRepoID, Merged, and MergeCommitSHA carry the PR's observed base
+	// identity and merge state for the §5.18 capture hooks; MergeCommitSHA
+	// is set exactly when Merged, and BaseRepoID is the only coordinate
+	// that can expose a repository name re-bound to a different repository
+	// (see prState).
+	BaseRepoID     int64
+	Merged         bool
+	MergeCommitSHA string
+	NotModified    bool
+}
+
+// IssueObservation is the reconciled state of one issue; see
+// RefObservation for NotModified. ClosedByCommitSHA is the commit the
+// issue's latest `closed` event attributes the closure to, or "" for an
+// open issue or a closure with no commit attribution — the explicit
+// closed-by link the §5.18 issue criterion evaluates.
+type IssueObservation struct {
+	Number            int
+	State             string
+	ClosedByCommitSHA string
+	NotModified       bool
 }
 
 // NewReconciler wires a Reconciler. baseURL is the GitHub API root
 // (real: https://api.github.com; tests: an httptest server).
 func NewReconciler(ts TokenSource, client *http.Client, baseURL string) *Reconciler {
 	return &Reconciler{
-		forge: newForge(ts, client, baseURL),
-		refs:  map[string]refCacheEntry{},
-		pulls: map[string]pullCacheEntry{},
+		forge:  newForge(ts, client, baseURL),
+		refs:   map[string]refCacheEntry{},
+		pulls:  map[string]pullCacheEntry{},
+		issues: map[string]issueCacheEntry{},
 	}
 }
 
@@ -174,21 +201,79 @@ func (r *Reconciler) ReconcilePull(ctx context.Context, repo string, number int)
 	}
 
 	obs := PullObservation{
-		Number:   read.PR.Number,
-		State:    read.PR.State,
-		Title:    read.PR.Title,
-		Body:     read.PR.Body,
-		HeadRef:  read.PR.HeadRef,
-		HeadSHA:  read.PR.HeadSHA,
-		HeadRepo: read.PR.HeadRepo,
-		BaseRef:  read.PR.BaseRef,
-		BaseRepo: read.PR.BaseRepo,
+		Number:         read.PR.Number,
+		State:          read.PR.State,
+		Title:          read.PR.Title,
+		Body:           read.PR.Body,
+		HeadRef:        read.PR.HeadRef,
+		HeadSHA:        read.PR.HeadSHA,
+		HeadRepo:       read.PR.HeadRepo,
+		BaseRef:        read.PR.BaseRef,
+		BaseRepo:       read.PR.BaseRepo,
+		BaseRepoID:     read.PR.BaseRepoID,
+		Merged:         read.PR.Merged,
+		MergeCommitSHA: read.PR.MergeCommitSHA,
 	}
 	r.mu.Lock()
 	if read.ETag != "" {
 		r.pulls[key] = pullCacheEntry{etag: read.ETag, obs: obs}
 	} else {
 		delete(r.pulls, key)
+	}
+	r.mu.Unlock()
+	return obs, nil
+}
+
+// ReconcileIssue observes one issue, conditionally when a prior
+// observation holds a validator. A closed issue's observation includes
+// the closing-commit walk, so the returned state is always evaluable
+// against the §5.18 issue criterion; a failed walk fails the observation
+// rather than reporting a closure with no attribution it actually has.
+func (r *Reconciler) ReconcileIssue(ctx context.Context, repo string, number int) (IssueObservation, error) {
+	ref, err := parseRepo(repo)
+	if err != nil {
+		return IssueObservation{}, fmt.Errorf("reconcile: %w", err)
+	}
+	if number <= 0 {
+		return IssueObservation{}, fmt.Errorf("reconcile: invalid issue number %d", number)
+	}
+	key := fmt.Sprintf("%s\x00issue\x00%d", repo, number)
+
+	r.mu.Lock()
+	entry, cached := r.issues[key]
+	r.mu.Unlock()
+	etag := ""
+	if cached {
+		etag = entry.etag
+	}
+
+	read, err := r.forge.getIssue(ctx, ref, number, etag)
+	if err != nil {
+		return IssueObservation{}, fmt.Errorf("reconcile: %w", err)
+	}
+	if read.NotModified {
+		// See ReconcileRef: an unsolicited 304 is refused, not trusted.
+		if !cached {
+			return IssueObservation{}, errors.New("reconcile: 304 for a request that sent no validator")
+		}
+		obs := entry.obs
+		obs.NotModified = true
+		return obs, nil
+	}
+
+	obs := IssueObservation{Number: read.Issue.Number, State: read.Issue.State}
+	if read.Issue.State == "closed" {
+		commit, err := r.forge.issueClosingCommit(ctx, ref, number)
+		if err != nil {
+			return IssueObservation{}, fmt.Errorf("reconcile: %w", err)
+		}
+		obs.ClosedByCommitSHA = commit
+	}
+	r.mu.Lock()
+	if read.ETag != "" {
+		r.issues[key] = issueCacheEntry{etag: read.ETag, obs: obs}
+	} else {
+		delete(r.issues, key)
 	}
 	r.mu.Unlock()
 	return obs, nil
