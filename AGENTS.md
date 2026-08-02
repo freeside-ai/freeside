@@ -211,7 +211,7 @@ The daemon (Wave 0 unit 1) and the API spec (Wave 0 unit 5) are initialized; the
 | `prompts/`    | prompt text    | not yet initialized; see docs/plan.md roadmap |
 | `policy/`     | YAML (policy)  | not yet initialized; see docs/plan.md roadmap |
 | `images/`     | OCI images     | `bash scripts/build-exporter-image.sh --local-registry-port 5000`; the agent bases are `bash scripts/build-agent-claude-image.sh --local-registry-port 5000` and `bash scripts/build-agent-codex-image.sh --local-registry-port 5000`, each followed by `bash scripts/check-agent-image.sh <ref>` on the registry-resolvable reference it prints (all need Apple `container`, and the builds need container egress; use `--registry HOST[/PATH]` for shared images); per-project images are runtime artifacts from the reusable builder (#334), manually proven before #237 and later invoked by `freesided onboard` (#238), not built from this directory |
-| `scripts/`    | Bash           | `bash -n scripts/*.sh app/scripts/*.sh`; `shellcheck scripts/*.sh app/scripts/*.sh`; `bash scripts/test-build-image-references.sh`; `bash scripts/test-merge-result-audit.sh`; `bash scripts/test-check-agent-image.sh` (CI pins shellcheck in `.github/workflows/scripts-ci.yml`); `bash scripts/run-real-work.sh <spec> <policy> <publication>` is the §11 1A.2 real unattended run and needs Apple `container` plus the operator preconditions its header lists |
+| `scripts/`    | Bash           | `bash -n scripts/*.sh app/scripts/*.sh`; `shellcheck scripts/*.sh app/scripts/*.sh`; `bash scripts/test-build-image-references.sh`; `bash scripts/test-merge-result-audit.sh`; `bash scripts/test-check-agent-image.sh`; `bash scripts/test-install-mac-app.sh` (CI pins shellcheck in `.github/workflows/scripts-ci.yml`); `bash scripts/run-real-work.sh <spec> <policy> <publication>` is the §11 1A.2 real unattended run and needs Apple `container` plus the operator preconditions its header lists |
 
 Lint/format and CI are established with the first component that carries code: the daemon does so here via `daemon/.golangci.yml` and `.github/workflows/daemon-ci.yml` (Linux runs build/test/vet/lint, macOS runs build/test). Later components add their own on the same pattern.
 
@@ -731,8 +731,9 @@ The build succeeds, tests pass, and lint and formatting are clean.
   handoff, base SHA and verdict recorded in PR Verification (see
   Integration ordering and merge-result audit); when `scripts/` is in
   scope, `bash scripts/test-build-image-references.sh`,
-  `bash scripts/test-merge-result-audit.sh`, and
-  `bash scripts/test-check-agent-image.sh` also pass
+  `bash scripts/test-merge-result-audit.sh`,
+  `bash scripts/test-check-agent-image.sh`, and
+  `bash scripts/test-install-mac-app.sh` also pass
 - Decision note written or updated when the work hits a Decision notes
   trigger or the mandatory-note list; most work needs none
 

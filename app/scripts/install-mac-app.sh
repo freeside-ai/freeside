@@ -45,6 +45,9 @@ bundle_id="ai.freeside.app.macos"
 install_dir="${FREESIDE_MAC_INSTALL_DIR:-$HOME/Applications}"
 build_dir="${FREESIDE_MAC_BUILD_DIR:-$app_dir/DerivedData/mac-install}"
 destination="$install_dir/Freeside.app"
+superseded="$destination.install-superseded"
+rejected="$destination.install-rejected"
+recovery_guard="$destination.install-recovery-guard"
 
 server_url=""
 server_url_given=false
@@ -117,6 +120,170 @@ if afterHost.hasPrefix(":") {
     die "--server-url is not an http(s) URL with a host: $server_url"
 fi
 
+# SIGKILL cannot be trapped. If it lands during replacement, the superseded
+# path is the only known-good client: the canonical path is either absent or
+# contains the not-yet-verified replacement. Recover either state before
+# identity resolution, the build, or generic stale-path cleanup can fail or
+# destroy the recovery object. A wrong-ID or damaged object is never promoted:
+# preserve it in place and tell the operator how to recover manually instead
+# of guessing that it is a Freeside client.
+rename_exclusively() {
+    # `mv source existing-directory` nests the source and reports success. The
+    # vacancy check cannot close the race by itself, so make nonexistence part
+    # of the rename operation. renamex_np has provided RENAME_EXCL since macOS
+    # 10.12; the installer already requires Swift/Xcode for its build.
+    swift -e 'import Darwin
+guard CommandLine.arguments.count == 3 else { exit(64) }
+let result = CommandLine.arguments[1].withCString { source in
+    CommandLine.arguments[2].withCString { target in
+        renamex_np(source, target, UInt32(RENAME_EXCL))
+    }
+}
+if result != 0 {
+    perror("renamex_np")
+    exit(1)
+}' "$1" "$2"
+}
+
+recovery_validation_error=""
+recovery_app_is_valid() {
+    local candidate=$1
+    recovery_validation_error=""
+    if [[ ! -d "$candidate" || -L "$candidate" ]]; then
+        recovery_validation_error="a non-bundle recovery object"
+        return 1
+    fi
+
+    local recovered_id
+    recovered_id="$(plutil -extract CFBundleIdentifier raw -o - \
+        "$candidate/Contents/Info.plist" 2>/dev/null || true)"
+    if [[ "$recovered_id" != "$bundle_id" ]]; then
+        recovery_validation_error="bundle id '${recovered_id:-unknown}', not $bundle_id"
+        return 1
+    fi
+    if ! codesign --verify --strict "$candidate"; then
+        recovery_validation_error="an app that failed signature verification"
+        return 1
+    fi
+}
+
+restore_interrupted_install() {
+    local guarded=false
+    if [[ -e "$recovery_guard" || -L "$recovery_guard" ]]; then
+        if [[ ! -d "$recovery_guard" || -L "$recovery_guard" ]]; then
+            die "the recovery guard at $recovery_guard is not a directory.
+  It was preserved; inspect it before retrying."
+        fi
+        guarded=true
+    fi
+
+    # A persistent guard is created before a recovery object is promoted. There
+    # is no atomic validate-and-disarm filesystem primitive, so the guard is
+    # deliberately never removed automatically: every later installer run
+    # re-gates the canonical entry, including one after any possible SIGKILL.
+    if [[ "$guarded" == true && ! -e "$superseded" && ! -L "$superseded" ]]; then
+        if [[ ! -e "$destination" && ! -L "$destination" ]]; then
+            echo "install-mac-app: recovery guard has no app to validate;" >&2
+            echo "  proceeding with a fresh install and retaining $recovery_guard" >&2
+            return 0
+        fi
+        if recovery_app_is_valid "$destination"; then
+            echo "install-mac-app: validated the recovery-guarded app" >&2
+            return 0
+        fi
+
+        local guarded_error
+        guarded_error=$recovery_validation_error
+        if [[ -e "$rejected" || -L "$rejected" ]]; then
+            die "a guarded recovery left $guarded_error at $destination,
+  but $rejected is already occupied. Both entries and $recovery_guard were
+  preserved; inspect them before retrying."
+        fi
+        rename_exclusively "$destination" "$rejected" ||
+            die "a guarded recovery left $guarded_error at $destination,
+  and it could not be preserved at $rejected. The recovery guard remains;
+  inspect both paths before retrying."
+        die "a guarded recovery left $guarded_error at $destination.
+  It was preserved at $rejected; no verified recovery app remains at the known
+  path. The guard remains at $recovery_guard so any new canonical entry is
+  re-gated; inspect the install directory before retrying."
+    fi
+
+    [[ -e "$superseded" || -L "$superseded" ]] || return 0
+
+    if [[ -e "$destination" || -L "$destination" ]]; then
+        if recovery_app_is_valid "$destination"; then
+            return 0
+        fi
+        local destination_error
+        destination_error=$recovery_validation_error
+
+        if ! recovery_app_is_valid "$superseded"; then
+            die "an interrupted install left $destination_error at
+  $destination and $recovery_validation_error at $superseded. Both were
+  preserved; inspect them and move one aside before retrying."
+        fi
+        if [[ -e "$rejected" || -L "$rejected" ]]; then
+            die "an interrupted install left $destination_error at
+  $destination, but $rejected is already occupied. The verified recovery app
+  remains at $superseded; inspect all three paths before retrying."
+        fi
+
+        # Preserve the untrusted destination before freeing the canonical path.
+        # An exclusive rename makes a concurrent occupant at the quarantine
+        # path a hard failure rather than nesting or replacing either object.
+        rename_exclusively "$destination" "$rejected" ||
+            die "could not preserve the untrusted interrupted install at
+  $rejected. The verified recovery app remains at $superseded; inspect both
+  paths before retrying."
+        echo "install-mac-app: preserved an untrusted interrupted install at" >&2
+        echo "  $rejected" >&2
+    fi
+
+    if ! recovery_app_is_valid "$superseded"; then
+        die "an interrupted install left $recovery_validation_error at
+  $superseded. It was preserved; inspect it and move it aside before retrying."
+    fi
+
+    # Verification runs external processes. Recheck the directory entry after
+    # they return for a precise diagnostic; the exclusive rename below is the
+    # atomic guard that closes the remaining check-to-move race.
+    [[ ! -e "$destination" && ! -L "$destination" ]] ||
+        die "something else appeared at $destination while the recovery app was
+  being verified. The recovery app remains at $superseded; move the other entry
+  aside, then move the recovery app back manually."
+
+    if [[ "$guarded" == false ]]; then
+        mkdir "$recovery_guard" ||
+            die "could not create the recovery guard at $recovery_guard.
+  The recovery app remains at $superseded; inspect the guard path before
+  retrying."
+    fi
+    rename_exclusively "$superseded" "$destination" ||
+        die "could not restore the interrupted install. The recovery app remains
+  at $superseded and the guard remains at $recovery_guard; retrying will
+  re-gate both paths."
+
+    # RENAME_EXCL binds destination vacancy, not source identity. Re-run the
+    # whole trust gate against the moved object: if the source path was replaced
+    # after the first verification, return that object to the recovery path
+    # rather than leaving an unverified app at the canonical destination.
+    if ! recovery_app_is_valid "$destination"; then
+        local moved_error
+        moved_error=$recovery_validation_error
+        if rename_exclusively "$destination" "$superseded"; then
+            die "the recovery app changed while it was being restored: $moved_error.
+  The moved object was returned to $superseded; inspect it before retrying."
+        fi
+        die "the recovery app changed while it was being restored: $moved_error.
+  It could not be returned because another entry occupies $superseded; inspect
+  both $destination and $superseded before retrying."
+    fi
+    echo "install-mac-app: restored an install interrupted before replacement" >&2
+}
+
+restore_interrupted_install
+
 resolve_identity() {
     if [[ -n "${FREESIDE_MAC_SIGNING_IDENTITY:-}" ]]; then
         printf '%s' "$FREESIDE_MAC_SIGNING_IDENTITY"
@@ -163,14 +330,15 @@ fi
 
 # Never replace a bundle that is not a Freeside client: the install root
 # is the operator's own ~/Applications, and a name collision there is
-# someone else's app. The bundle identifier is the whole test on purpose.
-# It does not prove this script installed the bundle, and it is not meant
-# to: a hand-copied or differently signed Freeside build at this path is
-# the client, and replacing it is an update, which the changed-requirement
-# warning below already surfaces. An installer-owned marker would instead
-# refuse to manage exactly those builds. Checked before the build so the
-# failure is immediate, and again immediately before the swap, since the
-# build takes minutes.
+# someone else's app. For an ordinary install, the bundle identifier is the
+# whole test on purpose. It does not prove this script installed the bundle,
+# and it is not meant to: a hand-copied or differently signed Freeside build at
+# this path is the client, and replacing it is an update, which the changed-
+# requirement warning below already surfaces. A persistent recovery guard is
+# not an ownership marker; it tightens this boundary to strict signature
+# validation after a crash-recovery promotion. Checked before the build so the
+# failure is immediate, and again immediately before the swap, since the build
+# takes minutes and a guarded interloper must not reach the deletable backup.
 # The vacancy test is on the directory entry, not on what it resolves to.
 # `-e` follows symlinks, so a dangling one reads as vacant while still
 # occupying the path: the staged rename then fails against it (a
@@ -188,6 +356,13 @@ assert_destination_replaceable() {
         "$destination/Contents/Info.plist" 2>/dev/null || true)"
     [[ "$installed_id" == "$bundle_id" ]] ||
         die "$destination holds bundle id '${installed_id:-unknown}', not $bundle_id; move it aside"
+    if [[ -e "$recovery_guard" || -L "$recovery_guard" ]]; then
+        [[ -d "$recovery_guard" && ! -L "$recovery_guard" ]] ||
+            die "the recovery guard at $recovery_guard is not a directory; inspect it before retrying"
+        codesign --verify --strict "$destination" ||
+            die "the recovery guard refused to replace an app that failed signature verification at
+  $destination. It was preserved; retry to quarantine it before rebuilding."
+    fi
 }
 
 assert_destination_replaceable
@@ -249,7 +424,6 @@ fi
 mkdir -p "$install_dir"
 staged="$destination.install-staging"
 staged_inode=""
-superseded="$destination.install-superseded"
 rm -rf "$staged" "$superseded"
 ditto "$built_app" "$staged"
 staged_inode="$(stat -f %i "$staged")"
@@ -319,6 +493,17 @@ trap roll_back_and_abort INT TERM
 
 if [[ -e "$destination" ]]; then
     mv "$destination" "$superseded"
+    if [[ -e "$recovery_guard" || -L "$recovery_guard" ]] &&
+        ! recovery_app_is_valid "$superseded"; then
+        aside_error=$recovery_validation_error
+        if rename_exclusively "$superseded" "$destination"; then
+            die "the recovery-guarded app changed before replacement: $aside_error.
+  The moved object was returned to $destination and preserved."
+        fi
+        die "the recovery-guarded app changed before replacement: $aside_error.
+  It remains at $superseded because $destination is occupied; inspect both
+  paths before retrying."
+    fi
 fi
 # Renaming onto an existing directory would nest the staged bundle inside
 # it rather than replace it, so require the path to be free. Same

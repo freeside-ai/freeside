@@ -5,8 +5,10 @@ name: scripts CI
 # tells contributors to run), plus the merge-result-audit regression
 # suite (isolated synthetic repos, no network), the build-image reference
 # regression suite, and the check-agent-image regression suite (both use
-# scripted container-runtime stand-ins, no network). The suites test the script
-# implementations only; nothing here parses PR prose. shellcheck
+# scripted container-runtime stand-ins, no network), plus the Mac installer
+# recovery suite (command stand-ins, no Xcode).
+# The suites test the script implementations only; nothing here parses
+# PR prose. shellcheck
 # runs as a pinned, checksum-verified prebuilt binary, matching the
 # pinned-vacuum/golangci-lint determinism convention (a floating linter
 # is nondeterministic verification).
@@ -57,3 +59,5 @@ jobs:
         run: bash scripts/test-merge-result-audit.sh
       - name: check-agent-image regression suite
         run: bash scripts/test-check-agent-image.sh
+      - name: Mac installer recovery regression suite
+        run: bash scripts/test-install-mac-app.sh
