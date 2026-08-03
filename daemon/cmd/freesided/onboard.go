@@ -252,7 +252,7 @@ func runOnboardCommand(
 				PRExecution:    domain.PRExecutionAuditedSameRepo,
 				CommitPlan:     domain.CommitPlanSingleCommit,
 				MessageRuleset: domain.MessageRulesetGitHub1,
-				ReviewMode:     domain.ReviewAuto,
+				ReviewMode:     domain.ReviewFreesideInvoked,
 				ReviewConfig:   domain.Digest(*reviewConfig),
 			},
 			Image: projectimage.Request{

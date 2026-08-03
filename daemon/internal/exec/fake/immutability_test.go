@@ -86,6 +86,7 @@ func reviewFindings() []domain.Finding {
 		ID:        "finding-1",
 		RunID:     "run-1",
 		Source:    "codex",
+		Severity:  "medium",
 		Location:  "daemon/internal/exec/driver.go:12",
 		Message:   "possible off-by-one",
 		CreatedAt: fixedTime,
@@ -94,7 +95,7 @@ func reviewFindings() []domain.Finding {
 
 func driveReviewToResult(t *testing.T, s *fake.ReviewSource, id domain.InvocationID) exec.ReviewResult {
 	t.Helper()
-	if err := s.RequestReview(t.Context(), id, exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
+	if err := s.RequestReview(t.Context(), id, reviewRequest("cafebabe")); err != nil {
 		t.Fatalf("request review %s: %v", id, err)
 	}
 	result, _ := pollUntilResult(t, s, id)

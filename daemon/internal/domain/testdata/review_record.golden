@@ -1,0 +1,17 @@
+{
+  "invocation_id": "review-run-1-1",
+  "run_id": "run-1",
+  "round": 1,
+  "provider": "openai",
+  "model_configuration": "gpt-5.2-codex/high",
+  "configuration_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "cost_owner": "subscription:owner",
+  "base_sha": "beefcafe",
+  "head_sha": "cafebabe",
+  "completed_at": "2026-01-02T03:04:05Z",
+  "completion_evidence": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "outcome": "findings",
+  "finding_ids": [
+    "find-1"
+  ]
+}

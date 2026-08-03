@@ -30,7 +30,7 @@ func TestReviewSourceRestartBeforeIntentDispatch(t *testing.T) {
 	s.Script("inv-1", fake.ReviewScript{Outcome: fake.OutcomeComplete, Result: exec.ReviewResult{HeadSHA: "cafebabe"}})
 
 	s = reopenReviewSource(t, dir)
-	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
+	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); err != nil {
 		t.Fatalf("request after restart must succeed (no phantom intent): %v", err)
 	}
 	result, _ := pollUntilResult(t, s, "inv-1")
@@ -53,7 +53,7 @@ func TestReviewSourceRestartAfterIntentBeforeResult(t *testing.T) {
 		PendingPolls: 2,
 		Result:       exec.ReviewResult{HeadSHA: "cafebabe"},
 	})
-	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
+	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); err != nil {
 		t.Fatal(err)
 	}
 	// A poll observes delivery lag (not-ready), then the process dies.
@@ -68,10 +68,10 @@ func TestReviewSourceRestartAfterIntentBeforeResult(t *testing.T) {
 	if _, err := s.Poll(t.Context(), "inv-1"); !errors.Is(err, exec.ErrNoResult) {
 		t.Errorf("poll after restart = %v, want ErrNoResult", err)
 	}
-	if err := s.Verify(t.Context(), "inv-1", "cafebabe"); !errors.Is(err, exec.ErrNoResult) {
+	if err := s.Verify(t.Context(), "inv-1", "base-sha", "cafebabe"); !errors.Is(err, exec.ErrNoResult) {
 		t.Errorf("verify after restart = %v, want ErrNoResult", err)
 	}
-	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); !errors.Is(err, exec.ErrDuplicateStart) {
+	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); !errors.Is(err, exec.ErrDuplicateStart) {
 		t.Errorf("re-request of a committed intent = %v, want ErrDuplicateStart", err)
 	}
 }
@@ -90,12 +90,12 @@ func TestReviewSourceRestartAfterResultBeforeAcceptance(t *testing.T) {
 		Result: exec.ReviewResult{
 			HeadSHA: "cafebabe",
 			Findings: []domain.Finding{{
-				ID: "finding-1", RunID: "run-1", Source: "codex",
+				ID: "finding-1", RunID: "run-1", Source: "codex", Severity: "medium",
 				Location: "daemon/internal/exec/review.go:20", Message: "x", CreatedAt: fixedTime,
 			}},
 		},
 	})
-	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
+	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); err != nil {
 		t.Fatal(err)
 	}
 	acc := newAcceptor()
@@ -115,7 +115,7 @@ func TestReviewSourceRestartAfterResultBeforeAcceptance(t *testing.T) {
 	if acc.accept(t, "inv-1", after) {
 		t.Error("post-restart delivery accepted as a new result; the workflow would advance twice")
 	}
-	if err := s.Verify(t.Context(), "inv-1", "cafebabe"); err != nil {
+	if err := s.Verify(t.Context(), "inv-1", "base-sha", "cafebabe"); err != nil {
 		t.Errorf("verify the recovered result against its head = %v, want nil", err)
 	}
 }
@@ -139,7 +139,7 @@ func TestReviewSourceRestartCrashAfterResultRecoverable(t *testing.T) {
 		Result:  exec.ReviewResult{HeadSHA: "cafebabe"},
 	})
 	for _, id := range []domain.InvocationID{"inv-after", "inv-fail"} {
-		if err := s.RequestReview(t.Context(), id, exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
+		if err := s.RequestReview(t.Context(), id, reviewRequest("cafebabe")); err != nil {
 			t.Fatal(err)
 		}
 		// Drive Inspect to the terminal transition (commits the crash-after

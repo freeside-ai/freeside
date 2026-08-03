@@ -18,6 +18,16 @@
 #   FREESIDE_REAL_RUN_STATE_ROOT     daemon state root (holds the SQLite store)
 #   FREESIDE_REAL_RUN_AGENT_IMAGE    digest-pinned admitted project image
 #   FREESIDE_WARD_EXPORTER_IMAGE     digest-pinned export helper image
+#   FREESIDE_REAL_RUN_REVIEW_IMAGE   digest-pinned Codex reviewer image
+#   FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT private root containing the review
+#                                    credential and instruction snapshots
+#   FREESIDE_REAL_RUN_REVIEW_AUTH_MODE subscription or api_key
+#   FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY Codex reviewer auth identity id
+#   FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT Codex auth snapshot under the input root
+#   FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS composed AGENTS.md snapshot under the input root
+#   FREESIDE_REAL_RUN_REVIEW_MODEL   explicit Codex reviewer model
+#   FREESIDE_REAL_RUN_REVIEW_REASONING explicit reviewer reasoning effort
+#   FREESIDE_REAL_RUN_REVIEW_COST_OWNER account charged for review
 #   FREESIDE_REAL_RUN_SEED_ROOT      daemon-owned exact-base checkout root
 #   FREESIDE_REAL_RUN_AUTH_IDENTITY  provider auth identity id
 #   FREESIDE_REAL_RUN_AUTH_VOLUME    that identity's credential volume
@@ -64,6 +74,11 @@ done
 
 required=(
   FREESIDE_REAL_RUN_STATE_ROOT FREESIDE_REAL_RUN_AGENT_IMAGE FREESIDE_WARD_EXPORTER_IMAGE
+  FREESIDE_REAL_RUN_REVIEW_IMAGE FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT
+  FREESIDE_REAL_RUN_REVIEW_AUTH_MODE FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY
+  FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS
+  FREESIDE_REAL_RUN_REVIEW_MODEL FREESIDE_REAL_RUN_REVIEW_REASONING
+  FREESIDE_REAL_RUN_REVIEW_COST_OWNER
   FREESIDE_REAL_RUN_SEED_ROOT FREESIDE_REAL_RUN_AUTH_IDENTITY FREESIDE_REAL_RUN_AUTH_VOLUME
   FREESIDE_REAL_RUN_REPO FREESIDE_REAL_RUN_REPOSITORY_ID FREESIDE_REAL_RUN_BASE_REF
   FREESIDE_REAL_RUN_BASE_SHA FREESIDE_REAL_RUN_PROMPT_PACKAGE FREESIDE_REAL_RUN_INSTRUCTIONS
@@ -84,7 +99,8 @@ fi
 
 # Digest pinning is the ward's own refusal; checking it here reports a
 # configuration mistake now instead of a gate failure deep into a run.
-for ref in "$FREESIDE_REAL_RUN_AGENT_IMAGE" "$FREESIDE_WARD_EXPORTER_IMAGE"; do
+for ref in "$FREESIDE_REAL_RUN_AGENT_IMAGE" "$FREESIDE_WARD_EXPORTER_IMAGE" \
+  "$FREESIDE_REAL_RUN_REVIEW_IMAGE"; do
   if [[ "$ref" != *"@sha256:"* ]]; then
     echo "run-real-work: image reference is not digest-pinned: $ref" >&2
     exit 2
@@ -169,6 +185,15 @@ echo "starting the daemon with the production Claude driver" >&2
   -driver claude \
   -agent-image "$FREESIDE_REAL_RUN_AGENT_IMAGE" \
   -exporter-image "$FREESIDE_WARD_EXPORTER_IMAGE" \
+  -review-image "$FREESIDE_REAL_RUN_REVIEW_IMAGE" \
+  -review-input-root "$FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT" \
+  -review-auth-mode "$FREESIDE_REAL_RUN_REVIEW_AUTH_MODE" \
+  -review-auth-identity "$FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY" \
+  -review-auth-snapshot "$FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT" \
+  -review-instructions "$FREESIDE_REAL_RUN_REVIEW_INSTRUCTIONS" \
+  -review-model "$FREESIDE_REAL_RUN_REVIEW_MODEL" \
+  -review-reasoning-effort "$FREESIDE_REAL_RUN_REVIEW_REASONING" \
+  -review-cost-owner "$FREESIDE_REAL_RUN_REVIEW_COST_OWNER" \
   -seed-root "$FREESIDE_REAL_RUN_SEED_ROOT" \
   -state-dir "$FREESIDE_REAL_RUN_STATE_ROOT" \
   -prompt-package "$FREESIDE_REAL_RUN_PROMPT_PACKAGE" \

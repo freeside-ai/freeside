@@ -46,7 +46,7 @@ func TestCandidateAuthorizationV2MigrationArchivesV1Rows(t *testing.T) {
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
 		Review: domain.ReviewSettings{
-			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config",
 		},
 	})
 	if err != nil {
@@ -282,7 +282,7 @@ func TestTrustRowsTamperedBodyFailsClosed(t *testing.T) {
 		CommitPlan:                 domain.CommitPlanSingleCommit,
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
-		Review:                     domain.ReviewSettings{Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config"},
+		Review:                     domain.ReviewSettings{Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config"},
 	})
 	if err != nil {
 		t.Fatalf("profile: %v", err)
@@ -501,7 +501,7 @@ func TestTrustRowsInconsistentColumnsFailClosed(t *testing.T) {
 		CommitPlan:                 domain.CommitPlanSingleCommit,
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
-		Review:                     domain.ReviewSettings{Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config"},
+		Review:                     domain.ReviewSettings{Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config"},
 	})
 	if err != nil {
 		t.Fatalf("profile: %v", err)
@@ -595,7 +595,7 @@ func TestWorkflowAuditEvidenceRetentionAndTamperGate(t *testing.T) {
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        approvedEvidence.Digest(),
 		Review: domain.ReviewSettings{
-			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config",
 		},
 	})
 	if err != nil {
@@ -610,7 +610,7 @@ func TestWorkflowAuditEvidenceRetentionAndTamperGate(t *testing.T) {
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        reapprovedEvidence.Digest(),
 		Review: domain.ReviewSettings{
-			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config-b",
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config-b",
 		},
 	})
 	if err != nil {
@@ -736,7 +736,7 @@ func TestWorkflowAuditEvidencePruningRejectsUnauthenticatedBindings(t *testing.T
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        approved.Digest(),
 		Review: domain.ReviewSettings{
-			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config",
 		},
 	})
 	if err != nil {
@@ -948,7 +948,7 @@ func TestLatestTrustProfileSurvivesStaleHistory(t *testing.T) {
 		CommitPlan:                 domain.CommitPlanSingleCommit,
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
-		Review:                     domain.ReviewSettings{Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config"},
+		Review:                     domain.ReviewSettings{Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config"},
 	})
 	if err != nil {
 		t.Fatalf("re-approved profile: %v", err)
@@ -1007,7 +1007,7 @@ func TestTrustProfileActivationMigrationBackfillsLatestProfile(t *testing.T) {
 		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
 		CommitPlan:                 domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest: "sha256:workflow-audit",
-		Review:              domain.ReviewSettings{Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config"},
+		Review:              domain.ReviewSettings{Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config"},
 	})
 	if err != nil {
 		t.Fatalf("profile A: %v", err)

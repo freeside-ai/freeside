@@ -2,6 +2,7 @@ package fake
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sync"
@@ -9,6 +10,10 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
+
+// DefaultReviewConfigurationDigest is the deterministic deployment authority
+// attached to fake review results unless a test scripts another digest.
+const DefaultReviewConfigurationDigest domain.Digest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 
 // ErrResultHeadMismatch marks a fixture/reviewer fault: a committed review
 // result ran against a head other than the one its invocation id requested.
@@ -141,6 +146,9 @@ func (s *ReviewSource) Script(id domain.InvocationID, sc ReviewScript) {
 func (s *ReviewSource) RequestReview(_ context.Context, id domain.InvocationID, req exec.ReviewRequest) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := req.Validate(); err != nil {
+		return fmt.Errorf("fake review source request %s: %w", id, err)
+	}
 	if _, ok := s.sessions[id]; ok {
 		return fmt.Errorf("fake review source request %s: %w", id, exec.ErrDuplicateStart)
 	}
@@ -260,6 +268,30 @@ func (s *ReviewSource) Poll(_ context.Context, id domain.InvocationID) (exec.Rev
 // the stored value. Callers hold s.mu.
 func (s *ReviewSource) commit(id domain.InvocationID, r exec.ReviewResult) exec.ReviewResult {
 	r.InvocationID = id
+	intent := s.intents[id]
+	if r.BaseSHA == "" {
+		r.BaseSHA = intent.BaseSHA
+	}
+	if r.Provider == "" {
+		r.Provider = "fake"
+	}
+	if r.ModelConfiguration == "" {
+		r.ModelConfiguration = "fake/review-v1"
+	}
+	if r.ConfigurationDigest == "" {
+		r.ConfigurationDigest = DefaultReviewConfigurationDigest
+	}
+	if r.CostOwner == "" {
+		r.CostOwner = "test"
+	}
+	if r.CompletedAt.IsZero() {
+		r.CompletedAt = intent.RequestedAt
+	}
+	if r.CompletionEvidence == "" {
+		r.CompletionEvidence = domain.Digest(fmt.Sprintf(
+			"sha256:%x", sha256.Sum256([]byte("fake-review-completion")),
+		))
+	}
 	// Store and return independent snapshots: Poll returns this value
 	// directly, so neither the committed copy nor the delivered one may
 	// alias the script or each other (#35).
@@ -277,7 +309,9 @@ func (s *ReviewSource) commit(id domain.InvocationID, r exec.ReviewResult) exec.
 // committed it returns exec.ErrResultNotReady (freshness of an undelivered
 // review is unknowable), or exec.ErrNoResult when the review will never commit
 // one (a failed or lost session): "never" is not "not yet".
-func (s *ReviewSource) Verify(_ context.Context, id domain.InvocationID, expectedHead string) error {
+func (s *ReviewSource) Verify(
+	_ context.Context, id domain.InvocationID, expectedBase, expectedHead string,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess, ok := s.sessions[id]
@@ -301,9 +335,34 @@ func (s *ReviewSource) Verify(_ context.Context, id domain.InvocationID, expecte
 		return fmt.Errorf("fake review source verify %s: result head %q, requested %q: %w",
 			id, r.HeadSHA, intent.HeadSHA, ErrResultHeadMismatch)
 	}
+	if intent := s.intents[id]; r.BaseSHA != intent.BaseSHA {
+		return fmt.Errorf("fake review source verify %s: result base %q, requested %q: %w",
+			id, r.BaseSHA, intent.BaseSHA, ErrResultHeadMismatch)
+	}
+	if r.BaseSHA != expectedBase {
+		return fmt.Errorf("fake review source verify %s: result base %q, expected %q: %w",
+			id, r.BaseSHA, expectedBase, exec.ErrStaleHead)
+	}
 	if r.HeadSHA != expectedHead {
 		return fmt.Errorf("fake review source verify %s: result head %q, expected %q: %w",
 			id, r.HeadSHA, expectedHead, exec.ErrStaleHead)
+	}
+	return nil
+}
+
+func (s *ReviewSource) VerifyRequestAuthority(
+	_ context.Context, id domain.InvocationID, expected domain.Digest,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	request, ok := s.intents[id]
+	if !ok {
+		return fmt.Errorf("fake review source verify request %s: %w", id, exec.ErrUnknownInvocation)
+	}
+	authority, err := request.AuthorityDigest()
+	if err != nil || authority != expected {
+		return fmt.Errorf("fake review source verify %s request authority: %w",
+			id, errors.Join(err, domain.ErrParentKeyMismatch))
 	}
 	return nil
 }

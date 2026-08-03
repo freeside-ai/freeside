@@ -2,6 +2,7 @@
   "id": "find-1",
   "run_id": "run-1",
   "source": "codex_github",
+  "severity": "medium",
   "location": "daemon/main.go:42",
   "message": "unchecked error",
   "raw_text": "err not handled",

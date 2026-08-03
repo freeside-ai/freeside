@@ -144,6 +144,16 @@ func main() {
 	baseSHA := flags.String("base-sha", "", "exact 40-character base commit work items run against")
 	allowedPaths := flags.String("allowed-paths", "", "comma-separated candidate path allowlist (required in claude driver mode)")
 	authIdentity := flags.String("auth-identity", "", "provider auth identity work items run under")
+	reviewImage := flags.String("review-image", "", "digest-pinned Codex review image")
+	reviewInputRoot := flags.String("review-input-root", "", "private root containing Codex review auth and instruction snapshots")
+	reviewAuthMode := flags.String("review-auth-mode", "", "Codex review auth mode: subscription or api_key")
+	reviewAuthIdentity := flags.String("review-auth-identity", "", "Codex review auth identity")
+	reviewAuthSnapshot := flags.String("review-auth-snapshot", "", "Codex auth.json snapshot under review-input-root")
+	reviewInstructions := flags.String("review-instructions", "", "composed Codex AGENTS.md snapshot under review-input-root")
+	reviewModel := flags.String("review-model", "", "pinned Codex review model configuration")
+	reviewReasoningEffort := flags.String("review-reasoning-effort", "", "Codex review reasoning effort")
+	reviewCostOwner := flags.String("review-cost-owner", "", "account charged for Codex review")
+	reviewWorkspaceSize := flags.Int64("review-workspace-size-mb", 8192, "Codex review workspace volume size")
 	runConformance := flags.Bool("run-conformance", false,
 		"run and durably record the full ward suite for this exact Claude configuration before admission")
 	operatingMode := flags.String(
@@ -212,6 +222,18 @@ func main() {
 		if v := repositoryID.Value(); v != nil {
 			id = *v
 		}
+		var codexAuthMode ward.CodexAuthMode
+		if mode == domain.ModeUnattended {
+			switch *reviewAuthMode {
+			case string(ward.CodexAuthSubscription):
+				codexAuthMode = ward.CodexAuthSubscription
+			case string(ward.CodexAuthAPIKey):
+				codexAuthMode = ward.CodexAuthAPIKey
+			default:
+				fmt.Fprintf(os.Stderr, "freesided: -review-auth-mode %q is not subscription or api_key\n", *reviewAuthMode)
+				os.Exit(2)
+			}
+		}
 		daemonConfig.Claude = &claudeDriverConfig{
 			AgentImage: domain.ImageRef(*agentImage), ExporterImage: *exporterImage,
 			ContainerBin: *containerBin, SeedRoot: *seedRoot,
@@ -226,6 +248,12 @@ func main() {
 			RunConformance: *runConformance,
 			StateRoot:      *publicationStateDir, CredentialsDir: *publicationCredentialsDir,
 			OperatingMode: mode,
+			ReviewImage:   *reviewImage, ReviewInputRoot: *reviewInputRoot,
+			ReviewAuthMode:       codexAuthMode,
+			ReviewAuthIdentityID: domain.AuthIdentityID(*reviewAuthIdentity),
+			ReviewAuthSnapshot:   *reviewAuthSnapshot, ReviewInstructions: *reviewInstructions,
+			ReviewModel: *reviewModel, ReviewReasoningEffort: *reviewReasoningEffort,
+			ReviewCostOwner: *reviewCostOwner, ReviewWorkspaceSizeMB: *reviewWorkspaceSize,
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "freesided: -driver %q is not fake or claude\n", *driverMode)
@@ -514,11 +542,20 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 			engine.WithAdmissionDerivation(claudeWiring.derive),
 		}
 		engineOptions = append(engineOptions, engine.WithProductionPublication(engine.ProductionPublicationConfig{
-			WorkDir:   filepath.Join(cfg.Claude.StateDir, "production-publication"),
+			WorkDir:   filepath.Join(cfg.Claude.SeedRoot, "production-publication"),
 			Transport: claudeWiring.publicationTransport,
 			Publisher: claudeWiring.publisher, Artifacts: blobs,
-			ApprovedRecipes: cfg.ApprovedRecipes,
-			HoldOnly:        cfg.Claude.OperatingMode != domain.ModeUnattended,
+			ApprovedRecipes:           cfg.ApprovedRecipes,
+			ReviewSource:              claudeWiring.reviewSource,
+			ReviewRecovery:            claudeWiring.reviewRecovery,
+			ReviewConfigurationDigest: claudeWiring.reviewConfigurationDigest,
+			ObserveBase: func(observeCtx context.Context, repo, baseRef string) (string, error) {
+				return claudeWiring.observeBaseTip(observeCtx, domain.ScheduleBaseWatch{
+					Repo: repo, BaseRef: baseRef,
+				})
+			},
+			ObservePull: claudeWiring.observePull,
+			HoldOnly:    cfg.Claude.OperatingMode != domain.ModeUnattended,
 			NewRoom: func(image domain.ProjectImage) (engine.ProductionVerificationRoom, error) {
 				return ward.NewProjectImageRoom(claudeWiring.containerBin, image)
 			},

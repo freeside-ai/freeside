@@ -19,7 +19,7 @@
     "message_ruleset": "github/1",
     "workflow_audit_digest": "sha256:c1467a6321f458d7d21d1b1abf8800a03e581cf69f1f17a2cb96545001ba8132",
     "review": {
-      "mode": "auto",
+      "mode": "freeside_invoked",
       "config_digest": "sha256:review-config"
     },
     "protected_paths": {
@@ -37,7 +37,7 @@
       "extra_egress_and_trust_patterns": null,
       "extra_materiality_rules_patterns": null
     },
-    "profile_digest": "sha256:165434153c7eb41c6e781720c3097822edc535c5760fad9fb2fe0c99b6ffe513"
+    "profile_digest": "sha256:d5443f44d82f953e8139f34dfc215162d974874534157a530d0d98aa3463535a"
   },
   "review": {
     "profile": {
@@ -58,7 +58,7 @@
       "message_ruleset": "github/1",
       "workflow_audit_digest": "sha256:c1467a6321f458d7d21d1b1abf8800a03e581cf69f1f17a2cb96545001ba8132",
       "review": {
-        "mode": "auto",
+        "mode": "freeside_invoked",
         "config_digest": "sha256:review-config"
       },
       "protected_paths": {
@@ -76,7 +76,7 @@
         "extra_egress_and_trust_patterns": null,
         "extra_materiality_rules_patterns": null
       },
-      "profile_digest": "sha256:165434153c7eb41c6e781720c3097822edc535c5760fad9fb2fe0c99b6ffe513"
+      "profile_digest": "sha256:d5443f44d82f953e8139f34dfc215162d974874534157a530d0d98aa3463535a"
     },
     "approved": {
       "audit": {

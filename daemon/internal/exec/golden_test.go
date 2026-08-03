@@ -27,12 +27,20 @@ func TestGolden(t *testing.T) {
 		Summary:      "implemented the fix and its regression test",
 	}
 	review := exec.ReviewResult{
-		InvocationID: "inv-2",
-		HeadSHA:      "cafebabe",
+		InvocationID:        "inv-2",
+		BaseSHA:             "beefcafe",
+		HeadSHA:             "cafebabe",
+		Provider:            "openai",
+		ModelConfiguration:  "gpt-5.2-codex/high",
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		CostOwner:           "subscription:owner",
+		CompletedAt:         ts,
+		CompletionEvidence:  domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Findings: []domain.Finding{{
 			ID:        "finding-1",
 			RunID:     "run-1",
 			Source:    "codex",
+			Severity:  "medium",
 			Location:  "daemon/internal/exec/driver.go:12",
 			Message:   "possible off-by-one in retry ordinal",
 			RawText:   "P2: possible off-by-one in retry ordinal",

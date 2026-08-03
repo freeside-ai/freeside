@@ -12,6 +12,7 @@ type Finding struct {
 	ID        FindingID `json:"id"`
 	RunID     RunID     `json:"run_id"`
 	Source    string    `json:"source"`
+	Severity  string    `json:"severity,omitempty"`
 	Location  string    `json:"location"`
 	Message   string    `json:"message"`
 	RawText   string    `json:"raw_text"`

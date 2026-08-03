@@ -884,7 +884,7 @@ func TestPublishRefusesTrustProfileDrift(t *testing.T) {
 		CommitPlan:                 domain.CommitPlanSingleCommit,
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:revised-audit",
-		Review:                     domain.ReviewSettings{Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config"},
+		Review:                     domain.ReviewSettings{Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config"},
 	})
 	if err != nil {
 		t.Fatalf("superseded profile: %v", err)

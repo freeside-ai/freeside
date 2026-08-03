@@ -118,7 +118,7 @@ func TestAttendedImportUsesCurrentActiveTrustProfile(t *testing.T) {
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
 		Review: domain.ReviewSettings{
-			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review",
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review",
 		},
 	})
 	if err != nil {

@@ -176,7 +176,7 @@ func TestOnboardRequiresOneDigestBoundReviewBeforeBuildAndActivation(t *testing.
 		Policy: operations.OnboardPolicy{
 			PRExecution: domain.PRExecutionAuditedSameRepo,
 			CommitPlan:  domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
-			ReviewMode: domain.ReviewAuto, ReviewConfig: "sha256:review",
+			ReviewMode: domain.ReviewFreesideInvoked, ReviewConfig: "sha256:review",
 		},
 		Image: projectimage.Request{
 			Repository: "example/repo", RepositoryID: 44,
@@ -407,7 +407,7 @@ func TestOnboardPromotesPendingInstallationOnlyAfterApproval(t *testing.T) {
 		Policy: operations.OnboardPolicy{
 			PRExecution: domain.PRExecutionAuditedSameRepo,
 			CommitPlan:  domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
-			ReviewMode: domain.ReviewAuto, ReviewConfig: "sha256:review",
+			ReviewMode: domain.ReviewFreesideInvoked, ReviewConfig: "sha256:review",
 		},
 		Image: projectimage.Request{
 			Repository: "example/repo", RepositoryID: 44,

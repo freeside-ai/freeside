@@ -722,7 +722,7 @@ func TestValidateNewFakePublicationBindingsRejectsChangedEpochAndProfile(t *test
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
 		Review: domain.ReviewSettings{
-			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config",
 		},
 	})
 	if err != nil {

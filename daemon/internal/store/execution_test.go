@@ -301,7 +301,7 @@ func testTrustProfile(t *testing.T, repo string, repositoryID int64) domain.Auto
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
 		Review: domain.ReviewSettings{
-			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config",
 		},
 	})
 	if err != nil {
@@ -324,7 +324,7 @@ func seedTrustProfile(t *testing.T, s *store.Store, repo string, repositoryID in
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
 		Review: domain.ReviewSettings{
-			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config",
 		},
 	})
 	if err != nil {
@@ -715,7 +715,7 @@ func TestAdmissionBoundToTheActiveTrustProfileRevision(t *testing.T) {
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit-v2",
 		Review: domain.ReviewSettings{
-			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config",
 		},
 	})
 	if err != nil {

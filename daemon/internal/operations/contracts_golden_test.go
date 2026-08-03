@@ -37,7 +37,7 @@ func TestOperationalContractGoldens(t *testing.T) {
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        audit.WorkflowAuditDigest,
 		Review: domain.ReviewSettings{
-			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config",
 		},
 		ProtectedPaths: domain.ProtectedPathConfig{
 			ExtraAutomationControlPatterns:   []string{".github/workflows/**"},

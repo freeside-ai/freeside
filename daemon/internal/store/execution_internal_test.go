@@ -366,7 +366,7 @@ func tamperTrustProfile(t *testing.T, repo string, repositoryID int64) domain.Au
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
 		Review: domain.ReviewSettings{
-			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config",
 		},
 	})
 	if err != nil {

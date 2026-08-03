@@ -35,6 +35,11 @@ const (
 	codexShadowObserverTarget = "/freeside-agents-shadow"
 	codexShadowProofPath      = "/freeside-agents-shadow-proof.txt"
 	codexWorkspaceProofPath   = "/freeside-review-workspace-proof.txt"
+	codexReviewOutputDir      = "/freeside-review-output"
+	codexReviewResultPath     = codexReviewOutputDir + "/result.json"
+	codexReviewEventsPath     = codexReviewOutputDir + "/events.jsonl"
+	codexReviewStatusPath     = codexReviewOutputDir + "/status"
+	codexReviewSchemaPath     = codexReviewOutputDir + "/schema.json"
 
 	codexReviewTopologyVersion = "codex_review_read_only_v1"
 	maxCodexAuthSnapshotBytes  = 1 << 20
@@ -130,6 +135,8 @@ type CodexReviewConfig struct {
 	// receives review credentials. Caller intent may name it, never select it.
 	ApprovedImage            string
 	ObserverImage            string
+	Model                    string
+	ReasoningEffort          string
 	AccessTokenLifetimeFloor time.Duration
 	Now                      func() time.Time
 	Journal                  CodexReviewJournal
@@ -147,22 +154,23 @@ type CodexReviewVolumeLifecycleLeaser interface {
 	AcquireCodexReviewVolumeLease(
 		ctx context.Context, holder string, volumes []string,
 	) (CodexReviewVolumeLifecycleLease, error)
-	// RecoverCodexReviewVolumeLease atomically adopts an untransferred lease
-	// only when it is free or held by this exact durable owner. If Start already
-	// transferred the window, it returns ErrCodexReviewVolumeLeaseTransferred
-	// together with authenticated transfer evidence; another holder returns
+	// RecoverCodexReviewVolumeLease atomically adopts an unattached lease only
+	// when it is free or held by this exact durable owner. If the exact review
+	// container already attaches both volumes, it returns
+	// ErrCodexReviewVolumeLeaseTransferred together with authenticated
+	// attachment evidence; another holder returns
 	// ErrCodexReviewVolumeLeaseForeignOwner. Once the coordinator itself
-	// observes that a transferred window's target container no longer exists,
+	// observes that the attachment's target container no longer exists,
 	// the window is over: a later call from the exact durable owner adopts the
-	// lease back as held, which is how ward retries after reaping a transferred
-	// start it could not hand off.
+	// lease back as held, which is how ward retries after reaping a pre-handoff
+	// attachment it could not adopt.
 	RecoverCodexReviewVolumeLease(
 		ctx context.Context, holder string, volumes []string,
 	) (CodexReviewVolumeLifecycleLease, CodexReviewVolumeLeaseTransfer, error)
 }
 
 // CodexReviewVolumeLeaseTransfer is deployment-owned evidence that the exact
-// lifecycle window became the review container's immutable attachment.
+// review container immutably attaches the lifecycle window's two volumes.
 type CodexReviewVolumeLeaseTransfer struct {
 	Holder    string
 	Volumes   []string
@@ -264,18 +272,19 @@ func (o CodexReviewShadowObservation) verifyFresh(fresh CodexReviewShadowObserva
 // It carries paths only to daemon-prepared, single-file snapshots under
 // Config.InputRoot; BuildCodexReviewAgentSpec re-opens and validates them.
 type CodexReviewSpec struct {
-	RunID           string
-	Image           string
-	WorkspaceVolume string
-	Workspace       CodexReviewWorkspaceObservation
-	Network         CodexReviewNetworkObservation
-	Prompt          string
-	Boundary        CodexReviewBoundary
-	AuthMode        CodexAuthMode
-	AuthIdentityID  domain.AuthIdentityID
-	AuthSnapshot    string
-	Instructions    VendorInstructions
-	InstructionFile string
+	RunID                string
+	Image                string
+	WorkspaceSourceRunID string
+	WorkspaceVolume      string
+	Workspace            CodexReviewWorkspaceObservation
+	Network              CodexReviewNetworkObservation
+	Prompt               string
+	Boundary             CodexReviewBoundary
+	AuthMode             CodexAuthMode
+	AuthIdentityID       domain.AuthIdentityID
+	AuthSnapshot         string
+	Instructions         VendorInstructions
+	InstructionFile      string
 
 	// AgentsShadow is the runtime-backed observation of one empty volume,
 	// mounted read-only at HOME/.agents and at the workspace root plus every
@@ -291,6 +300,7 @@ type CodexReviewJournalBinding struct {
 	TopologyVersion                         string                `json:"topology_version"`
 	RunID                                   string                `json:"run_id"`
 	Boundary                                CodexReviewBoundary   `json:"boundary"`
+	WorkspaceSourceRunID                    string                `json:"workspace_source_run_id"`
 	WorkspaceVolume                         string                `json:"workspace_volume"`
 	WorkspaceFingerprint                    string                `json:"workspace_fingerprint"`
 	WorkspaceHead                           string                `json:"workspace_head"`
@@ -633,7 +643,7 @@ func BuildCodexReviewAgentSpec(
 		"HOME=" + CodexContainerHomeTarget,
 		"CODEX_HOME=" + CodexHomeTarget,
 	}, proxyEnvironment(cfg.ProxyURL)...)
-	command := codexReviewCommand(cfg.WorkspaceTarget, req.Prompt)
+	command := codexReviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt)
 	mounts := []Mount{
 		{Type: MountVolume, Source: req.WorkspaceVolume, Target: cfg.WorkspaceTarget, ReadOnly: true},
 		{Type: MountBind, Source: authPath, Target: CodexAuthFileTarget, ReadOnly: true},
@@ -658,6 +668,7 @@ func BuildCodexReviewAgentSpec(
 		TopologyVersion:                 codexReviewTopologyVersion,
 		RunID:                           req.RunID,
 		Boundary:                        req.Boundary,
+		WorkspaceSourceRunID:            req.WorkspaceSourceRunID,
 		WorkspaceVolume:                 req.WorkspaceVolume,
 		WorkspaceFingerprint:            req.Workspace.fingerprint,
 		WorkspaceHead:                   req.Workspace.head,
@@ -727,7 +738,8 @@ func (b CodexReviewJournalBinding) validate(requirePreStartObservation bool) err
 		b.RefreshEndpointReachable || b.PublicationCredentials {
 		return errors.New("codex review journal posture is invalid")
 	}
-	if b.WorkspaceVolume == "" || !cliSafe(b.WorkspaceVolume) || !cleanAbs(b.WorkspaceTarget) ||
+	if !runIDPattern.MatchString(b.WorkspaceSourceRunID) ||
+		b.WorkspaceVolume == "" || !cliSafe(b.WorkspaceVolume) || !cleanAbs(b.WorkspaceTarget) ||
 		!cliSafe(b.WorkspaceTarget) ||
 		codexReviewWorkspaceOverlapsControlPath(b.WorkspaceTarget) ||
 		b.HomeTarget != CodexContainerHomeTarget || b.CodexHomeTarget != CodexHomeTarget {
@@ -787,6 +799,8 @@ func validateCodexReviewRequest(cfg CodexReviewConfig, req CodexReviewSpec) erro
 	switch {
 	case !runIDPattern.MatchString(req.RunID):
 		return fmt.Errorf("%w: RunID is invalid", ErrInvalidCodexReviewSpec)
+	case !runIDPattern.MatchString(req.WorkspaceSourceRunID):
+		return fmt.Errorf("%w: WorkspaceSourceRunID is invalid", ErrInvalidCodexReviewSpec)
 	case !digestPinnedImagePattern.MatchString(req.Image):
 		return fmt.Errorf("%w: Image must be digest-pinned", ErrInvalidCodexReviewSpec)
 	case !digestPinnedImagePattern.MatchString(cfg.ApprovedImage) || !sameImage(cfg.ApprovedImage, req.Image):
@@ -1008,13 +1022,19 @@ func jwtExpiry(token string) (time.Time, error) {
 	return time.Unix(seconds, 0).UTC(), nil
 }
 
-func codexReviewCommand(workspaceTarget, prompt string) []string {
-	return []string{
-		"codex", "exec", "--json", "--ephemeral", "--skip-git-repo-check",
-		"-s", "read-only", "-C", workspaceTarget,
-		"-c", "project_doc_max_bytes=0", "--ignore-user-config", "--ignore-rules",
-		"--", prompt,
-	}
+func codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt string) []string {
+	schema := `{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["P1","P2","P3"]},"location":{"type":"string"},"explanation":{"type":"string"}},"required":["severity","location","explanation"],"additionalProperties":false}}},"required":["findings"],"additionalProperties":false}`
+	command := "set +e; mkdir -p " + shellQuote(codexReviewOutputDir) + "; " +
+		"printf '%s' " + shellQuote(schema) + " > " + shellQuote(codexReviewSchemaPath) + "; " +
+		"codex exec --json --ephemeral --skip-git-repo-check -s read-only -C " + shellQuote(workspaceTarget) +
+		" -m " + shellQuote(model) + " -c " + shellQuote("model_reasoning_effort=\""+reasoningEffort+"\"") +
+		" -c project_doc_max_bytes=0 --ignore-user-config --ignore-rules" +
+		" --output-schema " + shellQuote(codexReviewSchemaPath) +
+		" --output-last-message " + shellQuote(codexReviewResultPath) +
+		" -- " + shellQuote(prompt) + " > " + shellQuote(codexReviewEventsPath) + " 2>&1; " +
+		"review_status=$?; printf '%s\\n' \"$review_status\" > " + shellQuote(codexReviewStatusPath) +
+		"; exit \"$review_status\""
+	return []string{"sh", "-c", command}
 }
 
 func codexReviewShadowObserverName(runID string) string {
@@ -1194,7 +1214,7 @@ func validateCodexReviewAgentSpec(
 	}
 	authSum := sha256.Sum256(authBody)
 	wantAuthDigest := fmt.Sprintf("sha256:%x", authSum)
-	wantCommand := codexReviewCommand(cfg.WorkspaceTarget, req.Prompt)
+	wantCommand := codexReviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt)
 	wantEnv := append([]string{
 		"HOME=" + CodexContainerHomeTarget,
 		"CODEX_HOME=" + CodexHomeTarget,
@@ -1236,6 +1256,7 @@ func validateCodexReviewAgentSpec(
 	}
 	if binding.TopologyVersion != codexReviewTopologyVersion ||
 		binding.RunID != req.RunID ||
+		binding.WorkspaceSourceRunID != req.WorkspaceSourceRunID ||
 		binding.Boundary != CodexReviewFreshStart || !binding.FreshContext || binding.ContinuityMounted ||
 		binding.WorkspaceVolume != req.WorkspaceVolume || binding.WorkspaceTarget != cfg.WorkspaceTarget ||
 		binding.WorkspaceFingerprint != req.Workspace.fingerprint ||
