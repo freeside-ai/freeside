@@ -1,6 +1,7 @@
 package projectimage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -608,6 +609,34 @@ func TestBuildContextPreparationBindsNPMInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	launcherPath := filepath.Join(contextDir, "toolchain-launcher")
+	launcher, err := os.ReadFile(launcherPath) //nolint:gosec // fixed file under test-owned build context
+	if err != nil {
+		t.Fatal(err)
+	}
+	launcherInfo, err := os.Stat(launcherPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(launcher, []byte(nodeToolchainLauncher)) || launcherInfo.Mode().Perm() != 0o755 {
+		t.Fatal("generated Node toolchain launcher differs from the fixed executable input")
+	}
+	for _, freshBinding := range []string{
+		"#!/usr/bin/busybox sh",
+		"toolchain=$(/usr/bin/busybox mktemp -d /tmp/freeside-project-node.XXXXXX)",
+		"owned_toolchain=true",
+		"export FREESIDE_PROJECT_NODE_ROOT=$toolchain",
+		"trap '/usr/bin/busybox rm -rf \"$toolchain\"' EXIT",
+		"/usr/bin/busybox xz -dc " + nodeToolchainArchivePath,
+		"/usr/bin/busybox tar -xf - -C \"$toolchain\" --strip-components=1",
+		"if [ \"$owned_toolchain\" = false ]; then",
+		"exec \"$@\"",
+		"\"$@\"",
+	} {
+		if !strings.Contains(string(launcher), freshBinding) {
+			t.Errorf("Node toolchain launcher omits fresh bound execution step %q", freshBinding)
+		}
+	}
 	for _, manifest := range []string{"package.json", "package-lock.json"} {
 		if !strings.Contains(
 			string(preparation),
@@ -634,5 +663,22 @@ func TestBuildContextPreparationBindsNPMInputs(t *testing.T) {
 	}
 	if !strings.Contains(string(preparation), "exec npm ci --ignore-scripts") {
 		t.Error("preparation permits candidate lifecycle scripts")
+	}
+	for _, toolchainBinding := range []string{
+		"ARG PROJECT_TOOLCHAIN_BASE_IMAGE=" + nodeToolchainBaseImage,
+		"ARG PROJECT_NODE_VERSION=" + nodeToolchainVersion,
+		"ARG PROJECT_NODE_SHA256=" + nodeToolchainArchiveSHA256,
+		"FROM ${PROJECT_TOOLCHAIN_BASE_IMAGE} AS project-toolchain",
+		"COPY --from=project-toolchain /opt/freeside/project-toolchain/node.tar.xz " +
+			nodeToolchainArchivePath,
+		"COPY toolchain-launcher " + nodeLauncherPath,
+		"COPY toolchain-launcher " + npmLauncherPath,
+		"COPY toolchain-launcher " + npxLauncherPath,
+		"ai.freeside.project.toolchain.node.version=\"${PROJECT_NODE_VERSION}\"",
+		"ai.freeside.project.toolchain.node.archive-sha256=\"${PROJECT_NODE_SHA256}\"",
+	} {
+		if !strings.Contains(string(containerfile), toolchainBinding) {
+			t.Errorf("generated Containerfile omits toolchain binding %q", toolchainBinding)
+		}
 	}
 }

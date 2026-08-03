@@ -140,13 +140,15 @@ type buildSpec struct {
 }
 
 type provenanceSpec struct {
-	ImageDigest  string
-	BaseBuildRef string
-	BaseDigest   string
-	Repository   string
-	RepositoryID int64
-	CommitSHA    string
-	RecipeDigest domain.Digest
+	ImageDigest                string
+	BaseBuildRef               string
+	BaseDigest                 string
+	Repository                 string
+	RepositoryID               int64
+	CommitSHA                  string
+	RecipeDigest               domain.Digest
+	NodeVersion                string
+	NodeToolchainArchiveSHA256 string
 }
 
 type runSpec struct {
@@ -321,7 +323,8 @@ func (b *Builder) Build(
 		BaseBuildRef: privateBaseRef, BaseDigest: baseDigest,
 		Repository:   normalized.Repository,
 		RepositoryID: normalized.RepositoryID, CommitSHA: normalized.CommitSHA,
-		RecipeDigest: recipeDigest,
+		RecipeDigest: recipeDigest, NodeVersion: nodeToolchainVersion,
+		NodeToolchainArchiveSHA256: nodeToolchainArchiveSHA256,
 	}
 	if err := b.backend.CheckProvenance(ctx, localRef, provenance); err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("local image provenance: %w: %w", err, ErrProofFailed)
@@ -594,6 +597,9 @@ func createBuildContext(
 	// Executable by design: the image invokes this fixed, builder-owned helper.
 	if err := os.WriteFile(filepath.Join(contextDir, "prepare"), []byte(prepareScript), 0o700); err != nil { //nolint:gosec // G306
 		return fmt.Errorf("write preparation helper: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(contextDir, "toolchain-launcher"), []byte(nodeToolchainLauncher), 0o755); err != nil { //nolint:gosec // G306: executable fixed builder-owned helper
+		return fmt.Errorf("write Node toolchain launcher: %w", err)
 	}
 	containerfile := renderContainerfile(request, recipeDigest)
 	if err := os.WriteFile(filepath.Join(contextDir, "Containerfile"), []byte(containerfile), 0o600); err != nil {
