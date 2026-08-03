@@ -1,0 +1,140 @@
+{
+  "spec": {
+    "name": "freeside-review-review-1-codex",
+    "image": "example.test/codex@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "command": [
+      "codex",
+      "exec",
+      "--json",
+      "--ephemeral",
+      "--skip-git-repo-check",
+      "-s",
+      "read-only",
+      "-C",
+      "/workspace/project",
+      "-c",
+      "project_doc_max_bytes=0",
+      "--ignore-user-config",
+      "--ignore-rules",
+      "--",
+      "Review the exact candidate head."
+    ],
+    "env": [
+      "HOME=/var/lib/freeside/home",
+      "CODEX_HOME=/var/lib/freeside/codex-home",
+      "HTTP_PROXY=http://127.0.0.1:43123",
+      "HTTPS_PROXY=http://127.0.0.1:43123",
+      "http_proxy=http://127.0.0.1:43123",
+      "https_proxy=http://127.0.0.1:43123",
+      "NO_PROXY=",
+      "no_proxy="
+    ],
+    "mounts": [
+      {
+        "type": "volume",
+        "source": "candidate-workspace",
+        "target": "/workspace/project",
+        "read_only": true
+      },
+      {
+        "type": "bind",
+        "source": "/trusted/review-input/auth.json",
+        "target": "/var/lib/freeside/codex-home/auth.json",
+        "read_only": true
+      },
+      {
+        "type": "bind",
+        "source": "/trusted/review-input/AGENTS.md",
+        "target": "/var/lib/freeside/codex-home/AGENTS.md",
+        "read_only": true
+      },
+      {
+        "type": "volume",
+        "source": "freeside-review-review-1-agents",
+        "target": "/.agents",
+        "read_only": true
+      },
+      {
+        "type": "volume",
+        "source": "freeside-review-review-1-agents",
+        "target": "/var/lib/freeside/home/.agents",
+        "read_only": true
+      },
+      {
+        "type": "volume",
+        "source": "freeside-review-review-1-agents",
+        "target": "/workspace/.agents",
+        "read_only": true
+      },
+      {
+        "type": "volume",
+        "source": "freeside-review-review-1-agents",
+        "target": "/workspace/project/.agents",
+        "read_only": true
+      }
+    ],
+    "labels": [
+      {
+        "key": "freeside.handoff",
+        "value": "review-1"
+      }
+    ],
+    "network": "freeside-review-review-1-egress",
+    "network_disabled": false
+  },
+  "binding": {
+    "topology_version": "codex_review_read_only_v1",
+    "run_id": "review-1",
+    "boundary": "fresh_start",
+    "workspace_volume": "candidate-workspace",
+    "workspace_fingerprint": "2026-08-03T11:59:59Z",
+    "workspace_head": "0123456789abcdef0123456789abcdef01234567",
+    "workspace_tree_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+    "workspace_observer_image": "example.test/exporter@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "workspace_observer_fingerprint": "00000000000000000000000000000000:2026-08-03T12:00:03Z",
+    "workspace_pre_start_observer_fingerprint": "",
+    "workspace_target": "/workspace/project",
+    "workspace_read_only": true,
+    "home_target": "/var/lib/freeside/home",
+    "codex_home_target": "/var/lib/freeside/codex-home",
+    "fresh_context": true,
+    "continuity_mounted": false,
+    "auth_mode": "subscription",
+    "auth_identity_id": "codex-reviewer",
+    "auth_snapshot_digest": "sha256:7ef7b70d220a8c1807b2f46f2fd05aa863f1240f8dafd213e318fc79ddbc7a66",
+    "access_token_expires_at": "2026-08-03T14:00:00Z",
+    "auth_read_only": true,
+    "auth_store_mutation_lease_required": true,
+    "instruction_digest": "sha256:2f7c3707b9ea01f776e5dc350644c4fee47c27b46a1fd8491024984417855c4a",
+    "instruction_read_only": true,
+    "agents_shadow_volume": "freeside-review-review-1-agents",
+    "agents_shadow_fingerprint": "2026-08-03T12:00:00Z",
+    "agents_shadow_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "agents_shadow_observer_image": "example.test/exporter@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "agents_shadow_observer_fingerprint": "00000000000000000000000000000000:2026-08-03T12:00:01Z",
+    "agents_shadow_pre_start_observer_fingerprint": "",
+    "agents_shadow_targets": [
+      "/.agents",
+      "/var/lib/freeside/home/.agents",
+      "/workspace/.agents",
+      "/workspace/project/.agents"
+    ],
+    "agents_shadow_read_only": true,
+    "provider_endpoints": [
+      "chatgpt.com:443"
+    ],
+    "provider_network": "freeside-review-review-1-egress",
+    "provider_network_fingerprint": "2026-08-03T11:59:58Z",
+    "provider_network_host_only": true,
+    "provider_network_gateway": "127.0.0.1",
+    "provider_network_subnet": "127.0.0.0/24",
+    "provider_proxy_authority": "127.0.0.1:43123",
+    "refresh_endpoint_reachable": false,
+    "publication_credentials": false,
+    "launcher_environment_digest": "sha256:47f4dcdaa18bce03dff3fe6dcd5a9f357cf18e61071d3016c2a3ff3dd8aa569c",
+    "command_digest": "sha256:eac17865ff5cadb11f62a9a44d33b266de19153fe77b9754c317c5a68ced6fca",
+    "review_container": "",
+    "review_container_fingerprint": "",
+    "review_ownership_token": ""
+  }
+}

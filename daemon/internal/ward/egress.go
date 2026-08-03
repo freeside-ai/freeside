@@ -385,7 +385,7 @@ func proxyEnvironment(proxyURL string) []string {
 
 func proxyAddress(proxyURL string) (string, error) {
 	u, err := url.Parse(proxyURL)
-	if err != nil || u.Scheme != "http" || u.Host == "" || u.Path != "" {
+	if err != nil || u.Scheme != "http" || u.User != nil || u.Host == "" || u.Path != "" {
 		return "", errors.New("invalid proxy URL")
 	}
 	return u.Host, nil

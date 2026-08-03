@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	osexec "os/exec"
 	"sort"
 	"strings"
@@ -236,18 +237,18 @@ func (c *CLIRuntime) CreateContainer(ctx context.Context, spec ContainerSpec) er
 	return c.runDiscard(ctx, false, args...)
 }
 
-// createContainerArgs phrases a spec as CLI arguments. It refuses any
-// non-volume mount: the gate only ever generates volume mounts, and the
-// runtime is never even asked for anything else.
+// createContainerArgs phrases a spec as CLI arguments. Host binds are
+// deliberately limited to clean, read-only paths: the only gate-generated
+// binds are the Codex review topology's independently verified snapshot files.
 func createContainerArgs(spec ContainerSpec) ([]string, error) {
 	args := []string{"create", "--name", spec.Name}
 	for _, l := range spec.Labels {
 		args = append(args, "--label", l.Key+"="+l.Value)
 	}
 	for _, m := range spec.Mounts {
-		if m.Type != MountVolume {
-			return nil, fmt.Errorf("refusing to create container %q with %s mount at %q",
-				spec.Name, m.Type, m.Target)
+		if m.Type != MountVolume && m.Type != MountBind {
+			return nil, fmt.Errorf("refusing to create container %q with unknown mount type at %q",
+				spec.Name, m.Target)
 		}
 		// A comma or control character in a field would let the CLI parse an
 		// injected mount option; refuse to phrase it rather than escape it.
@@ -255,7 +256,19 @@ func createContainerArgs(spec ContainerSpec) ([]string, error) {
 			return nil, fmt.Errorf("refusing to create container %q: mount field for target %q carries a CLI delimiter",
 				spec.Name, m.Target)
 		}
-		mount := fmt.Sprintf("type=volume,source=%s,target=%s", m.Source, m.Target)
+		if !cleanAbs(m.Target) {
+			return nil, fmt.Errorf("refusing to create container %q with an unclean mount target", spec.Name)
+		}
+		if m.Type == MountBind {
+			info, err := os.Lstat(m.Source)
+			if !m.ReadOnly || !cleanAbs(m.Source) || err != nil || !info.Mode().IsRegular() {
+				return nil, fmt.Errorf(
+					"refusing to create container %q with a writable, non-file, or unclean bind mount",
+					spec.Name,
+				)
+			}
+		}
+		mount := fmt.Sprintf("type=%s,source=%s,target=%s", m.Type, m.Source, m.Target)
 		if m.ReadOnly {
 			mount += ",readonly"
 		}

@@ -854,6 +854,25 @@ func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Write
 		}
 		return writeProofTar(dest, f.baseProofPath, proof)
 	}
+	if vol, isObserver := c.observedVolume(codexWorkspaceProofPath); isObserver {
+		proof := baseProofForAbsentGitDir(c.ownershipToken())
+		if sha, seeded := f.volBase[vol]; seeded {
+			proof = baseProofFor(c.ownershipToken(), sha, f.volTree[vol])
+		}
+		if f.observerProof != nil {
+			proof = f.observerProof(id, proof)
+		}
+		return writeProofTar(dest, codexWorkspaceProofPath, proof)
+	}
+	if _, isShadowObserver := c.observedVolume(codexShadowProofPath); isShadowObserver {
+		proof := []byte(fmt.Sprintf(
+			"nonce=%s\nempty=yes\ntree=%s\n", c.ownershipToken(), emptyCodexShadowDigest,
+		))
+		if f.observerProof != nil {
+			proof = f.observerProof(id, proof)
+		}
+		return writeProofTar(dest, codexShadowProofPath, proof)
+	}
 	// A credential-store observer's rootfs carries its digest proof: the
 	// simulated store content is credState (empty state digests too, like an
 	// empty volume), so a test mutates the store by changing the string.

@@ -386,10 +386,9 @@ func (i VendorInstructions) validate() error {
 	case domain.AgentVendorClaude:
 		// Claude's existing ward topology implements the append-file binding.
 	case domain.AgentVendorCodex:
-		// #480 owns the Codex review ward topology. Recognizing the contract
-		// here must not make that not-yet-conformed execution path runnable.
-		return fmt.Errorf("%w: codex vendor-instruction topology is not implemented",
-			ErrInvalidHandoffSpec)
+		// Codex's append-file binding is implemented only by the dedicated
+		// read-only review topology. HandoffSpec.validate keeps it off the
+		// writable workspace/export path.
 	}
 	if !i.Present {
 		if i.Digest != "" || len(i.Body) != 0 {
@@ -597,6 +596,12 @@ func (s HandoffSpec) validate() error {
 	}
 	if err := s.Agent.VendorInstructions.validate(); err != nil {
 		return err
+	}
+	if s.Agent.VendorInstructions.Vendor == domain.AgentVendorCodex {
+		return fmt.Errorf(
+			"%w: codex review invocations use the read-only review topology, not the writable handoff path",
+			ErrInvalidHandoffSpec,
+		)
 	}
 	if err := s.Agent.InstructionPolicy.validate(); err != nil {
 		return err
