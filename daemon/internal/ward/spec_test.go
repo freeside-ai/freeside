@@ -101,7 +101,11 @@ func TestHandoffSpecValidate(t *testing.T) {
 			s.Agent.InstructionPolicy.Boundaries[2] = "fork"
 		}},
 		{"unsupported instruction vendor", func(s *HandoffSpec) {
-			s.Agent.VendorInstructions.Vendor = "codex"
+			s.Agent.VendorInstructions.Vendor = domain.AgentVendorCodex
+			s.Agent.VendorInstructions.Delivery = domain.VendorInstructionDeliveryAppendFile
+		}},
+		{"replace-authority instruction binding", func(s *HandoffSpec) {
+			s.Agent.VendorInstructions.Delivery = "instructions_key"
 		}},
 		{"absent instructions with digest", func(s *HandoffSpec) {
 			s.Agent.VendorInstructions.Digest = domain.Digest(

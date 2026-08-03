@@ -354,14 +354,26 @@ func TestGolden(t *testing.T) {
 		PromptPackageDigest: stageDigest("3"),
 		PolicyDigest:        resolvedPolicy.Digest,
 		VendorInstructions: &domain.VendorInstructionSnapshot{
-			Vendor: domain.AgentVendorClaude,
-			Digest: &vendorDigest,
+			Vendor:   domain.AgentVendorClaude,
+			Delivery: domain.VendorInstructionDeliveryAppendFile,
+			Digest:   &vendorDigest,
 		},
 		ConversationDigest:   &conversationDigest,
 		PriorArtifactDigests: []domain.Digest{stageDigest("4"), stageDigest("5")},
 		ImageInputDigests:    []domain.Digest{stageDigest("6")},
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	codexStageInput := stageInputs
+	codexVendorInstructions := *stageInputs.VendorInstructions
+	codexVendorInstructions.Vendor = domain.AgentVendorCodex
+	codexStageInput.VendorInstructions = &codexVendorInstructions
+	codexStageInput.ID, err = codexStageInput.ComputeID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := codexStageInput.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
@@ -755,6 +767,7 @@ func TestGolden(t *testing.T) {
 		{"auth_identity", identity},
 		{"auth_store_mutation_lease", mutationLease},
 		{"stage_input_snapshot", stageInputs},
+		{"stage_input_snapshot_codex", codexStageInput},
 		{"execution_admission", admission},
 		{"execution_admission_waived", waivedAdmission},
 		{"execution_export", export},

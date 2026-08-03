@@ -31,6 +31,7 @@ func TestWithAdmissionRejectsNonCanonicalPromptDigest(t *testing.T) {
 			PromptPackageDigest: "sha256:not-hex",
 			VendorInstructions: VendorInstructionConfig{
 				Vendor:   domain.AgentVendorClaude,
+				Delivery: domain.VendorInstructionDeliveryAppendFile,
 				HostPath: "/nonexistent/freeside-test-claude-instructions",
 			},
 		},
@@ -38,6 +39,54 @@ func TestWithAdmissionRejectsNonCanonicalPromptDigest(t *testing.T) {
 	)
 	if err := option(&Engine{}); err == nil {
 		t.Fatal("WithAdmission accepted a prompt digest the materializer cannot resolve")
+	}
+}
+
+func TestWithAdmissionRejectsUnconformedVendorInstructionBinding(t *testing.T) {
+	digest := domain.Digest("sha256:" + strings.Repeat("1", 64))
+	for _, tc := range []struct {
+		name     string
+		vendor   domain.AgentVendor
+		delivery domain.VendorInstructionDelivery
+	}{
+		{"unknown vendor", "unknown", domain.VendorInstructionDeliveryAppendFile},
+		{"missing binding", domain.AgentVendorCodex, ""},
+		{"replace-authority instructions key", domain.AgentVendorCodex, "instructions_key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			option := WithAdmission(
+				stageInputBackend{}, nil,
+				AdmissionEnvironment{
+					PromptPackageDigest: digest,
+					VendorInstructions: VendorInstructionConfig{
+						Vendor: tc.vendor, Delivery: tc.delivery,
+						HostPath: "/nonexistent/vendor-instructions",
+					},
+				},
+				time.Now,
+			)
+			if err := option(&Engine{}); !errors.Is(
+				err, domain.ErrUnsupportedVendorInstructionBinding,
+			) {
+				t.Fatalf("WithAdmission() = %v, want typed binding refusal", err)
+			}
+		})
+	}
+
+	option := WithAdmission(
+		stageInputBackend{}, nil,
+		AdmissionEnvironment{
+			PromptPackageDigest: digest,
+			VendorInstructions: VendorInstructionConfig{
+				Vendor:   domain.AgentVendorCodex,
+				Delivery: domain.VendorInstructionDeliveryAppendFile,
+				HostPath: "/nonexistent/AGENTS.md",
+			},
+		},
+		time.Now,
+	)
+	if err := option(&Engine{}); err != nil {
+		t.Fatalf("WithAdmission() rejected the conformed Codex binding: %v", err)
 	}
 }
 
@@ -49,6 +98,7 @@ func TestWithAdmissionRequiresConfigurationBoundUnattendedBackend(t *testing.T) 
 			PromptPackageDigest: domain.Digest("sha256:" + strings.Repeat("1", 64)),
 			VendorInstructions: VendorInstructionConfig{
 				Vendor:   domain.AgentVendorClaude,
+				Delivery: domain.VendorInstructionDeliveryAppendFile,
 				HostPath: "/nonexistent/freeside-test-claude-instructions",
 			},
 		},
@@ -140,6 +190,7 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 				PromptPackageDigest: digest("3"),
 				VendorInstructions: VendorInstructionConfig{
 					Vendor:   domain.AgentVendorClaude,
+					Delivery: domain.VendorInstructionDeliveryAppendFile,
 					HostPath: vendorPath,
 				},
 				Base: domain.BaseRevision{

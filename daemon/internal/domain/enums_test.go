@@ -24,6 +24,16 @@ func TestEnumValidity(t *testing.T) {
 		valids["ProducerClass"] = append(valids["ProducerClass"], v.valid)
 	}
 	invalids["ProducerClass"] = ProducerClass("").valid
+	for _, v := range AllAgentVendors {
+		valids["AgentVendor"] = append(valids["AgentVendor"], v.valid)
+	}
+	invalids["AgentVendor"] = AgentVendor("").valid
+	for _, v := range AllVendorInstructionDeliveries {
+		valids["VendorInstructionDelivery"] = append(
+			valids["VendorInstructionDelivery"], v.valid,
+		)
+	}
+	invalids["VendorInstructionDelivery"] = VendorInstructionDelivery("").valid
 	for _, v := range AllDeliveryStatuses {
 		valids["DeliveryStatus"] = append(valids["DeliveryStatus"], v.valid)
 	}

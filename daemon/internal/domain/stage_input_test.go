@@ -21,8 +21,9 @@ func stageInputSnapshotInput() domain.StageInputSnapshotInput {
 		PromptPackageDigest: stageDigest("3"),
 		PolicyDigest:        stageDigest("4"),
 		VendorInstructions: &domain.VendorInstructionSnapshot{
-			Vendor: domain.AgentVendorClaude,
-			Digest: &vendorDigest,
+			Vendor:   domain.AgentVendorCodex,
+			Delivery: domain.VendorInstructionDeliveryAppendFile,
+			Digest:   &vendorDigest,
 		},
 		PriorArtifactDigests: []domain.Digest{stageDigest("5"), stageDigest("6")},
 		ImageInputDigests:    []domain.Digest{stageDigest("7")},
@@ -87,7 +88,7 @@ func TestNewStageInputSnapshotCanonicalAndDetached(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(absentBody), `"vendor_instructions":{"vendor":"claude","digest":null}`) {
+	if !strings.Contains(string(absentBody), `"vendor_instructions":{"vendor":"codex","delivery":"append_file","digest":null}`) {
 		t.Fatalf("explicit absence is not serialized: %s", absentBody)
 	}
 	if absent.ID == empty.ID {
@@ -115,7 +116,13 @@ func TestStageInputSnapshotValidate(t *testing.T) {
 		}, domain.ErrEmptyField},
 		{"unknown vendor", func(s *domain.StageInputSnapshot) {
 			s.VendorInstructions.Vendor = "unknown"
-		}, domain.ErrStageInputsNotCanonical},
+		}, domain.ErrUnsupportedVendorInstructionBinding},
+		{"missing binding", func(s *domain.StageInputSnapshot) {
+			s.VendorInstructions.Delivery = ""
+		}, domain.ErrUnsupportedVendorInstructionBinding},
+		{"replace-authority binding", func(s *domain.StageInputSnapshot) {
+			s.VendorInstructions.Delivery = "instructions_key"
+		}, domain.ErrUnsupportedVendorInstructionBinding},
 		{"malformed vendor digest", func(s *domain.StageInputSnapshot) {
 			digest := domain.Digest("sha256:not-hex")
 			s.VendorInstructions.Digest = &digest
@@ -150,5 +157,45 @@ func TestStageInputSnapshotValidate(t *testing.T) {
 				t.Fatalf("Validate() = %v, want %v", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestVendorInstructionBindingConformance(t *testing.T) {
+	for _, vendor := range []domain.AgentVendor{
+		domain.AgentVendorClaude,
+		domain.AgentVendorCodex,
+	} {
+		if err := domain.ValidateVendorInstructionBinding(
+			vendor, domain.VendorInstructionDeliveryAppendFile,
+		); err != nil {
+			t.Errorf("append-file binding for %q = %v, want nil", vendor, err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name     string
+		vendor   domain.AgentVendor
+		delivery domain.VendorInstructionDelivery
+	}{
+		{"unknown vendor", "unknown", domain.VendorInstructionDeliveryAppendFile},
+		{"missing delivery", domain.AgentVendorCodex, ""},
+		{"replace authority", domain.AgentVendorCodex, "instructions_key"},
+		{"cross-vendor CLI flag", domain.AgentVendorCodex, "append_system_prompt_file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := domain.ValidateVendorInstructionBinding(tc.vendor, tc.delivery)
+			if !errors.Is(err, domain.ErrUnsupportedVendorInstructionBinding) {
+				t.Fatalf("ValidateVendorInstructionBinding() = %v, want typed refusal", err)
+			}
+		})
+	}
+}
+
+func TestLegacyClaudeVendorInstructionSnapshotRemainsValid(t *testing.T) {
+	in := stageInputSnapshotInput()
+	in.VendorInstructions.Vendor = domain.AgentVendorClaude
+	in.VendorInstructions.Delivery = ""
+	if _, err := domain.NewStageInputSnapshot(in); err != nil {
+		t.Fatalf("legacy Claude v2 snapshot = %v, want valid reconstruction", err)
 	}
 }

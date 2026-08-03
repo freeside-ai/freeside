@@ -369,7 +369,9 @@ func stageInputsWithBodies(
 		PromptPackageDigest: digestOf(promptBody),
 		PolicyDigest:        digestOf(policyBody),
 		VendorInstructions: &domain.VendorInstructionSnapshot{
-			Vendor: domain.AgentVendorClaude, Digest: &vendorDigest,
+			Vendor:   domain.AgentVendorClaude,
+			Delivery: domain.VendorInstructionDeliveryAppendFile,
+			Digest:   &vendorDigest,
 		},
 	})
 	if err != nil {

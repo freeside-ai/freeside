@@ -38,6 +38,7 @@ func admissionEnvironment() engine.AdmissionEnvironment {
 			"sha256:037aa38647518d5b7d034a92109df888dda8247b1772d509e7c4d77b517ddacd"),
 		VendorInstructions: engine.VendorInstructionConfig{
 			Vendor:   domain.AgentVendorClaude,
+			Delivery: domain.VendorInstructionDeliveryAppendFile,
 			HostPath: "/nonexistent/freeside-test-claude-instructions",
 		},
 		Base: domain.BaseRevision{

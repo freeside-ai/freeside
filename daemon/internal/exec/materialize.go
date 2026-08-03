@@ -171,12 +171,19 @@ type StageInputs struct {
 // input for one admitted execution. A nil content value is the explicit
 // snapshot of a missing host file, not a lookup to perform later.
 type MaterializedVendorInstructions struct {
-	vendor  domain.AgentVendor
-	content *MaterializedContent
+	vendor   domain.AgentVendor
+	delivery domain.VendorInstructionDelivery
+	content  *MaterializedContent
 }
 
 // Vendor identifies the native instruction mechanism this input targets.
 func (i MaterializedVendorInstructions) Vendor() domain.AgentVendor { return i.vendor }
+
+// Delivery identifies the conformed native binding for the instruction file.
+// Historical Claude v2 snapshots are normalized to append-file delivery.
+func (i MaterializedVendorInstructions) Delivery() domain.VendorInstructionDelivery {
+	return i.delivery
+}
 
 // Content returns the verified instruction bytes, or false for admitted
 // absence.
@@ -285,8 +292,12 @@ func (m *Materializer) Materialize(ctx context.Context, spec StartSpec) (StageIn
 	}
 	var vendorInstructions *MaterializedVendorInstructions
 	if snapshot.VendorInstructions != nil {
+		delivery := snapshot.VendorInstructions.Delivery
+		if delivery == "" && snapshot.VendorInstructions.Vendor == domain.AgentVendorClaude {
+			delivery = domain.VendorInstructionDeliveryAppendFile
+		}
 		vendorInstructions = &MaterializedVendorInstructions{
-			vendor: snapshot.VendorInstructions.Vendor,
+			vendor: snapshot.VendorInstructions.Vendor, delivery: delivery,
 		}
 		if snapshot.VendorInstructions.Digest != nil {
 			content, err := load(
