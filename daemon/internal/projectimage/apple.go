@@ -32,6 +32,7 @@ const (
 	ownershipLabel      = "ai.freeside.project-image.owner"
 	registryPortLabel   = "ai.freeside.project-image.registry-port"
 	allowlistPathEnv    = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	busyboxPath         = "/usr/bin/busybox"
 	maxPrepareBytes     = 64 << 10
 )
 
@@ -78,7 +79,7 @@ type appleBackend struct {
 	probeRegistry    func(context.Context, string) error
 	waitRegistry     func(context.Context, string) error
 	deleteManifest   func(context.Context, string) error
-	readEvidence     func(context.Context, string, string, bool) (ociEvidence, error)
+	readEvidence     func(context.Context, string, string, map[string]int64) (ociEvidence, error)
 }
 
 func (a appleBackend) ImageDigest(ctx context.Context, ref string) (string, error) {
@@ -202,19 +203,25 @@ func (a appleBackend) CheckProvenance(ctx context.Context, ref string, want prov
 	if readEvidence == nil {
 		readEvidence = a.readOCIEvidence
 	}
-	baseEvidence, err := readEvidence(ctx, want.BaseBuildRef, want.BaseDigest, false)
+	baseEvidence, err := readEvidence(ctx, want.BaseBuildRef, want.BaseDigest, map[string]int64{
+		busyboxPath: maxBusyboxBytes,
+	})
 	if err != nil {
 		return fmt.Errorf("host-verify build base: %w", err)
 	}
 	if user := baseEvidence.Config.Config.User; !rootImageUser(user) {
 		return fmt.Errorf("build base config sets user %q, want the runtime-default root user", user)
 	}
-	projectEvidence, err := readEvidence(ctx, ref, want.ImageDigest, true)
+	projectEvidence, err := readEvidence(ctx, ref, want.ImageDigest, projectEvidenceTargets())
 	if err != nil {
 		return fmt.Errorf("host-verify project image: %w", err)
 	}
 	if user := projectEvidence.Config.Config.User; !rootImageUser(user) {
 		return fmt.Errorf("project image config sets user %q, want the runtime-default root user", user)
+	}
+	if !bytes.Equal(baseEvidence.Files[busyboxPath], projectEvidence.Files[busyboxPath]) ||
+		baseEvidence.FileModes[busyboxPath] != projectEvidence.FileModes[busyboxPath] {
+		return fmt.Errorf("project image replaces the approved base's static BusyBox")
 	}
 	baseLayers := baseEvidence.Config.RootFS.DiffIDs
 	projectLayers := projectEvidence.Config.RootFS.DiffIDs
@@ -224,12 +231,14 @@ func (a appleBackend) CheckProvenance(ctx context.Context, ref string, want prov
 	}
 	labels := projectEvidence.Config.Config.Labels
 	expected := map[string]string{
-		"org.opencontainers.image.title":    "freeside-project-image",
-		"ai.freeside.base.digest":           want.BaseDigest,
-		"ai.freeside.project.repository":    want.Repository,
-		"ai.freeside.project.repository-id": strconv.FormatInt(want.RepositoryID, 10),
-		"ai.freeside.project.commit":        want.CommitSHA,
-		"ai.freeside.project.recipe-digest": string(want.RecipeDigest),
+		"org.opencontainers.image.title":                    "freeside-project-image",
+		"ai.freeside.base.digest":                           want.BaseDigest,
+		"ai.freeside.project.repository":                    want.Repository,
+		"ai.freeside.project.repository-id":                 strconv.FormatInt(want.RepositoryID, 10),
+		"ai.freeside.project.commit":                        want.CommitSHA,
+		"ai.freeside.project.recipe-digest":                 string(want.RecipeDigest),
+		"ai.freeside.project.toolchain.node.version":        want.NodeVersion,
+		"ai.freeside.project.toolchain.node.archive-sha256": want.NodeToolchainArchiveSHA256,
 	}
 	for key, value := range expected {
 		if labels[key] != value {
@@ -237,6 +246,7 @@ func (a appleBackend) CheckProvenance(ctx context.Context, ref string, want prov
 		}
 	}
 	files := projectEvidence.Files
+	modes := projectEvidence.FileModes
 	recipeBytes, recipeFound := files[ward.ProjectRecipePath]
 	prepareBytes, prepareFound := files[PreparationPath]
 	if !recipeFound || !prepareFound {
@@ -246,6 +256,19 @@ func (a appleBackend) CheckProvenance(ctx context.Context, ref string, want prov
 	if recipeDigest != string(want.RecipeDigest) ||
 		!bytes.Equal(prepareBytes, []byte(prepareScript)) {
 		return fmt.Errorf("embedded provenance file digests do not match the build inputs")
+	}
+	archive, archiveFound := files[nodeToolchainArchivePath]
+	archiveDigest := fmt.Sprintf("%x", sha256.Sum256(archive))
+	if !archiveFound || archiveDigest != want.NodeToolchainArchiveSHA256 {
+		return fmt.Errorf("embedded Node toolchain archive does not match the pinned input")
+	}
+	if modes[nodeToolchainArchivePath] != 0o644 || modes[PreparationPath] != 0o700 {
+		return fmt.Errorf("embedded project-image provenance files have invalid modes")
+	}
+	for _, launcher := range []string{nodeLauncherPath, npmLauncherPath, npxLauncherPath} {
+		if !bytes.Equal(files[launcher], []byte(nodeToolchainLauncher)) || modes[launcher] != 0o755 {
+			return fmt.Errorf("embedded Node toolchain launcher %s does not match the builder input", launcher)
+		}
 	}
 	return nil
 }
@@ -1005,7 +1028,7 @@ func (a appleBackend) readOCIEvidence(
 	ctx context.Context,
 	ref string,
 	expectedDigest string,
-	requireFiles bool,
+	wanted map[string]int64,
 ) (ociEvidence, error) {
 	archive, err := os.CreateTemp("", "freeside-project-rootfs-*.tar")
 	if err != nil {
@@ -1026,7 +1049,7 @@ func (a appleBackend) readOCIEvidence(
 	if err != nil {
 		return ociEvidence{}, runError("save image as OCI archive", output, err)
 	}
-	return readOCIEvidence(archivePath, expectedDigest, requireFiles)
+	return readOCIEvidence(archivePath, expectedDigest, wanted)
 }
 
 type ociDescriptor struct {
@@ -1049,8 +1072,9 @@ type ociManifest struct {
 }
 
 type ociEvidence struct {
-	Config ociImageConfig
-	Files  map[string][]byte
+	Config    ociImageConfig
+	Files     map[string][]byte
+	FileModes map[string]int64
 }
 
 const (
@@ -1062,12 +1086,26 @@ const (
 	maxOCIJSONBytes      = 4 << 20
 	maxOCILayers         = 128
 	maxOCILayerBytes     = 1 << 30
+	maxNodeArchiveBytes  = 64 << 20
+	maxBusyboxBytes      = 8 << 20
 )
+
+func projectEvidenceTargets() map[string]int64 {
+	return map[string]int64{
+		ward.ProjectRecipePath:   maxRecipeBytes,
+		PreparationPath:          maxPrepareBytes,
+		nodeToolchainArchivePath: maxNodeArchiveBytes,
+		nodeLauncherPath:         maxPrepareBytes,
+		npmLauncherPath:          maxPrepareBytes,
+		npxLauncherPath:          maxPrepareBytes,
+		busyboxPath:              maxBusyboxBytes,
+	}
+}
 
 func readOCIEvidence(
 	archivePath string,
 	expectedDigest string,
-	requireFiles bool,
+	wanted map[string]int64,
 ) (ociEvidence, error) {
 	indexBytes, err := readOCIArchiveEntry(archivePath, "index.json", maxOCIJSONBytes)
 	if err != nil {
@@ -1132,17 +1170,14 @@ func readOCIEvidence(
 		return ociEvidence{}, err
 	}
 	evidence := ociEvidence{Config: config}
-	if !requireFiles {
+	if len(wanted) == 0 {
 		return evidence, nil
 	}
-	wanted := map[string]int64{
-		ward.ProjectRecipePath: maxRecipeBytes,
-		PreparationPath:        maxPrepareBytes,
-	}
 	files := make(map[string][]byte, len(wanted))
+	modes := make(map[string]int64, len(wanted))
 	for index := len(manifest.Layers) - 1; index >= 0; index-- {
 		if err := readProvenanceLayer(
-			layerPaths[index], manifest.Layers[index].MediaType, wanted, files,
+			layerPaths[index], manifest.Layers[index].MediaType, wanted, files, modes,
 		); err != nil {
 			return ociEvidence{}, err
 		}
@@ -1156,6 +1191,7 @@ func readOCIEvidence(
 		}
 	}
 	evidence.Files = files
+	evidence.FileModes = modes
 	return evidence, nil
 }
 
@@ -1368,6 +1404,7 @@ func readProvenanceLayer(
 	layerPath, mediaType string,
 	wanted map[string]int64,
 	files map[string][]byte,
+	modes map[string]int64,
 ) error {
 	layer, err := os.Open(layerPath) //nolint:gosec // fixed index under private layer scratch
 	if err != nil {
@@ -1398,7 +1435,13 @@ func readProvenanceLayer(
 			return fmt.Errorf("read OCI layer archive: %w", err)
 		}
 		name := strings.TrimSuffix(strings.TrimPrefix(header.Name, "./"), "/")
-		if name == "" || strings.HasPrefix(name, "/") || pathpkg.Clean(name) != name {
+		if name == "" {
+			if header.Name == "./" && header.Typeflag == tar.TypeDir {
+				continue
+			}
+			return fmt.Errorf("OCI layer has unsafe path %q", header.Name)
+		}
+		if strings.HasPrefix(name, "/") || pathpkg.Clean(name) != name {
 			return fmt.Errorf("OCI layer has unsafe path %q", header.Name)
 		}
 		absoluteName := "/" + name
@@ -1418,6 +1461,7 @@ func readProvenanceLayer(
 				return fmt.Errorf("project image rootfs truncated %s", absoluteName)
 			}
 			files[absoluteName] = body
+			modes[absoluteName] = header.Mode
 			continue
 		}
 		for target := range wanted {

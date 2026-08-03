@@ -450,20 +450,25 @@ func TestAppleImageDigestRequiresFullLowercaseDigest(t *testing.T) {
 
 func TestAppleCheckProvenanceBindsLabelsAndEmbeddedFiles(t *testing.T) {
 	recipeDigest := verify.RecipeDigest([]byte(testRecipe))
+	nodeArchive := []byte("pinned Node archive")
+	nodeArchiveDigest := fmt.Sprintf("%x", sha256.Sum256(nodeArchive))
 	spec := provenanceSpec{
 		ImageDigest:  testImageDigest,
 		BaseBuildRef: "base:local", BaseDigest: testBaseDigest,
 		Repository:   "freeasinbird/gh-imgup",
 		RepositoryID: 1278475858, CommitSHA: testCommit, RecipeDigest: recipeDigest,
+		NodeVersion: nodeToolchainVersion, NodeToolchainArchiveSHA256: nodeArchiveDigest,
 	}
 	ref := "project:local"
 	projectLabels := map[string]string{
-		"org.opencontainers.image.title":    "freeside-project-image",
-		"ai.freeside.base.digest":           spec.BaseDigest,
-		"ai.freeside.project.repository":    spec.Repository,
-		"ai.freeside.project.repository-id": "1278475858",
-		"ai.freeside.project.commit":        spec.CommitSHA,
-		"ai.freeside.project.recipe-digest": string(spec.RecipeDigest),
+		"org.opencontainers.image.title":                    "freeside-project-image",
+		"ai.freeside.base.digest":                           spec.BaseDigest,
+		"ai.freeside.project.repository":                    spec.Repository,
+		"ai.freeside.project.repository-id":                 "1278475858",
+		"ai.freeside.project.commit":                        spec.CommitSHA,
+		"ai.freeside.project.recipe-digest":                 string(spec.RecipeDigest),
+		"ai.freeside.project.toolchain.node.version":        spec.NodeVersion,
+		"ai.freeside.project.toolchain.node.archive-sha256": spec.NodeToolchainArchiveSHA256,
 	}
 	runner := &recordingRunner{run: func(call commandSpec) (commandOutput, error) {
 		if len(call.Args) >= 2 && call.Args[0] == "image" && call.Args[1] == "inspect" {
@@ -476,22 +481,38 @@ func TestAppleCheckProvenanceBindsLabelsAndEmbeddedFiles(t *testing.T) {
 	}}
 	var baseConfig ociImageConfig
 	baseConfig.RootFS.DiffIDs = []string{"sha256:base-layer"}
+	baseBusybox := []byte("approved static BusyBox")
 	var projectConfig ociImageConfig
 	projectConfig.Config.Labels = projectLabels
 	projectConfig.RootFS.DiffIDs = []string{"sha256:base-layer", "sha256:project-layer"}
+	files := map[string][]byte{
+		ward.ProjectRecipePath:   []byte(testRecipe),
+		PreparationPath:          []byte(prepareScript),
+		nodeToolchainArchivePath: nodeArchive,
+		nodeLauncherPath:         []byte(nodeToolchainLauncher),
+		npmLauncherPath:          []byte(nodeToolchainLauncher),
+		npxLauncherPath:          []byte(nodeToolchainLauncher),
+		busyboxPath:              baseBusybox,
+	}
+	modes := map[string]int64{
+		ward.ProjectRecipePath: 0o600, PreparationPath: 0o700,
+		nodeToolchainArchivePath: 0o644,
+		nodeLauncherPath:         0o755, npmLauncherPath: 0o755, npxLauncherPath: 0o755,
+		busyboxPath: 0o755,
+	}
 	backend := appleBackend{
 		containerPath: "container", runner: runner,
-		readEvidence: func(_ context.Context, imageRef, _ string, requireFiles bool) (ociEvidence, error) {
+		readEvidence: func(_ context.Context, imageRef, _ string, wanted map[string]int64) (ociEvidence, error) {
 			if imageRef == spec.BaseBuildRef {
-				return ociEvidence{Config: baseConfig}, nil
+				return ociEvidence{
+					Config: baseConfig, Files: map[string][]byte{busyboxPath: baseBusybox},
+					FileModes: map[string]int64{busyboxPath: 0o755},
+				}, nil
 			}
-			if !requireFiles {
+			if len(wanted) == 0 {
 				return ociEvidence{}, errors.New("project evidence omitted rootfs proof")
 			}
-			return ociEvidence{Config: projectConfig, Files: map[string][]byte{
-				ward.ProjectRecipePath: []byte(testRecipe),
-				PreparationPath:        []byte(prepareScript),
-			}}, nil
+			return ociEvidence{Config: projectConfig, Files: files, FileModes: modes}, nil
 		},
 	}
 	if err := backend.CheckProvenance(t.Context(), ref, spec); err != nil {
@@ -502,6 +523,41 @@ func TestAppleCheckProvenanceBindsLabelsAndEmbeddedFiles(t *testing.T) {
 		t.Fatal("CheckProvenance accepted a mismatched commit label")
 	}
 	projectLabels["ai.freeside.project.commit"] = spec.CommitSHA
+	projectLabels["ai.freeside.project.toolchain.node.archive-sha256"] = strings.Repeat("0", 64)
+	if err := backend.CheckProvenance(t.Context(), ref, spec); err == nil {
+		t.Fatal("CheckProvenance accepted a mismatched Node toolchain archive label")
+	}
+	projectLabels["ai.freeside.project.toolchain.node.archive-sha256"] = spec.NodeToolchainArchiveSHA256
+	files[nodeToolchainArchivePath] = []byte("tampered archive")
+	if err := backend.CheckProvenance(t.Context(), ref, spec); err == nil {
+		t.Fatal("CheckProvenance accepted a tampered Node toolchain archive")
+	}
+	files[nodeToolchainArchivePath] = nodeArchive
+	files[npmLauncherPath] = []byte("tampered launcher")
+	if err := backend.CheckProvenance(t.Context(), ref, spec); err == nil {
+		t.Fatal("CheckProvenance accepted a tampered Node toolchain launcher")
+	}
+	files[npmLauncherPath] = []byte(nodeToolchainLauncher)
+	modes[npmLauncherPath] = 0o600
+	if err := backend.CheckProvenance(t.Context(), ref, spec); err == nil {
+		t.Fatal("CheckProvenance accepted a non-executable Node toolchain launcher")
+	}
+	modes[npmLauncherPath] = 0o755
+	files[busyboxPath] = []byte("overridden BusyBox")
+	if err := backend.CheckProvenance(t.Context(), ref, spec); err == nil {
+		t.Fatal("CheckProvenance accepted a post-base BusyBox override")
+	}
+	files[busyboxPath] = baseBusybox
+	modes[npmLauncherPath] = 0o4700
+	if err := backend.CheckProvenance(t.Context(), ref, spec); err == nil {
+		t.Fatal("CheckProvenance accepted setuid bits on a Node toolchain launcher")
+	}
+	modes[npmLauncherPath] = 0o755
+	modes[nodeToolchainArchivePath] = 0o1644
+	if err := backend.CheckProvenance(t.Context(), ref, spec); err == nil {
+		t.Fatal("CheckProvenance accepted sticky bits on the Node toolchain archive")
+	}
+	modes[nodeToolchainArchivePath] = 0o644
 	projectConfig.Config.User = "node"
 	if err := backend.CheckProvenance(t.Context(), ref, spec); err == nil {
 		t.Fatal("CheckProvenance accepted a project config with a non-root user")
@@ -676,6 +732,7 @@ func TestReadProvenanceArchiveRequiresUniqueRegularBoundedFiles(t *testing.T) {
 		return path
 	}
 	validEntries := []archiveEntry{
+		{"./", "", tar.TypeDir},
 		{strings.TrimPrefix(ward.ProjectRecipePath, "/"), testRecipe, tar.TypeReg},
 		{"usr/local/bin/freeside-project-prepare", prepareScript, tar.TypeReg},
 	}
@@ -684,15 +741,17 @@ func TestReadProvenanceArchiveRequiresUniqueRegularBoundedFiles(t *testing.T) {
 		PreparationPath:        maxPrepareBytes,
 	}
 	files := map[string][]byte{}
+	modes := map[string]int64{}
 	err := readProvenanceLayer(
-		writeArchive(t, validEntries), ociLayerMediaType, wanted, files,
+		writeArchive(t, validEntries), ociLayerMediaType, wanted, files, modes,
 	)
 	if err != nil || string(files[PreparationPath]) != prepareScript {
 		t.Fatalf("readProvenanceLayer = %v, %v", files, err)
 	}
-	duplicate := append(append([]archiveEntry{}, validEntries...), validEntries[0])
+	duplicate := append(append([]archiveEntry{}, validEntries...), validEntries[1])
 	if err := readProvenanceLayer(
-		writeArchive(t, duplicate), ociLayerMediaType, wanted, map[string][]byte{},
+		writeArchive(t, duplicate), ociLayerMediaType, wanted,
+		map[string][]byte{}, map[string]int64{},
 	); err == nil {
 		t.Fatal("readProvenanceLayer accepted a duplicate provenance file")
 	}
@@ -700,7 +759,8 @@ func TestReadProvenanceArchiveRequiresUniqueRegularBoundedFiles(t *testing.T) {
 	symlink[1].typeflag = tar.TypeSymlink
 	symlink[1].body = ""
 	if err := readProvenanceLayer(
-		writeArchive(t, symlink), ociLayerMediaType, wanted, map[string][]byte{},
+		writeArchive(t, symlink), ociLayerMediaType, wanted,
+		map[string][]byte{}, map[string]int64{},
 	); err == nil {
 		t.Fatal("readProvenanceLayer accepted a symlinked preparation helper")
 	}
@@ -708,7 +768,8 @@ func TestReadProvenanceArchiveRequiresUniqueRegularBoundedFiles(t *testing.T) {
 		{"usr/local/share/.wh.freeside", "", tar.TypeReg},
 	}
 	if err := readProvenanceLayer(
-		writeArchive(t, ancestorWhiteout), ociLayerMediaType, wanted, map[string][]byte{},
+		writeArchive(t, ancestorWhiteout), ociLayerMediaType, wanted,
+		map[string][]byte{}, map[string]int64{},
 	); err == nil {
 		t.Fatal("readProvenanceLayer accepted an ancestor whiteout")
 	}
@@ -716,7 +777,8 @@ func TestReadProvenanceArchiveRequiresUniqueRegularBoundedFiles(t *testing.T) {
 		{".wh..wh..opq", "", tar.TypeReg},
 	}
 	if err := readProvenanceLayer(
-		writeArchive(t, rootOpaqueWhiteout), ociLayerMediaType, wanted, map[string][]byte{},
+		writeArchive(t, rootOpaqueWhiteout), ociLayerMediaType, wanted,
+		map[string][]byte{}, map[string]int64{},
 	); err == nil {
 		t.Fatal("readProvenanceLayer accepted a root opaque whiteout")
 	}
@@ -724,7 +786,7 @@ func TestReadProvenanceArchiveRequiresUniqueRegularBoundedFiles(t *testing.T) {
 		archiveEntry{"usr/local", "", tar.TypeSymlink})
 	if err := readProvenanceLayer(
 		writeArchive(t, laterAncestorReplacement),
-		ociLayerMediaType, wanted, map[string][]byte{},
+		ociLayerMediaType, wanted, map[string][]byte{}, map[string]int64{},
 	); err == nil {
 		t.Fatal("readProvenanceLayer accepted a later same-layer ancestor replacement")
 	}
