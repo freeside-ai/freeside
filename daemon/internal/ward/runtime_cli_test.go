@@ -507,7 +507,8 @@ func TestDecodeVolumeInspect(t *testing.T) {
 }
 
 // TestCreateContainerArgs pins the CLI phrasing of the generated exporter
-// spec, readonly flag included, and the refusal to phrase non-volume mounts.
+// spec, readonly flag included, and the narrow read-only bind phrasing used
+// by the Codex review topology.
 func TestCreateContainerArgs(t *testing.T) {
 	cfg := testConfig()
 	hs := testHandoffSpec()
@@ -549,12 +550,34 @@ func TestCreateContainerArgs(t *testing.T) {
 		t.Errorf("writer provider network missing or mis-phrased: %q", joined)
 	}
 
-	if _, err := createContainerArgs(ContainerSpec{
-		Name:   "x",
-		Image:  "img",
-		Mounts: []Mount{{Type: MountBind, Source: "/host", Target: "/m"}},
-	}); err == nil {
-		t.Error("bind mount phrased instead of refused")
+	bindSource := filepath.Join(t.TempDir(), "snapshot")
+	if err := os.WriteFile(bindSource, []byte("snapshot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bindArgs, err := createContainerArgs(ContainerSpec{
+		Name:  "x",
+		Image: "img",
+		Mounts: []Mount{{
+			Type: MountBind, Source: bindSource, Target: "/m/file", ReadOnly: true,
+		}},
+		NetworkDisabled: true,
+	})
+	if err != nil {
+		t.Fatalf("read-only bind mount refused: %v", err)
+	}
+	if !strings.Contains(strings.Join(bindArgs, " "), "type=bind,source="+bindSource+",target=/m/file,readonly") {
+		t.Errorf("read-only bind mount mis-phrased: %q", bindArgs)
+	}
+	for _, bind := range []Mount{
+		{Type: MountBind, Source: bindSource, Target: "/m/file"},
+		{Type: MountBind, Source: "relative", Target: "/m/file", ReadOnly: true},
+		{Type: MountBind, Source: t.TempDir(), Target: "/m/file", ReadOnly: true},
+	} {
+		if _, err := createContainerArgs(ContainerSpec{
+			Name: "x", Image: "img", Mounts: []Mount{bind}, NetworkDisabled: true,
+		}); err == nil {
+			t.Errorf("unsafe bind mount phrased: %+v", bind)
+		}
 	}
 	if _, err := createContainerArgs(ContainerSpec{Name: "x", Image: "img"}); err == nil {
 		t.Error("implicit runtime-default network phrased instead of refused")

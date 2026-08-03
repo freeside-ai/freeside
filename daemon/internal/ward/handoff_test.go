@@ -1980,7 +1980,10 @@ func TestHandoffAgentOwnershipDowngradedAfterDeleteUncertainty(t *testing.T) {
 func TestHandoffBoundsWedgedWriterStart(t *testing.T) {
 	fx := newHandoffFixture(t)
 	names := namesFor(testHandoffSpec().RunID)
-	fx.cfg.HandoffTimeout = 100 * time.Millisecond
+	// Leave enough room for the fake's deterministic preparation even on a
+	// loaded CI host; the named StartContainer remains the operation that must
+	// consume the handoff budget.
+	fx.cfg.HandoffTimeout = time.Second
 	fx.rt.blockStart = names.Agent
 
 	_, err := fx.run(t)

@@ -15,8 +15,10 @@ type MountType string
 const (
 	// MountVolume is a named volume managed by the container runtime.
 	MountVolume MountType = "volume"
-	// MountBind is a host-directory bind (virtiofs on Apple container). The
-	// gate never generates one and rejects any it observes.
+	// MountBind is a host path bind (virtiofs on Apple container). The Codex
+	// review topology uses independently verified, read-only single-file binds
+	// inside its writable per-invocation home. Every other ward role rejects
+	// binds in its own allowlist.
 	MountBind MountType = "bind"
 )
 
