@@ -342,10 +342,11 @@ func (s HandoffSpec) RepositoryInstructionBase(
 // vendor-instruction role. Body is detached at Handoff entry and re-hashed
 // before any runtime object is created.
 type VendorInstructions struct {
-	Vendor  domain.AgentVendor
-	Present bool
-	Digest  domain.Digest
-	Body    []byte
+	Vendor   domain.AgentVendor
+	Delivery domain.VendorInstructionDelivery `json:",omitempty"`
+	Present  bool
+	Digest   domain.Digest
+	Body     []byte
 }
 
 // VendorInstructionsFromStageInputs converts the verified execution-input
@@ -359,7 +360,9 @@ func VendorInstructionsFromStageInputs(inputs exec.StageInputs) (VendorInstructi
 			ErrInvalidHandoffSpec,
 		)
 	}
-	out := VendorInstructions{Vendor: materialized.Vendor()}
+	out := VendorInstructions{
+		Vendor: materialized.Vendor(), Delivery: materialized.Delivery(),
+	}
 	content, present := materialized.Content()
 	if !present {
 		return out, nil
@@ -371,14 +374,22 @@ func VendorInstructionsFromStageInputs(inputs exec.StageInputs) (VendorInstructi
 }
 
 func (i VendorInstructions) validate() error {
+	// Persisted pre-v3 Claude intents carry no explicit binding. They remain
+	// recoverable as the append-file contract they were created under.
+	if i.Vendor == domain.AgentVendorClaude && i.Delivery == "" {
+		i.Delivery = domain.VendorInstructionDeliveryAppendFile
+	}
+	if err := domain.ValidateVendorInstructionBinding(i.Vendor, i.Delivery); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidHandoffSpec, err)
+	}
 	switch i.Vendor {
 	case domain.AgentVendorClaude:
-		// Claude is the only Phase 1A agent vendor. A later vendor adds its
-		// own target in vendorInstructionMountTarget rather than inheriting
-		// Claude's path accidentally.
-	default:
-		return fmt.Errorf("%w: unsupported vendor instructions %q",
-			ErrInvalidHandoffSpec, i.Vendor)
+		// Claude's existing ward topology implements the append-file binding.
+	case domain.AgentVendorCodex:
+		// #480 owns the Codex review ward topology. Recognizing the contract
+		// here must not make that not-yet-conformed execution path runnable.
+		return fmt.Errorf("%w: codex vendor-instruction topology is not implemented",
+			ErrInvalidHandoffSpec)
 	}
 	if !i.Present {
 		if i.Digest != "" || len(i.Body) != 0 {
@@ -419,6 +430,8 @@ func vendorInstructionMountTarget(vendor domain.AgentVendor) string {
 	switch vendor {
 	case domain.AgentVendorClaude:
 		return claudeInstructionMountTarget
+	case domain.AgentVendorCodex:
+		return ""
 	}
 	return ""
 }

@@ -314,7 +314,9 @@ func (p *productionPublicationHarness) newEngineForMode(
 		EgressProfile:  domain.EgressProviderOnly, ImageRef: p.image.ImageRef,
 		PromptPackageDigest: productionDigest([]byte("prompt package")),
 		VendorInstructions: engine.VendorInstructionConfig{
-			Vendor: domain.AgentVendorClaude, HostPath: "/nonexistent/production-publication-claude-md",
+			Vendor:   domain.AgentVendorClaude,
+			Delivery: domain.VendorInstructionDeliveryAppendFile,
+			HostPath: "/nonexistent/production-publication-claude-md",
 		},
 		AuthIdentityID: &identity,
 	}

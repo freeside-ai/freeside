@@ -14,6 +14,7 @@ import (
 func claudeInstructions(path string) VendorInstructionConfig {
 	return VendorInstructionConfig{
 		Vendor:   domain.AgentVendorClaude,
+		Delivery: domain.VendorInstructionDeliveryAppendFile,
 		HostPath: path,
 	}
 }
@@ -53,6 +54,23 @@ func TestSnapshotVendorInstructionsRecordsExactBytesOrExplicitAbsence(t *testing
 	}
 	if replayed.Digest == nil || *replayed.Digest != *present.Digest {
 		t.Fatal("caller mutation changed the source or its content identity")
+	}
+}
+
+func TestSnapshotVendorInstructionsCarriesCodexAppendFileBinding(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing-AGENTS.md")
+	snapshot, body, err := snapshotVendorInstructions(t.Context(), VendorInstructionConfig{
+		Vendor:   domain.AgentVendorCodex,
+		Delivery: domain.VendorInstructionDeliveryAppendFile,
+		HostPath: path,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Vendor != domain.AgentVendorCodex ||
+		snapshot.Delivery != domain.VendorInstructionDeliveryAppendFile ||
+		snapshot.Digest != nil || body != nil {
+		t.Fatalf("Codex absent snapshot = %+v, body %q", snapshot, body)
 	}
 }
 

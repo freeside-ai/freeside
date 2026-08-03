@@ -183,3 +183,8 @@ var (
 	ErrImmutableTransition = errors.New("an immutable field or recorded history would change")
 	ErrStaleTransition     = errors.New("an update does not advance the aggregate's version or lifecycle")
 )
+
+// ErrUnsupportedVendorInstructionBinding is a typed admission refusal for a
+// vendor/delivery pair that has not passed its native-binding conformance gate.
+var ErrUnsupportedVendorInstructionBinding = errors.New(
+	"vendor instruction delivery binding is unsupported")

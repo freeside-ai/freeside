@@ -418,6 +418,18 @@ func (d *Driver) regateWithCurrentPolicy(
 		return fmt.Errorf("%w: intent %s vendor instructions disagree with admission",
 			ErrUnsupportedStart, i.InvocationID)
 	}
+	delivery := vendor.Delivery
+	if delivery == "" && vendor.Vendor == domain.AgentVendorClaude {
+		delivery = domain.VendorInstructionDeliveryAppendFile
+	}
+	intentDelivery := i.Instructions.Delivery
+	if intentDelivery == "" && i.Instructions.Vendor == domain.AgentVendorClaude {
+		intentDelivery = domain.VendorInstructionDeliveryAppendFile
+	}
+	if delivery != intentDelivery {
+		return fmt.Errorf("%w: intent %s vendor-instruction delivery disagrees with admission",
+			ErrUnsupportedStart, i.InvocationID)
+	}
 	switch {
 	case vendor.Digest == nil:
 		if i.Instructions.Present || i.Instructions.Digest != "" ||

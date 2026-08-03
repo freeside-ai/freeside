@@ -219,8 +219,9 @@ func newMaterializeFixture(t *testing.T) materializeFixture {
 		PromptPackageDigest: contentDigest(bodies["prompt"]),
 		PolicyDigest:        contentDigest(bodies["policy"]),
 		VendorInstructions: &domain.VendorInstructionSnapshot{
-			Vendor: domain.AgentVendorClaude,
-			Digest: &vendorDigest,
+			Vendor:   domain.AgentVendorClaude,
+			Delivery: domain.VendorInstructionDeliveryAppendFile,
+			Digest:   &vendorDigest,
 		},
 		ConversationDigest:   &conversationDigest,
 		PriorArtifactDigests: []domain.Digest{contentDigest(bodies["prior"])},
@@ -289,7 +290,8 @@ func TestMaterializeStageInputs(t *testing.T) {
 		t.Fatal("materialized core input differs from admitted bytes")
 	}
 	vendor, ok := bundle.VendorInstructions()
-	if !ok || vendor.Vendor() != domain.AgentVendorClaude {
+	if !ok || vendor.Vendor() != domain.AgentVendorClaude ||
+		vendor.Delivery() != domain.VendorInstructionDeliveryAppendFile {
 		t.Fatal("materialized bundle lost its vendor-instruction role")
 	}
 	vendorContent, ok := vendor.Content()
@@ -341,6 +343,32 @@ func TestMaterializeExplicitVendorInstructionAbsence(t *testing.T) {
 	}
 	if _, present := instructions.Content(); present {
 		t.Fatal("explicitly absent vendor instructions materialized content")
+	}
+}
+
+func TestMaterializeLegacyClaudeBindingAsAppendFile(t *testing.T) {
+	fixture := newMaterializeFixture(t)
+	snapshot := *fixture.spec.StageInputs
+	vendor := *snapshot.VendorInstructions
+	vendor.Delivery = ""
+	snapshot.VendorInstructions = &vendor
+	id, err := snapshot.ComputeID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.ID = id
+	fixture.spec.StageInputs = &snapshot
+
+	bundle, err := newTestMaterializer(t, fixture.source).Materialize(
+		t.Context(), fixture.spec,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instructions, ok := bundle.VendorInstructions()
+	if !ok || instructions.Delivery() != domain.VendorInstructionDeliveryAppendFile {
+		t.Fatalf("legacy delivery = %q, want append_file",
+			instructions.Delivery())
 	}
 }
 

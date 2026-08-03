@@ -101,21 +101,46 @@ func (c ProducerClass) valid() bool {
 }
 
 // AgentVendor names the vendor-native instruction mechanism one admitted
-// execution uses. The vocabulary is intentionally narrower than the future
-// driver set: adding a driver also adds its exact native instruction target
-// and conformance proof rather than silently treating vendors as equivalent.
+// stage uses. The vocabulary is intentionally independent of the execution
+// driver set: adding a vendor also adds its exact delivery binding and
+// conformance proof rather than silently treating vendors as equivalent.
 type AgentVendor string
 
 const (
 	AgentVendorClaude AgentVendor = "claude"
+	AgentVendorCodex  AgentVendor = "codex"
 )
 
 // AllAgentVendors lists every valid AgentVendor.
-var AllAgentVendors = []AgentVendor{AgentVendorClaude}
+var AllAgentVendors = []AgentVendor{AgentVendorClaude, AgentVendorCodex}
 
 func (v AgentVendor) valid() bool {
 	switch v {
-	case AgentVendorClaude:
+	case AgentVendorClaude, AgentVendorCodex:
+		return true
+	default:
+		return false
+	}
+}
+
+// VendorInstructionDelivery names how a daemon-composed instruction bundle
+// reaches a vendor-native instruction surface. AppendFile preserves the
+// vendor's built-in authority and adds the digest-bound file alongside it;
+// replace-authority configuration is deliberately not part of the vocabulary.
+type VendorInstructionDelivery string
+
+const (
+	VendorInstructionDeliveryAppendFile VendorInstructionDelivery = "append_file"
+)
+
+// AllVendorInstructionDeliveries lists every valid VendorInstructionDelivery.
+var AllVendorInstructionDeliveries = []VendorInstructionDelivery{
+	VendorInstructionDeliveryAppendFile,
+}
+
+func (d VendorInstructionDelivery) valid() bool {
+	switch d {
+	case VendorInstructionDeliveryAppendFile:
 		return true
 	default:
 		return false

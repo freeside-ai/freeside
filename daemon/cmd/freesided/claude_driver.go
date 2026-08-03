@@ -986,7 +986,9 @@ func composeClaudeDriver(
 		ImageRef:            cfg.AgentImage,
 		PromptPackageDigest: promptPackage,
 		VendorInstructions: engine.VendorInstructionConfig{
-			Vendor: domain.AgentVendorClaude, HostPath: cfg.VendorInstructions,
+			Vendor:   domain.AgentVendorClaude,
+			Delivery: domain.VendorInstructionDeliveryAppendFile,
+			HostPath: cfg.VendorInstructions,
 		},
 		// Base and Workspace are per-attempt and supplied by derive below;
 		// the static values here would be wrong the moment a second work item

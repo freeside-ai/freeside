@@ -24,8 +24,9 @@ func fullAdmission(t *testing.T, identity *domain.AuthIdentityID, egress domain.
 		PromptPackageDigest: execStageDigest("3"),
 		PolicyDigest:        execStageDigest("4"),
 		VendorInstructions: &domain.VendorInstructionSnapshot{
-			Vendor: domain.AgentVendorClaude,
-			Digest: &vendorDigest,
+			Vendor:   domain.AgentVendorClaude,
+			Delivery: domain.VendorInstructionDeliveryAppendFile,
+			Digest:   &vendorDigest,
 		},
 		ConversationDigest:   &conversationDigest,
 		PriorArtifactDigests: []domain.Digest{execStageDigest("5")},

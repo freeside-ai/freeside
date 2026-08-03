@@ -52,8 +52,9 @@ func TestGolden(t *testing.T) {
 		PromptPackageDigest: execStageDigest("3"),
 		PolicyDigest:        execStageDigest("4"),
 		VendorInstructions: &domain.VendorInstructionSnapshot{
-			Vendor: domain.AgentVendorClaude,
-			Digest: &vendorDigest,
+			Vendor:   domain.AgentVendorClaude,
+			Delivery: domain.VendorInstructionDeliveryAppendFile,
+			Digest:   &vendorDigest,
 		},
 		ConversationDigest:   &conversationDigest,
 		PriorArtifactDigests: []domain.Digest{execStageDigest("5")},

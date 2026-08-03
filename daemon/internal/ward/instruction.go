@@ -523,8 +523,9 @@ func expectedInstructions(hs HandoffSpec, st *runState) VendorInstructions {
 		return hs.Agent.VendorInstructions
 	}
 	return VendorInstructions{
-		Vendor:  hs.Agent.VendorInstructions.Vendor,
-		Present: true,
+		Vendor:   hs.Agent.VendorInstructions.Vendor,
+		Delivery: hs.Agent.VendorInstructions.Delivery,
+		Present:  true,
 		Digest: domain.Digest(
 			"sha256:" + st.preparedInstructions.BundleDigest,
 		),

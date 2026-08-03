@@ -15,28 +15,28 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
-// VendorInstructionConfig identifies the operator-owned instruction file a
-// vendor loads natively inside its agent container. HostPath is resolved by
+// VendorInstructionConfig identifies the operator-owned instruction file and
+// conformed native delivery binding for one vendor. HostPath is resolved by
 // the kernel at admission; a final symlink is allowed and its target bytes are
 // frozen, while the live path is never exposed to the container.
 type VendorInstructionConfig struct {
 	Vendor   domain.AgentVendor
+	Delivery domain.VendorInstructionDelivery
 	HostPath string
 }
 
 func (c VendorInstructionConfig) validate() error {
-	switch c.Vendor {
-	case domain.AgentVendorClaude:
-		if !filepath.IsAbs(c.HostPath) || filepath.Clean(c.HostPath) != c.HostPath ||
-			c.HostPath == string(filepath.Separator) {
-			return fmt.Errorf(
-				"vendor instruction path %q is not a clean absolute non-root path",
-				c.HostPath,
-			)
-		}
-		return nil
+	if err := domain.ValidateVendorInstructionBinding(c.Vendor, c.Delivery); err != nil {
+		return err
 	}
-	return fmt.Errorf("vendor instruction vendor %q is unsupported", c.Vendor)
+	if !filepath.IsAbs(c.HostPath) || filepath.Clean(c.HostPath) != c.HostPath ||
+		c.HostPath == string(filepath.Separator) {
+		return fmt.Errorf(
+			"vendor instruction path %q is not a clean absolute non-root path",
+			c.HostPath,
+		)
+	}
+	return nil
 }
 
 // snapshotVendorInstructions freezes the bytes reached through the configured
@@ -48,7 +48,12 @@ func (c VendorInstructionConfig) validate() error {
 func snapshotVendorInstructions(
 	ctx context.Context, cfg VendorInstructionConfig,
 ) (domain.VendorInstructionSnapshot, []byte, error) {
-	snapshot := domain.VendorInstructionSnapshot{Vendor: cfg.Vendor}
+	if err := cfg.validate(); err != nil {
+		return domain.VendorInstructionSnapshot{}, nil, err
+	}
+	snapshot := domain.VendorInstructionSnapshot{
+		Vendor: cfg.Vendor, Delivery: cfg.Delivery,
+	}
 	if err := ctx.Err(); err != nil {
 		return domain.VendorInstructionSnapshot{}, nil, err
 	}

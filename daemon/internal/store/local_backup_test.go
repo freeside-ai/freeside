@@ -211,8 +211,9 @@ func TestLocalCheckpointHealthIncludesEveryStageInputRole(t *testing.T) {
 		PromptPackageDigest: promptDigest,
 		PolicyDigest:        policyDigest,
 		VendorInstructions: &domain.VendorInstructionSnapshot{
-			Vendor: domain.AgentVendorClaude,
-			Digest: &vendorDigest,
+			Vendor:   domain.AgentVendorClaude,
+			Delivery: domain.VendorInstructionDeliveryAppendFile,
+			Digest:   &vendorDigest,
 		},
 		ConversationDigest:   &conversationDigest,
 		PriorArtifactDigests: []domain.Digest{priorDigest},
