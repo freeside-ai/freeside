@@ -44,10 +44,18 @@ const (
 // what the agent could actually reach.
 func ProviderEndpoints() []string { return []string{"api.anthropic.com:443"} }
 
-// agentEnv is intentionally empty. Fixed launch variables live in the
-// launcher command and ward injects only its authenticated proxy variables.
+// agentEnv carries the fixed command-scope Git protected configuration the
+// unprivileged writer needs for ward's deliberately root-owned workspace
+// mount. A repository-local safe.directory cannot authorize itself: Git
+// refuses the ownership mismatch before it trusts local configuration. The
+// exact path preserves that check for every other repository the writer can
+// reach, and ward appends only its authenticated proxy variables.
 func agentEnv() []string {
-	return nil
+	return []string{
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=safe.directory",
+		"GIT_CONFIG_VALUE_0=" + workspaceDir,
+	}
 }
 
 // RunIDFor is the deterministic ward run identity for one invocation:

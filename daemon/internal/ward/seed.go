@@ -258,6 +258,8 @@ const (
 	seedRepoBindingSubsection  = "transport"
 	seedRepoBindingName        = "repo"
 	seedRepoBindingIDPath      = ".git/freeside-repository-id"
+	seedWorkerGitName          = "Freeside Worker"
+	seedWorkerGitEmail         = "worker@freeside.invalid"
 	maxGitConfigBytes          = 1 << 20
 	maxRepositoryIDBytes       = 64
 )
@@ -268,6 +270,8 @@ const (
 // to their shared keys must move both. core.worktree is intentionally absent:
 // FetchBase initializes .git inside its checkout and never authors that key,
 // while accepting an arbitrary path would redirect the writer's worktree.
+// user.* is likewise absent: canonicalSeedGitConfig appends the fixed worker
+// identity only after every source-provided key and value has passed this gate.
 var seedGitConfigKeys = map[string]bool{
 	"core.bare":                    true,
 	"core.filemode":                true,
@@ -294,7 +298,8 @@ var seedGitConfigKeyOrder = []string{
 
 // canonicalizeSeedRepoBinding proves the checkout was materialized from the
 // repository the caller declared, then replaces its local config with the
-// validated daemon-authored facts in one canonical, comment-free form.
+// validated daemon-authored facts and the fixed worker commit identity in one
+// canonical, comment-free form.
 //
 // Containment under SeedRoot is not enough on its own. A seed root holds
 // checkouts for every managed repository, and forks share commits, so a source
@@ -451,6 +456,14 @@ func canonicalSeedGitConfig(values map[string]string) string {
 		b.WriteString(value)
 		b.WriteByte('\n')
 	}
+	// The worker may author disposable checkpoint history, but the fetched
+	// checkout may not choose who authored it. Inject the identity after source
+	// validation rather than admitting user.* into seedGitConfigKeys.
+	b.WriteString("[user]\n\tname = ")
+	b.WriteString(seedWorkerGitName)
+	b.WriteString("\n\temail = ")
+	b.WriteString(seedWorkerGitEmail)
+	b.WriteByte('\n')
 	return b.String()
 }
 
