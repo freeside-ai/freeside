@@ -109,12 +109,17 @@ var (
 	ErrScheduleDetailMismatch     = errors.New("schedule detail fields do not match the kind's contract")
 	ErrBaseFreshnessInconsistent  = errors.New("base freshness fields are internally inconsistent")
 	ErrBaseFreshnessOutsideReview = errors.New("base freshness is a ready_for_final_review semantic")
-	ErrWorkUnitInconsistent       = errors.New("work-unit declaration fields do not match the criterion's contract")
-	ErrCompletionInconsistent     = errors.New("work-unit completion fields do not match the criterion's contract")
-	ErrMergeFactInconsistent      = errors.New("pull merge fact fields are internally inconsistent")
-	ErrIssueFactInconsistent      = errors.New("issue state fact fields are internally inconsistent")
-	ErrDependenciesNotCanonical   = errors.New("declared dependency issues are not in canonical (ascending, deduplicated) order")
-	ErrDeclaredPathsNotCanonical  = errors.New("declared paths are not in canonical (sorted, deduplicated) order")
+
+	ErrInvalidReadinessInvalidationReason = errors.New("unknown readiness invalidation reason")
+	ErrReadinessInvalidationOutsideReview = errors.New("readiness invalidation is a ready_for_final_review semantic")
+	ErrReadinessInvalidationNotSuperseded = errors.New("readiness invalidation requires a superseded item")
+	ErrReadinessInvalidationNotDivergent  = errors.New("readiness invalidation bound and observed coordinates do not diverge")
+	ErrWorkUnitInconsistent               = errors.New("work-unit declaration fields do not match the criterion's contract")
+	ErrCompletionInconsistent             = errors.New("work-unit completion fields do not match the criterion's contract")
+	ErrMergeFactInconsistent              = errors.New("pull merge fact fields are internally inconsistent")
+	ErrIssueFactInconsistent              = errors.New("issue state fact fields are internally inconsistent")
+	ErrDependenciesNotCanonical           = errors.New("declared dependency issues are not in canonical (ascending, deduplicated) order")
+	ErrDeclaredPathsNotCanonical          = errors.New("declared paths are not in canonical (sorted, deduplicated) order")
 
 	// Trust-boundary failures.
 	ErrPlaintextCredential               = errors.New("credential material must be a sha256 digest, never plaintext")

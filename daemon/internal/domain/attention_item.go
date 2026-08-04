@@ -286,6 +286,94 @@ func (b BaseFreshness) Validate() error {
 	return nil
 }
 
+// ReadinessInvalidationReason names the axis on which a ready_for_final_review
+// item's exact binding diverged from the daemon's live observation, so a clean
+// review pass no longer describes the current candidate (plan §7, issue #496).
+// The zero value is invalid.
+type ReadinessInvalidationReason string
+
+const (
+	// ReadinessInvalidationHeadChanged: the observed PR head SHA differs from
+	// the head the ready item was earned against (a force-push or new commit).
+	ReadinessInvalidationHeadChanged ReadinessInvalidationReason = "head_changed"
+	// ReadinessInvalidationBaseAdvanced: the observed target-base tip advanced
+	// past the base the publication was admitted for.
+	ReadinessInvalidationBaseAdvanced ReadinessInvalidationReason = "base_advanced"
+	// ReadinessInvalidationRetargeted: the PR's base ref changed (the pull was
+	// retargeted at a different branch).
+	ReadinessInvalidationRetargeted ReadinessInvalidationReason = "retargeted"
+)
+
+// AllReadinessInvalidationReasons is the single registration point for
+// readiness invalidation reasons. A pull whose observed repository or number
+// does not match the binding is deliberately absent: that is a suspect
+// returned observation the reconciler declines to act on (the requires-exact
+// defense), not a trustworthy identity-change signal, so no reason names it
+// until a consumer with a trustworthy signal needs one (cf. issue #22).
+var AllReadinessInvalidationReasons = []ReadinessInvalidationReason{
+	ReadinessInvalidationHeadChanged,
+	ReadinessInvalidationBaseAdvanced,
+	ReadinessInvalidationRetargeted,
+}
+
+func (r ReadinessInvalidationReason) valid() bool {
+	switch r {
+	case ReadinessInvalidationHeadChanged, ReadinessInvalidationBaseAdvanced,
+		ReadinessInvalidationRetargeted:
+		return true
+	default:
+		return false
+	}
+}
+
+// ReadinessInvalidation is the daemon-recorded fact that a
+// ready_for_final_review item's clean-pass claim was invalidated by a change
+// the review pass was not run against (plan §7, issue #496). It is written in
+// the same transaction that supersedes the item, so the staleness is
+// item-visible to signet clients and the version bump stales any command
+// prepared against the old ready claim. It is never client-supplied
+// (AttentionItemInput carries no path to it), and it is written once: the
+// superseding transition is terminal, so the fact never changes afterward.
+type ReadinessInvalidation struct {
+	Reason ReadinessInvalidationReason `json:"reason"`
+	// Bound is the ready item's binding coordinate on the reason's axis (the
+	// value the review pass was earned against): the head SHA for head_changed,
+	// the admitted base SHA for base_advanced, the base ref for retargeted, the
+	// "repository_id#pr_number" identity for identity_changed.
+	Bound string `json:"bound"`
+	// Observed is the daemon's live observation on that same axis. It differs
+	// from Bound by construction; that divergence is what invalidates the pass,
+	// so it is revalidated (a decoded fact cannot claim an invalidation its own
+	// coordinates contradict), mirroring BaseFreshness.Advanced.
+	Observed string `json:"observed"`
+	// ObservedAt is the UTC instant of the observation.
+	ObservedAt time.Time `json:"observed_at"`
+}
+
+// Validate reports whether the fact is structurally sound and internally
+// consistent.
+func (r ReadinessInvalidation) Validate() error {
+	if !r.Reason.valid() {
+		return fmt.Errorf("readiness invalidation reason %q: %w", r.Reason, ErrInvalidReadinessInvalidationReason)
+	}
+	for name, v := range map[string]string{"bound": r.Bound, "observed": r.Observed} {
+		if v == "" {
+			return fmt.Errorf("readiness invalidation %s: %w", name, ErrEmptyField)
+		}
+	}
+	if r.Bound == r.Observed {
+		return fmt.Errorf("readiness invalidation bound and observed both %q: %w",
+			r.Bound, ErrReadinessInvalidationNotDivergent)
+	}
+	if r.ObservedAt.IsZero() {
+		return fmt.Errorf("readiness invalidation observed_at: %w", ErrMissingTimestamp)
+	}
+	if r.ObservedAt.Location() != time.UTC {
+		return fmt.Errorf("readiness invalidation observed_at: %w", ErrTimestampNotUTC)
+	}
+	return nil
+}
+
 // AttentionItem is a single request for human judgement (plan §4). Its timing
 // aggregates are derived from deliveries via WithTiming, never constructed
 // directly; its evidence snapshot admits only verifier/daemon artifacts under
@@ -320,12 +408,18 @@ type AttentionItem struct {
 	// present only on ready_for_final_review items once the watch has
 	// observed the base (plan §5.16); nil renders explicit null. Daemon-set
 	// by the consuming handler; there is no client input path.
-	BaseFreshness     *BaseFreshness    `json:"base_freshness"`
-	ItemVersion       int               `json:"item_version"`
-	InterruptionClass InterruptionClass `json:"interruption_class"`
-	ConversationID    *ConversationID   `json:"conversation_id"`
-	Timing            TimingSummary     `json:"timing"`
-	ExpiresWhen       *time.Time        `json:"expires_when"`
+	BaseFreshness *BaseFreshness `json:"base_freshness"`
+	// ReadinessInvalidation is the daemon-recorded fact that a
+	// ready_for_final_review item's clean-pass claim was invalidated by a
+	// base/head/identity change (plan §7, issue #496), present only on a
+	// superseded ready item; nil renders explicit null. Daemon-set in the
+	// superseding transaction, there is no client input path.
+	ReadinessInvalidation *ReadinessInvalidation `json:"readiness_invalidation"`
+	ItemVersion           int                    `json:"item_version"`
+	InterruptionClass     InterruptionClass      `json:"interruption_class"`
+	ConversationID        *ConversationID        `json:"conversation_id"`
+	Timing                TimingSummary          `json:"timing"`
+	ExpiresWhen           *time.Time             `json:"expires_when"`
 	// DecidedAt is the daemon-stamped instant the item's first concluding
 	// decision was accepted (plan §4: open-to-decision time is the headline
 	// attention-latency metric, with the §1 per-unit measure governing;
@@ -490,6 +584,28 @@ func (i AttentionItem) Validate() error {
 				i.ID, i.Type, ErrBaseFreshnessOutsideReview)
 		}
 		if err := i.BaseFreshness.Validate(); err != nil {
+			return fmt.Errorf("item %s: %w", i.ID, err)
+		}
+	}
+	if i.ReadinessInvalidation != nil {
+		// Readiness invalidation is a ready_for_final_review semantic (plan §7,
+		// issue #496): the fact records why that item's clean pass no longer
+		// binds, so it on any other type is a malformed item.
+		if i.Type != AttentionReadyForFinalReview {
+			return fmt.Errorf("item %s type %q carries a readiness invalidation: %w",
+				i.ID, i.Type, ErrReadinessInvalidationOutsideReview)
+		}
+		// The fact is produced only in the same transition that supersedes the
+		// item (§7, issue #496), so it is valid only on a superseded item. Fail
+		// closed at this reconstruction/caller boundary: a decoded row or an
+		// exported struct carrying the stale-pass fact on a still-actionable
+		// item would otherwise leave clients free to submit decisions, since
+		// command rejection is keyed to status/version, not to this fact.
+		if i.Status != StatusSuperseded {
+			return fmt.Errorf("item %s status %q carries a readiness invalidation: %w",
+				i.ID, i.Status, ErrReadinessInvalidationNotSuperseded)
+		}
+		if err := i.ReadinessInvalidation.Validate(); err != nil {
 			return fmt.Errorf("item %s: %w", i.ID, err)
 		}
 	}

@@ -312,6 +312,58 @@ func TestValidateRejectsCorruptTiming(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsInvalidationWithoutSupersession is the reconstruction/
+// caller trust boundary (§7, issue #496): the readiness-invalidation fact is
+// produced only in the transition that supersedes the item, so a decoded row or
+// exported struct carrying it on a non-review type, or on a still-actionable
+// (non-superseded) ready item, must fail closed. Command rejection keys on
+// status/version, not on the fact, so a fact on an open item would otherwise
+// leave clients free to submit decisions against a stale pass.
+func TestValidateRejectsInvalidationWithoutSupersession(t *testing.T) {
+	recipe := approvedRecipe
+	readyItem := func() domain.AttentionItem {
+		in := validItemInput(domain.AttentionReadyForFinalReview)
+		in.PRHeadSHA = "abc123"
+		in.EvidenceSnapshot = []domain.Artifact{{ID: "e1", Type: "log", Digest: "sha256:log", Provenance: provenance(domain.ProducerVerifier, &recipe)}}
+		item, err := domain.NewAttentionItem(in, approvedRecipes())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return item
+	}
+	fact := &domain.ReadinessInvalidation{
+		Reason: domain.ReadinessInvalidationHeadChanged,
+		Bound:  "abc123", Observed: "def456",
+		ObservedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+	}
+
+	// A ready item still open (actionable) with the fact is rejected.
+	openItem := readyItem()
+	openItem.ReadinessInvalidation = fact
+	if err := openItem.Validate(); !errors.Is(err, domain.ErrReadinessInvalidationNotSuperseded) {
+		t.Fatalf("open ready item Validate() = %v, want ErrReadinessInvalidationNotSuperseded", err)
+	}
+
+	// The same fact on a superseded ready item validates.
+	superseded := readyItem()
+	superseded.ReadinessInvalidation = fact
+	superseded.Status = domain.StatusSuperseded
+	if err := superseded.Validate(); err != nil {
+		t.Fatalf("superseded ready item Validate() = %v, want nil", err)
+	}
+
+	// The fact on a non-review type is rejected even when superseded.
+	wrongType, err := domain.NewAttentionItem(validItemInput(domain.AttentionSpecApproval), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongType.ReadinessInvalidation = fact
+	wrongType.Status = domain.StatusSuperseded
+	if err := wrongType.Validate(); !errors.Is(err, domain.ErrReadinessInvalidationOutsideReview) {
+		t.Fatalf("non-review item Validate() = %v, want ErrReadinessInvalidationOutsideReview", err)
+	}
+}
+
 // TestWithDecidedAt covers the decision-instant writer (issue #171): a real
 // UTC instant stamps once; zero, non-UTC, and re-stamping are rejected; and
 // the constructor never sets the field.

@@ -602,6 +602,22 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A ready item superseded because its earned-against head moved (§7, issue
+	// #496): the daemon records the readiness_invalidation fact in the same
+	// transition that supersedes it, so the api example's
+	// readiness_invalidation branch is pinned beside the superseded status.
+	invalidatedItem := item
+	invalidatedItem.ItemVersion = item.ItemVersion + 1
+	invalidatedItem.Status = domain.StatusSuperseded
+	invalidatedItem.ReadinessInvalidation = &domain.ReadinessInvalidation{
+		Reason: domain.ReadinessInvalidationHeadChanged,
+		Bound:  "cafebabe", Observed: "feedface",
+		ObservedAt: ts.Add(50 * time.Minute),
+	}
+	if err := invalidatedItem.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
 	// Durable-scheduler fixtures (§5.16, #442): one schedule per shape class
 	// (a one-shot deadline, the base-advance watch with its kind-scoped
 	// detail, the expiring installation poll, a permanent trusted-config job,
@@ -739,6 +755,7 @@ func TestGolden(t *testing.T) {
 		value any
 	}{
 		{"attention_item_base_freshness", freshItem},
+		{"attention_item_readiness_invalidation", invalidatedItem},
 		{"schedule_deadline", deadlineSchedule},
 		{"schedule_base_advance_watch", watchSchedule},
 		{"schedule_installation_poll", pollSchedule},

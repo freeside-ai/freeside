@@ -16,6 +16,7 @@
   "pr_head_sha": "",
   "commit_plan_notice": null,
   "base_freshness": null,
+  "readiness_invalidation": null,
   "item_version": 1,
   "interruption_class": "planned_gate",
   "conversation_id": null,
