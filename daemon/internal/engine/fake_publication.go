@@ -2288,6 +2288,14 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	// like status and timing it never disqualifies an otherwise matching
 	// item during recovery.
 	normalized.BaseFreshness = expected.BaseFreshness
+	// Readiness invalidation is likewise recorded after creation, in the same
+	// transition that supersedes the item (§7, issue #496): the active-resource
+	// reconciler or the base-advance watch can set it during a crash seam before
+	// finishTask runs. Recovery must accept the resulting terminal item as
+	// compatible with the freshly derived ready shape rather than failing with
+	// "disagrees" and stranding the publication task; the transition check below
+	// still enforces that open -> superseded is a legal move.
+	normalized.ReadinessInvalidation = expected.ReadinessInvalidation
 	if !reflect.DeepEqual(normalized, expected) {
 		return false
 	}
