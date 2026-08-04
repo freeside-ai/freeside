@@ -21,7 +21,7 @@ func validTrustProfileInput() domain.AutomationTrustProfileInput {
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
 		Review: domain.ReviewSettings{
-			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config",
 		},
 		ProtectedPaths: domain.ProtectedPathConfig{
 			ExtraAutomationControlPatterns: []string{"deploy/**"},
@@ -265,7 +265,7 @@ func fullyPopulatedTrustProfileInput() domain.AutomationTrustProfileInput {
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
 		Review: domain.ReviewSettings{
-			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config",
 		},
 		ProtectedPaths: domain.ProtectedPathConfig{
 			ExtraAutomationControlPatterns:   []string{"deploy/**"},
@@ -279,7 +279,7 @@ func fullyPopulatedTrustProfileInput() domain.AutomationTrustProfileInput {
 	}
 }
 
-// TestTrustProfileDigestStability pins the v5 canonical form: a fixed,
+// TestTrustProfileDigestStability pins the v6 canonical form: a fixed,
 // fully-populated profile resolves to this digest on every build. A mismatch
 // means the canonical encoding changed without a version bump (or a bump
 // without repinning), either of which would read unchanged profiles as drift
@@ -289,9 +289,9 @@ func TestTrustProfileDigestStability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAutomationTrustProfile: %v", err)
 	}
-	const want = domain.Digest("sha256:61775dbfa6a865b12d308519cec0a4ea979d6644c7e2a5b859c01dbfd823d100")
+	const want = domain.Digest("sha256:b94adf427ed789a207d3e42b2e10022575defc54f3317fa739a5e7704eb2dd47")
 	if p.ProfileDigest != want {
-		t.Fatalf("v5 canonical digest = %q, want %q", p.ProfileDigest, want)
+		t.Fatalf("v6 canonical digest = %q, want %q", p.ProfileDigest, want)
 	}
 }
 

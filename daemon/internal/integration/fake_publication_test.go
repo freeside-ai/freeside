@@ -483,7 +483,7 @@ func newPublicationHarness(t *testing.T) *publicationHarness {
 		CommitPlan:                 domain.CommitPlanPlanPreferred, MessageRuleset: domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest: auditEvidence.Digest(),
 		Review: domain.ReviewSettings{
-			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: fake.DefaultReviewConfigurationDigest,
 		},
 	})
 	if err != nil {

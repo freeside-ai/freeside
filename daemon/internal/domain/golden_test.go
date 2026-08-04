@@ -214,7 +214,23 @@ func TestGolden(t *testing.T) {
 
 	finding := domain.Finding{
 		ID: "find-1", RunID: "run-1", Source: "codex_github",
-		Location: "daemon/main.go:42", Message: "unchecked error", RawText: "err not handled", CreatedAt: ts,
+		Severity: "medium", Location: "daemon/main.go:42", Message: "unchecked error", RawText: "err not handled", CreatedAt: ts,
+	}
+	reviewRecord, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: "review-run-1-1", RunID: "run-1", Round: 1,
+		Provider: "openai", ModelConfiguration: "gpt-5.2-codex/high",
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		CostOwner:           "subscription:owner", BaseSHA: "beefcafe", HeadSHA: "cafebabe",
+		CompletedAt: ts, CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
+		Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewFailure := domain.ReviewFailure{
+		InvocationID: "review-run-1-2", RunID: "run-1", Round: 2,
+		BaseSHA: "beefcafe", HeadSHA: "cafebabe", Class: domain.ReviewFailureQuota,
+		Reason: "provider quota exhausted", ObservedAt: ts,
 	}
 	classification := domain.Classification{
 		FindingID: "find-1", Version: 1, Materiality: "medium", Confidence: "high", Note: "worth fixing",
@@ -241,7 +257,7 @@ func TestGolden(t *testing.T) {
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
 		Review: domain.ReviewSettings{
-			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config",
 		},
 		ProtectedPaths: domain.ProtectedPathConfig{
 			ExtraAutomationControlPatterns:   []string{"deploy/**", "ci/*.sh", "deploy/**"},
@@ -748,6 +764,8 @@ func TestGolden(t *testing.T) {
 		{"device_credential", credential},
 		{"pairing_code", pairingCode},
 		{"finding", finding},
+		{"review_record", reviewRecord},
+		{"review_failure", reviewFailure},
 		{"classification", classification},
 		{"command_discuss", discussCommand},
 		{"conversation", conversation},

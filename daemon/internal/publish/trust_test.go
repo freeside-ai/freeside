@@ -38,7 +38,7 @@ func trustProfileForRepoID(t *testing.T, repo string, repositoryID int64) domain
 		CommitPlan:                 domain.CommitPlanSingleCommit,
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        evidence.Digest(),
-		Review:                     domain.ReviewSettings{Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config"},
+		Review:                     domain.ReviewSettings{Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config"},
 	})
 	if err != nil {
 		t.Fatalf("trustProfileForRepo: %v", err)

@@ -2,6 +2,7 @@ package fake_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,18 @@ import (
 // fixedTime keeps finding fixtures deterministic; the fakes themselves never
 // touch a clock.
 var fixedTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+func reviewRequest(head string) exec.ReviewRequest {
+	return exec.ReviewRequest{
+		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
+		BaseRef: "main", BaseSHA: "base-sha", HeadSHA: head,
+		Workspace: "/candidate", Verification: exec.ReviewVerificationEvidence{
+			Outcome:                domain.VerificationPassed,
+			RecipeDigest:           domain.Digest("sha256:" + strings.Repeat("c", 64)),
+			EvidenceSnapshotDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		}, RequestedAt: fixedTime,
+	}
+}
 
 // pollUntilResult drives Poll through scripted delivery lag and returns the
 // result plus how many polls returned not-ready (bounded, a runaway guard).
@@ -46,6 +59,7 @@ func TestReviewSourceFindingsPass(t *testing.T) {
 				ID:        "finding-1",
 				RunID:     "run-1",
 				Source:    "codex",
+				Severity:  "medium",
 				Location:  "daemon/internal/exec/driver.go:12",
 				Message:   "possible off-by-one",
 				CreatedAt: fixedTime,
@@ -53,7 +67,7 @@ func TestReviewSourceFindingsPass(t *testing.T) {
 		},
 	})
 
-	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
+	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); err != nil {
 		t.Fatal(err)
 	}
 	if status, err := s.Inspect(t.Context(), "inv-1"); err != nil || status != exec.StatusCompleted {
@@ -72,7 +86,7 @@ func TestReviewSourceFindingsPass(t *testing.T) {
 	if err := result.Validate(); err != nil {
 		t.Errorf("committed result must validate: %v", err)
 	}
-	if err := s.Verify(t.Context(), "inv-1", "cafebabe"); err != nil {
+	if err := s.Verify(t.Context(), "inv-1", "base-sha", "cafebabe"); err != nil {
 		t.Errorf("verify against the reviewed head = %v, want nil", err)
 	}
 }
@@ -86,7 +100,7 @@ func TestReviewSourceCleanPass(t *testing.T) {
 		Result:  exec.ReviewResult{HeadSHA: "cafebabe"},
 	})
 
-	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
+	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); err != nil {
 		t.Fatal(err)
 	}
 	result, _ := pollUntilResult(t, s, "inv-1")
@@ -96,7 +110,7 @@ func TestReviewSourceCleanPass(t *testing.T) {
 	if err := result.Validate(); err != nil {
 		t.Errorf("clean-pass result must validate: %v", err)
 	}
-	if err := s.Verify(t.Context(), "inv-1", "cafebabe"); err != nil {
+	if err := s.Verify(t.Context(), "inv-1", "base-sha", "cafebabe"); err != nil {
 		t.Errorf("verify = %v, want nil", err)
 	}
 }
@@ -111,7 +125,7 @@ func TestReviewSourceDuplicatePollAcceptsOnce(t *testing.T) {
 		Result:  exec.ReviewResult{HeadSHA: "cafebabe"},
 	})
 
-	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
+	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); err != nil {
 		t.Fatal(err)
 	}
 	acc := newAcceptor()
@@ -141,19 +155,19 @@ func TestReviewSourceStaleHeadFailsVerify(t *testing.T) {
 		Result:  exec.ReviewResult{HeadSHA: "0ld0ld"},
 	})
 
-	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "0ld0ld"}); err != nil {
+	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("0ld0ld")); err != nil {
 		t.Fatal(err)
 	}
 	// Freshness of an undelivered review is unknowable, not assumed.
-	if err := s.Verify(t.Context(), "inv-1", "0ld0ld"); !errors.Is(err, exec.ErrResultNotReady) {
+	if err := s.Verify(t.Context(), "inv-1", "base-sha", "0ld0ld"); !errors.Is(err, exec.ErrResultNotReady) {
 		t.Errorf("verify before result = %v, want ErrResultNotReady", err)
 	}
 	pollUntilResult(t, s, "inv-1")
 
-	if err := s.Verify(t.Context(), "inv-1", "n3wn3w"); !errors.Is(err, exec.ErrStaleHead) {
+	if err := s.Verify(t.Context(), "inv-1", "base-sha", "n3wn3w"); !errors.Is(err, exec.ErrStaleHead) {
 		t.Errorf("verify against a newer head = %v, want ErrStaleHead", err)
 	}
-	if err := s.Verify(t.Context(), "inv-1", "0ld0ld"); err != nil {
+	if err := s.Verify(t.Context(), "inv-1", "base-sha", "0ld0ld"); err != nil {
 		t.Errorf("verify against the reviewed head = %v, want nil", err)
 	}
 }
@@ -173,7 +187,7 @@ func TestReviewSourceResultHeadMismatchFailsVerify(t *testing.T) {
 		Result:  exec.ReviewResult{HeadSHA: "headB"},
 	})
 
-	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "headA"}); err != nil {
+	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("headA")); err != nil {
 		t.Fatal(err)
 	}
 	// Poll delivers the committed (mis-headed) result unchanged: binding is
@@ -186,12 +200,12 @@ func TestReviewSourceResultHeadMismatchFailsVerify(t *testing.T) {
 	// Verify against the result's own head: the freshness comparison would
 	// pass (headB == headB), but binding fails first because the request
 	// committed headA.
-	if err := s.Verify(t.Context(), "inv-1", "headB"); !errors.Is(err, fake.ErrResultHeadMismatch) {
+	if err := s.Verify(t.Context(), "inv-1", "base-sha", "headB"); !errors.Is(err, fake.ErrResultHeadMismatch) {
 		t.Errorf("verify against the result head = %v, want ErrResultHeadMismatch", err)
 	}
 	// Verify against the requested head fails too: the result never ran
 	// against headA, so no expected head can bind it.
-	if err := s.Verify(t.Context(), "inv-1", "headA"); !errors.Is(err, fake.ErrResultHeadMismatch) {
+	if err := s.Verify(t.Context(), "inv-1", "base-sha", "headA"); !errors.Is(err, fake.ErrResultHeadMismatch) {
 		t.Errorf("verify against the requested head = %v, want ErrResultHeadMismatch", err)
 	}
 }
@@ -207,7 +221,7 @@ func TestReviewSourceDelayedReview(t *testing.T) {
 		Result:          exec.ReviewResult{HeadSHA: "cafebabe"},
 	})
 
-	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
+	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); err != nil {
 		t.Fatal(err)
 	}
 	if status, err := s.Inspect(t.Context(), "inv-1"); err != nil || status != exec.StatusRunning {
@@ -234,7 +248,7 @@ func TestReviewSourceFailedOutcome(t *testing.T) {
 		Result:  exec.ReviewResult{HeadSHA: "cafebabe"},
 	})
 
-	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
+	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); err != nil {
 		t.Fatal(err)
 	}
 	if status, err := s.Inspect(t.Context(), "inv-1"); err != nil || status != exec.StatusFailed {
@@ -243,7 +257,7 @@ func TestReviewSourceFailedOutcome(t *testing.T) {
 	if _, err := s.Poll(t.Context(), "inv-1"); !errors.Is(err, exec.ErrNoResult) {
 		t.Errorf("poll of a failed review = %v, want ErrNoResult", err)
 	}
-	if err := s.Verify(t.Context(), "inv-1", "cafebabe"); !errors.Is(err, exec.ErrNoResult) {
+	if err := s.Verify(t.Context(), "inv-1", "base-sha", "cafebabe"); !errors.Is(err, exec.ErrNoResult) {
 		t.Errorf("verify of a failed review = %v, want ErrNoResult", err)
 	}
 }
@@ -260,13 +274,13 @@ func TestReviewSourceFailedWaitsForExecution(t *testing.T) {
 		Result:          exec.ReviewResult{HeadSHA: "cafebabe"},
 	})
 
-	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
+	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Poll(t.Context(), "inv-1"); !errors.Is(err, exec.ErrResultNotReady) {
 		t.Errorf("poll while still running = %v, want ErrResultNotReady", err)
 	}
-	if err := s.Verify(t.Context(), "inv-1", "cafebabe"); !errors.Is(err, exec.ErrResultNotReady) {
+	if err := s.Verify(t.Context(), "inv-1", "base-sha", "cafebabe"); !errors.Is(err, exec.ErrResultNotReady) {
 		t.Errorf("verify while still running = %v, want ErrResultNotReady", err)
 	}
 
@@ -281,7 +295,7 @@ func TestReviewSourceFailedWaitsForExecution(t *testing.T) {
 	if _, err := s.Poll(t.Context(), "inv-1"); !errors.Is(err, exec.ErrNoResult) {
 		t.Errorf("poll after failure = %v, want ErrNoResult", err)
 	}
-	if err := s.Verify(t.Context(), "inv-1", "cafebabe"); !errors.Is(err, exec.ErrNoResult) {
+	if err := s.Verify(t.Context(), "inv-1", "base-sha", "cafebabe"); !errors.Is(err, exec.ErrNoResult) {
 		t.Errorf("verify after failure = %v, want ErrNoResult", err)
 	}
 }
@@ -295,7 +309,7 @@ func TestReviewSourceCrashBeforeResult(t *testing.T) {
 		Result:  exec.ReviewResult{HeadSHA: "cafebabe"},
 	})
 
-	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
+	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); err != nil {
 		t.Fatal(err)
 	}
 	if status, err := s.Inspect(t.Context(), "inv-1"); err != nil || status != exec.StatusGone {
@@ -316,7 +330,7 @@ func TestReviewSourceCrashAfterResultRecoverable(t *testing.T) {
 		Result:  exec.ReviewResult{HeadSHA: "cafebabe"},
 	})
 
-	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{RunID: "run-1", HeadSHA: "cafebabe"}); err != nil {
+	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); err != nil {
 		t.Fatal(err)
 	}
 	if status, err := s.Inspect(t.Context(), "inv-1"); err != nil || status != exec.StatusGone {
@@ -338,7 +352,7 @@ func TestReviewSourceCrashAfterResultRecoverable(t *testing.T) {
 	if acc.accept(t, "inv-1", second) {
 		t.Error("second poll accepted as a new result; want identical replay")
 	}
-	if err := s.Verify(t.Context(), "inv-1", "cafebabe"); err != nil {
+	if err := s.Verify(t.Context(), "inv-1", "base-sha", "cafebabe"); err != nil {
 		t.Errorf("verify the recovered result = %v, want nil", err)
 	}
 }
@@ -349,13 +363,13 @@ func TestReviewSourceGuards(t *testing.T) {
 	s := fake.NewReviewSource()
 	s.Script("inv-1", fake.ReviewScript{Outcome: fake.OutcomeComplete, Result: exec.ReviewResult{HeadSHA: "cafebabe"}})
 
-	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{}); err != nil {
+	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RequestReview(t.Context(), "inv-1", exec.ReviewRequest{}); !errors.Is(err, exec.ErrDuplicateStart) {
+	if err := s.RequestReview(t.Context(), "inv-1", reviewRequest("cafebabe")); !errors.Is(err, exec.ErrDuplicateStart) {
 		t.Errorf("second request = %v, want ErrDuplicateStart", err)
 	}
-	if err := s.RequestReview(t.Context(), "inv-unscripted", exec.ReviewRequest{}); !errors.Is(err, fake.ErrUnscripted) {
+	if err := s.RequestReview(t.Context(), "inv-unscripted", reviewRequest("cafebabe")); !errors.Is(err, fake.ErrUnscripted) {
 		t.Errorf("unscripted request = %v, want ErrUnscripted", err)
 	}
 	if _, err := s.Inspect(t.Context(), "inv-unknown"); !errors.Is(err, exec.ErrUnknownInvocation) {
@@ -364,7 +378,7 @@ func TestReviewSourceGuards(t *testing.T) {
 	if _, err := s.Poll(t.Context(), "inv-unknown"); !errors.Is(err, exec.ErrUnknownInvocation) {
 		t.Errorf("unknown poll = %v, want ErrUnknownInvocation", err)
 	}
-	if err := s.Verify(t.Context(), "inv-unknown", "head"); !errors.Is(err, exec.ErrUnknownInvocation) {
+	if err := s.Verify(t.Context(), "inv-unknown", "base-sha", "head"); !errors.Is(err, exec.ErrUnknownInvocation) {
 		t.Errorf("unknown verify = %v, want ErrUnknownInvocation", err)
 	}
 }

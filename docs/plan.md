@@ -488,15 +488,15 @@ repository_security:
                                              # registry at profile review,
                                              # digest-bound
   workflow_audit_digest: sha256:...
-  review: {mode: auto | framework_triggered, config_digest: sha256:...}
-                                             # native-trigger vocabulary,
-                                             # superseded by the revision-25
-                                             # Freeside-invoked review stage
-                                             # (Section 7): this field and
-                                             # its domain enum migrate with
-                                             # the #427 contract unit, and
-                                             # native review becomes
-                                             # observation-only
+  review: {mode: freeside_invoked, config_digest: sha256:...}
+                                             # Freeside-owned production
+                                             # review stage (Section 7);
+                                             # historical auto and
+                                             # framework_triggered profiles
+                                             # require owner re-approval
+                                             # under the versioned digest;
+                                             # native review is observation-
+                                             # only evidence
 ```
 
 The audit attests the PR job's **effective authority**, including:

@@ -16,7 +16,7 @@
   "message_ruleset": "github/1",
   "workflow_audit_digest": "sha256:workflow-audit",
   "review": {
-    "mode": "auto",
+    "mode": "freeside_invoked",
     "config_digest": "sha256:review-config"
   },
   "protected_paths": {
@@ -38,5 +38,5 @@
       "docs/plan.md"
     ]
   },
-  "profile_digest": "sha256:9d6b02249b80b5348d5be813f37c8cf2a2df3f5bea9122b085cc3f7dd93f935e"
+  "profile_digest": "sha256:bed60edca142c75b455ddd75668afdd452cfb5bfe6dfe5bf847815cb816ec436"
 }

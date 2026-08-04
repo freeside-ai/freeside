@@ -5,15 +5,70 @@
 package wardstore
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
+
+func marshalCodexReview(value any) ([]byte, error) {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("marshal Codex review journal: %w", err)
+	}
+	return body, nil
+}
+
+func decodeCodexReview[T any](body []byte) (T, error) {
+	var value T
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		return value, fmt.Errorf("decode Codex review journal: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return value, errors.New("decode Codex review journal: trailing JSON value")
+	}
+	return value, nil
+}
+
+func classifyCodexReviewMutation(err error) error {
+	if errors.Is(err, store.ErrImmutableConflict) {
+		return errors.Join(ward.ErrConformance, err)
+	}
+	return err
+}
+
+func verifyCodexReviewBody(record store.CodexReviewOpaqueRecord) error {
+	bodyDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(record.Body))
+	if record.BodyDigest != bodyDigest {
+		return fmt.Errorf(
+			"persisted body digest %q does not match %q", record.BodyDigest, bodyDigest)
+	}
+	return nil
+}
+
+func verifyCodexReviewStateBody(record store.CodexReviewOpaqueRecord) error {
+	authority := make([]byte, 0, len(record.State)+1+len(record.Body))
+	authority = append(authority, record.State...)
+	authority = append(authority, 0)
+	authority = append(authority, record.Body...)
+	bodyDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(authority))
+	if record.BodyDigest != bodyDigest {
+		return fmt.Errorf(
+			"persisted state/body digest %q does not match %q", record.BodyDigest, bodyDigest)
+	}
+	return nil
+}
 
 // Adapters groups the two production ports backed by one open Store. They are
 // separate Go types because AuthStoreLeaser.Get and HandoffJournal.Get
@@ -42,6 +97,390 @@ func New(st *store.Store) (*Adapters, error) {
 		Journal: &Journal{store: st},
 		Leaser:  &Leaser{store: st},
 	}, nil
+}
+
+func (a *Journal) PutCodexReviewWorkspaceBinding(
+	ctx context.Context, binding ward.CodexReviewWorkspaceBinding,
+) error {
+	body, err := marshalCodexReview(binding)
+	if err != nil {
+		return err
+	}
+	var existing store.CodexReviewOpaqueRecord
+	err = a.store.Read(ctx, func(tx *store.ReadTx) error {
+		var readErr error
+		existing, readErr = tx.GetCodexReviewWorkspace(ctx, binding.SourceRunID)
+		return readErr
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return classifyCodexReviewMutation(a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			return tx.RecordCodexReviewWorkspace(ctx, binding.SourceRunID, binding.Volume, body)
+		}))
+	}
+	if err != nil {
+		return err
+	}
+	if err := verifyCodexReviewBody(existing); err != nil {
+		return errors.Join(ward.ErrConformance, err)
+	}
+	prior, err := decodeCodexReview[ward.CodexReviewWorkspaceBinding](existing.Body)
+	if err != nil {
+		return errors.Join(ward.ErrConformance, err)
+	}
+	if prior == binding {
+		return nil
+	}
+	if prior.SourceRunID != binding.SourceRunID || prior.Volume != binding.Volume ||
+		prior.OwnershipToken != binding.OwnershipToken || prior.CreationFingerprint != "" ||
+		binding.CreationFingerprint == "" {
+		return errors.Join(ward.ErrConformance, store.ErrImmutableConflict)
+	}
+	return classifyCodexReviewMutation(a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.FinalizeCodexReviewWorkspace(ctx, binding.SourceRunID, existing.Body, body)
+	}))
+}
+
+func (a *Journal) PutCodexReviewRequest(
+	ctx context.Context, id string, request exec.ReviewRequest,
+) error {
+	if err := request.Validate(); err != nil {
+		return err
+	}
+	body, err := marshalCodexReview(request)
+	if err != nil {
+		return err
+	}
+	return classifyCodexReviewMutation(a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordCodexReviewRequest(ctx, id, body)
+	}))
+}
+
+func (a *Journal) GetCodexReviewRequest(
+	ctx context.Context, id string,
+) (exec.ReviewRequest, error) {
+	var record store.CodexReviewOpaqueRecord
+	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		record, err = tx.GetCodexReviewRequest(ctx, id)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return exec.ReviewRequest{}, exec.ErrUnknownInvocation
+	}
+	if err != nil {
+		return exec.ReviewRequest{}, err
+	}
+	if err := verifyCodexReviewBody(record); err != nil {
+		return exec.ReviewRequest{}, errors.Join(ward.ErrCodexReviewRequestRejected, err)
+	}
+	request, err := decodeCodexReview[exec.ReviewRequest](record.Body)
+	if err != nil {
+		return exec.ReviewRequest{}, errors.Join(ward.ErrCodexReviewRequestRejected, err)
+	}
+	if err := request.Validate(); err != nil {
+		return exec.ReviewRequest{}, errors.Join(ward.ErrCodexReviewRequestRejected, err)
+	}
+	return request, nil
+}
+
+func (a *Journal) PutCodexReviewOutcome(
+	ctx context.Context, id string, outcome ward.CodexReviewSourceOutcome,
+) error {
+	if err := outcome.Validate(); err != nil {
+		return err
+	}
+	if outcome.InvocationID != domain.InvocationID(id) {
+		return domain.ErrParentKeyMismatch
+	}
+	body, err := marshalCodexReview(outcome)
+	if err != nil {
+		return err
+	}
+	return classifyCodexReviewMutation(a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordCodexReviewOutcome(ctx, id, body)
+	}))
+}
+
+func (a *Journal) GetCodexReviewOutcome(
+	ctx context.Context, id string,
+) (ward.CodexReviewSourceOutcome, bool, error) {
+	var record store.CodexReviewOpaqueRecord
+	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		record, err = tx.GetCodexReviewOutcome(ctx, id)
+		return err
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return ward.CodexReviewSourceOutcome{}, false, ward.ErrCodexReviewOutcomeNotFound
+		}
+		return ward.CodexReviewSourceOutcome{}, false, err
+	}
+	if err := verifyCodexReviewStateBody(record); err != nil {
+		return ward.CodexReviewSourceOutcome{}, false, errors.Join(
+			ward.ErrCodexReviewOutcomeRejected, err)
+	}
+	outcome, err := decodeCodexReview[ward.CodexReviewSourceOutcome](record.Body)
+	if err != nil {
+		return ward.CodexReviewSourceOutcome{}, false,
+			errors.Join(ward.ErrCodexReviewOutcomeRejected, err)
+	}
+	if err := outcome.Validate(); err != nil {
+		return ward.CodexReviewSourceOutcome{}, false,
+			errors.Join(ward.ErrCodexReviewOutcomeRejected, err)
+	}
+	if outcome.InvocationID != domain.InvocationID(id) {
+		return ward.CodexReviewSourceOutcome{}, false,
+			errors.Join(ward.ErrCodexReviewOutcomeRejected, domain.ErrParentKeyMismatch)
+	}
+	return outcome, record.State == "ready", nil
+}
+
+func (a *Journal) MarkCodexReviewOutcomeReady(ctx context.Context, id string) error {
+	return classifyCodexReviewMutation(a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.MarkCodexReviewOutcomeReady(ctx, id)
+	}))
+}
+
+func (a *Journal) GetCodexReviewWorkspaceBinding(
+	ctx context.Context, sourceRunID string,
+) (ward.CodexReviewWorkspaceBinding, error) {
+	var record store.CodexReviewOpaqueRecord
+	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		record, err = tx.GetCodexReviewWorkspace(ctx, sourceRunID)
+		return err
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return ward.CodexReviewWorkspaceBinding{}, ward.ErrCodexReviewWorkspaceNotFound
+		}
+		return ward.CodexReviewWorkspaceBinding{}, err
+	}
+	if err := verifyCodexReviewBody(record); err != nil {
+		return ward.CodexReviewWorkspaceBinding{}, errors.Join(ward.ErrConformance, err)
+	}
+	binding, err := decodeCodexReview[ward.CodexReviewWorkspaceBinding](record.Body)
+	if err != nil {
+		return ward.CodexReviewWorkspaceBinding{}, errors.Join(ward.ErrConformance, err)
+	}
+	if binding.SourceRunID != sourceRunID || binding.Volume != record.Key {
+		return ward.CodexReviewWorkspaceBinding{},
+			errors.Join(ward.ErrConformance, domain.ErrParentKeyMismatch)
+	}
+	return binding, nil
+}
+
+func (a *Journal) ListCodexReviewWorkspaceIDs(ctx context.Context) ([]string, error) {
+	var ids []string
+	if err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		ids, err = tx.ListCodexReviewWorkspaceIDs(ctx)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+func (a *Journal) DeleteCodexReviewWorkspaceBinding(
+	ctx context.Context, binding ward.CodexReviewWorkspaceBinding,
+) error {
+	body, err := marshalCodexReview(binding)
+	if err != nil {
+		return err
+	}
+	return classifyCodexReviewMutation(a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.DeleteCodexReviewWorkspace(ctx, binding.SourceRunID, binding.Volume, body)
+	}))
+}
+
+func (a *Journal) BeginCodexReviewIntent(
+	ctx context.Context, intent ward.CodexReviewLaunchIntent,
+) error {
+	body, err := marshalCodexReview(intent)
+	if err != nil {
+		return err
+	}
+	return classifyCodexReviewMutation(a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.BeginCodexReviewIntent(ctx, intent.RunID, string(intent.State), body)
+	}))
+}
+
+func (a *Journal) GetCodexReviewIntent(
+	ctx context.Context, runID string,
+) (ward.CodexReviewLaunchIntent, error) {
+	var record store.CodexReviewOpaqueRecord
+	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		record, err = tx.GetCodexReviewIntent(ctx, runID)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return ward.CodexReviewLaunchIntent{}, ward.ErrCodexReviewIntentNotFound
+	}
+	if err != nil {
+		return ward.CodexReviewLaunchIntent{}, err
+	}
+	if err := verifyCodexReviewStateBody(record); err != nil {
+		return ward.CodexReviewLaunchIntent{}, errors.Join(ward.ErrConformance, err)
+	}
+	intent, err := decodeCodexReview[ward.CodexReviewLaunchIntent](record.Body)
+	if err != nil {
+		return ward.CodexReviewLaunchIntent{}, errors.Join(ward.ErrConformance, err)
+	}
+	if string(intent.State) != record.State || intent.RunID != runID {
+		return ward.CodexReviewLaunchIntent{}, errors.Join(ward.ErrConformance, domain.ErrParentKeyMismatch)
+	}
+	return intent, nil
+}
+
+func (a *Journal) ListCodexReviewIntentIDs(ctx context.Context) ([]string, error) {
+	var ids []string
+	if err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		ids, err = tx.ListCodexReviewIntentIDs(ctx)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+func (a *Journal) updateCodexReviewIntent(
+	ctx context.Context,
+	runID string,
+	mutate func(*ward.CodexReviewLaunchIntent) error,
+) error {
+	return classifyCodexReviewMutation(a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		record, err := tx.GetCodexReviewIntent(ctx, runID)
+		if err != nil {
+			return err
+		}
+		if err := verifyCodexReviewStateBody(record); err != nil {
+			return errors.Join(ward.ErrConformance, err)
+		}
+		intent, err := decodeCodexReview[ward.CodexReviewLaunchIntent](record.Body)
+		if err != nil {
+			return errors.Join(ward.ErrConformance, err)
+		}
+		if intent.RunID != runID || string(intent.State) != record.State {
+			return errors.Join(ward.ErrConformance, domain.ErrParentKeyMismatch)
+		}
+		before := append([]byte(nil), record.Body...)
+		beforeState := intent.State
+		if err := mutate(&intent); err != nil {
+			if errors.Is(err, store.ErrImmutableConflict) ||
+				errors.Is(err, domain.ErrParentKeyMismatch) {
+				return errors.Join(ward.ErrConformance, err)
+			}
+			return err
+		}
+		after, err := marshalCodexReview(intent)
+		if err != nil {
+			return err
+		}
+		return tx.UpdateCodexReviewIntent(ctx, runID, string(beforeState), string(intent.State), before, after)
+	}))
+}
+
+func (a *Journal) MarkCodexReviewIntentResource(
+	ctx context.Context, runID string, resource ward.CodexReviewIntentResource,
+) error {
+	return a.updateCodexReviewIntent(ctx, runID, func(intent *ward.CodexReviewLaunchIntent) error {
+		if intent.State != ward.CodexReviewIntentPreparing {
+			return store.ErrImmutableConflict
+		}
+		for i := range intent.Resources {
+			if intent.Resources[i].Name == resource.Name {
+				intent.Resources[i] = resource
+				return nil
+			}
+		}
+		return domain.ErrParentKeyMismatch
+	})
+}
+
+func (a *Journal) transitionCodexReviewIntent(
+	ctx context.Context, runID string,
+	from []ward.CodexReviewIntentState, to ward.CodexReviewIntentState,
+) error {
+	return a.updateCodexReviewIntent(ctx, runID, func(intent *ward.CodexReviewLaunchIntent) error {
+		for _, allowed := range from {
+			if intent.State == allowed {
+				intent.State = to
+				return nil
+			}
+		}
+		if intent.State == to {
+			return nil
+		}
+		return store.ErrImmutableConflict
+	})
+}
+
+func (a *Journal) MarkCodexReviewIntentPrepared(ctx context.Context, runID string) error {
+	return a.transitionCodexReviewIntent(ctx, runID,
+		[]ward.CodexReviewIntentState{ward.CodexReviewIntentPreparing}, ward.CodexReviewIntentPrepared)
+}
+
+func (a *Journal) MarkCodexReviewIntentStarting(ctx context.Context, runID string) error {
+	return a.transitionCodexReviewIntent(ctx, runID,
+		[]ward.CodexReviewIntentState{ward.CodexReviewIntentPrepared}, ward.CodexReviewIntentStarting)
+}
+
+func (a *Journal) MarkCodexReviewIntentStarted(ctx context.Context, runID string) error {
+	return a.transitionCodexReviewIntent(ctx, runID,
+		[]ward.CodexReviewIntentState{ward.CodexReviewIntentStarting}, ward.CodexReviewIntentStarted)
+}
+
+func (a *Journal) CloseCodexReviewIntent(ctx context.Context, runID string) error {
+	return a.transitionCodexReviewIntent(ctx, runID,
+		[]ward.CodexReviewIntentState{
+			ward.CodexReviewIntentPreparing, ward.CodexReviewIntentPrepared,
+			ward.CodexReviewIntentStarting, ward.CodexReviewIntentStarted,
+		}, ward.CodexReviewIntentClosed)
+}
+
+func (a *Journal) PutCodexReviewBinding(
+	ctx context.Context, binding ward.CodexReviewJournalBinding,
+) error {
+	body, err := marshalCodexReview(binding)
+	if err != nil {
+		return err
+	}
+	return classifyCodexReviewMutation(a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordCodexReviewBinding(ctx, binding.RunID, body)
+	}))
+}
+
+func (a *Journal) GetCodexReviewBinding(
+	ctx context.Context, runID string,
+) (ward.CodexReviewJournalBinding, error) {
+	var record store.CodexReviewOpaqueRecord
+	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		record, err = tx.GetCodexReviewBinding(ctx, runID)
+		return err
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return ward.CodexReviewJournalBinding{}, ward.ErrCodexReviewBindingNotFound
+		}
+		return ward.CodexReviewJournalBinding{}, err
+	}
+	if err := verifyCodexReviewBody(record); err != nil {
+		return ward.CodexReviewJournalBinding{}, errors.Join(ward.ErrConformance, err)
+	}
+	binding, err := decodeCodexReview[ward.CodexReviewJournalBinding](record.Body)
+	if err != nil {
+		return ward.CodexReviewJournalBinding{}, errors.Join(ward.ErrConformance, err)
+	}
+	if binding.RunID != runID {
+		return ward.CodexReviewJournalBinding{},
+			errors.Join(ward.ErrConformance, domain.ErrParentKeyMismatch)
+	}
+	return binding, nil
 }
 
 // AuthStoreVolume returns the trusted identity-to-volume binding.

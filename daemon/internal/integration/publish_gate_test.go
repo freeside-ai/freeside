@@ -165,7 +165,7 @@ func conformantTrust(t *testing.T, headSHA string) (domain.AutomationTrustProfil
 		CommitPlan:                 domain.CommitPlanSingleCommit,
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        evidence.Digest(),
-		Review:                     domain.ReviewSettings{Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config"},
+		Review:                     domain.ReviewSettings{Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config"},
 	})
 	if err != nil {
 		t.Fatalf("NewAutomationTrustProfile: %v", err)

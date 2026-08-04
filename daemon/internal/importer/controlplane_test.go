@@ -24,7 +24,7 @@ func fixtureTrustProfile(t *testing.T) domain.AutomationTrustProfile {
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:workflow-audit",
 		Review: domain.ReviewSettings{
-			Mode: domain.ReviewAuto, ConfigDigest: "sha256:review-config",
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config",
 		},
 		ProtectedPaths: domain.ProtectedPathConfig{
 			ExtraAutomationControlPatterns:   []string{"ci/**"},

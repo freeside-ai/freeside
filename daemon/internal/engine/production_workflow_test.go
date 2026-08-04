@@ -29,6 +29,30 @@ func productionEntry(payload string) store.QueueEntry {
 	}
 }
 
+func TestNormalizeTerminalReviewFailurePreservesDeclaredClass(t *testing.T) {
+	for _, class := range []domain.ReviewFailureClass{
+		domain.ReviewFailureTransient,
+		domain.ReviewFailureConfiguration,
+		domain.ReviewFailureQuota,
+		domain.ReviewFailureContradiction,
+	} {
+		t.Run(string(class), func(t *testing.T) {
+			declared := &exec.ReviewSourceFailure{
+				Class: class, Err: errors.New("terminal source failure"),
+			}
+			err := normalizeTerminalReviewFailure(errors.Join(exec.ErrNoResult, declared))
+			if exec.ClassifyReviewSourceFailure(err) != class || !errors.Is(err, exec.ErrNoResult) {
+				t.Fatalf("normalized %s failure = %v", class, err)
+			}
+		})
+	}
+	bare := normalizeTerminalReviewFailure(exec.ErrNoResult)
+	if exec.ClassifyReviewSourceFailure(bare) != domain.ReviewFailureTransient ||
+		!errors.Is(bare, exec.ErrNoResult) {
+		t.Fatalf("normalized bare no-result = %v", bare)
+	}
+}
+
 func TestProductionHoldRetryPruning(t *testing.T) {
 	w := productionPublicationWorkflow{holdRetryAfter: map[domain.RunID]time.Time{
 		"run-pending":  time.Unix(1, 0),

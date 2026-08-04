@@ -569,21 +569,72 @@ func (m TokenPermissionsMode) valid() bool {
 	}
 }
 
-// ReviewMode is how automated review is triggered for the repository (plan
-// §5.5): automatically on PR events, or only when the framework requests it.
+// ReviewMode is the production review binding approved for the repository
+// (plan §5.5, §7). GitHub-native review is observation-only evidence and is
+// deliberately absent from this authority vocabulary.
 type ReviewMode string
 
 const (
-	ReviewAuto               ReviewMode = "auto"
-	ReviewFrameworkTriggered ReviewMode = "framework_triggered"
+	ReviewFreesideInvoked ReviewMode = "freeside_invoked"
 )
 
 // AllReviewModes lists every valid ReviewMode.
-var AllReviewModes = []ReviewMode{ReviewAuto, ReviewFrameworkTriggered}
+var AllReviewModes = []ReviewMode{ReviewFreesideInvoked}
 
 func (m ReviewMode) valid() bool {
 	switch m {
-	case ReviewAuto, ReviewFrameworkTriggered:
+	case ReviewFreesideInvoked:
+		return true
+	default:
+		return false
+	}
+}
+
+// ReviewOutcome is the result of one completed, exact-base/head review pass.
+// The zero value is invalid by design.
+type ReviewOutcome string
+
+const (
+	ReviewClean    ReviewOutcome = "clean"
+	ReviewFindings ReviewOutcome = "findings"
+)
+
+// AllReviewOutcomes lists every valid ReviewOutcome.
+var AllReviewOutcomes = []ReviewOutcome{ReviewClean, ReviewFindings}
+
+func (o ReviewOutcome) valid() bool {
+	switch o {
+	case ReviewClean, ReviewFindings:
+		return true
+	default:
+		return false
+	}
+}
+
+// ReviewFailureClass routes a review invocation that did not produce a
+// result. Transient failures retry with backoff, configuration and quota
+// failures become durable attention, and contradictions fail loudly.
+type ReviewFailureClass string
+
+const (
+	ReviewFailureTransient     ReviewFailureClass = "transient"
+	ReviewFailureConfiguration ReviewFailureClass = "configuration"
+	ReviewFailureQuota         ReviewFailureClass = "quota"
+	ReviewFailureContradiction ReviewFailureClass = "contradiction"
+)
+
+// AllReviewFailureClasses lists every valid ReviewFailureClass.
+var AllReviewFailureClasses = []ReviewFailureClass{
+	ReviewFailureTransient,
+	ReviewFailureConfiguration,
+	ReviewFailureQuota,
+	ReviewFailureContradiction,
+}
+
+func (c ReviewFailureClass) valid() bool {
+	switch c {
+	case ReviewFailureTransient, ReviewFailureConfiguration,
+		ReviewFailureQuota, ReviewFailureContradiction:
 		return true
 	default:
 		return false

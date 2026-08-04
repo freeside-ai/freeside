@@ -1,0 +1,10 @@
+{
+  "invocation_id": "review-run-1-2",
+  "run_id": "run-1",
+  "round": 2,
+  "base_sha": "beefcafe",
+  "head_sha": "cafebabe",
+  "class": "quota",
+  "reason": "provider quota exhausted",
+  "observed_at": "2026-01-02T03:04:05Z"
+}

@@ -57,6 +57,7 @@ func (r *productionRoom) Run(
 }
 
 type productionCrashSeams struct {
+	reviewRecovery    func(context.Context) error
 	afterVerification func() error
 	afterPublication  func() error
 	afterReady        func() error
@@ -65,17 +66,108 @@ type productionCrashSeams struct {
 	afterLockRelease  func() error
 }
 
+type faultReviewSource struct {
+	exec.ReviewSource
+	requestCalls          int
+	inspectCalls          int
+	failInspectAt         int
+	pollCalls             int
+	failPollAt            int
+	failPollWith          error
+	verifyCalls           int
+	failVerifyAt          int
+	failVerifyWith        error
+	failAuthorityWith     error
+	failRequestAfterStart bool
+	requestedWorkspace    string
+}
+
+func (s *faultReviewSource) RequestReview(
+	ctx context.Context, id domain.InvocationID, req exec.ReviewRequest,
+) error {
+	s.requestCalls++
+	if err := s.ReviewSource.RequestReview(ctx, id, req); err != nil {
+		return err
+	}
+	s.requestedWorkspace = req.Workspace
+	if s.failRequestAfterStart {
+		s.failRequestAfterStart = false
+		return &exec.ReviewSourceFailure{
+			Class: domain.ReviewFailureTransient,
+			Err:   errors.New("injected transient review preparation failure"),
+		}
+	}
+	return nil
+}
+
+func (s *faultReviewSource) Inspect(
+	ctx context.Context, id domain.InvocationID,
+) (exec.Status, error) {
+	s.inspectCalls++
+	if s.inspectCalls == s.failInspectAt {
+		return "", &exec.ReviewSourceFailure{
+			Class: domain.ReviewFailureTransient,
+			Err:   errors.New("injected transient review inspection failure"),
+		}
+	}
+	return s.ReviewSource.Inspect(ctx, id)
+}
+
+func (s *faultReviewSource) Poll(
+	ctx context.Context, id domain.InvocationID,
+) (exec.ReviewResult, error) {
+	s.pollCalls++
+	if s.pollCalls == s.failPollAt {
+		return exec.ReviewResult{}, s.failPollWith
+	}
+	return s.ReviewSource.Poll(ctx, id)
+}
+
+func (s *faultReviewSource) Verify(
+	ctx context.Context, id domain.InvocationID, expectedBase, expectedHead string,
+) error {
+	s.verifyCalls++
+	if s.verifyCalls == s.failVerifyAt {
+		if s.failVerifyWith != nil {
+			return s.failVerifyWith
+		}
+		return &exec.ReviewSourceFailure{
+			Class: domain.ReviewFailureTransient,
+			Err:   errors.New("injected transient review verification failure"),
+		}
+	}
+	return s.ReviewSource.Verify(ctx, id, expectedBase, expectedHead)
+}
+
+func (s *faultReviewSource) VerifyRequestAuthority(
+	ctx context.Context, id domain.InvocationID, expected domain.Digest,
+) error {
+	if s.failAuthorityWith != nil {
+		return s.failAuthorityWith
+	}
+	verifier, ok := s.ReviewSource.(exec.ReviewRequestAuthorityVerifier)
+	if !ok {
+		return errors.New("wrapped review source does not verify request authority")
+	}
+	return verifier.VerifyRequestAuthority(ctx, id, expected)
+}
+
 type productionPublicationHarness struct {
 	*publicationHarness
-	runID             domain.RunID
-	projectID         domain.ProjectID
-	image             domain.ProjectImage
-	driver            *fake.StageDriver
-	replay            engine.ProductionReplay
-	room              *productionRoom
-	workflow          *engine.Engine
-	invocation        domain.InvocationID
-	recipeReadTimeout time.Duration
+	runID                     domain.RunID
+	projectID                 domain.ProjectID
+	image                     domain.ProjectImage
+	driver                    *fake.StageDriver
+	replay                    engine.ProductionReplay
+	room                      *productionRoom
+	reviewer                  *fake.ReviewSource
+	reviewSource              exec.ReviewSource
+	reviewConfigurationDigest domain.Digest
+	observedBase              string
+	observedHead              string
+	workflow                  *engine.Engine
+	invocation                domain.InvocationID
+	recipeReadTimeout         time.Duration
 }
 
 func newProductionPublicationHarness(t *testing.T, resultHead string) *productionPublicationHarness {
@@ -145,9 +237,13 @@ func newProductionPublicationHarness(t *testing.T, resultHead string) *productio
 	p := &productionPublicationHarness{
 		publicationHarness: h, runID: runID, projectID: projectID,
 		image: image, driver: driver, replay: replay,
-		room:       &productionRoom{recipe: bytes.Clone(h.recipe)},
-		invocation: submitted.InvocationID,
+		room:     &productionRoom{recipe: bytes.Clone(h.recipe)},
+		reviewer: fake.NewReviewSource(), observedBase: h.baseSHA,
+		reviewConfigurationDigest: fake.DefaultReviewConfigurationDigest,
+		observedHead:              replay.HeadSHA,
+		invocation:                submitted.InvocationID,
 	}
+	p.reviewSource = p.reviewer
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	return p
 }
@@ -335,14 +431,40 @@ func (p *productionPublicationHarness) newEngineForMode(
 		}),
 	}
 	if withPublication {
+		reviewRecovery := seams.reviewRecovery
+		if reviewRecovery == nil {
+			reviewRecovery = func(context.Context) error { return nil }
+		}
+		reviewID := engine.ProductionReviewInvocationID(p.runID, 1)
+		p.reviewer.Script(reviewID, fake.ReviewScript{
+			Outcome: fake.OutcomeComplete,
+			Result: exec.ReviewResult{
+				BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+				Provider: "openai", ModelConfiguration: "codex/test",
+				CostOwner: "test", CompletedAt: p.now.UTC(),
+				CompletionEvidence: productionDigest([]byte("clean review")),
+			},
+		})
 		options = append(options, engine.WithProductionPublication(engine.ProductionPublicationConfig{
 			WorkDir:   filepath.Join(p.workDir, "production-publication"),
 			Transport: p.transport, Publisher: p.newPublisher(t), Artifacts: p.blobs,
-			ApprovedRecipes:   approvedRecipes,
-			HoldOnly:          holdOnly,
-			RecipeReadTimeout: p.recipeReadTimeout,
-			HoldRetryInterval: time.Minute,
-			Now:               func() time.Time { return p.now },
+			ApprovedRecipes:           approvedRecipes,
+			HoldOnly:                  holdOnly,
+			RecipeReadTimeout:         p.recipeReadTimeout,
+			HoldRetryInterval:         time.Minute,
+			Now:                       func() time.Time { return p.now },
+			ReviewSource:              p.reviewSource,
+			ReviewRecovery:            reviewRecovery,
+			ReviewConfigurationDigest: p.reviewConfigurationDigest,
+			ObserveBase: func(context.Context, string, string) (string, error) {
+				return p.observedBase, nil
+			},
+			ObservePull: func(_ context.Context, repo string, number int) (publish.PullObservation, error) {
+				return publish.PullObservation{
+					Number: number, State: "open", HeadSHA: p.observedHead,
+					HeadRepo: repo, BaseRef: "main", BaseRepo: repo,
+				}, nil
+			},
 			NewRoom: func(image domain.ProjectImage) (engine.ProductionVerificationRoom, error) {
 				if image.ID != p.image.ID {
 					return nil, domain.ErrParentKeyMismatch
@@ -464,6 +586,22 @@ func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 	if p.room.reads != 1 {
 		t.Fatalf("project-image recipe reads = %d, want 1", p.room.reads)
 	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		review, err := tx.LatestReviewRecord(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if review.Outcome != domain.ReviewClean || review.BaseSHA != p.baseSHA ||
+			review.HeadSHA != p.replay.HeadSHA || review.Provider != "openai" ||
+			review.ModelConfiguration == "" || review.CostOwner == "" ||
+			review.ConfigurationDigest != fake.DefaultReviewConfigurationDigest ||
+			review.CompletionEvidence == "" {
+			t.Fatalf("review pass = %#v", review)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	beforePushes := p.transport.pushCount()
 	if result, err := p.reconcileLanes(); err != nil ||
 		result.ResultsAccepted != 0 || result.PublicationTasksCompleted != 0 {
@@ -471,6 +609,536 @@ func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 	}
 	if p.transport.pushCount() != beforePushes {
 		t.Fatal("converged replay repeated the publication transport")
+	}
+}
+
+func TestProductionReviewInvocationIDIsWardSafe(t *testing.T) {
+	runID := domain.RunID("run-" + strings.Repeat("a", 64))
+	first := engine.ProductionReviewInvocationID(runID, 1)
+	second := engine.ProductionReviewInvocationID(runID, 2)
+	if len(first) > 32 || !strings.HasPrefix(string(first), "review-") || first == second {
+		t.Fatalf("review invocation ids = %q / %q", first, second)
+	}
+}
+
+func TestProductionReviewConfigurationMustMatchTrustProfile(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	p.startAndRecordExport(t)
+	record, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: engine.ProductionReviewInvocationID(p.runID, 1),
+		RunID:        p.runID, Round: 1, Provider: "openai", ModelConfiguration: "codex/test",
+		ConfigurationDigest: fake.DefaultReviewConfigurationDigest, CostOwner: "test",
+		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
+		CompletionEvidence: productionDigest([]byte("prior clean review")), Outcome: domain.ReviewClean,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		return tx.PutReviewRecord(p.ctx, record, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.reviewConfigurationDigest = domain.Digest("sha256:" + strings.Repeat("d", 64))
+	recoveryCalls := 0
+	p.workflow = p.newEngine(t, productionCrashSeams{reviewRecovery: func(context.Context) error {
+		recoveryCalls++
+		if recoveryCalls == 1 {
+			return errors.New("old review topology is still cleaning up")
+		}
+		return nil
+	}}, true)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("configuration mismatch bypassed failed startup review recovery")
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		_, err := tx.LatestReviewFailure(p.ctx, p.runID)
+		if err == nil {
+			return errors.New("configuration failure recorded before recovery")
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := p.reconcileLanes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 1 {
+		t.Fatalf("configuration-mismatched result = %#v", result)
+	}
+	if recoveryCalls != 2 {
+		t.Fatalf("startup review recovery calls = %d, want retry before configuration failure", recoveryCalls)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if failure.Class != domain.ReviewFailureConfiguration || failure.Round != 2 {
+			t.Fatalf("configuration failure = %#v", failure)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatalf("converged configuration mismatch replay: %v", err)
+	}
+	if recoveryCalls != 2 {
+		t.Fatalf("startup review recovery repeated after success: %d calls", recoveryCalls)
+	}
+}
+
+func TestProductionReviewResultConfigurationMismatchIsContradiction(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	id := engine.ProductionReviewInvocationID(p.runID, 1)
+	p.reviewer.Script(id, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		},
+	})
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("review result from an unapproved configuration did not fail loudly")
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if failure.Class != domain.ReviewFailureContradiction {
+			t.Fatalf("configuration contradiction = %#v", failure)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductionReviewFindingsEscalateWithoutReady(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	reviewID := engine.ProductionReviewInvocationID(p.runID, 1)
+	p.reviewer.Script(reviewID, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("review findings")),
+			Findings: []domain.Finding{{
+				ID: "review-finding-1", RunID: p.runID, Source: "codex_local", Severity: "P1",
+				Location: "daemon/main.go:12", Message: "unsafe transition", RawText: "unsafe transition",
+				CreatedAt: p.now,
+			}},
+		},
+	})
+	p.startAndRecordExport(t)
+	result, err := p.reconcileLanes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 1 ||
+		result.PublicationTasksCompleted != 1 {
+		t.Fatalf("findings result = %#v", result)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.GetAttentionItem(p.ctx, domain.ItemID("production-ready-"+string(p.runID))); !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("ready item after findings: %w", err)
+		}
+		item, err := tx.GetAttentionItem(p.ctx,
+			domain.ItemID(fmt.Sprintf("production-review-%s-1", p.runID)))
+		if err != nil {
+			return err
+		}
+		if item.Type != domain.AttentionReviewDiminishing || item.PRHeadSHA != p.replay.HeadSHA {
+			t.Fatalf("review attention = %#v", item)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductionCleanReviewIsInvalidatedByBaseAdvance(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	p.observedBase = strings.Repeat("f", 40)
+	p.startAndRecordExport(t)
+	result, err := p.reconcileLanes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 1 {
+		t.Fatalf("base-advanced result = %#v", result)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		item, err := tx.GetAttentionItem(p.ctx,
+			domain.ItemID(fmt.Sprintf("production-review-%s-1", p.runID)))
+		if err != nil {
+			return err
+		}
+		if item.Type != domain.AttentionReviewDispute ||
+			!slices.Equal(item.RequestedDecision, []domain.Action{domain.ActionDiscuss, domain.ActionStop}) {
+			t.Fatalf("base-advance attention = %#v", item)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductionCleanReviewIsInvalidatedByPublishedHeadAdvance(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	p.observedHead = strings.Repeat("f", 40)
+	p.startAndRecordExport(t)
+	result, err := p.reconcileLanes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 1 {
+		t.Fatalf("head-advanced result = %#v", result)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		item, err := tx.GetAttentionItem(p.ctx,
+			domain.ItemID(fmt.Sprintf("production-review-%s-1", p.runID)))
+		if err != nil {
+			return err
+		}
+		if item.Type != domain.AttentionReviewDispute ||
+			!strings.Contains(item.Reason, "head changed") ||
+			!slices.Equal(item.RequestedDecision, []domain.Action{domain.ActionDiscuss, domain.ActionStop}) {
+			t.Fatalf("head-advance attention = %#v", item)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductionTransientReviewFailureBacksOffAndRetries(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	round1 := engine.ProductionReviewInvocationID(p.runID, 1)
+	round2 := engine.ProductionReviewInvocationID(p.runID, 2)
+	p.reviewer.Script(round1, fake.ReviewScript{Outcome: fake.OutcomeFail})
+	p.reviewer.Script(round2, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt:        p.now.Add(2 * time.Second),
+			CompletionEvidence: productionDigest([]byte("retry clean")),
+		},
+	})
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
+		t.Fatalf("first review failure = %#v, %v", result, err)
+	}
+	if _, err := p.reviewer.Inspect(p.ctx, round2); !errors.Is(err, exec.ErrUnknownInvocation) {
+		t.Fatalf("round 2 started before backoff: %v", err)
+	}
+	// Reconstruct the workflow to prove backoff comes from the durable failure
+	// timestamp rather than only the process-local retry map.
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
+		t.Fatalf("review backoff pass = %#v, %v", result, err)
+	}
+	p.now = p.now.Add(2 * time.Second)
+	result, err := p.reconcileLanes()
+	if err != nil || result.ReadyItemsCreated != 1 || result.PublicationTasksCompleted != 1 {
+		t.Fatalf("review retry = %#v, %v", result, err)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		review, err := tx.LatestReviewRecord(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if failure.Class != domain.ReviewFailureTransient || failure.Round != 1 || review.Round != 2 {
+			t.Fatalf("review retry records = %#v / %#v", failure, review)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductionTerminalTransientReviewOutcomeAdvancesRound(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	round1 := engine.ProductionReviewInvocationID(p.runID, 1)
+	round2 := engine.ProductionReviewInvocationID(p.runID, 2)
+	p.reviewer.Script(round1, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt:        p.now,
+			CompletionEvidence: productionDigest([]byte("unused terminal result")),
+		},
+	})
+	p.reviewer.Script(round2, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt:        p.now.Add(2 * time.Second),
+			CompletionEvidence: productionDigest([]byte("retry clean")),
+		},
+	})
+	faults := &faultReviewSource{
+		ReviewSource: p.reviewer, failPollAt: 1,
+		failPollWith: errors.Join(exec.ErrNoResult, &exec.ReviewSourceFailure{
+			Class: domain.ReviewFailureTransient, Err: errors.New("connection reset"),
+		}),
+	}
+	p.reviewSource = faults
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
+		t.Fatalf("terminal transient outcome = %#v, %v", result, err)
+	}
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
+		t.Fatalf("terminal transient backoff = %#v, %v", result, err)
+	}
+	p.now = p.now.Add(2 * time.Second)
+	result, err := p.reconcileLanes()
+	if err != nil || result.ReadyItemsCreated != 1 || result.PublicationTasksCompleted != 1 {
+		t.Fatalf("terminal transient retry = %#v, %v", result, err)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		review, err := tx.LatestReviewRecord(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if failure.Class != domain.ReviewFailureTransient || failure.Round != 1 || review.Round != 2 {
+			t.Fatalf("terminal transient records = %#v / %#v", failure, review)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductionReviewObservationFailuresRetrySameInvocation(t *testing.T) {
+	transient := func(message string) error {
+		return &exec.ReviewSourceFailure{
+			Class: domain.ReviewFailureTransient, Err: errors.New(message),
+		}
+	}
+	for _, tc := range []struct {
+		name      string
+		configure func(*faultReviewSource)
+	}{
+		{"post-launch inspect", func(source *faultReviewSource) { source.failInspectAt = 2 }},
+		{"poll", func(source *faultReviewSource) {
+			source.failPollAt = 1
+			source.failPollWith = transient("injected transient review poll failure")
+		}},
+		{"poll joined not ready", func(source *faultReviewSource) {
+			source.failPollAt = 1
+			source.failPollWith = errors.Join(exec.ErrResultNotReady,
+				transient("injected transient review poll failure"))
+		}},
+		{"final verification", func(source *faultReviewSource) { source.failVerifyAt = 1 }},
+		{"verification joined not ready", func(source *faultReviewSource) {
+			source.failVerifyAt = 1
+			source.failVerifyWith = errors.Join(exec.ErrResultNotReady,
+				transient("injected transient review verification failure"))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newProductionPublicationHarness(t, "")
+			faults := &faultReviewSource{ReviewSource: p.reviewer}
+			tc.configure(faults)
+			p.reviewSource = faults
+			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+			p.startAndRecordExport(t)
+			if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
+				t.Fatalf("transient observation = %#v, %v", result, err)
+			}
+			if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+				_, err := tx.LatestReviewFailure(p.ctx, p.runID)
+				return err
+			}); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("transient observation terminalized invocation: %v", err)
+			}
+			inspectCalls, pollCalls, verifyCalls := faults.inspectCalls, faults.pollCalls, faults.verifyCalls
+			if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
+				t.Fatalf("review retry before backoff = %#v, %v", result, err)
+			}
+			if faults.inspectCalls != inspectCalls || faults.pollCalls != pollCalls ||
+				faults.verifyCalls != verifyCalls {
+				t.Fatalf("review retried before backoff: inspect=%d/%d poll=%d/%d verify=%d/%d",
+					faults.inspectCalls, inspectCalls, faults.pollCalls, pollCalls,
+					faults.verifyCalls, verifyCalls)
+			}
+			p.now = p.now.Add(time.Second)
+			result, err := p.reconcileLanes()
+			if err != nil || result.ReadyItemsCreated != 1 || result.PublicationTasksCompleted != 1 {
+				t.Fatalf("same-invocation retry = %#v, %v", result, err)
+			}
+			if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+				record, err := tx.LatestReviewRecord(p.ctx, p.runID)
+				if err == nil && record.Round != 1 {
+					t.Fatalf("review round = %d, want 1", record.Round)
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestProductionReviewRetainsWorkspaceForPendingPreparation(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	faults := &faultReviewSource{
+		ReviewSource: p.reviewer, failRequestAfterStart: true,
+	}
+	p.reviewSource = faults
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
+		t.Fatalf("transient preparation = %#v, %v", result, err)
+	}
+	if faults.requestedWorkspace == "" {
+		t.Fatal("review request did not retain a workspace")
+	}
+	if info, err := os.Stat(faults.requestedWorkspace); err != nil || !info.IsDir() {
+		t.Fatalf("retained review workspace = %#v, %v", info, err)
+	}
+	requestCalls, inspectCalls := faults.requestCalls, faults.inspectCalls
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
+		t.Fatalf("preparation retry before backoff = %#v, %v", result, err)
+	}
+	if faults.requestCalls != requestCalls || faults.inspectCalls != inspectCalls {
+		t.Fatalf("preparation retried before backoff: request=%d/%d inspect=%d/%d",
+			faults.requestCalls, requestCalls, faults.inspectCalls, inspectCalls)
+	}
+	p.now = p.now.Add(time.Second)
+	result, err := p.reconcileLanes()
+	if err != nil || result.ReadyItemsCreated != 1 || result.PublicationTasksCompleted != 1 {
+		t.Fatalf("preparation retry = %#v, %v", result, err)
+	}
+	if _, err := os.Stat(faults.requestedWorkspace); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("terminal review workspace still exists: %v", err)
+	}
+}
+
+func TestProductionReviewWorkspaceCleanupRefusesSymlinkReplacement(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	faults := &faultReviewSource{
+		ReviewSource: p.reviewer, failRequestAfterStart: true,
+	}
+	p.reviewSource = faults
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(faults.requestedWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	foreign := t.TempDir()
+	marker := filepath.Join(foreign, "must-survive")
+	writeFile(t, foreign, "must-survive", "foreign\n")
+	if err := os.Symlink(foreign, faults.requestedWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	p.now = p.now.Add(time.Second)
+	if _, err := p.reconcileLanes(); !errors.Is(err, domain.ErrPathBoundaryMismatch) {
+		t.Fatalf("symlink replacement cleanup = %v", err)
+	}
+	if body, err := os.ReadFile(marker); err != nil || //nolint:gosec // test-owned path under t.TempDir
+		string(body) != "foreign\n" {
+		t.Fatalf("foreign workspace target changed: %q, %v", body, err)
+	}
+}
+
+func TestProductionReviewContradictionFailsLoudAndPersists(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	id := engine.ProductionReviewInvocationID(p.runID, 1)
+	p.reviewer.Script(id, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: strings.Repeat("e", 40), HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("contradiction")),
+		},
+	})
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("contradictory review result did not fail loudly")
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if failure.Class != domain.ReviewFailureContradiction {
+			t.Fatalf("contradiction record = %#v", failure)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductionReviewRewrittenRequestFailsClosedBeforeRelaunch(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	id := engine.ProductionReviewInvocationID(p.runID, 1)
+	p.reviewer.Script(id, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("never delivered")),
+		},
+	})
+	// Model a persisted request row rewritten while the invocation was
+	// interrupted: the recomputed authority digest no longer matches. The
+	// engine must fail closed before Inspect can act on the decoded request
+	// and relaunch anything from it, so with the gate armed from the first
+	// pass the review source must never be inspected at all. Were the gate
+	// ordered after Inspect, the scripted clean review would complete and the
+	// loud-failure assertion below would fail.
+	faults := &faultReviewSource{
+		ReviewSource: p.reviewer,
+		failAuthorityWith: &exec.ReviewSourceFailure{
+			Class: domain.ReviewFailureContradiction,
+			Err:   domain.ErrParentKeyMismatch,
+		},
+	}
+	p.reviewSource = faults
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("rewritten review request did not fail loudly")
+	}
+	if faults.inspectCalls != 0 {
+		t.Fatalf("rewritten request still drove Inspect %d time(s)", faults.inspectCalls)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if failure.Class != domain.ReviewFailureContradiction {
+			t.Fatalf("rewritten request failure = %#v", failure)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -575,15 +1243,28 @@ func TestProductionPublicationRestartsAcrossDurableBoundaries(t *testing.T) {
 func TestAttendedRestartHoldsQueuedUnattendedPublication(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
+	recoveryCalls := 0
 	p.workflow = p.newEngineForMode(
-		t, productionCrashSeams{}, true, nil, domain.ModeAttendedDev, true,
+		t, productionCrashSeams{reviewRecovery: func(context.Context) error {
+			recoveryCalls++
+			if recoveryCalls == 1 {
+				return errors.New("runtime cleanup temporarily unavailable")
+			}
+			return nil
+		}}, true, nil, domain.ModeAttendedDev, true,
 	)
 	before, err := p.store.ServerState(p.ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("attended publication ignored failed review recovery")
+	}
 	if result, err := p.reconcileLanes(); err != nil || result != (engine.ReconcileResult{}) {
 		t.Fatalf("attended publication hold = %#v, %v", result, err)
+	}
+	if recoveryCalls != 2 {
+		t.Fatalf("attended review recovery calls = %d, want retry", recoveryCalls)
 	}
 	after, err := p.store.ServerState(p.ctx)
 	if err != nil {
@@ -882,73 +1563,71 @@ func TestReadyProductionPublicationMissingPrerequisiteFailsClosed(t *testing.T) 
 }
 
 func TestFinalizedProductionPublicationSurvivesLaterRecipeRevocation(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		seams productionCrashSeams
-	}{
-		{"after outcome", productionCrashSeams{
-			afterPublication: func() error { return errors.New("stop after durable publication outcome") },
-		}},
-		{"after ready", productionCrashSeams{
-			afterReady: func() error { return errors.New("stop after durable ready item") },
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			p := newProductionPublicationHarness(t, "")
-			p.workflow = p.newEngine(t, tc.seams, true)
-			p.startAndRecordExport(t)
-			if _, err := p.reconcileLanes(); err == nil {
-				t.Fatal("publication seam did not interrupt reconciliation")
-			}
-			p.workflow = p.newEngineWithApprovedRecipes(
-				t, productionCrashSeams{}, true,
-				map[domain.Digest]bool{productionDigest([]byte("unrelated recipe")): true},
-			)
-			if result, err := p.reconcileLanes(); err != nil ||
-				result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
-				t.Fatalf("finalize durable publication after recipe revocation = %#v, %v", result, err)
-			}
-			if tc.name == "after outcome" {
-				p.assertReadyWithEvidence(t, 0)
-			} else {
-				p.assertReady(t)
-			}
-			if _, err := p.attention.GetAttentionItem(
-				p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
-			); !errors.Is(err, store.ErrNotFound) {
-				t.Fatalf("finalized publication created contradictory blocked item: %v", err)
-			}
-		})
+	p := newProductionPublicationHarness(t, "")
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterReady: func() error { return errors.New("stop after durable ready item") },
+	}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("ready seam did not interrupt reconciliation")
 	}
-	t.Run("after revoked ready", func(t *testing.T) {
-		p := newProductionPublicationHarness(t, "")
-		p.workflow = p.newEngine(t, productionCrashSeams{
-			afterPublication: func() error { return errors.New("stop after durable publication outcome") },
-		}, true)
-		p.startAndRecordExport(t)
-		if _, err := p.reconcileLanes(); err == nil {
-			t.Fatal("publication outcome seam did not interrupt reconciliation")
-		}
-		revokedRecipes := map[domain.Digest]bool{
-			productionDigest([]byte("unrelated recipe")): true,
-		}
-		p.workflow = p.newEngineForMode(
-			t,
-			productionCrashSeams{afterReady: func() error { return errors.New("stop after redacted ready item") }},
-			true, revokedRecipes, domain.ModeUnattended, false,
-		)
-		if _, err := p.reconcileLanes(); err == nil {
-			t.Fatal("redacted ready seam did not interrupt reconciliation")
-		}
-		p.workflow = p.newEngineWithApprovedRecipes(
-			t, productionCrashSeams{}, true, revokedRecipes,
-		)
-		if result, err := p.reconcileLanes(); err != nil ||
-			result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
-			t.Fatalf("recover redacted ready after recipe revocation = %#v, %v", result, err)
-		}
-		p.assertReadyWithEvidence(t, 0)
+	p.workflow = p.newEngineWithApprovedRecipes(
+		t, productionCrashSeams{}, true,
+		map[domain.Digest]bool{productionDigest([]byte("unrelated recipe")): true},
+	)
+	if result, err := p.reconcileLanes(); err != nil ||
+		result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
+		t.Fatalf("finalize durable ready item after recipe revocation = %#v, %v", result, err)
+	}
+	p.assertReady(t)
+	if _, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
+	); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("finalized ready item created contradictory blocked item: %v", err)
+	}
+}
+
+func TestProductionReviewRegatesRecipeAuthorityBeforeReadiness(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	reviewID := engine.ProductionReviewInvocationID(p.runID, 1)
+	p.reviewer.Script(reviewID, fake.ReviewScript{
+		PendingInspects: 1, Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("delayed clean review")),
+		},
 	})
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
+		t.Fatalf("pending review = %#v, %v", result, err)
+	}
+	revokedRecipes := map[domain.Digest]bool{
+		productionDigest([]byte("unrelated recipe")): true,
+	}
+	p.workflow = p.newEngineWithApprovedRecipes(t, productionCrashSeams{}, true, revokedRecipes)
+	result, err := p.reconcileLanes()
+	if err != nil || result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 1 ||
+		result.PublicationTasksCompleted != 0 {
+		t.Fatalf("review completed after recipe revocation = %#v, %v", result, err)
+	}
+	if _, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID("production-ready-"+string(p.runID)),
+	); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("revoked review created readiness: %v", err)
+	}
+	hold, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
+	)
+	if err != nil || !strings.Contains(hold.Item.Reason, "no longer approves") {
+		t.Fatalf("revoked review hold = %#v, %v", hold, err)
+	}
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	result, err = p.reconcileLanes()
+	if err != nil || result.ReadyItemsCreated != 1 || result.PublicationTasksCompleted != 1 {
+		t.Fatalf("review after recipe reapproval = %#v, %v", result, err)
+	}
+	p.assertReady(t)
 }
 
 func TestProductionPublicationConflictIsDurablyHeld(t *testing.T) {

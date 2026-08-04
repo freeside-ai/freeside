@@ -15,7 +15,8 @@ import (
 // discipline) is a new version: two daemon builds must never derive different
 // digests for the same profile content, or the digest-bound publication gate
 // (plan §5.5) would read an unchanged profile as drift across an upgrade.
-// v5 binds the immutable GitHub repository ID so a renamed or deleted
+// v6 replaces the falsified native-trigger review modes with the
+// Freeside-invoked production binding. v5 binds the immutable GitHub repository ID so a renamed or deleted
 // owner/name cannot authorize minting for a different repository. v4 adds
 // explicit allow axes for every privilege WorkflowAudit attests:
 // reusable workflows, package publishing, and artifact consumers. v3 added
@@ -28,7 +29,7 @@ import (
 // ProtectedPathConfig. Rows from a prior version fail Validate's digest
 // recompute and are re-recorded by a human, never migrated (§5.5 drift
 // recovery).
-const trustProfileEncodingVersion = "freeside-trust-profile/v5"
+const trustProfileEncodingVersion = "freeside-trust-profile/v6"
 
 // ProtectedPathConfig is the repository-specific widening of the protected
 // control-plane path classes (plan §5.5, §5.8). Only Extra* fields exist by
@@ -126,9 +127,9 @@ func canonicalPatterns(in []string) []string {
 	return slices.Compact(out)
 }
 
-// ReviewSettings is the trust profile's automated-review binding (plan §5.5):
-// how review is triggered and the digest of the reviewer configuration the
-// profile was approved against.
+// ReviewSettings is the trust profile's Freeside-invoked review binding (plan
+// §5.5, §7). Native GitHub review is observational evidence, not a trust
+// setting and never an alternate way to satisfy this binding.
 type ReviewSettings struct {
 	Mode         ReviewMode `json:"mode"`
 	ConfigDigest Digest     `json:"config_digest"`

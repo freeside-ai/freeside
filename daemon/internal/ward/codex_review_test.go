@@ -20,19 +20,88 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 )
 
 type fakeCodexReviewJournal struct {
-	binding          CodexReviewJournalBinding
-	workspaceBinding CodexReviewWorkspaceBinding
-	intent           *CodexReviewLaunchIntent
-	mutate           func(*CodexReviewJournalBinding)
-	onGet            func()
-	onBegin          func(CodexReviewLaunchIntent) error
-	failResourceMark error
-	failStarting     error
-	failStarted      error
+	binding             CodexReviewJournalBinding
+	workspaceBinding    CodexReviewWorkspaceBinding
+	intent              *CodexReviewLaunchIntent
+	extraIntents        map[string]*CodexReviewLaunchIntent
+	failIntentByID      map[string]error
+	mutate              func(*CodexReviewJournalBinding)
+	onGet               func()
+	onBegin             func(CodexReviewLaunchIntent) error
+	requests            map[string]exec.ReviewRequest
+	outcomes            map[string]CodexReviewSourceOutcome
+	ready               map[string]bool
+	failResourceMark    error
+	failStarting        error
+	failStarted         error
+	failGetIntent       error
+	failGetRequest      error
+	failGetOutcome      error
+	failGetBinding      error
+	failDeleteWorkspace error
+}
+
+func (j *fakeCodexReviewJournal) PutCodexReviewRequest(
+	_ context.Context, id string, request exec.ReviewRequest,
+) error {
+	if j.requests == nil {
+		j.requests = make(map[string]exec.ReviewRequest)
+	}
+	j.requests[id] = request
+	return nil
+}
+
+func (j *fakeCodexReviewJournal) GetCodexReviewRequest(
+	_ context.Context, id string,
+) (exec.ReviewRequest, error) {
+	if j.failGetRequest != nil {
+		return exec.ReviewRequest{}, j.failGetRequest
+	}
+	request, ok := j.requests[id]
+	if !ok {
+		return exec.ReviewRequest{}, exec.ErrUnknownInvocation
+	}
+	return request, nil
+}
+
+func (j *fakeCodexReviewJournal) PutCodexReviewOutcome(
+	_ context.Context, id string, outcome CodexReviewSourceOutcome,
+) error {
+	if j.outcomes == nil {
+		j.outcomes = make(map[string]CodexReviewSourceOutcome)
+	}
+	j.outcomes[id] = outcome
+	return nil
+}
+
+func (j *fakeCodexReviewJournal) GetCodexReviewOutcome(
+	_ context.Context, id string,
+) (CodexReviewSourceOutcome, bool, error) {
+	if j.failGetOutcome != nil {
+		return CodexReviewSourceOutcome{}, false, j.failGetOutcome
+	}
+	outcome, ok := j.outcomes[id]
+	return outcome, j.ready[id], func() error {
+		if !ok {
+			return ErrCodexReviewOutcomeNotFound
+		}
+		return nil
+	}()
+}
+
+func (j *fakeCodexReviewJournal) MarkCodexReviewOutcomeReady(
+	_ context.Context, id string,
+) error {
+	if j.ready == nil {
+		j.ready = make(map[string]bool)
+	}
+	j.ready[id] = true
+	return nil
 }
 
 var errFakeCodexReviewVolumeLeaseHeld = errors.New("fake Codex review volume lease is held")
@@ -147,9 +216,42 @@ func (l *fakeCodexReviewVolumeLeaser) ReleaseCodexReviewVolumeLease(context.Cont
 }
 
 func (j *fakeCodexReviewJournal) GetCodexReviewWorkspaceBinding(
-	_ context.Context, _ string,
+	_ context.Context, sourceRunID string,
 ) (CodexReviewWorkspaceBinding, error) {
+	if j.workspaceBinding.SourceRunID != sourceRunID {
+		return CodexReviewWorkspaceBinding{}, ErrCodexReviewWorkspaceNotFound
+	}
 	return j.workspaceBinding, nil
+}
+
+func (j *fakeCodexReviewJournal) ListCodexReviewWorkspaceIDs(_ context.Context) ([]string, error) {
+	if j.workspaceBinding.SourceRunID == "" {
+		return nil, nil
+	}
+	return []string{j.workspaceBinding.SourceRunID}, nil
+}
+
+func (j *fakeCodexReviewJournal) DeleteCodexReviewWorkspaceBinding(
+	_ context.Context, binding CodexReviewWorkspaceBinding,
+) error {
+	if j.failDeleteWorkspace != nil {
+		return j.failDeleteWorkspace
+	}
+	if j.workspaceBinding.SourceRunID == "" {
+		return nil
+	}
+	if j.workspaceBinding != binding {
+		return ErrConformance
+	}
+	j.workspaceBinding = CodexReviewWorkspaceBinding{}
+	return nil
+}
+
+func (j *fakeCodexReviewJournal) PutCodexReviewWorkspaceBinding(
+	_ context.Context, binding CodexReviewWorkspaceBinding,
+) error {
+	j.workspaceBinding = binding
+	return nil
 }
 
 func (j *fakeCodexReviewJournal) BeginCodexReviewIntent(_ context.Context, intent CodexReviewLaunchIntent) error {
@@ -168,12 +270,42 @@ func (j *fakeCodexReviewJournal) BeginCodexReviewIntent(_ context.Context, inten
 }
 
 func (j *fakeCodexReviewJournal) GetCodexReviewIntent(_ context.Context, runID string) (CodexReviewLaunchIntent, error) {
-	if j.intent == nil || j.intent.RunID != runID {
+	if err := j.failIntentByID[runID]; err != nil {
+		return CodexReviewLaunchIntent{}, err
+	}
+	if j.failGetIntent != nil {
+		return CodexReviewLaunchIntent{}, j.failGetIntent
+	}
+	intent := j.intent
+	if extra := j.extraIntents[runID]; extra != nil {
+		intent = extra
+	}
+	if intent == nil || intent.RunID != runID {
 		return CodexReviewLaunchIntent{}, ErrCodexReviewIntentNotFound
 	}
-	copy := *j.intent
-	copy.Resources = slices.Clone(j.intent.Resources)
+	copy := *intent
+	copy.Resources = slices.Clone(intent.Resources)
 	return copy, nil
+}
+
+func (j *fakeCodexReviewJournal) ListCodexReviewIntentIDs(_ context.Context) ([]string, error) {
+	if j.failGetIntent != nil {
+		return nil, j.failGetIntent
+	}
+	if j.intent == nil {
+		if len(j.extraIntents) == 0 {
+			return nil, nil
+		}
+	}
+	ids := make([]string, 0, len(j.extraIntents)+1)
+	if j.intent != nil {
+		ids = append(ids, j.intent.RunID)
+	}
+	for id := range j.extraIntents {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids, nil
 }
 
 func (j *fakeCodexReviewJournal) MarkCodexReviewIntentResource(
@@ -245,6 +377,9 @@ func (j *fakeCodexReviewJournal) PutCodexReviewBinding(
 func (j *fakeCodexReviewJournal) GetCodexReviewBinding(
 	_ context.Context, _ string,
 ) (CodexReviewJournalBinding, error) {
+	if j.failGetBinding != nil {
+		return CodexReviewJournalBinding{}, j.failGetBinding
+	}
 	if j.onGet != nil {
 		j.onGet()
 	}
@@ -389,6 +524,7 @@ func testCodexReview(t *testing.T) (CodexReviewConfig, CodexReviewSpec) {
 	instructionBody := []byte("Review the candidate independently.\n")
 	digest := digestBody(instructionBody)
 	cfg := CodexReviewConfig{
+		Model: "gpt-5.2-codex", ReasoningEffort: "high",
 		InputRoot:                root,
 		WorkspaceTarget:          "/workspace/project",
 		ProviderEndpoints:        []string{"chatgpt.com:443"},
@@ -402,19 +538,20 @@ func testCodexReview(t *testing.T) (CodexReviewConfig, CodexReviewSpec) {
 		t, cfg, "review-1", "freeside-review-review-1-agents", "2026-08-03T12:00:01Z",
 	)
 	workspace := testCodexReviewWorkspace(
-		t, cfg, "review-1", "candidate-workspace", "2026-08-03T12:00:03Z",
+		t, cfg, "review-1", namesFor("review-1").Workspace, "2026-08-03T12:00:03Z",
 	)
 	req := CodexReviewSpec{
-		RunID:           "review-1",
-		Image:           "example.test/codex@sha256:" + strings.Repeat("a", 64),
-		WorkspaceVolume: "candidate-workspace",
-		Workspace:       workspace,
-		Network:         testCodexReviewNetwork(t, cfg, "review-1"),
-		Prompt:          "Review the exact candidate head.",
-		Boundary:        CodexReviewFreshStart,
-		AuthMode:        CodexAuthSubscription,
-		AuthIdentityID:  "codex-reviewer",
-		AuthSnapshot:    writeCodexReviewFile(t, root, "auth.json", auth),
+		RunID:                "review-1",
+		Image:                "example.test/codex@sha256:" + strings.Repeat("a", 64),
+		WorkspaceSourceRunID: "review-1",
+		WorkspaceVolume:      namesFor("review-1").Workspace,
+		Workspace:            workspace,
+		Network:              testCodexReviewNetwork(t, cfg, "review-1"),
+		Prompt:               "Review the exact candidate head.",
+		Boundary:             CodexReviewFreshStart,
+		AuthMode:             CodexAuthSubscription,
+		AuthIdentityID:       "codex-reviewer",
+		AuthSnapshot:         writeCodexReviewFile(t, root, "auth.json", auth),
 		Instructions: VendorInstructions{
 			Vendor: domain.AgentVendorCodex, Delivery: domain.VendorInstructionDeliveryAppendFile,
 			Present: true, Digest: digest, Body: instructionBody,
@@ -435,7 +572,7 @@ func testCodexReviewLifecycle(
 	cfg.ProxyURL = ""
 	launch := CodexReviewLaunchSpec{
 		RunID: req.RunID, Image: req.Image, WorkspaceVolume: req.WorkspaceVolume,
-		WorkspaceSourceRunID: "candidate-run",
+		WorkspaceSourceRunID: req.RunID,
 		ExpectedHead:         testCodexReviewHead, Prompt: req.Prompt, Boundary: req.Boundary,
 		AuthMode: req.AuthMode, AuthIdentityID: req.AuthIdentityID,
 		AuthSnapshot: req.AuthSnapshot, Instructions: req.Instructions,
@@ -445,7 +582,7 @@ func testCodexReviewLifecycle(
 	cfg.VolumeLifecycleLeaser = &fakeCodexReviewVolumeLeaser{rt: fx.rt}
 	workspaceOwner := testOwnershipLabel()
 	fx.rt.vols[launch.WorkspaceVolume] = &fakeVol{
-		labels: append(runLabels("candidate-run"), workspaceOwner), created: "workspace-created",
+		labels: append(runLabels(req.RunID), workspaceOwner), created: "workspace-created",
 	}
 	journal.workspaceBinding = CodexReviewWorkspaceBinding{
 		SourceRunID: launch.WorkspaceSourceRunID, Volume: launch.WorkspaceVolume,
@@ -530,6 +667,23 @@ func TestBackendCodexReviewPersistsIntentBeforeLeaseOrRuntime(t *testing.T) {
 	}
 }
 
+func TestBackendCodexReviewValidatesPriorIntentBeforeStateBranch(t *testing.T) {
+	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
+	journal.intent = &CodexReviewLaunchIntent{
+		RunID: launch.RunID,
+		State: CodexReviewIntentClosed,
+	}
+	if got, err := backend.CodexReview(context.Background(), cfg, launch); got != nil ||
+		!errors.Is(err, ErrConformance) || errors.Is(err, ErrCodexReviewOperational) {
+		t.Fatalf("CodexReview = (%v, %v), want non-operational conformance refusal", got, err)
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if len(rt.calls) != 0 {
+		t.Fatalf("runtime calls before validating prior intent: %v", rt.calls)
+	}
+}
+
 func TestBackendCodexReviewRetainsRecoveryIntentWhenResourceJournalUpdateFails(t *testing.T) {
 	backend, _, cfg, launch, journal := testCodexReviewLifecycle(t)
 	journal.failResourceMark = errors.New("journal unavailable")
@@ -538,6 +692,15 @@ func TestBackendCodexReviewRetainsRecoveryIntentWhenResourceJournalUpdateFails(t
 	}
 	if journal.intent == nil || journal.intent.State != CodexReviewIntentPreparing {
 		t.Fatal("failed resource update discarded the durable recovery intent")
+	}
+}
+
+func TestBackendCodexReviewPreservesResourceMutationConformance(t *testing.T) {
+	backend, _, cfg, launch, journal := testCodexReviewLifecycle(t)
+	journal.failResourceMark = errors.Join(ErrConformance, errors.New("malformed intent row"))
+	if got, err := backend.CodexReview(context.Background(), cfg, launch); got != nil ||
+		!errors.Is(err, ErrConformance) || errors.Is(err, ErrCodexReviewOperational) {
+		t.Fatalf("CodexReview = (%v, %v), want non-operational conformance refusal", got, err)
 	}
 }
 
@@ -587,6 +750,48 @@ func TestRecoverCodexReviewReapsOnlyDurablyOwnedPreStartObjects(t *testing.T) {
 	}
 }
 
+func TestRecoverCodexReviewKeepsRuntimeListingFailuresTransient(t *testing.T) {
+	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
+	owner := testOwnershipLabel()
+	digest, err := codexReviewIntentDigest(cfg, launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shadow := codexReviewShadowVolumeName(launch.RunID)
+	journal.intent = &CodexReviewLaunchIntent{
+		RunID: launch.RunID, SpecDigest: digest, OwnershipToken: owner.Value,
+		ShadowVolume: shadow, Network: codexReviewNetworkName(launch.RunID),
+		ReviewContainer: codexReviewContainerName(launch.RunID), State: CodexReviewIntentPreparing,
+		Resources: []CodexReviewIntentResource{
+			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
+			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
+			{Name: codexReviewShadowObserverName(launch.RunID)},
+			{Name: shadow, OwnershipToken: owner.Value, Fingerprint: "shadow"},
+			{Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value},
+			{Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value},
+		},
+	}
+	rt.vols[shadow] = &fakeVol{labels: []Label{owner}, created: "shadow"}
+	failed := false
+	rt.onListContainers = func(list []ContainerSummary) ([]ContainerSummary, error) {
+		if !failed {
+			failed = true
+			return nil, errors.New("runtime temporarily unavailable")
+		}
+		return list, nil
+	}
+	err = backend.RecoverCodexReview(context.Background(), cfg, launch)
+	if !errors.Is(err, ErrCodexReviewOperational) || !errors.Is(err, ErrConformance) {
+		t.Fatalf("runtime listing recovery error = %v, want operational conformance", err)
+	}
+	if journal.intent.State != CodexReviewIntentPreparing {
+		t.Fatalf("intent state = %q, want retryable preparing", journal.intent.State)
+	}
+	if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err != nil {
+		t.Fatalf("recovery retry = %v", err)
+	}
+}
+
 func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 	setup := func(t *testing.T) (*Backend, *fakeRuntime, CodexReviewConfig, CodexReviewLaunchSpec, *fakeCodexReviewJournal, Label) {
 		t.Helper()
@@ -603,16 +808,56 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 	}
 
 	t.Run("same owner adopts and releases", func(t *testing.T) {
-		backend, _, cfg, launch, journal, owner := setup(t)
+		backend, rt, cfg, launch, journal, owner := setup(t)
 		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
 		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value, []string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
 			t.Fatal(err)
 		}
-		if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err != nil {
+		recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := recovery.Reconcile(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		if !leaser.released || journal.intent.State != CodexReviewIntentClosed {
 			t.Fatal("same-owner recovery did not adopt, release, and close")
+		}
+		if _, exists := rt.vols[launch.WorkspaceVolume]; exists {
+			t.Fatal("attended pre-start recovery left the candidate workspace behind")
+		}
+		if journal.workspaceBinding.SourceRunID != "" {
+			t.Fatal("attended pre-start recovery left the candidate workspace binding reusable")
+		}
+	})
+
+	t.Run("closed intent retries binding reset", func(t *testing.T) {
+		backend, rt, cfg, launch, journal, owner := setup(t)
+		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
+		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value,
+			[]string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+			t.Fatal(err)
+		}
+		journal.failDeleteWorkspace = errors.New("journal temporarily unavailable")
+		recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := recovery.Reconcile(context.Background()); err == nil {
+			t.Fatal("recovery accepted a failed workspace-binding reset")
+		}
+		if journal.intent.State != CodexReviewIntentClosed || journal.workspaceBinding.SourceRunID == "" {
+			t.Fatal("failed binding reset did not retain its closed-intent retry evidence")
+		}
+		if _, exists := rt.vols[launch.WorkspaceVolume]; exists {
+			t.Fatal("failed binding reset left the candidate volume live")
+		}
+		journal.failDeleteWorkspace = nil
+		if err := recovery.Reconcile(context.Background()); err != nil {
+			t.Fatalf("closed-intent binding reset retry = %v", err)
+		}
+		if journal.workspaceBinding.SourceRunID != "" {
+			t.Fatal("closed intent suppressed orphan binding cleanup on retry")
 		}
 	})
 
@@ -629,6 +874,157 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 			t.Fatal("foreign lease recovery mutated pre-start objects or intent")
 		}
 	})
+}
+
+func TestCodexReviewRecoveryMarksClosedOutcomeReady(t *testing.T) {
+	backend, _, cfg, launch, journal := testCodexReviewLifecycle(t)
+	owner := testOwnershipLabel()
+	journal.intent = &CodexReviewLaunchIntent{
+		RunID: launch.RunID, OwnershipToken: owner.Value,
+		ShadowVolume:    codexReviewShadowVolumeName(launch.RunID),
+		Network:         codexReviewNetworkName(launch.RunID),
+		ReviewContainer: codexReviewContainerName(launch.RunID),
+		State:           CodexReviewIntentClosed,
+		Resources: []CodexReviewIntentResource{
+			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
+			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
+			{Name: codexReviewShadowObserverName(launch.RunID)},
+			{Name: codexReviewShadowVolumeName(launch.RunID), OwnershipToken: owner.Value},
+			{Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value},
+			{Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value},
+		},
+	}
+	journal.outcomes = map[string]CodexReviewSourceOutcome{launch.RunID: {
+		InvocationID: domain.InvocationID(launch.RunID),
+		FailureClass: domain.ReviewFailureTransient,
+		Failure:      "cleanup completed before the ready mark",
+	}}
+	recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recovery.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !journal.ready[launch.RunID] {
+		t.Fatal("closed collected outcome remained not ready")
+	}
+}
+
+func TestCodexReviewRecoveryCleansWorkspaceWithoutLaunchIntent(t *testing.T) {
+	for _, preparation := range []string{"pending", "finalized"} {
+		t.Run(preparation, func(t *testing.T) {
+			ctx := context.Background()
+			fx := newHandoffFixture(t)
+			seed := fx.seed(t).Seed
+			backend := fx.backend(t)
+			journal := &fakeCodexReviewJournal{}
+			runID := "review-orphan-" + preparation
+			volume := namesFor(runID).Workspace
+			switch preparation {
+			case "pending":
+				owner := testOwnershipLabel()
+				if err := journal.PutCodexReviewWorkspaceBinding(ctx, CodexReviewWorkspaceBinding{
+					SourceRunID: runID, Volume: volume, OwnershipToken: owner.Value,
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if err := fx.rt.CreateVolume(ctx, volume, 64, append(runLabels(runID), owner)); err != nil {
+					t.Fatal(err)
+				}
+			case "finalized":
+				if _, err := backend.PrepareCodexReviewWorkspace(
+					ctx, journal, runID, seed.SourceDir, seed.Base, 64,
+				); err != nil {
+					t.Fatal(err)
+				}
+			}
+			leaser, err := NewRuntimeCodexReviewVolumeLeaser(fx.rt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recovery, err := NewCodexReviewRecovery(backend, journal, leaser)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := recovery.Reconcile(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := fx.rt.vols[volume]; exists {
+				t.Fatal("startup recovery left a prepared workspace without a launch intent")
+			}
+			if journal.workspaceBinding.SourceRunID != "" {
+				t.Fatal("startup recovery left the workspace binding reusable")
+			}
+			binding, err := backend.PrepareCodexReviewWorkspace(
+				ctx, journal, runID, seed.SourceDir, seed.Base, 64,
+			)
+			if err != nil || binding.CreationFingerprint == "" {
+				t.Fatalf("prepare same invocation after recovery = %#v, %v", binding, err)
+			}
+		})
+	}
+}
+
+func TestCodexReviewRecoveryDoesNotLetInvalidIntentStarveLaterCleanup(t *testing.T) {
+	backend, _, cfg, _, journal := testCodexReviewLifecycle(t)
+	validID := "review-2"
+	owner := testOwnershipLabel()
+	valid := &CodexReviewLaunchIntent{
+		RunID: validID, OwnershipToken: owner.Value,
+		ShadowVolume: codexReviewShadowVolumeName(validID), Network: codexReviewNetworkName(validID),
+		ReviewContainer: codexReviewContainerName(validID), State: CodexReviewIntentClosed,
+		Resources: []CodexReviewIntentResource{
+			{Name: codexReviewWorkspaceObserverName(validID)},
+			{Name: codexReviewShadowInitializerName(validID), OwnershipToken: owner.Value},
+			{Name: codexReviewShadowObserverName(validID)},
+			{Name: codexReviewShadowVolumeName(validID), OwnershipToken: owner.Value},
+			{Name: codexReviewNetworkName(validID), OwnershipToken: owner.Value},
+			{Name: codexReviewContainerName(validID), OwnershipToken: owner.Value},
+		},
+	}
+	journal.intent = nil
+	journal.extraIntents = map[string]*CodexReviewLaunchIntent{
+		"review-1": valid,
+		validID:    valid,
+	}
+	journal.failIntentByID = map[string]error{"review-1": ErrConformance}
+	journal.outcomes = map[string]CodexReviewSourceOutcome{validID: {
+		InvocationID: domain.InvocationID(validID), FailureClass: domain.ReviewFailureTransient,
+		Failure: "cleanup completed before the ready mark",
+	}}
+	recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recovery.Reconcile(context.Background()); !errors.Is(err, ErrConformance) {
+		t.Fatalf("recovery error = %v, want invalid first intent", err)
+	}
+	if !journal.ready[validID] {
+		t.Fatal("invalid first intent starved a later recoverable outcome")
+	}
+}
+
+func TestCodexReviewRecoveryFailsClosedOnRewrittenIntentKey(t *testing.T) {
+	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
+	rewrittenID := launch.RunID + "-rewritten"
+	journal.intent = nil
+	journal.extraIntents = map[string]*CodexReviewLaunchIntent{
+		rewrittenID: {RunID: launch.RunID},
+	}
+	recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recovery.Reconcile(context.Background()); err == nil {
+		t.Fatal("recovery accepted a rewritten intent primary key")
+	}
+	if _, exists := rt.vols[launch.WorkspaceVolume]; !exists {
+		t.Fatal("orphan pass deleted a workspace still owned by an intent")
+	}
+	if journal.workspaceBinding.SourceRunID != launch.RunID {
+		t.Fatal("orphan pass deleted a binding still owned by an intent")
+	}
 }
 
 func TestRecoverCodexReviewRefusesForeignSameNameReviewContainer(t *testing.T) {
@@ -733,8 +1129,9 @@ func TestRecoverCodexReviewRetriesLeaseReleaseBeforeClosingIntent(t *testing.T) 
 	rt.vols[shadow] = &fakeVol{labels: []Label{owner}, created: "shadow"}
 	leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
 	leaser.releaseErr = errors.New("release failed")
-	if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err == nil || journal.intent.State != CodexReviewIntentPreparing {
-		t.Fatal("release failure closed recovery intent")
+	if err := backend.RecoverCodexReview(context.Background(), cfg, launch); !errors.Is(err, ErrCodexReviewOperational) ||
+		!errors.Is(err, ErrConformance) || journal.intent.State != CodexReviewIntentPreparing {
+		t.Fatalf("release failure = %v, state = %q; want operational retry", err, journal.intent.State)
 	}
 	leaser.releaseErr = nil
 	if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err != nil || journal.intent.State != CodexReviewIntentClosed {
@@ -1027,25 +1424,42 @@ func crashedTransferredCodexReview(
 	return backend, rt, cfg, launch, journal, leaser
 }
 
-func TestRecoverCodexReviewReapsTransferredStartForRelaunch(t *testing.T) {
-	backend, rt, cfg, launch, journal, leaser := crashedTransferredCodexReview(t)
-	if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err != nil {
-		t.Fatalf("transferred starting recovery = %v, want reaped cleanup", err)
+func TestRecoverCodexReviewReapsTransferredAttachmentForRelaunch(t *testing.T) {
+	for _, state := range []CodexReviewIntentState{
+		CodexReviewIntentPreparing, CodexReviewIntentPrepared, CodexReviewIntentStarting,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			backend, rt, cfg, launch, journal, leaser := crashedTransferredCodexReview(t)
+			journal.intent.State = state
+			if state != CodexReviewIntentStarting {
+				rt.ctrs[codexReviewContainerName(launch.RunID)].started = false
+			}
+			if state == CodexReviewIntentPreparing {
+				for i := range journal.intent.Resources {
+					if journal.intent.Resources[i].Name == codexReviewContainerName(launch.RunID) {
+						journal.intent.Resources[i].Fingerprint = ""
+					}
+				}
+			}
+			if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err != nil {
+				t.Fatalf("transferred %s recovery = %v, want reaped cleanup", state, err)
+			}
+			if journal.intent.State != CodexReviewIntentClosed {
+				t.Fatalf("intent state = %q, want closed", journal.intent.State)
+			}
+			if _, exists := rt.ctrs[codexReviewContainerName(launch.RunID)]; exists {
+				t.Fatalf("transferred %s recovery left the credential-bearing review attached", state)
+			}
+			if !leaser.released || leaser.transferred || leaser.held {
+				t.Fatalf("transferred %s recovery did not return the lifecycle lease", state)
+			}
+			relaunched, err := backend.CodexReview(context.Background(), cfg, launch)
+			if err != nil {
+				t.Fatalf("relaunch after transferred %s recovery = %v, want success", state, err)
+			}
+			_ = relaunched.Close()
+		})
 	}
-	if journal.intent.State != CodexReviewIntentClosed {
-		t.Fatalf("intent state = %q, want closed", journal.intent.State)
-	}
-	if _, exists := rt.ctrs[codexReviewContainerName(launch.RunID)]; exists {
-		t.Fatal("transferred starting recovery left the credential-bearing review running")
-	}
-	if !leaser.released || leaser.transferred || leaser.held {
-		t.Fatal("transferred starting recovery did not return the lifecycle lease")
-	}
-	relaunched, err := backend.CodexReview(context.Background(), cfg, launch)
-	if err != nil {
-		t.Fatalf("relaunch after transferred starting recovery = %v, want success", err)
-	}
-	_ = relaunched.Close()
 }
 
 func TestRecoverCodexReviewRejectsForgedTransferredLease(t *testing.T) {
@@ -1066,21 +1480,26 @@ func TestRecoverCodexReviewRejectsForgedTransferredLease(t *testing.T) {
 			}
 		}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			backend, rt, cfg, launch, journal, leaser := crashedTransferredCodexReview(t)
-			leaser.mu.Lock()
-			tc.mutate(leaser, rt, launch)
-			leaser.mu.Unlock()
-			if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err == nil {
-				t.Fatal("recovery accepted forged transferred lease evidence")
-			}
-			if journal.intent.State != CodexReviewIntentStarting {
-				t.Fatalf("intent state = %q, want starting", journal.intent.State)
-			}
-			if _, exists := rt.ctrs[codexReviewContainerName(launch.RunID)]; !exists {
-				t.Fatal("forged transfer recovery deleted a same-name running container")
-			}
-		})
+		for _, state := range []CodexReviewIntentState{
+			CodexReviewIntentPreparing, CodexReviewIntentPrepared, CodexReviewIntentStarting,
+		} {
+			t.Run(tc.name+"/"+string(state), func(t *testing.T) {
+				backend, rt, cfg, launch, journal, leaser := crashedTransferredCodexReview(t)
+				journal.intent.State = state
+				leaser.mu.Lock()
+				tc.mutate(leaser, rt, launch)
+				leaser.mu.Unlock()
+				if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err == nil {
+					t.Fatal("recovery accepted forged transferred lease evidence")
+				}
+				if journal.intent.State != state {
+					t.Fatalf("intent state = %q, want %q", journal.intent.State, state)
+				}
+				if _, exists := rt.ctrs[codexReviewContainerName(launch.RunID)]; !exists {
+					t.Fatal("forged transfer recovery deleted a same-name review container")
+				}
+			})
+		}
 	}
 }
 
@@ -1679,7 +2098,9 @@ func TestCodexReviewConformanceRejectsTopologyDrift(t *testing.T) {
 		{"writable auth", func(s *ContainerSpec, _ *CodexReviewJournalBinding) { s.Mounts[1].ReadOnly = false }},
 		{"missing ancestor shadow", func(s *ContainerSpec, _ *CodexReviewJournalBinding) { s.Mounts = s.Mounts[:len(s.Mounts)-1] }},
 		{"extra child environment", func(s *ContainerSpec, _ *CodexReviewJournalBinding) { s.Env = append(s.Env, "OPENAI_API_KEY=secret") }},
-		{"severance removed", func(s *ContainerSpec, _ *CodexReviewJournalBinding) { s.Command = slices.Delete(s.Command, 10, 12) }},
+		{"severance removed", func(s *ContainerSpec, _ *CodexReviewJournalBinding) {
+			s.Command[2] = strings.Replace(s.Command[2], " --ignore-user-config --ignore-rules", "", 1)
+		}},
 		{"continuity journalled", func(_ *ContainerSpec, b *CodexReviewJournalBinding) { b.ContinuityMounted = true }},
 		{"lease rule dropped", func(_ *ContainerSpec, b *CodexReviewJournalBinding) { b.AuthStoreMutationLeaseRequired = false }},
 		{"shadow digest changed", func(_ *ContainerSpec, b *CodexReviewJournalBinding) { b.AgentsShadowDigest = strings.Repeat("d", 64) }},

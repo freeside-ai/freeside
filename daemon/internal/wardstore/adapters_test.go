@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
@@ -127,6 +129,165 @@ func TestJournalMapsMissingRecordToWardSentinel(t *testing.T) {
 	_, err = adapters.Journal.Get(ctx, "missing-run")
 	if !errors.Is(err, ward.ErrJournalRecordNotFound) {
 		t.Fatalf("Journal.Get missing = %v, want ErrJournalRecordNotFound", err)
+	}
+}
+
+func TestCodexReviewJournalRoundTripsLifecycleAcrossStoreReopen(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	st, err := store.Open(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapters, err := wardstore.New(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := "review-run-1"
+	when := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	request := exec.ReviewRequest{
+		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
+		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
+		Workspace: "/seed/candidate", Verification: exec.ReviewVerificationEvidence{
+			Outcome:                domain.VerificationPassed,
+			RecipeDigest:           domain.Digest("sha256:" + strings.Repeat("c", 64)),
+			EvidenceSnapshotDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		}, RequestedAt: when,
+	}
+	workspace := ward.CodexReviewWorkspaceBinding{
+		SourceRunID: runID, Volume: "candidate-volume",
+		OwnershipToken: strings.Repeat("a", 32),
+	}
+	intent := ward.CodexReviewLaunchIntent{
+		RunID: runID, SpecDigest: strings.Repeat("a", 64), OwnershipToken: strings.Repeat("b", 32),
+		ShadowVolume: "shadow", Network: "network", ReviewContainer: "review",
+		Resources: []ward.CodexReviewIntentResource{{Name: "shadow", OwnershipToken: strings.Repeat("b", 32)}},
+		State:     ward.CodexReviewIntentPreparing,
+	}
+	if err := adapters.Journal.PutCodexReviewRequest(ctx, runID, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapters.Journal.PutCodexReviewWorkspaceBinding(ctx, workspace); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := adapters.Journal.ListCodexReviewWorkspaceIDs(ctx); err != nil ||
+		!slices.Equal(got, []string{runID}) {
+		t.Fatalf("review workspace ids = %#v, %v", got, err)
+	}
+	workspace.CreationFingerprint = "workspace-fingerprint"
+	if err := adapters.Journal.PutCodexReviewWorkspaceBinding(ctx, workspace); err != nil {
+		t.Fatal(err)
+	}
+	conflictingWorkspace := workspace
+	conflictingWorkspace.CreationFingerprint = "replacement-fingerprint"
+	if err := adapters.Journal.PutCodexReviewWorkspaceBinding(ctx, conflictingWorkspace); !errors.Is(err, store.ErrImmutableConflict) {
+		t.Fatalf("workspace replacement = %v, want immutable conflict", err)
+	}
+	if err := adapters.Journal.DeleteCodexReviewWorkspaceBinding(ctx, conflictingWorkspace); !errors.Is(err, ward.ErrConformance) {
+		t.Fatalf("delete replaced workspace = %v, want conformance failure", err)
+	}
+	if err := adapters.Journal.DeleteCodexReviewWorkspaceBinding(ctx, workspace); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := adapters.Journal.ListCodexReviewWorkspaceIDs(ctx); err != nil || len(got) != 0 {
+		t.Fatalf("deleted review workspace ids = %#v, %v", got, err)
+	}
+	if _, err := adapters.Journal.GetCodexReviewWorkspaceBinding(ctx, runID); !errors.Is(err, ward.ErrCodexReviewWorkspaceNotFound) {
+		t.Fatalf("deleted review workspace = %v", err)
+	}
+	if err := adapters.Journal.PutCodexReviewWorkspaceBinding(ctx, workspace); err != nil {
+		t.Fatalf("recreate review workspace binding: %v", err)
+	}
+	if err := adapters.Journal.BeginCodexReviewIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	resource := intent.Resources[0]
+	resource.Fingerprint = "shadow-fingerprint"
+	if err := adapters.Journal.MarkCodexReviewIntentResource(ctx, runID, resource); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapters.Journal.MarkCodexReviewIntentPrepared(ctx, runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapters.Journal.MarkCodexReviewIntentStarting(ctx, runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapters.Journal.MarkCodexReviewIntentStarted(ctx, runID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := adapters.Journal.ListCodexReviewIntentIDs(ctx); err != nil ||
+		!slices.Equal(got, []string{runID}) {
+		t.Fatalf("review intent ids = %#v, %v", got, err)
+	}
+	if err := adapters.Journal.PutCodexReviewBinding(ctx,
+		ward.CodexReviewJournalBinding{RunID: runID}); err != nil {
+		t.Fatal(err)
+	}
+	result := exec.ReviewResult{
+		InvocationID: domain.InvocationID(runID), BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA,
+		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)), CostOwner: "owner",
+		CompletedAt: when,
+	}
+	collectionEvidence := domain.Digest("sha256:" + strings.Repeat("c", 64))
+	result.CompletionEvidence, err = ward.CodexReviewResultEvidence(result, collectionEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := ward.CodexReviewSourceOutcome{
+		InvocationID: domain.InvocationID(runID), Result: &result, CollectionEvidence: collectionEvidence,
+	}
+	if err := adapters.Journal.PutCodexReviewOutcome(ctx, runID, outcome); err != nil {
+		t.Fatal(err)
+	}
+	if _, ready, err := adapters.Journal.GetCodexReviewOutcome(ctx, runID); err != nil || ready {
+		t.Fatalf("collected outcome = ready %v, %v", ready, err)
+	}
+	if err := adapters.Journal.CloseCodexReviewIntent(ctx, runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapters.Journal.MarkCodexReviewOutcomeReady(ctx, runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapters.Journal.PutCodexReviewOutcome(ctx, runID, outcome); err != nil {
+		t.Fatalf("replay outcome after ready transition: %v", err)
+	}
+	if got, err := adapters.Journal.ListCodexReviewIntentIDs(ctx); err != nil ||
+		!slices.Equal(got, []string{runID}) {
+		t.Fatalf("closed review intent ids = %#v, %v", got, err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	adapters, err = wardstore.New(reopened)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := adapters.Journal.GetCodexReviewIntent(ctx, runID); err != nil || got.State != ward.CodexReviewIntentClosed {
+		t.Fatalf("reopened intent = %#v, %v", got, err)
+	}
+	if got, err := adapters.Journal.GetCodexReviewWorkspaceBinding(ctx, runID); err != nil || got != workspace {
+		t.Fatalf("reopened workspace = %#v, %v", got, err)
+	}
+	if got, ready, err := adapters.Journal.GetCodexReviewOutcome(ctx, runID); err != nil || !ready || got.Result == nil {
+		t.Fatalf("reopened outcome = %#v, ready %v, %v", got, ready, err)
+	}
+	restartedIntent := intent
+	restartedIntent.SpecDigest = "restarted-spec"
+	if err := adapters.Journal.BeginCodexReviewIntent(ctx, restartedIntent); err != nil {
+		t.Fatalf("restart closed intent: %v", err)
+	}
+	if got, err := adapters.Journal.GetCodexReviewIntent(ctx, runID); err != nil ||
+		got.State != ward.CodexReviewIntentPreparing || got.SpecDigest != restartedIntent.SpecDigest {
+		t.Fatalf("restarted intent = %#v, %v", got, err)
+	}
+	if _, err := adapters.Journal.GetCodexReviewBinding(ctx, runID); !errors.Is(err, ward.ErrCodexReviewBindingNotFound) {
+		t.Fatalf("restarted intent retained old binding: %v", err)
 	}
 }
 

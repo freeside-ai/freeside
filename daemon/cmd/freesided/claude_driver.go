@@ -66,9 +66,19 @@ type claudeDriverConfig struct {
 	RunConformance bool
 	// StateRoot and CredentialsDir locate the GitHub App authority and
 	// credential material the exact-base transport authenticates with.
-	StateRoot      string
-	CredentialsDir string
-	OperatingMode  domain.OperatingMode
+	StateRoot             string
+	CredentialsDir        string
+	OperatingMode         domain.OperatingMode
+	ReviewImage           string
+	ReviewInputRoot       string
+	ReviewAuthMode        ward.CodexAuthMode
+	ReviewAuthIdentityID  domain.AuthIdentityID
+	ReviewAuthSnapshot    string
+	ReviewInstructions    string
+	ReviewModel           string
+	ReviewReasoningEffort string
+	ReviewCostOwner       string
+	ReviewWorkspaceSizeMB int64
 }
 
 func (c claudeDriverConfig) validate() error {
@@ -105,6 +115,22 @@ func (c claudeDriverConfig) validate() error {
 		return fmt.Errorf("-state-dir is required in claude driver mode")
 	case c.StateRoot == "" || c.CredentialsDir == "":
 		return fmt.Errorf("-publication-state-dir and -publication-credentials-dir are required in claude driver mode")
+	case c.OperatingMode == domain.ModeUnattended &&
+		(c.ReviewImage == "" || c.ReviewInputRoot == "" || c.ReviewAuthIdentityID == "" ||
+			c.ReviewAuthSnapshot == "" || c.ReviewInstructions == "" || c.ReviewModel == "" ||
+			c.ReviewReasoningEffort == "" || c.ReviewCostOwner == "" || c.ReviewWorkspaceSizeMB <= 0):
+		return fmt.Errorf("codex review configuration is required in claude driver mode")
+	case c.OperatingMode == domain.ModeUnattended && domain.ImageRef(c.ReviewImage).Validate() != nil:
+		return fmt.Errorf("-review-image must be digest-pinned")
+	case c.OperatingMode == domain.ModeUnattended &&
+		(!filepath.IsAbs(c.ReviewInputRoot) || filepath.Clean(c.ReviewInputRoot) != c.ReviewInputRoot):
+		return fmt.Errorf("-review-input-root must be a clean absolute path")
+	case c.OperatingMode == domain.ModeUnattended &&
+		(strings.IndexByte(c.ReviewModel, 0) >= 0 || strings.IndexByte(c.ReviewReasoningEffort, 0) >= 0):
+		return fmt.Errorf("codex review model configuration must be NUL-free")
+	case c.OperatingMode == domain.ModeUnattended &&
+		c.ReviewAuthMode != ward.CodexAuthSubscription && c.ReviewAuthMode != ward.CodexAuthAPIKey:
+		return fmt.Errorf("-review-auth-mode is invalid")
 	}
 	return nil
 }
@@ -850,17 +876,20 @@ func isPermanentSeedCredentialError(err error) bool {
 // matching prior pass is restored. The daemon keeps the same conformance
 // closure for every scheduled doctor pass.
 type claudeComposition struct {
-	driver               *claude.Driver
-	backend              *ward.Backend
-	authority            *publish.InstallationAuthorityStore
-	publicationTransport engine.PublicationTransport
-	publisher            *publish.Publisher
-	containerBin         string
-	env                  engine.AdmissionEnvironment
-	derive               engine.AdmissionDerivation
-	runConformance       func(context.Context) error
-	closer               sessionCloser
-	janitor              *janitorSession
+	driver                    *claude.Driver
+	backend                   *ward.Backend
+	authority                 *publish.InstallationAuthorityStore
+	publicationTransport      engine.PublicationTransport
+	publisher                 *publish.Publisher
+	reviewSource              exec.ReviewSource
+	reviewRecovery            func(context.Context) error
+	reviewConfigurationDigest domain.Digest
+	containerBin              string
+	env                       engine.AdmissionEnvironment
+	derive                    engine.AdmissionDerivation
+	runConformance            func(context.Context) error
+	closer                    sessionCloser
+	janitor                   *janitorSession
 	// observeBaseTip is the base-advance watch's conditional ref read
 	// through the publish reconciler (§5.11 conditional requests; §5.16
 	// base_advance_watch consumer).
@@ -906,7 +935,8 @@ func composeClaudeDriver(
 	if adapterErr != nil {
 		return nil, fmt.Errorf("compose ward store adapters: %w", adapterErr)
 	}
-	backend, backendErr := ward.New(ward.NewCLIRuntime(cfg.ContainerBin), ward.Config{
+	runtime := ward.NewCLIRuntime(cfg.ContainerBin)
+	backend, backendErr := ward.New(runtime, ward.Config{
 		AgentImage:    string(cfg.AgentImage),
 		ExporterImage: cfg.ExporterImage,
 		// The trusted in-image helper's fixed argv, from the gauntlet lane's
@@ -922,6 +952,60 @@ func composeClaudeDriver(
 	})
 	if backendErr != nil {
 		return nil, fmt.Errorf("compose ward backend: %w", backendErr)
+	}
+	var (
+		reviewSource              exec.ReviewSource
+		reviewConfigurationDigest domain.Digest
+	)
+	volumeLeaser, err := ward.NewRuntimeCodexReviewVolumeLeaser(runtime)
+	if err != nil {
+		return nil, fmt.Errorf("compose Codex review volume lifecycle: %w", err)
+	}
+	reviewRecovery, err := ward.NewCodexReviewRecovery(backend, adapters.Journal, volumeLeaser)
+	if err != nil {
+		return nil, fmt.Errorf("compose Codex review recovery: %w", err)
+	}
+	if cfg.OperatingMode == domain.ModeUnattended {
+		reviewInstructionBody, err := os.ReadFile(cfg.ReviewInstructions)
+		if err != nil || len(reviewInstructionBody) == 0 {
+			return nil, fmt.Errorf("read Codex review instructions: %w", err)
+		}
+		reviewInstructionSum := sha256.Sum256(reviewInstructionBody)
+		reviewInstructions := ward.VendorInstructions{
+			Vendor: domain.AgentVendorCodex, Delivery: domain.VendorInstructionDeliveryAppendFile,
+			Present: true, Digest: domain.Digest(fmt.Sprintf("sha256:%x", reviewInstructionSum)),
+			Body: reviewInstructionBody,
+		}
+		reviewEndpoints := []string{"chatgpt.com:443"}
+		if cfg.ReviewAuthMode == ward.CodexAuthAPIKey {
+			reviewEndpoints = []string{"api.openai.com:443"}
+		}
+		reviewConfig := ward.CodexReviewConfig{
+			InputRoot: cfg.ReviewInputRoot, WorkspaceTarget: "/workspace/project",
+			ProviderEndpoints: reviewEndpoints, ApprovedImage: cfg.ReviewImage,
+			ObserverImage: cfg.ExporterImage, Model: cfg.ReviewModel,
+			ReasoningEffort: cfg.ReviewReasoningEffort, AccessTokenLifetimeFloor: time.Hour,
+			Now: func() time.Time { return time.Now().UTC() }, Journal: adapters.Journal,
+			VolumeLifecycleLeaser: volumeLeaser,
+		}
+		reviewConfigurationDigest, err = ward.CodexReviewConfigurationDigest(
+			reviewConfig, cfg.ReviewWorkspaceSizeMB, cfg.ReviewAuthMode,
+			cfg.ReviewAuthIdentityID, reviewInstructions.Digest, cfg.ReviewCostOwner,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("digest Codex review configuration: %w", err)
+		}
+		reviewSource, err = ward.NewCodexReviewSource(ward.CodexReviewSourceConfig{
+			Backend: backend, Review: reviewConfig, Journal: adapters.Journal,
+			WorkspaceSizeMB: cfg.ReviewWorkspaceSizeMB, AuthMode: cfg.ReviewAuthMode,
+			AuthIdentityID: cfg.ReviewAuthIdentityID, AuthSnapshot: cfg.ReviewAuthSnapshot,
+			Instructions: reviewInstructions, InstructionFile: cfg.ReviewInstructions,
+			ConfigurationDigest: reviewConfigurationDigest,
+			CostOwner:           cfg.ReviewCostOwner, Now: func() time.Time { return time.Now().UTC() },
+		})
+		if err != nil {
+			return nil, fmt.Errorf("compose Codex review source: %w", err)
+		}
 	}
 	var (
 		conformance     domain.BackendConformance
@@ -1014,7 +1098,9 @@ func composeClaudeDriver(
 			return reconciler.ReconcileIssue(obsCtx, repo, number)
 		},
 		publicationTransport: publicationTransport,
-		publisher:            publisher, containerBin: cfg.ContainerBin,
+		publisher:            publisher, reviewSource: reviewSource,
+		reviewRecovery:            reviewRecovery.Reconcile,
+		reviewConfigurationDigest: reviewConfigurationDigest, containerBin: cfg.ContainerBin,
 		env:    env,
 		derive: claudeAdmissionDerivation(cfg),
 		runConformance: func(runCtx context.Context) error {
