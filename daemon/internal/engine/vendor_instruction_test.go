@@ -74,6 +74,48 @@ func TestSnapshotVendorInstructionsCarriesCodexAppendFileBinding(t *testing.T) {
 	}
 }
 
+func TestSnapshotVendorInstructionsRejectsForbiddenHostInputAlias(t *testing.T) {
+	dir := t.TempDir()
+	auth := filepath.Join(dir, "auth.json")
+	instructions := filepath.Join(dir, "AGENTS.md")
+	if err := os.WriteFile(auth, []byte("credential material"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(auth, instructions); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := snapshotVendorInstructions(t.Context(), VendorInstructionConfig{
+		Vendor: domain.AgentVendorCodex, Delivery: domain.VendorInstructionDeliveryAppendFile,
+		HostPath: instructions, ForbiddenHostPaths: []string{auth},
+	})
+	if err == nil {
+		t.Fatal("instruction snapshot accepted the auth snapshot inode")
+	}
+}
+
+func TestPinnedForbiddenHostInputsRejectPathReplacement(t *testing.T) {
+	dir := t.TempDir()
+	auth := filepath.Join(dir, "auth.json")
+	replacement := filepath.Join(dir, "auth.replacement.json")
+	if err := os.WriteFile(auth, []byte("original credential material"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := pinForbiddenHostInputs([]string{auth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closePinnedForbiddenHostInputs(inputs)
+	if err := os.WriteFile(replacement, []byte("rotated credential material"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, auth); err != nil {
+		t.Fatal(err)
+	}
+	if err := revalidatePinnedForbiddenHostInputs(inputs); err == nil {
+		t.Fatal("forbidden input replacement was accepted")
+	}
+}
+
 func TestSnapshotVendorInstructionsDereferencesOnce(t *testing.T) {
 	dir := t.TempDir()
 	firstPath := filepath.Join(dir, "first.md")

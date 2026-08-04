@@ -24,7 +24,8 @@ func TestReviewRecordRoundTripsWithRawFindingsAndIsExclusiveWithFailure(t *testi
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-run-1-1", RunID: run.ID, Round: 1,
 		Provider: "openai", ModelConfiguration: "gpt-codex/high",
-		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)), CostOwner: "owner",
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)), CostOwner: "owner",
 		BaseSHA: "base", HeadSHA: "head", CompletedAt: when,
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)), Outcome: domain.ReviewFindings,
 		FindingIDs: []domain.FindingID{finding.ID},
@@ -84,7 +85,8 @@ func TestReviewRecordRoundTripsWithRawFindingsAndIsExclusiveWithFailure(t *testi
 	second, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-run-1-2-alias", RunID: run.ID, Round: 2,
 		Provider: "openai", ModelConfiguration: "gpt-codex/high",
-		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)), CostOwner: "owner",
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)), CostOwner: "owner",
 		BaseSHA: "base", HeadSHA: "head", CompletedAt: when,
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            domain.ReviewClean,
@@ -111,7 +113,8 @@ func TestReviewRecordCanonicalizesFindingOrder(t *testing.T) {
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-run-order-1", RunID: run.ID, Round: 1,
 		Provider: "openai", ModelConfiguration: "gpt-codex/high",
-		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)), CostOwner: "owner",
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)), CostOwner: "owner",
 		BaseSHA: "base", HeadSHA: "head", CompletedAt: when,
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)), Outcome: domain.ReviewFindings,
 		FindingIDs: []domain.FindingID{findings[0].ID, findings[1].ID},

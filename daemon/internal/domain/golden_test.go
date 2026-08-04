@@ -220,6 +220,7 @@ func TestGolden(t *testing.T) {
 		InvocationID: "review-run-1-1", RunID: "run-1", Round: 1,
 		Provider: "openai", ModelConfiguration: "gpt-5.2-codex/high",
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
 		CostOwner:           "subscription:owner", BaseSHA: "beefcafe", HeadSHA: "cafebabe",
 		CompletedAt: ts, CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome: domain.ReviewFindings, FindingIDs: []domain.FindingID{finding.ID},

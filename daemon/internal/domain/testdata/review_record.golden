@@ -5,6 +5,7 @@
   "provider": "openai",
   "model_configuration": "gpt-5.2-codex/high",
   "configuration_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "instruction_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
   "cost_owner": "subscription:owner",
   "base_sha": "beefcafe",
   "head_sha": "cafebabe",

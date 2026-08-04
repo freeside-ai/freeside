@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -39,6 +40,25 @@ func decodeCodexReview[T any](body []byte) (T, error) {
 		return value, errors.New("decode Codex review journal: trailing JSON value")
 	}
 	return value, nil
+}
+
+func legacyCodexReviewRequest(body []byte, request exec.ReviewRequest) bool {
+	if request.Instructions.CompositionVersion != "" ||
+		request.Instructions.HostDigest != nil ||
+		len(request.Instructions.RepositorySources) != 0 ||
+		request.Instructions.ResultDigest != "" {
+		return false
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return false
+	}
+	for field := range fields {
+		if strings.EqualFold(field, "instructions") {
+			return false
+		}
+	}
+	return true
 }
 
 func classifyCodexReviewMutation(err error) error {
@@ -178,6 +198,10 @@ func (a *Journal) GetCodexReviewRequest(
 		return exec.ReviewRequest{}, errors.Join(ward.ErrCodexReviewRequestRejected, err)
 	}
 	if err := request.Validate(); err != nil {
+		if legacyCodexReviewRequest(record.Body, request) {
+			return exec.ReviewRequest{}, errors.Join(
+				ward.ErrCodexReviewRequestRejected, exec.ErrLegacyReviewRequest, err)
+		}
 		return exec.ReviewRequest{}, errors.Join(ward.ErrCodexReviewRequestRejected, err)
 	}
 	return request, nil

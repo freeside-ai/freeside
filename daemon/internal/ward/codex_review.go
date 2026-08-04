@@ -21,6 +21,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
 
 const (
@@ -285,6 +286,7 @@ type CodexReviewSpec struct {
 	AuthSnapshot         string
 	Instructions         VendorInstructions
 	InstructionFile      string
+	InstructionBinding   exec.ReviewInstructionBinding
 
 	// AgentsShadow is the runtime-backed observation of one empty volume,
 	// mounted read-only at HOME/.agents and at the workspace root plus every
@@ -297,53 +299,56 @@ type CodexReviewSpec struct {
 // pre-start observation beside the initial observation. The binding carries no
 // prompt or credential bytes.
 type CodexReviewJournalBinding struct {
-	TopologyVersion                         string                `json:"topology_version"`
-	RunID                                   string                `json:"run_id"`
-	Boundary                                CodexReviewBoundary   `json:"boundary"`
-	WorkspaceSourceRunID                    string                `json:"workspace_source_run_id"`
-	WorkspaceVolume                         string                `json:"workspace_volume"`
-	WorkspaceFingerprint                    string                `json:"workspace_fingerprint"`
-	WorkspaceHead                           string                `json:"workspace_head"`
-	WorkspaceTreeDigest                     string                `json:"workspace_tree_digest"`
-	WorkspaceObserverImage                  string                `json:"workspace_observer_image"`
-	WorkspaceObserverFingerprint            string                `json:"workspace_observer_fingerprint"`
-	WorkspacePreStartObserverFingerprint    string                `json:"workspace_pre_start_observer_fingerprint"`
-	WorkspaceTarget                         string                `json:"workspace_target"`
-	WorkspaceReadOnly                       bool                  `json:"workspace_read_only"`
-	HomeTarget                              string                `json:"home_target"`
-	CodexHomeTarget                         string                `json:"codex_home_target"`
-	FreshContext                            bool                  `json:"fresh_context"`
-	ContinuityMounted                       bool                  `json:"continuity_mounted"`
-	AuthMode                                CodexAuthMode         `json:"auth_mode"`
-	AuthIdentityID                          domain.AuthIdentityID `json:"auth_identity_id"`
-	AuthSnapshotDigest                      string                `json:"auth_snapshot_digest"`
-	AccessTokenExpiresAt                    *time.Time            `json:"access_token_expires_at"`
-	AuthReadOnly                            bool                  `json:"auth_read_only"`
-	AuthStoreMutationLeaseRequired          bool                  `json:"auth_store_mutation_lease_required"`
-	InstructionDigest                       domain.Digest         `json:"instruction_digest"`
-	InstructionReadOnly                     bool                  `json:"instruction_read_only"`
-	AgentsShadowVolume                      string                `json:"agents_shadow_volume"`
-	AgentsShadowFingerprint                 string                `json:"agents_shadow_fingerprint"`
-	AgentsShadowDigest                      string                `json:"agents_shadow_digest"`
-	AgentsShadowObserverImage               string                `json:"agents_shadow_observer_image"`
-	AgentsShadowObserverFingerprint         string                `json:"agents_shadow_observer_fingerprint"`
-	AgentsShadowPreStartObserverFingerprint string                `json:"agents_shadow_pre_start_observer_fingerprint"`
-	AgentsShadowTargets                     []string              `json:"agents_shadow_targets"`
-	AgentsShadowReadOnly                    bool                  `json:"agents_shadow_read_only"`
-	ProviderEndpoints                       []string              `json:"provider_endpoints"`
-	ProviderNetwork                         string                `json:"provider_network"`
-	ProviderNetworkFingerprint              string                `json:"provider_network_fingerprint"`
-	ProviderNetworkHostOnly                 bool                  `json:"provider_network_host_only"`
-	ProviderNetworkGateway                  string                `json:"provider_network_gateway"`
-	ProviderNetworkSubnet                   string                `json:"provider_network_subnet"`
-	ProviderProxyAuthority                  string                `json:"provider_proxy_authority"`
-	RefreshEndpointReachable                bool                  `json:"refresh_endpoint_reachable"`
-	PublicationCredentials                  bool                  `json:"publication_credentials"`
-	LauncherEnvironmentDigest               string                `json:"launcher_environment_digest"`
-	CommandDigest                           string                `json:"command_digest"`
-	ReviewContainer                         string                `json:"review_container"`
-	ReviewContainerFingerprint              string                `json:"review_container_fingerprint"`
-	ReviewOwnershipToken                    string                `json:"review_ownership_token"`
+	TopologyVersion                         string                         `json:"topology_version"`
+	RunID                                   string                         `json:"run_id"`
+	Boundary                                CodexReviewBoundary            `json:"boundary"`
+	WorkspaceSourceRunID                    string                         `json:"workspace_source_run_id"`
+	WorkspaceVolume                         string                         `json:"workspace_volume"`
+	WorkspaceFingerprint                    string                         `json:"workspace_fingerprint"`
+	WorkspaceHead                           string                         `json:"workspace_head"`
+	WorkspaceTreeDigest                     string                         `json:"workspace_tree_digest"`
+	WorkspaceObserverImage                  string                         `json:"workspace_observer_image"`
+	WorkspaceObserverFingerprint            string                         `json:"workspace_observer_fingerprint"`
+	WorkspacePreStartObserverFingerprint    string                         `json:"workspace_pre_start_observer_fingerprint"`
+	WorkspaceTarget                         string                         `json:"workspace_target"`
+	WorkspaceReadOnly                       bool                           `json:"workspace_read_only"`
+	HomeTarget                              string                         `json:"home_target"`
+	CodexHomeTarget                         string                         `json:"codex_home_target"`
+	FreshContext                            bool                           `json:"fresh_context"`
+	ContinuityMounted                       bool                           `json:"continuity_mounted"`
+	AuthMode                                CodexAuthMode                  `json:"auth_mode"`
+	AuthIdentityID                          domain.AuthIdentityID          `json:"auth_identity_id"`
+	AuthSnapshotDigest                      string                         `json:"auth_snapshot_digest"`
+	AccessTokenExpiresAt                    *time.Time                     `json:"access_token_expires_at"`
+	AuthReadOnly                            bool                           `json:"auth_read_only"`
+	AuthStoreMutationLeaseRequired          bool                           `json:"auth_store_mutation_lease_required"`
+	InstructionDigest                       domain.Digest                  `json:"instruction_digest"`
+	InstructionCompositionVersion           string                         `json:"instruction_composition_version"`
+	HostInstructionDigest                   *domain.Digest                 `json:"host_instruction_digest"`
+	RepositoryInstructionSources            []exec.ReviewInstructionSource `json:"repository_instruction_sources"`
+	InstructionReadOnly                     bool                           `json:"instruction_read_only"`
+	AgentsShadowVolume                      string                         `json:"agents_shadow_volume"`
+	AgentsShadowFingerprint                 string                         `json:"agents_shadow_fingerprint"`
+	AgentsShadowDigest                      string                         `json:"agents_shadow_digest"`
+	AgentsShadowObserverImage               string                         `json:"agents_shadow_observer_image"`
+	AgentsShadowObserverFingerprint         string                         `json:"agents_shadow_observer_fingerprint"`
+	AgentsShadowPreStartObserverFingerprint string                         `json:"agents_shadow_pre_start_observer_fingerprint"`
+	AgentsShadowTargets                     []string                       `json:"agents_shadow_targets"`
+	AgentsShadowReadOnly                    bool                           `json:"agents_shadow_read_only"`
+	ProviderEndpoints                       []string                       `json:"provider_endpoints"`
+	ProviderNetwork                         string                         `json:"provider_network"`
+	ProviderNetworkFingerprint              string                         `json:"provider_network_fingerprint"`
+	ProviderNetworkHostOnly                 bool                           `json:"provider_network_host_only"`
+	ProviderNetworkGateway                  string                         `json:"provider_network_gateway"`
+	ProviderNetworkSubnet                   string                         `json:"provider_network_subnet"`
+	ProviderProxyAuthority                  string                         `json:"provider_proxy_authority"`
+	RefreshEndpointReachable                bool                           `json:"refresh_endpoint_reachable"`
+	PublicationCredentials                  bool                           `json:"publication_credentials"`
+	LauncherEnvironmentDigest               string                         `json:"launcher_environment_digest"`
+	CommandDigest                           string                         `json:"command_digest"`
+	ReviewContainer                         string                         `json:"review_container"`
+	ReviewContainerFingerprint              string                         `json:"review_container_fingerprint"`
+	ReviewOwnershipToken                    string                         `json:"review_ownership_token"`
 }
 
 // BuildCodexReviewShadowObserverSpec returns the exact networkless helper
@@ -688,6 +693,9 @@ func BuildCodexReviewAgentSpec(
 		AuthReadOnly:                    true,
 		AuthStoreMutationLeaseRequired:  true,
 		InstructionDigest:               req.Instructions.Digest,
+		InstructionCompositionVersion:   req.InstructionBinding.CompositionVersion,
+		HostInstructionDigest:           cloneOptionalDigest(req.InstructionBinding.HostDigest),
+		RepositoryInstructionSources:    slices.Clone(req.InstructionBinding.RepositorySources),
 		InstructionReadOnly:             true,
 		AgentsShadowVolume:              req.AgentsShadow.volume,
 		AgentsShadowFingerprint:         req.AgentsShadow.fingerprint,
@@ -718,7 +726,15 @@ func BuildCodexReviewAgentSpec(
 // deliberately not an authorization gate: CodexReview reloads the durable
 // record and reconstructs every runtime observation before start.
 func (b CodexReviewJournalBinding) validateShape() error {
-	return b.validate(true)
+	return b.validate(true, false)
+}
+
+// validateForTeardown accepts the one historical instruction shape that
+// predates explicit composition provenance. It is used only to authenticate
+// cleanup targets; legacy instruction authority can never launch or satisfy
+// a review result.
+func (b CodexReviewJournalBinding) validateForTeardown() error {
+	return b.validate(true, true)
 }
 
 func (b CodexReviewJournalBinding) validatePrepared() error {
@@ -726,10 +742,12 @@ func (b CodexReviewJournalBinding) validatePrepared() error {
 		b.WorkspacePreStartObserverFingerprint != "" {
 		return errors.New("codex review prepared journal binding carries pre-start evidence")
 	}
-	return b.validate(false)
+	return b.validate(false, false)
 }
 
-func (b CodexReviewJournalBinding) validate(requirePreStartObservation bool) error {
+func (b CodexReviewJournalBinding) validate(
+	requirePreStartObservation, allowLegacyInstructionBinding bool,
+) error {
 	if b.TopologyVersion != codexReviewTopologyVersion ||
 		!runIDPattern.MatchString(b.RunID) ||
 		b.Boundary != CodexReviewFreshStart || !b.FreshContext || b.ContinuityMounted ||
@@ -756,8 +774,14 @@ func (b CodexReviewJournalBinding) validate(requirePreStartObservation bool) err
 			b.WorkspacePreStartObserverFingerprint == b.WorkspaceObserverFingerprint) {
 		return errors.New("codex review journal omits distinct pre-start workspace evidence")
 	}
+	instructionBindingValid := b.instructionBinding().Validate() == nil
+	if allowLegacyInstructionBinding && b.InstructionCompositionVersion == "" &&
+		b.HostInstructionDigest == nil && len(b.RepositoryInstructionSources) == 0 &&
+		contentaddr.Valid(string(b.InstructionDigest)) {
+		instructionBindingValid = true
+	}
 	if !b.AuthMode.valid() || b.AuthIdentityID == "" ||
-		!contentaddr.Valid(b.AuthSnapshotDigest) || !contentaddr.Valid(string(b.InstructionDigest)) {
+		!contentaddr.Valid(b.AuthSnapshotDigest) || !instructionBindingValid {
 		return errors.New("codex review journal credential or instruction binding is invalid")
 	}
 	if b.AuthMode == CodexAuthSubscription && b.AccessTokenExpiresAt == nil {
@@ -859,7 +883,28 @@ func validateCodexReviewRequest(cfg CodexReviewConfig, req CodexReviewSpec) erro
 	if req.Instructions.Vendor != domain.AgentVendorCodex || !req.Instructions.Present {
 		return fmt.Errorf("%w: a present Codex append-file instruction is required", ErrInvalidCodexReviewSpec)
 	}
+	if err := req.InstructionBinding.Validate(); err != nil ||
+		req.InstructionBinding.ResultDigest != req.Instructions.Digest {
+		return fmt.Errorf("%w: review instruction provenance is invalid", ErrInvalidCodexReviewSpec)
+	}
 	return nil
+}
+
+func (b CodexReviewJournalBinding) instructionBinding() exec.ReviewInstructionBinding {
+	return exec.ReviewInstructionBinding{
+		CompositionVersion: b.InstructionCompositionVersion,
+		HostDigest:         cloneOptionalDigest(b.HostInstructionDigest),
+		RepositorySources:  slices.Clone(b.RepositoryInstructionSources),
+		ResultDigest:       b.InstructionDigest,
+	}
+}
+
+func cloneOptionalDigest(in *domain.Digest) *domain.Digest {
+	if in == nil {
+		return nil
+	}
+	digest := *in
+	return &digest
 }
 
 func readCodexReviewInput(root, file string, limit int64) (string, []byte, error) {
@@ -1272,6 +1317,7 @@ func validateCodexReviewAgentSpec(
 		binding.AuthMode != req.AuthMode || binding.AuthIdentityID != req.AuthIdentityID ||
 		binding.AuthSnapshotDigest != wantAuthDigest || !sameOptionalTime(binding.AccessTokenExpiresAt, expires) ||
 		binding.InstructionDigest != req.Instructions.Digest ||
+		!sameReviewInstructionBinding(binding.instructionBinding(), req.InstructionBinding) ||
 		binding.AgentsShadowVolume != req.AgentsShadow.volume ||
 		binding.AgentsShadowFingerprint != req.AgentsShadow.fingerprint ||
 		binding.AgentsShadowDigest != req.AgentsShadow.digest ||

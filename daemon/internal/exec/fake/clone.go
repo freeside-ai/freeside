@@ -28,3 +28,13 @@ func cloneReviewResult(r exec.ReviewResult) exec.ReviewResult {
 	r.Findings = slices.Clone(r.Findings)
 	return r
 }
+
+func cloneReviewRequest(r exec.ReviewRequest) exec.ReviewRequest {
+	r.Verification.ArtifactDigests = slices.Clone(r.Verification.ArtifactDigests)
+	r.Instructions.RepositorySources = slices.Clone(r.Instructions.RepositorySources)
+	if r.Instructions.HostDigest != nil {
+		digest := *r.Instructions.HostDigest
+		r.Instructions.HostDigest = &digest
+	}
+	return r
+}

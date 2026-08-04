@@ -78,6 +78,11 @@ type faultReviewSource struct {
 	failVerifyAt          int
 	failVerifyWith        error
 	failAuthorityWith     error
+	failAuthorityAt       int
+	authorityCalls        int
+	failSupersessionWith  error
+	failSupersessionAt    int
+	supersessionCalls     int
 	failRequestAfterStart bool
 	requestedWorkspace    string
 }
@@ -142,7 +147,9 @@ func (s *faultReviewSource) Verify(
 func (s *faultReviewSource) VerifyRequestAuthority(
 	ctx context.Context, id domain.InvocationID, expected domain.Digest,
 ) error {
-	if s.failAuthorityWith != nil {
+	s.authorityCalls++
+	if s.failAuthorityWith != nil &&
+		(s.failAuthorityAt == 0 || s.authorityCalls == s.failAuthorityAt) {
 		return s.failAuthorityWith
 	}
 	verifier, ok := s.ReviewSource.(exec.ReviewRequestAuthorityVerifier)
@@ -150,6 +157,20 @@ func (s *faultReviewSource) VerifyRequestAuthority(
 		return errors.New("wrapped review source does not verify request authority")
 	}
 	return verifier.VerifyRequestAuthority(ctx, id, expected)
+}
+
+func (s *faultReviewSource) VerifyReviewRequestSupersession(
+	ctx context.Context, id domain.InvocationID, expected exec.ReviewRequest,
+) error {
+	s.supersessionCalls++
+	if s.failSupersessionWith != nil &&
+		(s.failSupersessionAt == 0 || s.supersessionCalls == s.failSupersessionAt) {
+		return s.failSupersessionWith
+	}
+	if verifier, ok := s.ReviewSource.(exec.ReviewRequestSupersessionVerifier); ok {
+		return verifier.VerifyReviewRequestSupersession(ctx, id, expected)
+	}
+	return nil
 }
 
 type productionPublicationHarness struct {
@@ -595,6 +616,7 @@ func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 			review.HeadSHA != p.replay.HeadSHA || review.Provider != "openai" ||
 			review.ModelConfiguration == "" || review.CostOwner == "" ||
 			review.ConfigurationDigest != fake.DefaultReviewConfigurationDigest ||
+			review.InstructionDigest == "" ||
 			review.CompletionEvidence == "" {
 			t.Fatalf("review pass = %#v", review)
 		}
@@ -621,13 +643,225 @@ func TestProductionReviewInvocationIDIsWardSafe(t *testing.T) {
 	}
 }
 
+func TestProductionCleanReviewDoesNotSurviveInstructionAuthorityChange(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	p.startAndRecordExport(t)
+	old, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: engine.ProductionReviewInvocationID(p.runID, 1),
+		RunID:        p.runID, Round: 1, Provider: "openai", ModelConfiguration: "codex/test",
+		ConfigurationDigest: fake.DefaultReviewConfigurationDigest,
+		InstructionDigest:   productionDigest([]byte("superseded instructions")), CostOwner: "test",
+		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
+		CompletionEvidence: productionDigest([]byte("prior clean review")), Outcome: domain.ReviewClean,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		return tx.PutReviewRecord(p.ctx, old, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	secondID := engine.ProductionReviewInvocationID(p.runID, 2)
+	p.reviewer.Script(secondID, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test",
+			CostOwner: "test", CompletedAt: p.now,
+			CompletionEvidence: productionDigest([]byte("replacement clean review")),
+		},
+	})
+	result, err := p.reconcileLanes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ReadyItemsCreated != 1 {
+		t.Fatalf("instruction re-review result = %#v", result)
+	}
+	_, current, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		record, err := tx.LatestReviewRecord(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if record.Round != 2 || record.InstructionDigest != current.ResultDigest {
+			t.Fatalf("replacement review record = %#v", record)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductionFindingsDoNotSurviveInstructionAuthorityChange(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	p.startAndRecordExport(t)
+	old, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: engine.ProductionReviewInvocationID(p.runID, 1),
+		RunID:        p.runID, Round: 1, Provider: "openai", ModelConfiguration: "codex/test",
+		ConfigurationDigest: fake.DefaultReviewConfigurationDigest,
+		InstructionDigest:   productionDigest([]byte("superseded instructions")), CostOwner: "test",
+		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
+		CompletionEvidence: productionDigest([]byte("prior findings review")), Outcome: domain.ReviewFindings,
+		FindingIDs: []domain.FindingID{"old-finding"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldFinding := domain.Finding{
+		ID: "old-finding", RunID: p.runID, Source: "codex_local", Severity: "P1",
+		Location: "daemon/main.go:12", Message: "stale finding", RawText: "stale finding",
+		CreatedAt: p.now,
+	}
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		return tx.PutReviewRecord(p.ctx, old, []domain.Finding{oldFinding})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	secondID := engine.ProductionReviewInvocationID(p.runID, 2)
+	p.reviewer.Script(secondID, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("replacement clean review")),
+		},
+	})
+	result, err := p.reconcileLanes()
+	if err != nil || result.ReadyItemsCreated != 1 || result.BlockedItemsCreated != 0 {
+		t.Fatalf("stale findings re-review = %#v, %v", result, err)
+	}
+}
+
+func TestProductionLegacyReviewRequestAdvancesToAuthoritativeRound(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	fault := &faultReviewSource{
+		ReviewSource:    p.reviewer,
+		failAuthorityAt: 1,
+		failAuthorityWith: errors.Join(exec.ErrLegacyReviewRequest,
+			&exec.ReviewSourceFailure{
+				Class: domain.ReviewFailureContradiction,
+				Err:   errors.New("pre-authority request rejected after teardown"),
+			}),
+	}
+	p.reviewSource = fault
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
+		t.Fatalf("legacy request supersession = %#v, %v", result, err)
+	}
+	p.now = p.now.Add(2 * time.Second)
+	secondID := engine.ProductionReviewInvocationID(p.runID, 2)
+	p.reviewer.Script(secondID, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("authoritative replacement")),
+		},
+	})
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {
+		t.Fatalf("authoritative replacement review = %#v, %v", result, err)
+	}
+}
+
+func TestProductionLegacyReviewRequestSupersessionPreflightAdvancesRound(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	fault := &faultReviewSource{
+		ReviewSource: p.reviewer, failSupersessionAt: 1,
+		failSupersessionWith: errors.Join(exec.ErrLegacyReviewRequest,
+			&exec.ReviewSourceFailure{
+				Class: domain.ReviewFailureContradiction,
+				Err:   errors.New("legacy request rejected after teardown"),
+			}),
+	}
+	p.reviewSource = fault
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
+		t.Fatalf("legacy supersession preflight = %#v, %v", result, err)
+	}
+	p.now = p.now.Add(2 * time.Second)
+	secondID := engine.ProductionReviewInvocationID(p.runID, 2)
+	p.reviewer.Script(secondID, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("legacy preflight replacement")),
+		},
+	})
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {
+		t.Fatalf("legacy preflight replacement review = %#v, %v", result, err)
+	}
+}
+
+func TestProductionSupersededInstructionRequestAdvancesToNewRound(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	fault := &faultReviewSource{
+		ReviewSource: p.reviewer, failSupersessionAt: 1,
+		failSupersessionWith: &exec.ReviewSourceFailure{
+			Class: domain.ReviewFailureTransient, Err: exec.ErrSupersededReviewRequest,
+		},
+	}
+	p.reviewSource = fault
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
+		t.Fatalf("superseded instruction request = %#v, %v", result, err)
+	}
+	p.now = p.now.Add(2 * time.Second)
+	secondID := engine.ProductionReviewInvocationID(p.runID, 2)
+	p.reviewer.Script(secondID, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("superseding instruction round")),
+		},
+	})
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {
+		t.Fatalf("superseding instruction review = %#v, %v", result, err)
+	}
+}
+
+func TestProductionPersistedCleanReviewRegatesRequestAuthority(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterReady: func() error { return errors.New("stop after persisted clean review") },
+	}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("persisted clean review seam did not interrupt reconciliation")
+	}
+	fault := &faultReviewSource{
+		ReviewSource:    p.reviewer,
+		failAuthorityAt: 1,
+		failAuthorityWith: &exec.ReviewSourceFailure{
+			Class: domain.ReviewFailureContradiction,
+			Err:   errors.New("injected persisted instruction closure corruption"),
+		},
+	}
+	p.reviewSource = fault
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	if _, err := p.reconcileLanes(); err == nil || fault.authorityCalls != fault.failAuthorityAt {
+		t.Fatalf("persisted clean review authority re-gate = calls %d, %v",
+			fault.authorityCalls, err)
+	}
+}
+
 func TestProductionReviewConfigurationMustMatchTrustProfile(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: engine.ProductionReviewInvocationID(p.runID, 1),
 		RunID:        p.runID, Round: 1, Provider: "openai", ModelConfiguration: "codex/test",
-		ConfigurationDigest: fake.DefaultReviewConfigurationDigest, CostOwner: "test",
+		ConfigurationDigest: fake.DefaultReviewConfigurationDigest,
+		InstructionDigest:   productionDigest([]byte("prior instructions")), CostOwner: "test",
 		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
 		CompletionEvidence: productionDigest([]byte("prior clean review")), Outcome: domain.ReviewClean,
 	})

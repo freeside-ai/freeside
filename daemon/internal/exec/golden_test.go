@@ -33,6 +33,7 @@ func TestGolden(t *testing.T) {
 		Provider:            "openai",
 		ModelConfiguration:  "gpt-5.2-codex/high",
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
 		CostOwner:           "subscription:owner",
 		CompletedAt:         ts,
 		CompletionEvidence:  domain.Digest("sha256:" + strings.Repeat("e", 64)),
