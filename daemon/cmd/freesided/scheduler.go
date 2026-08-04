@@ -491,6 +491,64 @@ func baseAdvanceRegistration(st *store.Store, observe baseTipObserver, capture m
 					Outcome: domain.OutcomeObserveFailed,
 				}, captureCommit), nil
 			}
+			fact := domain.BaseFreshness{
+				BaseRef:         sc.BaseWatch.BaseRef,
+				AdmittedBaseSHA: sc.BaseWatch.AdmittedBaseSHA,
+				ObservedBaseSHA: observed,
+				Advanced:        observed != sc.BaseWatch.AdmittedBaseSHA,
+				ObservedAt:      ev.FiredAt,
+			}
+			if fact.Advanced {
+				// The target base advanced past the admitted base: the clean
+				// review pass no longer describes the candidate's base (plan §7,
+				// issue #496). Supersede the item, recording both the base fact
+				// and the readiness-invalidation reason, and conclude the
+				// publication schedules; the watch does not re-arm.
+				//
+				// This precedes the unchanged-observation fast path below by
+				// design: an item whose BaseFreshness already recorded this
+				// advance under the pre-#496 record-only behavior is still open
+				// with an unchanged observed tip, so keying supersession on a
+				// *new* observation would let it fall through the fast path and
+				// stay open indefinitely, presenting a pass bound to a base the
+				// tip has already left. Superseding on the advance itself, not
+				// on the observation being new, drains that upgrade population on
+				// the next fire.
+				invalidation := &domain.ReadinessInvalidation{
+					Reason:     domain.ReadinessInvalidationBaseAdvanced,
+					Bound:      sc.BaseWatch.AdmittedBaseSHA,
+					Observed:   observed,
+					ObservedAt: ev.FiredAt,
+				}
+				return withCapture(scheduler.Consumption{
+					Outcome: domain.OutcomeHandled,
+					Commit: func(ctx context.Context, tx *store.WriteTx) error {
+						item, err := tx.GetAttentionItem(ctx, *sc.Subject.ItemID)
+						if errors.Is(err, store.ErrNotFound) {
+							return nil
+						}
+						if err != nil {
+							return err
+						}
+						if item.Status != domain.StatusOpen || item.ItemVersion != current.ItemVersion {
+							// A conclusion or any other item update serialized
+							// after the handler's read: abandon, so the
+							// supersession is never committed against a different
+							// version, and the next pass recomputes from the
+							// winning state.
+							return scheduler.ErrStaleConsumption
+						}
+						item.BaseFreshness = &fact
+						item.ReadinessInvalidation = invalidation
+						item.Status = domain.StatusSuperseded
+						item.ItemVersion++
+						if err := tx.PutAttentionItem(ctx, item); err != nil {
+							return err
+						}
+						return concludePublicationSchedules(ctx, tx, item.ID, ev.FiredAt)
+					},
+				}, captureCommit), nil
+			}
 			if current.BaseFreshness != nil && current.BaseFreshness.ObservedBaseSHA == observed {
 				if staleExpectation {
 					// No fact to write, but the event's expectation is stale
@@ -511,23 +569,17 @@ func baseAdvanceRegistration(st *store.Store, observe baseTipObserver, capture m
 					Outcome: domain.OutcomeHandled,
 				}, captureCommit), nil
 			}
-			// A material change: the fact write bumps the item version, so the
-			// same consumption re-arms the watch with the binding it is about to
-			// create, keeping the schedule's expectation current instead of
-			// leaving every later fire one version behind.
+			// A material change back to (or still at) the admitted base: the fact
+			// write bumps the item version, so the same consumption re-arms the
+			// watch with the binding it is about to create, keeping the
+			// schedule's expectation current instead of leaving every later fire
+			// one version behind.
 			expected := current.ItemVersion + 1
 			subject := sc.Subject
 			subject.ItemVersion = &expected
 			reArmed, err := sc.ReArmed(subject, nil, ev.FiredAt)
 			if err != nil {
 				return scheduler.Consumption{}, err
-			}
-			fact := domain.BaseFreshness{
-				BaseRef:         sc.BaseWatch.BaseRef,
-				AdmittedBaseSHA: sc.BaseWatch.AdmittedBaseSHA,
-				ObservedBaseSHA: observed,
-				Advanced:        observed != sc.BaseWatch.AdmittedBaseSHA,
-				ObservedAt:      ev.FiredAt,
 			}
 			return withCapture(scheduler.Consumption{
 				Outcome:  domain.OutcomeHandled,

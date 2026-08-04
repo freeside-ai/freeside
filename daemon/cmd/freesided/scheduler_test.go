@@ -121,8 +121,10 @@ func watchSchedule(t *testing.T, item domain.AttentionItem) domain.Schedule {
 
 // TestBaseAdvanceWatchMaintainsFact is the issue-named consumer: the watch
 // writes the item's base-freshness fact on material change only, so an
-// unchanged observation leaves the item version alone while a base advance
-// bumps it (invalidating commands prepared against the stale base claim).
+// unchanged observation leaves the item version alone. A base advance past the
+// admitted tip additionally supersedes the item, recording the
+// readiness-invalidation reason and concluding the publication schedules (plan
+// §7, issue #496), so a stale review pass cannot keep presenting as ready.
 func TestBaseAdvanceWatchMaintainsFact(t *testing.T) {
 	ctx := context.Background()
 	st := schedTestStore(t)
@@ -209,7 +211,9 @@ func TestBaseAdvanceWatchMaintainsFact(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The base advances: the fact flips and the version bumps.
+	// The base advances past the admitted tip: the watch supersedes the item,
+	// recording the base fact and the readiness-invalidation reason together,
+	// and concludes the watch schedule. It does not re-arm (plan §7, #496).
 	observeErr = nil
 	observed = "deadbeef"
 	now = start.Add(241 * time.Second)
@@ -217,38 +221,98 @@ func TestBaseAdvanceWatchMaintainsFact(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = readItem()
-	if got.BaseFreshness == nil || !got.BaseFreshness.Advanced ||
-		got.BaseFreshness.ObservedBaseSHA != "deadbeef" || got.ItemVersion != 3 {
-		t.Fatalf("advanced fact = %+v (version %d)", got.BaseFreshness, got.ItemVersion)
+	if got.Status != domain.StatusSuperseded || got.ItemVersion != 3 {
+		t.Fatalf("advanced item = status %s version %d", got.Status, got.ItemVersion)
 	}
+	if got.BaseFreshness == nil || !got.BaseFreshness.Advanced ||
+		got.BaseFreshness.ObservedBaseSHA != "deadbeef" {
+		t.Fatalf("advanced fact = %+v", got.BaseFreshness)
+	}
+	if got.ReadinessInvalidation == nil ||
+		got.ReadinessInvalidation.Reason != domain.ReadinessInvalidationBaseAdvanced ||
+		got.ReadinessInvalidation.Bound != "cafebabe" ||
+		got.ReadinessInvalidation.Observed != "deadbeef" {
+		t.Fatalf("invalidation = %+v", got.ReadinessInvalidation)
+	}
+	// The watch schedule is concluded (subject_concluded), not re-armed.
+	final := readScheduleRow(t, st, sched.ID)
+	if final.Status != domain.ScheduleResolved ||
+		final.Resolution.Reason != domain.ResolutionSubjectConcluded {
+		t.Fatalf("final schedule = %+v", final)
+	}
+}
 
-	// A concluded item resolves the watch with recorded proof at the next
-	// fire; the handler's concluded path (which also hosts the final
-	// capture pass) records the same subject_concluded proof the built-in
-	// check used to.
-	concluded := got
-	concluded.ItemVersion++
-	concluded.Status = domain.StatusResolved
+// TestBaseAdvanceWatchSupersedesPreRecordedAdvance drains the pre-#496
+// upgrade population: an open ready item whose BaseFreshness already recorded a
+// base advance under the old record-only behavior, with an observed tip that
+// has not moved since. Because the observation is unchanged, this item reaches
+// the watch through the fast path, so superseding must key on the advance
+// itself, not on the observation being new; otherwise the item stays open
+// forever presenting a pass bound to the abandoned base.
+func TestBaseAdvanceWatchSupersedesPreRecordedAdvance(t *testing.T) {
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := schedTestItem(t, st)
+
+	// Seed the pre-#496 state: Advanced fact on a still-open ready item. The
+	// old record-only write bumped the version, so advance it here too (the
+	// store rejects a same-version re-put).
+	item.BaseFreshness = &domain.BaseFreshness{
+		BaseRef: "main", AdmittedBaseSHA: "cafebabe", ObservedBaseSHA: "deadbeef",
+		Advanced: true, ObservedAt: time.Date(2026, 2, 3, 3, 0, 0, 0, time.UTC),
+	}
+	item.ItemVersion = 2
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
-		return tx.PutAttentionItem(ctx, concluded)
+		return tx.PutAttentionItem(ctx, item)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	now = start.Add(301 * time.Second)
+
+	sched := watchSchedule(t, item)
+	start := sched.CreatedAt
+	now := start
+	s, err := scheduler.New(st, domain.ModeAttendedDev,
+		func() time.Time { return now },
+		map[domain.ScheduleKind]scheduler.Registration{
+			domain.ScheduleBaseAdvanceWatch: baseAdvanceRegistration(st,
+				func(context.Context, domain.ScheduleBaseWatch) (string, error) {
+					// The observed tip is unchanged from the recorded fact.
+					return "deadbeef", nil
+				}, mergeCapture{}),
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Arm(ctx, sched, start.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	now = start.Add(61 * time.Second)
 	if err := s.RunOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
-	var final domain.Schedule
+
+	var got domain.AttentionItem
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		final, err = tx.GetSchedule(ctx, sched.ID)
+		got, err = tx.GetAttentionItem(ctx, item.ID)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if got.Status != domain.StatusSuperseded {
+		t.Fatalf("pre-recorded advance left item %s, want superseded", got.Status)
+	}
+	if got.ReadinessInvalidation == nil ||
+		got.ReadinessInvalidation.Reason != domain.ReadinessInvalidationBaseAdvanced ||
+		got.ReadinessInvalidation.Bound != "cafebabe" ||
+		got.ReadinessInvalidation.Observed != "deadbeef" {
+		t.Fatalf("invalidation = %+v, want base_advanced cafebabe->deadbeef", got.ReadinessInvalidation)
+	}
+	final := readScheduleRow(t, st, sched.ID)
 	if final.Status != domain.ScheduleResolved ||
 		final.Resolution.Reason != domain.ResolutionSubjectConcluded {
-		t.Fatalf("final schedule = %+v", final)
+		t.Fatalf("final schedule = %+v, want concluded", final)
 	}
 }
 
