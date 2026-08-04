@@ -13,7 +13,8 @@ func validReviewRecord() domain.ReviewRecord {
 	return domain.ReviewRecord{
 		InvocationID: "review-run-1-1", RunID: "run-1", Round: 1,
 		Provider: "openai", ModelConfiguration: "gpt-codex/high",
-		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)), CostOwner: "owner",
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)), CostOwner: "owner",
 		BaseSHA: "base", HeadSHA: "head", CompletedAt: time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)), Outcome: domain.ReviewClean,
 	}
@@ -33,6 +34,14 @@ func TestReviewRecordBindsOutcomeToCanonicalFindings(t *testing.T) {
 	got.Outcome = domain.ReviewClean
 	if err := got.Validate(); !errors.Is(err, domain.ErrInvalidReviewOutcome) {
 		t.Fatalf("clean record with findings = %v", err)
+	}
+}
+
+func TestReviewRecordRejectsMissingInstructionDigest(t *testing.T) {
+	record := validReviewRecord()
+	record.InstructionDigest = ""
+	if err := record.Validate(); err == nil {
+		t.Fatal("new review record accepted a missing instruction digest")
 	}
 }
 

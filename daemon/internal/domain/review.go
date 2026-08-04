@@ -9,8 +9,9 @@ import (
 )
 
 // ReviewRecord is the immutable authority record for one completed review
-// pass (plan §7). Readiness consumes this exact base/head binding; a native
-// forge review is deliberately not representable as a satisfying record.
+// pass (plan §7). Readiness consumes its exact base, head, configuration, and
+// instruction binding; a native forge review is deliberately not representable
+// as a satisfying record.
 type ReviewRecord struct {
 	InvocationID        InvocationID  `json:"invocation_id"`
 	RunID               RunID         `json:"run_id"`
@@ -18,6 +19,7 @@ type ReviewRecord struct {
 	Provider            string        `json:"provider"`
 	ModelConfiguration  string        `json:"model_configuration"`
 	ConfigurationDigest Digest        `json:"configuration_digest"`
+	InstructionDigest   Digest        `json:"instruction_digest"`
 	CostOwner           string        `json:"cost_owner"`
 	BaseSHA             string        `json:"base_sha"`
 	HeadSHA             string        `json:"head_sha"`
@@ -44,6 +46,9 @@ func (r ReviewRecord) Validate() error {
 	case !contentaddr.Valid(string(r.ConfigurationDigest)):
 		return fmt.Errorf("review record configuration_digest %q: %w",
 			r.ConfigurationDigest, ErrInvalidReviewCompletionEvidence)
+	case !contentaddr.Valid(string(r.InstructionDigest)):
+		return fmt.Errorf("review record instruction_digest %q: %w",
+			r.InstructionDigest, ErrInvalidReviewCompletionEvidence)
 	case r.CostOwner == "":
 		return fmt.Errorf("review record cost_owner: %w", ErrEmptyField)
 	case r.BaseSHA == "":

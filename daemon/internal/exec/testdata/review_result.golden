@@ -5,6 +5,7 @@
   "provider": "openai",
   "model_configuration": "gpt-5.2-codex/high",
   "configuration_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "instruction_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
   "cost_owner": "subscription:owner",
   "completed_at": "2026-01-02T03:04:05Z",
   "completion_evidence": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",

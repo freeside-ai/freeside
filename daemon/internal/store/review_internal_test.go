@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -26,6 +27,7 @@ func TestReviewRecordReadRevalidatesCanonicalBody(t *testing.T) {
 		InvocationID: "review-tamper-1", RunID: run.ID, Round: 1,
 		Provider: "openai", ModelConfiguration: "gpt-codex/high",
 		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
 		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head", CompletedAt: when,
 		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
 		Outcome:            domain.ReviewClean,
@@ -52,6 +54,68 @@ func TestReviewRecordReadRevalidatesCanonicalBody(t *testing.T) {
 	})
 	if !errors.Is(err, errRowInconsistent) {
 		t.Fatalf("partially rewritten review record read = %v", err)
+	}
+}
+
+func TestReviewRecordReadPreservesLegacyMissingInstructionAuthority(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, t.TempDir()+"/review.db", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	run := domain.Run{
+		ID: "run-review-legacy", ProjectID: "project-1",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+	}
+	record, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: "review-legacy-1", RunID: run.ID, Round: 1,
+		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head",
+		CompletedAt:        time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
+		Outcome:            domain.ReviewClean,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		return tx.PutReviewRecord(ctx, record, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var raw []byte
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT body FROM review_records WHERE invocation_id = ?`, record.InvocationID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var legacy map[string]any
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	delete(legacy, "instruction_digest")
+	raw, err = json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.ExecContext(ctx,
+		`UPDATE review_records SET body_digest = ?, body = ? WHERE invocation_id = ?`,
+		reviewBodyDigest(string(raw)), string(raw), record.InvocationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		got, err := tx.GetReviewRecord(ctx, record.InvocationID)
+		if err == nil && got.InstructionDigest != "" {
+			t.Fatalf("legacy instruction digest = %q", got.InstructionDigest)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -166,13 +166,8 @@ func (s *ReviewSource) RequestReview(_ context.Context, id domain.InvocationID, 
 	}
 	// Record the committed intent durably (one per id): a restart reconciles
 	// a requested id by Poll/Verify, never by requesting again. This committed
-	// copy is what Verify binds the result's head to (#36). exec.ReviewRequest
-	// is scalar-only (RunID, HeadSHA), so the map assignment is a full
-	// value-copy snapshot: immutable regardless of the caller and stable
-	// across restart (persist.go round-trips it). A future reference-typed
-	// field on ReviewRequest would need a defensive copy here, as cloneReviewResult
-	// does for results.
-	s.intents[id] = req
+	// copy is what Verify binds the result's candidate and instructions to.
+	s.intents[id] = cloneReviewRequest(req)
 	s.mustPersistLocked("request", id)
 	return nil
 }
@@ -281,6 +276,9 @@ func (s *ReviewSource) commit(id domain.InvocationID, r exec.ReviewResult) exec.
 	if r.ConfigurationDigest == "" {
 		r.ConfigurationDigest = DefaultReviewConfigurationDigest
 	}
+	if r.InstructionDigest == "" {
+		r.InstructionDigest = intent.Instructions.ResultDigest
+	}
 	if r.CostOwner == "" {
 		r.CostOwner = "test"
 	}
@@ -338,6 +336,10 @@ func (s *ReviewSource) Verify(
 	if intent := s.intents[id]; r.BaseSHA != intent.BaseSHA {
 		return fmt.Errorf("fake review source verify %s: result base %q, requested %q: %w",
 			id, r.BaseSHA, intent.BaseSHA, ErrResultHeadMismatch)
+	}
+	if intent := s.intents[id]; r.InstructionDigest != intent.Instructions.ResultDigest {
+		return fmt.Errorf("fake review source verify %s: result instructions %q, requested %q: %w",
+			id, r.InstructionDigest, intent.Instructions.ResultDigest, ErrResultHeadMismatch)
 	}
 	if r.BaseSHA != expectedBase {
 		return fmt.Errorf("fake review source verify %s: result base %q, expected %q: %w",

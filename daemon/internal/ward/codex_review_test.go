@@ -521,7 +521,12 @@ func testCodexReview(t *testing.T) (CodexReviewConfig, CodexReviewSpec) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	instructionBody := []byte("Review the candidate independently.\n")
+	instructionBody, instructionBinding, err := exec.ComposeCodexReviewInstructions(
+		exec.ReviewHostInstructionInput{}, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	digest := digestBody(instructionBody)
 	cfg := CodexReviewConfig{
 		Model: "gpt-5.2-codex", ReasoningEffort: "high",
@@ -556,8 +561,9 @@ func testCodexReview(t *testing.T) (CodexReviewConfig, CodexReviewSpec) {
 			Vendor: domain.AgentVendorCodex, Delivery: domain.VendorInstructionDeliveryAppendFile,
 			Present: true, Digest: digest, Body: instructionBody,
 		},
-		InstructionFile: writeCodexReviewFile(t, root, "AGENTS.md", instructionBody),
-		AgentsShadow:    shadow,
+		InstructionFile:    writeCodexReviewFile(t, root, "AGENTS.md", instructionBody),
+		InstructionBinding: instructionBinding,
+		AgentsShadow:       shadow,
 	}
 	return cfg, req
 }
@@ -576,7 +582,7 @@ func testCodexReviewLifecycle(
 		ExpectedHead:         testCodexReviewHead, Prompt: req.Prompt, Boundary: req.Boundary,
 		AuthMode: req.AuthMode, AuthIdentityID: req.AuthIdentityID,
 		AuthSnapshot: req.AuthSnapshot, Instructions: req.Instructions,
-		InstructionFile: req.InstructionFile,
+		InstructionFile: req.InstructionFile, InstructionBinding: req.InstructionBinding,
 	}
 	fx := newHandoffFixture(t)
 	cfg.VolumeLifecycleLeaser = &fakeCodexReviewVolumeLeaser{rt: fx.rt}
@@ -813,7 +819,7 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value, []string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
 			t.Fatal(err)
 		}
-		recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser)
+		recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser, cfg.InputRoot)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -839,7 +845,7 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 			t.Fatal(err)
 		}
 		journal.failDeleteWorkspace = errors.New("journal temporarily unavailable")
-		recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser)
+		recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser, cfg.InputRoot)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -899,7 +905,7 @@ func TestCodexReviewRecoveryMarksClosedOutcomeReady(t *testing.T) {
 		FailureClass: domain.ReviewFailureTransient,
 		Failure:      "cleanup completed before the ready mark",
 	}}
-	recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser)
+	recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser, cfg.InputRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -943,7 +949,7 @@ func TestCodexReviewRecoveryCleansWorkspaceWithoutLaunchIntent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			recovery, err := NewCodexReviewRecovery(backend, journal, leaser)
+			recovery, err := NewCodexReviewRecovery(backend, journal, leaser, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -993,7 +999,7 @@ func TestCodexReviewRecoveryDoesNotLetInvalidIntentStarveLaterCleanup(t *testing
 		InvocationID: domain.InvocationID(validID), FailureClass: domain.ReviewFailureTransient,
 		Failure: "cleanup completed before the ready mark",
 	}}
-	recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser)
+	recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser, cfg.InputRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1012,7 +1018,7 @@ func TestCodexReviewRecoveryFailsClosedOnRewrittenIntentKey(t *testing.T) {
 	journal.extraIntents = map[string]*CodexReviewLaunchIntent{
 		rewrittenID: {RunID: launch.RunID},
 	}
-	recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser)
+	recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser, cfg.InputRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1678,6 +1684,17 @@ func TestBuildCodexReviewAgentSpecConforms(t *testing.T) {
 	finalBinding.ReviewOwnershipToken = testOwnershipLabel().Value
 	if err := finalBinding.validateShape(); err != nil {
 		t.Fatalf("complete journal binding fails reconstruction validation: %v", err)
+	}
+	wrongComposition := finalBinding
+	wrongComposition.InstructionCompositionVersion = "codex_explicit_bundle_v0"
+	if err := wrongComposition.validateShape(); err == nil {
+		t.Error("journal binding accepted a different instruction composition version")
+	}
+	wrongSources := binding
+	digest := domain.Digest("sha256:" + strings.Repeat("f", 64))
+	wrongSources.HostInstructionDigest = &digest
+	if err := validateCodexReviewAgentSpec(cfg, req, spec, wrongSources); err == nil {
+		t.Error("journal binding accepted instruction sources unrelated to the request")
 	}
 	reusedBinding := finalBinding
 	reusedBinding.AgentsShadowPreStartObserverFingerprint = reusedBinding.AgentsShadowObserverFingerprint

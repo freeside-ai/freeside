@@ -1,9 +1,11 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,11 +15,14 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
 
 // BackupArtifactStore is the part of the content-addressed blob store local
@@ -56,6 +61,70 @@ var ErrBackupClosureIncomplete = fmt.Errorf(
 type artifactClosure struct {
 	digests []domain.Digest
 	gap     error
+}
+
+func rejectBackupDuplicateJSONKeys(payload []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	if err := checkBackupJSONValue(decoder); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("backup JSON contains more than one top-level value")
+		}
+		return err
+	}
+	return nil
+}
+
+func checkBackupJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("backup JSON object key is not a string")
+			}
+			folded := strings.ToLower(key)
+			if _, duplicate := seen[folded]; duplicate {
+				return errors.New("backup JSON object contains a duplicate key")
+			}
+			seen[folded] = struct{}{}
+			if err := checkBackupJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		end, err := decoder.Token()
+		if err != nil || end != json.Delim('}') {
+			return errors.New("backup JSON object is not terminated")
+		}
+	case '[':
+		for decoder.More() {
+			if err := checkBackupJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		end, err := decoder.Token()
+		if err != nil || end != json.Delim(']') {
+			return errors.New("backup JSON array is not terminated")
+		}
+	default:
+		return errors.New("backup JSON contains an unexpected delimiter")
+	}
+	return nil
 }
 
 // recordGap keeps the first unreadable row in outbox order. Later rows are
@@ -490,6 +559,83 @@ func checkpointArtifactDigests(
 		}
 	}
 	if err := errors.Join(admissionRows.Err(), admissionRows.Close()); err != nil {
+		return artifactClosure{}, err
+	}
+
+	reviewRows, err := sqlTx.QueryContext(ctx,
+		`SELECT body_digest, body FROM codex_review_requests ORDER BY invocation_id`)
+	if err != nil {
+		return artifactClosure{}, err
+	}
+	for reviewRows.Next() {
+		var bodyDigest string
+		var body []byte
+		if err := reviewRows.Scan(&bodyDigest, &body); err != nil {
+			_ = reviewRows.Close()
+			return artifactClosure{}, err
+		}
+		if bodyDigest != codexReviewBodyDigest(body) {
+			_ = reviewRows.Close()
+			return artifactClosure{}, errors.New("codex review request body digest is invalid")
+		}
+		if err := rejectBackupDuplicateJSONKeys(body); err != nil {
+			_ = reviewRows.Close()
+			return artifactClosure{}, errors.New("codex review request instruction closure is ambiguous")
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(body, &fields); err != nil {
+			_ = reviewRows.Close()
+			return artifactClosure{}, errors.New("codex review request instruction closure is invalid")
+		}
+		var instructionRaw json.RawMessage
+		for key, raw := range fields {
+			if strings.EqualFold(key, "instructions") {
+				instructionRaw = raw
+			}
+		}
+		if instructionRaw == nil {
+			// Review requests written before instruction authority carry no
+			// instruction artifacts. Their review records cannot satisfy the
+			// current gate, but they do not make historical backups incomplete.
+			continue
+		}
+		if bytes.Equal(bytes.TrimSpace(instructionRaw), []byte("null")) {
+			_ = reviewRows.Close()
+			return artifactClosure{}, errors.New("codex review request instruction closure is null")
+		}
+		var request exec.ReviewRequest
+		decoder := json.NewDecoder(bytes.NewReader(body))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF || request.Validate() != nil {
+			_ = reviewRows.Close()
+			return artifactClosure{}, errors.New("codex review request instruction closure is invalid")
+		}
+		instructions := request.Instructions
+		if instructions.CompositionVersion != "codex_explicit_bundle_v1" ||
+			!contentaddr.Valid(string(instructions.ResultDigest)) {
+			_ = reviewRows.Close()
+			return artifactClosure{}, errors.New("codex review request instruction closure is invalid")
+		}
+		if instructions.HostDigest != nil {
+			if !contentaddr.Valid(string(*instructions.HostDigest)) {
+				_ = reviewRows.Close()
+				return artifactClosure{}, errors.New("codex review host instruction closure is invalid")
+			}
+			digests[*instructions.HostDigest] = struct{}{}
+		}
+		priorPath := ""
+		for _, source := range instructions.RepositorySources {
+			if !fs.ValidPath(source.Path) || source.Path == "." ||
+				priorPath >= source.Path || !contentaddr.Valid(string(source.Digest)) {
+				_ = reviewRows.Close()
+				return artifactClosure{}, errors.New("codex review repository instruction closure is invalid")
+			}
+			priorPath = source.Path
+			digests[source.Digest] = struct{}{}
+		}
+		digests[instructions.ResultDigest] = struct{}{}
+	}
+	if err := errors.Join(reviewRows.Err(), reviewRows.Close()); err != nil {
 		return artifactClosure{}, err
 	}
 

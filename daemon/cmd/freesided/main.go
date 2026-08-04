@@ -149,7 +149,7 @@ func main() {
 	reviewAuthMode := flags.String("review-auth-mode", "", "Codex review auth mode: subscription or api_key")
 	reviewAuthIdentity := flags.String("review-auth-identity", "", "Codex review auth identity")
 	reviewAuthSnapshot := flags.String("review-auth-snapshot", "", "Codex auth.json snapshot under review-input-root")
-	reviewInstructions := flags.String("review-instructions", "", "composed Codex AGENTS.md snapshot under review-input-root")
+	reviewInstructions := flags.String("review-instructions", "", "operator-host Codex instruction source snapshotted with explicit absence")
 	reviewModel := flags.String("review-model", "", "pinned Codex review model configuration")
 	reviewReasoningEffort := flags.String("review-reasoning-effort", "", "Codex review reasoning effort")
 	reviewCostOwner := flags.String("review-cost-owner", "", "account charged for Codex review")
@@ -549,6 +549,7 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 			ReviewSource:              claudeWiring.reviewSource,
 			ReviewRecovery:            claudeWiring.reviewRecovery,
 			ReviewConfigurationDigest: claudeWiring.reviewConfigurationDigest,
+			ReviewHostInstructions:    claudeWiring.reviewHostInstructions,
 			ObserveBase: func(observeCtx context.Context, repo, baseRef string) (string, error) {
 				return claudeWiring.observeBaseTip(observeCtx, domain.ScheduleBaseWatch{
 					Repo: repo, BaseRef: baseRef,

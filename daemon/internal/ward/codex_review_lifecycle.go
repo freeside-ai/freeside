@@ -138,6 +138,7 @@ type CodexReviewLaunchSpec struct {
 	AuthSnapshot         string
 	Instructions         VendorInstructions
 	InstructionFile      string
+	InstructionBinding   exec.ReviewInstructionBinding
 }
 
 // CodexReviewLaunch is a started review and its reconstructed durable binding.
@@ -414,7 +415,8 @@ func (b *Backend) CodexReview(
 		Workspace: workspace, Network: network, Prompt: launch.Prompt, Boundary: launch.Boundary,
 		AuthMode: launch.AuthMode, AuthIdentityID: launch.AuthIdentityID,
 		AuthSnapshot: launch.AuthSnapshot, Instructions: launch.Instructions,
-		InstructionFile: launch.InstructionFile, AgentsShadow: shadow,
+		InstructionFile: launch.InstructionFile, InstructionBinding: launch.InstructionBinding,
+		AgentsShadow: shadow,
 	}
 	spec, binding, err := BuildCodexReviewAgentSpec(cfg, req)
 	if err != nil {
@@ -601,6 +603,10 @@ func validateCodexReviewLaunch(cfg CodexReviewConfig, launch CodexReviewLaunchSp
 		launch.Instructions.Vendor != domain.AgentVendorCodex || !launch.Instructions.Present {
 		return fmt.Errorf("%w: Codex instructions are invalid", ErrInvalidCodexReviewSpec)
 	}
+	if err := launch.InstructionBinding.Validate(); err != nil ||
+		launch.InstructionBinding.ResultDigest != launch.Instructions.Digest {
+		return fmt.Errorf("%w: Codex instruction provenance is invalid", ErrInvalidCodexReviewSpec)
+	}
 	authPath, authBody, err := readCodexReviewInput(
 		cfg.InputRoot, launch.AuthSnapshot, maxCodexAuthSnapshotBytes,
 	)
@@ -634,15 +640,15 @@ func codexReviewIntentDigest(cfg CodexReviewConfig, launch CodexReviewLaunchSpec
 		Boundary                                                              CodexReviewBoundary
 		AuthMode                                                              CodexAuthMode
 		AuthIdentityID                                                        domain.AuthIdentityID
-		InstructionDigest                                                     domain.Digest
+		InstructionBinding                                                    exec.ReviewInstructionBinding
 		ApprovedImage, ObserverImage, WorkspaceTarget, Model, ReasoningEffort string
 		ProviderEndpoints                                                     []string
 	}{
 		RunID: launch.RunID, Image: launch.Image, WorkspaceSourceRunID: launch.WorkspaceSourceRunID,
 		WorkspaceVolume: launch.WorkspaceVolume, ExpectedHead: launch.ExpectedHead,
 		Boundary: launch.Boundary, AuthMode: launch.AuthMode, AuthIdentityID: launch.AuthIdentityID,
-		InstructionDigest: launch.Instructions.Digest,
-		ApprovedImage:     cfg.ApprovedImage, ObserverImage: cfg.ObserverImage,
+		InstructionBinding: launch.InstructionBinding,
+		ApprovedImage:      cfg.ApprovedImage, ObserverImage: cfg.ObserverImage,
 		WorkspaceTarget: cfg.WorkspaceTarget, Model: cfg.Model, ReasoningEffort: cfg.ReasoningEffort,
 		ProviderEndpoints: slices.Clone(cfg.ProviderEndpoints),
 	}
@@ -854,22 +860,23 @@ func (b *Backend) recoverCodexReviewIntent(
 
 // CodexReviewRecovery converges only durable review topology left by a prior
 // daemon. It carries no launch credentials, prompt, instructions, or reviewer
-// configuration, so attended mode can reap owned resources without gaining
-// authority to start a review.
+// configuration. The optional input root only lets it remove an already
+// materialized daemon-owned snapshot, never read or launch from one.
 type CodexReviewRecovery struct {
-	backend *Backend
-	cfg     CodexReviewConfig
+	backend   *Backend
+	cfg       CodexReviewConfig
+	inputRoot string
 }
 
 func NewCodexReviewRecovery(
-	backend *Backend, journal CodexReviewJournal, leaser CodexReviewVolumeLifecycleLeaser,
+	backend *Backend, journal CodexReviewJournal, leaser CodexReviewVolumeLifecycleLeaser, inputRoot string,
 ) (*CodexReviewRecovery, error) {
-	if backend == nil || journal == nil || leaser == nil {
+	if backend == nil || journal == nil || leaser == nil || inputRoot != "" && !cleanAbs(inputRoot) {
 		return nil, errors.New("nil Codex review recovery dependency")
 	}
 	return &CodexReviewRecovery{backend: backend, cfg: CodexReviewConfig{
 		Journal: journal, VolumeLifecycleLeaser: leaser,
-	}}, nil
+	}, inputRoot: inputRoot}, nil
 }
 
 // Reconcile retries every non-closed launch and every closed launch whose
@@ -920,6 +927,11 @@ func (r *CodexReviewRecovery) Reconcile(ctx context.Context) error {
 		if _, exists := intentIDs[id]; exists {
 			continue
 		}
+		if err := r.removeInstructionSnapshot(id); err != nil {
+			recoveryErrs = append(recoveryErrs,
+				fmt.Errorf("recover orphaned Codex review snapshot %q: %w", id, err))
+			continue
+		}
 		if err := r.backend.cleanupOrphanedCodexReviewWorkspace(ctx, r.cfg.Journal, id); err != nil {
 			recoveryErrs = append(recoveryErrs,
 				fmt.Errorf("recover orphaned Codex review workspace %q: %w", id, err))
@@ -939,6 +951,9 @@ func (r *CodexReviewRecovery) reconcileIntent(
 			CheckControlPlaneIsolation, "load recoverable Codex review outcome: %v", outcomeErr)
 	}
 	if intent.State == CodexReviewIntentClosed {
+		if err := r.removeInstructionSnapshot(id); err != nil {
+			return err
+		}
 		if outcomeErr == nil && !ready {
 			if err := r.cfg.Journal.MarkCodexReviewOutcomeReady(ctx, id); err != nil {
 				return codexReviewJournalCheckf(
@@ -946,12 +961,20 @@ func (r *CodexReviewRecovery) reconcileIntent(
 			}
 		}
 		if outcomeRejected {
-			return outcomeErr
+			// Recovery owns topology convergence, not result authority. A closed
+			// intent proves no credential-bearing resources remain; leave the
+			// rejected outcome for ReviewSource to fail closed if a workflow still
+			// tries to consume it. This also lets upgrades pass historical outcomes
+			// whose pre-instruction schema the current result decoder rejects.
+			return nil
 		}
 		return nil
 	}
 	if intent.State != CodexReviewIntentStarted {
 		cleanupErr := r.backend.recoverCodexReviewIntent(ctx, r.cfg, intent, true)
+		if cleanupErr == nil {
+			cleanupErr = r.removeInstructionSnapshot(id)
+		}
 		if cleanupErr == nil && outcomeErr == nil && !ready {
 			if err := r.cfg.Journal.MarkCodexReviewOutcomeReady(ctx, id); err != nil {
 				cleanupErr = codexReviewJournalCheckf(
@@ -976,6 +999,9 @@ func (r *CodexReviewRecovery) reconcileIntent(
 		}
 	}
 	cleanupErr := r.backend.AbortCodexReview(ctx, r.cfg, id)
+	if cleanupErr == nil {
+		cleanupErr = r.removeInstructionSnapshot(id)
+	}
 	if cleanupErr == nil && !outcomeRejected {
 		if err := r.cfg.Journal.MarkCodexReviewOutcomeReady(ctx, id); err != nil {
 			cleanupErr = codexReviewJournalCheckf(
@@ -986,6 +1012,17 @@ func (r *CodexReviewRecovery) reconcileIntent(
 		return errors.Join(cleanupErr, outcomeErr)
 	}
 	return cleanupErr
+}
+
+func (r *CodexReviewRecovery) removeInstructionSnapshot(id string) error {
+	if r.inputRoot == "" {
+		return nil
+	}
+	if err := removeCodexReviewInstructionSnapshot(r.inputRoot, id); err != nil {
+		return codexReviewOperationalCheckf(
+			CheckControlPlaneIsolation, "remove recovered review instruction snapshot: %v", err)
+	}
+	return nil
 }
 
 func allCodexReviewFailuresOperational(errs []error) bool {
@@ -1543,6 +1580,11 @@ func sameCodexReviewBinding(a, b CodexReviewJournalBinding) bool {
 func cloneCodexReviewBinding(binding CodexReviewJournalBinding) CodexReviewJournalBinding {
 	binding.AgentsShadowTargets = slices.Clone(binding.AgentsShadowTargets)
 	binding.ProviderEndpoints = slices.Clone(binding.ProviderEndpoints)
+	binding.RepositoryInstructionSources = slices.Clone(binding.RepositoryInstructionSources)
+	if binding.HostInstructionDigest != nil {
+		digest := *binding.HostInstructionDigest
+		binding.HostInstructionDigest = &digest
+	}
 	if binding.AccessTokenExpiresAt != nil {
 		expires := *binding.AccessTokenExpiresAt
 		binding.AccessTokenExpiresAt = &expires

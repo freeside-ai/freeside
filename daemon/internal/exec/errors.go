@@ -32,6 +32,13 @@ var (
 	ErrInputLimitInvalid = errors.New("stage input byte limit is invalid")
 	// ErrStageInputsMissing: a legacy admission has no materializable snapshot.
 	ErrStageInputsMissing = errors.New("stage input snapshot is missing")
+	// ErrLegacyReviewRequest: an authenticated request predates explicit review
+	// instruction authority. It may be torn down and superseded, never accepted.
+	ErrLegacyReviewRequest = errors.New("legacy review request has no instruction authority")
+	// ErrSupersededReviewRequest reports an otherwise valid persisted request
+	// whose instruction authority was replaced by the current trusted snapshot.
+	// It is torn down before a fresh review round is scheduled.
+	ErrSupersededReviewRequest = errors.New("review request instruction authority was superseded")
 	// ErrInputTooLarge: one input or the aggregate exceeds its configured cap.
 	ErrInputTooLarge = errors.New("stage input exceeds materialization limit")
 	// ErrInputDigestMismatch: resolved bytes do not match the admitted digest.

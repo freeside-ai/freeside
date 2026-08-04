@@ -2,8 +2,11 @@ package wardstore
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -43,6 +46,10 @@ func TestCodexReviewJournalClassifiesRejectedPersistedRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, instructions, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request := exec.ReviewRequest{
 		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
 		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
@@ -50,7 +57,7 @@ func TestCodexReviewJournalClassifiesRejectedPersistedRows(t *testing.T) {
 			Outcome:                domain.VerificationPassed,
 			RecipeDigest:           domain.Digest("sha256:" + strings.Repeat("c", 64)),
 			EvidenceSnapshotDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		}, RequestedAt: time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		}, Instructions: instructions, RequestedAt: time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	}
 	if err := adapters.Journal.PutCodexReviewRequest(ctx, "review-run-1", request); err != nil {
 		t.Fatal(err)
@@ -69,6 +76,28 @@ func TestCodexReviewJournalClassifiesRejectedPersistedRows(t *testing.T) {
 		if _, err := adapters.Journal.GetCodexReviewRequest(ctx, "review-run-1"); !errors.Is(err, ward.ErrCodexReviewRequestRejected) {
 			t.Fatalf("invalid persisted request %q = %v, want ErrCodexReviewRequestRejected", body, err)
 		}
+	}
+	requestFields := make(map[string]json.RawMessage)
+	requestBody, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(requestBody, &requestFields); err != nil {
+		t.Fatal(err)
+	}
+	delete(requestFields, "instructions")
+	legacyBody, err := json.Marshal(requestFields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(legacyBody))
+	if _, err := db.ExecContext(ctx,
+		`UPDATE codex_review_requests SET body = ?, body_digest = ? WHERE invocation_id = ?`,
+		string(legacyBody), legacyDigest, "review-run-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapters.Journal.GetCodexReviewRequest(ctx, "review-run-1"); !errors.Is(err, exec.ErrLegacyReviewRequest) {
+		t.Fatalf("legacy persisted request = %v, want ErrLegacyReviewRequest", err)
 	}
 	outcome := ward.CodexReviewSourceOutcome{
 		InvocationID: "review-run-1", FailureClass: domain.ReviewFailureContradiction,
@@ -224,6 +253,10 @@ func TestCodexReviewJournalRejectsRewrittenOutcomeAuthority(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	when := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	_, instructions, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, ready := range []bool{false, true} {
 		id := "review-outcome-collected"
 		if ready {
@@ -236,7 +269,7 @@ func TestCodexReviewJournalRejectsRewrittenOutcomeAuthority(t *testing.T) {
 				Outcome:                domain.VerificationPassed,
 				RecipeDigest:           domain.Digest("sha256:" + strings.Repeat("c", 64)),
 				EvidenceSnapshotDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
-			}, RequestedAt: when,
+			}, Instructions: instructions, RequestedAt: when,
 		}
 		if err := adapters.Journal.PutCodexReviewRequest(ctx, id, request); err != nil {
 			t.Fatal(err)
@@ -245,7 +278,8 @@ func TestCodexReviewJournalRejectsRewrittenOutcomeAuthority(t *testing.T) {
 		result := exec.ReviewResult{
 			InvocationID: domain.InvocationID(id), BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA,
 			Provider: "openai", ModelConfiguration: "gpt-codex/high",
-			ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("f", 64)), CostOwner: "owner",
+			ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("f", 64)),
+			InstructionDigest:   instructions.ResultDigest, CostOwner: "owner",
 			CompletedAt: when,
 			Findings: []domain.Finding{{
 				ID: "finding-1", RunID: request.RunID, Source: "codex_local", Severity: "P1",

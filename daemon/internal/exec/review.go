@@ -74,11 +74,20 @@ type ReviewSource interface {
 // workspace — because the engine terminalizes on the contradiction and
 // never inspects the invocation again; a rejected request must not strand
 // a credential-bearing topology. While that teardown is still converging
-// the verifier reports a transient failure so the engine retries.
+// the verifier reports a transient failure so the engine retries. An
+// authenticated pre-authority request reports ErrLegacyReviewRequest after
+// teardown so the engine can supersede it with a new round.
 type ReviewRequestAuthorityVerifier interface {
 	VerifyRequestAuthority(
 		ctx context.Context, id domain.InvocationID, expected domain.Digest,
 	) error
+}
+
+// ReviewRequestSupersessionVerifier recognizes a persisted request whose only
+// authority change is an updated trusted instruction binding. It must tear
+// down that request before returning ErrSupersededReviewRequest.
+type ReviewRequestSupersessionVerifier interface {
+	VerifyReviewRequestSupersession(ctx context.Context, id domain.InvocationID, expected ReviewRequest) error
 }
 
 // ReviewRequest is what a review source needs to review one exact candidate.
@@ -92,6 +101,7 @@ type ReviewRequest struct {
 	HeadSHA      string                     `json:"head_sha"`
 	Workspace    string                     `json:"workspace"`
 	Verification ReviewVerificationEvidence `json:"verification"`
+	Instructions ReviewInstructionBinding   `json:"instructions"`
 	RequestedAt  time.Time                  `json:"requested_at"`
 }
 
@@ -161,7 +171,7 @@ func (r ReviewRequest) Validate() error {
 	case r.RequestedAt.Location() != time.UTC:
 		return fmt.Errorf("review request requested_at: %w", domain.ErrTimestampNotUTC)
 	}
-	return r.Verification.Validate()
+	return errors.Join(r.Verification.Validate(), r.Instructions.Validate())
 }
 
 // AuthorityDigest binds the reviewer to every request field that can change
@@ -182,11 +192,12 @@ func (r ReviewRequest) AuthorityDigest() (domain.Digest, error) {
 		HeadSHA      string                     `json:"head_sha"`
 		Workspace    string                     `json:"workspace"`
 		Verification ReviewVerificationEvidence `json:"verification"`
+		Instructions ReviewInstructionBinding   `json:"instructions"`
 	}{
-		Version: "review-request-authority-v1", RunID: r.RunID, Round: r.Round,
+		Version: "review-request-authority-v2", RunID: r.RunID, Round: r.Round,
 		Repo: r.Repo, RepositoryID: r.RepositoryID, BaseRef: r.BaseRef,
 		BaseSHA: r.BaseSHA, HeadSHA: r.HeadSHA, Workspace: r.Workspace,
-		Verification: r.Verification,
+		Verification: r.Verification, Instructions: r.Instructions,
 	})
 	if err != nil {
 		return "", err
@@ -205,6 +216,7 @@ type ReviewResult struct {
 	Provider            string              `json:"provider"`
 	ModelConfiguration  string              `json:"model_configuration"`
 	ConfigurationDigest domain.Digest       `json:"configuration_digest"`
+	InstructionDigest   domain.Digest       `json:"instruction_digest"`
 	CostOwner           string              `json:"cost_owner"`
 	CompletedAt         time.Time           `json:"completed_at"`
 	CompletionEvidence  domain.Digest       `json:"completion_evidence"`
@@ -223,7 +235,8 @@ func (r ReviewResult) Validate() error {
 		return fmt.Errorf("review result head_sha: %w", domain.ErrEmptyField)
 	}
 	if r.BaseSHA == "" || r.Provider == "" || r.ModelConfiguration == "" || r.CostOwner == "" ||
-		!contentaddr.Valid(string(r.ConfigurationDigest)) {
+		!contentaddr.Valid(string(r.ConfigurationDigest)) ||
+		!contentaddr.Valid(string(r.InstructionDigest)) {
 		return fmt.Errorf("review result provenance: %w", domain.ErrEmptyField)
 	}
 	if !contentaddr.Valid(string(r.CompletionEvidence)) {

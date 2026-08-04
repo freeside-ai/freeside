@@ -884,6 +884,7 @@ type claudeComposition struct {
 	reviewSource              exec.ReviewSource
 	reviewRecovery            func(context.Context) error
 	reviewConfigurationDigest domain.Digest
+	reviewHostInstructions    engine.ReviewHostInstructions
 	containerBin              string
 	env                       engine.AdmissionEnvironment
 	derive                    engine.AdmissionDerivation
@@ -956,25 +957,23 @@ func composeClaudeDriver(
 	var (
 		reviewSource              exec.ReviewSource
 		reviewConfigurationDigest domain.Digest
+		reviewHostInstructions    engine.ReviewHostInstructions
 	)
 	volumeLeaser, err := ward.NewRuntimeCodexReviewVolumeLeaser(runtime)
 	if err != nil {
 		return nil, fmt.Errorf("compose Codex review volume lifecycle: %w", err)
 	}
-	reviewRecovery, err := ward.NewCodexReviewRecovery(backend, adapters.Journal, volumeLeaser)
+	reviewRecovery, err := ward.NewCodexReviewRecovery(
+		backend, adapters.Journal, volumeLeaser, cfg.ReviewInputRoot)
 	if err != nil {
 		return nil, fmt.Errorf("compose Codex review recovery: %w", err)
 	}
 	if cfg.OperatingMode == domain.ModeUnattended {
-		reviewInstructionBody, err := os.ReadFile(cfg.ReviewInstructions)
-		if err != nil || len(reviewInstructionBody) == 0 {
-			return nil, fmt.Errorf("read Codex review instructions: %w", err)
-		}
-		reviewInstructionSum := sha256.Sum256(reviewInstructionBody)
-		reviewInstructions := ward.VendorInstructions{
-			Vendor: domain.AgentVendorCodex, Delivery: domain.VendorInstructionDeliveryAppendFile,
-			Present: true, Digest: domain.Digest(fmt.Sprintf("sha256:%x", reviewInstructionSum)),
-			Body: reviewInstructionBody,
+		reviewHostInstructions, err = engine.SnapshotReviewHostInstructions(
+			ctx, cfg.ReviewInstructions, cfg.ReviewAuthSnapshot,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("snapshot Codex review host instructions: %w", err)
 		}
 		reviewEndpoints := []string{"chatgpt.com:443"}
 		if cfg.ReviewAuthMode == ward.CodexAuthAPIKey {
@@ -990,7 +989,7 @@ func composeClaudeDriver(
 		}
 		reviewConfigurationDigest, err = ward.CodexReviewConfigurationDigest(
 			reviewConfig, cfg.ReviewWorkspaceSizeMB, cfg.ReviewAuthMode,
-			cfg.ReviewAuthIdentityID, reviewInstructions.Digest, cfg.ReviewCostOwner,
+			cfg.ReviewAuthIdentityID, cfg.ReviewCostOwner,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("digest Codex review configuration: %w", err)
@@ -999,9 +998,9 @@ func composeClaudeDriver(
 			Backend: backend, Review: reviewConfig, Journal: adapters.Journal,
 			WorkspaceSizeMB: cfg.ReviewWorkspaceSizeMB, AuthMode: cfg.ReviewAuthMode,
 			AuthIdentityID: cfg.ReviewAuthIdentityID, AuthSnapshot: cfg.ReviewAuthSnapshot,
-			Instructions: reviewInstructions, InstructionFile: cfg.ReviewInstructions,
-			ConfigurationDigest: reviewConfigurationDigest,
-			CostOwner:           cfg.ReviewCostOwner, Now: func() time.Time { return time.Now().UTC() },
+			InstructionArtifacts: blobs,
+			ConfigurationDigest:  reviewConfigurationDigest,
+			CostOwner:            cfg.ReviewCostOwner, Now: func() time.Time { return time.Now().UTC() },
 		})
 		if err != nil {
 			return nil, fmt.Errorf("compose Codex review source: %w", err)
@@ -1101,8 +1100,9 @@ func composeClaudeDriver(
 		publisher:            publisher, reviewSource: reviewSource,
 		reviewRecovery:            reviewRecovery.Reconcile,
 		reviewConfigurationDigest: reviewConfigurationDigest, containerBin: cfg.ContainerBin,
-		env:    env,
-		derive: claudeAdmissionDerivation(cfg),
+		reviewHostInstructions: reviewHostInstructions,
+		env:                    env,
+		derive:                 claudeAdmissionDerivation(cfg),
 		runConformance: func(runCtx context.Context) error {
 			return runClaudeConformance(
 				runCtx, st, transport, backend, cfg, janitor.WithStableCoverage,

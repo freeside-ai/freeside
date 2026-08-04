@@ -145,6 +145,10 @@ func TestCodexReviewJournalRoundTripsLifecycleAcrossStoreReopen(t *testing.T) {
 	}
 	runID := "review-run-1"
 	when := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	_, instructions, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request := exec.ReviewRequest{
 		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
 		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
@@ -152,7 +156,7 @@ func TestCodexReviewJournalRoundTripsLifecycleAcrossStoreReopen(t *testing.T) {
 			Outcome:                domain.VerificationPassed,
 			RecipeDigest:           domain.Digest("sha256:" + strings.Repeat("c", 64)),
 			EvidenceSnapshotDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		}, RequestedAt: when,
+		}, Instructions: instructions, RequestedAt: when,
 	}
 	workspace := ward.CodexReviewWorkspaceBinding{
 		SourceRunID: runID, Volume: "candidate-volume",
@@ -226,7 +230,8 @@ func TestCodexReviewJournalRoundTripsLifecycleAcrossStoreReopen(t *testing.T) {
 	result := exec.ReviewResult{
 		InvocationID: domain.InvocationID(runID), BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA,
 		Provider: "openai", ModelConfiguration: "gpt-codex/high",
-		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)), CostOwner: "owner",
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		InstructionDigest:   instructions.ResultDigest, CostOwner: "owner",
 		CompletedAt: when,
 	}
 	collectionEvidence := domain.Digest("sha256:" + strings.Repeat("c", 64))

@@ -142,7 +142,11 @@ func (b *Backend) authenticateCodexReviewContainerWithImage(
 		return CodexReviewLaunchIntent{}, CodexReviewJournalBinding{}, InspectReport{},
 			codexReviewOperationalf("load Codex review durable binding: %v", err)
 	}
-	if binding.validateShape() != nil || binding.RunID != runID ||
+	bindingErr := binding.validateShape()
+	if approvedImage == "" {
+		bindingErr = binding.validateForTeardown()
+	}
+	if bindingErr != nil || binding.RunID != runID ||
 		binding.ReviewContainer != intent.ReviewContainer ||
 		binding.ReviewOwnershipToken != intent.OwnershipToken {
 		return CodexReviewLaunchIntent{}, CodexReviewJournalBinding{}, InspectReport{},
@@ -221,7 +225,7 @@ func (b *Backend) cleanupCodexReview(
 		}
 		return codexReviewOperationalf("load Codex review durable binding: %v", err)
 	}
-	if binding.validateShape() != nil || binding.RunID != runID ||
+	if binding.validateForTeardown() != nil || binding.RunID != runID ||
 		binding.ReviewContainer != intent.ReviewContainer ||
 		binding.ReviewOwnershipToken != intent.OwnershipToken ||
 		binding.WorkspaceSourceRunID != runID ||

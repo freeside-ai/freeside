@@ -1,10 +1,13 @@
 package ward
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +16,308 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
+
+type testReviewInstructionArtifacts map[domain.Digest][]byte
+
+func (a testReviewInstructionArtifacts) Open(digest domain.Digest) (io.ReadCloser, error) {
+	body, ok := a[digest]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return io.NopCloser(bytes.NewReader(body)), nil
+}
+
+func testReviewInstructionBinding() exec.ReviewInstructionBinding {
+	_, binding, _ := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
+	return binding
+}
+
+func TestCodexReviewSourceReconstructsInstructionClosure(t *testing.T) {
+	cfg, _ := testCodexReview(t)
+	host := []byte("operator rules\n")
+	repository := []byte("repository rules\n")
+	bundle, binding, err := exec.ComposeCodexReviewInstructions(
+		exec.ReviewHostInstructionInput{Present: true, Body: host},
+		[]exec.ReviewInstructionSourceInput{{Path: "AGENTS.md", Body: repository}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts := testReviewInstructionArtifacts{
+		*binding.HostDigest:                 host,
+		binding.RepositorySources[0].Digest: repository,
+		binding.ResultDigest:                bundle,
+	}
+	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
+		Review: cfg, InstructionArtifacts: artifacts,
+	}}
+	instructions, path, err := source.materializeReviewInstructions(
+		t.Context(), "review-closure-1", binding,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instructions.Digest != binding.ResultDigest || !bytes.Equal(instructions.Body, bundle) {
+		t.Fatal("reconstructed instructions lost the result binding")
+	}
+	_, got, err := readCodexReviewInput(cfg.InputRoot, path, domain.MaxVendorInstructionBytes)
+	if err != nil || !bytes.Equal(got, bundle) {
+		t.Fatalf("materialized instruction file = %q, %v", got, err)
+	}
+
+	delete(artifacts, binding.RepositorySources[0].Digest)
+	if _, _, err := source.materializeReviewInstructions(
+		t.Context(), "review-closure-2", binding,
+	); err == nil {
+		t.Fatal("missing repository source artifact was accepted")
+	}
+	artifacts[binding.RepositorySources[0].Digest] = repository
+	artifacts[binding.ResultDigest] = []byte("tampered result")
+	if _, _, err := source.materializeReviewInstructions(
+		t.Context(), "review-closure-3", binding,
+	); err == nil {
+		t.Fatal("tampered result artifact was accepted")
+	}
+}
+
+func TestCodexReviewSourceDoesNotReplaceExistingInstructionSnapshot(t *testing.T) {
+	cfg, _ := testCodexReview(t)
+	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{Review: cfg}}
+	id := domain.InvocationID("review-existing-snapshot")
+	directory := filepath.Dir(source.instructionFile(id))
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := source.instructionFile(id)
+	if err := os.WriteFile(target, []byte("operator-controlled input"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.writeReviewInstructionFile(id, []byte("trusted bundle")); err == nil {
+		t.Fatal("existing instruction snapshot was replaced")
+	}
+	got, err := os.ReadFile(target) //nolint:gosec // test-controlled snapshot path
+	if err != nil || string(got) != "operator-controlled input" {
+		t.Fatalf("existing instruction snapshot = %q, %v", got, err)
+	}
+}
+
+func TestRemoveCodexReviewInstructionSnapshotRejectsInvalidID(t *testing.T) {
+	cfg, _ := testCodexReview(t)
+	root := codexReviewInstructionRoot(cfg.InputRoot)
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "AGENTS.md")
+	if err := os.WriteFile(target, []byte("operator-controlled input"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCodexReviewInstructionSnapshot(cfg.InputRoot, ".."); err == nil {
+		t.Fatal("invalid snapshot ID was accepted")
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("invalid snapshot ID removed root input: %v", err)
+	}
+}
+
+func TestCodexReviewRecoveryRemovesInstructionSnapshot(t *testing.T) {
+	backend, _, cfg, launch, journal := testCodexReviewLifecycle(t)
+	owner := testOwnershipLabel()
+	journal.intent = &CodexReviewLaunchIntent{
+		RunID: launch.RunID, OwnershipToken: owner.Value,
+		ShadowVolume: codexReviewShadowVolumeName(launch.RunID),
+		Network:      codexReviewNetworkName(launch.RunID), ReviewContainer: codexReviewContainerName(launch.RunID),
+		State: CodexReviewIntentClosed,
+		Resources: []CodexReviewIntentResource{
+			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
+			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
+			{Name: codexReviewShadowObserverName(launch.RunID)},
+			{Name: codexReviewShadowVolumeName(launch.RunID), OwnershipToken: owner.Value},
+			{Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value},
+			{Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value},
+		},
+	}
+	journal.outcomes = map[string]CodexReviewSourceOutcome{launch.RunID: {
+		InvocationID: domain.InvocationID(launch.RunID), FailureClass: domain.ReviewFailureTransient,
+		Failure: "cleanup completed before the ready mark",
+	}}
+	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{Review: cfg}}
+	path, err := source.writeReviewInstructionFile(domain.InvocationID(launch.RunID), []byte("trusted bundle"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser, cfg.InputRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recovery.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("recovered instruction snapshot remains: %v", err)
+	}
+}
+
+func TestCodexReviewRecoveryRemovesOrphanWorkspaceInstructionSnapshot(t *testing.T) {
+	ctx := t.Context()
+	fx := newHandoffFixture(t)
+	seed := fx.seed(t).Seed
+	backend := fx.backend(t)
+	cfg, _ := testCodexReview(t)
+	journal := &fakeCodexReviewJournal{}
+	id := "review-orphaned-snapshot"
+	if _, err := backend.PrepareCodexReviewWorkspace(
+		ctx, journal, id, seed.SourceDir, seed.Base, 64,
+	); err != nil {
+		t.Fatal(err)
+	}
+	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{Review: cfg}}
+	path, err := source.writeReviewInstructionFile(domain.InvocationID(id), []byte("trusted bundle"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaser, err := NewRuntimeCodexReviewVolumeLeaser(fx.rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := NewCodexReviewRecovery(backend, journal, leaser, cfg.InputRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recovery.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("orphaned instruction snapshot remains: %v", err)
+	}
+}
+
+func TestCodexReviewRecoveryKeepsOrphanWorkspaceWhenSnapshotRemovalFails(t *testing.T) {
+	ctx := t.Context()
+	fx := newHandoffFixture(t)
+	seed := fx.seed(t).Seed
+	backend := fx.backend(t)
+	cfg, _ := testCodexReview(t)
+	journal := &fakeCodexReviewJournal{}
+	id := "review-orphaned-snapshot-failure"
+	if _, err := backend.PrepareCodexReviewWorkspace(
+		ctx, journal, id, seed.SourceDir, seed.Base, 64,
+	); err != nil {
+		t.Fatal(err)
+	}
+	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{Review: cfg}}
+	path, err := source.writeReviewInstructionFile(domain.InvocationID(id), []byte("trusted bundle"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(filepath.Dir(path))
+	if err := os.Chmod(root, 0o755); err != nil { //nolint:gosec // test makes an owned temporary root invalid
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700) }) //nolint:gosec // restore the owned temporary root
+	leaser, err := NewRuntimeCodexReviewVolumeLeaser(fx.rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := NewCodexReviewRecovery(backend, journal, leaser, cfg.InputRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recovery.Reconcile(ctx); err == nil {
+		t.Fatal("recovery accepted an invalid instruction snapshot root")
+	}
+	if journal.workspaceBinding.SourceRunID != id {
+		t.Fatalf("orphan workspace binding = %q, want %q", journal.workspaceBinding.SourceRunID, id)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("orphaned instruction snapshot = %v", err)
+	}
+}
+
+func TestCodexReviewSourceRegatesInstructionClosureBeforeReadiness(t *testing.T) {
+	id := domain.InvocationID("review-readiness-1")
+	bundle, binding, err := exec.ComposeCodexReviewInstructions(
+		exec.ReviewHostInstructionInput{},
+		[]exec.ReviewInstructionSourceInput{{Path: "AGENTS.md", Body: []byte("trusted base\n")}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := exec.ReviewRequest{
+		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/candidate",
+		Verification: testReviewVerificationEvidence(), Instructions: binding, RequestedAt: codexReviewEpoch,
+	}
+	authority, err := request.AuthorityDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := &fakeCodexReviewJournal{
+		requests: map[string]exec.ReviewRequest{string(id): request},
+		outcomes: map[string]CodexReviewSourceOutcome{string(id): {
+			InvocationID: id, FailureClass: domain.ReviewFailureContradiction,
+			Failure: "closed test outcome",
+		}},
+		ready: map[string]bool{string(id): true},
+	}
+	artifacts := testReviewInstructionArtifacts{
+		binding.RepositorySources[0].Digest: []byte("trusted base\n"),
+		binding.ResultDigest:                bundle,
+	}
+	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
+		Journal: journal, InstructionArtifacts: artifacts,
+	}}
+	if err := source.VerifyRequestAuthority(t.Context(), id, authority); err != nil {
+		t.Fatal(err)
+	}
+	artifacts[binding.ResultDigest] = []byte("tampered after launch")
+	var failure *exec.ReviewSourceFailure
+	if err := source.VerifyRequestAuthority(t.Context(), id, authority); !errors.As(err, &failure) ||
+		failure.Class != domain.ReviewFailureContradiction {
+		t.Fatalf("tampered readiness instruction closure = %v", err)
+	}
+}
+
+func TestCodexReviewSourceCleansPreparedWorkspaceWhenInstructionClosureFails(t *testing.T) {
+	ctx := context.Background()
+	fx := newHandoffFixture(t)
+	seedSpec := fx.seed(t)
+	backend := fx.backend(t)
+	cfg, requestSpec := testCodexReview(t)
+	journal := &fakeCodexReviewJournal{}
+	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
+	bundle, binding, err := exec.ComposeCodexReviewInstructions(
+		exec.ReviewHostInstructionInput{},
+		[]exec.ReviewInstructionSourceInput{{Path: "AGENTS.md", Body: []byte("trusted base\n")}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep the composed result but omit its repository source, forcing the
+	// pre-credential reconstruction failure after workspace preparation.
+	sourceConfig.InstructionArtifacts = testReviewInstructionArtifacts{
+		binding.ResultDigest: bundle,
+	}
+	source, err := NewCodexReviewSource(sourceConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := domain.InvocationID("review-missing-instructions-1")
+	request := exec.ReviewRequest{
+		RunID: "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Instructions: binding, RequestedAt: codexReviewEpoch,
+	}
+	var failure *exec.ReviewSourceFailure
+	if err := source.RequestReview(ctx, id, request); !errors.As(err, &failure) ||
+		failure.Class != domain.ReviewFailureContradiction {
+		t.Fatalf("missing instruction source = %v", err)
+	}
+	if _, err := journal.GetCodexReviewWorkspaceBinding(ctx, string(id)); !errors.Is(err, ErrCodexReviewWorkspaceNotFound) {
+		t.Fatalf("prepared review workspace survived instruction refusal: %v", err)
+	}
+}
 
 func testReviewVerificationEvidence() exec.ReviewVerificationEvidence {
 	return exec.ReviewVerificationEvidence{
@@ -40,13 +345,15 @@ func codexReviewSourceConfigForTest(
 	sourceConfig := CodexReviewSourceConfig{
 		Backend: backend, Review: cfg, Journal: journal, WorkspaceSizeMB: 64,
 		AuthMode: request.AuthMode, AuthIdentityID: request.AuthIdentityID,
-		AuthSnapshot: request.AuthSnapshot, Instructions: request.Instructions,
-		InstructionFile: request.InstructionFile,
-		CostOwner:       "subscription:owner", Now: func() time.Time { return codexReviewEpoch },
+		AuthSnapshot: request.AuthSnapshot,
+		InstructionArtifacts: testReviewInstructionArtifacts{
+			request.InstructionBinding.ResultDigest: request.Instructions.Body,
+		},
+		CostOwner: "subscription:owner", Now: func() time.Time { return codexReviewEpoch },
 	}
 	sourceConfig.ConfigurationDigest, err = CodexReviewConfigurationDigest(
 		cfg, sourceConfig.WorkspaceSizeMB, sourceConfig.AuthMode, sourceConfig.AuthIdentityID,
-		sourceConfig.Instructions.Digest, sourceConfig.CostOwner,
+		sourceConfig.CostOwner,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +378,7 @@ func TestCodexReviewSourceRunsWardLifecycleAndCleansBeforePoll(t *testing.T) {
 		RunID: "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	if err := source.RequestReview(ctx, id, request); err != nil {
@@ -195,7 +502,7 @@ func TestCodexReviewSourcePersistsInvalidCollectedResultAndCleans(t *testing.T) 
 		RunID: "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	if err := source.RequestReview(ctx, id, request); err != nil {
@@ -291,7 +598,7 @@ func TestCodexReviewSourcePersistsMalformedRawOutputAndCleans(t *testing.T) {
 				RunID: "run-raw", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 				RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 				BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-				Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+				Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 				RequestedAt: codexReviewEpoch.Add(-time.Minute),
 			}
 			if err := source.RequestReview(ctx, id, request); err != nil {
@@ -351,7 +658,7 @@ func TestCodexReviewSourceRetriesOperationalBindingRead(t *testing.T) {
 		RunID: "run-binding-read", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	if err := source.RequestReview(ctx, id, request); err != nil {
@@ -399,7 +706,7 @@ func TestCodexReviewSourceCleansBeforeRejectingMalformedOutcome(t *testing.T) {
 		RunID: "run-outcome-row", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	if err := source.RequestReview(ctx, id, request); err != nil {
@@ -463,7 +770,7 @@ func TestCodexReviewSourceAbortsStartedInvocationForRejectedRequest(t *testing.T
 		RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	if err := source.RequestReview(ctx, id, request); err != nil {
@@ -546,7 +853,7 @@ func TestCodexReviewSourceAbortsPreHandoffLaunchForRejectedRequest(t *testing.T)
 		RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	if err := source.RequestReview(ctx, id, request); err != nil {
@@ -603,7 +910,7 @@ func TestCodexReviewSourceRejectedRequestStaysLoudBeforeBinding(t *testing.T) {
 		RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	if err := source.RequestReview(ctx, id, request); err != nil {
@@ -654,7 +961,7 @@ func TestCodexReviewSourceInspectAbortsInvocationForInvalidPersistedRequest(t *t
 		RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	if err := source.RequestReview(ctx, id, request); err != nil {
@@ -684,6 +991,37 @@ func TestCodexReviewSourceInspectAbortsInvocationForInvalidPersistedRequest(t *t
 	}
 }
 
+func TestCodexReviewSourcePreservesLegacyRequestThroughRejectedOutcome(t *testing.T) {
+	ctx := context.Background()
+	fx := newHandoffFixture(t)
+	seedSpec := fx.seed(t)
+	backend := fx.backend(t)
+	cfg, requestSpec := testCodexReview(t)
+	journal := &fakeCodexReviewJournal{}
+	source, err := NewCodexReviewSource(
+		codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := domain.InvocationID("review-legacy-rejected-outcome")
+	request := exec.ReviewRequest{
+		RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
+		RequestedAt: codexReviewEpoch.Add(-time.Minute),
+	}
+	if err := source.RequestReview(ctx, id, request); err != nil {
+		t.Fatal(err)
+	}
+	journal.failGetRequest = errors.Join(ErrCodexReviewRequestRejected, exec.ErrLegacyReviewRequest)
+	journal.failGetOutcome = ErrCodexReviewOutcomeRejected
+	if err := source.VerifyReviewRequestSupersession(ctx, id, request); !errors.Is(err, exec.ErrLegacyReviewRequest) {
+		t.Fatalf("rejected legacy request outcome = %v, want ErrLegacyReviewRequest", err)
+	}
+}
+
 func TestCodexReviewSourceReapsPreparedWorkspaceForRejectedUnstartedRequest(t *testing.T) {
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
@@ -701,7 +1039,7 @@ func TestCodexReviewSourceReapsPreparedWorkspaceForRejectedUnstartedRequest(t *t
 		RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	// Persist and prepare without ever launching: the window between workspace
@@ -763,7 +1101,7 @@ func TestCodexReviewCleanupRefusesRedirectedWorkspaceBinding(t *testing.T) {
 		RunID: "run-redirect", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	if err := source.RequestReview(ctx, id, request); err != nil {
@@ -814,7 +1152,7 @@ func TestCodexReviewCleanupRefusesSubstitutedIntentResources(t *testing.T) {
 		RunID: "run-redirect", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	if err := source.RequestReview(ctx, id, request); err != nil {
@@ -856,7 +1194,7 @@ func TestCodexReviewCleanupRefusesMissingIntentAuthority(t *testing.T) {
 		RunID: "run-intent-authority", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	if err := source.RequestReview(ctx, id, request); err != nil {
@@ -892,7 +1230,7 @@ func TestCodexReviewCleanupSurfacesForeignLeaseAsContradiction(t *testing.T) {
 		RunID: "run-lease", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	if err := source.RequestReview(ctx, id, request); err != nil {
@@ -923,7 +1261,7 @@ func TestCodexReviewCleanupSurfacesForeignLeaseAsContradiction(t *testing.T) {
 	}
 }
 
-func TestCodexReviewRecoveryAbortsRunningInvocationWithLostProxy(t *testing.T) {
+func TestCodexReviewRecoveryAbortsLegacyRunningInvocationWithLostProxy(t *testing.T) {
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -940,7 +1278,7 @@ func TestCodexReviewRecoveryAbortsRunningInvocationWithLostProxy(t *testing.T) {
 		RunID: "run-restart", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	if err := source.RequestReview(ctx, id, request); err != nil {
@@ -950,11 +1288,17 @@ func TestCodexReviewRecoveryAbortsRunningInvocationWithLostProxy(t *testing.T) {
 	_ = source.launches[id].Close()
 	delete(source.launches, id)
 	source.mu.Unlock()
+	journal.binding.InstructionCompositionVersion = ""
+	journal.binding.HostInstructionDigest = nil
+	journal.binding.RepositoryInstructionSources = nil
+	if err := journal.binding.validateForTeardown(); err != nil {
+		t.Fatalf("legacy binding fixture: %v", err)
+	}
 	volumeLeaser, err := NewRuntimeCodexReviewVolumeLeaser(fx.rt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	recovery, err := NewCodexReviewRecovery(backend, journal, volumeLeaser)
+	recovery, err := NewCodexReviewRecovery(backend, journal, volumeLeaser, cfg.InputRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1009,7 +1353,7 @@ func TestCodexReviewSourceRestartAbortsRunningInvocationWithLostProxy(t *testing
 		RunID: "run-restart-source", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	if err := source.RequestReview(ctx, id, request); err != nil {
@@ -1077,7 +1421,7 @@ func TestCodexReviewRecoveryCleansBeforeReportingRejectedOutcome(t *testing.T) {
 		RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	if err := source.RequestReview(ctx, id, request); err != nil {
@@ -1092,7 +1436,7 @@ func TestCodexReviewRecoveryCleansBeforeReportingRejectedOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recovery, err := NewCodexReviewRecovery(backend, journal, volumeLeaser)
+	recovery, err := NewCodexReviewRecovery(backend, journal, volumeLeaser, cfg.InputRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1109,6 +1453,51 @@ func TestCodexReviewRecoveryCleansBeforeReportingRejectedOutcome(t *testing.T) {
 		t.Fatalf("rejected outcome leaked topology: containers=%v volumes=%v networks=%v",
 			containers, volumes, networks)
 	}
+	if err := recovery.Reconcile(ctx); err != nil {
+		t.Fatalf("closed rejected outcome kept recovery wedged: %v", err)
+	}
+}
+
+func TestCodexReviewRecoveryDoesNotTrustClosedRejectedLegacyOutcome(t *testing.T) {
+	for _, ready := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ready=%t", ready), func(t *testing.T) {
+			fx := newHandoffFixture(t)
+			backend := fx.backend(t)
+			id := "review-legacy-closed"
+			owner := strings.Repeat("b", 32)
+			shadow := codexReviewShadowVolumeName(id)
+			network := codexReviewNetworkName(id)
+			review := codexReviewContainerName(id)
+			journal := &fakeCodexReviewJournal{
+				intent: &CodexReviewLaunchIntent{
+					RunID: id, SpecDigest: strings.Repeat("a", 64),
+					OwnershipToken: owner, ShadowVolume: shadow,
+					Network: network, ReviewContainer: review, State: CodexReviewIntentClosed,
+					Resources: []CodexReviewIntentResource{
+						{Name: codexReviewWorkspaceObserverName(id)},
+						{Name: codexReviewShadowInitializerName(id), OwnershipToken: owner},
+						{Name: codexReviewShadowObserverName(id)},
+						{Name: shadow, OwnershipToken: owner},
+						{Name: network, OwnershipToken: owner},
+						{Name: review, OwnershipToken: owner},
+					},
+				},
+				ready:          map[string]bool{id: ready},
+				failGetOutcome: ErrCodexReviewOutcomeRejected,
+			}
+			leaser, err := NewRuntimeCodexReviewVolumeLeaser(fx.rt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recovery, err := NewCodexReviewRecovery(backend, journal, leaser, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := recovery.Reconcile(t.Context()); err != nil {
+				t.Fatalf("closed legacy outcome blocked topology recovery: %v", err)
+			}
+		})
+	}
 }
 
 func TestCodexReviewSourceNormalizesStructuredFindings(t *testing.T) {
@@ -1121,7 +1510,7 @@ func TestCodexReviewSourceNormalizesStructuredFindings(t *testing.T) {
 	request := exec.ReviewRequest{
 		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
 		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
-		Workspace: "/seed/candidate", Verification: testReviewVerificationEvidence(),
+		Workspace: "/seed/candidate", Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: now.Add(-time.Minute),
 	}
 	collection := CodexReviewCollection{
@@ -1156,7 +1545,7 @@ func TestCodexReviewSourceRejectsInvalidFindingsEnvelope(t *testing.T) {
 	request := exec.ReviewRequest{
 		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
 		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
-		Workspace: "/seed/candidate", Verification: testReviewVerificationEvidence(),
+		Workspace: "/seed/candidate", Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: now.Add(-time.Minute),
 	}
 	for _, tc := range []struct {
@@ -1198,7 +1587,7 @@ func TestCodexReviewSourceFindingIdentityIsInvocationScoped(t *testing.T) {
 	request := exec.ReviewRequest{
 		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/candidate",
-		Verification: testReviewVerificationEvidence(), RequestedAt: now,
+		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: now,
 	}
 	collection := CodexReviewCollection{Result: []byte(
 		`{"findings":[{"severity":"P2","location":"daemon/main.go:12","explanation":"unchecked error"}]}`,
@@ -1269,7 +1658,7 @@ func TestCodexReviewSourceJournalReadsKeepResultPending(t *testing.T) {
 	request := exec.ReviewRequest{
 		RunID: "run-journal-read", Round: 1, Repo: "owner/repo", RepositoryID: 42,
 		BaseRef: "main", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
-		Workspace: "/seed/candidate", Verification: testReviewVerificationEvidence(),
+		Workspace: "/seed/candidate", Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch,
 	}
 	journal := &fakeCodexReviewJournal{requests: map[string]exec.ReviewRequest{string(id): request}}
@@ -1302,7 +1691,7 @@ func TestCodexReviewSourceRecoversBeforeLaunchIntent(t *testing.T) {
 				RunID: "run-recover", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 				RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 				BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-				Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+				Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 				RequestedAt: codexReviewEpoch.Add(-time.Minute),
 			}
 			if err := journal.PutCodexReviewRequest(ctx, string(id), request); err != nil {
@@ -1397,7 +1786,7 @@ func TestCodexReviewSourceRetriesTransientPreparationUnderSameInvocation(t *test
 		RunID: "run-retry", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	fx.rt.onCreateVolume = func(name string) error {
@@ -1445,7 +1834,7 @@ func TestCodexReviewSourceRetriesTransientLaunchUnderSameInvocation(t *testing.T
 		RunID: "run-retry", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	fx.rt.onCreateVolume = func(name string) error {
@@ -1487,7 +1876,7 @@ func TestCodexReviewSourceVerifyRejectsSwappedInvocation(t *testing.T) {
 	request := exec.ReviewRequest{
 		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/candidate",
-		Verification: testReviewVerificationEvidence(), RequestedAt: codexReviewEpoch,
+		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,
 	}
 	result := exec.ReviewResult{
 		InvocationID: "review-run-1-2", BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA,
@@ -1563,7 +1952,7 @@ func TestCodexReviewSourceVerifyRejectsSwappedRequestAuthority(t *testing.T) {
 	request := exec.ReviewRequest{
 		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/candidate",
-		Verification: testReviewVerificationEvidence(), RequestedAt: codexReviewEpoch,
+		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,
 	}
 	expected, err := request.AuthorityDigest()
 	if err != nil {
@@ -1573,6 +1962,21 @@ func TestCodexReviewSourceVerifyRejectsSwappedRequestAuthority(t *testing.T) {
 		"ownership": func(swapped *exec.ReviewRequest) {
 			swapped.RunID = "run-2"
 			swapped.Round = 2
+		},
+		"cross repository": func(swapped *exec.ReviewRequest) {
+			swapped.Repo = "other/repo"
+			swapped.RepositoryID = 84
+		},
+		"stale base": func(swapped *exec.ReviewRequest) {
+			swapped.BaseSHA = strings.Repeat("e", 40)
+		},
+		"instruction source": func(swapped *exec.ReviewRequest) {
+			swapped.Instructions.RepositorySources = []exec.ReviewInstructionSource{{
+				Path: "AGENTS.md", Digest: domain.Digest("sha256:" + strings.Repeat("f", 64)),
+			}}
+		},
+		"instruction result": func(swapped *exec.ReviewRequest) {
+			swapped.Instructions.ResultDigest = domain.Digest("sha256:" + strings.Repeat("1", 64))
 		},
 		"workspace": func(swapped *exec.ReviewRequest) {
 			swapped.Workspace = "/swapped-candidate"
@@ -1604,7 +2008,7 @@ func TestCodexReviewSourceOutcomeRejectsFindingCorruption(t *testing.T) {
 	request := exec.ReviewRequest{
 		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/candidate",
-		Verification: testReviewVerificationEvidence(), RequestedAt: now,
+		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: now,
 	}
 	outcome := source.normalizeCollection("review-invocation-1", request, CodexReviewCollection{
 		Result: []byte(`{"findings":[{"severity":"P1","location":"main.go:1","explanation":"unsafe"}]}`),
@@ -1625,43 +2029,37 @@ func TestCodexReviewConfigurationDigestBindsEffectiveInputs(t *testing.T) {
 		size int64,
 		authMode CodexAuthMode,
 		identity domain.AuthIdentityID,
-		instructions domain.Digest,
 		costOwner string,
 	) domain.Digest {
 		t.Helper()
 		got, err := CodexReviewConfigurationDigest(
-			config, size, authMode, identity, instructions, costOwner,
+			config, size, authMode, identity, costOwner,
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return got
 	}
-	base := digest(cfg, 64, request.AuthMode, request.AuthIdentityID,
-		request.Instructions.Digest, "subscription:owner")
+	base := digest(cfg, 64, request.AuthMode, request.AuthIdentityID, "subscription:owner")
 	reordered := cfg
 	reordered.ProviderEndpoints = slices.Clone(cfg.ProviderEndpoints)
 	slices.Reverse(reordered.ProviderEndpoints)
 	if got := digest(reordered, 64, request.AuthMode, request.AuthIdentityID,
-		request.Instructions.Digest, "subscription:owner"); got != base {
+		"subscription:owner"); got != base {
 		t.Fatalf("endpoint order changed digest: %q != %q", got, base)
 	}
 	mutated := cfg
 	mutated.Model += "-different"
 	if got := digest(mutated, 64, request.AuthMode, request.AuthIdentityID,
-		request.Instructions.Digest, "subscription:owner"); got == base {
+		"subscription:owner"); got == base {
 		t.Fatal("model change did not change configuration digest")
 	}
 	if got := digest(cfg, 65, request.AuthMode, request.AuthIdentityID,
-		request.Instructions.Digest, "subscription:owner"); got == base {
+		"subscription:owner"); got == base {
 		t.Fatal("workspace size change did not change configuration digest")
 	}
 	if got := digest(cfg, 64, request.AuthMode, request.AuthIdentityID,
-		domain.Digest("sha256:"+strings.Repeat("d", 64)), "subscription:owner"); got == base {
-		t.Fatal("instruction change did not change configuration digest")
-	}
-	if got := digest(cfg, 64, request.AuthMode, request.AuthIdentityID,
-		request.Instructions.Digest, "different-owner"); got == base {
+		"different-owner"); got == base {
 		t.Fatal("cost owner change did not change configuration digest")
 	}
 }

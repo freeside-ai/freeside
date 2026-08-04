@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -24,6 +25,19 @@ func reviewBodyDigest(body string) string {
 
 func reviewBodyAuthority(body string) string {
 	return reviewBodyDigest(body) + body
+}
+
+func validatePersistedReviewRecord(record domain.ReviewRecord) error {
+	if record.InstructionDigest != "" {
+		return record.Validate()
+	}
+	// Historical rows written before instruction authority have exactly this
+	// one missing field. Keep them readable so the engine can invalidate their
+	// clean pass and schedule a current review; every write remains strict.
+	legacy := record
+	legacy.InstructionDigest = domain.Digest(
+		"sha256:0000000000000000000000000000000000000000000000000000000000000000")
+	return legacy.Validate()
 }
 
 // PutReviewRecord atomically persists one completed pass and its immutable raw
@@ -107,11 +121,11 @@ func (tx *ReadTx) GetReviewRecord(
 	if bodyDigest != reviewBodyDigest(string(body)) {
 		return domain.ReviewRecord{}, fmt.Errorf("get review record %q: %w", id, errRowInconsistent)
 	}
-	record, err := decode[domain.ReviewRecord](body)
-	if err != nil {
+	var record domain.ReviewRecord
+	if err := json.Unmarshal(body, &record); err != nil {
 		return domain.ReviewRecord{}, fmt.Errorf("get review record %q: %w", id, err)
 	}
-	if err := record.Validate(); err != nil {
+	if err := validatePersistedReviewRecord(record); err != nil {
 		return domain.ReviewRecord{}, fmt.Errorf("get review record %q: %w", id, err)
 	}
 	if record.InvocationID != id || record.RunID != domain.RunID(runID) ||

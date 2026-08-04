@@ -86,6 +86,7 @@ type ProductionPublicationConfig struct {
 	// must not carry authority to start a new review.
 	ReviewRecovery            func(context.Context) error
 	ReviewConfigurationDigest domain.Digest
+	ReviewHostInstructions    ReviewHostInstructions
 	// ObserveBase returns the current target ref SHA. A clean pass against an
 	// older base is never promoted to readiness.
 	ObserveBase func(context.Context, string, string) (string, error)
@@ -166,6 +167,7 @@ type productionPublicationWorkflow struct {
 	reviewRecovery            func(context.Context) error
 	reviewRecoveryPending     bool
 	reviewConfigurationDigest domain.Digest
+	reviewHostInstructions    ReviewHostInstructions
 	observeBase               func(context.Context, string, string) (string, error)
 	observePull               func(context.Context, string, int) (publish.PullObservation, error)
 	holdOnly                  bool
@@ -205,7 +207,8 @@ func newProductionPublicationWorkflow(
 		cfg.Artifacts == nil || cfg.NewRoom == nil ||
 		cfg.ReviewRecovery == nil ||
 		(!cfg.HoldOnly && (cfg.ReviewSource == nil || cfg.ObserveBase == nil || cfg.ObservePull == nil ||
-			!contentaddr.Valid(string(cfg.ReviewConfigurationDigest)))) {
+			!contentaddr.Valid(string(cfg.ReviewConfigurationDigest)) ||
+			cfg.ReviewHostInstructions.validate() != nil)) {
 		return nil, errors.New("nil dependency")
 	}
 	if strings.TrimSpace(cfg.WorkDir) == "" {
@@ -243,7 +246,12 @@ func newProductionPublicationWorkflow(
 		newRoom:         cfg.NewRoom, reviewSource: cfg.ReviewSource,
 		reviewRecovery: cfg.ReviewRecovery, reviewRecoveryPending: true,
 		reviewConfigurationDigest: cfg.ReviewConfigurationDigest,
-		observeBase:               cfg.ObserveBase, observePull: cfg.ObservePull, holdOnly: cfg.HoldOnly,
+		reviewHostInstructions: ReviewHostInstructions{
+			Present: cfg.ReviewHostInstructions.Present,
+			Digest:  cfg.ReviewHostInstructions.Digest,
+			Body:    bytes.Clone(cfg.ReviewHostInstructions.Body),
+		},
+		observeBase: cfg.ObserveBase, observePull: cfg.ObservePull, holdOnly: cfg.HoldOnly,
 		recipeReadTimeout: cfg.RecipeReadTimeout,
 		holdRetryInterval: cfg.HoldRetryInterval, now: cfg.Now,
 		holdRetryAfter:    make(map[domain.RunID]time.Time),
@@ -1314,6 +1322,14 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
+	var reviewInstructions exec.ReviewInstructionBinding
+	if !w.holdOnly {
+		reviewInstructions, err = w.composeReviewInstructions(checkoutDir)
+		if err != nil {
+			return productionTaskOutcome{}, fmt.Errorf(
+				"compose exact-base review instructions: %w", err)
+		}
+	}
 	handoffDir := filepath.Join(scratch, "handoff")
 	if err := w.materializeReplay(binding.replay, handoffDir); err != nil {
 		return productionTaskOutcome{}, err
@@ -1368,7 +1384,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			if err != nil {
 				return productionTaskOutcome{}, err
 			}
-			return w.completePublishedTask(ctx, task, binding, checkpoint, published, checkoutDir)
+			return w.completePublishedTask(ctx, task, binding, checkpoint, published, checkoutDir, reviewInstructions)
 		}
 		published, outcomeFound, err := w.loadPublicationOutcome(
 			ctx, task, candidate, w.publisher.VerifyOutcome,
@@ -1387,7 +1403,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			return productionTaskOutcome{}, err
 		}
 		if outcomeFound {
-			return w.completePublishedTask(ctx, task, binding, checkpoint, published, checkoutDir)
+			return w.completePublishedTask(ctx, task, binding, checkpoint, published, checkoutDir, reviewInstructions)
 		}
 	}
 	if !w.approvedRecipes[binding.image.RecipeDigest] {
@@ -1442,7 +1458,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		}
 		return productionTaskOutcome{}, err
 	} else if found {
-		return w.completePublishedTask(ctx, task, binding, checkpoint, published, checkoutDir)
+		return w.completePublishedTask(ctx, task, binding, checkpoint, published, checkoutDir, reviewInstructions)
 	}
 	published, err := w.publisher.PublishExecutionAfterGateAndFinalize(
 		ctx,
@@ -1503,7 +1519,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 				errors.Join(err, errProductionCrashSeam))
 		}
 	}
-	return w.completePublishedTask(ctx, task, binding, checkpoint, published, checkoutDir)
+	return w.completePublishedTask(ctx, task, binding, checkpoint, published, checkoutDir, reviewInstructions)
 }
 
 type productionReviewGateState uint8
@@ -1513,6 +1529,45 @@ const (
 	productionReviewPassed
 	productionReviewEscalated
 )
+
+func (w *productionPublicationWorkflow) productionReviewRequest(
+	task productionPublicationTask,
+	binding productionBinding,
+	checkpoint productionVerificationCheckpoint,
+	id domain.InvocationID,
+	round int,
+	instructions exec.ReviewInstructionBinding,
+) (exec.ReviewRequest, domain.Digest, error) {
+	reviewWorkspace, err := w.reviewWorkspacePath(id)
+	if err != nil {
+		return exec.ReviewRequest{}, "", err
+	}
+	artifactDigests := make([]domain.Digest, len(checkpoint.Artifacts))
+	for i := range checkpoint.Artifacts {
+		artifactDigests[i] = checkpoint.Artifacts[i].Digest
+	}
+	verification, err := exec.NewReviewVerificationEvidence(
+		exec.ReviewVerificationEvidence{
+			Outcome:                checkpoint.Authorization.VerificationOutcome,
+			RecipeDigest:           checkpoint.Authorization.VerificationRecipeDigest,
+			EvidenceSnapshotDigest: checkpoint.Authorization.EvidenceSnapshotDigest,
+			ArtifactDigests:        artifactDigests,
+		},
+	)
+	if err != nil {
+		return exec.ReviewRequest{}, "", err
+	}
+	request := exec.ReviewRequest{
+		RunID: task.RunID, Round: round,
+		Repo: binding.admission.Base.Repo, RepositoryID: binding.admission.Base.RepositoryID,
+		BaseRef: binding.admission.Base.BaseRef,
+		BaseSHA: binding.admission.Base.BaseSHA, HeadSHA: task.HeadSHA,
+		Workspace: reviewWorkspace, Verification: verification,
+		Instructions: instructions, RequestedAt: w.now().UTC(),
+	}
+	authority, err := request.AuthorityDigest()
+	return request, authority, err
+}
 
 // ProductionReviewInvocationID derives the bounded ward identity for one
 // run/round without embedding an arbitrarily long durable run ID.
@@ -1585,6 +1640,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	checkpoint productionVerificationCheckpoint,
 	published publish.Result,
 	workspace string,
+	reviewInstructions exec.ReviewInstructionBinding,
 ) (productionReviewGateState, error) {
 	if binding.profile.Review.Mode != domain.ReviewFreesideInvoked {
 		return productionReviewPending, fmt.Errorf(
@@ -1643,30 +1699,50 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 				"latest review record is bound to a different candidate: %w", domain.ErrParentKeyMismatch,
 			)
 		}
-		if latestRecord.Outcome == domain.ReviewFindings {
-			if err := w.putReviewAttention(ctx, task, *latestRecord,
-				fmt.Sprintf("Codex review found %d issue(s) requiring remediation.", len(latestRecord.FindingIDs)),
-				domain.AttentionReviewDiminishing,
-			); err != nil {
+		if latestRecord.InstructionDigest == reviewInstructions.ResultDigest {
+			if latestRecord.Outcome == domain.ReviewFindings {
+				if err := w.putReviewAttention(ctx, task, *latestRecord,
+					fmt.Sprintf("Codex review found %d issue(s) requiring remediation.", len(latestRecord.FindingIDs)),
+					domain.AttentionReviewDiminishing,
+				); err != nil {
+					return productionReviewPending, err
+				}
+				return productionReviewEscalated, nil
+			}
+			_, requestAuthority, err := w.productionReviewRequest(
+				task, binding, checkpoint, latestRecord.InvocationID,
+				latestRecord.Round, reviewInstructions,
+			)
+			if err != nil {
 				return productionReviewPending, err
 			}
-			return productionReviewEscalated, nil
-		}
-		staleReason, err := w.reviewPassStaleReason(ctx, binding, published, *latestRecord)
-		if err != nil {
-			return productionReviewPending, err
-		}
-		if staleReason != "" {
-			if err := w.putReviewAttention(ctx, task, *latestRecord,
-				staleReason,
-				domain.AttentionReviewDispute,
+			authorityVerifier, ok := w.reviewSource.(exec.ReviewRequestAuthorityVerifier)
+			if !ok {
+				return productionReviewPending, errors.New(
+					"review source cannot re-gate persisted request authority")
+			}
+			if err := authorityVerifier.VerifyRequestAuthority(
+				ctx, latestRecord.InvocationID, requestAuthority,
 			); err != nil {
+				return productionReviewPending, fmt.Errorf(
+					"re-gate persisted review instruction authority: %w", err)
+			}
+			staleReason, err := w.reviewPassStaleReason(ctx, binding, published, *latestRecord)
+			if err != nil {
 				return productionReviewPending, err
 			}
-			return productionReviewEscalated, nil
+			if staleReason != "" {
+				if err := w.putReviewAttention(ctx, task, *latestRecord,
+					staleReason,
+					domain.AttentionReviewDispute,
+				); err != nil {
+					return productionReviewPending, err
+				}
+				return productionReviewEscalated, nil
+			}
+			delete(w.reviewRetryAfter, task.RunID)
+			return productionReviewPassed, nil
 		}
-		delete(w.reviewRetryAfter, task.RunID)
-		return productionReviewPassed, nil
 	}
 
 	round := 1
@@ -1732,36 +1808,13 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	}
 
 	id := ProductionReviewInvocationID(task.RunID, round)
-	reviewWorkspace, err := w.reviewWorkspacePath(id)
-	if err != nil {
-		return productionReviewPending, err
-	}
-	artifactDigests := make([]domain.Digest, len(checkpoint.Artifacts))
-	for i := range checkpoint.Artifacts {
-		artifactDigests[i] = checkpoint.Artifacts[i].Digest
-	}
-	verification, err := exec.NewReviewVerificationEvidence(
-		exec.ReviewVerificationEvidence{
-			Outcome:                checkpoint.Authorization.VerificationOutcome,
-			RecipeDigest:           checkpoint.Authorization.VerificationRecipeDigest,
-			EvidenceSnapshotDigest: checkpoint.Authorization.EvidenceSnapshotDigest,
-			ArtifactDigests:        artifactDigests,
-		},
+	req, requestAuthority, err := w.productionReviewRequest(
+		task, binding, checkpoint, id, round, reviewInstructions,
 	)
 	if err != nil {
 		return productionReviewPending, err
 	}
-	req := exec.ReviewRequest{
-		RunID: task.RunID, Round: round,
-		Repo: binding.admission.Base.Repo, RepositoryID: binding.admission.Base.RepositoryID,
-		BaseRef: binding.admission.Base.BaseRef,
-		BaseSHA: binding.admission.Base.BaseSHA, HeadSHA: task.HeadSHA,
-		Workspace: reviewWorkspace, Verification: verification, RequestedAt: w.now().UTC(),
-	}
-	requestAuthority, err := req.AuthorityDigest()
-	if err != nil {
-		return productionReviewPending, err
-	}
+	reviewWorkspace := req.Workspace
 	authorityVerifier, ok := w.reviewSource.(exec.ReviewRequestAuthorityVerifier)
 	if !ok {
 		return w.recordReviewSourceFailure(ctx, task, id, round,
@@ -1772,6 +1825,21 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			},
 		)
 	}
+	if supersessionVerifier, ok := w.reviewSource.(exec.ReviewRequestSupersessionVerifier); ok {
+		if err := supersessionVerifier.VerifyReviewRequestSupersession(ctx, id, req); err != nil &&
+			!errors.Is(err, exec.ErrUnknownInvocation) {
+			if errors.Is(err, exec.ErrSupersededReviewRequest) || errors.Is(err, exec.ErrLegacyReviewRequest) {
+				return w.recordReviewSourceFailure(ctx, task, id, round,
+					binding.admission.Base.BaseSHA, task.HeadSHA,
+					&exec.ReviewSourceFailure{Class: domain.ReviewFailureTransient, Err: err})
+			}
+			if w.scheduleReviewInvocationRetry(task.RunID, round, err) {
+				return productionReviewPending, nil
+			}
+			return w.recordReviewSourceFailure(ctx, task, id, round,
+				binding.admission.Base.BaseSHA, task.HeadSHA, err)
+		}
+	}
 	// Re-gate the persisted request against the engine's current authority
 	// before Inspect may act on it: Inspect's restart-recovery window
 	// relaunches from the decoded journal row, so a rewritten-but-valid row
@@ -1779,6 +1847,15 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	// credential-bearing review, not only after Poll delivers a result.
 	if err := authorityVerifier.VerifyRequestAuthority(ctx, id, requestAuthority); err != nil &&
 		!errors.Is(err, exec.ErrUnknownInvocation) {
+		if errors.Is(err, exec.ErrLegacyReviewRequest) {
+			return w.recordReviewSourceFailure(ctx, task, id, round,
+				binding.admission.Base.BaseSHA, task.HeadSHA,
+				&exec.ReviewSourceFailure{
+					Class: domain.ReviewFailureTransient,
+					Err:   err,
+				},
+			)
+		}
 		if w.scheduleReviewInvocationRetry(task.RunID, round, err) {
 			return productionReviewPending, nil
 		}
@@ -1852,6 +1929,15 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			},
 		)
 	}
+	if result.InstructionDigest != req.Instructions.ResultDigest {
+		return w.recordReviewSourceFailure(ctx, task, id, round,
+			binding.admission.Base.BaseSHA, task.HeadSHA,
+			&exec.ReviewSourceFailure{
+				Class: domain.ReviewFailureContradiction,
+				Err:   domain.ErrParentKeyMismatch,
+			},
+		)
+	}
 	if err := authorityVerifier.VerifyRequestAuthority(ctx, id, requestAuthority); err != nil {
 		if w.scheduleReviewInvocationRetry(task.RunID, round, err) {
 			return productionReviewPending, nil
@@ -1892,6 +1978,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		InvocationID: id, RunID: task.RunID, Round: round,
 		Provider: result.Provider, ModelConfiguration: result.ModelConfiguration,
 		ConfigurationDigest: result.ConfigurationDigest,
+		InstructionDigest:   result.InstructionDigest,
 		CostOwner:           result.CostOwner, BaseSHA: result.BaseSHA, HeadSHA: result.HeadSHA,
 		CompletedAt: result.CompletedAt, CompletionEvidence: result.CompletionEvidence,
 		Outcome: outcome, FindingIDs: findingIDs,
@@ -2133,8 +2220,11 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 	checkpoint productionVerificationCheckpoint,
 	published publish.Result,
 	checkoutDir string,
+	reviewInstructions exec.ReviewInstructionBinding,
 ) (productionTaskOutcome, error) {
-	reviewState, err := w.reconcileReviewGate(ctx, task, binding, checkpoint, published, checkoutDir)
+	reviewState, err := w.reconcileReviewGate(
+		ctx, task, binding, checkpoint, published, checkoutDir, reviewInstructions,
+	)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}

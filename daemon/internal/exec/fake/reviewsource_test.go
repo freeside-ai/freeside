@@ -16,6 +16,7 @@ import (
 var fixedTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
 func reviewRequest(head string) exec.ReviewRequest {
+	_, instructions, _ := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
 	return exec.ReviewRequest{
 		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42,
 		BaseRef: "main", BaseSHA: "base-sha", HeadSHA: head,
@@ -23,7 +24,7 @@ func reviewRequest(head string) exec.ReviewRequest {
 			Outcome:                domain.VerificationPassed,
 			RecipeDigest:           domain.Digest("sha256:" + strings.Repeat("c", 64)),
 			EvidenceSnapshotDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
-		}, RequestedAt: fixedTime,
+		}, Instructions: instructions, RequestedAt: fixedTime,
 	}
 }
 
