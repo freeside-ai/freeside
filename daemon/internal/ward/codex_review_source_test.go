@@ -2163,3 +2163,106 @@ func TestRuntimeCodexReviewVolumeLeaseTransfersAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestClassifyCodexLaunchFailure pins the launch-path failure classification
+// and its precedence (operational > contradiction > configuration). The
+// classifier keys only off error-class sentinels and never inspects
+// ConformanceFailure.Check, so each audit-named contradiction family below is
+// an equivalence-class representative: every ErrConformance failure reachable
+// before start classifies identically as a contradiction (#499).
+func TestClassifyCodexLaunchFailure(t *testing.T) {
+	conformance := func(c Check) error {
+		return &ConformanceFailure{Backend: BackendName, Check: c, Reason: "test"}
+	}
+	cases := []struct {
+		name string
+		err  error
+		want domain.ReviewFailureClass
+	}{
+		{"operational alone", ErrCodexReviewOperational, domain.ReviewFailureTransient},
+		{"operational wrapped", fmt.Errorf("read: %w", ErrCodexReviewOperational), domain.ReviewFailureTransient},
+		{
+			"operational joined with conformance context",
+			errors.Join(ErrCodexReviewOperational, conformance(CheckWorkspaceSeeding)),
+			domain.ReviewFailureTransient,
+		},
+		{
+			"operational joined with spec",
+			errors.Join(ErrCodexReviewOperational, ErrInvalidCodexReviewSpec),
+			domain.ReviewFailureTransient,
+		},
+		{"bare conformance sentinel", ErrConformance, domain.ReviewFailureContradiction},
+		{"changed auth/instruction snapshot", conformance(CheckCredentialSeparation), domain.ReviewFailureContradiction},
+		{"command/mount divergence", conformance(CheckObservedBaseIdentity), domain.ReviewFailureContradiction},
+		{"invalid or divergent journal binding", conformance(CheckWorkspaceSeeding), domain.ReviewFailureContradiction},
+		{"foreign/unprovable owned object", conformance(CheckTeardown), domain.ReviewFailureContradiction},
+		{"persisted binding disagreement", conformance(CheckControlPlaneIsolation), domain.ReviewFailureContradiction},
+		{
+			"conformance joined with spec takes the loud branch",
+			errors.Join(conformance(CheckWorkspaceSeeding), ErrInvalidCodexReviewSpec),
+			domain.ReviewFailureContradiction,
+		},
+		{"invalid static spec", ErrInvalidCodexReviewSpec, domain.ReviewFailureConfiguration},
+		{"invalid static spec wrapped", fmt.Errorf("%w: bad prompt", ErrInvalidCodexReviewSpec), domain.ReviewFailureConfiguration},
+		{"unknown error", errors.New("boom"), domain.ReviewFailureTransient},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyCodexLaunchFailure(tc.err); got != tc.want {
+				t.Fatalf("classifyCodexLaunchFailure(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCodexReviewSourceLaunchConformanceIsContradiction proves the wiring:
+// a conformance failure produced during workspace preparation (a divergent
+// persisted workspace binding) surfaces to the engine as a
+// ReviewFailureContradiction, not the repairable ReviewFailureConfiguration
+// the launch classifier previously emitted for every conformance failure.
+func TestCodexReviewSourceLaunchConformanceIsContradiction(t *testing.T) {
+	ctx := context.Background()
+	fx := newHandoffFixture(t)
+	seedSpec := fx.seed(t)
+	backend := fx.backend(t)
+	cfg, requestSpec := testCodexReview(t)
+	journal := &fakeCodexReviewJournal{}
+	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
+	source, err := NewCodexReviewSource(sourceConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := domain.InvocationID("review-divergent-binding-1")
+	// A persisted workspace binding whose stored Volume disagrees with the
+	// deterministic name for this invocation. Its empty CreationFingerprint
+	// routes startRequestedReview into PrepareCodexReviewWorkspace, which fails
+	// the CheckWorkspaceSeeding conformance gate on the divergence.
+	journal.workspaceBinding = CodexReviewWorkspaceBinding{
+		SourceRunID: string(id), Volume: "codex-review-foreign-volume",
+		OwnershipToken: "stored-token",
+	}
+	request := exec.ReviewRequest{
+		RunID: "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,
+	}
+	var failure *exec.ReviewSourceFailure
+	if err := source.RequestReview(ctx, id, request); !errors.As(err, &failure) ||
+		failure.Class != domain.ReviewFailureContradiction {
+		t.Fatalf("launch conformance failure = %v (class %v), want contradiction",
+			err, reviewSourceFailureClass(err))
+	}
+	if !errors.Is(failure.Err, ErrConformance) {
+		t.Fatalf("launch failure did not carry the conformance sentinel: %v", failure.Err)
+	}
+}
+
+func reviewSourceFailureClass(err error) domain.ReviewFailureClass {
+	var failure *exec.ReviewSourceFailure
+	if errors.As(err, &failure) {
+		return failure.Class
+	}
+	return ""
+}
