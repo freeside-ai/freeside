@@ -790,6 +790,30 @@ func TestReadProvenanceArchiveRequiresUniqueRegularBoundedFiles(t *testing.T) {
 	); err == nil {
 		t.Fatal("readProvenanceLayer accepted a later same-layer ancestor replacement")
 	}
+	// #518: the builder clears the launcher paths with a base-independent rm
+	// before the launcher COPYs, so a launcher whiteout lands in a layer OLDER
+	// than the launcher's regular file. readOCIEvidence walks newest-first, so
+	// the launcher resolves before the older whiteout layer is read; that
+	// whiteout must then be skipped, not refused.
+	launcherWanted := map[string]int64{nodeLauncherPath: maxPrepareBytes}
+	launcherWhiteout := []archiveEntry{{"usr/local/bin/.wh.node", "", tar.TypeReg}}
+	resolvedLauncher := map[string][]byte{nodeLauncherPath: []byte(nodeToolchainLauncher)}
+	if err := readProvenanceLayer(
+		writeArchive(t, launcherWhiteout), ociLayerMediaType, launcherWanted,
+		resolvedLauncher, map[string]int64{nodeLauncherPath: 0o755},
+	); err != nil {
+		t.Fatalf(
+			"readProvenanceLayer refused an older-layer launcher whiteout under a resolved launcher: %v",
+			err)
+	}
+	// A launcher whiteout in a layer NEWER than the launcher (unresolved when
+	// the whiteout layer is read) still refuses.
+	if err := readProvenanceLayer(
+		writeArchive(t, launcherWhiteout), ociLayerMediaType, launcherWanted,
+		map[string][]byte{}, map[string]int64{},
+	); err == nil {
+		t.Fatal("readProvenanceLayer accepted a launcher whiteout newer than the launcher layer")
+	}
 }
 
 func TestAppleRunTakesExitStatusOnlyFromHostProcessResult(t *testing.T) {

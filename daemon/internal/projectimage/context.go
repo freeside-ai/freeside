@@ -126,6 +126,16 @@ ARG PROJECT_NODE_VERSION
 ARG PROJECT_NODE_SHA256
 
 COPY --from=project-toolchain /opt/freeside/project-toolchain/node.tar.xz /opt/freeside/project-toolchain/node.tar.xz
+# An approved base may legitimately carry Node at these launcher paths (the
+# Claude base extracts the official tarball, whose bin/npm and bin/npx are
+# symlinks), and COPY follows a pre-existing symlink at the destination,
+# writing the launcher bytes through it rather than replacing the link. Clear
+# the three paths first with the base's own already-trusted static BusyBox so
+# each COPY lands a fresh regular file while trusting nothing at the target:
+# rm -f unlinks whatever entry exists, and unlinking a symlink never touches
+# what it points at. Exec form needs no shell in the base; rm -f (not -rf)
+# fails the build loudly should an approved base ever ship a directory here.
+RUN ["/usr/bin/busybox", "rm", "-f", "/usr/local/bin/node", "/usr/local/bin/npm", "/usr/local/bin/npx"]
 COPY toolchain-launcher /usr/local/bin/node
 COPY toolchain-launcher /usr/local/bin/npm
 COPY toolchain-launcher /usr/local/bin/npx
