@@ -43,13 +43,21 @@ servers:
 
 # Every endpoint requires the paired-device credential: revocation must be
 # enforceable by contract (a revoked device cannot submit, plan §5.14 sync
-# tests 15-16). The single exception is POST /pairing, which issues the
-# credential: it overrides with security: [], and the short-lived pairing
-# code is its authenticator.
+# tests 15-16). Exactly two operations override with security: []:
+# POST /pairing, which issues the credential (the short-lived pairing code
+# is its authenticator), and GET /health, the plan §5.2 liveness probe,
+# whose callers (supervisors, probes, an unpaired operator surface) hold
+# no credential by design and which discloses nothing beyond liveness,
+# version, and start time.
 security:
   - deviceCredential: []
 
 tags:
+  - name: health
+    description: >
+      Process liveness for supervisors, probes, and unpaired operator
+      surfaces (plan §5.2 supervision contract). Deliberately outside the
+      credential boundary and deliberately minimal.
   - name: sync
     description: Cache bootstrap (plan §5.14 revision, epoch, and cache semantics).
   - name: attention
@@ -85,6 +93,35 @@ tags:
     description: Digest-addressed attachment upload.
 
 paths:
+  /health:
+    get:
+      operationId: getHealth
+      tags: [health]
+      summary: Process liveness, version, and start time
+      # Unauthenticated by design, with POST /pairing: the callers are
+      # supervisors, external liveness probes, and the operator surface
+      # deciding whether a daemon is up at all, none of which holds a
+      # device credential (plan §5.2).
+      security: []
+      description: |
+        Answers only "is the daemon process up, which build, since when."
+        Supervisors and the external liveness probe poll it (plan §5.2);
+        the operator client uses `version` for skew detection and
+        `started_at` for restart visibility (a start time that keeps
+        moving under a supervisor is crash-loop evidence). The response
+        deliberately carries no operational state: unattended-admission
+        stops, `system_health` items, and everything else requiring
+        judgment stay on the authenticated surfaces (plan §4), so this
+        route widens what an unpaired caller learns by nothing beyond
+        liveness, version, and start time.
+      responses:
+        "200":
+          description: The process is up.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
   /sync/bootstrap:
     get:
       operationId: getSyncBootstrap
@@ -391,9 +428,9 @@ paths:
       operationId: pairDevice
       tags: [devices]
       summary: Exchange a pairing code for a device credential
-      # The one unauthenticated operation: the requester has no credential
-      # yet, and the short-lived code displayed on the daemon host is the
-      # authenticator (plan §5.14 devices).
+      # Unauthenticated by design, with GET /health: the requester has no
+      # credential yet, and the short-lived code displayed on the daemon
+      # host is the authenticator (plan §5.14 devices).
       security: []
       description: |
         Exchanges a short-lived pairing code (displayed on the daemon host,
@@ -1227,6 +1264,39 @@ components:
           $ref: "#/components/schemas/AttentionItemSnapshot"
 
     # --- device pairing (plan §5.14 devices) ---
+
+    HealthStatus:
+      type: object
+      description: >
+        Process liveness (plan §5.2): a transport-level status object for
+        callers that hold no device credential, not a mirror of a
+        synchronized domain type. `status` is fixed at `ok` because
+        liveness is proven by answering; degraded operational states are
+        deliberately not disclosed here (plan §4 owns them, behind
+        authentication).
+      required: [status, version, started_at]
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          description: Fixed at `ok`; liveness is proven by answering at all.
+        version:
+          type: string
+          minLength: 1
+          description: >
+            The daemon build version, for operator-client skew detection.
+        started_at:
+          type: string
+          format: date-time
+          description: >
+            The current process's start time (RFC3339 UTC). Under a
+            supervisor, a start time that keeps advancing across polls is
+            crash-loop evidence.
+      example:
+        status: "ok"
+        version: "0.1.0"
+        started_at: "2026-01-02T03:04:05Z"
 
     PairingRequest:
       type: object

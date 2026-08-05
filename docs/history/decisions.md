@@ -816,7 +816,7 @@ New in revision 25 (decider in parentheses):
 
 ---
 
-## Revision 26 (Current)
+## Revision 26
 
 Revision 26 decomposes Phase 1B into build waves and records the operator
 client-access decisions. Held from revision 25: everything except the one
@@ -855,3 +855,53 @@ New in revision 26 (decider in parentheses):
    Apple Developer Program defers to Phase 2 with APNs, because client
    correctness never depends on push (Section 5.14).
    (User; same devlog.)
+
+---
+
+## Revision 27 (Current)
+
+Revision 27 writes the daemon supervision contract (Section 5.2):
+supervision modes by deployment class, exit discipline over a complete
+fatal-writer inventory, stop semantics, and the liveness surface. Held from
+revision 26: everything; the one sequencing amendment pulls the supervision
+core forward from wave 7 to wave 5.
+
+1. **Supervision is mode-scoped** (Section 5.2): Mac-first single-operator
+   runs `freesided` as a per-user LaunchAgent registered by the Mac app
+   through `SMAppService` (bundled plist, `KeepAlive`, no privileged step),
+   superseding the LaunchDaemon-first direction endorsed in devlog
+   2026-08-01-2221-supervision-contract-gap.md; the dedicated-user
+   LaunchDaemon through the elevation helper is retained as the hardened
+   end state. Changed assumptions: real-backlog daily operation begins at
+   wave-4 close, two waves ahead of the fix parked in wave 7; Apple
+   `container` is per-user tooling with unverified behavior under a
+   GUI-less service account; the elevation helper drops off the Mac-first
+   critical path entirely.
+   (User; devlog 2026-08-05-0001-supervision-contract.md; #453, #454.)
+2. **Exit discipline classifies every fatal-channel writer** (Section 5.2):
+   durable in-process stops (store and correctness failures, backup
+   maintenance, definitively classified doctor or janitor pass failures,
+   externally caused failures once persistence is established) never exit;
+   a post-bind HTTP serve fault is a restart-safe exit; panics and startup
+   failures are involuntary exits. Restart-always is endorsed only over
+   this inventory, and the doctor source-error posture deferred by devlog
+   2026-07-30-2350-operational-command-packaging.md resolves as a durable
+   stop.
+   (User; same devlog; #453, #454, #435.)
+3. **The stop-wait fork closes on the unlimited side** (Section 5.2):
+   SIGTERM with an effectively unlimited exit timeout over unbounded
+   credential-lease teardown; a bounded credential-safe teardown is
+   deferred hardening, not a tunable; SIGKILL stays crash-equivalent.
+   (User; same devlog.)
+4. **Liveness is an unauthenticated `GET /health` plus supervised address
+   and readiness publication** (Sections 5.2 and 10; api/openapi.yaml): a
+   fixed loopback address in the unit file, a `0600` state-directory
+   readiness file replacing the one-shot stdout line under supervision,
+   the external ntfy probe in 1B.1, and the Mac app's menu bar presence as
+   the local surface, with the app owning the local daemon's lifecycle.
+   (User; same devlog; #453, #454.)
+5. **The supervision core pulls forward to wave 5 by owner fiat**
+   (Section 11, amending revision 26's wave-7 concentration for this unit
+   only): #454's daemon side and the app-side LaunchAgent and menu-bar
+   unit land in wave 5; the external-probe remainder stays in wave 7.
+   (User; same devlog; #453, #454.)

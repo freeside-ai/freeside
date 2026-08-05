@@ -29,7 +29,10 @@ public struct MockServerTransport: ClientTransport {
         operationID: String
     ) async throws -> (HTTPResponse, HTTPBody?) {
         // The daemon authorizes before any handler runs and fails closed
-        // (#105); pairing is the one unauthenticated operation.
+        // (#105). The spec exempts two operations from authentication,
+        // pairing and health (plan §5.2); the mock exempts only pairing,
+        // because it serves no health handler until an app surface calls
+        // one.
         var authenticatedDevice: String?
         if operationID != "pairDevice" {
             switch await server.authenticate(

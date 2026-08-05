@@ -1,9 +1,9 @@
 ---
 title: Freeside Project Plan
-revision: 26
+revision: 27
 status: active
 phase: 1A
-updated: 2026-08-01
+updated: 2026-08-05
 ---
 
 # Freeside
@@ -304,15 +304,105 @@ GitHub  <── reconciliation and publication ──>  freesided
 | **Sync API** | Serves atomic snapshots with revision, epoch, and invalidation semantics. |
 | **Freeside app** | Provides the SwiftUI macOS and iOS inbox, decision detail, and run timeline using platform-protected caches. |
 
-### 5.2 The daemon
+### 5.2 The Daemon and Its Supervisor
 
-`freesided` is a single static Go binary.
+`freesided` is a single static Go binary. A supervisor keeps it running; the
+daemon never supervises itself, and launchd/systemd knowledge never enters
+`daemon/`: unit files and their registration live with the install tooling
+and the operator app.
 
-- A supervisor runs it under a dedicated user.
-- Other accounts cannot access its state or credentials.
-- Privileged services bind only to loopback or Tailscale.
-- **The daemon never runs as root.** One-time privileged work, such as user
-  creation and launchd installation, lives in a narrow elevation helper.
+**Supervision modes** (decider: user; revision 27):
+
+- **Mac-first single-operator (Phase 1):** a per-user launchd LaunchAgent in
+  the operator's login session, registered by the Freeside Mac app through
+  `SMAppService` from a plist shipped in the app bundle, with `KeepAlive`.
+  The app is installer and trigger; launchd is the supervisor. This path has
+  no privileged step: the daemon drives Apple `container`, per-user tooling,
+  and the operator account is the isolation boundary (state and credentials
+  stay `0700`/`0600` under it, so other accounts cannot access them). Cost,
+  accepted for Phase 1: the daemon lives in the login session, so unattended
+  operation assumes a logged-in operator, a bound already true of the
+  terminal-launched process this replaces.
+- **Hardened (multi-user or server hosts, deferred):** a dedicated-user
+  LaunchDaemon or systemd unit installed through the Section 10 elevation
+  helper, for boot-time start, logout survival, and operator isolation.
+  Retained as the end state, not scheduled in Phase 1.
+
+**The daemon never runs as root.** One-time privileged work, such as user
+creation and LaunchDaemon installation on the hardened path, lives in a
+narrow elevation helper. Privileged services bind only to loopback or
+Tailscale.
+
+**Exit discipline.** Every deliberate stop is durable and in-process; the
+process exits only involuntarily or to be restarted. Classification of
+today's fatal-channel writers and exit paths:
+
+- **Durable stop** (close unattended admission through the Section 4
+  transition, file `system_health`, keep serving reads; only explicit
+  resume reopens admission, and a restart never does):
+  - store I/O and correctness failures in any long-running loop (the
+    workflow reconcile loop, a scheduler pass, active-resource enumeration
+    or commit): an invariant on durable state recurs on restart, and a
+    respawn loop would hide it;
+  - local backup maintenance failure: persistent disk or encryption damage
+    (Section 5.10);
+  - a doctor or janitor pass failure with a local or definitively
+    classified cause (an unreadable operational source, revoked or broken
+    GitHub App authority): health can no longer be asserted, resolving the
+    doctor source-error posture deferred by the operational-command
+    packaging decision;
+  - an externally caused pass or lane failure once persistence is
+    established (a consecutive-failure threshold the implementation unit
+    sets). A transient external failure alone never stops or exits: it
+    retries on its cadence or backoff and is recorded.
+- **Restart-safe exit:** a post-bind HTTP serve fault. Without the API
+  surface the daemon cannot serve even read-only state, and a fresh bind
+  plausibly clears the fault.
+- **Process exit (involuntary):** panics and invariant violations, and
+  startup failures from flag validation through migrations and the initial
+  doctor pass. A pre-store startup failure cannot record a durable stop by
+  construction. The supervisor restarts these under its throttle;
+  crash-looping is visible as `started_at` churn on `/health` and, from
+  1B.1, as the external probe's alarm.
+
+After this contract the daemon's fatal channel carries only the two exit
+classes; every durable-stop condition is consumed before reaching it.
+
+**Restart policy.** Restart-always with the platform throttle. This is safe
+only because every deliberate stop is in-process and durable: a restart can
+resume only work the contract says is safe to resume, and Section 4's rule
+stands (a restart never reopens unattended admission).
+
+**Stop.** Supervisor stop is SIGTERM with an effectively unlimited exit
+timeout, because credential-lease teardown is unbounded by design (decider:
+user; the stop-wait fork closes on the unlimited side: any finite grace
+recreates SIGKILL-mid-lease, and a bounded credential-safe teardown is
+deferred hardening, not a tunable). SIGKILL and power loss remain
+crash-equivalent, covered by kill-recovery.
+
+**Liveness and address.**
+
+- Unauthenticated `GET /health` returns exactly `{status, version,
+  started_at}`: liveness, version-skew detection, and crash-loop evidence (a
+  moving start time under a supervisor). Everything richer stays on the
+  authenticated surfaces (Sections 4 and 5.14); the route widens what an
+  unpaired caller learns by nothing else.
+- Under supervision the listen address is explicit fixed loopback
+  configuration in the unit file, never the ephemeral default; bare
+  foreground runs keep `127.0.0.1:0`.
+- The daemon durably publishes readiness (`{api_url, pairing_code}`, today's
+  one-shot stdout line) to a `0600` runtime file in the state directory on
+  every start: under a supervisor no terminal exists to read stdout, and
+  same-user file readability is the same trust boundary as today's
+  terminal. The stdout line remains for foreground runs.
+- The away-from-host liveness probe stays outside the process (Section 5.16
+  keeps process heartbeats as plain tickers): an external probe polls
+  `/health` and notifies over ntfy on unreachability or crash-loop, landing
+  in 1B.1. The local surface is the Mac app's menu bar presence (Section
+  10).
+
+Storage and CI invariants:
+
 - SQLite runs with WAL, `synchronous=FULL`, `foreign_keys=ON`, and a configured
   `busy_timeout`.
 - CI builds and tests on macOS and Linux; macOS jobs stay lean.
@@ -1968,7 +2058,7 @@ Build the installer only after the underlying interfaces survive real use. The
 
 | Command | Function |
 | --- | --- |
-| `freesided setup` | Performs installation. Privileged steps run through a narrow elevation helper; the daemon never retains root. |
+| `freesided setup` | Performs installation. On the Mac-first path the operator app registers the daemon LaunchAgent (Section 5.2) and no step is privileged; when a hardened deployment needs privileged steps (user creation, LaunchDaemon installation), they run through a narrow elevation helper; the daemon never retains root. |
 | `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and invokes the proven reusable project-image builder. If installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls; a callback or `--resume` reopens the same review after approval. |
 | `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, and, from 1B.1, stored-credential integrity (a truncation and corruption probe). It runs on a schedule and files `system_health` items. |
 | `freesided submit` | Starts a manually approved work item. |
@@ -1986,6 +2076,14 @@ FreesideMac with a direct install-and-update script, an icon from the Section
 follows mid-1B under free provisioning; the paid Apple Developer Program is
 deferred until APNs arrives in Phase 2, because client correctness never
 depends on push (Section 5.14).
+
+From revision 27, the Mac app on the daemon host also owns the local
+daemon's lifecycle (Section 5.2): it registers the LaunchAgent, reads the
+daemon's published readiness file, and carries a menu bar presence showing
+liveness and version with start and stop through launchd. The menu bar is
+the out-of-band surface for the one failure the attention system cannot
+report, a dead daemon; richer operational state on that surface (doctor
+results, the 1B.1 signals) layers on later waves.
 
 ### GitHub App Agent Identity
 
@@ -2334,9 +2432,9 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **2: convergence** | Integrated | Workflow engine, real driver, end-to-end fakes, and real work. The **spine** owns integration and contract adjudication. |
 | **3 (1B.0): loop foundations** | Parallel lanes | Spine, serialized: the Section 5.16 scheduler (four timer kinds, trusted-job ticker migration), then Section 5.18 capture-hook recording. Ward: #401 gates 1/2/4/5 as parallel probes, then the #404 base image pinned per gate 2's outcome. App: Mac-first operator access (Section 10). |
 | **4 (1B.0): the review stage** | Serial | The spine rescopes #406/#407 into review cores and execution remainders, then lands the review-selection contract core, the review ward-topology slice, #405 only if review needs a project-derived image, and #427 — anchored per the open Section 7 fork. Its close stands the minimal loop; real-backlog use begins. |
-| **5 (1B.0): loop depth** | Parallel lanes | Elaborator and daemon research fetching with the spec-approval gate; label-initiator intake; the Section 5.13 classifier and diagnostic sites; the provenance-gated EvidencePublisher; the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section 6 state algebra, then the effect-registry retrofit of `run_proposal`. |
+| **5 (1B.0): loop depth** | Parallel lanes | Elaborator and daemon research fetching with the spec-approval gate; label-initiator intake; the Section 5.13 classifier and diagnostic sites; the provenance-gated EvidencePublisher; the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section 6 state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section 5.2 contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy; the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section 10). 1B.0 exit. |
-| **7 (1B.1): operational closure** | Parallel lanes | Human-gated follow-up filing with the `effect_proposal` card; the doctor credential-integrity probe; the stall heartbeat; the deferral drain (sweep-eligible open deferrals enumerated at this wave's planning; dormant contract units excluded unless the spine assigns chain positions). The execution tail closes in order: #401 gate 3, the #406/#407 execution remainders, #405 if outstanding, #397 by explicit owner decision on shadow evidence, then #408. |
+| **7 (1B.1): operational closure** | Parallel lanes | Human-gated follow-up filing with the `effect_proposal` card; the doctor credential-integrity probe; the stall heartbeat; the external daemon-liveness probe (Section 5.2); the deferral drain (sweep-eligible open deferrals enumerated at this wave's planning; dormant contract units excluded unless the spine assigns chain positions). The execution tail closes in order: #401 gate 3, the #406/#407 execution remainders, #405 if outstanding, #397 by explicit owner decision on shadow evidence, then #408. |
 | **8 (1B.2): the initiative view** | Integrated | The Section 5.18 frontier projection and the deterministic initiative view. 1B exit evaluation. |
 
 Review bandwidth limits parallel width. Every wave ends with a fresh-context
@@ -2419,37 +2517,47 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 26 ("1B wave decomposition and operator access"):
+Revision 27 ("The supervision contract"):
 
-1. **Phase 1B builds in six waves (3–8) mapped to its internal exits**
-   (Section 11's coordination table): loop foundations, the review stage,
-   loop depth, convergence and yield, operational closure, the initiative
-   view. The table records shape and sequencing; each wave's unit list
-   lives in its pinned tracking issue. Phase milestones stay whole:
-   internal exits are not sub-milestones.
-   (User; devlog 2026-08-01-1643-1b-wave-plan.md.)
-2. **The Codex review substrate fronts the build** because #427 depends on
-   it, verified against #401/#404/#406/#407 as written: #401 gates 1/2/4/5
-   and the #404 base image land in wave 3; a review-scoped selection
-   contract, the review ward-topology slice, and #427 land in wave 4, with
-   the spine rescoping #406/#407 into review cores and execution remainders
-   at wave-4 scheduling. The execution tail — #401 gate 3, the execution
-   remainders, #405 if outstanding, #397 by explicit owner decision on
-   shadow evidence, then #408 — closes in wave 7.
-   (User; same devlog; #397, #401, #404, #405, #406, #407, #408, #427.)
-3. **First real-backlog use gates on the review-stage chain as well as the
-   scheduler** (Section 11's 1B.0, amending revision 25's scheduler-only
-   statement): revision 25 itself made review a required
-   workflow stage, and #427's declared substrate dependencies put the
-   review chain on the minimal loop's critical path. The state algebra and
-   effect-registry retrofit stay off that path.
-   (User; same devlog; #427.)
-4. **The operator client installs Mac-first** (Section 10): direct install
-   of a locally built, personal-team-signed FreesideMac with icon and real
-   pairing in wave 3; iOS follows mid-1B under free provisioning; the paid
-   Apple Developer Program defers to Phase 2 with APNs, because client
-   correctness never depends on push (Section 5.14).
+1. **Supervision is mode-scoped** (Section 5.2): Mac-first single-operator
+   runs `freesided` as a per-user LaunchAgent registered by the Mac app
+   through `SMAppService` (bundled plist, `KeepAlive`, no privileged step),
+   superseding the LaunchDaemon-first direction endorsed in devlog
+   2026-08-01-2221-supervision-contract-gap.md; the dedicated-user
+   LaunchDaemon through the elevation helper is retained as the hardened
+   end state. Changed assumptions: real-backlog daily operation begins at
+   wave-4 close, two waves ahead of the fix parked in wave 7; Apple
+   `container` is per-user tooling with unverified behavior under a
+   GUI-less service account; the elevation helper drops off the Mac-first
+   critical path entirely.
+   (User; devlog 2026-08-05-0001-supervision-contract.md; #453, #454.)
+2. **Exit discipline classifies every fatal-channel writer** (Section 5.2):
+   durable in-process stops (store and correctness failures, backup
+   maintenance, definitively classified doctor or janitor pass failures,
+   externally caused failures once persistence is established) never exit;
+   a post-bind HTTP serve fault is a restart-safe exit; panics and startup
+   failures are involuntary exits. Restart-always is endorsed only over
+   this inventory, and the doctor source-error posture deferred by devlog
+   2026-07-30-2350-operational-command-packaging.md resolves as a durable
+   stop.
+   (User; same devlog; #453, #454, #435.)
+3. **The stop-wait fork closes on the unlimited side** (Section 5.2):
+   SIGTERM with an effectively unlimited exit timeout over unbounded
+   credential-lease teardown; a bounded credential-safe teardown is
+   deferred hardening, not a tunable; SIGKILL stays crash-equivalent.
    (User; same devlog.)
+4. **Liveness is an unauthenticated `GET /health` plus supervised address
+   and readiness publication** (Sections 5.2 and 10; api/openapi.yaml): a
+   fixed loopback address in the unit file, a `0600` state-directory
+   readiness file replacing the one-shot stdout line under supervision,
+   the external ntfy probe in 1B.1, and the Mac app's menu bar presence as
+   the local surface, with the app owning the local daemon's lifecycle.
+   (User; same devlog; #453, #454.)
+5. **The supervision core pulls forward to wave 5 by owner fiat**
+   (Section 11, amending revision 26's wave-7 concentration for this unit
+   only): #454's daemon side and the app-side LaunchAgent and menu-bar
+   unit land in wave 5; the external-probe remainder stays in wave 7.
+   (User; same devlog; #453, #454.)
 
 ## 14. Risks
 
