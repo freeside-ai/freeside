@@ -245,3 +245,81 @@ func (tx *ReadTx) GetReviewFailure(
 	}
 	return failure, nil
 }
+
+// review_retries is a mutable current-state aggregate, not an immutable
+// account: a same-invocation transient retry legitimately overwrites its own
+// deadline as attempts accumulate in one round, so it upserts on run_id rather
+// than going through putImmutable. The row is daemon-internal pacing state (no
+// wire exposure), a delay claim the engine re-derives and re-binds; it is
+// never a trust bit a reader may act on directly.
+const putReviewRetrySQL = `
+INSERT INTO review_retries
+    (run_id, invocation_id, round, base_sha, head_sha, observed_at, body_digest, body)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (run_id) DO UPDATE SET
+    invocation_id = excluded.invocation_id,
+    round         = excluded.round,
+    base_sha      = excluded.base_sha,
+    head_sha      = excluded.head_sha,
+    observed_at   = excluded.observed_at,
+    body_digest   = excluded.body_digest,
+    body          = excluded.body`
+
+// PutReviewRetry records or advances the pending same-invocation retry for one
+// run. Repeated same-round transients push the deadline out, matching the
+// in-memory reviewRetryAfter semantics exactly.
+func (tx *WriteTx) PutReviewRetry(ctx context.Context, retry domain.ReviewRetry) error {
+	if err := retry.Validate(); err != nil {
+		return fmt.Errorf("put review retry %q: %w", retry.RunID, err)
+	}
+	body, err := encode(retry)
+	if err != nil {
+		return fmt.Errorf("put review retry %q: %w", retry.RunID, err)
+	}
+	if _, err := tx.tx.ExecContext(ctx, putReviewRetrySQL,
+		retry.RunID, retry.InvocationID, retry.Round, retry.BaseSHA, retry.HeadSHA,
+		retry.ObservedAt.Format(time.RFC3339Nano), reviewBodyDigest(body), body); err != nil {
+		return fmt.Errorf("put review retry %q: %w", retry.RunID, err)
+	}
+	return nil
+}
+
+// GetReviewRetry reconstructs and cross-checks the pending retry for one run,
+// returning ErrNotFound when none is live.
+func (tx *ReadTx) GetReviewRetry(ctx context.Context, runID domain.RunID) (domain.ReviewRetry, error) {
+	var idRunID, invocationID, baseSHA, headSHA, observedAt, bodyDigest string
+	var round int
+	var body []byte
+	err := tx.tx.QueryRowContext(ctx, `SELECT run_id, invocation_id, round, base_sha, head_sha,
+		observed_at, body_digest, body FROM review_retries WHERE run_id = ?`, runID).Scan(
+		&idRunID, &invocationID, &round, &baseSHA, &headSHA, &observedAt, &bodyDigest, &body)
+	if err != nil {
+		return domain.ReviewRetry{}, fmt.Errorf("get review retry %q: %w", runID, notFoundOr(err))
+	}
+	if bodyDigest != reviewBodyDigest(string(body)) {
+		return domain.ReviewRetry{}, fmt.Errorf("get review retry %q: %w", runID, errRowInconsistent)
+	}
+	retry, err := decode[domain.ReviewRetry](body)
+	if err != nil {
+		return domain.ReviewRetry{}, fmt.Errorf("get review retry %q: %w", runID, err)
+	}
+	if err := retry.Validate(); err != nil {
+		return domain.ReviewRetry{}, fmt.Errorf("get review retry %q: %w", runID, err)
+	}
+	if retry.RunID != domain.RunID(idRunID) || retry.InvocationID != domain.InvocationID(invocationID) ||
+		retry.Round != round || retry.BaseSHA != baseSHA || retry.HeadSHA != headSHA ||
+		retry.ObservedAt.Format(time.RFC3339Nano) != observedAt {
+		return domain.ReviewRetry{}, fmt.Errorf("get review retry %q: %w", runID, errRowInconsistent)
+	}
+	return retry, nil
+}
+
+// DeleteReviewRetry clears the pending retry for one run. It is idempotent:
+// deleting an absent row is not an error, so a superseding outcome may clear
+// unconditionally.
+func (tx *WriteTx) DeleteReviewRetry(ctx context.Context, runID domain.RunID) error {
+	if _, err := tx.tx.ExecContext(ctx, `DELETE FROM review_retries WHERE run_id = ?`, runID); err != nil {
+		return fmt.Errorf("delete review retry %q: %w", runID, err)
+	}
+	return nil
+}

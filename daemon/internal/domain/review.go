@@ -128,3 +128,43 @@ func (f ReviewFailure) Validate() error {
 	}
 	return nil
 }
+
+// ReviewRetry is the durable, mutable current-state of a pending
+// same-invocation transient retry (plan §7; issue #498). A transient
+// request/inspect/poll/verification failure does not terminalize the
+// invocation, so its retry deadline lives only in process memory; this row
+// records it durably so a daemon restart during the backoff reconstructs the
+// remaining delay instead of retrying immediately. At most one is live per
+// run, keyed by RunID; a new round or invocation overwrites it, and any
+// superseding outcome clears it.
+//
+// The row is a delay claim, never authority. The deadline is derived, never
+// stored: ObservedAt + delay(Round). The engine re-derives it and re-binds to
+// the current candidate at the gate, so a decoded row can postpone a retry but
+// can never authorize skipping backoff, changing the invocation, or advancing
+// the round.
+type ReviewRetry struct {
+	RunID        RunID        `json:"run_id"`
+	InvocationID InvocationID `json:"invocation_id"`
+	Round        int          `json:"round"`
+	BaseSHA      string       `json:"base_sha"`
+	HeadSHA      string       `json:"head_sha"`
+	ObservedAt   time.Time    `json:"observed_at"`
+	Reason       string       `json:"reason"`
+}
+
+func (r ReviewRetry) Validate() error {
+	switch {
+	case r.RunID == "" || r.InvocationID == "":
+		return fmt.Errorf("review retry identity: %w", ErrEmptyID)
+	case r.Round < 1:
+		return fmt.Errorf("review retry round %d: %w", r.Round, ErrNonPositive)
+	case r.BaseSHA == "" || r.HeadSHA == "" || r.Reason == "":
+		return fmt.Errorf("review retry binding: %w", ErrEmptyField)
+	case r.ObservedAt.IsZero():
+		return fmt.Errorf("review retry observed_at: %w", ErrMissingTimestamp)
+	case r.ObservedAt.Location() != time.UTC:
+		return fmt.Errorf("review retry observed_at: %w", ErrTimestampNotUTC)
+	}
+	return nil
+}

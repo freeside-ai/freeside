@@ -101,6 +101,73 @@ func TestReviewRecordRoundTripsWithRawFindingsAndIsExclusiveWithFailure(t *testi
 	}
 }
 
+func TestReviewRetryUpsertsAndClears(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t, store.Options{})
+	run := domain.Run{ID: "run-retry", ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
+	first := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	retry := domain.ReviewRetry{
+		RunID: run.ID, InvocationID: "review-run-retry-1", Round: 1,
+		BaseSHA: "base", HeadSHA: "head", ObservedAt: first, Reason: "transient poll failure",
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		return tx.PutReviewRetry(ctx, retry)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.GetReviewRetry(ctx, run.ID)
+		if err != nil {
+			return err
+		}
+		if got != retry {
+			t.Fatalf("review retry = %#v, want %#v", got, retry)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A repeated same-round transient advances the deadline in place: the same
+	// key upserts rather than accumulating a second row.
+	advanced := retry
+	advanced.ObservedAt = first.Add(time.Second)
+	advanced.Reason = "second transient poll failure"
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutReviewRetry(ctx, advanced)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.GetReviewRetry(ctx, run.ID)
+		if err != nil {
+			return err
+		}
+		if !got.ObservedAt.Equal(advanced.ObservedAt) || got.Reason != advanced.Reason {
+			t.Fatalf("advanced review retry = %#v", got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Delete is idempotent: the second delete on an absent row is not an error.
+	for i := 0; i < 2; i++ {
+		if err := st.Write(ctx, func(tx *store.WriteTx) error {
+			return tx.DeleteReviewRetry(ctx, run.ID)
+		}); err != nil {
+			t.Fatalf("delete review retry #%d: %v", i, err)
+		}
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetReviewRetry(ctx, run.ID)
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("get after delete = %v", err)
+	}
+}
+
 func TestReviewRecordCanonicalizesFindingOrder(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t, store.Options{})

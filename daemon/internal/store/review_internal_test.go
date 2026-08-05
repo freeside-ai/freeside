@@ -156,3 +156,44 @@ func TestReviewFailureReadRevalidatesCanonicalBody(t *testing.T) {
 		t.Fatalf("partially rewritten review failure read = %v", err)
 	}
 }
+
+func TestReviewRetryReadRevalidatesCanonicalBody(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, t.TempDir()+"/review-retry.db", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	run := domain.Run{
+		ID: "run-review-retry-tamper", ProjectID: "project-1",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+	}
+	retry := domain.ReviewRetry{
+		RunID: run.ID, InvocationID: "review-retry-tamper-1", Round: 1,
+		BaseSHA: "base", HeadSHA: "head",
+		ObservedAt: time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC), Reason: "transient",
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		return tx.PutReviewRetry(ctx, retry)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Rewrite the body's round without recomputing body_digest: the read must
+	// fail closed rather than trust the decoded delay claim. A restored, larger
+	// round would otherwise extend the backoff a rewriter never authorized.
+	if _, err := st.db.ExecContext(ctx,
+		`UPDATE review_retries SET body = json_set(body, '$.round', 9)
+		 WHERE run_id = ?`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	err = st.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.GetReviewRetry(ctx, run.ID)
+		return err
+	})
+	if !errors.Is(err, errRowInconsistent) {
+		t.Fatalf("partially rewritten review retry read = %v", err)
+	}
+}
