@@ -53,6 +53,57 @@ func TestNormalizeTerminalReviewFailurePreservesDeclaredClass(t *testing.T) {
 	}
 }
 
+func TestProductionReviewTransientSourceFailureSchedulesSameInvocationRetry(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	run := domain.Run{
+		ID: "run-review-artifact-retry", ProjectID: "project-1",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, run) }); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	w := &productionPublicationWorkflow{
+		store: st, now: func() time.Time { return now },
+		reviewRetryAfter: make(map[domain.RunID]time.Time),
+	}
+	id := ProductionReviewInvocationID(run.ID, 1)
+	cause := &exec.ReviewSourceFailure{
+		Class: domain.ReviewFailureTransient,
+		Err:   errors.New("read persisted review instruction artifact: input/output error"),
+	}
+	state, err := w.retryOrRecordReviewFailure(
+		ctx, productionPublicationTask{RunID: run.ID}, id, 1, "base", "head", cause,
+	)
+	if err != nil || state != productionReviewPending {
+		t.Fatalf("retry routing = %q, %v", state, err)
+	}
+	if got := w.reviewRetryAfter[run.ID]; !got.Equal(now.Add(reviewRetryDelay(1))) {
+		t.Fatalf("in-memory retry deadline = %v", got)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		retry, err := tx.GetReviewRetry(ctx, run.ID)
+		if err != nil {
+			return err
+		}
+		if retry.InvocationID != id || retry.Round != 1 || retry.BaseSHA != "base" ||
+			retry.HeadSHA != "head" || retry.ObservedAt != now || !strings.Contains(retry.Reason, "input/output error") {
+			t.Fatalf("durable retry = %#v", retry)
+		}
+		if _, err := tx.GetReviewFailure(ctx, id); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("transient materialization recorded terminal failure: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProductionHoldRetryPruning(t *testing.T) {
 	w := productionPublicationWorkflow{holdRetryAfter: map[domain.RunID]time.Time{
 		"run-pending":  time.Unix(1, 0),
