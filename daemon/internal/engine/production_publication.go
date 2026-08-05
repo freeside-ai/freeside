@@ -1740,6 +1740,14 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 				}
 				return productionReviewEscalated, nil
 			}
+			// This clean-pass re-entry is downstream of the record write that
+			// already cleared the durable row; clear its durable twin too so a
+			// crash-recovered pass never leaves an orphan pending retry.
+			if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+				return tx.DeleteReviewRetry(ctx, task.RunID)
+			}); err != nil {
+				return productionReviewPending, err
+			}
 			delete(w.reviewRetryAfter, task.RunID)
 			return productionReviewPassed, nil
 		}
@@ -1773,8 +1781,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			return productionReviewEscalated, nil
 		}
 		if latestFailure.Class == domain.ReviewFailureTransient {
-			delay := time.Second << min(latestFailure.Round-1, 8)
-			retryAt := latestFailure.ObservedAt.Add(delay)
+			retryAt := latestFailure.ObservedAt.Add(reviewRetryDelay(latestFailure.Round))
 			if w.now().Before(retryAt) {
 				w.reviewRetryAfter[task.RunID] = retryAt
 			}
@@ -1803,8 +1810,21 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		}
 		return productionReviewEscalated, nil
 	}
-	if retryAt, ok := w.reviewRetryAfter[task.RunID]; ok && w.now().Before(retryAt) {
-		return productionReviewPending, nil
+	if retryAt, ok := w.reviewRetryAfter[task.RunID]; ok {
+		if w.now().Before(retryAt) {
+			return productionReviewPending, nil
+		}
+	} else {
+		// No process-local deadline: a restart may have dropped a pending
+		// same-invocation retry. Reconstruct it from the durable row, which
+		// fails closed on a corrupt or unreadable row rather than retrying.
+		pending, err := w.reconstructReviewRetryDeadline(ctx, task, binding, round)
+		if err != nil {
+			return productionReviewPending, err
+		}
+		if pending {
+			return productionReviewPending, nil
+		}
 	}
 
 	id := ProductionReviewInvocationID(task.RunID, round)
@@ -1833,10 +1853,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 					binding.admission.Base.BaseSHA, task.HeadSHA,
 					&exec.ReviewSourceFailure{Class: domain.ReviewFailureTransient, Err: err})
 			}
-			if w.scheduleReviewInvocationRetry(task.RunID, round, err) {
-				return productionReviewPending, nil
-			}
-			return w.recordReviewSourceFailure(ctx, task, id, round,
+			return w.retryOrRecordReviewFailure(ctx, task, id, round,
 				binding.admission.Base.BaseSHA, task.HeadSHA, err)
 		}
 	}
@@ -1856,12 +1873,8 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 				},
 			)
 		}
-		if w.scheduleReviewInvocationRetry(task.RunID, round, err) {
-			return productionReviewPending, nil
-		}
-		return w.recordReviewSourceFailure(ctx, task, id, round,
-			binding.admission.Base.BaseSHA, task.HeadSHA, err,
-		)
+		return w.retryOrRecordReviewFailure(ctx, task, id, round,
+			binding.admission.Base.BaseSHA, task.HeadSHA, err)
 	}
 	status, err := w.reviewSource.Inspect(ctx, id)
 	if errors.Is(err, exec.ErrUnknownInvocation) {
@@ -1875,24 +1888,15 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			)
 		}
 		if err := w.reviewSource.RequestReview(ctx, id, req); err != nil {
-			if w.scheduleReviewInvocationRetry(task.RunID, round, err) {
-				return productionReviewPending, nil
-			}
-			return w.recordReviewSourceFailure(ctx, task, id, round, req.BaseSHA, req.HeadSHA, err)
+			return w.retryOrRecordReviewFailure(ctx, task, id, round, req.BaseSHA, req.HeadSHA, err)
 		}
 		status, err = w.reviewSource.Inspect(ctx, id)
 		if err != nil {
-			if w.scheduleReviewInvocationRetry(task.RunID, round, err) {
-				return productionReviewPending, nil
-			}
-			return w.recordReviewSourceFailure(ctx, task, id, round, req.BaseSHA, req.HeadSHA, err)
+			return w.retryOrRecordReviewFailure(ctx, task, id, round, req.BaseSHA, req.HeadSHA, err)
 		}
 	}
 	if err != nil {
-		if w.scheduleReviewInvocationRetry(task.RunID, round, err) {
-			return productionReviewPending, nil
-		}
-		return w.recordReviewSourceFailure(
+		return w.retryOrRecordReviewFailure(
 			ctx, task, id, round, binding.admission.Base.BaseSHA, task.HeadSHA, err,
 		)
 	}
@@ -1902,8 +1906,15 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	result, err := w.reviewSource.Poll(ctx, id)
 	if errors.Is(err, exec.ErrNoResult) {
 		err = normalizeTerminalReviewFailure(err)
-	} else if err != nil && w.scheduleReviewInvocationRetry(task.RunID, round, err) {
-		return productionReviewPending, nil
+	} else if err != nil {
+		scheduled, schedErr := w.scheduleReviewInvocationRetry(
+			ctx, id, task.RunID, round, binding.admission.Base.BaseSHA, task.HeadSHA, err)
+		if schedErr != nil {
+			return productionReviewPending, schedErr
+		}
+		if scheduled {
+			return productionReviewPending, nil
+		}
 	}
 	if errors.Is(err, exec.ErrResultNotReady) {
 		return productionReviewPending, nil
@@ -1939,16 +1950,17 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		)
 	}
 	if err := authorityVerifier.VerifyRequestAuthority(ctx, id, requestAuthority); err != nil {
-		if w.scheduleReviewInvocationRetry(task.RunID, round, err) {
-			return productionReviewPending, nil
-		}
-		return w.recordReviewSourceFailure(ctx, task, id, round,
+		return w.retryOrRecordReviewFailure(ctx, task, id, round,
 			binding.admission.Base.BaseSHA, task.HeadSHA, err,
 		)
 	}
 	if err := w.reviewSource.Verify(ctx, id, binding.admission.Base.BaseSHA, task.HeadSHA); err != nil {
-		if w.scheduleReviewInvocationRetry(task.RunID, round, err) ||
-			errors.Is(err, exec.ErrResultNotReady) {
+		scheduled, schedErr := w.scheduleReviewInvocationRetry(
+			ctx, id, task.RunID, round, binding.admission.Base.BaseSHA, task.HeadSHA, err)
+		if schedErr != nil {
+			return productionReviewPending, schedErr
+		}
+		if scheduled || errors.Is(err, exec.ErrResultNotReady) {
 			return productionReviewPending, nil
 		}
 		return w.recordReviewSourceFailure(ctx, task, id, round,
@@ -1986,8 +1998,13 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	if err != nil {
 		return productionReviewPending, err
 	}
+	// The completed record supersedes any pending same-invocation retry for
+	// this run: clear the durable row atomically with the record it writes.
 	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
-		return tx.PutReviewRecord(ctx, record, result.Findings)
+		if err := tx.PutReviewRecord(ctx, record, result.Findings); err != nil {
+			return err
+		}
+		return tx.DeleteReviewRetry(ctx, task.RunID)
 	}); err != nil {
 		return productionReviewPending, err
 	}
@@ -2027,15 +2044,106 @@ func normalizeTerminalReviewFailure(err error) error {
 	return &exec.ReviewSourceFailure{Class: domain.ReviewFailureTransient, Err: err}
 }
 
+// reviewRetryDelay is the exponential same-invocation/terminal-transient
+// backoff: 1s doubling per round, capped at round 9 (2^8 s). The single
+// definition keeps the same-invocation scheduler, the terminal-transient
+// reconstruction, and the durable-row reconstruction from drifting apart.
+func reviewRetryDelay(round int) time.Duration {
+	return time.Second << min(round-1, 8)
+}
+
+// scheduleReviewInvocationRetry paces a same-invocation transient retry: it
+// sets the process-local deadline and durably records it so a restart during
+// the backoff reconstructs the remaining delay instead of retrying
+// immediately (issue #498). The row does not terminalize or advance the
+// invocation. On a persist failure it still holds the process-local bound,
+// then returns the error so the pass surfaces it rather than proceeding.
 func (w *productionPublicationWorkflow) scheduleReviewInvocationRetry(
-	runID domain.RunID, round int, err error,
-) bool {
-	if exec.ClassifyReviewSourceFailure(err) != domain.ReviewFailureTransient {
-		return false
+	ctx context.Context, id domain.InvocationID, runID domain.RunID, round int,
+	baseSHA, headSHA string, cause error,
+) (bool, error) {
+	if exec.ClassifyReviewSourceFailure(cause) != domain.ReviewFailureTransient {
+		return false, nil
 	}
-	delay := time.Second << min(round-1, 8)
-	w.reviewRetryAfter[runID] = w.now().Add(delay)
-	return true
+	observedAt := w.now().UTC()
+	w.reviewRetryAfter[runID] = observedAt.Add(reviewRetryDelay(round))
+	retry := domain.ReviewRetry{
+		RunID: runID, InvocationID: id, Round: round,
+		BaseSHA: baseSHA, HeadSHA: headSHA, ObservedAt: observedAt, Reason: cause.Error(),
+	}
+	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutReviewRetry(ctx, retry)
+	}); err != nil {
+		return true, fmt.Errorf("persist review retry %q: %w", id, err)
+	}
+	return true, nil
+}
+
+// retryOrRecordReviewFailure paces a transient observation failure as a
+// same-invocation retry, or records a terminal failure otherwise. It
+// centralizes the pending-or-record branch shared by the observation call
+// sites; the two sites that also fold in ErrResultNotReady stay inline.
+func (w *productionPublicationWorkflow) retryOrRecordReviewFailure(
+	ctx context.Context, task productionPublicationTask, id domain.InvocationID,
+	round int, baseSHA, headSHA string, cause error,
+) (productionReviewGateState, error) {
+	scheduled, err := w.scheduleReviewInvocationRetry(ctx, id, task.RunID, round, baseSHA, headSHA, cause)
+	if err != nil {
+		return productionReviewPending, err
+	}
+	if scheduled {
+		return productionReviewPending, nil
+	}
+	return w.recordReviewSourceFailure(ctx, task, id, round, baseSHA, headSHA, cause)
+}
+
+// reconstructReviewRetryDeadline restores a pending same-invocation retry that
+// a restart dropped from the process-local map. The decoded row is a delay
+// claim, never authority: a row bound to a superseded round, invocation, or
+// candidate is stale and dropped, and the deadline is re-derived from the
+// row's round, so the row can only postpone a retry, never authorize skipping
+// backoff, changing the invocation, or advancing the round. It returns
+// (true, nil) when a live deadline still binds the pass to pending.
+func (w *productionPublicationWorkflow) reconstructReviewRetryDeadline(
+	ctx context.Context, task productionPublicationTask, binding productionBinding, round int,
+) (bool, error) {
+	var retry domain.ReviewRetry
+	found := false
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.GetReviewRetry(ctx, task.RunID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		retry = got
+		found = true
+		return nil
+	}); err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+	if retry.Round != round ||
+		retry.InvocationID != ProductionReviewInvocationID(task.RunID, round) ||
+		retry.BaseSHA != binding.admission.Base.BaseSHA || retry.HeadSHA != task.HeadSHA {
+		if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+			return tx.DeleteReviewRetry(ctx, task.RunID)
+		}); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	retryAt := retry.ObservedAt.Add(reviewRetryDelay(retry.Round))
+	if w.now().Before(retryAt) {
+		w.reviewRetryAfter[task.RunID] = retryAt
+		return true, nil
+	}
+	// Deadline already passed: proceed now; the next transient overwrites the
+	// row and any terminal outcome clears it.
+	return false, nil
 }
 
 func (w *productionPublicationWorkflow) reviewPassStaleReason(
@@ -2133,8 +2241,13 @@ func (w *productionPublicationWorkflow) recordReviewSourceFailure(
 		BaseSHA: baseSHA, HeadSHA: headSHA, Class: class,
 		Reason: sourceErr.Error(), ObservedAt: w.now().UTC(),
 	}
+	// The terminal outcome supersedes any pending same-invocation retry for
+	// this run: clear the durable row atomically with the failure it records.
 	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
-		return tx.PutReviewFailure(ctx, failure)
+		if err := tx.PutReviewFailure(ctx, failure); err != nil {
+			return err
+		}
+		return tx.DeleteReviewRetry(ctx, task.RunID)
 	}); err != nil {
 		return productionReviewPending, err
 	}
@@ -2143,8 +2256,10 @@ func (w *productionPublicationWorkflow) recordReviewSourceFailure(
 	}
 	switch class {
 	case domain.ReviewFailureTransient:
-		delay := time.Second << min(round-1, 8)
-		w.reviewRetryAfter[task.RunID] = w.now().Add(delay)
+		// A terminal transient advances the round; its deadline reconstructs
+		// from the persisted ReviewFailure.ObservedAt, not the same-invocation
+		// row (which the write above cleared).
+		w.reviewRetryAfter[task.RunID] = w.now().Add(reviewRetryDelay(round))
 		return productionReviewPending, nil
 	case domain.ReviewFailureConfiguration, domain.ReviewFailureQuota:
 		record := domain.ReviewRecord{
