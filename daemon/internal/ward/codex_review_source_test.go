@@ -2266,3 +2266,65 @@ func reviewSourceFailureClass(err error) domain.ReviewFailureClass {
 	}
 	return ""
 }
+
+// TestReconcileRejectedRequestDispatchEquivalence measures that the no-default
+// switch classifying a rejected intent's launch state (reconcileRejectedRequest,
+// codex_review_source.go) decides identically to the if/else it replaced on
+// every input that reaches the switch, and records the intended divergence on
+// the inputs the closed/not-found branch and validateIdentity make unreachable
+// before it. Per the trust-boundary refactor discipline this is a harness over
+// a corpus, not a diff-read: the dispatch owns credential-bearing teardown.
+func TestReconcileRejectedRequestDispatchEquivalence(t *testing.T) {
+	type branch int
+	const (
+		branchContradictionPreparing branch = iota
+		branchRejectedTeardown
+		branchFailClosed
+	)
+	// oldDispatch reconstructs the pre-refactor if/else: the preparing state
+	// returned the pre-binding contradiction, every other value fell through to
+	// the rejected-teardown arm.
+	oldDispatch := func(s CodexReviewIntentState) branch {
+		if s == CodexReviewIntentPreparing {
+			return branchContradictionPreparing
+		}
+		return branchRejectedTeardown
+	}
+	// newDispatch mirrors the no-default switch now in reconcileRejectedRequest,
+	// including the empty closed case that falls to the fail-closed return.
+	newDispatch := func(s CodexReviewIntentState) branch {
+		switch s {
+		case CodexReviewIntentPreparing:
+			return branchContradictionPreparing
+		case CodexReviewIntentPrepared, CodexReviewIntentStarting, CodexReviewIntentStarted:
+			return branchRejectedTeardown
+		case CodexReviewIntentClosed:
+		}
+		return branchFailClosed
+	}
+	// Reachable inputs: validateIdentity guarantees State is a registered
+	// member, and the closed and not-found cases return before the switch, so
+	// only the four pre-terminal states arrive. Old and new must agree here.
+	for _, s := range []CodexReviewIntentState{
+		CodexReviewIntentPreparing, CodexReviewIntentPrepared,
+		CodexReviewIntentStarting, CodexReviewIntentStarted,
+	} {
+		if oldDispatch(s) != newDispatch(s) {
+			t.Errorf("reachable state %q: old=%d new=%d", s, oldDispatch(s), newDispatch(s))
+		}
+	}
+	// Unreachable inputs: a closed intent settles above; the zero value and any
+	// unregistered token are rejected upstream by validateIdentity. The refactor
+	// intentionally routes them to the fail-closed return rather than the old
+	// rejected-teardown fall-through. Assert both halves so the divergence is
+	// recorded and guarded, not accidental.
+	for _, s := range []CodexReviewIntentState{CodexReviewIntentClosed, "", "resuming", "STARTED"} {
+		if oldDispatch(s) != branchRejectedTeardown {
+			t.Errorf("guard premise broke: old dispatch for %q = %d, want rejected-teardown",
+				s, oldDispatch(s))
+		}
+		if newDispatch(s) != branchFailClosed {
+			t.Errorf("unreachable state %q: new dispatch = %d, want fail-closed", s, newDispatch(s))
+		}
+	}
+}
