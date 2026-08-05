@@ -59,3 +59,24 @@ func TestReviewFailureRequiresTypedTerminalAccount(t *testing.T) {
 		t.Fatalf("unknown failure class = %v", err)
 	}
 }
+
+func TestReviewRetryValidatesIdentityAndTimestamp(t *testing.T) {
+	retry := domain.ReviewRetry{
+		RunID: "run-1", InvocationID: "review-run-1-1", Round: 1,
+		BaseSHA: "base", HeadSHA: "head",
+		ObservedAt: time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC), Reason: "transient poll failure",
+	}
+	if err := retry.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	zeroRound := retry
+	zeroRound.Round = 0
+	if err := zeroRound.Validate(); !errors.Is(err, domain.ErrNonPositive) {
+		t.Fatalf("zero round = %v", err)
+	}
+	local := retry
+	local.ObservedAt = time.Date(2026, 8, 3, 12, 0, 0, 0, time.Local)
+	if err := local.Validate(); !errors.Is(err, domain.ErrTimestampNotUTC) {
+		t.Fatalf("non-UTC observed_at = %v", err)
+	}
+}

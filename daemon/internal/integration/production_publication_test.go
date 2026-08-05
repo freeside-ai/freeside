@@ -1173,6 +1173,7 @@ func TestProductionReviewObservationFailuresRetrySameInvocation(t *testing.T) {
 		name      string
 		configure func(*faultReviewSource)
 	}{
+		{"request preparation", func(source *faultReviewSource) { source.failRequestAfterStart = true }},
 		{"post-launch inspect", func(source *faultReviewSource) { source.failInspectAt = 2 }},
 		{"poll", func(source *faultReviewSource) {
 			source.failPollAt = 1
@@ -1200,37 +1201,114 @@ func TestProductionReviewObservationFailuresRetrySameInvocation(t *testing.T) {
 			if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
 				t.Fatalf("transient observation = %#v, %v", result, err)
 			}
+			// The transient did not terminalize the invocation, and it durably
+			// recorded the pending same-invocation retry bound to this candidate.
+			if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+				if _, err := tx.LatestReviewFailure(p.ctx, p.runID); !errors.Is(err, store.ErrNotFound) {
+					t.Fatalf("transient observation terminalized invocation: %v", err)
+				}
+				retry, err := tx.GetReviewRetry(p.ctx, p.runID)
+				if err != nil {
+					return err
+				}
+				if retry.Round != 1 || retry.BaseSHA != p.baseSHA || retry.HeadSHA != p.replay.HeadSHA ||
+					retry.InvocationID != engine.ProductionReviewInvocationID(p.runID, 1) {
+					t.Fatalf("persisted review retry = %#v", retry)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			// Restart inside the backoff. A fresh workflow drops the in-memory
+			// deadline, so only the durable row can hold the retry: it must not
+			// retry early (no new source calls) or terminalize.
+			requestCalls, inspectCalls := faults.requestCalls, faults.inspectCalls
+			pollCalls, verifyCalls := faults.pollCalls, faults.verifyCalls
+			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+			if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
+				t.Fatalf("review retry after restart before backoff = %#v, %v", result, err)
+			}
+			if faults.requestCalls != requestCalls || faults.inspectCalls != inspectCalls ||
+				faults.pollCalls != pollCalls || faults.verifyCalls != verifyCalls {
+				t.Fatalf("review retried early after restart: request=%d/%d inspect=%d/%d poll=%d/%d verify=%d/%d",
+					faults.requestCalls, requestCalls, faults.inspectCalls, inspectCalls,
+					faults.pollCalls, pollCalls, faults.verifyCalls, verifyCalls)
+			}
 			if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 				_, err := tx.LatestReviewFailure(p.ctx, p.runID)
 				return err
 			}); !errors.Is(err, store.ErrNotFound) {
-				t.Fatalf("transient observation terminalized invocation: %v", err)
+				t.Fatalf("restart terminalized the pending retry: %v", err)
 			}
-			inspectCalls, pollCalls, verifyCalls := faults.inspectCalls, faults.pollCalls, faults.verifyCalls
-			if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
-				t.Fatalf("review retry before backoff = %#v, %v", result, err)
-			}
-			if faults.inspectCalls != inspectCalls || faults.pollCalls != pollCalls ||
-				faults.verifyCalls != verifyCalls {
-				t.Fatalf("review retried before backoff: inspect=%d/%d poll=%d/%d verify=%d/%d",
-					faults.inspectCalls, inspectCalls, faults.pollCalls, pollCalls,
-					faults.verifyCalls, verifyCalls)
-			}
+			// Advance past the deadline and restart again: the reconstructed
+			// deadline has now elapsed, so the same round-1 invocation retries
+			// and the run completes. The retry state clears with the success.
 			p.now = p.now.Add(time.Second)
+			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 			result, err := p.reconcileLanes()
 			if err != nil || result.ReadyItemsCreated != 1 || result.PublicationTasksCompleted != 1 {
-				t.Fatalf("same-invocation retry = %#v, %v", result, err)
+				t.Fatalf("same-invocation retry after restart = %#v, %v", result, err)
 			}
 			if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 				record, err := tx.LatestReviewRecord(p.ctx, p.runID)
-				if err == nil && record.Round != 1 {
+				if err != nil {
+					return err
+				}
+				if record.Round != 1 {
 					t.Fatalf("review round = %d, want 1", record.Round)
 				}
-				return err
+				if _, err := tx.GetReviewRetry(p.ctx, p.runID); !errors.Is(err, store.ErrNotFound) {
+					t.Fatalf("completed run left a pending retry: %v", err)
+				}
+				return nil
 			}); err != nil {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// TestProductionReviewRetryClearsOnStaleCandidate proves the reconstructed row
+// is a delay claim bound to a candidate, never authority: a row left over from
+// a superseded candidate is dropped, and the gate proceeds against the current
+// candidate rather than honoring the stale deadline.
+func TestProductionReviewRetryClearsOnStaleCandidate(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	faults := &faultReviewSource{ReviewSource: p.reviewer, failInspectAt: 2}
+	p.reviewSource = faults
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
+		t.Fatalf("transient observation = %#v, %v", result, err)
+	}
+	// Rebind the persisted retry to a superseded head, as if a candidate change
+	// left it behind; its deadline is still in the future.
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		retry, err := tx.GetReviewRetry(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		retry.HeadSHA = "superseded-head"
+		retry.Reason = "stale-candidate retry"
+		return tx.PutReviewRetry(p.ctx, retry)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Restart inside the original delay: the reconstructed row is bound to a
+	// different candidate, so it is stale. The gate drops it and proceeds
+	// against the current candidate rather than waiting out its deadline.
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	result, err := p.reconcileLanes()
+	if err != nil || result.ReadyItemsCreated != 1 || result.PublicationTasksCompleted != 1 {
+		t.Fatalf("stale-candidate retry did not proceed against the current candidate = %#v, %v", result, err)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.GetReviewRetry(p.ctx, p.runID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("stale review retry survived: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
