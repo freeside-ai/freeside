@@ -1038,11 +1038,37 @@ func (s *CodexReviewSource) reconcileRejectedRequest(
 	return nil
 }
 
+// classifyCodexLaunchFailure maps a pre-start (workspace-preparation and ward
+// launch) failure to its durable ReviewFailureClass. Precedence is
+// operational > contradiction > configuration:
+//
+//   - ErrCodexReviewOperational first, so runtime/storage I/O stays transient
+//     even when a shared path wraps it in the conformance class.
+//   - ErrConformance next: every launch-reachable conformance failure is an
+//     authenticated live/durable contradiction found after launch admission
+//     (changed auth/instruction snapshot, command/mount divergence, invalid or
+//     divergent journal binding, foreign/unprovable owned object, persisted
+//     binding disagreement), so it fails loudly rather than presenting as a
+//     repairable deployment problem. Checked before the spec sentinel so an
+//     error carrying both takes the loud stop branch (fail-closed).
+//   - ErrInvalidCodexReviewSpec last: only invalid static deployment/request
+//     shape is operator-repairable configuration.
+//
+// This is classifyCodexObservationFailure plus the trailing spec branch. The
+// two are kept separate rather than merged: the observation classifier
+// deliberately has no spec branch (a post-launch spec error, were one to
+// arise, falls through to transient), so folding one in would add
+// spec->configuration to the observation path. #499 fences that off as a
+// non-goal (no change to observation-path classification); the spec branch
+// stays launch-only.
 func classifyCodexLaunchFailure(err error) domain.ReviewFailureClass {
 	if errors.Is(err, ErrCodexReviewOperational) {
 		return domain.ReviewFailureTransient
 	}
-	if errors.Is(err, ErrInvalidCodexReviewSpec) || errors.Is(err, ErrConformance) {
+	if errors.Is(err, ErrConformance) {
+		return domain.ReviewFailureContradiction
+	}
+	if errors.Is(err, ErrInvalidCodexReviewSpec) {
 		return domain.ReviewFailureConfiguration
 	}
 	return domain.ReviewFailureTransient

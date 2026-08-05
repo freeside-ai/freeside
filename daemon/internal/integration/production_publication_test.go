@@ -84,6 +84,7 @@ type faultReviewSource struct {
 	failSupersessionAt    int
 	supersessionCalls     int
 	failRequestAfterStart bool
+	failRequestWith       error
 	requestedWorkspace    string
 }
 
@@ -91,6 +92,12 @@ func (s *faultReviewSource) RequestReview(
 	ctx context.Context, id domain.InvocationID, req exec.ReviewRequest,
 ) error {
 	s.requestCalls++
+	// failRequestWith models a pre-start launch failure (e.g. a workspace
+	// preparation conformance contradiction): the invocation never starts, so
+	// the wrapped source is left untouched.
+	if s.failRequestWith != nil {
+		return s.failRequestWith
+	}
 	if err := s.ReviewSource.RequestReview(ctx, id, req); err != nil {
 		return err
 	}
@@ -1404,6 +1411,59 @@ func TestProductionReviewContradictionFailsLoudAndPersists(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestProductionLaunchContradictionFailsLoudAndPersists covers the engine
+// side of #499: a launch-time (RequestReview) failure classified as a
+// contradiction must fail the workflow loudly, persist its class, create no
+// readiness, and stay loud when resumed from the persisted failure row, rather
+// than routing to a review-dispute attention item the way a configuration
+// failure would.
+func TestProductionLaunchContradictionFailsLoudAndPersists(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	faults := &faultReviewSource{
+		ReviewSource: p.reviewer,
+		failRequestWith: &exec.ReviewSourceFailure{
+			Class: domain.ReviewFailureContradiction,
+			Err:   errors.New("workspace preparation conformance contradiction"),
+		},
+	}
+	p.reviewSource = faults
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("launch contradiction did not fail loudly")
+	}
+	assertPersistedContradictionWithoutReady := func() {
+		t.Helper()
+		if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+			failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
+			if err != nil {
+				return err
+			}
+			if failure.Class != domain.ReviewFailureContradiction {
+				t.Fatalf("launch failure class = %#v, want contradiction", failure)
+			}
+			if _, err := tx.GetAttentionItem(p.ctx,
+				domain.ItemID("production-ready-"+string(p.runID))); !errors.Is(err, store.ErrNotFound) {
+				return fmt.Errorf("readiness created for a launch contradiction: %w", err)
+			}
+			if _, err := tx.GetAttentionItem(p.ctx,
+				domain.ItemID(fmt.Sprintf("production-review-%s-1", p.runID))); !errors.Is(err, store.ErrNotFound) {
+				return fmt.Errorf("review-dispute attention created for a launch contradiction: %w", err)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertPersistedContradictionWithoutReady()
+	// Resume from the persisted failure row: the gate must still fail loudly
+	// off the stored contradiction class, never converting it to a dispute.
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("resumed launch contradiction did not fail loudly")
+	}
+	assertPersistedContradictionWithoutReady()
 }
 
 func TestProductionReviewRewrittenRequestFailsClosedBeforeRelaunch(t *testing.T) {
