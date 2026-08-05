@@ -1012,7 +1012,13 @@ func (s *CodexReviewSource) reconcileRejectedRequest(
 	if err != nil {
 		return &exec.ReviewSourceFailure{Class: classifyCodexObservationFailure(err), Err: err}
 	}
-	if intent.State == CodexReviewIntentPreparing {
+	// The intent decoded cleanly (validateIdentity passed, so State is a
+	// registered member) and the closed and not-found cases settled above,
+	// leaving the pre-terminal states. Dispatch is a no-default switch so a
+	// future durable state cannot silently join the post-launch rejection arm:
+	// exhaustive forces it to be classified here.
+	switch intent.State {
+	case CodexReviewIntentPreparing:
 		return &exec.ReviewSourceFailure{
 			Class: domain.ReviewFailureContradiction,
 			Err: fmt.Errorf(
@@ -1020,22 +1026,33 @@ func (s *CodexReviewSource) reconcileRejectedRequest(
 				id, intent.State,
 			),
 		}
-	}
-	rejected := CodexReviewSourceOutcome{
-		InvocationID:  id,
-		FailureClass:  domain.ReviewFailureContradiction,
-		Failure:       "persisted Codex review request was rejected after launch; the launched invocation is aborted",
-		AbortRequired: true,
-	}
-	if err := s.cfg.Journal.PutCodexReviewOutcome(ctx, string(id), rejected); err != nil {
-		return codexReviewOutcomeWriteFailure(err)
-	}
-	if cleanupErr := s.finishCleanup(ctx, id, true); cleanupErr != nil {
-		return &exec.ReviewSourceFailure{
-			Class: classifyCodexObservationFailure(cleanupErr), Err: cleanupErr,
+	case CodexReviewIntentPrepared, CodexReviewIntentStarting, CodexReviewIntentStarted:
+		rejected := CodexReviewSourceOutcome{
+			InvocationID:  id,
+			FailureClass:  domain.ReviewFailureContradiction,
+			Failure:       "persisted Codex review request was rejected after launch; the launched invocation is aborted",
+			AbortRequired: true,
 		}
+		if err := s.cfg.Journal.PutCodexReviewOutcome(ctx, string(id), rejected); err != nil {
+			return codexReviewOutcomeWriteFailure(err)
+		}
+		if cleanupErr := s.finishCleanup(ctx, id, true); cleanupErr != nil {
+			return &exec.ReviewSourceFailure{
+				Class: classifyCodexObservationFailure(cleanupErr), Err: cleanupErr,
+			}
+		}
+		return nil
+	case CodexReviewIntentClosed:
+		// Unreachable: a closed intent settles with the not-found branch above.
+		// Listed to satisfy exhaustive without a default; falls to the
+		// fail-closed return below if control ever reaches it.
 	}
-	return nil
+	// Fail closed for the invalid zero value (already rejected upstream by
+	// validateIdentity) and any member the switch leaves unhandled.
+	return &exec.ReviewSourceFailure{
+		Class: domain.ReviewFailureContradiction,
+		Err:   fmt.Errorf("codex review invocation %s carries unhandled launch state %q", id, intent.State),
+	}
 }
 
 // classifyCodexLaunchFailure maps a pre-start (workspace-preparation and ward
