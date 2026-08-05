@@ -41,6 +41,13 @@ type (
 	issueObserver func(ctx context.Context, repo string, number int) (publish.IssueObservation, error)
 )
 
+// nativeReviewObserver reads one PR's native (forge-hosted) review activity —
+// its submitted reviews, inline review comments, and description reactions —
+// as best-effort extra evidence (plan §5.16, §7). The production composition
+// observes through the publish reconciler's conditional reads; the fake lane
+// wires no native reviewer.
+type nativeReviewObserver func(ctx context.Context, repo string, number int) (publish.PullReviewObservation, error)
+
 // mergeCapture is the former §5.18 base-watch capture hook. Production and
 // fake composition leave it unwired after #463 moved resource observation to
 // active_resource.go; it remains here only as a focused regression harness for

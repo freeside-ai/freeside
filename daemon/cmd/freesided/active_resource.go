@@ -20,7 +20,19 @@ type activeResourceReconciler struct {
 	store *store.Store
 	pull  pullObserver
 	issue issueObserver
-	now   func() time.Time
+	// review observes native (forge-hosted) review activity on the exact ready
+	// PR; reviewers is the configured set of reviewer logins whose activity is
+	// recorded. Both are optional: a composition that wires no native reviewer
+	// (or an empty set) simply records no native evidence (plan §5.16, §7).
+	review    nativeReviewObserver
+	reviewers map[string]bool
+	// reviewInvalidate drops the observer's cached validators for a PR when the
+	// durable append of its native observations fails, so the next tick
+	// re-fetches unconditionally instead of riding a 304 and permanently
+	// dropping the un-persisted rows (issue #497). Optional: nil disables it,
+	// which only forfeits the prompt retry a cache-eviction buys.
+	reviewInvalidate func(repo string, number int)
+	now              func() time.Time
 }
 
 type activeResourceObservation struct {
@@ -38,6 +50,13 @@ type activeResourceObservation struct {
 	// pass no longer describes the live candidate (plan §7, issue #496). The
 	// commit supersedes the still-open item and records this fact.
 	invalidation *domain.ReadinessInvalidation
+	// nativeObservations are normalized native-review observations to append as
+	// best-effort extra evidence (plan §5.16, §7; issue #497). nativeErr holds
+	// an isolated native-observe failure: it is reported but never blocks the
+	// pull/issue facts, completion, or invalidation handling, and the next tick
+	// retries.
+	nativeObservations []domain.NativeReviewObservation
+	nativeErr          error
 }
 
 // Run performs one startup pass and then polls on a plain ticker. A resource
@@ -111,15 +130,51 @@ func (r activeResourceReconciler) Reconcile(ctx context.Context) ([]error, error
 			failures = append(failures, fmt.Errorf("reconcile ready resource %s: %w", item.ID, err))
 			continue
 		}
-		if !observation.material && !observation.conclude &&
-			observation.completion == nil && observation.invalidation == nil {
-			continue
+		// A native-observe failure is isolated: it is reported but never blocks
+		// the pull/issue commit below, and the next tick retries (plan §5.16).
+		if observation.nativeErr != nil {
+			failures = append(failures, fmt.Errorf("reconcile ready resource %s: %w", item.ID, observation.nativeErr))
 		}
-		if err := r.commit(ctx, observation); err != nil {
-			return failures, fmt.Errorf("commit ready resource %s: %w", item.ID, err)
+		if observation.material || observation.conclude ||
+			observation.completion != nil || observation.invalidation != nil {
+			if err := r.commit(ctx, observation); err != nil {
+				return failures, fmt.Errorf("commit ready resource %s: %w", item.ID, err)
+			}
+		}
+		// Native observations commit in their own daemon-internal transaction,
+		// so a native-store failure is isolated from the pull/issue facts and
+		// collected as a retryable failure rather than stopping the pass.
+		if len(observation.nativeObservations) > 0 {
+			if err := r.commitNativeReview(ctx, observation.nativeObservations); err != nil {
+				failures = append(failures, fmt.Errorf("record native review %s: %w", item.ID, err))
+				// The observer already advanced its ETags on the fetch, so a 304
+				// on the next tick would suppress the rebuild and strand these
+				// un-persisted rows. Evict the cache so the retry re-fetches
+				// unconditionally and rebuilds them (issue #497).
+				if r.reviewInvalidate != nil {
+					r.reviewInvalidate(observation.binding.Repo, observation.binding.PRNumber)
+				}
+			}
 		}
 	}
 	return failures, nil
+}
+
+// commitNativeReview appends the pass's native review observations in a single
+// daemon-internal transaction. Each append coalesces an unchanged
+// re-observation, so duplicate observations converge idempotently under
+// retries (issue #497).
+func (r activeResourceReconciler) commitNativeReview(
+	ctx context.Context, observations []domain.NativeReviewObservation,
+) error {
+	return r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		for _, observation := range observations {
+			if _, err := tx.AppendNativeReviewObservation(ctx, observation); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (r activeResourceReconciler) settleSchedules(
@@ -230,6 +285,21 @@ func (r activeResourceReconciler) observe(
 	// a conclusion are mutually exclusive by construction.
 	if !exact && pullFact.RepositoryID == binding.RepositoryID && pullFact.PRNumber == binding.PRNumber {
 		observation.invalidation = readinessInvalidationFor(binding, pullFact)
+	}
+	// Native review activity is observed only while the live candidate is the
+	// bound one (exact and still open): a diverged pull is invalidating and a
+	// closed pull is concluding, and observation stops once the item leaves
+	// ready (plan §5.16). The observer's failure is isolated into nativeErr so
+	// it never blocks the pull/issue facts; on success, unchanged activity
+	// (a 304 across all sub-resources) yields nothing to record.
+	if r.review != nil && exact && pullFact.State == domain.PullRequestOpen {
+		reviewObs, err := r.review(ctx, binding.Repo, binding.PRNumber)
+		switch {
+		case err != nil:
+			observation.nativeErr = fmt.Errorf("observe native review %s#%d: %w", binding.Repo, binding.PRNumber, err)
+		case !reviewObs.NotModified:
+			observation.nativeObservations = buildNativeReviewObservations(reviewObs, binding, r.reviewers, observedAt)
+		}
 	}
 	if declaration != nil && unitBinding != nil && !completed && exact && pullFact.Merged &&
 		declaration.CompletionCriterion == domain.CompletionBoundIssueClosedByMergedPR &&
