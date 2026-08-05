@@ -674,8 +674,13 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 			defer d.wg.Done()
 			reconciler := activeResourceReconciler{
 				store: st, pull: claudeWiring.observePull,
-				issue: claudeWiring.observeIssue,
-				now:   func() time.Time { return time.Now().UTC() },
+				issue:  claudeWiring.observeIssue,
+				review: claudeWiring.observeReview,
+				// The default automated reviewer is wired here, not in the
+				// domain (plan §5.16, §7; AGENTS.md, Automated reviewer).
+				reviewers:        map[string]bool{defaultNativeReviewerLogin: true},
+				reviewInvalidate: claudeWiring.reviewInvalidate,
+				now:              func() time.Time { return time.Now().UTC() },
 			}
 			err := reconciler.Run(ctx, defaultActiveResourceInterval, func(err error) {
 				fmt.Fprintln(os.Stderr, "freesided: active resource:", err)

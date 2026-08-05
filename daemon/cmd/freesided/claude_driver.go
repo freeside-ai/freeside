@@ -899,6 +899,13 @@ type claudeComposition struct {
 	// conditional reads through the same reconciler.
 	observePull  pullObserver
 	observeIssue issueObserver
+	// observeReview is the §5.16 native-review observation's conditional reads
+	// through the same reconciler (issue #497).
+	observeReview nativeReviewObserver
+	// reviewInvalidate evicts a PR's cached review-activity validators after a
+	// failed durable append, so the next tick re-fetches unconditionally rather
+	// than riding a 304 and stranding the un-persisted rows (issue #497).
+	reviewInvalidate func(repo string, number int)
 }
 
 // composeClaudeDriver builds the production ward gate and Claude driver.
@@ -1096,6 +1103,10 @@ func composeClaudeDriver(
 		observeIssue: func(obsCtx context.Context, repo string, number int) (publish.IssueObservation, error) {
 			return reconciler.ReconcileIssue(obsCtx, repo, number)
 		},
+		observeReview: func(obsCtx context.Context, repo string, number int) (publish.PullReviewObservation, error) {
+			return reconciler.ReconcilePullReviewActivity(obsCtx, repo, number)
+		},
+		reviewInvalidate:     reconciler.EvictPullReviewActivity,
 		publicationTransport: publicationTransport,
 		publisher:            publisher, reviewSource: reviewSource,
 		reviewRecovery:            reviewRecovery.Reconcile,

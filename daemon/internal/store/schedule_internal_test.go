@@ -288,7 +288,8 @@ func migrationsBeforeScheduleAuthority(t *testing.T) fs.FS {
 	for _, entry := range entries {
 		if entry.Name() == "0027_schedule_authority.sql" ||
 			entry.Name() == "0028_ready_item_pr_binding.sql" ||
-			entry.Name() == "0029_review_stage.sql" || entry.IsDir() {
+			entry.Name() == "0029_review_stage.sql" ||
+			entry.Name() == "0030_native_review_observation.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())
