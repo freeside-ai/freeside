@@ -444,6 +444,111 @@ func TestActiveResourceReconcileRequiresExactReturnedResource(t *testing.T) {
 	})
 }
 
+// TestActiveResourceReconcileInvalidatesReadyOnCandidateChange is #496's
+// reconciler consumer: a pull that is provably this PR (matching repository
+// and number) but whose head or base ref no longer matches the binding
+// supersedes the ready item, records the readiness-invalidation reason, and
+// concludes the publication schedules, so a stale review pass cannot keep
+// presenting as ready.
+func TestActiveResourceReconcileInvalidatesReadyOnCandidateChange(t *testing.T) {
+	cases := []struct {
+		name            string
+		mutate          func(*publish.PullObservation)
+		reason          domain.ReadinessInvalidationReason
+		bound, observed string
+	}{
+		{
+			name:   "head advanced",
+			mutate: func(p *publish.PullObservation) { p.HeadSHA = "f00dbabe" },
+			reason: domain.ReadinessInvalidationHeadChanged,
+			bound:  "cafed00d", observed: "f00dbabe",
+		},
+		{
+			name:   "retargeted",
+			mutate: func(p *publish.PullObservation) { p.BaseRef = "release" },
+			reason: domain.ReadinessInvalidationRetargeted,
+			bound:  "main", observed: "release",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := schedTestStore(t)
+			item := activeReadyItem(t, st)
+			armActiveTestSchedules(t, st, item)
+			reconciler := activeResourceReconciler{
+				store: st,
+				pull: func(context.Context, string, int) (publish.PullObservation, error) {
+					observed := exactPull("open", false)
+					tc.mutate(&observed)
+					return observed, nil
+				},
+				now: func() time.Time { return activeResourceTestTime },
+			}
+			failures, err := reconciler.Reconcile(ctx)
+			if err != nil || len(failures) != 0 {
+				t.Fatalf("Reconcile = %v, %v", failures, err)
+			}
+			got := readActiveItem(t, st, item.ID)
+			if got.Status != domain.StatusSuperseded || got.ItemVersion != item.ItemVersion+1 {
+				t.Fatalf("invalidated item = status %s version %d", got.Status, got.ItemVersion)
+			}
+			inv := got.ReadinessInvalidation
+			if inv == nil || inv.Reason != tc.reason ||
+				inv.Bound != tc.bound || inv.Observed != tc.observed ||
+				!inv.ObservedAt.Equal(activeResourceTestTime) {
+				t.Fatalf("invalidation = %+v", inv)
+			}
+			// The publication watches are concluded alongside the supersession,
+			// so no later fire acts on the invalidated item.
+			for _, id := range publicationScheduleIDs(item.ID) {
+				if sc := readScheduleRow(t, st, id); !sc.Status.Terminal() {
+					t.Fatalf("schedule %s not concluded: %s", id, sc.Status)
+				}
+			}
+		})
+	}
+}
+
+// TestActiveResourceReconcileInvalidationYieldsToConcurrentConclusion is the
+// #496 race: a conclusion that serializes between the observation and the
+// commit wins, because the commit re-reads the item and only supersedes a
+// still-open one. The pull observer concludes the item as a side effect,
+// standing in for the concurrent writer.
+func TestActiveResourceReconcileInvalidationYieldsToConcurrentConclusion(t *testing.T) {
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	armActiveTestSchedules(t, st, item)
+	reconciler := activeResourceReconciler{
+		store: st,
+		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			// A decision concludes the item after the observation reads it open
+			// but before the commit re-reads it.
+			concluded := readActiveItem(t, st, item.ID)
+			concluded.Status = domain.StatusResolved
+			concluded.ItemVersion++
+			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				return tx.PutAttentionItem(ctx, concluded)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			observed := exactPull("open", false)
+			observed.HeadSHA = "f00dbabe"
+			return observed, nil
+		},
+		now: func() time.Time { return activeResourceTestTime },
+	}
+	failures, err := reconciler.Reconcile(ctx)
+	if err != nil || len(failures) != 0 {
+		t.Fatalf("Reconcile = %v, %v", failures, err)
+	}
+	got := readActiveItem(t, st, item.ID)
+	if got.Status != domain.StatusResolved || got.ReadinessInvalidation != nil {
+		t.Fatalf("concurrent conclusion lost to invalidation = %+v", got)
+	}
+}
+
 func TestActiveResourceReconcileRetriesTransientFailureWithoutChurn(t *testing.T) {
 	ctx := context.Background()
 	st := schedTestStore(t)

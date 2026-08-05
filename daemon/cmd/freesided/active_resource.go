@@ -33,6 +33,11 @@ type activeResourceObservation struct {
 	exactClosed bool
 	conclude    bool
 	material    bool
+	// invalidation is set when the observed pull diverges from the ready
+	// item's binding (head, target ref, or identity), so the clean review
+	// pass no longer describes the live candidate (plan §7, issue #496). The
+	// commit supersedes the still-open item and records this fact.
+	invalidation *domain.ReadinessInvalidation
 }
 
 // Run performs one startup pass and then polls on a plain ticker. A resource
@@ -106,7 +111,8 @@ func (r activeResourceReconciler) Reconcile(ctx context.Context) ([]error, error
 			failures = append(failures, fmt.Errorf("reconcile ready resource %s: %w", item.ID, err))
 			continue
 		}
-		if !observation.material && !observation.conclude && observation.completion == nil {
+		if !observation.material && !observation.conclude &&
+			observation.completion == nil && observation.invalidation == nil {
 			continue
 		}
 		if err := r.commit(ctx, observation); err != nil {
@@ -214,6 +220,16 @@ func (r activeResourceReconciler) observe(
 	observation := activeResourceObservation{
 		itemID: item.ID, binding: binding, pull: pullFact,
 		completed: completed, exactClosed: exact && pullFact.State == domain.PullRequestClosed,
+	}
+	// A pull that is provably this PR (matching repository and number) but no
+	// longer matches its head or base ref invalidates the ready pass. A
+	// foreign repository or number is a suspect returned observation the
+	// requires-exact defense declines to act on (it cannot prove anything
+	// about this item's actual PR), so it is not an invalidation. exactClosed
+	// (the resolve path below) requires full exactness, so an invalidation and
+	// a conclusion are mutually exclusive by construction.
+	if !exact && pullFact.RepositoryID == binding.RepositoryID && pullFact.PRNumber == binding.PRNumber {
+		observation.invalidation = readinessInvalidationFor(binding, pullFact)
 	}
 	if declaration != nil && unitBinding != nil && !completed && exact && pullFact.Merged &&
 		declaration.CompletionCriterion == domain.CompletionBoundIssueClosedByMergedPR &&
@@ -355,18 +371,57 @@ func (r activeResourceReconciler) commit(ctx context.Context, observation active
 		if err != nil {
 			return err
 		}
-		if observation.conclude && item.Status == domain.StatusOpen {
-			item.Status = domain.StatusResolved
-			item.ItemVersion++
-			if err := tx.PutAttentionItem(ctx, item); err != nil {
-				return err
+		if item.Status == domain.StatusOpen {
+			switch {
+			case observation.invalidation != nil:
+				// The pass no longer describes the live candidate: supersede the
+				// item and record why in the same transaction, so the staleness is
+				// item-visible and the version bump stales any command prepared
+				// against the old ready claim (plan §7, issue #496).
+				item.Status = domain.StatusSuperseded
+				item.ReadinessInvalidation = observation.invalidation
+				item.ItemVersion++
+				if err := tx.PutAttentionItem(ctx, item); err != nil {
+					return err
+				}
+			case observation.conclude:
+				item.Status = domain.StatusResolved
+				item.ItemVersion++
+				if err := tx.PutAttentionItem(ctx, item); err != nil {
+					return err
+				}
+			default:
+				// Still open and neither concluded nor invalidated: the pull fact
+				// (and any issue fact) is recorded, but the schedules stay armed.
+				return nil
 			}
-		}
-		if item.Status == domain.StatusOpen && !observation.conclude {
-			return nil
 		}
 		return concludePublicationSchedules(ctx, tx, item.ID, observation.pull.ObservedAt)
 	})
+}
+
+// readinessInvalidationFor derives the readiness-invalidation fact for a ready
+// item whose observed pull is provably this PR (the caller has matched
+// repository and number) but no longer matches its binding, naming the target
+// ref before the head. The caller establishes divergence, so the default is
+// unreachable and returns nil rather than a fact that would fail validation.
+func readinessInvalidationFor(
+	binding domain.ReadyItemPRBinding, pull domain.PullMergeFact,
+) *domain.ReadinessInvalidation {
+	inv := &domain.ReadinessInvalidation{ObservedAt: pull.ObservedAt}
+	switch {
+	case pull.BaseRef != binding.BaseRef:
+		inv.Reason = domain.ReadinessInvalidationRetargeted
+		inv.Bound = binding.BaseRef
+		inv.Observed = pull.BaseRef
+	case pull.HeadSHA != binding.HeadSHA:
+		inv.Reason = domain.ReadinessInvalidationHeadChanged
+		inv.Bound = binding.HeadSHA
+		inv.Observed = pull.HeadSHA
+	default:
+		return nil
+	}
+	return inv
 }
 
 func publicationScheduleIDs(itemID domain.ItemID) []domain.ScheduleID {

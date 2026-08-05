@@ -175,3 +175,30 @@ func TestCompatibleTerminalItemIgnoresBaseFreshness(t *testing.T) {
 		t.Fatal("genuinely different item accepted")
 	}
 }
+
+// TestCompatibleTerminalItemIgnoresReadinessInvalidation: the invalidation
+// fact is recorded in the same transition that supersedes the ready item
+// (§7, issue #496), so a crash seam can leave the persisted item superseded
+// with the fact set before finishTask runs. Terminal-item recovery must treat
+// that item as compatible with the freshly derived ready shape (it does not
+// carry the fact) instead of failing "disagrees" and stranding the task.
+func TestCompatibleTerminalItemIgnoresReadinessInvalidation(t *testing.T) {
+	st := watchTestStore(t)
+	expected := watchTestItem(t, st, domain.StatusOpen)
+	current := expected
+	current.ItemVersion = expected.ItemVersion + 1
+	current.Status = domain.StatusSuperseded
+	current.ReadinessInvalidation = &domain.ReadinessInvalidation{
+		Reason: domain.ReadinessInvalidationHeadChanged,
+		Bound:  "cafebabe", Observed: "deadbeef",
+		ObservedAt: time.Date(2026, 2, 3, 5, 0, 0, 0, time.UTC),
+	}
+	if !compatibleTerminalItem(expected, current) {
+		t.Fatal("invalidation-bearing superseded item rejected during recovery compatibility")
+	}
+	foreign := current
+	foreign.Reason = "a different item"
+	if compatibleTerminalItem(expected, foreign) {
+		t.Fatal("genuinely different item accepted")
+	}
+}

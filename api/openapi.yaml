@@ -1352,6 +1352,7 @@ components:
         - pr_head_sha
         - commit_plan_notice
         - base_freshness
+        - readiness_invalidation
         - item_version
         - interruption_class
         - conversation_id
@@ -1425,6 +1426,19 @@ components:
             watch has observed the base; updated on material change only,
             with the version bump that a real base advance implies. Never
             client-set.
+        readiness_invalidation:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ReadinessInvalidation"
+          description: >
+            The daemon-recorded fact that this ready_for_final_review item's
+            clean-pass claim was invalidated by a base/head/identity change
+            the review was not run against (plan §7; mirrors
+            domain.AttentionItem.ReadinessInvalidation). Written in the same
+            transaction that supersedes the item, so the staleness is
+            item-visible and the version bump stales any command prepared
+            against the old ready claim. Present only on a superseded ready
+            item; null otherwise. Never client-set.
         item_version:
           type: integer
           minimum: 1
@@ -1505,6 +1519,7 @@ components:
         pr_head_sha: "cafebabe"
         commit_plan_notice: "present_but_not_honored"
         base_freshness: null
+        readiness_invalidation: null
         item_version: 1
         interruption_class: "planned_gate"
         conversation_id: "conv-1"
@@ -2330,6 +2345,56 @@ components:
         observed_base_sha: "deadbeef"
         advanced: true
         observed_at: "2026-01-02T03:49:05Z"
+
+    ReadinessInvalidationReason:
+      type: string
+      description: >
+        The axis on which a ready_for_final_review item's exact binding
+        diverged from the daemon's live observation (plan §7; domain
+        attention_item.go): head_changed (observed PR head SHA moved),
+        base_advanced (observed target-base tip advanced past the admitted
+        base), retargeted (PR base ref changed). A foreign observed
+        repository/PR identity is deliberately not a reason: it is a suspect
+        returned observation the reconciler declines to act on, not a
+        trustworthy identity-change signal.
+      enum:
+        - head_changed
+        - base_advanced
+        - retargeted
+
+    ReadinessInvalidation:
+      type: object
+      description: >
+        The daemon-recorded fact that a ready_for_final_review item's
+        clean-pass claim was invalidated (plan §7; mirrors
+        domain.ReadinessInvalidation). observed differs from bound by
+        construction, and that divergence (revalidated by the daemon) is
+        what invalidates the pass, mirroring BaseFreshness.advanced.
+      required: [reason, bound, observed, observed_at]
+      properties:
+        reason:
+          $ref: "#/components/schemas/ReadinessInvalidationReason"
+        bound:
+          type: string
+          minLength: 1
+          description: >
+            The ready item's binding coordinate on the reason's axis (the
+            value the review pass was earned against): the head SHA for
+            head_changed, the admitted base SHA for base_advanced, the base
+            ref for retargeted, the "repository_id#pr_number" identity for
+            identity_changed.
+        observed:
+          type: string
+          minLength: 1
+          description: The daemon's live observation on that same axis.
+        observed_at:
+          type: string
+          format: date-time
+      example:
+        reason: "head_changed"
+        bound: "cafebabe"
+        observed: "feedface"
+        observed_at: "2026-01-02T03:54:05Z"
 
     BlockingSupersession:
       type: object
