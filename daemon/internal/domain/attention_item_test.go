@@ -352,6 +352,19 @@ func TestValidateRejectsInvalidationWithoutSupersession(t *testing.T) {
 		t.Fatalf("superseded ready item Validate() = %v, want nil", err)
 	}
 
+	// The identity coordinate is the bound and observed repository ID plus PR
+	// number. It validates on the same superseded-only trust boundary.
+	identityChanged := readyItem()
+	identityChanged.ReadinessInvalidation = &domain.ReadinessInvalidation{
+		Reason: domain.ReadinessInvalidationIdentityChanged,
+		Bound:  "84958515#450", Observed: "84958516#451",
+		ObservedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+	}
+	identityChanged.Status = domain.StatusSuperseded
+	if err := identityChanged.Validate(); err != nil {
+		t.Fatalf("identity-changed ready item Validate() = %v, want nil", err)
+	}
+
 	// The fact on a non-review type is rejected even when superseded.
 	wrongType, err := domain.NewAttentionItem(validItemInput(domain.AttentionSpecApproval), nil)
 	if err != nil {

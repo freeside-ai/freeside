@@ -1,0 +1,76 @@
+{
+  "id": "item-1",
+  "project_id": "proj-1",
+  "subject": {
+    "subject_type": "run",
+    "subject_id": "run-1",
+    "run_id": "run-1"
+  },
+  "type": "ready_for_final_review",
+  "priority": "normal",
+  "reason": "checks are green and the diff is ready",
+  "requested_decision": [
+    "open_pr",
+    "return_to_agent",
+    "dismiss"
+  ],
+  "evidence_snapshot": [
+    {
+      "id": "art-1",
+      "type": "verify_log",
+      "digest": "sha256:log",
+      "provenance": {
+        "producer_class": "verifier",
+        "producer_invocation_id": "inv-1",
+        "head_binding": "head_bound",
+        "source_head_sha": "cafebabe",
+        "verification_recipe_digest": "sha256:recipe-approved",
+        "sensitivity_class": "normal"
+      },
+      "publish_eligible": true
+    }
+  ],
+  "agent_claims": [
+    {
+      "label": "screenshot",
+      "artifact_id": "art-2",
+      "digest": "sha256:img",
+      "provenance": {
+        "producer_class": "agent",
+        "producer_invocation_id": "inv-2",
+        "head_binding": "head_bound",
+        "source_head_sha": "cafebabe",
+        "verification_recipe_digest": null,
+        "sensitivity_class": "normal"
+      },
+      "text": null
+    }
+  ],
+  "artifact_digests": [
+    "sha256:img",
+    "sha256:log"
+  ],
+  "pr_head_sha": "cafebabe",
+  "commit_plan_notice": "present_but_not_honored",
+  "base_freshness": null,
+  "readiness_invalidation": {
+    "reason": "identity_changed",
+    "bound": "84958515#450",
+    "observed": "84958516#451",
+    "observed_at": "2026-01-02T03:55:05Z"
+  },
+  "item_version": 2,
+  "interruption_class": "planned_gate",
+  "conversation_id": "conv-1",
+  "timing": {
+    "delivery_count": 1,
+    "first_submitted_at": "2026-01-02T03:04:05Z",
+    "first_accepted_at": "2026-01-02T03:05:05Z",
+    "first_opened_at": "2026-01-02T03:09:05Z",
+    "submit_to_first_open": 300000000000
+  },
+  "expires_when": "2026-01-03T03:04:05Z",
+  "decided_at": null,
+  "blocking_supersession": null,
+  "status": "superseded"
+}

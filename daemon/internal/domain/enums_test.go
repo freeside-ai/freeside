@@ -206,6 +206,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["IssueState"] = append(valids["IssueState"], v.valid)
 	}
 	invalids["IssueState"] = IssueState("").valid
+	for _, v := range AllReadinessInvalidationReasons {
+		valids["ReadinessInvalidationReason"] = append(valids["ReadinessInvalidationReason"], v.valid)
+	}
+	invalids["ReadinessInvalidationReason"] = ReadinessInvalidationReason("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {
