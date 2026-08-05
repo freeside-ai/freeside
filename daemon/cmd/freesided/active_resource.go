@@ -36,9 +36,13 @@ type activeResourceReconciler struct {
 }
 
 type activeResourceObservation struct {
-	itemID      domain.ItemID
-	binding     domain.ReadyItemPRBinding
-	pull        domain.PullMergeFact
+	itemID  domain.ItemID
+	binding domain.ReadyItemPRBinding
+	// pull is nil only when the first successful observation has a foreign
+	// repository/PR identity. The foreign pull is never constructed as a fact
+	// or persisted; only the daemon's readiness withdrawal crosses the commit
+	// boundary (plan §7, issue #514).
+	pull        *domain.PullMergeFact
 	issue       *domain.IssueStateFact
 	completion  *domain.WorkUnitCompletion
 	completed   bool
@@ -57,6 +61,16 @@ type activeResourceObservation struct {
 	// retries.
 	nativeObservations []domain.NativeReviewObservation
 	nativeErr          error
+}
+
+func validateObservedPullIdentityCoordinates(repositoryID int64, prNumber int) error {
+	if repositoryID <= 0 {
+		return fmt.Errorf("returned repository_id %d: %w", repositoryID, domain.ErrNonPositive)
+	}
+	if prNumber <= 0 {
+		return fmt.Errorf("returned pr_number %d: %w", prNumber, domain.ErrNonPositive)
+	}
+	return nil
 }
 
 // Run performs one startup pass and then polls on a plain ticker. A resource
@@ -256,9 +270,22 @@ func (r activeResourceReconciler) observe(
 	if err != nil {
 		return activeResourceObservation{}, fmt.Errorf("observe pull %s#%d: %w", binding.Repo, binding.PRNumber, err)
 	}
-	if observed.Number != binding.PRNumber {
-		return activeResourceObservation{}, fmt.Errorf("observe pull %s#%d returned number %d",
-			binding.Repo, binding.PRNumber, observed.Number)
+	if err := validateObservedPullIdentityCoordinates(observed.BaseRepoID, observed.Number); err != nil {
+		return activeResourceObservation{}, fmt.Errorf("observe pull %s#%d: %w",
+			binding.Repo, binding.PRNumber, err)
+	}
+	// Readiness is a standing claim about one immutable repository/PR binding.
+	// When the successful observation channel no longer reaches that identity,
+	// withdraw the claim before constructing or validating any foreign pull
+	// fact. The mismatch proves only that readiness is no longer verifiable; it
+	// gives no authority over the foreign object (plan §7, issue #514).
+	if observed.BaseRepoID != binding.RepositoryID || observed.Number != binding.PRNumber {
+		return activeResourceObservation{
+			itemID: item.ID, binding: binding,
+			invalidation: readinessIdentityInvalidationFor(
+				binding, observed.BaseRepoID, observed.Number, observedAt,
+			),
+		}, nil
 	}
 	pullFact := domain.PullMergeFact{
 		Repo: binding.Repo, RepositoryID: observed.BaseRepoID,
@@ -273,16 +300,14 @@ func (r activeResourceReconciler) observe(
 		pullFact.PRNumber == binding.PRNumber && pullFact.BaseRef == binding.BaseRef &&
 		pullFact.HeadSHA == binding.HeadSHA
 	observation := activeResourceObservation{
-		itemID: item.ID, binding: binding, pull: pullFact,
+		itemID: item.ID, binding: binding, pull: &pullFact,
 		completed: completed, exactClosed: exact && pullFact.State == domain.PullRequestClosed,
 	}
 	// A pull that is provably this PR (matching repository and number) but no
-	// longer matches its head or base ref invalidates the ready pass. A
-	// foreign repository or number is a suspect returned observation the
-	// requires-exact defense declines to act on (it cannot prove anything
-	// about this item's actual PR), so it is not an invalidation. exactClosed
-	// (the resolve path below) requires full exactness, so an invalidation and
-	// a conclusion are mutually exclusive by construction.
+	// longer matches its head or base ref invalidates the ready pass. Identity
+	// divergence already returned above without constructing a pull fact.
+	// exactClosed (the resolve path below) requires full exactness, so an
+	// invalidation and a conclusion are mutually exclusive by construction.
 	if !exact && pullFact.RepositoryID == binding.RepositoryID && pullFact.PRNumber == binding.PRNumber {
 		observation.invalidation = readinessInvalidationFor(binding, pullFact)
 	}
@@ -312,27 +337,38 @@ func (r activeResourceReconciler) observe(
 			return activeResourceObservation{}, fmt.Errorf("observe issue %s#%d: %w",
 				binding.Repo, *declaration.BoundIssue, err)
 		}
-		if issueObserved.Number != *declaration.BoundIssue {
-			return activeResourceObservation{}, fmt.Errorf("observe issue %s#%d returned number %d",
-				binding.Repo, *declaration.BoundIssue, issueObserved.Number)
-		}
 		recheck, err := r.pull(ctx, binding.Repo, binding.PRNumber)
 		if err != nil {
 			return activeResourceObservation{}, fmt.Errorf("re-verify repository identity %s: %w", binding.Repo, err)
 		}
-		if recheck.Number != binding.PRNumber || recheck.BaseRepoID != pullFact.RepositoryID {
-			return activeResourceObservation{}, fmt.Errorf("repository %s changed identity during reconciliation", binding.Repo)
+		if err := validateObservedPullIdentityCoordinates(recheck.BaseRepoID, recheck.Number); err != nil {
+			return activeResourceObservation{}, fmt.Errorf("re-verify repository identity %s: %w",
+				binding.Repo, err)
 		}
-		issueFact := domain.IssueStateFact{
-			Repo: binding.Repo, RepositoryID: pullFact.RepositoryID,
-			IssueNumber: issueObserved.Number, State: domain.IssueState(issueObserved.State),
-			ClosedByCommitSHA: issueObserved.ClosedByCommitSHA, ObservedAt: observedAt,
+		if recheck.Number != binding.PRNumber || recheck.BaseRepoID != binding.RepositoryID {
+			// The exact pull observed at the start of the pass remains a valid fact,
+			// but the intervening issue observation cannot support completion after
+			// the path stops resolving to the bound identity. Withdraw readiness and
+			// persist neither the issue observation nor completion (issue #514).
+			observation.invalidation = readinessIdentityInvalidationFor(
+				binding, recheck.BaseRepoID, recheck.Number, observedAt,
+			)
+		} else {
+			if issueObserved.Number != *declaration.BoundIssue {
+				return activeResourceObservation{}, fmt.Errorf("observe issue %s#%d returned number %d",
+					binding.Repo, *declaration.BoundIssue, issueObserved.Number)
+			}
+			issueFact := domain.IssueStateFact{
+				Repo: binding.Repo, RepositoryID: pullFact.RepositoryID,
+				IssueNumber: issueObserved.Number, State: domain.IssueState(issueObserved.State),
+				ClosedByCommitSHA: issueObserved.ClosedByCommitSHA, ObservedAt: observedAt,
+			}
+			if err := issueFact.Validate(); err != nil {
+				return activeResourceObservation{}, fmt.Errorf("observe issue %s#%d: %w",
+					binding.Repo, *declaration.BoundIssue, err)
+			}
+			observation.issue = &issueFact
 		}
-		if err := issueFact.Validate(); err != nil {
-			return activeResourceObservation{}, fmt.Errorf("observe issue %s#%d: %w",
-				binding.Repo, *declaration.BoundIssue, err)
-		}
-		observation.issue = &issueFact
 	}
 	if declaration != nil && unitBinding != nil {
 		if completion, ok := domain.EvaluateWorkUnitCompletion(
@@ -387,8 +423,10 @@ func (r activeResourceReconciler) commit(ctx context.Context, observation active
 		if binding != observation.binding {
 			return fmt.Errorf("ready resource binding changed during reconciliation: %w", store.ErrImmutableConflict)
 		}
-		if _, err := tx.AppendPullMergeFact(ctx, observation.pull); err != nil {
-			return err
+		if observation.pull != nil {
+			if _, err := tx.AppendPullMergeFact(ctx, *observation.pull); err != nil {
+				return err
+			}
 		}
 		if observation.issue != nil {
 			if _, err := tx.AppendIssueStateFact(ctx, *observation.issue); err != nil {
@@ -466,8 +504,29 @@ func (r activeResourceReconciler) commit(ctx context.Context, observation active
 				return nil
 			}
 		}
-		return concludePublicationSchedules(ctx, tx, item.ID, observation.pull.ObservedAt)
+		settledAt := time.Time{}
+		if observation.pull != nil {
+			settledAt = observation.pull.ObservedAt
+		} else if observation.invalidation != nil {
+			settledAt = observation.invalidation.ObservedAt
+		}
+		if settledAt.IsZero() {
+			return errors.New("active resource commit has no observation timestamp")
+		}
+		return concludePublicationSchedules(ctx, tx, item.ID, settledAt)
 	})
+}
+
+func readinessIdentityInvalidationFor(
+	binding domain.ReadyItemPRBinding, repositoryID int64, prNumber int,
+	observedAt time.Time,
+) *domain.ReadinessInvalidation {
+	return &domain.ReadinessInvalidation{
+		Reason:     domain.ReadinessInvalidationIdentityChanged,
+		Bound:      fmt.Sprintf("%d#%d", binding.RepositoryID, binding.PRNumber),
+		Observed:   fmt.Sprintf("%d#%d", repositoryID, prNumber),
+		ObservedAt: observedAt,
+	}
 }
 
 // readinessInvalidationFor derives the readiness-invalidation fact for a ready

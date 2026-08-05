@@ -302,24 +302,27 @@ const (
 	// ReadinessInvalidationRetargeted: the PR's base ref changed (the pull was
 	// retargeted at a different branch).
 	ReadinessInvalidationRetargeted ReadinessInvalidationReason = "retargeted"
+	// ReadinessInvalidationIdentityChanged: the observed repository ID or PR
+	// number differs from the ready item's immutable binding.
+	ReadinessInvalidationIdentityChanged ReadinessInvalidationReason = "identity_changed"
 )
 
 // AllReadinessInvalidationReasons is the single registration point for
-// readiness invalidation reasons. A pull whose observed repository or number
-// does not match the binding is deliberately absent: that is a suspect
-// returned observation the reconciler declines to act on (the requires-exact
-// defense), not a trustworthy identity-change signal, so no reason names it
-// until a consumer with a trustworthy signal needs one (cf. issue #22).
+// readiness invalidation reasons. An observed repository/PR identity mismatch
+// withdraws the ready item's standing claim without treating the foreign pull
+// as authority for the bound PR (issue #514;
+// devlog/2026-08-05-0113-ready-identity-fail-closed.md).
 var AllReadinessInvalidationReasons = []ReadinessInvalidationReason{
 	ReadinessInvalidationHeadChanged,
 	ReadinessInvalidationBaseAdvanced,
 	ReadinessInvalidationRetargeted,
+	ReadinessInvalidationIdentityChanged,
 }
 
 func (r ReadinessInvalidationReason) valid() bool {
 	switch r {
 	case ReadinessInvalidationHeadChanged, ReadinessInvalidationBaseAdvanced,
-		ReadinessInvalidationRetargeted:
+		ReadinessInvalidationRetargeted, ReadinessInvalidationIdentityChanged:
 		return true
 	default:
 		return false
