@@ -744,6 +744,26 @@ func TestGolden(t *testing.T) {
 		State: domain.IssueClosed, ClosedByCommitSHA: "deadbeef",
 		ObservedAt: ts.Add(2 * time.Hour),
 	}
+	nativeReviewObservation := domain.NativeReviewObservation{
+		Repo: "owner/repo", RepositoryID: 84958515, PRNumber: 450,
+		Provider: domain.NativeReviewCodexGitHub, Kind: domain.NativeReviewFindings,
+		NativeID: 900100, AuthorLogin: "chatgpt-codex-connector",
+		ReviewCommitSHA: "cafebabe", ReviewState: "COMMENTED", BindingHeadSHA: "cafebabe",
+		SubmittedAt: ts.Add(2 * time.Hour), ObservedAt: ts.Add(3 * time.Hour),
+		Findings: []domain.Finding{{
+			ID: "native-comment-800200", RunID: "run-1", Source: "codex_github",
+			Severity: "P2", Location: "daemon/main.go:42",
+			Message: "unchecked error", RawText: "P2: the error return is dropped",
+			CreatedAt: ts.Add(2 * time.Hour),
+		}},
+	}
+	nativeReviewCleanPass := domain.NativeReviewObservation{
+		Repo: "owner/repo", RepositoryID: 84958515, PRNumber: 450,
+		Provider: domain.NativeReviewCodexGitHub, Kind: domain.NativeReviewCleanPass,
+		NativeID: 700300, AuthorLogin: "chatgpt-codex-connector",
+		BindingHeadSHA: "cafebabe",
+		SubmittedAt:    ts.Add(2 * time.Hour), ObservedAt: ts.Add(3 * time.Hour),
+	}
 	unitCompletion, completed := domain.EvaluateWorkUnitCompletion(
 		unitDeclaration, unitPRBinding, pullMergeFact, &issueStateFact)
 	if !completed {
@@ -824,6 +844,8 @@ func TestGolden(t *testing.T) {
 		{"ready_item_pr_binding", readyItemPRBinding},
 		{"pull_merge_fact", pullMergeFact},
 		{"issue_state_fact", issueStateFact},
+		{"native_review_observation", nativeReviewObservation},
+		{"native_review_clean_pass", nativeReviewCleanPass},
 		{"work_unit_completion", unitCompletion},
 	}
 	for _, tc := range cases {

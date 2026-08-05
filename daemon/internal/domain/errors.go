@@ -58,6 +58,8 @@ var (
 	ErrInvalidCompletionCriterion       = errors.New("invalid work-unit completion criterion")
 	ErrInvalidPullRequestState          = errors.New("invalid pull request state")
 	ErrInvalidIssueState                = errors.New("invalid issue state")
+	ErrInvalidNativeReviewProvider      = errors.New("invalid native review provider")
+	ErrInvalidNativeReviewKind          = errors.New("invalid native review kind")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")
@@ -118,6 +120,9 @@ var (
 	ErrCompletionInconsistent             = errors.New("work-unit completion fields do not match the criterion's contract")
 	ErrMergeFactInconsistent              = errors.New("pull merge fact fields are internally inconsistent")
 	ErrIssueFactInconsistent              = errors.New("issue state fact fields are internally inconsistent")
+	ErrNativeReviewInconsistent           = errors.New("native review observation fields are internally inconsistent")
+	ErrNativeReviewTextNotUTF8            = errors.New("native review finding text is not valid UTF-8")
+	ErrNativeReviewTextTooLarge           = errors.New("native review finding text exceeds the inline size cap")
 	ErrDependenciesNotCanonical           = errors.New("declared dependency issues are not in canonical (ascending, deduplicated) order")
 	ErrDeclaredPathsNotCanonical          = errors.New("declared paths are not in canonical (sorted, deduplicated) order")
 
