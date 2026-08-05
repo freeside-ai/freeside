@@ -858,7 +858,7 @@ New in revision 26 (decider in parentheses):
 
 ---
 
-## Revision 27 (Current)
+## Revision 27
 
 Revision 27 writes the daemon supervision contract (Section 5.2):
 supervision modes by deployment class, exit discipline over a complete
@@ -905,3 +905,49 @@ core forward from wave 7 to wave 5.
    only): #454's daemon side and the app-side LaunchAgent and menu-bar
    unit land in wave 5; the external-probe remainder stays in wave 7.
    (User; same devlog; #453, #454.)
+
+---
+
+## Revision 28 (Current)
+
+Revision 28 resolves the Section 7 review-anchor fork, deliberately carried
+unresolved since revision 25, on the day of the first production backlog run
+(2026-08-05, recorded on #482). Held from revision 27: everything; the
+resolution pins one publication condition and names one deferred capability.
+
+1. **The review anchor is pre-publication** (Sections 1, 7, and 11):
+   implement → verify → review → clean: publish; the PR opens already
+   reviewed, and forge checks still gate merge. This resolves the fork
+   revision 25 deliberately carried unresolved. The internal loop is the
+   agent's pre-push work; the PR is the collaboration surface: the PR list
+   stays a decision queue, not a work queue; post-publication state is the
+   expensive place to be correct (the #496/#514 ready-identity class); PR
+   comments are mutable, so the authoritative ReviewRecord lives in the
+   store under either anchor, and PR-anchoring would mean building both
+   surfaces; and owner drill-down usage is served by computed readiness,
+   the run timeline, and structured dispositions. The PR-anchored shape
+   stays recorded as the fallback; revisit when real usage shows the owner
+   cannot trust review they did not watch. The stage #427 landed
+   PR-anchored under the then-open fork; the implementation re-anchor is
+   tracked in #527.
+   (User; devlog 2026-08-05-1746-review-anchor-pre-publication.md; #482,
+   #427, #527.)
+2. **Publication carries the disposition history as the EvidencePublisher's
+   first slice** (Sections 7, 5.15, and 11): review rounds, final
+   dispositions including declined and deferred with reasons, and the
+   readiness derivation, so the merged PR is forensically self-explanatory
+   on the forge; the owner's condition on the anchor resolution, pinning
+   the slice's priority, not gating publication before #525 lands (until
+   then the store carries the durable review state; per-finding
+   disposition persistence precedes both #525's rendering and any
+   reliance on the store as the authoritative disposition record).
+   (User; same devlog; #525.)
+3. **External review response is a named deferred capability** (Sections 7
+   and 11): review activity arriving on a published PR from outside the
+   control plane is identity-gated by an external-reviewer allowlist in
+   the trust profile, normalized into the finding pipeline with source
+   provenance, and drives the standard remediation → reverify → re-review
+   cycle under the same convergence policy as internal rounds; it never
+   satisfies the Section 7 requirement. Related to #502 as
+   re-entry-after-terminal-state triggers.
+   (User; same devlog; #524.)

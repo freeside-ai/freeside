@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 27
+revision: 28
 status: active
 phase: 1A
 updated: 2026-08-05
@@ -58,10 +58,10 @@ Linux-portable under Section 3.3.
    out-of-process hostile import boundary and then a fresh checkout.
 6. A trusted recipe verifies the candidate and captures evidence in a clean
    environment.
-7. The daemon publishes the verified candidate under an audited GitHub trust
-   profile.
-8. Independent review and yield-driven remediation continue within explicit
+7. Independent review and yield-driven remediation run within explicit
    emergency brakes.
+8. The daemon publishes the verified, reviewed candidate under an audited
+   GitHub trust profile.
 9. A ready-for-final-review item appears on my phone with mechanical evidence.
 10. I review and merge the pull request on GitHub.
 
@@ -634,7 +634,9 @@ commit plan + evidence manifest ──▶ gauntlet worker (unprivileged, out of
 gauntlet ──▶ fresh daemon-owned checkout; daemon re-authors clean commits
 fresh checkout ──▶ clean verification workspace (no credentials, no network;
    trusted recipe runs checks and captures evidence)
-verified candidate ──▶ git/publish ──▶ GitHub PR (under trust profile)
+verified candidate ──▶ required review pass (Section 7; pre-publication,
+   findings drive remediation and reverification)
+reviewed candidate ──▶ git/publish ──▶ GitHub PR (under trust profile)
 ```
 
 Exactly two channels leave the agent workspace, and they never mix:
@@ -1741,7 +1743,9 @@ import, never the raw workspace. Each pass binds the exact candidate head and
 invocation inputs; stopping is bounded by resolved policy; the pass holds no
 direct remediation or publication authority. Each remediation repeats the
 gauntlet, verification, and the adversarial pass itself. Distinct from the
-Section 7 review requirement and from its open anchor fork.
+Section 7 review requirement, which itself anchors pre-publication
+(revision 28): the Section 7 pass is required; this pass is optional and
+deferred.
 
 **Readiness registry (deferred).** When built, a projection over current
 typed proofs recomputed on read, never a stored ready bit; the Section 10
@@ -1854,15 +1858,44 @@ never a silent stall. Failure classification matches the publication
 boundary: transient failures retry with backoff; configuration or quota
 failures create attention; durable contradictions fail loudly.
 
-**Open fork (owner decision, deliberately carried unresolved; revision 25):
-the review anchor.** Either the required review pass anchors pre-publication
-— implement → verify → review → clean: publish, the PR opening already
-reviewed with forge checks still gating merge — or it stays PR-anchored
-post-publication as Section 11's 1B chain currently reads. The trigger
-falsification forces neither; a Freeside-invoked reviewer can review either
-surface. The recorded lean is pre-publication with forge checks still gating
-merge. Until the owner resolves the fork, the Section 11 chain keeps the
-PR-anchored shape and cites this section.
+**Resolved fork (decider: user, 2026-08-05; revision 28): the review anchor
+is pre-publication.** Implement → verify → review → clean: publish; the PR
+opens already reviewed, and forge checks still gate merge. The stage as
+landed (#427, PR #490) reviews the published PR under the then-open fork;
+the implementation re-anchor is tracked in #527. The internal loop
+is the agent's pre-push work; the PR is the collaboration surface. The PR
+list stays a decision queue, not a work queue; post-publication state is the
+expensive place to be correct (the #496/#514 ready-identity class); PR
+comments are mutable, so the authoritative ReviewRecord lives in the store
+under either anchor, and PR-anchoring would mean building both surfaces; and
+the owner's own drill-down usage — progress pulse, forensic drill-down on
+agent/forge disagreement, disposition reconstruction — is served by computed
+readiness, the run timeline, and structured dispositions, not comment
+threads. The owner's condition on this resolution pins the
+EvidencePublisher's first slice (Section 5.15; #525, wave 5 per Section
+11): at publication the PR carries the disposition history — review
+rounds, final dispositions including declined and deferred with reasons,
+and the readiness derivation — so the merged PR is forensically
+self-explanatory on the forge. The condition is not an immediate
+publication precondition. Until #525 lands the forge carries no
+disposition history; the store carries the durable review state —
+ReviewRecords (round outcomes, finding identity), raw findings, and
+classifications. Per-finding dispositions with reasons and the readiness
+derivation are not yet persisted anywhere; persisting them is a
+prerequisite both of #525's rendering and of any pre-#525 publication
+that treats the store as the authoritative disposition record. The
+trigger falsification forced
+neither anchor; a Freeside-invoked reviewer can review either surface. The
+PR-anchored shape remains the recorded, considered-and-rejected alternative
+(revision 25's fork text, docs/history/decisions.md); revisit when real
+usage shows the owner cannot trust review they did not watch — it is the
+fallback.
+
+Review activity arriving on a published PR from outside the control plane —
+human maintainers, GitHub-native Codex when it fires, other bots — is the
+deferred external review response capability (Section 11; #524); it never
+satisfies this section's requirement, which stays Freeside-invoked and
+pre-publication.
 
 Sequencing preserves independence (spine-confirmed on #427): the #427
 implementation unit, then production runs with Claude implementing and Codex
@@ -2333,18 +2366,24 @@ largest runtime unknown. It blocks only 1A.2, never 1A.0 or 1A.1.
 Phase 1B turns the secure path into the useful daily workflow:
 
 `labeled issue → daemon-fetched research → elaboration → spec approval →
-implementation → gauntlet → PR under a trust profile → checks →
-Freeside-invoked review (Section 7; its open anchor fork may move the
-required pass before publication) → yield-driven remediation and pattern
-sweeps → diminishing-returns or dispute item → ready-for-final-review with
-yield history → human GitHub merge`
+implementation → gauntlet → Freeside-invoked review (Section 7,
+pre-publication) → yield-driven remediation and pattern sweeps →
+diminishing-returns or dispute item → clean: PR under a trust profile,
+carrying the Section 7 disposition history (#525) → checks →
+ready-for-final-review with yield history → human GitHub merge`
+
+External review activity on the published PR re-enters the workflow
+asynchronously when it arrives (deferred; #524, sharing the
+re-entry-after-terminal-state trigger shape with #502); it is not a stage
+of the chain and never a readiness prerequisite.
 
 Phase 1B adds:
 
 - the elaborator and research fetcher;
 - label-initiator intake (scan-query initiators stay Phase 2);
-- the Freeside-invoked review stage (Section 7; implementation #427), with
-  ReviewSource freshness verification and automatic re-review testing;
+- the Freeside-invoked review stage (Section 7; implementation #427;
+  pre-publication re-anchor #527), with ReviewSource freshness verification
+  and automatic re-review testing;
 - finding classification with sampled accuracy and second adjudication;
 - convergence policy and the shadow arm;
 - provenance-gated EvidencePublisher;
@@ -2431,8 +2470,8 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **1: subsystems** | Parallel lanes | signet, gauntlet, publish, ward, and the saddle pair. |
 | **2: convergence** | Integrated | Workflow engine, real driver, end-to-end fakes, and real work. The **spine** owns integration and contract adjudication. |
 | **3 (1B.0): loop foundations** | Parallel lanes | Spine, serialized: the Section 5.16 scheduler (four timer kinds, trusted-job ticker migration), then Section 5.18 capture-hook recording. Ward: #401 gates 1/2/4/5 as parallel probes, then the #404 base image pinned per gate 2's outcome. App: Mac-first operator access (Section 10). |
-| **4 (1B.0): the review stage** | Serial | The spine rescopes #406/#407 into review cores and execution remainders, then lands the review-selection contract core, the review ward-topology slice, #405 only if review needs a project-derived image, and #427 — anchored per the open Section 7 fork. Its close stands the minimal loop; real-backlog use begins. |
-| **5 (1B.0): loop depth** | Parallel lanes | Elaborator and daemon research fetching with the spec-approval gate; label-initiator intake; the Section 5.13 classifier and diagnostic sites; the provenance-gated EvidencePublisher; the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section 6 state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section 5.2 contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
+| **4 (1B.0): the review stage** | Serial | The spine rescopes #406/#407 into review cores and execution remainders, then lands the review-selection contract core, the review ward-topology slice, #405 only if review needs a project-derived image, and #427 — landed PR-anchored under the then-open Section 7 fork (resolved pre-publication in revision 28; the implementation re-anchor is #527, unscheduled). Its close stands the minimal loop; real-backlog use begins. |
+| **5 (1B.0): loop depth** | Parallel lanes | Elaborator and daemon research fetching with the spec-approval gate; label-initiator intake; the Section 5.13 classifier and diagnostic sites; the provenance-gated EvidencePublisher (first slice: the Section 7 disposition history at publication, #525); the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section 6 state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section 5.2 contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy; the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section 10). 1B.0 exit. |
 | **7 (1B.1): operational closure** | Parallel lanes | Human-gated follow-up filing with the `effect_proposal` card; the doctor credential-integrity probe; the stall heartbeat; the external daemon-liveness probe (Section 5.2); the deferral drain (sweep-eligible open deferrals enumerated at this wave's planning; dormant contract units excluded unless the spine assigns chain positions). The execution tail closes in order: #401 gate 3, the #406/#407 execution remainders, #405 if outstanding, #397 by explicit owner decision on shadow evidence, then #408. |
 | **8 (1B.2): the initiative view** | Integrated | The Section 5.18 frontier projection and the deterministic initiative view. 1B exit evaluation. |
@@ -2517,47 +2556,44 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 27 ("The supervision contract"):
+Revision 28 ("The review anchor"):
 
-1. **Supervision is mode-scoped** (Section 5.2): Mac-first single-operator
-   runs `freesided` as a per-user LaunchAgent registered by the Mac app
-   through `SMAppService` (bundled plist, `KeepAlive`, no privileged step),
-   superseding the LaunchDaemon-first direction endorsed in devlog
-   2026-08-01-2221-supervision-contract-gap.md; the dedicated-user
-   LaunchDaemon through the elevation helper is retained as the hardened
-   end state. Changed assumptions: real-backlog daily operation begins at
-   wave-4 close, two waves ahead of the fix parked in wave 7; Apple
-   `container` is per-user tooling with unverified behavior under a
-   GUI-less service account; the elevation helper drops off the Mac-first
-   critical path entirely.
-   (User; devlog 2026-08-05-0001-supervision-contract.md; #453, #454.)
-2. **Exit discipline classifies every fatal-channel writer** (Section 5.2):
-   durable in-process stops (store and correctness failures, backup
-   maintenance, definitively classified doctor or janitor pass failures,
-   externally caused failures once persistence is established) never exit;
-   a post-bind HTTP serve fault is a restart-safe exit; panics and startup
-   failures are involuntary exits. Restart-always is endorsed only over
-   this inventory, and the doctor source-error posture deferred by devlog
-   2026-07-30-2350-operational-command-packaging.md resolves as a durable
-   stop.
-   (User; same devlog; #453, #454, #435.)
-3. **The stop-wait fork closes on the unlimited side** (Section 5.2):
-   SIGTERM with an effectively unlimited exit timeout over unbounded
-   credential-lease teardown; a bounded credential-safe teardown is
-   deferred hardening, not a tunable; SIGKILL stays crash-equivalent.
-   (User; same devlog.)
-4. **Liveness is an unauthenticated `GET /health` plus supervised address
-   and readiness publication** (Sections 5.2 and 10; api/openapi.yaml): a
-   fixed loopback address in the unit file, a `0600` state-directory
-   readiness file replacing the one-shot stdout line under supervision,
-   the external ntfy probe in 1B.1, and the Mac app's menu bar presence as
-   the local surface, with the app owning the local daemon's lifecycle.
-   (User; same devlog; #453, #454.)
-5. **The supervision core pulls forward to wave 5 by owner fiat**
-   (Section 11, amending revision 26's wave-7 concentration for this unit
-   only): #454's daemon side and the app-side LaunchAgent and menu-bar
-   unit land in wave 5; the external-probe remainder stays in wave 7.
-   (User; same devlog; #453, #454.)
+1. **The review anchor is pre-publication** (Sections 1, 7, and 11):
+   implement → verify → review → clean: publish; the PR opens already
+   reviewed, and forge checks still gate merge. This resolves the fork
+   revision 25 deliberately carried unresolved. The internal loop is the
+   agent's pre-push work; the PR is the collaboration surface: the PR list
+   stays a decision queue, not a work queue; post-publication state is the
+   expensive place to be correct (the #496/#514 ready-identity class); PR
+   comments are mutable, so the authoritative ReviewRecord lives in the
+   store under either anchor, and PR-anchoring would mean building both
+   surfaces; and owner drill-down usage is served by computed readiness,
+   the run timeline, and structured dispositions. The PR-anchored shape
+   stays recorded as the fallback; revisit when real usage shows the owner
+   cannot trust review they did not watch. The stage #427 landed
+   PR-anchored under the then-open fork; the implementation re-anchor is
+   tracked in #527.
+   (User; devlog 2026-08-05-1746-review-anchor-pre-publication.md; #482,
+   #427, #527.)
+2. **Publication carries the disposition history as the EvidencePublisher's
+   first slice** (Sections 7, 5.15, and 11): review rounds, final
+   dispositions including declined and deferred with reasons, and the
+   readiness derivation, so the merged PR is forensically self-explanatory
+   on the forge; the owner's condition on the anchor resolution, pinning
+   the slice's priority, not gating publication before #525 lands (until
+   then the store carries the durable review state; per-finding
+   disposition persistence precedes both #525's rendering and any
+   reliance on the store as the authoritative disposition record).
+   (User; same devlog; #525.)
+3. **External review response is a named deferred capability** (Sections 7
+   and 11): review activity arriving on a published PR from outside the
+   control plane is identity-gated by an external-reviewer allowlist in
+   the trust profile, normalized into the finding pipeline with source
+   provenance, and drives the standard remediation → reverify → re-review
+   cycle under the same convergence policy as internal rounds; it never
+   satisfies the Section 7 requirement. Related to #502 as
+   re-entry-after-terminal-state triggers.
+   (User; same devlog; #524.)
 
 ## 14. Risks
 
