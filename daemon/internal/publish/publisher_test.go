@@ -91,6 +91,16 @@ type fakeGitHub struct {
 	// with rel="next" Link headers (default: one page).
 	issueEventsPageSize int
 
+	// Native review activity per PR number, each list ETag'd by its revision
+	// counter (bump to invalidate). reviews are submitted reviews, comments
+	// the inline review comments, reactions the PR-description reactions.
+	reviews           map[int][]fakeReview
+	reviewRevs        map[int]int
+	reviewComments    map[int][]fakeReviewComment
+	reviewCommentRevs map[int]int
+	reactions         map[int][]fakeReaction
+	reactionRevs      map[int]int
+
 	// createHeadRepo, when set, is the head repository the fake reports
 	// for PRs created through it (simulating a head resolved to a fork).
 	createHeadRepo string
@@ -113,7 +123,37 @@ func newFakeGitHub(t *testing.T) *fakeGitHub {
 	return &fakeGitHub{
 		t: t, refs: map[string]string{}, prRevs: map[int]int{}, nextPR: 101,
 		issues: map[int]fakeIssue{}, issueRevs: map[int]int{},
+		reviews: map[int][]fakeReview{}, reviewRevs: map[int]int{},
+		reviewComments: map[int][]fakeReviewComment{}, reviewCommentRevs: map[int]int{},
+		reactions: map[int][]fakeReaction{}, reactionRevs: map[int]int{},
 	}
+}
+
+type fakeReview struct {
+	ID          int64
+	Login       string
+	State       string
+	Body        string
+	CommitID    string
+	SubmittedAt string // RFC3339; "" is a pending review
+}
+
+type fakeReviewComment struct {
+	ID        int64
+	ReviewID  int64
+	Login     string
+	Path      string
+	Line      *int
+	Body      string
+	CommitID  string
+	CreatedAt string
+}
+
+type fakeReaction struct {
+	ID        int64
+	Login     string
+	Content   string
+	CreatedAt string
 }
 
 func (g *fakeGitHub) server() *httptest.Server {
@@ -240,6 +280,75 @@ func (g *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		g.prs = append(g.prs, pr)
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(prJSON(pr))
+
+	case r.Method == http.MethodGet && strings.HasPrefix(path, testRepoPath+"/pulls/") && strings.HasSuffix(path, "/reviews"):
+		number, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(path, testRepoPath+"/pulls/"), "/reviews"))
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		etag := fmt.Sprintf(`"reviews-%d-%d"`, number, g.reviewRevs[number])
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		out := []map[string]any{}
+		for _, rv := range g.reviews[number] {
+			out = append(out, map[string]any{
+				"id": rv.ID, "user": map[string]any{"login": rv.Login},
+				"state": rv.State, "body": rv.Body, "commit_id": rv.CommitID,
+				"submitted_at": rv.SubmittedAt,
+			})
+		}
+		_ = json.NewEncoder(w).Encode(out)
+
+	case r.Method == http.MethodGet && strings.HasPrefix(path, testRepoPath+"/pulls/") && strings.HasSuffix(path, "/comments"):
+		number, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(path, testRepoPath+"/pulls/"), "/comments"))
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		etag := fmt.Sprintf(`"comments-%d-%d"`, number, g.reviewCommentRevs[number])
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		out := []map[string]any{}
+		for _, c := range g.reviewComments[number] {
+			row := map[string]any{
+				"id": c.ID, "pull_request_review_id": c.ReviewID,
+				"user": map[string]any{"login": c.Login}, "path": c.Path,
+				"line": nil, "body": c.Body, "commit_id": c.CommitID, "created_at": c.CreatedAt,
+			}
+			if c.Line != nil {
+				row["line"] = *c.Line
+			}
+			out = append(out, row)
+		}
+		_ = json.NewEncoder(w).Encode(out)
+
+	case r.Method == http.MethodGet && strings.HasPrefix(path, testRepoPath+"/issues/") && strings.HasSuffix(path, "/reactions"):
+		number, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(path, testRepoPath+"/issues/"), "/reactions"))
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		etag := fmt.Sprintf(`"reactions-%d-%d"`, number, g.reactionRevs[number])
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		out := []map[string]any{}
+		for _, rn := range g.reactions[number] {
+			out = append(out, map[string]any{
+				"id": rn.ID, "user": map[string]any{"login": rn.Login},
+				"content": rn.Content, "created_at": rn.CreatedAt,
+			})
+		}
+		_ = json.NewEncoder(w).Encode(out)
 
 	case r.Method == http.MethodGet && strings.HasPrefix(path, testRepoPath+"/pulls/"):
 		number, err := strconv.Atoi(strings.TrimPrefix(path, testRepoPath+"/pulls/"))

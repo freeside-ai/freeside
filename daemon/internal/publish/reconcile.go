@@ -32,10 +32,11 @@ import (
 type Reconciler struct {
 	forge *forge
 
-	mu     sync.Mutex
-	refs   map[string]refCacheEntry
-	pulls  map[string]pullCacheEntry
-	issues map[string]issueCacheEntry
+	mu             sync.Mutex
+	refs           map[string]refCacheEntry
+	pulls          map[string]pullCacheEntry
+	issues         map[string]issueCacheEntry
+	reviewActivity map[string]reviewActivityCacheEntry
 }
 
 type refCacheEntry struct {
@@ -51,6 +52,20 @@ type pullCacheEntry struct {
 type issueCacheEntry struct {
 	etag string
 	obs  IssueObservation
+}
+
+// reviewActivityCacheEntry caches the three list sub-resources of one PR's
+// review activity independently: each carries its own validator, so an
+// unchanged sub-resource answers 304 and its cached items are reused while a
+// changed sibling re-reads. An empty per-part etag makes that part's next poll
+// unconditional.
+type reviewActivityCacheEntry struct {
+	reviewsETag   string
+	commentsETag  string
+	reactionsETag string
+	reviews       []PullReview
+	comments      []PullReviewComment
+	reactions     []PullDescriptionReaction
 }
 
 // RefObservation is the reconciled state of one branch ref.
@@ -103,14 +118,28 @@ type IssueObservation struct {
 	NotModified       bool
 }
 
+// PullReviewObservation is the reconciled native review activity of one pull
+// request (plan §5.16, §7): its submitted reviews, inline review comments, and
+// description reactions, as observed. It is raw transport, not durable
+// evidence — the reconciler filters by reviewer login, normalizes, and bounds
+// it before recording. NotModified reports that all three sub-resources
+// answered 304, so the whole activity is unchanged.
+type PullReviewObservation struct {
+	Reviews     []PullReview
+	Comments    []PullReviewComment
+	Reactions   []PullDescriptionReaction
+	NotModified bool
+}
+
 // NewReconciler wires a Reconciler. baseURL is the GitHub API root
 // (real: https://api.github.com; tests: an httptest server).
 func NewReconciler(ts TokenSource, client *http.Client, baseURL string) *Reconciler {
 	return &Reconciler{
-		forge:  newForge(ts, client, baseURL),
-		refs:   map[string]refCacheEntry{},
-		pulls:  map[string]pullCacheEntry{},
-		issues: map[string]issueCacheEntry{},
+		forge:          newForge(ts, client, baseURL),
+		refs:           map[string]refCacheEntry{},
+		pulls:          map[string]pullCacheEntry{},
+		issues:         map[string]issueCacheEntry{},
+		reviewActivity: map[string]reviewActivityCacheEntry{},
 	}
 }
 
@@ -277,4 +306,93 @@ func (r *Reconciler) ReconcileIssue(ctx context.Context, repo string, number int
 	}
 	r.mu.Unlock()
 	return obs, nil
+}
+
+// ReconcilePullReviewActivity observes a pull request's native review activity
+// (plan §5.16, §7): its submitted reviews, inline review comments, and
+// description reactions, each conditionally when a prior observation holds a
+// validator. The three sub-resources are cached independently, so an unchanged
+// one rides its 304 while a changed sibling re-reads; the observation reports
+// NotModified only when all three are unchanged. Read-only: this never touches
+// publication or readiness state.
+func (r *Reconciler) ReconcilePullReviewActivity(ctx context.Context, repo string, number int) (PullReviewObservation, error) {
+	ref, err := parseRepo(repo)
+	if err != nil {
+		return PullReviewObservation{}, fmt.Errorf("reconcile: %w", err)
+	}
+	if number <= 0 {
+		return PullReviewObservation{}, fmt.Errorf("reconcile: invalid pull number %d", number)
+	}
+	key := fmt.Sprintf("%s\x00review\x00%d", repo, number)
+
+	r.mu.Lock()
+	entry := r.reviewActivity[key]
+	r.mu.Unlock()
+
+	reviewsRead, err := r.forge.getPullReviews(ctx, ref, number, entry.reviewsETag)
+	if err != nil {
+		return PullReviewObservation{}, fmt.Errorf("reconcile: %w", err)
+	}
+	commentsRead, err := r.forge.getPullReviewComments(ctx, ref, number, entry.commentsETag)
+	if err != nil {
+		return PullReviewObservation{}, fmt.Errorf("reconcile: %w", err)
+	}
+	reactionsRead, err := r.forge.getIssueReactions(ctx, ref, number, entry.reactionsETag)
+	if err != nil {
+		return PullReviewObservation{}, fmt.Errorf("reconcile: %w", err)
+	}
+
+	reviews, reviewsETag, err := resolveListPart(reviewsRead, entry.reviewsETag, entry.reviews)
+	if err != nil {
+		return PullReviewObservation{}, fmt.Errorf("reconcile reviews: %w", err)
+	}
+	comments, commentsETag, err := resolveListPart(commentsRead, entry.commentsETag, entry.comments)
+	if err != nil {
+		return PullReviewObservation{}, fmt.Errorf("reconcile review comments: %w", err)
+	}
+	reactions, reactionsETag, err := resolveListPart(reactionsRead, entry.reactionsETag, entry.reactions)
+	if err != nil {
+		return PullReviewObservation{}, fmt.Errorf("reconcile reactions: %w", err)
+	}
+
+	obs := PullReviewObservation{
+		Reviews: reviews, Comments: comments, Reactions: reactions,
+		NotModified: reviewsRead.NotModified && commentsRead.NotModified && reactionsRead.NotModified,
+	}
+	r.mu.Lock()
+	r.reviewActivity[key] = reviewActivityCacheEntry{
+		reviewsETag: reviewsETag, commentsETag: commentsETag, reactionsETag: reactionsETag,
+		reviews: reviews, comments: comments, reactions: reactions,
+	}
+	r.mu.Unlock()
+	return obs, nil
+}
+
+// EvictPullReviewActivity drops the cached validators and lists for one PR's
+// review activity, so the next ReconcilePullReviewActivity re-fetches every
+// sub-resource unconditionally instead of riding a 304. The active-resource
+// reconciler calls this when the durable append of the built observations
+// fails: getPull* already advanced the ETags on the successful fetch, so
+// without eviction the next tick's conditional GET answers 304/NotModified,
+// observe suppresses buildNativeReviewObservations, and the un-persisted rows
+// are never retried until external review activity changes (issue #497).
+func (r *Reconciler) EvictPullReviewActivity(repo string, number int) {
+	key := fmt.Sprintf("%s\x00review\x00%d", repo, number)
+	r.mu.Lock()
+	delete(r.reviewActivity, key)
+	r.mu.Unlock()
+}
+
+// resolveListPart returns the items and validator for one review sub-resource:
+// the fresh list on a 200, or the cached list on a solicited 304. As in
+// ReconcileRef, an unsolicited 304 (no validator was sent) is refused rather
+// than trusted, so a server cannot fabricate a "confirmed" empty observation.
+func resolveListPart[E any](read listRead[E], sentETag string, cached []E) ([]E, string, error) {
+	if read.NotModified {
+		if sentETag == "" {
+			return nil, "", errors.New("304 for a request that sent no validator")
+		}
+		return cached, sentETag, nil
+	}
+	return read.Items, read.ETag, nil
 }
