@@ -2423,14 +2423,15 @@ components:
         diverged from the daemon's live observation (plan §7; domain
         attention_item.go): head_changed (observed PR head SHA moved),
         base_advanced (observed target-base tip advanced past the admitted
-        base), retargeted (PR base ref changed). A foreign observed
-        repository/PR identity is deliberately not a reason: it is a suspect
-        returned observation the reconciler declines to act on, not a
-        trustworthy identity-change signal.
+        base), retargeted (PR base ref changed), identity_changed (observed
+        repository ID or PR number differs from the ready item's immutable
+        binding). Identity divergence withdraws the daemon's stale ready claim
+        without treating the foreign observation as authority for the bound PR.
       enum:
         - head_changed
         - base_advanced
         - retargeted
+        - identity_changed
 
     ReadinessInvalidation:
       type: object
