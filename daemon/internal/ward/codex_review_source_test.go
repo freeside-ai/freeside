@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -19,12 +20,51 @@ import (
 
 type testReviewInstructionArtifacts map[domain.Digest][]byte
 
+var errTestReviewInstructionArtifactNotFound = errors.New("review instruction artifact not found")
+
 func (a testReviewInstructionArtifacts) Open(digest domain.Digest) (io.ReadCloser, error) {
 	body, ok := a[digest]
 	if !ok {
-		return nil, os.ErrNotExist
+		return nil, errTestReviewInstructionArtifactNotFound
 	}
 	return io.NopCloser(bytes.NewReader(body)), nil
+}
+
+type testReviewInstructionArtifactsFunc func(domain.Digest) (io.ReadCloser, error)
+
+func (f testReviewInstructionArtifactsFunc) Open(digest domain.Digest) (io.ReadCloser, error) {
+	return f(digest)
+}
+
+type testReviewInstructionReadCloser struct {
+	io.Reader
+	closeErr error
+}
+
+func (r testReviewInstructionReadCloser) Close() error {
+	return r.closeErr
+}
+
+type testReviewInstructionErrorReader struct {
+	err error
+}
+
+func (r testReviewInstructionErrorReader) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+type testReviewInstructionBodyErrorReader struct {
+	body []byte
+	err  error
+}
+
+func (r *testReviewInstructionBodyErrorReader) Read(p []byte) (int, error) {
+	n := copy(p, r.body)
+	r.body = r.body[n:]
+	if len(r.body) == 0 {
+		return n, r.err
+	}
+	return n, nil
 }
 
 func testReviewInstructionBinding() exec.ReviewInstructionBinding {
@@ -68,19 +108,19 @@ func TestCodexReviewSourceReconstructsInstructionClosure(t *testing.T) {
 	delete(artifacts, binding.RepositorySources[0].Digest)
 	if _, _, err := source.materializeReviewInstructions(
 		t.Context(), "review-closure-2", binding,
-	); err == nil {
-		t.Fatal("missing repository source artifact was accepted")
+	); err == nil || classifyCodexInstructionMaterializationFailure(err) != domain.ReviewFailureContradiction {
+		t.Fatalf("missing repository source artifact classification = %v", err)
 	}
 	artifacts[binding.RepositorySources[0].Digest] = repository
 	artifacts[binding.ResultDigest] = []byte("tampered result")
 	if _, _, err := source.materializeReviewInstructions(
 		t.Context(), "review-closure-3", binding,
-	); err == nil {
-		t.Fatal("tampered result artifact was accepted")
+	); err == nil || classifyCodexInstructionMaterializationFailure(err) != domain.ReviewFailureContradiction {
+		t.Fatalf("tampered result artifact classification = %v", err)
 	}
 }
 
-func TestCodexReviewSourceDoesNotReplaceExistingInstructionSnapshot(t *testing.T) {
+func TestCodexReviewSourceReplacesStaleInstructionSnapshot(t *testing.T) {
 	cfg, _ := testCodexReview(t)
 	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{Review: cfg}}
 	id := domain.InvocationID("review-existing-snapshot")
@@ -92,11 +132,11 @@ func TestCodexReviewSourceDoesNotReplaceExistingInstructionSnapshot(t *testing.T
 	if err := os.WriteFile(target, []byte("operator-controlled input"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := source.writeReviewInstructionFile(id, []byte("trusted bundle")); err == nil {
-		t.Fatal("existing instruction snapshot was replaced")
+	if _, err := source.writeReviewInstructionFile(id, []byte("trusted bundle")); err != nil {
+		t.Fatal(err)
 	}
 	got, err := os.ReadFile(target) //nolint:gosec // test-controlled snapshot path
-	if err != nil || string(got) != "operator-controlled input" {
+	if err != nil || string(got) != "trusted bundle" {
 		t.Fatalf("existing instruction snapshot = %q, %v", got, err)
 	}
 }
@@ -275,9 +315,243 @@ func TestCodexReviewSourceRegatesInstructionClosureBeforeReadiness(t *testing.T)
 		failure.Class != domain.ReviewFailureContradiction {
 		t.Fatalf("tampered readiness instruction closure = %v", err)
 	}
+
+	artifactIO := &os.PathError{Op: "open", Path: "artifact", Err: syscall.EIO}
+	unexpectedReconcile := errors.New("authority I/O must not reconcile the request")
+	source.cfg.InstructionArtifacts = testReviewInstructionArtifactsFunc(
+		func(domain.Digest) (io.ReadCloser, error) { return nil, artifactIO },
+	)
+	journal.failGetOutcome = unexpectedReconcile
+	failure = nil
+	if err := source.VerifyRequestAuthority(t.Context(), id, authority); !errors.As(err, &failure) ||
+		failure.Class != domain.ReviewFailureTransient || !errors.Is(err, artifactIO) ||
+		errors.Is(err, unexpectedReconcile) {
+		t.Fatalf("operational readiness instruction closure = %v", err)
+	}
 }
 
 func TestCodexReviewSourceCleansPreparedWorkspaceWhenInstructionClosureFails(t *testing.T) {
+	tests := []struct {
+		name        string
+		directStart bool
+		setup       func(*testing.T, CodexReviewSpec) (exec.ReviewInstructionBinding, CodexReviewInstructionArtifacts)
+	}{
+		{
+			name: "missing source",
+			setup: func(t *testing.T, _ CodexReviewSpec) (exec.ReviewInstructionBinding, CodexReviewInstructionArtifacts) {
+				bundle, binding, err := exec.ComposeCodexReviewInstructions(
+					exec.ReviewHostInstructionInput{},
+					[]exec.ReviewInstructionSourceInput{{Path: "AGENTS.md", Body: []byte("trusted base\n")}},
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return binding, testReviewInstructionArtifacts{binding.ResultDigest: bundle}
+			},
+		},
+		{
+			name: "oversized result",
+			setup: func(_ *testing.T, request CodexReviewSpec) (exec.ReviewInstructionBinding, CodexReviewInstructionArtifacts) {
+				return request.InstructionBinding, testReviewInstructionArtifacts{
+					request.InstructionBinding.ResultDigest: bytes.Repeat(
+						[]byte("x"), int(domain.MaxVendorInstructionBytes)+1,
+					),
+				}
+			},
+		},
+		{
+			name: "tampered result",
+			setup: func(_ *testing.T, request CodexReviewSpec) (exec.ReviewInstructionBinding, CodexReviewInstructionArtifacts) {
+				return request.InstructionBinding, testReviewInstructionArtifacts{
+					request.InstructionBinding.ResultDigest: []byte("tampered result"),
+				}
+			},
+		},
+		{
+			name: "invalid binding", directStart: true,
+			setup: func(_ *testing.T, request CodexReviewSpec) (exec.ReviewInstructionBinding, CodexReviewInstructionArtifacts) {
+				binding := request.InstructionBinding
+				binding.CompositionVersion = "future"
+				return binding, testReviewInstructionArtifacts{
+					request.InstructionBinding.ResultDigest: request.Instructions.Body,
+				}
+			},
+		},
+		{
+			name: "composition divergence",
+			setup: func(_ *testing.T, request CodexReviewSpec) (exec.ReviewInstructionBinding, CodexReviewInstructionArtifacts) {
+				binding := request.InstructionBinding
+				binding.ResultDigest = domain.Digest("sha256:" + strings.Repeat("f", 64))
+				return binding, testReviewInstructionArtifacts{
+					binding.ResultDigest: request.Instructions.Body,
+				}
+			},
+		},
+	}
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			fx := newHandoffFixture(t)
+			seedSpec := fx.seed(t)
+			backend := fx.backend(t)
+			cfg, requestSpec := testCodexReview(t)
+			journal := &fakeCodexReviewJournal{}
+			sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
+			binding, artifacts := tc.setup(t, requestSpec)
+			sourceConfig.InstructionArtifacts = artifacts
+			source, err := NewCodexReviewSource(sourceConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := domain.InvocationID(fmt.Sprintf("review-invalid-instructions-%d", i))
+			request := exec.ReviewRequest{
+				RunID: "run-invalid-instructions", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+				RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
+				BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
+				Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+				Instructions: binding, RequestedAt: codexReviewEpoch,
+			}
+			var failure *exec.ReviewSourceFailure
+			var startErr error
+			if tc.directStart {
+				startErr = source.startRequestedReview(ctx, id, request)
+			} else {
+				startErr = source.RequestReview(ctx, id, request)
+			}
+			if !errors.As(startErr, &failure) ||
+				failure.Class != domain.ReviewFailureContradiction {
+				t.Fatalf("instruction refusal = %v", startErr)
+			}
+			if _, err := journal.GetCodexReviewWorkspaceBinding(ctx, string(id)); !errors.Is(err, ErrCodexReviewWorkspaceNotFound) {
+				t.Fatalf("prepared review workspace survived instruction refusal: %v", err)
+			}
+			if journal.intent != nil {
+				t.Fatal("credential-bearing review launch began after instruction refusal")
+			}
+		})
+	}
+}
+
+func TestCodexReviewSourceRetriesInstructionMaterializationUnderSameInvocation(t *testing.T) {
+	tests := []struct {
+		name string
+		fail func([]byte) (io.ReadCloser, error)
+	}{
+		{
+			name: "open I/O",
+			fail: func([]byte) (io.ReadCloser, error) {
+				return nil, &os.PathError{Op: "open", Path: "artifact", Err: syscall.EIO}
+			},
+		},
+		{
+			name: "read I/O",
+			fail: func([]byte) (io.ReadCloser, error) {
+				return testReviewInstructionReadCloser{
+					Reader: testReviewInstructionErrorReader{err: syscall.EIO},
+				}, nil
+			},
+		},
+		{
+			name: "close I/O",
+			fail: func(body []byte) (io.ReadCloser, error) {
+				return testReviewInstructionReadCloser{
+					Reader: bytes.NewReader(body), closeErr: syscall.EIO,
+				}, nil
+			},
+		},
+		{
+			name: "cancellation",
+			fail: func([]byte) (io.ReadCloser, error) {
+				return nil, context.Canceled
+			},
+		},
+		{
+			name: "deadline",
+			fail: func([]byte) (io.ReadCloser, error) {
+				return nil, context.DeadlineExceeded
+			},
+		},
+	}
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			fx := newHandoffFixture(t)
+			seedSpec := fx.seed(t)
+			backend := fx.backend(t)
+			cfg, requestSpec := testCodexReview(t)
+			journal := &fakeCodexReviewJournal{}
+			sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
+			artifacts := sourceConfig.InstructionArtifacts
+			failing := true
+			sourceConfig.InstructionArtifacts = testReviewInstructionArtifactsFunc(
+				func(digest domain.Digest) (io.ReadCloser, error) {
+					reader, err := artifacts.Open(digest)
+					if err != nil || !failing {
+						return reader, err
+					}
+					body, readErr := io.ReadAll(reader)
+					closeErr := reader.Close()
+					if readErr != nil || closeErr != nil {
+						return nil, errors.Join(readErr, closeErr)
+					}
+					return tc.fail(body)
+				},
+			)
+			source, err := NewCodexReviewSource(sourceConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := domain.InvocationID(fmt.Sprintf("review-instruction-%d", i))
+			request := exec.ReviewRequest{
+				RunID: "run-instruction-retry", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+				RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
+				BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
+				Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+				Instructions: requestSpec.InstructionBinding, RequestedAt: codexReviewEpoch,
+			}
+			var failure *exec.ReviewSourceFailure
+			requestErr := source.RequestReview(ctx, id, request)
+			if !errors.As(requestErr, &failure) ||
+				failure.Class != domain.ReviewFailureTransient {
+				t.Fatalf("materialization failure = %v", requestErr)
+			}
+			if strings.Contains(requestErr.Error(), "persisted review instruction result is invalid") {
+				t.Fatalf("artifact read failure was collapsed into divergence: %v", requestErr)
+			}
+			workspace, err := journal.GetCodexReviewWorkspaceBinding(ctx, string(id))
+			if err != nil {
+				t.Fatalf("retry workspace binding = %v", err)
+			}
+			if _, err := fx.rt.InspectVolume(ctx, workspace.Volume); err != nil {
+				t.Fatalf("retry workspace was removed: %v", err)
+			}
+			if journal.intent != nil {
+				t.Fatal("credential-bearing review launch began after materialization failure")
+			}
+			if _, err := os.Stat(source.instructionFile(id)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("partial instruction snapshot survived: %v", err)
+			}
+
+			failing = false
+			status, err := source.Inspect(ctx, id)
+			if err != nil || status != exec.StatusRunning {
+				t.Fatalf("retried materialization = %q, %v", status, err)
+			}
+			source.mu.Lock()
+			launch := source.launches[id]
+			delete(source.launches, id)
+			source.mu.Unlock()
+			if launch != nil {
+				_ = launch.Close()
+			}
+			if err := backend.AbortCodexReview(ctx, source.cfg.Review, string(id)); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCodexReviewInstructionMaterializationRejectsDivergentSnapshotTopology(t *testing.T) {
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -285,37 +559,147 @@ func TestCodexReviewSourceCleansPreparedWorkspaceWhenInstructionClosureFails(t *
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
-	bundle, binding, err := exec.ComposeCodexReviewInstructions(
-		exec.ReviewHostInstructionInput{},
-		[]exec.ReviewInstructionSourceInput{{Path: "AGENTS.md", Body: []byte("trusted base\n")}},
+	sourceConfig.InstructionArtifacts = testReviewInstructionArtifactsFunc(
+		func(domain.Digest) (io.ReadCloser, error) {
+			return nil, &os.PathError{Op: "open", Path: "artifact", Err: syscall.EIO}
+		},
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Keep the composed result but omit its repository source, forcing the
-	// pre-credential reconstruction failure after workspace preparation.
-	sourceConfig.InstructionArtifacts = testReviewInstructionArtifacts{
-		binding.ResultDigest: bundle,
-	}
 	source, err := NewCodexReviewSource(sourceConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := domain.InvocationID("review-missing-instructions-1")
+	id := domain.InvocationID("review-instruction-cleanup")
+	if _, err := source.writeReviewInstructionFile(id, []byte("partial snapshot")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(source.instructionFile(id)), "extra"),
+		[]byte("prevents directory removal"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	request := exec.ReviewRequest{
-		RunID: "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		RunID: "run-instruction-cleanup", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
 		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
-		Instructions: binding, RequestedAt: codexReviewEpoch,
+		Instructions: requestSpec.InstructionBinding, RequestedAt: codexReviewEpoch,
 	}
 	var failure *exec.ReviewSourceFailure
-	if err := source.RequestReview(ctx, id, request); !errors.As(err, &failure) ||
-		failure.Class != domain.ReviewFailureContradiction {
-		t.Fatalf("missing instruction source = %v", err)
+	err = source.RequestReview(ctx, id, request)
+	if !errors.As(err, &failure) || failure.Class != domain.ReviewFailureContradiction ||
+		!errors.Is(err, ErrConformance) {
+		t.Fatalf("materialization plus cleanup failure = %v", err)
 	}
-	if _, err := journal.GetCodexReviewWorkspaceBinding(ctx, string(id)); !errors.Is(err, ErrCodexReviewWorkspaceNotFound) {
-		t.Fatalf("prepared review workspace survived instruction refusal: %v", err)
+	if _, err := journal.GetCodexReviewWorkspaceBinding(ctx, string(id)); err != nil {
+		t.Fatalf("snapshot contradiction removed unreaped workspace: %v", err)
+	}
+	if journal.intent != nil {
+		t.Fatal("credential-bearing review launch began after cleanup failure")
+	}
+	failure = nil
+	if _, err := source.Inspect(ctx, id); !errors.As(err, &failure) ||
+		failure.Class != domain.ReviewFailureContradiction || !errors.Is(err, ErrConformance) {
+		t.Fatalf("repeated snapshot divergence = %v", err)
+	}
+}
+
+func TestCodexReviewInstructionMaterializationFailsClosed(t *testing.T) {
+	oversized := bytes.Repeat([]byte("x"), int(domain.MaxVendorInstructionBytes)+1)
+	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
+		InstructionArtifacts: testReviewInstructionArtifacts{digestBody(oversized): oversized},
+	}}
+	if _, err := source.readReviewInstructionArtifact(t.Context(), digestBody(oversized)); classifyCodexInstructionMaterializationFailure(err) != domain.ReviewFailureContradiction ||
+		!errors.Is(err, ErrConformance) {
+		t.Fatalf("oversized artifact classification = %v", err)
+	}
+	source.cfg.InstructionArtifacts = testReviewInstructionArtifactsFunc(
+		func(domain.Digest) (io.ReadCloser, error) {
+			return testReviewInstructionReadCloser{
+				Reader: &testReviewInstructionBodyErrorReader{body: slices.Clone(oversized), err: syscall.EIO},
+			}, nil
+		},
+	)
+	if _, err := source.readReviewInstructionArtifact(t.Context(), digestBody(oversized)); classifyCodexInstructionMaterializationFailure(err) != domain.ReviewFailureContradiction ||
+		!errors.Is(err, ErrConformance) {
+		t.Fatalf("oversized artifact plus I/O classification = %v", err)
+	}
+
+	tamperedDigest := digestBody([]byte("trusted"))
+	source.cfg.InstructionArtifacts = testReviewInstructionArtifactsFunc(
+		func(domain.Digest) (io.ReadCloser, error) {
+			return testReviewInstructionReadCloser{
+				Reader: bytes.NewReader([]byte("tampered")), closeErr: syscall.EIO,
+			}, nil
+		},
+	)
+	if _, err := source.readReviewInstructionArtifact(t.Context(), tamperedDigest); classifyCodexInstructionMaterializationFailure(err) != domain.ReviewFailureContradiction ||
+		!errors.Is(err, ErrConformance) {
+		t.Fatalf("tampered artifact plus close I/O classification = %v", err)
+	}
+
+	_, binding, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.ResultDigest = domain.Digest("sha256:" + strings.Repeat("f", 64))
+	source.cfg.InstructionArtifacts = testReviewInstructionArtifacts{
+		binding.ResultDigest: []byte("different persisted result"),
+	}
+	if _, err := source.reconstructReviewInstructions(t.Context(), binding); classifyCodexInstructionMaterializationFailure(err) != domain.ReviewFailureContradiction {
+		t.Fatalf("composition divergence classification = %v", err)
+	}
+
+	for _, err := range []error{
+		errTestReviewInstructionArtifactNotFound,
+		errors.New("unknown artifact failure"),
+		fmt.Errorf("missing: %w", os.ErrNotExist),
+	} {
+		if got := classifyCodexInstructionMaterializationFailure(err); got != domain.ReviewFailureContradiction {
+			t.Fatalf("unrecognized materialization error %v = %q", err, got)
+		}
+	}
+}
+
+func TestCodexReviewInstructionOpenClassification(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"path I/O", &os.PathError{Op: "open", Path: "artifact", Err: syscall.EIO}, true},
+		{"raw I/O", syscall.EMFILE, true},
+		{"missing path", &os.PathError{Op: "open", Path: "artifact", Err: syscall.ENOENT}, false},
+		{"missing sentinel", os.ErrNotExist, false},
+		{"unknown", errors.New("artifact unavailable"), false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := codexReviewInstructionOpenIsOperational(tc.err); got != tc.want {
+				t.Fatalf("operational = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCodexReviewInstructionWriteClassification(t *testing.T) {
+	missingRoot := filepath.Join(t.TempDir(), "missing")
+	source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
+		Review: CodexReviewConfig{InputRoot: missingRoot},
+	}}
+	_, err := source.writeReviewInstructionFile("review-write-io", []byte("trusted"))
+	if classifyCodexInstructionMaterializationFailure(err) != domain.ReviewFailureTransient ||
+		!errors.Is(err, ErrCodexReviewOperational) {
+		t.Fatalf("write I/O classification = %v", err)
+	}
+
+	invalidRoot := t.TempDir()
+	if err := os.Chmod(invalidRoot, 0o755); err != nil { //nolint:gosec // test makes the owned root non-private
+		t.Fatal(err)
+	}
+	source.cfg.Review.InputRoot = invalidRoot
+	_, err = source.writeReviewInstructionFile("review-write-invariant", []byte("trusted"))
+	if classifyCodexInstructionMaterializationFailure(err) != domain.ReviewFailureContradiction ||
+		errors.Is(err, ErrCodexReviewOperational) {
+		t.Fatalf("write invariant classification = %v", err)
 	}
 }
 
@@ -1650,6 +2034,13 @@ func TestCodexReviewLaunchCleanupFailureDoesNotTerminalizeUnreapedWorkspace(t *t
 	if exec.ClassifyReviewSourceFailure(contradiction) != domain.ReviewFailureContradiction ||
 		!errors.Is(contradiction, launchErr) {
 		t.Fatalf("contradictory cleanup classification = %v", contradiction)
+	}
+	operationalContradiction := codexReviewLaunchCleanupFailure(
+		fmt.Errorf("invalid review authority: %w", ErrConformance),
+		errors.Join(ErrCodexReviewOperational, fmt.Errorf("workspace cleanup: %w", ErrConformance)),
+	)
+	if exec.ClassifyReviewSourceFailure(operationalContradiction) != domain.ReviewFailureTransient {
+		t.Fatalf("operational cleanup did not outrank contradiction: %v", operationalContradiction)
 	}
 }
 
