@@ -671,6 +671,8 @@ func TestBuildContextPreparationBindsNPMInputs(t *testing.T) {
 		"FROM ${PROJECT_TOOLCHAIN_BASE_IMAGE} AS project-toolchain",
 		"COPY --from=project-toolchain /opt/freeside/project-toolchain/node.tar.xz " +
 			nodeToolchainArchivePath,
+		`RUN ["/usr/bin/busybox", "rm", "-f", "` + nodeLauncherPath + `", "` +
+			npmLauncherPath + `", "` + npxLauncherPath + `"]`,
 		"COPY toolchain-launcher " + nodeLauncherPath,
 		"COPY toolchain-launcher " + npmLauncherPath,
 		"COPY toolchain-launcher " + npxLauncherPath,
@@ -680,5 +682,17 @@ func TestBuildContextPreparationBindsNPMInputs(t *testing.T) {
 		if !strings.Contains(string(containerfile), toolchainBinding) {
 			t.Errorf("generated Containerfile omits toolchain binding %q", toolchainBinding)
 		}
+	}
+	// The launcher paths must be cleared by a base-independent mechanism before
+	// the COPY lands each fresh regular file, so COPY never follows a symlink an
+	// approved base carries at those paths (#518).
+	clearLaunchers := `RUN ["/usr/bin/busybox", "rm", "-f", "` + nodeLauncherPath + `", "` +
+		npmLauncherPath + `", "` + npxLauncherPath + `"]`
+	clearAt := strings.Index(string(containerfile), clearLaunchers)
+	copyNodeAt := strings.Index(string(containerfile), "COPY toolchain-launcher "+nodeLauncherPath)
+	if clearAt < 0 || copyNodeAt < 0 || clearAt >= copyNodeAt {
+		t.Errorf(
+			"generated Containerfile does not clear launcher paths before the toolchain COPY (clear=%d, copy=%d)",
+			clearAt, copyNodeAt)
 	}
 }
