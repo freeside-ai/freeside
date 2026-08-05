@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -39,7 +40,9 @@ type CodexReviewSourceConfig struct {
 }
 
 // CodexReviewInstructionArtifacts is the content-addressed closure used to
-// reconstruct every source and the composed result before launch.
+// reconstruct every source and the composed result before launch. Open must
+// leave operational filesystem failures discoverable through *fs.PathError or
+// syscall.Errno; missing content and unknown error shapes fail closed.
 type CodexReviewInstructionArtifacts interface {
 	Open(domain.Digest) (io.ReadCloser, error)
 }
@@ -164,12 +167,21 @@ func (s *CodexReviewSource) startRequestedReview(
 	}
 	instructions, instructionFile, err := s.materializeReviewInstructions(ctx, id, req.Instructions)
 	if err != nil {
+		class := classifyCodexInstructionMaterializationFailure(err)
+		if class == domain.ReviewFailureTransient {
+			if cleanupErr := removeCodexReviewInstructionSnapshot(
+				s.cfg.Review.InputRoot, string(id),
+			); cleanupErr != nil {
+				return codexReviewLaunchCleanupFailure(err, cleanupErr)
+			}
+			return &exec.ReviewSourceFailure{Class: class, Err: err}
+		}
 		cleanupErr := s.cfg.Backend.cleanupOrphanedCodexReviewWorkspace(
 			context.WithoutCancel(ctx), s.cfg.Journal, string(id))
 		if cleanupErr != nil {
 			return codexReviewLaunchCleanupFailure(err, cleanupErr)
 		}
-		return &exec.ReviewSourceFailure{Class: domain.ReviewFailureContradiction, Err: err}
+		return &exec.ReviewSourceFailure{Class: class, Err: err}
 	}
 	launch, err := s.cfg.Backend.CodexReview(ctx, s.cfg.Review, CodexReviewLaunchSpec{
 		RunID: string(id), Image: s.cfg.Review.ApprovedImage,
@@ -257,9 +269,11 @@ func (s *CodexReviewSource) reconstructReviewInstructions(
 			err, errors.New("reconstructed review instructions diverge from request authority"))
 	}
 	persisted, err := s.readReviewInstructionArtifact(ctx, binding.ResultDigest)
-	if err != nil || !slices.Equal(persisted, reconstructed) {
-		return nil, errors.Join(
-			err, errors.New("persisted review instruction result is invalid"))
+	if err != nil {
+		return nil, fmt.Errorf("load persisted review instruction result: %w", err)
+	}
+	if !slices.Equal(persisted, reconstructed) {
+		return nil, errors.New("persisted review instruction result is invalid")
 	}
 	return reconstructed, nil
 }
@@ -272,21 +286,39 @@ func (s *CodexReviewSource) readReviewInstructionArtifact(
 	}
 	reader, err := s.cfg.InstructionArtifacts.Open(digest)
 	if err != nil {
+		if codexReviewInstructionOpenIsOperational(err) {
+			return nil, errors.Join(ErrCodexReviewOperational, err)
+		}
 		return nil, err
 	}
 	body, readErr := io.ReadAll(io.LimitReader(reader, domain.MaxVendorInstructionBytes+1))
 	closeErr := reader.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, errors.Join(readErr, closeErr)
-	}
 	if int64(len(body)) > domain.MaxVendorInstructionBytes {
-		return nil, errors.New("review instruction artifact exceeds the byte limit")
+		return nil, fmt.Errorf("review instruction artifact exceeds the byte limit: %w", ErrConformance)
+	}
+	if readErr != nil {
+		return nil, errors.Join(ErrCodexReviewOperational, readErr, closeErr)
 	}
 	sum := sha256.Sum256(body)
 	if domain.Digest(fmt.Sprintf("sha256:%x", sum)) != digest {
-		return nil, errors.New("review instruction artifact does not match its digest")
+		return nil, fmt.Errorf("review instruction artifact does not match its digest: %w", ErrConformance)
+	}
+	if closeErr != nil {
+		return nil, errors.Join(ErrCodexReviewOperational, closeErr)
 	}
 	return body, nil
+}
+
+func codexReviewInstructionOpenIsOperational(err error) bool {
+	if errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return true
+	}
+	var errno syscall.Errno
+	return errors.As(err, &errno)
 }
 
 func (s *CodexReviewSource) writeReviewInstructionFile(
@@ -297,30 +329,38 @@ func (s *CodexReviewSource) writeReviewInstructionFile(
 	if err := ensureCodexReviewInstructionRoot(s.cfg.Review.InputRoot); err != nil {
 		return "", err
 	}
+	if err := removeCodexReviewInstructionSnapshot(s.cfg.Review.InputRoot, string(id)); err != nil {
+		return "", err
+	}
 	if err := os.Mkdir(directory, 0o700); err != nil {
-		return "", fmt.Errorf("create review instruction snapshot directory: %w", err)
+		return "", errors.Join(ErrCodexReviewOperational,
+			fmt.Errorf("create review instruction snapshot directory: %w", err))
 	}
 	file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // target is an owned deterministic snapshot path
 	if err != nil {
 		_ = os.Remove(directory)
-		return "", fmt.Errorf("create review instruction snapshot: %w", err)
+		return "", errors.Join(ErrCodexReviewOperational,
+			fmt.Errorf("create review instruction snapshot: %w", err))
 	}
 	if err := file.Chmod(0o600); err != nil {
 		_ = file.Close()
 		_ = os.Remove(target)
 		_ = os.Remove(directory)
-		return "", fmt.Errorf("protect review instruction snapshot: %w", err)
+		return "", errors.Join(ErrCodexReviewOperational,
+			fmt.Errorf("protect review instruction snapshot: %w", err))
 	}
 	if _, err := file.Write(body); err != nil {
 		_ = file.Close()
 		_ = os.Remove(target)
 		_ = os.Remove(directory)
-		return "", fmt.Errorf("write review instruction snapshot: %w", err)
+		return "", errors.Join(ErrCodexReviewOperational,
+			fmt.Errorf("write review instruction snapshot: %w", err))
 	}
 	if err := file.Close(); err != nil {
 		_ = os.Remove(target)
 		_ = os.Remove(directory)
-		return "", fmt.Errorf("close review instruction snapshot: %w", err)
+		return "", errors.Join(ErrCodexReviewOperational,
+			fmt.Errorf("close review instruction snapshot: %w", err))
 	}
 	return target, nil
 }
@@ -347,7 +387,8 @@ func codexReviewInstructionRoot(inputRoot string) string {
 func ensureCodexReviewInstructionRoot(inputRoot string) error {
 	rootInfo, err := os.Lstat(inputRoot)
 	if err != nil {
-		return fmt.Errorf("inspect review input root: %w", err)
+		return errors.Join(ErrCodexReviewOperational,
+			fmt.Errorf("inspect review input root: %w", err))
 	}
 	rootStat, rootOwned := rootInfo.Sys().(*syscall.Stat_t)
 	if !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 || rootInfo.Mode().Perm()&0o077 != 0 ||
@@ -356,11 +397,13 @@ func ensureCodexReviewInstructionRoot(inputRoot string) error {
 	}
 	root := codexReviewInstructionRoot(inputRoot)
 	if err := os.Mkdir(root, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("create review instruction root: %w", err)
+		return errors.Join(ErrCodexReviewOperational,
+			fmt.Errorf("create review instruction root: %w", err))
 	}
 	info, err := os.Lstat(root)
 	if err != nil {
-		return fmt.Errorf("inspect review instruction root: %w", err)
+		return errors.Join(ErrCodexReviewOperational,
+			fmt.Errorf("inspect review instruction root: %w", err))
 	}
 	stat, owned := info.Sys().(*syscall.Stat_t)
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 ||
@@ -372,7 +415,7 @@ func ensureCodexReviewInstructionRoot(inputRoot string) error {
 
 func removeCodexReviewInstructionSnapshot(inputRoot string, id string) error {
 	if !runIDPattern.MatchString(id) {
-		return errors.New("review instruction snapshot id is invalid")
+		return fmt.Errorf("review instruction snapshot id is invalid: %w", ErrConformance)
 	}
 	root := codexReviewInstructionRoot(inputRoot)
 	rootInfo, err := os.Lstat(root)
@@ -380,12 +423,13 @@ func removeCodexReviewInstructionSnapshot(inputRoot string, id string) error {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("inspect review instruction root: %w", err)
+		return errors.Join(ErrCodexReviewOperational,
+			fmt.Errorf("inspect review instruction root: %w", err))
 	}
 	rootStat, rootOwned := rootInfo.Sys().(*syscall.Stat_t)
 	if !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 || rootInfo.Mode().Perm()&0o077 != 0 ||
 		!rootOwned || !codexReviewUIDMatches(rootStat, os.Geteuid()) {
-		return errors.New("review instruction root is not a private daemon-owned directory")
+		return fmt.Errorf("review instruction root is not a private daemon-owned directory: %w", ErrConformance)
 	}
 	directory := filepath.Join(root, id)
 	directoryInfo, err := os.Lstat(directory)
@@ -393,19 +437,41 @@ func removeCodexReviewInstructionSnapshot(inputRoot string, id string) error {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("inspect review instruction snapshot directory: %w", err)
+		return errors.Join(ErrCodexReviewOperational,
+			fmt.Errorf("inspect review instruction snapshot directory: %w", err))
 	}
 	directoryStat, directoryOwned := directoryInfo.Sys().(*syscall.Stat_t)
 	if !directoryInfo.IsDir() || directoryInfo.Mode()&os.ModeSymlink != 0 ||
 		directoryInfo.Mode().Perm()&0o077 != 0 || !directoryOwned ||
 		!codexReviewUIDMatches(directoryStat, os.Geteuid()) {
-		return errors.New("review instruction snapshot directory is not a private daemon-owned directory")
+		return fmt.Errorf("review instruction snapshot directory is not a private daemon-owned directory: %w", ErrConformance)
 	}
-	if err := os.Remove(filepath.Join(directory, "AGENTS.md")); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove review instruction snapshot: %w", err)
+	target := filepath.Join(directory, "AGENTS.md")
+	targetInfo, err := os.Lstat(target)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return errors.Join(ErrCodexReviewOperational,
+			fmt.Errorf("inspect review instruction snapshot: %w", err))
+	}
+	if err == nil {
+		targetStat, targetOwned := targetInfo.Sys().(*syscall.Stat_t)
+		if !targetInfo.Mode().IsRegular() || targetInfo.Mode()&os.ModeSymlink != 0 ||
+			targetInfo.Mode().Perm()&0o077 != 0 || !targetOwned ||
+			!codexReviewUIDMatches(targetStat, os.Geteuid()) {
+			return fmt.Errorf("review instruction snapshot is not a private daemon-owned regular file: %w",
+				ErrConformance)
+		}
+	}
+	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return errors.Join(ErrCodexReviewOperational,
+			fmt.Errorf("remove review instruction snapshot: %w", err))
 	}
 	if err := os.Remove(directory); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove review instruction snapshot directory: %w", err)
+		if errors.Is(err, syscall.ENOTEMPTY) {
+			return fmt.Errorf("review instruction snapshot directory contains unexpected entries: %w",
+				ErrConformance)
+		}
+		return errors.Join(ErrCodexReviewOperational,
+			fmt.Errorf("remove review instruction snapshot directory: %w", err))
 	}
 	return nil
 }
@@ -861,11 +927,14 @@ func (s *CodexReviewSource) VerifyRequestAuthority(
 		}
 	}
 	if _, err := s.reconstructReviewInstructions(ctx, request.Instructions); err != nil {
-		if reconcileErr := s.reconcileRejectedRequest(ctx, id); reconcileErr != nil {
-			return reconcileErr
+		class := classifyCodexInstructionMaterializationFailure(err)
+		if class == domain.ReviewFailureContradiction {
+			if reconcileErr := s.reconcileRejectedRequest(ctx, id); reconcileErr != nil {
+				return reconcileErr
+			}
 		}
 		return &exec.ReviewSourceFailure{
-			Class: domain.ReviewFailureContradiction,
+			Class: class,
 			Err:   fmt.Errorf("reconstruct review instruction authority: %w", err),
 		}
 	}
@@ -1089,6 +1158,17 @@ func classifyCodexLaunchFailure(err error) domain.ReviewFailureClass {
 		return domain.ReviewFailureConfiguration
 	}
 	return domain.ReviewFailureTransient
+}
+
+// classifyCodexInstructionMaterializationFailure is deliberately fail-closed:
+// only positively identified operational I/O and cancellation may retry the
+// same invocation before a credential-bearing reviewer starts.
+func classifyCodexInstructionMaterializationFailure(err error) domain.ReviewFailureClass {
+	if errors.Is(err, ErrCodexReviewOperational) || errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return domain.ReviewFailureTransient
+	}
+	return domain.ReviewFailureContradiction
 }
 
 func classifyCodexObservationFailure(err error) domain.ReviewFailureClass {
