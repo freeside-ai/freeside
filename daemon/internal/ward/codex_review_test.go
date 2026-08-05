@@ -2224,8 +2224,71 @@ func TestCodexReviewEnums(t *testing.T) {
 			t.Errorf("registered auth mode %q reports invalid", mode)
 		}
 	}
-	if CodexReviewBoundary("").valid() || CodexAuthMode("").valid() {
+	for _, state := range AllCodexReviewIntentStates {
+		if !state.valid() {
+			t.Errorf("registered intent state %q reports invalid", state)
+		}
+	}
+	if CodexReviewBoundary("").valid() || CodexAuthMode("").valid() ||
+		CodexReviewIntentState("").valid() {
 		t.Error("zero enum value reports valid")
+	}
+}
+
+// TestCodexReviewIntentStateTokens pins the persisted string token of every
+// registered state. A drift here is a stored-JSON compatibility break: the
+// tokens are the on-disk representation of the durable launch intent.
+func TestCodexReviewIntentStateTokens(t *testing.T) {
+	tokens := map[CodexReviewIntentState]string{
+		CodexReviewIntentPreparing: "preparing",
+		CodexReviewIntentPrepared:  "prepared",
+		CodexReviewIntentStarting:  "starting",
+		CodexReviewIntentStarted:   "started",
+		CodexReviewIntentClosed:    "closed",
+	}
+	if len(tokens) != len(AllCodexReviewIntentStates) {
+		t.Fatalf("token map has %d entries, registration point has %d",
+			len(tokens), len(AllCodexReviewIntentStates))
+	}
+	for _, state := range AllCodexReviewIntentStates {
+		want, ok := tokens[state]
+		if !ok {
+			t.Errorf("registered state %q missing from token expectations", state)
+			continue
+		}
+		if string(state) != want {
+			t.Errorf("state token = %q, want %q", string(state), want)
+		}
+	}
+}
+
+// TestCodexReviewIntentStateValidEquivalence proves the valid() predicate that
+// replaced validateIdentity's inline membership switch decides the full input
+// space identically to that switch: exactly the five registered tokens are
+// valid, and the zero value plus adversarial near-members (case, spacing,
+// prefix/suffix, substring) are rejected.
+func TestCodexReviewIntentStateValidEquivalence(t *testing.T) {
+	// oldMembership is the inline switch validateIdentity carried before the
+	// registration point existed, reconstructed here as the equivalence oracle.
+	oldMembership := func(s CodexReviewIntentState) bool {
+		switch s {
+		case CodexReviewIntentPreparing, CodexReviewIntentPrepared,
+			CodexReviewIntentStarting, CodexReviewIntentStarted, CodexReviewIntentClosed:
+			return true
+		default:
+			return false
+		}
+	}
+	cases := []CodexReviewIntentState{
+		CodexReviewIntentPreparing, CodexReviewIntentPrepared,
+		CodexReviewIntentStarting, CodexReviewIntentStarted, CodexReviewIntentClosed,
+		"", "Preparing", "PREPARED", " starting", "started ", "start",
+		"startedx", "xclosed", "prepared\n", "prep", "closed closed", "STARTED",
+	}
+	for _, s := range cases {
+		if got, want := s.valid(), oldMembership(s); got != want {
+			t.Errorf("valid(%q) = %v, inline membership = %v", string(s), got, want)
+		}
 	}
 }
 

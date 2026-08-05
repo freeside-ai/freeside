@@ -89,6 +89,26 @@ const (
 	CodexReviewIntentClosed    CodexReviewIntentState = "closed"
 )
 
+// AllCodexReviewIntentStates is the single registration point for the durable
+// launch-intent lifecycle, ordered by progression. A new state joins here and
+// the validity predicate, the exhaustive settlement switch, and the wardstore
+// transition table then force every from-state and dispatch decision. The zero
+// value is invalid by design.
+var AllCodexReviewIntentStates = []CodexReviewIntentState{
+	CodexReviewIntentPreparing, CodexReviewIntentPrepared,
+	CodexReviewIntentStarting, CodexReviewIntentStarted, CodexReviewIntentClosed,
+}
+
+func (s CodexReviewIntentState) valid() bool {
+	switch s {
+	case CodexReviewIntentPreparing, CodexReviewIntentPrepared,
+		CodexReviewIntentStarting, CodexReviewIntentStarted, CodexReviewIntentClosed:
+		return true
+	default:
+		return false
+	}
+}
+
 // CodexReviewIntentResource is earned evidence for one side effect. An empty
 // fingerprint deliberately represents the create-return/inspect crash window:
 // recovery may still act only when the durable unpredictable owner is present.
@@ -1107,9 +1127,7 @@ func (intent CodexReviewLaunchIntent) validateIdentity(runID string) error {
 		intent.ReviewContainer != codexReviewContainerName(runID) {
 		return errors.New("launch identity is invalid")
 	}
-	switch intent.State {
-	case CodexReviewIntentPreparing, CodexReviewIntentPrepared, CodexReviewIntentStarting, CodexReviewIntentStarted, CodexReviewIntentClosed:
-	default:
+	if !intent.State.valid() {
 		return errors.New("launch state is invalid")
 	}
 	expected := map[string]struct{}{
