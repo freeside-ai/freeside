@@ -3,6 +3,7 @@ package wardstore_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -333,5 +334,130 @@ func TestLeaserMapsEndedWindowForWardConvergence(t *testing.T) {
 func TestNewRejectsNilStore(t *testing.T) {
 	if _, err := wardstore.New(nil); err == nil {
 		t.Fatal("wardstore.New(nil) succeeded")
+	}
+}
+
+// TestCodexReviewIntentTransitionFromStates pins, for every registered launch
+// state, exactly which persistence transitions accept it as a from-state (a
+// forward move to the transition's target). The expectations map is keyed by
+// ward.AllCodexReviewIntentStates: a state absent from the map fails the test,
+// so a future durable state cannot merge without its from-state decision being
+// made here rather than silently inherited by the explicit close list.
+func TestCodexReviewIntentTransitionFromStates(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	adapters, err := wardstore.New(st)
+	if err != nil {
+		t.Fatalf("wardstore.New: %v", err)
+	}
+
+	type transition struct {
+		name string
+		to   ward.CodexReviewIntentState
+		run  func(runID string) error
+	}
+	transitions := []transition{
+		{"MarkPrepared", ward.CodexReviewIntentPrepared, func(id string) error {
+			return adapters.Journal.MarkCodexReviewIntentPrepared(ctx, id)
+		}},
+		{"MarkStarting", ward.CodexReviewIntentStarting, func(id string) error {
+			return adapters.Journal.MarkCodexReviewIntentStarting(ctx, id)
+		}},
+		{"MarkStarted", ward.CodexReviewIntentStarted, func(id string) error {
+			return adapters.Journal.MarkCodexReviewIntentStarted(ctx, id)
+		}},
+		{"Close", ward.CodexReviewIntentClosed, func(id string) error {
+			return adapters.Journal.CloseCodexReviewIntent(ctx, id)
+		}},
+	}
+
+	// acceptedFrom[state] lists the transitions that move that state forward.
+	// Every ward.AllCodexReviewIntentStates member must appear.
+	acceptedFrom := map[ward.CodexReviewIntentState][]string{
+		ward.CodexReviewIntentPreparing: {"MarkPrepared", "Close"},
+		ward.CodexReviewIntentPrepared:  {"MarkStarting", "Close"},
+		ward.CodexReviewIntentStarting:  {"MarkStarted", "Close"},
+		ward.CodexReviewIntentStarted:   {"Close"},
+		ward.CodexReviewIntentClosed:    {},
+	}
+	for _, s := range ward.AllCodexReviewIntentStates {
+		if _, ok := acceptedFrom[s]; !ok {
+			t.Fatalf("registered state %q absent from transition expectations; decide which "+
+				"Mark*/Close transitions accept it as a from-state", s)
+		}
+	}
+
+	// driveTo begins a fresh intent and advances it to target through the
+	// forward transitions, so each (state, transition) probe starts isolated.
+	driveTo := func(id string, target ward.CodexReviewIntentState) {
+		t.Helper()
+		intent := ward.CodexReviewLaunchIntent{
+			RunID: id, SpecDigest: strings.Repeat("a", 64), OwnershipToken: strings.Repeat("b", 32),
+			ShadowVolume: "shadow", Network: "network", ReviewContainer: "review",
+			Resources: []ward.CodexReviewIntentResource{{Name: "shadow", OwnershipToken: strings.Repeat("b", 32)}},
+			State:     ward.CodexReviewIntentPreparing,
+		}
+		if err := adapters.Journal.BeginCodexReviewIntent(ctx, intent); err != nil {
+			t.Fatalf("begin intent %q: %v", id, err)
+		}
+		var seq []func(string) error
+		switch target {
+		case ward.CodexReviewIntentPreparing:
+		case ward.CodexReviewIntentPrepared:
+			seq = []func(string) error{transitions[0].run}
+		case ward.CodexReviewIntentStarting:
+			seq = []func(string) error{transitions[0].run, transitions[1].run}
+		case ward.CodexReviewIntentStarted:
+			seq = []func(string) error{transitions[0].run, transitions[1].run, transitions[2].run}
+		case ward.CodexReviewIntentClosed:
+			seq = []func(string) error{transitions[3].run}
+		}
+		for _, step := range seq {
+			if err := step(id); err != nil {
+				t.Fatalf("drive %q to %q: %v", id, target, err)
+			}
+		}
+		got, err := adapters.Journal.GetCodexReviewIntent(ctx, id)
+		if err != nil || got.State != target {
+			t.Fatalf("seeded %q at %q, got %q (%v)", id, target, got.State, err)
+		}
+	}
+
+	for _, s := range ward.AllCodexReviewIntentStates {
+		want := acceptedFrom[s]
+		for _, tr := range transitions {
+			id := fmt.Sprintf("run-%s-%s", s, tr.name)
+			driveTo(id, s)
+			err := tr.run(id)
+			got, gerr := adapters.Journal.GetCodexReviewIntent(ctx, id)
+			if gerr != nil {
+				t.Fatalf("read %q after %s: %v", id, tr.name, gerr)
+			}
+			acceptedAsFrom := err == nil && s != tr.to && got.State == tr.to
+			shouldAccept := slices.Contains(want, tr.name)
+			if acceptedAsFrom != shouldAccept {
+				t.Errorf("%s from %q: acceptedAsFrom=%v want %v (err=%v, state=%q)",
+					tr.name, s, acceptedAsFrom, shouldAccept, err, got.State)
+			}
+			switch {
+			case shouldAccept:
+				// forward move already asserted by acceptedAsFrom above.
+			case s == tr.to:
+				// idempotent self-transition: no error, state unchanged.
+				if err != nil || got.State != s {
+					t.Errorf("%s on already-%q: err=%v state=%q, want no-op", tr.name, s, err, got.State)
+				}
+			default:
+				// rejected from-state: immutable conflict, state unchanged.
+				if !errors.Is(err, store.ErrImmutableConflict) || got.State != s {
+					t.Errorf("%s from %q: err=%v state=%q, want ErrImmutableConflict and unchanged",
+						tr.name, s, err, got.State)
+				}
+			}
+		}
 	}
 }
