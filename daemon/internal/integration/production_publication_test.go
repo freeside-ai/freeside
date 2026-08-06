@@ -1562,6 +1562,16 @@ func TestProductionReviewRetainsWorkspaceForPendingPreparation(t *testing.T) {
 	if info, err := os.Stat(faults.requestedWorkspace); err != nil || !info.IsDir() {
 		t.Fatalf("retained review workspace = %#v, %v", info, err)
 	}
+	content, err := os.ReadFile(filepath.Join(faults.requestedWorkspace, "README.md"))
+	if err != nil {
+		t.Fatalf("read retained candidate content: %v", err)
+	}
+	if string(content) != "production change\n" {
+		t.Fatalf("retained candidate content = %q, want %q", content, "production change\n")
+	}
+	if status := runGit(t, faults.requestedWorkspace, "status", "--porcelain"); status != "" {
+		t.Fatalf("retained candidate worktree is dirty:\n%s", status)
+	}
 	requestCalls, inspectCalls := faults.requestCalls, faults.inspectCalls
 	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
 		t.Fatalf("preparation retry before backoff = %#v, %v", result, err)
@@ -1577,6 +1587,109 @@ func TestProductionReviewRetainsWorkspaceForPendingPreparation(t *testing.T) {
 	}
 	if _, err := os.Stat(faults.requestedWorkspace); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("terminal review workspace still exists: %v", err)
+	}
+}
+
+func TestProductionReviewReseedsExistingWorkspaceForUnknownInvocation(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	faults := &faultReviewSource{
+		ReviewSource: p.reviewer, failRequestAfterStart: true,
+	}
+	p.reviewSource = faults
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	target := filepath.Join(
+		p.workDir, "production-publication", "review-workspaces",
+		string(engine.ProductionReviewInvocationID(p.runID, 1)),
+	)
+	writeFile(t, target, "pre-upgrade.txt", "unmaterialized\n")
+
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
+		t.Fatalf("same-invocation recovery = %#v, %v", result, err)
+	}
+	if faults.requestedWorkspace != target {
+		t.Fatalf("requested workspace = %q, want %q", faults.requestedWorkspace, target)
+	}
+	if _, err := os.Lstat(filepath.Join(target, "pre-upgrade.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pre-upgrade workspace content survived reseed: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(target, "README.md")) //nolint:gosec // test-owned retained-workspace path
+	if err != nil || string(content) != "production change\n" {
+		t.Fatalf("reseeded candidate content = %q, %v", content, err)
+	}
+	if status := runGit(t, target, "status", "--porcelain"); status != "" {
+		t.Fatalf("reseeded candidate worktree is dirty:\n%s", status)
+	}
+}
+
+func TestProductionReviewWorkspaceMaterializationFailureIsAtomic(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	faults := &faultReviewSource{ReviewSource: p.reviewer}
+	p.reviewSource = faults
+	injected := errors.New("injected review workspace materialization failure")
+	p.transport.failMaterialization(injected)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+
+	if _, err := p.reconcileLanes(); !errors.Is(err, injected) {
+		t.Fatalf("materialization failure = %v, want injected error", err)
+	}
+	if faults.requestCalls != 0 {
+		t.Fatalf("review launched after materialization failure: %d requests", faults.requestCalls)
+	}
+	target := filepath.Join(
+		p.workDir, "production-publication", "review-workspaces",
+		string(engine.ProductionReviewInvocationID(p.runID, 1)),
+	)
+	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed materialization left a durable workspace: %v", err)
+	}
+}
+
+func TestProductionReviewWorkspaceMaterializationRefusalIsDurable(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	faults := &faultReviewSource{ReviewSource: p.reviewer}
+	p.reviewSource = faults
+	refused := fmt.Errorf("injected candidate-tree refusal: %w", publish.ErrMaterializationRefused)
+	p.transport.failMaterialization(refused)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+
+	result, err := p.reconcileLanes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.BlockedItemsCreated != 1 || result.PublicationTasksCompleted != 1 {
+		t.Fatalf("materialization refusal result = %#v", result)
+	}
+	if faults.requestCalls != 0 {
+		t.Fatalf("review launched after materialization refusal: %d requests", faults.requestCalls)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if failure.Class != domain.ReviewFailureConfiguration || failure.Round != 1 {
+			t.Fatalf("materialization refusal = %#v", failure)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(
+		p.workDir, "production-publication", "review-workspaces",
+		string(engine.ProductionReviewInvocationID(p.runID, 1)),
+	)
+	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refused materialization left a durable workspace: %v", err)
+	}
+	result, err = p.reconcileLanes()
+	if err != nil || result.BlockedItemsCreated != 0 || result.PublicationTasksCompleted != 0 {
+		t.Fatalf("materialization refusal replay = %#v, %v", result, err)
+	}
+	if faults.requestCalls != 0 {
+		t.Fatalf("review launched while replaying materialization refusal: %d requests", faults.requestCalls)
 	}
 }
 

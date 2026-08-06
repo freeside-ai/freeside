@@ -283,14 +283,47 @@ type integrationTransport struct {
 	symlinkTarget  string
 	replaceParent  string
 
-	mu           sync.Mutex
-	fetches      int
-	fetchErr     error
-	fetchEntered chan struct{}
-	fetchRelease chan struct{}
-	pushes       int
-	fail         bool
-	conflict     bool
+	mu             sync.Mutex
+	fetches        int
+	fetchErr       error
+	fetchEntered   chan struct{}
+	fetchRelease   chan struct{}
+	materializeErr error
+	pushes         int
+	fail           bool
+	conflict       bool
+}
+
+func (tr *integrationTransport) RetainWorktree(
+	ctx context.Context, checkout engine.PublicationCheckout, dest, headSHA string,
+) error {
+	sealed, ok := checkout.(integrationCheckout)
+	if !ok || sealed.owner != tr {
+		return engine.ErrForeignPublicationCheckout
+	}
+	tr.mu.Lock()
+	err := tr.materializeErr
+	tr.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if got := runGit(tr.t, checkout.Dir(), "rev-parse", "--verify", headSHA+"^{commit}"); got != headSHA {
+		return fmt.Errorf("materialization resolved %s to %s", headSHA, got)
+	}
+	if err := os.CopyFS(dest, os.DirFS(checkout.Dir())); err != nil {
+		return err
+	}
+	runGit(tr.t, dest, "reset", "-q", "--hard", headSHA)
+	return nil
+}
+
+func (tr *integrationTransport) failMaterialization(err error) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.materializeErr = err
 }
 
 // blockNextFetch parks the next FetchBase inside the transport, which is how a
