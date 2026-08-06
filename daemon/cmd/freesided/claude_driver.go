@@ -24,6 +24,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -908,6 +909,58 @@ type claudeComposition struct {
 	reviewInvalidate func(repo string, number int)
 }
 
+// ErrProjectImageComposition marks an unattended composition whose configured
+// agent image cannot be bound to a matching immutable project-image record.
+// Refusing at startup turns the run-482 misconfiguration (a base the pinned
+// image was never built from) into a daemon-start failure instead of a run
+// that spends implementation before publication binding rejects it.
+var ErrProjectImageComposition = errors.New("configured agent image has no matching project-image record")
+
+// resolveProjectImagePreparation binds the configured agent image to the
+// immutable project_images provenance production publication already treats as
+// authority (engine.productionPublicationWorkflow.loadBinding), and returns the
+// workspace-hydration argv the launch command must run. It refuses when no
+// record names the image; when its recorded repository, repository ID, or
+// commit disagrees with the configured repo/base; or when the decoded
+// preparation command is not the fixed image-owned helper the builder and
+// onboarding policy admit (projectimage.PreparationPath). Naming each mismatch,
+// because the implementer must hydrate from an image built for exactly this
+// repository and base (a mismatched base would make the preparation helper's
+// manifest guard exit 42), running exactly the approved helper.
+//
+// The command re-gate is the reconstruction trust boundary (AGENTS.md daemon
+// conventions): PreparationCommand is a store field decoded here, so a
+// corrupted or tampered row that is otherwise self-consistent must not reach
+// the root launch argv. Validate only rejects empty/NUL commands and
+// shell-quoting only prevents injection, so neither bounds *which* command
+// runs; onboarding gates the same field to the identical fixed value, and this
+// boundary re-runs that gate rather than trusting the decoded argv.
+func resolveProjectImagePreparation(
+	image domain.ProjectImage, found bool, cfg claudeDriverConfig,
+) ([]string, error) {
+	switch {
+	case !found:
+		return nil, fmt.Errorf("agent image %q: %w", cfg.AgentImage, ErrProjectImageComposition)
+	case image.Repository != cfg.Repo:
+		return nil, fmt.Errorf(
+			"project-image repository %q disagrees with configured %q: %w",
+			image.Repository, cfg.Repo, ErrProjectImageComposition)
+	case image.RepositoryID != cfg.RepositoryID:
+		return nil, fmt.Errorf(
+			"project-image repository id %d disagrees with configured %d: %w",
+			image.RepositoryID, cfg.RepositoryID, ErrProjectImageComposition)
+	case image.CommitSHA != cfg.BaseSHA:
+		return nil, fmt.Errorf(
+			"project-image commit %s disagrees with configured base %s: %w",
+			image.CommitSHA, cfg.BaseSHA, ErrProjectImageComposition)
+	case !slices.Equal(image.PreparationCommand, []string{projectimage.PreparationPath}):
+		return nil, fmt.Errorf(
+			"project-image preparation command %q is not the approved %q: %w",
+			image.PreparationCommand, projectimage.PreparationPath, ErrProjectImageComposition)
+	}
+	return slices.Clone(image.PreparationCommand), nil
+}
+
 // composeClaudeDriver builds the production ward gate and Claude driver.
 // Nothing here reaches the network or the runtime; the caller runs the
 // conformance suite and the driver's restart reconciliation before the
@@ -921,6 +974,27 @@ func composeClaudeDriver(
 	promptPackage, err := ingestPromptPackage(blobs, cfg.PromptPackageFile)
 	if err != nil {
 		return nil, err
+	}
+	// Resolve the workspace-hydration command before any network-touching
+	// composition, so a base/image misconfiguration fails at startup. Only the
+	// unattended path runs a project image; the attended conversation-turn path
+	// carries no preparation and stays unchanged.
+	var preparation []string
+	if cfg.OperatingMode == domain.ModeUnattended {
+		var (
+			image domain.ProjectImage
+			found bool
+		)
+		if readErr := st.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			image, found, err = tx.GetProjectImageByRef(ctx, cfg.AgentImage)
+			return err
+		}); readErr != nil {
+			return nil, fmt.Errorf("resolve project image: %w", readErr)
+		}
+		if preparation, err = resolveProjectImagePreparation(image, found, cfg); err != nil {
+			return nil, err
+		}
 	}
 	authority, err := publish.NewInstallationAuthorityStore(cfg.StateRoot)
 	if err != nil {
@@ -1062,7 +1136,8 @@ func composeClaudeDriver(
 		Import: importer.Options{
 			Policy: importer.Policy{Allowlist: cfg.AllowedPaths},
 		},
-		Now: func() time.Time { return time.Now().UTC() },
+		Preparation: preparation,
+		Now:         func() time.Time { return time.Now().UTC() },
 	})
 	if driverErr != nil {
 		return nil, fmt.Errorf("compose claude driver: %w", driverErr)
