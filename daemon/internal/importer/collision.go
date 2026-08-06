@@ -161,7 +161,13 @@ var caseFold = cases.Fold()
 func foldedComponents(p string) []string {
 	comps := strings.Split(p, "/")
 	for i, c := range comps {
-		comps[i] = caseFold.String(norm.NFC.String(c))
+		comps[i] = CheckoutFoldComponent(c)
 	}
 	return comps
+}
+
+// CheckoutFoldComponent folds one repository path component using the case
+// and Unicode normalization posture of the reference checkout filesystem.
+func CheckoutFoldComponent(component string) string {
+	return caseFold.String(norm.NFC.String(component))
 }

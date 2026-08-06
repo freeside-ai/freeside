@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -317,6 +318,116 @@ func (r *netRunner) run(ctx context.Context, tok *InstallationToken, args ...str
 		}
 	}
 	return outBuf.Bytes(), errBuf.Bytes(), nil
+}
+
+// runTo is run's streaming-stdout counterpart for raw object extraction and
+// bounded plumbing listings. It deliberately classifies failures from stderr
+// only: stdout can be candidate blob content and must never enter error
+// classification or retention.
+func (r *netRunner) runTo(ctx context.Context, stdout io.Writer, args ...string) error {
+	argv := make([]string, 0, len(transportConfig(r.scheme))+len(args))
+	argv = append(argv, transportConfig(r.scheme)...)
+	argv = append(argv, args...)
+	cmd := exec.CommandContext(ctx, r.gitPath, argv...) //nolint:gosec // G204: fixed transport argv from daemon-validated SHAs
+	cmd.Dir = r.dir
+	cmd.Env = r.env
+	var errBuf bytes.Buffer
+	cmd.Stderr = &errBuf
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return &TransportGitError{
+			Args: args, ExitCode: -1, Refusal: RefusalUnknown, Err: err,
+		}
+	}
+	if err := cmd.Start(); err != nil {
+		return &TransportGitError{
+			Args: args, ExitCode: -1, Refusal: RefusalUnknown, Err: err,
+		}
+	}
+	if _, copyErr := io.Copy(stdout, stdoutPipe); copyErr != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		exitCode := -1
+		if cmd.ProcessState != nil {
+			exitCode = cmd.ProcessState.ExitCode()
+		}
+		return &TransportGitError{
+			Args:     args,
+			ExitCode: exitCode,
+			Refusal:  classifyTransportFailure(nil, errBuf.Bytes()),
+			Err:      copyErr,
+		}
+	}
+	if runErr := cmd.Wait(); runErr != nil {
+		exitCode := -1
+		if cmd.ProcessState != nil {
+			exitCode = cmd.ProcessState.ExitCode()
+		}
+		return &TransportGitError{
+			Args:     args,
+			ExitCode: exitCode,
+			Refusal:  classifyTransportFailure(nil, errBuf.Bytes()),
+			Err:      runErr,
+		}
+	}
+	return nil
+}
+
+// interact runs one plumbing process while the caller exchanges a bounded
+// request/response protocol over its stdin and stdout.
+func (r *netRunner) interact(
+	ctx context.Context,
+	interaction func(io.Writer, io.Reader) error,
+	args ...string,
+) error {
+	argv := make([]string, 0, len(transportConfig(r.scheme))+len(args))
+	argv = append(argv, transportConfig(r.scheme)...)
+	argv = append(argv, args...)
+	cmd := exec.CommandContext(ctx, r.gitPath, argv...) //nolint:gosec // G204: fixed plumbing argv; validated object IDs travel over stdin
+	cmd.Dir = r.dir
+	cmd.Env = r.env
+	var errBuf bytes.Buffer
+	cmd.Stderr = &errBuf
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return &TransportGitError{Args: args, ExitCode: -1, Refusal: RefusalUnknown, Err: err}
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return &TransportGitError{Args: args, ExitCode: -1, Refusal: RefusalUnknown, Err: err}
+	}
+	if err := cmd.Start(); err != nil {
+		return &TransportGitError{Args: args, ExitCode: -1, Refusal: RefusalUnknown, Err: err}
+	}
+	interactionErr := interaction(stdin, stdout)
+	closeErr := stdin.Close()
+	if interactionErr != nil || closeErr != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		cause := interactionErr
+		if cause == nil {
+			cause = closeErr
+		}
+		exitCode := -1
+		if cmd.ProcessState != nil {
+			exitCode = cmd.ProcessState.ExitCode()
+		}
+		return &TransportGitError{
+			Args: args, ExitCode: exitCode,
+			Refusal: classifyTransportFailure(nil, errBuf.Bytes()), Err: cause,
+		}
+	}
+	if runErr := cmd.Wait(); runErr != nil {
+		exitCode := -1
+		if cmd.ProcessState != nil {
+			exitCode = cmd.ProcessState.ExitCode()
+		}
+		return &TransportGitError{
+			Args: args, ExitCode: exitCode,
+			Refusal: classifyTransportFailure(nil, errBuf.Bytes()), Err: runErr,
+		}
+	}
+	return nil
 }
 
 // runAuthed executes one authenticated transport command with the

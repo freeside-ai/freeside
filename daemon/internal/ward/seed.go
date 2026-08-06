@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -88,46 +89,47 @@ func stageSeedSource(cfg Config, dir, declaredRepo string, declaredRepositoryID 
 		return "", failf(CheckWorkspaceSeeding, "seed source could not be opened under the daemon's seed root")
 	}
 	defer srcRoot.Close() //nolint:errcheck // read-only handle
+	snapshotRoot, err := os.OpenRoot(snapshot)
+	if err != nil {
+		return "", failf(CheckWorkspaceSeeding, "seed snapshot could not be opened")
+	}
+	defer snapshotRoot.Close() //nolint:errcheck // gate-owned snapshot handle
 
 	remaining := cfg.MaxSeedBytes
 	var entries, gitConfigContentIndex int
 	var gitConfigSourceBytes int64
 	gitConfigContentIndex = -1
 	var contentLines, execPaths, dirPaths []string
-	walkErr := fs.WalkDir(srcRoot.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return failf(CheckWorkspaceSeeding, "seed source could not be walked")
-		}
+	walkErr := walkRoot(srcRoot, func(rel string, d fs.DirEntry) (bool, error) {
 		entries++
 		if cfg.MaxSeedEntries > 0 && entries > cfg.MaxSeedEntries {
-			return failf(CheckWorkspaceSeeding, "seed source exceeds the entry budget of %d", cfg.MaxSeedEntries)
+			return false, failf(CheckWorkspaceSeeding, "seed source exceeds the entry budget of %d", cfg.MaxSeedEntries)
 		}
 		// A newline in a path would make the guest's line-oriented digest
 		// ambiguous, and no git checkout needs one. Refused rather than
 		// escaped, like every other delimiter this package meets.
 		if strings.ContainsAny(rel, "\n\r") {
-			return failf(CheckWorkspaceSeeding, "seed source contains a path with a line break")
+			return false, failf(CheckWorkspaceSeeding, "seed source contains a path with a line break")
 		}
-		dest := filepath.Join(snapshot, filepath.FromSlash(rel))
 		switch {
 		case d.IsDir():
 			if rel != "." {
-				if mkErr := os.Mkdir(dest, 0o700); mkErr != nil {
-					return failf(CheckWorkspaceSeeding, "seed snapshot directory could not be created")
+				if mkErr := snapshotRoot.Mkdir(filepath.FromSlash(rel), 0o700); mkErr != nil {
+					return false, failf(CheckWorkspaceSeeding, "seed snapshot directory could not be created")
 				}
 			}
 			// Directories are digested too: an empty one is invisible in a
 			// content-only digest, and an injected .git/rebase-apply changes
 			// git's behaviour without changing a single file.
 			dirPaths = append(dirPaths, findPath(rel))
-			return nil
+			return true, nil
 		case d.Type()&fs.ModeSymlink != 0:
 			// Named separately from the catch-all below because it is the case
 			// an honest checkout could plausibly hit, and a reader debugging a
 			// refusal should not have to guess which irregular kind it was.
-			return failf(CheckWorkspaceSeeding, "seed source contains a symbolic link")
+			return false, failf(CheckWorkspaceSeeding, "seed source contains a symbolic link")
 		case !d.Type().IsRegular():
-			return failf(CheckWorkspaceSeeding, "seed source contains a non-regular file")
+			return false, failf(CheckWorkspaceSeeding, "seed source contains a non-regular file")
 		}
 		// Copy and hash in one pass, bounded as it goes. The budget applies to
 		// bytes actually written, not to a size read before the copy, so a file
@@ -135,9 +137,9 @@ func stageSeedSource(cfg Config, dir, declaredRepo string, declaredRepositoryID 
 		// comes from the opened descriptor, not from the walk entry, for the
 		// same reason the open refuses to follow: the entry describes what was
 		// there at walk time.
-		sum, written, perm, copyErr := copySeedFile(srcRoot, rel, dest, remaining)
+		sum, written, perm, copyErr := copySeedFile(srcRoot, snapshotRoot, rel, remaining)
 		if copyErr != nil {
-			return copyErr
+			return false, copyErr
 		}
 		remaining -= written
 		contentLine := sum + "  " + findPath(rel)
@@ -150,14 +152,18 @@ func stageSeedSource(cfg Config, dir, declaredRepo string, declaredRepositoryID 
 		if perm&0o100 != 0 {
 			execPaths = append(execPaths, findPath(rel))
 		}
-		return nil
+		return false, nil
 	})
 	if walkErr != nil {
-		return "", walkErr
+		var failure *ConformanceFailure
+		if errors.As(walkErr, &failure) {
+			return "", walkErr
+		}
+		return "", failf(CheckWorkspaceSeeding, "seed source could not be walked")
 	}
 	// The observer reads the seeded base from this file; a source without it
 	// could only ever produce a failed attestation.
-	head, err := os.Lstat(filepath.Join(snapshot, filepath.FromSlash(gitHeadPath)))
+	head, err := snapshotRoot.Lstat(filepath.FromSlash(gitHeadPath))
 	if err != nil || !head.Mode().IsRegular() {
 		return "", failf(CheckWorkspaceSeeding, "seed source does not carry a regular %s", gitHeadPath)
 	}
@@ -172,21 +178,20 @@ func stageSeedSource(cfg Config, dir, declaredRepo string, declaredRepositoryID 
 	// source would leave the same window the snapshot exists to close: a
 	// checkout swapped mid-walk could put another repository into the snapshot,
 	// and its digest and HEAD would be self-consistent about the wrong thing.
-	if err := canonicalizeSeedRepoBinding(snapshot, declaredRepo, declaredRepositoryID); err != nil {
+	if err := canonicalizeSeedRepoBinding(snapshotRoot, declaredRepo, declaredRepositoryID); err != nil {
 		return "", err
 	}
 	if gitConfigContentIndex < 0 {
 		return "", failf(CheckWorkspaceSeeding, "seed source carries no git config to bind it to a repository")
 	}
-	configPath := filepath.Join(snapshot, ".git", "config")
-	configInfo, err := os.Stat(configPath)
+	configInfo, err := snapshotRoot.Stat(".git/config")
 	if err != nil || !configInfo.Mode().IsRegular() {
 		return "", failf(CheckWorkspaceSeeding, "canonical seed git config could not be examined")
 	}
 	if growth := configInfo.Size() - gitConfigSourceBytes; growth > remaining {
 		return "", failf(CheckWorkspaceSeeding, "canonical seed git config exceeds the byte budget")
 	}
-	configSum, err := fileSHA256(configPath)
+	configSum, err := rootFileSHA256(snapshotRoot, ".git/config")
 	if err != nil {
 		return "", failf(CheckWorkspaceSeeding, "canonical seed git config could not be hashed")
 	}
@@ -214,8 +219,9 @@ func findPath(rel string) string {
 // symlink in between would otherwise be followed, and the target's bytes, from
 // anywhere on the host, would be stored as a regular file whose digest and
 // irregular=absent report are perfectly self-consistent about the wrong thing.
-func copySeedFile(root *os.Root, rel, dest string, budget int64) (sum string, written int64, perm fs.FileMode, err error) {
-	in, err := root.OpenFile(rel, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+func copySeedFile(source, destination *os.Root, rel string, budget int64) (sum string, written int64, perm fs.FileMode, err error) {
+	rootPath := filepath.FromSlash(rel)
+	in, err := source.OpenFile(rootPath, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return "", 0, 0, failf(CheckWorkspaceSeeding, "seed source entry could not be opened without following a link")
 	}
@@ -228,7 +234,7 @@ func copySeedFile(root *os.Root, rel, dest string, budget int64) (sum string, wr
 		return "", 0, 0, failf(CheckWorkspaceSeeding, "seed source entry is not a regular file")
 	}
 	perm = st.Mode().Perm()
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm) //nolint:gosec // gate-owned snapshot under a fresh temp directory
+	out, err := destination.OpenFile(rootPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
 	if err != nil {
 		return "", 0, 0, failf(CheckWorkspaceSeeding, "seed snapshot entry could not be created")
 	}
@@ -314,9 +320,8 @@ var seedGitConfigKeyOrder = []string{
 // allowlisted key can hide credential bytes in its value. Full-line comments
 // and formatting are discarded when the canonical file is written, so no
 // ignored input reaches the credential-bearing writer.
-func canonicalizeSeedRepoBinding(dir, declaredRepo string, declaredRepositoryID int64) error {
-	configPath := filepath.Join(dir, ".git", "config")
-	f, err := os.Open(configPath) //nolint:gosec // inside the gate-owned snapshot
+func canonicalizeSeedRepoBinding(root *os.Root, declaredRepo string, declaredRepositoryID int64) error {
+	f, err := root.Open(".git/config")
 	if err != nil {
 		return failf(CheckWorkspaceSeeding, "seed source carries no readable git config to bind it to a repository")
 	}
@@ -390,7 +395,7 @@ func canonicalizeSeedRepoBinding(dir, declaredRepo string, declaredRepositoryID 
 	if _, ok := values[repoKey]; !ok {
 		return failf(CheckWorkspaceSeeding, "seed source git config does not carry exactly one repository binding")
 	}
-	idFile, err := os.Open(filepath.Join(dir, filepath.FromSlash(seedRepoBindingIDPath))) //nolint:gosec // inside the verified snapshot
+	idFile, err := root.Open(filepath.FromSlash(seedRepoBindingIDPath))
 	if err != nil {
 		return failf(CheckWorkspaceSeeding, "seed source carries no readable canonical repository id binding")
 	}
@@ -407,7 +412,7 @@ func canonicalizeSeedRepoBinding(dir, declaredRepo string, declaredRepositoryID 
 	if repositoryID != declaredRepositoryID {
 		return failf(CheckWorkspaceSeeding, "seed source is bound to a different repository identity than the declared base")
 	}
-	if err := os.WriteFile(configPath, []byte(canonicalSeedGitConfig(values)), 0o600); err != nil {
+	if err := root.WriteFile(".git/config", []byte(canonicalSeedGitConfig(values)), 0o600); err != nil {
 		return failf(CheckWorkspaceSeeding, "canonical seed git config could not be written")
 	}
 	return nil
@@ -507,6 +512,19 @@ func parseSeedGitConfigSection(line string) (section, subsection string, ok bool
 
 func fileSHA256(p string) (string, error) {
 	f, err := os.Open(p) //nolint:gosec // a path the gate is in the middle of validating, under its own seed root
+	if err != nil {
+		return "", err
+	}
+	defer f.Close() //nolint:errcheck // read-only handle
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func rootFileSHA256(root *os.Root, rel string) (string, error) {
+	f, err := root.Open(filepath.FromSlash(rel))
 	if err != nil {
 		return "", err
 	}
