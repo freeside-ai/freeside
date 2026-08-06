@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run-real-work.sh — the §11 1A.2 complete unattended production exercise.
 #
-# Usage: run-real-work.sh <spec-file> <resolved-policy-keys.json> <publication.json>
+# Usage: run-real-work.sh <spec-file> <resolved-policy-keys.json> <publication.json> [work-unit.json]
 #
 # Submits one operator-approved work item through `freesided submit`,
 # runs the daemon with the production Claude driver until the run reaches
@@ -56,16 +56,23 @@
 # attribution fields. Before execution, the daemon resolves that account from
 # the App registration selected by its installation token and requires an
 # exact match. The fields contain no credential or publication authority.
+# The optional fourth argument is the §5.18 work-unit declaration JSON that
+# `freesided submit -work-unit` captures (completion criterion, bound issue,
+# dependencies). It is operator input like the other three: its canonical
+# digest joins the run-identity derivation, so a declared submission is a
+# distinct work item from an undeclared submission of the same spec,
+# policy, and publication bytes.
 set -euo pipefail
 
 spec_file="${1:-}"
 policy_file="${2:-}"
 publication_file="${3:-}"
+work_unit_file="${4:-}"
 if [[ -z "$spec_file" || -z "$policy_file" || -z "$publication_file" ]]; then
-  echo "usage: run-real-work.sh <spec-file> <resolved-policy-keys.json> <publication.json>" >&2
+  echo "usage: run-real-work.sh <spec-file> <resolved-policy-keys.json> <publication.json> [work-unit.json]" >&2
   exit 2
 fi
-for path in "$spec_file" "$policy_file" "$publication_file"; do
+for path in "$spec_file" "$policy_file" "$publication_file" ${work_unit_file:+"$work_unit_file"}; do
   if [[ ! -f "$path" ]]; then
     echo "run-real-work: $path is not a file" >&2
     exit 2
@@ -145,12 +152,17 @@ echo "building freesided" >&2
 
 echo "submitting the work item" >&2
 submit_log="$workdir/submit.json"
-"$workdir/freesided" submit \
-  -db "$db_path" \
-  --spec "$spec_file" \
-  --policy "$policy_file" \
-  --publication "$publication_file" \
-  --project "$FREESIDE_REAL_RUN_PROJECT" | tee "$submit_log"
+submit_args=(
+  -db "$db_path"
+  --spec "$spec_file"
+  --policy "$policy_file"
+  --publication "$publication_file"
+  --project "$FREESIDE_REAL_RUN_PROJECT"
+)
+if [[ -n "$work_unit_file" ]]; then
+  submit_args+=(--work-unit "$work_unit_file")
+fi
+"$workdir/freesided" submit "${submit_args[@]}" | tee "$submit_log"
 
 invocation_id="$(sed -n 's/.*"invocation_id":"\([^"]*\)".*/\1/p' "$submit_log")"
 run_id="$(sed -n 's/.*"run_id":"\([^"]*\)".*/\1/p' "$submit_log")"
