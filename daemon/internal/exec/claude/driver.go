@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -60,6 +62,18 @@ type Config struct {
 	// the declared path allowlist. Authority widens it with the exact
 	// admitted trust profile before every import.
 	Import importer.Options
+	// Preparation is the project image's workspace-hydration argv (the
+	// image-owned freeside-project-prepare helper). When set, the launch
+	// command runs it in the root phase so the implementer can execute the
+	// admitted verification recipe over hydrated dependencies (#522). It is
+	// composition config resolved from the immutable project_images record, not
+	// per-attempt state, so recovery re-derives the same command; empty leaves
+	// the attended launch command unchanged. New re-gates it to empty or the
+	// fixed helper (projectimage.PreparationPath): the value reaches root argv,
+	// so this exported constructor is a trust boundary that re-runs the policy
+	// gate rather than trusting an arbitrary caller-supplied command (AGENTS.md
+	// daemon conventions), the same gate composition and onboarding apply.
+	Preparation []string
 	// Now supplies the pinned instants a replayed pipeline reuses.
 	Now func() time.Time
 }
@@ -83,6 +97,7 @@ type Driver struct {
 	volumes    AuthStoreVolumes
 	preJob     func(context.Context, domain.InvocationID) error
 	imports    importer.Options
+	prepare    []string
 	now        func() time.Time
 	lifetime   context.Context
 
@@ -139,6 +154,13 @@ func New(cfg Config) (*Driver, error) {
 		return nil, errors.New("new claude driver: nil auth store volumes")
 	case cfg.Now == nil:
 		return nil, errors.New("new claude driver: nil clock")
+	case len(cfg.Preparation) > 0 &&
+		!slices.Equal(cfg.Preparation, []string{projectimage.PreparationPath}):
+		// The preparation argv reaches the root launch command; accept only the
+		// fixed image-owned helper (or none) so an arbitrary caller-supplied
+		// command cannot execute as root beside the credential mount.
+		return nil, errors.New(
+			"new claude driver: preparation must be empty or the fixed project-image helper")
 	}
 	if err := os.MkdirAll(cfg.Dir, 0o700); err != nil {
 		return nil, fmt.Errorf("new claude driver: %w", err)
@@ -157,7 +179,8 @@ func New(cfg Config) (*Driver, error) {
 		exports: cfg.Exports, outcomes: cfg.Outcomes, authority: cfg.Authority,
 		artifacts: cfg.Artifacts, volumes: cfg.Volumes,
 		preJob:  cfg.PreJob,
-		imports: cfg.Import, now: cfg.Now, lifetime: cfg.Lifetime,
+		imports: cfg.Import, prepare: slices.Clone(cfg.Preparation),
+		now: cfg.Now, lifetime: cfg.Lifetime,
 		running:    map[domain.InvocationID]*session{},
 		recovering: map[domain.InvocationID]struct{}{},
 	}, nil
@@ -212,7 +235,11 @@ func (d *Driver) StartWithInputs(
 		InvocationID: id, RunID: RunIDFor(id), Phase: phaseSeeding, Spec: spec,
 		Seed: filepath.Join(d.seedRoot, RunIDFor(id)), Prompt: prompt,
 		Inputs: materialized, Instructions: instructions,
-		RecordedAt: now, CommitDate: now,
+		// Capture the composition-derived hydration argv into the durable
+		// record so recovery rebuilds the launch command from the intent, not
+		// from a d.prepare that a later deploy or mode change may have altered.
+		Preparation: slices.Clone(d.prepare),
+		RecordedAt:  now, CommitDate: now,
 	}
 	if err != nil {
 		if !errors.Is(err, ErrUnsupportedStart) {

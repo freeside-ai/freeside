@@ -18,7 +18,10 @@ ON CONFLICT (image_ref) DO NOTHING`
 	getProjectImageSQL = `
 SELECT id, repository, repository_id, commit_sha, recipe_digest, base_image_ref, image_ref, body
 FROM project_images WHERE id = ?`
-	getProjectImageBodySQL     = `SELECT body FROM project_images WHERE image_ref = ?`
+	getProjectImageBodySQL  = `SELECT body FROM project_images WHERE image_ref = ?`
+	getProjectImageByRefSQL = `
+SELECT id, repository, repository_id, commit_sha, recipe_digest, base_image_ref, image_ref, body
+FROM project_images WHERE image_ref = ?`
 	projectImageRefRecordedSQL = `SELECT EXISTS(
 SELECT 1 FROM project_images WHERE image_ref = ?)`
 	listProjectImagesSQL = `
@@ -58,6 +61,31 @@ func (tx *ReadTx) ProjectImageRefRecorded(
 		return false, fmt.Errorf("lookup project image ref %q: %w", imageRef, err)
 	}
 	return recorded, nil
+}
+
+// GetProjectImageByRef reconstructs the immutable project-image record that
+// produced one image reference, reporting absence rather than erroring. The
+// reference is globally unique (RecordProjectImage keys on image_ref), so this
+// binds a configured agent image back to the provenance production publication
+// already treats as authority, without knowing which repository built it.
+func (tx *ReadTx) GetProjectImageByRef(
+	ctx context.Context, imageRef domain.ImageRef,
+) (domain.ProjectImage, bool, error) {
+	if imageRef == "" {
+		return domain.ProjectImage{}, false, fmt.Errorf("get project image by ref: empty image_ref")
+	}
+	image, err := scanProjectImage(tx.tx.QueryRowContext(ctx, getProjectImageByRefSQL, imageRef))
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ProjectImage{}, false, nil
+	}
+	if err != nil {
+		return domain.ProjectImage{}, false, fmt.Errorf("get project image by ref %q: %w", imageRef, err)
+	}
+	if image.ImageRef != imageRef {
+		return domain.ProjectImage{}, false,
+			fmt.Errorf("get project image by ref %q: %w", imageRef, errRowInconsistent)
+	}
+	return image, true, nil
 }
 
 // GetProjectImage reconstructs one immutable project-image result.

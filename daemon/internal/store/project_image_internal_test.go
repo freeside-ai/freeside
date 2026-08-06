@@ -116,6 +116,40 @@ func TestProjectImageRoundTripAndReplay(t *testing.T) {
 	}
 }
 
+func TestGetProjectImageByRef(t *testing.T) {
+	ctx := context.Background()
+	s := openProjectImageStore(t)
+	image := testProjectImage(t)
+	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		return tx.RecordProjectImage(ctx, image)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		got, found, err := tx.GetProjectImageByRef(ctx, image.ImageRef)
+		if err != nil {
+			return err
+		}
+		if !found || got.ID != image.ID || got.CommitSHA != image.CommitSHA {
+			t.Fatalf("by-ref lookup = (%+v, %v), want image %s", got, found, image.ID)
+		}
+		_, found, err = tx.GetProjectImageByRef(
+			ctx, domain.ImageRef("example.test/project@sha256:"+strings.Repeat("e", 64)))
+		if err != nil {
+			return err
+		}
+		if found {
+			t.Fatal("unrecorded image ref reported as found")
+		}
+		if _, _, err := tx.GetProjectImageByRef(ctx, ""); err == nil {
+			t.Fatal("empty image ref was accepted")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProjectImageImmutableConflictAndTampering(t *testing.T) {
 	ctx := context.Background()
 	s := openProjectImageStore(t)

@@ -19,6 +19,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -70,6 +71,19 @@ type intent struct {
 	// down must not silently re-target an in-flight run, and the admission
 	// snapshot carries only the digest, not the bytes the gate re-hashes.
 	Instructions ward.VendorInstructions `json:"instructions"`
+	// Preparation is the project-image workspace-hydration argv captured from
+	// composition at start, so recovery rebuilds the launch command from the
+	// record rather than from mutable composition state. agentCommand folds it
+	// into Agent.Command, which ward binds into SpecDigest, so a recovery that
+	// re-derived it from the current d.prepare would diverge whenever
+	// composition changed (a deploy that adds hydration to an in-flight run, an
+	// attended restart) and strand the run on an unrecoverable digest mismatch.
+	// Persisting it here is the same byte-identical-replay reason the image is
+	// sourced from Spec.ImageRef and the prompt from Prompt. Empty on the
+	// attended path (omitempty keeps those records byte-identical) and on any
+	// record written before this field existed, so an old intent reproduces its
+	// original no-prepare command.
+	Preparation []string `json:"preparation,omitempty"`
 	// Export carries what the gate released, recorded the moment Handoff
 	// returns. The gate closes its journal at that point and refuses to
 	// recover a closed record, so without this the whole import-and-record
@@ -113,6 +127,14 @@ func (i intent) validate() error {
 	case i.Export != nil && i.Export.Replay != nil &&
 		i.Export.CommitPlanPresent != (i.Export.Replay.CommitPlanDigest != nil):
 		return fmt.Errorf("driver intent %q replay disagrees with commit-plan presence", i.InvocationID)
+	case len(i.Preparation) > 0 &&
+		!slices.Equal(i.Preparation, []string{projectimage.PreparationPath}):
+		// A decoded record is a reconstruction trust boundary: Preparation
+		// reaches the root launch argv, so the same gate New and composition
+		// apply is re-run here and fails closed on a tampered non-helper argv.
+		return fmt.Errorf(
+			"driver intent %q preparation must be empty or the fixed project-image helper",
+			i.InvocationID)
 	}
 	if i.Export != nil && i.Export.Replay != nil && i.Export.Replay.CommitPlanDigest != nil &&
 		!contentaddr.Valid(string(*i.Export.Replay.CommitPlanDigest)) {
