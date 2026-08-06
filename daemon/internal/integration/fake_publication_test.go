@@ -385,6 +385,18 @@ func (tr *integrationTransport) PushHead(
 	if !ok || sealed.owner != tr {
 		return publish.PushResult{}, engine.ErrForeignPublicationCheckout
 	}
+	// The real Git transport pushes from the checkout working tree, so it reads
+	// checkout.Dir(); model that dependency here. A pre-publication review that
+	// consumed (moved and deleted) the publication checkout would leave this
+	// path missing, which the real transport would fail on but a double that
+	// never touched Dir() would silently mask (issue #527 checkout-vs-workspace
+	// seam).
+	if dir := checkout.Dir(); dir != "" {
+		if _, err := os.Stat(dir); err != nil {
+			return publish.PushResult{}, fmt.Errorf(
+				"publication checkout unavailable for push: %w", err)
+		}
+	}
 	// Branch and head come off the gate capability, as they do in the real
 	// transport: a double that took them from separately supplied input
 	// could stand in for a push the Publisher never cleared.

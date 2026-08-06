@@ -191,8 +191,6 @@ type productionPublicationHarness struct {
 	reviewer                  *fake.ReviewSource
 	reviewSource              exec.ReviewSource
 	reviewConfigurationDigest domain.Digest
-	observedBase              string
-	observedHead              string
 	workflow                  *engine.Engine
 	invocation                domain.InvocationID
 	recipeReadTimeout         time.Duration
@@ -265,10 +263,9 @@ func newProductionPublicationHarness(t *testing.T, resultHead string) *productio
 	p := &productionPublicationHarness{
 		publicationHarness: h, runID: runID, projectID: projectID,
 		image: image, driver: driver, replay: replay,
-		room:     &productionRoom{recipe: bytes.Clone(h.recipe)},
-		reviewer: fake.NewReviewSource(), observedBase: h.baseSHA,
+		room:                      &productionRoom{recipe: bytes.Clone(h.recipe)},
+		reviewer:                  fake.NewReviewSource(),
 		reviewConfigurationDigest: fake.DefaultReviewConfigurationDigest,
-		observedHead:              replay.HeadSHA,
 		invocation:                submitted.InvocationID,
 	}
 	p.reviewSource = p.reviewer
@@ -484,15 +481,6 @@ func (p *productionPublicationHarness) newEngineForMode(
 			ReviewSource:              p.reviewSource,
 			ReviewRecovery:            reviewRecovery,
 			ReviewConfigurationDigest: p.reviewConfigurationDigest,
-			ObserveBase: func(context.Context, string, string) (string, error) {
-				return p.observedBase, nil
-			},
-			ObservePull: func(_ context.Context, repo string, number int) (publish.PullObservation, error) {
-				return publish.PullObservation{
-					Number: number, State: "open", HeadSHA: p.observedHead,
-					HeadRepo: repo, BaseRef: "main", BaseRepo: repo,
-				}, nil
-			},
 			NewRoom: func(image domain.ProjectImage) (engine.ProductionVerificationRoom, error) {
 				if image.ID != p.image.ID {
 					return nil, domain.ErrParentKeyMismatch
@@ -837,13 +825,31 @@ func TestProductionSupersededInstructionRequestAdvancesToNewRound(t *testing.T) 
 }
 
 func TestProductionPersistedCleanReviewRegatesRequestAuthority(t *testing.T) {
+	// A persisted clean review record is replayed by the pre-publication review
+	// gate, which re-gates the persisted request authority before treating the
+	// record as a pass (issue #527): a rewritten-but-valid row fails closed with
+	// no publication effect.
 	p := newProductionPublicationHarness(t, "")
-	p.workflow = p.newEngine(t, productionCrashSeams{
-		afterReady: func() error { return errors.New("stop after persisted clean review") },
-	}, true)
 	p.startAndRecordExport(t)
-	if _, err := p.reconcileLanes(); err == nil {
-		t.Fatal("persisted clean review seam did not interrupt reconciliation")
+	_, current, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: engine.ProductionReviewInvocationID(p.runID, 1),
+		RunID:        p.runID, Round: 1, Provider: "openai", ModelConfiguration: "codex/test",
+		ConfigurationDigest: fake.DefaultReviewConfigurationDigest,
+		InstructionDigest:   current.ResultDigest, CostOwner: "test",
+		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
+		CompletionEvidence: productionDigest([]byte("prior clean review")), Outcome: domain.ReviewClean,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		return tx.PutReviewRecord(p.ctx, record, nil)
+	}); err != nil {
+		t.Fatal(err)
 	}
 	fault := &faultReviewSource{
 		ReviewSource:    p.reviewer,
@@ -858,6 +864,9 @@ func TestProductionPersistedCleanReviewRegatesRequestAuthority(t *testing.T) {
 	if _, err := p.reconcileLanes(); err == nil || fault.authorityCalls != fault.failAuthorityAt {
 		t.Fatalf("persisted clean review authority re-gate = calls %d, %v",
 			fault.authorityCalls, err)
+	}
+	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+		t.Fatalf("authority re-gate failure published = %d refs, %d prs", refs, prs)
 	}
 }
 
@@ -984,8 +993,11 @@ func TestProductionReviewFindingsEscalateWithoutReady(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 1 ||
-		result.PublicationTasksCompleted != 1 {
+		result.PublicationTasksCompleted != 1 || result.LastPRNumber != 0 {
 		t.Fatalf("findings result = %#v", result)
+	}
+	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+		t.Fatalf("findings escalation produced forge effects = %d refs, %d prs", refs, prs)
 	}
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		if _, err := tx.GetAttentionItem(p.ctx, domain.ItemID("production-ready-"+string(p.runID))); !errors.Is(err, store.ErrNotFound) {
@@ -1005,9 +1017,15 @@ func TestProductionReviewFindingsEscalateWithoutReady(t *testing.T) {
 	}
 }
 
-func TestProductionCleanReviewIsInvalidatedByBaseAdvance(t *testing.T) {
+func TestProductionBaseAdvanceAfterReviewBlocksAtPublisher(t *testing.T) {
+	// Under pre-publication review (issue #527, decision 1) the §7 review runs
+	// against the admitted base, so a base advance discovered at publication is
+	// owned by the publisher's exact-base gate, not a review dispute: the
+	// candidate reviews clean, then the publisher refuses the moved base and the
+	// run blocks with no forge effect.
 	p := newProductionPublicationHarness(t, "")
-	p.observedBase = strings.Repeat("f", 40)
+	p.audit.AuditedCommitSHA = strings.Repeat("f", 40)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	p.startAndRecordExport(t)
 	result, err := p.reconcileLanes()
 	if err != nil {
@@ -1016,15 +1034,25 @@ func TestProductionCleanReviewIsInvalidatedByBaseAdvance(t *testing.T) {
 	if result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 1 {
 		t.Fatalf("base-advanced result = %#v", result)
 	}
+	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+		t.Fatalf("base advance produced forge effects = %d refs, %d prs", refs, prs)
+	}
+	blocked, err := p.attention.GetAttentionItem(p.ctx,
+		domain.ItemID("production-publish-blocked-"+string(p.runID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked.Item.Reason != "The target base advanced after admission; rerun and reverify against the current base." {
+		t.Fatalf("base-advance block reason = %q", blocked.Item.Reason)
+	}
+	// The candidate was reviewed clean before publication was attempted.
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
-		item, err := tx.GetAttentionItem(p.ctx,
-			domain.ItemID(fmt.Sprintf("production-review-%s-1", p.runID)))
+		review, err := tx.LatestReviewRecord(p.ctx, p.runID)
 		if err != nil {
 			return err
 		}
-		if item.Type != domain.AttentionReviewDispute ||
-			!slices.Equal(item.RequestedDecision, []domain.Action{domain.ActionDiscuss, domain.ActionStop}) {
-			t.Fatalf("base-advance attention = %#v", item)
+		if review.Outcome != domain.ReviewClean || review.HeadSHA != p.replay.HeadSHA {
+			t.Fatalf("pre-publication review = %#v", review)
 		}
 		return nil
 	}); err != nil {
@@ -1032,27 +1060,225 @@ func TestProductionCleanReviewIsInvalidatedByBaseAdvance(t *testing.T) {
 	}
 }
 
-func TestProductionCleanReviewIsInvalidatedByPublishedHeadAdvance(t *testing.T) {
+// TestProductionCleanReviewIsInvalidatedByPublishedHeadAdvance retired with the
+// pre-publication re-anchor (issue #527): no PR head exists during the review
+// pass, so a published-head advance has no counterpart in the review gate. That
+// class returns as #524's external-response capability over an already-published
+// PR, covered there by the #496/#514 active-resource invalidation machinery.
+
+func TestProductionCleanReviewReplayPublishesWithoutNewRound(t *testing.T) {
+	// Record replay across a crash between the clean review pass and publication:
+	// the review round completes and its record persists, the publishing push
+	// then fails transiently, and a later pass replays the persisted record and
+	// publishes without invoking a new review round (issue #527).
 	p := newProductionPublicationHarness(t, "")
-	p.observedHead = strings.Repeat("f", 40)
+	fault := &faultReviewSource{ReviewSource: p.reviewer}
+	p.reviewSource = fault
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	p.startAndRecordExport(t)
-	result, err := p.reconcileLanes()
-	if err != nil {
-		t.Fatal(err)
+	p.transport.failNextPush()
+	// A transient publishing push backs off into an empty result, not a loud
+	// error; the clean review round has already completed and persisted.
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
+		t.Fatalf("transient publishing push = %#v, %v", result, err)
 	}
-	if result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 1 {
-		t.Fatalf("head-advanced result = %#v", result)
+	if fault.requestCalls != 1 {
+		t.Fatalf("first pass review requests = %d, want 1", fault.requestCalls)
 	}
+	if _, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID("production-ready-"+string(p.runID)),
+	); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("readiness created before publication: %v", err)
+	}
+	// The clean review record persisted before the failed push.
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
-		item, err := tx.GetAttentionItem(p.ctx,
-			domain.ItemID(fmt.Sprintf("production-review-%s-1", p.runID)))
+		review, err := tx.LatestReviewRecord(p.ctx, p.runID)
 		if err != nil {
 			return err
 		}
-		if item.Type != domain.AttentionReviewDispute ||
-			!strings.Contains(item.Reason, "head changed") ||
-			!slices.Equal(item.RequestedDecision, []domain.Action{domain.ActionDiscuss, domain.ActionStop}) {
-			t.Fatalf("head-advance attention = %#v", item)
+		if review.Outcome != domain.ReviewClean || review.Round != 1 {
+			t.Fatalf("persisted review before push = %#v", review)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Later pass past the transient backoff: the failed-push flag has cleared, so
+	// publication succeeds by replaying the record without a new review round.
+	p.now = p.now.Add(time.Minute)
+	result, err := p.reconcileLanes()
+	if err != nil || result.ReadyItemsCreated != 1 || result.PublicationTasksCompleted != 1 ||
+		result.LastPRNumber == 0 {
+		t.Fatalf("record-replay publish = %#v, %v", result, err)
+	}
+	if fault.requestCalls != 1 {
+		t.Fatalf("record replay invoked a new review round: requests = %d", fault.requestCalls)
+	}
+	p.assertReady(t)
+}
+
+func TestProductionPublishedWithoutCleanRecordFailsClosed(t *testing.T) {
+	// Decision 2: a published run reaches readiness only through a clean,
+	// candidate-bound review record. When the latest review state is not one
+	// (here, a later record bound to a foreign head, standing in for a run
+	// published under the retired post-publication order), the readiness re-gate
+	// fails closed rather than deriving silent readiness (issue #527).
+	p := newProductionPublicationHarness(t, "")
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterPublication: func() error {
+			return errors.New("stop after publication, before readiness")
+		},
+	}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("afterPublication seam did not interrupt reconciliation")
+	}
+	foreign, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: engine.ProductionReviewInvocationID(p.runID, 2),
+		RunID:        p.runID, Round: 2, Provider: "openai", ModelConfiguration: "codex/test",
+		ConfigurationDigest: fake.DefaultReviewConfigurationDigest,
+		InstructionDigest:   productionDigest([]byte("foreign instructions")), CostOwner: "test",
+		BaseSHA: p.baseSHA, HeadSHA: strings.Repeat("e", 40), CompletedAt: p.now,
+		CompletionEvidence: productionDigest([]byte("foreign candidate review")), Outcome: domain.ReviewClean,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		return tx.PutReviewRecord(p.ctx, foreign, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	// Decision 2's fail-closed re-gate must be an operator-visible durable
+	// hold, not a lane-fatal error: a non-nil reconcile error is exactly what
+	// makes runReconcileLoop exit, halting every queued publication and never
+	// creating the promised disposition (#527, Codex round 3). So the pass
+	// returns nil while holding this one run, matching the sibling recipe
+	// re-gate's disposition (Codex round 4 aligned the mechanism).
+	result, err := p.reconcileLanes()
+	if err != nil {
+		t.Fatalf("fail-closed re-gate crashed the lane instead of holding: %v", err)
+	}
+	if result.BlockedItemsCreated != 1 || result.ReadyItemsCreated != 0 ||
+		result.PublicationTasksCompleted != 0 {
+		t.Fatalf("fail-closed re-gate outcome = %#v", result)
+	}
+	if _, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID("production-ready-"+string(p.runID)),
+	); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("fail-closed re-gate created readiness: %v", err)
+	}
+	blocked, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
+	)
+	if err != nil ||
+		!strings.Contains(blocked.Item.Reason, "lacks a clean, candidate-bound review record") {
+		t.Fatalf("fail-closed hold item = %#v, %v", blocked, err)
+	}
+	// The lane keeps running: a follow-up pass returns nil (the loop never
+	// exited) and idempotently re-holds without readying the run.
+	replay, err := p.reconcileLanes()
+	if err != nil || replay.BlockedItemsCreated != 0 || replay.ReadyItemsCreated != 0 {
+		t.Fatalf("lane did not survive the hold or was not idempotent = %#v, %v", replay, err)
+	}
+}
+
+func TestProductionPublishedReviewConfigMustStayProfileApproved(t *testing.T) {
+	// Finding 5 (Codex round 4): the readiness recovery re-gate must be no
+	// weaker than the pre-publication gate on the trust-profile-approval axis.
+	// A published run whose review record matches the daemon's current reviewer
+	// configuration, but whose configuration the pinned trust profile no longer
+	// approves (profile.Review.ConfigDigest diverged), must fail closed to an
+	// operator-visible hold, exactly as the pre-publication gate would. Before
+	// the fix, assertReviewedCandidate compared only against the current daemon
+	// configuration and would have derived readiness under an unapproved config.
+	p := newProductionPublicationHarness(t, "")
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterPublication: func() error {
+			return errors.New("stop after publication, before readiness")
+		},
+	}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("afterPublication seam did not interrupt reconciliation")
+	}
+	// A clean, candidate-bound record produced under a drifted reviewer
+	// configuration that the daemon now runs but the trust profile never
+	// approved (profile.Review.ConfigDigest stays fake.DefaultReviewConfigurationDigest).
+	drifted := domain.Digest("sha256:" + strings.Repeat("d", 64))
+	_, instructions, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: engine.ProductionReviewInvocationID(p.runID, 2),
+		RunID:        p.runID, Round: 2, Provider: "openai", ModelConfiguration: "codex/test",
+		ConfigurationDigest: drifted,
+		InstructionDigest:   instructions.ResultDigest, CostOwner: "test",
+		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA, CompletedAt: p.now,
+		CompletionEvidence: productionDigest([]byte("clean under drifted config")), Outcome: domain.ReviewClean,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		return tx.PutReviewRecord(p.ctx, record, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The daemon reviewer configuration drifts to match the record; the pinned
+	// trust profile still approves only the original configuration.
+	p.reviewConfigurationDigest = drifted
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	result, err := p.reconcileLanes()
+	if err != nil {
+		t.Fatalf("profile-unapproved re-gate crashed the lane instead of holding: %v", err)
+	}
+	if result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 1 ||
+		result.PublicationTasksCompleted != 0 {
+		t.Fatalf("profile-unapproved config derived readiness or wrong disposition = %#v", result)
+	}
+	if _, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID("production-ready-"+string(p.runID)),
+	); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("profile-unapproved config created readiness: %v", err)
+	}
+	blocked, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
+	)
+	if err != nil ||
+		!strings.Contains(blocked.Item.Reason, "trust-approved reviewer configuration") {
+		t.Fatalf("profile-unapproved hold item = %#v, %v", blocked, err)
+	}
+}
+
+func TestProductionPendingReviewPublishesNothing(t *testing.T) {
+	// A review still running (StatusPending) keeps the task queued with no
+	// publication effect: no branch push, no PR, nothing readied, no record yet
+	// (issue #527 acceptance: a pending review blocks publication).
+	p := newProductionPublicationHarness(t, "")
+	reviewID := engine.ProductionReviewInvocationID(p.runID, 1)
+	p.reviewer.Script(reviewID, fake.ReviewScript{
+		PendingInspects: 2, Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("still-running review")),
+		},
+	})
+	p.startAndRecordExport(t)
+	result, err := p.reconcileLanes()
+	if err != nil || result.PublicationTasksCompleted != 0 || result.ReadyItemsCreated != 0 ||
+		result.BlockedItemsCreated != 0 || result.LastPRNumber != 0 {
+		t.Fatalf("pending review = %#v, %v", result, err)
+	}
+	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+		t.Fatalf("pending review produced forge effects = %d refs, %d prs", refs, prs)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.LatestReviewRecord(p.ctx, p.runID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("pending review wrote a record: %v", err)
 		}
 		return nil
 	}); err != nil {
@@ -1960,19 +2186,20 @@ func TestFinalizedProductionPublicationSurvivesLaterRecipeRevocation(t *testing.
 }
 
 func TestProductionReviewRegatesRecipeAuthorityBeforeReadiness(t *testing.T) {
+	// A candidate reviews clean and publishes, but a crash between publication and
+	// readiness leaves no ready item. If recipe approval is revoked before the
+	// recovery pass, readiness is re-gated on the recipe and held, never derived
+	// (issue #527: the readiness path re-gates recipe approval after the clean
+	// review pass); restoring approval recovers it to ready.
 	p := newProductionPublicationHarness(t, "")
-	reviewID := engine.ProductionReviewInvocationID(p.runID, 1)
-	p.reviewer.Script(reviewID, fake.ReviewScript{
-		PendingInspects: 1, Outcome: fake.OutcomeComplete,
-		Result: exec.ReviewResult{
-			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
-			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
-			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("delayed clean review")),
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterPublication: func() error {
+			return errors.New("stop after publication, before readiness")
 		},
-	})
+	}, true)
 	p.startAndRecordExport(t)
-	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
-		t.Fatalf("pending review = %#v, %v", result, err)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("afterPublication seam did not interrupt reconciliation")
 	}
 	revokedRecipes := map[domain.Digest]bool{
 		productionDigest([]byte("unrelated recipe")): true,
@@ -1981,7 +2208,7 @@ func TestProductionReviewRegatesRecipeAuthorityBeforeReadiness(t *testing.T) {
 	result, err := p.reconcileLanes()
 	if err != nil || result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 1 ||
 		result.PublicationTasksCompleted != 0 {
-		t.Fatalf("review completed after recipe revocation = %#v, %v", result, err)
+		t.Fatalf("readiness after recipe revocation = %#v, %v", result, err)
 	}
 	if _, err := p.attention.GetAttentionItem(
 		p.ctx, domain.ItemID("production-ready-"+string(p.runID)),

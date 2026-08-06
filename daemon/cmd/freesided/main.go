@@ -550,13 +550,7 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 			ReviewRecovery:            claudeWiring.reviewRecovery,
 			ReviewConfigurationDigest: claudeWiring.reviewConfigurationDigest,
 			ReviewHostInstructions:    claudeWiring.reviewHostInstructions,
-			ObserveBase: func(observeCtx context.Context, repo, baseRef string) (string, error) {
-				return claudeWiring.observeBaseTip(observeCtx, domain.ScheduleBaseWatch{
-					Repo: repo, BaseRef: baseRef,
-				})
-			},
-			ObservePull: claudeWiring.observePull,
-			HoldOnly:    cfg.Claude.OperatingMode != domain.ModeUnattended,
+			HoldOnly:                  cfg.Claude.OperatingMode != domain.ModeUnattended,
 			NewRoom: func(image domain.ProjectImage) (engine.ProductionVerificationRoom, error) {
 				return ward.NewProjectImageRoom(claudeWiring.containerBin, image)
 			},
