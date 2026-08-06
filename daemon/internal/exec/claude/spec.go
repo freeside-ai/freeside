@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"path"
+	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -36,6 +38,18 @@ const (
 	workspaceSizeMB int64 = 4096
 	agentUID              = "1001"
 	agentGID              = "1001"
+	// writerOutcomePrepareFailed is the pre-agent sentinel the root wrapper
+	// writes when the project image's preparation command (implementer
+	// workspace hydration) exits nonzero. It is distinct from the
+	// token-missing 86 so the failure reads as an environment failure rather
+	// than an agent failure, and the agent never launches.
+	writerOutcomePrepareFailed = 87
+	// prepareHome mirrors the verification room's HOME for the preparation
+	// command (ward's ProjectImageRoom runs it with HOME=/tmp/freeside-home and
+	// LC_ALL=C over the workspace). The implementer hydrates with the same
+	// invocation, so it resolves the exact lockfile-pinned toolchain the
+	// verifier will. Keep it in step with verification_room.go.
+	prepareHome = "/tmp/freeside-home"
 )
 
 // ProviderEndpoints is the provider_only egress allowlist for the Claude
@@ -88,7 +102,17 @@ const (
 // which the repo walk skips. The root launcher declares that transcript as
 // sensitive evidence before dropping privilege, so it crosses only through
 // the evidence channel after the writer is gone.
-func agentCommand(prompt, sessionID string, invocationID domain.InvocationID) []string {
+//
+// When prepare is non-empty the root phase hydrates the workspace with the
+// project image's preparation command before ownership is handed to the agent,
+// so the implementer can run the admitted verification recipe over the same
+// dependencies the verifier will (#522). Hydration runs as root before the
+// chown sweep, so the hydrated node_modules is dropped to the agent user with
+// the rest of the tree; a nonzero prepare exit writes the pre-agent sentinel
+// and never launches the agent. The tree is removed again in the epilogue
+// before the outcome marker, so the git-blind export walk never sees it. An
+// empty prepare keeps the attended launch command byte-identical.
+func agentCommand(prompt, sessionID string, invocationID domain.InvocationID, prepare []string) []string {
 	descriptor, err := json.Marshal(export.EvidenceSourceManifest{
 		Version: export.EvidenceSourceVersion,
 		Sources: []export.EvidenceSource{{
@@ -101,10 +125,22 @@ func agentCommand(prompt, sessionID string, invocationID domain.InvocationID) []
 	if err != nil {
 		panic("marshal fixed Claude transcript descriptor: " + err.Error())
 	}
+	// hydrate runs before the chown sweep; guardPrefix turns the token check
+	// into a two-branch guard that reports the prepare failure and skips the
+	// agent. Both are empty/"if " with no preparation, so the command stays
+	// byte-identical for the attended path.
+	hydrate, guardPrefix := "", "if "
+	if len(prepare) > 0 {
+		hydrate = "prepare_status=0; set +e; ( cd " + shellQuote(workspaceDir) +
+			" && HOME=" + shellQuote(prepareHome) + " LC_ALL=C " + shellJoin(prepare) +
+			" ); prepare_status=$?; set -e; "
+		guardPrefix = "if [ \"$prepare_status\" -ne 0 ]; then status=" +
+			strconv.Itoa(writerOutcomePrepareFailed) + "; elif "
+	}
 	return []string{"sh", "-c", fmt.Sprintf(
 		"set -eu; "+
 			"chmod 0711 /root; "+
-			"rm -rf %s; "+
+			"rm -rf %s; %s"+
 			"find %s -mindepth 1 -maxdepth 1 -exec chown -hR %s:%s {} +; "+
 			"chown 0:0 %s; chmod 1777 %s; "+
 			"mkdir -p %s; chown 0:0 %s; chmod 1777 %s; "+
@@ -112,7 +148,7 @@ func agentCommand(prompt, sessionID string, invocationID domain.InvocationID) []
 			"printf '%%s\\n' %s > %s; chown 0:0 %s; chmod 0644 %s; "+
 			"chown %s:%s %s %s; chmod 0700 %s %s; "+
 			"cd %s; status=86; "+
-			"if [ -s %s ] && token=$(cat %s); then "+
+			"%s[ -s %s ] && token=$(cat %s); then "+
 			"set +e; HOME=/root CLAUDE_CONFIG_DIR=%s DISABLE_AUTOUPDATER=1 "+
 			"DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 "+
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 IS_SANDBOX=1 "+
@@ -125,7 +161,8 @@ func agentCommand(prompt, sessionID string, invocationID domain.InvocationID) []
 			"> %s 2>&1; status=$?; set -e; unset token; fi; "+
 			"rm -rf -- %s; "+
 			"printf '%%s %%s\\n' %s \"$status\" > %s; sync; exit \"$status\"",
-		shellQuote(path.Dir(transcriptPath)), shellQuote(workspaceDir),
+		shellQuote(path.Dir(transcriptPath)), hydrate,
+		shellQuote(workspaceDir),
 		agentUID, agentGID,
 		shellQuote(workspaceDir), shellQuote(workspaceDir),
 		shellQuote(path.Dir(transcriptPath)), shellQuote(path.Dir(transcriptPath)),
@@ -138,6 +175,7 @@ func agentCommand(prompt, sessionID string, invocationID domain.InvocationID) []
 		shellQuote(ward.ClaudeContinuityTarget), shellQuote(ward.ClaudeSessionScratchTarget),
 		shellQuote(ward.ClaudeContinuityTarget), shellQuote(ward.ClaudeSessionScratchTarget),
 		shellQuote(workspaceDir),
+		guardPrefix,
 		shellQuote(credentialTokenPath), shellQuote(credentialTokenPath),
 		shellQuote(ward.ClaudeConfigRootTarget), agentUID, agentGID, shellQuote(prompt),
 		shellQuote(sessionID), shellQuote(instructionBundlePath),
@@ -145,6 +183,15 @@ func agentCommand(prompt, sessionID string, invocationID domain.InvocationID) []
 		shellQuote(ward.WriterNoncePlaceholder),
 		shellQuote(writerOutcomePath),
 	)}
+}
+
+// shellJoin renders an argv as space-separated single-quoted shell words.
+func shellJoin(args []string) string {
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		quoted[i] = shellQuote(arg)
+	}
+	return strings.Join(quoted, " ")
 }
 
 func sessionIDFor(id domain.InvocationID) string {
@@ -245,7 +292,7 @@ func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, 
 		},
 		Agent: ward.AgentSpec{
 			Image:             string(spec.ImageRef),
-			Command:           agentCommand(in.Prompt, sessionIDFor(id), id),
+			Command:           agentCommand(in.Prompt, sessionIDFor(id), id, in.Preparation),
 			Env:               agentEnv(),
 			EgressProfile:     spec.EgressProfile,
 			OutcomeMarkerPath: writerOutcomePath,

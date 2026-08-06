@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -29,7 +30,7 @@ import (
 // matching the whole script, so ordinary edits stay cheap.
 func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 	t.Parallel()
-	script := strings.Join(agentCommand("do the work", "session-1", "inv-1"), " ")
+	script := strings.Join(agentCommand("do the work", "session-1", "inv-1", nil), " ")
 	evidenceDir := path.Dir(transcriptPath)
 	controlDir := path.Dir(writerOutcomePath)
 
@@ -106,6 +107,76 @@ func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 		if !strings.Contains(script, field) {
 			t.Errorf("transcript descriptor omits %q", field)
 		}
+	}
+}
+
+// The implementer hydration (#522) is a security-relevant ordering: it must
+// run as root before the ownership sweep so the hydrated tree is dropped to
+// the agent with everything else, a nonzero exit must skip the agent behind a
+// distinct pre-agent sentinel, and the tree must be removed before the outcome
+// marker so the git-blind export never sees it.
+func TestAgentCommandHydratesBeforeTheOwnershipDrop(t *testing.T) {
+	t.Parallel()
+	prepare := []string{"/usr/local/bin/freeside-project-prepare"}
+	script := strings.Join(agentCommand("do the work", "session-1", "inv-1", prepare), " ")
+
+	at := func(needle string) int {
+		t.Helper()
+		i := strings.Index(script, needle)
+		if i < 0 {
+			t.Fatalf("agent command omits %q:\n%s", needle, script)
+		}
+		return i
+	}
+
+	// The preparation runs in the workspace with the verifier's HOME and
+	// LC_ALL, so the implementer resolves the same lockfile-pinned toolchain.
+	hydrate := at("( cd '" + workspaceDir + "' && HOME='" + prepareHome +
+		"' LC_ALL=C '/usr/local/bin/freeside-project-prepare' )")
+	prepareStatus := at("prepare_status=$?")
+	sweep := at("chown -hR " + agentUID + ":" + agentGID)
+	drop := at("setpriv --reuid=" + agentUID)
+	marker := at("> '" + writerOutcomePath + "'")
+	cleanup := at("rm -rf -- '" + workspaceDir + "/node_modules'")
+
+	if hydrate > sweep {
+		t.Error("hydration runs after the ownership sweep, so the hydrated tree is not dropped to the agent")
+	}
+	if prepareStatus > sweep {
+		t.Error("the preparation exit status is captured after the ownership sweep")
+	}
+
+	// A nonzero preparation exit writes the distinct sentinel and gates the
+	// agent behind the elif, so the agent never launches on a failed hydrate.
+	guard := at("if [ \"$prepare_status\" -ne 0 ]; then status=" +
+		strconv.Itoa(writerOutcomePrepareFailed) + "; elif [ -s '" + credentialTokenPath + "' ]")
+	if guard > drop {
+		t.Error("the preparation-failure guard is not established before the agent launch")
+	}
+	if cleanup < drop || cleanup > marker {
+		t.Error("the hydrated tree is not removed after the writer and before its outcome marker")
+	}
+	if writerOutcomePrepareFailed == 86 {
+		t.Error("the preparation sentinel collides with the token-missing status")
+	}
+}
+
+// The attended launch command carries no hydration when no preparation is
+// configured, so the 1A.0 conversation-turn path is byte-for-byte unchanged.
+func TestAgentCommandWithoutPreparationIsUnchanged(t *testing.T) {
+	t.Parallel()
+	base := strings.Join(agentCommand("do the work", "session-1", "inv-1", nil), " ")
+	empty := strings.Join(agentCommand("do the work", "session-1", "inv-1", []string{}), " ")
+	if base != empty {
+		t.Fatal("nil and empty preparation produce different launch commands")
+	}
+	for _, marker := range []string{"prepare_status", prepareHome, "LC_ALL=C"} {
+		if strings.Contains(base, marker) {
+			t.Errorf("launch command carries hydration text %q without a preparation command", marker)
+		}
+	}
+	if !strings.Contains(base, "status=86; if [ -s '"+credentialTokenPath+"' ]") {
+		t.Error("the token guard is not the plain single-branch form without a preparation command")
 	}
 }
 

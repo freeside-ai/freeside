@@ -1203,10 +1203,22 @@ func (d *Driver) recoverIntent(ctx context.Context, in intent) error {
 		// means the engine does not mint a fresh attempt).
 		return d.commitLost(ctx, in.InvocationID)
 	case ward.RecoveryFailed:
+		// The pre-agent preparation sentinel is indistinguishable from an agent
+		// failure under the bare status line, so name it: the workspace-hydration
+		// helper ran and exited nonzero before the agent started (e.g. its
+		// manifest guard exit 42), which is an environment fault the operator
+		// triages differently from an agent exit.
+		summary := fmt.Sprintf("Claude writer exited with status %d.", recovered.FailureStatus)
+		if recovered.FailureStatus == writerOutcomePrepareFailed {
+			summary = fmt.Sprintf(
+				"Workspace preparation failed before the agent started (status %d): "+
+					"the project-image hydration helper exited nonzero.",
+				writerOutcomePrepareFailed)
+		}
 		return d.commitRecoveredTerminal(in.InvocationID, exec.StageResult{
 			InvocationID: in.InvocationID,
 			Status:       exec.StatusFailed,
-			Summary:      truncateSummary(fmt.Sprintf("Claude writer exited with status %d.", recovered.FailureStatus)),
+			Summary:      truncateSummary(summary),
 		})
 	case ward.RecoveryCanceled:
 		return d.commitRecoveredTerminal(in.InvocationID, exec.StageResult{

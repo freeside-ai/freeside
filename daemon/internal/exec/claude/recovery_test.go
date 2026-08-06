@@ -126,6 +126,36 @@ func TestRecoveredWriterFailureCommitsCanonicalOutcome(t *testing.T) {
 	}
 }
 
+// The pre-agent preparation sentinel must recover as a named preparation
+// failure, not the bare status line, so the operator triages an environment
+// fault (the hydration helper exited nonzero) apart from an agent failure.
+func TestRecoveredPreparationFailureNamesTheEnvironmentFault(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	outcomes := newStubExports()
+	gate := &stubGate{
+		recoverFn: func(string, ward.HandoffSpec) (*ward.RecoveryResult, error) {
+			return &ward.RecoveryResult{
+				Outcome: ward.RecoveryFailed, FailureStatus: writerOutcomePrepareFailed,
+			}, nil
+		},
+	}
+	d := newTestDriver(t, gate, outcomes)
+	orphan(t, d, phaseRunning, nil)
+
+	if err := d.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	result, err := d.Collect(ctx, testInvoke)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if result.Status != exec.StatusFailed ||
+		!strings.Contains(result.Summary, "Workspace preparation failed") {
+		t.Fatalf("result = %+v, want a named preparation failure", result)
+	}
+}
+
 func TestRecoveredCancellationCommitsCanonicalOutcome(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
