@@ -87,12 +87,6 @@ type ProductionPublicationConfig struct {
 	ReviewRecovery            func(context.Context) error
 	ReviewConfigurationDigest domain.Digest
 	ReviewHostInstructions    ReviewHostInstructions
-	// ObserveBase returns the current target ref SHA. A clean pass against an
-	// older base is never promoted to readiness.
-	ObserveBase func(context.Context, string, string) (string, error)
-	// ObservePull returns the current published resource. A human or external
-	// actor pushing a new PR head invalidates the exact-head review pass.
-	ObservePull func(context.Context, string, int) (publish.PullObservation, error)
 	// HoldOnly composes the durable publication boundary without advancing its
 	// queue. Attended startup uses it to recognize publication tasks admitted
 	// by an earlier unattended process while preserving the attended ban on
@@ -168,8 +162,6 @@ type productionPublicationWorkflow struct {
 	reviewRecoveryPending     bool
 	reviewConfigurationDigest domain.Digest
 	reviewHostInstructions    ReviewHostInstructions
-	observeBase               func(context.Context, string, string) (string, error)
-	observePull               func(context.Context, string, int) (publish.PullObservation, error)
 	holdOnly                  bool
 	recipeReadTimeout         time.Duration
 	holdRetryInterval         time.Duration
@@ -206,7 +198,7 @@ func newProductionPublicationWorkflow(
 	if st == nil || attention == nil || cfg.Transport == nil || cfg.Publisher == nil ||
 		cfg.Artifacts == nil || cfg.NewRoom == nil ||
 		cfg.ReviewRecovery == nil ||
-		(!cfg.HoldOnly && (cfg.ReviewSource == nil || cfg.ObserveBase == nil || cfg.ObservePull == nil ||
+		(!cfg.HoldOnly && (cfg.ReviewSource == nil ||
 			!contentaddr.Valid(string(cfg.ReviewConfigurationDigest)) ||
 			cfg.ReviewHostInstructions.validate() != nil)) {
 		return nil, errors.New("nil dependency")
@@ -251,7 +243,7 @@ func newProductionPublicationWorkflow(
 			Digest:  cfg.ReviewHostInstructions.Digest,
 			Body:    bytes.Clone(cfg.ReviewHostInstructions.Body),
 		},
-		observeBase: cfg.ObserveBase, observePull: cfg.ObservePull, holdOnly: cfg.HoldOnly,
+		holdOnly:          cfg.HoldOnly,
 		recipeReadTimeout: cfg.RecipeReadTimeout,
 		holdRetryInterval: cfg.HoldRetryInterval, now: cfg.Now,
 		holdRetryAfter:    make(map[domain.RunID]time.Time),
@@ -1384,7 +1376,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			if err != nil {
 				return productionTaskOutcome{}, err
 			}
-			return w.completePublishedTask(ctx, task, binding, checkpoint, published, checkoutDir, reviewInstructions)
+			return w.completePublishedTask(ctx, task, binding, checkpoint, published, reviewInstructions)
 		}
 		published, outcomeFound, err := w.loadPublicationOutcome(
 			ctx, task, candidate, w.publisher.VerifyOutcome,
@@ -1403,7 +1395,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			return productionTaskOutcome{}, err
 		}
 		if outcomeFound {
-			return w.completePublishedTask(ctx, task, binding, checkpoint, published, checkoutDir, reviewInstructions)
+			return w.completePublishedTask(ctx, task, binding, checkpoint, published, reviewInstructions)
 		}
 	}
 	if !w.approvedRecipes[binding.image.RecipeDigest] {
@@ -1442,6 +1434,27 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		)
 	}
 
+	// The §7 review gate precedes every publication effect: a verification-clean
+	// candidate is reviewed against its exact base and head before any branch
+	// push or PR creation (issue #527). A pending review keeps the task queued
+	// with nothing published; an escalated one is terminal-blocked with no PR;
+	// only a clean pass falls through to publication, where the trust and
+	// exact-base gates still re-gate the candidate.
+	reviewState, err := w.reconcileReviewGate(
+		ctx, task, binding, checkpoint, checkoutDir, reviewInstructions,
+	)
+	if err != nil {
+		return productionTaskOutcome{}, err
+	}
+	switch reviewState {
+	case productionReviewPending:
+		return productionTaskOutcome{}, nil
+	case productionReviewEscalated:
+		return w.completeReviewEscalationTask(ctx, task, binding)
+	case productionReviewPassed:
+		// Fall through to the publication path below.
+	}
+
 	candidate := productionCandidate(task, binding, checkpoint)
 	if published, found, err := w.loadPublicationOutcome(
 		ctx, task, candidate, w.publisher.VerifyOutcome,
@@ -1458,7 +1471,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		}
 		return productionTaskOutcome{}, err
 	} else if found {
-		return w.completePublishedTask(ctx, task, binding, checkpoint, published, checkoutDir, reviewInstructions)
+		return w.completePublishedTask(ctx, task, binding, checkpoint, published, reviewInstructions)
 	}
 	published, err := w.publisher.PublishExecutionAfterGateAndFinalize(
 		ctx,
@@ -1519,7 +1532,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 				errors.Join(err, errProductionCrashSeam))
 		}
 	}
-	return w.completePublishedTask(ctx, task, binding, checkpoint, published, checkoutDir, reviewInstructions)
+	return w.completePublishedTask(ctx, task, binding, checkpoint, published, reviewInstructions)
 }
 
 type productionReviewGateState uint8
@@ -1605,7 +1618,25 @@ func (w *productionPublicationWorkflow) ensureReviewWorkspace(
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return "", err
 	}
-	if err := os.Rename(checkout, target); err != nil {
+	// Copy, not move: under the pre-publication review anchor the publication
+	// checkout must survive at its original path for the subsequent PushHead
+	// when a synchronous review source completes inline within the same pass.
+	// The async path is unaffected: the request pass's scratch checkout is
+	// cleaned by its own defer, while this durable workspace copy persists for
+	// later polling passes. Stage into a sibling temp dir and rename into place
+	// so a failed or interrupted copy never leaves a partial workspace that the
+	// idempotent guard above would accept on a later pass (os.Rename is atomic;
+	// os.CopyFS is not). os.CopyFS preserves file modes (exec bits) and symlinks.
+	staging, err := os.MkdirTemp(filepath.Dir(target), "staging-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(staging) //nolint:errcheck // best-effort staging cleanup
+	staged := filepath.Join(staging, "workspace")
+	if err := os.CopyFS(staged, os.DirFS(checkout)); err != nil {
+		return "", fmt.Errorf("retain review workspace: %w", err)
+	}
+	if err := os.Rename(staged, target); err != nil {
 		return "", fmt.Errorf("retain review workspace: %w", err)
 	}
 	return target, nil
@@ -1638,7 +1669,6 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	task productionPublicationTask,
 	binding productionBinding,
 	checkpoint productionVerificationCheckpoint,
-	published publish.Result,
 	workspace string,
 	reviewInstructions exec.ReviewInstructionBinding,
 ) (productionReviewGateState, error) {
@@ -1726,19 +1756,6 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			); err != nil {
 				return productionReviewPending, fmt.Errorf(
 					"re-gate persisted review instruction authority: %w", err)
-			}
-			staleReason, err := w.reviewPassStaleReason(ctx, binding, published, *latestRecord)
-			if err != nil {
-				return productionReviewPending, err
-			}
-			if staleReason != "" {
-				if err := w.putReviewAttention(ctx, task, *latestRecord,
-					staleReason,
-					domain.AttentionReviewDispute,
-				); err != nil {
-					return productionReviewPending, err
-				}
-				return productionReviewEscalated, nil
 			}
 			// This clean-pass re-entry is downstream of the record write that
 			// already cleared the durable row; clear its durable twin too so a
@@ -2020,19 +2037,6 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		}
 		return productionReviewEscalated, nil
 	}
-	staleReason, err := w.reviewPassStaleReason(ctx, binding, published, record)
-	if err != nil {
-		return productionReviewPending, err
-	}
-	if staleReason != "" {
-		if err := w.putReviewAttention(ctx, task, record,
-			staleReason,
-			domain.AttentionReviewDispute,
-		); err != nil {
-			return productionReviewPending, err
-		}
-		return productionReviewEscalated, nil
-	}
 	return productionReviewPassed, nil
 }
 
@@ -2144,38 +2148,6 @@ func (w *productionPublicationWorkflow) reconstructReviewRetryDeadline(
 	// Deadline already passed: proceed now; the next transient overwrites the
 	// row and any terminal outcome clears it.
 	return false, nil
-}
-
-func (w *productionPublicationWorkflow) reviewPassStaleReason(
-	ctx context.Context,
-	binding productionBinding,
-	published publish.Result,
-	record domain.ReviewRecord,
-) (string, error) {
-	currentBase, err := w.observeBase(ctx, binding.admission.Base.Repo, binding.admission.Base.BaseRef)
-	if err != nil {
-		return "", productionPublicationRetryableError(
-			fmt.Errorf("observe base after review: %w", err),
-		)
-	}
-	if currentBase != record.BaseSHA {
-		return "The target base advanced after the clean pass; its review and verification evidence are stale.", nil
-	}
-	pull, err := w.observePull(ctx, binding.admission.Base.Repo, published.PRNumber)
-	if err != nil {
-		return "", productionPublicationRetryableError(
-			fmt.Errorf("observe pull request after review: %w", err),
-		)
-	}
-	if pull.Number != published.PRNumber || pull.State != "open" || pull.HeadSHA == "" ||
-		pull.HeadRepo != binding.admission.Base.Repo || pull.BaseRepo != binding.admission.Base.Repo ||
-		pull.BaseRef != binding.admission.Base.BaseRef {
-		return "The published pull request changed identity or state during review; its review evidence cannot satisfy readiness.", nil
-	}
-	if pull.HeadSHA != record.HeadSHA {
-		return "The published pull request head changed after the review began; the exact-head pass is stale.", nil
-	}
-	return "", nil
 }
 
 func (w *productionPublicationWorkflow) latestReviewState(
@@ -2310,11 +2282,14 @@ func (w *productionPublicationWorkflow) putReviewAttention(
 	return w.attention.PutItem(ctx, item)
 }
 
+// completeReviewEscalationTask terminalizes a run whose §7 review escalated
+// before publication: no branch push, no PR, no publication intent. The durable
+// AttentionItem written by the gate (PRHeadSHA = task.HeadSHA) is the operator
+// surface; the terminal outcome carries no PR number (issue #527, decision 3).
 func (w *productionPublicationWorkflow) completeReviewEscalationTask(
 	ctx context.Context,
 	task productionPublicationTask,
 	binding productionBinding,
-	published publish.Result,
 ) (productionTaskOutcome, error) {
 	accepted, err := w.recordCompletedTerminal(ctx, binding.run, task)
 	if err != nil {
@@ -2324,8 +2299,52 @@ func (w *productionPublicationWorkflow) completeReviewEscalationTask(
 		return productionTaskOutcome{}, err
 	}
 	return productionTaskOutcome{
-		completed: true, accepted: accepted, blocked: true, prNumber: published.PRNumber,
+		completed: true, accepted: accepted, blocked: true,
 	}, nil
+}
+
+// assertReviewedCandidate is the readiness reconstruction boundary: it fails
+// closed unless the latest review state is a clean pass bound to this exact
+// candidate (base and head), authoritative over any failure round, produced
+// under the current, trust-profile-approved reviewer configuration and
+// instruction authority. To stay no weaker than the pre-publication gate it
+// replaces on recovery, it re-checks the same profile axes that gate enforces
+// before accepting a clean record: the Freeside-invoked review mode and the
+// trust profile's approval of the current reviewer configuration
+// (profile.Review.ConfigDigest == reviewConfigurationDigest). A missing,
+// stale, findings, or foreign-candidate record, a non-Freeside review mode, or
+// a reviewer configuration the trust profile no longer approves blocks
+// readiness rather than deriving it silently, so a run published under the
+// retired post-publication order that never recorded such a review is held for
+// manual operator disposition instead (issue #527, decision 2; Codex round 4
+// closed the profile-approval axis). A fully-ready old-order run, which does
+// carry a clean candidate-bound record under an approved configuration,
+// re-derives readiness idempotently through this same check.
+func (w *productionPublicationWorkflow) assertReviewedCandidate(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	reviewInstructions exec.ReviewInstructionBinding,
+) error {
+	record, failure, err := w.latestReviewState(ctx, task.RunID)
+	if err != nil {
+		return err
+	}
+	if binding.profile.Review.Mode != domain.ReviewFreesideInvoked ||
+		binding.profile.Review.ConfigDigest != w.reviewConfigurationDigest ||
+		record == nil ||
+		record.Outcome != domain.ReviewClean ||
+		record.ConfigurationDigest != w.reviewConfigurationDigest ||
+		record.InstructionDigest != reviewInstructions.ResultDigest ||
+		record.BaseSHA != binding.admission.Base.BaseSHA ||
+		record.HeadSHA != task.HeadSHA ||
+		(failure != nil && failure.Round >= record.Round) {
+		return fmt.Errorf(
+			"published candidate lacks a clean, candidate-bound review record under the current trust-approved reviewer configuration: %w",
+			domain.ErrParentKeyMismatch,
+		)
+	}
+	return nil
 }
 
 func (w *productionPublicationWorkflow) completePublishedTask(
@@ -2334,20 +2353,36 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 	binding productionBinding,
 	checkpoint productionVerificationCheckpoint,
 	published publish.Result,
-	checkoutDir string,
 	reviewInstructions exec.ReviewInstructionBinding,
 ) (productionTaskOutcome, error) {
-	reviewState, err := w.reconcileReviewGate(
-		ctx, task, binding, checkpoint, published, checkoutDir, reviewInstructions,
-	)
-	if err != nil {
+	// Readiness reconstruction boundary: a published candidate reaches readiness
+	// only through a clean, candidate-bound review record under the current
+	// reviewer configuration, failing closed otherwise (issue #527, decision 2).
+	// The §7 review gate itself runs before publication in reconcileTask; this
+	// re-gate keeps every crash-recovery call site correct, including an
+	// old-order run that published before recording a clean, candidate-bound
+	// review.
+	if err := w.assertReviewedCandidate(ctx, task, binding, reviewInstructions); err != nil {
+		// Decision 2 promises operator-visible disposition, not a lane-fatal
+		// error. The re-gate stays fail-closed (never silent readiness); only
+		// its failure handling is task-scoped here. On a fail-closed mismatch
+		// (ErrParentKeyMismatch) this holds the one run with an operator-visible
+		// item, exactly as the sibling recipe-approval re-gate below does, so
+		// the reconcile lane keeps advancing every other queued publication and
+		// the run recovers if the reviewer configuration is restored (an
+		// old-order run with no record instead stays held until the operator
+		// dispositions it). A store read failure from latestReviewState is
+		// environmental and still propagates for retry. The already-published
+		// PR carries no binding on this held item, matching the recipe re-gate's
+		// pre-existing behavior across axes (tracked as a follow-up, not #527).
+		if errors.Is(err, domain.ErrParentKeyMismatch) {
+			return w.holdBlockedTask(
+				ctx, task, checkpoint.Imported,
+				"Publication is durably held because this published run lacks a clean, candidate-bound review record under the current trust-approved reviewer configuration. Restore the approved reviewer configuration or disposition the run manually.",
+				domain.HoldTrustBlocked,
+			)
+		}
 		return productionTaskOutcome{}, err
-	}
-	if reviewState == productionReviewPending {
-		return productionTaskOutcome{prNumber: published.PRNumber}, nil
-	}
-	if reviewState == productionReviewEscalated {
-		return w.completeReviewEscalationTask(ctx, task, binding, published)
 	}
 	readyExists, err := w.hasCompatibleReadyItem(ctx, task, binding, checkpoint, published)
 	if err != nil {
