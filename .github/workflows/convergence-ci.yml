@@ -41,6 +41,40 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: daemon/go.mod
-          cache-dependency-path: daemon/go.sum
+          cache: false
+      # Same two Go caches as daemon-ci.yml, which carries the rationale:
+      # modules keyed on go.sum alone, build output on a rolling key so
+      # the harness build does not recompile from scratch every run.
+      - name: Resolve Go cache paths
+        id: go-cache
+        run: |
+          echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.go-cache.outputs.mod }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('daemon/go.sum') }}
+          restore-keys: go-mod-${{ runner.os }}-
+      - name: Cache Go build output
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          key: go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
+            go-build-${{ runner.os }}-${{ github.job }}-
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          # SwiftPM's shared dependency cache: the bare mirrors it clones
+          # the pinned checkouts from. macOS location; the Linux one is
+          # ~/.cache/org.swift.swiftpm (see app-ci.yml). Not app/.build:
+          # caching compiled output could let a stale artifact register
+          # as a pass, while a mirror cannot (the pin still decides what
+          # is checked out and everything is still compiled here).
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
+          restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
       - name: Run the convergence pass
         run: bash scripts/run-convergence.sh

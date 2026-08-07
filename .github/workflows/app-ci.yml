@@ -57,6 +57,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          # SwiftPM's shared dependency cache: the bare mirrors it clones
+          # the pinned checkouts from, re-fetched from github.com on
+          # every run without this. Linux location here; macOS jobs use
+          # ~/Library/Caches/org.swift.swiftpm. Not app/.build: caching
+          # compiled output could let a stale artifact register as a
+          # pass, while a mirror cannot (Package.resolved still decides
+          # what is checked out and everything is still compiled here).
+          path: ~/.cache/org.swift.swiftpm
+          key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
+          restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
       - name: Verify generated API client
         working-directory: app
         run: ./scripts/generate-api-client.sh
@@ -69,6 +82,16 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+      - name: Cache SwiftPM dependencies
+        # xcodebuild resolves the same twelve packages the package job
+        # does, from the same shared cache; see that job for the
+        # rationale. Its checkouts land in DerivedData, which stays
+        # uncached for the same reason app/.build does.
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
+          restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
       - name: Test Mac installer with the real exclusive rename
         run: FREESIDE_TEST_REAL_RENAME=true bash scripts/test-install-mac-app.sh
       - name: Build macOS app

@@ -37,8 +37,49 @@ jobs:
           # go-version-file is resolved from the workspace root, not the
           # working-directory default above.
           go-version-file: daemon/go.mod
-          # Like go-version-file, resolved from the workspace root.
-          cache-dependency-path: daemon/go.sum
+          # Superseded by the two caches below; see the rationale there.
+          cache: false
+      - name: Resolve Go cache paths
+        id: go-cache
+        # go env, not literal paths: GOCACHE is ~/.cache/go-build on
+        # Linux but ~/Library/Caches/go-build on macOS, and this job's
+        # cache block then stays identical to its macOS sibling's.
+        run: |
+          echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.go-cache.outputs.mod }}
+          # Content is fully determined by go.sum, so a primary hit is a
+          # complete cache and skipping the save is correct. Kept apart
+          # from the build cache below so the rolling key does not
+          # re-upload ~80 MB of unchanged modules on every push. The key
+          # is deliberately shared with the other Go jobs on this runner
+          # OS: on the one run per go.sum that populates it, the loser of
+          # that race logs "Failed to save: Unable to reserve cache with
+          # key ..., another job may be creating this cache", which is
+          # the intended outcome, since the winner's entry is identical.
+          key: go-mod-${{ runner.os }}-${{ hashFiles('daemon/go.sum') }}
+          restore-keys: go-mod-${{ runner.os }}-
+      - name: Cache Go build output
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          # Rolling key: setup-go's cache keys on go.sum alone, so once
+          # an entry existed every run restored it and skipped the save
+          # ("Cache hit occurred on the primary key ..., not saving
+          # cache"), leaving the daemon's own packages to recompile from
+          # scratch each time. The commit suffix makes every run's
+          # primary key miss, so each run saves a cache refreshed with
+          # what it just compiled, while restore-keys fall back to the
+          # newest sibling entry. The job segment keeps the three Go jobs
+          # across the two workflows from racing to save one key on a
+          # single commit.
+          key: go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
+            go-build-${{ runner.os }}-${{ github.job }}-
       - run: go build ./...
       - name: cross-compile exporter (static linux/arm64)
         # Guards the exporter-image build target (#73 acceptance 4): the
@@ -63,6 +104,26 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: daemon/go.mod
-          cache-dependency-path: daemon/go.sum
+          cache: false
+      # Same two caches as the linux job, which carries the rationale.
+      - name: Resolve Go cache paths
+        id: go-cache
+        run: |
+          echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.go-cache.outputs.mod }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('daemon/go.sum') }}
+          restore-keys: go-mod-${{ runner.os }}-
+      - name: Cache Go build output
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          key: go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
+            go-build-${{ runner.os }}-${{ github.job }}-
       - run: go build ./...
       - run: go test ./...
