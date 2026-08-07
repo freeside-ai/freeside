@@ -74,8 +74,16 @@ func TestGitFetchScrubsAmbientConfigurationAndAllowsOnlyHTTPS(t *testing.T) {
 	spec := runner.specs[0]
 	wantConfig := []string{
 		"-c", "core.hooksPath=/dev/null",
+		"-c", "core.fsmonitor=false",
 		"-c", "protocol.allow=never",
 		"-c", "protocol.https.allow=always",
+		"-c", "core.protectHFS=true",
+		"-c", "core.protectNTFS=true",
+		"-c", "credential.helper=",
+		"-c", "http.followRedirects=false",
+		"-c", "push.followTags=false",
+		"-c", "fetch.recurseSubmodules=false",
+		"-c", "transfer.fsckObjects=true",
 	}
 	if !slices.Equal(spec.Args[:len(wantConfig)], wantConfig) {
 		t.Fatalf("clone config = %q, want %q", spec.Args[:len(wantConfig)], wantConfig)

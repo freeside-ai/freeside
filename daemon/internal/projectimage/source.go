@@ -57,13 +57,22 @@ func (g gitSource) Fetch(
 			"GIT_CONFIG_VALUE_0=Authorization: Basic "+basic,
 		)
 	}
+	// Keep this literal prefix aligned with the canonical baseline in
+	// publish/gitnet.go's transportConfig. This bare clone never checks out;
+	// verify.MaterializeExact remains the checkout-side defense. Issue #566 will
+	// consolidate the duplicated baseline.
 	args := []string{
 		"-c", "core.hooksPath=/dev/null",
+		"-c", "core.fsmonitor=false",
 		"-c", "protocol.allow=never",
 		"-c", "protocol.https.allow=always",
-	}
-	if authenticated {
-		args = append(args, "-c", "http.followRedirects=false")
+		"-c", "core.protectHFS=true",
+		"-c", "core.protectNTFS=true",
+		"-c", "credential.helper=",
+		"-c", "http.followRedirects=false",
+		"-c", "push.followTags=false",
+		"-c", "fetch.recurseSubmodules=false",
+		"-c", "transfer.fsckObjects=true",
 	}
 	args = append(args, "clone", "--quiet", "--bare", url, destination)
 	output, err := g.runner.Run(ctx, commandSpec{
