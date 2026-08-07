@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -76,6 +77,11 @@ type Config struct {
 	Preparation []string
 	// Now supplies the pinned instants a replayed pipeline reuses.
 	Now func() time.Time
+	// Logger reports what the asynchronous pipeline does. The pipeline has
+	// no caller to return an error to once a handoff is running, so without
+	// it a retained terminal-write failure stays invisible until the next
+	// Inspect. Nil discards the records.
+	Logger *slog.Logger
 }
 
 // Driver is the production Claude stage driver. It implements
@@ -100,6 +106,7 @@ type Driver struct {
 	prepare    []string
 	now        func() time.Time
 	lifetime   context.Context
+	logger     *slog.Logger
 
 	// mu serializes state transitions per invocation. StartWithInputs owns
 	// duplicate arbitration (exec.MaterializedStageDriver), and the pipeline
@@ -181,9 +188,19 @@ func New(cfg Config) (*Driver, error) {
 		preJob:  cfg.PreJob,
 		imports: cfg.Import, prepare: slices.Clone(cfg.Preparation),
 		now: cfg.Now, lifetime: cfg.Lifetime,
+		logger:     pipelineLogger(cfg.Logger),
 		running:    map[domain.InvocationID]*session{},
 		recovering: map[domain.InvocationID]struct{}{},
 	}, nil
+}
+
+// pipelineLogger normalizes the optional logger so the pipeline never has
+// to check, and stamps the subsystem here rather than at each record.
+func pipelineLogger(logger *slog.Logger) *slog.Logger {
+	if logger == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return logger.With("subsystem", "claude-driver")
 }
 
 func cleanAbsoluteRoot(path string) bool {

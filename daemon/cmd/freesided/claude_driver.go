@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -968,6 +969,7 @@ func resolveProjectImagePreparation(
 // engine loop starts.
 func composeClaudeDriver(
 	ctx context.Context, st *store.Store, blobs *signet.BlobStore, cfg claudeDriverConfig,
+	logger *slog.Logger,
 ) (_ *claudeComposition, err error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -1139,6 +1141,7 @@ func composeClaudeDriver(
 		},
 		Preparation: preparation,
 		Now:         func() time.Time { return time.Now().UTC() },
+		Logger:      logger,
 	})
 	if driverErr != nil {
 		return nil, fmt.Errorf("compose claude driver: %w", driverErr)

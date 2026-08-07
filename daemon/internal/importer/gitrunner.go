@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 )
 
 // GitError carries a failed plumbing invocation: the argument vector
@@ -147,7 +148,7 @@ func (g *gitRunner) runTo(ctx context.Context, stdin io.Reader, w io.Writer, arg
 	cmd.Stdin = stdin
 	var stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = w, &stderr
-	if err := cmd.Run(); err != nil {
+	if err := procbound.Run(cmd, procbound.DefaultWaitDelay); err != nil {
 		return &GitError{Args: args, Stderr: stderr.String(), Err: err}
 	}
 	return nil
