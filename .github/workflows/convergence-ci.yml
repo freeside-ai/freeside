@@ -64,5 +64,17 @@ jobs:
           restore-keys: |
             go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
             go-build-${{ runner.os }}-${{ github.job }}-
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          # SwiftPM's shared dependency cache: the bare mirrors it clones
+          # the pinned checkouts from. macOS location; the Linux one is
+          # ~/.cache/org.swift.swiftpm (see app-ci.yml). Not app/.build:
+          # caching compiled output could let a stale artifact register
+          # as a pass, while a mirror cannot (the pin still decides what
+          # is checked out and everything is still compiled here).
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
+          restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
       - name: Run the convergence pass
         run: bash scripts/run-convergence.sh
