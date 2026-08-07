@@ -325,7 +325,6 @@ func TestNamesFor(t *testing.T) {
 // exactly this reason. Every role is enumerated so a longer suffix cannot
 // silently exceed the bound.
 func TestNamesForFitsRuntimeIDLimit(t *testing.T) {
-	const runtimeIDLimit = 64
 	longest := "a" + strings.Repeat("b", 31) // the max runIDPattern admits
 	if !runIDPattern.MatchString(longest) {
 		t.Fatalf("fixture run ID %q is not a valid run ID", longest)
@@ -346,8 +345,8 @@ func TestNamesForFitsRuntimeIDLimit(t *testing.T) {
 		"writer-observer": n.WriterObserver, "agent": n.Agent,
 		"exporter": n.Exporter, "network": n.Network,
 	} {
-		if len(name) > runtimeIDLimit {
-			t.Errorf("%s name %q is %d bytes, over the runtime's %d-byte limit", role, name, len(name), runtimeIDLimit)
+		if len(name) > appleContainerIDLimit {
+			t.Errorf("%s name %q is %d bytes, over the runtime's %d-byte limit", role, name, len(name), appleContainerIDLimit)
 		}
 	}
 }

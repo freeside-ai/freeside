@@ -1082,8 +1082,47 @@ func codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt string) 
 	return []string{"sh", "-c", command}
 }
 
+type codexReviewResourceNames struct {
+	workspaceObserver string
+	shadowInitializer string
+	shadowObserver    string
+	reviewContainer   string
+	shadowVolume      string
+	network           string
+}
+
+// codexReviewNames is the single registration point for runtime resources
+// owned by one review invocation. It preserves the complete admitted run ID,
+// so names remain collision-resistant without truncation or a hash alias.
+func codexReviewNames(runID string) codexReviewResourceNames {
+	prefix := "freeside-review-" + runID
+	return codexReviewResourceNames{
+		workspaceObserver: prefix + "-ws-obs",
+		shadowInitializer: prefix + "-agents-init",
+		shadowObserver:    prefix + "-agents-obs",
+		reviewContainer:   prefix + "-codex",
+		shadowVolume:      prefix + "-agents",
+		network:           prefix + "-egress",
+	}
+}
+
+// legacyCodexReviewNames re-derives the exact topology persisted before #587.
+// It is accepted only while authenticating existing intents for cleanup; no
+// new resource is ever created with these names.
+func legacyCodexReviewNames(runID string) codexReviewResourceNames {
+	prefix := "freeside-review-" + runID
+	return codexReviewResourceNames{
+		workspaceObserver: prefix + "-workspace-observer",
+		shadowInitializer: prefix + "-agents-init",
+		shadowObserver:    prefix + "-agents-observer",
+		reviewContainer:   prefix + "-codex",
+		shadowVolume:      prefix + "-agents",
+		network:           prefix + "-egress",
+	}
+}
+
 func codexReviewShadowObserverName(runID string) string {
-	return "freeside-review-" + runID + "-agents-observer"
+	return codexReviewNames(runID).shadowObserver
 }
 
 func codexReviewShadowObserverScript(nonce, targetPath, proofPath string) string {
@@ -1214,10 +1253,10 @@ func pathsOverlap(a, b string) bool {
 	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
 }
 
-func codexReviewContainerName(runID string) string { return "freeside-review-" + runID + "-codex" }
-func codexReviewNetworkName(runID string) string   { return "freeside-review-" + runID + "-egress" }
+func codexReviewContainerName(runID string) string { return codexReviewNames(runID).reviewContainer }
+func codexReviewNetworkName(runID string) string   { return codexReviewNames(runID).network }
 func codexReviewWorkspaceObserverName(runID string) string {
-	return "freeside-review-" + runID + "-workspace-observer"
+	return codexReviewNames(runID).workspaceObserver
 }
 
 func digestStrings(values []string) string {

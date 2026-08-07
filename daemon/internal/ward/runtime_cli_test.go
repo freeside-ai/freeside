@@ -366,6 +366,21 @@ func TestDecodeListFailsClosedOnMissingIdentity(t *testing.T) {
 	}
 }
 
+func TestRuntimeResourceNameLimitRejectsLegacyCodexObserver(t *testing.T) {
+	maximumID := strings.Repeat("a", 32)
+	legacy := legacyCodexReviewNames(maximumID).workspaceObserver
+	if len(legacy) <= appleContainerIDLimit {
+		t.Fatalf("legacy workspace observer is %d bytes, want a regression fixture over %d",
+			len(legacy), appleContainerIDLimit)
+	}
+	if err := validateRuntimeResourceName(legacy); err == nil {
+		t.Fatal("runtime boundary accepted the legacy oversized workspace observer")
+	}
+	if err := validateRuntimeResourceName(strings.Repeat("a", appleContainerIDLimit)); err != nil {
+		t.Fatalf("runtime boundary rejected an ID at the limit: %v", err)
+	}
+}
+
 // TestIdentityMismatchErrorsRedactObservedIDs proves the identity-disagreement
 // failures across all three decoders never echo the untrusted CLI-observed
 // identity: a foreign row's id or name can carry a copied credential, and these

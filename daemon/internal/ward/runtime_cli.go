@@ -37,11 +37,17 @@ func NewCLIRuntime(binPath string) *CLIRuntime {
 
 var _ Runtime = (*CLIRuntime)(nil)
 
-// maxRuntimeOutput bounds the stdout buffered from a JSON-producing runtime
-// call. Honest inspect/list output is far smaller; the cap stops a wedged or
-// hostile runtime returning an unbounded stream from exhausting daemon memory
-// before decoding — the stdout analogue of the stderr and archive bounds.
-const maxRuntimeOutput = 16 << 20
+const (
+	// appleContainerIDLimit is the maximum byte length Apple container 1.1.0
+	// accepts for container, volume, and network IDs. Creation fails locally at
+	// this boundary so a deterministic overlength name cannot enter a retry loop.
+	appleContainerIDLimit = 64
+	// maxRuntimeOutput bounds the stdout buffered from a JSON-producing runtime
+	// call. Honest inspect/list output is far smaller; the cap stops a wedged or
+	// hostile runtime returning an unbounded stream from exhausting daemon memory
+	// before decoding — the stdout analogue of the stderr and archive bounds.
+	maxRuntimeOutput = 16 << 20
+)
 
 // run executes a JSON-producing CLI call (list/inspect) and returns its stdout,
 // capped so a wedged runtime cannot exhaust memory. Stderr is withheld from the
@@ -130,6 +136,9 @@ func runPrepared(cmd *osexec.Cmd, stdout io.Writer, reportStderr bool, operation
 }
 
 func (c *CLIRuntime) CreateVolume(ctx context.Context, name string, sizeMB int64, labels []Label) error {
+	if err := validateRuntimeResourceName(name); err != nil {
+		return err
+	}
 	args := []string{"volume", "create", "-s", fmt.Sprintf("%dM", sizeMB)}
 	for _, l := range labels {
 		args = append(args, "--label", l.Key+"="+l.Value)
@@ -139,6 +148,9 @@ func (c *CLIRuntime) CreateVolume(ctx context.Context, name string, sizeMB int64
 }
 
 func (c *CLIRuntime) CreateNetwork(ctx context.Context, name string, labels []Label) error {
+	if err := validateRuntimeResourceName(name); err != nil {
+		return err
+	}
 	args := []string{"network", "create", "--internal"}
 	for _, l := range labels {
 		args = append(args, "--label", l.Key+"="+l.Value)
@@ -243,6 +255,9 @@ func (c *CLIRuntime) CreateContainer(ctx context.Context, spec ContainerSpec) er
 // deliberately limited to clean, read-only paths: the only gate-generated
 // binds are the Codex review topology's independently verified snapshot files.
 func createContainerArgs(spec ContainerSpec) ([]string, error) {
+	if err := validateRuntimeResourceName(spec.Name); err != nil {
+		return nil, err
+	}
 	args := []string{"create", "--name", spec.Name}
 	for _, l := range spec.Labels {
 		args = append(args, "--label", l.Key+"="+l.Value)
@@ -311,6 +326,14 @@ func createContainerArgs(spec ContainerSpec) ([]string, error) {
 	args = append(args, "--", spec.Image)
 	args = append(args, spec.Command...)
 	return args, nil
+}
+
+func validateRuntimeResourceName(name string) error {
+	if len(name) > appleContainerIDLimit {
+		return fmt.Errorf("refusing to create runtime resource with a %d-byte ID; maximum is %d",
+			len(name), appleContainerIDLimit)
+	}
+	return nil
 }
 
 func (c *CLIRuntime) StartContainer(ctx context.Context, id string) error {

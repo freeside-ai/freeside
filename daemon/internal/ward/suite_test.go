@@ -310,8 +310,9 @@ func TestConformanceObjectNamesFitReferenceRuntime(t *testing.T) {
 		networklessLivenessProbeSuffix, networklessLivenessVolumeProbeSuffix,
 	}
 	for _, role := range roles {
-		if name := conformanceObjectName(runID, role); len(name) > 64 {
-			t.Errorf("conformance role %q produces %d-byte container ID %q, want <= 64", role, len(name), name)
+		if name := conformanceObjectName(runID, role); len(name) > appleContainerIDLimit {
+			t.Errorf("conformance role %q produces %d-byte container ID %q, want <= %d",
+				role, len(name), name, appleContainerIDLimit)
 		}
 	}
 }

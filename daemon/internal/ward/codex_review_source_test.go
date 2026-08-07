@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"syscall"
@@ -2258,6 +2259,108 @@ func TestCodexReviewSourceRetriesTransientLaunchUnderSameInvocation(t *testing.T
 		_ = launch.Close()
 	}
 	if err := backend.AbortCodexReview(ctx, source.cfg.Review, string(id)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCodexReviewRestartRecoversLegacyRoundAndRelaunchesSameRequest(t *testing.T) {
+	ctx := context.Background()
+	fx := newHandoffFixture(t)
+	seedSpec := fx.seed(t)
+	backend := fx.backend(t)
+	cfg, requestSpec := testCodexReview(t)
+	journal := &fakeCodexReviewJournal{}
+	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
+	source, err := NewCodexReviewSource(sourceConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := domain.InvocationID("review-0dcd5c691adcaec0c353993a")
+	request := exec.ReviewRequest{
+		RunID: "run-bc28d74f7774a86464f1cc823da168d69b9f4b2a2de56d4a0abb6f5171e5c165",
+		Round: 2, Repo: seedSpec.Seed.Base.Repo,
+		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
+		BaseSHA: "9595682ebad1610833660ba469e8fc18b5ed8cab",
+		HeadSHA: seedSpec.Seed.Base.BaseSHA, Workspace: seedSpec.Seed.SourceDir,
+		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
+		RequestedAt: time.Date(2026, 8, 7, 3, 44, 13, 821738000, time.UTC),
+	}
+	if err := journal.PutCodexReviewRequest(ctx, string(id), request); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := backend.PrepareCodexReviewWorkspace(
+		ctx, journal, string(id), request.Workspace,
+		domain.BaseRevision{
+			Repo: request.Repo, RepositoryID: request.RepositoryID,
+			BaseRef: request.BaseRef, BaseSHA: request.HeadSHA,
+		}, sourceConfig.WorkspaceSizeMB,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instructions, instructionFile, err := source.materializeReviewInstructions(ctx, id, request.Instructions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launchSpec := CodexReviewLaunchSpec{
+		RunID: string(id), Image: sourceConfig.Review.ApprovedImage,
+		WorkspaceSourceRunID: string(id), WorkspaceVolume: workspace.Volume,
+		ExpectedHead: request.HeadSHA, Prompt: codexProductionReviewPrompt(request),
+		Boundary: CodexReviewFreshStart, AuthMode: sourceConfig.AuthMode,
+		AuthIdentityID: sourceConfig.AuthIdentityID, AuthSnapshot: sourceConfig.AuthSnapshot,
+		Instructions: instructions, InstructionFile: instructionFile,
+		InstructionBinding: request.Instructions,
+	}
+	digest, err := codexReviewIntentDigest(sourceConfig.Review, launchSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := testOwnershipLabel()
+	journal.intent = legacyCodexReviewIntentForTest(string(id), digest, owner.Value)
+	legacyObserver := legacyCodexReviewNames(string(id)).workspaceObserver
+	fx.rt.ctrs[legacyObserver] = &fakeCtr{
+		spec:    ContainerSpec{Name: legacyObserver, Labels: append(runLabels(string(id)), owner)},
+		created: "legacy-observer",
+	}
+	recovery, err := NewCodexReviewRecovery(
+		backend, journal, sourceConfig.Review.VolumeLifecycleLeaser, sourceConfig.Review.InputRoot,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recovery.Reconcile(ctx); err != nil {
+		t.Fatalf("restart recovery: %v", err)
+	}
+	if journal.intent.State != CodexReviewIntentClosed {
+		t.Fatalf("recovered intent state = %q, want closed before retry", journal.intent.State)
+	}
+	persisted, err := journal.GetCodexReviewRequest(ctx, string(id))
+	if err != nil || !reflect.DeepEqual(persisted, request) {
+		t.Fatalf("recovery changed persisted round-2 request: %#v, %v", persisted, err)
+	}
+	if _, exists := fx.rt.ctrs[legacyObserver]; exists {
+		t.Fatal("restart recovery left the authenticated legacy observer")
+	}
+	restarted, err := NewCodexReviewSource(sourceConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := restarted.Inspect(ctx, id)
+	if err != nil || status != exec.StatusRunning {
+		t.Fatalf("same-request restart launch = %q, %v", status, err)
+	}
+	if journal.intent.State != CodexReviewIntentStarted ||
+		journal.intent.Resources[0].Name != codexReviewWorkspaceObserverName(string(id)) {
+		t.Fatalf("restart launch intent = %#v, want current started topology", journal.intent)
+	}
+	restarted.mu.Lock()
+	launch := restarted.launches[id]
+	delete(restarted.launches, id)
+	restarted.mu.Unlock()
+	if launch != nil {
+		_ = launch.Close()
+	}
+	if err := backend.AbortCodexReview(ctx, restarted.cfg.Review, string(id)); err != nil {
 		t.Fatal(err)
 	}
 }
