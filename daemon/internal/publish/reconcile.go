@@ -28,11 +28,14 @@ import (
 // observation pair, and the next conditional poll simply gets a 200
 // and re-syncs. Serializing the whole sequence would hold a lock
 // across network I/O for a cache correctness never depends on.
+// Eviction advances a process-wide epoch so a response that started before
+// eviction may still be returned to its caller but cannot refill any cache.
 // Intended usage is one poller per resource.
 type Reconciler struct {
 	forge *forge
 
 	mu             sync.Mutex
+	cacheEpoch     uint64
 	refs           map[string]refCacheEntry
 	pulls          map[string]pullCacheEntry
 	issues         map[string]issueCacheEntry
@@ -66,6 +69,22 @@ type reviewActivityCacheEntry struct {
 	reviews       []PullReview
 	comments      []PullReviewComment
 	reactions     []PullDescriptionReaction
+}
+
+func refKey(repo, branch string) string {
+	return repo + "\x00" + branch
+}
+
+func pullKey(repo string, number int) string {
+	return fmt.Sprintf("%s\x00%d", repo, number)
+}
+
+func issueKey(repo string, number int) string {
+	return fmt.Sprintf("%s\x00issue\x00%d", repo, number)
+}
+
+func reviewActivityKey(repo string, number int) string {
+	return fmt.Sprintf("%s\x00review\x00%d", repo, number)
 }
 
 // RefObservation is the reconciled state of one branch ref.
@@ -154,10 +173,11 @@ func (r *Reconciler) ReconcileRef(ctx context.Context, repo, branch string) (Ref
 	if branch == "" {
 		return RefObservation{}, errors.New("reconcile: empty branch")
 	}
-	key := repo + "\x00" + branch
+	key := refKey(repo, branch)
 
 	r.mu.Lock()
 	entry, cached := r.refs[key]
+	epoch := r.cacheEpoch
 	r.mu.Unlock()
 	etag := ""
 	if cached {
@@ -184,12 +204,14 @@ func (r *Reconciler) ReconcileRef(ctx context.Context, repo, branch string) (Ref
 
 	obs := RefObservation{Exists: st.Exists, SHA: st.SHA}
 	r.mu.Lock()
-	if st.Exists && st.ETag != "" {
-		r.refs[key] = refCacheEntry{etag: st.ETag, obs: obs}
-	} else {
-		// No validator (absent ref, or a response without an ETag): the
-		// next poll is unconditional.
-		delete(r.refs, key)
+	if epoch == r.cacheEpoch {
+		if st.Exists && st.ETag != "" {
+			r.refs[key] = refCacheEntry{etag: st.ETag, obs: obs}
+		} else {
+			// No validator (absent ref, or a response without an ETag): the
+			// next poll is unconditional.
+			delete(r.refs, key)
+		}
 	}
 	r.mu.Unlock()
 	return obs, nil
@@ -205,10 +227,11 @@ func (r *Reconciler) ReconcilePull(ctx context.Context, repo string, number int)
 	if number <= 0 {
 		return PullObservation{}, fmt.Errorf("reconcile: invalid pull number %d", number)
 	}
-	key := fmt.Sprintf("%s\x00%d", repo, number)
+	key := pullKey(repo, number)
 
 	r.mu.Lock()
 	entry, cached := r.pulls[key]
+	epoch := r.cacheEpoch
 	r.mu.Unlock()
 	etag := ""
 	if cached {
@@ -244,10 +267,12 @@ func (r *Reconciler) ReconcilePull(ctx context.Context, repo string, number int)
 		MergeCommitSHA: read.PR.MergeCommitSHA,
 	}
 	r.mu.Lock()
-	if read.ETag != "" {
-		r.pulls[key] = pullCacheEntry{etag: read.ETag, obs: obs}
-	} else {
-		delete(r.pulls, key)
+	if epoch == r.cacheEpoch {
+		if read.ETag != "" {
+			r.pulls[key] = pullCacheEntry{etag: read.ETag, obs: obs}
+		} else {
+			delete(r.pulls, key)
+		}
 	}
 	r.mu.Unlock()
 	return obs, nil
@@ -266,10 +291,11 @@ func (r *Reconciler) ReconcileIssue(ctx context.Context, repo string, number int
 	if number <= 0 {
 		return IssueObservation{}, fmt.Errorf("reconcile: invalid issue number %d", number)
 	}
-	key := fmt.Sprintf("%s\x00issue\x00%d", repo, number)
+	key := issueKey(repo, number)
 
 	r.mu.Lock()
 	entry, cached := r.issues[key]
+	epoch := r.cacheEpoch
 	r.mu.Unlock()
 	etag := ""
 	if cached {
@@ -299,10 +325,12 @@ func (r *Reconciler) ReconcileIssue(ctx context.Context, repo string, number int
 		obs.ClosedByCommitSHA = commit
 	}
 	r.mu.Lock()
-	if read.ETag != "" {
-		r.issues[key] = issueCacheEntry{etag: read.ETag, obs: obs}
-	} else {
-		delete(r.issues, key)
+	if epoch == r.cacheEpoch {
+		if read.ETag != "" {
+			r.issues[key] = issueCacheEntry{etag: read.ETag, obs: obs}
+		} else {
+			delete(r.issues, key)
+		}
 	}
 	r.mu.Unlock()
 	return obs, nil
@@ -323,10 +351,11 @@ func (r *Reconciler) ReconcilePullReviewActivity(ctx context.Context, repo strin
 	if number <= 0 {
 		return PullReviewObservation{}, fmt.Errorf("reconcile: invalid pull number %d", number)
 	}
-	key := fmt.Sprintf("%s\x00review\x00%d", repo, number)
+	key := reviewActivityKey(repo, number)
 
 	r.mu.Lock()
 	entry := r.reviewActivity[key]
+	epoch := r.cacheEpoch
 	r.mu.Unlock()
 
 	reviewsRead, err := r.forge.getPullReviews(ctx, ref, number, entry.reviewsETag)
@@ -360,12 +389,38 @@ func (r *Reconciler) ReconcilePullReviewActivity(ctx context.Context, repo strin
 		NotModified: reviewsRead.NotModified && commentsRead.NotModified && reactionsRead.NotModified,
 	}
 	r.mu.Lock()
-	r.reviewActivity[key] = reviewActivityCacheEntry{
-		reviewsETag: reviewsETag, commentsETag: commentsETag, reactionsETag: reactionsETag,
-		reviews: reviews, comments: comments, reactions: reactions,
+	if epoch == r.cacheEpoch {
+		r.reviewActivity[key] = reviewActivityCacheEntry{
+			reviewsETag: reviewsETag, commentsETag: commentsETag, reactionsETag: reactionsETag,
+			reviews: reviews, comments: comments, reactions: reactions,
+		}
 	}
 	r.mu.Unlock()
 	return obs, nil
+}
+
+// EvictRef drops the cached validator and observation for one branch ref.
+func (r *Reconciler) EvictRef(repo, branch string) {
+	r.mu.Lock()
+	r.cacheEpoch++
+	delete(r.refs, refKey(repo, branch))
+	r.mu.Unlock()
+}
+
+// EvictPull drops the cached validator and observation for one pull request.
+func (r *Reconciler) EvictPull(repo string, number int) {
+	r.mu.Lock()
+	r.cacheEpoch++
+	delete(r.pulls, pullKey(repo, number))
+	r.mu.Unlock()
+}
+
+// EvictIssue drops the cached validator and observation for one issue.
+func (r *Reconciler) EvictIssue(repo string, number int) {
+	r.mu.Lock()
+	r.cacheEpoch++
+	delete(r.issues, issueKey(repo, number))
+	r.mu.Unlock()
 }
 
 // EvictPullReviewActivity drops the cached validators and lists for one PR's
@@ -377,9 +432,9 @@ func (r *Reconciler) ReconcilePullReviewActivity(ctx context.Context, repo strin
 // observe suppresses buildNativeReviewObservations, and the un-persisted rows
 // are never retried until external review activity changes (issue #497).
 func (r *Reconciler) EvictPullReviewActivity(repo string, number int) {
-	key := fmt.Sprintf("%s\x00review\x00%d", repo, number)
 	r.mu.Lock()
-	delete(r.reviewActivity, key)
+	r.cacheEpoch++
+	delete(r.reviewActivity, reviewActivityKey(repo, number))
 	r.mu.Unlock()
 }
 

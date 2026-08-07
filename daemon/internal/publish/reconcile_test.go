@@ -141,6 +141,85 @@ func TestReconcilePullConditional(t *testing.T) {
 	}
 }
 
+func TestEvictResourceCachesForceUnconditionalRefetch(t *testing.T) {
+	t.Run("ref", func(t *testing.T) {
+		t.Parallel()
+		gh := newFakeGitHub(t)
+		gh.refs["main"] = testHeadSHA
+		r := newTestReconciler(t, gh)
+
+		if _, err := r.ReconcileRef(t.Context(), testRepo, "main"); err != nil {
+			t.Fatal(err)
+		}
+		if obs, err := r.ReconcileRef(t.Context(), testRepo, "main"); err != nil || !obs.NotModified {
+			t.Fatalf("cached ReconcileRef = %+v, %v", obs, err)
+		}
+		conditionalBefore := conditionalRequests(gh)
+		r.EvictRef(testRepo, "main")
+		if obs, err := r.ReconcileRef(t.Context(), testRepo, "main"); err != nil || obs.NotModified {
+			t.Fatalf("post-eviction ReconcileRef = %+v, %v", obs, err)
+		}
+		if got := conditionalRequests(gh); got != conditionalBefore {
+			t.Fatalf("post-eviction ref sent %d conditional requests, want 0", got-conditionalBefore)
+		}
+		if obs, err := r.ReconcileRef(t.Context(), testRepo, "main"); err != nil || !obs.NotModified {
+			t.Fatalf("repopulated ReconcileRef = %+v, %v", obs, err)
+		}
+	})
+
+	t.Run("pull", func(t *testing.T) {
+		t.Parallel()
+		gh := newFakeGitHub(t)
+		gh.prs = append(gh.prs, fakePR{
+			Number: 7, State: "open", HeadRef: "branch", HeadSHA: testHeadSHA,
+		})
+		r := newTestReconciler(t, gh)
+
+		if _, err := r.ReconcilePull(t.Context(), testRepo, 7); err != nil {
+			t.Fatal(err)
+		}
+		if obs, err := r.ReconcilePull(t.Context(), testRepo, 7); err != nil || !obs.NotModified {
+			t.Fatalf("cached ReconcilePull = %+v, %v", obs, err)
+		}
+		conditionalBefore := conditionalRequests(gh)
+		r.EvictPull(testRepo, 7)
+		if obs, err := r.ReconcilePull(t.Context(), testRepo, 7); err != nil || obs.NotModified {
+			t.Fatalf("post-eviction ReconcilePull = %+v, %v", obs, err)
+		}
+		if got := conditionalRequests(gh); got != conditionalBefore {
+			t.Fatalf("post-eviction pull sent %d conditional requests, want 0", got-conditionalBefore)
+		}
+		if obs, err := r.ReconcilePull(t.Context(), testRepo, 7); err != nil || !obs.NotModified {
+			t.Fatalf("repopulated ReconcilePull = %+v, %v", obs, err)
+		}
+	})
+
+	t.Run("issue", func(t *testing.T) {
+		t.Parallel()
+		gh := newFakeGitHub(t)
+		gh.issues[443] = fakeIssue{State: "open"}
+		r := newTestReconciler(t, gh)
+
+		if _, err := r.ReconcileIssue(t.Context(), testRepo, 443); err != nil {
+			t.Fatal(err)
+		}
+		if obs, err := r.ReconcileIssue(t.Context(), testRepo, 443); err != nil || !obs.NotModified {
+			t.Fatalf("cached ReconcileIssue = %+v, %v", obs, err)
+		}
+		conditionalBefore := conditionalRequests(gh)
+		r.EvictIssue(testRepo, 443)
+		if obs, err := r.ReconcileIssue(t.Context(), testRepo, 443); err != nil || obs.NotModified {
+			t.Fatalf("post-eviction ReconcileIssue = %+v, %v", obs, err)
+		}
+		if got := conditionalRequests(gh); got != conditionalBefore {
+			t.Fatalf("post-eviction issue sent %d conditional requests, want 0", got-conditionalBefore)
+		}
+		if obs, err := r.ReconcileIssue(t.Context(), testRepo, 443); err != nil || !obs.NotModified {
+			t.Fatalf("repopulated ReconcileIssue = %+v, %v", obs, err)
+		}
+	})
+}
+
 // TestReconcilePerResourceValidators (issue #81 acceptance 3, the "no
 // global cursor" half): each resource carries its own validator, so
 // one resource changing does not disturb another's 304 cycle.
