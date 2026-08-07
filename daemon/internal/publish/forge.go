@@ -375,15 +375,30 @@ func (f *forge) updatePR(ctx context.Context, repo repoRef, number int, title, b
 // decodeResponse decodes exactly one JSON document from an API
 // response body. Unknown fields are expected (GitHub responses carry
 // far more than this package reads), but trailing data after the
-// document fails closed: a response this package cannot fully delimit
-// must not drive convergence decisions.
+// document and bodies over the shared resource bound fail closed: a
+// response this package cannot fully delimit must not drive convergence
+// decisions.
+const maxForgeResponseBytes = 16 << 20
+
 func decodeResponse(r io.Reader, v any) error {
-	dec := json.NewDecoder(r)
-	if err := dec.Decode(v); err != nil {
-		return err
+	limited := &io.LimitedReader{R: r, N: maxForgeResponseBytes + 1}
+	dec := json.NewDecoder(limited)
+	decodeErr := dec.Decode(v)
+	var trailingErr error
+	if decodeErr == nil {
+		if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+			trailingErr = errors.New("trailing data after the response document")
+		}
 	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return errors.New("trailing data after the response document")
+	_, drainErr := io.Copy(io.Discard, limited)
+	if limited.N == 0 {
+		return errors.New("response exceeds the 16777216-byte bound")
 	}
-	return nil
+	if decodeErr != nil {
+		return decodeErr
+	}
+	if trailingErr != nil {
+		return trailingErr
+	}
+	return drainErr
 }

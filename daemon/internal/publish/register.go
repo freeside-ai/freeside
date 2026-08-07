@@ -260,7 +260,7 @@ func (r *Registrar) exchangeCode(
 		return AppCredentials{}, fmt.Errorf("register: %w", &APIError{Status: resp.StatusCode, RequestPath: redactedPath})
 	}
 	var conv conversionResponse
-	if err := json.NewDecoder(resp.Body).Decode(&conv); err != nil {
+	if err := decodeResponse(resp.Body, &conv); err != nil {
 		return AppCredentials{}, fmt.Errorf("register: decode conversion: %w", err)
 	}
 	// Returned-object trust boundary: a syntactically valid conversion
@@ -371,7 +371,7 @@ func (r *Registrar) verifyVisibility(
 		var app struct {
 			ID int64 `json:"id"`
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&app); err != nil {
+		if err := decodeResponse(resp.Body, &app); err != nil {
 			return fmt.Errorf("register: decode public App metadata: %w", err)
 		}
 		if app.ID != appID {
@@ -425,7 +425,7 @@ func (r *Registrar) verifyAuthenticatedApp(ctx context.Context, appID int64, key
 	var app struct {
 		ID int64 `json:"id"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&app); err != nil {
+	if err := decodeResponse(resp.Body, &app); err != nil {
 		return fmt.Errorf("register: decode authenticated App metadata: %w", err)
 	}
 	if app.ID != appID {
