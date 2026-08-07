@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -277,6 +278,81 @@ VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?)`,
 			assertTableExists(t, db, "schedules", true)
 			assertTableExists(t, db, "schedules_without_authority", false)
 		})
+	}
+}
+
+// TestJoinedRowSurfacesScanMismatchAsError proves the forwarding scanner that
+// feeds the recurring due read reports an incompatible scan destination as an
+// error, never the panic the removed positional type assertions would raise on
+// a future schedule column-type change.
+func TestJoinedRowSurfacesScanMismatchAsError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openRaw(t)
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	st := &Store{db: db}
+	ts := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
+	interval := int64(30)
+	janitor, err := domain.NewSchedule(domain.ScheduleInput{
+		ID: "schedule-janitor", ProjectID: "project-system",
+		Kind:      domain.ScheduleJanitor,
+		Subject:   domain.ScheduleSubject{Type: domain.ScheduleSubjectTrustedConfig},
+		CreatedAt: ts, IntervalSeconds: &interval,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		return tx.PutSchedule(ctx, janitor)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *InternalTx) error {
+		return tx.SetScheduleTimer(ctx, janitor.ID, janitor.Generation, ts.Add(30*time.Second))
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	err = st.Read(ctx, func(tx *ReadTx) error {
+		rows, err := tx.tx.QueryContext(ctx, listDueRecurringSQL, ts.Add(time.Minute).UnixNano())
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		if !rows.Next() {
+			t.Fatal("expected one due recurring row")
+		}
+		// Correct destinations except the id column: it is TEXT, so scanning it
+		// into *int64 is exactly the type drift the deleted assertions would
+		// have panicked on. joinedRow forwards to sql.Rows.Scan, which reports
+		// it as an error. A panic here would fail the test outright.
+		var (
+			wrongID              int64
+			projectID, kind      string
+			status               string
+			generation           int64
+			runID, policy        sql.NullString
+			fireAt               sql.NullInt64
+			ev, aor              int64
+			body                 []byte
+			timerGen, nextNomFAt int64
+		)
+		scanErr := joinedRow{rows: rows, extra: []any{&timerGen, &nextNomFAt}}.Scan(
+			&wrongID, &projectID, &kind, &status, &generation, &runID, &policy,
+			&fireAt, &ev, &aor, &body,
+		)
+		if scanErr == nil {
+			t.Fatal("scan with a mismatched destination returned a nil error")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
