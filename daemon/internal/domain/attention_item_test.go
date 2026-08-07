@@ -450,6 +450,57 @@ func TestValidateDecidedAt(t *testing.T) {
 	})
 }
 
+// TestValidateExpiresWhen covers the reconstruction backstop for the optional
+// expiry: nil is absent, a present pointer must carry a real UTC instant. The
+// non-UTC case bypasses the constructor (which normalizes; see
+// TestNewAttentionItemNormalizesExpiresWhen), so Validate is exercised as the
+// backstop for a row that reaches it another way (issue #553), mirroring
+// TestValidateDecidedAt.
+func TestValidateExpiresWhen(t *testing.T) {
+	base, err := domain.NewAttentionItem(validItemInput(domain.AttentionSpecApproval), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("zero", func(t *testing.T) {
+		item := base
+		item.ExpiresWhen = &time.Time{}
+		if err := item.Validate(); !errors.Is(err, domain.ErrMissingTimestamp) {
+			t.Fatalf("Validate() = %v, want ErrMissingTimestamp", err)
+		}
+	})
+	t.Run("non-UTC", func(t *testing.T) {
+		item := base
+		local := time.Date(2026, 1, 2, 3, 4, 5, 0, time.FixedZone("PST", -8*3600))
+		item.ExpiresWhen = &local
+		if err := item.Validate(); !errors.Is(err, domain.ErrTimestampNotUTC) {
+			t.Fatalf("Validate() = %v, want ErrTimestampNotUTC", err)
+		}
+	})
+}
+
+// TestNewAttentionItemNormalizesExpiresWhen pins the producer-path
+// normalization: a host-local offset (the dev-CLI producer's clock) is stored
+// as the same instant in UTC, so the write boundary never persists an offset
+// spelling (issue #553).
+func TestNewAttentionItemNormalizesExpiresWhen(t *testing.T) {
+	in := validItemInput(domain.AttentionSpecApproval)
+	local := time.Date(2026, 1, 2, 3, 4, 5, 0, time.FixedZone("CEST", 2*60*60))
+	in.ExpiresWhen = &local
+	item, err := domain.NewAttentionItem(in, nil)
+	if err != nil {
+		t.Fatalf("NewAttentionItem with a non-UTC expires_when: %v", err)
+	}
+	if item.ExpiresWhen == nil {
+		t.Fatal("expires_when is nil, want the normalized instant")
+	}
+	if item.ExpiresWhen.Location() != time.UTC {
+		t.Errorf("expires_when location = %v, want UTC", item.ExpiresWhen.Location())
+	}
+	if !item.ExpiresWhen.Equal(local) {
+		t.Errorf("expires_when = %v, want the same instant as %v", item.ExpiresWhen, local)
+	}
+}
+
 // TestAttentionItemCommitPlanNotice pins the plan-notice contract surface
 // (plan §5.6; #212 owns emission): nil is absent and renders as an explicit
 // null like decided_at, every registered reason survives a marshal/decode
