@@ -77,6 +77,25 @@ jobs:
         working-directory: app
         run: swift test --only-use-versions-from-resolved-file
 
+  # The macOS twin of `package`, and the only job that runs
+  # FreesideCoreTests: Package.swift declares those targets only under
+  # `#if !os(Linux)`, so the ubuntu job never sees them, and `apps`
+  # compiles FreesideCore without running a test against it. A separate
+  # job rather than an `apps` step, so it runs in parallel and its cost
+  # reads as its own duration (#541); SwiftPM shares no build artifacts
+  # with xcodebuild, so folding it in would buy nothing. No schema-drift
+  # step: `package` runs that, and the result is platform-independent.
+  # FreesideConvergenceTests compiles here and skips without its harness
+  # environment, so this needs no live daemon.
+  core-tests:
+    name: core-tests (FreesideCore)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test Swift package
+        working-directory: app
+        run: swift test --only-use-versions-from-resolved-file
+
   apps:
     name: apps (macOS + iOS)
     runs-on: macos-26
