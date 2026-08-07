@@ -538,6 +538,14 @@ func (f *fakeRuntime) CreateContainer(ctx context.Context, spec ContainerSpec) e
 			return err
 		}
 	}
+	// Model Apple container 1.1.0's directory-only bind rule: a host bind mount
+	// is rejected at creation, so a bind-shaped spec can never pass conformance
+	// against the fake while failing only on the live runtime.
+	for _, m := range spec.Mounts {
+		if m.Type != MountVolume {
+			return fmt.Errorf("container %q rejects non-volume mount type %q at %q", spec.Name, m.Type, m.Target)
+		}
+	}
 	if _, dup := f.ctrs[spec.Name]; dup {
 		return fmt.Errorf("container %q already exists", spec.Name)
 	}

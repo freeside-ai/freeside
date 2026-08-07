@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	osexec "os/exec"
 	"sort"
 	"strings"
@@ -251,9 +250,10 @@ func (c *CLIRuntime) CreateContainer(ctx context.Context, spec ContainerSpec) er
 	return c.runDiscard(ctx, false, args...)
 }
 
-// createContainerArgs phrases a spec as CLI arguments. Host binds are
-// deliberately limited to clean, read-only paths: the only gate-generated
-// binds are the Codex review topology's independently verified snapshot files.
+// createContainerArgs phrases a spec as CLI arguments. Named volumes are the
+// only mount kind the gate emits; a host bind (or any other kind) is refused
+// outright, since Apple container 1.1.0 rejects single-file bind sources and no
+// ward role delivers host state by bind after #591.
 func createContainerArgs(spec ContainerSpec) ([]string, error) {
 	if err := validateRuntimeResourceName(spec.Name); err != nil {
 		return nil, err
@@ -263,9 +263,9 @@ func createContainerArgs(spec ContainerSpec) ([]string, error) {
 		args = append(args, "--label", l.Key+"="+l.Value)
 	}
 	for _, m := range spec.Mounts {
-		if m.Type != MountVolume && m.Type != MountBind {
-			return nil, fmt.Errorf("refusing to create container %q with unknown mount type at %q",
-				spec.Name, m.Target)
+		if m.Type != MountVolume {
+			return nil, fmt.Errorf("refusing to create container %q with non-volume mount type %q at %q",
+				spec.Name, m.Type, m.Target)
 		}
 		// A comma or control character in a field would let the CLI parse an
 		// injected mount option; refuse to phrase it rather than escape it.
@@ -275,15 +275,6 @@ func createContainerArgs(spec ContainerSpec) ([]string, error) {
 		}
 		if !cleanAbs(m.Target) {
 			return nil, fmt.Errorf("refusing to create container %q with an unclean mount target", spec.Name)
-		}
-		if m.Type == MountBind {
-			info, err := os.Lstat(m.Source)
-			if !m.ReadOnly || !cleanAbs(m.Source) || err != nil || !info.Mode().IsRegular() {
-				return nil, fmt.Errorf(
-					"refusing to create container %q with a writable, non-file, or unclean bind mount",
-					spec.Name,
-				)
-			}
 		}
 		mount := fmt.Sprintf("type=%s,source=%s,target=%s", m.Type, m.Source, m.Target)
 		if m.ReadOnly {

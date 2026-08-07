@@ -13,22 +13,27 @@ import (
 type MountType string
 
 const (
-	// MountVolume is a named volume managed by the container runtime.
+	// MountVolume is a named volume managed by the container runtime. It is the
+	// only mount kind the gate ever allows.
 	MountVolume MountType = "volume"
-	// MountBind is a host path bind (virtiofs on Apple container). The Codex
-	// review topology uses independently verified, read-only single-file binds
-	// inside its writable per-invocation home. Every other ward role rejects
-	// binds in its own allowlist.
+	// MountBind is a host path bind (virtiofs on Apple container). It is no
+	// longer a valid gate mount: Apple container 1.1.0 rejects single-file bind
+	// sources, so the Codex review topology moved its two files onto a
+	// read-only named volume (#591), and no ward role emits a bind. The constant
+	// remains only so a runtime that reports a bind decodes to this value and
+	// fails valid() closed, and so the conformance and runtime layers can refuse
+	// it by name as defense in depth.
 	MountBind MountType = "bind"
 )
 
 // AllMountTypes lists every valid MountType; it drives table-driven tests
-// and is the single place a new mount type is registered.
-var AllMountTypes = []MountType{MountVolume, MountBind}
+// and is the single place a new mount type is registered. MountBind is
+// deliberately absent: it is a reject-only decode target, never a valid mount.
+var AllMountTypes = []MountType{MountVolume}
 
 func (m MountType) valid() bool {
 	switch m {
-	case MountVolume, MountBind:
+	case MountVolume:
 		return true
 	default:
 		return false

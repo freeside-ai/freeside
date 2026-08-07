@@ -8,7 +8,9 @@ func TestMountTypeValid(t *testing.T) {
 			t.Errorf("MountType %q: valid() = false, want true", m)
 		}
 	}
-	for _, m := range []MountType{"", "tmpfs", "virtiofs"} {
+	// MountBind is a reject-only decode target after #591, so it must report
+	// invalid alongside the unknown kinds.
+	for _, m := range []MountType{"", "tmpfs", "virtiofs", MountBind} {
 		if m.valid() {
 			t.Errorf("MountType %q: valid() = true, want false", m)
 		}
