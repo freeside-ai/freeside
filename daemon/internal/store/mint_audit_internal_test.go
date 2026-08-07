@@ -12,6 +12,7 @@ import (
 // migration neither invents a registration identity for historical singleton
 // mints nor makes those rows unreadable.
 func TestMintAuditRegistrationMigrationPreservesLegacyRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	names, err := fs.Glob(migrations.FS, "000[1-9]_*.sql")
@@ -63,6 +64,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 // migration neither guesses a canonical repository ID from a mutable
 // owner/name nor makes pre-ID mint rows unreadable.
 func TestMintAuditRepositoryMigrationPreservesLegacyRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	names, err := fs.Glob(migrations.FS, "*.sql")

@@ -12,6 +12,7 @@ import (
 )
 
 func TestReviewRecordReadRevalidatesCanonicalBody(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, err := Open(ctx, t.TempDir()+"/review.db", Options{})
 	if err != nil {
@@ -58,6 +59,7 @@ func TestReviewRecordReadRevalidatesCanonicalBody(t *testing.T) {
 }
 
 func TestReviewRecordReadPreservesLegacyMissingInstructionAuthority(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, err := Open(ctx, t.TempDir()+"/review.db", Options{})
 	if err != nil {
@@ -120,6 +122,7 @@ func TestReviewRecordReadPreservesLegacyMissingInstructionAuthority(t *testing.T
 }
 
 func TestReviewFailureReadRevalidatesCanonicalBody(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, err := Open(ctx, t.TempDir()+"/review-failure.db", Options{})
 	if err != nil {
@@ -158,6 +161,7 @@ func TestReviewFailureReadRevalidatesCanonicalBody(t *testing.T) {
 }
 
 func TestReviewRetryReadRevalidatesCanonicalBody(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, err := Open(ctx, t.TempDir()+"/review-retry.db", Options{})
 	if err != nil {

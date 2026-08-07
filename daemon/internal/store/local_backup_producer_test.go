@@ -31,6 +31,7 @@ func (s *blockingBackupArtifactStore) Verify(domain.Digest) (bool, error) {
 }
 
 func TestLocalBackupProducerCreatesRefreshesAndVerifiesEvidence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
@@ -195,6 +196,7 @@ func TestLocalBackupProducerCreatesRefreshesAndVerifiesEvidence(t *testing.T) {
 }
 
 func TestLocalBackupProducerPreservesFallbackUntilManifestRefreshSucceeds(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	firstDigest := domain.Digest("sha256:manifest-first")
@@ -290,6 +292,7 @@ func TestLocalBackupProducerPreservesFallbackUntilManifestRefreshSucceeds(t *tes
 }
 
 func TestLocalBackupProducerRejectsWidenedDirectory(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
 	checkpointDir := dbPath + ".checkpoints"
@@ -317,6 +320,7 @@ func TestLocalBackupProducerRejectsWidenedDirectory(t *testing.T) {
 }
 
 func TestLocalBackupHealthPinsCheckpointAndRestoreGeneration(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
@@ -402,6 +406,7 @@ func TestLocalBackupHealthPinsCheckpointAndRestoreGeneration(t *testing.T) {
 // refused while the gap holds, and the upgrade that repairs it needs no
 // operator step (#430).
 func TestLocalBackupProducerReportsUnreadableDurableRowAndRecovers(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	payloadDigest := domain.Digest("sha256:durable-task-payload")
@@ -517,6 +522,7 @@ func TestLocalBackupProducerReportsUnreadableDurableRowAndRecovers(t *testing.T)
 // digest the rest of the scan lacks, so equality proves nothing. A daemon that
 // can read the live database repairs it instead of carrying it (#430).
 func TestLocalBackupProducerReplacesACheckpointItCannotVerify(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	files, err := store.NewDefaultLocalBackupFiles(dbPath)
@@ -570,6 +576,7 @@ func TestLocalBackupProducerReplacesACheckpointItCannotVerify(t *testing.T) {
 // has actually scanned that database. Answering from a valid pre-downgrade
 // checkpoint would open the gate this unit exists to hold (#430).
 func TestLocalBackupProducerRefusesClosureUntilItScansTheLiveStore(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	files, err := store.NewDefaultLocalBackupFiles(dbPath)
@@ -631,6 +638,7 @@ func TestLocalBackupProducerRefusesClosureUntilItScansTheLiveStore(t *testing.T)
 }
 
 func TestLocalBackupProducerReportsAnUnregisteredDurableKind(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	files, err := store.NewDefaultLocalBackupFiles(dbPath)

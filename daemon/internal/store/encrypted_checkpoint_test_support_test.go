@@ -14,6 +14,7 @@ import (
 )
 
 func TestBackupEncryptionKeyFailsClosed(t *testing.T) {
+	t.Parallel()
 	t.Run("missing beside encrypted checkpoint", func(t *testing.T) {
 		dbPath := filepath.Join(t.TempDir(), "freeside.db")
 		if _, err := NewDefaultLocalBackupFiles(dbPath); err != nil {
@@ -69,6 +70,7 @@ func TestBackupEncryptionKeyFailsClosed(t *testing.T) {
 }
 
 func TestConcurrentBackupEncryptionKeyCreationConverges(t *testing.T) {
+	t.Parallel()
 	const contenders = 32
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	start := make(chan struct{})
@@ -112,6 +114,7 @@ func TestConcurrentBackupEncryptionKeyCreationConverges(t *testing.T) {
 }
 
 func TestBackupEncryptionKeyPublicationDoesNotReplaceWinner(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	path := filepath.Join(root, "freeside.db"+backupEncryptionKeySuffix)
 	winner := bytes.Repeat([]byte{0x42}, backupEncryptionKeySize)

@@ -41,6 +41,7 @@ func (p *productionPublicationHarness) nativeCleanPass(nativeID int64) domain.Na
 // found findings: readiness stays gated on the exact Freeside pass (plan §6,
 // §7; issue #497), and the native observation coexists as extra evidence.
 func TestProductionNativeCleanPassNeverSatisfiesReadiness(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	reviewID := engine.ProductionReviewInvocationID(p.runID, 1)
 	p.reviewer.Script(reviewID, fake.ReviewScript{
@@ -93,6 +94,7 @@ func TestProductionNativeCleanPassNeverSatisfiesReadiness(t *testing.T) {
 // evidence is additive, never a second or substitute readiness path, and a
 // later pass never re-derives readiness from it.
 func TestProductionReadyCoexistsWithNativeObservations(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	result, err := p.reconcileLanes()

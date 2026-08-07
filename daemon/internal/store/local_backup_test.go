@@ -21,6 +21,7 @@ func (s backupArtifactSet) Verify(digest domain.Digest) (bool, error) {
 }
 
 func TestLocalCheckpointHealthEvaluatesEveryDimension(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
@@ -189,6 +190,7 @@ func TestLocalCheckpointHealthEvaluatesEveryDimension(t *testing.T) {
 }
 
 func TestLocalCheckpointHealthIncludesEveryStageInputRole(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
@@ -298,6 +300,7 @@ func TestLocalCheckpointHealthIncludesEveryStageInputRole(t *testing.T) {
 }
 
 func TestLocalCheckpointHealthDoesNotTrustCheckpointModTime(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
@@ -331,6 +334,7 @@ func TestLocalCheckpointHealthDoesNotTrustCheckpointModTime(t *testing.T) {
 }
 
 func TestLocalCheckpointHealthReportsMissingEvidenceUnhealthy(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
 	source, err := store.NewLocalCheckpointHealthSource(store.LocalCheckpointHealthOptions{
@@ -374,6 +378,7 @@ func writeCheckpointGeneratedAt(t *testing.T, path string, generatedAt time.Time
 }
 
 func TestLocalCheckpointHealthIncludesDurablePayloadBlobs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	recipeDigest := domain.Digest("sha256:durable-recipe")
@@ -461,6 +466,7 @@ func TestLocalCheckpointHealthIncludesDurablePayloadBlobs(t *testing.T) {
 }
 
 func TestLocalCheckpointHealthRetainsExternalCommandBindings(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	f := newFixtures(t)
@@ -585,6 +591,7 @@ func TestLocalCheckpointHealthRetainsExternalCommandBindings(t *testing.T) {
 }
 
 func TestLocalCheckpointHealthRejectsDivergentClosureRows(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		mutation string

@@ -68,6 +68,8 @@ func scrubbedGitEnv() []string {
 }
 
 func TestRunGitIgnoresAmbientGitDir(t *testing.T) {
+	// Serial: t.Setenv mutates the process-global environment, which the
+	// Go test runner forbids in a parallel test (it panics).
 	fixture := t.TempDir()
 	runGit(t, fixture, "init", "-q")
 	decoy := t.TempDir()
@@ -254,6 +256,7 @@ func (zeroTokenSource) Token(context.Context, string) (publish.InstallationToken
 // or pull request. The forge server fails the test on any request, so the
 // assertion is that no external effect occurred at all.
 func TestImportFindingsBlockPublication(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	headSHA, importFindings := importControlPlaneCandidate(t)

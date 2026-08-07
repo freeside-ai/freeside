@@ -35,6 +35,7 @@ func ptrDigest(d domain.Digest) *domain.Digest { return &d }
 // publish_eligible artifact under an unapproved recipe. The gate is the store's,
 // so it fires even under a store that approves other recipes.
 func TestPutArtifactRejectsForgedPublishEligible(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	// A store that approves the fixture recipe but NOT the forged one.
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
@@ -59,6 +60,7 @@ func TestPutArtifactRejectsForgedPublishEligible(t *testing.T) {
 // legal non-evidence artifact (agent output, publish_eligible=false) persists
 // even under a store that approves nothing.
 func TestPutArtifactAllowsLegalNonEvidence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	agentArt := domain.Artifact{
@@ -85,6 +87,7 @@ func TestPutArtifactAllowsLegalNonEvidence(t *testing.T) {
 // mode survives a write/read cycle and is admitted even though the item names a
 // pr_head_sha the evidence was not produced against.
 func TestHeadIndependentEvidenceRoundTrips(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixtures(t)
 	recipe := fixtureRecipe
@@ -154,6 +157,7 @@ func TestHeadIndependentEvidenceRoundTrips(t *testing.T) {
 // when read back under a policy that no longer approves its recipe (a forged
 // row, or one written by an older binary, cannot leak as valid evidence).
 func TestGetArtifactRejectsUnapprovedRecipe(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := tempDBPath(t)
 	f := newFixtures(t)
@@ -182,6 +186,7 @@ func TestGetArtifactRejectsUnapprovedRecipe(t *testing.T) {
 // an unapproved recipe fails closed at the persistence boundary. The gate runs
 // before the insert, so it fires without the item's foreign keys being seeded.
 func TestPutAttentionItemRejectsUnapprovedEvidence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixtures(t) // f.item carries evidence under fixtureRecipe
 	s := openStore(t, store.Options{})
@@ -196,6 +201,7 @@ func TestPutAttentionItemRejectsUnapprovedEvidence(t *testing.T) {
 // policy fails closed when read back under one that no longer approves its
 // evidence recipe.
 func TestGetAttentionItemRejectsUnapprovedEvidence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := tempDBPath(t)
 	f := newFixtures(t)

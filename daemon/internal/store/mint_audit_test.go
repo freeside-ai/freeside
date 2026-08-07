@@ -35,6 +35,7 @@ func mintAuditFixture() store.MintAudit {
 // TestRecordMintAuditRoundTrip: a recorded mint reads back field-identical
 // and in insertion order, with times normalized to UTC instants.
 func TestRecordMintAuditRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 
@@ -95,6 +96,7 @@ func TestRecordMintAuditRoundTrip(t *testing.T) {
 // TestRecordMintAuditAppendOnly: two byte-identical mints are two real
 // events; the ledger has no idempotency key and must not dedup them.
 func TestRecordMintAuditAppendOnly(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 
@@ -126,6 +128,7 @@ func TestRecordMintAuditAppendOnly(t *testing.T) {
 // TestRecordMintAuditRejections: the write method names invalid records
 // before the schema CHECKs surface a bare constraint error.
 func TestRecordMintAuditRejections(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 
@@ -176,6 +179,7 @@ func TestRecordMintAuditRejections(t *testing.T) {
 // ledger distinguishes one repository before and after a rename from a
 // different repository that later reuses the original display path.
 func TestMintAuditRepositoryIdentitySurvivesRenameAndNameReuse(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 
@@ -223,6 +227,7 @@ func TestMintAuditRepositoryIdentitySurvivesRenameAndNameReuse(t *testing.T) {
 // acceptance 1); recording a mint rides WriteInternal and must not bump the
 // client-visible revision.
 func TestRecordMintAuditInvisibleToSync(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 
@@ -248,6 +253,7 @@ func TestRecordMintAuditInvisibleToSync(t *testing.T) {
 
 // TestMintAuditPersistsAcrossReopen: the ledger survives a daemon restart.
 func TestMintAuditPersistsAcrossReopen(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := tempDBPath(t)
 

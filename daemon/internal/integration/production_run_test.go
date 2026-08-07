@@ -887,6 +887,7 @@ func TestUnpublishedProductionCompletionNeverCreatesATerminal(t *testing.T) {
 }
 
 func TestPreJobRefusalHoldsThePendingIntentWithoutStoppingReconcile(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openUnattendedFixture(t)
 	spec, policy, resolved := registerSubmissionArtifacts(t, f.store, "run-prod-prejob")
@@ -928,6 +929,7 @@ func TestPreJobRefusalHoldsThePendingIntentWithoutStoppingReconcile(t *testing.T
 }
 
 func TestInputIORefusalHoldsThePendingIntentWithoutStoppingReconcile(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openUnattendedFixture(t)
 	spec, policy, resolved := registerSubmissionArtifacts(t, f.store, "run-prod-input-io")
@@ -972,6 +974,7 @@ func TestInputIORefusalHoldsThePendingIntentWithoutStoppingReconcile(t *testing.
 }
 
 func TestInputIORefusalDoesNotStarveLaterProductionIntent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openUnattendedFixture(t)
 	spec1, policy1, resolved1 := registerSubmissionArtifacts(t, f.store, "run-prod-input-held")

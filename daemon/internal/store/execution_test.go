@@ -158,6 +158,7 @@ func recordAdmission(t *testing.T, s *store.Store, admission domain.ExecutionAdm
 // back as it went in, an identical replay converges, and a divergent replay of
 // one invocation is an immutable conflict.
 func TestExecutionAdmissionRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAdmissionFixture(t, nil)
 	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
@@ -208,6 +209,7 @@ func TestExecutionAdmissionRoundTrip(t *testing.T) {
 // snapshot is frozen at spawn, so what keeps it meaningful is re-checking it
 // against the floor policy states now, on both the write and every read.
 func TestExecutionAdmissionRegatedAgainstCurrentFloor(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAdmissionFixture(t, nil)
 	path := tempDBPath(t)
@@ -264,6 +266,7 @@ func TestExecutionAdmissionRegatedAgainstCurrentFloor(t *testing.T) {
 // TestExecutionAdmissionUnconfiguredFloorFailsClosed pins the direction an
 // unconfigured policy fails in: nothing is admissible, rather than everything.
 func TestExecutionAdmissionUnconfiguredFloorFailsClosed(t *testing.T) {
+	t.Parallel()
 	f := newAdmissionFixture(t, nil)
 	s := openWithFixture(t, f, store.Options{})
 	if err := recordAdmission(t, s, f.admission); !errors.Is(err, domain.ErrUnknownAdmissionFloor) {
@@ -272,6 +275,7 @@ func TestExecutionAdmissionUnconfiguredFloorFailsClosed(t *testing.T) {
 }
 
 func TestExecutionAdmissionRejectsRetiredWaiver(t *testing.T) {
+	t.Parallel()
 	activeProfile := testTrustProfile(t, "owner/repo", 424242).ProfileDigest
 	f := newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
 		in.OperatingMode = domain.ModeUnattended
@@ -340,6 +344,7 @@ func seedTrustProfile(t *testing.T, s *store.Store, repo string, repositoryID in
 // TestOptionsAdmissionPolicyIsSnapshotted proves a caller cannot widen the
 // boundary policy after Open by mutating the maps and slices it passed in.
 func TestOptionsAdmissionPolicyIsSnapshotted(t *testing.T) {
+	t.Parallel()
 	f := newAdmissionFixture(t, nil)
 	floors := attendedFloors()
 	waiver := int64(42)
@@ -361,6 +366,7 @@ func TestOptionsAdmissionPolicyIsSnapshotted(t *testing.T) {
 // caller-supplied digest would point execution at a binding the run does not
 // have.
 func TestExecutionAdmissionMatchesTheRunsDigests(t *testing.T) {
+	t.Parallel()
 	f := newAdmissionFixture(t, nil)
 	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
 
@@ -385,6 +391,7 @@ func TestExecutionAdmissionMatchesTheRunsDigests(t *testing.T) {
 // profile, and the profile is also what stops the record's own repository
 // name-and-number pair from being self-asserted.
 func TestUnattendedAdmissionRequiresATrustedRepository(t *testing.T) {
+	t.Parallel()
 	activeProfile := testTrustProfile(t, "owner/repo", 424242).ProfileDigest
 	unattended := func(in *domain.ExecutionAdmissionInput) {
 		in.OperatingMode = domain.ModeUnattended
@@ -448,6 +455,7 @@ func TestUnattendedAdmissionRequiresATrustedRepository(t *testing.T) {
 // TestUnattendedAdmissionUsesEncryptedBackupHealth pins the ordinary post-waiver
 // path: a fully healthy checkpoint admits unattended work without an exception.
 func TestUnattendedAdmissionUsesEncryptedBackupHealth(t *testing.T) {
+	t.Parallel()
 	active := testTrustProfile(t, "owner/repo", 424242).ProfileDigest
 	f := newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
 		in.OperatingMode = domain.ModeUnattended
@@ -481,6 +489,7 @@ func TestUnattendedAdmissionUsesEncryptedBackupHealth(t *testing.T) {
 // admission: callers can inspect every dimension, while an unconfigured store
 // reports absence instead of synthesizing a healthy default.
 func TestBackupHealthIsQueryable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	want := healthyBackupHealth()
 	configured := openStore(t, store.Options{BackupHealthSource: healthyBackupHealthSource()})
@@ -503,6 +512,7 @@ func TestBackupHealthIsQueryable(t *testing.T) {
 // initial write, then the same live source is changed after a healthy write
 // and reconstruction refuses the already-recorded admission.
 func TestUnattendedAdmissionRegatesEveryBackupHealthDimension(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	active := testTrustProfile(t, "owner/repo", 424242).ProfileDigest
 	f := newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
@@ -602,6 +612,7 @@ func TestUnattendedAdmissionRegatesEveryBackupHealthDimension(t *testing.T) {
 // missing producer from an explicitly unhealthy signal. Neither is an
 // implicit pass.
 func TestUnattendedAdmissionWithNoBackupHealthSourceFailsClosed(t *testing.T) {
+	t.Parallel()
 	active := testTrustProfile(t, "owner/repo", 424242).ProfileDigest
 	f := newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
 		in.OperatingMode = domain.ModeUnattended
@@ -622,6 +633,7 @@ func TestUnattendedAdmissionWithNoBackupHealthSourceFailsClosed(t *testing.T) {
 }
 
 func TestListUnattendedAdmissionsEvaluatesBackupHealthOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	active := testTrustProfile(t, "owner/repo", 424242).ProfileDigest
 	unattended := func(in *domain.ExecutionAdmissionInput) {
@@ -685,6 +697,7 @@ func TestListUnattendedAdmissionsEvaluatesBackupHealthOnce(t *testing.T) {
 // operator who activates a revised profile expects it to bind work already in
 // flight, not merely the next run.
 func TestAdmissionBoundToTheActiveTrustProfileRevision(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	active := testTrustProfile(t, "owner/repo", 424242).ProfileDigest
 	f := newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
@@ -773,6 +786,7 @@ func TestAdmissionBoundToTheActiveTrustProfileRevision(t *testing.T) {
 // invocation record is the durable statement of what a turn was given, so the
 // digest is recomputed from it rather than trusted from the caller.
 func TestExecutionAdmissionMatchesTheInvocationsInputs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAdmissionFixture(t, nil)
 	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
@@ -818,6 +832,7 @@ func TestExecutionAdmissionMatchesTheInvocationsInputs(t *testing.T) {
 // the run does not carry: the admission asserts a binding, and an unbound
 // assertion is what a confused writer produces.
 func TestExecutionAdmissionRequiresItsAttempt(t *testing.T) {
+	t.Parallel()
 	f := newAdmissionFixture(t, nil)
 	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
 
@@ -846,6 +861,7 @@ func TestExecutionAdmissionRequiresItsAttempt(t *testing.T) {
 // TestExecutionExportBinding covers the link the publication chain joins on: an
 // export belongs to its admission, at the base that admission was granted for.
 func TestExecutionExportBinding(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAdmissionFixture(t, nil)
 	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
@@ -915,6 +931,7 @@ func TestExecutionExportBinding(t *testing.T) {
 }
 
 func TestExecutionOutcomeBinding(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAdmissionFixture(t, nil)
 	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
@@ -1051,6 +1068,7 @@ func TestExecutionExportAndOutcomeAreMutuallyExclusive(t *testing.T) {
 // this test "asserted" that hop by comparing a literal to the same literal,
 // which proved nothing; better to state the gap than to simulate coverage.
 func TestRunReachesItsAdmissionAndExport(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAdmissionFixture(t, nil)
 	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})

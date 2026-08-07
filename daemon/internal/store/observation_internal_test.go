@@ -26,6 +26,7 @@ func seedObservationStore(t *testing.T) *Store {
 // raw inserts bypass the write boundary the way tampering or a future schema
 // would.
 func TestObservationReadsFailClosedOnTamper(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	at := formatTime(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
 
@@ -145,6 +146,7 @@ func TestObservationReadsFailClosedOnTamper(t *testing.T) {
 // by erasing the milestones the insert wrote) must not mint milestones the
 // run never had observed.
 func TestAuthorityReplayDoesNotBackfillMilestones(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, admission := seedAdmission(t, nil)
 

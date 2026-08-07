@@ -672,6 +672,7 @@ func onlyPublicationHandoff(t *testing.T, workDir string) string {
 }
 
 func TestFakeCandidatePublicationRejectsInvalidAllowlistBeforeCommit(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -701,6 +702,7 @@ func TestFakeCandidatePublicationRejectsInvalidAllowlistBeforeCommit(t *testing.
 }
 
 func TestFakeCandidatePublicationRejectsInvalidBaseRefBeforeCommit(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -725,6 +727,7 @@ func TestFakeCandidatePublicationRejectsInvalidBaseRefBeforeCommit(t *testing.T)
 }
 
 func TestFakeCandidatePublicationRejectsInvalidRepoBeforeCommit(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -749,6 +752,7 @@ func TestFakeCandidatePublicationRejectsInvalidRepoBeforeCommit(t *testing.T) {
 }
 
 func TestFakeCandidatePublicationRejectsEmptyWorkspaceBeforeCommit(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workflow := h.engine()
 	spec := h.spec("")
@@ -769,6 +773,7 @@ func TestFakeCandidatePublicationRejectsEmptyWorkspaceBeforeCommit(t *testing.T)
 }
 
 func TestFakeCandidatePublicationRejectsMarkerBodyBeforeCommit(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -792,6 +797,7 @@ func TestFakeCandidatePublicationRejectsMarkerBodyBeforeCommit(t *testing.T) {
 }
 
 func TestFakeCandidatePublicationRejectsDaemonOwnedRootBeforeCommit(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workflow := h.engine()
 	spec := h.spec(filepath.Dir(h.dbPath))
@@ -813,6 +819,7 @@ func TestFakeCandidatePublicationRejectsDaemonOwnedRootBeforeCommit(t *testing.T
 }
 
 func TestFakeCandidatePublicationRejectsPreEpochCommitDateBeforeCommit(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -837,6 +844,7 @@ func TestFakeCandidatePublicationRejectsPreEpochCommitDateBeforeCommit(t *testin
 }
 
 func TestFakeCandidatePublicationRejectsCommitDateAtGitUpperBoundBeforeCommit(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -861,6 +869,7 @@ func TestFakeCandidatePublicationRejectsCommitDateAtGitUpperBoundBeforeCommit(t 
 }
 
 func TestFakeCandidatePublicationRejectsNonUTF8IdentifierBeforeCommit(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -885,6 +894,7 @@ func TestFakeCandidatePublicationRejectsNonUTF8IdentifierBeforeCommit(t *testing
 }
 
 func TestFakeCandidatePublicationReservesVerificationInvocation(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -919,6 +929,7 @@ func TestFakeCandidatePublicationReservesVerificationInvocation(t *testing.T) {
 }
 
 func TestFakeCandidatePublicationRejectsPreexistingPublisherIntentAtAdmission(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -957,6 +968,7 @@ func TestFakeCandidatePublicationRejectsPreexistingPublisherIntentAtAdmission(t 
 }
 
 func TestFakeCandidatePublicationRejectsMissingInvocationOwnerBeforeRecovery(t *testing.T) {
+	t.Parallel()
 	for _, invocation := range []struct {
 		role string
 		id   func(engine.FakePublicationSpec) domain.InvocationID
@@ -1009,6 +1021,7 @@ func TestFakeCandidatePublicationRejectsMissingInvocationOwnerBeforeRecovery(t *
 }
 
 func TestFakeCandidatePublicationPropagatesInactiveJanitorDuringPendingRecovery(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1055,6 +1068,7 @@ func TestFakeCandidatePublicationPropagatesInactiveJanitorDuringPendingRecovery(
 }
 
 func TestFakeCandidatePublicationRemovesHandoffWhenTaskTransactionRollsBack(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1092,6 +1106,7 @@ func TestFakeCandidatePublicationRemovesHandoffWhenTaskTransactionRollsBack(t *t
 }
 
 func TestFakeCandidatePublicationRejectsSymlinkedWorkspaceWorkDirOverlap(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1120,6 +1135,7 @@ func TestFakeCandidatePublicationRejectsSymlinkedWorkspaceWorkDirOverlap(t *test
 }
 
 func TestFakeCandidatePublicationRejectsExtendedDurableRun(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1154,6 +1170,7 @@ func TestFakeCandidatePublicationRejectsExtendedDurableRun(t *testing.T) {
 }
 
 func TestFakeCandidatePublicationRejectsReplayUnderDifferentWorkRoot(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1171,6 +1188,7 @@ func TestFakeCandidatePublicationRejectsReplayUnderDifferentWorkRoot(t *testing.
 }
 
 func TestFakeCandidatePublicationRejectsPublicationInvocationOwnedByAnotherTask(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1205,6 +1223,7 @@ func TestFakeCandidatePublicationRejectsPublicationInvocationOwnedByAnotherTask(
 }
 
 func TestFakeCandidatePublicationRejectsExtendedDurableRunAfterDispatch(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1250,6 +1269,7 @@ func extendFakePublicationRun(
 }
 
 func TestFakeCandidatePublicationRejectsRedirectedCheckoutBeforeImport(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1271,6 +1291,7 @@ func TestFakeCandidatePublicationRejectsRedirectedCheckoutBeforeImport(t *testin
 }
 
 func TestFakeCandidatePublicationRejectsSymlinkedRequestedCheckoutBeforeImport(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1295,6 +1316,7 @@ func TestFakeCandidatePublicationRejectsSymlinkedRequestedCheckoutBeforeImport(t
 }
 
 func TestFakeCandidatePublicationRejectsReplacedCheckoutParentBeforeImport(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1317,6 +1339,7 @@ func TestFakeCandidatePublicationRejectsReplacedCheckoutParentBeforeImport(t *te
 }
 
 func TestFakeCandidatePublicationReusesValidatedCheckoutDirectory(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1338,6 +1361,7 @@ func TestFakeCandidatePublicationReusesValidatedCheckoutDirectory(t *testing.T) 
 }
 
 func TestFakeCandidatePublicationRestoresAndConvergesExactlyOnce(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1413,6 +1437,7 @@ func TestFakeCandidatePublicationRestoresAndConvergesExactlyOnce(t *testing.T) {
 }
 
 func TestFakeCandidatePublicationSerializesOneTaskAcrossEngines(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1477,6 +1502,7 @@ func TestFakeCandidatePublicationSerializesOneTaskAcrossEngines(t *testing.T) {
 }
 
 func TestFakeCandidatePublicationSerializesOneIdentityAcrossRuns(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1550,6 +1576,7 @@ func TestFakeCandidatePublicationSerializesOneIdentityAcrossRuns(t *testing.T) {
 }
 
 func TestFakeCandidatePublicationRejectsCorruptCheckpointBlob(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1595,6 +1622,7 @@ func TestFakeCandidatePublicationRejectsCorruptCheckpointBlob(t *testing.T) {
 }
 
 func TestFakeCandidatePublicationRejectsSubstitutedCheckpointArtifact(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1656,6 +1684,7 @@ func TestFakeCandidatePublicationRejectsSubstitutedCheckpointArtifact(t *testing
 }
 
 func TestFakeCandidatePublicationReverifiesSelfConsistentCheckpoint(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1728,6 +1757,7 @@ func TestFakeCandidatePublicationReverifiesSelfConsistentCheckpoint(t *testing.T
 }
 
 func TestFakeCandidatePublicationRejectsCorruptTerminalEvidenceBeforeDispatch(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1802,6 +1832,7 @@ func TestFakeCandidatePublicationRejectsCorruptTerminalEvidenceBeforeDispatch(t 
 }
 
 func TestFakeCandidatePublicationRejectsCorruptTerminalEvidenceAfterDispatch(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1834,6 +1865,7 @@ func TestFakeCandidatePublicationRejectsCorruptTerminalEvidenceAfterDispatch(t *
 }
 
 func TestFakeCandidatePublicationRejectsUnboundReadyTerminalDecisionInputs(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -1970,6 +2002,7 @@ func TestFakeCandidatePublicationRejectsUnboundReadyTerminalDecisionInputs(t *te
 }
 
 func TestFakeCandidatePublicationContinuesPastBrokenSibling(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workflow := h.engine()
 	firstWorkspace := t.TempDir()
@@ -2023,6 +2056,7 @@ func TestFakeCandidatePublicationContinuesPastBrokenSibling(t *testing.T) {
 }
 
 func TestFakeCandidatePublicationRejectsUnboundBlockedTerminal(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workflow := h.engine()
 	workspace := t.TempDir()
@@ -2076,6 +2110,7 @@ func TestFakeCandidatePublicationRejectsUnboundBlockedTerminal(t *testing.T) {
 }
 
 func TestFakeCandidatePublicationRecoversPersistedRecipe(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -2123,6 +2158,7 @@ func TestFakeCandidatePublicationRecoversPersistedRecipe(t *testing.T) {
 }
 
 func TestFakeCandidatePublicationScopedReconcileLeavesGenericRunUntouched(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workflow := h.engine()
 	if _, err := workflow.StartFakeRun(h.ctx, engine.FakeRunSpec{
@@ -2159,6 +2195,7 @@ func TestFakeCandidatePublicationScopedReconcileLeavesGenericRunUntouched(t *tes
 }
 
 func TestFakeCandidatePublicationDoesNotReuseHandoffAfterStateRollback(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -2236,6 +2273,7 @@ func TestFakeCandidatePublicationDoesNotReuseHandoffAfterStateRollback(t *testin
 }
 
 func TestFakeCandidatePublicationRejectsReplacedCommittedHandoff(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -2270,6 +2308,7 @@ func TestFakeCandidatePublicationRejectsReplacedCommittedHandoff(t *testing.T) {
 }
 
 func TestFakeCandidatePublicationAdoptsMatchingPrecommitHandoff(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -2318,6 +2357,7 @@ func TestFakeCandidatePublicationAdoptsMatchingPrecommitHandoff(t *testing.T) {
 }
 
 func TestFakeCandidatePublicationDoesNotReExportMissingCommittedHandoff(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -2340,6 +2380,7 @@ func TestFakeCandidatePublicationDoesNotReExportMissingCommittedHandoff(t *testi
 }
 
 func TestFakeCandidatePublicationContainsMaliciousFixtures(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		build       func(*testing.T, string)
@@ -2409,6 +2450,7 @@ func TestFakeCandidatePublicationContainsMaliciousFixtures(t *testing.T) {
 }
 
 func TestFakeCandidatePublicationChecksFreshTrustBeforePush(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	h.audit.OIDCAvailable = true
 	workspace := t.TempDir()
@@ -2435,6 +2477,7 @@ func TestFakeCandidatePublicationChecksFreshTrustBeforePush(t *testing.T) {
 }
 
 func TestFakeCandidatePublicationRetainsRecoveryTaskAfterIntentTrustDrift(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -2529,6 +2572,7 @@ func TestFakeCandidatePublicationRetainsRecoveryTaskAfterIntentTrustDrift(t *tes
 }
 
 func TestFakeCandidatePublicationRecoversDispatchedOutcomeBeforeTrustGate(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -2567,6 +2611,7 @@ func TestFakeCandidatePublicationRecoversDispatchedOutcomeBeforeTrustGate(t *tes
 }
 
 func TestFakeCandidatePublicationRejectsAlteredImportAccountDuringOutcomeRecovery(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -2626,6 +2671,7 @@ func TestFakeCandidatePublicationRejectsAlteredImportAccountDuringOutcomeRecover
 }
 
 func TestFakeCandidatePublicationDoesNotReuseSiblingOutcome(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -2719,6 +2765,7 @@ func sameArtifactDigests(a, b []domain.Artifact) bool {
 }
 
 func TestFakeCandidatePublicationReplayKeepsOriginalTrustBinding(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -2782,6 +2829,7 @@ func TestFakeCandidatePublicationReplayKeepsOriginalTrustBinding(t *testing.T) {
 // before the task reconciles. The task cannot renegotiate the invocation ID it
 // already committed, so a foreign intent there would strand it permanently.
 func TestFakeCandidatePublicationBlocksForeignIntentBetweenAdmissionAndReconciliation(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -2885,6 +2933,7 @@ func TestFakeCandidatePublicationBlocksForeignIntentBetweenAdmissionAndReconcili
 // case. A run cannot admit a task bound to an invocation another run is
 // already holding, and it finds out before any of its own state is committed.
 func TestFakeCandidatePublicationRejectsForeignReservationAtAdmission(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -3031,6 +3080,7 @@ func assertFakePublicationSchedulePoliciesConverged(
 }
 
 func TestFakeCandidatePublicationReplayConvergesLegacyPolicy(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -3069,6 +3119,7 @@ func TestFakeCandidatePublicationReplayConvergesLegacyPolicy(t *testing.T) {
 }
 
 func TestFakeCandidatePublicationBulkRecoveryConvergesDispatchedLegacyPolicy(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -3096,6 +3147,7 @@ func TestFakeCandidatePublicationBulkRecoveryConvergesDispatchedLegacyPolicy(t *
 // between admission and reconciliation must read its own reservation as "not
 // published yet" and settle it, not as a foreign row at the intent key.
 func TestFakeCandidatePublicationSettlesAReservationWrittenBeforeRestart(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
@@ -3121,6 +3173,7 @@ func TestFakeCandidatePublicationSettlesAReservationWrittenBeforeRestart(t *test
 // the rest of the task's life, so the upgrade would leave exactly the strand
 // this unit exists to prevent.
 func TestFakeCandidatePublicationBackfillsAReservationMissingFromAdmission(t *testing.T) {
+	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")

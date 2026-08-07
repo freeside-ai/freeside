@@ -193,6 +193,7 @@ func submitOn(t *testing.T, f *workflowFixture, itemID domain.ItemID, commandID 
 // the explicit resume_unattended reopens dispatch, after which the held
 // intent is admitted on its own merits.
 func TestStopUnattendedHoldsDispatchUntilResume(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openUnattendedFixture(t)
 
@@ -304,6 +305,7 @@ func TestStopUnattendedHoldsDispatchUntilResume(t *testing.T) {
 // unattended operation, so the replay path holds it while stopped and starts
 // it only after the explicit resume.
 func TestStopHoldsAReplayedRecordedAdmission(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openUnattendedFixture(t)
 
@@ -364,6 +366,7 @@ func TestStopHoldsAReplayedRecordedAdmission(t *testing.T) {
 // until resume — the driver's own answer, not the outbox bookkeeping, is
 // what distinguishes an unstarted launch from an unmarked one.
 func TestStopDoesNotHoldAcceptanceOfStartedWork(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openUnattendedFixture(t)
 
@@ -412,6 +415,7 @@ func TestStopDoesNotHoldAcceptanceOfStartedWork(t *testing.T) {
 // barrier, and an engine with no admission configuration must treat its
 // unknowable operating mode as unattended (fail closed) rather than skip it.
 func TestStopHoldsAFreshDispatchUnderAnUnconfiguredEngine(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openUnattendedFixture(t)
 
@@ -456,6 +460,7 @@ func TestStopHoldsAFreshDispatchUnderAnUnconfiguredEngine(t *testing.T) {
 // a blocking system_health item exactly as it does against a stop — not just
 // against whichever half was remembered.
 func TestBlockingItemHoldsAFreshDispatchUnderAnUnconfiguredEngine(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openUnattendedFixture(t)
 
@@ -528,6 +533,7 @@ func TestBlockingItemHoldsAFreshDispatchUnderAnUnconfiguredEngine(t *testing.T) 
 // between a recorded unattended attempt and a driver start the operator
 // stopped. Without it, exactly one last launch would leak here.
 func TestStopHoldsAReplayUnderAnUnconfiguredEngine(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openUnattendedFixture(t)
 

@@ -11,6 +11,7 @@ import (
 // write transaction increments ServerState.revision exactly once, and the
 // internal write path does not increment it at all.
 func TestWriteIncrementsRevisionOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 
@@ -70,6 +71,7 @@ func TestWriteIncrementsRevisionOnce(t *testing.T) {
 // TestNewEpoch is the fixture-5 epoch path: a bump issues a fresh epoch and
 // leaves the revision alone (the epoch change itself invalidates cursors).
 func TestNewEpoch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 
@@ -92,6 +94,7 @@ func TestNewEpoch(t *testing.T) {
 // TestEpochSurvivesReopen: Open seeds an epoch once and never overwrites an
 // established one.
 func TestEpochSurvivesReopen(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := tempDBPath(t)
 	s, err := store.Open(ctx, path, store.Options{})

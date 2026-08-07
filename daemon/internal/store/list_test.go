@@ -17,6 +17,7 @@ import (
 // as_of_revision is exactly the revision of the Write that last touched it,
 // none exceeds the state's revision, and the bodies round-trip.
 func TestBootstrapListsOneSnapshot(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
@@ -123,6 +124,7 @@ func TestBootstrapListsOneSnapshot(t *testing.T) {
 // synchronously inside a Read callback would deadlock by design; the
 // concurrent goroutine below is the only shape that can exist.
 func TestListSnapshotIsolatedFromConcurrentWrite(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
@@ -201,6 +203,7 @@ func TestListSnapshotIsolatedFromConcurrentWrite(t *testing.T) {
 // ascending primary key, never by insertion order. Runs cover the single-key
 // shape, deliveries the composite key with every column permuted.
 func TestListDeterministicOrder(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
@@ -275,6 +278,7 @@ func TestListDeterministicOrder(t *testing.T) {
 // error; a fresh daemon's first bootstrap serves zero rows, and a nil slice
 // would marshal as JSON null where the sync schemas require arrays.
 func TestListEmptyStore(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	if err := s.Read(ctx, func(tx *store.ReadTx) error {
@@ -313,6 +317,7 @@ func TestListEmptyStore(t *testing.T) {
 // Get, so an item persisted under an approving policy fails the whole list
 // closed when enumerated under a policy that no longer approves its recipe.
 func TestListAttentionItemsRegatesEvidence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := tempDBPath(t)
 	f := newFixtures(t)

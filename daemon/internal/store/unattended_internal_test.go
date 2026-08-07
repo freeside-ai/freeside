@@ -17,6 +17,7 @@ import (
 // stored body, and the new transition log starts empty — the legitimate
 // "never stopped" state, so nothing about the upgrade closes admission.
 func TestUnattendedOperationMigrationAppliesFromHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	migrateThrough(t, ctx, db, "0017_")
@@ -77,6 +78,7 @@ func TestUnattendedOperationMigrationAppliesFromHead(t *testing.T) {
 // fails closed against the command that says stop_unattended, and a row
 // stripped of its command binding is refused outright.
 func TestTamperedTransitionFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
 	if err != nil {
@@ -167,6 +169,7 @@ func TestTamperedTransitionFailsClosed(t *testing.T) {
 // to refuse it — the whole-table divergence count must fail the gate closed
 // instead of letting unattended admission proceed past a hidden open blocker.
 func TestForgedLookupColumnCannotHideABlocker(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -246,6 +249,7 @@ func TestForgedLookupColumnCannotHideABlocker(t *testing.T) {
 // cannot hide an open blocking item from the admission query while the row
 // still reads as valid elsewhere.
 func TestForgedItemTypeColumnFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {

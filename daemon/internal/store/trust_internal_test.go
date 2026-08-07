@@ -16,6 +16,7 @@ import (
 )
 
 func TestCandidateAuthorizationV2MigrationArchivesV1Rows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	files, err := fs.Glob(migrations.FS, "*.sql")
@@ -202,6 +203,7 @@ func TestCandidateAuthorizationV2MigrationArchivesV1Rows(t *testing.T) {
 }
 
 func TestWorkflowAuditEvidenceMigrationPreservesLegacyLedger(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	files, err := fs.Glob(migrations.FS, "*.sql")
@@ -263,6 +265,7 @@ func TestWorkflowAuditEvidenceMigrationPreservesLegacyLedger(t *testing.T) {
 // id, and trust bit. Internal test: writing the tampered row requires raw
 // SQL.
 func TestTrustRowsTamperedBodyFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -380,6 +383,7 @@ const (
 // persistence-boundary re-gate rejects it before the profile can authorize
 // publication or token minting.
 func TestTrustProfilePreRepositoryIDRowFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -434,6 +438,7 @@ const (
 // the conservative single_commit default arrives (plan §5.5 drift recovery;
 // the v2 precedent is the protected-path widening bump).
 func TestTrustProfileStaleEncodingRowFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -482,6 +487,7 @@ func TestTrustProfileStaleEncodingRowFailsClosed(t *testing.T) {
 // columns disagree with a valid body is corrupt, not trusted data — the
 // scanner cross-check rejects it even though the body itself validates.
 func TestTrustRowsInconsistentColumnsFailClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -554,6 +560,7 @@ func TestTrustRowsInconsistentColumnsFailClosed(t *testing.T) {
 }
 
 func TestWorkflowAuditEvidenceRetentionAndTamperGate(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -695,6 +702,7 @@ func TestWorkflowAuditEvidenceRetentionAndTamperGate(t *testing.T) {
 }
 
 func TestWorkflowAuditEvidencePruningRejectsUnauthenticatedBindings(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -885,6 +893,7 @@ func TestWorkflowAuditEvidencePruningRejectsUnauthenticatedBindings(t *testing.T
 // one and the read still fails closed. The validating full-history list
 // keeps failing either way, so stale history is never silently readable.
 func TestLatestTrustProfileSurvivesStaleHistory(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -983,6 +992,7 @@ func TestLatestTrustProfileSurvivesStaleHistory(t *testing.T) {
 }
 
 func TestTrustProfileActivationMigrationBackfillsLatestProfile(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	files, err := fs.Glob(migrations.FS, "000[1-7]_*.sql")

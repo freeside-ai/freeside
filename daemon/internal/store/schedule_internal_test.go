@@ -16,6 +16,7 @@ import (
 // workload schedules acquire independent authority while legacy one-shot
 // expiry state converges onto the new two-outcome contract.
 func TestScheduleAuthorityMigrationBackfillsAndNormalizesOneShots(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrationsBeforeScheduleAuthority(t)); err != nil {
@@ -192,6 +193,7 @@ SELECT entity_version, as_of_revision FROM schedules ORDER BY id`)
 // cannot launder column/body contradictions or timestamps the Go decoder would
 // reject into valid rows.
 func TestScheduleAuthorityMigrationRejectsInvalidLegacyRows(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{
 		"status contradiction",
 		"loose expiry timestamp",
@@ -307,6 +309,7 @@ func migrationsBeforeScheduleAuthority(t *testing.T) fs.FS {
 // boundary. The malformed rows bypass PutSchedule, as only a damaged store or
 // migration can present this shape after constructors and writes reject it.
 func TestGetScheduleRejectsOneShotExpiry(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {

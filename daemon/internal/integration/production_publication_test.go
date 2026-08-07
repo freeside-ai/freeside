@@ -598,6 +598,7 @@ func (p *productionPublicationHarness) assertReadyWithEvidence(t *testing.T, wan
 }
 
 func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	result, err := p.reconcileLanes()
@@ -643,6 +644,7 @@ func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 }
 
 func TestProductionReviewInvocationIDIsWardSafe(t *testing.T) {
+	t.Parallel()
 	runID := domain.RunID("run-" + strings.Repeat("a", 64))
 	first := engine.ProductionReviewInvocationID(runID, 1)
 	second := engine.ProductionReviewInvocationID(runID, 2)
@@ -652,6 +654,7 @@ func TestProductionReviewInvocationIDIsWardSafe(t *testing.T) {
 }
 
 func TestProductionCleanReviewDoesNotSurviveInstructionAuthorityChange(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	old, err := domain.NewReviewRecord(domain.ReviewRecord{
@@ -706,6 +709,7 @@ func TestProductionCleanReviewDoesNotSurviveInstructionAuthorityChange(t *testin
 }
 
 func TestProductionFindingsDoNotSurviveInstructionAuthorityChange(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	old, err := domain.NewReviewRecord(domain.ReviewRecord{
@@ -746,6 +750,7 @@ func TestProductionFindingsDoNotSurviveInstructionAuthorityChange(t *testing.T) 
 }
 
 func TestProductionLegacyReviewRequestAdvancesToAuthoritativeRound(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	fault := &faultReviewSource{
 		ReviewSource:    p.reviewer,
@@ -778,6 +783,7 @@ func TestProductionLegacyReviewRequestAdvancesToAuthoritativeRound(t *testing.T)
 }
 
 func TestProductionLegacyReviewRequestSupersessionPreflightAdvancesRound(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	fault := &faultReviewSource{
 		ReviewSource: p.reviewer, failSupersessionAt: 1,
@@ -809,6 +815,7 @@ func TestProductionLegacyReviewRequestSupersessionPreflightAdvancesRound(t *test
 }
 
 func TestProductionSupersededInstructionRequestAdvancesToNewRound(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	fault := &faultReviewSource{
 		ReviewSource: p.reviewer, failSupersessionAt: 1,
@@ -838,6 +845,7 @@ func TestProductionSupersededInstructionRequestAdvancesToNewRound(t *testing.T) 
 }
 
 func TestProductionPersistedCleanReviewRegatesRequestAuthority(t *testing.T) {
+	t.Parallel()
 	// A persisted clean review record is replayed by the pre-publication review
 	// gate, which re-gates the persisted request authority before treating the
 	// record as a pass (issue #527): a rewritten-but-valid row fails closed with
@@ -884,6 +892,7 @@ func TestProductionPersistedCleanReviewRegatesRequestAuthority(t *testing.T) {
 }
 
 func TestProductionReviewConfigurationMustMatchTrustProfile(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
@@ -957,6 +966,7 @@ func TestProductionReviewConfigurationMustMatchTrustProfile(t *testing.T) {
 }
 
 func TestProductionReviewResultConfigurationMismatchIsContradiction(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	id := engine.ProductionReviewInvocationID(p.runID, 1)
 	p.reviewer.Script(id, fake.ReviewScript{
@@ -993,6 +1003,7 @@ func TestProductionReviewResultConfigurationMismatchIsContradiction(t *testing.T
 }
 
 func TestProductionParkedReviewContradictionPrecedesConfigurationDrift(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	id := engine.ProductionReviewInvocationID(p.runID, 1)
 	p.reviewer.Script(id, fake.ReviewScript{
@@ -1040,6 +1051,7 @@ func TestProductionParkedReviewContradictionPrecedesConfigurationDrift(t *testin
 }
 
 func TestProductionReviewFindingsEscalateWithoutReady(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	reviewID := engine.ProductionReviewInvocationID(p.runID, 1)
 	p.reviewer.Script(reviewID, fake.ReviewScript{
@@ -1086,6 +1098,7 @@ func TestProductionReviewFindingsEscalateWithoutReady(t *testing.T) {
 }
 
 func TestProductionBaseAdvanceAfterReviewBlocksAtPublisher(t *testing.T) {
+	t.Parallel()
 	// Under pre-publication review (issue #527, decision 1) the §7 review runs
 	// against the admitted base, so a base advance discovered at publication is
 	// owned by the publisher's exact-base gate, not a review dispute: the
@@ -1135,6 +1148,7 @@ func TestProductionBaseAdvanceAfterReviewBlocksAtPublisher(t *testing.T) {
 // PR, covered there by the #496/#514 active-resource invalidation machinery.
 
 func TestProductionCleanReviewReplayPublishesWithoutNewRound(t *testing.T) {
+	t.Parallel()
 	// Record replay across a crash between the clean review pass and publication:
 	// the review round completes and its record persists, the publishing push
 	// then fails transiently, and a later pass replays the persisted record and
@@ -1186,6 +1200,7 @@ func TestProductionCleanReviewReplayPublishesWithoutNewRound(t *testing.T) {
 }
 
 func TestProductionPublishedWithoutCleanRecordFailsClosed(t *testing.T) {
+	t.Parallel()
 	// Decision 2: a published run reaches readiness only through a clean,
 	// candidate-bound review record. When the latest review state is not one
 	// (here, a later record bound to a foreign head, standing in for a run
@@ -1253,6 +1268,7 @@ func TestProductionPublishedWithoutCleanRecordFailsClosed(t *testing.T) {
 }
 
 func TestProductionPublishedReviewConfigMustStayProfileApproved(t *testing.T) {
+	t.Parallel()
 	// Finding 5 (Codex round 4): the readiness recovery re-gate must be no
 	// weaker than the pre-publication gate on the trust-profile-approval axis.
 	// A published run whose review record matches the daemon's current reviewer
@@ -1322,6 +1338,7 @@ func TestProductionPublishedReviewConfigMustStayProfileApproved(t *testing.T) {
 }
 
 func TestProductionPendingReviewPublishesNothing(t *testing.T) {
+	t.Parallel()
 	// A review still running (StatusPending) keeps the task queued with no
 	// publication effect: no branch push, no PR, nothing readied, no record yet
 	// (issue #527 acceptance: a pending review blocks publication).
@@ -1355,6 +1372,7 @@ func TestProductionPendingReviewPublishesNothing(t *testing.T) {
 }
 
 func TestProductionTransientReviewFailureBacksOffAndRetries(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	round1 := engine.ProductionReviewInvocationID(p.runID, 1)
 	round2 := engine.ProductionReviewInvocationID(p.runID, 2)
@@ -1405,6 +1423,7 @@ func TestProductionTransientReviewFailureBacksOffAndRetries(t *testing.T) {
 }
 
 func TestProductionTerminalTransientReviewOutcomeAdvancesRound(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	round1 := engine.ProductionReviewInvocationID(p.runID, 1)
 	round2 := engine.ProductionReviewInvocationID(p.runID, 2)
@@ -1465,6 +1484,7 @@ func TestProductionTerminalTransientReviewOutcomeAdvancesRound(t *testing.T) {
 }
 
 func TestProductionReviewObservationFailuresRetrySameInvocation(t *testing.T) {
+	t.Parallel()
 	transient := func(message string) error {
 		return &exec.ReviewSourceFailure{
 			Class: domain.ReviewFailureTransient, Err: errors.New(message),
@@ -1574,6 +1594,7 @@ func TestProductionReviewObservationFailuresRetrySameInvocation(t *testing.T) {
 // a superseded candidate is dropped, and the gate proceeds against the current
 // candidate rather than honoring the stale deadline.
 func TestProductionReviewRetryClearsOnStaleCandidate(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	faults := &faultReviewSource{ReviewSource: p.reviewer, failInspectAt: 2}
 	p.reviewSource = faults
@@ -1614,6 +1635,7 @@ func TestProductionReviewRetryClearsOnStaleCandidate(t *testing.T) {
 }
 
 func TestProductionReviewRetainsWorkspaceForPendingPreparation(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	faults := &faultReviewSource{
 		ReviewSource: p.reviewer, failRequestAfterStart: true,
@@ -1659,6 +1681,7 @@ func TestProductionReviewRetainsWorkspaceForPendingPreparation(t *testing.T) {
 }
 
 func TestProductionReviewReseedsExistingWorkspaceForUnknownInvocation(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	faults := &faultReviewSource{
 		ReviewSource: p.reviewer, failRequestAfterStart: true,
@@ -1691,6 +1714,7 @@ func TestProductionReviewReseedsExistingWorkspaceForUnknownInvocation(t *testing
 }
 
 func TestProductionReviewWorkspaceMaterializationFailureIsAtomic(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	faults := &faultReviewSource{ReviewSource: p.reviewer}
 	p.reviewSource = faults
@@ -1715,6 +1739,7 @@ func TestProductionReviewWorkspaceMaterializationFailureIsAtomic(t *testing.T) {
 }
 
 func TestProductionReviewWorkspaceMaterializationRefusalIsDurable(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	faults := &faultReviewSource{ReviewSource: p.reviewer}
 	p.reviewSource = faults
@@ -1762,6 +1787,7 @@ func TestProductionReviewWorkspaceMaterializationRefusalIsDurable(t *testing.T) 
 }
 
 func TestProductionReviewWorkspaceCleanupRefusesSymlinkReplacement(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	faults := &faultReviewSource{
 		ReviewSource: p.reviewer, failRequestAfterStart: true,
@@ -1792,6 +1818,7 @@ func TestProductionReviewWorkspaceCleanupRefusesSymlinkReplacement(t *testing.T)
 }
 
 func TestProductionReviewContradictionParksWithOneRecoveryItem(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	id := engine.ProductionReviewInvocationID(p.runID, 1)
 	p.reviewer.Script(id, fake.ReviewScript{
@@ -1853,6 +1880,7 @@ func TestProductionReviewContradictionParksWithOneRecoveryItem(t *testing.T) {
 }
 
 func TestProductionReviewContradictionStaysParkedAfterDeliveryTiming(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	id := engine.ProductionReviewInvocationID(p.runID, 1)
 	p.reviewer.Script(id, fake.ReviewScript{
@@ -1908,6 +1936,7 @@ func TestProductionReviewContradictionStaysParkedAfterDeliveryTiming(t *testing.
 // contradiction: persist its class, create no readiness, and keep the task
 // live behind one recovery item rather than terminalizing it as a dispute.
 func TestProductionLaunchContradictionRaisesRecoveryItem(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	faults := &faultReviewSource{
 		ReviewSource: p.reviewer,
@@ -1961,6 +1990,7 @@ func productionReviewItemIDForTest(runID domain.RunID, round int) domain.ItemID 
 }
 
 func TestProductionReviewRecoveryAdvancesAndPreservesFailure(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	firstID := engine.ProductionReviewInvocationID(p.runID, 1)
 	p.reviewer.Script(firstID, fake.ReviewScript{
@@ -2057,6 +2087,7 @@ func TestProductionReviewRecoveryAdvancesAndPreservesFailure(t *testing.T) {
 }
 
 func TestProductionReviewRecoveryAtHardLimitEscalatesUnderDistinctItem(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarnessWithPolicyKeys(t, "", []domain.PolicyKey{{
 		Key: "review.hard_round_limit", Value: "1",
 		Provenance: domain.KeyProvenance{
@@ -2136,6 +2167,7 @@ func TestProductionReviewRecoveryAtHardLimitEscalatesUnderDistinctItem(t *testin
 }
 
 func TestProductionNonContradictionHardLimitConvergesOnLegacyItem(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarnessWithPolicyKeys(t, "", []domain.PolicyKey{{
 		Key: "review.hard_round_limit", Value: "1",
 		Provenance: domain.KeyProvenance{
@@ -2194,6 +2226,7 @@ func TestProductionNonContradictionHardLimitConvergesOnLegacyItem(t *testing.T) 
 }
 
 func TestProductionReviewRewrittenRequestFailsClosedBeforeRelaunch(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	id := engine.ProductionReviewInvocationID(p.runID, 1)
 	p.reviewer.Script(id, fake.ReviewScript{
@@ -2256,6 +2289,7 @@ func TestProductionReviewRewrittenRequestFailsClosedBeforeRelaunch(t *testing.T)
 }
 
 func TestProductionVerificationRejectsRecipeNotBoundToProjectImage(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	mismatched := []byte(`{"commands":[["different-check"]],"capture":"none"}`)
 	p.room.recipe = mismatched
@@ -2279,6 +2313,7 @@ func TestProductionVerificationRejectsRecipeNotBoundToProjectImage(t *testing.T)
 }
 
 func TestProductionRecipeExtractionIsBounded(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.recipeReadTimeout = 25 * time.Millisecond
 	p.room.read = func(ctx context.Context) ([]byte, error) {
@@ -2312,6 +2347,7 @@ func TestProductionRecipeExtractionIsBounded(t *testing.T) {
 }
 
 func TestProductionPublicationRestartsAcrossDurableBoundaries(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		seams func(error) productionCrashSeams
@@ -2354,6 +2390,7 @@ func TestProductionPublicationRestartsAcrossDurableBoundaries(t *testing.T) {
 }
 
 func TestAttendedRestartHoldsQueuedUnattendedPublication(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	recoveryCalls := 0
@@ -2444,6 +2481,7 @@ func TestAttendedRestartHoldsQueuedUnattendedPublication(t *testing.T) {
 }
 
 func TestProductionPublicationRecoversWithoutPrivateDriverReplay(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	var executionExport domain.ExecutionExport
@@ -2496,6 +2534,7 @@ func TestProductionPublicationRecoversWithoutPrivateDriverReplay(t *testing.T) {
 }
 
 func TestUnattendedExecutionExportUsesAtomicPathAfterAttendedRestart(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	result, err := p.reconcileLanes()
 	if err != nil || result.InvocationsStarted != 1 {
@@ -2552,6 +2591,7 @@ func TestUnattendedExecutionExportUsesAtomicPathAfterAttendedRestart(t *testing.
 }
 
 func TestProductionPublicationRestartsAcrossExternalEffectBoundaries(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		inject func(*productionPublicationHarness)
@@ -2580,6 +2620,7 @@ func TestProductionPublicationRestartsAcrossExternalEffectBoundaries(t *testing.
 }
 
 func TestFinalizedProductionPublicationSurvivesLaterTrustDrift(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.workflow = p.newEngine(t, productionCrashSeams{
 		afterPublication: func() error { return errors.New("stop after durable publication outcome") },
@@ -2597,6 +2638,7 @@ func TestFinalizedProductionPublicationSurvivesLaterTrustDrift(t *testing.T) {
 }
 
 func TestReadyProductionPublicationWinsOverLaterExternalConflict(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.workflow = p.newEngine(t, productionCrashSeams{
 		afterReady: func() error { return errors.New("stop after durable ready item") },
@@ -2625,6 +2667,7 @@ func TestReadyProductionPublicationWinsOverLaterExternalConflict(t *testing.T) {
 }
 
 func TestReadyProductionPublicationMissingPrerequisiteFailsClosed(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		query string
@@ -2676,6 +2719,7 @@ func TestReadyProductionPublicationMissingPrerequisiteFailsClosed(t *testing.T) 
 }
 
 func TestFinalizedProductionPublicationSurvivesLaterRecipeRevocation(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.workflow = p.newEngine(t, productionCrashSeams{
 		afterReady: func() error { return errors.New("stop after durable ready item") },
@@ -2701,6 +2745,7 @@ func TestFinalizedProductionPublicationSurvivesLaterRecipeRevocation(t *testing.
 }
 
 func TestProductionReviewRegatesRecipeAuthorityBeforeReadiness(t *testing.T) {
+	t.Parallel()
 	// A candidate reviews clean and publishes, but a crash between publication and
 	// readiness leaves no ready item. If recipe approval is revoked before the
 	// recovery pass, readiness is re-gated on the recipe and held, never derived
@@ -2745,6 +2790,7 @@ func TestProductionReviewRegatesRecipeAuthorityBeforeReadiness(t *testing.T) {
 }
 
 func TestProductionPublicationConflictIsDurablyHeld(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	p.transport.conflictNextPush()
@@ -2792,6 +2838,7 @@ func TestProductionPublicationConflictIsDurablyHeld(t *testing.T) {
 }
 
 func TestProductionPublicationTransientFailureBacksOffWithoutStoppingEngine(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	p.transport.failFetch(&net.DNSError{Err: "temporary", Name: "github.com"})
@@ -2820,6 +2867,7 @@ func TestProductionPublicationTransientFailureBacksOffWithoutStoppingEngine(t *t
 }
 
 func TestProductionPublicationMutableAppAuthorityBacksOff(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.tokens = inactiveIntegrationTokenSource{}
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
@@ -2842,6 +2890,7 @@ func TestProductionPublicationMutableAppAuthorityBacksOff(t *testing.T) {
 }
 
 func TestProductionPublicationPermanentFetchRefusalIsHeld(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -2869,6 +2918,7 @@ func TestProductionPublicationPermanentFetchRefusalIsHeld(t *testing.T) {
 }
 
 func TestProductionPublicationHoldAdvancesToDefinitiveBlock(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	p.transport.failFetch(fmt.Errorf("base disappeared: %w", publish.ErrRemoteMissingBase))
@@ -2908,6 +2958,7 @@ func TestProductionPublicationHoldAdvancesToDefinitiveBlock(t *testing.T) {
 }
 
 func TestProductionPublicationReleaseFailurePreservesOutcome(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.workflow = p.newEngine(t, productionCrashSeams{
 		afterLockRelease: func() error { return errors.New("injected lock release failure") },
@@ -2923,6 +2974,7 @@ func TestProductionPublicationReleaseFailurePreservesOutcome(t *testing.T) {
 }
 
 func TestProductionPublicationCorruptCheckpointStillFailsLoud(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
@@ -2949,6 +3001,7 @@ func TestProductionPublicationCorruptCheckpointStillFailsLoud(t *testing.T) {
 }
 
 func TestProductionPublicationReadyPrecedesHoldSupersession(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		action domain.Action
@@ -3045,6 +3098,7 @@ func TestProductionPublicationReadyPrecedesHoldSupersession(t *testing.T) {
 }
 
 func TestRecipeRevocationRetainsPendingPublicationIntent(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	p.transport.failNextPush()
@@ -3110,6 +3164,7 @@ func TestRecipeRevocationRetainsPendingPublicationIntent(t *testing.T) {
 }
 
 func TestProductionPublicationHoldRefreshesWhenCauseChanges(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	p.transport.conflictNextPush()
@@ -3155,6 +3210,7 @@ func TestProductionPublicationHoldRefreshesWhenCauseChanges(t *testing.T) {
 }
 
 func TestProductionExportSurvivesUntilPublicationComposerReturns(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.workflow = p.newEngine(t, productionCrashSeams{}, false)
 	p.startAndRecordExport(t)
@@ -3176,6 +3232,7 @@ func TestProductionExportSurvivesUntilPublicationComposerReturns(t *testing.T) {
 }
 
 func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testing.T) {
+	t.Parallel()
 	t.Run("blocked reason must match checkpoint authority", func(t *testing.T) {
 		p := newProductionPublicationHarness(t, "")
 		p.room.fail = true
@@ -3548,6 +3605,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 }
 
 func TestProductionPublicationBackupBindsReplayBlobs(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	// Interrupt after the task and verification checkpoint exist so the
@@ -3604,6 +3662,7 @@ func TestProductionPublicationBackupBindsReplayBlobs(t *testing.T) {
 // production lane behind a durable notice, while the healthy run in the same
 // store still executes, verifies, and publishes.
 func TestDowngradedProductionMarkerQuarantinesOnlyItsRun(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	downgraded := domain.RunID("run-downgraded-marker")
 	futureVersion := "freeside.production-invocation/v9"
@@ -3700,6 +3759,7 @@ func productionQuarantineItem(
 // release: when the marker reads again, the run publishes and the notice is
 // retired rather than left contradicting the run's own outcome.
 func TestQuarantinedMarkerHoldsAndReleasesThePublicationLane(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 
@@ -3747,6 +3807,7 @@ func TestQuarantinedMarkerHoldsAndReleasesThePublicationLane(t *testing.T) {
 // decode failure would end Engine.Run on every pass for as long as the row
 // exists.
 func TestUnreadablePublicationTaskDoesNotEndTheEngineLoop(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	stranded := domain.RunID("run-unreadable-task")
 	seedFutureVersionProductionRun(t, p, stranded, "freeside.production-invocation/v2")
@@ -3818,6 +3879,7 @@ func writeOutboxPayload(t *testing.T, p *productionPublicationHarness, key strin
 // still pending, because a task that completes leaves the pending scan and no
 // later pass would reach it.
 func TestUnreadablePublicationTaskHoldsAndReleases(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	p.workflow = p.newEngineForMode(
@@ -3859,6 +3921,7 @@ func TestUnreadablePublicationTaskHoldsAndReleases(t *testing.T) {
 // notice must not outlive the hold it describes while the already-durable
 // publication task finishes.
 func TestRemovedMarkerRetiresTheQuarantineNotice(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	p.workflow = p.newEngineForMode(
@@ -3956,6 +4019,7 @@ func (p *productionPublicationHarness) submitUnrelatedRun(
 // dispatches an unrelated invocation, and the parked task finishes normally
 // once the boundary returns.
 func TestBlockedProductionPublicationLeavesTheReconcileLoopFree(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	entered, release := p.transport.blockNextFetch()
@@ -3998,6 +4062,7 @@ func TestBlockedProductionPublicationLeavesTheReconcileLoopFree(t *testing.T) {
 // publication loop shuts down like the reconcile loop: cancellation ends the
 // parked worker, and the durable task survives for the next process to finish.
 func TestShutdownEndsAParkedProductionPublicationWithoutLosingItsTask(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	entered, release := p.transport.blockNextFetch()
@@ -4054,6 +4119,7 @@ func TestShutdownEndsAParkedProductionPublicationWithoutLosingItsTask(t *testing
 // head — and a converged re-pass restates the same record instead of
 // duplicating or conflicting.
 func TestProductionPublicationRecordsWorkUnitPRBinding(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	// Declaration capture at submission is covered in production_run_test.go;
 	// here the unit is declared for the already-submitted run so the ready

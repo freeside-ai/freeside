@@ -17,6 +17,7 @@ import (
 // puts share one Write, which doubles as the multi-put half of fixture 5:
 // one client-visible transaction, one revision bump.
 func TestGoldenRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
@@ -138,6 +139,7 @@ func marshalIndent(t *testing.T, v any) []byte {
 // cannot be expressed, so the write-once check is unreachable here. That
 // stronger invariant is covered by TestResolvedPolicyDigestMatchesRun.
 func TestPutImmutableConflict(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixtures(t)
 
@@ -227,6 +229,7 @@ func TestPutImmutableConflict(t *testing.T) {
 //     rejected as stale, carrying the current item as the replacement;
 //   - a command for an absent item is not found.
 func TestCommandIdempotentAndStale(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixtures(t)
 
@@ -426,6 +429,7 @@ func TestCommandIdempotentAndStale(t *testing.T) {
 // aggregate replaces the body (the upsert path) when the change is a
 // legitimate evolution: here a run gaining a retry attempt and a new stage.
 func TestPutAgainUpdates(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
@@ -460,6 +464,7 @@ func TestPutAgainUpdates(t *testing.T) {
 // digest are fixed at creation, and its recorded stages and attempts only
 // append; a Put that would retarget or rewrite any of them fails.
 func TestRunFixedBindingsAndHistory(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixtures(t)
 
@@ -513,6 +518,7 @@ func TestRunFixedBindingsAndHistory(t *testing.T) {
 // TestConversationAppendOnly: stored messages are immutable (§5.14); an
 // update must carry them unchanged and may only append.
 func TestConversationAppendOnly(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixtures(t)
 	second := domain.Message{
@@ -565,6 +571,7 @@ func TestConversationAppendOnly(t *testing.T) {
 // type) is fixed at creation; transitions evolve status and evidence on the
 // same identity, and a different subject is a new superseding item.
 func TestAttentionItemFixedBindings(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixtures(t)
 
@@ -629,6 +636,7 @@ func TestAttentionItemFixedBindings(t *testing.T) {
 // resolved v2 overwritten by an open v1); a byte-identical replay converges
 // silently.
 func TestAttentionItemStaleWriteRejected(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
@@ -668,6 +676,7 @@ func TestAttentionItemStaleWriteRejected(t *testing.T) {
 // (submitted -> channel_accepted -> opened) and recorded receipts never
 // change; a stale retry must not roll an opened delivery back to submitted.
 func TestDeliveryLifecycleForwardOnly(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
@@ -734,6 +743,7 @@ func TestDeliveryLifecycleForwardOnly(t *testing.T) {
 // authentic policy whose content does not match the run's pinned policy_digest
 // fails the store's run binding; only the run's own policy is accepted.
 func TestResolvedPolicyDigestMatchesRun(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
@@ -772,6 +782,7 @@ func TestResolvedPolicyDigestMatchesRun(t *testing.T) {
 
 // TestGetNotFound: every Get wraps ErrNotFound for a missing row.
 func TestGetNotFound(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	if err := s.Read(ctx, func(tx *store.ReadTx) error {
@@ -785,6 +796,7 @@ func TestGetNotFound(t *testing.T) {
 // TestForeignKeysEnforced is acceptance fixture 6: an orphaning write fails,
 // proving foreign_keys=ON is effective on the write path, not merely set.
 func TestForeignKeysEnforced(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newFixtures(t)
 
@@ -834,6 +846,7 @@ func TestForeignKeysEnforced(t *testing.T) {
 // endpoints of the metric — the delivery's opened receipt and the item's
 // decision instant — read back from durable state alone, no test clock.
 func TestDecisionInstantsSurviveReopen(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := tempDBPath(t)
 	opts := store.Options{ApprovedRecipes: approvedFixtureRecipes()}

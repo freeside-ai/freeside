@@ -14,6 +14,7 @@ import (
 )
 
 func TestHandoffJournalColumnsAreCrossChecked(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name string
@@ -150,6 +151,7 @@ func TestHandoffJournalColumnsAreCrossChecked(t *testing.T) {
 }
 
 func TestHandoffMigrationLeavesLegacyLeasedIdentitiesUnboundAndRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	migrateThrough(t, ctx, db, "0019_")
@@ -215,6 +217,7 @@ VALUES ('auth-legacy', 'inv-legacy', 1, '2026-07-28T12:00:00Z',
 }
 
 func TestFailedHandoffOutcomeMigrationAppliesFromPriorHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	migrateThrough(t, ctx, db, "0022_")

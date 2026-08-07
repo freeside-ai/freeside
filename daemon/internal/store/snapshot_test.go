@@ -30,6 +30,7 @@ func seedItem(t *testing.T, s *store.Store, f fixtures) {
 // acceptance 1): entity_version counts Puts from 1, and as_of_revision is the
 // revision the writing transaction committed as.
 func TestAttentionItemSnapshotMetadata(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
@@ -91,6 +92,7 @@ func TestAttentionItemSnapshotMetadata(t *testing.T) {
 // bindings match the live item exactly still diverges from the counter an
 // expected_entity_version equal to the item_version would claim.
 func TestItemSnapshotDistinguishesEntityVersionFromBindings(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
@@ -142,6 +144,7 @@ func TestItemSnapshotDistinguishesEntityVersionFromBindings(t *testing.T) {
 // transaction commits as (the same-tx path Submit's fresh accept uses), and
 // later client-visible writes leave the recorded value untouched.
 func TestCommandSnapshotOriginalRevision(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
@@ -218,6 +221,7 @@ func TestCommandSnapshotOriginalRevision(t *testing.T) {
 // to 2, unlike the write-once command rows; GetDevice reads through the same
 // path, so its behaviour is pinned by the same assertions.
 func TestDeviceSnapshotMetadata(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)
@@ -296,6 +300,7 @@ var errAbandonReplay = errors.New("abandon replay")
 // error leaves the server revision unmoved, which is how a service returns
 // the original result without burning a revision on the replay.
 func TestCommandSnapshotReplayInsideWrite(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
 	f := newFixtures(t)

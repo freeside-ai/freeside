@@ -39,6 +39,7 @@ func nativeReviewFixtures(ts time.Time) (findings, clean domain.NativeReviewObse
 // coalesces, a material change (new findings) appends, and distinct identities
 // (a findings review vs a clean-pass reaction) keep independent timelines.
 func TestNativeReviewObservationAppendOnMaterialChange(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openCaptureStore(t)
 	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -139,6 +140,7 @@ func TestNativeReviewObservationAppendOnMaterialChange(t *testing.T) {
 // head other than the item's live binding head is persisted with the
 // divergence visible rather than dropped.
 func TestNativeReviewObservationStaleHeadRecorded(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openCaptureStore(t)
 	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)

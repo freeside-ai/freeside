@@ -42,6 +42,7 @@ func openProjectImageStore(t *testing.T) *Store {
 }
 
 func TestProjectImageMigrationAppliesFromHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	migrateThrough(t, ctx, db, "0016_")
@@ -58,6 +59,7 @@ func TestProjectImageMigrationAppliesFromHead(t *testing.T) {
 }
 
 func TestProjectImageRoundTripAndReplay(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openProjectImageStore(t)
 	image := testProjectImage(t)
@@ -117,6 +119,7 @@ func TestProjectImageRoundTripAndReplay(t *testing.T) {
 }
 
 func TestGetProjectImageByRef(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openProjectImageStore(t)
 	image := testProjectImage(t)
@@ -151,6 +154,7 @@ func TestGetProjectImageByRef(t *testing.T) {
 }
 
 func TestProjectImageImmutableConflictAndTampering(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openProjectImageStore(t)
 	image := testProjectImage(t)
