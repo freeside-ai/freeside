@@ -484,21 +484,30 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		}}
 	}
 	runID := domain.RunID("run-" + req.ID)
+	var reviewRecoveryBinding *domain.ReviewRecoveryBinding
+	if itemType == domain.AttentionReviewContradiction {
+		reviewRecoveryBinding = &domain.ReviewRecoveryBinding{
+			RunID: runID, InvocationID: domain.InvocationID("review-" + req.ID), Round: 1,
+			BaseSHA: "beefcafe", HeadSHA: "cafebabe",
+			FailureDigest: domain.Digest("sha256:failure-" + req.ID),
+		}
+	}
 	expires := time.Now().Add(24 * time.Hour)
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID:                domain.ItemID(req.ID),
-		ProjectID:         "proj-convergence",
-		Subject:           domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
-		Type:              itemType,
-		Priority:          domain.PriorityNormal,
-		Reason:            req.Reason,
-		RequestedDecision: requested,
-		AgentClaims:       claims,
-		PRHeadSHA:         "cafebabe",
-		ItemVersion:       req.ItemVersion,
-		InterruptionClass: domain.InterruptionPlannedGate,
-		ExpiresWhen:       &expires,
-		Status:            domain.StatusOpen,
+		ID:                    domain.ItemID(req.ID),
+		ProjectID:             "proj-convergence",
+		Subject:               domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		Type:                  itemType,
+		Priority:              domain.PriorityNormal,
+		Reason:                req.Reason,
+		RequestedDecision:     requested,
+		AgentClaims:           claims,
+		PRHeadSHA:             "cafebabe",
+		ReviewRecoveryBinding: reviewRecoveryBinding,
+		ItemVersion:           req.ItemVersion,
+		InterruptionClass:     domain.InterruptionPlannedGate,
+		ExpiresWhen:           &expires,
+		Status:                domain.StatusOpen,
 	}, nil)
 	if err != nil {
 		// NewAttentionItem's Validate rejects an unknown type or a malformed

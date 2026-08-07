@@ -233,6 +233,29 @@ func TestGolden(t *testing.T) {
 		BaseSHA: "beefcafe", HeadSHA: "cafebabe", Class: domain.ReviewFailureQuota,
 		Reason: "provider quota exhausted", ObservedAt: ts,
 	}
+	commandID := "command-recover-review-1"
+	reviewRecovery := domain.ReviewRecoveryTransition{
+		RunID: "run-1", InvocationID: "review-run-1-2", Round: 2,
+		BaseSHA: "beefcafe", HeadSHA: "cafebabe",
+		FailureDigest: "sha256:review-failure-body", CommandID: &commandID,
+		Reason: "operator authorized recovery of the displayed contradiction", OccurredAt: ts,
+	}
+	recoveryRunID := domain.RunID("run-1")
+	recoveryItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-review-recovery", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &recoveryRunID},
+		Type:    domain.AttentionReviewContradiction, Priority: domain.PriorityHigh,
+		Reason:            "review contradicted its execution contract",
+		RequestedDecision: []domain.Action{domain.ActionRecoverReview},
+		PRHeadSHA:         "cafebabe", ReviewRecoveryBinding: &domain.ReviewRecoveryBinding{
+			RunID: "run-1", InvocationID: "review-run-1-2", Round: 2,
+			BaseSHA: "beefcafe", HeadSHA: "cafebabe", FailureDigest: "sha256:review-failure-body",
+		},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
 	classification := domain.Classification{
 		FindingID: "find-1", Version: 1, Materiality: "medium", Confidence: "high", Note: "worth fixing",
 	}
@@ -800,6 +823,7 @@ func TestGolden(t *testing.T) {
 		{"attention_item_blocked", blockedItem},
 		{"attention_item_decided", decidedItem},
 		{"attention_item_superseded", supersededItem},
+		{"attention_item_review_recovery", recoveryItem},
 		{"command", command},
 		{"subject", subject},
 		{"agent_claim", agentClaim},
@@ -816,6 +840,7 @@ func TestGolden(t *testing.T) {
 		{"finding", finding},
 		{"review_record", reviewRecord},
 		{"review_failure", reviewFailure},
+		{"review_recovery_transition", reviewRecovery},
 		{"classification", classification},
 		{"command_discuss", discussCommand},
 		{"conversation", conversation},

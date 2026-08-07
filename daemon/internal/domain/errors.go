@@ -182,13 +182,16 @@ var (
 		"admission backend configuration differs from the current conformance proof")
 
 	// Unattended operating-state and §4 blocking failures (issues #319, #321).
-	ErrInvalidUnattendedOperationState = errors.New("unknown unattended operation state")
-	ErrInvalidSupersessionKind         = errors.New("unknown blocking supersession kind")
-	ErrSupersessionOutsideSystemHealth = errors.New("blocking supersession is a system_health semantic")
-	ErrUnattendedOperationStopped      = errors.New("unattended operation is stopped by operator decision")
-	ErrBlockingSystemHealth            = errors.New("an open system_health item blocks unattended admission")
-	ErrTransitionUnbacked              = errors.New("operating transition names no accepted command")
-	ErrTransitionCommandMismatch       = errors.New("operating transition disagrees with its accepted command")
+	ErrInvalidUnattendedOperationState  = errors.New("unknown unattended operation state")
+	ErrInvalidSupersessionKind          = errors.New("unknown blocking supersession kind")
+	ErrSupersessionOutsideSystemHealth  = errors.New("blocking supersession is a system_health semantic")
+	ErrUnattendedOperationStopped       = errors.New("unattended operation is stopped by operator decision")
+	ErrBlockingSystemHealth             = errors.New("an open system_health item blocks unattended admission")
+	ErrTransitionUnbacked               = errors.New("operating transition names no accepted command")
+	ErrTransitionCommandMismatch        = errors.New("operating transition disagrees with its accepted command")
+	ErrReviewRecoveryBindingMissing     = errors.New("review contradiction item lacks its recovery binding")
+	ErrReviewRecoveryBindingOutsideItem = errors.New("review recovery binding is a review_contradiction semantic")
+	ErrReviewRecoveryBindingMismatch    = errors.New("review recovery binding disagrees with its persisted failure")
 
 	// Transition failures: how a persisted aggregate may change between its
 	// stored version and an update (the transition validators). A writer maps
