@@ -4,6 +4,11 @@ import FreesideAPI
 /// switches omit `default` on purpose: a new enum member must be handled
 /// here before the code compiles.
 enum AttentionDisplay {
+    struct BindingRow: Equatable {
+        let label: String
+        let value: String
+    }
+
     static func title(_ type: Components.Schemas.AttentionType) -> String {
         switch type {
         case .spec_approval: return "Spec approval"
@@ -11,6 +16,7 @@ enum AttentionDisplay {
         case .agent_question: return "Agent question"
         case .review_diminishing_returns: return "Diminishing returns"
         case .review_dispute: return "Review dispute"
+        case .review_contradiction: return "Review contradiction"
         case .ready_for_final_review: return "Ready for final review"
         case .publish_blocked: return "Publish blocked"
         case .run_proposal: return "Run proposal"
@@ -49,6 +55,7 @@ enum AttentionDisplay {
         case .run_doctor: return "Run doctor"
         case .stop_unattended: return "Stop unattended"
         case .resume_unattended: return "Resume unattended"
+        case .recover_review: return "Recover review"
         }
     }
 
@@ -87,5 +94,19 @@ enum AttentionDisplay {
         case .project(let unscoped), .system(let unscoped):
             return unscoped.subject_id
         }
+    }
+
+    static func reviewRecoveryBindingRows(
+        _ item: Components.Schemas.AttentionItem
+    ) -> [BindingRow] {
+        guard let binding = item.review_recovery_binding?.value1 else { return [] }
+        return [
+            BindingRow(label: "Recovery run", value: binding.run_id),
+            BindingRow(label: "Invocation", value: binding.invocation_id),
+            BindingRow(label: "Round", value: "\(binding.round)"),
+            BindingRow(label: "Base", value: binding.base_sha),
+            BindingRow(label: "Head", value: binding.head_sha),
+            BindingRow(label: "Failure digest", value: binding.failure_digest),
+        ]
     }
 }

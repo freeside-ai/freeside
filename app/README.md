@@ -23,7 +23,7 @@ Build the daemon you point it at from the same commit as the client. The API sch
 Launch arguments also pin the presentation per launch (`LaunchInputs`), so screenshot and testing workflows drive the app without UI automation. These are launch arguments rather than environment variables because `open --args` forwards only arguments, and `xcrun simctl launch` forwards them too:
 
 - `-FreesideColorScheme light|dark`: force an appearance without touching the system setting; unset follows the system.
-- `-FreesideSelect <item-id>`: select the given inbox item at launch. `AttentionFixtures.defaultInboxItemIDs()` is the source of truth for the accepted values, today the default mock inbox's ids: `item-spec_approval`, `item-execution_failure`, `item-agent_question`, `item-review_diminishing_returns`, `item-review_dispute`, `item-ready_for_final_review`, `item-publish_blocked`, `item-run_proposal`, `item-system_health`, `item-blocked`. An unknown id is ignored with a note on stderr.
+- `-FreesideSelect <item-id>`: select the given inbox item at launch. `AttentionFixtures.defaultInboxItemIDs()` is the source of truth for the accepted values, today the default mock inbox's ids: `item-spec_approval`, `item-execution_failure`, `item-agent_question`, `item-review_diminishing_returns`, `item-review_dispute`, `item-review_contradiction`, `item-ready_for_final_review`, `item-publish_blocked`, `item-run_proposal`, `item-system_health`, `item-blocked`. An unknown id is ignored with a note on stderr.
 
 ## Installing the Operator Client
 

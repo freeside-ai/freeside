@@ -7,7 +7,9 @@
 /// run_doctor leaves a system_health item blocking); the unattended
 /// stop/resume transactions conclude the decided item and durably move the
 /// daemon's operating state (#319: stop also raises the resume-offering
-/// notice, resume resolves it); pending actions are rejected until the unit
+/// notice, resume resolves it); recover_review concludes its exact
+/// contradiction carrier and authorizes the daemon's append-only recovery
+/// transition; pending actions are rejected until the unit
 /// that owns their transaction lands (conversations, timing, proposal
 /// revision, parameter-carrying payloads). A provisional client mirror
 /// pending a queryable contract representation (#22); no `default`, so a new
@@ -18,6 +20,7 @@ public enum ActionOutcome: Equatable {
     case pending
     case stopsUnattended
     case resumesUnattended
+    case recoversReview
 
     public static func of(_ action: Components.Schemas.Action) -> ActionOutcome {
         switch action {
@@ -30,6 +33,8 @@ public enum ActionOutcome: Equatable {
             return .stopsUnattended
         case .resume_unattended:
             return .resumesUnattended
+        case .recover_review:
+            return .recoversReview
         case .open_pr, .mark_seen, .acknowledge, .inspect_trust_failure, .run_doctor:
             return .records
         case .discuss, .snooze, .start_with_changes, .continue_under_policy,

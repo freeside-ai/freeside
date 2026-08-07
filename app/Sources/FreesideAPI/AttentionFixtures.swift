@@ -10,13 +10,14 @@ public enum AttentionFixtures {
     /// MockServer's default approved set contains exactly this digest.
     public static let approvedRecipeDigest = "sha256:recipe-approved"
 
-    /// The ten Phase 1 attention types, in the schema's enum order.
+    /// The Phase 1 attention types, in the schema's enum order.
     public static let phase1Types: [Components.Schemas.AttentionType] = [
         .spec_approval,
         .execution_failure,
         .agent_question,
         .review_diminishing_returns,
         .review_dispute,
+        .review_contradiction,
         .ready_for_final_review,
         .publish_blocked,
         .run_proposal,
@@ -36,6 +37,7 @@ public enum AttentionFixtures {
             .finish_now, .apply_then_finish, .continue_under_policy, .convert_to_policy,
         ],
         .review_dispute: [.adjudicate, .discuss, .stop],
+        .review_contradiction: [.recover_review],
         .ready_for_final_review: [.open_pr, .return_to_agent, .mark_seen, .dismiss, .stop],
         .publish_blocked: [
             .rerun_trust_evaluation, .choose_alternate_profile, .inspect_trust_failure, .stop,
@@ -60,7 +62,7 @@ public enum AttentionFixtures {
         .open_pr, .return_to_agent, .mark_seen, .dismiss,
         .start, .start_with_changes, .decline, .snooze,
         .acknowledge, .run_doctor, .stop_unattended,
-        .resume_unattended,
+        .resume_unattended, .recover_review,
     ]
 
     /// The default mock inbox: one open item per Phase 1 type.
@@ -160,6 +162,9 @@ public enum AttentionFixtures {
         case .spec_approval, .ready_for_final_review, .run_proposal, .review_diminishing_returns:
             priority = type == .spec_approval ? .high : .normal
             interruption = .planned_gate
+        case .review_contradiction:
+            priority = .high
+            interruption = .exceptional
         default:
             priority = type == .execution_failure ? .urgent : .normal
             interruption = .exceptional
@@ -202,6 +207,18 @@ public enum AttentionFixtures {
         // honor. Every other card keeps the null render.
         let commitPlanNotice: Components.Schemas.AttentionItem.commit_plan_noticePayload? =
             type == .ready_for_final_review ? .init(value1: .present_but_not_honored) : nil
+        let reviewRecoveryBinding: Components.Schemas.AttentionItem.review_recovery_bindingPayload? =
+            type == .review_contradiction
+            ? .init(
+                value1: .init(
+                    run_id: "run-\(key)",
+                    invocation_id: "review-run-\(key)-1",
+                    round: 1,
+                    base_sha: "beefcafe",
+                    head_sha: "cafebabe",
+                    failure_digest: "sha256:failure-\(key)"
+                ))
+            : nil
 
         let item = Components.Schemas.AttentionItem(
             id: "item-\(key)",
@@ -224,6 +241,7 @@ public enum AttentionFixtures {
             artifact_digests: (agentClaims.map(\.digest) + [evidenceDigest]).sorted(),
             pr_head_sha: prHeadSHA,
             commit_plan_notice: commitPlanNotice,
+            review_recovery_binding: reviewRecoveryBinding,
             item_version: 1,
             interruption_class: interruption,
             conversation_id: nil,
@@ -279,6 +297,8 @@ public enum AttentionFixtures {
             return "review rounds are surfacing only marginal nits"
         case .review_dispute:
             return "the agent disputes a review finding as contrived"
+        case .review_contradiction:
+            return "review contradicted its execution contract"
         case .ready_for_final_review:
             return "checks are green and the diff is ready"
         case .publish_blocked:

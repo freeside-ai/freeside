@@ -844,6 +844,7 @@ public actor MockServer {
                         artifact_digests: [],
                         pr_head_sha: "",
                         commit_plan_notice: nil,
+                        review_recovery_binding: nil,
                         item_version: 1,
                         interruption_class: .exceptional,
                         conversation_id: nil,
@@ -863,6 +864,10 @@ public actor MockServer {
         case .resumesUnattended:
             // The daemon's resume transaction concludes the stopped notice;
             // the operating-state effect has no API surface.
+            itemsByID[payload.item_id] = concluded(current, as: .resolved)
+        case .recoversReview:
+            // The daemon also appends the exact-row transition; it has no API
+            // surface, so resolving the carrier is the mock's observable parity.
             itemsByID[payload.item_id] = concluded(current, as: .resolved)
         case .records:
             // The command record is the whole server-side effect; the

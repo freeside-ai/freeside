@@ -91,6 +91,18 @@ struct DecisionDetailView: View {
                         .truncationMode(.middle)
                         .foregroundStyle(.secondary)
                 }
+                let recoveryRows = AttentionDisplay.reviewRecoveryBindingRows(item)
+                if !recoveryRows.isEmpty {
+                    Divider()
+                    ForEach(Array(recoveryRows.enumerated()), id: \.offset) { _, row in
+                        LabeledContent(row.label) {
+                            Text(row.value)
+                                .font(.caption.monospaced())
+                                .multilineTextAlignment(.trailing)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
             }
 
             actions(item)

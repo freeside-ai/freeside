@@ -1423,6 +1423,7 @@ components:
         - commit_plan_notice
         - base_freshness
         - readiness_invalidation
+        - review_recovery_binding
         - item_version
         - interruption_class
         - conversation_id
@@ -1509,6 +1510,16 @@ components:
             item-visible and the version bump stales any command prepared
             against the old ready claim. Present only on a superseded ready
             item; null otherwise. Never client-set.
+        review_recovery_binding:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ReviewRecoveryBinding"
+          description: >
+            The exact persisted contradiction this review_contradiction item
+            offers to recover (issue #580; mirrors
+            domain.AttentionItem.ReviewRecoveryBinding). It binds the run,
+            invocation, round, base, head, and immutable failure-row body
+            digest displayed to the operator; null on every other item.
         item_version:
           type: integer
           minimum: 1
@@ -1590,6 +1601,7 @@ components:
         commit_plan_notice: "present_but_not_honored"
         base_freshness: null
         readiness_invalidation: null
+        review_recovery_binding: null
         item_version: 1
         interruption_class: "planned_gate"
         conversation_id: "conv-1"
@@ -2312,6 +2324,7 @@ components:
         - agent_question
         - review_diminishing_returns
         - review_dispute
+        - review_contradiction
         - ready_for_final_review
         - publish_blocked
         - run_proposal
@@ -2357,6 +2370,7 @@ components:
         - run_doctor
         - stop_unattended
         - resume_unattended
+        - recover_review
 
     Priority:
       type: string
@@ -2466,6 +2480,39 @@ components:
         bound: "cafebabe"
         observed: "feedface"
         observed_at: "2026-01-02T03:54:05Z"
+
+    ReviewRecoveryBinding:
+      type: object
+      description: >
+        Every coordinate of one immutable persisted review contradiction,
+        including its exact body digest. A recover_review command authorizes
+        only this row; a later contradiction requires another decision.
+      required: [run_id, invocation_id, round, base_sha, head_sha, failure_digest]
+      properties:
+        run_id:
+          type: string
+          minLength: 1
+        invocation_id:
+          type: string
+          minLength: 1
+        round:
+          type: integer
+          minimum: 1
+        base_sha:
+          type: string
+          minLength: 1
+        head_sha:
+          type: string
+          minLength: 1
+        failure_digest:
+          $ref: "#/components/schemas/Digest"
+      example:
+        run_id: "run-1"
+        invocation_id: "review-run-1-1"
+        round: 1
+        base_sha: "beefcafe"
+        head_sha: "cafebabe"
+        failure_digest: "sha256:review-failure-body"
 
     BlockingSupersession:
       type: object

@@ -59,6 +59,27 @@ enum MockContractValidation {
                 return "non-positive blocking_supersession repository_id"
             }
         }
+        if let recovery = item.review_recovery_binding?.value1 {
+            if item._type != .review_contradiction {
+                return "review_recovery_binding on a non-review_contradiction item"
+            }
+            if recovery.run_id.isEmpty || recovery.invocation_id.isEmpty
+                || recovery.base_sha.isEmpty || recovery.head_sha.isEmpty
+                || recovery.failure_digest.isEmpty
+            {
+                return "empty review_recovery_binding field"
+            }
+            if recovery.round < 1 { return "non-positive review recovery round" }
+            guard case .run(let subject) = item.subject,
+                subject.subject_id == recovery.run_id,
+                subject.run_id == recovery.run_id,
+                item.pr_head_sha == recovery.head_sha
+            else {
+                return "review recovery binding disagrees with item subject or head"
+            }
+        } else if item._type == .review_contradiction {
+            return "review_contradiction item lacks review_recovery_binding"
+        }
         // An empty requested_decision is structurally valid (#96): which
         // types must offer an action is signet policy (itemPolicyBreach).
         if let breach = timingBreach(item.timing) { return breach }

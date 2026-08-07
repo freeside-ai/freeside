@@ -2,16 +2,17 @@ import FreesideAPI
 import Testing
 
 @Suite struct FixtureTests {
-    /// Independent transcription of plan §4's per-type action table
-    /// (docs/plan.md §4 "Actions"), for the nine types §4 defines;
-    /// signet's policy pins `blocked` read-only (no actions), which the
-    /// schema permits since #96.
+    /// Independent transcription of plan §4's per-type action table plus
+    /// review_contradiction's issue #580 recovery action. Signet's policy
+    /// pins `blocked` read-only (no actions), which the schema permits
+    /// since #96.
     static let planSection4: [Components.Schemas.AttentionType: [Components.Schemas.Action]] = [
         .spec_approval: [.approve, .request_changes, .discuss, .stop],
         .review_diminishing_returns: [
             .finish_now, .apply_then_finish, .continue_under_policy, .convert_to_policy,
         ],
         .review_dispute: [.adjudicate, .discuss, .stop],
+        .review_contradiction: [.recover_review],
         .execution_failure: [.retry, .retry_with_capabilities, .discuss, .stop],
         .agent_question: [.answer_and_retry, .answer_without_retry, .stop],
         .publish_blocked: [
@@ -29,17 +30,17 @@ import Testing
         // blocked is pinned read-only by signet policy: it offers the
         // empty set, which the contract permits since #96.
         #expect(AttentionFixtures.phase1ActionSets[.blocked] == [])
-        #expect(AttentionFixtures.phase1ActionSets.count == 10)
+        #expect(AttentionFixtures.phase1ActionSets.count == 11)
     }
 
     /// phase1Actions is the enumeration universe the cross-language policy
     /// parity suite walks; if it dropped an action, that action's cells would
     /// go unchecked. Pin it to exactly the union of the per-type sets (every
-    /// action is offered by at least one type) and to a duplicate-free 28.
+    /// action is offered by at least one type) and to a duplicate-free 29.
     @Test func phase1ActionsCoverEveryOfferedActionWithoutDuplicates() {
         let offered = Set(AttentionFixtures.phase1ActionSets.values.flatMap { $0 })
         #expect(Set(AttentionFixtures.phase1Actions) == offered)
-        #expect(AttentionFixtures.phase1Actions.count == 28)
+        #expect(AttentionFixtures.phase1Actions.count == 29)
         #expect(Set(AttentionFixtures.phase1Actions).count == AttentionFixtures.phase1Actions.count)
     }
 
@@ -60,6 +61,7 @@ import Testing
                 "item-agent_question",
                 "item-review_diminishing_returns",
                 "item-review_dispute",
+                "item-review_contradiction",
                 "item-ready_for_final_review",
                 "item-publish_blocked",
                 "item-run_proposal",
