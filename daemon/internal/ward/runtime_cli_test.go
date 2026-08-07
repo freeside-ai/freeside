@@ -565,25 +565,15 @@ func TestCreateContainerArgs(t *testing.T) {
 		t.Errorf("writer provider network missing or mis-phrased: %q", joined)
 	}
 
+	// After #591 the gate emits only volume mounts; a host bind of any shape is
+	// refused outright, including the clean read-only regular-file source the old
+	// single-file-bind path would have phrased.
 	bindSource := filepath.Join(t.TempDir(), "snapshot")
 	if err := os.WriteFile(bindSource, []byte("snapshot"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	bindArgs, err := createContainerArgs(ContainerSpec{
-		Name:  "x",
-		Image: "img",
-		Mounts: []Mount{{
-			Type: MountBind, Source: bindSource, Target: "/m/file", ReadOnly: true,
-		}},
-		NetworkDisabled: true,
-	})
-	if err != nil {
-		t.Fatalf("read-only bind mount refused: %v", err)
-	}
-	if !strings.Contains(strings.Join(bindArgs, " "), "type=bind,source="+bindSource+",target=/m/file,readonly") {
-		t.Errorf("read-only bind mount mis-phrased: %q", bindArgs)
-	}
 	for _, bind := range []Mount{
+		{Type: MountBind, Source: bindSource, Target: "/m/file", ReadOnly: true},
 		{Type: MountBind, Source: bindSource, Target: "/m/file"},
 		{Type: MountBind, Source: "relative", Target: "/m/file", ReadOnly: true},
 		{Type: MountBind, Source: t.TempDir(), Target: "/m/file", ReadOnly: true},
@@ -591,7 +581,7 @@ func TestCreateContainerArgs(t *testing.T) {
 		if _, err := createContainerArgs(ContainerSpec{
 			Name: "x", Image: "img", Mounts: []Mount{bind}, NetworkDisabled: true,
 		}); err == nil {
-			t.Errorf("unsafe bind mount phrased: %+v", bind)
+			t.Errorf("host bind mount phrased instead of refused: %+v", bind)
 		}
 	}
 	if _, err := createContainerArgs(ContainerSpec{Name: "x", Image: "img"}); err == nil {

@@ -266,7 +266,7 @@ func (b *Backend) cleanupCodexReview(
 		return err
 	}
 	lease, _, err := cfg.VolumeLifecycleLeaser.RecoverCodexReviewVolumeLease(
-		ctx, owner.Value, []string{binding.WorkspaceVolume, intent.ShadowVolume},
+		ctx, owner.Value, codexReviewLeaseVolumes(binding.WorkspaceVolume, intent.ShadowVolume, intent.SnapshotVolume),
 	)
 	if err != nil {
 		// The leaser's authenticated refusals are contradictions, not runtime
@@ -293,6 +293,13 @@ func (b *Backend) cleanupCodexReview(
 	}
 	if err := b.deleteCodexReviewVolume(ctx, intent.ShadowVolume, claims[intent.ShadowVolume], owner); err != nil {
 		return err
+	}
+	// The credential snapshot volume is ward-owned and part of the terminal
+	// lease. A legacy (pre-#591) intent carries none, so this is skipped there.
+	if intent.SnapshotVolume != "" {
+		if err := b.deleteCodexReviewVolume(ctx, intent.SnapshotVolume, claims[intent.SnapshotVolume], owner); err != nil {
+			return err
+		}
 	}
 	workspaceBinding, err := cfg.Journal.GetCodexReviewWorkspaceBinding(
 		ctx, binding.WorkspaceSourceRunID,

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -18,6 +19,12 @@ import (
 )
 
 const codexReviewShadowVolumeSizeMB int64 = 2
+
+// codexReviewSnapshotVolumeSizeMB sizes the read-only credential volume. It
+// must hold both admitted files at their independent ceilings (auth.json up to
+// maxCodexAuthSnapshotBytes, AGENTS.md up to domain.MaxVendorInstructionBytes,
+// 1 MiB each) plus filesystem overhead, so it is provisioned well above 2 MiB.
+const codexReviewSnapshotVolumeSizeMB int64 = 8
 
 // CodexReviewJournal is the durable seam for a prepared review launch. Put
 // must be durable before it returns. Get must decode a fresh copy rather than
@@ -123,14 +130,31 @@ type CodexReviewIntentResource struct {
 // re-observed on recovery; these fields only authenticate candidates and bind
 // a retry to the caller intent that opened the run.
 type CodexReviewLaunchIntent struct {
-	RunID           string                      `json:"run_id"`
-	SpecDigest      string                      `json:"spec_digest"`
-	OwnershipToken  string                      `json:"ownership_token"`
-	ShadowVolume    string                      `json:"shadow_volume"`
-	Network         string                      `json:"network"`
-	ReviewContainer string                      `json:"review_container"`
-	Resources       []CodexReviewIntentResource `json:"resources"`
-	State           CodexReviewIntentState      `json:"state"`
+	RunID           string `json:"run_id"`
+	SpecDigest      string `json:"spec_digest"`
+	OwnershipToken  string `json:"ownership_token"`
+	ShadowVolume    string `json:"shadow_volume"`
+	Network         string `json:"network"`
+	ReviewContainer string `json:"review_container"`
+	// SnapshotVolume is the ward-owned read-only credential volume added in #591.
+	// It is empty on the pre-#591 six-resource generation, whose review container
+	// delivered the two files as host binds; an empty value selects the legacy
+	// lease and cleanup shape everywhere it is consumed.
+	SnapshotVolume string                      `json:"snapshot_volume"`
+	Resources      []CodexReviewIntentResource `json:"resources"`
+	State          CodexReviewIntentState      `json:"state"`
+}
+
+// codexReviewLeaseVolumes is the exclusive-lease volume set for one review. The
+// snapshot volume joins the workspace and shadow volumes on the #591 shape; a
+// legacy intent with no snapshot volume keeps the original two-volume lease, so
+// the same helper serves both the current launch path and legacy recovery.
+func codexReviewLeaseVolumes(workspaceVolume, shadowVolume, snapshotVolume string) []string {
+	volumes := []string{workspaceVolume, shadowVolume}
+	if snapshotVolume != "" {
+		volumes = append(volumes, snapshotVolume)
+	}
+	return volumes
 }
 
 // CodexReviewWorkspaceBinding is the minimum prior ward provenance needed to
@@ -227,10 +251,12 @@ func (b *Backend) CodexReview(
 		return nil, fmt.Errorf("mint Codex review ownership: %w", err)
 	}
 	shadowName := codexReviewShadowVolumeName(launch.RunID)
+	snapshotName := codexReviewSnapshotVolumeName(launch.RunID)
 	intent := CodexReviewLaunchIntent{
 		RunID: launch.RunID, SpecDigest: intentDigest, OwnershipToken: owner.Value,
 		ShadowVolume: shadowName, Network: codexReviewNetworkName(launch.RunID),
 		ReviewContainer: codexReviewContainerName(launch.RunID),
+		SnapshotVolume:  snapshotName,
 		Resources: []CodexReviewIntentResource{
 			{Name: codexReviewWorkspaceObserverName(launch.RunID)},
 			{Name: codexReviewShadowInitializerName(launch.RunID), OwnershipToken: owner.Value},
@@ -238,6 +264,9 @@ func (b *Backend) CodexReview(
 			{Name: codexReviewContainerName(launch.RunID), OwnershipToken: owner.Value},
 			{Name: shadowName, OwnershipToken: owner.Value},
 			{Name: codexReviewNetworkName(launch.RunID), OwnershipToken: owner.Value},
+			{Name: snapshotName, OwnershipToken: owner.Value},
+			{Name: codexReviewSnapshotSeederName(launch.RunID), OwnershipToken: owner.Value},
+			{Name: codexReviewSnapshotObserverName(launch.RunID)},
 		}, State: CodexReviewIntentPreparing,
 	}
 	if err := cfg.Journal.BeginCodexReviewIntent(ctx, intent); err != nil {
@@ -246,7 +275,7 @@ func (b *Backend) CodexReview(
 		)
 	}
 	volumeLease, err := cfg.VolumeLifecycleLeaser.AcquireCodexReviewVolumeLease(
-		ctx, owner.Value, []string{launch.WorkspaceVolume, shadowName},
+		ctx, owner.Value, codexReviewLeaseVolumes(launch.WorkspaceVolume, shadowName, snapshotName),
 	)
 	if err != nil {
 		if errors.Is(err, ErrCodexReviewVolumeLeaseForeignOwner) {
@@ -316,6 +345,7 @@ func (b *Backend) CodexReview(
 
 	networkName := codexReviewNetworkName(launch.RunID)
 	shadowClaim := objectClaim{attempted: true}
+	snapshotClaim := objectClaim{}
 	networkClaim := objectClaim{}
 	containerClaim := objectClaim{}
 	var proxy *connectProxy
@@ -345,6 +375,11 @@ func (b *Backend) CodexReview(
 		if shadowClaim.attempted {
 			cleanupErrs = append(cleanupErrs, b.deleteCodexReviewVolume(
 				cleanupCtx, shadowName, shadowClaim, owner,
+			))
+		}
+		if snapshotClaim.attempted {
+			cleanupErrs = append(cleanupErrs, b.deleteCodexReviewVolume(
+				cleanupCtx, snapshotName, snapshotClaim, owner,
 			))
 		}
 		if networkClaim.attempted {
@@ -395,6 +430,45 @@ func (b *Backend) CodexReview(
 	if err != nil {
 		return nil, err
 	}
+	snapshotClaim.attempted = true
+	if err := b.rt.CreateVolume(
+		ctx, snapshotName, codexReviewSnapshotVolumeSizeMB,
+		append(runLabels(launch.RunID), owner),
+	); err != nil {
+		return nil, codexReviewOperationalCheckf(
+			CheckCredentialSeparation, "create Codex review snapshot: %v", err,
+		)
+	}
+	snapshotClaim.owned = true
+	snapshotReport, err := b.rt.InspectVolume(ctx, snapshotName)
+	if err != nil {
+		return nil, codexReviewOperationalCheckf(
+			CheckCredentialSeparation, "inspect Codex review snapshot: %v", err,
+		)
+	}
+	snapshotClaim.fingerprint, err = ownedFingerprint(
+		snapshotReport.CreationDate, snapshotReport.Labels, snapshotReport.LabelsObserved, owner,
+	)
+	if err != nil {
+		return nil, failf(CheckCredentialSeparation, "authenticate Codex review snapshot: %v", err)
+	}
+	if err := cfg.Journal.MarkCodexReviewIntentResource(ctx, launch.RunID,
+		CodexReviewIntentResource{Name: snapshotName, OwnershipToken: owner.Value, Fingerprint: snapshotClaim.fingerprint}); err != nil {
+		return nil, codexReviewJournalCheckf(
+			CheckCredentialSeparation, "journal Codex review snapshot: %v", err,
+		)
+	}
+	if err := b.seedCodexReviewSnapshot(ctx, cfg, launch, snapshotName, owner,
+		func(resource CodexReviewIntentResource) error {
+			resource.OwnershipToken = owner.Value
+			return cfg.Journal.MarkCodexReviewIntentResource(ctx, launch.RunID, resource)
+		}); err != nil {
+		return nil, err
+	}
+	snapshot, err := b.observeCodexReviewSnapshot(ctx, cfg, launch.RunID, snapshotName, owner, snapshotReport)
+	if err != nil {
+		return nil, err
+	}
 	networkClaim.attempted = true
 	if err := b.rt.CreateNetwork(ctx, networkName, append(runLabels(launch.RunID), owner)); err != nil {
 		return nil, codexReviewOperationalCheckf(CheckAgentEgress, "create Codex review network: %v", err)
@@ -436,7 +510,7 @@ func (b *Backend) CodexReview(
 		AuthMode: launch.AuthMode, AuthIdentityID: launch.AuthIdentityID,
 		AuthSnapshot: launch.AuthSnapshot, Instructions: launch.Instructions,
 		InstructionFile: launch.InstructionFile, InstructionBinding: launch.InstructionBinding,
-		AgentsShadow: shadow,
+		AgentsShadow: shadow, Snapshot: snapshot,
 	}
 	spec, binding, err := BuildCodexReviewAgentSpec(cfg, req)
 	if err != nil {
@@ -475,14 +549,14 @@ func (b *Backend) CodexReview(
 	binding.ReviewContainerFingerprint = containerClaim.fingerprint
 	binding.ReviewOwnershipToken = owner.Value
 
-	freshShadow, freshWorkspace, currentNetwork, err := b.reobserveCodexReview(
-		ctx, cfg, launch, workspaceOwner, owner, shadowName,
+	freshShadow, freshWorkspace, freshSnapshot, currentNetwork, err := b.reobserveCodexReview(
+		ctx, cfg, launch, workspaceOwner, owner, shadowName, snapshotName,
 	)
 	if err != nil {
 		return nil, err
 	}
 	binding, err = verifyCodexReviewAllowlistShape(
-		cfg, req, binding, freshShadow, freshWorkspace, currentNetwork, containerReport, spec,
+		cfg, req, binding, freshShadow, freshWorkspace, freshSnapshot, currentNetwork, containerReport, spec,
 	)
 	if err != nil {
 		return nil, err
@@ -514,7 +588,7 @@ func (b *Backend) CodexReview(
 		return nil, err
 	}
 	if err := b.reconstructCodexReview(
-		ctx, cfg, launch, req, spec, persisted, workspaceOwner, owner, shadowName,
+		ctx, cfg, launch, req, spec, persisted, workspaceOwner, owner, shadowName, snapshotName,
 	); err != nil {
 		return nil, err
 	}
@@ -719,12 +793,30 @@ func (b *Backend) recoverCodexReviewIntent(
 	if intent.State == CodexReviewIntentClosed {
 		return nil
 	}
+	// Wipe the daemon's own host credential stage BEFORE the lease gate, so a
+	// crash in the seeder window cannot strand the plaintext auth.json even when
+	// the lease reconstruction later fails closed on a leftover partial-attachment
+	// prep container (a pre-existing recovery limitation tracked separately; see
+	// the follow-up issue). This is the daemon's own host file, derived from the
+	// trusted b.cfg.ExportRoot plus the validated runID, not a runtime object, so
+	// it needs no lease, claim, or owner proof. Fail closed on error: return an
+	// operational (retryable) error BEFORE acquiring the lease or closing the
+	// intent, so the reconciler retries the whole recovery next cycle and the
+	// intent stays open until the wipe succeeds. A transient FS error can never
+	// close the intent over a surviving credential (the closed-intent path never
+	// revisits this wipe). Idempotent: RemoveAll no-ops when absent, so a legacy
+	// pre-#591 intent is a clean no-op.
+	if stageErr := os.RemoveAll(codexReviewSnapshotStagePath(b.cfg.ExportRoot, intent.RunID)); stageErr != nil {
+		return codexReviewOperationalCheckf(
+			CheckCredentialSeparation, "remove recovery Codex review snapshot stage: %v", stageErr)
+	}
 	launch := CodexReviewLaunchSpec{
 		RunID: intent.RunID, WorkspaceVolume: namesFor(intent.RunID).Workspace,
 	}
 	owner := Label{Key: ownershipLabelKey, Value: intent.OwnershipToken}
+	leaseVolumes := codexReviewLeaseVolumes(launch.WorkspaceVolume, intent.ShadowVolume, intent.SnapshotVolume)
 	lease, transfer, err := cfg.VolumeLifecycleLeaser.RecoverCodexReviewVolumeLease(
-		ctx, owner.Value, []string{launch.WorkspaceVolume, intent.ShadowVolume},
+		ctx, owner.Value, leaseVolumes,
 	)
 	if err != nil {
 		if !errors.Is(err, ErrCodexReviewVolumeLeaseTransferred) {
@@ -744,7 +836,7 @@ func (b *Backend) recoverCodexReviewIntent(
 			return reapErr
 		}
 		lease, _, err = cfg.VolumeLifecycleLeaser.RecoverCodexReviewVolumeLease(
-			ctx, owner.Value, []string{launch.WorkspaceVolume, intent.ShadowVolume},
+			ctx, owner.Value, leaseVolumes,
 		)
 		if err != nil {
 			if errors.Is(err, ErrCodexReviewVolumeLeaseForeignOwner) ||
@@ -780,7 +872,15 @@ func (b *Backend) recoverCodexReviewIntent(
 		return codexReviewOperationalCheckf(
 			CheckControlPlaneIsolation, "list Codex review recovery containers: %v", listErr)
 	}
-	for _, name := range []string{names.workspaceObserver, names.shadowInitializer, names.shadowObserver, names.reviewContainer} {
+	recoveryContainers := []string{names.workspaceObserver, names.shadowInitializer, names.shadowObserver}
+	if names.snapshotSeeder != "" {
+		recoveryContainers = append(recoveryContainers, names.snapshotSeeder)
+	}
+	if names.snapshotObserver != "" {
+		recoveryContainers = append(recoveryContainers, names.snapshotObserver)
+	}
+	recoveryContainers = append(recoveryContainers, names.reviewContainer)
+	for _, name := range recoveryContainers {
 		if !slices.ContainsFunc(containers, func(c ContainerSummary) bool { return c.ID == name }) {
 			continue
 		}
@@ -813,17 +913,29 @@ func (b *Backend) recoverCodexReviewIntent(
 	if listErr != nil {
 		cleanupErrs = append(cleanupErrs,
 			codexReviewOperationalf("list recovery volumes: %v", listErr))
-	} else if slices.ContainsFunc(volumes, func(v VolumeSummary) bool { return v.Name == intent.ShadowVolume }) {
-		report, inspectErr := b.rt.InspectVolume(ctx, intent.ShadowVolume)
-		if inspectErr != nil {
-			cleanupErrs = append(cleanupErrs,
-				codexReviewOperationalf("inspect recovery shadow volume: %v", inspectErr))
-		} else if report.Name != intent.ShadowVolume || classifyEvidence(
-			claims[intent.ShadowVolume], owners[intent.ShadowVolume], report.CreationDate, report.Labels, report.LabelsObserved,
-		) != evidenceOurs {
-			cleanupErrs = append(cleanupErrs, fmt.Errorf("recovery shadow volume is foreign or unprovable"))
-		} else if err := b.deleteCodexReviewVolume(ctx, intent.ShadowVolume, claims[intent.ShadowVolume], owners[intent.ShadowVolume]); err != nil {
-			cleanupErrs = append(cleanupErrs, err)
+	} else {
+		// The shadow and snapshot volumes are both ward-owned and part of the
+		// exclusive lease; the candidate workspace is cleaned on its own path and
+		// is never deleted here. A legacy intent carries no snapshot volume.
+		recoveryVolumes := []string{intent.ShadowVolume}
+		if intent.SnapshotVolume != "" {
+			recoveryVolumes = append(recoveryVolumes, intent.SnapshotVolume)
+		}
+		for _, name := range recoveryVolumes {
+			if !slices.ContainsFunc(volumes, func(v VolumeSummary) bool { return v.Name == name }) {
+				continue
+			}
+			report, inspectErr := b.rt.InspectVolume(ctx, name)
+			if inspectErr != nil {
+				cleanupErrs = append(cleanupErrs,
+					codexReviewOperationalf("inspect recovery volume %q: %v", name, inspectErr))
+			} else if report.Name != name || classifyEvidence(
+				claims[name], owners[name], report.CreationDate, report.Labels, report.LabelsObserved,
+			) != evidenceOurs {
+				cleanupErrs = append(cleanupErrs, fmt.Errorf("recovery volume %q is foreign or unprovable", name))
+			} else if err := b.deleteCodexReviewVolume(ctx, name, claims[name], owners[name]); err != nil {
+				cleanupErrs = append(cleanupErrs, err)
+			}
 		}
 	}
 	networks, listErr := b.rt.ListNetworks(ctx)
@@ -884,9 +996,8 @@ func (b *Backend) recoverCodexReviewIntent(
 // configuration. The optional input root only lets it remove an already
 // materialized daemon-owned snapshot, never read or launch from one.
 type CodexReviewRecovery struct {
-	backend   *Backend
-	cfg       CodexReviewConfig
-	inputRoot string
+	backend *Backend
+	cfg     CodexReviewConfig
 }
 
 func NewCodexReviewRecovery(
@@ -896,8 +1007,8 @@ func NewCodexReviewRecovery(
 		return nil, errors.New("nil Codex review recovery dependency")
 	}
 	return &CodexReviewRecovery{backend: backend, cfg: CodexReviewConfig{
-		Journal: journal, VolumeLifecycleLeaser: leaser,
-	}, inputRoot: inputRoot}, nil
+		Journal: journal, VolumeLifecycleLeaser: leaser, InputRoot: inputRoot,
+	}}, nil
 }
 
 // Reconcile retries every non-closed launch and every closed launch whose
@@ -1036,10 +1147,10 @@ func (r *CodexReviewRecovery) reconcileIntent(
 }
 
 func (r *CodexReviewRecovery) removeInstructionSnapshot(id string) error {
-	if r.inputRoot == "" {
+	if r.cfg.InputRoot == "" {
 		return nil
 	}
-	if err := removeCodexReviewInstructionSnapshot(r.inputRoot, id); err != nil {
+	if err := removeCodexReviewInstructionSnapshot(r.cfg.InputRoot, id); err != nil {
 		return codexReviewOperationalCheckf(
 			CheckControlPlaneIsolation, "remove recovered review instruction snapshot: %v", err)
 	}
@@ -1068,7 +1179,7 @@ func (b *Backend) reapCodexReviewTransferredAttachment(
 	transfer CodexReviewVolumeLeaseTransfer,
 ) error {
 	if transfer.Holder != owner.Value ||
-		!slices.Equal(transfer.Volumes, []string{launch.WorkspaceVolume, intent.ShadowVolume}) ||
+		!slices.Equal(transfer.Volumes, codexReviewLeaseVolumes(launch.WorkspaceVolume, intent.ShadowVolume, intent.SnapshotVolume)) ||
 		transfer.Container != intent.ReviewContainer {
 		return failf(CheckControlPlaneIsolation, "Codex review starting lease transfer is foreign or malformed")
 	}
@@ -1137,8 +1248,12 @@ func (intent CodexReviewLaunchIntent) validatedResourceNames(runID string) (code
 	if !intent.State.valid() {
 		return codexReviewResourceNames{}, errors.New("launch state is invalid")
 	}
+	// Order matters only for disambiguating the two six-resource generations by
+	// their observer names; resourceNamesMatch keys the current nine-resource
+	// shape off a non-empty snapshot volume, so a persisted pre-#591 intent
+	// (run 482's round-2 record) is authenticated as cleanup-only legacy.
 	for _, names := range []codexReviewResourceNames{
-		codexReviewNames(runID), legacyCodexReviewNames(runID),
+		codexReviewNames(runID), preSnapshotCodexReviewNames(runID), legacyCodexReviewNames(runID),
 	} {
 		if intent.resourceNamesMatch(names) {
 			return names, nil
@@ -1149,7 +1264,7 @@ func (intent CodexReviewLaunchIntent) validatedResourceNames(runID string) (code
 
 func (intent CodexReviewLaunchIntent) resourceNamesMatch(names codexReviewResourceNames) bool {
 	if intent.ShadowVolume != names.shadowVolume || intent.Network != names.network ||
-		intent.ReviewContainer != names.reviewContainer {
+		intent.ReviewContainer != names.reviewContainer || intent.SnapshotVolume != names.snapshotVolume {
 		return false
 	}
 	expected := map[string]struct{}{
@@ -1159,6 +1274,14 @@ func (intent CodexReviewLaunchIntent) resourceNamesMatch(names codexReviewResour
 		intent.ReviewContainer:  {},
 		intent.ShadowVolume:     {},
 		intent.Network:          {},
+	}
+	// The snapshot volume is the discriminator between the nine-resource #591
+	// shape and the six-resource host-bind generations. An empty snapshotVolume
+	// (legacy/pre-snapshot) omits all three snapshot resources.
+	if names.snapshotVolume != "" {
+		expected[names.snapshotVolume] = struct{}{}
+		expected[names.snapshotSeeder] = struct{}{}
+		expected[names.snapshotObserver] = struct{}{}
 	}
 	if len(intent.Resources) != len(expected) {
 		return false
@@ -1171,8 +1294,12 @@ func (intent CodexReviewLaunchIntent) resourceNamesMatch(names codexReviewResour
 		if resource.OwnershipToken != "" && !ownershipTokenPattern.MatchString(resource.OwnershipToken) {
 			return false
 		}
+		// Resources ward creates directly carry the durable owner token; the three
+		// observers mint their own. snapshotSeeder and snapshotVolume are
+		// ward-created, so they must bear the intent owner; snapshotObserver may not.
 		if resource.Name == intent.ShadowVolume || resource.Name == intent.Network ||
-			resource.Name == intent.ReviewContainer || resource.Name == names.shadowInitializer {
+			resource.Name == intent.ReviewContainer || resource.Name == names.shadowInitializer ||
+			(names.snapshotVolume != "" && (resource.Name == names.snapshotVolume || resource.Name == names.snapshotSeeder)) {
 			if resource.OwnershipToken != intent.OwnershipToken {
 				return false
 			}
@@ -1268,6 +1395,213 @@ func (b *Backend) initializeCodexReviewShadow(
 	}
 	claim.attempted = false
 	return nil
+}
+
+// codexReviewSnapshotStagePath is the deterministic, runID-keyed host directory
+// where seedCodexReviewSnapshot stages the two admitted files before copying
+// them into the networkless seeder. Its root is the trusted daemon-owned
+// ExportRoot (b.cfg.ExportRoot: validated cleanAbs at init, stable across
+// restart, independent of the mutable -review-input-root), so both seeding and
+// recoverCodexReviewIntent re-derive the exact same path from the same trusted
+// Backend config, never from the journal. That trusted-and-stable derivation is
+// what lets recovery reap a crashed run's plaintext-credential residue that the
+// seeder's defer wipe could not, and it fails closed (recovery always knows the
+// one root). runID is runIDPattern-validated upstream, so it carries no path
+// separators.
+func codexReviewSnapshotStagePath(exportRoot, runID string) string {
+	return filepath.Join(exportRoot, ".codex-review-snapshot-stage-"+runID)
+}
+
+// createPrivateStageDir creates path as a fresh, private (0700), daemon-owned
+// directory, defeating a pre-created symlink or residue under a possibly-shared
+// root (ExportRoot can default to a shared temp dir). It removes any existing
+// entry, including a symlink (RemoveAll unlinks the symlink itself, never its
+// target), recreates the directory, then Lstat-verifies the result is a real,
+// unsymlinked, 0700, euid-owned directory before the caller writes secrets into
+// it. This closes a /tmp-style pre-attack on the credential stage.
+func createPrivateStageDir(path string) error {
+	if err := os.Mkdir(path, 0o700); err != nil {
+		if !errors.Is(err, os.ErrExist) {
+			return err
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+		if err := os.Mkdir(path, 0o700); err != nil {
+			return err
+		}
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	stat, owned := info.Sys().(*syscall.Stat_t)
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 ||
+		!owned || !codexReviewUIDMatches(stat, os.Geteuid()) {
+		return errors.New("stage is not a private daemon-owned directory")
+	}
+	return nil
+}
+
+// seedCodexReviewSnapshot places exactly the two admitted files onto the fresh
+// read-only credential volume using the running-seeder + CopyIntoContainer
+// pattern, so the credential bytes transit only a ward-owned, networkless,
+// pinned-image container that is proven absent afterward. The host stage is a
+// private 0700 directory with 0400 files at a deterministic, recovery-reapable
+// path, wiped on return; a crash before that wipe is swept by
+// recoverCodexReviewIntent.
+func (b *Backend) seedCodexReviewSnapshot(
+	ctx context.Context, cfg CodexReviewConfig, launch CodexReviewLaunchSpec, volume string, owner Label,
+	mark func(CodexReviewIntentResource) error,
+) (retErr error) {
+	_, authBody, err := readCodexReviewInput(cfg.InputRoot, launch.AuthSnapshot, maxCodexAuthSnapshotBytes)
+	if err != nil {
+		return failf(CheckCredentialSeparation, "Codex review auth snapshot changed before snapshot seeding")
+	}
+	_, instructionBody, err := readCodexReviewInput(cfg.InputRoot, launch.InstructionFile, domain.MaxVendorInstructionBytes)
+	if err != nil || !bytes.Equal(instructionBody, launch.Instructions.Body) {
+		return failf(CheckCredentialSeparation, "Codex review instruction snapshot changed before snapshot seeding")
+	}
+	// The stage is a deterministic, runID-keyed private 0700 directory under the
+	// trusted daemon-owned ExportRoot (not the mutable -review-input-root and not
+	// the journal), so no other host user can read the credential bytes and
+	// recovery re-derives the exact same path from the same trusted config. The
+	// files are 0400 and the whole stage is wiped on return whether or not seeding
+	// succeeded; the wipe error is surfaced rather than dropped, because a crash
+	// before the defer runs leaves the plaintext auth.json for
+	// recoverCodexReviewIntent to reap. createPrivateStageDir defeats a residue or
+	// pre-created symlink at the path under a possibly-shared ExportRoot.
+	dir := codexReviewSnapshotStagePath(b.cfg.ExportRoot, launch.RunID)
+	// Host-filesystem staging failures below are transient (full disk, temporary
+	// permission), so they are operational/retryable, not durable contradictions:
+	// a passing full disk must not terminate the review. codexReviewOperationalCheckf
+	// keeps the credential-separation check context while classifying retryable, the
+	// same way the seeder's create/start/inspect steps already are.
+	if err := createPrivateStageDir(dir); err != nil {
+		return codexReviewOperationalCheckf(CheckCredentialSeparation, "create Codex review snapshot stage: %v", err)
+	}
+	defer func() {
+		if rmErr := os.RemoveAll(dir); rmErr != nil {
+			retErr = errors.Join(retErr, codexReviewOperationalCheckf(
+				CheckCredentialSeparation, "wipe Codex review snapshot stage: %v", rmErr,
+			))
+		}
+	}()
+	if err := os.WriteFile(filepath.Join(dir, codexReviewSnapshotAuthName), authBody, 0o400); err != nil {
+		return codexReviewOperationalCheckf(CheckCredentialSeparation, "stage Codex review snapshot auth: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, codexReviewSnapshotInstrName), instructionBody, 0o400); err != nil {
+		return codexReviewOperationalCheckf(CheckCredentialSeparation, "stage Codex review snapshot instructions: %v", err)
+	}
+	readyDir, err := os.MkdirTemp("", "freeside-codex-review-snapshot-ready-"+launch.RunID+"-")
+	if err != nil {
+		return codexReviewOperationalCheckf(CheckCredentialSeparation, "create Codex review snapshot sentinel: %v", err)
+	}
+	defer os.RemoveAll(readyDir) //nolint:errcheck // best-effort cleanup of a host sentinel dir
+	if err := os.WriteFile(filepath.Join(readyDir, seedReadyFile), []byte("ready\n"), 0o600); err != nil {
+		return codexReviewOperationalCheckf(CheckCredentialSeparation, "write Codex review snapshot sentinel: %v", err)
+	}
+	spec := ContainerSpec{
+		Name:    codexReviewSnapshotSeederName(launch.RunID),
+		Image:   cfg.ObserverImage,
+		Command: []string{"sh", "-c", codexReviewSnapshotSeederScript(b.cfg, codexReviewSnapshotSeedTarget)},
+		Mounts: []Mount{{
+			Type: MountVolume, Source: volume, Target: codexReviewSnapshotSeedTarget,
+		}},
+		Labels:          append(runLabels(launch.RunID), owner),
+		NetworkDisabled: true,
+	}
+	claim := objectClaim{attempted: true}
+	defer func() {
+		if retErr == nil || !claim.attempted {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
+		defer cancel()
+		if cleanupErr := b.reapUnlistedContainer(cleanupCtx, spec.Name, claim, owner); cleanupErr != nil {
+			retErr = errors.Join(retErr, failf(
+				CheckCredentialSeparation, "Codex review snapshot seeder cleanup: %v", cleanupErr,
+			))
+		}
+	}()
+	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
+		return codexReviewOperationalCheckf(CheckCredentialSeparation, "create Codex review snapshot seeder: %v", err)
+	}
+	claim.owned = true
+	rep, err := b.rt.Inspect(ctx, spec.Name)
+	if err != nil {
+		return codexReviewOperationalCheckf(CheckCredentialSeparation, "inspect Codex review snapshot seeder: %v", err)
+	}
+	if err := verifySeedRoleAllowlist(rep, spec, volume, codexReviewSnapshotSeedTarget, CheckCredentialSeparation); err != nil {
+		return err
+	}
+	claim.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, owner)
+	if err != nil {
+		return failf(CheckCredentialSeparation, "authenticate Codex review snapshot seeder: %v", err)
+	}
+	if err := mark(CodexReviewIntentResource{Name: spec.Name, Fingerprint: claim.fingerprint}); err != nil {
+		return codexReviewJournalCheckf(CheckCredentialSeparation, "journal Codex review snapshot seeder: %v", err)
+	}
+	if err := b.rt.StartContainer(ctx, spec.Name); err != nil {
+		return codexReviewOperationalCheckf(CheckCredentialSeparation, "start Codex review snapshot seeder: %v", err)
+	}
+	if err := b.copyIntoSeeder(ctx, spec.Name, dir, b.cfg.SeedStageDir); err != nil {
+		// copyIntoSeeder classifies its CLI copy failure as a durable contradiction
+		// (shared with the workspace seeder); for the credential stage a transient
+		// host-copy failure is retryable, so reclassify operational at this site.
+		return codexReviewOperationalCheckf(CheckCredentialSeparation, "copy Codex review snapshot stage into seeder: %v", err)
+	}
+	if err := b.copyIntoSeeder(ctx, spec.Name, readyDir, b.cfg.SeedReadyDir); err != nil {
+		return codexReviewOperationalCheckf(CheckCredentialSeparation, "copy Codex review snapshot sentinel into seeder: %v", err)
+	}
+	if err := b.waitStopped(ctx, spec.Name, claim, owner, b.cfg.SeedTimeout); err != nil {
+		return codexReviewOperationalCheckf(CheckCredentialSeparation, "wait for Codex review snapshot seeder: %v", err)
+	}
+	if err := b.rt.DeleteContainer(ctx, spec.Name); err != nil {
+		return codexReviewOperationalCheckf(CheckCredentialSeparation, "delete Codex review snapshot seeder: %v", err)
+	}
+	if err := b.verifyContainerAbsent(ctx, spec.Name, claim, owner, CheckCredentialSeparation); err != nil {
+		return err
+	}
+	claim.attempted = false
+	return nil
+}
+
+func (b *Backend) observeCodexReviewSnapshot(
+	ctx context.Context, cfg CodexReviewConfig, runID, volume string,
+	volumeOwner Label, volumeReport VolumeSummary,
+) (CodexReviewSnapshotObservation, error) {
+	observerOwner, err := newOwnershipLabel()
+	if err != nil {
+		return CodexReviewSnapshotObservation{}, failf(CheckCredentialSeparation,
+			"mint Codex review snapshot observer ownership: %v", err)
+	}
+	spec, err := BuildCodexReviewSnapshotObserverSpec(cfg, runID, volume, observerOwner)
+	if err != nil {
+		return CodexReviewSnapshotObservation{}, err
+	}
+	if err := cfg.Journal.MarkCodexReviewIntentResource(ctx, runID,
+		CodexReviewIntentResource{Name: spec.Name, OwnershipToken: observerOwner.Value}); err != nil {
+		return CodexReviewSnapshotObservation{}, codexReviewJournalCheckf(
+			CheckCredentialSeparation, "journal snapshot observer intent: %v", err,
+		)
+	}
+	report, proof, err := b.runCodexReviewObserver(
+		ctx, spec, observerOwner, codexReviewSnapshotProofPath, CheckCredentialSeparation,
+		func(resource CodexReviewIntentResource) error {
+			resource.OwnershipToken = observerOwner.Value
+			return cfg.Journal.MarkCodexReviewIntentResource(ctx, runID, resource)
+		},
+		func(rep InspectReport) error {
+			return verifySeedRoleAllowlist(rep, spec, volume, codexReviewSnapshotObserverTarget, CheckCredentialSeparation)
+		},
+	)
+	if err != nil {
+		return CodexReviewSnapshotObservation{}, err
+	}
+	return ObserveCodexReviewSnapshot(
+		cfg, runID, volume, volumeOwner, observerOwner, volumeReport, report, proof,
+	)
 }
 
 func (b *Backend) observeCodexReviewWorkspace(
@@ -1531,42 +1865,57 @@ func validateCodexReviewStartLifetime(
 
 func (b *Backend) reobserveCodexReview(
 	ctx context.Context, cfg CodexReviewConfig, launch CodexReviewLaunchSpec,
-	workspaceOwner, owner Label, shadowName string,
-) (CodexReviewShadowObservation, CodexReviewWorkspaceObservation, CodexReviewNetworkObservation, error) {
+	workspaceOwner, owner Label, shadowName, snapshotName string,
+) (CodexReviewShadowObservation, CodexReviewWorkspaceObservation, CodexReviewSnapshotObservation, CodexReviewNetworkObservation, error) {
+	var (
+		emptyShadow    CodexReviewShadowObservation
+		emptyWorkspace CodexReviewWorkspaceObservation
+		emptySnapshot  CodexReviewSnapshotObservation
+		emptyNetwork   CodexReviewNetworkObservation
+	)
 	workspaceReport, err := b.rt.InspectVolume(ctx, launch.WorkspaceVolume)
 	if err != nil {
-		return CodexReviewShadowObservation{}, CodexReviewWorkspaceObservation{}, CodexReviewNetworkObservation{},
+		return emptyShadow, emptyWorkspace, emptySnapshot, emptyNetwork,
 			codexReviewOperationalCheckf(CheckObservedBaseIdentity, "inspect Codex review workspace: %v", err)
 	}
 	workspace, err := b.observeCodexReviewWorkspace(ctx, cfg, launch, workspaceOwner, workspaceReport)
 	if err != nil {
-		return CodexReviewShadowObservation{}, CodexReviewWorkspaceObservation{}, CodexReviewNetworkObservation{}, err
+		return emptyShadow, emptyWorkspace, emptySnapshot, emptyNetwork, err
 	}
 	shadowReport, err := b.rt.InspectVolume(ctx, shadowName)
 	if err != nil {
-		return CodexReviewShadowObservation{}, CodexReviewWorkspaceObservation{}, CodexReviewNetworkObservation{},
+		return emptyShadow, emptyWorkspace, emptySnapshot, emptyNetwork,
 			codexReviewOperationalCheckf(CheckControlPlaneIsolation, "inspect Codex review shadow: %v", err)
 	}
 	shadow, err := b.observeCodexReviewShadow(ctx, cfg, launch.RunID, shadowName, owner, shadowReport)
 	if err != nil {
-		return CodexReviewShadowObservation{}, CodexReviewWorkspaceObservation{}, CodexReviewNetworkObservation{}, err
+		return emptyShadow, emptyWorkspace, emptySnapshot, emptyNetwork, err
+	}
+	snapshotReport, err := b.rt.InspectVolume(ctx, snapshotName)
+	if err != nil {
+		return emptyShadow, emptyWorkspace, emptySnapshot, emptyNetwork,
+			codexReviewOperationalCheckf(CheckCredentialSeparation, "inspect Codex review snapshot: %v", err)
+	}
+	snapshot, err := b.observeCodexReviewSnapshot(ctx, cfg, launch.RunID, snapshotName, owner, snapshotReport)
+	if err != nil {
+		return emptyShadow, emptyWorkspace, emptySnapshot, emptyNetwork, err
 	}
 	networkReport, err := b.rt.InspectNetwork(ctx, codexReviewNetworkName(launch.RunID))
 	if err != nil {
-		return CodexReviewShadowObservation{}, CodexReviewWorkspaceObservation{}, CodexReviewNetworkObservation{},
+		return emptyShadow, emptyWorkspace, emptySnapshot, emptyNetwork,
 			codexReviewOperationalCheckf(CheckAgentEgress, "inspect Codex review network: %v", err)
 	}
 	network, err := ObserveCodexReviewNetwork(cfg, launch.RunID, owner, networkReport)
-	return shadow, workspace, network, err
+	return shadow, workspace, snapshot, network, err
 }
 
 func (b *Backend) reconstructCodexReview(
 	ctx context.Context, cfg CodexReviewConfig, launch CodexReviewLaunchSpec,
 	req CodexReviewSpec, spec ContainerSpec, binding CodexReviewJournalBinding,
-	workspaceOwner, owner Label, shadowName string,
+	workspaceOwner, owner Label, shadowName, snapshotName string,
 ) error {
-	shadow, workspace, network, err := b.reobserveCodexReview(
-		ctx, cfg, launch, workspaceOwner, owner, shadowName,
+	shadow, workspace, snapshot, network, err := b.reobserveCodexReview(
+		ctx, cfg, launch, workspaceOwner, owner, shadowName, snapshotName,
 	)
 	if err != nil {
 		return err
@@ -1575,7 +1924,11 @@ func (b *Backend) reconstructCodexReview(
 		binding.AgentsShadowDigest != shadow.digest ||
 		binding.WorkspaceFingerprint != workspace.fingerprint ||
 		binding.WorkspaceHead != workspace.head ||
-		binding.WorkspaceTreeDigest != workspace.treeDigest {
+		binding.WorkspaceTreeDigest != workspace.treeDigest ||
+		binding.SnapshotFingerprint != snapshot.fingerprint ||
+		binding.SnapshotVolume != snapshot.volume ||
+		binding.AuthSnapshotDigest != snapshot.authDigest ||
+		req.Snapshot.instructionDigest != snapshot.instructionDigest {
 		return failf(CheckControlPlaneIsolation, "reconstructed Codex review volumes diverged")
 	}
 	current := CodexReviewNetworkObservation{
@@ -1602,6 +1955,7 @@ func (b *Backend) reconstructCodexReview(
 	prepared := binding
 	prepared.AgentsShadowPreStartObserverFingerprint = ""
 	prepared.WorkspacePreStartObserverFingerprint = ""
+	prepared.SnapshotPreStartObserverFingerprint = ""
 	if err := validateCodexReviewAgentSpec(cfg, req, spec, prepared); err != nil {
 		return err
 	}

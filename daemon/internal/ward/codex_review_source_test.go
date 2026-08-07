@@ -2658,6 +2658,67 @@ func TestRuntimeCodexReviewVolumeLeaseTransfersAtomically(t *testing.T) {
 	}
 }
 
+// TestRuntimeCodexReviewVolumeLeaseRecoversMultiTargetShadowContainer exercises
+// the exact realized #591 review-container mount shape through recovery: the
+// workspace mounted once, the snapshot once, and the .agents shadow at every
+// in-container ancestor target. A leased volume attached many times and a total
+// volume-mount count far above the leased-set size must still authenticate as
+// the atomic transfer; the pre-#591 reconstruct rejected this shape outright.
+func TestRuntimeCodexReviewVolumeLeaseRecoversMultiTargetShadowContainer(t *testing.T) {
+	ctx := context.Background()
+	runtime := newFakeRuntime(t)
+	volumes := []string{"workspace", "shadow", "snapshot"}
+	for _, volume := range volumes {
+		if err := runtime.CreateVolume(ctx, volume, 2, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mounts := []Mount{
+		{Type: MountVolume, Source: "workspace", Target: "/workspace/project", ReadOnly: true},
+		{Type: MountVolume, Source: "snapshot", Target: codexReviewSnapshotTarget, ReadOnly: true},
+	}
+	for _, target := range codexAgentsShadowTargets("/workspace/project") {
+		mounts = append(mounts, Mount{Type: MountVolume, Source: "shadow", Target: target, ReadOnly: true})
+	}
+	if err := runtime.CreateContainer(ctx, ContainerSpec{
+		Name: "review", Image: "image", Command: []string{"true"},
+		Labels: []Label{{Key: ownershipLabelKey, Value: "owner"}},
+		Mounts: mounts,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	leaser, err := NewRuntimeCodexReviewVolumeLeaser(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, transfer, err := leaser.RecoverCodexReviewVolumeLease(ctx, "owner", volumes)
+	if !errors.Is(err, ErrCodexReviewVolumeLeaseTransferred) {
+		t.Fatalf("multi-target-shadow recovery = %v, want transferred", err)
+	}
+	if transfer.Container != "review" || !slices.Equal(transfer.Volumes, volumes) {
+		t.Fatalf("transfer = %#v, want container review over %v", transfer, volumes)
+	}
+	// A container attaching a proper subset of the leased volumes is not the
+	// atomic transfer and must fail closed, even alongside the multi-mount
+	// shadow container that does attach the full set.
+	if err := runtime.CreateContainer(ctx, ContainerSpec{
+		Name: "partial", Image: "image", Command: []string{"true"},
+		Labels: []Label{{Key: ownershipLabelKey, Value: "owner"}},
+		Mounts: []Mount{
+			{Type: MountVolume, Source: "workspace", Target: "/workspace/project", ReadOnly: true},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := NewRuntimeCodexReviewVolumeLeaser(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fresh.RecoverCodexReviewVolumeLease(ctx, "owner", volumes); !errors.Is(err, ErrCodexReviewVolumeLeaseForeignOwner) {
+		t.Fatalf("subset attachment = %v, want foreign refusal", err)
+	}
+}
+
 // TestClassifyCodexLaunchFailure pins the launch-path failure classification
 // and its precedence (operational > contradiction > configuration). The
 // classifier keys only off error-class sentinels and never inspects

@@ -1,0 +1,274 @@
+package ward
+
+// Host-gated live regression for the #591 credential snapshot volume. It proves
+// on the reference runtime (Apple container 1.1.0) what the scripted fake cannot
+// fully guarantee: that the two admitted files are delivered on one read-only
+// named volume, that the networkless observer proves exactly those two files
+// with their digests, and that the review container reads them through symlinks
+// inside its writable CODEX_HOME while the snapshot bytes stay read-only and no
+// sibling host content leaks in.
+//
+// Opt-in and CI-blind, following live_test.go: it needs macOS, the `container`
+// CLI, `container system start`, and the pinned alpine image. It is skipped by
+// default like every other FREESIDE_WARD_LIVE_TEST suite.
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"fmt"
+	"os"
+	osexec "os/exec"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestLiveCodexReviewSnapshotDeliversExactlyTwoFilesReadOnly(t *testing.T) {
+	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
+		t.Skip("live codex-review snapshot test skipped: set FREESIDE_WARD_LIVE_TEST=1 (requires macOS, Apple container 1.1.0, `container system start`, and the pinned alpine:3.22 image)")
+	}
+	bin, err := osexec.LookPath("container")
+	if err != nil {
+		t.Fatalf("container CLI not on PATH: %v", err)
+	}
+	if out, perr := osexec.Command(bin, "image", "pull", liveImage).CombinedOutput(); perr != nil { //nolint:gosec // fixed args, resolved CLI path
+		t.Logf("image pull (continuing; may be cached): %v: %s", perr, out)
+	}
+	ctx := context.Background()
+	rt := NewCLIRuntime(bin)
+	runID := fmt.Sprintf("livesnap-%d", time.Now().Unix())
+
+	volume := codexReviewSnapshotVolumeName(runID)
+	seeder := codexReviewSnapshotSeederName(runID)
+	observer := codexReviewSnapshotObserverName(runID)
+	review := codexReviewContainerName(runID)
+	t.Cleanup(func() {
+		for _, c := range []string{seeder, observer, review} {
+			_ = rt.StopContainer(ctx, c)
+			_ = rt.DeleteContainer(ctx, c)
+		}
+		_ = rt.DeleteVolume(ctx, volume)
+	})
+
+	label, err := newOwnershipLabel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig()
+
+	// Fixed, distinct byte contents so the review container's exact-bytes check
+	// and the observer's digest are both deterministic.
+	authBody := []byte(`{"auth_mode":"api_key","OPENAI_API_KEY":"live-fixture-key","tokens":null}`)
+	instructionBody := []byte("# Review instructions\nlive fixture\n")
+	authSum := sha256.Sum256(authBody)
+	instrSum := sha256.Sum256(instructionBody)
+
+	stage := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stage, codexReviewSnapshotAuthName), authBody, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stage, codexReviewSnapshotInstrName), instructionBody, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	readyDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(readyDir, seedReadyFile), []byte("ready\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := rt.CreateVolume(ctx, volume, codexReviewSnapshotVolumeSizeMB, append(runLabels(runID), label)); err != nil {
+		t.Fatalf("create snapshot volume: %v", err)
+	}
+
+	// Seed: a networkless running seeder receives the two files by copy and moves
+	// them onto the read-write-mounted volume, then is deleted.
+	if err := rt.CreateContainer(ctx, ContainerSpec{
+		Name:            seeder,
+		Image:           liveImage,
+		Command:         []string{"sh", "-c", codexReviewSnapshotSeederScript(cfg, codexReviewSnapshotSeedTarget)},
+		Mounts:          []Mount{{Type: MountVolume, Source: volume, Target: codexReviewSnapshotSeedTarget}},
+		Labels:          append(runLabels(runID), label),
+		NetworkDisabled: true,
+	}); err != nil {
+		t.Fatalf("create snapshot seeder: %v", err)
+	}
+	if err := rt.StartContainer(ctx, seeder); err != nil {
+		t.Fatalf("start snapshot seeder: %v", err)
+	}
+	if err := rt.CopyIntoContainer(ctx, seeder, stage, cfg.SeedStageDir); err != nil {
+		t.Fatalf("copy snapshot stage: %v", err)
+	}
+	if err := rt.CopyIntoContainer(ctx, seeder, readyDir, cfg.SeedReadyDir); err != nil {
+		t.Fatalf("copy snapshot sentinel: %v", err)
+	}
+	waitLiveStopped(t, rt, seeder)
+	if err := rt.DeleteContainer(ctx, seeder); err != nil {
+		t.Fatalf("delete snapshot seeder: %v", err)
+	}
+
+	// Observe: a separate read-only VM proves exactly the two files and their
+	// digests. This is the trust boundary; the writer never vouches for itself.
+	if err := rt.CreateContainer(ctx, ContainerSpec{
+		Name:  observer,
+		Image: liveImage,
+		Command: []string{"sh", "-c", codexReviewSnapshotObserverScript(
+			label.Value, codexReviewSnapshotObserverTarget, codexReviewSnapshotProofPath,
+		)},
+		Mounts:          []Mount{{Type: MountVolume, Source: volume, Target: codexReviewSnapshotObserverTarget, ReadOnly: true}},
+		Labels:          append(runLabels(runID), label),
+		NetworkDisabled: true,
+	}); err != nil {
+		t.Fatalf("create snapshot observer: %v", err)
+	}
+	if err := rt.StartContainer(ctx, observer); err != nil {
+		t.Fatalf("start snapshot observer: %v", err)
+	}
+	waitLiveStopped(t, rt, observer)
+	proof := liveReadContainerFile(t, rt, observer, codexReviewSnapshotProofPath)
+	wantProof := fmt.Sprintf("nonce=%s\nvalid=valid\nauth=sha256:%x\ninstr=sha256:%x\n", label.Value, authSum, instrSum)
+	if string(proof) != wantProof {
+		t.Fatalf("snapshot observer proof = %q, want %q", proof, wantProof)
+	}
+	if err := rt.DeleteContainer(ctx, observer); err != nil {
+		t.Fatalf("delete snapshot observer: %v", err)
+	}
+
+	// Review: mount the snapshot read-only, run the production symlink preamble,
+	// then verify the container reads exactly the two files through the links,
+	// the snapshot mount is read-only, and CODEX_HOME carries no sibling content
+	// beyond the two links.
+	verify := "set +e; mkdir -p " + shellQuote(CodexHomeTarget) + "; " +
+		"ln -s " + shellQuote(codexReviewSnapshotAuthSource) + " " + shellQuote(CodexAuthFileTarget) + "; " +
+		"ln -s " + shellQuote(codexReviewSnapshotInstrSource) + " " + shellQuote(CodexInstructionTarget) + "; " +
+		"ok=1; " +
+		"[ -L " + shellQuote(CodexAuthFileTarget) + " ] || ok=0; " +
+		"[ -L " + shellQuote(CodexInstructionTarget) + " ] || ok=0; " +
+		"[ \"$(cat " + shellQuote(CodexAuthFileTarget) + ")\" = " + shellQuote(string(authBody)) + " ] || ok=0; " +
+		"[ \"$(cat " + shellQuote(CodexInstructionTarget) + ")\" = " + shellQuote(string(instructionBody)) + " ] || ok=0; " +
+		"entries=\"$(cd " + shellQuote(codexReviewSnapshotTarget) + " && find . ! -name . -print | sort | tr '\\n' ',')\"; " +
+		"[ \"$entries\" = './AGENTS.md,./auth.json,' ] || ok=0; " +
+		"if echo probe > " + shellQuote(codexReviewSnapshotTarget+"/probe") + " 2>/dev/null; then ok=0; fi; " +
+		"home=\"$(cd " + shellQuote(CodexHomeTarget) + " && find . ! -name . -print | sort | tr '\\n' ',')\"; " +
+		"[ \"$home\" = './AGENTS.md,./auth.json,' ] || ok=0; " +
+		"printf 'ok=%s\\n' \"$ok\" > /live-review-proof.txt"
+	if err := rt.CreateContainer(ctx, ContainerSpec{
+		Name:    review,
+		Image:   liveImage,
+		Command: []string{"sh", "-c", verify},
+		Env:     []string{"CODEX_HOME=" + CodexHomeTarget},
+		Mounts: []Mount{
+			{Type: MountVolume, Source: volume, Target: codexReviewSnapshotTarget, ReadOnly: true},
+		},
+		Labels:          append(runLabels(runID), label),
+		NetworkDisabled: true,
+	}); err != nil {
+		t.Fatalf("create review container: %v", err)
+	}
+	if err := rt.StartContainer(ctx, review); err != nil {
+		t.Fatalf("start review container: %v", err)
+	}
+	waitLiveStopped(t, rt, review)
+	reviewProof := liveReadContainerFile(t, rt, review, "/live-review-proof.txt")
+	if string(reviewProof) != "ok=1\n" {
+		t.Fatalf("review container snapshot verification = %q, want ok=1", reviewProof)
+	}
+}
+
+// TestLiveCodexReviewSnapshotPreambleFailsClosedWhenImageShadowsCredential is
+// the #591 fail-closed regression for the launch prologue. A derived or updated
+// review image that already ships a file at a fixed CODEX_HOME path must not let
+// the review proceed: the `set -e` prologue's `ln -s` hits "File exists" and
+// aborts before `codex exec` runs, so the schema/output artifacts never appear
+// and the image-provided credential is left untouched (never read by codex).
+// Under the prior `set +e` prologue the ln failure was swallowed, so the
+// schema.json probe is the discriminator between fail-open and fail-closed.
+//
+// It runs the exact production launch command from codexReviewCommand, so it
+// cannot drift from the code under test. Like the sibling live test it is opt-in
+// and CI-blind (needs macOS, the `container` CLI, and the pinned alpine image).
+func TestLiveCodexReviewSnapshotPreambleFailsClosedWhenImageShadowsCredential(t *testing.T) {
+	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
+		t.Skip("live codex-review fail-closed test skipped: set FREESIDE_WARD_LIVE_TEST=1 (requires macOS, Apple container 1.1.0, `container system start`, and the pinned alpine:3.22 image)")
+	}
+	bin, err := osexec.LookPath("container")
+	if err != nil {
+		t.Fatalf("container CLI not on PATH: %v", err)
+	}
+	if out, perr := osexec.Command(bin, "image", "pull", liveImage).CombinedOutput(); perr != nil { //nolint:gosec // fixed args, resolved CLI path
+		t.Logf("image pull (continuing; may be cached): %v: %s", perr, out)
+	}
+	ctx := context.Background()
+	rt := NewCLIRuntime(bin)
+	runID := fmt.Sprintf("livesnapfc-%d", time.Now().Unix())
+	review := codexReviewContainerName(runID)
+	t.Cleanup(func() {
+		_ = rt.StopContainer(ctx, review)
+		_ = rt.DeleteContainer(ctx, review)
+	})
+
+	label, err := newOwnershipLabel()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the derived image: pre-create a regular file at the fixed auth
+	// path, then hand off to the unmodified production command. No snapshot volume
+	// is mounted because the abort is triggered by the pre-existing target, not by
+	// the link source; this isolates the prologue's fail-closed property.
+	prod := codexReviewCommand("/workspace/project", "gpt-5.2-codex", "high", "unused")
+	command := "mkdir -p " + shellQuote(CodexHomeTarget) + "; " +
+		"printf 'image-shadow' > " + shellQuote(CodexAuthFileTarget) + "; " + prod[2]
+
+	if err := rt.CreateContainer(ctx, ContainerSpec{
+		Name:            review,
+		Image:           liveImage,
+		Command:         []string{"sh", "-c", command},
+		Env:             []string{"CODEX_HOME=" + CodexHomeTarget},
+		Labels:          append(runLabels(runID), label),
+		NetworkDisabled: true,
+	}); err != nil {
+		t.Fatalf("create review container: %v", err)
+	}
+	if err := rt.StartContainer(ctx, review); err != nil {
+		t.Fatalf("start review container: %v", err)
+	}
+	waitLiveStopped(t, rt, review)
+
+	if _, found := liveContainerFileOptional(t, rt, review, codexReviewSchemaPath); found {
+		t.Fatal("fail-open: schema.json was written, so the prologue continued past the failed credential link toward codex exec")
+	}
+	shadow, found := liveContainerFileOptional(t, rt, review, CodexAuthFileTarget)
+	if !found {
+		t.Fatal("image-provided credential file vanished; expected the aborted prologue to leave it intact")
+	}
+	if string(shadow) != "image-shadow" {
+		t.Fatalf("image credential = %q, want it untouched (%q)", shadow, "image-shadow")
+	}
+}
+
+// liveReadContainerFile exports a stopped container's rootfs and returns the
+// bytes of one regular file, under the same byte cap the proof paths use.
+func liveReadContainerFile(t *testing.T, rt Runtime, id, path string) []byte {
+	t.Helper()
+	data, found := liveContainerFileOptional(t, rt, id, path)
+	if !found {
+		t.Fatalf("%s produced no %s", id, path)
+	}
+	return data
+}
+
+// liveContainerFileOptional is liveReadContainerFile without the must-exist
+// assertion: it reports whether the regular file was present, so a test can
+// assert an artifact's absence (e.g. a fail-closed abort leaving no output).
+func liveContainerFileOptional(t *testing.T, rt Runtime, id, path string) ([]byte, bool) {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := rt.ExportRootFS(context.Background(), id, &buf, maxBaseProofBytes<<4); err != nil {
+		t.Fatalf("export %s rootfs: %v", id, err)
+	}
+	data, found, err := extractArchiveRegularFile(bytes.NewReader(buf.Bytes()), path, maxBaseProofBytes)
+	if err != nil {
+		t.Fatalf("read %s from %s rootfs: %v", path, id, err)
+	}
+	return data, found
+}

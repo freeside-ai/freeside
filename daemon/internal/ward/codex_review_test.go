@@ -445,6 +445,44 @@ func testCodexReviewShadow(
 	return observation
 }
 
+func testCodexReviewSnapshot(
+	t *testing.T,
+	cfg CodexReviewConfig,
+	runID, volume string,
+	authBody, instructionBody []byte,
+	observerFingerprint string,
+) CodexReviewSnapshotObservation {
+	t.Helper()
+	owner := testOwnershipLabel()
+	spec, err := BuildCodexReviewSnapshotObserverSpec(cfg, runID, volume, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	volumeReport := VolumeSummary{
+		Name: volume, Labels: slices.Clone(spec.Labels), LabelsObserved: true,
+		CreationDate: "2026-08-03T12:00:02Z",
+	}
+	observerReport := InspectReport{
+		ID: spec.Name, ImageReference: spec.Image, Command: slices.Clone(spec.Command),
+		WorkingDirectory: "/", State: StateStopped, AllowlistFieldsObserved: true,
+		Mounts: slices.Clone(spec.Mounts), Env: []string{fixedContainerPathEnv},
+		NetworksObserved: true, Labels: slices.Clone(spec.Labels), LabelsObserved: true,
+		CreationDate: observerFingerprint,
+	}
+	authSum := sha256.Sum256(authBody)
+	instrSum := sha256.Sum256(instructionBody)
+	proof := []byte(fmt.Sprintf(
+		"nonce=%s\nvalid=valid\nauth=sha256:%x\ninstr=sha256:%x\n", owner.Value, authSum, instrSum,
+	))
+	observation, err := ObserveCodexReviewSnapshot(
+		cfg, runID, volume, owner, owner, volumeReport, observerReport, proof,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return observation
+}
+
 func testCodexReviewWorkspace(
 	t *testing.T,
 	cfg CodexReviewConfig,
@@ -542,6 +580,9 @@ func testCodexReview(t *testing.T) (CodexReviewConfig, CodexReviewSpec) {
 	shadow := testCodexReviewShadow(
 		t, cfg, "review-1", "freeside-review-review-1-agents", "2026-08-03T12:00:01Z",
 	)
+	snapshot := testCodexReviewSnapshot(
+		t, cfg, "review-1", codexReviewSnapshotVolumeName("review-1"), auth, instructionBody, "2026-08-03T12:00:02Z",
+	)
 	workspace := testCodexReviewWorkspace(
 		t, cfg, "review-1", namesFor("review-1").Workspace, "2026-08-03T12:00:03Z",
 	)
@@ -564,6 +605,7 @@ func testCodexReview(t *testing.T) (CodexReviewConfig, CodexReviewSpec) {
 		InstructionFile:    writeCodexReviewFile(t, root, "AGENTS.md", instructionBody),
 		InstructionBinding: instructionBinding,
 		AgentsShadow:       shadow,
+		Snapshot:           snapshot,
 	}
 	return cfg, req
 }
@@ -762,6 +804,88 @@ func TestCodexReviewIntentRejectsMixedResourceNameGenerations(t *testing.T) {
 	intent.Resources[0].Name = codexReviewNames(runID).workspaceObserver
 	if err := intent.validateIdentity(runID); err == nil {
 		t.Fatal("intent accepted a mixed legacy/current resource topology")
+	}
+}
+
+// preSnapshotCodexReviewIntentForTest builds the #587..#590 host-bind
+// generation: the current short names, six resources, and no snapshot volume,
+// exactly the shape run 482 persisted at its round-2 pause before #591.
+func preSnapshotCodexReviewIntentForTest(runID, digest, owner string) *CodexReviewLaunchIntent {
+	names := preSnapshotCodexReviewNames(runID)
+	return &CodexReviewLaunchIntent{
+		RunID: runID, SpecDigest: digest, OwnershipToken: owner,
+		ShadowVolume: names.shadowVolume, Network: names.network,
+		ReviewContainer: names.reviewContainer, State: CodexReviewIntentPreparing,
+		Resources: []CodexReviewIntentResource{
+			{Name: names.workspaceObserver},
+			{Name: names.shadowInitializer, OwnershipToken: owner},
+			{Name: names.shadowObserver},
+			{Name: names.reviewContainer, OwnershipToken: owner},
+			{Name: names.shadowVolume, OwnershipToken: owner},
+			{Name: names.network, OwnershipToken: owner},
+		},
+	}
+}
+
+func currentCodexReviewIntentForTest(runID, digest, owner string) *CodexReviewLaunchIntent {
+	names := codexReviewNames(runID)
+	return &CodexReviewLaunchIntent{
+		RunID: runID, SpecDigest: digest, OwnershipToken: owner,
+		ShadowVolume: names.shadowVolume, Network: names.network,
+		ReviewContainer: names.reviewContainer, SnapshotVolume: names.snapshotVolume,
+		State: CodexReviewIntentPreparing,
+		Resources: []CodexReviewIntentResource{
+			{Name: names.workspaceObserver},
+			{Name: names.shadowInitializer, OwnershipToken: owner},
+			{Name: names.shadowObserver},
+			{Name: names.reviewContainer, OwnershipToken: owner},
+			{Name: names.shadowVolume, OwnershipToken: owner},
+			{Name: names.network, OwnershipToken: owner},
+			{Name: names.snapshotVolume, OwnershipToken: owner},
+			{Name: names.snapshotSeeder, OwnershipToken: owner},
+			{Name: names.snapshotObserver},
+		},
+	}
+}
+
+// TestCodexReviewIntentAcceptsPreSnapshotGenerationForCleanup pins the #591
+// restart-safety criterion: run 482's persisted six-resource, host-bind intent
+// authenticates as a cleanup-only legacy generation (no snapshot resources),
+// while the current generation carries nine resources and the snapshot volume,
+// and a six-resource intent claiming a snapshot volume is rejected.
+func TestCodexReviewIntentAcceptsPreSnapshotGenerationForCleanup(t *testing.T) {
+	runID := strings.Repeat("a", 32)
+	owner := strings.Repeat("1", 32)
+	digest := strings.Repeat("a", 64)
+
+	preSnapshot := preSnapshotCodexReviewIntentForTest(runID, digest, owner)
+	names, err := preSnapshot.validatedResourceNames(runID)
+	if err != nil {
+		t.Fatalf("pre-snapshot intent rejected: %v", err)
+	}
+	if names.snapshotVolume != "" || names.snapshotSeeder != "" || names.snapshotObserver != "" {
+		t.Fatalf("pre-snapshot generation carried snapshot resources: %#v", names)
+	}
+
+	poisoned := preSnapshotCodexReviewIntentForTest(runID, digest, owner)
+	poisoned.SnapshotVolume = codexReviewSnapshotVolumeName(runID)
+	if err := poisoned.validateIdentity(runID); err == nil {
+		t.Fatal("six-resource intent accepted a snapshot volume")
+	}
+
+	current := currentCodexReviewIntentForTest(runID, digest, owner)
+	currentNames, err := current.validatedResourceNames(runID)
+	if err != nil {
+		t.Fatalf("current intent rejected: %v", err)
+	}
+	if currentNames.snapshotVolume != codexReviewSnapshotVolumeName(runID) {
+		t.Fatalf("current generation missing snapshot volume: %#v", currentNames)
+	}
+
+	truncated := currentCodexReviewIntentForTest(runID, digest, owner)
+	truncated.Resources = truncated.Resources[:6]
+	if err := truncated.validateIdentity(runID); err == nil {
+		t.Fatal("nine-resource intent accepted with only six resources")
 	}
 }
 
@@ -1003,6 +1127,82 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 		}
 	})
 
+	// plantStage simulates a daemon killed mid-seed: the deterministic host stage
+	// under the trusted ExportRoot still holds a plaintext auth.json that the
+	// seeder's defer never wiped. It names no runtime resource, so only the
+	// recovery stage sweep can reap it.
+	plantStage := func(t *testing.T, backend *Backend, runID string) string {
+		t.Helper()
+		stage := codexReviewSnapshotStagePath(backend.cfg.ExportRoot, runID)
+		if err := os.Mkdir(stage, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(stage, codexReviewSnapshotAuthName), []byte("SECRET-KEY"), 0o400); err != nil {
+			t.Fatal(err)
+		}
+		return stage
+	}
+
+	t.Run("reaps a crashed run's credential stage", func(t *testing.T) {
+		backend, _, cfg, launch, journal, owner := setup(t)
+		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
+		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value,
+			[]string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+			t.Fatal(err)
+		}
+		stage := plantStage(t, backend, launch.RunID)
+		recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser, cfg.InputRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := recovery.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if journal.intent.State != CodexReviewIntentClosed {
+			t.Fatal("recovery did not complete")
+		}
+		if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("recovery left the crashed run's credential stage behind: stat err = %v", err)
+		}
+	})
+
+	// The stage path derives from the trusted daemon-owned ExportRoot, not the
+	// mutable -review-input-root, so recovery reaps it regardless of any
+	// review-input-root change across the restart, including an empty root (valid
+	// in attended_dev). This is the R1 reframe: the reap no longer depends on the
+	// recovery-time InputRoot or on any journal-persisted root.
+	for _, recoveryRoot := range []string{t.TempDir(), ""} {
+		name := "changed review-input-root"
+		if recoveryRoot == "" {
+			name = "empty attended_dev review-input-root"
+		}
+		t.Run("reaps the ExportRoot stage across a "+name, func(t *testing.T) {
+			backend, _, cfg, launch, journal, owner := setup(t)
+			if recoveryRoot != "" && recoveryRoot == cfg.InputRoot {
+				t.Fatalf("test setup: recovery root must differ from the launch InputRoot %q", cfg.InputRoot)
+			}
+			leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
+			if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value,
+				[]string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+				t.Fatal(err)
+			}
+			stage := plantStage(t, backend, launch.RunID)
+			recovery, err := NewCodexReviewRecovery(backend, journal, cfg.VolumeLifecycleLeaser, recoveryRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := recovery.Reconcile(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if journal.intent.State != CodexReviewIntentClosed {
+				t.Fatal("recovery did not complete")
+			}
+			if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("recovery under a %s left the ExportRoot credential stage behind: stat err = %v", name, err)
+			}
+		})
+	}
+
 	t.Run("closed intent retries binding reset", func(t *testing.T) {
 		backend, rt, cfg, launch, journal, owner := setup(t)
 		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
@@ -1046,6 +1246,124 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 			t.Fatal("foreign lease recovery mutated pre-start objects or intent")
 		}
 	})
+
+	t.Run("wipes the host credential stage even when the lease is blocked", func(t *testing.T) {
+		backend, _, cfg, launch, journal, _ := setup(t)
+		// A crash in the seeder window leaves both a plaintext host credential
+		// stage and a leftover single-volume prep container; that partial-attachment
+		// container makes RecoverCodexReviewVolumeLease fail closed (ForeignOwner), a
+		// pre-existing recovery block tracked separately. A foreign holder occupying
+		// the lease reproduces that same pre-lease block here. Recovery must still
+		// have wiped the daemon's own host stage first, since the early wipe runs
+		// before the lease gate and needs no lease/claim/owner proof.
+		stage := plantStage(t, backend, launch.RunID)
+		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
+		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), strings.Repeat("1", 32),
+			[]string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err == nil {
+			t.Fatal("expected recovery to be blocked by the occupied lease")
+		}
+		if journal.intent.State == CodexReviewIntentClosed {
+			t.Fatal("a lease-blocked recovery must not close the intent")
+		}
+		if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("lease-blocked recovery left the host credential stage behind: stat err = %v", err)
+		}
+	})
+
+	t.Run("keeps the intent open when the credential wipe fails", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root bypasses the directory permission that forces RemoveAll to fail")
+		}
+		backend, _, cfg, launch, journal, owner := setup(t)
+		leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)
+		if _, err := leaser.AcquireCodexReviewVolumeLease(context.Background(), owner.Value,
+			[]string{launch.WorkspaceVolume, codexReviewShadowVolumeName(launch.RunID)}); err != nil {
+			t.Fatal(err)
+		}
+		// A crash-residue stage whose directory is made unwritable, so the early
+		// RemoveAll of the plaintext auth.json fails. Recovery must fail closed:
+		// return an error and leave the intent open for a later reconcile to retry,
+		// never close the intent over a credential it could not wipe (the
+		// closed-intent path never revisits the wipe).
+		stage := plantStage(t, backend, launch.RunID)
+		if err := os.Chmod(stage, 0o500); err != nil { //nolint:gosec // G302: directory perms; the execute bit is needed to traverse a dir, and 0500 removes only write to force the RemoveAll failure
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(stage, 0o700) }) //nolint:gosec // G302: restore directory perms so t.TempDir cleanup can remove it
+
+		if err := backend.RecoverCodexReview(context.Background(), cfg, launch); err == nil {
+			t.Fatal("expected recovery to fail closed when the credential wipe fails")
+		}
+		if journal.intent.State == CodexReviewIntentClosed {
+			t.Fatal("a failed credential wipe must not close the intent")
+		}
+		if _, err := os.Stat(filepath.Join(stage, codexReviewSnapshotAuthName)); err != nil {
+			t.Fatalf("the un-wiped credential should remain for a retry: %v", err)
+		}
+	})
+}
+
+// TestCreatePrivateStageDirDefeatsSymlinkPreattack covers the R1 stage
+// creation guard: because ExportRoot can default to a shared temp dir, the
+// credential stage must survive a pre-created symlink or stale residue at its
+// path and end up a fresh, private, real directory the caller can safely write
+// 0400 secrets into.
+func TestCreatePrivateStageDirDefeatsSymlinkPreattack(t *testing.T) {
+	base := t.TempDir()
+
+	// Happy path: a fresh path becomes a real private directory.
+	fresh := filepath.Join(base, "fresh")
+	if err := createPrivateStageDir(fresh); err != nil {
+		t.Fatalf("fresh stage: %v", err)
+	}
+	if info, err := os.Lstat(fresh); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("fresh stage is not a real directory: info=%v err=%v", info, err)
+	}
+
+	// Symlink pre-attack: an attacker pre-creates the stage path as a symlink to
+	// a directory they control. createPrivateStageDir must unlink the symlink
+	// (never its target) and install a real directory in its place, so the later
+	// 0400 write lands in the daemon-owned stage, not the attacker's directory.
+	target := t.TempDir()
+	sentinel := filepath.Join(target, "attacker-owned")
+	if err := os.WriteFile(sentinel, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(base, "linked")
+	if err := os.Symlink(target, linked); err != nil {
+		t.Fatal(err)
+	}
+	if err := createPrivateStageDir(linked); err != nil {
+		t.Fatalf("symlinked stage: %v", err)
+	}
+	info, err := os.Lstat(linked)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("stage is still a symlink or not a directory: info=%v err=%v", info, err)
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("attacker target was followed and disturbed: %v", err)
+	}
+	if entries, err := os.ReadDir(linked); err != nil || len(entries) != 0 {
+		t.Fatalf("replacement stage is not a fresh empty directory: entries=%v err=%v", entries, err)
+	}
+
+	// Residue: a pre-existing directory with stale content is removed+recreated.
+	residue := filepath.Join(base, "residue")
+	if err := os.Mkdir(residue, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(residue, "stale"), []byte("old"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := createPrivateStageDir(residue); err != nil {
+		t.Fatalf("residue stage: %v", err)
+	}
+	if entries, err := os.ReadDir(residue); err != nil || len(entries) != 0 {
+		t.Fatalf("residue stage was not cleared: entries=%v err=%v", entries, err)
+	}
 }
 
 func TestCodexReviewRecoveryMarksClosedOutcomeReady(t *testing.T) {
@@ -1415,7 +1733,11 @@ func TestBackendCodexReviewLifecycleLeaseClosesFinalAttachmentWindow(t *testing.
 	if !attackerRefused || !leaser.transferred {
 		t.Fatal("review did not atomically transfer the exclusive lifecycle lease into start")
 	}
-	if want := []string{launchSpec.WorkspaceVolume, codexReviewShadowVolumeName(launchSpec.RunID)}; !slices.Equal(leaser.volumes, want) {
+	if want := []string{
+		launchSpec.WorkspaceVolume,
+		codexReviewShadowVolumeName(launchSpec.RunID),
+		codexReviewSnapshotVolumeName(launchSpec.RunID),
+	}; !slices.Equal(leaser.volumes, want) {
 		t.Fatalf("lease volumes = %v, want %v", leaser.volumes, want)
 	}
 }
@@ -1845,6 +2167,7 @@ func TestBuildCodexReviewAgentSpecConforms(t *testing.T) {
 	finalBinding := binding
 	finalBinding.AgentsShadowPreStartObserverFingerprint = "2026-08-03T12:00:02Z"
 	finalBinding.WorkspacePreStartObserverFingerprint = "2026-08-03T12:00:04Z"
+	finalBinding.SnapshotPreStartObserverFingerprint = "2026-08-03T12:00:06Z"
 	finalBinding.ReviewContainer = codexReviewContainerName(req.RunID)
 	finalBinding.ReviewContainerFingerprint = "2026-08-03T12:00:05Z"
 	finalBinding.ReviewOwnershipToken = testOwnershipLabel().Value
@@ -1919,8 +2242,6 @@ func TestBuildCodexReviewAgentSpecConforms(t *testing.T) {
 		}
 	}
 	goldenSpec := cloneContainerSpec(spec)
-	goldenSpec.Mounts[1].Source = "/trusted/review-input/auth.json"
-	goldenSpec.Mounts[2].Source = "/trusted/review-input/AGENTS.md"
 	got, err := json.MarshalIndent(struct {
 		Spec    ContainerSpec             `json:"spec"`
 		Binding CodexReviewJournalBinding `json:"binding"`
@@ -2251,9 +2572,10 @@ func TestCodexReviewAPIKeyStaysOutOfEnvironment(t *testing.T) {
 	cfg, req := testCodexReview(t)
 	req.AuthMode = CodexAuthAPIKey
 	cfg.ProviderEndpoints = []string{"api.openai.com:443"}
-	req.AuthSnapshot = writeCodexReviewFile(
-		t, cfg.InputRoot, "api-auth.json",
-		[]byte(`{"auth_mode":"api_key","OPENAI_API_KEY":"not-a-real-key","tokens":null}`),
+	apiAuth := []byte(`{"auth_mode":"api_key","OPENAI_API_KEY":"not-a-real-key","tokens":null}`)
+	req.AuthSnapshot = writeCodexReviewFile(t, cfg.InputRoot, "api-auth.json", apiAuth)
+	req.Snapshot = testCodexReviewSnapshot(
+		t, cfg, req.RunID, req.Snapshot.volume, apiAuth, req.Instructions.Body, "2026-08-03T12:00:02Z",
 	)
 	spec, binding, err := BuildCodexReviewAgentSpec(cfg, req)
 	if err != nil {
@@ -2278,7 +2600,7 @@ func TestCodexReviewConformanceRejectsTopologyDrift(t *testing.T) {
 		mutate func(*ContainerSpec, *CodexReviewJournalBinding)
 	}{
 		{"writable workspace", func(s *ContainerSpec, _ *CodexReviewJournalBinding) { s.Mounts[0].ReadOnly = false }},
-		{"writable auth", func(s *ContainerSpec, _ *CodexReviewJournalBinding) { s.Mounts[1].ReadOnly = false }},
+		{"writable snapshot", func(s *ContainerSpec, _ *CodexReviewJournalBinding) { s.Mounts[1].ReadOnly = false }},
 		{"missing ancestor shadow", func(s *ContainerSpec, _ *CodexReviewJournalBinding) { s.Mounts = s.Mounts[:len(s.Mounts)-1] }},
 		{"extra child environment", func(s *ContainerSpec, _ *CodexReviewJournalBinding) { s.Env = append(s.Env, "OPENAI_API_KEY=secret") }},
 		{"severance removed", func(s *ContainerSpec, _ *CodexReviewJournalBinding) {
@@ -2309,6 +2631,13 @@ func TestCodexReviewAllowlistShapeChecksRealizedSpec(t *testing.T) {
 	freshWorkspace := testCodexReviewWorkspace(
 		t, cfg, req.RunID, req.Workspace.volume, "2026-08-03T12:00:04Z",
 	)
+	authBytes, err := os.ReadFile(req.AuthSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshSnapshot := testCodexReviewSnapshot(
+		t, cfg, req.RunID, req.Snapshot.volume, authBytes, req.Instructions.Body, "2026-08-03T12:00:06Z",
+	)
 	currentNetwork := testCodexReviewNetwork(t, cfg, req.RunID)
 	spec, binding, err := BuildCodexReviewAgentSpec(cfg, req)
 	if err != nil {
@@ -2331,7 +2660,7 @@ func TestCodexReviewAllowlistShapeChecksRealizedSpec(t *testing.T) {
 	binding.ReviewContainerFingerprint = "2026-08-03T12:00:05Z"
 	binding.ReviewOwnershipToken = testOwnershipLabel().Value
 	finalBinding, err := verifyCodexReviewAllowlistShape(
-		cfg, req, binding, freshShadow, freshWorkspace, currentNetwork, rep, spec,
+		cfg, req, binding, freshShadow, freshWorkspace, freshSnapshot, currentNetwork, rep, spec,
 	)
 	if err != nil {
 		t.Fatalf("conforming realized spec rejected: %v", err)
@@ -2339,24 +2668,26 @@ func TestCodexReviewAllowlistShapeChecksRealizedSpec(t *testing.T) {
 	if finalBinding.AgentsShadowObserverFingerprint != req.AgentsShadow.observerFingerprint ||
 		finalBinding.AgentsShadowPreStartObserverFingerprint != freshShadow.observerFingerprint ||
 		finalBinding.WorkspaceObserverFingerprint != req.Workspace.observerFingerprint ||
-		finalBinding.WorkspacePreStartObserverFingerprint != freshWorkspace.observerFingerprint {
+		finalBinding.WorkspacePreStartObserverFingerprint != freshWorkspace.observerFingerprint ||
+		finalBinding.SnapshotObserverFingerprint != req.Snapshot.observerFingerprint ||
+		finalBinding.SnapshotPreStartObserverFingerprint != freshSnapshot.observerFingerprint {
 		t.Error("final binding did not journal the pre-start observations")
 	}
 	rep.Mounts[1].ReadOnly = false
 	if _, err := verifyCodexReviewAllowlistShape(
-		cfg, req, binding, freshShadow, freshWorkspace, currentNetwork, rep, spec,
+		cfg, req, binding, freshShadow, freshWorkspace, freshSnapshot, currentNetwork, rep, spec,
 	); !errors.Is(err, ErrConformance) {
-		t.Fatalf("writable realized auth mount = %v, want conformance failure", err)
+		t.Fatalf("writable realized snapshot mount = %v, want conformance failure", err)
 	}
 	rep.Mounts[1].ReadOnly = true
 	if _, err := verifyCodexReviewAllowlistShape(
-		cfg, req, binding, req.AgentsShadow, freshWorkspace, currentNetwork, rep, spec,
+		cfg, req, binding, req.AgentsShadow, freshWorkspace, freshSnapshot, currentNetwork, rep, spec,
 	); !errors.Is(err, ErrConformance) {
 		t.Fatalf("reused shadow proof = %v, want conformance failure", err)
 	}
 	freshShadow.fingerprint = "replacement"
 	if _, err := verifyCodexReviewAllowlistShape(
-		cfg, req, binding, freshShadow, freshWorkspace, currentNetwork, rep, spec,
+		cfg, req, binding, freshShadow, freshWorkspace, freshSnapshot, currentNetwork, rep, spec,
 	); !errors.Is(err, ErrConformance) {
 		t.Fatalf("replaced shadow volume = %v, want conformance failure", err)
 	}
@@ -2366,14 +2697,14 @@ func TestCodexReviewAllowlistShapeChecksRealizedSpec(t *testing.T) {
 	changedWorkspace := freshWorkspace
 	changedWorkspace.treeDigest = strings.Repeat("2", 64)
 	if _, err := verifyCodexReviewAllowlistShape(
-		cfg, req, binding, freshShadow, changedWorkspace, currentNetwork, rep, spec,
+		cfg, req, binding, freshShadow, changedWorkspace, freshSnapshot, currentNetwork, rep, spec,
 	); !errors.Is(err, ErrConformance) {
 		t.Fatalf("changed workspace tree = %v, want conformance failure", err)
 	}
 	replacedNetwork := currentNetwork
 	replacedNetwork.fingerprint = "replacement"
 	if _, err := verifyCodexReviewAllowlistShape(
-		cfg, req, binding, freshShadow, freshWorkspace, replacedNetwork, rep, spec,
+		cfg, req, binding, freshShadow, freshWorkspace, freshSnapshot, replacedNetwork, rep, spec,
 	); !errors.Is(err, ErrConformance) {
 		t.Fatalf("replaced provider network = %v, want conformance failure", err)
 	}
