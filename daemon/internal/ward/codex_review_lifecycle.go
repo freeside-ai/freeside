@@ -712,7 +712,8 @@ func (b *Backend) RecoverCodexReview(
 func (b *Backend) recoverCodexReviewIntent(
 	ctx context.Context, cfg CodexReviewConfig, intent CodexReviewLaunchIntent, discardWorkspace bool,
 ) error {
-	if intent.validateIdentity(intent.RunID) != nil || intent.State == CodexReviewIntentStarted {
+	names, namesErr := intent.validatedResourceNames(intent.RunID)
+	if namesErr != nil || intent.State == CodexReviewIntentStarted {
 		return failf(CheckControlPlaneIsolation, "Codex review recovery intent is invalid")
 	}
 	if intent.State == CodexReviewIntentClosed {
@@ -779,7 +780,7 @@ func (b *Backend) recoverCodexReviewIntent(
 		return codexReviewOperationalCheckf(
 			CheckControlPlaneIsolation, "list Codex review recovery containers: %v", listErr)
 	}
-	for _, name := range []string{codexReviewWorkspaceObserverName(launch.RunID), codexReviewShadowInitializerName(launch.RunID), codexReviewShadowObserverName(launch.RunID), intent.ReviewContainer} {
+	for _, name := range []string{names.workspaceObserver, names.shadowInitializer, names.shadowObserver, names.reviewContainer} {
 		if !slices.ContainsFunc(containers, func(c ContainerSummary) bool { return c.ID == name }) {
 			continue
 		}
@@ -1120,46 +1121,64 @@ func (intent CodexReviewLaunchIntent) validateFor(launch CodexReviewLaunchSpec, 
 // destruction at a sibling invocation's resources or fake convergence by
 // naming resources that never existed.
 func (intent CodexReviewLaunchIntent) validateIdentity(runID string) error {
+	_, err := intent.validatedResourceNames(runID)
+	return err
+}
+
+// validatedResourceNames authenticates both the current topology and the one
+// exact legacy topology that an upgrade may need to reap. Matching individual
+// legacy names is insufficient: the complete stored set must be one coherent
+// generation, preventing a rewritten row from composing teardown targets.
+func (intent CodexReviewLaunchIntent) validatedResourceNames(runID string) (codexReviewResourceNames, error) {
 	if intent.RunID != runID ||
-		!codexReviewOwnershipLabelValid(Label{Key: ownershipLabelKey, Value: intent.OwnershipToken}) ||
-		intent.ShadowVolume != codexReviewShadowVolumeName(runID) ||
-		intent.Network != codexReviewNetworkName(runID) ||
-		intent.ReviewContainer != codexReviewContainerName(runID) {
-		return errors.New("launch identity is invalid")
+		!codexReviewOwnershipLabelValid(Label{Key: ownershipLabelKey, Value: intent.OwnershipToken}) {
+		return codexReviewResourceNames{}, errors.New("launch identity is invalid")
 	}
 	if !intent.State.valid() {
-		return errors.New("launch state is invalid")
+		return codexReviewResourceNames{}, errors.New("launch state is invalid")
+	}
+	for _, names := range []codexReviewResourceNames{
+		codexReviewNames(runID), legacyCodexReviewNames(runID),
+	} {
+		if intent.resourceNamesMatch(names) {
+			return names, nil
+		}
+	}
+	return codexReviewResourceNames{}, errors.New("launch resources are invalid")
+}
+
+func (intent CodexReviewLaunchIntent) resourceNamesMatch(names codexReviewResourceNames) bool {
+	if intent.ShadowVolume != names.shadowVolume || intent.Network != names.network ||
+		intent.ReviewContainer != names.reviewContainer {
+		return false
 	}
 	expected := map[string]struct{}{
-		codexReviewWorkspaceObserverName(runID): {},
-		codexReviewShadowInitializerName(runID): {},
-		codexReviewShadowObserverName(runID):    {},
-		intent.ReviewContainer:                  {},
-		intent.ShadowVolume:                     {},
-		intent.Network:                          {},
+		names.workspaceObserver: {},
+		names.shadowInitializer: {},
+		names.shadowObserver:    {},
+		intent.ReviewContainer:  {},
+		intent.ShadowVolume:     {},
+		intent.Network:          {},
 	}
 	if len(intent.Resources) != len(expected) {
-		return errors.New("launch resources are incomplete")
+		return false
 	}
 	for _, resource := range intent.Resources {
 		if _, ok := expected[resource.Name]; !ok {
-			return errors.New("launch resource is invalid")
+			return false
 		}
 		delete(expected, resource.Name)
 		if resource.OwnershipToken != "" && !ownershipTokenPattern.MatchString(resource.OwnershipToken) {
-			return errors.New("launch resource owner is invalid")
+			return false
 		}
 		if resource.Name == intent.ShadowVolume || resource.Name == intent.Network ||
-			resource.Name == intent.ReviewContainer || resource.Name == codexReviewShadowInitializerName(runID) {
+			resource.Name == intent.ReviewContainer || resource.Name == names.shadowInitializer {
 			if resource.OwnershipToken != intent.OwnershipToken {
-				return errors.New("fixed launch resource owner diverged")
+				return false
 			}
 		}
 	}
-	if len(expected) != 0 {
-		return errors.New("launch resource is missing")
-	}
-	return nil
+	return len(expected) == 0
 }
 
 func (b CodexReviewWorkspaceBinding) validateFor(launch CodexReviewLaunchSpec) error {
@@ -1665,9 +1684,9 @@ func (b *Backend) deleteCodexReviewVolume(
 }
 
 func codexReviewShadowVolumeName(runID string) string {
-	return "freeside-review-" + runID + "-agents"
+	return codexReviewNames(runID).shadowVolume
 }
 
 func codexReviewShadowInitializerName(runID string) string {
-	return "freeside-review-" + runID + "-agents-init"
+	return codexReviewNames(runID).shadowInitializer
 }

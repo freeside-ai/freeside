@@ -599,6 +599,172 @@ func testCodexReviewLifecycle(
 	return fx.backend(t), fx.rt, cfg, launch, journal
 }
 
+func retargetCodexReviewLifecycle(
+	t *testing.T,
+	rt *fakeRuntime,
+	launch *CodexReviewLaunchSpec,
+	journal *fakeCodexReviewJournal,
+	runID string,
+) {
+	t.Helper()
+	oldVolume := launch.WorkspaceVolume
+	workspaceOwner := Label{Key: ownershipLabelKey, Value: journal.workspaceBinding.OwnershipToken}
+	delete(rt.vols, oldVolume)
+	delete(rt.volBase, oldVolume)
+	delete(rt.volTree, oldVolume)
+	launch.RunID = runID
+	launch.WorkspaceSourceRunID = runID
+	launch.WorkspaceVolume = namesFor(runID).Workspace
+	rt.vols[launch.WorkspaceVolume] = &fakeVol{
+		labels: append(runLabels(runID), workspaceOwner), created: "workspace-created",
+	}
+	rt.volBase[launch.WorkspaceVolume] = testCodexReviewHead
+	rt.volTree[launch.WorkspaceVolume] = testCodexReviewTreeDigest
+	journal.workspaceBinding = CodexReviewWorkspaceBinding{
+		SourceRunID: runID, Volume: launch.WorkspaceVolume,
+		OwnershipToken: workspaceOwner.Value, CreationFingerprint: "workspace-created",
+	}
+}
+
+func legacyCodexReviewIntentForTest(
+	runID, digest, owner string,
+) *CodexReviewLaunchIntent {
+	names := legacyCodexReviewNames(runID)
+	return &CodexReviewLaunchIntent{
+		RunID: runID, SpecDigest: digest, OwnershipToken: owner,
+		ShadowVolume: names.shadowVolume, Network: names.network,
+		ReviewContainer: names.reviewContainer, State: CodexReviewIntentPreparing,
+		Resources: []CodexReviewIntentResource{
+			{Name: names.workspaceObserver},
+			{Name: names.shadowInitializer, OwnershipToken: owner},
+			{Name: names.shadowObserver},
+			{Name: names.reviewContainer, OwnershipToken: owner},
+			{Name: names.shadowVolume, OwnershipToken: owner},
+			{Name: names.network, OwnershipToken: owner},
+		},
+	}
+}
+
+func TestCodexReviewResourceNamesFitReferenceRuntime(t *testing.T) {
+	maximumID := strings.Repeat("a", 32)
+	if !runIDPattern.MatchString(maximumID) {
+		t.Fatalf("maximum invocation ID %q is not admitted", maximumID)
+	}
+	names := codexReviewNames(maximumID)
+	resources := map[string]string{
+		"workspace volume":   namesFor(maximumID).Workspace,
+		"workspace observer": names.workspaceObserver,
+		"shadow initializer": names.shadowInitializer,
+		"shadow observer":    names.shadowObserver,
+		"review container":   names.reviewContainer,
+		"shadow volume":      names.shadowVolume,
+		"network":            names.network,
+	}
+	seen := make(map[string]string, len(resources))
+	for role, name := range resources {
+		if err := validateRuntimeResourceName(name); err != nil {
+			t.Errorf("%s name %q is not valid at the runtime boundary: %v", role, name, err)
+		}
+		if prior, exists := seen[name]; exists {
+			t.Errorf("%s and %s share runtime name %q", prior, role, name)
+		}
+		seen[name] = role
+	}
+	other := codexReviewNames("b" + maximumID[1:])
+	if other.workspaceObserver == names.workspaceObserver || other.shadowVolume == names.shadowVolume {
+		t.Fatal("distinct invocation IDs collided after resource-name derivation")
+	}
+}
+
+func TestBackendCodexReviewMaximumInvocationReachesRuntimeLaunch(t *testing.T) {
+	backend, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
+	retargetCodexReviewLifecycle(t, rt, &launchSpec, journal, strings.Repeat("a", 32))
+	rt.onCreateVolume = validateRuntimeResourceName
+	rt.onCreateNetwork = validateRuntimeResourceName
+	rt.onCreateContainer = func(spec ContainerSpec) error {
+		return validateRuntimeResourceName(spec.Name)
+	}
+	launch, err := backend.CodexReview(context.Background(), cfg, launchSpec)
+	if err != nil {
+		t.Fatalf("maximum invocation failed at the runtime boundary: %v", err)
+	}
+	t.Cleanup(func() { _ = launch.Close() })
+	if rt.callIndex("start-container "+codexReviewContainerName(launchSpec.RunID)) < 0 {
+		t.Fatal("maximum invocation topology did not reach review launch")
+	}
+}
+
+func TestBackendCodexReviewReapsAuthenticatedLegacyOversizedObserverBeforeRelaunch(t *testing.T) {
+	backend, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
+	const runID = "review-0dcd5c691adcaec0c353993a"
+	retargetCodexReviewLifecycle(t, rt, &launchSpec, journal, runID)
+	digest, err := codexReviewIntentDigest(cfg, launchSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := testOwnershipLabel()
+	journal.intent = legacyCodexReviewIntentForTest(runID, digest, owner.Value)
+	legacyObserver := legacyCodexReviewNames(runID).workspaceObserver
+	if err := validateRuntimeResourceName(legacyObserver); err == nil {
+		t.Fatal("production regression fixture is not oversized")
+	}
+	rt.ctrs[legacyObserver] = &fakeCtr{
+		spec:    ContainerSpec{Name: legacyObserver, Labels: append(runLabels(runID), owner)},
+		created: "legacy-observer",
+	}
+	launch, err := backend.CodexReview(context.Background(), cfg, launchSpec)
+	if err != nil {
+		t.Fatalf("same-invocation relaunch after legacy recovery: %v", err)
+	}
+	t.Cleanup(func() { _ = launch.Close() })
+	if _, exists := rt.ctrs[legacyObserver]; exists {
+		t.Fatal("authenticated legacy oversized observer survived recovery")
+	}
+	if journal.intent.State != CodexReviewIntentStarted ||
+		journal.intent.Resources[0].Name != codexReviewWorkspaceObserverName(runID) {
+		t.Fatalf("relaunch intent = %#v, want current started topology", journal.intent)
+	}
+}
+
+func TestRecoverCodexReviewRefusesForeignLegacyOversizedObserver(t *testing.T) {
+	backend, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
+	const runID = "review-0dcd5c691adcaec0c353993a"
+	retargetCodexReviewLifecycle(t, rt, &launchSpec, journal, runID)
+	digest, err := codexReviewIntentDigest(cfg, launchSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := testOwnershipLabel()
+	journal.intent = legacyCodexReviewIntentForTest(runID, digest, owner.Value)
+	legacyObserver := legacyCodexReviewNames(runID).workspaceObserver
+	rt.ctrs[legacyObserver] = &fakeCtr{
+		spec: ContainerSpec{Name: legacyObserver, Labels: []Label{{
+			Key: ownershipLabelKey, Value: strings.Repeat("f", 32),
+		}}},
+		created: "foreign-observer",
+	}
+	if err := backend.RecoverCodexReview(context.Background(), cfg, launchSpec); err == nil ||
+		!errors.Is(err, ErrConformance) {
+		t.Fatalf("foreign legacy recovery = %v, want conformance refusal", err)
+	}
+	if _, exists := rt.ctrs[legacyObserver]; !exists {
+		t.Fatal("recovery deleted a foreign legacy oversized observer")
+	}
+	if journal.intent.State != CodexReviewIntentPreparing {
+		t.Fatalf("foreign legacy recovery closed intent: %q", journal.intent.State)
+	}
+}
+
+func TestCodexReviewIntentRejectsMixedResourceNameGenerations(t *testing.T) {
+	runID := strings.Repeat("a", 32)
+	owner := strings.Repeat("1", 32)
+	intent := legacyCodexReviewIntentForTest(runID, strings.Repeat("a", 64), owner)
+	intent.Resources[0].Name = codexReviewNames(runID).workspaceObserver
+	if err := intent.validateIdentity(runID); err == nil {
+		t.Fatal("intent accepted a mixed legacy/current resource topology")
+	}
+}
+
 func TestBackendCodexReviewAuthenticatesAndReconstructsBeforeStart(t *testing.T) {
 	backend, rt, cfg, launchSpec, journal := testCodexReviewLifecycle(t)
 	workspaceObserver := codexReviewWorkspaceObserverName(launchSpec.RunID)
