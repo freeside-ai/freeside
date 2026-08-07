@@ -1097,3 +1097,140 @@ func TestPutAttentionItemPreNoticeRowConverges(t *testing.T) {
 		t.Fatalf("stored body was rewritten:\ngot  %s\nwant %s", stored, legacy)
 	}
 }
+
+// TestPutAttentionItemLegacyOffsetExpiresWhenConverges is the #553 read-path
+// tolerance: a row the dev CLI persisted before expires_when carried a UTC
+// check holds a valid instant in a host-local offset spelling. Read must
+// canonicalize it to UTC (so callers see one spelling), an idempotent replay
+// must still converge without entity_version churn (the offset and its UTC
+// re-encode are the same instant, exactly the commit_plan_notice precedent
+// above), and a real transition against the legacy row must validate through
+// the canonicalized decode rather than being refused by the write-boundary UTC
+// check. Internal test: the offset row is written as raw SQL past the Put
+// boundary.
+func TestPutAttentionItemLegacyOffsetExpiresWhenConverges(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openRaw(t)
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := seedEpoch(ctx, db); err != nil {
+		t.Fatalf("seedEpoch: %v", err)
+	}
+	s := &Store{db: db}
+
+	expiresUTC := time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC)
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-1", ProjectID: "proj-1",
+		Subject:           domain.Subject{Type: domain.SubjectRun, ID: "run-1"},
+		Type:              domain.AttentionReadyForFinalReview,
+		Priority:          domain.PriorityNormal,
+		Reason:            "checks are green and the diff is ready",
+		RequestedDecision: []domain.Action{domain.ActionOpenPR},
+		ItemVersion:       1,
+		InterruptionClass: domain.InterruptionPlannedGate,
+		Status:            domain.StatusOpen,
+		ExpiresWhen:       &expiresUTC,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewAttentionItem: %v", err)
+	}
+	body, err := encode(item)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	// Forge the legacy spelling by rewriting only the expires_when value in the
+	// canonical body to the same instant carried in a +02:00 offset.
+	loc := time.FixedZone("+0200", 2*60*60)
+	utcSpelling := `"expires_when":"` + expiresUTC.Format(time.RFC3339Nano) + `"`
+	offsetSpelling := `"expires_when":"` + expiresUTC.In(loc).Format(time.RFC3339Nano) + `"`
+	legacy := strings.Replace(body, utcSpelling, offsetSpelling, 1)
+	if legacy == body {
+		t.Fatalf("offset rewrite did not apply; body = %s", body)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body) VALUES (?, ?, NULL, ?, ?, 1, 1, ?)`,
+		item.ID, item.ProjectID, item.Type, item.Status, legacy); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+
+	// Read canonicalizes to UTC on both the Get and List paths.
+	assertUTC := func(where string, got *time.Time) {
+		t.Helper()
+		if got == nil {
+			t.Fatalf("%s: expires_when is nil, want a value", where)
+		}
+		if got.Location() != time.UTC {
+			t.Errorf("%s: expires_when location = %v, want UTC", where, got.Location())
+		}
+		if !got.Equal(expiresUTC) {
+			t.Errorf("%s: expires_when = %v, want the same instant as %v", where, got, expiresUTC)
+		}
+	}
+	var fromGet domain.AttentionItem
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		fromGet, err = tx.GetAttentionItem(ctx, item.ID)
+		return err
+	}); err != nil {
+		t.Fatalf("GetAttentionItem: %v", err)
+	}
+	assertUTC("Get", fromGet.ExpiresWhen)
+
+	var fromList []Snapshotted[domain.AttentionItem]
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		fromList, err = tx.ListAttentionItems(ctx)
+		return err
+	}); err != nil {
+		t.Fatalf("ListAttentionItems: %v", err)
+	}
+	if len(fromList) != 1 {
+		t.Fatalf("ListAttentionItems returned %d items, want 1", len(fromList))
+	}
+	assertUTC("List", fromList[0].Value.ExpiresWhen)
+
+	// An idempotent replay converges against the offset row without churn: the
+	// canonical re-encode of the decoded row equals the fresh body, so no write
+	// and no entity_version advance.
+	if err := s.Write(ctx, func(tx *WriteTx) error {
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatalf("idempotent replay against an offset row: %v", err)
+	}
+	var version int64
+	var stored string
+	if err := db.QueryRowContext(ctx,
+		`SELECT entity_version, body FROM attention_items WHERE id = ?`, item.ID).
+		Scan(&version, &stored); err != nil {
+		t.Fatalf("read row back: %v", err)
+	}
+	if version != 1 {
+		t.Fatalf("entity_version = %d, want 1 (no churn)", version)
+	}
+	if stored != legacy {
+		t.Fatalf("an idempotent replay rewrote the stored body:\ngot  %s\nwant %s", stored, legacy)
+	}
+
+	// A real transition against the legacy row still validates: the decoded old
+	// row is canonicalized before ValidateAttentionItemTransition, so the UTC
+	// check the write boundary now enforces cannot refuse the read of a
+	// pre-existing offset row.
+	advanced := item
+	advanced.ItemVersion = 2
+	if err := s.Write(ctx, func(tx *WriteTx) error {
+		return tx.PutAttentionItem(ctx, advanced)
+	}); err != nil {
+		t.Fatalf("real transition against an offset row: %v", err)
+	}
+	if err := db.QueryRowContext(ctx,
+		`SELECT entity_version FROM attention_items WHERE id = ?`, item.ID).
+		Scan(&version); err != nil {
+		t.Fatalf("read row back after transition: %v", err)
+	}
+	if version != 2 {
+		t.Fatalf("entity_version after transition = %d, want 2", version)
+	}
+}

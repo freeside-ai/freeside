@@ -799,3 +799,22 @@ func (i AttentionItem) WithDecidedAt(t time.Time) (AttentionItem, error) {
 	i.DecidedAt = &t
 	return i, nil
 }
+
+// CanonicalizeStoredRow rewrites a decoded stored row's fields to their
+// canonical spelling before Validate runs, so a row written under an older,
+// looser encoding converges instead of being refused by the current, stricter
+// Validate. It must stay lossless (the same instant in canonical byte form):
+// the store's put-idempotence compare is a canonical re-encode, so a legacy row
+// and its fresh equivalent have to marshal identically once this has run.
+//
+// Today the only such field is ExpiresWhen, whose UTC check (issue #553)
+// post-dates a dev-CLI producer that persisted a host-local offset; rewriting
+// it to UTC is the same instant in the spelling Validate now demands. DecidedAt
+// needs no entry: its write gate has always rejected non-UTC, so no offset row
+// of it can exist to canonicalize.
+func (i *AttentionItem) CanonicalizeStoredRow() {
+	if i.ExpiresWhen != nil {
+		utc := i.ExpiresWhen.UTC()
+		i.ExpiresWhen = &utc
+	}
+}
