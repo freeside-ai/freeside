@@ -30,7 +30,7 @@ import (
 func TestRunServesSignetAndStops(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
-	h, err := run(ctx, config{
+	h, err := run(ctx, nil, config{
 		DBPath:        filepath.Join(root, "freeside.db"),
 		FakeDriverDir: filepath.Join(root, "driver"),
 		ListenAddr:    "127.0.0.1:0", ReconcileInterval: 10 * time.Millisecond,
@@ -69,7 +69,7 @@ func TestRunConvergesLegacyFakePublicationBeforeStartingScheduler(t *testing.T) 
 		ListenAddr: "127.0.0.1:0", ReconcileInterval: 10 * time.Millisecond,
 	}
 	cleanCtx, stopClean := context.WithCancel(context.Background())
-	clean, err := run(cleanCtx, cfg)
+	clean, err := run(cleanCtx, nil, cfg)
 	if err != nil {
 		stopClean()
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestRunConvergesLegacyFakePublicationBeforeStartingScheduler(t *testing.T) 
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	h, err := run(ctx, cfg)
+	h, err := run(ctx, nil, cfg)
 	if err == nil {
 		_ = h.Close()
 		t.Fatal("run started scheduler before rejecting malformed legacy publication history")
@@ -124,7 +124,7 @@ func TestRunStartsWithADurableRowItCannotReconstruct(t *testing.T) {
 	start := func(t *testing.T, attempt string) (*daemon, context.CancelFunc) {
 		t.Helper()
 		ctx, cancel := context.WithCancel(context.Background())
-		h, err := run(ctx, cfg)
+		h, err := run(ctx, nil, cfg)
 		if err != nil {
 			cancel()
 			t.Fatalf("%s: run: %v", attempt, err)
@@ -404,26 +404,48 @@ func TestStartupSessionCleanupTransfersOnlyAfterSuccess(t *testing.T) {
 	t.Parallel()
 	closeErr := errors.New("session close failed")
 	failed := &recordingSessionCloser{err: closeErr}
-	if err := closeStartupSessions(false, failed); !errors.Is(err, closeErr) {
+	stopped := 0
+	stop := func() { stopped++ }
+	if err := closeStartupSessions(false, failed, stop); !errors.Is(err, closeErr) {
 		t.Fatalf("failed-start cleanup = %v, want %v", err, closeErr)
 	}
 	if failed.calls != 1 {
 		t.Fatalf("failed-start close calls = %d, want 1", failed.calls)
 	}
+	// A failed startup tears down a credential-bearing session while
+	// signal.NotifyContext is still registered; restoring signal disposition
+	// first is what keeps a second SIGTERM able to end a wedged lease cleanup.
+	if stopped != 1 {
+		t.Fatalf("failed-start signal restore calls = %d, want 1", stopped)
+	}
 
 	succeeded := &recordingSessionCloser{}
-	if err := closeStartupSessions(true, succeeded); err != nil {
+	if err := closeStartupSessions(true, succeeded, stop); err != nil {
 		t.Fatalf("successful-start cleanup = %v", err)
 	}
 	if succeeded.calls != 0 {
 		t.Fatalf("successful-start close calls = %d, want daemon ownership", succeeded.calls)
+	}
+	// A successful startup leaves signal handling in place: serve owns the
+	// stop-before-close sequence for the running daemon's teardown.
+	if stopped != 1 {
+		t.Fatalf("successful-start signal restore calls = %d, want no additional restore", stopped)
+	}
+
+	// With no credential-bearing closer (the fake-driver lane), there is
+	// nothing that can wedge, so signal disposition is left untouched.
+	if err := closeStartupSessions(false, nil, stop); err != nil {
+		t.Fatalf("failed-start with no closer = %v", err)
+	}
+	if stopped != 1 {
+		t.Fatalf("no-closer signal restore calls = %d, want no restore", stopped)
 	}
 }
 
 func TestRunPairsFreshDevice(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
-	h, err := run(ctx, config{
+	h, err := run(ctx, nil, config{
 		DBPath: filepath.Join(root, "freeside.db"), ListenAddr: "127.0.0.1:0",
 		ReconcileInterval: 10 * time.Millisecond,
 	})
@@ -574,10 +596,10 @@ func TestTopicKeyPersistsAndRejectsUntrustedFiles(t *testing.T) {
 func TestRunValidatesConfiguration(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	if _, err := run(ctx, config{ListenAddr: "127.0.0.1:0"}); err == nil {
+	if _, err := run(ctx, nil, config{ListenAddr: "127.0.0.1:0"}); err == nil {
 		t.Fatal("run accepted an empty database path")
 	}
-	if _, err := run(ctx, config{
+	if _, err := run(ctx, nil, config{
 		DBPath:     filepath.Join(t.TempDir(), "freeside.db"),
 		ListenAddr: "127.0.0.1:0", ReconcileInterval: -time.Second,
 	}); err == nil {
@@ -722,7 +744,7 @@ func TestRepositoryIDFlag(t *testing.T) {
 func TestRunDrivesFakeWorkflow(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
-	h, err := run(ctx, config{
+	h, err := run(ctx, nil, config{
 		DBPath:        filepath.Join(root, "freeside.db"),
 		FakeDriverDir: filepath.Join(root, "driver"),
 		ListenAddr:    "127.0.0.1:0", ReconcileInterval: 5 * time.Millisecond,
@@ -964,7 +986,7 @@ func TestParseTailscaleIPs(t *testing.T) {
 func TestRunRefusesNonLoopbackBeforeCreatingState(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	driverDir := filepath.Join(t.TempDir(), "driver")
-	h, err := run(context.Background(), config{
+	h, err := run(context.Background(), nil, config{
 		DBPath:        dbPath,
 		ListenAddr:    "0.0.0.0:0",
 		FakeDriverDir: driverDir,

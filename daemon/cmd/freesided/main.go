@@ -260,23 +260,46 @@ func main() {
 		fmt.Fprintf(os.Stderr, "freesided: -driver %q is not fake or claude\n", *driverMode)
 		os.Exit(2)
 	}
-	h, err := run(ctx, daemonConfig)
+	h, err := run(ctx, stop, daemonConfig)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
 		os.Exit(1)
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(h.readiness()); err != nil {
+		// Restore signal disposition before teardown here too, for the reason
+		// serve documents: an unstopped Close keeps absorbing the operator's
+		// SIGTERM, leaving SIGKILL as the only way out of a slow teardown.
+		stop()
 		_ = h.Close()
 		fmt.Fprintln(os.Stderr, "freesided:", err)
 		os.Exit(1)
 	}
 
-	waitErr := h.Wait(ctx)
-	closeErr := h.Close()
-	if err := errors.Join(waitErr, closeErr); err != nil {
+	if err := serve(ctx, stop, h); err != nil {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
 		os.Exit(1)
 	}
+}
+
+// serve runs the daemon until its context ends or a component fails, then
+// tears it down.
+//
+// stop runs before teardown, not after. Until signal disposition is
+// restored, signal.NotifyContext keeps absorbing SIGTERM, so an operator
+// signalling during a slow teardown gets nothing: the second signal is
+// swallowed, and the only thing left that ends the process is a SIGKILL
+// landing mid-teardown, stranding the containers it was reaping. Once stop
+// has run, a second SIGTERM terminates the process on the spot.
+//
+// This is the escape hatch that plan §5.2's unbounded credential-lease
+// teardown needs, and the reason it is not a finite grace in disguise:
+// nothing abandons the lease on a timer, and abandoning it is a human
+// decision, taken deliberately, with the process still reporting what it
+// was doing.
+func serve(ctx context.Context, stop func(), h *daemon) error {
+	waitErr := h.Wait(ctx)
+	stop()
+	return errors.Join(waitErr, h.Close())
 }
 
 // splitNonEmpty splits a comma-separated flag into its non-empty members,
@@ -366,7 +389,7 @@ type daemon struct {
 	pairingCode   string
 }
 
-func run(parent context.Context, cfg config) (_ *daemon, err error) {
+func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error) {
 	if cfg.DBPath == "" {
 		return nil, errors.New("-db is required")
 	}
@@ -467,7 +490,7 @@ func run(parent context.Context, cfg config) (_ *daemon, err error) {
 	}()
 	var startupSessionCloser sessionCloser
 	defer func() {
-		err = errors.Join(err, closeStartupSessions(success, startupSessionCloser))
+		err = errors.Join(err, closeStartupSessions(success, startupSessionCloser, stop))
 	}()
 	// Backup evidence is maintained before anything can admit work. Orphan
 	// reconciliation below resumes writers through the unattended admission
@@ -702,9 +725,17 @@ func parseOperatingMode(raw string) (domain.OperatingMode, error) {
 	}
 }
 
-func closeStartupSessions(success bool, closer sessionCloser) error {
+func closeStartupSessions(success bool, closer sessionCloser, stop func()) error {
 	if success || closer == nil {
 		return nil
+	}
+	// Restore signal disposition before this teardown, for the reason serve
+	// documents: startupSessionCloser can block on credential-bearing lease
+	// cleanup, and until stop runs signal.NotifyContext keeps absorbing the
+	// operator's SIGTERM, leaving SIGKILL as the only way out. stop is nil
+	// only in tests that never register signal handling.
+	if stop != nil {
+		stop()
 	}
 	return closer.Close(context.Background())
 }
@@ -776,6 +807,20 @@ func (d *daemon) Wait(ctx context.Context) error {
 	}
 }
 
+// Close tears the daemon down. It deliberately imposes no deadline on the
+// credential-bearing session teardown: plan §5.2 closes the stop-wait fork
+// on the unlimited side, because "any finite grace recreates
+// SIGKILL-mid-lease, and a bounded credential-safe teardown is deferred
+// hardening, not a tunable". The supervisor's exit timeout is effectively
+// unlimited to match, so waiting here is the contract, not a hazard.
+//
+// What makes that wait safe is that it can no longer be indefinite by
+// accident. The subprocess sites it runs through are bounded individually
+// (internal/procbound), so a teardown that is still going is doing work
+// rather than blocked on a pipe a descendant never closed; and serve
+// restores signal disposition before calling this, so an operator who
+// decides to abandon a lease can, with a second SIGTERM. That is a human
+// choosing to, which is the distinction §5.2 draws.
 func (d *daemon) Close() error {
 	d.closeOnce.Do(func() {
 		d.cancel()
@@ -786,7 +831,7 @@ func (d *daemon) Close() error {
 			// close its store or exit while a session still uses its lease.
 			driverErr = d.sessionCloser.Close(context.Background())
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), serverShutdownBudget)
 		defer cancel()
 		shutdownErr := d.server.Shutdown(ctx)
 		d.wg.Wait()
@@ -794,6 +839,12 @@ func (d *daemon) Close() error {
 	})
 	return d.closeErr
 }
+
+// serverShutdownBudget bounds draining in-flight HTTP requests. Unlike the
+// session teardown above, this phase holds no credential lease: the API is
+// a read/write surface over the store, and abandoning a slow request loses
+// nothing durable.
+const serverShutdownBudget = 5 * time.Second
 
 var (
 	tailscaleIPv4 = netip.MustParsePrefix("100.64.0.0/10")
