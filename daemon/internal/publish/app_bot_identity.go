@@ -4,15 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
 )
-
-const maxAppBotIdentityResponseBytes = 64 << 10
 
 // AppBotIdentity is the public Git attribution GitHub binds to one App.
 // It carries no credential or publication authority.
@@ -169,9 +166,7 @@ func (r *GitHubAppBotIdentityResolver) revalidateLocked(
 		ID    int64  `json:"id"`
 		Type  string `json:"type"`
 	}
-	if err := decodeResponse(
-		io.LimitReader(resp.Body, maxAppBotIdentityResponseBytes), &user,
-	); err != nil {
+	if err := decodeResponse(resp.Body, &user); err != nil {
 		return AppBotIdentity{}, fmt.Errorf("resolve App bot identity: decode response: %w", err)
 	}
 	if user.Login != login || user.ID <= 0 || user.Type != "Bot" {

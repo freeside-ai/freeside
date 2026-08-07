@@ -3,9 +3,11 @@ package publish
 import (
 	"context"
 	"errors"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -36,6 +38,108 @@ func TestOnlyGitNetImportsExec(t *testing.T) {
 		for _, imp := range file.Imports {
 			if imp.Path.Value == `"os/exec"` && filepath.Base(name) != "gitnet.go" {
 				t.Errorf("%s imports os/exec; only gitnet.go may", name)
+			}
+		}
+	}
+}
+
+// TestOnlyApprovedStreamingReaders keeps response size and trailing-data
+// enforcement centralized. New JSON decoders or whole-reader paths require an
+// explicit review of why they do not bypass decodeResponse.
+func TestOnlyApprovedStreamingReaders(t *testing.T) {
+	t.Parallel()
+	approved := map[string]map[string]int{
+		"encoding/json.NewDecoder": {
+			"forge.go.decodeResponse":                                 1,
+			"janitor_journal.go.decodeJanitorJournal":                 1,
+			"janitor_snapshot.go.DecodeInstallationAuthorityDocument": 1,
+			"janitor_snapshot.go.rejectDuplicateJSONKeys":             1,
+			"ledger.go.DecodeIntent":                                  1,
+			"outcome.go.DecodeOutcome":                                1,
+			"reservation.go.DecodeReservation":                        1,
+		},
+		"encoding/json.Unmarshal": {
+			"janitor_snapshot.go.jsonArray":        1,
+			"janitor_snapshot.go.jsonObject":       1,
+			"keystore.go.loadAppFrom":              1,
+			"keystore.go.loadLegacyAppFrom":        1,
+			"store_intent.go.commitReservedIntent": 1,
+		},
+		"io.ReadAll": {
+			"janitor_store.go.readFile":      1,
+			"onboarding.go.ImportKey":        1,
+			"transport.go.readRepoIDBinding": 1,
+		},
+	}
+	observed := make(map[string]map[string]int)
+	sources, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	for _, name := range sources {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		imports := make(map[string]string)
+		for _, spec := range file.Imports {
+			path, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			importName := filepath.Base(path)
+			if spec.Name != nil {
+				importName = spec.Name.Name
+			}
+			if importName == "." && (path == "encoding/json" || path == "io") {
+				t.Errorf("%s dot-imports %s; guarded calls must remain attributable", filepath.Base(name), path)
+			}
+			imports[importName] = path
+		}
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || function.Body == nil {
+				continue
+			}
+			location := filepath.Base(name) + "." + function.Name.Name
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				selector, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				packageName, ok := selector.X.(*ast.Ident)
+				if !ok {
+					return true
+				}
+				callName := imports[packageName.Name] + "." + selector.Sel.Name
+				allowedLocations, guarded := approved[callName]
+				if !guarded {
+					return true
+				}
+				if _, allowed := allowedLocations[location]; !allowed {
+					t.Errorf("%s calls %s outside the reviewed allowlist", fset.Position(call.Pos()), callName)
+					return true
+				}
+				if observed[callName] == nil {
+					observed[callName] = make(map[string]int)
+				}
+				observed[callName][location]++
+				return true
+			})
+		}
+	}
+	for callName, allowedLocations := range approved {
+		for location, want := range allowedLocations {
+			if got := observed[callName][location]; got != want {
+				t.Errorf("%s call count in %s = %d, want %d", callName, location, got, want)
 			}
 		}
 	}
