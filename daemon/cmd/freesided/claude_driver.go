@@ -826,6 +826,7 @@ func classifyTransportSeedError(err error) error {
 		return err
 	}
 	if errors.Is(err, publish.ErrRemoteMissingBase) ||
+		errors.Is(err, publish.ErrMaterializationRefused) ||
 		isPermanentSeedCredentialError(err) {
 		return fmt.Errorf("%w: %w", claude.ErrSeedRefused, err)
 	}

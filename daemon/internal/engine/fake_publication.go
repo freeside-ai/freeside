@@ -73,6 +73,7 @@ type PublicationCheckout interface {
 // produce one, so the seam itself cannot express an ungated push (#288).
 type PublicationTransport interface {
 	FetchBase(ctx context.Context, repo, baseRef, baseSHA, dir string) (PublicationCheckout, error)
+	RetainWorktree(ctx context.Context, checkout PublicationCheckout, dest, headSHA string) error
 	PushHead(ctx context.Context, checkout PublicationCheckout, gated publish.GatedHead) (publish.PushResult, error)
 }
 
@@ -112,6 +113,19 @@ func (t *GitPublicationTransport) FetchBase(
 		return nil, err
 	}
 	return gitPublicationCheckout{checkout: checkout, owner: t}, nil
+}
+
+func (t *GitPublicationTransport) RetainWorktree(
+	ctx context.Context, checkout PublicationCheckout, dest, headSHA string,
+) error {
+	if t == nil || t.transport == nil {
+		return errors.New("publication transport: nil git transport")
+	}
+	sealed, ok := checkout.(gitPublicationCheckout)
+	if !ok || sealed.owner != t {
+		return ErrForeignPublicationCheckout
+	}
+	return t.transport.RetainWorktree(ctx, sealed.checkout.Dir(), dest, headSHA)
 }
 
 // PushHead forwards both capabilities to the sealed transport: the

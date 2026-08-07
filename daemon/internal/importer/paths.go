@@ -29,7 +29,7 @@ func gatePaths(m export.Manifest) error {
 			return fmt.Errorf("manifest path %q occupies the reserved commit-plan namespace: %w", e.Path, ErrCommitPlanCollision)
 		}
 		for _, comp := range strings.Split(e.Path, "/") {
-			if gitUnsafeComponent(comp) {
+			if GitUnsafeComponent(comp) {
 				return fmt.Errorf("path %q component %q: %w", e.Path, comp, ErrGitPathInjection)
 			}
 		}
@@ -57,7 +57,7 @@ func parentDir(p string) string {
 	return p[:i]
 }
 
-// gitUnsafeComponent reports whether one path component could name git
+// GitUnsafeComponent reports whether one path component could name git
 // metadata on any filesystem a checkout or downstream working tree
 // might use: exact or case-folded ".git" after an NTFS trailing
 // dot/space trim, the NTFS 8.3 short form "git~1", a backslash (an
@@ -65,7 +65,7 @@ func parentDir(p string) string {
 // The plumbing later runs with core.protectHFS and core.protectNTFS as
 // a backstop; this gate exists so a forged manifest fails closed on the
 // importer's terms with a typed error, not git's.
-func gitUnsafeComponent(c string) bool {
+func GitUnsafeComponent(c string) bool {
 	if strings.ContainsRune(c, '\\') {
 		return true
 	}

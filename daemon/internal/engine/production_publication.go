@@ -1441,7 +1441,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	// only a clean pass falls through to publication, where the trust and
 	// exact-base gates still re-gate the candidate.
 	reviewState, err := w.reconcileReviewGate(
-		ctx, task, binding, checkpoint, checkoutDir, reviewInstructions,
+		ctx, task, binding, checkpoint, checkout, reviewInstructions,
 	)
 	if err != nil {
 		return productionTaskOutcome{}, err
@@ -1600,41 +1600,50 @@ func (w *productionPublicationWorkflow) reviewWorkspacePath(
 }
 
 func (w *productionPublicationWorkflow) ensureReviewWorkspace(
-	id domain.InvocationID, checkout string,
+	ctx context.Context, id domain.InvocationID, checkout PublicationCheckout, headSHA string,
 ) (string, error) {
 	target, err := w.reviewWorkspacePath(id)
 	if err != nil {
 		return "", err
 	}
+	targetExists := false
 	if info, err := os.Lstat(target); err == nil {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return "", fmt.Errorf("review workspace %q is not an owned directory: %w",
 				target, domain.ErrPathBoundaryMismatch)
 		}
-		return target, nil
+		targetExists = true
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return "", err
 	}
-	// Copy, not move: under the pre-publication review anchor the publication
-	// checkout must survive at its original path for the subsequent PushHead
-	// when a synchronous review source completes inline within the same pass.
-	// The async path is unaffected: the request pass's scratch checkout is
-	// cleaned by its own defer, while this durable workspace copy persists for
-	// later polling passes. Stage into a sibling temp dir and rename into place
-	// so a failed or interrupted copy never leaves a partial workspace that the
-	// idempotent guard above would accept on a later pass (os.Rename is atomic;
-	// os.CopyFS is not). os.CopyFS preserves file modes (exec bits) and symlinks.
+	// Retain, not move: under the pre-publication review anchor the sealed
+	// publication checkout must survive for the subsequent PushHead when a
+	// synchronous review source completes inline. The transport claims the
+	// fresh staged destination and copies from that capability, so raw
+	// materialization cannot clear a caller-nominated existing directory. Stage
+	// the retained candidate in a sibling temp dir, then rename it, so it cannot leave a
+	// partial workspace that a resumed unknown invocation could use on a later
+	// pass. An existing path can be a pre-upgrade, unmaterialized copy from the
+	// same pending invocation, so unknown means rebuild rather than accept it.
+	// The staged materialization finishes before the old directory is removed;
+	// os.Rename cannot replace a non-empty directory. If the process stops in
+	// the resulting absent window, the same guard rebuilds on the next pass.
 	staging, err := os.MkdirTemp(filepath.Dir(target), "staging-")
 	if err != nil {
 		return "", err
 	}
 	defer os.RemoveAll(staging) //nolint:errcheck // best-effort staging cleanup
 	staged := filepath.Join(staging, "workspace")
-	if err := os.CopyFS(staged, os.DirFS(checkout)); err != nil {
-		return "", fmt.Errorf("retain review workspace: %w", err)
+	if err := w.transport.RetainWorktree(ctx, checkout, staged, headSHA); err != nil {
+		return "", fmt.Errorf("materialize review workspace: %w", err)
+	}
+	if targetExists {
+		if err := os.RemoveAll(target); err != nil {
+			return "", fmt.Errorf("replace review workspace: %w", err)
+		}
 	}
 	if err := os.Rename(staged, target); err != nil {
 		return "", fmt.Errorf("retain review workspace: %w", err)
@@ -1669,7 +1678,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	task productionPublicationTask,
 	binding productionBinding,
 	checkpoint productionVerificationCheckpoint,
-	workspace string,
+	workspace PublicationCheckout,
 	reviewInstructions exec.ReviewInstructionBinding,
 ) (productionReviewGateState, error) {
 	if binding.profile.Review.Mode != domain.ReviewFreesideInvoked {
@@ -1895,8 +1904,21 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	}
 	status, err := w.reviewSource.Inspect(ctx, id)
 	if errors.Is(err, exec.ErrUnknownInvocation) {
-		retainedWorkspace, workspaceErr := w.ensureReviewWorkspace(id, workspace)
+		// Unknown is also the workspace-staleness signal: no live review
+		// container can reference this invocation's retained path, and the
+		// launch below will seed its replacement. Keep that answer in this
+		// control flow instead of querying the review source again.
+		retainedWorkspace, workspaceErr := w.ensureReviewWorkspace(ctx, id, workspace, task.HeadSHA)
 		if workspaceErr != nil {
+			if errors.Is(workspaceErr, publish.ErrMaterializationRefused) {
+				return w.recordReviewSourceFailure(ctx, task, id, round,
+					binding.admission.Base.BaseSHA, task.HeadSHA,
+					&exec.ReviewSourceFailure{
+						Class: domain.ReviewFailureConfiguration,
+						Err:   workspaceErr,
+					},
+				)
+			}
 			return productionReviewPending, workspaceErr
 		}
 		if retainedWorkspace != reviewWorkspace {

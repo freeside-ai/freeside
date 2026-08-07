@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -92,6 +93,55 @@ func TestComposeClaudeInstructionsBindsTrustedBaseScopes(t *testing.T) {
 	}
 	if strings.Contains(string(body), "git metadata poison") {
 		t.Fatal("bundle included repository metadata as instructions")
+	}
+}
+
+func TestComposeClaudeInstructionsUsesRootedPaths(t *testing.T) {
+	snapshot := t.TempDir()
+	root, err := os.OpenRoot(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close() //nolint:errcheck // test-owned snapshot handle
+	components := make([]string, 256)
+	for i := range 255 {
+		components[i] = strings.Repeat("x", 15)
+	}
+	components[0] = strings.Repeat("x", 21)
+	components[255] = instructionFileName
+	rel := strings.Join(components, "/")
+	if len(rel) != 4095 {
+		t.Fatalf("fixture path bytes = %d, want 4095", len(rel))
+	}
+	if err := root.MkdirAll(filepath.FromSlash(filepath.Dir(rel)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.WriteFile(filepath.FromSlash(rel), []byte("deep instruction\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	body, _, err := composeClaudeInstructions(HandoffSpec{}, &runState{seedSnapshotDir: snapshot})
+	if err != nil {
+		t.Fatalf("compose near-limit instruction: %v", err)
+	}
+	if !strings.Contains(string(body), "deep instruction\n") {
+		t.Fatalf("deep instruction missing from bundle")
+	}
+	if runtime.GOOS == "linux" {
+		rawDir := string([]byte{'c', 'a', 'f', 0xe9})
+		rawPath := rawDir + "/" + instructionFileName
+		if err := root.Mkdir(rawDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := root.WriteFile(rawPath, []byte("raw instruction\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		body, _, err := composeClaudeInstructions(HandoffSpec{}, &runState{seedSnapshotDir: snapshot})
+		if err != nil {
+			t.Fatalf("compose raw non-UTF-8 instruction: %v", err)
+		}
+		if !strings.Contains(string(body), "raw instruction\n") {
+			t.Fatal("raw non-UTF-8 instruction missing from bundle")
+		}
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -291,9 +292,15 @@ func TestCopySeedFileRefusesSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer srcRoot.Close() //nolint:errcheck // read-only handle
-	_, _, _, err = copySeedFile(srcRoot, "entry", filepath.Join(dir, "dest"), 1<<20)
+	destDir := t.TempDir()
+	destRoot, err := os.OpenRoot(destDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destRoot.Close() //nolint:errcheck // test-owned destination handle
+	_, _, _, err = copySeedFile(srcRoot, destRoot, "entry", 1<<20)
 	wantCheckFailure(t, err, CheckWorkspaceSeeding)
-	if _, statErr := os.Stat(filepath.Join(dir, "dest")); statErr == nil {
+	if _, statErr := os.Stat(filepath.Join(destDir, "entry")); statErr == nil {
 		t.Error("a refused entry still produced a snapshot file")
 	}
 }
@@ -312,7 +319,12 @@ func TestCopySeedFileTakesModeFromTheDescriptor(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer srcRoot.Close() //nolint:errcheck // read-only handle
-	_, _, perm, err := copySeedFile(srcRoot, "run.sh", filepath.Join(dir, "dest"), 1<<20)
+	destRoot, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destRoot.Close() //nolint:errcheck // test-owned destination handle
+	_, _, perm, err := copySeedFile(srcRoot, destRoot, "run.sh", 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,6 +436,66 @@ func TestVerifySeedSourceAcceptsDaemonOwnedCheckout(t *testing.T) {
 	}
 	if got := digestOfDir(t, canonicalSnapshot); got != canonicalDigest {
 		t.Errorf("canonicalized tree digest = %q, observer digest = %q", canonicalDigest, got)
+	}
+}
+
+func TestStageSeedSourceUsesRootedPaths(t *testing.T) {
+	seedRoot := t.TempDir()
+	source := writeSeedCheckout(t, seedRoot, testBaseSHA)
+	sourceRoot, err := os.OpenRoot(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sourceRoot.Close() //nolint:errcheck // test-owned source handle
+	components := make([]string, 256)
+	for i := range components {
+		components[i] = strings.Repeat("x", 15)
+	}
+	rel := strings.Join(components, "/")
+	if len(rel) != 4095 {
+		t.Fatalf("fixture path bytes = %d, want 4095", len(rel))
+	}
+	if err := sourceRoot.MkdirAll(filepath.FromSlash(filepath.Dir(rel)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceRoot.WriteFile(filepath.FromSlash(rel), []byte("rooted\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig()
+	cfg.SeedRoot = seedRoot
+	snapshot := t.TempDir()
+	if _, err := stageSeedSource(cfg, source, testBaseRevision().Repo, testBaseRevision().RepositoryID, snapshot); err != nil {
+		t.Fatalf("stage near-limit path: %v", err)
+	}
+	snapshotRoot, err := os.OpenRoot(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshotRoot.Close() //nolint:errcheck // test-owned snapshot handle
+	if got, err := snapshotRoot.ReadFile(filepath.FromSlash(rel)); err != nil || string(got) != "rooted\n" {
+		t.Fatalf("rooted snapshot file = %q, %v", got, err)
+	}
+	if runtime.GOOS == "linux" {
+		rawDir := string([]byte{'c', 'a', 'f', 0xe9})
+		rawPath := rawDir + "/raw.txt"
+		if err := sourceRoot.Mkdir(rawDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := sourceRoot.WriteFile(rawPath, []byte("raw\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rawSnapshot := t.TempDir()
+		if _, err := stageSeedSource(cfg, source, testBaseRevision().Repo, testBaseRevision().RepositoryID, rawSnapshot); err != nil {
+			t.Fatalf("stage raw non-UTF-8 path: %v", err)
+		}
+		rawRoot, err := os.OpenRoot(rawSnapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rawRoot.Close() //nolint:errcheck // test-owned snapshot handle
+		if got, err := rawRoot.ReadFile(rawPath); err != nil || string(got) != "raw\n" {
+			t.Fatalf("raw snapshot file = %q, %v", got, err)
+		}
 	}
 }
 

@@ -217,7 +217,7 @@ func validateCommitPlanPath(p string, pol Policy) error {
 		return fmt.Errorf("path occupies a reserved channel: %w", errPlanStructural)
 	}
 	for _, comp := range strings.Split(p, "/") {
-		if gitUnsafeComponent(comp) {
+		if GitUnsafeComponent(comp) {
 			return fmt.Errorf("path contains git metadata: %w", errPlanStructural)
 		}
 	}

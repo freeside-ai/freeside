@@ -275,6 +275,215 @@ func (t *Transport) FetchBaseWorktree(ctx context.Context, repo, baseRef, baseSH
 	return t.fetchBase(ctx, repo, baseRef, baseSHA, dir, true)
 }
 
+// RetainWorktree claims a fresh dest and copies source's bounded repository
+// before materializing commitSHA's raw tree there. It never modifies source and
+// refuses an existing dest, so a caller-nominated path cannot turn raw
+// materialization into a recursive deletion primitive. The commit must already
+// exist in source; this method performs no fetch and never consults a remote.
+// Only regular 100644/100755 tree entries are admitted.
+func (t *Transport) RetainWorktree(ctx context.Context, source, dest, commitSHA string) (retainedErr error) {
+	if !validCommitSHA(commitSHA) {
+		return fmt.Errorf("commit %q is not a full commit SHA", commitSHA)
+	}
+	source, err := filepath.Abs(source)
+	if err != nil {
+		return fmt.Errorf("resolve source checkout: %w", err)
+	}
+	source, err = filepath.EvalSymlinks(source)
+	if err != nil {
+		return fmt.Errorf("resolve physical source checkout: %w", err)
+	}
+	dest, err = filepath.Abs(dest)
+	if err != nil {
+		return fmt.Errorf("resolve retained checkout: %w", err)
+	}
+	destParent, err := filepath.EvalSymlinks(filepath.Dir(dest))
+	if err != nil {
+		return fmt.Errorf("resolve physical retained-checkout parent: %w", err)
+	}
+	dest = filepath.Join(destParent, filepath.Base(dest))
+	if within, relErr := filepath.Rel(source, dest); relErr != nil {
+		return fmt.Errorf("compare retained checkout paths: %w", relErr)
+	} else if within == "." || (within != ".." && !strings.HasPrefix(within, ".."+string(filepath.Separator))) {
+		return fmt.Errorf("retained checkout %q is inside source %q: %w", dest, source, ErrGitTransport)
+	}
+	scratch, err := os.MkdirTemp("", "freeside-transport-")
+	if err != nil {
+		return fmt.Errorf("create transport scratch: %w", err)
+	}
+	defer os.RemoveAll(scratch) //nolint:errcheck // best-effort scratch cleanup
+	r, err := newNetRunner(t.gitPath, scratch, t.scheme)
+	if err != nil {
+		return err
+	}
+	if err := r.pinRepo(ctx, source); err != nil {
+		return err
+	}
+	if err := r.assertPristineConfig(ctx); err != nil {
+		return err
+	}
+	if _, err := validatedMaterializationTree(ctx, r, commitSHA); err != nil {
+		return err
+	}
+	if err := validateRetainedRepository(ctx, source); err != nil {
+		return err
+	}
+	if err := os.Mkdir(dest, 0o700); err != nil {
+		return fmt.Errorf("claim retained checkout: %w", err)
+	}
+	retained := false
+	defer func() {
+		if !retained {
+			if cleanupErr := os.RemoveAll(dest); retainedErr == nil && cleanupErr != nil {
+				retainedErr = fmt.Errorf("clean failed retained checkout: %w", cleanupErr)
+			}
+		}
+	}()
+	if err := copyRetainedRepository(ctx, source, dest); err != nil {
+		return fmt.Errorf("copy retained checkout: %w", err)
+	}
+	destRunner, err := newNetRunner(t.gitPath, scratch, t.scheme)
+	if err != nil {
+		return err
+	}
+	if err := destRunner.pinRepo(ctx, dest); err != nil {
+		return err
+	}
+	if err := destRunner.assertPristineConfig(ctx); err != nil {
+		return err
+	}
+	if err := materializeWorktree(ctx, destRunner, dest, commitSHA); err != nil {
+		return err
+	}
+	retained = true
+	return nil
+}
+
+// The retained repository lands once on the host and then twice more under
+// Ward's seed budgets. A source object database is not constrained by the
+// candidate tree's blob budget, so copying it with os.CopyFS lets unrelated
+// history consume unbounded disk before Ward can inspect it. Match the
+// materializer's established ceilings and fail before destination claim when
+// the repository alone cannot fit within them. The copy pass applies the same
+// accounting again so a changed source cannot turn the preflight into a stale
+// promise.
+const (
+	maxRetainedRepositoryBytes   = maxMaterializationBytes
+	maxRetainedRepositoryEntries = maxMaterializationEntries
+)
+
+func validateRetainedRepository(ctx context.Context, source string) error {
+	return walkRetainedRepository(ctx, source, nil)
+}
+
+func copyRetainedRepository(ctx context.Context, source, dest string) error {
+	return walkRetainedRepository(ctx, source, func(
+		path, rel string, info os.FileInfo,
+	) error {
+		target := filepath.Join(dest, ".git", rel)
+		if info.IsDir() {
+			if err := os.Mkdir(target, info.Mode().Perm()); err != nil {
+				return err
+			}
+			return nil
+		}
+		return copyRetainedRepositoryFile(ctx, path, target, info)
+	})
+}
+
+func walkRetainedRepository(
+	ctx context.Context,
+	source string,
+	visit func(path, rel string, info os.FileInfo) error,
+) error {
+	root := filepath.Join(source, ".git")
+	remaining := maxRetainedRepositoryBytes
+	entries := 0
+	return filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if walkErr != nil {
+			return walkErr
+		}
+		entries++
+		if entries > maxRetainedRepositoryEntries {
+			return fmt.Errorf(
+				"repository exceeds %d retained entries: %w",
+				maxRetainedRepositoryEntries, ErrMaterializationRefused,
+			)
+		}
+		if !info.IsDir() && !info.Mode().IsRegular() {
+			return fmt.Errorf("repository carries an irregular entry: %w", ErrMaterializationRefused)
+		}
+		if info.Mode().IsRegular() {
+			if info.Size() < 0 || info.Size() > remaining {
+				return fmt.Errorf(
+					"repository exceeds %d retained bytes: %w",
+					maxRetainedRepositoryBytes, ErrMaterializationRefused,
+				)
+			}
+			remaining -= info.Size()
+		}
+		if visit == nil {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		return visit(path, rel, info)
+	})
+}
+
+type retainedRepositoryReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (r retainedRepositoryReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.r.Read(p)
+}
+
+func copyRetainedRepositoryFile(
+	ctx context.Context, source, dest string, expected os.FileInfo,
+) (retErr error) {
+	in, err := os.Open(source) //nolint:gosec // path is rooted in the validated daemon-owned repository walk
+	if err != nil {
+		return err
+	}
+	defer in.Close() //nolint:errcheck // read-only handle
+	actual, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	if !actual.Mode().IsRegular() || actual.Size() != expected.Size() {
+		return fmt.Errorf("repository changed during retention: %w", ErrMaterializationRefused)
+	}
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, expected.Mode().Perm()) //nolint:gosec // destination is under a fresh daemon-owned checkout
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := out.Close(); retErr == nil && closeErr != nil {
+			retErr = closeErr
+		}
+	}()
+	written, err := io.Copy(out, io.LimitReader(
+		retainedRepositoryReader{ctx: ctx, r: in}, expected.Size()+1,
+	))
+	if err != nil {
+		return err
+	}
+	if written != expected.Size() {
+		return fmt.Errorf("repository changed during retention: %w", ErrMaterializationRefused)
+	}
+	return nil
+}
+
 // withoutGitIndexFile drops every GIT_INDEX_FILE entry so a replacement is
 // unambiguous: duplicate keys in one environment resolve differently across
 // libc implementations, and the wrong index here would leave the seeded
@@ -291,7 +500,7 @@ func withoutGitIndexFile(env []string) []string {
 }
 
 func (t *Transport) fetchBase(
-	ctx context.Context, repo, baseRef, baseSHA, dir string, materializeWorktree bool,
+	ctx context.Context, repo, baseRef, baseSHA, dir string, withWorktree bool,
 ) (Checkout, error) {
 	ref, err := parseTransportRepo(repo)
 	if err != nil {
@@ -411,20 +620,9 @@ func (t *Transport) fetchBase(
 	if err := stampRepoIDBinding(dir, tok.RepositoryID); err != nil {
 		return Checkout{}, err
 	}
-	if materializeWorktree {
-		// The index belongs inside this repository, not in the scratch the
-		// call removes: ward's observer ignores a copied index and compares
-		// raw worktree bytes with HEAD, but the writer that later works in
-		// this tree needs one, or its first `git status` reports every
-		// tracked path deleted and untracked at once. Restore the runner's
-		// own index afterwards so nothing later in the call writes here.
-		scratchEnv := r.env
-		r.env = append(withoutGitIndexFile(r.env),
-			"GIT_INDEX_FILE="+filepath.Join(dir, ".git", "index"))
-		_, _, resetErr := r.run(ctx, nil, "--work-tree", dir, "reset", "--hard", baseSHA)
-		r.env = scratchEnv
-		if resetErr != nil {
-			return Checkout{}, resetErr
+	if withWorktree {
+		if err := materializeWorktree(ctx, r, dir, baseSHA); err != nil {
+			return Checkout{}, err
 		}
 	}
 	materialized = true

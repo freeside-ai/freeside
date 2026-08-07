@@ -61,20 +61,16 @@ func composeClaudeInstructions(
 			"Claude instruction composition has no trusted-base snapshot",
 		)
 	}
+	snapshotRoot, err := os.OpenRoot(st.seedSnapshotDir)
+	if err != nil {
+		return nil, HandoffJournalInstructions{}, failf(
+			CheckControlPlaneIsolation, "open trusted-base snapshot: %v", err,
+		)
+	}
+	defer snapshotRoot.Close() //nolint:errcheck // read-only snapshot handle
 	var sources []repositoryInstruction
 	var repositoryBytes int64
-	err := filepath.WalkDir(st.seedSnapshotDir, func(
-		fullPath string,
-		entry fs.DirEntry,
-		walkErr error,
-	) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel, err := filepath.Rel(st.seedSnapshotDir, fullPath)
-		if err != nil {
-			return err
-		}
+	err = walkRoot(snapshotRoot, func(rel string, entry fs.DirEntry) (bool, error) {
 		if entry.IsDir() {
 			// Git metadata is skipped at any depth, not only at the
 			// repository root. A vendored checkout or a committed fixture can
@@ -83,30 +79,30 @@ func composeClaudeInstructions(
 			// one would make composition (and therefore every run on that
 			// repository) fail on ordinary repository content.
 			if entry.Name() == ".git" {
-				return filepath.SkipDir
+				return false, nil
 			}
-			return nil
+			return true, nil
 		}
 		if entry.Name() != instructionFileName {
-			return nil
+			return false, nil
 		}
 		body, err := expandRepositoryInstruction(
-			st.seedSnapshotDir,
-			filepath.ToSlash(rel),
+			snapshotRoot,
+			rel,
 			domain.MaxVendorInstructionBytes-repositoryBytes,
 			map[string]bool{},
 		)
 		if err != nil {
-			return err
+			return false, err
 		}
 		repositoryBytes += int64(len(body))
 		sum := sha256.Sum256(body)
 		sources = append(sources, repositoryInstruction{
-			path:   filepath.ToSlash(rel),
+			path:   rel,
 			digest: hex.EncodeToString(sum[:]),
 			body:   body,
 		})
-		return nil
+		return false, nil
 	})
 	if err != nil {
 		return nil, HandoffJournalInstructions{}, failf(
@@ -195,7 +191,7 @@ func composeClaudeInstructions(
 // starts lines with "@"; every hostile shape (escape, git metadata, symbolic
 // link, cycle) still fails the whole composition closed.
 func expandRepositoryInstruction(
-	root, rel string, remaining int64, stack map[string]bool,
+	root *os.Root, rel string, remaining int64, stack map[string]bool,
 ) ([]byte, error) {
 	if remaining < 0 {
 		return nil, errInstructionBudget
@@ -217,11 +213,11 @@ func expandRepositoryInstruction(
 	stack[canonical] = true
 	defer delete(stack, canonical)
 
-	path := root
+	var rootedPath string
 	parts := strings.Split(clean, string(filepath.Separator))
 	for index, part := range parts {
-		path = filepath.Join(path, part)
-		info, err := os.Lstat(path)
+		rootedPath = filepath.Join(rootedPath, part)
+		info, err := root.Lstat(rootedPath)
 		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 			return nil, fmt.Errorf("%w: %q", errInstructionImportUnresolved, canonical)
 		}
@@ -237,7 +233,7 @@ func expandRepositoryInstruction(
 				errInstructionImportUnresolved, canonical)
 		}
 	}
-	file, err := os.Open(path) //nolint:gosec // gate-owned immutable snapshot
+	file, err := root.OpenFile(rootedPath, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, err
 	}
