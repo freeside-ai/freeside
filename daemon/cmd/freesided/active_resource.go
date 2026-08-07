@@ -33,6 +33,12 @@ type activeResourceReconciler struct {
 	// dropping the un-persisted rows (issue #497). Optional: nil disables it,
 	// which only forfeits the prompt retry a cache-eviction buys.
 	reviewInvalidate func(repo string, number int)
+	// evictConcluded drops every conditional-request cache entry owned by a
+	// ready resource after the item leaves the open state. evictedConcluded
+	// keeps the terminal branch's forever cadence from re-reading the durable
+	// binding on every pass; both are process-local optimizations.
+	evictConcluded   func(domain.ReadyItemPRBinding, *int)
+	evictedConcluded map[domain.ItemID]struct{}
 	now              func() time.Time
 }
 
@@ -137,7 +143,7 @@ func (r activeResourceReconciler) Run(
 // Reconcile makes one independent pass over every active ready item.
 // Per-resource observation failures remain retryable and do not prevent a
 // healthy sibling from converging in the same pass.
-func (r activeResourceReconciler) Reconcile(ctx context.Context) ([]error, error) {
+func (r *activeResourceReconciler) Reconcile(ctx context.Context) ([]error, error) {
 	if r.store == nil || r.pull == nil || r.now == nil {
 		return nil, errors.New("active resource reconciler is not fully configured")
 	}
@@ -156,6 +162,9 @@ func (r activeResourceReconciler) Reconcile(ctx context.Context) ([]error, error
 			continue
 		}
 		if item.Status != domain.StatusOpen {
+			if err := r.evictConcludedResource(ctx, item.ID); err != nil {
+				failures = append(failures, fmt.Errorf("evict concluded ready resource %s: %w", item.ID, err))
+			}
 			if err := r.settleSchedules(ctx, item.ID, r.now().UTC()); err != nil {
 				return failures, fmt.Errorf("settle ready resource %s: %w", item.ID, err)
 			}
@@ -176,6 +185,9 @@ func (r activeResourceReconciler) Reconcile(ctx context.Context) ([]error, error
 			if err := r.commit(ctx, observation); err != nil {
 				return failures, fmt.Errorf("commit ready resource %s: %w", item.ID, err)
 			}
+			if err := r.evictConcludedResource(ctx, item.ID); err != nil {
+				failures = append(failures, fmt.Errorf("evict concluded ready resource %s: %w", item.ID, err))
+			}
 		}
 		// Native observations commit in their own daemon-internal transaction,
 		// so a native-store failure is isolated from the pull/issue facts and
@@ -194,6 +206,63 @@ func (r activeResourceReconciler) Reconcile(ctx context.Context) ([]error, error
 		}
 	}
 	return failures, nil
+}
+
+func (r *activeResourceReconciler) evictConcludedResource(
+	ctx context.Context, itemID domain.ItemID,
+) error {
+	if r.evictConcluded == nil {
+		return nil
+	}
+	if _, ok := r.evictedConcluded[itemID]; ok {
+		return nil
+	}
+	var (
+		binding    domain.ReadyItemPRBinding
+		boundIssue *int
+		concluded  bool
+		found      bool
+	)
+	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+		item, err := tx.GetAttentionItem(ctx, itemID)
+		if err != nil {
+			return err
+		}
+		if item.Status == domain.StatusOpen {
+			return nil
+		}
+		concluded = true
+		binding, err = tx.GetReadyItemPRBinding(ctx, itemID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		found = true
+		declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, binding.RunID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		boundIssue = declaration.BoundIssue
+		return nil
+	}); err != nil {
+		return err
+	}
+	if !concluded {
+		return nil
+	}
+	if found {
+		r.evictConcluded(binding, boundIssue)
+	}
+	if r.evictedConcluded == nil {
+		r.evictedConcluded = make(map[domain.ItemID]struct{})
+	}
+	r.evictedConcluded[itemID] = struct{}{}
+	return nil
 }
 
 // commitNativeReview appends the pass's native review observations in a single

@@ -744,6 +744,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				// domain (plan §5.16, §7; AGENTS.md, Automated reviewer).
 				reviewers:        map[string]bool{defaultNativeReviewerLogin: true},
 				reviewInvalidate: claudeWiring.reviewInvalidate,
+				evictConcluded:   claudeWiring.evictConcluded,
 				now:              func() time.Time { return time.Now().UTC() },
 			}
 			err := reconciler.Run(ctx, defaultActiveResourceInterval, cfg.Logger)

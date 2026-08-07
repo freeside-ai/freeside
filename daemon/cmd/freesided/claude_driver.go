@@ -909,6 +909,9 @@ type claudeComposition struct {
 	// failed durable append, so the next tick re-fetches unconditionally rather
 	// than riding a 304 and stranding the un-persisted rows (issue #497).
 	reviewInvalidate func(repo string, number int)
+	// evictConcluded drops the four conditional-request cache entries owned by
+	// a ready resource after its attention item leaves the open state.
+	evictConcluded func(domain.ReadyItemPRBinding, *int)
 }
 
 // ErrProjectImageComposition marks an unattended composition whose configured
@@ -1185,7 +1188,15 @@ func composeClaudeDriver(
 		observeReview: func(obsCtx context.Context, repo string, number int) (publish.PullReviewObservation, error) {
 			return reconciler.ReconcilePullReviewActivity(obsCtx, repo, number)
 		},
-		reviewInvalidate:     reconciler.EvictPullReviewActivity,
+		reviewInvalidate: reconciler.EvictPullReviewActivity,
+		evictConcluded: func(binding domain.ReadyItemPRBinding, boundIssue *int) {
+			reconciler.EvictRef(binding.Repo, binding.BaseRef)
+			reconciler.EvictPull(binding.Repo, binding.PRNumber)
+			reconciler.EvictPullReviewActivity(binding.Repo, binding.PRNumber)
+			if boundIssue != nil {
+				reconciler.EvictIssue(binding.Repo, *boundIssue)
+			}
+		},
 		publicationTransport: publicationTransport,
 		publisher:            publisher, reviewSource: reviewSource,
 		reviewRecovery:            reviewRecovery.Reconcile,
