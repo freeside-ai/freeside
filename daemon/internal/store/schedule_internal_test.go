@@ -290,7 +290,8 @@ func migrationsBeforeScheduleAuthority(t *testing.T) fs.FS {
 			entry.Name() == "0028_ready_item_pr_binding.sql" ||
 			entry.Name() == "0029_review_stage.sql" ||
 			entry.Name() == "0030_native_review_observation.sql" ||
-			entry.Name() == "0031_review_retry.sql" || entry.IsDir() {
+			entry.Name() == "0031_review_retry.sql" ||
+			entry.Name() == "0032_review_recovery.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())
