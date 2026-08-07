@@ -338,6 +338,12 @@ type config struct {
 	// Nil discards their records, which keeps every test composition quiet
 	// without each one having to build a handler.
 	Logger *slog.Logger
+	// afterBackgroundStart is a test seam for startup failures after the base
+	// background workers have launched. Production leaves it nil.
+	afterBackgroundStart func() error
+	// beforeStoreClose is a test seam for observing failed-start cleanup at
+	// the store-close boundary. Production leaves it nil.
+	beforeStoreClose func()
 	// Claude, when set, replaces the permanent fake stage driver with the
 	// production Claude driver and its ward gate (#237). Nil keeps the 1A.0
 	// walking-skeleton composition byte-for-byte.
@@ -521,6 +527,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}
 	defer func() {
 		if !success {
+			if cfg.beforeStoreClose != nil {
+				cfg.beforeStoreClose()
+			}
 			_ = st.Close()
 		}
 	}()
@@ -683,6 +692,21 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		defer d.wg.Done()
 		d.errs <- localBackups.Run(ctx)
 	}()
+	defer func() {
+		if !success {
+			if stop != nil {
+				stop()
+			}
+			cancel()
+			_ = d.server.Close()
+			d.wg.Wait()
+		}
+	}()
+	if cfg.afterBackgroundStart != nil {
+		if err := cfg.afterBackgroundStart(); err != nil {
+			return nil, err
+		}
+	}
 	if claudeWiring == nil {
 		// The fake lane arms the §5.16 publication watches beside its ready
 		// items; the walking-skeleton composition runs the same watch kinds

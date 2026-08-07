@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +27,123 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestRunDrainsBackgroundWorkersBeforeClosingStoreOnStartupFailure(t *testing.T) {
+	root := t.TempDir()
+	var logs lockedBuffer
+	logger, err := newLogger(&logs, defaultLogLevel)
+	if err != nil {
+		t.Fatalf("newLogger: %v", err)
+	}
+	startupErr := errors.New("injected post-background-start failure")
+	const signalRestoredLog = "signal disposition restored"
+	var logsAtStoreClose string
+	cfg := config{
+		DBPath:            filepath.Join(root, "freeside.db"),
+		FakeDriverDir:     filepath.Join(root, "driver"),
+		ListenAddr:        "127.0.0.1:0",
+		ReconcileInterval: time.Millisecond,
+		Logger:            logger,
+		afterBackgroundStart: func() error {
+			deadline := time.NewTimer(30 * time.Second)
+			defer deadline.Stop()
+			ticker := time.NewTicker(time.Millisecond)
+			defer ticker.Stop()
+			for {
+				if strings.Contains(logs.String(), "reconcile loop started") {
+					return startupErr
+				}
+				select {
+				case <-deadline.C:
+					return errors.New("reconcile loop did not start")
+				case <-ticker.C:
+				}
+			}
+		},
+		beforeStoreClose: func() {
+			logsAtStoreClose = logs.String()
+		},
+	}
+
+	h, err := run(t.Context(), func() {
+		if _, err := fmt.Fprintln(&logs, signalRestoredLog); err != nil {
+			t.Errorf("record signal restoration: %v", err)
+		}
+	}, cfg)
+	if h != nil {
+		_ = h.Close()
+		t.Fatal("run returned a daemon after the injected startup failure")
+	}
+	if !errors.Is(err, startupErr) {
+		t.Fatalf("run error = %v, want %v", err, startupErr)
+	}
+	if !strings.Contains(logsAtStoreClose, "reconcile loop stopped") {
+		t.Fatalf("store close began before the reconcile loop stopped:\n%s", logsAtStoreClose)
+	}
+	signalRestoredAt := strings.Index(logsAtStoreClose, signalRestoredLog)
+	reconcileStoppedAt := strings.Index(logsAtStoreClose, "reconcile loop stopped")
+	if signalRestoredAt == -1 || signalRestoredAt > reconcileStoppedAt {
+		t.Fatalf("signal disposition was not restored before the worker drain:\n%s", logsAtStoreClose)
+	}
+	gotLogs := logs.String()
+	for _, unexpected := range []string{"reconcile pass failed", "sql: database is closed"} {
+		if strings.Contains(gotLogs, unexpected) {
+			t.Fatalf("background worker used the closed store (%q):\n%s", unexpected, gotLogs)
+		}
+	}
+}
+
+func TestRunReturnsAfterPostBackgroundStartFailure(t *testing.T) {
+	root := t.TempDir()
+	startupErr := errors.New("injected post-background-start failure")
+	result := make(chan struct {
+		h   *daemon
+		err error
+	}, 1)
+	go func() {
+		h, err := run(t.Context(), nil, config{
+			DBPath:               filepath.Join(root, "freeside.db"),
+			FakeDriverDir:        filepath.Join(root, "driver"),
+			ListenAddr:           "127.0.0.1:0",
+			ReconcileInterval:    time.Millisecond,
+			afterBackgroundStart: func() error { return startupErr },
+		})
+		result <- struct {
+			h   *daemon
+			err error
+		}{h: h, err: err}
+	}()
+
+	select {
+	case got := <-result:
+		if got.h != nil {
+			_ = got.h.Close()
+			t.Fatal("run returned a daemon after the injected startup failure")
+		}
+		if !errors.Is(got.err, startupErr) {
+			t.Fatalf("run error = %v, want %v", got.err, startupErr)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("run hung while draining a failed startup")
+	}
+}
 
 func TestRunServesSignetAndStops(t *testing.T) {
 	root := t.TempDir()
