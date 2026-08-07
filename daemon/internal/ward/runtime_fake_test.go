@@ -93,6 +93,10 @@ type fakeRuntime struct {
 	volBase map[string]string
 	// volTree is the tree digest the simulated seeder placed alongside it.
 	volTree map[string]string
+	// snapshotFiles holds the files the Codex-review snapshot seeder placed on a
+	// volume, keyed by volume then basename, so the snapshot observer can report
+	// their sha256 digests.
+	snapshotFiles map[string]map[string][]byte
 	// instructionState holds the exact CLAUDE.md bytes the instruction seeder
 	// placed in each volume. A present map entry with nil content represents
 	// the admitted empty overlay.
@@ -198,6 +202,7 @@ func newFakeRuntime(t *testing.T) *fakeRuntime {
 		ctrs:                   map[string]*fakeCtr{},
 		volBase:                map[string]string{},
 		volTree:                map[string]string{},
+		snapshotFiles:          map[string]map[string][]byte{},
 		instructionState:       map[string][]byte{},
 		stateManifest:          map[string]stateManifestKind{},
 		staged:                 map[string]string{},
@@ -376,6 +381,20 @@ func baseProofForAbsentGitDir(nonce string) []byte {
 		baseProofNonceKey, nonce, baseProofGitDirKey, baseProofDetachedKey,
 		baseProofSHAKey, baseProofWorktreeKey, baseProofReplacementsKey, baseProofIrregularKey,
 		baseProofTreeKey)
+}
+
+// snapshotProofFor renders the proof the Codex-review snapshot observer would
+// write: valid only when the volume holds exactly the two named files, with
+// their sha256 digests. A missing, extra, or renamed entry reports invalid.
+func snapshotProofFor(nonce string, files map[string][]byte) []byte {
+	auth, hasAuth := files[codexReviewSnapshotAuthName]
+	instr, hasInstr := files[codexReviewSnapshotInstrName]
+	if !hasAuth || !hasInstr || len(files) != 2 {
+		return fmt.Appendf(nil, "nonce=%s\nvalid=invalid\nauth=sha256:\ninstr=sha256:\n", nonce)
+	}
+	authSum := sha256.Sum256(auth)
+	instrSum := sha256.Sum256(instr)
+	return fmt.Appendf(nil, "nonce=%s\nvalid=valid\nauth=sha256:%x\ninstr=sha256:%x\n", nonce, authSum, instrSum)
 }
 
 // writeProofTar streams a one-entry archive carrying proof at absolutePath,
@@ -688,6 +707,10 @@ func (f *fakeRuntime) DeleteContainer(ctx context.Context, id string) error {
 		return fmt.Errorf("container %q is running", id)
 	}
 	delete(f.ctrs, id)
+	// A deleted container's in-flight seeding stage is gone with it, so a later
+	// same-named seeder (e.g. a relaunch after recovery) stages afresh rather
+	// than resuming this one's already-removed host directory.
+	delete(f.staged, id)
 	return nil
 }
 
@@ -762,6 +785,27 @@ func (f *fakeRuntime) CopyIntoContainer(ctx context.Context, id, hostDir, target
 	if !ok {
 		// No read-write volume: the copy landed in the rootfs and nothing
 		// reaches a workspace, exactly as the runtime behaves.
+		return nil
+	}
+	// The Codex-review snapshot seeder moves exactly two named files onto its
+	// volume. Record whatever the staged tree actually holds so an altered or
+	// partial copy fails the observer's exact-two-files attestation.
+	if c.spec.Mounts[0].Target == codexReviewSnapshotSeedTarget {
+		files := map[string][]byte{}
+		entries, dirErr := os.ReadDir(src)
+		if dirErr == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					files[entry.Name()+"/"] = nil
+					continue
+				}
+				body, readErr := os.ReadFile(filepath.Join(src, entry.Name())) //nolint:gosec // test fixture path
+				if readErr == nil {
+					files[entry.Name()] = append([]byte(nil), body...)
+				}
+			}
+		}
+		f.snapshotFiles[vol] = files
 		return nil
 	}
 	head, err := os.ReadFile(filepath.Join(src, ".git", "HEAD")) //nolint:gosec // test fixture path
@@ -872,6 +916,13 @@ func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Write
 			proof = f.observerProof(id, proof)
 		}
 		return writeProofTar(dest, codexShadowProofPath, proof)
+	}
+	if vol, isSnapshotObserver := c.observedVolume(codexReviewSnapshotProofPath); isSnapshotObserver {
+		proof := snapshotProofFor(c.ownershipToken(), f.snapshotFiles[vol])
+		if f.observerProof != nil {
+			proof = f.observerProof(id, proof)
+		}
+		return writeProofTar(dest, codexReviewSnapshotProofPath, proof)
 	}
 	// A credential-store observer's rootfs carries its digest proof: the
 	// simulated store content is credState (empty state digests too, like an

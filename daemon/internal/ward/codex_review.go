@@ -26,23 +26,46 @@ import (
 
 const (
 	// CodexHomeTarget is writable per invocation on the fresh container rootfs.
-	// Only auth.json and AGENTS.md are overlaid read-only as single files.
+	// auth.json and AGENTS.md are symlinks into the read-only snapshot volume,
+	// so CODEX_HOME stays writable while the credential bytes stay immutable.
 	CodexHomeTarget = "/var/lib/freeside/codex-home"
 	// CodexContainerHomeTarget is a clean per-invocation HOME, distinct from
 	// CODEX_HOME so cross-agent skill discovery cannot reach operator state.
-	CodexContainerHomeTarget  = "/var/lib/freeside/home"
-	CodexAuthFileTarget       = CodexHomeTarget + "/auth.json"
-	CodexInstructionTarget    = CodexHomeTarget + "/AGENTS.md"
-	codexShadowObserverTarget = "/freeside-agents-shadow"
-	codexShadowProofPath      = "/freeside-agents-shadow-proof.txt"
-	codexWorkspaceProofPath   = "/freeside-review-workspace-proof.txt"
-	codexReviewOutputDir      = "/freeside-review-output"
-	codexReviewResultPath     = codexReviewOutputDir + "/result.json"
-	codexReviewEventsPath     = codexReviewOutputDir + "/events.jsonl"
-	codexReviewStatusPath     = codexReviewOutputDir + "/status"
-	codexReviewSchemaPath     = codexReviewOutputDir + "/schema.json"
+	CodexContainerHomeTarget = "/var/lib/freeside/home"
+	CodexAuthFileTarget      = CodexHomeTarget + "/auth.json"
+	CodexInstructionTarget   = CodexHomeTarget + "/AGENTS.md"
+	// codexReviewSnapshotTarget is where the review container reads the two
+	// admitted snapshots read-only. It is a named volume, not a host bind:
+	// Apple container 1.1.0 rejects single-file bind sources (#591), and volumes
+	// are ward's one live-proven read-only delivery transport. The two entries
+	// carry fixed basenames on the volume regardless of their host source names.
+	codexReviewSnapshotTarget      = "/var/lib/freeside/codex-snapshot"
+	codexReviewSnapshotAuthName    = "auth.json"
+	codexReviewSnapshotInstrName   = "AGENTS.md"
+	codexReviewSnapshotAuthSource  = codexReviewSnapshotTarget + "/" + codexReviewSnapshotAuthName
+	codexReviewSnapshotInstrSource = codexReviewSnapshotTarget + "/" + codexReviewSnapshotInstrName
+	// codexReviewSnapshotSeedTarget is the read-write mount where the networkless
+	// seeder places the two admitted files onto the fresh snapshot volume, and
+	// codexReviewSnapshotObserverTarget is where the separate read-only observer
+	// proves exactly those two files landed. The seed and observe roles use
+	// distinct VMs and distinct targets for the same reason the workspace seeder
+	// and observer do: the writer must never vouch for its own write.
+	codexReviewSnapshotSeedTarget     = "/freeside-codex-snapshot-seed"
+	codexReviewSnapshotObserverTarget = "/freeside-codex-snapshot"
+	codexReviewSnapshotProofPath      = "/freeside-codex-snapshot-proof.txt"
+	codexShadowObserverTarget         = "/freeside-agents-shadow"
+	codexShadowProofPath              = "/freeside-agents-shadow-proof.txt"
+	codexWorkspaceProofPath           = "/freeside-review-workspace-proof.txt"
+	codexReviewOutputDir              = "/freeside-review-output"
+	codexReviewResultPath             = codexReviewOutputDir + "/result.json"
+	codexReviewEventsPath             = codexReviewOutputDir + "/events.jsonl"
+	codexReviewStatusPath             = codexReviewOutputDir + "/status"
+	codexReviewSchemaPath             = codexReviewOutputDir + "/schema.json"
 
-	codexReviewTopologyVersion = "codex_review_read_only_v1"
+	// Bumped to v2 for #591: the auth/instruction snapshots move from two
+	// single-file host binds to one read-only snapshot volume, so a prepared
+	// binding written under v1 must not validate against the new mount shape.
+	codexReviewTopologyVersion = "codex_review_read_only_v2"
 	maxCodexAuthSnapshotBytes  = 1 << 20
 	maxCodexReviewPromptBytes  = 31 << 10
 	emptyCodexShadowDigest     = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -269,6 +292,39 @@ func (o CodexReviewShadowObservation) verifyFresh(fresh CodexReviewShadowObserva
 	return nil
 }
 
+// CodexReviewSnapshotObservation is opaque evidence from a pinned, networkless,
+// read-only observer that the ward-owned snapshot volume holds exactly the two
+// admitted files (auth.json and AGENTS.md), both regular and unsymlinked, and
+// carries their sha256 digests. Callers cannot construct it by copying identity
+// or digest strings into a request; BuildCodexReviewAgentSpec ties the recorded
+// digests back to the bytes admission re-read from the host.
+type CodexReviewSnapshotObservation struct {
+	volume              string
+	fingerprint         string
+	authDigest          string
+	instructionDigest   string
+	observerImage       string
+	observerFingerprint string
+}
+
+func (o CodexReviewSnapshotObservation) valid() bool {
+	return o.volume != "" && cliSafe(o.volume) && o.fingerprint != "" && o.observerFingerprint != "" &&
+		contentaddr.Valid(o.authDigest) && contentaddr.Valid(o.instructionDigest) &&
+		digestPinnedImagePattern.MatchString(o.observerImage)
+}
+
+func (o CodexReviewSnapshotObservation) verifyFresh(fresh CodexReviewSnapshotObservation) error {
+	if !o.valid() || !fresh.valid() || fresh.volume != o.volume ||
+		fresh.fingerprint != o.fingerprint || fresh.authDigest != o.authDigest ||
+		fresh.instructionDigest != o.instructionDigest || fresh.observerImage != o.observerImage {
+		return failf(CheckCredentialSeparation, "Codex review snapshot volume changed before launch")
+	}
+	if fresh.observerFingerprint == o.observerFingerprint {
+		return failf(CheckCredentialSeparation, "Codex review snapshot was not re-observed before launch")
+	}
+	return nil
+}
+
 // CodexReviewSpec is the caller-owned request for one fresh review container.
 // It carries paths only to daemon-prepared, single-file snapshots under
 // Config.InputRoot; BuildCodexReviewAgentSpec re-opens and validates them.
@@ -292,6 +348,11 @@ type CodexReviewSpec struct {
 	// mounted read-only at HOME/.agents and at the workspace root plus every
 	// in-container ancestor. Its evidence never authorizes cleanup.
 	AgentsShadow CodexReviewShadowObservation
+
+	// Snapshot is the runtime-backed observation of the ward-owned read-only
+	// volume that delivers exactly the two admitted files (auth.json, AGENTS.md)
+	// to the review container. Its digests are tied to the admitted bodies.
+	Snapshot CodexReviewSnapshotObservation
 }
 
 // CodexReviewJournalBinding is the non-secret topology evidence a review
@@ -327,6 +388,13 @@ type CodexReviewJournalBinding struct {
 	HostInstructionDigest                   *domain.Digest                 `json:"host_instruction_digest"`
 	RepositoryInstructionSources            []exec.ReviewInstructionSource `json:"repository_instruction_sources"`
 	InstructionReadOnly                     bool                           `json:"instruction_read_only"`
+	SnapshotVolume                          string                         `json:"snapshot_volume"`
+	SnapshotTarget                          string                         `json:"snapshot_target"`
+	SnapshotFingerprint                     string                         `json:"snapshot_fingerprint"`
+	SnapshotObserverImage                   string                         `json:"snapshot_observer_image"`
+	SnapshotObserverFingerprint             string                         `json:"snapshot_observer_fingerprint"`
+	SnapshotPreStartObserverFingerprint     string                         `json:"snapshot_pre_start_observer_fingerprint"`
+	SnapshotReadOnly                        bool                           `json:"snapshot_read_only"`
 	AgentsShadowVolume                      string                         `json:"agents_shadow_volume"`
 	AgentsShadowFingerprint                 string                         `json:"agents_shadow_fingerprint"`
 	AgentsShadowDigest                      string                         `json:"agents_shadow_digest"`
@@ -441,6 +509,199 @@ func ObserveCodexReviewShadow(
 		volume: volume, fingerprint: fingerprint, digest: emptyCodexShadowDigest,
 		observerImage: cfg.ObserverImage, observerFingerprint: observerFingerprint,
 	}, nil
+}
+
+// BuildCodexReviewSnapshotObserverSpec returns the pinned, networkless,
+// read-only observer whose proof establishes that the snapshot volume holds
+// exactly the two admitted files and reports their sha256 digests. It is a
+// topology constructor for conformance tests; Backend.CodexReview owns the safe
+// runtime lifecycle.
+func BuildCodexReviewSnapshotObserverSpec(
+	cfg CodexReviewConfig,
+	runID, volume string,
+	ownershipLabel Label,
+) (ContainerSpec, error) {
+	switch {
+	case !runIDPattern.MatchString(runID):
+		return ContainerSpec{}, fmt.Errorf("%w: RunID is invalid", ErrInvalidCodexReviewSpec)
+	case volume == "" || !cliSafe(volume):
+		return ContainerSpec{}, fmt.Errorf("%w: snapshot volume is invalid", ErrInvalidCodexReviewSpec)
+	case !digestPinnedImagePattern.MatchString(cfg.ObserverImage):
+		return ContainerSpec{}, fmt.Errorf("%w: ObserverImage must be digest-pinned", ErrInvalidCodexReviewSpec)
+	case !codexReviewOwnershipLabelValid(ownershipLabel):
+		return ContainerSpec{}, fmt.Errorf("%w: ownership label is invalid", ErrInvalidCodexReviewSpec)
+	}
+	return ContainerSpec{
+		Name:  codexReviewSnapshotObserverName(runID),
+		Image: cfg.ObserverImage,
+		Command: []string{
+			"sh", "-c", codexReviewSnapshotObserverScript(
+				ownershipLabel.Value, codexReviewSnapshotObserverTarget, codexReviewSnapshotProofPath,
+			),
+		},
+		Mounts: []Mount{{
+			Type: MountVolume, Source: volume, Target: codexReviewSnapshotObserverTarget, ReadOnly: true,
+		}},
+		Labels:          append(runLabels(runID), ownershipLabel),
+		NetworkDisabled: true,
+	}, nil
+}
+
+// ObserveCodexReviewSnapshot validates the runtime-owned snapshot volume, the
+// networkless read-only observer, and its nonce-bound proof. The returned value
+// is the only snapshot evidence the review topology accepts. Its digests are
+// tied to the admitted bodies inside BuildCodexReviewAgentSpec.
+func ObserveCodexReviewSnapshot(
+	cfg CodexReviewConfig,
+	runID, volume string,
+	volumeOwnershipLabel, observerOwnershipLabel Label,
+	volumeReport VolumeSummary,
+	observerReport InspectReport,
+	proof []byte,
+) (CodexReviewSnapshotObservation, error) {
+	spec, err := BuildCodexReviewSnapshotObserverSpec(cfg, runID, volume, observerOwnershipLabel)
+	if err != nil {
+		return CodexReviewSnapshotObservation{}, err
+	}
+	if !codexReviewOwnershipLabelValid(volumeOwnershipLabel) {
+		return CodexReviewSnapshotObservation{}, failf(
+			CheckCredentialSeparation, "Codex review snapshot ownership claim is invalid",
+		)
+	}
+	if volumeReport.Name != volume {
+		return CodexReviewSnapshotObservation{}, failf(
+			CheckCredentialSeparation, "Codex review snapshot observation identified the wrong volume",
+		)
+	}
+	fingerprint, err := ownedFingerprint(
+		volumeReport.CreationDate, volumeReport.Labels, volumeReport.LabelsObserved, volumeOwnershipLabel,
+	)
+	if err != nil {
+		return CodexReviewSnapshotObservation{}, failf(
+			CheckCredentialSeparation, "Codex review snapshot ownership: %v", err,
+		)
+	}
+	if err := verifySeedRoleAllowlist(
+		observerReport, spec, volume, codexReviewSnapshotObserverTarget, CheckCredentialSeparation,
+	); err != nil {
+		return CodexReviewSnapshotObservation{}, err
+	}
+	observerCreationFingerprint, err := ownedFingerprint(
+		observerReport.CreationDate, observerReport.Labels,
+		observerReport.LabelsObserved, observerOwnershipLabel,
+	)
+	if err != nil {
+		return CodexReviewSnapshotObservation{}, failf(
+			CheckCredentialSeparation, "Codex review snapshot observer ownership is not fingerprinted",
+		)
+	}
+	observerFingerprint := codexReviewObserverFingerprint(
+		observerCreationFingerprint, observerOwnershipLabel,
+	)
+	authDigest, instructionDigest, err := parseCodexReviewSnapshotProof(proof, observerOwnershipLabel.Value)
+	if err != nil {
+		return CodexReviewSnapshotObservation{}, err
+	}
+	return CodexReviewSnapshotObservation{
+		volume: volume, fingerprint: fingerprint,
+		authDigest: authDigest, instructionDigest: instructionDigest,
+		observerImage: cfg.ObserverImage, observerFingerprint: observerFingerprint,
+	}, nil
+}
+
+// codexReviewSnapshotObserverScript lists the snapshot volume and gates on it
+// holding exactly {AGENTS.md, auth.json} as regular, unsymlinked files, then
+// emits their sha256 digests. Any extra, missing, non-regular, or symlinked
+// entry leaves valid=invalid, which the proof parser fails closed on.
+func codexReviewSnapshotObserverScript(nonce, targetPath, proofPath string) string {
+	target := shellQuote(targetPath)
+	auth := shellQuote(targetPath + "/" + codexReviewSnapshotAuthName)
+	instr := shellQuote(targetPath + "/" + codexReviewSnapshotInstrName)
+	proof := shellQuote(proofPath)
+	return "set -u; LC_ALL=C; export LC_ALL; valid=invalid; authsum=; instrsum=; " +
+		"entries=\"$(cd " + target + " 2>/dev/null && find . ! -name . -print | sort)\"; " +
+		"if [ \"$entries\" = './AGENTS.md\n./auth.json' ] && " +
+		"[ -f " + auth + " ] && [ ! -L " + auth + " ] && " +
+		"[ -f " + instr + " ] && [ ! -L " + instr + " ]; then " +
+		"authsum=\"$(sha256sum " + auth + " | cut -d' ' -f1)\"; " +
+		"instrsum=\"$(sha256sum " + instr + " | cut -d' ' -f1)\"; " +
+		"if [ -n \"$authsum\" ] && [ -n \"$instrsum\" ]; then valid=valid; fi; fi; " +
+		"printf 'nonce=%s\\nvalid=%s\\nauth=sha256:%s\\ninstr=sha256:%s\\n' " +
+		shellQuote(nonce) + " \"$valid\" \"$authsum\" \"$instrsum\" > " + proof
+}
+
+// parseCodexReviewSnapshotProof validates the nonce-bound proof and returns the
+// two digests. It fails closed unless the observer proved exactly the two files
+// (valid=valid) and reported two well-formed sha256 digests.
+func parseCodexReviewSnapshotProof(proof []byte, nonce string) (string, string, error) {
+	if len(proof) == 0 || len(proof) > maxBaseProofBytes {
+		return "", "", failf(CheckCredentialSeparation, "Codex review snapshot proof has an invalid size")
+	}
+	var sawNonce, valid bool
+	var authDigest, instructionDigest string
+	for _, line := range strings.Split(strings.ReplaceAll(string(proof), "\r\n", "\n"), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "nonce":
+			if sawNonce || value != nonce {
+				return "", "", failf(CheckCredentialSeparation, "Codex review snapshot proof nonce is invalid")
+			}
+			sawNonce = true
+		case "valid":
+			if valid || value != "valid" {
+				return "", "", failf(
+					CheckCredentialSeparation,
+					"Codex review snapshot observer did not prove exactly the two admitted files",
+				)
+			}
+			valid = true
+		case "auth":
+			if authDigest != "" || !contentaddr.Valid(value) {
+				return "", "", failf(CheckCredentialSeparation, "Codex review snapshot proof auth digest is invalid")
+			}
+			authDigest = value
+		case "instr":
+			if instructionDigest != "" || !contentaddr.Valid(value) {
+				return "", "", failf(CheckCredentialSeparation, "Codex review snapshot proof instruction digest is invalid")
+			}
+			instructionDigest = value
+		}
+	}
+	if !sawNonce || !valid || authDigest == "" || instructionDigest == "" {
+		return "", "", failf(CheckCredentialSeparation, "Codex review snapshot proof is incomplete")
+	}
+	return authDigest, instructionDigest, nil
+}
+
+// codexReviewSnapshotSeederScript is the fixed, gate-authored command that a
+// networkless seeder runs in the pinned observer image: it waits for the host's
+// completion sentinel, refuses a staged tree that is not exactly the two files,
+// clears the volume's filesystem lost+found, and copies the two files onto the
+// read-write-mounted snapshot volume. A separate read-only observer, in its own
+// VM, is the proof; this writer never vouches for its own write.
+func codexReviewSnapshotSeederScript(cfg Config, volumeTarget string) string {
+	ready := shellQuote(path.Join(cfg.SeedReadyDir, seedReadyFile))
+	stage := shellQuote(cfg.SeedStageDir)
+	stageAuth := shellQuote(cfg.SeedStageDir + "/" + codexReviewSnapshotAuthName)
+	stageInstr := shellQuote(cfg.SeedStageDir + "/" + codexReviewSnapshotInstrName)
+	volAuth := shellQuote(volumeTarget + "/" + codexReviewSnapshotAuthName)
+	volInstr := shellQuote(volumeTarget + "/" + codexReviewSnapshotInstrName)
+	lostFound := shellQuote(volumeTarget + "/" + lostFoundDir)
+	ticks := seederScriptTicks(cfg)
+	return "set -eu; i=0; " +
+		"while [ ! -f " + ready + " ]; do " +
+		"i=$((i+1)); if [ \"$i\" -gt " + fmt.Sprintf("%d", ticks) + " ]; then exit 91; fi; " +
+		"sleep 1; done; " +
+		"staged=\"$(cd " + stage + " && find . ! -name . -print | sort)\"; " +
+		"if [ \"$staged\" != './AGENTS.md\n./auth.json' ]; then exit 92; fi; " +
+		"if [ ! -f " + stageAuth + " ] || [ -L " + stageAuth + " ]; then exit 93; fi; " +
+		"if [ ! -f " + stageInstr + " ] || [ -L " + stageInstr + " ]; then exit 94; fi; " +
+		"rm -rf " + lostFound + "; " +
+		"cp " + stageAuth + " " + volAuth + "; " +
+		"cp " + stageInstr + " " + volInstr + "; sync"
 }
 
 // BuildCodexReviewWorkspaceObserverSpec returns the pinned, networkless,
@@ -643,6 +904,20 @@ func BuildCodexReviewAgentSpec(
 		)
 	}
 
+	// The two admitted bodies are delivered on one ward-owned read-only volume.
+	// The snapshot observation proves that volume already holds exactly these two
+	// files; tie its per-file digests to the bytes admission just re-read so a
+	// seeded volume that diverged from the admitted body cannot start.
+	authSum := sha256.Sum256(authBody)
+	wantAuthDigest := fmt.Sprintf("sha256:%x", authSum)
+	instructionSum := sha256.Sum256(instructionBody)
+	wantInstructionDigest := fmt.Sprintf("sha256:%x", instructionSum)
+	if req.Snapshot.authDigest != wantAuthDigest || req.Snapshot.instructionDigest != wantInstructionDigest {
+		return ContainerSpec{}, CodexReviewJournalBinding{}, failf(
+			CheckCredentialSeparation, "Codex review snapshot volume does not hold the admitted credential and instruction bytes",
+		)
+	}
+
 	shadowTargets := codexAgentsShadowTargets(cfg.WorkspaceTarget)
 	env := append([]string{
 		"HOME=" + CodexContainerHomeTarget,
@@ -651,8 +926,7 @@ func BuildCodexReviewAgentSpec(
 	command := codexReviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt)
 	mounts := []Mount{
 		{Type: MountVolume, Source: req.WorkspaceVolume, Target: cfg.WorkspaceTarget, ReadOnly: true},
-		{Type: MountBind, Source: authPath, Target: CodexAuthFileTarget, ReadOnly: true},
-		{Type: MountBind, Source: instructionPath, Target: CodexInstructionTarget, ReadOnly: true},
+		{Type: MountVolume, Source: req.Snapshot.volume, Target: codexReviewSnapshotTarget, ReadOnly: true},
 	}
 	for _, target := range shadowTargets {
 		mounts = append(mounts, Mount{
@@ -668,7 +942,6 @@ func BuildCodexReviewAgentSpec(
 		Labels:  runLabels(req.RunID),
 		Network: codexReviewNetworkName(req.RunID),
 	}
-	authSum := sha256.Sum256(authBody)
 	binding := CodexReviewJournalBinding{
 		TopologyVersion:                 codexReviewTopologyVersion,
 		RunID:                           req.RunID,
@@ -688,7 +961,7 @@ func BuildCodexReviewAgentSpec(
 		ContinuityMounted:               false,
 		AuthMode:                        req.AuthMode,
 		AuthIdentityID:                  req.AuthIdentityID,
-		AuthSnapshotDigest:              fmt.Sprintf("sha256:%x", authSum),
+		AuthSnapshotDigest:              wantAuthDigest,
 		AccessTokenExpiresAt:            accessExpiry,
 		AuthReadOnly:                    true,
 		AuthStoreMutationLeaseRequired:  true,
@@ -697,6 +970,12 @@ func BuildCodexReviewAgentSpec(
 		HostInstructionDigest:           cloneOptionalDigest(req.InstructionBinding.HostDigest),
 		RepositoryInstructionSources:    slices.Clone(req.InstructionBinding.RepositorySources),
 		InstructionReadOnly:             true,
+		SnapshotVolume:                  req.Snapshot.volume,
+		SnapshotTarget:                  codexReviewSnapshotTarget,
+		SnapshotFingerprint:             req.Snapshot.fingerprint,
+		SnapshotObserverImage:           req.Snapshot.observerImage,
+		SnapshotObserverFingerprint:     req.Snapshot.observerFingerprint,
+		SnapshotReadOnly:                true,
 		AgentsShadowVolume:              req.AgentsShadow.volume,
 		AgentsShadowFingerprint:         req.AgentsShadow.fingerprint,
 		AgentsShadowDigest:              req.AgentsShadow.digest,
@@ -739,7 +1018,8 @@ func (b CodexReviewJournalBinding) validateForTeardown() error {
 
 func (b CodexReviewJournalBinding) validatePrepared() error {
 	if b.AgentsShadowPreStartObserverFingerprint != "" ||
-		b.WorkspacePreStartObserverFingerprint != "" {
+		b.WorkspacePreStartObserverFingerprint != "" ||
+		b.SnapshotPreStartObserverFingerprint != "" {
 		return errors.New("codex review prepared journal binding carries pre-start evidence")
 	}
 	return b.validate(false, false)
@@ -752,7 +1032,7 @@ func (b CodexReviewJournalBinding) validate(
 		!runIDPattern.MatchString(b.RunID) ||
 		b.Boundary != CodexReviewFreshStart || !b.FreshContext || b.ContinuityMounted ||
 		!b.WorkspaceReadOnly || !b.AuthReadOnly || !b.AuthStoreMutationLeaseRequired ||
-		!b.InstructionReadOnly || !b.AgentsShadowReadOnly ||
+		!b.InstructionReadOnly || !b.SnapshotReadOnly || !b.AgentsShadowReadOnly ||
 		b.RefreshEndpointReachable || b.PublicationCredentials {
 		return errors.New("codex review journal posture is invalid")
 	}
@@ -789,6 +1069,17 @@ func (b CodexReviewJournalBinding) validate(
 	}
 	if b.AuthMode == CodexAuthAPIKey && b.AccessTokenExpiresAt != nil {
 		return errors.New("codex review API-key binding carries access-token expiry")
+	}
+	if b.SnapshotVolume == "" || !cliSafe(b.SnapshotVolume) || b.SnapshotVolume != codexReviewSnapshotVolumeName(b.RunID) ||
+		b.SnapshotTarget != codexReviewSnapshotTarget || b.SnapshotFingerprint == "" ||
+		!digestPinnedImagePattern.MatchString(b.SnapshotObserverImage) ||
+		b.SnapshotObserverFingerprint == "" {
+		return errors.New("codex review journal snapshot binding is invalid")
+	}
+	if requirePreStartObservation &&
+		(b.SnapshotPreStartObserverFingerprint == "" ||
+			b.SnapshotPreStartObserverFingerprint == b.SnapshotObserverFingerprint) {
+		return errors.New("codex review journal omits distinct pre-start snapshot evidence")
 	}
 	if b.AgentsShadowVolume == "" || !cliSafe(b.AgentsShadowVolume) ||
 		b.AgentsShadowFingerprint == "" || b.AgentsShadowDigest != emptyCodexShadowDigest ||
@@ -856,6 +1147,9 @@ func validateCodexReviewRequest(cfg CodexReviewConfig, req CodexReviewSpec) erro
 		return fmt.Errorf("%w: AuthIdentityID is required", ErrInvalidCodexReviewSpec)
 	case !req.AgentsShadow.valid() || req.AgentsShadow.observerImage != cfg.ObserverImage:
 		return fmt.Errorf("%w: runtime-backed empty shadow observation is required", ErrInvalidCodexReviewSpec)
+	case !req.Snapshot.valid() || req.Snapshot.observerImage != cfg.ObserverImage ||
+		req.Snapshot.volume != codexReviewSnapshotVolumeName(req.RunID):
+		return fmt.Errorf("%w: runtime-backed snapshot volume observation is required", ErrInvalidCodexReviewSpec)
 	case !cleanAbs(cfg.InputRoot):
 		return fmt.Errorf("%w: InputRoot must be a clean absolute non-root path", ErrInvalidCodexReviewSpec)
 	case cfg.AccessTokenLifetimeFloor <= 0:
@@ -1069,9 +1363,24 @@ func jwtExpiry(token string) (time.Time, error) {
 
 func codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt string) []string {
 	schema := `{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["P1","P2","P3"]},"location":{"type":"string"},"explanation":{"type":"string"}},"required":["severity","location","explanation"],"additionalProperties":false}}},"required":["findings"],"additionalProperties":false}`
-	command := "set +e; mkdir -p " + shellQuote(codexReviewOutputDir) + "; " +
+	// CODEX_HOME lives on the fresh, writable container rootfs; auth.json and
+	// AGENTS.md are symlinks into the read-only snapshot volume, so the credential
+	// bytes stay immutable while CODEX_HOME itself remains writable for the CLI's
+	// own scratch state. Apple container rejects single-file binds (#591), so the
+	// two files arrive on one seeded volume and are linked into place here.
+	//
+	// The setup prologue runs under `set -e` so it fails closed: if a derived or
+	// updated review image already ships either fixed CODEX_HOME path, the `ln -s`
+	// hits "File exists" and aborts the container before `codex exec` runs, rather
+	// than silently leaving codex to read the image-provided credential or
+	// instruction. `set +e` is relaxed only immediately before `codex exec`, so a
+	// nonzero codex exit is still captured into review_status and the status file.
+	command := "set -e; mkdir -p " + shellQuote(CodexHomeTarget) + "; " +
+		"ln -s " + shellQuote(codexReviewSnapshotAuthSource) + " " + shellQuote(CodexAuthFileTarget) + "; " +
+		"ln -s " + shellQuote(codexReviewSnapshotInstrSource) + " " + shellQuote(CodexInstructionTarget) + "; " +
+		"mkdir -p " + shellQuote(codexReviewOutputDir) + "; " +
 		"printf '%s' " + shellQuote(schema) + " > " + shellQuote(codexReviewSchemaPath) + "; " +
-		"codex exec --json --ephemeral --skip-git-repo-check -s read-only -C " + shellQuote(workspaceTarget) +
+		"set +e; codex exec --json --ephemeral --skip-git-repo-check -s read-only -C " + shellQuote(workspaceTarget) +
 		" -m " + shellQuote(model) + " -c " + shellQuote("model_reasoning_effort=\""+reasoningEffort+"\"") +
 		" -c project_doc_max_bytes=0 --ignore-user-config --ignore-rules" +
 		" --output-schema " + shellQuote(codexReviewSchemaPath) +
@@ -1089,6 +1398,12 @@ type codexReviewResourceNames struct {
 	reviewContainer   string
 	shadowVolume      string
 	network           string
+	// snapshot resources are empty on the pre-#591 generation, which delivered
+	// the two files as read-only host binds instead of a seeded volume. An empty
+	// snapshotVolume selects the six-resource legacy shape in resourceNamesMatch.
+	snapshotVolume   string
+	snapshotSeeder   string
+	snapshotObserver string
 }
 
 // codexReviewNames is the single registration point for runtime resources
@@ -1103,12 +1418,17 @@ func codexReviewNames(runID string) codexReviewResourceNames {
 		reviewContainer:   prefix + "-codex",
 		shadowVolume:      prefix + "-agents",
 		network:           prefix + "-egress",
+		snapshotVolume:    prefix + "-snap",
+		snapshotSeeder:    prefix + "-snap-init",
+		snapshotObserver:  prefix + "-snap-obs",
 	}
 }
 
 // legacyCodexReviewNames re-derives the exact topology persisted before #587.
 // It is accepted only while authenticating existing intents for cleanup; no
-// new resource is ever created with these names.
+// new resource is ever created with these names. It carries no snapshot
+// resources: pre-#587 launches used host binds, so their intents have the
+// six-resource shape.
 func legacyCodexReviewNames(runID string) codexReviewResourceNames {
 	prefix := "freeside-review-" + runID
 	return codexReviewResourceNames{
@@ -1121,8 +1441,36 @@ func legacyCodexReviewNames(runID string) codexReviewResourceNames {
 	}
 }
 
+// preSnapshotCodexReviewNames re-derives the #587..#590 topology: the current
+// short names but still the six-resource, host-bind shape from before the
+// snapshot volume (#591). It authenticates the round-2 intent persisted by
+// run 482 for cleanup only; no new resource is created with this shape.
+func preSnapshotCodexReviewNames(runID string) codexReviewResourceNames {
+	prefix := "freeside-review-" + runID
+	return codexReviewResourceNames{
+		workspaceObserver: prefix + "-ws-obs",
+		shadowInitializer: prefix + "-agents-init",
+		shadowObserver:    prefix + "-agents-obs",
+		reviewContainer:   prefix + "-codex",
+		shadowVolume:      prefix + "-agents",
+		network:           prefix + "-egress",
+	}
+}
+
 func codexReviewShadowObserverName(runID string) string {
 	return codexReviewNames(runID).shadowObserver
+}
+
+func codexReviewSnapshotObserverName(runID string) string {
+	return codexReviewNames(runID).snapshotObserver
+}
+
+func codexReviewSnapshotSeederName(runID string) string {
+	return codexReviewNames(runID).snapshotSeeder
+}
+
+func codexReviewSnapshotVolumeName(runID string) string {
+	return codexReviewNames(runID).snapshotVolume
 }
 
 func codexReviewShadowObserverScript(nonce, targetPath, proofPath string) string {
@@ -1277,13 +1625,13 @@ func validateCodexReviewAgentSpec(
 	if err := validateCodexReviewRequest(cfg, req); err != nil {
 		return err
 	}
-	authPath, authBody, err := readCodexReviewInput(
+	_, authBody, err := readCodexReviewInput(
 		cfg.InputRoot, req.AuthSnapshot, maxCodexAuthSnapshotBytes,
 	)
 	if err != nil {
 		return failf(CheckCredentialSeparation, "Codex review auth snapshot changed after admission")
 	}
-	instructionPath, instructionBody, err := readCodexReviewInput(
+	_, instructionBody, err := readCodexReviewInput(
 		cfg.InputRoot, req.InstructionFile, domain.MaxVendorInstructionBytes,
 	)
 	if err != nil || !bytes.Equal(instructionBody, req.Instructions.Body) {
@@ -1298,6 +1646,14 @@ func validateCodexReviewAgentSpec(
 	}
 	authSum := sha256.Sum256(authBody)
 	wantAuthDigest := fmt.Sprintf("sha256:%x", authSum)
+	instructionSum := sha256.Sum256(instructionBody)
+	wantInstructionDigest := fmt.Sprintf("sha256:%x", instructionSum)
+	// Re-tie the snapshot observation's per-file digests to the bytes admission
+	// re-read, so a snapshot volume seeded with different content cannot pass the
+	// final pre-start reconstruction.
+	if req.Snapshot.authDigest != wantAuthDigest || req.Snapshot.instructionDigest != wantInstructionDigest {
+		return failf(CheckCredentialSeparation, "Codex review snapshot volume diverged from the admitted bytes")
+	}
 	wantCommand := codexReviewCommand(cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, req.Prompt)
 	wantEnv := append([]string{
 		"HOME=" + CodexContainerHomeTarget,
@@ -1312,24 +1668,20 @@ func validateCodexReviewAgentSpec(
 		return failf(CheckControlPlaneIsolation, "Codex review environment is malformed or duplicates a key")
 	}
 	wantTargets := codexAgentsShadowTargets(cfg.WorkspaceTarget)
-	if len(spec.Mounts) != 3+len(wantTargets) {
+	if len(spec.Mounts) != 2+len(wantTargets) {
 		return failf(CheckControlPlaneIsolation, "Codex review carries an unexpected mount count")
 	}
-	workspace, auth, instructions := spec.Mounts[0], spec.Mounts[1], spec.Mounts[2]
+	workspace, snapshot := spec.Mounts[0], spec.Mounts[1]
 	if workspace.Type != MountVolume || workspace.Source != req.WorkspaceVolume ||
 		workspace.Target != cfg.WorkspaceTarget || !workspace.ReadOnly {
 		return failf(CheckCredentialSeparation, "Codex review workspace is not the admitted read-only volume")
 	}
-	if auth.Type != MountBind || auth.Source != authPath ||
-		auth.Target != CodexAuthFileTarget || !auth.ReadOnly {
-		return failf(CheckCredentialSeparation, "Codex review auth snapshot is not a read-only single-file bind")
-	}
-	if instructions.Type != MountBind || instructions.Source != instructionPath ||
-		instructions.Target != CodexInstructionTarget || !instructions.ReadOnly {
-		return failf(CheckControlPlaneIsolation, "Codex review instructions are not a read-only single-file bind")
+	if snapshot.Type != MountVolume || snapshot.Source != req.Snapshot.volume ||
+		snapshot.Target != codexReviewSnapshotTarget || !snapshot.ReadOnly {
+		return failf(CheckCredentialSeparation, "Codex review snapshot is not the admitted read-only volume")
 	}
 	for i, target := range wantTargets {
-		m := spec.Mounts[3+i]
+		m := spec.Mounts[2+i]
 		if m.Type != MountVolume || m.Source != req.AgentsShadow.volume ||
 			m.Target != target || !m.ReadOnly {
 			return failf(CheckControlPlaneIsolation, "Codex review .agents shadow topology diverged")
@@ -1357,6 +1709,11 @@ func validateCodexReviewAgentSpec(
 		binding.AuthSnapshotDigest != wantAuthDigest || !sameOptionalTime(binding.AccessTokenExpiresAt, expires) ||
 		binding.InstructionDigest != req.Instructions.Digest ||
 		!sameReviewInstructionBinding(binding.instructionBinding(), req.InstructionBinding) ||
+		binding.SnapshotVolume != req.Snapshot.volume || binding.SnapshotTarget != codexReviewSnapshotTarget ||
+		binding.SnapshotFingerprint != req.Snapshot.fingerprint ||
+		binding.SnapshotObserverImage != req.Snapshot.observerImage ||
+		binding.SnapshotObserverFingerprint != req.Snapshot.observerFingerprint ||
+		binding.SnapshotPreStartObserverFingerprint != "" || !binding.SnapshotReadOnly ||
 		binding.AgentsShadowVolume != req.AgentsShadow.volume ||
 		binding.AgentsShadowFingerprint != req.AgentsShadow.fingerprint ||
 		binding.AgentsShadowDigest != req.AgentsShadow.digest ||
@@ -1395,6 +1752,7 @@ func verifyCodexReviewAllowlistShape(
 	binding CodexReviewJournalBinding,
 	freshShadow CodexReviewShadowObservation,
 	freshWorkspace CodexReviewWorkspaceObservation,
+	freshSnapshot CodexReviewSnapshotObservation,
 	currentNetwork CodexReviewNetworkObservation,
 	rep InspectReport,
 	spec ContainerSpec,
@@ -1403,6 +1761,9 @@ func verifyCodexReviewAllowlistShape(
 		return CodexReviewJournalBinding{}, err
 	}
 	if err := req.Workspace.verifyFresh(freshWorkspace); err != nil {
+		return CodexReviewJournalBinding{}, err
+	}
+	if err := req.Snapshot.verifyFresh(freshSnapshot); err != nil {
 		return CodexReviewJournalBinding{}, err
 	}
 	if err := req.Network.verifyCurrent(currentNetwork); err != nil {
@@ -1416,6 +1777,7 @@ func verifyCodexReviewAllowlistShape(
 	}
 	binding.AgentsShadowPreStartObserverFingerprint = freshShadow.observerFingerprint
 	binding.WorkspacePreStartObserverFingerprint = freshWorkspace.observerFingerprint
+	binding.SnapshotPreStartObserverFingerprint = freshSnapshot.observerFingerprint
 	if err := binding.validateShape(); err != nil {
 		return CodexReviewJournalBinding{}, failf(
 			CheckControlPlaneIsolation, "Codex review final journal binding is invalid",
