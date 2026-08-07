@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -76,23 +77,41 @@ func validateObservedPullIdentityCoordinates(repositoryID int64, prNumber int) e
 // Run performs one startup pass and then polls on a plain ticker. A resource
 // failure is reported and isolated to that item; enumeration or transaction
 // failures stop the loop because continuing would silently omit durable work.
+//
+// This is the GitHub-facing loop, so it is where a recurring credential or
+// rate-limit failure shows up. Reporting it at error severity with a
+// timestamp is the whole point: as an unstructured stderr line every
+// quarter hour, a persistent 401 was indistinguishable from noise.
 func (r activeResourceReconciler) Run(
-	ctx context.Context, interval time.Duration, report func(error),
+	ctx context.Context, interval time.Duration, logger *slog.Logger,
 ) error {
 	if interval <= 0 {
 		return fmt.Errorf("active resource interval %s must be positive", interval)
 	}
-	if report == nil {
-		report = func(error) {}
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
 	}
+	logger = logger.With("subsystem", "active-resource")
+	logger.Info("active resource reconciler started", "interval", interval)
 	reconcile := func() error {
 		failures, err := r.Reconcile(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				logger.Info("active resource reconciler stopped during shutdown")
+			} else {
+				logger.Error("active resource pass failed", "error", err)
+			}
 			return err
 		}
 		for _, failure := range failures {
-			report(failure)
+			// Isolated per-item failures: the pass converged around them, so
+			// they are error severity without being loop-fatal.
+			logger.Error("active resource observation failed", "error", failure)
 		}
+		// Per-pass at debug. This runs every quarter hour forever; an info
+		// record per idle pass is a log an operator stops reading, and the
+		// records that matter drown in it.
+		logger.Debug("active resource pass complete", "failures", len(failures))
 		return nil
 	}
 	if err := reconcile(); err != nil {
@@ -103,6 +122,7 @@ func (r activeResourceReconciler) Run(
 	for {
 		select {
 		case <-ctx.Done():
+			logger.Info("active resource reconciler stopped")
 			return nil
 		case <-ticker.C:
 			if err := reconcile(); err != nil {

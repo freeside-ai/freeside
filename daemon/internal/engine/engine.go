@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -54,11 +55,27 @@ type Engine struct {
 	// pace bounds the per-pass observation writes (issue #394); process
 	// state only, never authority.
 	pace observationPace
+	// logger reports what the reconcile loops do. Never nil after New, so
+	// the loops log without checking.
+	logger *slog.Logger
 }
 
 // Option configures an optional engine workflow without changing the shared
 // store, signet, or driver contracts.
 type Option func(*Engine) error
+
+// WithLogger installs the reconcile loops' logger. Without it the engine
+// discards its records, which is what every test wants and no unattended
+// daemon does.
+func WithLogger(logger *slog.Logger) Option {
+	return func(e *Engine) error {
+		if logger == nil {
+			return errors.New("engine logger: nil logger")
+		}
+		e.logger = logger.With("subsystem", "engine")
+		return nil
+	}
+}
 
 // New constructs an Engine from already-open boundaries. Their lifetimes stay
 // with the daemon composition that supplied them.
@@ -75,6 +92,7 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 	e := &Engine{
 		store: st, signet: attention, driver: driver,
 		fakePublicationPolicy: &fakePublicationPolicyRecovery{store: st},
+		logger:                slog.New(slog.DiscardHandler),
 	}
 	for _, opt := range opts {
 		if opt == nil {
@@ -216,7 +234,7 @@ func (e *Engine) ReconcileFakePublication(
 // It does not advance the production publication lane; a composition that
 // configured one runs RunProductionPublications beside this loop.
 func (e *Engine) Run(ctx context.Context, interval time.Duration) error {
-	return runReconcileLoop(ctx, "run engine", interval, func(ctx context.Context) error {
+	return runReconcileLoop(ctx, e.logger, "run engine", interval, func(ctx context.Context) error {
 		_, err := e.Reconcile(ctx)
 		return err
 	})
@@ -235,7 +253,7 @@ func (e *Engine) RunProductionPublications(ctx context.Context, interval time.Du
 	if e.productionPublication == nil {
 		return errors.New("production publication workflow is not configured")
 	}
-	return runReconcileLoop(ctx, "run production publications", interval,
+	return runReconcileLoop(ctx, e.logger, "run production publications", interval,
 		func(ctx context.Context) error {
 			_, err := e.ReconcileProductionPublications(ctx)
 			return err
@@ -245,8 +263,16 @@ func (e *Engine) RunProductionPublications(ctx context.Context, interval time.Du
 // runReconcileLoop runs pass immediately and then on interval until ctx is
 // canceled. A correctness error stops the loop instead of being hidden by
 // retries; cancellation during a pass is shutdown, not a failure.
+//
+// It is the single logging seam for both engine loops. A stopping error is
+// recorded here, before it propagates to a caller that may only hand it to
+// a channel, so the reason the loop died is legible without the daemon
+// having to survive to report it. Completed passes are debug: this runs on
+// a fixed cadence forever, and an info record per pass is a log the
+// operator stops reading.
 func runReconcileLoop(
 	ctx context.Context,
+	logger *slog.Logger,
 	name string,
 	interval time.Duration,
 	pass func(context.Context) error,
@@ -254,17 +280,23 @@ func runReconcileLoop(
 	if interval <= 0 {
 		return fmt.Errorf("%s: interval %s must be positive", name, interval)
 	}
+	logger = logger.With("loop", name)
+	logger.Info("reconcile loop started", "interval", interval)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		if err := pass(ctx); err != nil {
 			if ctx.Err() != nil {
+				logger.Info("reconcile loop stopped during shutdown")
 				return nil
 			}
+			logger.Error("reconcile pass failed", "error", err)
 			return err
 		}
+		logger.Debug("reconcile pass complete")
 		select {
 		case <-ctx.Done():
+			logger.Info("reconcile loop stopped")
 			return nil
 		case <-ticker.C:
 		}

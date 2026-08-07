@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,21 +43,27 @@ var errExportAuthorityConflict = errors.New("released export conflicts with dura
 // result. Operational failures after a handoff has returned deliberately
 // remain in phaseExported so Inspect can retry them without discarding work.
 func (d *Driver) runPipeline(ctx context.Context, in intent) {
+	log := d.logger.With("invocation", string(in.InvocationID), "run", in.RunID)
+	log.Debug("pipeline started", "phase", string(in.Phase))
 	result, err := d.handoffAndImport(ctx, in)
 	if err == nil {
 		// A failed terminal write is retained on the live session and retried
 		// by Inspect/Collect; the asynchronous pipeline has no caller to
-		// return it to.
-		_ = d.commitResult(in.InvocationID, result)
+		// return it to, so this record is where the retained failure surfaces
+		// before that retry rather than after it.
+		d.commit(log, in.InvocationID, result)
 		return
 	}
 	if errors.Is(err, errExportAuthorityConflict) {
+		log.Error("released export conflicts with durable authority; preserved for repair",
+			"error", err)
 		return
 	}
 	if errors.Is(err, ErrRecoveryRetryable) {
 		// The durable preterminal phase (or an in-process retry of its write)
 		// owns this window. Inventing a failed result would discard a returned
 		// export or skip recovery of a writer whose teardown is not yet proven.
+		log.Debug("pipeline left the window to recovery", "error", err)
 		return
 	}
 	// A failure here is this stage's outcome, not the daemon's: the engine
@@ -67,10 +74,31 @@ func (d *Driver) runPipeline(ctx context.Context, in intent) {
 	if ctx.Err() != nil && !errors.Is(err, ErrSeedRefused) {
 		status = exec.StatusCanceled
 	}
-	_ = d.commitResult(in.InvocationID, exec.StageResult{
+	if status == exec.StatusCanceled {
+		// A stage the daemon's own shutdown canceled is a lifecycle event,
+		// not a fault. Logging it at error would train the operator to skim
+		// past the severity, which is the habit the rest of this costs
+		// effort to avoid; the durable StatusCanceled remains the authority.
+		log.Info("stage canceled", "error", err)
+	} else {
+		log.Error("stage failed", "error", err)
+	}
+	d.commit(log, in.InvocationID, exec.StageResult{
 		InvocationID: in.InvocationID, Status: status,
 		Summary: truncateSummary(err.Error()),
 	})
+}
+
+// commit writes the terminal result and reports a write that failed. The
+// failure is retained for Inspect/Collect either way; recording it is the
+// difference between an operator seeing it now and inferring it later.
+func (d *Driver) commit(log *slog.Logger, id domain.InvocationID, result exec.StageResult) {
+	if err := d.commitResult(id, result); err != nil {
+		log.Error("terminal result write failed; retained for retry",
+			"status", string(result.Status), "error", err)
+		return
+	}
+	log.Debug("terminal result committed", "status", string(result.Status))
 }
 
 // handoffAndImport seeds the exact base, runs the ward gate, imports the

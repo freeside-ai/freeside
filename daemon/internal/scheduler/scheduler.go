@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sync"
 	"time"
@@ -83,6 +84,10 @@ type Scheduler struct {
 	clock func() time.Time
 	kinds map[domain.ScheduleKind]Registration
 
+	// logger reports what the due-scan loop does. Never nil after New, so
+	// Run logs without checking; SetLogger replaces it before Run starts.
+	logger *slog.Logger
+
 	mu       sync.Mutex
 	inFlight map[domain.ScheduleID]struct{}
 	wg       sync.WaitGroup
@@ -115,9 +120,20 @@ func New(
 	}
 	return &Scheduler{
 		store: st, mode: mode, clock: clock, kinds: registered,
+		logger:   slog.New(slog.DiscardHandler),
 		inFlight: map[domain.ScheduleID]struct{}{},
 		errs:     make(chan error, 1),
 	}, nil
+}
+
+// SetLogger installs the loop logger, which the daemon composition does at
+// wiring time; call it before Run. A nil logger leaves records discarded,
+// which is what every test wants and no unattended daemon does.
+func (s *Scheduler) SetLogger(logger *slog.Logger) {
+	if logger == nil {
+		return
+	}
+	s.logger = logger.With("subsystem", "scheduler")
 }
 
 // RegisteredKinds enumerates the kinds this scheduler drives, sorted, for
@@ -235,23 +251,34 @@ func (s *Scheduler) Run(ctx context.Context, interval time.Duration) error {
 	if interval <= 0 {
 		return fmt.Errorf("scheduler: interval %s must be positive", interval)
 	}
+	s.logger.Info("scheduler started", "interval", interval, "mode", string(s.mode))
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	defer s.wg.Wait()
 	for {
 		if err := s.pass(ctx); err != nil {
 			if ctx.Err() != nil {
+				s.logger.Info("scheduler stopped during shutdown")
 				return nil
 			}
+			// Recorded here rather than left to the caller: a pass error stops
+			// the daemon, and the channel it travels on may not outlive it.
+			s.logger.Error("scheduling pass failed", "error", err)
 			return err
 		}
+		// Per-pass at debug: this ticks forever, so an info record per scan
+		// is a log an operator stops reading.
+		s.logger.Debug("scheduling pass complete")
 		select {
 		case <-ctx.Done():
+			s.logger.Info("scheduler stopped")
 			return nil
 		case err := <-s.errs:
 			if ctx.Err() != nil {
+				s.logger.Info("scheduler stopped during shutdown")
 				return nil
 			}
+			s.logger.Error("scheduled handler failed", "error", err)
 			return err
 		case <-ticker.C:
 		}

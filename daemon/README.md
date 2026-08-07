@@ -199,6 +199,22 @@ question in its plainest form. It is not a substitute for the stall notice,
 and a stall an operator only learns about by watching a terminal is a gap in
 the notice path, not a use for this command.
 
+The long-running loops report through a structured logger on stderr, which a
+supervisor captures to a file. Records carry a severity, a `subsystem` key
+(`engine`, `scheduler`, `active-resource`, `claude-driver`), and, where the
+loop has them in scope, `run` and `invocation`, so a recurring failure can be
+filtered out of the stream rather than read out of it. `-log-level` selects
+the severity, default `info`; the accepted spellings are slog's own (`debug`,
+`info`, `warn`, `error`). Every per-iteration record sits at `debug`, so the
+default emits nothing per pass: these loops tick on fixed cadences forever,
+and a record per idle pass buries the ones worth reading. Credential values
+never reach a record; `publish.Secret` renders as `[REDACTED]` through every
+formatting path a record can take, which `cmd/freesided`'s logging test pins.
+
+Logging is diagnostic and does not replace the attention path: work needing
+judgment still raises an attention item, and nothing depends on an operator
+watching stderr.
+
 Operational results always state the operating mode and isolation class.
 `attended_dev` is the default; unattended operation is an explicit
 `-operating-mode unattended` choice. An attended admission resolves the

@@ -11,7 +11,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
+	"log/slog"
 	"maps"
 	"net"
 	"net/http"
@@ -115,6 +117,8 @@ func main() {
 	driverDir := flags.String("fake-driver-dir", "", "permanent fake StageDriver state directory (defaults beside -db)")
 	listenAddr := flags.String("listen", "127.0.0.1:0", "signet listener address (loopback or Tailscale-owned address only)")
 	ntfyURL := flags.String("ntfy-url", defaultNtfyURL, "ntfy server URL for device notifications")
+	logLevel := flags.String("log-level", defaultLogLevel,
+		"loop log severity: debug, info, warn, or error (debug adds a record per loop iteration)")
 	interval := flags.Duration("reconcile-interval", defaultReconcileInterval, "workflow reconciliation interval")
 	fakePublication := flags.Bool("fake-publication", false, "run one explicit attended fake-candidate publication")
 	publicationStateDir := flags.String("publication-state-dir", "", "GitHub App authority state directory")
@@ -177,6 +181,11 @@ func main() {
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
+	logger, err := newLogger(os.Stderr, *logLevel)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "freesided:", err)
+		os.Exit(2)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -210,6 +219,7 @@ func main() {
 		SchedulerInterval:                  *schedulerInterval,
 		ApprovedRecipes:                    approvedRecipes,
 		BackupEncryptionWaiverRepositoryID: backupEncryptionWaiverRepositoryID.Value(),
+		Logger:                             logger,
 	}
 	mode, err := parseOperatingMode(*operatingMode)
 	if err != nil {
@@ -324,10 +334,36 @@ type config struct {
 	SchedulerInterval                  time.Duration
 	ApprovedRecipes                    map[domain.Digest]bool
 	BackupEncryptionWaiverRepositoryID *int64
+	// Logger is the process logger the long-running loops report through.
+	// Nil discards their records, which keeps every test composition quiet
+	// without each one having to build a handler.
+	Logger *slog.Logger
 	// Claude, when set, replaces the permanent fake stage driver with the
 	// production Claude driver and its ward gate (#237). Nil keeps the 1A.0
 	// walking-skeleton composition byte-for-byte.
 	Claude *claudeDriverConfig
+}
+
+// defaultLogLevel emits what an unattended daemon's operator needs and
+// nothing per loop iteration. The reconcile, scheduler, and active-resource
+// loops all tick on fixed cadences forever, so their per-pass records live
+// at debug: a page of "pass complete" every quarter hour is a log that gets
+// filtered out wholesale, taking the 401 with it.
+const defaultLogLevel = "info"
+
+// newLogger builds the process logger over w. Text key=value rather than
+// JSON because the LaunchAgent captures stderr straight to a file the
+// operator greps; a line they can read beats one that needs a tool.
+//
+// The level parses through slog's own text unmarshaler, so the accepted
+// spellings are exactly slog's (including "warn" and offsets like
+// "error+1") rather than a second vocabulary that drifts from it.
+func newLogger(w io.Writer, level string) (*slog.Logger, error) {
+	var parsed slog.Level
+	if err := parsed.UnmarshalText([]byte(level)); err != nil {
+		return nil, fmt.Errorf("-log-level %q is not debug, info, warn, or error", level)
+	}
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: parsed})), nil
 }
 
 func (cfg config) storeOptions() (store.Options, error) {
@@ -537,7 +573,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		claudeWiring *claudeComposition
 	)
 	if cfg.Claude == nil {
-		workflow, err = engine.New(st, attention, autoScriptStageDriver{StageDriver: driver})
+		var walkingSkeletonOptions []engine.Option
+		if cfg.Logger != nil {
+			walkingSkeletonOptions = append(walkingSkeletonOptions, engine.WithLogger(cfg.Logger))
+		}
+		workflow, err = engine.New(
+			st, attention, autoScriptStageDriver{StageDriver: driver}, walkingSkeletonOptions...)
 		if err != nil {
 			return nil, err
 		}
@@ -548,7 +589,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return nil, fmt.Errorf("seed walking-skeleton run: %w", err)
 		}
 	} else {
-		claudeWiring, err = composeClaudeDriver(ctx, st, blobs, *cfg.Claude)
+		claudeWiring, err = composeClaudeDriver(ctx, st, blobs, *cfg.Claude, cfg.Logger)
 		if err != nil {
 			return nil, err
 		}
@@ -579,6 +620,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				return ward.NewProjectImageRoom(claudeWiring.containerBin, image)
 			},
 		}))
+		if cfg.Logger != nil {
+			engineOptions = append(engineOptions, engine.WithLogger(cfg.Logger))
+		}
 		workflow, err = engine.New(st, attention, stageDriver, engineOptions...)
 		if err != nil {
 			return nil, err
@@ -647,6 +691,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err != nil {
 			return nil, err
 		}
+		fakeSched.SetLogger(cfg.Logger)
 		d.wg.Add(1)
 		go func() {
 			defer d.wg.Done()
@@ -668,6 +713,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err != nil {
 			return nil, err
 		}
+		sched.SetLogger(cfg.Logger)
 		if err := armTrustedConfigJobs(parent, sched, cfg); err != nil {
 			return nil, err
 		}
@@ -700,9 +746,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				reviewInvalidate: claudeWiring.reviewInvalidate,
 				now:              func() time.Time { return time.Now().UTC() },
 			}
-			err := reconciler.Run(ctx, defaultActiveResourceInterval, func(err error) {
-				fmt.Fprintln(os.Stderr, "freesided: active resource:", err)
-			})
+			err := reconciler.Run(ctx, defaultActiveResourceInterval, cfg.Logger)
 			if err != nil {
 				d.errs <- fmt.Errorf("active resource reconciler: %w", err)
 				return
