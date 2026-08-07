@@ -8,8 +8,8 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
-// TestAllowedActionsByType is the independent plan §4 fixture for all ten
-// Phase 1 attention types. It pins both halves of each allowed set: the listed
+// TestAllowedActionsByType is the independent fixture for all Phase 1
+// attention types. It pins both halves of each allowed set: the listed
 // actions pass together, and every other member of the domain union fails.
 func TestAllowedActionsByType(t *testing.T) {
 	fixtures := map[domain.AttentionType][]domain.Action{
@@ -23,6 +23,7 @@ func TestAllowedActionsByType(t *testing.T) {
 		domain.AttentionReviewDispute: {
 			domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop,
 		},
+		domain.AttentionReviewContradiction: {domain.ActionRecoverReview},
 		domain.AttentionExecutionFailure: {
 			domain.ActionRetry, domain.ActionRetryWithCapability, domain.ActionDiscuss, domain.ActionStop,
 		},
