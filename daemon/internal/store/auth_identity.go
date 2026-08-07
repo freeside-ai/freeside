@@ -83,7 +83,7 @@ type LeaseHeldError struct {
 
 func (e *LeaseHeldError) Error() string {
 	return fmt.Sprintf("auth store mutation lease on %q held by %q (fence %d) until %s",
-		e.AuthIdentityID, e.Holder, e.Fence, e.ExpiresAt.Format(time.RFC3339Nano))
+		e.AuthIdentityID, e.Holder, e.Fence, formatTime(e.ExpiresAt))
 }
 
 // Unwrap makes errors.Is(err, ErrLeaseHeld) match the refusal class.
@@ -187,10 +187,10 @@ func (tx *InternalTx) requireForwardRevision(
 	if err != nil {
 		return err
 	}
-	column := storedAt.Format(time.RFC3339Nano)
+	column := formatTime(storedAt)
 	if recordedAt.Before(storedAt) {
 		return fmt.Errorf("revision stamped %s, stored revision is %s: %w",
-			recordedAt.Format(time.RFC3339Nano), column, ErrStaleWrite)
+			formatTime(recordedAt), column, ErrStaleWrite)
 	}
 	if recordedAt.Equal(storedAt) && stored != proposed {
 		return fmt.Errorf("divergent revision shares the stored instant %s: %w", column, ErrStaleWrite)
@@ -274,7 +274,7 @@ func (tx *InternalTx) AcquireAuthStoreMutationLease(
 	if !expiresAt.After(now) {
 		return domain.AuthStoreMutationLease{}, fmt.Errorf(
 			"acquire auth store mutation lease %q: window ends at %s, now is %s: %w",
-			id, expiresAt.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), ErrLeaseWindowRegresses)
+			id, formatTime(expiresAt), formatTime(now), ErrLeaseWindowRegresses)
 	}
 	current, err := tx.GetAuthStoreMutationLease(ctx, id)
 	switch {
@@ -291,7 +291,7 @@ func (tx *InternalTx) AcquireAuthStoreMutationLease(
 	if now.Before(current.AcquiredAt) || (current.ReleasedAt != nil && now.Before(*current.ReleasedAt)) {
 		return domain.AuthStoreMutationLease{}, fmt.Errorf(
 			"acquire auth store mutation lease %q: instant %s predates the current generation: %w",
-			id, now.Format(time.RFC3339Nano), ErrLeaseWindowRegresses)
+			id, formatTime(now), ErrLeaseWindowRegresses)
 	}
 	if current.HeldAt(now) {
 		if current.Holder == holder {
@@ -391,8 +391,8 @@ func (tx *InternalTx) RenewAuthStoreMutationLease(
 	if !expiresAt.After(now) || expiresAt.Before(current.ExpiresAt) {
 		return domain.AuthStoreMutationLease{}, fmt.Errorf(
 			"renew auth store mutation lease %q: window ends at %s, now is %s, current expiry is %s: %w",
-			id, expiresAt.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
-			current.ExpiresAt.Format(time.RFC3339Nano), ErrLeaseWindowRegresses)
+			id, formatTime(expiresAt), formatTime(now),
+			formatTime(current.ExpiresAt), ErrLeaseWindowRegresses)
 	}
 	renewed := current
 	renewed.ExpiresAt = expiresAt.UTC()
@@ -441,9 +441,9 @@ func (tx *InternalTx) ReleaseAuthStoreMutationLease(
 	if !current.HeldAt(releasedAt) {
 		return fmt.Errorf(
 			"release auth store mutation lease %q: instant %s is outside the window %s..%s: %w",
-			id, releasedAt.Format(time.RFC3339Nano),
-			current.AcquiredAt.Format(time.RFC3339Nano),
-			current.ExpiresAt.Format(time.RFC3339Nano), ErrLeaseWindowRegresses)
+			id, formatTime(releasedAt),
+			formatTime(current.AcquiredAt),
+			formatTime(current.ExpiresAt), ErrLeaseWindowRegresses)
 	}
 	released := current
 	at := releasedAt.UTC()

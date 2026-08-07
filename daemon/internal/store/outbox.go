@@ -296,7 +296,7 @@ func (tx *InternalTx) record(ctx context.Context, insertSQL, selectSQL, key, kin
 		// an intentionally empty payload is fine.
 		payload = []byte{}
 	}
-	createdAt := time.Now().UTC().Format(time.RFC3339Nano)
+	createdAt := formatTime(time.Now())
 	res, err := tx.tx.ExecContext(ctx, insertSQL, key, kind, payload, createdAt)
 	if err != nil {
 		return QueueEntry{}, false, err

@@ -389,7 +389,7 @@ func (tx *InternalTx) CreatePendingScheduleOccurrence(
 	}
 	res, err := tx.tx.ExecContext(ctx, createOccurrenceSQL,
 		occ.ScheduleID, occ.Generation, occ.NominalFireAt.UnixNano(),
-		gapMissed, gapEarliest, occ.CreatedAt.Format(time.RFC3339Nano))
+		gapMissed, gapEarliest, formatTime(occ.CreatedAt))
 	if err != nil {
 		return false, fmt.Errorf("create schedule occurrence %q: %w", occ.ScheduleID, err)
 	}
@@ -534,7 +534,7 @@ func (tx *InternalTx) ConsumeScheduleOccurrence(
 		return false, fmt.Errorf("consume schedule occurrence %q: %w", id, err)
 	}
 	res, err := tx.tx.ExecContext(ctx, consumeOccurrenceSQL,
-		consumedAt.UTC().Format(time.RFC3339Nano), outcome,
+		formatTime(consumedAt), outcome,
 		id, generation, nominalFireAt.UTC().UnixNano())
 	if err != nil {
 		return false, fmt.Errorf("consume schedule occurrence %q: %w", id, err)

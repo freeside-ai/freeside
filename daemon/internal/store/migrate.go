@@ -150,7 +150,7 @@ func applyMigration(ctx context.Context, db *sql.DB, fsys fs.FS, version int, na
 	if _, err := tx.ExecContext(ctx, string(body)); err != nil {
 		return fmt.Errorf("migration %q: %w", name, err)
 	}
-	appliedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	appliedAt := formatTime(time.Now())
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO schema_migrations (version, name, digest, applied_at) VALUES (?, ?, ?, ?)`,
 		version, name, digest, appliedAt); err != nil {
