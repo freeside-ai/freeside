@@ -735,6 +735,13 @@ func (d *Driver) seedBase(ctx context.Context, in intent) error {
 	return nil
 }
 
+// errSeedCleanupAfterClose marks terminal seed cleanup that could not run
+// because the driver's seed root is already closed. It is a benign shutdown
+// race, not an undeletable checkout: an in-flight terminal Inspect/Collect
+// reached cleanup after Close, so the seed is deferred to the next process.
+// reportTerminalSeedCleanup suppresses it rather than raising a false failure.
+var errSeedCleanupAfterClose = errors.New("terminal seed cleanup after driver close")
+
 // cleanupTerminalSeed removes only daemon-derived names beneath the trusted
 // seed root. The persisted Seed field is authenticated for reconstruction but
 // is deliberately not deletion authority. A Root-scoped removal cannot follow
@@ -752,16 +759,59 @@ func (d *Driver) cleanupTerminalSeed(in intent) error {
 	d.seedMu.Lock()
 	defer d.seedMu.Unlock()
 	if d.seedFS == nil {
-		return errors.New("terminal seed cleanup after driver close")
+		return errSeedCleanupAfterClose
 	}
 	runID := RunIDFor(in.InvocationID)
 	for _, name := range []string{runID, runID + "-import"} {
 		if err := d.seedFS.RemoveAll(name); err != nil {
+			// Name the root-relative target, never filepath.Join(d.seedRoot,
+			// name). The removal goes through the fd-pinned seedFS, but
+			// d.seedRoot is a mutable pathname: were the seed root renamed and
+			// replaced by a symlink, the joined path would resolve through it to
+			// an unrelated outside checkout and misdirect operator remediation at
+			// a tree cleanup never touched. The root-relative name cannot be
+			// redirected.
 			return fmt.Errorf("%w: remove terminal seed %s: %w",
 				ErrRecoveryRetryable, name, err)
 		}
 	}
 	return nil
+}
+
+// reportTerminalSeedCleanup runs best-effort terminal seed cleanup and reports
+// a failure instead of discarding it. Terminal commits must not block on
+// cleanup (the seed root would otherwise accumulate full checkouts with no
+// operational signal), so the error is logged, never returned.
+//
+// Inspect and Collect are idempotent terminal reads the engine calls
+// repeatedly, and each re-attempts cleanup; the retry is deliberate so a
+// transient failure still converges, but the warning is deduplicated by the
+// failing error's identity so one undeletable checkout cannot flood operator
+// logs. Keying on the error rather than the invocation keeps each distinct
+// unresolved checkout reported once: cleanup stops at the first undeletable
+// name, so when an operator repairs it the sibling target's failure is a new
+// error and is surfaced instead of being silently suppressed.
+func (d *Driver) reportTerminalSeedCleanup(in intent) {
+	err := d.cleanupTerminalSeed(in)
+	if errors.Is(err, errSeedCleanupAfterClose) {
+		// Benign shutdown race: cleanup could not run because the seed root is
+		// already closed, so the seed is deferred to the next process rather
+		// than leaked. Pre-close this error was discarded; do not raise a
+		// false undeletable-checkout warning, and leave the dedup set alone.
+		return
+	}
+	d.seedMu.Lock()
+	defer d.seedMu.Unlock()
+	if err == nil {
+		delete(d.seedCleanupWarned, in.InvocationID)
+		return
+	}
+	if d.seedCleanupWarned[in.InvocationID] == err.Error() {
+		return
+	}
+	d.seedCleanupWarned[in.InvocationID] = err.Error()
+	d.logger.Warn("terminal seed cleanup failed",
+		"invocation", string(in.InvocationID), "run", in.RunID, "error", err)
 }
 
 // commitResult makes one terminal result durable and collectable. The durable
@@ -854,7 +904,7 @@ func (d *Driver) commitResultLocked(
 		return false, err
 	}
 	if in.Phase == phaseCommitted || in.Phase == phaseLost {
-		_ = d.cleanupTerminalSeed(in)
+		d.reportTerminalSeedCleanup(in)
 		return true, nil
 	}
 	if result.Status != exec.StatusCompleted && in.Phase == phaseRunning {
@@ -873,7 +923,7 @@ func (d *Driver) commitResultLocked(
 	if err := d.saveIntent(in); err != nil {
 		return false, err
 	}
-	_ = d.cleanupTerminalSeed(in)
+	d.reportTerminalSeedCleanup(in)
 	return true, nil
 }
 
@@ -921,7 +971,7 @@ func (d *Driver) commitLost(ctx context.Context, id domain.InvocationID) error {
 	}
 	switch in.Phase {
 	case phaseCommitted, phaseLost:
-		_ = d.cleanupTerminalSeed(in)
+		d.reportTerminalSeedCleanup(in)
 		return nil
 	case phaseRunning, phaseExported:
 	case phaseSeeding:
@@ -935,7 +985,7 @@ func (d *Driver) commitLost(ctx context.Context, id domain.InvocationID) error {
 	if err := d.saveIntent(in); err != nil {
 		return err
 	}
-	_ = d.cleanupTerminalSeed(in)
+	d.reportTerminalSeedCleanup(in)
 	return nil
 }
 
@@ -1070,7 +1120,7 @@ func (d *Driver) Reconcile(ctx context.Context) error {
 	}
 	for _, in := range intents {
 		if in.Phase == phaseCommitted || in.Phase == phaseLost {
-			_ = d.cleanupTerminalSeed(in)
+			d.reportTerminalSeedCleanup(in)
 			continue
 		}
 		d.mu.Lock()
@@ -1287,7 +1337,7 @@ func (d *Driver) commitRecoveredTerminal(
 	if err := d.saveIntent(in); err != nil {
 		return err
 	}
-	_ = d.cleanupTerminalSeed(in)
+	d.reportTerminalSeedCleanup(in)
 	return nil
 }
 

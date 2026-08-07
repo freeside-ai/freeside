@@ -94,19 +94,27 @@ type Driver struct {
 	exportRoot string
 	seedMu     sync.Mutex
 	seedFS     *os.Root
-	gate       Gate
-	seeder     Seeder
-	exports    ExportRecorder
-	outcomes   OutcomeRecorder
-	authority  AdmissionAuthority
-	artifacts  Artifacts
-	volumes    AuthStoreVolumes
-	preJob     func(context.Context, domain.InvocationID) error
-	imports    importer.Options
-	prepare    []string
-	now        func() time.Time
-	lifetime   context.Context
-	logger     *slog.Logger
+	// seedCleanupWarned records, per invocation, the last terminal-seed-cleanup
+	// failure already reported (by error identity), so a persistent removal
+	// failure logs once rather than on every idempotent Inspect/Collect, yet a
+	// change to a different failing target still warns: cleanup stops at the
+	// first undeletable name, so once an operator repairs it the sibling
+	// becomes the new blocker and must be reported. Guarded by seedMu; a full
+	// success clears the entry.
+	seedCleanupWarned map[domain.InvocationID]string
+	gate              Gate
+	seeder            Seeder
+	exports           ExportRecorder
+	outcomes          OutcomeRecorder
+	authority         AdmissionAuthority
+	artifacts         Artifacts
+	volumes           AuthStoreVolumes
+	preJob            func(context.Context, domain.InvocationID) error
+	imports           importer.Options
+	prepare           []string
+	now               func() time.Time
+	lifetime          context.Context
+	logger            *slog.Logger
 
 	// mu serializes state transitions per invocation. StartWithInputs owns
 	// duplicate arbitration (exec.MaterializedStageDriver), and the pipeline
@@ -188,9 +196,10 @@ func New(cfg Config) (*Driver, error) {
 		preJob:  cfg.PreJob,
 		imports: cfg.Import, prepare: slices.Clone(cfg.Preparation),
 		now: cfg.Now, lifetime: cfg.Lifetime,
-		logger:     pipelineLogger(cfg.Logger),
-		running:    map[domain.InvocationID]*session{},
-		recovering: map[domain.InvocationID]struct{}{},
+		logger:            pipelineLogger(cfg.Logger),
+		running:           map[domain.InvocationID]*session{},
+		recovering:        map[domain.InvocationID]struct{}{},
+		seedCleanupWarned: map[domain.InvocationID]string{},
 	}, nil
 }
 
@@ -443,7 +452,7 @@ func (d *Driver) inspectIntent(
 		return intent{}, false, err
 	}
 	if in.Phase == phaseCommitted || in.Phase == phaseLost {
-		_ = d.cleanupTerminalSeed(in)
+		d.reportTerminalSeedCleanup(in)
 	}
 	_, live := d.running[id]
 	return in, live, nil
@@ -564,7 +573,7 @@ func (d *Driver) commitPreJournalCancellationLocked(
 	if err := d.saveIntent(in); err != nil {
 		return false, err
 	}
-	_ = d.cleanupTerminalSeed(in)
+	d.reportTerminalSeedCleanup(in)
 	return true, nil
 }
 
@@ -580,7 +589,7 @@ func (d *Driver) Collect(ctx context.Context, id domain.InvocationID) (exec.Stag
 		return exec.StageResult{}, err
 	}
 	if in.Phase == phaseCommitted || in.Phase == phaseLost {
-		_ = d.cleanupTerminalSeed(in)
+		d.reportTerminalSeedCleanup(in)
 	}
 	switch in.Phase {
 	case phaseCommitted:

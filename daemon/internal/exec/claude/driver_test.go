@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1576,6 +1577,239 @@ func TestTerminalSeedCleanupIsRootScopedAndPhaseGated(t *testing.T) {
 			t.Fatalf("root replacement redirected deletion: %q, %v", body, err)
 		}
 	})
+}
+
+// captureHandler records emitted slog records so a test can assert what the
+// reporting boundary observed. Attribute values are flattened to strings,
+// which is all these assertions need.
+type captureHandler struct {
+	mu      sync.Mutex
+	records []captureRecord
+}
+
+type captureRecord struct {
+	level slog.Level
+	msg   string
+	attrs map[string]string
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	rec := captureRecord{level: r.Level, msg: r.Message, attrs: map[string]string{}}
+	r.Attrs(func(a slog.Attr) bool {
+		rec.attrs[a.Key] = a.Value.String()
+		return true
+	})
+	h.mu.Lock()
+	h.records = append(h.records, rec)
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *captureHandler) snapshot() []captureRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]captureRecord(nil), h.records...)
+}
+
+// TestTerminalSeedCleanupFailureIsReportedNotSwallowed proves the terminal
+// commit still succeeds when seed cleanup fails, and that the failure surfaces
+// through the logging boundary at a filterable severity with the root-relative
+// undeletable target, rather than being discarded.
+func TestTerminalSeedCleanupFailureIsReportedNotSwallowed(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		// The fixture forces removal to fail by making the seed directory
+		// read-only, which root ignores: RemoveAll would succeed, no warning
+		// would fire, and the assertion below would spuriously fail. CI runs
+		// as an unprivileged user; skip only under root.
+		t.Skip("permission-based cleanup-failure fixture is ineffective as root")
+	}
+	ctx := context.Background()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	handler := &captureHandler{}
+	d.logger = slog.New(handler)
+	orphan(t, d, phaseSeeding, nil)
+
+	// Plant an undeletable seed: an obstacle inside the run's seed directory
+	// whose parent is read-only, so a root-scoped RemoveAll cannot unlink the
+	// child. Restored in Cleanup so the temp dir can be torn down.
+	runID := RunIDFor(testInvoke)
+	seed := filepath.Join(d.seedRoot, runID)
+	if err := os.MkdirAll(seed, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "obstacle"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(seed, 0o500); err != nil { //nolint:gosec // fixture makes the seed dir read-only so removal fails
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(seed, 0o700) }) //nolint:gosec // restore the seed dir's owner-only permissions so the temp dir can be removed
+
+	result := exec.StageResult{
+		InvocationID: testInvoke,
+		Status:       exec.StatusFailed,
+		Summary:      "materialization failed",
+	}
+	if err := d.commitResult(testInvoke, result); err != nil {
+		t.Fatalf("commitResult must not surface best-effort cleanup failure: %v", err)
+	}
+
+	// Inspect and Collect are idempotent terminal reads the engine calls
+	// repeatedly, and each re-attempts the still-failing cleanup. The retry is
+	// deliberate, but a single undeletable checkout must surface one warning,
+	// not one per read, or a polling engine floods operator logs.
+	var collected exec.StageResult
+	for i := 0; i < 3; i++ {
+		if _, err := d.Inspect(ctx, testInvoke); err != nil {
+			t.Fatalf("Inspect after cleanup failure: %v", err)
+		}
+		got, err := d.Collect(ctx, testInvoke)
+		if err != nil {
+			t.Fatalf("Collect after cleanup failure: %v", err)
+		}
+		collected = got
+	}
+
+	var warns []captureRecord
+	for _, rec := range handler.snapshot() {
+		if rec.level == slog.LevelWarn && rec.msg == "terminal seed cleanup failed" {
+			warns = append(warns, rec)
+		}
+	}
+	if len(warns) != 1 {
+		t.Fatalf("cleanup-failure warn records = %d, want exactly one across repeated terminal reads", len(warns))
+	}
+	w := warns[0]
+	if w.attrs["invocation"] != string(testInvoke) || w.attrs["run"] != runID {
+		t.Errorf("warn attrs = %#v, want invocation %q run %q", w.attrs, testInvoke, runID)
+	}
+	if !strings.Contains(w.attrs["error"], runID) {
+		t.Errorf("warn error %q does not name the root-relative target %q", w.attrs["error"], runID)
+	}
+	// The undeletable target must be reported root-relative, not joined onto the
+	// mutable d.seedRoot pathname: a renamed-and-symlinked seed root would make
+	// the joined path resolve to an unrelated outside checkout and misdirect
+	// remediation, though the fd-pinned seedFS deleted the real tree. os.Root's
+	// own error is already root-relative, so a leaked d.seedRoot can only come
+	// from the report itself.
+	if strings.Contains(w.attrs["error"], d.seedRoot) {
+		t.Errorf("warn error %q leaks the mutable seed-root pathname %q; report the root-relative target", w.attrs["error"], d.seedRoot)
+	}
+
+	// The cleanup failure must not lose the outcome: the terminal result is
+	// still durable and collectable.
+	if collected.InvocationID != result.InvocationID ||
+		collected.Status != result.Status ||
+		collected.Summary != result.Summary {
+		t.Fatalf("collected = %#v, want %#v", collected, result)
+	}
+}
+
+// TestTerminalSeedCleanupSilentAfterDriverClose proves the reporting boundary
+// treats a closed seed root as a benign shutdown race, not an undeletable
+// checkout: an in-flight terminal Inspect/Collect that reaches cleanup after
+// Close must not emit a false failure warning (the pre-report code discarded
+// this error). Root-independent: it forces the closed-driver sentinel
+// directly rather than relying on filesystem permissions.
+func TestTerminalSeedCleanupSilentAfterDriverClose(t *testing.T) {
+	t.Parallel()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	handler := &captureHandler{}
+	d.logger = slog.New(handler)
+
+	if err := d.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	in := intent{InvocationID: testInvoke, Phase: phaseCommitted, RunID: RunIDFor(testInvoke)}
+	if err := d.cleanupTerminalSeed(in); !errors.Is(err, errSeedCleanupAfterClose) {
+		t.Fatalf("cleanup after close = %v, want errSeedCleanupAfterClose", err)
+	}
+
+	d.reportTerminalSeedCleanup(in)
+	for _, rec := range handler.snapshot() {
+		if rec.level == slog.LevelWarn && rec.msg == "terminal seed cleanup failed" {
+			t.Fatalf("closed-driver cleanup emitted a false failure warning: %#v", rec.attrs)
+		}
+	}
+}
+
+// TestTerminalSeedCleanupWarnsPerFailingPath proves the dedup is keyed by the
+// failing error, not the invocation. Cleanup stops at the first undeletable
+// name, so once an operator repairs it the sibling target becomes the new
+// blocker: its distinct failure must be reported, not suppressed as an
+// already-warned invocation. Permission-based, so it skips as root.
+func TestTerminalSeedCleanupWarnsPerFailingPath(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("permission-based cleanup-failure fixture is ineffective as root")
+	}
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	handler := &captureHandler{}
+	d.logger = slog.New(handler)
+
+	runID := RunIDFor(testInvoke)
+	seed := filepath.Join(d.seedRoot, runID)
+	importSeed := filepath.Join(d.seedRoot, runID+"-import")
+	for _, dir := range []string{seed, importSeed} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "obstacle"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, 0o500); err != nil { //nolint:gosec // fixture makes the seed dir read-only so removal fails
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(seed, 0o700)       //nolint:gosec // restore owner-only perms for temp-dir teardown
+		_ = os.Chmod(importSeed, 0o700) //nolint:gosec // restore owner-only perms for temp-dir teardown
+	})
+
+	in := intent{InvocationID: testInvoke, Phase: phaseCommitted, RunID: runID}
+
+	// Both undeletable: cleanup stops at the primary seed and warns once, then
+	// suppresses the identical repeat.
+	d.reportTerminalSeedCleanup(in)
+	d.reportTerminalSeedCleanup(in)
+
+	// The operator repairs the primary seed; the next attempt removes it and
+	// then fails on the sibling import seed, a distinct error that must surface
+	// rather than be hidden by the earlier warning.
+	if err := os.Chmod(seed, 0o700); err != nil { //nolint:gosec // repair the primary seed so cleanup advances to the sibling
+		t.Fatal(err)
+	}
+	d.reportTerminalSeedCleanup(in)
+	d.reportTerminalSeedCleanup(in)
+
+	var warns []captureRecord
+	for _, rec := range handler.snapshot() {
+		if rec.level == slog.LevelWarn && rec.msg == "terminal seed cleanup failed" {
+			warns = append(warns, rec)
+		}
+	}
+	if len(warns) != 2 {
+		t.Fatalf("cleanup-failure warn records = %d, want two (one per distinct failing checkout)", len(warns))
+	}
+	if strings.Contains(warns[0].attrs["error"], "-import") {
+		t.Errorf("first warning should name the primary seed, got %q", warns[0].attrs["error"])
+	}
+	// Reported root-relative (runID+"-import"), not the absolute importSeed path,
+	// so a swapped seed-root symlink cannot redirect the named target.
+	importName := runID + "-import"
+	if !strings.Contains(warns[1].attrs["error"], importName) {
+		t.Errorf("second warning should name the sibling import target %q, got %q", importName, warns[1].attrs["error"])
+	}
+	if strings.Contains(warns[1].attrs["error"], d.seedRoot) {
+		t.Errorf("second warning leaks the mutable seed-root pathname %q: %q", d.seedRoot, warns[1].attrs["error"])
+	}
 }
 
 func waitSessionDone(t *testing.T, d *Driver, id domain.InvocationID) {
