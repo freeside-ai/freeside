@@ -454,7 +454,7 @@ func inspectBackupDB(
 		case err != nil:
 			return backupDatabaseSnapshot{}, fmt.Errorf("checkpoint marker: %w", err)
 		default:
-			snapshot.generatedAt, err = time.Parse(time.RFC3339Nano, generatedAt)
+			snapshot.generatedAt, err = parseTime(generatedAt)
 			if err != nil {
 				return backupDatabaseSnapshot{}, fmt.Errorf("checkpoint marker time: %w", err)
 			}
@@ -470,7 +470,7 @@ func inspectBackupDB(
 		case err != nil:
 			return backupDatabaseSnapshot{}, fmt.Errorf("restore marker: %w", err)
 		default:
-			snapshot.restoredAt, err = time.Parse(time.RFC3339Nano, restoredAt)
+			snapshot.restoredAt, err = parseTime(restoredAt)
 			if err != nil {
 				return backupDatabaseSnapshot{}, fmt.Errorf("restore marker time: %w", err)
 			}

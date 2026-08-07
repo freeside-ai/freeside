@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -108,7 +107,7 @@ func (tx *ReadTx) LatestUnattendedOperationTransition(
 		return domain.UnattendedOperationTransition{}, false,
 			fmt.Errorf("latest unattended operation transition: %w", err)
 	}
-	at, err := time.Parse(time.RFC3339Nano, occurredAt)
+	at, err := parseTime(occurredAt)
 	if err != nil {
 		return domain.UnattendedOperationTransition{}, false,
 			fmt.Errorf("latest unattended operation transition occurred_at %q: %w", occurredAt, err)
@@ -116,7 +115,7 @@ func (tx *ReadTx) LatestUnattendedOperationTransition(
 	transition := domain.UnattendedOperationTransition{
 		State:      domain.UnattendedOperationState(state),
 		Reason:     reason,
-		OccurredAt: at.UTC(),
+		OccurredAt: at,
 	}
 	if commandID.Valid {
 		transition.CommandID = &commandID.String

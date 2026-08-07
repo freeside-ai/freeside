@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -127,7 +126,7 @@ func (tx *ReadTx) LatestReviewRecoveryTransition(
 		return domain.ReviewRecoveryTransition{}, false,
 			fmt.Errorf("latest review recovery transition %q: %w", runID, err)
 	}
-	at, err := time.Parse(time.RFC3339Nano, occurredAt)
+	at, err := parseTime(occurredAt)
 	if err != nil {
 		return domain.ReviewRecoveryTransition{}, false,
 			fmt.Errorf("latest review recovery transition %q occurred_at %q: %w",
@@ -136,7 +135,7 @@ func (tx *ReadTx) LatestReviewRecoveryTransition(
 	transition := domain.ReviewRecoveryTransition{
 		RunID: domain.RunID(storedRunID), InvocationID: domain.InvocationID(invocationID),
 		Round: round, BaseSHA: baseSHA, HeadSHA: headSHA,
-		FailureDigest: domain.Digest(failureDigest), Reason: reason, OccurredAt: at.UTC(),
+		FailureDigest: domain.Digest(failureDigest), Reason: reason, OccurredAt: at,
 	}
 	if commandID.Valid {
 		transition.CommandID = &commandID.String

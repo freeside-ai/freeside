@@ -131,11 +131,11 @@ func (tx *ReadTx) ListMintAudits(ctx context.Context) ([]MintAudit, error) {
 			&expiresAt); err != nil {
 			return nil, fmt.Errorf("list mint audits: %w", err)
 		}
-		rec.MintedAt, err = time.Parse(time.RFC3339Nano, mintedAt)
+		rec.MintedAt, err = parseTime(mintedAt)
 		if err != nil {
 			return nil, fmt.Errorf("list mint audits: stored minted_at invalid: %w", err)
 		}
-		rec.ExpiresAt, err = time.Parse(time.RFC3339Nano, expiresAt)
+		rec.ExpiresAt, err = parseTime(expiresAt)
 		if err != nil {
 			return nil, fmt.Errorf("list mint audits: stored expires_at invalid: %w", err)
 		}

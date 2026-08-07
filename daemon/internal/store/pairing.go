@@ -230,11 +230,25 @@ func formatTimePtr(t *time.Time) any {
 	return formatTime(*t)
 }
 
+// parseTime reads a stored RFC3339Nano column (the shape formatTime writes),
+// returning the instant normalized to UTC so a caller never re-normalizes and
+// an unparsable column is reported with one uniform shape. Callers add their
+// own context to the error.
+func parseTime(column string) (time.Time, error) {
+	t, err := time.Parse(time.RFC3339Nano, column)
+	if err != nil {
+		// time.Parse already quotes the offending value, so the prefix stays
+		// value-free to avoid duplicating it under the caller's own context.
+		return time.Time{}, fmt.Errorf("parse RFC3339Nano timestamp: %w", err)
+	}
+	return t.UTC(), nil
+}
+
 // timeColumnEqual reports whether a stored RFC3339Nano column names the same
 // instant as the body's field; an unparsable column is inconsistent, never
 // equal.
 func timeColumnEqual(column string, want time.Time) bool {
-	parsed, err := time.Parse(time.RFC3339Nano, column)
+	parsed, err := parseTime(column)
 	if err != nil {
 		return false
 	}

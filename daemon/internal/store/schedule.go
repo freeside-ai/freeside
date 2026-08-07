@@ -433,18 +433,17 @@ func scanOccurrence(sc scanner) (domain.ScheduleOccurrence, error) {
 			EarliestMissedAt:  time.Unix(0, gapEarliest.Int64).UTC(),
 		}
 	}
-	created, err := time.Parse(time.RFC3339Nano, createdAt)
+	created, err := parseTime(createdAt)
 	if err != nil {
 		return domain.ScheduleOccurrence{}, fmt.Errorf("stored created_at invalid: %w", err)
 	}
-	occ.CreatedAt = created.UTC()
+	occ.CreatedAt = created
 	if consumedAt.Valid {
-		consumed, err := time.Parse(time.RFC3339Nano, consumedAt.String)
+		consumed, err := parseTime(consumedAt.String)
 		if err != nil {
 			return domain.ScheduleOccurrence{}, fmt.Errorf("stored consumed_at invalid: %w", err)
 		}
-		consumedUTC := consumed.UTC()
-		occ.ConsumedAt = &consumedUTC
+		occ.ConsumedAt = &consumed
 	}
 	if outcome.Valid {
 		out := domain.ScheduleOccurrenceOutcome(outcome.String)
