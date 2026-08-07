@@ -1,25 +1,34 @@
 {
-  "id": "item-2",
+  "id": "item-review-recovery",
   "project_id": "proj-1",
   "subject": {
     "subject_type": "run",
     "subject_id": "run-1",
     "run_id": "run-1"
   },
-  "type": "blocked",
-  "priority": "normal",
-  "reason": "waiting on an external dependency",
-  "requested_decision": [],
-  "evidence_snapshot": [],
-  "agent_claims": [],
+  "type": "review_contradiction",
+  "priority": "high",
+  "reason": "review contradicted its execution contract",
+  "requested_decision": [
+    "recover_review"
+  ],
+  "evidence_snapshot": null,
+  "agent_claims": null,
   "artifact_digests": [],
-  "pr_head_sha": "",
+  "pr_head_sha": "cafebabe",
   "commit_plan_notice": null,
   "base_freshness": null,
   "readiness_invalidation": null,
-  "review_recovery_binding": null,
+  "review_recovery_binding": {
+    "run_id": "run-1",
+    "invocation_id": "review-run-1-2",
+    "round": 2,
+    "base_sha": "beefcafe",
+    "head_sha": "cafebabe",
+    "failure_digest": "sha256:review-failure-body"
+  },
   "item_version": 1,
-  "interruption_class": "planned_gate",
+  "interruption_class": "exceptional",
   "conversation_id": null,
   "timing": {
     "delivery_count": 0,

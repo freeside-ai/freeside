@@ -418,6 +418,10 @@ type AttentionItem struct {
 	// superseded ready item; nil renders explicit null. Daemon-set in the
 	// superseding transaction, there is no client input path.
 	ReadinessInvalidation *ReadinessInvalidation `json:"readiness_invalidation"`
+	// ReviewRecoveryBinding identifies the exact persisted contradiction the
+	// item offers to recover. It is present only on review_contradiction items
+	// and is immutable across the item's lifecycle.
+	ReviewRecoveryBinding *ReviewRecoveryBinding `json:"review_recovery_binding"`
 	ItemVersion           int                    `json:"item_version"`
 	InterruptionClass     InterruptionClass      `json:"interruption_class"`
 	ConversationID        *ConversationID        `json:"conversation_id"`
@@ -449,21 +453,22 @@ type AttentionItem struct {
 // input path that sets either, so a caller cannot bind a digest it did not
 // render (plan §4).
 type AttentionItemInput struct {
-	ID                ItemID
-	ProjectID         ProjectID
-	Subject           Subject
-	Type              AttentionType
-	Priority          Priority
-	Reason            string
-	RequestedDecision []Action
-	EvidenceSnapshot  []Artifact
-	AgentClaims       []AgentClaim
-	PRHeadSHA         string
-	CommitPlanNotice  *CommitPlanNoticeReason
-	ItemVersion       int
-	InterruptionClass InterruptionClass
-	ConversationID    *ConversationID
-	ExpiresWhen       *time.Time
+	ID                    ItemID
+	ProjectID             ProjectID
+	Subject               Subject
+	Type                  AttentionType
+	Priority              Priority
+	Reason                string
+	RequestedDecision     []Action
+	EvidenceSnapshot      []Artifact
+	AgentClaims           []AgentClaim
+	PRHeadSHA             string
+	CommitPlanNotice      *CommitPlanNoticeReason
+	ReviewRecoveryBinding *ReviewRecoveryBinding
+	ItemVersion           int
+	InterruptionClass     InterruptionClass
+	ConversationID        *ConversationID
+	ExpiresWhen           *time.Time
 	// BlockingSupersession may be set only by daemon-internal creators of
 	// system_health items; there is no client input path to it.
 	BlockingSupersession *BlockingSupersession
@@ -484,23 +489,24 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 	subject := in.Subject
 	subject.RunID = clonePtr(in.Subject.RunID)
 	item := AttentionItem{
-		ID:                   in.ID,
-		ProjectID:            in.ProjectID,
-		Subject:              subject,
-		Type:                 in.Type,
-		Priority:             in.Priority,
-		Reason:               in.Reason,
-		RequestedDecision:    slices.Clone(in.RequestedDecision),
-		EvidenceSnapshot:     cloneArtifacts(in.EvidenceSnapshot),
-		AgentClaims:          cloneAgentClaims(in.AgentClaims),
-		PRHeadSHA:            in.PRHeadSHA,
-		CommitPlanNotice:     clonePtr(in.CommitPlanNotice),
-		ItemVersion:          in.ItemVersion,
-		InterruptionClass:    in.InterruptionClass,
-		ConversationID:       clonePtr(in.ConversationID),
-		ExpiresWhen:          clonePtr(in.ExpiresWhen),
-		BlockingSupersession: clonePtr(in.BlockingSupersession),
-		Status:               in.Status,
+		ID:                    in.ID,
+		ProjectID:             in.ProjectID,
+		Subject:               subject,
+		Type:                  in.Type,
+		Priority:              in.Priority,
+		Reason:                in.Reason,
+		RequestedDecision:     slices.Clone(in.RequestedDecision),
+		EvidenceSnapshot:      cloneArtifacts(in.EvidenceSnapshot),
+		AgentClaims:           cloneAgentClaims(in.AgentClaims),
+		PRHeadSHA:             in.PRHeadSHA,
+		CommitPlanNotice:      clonePtr(in.CommitPlanNotice),
+		ReviewRecoveryBinding: clonePtr(in.ReviewRecoveryBinding),
+		ItemVersion:           in.ItemVersion,
+		InterruptionClass:     in.InterruptionClass,
+		ConversationID:        clonePtr(in.ConversationID),
+		ExpiresWhen:           clonePtr(in.ExpiresWhen),
+		BlockingSupersession:  clonePtr(in.BlockingSupersession),
+		Status:                in.Status,
 	}
 	// Derive the binding set from the rendered evidence and claims, so the
 	// approval binds exactly what was shown (plan §3.1, §4). Validate re-derives
@@ -565,6 +571,26 @@ func (i AttentionItem) Validate() error {
 	}
 	if i.CommitPlanNotice != nil && !i.CommitPlanNotice.valid() {
 		return fmt.Errorf("item %s commit_plan_notice %q: %w", i.ID, *i.CommitPlanNotice, ErrInvalidCommitPlanNotice)
+	}
+	if i.ReviewRecoveryBinding == nil {
+		if i.Type == AttentionReviewContradiction {
+			return fmt.Errorf("item %s: %w", i.ID, ErrReviewRecoveryBindingMissing)
+		}
+	} else {
+		if i.Type != AttentionReviewContradiction {
+			return fmt.Errorf("item %s type %q carries a review recovery binding: %w",
+				i.ID, i.Type, ErrReviewRecoveryBindingOutsideItem)
+		}
+		if err := i.ReviewRecoveryBinding.Validate(); err != nil {
+			return fmt.Errorf("item %s: %w", i.ID, err)
+		}
+		if i.Subject.Type != SubjectRun || i.Subject.RunID == nil ||
+			*i.Subject.RunID != i.ReviewRecoveryBinding.RunID ||
+			i.Subject.ID != SubjectID(i.ReviewRecoveryBinding.RunID) ||
+			i.PRHeadSHA != i.ReviewRecoveryBinding.HeadSHA {
+			return fmt.Errorf("item %s recovery binding disagrees with its subject or head: %w",
+				i.ID, ErrReviewRecoveryBindingMismatch)
+		}
 	}
 	if i.BlockingSupersession != nil {
 		// Blocking is a system_health semantic (plan §4): only that type's

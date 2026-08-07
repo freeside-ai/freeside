@@ -223,7 +223,7 @@ and sampled decision audits.
 system, subject_id, run_id?}`, `type`, `priority`, `reason`,
 `requested_decision`, `evidence_snapshot`, `agent_claims`, `artifact_digests`,
 `pr_head_sha`, `item_version`, `interruption_class`, `conversation_id?`, derived
-timing aggregates, `expires_when`, and `status`.
+timing aggregates, `expires_when`, `review_recovery_binding?`, and `status`.
 
 `evidence_snapshot` contains engine facts and only verifier or daemon artifacts
 produced under an approved recipe (Section 5.15). Agent claims are labeled.
@@ -248,6 +248,7 @@ Approval is not a universal action.
 | `spec_approval` | Approve, request changes, discuss, or stop. Render the full specification. A revision shows the diff from the last reviewed version, prior comments, and claimed addressals. |
 | `review_diminishing_returns` | Finish now; apply the current batch and finish; continue under specified policy; or turn a recurring preference into a project-policy proposal PR. It never mutates policy directly. |
 | `review_dispute` | Adjudicate the finding, discuss, or stop. |
+| `review_contradiction` | Recover only the exact persisted contradiction named by the card, or leave it parked. The card renders the bound run, invocation, round, base SHA, head SHA, and immutable failure-body digest; recovery preserves the original failure evidence. |
 | `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. |
 | `agent_question` | Answer and retry, answer without retry, or stop. |
 | `publish_blocked` | Rerun trust evaluation, choose an approved alternate publication profile, inspect the trust failure, or stop. |

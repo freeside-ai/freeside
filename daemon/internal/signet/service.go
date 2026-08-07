@@ -208,6 +208,10 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 				if err := s.applyResumeUnattended(ctx, tx, command, item, status); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
+			case outcomeRecoversReview:
+				if err := s.applyReviewRecovery(ctx, tx, command, item, status); err != nil {
+					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+				}
 			case outcomeRecords, outcomePending:
 				// Records: the command record is the whole effect. Pending:
 				// unreachable, rejected above before PutCommand.
@@ -267,6 +271,9 @@ const (
 	// accepting transaction (applyResumeUnattended). Only this operator path
 	// writes "resumed"; a restart alone never does.
 	outcomeResumesUnattended
+	// outcomeRecoversReview: conclude the contradiction item and append the
+	// exact-row-bound recovery transition in the accepting transaction.
+	outcomeRecoversReview
 )
 
 // actionOutcome maps an action to what its acceptance does, following plan
@@ -279,6 +286,8 @@ const (
 // diagnostic clears. Stop/resume of unattended operation conclude the decided
 // item and append the durable operating transition in the accepting
 // transaction (issue #319; applyStopUnattended, applyResumeUnattended).
+// Recover review similarly concludes its carrier and appends the command-backed
+// exact-row transition (issue #580; applyReviewRecovery).
 // Discuss runs the conversation transaction (plan §5.14
 // discuss semantics; applyDiscuss). Pending actions are rejected before any
 // transaction because their accepted effect cannot be represented yet: snooze
@@ -305,6 +314,8 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		return domain.StatusResolved, outcomeStopsUnattended
 	case domain.ActionResumeUnattended:
 		return domain.StatusResolved, outcomeResumesUnattended
+	case domain.ActionRecoverReview:
+		return domain.StatusResolved, outcomeRecoversReview
 	case domain.ActionOpenPR, domain.ActionMarkSeen, domain.ActionAcknowledge,
 		domain.ActionInspectTrustFailure, domain.ActionRunDoctor:
 		return "", outcomeRecords

@@ -1,0 +1,11 @@
+{
+  "run_id": "run-1",
+  "invocation_id": "review-run-1-2",
+  "round": 2,
+  "base_sha": "beefcafe",
+  "head_sha": "cafebabe",
+  "failure_digest": "sha256:review-failure-body",
+  "command_id": "command-recover-review-1",
+  "reason": "operator authorized recovery of the displayed contradiction",
+  "occurred_at": "2026-01-02T03:04:05Z"
+}

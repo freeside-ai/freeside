@@ -14,7 +14,7 @@ import (
 // validItemInput is a minimal, valid AttentionItemInput of the given type,
 // used as the base a test mutates one field of.
 func validItemInput(typ domain.AttentionType) domain.AttentionItemInput {
-	return domain.AttentionItemInput{
+	in := domain.AttentionItemInput{
 		ID:        "item-1",
 		ProjectID: "proj-1",
 		Subject: domain.Subject{
@@ -29,6 +29,17 @@ func validItemInput(typ domain.AttentionType) domain.AttentionItemInput {
 		InterruptionClass: domain.InterruptionPlannedGate,
 		Status:            domain.StatusOpen,
 	}
+	if typ == domain.AttentionReviewContradiction {
+		runID := domain.RunID("run-1")
+		in.Subject.RunID = &runID
+		in.PRHeadSHA = "head"
+		in.RequestedDecision = []domain.Action{domain.ActionRecoverReview}
+		in.ReviewRecoveryBinding = &domain.ReviewRecoveryBinding{
+			RunID: runID, InvocationID: "review-1", Round: 1,
+			BaseSHA: "base", HeadSHA: "head", FailureDigest: "sha256:failure",
+		}
+	}
+	return in
 }
 
 // textClaims wraps one otherwise-valid text claim around the given body;
@@ -44,12 +55,12 @@ func textClaims(text domain.ClaimText, digest domain.Digest) []domain.AgentClaim
 	}}
 }
 
-// TestNewAttentionItemTypes is acceptance criterion 1: each of the ten Phase 1
+// TestNewAttentionItemTypes is acceptance criterion 1: each Phase 1
 // attention types constructs a valid item; an unknown type and an invalid
 // subject type are rejected.
 func TestNewAttentionItemTypes(t *testing.T) {
-	if len(domain.AllAttentionTypes) != 10 {
-		t.Fatalf("expected ten Phase 1 attention types, got %d", len(domain.AllAttentionTypes))
+	if len(domain.AllAttentionTypes) != 11 {
+		t.Fatalf("expected eleven Phase 1 attention types, got %d", len(domain.AllAttentionTypes))
 	}
 	for _, typ := range domain.AllAttentionTypes {
 		t.Run(string(typ), func(t *testing.T) {

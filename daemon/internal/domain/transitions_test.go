@@ -49,6 +49,16 @@ func TestValidateRunTransition(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("review recovery binding changes", func(t *testing.T) {
+		oldRecovery := mustItem(t, validItemInput(domain.AttentionReviewContradiction))
+		updated := validItemInput(domain.AttentionReviewContradiction)
+		updated.ItemVersion = 2
+		updated.ReviewRecoveryBinding.Round = 2
+		if err := domain.ValidateAttentionItemTransition(oldRecovery, mustItem(t, updated)); !errors.Is(err, domain.ErrImmutableTransition) {
+			t.Fatalf("ValidateAttentionItemTransition() = %v, want ErrImmutableTransition", err)
+		}
+	})
 }
 
 // appendedRun is validRun with one appended attempt on its stage: a legal

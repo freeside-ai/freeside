@@ -297,6 +297,20 @@ func productionReviewItemID(runID domain.RunID, round int) domain.ItemID {
 	return domain.ItemID(fmt.Sprintf("production-review-%s-%d", runID, round))
 }
 
+func productionReviewHardLimitItemID(
+	runID domain.RunID, hardLimit int, recoveredContradiction bool,
+) domain.ItemID {
+	if recoveredContradiction {
+		// This namespace cannot collide with productionReviewItemID for any
+		// legal RunID: their fixed prefixes diverge before the run coordinate.
+		return domain.ItemID(fmt.Sprintf(
+			"production-recovered-review-exhaustion-%s-%d", runID, hardLimit))
+	}
+	// Preserve the pre-recovery identity for every existing exhaustion path,
+	// so an upgrade after its item write converges on the same durable row.
+	return productionReviewItemID(runID, hardLimit)
+}
+
 // hasQueuedCompletion reports whether the durable publication task has
 // already accepted ownership of this completed invocation. Once that task is
 // stored, reconciliation must not depend on the producing driver's private
@@ -1701,6 +1715,28 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			return productionReviewPending, err
 		}
 	}
+	recoveredContradiction := false
+	if latestFailure != nil && latestFailure.Class == domain.ReviewFailureContradiction &&
+		(latestRecord == nil || latestFailure.Round > latestRecord.Round) {
+		if latestFailure.BaseSHA != binding.admission.Base.BaseSHA ||
+			latestFailure.HeadSHA != task.HeadSHA {
+			return productionReviewPending, fmt.Errorf(
+				"latest review failure is bound to a different candidate: %w",
+				domain.ErrParentKeyMismatch,
+			)
+		}
+		recovered, err := w.reviewContradictionRecovered(ctx, *latestFailure)
+		if err != nil {
+			return productionReviewPending, err
+		}
+		if !recovered {
+			if err := w.putReviewContradictionAttention(ctx, task, *latestFailure); err != nil {
+				return productionReviewPending, err
+			}
+			return productionReviewPending, nil
+		}
+		recoveredContradiction = true
+	}
 	if binding.profile.Review.ConfigDigest != w.reviewConfigurationDigest {
 		if latestFailure != nil && latestFailure.Class == domain.ReviewFailureConfiguration &&
 			(latestRecord == nil || latestFailure.Round > latestRecord.Round) {
@@ -1812,12 +1848,6 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 				w.reviewRetryAfter[task.RunID] = retryAt
 			}
 		}
-		if latestFailure.Class == domain.ReviewFailureContradiction {
-			return productionReviewPending, fmt.Errorf(
-				"review invocation %q contradicted its contract: %s",
-				latestFailure.InvocationID, latestFailure.Reason,
-			)
-		}
 	}
 	hardLimit, err := w.reviewHardRoundLimit(ctx, task.RunID)
 	if err != nil {
@@ -1828,9 +1858,10 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			RunID: task.RunID, Round: hardLimit,
 			BaseSHA: binding.admission.Base.BaseSHA, HeadSHA: task.HeadSHA,
 		}
-		if err := w.putReviewAttention(ctx, task, record,
+		if err := w.putReviewAttentionWithID(ctx, task, record,
 			fmt.Sprintf("Review exhausted the resolved hard limit of %d rounds.", hardLimit),
 			domain.AttentionReviewDiminishing,
+			productionReviewHardLimitItemID(task.RunID, hardLimit, recoveredContradiction),
 		); err != nil {
 			return productionReviewPending, err
 		}
@@ -2268,11 +2299,102 @@ func (w *productionPublicationWorkflow) recordReviewSourceFailure(
 		}
 		return productionReviewEscalated, nil
 	case domain.ReviewFailureContradiction:
-		return productionReviewPending, fmt.Errorf("review invocation %q contradicted its contract: %w",
-			id, sourceErr)
+		if err := w.putReviewContradictionAttention(ctx, task, failure); err != nil {
+			return productionReviewPending, err
+		}
+		return productionReviewPending, nil
 	}
 	return productionReviewPending, fmt.Errorf("review invocation %q has invalid failure class: %w",
 		id, domain.ErrInvalidReviewFailureClass)
+}
+
+// reviewContradictionRecovered reports whether the latest command-backed
+// transition for this run matches every coordinate and the exact persisted
+// body digest of failure. An older recovery deliberately does not authorize a
+// later contradiction.
+func (w *productionPublicationWorkflow) reviewContradictionRecovered(
+	ctx context.Context, failure domain.ReviewFailure,
+) (bool, error) {
+	var recovered bool
+	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		digest, err := tx.ReviewFailureBodyDigest(ctx, failure.InvocationID)
+		if err != nil {
+			return err
+		}
+		transition, found, err := tx.LatestReviewRecoveryTransition(ctx, failure.RunID)
+		if err != nil {
+			return err
+		}
+		recovered = found && transition.Binding().Matches(failure, digest)
+		return nil
+	})
+	return recovered, err
+}
+
+// putReviewContradictionAttention exposes one persisted contradiction without
+// terminalizing its publication task. The deterministic identity plus the
+// preflight below keeps subsequent ticks from rewriting the same open item or
+// consuming a new sync revision; any divergent row fails closed.
+func (w *productionPublicationWorkflow) putReviewContradictionAttention(
+	ctx context.Context, task productionPublicationTask, failure domain.ReviewFailure,
+) error {
+	var digest domain.Digest
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		digest, err = tx.ReviewFailureBodyDigest(ctx, failure.InvocationID)
+		return err
+	}); err != nil {
+		return err
+	}
+	binding := domain.ReviewRecoveryBinding{
+		RunID: failure.RunID, InvocationID: failure.InvocationID, Round: failure.Round,
+		BaseSHA: failure.BaseSHA, HeadSHA: failure.HeadSHA, FailureDigest: digest,
+	}
+	runID := task.RunID
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: productionReviewItemID(task.RunID, failure.Round), ProjectID: task.ProjectID,
+		Subject: domain.Subject{
+			Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID,
+		},
+		Type: domain.AttentionReviewContradiction, Priority: domain.PriorityHigh,
+		Reason:            fmt.Sprintf("Codex review contradicted its execution contract: %s", failure.Reason),
+		RequestedDecision: []domain.Action{domain.ActionRecoverReview},
+		PRHeadSHA:         failure.HeadSHA, ReviewRecoveryBinding: &binding,
+		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+		Status: domain.StatusOpen,
+	}, w.approvedRecipes)
+	if err != nil {
+		return err
+	}
+	var existing *domain.AttentionItem
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.GetAttentionItem(ctx, item.ID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		existing = &got
+		return nil
+	}); err != nil {
+		return err
+	}
+	if existing != nil {
+		// Delivery receipts legitimately advance the item's version and derived
+		// timing while it remains parked. Ignore only those two mutable telemetry
+		// fields; every identity, presentation, action, and recovery coordinate
+		// must still match the persisted contradiction exactly.
+		comparable := *existing
+		comparable.ItemVersion = item.ItemVersion
+		comparable.Timing = item.Timing
+		if !reflect.DeepEqual(comparable, item) {
+			return fmt.Errorf("review contradiction item %q diverges from failure %q: %w",
+				item.ID, failure.InvocationID, domain.ErrReviewRecoveryBindingMismatch)
+		}
+		return nil
+	}
+	return w.attention.PutItem(ctx, item)
 }
 
 func (w *productionPublicationWorkflow) putReviewAttention(
@@ -2281,6 +2403,20 @@ func (w *productionPublicationWorkflow) putReviewAttention(
 	record domain.ReviewRecord,
 	reason string,
 	itemType domain.AttentionType,
+) error {
+	return w.putReviewAttentionWithID(
+		ctx, task, record, reason, itemType,
+		productionReviewItemID(task.RunID, record.Round),
+	)
+}
+
+func (w *productionPublicationWorkflow) putReviewAttentionWithID(
+	ctx context.Context,
+	task productionPublicationTask,
+	record domain.ReviewRecord,
+	reason string,
+	itemType domain.AttentionType,
+	itemID domain.ItemID,
 ) error {
 	runID := task.RunID
 	// Review escalation completes the publication task before presenting this
@@ -2291,7 +2427,7 @@ func (w *productionPublicationWorkflow) putReviewAttention(
 		actions = []domain.Action{domain.ActionDiscuss, domain.ActionStop}
 	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: productionReviewItemID(task.RunID, record.Round), ProjectID: task.ProjectID,
+		ID: itemID, ProjectID: task.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID},
 		Type:    itemType, Priority: domain.PriorityNormal, Reason: reason,
 		RequestedDecision: actions,

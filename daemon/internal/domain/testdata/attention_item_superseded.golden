@@ -20,6 +20,7 @@
   "commit_plan_notice": null,
   "base_freshness": null,
   "readiness_invalidation": null,
+  "review_recovery_binding": null,
   "item_version": 1,
   "interruption_class": "exceptional",
   "conversation_id": null,

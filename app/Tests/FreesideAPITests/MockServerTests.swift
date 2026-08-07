@@ -681,6 +681,28 @@ import Testing
         #expect(after.item.status == .resolved)
     }
 
+    @Test func reviewRecoveryResolvesItsExactCarrier() async throws {
+        // The command records the operator's decision against the binding
+        // rendered on this exact contradiction item. The daemon additionally
+        // appends the recovery transition; the mock exposes the carrier effect.
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        let before =
+            try await client
+            .getAttentionItem(path: .init(item_id: "item-review_contradiction")).ok.body.json
+        #expect(before.item.review_recovery_binding != nil)
+
+        let command = Self.command(
+            id: "cmd-recover-review", against: before, action: .recover_review)
+        _ = try await client.submitCommand(body: .json(command)).ok.body.json
+
+        let after =
+            try await client
+            .getAttentionItem(path: .init(item_id: "item-review_contradiction")).ok.body.json
+        #expect(after.item.status == .resolved)
+        #expect(after.item.review_recovery_binding == before.item.review_recovery_binding)
+    }
+
     @Test func pendingActionIsRejectedBeforeAnyEffect() async throws {
         // Mirrors signet actionOutcome: a pending action's transaction
         // belongs to a later unit, so acceptance rejects it rather than

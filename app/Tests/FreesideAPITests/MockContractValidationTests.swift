@@ -56,6 +56,41 @@ import Testing
                 == "artifact_digests is not the canonical union of rendered digests")
     }
 
+    @Test func reviewRecoveryBindingIsExactAndTypeScoped() {
+        let fixture = AttentionFixtures.fixture(type: .review_contradiction).item
+        #expect(MockContractValidation.itemValidityBreach(fixture) == nil)
+
+        var missing = fixture
+        missing.review_recovery_binding = nil
+        #expect(
+            MockContractValidation.itemValidityBreach(missing)
+                == "review_contradiction item lacks review_recovery_binding")
+
+        var wrongType = AttentionFixtures.fixture(type: .spec_approval).item
+        wrongType.review_recovery_binding = fixture.review_recovery_binding
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongType)
+                == "review_recovery_binding on a non-review_contradiction item")
+
+        var empty = fixture
+        empty.review_recovery_binding?.value1.invocation_id = ""
+        #expect(
+            MockContractValidation.itemValidityBreach(empty)
+                == "empty review_recovery_binding field")
+
+        var zeroRound = fixture
+        zeroRound.review_recovery_binding?.value1.round = 0
+        #expect(
+            MockContractValidation.itemValidityBreach(zeroRound)
+                == "non-positive review recovery round")
+
+        var wrongHead = fixture
+        wrongHead.pr_head_sha = "deadbeef"
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongHead)
+                == "review recovery binding disagrees with item subject or head")
+    }
+
     // The text-claim carrier (#217): the daemon recomputes the claim digest
     // over the content bytes, so the mirrored checks here are the empty
     // content, the byte cap, and the binding rule. The invalid-media-type

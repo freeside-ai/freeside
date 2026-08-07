@@ -130,6 +130,14 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 		return fmt.Errorf("attention item %s: blocking supersession would change: %w",
 			updated.ID, ErrImmutableTransition)
 	}
+	sameReviewRecovery, err := jsonEqual(old.ReviewRecoveryBinding, updated.ReviewRecoveryBinding)
+	if err != nil {
+		return fmt.Errorf("attention item %s: %w", updated.ID, err)
+	}
+	if !sameReviewRecovery {
+		return fmt.Errorf("attention item %s: review recovery binding would change: %w",
+			updated.ID, ErrImmutableTransition)
+	}
 	return nil
 }
 

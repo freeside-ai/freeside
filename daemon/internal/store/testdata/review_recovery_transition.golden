@@ -1,0 +1,11 @@
+{
+  "run_id": "run-recovery",
+  "invocation_id": "review-recovery-1",
+  "round": 1,
+  "base_sha": "base",
+  "head_sha": "head",
+  "failure_digest": "sha256:8ac78227269eea15f30ed20bdc8369a05b561f14c2807f97c88d7840215a30a1",
+  "command_id": "command-recover-review",
+  "reason": "operator authorized recovery",
+  "occurred_at": "2026-08-07T01:03:03Z"
+}

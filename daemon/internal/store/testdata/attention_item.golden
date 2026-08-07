@@ -72,6 +72,7 @@
   "commit_plan_notice": "present_but_not_honored",
   "base_freshness": null,
   "readiness_invalidation": null,
+  "review_recovery_binding": null,
   "item_version": 1,
   "interruption_class": "planned_gate",
   "conversation_id": "conv-1",

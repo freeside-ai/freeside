@@ -13,8 +13,8 @@ package domain
 // member to be handled; see computePublishEligible and
 // EligibleForEvidenceSnapshot in artifact.go for the pattern.
 
-// AttentionType is the kind of decision an AttentionItem asks for. The ten
-// Phase 1 types (plan §4), including the consolidated blocked item.
+// AttentionType is the kind of decision an AttentionItem asks for. The Phase 1
+// types include the consolidated blocked item and explicit review recovery.
 type AttentionType string
 
 const (
@@ -23,6 +23,7 @@ const (
 	AttentionAgentQuestion       AttentionType = "agent_question"
 	AttentionReviewDiminishing   AttentionType = "review_diminishing_returns"
 	AttentionReviewDispute       AttentionType = "review_dispute"
+	AttentionReviewContradiction AttentionType = "review_contradiction"
 	AttentionReadyForFinalReview AttentionType = "ready_for_final_review"
 	AttentionPublishBlocked      AttentionType = "publish_blocked"
 	AttentionRunProposal         AttentionType = "run_proposal"
@@ -38,6 +39,7 @@ var AllAttentionTypes = []AttentionType{
 	AttentionAgentQuestion,
 	AttentionReviewDiminishing,
 	AttentionReviewDispute,
+	AttentionReviewContradiction,
 	AttentionReadyForFinalReview,
 	AttentionPublishBlocked,
 	AttentionRunProposal,
@@ -48,7 +50,8 @@ var AllAttentionTypes = []AttentionType{
 func (t AttentionType) valid() bool {
 	switch t {
 	case AttentionSpecApproval, AttentionExecutionFailure, AttentionAgentQuestion,
-		AttentionReviewDiminishing, AttentionReviewDispute, AttentionReadyForFinalReview,
+		AttentionReviewDiminishing, AttentionReviewDispute, AttentionReviewContradiction,
+		AttentionReadyForFinalReview,
 		AttentionPublishBlocked, AttentionRunProposal, AttentionSystemHealth, AttentionBlocked:
 		return true
 	default:
@@ -322,6 +325,7 @@ const (
 	ActionRunDoctor            Action = "run_doctor"
 	ActionStopUnattended       Action = "stop_unattended"
 	ActionResumeUnattended     Action = "resume_unattended"
+	ActionRecoverReview        Action = "recover_review"
 )
 
 // AllActions lists every valid Action.
@@ -334,7 +338,7 @@ var AllActions = []Action{
 	ActionOpenPR, ActionReturnToAgent, ActionMarkSeen, ActionDismiss,
 	ActionStart, ActionStartWithChanges, ActionDecline, ActionSnooze,
 	ActionAcknowledge, ActionRunDoctor, ActionStopUnattended,
-	ActionResumeUnattended,
+	ActionResumeUnattended, ActionRecoverReview,
 }
 
 func (a Action) valid() bool {
@@ -347,7 +351,7 @@ func (a Action) valid() bool {
 		ActionOpenPR, ActionReturnToAgent, ActionMarkSeen, ActionDismiss,
 		ActionStart, ActionStartWithChanges, ActionDecline, ActionSnooze,
 		ActionAcknowledge, ActionRunDoctor, ActionStopUnattended,
-		ActionResumeUnattended:
+		ActionResumeUnattended, ActionRecoverReview:
 		return true
 	default:
 		return false

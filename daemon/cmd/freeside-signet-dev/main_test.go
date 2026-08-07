@@ -497,6 +497,7 @@ func TestControlPutItemPolicyBoundary(t *testing.T) {
 		{"empty set on non-blocked rejected", "spec_approval", []string{}, http.StatusBadRequest, "offers no requested decision"},
 		{"blocked accepts the empty set", "blocked", []string{}, http.StatusOK, ""},
 		{"blocked rejects any action", "blocked", []string{"stop"}, http.StatusBadRequest, "is not allowed for"},
+		{"review contradiction accepts recovery", "review_contradiction", []string{"recover_review"}, http.StatusOK, ""},
 		{"unknown type rejected", "not_a_real_type", []string{"stop"}, http.StatusBadRequest, "unknown attention type"},
 		{"unknown action rejected", "spec_approval", []string{"not_a_real_action"}, http.StatusBadRequest, "invalid action"},
 	}
