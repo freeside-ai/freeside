@@ -268,27 +268,10 @@ func (tx *ReadTx) ListDueSchedules(ctx context.Context, now time.Time) ([]DueSch
 	}
 	defer func() { _ = recurring.Close() }()
 	for recurring.Next() {
-		var (
-			id              string
-			projectID       string
-			kind            string
-			status          string
-			generation      int64
-			runID           sql.NullString
-			policy          sql.NullString
-			fireAt          sql.NullInt64
-			snap            Snapshot
-			body            []byte
-			timerGeneration int64
-			nextNominal     int64
-		)
-		if err := recurring.Scan(&id, &projectID, &kind, &status, &generation, &runID, &policy, &fireAt,
-			&snap.EntityVersion, &snap.AsOfRevision, &body, &timerGeneration, &nextNominal); err != nil {
-			return nil, fmt.Errorf("list due schedules: %w", err)
-		}
-		schedule, _, err := tx.scanScheduleSnapshot(fixedRow{
-			id, projectID, kind, status, generation, runID, policy, fireAt,
-			snap.EntityVersion, snap.AsOfRevision, body,
+		var timerGeneration, nextNominal int64
+		schedule, _, err := tx.scanScheduleSnapshot(joinedRow{
+			rows:  recurring,
+			extra: []any{&timerGeneration, &nextNominal},
 		})
 		if err != nil {
 			return nil, fmt.Errorf("list due schedules: %w", err)
@@ -307,39 +290,18 @@ func (tx *ReadTx) ListDueSchedules(ctx context.Context, now time.Time) ([]DueSch
 	return due, nil
 }
 
-// fixedRow adapts already-scanned schedule columns back onto the shared
-// reconstruction sequence, so the recurring due scan cannot skip a gate the
-// single Get runs.
-type fixedRow struct {
-	id            string
-	projectID     string
-	kind          string
-	status        string
-	generation    int64
-	runID         sql.NullString
-	policy        sql.NullString
-	fireAt        sql.NullInt64
-	entityVersion int64
-	asOfRevision  int64
-	body          []byte
+// joinedRow forwards Scan to the joined rows, appending the join's trailing
+// destinations, so the shared reconstruction sequence owns the schedule
+// columns' order and types for the joined read too. A future column-type
+// change surfaces as a sql.Rows.Scan error, never a panic.
+type joinedRow struct {
+	rows  *sql.Rows
+	extra []any
 }
 
-func (r fixedRow) Scan(dest ...any) error {
-	if len(dest) != 11 {
-		return fmt.Errorf("fixed schedule row scans 11 columns, got %d", len(dest))
-	}
-	*dest[0].(*string) = r.id
-	*dest[1].(*string) = r.projectID
-	*dest[2].(*string) = r.kind
-	*dest[3].(*string) = r.status
-	*dest[4].(*int64) = r.generation
-	*dest[5].(*sql.NullString) = r.runID
-	*dest[6].(*sql.NullString) = r.policy
-	*dest[7].(*sql.NullInt64) = r.fireAt
-	*dest[8].(*int64) = r.entityVersion
-	*dest[9].(*int64) = r.asOfRevision
-	*dest[10].(*[]byte) = r.body
-	return nil
+func (r joinedRow) Scan(dest ...any) error {
+	// append onto dest is safe: it is the callee's own variadic slice.
+	return r.rows.Scan(append(dest, r.extra...)...)
 }
 
 const setScheduleTimerSQL = `
