@@ -32,6 +32,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
+	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -866,6 +867,8 @@ func readTailscaleIPs() ([]netip.Addr, error) {
 	// The executable name and arguments are fixed; only the trusted supervisor
 	// controls the daemon's PATH.
 	cmd := osexec.CommandContext(ctx, "tailscale", "ip") //nolint:gosec // G204 has no untrusted command input.
+	procbound.Bind(cmd, procbound.DefaultWaitDelay)
+	defer procbound.Reap(cmd)
 	output, err := cmd.Output()
 	if err != nil {
 		if ctx.Err() != nil {

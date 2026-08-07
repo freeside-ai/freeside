@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 )
 
 // ErrGitTransport is the class sentinel for a failed git transport
@@ -309,7 +311,7 @@ func (r *netRunner) run(ctx context.Context, tok *InstallationToken, args ...str
 	cmd.Env = env
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &outBuf, &errBuf
-	if runErr := cmd.Run(); runErr != nil {
+	if runErr := procbound.Run(cmd, procbound.DefaultWaitDelay); runErr != nil {
 		return nil, nil, &TransportGitError{
 			Args:     args,
 			ExitCode: cmd.ProcessState.ExitCode(),
@@ -331,6 +333,7 @@ func (r *netRunner) runTo(ctx context.Context, stdout io.Writer, args ...string)
 	cmd := exec.CommandContext(ctx, r.gitPath, argv...) //nolint:gosec // G204: fixed transport argv from daemon-validated SHAs
 	cmd.Dir = r.dir
 	cmd.Env = r.env
+	procbound.Bind(cmd, procbound.DefaultWaitDelay)
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -344,6 +347,11 @@ func (r *netRunner) runTo(ctx context.Context, stdout io.Writer, args ...string)
 			Args: args, ExitCode: -1, Refusal: RefusalUnknown, Err: err,
 		}
 	}
+	// The copy below runs before Wait, so WaitDelay's timer has not
+	// started: only cancellation killing the whole group unblocks a read
+	// that git-remote-https is holding open. The reap runs after every
+	// exit below, each of which waits first.
+	defer procbound.Reap(cmd)
 	if _, copyErr := io.Copy(stdout, stdoutPipe); copyErr != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
@@ -386,6 +394,7 @@ func (r *netRunner) interact(
 	cmd := exec.CommandContext(ctx, r.gitPath, argv...) //nolint:gosec // G204: fixed plumbing argv; validated object IDs travel over stdin
 	cmd.Dir = r.dir
 	cmd.Env = r.env
+	procbound.Bind(cmd, procbound.DefaultWaitDelay)
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
 	stdin, err := cmd.StdinPipe()
@@ -399,6 +408,9 @@ func (r *netRunner) interact(
 	if err := cmd.Start(); err != nil {
 		return &TransportGitError{Args: args, ExitCode: -1, Refusal: RefusalUnknown, Err: err}
 	}
+	// As in runTo: the interaction reads before Wait, so the group kill on
+	// cancellation is what unblocks it. Every exit below waits first.
+	defer procbound.Reap(cmd)
 	interactionErr := interaction(stdin, stdout)
 	closeErr := stdin.Close()
 	if interactionErr != nil || closeErr != nil {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+
+	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 )
 
 const maxCommandOutputBytes = 1 << 20
@@ -37,7 +39,7 @@ func (execRunner) Run(ctx context.Context, spec commandSpec) (commandOutput, err
 	output := tailBuffer{max: maxCommandOutputBytes}
 	cmd.Stdout = &output
 	cmd.Stderr = &output
-	err := cmd.Run()
+	err := procbound.Run(cmd, procbound.DefaultWaitDelay)
 	result := commandOutput{bytes: output.bytes(), truncated: output.truncated}
 	if cmd.ProcessState != nil {
 		result.exited = true

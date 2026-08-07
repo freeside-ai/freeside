@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
@@ -237,9 +238,17 @@ func runVerificationCommand(
 	cmd := exec.CommandContext(ctx, path, args...) //nolint:gosec // executable resolved at construction; argv is trusted recipe/project-image data
 	output := &verificationOutput{max: maxOutput}
 	cmd.Stdout, cmd.Stderr = output, output
-	err := cmd.Run()
+	err := procbound.Run(cmd, procbound.DefaultWaitDelay)
 	result := verify.StepResult{Output: output.buf.Bytes(), Truncated: output.truncated}
 	if err == nil {
+		return result, nil
+	}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// The room's own classification (internal/verify/procroom.go): a
+		// container that exited cleanly while something still holds the
+		// output pipe is not a clean verification, so the step fails
+		// rather than letting a lingering descendant read as passed.
+		result.ExitCode = -1
 		return result, nil
 	}
 	var exit *exec.ExitError
@@ -272,12 +281,19 @@ func runRecipeReadCommand(
 	stderr := &verificationOutput{max: maxOutput}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	err := cmd.Run()
+	err := procbound.Run(cmd, procbound.DefaultWaitDelay)
 	if stderr.truncated {
 		return verify.StepResult{}, fmt.Errorf("recipe extraction diagnostics exceeded the %d-byte cap", maxOutput)
 	}
 	result := verify.StepResult{Output: stdout.buf.Bytes(), Truncated: stdout.truncated}
 	if err == nil {
+		return result, nil
+	}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// An extraction whose pipes outlived the process may have lost
+		// recipe bytes still in flight; ReadRecipe rejects a non-zero
+		// exit, so the truncated read can never reach the digest check.
+		result.ExitCode = -1
 		return result, nil
 	}
 	var exit *exec.ExitError

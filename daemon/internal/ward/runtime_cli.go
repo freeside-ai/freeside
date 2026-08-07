@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 )
 
 // CLIRuntime is the Runtime over the Apple container CLI (the reference
@@ -109,7 +111,7 @@ func runPrepared(cmd *osexec.Cmd, stdout io.Writer, reportStderr bool, operation
 		// credential), so drain it rather than buffering bytes that are thrown
 		// away — an unbounded buffer would be a memory-exhaustion vector.
 		cmd.Stderr = io.Discard
-		if err := cmd.Run(); err != nil {
+		if err := procbound.Run(cmd, procbound.DefaultWaitDelay); err != nil {
 			return fmt.Errorf("container %s: %w", operation, err)
 		}
 		return nil
@@ -117,7 +119,7 @@ func runPrepared(cmd *osexec.Cmd, stdout io.Writer, reportStderr bool, operation
 	const maxStderr = 512
 	stderr := &capWriter{max: maxStderr}
 	cmd.Stderr = stderr
-	if err := cmd.Run(); err != nil {
+	if err := procbound.Run(cmd, procbound.DefaultWaitDelay); err != nil {
 		msg := strings.TrimSpace(stderr.buf.String())
 		if stderr.truncated {
 			msg += "..."
