@@ -31,24 +31,29 @@ interface segregation. `publish.Recorder` is left untouched so the worker
 Minter's port stays focused; `StoreRecorder` gains `RecordInstallationMint`
 concretely.
 
-Chose to record **inside `mintGrantReadToken`, on the fully validated path
-only**, mirroring the worker mint (`mint.go`): after the scope-equality and
-expiry checks pass, before the token is returned for use. The scope comparison
-proves the grant identical to the fixed request, so both requested and granted
-carry `metadata:read`. A record that fails to commit fails the mint (wrapped in
-`errJanitorUnsafe`); the token still travels out so the caller revokes it, and
-it is never used. Because the row is written at mint time, a later revoke
-failure still leaves an operator-findable record of the live credential, which
-is the exact gap the determination named.
+Chose to record **every token GitHub actually minted, at the point its
+existence is known, before the returned grant is validated** (owner call after
+the automated P1 below). `mintGrantReadToken` confirms a token exists (201 with
+a non-empty token), then `classifyGrantReadMint` judges the grant and returns an
+`outcome`, the granted scopes to record (the fixed grant only when validated,
+else empty — the daemon does not vouch for a grant it rejected), and the
+validated expiry (nil otherwise). The record is written before any
+validation-driven return, so a token whose revoke also fails is never left off
+the ledger. A record that fails to commit fails the mint (wrapped in
+`errJanitorUnsafe`), and its error subsumes any validation error, since audit is
+the barrier; the token still travels out so the caller revokes it, and on this
+path it is never used.
 
 Chose migration **0033 as a single additive `CREATE TABLE`**
 (`publish_installation_mint_audits`, STRICT, insert-only, no token column). It
 carries `registration_id`/`installation_id` (strictly positive — a fresh table
-has no legacy-unknown sentinels) and the six requested + six granted permission
-scope columns, mirroring `publish_mint_audits` minus the repository-scope
-columns an installation-wide mint cannot fill. `InstallationMintAudit` /
-`RecordInstallationMint` / `ListInstallationMintAudits` mirror the worker
-`MintAudit` surface.
+has no legacy-unknown sentinels), an `outcome` column (validated /
+grant_rejected / expiry_rejected / undecodable), the six requested + six granted
+permission scope columns, and a **nullable `expires_at`** (NULL when the expiry
+was not validated, so the audit never fabricates an instant that never held).
+`InstallationMintAudit` / `RecordInstallationMint` / `ListInstallationMintAudits`
+mirror the worker `MintAudit` surface, with `InstallationMintOutcome` the closed
+outcome vocabulary and `ExpiresAt` a `*time.Time`.
 
 ## Rejected Alternatives
 
@@ -62,10 +67,44 @@ columns an installation-wide mint cannot fill. `InstallationMintAudit` /
   failed-revoke gap open; a rebuild cannot relax `publish_mint_audits`'
   CHECKs without a full-table copy of an insert-only ledger, and 0011's legacy
   `repository_id = 0` sentinel blocks a clean per-scope validity CHECK).
+- **Record only the validated-clean mint** (the first-pass shape): rejected by
+  the automated P1 below and the owner. It under-closes the very invariant the
+  issue exists to protect — a 201 with a live token but a malformed grant is
+  never used, yet if its revoke also fails the daemon holds a live unrevocable
+  credential with no row. The determined shape (typed granted + valid expiry)
+  structurally cannot represent that mint, which is why closing it needed the
+  `outcome` column and nullable expiry above (an owner-approved expansion of the
+  determined shape, resolved in-session).
 
 ## Refute-First Findings
 
-_(pending the fresh-context reviewer; folded before push)_
+A fresh-context reviewer (pre-push) traced the change decision-by-decision and
+found no confirmed defect; the automated reviewer (Codex, post-push) then found
+one **P1** that was real and reshaped the design.
+
+- **Confirmed and fixed (P1, the design change above):** the validated-clean
+  audit did not close the invariant for a token whose grant was rejected and
+  whose revoke then also failed — a live, unrevocable credential with no row.
+  Fixed by auditing every minted token before validation, with the `outcome`
+  column and nullable expiry. Covered by
+  `TestInstallationJanitorAuditsRejectedMintBeforeFailedRevoke`.
+- **Confirmed and fixed (test robustness):** the store round-trip fixture set
+  only `metadata:read`, leaving the other ten scope columns empty, so a
+  field-to-wrong-empty-column misbinding would round-trip clean. The reviewer
+  hand-verified the INSERT/SELECT/Scan correspondence (no actual bug), and the
+  fixture now populates every scope column with a distinguishing value so the
+  round-trip catches a misbinding, matching the worker mint-audit test pattern.
+- **Rejected by verification:** `registration_id = app.AppID` must be positive
+  or the store fail-closes and aborts the pass. This is established parity with
+  the worker mint's `RegistrationID > 0` rule; `app.AppID` already anchors
+  `reconcileRegistration`'s own error messages, so a zero here is already a
+  broken registration, not a new failure mode. No regression.
+
+No token material reaches the audit row, an error string, or a log: the record
+has no token field by type, requested/granted carry the fixed scope names (not
+the response), and an over-broad or proxy-tampered grant fails the scope
+comparison before any record. Verified by the reviewer and by the two tests
+asserting the enumeration token never appears in the error.
 
 ## Verification
 
@@ -73,8 +112,10 @@ _(pending the fresh-context reviewer; folded before push)_
   clean; full `go test ./...` green.
 - Acceptance grep: `access_tokens` shows exactly two mint sites
   (`janitor.go` → `RecordInstallationMint`, `mint.go` → `RecordMint`).
-- Three janitor mint-audit tests: clean pass writes exactly one row; failed
-  revocation leaves the row; audit-write failure blocks token use yet revokes.
+- Four janitor mint-audit tests: clean pass writes exactly one validated row;
+  failed revocation leaves the validated row; a rejected grant with a failed
+  revoke leaves a `grant_rejected` row with no expiry; audit-write failure
+  blocks token use yet revokes.
 - Store tests mirror the worker mint-audit suite (round-trip, append-only,
   rejections, sync-invisibility, reopen).
 
