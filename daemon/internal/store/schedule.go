@@ -389,7 +389,7 @@ func (tx *InternalTx) CreatePendingScheduleOccurrence(
 	}
 	res, err := tx.tx.ExecContext(ctx, createOccurrenceSQL,
 		occ.ScheduleID, occ.Generation, occ.NominalFireAt.UnixNano(),
-		gapMissed, gapEarliest, occ.CreatedAt.Format(time.RFC3339Nano))
+		gapMissed, gapEarliest, formatTime(occ.CreatedAt))
 	if err != nil {
 		return false, fmt.Errorf("create schedule occurrence %q: %w", occ.ScheduleID, err)
 	}
@@ -433,18 +433,17 @@ func scanOccurrence(sc scanner) (domain.ScheduleOccurrence, error) {
 			EarliestMissedAt:  time.Unix(0, gapEarliest.Int64).UTC(),
 		}
 	}
-	created, err := time.Parse(time.RFC3339Nano, createdAt)
+	created, err := parseTime(createdAt)
 	if err != nil {
 		return domain.ScheduleOccurrence{}, fmt.Errorf("stored created_at invalid: %w", err)
 	}
-	occ.CreatedAt = created.UTC()
+	occ.CreatedAt = created
 	if consumedAt.Valid {
-		consumed, err := time.Parse(time.RFC3339Nano, consumedAt.String)
+		consumed, err := parseTime(consumedAt.String)
 		if err != nil {
 			return domain.ScheduleOccurrence{}, fmt.Errorf("stored consumed_at invalid: %w", err)
 		}
-		consumedUTC := consumed.UTC()
-		occ.ConsumedAt = &consumedUTC
+		occ.ConsumedAt = &consumed
 	}
 	if outcome.Valid {
 		out := domain.ScheduleOccurrenceOutcome(outcome.String)
@@ -535,7 +534,7 @@ func (tx *InternalTx) ConsumeScheduleOccurrence(
 		return false, fmt.Errorf("consume schedule occurrence %q: %w", id, err)
 	}
 	res, err := tx.tx.ExecContext(ctx, consumeOccurrenceSQL,
-		consumedAt.UTC().Format(time.RFC3339Nano), outcome,
+		formatTime(consumedAt), outcome,
 		id, generation, nominalFireAt.UTC().UnixNano())
 	if err != nil {
 		return false, fmt.Errorf("consume schedule occurrence %q: %w", id, err)

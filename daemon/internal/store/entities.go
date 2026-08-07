@@ -135,12 +135,25 @@ func encode(v validator) (string, error) {
 	return string(body), nil
 }
 
+// storedRowCanonicalizer is implemented by a decoded entity that can carry a
+// field written under an older, looser encoding than the current Validate
+// accepts. decode rewrites those fields to their canonical spelling before
+// Validate, so a legacy row converges instead of being refused; the rewrite
+// must be lossless so put-idempotence's canonical re-encode still matches
+// (issue #553).
+type storedRowCanonicalizer interface{ CanonicalizeStoredRow() }
+
 // decode unmarshals a stored body and re-validates it: Validate is the
-// deserialization backstop for values that bypassed their constructor.
+// deserialization backstop for values that bypassed their constructor. A row
+// whose type canonicalizes stored fields is rewritten first, so a legacy
+// spelling reaches Validate in the form it now demands.
 func decode[T validator](body []byte) (T, error) {
 	var v T
 	if err := json.Unmarshal(body, &v); err != nil {
 		return v, err
+	}
+	if c, ok := any(&v).(storedRowCanonicalizer); ok {
+		c.CanonicalizeStoredRow()
 	}
 	if err := v.Validate(); err != nil {
 		return v, fmt.Errorf("stored row invalid: %w", err)

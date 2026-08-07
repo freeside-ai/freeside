@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -152,9 +151,9 @@ func (tx *InternalTx) RecordRunHold(ctx context.Context, h domain.RunHoldObserva
 	case storedReason == string(h.Reason) &&
 		storedInvocation.Valid == (h.InvocationID != nil) &&
 		(!storedInvocation.Valid || storedInvocation.String == string(*h.InvocationID)):
-		if firstAt, parseErr := time.Parse(time.RFC3339Nano, storedFirst); parseErr == nil &&
-			!h.LastObservedAt.Before(firstAt.UTC()) {
-			h.FirstObservedAt = firstAt.UTC()
+		if firstAt, parseErr := parseTime(storedFirst); parseErr == nil &&
+			!h.LastObservedAt.Before(firstAt) {
+			h.FirstObservedAt = firstAt
 		}
 	}
 	var invocation any
@@ -227,7 +226,7 @@ func (tx *ReadTx) ListRunMilestones(
 			&outcome, &cause, &recordedAt); err != nil {
 			return nil, fmt.Errorf("list run milestones %s: %w", runID, err)
 		}
-		at, err := time.Parse(time.RFC3339Nano, recordedAt)
+		at, err := parseTime(recordedAt)
 		if err != nil {
 			return nil, fmt.Errorf("list run milestones %s recorded_at %q: %w",
 				runID, recordedAt, err)
@@ -235,7 +234,7 @@ func (tx *ReadTx) ListRunMilestones(
 		m := domain.RunMilestone{
 			RunID:      domain.RunID(storedRun),
 			Kind:       domain.RunMilestoneKind(kind),
-			RecordedAt: at.UTC(),
+			RecordedAt: at,
 		}
 		if invocation.Valid {
 			id := domain.InvocationID(invocation.String)
@@ -307,7 +306,7 @@ func scanInvocationObservation(row scanner) (domain.InvocationObservation, error
 	if err := row.Scan(&invocation, &run, &status, &live, &observedAt); err != nil {
 		return domain.InvocationObservation{}, err
 	}
-	at, err := time.Parse(time.RFC3339Nano, observedAt)
+	at, err := parseTime(observedAt)
 	if err != nil {
 		return domain.InvocationObservation{},
 			fmt.Errorf("observation %s observed_at %q: %w", invocation, observedAt, err)
@@ -317,7 +316,7 @@ func scanInvocationObservation(row scanner) (domain.InvocationObservation, error
 		RunID:        domain.RunID(run),
 		Status:       domain.ObservedInvocationStatus(status),
 		Live:         live != 0,
-		ObservedAt:   at.UTC(),
+		ObservedAt:   at,
 	}
 	if err := o.Validate(); err != nil {
 		return domain.InvocationObservation{}, err
@@ -346,12 +345,12 @@ func (tx *ReadTx) GetRunHold(
 	case err != nil:
 		return domain.RunHoldObservation{}, false, fmt.Errorf("get run hold %s: %w", runID, err)
 	}
-	firstAt, err := time.Parse(time.RFC3339Nano, first)
+	firstAt, err := parseTime(first)
 	if err != nil {
 		return domain.RunHoldObservation{}, false,
 			fmt.Errorf("get run hold %s first_observed_at %q: %w", runID, first, err)
 	}
-	lastAt, err := time.Parse(time.RFC3339Nano, last)
+	lastAt, err := parseTime(last)
 	if err != nil {
 		return domain.RunHoldObservation{}, false,
 			fmt.Errorf("get run hold %s last_observed_at %q: %w", runID, last, err)
@@ -359,8 +358,8 @@ func (tx *ReadTx) GetRunHold(
 	h := domain.RunHoldObservation{
 		RunID:           domain.RunID(storedRun),
 		Reason:          domain.RunHoldReason(reason),
-		FirstObservedAt: firstAt.UTC(),
-		LastObservedAt:  lastAt.UTC(),
+		FirstObservedAt: firstAt,
+		LastObservedAt:  lastAt,
 	}
 	if invocation.Valid {
 		id := domain.InvocationID(invocation.String)

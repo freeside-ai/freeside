@@ -300,7 +300,7 @@ func scanTrustProfile(sc scanner, wantDigest domain.Digest) (TrustProfileRecord,
 	if profile.ProfileDigest != digest || profile.Repo != repo {
 		return TrustProfileRecord{}, errRowInconsistent
 	}
-	at, err := time.Parse(time.RFC3339Nano, recordedAt)
+	at, err := parseTime(recordedAt)
 	if err != nil {
 		return TrustProfileRecord{}, fmt.Errorf("stored recorded_at invalid: %w", err)
 	}

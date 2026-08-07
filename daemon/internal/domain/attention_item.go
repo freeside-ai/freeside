@@ -508,6 +508,14 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		BlockingSupersession:  clonePtr(in.BlockingSupersession),
 		Status:                in.Status,
 	}
+	// Normalize the optional expiry to UTC so the producer path stores one
+	// canonical spelling (a dev-CLI producer stamps it from the host clock);
+	// Validate below then rejects any non-UTC that bypassed this constructor,
+	// mirroring DecidedAt (issue #553).
+	if item.ExpiresWhen != nil {
+		utc := item.ExpiresWhen.UTC()
+		item.ExpiresWhen = &utc
+	}
 	// Derive the binding set from the rendered evidence and claims, so the
 	// approval binds exactly what was shown (plan §3.1, §4). Validate re-derives
 	// and requires equality, which is what enforces this on the store-decode path
@@ -566,8 +574,16 @@ func (i AttentionItem) Validate() error {
 	if i.ConversationID != nil && *i.ConversationID == "" {
 		return fmt.Errorf("item %s conversation_id: %w", i.ID, ErrEmptyID)
 	}
-	if i.ExpiresWhen != nil && i.ExpiresWhen.IsZero() {
-		return fmt.Errorf("item %s expires_when: %w", i.ID, ErrMissingTimestamp)
+	if i.ExpiresWhen != nil {
+		if i.ExpiresWhen.IsZero() {
+			return fmt.Errorf("item %s expires_when: %w", i.ID, ErrMissingTimestamp)
+		}
+		// A canonical persisted encoding whose re-put convergence is a byte
+		// compare: a non-UTC instant is the same moment in a different byte form,
+		// so it would give one stamp two encodings (mirrors DecidedAt below).
+		if i.ExpiresWhen.Location() != time.UTC {
+			return fmt.Errorf("item %s expires_when: %w", i.ID, ErrTimestampNotUTC)
+		}
 	}
 	if i.CommitPlanNotice != nil && !i.CommitPlanNotice.valid() {
 		return fmt.Errorf("item %s commit_plan_notice %q: %w", i.ID, *i.CommitPlanNotice, ErrInvalidCommitPlanNotice)
@@ -798,4 +814,23 @@ func (i AttentionItem) WithDecidedAt(t time.Time) (AttentionItem, error) {
 	}
 	i.DecidedAt = &t
 	return i, nil
+}
+
+// CanonicalizeStoredRow rewrites a decoded stored row's fields to their
+// canonical spelling before Validate runs, so a row written under an older,
+// looser encoding converges instead of being refused by the current, stricter
+// Validate. It must stay lossless (the same instant in canonical byte form):
+// the store's put-idempotence compare is a canonical re-encode, so a legacy row
+// and its fresh equivalent have to marshal identically once this has run.
+//
+// Today the only such field is ExpiresWhen, whose UTC check (issue #553)
+// post-dates a dev-CLI producer that persisted a host-local offset; rewriting
+// it to UTC is the same instant in the spelling Validate now demands. DecidedAt
+// needs no entry: its write gate has always rejected non-UTC, so no offset row
+// of it can exist to canonicalize.
+func (i *AttentionItem) CanonicalizeStoredRow() {
+	if i.ExpiresWhen != nil {
+		utc := i.ExpiresWhen.UTC()
+		i.ExpiresWhen = &utc
+	}
 }

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -87,7 +86,7 @@ func (tx *WriteTx) PutReviewRecord(
 	err = tx.putImmutable(ctx, putReviewRecordSQL,
 		[]any{
 			record.InvocationID, record.RunID, record.Round, record.BaseSHA,
-			record.HeadSHA, record.Outcome, record.CompletedAt.Format(time.RFC3339Nano),
+			record.HeadSHA, record.Outcome, formatTime(record.CompletedAt),
 			reviewBodyDigest(body), body,
 		},
 		`SELECT body_digest || body FROM review_records WHERE invocation_id = ?`,
@@ -130,7 +129,7 @@ func (tx *ReadTx) GetReviewRecord(
 	}
 	if record.InvocationID != id || record.RunID != domain.RunID(runID) ||
 		record.Round != round || record.BaseSHA != baseSHA || record.HeadSHA != headSHA ||
-		string(record.Outcome) != outcome || record.CompletedAt.Format(time.RFC3339Nano) != completedAt {
+		string(record.Outcome) != outcome || formatTime(record.CompletedAt) != completedAt {
 		return domain.ReviewRecord{}, fmt.Errorf("get review record %q: %w", id, errRowInconsistent)
 	}
 	rows, err := tx.tx.QueryContext(ctx, `SELECT finding_id FROM review_record_findings
@@ -204,7 +203,7 @@ func (tx *WriteTx) PutReviewFailure(ctx context.Context, failure domain.ReviewFa
 	if err := tx.putImmutable(ctx, putReviewFailureSQL,
 		[]any{
 			failure.InvocationID, failure.RunID, failure.Round, failure.Class,
-			failure.ObservedAt.Format(time.RFC3339Nano), reviewBodyDigest(body), body,
+			formatTime(failure.ObservedAt), reviewBodyDigest(body), body,
 		},
 		`SELECT body_digest || body FROM review_failures WHERE invocation_id = ?`,
 		[]any{failure.InvocationID}, reviewBodyAuthority(body)); err != nil {
@@ -240,7 +239,7 @@ func (tx *ReadTx) GetReviewFailure(
 	}
 	if failure.InvocationID != id || failure.RunID != domain.RunID(runID) ||
 		failure.Round != round || string(failure.Class) != class ||
-		failure.ObservedAt.Format(time.RFC3339Nano) != observedAt {
+		formatTime(failure.ObservedAt) != observedAt {
 		return domain.ReviewFailure{}, fmt.Errorf("get review failure %q: %w", id, errRowInconsistent)
 	}
 	return failure, nil
@@ -278,7 +277,7 @@ func (tx *WriteTx) PutReviewRetry(ctx context.Context, retry domain.ReviewRetry)
 	}
 	if _, err := tx.tx.ExecContext(ctx, putReviewRetrySQL,
 		retry.RunID, retry.InvocationID, retry.Round, retry.BaseSHA, retry.HeadSHA,
-		retry.ObservedAt.Format(time.RFC3339Nano), reviewBodyDigest(body), body); err != nil {
+		formatTime(retry.ObservedAt), reviewBodyDigest(body), body); err != nil {
 		return fmt.Errorf("put review retry %q: %w", retry.RunID, err)
 	}
 	return nil
@@ -308,7 +307,7 @@ func (tx *ReadTx) GetReviewRetry(ctx context.Context, runID domain.RunID) (domai
 	}
 	if retry.RunID != domain.RunID(idRunID) || retry.InvocationID != domain.InvocationID(invocationID) ||
 		retry.Round != round || retry.BaseSHA != baseSHA || retry.HeadSHA != headSHA ||
-		retry.ObservedAt.Format(time.RFC3339Nano) != observedAt {
+		formatTime(retry.ObservedAt) != observedAt {
 		return domain.ReviewRetry{}, fmt.Errorf("get review retry %q: %w", runID, errRowInconsistent)
 	}
 	return retry, nil

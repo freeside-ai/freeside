@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -129,7 +128,7 @@ func (tx *ReadTx) LatestBackendConformance(
 		return domain.BackendConformance{}, false,
 			fmt.Errorf("latest backend conformance for %q capabilities: %w", backend, err)
 	}
-	at, err := time.Parse(time.RFC3339Nano, provedAt)
+	at, err := parseTime(provedAt)
 	if err != nil {
 		return domain.BackendConformance{}, false,
 			fmt.Errorf("latest backend conformance for %q proved_at %q: %w", backend, provedAt, err)
@@ -140,7 +139,7 @@ func (tx *ReadTx) LatestBackendConformance(
 		ConfigurationDigest: domain.Digest(configurationDigest),
 		Capabilities:        caps,
 		Generation:          uint64(id),
-		ProvedAt:            at.UTC(),
+		ProvedAt:            at,
 	}
 	if err := record.Validate(); err != nil {
 		return domain.BackendConformance{}, false,

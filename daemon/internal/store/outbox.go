@@ -129,7 +129,7 @@ func (tx *ReadTx) listOutboxByStatus(
 		if err := rows.Scan(&entry.ID, &entry.IdempotencyKey, &entry.Kind, &entry.Payload, &entry.Status, &stored); err != nil {
 			return nil, fmt.Errorf("list outbox %q status %q: %w", kind, status, err)
 		}
-		entry.CreatedAt, err = time.Parse(time.RFC3339Nano, stored)
+		entry.CreatedAt, err = parseTime(stored)
 		if err != nil {
 			return nil, fmt.Errorf("list outbox %q status %q: stored created_at invalid: %w", kind, status, err)
 		}
@@ -161,7 +161,7 @@ func (tx *ReadTx) GetOutbox(ctx context.Context, key string) (QueueEntry, error)
 	if err != nil {
 		return QueueEntry{}, fmt.Errorf("get outbox %q: %w", key, err)
 	}
-	entry.CreatedAt, err = time.Parse(time.RFC3339Nano, stored)
+	entry.CreatedAt, err = parseTime(stored)
 	if err != nil {
 		return QueueEntry{}, fmt.Errorf("get outbox %q: stored created_at invalid: %w", key, err)
 	}
@@ -190,7 +190,7 @@ func (tx *ReadTx) GetInbox(ctx context.Context, key string) (QueueEntry, error) 
 	if err != nil {
 		return QueueEntry{}, fmt.Errorf("get inbox %q: %w", key, err)
 	}
-	entry.CreatedAt, err = time.Parse(time.RFC3339Nano, stored)
+	entry.CreatedAt, err = parseTime(stored)
 	if err != nil {
 		return QueueEntry{}, fmt.Errorf("get inbox %q: stored created_at invalid: %w", key, err)
 	}
@@ -296,7 +296,7 @@ func (tx *InternalTx) record(ctx context.Context, insertSQL, selectSQL, key, kin
 		// an intentionally empty payload is fine.
 		payload = []byte{}
 	}
-	createdAt := time.Now().UTC().Format(time.RFC3339Nano)
+	createdAt := formatTime(time.Now())
 	res, err := tx.tx.ExecContext(ctx, insertSQL, key, kind, payload, createdAt)
 	if err != nil {
 		return QueueEntry{}, false, err
@@ -315,7 +315,7 @@ func (tx *InternalTx) record(ctx context.Context, insertSQL, selectSQL, key, kin
 	if err != nil {
 		return QueueEntry{}, false, err
 	}
-	entry.CreatedAt, err = time.Parse(time.RFC3339Nano, stored)
+	entry.CreatedAt, err = parseTime(stored)
 	if err != nil {
 		return QueueEntry{}, false, fmt.Errorf("stored created_at invalid: %w", err)
 	}
