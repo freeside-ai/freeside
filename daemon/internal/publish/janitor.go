@@ -135,13 +135,14 @@ type JanitorRegistrationChurn struct {
 // no signet or AttentionItem dependency: unsolicited GitHub state can be
 // removed and audited, but cannot create a human-decision path.
 type InstallationJanitor struct {
-	keystore    *Keystore
-	client      *http.Client
-	baseURL     string
-	authority   InstallationAuthoritySource
-	recorder    JanitorRecorder
-	now         func() time.Time
-	maxRemovals int
+	keystore     *Keystore
+	client       *http.Client
+	baseURL      string
+	authority    InstallationAuthoritySource
+	recorder     JanitorRecorder
+	mintRecorder InstallationMintRecorder
+	now          func() time.Time
+	maxRemovals  int
 
 	cycleMu sync.Mutex
 	mu      sync.RWMutex
@@ -153,16 +154,23 @@ type InstallationJanitor struct {
 
 // NewInstallationJanitor constructs a janitor with a hard per-cycle removal
 // bound. Enumeration is independently capped by installationMaxPages.
+//
+// It takes two audit ports because it records two different events to two
+// durable surfaces: recorder commits the destructive-action barrier (the file
+// journal), and mintRecorder commits each grant-read mint (the SQLite audit
+// ledger, via the store-backed recorder).
 func NewInstallationJanitor(
 	ks *Keystore,
 	client *http.Client,
 	baseURL string,
 	authority InstallationAuthoritySource,
 	recorder JanitorRecorder,
+	mintRecorder InstallationMintRecorder,
 	now func() time.Time,
 	maxRemovals int,
 ) (*InstallationJanitor, error) {
-	if ks == nil || client == nil || authority == nil || recorder == nil || now == nil {
+	if ks == nil || client == nil || authority == nil || recorder == nil ||
+		mintRecorder == nil || now == nil {
 		return nil, errors.New("installation janitor: nil dependency")
 	}
 	if baseURL == "" {
@@ -172,14 +180,15 @@ func NewInstallationJanitor(
 		return nil, errors.New("installation janitor: removal bound must be positive")
 	}
 	return &InstallationJanitor{
-		keystore:    ks,
-		client:      noRedirect(client),
-		baseURL:     baseURL,
-		authority:   authority,
-		recorder:    recorder,
-		now:         now,
-		maxRemovals: maxRemovals,
-		covered:     map[int64]registrationCoverage{},
+		keystore:     ks,
+		client:       noRedirect(client),
+		baseURL:      baseURL,
+		authority:    authority,
+		recorder:     recorder,
+		mintRecorder: mintRecorder,
+		now:          now,
+		maxRemovals:  maxRemovals,
+		covered:      map[int64]registrationCoverage{},
 	}, nil
 }
 
@@ -703,7 +712,7 @@ func (j *InstallationJanitor) reconcileRegistration(
 				})
 				continue
 			}
-			repositoryIDs, err := j.enumerateRepositoryGrants(ctx, jwt, installation.ID)
+			repositoryIDs, err := j.enumerateRepositoryGrants(ctx, jwt, app.AppID, installation.ID)
 			if err != nil {
 				return false, registrationCoverage{}, fmt.Errorf(
 					"installation janitor: registration %d installation %d grants: %w",
@@ -857,6 +866,12 @@ type installationRemoval struct {
 
 var grantReadPermissionScopes = map[string]string{"metadata": "read"}
 
+// grantReadPermissions is the typed form of the grant-read request, recorded in
+// the mint audit as both requested and granted: the validation against
+// grantReadPermissionScopes proves the returned grant identical to it, so no
+// other grant reaches the audit on the validated-clean path.
+var grantReadPermissions = Permissions{Metadata: "read"}
+
 type grantReadMintRequest struct {
 	Permissions Permissions `json:"permissions"`
 }
@@ -882,9 +897,10 @@ type installationRepositoriesPage struct {
 func (j *InstallationJanitor) enumerateRepositoryGrants(
 	ctx context.Context,
 	jwt Secret,
+	registrationID int64,
 	installationID int64,
 ) ([]int64, error) {
-	token, mintErr := j.mintGrantReadToken(ctx, jwt, installationID)
+	token, mintErr := j.mintGrantReadToken(ctx, jwt, registrationID, installationID)
 	if token.Reveal() == "" {
 		return nil, mintErr
 	}
@@ -921,6 +937,7 @@ func (j *InstallationJanitor) enumerateRepositoryGrants(
 func (j *InstallationJanitor) mintGrantReadToken(
 	ctx context.Context,
 	jwt Secret,
+	registrationID int64,
 	installationID int64,
 ) (Secret, error) {
 	body, err := json.Marshal(grantReadMintRequest{
@@ -963,28 +980,78 @@ func (j *InstallationJanitor) mintGrantReadToken(
 	// GitHub created a token. Every path below either carries its value out
 	// for the caller to revoke, or has lost it for good.
 	var minted grantReadMintResponse
-	if err := decodeResponse(resp.Body, &minted); err != nil {
-		if minted.Token.Reveal() == "" {
+	decodeErr := decodeResponse(resp.Body, &minted)
+	if minted.Token.Reveal() == "" {
+		// No token was recovered, so GitHub created nothing this daemon must
+		// account for: there is nothing to audit or revoke.
+		if decodeErr != nil {
 			return "", fmt.Errorf("mint grant-read token: %w: decode response", errJanitorUnsafe)
 		}
-		return minted.Token, errors.New("mint grant-read token: decode response")
-	}
-	if minted.Token.Reveal() == "" {
 		return "", fmt.Errorf("mint grant-read token: %w: response carries no token", errJanitorUnsafe)
+	}
+	// A token now provably exists. Every return below carries it out for the
+	// caller to revoke, and it MUST be audited first: a token whose revoke also
+	// fails is the live, unrevocable credential the whole audit exists to make
+	// operator-findable, so it cannot depend on the grant being well-formed.
+	// The clock is read once so the audit row and the expiry check share one
+	// instant. classifyGrantReadMint returns the outcome, the granted scopes to
+	// record (the fixed grant only when validated), the validated expiry (nil
+	// otherwise), and the caller error that preserves each path's prior
+	// meaning.
+	mintedAt := j.now()
+	outcome, granted, expiresAt, mintErr := classifyGrantReadMint(&minted, decodeErr, mintedAt)
+	// A record that fails to commit fails the mint (mirroring the worker mint,
+	// #545/#80): the token still travels out so the caller revokes it, and on
+	// this failure it is never used. This is the barrier, so its error subsumes
+	// any validation error the mint would otherwise have returned.
+	if err := j.mintRecorder.RecordInstallationMint(InstallationMintRecord{
+		MintedAt:       mintedAt.UTC(),
+		RegistrationID: registrationID,
+		InstallationID: installationID,
+		Outcome:        outcome,
+		Requested:      grantReadPermissions,
+		Granted:        granted,
+		ExpiresAt:      expiresAt,
+	}); err != nil {
+		return minted.Token, fmt.Errorf("mint grant-read token: %w: %w", errJanitorUnsafe, err)
+	}
+	return minted.Token, mintErr
+}
+
+// classifyGrantReadMint judges a grant-read 201 whose token is known to exist,
+// and returns the audit outcome, the granted scopes to record (the fixed grant
+// only when the scope comparison passed, else the zero Permissions, since the
+// daemon does not vouch for a grant it rejected), the validated expiry (nil
+// unless the whole grant is clean), and the caller error each path returns.
+// decodeErr, when non-nil, means the body could not be decoded even though a
+// token was recovered from it. The error strings preserve the meanings the
+// inlined validation carried before the audit was added: an undecodable body
+// and an expiry failure stay attributable to the registration (revoked, pass
+// continues), while a returned-grant mismatch stays an ErrGrantMismatch.
+func classifyGrantReadMint(
+	minted *grantReadMintResponse,
+	decodeErr error,
+	now time.Time,
+) (InstallationMintOutcome, Permissions, *time.Time, error) {
+	if decodeErr != nil {
+		return InstallationMintUndecodable, Permissions{}, nil,
+			errors.New("mint grant-read token: decode response")
 	}
 	if !maps.Equal(minted.Permissions, grantReadPermissionScopes) ||
 		minted.RepositorySelection != "selected" {
-		return minted.Token, fmt.Errorf("mint grant-read token: returned grant differs from request: %w", ErrGrantMismatch)
+		return InstallationMintGrantRejected, Permissions{}, nil,
+			fmt.Errorf("mint grant-read token: returned grant differs from request: %w", ErrGrantMismatch)
 	}
-	// Bound the expiry before the token is used for anything, after the
-	// scope comparison so an over-broad grant keeps its own error. The
-	// token still travels out with the error so the caller can revoke
-	// it: a credential this daemon holds and will not use is exactly the
-	// one that must be taken back.
-	if _, err := checkInstallationTokenExpiry(minted.ExpiresAt, j.now()); err != nil {
-		return minted.Token, fmt.Errorf("mint grant-read token: %w", err)
+	// The scope comparison passed, so the granted scope is the fixed request.
+	// Bound the expiry before the token is used: missing, garbled, lapsed, or
+	// over-long is rejected here, after the scope comparison so an over-broad
+	// grant keeps its own error.
+	expiresAt, err := checkInstallationTokenExpiry(minted.ExpiresAt, now)
+	if err != nil {
+		return InstallationMintExpiryRejected, grantReadPermissions, nil,
+			fmt.Errorf("mint grant-read token: %w", err)
 	}
-	return minted.Token, nil
+	return InstallationMintValidated, grantReadPermissions, &expiresAt, nil
 }
 
 func (j *InstallationJanitor) listInstallationRepositories(

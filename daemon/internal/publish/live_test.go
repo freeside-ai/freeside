@@ -596,6 +596,7 @@ func TestLiveInstallationJanitorPublishesCoverage(t *testing.T) {
 		"https://api.github.com",
 		store,
 		liveGuardRecorder{},
+		&captureMintRecorder{},
 		time.Now,
 		1,
 	)

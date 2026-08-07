@@ -528,6 +528,7 @@ func TestPendingExpansionPreservesOnlyCurrentMintAuthority(t *testing.T) {
 				srv.URL,
 				authority,
 				&removalRecorder{},
+				&captureMintRecorder{},
 				fixedNow,
 				1,
 			)
@@ -668,6 +669,7 @@ func TestPendingEnvelopeNeverAuthorizesMint(t *testing.T) {
 		srv.URL,
 		authority,
 		&removalRecorder{},
+		&captureMintRecorder{},
 		fixedNow,
 		1,
 	)

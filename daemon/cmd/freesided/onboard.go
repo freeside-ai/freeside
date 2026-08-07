@@ -273,7 +273,7 @@ func runOnboardCommand(
 	}
 	if trusted != nil {
 		return withInstallationJanitor(
-			ctx, authority, *credentialsDir, *stateDir, *installWait,
+			ctx, st, authority, *credentialsDir, *stateDir, *installWait,
 			func(janitor *publish.InstallationJanitor) (bool, error) {
 				return janitor.AllowsRepository(
 					*registrationID, trusted.InstallationID, *repositoryID,
@@ -307,8 +307,12 @@ func withDurableInstallationPoll(
 		return err
 	}
 	client := &http.Client{Timeout: 30 * time.Second}
+	recorder, err := publish.NewStoreRecorder(st)
+	if err != nil {
+		return err
+	}
 	janitor, err := publish.NewInstallationJanitor(
-		keystore, client, defaultGitHubAPIBase, authority, authority,
+		keystore, client, defaultGitHubAPIBase, authority, authority, recorder,
 		time.Now, defaultJanitorRemovalBound,
 	)
 	if err != nil {
@@ -468,6 +472,7 @@ func (g onboardingJanitorGate) PendingReady(
 
 func withInstallationJanitor(
 	ctx context.Context,
+	st *store.Store,
 	authority *publish.InstallationAuthorityStore,
 	credentialsDir string,
 	stateDir string,
@@ -482,6 +487,10 @@ func withInstallationJanitor(
 	if err != nil {
 		return err
 	}
+	recorder, err := publish.NewStoreRecorder(st)
+	if err != nil {
+		return err
+	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	janitor, err := publish.NewInstallationJanitor(
 		keystore,
@@ -489,6 +498,7 @@ func withInstallationJanitor(
 		defaultGitHubAPIBase,
 		authority,
 		authority,
+		recorder,
 		time.Now,
 		defaultJanitorRemovalBound,
 	)
