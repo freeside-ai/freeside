@@ -97,10 +97,12 @@ func (r activeResourceReconciler) Run(
 		failures, err := r.Reconcile(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
-				logger.Info("active resource reconciler stopped during shutdown")
-			} else {
-				logger.Error("active resource pass failed", "error", err)
+				// Cancellation mid-pass is shutdown, not a failure: the same
+				// reading the engine and scheduler loops already take. The
+				// select below logs the single stop record.
+				return nil
 			}
+			logger.Error("active resource pass failed", "error", err)
 			return err
 		}
 		for _, failure := range failures {
