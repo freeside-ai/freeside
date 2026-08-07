@@ -195,6 +195,18 @@ func registerSubmissionArtifacts(
 func registerSubmissionArtifactsWithPaths(
 	t *testing.T, st *store.Store, runID, paths string,
 ) (domain.Artifact, domain.Artifact, domain.ResolvedPolicy) {
+	return registerSubmissionArtifactsWithPolicyKeys(t, st, runID, []domain.PolicyKey{{
+		Key: "paths", Value: paths,
+		Provenance: domain.KeyProvenance{
+			Source: domain.ProvenanceOverride,
+			Digest: submissionDigest(runID, "policy-source"),
+		},
+	}})
+}
+
+func registerSubmissionArtifactsWithPolicyKeys(
+	t *testing.T, st *store.Store, runID string, keys []domain.PolicyKey,
+) (domain.Artifact, domain.Artifact, domain.ResolvedPolicy) {
 	t.Helper()
 	ctx := context.Background()
 	spec, err := domain.NewArtifact(domain.ArtifactInput{
@@ -208,13 +220,7 @@ func registerSubmissionArtifactsWithPaths(
 	if err != nil {
 		t.Fatalf("new spec artifact: %v", err)
 	}
-	resolved, err := domain.NewResolvedPolicy(domain.RunID(runID), []domain.PolicyKey{{
-		Key: "paths", Value: paths,
-		Provenance: domain.KeyProvenance{
-			Source: domain.ProvenanceOverride,
-			Digest: submissionDigest(runID, "policy-source"),
-		},
-	}})
+	resolved, err := domain.NewResolvedPolicy(domain.RunID(runID), keys)
 	if err != nil {
 		t.Fatalf("new resolved policy: %v", err)
 	}

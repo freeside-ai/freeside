@@ -197,6 +197,12 @@ type productionPublicationHarness struct {
 }
 
 func newProductionPublicationHarness(t *testing.T, resultHead string) *productionPublicationHarness {
+	return newProductionPublicationHarnessWithPolicyKeys(t, resultHead, nil)
+}
+
+func newProductionPublicationHarnessWithPolicyKeys(
+	t *testing.T, resultHead string, extraKeys []domain.PolicyKey,
+) *productionPublicationHarness {
 	t.Helper()
 	h := newPublicationHarness(t)
 	// Production verification reads the onboarding-bound external recipe
@@ -241,8 +247,15 @@ func newProductionPublicationHarness(t *testing.T, resultHead string) *productio
 	}
 	runID := domain.RunID("run-production-publication")
 	projectID := domain.ProjectID("project-production-publication")
-	spec, policy, resolved := registerSubmissionArtifactsWithPaths(
-		t, h.store, string(runID), "README.md",
+	policyKeys := append([]domain.PolicyKey{{
+		Key: "paths", Value: "README.md",
+		Provenance: domain.KeyProvenance{
+			Source: domain.ProvenanceOverride,
+			Digest: submissionDigest(string(runID), "policy-source"),
+		},
+	}}, extraKeys...)
+	spec, policy, resolved := registerSubmissionArtifactsWithPolicyKeys(
+		t, h.store, string(runID), policyKeys,
 	)
 	submitted, err := engine.SubmitProductionRun(h.ctx, h.store, engine.ProductionRunSpec{
 		RunID: runID, ProjectID: projectID, SpecArtifactID: spec.ID,
@@ -954,8 +967,8 @@ func TestProductionReviewResultConfigurationMismatchIsContradiction(t *testing.T
 		},
 	})
 	p.startAndRecordExport(t)
-	if _, err := p.reconcileLanes(); err == nil {
-		t.Fatal("review result from an unapproved configuration did not fail loudly")
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatalf("park unapproved-configuration contradiction: %v", err)
 	}
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
@@ -964,6 +977,61 @@ func TestProductionReviewResultConfigurationMismatchIsContradiction(t *testing.T
 		}
 		if failure.Class != domain.ReviewFailureContradiction {
 			t.Fatalf("configuration contradiction = %#v", failure)
+		}
+		item, err := tx.GetAttentionItem(p.ctx, productionReviewItemIDForTest(p.runID, 1))
+		if err != nil {
+			return err
+		}
+		if item.Type != domain.AttentionReviewContradiction ||
+			!item.Offers(domain.ActionRecoverReview) {
+			t.Fatalf("configuration contradiction item = %#v", item)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductionParkedReviewContradictionPrecedesConfigurationDrift(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	id := engine.ProductionReviewInvocationID(p.runID, 1)
+	p.reviewer.Script(id, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: strings.Repeat("e", 40), HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("contradiction")),
+		},
+	})
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatalf("park contradiction: %v", err)
+	}
+
+	// A restarted daemon may have a different effective reviewer
+	// configuration. The unresolved contradiction remains authoritative and
+	// must not be replaced by a new configuration failure before recovery.
+	p.reviewConfigurationDigest = domain.Digest("sha256:" + strings.Repeat("d", 64))
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 ||
+		result.ReadyItemsCreated != 0 {
+		t.Fatalf("configuration drift bypassed parked contradiction = %#v, %v", result, err)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if failure.InvocationID != id || failure.Round != 1 ||
+			failure.Class != domain.ReviewFailureContradiction {
+			t.Fatalf("latest failure after configuration drift = %#v", failure)
+		}
+		item, err := tx.GetAttentionItem(p.ctx, productionReviewItemIDForTest(p.runID, 1))
+		if err != nil {
+			return err
+		}
+		if item.Status != domain.StatusOpen || !item.Offers(domain.ActionRecoverReview) {
+			t.Fatalf("parked contradiction after configuration drift = %#v", item)
 		}
 		return nil
 	}); err != nil {
@@ -1723,7 +1791,7 @@ func TestProductionReviewWorkspaceCleanupRefusesSymlinkReplacement(t *testing.T)
 	}
 }
 
-func TestProductionReviewContradictionFailsLoudAndPersists(t *testing.T) {
+func TestProductionReviewContradictionParksWithOneRecoveryItem(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
 	id := engine.ProductionReviewInvocationID(p.runID, 1)
 	p.reviewer.Script(id, fake.ReviewScript{
@@ -1735,9 +1803,11 @@ func TestProductionReviewContradictionFailsLoudAndPersists(t *testing.T) {
 		},
 	})
 	p.startAndRecordExport(t)
-	if _, err := p.reconcileLanes(); err == nil {
-		t.Fatal("contradictory review result did not fail loudly")
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 ||
+		result.ReadyItemsCreated != 0 {
+		t.Fatalf("contradictory review result = %#v, %v", result, err)
 	}
+	var firstRevision int64
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
 		if err != nil {
@@ -1746,19 +1816,98 @@ func TestProductionReviewContradictionFailsLoudAndPersists(t *testing.T) {
 		if failure.Class != domain.ReviewFailureContradiction {
 			t.Fatalf("contradiction record = %#v", failure)
 		}
+		digest, err := tx.ReviewFailureBodyDigest(p.ctx, failure.InvocationID)
+		if err != nil {
+			return err
+		}
+		item, err := tx.GetAttentionItem(p.ctx, productionReviewItemIDForTest(p.runID, 1))
+		if err != nil {
+			return err
+		}
+		if item.Type != domain.AttentionReviewContradiction ||
+			!item.Offers(domain.ActionRecoverReview) || item.Status != domain.StatusOpen ||
+			item.ReviewRecoveryBinding == nil ||
+			!item.ReviewRecoveryBinding.Matches(failure, digest) {
+			t.Fatalf("contradiction recovery item = %#v", item)
+		}
+		state, err := tx.ServerState(p.ctx)
+		if err != nil {
+			return err
+		}
+		firstRevision = state.Revision
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 ||
+		result.ReadyItemsCreated != 0 {
+		t.Fatalf("parked contradiction replay = %#v, %v", result, err)
+	}
+	state, err := p.store.ServerState(p.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Revision != firstRevision {
+		t.Fatalf("second parked tick moved revision %d -> %d", firstRevision, state.Revision)
+	}
 }
 
-// TestProductionLaunchContradictionFailsLoudAndPersists covers the engine
-// side of #499: a launch-time (RequestReview) failure classified as a
-// contradiction must fail the workflow loudly, persist its class, create no
-// readiness, and stay loud when resumed from the persisted failure row, rather
-// than routing to a review-dispute attention item the way a configuration
-// failure would.
-func TestProductionLaunchContradictionFailsLoudAndPersists(t *testing.T) {
+func TestProductionReviewContradictionStaysParkedAfterDeliveryTiming(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	id := engine.ProductionReviewInvocationID(p.runID, 1)
+	p.reviewer.Script(id, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: strings.Repeat("e", 40), HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("contradiction")),
+		},
+	})
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatalf("park contradiction: %v", err)
+	}
+
+	itemID := productionReviewItemIDForTest(p.runID, 1)
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		item, err := tx.GetAttentionItem(p.ctx, itemID)
+		if err != nil {
+			return err
+		}
+		delivery := domain.AttentionDelivery{
+			ItemID: itemID, DeviceID: "device-review-recovery", Channel: "ntfy", Attempt: 1,
+			SubmittedAt: p.now, Status: domain.DeliverySubmitted,
+		}
+		if err := tx.PutAttentionDelivery(p.ctx, delivery); err != nil {
+			return err
+		}
+		item, err = item.WithTiming([]domain.AttentionDelivery{delivery})
+		if err != nil {
+			return err
+		}
+		item.ItemVersion++
+		return tx.PutAttentionItem(p.ctx, item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 ||
+		result.ReadyItemsCreated != 0 {
+		t.Fatalf("delivery timing displaced parked contradiction = %#v, %v", result, err)
+	}
+	item, err := p.attention.GetAttentionItem(p.ctx, itemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Item.Status != domain.StatusOpen || item.Item.ItemVersion != 2 ||
+		item.Item.Timing.DeliveryCount != 1 {
+		t.Fatalf("timed parked contradiction = %#v", item.Item)
+	}
+}
+
+// TestProductionLaunchContradictionRaisesRecoveryItem covers a launch-time
+// contradiction: persist its class, create no readiness, and keep the task
+// live behind one recovery item rather than terminalizing it as a dispute.
+func TestProductionLaunchContradictionRaisesRecoveryItem(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
 	faults := &faultReviewSource{
 		ReviewSource: p.reviewer,
@@ -1770,10 +1919,10 @@ func TestProductionLaunchContradictionFailsLoudAndPersists(t *testing.T) {
 	p.reviewSource = faults
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	p.startAndRecordExport(t)
-	if _, err := p.reconcileLanes(); err == nil {
-		t.Fatal("launch contradiction did not fail loudly")
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatalf("launch contradiction: %v", err)
 	}
-	assertPersistedContradictionWithoutReady := func() {
+	assertPersistedContradictionWithRecovery := func() {
 		t.Helper()
 		if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 			failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
@@ -1787,22 +1936,261 @@ func TestProductionLaunchContradictionFailsLoudAndPersists(t *testing.T) {
 				domain.ItemID("production-ready-"+string(p.runID))); !errors.Is(err, store.ErrNotFound) {
 				return fmt.Errorf("readiness created for a launch contradiction: %w", err)
 			}
-			if _, err := tx.GetAttentionItem(p.ctx,
-				domain.ItemID(fmt.Sprintf("production-review-%s-1", p.runID))); !errors.Is(err, store.ErrNotFound) {
-				return fmt.Errorf("review-dispute attention created for a launch contradiction: %w", err)
+			item, err := tx.GetAttentionItem(p.ctx, productionReviewItemIDForTest(p.runID, 1))
+			if err != nil {
+				return err
+			}
+			if item.Type != domain.AttentionReviewContradiction ||
+				!item.Offers(domain.ActionRecoverReview) {
+				t.Fatalf("launch contradiction item = %#v", item)
 			}
 			return nil
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	assertPersistedContradictionWithoutReady()
-	// Resume from the persisted failure row: the gate must still fail loudly
-	// off the stored contradiction class, never converting it to a dispute.
-	if _, err := p.reconcileLanes(); err == nil {
-		t.Fatal("resumed launch contradiction did not fail loudly")
+	assertPersistedContradictionWithRecovery()
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatalf("resumed parked launch contradiction: %v", err)
 	}
-	assertPersistedContradictionWithoutReady()
+	assertPersistedContradictionWithRecovery()
+}
+
+func productionReviewItemIDForTest(runID domain.RunID, round int) domain.ItemID {
+	return domain.ItemID(fmt.Sprintf("production-review-%s-%d", runID, round))
+}
+
+func TestProductionReviewRecoveryAdvancesAndPreservesFailure(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	firstID := engine.ProductionReviewInvocationID(p.runID, 1)
+	p.reviewer.Script(firstID, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: strings.Repeat("e", 40), HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("contradiction")),
+		},
+	})
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatalf("park contradiction: %v", err)
+	}
+
+	var original domain.ReviewFailure
+	var originalDigest domain.Digest
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		original, err = tx.GetReviewFailure(p.ctx, firstID)
+		if err != nil {
+			return err
+		}
+		originalDigest, err = tx.ReviewFailureBodyDigest(p.ctx, firstID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := p.attention.GetAttentionItem(
+		p.ctx, productionReviewItemIDForTest(p.runID, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deviceID := domain.DeviceID("device-review-recovery")
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		return tx.PutDevice(p.ctx, domain.Device{
+			ID: deviceID, DisplayName: "Review recovery device",
+			Status: domain.DeviceActive, PairedAt: p.now,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.attention.Submit(p.ctx, signet.ClientCommand{
+		CommandID: "recover-review-round-1", DeviceID: deviceID,
+		ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: snapshot.Item.ID, ItemVersion: snapshot.Item.ItemVersion,
+			PRHeadSHA:       snapshot.Item.PRHeadSHA,
+			ArtifactDigests: snapshot.Item.ArtifactDigests,
+			Action:          domain.ActionRecoverReview,
+		},
+	}); err != nil {
+		t.Fatalf("submit recovery: %v", err)
+	}
+
+	p.now = p.now.Add(time.Second)
+	secondID := engine.ProductionReviewInvocationID(p.runID, 2)
+	p.reviewer.Script(secondID, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("recovered clean review")),
+		},
+	})
+	result, err := p.reconcileLanes()
+	if err != nil || result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
+		t.Fatalf("recovered review = %#v, %v", result, err)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		failure, err := tx.GetReviewFailure(p.ctx, firstID)
+		if err != nil {
+			return err
+		}
+		digest, err := tx.ReviewFailureBodyDigest(p.ctx, firstID)
+		if err != nil {
+			return err
+		}
+		if failure != original || digest != originalDigest {
+			t.Fatalf("original failure changed: %#v/%s, want %#v/%s",
+				failure, digest, original, originalDigest)
+		}
+		record, err := tx.LatestReviewRecord(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if record.Round != 2 || record.InvocationID != secondID {
+			t.Fatalf("recovered review record = %#v", record)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductionReviewRecoveryAtHardLimitEscalatesUnderDistinctItem(t *testing.T) {
+	p := newProductionPublicationHarnessWithPolicyKeys(t, "", []domain.PolicyKey{{
+		Key: "review.hard_round_limit", Value: "1",
+		Provenance: domain.KeyProvenance{
+			Source: domain.ProvenanceOverride,
+			Digest: submissionDigest("run-production-publication", "review-hard-round-limit"),
+		},
+	}})
+	firstID := engine.ProductionReviewInvocationID(p.runID, 1)
+	p.reviewer.Script(firstID, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: strings.Repeat("e", 40), HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("contradiction")),
+		},
+	})
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatalf("park contradiction: %v", err)
+	}
+
+	contradictionID := productionReviewItemIDForTest(p.runID, 1)
+	snapshot, err := p.attention.GetAttentionItem(p.ctx, contradictionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deviceID := domain.DeviceID("device-hard-limit-recovery")
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		return tx.PutDevice(p.ctx, domain.Device{
+			ID: deviceID, DisplayName: "Hard-limit recovery device",
+			Status: domain.DeviceActive, PairedAt: p.now,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.attention.Submit(p.ctx, signet.ClientCommand{
+		CommandID: "recover-review-at-hard-limit", DeviceID: deviceID,
+		ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: snapshot.Item.ID, ItemVersion: snapshot.Item.ItemVersion,
+			PRHeadSHA: snapshot.Item.PRHeadSHA, ArtifactDigests: snapshot.Item.ArtifactDigests,
+			Action: domain.ActionRecoverReview,
+		},
+	}); err != nil {
+		t.Fatalf("submit recovery: %v", err)
+	}
+
+	result, err := p.reconcileLanes()
+	if err != nil || result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 0 {
+		t.Fatalf("hard-limit recovery = %#v, %v", result, err)
+	}
+	exhaustionID := domain.ItemID("production-recovered-review-exhaustion-" + string(p.runID) + "-1")
+	if exhaustionID == contradictionID {
+		t.Fatal("hard-limit escalation reused the contradiction item id")
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		contradiction, err := tx.GetAttentionItem(p.ctx, contradictionID)
+		if err != nil {
+			return err
+		}
+		if contradiction.Status != domain.StatusResolved ||
+			contradiction.Type != domain.AttentionReviewContradiction {
+			t.Fatalf("resolved contradiction carrier = %#v", contradiction)
+		}
+		exhaustion, err := tx.GetAttentionItem(p.ctx, exhaustionID)
+		if err != nil {
+			return err
+		}
+		if exhaustion.Status != domain.StatusOpen ||
+			exhaustion.Type != domain.AttentionReviewDiminishing {
+			t.Fatalf("hard-limit escalation = %#v", exhaustion)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductionNonContradictionHardLimitConvergesOnLegacyItem(t *testing.T) {
+	p := newProductionPublicationHarnessWithPolicyKeys(t, "", []domain.PolicyKey{{
+		Key: "review.hard_round_limit", Value: "1",
+		Provenance: domain.KeyProvenance{
+			Source: domain.ProvenanceOverride,
+			Digest: submissionDigest("run-production-publication", "review-hard-round-limit"),
+		},
+	}})
+	firstID := engine.ProductionReviewInvocationID(p.runID, 1)
+	p.reviewer.Script(firstID, fake.ReviewScript{Outcome: fake.OutcomeFail})
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatalf("record transient failure: %v", err)
+	}
+
+	// Simulate an older daemon that wrote the hard-limit item under the
+	// historical round identity, then crashed before terminalizing the task.
+	runID := p.runID
+	legacyID := productionReviewItemIDForTest(p.runID, 1)
+	legacy, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: legacyID, ProjectID: p.projectID,
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		Type:    domain.AttentionReviewDiminishing, Priority: domain.PriorityNormal,
+		Reason:            "Review exhausted the resolved hard limit of 1 rounds.",
+		RequestedDecision: []domain.Action{domain.ActionFinishNow},
+		PRHeadSHA:         p.replay.HeadSHA, ItemVersion: 1,
+		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.attention.PutItem(p.ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := p.reconcileLanes()
+	if err != nil || result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 0 {
+		t.Fatalf("legacy hard-limit convergence = %#v, %v", result, err)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		item, err := tx.GetAttentionItem(p.ctx, legacyID)
+		if err != nil {
+			return err
+		}
+		if item.Type != domain.AttentionReviewDiminishing || item.Status != domain.StatusOpen {
+			t.Fatalf("legacy hard-limit item = %#v", item)
+		}
+		alternateID := domain.ItemID(
+			"production-recovered-review-exhaustion-" + string(p.runID) + "-1")
+		if _, err := tx.GetAttentionItem(p.ctx, alternateID); !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("non-contradiction exhaustion created alternate item: %w", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestProductionReviewRewrittenRequestFailsClosedBeforeRelaunch(t *testing.T) {
@@ -1821,8 +2209,8 @@ func TestProductionReviewRewrittenRequestFailsClosedBeforeRelaunch(t *testing.T)
 	// engine must fail closed before Inspect can act on the decoded request
 	// and relaunch anything from it, so with the gate armed from the first
 	// pass the review source must never be inspected at all. Were the gate
-	// ordered after Inspect, the scripted clean review would complete and the
-	// loud-failure assertion below would fail.
+	// ordered after Inspect, the scripted clean review would complete instead
+	// of parking behind the exact contradiction recovery carrier.
 	faults := &faultReviewSource{
 		ReviewSource: p.reviewer,
 		failAuthorityWith: &exec.ReviewSourceFailure{
@@ -1833,8 +2221,9 @@ func TestProductionReviewRewrittenRequestFailsClosedBeforeRelaunch(t *testing.T)
 	p.reviewSource = faults
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	p.startAndRecordExport(t)
-	if _, err := p.reconcileLanes(); err == nil {
-		t.Fatal("rewritten review request did not fail loudly")
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 ||
+		result.ReadyItemsCreated != 0 {
+		t.Fatalf("rewritten review request = %#v, %v", result, err)
 	}
 	if faults.inspectCalls != 0 {
 		t.Fatalf("rewritten request still drove Inspect %d time(s)", faults.inspectCalls)
@@ -1846,6 +2235,19 @@ func TestProductionReviewRewrittenRequestFailsClosedBeforeRelaunch(t *testing.T)
 		}
 		if failure.Class != domain.ReviewFailureContradiction {
 			t.Fatalf("rewritten request failure = %#v", failure)
+		}
+		digest, err := tx.ReviewFailureBodyDigest(p.ctx, failure.InvocationID)
+		if err != nil {
+			return err
+		}
+		item, err := tx.GetAttentionItem(p.ctx, productionReviewItemIDForTest(p.runID, 1))
+		if err != nil {
+			return err
+		}
+		if item.Type != domain.AttentionReviewContradiction ||
+			item.ReviewRecoveryBinding == nil ||
+			!item.ReviewRecoveryBinding.Matches(failure, digest) {
+			t.Fatalf("rewritten request recovery item = %#v", item)
 		}
 		return nil
 	}); err != nil {
