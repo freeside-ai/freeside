@@ -143,6 +143,24 @@ func TestFakePublicationReconciliationRevalidatesInvocationOwners(t *testing.T) 
 	}
 }
 
+func TestDecodeFakePublicationInvocationOwnerRejectsUppercaseBindingDigest(t *testing.T) {
+	task := validFakePublicationTask(t)
+	owners, err := expectedFakePublicationInvocationOwners(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := owners[0]
+	owner.BindingDigest = domain.Digest("sha256:" + strings.Repeat("A", 64))
+	payload, err := json.Marshal(owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := decodeFakePublicationInvocationOwner(payload); err == nil {
+		t.Fatal("uppercase binding digest passed invocation-owner validation")
+	}
+}
+
 func TestFakePublicationReconciliationRevalidatesResolvedPolicy(t *testing.T) {
 	task := validFakePublicationTask(t)
 	valid := fakePublicationReconciliationFixture{
@@ -665,6 +683,9 @@ func TestFakePublicationTaskValidateReappliesAdmissionValidators(t *testing.T) {
 		"commit date upper bound": func(task *fakePublicationTask) {
 			task.CommitDate = time.Unix(fakePublicationMaxCommitTimestamp, 0).UTC()
 		},
+		"handoff digest case": func(task *fakePublicationTask) {
+			task.HandoffDigest = domain.Digest("sha256:" + strings.Repeat("A", 64))
+		},
 		"utf-8": func(task *fakePublicationTask) {
 			task.RunID = domain.RunID("run-\xff")
 		},
@@ -676,6 +697,31 @@ func TestFakePublicationTaskValidateReappliesAdmissionValidators(t *testing.T) {
 			mutate(&task)
 			if err := task.validate(); err == nil {
 				t.Fatal("decoded task passed admission validation")
+			}
+		})
+	}
+}
+
+func TestValidSHA256Digest(t *testing.T) {
+	hex64 := strings.Repeat("a", 64)
+	tests := []struct {
+		name   string
+		digest domain.Digest
+		want   bool
+	}{
+		{name: "lowercase hex", digest: domain.Digest("sha256:" + hex64), want: true},
+		{name: "uppercase hex", digest: domain.Digest("sha256:" + strings.ToUpper(hex64))},
+		{name: "mixed case hex", digest: domain.Digest("sha256:A" + hex64[1:])},
+		{name: "empty"},
+		{name: "missing prefix", digest: domain.Digest(hex64)},
+		{name: "wrong length", digest: domain.Digest("sha256:" + hex64[:63])},
+		{name: "non-hex", digest: domain.Digest("sha256:" + strings.Repeat("g", 64))},
+		{name: "whitespace", digest: domain.Digest(" sha256:" + hex64)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := validSHA256Digest(test.digest); got != test.want {
+				t.Fatalf("validSHA256Digest(%q) = %t, want %t", test.digest, got, test.want)
 			}
 		})
 	}

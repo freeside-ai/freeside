@@ -22,6 +22,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	exporter "github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
@@ -3040,12 +3041,7 @@ func validCommitSHA(sha string) bool {
 }
 
 func validSHA256Digest(digest domain.Digest) bool {
-	raw, ok := strings.CutPrefix(string(digest), "sha256:")
-	if !ok || len(raw) != sha256.Size*2 {
-		return false
-	}
-	_, err := hex.DecodeString(raw)
-	return err == nil
+	return contentaddr.Valid(string(digest))
 }
 
 func digestFakePublicationTree(root string) (domain.Digest, error) {
