@@ -19,6 +19,7 @@ import (
 // runner. A new os/exec import anywhere else is the escape this test
 // exists to catch.
 func TestOnlyGitNetImportsExec(t *testing.T) {
+	t.Parallel()
 	sources, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
@@ -41,6 +42,7 @@ func TestOnlyGitNetImportsExec(t *testing.T) {
 }
 
 func TestFinalizeRejectsSubstitutedIntentCoordinates(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	if err != nil {

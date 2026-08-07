@@ -42,6 +42,7 @@ func newMintCountingSource(t *testing.T, clock *time.Time) (*publish.CachedToken
 // the token's lifetime mint exactly once (one audit row per mint, not
 // per request).
 func TestCachedTokenSourceReusesUntilExpiry(t *testing.T) {
+	t.Parallel()
 	clock := fixtureTime
 	src, mints := newMintCountingSource(t, &clock)
 
@@ -66,6 +67,7 @@ func TestCachedTokenSourceReusesUntilExpiry(t *testing.T) {
 // the cached token is no longer handed out — a token about to lapse
 // mid-publication would fail the path halfway.
 func TestCachedTokenSourceRemintsNearExpiry(t *testing.T) {
+	t.Parallel()
 	clock := fixtureTime
 	src, mints := newMintCountingSource(t, &clock)
 
@@ -87,6 +89,7 @@ func TestCachedTokenSourceRemintsNearExpiry(t *testing.T) {
 // credential is not handed out after the registration no longer reports the
 // owner installation.
 func TestCachedTokenSourceRevalidatesInstallationBeforeCacheHit(t *testing.T) {
+	t.Parallel()
 	discoveries := 0
 	mints := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -134,6 +137,7 @@ func (s repositoryTrustSource) CurrentTrust(_ context.Context, repo string) (pub
 // private registrations whose installations deliberately share a synthetic
 // installation ID. Each registration mints and caches independently.
 func TestCachedTokenSourceIsolatesRegistrations(t *testing.T) {
+	t.Parallel()
 	const (
 		secondOwner   = "freeasinbird"
 		secondOwnerID = testOwnerID + 1
@@ -222,6 +226,7 @@ func TestCachedTokenSourceIsolatesRegistrations(t *testing.T) {
 
 // TestCachedTokenSourceValidation covers the fail-fast argument check.
 func TestCachedTokenSourceValidation(t *testing.T) {
+	t.Parallel()
 	clock := fixtureTime
 	src, _ := newMintCountingSource(t, &clock)
 	if _, err := src.Token(context.Background(), ""); err == nil {

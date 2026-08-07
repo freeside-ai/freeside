@@ -53,6 +53,8 @@ func stubTokenForms() []string {
 // daemon's own environment, and never retained by the runner between
 // invocations.
 func TestRunAuthedTokenPlacement(t *testing.T) {
+	// Serial: t.Setenv mutates the process-global environment, which the
+	// Go test runner forbids in a parallel test (it panics).
 	rec := filepath.Join(t.TempDir(), "record")
 	scratch := t.TempDir()
 	r, err := newNetRunner(stubGit(t, rec, "", 0), scratch, "https")
@@ -135,6 +137,7 @@ func TestRunAuthedTokenPlacement(t *testing.T) {
 // TestRunUnauthenticatedCarriesNoCredentialEnv proves the token triple
 // exists only on authenticated invocations.
 func TestRunUnauthenticatedCarriesNoCredentialEnv(t *testing.T) {
+	t.Parallel()
 	rec := filepath.Join(t.TempDir(), "record")
 	r, err := newNetRunner(stubGit(t, rec, "", 0), t.TempDir(), "https")
 	if err != nil {
@@ -170,6 +173,7 @@ func credentialConfigEnv(e string) bool {
 // and every rendering of the resulting error must still be free of
 // the token in any form.
 func TestTransportErrorRedactsFailureStreams(t *testing.T) {
+	t.Parallel()
 	rec := filepath.Join(t.TempDir(), "record")
 	leak := "printf 'fatal: leaked %s\\n' \"$GIT_CONFIG_VALUE_0\" >&2\n"
 	r, err := newNetRunner(stubGit(t, rec, leak, 3), t.TempDir(), "https")

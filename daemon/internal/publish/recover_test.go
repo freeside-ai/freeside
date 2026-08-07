@@ -121,6 +121,7 @@ func assertConverged(t *testing.T, s *store.Store, gh *fakeGitHub, cand publish.
 // intent commits but before any GitHub effect. Recovery produces exactly
 // one branch and PR.
 func TestKillBeforeExternalEffect(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "store.db")
 	gh := newFakeGitHub(t)
@@ -160,6 +161,7 @@ func TestKillBeforeExternalEffect(t *testing.T) {
 // created, then the daemon dies before the PR. Recovery creates only the
 // missing PR — exactly one branch, exactly one PR, no duplicate branch.
 func TestKillAfterBranchBeforePR(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "store.db")
 	gh := newFakeGitHub(t)
@@ -200,6 +202,7 @@ func TestKillAfterBranchBeforePR(t *testing.T) {
 // (acceptance). Recovery records the outcome and dispatches the intent
 // with NO second external effect (acceptance 2).
 func TestKillAfterPublishBeforeAcceptance(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "store.db")
 	gh := newFakeGitHub(t)
@@ -241,6 +244,7 @@ func TestKillAfterPublishBeforeAcceptance(t *testing.T) {
 // downstream transition. A recovery drain finds nothing pending, does
 // nothing, and the workflow never advances twice.
 func TestKillAfterAcceptance(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "store.db")
 	gh := newFakeGitHub(t)
@@ -282,6 +286,7 @@ func TestKillAfterAcceptance(t *testing.T) {
 // no recorded outcome, and the intent stays pending. The outcome's
 // eligibility is the gate's verdict, never an assumed one.
 func TestDrainReGateDriftLeavesPending(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	h := newDrainHarness(t)
 	cand := testCandidate(t)
@@ -328,6 +333,7 @@ func TestDrainReGateDriftLeavesPending(t *testing.T) {
 // external effect, and the intent stays pending until a human records an
 // approved new profile.
 func TestDrainTrustDriftLeavesPending(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	// The current profile still forbids OIDC, but the latest audit observes
 	// it available: drift on the oidc axis.

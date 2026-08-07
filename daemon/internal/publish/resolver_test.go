@@ -58,6 +58,7 @@ func newActiveResolver(
 // registration may carry several installations and resolution selects by the
 // canonical installation account rather than by registration owner.
 func TestInstallationResolverPublicRegistrationMatchesOwner(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	saveResolverApp(t, ks, "operator", 101, 501, publish.AppVisibilityPublic)
 	wantJWT, err := publish.AppJWT(fixtureKey(t), 501, fixtureTime)
@@ -103,6 +104,7 @@ func TestInstallationResolverPublicRegistrationMatchesOwner(t *testing.T) {
 // keystore enumeration that failed on the .DS_Store an operating system writes
 // into any directory a human displays denied credentials for every owner.
 func TestInstallationResolverSurvivesFinderArtifact(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	saveResolverApp(t, ks, "operator", 101, 501, publish.AppVisibilityPublic)
 	artifact := filepath.Join(ks.Dir(), "github-app", ".DS_Store")
@@ -127,6 +129,7 @@ func TestInstallationResolverSurvivesFinderArtifact(t *testing.T) {
 // TestInstallationResolverUnknownOwnerFailsClosed proves the resolver never
 // falls back to an unrelated installation when no account matches.
 func TestInstallationResolverUnknownOwnerFailsClosed(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	saveResolverApp(t, ks, "operator", 101, 501, publish.AppVisibilityPublic)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -143,6 +146,7 @@ func TestInstallationResolverUnknownOwnerFailsClosed(t *testing.T) {
 // TestInstallationResolverRejectsPrivateOwnerMismatch covers the
 // returned-object boundary and its auditable, non-reflective error carrier.
 func TestInstallationResolverRejectsPrivateOwnerMismatch(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	saveResolverApp(t, ks, "operator", 101, 501, publish.AppVisibilityPrivate)
 	const untrustedOwner = "attacker-account"
@@ -172,6 +176,7 @@ func TestInstallationResolverRejectsPrivateOwnerMismatch(t *testing.T) {
 // installation returned under a different App ID is not adopted by the only
 // locally known registration.
 func TestInstallationResolverRejectsUnknownRegistrationIdentity(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	saveResolverApp(t, ks, "operator", 101, 501, publish.AppVisibilityPublic)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -190,6 +195,7 @@ func TestInstallationResolverRejectsUnknownRegistrationIdentity(t *testing.T) {
 // all-repositories, and unknown modes fail as the same closed, auditable
 // returned-object class without reflecting the observed value.
 func TestInstallationResolverRejectsBroadRepositorySelection(t *testing.T) {
+	t.Parallel()
 	for _, selection := range []string{"", "all", "future-mode"} {
 		t.Run(selection, func(t *testing.T) {
 			ks := newTestKeystore(t)
@@ -221,6 +227,7 @@ func TestInstallationResolverRejectsBroadRepositorySelection(t *testing.T) {
 // owner installed under two locally known public registrations is never chosen
 // by registration order.
 func TestInstallationResolverRejectsAmbiguousRegistrations(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	saveResolverApp(t, ks, "operator-one", 101, 501, publish.AppVisibilityPublic)
 	saveResolverApp(t, ks, "operator-two", 102, 502, publish.AppVisibilityPublic)

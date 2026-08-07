@@ -59,6 +59,7 @@ func fixtureIntent() publish.Intent {
 // outlives any single daemon build, so a recovery scan after an
 // upgrade must decode what an older build recorded.
 func TestIntentGolden(t *testing.T) {
+	t.Parallel()
 	payload, err := fixtureIntent().Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -69,6 +70,7 @@ func TestIntentGolden(t *testing.T) {
 // TestIntentRoundTrip: Encode then DecodeIntent returns the same
 // intent.
 func TestIntentRoundTrip(t *testing.T) {
+	t.Parallel()
 	payload, err := fixtureIntent().Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -86,6 +88,7 @@ func TestIntentRoundTrip(t *testing.T) {
 // decodes; a decoded outbox row is a reconstructed value, so decode
 // re-validates rather than trusting it.
 func TestIntentValidation(t *testing.T) {
+	t.Parallel()
 	cases := map[string]func(*publish.Intent){
 		"empty identity":      func(i *publish.Intent) { i.Identity = "" },
 		"non-digest identity": func(i *publish.Intent) { i.Identity = "freeside/publish/abcd" },
@@ -141,6 +144,7 @@ func TestIntentValidation(t *testing.T) {
 // TestIntentKey pins the key shape and its fail-fast checks: an empty
 // component would compose a key that can collide across invocations.
 func TestIntentKey(t *testing.T) {
+	t.Parallel()
 	key, err := publish.IntentKey("inv-0001", publish.IntentKindPublication)
 	if err != nil {
 		t.Fatal(err)
@@ -160,6 +164,7 @@ func TestIntentKey(t *testing.T) {
 // consumers rely on — a second Record under the same key returns the
 // original payload, not the new one.
 func TestMemoryLedgerConverges(t *testing.T) {
+	t.Parallel()
 	l := newMemoryLedger()
 	first, recorded, err := l.Record(context.Background(), "k", "kind", []byte("original"), nil)
 	if err != nil || !recorded || string(first) != "original" {

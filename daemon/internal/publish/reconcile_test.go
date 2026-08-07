@@ -36,6 +36,7 @@ func conditionalRequests(gh *fakeGitHub) int {
 // unchanged; a moved ref invalidates the validator and is observed
 // fresh.
 func TestReconcileRefConditional(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	gh.refs["freeside/publish/abcd"] = testHeadSHA
 	r := newTestReconciler(t, gh)
@@ -78,6 +79,7 @@ func TestReconcileRefConditional(t *testing.T) {
 // TestReconcileRefAbsent: ref absence is an observation, and with no
 // validator the next poll stays unconditional.
 func TestReconcileRefAbsent(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	r := newTestReconciler(t, gh)
 
@@ -100,6 +102,7 @@ func TestReconcileRefAbsent(t *testing.T) {
 // request: unconditional, then 304 without churn, then a fresh
 // observation after the PR changes.
 func TestReconcilePullConditional(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	gh.prs = append(gh.prs, fakePR{Number: 7, State: "open", Title: "t", Body: "b", HeadRef: "freeside/publish/abcd", HeadSHA: testHeadSHA})
 	r := newTestReconciler(t, gh)
@@ -142,6 +145,7 @@ func TestReconcilePullConditional(t *testing.T) {
 // global cursor" half): each resource carries its own validator, so
 // one resource changing does not disturb another's 304 cycle.
 func TestReconcilePerResourceValidators(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	gh.refs["freeside/publish/aaaa"] = testHeadSHA
 	gh.refs["freeside/publish/bbbb"] = testHeadSHA
@@ -176,6 +180,7 @@ func TestReconcilePerResourceValidators(t *testing.T) {
 // next fresh observation instead of being cached behind a new
 // validator and then confirmed as "unchanged" by every later 304.
 func TestReconcilePullSurfacesRetarget(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	gh.prs = append(gh.prs, fakePR{Number: 7, State: "open", Title: "t", Body: "b", HeadRef: "freeside/publish/abcd", HeadSHA: testHeadSHA})
 	r := newTestReconciler(t, gh)
@@ -210,6 +215,7 @@ func TestReconcilePullSurfacesRetarget(t *testing.T) {
 // TestReconcileRefRejectsWrongRefName: a ref observation naming a
 // different ref must not be attributed to the requested branch.
 func TestReconcileRefRejectsWrongRefName(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	gh.refs["freeside/publish/abcd"] = testHeadSHA
 	gh.mangleRefName = true
@@ -225,6 +231,7 @@ func TestReconcileRefRejectsWrongRefName(t *testing.T) {
 // have the reconciler fabricate a "confirmed" observation out of an
 // empty cache.
 func TestReconcileRefusesUnsolicited304(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotModified)
 	}))
@@ -241,6 +248,7 @@ func TestReconcileRefusesUnsolicited304(t *testing.T) {
 
 // TestReconcileValidation covers fail-fast argument checks.
 func TestReconcileValidation(t *testing.T) {
+	t.Parallel()
 	r := newTestReconciler(t, newFakeGitHub(t))
 	if _, err := r.ReconcileRef(context.Background(), "not-a-repo", "branch"); err == nil {
 		t.Error("bad repo accepted, want error")
@@ -258,6 +266,7 @@ func TestReconcileValidation(t *testing.T) {
 // base-repository identity; an unmerged PR never surfaces GitHub's
 // test-merge commit as a fact.
 func TestReconcilePullMergeState(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	gh.prs = []fakePR{
 		{
@@ -293,6 +302,7 @@ func TestReconcilePullMergeState(t *testing.T) {
 // the pull's, and a closed issue's observation carries the closing commit
 // of its latest closed event ("" for a manual close).
 func TestReconcileIssueConditional(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	gh.issues[443] = fakeIssue{State: "open"}
 	r := newTestReconciler(t, gh)
@@ -347,6 +357,7 @@ func TestReconcileIssueConditional(t *testing.T) {
 // TestReconcileIssueEventPagination: the closing-commit walk follows
 // rel="next" pages, so the latest closed event on a later page wins.
 func TestReconcileIssueEventPagination(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	stale := testHeadSHA
 	commit := testOtherSHA
@@ -372,6 +383,7 @@ func TestReconcileIssueEventPagination(t *testing.T) {
 // secretly a pull request fails the observation, so one resource cannot
 // impersonate the other.
 func TestReconcileIssueRejectsPullRequest(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	gh.issues[450] = fakeIssue{State: "open", IsPR: true}
 	r := newTestReconciler(t, gh)

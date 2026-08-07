@@ -12,6 +12,7 @@ func intptr(n int) *int { return &n }
 // unchanged, and re-read a changed sub-resource while the unchanged siblings
 // stay on their 304.
 func TestReconcilePullReviewActivityConditional(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	gh.reviews[7] = []fakeReview{{
 		ID: 900100, Login: "chatgpt-codex-connector", State: "COMMENTED",
@@ -93,6 +94,7 @@ func TestReconcilePullReviewActivityConditional(t *testing.T) {
 // sub-resource unconditionally and rebuilds the lists rather than riding a
 // NotModified (issue #497).
 func TestEvictPullReviewActivityForcesUnconditionalRefetch(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	gh.reviews[7] = []fakeReview{{
 		ID: 900100, Login: "chatgpt-codex-connector", State: "COMMENTED",
@@ -141,6 +143,7 @@ func TestEvictPullReviewActivityForcesUnconditionalRefetch(t *testing.T) {
 // TestReconcilePullReviewActivitySkipsPending proves a pending (never
 // submitted) review is not observed.
 func TestReconcilePullReviewActivitySkipsPending(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	gh.reviews[7] = []fakeReview{
 		{ID: 1, Login: "chatgpt-codex-connector", State: "PENDING", SubmittedAt: ""},
@@ -158,6 +161,7 @@ func TestReconcilePullReviewActivitySkipsPending(t *testing.T) {
 
 // TestReconcilePullReviewActivityValidation fails fast on a bad repo or number.
 func TestReconcilePullReviewActivityValidation(t *testing.T) {
+	t.Parallel()
 	r := newTestReconciler(t, newFakeGitHub(t))
 	if _, err := r.ReconcilePullReviewActivity(context.Background(), "no-slash", 7); err == nil {
 		t.Error("bad repo did not error")

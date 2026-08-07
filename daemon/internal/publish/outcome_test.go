@@ -29,6 +29,7 @@ func fixtureOutcome() publish.Outcome {
 // outlives any single daemon build, so a later read must decode what an
 // older build recorded.
 func TestOutcomeGolden(t *testing.T) {
+	t.Parallel()
 	payload, err := fixtureOutcome().Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -39,6 +40,7 @@ func TestOutcomeGolden(t *testing.T) {
 // TestOutcomeRoundTrip: Encode then DecodeOutcome returns the same
 // outcome.
 func TestOutcomeRoundTrip(t *testing.T) {
+	t.Parallel()
 	payload, err := fixtureOutcome().Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -56,6 +58,7 @@ func TestOutcomeRoundTrip(t *testing.T) {
 // decodes; a decoded inbox row is a reconstructed value, so decode
 // re-validates rather than trusting it.
 func TestOutcomeValidation(t *testing.T) {
+	t.Parallel()
 	cases := map[string]func(*publish.Outcome){
 		"empty identity":      func(o *publish.Outcome) { o.Identity = "" },
 		"non-digest identity": func(o *publish.Outcome) { o.Identity = "freeside/publish/abcd" },
@@ -107,6 +110,7 @@ func TestOutcomeValidation(t *testing.T) {
 // branch prefix) so two identities sharing a branch-name prefix cannot
 // alias one outcome row.
 func TestOutcomeKeyIsKindNamespacedFullDigest(t *testing.T) {
+	t.Parallel()
 	recipe := testRecipe
 	id, err := publish.DeriveIdentity(publish.IdentityInput{
 		Repo:            "freeside-ai/evidence-repo",
@@ -134,6 +138,7 @@ func TestOutcomeKeyIsKindNamespacedFullDigest(t *testing.T) {
 }
 
 func TestLoadOutcomeReconstructsDurableResult(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	if err != nil {
@@ -197,6 +202,7 @@ func TestLoadOutcomeReconstructsDurableResult(t *testing.T) {
 }
 
 func TestLoadOutcomeRejectsForeignCoordinates(t *testing.T) {
+	t.Parallel()
 	candidate := testCandidate(t)
 	recipe := testRecipe
 	id, err := publish.DeriveIdentity(publish.IdentityInput{

@@ -23,6 +23,7 @@ func (s staticTokenSource) Token(context.Context, string) (InstallationToken, er
 // fetch and push shapes. Any drift here changes the lane's protocol
 // policy or ref discipline and must be a reviewed change.
 func TestTransportArgvGolden(t *testing.T) {
+	t.Parallel()
 	fixture := struct {
 		HardenedConfig []string `json:"hardened_config"`
 		Fetch          []string `json:"fetch"`
@@ -44,6 +45,7 @@ func TestTransportArgvGolden(t *testing.T) {
 }
 
 func TestNewTransportValidates(t *testing.T) {
+	t.Parallel()
 	if _, err := NewTransport(nil, TransportOptions{}); err == nil {
 		t.Error("nil token source accepted")
 	}
@@ -68,6 +70,7 @@ func TestNewTransportValidates(t *testing.T) {
 // must be refused, because the composed repository URL is argv and
 // error material the transport promises is credential-free.
 func TestValidRemoteBase(t *testing.T) {
+	t.Parallel()
 	for _, base := range []string{
 		"https://github.com",
 		"https://github.com/",
@@ -113,6 +116,7 @@ func TestValidRemoteBase(t *testing.T) {
 // "no rejected base is echoed", not "the known credential fields are
 // stripped".
 func TestRemoteBaseRefusalNeverLeaksCredentials(t *testing.T) {
+	t.Parallel()
 	const secret = "hunter2supersecret"
 	// Each template places the secret in a different URL position.
 	positions := map[string]string{
@@ -162,6 +166,7 @@ func TestRemoteBaseRefusalNeverLeaksCredentials(t *testing.T) {
 }
 
 func TestValidBranchName(t *testing.T) {
+	t.Parallel()
 	valid := []string{
 		"main", "freeside/publish/0123abcd", "release-1.2", "a_b", "x.y/z",
 	}
@@ -202,6 +207,7 @@ func TestValidBranchName(t *testing.T) {
 }
 
 func TestValidCommitSHA(t *testing.T) {
+	t.Parallel()
 	if !validCommitSHA("0123456789abcdef0123456789abcdef01234567") {
 		t.Error("full lowercase sha rejected")
 	}
@@ -220,6 +226,7 @@ func TestValidCommitSHA(t *testing.T) {
 }
 
 func TestParseTransportRepo(t *testing.T) {
+	t.Parallel()
 	if _, err := parseTransportRepo("freeasinbird/gh-imgup"); err != nil {
 		t.Errorf("plain owner/name rejected: %v", err)
 	}
@@ -239,6 +246,7 @@ func TestParseTransportRepo(t *testing.T) {
 }
 
 func TestValidateRepository(t *testing.T) {
+	t.Parallel()
 	if err := ValidateRepository("freeasinbird/gh-imgup"); err != nil {
 		t.Fatalf("ValidateRepository(valid) = %v", err)
 	}

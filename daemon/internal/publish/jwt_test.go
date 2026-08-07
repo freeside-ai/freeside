@@ -48,6 +48,7 @@ func fixtureKey(t *testing.T) *rsa.PrivateKey {
 // app ID, and time: PKCS#1 v1.5 signing is deterministic, so any drift
 // in header, claims, encoding, or signing surfaces as a golden diff.
 func TestAppJWTGolden(t *testing.T) {
+	t.Parallel()
 	jwt, err := publish.AppJWT(fixtureKey(t), fixtureAppID, fixtureTime)
 	if err != nil {
 		t.Fatalf("AppJWT: %v", err)
@@ -59,6 +60,7 @@ func TestAppJWTGolden(t *testing.T) {
 // key and checks the claim contract: iss is the app ID, iat is
 // backdated 60s for clock skew, exp stays under GitHub's 10-minute cap.
 func TestAppJWTVerifiesAndClaims(t *testing.T) {
+	t.Parallel()
 	key := fixtureKey(t)
 	jwt, err := publish.AppJWT(key, fixtureAppID, fixtureTime)
 	if err != nil {
@@ -114,6 +116,7 @@ func TestAppJWTVerifiesAndClaims(t *testing.T) {
 
 // TestAppJWTNoKey covers the fail-closed path.
 func TestAppJWTNoKey(t *testing.T) {
+	t.Parallel()
 	if _, err := publish.AppJWT(nil, fixtureAppID, fixtureTime); err == nil {
 		t.Error("AppJWT(nil key) succeeded, want error")
 	}

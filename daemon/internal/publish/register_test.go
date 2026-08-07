@@ -65,6 +65,7 @@ func conversionServer(t *testing.T, gotPath *string) *httptest.Server {
 // public App for the private work-account posture or vice versa. A public
 // observation is also bound back to the converted numeric App ID.
 func TestExchangeCodeVerifiesVisibility(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name                string
 		target              publish.RegistrationTarget
@@ -223,6 +224,7 @@ func TestExchangeCodeVerifiesVisibility(t *testing.T) {
 // TestManifestForm pins both owner endpoint forms and their topology-derived
 // visibility, while proving caller-supplied authority fields are overwritten.
 func TestManifestForm(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	r := publish.NewRegistrar(ks, http.DefaultClient, "https://api.github.example", "https://github.example")
 
@@ -305,6 +307,7 @@ func TestManifestForm(t *testing.T) {
 // TestGeneratedAppName pins the 34-character cap, the truncation precedence
 // (prefix, then owner, then operator), and the increasing collision sequence.
 func TestGeneratedAppName(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		operator string
@@ -341,6 +344,7 @@ func TestGeneratedAppName(t *testing.T) {
 // both owner legs and several collision widths. It is a refute-first check for
 // truncation panics, over-cap names, and lost numeric retry suffixes.
 func TestGeneratedAppNameBoundaries(t *testing.T) {
+	t.Parallel()
 	for operatorLength := 1; operatorLength <= 39; operatorLength++ {
 		operator := "u" + strings.Repeat("x", operatorLength-1)
 		for ownerLength := 1; ownerLength <= 39; ownerLength++ {
@@ -372,6 +376,7 @@ func TestGeneratedAppNameBoundaries(t *testing.T) {
 // recorded fixture (issue #80 acceptance 1): the credentials decode,
 // the key parses, and the pem's only landing place is the keystore.
 func TestExchangeCodeFixture(t *testing.T) {
+	t.Parallel()
 	var gotPath string
 	srv := conversionServer(t, &gotPath)
 	defer srv.Close()
@@ -423,6 +428,7 @@ func TestExchangeCodeFixture(t *testing.T) {
 // not share browser or listener state. An organization owner can submit the
 // form elsewhere and relay the resulting one-time code to this daemon.
 func TestRegistrationRelay(t *testing.T) {
+	t.Parallel()
 	var gotPath string
 	api := conversionServer(t, &gotPath)
 	defer api.Close()
@@ -453,6 +459,7 @@ func TestRegistrationRelay(t *testing.T) {
 // personal or organization settings page from being stored under that
 // unexpected account.
 func TestExchangeCodeRejectsOwnerMismatch(t *testing.T) {
+	t.Parallel()
 	var gotPath string
 	srv := conversionServer(t, &gotPath)
 	defer srv.Close()
@@ -481,6 +488,7 @@ func TestExchangeCodeRejectsOwnerMismatch(t *testing.T) {
 // owner login and numeric ID are insufficient because GitHub's namespaces and
 // the private-only organization posture carry different policy.
 func TestExchangeCodeRejectsOwnerTypeMismatch(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		actualType string
@@ -539,6 +547,7 @@ func TestExchangeCodeRejectsOwnerTypeMismatch(t *testing.T) {
 // TestExchangeCodeRedactsReturnedOwner keeps an untrusted conversion response
 // from smuggling sensitive text into an error through its owner field.
 func TestExchangeCodeRedactsReturnedOwner(t *testing.T) {
+	t.Parallel()
 	const secret = "SECRET_RETURNED_OWNER_VALUE"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fixture, err := os.ReadFile(filepath.Join("testdata", "conversion-response.json"))
@@ -569,6 +578,7 @@ func TestExchangeCodeRedactsReturnedOwner(t *testing.T) {
 // TestExchangeCodeRejectsOwnerIDMismatch prevents a renamed or login-reused
 // account from being accepted as the expected registration owner.
 func TestExchangeCodeRejectsOwnerIDMismatch(t *testing.T) {
+	t.Parallel()
 	var gotPath string
 	srv := conversionServer(t, &gotPath)
 	defer srv.Close()
@@ -595,6 +605,7 @@ func TestExchangeCodeRejectsOwnerIDMismatch(t *testing.T) {
 // TestExchangeCodeAPIError asserts a failed conversion surfaces as the
 // APIError carrier and writes nothing to the keystore.
 func TestExchangeCodeAPIError(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, `{"message":"Not Found"}`)
@@ -617,6 +628,7 @@ func TestExchangeCodeAPIError(t *testing.T) {
 // credential-equivalent (it exchanges for the App key), and Go wraps
 // transport errors in *url.Error, which carries the full request URL.
 func TestExchangeCodeTransportErrorRedactsCode(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	// A closed port: the connect fails before any request leaves.
 	r := publish.NewRegistrar(ks, &http.Client{Timeout: time.Second}, "http://127.0.0.1:1", "https://github.example")
@@ -634,6 +646,7 @@ func TestExchangeCodeTransportErrorRedactsCode(t *testing.T) {
 // URL as the Referer to the redirect target. The 3xx surfaces as the
 // redacted APIError.
 func TestExchangeCodeRefusesRedirect(t *testing.T) {
+	t.Parallel()
 	var targetHits int
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		targetHits++
@@ -691,6 +704,7 @@ func fetchRedirectURL(t *testing.T, formURL string) string {
 // overwrite the keystore, since issuer-0 credentials would replace
 // working ones and fail every later mint.
 func TestExchangeCodeRejectsMissingAppID(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fixture, err := os.ReadFile(filepath.Join("testdata", "conversion-response.json"))
 		if err != nil {
@@ -719,6 +733,7 @@ func TestExchangeCodeRejectsMissingAppID(t *testing.T) {
 // TestExchangeCodeRejectsMissingCanonicalMetadata keeps an incomplete
 // returned App identity from becoming the owner-keyed registration record.
 func TestExchangeCodeRejectsMissingCanonicalMetadata(t *testing.T) {
+	t.Parallel()
 	for _, field := range []string{"name", "slug"} {
 		t.Run(field, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -752,6 +767,7 @@ func TestExchangeCodeRejectsMissingCanonicalMetadata(t *testing.T) {
 // reports exactly the pinned manifest permissions before its one-time
 // credentials can replace the keystore.
 func TestExchangeCodeRejectsPermissionMismatch(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fixture, err := os.ReadFile(filepath.Join("testdata", "conversion-response.json"))
 		if err != nil {
@@ -782,6 +798,7 @@ func TestExchangeCodeRejectsPermissionMismatch(t *testing.T) {
 // per-attempt callback with the temporary code. A request to a wrong
 // callback path first must be ignored, not abort the flow.
 func TestRegisterOrchestration(t *testing.T) {
+	t.Parallel()
 	var gotPath string
 	api := conversionServer(t, &gotPath)
 	defer api.Close()
@@ -864,6 +881,7 @@ func (l *addrOnlyListener) Addr() net.Addr            { return l.addr }
 // successful bind is not enough; the advertised callback must be an
 // explicit loopback address.
 func TestRegisterRejectsNonLoopbackListener(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	r := publish.NewRegistrar(ks, http.DefaultClient, "https://api.github.example", "https://github.example")
 	for _, ip := range []net.IP{net.IPv4zero, net.IPv6zero, net.ParseIP("192.0.2.1")} {
@@ -885,6 +903,7 @@ func TestRegisterRejectsNonLoopbackListener(t *testing.T) {
 // TestRegisterDenied covers the cancelled flow: a redirect without a
 // code must not reach the conversion API.
 func TestRegisterDenied(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	r := publish.NewRegistrar(ks, http.DefaultClient, "http://unreachable.invalid", "https://github.example")
 

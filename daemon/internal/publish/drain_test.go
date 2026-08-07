@@ -153,6 +153,7 @@ func assertOutcomeRecorded(t *testing.T, s *store.Store, key string, want publis
 // one PR, one recorded outcome, and a dispatched row — with no second
 // external effect.
 func TestDrainConvergesPendingIntent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	h := newDrainHarness(t)
 	cand := testCandidate(t)
@@ -199,6 +200,7 @@ func TestDrainConvergesPendingIntent(t *testing.T) {
 }
 
 func TestDrainExecutionIntentReauthenticatesRecordedExport(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	storePath := filepath.Join(t.TempDir(), "store.db")
 	s, err := store.Open(
@@ -326,6 +328,7 @@ func TestDrainExecutionIntentReauthenticatesRecordedExport(t *testing.T) {
 }
 
 func TestDrainRecoversHeadTransportBeforeForgeConvergence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	h := newDrainHarness(t)
 	cand := testCandidate(t)
@@ -372,6 +375,7 @@ func TestDrainRecoversHeadTransportBeforeForgeConvergence(t *testing.T) {
 }
 
 func TestPublishAfterGateAndFinalizeDoesNotRegateReturnedResult(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	audit := testWorkflowAudit(t)
 	s := newTestStore(t)
@@ -418,6 +422,7 @@ func TestPublishAfterGateAndFinalizeDoesNotRegateReturnedResult(t *testing.T) {
 // TestDrainNoPending: an empty outbox drains to zero with no GitHub
 // traffic.
 func TestDrainNoPending(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	h := newDrainHarness(t)
 
@@ -434,6 +439,7 @@ func TestDrainNoPending(t *testing.T) {
 }
 
 func TestDrainPublicationIntentScopesRecoveryToInvocation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	h := newDrainHarness(t)
 	first := testCandidate(t)
@@ -474,6 +480,7 @@ func TestDrainPublicationIntentScopesRecoveryToInvocation(t *testing.T) {
 // never dispatched; it stays pending as loud evidence (mirrors signet's
 // TestDispatchRejectsCorruptIntent).
 func TestDrainRejectsCorruptIntent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	h := newDrainHarness(t)
 
@@ -514,6 +521,7 @@ func TestDrainRejectsCorruptIntent(t *testing.T) {
 // pending. This is the returned-object trust boundary: the drain trusts
 // the engine to reload a candidate, never to reload the wrong one.
 func TestDrainRejectsDivergedResolver(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	h := newDrainHarness(t)
 
@@ -575,6 +583,7 @@ func TestDrainRejectsDivergedResolver(t *testing.T) {
 // leaving the original intent to re-drive forever. Zero effect, exactly
 // one pending row (the original), no second intent recorded.
 func TestDrainRejectsInvocationMismatch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	h := newDrainHarness(t)
 
@@ -622,6 +631,7 @@ func TestDrainRejectsInvocationMismatch(t *testing.T) {
 // authorization-axis check recovery would silently retarget to a different
 // authorizing record. Zero effect, the original row stays pending.
 func TestDrainRejectsAuthorizationMismatch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	h := newDrainHarness(t)
 
@@ -673,6 +683,7 @@ func TestDrainRejectsAuthorizationMismatch(t *testing.T) {
 // fails closed and the intent stays pending (the finalize transaction
 // rolls back the mark too).
 func TestDrainRefusesForeignOutcomeRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	h := newDrainHarness(t)
 	cand := testCandidate(t)
@@ -704,6 +715,7 @@ func TestDrainRefusesForeignOutcomeRow(t *testing.T) {
 // alone. A row of another kind under the outcome key must roll back the
 // dispatched mark and remain loud, even if it copied the expected payload.
 func TestDrainRefusesForeignOutcomeKind(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	h := newDrainHarness(t)
 	cand := testCandidate(t)
@@ -746,6 +758,7 @@ func TestDrainRefusesForeignOutcomeKind(t *testing.T) {
 // candidate coordinates, so the drain's divergence guard (which derives
 // the same way) can never disagree with a real publish.
 func TestPublishIdentityMatchesDerivation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	h := newDrainHarness(t)
 	res, err := h.pub.Publish(ctx, testCandidate(t), testApprovedRecipes())

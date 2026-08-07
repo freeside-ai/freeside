@@ -150,6 +150,7 @@ func runAuditFixture(t *testing.T, fixture *auditFixtureServer) domain.WorkflowA
 }
 
 func TestGitHubWorkflowAuditorProducesFreshObservation(t *testing.T) {
+	t.Parallel()
 	fixture := &auditFixtureServer{t: t, changeOnce: true}
 	server := httptest.NewServer(http.HandlerFunc(fixture.handler))
 	defer server.Close()
@@ -205,6 +206,7 @@ func TestGitHubWorkflowAuditorProducesFreshObservation(t *testing.T) {
 }
 
 func TestGitHubWorkflowAuditorFailsClosedOnMissingScope(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.Path, "/git/ref/") {
@@ -229,6 +231,7 @@ func TestGitHubWorkflowAuditorFailsClosedOnMissingScope(t *testing.T) {
 }
 
 func TestGitHubWorkflowAuditorFailsClosedAtPaginationLimit(t *testing.T) {
+	t.Parallel()
 	fixture := &auditFixtureServer{t: t, runnerOverflow: true}
 	server := httptest.NewServer(http.HandlerFunc(fixture.handler))
 	defer server.Close()
@@ -243,6 +246,7 @@ func TestGitHubWorkflowAuditorFailsClosedAtPaginationLimit(t *testing.T) {
 }
 
 func TestGitHubWorkflowAuditorEnumeratesPinnedBaseWorkflows(t *testing.T) {
+	t.Parallel()
 	audit := runAuditFixture(t, &auditFixtureServer{t: t, baseOnlyWorkflow: `on: pull_request_target
 jobs:
   check:
@@ -256,6 +260,7 @@ jobs:
 }
 
 func TestGitHubWorkflowAuditorAcceptsDynamicWorkflowRows(t *testing.T) {
+	t.Parallel()
 	baseline := runAuditFixture(t, &auditFixtureServer{t: t})
 	audit := runAuditFixture(t, &auditFixtureServer{t: t, extraWorkflowRows: []string{
 		`{"path":"dynamic/dependabot/dependabot-updates","state":"active"}`,
@@ -276,6 +281,7 @@ func TestGitHubWorkflowAuditorAcceptsDynamicWorkflowRows(t *testing.T) {
 }
 
 func TestGitHubWorkflowAuditorDigestCoversDynamicWorkflowState(t *testing.T) {
+	t.Parallel()
 	active := runAuditFixture(t, &auditFixtureServer{t: t, extraWorkflowRows: []string{
 		`{"path":"dynamic/dependabot/dependabot-updates","state":"active"}`,
 	}})
@@ -288,6 +294,7 @@ func TestGitHubWorkflowAuditorDigestCoversDynamicWorkflowState(t *testing.T) {
 }
 
 func TestGitHubWorkflowAuditorFailsClosedOnMalformedWorkflowRows(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		rows []string
@@ -319,6 +326,7 @@ func TestGitHubWorkflowAuditorFailsClosedOnMalformedWorkflowRows(t *testing.T) {
 }
 
 func TestGitHubWorkflowAuditorDigestCoversLiveSettings(t *testing.T) {
+	t.Parallel()
 	baseline := runAuditFixture(t, &auditFixtureServer{t: t})
 	tests := []struct {
 		name    string

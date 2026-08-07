@@ -61,6 +61,7 @@ func scrubbedLiveGitEnv() []string {
 // unauthenticated ls-remote, so the live repo must be public (the
 // designated live fixture, freeasinbird/gh-imgup, is).
 func TestLiveTransportFetchPush(t *testing.T) {
+	t.Parallel()
 	m, repo, _ := newLiveMinter(t)
 	baseRef := os.Getenv("FREESIDE_PUBLISH_LIVE_BASE")
 	if baseRef == "" {

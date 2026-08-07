@@ -119,6 +119,7 @@ func newLiveMinter(t *testing.T) (m *publish.Minter, repo string, profile domain
 // TestLiveMintInstallationToken exercises the App JWT and
 // installation-token lifecycle against the real GitHub API.
 func TestLiveMintInstallationToken(t *testing.T) {
+	t.Parallel()
 	m, repo, _ := newLiveMinter(t)
 	tok, err := m.MintInstallationToken(context.Background(), repo)
 	if err != nil {
@@ -141,6 +142,7 @@ func TestLiveMintInstallationToken(t *testing.T) {
 // refs, it does not upload objects) and cleans up the branch and PR it
 // creates.
 func TestLivePublishEffectivelyOnce(t *testing.T) {
+	t.Parallel()
 	m, repo, liveProfile := newLiveMinter(t)
 	headSHA := os.Getenv("FREESIDE_PUBLISH_LIVE_HEAD_SHA")
 	if headSHA == "" {
@@ -393,6 +395,7 @@ func (f cleanupTransportFunc) RoundTrip(req *http.Request) (*http.Response, erro
 }
 
 func TestBareRepoName(t *testing.T) {
+	t.Parallel()
 	got, err := bareRepoName("freeside-ai/freeside")
 	if err != nil {
 		t.Fatal(err)
@@ -408,6 +411,7 @@ func TestBareRepoName(t *testing.T) {
 }
 
 func TestDoLiveCleanupRequestChecksStatus(t *testing.T) {
+	t.Parallel()
 	client := &http.Client{Transport: cleanupTransportFunc(func(req *http.Request) (*http.Response, error) {
 		if got := req.Header.Get("Authorization"); got != "Bearer secret" {
 			t.Errorf("Authorization = %q", got)
@@ -426,6 +430,7 @@ func TestDoLiveCleanupRequestChecksStatus(t *testing.T) {
 }
 
 func TestCleanupLivePublicationDiscoversPartialPR(t *testing.T) {
+	t.Parallel()
 	var requests []string
 	client := &http.Client{Transport: cleanupTransportFunc(func(req *http.Request) (*http.Response, error) {
 		requests = append(requests, req.Method+" "+req.URL.RequestURI())
@@ -490,6 +495,7 @@ func (liveGuardRecorder) RecordInstallationQuarantine(record publish.Installatio
 // authored bindings against the App's real installations and publishes coverage
 // for the exact repository.
 func TestLiveInstallationJanitorPublishesCoverage(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("FREESIDE_PUBLISH_LIVE_TEST") != "1" {
 		t.Skip("live GitHub integration is opt-in: set FREESIDE_PUBLISH_LIVE_TEST=1, " +
 			"FREESIDE_PUBLISH_LIVE_APP_ID, FREESIDE_PUBLISH_LIVE_APP_OWNER, FREESIDE_PUBLISH_LIVE_OWNER_ID, " +

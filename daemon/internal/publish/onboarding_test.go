@@ -194,6 +194,7 @@ func newTestOnboarder(
 }
 
 func TestCredentialOnboardingRegistrationAndInstallationFlow(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	onboarder, forge, _ := newTestOnboarder(t, ks, activeJanitorStatus{})
 	request := publish.CredentialRequest{
@@ -264,6 +265,7 @@ func TestCredentialOnboardingRegistrationAndInstallationFlow(t *testing.T) {
 }
 
 func TestCredentialOnboardingImportsPerMachineKey(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	onboarder, _, _ := newTestOnboarder(t, ks, activeJanitorStatus{})
 	registration := publicFixtureRegistration()
@@ -302,6 +304,7 @@ func TestCredentialOnboardingImportsPerMachineKey(t *testing.T) {
 }
 
 func TestCredentialOnboardingScopesInstallationToSelectedRegistration(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	if err := ks.SaveApp(publicFixtureCredentials(t)); err != nil {
 		t.Fatal(err)
@@ -332,6 +335,7 @@ func TestCredentialOnboardingScopesInstallationToSelectedRegistration(t *testing
 }
 
 func TestCredentialOnboardingKeyRotationPreservesManifestSecrets(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	existing := publicFixtureCredentials(t)
 	existing.WebhookSecret = publish.Secret("webhook-existing")
@@ -362,6 +366,7 @@ func TestCredentialOnboardingKeyRotationPreservesManifestSecrets(t *testing.T) {
 }
 
 func TestCredentialOnboardingRejectsUnsafeSlug(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	onboarder, _, _ := newTestOnboarder(t, ks, activeJanitorStatus{})
 	registration := publicFixtureRegistration()
@@ -372,6 +377,7 @@ func TestCredentialOnboardingRejectsUnsafeSlug(t *testing.T) {
 }
 
 func TestCredentialOnboardingRejectsUntrustedKeyOrAppMetadata(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		mutate    func(*credentialForge)
@@ -505,6 +511,7 @@ func (s *mutableJanitorStatus) setActive(active bool) {
 }
 
 func TestCredentialOnboardingWaitsThroughJanitorPass(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	if err := ks.SaveApp(publicFixtureCredentials(t)); err != nil {
 		t.Fatal(err)
@@ -530,6 +537,7 @@ func TestCredentialOnboardingWaitsThroughJanitorPass(t *testing.T) {
 }
 
 func TestCredentialOnboardingNormalizesTrailingSlashBaseURLs(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	forge := newCredentialForge(t)
 	srv := httptest.NewServer(forge)
@@ -569,6 +577,7 @@ func TestCredentialOnboardingNormalizesTrailingSlashBaseURLs(t *testing.T) {
 }
 
 func TestCredentialOnboardingNextTreatsInactiveJanitorAsNotReady(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	if err := ks.SaveApp(publicFixtureCredentials(t)); err != nil {
 		t.Fatal(err)
@@ -592,6 +601,7 @@ func TestCredentialOnboardingNextTreatsInactiveJanitorAsNotReady(t *testing.T) {
 }
 
 func TestCredentialDoctorDetections(t *testing.T) {
+	t.Parallel()
 	t.Run("missing key", func(t *testing.T) {
 		ks := newTestKeystore(t)
 		onboarder, _, _ := newTestOnboarder(t, ks, activeJanitorStatus{})

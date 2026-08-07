@@ -222,6 +222,7 @@ func assertShutdown(t *testing.T, cancel context.CancelFunc, done <-chan error) 
 // registration its authority source cannot serve used to stop the loop, which
 // denied every other registration until a human restarted the daemon.
 func TestInstallationJanitorIsolatesAnAuthorityFailure(t *testing.T) {
+	t.Parallel()
 	ks := twoRegistrationKeystore(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
@@ -274,6 +275,7 @@ func TestInstallationJanitorIsolatesAnAuthorityFailure(t *testing.T) {
 // #281: a forge failure scoped to one registration denies that registration
 // only.
 func TestInstallationJanitorIsolatesAReconcileFailure(t *testing.T) {
+	t.Parallel()
 	ks := twoRegistrationKeystore(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
@@ -313,6 +315,7 @@ func TestInstallationJanitorIsolatesAReconcileFailure(t *testing.T) {
 // heals on its own: authoring the missing snapshot entry restores coverage
 // without a daemon restart, which is the point of not stopping the loop.
 func TestInstallationJanitorRecoversWhenAnAuthorityFaultClears(t *testing.T) {
+	t.Parallel()
 	ks := twoRegistrationKeystore(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
@@ -353,6 +356,7 @@ func TestInstallationJanitorRecoversWhenAnAuthorityFaultClears(t *testing.T) {
 // line: a failure that names no registration cannot be attributed to one, so
 // it still stops the pass with every gate shut.
 func TestInstallationJanitorStopsOnAKeystoreFailure(t *testing.T) {
+	t.Parallel()
 	ks := twoRegistrationKeystore(t)
 	// A directory that could never be a registration fails enumeration closed
 	// for the whole keystore (#284).
@@ -386,6 +390,7 @@ func TestInstallationJanitorStopsOnAKeystoreFailure(t *testing.T) {
 // already covered under the old code, which appended coverage and only then
 // ended the pass, so only a sibling reached after it pins this change.
 func TestInstallationJanitorRemovalDoesNotDenyASibling(t *testing.T) {
+	t.Parallel()
 	ks := twoRegistrationKeystore(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -446,6 +451,7 @@ func TestInstallationJanitorRemovalDoesNotDenyASibling(t *testing.T) {
 // pass one, is skipped when 501 spends pass two's bound, then churns again in
 // pass three. The skipped pass neither clears nor increments its count.
 func TestInstallationJanitorPreservesSkippedRemovalChurn(t *testing.T) {
+	t.Parallel()
 	ks := twoRegistrationKeystore(t)
 	third501 := make(chan struct{})
 	releaseThird501 := make(chan struct{})
@@ -546,6 +552,7 @@ func TestInstallationJanitorPreservesSkippedRemovalChurn(t *testing.T) {
 // only that registration would let every other one keep minting on top of a
 // durable withdrawal barrier the daemon has just proven it cannot write.
 func TestInstallationJanitorStopsOnAnAuditBarrierFailure(t *testing.T) {
+	t.Parallel()
 	ks := twoRegistrationKeystore(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
@@ -578,6 +585,7 @@ func TestInstallationJanitorStopsOnAnAuditBarrierFailure(t *testing.T) {
 // stays live for an hour; faulting the registration would mint another every
 // pass, so the pass stops instead.
 func TestInstallationJanitorStopsOnAnUnrevokedToken(t *testing.T) {
+	t.Parallel()
 	ks := twoRegistrationKeystore(t)
 	var mintsMu sync.Mutex
 	mints := 0
@@ -621,6 +629,7 @@ func TestInstallationJanitorStopsOnAnUnrevokedToken(t *testing.T) {
 // learned, so retrying it every pass would accumulate credentials nothing can
 // revoke.
 func TestInstallationJanitorStopsOnAnUnaccountableMint(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		status     int
@@ -722,6 +731,7 @@ func TestInstallationJanitorStopsOnAnUnaccountableMint(t *testing.T) {
 // registration would otherwise get one destructive request beyond the bound.
 // A suspend is already a completed, account-visible effect.
 func TestInstallationJanitorBoundsDestructiveAttempts(t *testing.T) {
+	t.Parallel()
 	ks := twoRegistrationKeystore(t)
 	var effectsMu sync.Mutex
 	var suspends []string
@@ -771,6 +781,7 @@ func TestInstallationJanitorBoundsDestructiveAttempts(t *testing.T) {
 // must not open the gate for an ID whose sibling record could not be
 // validated.
 func TestInstallationJanitorWithdrawsCoverageFromADuplicatedRegistration(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	saveResolverApp(t, ks, "operator", 101, 501, publish.AppVisibilityPublic)
 	saveResolverApp(t, ks, "partner", 202, 501, publish.AppVisibilityPublic)
@@ -802,6 +813,7 @@ func TestInstallationJanitorWithdrawsCoverageFromADuplicatedRegistration(t *test
 }
 
 func TestInstallationJanitorWithdrawsChurningCoverageFromADuplicatedRegistration(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	saveResolverApp(t, ks, "operator", 101, 501, publish.AppVisibilityPublic)
 	saveResolverApp(t, ks, "partner", 202, 501, publish.AppVisibilityPublic)
@@ -865,6 +877,7 @@ func TestInstallationJanitorWithdrawsChurningCoverageFromADuplicatedRegistration
 }
 
 func TestInstallationJanitorWithdrawsIncompleteDuplicateCoverage(t *testing.T) {
+	t.Parallel()
 	t.Run("later duplicate is skipped", func(t *testing.T) {
 		testInstallationJanitorWithdrawsIncompleteDuplicateCoverage(
 			t,
@@ -992,6 +1005,7 @@ func testInstallationJanitorWithdrawsIncompleteDuplicateCoverage(
 // it would report a registration that has failed for hours as merely unvisited
 // for as long as each pass takes.
 func TestInstallationJanitorFaultsOutliveTheGateTheyExplain(t *testing.T) {
+	t.Parallel()
 	ks := twoRegistrationKeystore(t)
 	blocked := make(chan struct{})
 	release := make(chan struct{})
@@ -1074,6 +1088,7 @@ func TestInstallationJanitorFaultsOutliveTheGateTheyExplain(t *testing.T) {
 // registration ID, and a canceled pass reports the cancellation rather than a
 // fault for every registration it did not reach.
 func TestInstallationJanitorOrdersFaultsAndReportsCancellation(t *testing.T) {
+	t.Parallel()
 	ks := twoRegistrationKeystore(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
@@ -1111,6 +1126,7 @@ func TestInstallationJanitorOrdersFaultsAndReportsCancellation(t *testing.T) {
 // budget whole: it is spent by the pass, not by one registration, so a later
 // registration cannot be reconciled within it either.
 func TestInstallationJanitorRemovalLimitStopsThePass(t *testing.T) {
+	t.Parallel()
 	ks := twoRegistrationKeystore(t)
 	examined := map[int64]int{}
 	var examinedMu sync.Mutex
@@ -1161,6 +1177,7 @@ func TestInstallationJanitorRemovalLimitStopsThePass(t *testing.T) {
 }
 
 func TestInstallationJanitorFailedAttemptLimitStopsThePass(t *testing.T) {
+	t.Parallel()
 	ks := twoRegistrationKeystore(t)
 	examined := map[int64]int{}
 	var examinedMu sync.Mutex

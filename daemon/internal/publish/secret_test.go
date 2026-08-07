@@ -19,6 +19,7 @@ const secretValue = "ghs_SECRETSECRETSECRETSECRET"
 // marshalling — and asserts the value never appears (issue #80
 // acceptance 4).
 func TestSecretRendersRedactedEverywhere(t *testing.T) {
+	t.Parallel()
 	s := publish.Secret(secretValue)
 
 	for _, verb := range []string{"%s", "%q", "%v", "%+v", "%#v", "%x", "%X", "%d"} {
@@ -64,6 +65,7 @@ func TestSecretRendersRedactedEverywhere(t *testing.T) {
 // the redaction boundary: decoding an API response into a Secret and
 // revealing it at a use site.
 func TestSecretDecodesAndReveals(t *testing.T) {
+	t.Parallel()
 	var got struct {
 		Token publish.Secret `json:"token"`
 	}

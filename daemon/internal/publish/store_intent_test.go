@@ -45,6 +45,7 @@ func outboxRow(t *testing.T, s *store.Store, key string) store.QueueEntry {
 // commit an intent under the invocation, and it does not have to know
 // reservations exist to fail — it collides with the key it tried to take.
 func TestStoreLedgerRefusesReservedInvocationWithoutClaim(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := newTestStore(t)
 	owner := fixtureReservation(t)
@@ -87,6 +88,7 @@ func TestStoreLedgerRefusesReservedInvocationWithoutClaim(t *testing.T) {
 }
 
 func TestStoreLedgerRefusesExecutionIntentWithoutDurableReservation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := newTestStore(t)
 	claim := fixtureReservation(t)
@@ -127,6 +129,7 @@ func TestStoreLedgerRefusesExecutionIntentWithoutDurableReservation(t *testing.T
 }
 
 func TestStoreLedgerBindsExecutionIntentToExactReservation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := newTestStore(t)
 	owner := fixtureReservation(t)
@@ -182,6 +185,7 @@ func TestStoreLedgerBindsExecutionIntentToExactReservation(t *testing.T) {
 }
 
 func TestStoreLedgerExecutionRetryRequiresPersistedOwner(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := newTestStore(t)
 	owner := fixtureReservation(t)
@@ -218,6 +222,7 @@ func TestStoreLedgerExecutionRetryRequiresPersistedOwner(t *testing.T) {
 // reservation on the same row, so nothing ever released the key, and the
 // settled intent is pending — the recovery scan must still find it.
 func TestStoreLedgerSettlesItsOwnReservation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := newTestStore(t)
 	owner := fixtureReservation(t)
@@ -272,6 +277,7 @@ func TestStoreLedgerSettlesItsOwnReservation(t *testing.T) {
 // restart that re-runs it, must converge on the one committed intent rather
 // than reading its own settled row as somebody else's.
 func TestStoreLedgerConvergesAfterSettling(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := newTestStore(t)
 	owner := fixtureReservation(t)
@@ -320,6 +326,7 @@ func TestStoreLedgerConvergesAfterSettling(t *testing.T) {
 // presented against but names a different invocation would settle a
 // reservation the caller never made.
 func TestStoreLedgerRefusesClaimForAnotherKey(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := newTestStore(t)
 	owner := fixtureReservation(t)
@@ -356,6 +363,7 @@ func TestStoreLedgerRefusesClaimForAnotherKey(t *testing.T) {
 // single connection, so what this proves is that serialization plus the
 // reservation leaves exactly one committed intent, and that it is the owner's.
 func TestConcurrentWritersConvergeOnTheReservingRun(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := newTestStore(t)
 	owner := fixtureReservation(t)
@@ -459,6 +467,7 @@ func TestConcurrentWritersConvergeOnTheReservingRun(t *testing.T) {
 // key-versus-payload check on every pass and could never drain, so the write
 // side refuses it rather than committing a row nothing can ever finish.
 func TestStoreLedgerRefusesSettlingAnIntentForAnotherInvocation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := newTestStore(t)
 	owner := fixtureReservation(t)

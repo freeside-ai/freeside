@@ -17,6 +17,7 @@ func analyzeOne(t *testing.T, body string, defaultPerms domain.TokenPermissionsM
 }
 
 func TestAnalyzeWorkflowsPrivilegeAxes(t *testing.T) {
+	t.Parallel()
 	body := `name: CI
 on:
   pull_request:
@@ -46,6 +47,7 @@ jobs:
 }
 
 func TestAnalyzeWorkflowsMatchesSecretEnvironmentsCaseInsensitively(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		environment string
@@ -72,6 +74,7 @@ jobs:
 }
 
 func TestAnalyzeWorkflowsPermissionPrecedence(t *testing.T) {
+	t.Parallel()
 	body := `on: pull_request
 permissions:
   contents: write
@@ -92,6 +95,7 @@ jobs:
 }
 
 func TestAnalyzeWorkflowsInheritedWriteIncludesPackagePublishing(t *testing.T) {
+	t.Parallel()
 	body := `on: pull_request
 jobs:
   publish:
@@ -109,6 +113,7 @@ jobs:
 }
 
 func TestAnalyzeWorkflowsPullRequestTargetExplicitReductionClearsPackagePublishing(t *testing.T) {
+	t.Parallel()
 	body := `on: pull_request_target
 permissions:
   contents: read
@@ -125,6 +130,7 @@ jobs:
 }
 
 func TestAnalyzeWorkflowsPullRequestTargetFailsHigh(t *testing.T) {
+	t.Parallel()
 	facts := analyzeOne(t, `on: pull_request_target
 jobs:
   check:
@@ -138,6 +144,7 @@ jobs:
 }
 
 func TestAnalyzeWorkflowsSelfHostedRunnerSelection(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name    string
 		runsOn  string
@@ -173,6 +180,7 @@ jobs:
 }
 
 func TestAnalyzeWorkflowsIgnoresNonPRReusableWorkflow(t *testing.T) {
+	t.Parallel()
 	facts := analyzeOne(t, `on: push
 jobs:
   release:
@@ -184,6 +192,7 @@ jobs:
 }
 
 func TestAnalyzeWorkflowsNonPRLocalActionArtifactConsumer(t *testing.T) {
+	t.Parallel()
 	workflows := []workflowSource{{Path: ".github/workflows/release.yml", Active: true, Content: []byte(`on: push
 jobs:
   release:
@@ -208,6 +217,7 @@ runs:
 }
 
 func TestAnalyzeWorkflowsWorkflowRunArtifactConsumer(t *testing.T) {
+	t.Parallel()
 	facts := analyzeOne(t, `on: workflow_run
 jobs:
   consume:
@@ -221,6 +231,7 @@ jobs:
 }
 
 func TestAnalyzeWorkflowsLocalReusableWorkflow(t *testing.T) {
+	t.Parallel()
 	sources := []workflowSource{
 		{Path: ".github/workflows/ci.yml", Active: true, Content: []byte(`on: pull_request
 jobs:
@@ -250,6 +261,7 @@ jobs:
 }
 
 func TestAnalyzeWorkflowsSecretExpressionFormsAndScopes(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		body string
@@ -287,6 +299,7 @@ func TestAnalyzeWorkflowsSecretExpressionFormsAndScopes(t *testing.T) {
 }
 
 func TestAnalyzeWorkflowsLocalCompositeActionPrivileges(t *testing.T) {
+	t.Parallel()
 	workflows := []workflowSource{{Path: ".github/workflows/ci.yml", Active: true, Content: []byte(`on: pull_request
 jobs:
   check:
@@ -310,6 +323,7 @@ runs:
 }
 
 func TestAnalyzeWorkflowsFailsClosed(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		body string

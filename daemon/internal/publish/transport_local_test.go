@@ -166,6 +166,7 @@ func candidateHead(t *testing.T, co Checkout) string {
 }
 
 func TestFetchBaseMaterializesExactBase(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	dir := checkoutDir(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, dir)
@@ -190,6 +191,7 @@ func TestFetchBaseMaterializesExactBase(t *testing.T) {
 }
 
 func TestFetchBaseRefusesSHAAbsentFromRemote(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	missing := strings.Repeat("deadbeef", 5)
 	_, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", missing, checkoutDir(t))
@@ -199,6 +201,7 @@ func TestFetchBaseRefusesSHAAbsentFromRemote(t *testing.T) {
 }
 
 func TestFetchBaseRefusesSHAOffTheBaseBranch(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	// A commit that exists on the remote but only on another branch:
 	// requesting it against main must fail closed, because "the remote
@@ -218,6 +221,7 @@ func TestFetchBaseRefusesSHAOffTheBaseBranch(t *testing.T) {
 }
 
 func TestFetchBaseRefusesMissingBranch(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	_, err := remote.transport.FetchBase(t.Context(), remote.repo, "absent", remote.baseSHA, checkoutDir(t))
 	if !errors.Is(err, ErrRemoteMissingBase) {
@@ -232,6 +236,7 @@ func TestFetchBaseRefusesMissingBranch(t *testing.T) {
 // (case, dots, slashes, suffixes, nesting, duplication, control and
 // glob characters) rather than the one shape a finding cited.
 func TestValidBranchNameAgreesWithGit(t *testing.T) {
+	t.Parallel()
 	corpus := []string{
 		"main", "release-1.2", "a_b", "x.y/z", "freeside/publish/0123abcd",
 		"a/b/c/d", "A/B", "0", "a-", "-a", "a.b.c", "a..b", "a...b",
@@ -266,6 +271,8 @@ func TestValidBranchNameAgreesWithGit(t *testing.T) {
 // resolved against the caller's working directory, not the private
 // scratch every git invocation runs in.
 func TestFetchBaseAcceptsRelativeDir(t *testing.T) {
+	// Serial: t.Chdir mutates the process-global working directory, which
+	// the Go test runner forbids in a parallel test (it panics).
 	remote := newLocalRemote(t)
 	t.Chdir(t.TempDir())
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, "nested/checkout")
@@ -292,6 +299,7 @@ func TestFetchBaseAcceptsRelativeDir(t *testing.T) {
 // unreadable after the branch is confirmed present, so the fetch
 // fails for a reason unrelated to the ref existing.
 func TestFetchBaseDoesNotInferMissingBaseFromFailure(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	objects := filepath.Join(remote.bare, "objects")
 	if err := os.Chmod(objects, 0o000); err != nil {
@@ -309,6 +317,7 @@ func TestFetchBaseDoesNotInferMissingBaseFromFailure(t *testing.T) {
 }
 
 func TestFetchBaseRefusesClaimedDir(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	dir := checkoutDir(t)
 	if _, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, dir); err != nil {
@@ -335,6 +344,7 @@ func (c *countingTokenSource) Token(context.Context, string) (InstallationToken,
 // token source, so no audited mint and no live credential exists for
 // a call that had no remote effect.
 func TestRejectedCallsMintNoToken(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	counter := &countingTokenSource{}
 	tr := &Transport{tokens: counter, gitPath: "git", remoteBase: remote.transport.remoteBase, scheme: "file"}
@@ -366,6 +376,7 @@ func TestRejectedCallsMintNoToken(t *testing.T) {
 }
 
 func TestPushHeadCreatesBranch(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {
@@ -386,6 +397,7 @@ func TestPushHeadCreatesBranch(t *testing.T) {
 }
 
 func TestPushHeadConvergesOnIdenticalHead(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {
@@ -410,6 +422,7 @@ func TestPushHeadConvergesOnIdenticalHead(t *testing.T) {
 }
 
 func TestPushHeadRefusesForeignBranch(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {
@@ -432,6 +445,7 @@ func TestPushHeadRefusesForeignBranch(t *testing.T) {
 }
 
 func TestPushHeadMovesOnlyTheIntendedRef(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {
@@ -454,6 +468,7 @@ func TestPushHeadMovesOnlyTheIntendedRef(t *testing.T) {
 }
 
 func TestPushHeadRefusesHeadMissingFromCheckout(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {
@@ -472,6 +487,7 @@ func TestPushHeadRefusesHeadMissingFromCheckout(t *testing.T) {
 // Publisher's gates therefore cannot reach the managed repository even
 // with a genuine Checkout in hand.
 func TestPushHeadRefusesUngatedHead(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	counter := &countingTokenSource{}
 	tr := &Transport{tokens: counter, gitPath: "git", remoteBase: remote.transport.remoteBase, scheme: "file"}
@@ -515,6 +531,7 @@ func TestPushHeadRefusesUngatedHead(t *testing.T) {
 // zero value and can only be read, so no caller can mint one or repoint
 // one it holds at another candidate. A new exported field fails it.
 func TestGatedHeadIsSealed(t *testing.T) {
+	t.Parallel()
 	typ := reflect.TypeOf(GatedHead{})
 	for i := range typ.NumField() {
 		if f := typ.Field(i); f.IsExported() {
@@ -550,6 +567,7 @@ func TestGatedHeadIsSealed(t *testing.T) {
 // is why it is a test and not a review habit: an added exported mint
 // otherwise leaves the whole suite green.
 func TestNoExportedGatedHeadMint(t *testing.T) {
+	t.Parallel()
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
@@ -629,6 +647,7 @@ func mentionsGatedHead(expr ast.Expr) bool {
 // over an arbitrary local repository still fails the repo-binding
 // re-gate before any token is spent on it.
 func TestPushHeadRefusesUnboundCheckout(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	stray := t.TempDir()
 	gitOut(t, "", "init", "--initial-branch=main", stray)
@@ -652,6 +671,7 @@ func TestPushHeadRefusesUnboundCheckout(t *testing.T) {
 // decimal (one trailing newline) that this package's re-gate and ward's
 // seeding gate both parse, and the capability carries the same ID.
 func TestFetchBaseStampsRepositoryIDBinding(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {
@@ -674,6 +694,7 @@ func TestFetchBaseStampsRepositoryIDBinding(t *testing.T) {
 // identity cannot materialize a checkout that would only be refused at
 // every re-gate downstream.
 func TestFetchBaseRefusesTokenWithoutRepositoryID(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	remote.transport.tokens = staticTokenSource{tok: InstallationToken{Token: Secret(stubTokenValue)}}
 	dir := checkoutDir(t)
@@ -693,6 +714,7 @@ func TestFetchBaseRefusesTokenWithoutRepositoryID(t *testing.T) {
 // the file's bytes: the checkout is a directory later pipeline stages
 // write into, so rejected content is not safe error material.
 func TestPushHeadRefusesBrokenRepositoryIDBinding(t *testing.T) {
+	t.Parallel()
 	const canary = "credential-canary"
 	cases := []struct {
 		name   string
@@ -746,6 +768,7 @@ func TestPushHeadRefusesBrokenRepositoryIDBinding(t *testing.T) {
 // name was transferred and reused), and the push must refuse rather
 // than follow the name onto that repository.
 func TestPushHeadRefusesRebindTrustedRepositoryID(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {
@@ -764,6 +787,7 @@ func TestPushHeadRefusesRebindTrustedRepositoryID(t *testing.T) {
 // ordering to the stamp-integrity re-gate: a checkout refused on its
 // own binding state never reaches the token source.
 func TestPushHeadRefusedStampMintsNoToken(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {
@@ -784,6 +808,7 @@ func TestPushHeadRefusedStampMintsNoToken(t *testing.T) {
 }
 
 func TestPushHeadRefusesCheckoutBoundToOtherRepo(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {
@@ -802,6 +827,7 @@ func TestPushHeadRefusesCheckoutBoundToOtherRepo(t *testing.T) {
 // base branch would publish (and later target a PR at) a branch the
 // enforced base was never reachable from.
 func TestPushHeadRefusesIdentityOffTheFetchedBaseRef(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {
@@ -822,6 +848,7 @@ func TestPushHeadRefusesIdentityOffTheFetchedBaseRef(t *testing.T) {
 // exported API is the mechanical check; a new exported field would
 // fail it.
 func TestCheckoutIsSealed(t *testing.T) {
+	t.Parallel()
 	typ := reflect.TypeOf(Checkout{})
 	for i := range typ.NumField() {
 		if f := typ.Field(i); f.IsExported() {
@@ -846,6 +873,7 @@ func TestCheckoutIsSealed(t *testing.T) {
 }
 
 func TestPushHeadRefusesBaseMismatch(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {
@@ -865,6 +893,7 @@ func TestPushHeadRefusesBaseMismatch(t *testing.T) {
 // parentless commit over the same tree) must be refused even though
 // it is a valid commit in the checkout.
 func TestPushHeadRefusesHeadOffTheBase(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {

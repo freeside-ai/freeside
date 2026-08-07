@@ -73,6 +73,7 @@ func twoRegistrationForge(t *testing.T) (*publish.Keystore, *httptest.Server, fu
 // proves cleanup ran for the registration a token is minted through, and 601
 // never provides that token (#291).
 func TestResolutionSurvivesAnInactiveNonMatchingRegistration(t *testing.T) {
+	t.Parallel()
 	ks, srv, contacted := twoRegistrationForge(t)
 	resolver := publish.NewInstallationResolverWithJanitor(
 		ks, srv.Client(), srv.URL, fixedNow,
@@ -95,6 +96,7 @@ func TestResolutionSurvivesAnInactiveNonMatchingRegistration(t *testing.T) {
 }
 
 func TestResolutionKeepsSiblingFaultTransientBeforeCoverage(t *testing.T) {
+	t.Parallel()
 	ks, srv, contacted := twoRegistrationForge(t)
 	fault := errors.New("authority snapshot is unreadable")
 	resolver := publish.NewInstallationResolverWithJanitor(
@@ -121,6 +123,7 @@ func TestResolutionKeepsSiblingFaultTransientBeforeCoverage(t *testing.T) {
 }
 
 func TestResolutionSurfacesAllRecordedFaultsBeforeCoverage(t *testing.T) {
+	t.Parallel()
 	ks, srv, contacted := twoRegistrationForge(t)
 	firstFault := errors.New("operator authority snapshot is unreadable")
 	secondFault := errors.New("partner authority snapshot is unreadable")
@@ -153,6 +156,7 @@ func TestResolutionSurfacesAllRecordedFaultsBeforeCoverage(t *testing.T) {
 // resolved anything, so the coverage they restored still could not mint. This
 // drives the same fault through the resolver the minter uses.
 func TestResolutionSurvivesARealJanitorFault(t *testing.T) {
+	t.Parallel()
 	ks := twoRegistrationKeystore(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
@@ -204,6 +208,7 @@ func TestResolutionSurvivesARealJanitorFault(t *testing.T) {
 // the isolation above: coverage of a sibling never substitutes for coverage of
 // the registration the binding comes from.
 func TestResolutionDeniesWhenTheMatchingRegistrationIsInactive(t *testing.T) {
+	t.Parallel()
 	ks, srv, _ := twoRegistrationForge(t)
 	resolver := publish.NewInstallationResolverWithJanitor(
 		ks, srv.Client(), srv.URL, fixedNow,
@@ -225,6 +230,7 @@ func TestResolutionDeniesWhenTheMatchingRegistrationIsInactive(t *testing.T) {
 // cover. Skipping the uncovered candidate would turn this denial into a
 // confident single match under 501 (keystore.go's enumeration rule, #279).
 func TestResolutionDeniesAnAmbiguousMatchWithOneInactiveRegistration(t *testing.T) {
+	t.Parallel()
 	// Both orders run: the uncovered registration is reached last in one and
 	// first in the other. Only asserting the last one lets a gate that checks
 	// just the final match pass, and a multi-match denial would still look

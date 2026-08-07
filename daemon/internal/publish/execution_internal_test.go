@@ -7,6 +7,7 @@ import (
 )
 
 func TestValidateExecutionReservationStateRejectsInvalidState(t *testing.T) {
+	t.Parallel()
 	claim, err := NewReservation("inv-0001", "run-0001")
 	if err != nil {
 		t.Fatalf("NewReservation: %v", err)

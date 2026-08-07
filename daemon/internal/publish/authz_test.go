@@ -128,6 +128,7 @@ func seedAuthz(t *testing.T, s *store.Store, a domain.CandidateAuthorization) {
 // found=false for an unrecorded id (absence the gate fails closed on) and the
 // recorded authorization once seeded.
 func TestStoreAuthorizationSourceResolves(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := newTestStore(t)
 	src, err := publish.NewStoreAuthorizationSource(s)

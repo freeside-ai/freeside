@@ -14,6 +14,7 @@ import (
 )
 
 func TestPublisherRejectsNonAtomicStoreAdapterWiring(t *testing.T) {
+	t.Parallel()
 	first, second := newTestStore(t), newTestStore(t)
 	ledger, err := publish.NewStoreLedger(first)
 	if err != nil {
@@ -355,6 +356,7 @@ func assertDecisionRows(t *testing.T, s *store.Store, wantAudits, wantIntents in
 }
 
 func TestStorePublicationDecisionRecordsDriftedAuditWithoutIntent(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	seedDecisionRecords(t, s)
 	audit := testWorkflowAudit(t)
@@ -373,6 +375,7 @@ func TestStorePublicationDecisionRecordsDriftedAuditWithoutIntent(t *testing.T) 
 }
 
 func TestStorePublicationDecisionCommitsFreshAuditWithIntent(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	seedDecisionRecords(t, s)
 	gh := newFakeGitHub(t)
@@ -385,6 +388,7 @@ func TestStorePublicationDecisionCommitsFreshAuditWithIntent(t *testing.T) {
 }
 
 func TestPublishExecutionHoldsSourceHeadAgainstRecordedExport(t *testing.T) {
+	t.Parallel()
 	matchingHead := testHeadSHA
 	mismatchingHead := testOtherSHA
 	tests := []struct {
@@ -553,6 +557,7 @@ func TestPublishExecutionHoldsSourceHeadAgainstRecordedExport(t *testing.T) {
 }
 
 func TestPublishExecutionRefusesAdvancedTargetBeforeIntent(t *testing.T) {
+	t.Parallel()
 	head := testHeadSHA
 	s := newExecutionBoundStore(t, executionChainOptions{exportHead: &head})
 	seedDecisionRecords(t, s)
@@ -595,6 +600,7 @@ func TestPublishExecutionRefusesAdvancedTargetBeforeIntent(t *testing.T) {
 }
 
 func TestPublishExecutionRecoversCommittedIntentAfterTargetAdvances(t *testing.T) {
+	t.Parallel()
 	head := testHeadSHA
 	s := newExecutionBoundStore(t, executionChainOptions{exportHead: &head})
 	seedDecisionRecords(t, s)
@@ -638,6 +644,7 @@ func TestPublishExecutionRecoversCommittedIntentAfterTargetAdvances(t *testing.T
 }
 
 func TestPublishExecutionAuthenticatesFrozenAdmissionAndExport(t *testing.T) {
+	t.Parallel()
 	storePath := filepath.Join(t.TempDir(), "store.db")
 	initial, err := store.Open(
 		t.Context(),

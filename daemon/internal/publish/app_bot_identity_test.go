@@ -68,6 +68,7 @@ func appBotIdentityToken() publish.InstallationToken {
 }
 
 func TestGitHubAppBotIdentityResolverBindsSelectedRegistration(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/users/freeside-publish[bot]" {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
@@ -99,6 +100,7 @@ func TestGitHubAppBotIdentityResolverBindsSelectedRegistration(t *testing.T) {
 }
 
 func TestGitHubAppBotIdentityResolverCachesOneTokenBinding(t *testing.T) {
+	t.Parallel()
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
@@ -158,6 +160,7 @@ func TestGitHubAppBotIdentityResolverCachesOneTokenBinding(t *testing.T) {
 }
 
 func TestGitHubAppBotIdentityResolverCoalescesColdCallers(t *testing.T) {
+	t.Parallel()
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
@@ -197,6 +200,7 @@ func TestGitHubAppBotIdentityResolverCoalescesColdCallers(t *testing.T) {
 }
 
 func TestGitHubAppBotIdentityResolverRejectsUnboundIdentity(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		body string
@@ -236,6 +240,7 @@ func TestGitHubAppBotIdentityResolverRejectsUnboundIdentity(t *testing.T) {
 }
 
 func TestGitHubAppBotIdentityResolverRejectsTokenForUnknownRegistration(t *testing.T) {
+	t.Parallel()
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		requests++
