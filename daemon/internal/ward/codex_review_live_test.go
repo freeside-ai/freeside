@@ -136,15 +136,20 @@ func TestLiveCodexReviewSnapshotDeliversExactlyTwoFilesReadOnly(t *testing.T) {
 	// Review: mount the snapshot read-only, run the production symlink preamble,
 	// then verify the container reads exactly the two files through the links,
 	// the snapshot mount is read-only, and CODEX_HOME carries no sibling content
-	// beyond the two links.
+	// beyond the two links. Copy the dereferenced links into the container rootfs
+	// so the host can compare their complete bytes without shell normalization.
+	const (
+		authProofPath        = "/live-review-auth.bin"
+		instructionProofPath = "/live-review-instruction.bin"
+	)
 	verify := "set +e; mkdir -p " + shellQuote(CodexHomeTarget) + "; " +
 		"ln -s " + shellQuote(codexReviewSnapshotAuthSource) + " " + shellQuote(CodexAuthFileTarget) + "; " +
 		"ln -s " + shellQuote(codexReviewSnapshotInstrSource) + " " + shellQuote(CodexInstructionTarget) + "; " +
+		"cp " + shellQuote(CodexAuthFileTarget) + " " + shellQuote(authProofPath) + "; " +
+		"cp " + shellQuote(CodexInstructionTarget) + " " + shellQuote(instructionProofPath) + "; " +
 		"ok=1; " +
 		"[ -L " + shellQuote(CodexAuthFileTarget) + " ] || ok=0; " +
 		"[ -L " + shellQuote(CodexInstructionTarget) + " ] || ok=0; " +
-		"[ \"$(cat " + shellQuote(CodexAuthFileTarget) + ")\" = " + shellQuote(string(authBody)) + " ] || ok=0; " +
-		"[ \"$(cat " + shellQuote(CodexInstructionTarget) + ")\" = " + shellQuote(string(instructionBody)) + " ] || ok=0; " +
 		"entries=\"$(cd " + shellQuote(codexReviewSnapshotTarget) + " && find . ! -name . -print | sort | tr '\\n' ',')\"; " +
 		"[ \"$entries\" = './AGENTS.md,./auth.json,' ] || ok=0; " +
 		"if echo probe > " + shellQuote(codexReviewSnapshotTarget+"/probe") + " 2>/dev/null; then ok=0; fi; " +
@@ -172,6 +177,42 @@ func TestLiveCodexReviewSnapshotDeliversExactlyTwoFilesReadOnly(t *testing.T) {
 	if string(reviewProof) != "ok=1\n" {
 		t.Fatalf("review container snapshot verification = %q, want ok=1", reviewProof)
 	}
+	if err := compareCodexReviewSnapshotBytes("auth.json", liveReadContainerFile(t, rt, review, authProofPath), authBody); err != nil {
+		t.Fatal(err)
+	}
+	if err := compareCodexReviewSnapshotBytes("AGENTS.md", liveReadContainerFile(t, rt, review, instructionProofPath), instructionBody); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCompareCodexReviewSnapshotBytesRejectsTrailingDifferences(t *testing.T) {
+	authBody := []byte(`{"auth_mode":"api_key","OPENAI_API_KEY":"live-fixture-key","tokens":null}`)
+	instructionBody := []byte("# Review instructions\nlive fixture\n")
+
+	tests := []struct {
+		name string
+		want []byte
+		got  []byte
+	}{
+		{name: "auth trailing byte added", want: authBody, got: append(append([]byte(nil), authBody...), '\n')},
+		{name: "auth trailing byte removed", want: authBody, got: authBody[:len(authBody)-1]},
+		{name: "instruction trailing byte added", want: instructionBody, got: append(append([]byte(nil), instructionBody...), 0)},
+		{name: "instruction trailing newline removed", want: instructionBody, got: instructionBody[:len(instructionBody)-1]},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := compareCodexReviewSnapshotBytes(tt.name, tt.got, tt.want); err == nil {
+				t.Fatal("trailing difference accepted")
+			}
+		})
+	}
+}
+
+func compareCodexReviewSnapshotBytes(name string, got, want []byte) error {
+	if !bytes.Equal(got, want) {
+		return fmt.Errorf("%s bytes differ: got %q, want %q", name, got, want)
+	}
+	return nil
 }
 
 // TestLiveCodexReviewSnapshotPreambleFailsClosedWhenImageShadowsCredential is
