@@ -32,6 +32,7 @@ func (r storeConformanceRecorder) RecordBackendConformance(
 // adapter: what ward's Full pass hands the recorder is what the store's
 // admission gate later reconstructs, generation stamped by the append.
 func TestStoreBackedConformanceRecorder(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	if err != nil {

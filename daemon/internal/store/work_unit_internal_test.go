@@ -16,6 +16,7 @@ import (
 // different fact. The raw inserts bypass the write boundary the way
 // tampering or a future schema would.
 func TestWorkUnitReadsFailClosedOnTamper(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	at := formatTime(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
 

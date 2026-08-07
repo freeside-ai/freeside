@@ -16,6 +16,7 @@ import (
 // 0014: the tables land on a database sitting at the real prior head, existing
 // rows survive, and nothing is backfilled into them.
 func TestExecutionRecordsMigrationAppliesFromHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	migrateThrough(t, ctx, db, "0014_")
@@ -66,6 +67,7 @@ func TestExecutionRecordsMigrationAppliesFromHead(t *testing.T) {
 }
 
 func TestExecutionAuthorityTriggersRejectOverlap(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	t.Run("outcome after export", func(t *testing.T) {
 		s, admission := seedAdmission(t, nil)
@@ -312,6 +314,7 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 // unreadable. The historical record reconstructs under its original content
 // address, but the live conformance gate still refuses to dispatch it.
 func TestLegacyUnboundUnattendedAdmissionReconstructs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, admission := seedAdmission(t, &domain.BackupEncryptionWaiver{
 		RepositoryID: 424242,
@@ -385,6 +388,7 @@ func tamperFloor() domain.CapabilitySnapshot {
 // row is refused rather than read as an admission nobody granted. It catches
 // partial corruption and any edit that did not recompute the digest.
 func TestExecutionAdmissionTamperedRowFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cases := []struct {
 		name string
@@ -421,6 +425,7 @@ func TestExecutionAdmissionTamperedRowFailsClosed(t *testing.T) {
 // TestExecutionAdmissionTamperedColumnFailsClosed covers the other half of the
 // cross-check: an edit to an extracted column that leaves the body alone.
 func TestExecutionAdmissionTamperedColumnFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := seedAdmission(t, nil)
 	if _, err := s.db.ExecContext(ctx,
@@ -441,6 +446,7 @@ func TestExecutionAdmissionTamperedColumnFailsClosed(t *testing.T) {
 // recomputed so the record certifies itself, still buys nothing unless the
 // operator holds that exact waiver.
 func TestForgedWaiverRowFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	// The forged record is built the honest way and then written under a
 	// daemon whose operator configured a waiver for a different repository:
@@ -491,6 +497,7 @@ func TestForgedWaiverRowFailsClosed(t *testing.T) {
 // to compare it with the body rather than taking the body's word for an
 // identity binding no trusted row backs.
 func TestExecutionAdmissionAuthIdentityColumnCrossChecked(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name string
@@ -528,6 +535,7 @@ func TestExecutionAdmissionAuthIdentityColumnCrossChecked(t *testing.T) {
 // there a record?" must not read that as "there is none": doing so accepts
 // output whose reconstruction explicitly failed closed.
 func TestLookupSeparatesAbsenceFromRefusal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	waiver := &domain.BackupEncryptionWaiver{RepositoryID: 424242, Reason: "phase 1a.2"}
 	s, _ := seedAdmission(t, waiver)
@@ -583,6 +591,7 @@ func TestLookupSeparatesAbsenceFromRefusal(t *testing.T) {
 // has no content address, so a column is what makes a partially edited row
 // fail closed instead of reading back as evidence about the handoff.
 func TestExecutionExportAuditFieldsCrossChecked(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name string
@@ -642,6 +651,7 @@ func TestExecutionExportAuditFieldsCrossChecked(t *testing.T) {
 // An admission naming an identity whose body is malformed must fail closed
 // rather than let a replay dispatch under credential state nobody can read.
 func TestAdmissionFailsClosedOnAnUnreadableIdentity(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := seedAdmission(t, nil)
 

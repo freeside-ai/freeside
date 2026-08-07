@@ -14,6 +14,7 @@ import (
 )
 
 func TestReviewRecoveryMigrationAppliesFromHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	migrateThrough(t, ctx, db, "0032_")
@@ -113,6 +114,7 @@ func seedReviewRecovery(t *testing.T) (*Store, domain.ReviewRecoveryTransition) 
 }
 
 func TestReviewRecoveryTransitionRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, want := seedReviewRecovery(t)
 	var got domain.ReviewRecoveryTransition
@@ -155,6 +157,7 @@ func TestReviewRecoveryTransitionRoundTrip(t *testing.T) {
 }
 
 func TestReviewRecoveryWriteRejectsEveryMismatchedBinding(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, valid := seedReviewRecovery(t)
 	for name, mutate := range map[string]func(*domain.ReviewRecoveryTransition){
@@ -179,6 +182,7 @@ func TestReviewRecoveryWriteRejectsEveryMismatchedBinding(t *testing.T) {
 }
 
 func TestReviewRecoveryReadFailsClosedOnTamper(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for name, tamper := range map[string]func(*Store) error{
 		"unbacked": func(st *Store) error {
@@ -225,6 +229,7 @@ func TestReviewRecoveryReadFailsClosedOnTamper(t *testing.T) {
 }
 
 func TestReviewRecoveryRequiresContradiction(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, transition := seedReviewRecovery(t)
 	var rewrittenBody string

@@ -13,6 +13,7 @@ import (
 // unrelated actions onto one row, and an empty kind is unroutable; both are
 // rejected before touching the table.
 func TestQueueRejectsEmptyIdentity(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	cases := []struct {
@@ -45,6 +46,7 @@ func TestQueueRejectsEmptyIdentity(t *testing.T) {
 // same idempotency key returns the original row and creates no second row,
 // for the outbox and the inbox alike.
 func TestQueueIdempotency(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cases := []struct {
 		name   string
@@ -133,6 +135,7 @@ func TestQueueIdempotency(t *testing.T) {
 // TestListPendingOutbox: the recovery scan (§5.14 test 5) returns only
 // pending intents of the requested kind, in insertion order.
 func TestListPendingOutbox(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 
@@ -264,6 +267,7 @@ func TestListPendingOutbox(t *testing.T) {
 // revision change invalidates client caches; re-dispatching on recovery must
 // not).
 func TestMarkOutboxDispatchedInvisibleToSync(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 
@@ -298,6 +302,7 @@ func TestMarkOutboxDispatchedInvisibleToSync(t *testing.T) {
 // caller occupied at insert survives the promotion — same id, same created_at,
 // still pending and therefore still visible to the recovery scan.
 func TestPromoteOutboxRefinesPendingRowInPlace(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	placeholder := []byte(`{"reserved":true}`)
@@ -354,6 +359,7 @@ func TestPromoteOutboxRefinesPendingRowInPlace(t *testing.T) {
 // row somebody else settled, so the promotion must affect nothing and report
 // that it did not promote rather than overwriting the other writer's decision.
 func TestPromoteOutboxRefusesRowThatMoved(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	placeholder := []byte(`{"reserved":true}`)
 	final := []byte(`{"intent":true}`)
@@ -410,6 +416,7 @@ func TestPromoteOutboxRefusesRowThatMoved(t *testing.T) {
 // promoted false and hands back the settled row instead of erroring — the
 // caller compares it against what it wanted and converges.
 func TestPromoteOutboxSecondAttemptReportsNotPromoted(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	placeholder := []byte(`{"reserved":true}`)
@@ -446,6 +453,7 @@ func TestPromoteOutboxSecondAttemptReportsNotPromoted(t *testing.T) {
 // refine, and an unchanged kind would let the guard match the row the caller
 // just wrote, so a payload rewrite could pass as a fresh promotion.
 func TestPromoteOutboxRejectsUnusableRequest(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {

@@ -43,6 +43,7 @@ func migrateThrough(t *testing.T, ctx context.Context, db *sql.DB, before string
 // new tables land on a database sitting at the real prior head, carrying
 // existing rows, and nothing is backfilled into them.
 func TestAuthIdentityMigrationAppliesFromHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	migrateThrough(t, ctx, db, "0013_")
@@ -81,6 +82,7 @@ func TestAuthIdentityMigrationAppliesFromHead(t *testing.T) {
 // identity that does not exist is unrepresentable, so a forged row cannot
 // invent the identity it claims to guard.
 func TestLeaseRowRequiresItsIdentity(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -100,6 +102,7 @@ func TestLeaseRowRequiresItsIdentity(t *testing.T) {
 // a column is what stops a partially edited row reading back as a larger
 // parallelism limit than anyone measured.
 func TestAuthIdentityFieldsCrossChecked(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name string

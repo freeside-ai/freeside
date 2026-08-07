@@ -28,6 +28,7 @@ func headVersion(t *testing.T) int {
 // migrates 0 -> head, re-running is a no-op, and the schema version is
 // recorded and readable.
 func TestMigrateFreshAndIdempotent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	head := headVersion(t)
 	path := filepath.Join(t.TempDir(), "store.db")

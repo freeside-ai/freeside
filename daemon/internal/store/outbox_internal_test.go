@@ -9,6 +9,7 @@ import (
 )
 
 func TestGetOutboxRejectsUnknownStatus(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -47,6 +48,7 @@ func TestGetOutboxRejectsUnknownStatus(t *testing.T) {
 // resurrect one by settling a new payload onto it, so the pending guard covers
 // quarantined as well as dispatched.
 func TestPromoteOutboxRefusesQuarantinedRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {

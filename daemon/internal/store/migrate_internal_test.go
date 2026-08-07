@@ -48,6 +48,7 @@ func rawVersion(t *testing.T, db *sql.DB) int {
 // failing migration leaves the database at the prior version, with none of
 // the failed file's earlier statements applied.
 func TestFailingMigrationRollsBack(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	fsys := mapFS(map[string]string{
@@ -81,6 +82,7 @@ func assertTableExists(t *testing.T, db *sql.DB, name string, want bool) {
 
 // TestMigrationFileValidation pins the naming and ordering rules.
 func TestMigrationFileValidation(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		files map[string]string
@@ -114,6 +116,7 @@ func TestMigrationFileValidation(t *testing.T) {
 // hard error; a same-name rewrite must not silently diverge existing and
 // fresh databases.
 func TestMigrateRejectsDivergedHistory(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		diverged map[string]string
@@ -145,6 +148,7 @@ func TestMigrateRejectsDivergedHistory(t *testing.T) {
 // pragmas to each new connection, not just the first: with database/sql
 // pooling, every pragma except journal_mode is per-connection state.
 func TestPragmasOnEveryConnection(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db, err := openDB(filepath.Join(t.TempDir(), "store.db"), Options{})
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 )
 
 func TestCheckpointArtifactDigestsIncludesCodexReviewInstructionClosure(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -47,6 +48,7 @@ func TestCheckpointArtifactDigestsIncludesCodexReviewInstructionClosure(t *testi
 }
 
 func TestCheckpointArtifactDigestsRejectsUnknownCurrentReviewRequestFields(t *testing.T) {
+	t.Parallel()
 	host := domain.Digest("sha256:" + strings.Repeat("a", 64))
 	source := domain.Digest("sha256:" + strings.Repeat("b", 64))
 	result := domain.Digest("sha256:" + strings.Repeat("c", 64))
@@ -99,6 +101,7 @@ func validReviewRequestBody(t *testing.T, host, source, result domain.Digest) []
 }
 
 func TestCheckpointArtifactDigestsRejectsAmbiguousInstructionField(t *testing.T) {
+	t.Parallel()
 	result := "sha256:" + strings.Repeat("c", 64)
 	valid := `{"composition_version":"codex_explicit_bundle_v1",` +
 		`"host_digest":null,"repository_sources":[],"result_digest":"` + result + `"}`

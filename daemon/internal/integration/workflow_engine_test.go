@@ -276,6 +276,7 @@ func assertCompletedOnce(t *testing.T, f *workflowFixture, invocationID domain.I
 // the run, a second device refetches the same resolution, conversation feedback
 // commits an invocation, and the fake result advances the durable run once.
 func TestWorkflowEngineFakeFlow(t *testing.T) {
+	t.Parallel()
 	f := openWorkflowFixture(t, t.TempDir())
 	f.seed(t)
 	ctx := context.Background()
@@ -310,6 +311,7 @@ func TestWorkflowEngineFakeFlow(t *testing.T) {
 }
 
 func TestLegacyInvocationRefusalHoldsAndResumes(t *testing.T) {
+	t.Parallel()
 	f := openWorkflowFixture(t, t.TempDir())
 	f.seed(t)
 	f.approve(t)
@@ -345,6 +347,7 @@ func TestLegacyInvocationRefusalHoldsAndResumes(t *testing.T) {
 // machine from claiming every Run in a shared store. Only StartFakeRun's
 // deterministic approval item marks a run as belonging to this workflow.
 func TestWorkflowEngineIgnoresUnmarkedRun(t *testing.T) {
+	t.Parallel()
 	f := openWorkflowFixture(t, t.TempDir())
 	ctx := context.Background()
 	other := domain.Run{
@@ -375,6 +378,7 @@ func TestWorkflowEngineIgnoresUnmarkedRun(t *testing.T) {
 // from gaining authority by reproducing only this engine's feedback item and
 // stage shape. Dispatch requires StartFakeRun's initial approval marker too.
 func TestWorkflowEngineRejectsUnmarkedInvocation(t *testing.T) {
+	t.Parallel()
 	f := openWorkflowFixture(t, t.TempDir())
 	ctx := context.Background()
 	runID := domain.RunID("run-lookalike")
@@ -446,6 +450,7 @@ func TestWorkflowEngineRejectsUnmarkedInvocation(t *testing.T) {
 // history cannot retarget a legitimate invocation by changing only the
 // attempt's supposedly deterministic identity.
 func TestWorkflowEngineRejectsMalformedAttemptIdentity(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	f := openWorkflowFixture(t, root)
 	f.seed(t)
@@ -475,6 +480,7 @@ func TestWorkflowEngineRejectsMalformedAttemptIdentity(t *testing.T) {
 // discuss transaction but before the engine starts the fake. Restart scans the
 // pending outbox intent and completes the workflow once.
 func TestWorkflowEngineRecoversBeforeDispatch(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	f := openWorkflowFixture(t, root)
 	f.seed(t)
@@ -500,6 +506,7 @@ func TestWorkflowEngineRecoversBeforeDispatch(t *testing.T) {
 // commits a result but before local acceptance. Reconstructed fake state serves
 // the result by invocation id; inbox acceptance and run advancement occur once.
 func TestWorkflowEngineRecoversCommittedResult(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	f := openWorkflowFixture(t, root)
 	f.seed(t)
@@ -539,6 +546,7 @@ func TestWorkflowEngineRecoversCommittedResult(t *testing.T) {
 // The pending outbox is empty, so recovery must discover the committed fake
 // result through the Run attempt index.
 func TestWorkflowEngineRecoversDispatchedResult(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	f := openWorkflowFixture(t, root)
 	f.seed(t)
@@ -599,6 +607,7 @@ func (foreignResultDriver) Collect(context.Context, domain.InvocationID) (exec.S
 // otherwise-valid result. The legitimate invocation intent stays recorded,
 // but no agent message or completion transition is accepted.
 func TestWorkflowEngineRejectsForeignDriverResult(t *testing.T) {
+	t.Parallel()
 	f := openWorkflowFixture(t, t.TempDir())
 	f.seed(t)
 	f.approve(t)
@@ -641,6 +650,7 @@ func TestWorkflowEngineRejectsForeignDriverResult(t *testing.T) {
 // cannot be rendered as an agent answer. The attempt stays durable for later
 // failure policy, while the conversation and item remain unadvanced.
 func TestWorkflowEngineDoesNotAcceptFailedResult(t *testing.T) {
+	t.Parallel()
 	f := openWorkflowFixture(t, t.TempDir())
 	f.seed(t)
 	f.approve(t)
@@ -680,6 +690,7 @@ func TestWorkflowEngineDoesNotAcceptFailedResult(t *testing.T) {
 // block reconciliation merely because the conversation is awaiting a newer
 // invocation.
 func TestWorkflowEngineKeepsPriorAttemptsAccepted(t *testing.T) {
+	t.Parallel()
 	f := openWorkflowFixture(t, t.TempDir())
 	f.seed(t)
 	f.approve(t)

@@ -36,6 +36,7 @@ func observeRun(t *testing.T, s *store.Store, runID domain.RunID) domain.RunObse
 // hold come back validated and in append order through the ObserveRun read
 // surface an operator client consumes.
 func TestRunObservationRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAdmissionFixture(t, nil)
 	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
@@ -86,6 +87,7 @@ func TestRunObservationRoundTrip(t *testing.T) {
 // TestRunMilestoneFirstObservationWins: a replayed append with a different
 // instant converges on the recorded row instead of duplicating or erroring.
 func TestRunMilestoneFirstObservationWins(t *testing.T) {
+	t.Parallel()
 	f := newAdmissionFixture(t, nil)
 	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
 	inv := domain.InvocationID("inv-1")
@@ -113,6 +115,7 @@ func TestRunMilestoneFirstObservationWins(t *testing.T) {
 // a changed cause restarts the span, forward progress clears the hold, and
 // an explicit clear removes it.
 func TestRunHoldObservationLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAdmissionFixture(t, nil)
 	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
@@ -192,6 +195,7 @@ func TestRunHoldObservationLifecycle(t *testing.T) {
 // ends one cause leaves a hold another cause is keeping exactly as it
 // stands — span included.
 func TestClearRunHoldCause(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAdmissionFixture(t, nil)
 	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
@@ -243,6 +247,7 @@ func TestClearRunHoldCause(t *testing.T) {
 // repaired by overwrite, never trusted enough to refuse the write (the
 // refute-pass wedge).
 func TestInvocationObservationUpsert(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAdmissionFixture(t, nil)
 	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
@@ -291,6 +296,7 @@ func TestInvocationObservationUpsert(t *testing.T) {
 // commits them, and the outcome's summary text never crosses into the
 // projection.
 func TestExecutionRecordsProjectMilestones(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAdmissionFixture(t, nil)
 	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})

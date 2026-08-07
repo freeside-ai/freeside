@@ -38,6 +38,7 @@ func openWithIdentity(t *testing.T, identity domain.AuthIdentity) *store.Store {
 }
 
 func TestAuthIdentityRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	identity := testAuthIdentity()
 	s := openWithIdentity(t, identity)
@@ -89,6 +90,7 @@ func TestAuthIdentityRoundTrip(t *testing.T) {
 // superseded limit, and the direction that matters is the one that raises
 // concurrency past the latest safe result.
 func TestAuthIdentityRevisionsOnlyMoveForward(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	identity := testAuthIdentity()
 	s := openWithIdentity(t, identity)
@@ -146,6 +148,7 @@ func TestAuthIdentityRevisionsOnlyMoveForward(t *testing.T) {
 // identity, and a second acquirer is refused with the current holder named
 // rather than queued behind a lock nobody can see.
 func TestAcquireLeaseSingleWinner(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openWithIdentity(t, testAuthIdentity())
 	expires := leaseEpoch.Add(time.Minute)
@@ -197,6 +200,7 @@ func TestAcquireLeaseSingleWinner(t *testing.T) {
 // nothing releases it, so expiry is the only recovery, and the fence is what
 // keeps the zombie from acting on a lease it no longer has.
 func TestLeaseTakeoverBumpsTheFence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openWithIdentity(t, testAuthIdentity())
 	expires := leaseEpoch.Add(time.Minute)
@@ -244,6 +248,7 @@ func TestLeaseTakeoverBumpsTheFence(t *testing.T) {
 }
 
 func TestRenewAndReleaseLease(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openWithIdentity(t, testAuthIdentity())
 	expires := leaseEpoch.Add(time.Minute)
@@ -335,6 +340,7 @@ func TestRenewAndReleaseLease(t *testing.T) {
 // existing expiry earlier. Either would report a held lease the holder does
 // not really have for as long as it thinks.
 func TestLeaseWindowOnlyExtends(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openWithIdentity(t, testAuthIdentity())
 	expires := leaseEpoch.Add(time.Minute)
@@ -408,6 +414,7 @@ func TestLeaseWindowOnlyExtends(t *testing.T) {
 // held at any instant, so nothing else stops such a call from installing its
 // own (still future-dated) window and blocking the holders that come after it.
 func TestStaleAcquisitionAfterReleaseIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openWithIdentity(t, testAuthIdentity())
 
@@ -471,6 +478,7 @@ func TestStaleAcquisitionAfterReleaseIsRefused(t *testing.T) {
 // stored row reports what it says, and whether the window is open is decided
 // against the caller's instant, never read out of the row as a verdict.
 func TestLeaseLivenessUsesTheCallersClock(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openWithIdentity(t, testAuthIdentity())
 	expires := leaseEpoch.Add(time.Minute)
@@ -502,6 +510,7 @@ func TestLeaseLivenessUsesTheCallersClock(t *testing.T) {
 // taken nor reconstructed for an identity that does not require one, and an
 // unknown identity is not found rather than implicitly created.
 func TestLeaseRequiresADeclaringIdentity(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	unguarded := testAuthIdentity()
 	unguarded.ID = "auth-unguarded"
@@ -536,6 +545,7 @@ func TestLeaseRequiresADeclaringIdentity(t *testing.T) {
 // TestLeaseSurvivesReopen proves the lease is durable state, not process
 // state: a restarted daemon still sees the window it must wait out.
 func TestLeaseSurvivesReopen(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := tempDBPath(t)
 	identity := testAuthIdentity()

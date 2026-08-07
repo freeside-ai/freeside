@@ -111,6 +111,7 @@ func requireEnv(t *testing.T, name string) string {
 // TestRealWorkItemCompletesProductionPipeline verifies the durable output of
 // the full production composition driven by scripts/run-real-work.sh.
 func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
+	t.Parallel()
 	env := realRunEnvironment(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()

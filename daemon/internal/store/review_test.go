@@ -12,6 +12,7 @@ import (
 )
 
 func TestReviewRecordRoundTripsWithRawFindingsAndIsExclusiveWithFailure(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openStore(t, store.Options{})
 	run := domain.Run{ID: "run-1", ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
@@ -102,6 +103,7 @@ func TestReviewRecordRoundTripsWithRawFindingsAndIsExclusiveWithFailure(t *testi
 }
 
 func TestReviewRetryUpsertsAndClears(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openStore(t, store.Options{})
 	run := domain.Run{ID: "run-retry", ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
@@ -169,6 +171,7 @@ func TestReviewRetryUpsertsAndClears(t *testing.T) {
 }
 
 func TestReviewRecordCanonicalizesFindingOrder(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openStore(t, store.Options{})
 	run := domain.Run{ID: "run-order", ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}

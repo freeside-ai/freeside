@@ -18,6 +18,7 @@ import (
 // foreign key exercises the deferred-FK copy (alphabetical order inserts
 // attention_items before conversations).
 func TestCheckpointRestoreRotatesEpochAndRollsBackData(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 
@@ -105,6 +106,7 @@ func TestCheckpointRestoreRotatesEpochAndRollsBackData(t *testing.T) {
 // fail-closed FK posture) and a second checkpoint/restore succeeds (a leaked
 // attachment would fail the next ATTACH).
 func TestRestoreLeavesTheConnectionClean(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
@@ -145,6 +147,7 @@ func TestRestoreLeavesTheConnectionClean(t *testing.T) {
 // rather than rely on its parent directory's mode (VACUUM INTO otherwise
 // honours the umask, e.g. 0644).
 func TestCheckpointFileIsOwnerOnly(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	path := filepath.Join(t.TempDir(), "checkpoint.db")

@@ -14,6 +14,7 @@ import (
 )
 
 func TestEncryptedCheckpointRoundTripAndPlaintextProbe(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	files, err := store.NewDefaultLocalBackupFiles(dbPath)
@@ -131,6 +132,7 @@ func TestEncryptedCheckpointRoundTripAndPlaintextProbe(t *testing.T) {
 // binary restoring a newer daemon's checkpoint would admit rows whose blobs it
 // never proved present.
 func TestRestoreFailsClosedOnACheckpointThisBinaryCannotScan(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	payloadDigest := domain.Digest("sha256:durable-task-payload")
@@ -193,6 +195,7 @@ func TestRestoreFailsClosedOnACheckpointThisBinaryCannotScan(t *testing.T) {
 }
 
 func TestEncryptedCheckpointFailsClosedOnWrongKeyTamperAndDigestMismatch(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		corrupt func(*testing.T, string, *store.LocalBackupFiles) *store.LocalBackupFiles

@@ -43,6 +43,7 @@ func openStoreAt(t *testing.T, path string, opts store.Options) *store.Store {
 // TestOpenPragmas is acceptance fixture 1: a freshly opened store reports the
 // §5.2 pragma configuration.
 func TestOpenPragmas(t *testing.T) {
+	t.Parallel()
 	s := openStore(t, store.Options{BusyTimeout: 2 * time.Second})
 	got, err := s.Pragmas(context.Background())
 	if err != nil {
@@ -70,6 +71,7 @@ func TestOpenPragmas(t *testing.T) {
 // TestOpenDefaultBusyTimeout pins the default applied when Options.BusyTimeout
 // is zero.
 func TestOpenDefaultBusyTimeout(t *testing.T) {
+	t.Parallel()
 	s := openStore(t, store.Options{})
 	got, err := s.Pragmas(context.Background())
 	if err != nil {
@@ -84,6 +86,7 @@ func TestOpenDefaultBusyTimeout(t *testing.T) {
 // would truncate to busy_timeout(0), silently disabling waiting; Open must
 // refuse it instead.
 func TestOpenRejectsInvalidBusyTimeout(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		timeout time.Duration
@@ -106,6 +109,7 @@ func TestOpenRejectsInvalidBusyTimeout(t *testing.T) {
 // metacharacters in a legal path must be escaped or Open silently uses a
 // different file (everything after an unescaped '?' parses as query).
 func TestOpenPathWithSpecialCharacters(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "we?ird #dir 100%")
 	if err := os.MkdirAll(dir, 0o750); err != nil {

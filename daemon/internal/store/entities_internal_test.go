@@ -18,6 +18,7 @@ import (
 // not trusted data. Internal test: writing the corrupt row requires raw SQL
 // past the Put boundary.
 func TestGetRejectsInconsistentRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -75,6 +76,7 @@ func TestGetRejectsInconsistentRow(t *testing.T) {
 // decision record, not trusted data (#32 acceptance 4). Internal test: the
 // corrupt row is written past the Put boundary as raw SQL.
 func TestGetCommandRejectsInconsistentRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -133,6 +135,7 @@ func TestGetCommandRejectsInconsistentRow(t *testing.T) {
 // (#33 acceptance 2, the "stored digest" half). Internal test: encode would
 // reject the body, so it is written past the Put boundary as raw JSON.
 func TestGetResolvedPolicyRejectsForgedDigest(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -176,6 +179,7 @@ func TestGetResolvedPolicyRejectsForgedDigest(t *testing.T) {
 }
 
 func TestMigrateLegacyTrustProfileRunPolicyIsExact(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -426,6 +430,7 @@ UPDATE schedules SET policy_digest = ?, body = ? WHERE id = ?`,
 // their Gets closed too. Internal test: the Put boundary always stamps valid
 // values, so the bad rows are written as raw SQL.
 func TestGetRejectsForgedMetadata(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -551,6 +556,7 @@ func TestGetRejectsForgedMetadata(t *testing.T) {
 // store-impossible metadata fails the whole list closed, even beside a valid
 // sibling row. Internal test: the bad rows are written as raw SQL.
 func TestListRejectsForgedMetadata(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -700,6 +706,7 @@ func TestListRejectsForgedMetadata(t *testing.T) {
 // nullable conversation_id column. Internal test: the corrupt rows are
 // written as raw SQL.
 func TestListRejectsInconsistentRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -873,6 +880,7 @@ func TestListRejectsInconsistentRow(t *testing.T) {
 // acceptance 3). Internal test: the Put boundary always stamps valid values,
 // so the bad rows are written as raw SQL.
 func TestSnapshotRejectsForgedMetadata(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {
@@ -1028,6 +1036,7 @@ func TestSnapshotRejectsForgedMetadata(t *testing.T) {
 // unchanged replay instead of rejecting it as a same-version rewrite.
 // Internal test: the legacy row is written as raw SQL past the Put boundary.
 func TestPutAttentionItemPreNoticeRowConverges(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	if err := migrate(ctx, db, migrations.FS); err != nil {

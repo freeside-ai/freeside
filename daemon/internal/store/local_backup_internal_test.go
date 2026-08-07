@@ -11,6 +11,7 @@ import (
 // for 0015: existing commands survive, and their unknown inline classification
 // is left empty so backup closure fails conservatively.
 func TestCommandBackupBindingMigrationAppliesFromHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	migrateThrough(t, ctx, db, "0015_")

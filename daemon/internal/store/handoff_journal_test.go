@@ -22,6 +22,7 @@ func journalRecord(runID string) store.HandoffJournalRecord {
 }
 
 func TestHandoffJournalDurableLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openWithIdentity(t, testAuthIdentity())
 	rec := journalRecord("journal-run")
@@ -94,6 +95,7 @@ func TestHandoffJournalDurableLifecycle(t *testing.T) {
 }
 
 func TestHandoffJournalCancellationOutranksWriterFailure(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openWithIdentity(t, testAuthIdentity())
 	rec := journalRecord("canceled-journal-run")
@@ -131,6 +133,7 @@ func TestHandoffJournalCancellationOutranksWriterFailure(t *testing.T) {
 }
 
 func TestBeginLeasedHandoffRollsBackBothSidesOnJournalConflict(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openWithIdentity(t, testAuthIdentity())
 	rec := journalRecord("conflicting-run")
@@ -159,6 +162,7 @@ func TestBeginLeasedHandoffRollsBackBothSidesOnJournalConflict(t *testing.T) {
 }
 
 func TestBeginLeasedHandoffRefusesConvergedSameHolderLease(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openWithIdentity(t, testAuthIdentity())
 	oldAcquiredAt := leaseEpoch
@@ -206,6 +210,7 @@ func TestBeginLeasedHandoffRefusesConvergedSameHolderLease(t *testing.T) {
 }
 
 func TestUnleasedJournalBeginCannotForgeALeaseReference(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openWithIdentity(t, testAuthIdentity())
 	rec := journalRecord("forged-lease-run")
@@ -232,6 +237,7 @@ func TestUnleasedJournalBeginCannotForgeALeaseReference(t *testing.T) {
 }
 
 func TestJournalBeginRejectsCallerSuppliedProgressBeforeLeaseAcquisition(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openWithIdentity(t, testAuthIdentity())
 	rec := journalRecord("forged-progress-run")
@@ -263,6 +269,7 @@ func TestJournalBeginRejectsCallerSuppliedProgressBeforeLeaseAcquisition(t *test
 }
 
 func TestHandoffJournalProofAmendmentsAreImmutable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openWithIdentity(t, testAuthIdentity())
 	rec := journalRecord("proof-run")

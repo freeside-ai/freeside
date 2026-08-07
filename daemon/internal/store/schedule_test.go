@@ -67,6 +67,7 @@ func putSchedule(t *testing.T, s *store.Store, schedule domain.Schedule) {
 }
 
 func TestScheduleRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	schedule := deadlineSchedule(t)
@@ -100,6 +101,7 @@ func TestScheduleRoundTrip(t *testing.T) {
 }
 
 func TestPutScheduleEnforcesTransitions(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	schedule := deadlineSchedule(t)
@@ -156,6 +158,7 @@ func TestPutScheduleEnforcesTransitions(t *testing.T) {
 }
 
 func TestListDueSchedules(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	deadline := deadlineSchedule(t)
@@ -235,6 +238,7 @@ func timerFor(
 }
 
 func TestScheduleOccurrenceLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	schedule := deadlineSchedule(t)
@@ -332,6 +336,7 @@ func TestScheduleOccurrenceLifecycle(t *testing.T) {
 // store boundary: a rolled-back consuming transaction leaves the occurrence
 // pending and the schedule armed, so the fire is redelivered.
 func TestScheduleConsumptionAtomicity(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	schedule := deadlineSchedule(t)

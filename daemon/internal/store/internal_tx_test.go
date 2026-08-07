@@ -16,6 +16,7 @@ import (
 // this test guards the type boundary that makes that true and fails loudly if
 // a future Put ever lands on the internal surface.
 func TestInternalTxCannotWriteSynchronizedState(t *testing.T) {
+	t.Parallel()
 	writeTx := reflect.TypeOf(&store.WriteTx{})
 	internalTx := reflect.TypeOf(&store.InternalTx{})
 

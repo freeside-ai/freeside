@@ -15,6 +15,7 @@ import (
 // as the accept side, so a widened, disordered, or unregistered claim fails
 // closed instead of reading back as a wider declaration.
 func TestTamperedConformanceRowFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cases := []struct {
 		name         string
@@ -91,6 +92,7 @@ func TestTamperedConformanceRowFailsClosed(t *testing.T) {
 }
 
 func TestConformanceConfigurationMigrationPreservesLegacyRowsAsUnbound(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
 	migrateThrough(t, ctx, db, "0020_")

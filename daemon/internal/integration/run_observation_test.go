@@ -75,6 +75,7 @@ func (d streamRefusingDriver) Stream(context.Context, domain.InvocationID) (io.R
 // terminal recording in order, the final liveness is terminal, and elapsed
 // time and last observation derive from the model.
 func TestRunObservationTimelineForAPublishedRun(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	if _, err := p.reconcileLanes(); err != nil {
@@ -122,6 +123,7 @@ func TestRunObservationTimelineForAPublishedRun(t *testing.T) {
 // span, never free text, and the resume that dispatches the run clears the
 // hold through forward progress.
 func TestRunObservationHeldRunShowsTypedReason(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openUnattendedFixture(t)
 	// The stop decision arrives through signet, which requires the deciding
@@ -188,6 +190,7 @@ func TestRunObservationHeldRunShowsTypedReason(t *testing.T) {
 // failed stage projects the terminal milestone with its closed status class,
 // and the last observation derives as terminal liveness.
 func TestRunObservationTerminalFailure(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openUnattendedFixture(t)
 	// The containment boundary rides the whole scenario: observation must
@@ -251,6 +254,7 @@ func TestRunObservationTerminalFailure(t *testing.T) {
 // stale pre-restart observation derives as an observation gap rather than a
 // stale live verdict, and the next pass re-observes.
 func TestRunObservationSurvivesRestartWithDerivableGap(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
 	f := openUnattendedFixtureAt(t, root, true)
@@ -329,6 +333,7 @@ func TestRunObservationSurvivesRestartWithDerivableGap(t *testing.T) {
 // entry still records the typed hold for every queued run, not only the one
 // that surfaced the condition.
 func TestAttendedHoldObservesEveryQueuedRun(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openProductionFixture(t)
 	for _, runID := range []string{"run-prod-attended-a", "run-prod-attended-b"} {
@@ -359,6 +364,7 @@ func TestAttendedHoldObservesEveryQueuedRun(t *testing.T) {
 // run exactly as a failed fetch does, so the read surface must name it
 // instead of showing a run paused for no observable reason.
 func TestPublicationEnvironmentHoldCoversLockSetup(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	workDir := filepath.Join(p.workDir, "production-publication")
@@ -399,6 +405,7 @@ func TestPublicationEnvironmentHoldCoversLockSetup(t *testing.T) {
 // verification here, before any milestone exists, so acceptance is the only
 // thing that can have cleared the hold.
 func TestAcceptedPublicationClearsTheAttendedHold(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	p.workflow = p.newEngineForMode(
@@ -435,6 +442,7 @@ func TestAcceptedPublicationClearsTheAttendedHold(t *testing.T) {
 // attempt runs, so acceptance cannot blink a live cause out or restart its
 // "held since".
 func TestAcceptedPublicationKeepsOtherHoldCauses(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	p.transport.failFetch(&net.DNSError{Err: "temporary", Name: "github.com"})
@@ -469,6 +477,7 @@ func TestAcceptedPublicationKeepsOtherHoldCauses(t *testing.T) {
 // run_submitted instant that was never observed — SubmittedAt and Elapsed
 // would silently describe the replay instead of the run.
 func TestSubmissionReplayDoesNotBackfillTheMilestone(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openUnattendedFixture(t)
 	spec, policy, resolved := registerSubmissionArtifacts(t, f.store, "run-prod-observe-backfill")
@@ -521,6 +530,7 @@ func (d malformedInspectionDriver) Inspect(context.Context, domain.InvocationID)
 // so a driver reporting a lost session as live fails the boundary loudly
 // instead of projecting observed_live for a session nothing observes.
 func TestMalformedInspectionFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openUnattendedFixture(t)
 	spec, policy, resolved := registerSubmissionArtifacts(t, f.store, "run-prod-observe-malformed")
@@ -568,6 +578,7 @@ func TestMalformedInspectionFailsClosed(t *testing.T) {
 // records, and the run still dispatches, executes, and records its real
 // terminal exactly as without the forgery.
 func TestForgedMilestonesDriveNoWorkflowDecision(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openUnattendedFixture(t)
 

@@ -68,6 +68,7 @@ func conformanceAt(t *testing.T, outcome domain.ConformanceOutcome,
 // a byte-identical replay, and the lapse never makes the recorded admission
 // unreadable.
 func TestUnattendedAdmissionRequiresBackendConformance(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, f := openUnattendedNoConformance(t)
 
@@ -121,6 +122,7 @@ func TestUnattendedAdmissionRequiresBackendConformance(t *testing.T) {
 // admitting for as long as the recheck is pending, closing the gap between a
 // spawn-time snapshot freeze and the admission write.
 func TestUnattendedAdmissionRefusedDuringPendingRecheck(t *testing.T) {
+	t.Parallel()
 	s, f := openUnattendedNoConformance(t)
 	recordConformance(t, s, conformanceAt(t, domain.ConformancePassed, conformantCapabilities(t), admissionEpoch))
 	recordConformance(t, s, conformanceAt(t, domain.ConformanceSuperseded, nil, admissionEpoch.Add(time.Minute)))
@@ -133,6 +135,7 @@ func TestUnattendedAdmissionRefusedDuringPendingRecheck(t *testing.T) {
 // half: a snapshot wider than the backend's proven declaration is refused at
 // the write boundary even though it clears the configured floor.
 func TestUnattendedAdmissionExceedingConformanceRefused(t *testing.T) {
+	t.Parallel()
 	s, f := openUnattendedNoConformance(t)
 
 	proven := domain.NewCapabilitySnapshot(domain.CapPostExitExport)
@@ -148,6 +151,7 @@ func TestUnattendedAdmissionExceedingConformanceRefused(t *testing.T) {
 // cross-daemon race: a still-running daemon configured for A may not combine
 // its in-memory capability declaration with the newest durable proof for B.
 func TestUnattendedAdmissionRequiresTheCurrentBackendConfiguration(t *testing.T) {
+	t.Parallel()
 	s, f := openUnattendedNoConformance(t)
 	recordConformance(t, s, conformanceAt(
 		t, domain.ConformancePassed, conformantCapabilities(t), admissionEpoch))
@@ -185,6 +189,7 @@ func TestUnattendedAdmissionRequiresTheCurrentBackendConfiguration(t *testing.T)
 // reading: §5.7 admits a weaker, unproven runner class for attended_dev, so
 // the conformance gate applies to unattended admission only.
 func TestAttendedAdmissionNeedsNoConformance(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAdmissionFixture(t, nil)
 	s, err := store.Open(ctx, tempDBPath(t), store.Options{AdmissionFloors: attendedFloors()})
@@ -210,6 +215,7 @@ func TestAttendedAdmissionNeedsNoConformance(t *testing.T) {
 // than through the cooperative constructor, and a caller-supplied generation
 // are all refused before the row exists.
 func TestRecordBackendConformanceRefusals(t *testing.T) {
+	t.Parallel()
 	s, _ := openUnattendedNoConformance(t)
 	record := func(c domain.BackendConformance) error {
 		return s.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
@@ -266,6 +272,7 @@ func TestRecordBackendConformanceRefusals(t *testing.T) {
 // TestLatestBackendConformanceAbsence pins the Lookup shape: absence is a
 // boolean, per backend, never an error.
 func TestLatestBackendConformanceAbsence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _ := openUnattendedNoConformance(t)
 	if err := s.Read(ctx, func(tx *store.ReadTx) error {

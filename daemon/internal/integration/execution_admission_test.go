@@ -116,6 +116,7 @@ func dispatchOneInvocation(t *testing.T, f *workflowFixture) (domain.InvocationI
 // the snapshot exec.CheckCapabilities produced at spawn is durable, bound to
 // the attempt it admitted, and carries the environment the stage ran under.
 func TestAdmissionSnapshotPersistsWithTheAttempt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	declared := []exec.Capability{
 		exec.CapDetachableWorkspace, exec.CapPostExitExport, exec.CapReadOnlyRemount,
@@ -211,6 +212,7 @@ func TestAdmissionSnapshotPersistsWithTheAttempt(t *testing.T) {
 // reusing its slice or pointers must not be able to weaken the gate or
 // retarget the credential and waiver bindings a record attests to.
 func TestAdmissionConfigurationIsDetached(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	floor := []exec.Capability{exec.CapPostExitExport}
 	identity := testIdentity.ID
@@ -283,6 +285,7 @@ func TestAdmissionConfigurationIsDetached(t *testing.T) {
 // driver an admission no reader can reconstruct, so the replay must start
 // under the record that is actually stored.
 func TestDispatchReplayReusesThePersistedAdmission(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	floor := []exec.Capability{exec.CapPostExitExport}
 	f := openAdmittingFixture(t,
@@ -353,6 +356,7 @@ func TestDispatchReplayReusesThePersistedAdmission(t *testing.T) {
 // it to an unbound start that omits the image, base, credentials, and egress
 // profile it was admitted with.
 func TestReplayWithoutAdmissionConfigStillUsesTheRecord(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	floor := []exec.Capability{exec.CapPostExitExport}
 	f := openAdmittingFixture(t,
@@ -402,6 +406,7 @@ func TestReplayWithoutAdmissionConfigStillUsesTheRecord(t *testing.T) {
 // bindings, rather than refusing it forever because a fresh admission of the
 // same work would fail.
 func TestReplayUnderADegradedBackendUsesTheRecord(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	floor := []exec.Capability{exec.CapPostExitExport, exec.CapDetachableWorkspace}
 	f := openAdmittingFixture(t,
@@ -455,6 +460,7 @@ func TestReplayUnderADegradedBackendUsesTheRecord(t *testing.T) {
 // persistence boundary, which distinguishes a present-but-empty floor from a
 // missing one.
 func TestAdmissionAcceptsAnEmptyFloor(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openAdmittingFixture(t,
 		[]exec.Capability{exec.CapPostExitExport}, nil, domain.CapabilitySnapshot{})
@@ -479,6 +485,7 @@ func TestAdmissionAcceptsAnEmptyFloor(t *testing.T) {
 // and accepting that output anyway would advance the workflow on work produced
 // under an isolation class the operator now rejects.
 func TestAcceptanceRegatesTheAdmission(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	floor := []exec.Capability{exec.CapPostExitExport}
 	f := openAdmittingFixture(t,
@@ -541,6 +548,7 @@ func TestAcceptanceRegatesTheAdmission(t *testing.T) {
 // encrypted checkpoint gate replaces, rather than silently perpetuates, the
 // temporary plaintext-backup exception.
 func TestEncryptedAdmissionDoesNotSurfaceRetiredWaiverPosture(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openUnattendedFixture(t)
 	attention := f.signet
@@ -601,6 +609,7 @@ func unattendedTrustProfile(t *testing.T) domain.AutomationTrustProfile {
 // hold, leaving no attempt, record, or started invocation and preserving the
 // intent for a pass under a backend that clears the floor.
 func TestAdmissionRefusalHoldsWithoutStarting(t *testing.T) {
+	t.Parallel()
 	floor := []exec.Capability{exec.CapNetworklessExport}
 	f := openAdmittingFixture(t,
 		[]exec.Capability{exec.CapPostExitExport}, floor, domain.NewCapabilitySnapshot(floor...))
@@ -623,6 +632,7 @@ func TestAdmissionRefusalHoldsWithoutStarting(t *testing.T) {
 // independent authorities exist to catch. Mutable drift holds the intent, and
 // a later pass under matching policy records both authorities and starts it.
 func TestAdmissionAndAttemptShareOneTransaction(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := openAdmittingFixture(t,
 		[]exec.Capability{exec.CapPostExitExport},

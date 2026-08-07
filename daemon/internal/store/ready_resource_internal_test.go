@@ -42,6 +42,7 @@ func migrationsBeforeReadyResource(t *testing.T) fs.FS {
 // extracted columns are changed with the JSON, so only the immutable
 // admission/export/outcome anchors can reject each forged coordinate.
 func TestReadyItemBindingRegatesEveryResourceCoordinate(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 		domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
@@ -281,6 +282,7 @@ func TestReadyItemBindingRegatesEveryResourceCoordinate(t *testing.T) {
 // TestReadyResourceMigrationBackfillsOnlyExactHistory proves restart recovery
 // for ready items created before #463 and the fail-closed authority rule.
 func TestReadyResourceMigrationBackfillsOnlyExactHistory(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name         string
 		extraOutcome bool

@@ -77,6 +77,7 @@ func workflowAuditEvidenceFixture(t *testing.T, repo, marker string) domain.Work
 // digest and by repo listing, a byte-identical replay converges on the one
 // row, and a revised profile is a second row under its own digest.
 func TestTrustProfileRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	profile := trustProfileFixture(t)
@@ -153,6 +154,7 @@ func TestTrustProfileRoundTrip(t *testing.T) {
 // representable without mutating immutable profile content, while replaying
 // RecordTrustProfile(A) after B remains inert and cannot resurrect A.
 func TestTrustProfileExactReactivation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	profileA := trustProfileFixture(t)
@@ -211,6 +213,7 @@ func TestTrustProfileExactReactivation(t *testing.T) {
 // identical observations are two rows, read back field-identical in
 // insertion order.
 func TestWorkflowAuditAppendOnly(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	evidence := workflowAuditEvidenceFixture(t, "freeside-ai/candidate-repo", "ci")
@@ -272,6 +275,7 @@ func TestWorkflowAuditAppendOnly(t *testing.T) {
 }
 
 func TestWorkflowAuditReviewRetentionAndDeletion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	const (
@@ -407,6 +411,7 @@ func TestWorkflowAuditReviewRetentionAndDeletion(t *testing.T) {
 // identical by id and by (repo, head) listing, and a byte-identical replay
 // converges on the one row.
 func TestCandidateAuthorizationRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	profile := trustProfileFixture(t)
@@ -454,6 +459,7 @@ func TestCandidateAuthorizationRoundTrip(t *testing.T) {
 // *different* repository (one repository's candidates never bind another's
 // automation posture).
 func TestAuthorizationRequiresProfileRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	profile := trustProfileFixture(t)
@@ -497,6 +503,7 @@ func TestAuthorizationRequiresProfileRow(t *testing.T) {
 // different record for the same binding fails loudly, while the same head
 // re-authorized under a revised (re-recorded) profile is a legal second row.
 func TestAuthorizationUniquePerHeadAndProfile(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	profile := trustProfileFixture(t)

@@ -39,6 +39,7 @@ func pairDevice(t *testing.T, s *store.Store, f fixtures, consumedAt time.Time) 
 // then consumed pairing code and a recorded credential read back equal, with
 // stable golden forms alongside the synchronized entities'.
 func TestPairingRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	f := newFixtures(t)
@@ -88,6 +89,7 @@ func TestPairingRoundTrip(t *testing.T) {
 // them must not advance the client-visible revision (§5.14: clients cache
 // nothing about pairing codes, so nothing invalidates).
 func TestPairingBookkeepingBumpsNoRevision(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	f := newFixtures(t)
@@ -116,6 +118,7 @@ func TestPairingBookkeepingBumpsNoRevision(t *testing.T) {
 // (another device, or the same device at another instant) is an immutable
 // conflict, so one code can never create two devices.
 func TestConsumePairingCodeSingleWinner(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	f := newFixtures(t)
@@ -164,6 +167,7 @@ func TestConsumePairingCodeSingleWinner(t *testing.T) {
 // TestConsumeUnknownPairingCode: consuming a code that was never minted is
 // ErrNotFound, not a silent no-op.
 func TestConsumeUnknownPairingCode(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
@@ -178,6 +182,7 @@ func TestConsumeUnknownPairingCode(t *testing.T) {
 // convergence: an identical replay converges, a same-hash mint with a
 // different window conflicts.
 func TestMintPairingCodeImmutable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	f := newFixtures(t)
@@ -205,6 +210,7 @@ func TestMintPairingCodeImmutable(t *testing.T) {
 // fabricate a redemption and burn the device's one-code slot without the
 // single-winner path) is rejected outright.
 func TestMintRejectsPreConsumedCode(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	f := newFixtures(t)
@@ -229,6 +235,7 @@ func TestMintRejectsPreConsumedCode(t *testing.T) {
 // (the pairing_codes UNIQUE); the violation surfaces as the store's conflict
 // error, not a raw constraint failure.
 func TestConsumeSecondCodeSameDevice(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	f := newFixtures(t)
@@ -255,6 +262,7 @@ func ptrTime(t time.Time) *time.Time { return &t }
 // An identical replay converges; different material (or a different kind)
 // under the same device conflicts, and no method can update it in place.
 func TestDeviceCredentialWriteOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	f := newFixtures(t)
@@ -282,6 +290,7 @@ func TestDeviceCredentialWriteOnce(t *testing.T) {
 // maps to ErrImmutableConflict (§5.14 test 16's shape: revocation is a
 // recorded terminal outcome, never an erasure).
 func TestDeviceRevocationLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	f := newFixtures(t)

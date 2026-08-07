@@ -153,6 +153,7 @@ func putItem(t *testing.T, s *store.Store, item domain.AttentionItem) {
 // contract: an empty log reports absence, each append becomes the current
 // state, and a repeated state is a recorded decision, not a conflict.
 func TestUnattendedOperationTransitionLog(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAdmissionFixture(t, nil)
 	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
@@ -198,6 +199,7 @@ func TestUnattendedOperationTransitionLog(t *testing.T) {
 // daemon restart structurally (nothing writes "resumed" at open), and only an
 // explicit resume reopens admission. attended_dev is untouched throughout.
 func TestStopClosesUnattendedAdmission(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := unattendedAdmissionFixture(t)
 	path := tempDBPath(t)
@@ -256,6 +258,7 @@ func TestStopClosesUnattendedAdmission(t *testing.T) {
 // operating-state checks run when an admission is recorded, never when one is
 // reconstructed, so an operator stop leaves recorded history readable.
 func TestStopDoesNotPoisonRecordedHistory(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := unattendedAdmissionFixture(t)
 	s := openWithFixture(t, f, unattendedOptions())
@@ -289,6 +292,7 @@ func TestStopDoesNotPoisonRecordedHistory(t *testing.T) {
 // superseded by healthy encrypted backup evidence. attended_dev never consults
 // the rule.
 func TestBlockingSystemHealthRefusesUnattendedAdmission(t *testing.T) {
+	t.Parallel()
 	f := unattendedAdmissionFixture(t)
 
 	t.Run("unconditional open item blocks", func(t *testing.T) {
@@ -353,6 +357,7 @@ func TestBlockingSystemHealthRefusesUnattendedAdmission(t *testing.T) {
 }
 
 func TestRequireUnattendedAdmissibleLegacyNoticeNeedsHealthyEncryption(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := unattendedAdmissionFixture(t)
 	cleared := unattendedOptions()

@@ -75,6 +75,7 @@ func openCaptureStore(t *testing.T) *store.Store {
 }
 
 func TestReadyItemPRBindingAnchorsToReadyItem(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openCaptureStore(t)
 	runID := domain.RunID("run-1")
@@ -210,6 +211,7 @@ func writeInternal(t *testing.T, s *store.Store, fn func(tx *store.InternalTx) e
 // comes back as it went in, an identical replay converges, and a divergent
 // re-declaration is an immutable conflict.
 func TestWorkUnitDeclarationRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openCaptureStore(t)
 	decl, _, _, _ := captureFixture(t)
@@ -255,6 +257,7 @@ func TestWorkUnitDeclarationRoundTrip(t *testing.T) {
 // TestWorkUnitDeclarationRequiresRun: the declaration binds a persisted run
 // (FK), so capture cannot invent a unit for a run that was never submitted.
 func TestWorkUnitDeclarationRequiresRun(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openCaptureStore(t)
 	decl, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
@@ -273,6 +276,7 @@ func TestWorkUnitDeclarationRequiresRun(t *testing.T) {
 // TestWorkUnitPRBindingRoundTrip: write-once, requires its declaration, and
 // reconstructs exactly.
 func TestWorkUnitPRBindingRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openCaptureStore(t)
 	decl, binding, _, _ := captureFixture(t)
@@ -321,6 +325,7 @@ func TestWorkUnitPRBindingRoundTrip(t *testing.T) {
 // instant-only repeat does not, and a state change appends again, so the
 // stored history is the resource's state timeline.
 func TestPullMergeFactAppendOnMaterialChange(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openCaptureStore(t)
 	_, _, merged, _ := captureFixture(t)
@@ -385,6 +390,7 @@ func TestPullMergeFactAppendOnMaterialChange(t *testing.T) {
 // TestIssueStateFactAppendOnMaterialChange mirrors the pull-fact rule for
 // issues.
 func TestIssueStateFactAppendOnMaterialChange(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openCaptureStore(t)
 	_, _, _, closed := captureFixture(t)
@@ -443,6 +449,7 @@ func TestIssueStateFactAppendOnMaterialChange(t *testing.T) {
 // converges, a disagreeing completion claim conflicts, and the read re-gate
 // refuses a done bit the store's own evidence does not derive.
 func TestWorkUnitCompletionRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openCaptureStore(t)
 	decl, binding, pull, issue := captureFixture(t)
