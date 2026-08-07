@@ -1313,14 +1313,14 @@ func claudeTransport(
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
-	janitor, err := publish.NewInstallationJanitor(
-		keystore, client, defaultGitHubAPIBase, authority, authority, time.Now,
-		defaultJanitorRemovalBound,
-	)
+	recorder, err := publish.NewStoreRecorder(st)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
-	recorder, err := publish.NewStoreRecorder(st)
+	janitor, err := publish.NewInstallationJanitor(
+		keystore, client, defaultGitHubAPIBase, authority, authority, recorder, time.Now,
+		defaultJanitorRemovalBound,
+	)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}

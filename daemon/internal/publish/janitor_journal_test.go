@@ -383,7 +383,7 @@ func newStoreJanitor(
 	maxRemovals int,
 ) *publish.InstallationJanitor {
 	t.Helper()
-	janitor, err := publish.NewInstallationJanitor(ks, srv.Client(), srv.URL, store, store, fixedNow, maxRemovals)
+	janitor, err := publish.NewInstallationJanitor(ks, srv.Client(), srv.URL, store, store, &captureMintRecorder{}, fixedNow, maxRemovals)
 	if err != nil {
 		t.Fatalf("NewInstallationJanitor: %v", err)
 	}

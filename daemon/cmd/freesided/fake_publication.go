@@ -124,14 +124,14 @@ func runFakePublicationCommand(
 	if err != nil {
 		return fakePublicationCommandResult{}, err
 	}
-	janitor, err := publish.NewInstallationJanitor(
-		keystore, client, defaultGitHubAPIBase, authority, authority, time.Now,
-		defaultJanitorRemovalBound,
-	)
+	recorder, err := publish.NewStoreRecorder(st)
 	if err != nil {
 		return fakePublicationCommandResult{}, err
 	}
-	recorder, err := publish.NewStoreRecorder(st)
+	janitor, err := publish.NewInstallationJanitor(
+		keystore, client, defaultGitHubAPIBase, authority, authority, recorder, time.Now,
+		defaultJanitorRemovalBound,
+	)
 	if err != nil {
 		return fakePublicationCommandResult{}, err
 	}

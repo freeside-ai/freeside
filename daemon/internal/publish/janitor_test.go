@@ -35,6 +35,32 @@ type removalRecorder struct {
 	err         error
 }
 
+// captureMintRecorder is the test double for the janitor's installation-scope
+// mint audit port. A nil err records every mint; a non-nil err fails the mint
+// (the unauditable-token path), and the janitor still hands the token back for
+// revocation.
+type captureMintRecorder struct {
+	mu      sync.Mutex
+	records []publish.InstallationMintRecord
+	err     error
+}
+
+func (r *captureMintRecorder) RecordInstallationMint(rec publish.InstallationMintRecord) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return r.err
+	}
+	r.records = append(r.records, rec)
+	return nil
+}
+
+func (r *captureMintRecorder) snapshot() []publish.InstallationMintRecord {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]publish.InstallationMintRecord(nil), r.records...)
+}
+
 type failSecondRemovalRecorder struct {
 	mu    sync.Mutex
 	count int
@@ -127,6 +153,7 @@ func newJanitor(
 		server.URL,
 		authority,
 		recorder,
+		&captureMintRecorder{},
 		fixedNow,
 		maxRemovals,
 	)
@@ -545,6 +572,7 @@ func TestInstallationJanitorRequiresRegistrationOwner(t *testing.T) {
 		"https://api.github.test",
 		installationAuthoritySource{},
 		&removalRecorder{},
+		&captureMintRecorder{},
 		fixedNow,
 		1,
 	)
