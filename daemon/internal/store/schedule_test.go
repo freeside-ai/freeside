@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -218,6 +219,42 @@ func TestListDueSchedules(t *testing.T) {
 	}
 	if _, _, ok, err := timerFor(ctx, s, janitor.ID); err != nil || ok {
 		t.Fatalf("timer after delete: ok=%v err=%v", ok, err)
+	}
+}
+
+// TestListDueSchedulesJoinedReadMatchesDirect proves the joined recurring read
+// reconstructs the same schedule aggregate as a direct GetScheduleSnapshot of
+// the same row. Both flow through scanScheduleSnapshot, so the forwarding
+// scanner that feeds the join cannot drift from the single-row read.
+func TestListDueSchedulesJoinedReadMatchesDirect(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	janitor := janitorSchedule(t)
+	putSchedule(t, s, janitor)
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.SetScheduleTimer(ctx, janitor.ID, janitor.Generation, janitor.CreatedAt.Add(30*time.Second))
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var due []store.DueSchedule
+	var direct domain.Schedule
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		if due, err = tx.ListDueSchedules(ctx, janitor.CreatedAt.Add(time.Minute)); err != nil {
+			return err
+		}
+		direct, _, err = tx.GetScheduleSnapshot(ctx, janitor.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(due) != 1 || due[0].Schedule.ID != janitor.ID {
+		t.Fatalf("joined read = %+v, want the janitor only", due)
+	}
+	if !reflect.DeepEqual(due[0].Schedule, direct) {
+		t.Fatalf("joined read = %+v, direct read = %+v", due[0].Schedule, direct)
 	}
 }
 
