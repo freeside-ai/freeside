@@ -113,6 +113,7 @@ func (c *composedGate) candidateBranch(t *testing.T) string {
 // attempted, because the capability PushHead requires is minted only on
 // the far side of those gates.
 func TestGateRefusalReachesNoRemoteRef(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		// publisher wires the gate under test to refuse.
@@ -180,6 +181,7 @@ func TestGateRefusalReachesNoRemoteRef(t *testing.T) {
 // travel — and it must not be able to make itself the authority either,
 // which is what the second round of that finding was about.
 func TestForeignPublisherCannotReachTheTransport(t *testing.T) {
+	t.Parallel()
 	// Every gate these publishers run passes: their own authorization
 	// source holds the record, their own trust source is conformant, and
 	// they approve the candidate's recipe. They are simply not the
@@ -253,6 +255,7 @@ func assertForeignPublisherRefused(t *testing.T, c *composedGate, foreign *publi
 // works at all.
 
 func TestGatedPublicationCreatesTheRemoteRef(t *testing.T) {
+	t.Parallel()
 	c := newComposedGate(t)
 	p := c.authorize(t, newTestPublisherFull(
 		t, c.forge, newMemoryLedger(), conformantTrust(t),

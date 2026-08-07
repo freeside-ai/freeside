@@ -586,6 +586,7 @@ func newTestPublisherFull(t *testing.T, gh *fakeGitHub, ledger publish.IntentLed
 // #81 acceptance 2 and 4): intent recorded before any dispatch, branch
 // created at the candidate head, PR created with the identity marker.
 func TestPublishCreatesBranchAndPR(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	ledger := newMemoryLedger()
 	// Every GitHub request must observe the already-recorded intent:
@@ -626,6 +627,7 @@ func TestPublishCreatesBranchAndPR(t *testing.T) {
 }
 
 func TestPublishAfterGateOrdersTransportBetweenIntentAndForge(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	ledger := newMemoryLedger()
 	p := newTestPublisher(t, gh, ledger)
@@ -673,6 +675,7 @@ func TestPublishAfterGateOrdersTransportBetweenIntentAndForge(t *testing.T) {
 // the branch and PR and issues no writes at all (issue #81 acceptance
 // 2: converge, not duplicate).
 func TestPublishRetryConverges(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	ledger := newMemoryLedger()
 	p := newTestPublisher(t, gh, ledger)
@@ -705,6 +708,7 @@ func TestPublishRetryConverges(t *testing.T) {
 // attempt died between ref create and PR create); the retry finds it,
 // creates only the PR, and never re-creates the ref.
 func TestPublishRetryAfterPartialCrash(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	ledger := newMemoryLedger()
 	p := newTestPublisher(t, gh, ledger)
@@ -744,6 +748,7 @@ func TestPublishRetryAfterPartialCrash(t *testing.T) {
 // different commit — unknown external state the publisher never
 // overwrites (never force-pushes).
 func TestPublishRefusesMovedBranch(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	p := newTestPublisher(t, gh, newMemoryLedger())
 
@@ -771,6 +776,7 @@ func TestPublishRefusesMovedBranch(t *testing.T) {
 // TestPublishRefusesForeignPR: a PR occupies the publication branch
 // without the identity marker; it is not ours to converge.
 func TestPublishRefusesForeignPR(t *testing.T) {
+	t.Parallel()
 	for name, body := range map[string]string{
 		"no marker":      "someone else's PR",
 		"foreign marker": "<!-- freeside:publication-identity=sha256:" + strings.Repeat("d", 64) + " -->",
@@ -807,6 +813,7 @@ func TestPublishRefusesForeignPR(t *testing.T) {
 // TestPublishRefusesClosedMarkedPR: a closed publication PR is a human
 // decision; recreating or reopening it would override that decision.
 func TestPublishRefusesClosedMarkedPR(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	p := newTestPublisher(t, gh, newMemoryLedger())
 
@@ -830,6 +837,7 @@ func TestPublishRefusesClosedMarkedPR(t *testing.T) {
 // drifted is patched back to the deterministic content; an undrifted
 // one is left untouched.
 func TestPublishConvergesDriftedPR(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	p := newTestPublisher(t, gh, newMemoryLedger())
 
@@ -866,6 +874,7 @@ func TestPublishConvergesDriftedPR(t *testing.T) {
 // the publication before a single external request (issue #81
 // acceptance 4).
 func TestPublishRecordsIntentBeforeAnyDispatch(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	ledger := newMemoryLedger()
 	ledger.err = errors.New("ledger unavailable")
@@ -884,6 +893,7 @@ func TestPublishRecordsIntentBeforeAnyDispatch(t *testing.T) {
 // converge on the original intent, never publish new content under an
 // old key.
 func TestPublishRefusesReusedInvocation(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	ledger := newMemoryLedger()
 
@@ -925,6 +935,7 @@ func TestPublishRefusesReusedInvocation(t *testing.T) {
 // head, an unapproved recipe, and a forged eligibility bit all fail
 // closed with nothing recorded and nothing dispatched.
 func TestPublishGatesArtifacts(t *testing.T) {
+	t.Parallel()
 	otherHead := testArtifact(t, testOtherSHA)
 
 	forgedBit := testArtifact(t, testHeadSHA)
@@ -982,6 +993,7 @@ func TestPublishGatesArtifacts(t *testing.T) {
 // profile or fresh audit to compare against, or the fresh audit exceeds the
 // approved profile. The bound digest is a lookup key, never a verdict.
 func TestPublishRefusesTrustProfileDrift(t *testing.T) {
+	t.Parallel()
 	// A profile whose content (and so digest) differs from the one
 	// testCandidate binds to: a superseded revision (§5.5 drift recovery).
 	superseded, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
@@ -1087,6 +1099,7 @@ func catPtr(c domain.ControlPlaneCategory) *domain.ControlPlaneCategory { return
 // record whose bound facts describe a different candidate. Nothing is recorded
 // and nothing is dispatched.
 func TestPublishRefusesUnauthorizedCandidate(t *testing.T) {
+	t.Parallel()
 	// mkCase builds a non-authorizing (or mis-binding) authorization from the
 	// conformant input, points the candidate at it, and returns the source
 	// holding it. authorizingInput matches the candidate's coordinates, so
@@ -1253,6 +1266,7 @@ func TestPublishRefusesUnauthorizedCandidate(t *testing.T) {
 // otherwise the publisher's own PR would later fail marker parsing
 // and convergence would deadlock as ErrForeignResource.
 func TestPublishRejectsMarkerShapedBody(t *testing.T) {
+	t.Parallel()
 	for name, body := range map[string]string{
 		"quoted foreign marker": "Quoting the other PR:\n<!-- freeside:publication-identity=sha256:" + strings.Repeat("d", 64) + " -->",
 		"malformed marker line": "<!-- freeside:publication-identity=sha256:zz -->",
@@ -1278,6 +1292,7 @@ func TestPublishRejectsMarkerShapedBody(t *testing.T) {
 }
 
 func TestVerifyOutcomeBindsUniqueLivePullRequestNumber(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	p := newTestPublisher(t, gh, newMemoryLedger())
 	candidate := testCandidate(t)
@@ -1334,6 +1349,7 @@ func TestVerifyOutcomeBindsUniqueLivePullRequestNumber(t *testing.T) {
 // appear in a broader-than-asked list response; it does not occupy
 // this repository's head ref and must be skipped, not adopted.
 func TestPublishIgnoresForkPRWithCopiedMarker(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	p := newTestPublisher(t, gh, newMemoryLedger())
 
@@ -1374,6 +1390,7 @@ func TestPublishIgnoresForkPRWithCopiedMarker(t *testing.T) {
 // not the candidate head means the branch moved between checks;
 // converging would publish under the wrong commit.
 func TestPublishRefusesMarkedPRAtWrongHead(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	p := newTestPublisher(t, gh, newMemoryLedger())
 
@@ -1402,6 +1419,7 @@ func TestPublishRefusesMarkedPRAtWrongHead(t *testing.T) {
 // the publication would claim a commit its evidence was not produced
 // for.
 func TestPublishRefusesCreatedPRAtWrongHead(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	p := newTestPublisher(t, gh, newMemoryLedger())
 
@@ -1426,6 +1444,7 @@ func TestPublishRefusesCreatedPRAtWrongHead(t *testing.T) {
 // SHA) is not a publication of this repository's branch and must fail
 // closed rather than report success.
 func TestPublishRefusesCreatedPRFromForkHead(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	gh.createHeadRepo = "attacker/evidence-repo"
 	p := newTestPublisher(t, gh, newMemoryLedger())
@@ -1440,6 +1459,7 @@ func TestPublishRefusesCreatedPRFromForkHead(t *testing.T) {
 // publisher must refuse rather than report success or patch a PR that
 // now merges the candidate into the wrong branch.
 func TestPublishRefusesRetargetedPR(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	p := newTestPublisher(t, gh, newMemoryLedger())
 
@@ -1468,6 +1488,7 @@ func TestPublishRefusesRetargetedPR(t *testing.T) {
 // move, and the publisher must refuse rather than return success for
 // coordinates the identity does not name.
 func TestPublishRefusesPRMovedDuringPatch(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	p := newTestPublisher(t, gh, newMemoryLedger())
 
@@ -1497,6 +1518,7 @@ func TestPublishRefusesPRMovedDuringPatch(t *testing.T) {
 // returns the closed PR, but a closed publication PR is a human
 // decision, so the patched response's state must refuse success.
 func TestPublishRefusesPRClosedDuringPatch(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	p := newTestPublisher(t, gh, newMemoryLedger())
 
@@ -1526,6 +1548,7 @@ func TestPublishRefusesPRClosedDuringPatch(t *testing.T) {
 // different (even approved) recipe, or a candidate without a recipe,
 // is refused before any effect.
 func TestPublishRejectsRecipeMismatch(t *testing.T) {
+	t.Parallel()
 	otherRecipe := domain.Digest("sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
 	recipes := testApprovedRecipes()
 	recipes[otherRecipe] = true
@@ -1574,6 +1597,7 @@ func TestPublishRejectsRecipeMismatch(t *testing.T) {
 // publisher reports converged while the PR stays drifted and every
 // later publication silently re-patches.
 func TestPublishRefusesMangledStoredContent(t *testing.T) {
+	t.Parallel()
 	t.Run("create path", func(t *testing.T) {
 		gh := newFakeGitHub(t)
 		gh.mangleStoredTitle = true
@@ -1601,6 +1625,7 @@ func TestPublishRefusesMangledStoredContent(t *testing.T) {
 // not echo the requested ref and commit is not proof the branch exists
 // where the candidate needs it.
 func TestPublishRefusesWrongRefCreateEcho(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	gh.mangleRefCreate = true
 	p := newTestPublisher(t, gh, newMemoryLedger())
@@ -1615,6 +1640,7 @@ func TestPublishRefusesWrongRefCreateEcho(t *testing.T) {
 // decision-driving row without a positive number fails the read
 // instead of becoming a "successful" PR #0.
 func TestPublishRejectsMalformedPullList(t *testing.T) {
+	t.Parallel()
 	c := func(t *testing.T) publish.Candidate { t.Helper(); return testCandidate(t) }
 	id := func(t *testing.T) publish.Identity {
 		t.Helper()
@@ -1663,6 +1689,7 @@ func TestPublishRejectsMalformedPullList(t *testing.T) {
 
 // TestPublishValidation covers fail-fast candidate checks.
 func TestPublishValidation(t *testing.T) {
+	t.Parallel()
 	p := newTestPublisher(t, newFakeGitHub(t), newMemoryLedger())
 	cases := map[string]func(*publish.Candidate){
 		"bad repo":      func(c *publish.Candidate) { c.Repo = "no-owner" },
@@ -1699,6 +1726,7 @@ func newReservingPublisher(t *testing.T, gh *fakeGitHub, s *store.Store) *publis
 // publishes normally. Its intent replaces the reservation on the same row, so
 // the key it committed to was never free for anybody else to take.
 func TestPublishSettlesReservedInvocation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	gh := newFakeGitHub(t)
 	s := newTestStore(t)
@@ -1750,6 +1778,7 @@ func TestPublishSettlesReservedInvocation(t *testing.T) {
 // does not hold the reservation is refused before it touches GitHub, so the
 // reserving task still finds the world exactly as it left it.
 func TestPublishRefusesReservedInvocationBeforeAnyForgeEffect(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	owner, err := publish.NewReservation("inv-0001", "run-0001")
 	if err != nil {
@@ -1805,6 +1834,7 @@ func TestPublishRefusesReservedInvocationBeforeAnyForgeEffect(t *testing.T) {
 // through any other ledger fails closed rather than publishing past a
 // reservation nothing checked.
 func TestPublishRefusesReservationClaimWithoutAStoreLedger(t *testing.T) {
+	t.Parallel()
 	gh := newFakeGitHub(t)
 	candidate := testCandidate(t)
 	candidate.RunID = "run-0001"

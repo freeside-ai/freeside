@@ -173,6 +173,7 @@ func handleExactGrant(w http.ResponseWriter, r *http.Request, repositoryIDs ...i
 // is removed, and its safe numeric coordinates cross the audit barrier before
 // the destructive request.
 func TestInstallationJanitorRemovesUnknownOwner(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	var deletes []string
 	recorder := &removalRecorder{}
@@ -234,6 +235,7 @@ func TestInstallationJanitorRemovesUnknownOwner(t *testing.T) {
 // TestInstallationJanitorBoundsRemovalWork proves a cycle never exceeds its
 // destructive-work budget even when GitHub returns more unknown installations.
 func TestInstallationJanitorBoundsRemovalWork(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	deletes := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -265,6 +267,7 @@ func TestInstallationJanitorBoundsRemovalWork(t *testing.T) {
 // same registration, and every failed or successful attempt spends the same
 // pass-wide bound.
 func TestInstallationJanitorAttemptsRemovalSiblings(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name         string
 		maxRemovals  int
@@ -341,6 +344,7 @@ func TestInstallationJanitorAttemptsRemovalSiblings(t *testing.T) {
 }
 
 func TestInstallationJanitorAttemptsRemovalSiblingsAfterSuspendFailure(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	recorder := &removalRecorder{}
 	var effects []string
@@ -393,6 +397,7 @@ func TestInstallationJanitorAttemptsRemovalSiblingsAfterSuspendFailure(t *testin
 }
 
 func TestInstallationJanitorKeepsEarlierFailureWhenAuditBarrierFails(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	errJournal := errors.New("journal became unwritable")
 	recorder := &failSecondRemovalRecorder{err: errJournal}
@@ -426,6 +431,7 @@ func TestInstallationJanitorKeepsEarlierFailureWhenAuditBarrierFails(t *testing.
 // for review finding P2: deleting from page one must not shift the first row
 // of page two into an already-observed page and allow false clean coverage.
 func TestInstallationJanitorEnumeratesBeforePaginatedDeletes(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	const pageSize = 100
 	type wireInstallation struct {
@@ -498,6 +504,7 @@ func TestInstallationJanitorEnumeratesBeforePaginatedDeletes(t *testing.T) {
 // destructive-path check: an unavailable audit sink cannot produce an
 // unlogged uninstall.
 func TestInstallationJanitorAuditFailurePreventsDelete(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	deletes := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -525,6 +532,7 @@ func TestInstallationJanitorAuditFailurePreventsDelete(t *testing.T) {
 // refutation: an empty or misbound authority source cannot make the janitor
 // interpret every installation, including the operator's own, as removable.
 func TestInstallationJanitorRequiresRegistrationOwner(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	requests := 0
 	client := &http.Client{Transport: cleanupTransportFunc(func(*http.Request) (*http.Response, error) {
@@ -555,6 +563,7 @@ func TestInstallationJanitorRequiresRegistrationOwner(t *testing.T) {
 // object refutation: an App-ID mismatch cannot supply a deletion coordinate,
 // enter the audit log, or reflect attacker-controlled account text.
 func TestInstallationJanitorRejectsMalformedIdentityBeforeDelete(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	const untrustedLogin = "attacker-ghs_LEAKY"
 	deletes := 0
@@ -588,6 +597,7 @@ func TestInstallationJanitorRejectsMalformedIdentityBeforeDelete(t *testing.T) {
 // TestResolutionRequiresActiveJanitor proves a registration is refused before
 // GitHub is contacted when no always-on janitor covers it.
 func TestResolutionRequiresActiveJanitor(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	requests := 0
 	client := &http.Client{Transport: cleanupTransportFunc(func(*http.Request) (*http.Response, error) {
@@ -607,6 +617,7 @@ func TestResolutionRequiresActiveJanitor(t *testing.T) {
 // status contract consumed by minting and, later, doctor: startup is closed,
 // the first complete pass activates the registration, and shutdown closes it.
 func TestInstallationJanitorRunActivatesOnlyAfterCleanPass(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	firstPassed := make(chan struct{}, 1)
 	secondStarted := make(chan struct{}, 1)
@@ -683,6 +694,7 @@ func TestInstallationJanitorRunActivatesOnlyAfterCleanPass(t *testing.T) {
 // cannot be selected for the trusted repository, reaches no token endpoint,
 // and the publish path has no AttentionItem side effect.
 func TestUnknownInstallationCannotMintOrCreateAttention(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	s := newTestStore(t)
 	seedTrust(t, s, testTrustRepo)

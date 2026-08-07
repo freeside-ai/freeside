@@ -31,6 +31,7 @@ func fixtureIdentityInput() publish.IdentityInput {
 // canonical encoding transitively: any change to the encoded field
 // set, order, or version tag changes the digest and fails here.
 func TestIdentityGolden(t *testing.T) {
+	t.Parallel()
 	id, err := publish.DeriveIdentity(fixtureIdentityInput())
 	if err != nil {
 		t.Fatalf("DeriveIdentity: %v", err)
@@ -47,6 +48,7 @@ func TestIdentityGolden(t *testing.T) {
 }
 
 func TestValidateCandidateBodyReservesIdentityMarker(t *testing.T) {
+	t.Parallel()
 	id, err := publish.DeriveIdentity(fixtureIdentityInput())
 	if err != nil {
 		t.Fatal(err)
@@ -63,6 +65,7 @@ func TestValidateCandidateBodyReservesIdentityMarker(t *testing.T) {
 // TestDeriveIdentityDeterministic: the same candidate always derives
 // the same identity, independent of artifact-digest order.
 func TestDeriveIdentityDeterministic(t *testing.T) {
+	t.Parallel()
 	a, err := publish.DeriveIdentity(fixtureIdentityInput())
 	if err != nil {
 		t.Fatal(err)
@@ -90,6 +93,7 @@ func TestDeriveIdentityDeterministic(t *testing.T) {
 // independently and asserts each variation derives a distinct identity
 // (issue #81 acceptance 1: different input, different identity).
 func TestDeriveIdentityDistinguishesEachInput(t *testing.T) {
+	t.Parallel()
 	otherRecipe := domain.Digest("sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
 	variations := map[string]func(*publish.IdentityInput){
 		"repo":            func(in *publish.IdentityInput) { in.Repo = "freeside-ai/other-repo" },
@@ -125,6 +129,7 @@ func TestDeriveIdentityDistinguishesEachInput(t *testing.T) {
 
 // TestDeriveIdentityValidation covers the fail-fast input checks.
 func TestDeriveIdentityValidation(t *testing.T) {
+	t.Parallel()
 	empty := domain.Digest("")
 	cases := map[string]func(*publish.IdentityInput){
 		"empty repo":              func(in *publish.IdentityInput) { in.Repo = "" },
@@ -152,6 +157,7 @@ func TestDeriveIdentityValidation(t *testing.T) {
 // crash would be reachable from any consumer that ignored an error or
 // held the zero capability.
 func TestZeroIdentityNamesNoBranch(t *testing.T) {
+	t.Parallel()
 	if got := (publish.Identity{}).BranchName(); got != "" {
 		t.Errorf("zero Identity branch = %q, want empty", got)
 	}
@@ -169,6 +175,7 @@ func TestZeroIdentityNamesNoBranch(t *testing.T) {
 // space of a returned PR body: absent, malformed, truncated,
 // wrong-case, and conflicting markers all fail closed.
 func TestParseMarker(t *testing.T) {
+	t.Parallel()
 	id, err := publish.DeriveIdentity(fixtureIdentityInput())
 	if err != nil {
 		t.Fatal(err)

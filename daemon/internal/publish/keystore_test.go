@@ -49,6 +49,7 @@ func testCredentials() publish.AppCredentials {
 // every overlapping layout, including a symlinked credentials dir that
 // resolves back inside the state dir.
 func TestNewKeystoreRejectsOverlap(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	state := filepath.Join(base, "state")
 	if err := os.MkdirAll(filepath.Join(state, "creds"), 0o700); err != nil {
@@ -96,6 +97,7 @@ func TestNewKeystoreRejectsOverlap(t *testing.T) {
 
 // TestKeystoreRoundTrip saves and reloads the full credential set.
 func TestKeystoreRoundTrip(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	want := testCredentials()
 	if err := ks.SaveApp(want); err != nil {
@@ -119,6 +121,7 @@ func TestKeystoreRoundTrip(t *testing.T) {
 }
 
 func TestPendingAuthorityCredentialsFailClosedUntilFinalized(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	creds := testCredentials()
 	if err := ks.SaveAppPendingAuthority(creds); err != nil {
@@ -154,6 +157,7 @@ func TestPendingAuthorityCredentialsFailClosedUntilFinalized(t *testing.T) {
 // TestKeystoreMultipleRegistrations pins the owner-keyed layout,
 // deterministic enumeration, metadata, and containment modes.
 func TestKeystoreMultipleRegistrations(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	personal := testCredentials()
 	personal.Owner = "BenNelsonWeiss"
@@ -226,6 +230,7 @@ func TestKeystoreMultipleRegistrations(t *testing.T) {
 // display metadata, not the on-disk identity: saving the same numeric owner
 // after a rename replaces one registration rather than orphaning the old path.
 func TestKeystoreOwnerRenameKeepsStableRegistration(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	before := testCredentials()
 	if err := ks.SaveApp(before); err != nil {
@@ -253,6 +258,7 @@ func TestKeystoreOwnerRenameKeepsStableRegistration(t *testing.T) {
 // cannot hide a damaged registration and let minting proceed with a partial
 // view of the credential set.
 func TestListAppsFailsClosedOnIncompleteActiveRegistration(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	personal := testCredentials()
 	personal.Owner = "BenNelsonWeiss"
@@ -286,6 +292,7 @@ func TestListAppsFailsClosedOnIncompleteActiveRegistration(t *testing.T) {
 // first-save journal from an incomplete active registration: recovery may
 // discard the former because no credential was ever activated.
 func TestListAppsSkipsDiscardedIncompleteStage(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	stage := testAppDir(ks, testCredentials().OwnerID) + ".staging"
 	if err := os.MkdirAll(stage, 0o700); err != nil {
@@ -310,6 +317,7 @@ func TestListAppsSkipsDiscardedIncompleteStage(t *testing.T) {
 // TestListAppsRejectsCompoundJournalSuffix proves an unexpected directory
 // cannot masquerade as a known swap journal and disappear from enumeration.
 func TestListAppsRejectsCompoundJournalSuffix(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	unexpected := filepath.Join(
 		ks.Dir(),
@@ -332,6 +340,7 @@ func TestListAppsRejectsCompoundJournalSuffix(t *testing.T) {
 // registration; an entry that occupies a registration's name, or a directory
 // nobody can explain, still fails closed.
 func TestListAppsEntryPolicy(t *testing.T) {
+	t.Parallel()
 	personal, org := twoRegistrations()
 	strayOwner := strconv.FormatInt(org.OwnerID+1, 10)
 
@@ -414,6 +423,7 @@ func TestListAppsEntryPolicy(t *testing.T) {
 // TestUnexpectedEntries proves a skipped entry stays visible to a human
 // rather than being silently swallowed.
 func TestUnexpectedEntries(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	if entries, err := ks.UnexpectedEntries(); err != nil || entries != nil {
 		t.Fatalf("UnexpectedEntries on an unpopulated keystore = %v, %v, want nil, nil", entries, err)
@@ -455,6 +465,7 @@ func TestUnexpectedEntries(t *testing.T) {
 // TestLoadAppAbsentOwner distinguishes a missing owner binding from an
 // entirely unauthenticated keystore.
 func TestLoadAppAbsentOwner(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	if err := ks.SaveApp(testCredentials()); err != nil {
 		t.Fatal(err)
@@ -471,6 +482,7 @@ func TestLoadAppAbsentOwner(t *testing.T) {
 // TestMigrateLegacyApp requires explicit attribution before relocating the
 // singleton layout, and leaves no silently inferred owner behind.
 func TestMigrateLegacyApp(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	creds := testCredentials()
 	registrationRoot := writeLegacyLayout(t, ks, creds)
@@ -507,6 +519,7 @@ func TestMigrateLegacyApp(t *testing.T) {
 // daemon stops after atomically moving the singleton aside but before writing
 // the owner-keyed replacement.
 func TestMigrateLegacyAppResumesJournaledState(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	creds := testCredentials()
 	registrationRoot := writeLegacyLayout(t, ks, creds)
@@ -538,6 +551,7 @@ func TestMigrateLegacyAppResumesJournaledState(t *testing.T) {
 // lstat("app.pem") resolves a file named APP.PEM, so a case-sensitive skip
 // would pass over an entry the legacy gate still counts as a singleton.
 func TestMigrateLegacyAppRefusesStrandedSingletonFile(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{
 		keyFileNameForTest, metaFileNameForTest,
 		strings.ToUpper(keyFileNameForTest), strings.ToUpper(metaFileNameForTest),
@@ -576,6 +590,7 @@ func TestMigrateLegacyAppRefusesStrandedSingletonFile(t *testing.T) {
 // steps. Both recoverable states must require explicit attribution and keep
 // the only key reachable through migration.
 func TestMigrateLegacyAppRecoversSingletonSwapJournals(t *testing.T) {
+	t.Parallel()
 	for _, suffix := range []string{".old", ".staging"} {
 		t.Run(strings.TrimPrefix(suffix, "."), func(t *testing.T) {
 			ks := newTestKeystore(t)
@@ -630,6 +645,7 @@ func TestMigrateLegacyAppRecoversSingletonSwapJournals(t *testing.T) {
 // SaveApp recovery rule: a first-save stage that never held a complete
 // credential was never active and must not wedge the upgraded keystore.
 func TestMigrateLegacyAppDiscardsIncompleteSingletonStage(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	creds := testCredentials()
 	registrationRoot := writeLegacyLayout(t, ks, creds)
@@ -659,6 +675,7 @@ func TestMigrateLegacyAppDiscardsIncompleteSingletonStage(t *testing.T) {
 // replacement remains authoritative when the daemon stopped before removing
 // its previous-version journal.
 func TestMigrateLegacyAppPrefersActiveSingleton(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	active := testCredentials()
 	registrationRoot := writeLegacyLayout(t, ks, active)
@@ -688,6 +705,7 @@ func TestMigrateLegacyAppPrefersActiveSingleton(t *testing.T) {
 // removed. A retry cannot duplicate the credential under a new owner or
 // change its visibility.
 func TestMigrateLegacyAppResumeRejectsChangedAttribution(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	creds := testCredentials()
 	registrationRoot := writeLegacyLayout(t, ks, creds)
@@ -736,6 +754,7 @@ func TestMigrateLegacyAppResumeRejectsChangedAttribution(t *testing.T) {
 // appeared under the state dir — the strongest checkpoint-exclusion
 // assertion available before checkpoint code exists.
 func TestKeystoreWritesStayOutsideStateDir(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	credRoot := filepath.Join(base, "credentials")
 	stateDir := filepath.Join(base, "state")
@@ -789,6 +808,7 @@ func TestKeystoreWritesStayOutsideStateDir(t *testing.T) {
 // TestKeystorePermissions asserts the on-disk modes and that a widened
 // key file fails the next load closed.
 func TestKeystorePermissions(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	if err := ks.SaveApp(testCredentials()); err != nil {
 		t.Fatalf("SaveApp: %v", err)
@@ -826,6 +846,7 @@ func TestKeystorePermissions(t *testing.T) {
 // directories and recreates the credential files owner-only before any
 // secret bytes land.
 func TestSaveAppNarrowsWidePreexistingTargets(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	appDir := testAppDir(ks, testCredentials().OwnerID)
 	if err := os.MkdirAll(appDir, 0o755); err != nil { //nolint:gosec // deliberately wide: the pre-existing exposed keystore under test
@@ -865,6 +886,7 @@ func TestSaveAppNarrowsWidePreexistingTargets(t *testing.T) {
 // onto the state tree, so SaveApp must refuse it (and LoadApp must
 // refuse to read through it) with nothing landing at the target.
 func TestKeystoreRejectsSymlinkedAppDir(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	credRoot := filepath.Join(base, "credentials")
 	stateDir := filepath.Join(base, "state")
@@ -902,6 +924,7 @@ func TestKeystoreRejectsSymlinkedAppDir(t *testing.T) {
 // TestKeystoreRejectsSymlinkedOwnerDir covers the new owner-keyed path
 // boundary: a planted owner child cannot relocate that registration's key.
 func TestKeystoreRejectsSymlinkedOwnerDir(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	credRoot := filepath.Join(base, "credentials")
 	stateDir := filepath.Join(base, "state")
@@ -944,6 +967,7 @@ func TestKeystoreRejectsSymlinkedOwnerDir(t *testing.T) {
 // caller cannot overwrite working credentials with an issuer-0
 // identity or persist without key material.
 func TestSaveAppRejectsInvalidIdentity(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	noID := testCredentials()
 	noID.AppID = 0
@@ -969,6 +993,7 @@ func TestSaveAppRejectsInvalidIdentity(t *testing.T) {
 // persistence reconstruction boundary, so a corrupted or restored
 // metadata file cannot produce issuer-0 credentials.
 func TestLoadAppRejectsInvalidIdentity(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	if err := ks.SaveApp(testCredentials()); err != nil {
 		t.Fatal(err)
@@ -990,6 +1015,7 @@ func TestLoadAppRejectsInvalidIdentity(t *testing.T) {
 // TestLoadAppRejectsMismatchedKeyID proves restored metadata cannot identify
 // one key for revocation while the keystore actually signs with another.
 func TestLoadAppRejectsMismatchedKeyID(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	creds := testCredentials()
 	if err := ks.SaveApp(creds); err != nil {
@@ -1012,6 +1038,7 @@ func TestLoadAppRejectsMismatchedKeyID(t *testing.T) {
 // TestLoadAppRejectsMismatchedOwnerID proves the stable numeric directory
 // binding cannot be replaced by mutable or login-reused owner metadata.
 func TestLoadAppRejectsMismatchedOwnerID(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	creds := testCredentials()
 	if err := ks.SaveApp(creds); err != nil {
@@ -1041,6 +1068,7 @@ func TestLoadAppRejectsMismatchedOwnerID(t *testing.T) {
 // the state surface; the creation walk must refuse it and nothing may
 // land at the target.
 func TestSaveAppRejectsSymlinkedAncestor(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	stateDir := filepath.Join(base, "state")
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
@@ -1074,6 +1102,7 @@ func TestSaveAppRejectsSymlinkedAncestor(t *testing.T) {
 // never destroy the only working credentials before the replacement is
 // durable; a failed save leaves the previous credentials loadable.
 func TestSaveAppPreservesOldCredentialsOnFailure(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	want := testCredentials()
 	if err := ks.SaveApp(want); err != nil {
@@ -1110,6 +1139,7 @@ func TestSaveAppPreservesOldCredentialsOnFailure(t *testing.T) {
 // leaves .staging/.old directories; the next save clears them and
 // succeeds.
 func TestSaveAppCleansStaleSwapLeftovers(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	if err := ks.SaveApp(testCredentials()); err != nil {
 		t.Fatal(err)
@@ -1143,6 +1173,7 @@ func TestSaveAppCleansStaleSwapLeftovers(t *testing.T) {
 // TestSaveAppReplacesReadOnlyCredentials proves cleanup cannot report a false
 // failure after replacement has already activated the new credentials.
 func TestSaveAppReplacesReadOnlyCredentials(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	if err := ks.SaveApp(testCredentials()); err != nil {
 		t.Fatal(err)
@@ -1178,6 +1209,7 @@ func TestSaveAppReplacesReadOnlyCredentials(t *testing.T) {
 // The next load restores the known-good old credentials and discards
 // the incomplete staging directory.
 func TestLoadAppRecoversInterruptedReplacement(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	want := testCredentials()
 	if err := ks.SaveApp(want); err != nil {
@@ -1213,6 +1245,7 @@ func TestLoadAppRecoversInterruptedReplacement(t *testing.T) {
 // activation rename. With no old credentials to prefer, the validated
 // staging directory becomes active on restart.
 func TestLoadAppRecoversCompletedInitialStage(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	want := testCredentials()
 	if err := ks.SaveApp(want); err != nil {
@@ -1236,6 +1269,7 @@ func TestLoadAppRecoversCompletedInitialStage(t *testing.T) {
 }
 
 func TestPendingAuthorityPreCredentialStageIsNeverPromoted(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	appDir := testAppDir(ks, testCredentials().OwnerID)
 	staging := appDir + ".staging"
@@ -1263,6 +1297,7 @@ func TestPendingAuthorityPreCredentialStageIsNeverPromoted(t *testing.T) {
 // registration. A later SaveApp already holds fresh converted
 // credentials, so it discards the unusable stage and activates them.
 func TestSaveAppReplacesIncompleteInitialStage(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	staging := testAppDir(ks, testCredentials().OwnerID) + ".staging"
 	if err := os.MkdirAll(staging, 0o700); err != nil {
@@ -1285,6 +1320,7 @@ func TestSaveAppReplacesIncompleteInitialStage(t *testing.T) {
 // state, so the daemon can ask for re-registration without manual
 // filesystem repair.
 func TestLoadAppClearsIncompleteInitialStage(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	staging := testAppDir(ks, testCredentials().OwnerID) + ".staging"
 	if err := os.MkdirAll(staging, 0o700); err != nil {
@@ -1304,6 +1340,7 @@ func TestLoadAppClearsIncompleteInitialStage(t *testing.T) {
 
 // TestLoadAppEmpty covers the pre-registration (and post-restore) state.
 func TestLoadAppEmpty(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	if _, err := ks.LoadApp(testCredentials().OwnerID); !errors.Is(err, publish.ErrNoAppRegistration) {
 		t.Errorf("LoadApp on empty keystore = %v, want ErrNoAppRegistration", err)
@@ -1395,6 +1432,7 @@ func stripOwnerMetadata(t *testing.T, ks *publish.Keystore, ownerID int64) {
 // record with incomplete metadata still fails enumeration closed, but the
 // failure now names that record instead of reading as a broken keystore.
 func TestListAppsNamesTheUnreadableRegistration(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	personal, org := twoRegistrations()
 	saveAll(t, ks, personal, org)
@@ -1423,6 +1461,7 @@ func TestListAppsNamesTheUnreadableRegistration(t *testing.T) {
 // what re-opens resolution, and that it preserves rather than deletes the
 // record.
 func TestQuarantineAppRestoresEnumeration(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	personal, org := twoRegistrations()
 	saveAll(t, ks, personal, org)
@@ -1455,6 +1494,7 @@ func TestQuarantineAppRestoresEnumeration(t *testing.T) {
 // becoming a way to drop a working registration out of janitor coverage
 // while its installations stay live on GitHub.
 func TestQuarantineAppRefusesReadableRegistration(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	personal, org := twoRegistrations()
 	saveAll(t, ks, personal, org)
@@ -1474,6 +1514,7 @@ func TestQuarantineAppRefusesReadableRegistration(t *testing.T) {
 // TestQuarantineAppRefusesOverwrite keeps a second withdrawal from
 // destroying the first record it preserved.
 func TestQuarantineAppRefusesOverwrite(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	personal, org := twoRegistrations()
 	saveAll(t, ks, personal, org)
@@ -1495,6 +1536,7 @@ func TestQuarantineAppRefusesOverwrite(t *testing.T) {
 // TestQuarantineAppWithdrawsSwapLeftovers proves a .staging sibling cannot
 // resurrect a withdrawn record on the next enumeration.
 func TestQuarantineAppWithdrawsSwapLeftovers(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	personal, org := twoRegistrations()
 	saveAll(t, ks, personal, org)
@@ -1530,6 +1572,7 @@ func TestQuarantineAppWithdrawsSwapLeftovers(t *testing.T) {
 
 // TestQuarantineAppAbsentOwner keeps the withdrawal from inventing a record.
 func TestQuarantineAppAbsentOwner(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	if err := ks.SaveApp(testCredentials()); err != nil {
 		t.Fatal(err)
@@ -1591,6 +1634,7 @@ func rewriteOwnerID(t *testing.T, ks *publish.Keystore, dirOwnerID, persistedOwn
 // withdrawable. A state that enumeration rejects but quarantine refuses
 // would leave resolution blocked with no remedy.
 func TestQuarantineWithdrawsEveryEnumerationBlocker(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		damage func(t *testing.T, ks *publish.Keystore, ownerID int64)
@@ -1666,6 +1710,7 @@ func stripJournalMetadata(t *testing.T, journalDir string) {
 // honest about the one state recovery resolves on its own: an incomplete
 // first-save stage is discarded, not withdrawn.
 func TestQuarantineAppDiscardedStageLeavesNothingToWithdraw(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	if err := ks.SaveApp(testCredentials()); err != nil {
 		t.Fatal(err)
@@ -1691,6 +1736,7 @@ func TestQuarantineAppDiscardedStageLeavesNothingToWithdraw(t *testing.T) {
 // every registration alike, so withdrawing the named owner would drop a
 // working registration while leaving enumeration just as blocked.
 func TestQuarantineAppRefusesKeystoreWideFailure(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		widen  func(ks *publish.Keystore) string
@@ -1733,6 +1779,7 @@ func TestQuarantineAppRefusesKeystoreWideFailure(t *testing.T) {
 // (the active directory is present), and the retry must complete rather
 // than refuse on a destination its own earlier attempt created.
 func TestQuarantineAppResumesPartialWithdrawal(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	personal, org := twoRegistrations()
 	saveAll(t, ks, personal, org)
@@ -1778,6 +1825,7 @@ func TestQuarantineAppResumesPartialWithdrawal(t *testing.T) {
 // moved would leave journals recovery promotes back into the active slot,
 // and the retry would then collide with its own quarantined record.
 func TestQuarantineAppMovesTheActiveRecordLast(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	_, org := twoRegistrations()
 	if err := ks.SaveApp(org); err != nil {
@@ -1814,6 +1862,7 @@ func TestQuarantineAppMovesTheActiveRecordLast(t *testing.T) {
 // operator to a remedy that cannot help while enumeration stays blocked
 // on the leftover.
 func TestListAppsDoesNotAttributePostPromotionCleanup(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	personal, org := twoRegistrations()
 	saveAll(t, ks, personal, org)
@@ -1864,6 +1913,7 @@ func TestListAppsDoesNotAttributePostPromotionCleanup(t *testing.T) {
 // move, and a retry must finish the durability sequence rather than report
 // a record that is in fact already withdrawn.
 func TestQuarantineAppCompletesAnUnsyncedWithdrawal(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	personal, org := twoRegistrations()
 	saveAll(t, ks, personal, org)
@@ -1901,6 +1951,7 @@ func TestQuarantineAppCompletesAnUnsyncedWithdrawal(t *testing.T) {
 // piece leaves the active set and none is left behind on the source side
 // for recovery to promote.
 func TestQuarantineAppWithdrawsJournalsAndActiveTogether(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	personal, org := twoRegistrations()
 	saveAll(t, ks, personal, org)
@@ -1952,6 +2003,7 @@ var deficientRootModes = []struct {
 // attempt a move that cannot succeed. narrowDir deliberately preserves a
 // tighter-than-0700 root, so these are supported states, not corruption.
 func TestDeficientRegistrationRootIsKeystoreWide(t *testing.T) {
+	t.Parallel()
 	for _, tc := range deficientRootModes {
 		t.Run(tc.name, func(t *testing.T) {
 			ks := newTestKeystore(t)
@@ -2004,6 +2056,7 @@ func TestDeficientRegistrationRootIsKeystoreWide(t *testing.T) {
 // within the registration root, but the quarantine directory is created
 // beside it, so the withdrawal must refuse rather than fail part-way.
 func TestDeficientCredentialsRootRefusesWithdrawal(t *testing.T) {
+	t.Parallel()
 	for _, tc := range deficientRootModes {
 		t.Run(tc.name, func(t *testing.T) {
 			ks := newTestKeystore(t)
@@ -2045,6 +2098,7 @@ func TestDeficientCredentialsRootRefusesWithdrawal(t *testing.T) {
 // forbids the rename, so withdrawal would refuse. Attribution promises a
 // remedy, so it must not be made here either.
 func TestDeficientRootDoesNotAttributeActiveRecordFailure(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	personal, org := twoRegistrations()
 	saveAll(t, ks, personal, org)
@@ -2096,6 +2150,7 @@ func TestDeficientRootDoesNotAttributeActiveRecordFailure(t *testing.T) {
 // cannot write into fails every rename just as a deficient source root
 // does, so it must not be attributed to a record either.
 func TestDeficientQuarantineDestinationIsKeystoreWide(t *testing.T) {
+	t.Parallel()
 	for _, tc := range deficientRootModes {
 		t.Run(tc.name, func(t *testing.T) {
 			ks := newTestKeystore(t)
@@ -2152,6 +2207,7 @@ func TestDeficientQuarantineDestinationIsKeystoreWide(t *testing.T) {
 // cannot land. Attribution promises the withdrawal, so it must ask the
 // withdrawal's own preconditions rather than only the directory modes.
 func TestMalformedQuarantineTargetIsNotAttributed(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		plant func(t *testing.T, target string)
@@ -2222,6 +2278,7 @@ func TestMalformedQuarantineTargetIsNotAttributed(t *testing.T) {
 // distinct earlier withdrawal that the remedy refuses, so it must not be
 // advertised either.
 func TestExistingWithdrawalIsNotAttributed(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	personal, org := twoRegistrations()
 	saveAll(t, ks, personal, org)

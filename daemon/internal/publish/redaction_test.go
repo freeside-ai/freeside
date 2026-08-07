@@ -18,6 +18,7 @@ import (
 // fmt.%+v gives big integers, the token, the webhook and client
 // secrets — may appear in any rendering.
 func TestNoCredentialValueRenders(t *testing.T) {
+	t.Parallel()
 	key := fixtureKey(t)
 	pemRaw, err := os.ReadFile("testdata/test-signing-key.pem")
 	if err != nil {

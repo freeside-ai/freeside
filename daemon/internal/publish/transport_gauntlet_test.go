@@ -17,6 +17,7 @@ import (
 // that FetchBase's no-worktree shape satisfies the importer's
 // local-checkout contract unchanged.
 func TestTransportCarriesHostileHandoffCleanly(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {
@@ -98,6 +99,7 @@ func TestTransportCarriesHostileHandoffCleanly(t *testing.T) {
 // files exist with their committed bytes, nothing differs from HEAD, and HEAD
 // is still detached at the exact base.
 func TestFetchBaseWorktreeMaterializesTheCommittedTree(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	dir := checkoutDir(t)
 	co, err := remote.transport.FetchBaseWorktree(
@@ -129,6 +131,7 @@ func TestFetchBaseWorktreeMaterializesTheCommittedTree(t *testing.T) {
 // candidate commit. Pinning both shapes is what keeps the two lanes from
 // silently collapsing into one.
 func TestFetchBaseLeavesTheWorktreeUnmaterialized(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(
 		t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t),

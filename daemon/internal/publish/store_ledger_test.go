@@ -12,6 +12,7 @@ import (
 // outbox path (issue #82): the intent lands on the store-owned outbox
 // and Record reports it recorded.
 func TestStoreLedgerRecordsIntent(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ledger, err := publish.NewStoreLedger(s)
 	if err != nil {
@@ -44,6 +45,7 @@ func TestStoreLedgerRecordsIntent(t *testing.T) {
 // new, so a retry converges on the one committed intent instead of
 // minting a second.
 func TestStoreLedgerConverges(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ledger, err := publish.NewStoreLedger(s)
 	if err != nil {
@@ -80,6 +82,7 @@ func TestStoreLedgerConverges(t *testing.T) {
 // publication intent even when its payload bytes match. Record must fail
 // closed instead of allowing an external effect with no recoverable intent.
 func TestStoreLedgerRejectsForeignKind(t *testing.T) {
+	t.Parallel()
 	s := newTestStore(t)
 	ledger, err := publish.NewStoreLedger(s)
 	if err != nil {
@@ -104,6 +107,7 @@ func TestStoreLedgerRejectsForeignKind(t *testing.T) {
 // TestNewStoreLedgerNilStore fails closed at construction: a nil store
 // must error there, not at the first Record.
 func TestNewStoreLedgerNilStore(t *testing.T) {
+	t.Parallel()
 	if _, err := publish.NewStoreLedger(nil); err == nil {
 		t.Error("NewStoreLedger(nil) accepted, want error")
 	}

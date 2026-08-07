@@ -101,6 +101,7 @@ func newMintServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 // decodes into a redaction-safe token, and the mint lands one audit
 // record with both requested and granted scopes (acceptance 3).
 func TestMintInstallationToken(t *testing.T) {
+	t.Parallel()
 	ks := newRegisteredKeystore(t)
 	wantJWT, err := publish.AppJWT(fixtureKey(t), fixtureAppID, fixtureTime)
 	if err != nil {
@@ -194,6 +195,7 @@ func TestMintInstallationToken(t *testing.T) {
 // records. The permission object decodes losslessly, so an unknown
 // key cannot be dropped before the comparison.
 func TestMintRejectsGrantMismatch(t *testing.T) {
+	t.Parallel()
 	const (
 		expiry    = `"expires_at":"2026-07-16T13:00:00Z"`
 		wantRepos = `"repository_selection":"selected","repositories":[{"id":990011,"name":"evidence-repo"}]`
@@ -251,6 +253,7 @@ func TestMintRejectsGrantMismatch(t *testing.T) {
 // syntactically valid 201 whose token is missing or already expired
 // must not advance the audit barrier or circulate as a credential.
 func TestMintRejectsUnusableToken(t *testing.T) {
+	t.Parallel()
 	const wantPerms = `"permissions":{"actions":"read","administration":"read","contents":"write","environments":"read","pull_requests":"write","metadata":"read"}`
 	cases := []struct {
 		name string
@@ -296,6 +299,7 @@ func TestMintRejectsUnusableToken(t *testing.T) {
 // TestMintAPIError asserts a non-201 surfaces as the APIError carrier
 // with no audit record and no body content in the error.
 func TestMintAPIError(t *testing.T) {
+	t.Parallel()
 	ks := newRegisteredKeystore(t)
 	srv := newMintServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -324,6 +328,7 @@ func TestMintAPIError(t *testing.T) {
 // TestMintFailsWhenRecorderFails: an unauditable token must not
 // circulate.
 func TestMintFailsWhenRecorderFails(t *testing.T) {
+	t.Parallel()
 	ks := newRegisteredKeystore(t)
 	srv := newMintServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -341,6 +346,7 @@ func TestMintFailsWhenRecorderFails(t *testing.T) {
 
 // TestMintValidation covers the fail-fast argument checks.
 func TestMintValidation(t *testing.T) {
+	t.Parallel()
 	ks := newRegisteredKeystore(t)
 	m := newCoveredMinter(ks, http.DefaultClient, "http://unreachable.invalid", &captureRecorder{}, conformantTrust(t), fixedNow)
 	if _, err := m.MintInstallationToken(context.Background(), "repo"); err == nil {
@@ -354,6 +360,7 @@ func TestMintValidation(t *testing.T) {
 // TestMintRejectsRepositoryOutsideTrustedSet proves the onboarded trust source
 // gates every mint before installation discovery or token exchange.
 func TestMintRejectsRepositoryOutsideTrustedSet(t *testing.T) {
+	t.Parallel()
 	requests := 0
 	client := &http.Client{Transport: cleanupTransportFunc(func(*http.Request) (*http.Response, error) {
 		requests++
@@ -380,6 +387,7 @@ func TestMintRejectsRepositoryOutsideTrustedSet(t *testing.T) {
 // live installation discovery and signing. A locally replaced registration
 // cannot inherit a binding resolved under the prior App ID.
 func TestMintRejectsRegistrationChangeAfterResolution(t *testing.T) {
+	t.Parallel()
 	ks := newRegisteredKeystore(t)
 	tokenRequests := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -435,6 +443,7 @@ func newTestStore(t *testing.T) *store.Store {
 // path (issue #107 acceptance 2): the record lands on the store-owned
 // SQLite surface and reads back field-identical.
 func TestStoreRecorder(t *testing.T) {
+	t.Parallel()
 	ks := newRegisteredKeystore(t)
 	srv := newMintServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -485,6 +494,7 @@ func TestStoreRecorder(t *testing.T) {
 // recorder rather than a fake — an audit write that cannot commit
 // fails the mint, and a nil store fails at construction.
 func TestStoreRecorderFailsClosed(t *testing.T) {
+	t.Parallel()
 	if _, err := publish.NewStoreRecorder(nil); err == nil {
 		t.Error("NewStoreRecorder(nil) succeeded, want error")
 	}

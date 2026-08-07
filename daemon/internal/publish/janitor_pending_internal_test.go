@@ -7,6 +7,7 @@ import (
 )
 
 func TestPendingReadyNeverGrantsRuntimeAuthority(t *testing.T) {
+	t.Parallel()
 	janitor := &InstallationJanitor{
 		covered: map[int64]registrationCoverage{
 			11: {
@@ -57,6 +58,7 @@ func TestPendingReadyNeverGrantsRuntimeAuthority(t *testing.T) {
 }
 
 func TestStableCoverageExcludesReconciliationWithdrawal(t *testing.T) {
+	t.Parallel()
 	janitor := &InstallationJanitor{
 		covered: map[int64]registrationCoverage{
 			11: {

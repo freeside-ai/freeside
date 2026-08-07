@@ -167,6 +167,7 @@ func seedTrustProfile(t *testing.T, s *store.Store, profile domain.AutomationTru
 // profile/audit for an unseeded repository (absence the gate fails closed
 // on) and the recorded profile/audit once seeded.
 func TestStoreTrustSourceReturnsLatest(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := newTestStore(t)
 	src, err := publish.NewStoreTrustSource(s)

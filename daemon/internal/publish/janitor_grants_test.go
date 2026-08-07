@@ -33,6 +33,7 @@ func trustedPublicBinding(repositoryIDs ...int64) installationAuthoritySource {
 // token, completes enumeration, revokes it, commits local quarantine, suspends
 // the installation, and deletes it without ever calling an unsuspend endpoint.
 func TestInstallationJanitorQuarantinesGrantDrift(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	recorder := &removalRecorder{}
 	var events []string
@@ -102,6 +103,7 @@ func TestInstallationJanitorQuarantinesGrantDrift(t *testing.T) {
 }
 
 func TestInstallationJanitorQuarantinesRepositorySelectionDrift(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"", "all", "future_mode"} {
 		t.Run(fmt.Sprintf("mode_%q", mode), func(t *testing.T) {
 			ks := publicJanitorKeystore(t)
@@ -153,6 +155,7 @@ func TestInstallationJanitorQuarantinesRepositorySelectionDrift(t *testing.T) {
 }
 
 func TestInstallationJanitorRejectsUntrustedRepositoryPages(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		body string
@@ -231,6 +234,7 @@ func TestInstallationJanitorRejectsUntrustedRepositoryPages(t *testing.T) {
 }
 
 func TestInstallationJanitorTokenFailuresNeverPublishCoverage(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		mintStatus   int
@@ -325,6 +329,7 @@ func TestInstallationJanitorTokenFailuresNeverPublishCoverage(t *testing.T) {
 }
 
 func TestInstallationJanitorRemovesTrustedOwnerWithoutBindingBeforeMint(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	recorder := &removalRecorder{}
 	tokenMints := 0
@@ -354,6 +359,7 @@ func TestInstallationJanitorRemovesTrustedOwnerWithoutBindingBeforeMint(t *testi
 }
 
 func TestStalePendingEnvelopeResumesOrdinaryCleanup(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*publish.InstallationAuthority)
@@ -435,6 +441,7 @@ func TestStalePendingEnvelopeResumesOrdinaryCleanup(t *testing.T) {
 }
 
 func TestPrivateRegistrationRequiresJanitorCoverage(t *testing.T) {
+	t.Parallel()
 	requests := 0
 	client := &http.Client{Transport: cleanupTransportFunc(func(*http.Request) (*http.Response, error) {
 		requests++
@@ -455,6 +462,7 @@ func TestPrivateRegistrationRequiresJanitorCoverage(t *testing.T) {
 }
 
 func TestPendingExpansionPreservesOnlyCurrentMintAuthority(t *testing.T) {
+	t.Parallel()
 	const addedRepositoryID = int64(990012)
 	authority := installationAuthoritySource{
 		fixtureAppID: {
@@ -552,6 +560,7 @@ func TestPendingExpansionPreservesOnlyCurrentMintAuthority(t *testing.T) {
 }
 
 func TestPublicPendingEnvelopeTemporarilyExemptsExpectedOwner(t *testing.T) {
+	t.Parallel()
 	authority := publicAuthority()
 	snapshot := authority[501]
 	snapshot.ActiveEpoch = 7
@@ -600,6 +609,7 @@ func TestPublicPendingEnvelopeTemporarilyExemptsExpectedOwner(t *testing.T) {
 }
 
 func TestPendingEnvelopeNeverAuthorizesMint(t *testing.T) {
+	t.Parallel()
 	ks := newRegisteredKeystore(t)
 	authority := installationAuthoritySource{
 		fixtureAppID: {

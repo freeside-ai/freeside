@@ -46,6 +46,7 @@ func scanTreeForTokenForms(t *testing.T, root string) {
 // never-lands-on-disk property, proven on the real flow rather than
 // the stub.
 func TestTransportLeavesNoTokenOnDisk(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {
@@ -65,6 +66,7 @@ func TestTransportLeavesNoTokenOnDisk(t *testing.T) {
 // the ancestor — an authenticated push under a foreign repository
 // would honor that repository's local config.
 func TestPinRepoRefusesForeignGitDir(t *testing.T) {
+	t.Parallel()
 	outer := t.TempDir()
 	gitOut(t, "", "init", "--initial-branch=main", outer)
 	inner := filepath.Join(outer, "nested", "checkout")
@@ -90,6 +92,7 @@ func TestPinRepoRefusesForeignGitDir(t *testing.T) {
 // the same checkout path is not refused by the existing-repository
 // guard.
 func TestFetchBaseFailureDoesNotWedgeTheDir(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	dir := checkoutDir(t)
 	if _, err := remote.transport.FetchBase(t.Context(), remote.repo, "absent", remote.baseSHA, dir); err == nil {
@@ -111,6 +114,7 @@ func TestFetchBaseFailureDoesNotWedgeTheDir(t *testing.T) {
 // to the substituted host. Every such key must fail the invocation
 // closed, before any token is minted.
 func TestPushRefusesRedirectingCheckoutConfig(t *testing.T) {
+	t.Parallel()
 	hostile := map[string]string{
 		"url.file:///evil.insteadOf":         "file://",
 		"http.https://evil.test.extraHeader": "X-Evil: 1",
@@ -151,6 +155,7 @@ func TestPushRefusesRedirectingCheckoutConfig(t *testing.T) {
 // (the window a token mint would otherwise sit inside) must still
 // stop the credentialed process from starting.
 func TestAuthenticatedInvocationRechecksConfig(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {
@@ -185,6 +190,7 @@ func TestAuthenticatedInvocationRechecksConfig(t *testing.T) {
 // different endpoint must not be pushable by this one, however alike
 // the repository and base-ref labels look.
 func TestPushRefusesCheckoutFromAnotherTransport(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	other := newLocalRemote(t)
 	// Same repo and base-ref labels, different endpoint.
@@ -210,6 +216,7 @@ func TestPushRefusesCheckoutFromAnotherTransport(t *testing.T) {
 // stale-lease) and the remote ref must not move, even though the
 // existing ref is an ancestor a plain push would happily fast-forward.
 func TestPushLeaseRefusesExistingRefAtProtocolLevel(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err != nil {

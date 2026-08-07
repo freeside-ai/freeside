@@ -18,6 +18,7 @@ import (
 )
 
 func TestCappedMaterializationBufferStopsStreamingCommand(t *testing.T) {
+	t.Parallel()
 	buffer := cappedMaterializationBuffer{remaining: 3}
 	n, err := buffer.Write([]byte("abcdef"))
 	if n != 3 || !errors.Is(err, errMaterializationTreeListingLimit) {
@@ -57,6 +58,7 @@ func TestCappedMaterializationBufferStopsStreamingCommand(t *testing.T) {
 }
 
 func TestRetainedRepositoryReaderStopsOnCancellation(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	reader := retainedRepositoryReader{ctx: ctx, r: strings.NewReader("repository bytes")}
@@ -66,6 +68,7 @@ func TestRetainedRepositoryReaderStopsOnCancellation(t *testing.T) {
 }
 
 func TestRetainWorktreePopulatesImportedCandidate(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	co, err := remote.transport.FetchBase(
 		t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t),
@@ -176,6 +179,7 @@ exec git "$@"
 }
 
 func TestRetainWorktreeRefusesWithoutSideEffects(t *testing.T) {
+	t.Parallel()
 	t.Run("oversized repository", func(t *testing.T) {
 		remote := newLocalRemote(t)
 		co, err := remote.transport.FetchBase(
@@ -371,6 +375,7 @@ func TestRetainWorktreeRefusesWithoutSideEffects(t *testing.T) {
 }
 
 func TestFetchBaseWorktreeRefusesWorkingTreeEncoding(t *testing.T) {
+	t.Parallel()
 	remote := newLocalRemote(t)
 	if err := os.WriteFile(
 		filepath.Join(remote.work, ".gitattributes"),
@@ -396,6 +401,7 @@ func TestFetchBaseWorktreeRefusesWorkingTreeEncoding(t *testing.T) {
 }
 
 func TestWorkingTreeEncodingDetector(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		chunks []string
@@ -439,6 +445,7 @@ func TestWorkingTreeEncodingDetector(t *testing.T) {
 }
 
 func TestMaterializationTreePathBudgets(t *testing.T) {
+	t.Parallel()
 	t.Run("path bytes before split", func(t *testing.T) {
 		path := strings.Repeat("x", maxMaterializationPathBytes+1)
 		if err := validateMaterializationTreePath(path); err == nil {
@@ -495,6 +502,7 @@ func TestMaterializationTreePathBudgets(t *testing.T) {
 }
 
 func TestRejectMaterializationFilesystemCollisions(t *testing.T) {
+	t.Parallel()
 	entry := materializationTreeEntry{mode: "100644", oid: strings.Repeat("a", 40), size: 1}
 	for _, test := range []struct {
 		name  string
@@ -542,6 +550,7 @@ func TestRejectMaterializationFilesystemCollisions(t *testing.T) {
 }
 
 func TestMaterializationVerificationUsesRootedPaths(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -591,6 +600,7 @@ func TestMaterializationVerificationUsesRootedPaths(t *testing.T) {
 }
 
 func TestMaterializationTreePathGitAliases(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name string
 		path string

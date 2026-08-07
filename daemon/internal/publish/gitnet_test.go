@@ -3,6 +3,7 @@ package publish
 import "testing"
 
 func TestClassifyTransportFailure(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name           string
 		stdout, stderr string
@@ -63,6 +64,7 @@ func TestClassifyTransportFailure(t *testing.T) {
 }
 
 func TestTransportRefusalValid(t *testing.T) {
+	t.Parallel()
 	for _, r := range AllTransportRefusals {
 		if !r.valid() {
 			t.Errorf("registered refusal %q reports invalid", r)

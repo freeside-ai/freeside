@@ -140,6 +140,7 @@ func removalRecord(installationID int64, reason publish.InstallationRemovalReaso
 }
 
 func TestRecordInstallationRemovalCommitsDurably(t *testing.T) {
+	t.Parallel()
 	dir, store := newDocumentStore(t, operatorDocument(operatorBinding(701, fixtureRepositoryID)))
 
 	if err := store.RecordInstallationRemoval(removalRecord(702, publish.InstallationRemovalUnbound)); err != nil {
@@ -164,6 +165,7 @@ func TestRecordInstallationRemovalCommitsDurably(t *testing.T) {
 }
 
 func TestRemovalLeavesTrustIntact(t *testing.T) {
+	t.Parallel()
 	dir, store := newDocumentStore(t, operatorDocument(operatorBinding(701, fixtureRepositoryID)))
 
 	if err := store.RecordInstallationRemoval(removalRecord(701, publish.InstallationRemovalUnbound)); err != nil {
@@ -180,6 +182,7 @@ func TestRemovalLeavesTrustIntact(t *testing.T) {
 }
 
 func TestQuarantineWithdrawsTrustAcrossRestart(t *testing.T) {
+	t.Parallel()
 	dir, store := newDocumentStore(t, operatorDocument(operatorBinding(701, fixtureRepositoryID)))
 
 	record := removalRecord(701, publish.InstallationRemovalGrantDrift)
@@ -210,6 +213,7 @@ func TestQuarantineWithdrawsTrustAcrossRestart(t *testing.T) {
 }
 
 func TestRepeatedQuarantineKeepsOneWithdrawalAndEveryRequest(t *testing.T) {
+	t.Parallel()
 	dir, store := newDocumentStore(t, operatorDocument(operatorBinding(701, fixtureRepositoryID)))
 
 	for range 2 {
@@ -230,6 +234,7 @@ func TestRepeatedQuarantineKeepsOneWithdrawalAndEveryRequest(t *testing.T) {
 }
 
 func TestQuarantineDropsThePendingEnvelopeItNames(t *testing.T) {
+	t.Parallel()
 	document := operatorDocument()
 	document.Registrations[0].Pending = &publish.PendingEnvelopeRecord{
 		ActiveEpoch:            1,
@@ -257,6 +262,7 @@ func TestQuarantineDropsThePendingEnvelopeItNames(t *testing.T) {
 }
 
 func TestQuarantineRefusesAStaleBindingBesideAnUnrelatedEnvelope(t *testing.T) {
+	t.Parallel()
 	// The regression this pins: dropping binding 701 would leave a document the
 	// janitor previously rejected in a shape it accepts, because several of its
 	// cross-binding rules are satisfiable by removal. Rather than decide what a
@@ -289,6 +295,7 @@ func TestQuarantineRefusesAStaleBindingBesideAnUnrelatedEnvelope(t *testing.T) {
 }
 
 func TestUnusableJournalDeniesTheAuthority(t *testing.T) {
+	t.Parallel()
 	valid := `{"version":1,"quarantined":[{"registration_id":501,"installation_id":701,` +
 		`"recorded_at":"2026-01-02T03:04:05Z"}],"entries":[{"action":"quarantine",` +
 		`"requested_at":"2026-01-02T03:04:05Z","registration_id":501,"installation_id":701,` +
@@ -344,6 +351,7 @@ func TestUnusableJournalDeniesTheAuthority(t *testing.T) {
 }
 
 func TestRecorderRejectsAnIncompleteRecord(t *testing.T) {
+	t.Parallel()
 	_, store := newDocumentStore(t, operatorDocument(operatorBinding(701, fixtureRepositoryID)))
 
 	for name, record := range map[string]publish.InstallationRemovalRecord{
@@ -383,6 +391,7 @@ func newStoreJanitor(
 }
 
 func TestStoreBackedJanitorPublishesCoverage(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if handleExactGrant(w, r, fixtureRepositoryID) {
@@ -427,6 +436,7 @@ func TestStoreBackedJanitorPublishesCoverage(t *testing.T) {
 }
 
 func TestStoreBackedJanitorDeniesAPassWithoutTheRegistrationOwner(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	deletes := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -463,6 +473,7 @@ func TestStoreBackedJanitorDeniesAPassWithoutTheRegistrationOwner(t *testing.T) 
 }
 
 func TestStoreBackedJanitorFailsThePassWhenTheJournalCannotBeWritten(t *testing.T) {
+	t.Parallel()
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses the unwritable-directory check")
 	}
@@ -506,6 +517,7 @@ func TestStoreBackedJanitorFailsThePassWhenTheJournalCannotBeWritten(t *testing.
 // as unknown rather than trusted. It is removed, not suspended, which is the
 // residual cost of that crash window.
 func TestQuarantinedInstallationIsDeletedRatherThanRetrustedAfterRestart(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	var requests []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -556,6 +568,7 @@ func ptrInt64(value int64) *int64 { return &value }
 // would deny every registration and could not be repaired by the daemon itself,
 // so the write has to fail first, leaving the previous journal readable.
 func TestOversizedJournalIsRefusedBeforeItIsWritten(t *testing.T) {
+	t.Parallel()
 	dir, store := newDocumentStore(t, operatorDocument(operatorBinding(701, fixtureRepositoryID)))
 
 	// The janitor caps grant enumeration at 10,000 repository IDs, so a handful
@@ -621,6 +634,7 @@ func TestOversizedJournalIsRefusedBeforeItIsWritten(t *testing.T) {
 // rename discards the earlier withdrawal, leaving an installation this daemon
 // suspended and deleted trusted again after a restart.
 func TestConcurrentStoresKeepEveryWithdrawal(t *testing.T) {
+	t.Parallel()
 	const perStore = 20
 	dir, first := newDocumentStore(t, operatorDocument(operatorBinding(701, fixtureRepositoryID)))
 	second := reopenAuthorityStore(t, dir)

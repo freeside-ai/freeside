@@ -24,6 +24,7 @@ func fixtureReservation(t *testing.T) publish.Reservation {
 // any single daemon build, and a build that cannot decode a reservation an
 // older build wrote would read the invocation as free.
 func TestReservationGolden(t *testing.T) {
+	t.Parallel()
 	payload, err := fixtureReservation(t).Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +35,7 @@ func TestReservationGolden(t *testing.T) {
 // TestReservationRoundTrip: Encode then DecodeReservation returns the same
 // claim, so the ownership comparison is over the value that was committed.
 func TestReservationRoundTrip(t *testing.T) {
+	t.Parallel()
 	want := fixtureReservation(t)
 	payload, err := want.Encode()
 	if err != nil {
@@ -51,6 +53,7 @@ func TestReservationRoundTrip(t *testing.T) {
 // TestReservationRejectsIncompleteClaim: an empty run id would make every
 // claim match every reservation, and an empty invocation id names no key.
 func TestReservationRejectsIncompleteClaim(t *testing.T) {
+	t.Parallel()
 	if _, err := publish.NewReservation("", "run-0001"); err == nil {
 		t.Error("NewReservation accepted an empty invocation id, want error")
 	}
@@ -64,6 +67,7 @@ func TestReservationRejectsIncompleteClaim(t *testing.T) {
 // reservation is "the invocation is free", which is exactly the state the
 // reservation exists to deny.
 func TestDecodeReservationFailsClosed(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		payload string
@@ -109,6 +113,7 @@ func reservationKey(t *testing.T, r publish.Reservation) string {
 // the reservation holds the intent's own key, which is what makes an unaware
 // writer collide with it instead of racing past it.
 func TestReservationKeyIsThePublicationIntentKey(t *testing.T) {
+	t.Parallel()
 	claim := fixtureReservation(t)
 	want, err := publish.IntentKey(claim.InvocationID, publish.IntentKindPublication)
 	if err != nil {
@@ -123,6 +128,7 @@ func TestReservationKeyIsThePublicationIntentKey(t *testing.T) {
 // commit to an untouched invocation, and re-admitting the same request finds
 // its own reservation and converges rather than refusing itself.
 func TestCheckInvocationAvailableAdmitsFreeAndOwnedInvocations(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	claim := fixtureReservation(t)
 
@@ -149,6 +155,7 @@ func TestCheckInvocationAvailableAdmitsFreeAndOwnedInvocations(t *testing.T) {
 // already be spoken for. A committed intent means somebody published under this
 // invocation; the rest are rows this build must not interpret as free.
 func TestCheckInvocationAvailableRefusesOccupiedInvocations(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	claim := fixtureReservation(t)
 	key := reservationKey(t, claim)
@@ -210,6 +217,7 @@ func TestCheckInvocationAvailableRefusesOccupiedInvocations(t *testing.T) {
 // published finds its own promoted intent, which is what lets a replay of a
 // finished task re-run admission instead of failing on its own work.
 func TestClaimInvocationConverges(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	claim := fixtureReservation(t)
 	key := reservationKey(t, claim)
@@ -259,6 +267,7 @@ func TestClaimInvocationConverges(t *testing.T) {
 // TestClaimInvocationRefusesAnotherOwner: two runs cannot hold one publication
 // invocation, and the loser must find out before it commits anything.
 func TestClaimInvocationRefusesAnotherOwner(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := newTestStore(t)
 	first := fixtureReservation(t)

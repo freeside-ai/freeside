@@ -38,6 +38,7 @@ func writeAuthorityFile(t *testing.T, dir, payload string) {
 }
 
 func TestInstallationAuthorityStoreServesTheAuthoredEntry(t *testing.T) {
+	t.Parallel()
 	_, store := newAuthorityStore(t, validAuthorityJSON)
 
 	authority, err := store.InstallationAuthority(t.Context(), 91)
@@ -65,6 +66,7 @@ func TestInstallationAuthorityStoreServesTheAuthoredEntry(t *testing.T) {
 }
 
 func TestInstallationAuthorityStoreInitializesCanonicalRegistrationAuthority(t *testing.T) {
+	t.Parallel()
 	_, store := newAuthorityStore(t, "")
 	if err := store.InitializeDocument(t.Context()); err != nil {
 		t.Fatal(err)
@@ -100,6 +102,7 @@ func TestInstallationAuthorityStoreInitializesCanonicalRegistrationAuthority(t *
 }
 
 func TestInstallationAuthorityStoreCopiesTheRegistrationIntoThePendingEnvelope(t *testing.T) {
+	t.Parallel()
 	payload := withPending(`"active_epoch": 2, "durable_intent_revision": 5,
       "expected_account": "example-org", "expected_account_id": 4242, "installation_id": 77,
       "current_repository_ids": [10, 20], "expected_repository_ids": [10, 20, 30],
@@ -116,6 +119,7 @@ func TestInstallationAuthorityStoreCopiesTheRegistrationIntoThePendingEnvelope(t
 }
 
 func TestInstallationAuthorityStoreDocumentReplacementIsValidatedAndAtomic(t *testing.T) {
+	t.Parallel()
 	_, store := newAuthorityStore(t, validAuthorityJSON)
 	document, err := store.Document(t.Context())
 	if err != nil {
@@ -160,6 +164,7 @@ func TestInstallationAuthorityStoreDocumentReplacementIsValidatedAndAtomic(t *te
 }
 
 func TestInstallationAuthorityStoreSerializesSeparateWriters(t *testing.T) {
+	t.Parallel()
 	dir, first := newAuthorityStore(t, validAuthorityJSON)
 	second, err := publish.NewInstallationAuthorityStore(dir)
 	if err != nil {
@@ -214,6 +219,7 @@ func TestInstallationAuthorityStoreSerializesSeparateWriters(t *testing.T) {
 }
 
 func TestInstallationAuthorityStoreDeniesUnusableState(t *testing.T) {
+	t.Parallel()
 	// A denial is the only safe answer for every one of these: serving an empty
 	// authority instead would tell the janitor that no installation is trusted,
 	// which is an instruction to delete all of them.
@@ -348,6 +354,7 @@ func TestInstallationAuthorityStoreDeniesUnusableState(t *testing.T) {
 }
 
 func TestInstallationAuthorityStoreHonoursCancellation(t *testing.T) {
+	t.Parallel()
 	_, store := newAuthorityStore(t, validAuthorityJSON)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -358,6 +365,7 @@ func TestInstallationAuthorityStoreHonoursCancellation(t *testing.T) {
 }
 
 func TestInstallationAuthorityStoreReadsEveryCall(t *testing.T) {
+	t.Parallel()
 	dir, store := newAuthorityStore(t, validAuthorityJSON)
 	if _, err := store.InstallationAuthority(t.Context(), 91); err != nil {
 		t.Fatalf("first read: %v", err)
@@ -375,6 +383,7 @@ func TestInstallationAuthorityStoreReadsEveryCall(t *testing.T) {
 }
 
 func TestNewInstallationAuthorityStoreRejectsUnusableDirectories(t *testing.T) {
+	t.Parallel()
 	if _, err := publish.NewInstallationAuthorityStore("   "); err == nil {
 		t.Fatal("empty state directory was accepted")
 	}

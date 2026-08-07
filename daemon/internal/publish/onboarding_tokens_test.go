@@ -41,6 +41,7 @@ func (g *onboardingGate) PendingReady(
 }
 
 func TestOnboardingTokenSourceRegatesCachedReadOnlyMint(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	if err := ks.SaveApp(publicFixtureCredentials(t)); err != nil {
 		t.Fatal(err)

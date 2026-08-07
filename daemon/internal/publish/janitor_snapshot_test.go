@@ -62,6 +62,7 @@ func authorityFixture() publish.InstallationAuthorityDocument {
 }
 
 func TestInstallationAuthorityDocumentGolden(t *testing.T) {
+	t.Parallel()
 	payload, err := authorityFixture().Encode()
 	if err != nil {
 		t.Fatalf("encode fixture: %v", err)
@@ -106,6 +107,7 @@ const validAuthorityJSON = `{
 }`
 
 func TestDecodeInstallationAuthorityDocumentAcceptsCanonicalPayload(t *testing.T) {
+	t.Parallel()
 	document, err := publish.DecodeInstallationAuthorityDocument([]byte(validAuthorityJSON))
 	if err != nil {
 		t.Fatalf("decode: %v", err)
@@ -116,6 +118,7 @@ func TestDecodeInstallationAuthorityDocumentAcceptsCanonicalPayload(t *testing.T
 }
 
 func TestDecodeInstallationAuthorityDocumentRejects(t *testing.T) {
+	t.Parallel()
 	// Every case must fail: a snapshot this package cannot fully interpret
 	// would otherwise serve as a narrower authority, and a narrower authority
 	// tells the janitor to delete installations.
@@ -232,6 +235,7 @@ func TestDecodeInstallationAuthorityDocumentRejects(t *testing.T) {
 }
 
 func TestDecodeInstallationAuthorityDocumentErrorsAreSnapshotErrors(t *testing.T) {
+	t.Parallel()
 	for _, payload := range []string{
 		"",
 		strings.Replace(validAuthorityJSON, `"version": 1`, `"version": 2`, 1),
@@ -274,6 +278,7 @@ func FuzzDecodeInstallationAuthorityDocument(f *testing.F) {
 // surviving value is routinely the narrower one, and narrower here means the
 // janitor deletes.
 func TestDecodeInstallationAuthorityDocumentRejectsDuplicateKeys(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"narrowed bindings": strings.Replace(validAuthorityJSON,
 			`"pending": null`,
@@ -323,6 +328,7 @@ func TestDecodeInstallationAuthorityDocumentRejectsDuplicateKeys(t *testing.T) {
 // bindings is a mass-delete instruction, and a zero pending installation ID
 // matches any installation on the account.
 func TestDecodeInstallationAuthorityDocumentRequiresExplicitAbsence(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"bindings omitted": strings.Replace(validAuthorityJSON,
 			`"trusted_installations": [

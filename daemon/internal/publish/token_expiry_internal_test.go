@@ -14,6 +14,7 @@ var expiryNow = time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 // lifetime and skew rather than a copied literal, so widening either
 // constant cannot silently pass an unchanged test.
 func TestCheckInstallationTokenExpiry(t *testing.T) {
+	t.Parallel()
 	bound := expiryNow.Add(installationTokenLifetime + installationTokenSkew)
 	accepted := []struct {
 		name string

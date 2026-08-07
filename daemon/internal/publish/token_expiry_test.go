@@ -129,6 +129,7 @@ func assertNoExpiryLeak(t *testing.T, err error, tc expiryCase) {
 // or longer than GitHub's declared lifetime allows is refused before the
 // token is audited or returned.
 func TestMintRejectsExpiryOutsideTheDeclaredBound(t *testing.T) {
+	t.Parallel()
 	ks := newRegisteredKeystore(t)
 	for _, tc := range rejectedExpiries {
 		t.Run(tc.name, func(t *testing.T) {
@@ -156,6 +157,7 @@ func TestMintRejectsExpiryOutsideTheDeclaredBound(t *testing.T) {
 // bound: the fix must not refuse a conformant GitHub response, including
 // one that arrives at the skew limit or in a non-UTC zone.
 func TestMintAcceptsExpiryInsideTheDeclaredBound(t *testing.T) {
+	t.Parallel()
 	ks := newRegisteredKeystore(t)
 	for _, tc := range acceptedExpiries {
 		t.Run(tc.name, func(t *testing.T) {
@@ -190,6 +192,7 @@ func TestMintAcceptsExpiryInsideTheDeclaredBound(t *testing.T) {
 // cache entry, so a second call re-mints instead of handing out the
 // token the first call rejected.
 func TestCachedTokenSourceNeverCachesARejectedExpiry(t *testing.T) {
+	t.Parallel()
 	ks := newRegisteredKeystore(t)
 	for _, tc := range rejectedExpiries {
 		t.Run(tc.name, func(t *testing.T) {
@@ -232,6 +235,7 @@ const overLongExpiry = `"expires_at":"2126-07-16T13:00:00Z"`
 // comparison would silently downgrade a forged grant to a retryable
 // failure.
 func TestMintKeepsGrantMismatchForAnOverLongGrant(t *testing.T) {
+	t.Parallel()
 	ks := newRegisteredKeystore(t)
 	rec := &captureRecorder{}
 	srv := newMintServer(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -256,6 +260,7 @@ func TestMintKeepsGrantMismatchForAnOverLongGrant(t *testing.T) {
 // TestInstallationJanitorKeepsGrantMismatchForAnOverLongGrant is the
 // same ordering guarantee on the grant-read mint.
 func TestInstallationJanitorKeepsGrantMismatchForAnOverLongGrant(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	recorder := &removalRecorder{}
 	revokes := 0
@@ -329,6 +334,7 @@ func newOnboardingSource(
 // the read-only onboarding mint applies the same bound, caches nothing
 // it refused, and audits nothing.
 func TestOnboardingTokenSourceRejectsExpiryOutsideTheDeclaredBound(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeystore(t)
 	if err := ks.SaveApp(publicFixtureCredentials(t)); err != nil {
 		t.Fatal(err)
@@ -367,6 +373,7 @@ func TestOnboardingTokenSourceRejectsExpiryOutsideTheDeclaredBound(t *testing.T)
 // decoded and bounded before enumeration, the refused token is still
 // revoked, and the pass publishes no coverage and performs no removal.
 func TestInstallationJanitorRejectsGrantReadExpiryOutsideTheDeclaredBound(t *testing.T) {
+	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	for _, tc := range rejectedExpiries {
 		t.Run(tc.name, func(t *testing.T) {
