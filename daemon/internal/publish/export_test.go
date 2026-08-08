@@ -1,6 +1,10 @@
 package publish
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+)
 
 // This file exposes in-package test fixtures to the external
 // publish_test package. Its symbols are compiled into the test binary
@@ -50,4 +54,16 @@ func CandidateHeadForTest(t *testing.T, co Checkout) string {
 func GateHeadForTest(t *testing.T, owner *Transport, in IdentityInput) GatedHead {
 	t.Helper()
 	return testGatedHead(t, owner, in)
+}
+
+// ValidateTrustCandidateForTest exposes the drift-gate core so external
+// tests can pin the adoption arm's claim re-derivation directly: the
+// Publish path refuses a RunID-claiming candidate at the reservation
+// gate on a memory ledger before trust is ever evaluated.
+func ValidateTrustCandidateForTest(
+	c Candidate, profile domain.AutomationTrustProfile, audit domain.WorkflowAudit,
+	lookup func(domain.Digest) (domain.AutomationTrustProfile, bool, error),
+	adoption func(domain.RunID) (domain.ReviewConfigurationRecoveryTransition, bool, error),
+) error {
+	return validateTrustCandidate(c, profile, audit, lookup, adoption)
 }
