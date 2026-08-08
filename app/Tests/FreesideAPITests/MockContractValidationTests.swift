@@ -91,6 +91,47 @@ import Testing
                 == "review recovery binding disagrees with item subject or head")
     }
 
+    @Test func reviewConfigurationRecoveryIsExactAndTypeScoped() {
+        let fixture = AttentionFixtures.fixture(type: .review_configuration).item
+        #expect(MockContractValidation.itemValidityBreach(fixture) == nil)
+
+        var missing = fixture
+        missing.review_configuration_recovery = nil
+        #expect(
+            MockContractValidation.itemValidityBreach(missing)
+                == "review_configuration item lacks review_configuration_recovery")
+
+        var wrongType = AttentionFixtures.fixture(type: .spec_approval).item
+        wrongType.review_configuration_recovery = fixture.review_configuration_recovery
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongType)
+                == "review_configuration_recovery on a non-review_configuration item")
+
+        var empty = fixture
+        empty.review_configuration_recovery?.value1.superseded_profile_digest = ""
+        #expect(
+            MockContractValidation.itemValidityBreach(empty)
+                == "empty review_configuration_recovery field")
+
+        var zeroRound = fixture
+        zeroRound.review_configuration_recovery?.value1.round = 0
+        #expect(
+            MockContractValidation.itemValidityBreach(zeroRound)
+                == "non-positive review configuration recovery round")
+
+        var zeroRepository = fixture
+        zeroRepository.review_configuration_recovery?.value1.repository_id = 0
+        #expect(
+            MockContractValidation.itemValidityBreach(zeroRepository)
+                == "non-positive review configuration recovery repository_id")
+
+        var wrongHead = fixture
+        wrongHead.pr_head_sha = "deadbeef"
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongHead)
+                == "review configuration recovery disagrees with item subject or head")
+    }
+
     // The text-claim carrier (#217): the daemon recomputes the claim digest
     // over the content bytes, so the mirrored checks here are the empty
     // content, the byte cap, and the binding rule. The invalid-media-type

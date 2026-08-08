@@ -91,7 +91,9 @@ struct DecisionDetailView: View {
                         .truncationMode(.middle)
                         .foregroundStyle(.secondary)
                 }
-                let recoveryRows = AttentionDisplay.reviewRecoveryBindingRows(item)
+                let recoveryRows =
+                    AttentionDisplay.reviewRecoveryBindingRows(item)
+                    + AttentionDisplay.reviewConfigurationRecoveryRows(item)
                 if !recoveryRows.isEmpty {
                     Divider()
                     ForEach(Array(recoveryRows.enumerated()), id: \.offset) { _, row in
