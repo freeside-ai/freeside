@@ -2728,6 +2728,129 @@ func TestCodexReviewConformanceRejectsTopologyDrift(t *testing.T) {
 	}
 }
 
+func TestCodexReviewBindingUsesCanonicalEnvironmentDigest(t *testing.T) {
+	cfg, req := testCodexReview(t)
+	spec, binding, err := BuildCodexReviewAgentSpec(cfg, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reordered := slices.Clone(spec.Env)
+	slices.Reverse(reordered)
+	if got, want := binding.LauncherEnvironmentDigest, digestEnvironment(reordered); got != want {
+		t.Fatalf("launcher environment digest = %q, canonical reordered digest = %q", got, want)
+	}
+	if err := validateCodexReviewAgentSpec(cfg, req, spec, binding); err != nil {
+		t.Fatalf("canonical launcher environment binding rejected: %v", err)
+	}
+
+	legacy := binding
+	legacy.LauncherEnvironmentDigest = digestStrings(spec.Env)
+	if legacy.LauncherEnvironmentDigest == binding.LauncherEnvironmentDigest {
+		t.Fatal("fixture environment order does not distinguish legacy and canonical digests")
+	}
+	if err := validateCodexReviewAgentSpec(cfg, req, spec, legacy); !errors.Is(err, ErrConformance) {
+		t.Fatalf("legacy order-sensitive environment digest = %v, want conformance failure", err)
+	}
+}
+
+func TestCodexReviewPostStartEnvironmentAuthentication(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func([]string) []string
+		wantErr bool
+	}{
+		{
+			name:   "pre-start shape",
+			mutate: func(environment []string) []string { return environment },
+		},
+		{
+			name: "post-start permutation with PATH in the middle",
+			mutate: func(environment []string) []string {
+				permuted := slices.Clone(environment[1:])
+				slices.Reverse(permuted)
+				return slices.Insert(permuted, len(permuted)/2, environment[0])
+			},
+		},
+		{
+			name: "added entry",
+			mutate: func(environment []string) []string {
+				return append(environment, "EXTRA=inert")
+			},
+			wantErr: true,
+		},
+		{
+			name: "removed entry",
+			mutate: func(environment []string) []string {
+				return append(environment[:1:1], environment[2:]...)
+			},
+			wantErr: true,
+		},
+		{
+			name: "duplicated exact entry",
+			mutate: func(environment []string) []string {
+				return append(environment, environment[1])
+			},
+			wantErr: true,
+		},
+		{
+			name: "changed value",
+			mutate: func(environment []string) []string {
+				environment[1] += "-changed"
+				return environment
+			},
+			wantErr: true,
+		},
+		{
+			name:    "missing runtime PATH",
+			mutate:  func(environment []string) []string { return environment[1:] },
+			wantErr: true,
+		},
+		{
+			name: "duplicated runtime PATH",
+			mutate: func(environment []string) []string {
+				return append(environment, fixedContainerPathEnv)
+			},
+			wantErr: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			backend, rt, cfg, launchSpec, _ := testCodexReviewLifecycle(t)
+			launch, err := backend.CodexReview(context.Background(), cfg, launchSpec)
+			if err != nil {
+				t.Fatalf("launch: %v", err)
+			}
+			if err := launch.Close(); err != nil {
+				t.Fatalf("close proxy: %v", err)
+			}
+			reviewContainer := codexReviewContainerName(launchSpec.RunID)
+			rt.onInspect = func(id string, report InspectReport) (InspectReport, error) {
+				if id == reviewContainer {
+					report.Env = tc.mutate(slices.Clone(report.Env))
+				}
+				return report, nil
+			}
+			_, err = backend.InspectCodexReview(context.Background(), cfg, launchSpec.RunID)
+			if tc.wantErr {
+				if !errors.Is(err, ErrConformance) {
+					t.Fatalf("InspectCodexReview = %v, want conformance failure", err)
+				}
+			} else if err != nil {
+				t.Fatalf("InspectCodexReview = %v, want authenticated environment", err)
+			}
+
+			rt.onInspect = nil
+			if err := backend.AbortCodexReview(context.Background(), cfg, launchSpec.RunID); err != nil {
+				t.Fatalf("AbortCodexReview: %v", err)
+			}
+			if len(rt.ctrs) != 0 || len(rt.vols) != 0 || len(rt.nets) != 0 {
+				t.Fatalf("runtime residue after abort: containers=%d volumes=%d networks=%d",
+					len(rt.ctrs), len(rt.vols), len(rt.nets))
+			}
+		})
+	}
+}
+
 func TestCodexReviewAllowlistShapeChecksRealizedSpec(t *testing.T) {
 	cfg, req := testCodexReview(t)
 	freshShadow := testCodexReviewShadow(
