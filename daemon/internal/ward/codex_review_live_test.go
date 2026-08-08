@@ -20,15 +20,40 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
 
 // TestLiveCodexReviewLifecycleCrossesReconstructionStartBoundary drives the
-// complete production launch topology on Apple container. The strict journal
-// is deliberate: before #605's ordering fix its preparing-only resource guard
-// rejects the final reconstruction observations before Start.
+// complete production launch topology on Apple container, once for a
+// candidate carrying a repository-local .agents directory and once for a
+// candidate without one. The strict journal is deliberate: before #605's
+// ordering fix its preparing-only resource guard rejects the final
+// reconstruction observations before Start.
+//
+// The without-.agents case is the production errno 30 regression the earlier
+// fixture masked by always pre-creating .agents: Apple's runtime cannot
+// create a missing nested mountpoint under the read-only workspace, so the
+// launch must omit exactly the workspace-local shadow, bind the reduced
+// topology durably, cross reconstruction, and actually start.
 func TestLiveCodexReviewLifecycleCrossesReconstructionStartBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		slug       string
+		withAgents bool
+	}{
+		{"candidate with .agents directory", "agents", true},
+		{"candidate without .agents", "bare", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			liveCodexReviewLifecycle(t, tc.slug, tc.withAgents)
+		})
+	}
+}
+
+func liveCodexReviewLifecycle(t *testing.T, slug string, withAgents bool) {
+	t.Helper()
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("live codex-review lifecycle test skipped: set FREESIDE_WARD_LIVE_TEST=1 (requires macOS, Apple container 1.1.0, `container system start`, FREESIDE_WARD_EXPORTER_IMAGE, and FREESIDE_WARD_CODEX_AGENT_IMAGE)")
 	}
@@ -48,7 +73,7 @@ func TestLiveCodexReviewLifecycleCrossesReconstructionStartBoundary(t *testing.T
 
 	ctx := context.Background()
 	rt := NewCLIRuntime(bin)
-	runID := fmt.Sprintf("livereview-%d", time.Now().Unix())
+	runID := fmt.Sprintf("livereview%s-%d", slug, time.Now().Unix())
 	names := codexReviewNames(runID)
 	workspace := namesFor(runID).Workspace
 	t.Cleanup(func() {
@@ -70,11 +95,13 @@ func TestLiveCodexReviewLifecycleCrossesReconstructionStartBoundary(t *testing.T
 	if err := os.WriteFile(filepath.Join(checkout, "README.md"), []byte("review fixture\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(checkout, ".agents"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(checkout, ".agents", ".keep"), []byte("fixture\n"), 0o600); err != nil {
-		t.Fatal(err)
+	if withAgents {
+		if err := os.Mkdir(filepath.Join(checkout, ".agents"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(checkout, ".agents", ".keep"), []byte("fixture\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	candidate := commitLiveSeedCheckout(t, checkout)
 	journal := &fakeCodexReviewJournal{}
@@ -116,6 +143,19 @@ func TestLiveCodexReviewLifecycleCrossesReconstructionStartBoundary(t *testing.T
 	}
 	if journal.intent == nil || journal.intent.State != CodexReviewIntentStarted {
 		t.Fatalf("intent = %+v, want started handoff", journal.intent)
+	}
+	wantEntry := codexWorkspaceAgentsAbsent
+	if withAgents {
+		wantEntry = codexWorkspaceAgentsDir
+	}
+	if launch.Binding.WorkspaceAgentsEntry != wantEntry {
+		t.Errorf("durable binding workspace .agents entry = %q, want %q",
+			launch.Binding.WorkspaceAgentsEntry, wantEntry)
+	}
+	workspaceLocal := reviewConfig.WorkspaceTarget + "/.agents"
+	if mounted := slices.Contains(launch.Binding.AgentsShadowTargets, workspaceLocal); mounted != withAgents {
+		t.Errorf("workspace-local shadow bound = %v, want %v (targets %q)",
+			mounted, withAgents, launch.Binding.AgentsShadowTargets)
 	}
 	if err := launch.Close(); err != nil {
 		t.Fatalf("close review proxy: %v", err)

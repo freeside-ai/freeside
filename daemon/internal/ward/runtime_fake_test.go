@@ -93,6 +93,10 @@ type fakeRuntime struct {
 	volBase map[string]string
 	// volTree is the tree digest the simulated seeder placed alongside it.
 	volTree map[string]string
+	// volAgents is the workspace .agents entry kind the simulated seeder
+	// placed, classified from the same staged fixture the digest covers, so
+	// the synthesized codex workspace proof reports what the tree holds.
+	volAgents map[string]string
 	// snapshotFiles holds the files the Codex-review snapshot seeder placed on a
 	// volume, keyed by volume then basename, so the snapshot observer can report
 	// their sha256 digests.
@@ -202,6 +206,7 @@ func newFakeRuntime(t *testing.T) *fakeRuntime {
 		ctrs:                   map[string]*fakeCtr{},
 		volBase:                map[string]string{},
 		volTree:                map[string]string{},
+		volAgents:              map[string]string{},
 		snapshotFiles:          map[string]map[string][]byte{},
 		instructionState:       map[string][]byte{},
 		stateManifest:          map[string]stateManifestKind{},
@@ -834,7 +839,22 @@ func (f *fakeRuntime) CopyIntoContainer(ctx context.Context, id, hostDir, target
 	// than echoing the host's expectation is what lets an altered or partial
 	// copy fail the attestation in a test.
 	f.volTree[vol] = digestOfDir(f.t, src)
+	f.volAgents[vol] = agentsEntryOfDir(src)
 	return nil
+}
+
+// agentsEntryOfDir classifies a staged fixture's root .agents entry exactly
+// as the review workspace observer's probe does in the guest.
+func agentsEntryOfDir(root string) string {
+	info, err := os.Lstat(filepath.Join(root, ".agents"))
+	switch {
+	case err != nil:
+		return codexWorkspaceAgentsAbsent
+	case info.Mode()&fs.ModeSymlink != 0 || !info.IsDir():
+		return "other"
+	default:
+		return codexWorkspaceAgentsDir
+	}
 }
 
 // digestOfDir computes the tree digest the observer would report for a
@@ -911,6 +931,14 @@ func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Write
 		if sha, seeded := f.volBase[vol]; seeded {
 			proof = baseProofFor(c.ownershipToken(), sha, f.volTree[vol])
 		}
+		// The review observer's appended probe reports the .agents entry on
+		// every branch, exactly as the guest script does even over an
+		// unseeded volume.
+		entry := f.volAgents[vol]
+		if entry == "" {
+			entry = codexWorkspaceAgentsAbsent
+		}
+		proof = append(proof, fmt.Sprintf("%s=%s\n", codexWorkspaceAgentsKey, entry)...)
 		if f.observerProof != nil {
 			proof = f.observerProof(id, proof)
 		}

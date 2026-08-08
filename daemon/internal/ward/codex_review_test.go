@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	osexec "os/exec"
+	"path"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -566,6 +567,17 @@ func testCodexReviewWorkspace(
 	runID, volume, observerFingerprint string,
 ) CodexReviewWorkspaceObservation {
 	t.Helper()
+	return testCodexReviewWorkspaceWithAgents(
+		t, cfg, runID, volume, observerFingerprint, codexWorkspaceAgentsDir,
+	)
+}
+
+func testCodexReviewWorkspaceWithAgents(
+	t *testing.T,
+	cfg CodexReviewConfig,
+	runID, volume, observerFingerprint, agentsEntry string,
+) CodexReviewWorkspaceObservation {
+	t.Helper()
 	workspaceOwner := testOwnershipLabel()
 	observerOwner := testOwnershipLabel()
 	spec, err := BuildCodexReviewWorkspaceObserverSpec(cfg, runID, volume, observerOwner)
@@ -585,8 +597,10 @@ func testCodexReviewWorkspace(
 	}
 	proof := []byte(fmt.Sprintf(
 		"nonce=%s\ngit_dir=present\nhead_detached=yes\nbase_sha=%s\nworktree=clean\n"+
-			"git_replacements=absent\nirregular=absent\ntree_sha256=%s\n",
+			"git_replacements=absent\nirregular=absent\ntree_sha256=%s\n"+
+			codexWorkspaceAgentsKey+"=%s\n",
 		observerOwner.Value, testCodexReviewHead, testCodexReviewTreeDigest,
+		agentsEntry,
 	))
 	observation, err := ObserveCodexReviewWorkspace(
 		cfg, runID, volume, testCodexReviewHead, workspaceOwner, observerOwner,
@@ -810,6 +824,69 @@ func TestBackendCodexReviewMaximumInvocationReachesRuntimeLaunch(t *testing.T) {
 	t.Cleanup(func() { _ = launch.Close() })
 	if rt.callIndex("start-container "+codexReviewContainerName(launchSpec.RunID)) < 0 {
 		t.Fatal("maximum invocation topology did not reach review launch")
+	}
+}
+
+// TestBackendCodexReviewShadowTopologyFollowsObservedAgentsEntry drives the
+// full launch lifecycle for both attested workspace shapes: a candidate with
+// a .agents directory keeps the workspace-local shadow, and a candidate
+// proven to lack one launches without that mount, the topology Apple
+// container can actually start (errno 30 regression).
+func TestBackendCodexReviewShadowTopologyFollowsObservedAgentsEntry(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		entry               string
+		wantWorkspaceShadow bool
+	}{
+		{"observed directory keeps the workspace shadow", codexWorkspaceAgentsDir, true},
+		{"proven absent omits only the workspace shadow", codexWorkspaceAgentsAbsent, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend, rt, cfg, launchSpec, _ := testCodexReviewLifecycle(t)
+			rt.volAgents[launchSpec.WorkspaceVolume] = tc.entry
+			launch, err := backend.CodexReview(context.Background(), cfg, launchSpec)
+			if err != nil {
+				t.Fatalf("CodexReview with %s workspace .agents: %v", tc.entry, err)
+			}
+			t.Cleanup(func() { _ = launch.Close() })
+			reviewName := codexReviewContainerName(launchSpec.RunID)
+			if rt.callIndex("start-container "+reviewName) < 0 {
+				t.Fatal("review container was not started")
+			}
+			review, exists := rt.ctrs[reviewName]
+			if !exists {
+				t.Fatal("review container missing from runtime")
+			}
+			workspaceLocal := path.Join(cfg.WorkspaceTarget, ".agents")
+			mounted := false
+			for _, mount := range review.spec.Mounts {
+				if mount.Target == workspaceLocal {
+					mounted = true
+				}
+			}
+			if mounted != tc.wantWorkspaceShadow {
+				t.Errorf("workspace-local shadow mounted = %v, want %v (mounts %+v)",
+					mounted, tc.wantWorkspaceShadow, review.spec.Mounts)
+			}
+			if launch.Binding.WorkspaceAgentsEntry != tc.entry {
+				t.Errorf("durable binding entry = %q, want %q",
+					launch.Binding.WorkspaceAgentsEntry, tc.entry)
+			}
+		})
+	}
+}
+
+// TestBackendCodexReviewRefusesNonDirectoryWorkspaceAgents pins the
+// fail-closed arm: a .agents entry that is neither a directory nor absent
+// (a symlink or regular file) refuses the launch before any credential-
+// bearing container exists.
+func TestBackendCodexReviewRefusesNonDirectoryWorkspaceAgents(t *testing.T) {
+	backend, rt, cfg, launchSpec, _ := testCodexReviewLifecycle(t)
+	rt.volAgents[launchSpec.WorkspaceVolume] = "other"
+	_, err := backend.CodexReview(context.Background(), cfg, launchSpec)
+	wantCheckFailure(t, err, CheckControlPlaneIsolation)
+	if _, exists := rt.ctrs[codexReviewContainerName(launchSpec.RunID)]; exists {
+		t.Fatal("review container was created for a refused workspace .agents entry")
 	}
 }
 
@@ -2313,7 +2390,7 @@ func TestBuildCodexReviewAgentSpecConforms(t *testing.T) {
 	} {
 		poisonedBinding := finalBinding
 		poisonedBinding.WorkspaceTarget = target
-		poisonedBinding.AgentsShadowTargets = codexAgentsShadowTargets(target)
+		poisonedBinding.AgentsShadowTargets = codexAgentsShadowTargets(target, codexWorkspaceAgentsDir)
 		if err := poisonedBinding.validateShape(); err == nil {
 			t.Errorf("journal binding accepted unsafe workspace target %q", target)
 		}
@@ -2355,6 +2432,245 @@ func TestBuildCodexReviewAgentSpecConforms(t *testing.T) {
 		t.Fatal(err)
 	}
 	golden.Assert(t, "codex-review-spec", append(got, '\n'))
+}
+
+// TestCodexAgentsShadowTargetsFollowObservedWorkspaceEntry pins the
+// conditional topology: the workspace-local shadow exists exactly when the
+// observed tree carries a .agents directory, while the ambient shadows (the
+// reviewer's home and every workspace ancestor) never depend on it. Apple
+// container cannot create a missing mountpoint under the read-only workspace,
+// so mounting the shadow over an absent .agents is what broke production.
+func TestCodexAgentsShadowTargetsFollowObservedWorkspaceEntry(t *testing.T) {
+	withDir := codexAgentsShadowTargets("/workspace/project", codexWorkspaceAgentsDir)
+	withoutDir := codexAgentsShadowTargets("/workspace/project", codexWorkspaceAgentsAbsent)
+	const workspaceLocal = "/workspace/project/.agents"
+	if !slices.Contains(withDir, workspaceLocal) {
+		t.Errorf("dir targets %q omit the workspace-local shadow", withDir)
+	}
+	if slices.Contains(withoutDir, workspaceLocal) {
+		t.Errorf("absent targets %q still shadow the missing workspace mountpoint", withoutDir)
+	}
+	ambient := slices.DeleteFunc(slices.Clone(withDir), func(target string) bool {
+		return target == workspaceLocal
+	})
+	if !slices.Equal(ambient, withoutDir) {
+		t.Errorf("ambient shadows diverge: dir-derived %q, absent %q", ambient, withoutDir)
+	}
+	for _, want := range []string{
+		"/.agents", "/workspace/.agents", path.Join(CodexContainerHomeTarget, ".agents"),
+	} {
+		if !slices.Contains(withoutDir, want) {
+			t.Errorf("absent targets %q omit ambient shadow %q", withoutDir, want)
+		}
+	}
+}
+
+// TestCodexWorkspaceAgentsProbeScriptClassifiesEntries executes the actual
+// probe shell text against real filesystem shapes, so a quoting or
+// classification bug in the script surfaces here instead of only in the
+// opt-in live suite. The fake runtime synthesizes this line in Go; this test
+// is what ties that synthesis to the script's real behaviour.
+func TestCodexWorkspaceAgentsProbeScriptClassifiesEntries(t *testing.T) {
+	shPath, err := osexec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh not available: %v", err)
+	}
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, workspace string)
+		want  string
+	}{
+		{"directory", func(t *testing.T, workspace string) {
+			t.Helper()
+			if err := os.Mkdir(filepath.Join(workspace, ".agents"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}, codexWorkspaceAgentsDir},
+		{"absent", func(*testing.T, string) {}, codexWorkspaceAgentsAbsent},
+		{"regular file", func(t *testing.T, workspace string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(workspace, ".agents"), []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, "other"},
+		{"symlink to directory", func(t *testing.T, workspace string) {
+			t.Helper()
+			if err := os.Symlink(workspace, filepath.Join(workspace, ".agents")); err != nil {
+				t.Fatal(err)
+			}
+		}, "other"},
+		{"dangling symlink", func(t *testing.T, workspace string) {
+			t.Helper()
+			if err := os.Symlink("no-such-target", filepath.Join(workspace, ".agents")); err != nil {
+				t.Fatal(err)
+			}
+		}, "other"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			tc.setup(t, workspace)
+			proofPath := filepath.Join(t.TempDir(), "proof.txt")
+			script := codexWorkspaceAgentsProbeScript(workspace, proofPath)
+			if out, runErr := osexec.Command(shPath, "-c", script).CombinedOutput(); runErr != nil { //nolint:gosec // fixture paths in a fixed probe script
+				t.Fatalf("probe script: %v: %s", runErr, out)
+			}
+			proof, readErr := os.ReadFile(proofPath) //nolint:gosec // test fixture path
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if want := codexWorkspaceAgentsKey + "=" + tc.want + "\n"; string(proof) != want {
+				t.Errorf("probe proof = %q, want %q", proof, want)
+			}
+		})
+	}
+}
+
+func TestCodexReviewProofWorkspaceAgentsFailsClosed(t *testing.T) {
+	base := "nonce=n\ntree_sha256=" + strings.Repeat("1", 64) + "\n"
+	cases := []struct {
+		name  string
+		proof string
+		check Check
+	}{
+		{"omitted entry", base, CheckObservedBaseIdentity},
+		{"repeated entry", base + codexWorkspaceAgentsKey + "=dir\n" + codexWorkspaceAgentsKey + "=dir\n", CheckObservedBaseIdentity},
+		{"symlink or non-directory entry", base + codexWorkspaceAgentsKey + "=other\n", CheckControlPlaneIsolation},
+		{"unknown entry kind", base + codexWorkspaceAgentsKey + "=file\n", CheckControlPlaneIsolation},
+		{"empty entry value", base + codexWorkspaceAgentsKey + "=\n", CheckControlPlaneIsolation},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			entry, err := codexReviewProofWorkspaceAgents([]byte(tc.proof))
+			wantCheckFailure(t, err, tc.check)
+			if entry != "" {
+				t.Errorf("rejected proof still yielded entry %q", entry)
+			}
+		})
+	}
+	for _, valid := range []string{codexWorkspaceAgentsDir, codexWorkspaceAgentsAbsent} {
+		entry, err := codexReviewProofWorkspaceAgents([]byte(base + codexWorkspaceAgentsKey + "=" + valid + "\n"))
+		if err != nil || entry != valid {
+			t.Errorf("valid entry %q = %q, %v", valid, entry, err)
+		}
+	}
+}
+
+// TestBuildCodexReviewAgentSpecOmitsWorkspaceShadowWhenAgentsAbsent is the
+// unit regression for the production errno 30 failure: a candidate proven to
+// carry no .agents directory must launch without the workspace-local shadow
+// mount, with the reduced target set durably bound and self-consistent.
+func TestBuildCodexReviewAgentSpecOmitsWorkspaceShadowWhenAgentsAbsent(t *testing.T) {
+	cfg, req := testCodexReview(t)
+	req.Workspace = testCodexReviewWorkspaceWithAgents(
+		t, cfg, req.RunID, req.WorkspaceVolume, "2026-08-03T12:00:03Z", codexWorkspaceAgentsAbsent,
+	)
+	spec, binding, err := BuildCodexReviewAgentSpec(cfg, req)
+	if err != nil {
+		t.Fatalf("BuildCodexReviewAgentSpec: %v", err)
+	}
+	workspaceLocal := path.Join(cfg.WorkspaceTarget, ".agents")
+	for _, mount := range spec.Mounts {
+		if mount.Target == workspaceLocal {
+			t.Errorf("spec still mounts the shadow over the absent %q", workspaceLocal)
+		}
+	}
+	if binding.WorkspaceAgentsEntry != codexWorkspaceAgentsAbsent {
+		t.Errorf("binding workspace agents entry = %q, want %q",
+			binding.WorkspaceAgentsEntry, codexWorkspaceAgentsAbsent)
+	}
+	if want := codexAgentsShadowTargets(cfg.WorkspaceTarget, codexWorkspaceAgentsAbsent); !slices.Equal(binding.AgentsShadowTargets, want) {
+		t.Errorf("binding shadow targets = %q, want %q", binding.AgentsShadowTargets, want)
+	}
+	if err := binding.validatePrepared(); err != nil {
+		t.Errorf("prepared binding invalid: %v", err)
+	}
+	if err := validateCodexReviewAgentSpec(cfg, req, spec, binding); err != nil {
+		t.Errorf("self-validation: %v", err)
+	}
+}
+
+// TestCodexReviewBindingRejectsTopologyEntryMismatch holds the durable intent
+// to the observation that justified it: a binding whose stored target set
+// disagrees with its recorded workspace .agents entry, or whose entry
+// disagrees with the live observation, must fail closed, so reconstruction
+// can never choose a different topology than the one bound at launch.
+func TestCodexReviewBindingRejectsTopologyEntryMismatch(t *testing.T) {
+	cfg, req := testCodexReview(t)
+	_, binding, err := BuildCodexReviewAgentSpec(cfg, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flipped := binding
+	flipped.WorkspaceAgentsEntry = codexWorkspaceAgentsAbsent
+	if err := flipped.validatePrepared(); err == nil {
+		t.Error("binding accepted an entry that disagrees with its stored target set")
+	}
+	reduced := binding
+	reduced.AgentsShadowTargets = codexAgentsShadowTargets(cfg.WorkspaceTarget, codexWorkspaceAgentsAbsent)
+	if err := reduced.validatePrepared(); err == nil {
+		t.Error("binding accepted a target set that disagrees with its recorded entry")
+	}
+	empty := binding
+	empty.WorkspaceAgentsEntry = ""
+	if err := empty.validatePrepared(); err == nil {
+		t.Error("binding accepted an unrecorded workspace .agents entry")
+	}
+
+	consistent := binding
+	consistent.WorkspaceAgentsEntry = codexWorkspaceAgentsAbsent
+	consistent.AgentsShadowTargets = codexAgentsShadowTargets(cfg.WorkspaceTarget, codexWorkspaceAgentsAbsent)
+	spec, err := func() (ContainerSpec, error) {
+		s, _, buildErr := BuildCodexReviewAgentSpec(cfg, req)
+		return s, buildErr
+	}()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCodexReviewAgentSpec(cfg, req, spec, consistent); err == nil {
+		t.Error("spec validation accepted a binding whose entry disagrees with the observation")
+	}
+}
+
+// TestCodexReviewLegacyV2BindingAuthenticatesTeardownOnly pins the upgrade
+// posture: a v2 binding without the observed .agents entry may still
+// authenticate cleanup of a pre-upgrade review, but can never validate for
+// launch or result collection under the v3 contract.
+func TestCodexReviewLegacyV2BindingAuthenticatesTeardownOnly(t *testing.T) {
+	cfg, req := testCodexReview(t)
+	_, binding, err := BuildCodexReviewAgentSpec(cfg, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.ReviewContainer = codexReviewContainerName(binding.RunID)
+	binding.ReviewContainerFingerprint = "fingerprint"
+	binding.ReviewOwnershipToken = strings.Repeat("b", 32)
+	binding.WorkspacePreStartObserverFingerprint = "pre-start-workspace"
+	binding.SnapshotPreStartObserverFingerprint = "pre-start-snapshot"
+	binding.AgentsShadowPreStartObserverFingerprint = "pre-start-shadow"
+	if err := binding.validateShape(); err != nil {
+		t.Fatalf("v3 binding shape: %v", err)
+	}
+
+	legacy := binding
+	legacy.TopologyVersion = codexReviewTopologyVersionV2
+	legacy.WorkspaceAgentsEntry = ""
+	if err := legacy.validateForTeardown(); err != nil {
+		t.Errorf("legacy v2 binding failed teardown authentication: %v", err)
+	}
+	if err := legacy.validateShape(); err == nil {
+		t.Error("legacy v2 binding validated outside teardown")
+	}
+	downgraded := binding
+	downgraded.TopologyVersion = codexReviewTopologyVersionV2
+	if err := downgraded.validateShape(); err == nil {
+		t.Error("v2 topology version validated outside teardown")
+	}
+	unversioned := binding
+	unversioned.WorkspaceAgentsEntry = ""
+	if err := unversioned.validateForTeardown(); err == nil {
+		t.Error("v3 binding without a recorded entry authenticated teardown")
+	}
 }
 
 func TestCodexReviewRefusesResumeAndContinuity(t *testing.T) {

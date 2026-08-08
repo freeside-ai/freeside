@@ -62,13 +62,30 @@ const (
 	codexReviewStatusPath             = codexReviewOutputDir + "/status"
 	codexReviewSchemaPath             = codexReviewOutputDir + "/schema.json"
 
-	// Bumped to v2 for #591: the auth/instruction snapshots move from two
-	// single-file host binds to one read-only snapshot volume, so a prepared
-	// binding written under v1 must not validate against the new mount shape.
-	codexReviewTopologyVersion = "codex_review_read_only_v2"
-	maxCodexAuthSnapshotBytes  = 1 << 20
-	maxCodexReviewPromptBytes  = 31 << 10
-	emptyCodexShadowDigest     = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	// Bumped to v3: the workspace-local .agents shadow mount became
+	// conditional on the observed candidate tree. Apple container cannot
+	// create a missing nested mountpoint under the read-only workspace, so a
+	// candidate without .agents mounts no shadow there, and the chosen
+	// topology is bound to the observation that justified it. A v2 binding
+	// must not validate against the conditional shape; teardown
+	// authentication alone still accepts v2 so pre-upgrade reviews can be
+	// reaped. (v2 was #591's move to the read-only snapshot volume.)
+	codexReviewTopologyVersion   = "codex_review_read_only_v3"
+	codexReviewTopologyVersionV2 = "codex_review_read_only_v2"
+	maxCodexAuthSnapshotBytes    = 1 << 20
+	maxCodexReviewPromptBytes    = 31 << 10
+	emptyCodexShadowDigest       = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+	// codexWorkspaceAgentsKey is the workspace observer's proof line reporting
+	// what the candidate tree holds at <workspace>/.agents. The shadow-mount
+	// topology is derived from this observed value, never from a host-side
+	// guess: "dir" keeps the empty shadow mounted over the repository-local
+	// entry, "absent" omits only that workspace-local mount (the read-only
+	// immutable workspace cannot grow one later), and any other entry kind
+	// fails closed before a container is created.
+	codexWorkspaceAgentsKey    = "workspace_agents"
+	codexWorkspaceAgentsDir    = "dir"
+	codexWorkspaceAgentsAbsent = "absent"
 )
 
 // ErrInvalidCodexReviewSpec is the typed admission refusal for a Codex review
@@ -231,6 +248,7 @@ type CodexReviewWorkspaceObservation struct {
 	fingerprint         string
 	head                string
 	treeDigest          string
+	agentsEntry         string
 	observerImage       string
 	observerFingerprint string
 }
@@ -238,13 +256,15 @@ type CodexReviewWorkspaceObservation struct {
 func (o CodexReviewWorkspaceObservation) valid() bool {
 	return o.volume != "" && cliSafe(o.volume) && o.fingerprint != "" &&
 		commitSHAPattern.MatchString(o.head) && contentaddr.Valid("sha256:"+o.treeDigest) &&
+		(o.agentsEntry == codexWorkspaceAgentsDir || o.agentsEntry == codexWorkspaceAgentsAbsent) &&
 		digestPinnedImagePattern.MatchString(o.observerImage) && o.observerFingerprint != ""
 }
 
 func (o CodexReviewWorkspaceObservation) verifyFresh(fresh CodexReviewWorkspaceObservation) error {
 	if !o.valid() || !fresh.valid() || fresh.volume != o.volume ||
 		fresh.fingerprint != o.fingerprint || fresh.head != o.head ||
-		fresh.treeDigest != o.treeDigest || fresh.observerImage != o.observerImage {
+		fresh.treeDigest != o.treeDigest || fresh.agentsEntry != o.agentsEntry ||
+		fresh.observerImage != o.observerImage {
 		return failf(CheckObservedBaseIdentity, "Codex review workspace changed before launch")
 	}
 	if fresh.observerFingerprint == o.observerFingerprint {
@@ -345,8 +365,10 @@ type CodexReviewSpec struct {
 	InstructionBinding   exec.ReviewInstructionBinding
 
 	// AgentsShadow is the runtime-backed observation of one empty volume,
-	// mounted read-only at HOME/.agents and at the workspace root plus every
-	// in-container ancestor. Its evidence never authorizes cleanup.
+	// mounted read-only at HOME/.agents, at every in-container ancestor of
+	// the workspace, and over the workspace's own .agents exactly when the
+	// observed candidate tree carries that directory. Its evidence never
+	// authorizes cleanup.
 	AgentsShadow CodexReviewShadowObservation
 
 	// Snapshot is the runtime-backed observation of the ward-owned read-only
@@ -368,6 +390,7 @@ type CodexReviewJournalBinding struct {
 	WorkspaceFingerprint                    string                         `json:"workspace_fingerprint"`
 	WorkspaceHead                           string                         `json:"workspace_head"`
 	WorkspaceTreeDigest                     string                         `json:"workspace_tree_digest"`
+	WorkspaceAgentsEntry                    string                         `json:"workspace_agents_entry"`
 	WorkspaceObserverImage                  string                         `json:"workspace_observer_image"`
 	WorkspaceObserverFingerprint            string                         `json:"workspace_observer_fingerprint"`
 	WorkspacePreStartObserverFingerprint    string                         `json:"workspace_pre_start_observer_fingerprint"`
@@ -730,10 +753,17 @@ func BuildCodexReviewWorkspaceObserverSpec(
 		WorkspaceTarget: cfg.WorkspaceTarget,
 		BaseProofPath:   codexWorkspaceProofPath,
 	}
+	// The shared base-observer script, extended with the review-only .agents
+	// probe: the shadow-mount topology depends on what the candidate tree
+	// holds at <workspace>/.agents, and that fact must come from the same
+	// pinned, networkless, read-only observation that proves HEAD and tree,
+	// not from a host-side stat of a mutable checkout.
+	script := observerScript(observerCfg, ownershipLabel.Value) + "; " +
+		codexWorkspaceAgentsProbeScript(cfg.WorkspaceTarget, codexWorkspaceProofPath)
 	return ContainerSpec{
 		Name:            codexReviewWorkspaceObserverName(runID),
 		Image:           cfg.ObserverImage,
-		Command:         observerCommand(observerCfg, ownershipLabel.Value),
+		Command:         []string{"sh", "-c", script},
 		NetworkDisabled: true,
 		Mounts: []Mount{{
 			Type: MountVolume, Source: volume, Target: cfg.WorkspaceTarget, ReadOnly: true,
@@ -799,7 +829,12 @@ func ObserveCodexReviewWorkspace(
 	if err != nil {
 		return CodexReviewWorkspaceObservation{}, err
 	}
-	observedHead, err := verifyBaseProof(proof, observerOwnershipLabel.Value, treeDigest)
+	agentsEntry, err := codexReviewProofWorkspaceAgents(proof)
+	if err != nil {
+		return CodexReviewWorkspaceObservation{}, err
+	}
+	observedHead, err := verifyBaseProof(proof, observerOwnershipLabel.Value, treeDigest,
+		map[string]string{codexWorkspaceAgentsKey: agentsEntry})
 	if err != nil || observedHead != expectedHead {
 		return CodexReviewWorkspaceObservation{}, failf(
 			CheckObservedBaseIdentity, "Codex review workspace does not hold the requested head and tree",
@@ -807,7 +842,7 @@ func ObserveCodexReviewWorkspace(
 	}
 	return CodexReviewWorkspaceObservation{
 		volume: volume, fingerprint: fingerprint, head: observedHead,
-		treeDigest: treeDigest, observerImage: cfg.ObserverImage,
+		treeDigest: treeDigest, agentsEntry: agentsEntry, observerImage: cfg.ObserverImage,
 		observerFingerprint: observerFingerprint,
 	}, nil
 }
@@ -918,7 +953,7 @@ func BuildCodexReviewAgentSpec(
 		)
 	}
 
-	shadowTargets := codexAgentsShadowTargets(cfg.WorkspaceTarget)
+	shadowTargets := codexAgentsShadowTargets(cfg.WorkspaceTarget, req.Workspace.agentsEntry)
 	env := append([]string{
 		"HOME=" + CodexContainerHomeTarget,
 		"CODEX_HOME=" + CodexHomeTarget,
@@ -951,6 +986,7 @@ func BuildCodexReviewAgentSpec(
 		WorkspaceFingerprint:            req.Workspace.fingerprint,
 		WorkspaceHead:                   req.Workspace.head,
 		WorkspaceTreeDigest:             req.Workspace.treeDigest,
+		WorkspaceAgentsEntry:            req.Workspace.agentsEntry,
 		WorkspaceObserverImage:          req.Workspace.observerImage,
 		WorkspaceObserverFingerprint:    req.Workspace.observerFingerprint,
 		WorkspaceTarget:                 cfg.WorkspaceTarget,
@@ -1008,10 +1044,11 @@ func (b CodexReviewJournalBinding) validateShape() error {
 	return b.validate(true, false)
 }
 
-// validateForTeardown accepts the one historical instruction shape that
-// predates explicit composition provenance. It is used only to authenticate
-// cleanup targets; legacy instruction authority can never launch or satisfy
-// a review result.
+// validateForTeardown accepts the historical shapes that predate the current
+// contract: the instruction binding without explicit composition provenance,
+// and the v2 topology without the observed workspace .agents entry. It is
+// used only to authenticate cleanup targets; legacy authority can never
+// launch or satisfy a review result.
 func (b CodexReviewJournalBinding) validateForTeardown() error {
 	return b.validate(true, true)
 }
@@ -1026,9 +1063,13 @@ func (b CodexReviewJournalBinding) validatePrepared() error {
 }
 
 func (b CodexReviewJournalBinding) validate(
-	requirePreStartObservation, allowLegacyInstructionBinding bool,
+	requirePreStartObservation, allowLegacyTeardownBinding bool,
 ) error {
-	if b.TopologyVersion != codexReviewTopologyVersion ||
+	topologyVersionValid := b.TopologyVersion == codexReviewTopologyVersion
+	if allowLegacyTeardownBinding && b.TopologyVersion == codexReviewTopologyVersionV2 {
+		topologyVersionValid = true
+	}
+	if !topologyVersionValid ||
 		!runIDPattern.MatchString(b.RunID) ||
 		b.Boundary != CodexReviewFreshStart || !b.FreshContext || b.ContinuityMounted ||
 		!b.WorkspaceReadOnly || !b.AuthReadOnly || !b.AuthStoreMutationLeaseRequired ||
@@ -1043,8 +1084,18 @@ func (b CodexReviewJournalBinding) validate(
 		b.HomeTarget != CodexContainerHomeTarget || b.CodexHomeTarget != CodexHomeTarget {
 		return errors.New("codex review journal mount targets are invalid")
 	}
+	workspaceAgents := b.WorkspaceAgentsEntry
+	workspaceAgentsValid := workspaceAgents == codexWorkspaceAgentsDir ||
+		workspaceAgents == codexWorkspaceAgentsAbsent
+	if allowLegacyTeardownBinding && b.TopologyVersion == codexReviewTopologyVersionV2 &&
+		workspaceAgents == "" {
+		// v2 predates the observed .agents entry and always shadowed the
+		// workspace root; legacy authority reaps, it never launches.
+		workspaceAgentsValid = true
+		workspaceAgents = codexWorkspaceAgentsDir
+	}
 	if b.WorkspaceFingerprint == "" || !commitSHAPattern.MatchString(b.WorkspaceHead) ||
-		!contentaddr.Valid("sha256:"+b.WorkspaceTreeDigest) ||
+		!contentaddr.Valid("sha256:"+b.WorkspaceTreeDigest) || !workspaceAgentsValid ||
 		!digestPinnedImagePattern.MatchString(b.WorkspaceObserverImage) ||
 		b.WorkspaceObserverFingerprint == "" {
 		return errors.New("codex review journal workspace evidence is invalid")
@@ -1055,7 +1106,7 @@ func (b CodexReviewJournalBinding) validate(
 		return errors.New("codex review journal omits distinct pre-start workspace evidence")
 	}
 	instructionBindingValid := b.instructionBinding().Validate() == nil
-	if allowLegacyInstructionBinding && b.InstructionCompositionVersion == "" &&
+	if allowLegacyTeardownBinding && b.InstructionCompositionVersion == "" &&
 		b.HostInstructionDigest == nil && len(b.RepositoryInstructionSources) == 0 &&
 		contentaddr.Valid(string(b.InstructionDigest)) {
 		instructionBindingValid = true
@@ -1085,7 +1136,7 @@ func (b CodexReviewJournalBinding) validate(
 		b.AgentsShadowFingerprint == "" || b.AgentsShadowDigest != emptyCodexShadowDigest ||
 		!digestPinnedImagePattern.MatchString(b.AgentsShadowObserverImage) ||
 		b.AgentsShadowObserverFingerprint == "" ||
-		!slices.Equal(b.AgentsShadowTargets, codexAgentsShadowTargets(b.WorkspaceTarget)) {
+		!slices.Equal(b.AgentsShadowTargets, codexAgentsShadowTargets(b.WorkspaceTarget, workspaceAgents)) {
 		return errors.New("codex review journal .agents shadow binding is invalid")
 	}
 	if requirePreStartObservation &&
@@ -1498,9 +1549,20 @@ func verifyCodexReviewShadowObserverAllowlist(rep InspectReport, spec ContainerS
 	return nil
 }
 
-func codexAgentsShadowTargets(workspaceTarget string) []string {
+// codexAgentsShadowTargets derives the empty-shadow mount set from the
+// observed workspace .agents entry. The ambient locations (the reviewer's
+// home and every in-container ancestor of the workspace) sit on the
+// container's writable rootfs and are always shadowed. The workspace's own
+// .agents lies inside the read-only candidate mount, where the runtime can
+// mount over an existing directory but cannot create a missing mountpoint,
+// so it is shadowed exactly when the attested tree carries the directory;
+// the immutable read-only workspace cannot grow one after observation.
+func codexAgentsShadowTargets(workspaceTarget, workspaceAgents string) []string {
 	seen := map[string]struct{}{path.Join(CodexContainerHomeTarget, ".agents"): {}}
-	for current := path.Clean(workspaceTarget); ; current = path.Dir(current) {
+	if workspaceAgents == codexWorkspaceAgentsDir {
+		seen[path.Join(path.Clean(workspaceTarget), ".agents")] = struct{}{}
+	}
+	for current := path.Dir(path.Clean(workspaceTarget)); ; current = path.Dir(current) {
 		seen[path.Join(current, ".agents")] = struct{}{}
 		if current == "/" {
 			break
@@ -1512,6 +1574,50 @@ func codexAgentsShadowTargets(workspaceTarget string) []string {
 	}
 	sort.Strings(targets)
 	return targets
+}
+
+// codexWorkspaceAgentsProbeScript classifies the workspace's own .agents
+// entry for the observer proof: "dir" for a real directory, "absent" for no
+// entry, "other" for a symlink or any non-directory kind. The symlink test
+// comes first because -d follows links; "other" is deliberately emitted
+// rather than suppressed so the host refuses it instead of defaulting.
+func codexWorkspaceAgentsProbeScript(workspaceTarget, proofPath string) string {
+	agents := shellQuote(path.Join(path.Clean(workspaceTarget), ".agents"))
+	proof := shellQuote(proofPath)
+	return "a=absent; if [ -h " + agents + " ]; then a=other; " +
+		"elif [ -d " + agents + " ]; then a=" + codexWorkspaceAgentsDir + "; " +
+		"elif [ -e " + agents + " ]; then a=other; fi; " +
+		"printf '" + codexWorkspaceAgentsKey + "=%s\\n' \"$a\" >> " + proof + "; sync"
+}
+
+// codexReviewProofWorkspaceAgents extracts the observed workspace .agents
+// entry from the proof. Anything but the two launchable values fails closed:
+// a symlink or non-directory .agents never reaches a review container.
+func codexReviewProofWorkspaceAgents(proof []byte) (string, error) {
+	if len(proof) == 0 || len(proof) > maxBaseProofBytes {
+		return "", failf(CheckObservedBaseIdentity, "Codex review workspace proof has an invalid size")
+	}
+	var entry string
+	for _, line := range strings.Split(strings.ReplaceAll(string(proof), "\r\n", "\n"), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || key != codexWorkspaceAgentsKey {
+			continue
+		}
+		if entry != "" {
+			return "", failf(CheckObservedBaseIdentity, "Codex review workspace proof repeats the .agents entry")
+		}
+		switch value {
+		case codexWorkspaceAgentsDir, codexWorkspaceAgentsAbsent:
+			entry = value
+		default:
+			return "", failf(CheckControlPlaneIsolation,
+				"Codex review workspace .agents entry is neither a directory nor absent")
+		}
+	}
+	if entry == "" {
+		return "", failf(CheckObservedBaseIdentity, "Codex review workspace proof omits the .agents entry")
+	}
+	return entry, nil
 }
 
 func codexReviewWorkspaceOverlapsControlPath(workspaceTarget string) bool {
@@ -1673,7 +1779,7 @@ func validateCodexReviewAgentSpec(
 	if _, ok := environmentByKey(append([]string{fixedContainerPathEnv}, spec.Env...)); !ok {
 		return failf(CheckControlPlaneIsolation, "Codex review environment is malformed or duplicates a key")
 	}
-	wantTargets := codexAgentsShadowTargets(cfg.WorkspaceTarget)
+	wantTargets := codexAgentsShadowTargets(cfg.WorkspaceTarget, req.Workspace.agentsEntry)
 	if len(spec.Mounts) != 2+len(wantTargets) {
 		return failf(CheckControlPlaneIsolation, "Codex review carries an unexpected mount count")
 	}
@@ -1704,6 +1810,7 @@ func validateCodexReviewAgentSpec(
 		binding.WorkspaceFingerprint != req.Workspace.fingerprint ||
 		binding.WorkspaceHead != req.Workspace.head ||
 		binding.WorkspaceTreeDigest != req.Workspace.treeDigest ||
+		binding.WorkspaceAgentsEntry != req.Workspace.agentsEntry ||
 		binding.WorkspaceObserverImage != req.Workspace.observerImage ||
 		binding.WorkspaceObserverFingerprint != req.Workspace.observerFingerprint ||
 		binding.WorkspacePreStartObserverFingerprint != "" ||

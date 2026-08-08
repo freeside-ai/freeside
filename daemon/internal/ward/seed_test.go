@@ -163,12 +163,20 @@ func TestVerifyBaseProof(t *testing.T) {
 	good := []byte("nonce=" + nonce + "\ngit_dir=present\nhead_detached=yes\nbase_sha=" + testBaseSHA +
 		"\nworktree=clean\ngit_replacements=absent\nirregular=absent\ntree_sha256=" + tree + "\n")
 
-	got, err := verifyBaseProof(good, nonce, tree)
+	got, err := verifyBaseProof(good, nonce, tree, nil)
 	if err != nil {
 		t.Fatalf("conforming proof: %v, want nil", err)
 	}
 	if got != testBaseSHA {
 		t.Errorf("observed base = %q, want %q", got, testBaseSHA)
+	}
+	// An extra expectation may extend the proof contract, never replace a
+	// base authentication key: a colliding map would silently overwrite the
+	// nonce or tree expectation.
+	for _, colliding := range []string{baseProofNonceKey, baseProofTreeKey, baseProofSHAKey} {
+		if _, err := verifyBaseProof(good, nonce, tree, map[string]string{colliding: "x"}); err == nil {
+			t.Errorf("colliding extra expectation %q accepted", colliding)
+		}
 	}
 
 	// proofWith renders a full proof with one field replaced, so each case
@@ -243,7 +251,7 @@ func TestVerifyBaseProof(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			sha, err := verifyBaseProof([]byte(tc.proof), nonce, tree)
+			sha, err := verifyBaseProof([]byte(tc.proof), nonce, tree, nil)
 			wantCheckFailure(t, err, CheckObservedBaseIdentity)
 			if sha != "" {
 				t.Errorf("rejected proof still yielded a base %q", sha)
@@ -259,7 +267,7 @@ func TestVerifyBaseProofNeverEchoesContent(t *testing.T) {
 	const nonce = "0123456789abcdef0123456789abcdef"
 	const planted = "attacker-controlled-fixture-value"
 	_, err := verifyBaseProof([]byte("nonce="+nonce+"\ngit_dir="+planted+"\nhead_detached=yes\nbase_sha="+testBaseSHA+
-		"\nworktree=clean\ngit_replacements=absent\nirregular=absent\ntree_sha256="+strings.Repeat("e", 64)+"\n"), nonce, strings.Repeat("e", 64))
+		"\nworktree=clean\ngit_replacements=absent\nirregular=absent\ntree_sha256="+strings.Repeat("e", 64)+"\n"), nonce, strings.Repeat("e", 64), nil)
 	if err == nil {
 		t.Fatal("unexpected value accepted, want a failure")
 	}

@@ -2787,7 +2787,7 @@ func TestRuntimeCodexReviewVolumeLeaseRecoversMultiTargetShadowContainer(t *test
 		{Type: MountVolume, Source: "workspace", Target: "/workspace/project", ReadOnly: true},
 		{Type: MountVolume, Source: "snapshot", Target: codexReviewSnapshotTarget, ReadOnly: true},
 	}
-	for _, target := range codexAgentsShadowTargets("/workspace/project") {
+	for _, target := range codexAgentsShadowTargets("/workspace/project", codexWorkspaceAgentsDir) {
 		mounts = append(mounts, Mount{Type: MountVolume, Source: "shadow", Target: target, ReadOnly: true})
 	}
 	if err := runtime.CreateContainer(ctx, ContainerSpec{

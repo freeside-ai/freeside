@@ -772,7 +772,7 @@ func (b *Backend) readBaseProof(ctx context.Context, runID, id string, st *runSt
 	if !found {
 		return "", failf(CheckObservedBaseIdentity, "base observer produced no proof")
 	}
-	return verifyBaseProof(data, st.ownershipLabel.Value, st.seedTreeDigest)
+	return verifyBaseProof(data, st.ownershipLabel.Value, st.seedTreeDigest, nil)
 }
 
 // maxBaseProofBytes bounds the proof read into the daemon's heap. The honest

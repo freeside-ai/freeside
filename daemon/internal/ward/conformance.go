@@ -596,7 +596,12 @@ func verifyCredProof(
 // The nonce must equal this invocation's unpredictable ownership token. That is
 // what makes the proof this run's rather than a file the image shipped with or
 // an earlier run left behind.
-func verifyBaseProof(data []byte, nonce, treeDigest string) (string, error) {
+//
+// extra carries additional required key/value pairs a caller's extended
+// observer script emits (the Codex review workspace probe); they are held to
+// the same exactly-once, exact-value discipline as the base keys. A nil map
+// keeps the base contract, under which any extra key is unknown and rejected.
+func verifyBaseProof(data []byte, nonce, treeDigest string, extra map[string]string) (string, error) {
 	fixed := map[string]string{
 		baseProofNonceKey:    nonce,
 		baseProofGitDirKey:   "present",
@@ -618,6 +623,15 @@ func verifyBaseProof(data []byte, nonce, treeDigest string) (string, error) {
 		// volume. HEAD is a pointer and proves nothing about content; this is
 		// what makes the attestation cover what the writer will actually see.
 		baseProofTreeKey: treeDigest,
+	}
+	for key, value := range extra {
+		// A collision would silently replace a base authentication
+		// expectation (the nonce, the tree digest); no honest caller extends
+		// the proof with a key the base contract already owns.
+		if _, exists := fixed[key]; exists || key == baseProofSHAKey {
+			return "", failf(CheckObservedBaseIdentity, "base proof extra expectation collides with a base key")
+		}
+		fixed[key] = value
 	}
 	seen := map[string]bool{}
 	var observed string
@@ -656,11 +670,15 @@ func verifyBaseProof(data []byte, nonce, treeDigest string) (string, error) {
 	if err := sc.Err(); err != nil {
 		return "", failf(CheckObservedBaseIdentity, "base proof unreadable")
 	}
-	for _, key := range []string{
+	required := []string{
 		baseProofNonceKey, baseProofGitDirKey, baseProofDetachedKey,
 		baseProofSHAKey, baseProofWorktreeKey, baseProofReplacementsKey,
 		baseProofIrregularKey, baseProofTreeKey,
-	} {
+	}
+	for key := range extra {
+		required = append(required, key)
+	}
+	for _, key := range required {
 		if !seen[key] {
 			return "", failf(CheckObservedBaseIdentity, "base proof omits a required key")
 		}

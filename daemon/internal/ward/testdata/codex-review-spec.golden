@@ -65,7 +65,7 @@
     "network_disabled": false
   },
   "binding": {
-    "topology_version": "codex_review_read_only_v2",
+    "topology_version": "codex_review_read_only_v3",
     "run_id": "review-1",
     "boundary": "fresh_start",
     "workspace_source_run_id": "review-1",
@@ -73,6 +73,7 @@
     "workspace_fingerprint": "2026-08-03T11:59:59Z",
     "workspace_head": "0123456789abcdef0123456789abcdef01234567",
     "workspace_tree_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+    "workspace_agents_entry": "dir",
     "workspace_observer_image": "example.test/exporter@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "workspace_observer_fingerprint": "00000000000000000000000000000000:2026-08-03T12:00:03Z",
     "workspace_pre_start_observer_fingerprint": "",
