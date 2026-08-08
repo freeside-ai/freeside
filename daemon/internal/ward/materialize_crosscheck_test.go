@@ -87,7 +87,7 @@ func TestPublishMaterializationPassesWardBaseProof(t *testing.T) {
 		baseProofIrregularKey,
 		baseProofTreeKey, treeDigest,
 	))
-	if observed, verifyErr := verifyBaseProof(proof, nonce, treeDigest); verifyErr != nil || observed != base.BaseSHA {
+	if observed, verifyErr := verifyBaseProof(proof, nonce, treeDigest, nil); verifyErr != nil || observed != base.BaseSHA {
 		t.Fatalf("Ward base proof = %q, %v, want %q", observed, verifyErr, base.BaseSHA)
 	}
 }

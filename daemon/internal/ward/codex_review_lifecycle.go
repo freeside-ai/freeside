@@ -2047,6 +2047,7 @@ func (b *Backend) reconstructCodexReview(
 		binding.WorkspaceFingerprint != workspace.fingerprint ||
 		binding.WorkspaceHead != workspace.head ||
 		binding.WorkspaceTreeDigest != workspace.treeDigest ||
+		binding.WorkspaceAgentsEntry != workspace.agentsEntry ||
 		binding.SnapshotFingerprint != snapshot.fingerprint ||
 		binding.SnapshotVolume != snapshot.volume ||
 		binding.AuthSnapshotDigest != snapshot.authDigest ||
