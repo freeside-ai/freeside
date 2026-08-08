@@ -441,7 +441,7 @@ func writeCommandError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusNotFound, errorResponse{Message: "not found"})
 		return
 	}
-	if isCommandRequestError(err) {
+	if isCommandRequestError(err) || isCommandAuthorityRejection(err) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Message: err.Error()})
 		return
 	}
@@ -459,6 +459,30 @@ func isCommandRequestError(err error) bool {
 		store.ErrActionNotOffered, store.ErrImmutableConflict,
 		domain.ErrEmptyID, domain.ErrEmptyField, domain.ErrInvalidAction,
 		domain.ErrNonPositive, domain.ErrDigestsNotCanonical, domain.ErrDuplicate,
+	} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// isCommandAuthorityRejection classifies the determinate recovery-decision
+// rejections a Submit can earn from the signet gates and the store's write
+// re-gate: the accepting transaction rolled back and the item stays open, so
+// the client must see an authoritative no-effect 4xx (a definitive rejection
+// it can retry past once the operator repairs the state) rather than a
+// possibly-committed 5xx that holds its pending slot and replays forever.
+func isCommandAuthorityRejection(err error) bool {
+	for _, target := range []error{
+		domain.ErrReviewConfigAdoptionIneffective,
+		domain.ErrReviewConfigSupersessionInvalid,
+		domain.ErrReviewConfigRecoveryBindingMissing,
+		domain.ErrReviewConfigRecoveryBindingMismatch,
+		domain.ErrReviewRecoveryBindingMissing,
+		domain.ErrReviewRecoveryBindingMismatch,
+		domain.ErrTransitionCommandMismatch,
+		domain.ErrTransitionUnbacked,
 	} {
 		if errors.Is(err, target) {
 			return true

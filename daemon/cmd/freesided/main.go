@@ -565,6 +565,10 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return nil, fmt.Errorf("open fake stage driver: %w", err)
 		}
 	}
+	var (
+		workflow     *engine.Engine
+		claudeWiring *claudeComposition
+	)
 	attention := signet.NewService(st,
 		signet.WithPairingKey(pairingKey),
 		signet.WithBlobStore(blobs),
@@ -572,15 +576,20 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			BaseURL: cfg.NtfyURL, TopicKey: topicKey,
 			ClickBaseURL: "http://" + listener.Addr().String(),
 		}),
+		// The effective digest exists only after the Claude composition below;
+		// the func indirection lets the decision-time adoption gate read it
+		// then. The fake-driver composition leaves it empty (gate absent).
+		signet.WithEffectiveReviewConfiguration(func() domain.Digest {
+			if claudeWiring == nil {
+				return ""
+			}
+			return claudeWiring.reviewConfigurationDigest
+		}),
 	)
 	pairingCode, _, err := attention.MintPairingCode(parent)
 	if err != nil {
 		return nil, fmt.Errorf("mint startup pairing code: %w", err)
 	}
-	var (
-		workflow     *engine.Engine
-		claudeWiring *claudeComposition
-	)
 	if cfg.Claude == nil {
 		var walkingSkeletonOptions []engine.Option
 		if cfg.Logger != nil {
