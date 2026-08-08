@@ -58,6 +58,15 @@ type Candidate struct {
 	// nil id names no authorizing record and also fails closed.
 	AuthorizationID    *domain.Digest
 	TrustProfileDigest *domain.Digest
+	// AdoptedTrustProfileDigest names the profile revision an operator
+	// explicitly adopted for this run through a durable
+	// review-configuration-only recovery transition (issue #611). It is an
+	// engine-supplied claim, never an authority: the drift gate accepts it
+	// only after re-deriving, from the trust source, that the named revision
+	// is the repository's current profile and differs from the authorized
+	// TrustProfileDigest revision solely in its review configuration digest.
+	// Nil keeps the strict equality the gate has always enforced.
+	AdoptedTrustProfileDigest *domain.Digest
 }
 
 // ExecutionCandidate is the production publication input: the candidate plus
@@ -541,22 +550,36 @@ func (p *Publisher) gateTrustDrift(ctx context.Context, c Candidate, audit domai
 	if err := current.Profile.Validate(); err != nil {
 		return fmt.Errorf("current trust profile for %s: %w", c.Repo, err)
 	}
-	if current.Profile.ProfileDigest != *c.TrustProfileDigest {
-		return fmt.Errorf("candidate bound to trust profile %s, current is %s: %w",
-			*c.TrustProfileDigest, current.Profile.ProfileDigest, ErrTrustProfileDrift)
+	lookup := func(digest domain.Digest) (domain.AutomationTrustProfile, bool, error) {
+		source, ok := p.trust.(TrustProfileSource)
+		if !ok {
+			return domain.AutomationTrustProfile{}, false, nil
+		}
+		return source.TrustProfile(ctx, c.Repo, digest)
 	}
-	return validateTrustCandidate(c, *current.Profile, audit)
+	adoption := func(runID domain.RunID) (domain.ReviewConfigurationRecoveryTransition, bool, error) {
+		source, ok := p.trust.(ReviewAdoptionSource)
+		if !ok {
+			return domain.ReviewConfigurationRecoveryTransition{}, false, nil
+		}
+		return source.ReviewConfigurationAdoption(ctx, runID)
+	}
+	return validateTrustCandidate(c, *current.Profile, audit, lookup, adoption)
 }
 
-func validateTrustCandidate(c Candidate, profile domain.AutomationTrustProfile, audit domain.WorkflowAudit) error {
+func validateTrustCandidate(
+	c Candidate, profile domain.AutomationTrustProfile, audit domain.WorkflowAudit,
+	lookup func(domain.Digest) (domain.AutomationTrustProfile, bool, error),
+	adoption func(domain.RunID) (domain.ReviewConfigurationRecoveryTransition, bool, error),
+) error {
 	if c.TrustProfileDigest == nil {
 		return fmt.Errorf("candidate carries no trust-profile binding: %w", ErrTrustProfileDrift)
 	}
 	if err := profile.Validate(); err != nil {
 		return fmt.Errorf("current trust profile for %s: %w", c.Repo, err)
 	}
-	if profile.ProfileDigest != *c.TrustProfileDigest {
-		return fmt.Errorf("candidate bound to trust profile %s, current is %s: %w", *c.TrustProfileDigest, profile.ProfileDigest, ErrTrustProfileDrift)
+	if err := profileSatisfiesCandidateBinding(c, profile, lookup, adoption); err != nil {
+		return err
 	}
 	if err := audit.Validate(); err != nil {
 		return fmt.Errorf("fresh workflow audit for %s: %w", c.Repo, err)
@@ -584,6 +607,57 @@ func validateTrustCandidate(c Candidate, profile domain.AutomationTrustProfile, 
 // candidate, distinct coordinates the identity derivation already pins. A nil
 // id, or a candidate missing the recipe or trust-profile digest the record
 // binds, names no authorizing record and fails closed.
+// profileSatisfiesCandidateBinding accepts the current profile for a
+// candidate either by the strict equality the drift gate has always enforced
+// or through an operator-adopted review-configuration-only supersession of
+// the authorized revision (issue #611). The adoption arm re-derives every
+// fact: Candidate.AdoptedTrustProfileDigest is only a claim, so the run must
+// carry a command-backed recovery transition (re-gated by its store on read)
+// naming exactly this supersession, the adopted digest must be the current
+// profile, the authorized revision must still be reconstructable from the
+// trust source, and the overlay recompute must prove the two revisions
+// differ solely in the review configuration digest. A forged, unbacked, or
+// over-broad claim fails closed as ordinary drift.
+func profileSatisfiesCandidateBinding(
+	c Candidate, profile domain.AutomationTrustProfile,
+	lookup func(domain.Digest) (domain.AutomationTrustProfile, bool, error),
+	adoption func(domain.RunID) (domain.ReviewConfigurationRecoveryTransition, bool, error),
+) error {
+	if profile.ProfileDigest == *c.TrustProfileDigest {
+		return nil
+	}
+	drift := fmt.Errorf("candidate bound to trust profile %s, current is %s: %w",
+		*c.TrustProfileDigest, profile.ProfileDigest, ErrTrustProfileDrift)
+	if c.AdoptedTrustProfileDigest == nil || lookup == nil || adoption == nil ||
+		c.RunID == "" || profile.ProfileDigest != *c.AdoptedTrustProfileDigest {
+		return drift
+	}
+	transition, adopted, err := adoption(c.RunID)
+	if err != nil {
+		return fmt.Errorf("read review configuration adoption for run %s: %w", c.RunID, err)
+	}
+	if !adopted || transition.Repo != c.Repo ||
+		transition.SupersededProfileDigest != *c.TrustProfileDigest ||
+		transition.SupersedingProfileDigest != profile.ProfileDigest {
+		return drift
+	}
+	superseded, found, err := lookup(*c.TrustProfileDigest)
+	if err != nil {
+		return fmt.Errorf("read superseded trust profile %s: %w", *c.TrustProfileDigest, err)
+	}
+	if !found {
+		return drift
+	}
+	reviewOnly, err := domain.ReviewConfigurationOnlySupersession(superseded, profile)
+	if err != nil {
+		return fmt.Errorf("validate adopted trust supersession: %w", err)
+	}
+	if !reviewOnly {
+		return drift
+	}
+	return nil
+}
+
 func (p *Publisher) gateAuthorization(ctx context.Context, c Candidate) error {
 	if c.AuthorizationID == nil {
 		return fmt.Errorf("candidate carries no authorization binding: %w", ErrUnauthorizedPublication)

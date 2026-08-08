@@ -703,6 +703,31 @@ import Testing
         #expect(after.item.review_recovery_binding == before.item.review_recovery_binding)
     }
 
+    @Test func reviewConfigurationAdoptionResolvesItsExactCarrier() async throws {
+        // The command records the operator's decision against the binding
+        // rendered on this exact parked-configuration item. The daemon
+        // additionally appends the profile-supersession-bound transition; the
+        // mock exposes the carrier effect.
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        let before =
+            try await client
+            .getAttentionItem(path: .init(item_id: "item-review_configuration")).ok.body.json
+        #expect(before.item.review_configuration_recovery != nil)
+
+        let command = Self.command(
+            id: "cmd-adopt-review-configuration", against: before,
+            action: .adopt_review_configuration)
+        _ = try await client.submitCommand(body: .json(command)).ok.body.json
+
+        let after =
+            try await client
+            .getAttentionItem(path: .init(item_id: "item-review_configuration")).ok.body.json
+        #expect(after.item.status == .resolved)
+        #expect(
+            after.item.review_configuration_recovery == before.item.review_configuration_recovery)
+    }
+
     @Test func pendingActionIsRejectedBeforeAnyEffect() async throws {
         // Mirrors signet actionOutcome: a pending action's transaction
         // belongs to a later unit, so acceptance rejects it rather than

@@ -223,7 +223,8 @@ and sampled decision audits.
 system, subject_id, run_id?}`, `type`, `priority`, `reason`,
 `requested_decision`, `evidence_snapshot`, `agent_claims`, `artifact_digests`,
 `pr_head_sha`, `item_version`, `interruption_class`, `conversation_id?`, derived
-timing aggregates, `expires_when`, `review_recovery_binding?`, and `status`.
+timing aggregates, `expires_when`, `review_recovery_binding?`,
+`review_configuration_recovery?`, and `status`.
 
 `evidence_snapshot` contains engine facts and only verifier or daemon artifacts
 produced under an approved recipe (Section 5.15). Agent claims are labeled.
@@ -249,6 +250,7 @@ Approval is not a universal action.
 | `review_diminishing_returns` | Finish now; apply the current batch and finish; continue under specified policy; or turn a recurring preference into a project-policy proposal PR. It never mutates policy directly. |
 | `review_dispute` | Adjudicate the finding, discuss, or stop. |
 | `review_contradiction` | Recover only the exact persisted contradiction named by the card, or leave it parked. The card renders the bound run, invocation, round, base SHA, head SHA, and immutable failure-body digest; recovery preserves the original failure evidence. |
+| `review_configuration` | Adopt the review configuration (`adopt_review_configuration`), discuss, or stop. The run is parked, not terminal: adoption authorizes an operator-approved, review-configuration-only profile supersession of exactly the parked failure named by the card's binding, resolved at decision time as the repository's currently activated revision and re-gated on every read; stop concludes the run as a configuration failure always did. The card renders the same bound coordinates as `review_contradiction` plus the superseded profile digest. |
 | `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. |
 | `agent_question` | Answer and retry, answer without retry, or stop. |
 | `publish_blocked` | Rerun trust evaluation, choose an approved alternate publication profile, inspect the trust failure, or stop. |

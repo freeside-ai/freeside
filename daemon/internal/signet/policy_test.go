@@ -24,6 +24,9 @@ func TestAllowedActionsByType(t *testing.T) {
 			domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop,
 		},
 		domain.AttentionReviewContradiction: {domain.ActionRecoverReview},
+		domain.AttentionReviewConfiguration: {
+			domain.ActionAdoptReviewConfiguration, domain.ActionDiscuss, domain.ActionStop,
+		},
 		domain.AttentionExecutionFailure: {
 			domain.ActionRetry, domain.ActionRetryWithCapability, domain.ActionDiscuss, domain.ActionStop,
 		},

@@ -44,7 +44,32 @@ func (d *storePublicationDecision) prepare(
 		if err != nil {
 			return fmt.Errorf("read current trust profile: %w", err)
 		}
-		if err := validateTrustCandidate(c, profile, audit); err != nil {
+		if err := validateTrustCandidate(c, profile, audit,
+			func(digest domain.Digest) (domain.AutomationTrustProfile, bool, error) {
+				superseded, err := tx.GetTrustProfile(ctx, digest)
+				switch {
+				case errors.Is(err, store.ErrNotFound):
+					return domain.AutomationTrustProfile{}, false, nil
+				case err != nil:
+					return domain.AutomationTrustProfile{}, false, err
+				case superseded.Repo != c.Repo:
+					return domain.AutomationTrustProfile{}, false, nil
+				}
+				return superseded, true, nil
+			},
+			func(runID domain.RunID) (domain.ReviewConfigurationRecoveryTransition, bool, error) {
+				transition, found, err := tx.LatestReviewConfigurationRecoveryTransition(ctx, runID)
+				// The store's ineffective classification (a tampered, unbacked,
+				// moved-on, or over-broad adoption) grants nothing: report
+				// absence so the gate fails closed as ordinary drift.
+				if errors.Is(err, domain.ErrReviewConfigRecoveryIneffective) {
+					return domain.ReviewConfigurationRecoveryTransition{}, false, nil
+				}
+				if err != nil {
+					return domain.ReviewConfigurationRecoveryTransition{}, false, err
+				}
+				return transition, found, nil
+			}); err != nil {
 			decisionErr = err
 			return nil
 		}

@@ -2,7 +2,9 @@ package publish_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -193,5 +195,96 @@ func TestStoreTrustSourceReturnsLatest(t *testing.T) {
 	}
 	if ct.Audit == nil || ct.Audit.WorkflowAuditDigest != workflowAuditForRepo(t, testTrustRepo).WorkflowAuditDigest {
 		t.Fatalf("current audit = %v, want the seeded audit", ct.Audit)
+	}
+}
+
+// TestTrustCandidateAdoptionClaimNeedsTransition pins the adoption arm's
+// re-derivation (issue #611, Codex round 2): Candidate.
+// AdoptedTrustProfileDigest is a claim, so the drift gate accepts a
+// review-configuration-only supersession only when the run's command-backed
+// recovery transition names exactly that supersession. A claim with no
+// transition, a mismatched transition, a missing adoption capability, or no
+// run binding fails closed as ordinary drift; only the fully matching
+// transition passes.
+func TestTrustCandidateAdoptionClaimNeedsTransition(t *testing.T) {
+	t.Parallel()
+	authorized := testTrustProfile(t)
+	adopted, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo:                       testTrustRepo,
+		RepositoryID:               fixtureRepositoryID,
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
+		WorkflowAuditDigest:        authorized.WorkflowAuditDigest,
+		Review:                     domain.ReviewSettings{Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config-adopted"},
+	})
+	if err != nil {
+		t.Fatalf("adopted profile: %v", err)
+	}
+	audit := testWorkflowAudit(t)
+	lookup := func(digest domain.Digest) (domain.AutomationTrustProfile, bool, error) {
+		if digest == authorized.ProfileDigest {
+			return authorized, true, nil
+		}
+		return domain.AutomationTrustProfile{}, false, nil
+	}
+	matching := domain.ReviewConfigurationRecoveryTransition{
+		RunID: "run-adopted", Repo: testTrustRepo,
+		SupersededProfileDigest:  authorized.ProfileDigest,
+		SupersedingProfileDigest: adopted.ProfileDigest,
+	}
+	mismatched := matching
+	mismatched.SupersededProfileDigest = domain.Digest("sha256:" + strings.Repeat("f", 64))
+	adoptionOf := func(tr *domain.ReviewConfigurationRecoveryTransition) func(domain.RunID) (domain.ReviewConfigurationRecoveryTransition, bool, error) {
+		return func(domain.RunID) (domain.ReviewConfigurationRecoveryTransition, bool, error) {
+			if tr == nil {
+				return domain.ReviewConfigurationRecoveryTransition{}, false, nil
+			}
+			return *tr, true, nil
+		}
+	}
+	candidate := func(mutate func(*publish.Candidate)) publish.Candidate {
+		c := publish.Candidate{
+			Repo: testTrustRepo, RunID: "run-adopted",
+			TrustProfileDigest:        &authorized.ProfileDigest,
+			AdoptedTrustProfileDigest: &adopted.ProfileDigest,
+		}
+		if mutate != nil {
+			mutate(&c)
+		}
+		return c
+	}
+
+	cases := map[string]struct {
+		candidate publish.Candidate
+		adoption  func(domain.RunID) (domain.ReviewConfigurationRecoveryTransition, bool, error)
+		wantErr   error
+	}{
+		"no transition":         {candidate(nil), adoptionOf(nil), publish.ErrTrustProfileDrift},
+		"mismatched transition": {candidate(nil), adoptionOf(&mismatched), publish.ErrTrustProfileDrift},
+		"no adoption capability": {
+			candidate(nil), nil, publish.ErrTrustProfileDrift,
+		},
+		"no run binding": {
+			candidate(func(c *publish.Candidate) { c.RunID = "" }),
+			adoptionOf(&matching), publish.ErrTrustProfileDrift,
+		},
+		"matching transition": {candidate(nil), adoptionOf(&matching), nil},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := publish.ValidateTrustCandidateForTest(tc.candidate, adopted, audit, lookup, tc.adoption)
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("matching adoption = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("adoption claim = %v, want %v", err, tc.wantErr)
+			}
+		})
 	}
 }

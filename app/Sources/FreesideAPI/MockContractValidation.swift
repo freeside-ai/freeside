@@ -80,6 +80,31 @@ enum MockContractValidation {
         } else if item._type == .review_contradiction {
             return "review_contradiction item lacks review_recovery_binding"
         }
+        if let recovery = item.review_configuration_recovery?.value1 {
+            if item._type != .review_configuration {
+                return "review_configuration_recovery on a non-review_configuration item"
+            }
+            if recovery.run_id.isEmpty || recovery.invocation_id.isEmpty
+                || recovery.base_sha.isEmpty || recovery.head_sha.isEmpty
+                || recovery.failure_digest.isEmpty || recovery.repo.isEmpty
+                || recovery.superseded_profile_digest.isEmpty
+            {
+                return "empty review_configuration_recovery field"
+            }
+            if recovery.round < 1 { return "non-positive review configuration recovery round" }
+            if recovery.repository_id < 1 {
+                return "non-positive review configuration recovery repository_id"
+            }
+            guard case .run(let subject) = item.subject,
+                subject.subject_id == recovery.run_id,
+                subject.run_id == recovery.run_id,
+                item.pr_head_sha == recovery.head_sha
+            else {
+                return "review configuration recovery disagrees with item subject or head"
+            }
+        } else if item._type == .review_configuration {
+            return "review_configuration item lacks review_configuration_recovery"
+        }
         // An empty requested_decision is structurally valid (#96): which
         // types must offer an action is signet policy (itemPolicyBreach).
         if let breach = timingBreach(item.timing) { return breach }

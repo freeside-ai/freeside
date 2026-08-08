@@ -422,11 +422,17 @@ type AttentionItem struct {
 	// item offers to recover. It is present only on review_contradiction items
 	// and is immutable across the item's lifecycle.
 	ReviewRecoveryBinding *ReviewRecoveryBinding `json:"review_recovery_binding"`
-	ItemVersion           int                    `json:"item_version"`
-	InterruptionClass     InterruptionClass      `json:"interruption_class"`
-	ConversationID        *ConversationID        `json:"conversation_id"`
-	Timing                TimingSummary          `json:"timing"`
-	ExpiresWhen           *time.Time             `json:"expires_when"`
+	// ReviewConfigurationRecovery identifies the exact parked
+	// configuration-class failure the item offers to recover and the
+	// admission-pinned profile it was parked under. It is present only on
+	// review_configuration items and is immutable across the item's
+	// lifecycle; the adoption target is resolved at decision time, not here.
+	ReviewConfigurationRecovery *ReviewConfigurationRecoveryBinding `json:"review_configuration_recovery"`
+	ItemVersion                 int                                 `json:"item_version"`
+	InterruptionClass           InterruptionClass                   `json:"interruption_class"`
+	ConversationID              *ConversationID                     `json:"conversation_id"`
+	Timing                      TimingSummary                       `json:"timing"`
+	ExpiresWhen                 *time.Time                          `json:"expires_when"`
 	// DecidedAt is the daemon-stamped instant the item's first concluding
 	// decision was accepted (plan §4: open-to-decision time is the headline
 	// attention-latency metric, with the §1 per-unit measure governing;
@@ -453,22 +459,23 @@ type AttentionItem struct {
 // input path that sets either, so a caller cannot bind a digest it did not
 // render (plan §4).
 type AttentionItemInput struct {
-	ID                    ItemID
-	ProjectID             ProjectID
-	Subject               Subject
-	Type                  AttentionType
-	Priority              Priority
-	Reason                string
-	RequestedDecision     []Action
-	EvidenceSnapshot      []Artifact
-	AgentClaims           []AgentClaim
-	PRHeadSHA             string
-	CommitPlanNotice      *CommitPlanNoticeReason
-	ReviewRecoveryBinding *ReviewRecoveryBinding
-	ItemVersion           int
-	InterruptionClass     InterruptionClass
-	ConversationID        *ConversationID
-	ExpiresWhen           *time.Time
+	ID                          ItemID
+	ProjectID                   ProjectID
+	Subject                     Subject
+	Type                        AttentionType
+	Priority                    Priority
+	Reason                      string
+	RequestedDecision           []Action
+	EvidenceSnapshot            []Artifact
+	AgentClaims                 []AgentClaim
+	PRHeadSHA                   string
+	CommitPlanNotice            *CommitPlanNoticeReason
+	ReviewRecoveryBinding       *ReviewRecoveryBinding
+	ReviewConfigurationRecovery *ReviewConfigurationRecoveryBinding
+	ItemVersion                 int
+	InterruptionClass           InterruptionClass
+	ConversationID              *ConversationID
+	ExpiresWhen                 *time.Time
 	// BlockingSupersession may be set only by daemon-internal creators of
 	// system_health items; there is no client input path to it.
 	BlockingSupersession *BlockingSupersession
@@ -489,24 +496,25 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 	subject := in.Subject
 	subject.RunID = clonePtr(in.Subject.RunID)
 	item := AttentionItem{
-		ID:                    in.ID,
-		ProjectID:             in.ProjectID,
-		Subject:               subject,
-		Type:                  in.Type,
-		Priority:              in.Priority,
-		Reason:                in.Reason,
-		RequestedDecision:     slices.Clone(in.RequestedDecision),
-		EvidenceSnapshot:      cloneArtifacts(in.EvidenceSnapshot),
-		AgentClaims:           cloneAgentClaims(in.AgentClaims),
-		PRHeadSHA:             in.PRHeadSHA,
-		CommitPlanNotice:      clonePtr(in.CommitPlanNotice),
-		ReviewRecoveryBinding: clonePtr(in.ReviewRecoveryBinding),
-		ItemVersion:           in.ItemVersion,
-		InterruptionClass:     in.InterruptionClass,
-		ConversationID:        clonePtr(in.ConversationID),
-		ExpiresWhen:           clonePtr(in.ExpiresWhen),
-		BlockingSupersession:  clonePtr(in.BlockingSupersession),
-		Status:                in.Status,
+		ID:                          in.ID,
+		ProjectID:                   in.ProjectID,
+		Subject:                     subject,
+		Type:                        in.Type,
+		Priority:                    in.Priority,
+		Reason:                      in.Reason,
+		RequestedDecision:           slices.Clone(in.RequestedDecision),
+		EvidenceSnapshot:            cloneArtifacts(in.EvidenceSnapshot),
+		AgentClaims:                 cloneAgentClaims(in.AgentClaims),
+		PRHeadSHA:                   in.PRHeadSHA,
+		CommitPlanNotice:            clonePtr(in.CommitPlanNotice),
+		ReviewRecoveryBinding:       clonePtr(in.ReviewRecoveryBinding),
+		ReviewConfigurationRecovery: clonePtr(in.ReviewConfigurationRecovery),
+		ItemVersion:                 in.ItemVersion,
+		InterruptionClass:           in.InterruptionClass,
+		ConversationID:              clonePtr(in.ConversationID),
+		ExpiresWhen:                 clonePtr(in.ExpiresWhen),
+		BlockingSupersession:        clonePtr(in.BlockingSupersession),
+		Status:                      in.Status,
 	}
 	// Normalize the optional expiry to UTC so the producer path stores one
 	// canonical spelling (a dev-CLI producer stamps it from the host clock);
@@ -606,6 +614,26 @@ func (i AttentionItem) Validate() error {
 			i.PRHeadSHA != i.ReviewRecoveryBinding.HeadSHA {
 			return fmt.Errorf("item %s recovery binding disagrees with its subject or head: %w",
 				i.ID, ErrReviewRecoveryBindingMismatch)
+		}
+	}
+	if i.ReviewConfigurationRecovery == nil {
+		if i.Type == AttentionReviewConfiguration {
+			return fmt.Errorf("item %s: %w", i.ID, ErrReviewConfigRecoveryBindingMissing)
+		}
+	} else {
+		if i.Type != AttentionReviewConfiguration {
+			return fmt.Errorf("item %s type %q carries a review configuration recovery binding: %w",
+				i.ID, i.Type, ErrReviewConfigRecoveryBindingOutsideItem)
+		}
+		if err := i.ReviewConfigurationRecovery.Validate(); err != nil {
+			return fmt.Errorf("item %s: %w", i.ID, err)
+		}
+		if i.Subject.Type != SubjectRun || i.Subject.RunID == nil ||
+			*i.Subject.RunID != i.ReviewConfigurationRecovery.RunID ||
+			i.Subject.ID != SubjectID(i.ReviewConfigurationRecovery.RunID) ||
+			i.PRHeadSHA != i.ReviewConfigurationRecovery.HeadSHA {
+			return fmt.Errorf("item %s configuration recovery binding disagrees with its subject or head: %w",
+				i.ID, ErrReviewConfigRecoveryBindingMismatch)
 		}
 	}
 	if i.BlockingSupersession != nil {

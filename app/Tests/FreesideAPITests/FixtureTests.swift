@@ -13,6 +13,7 @@ import Testing
         ],
         .review_dispute: [.adjudicate, .discuss, .stop],
         .review_contradiction: [.recover_review],
+        .review_configuration: [.adopt_review_configuration, .discuss, .stop],
         .execution_failure: [.retry, .retry_with_capabilities, .discuss, .stop],
         .agent_question: [.answer_and_retry, .answer_without_retry, .stop],
         .publish_blocked: [
@@ -30,17 +31,17 @@ import Testing
         // blocked is pinned read-only by signet policy: it offers the
         // empty set, which the contract permits since #96.
         #expect(AttentionFixtures.phase1ActionSets[.blocked] == [])
-        #expect(AttentionFixtures.phase1ActionSets.count == 11)
+        #expect(AttentionFixtures.phase1ActionSets.count == 12)
     }
 
     /// phase1Actions is the enumeration universe the cross-language policy
     /// parity suite walks; if it dropped an action, that action's cells would
     /// go unchecked. Pin it to exactly the union of the per-type sets (every
-    /// action is offered by at least one type) and to a duplicate-free 29.
+    /// action is offered by at least one type) and to a duplicate-free 30.
     @Test func phase1ActionsCoverEveryOfferedActionWithoutDuplicates() {
         let offered = Set(AttentionFixtures.phase1ActionSets.values.flatMap { $0 })
         #expect(Set(AttentionFixtures.phase1Actions) == offered)
-        #expect(AttentionFixtures.phase1Actions.count == 29)
+        #expect(AttentionFixtures.phase1Actions.count == 30)
         #expect(Set(AttentionFixtures.phase1Actions).count == AttentionFixtures.phase1Actions.count)
     }
 
@@ -62,6 +63,7 @@ import Testing
                 "item-review_diminishing_returns",
                 "item-review_dispute",
                 "item-review_contradiction",
+                "item-review_configuration",
                 "item-ready_for_final_review",
                 "item-publish_blocked",
                 "item-run_proposal",

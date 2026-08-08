@@ -193,6 +193,26 @@ var (
 	ErrReviewRecoveryBindingOutsideItem = errors.New("review recovery binding is a review_contradiction semantic")
 	ErrReviewRecoveryBindingMismatch    = errors.New("review recovery binding disagrees with its persisted failure")
 
+	ErrReviewConfigRecoveryBindingMissing     = errors.New("review configuration item lacks its recovery binding")
+	ErrReviewConfigRecoveryBindingOutsideItem = errors.New("review configuration recovery binding is a review_configuration semantic")
+	ErrReviewConfigRecoveryBindingMismatch    = errors.New("review configuration recovery binding disagrees with its persisted authority")
+	ErrReviewConfigSupersessionInvalid        = errors.New("review configuration supersession exceeds the review configuration digest")
+	// ErrReviewConfigRecoveryIneffective classifies every determinate
+	// integrity or policy rejection of a persisted adoption on the read
+	// re-gate (tampered, unbacked, missing referents, moved-on, or
+	// over-broad): the row grants nothing right now, as opposed to an
+	// environmental read failure that should retry. Consumers treat it as
+	// no adoption so the run stays visibly parked instead of error-looping.
+	ErrReviewConfigRecoveryIneffective = errors.New("review configuration recovery cannot currently grant authority")
+	// ErrReviewConfigAdoptionIneffective rejects an adoption at decision
+	// time when the resolved target could not grant authority even if
+	// recorded: accepting it would conclude the item and permanently park
+	// the run behind an ineffective transition (one adoption per failure
+	// row). The item stays open so the operator can activate the matching
+	// revision and retry. This is a usability gate at the decision
+	// boundary; authority is still re-derived on every read.
+	ErrReviewConfigAdoptionIneffective = errors.New("adopted profile does not approve the effective reviewer configuration")
+
 	// Transition failures: how a persisted aggregate may change between its
 	// stored version and an update (the transition validators). A writer maps
 	// these onto its own conflict/stale-write errors at its boundary.

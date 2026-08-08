@@ -1,0 +1,15 @@
+{
+  "run_id": "run-config-recovery",
+  "invocation_id": "review-config-recovery-2",
+  "round": 2,
+  "base_sha": "base",
+  "head_sha": "head",
+  "failure_digest": "sha256:9482b3fae5ea68c9a1ed9383754a5a42a1eea2d00e07543b9be26a4b60ac9532",
+  "repo": "acme/widgets",
+  "repository_id": 7,
+  "superseded_profile_digest": "sha256:7e6fc70712e8dbc24538df4b086536adcd0a6524b6c660b2bd209516905321cc",
+  "superseding_profile_digest": "sha256:bf68f0bbfe861f50279fd6ea699bf8fa1535b89f027cc6da5670213c44338307",
+  "command_id": "command-adopt-review-configuration",
+  "reason": "operator adopted the superseding review configuration",
+  "occurred_at": "2026-08-08T01:03:03Z"
+}
