@@ -47,6 +47,11 @@ type Backend struct {
 	// handoffs would converge on one window (see acquireAuthStoreLease).
 	leaseMu      sync.Mutex
 	activeLeases map[domain.AuthIdentityID]bool
+	// codexReviewMu guards per-run lifecycle gates. A rejected request must not
+	// recover a preparing intent while the in-process launch still creates and
+	// journals resources under that same durable owner.
+	codexReviewMu   sync.Mutex
+	codexReviewRuns map[string]chan struct{}
 }
 
 type conformanceConfiguration struct {
@@ -99,6 +104,7 @@ func New(rt Runtime, cfg Config) (*Backend, error) {
 		runtimeIdentity: runtimeIdentity,
 		initialized:     true,
 		activeLeases:    map[domain.AuthIdentityID]bool{},
+		codexReviewRuns: map[string]chan struct{}{},
 	}, nil
 }
 

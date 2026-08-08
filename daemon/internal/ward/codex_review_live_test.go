@@ -24,6 +24,185 @@ import (
 	"time"
 )
 
+// TestLiveCodexReviewLifecycleCrossesReconstructionStartBoundary drives the
+// complete production launch topology on Apple container. The strict journal
+// is deliberate: before #605's ordering fix its preparing-only resource guard
+// rejects the final reconstruction observations before Start.
+func TestLiveCodexReviewLifecycleCrossesReconstructionStartBoundary(t *testing.T) {
+	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
+		t.Skip("live codex-review lifecycle test skipped: set FREESIDE_WARD_LIVE_TEST=1 (requires macOS, Apple container 1.1.0, `container system start`, FREESIDE_WARD_EXPORTER_IMAGE, and FREESIDE_WARD_CODEX_AGENT_IMAGE)")
+	}
+	reviewImage := os.Getenv("FREESIDE_WARD_CODEX_AGENT_IMAGE")
+	if reviewImage == "" {
+		t.Skip("live codex-review lifecycle test skipped: set FREESIDE_WARD_CODEX_AGENT_IMAGE to the digest-pinned Codex agent image")
+	}
+	bin, err := osexec.LookPath("container")
+	if err != nil {
+		t.Fatalf("container CLI not on PATH: %v", err)
+	}
+	if out, pullErr := osexec.Command(bin, "image", "pull", liveImage).CombinedOutput(); pullErr != nil { //nolint:gosec // fixed args, resolved CLI path
+		t.Logf("image pull (continuing; may be cached): %v: %s", pullErr, out)
+	}
+	exporterImage := liveExporterImage(t)
+	requireExporterGit(t, bin, exporterImage)
+
+	ctx := context.Background()
+	rt := NewCLIRuntime(bin)
+	runID := fmt.Sprintf("livereview-%d", time.Now().Unix())
+	names := codexReviewNames(runID)
+	workspace := namesFor(runID).Workspace
+	t.Cleanup(func() {
+		for _, name := range []string{
+			names.workspaceObserver, names.shadowInitializer, names.shadowObserver,
+			names.snapshotSeeder, names.snapshotObserver, names.reviewContainer,
+		} {
+			_ = rt.StopContainer(ctx, name)
+			_ = rt.DeleteContainer(ctx, name)
+		}
+		_ = rt.DeleteNetwork(ctx, names.network)
+		_ = rt.DeleteVolume(ctx, names.shadowVolume)
+		_ = rt.DeleteVolume(ctx, names.snapshotVolume)
+		_ = rt.DeleteVolume(ctx, workspace)
+	})
+
+	root := t.TempDir()
+	checkout := initLiveSeedCheckout(t, root)
+	if err := os.WriteFile(filepath.Join(checkout, "README.md"), []byte("review fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(checkout, ".agents"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, ".agents", ".keep"), []byte("fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	candidate := commitLiveSeedCheckout(t, checkout)
+	journal := &fakeCodexReviewJournal{}
+	backendConfig := testConfig()
+	backendConfig.ExporterImage = exporterImage
+	backendConfig.SeedRoot = root
+	backendConfig.PollInterval = 500 * time.Millisecond
+	backendConfig.SeedTimeout = 2 * time.Minute
+	backend, err := New(rt, backendConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.PrepareCodexReviewWorkspace(
+		ctx, journal, runID, checkout, candidate, 64,
+	); err != nil {
+		t.Fatalf("PrepareCodexReviewWorkspace: %v", err)
+	}
+
+	reviewConfig, request := testCodexReview(t)
+	reviewConfig.ApprovedImage = reviewImage
+	reviewConfig.ObserverImage = exporterImage
+	reviewConfig.Journal = journal
+	reviewConfig.ProxyURL = ""
+	reviewConfig.VolumeLifecycleLeaser, err = NewRuntimeCodexReviewVolumeLeaser(rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launchSpec := CodexReviewLaunchSpec{
+		RunID: runID, Image: reviewImage, WorkspaceSourceRunID: runID,
+		WorkspaceVolume: workspace, ExpectedHead: candidate.BaseSHA,
+		Prompt: request.Prompt, Boundary: request.Boundary,
+		AuthMode: request.AuthMode, AuthIdentityID: request.AuthIdentityID,
+		AuthSnapshot: request.AuthSnapshot, Instructions: request.Instructions,
+		InstructionFile: request.InstructionFile, InstructionBinding: request.InstructionBinding,
+	}
+	launch, err := backend.CodexReview(ctx, reviewConfig, launchSpec)
+	if err != nil {
+		t.Fatalf("CodexReview through final reconstruction and Start: %v", err)
+	}
+	if journal.intent == nil || journal.intent.State != CodexReviewIntentStarted {
+		t.Fatalf("intent = %+v, want started handoff", journal.intent)
+	}
+	if err := launch.Close(); err != nil {
+		t.Fatalf("close review proxy: %v", err)
+	}
+
+	// #606 tracks Apple container's post-start environment reordering, which
+	// currently makes the ordinary AbortCodexReview identity comparison reject
+	// this otherwise authenticated fixture. Keep #605's live boundary proof
+	// independent of that adjacent bug: use the same durable ownership
+	// fingerprints and exclusive volume lease to reap only this test's objects.
+	intent := *journal.intent
+	owner := Label{Key: ownershipLabelKey, Value: intent.OwnershipToken}
+	if err := backend.reapCodexReviewContainer(ctx, names.reviewContainer,
+		objectClaim{attempted: true, owned: true, fingerprint: launch.Binding.ReviewContainerFingerprint}, owner,
+	); err != nil {
+		t.Fatalf("reap live review container: %v", err)
+	}
+	lease, _, err := reviewConfig.VolumeLifecycleLeaser.RecoverCodexReviewVolumeLease(
+		ctx, owner.Value, codexReviewLeaseVolumes(workspace, names.shadowVolume, names.snapshotVolume),
+	)
+	if err != nil {
+		t.Fatalf("recover live review volume lease: %v", err)
+	}
+	claims := make(map[string]objectClaim, len(intent.Resources))
+	for _, resource := range intent.Resources {
+		claims[resource.Name] = objectClaim{attempted: true, owned: true, fingerprint: resource.Fingerprint}
+	}
+	if err := backend.deleteCodexReviewVolume(ctx, names.shadowVolume, claims[names.shadowVolume], owner); err != nil {
+		t.Fatalf("delete live shadow volume: %v", err)
+	}
+	if err := backend.deleteCodexReviewVolume(ctx, names.snapshotVolume, claims[names.snapshotVolume], owner); err != nil {
+		t.Fatalf("delete live snapshot volume: %v", err)
+	}
+	workspaceOwner := Label{Key: ownershipLabelKey, Value: journal.workspaceBinding.OwnershipToken}
+	if err := backend.deleteCodexReviewVolume(ctx, workspace,
+		objectClaim{attempted: true, owned: true, fingerprint: journal.workspaceBinding.CreationFingerprint},
+		workspaceOwner,
+	); err != nil {
+		t.Fatalf("delete live workspace volume: %v", err)
+	}
+	if err := backend.teardownCodexReviewNetwork(ctx, names.network, claims[names.network], owner); err != nil {
+		t.Fatalf("delete live review network: %v", err)
+	}
+	if err := lease.ReleaseCodexReviewVolumeLease(ctx); err != nil {
+		t.Fatalf("release live review volume lease: %v", err)
+	}
+	if err := journal.CloseCodexReviewIntent(ctx, runID); err != nil {
+		t.Fatalf("close live review intent: %v", err)
+	}
+	if journal.intent.State != CodexReviewIntentClosed {
+		t.Fatalf("intent state after teardown = %q, want closed", journal.intent.State)
+	}
+
+	containers, err := rt.ListContainers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, container := range containers {
+		for _, owned := range []string{
+			names.workspaceObserver, names.shadowInitializer, names.shadowObserver,
+			names.snapshotSeeder, names.snapshotObserver, names.reviewContainer,
+		} {
+			if container.ID == owned {
+				t.Errorf("container %q survived live Codex review teardown", owned)
+			}
+		}
+	}
+	volumes, err := rt.ListVolumes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, volume := range volumes {
+		if volume.Name == workspace || volume.Name == names.shadowVolume || volume.Name == names.snapshotVolume {
+			t.Errorf("volume %q survived live Codex review teardown", volume.Name)
+		}
+	}
+	networks, err := rt.ListNetworks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, network := range networks {
+		if network.Name == names.network {
+			t.Errorf("network %q survived live Codex review teardown", network.Name)
+		}
+	}
+}
+
 func TestLiveCodexReviewSnapshotDeliversExactlyTwoFilesReadOnly(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("live codex-review snapshot test skipped: set FREESIDE_WARD_LIVE_TEST=1 (requires macOS, Apple container 1.1.0, `container system start`, and the pinned alpine:3.22 image)")

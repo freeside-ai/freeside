@@ -334,6 +334,24 @@ func (tx *ReadTx) GetCodexReviewOutcome(
 	}, nil
 }
 
+func (tx *ReadTx) ListCodexReviewOutcomeIDs(ctx context.Context) ([]string, error) {
+	rows, err := tx.tx.QueryContext(ctx,
+		`SELECT invocation_id FROM codex_review_outcomes ORDER BY invocation_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck // read-only query
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (tx *InternalTx) MarkCodexReviewOutcomeReady(
 	ctx context.Context, invocationID string,
 ) error {

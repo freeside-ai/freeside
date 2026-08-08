@@ -22,6 +22,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 type fakeCodexReviewJournal struct {
@@ -92,6 +93,15 @@ func (j *fakeCodexReviewJournal) GetCodexReviewOutcome(
 		}
 		return nil
 	}()
+}
+
+func (j *fakeCodexReviewJournal) ListCodexReviewOutcomeIDs(_ context.Context) ([]string, error) {
+	ids := make([]string, 0, len(j.outcomes))
+	for id := range j.outcomes {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids, nil
 }
 
 func (j *fakeCodexReviewJournal) MarkCodexReviewOutcomeReady(
@@ -317,51 +327,115 @@ func (j *fakeCodexReviewJournal) MarkCodexReviewIntentResource(
 	if j.intent == nil || j.intent.RunID != runID {
 		return ErrCodexReviewIntentNotFound
 	}
+	if j.intent.State != CodexReviewIntentPreparing {
+		return errors.Join(ErrConformance, store.ErrImmutableConflict)
+	}
 	for i := range j.intent.Resources {
 		if j.intent.Resources[i].Name == resource.Name {
 			j.intent.Resources[i] = resource
 			return nil
 		}
 	}
-	return errors.New("unknown Codex review intent resource")
+	return errors.Join(ErrConformance, domain.ErrParentKeyMismatch)
+}
+
+func TestFakeCodexReviewJournalRejectsResourceMutationAfterPreparing(t *testing.T) {
+	for _, state := range AllCodexReviewIntentStates {
+		t.Run(string(state), func(t *testing.T) {
+			journal := &fakeCodexReviewJournal{intent: &CodexReviewLaunchIntent{
+				RunID: "review-1", State: state,
+				Resources: []CodexReviewIntentResource{{Name: "resource"}},
+			}}
+			err := journal.MarkCodexReviewIntentResource(context.Background(), "review-1",
+				CodexReviewIntentResource{Name: "resource", Fingerprint: "fresh"})
+			if state == CodexReviewIntentPreparing {
+				if err != nil || journal.intent.Resources[0].Fingerprint != "fresh" {
+					t.Fatalf("preparing resource mutation = %v, intent %+v; want success", err, journal.intent)
+				}
+				return
+			}
+			if !errors.Is(err, ErrConformance) || !errors.Is(err, store.ErrImmutableConflict) {
+				t.Fatalf("%s resource mutation = %v, want conformance immutable conflict", state, err)
+			}
+		})
+	}
+}
+
+func (j *fakeCodexReviewJournal) transitionCodexReviewIntent(
+	runID string, from []CodexReviewIntentState, to CodexReviewIntentState,
+) error {
+	if j.intent == nil || j.intent.RunID != runID {
+		return ErrCodexReviewIntentNotFound
+	}
+	if j.intent.State == to {
+		return nil
+	}
+	if !slices.Contains(from, j.intent.State) {
+		return errors.Join(ErrConformance, store.ErrImmutableConflict)
+	}
+	j.intent.State = to
+	return nil
 }
 
 func (j *fakeCodexReviewJournal) MarkCodexReviewIntentPrepared(_ context.Context, runID string) error {
 	if j.intent == nil || j.intent.RunID != runID {
 		return ErrCodexReviewIntentNotFound
 	}
-	j.intent.State = CodexReviewIntentPrepared
-	return nil
+	if _, rejected := j.outcomes[runID]; rejected {
+		return errors.Join(ErrConformance, store.ErrImmutableConflict)
+	}
+	return j.transitionCodexReviewIntent(
+		runID, []CodexReviewIntentState{CodexReviewIntentPreparing}, CodexReviewIntentPrepared,
+	)
+}
+
+func TestBackendCodexReviewDoesNotPrepareAfterRejectedOutcome(t *testing.T) {
+	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
+	journal.onGet = func() {
+		if journal.outcomes == nil {
+			journal.outcomes = make(map[string]CodexReviewSourceOutcome)
+		}
+		journal.outcomes[launch.RunID] = CodexReviewSourceOutcome{
+			InvocationID: domain.InvocationID(launch.RunID),
+			FailureClass: domain.ReviewFailureContradiction,
+			Failure:      "request rejected",
+		}
+	}
+	if got, err := backend.CodexReview(context.Background(), cfg, launch); got != nil ||
+		!errors.Is(err, ErrConformance) || errors.Is(err, ErrCodexReviewOperational) {
+		t.Fatalf("CodexReview after rejection fence = (%v, %v), want conformance refusal", got, err)
+	}
+	if journal.intent == nil || journal.intent.State != CodexReviewIntentPreparing {
+		t.Fatalf("intent = %+v, want preparing", journal.intent)
+	}
+	if rt.callIndex("start-container "+codexReviewContainerName(launch.RunID)) != -1 {
+		t.Fatal("review container started after the rejection fence")
+	}
 }
 
 func (j *fakeCodexReviewJournal) MarkCodexReviewIntentStarting(_ context.Context, runID string) error {
 	if j.failStarting != nil {
 		return j.failStarting
 	}
-	if j.intent == nil || j.intent.RunID != runID {
-		return ErrCodexReviewIntentNotFound
-	}
-	j.intent.State = CodexReviewIntentStarting
-	return nil
+	return j.transitionCodexReviewIntent(
+		runID, []CodexReviewIntentState{CodexReviewIntentPrepared}, CodexReviewIntentStarting,
+	)
 }
 
 func (j *fakeCodexReviewJournal) MarkCodexReviewIntentStarted(_ context.Context, runID string) error {
 	if j.failStarted != nil {
 		return j.failStarted
 	}
-	if j.intent == nil || j.intent.RunID != runID {
-		return ErrCodexReviewIntentNotFound
-	}
-	j.intent.State = CodexReviewIntentStarted
-	return nil
+	return j.transitionCodexReviewIntent(
+		runID, []CodexReviewIntentState{CodexReviewIntentStarting}, CodexReviewIntentStarted,
+	)
 }
 
 func (j *fakeCodexReviewJournal) CloseCodexReviewIntent(_ context.Context, runID string) error {
-	if j.intent == nil || j.intent.RunID != runID {
-		return ErrCodexReviewIntentNotFound
-	}
-	j.intent.State = CodexReviewIntentClosed
-	return nil
+	return j.transitionCodexReviewIntent(runID, []CodexReviewIntentState{
+		CodexReviewIntentPreparing, CodexReviewIntentPrepared,
+		CodexReviewIntentStarting, CodexReviewIntentStarted,
+	}, CodexReviewIntentClosed)
 }
 
 func (j *fakeCodexReviewJournal) PutCodexReviewBinding(
@@ -375,13 +449,16 @@ func (j *fakeCodexReviewJournal) PutCodexReviewBinding(
 }
 
 func (j *fakeCodexReviewJournal) GetCodexReviewBinding(
-	_ context.Context, _ string,
+	_ context.Context, runID string,
 ) (CodexReviewJournalBinding, error) {
 	if j.failGetBinding != nil {
 		return CodexReviewJournalBinding{}, j.failGetBinding
 	}
 	if j.onGet != nil {
 		j.onGet()
+	}
+	if j.binding.RunID != runID {
+		return CodexReviewJournalBinding{}, ErrCodexReviewBindingNotFound
 	}
 	return cloneCodexReviewBinding(j.binding), nil
 }
@@ -1453,6 +1530,34 @@ func TestCodexReviewRecoveryCleansWorkspaceWithoutLaunchIntent(t *testing.T) {
 				t.Fatalf("prepare same invocation after recovery = %#v, %v", binding, err)
 			}
 		})
+	}
+}
+
+func TestCodexReviewRecoveryMarksFenceOnlyRejectedOutcomeReady(t *testing.T) {
+	ctx := context.Background()
+	fx := newHandoffFixture(t)
+	backend := fx.backend(t)
+	cfg, _ := testCodexReview(t)
+	leaser, err := NewRuntimeCodexReviewVolumeLeaser(fx.rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const runID = "review-fence-only-rejection"
+	journal := &fakeCodexReviewJournal{outcomes: map[string]CodexReviewSourceOutcome{
+		runID: {
+			InvocationID: domain.InvocationID(runID), FailureClass: domain.ReviewFailureContradiction,
+			Failure: "rejected request fenced before launch intent", AbortRequired: true,
+		},
+	}}
+	recovery, err := NewCodexReviewRecovery(backend, journal, leaser, cfg.InputRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recovery.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !journal.ready[runID] {
+		t.Fatal("fence-only rejected outcome remained unready after recovery")
 	}
 }
 

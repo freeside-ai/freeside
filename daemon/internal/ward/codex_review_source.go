@@ -103,7 +103,10 @@ type CodexReviewSource struct {
 }
 
 func NewCodexReviewSource(cfg CodexReviewSourceConfig) (*CodexReviewSource, error) {
-	if cfg.Backend == nil || cfg.Journal == nil || cfg.Review.Journal != cfg.Journal ||
+	if cfg.Backend == nil || !cfg.Backend.initialized {
+		return nil, fmt.Errorf("codex review source: %w: backend is not initialized", ErrInvalidConfig)
+	}
+	if cfg.Journal == nil || cfg.Review.Journal != cfg.Journal ||
 		cfg.Review.VolumeLifecycleLeaser == nil || cfg.WorkspaceSizeMB <= 0 ||
 		cfg.AuthIdentityID == "" || cfg.AuthSnapshot == "" || cfg.InstructionArtifacts == nil ||
 		!contentaddr.Valid(string(cfg.ConfigurationDigest)) || cfg.CostOwner == "" {
@@ -152,6 +155,17 @@ func (s *CodexReviewSource) RequestReview(
 func (s *CodexReviewSource) startRequestedReview(
 	ctx context.Context, id domain.InvocationID, req exec.ReviewRequest,
 ) error {
+	releaseRun, err := s.cfg.Backend.acquireCodexReviewRun(ctx, string(id))
+	if err != nil {
+		return &exec.ReviewSourceFailure{
+			Class: domain.ReviewFailureTransient,
+			Err:   codexReviewOperationalf("acquire Codex review source run gate: %v", err),
+		}
+	}
+	defer releaseRun()
+	if err := codexReviewOutcomeFence(ctx, s.cfg.Journal, string(id)); err != nil {
+		return &exec.ReviewSourceFailure{Class: classifyCodexLaunchFailure(err), Err: err}
+	}
 	candidate := domain.BaseRevision{
 		Repo: req.Repo, RepositoryID: req.RepositoryID, BaseRef: req.BaseRef, BaseSHA: req.HeadSHA,
 	}
@@ -183,7 +197,7 @@ func (s *CodexReviewSource) startRequestedReview(
 		}
 		return &exec.ReviewSourceFailure{Class: class, Err: err}
 	}
-	launch, err := s.cfg.Backend.CodexReview(ctx, s.cfg.Review, CodexReviewLaunchSpec{
+	launch, err := s.cfg.Backend.codexReview(ctx, s.cfg.Review, CodexReviewLaunchSpec{
 		RunID: string(id), Image: s.cfg.Review.ApprovedImage,
 		WorkspaceSourceRunID: string(id), WorkspaceVolume: workspace.Volume,
 		ExpectedHead: req.HeadSHA, Prompt: codexProductionReviewPrompt(req),
@@ -1024,11 +1038,11 @@ func (s *CodexReviewSource) rejectedOutcomeStatus(
 // rejected request could have influenced (the workspace reap and the
 // outcome row are re-checked here for the same reason). A never-started
 // or already-closed invocation reaps at most its prepared workspace
-// volume. Only the pre-binding preparing state stays loud without
-// teardown: no durable binding exists yet to authenticate one, so it
-// lands on the recorded topology-contradiction boundary. A nil return
-// means nothing this source started remains live, and the caller reports
-// the rejection itself.
+// volume. Preparing spans both sides of binding persistence, so rejection
+// first writes an outcome that atomically fences the preparing-to-prepared
+// transition before cleanup decides which durable topology now exists.
+// A nil return means nothing this source started remains live, and the
+// caller reports the rejection itself.
 func (s *CodexReviewSource) reconcileRejectedRequest(
 	ctx context.Context, id domain.InvocationID,
 ) error {
@@ -1043,85 +1057,80 @@ func (s *CodexReviewSource) reconcileRejectedRequest(
 		if ready {
 			return nil
 		}
-		// abort=true regardless of the decoded AbortRequired bit: in this
-		// threat model the row is rewritable, a flipped bit against a still
-		// running container would refuse teardown forever, and abort also
-		// reaps an already stopped topology.
-		if cleanupErr := s.finishCleanup(ctx, id, true); cleanupErr != nil {
-			return &exec.ReviewSourceFailure{
-				Class: classifyCodexObservationFailure(cleanupErr), Err: cleanupErr,
-			}
-		}
-		return nil
-	}
-	if !errors.Is(err, ErrCodexReviewOutcomeNotFound) {
+	} else if !errors.Is(err, ErrCodexReviewOutcomeNotFound) {
 		if errors.Is(err, ErrCodexReviewOutcomeRejected) {
 			return s.rejectPersistedOutcome(ctx, id, err)
 		}
 		return &exec.ReviewSourceFailure{Class: domain.ReviewFailureTransient, Err: err}
-	}
-	intent, err := s.cfg.Journal.GetCodexReviewIntent(ctx, string(id))
-	if err == nil && intent.validateIdentity(string(id)) != nil {
-		return &exec.ReviewSourceFailure{
-			Class: domain.ReviewFailureContradiction,
-			Err:   errors.New("persisted Codex review launch intent is invalid"),
-		}
-	}
-	if errors.Is(err, ErrCodexReviewIntentNotFound) ||
-		(err == nil && intent.State == CodexReviewIntentClosed) {
-		if cleanupErr := s.cfg.Backend.CleanupCodexReviewWorkspace(
-			ctx, s.cfg.Journal, string(id),
-		); cleanupErr != nil && !errors.Is(cleanupErr, ErrCodexReviewWorkspaceNotFound) {
-			return &exec.ReviewSourceFailure{
-				Class: classifyCodexObservationFailure(cleanupErr), Err: cleanupErr,
-			}
-		}
-		return nil
-	}
-	if err != nil {
-		return &exec.ReviewSourceFailure{Class: classifyCodexObservationFailure(err), Err: err}
-	}
-	// The intent decoded cleanly (validateIdentity passed, so State is a
-	// registered member) and the closed and not-found cases settled above,
-	// leaving the pre-terminal states. Dispatch is a no-default switch so a
-	// future durable state cannot silently join the post-launch rejection arm:
-	// exhaustive forces it to be classified here.
-	switch intent.State {
-	case CodexReviewIntentPreparing:
-		return &exec.ReviewSourceFailure{
-			Class: domain.ReviewFailureContradiction,
-			Err: fmt.Errorf(
-				"codex review invocation %s was rejected in pre-binding state %q; no durable binding exists yet to authenticate a teardown",
-				id, intent.State,
-			),
-		}
-	case CodexReviewIntentPrepared, CodexReviewIntentStarting, CodexReviewIntentStarted:
+	} else {
+		// Persist the fence before waiting for an in-process launch. It must also
+		// exist when no intent is visible yet: a launch holding the run gate may
+		// not have reached BeginIntent, and its prepared transition must still
+		// lose to this rejection.
 		rejected := CodexReviewSourceOutcome{
 			InvocationID:  id,
 			FailureClass:  domain.ReviewFailureContradiction,
-			Failure:       "persisted Codex review request was rejected after launch; the launched invocation is aborted",
+			Failure:       "persisted Codex review request was rejected after launch admission; any prepared invocation is aborted",
 			AbortRequired: true,
 		}
 		if err := s.cfg.Journal.PutCodexReviewOutcome(ctx, string(id), rejected); err != nil {
 			return codexReviewOutcomeWriteFailure(err)
 		}
-		if cleanupErr := s.finishCleanup(ctx, id, true); cleanupErr != nil {
-			return &exec.ReviewSourceFailure{
-				Class: classifyCodexObservationFailure(cleanupErr), Err: cleanupErr,
+	}
+
+	releaseRun, err := s.cfg.Backend.acquireCodexReviewRun(ctx, string(id))
+	if err != nil {
+		return &exec.ReviewSourceFailure{
+			Class: domain.ReviewFailureTransient,
+			Err:   codexReviewOperationalf("acquire Codex review rejection run gate: %v", err),
+		}
+	}
+	defer releaseRun()
+	// abort=true regardless of the decoded AbortRequired bit: in this threat
+	// model the row is rewritable, a flipped bit against a live container would
+	// refuse teardown forever, and abort also reaps an already stopped topology.
+	if cleanupErr := s.finishRejectedRequestCleanup(ctx, id); cleanupErr != nil {
+		return &exec.ReviewSourceFailure{
+			Class: classifyCodexObservationFailure(cleanupErr), Err: cleanupErr,
+		}
+	}
+	return nil
+}
+
+func (s *CodexReviewSource) finishRejectedRequestCleanup(
+	ctx context.Context, id domain.InvocationID,
+) error {
+	intent, err := s.cfg.Journal.GetCodexReviewIntent(ctx, string(id))
+	if errors.Is(err, ErrCodexReviewIntentNotFound) {
+		if cleanupErr := s.cfg.Backend.CleanupCodexReviewWorkspace(
+			ctx, s.cfg.Journal, string(id),
+		); cleanupErr != nil && !errors.Is(cleanupErr, ErrCodexReviewWorkspaceNotFound) {
+			return cleanupErr
+		}
+	} else if err != nil {
+		return err
+	} else if intent.validateIdentity(string(id)) != nil {
+		return failf(CheckControlPlaneIsolation, "persisted Codex review launch intent is invalid")
+	} else {
+		switch intent.State {
+		case CodexReviewIntentPreparing, CodexReviewIntentPrepared, CodexReviewIntentStarting:
+			if err := s.cfg.Backend.recoverCodexReviewIntent(ctx, s.cfg.Review, intent, true); err != nil {
+				return err
+			}
+		case CodexReviewIntentStarted:
+			return s.finishCleanup(ctx, id, true)
+		case CodexReviewIntentClosed:
+			if cleanupErr := s.cfg.Backend.CleanupCodexReviewWorkspace(
+				ctx, s.cfg.Journal, string(id),
+			); cleanupErr != nil && !errors.Is(cleanupErr, ErrCodexReviewWorkspaceNotFound) {
+				return cleanupErr
 			}
 		}
-		return nil
-	case CodexReviewIntentClosed:
-		// Unreachable: a closed intent settles with the not-found branch above.
-		// Listed to satisfy exhaustive without a default; falls to the
-		// fail-closed return below if control ever reaches it.
 	}
-	// Fail closed for the invalid zero value (already rejected upstream by
-	// validateIdentity) and any member the switch leaves unhandled.
-	return &exec.ReviewSourceFailure{
-		Class: domain.ReviewFailureContradiction,
-		Err:   fmt.Errorf("codex review invocation %s carries unhandled launch state %q", id, intent.State),
+	if err := removeCodexReviewInstructionSnapshot(s.cfg.Review.InputRoot, string(id)); err != nil {
+		return err
 	}
+	return s.cfg.Journal.MarkCodexReviewOutcomeReady(ctx, string(id))
 }
 
 // classifyCodexLaunchFailure maps a pre-start (workspace-preparation and ward

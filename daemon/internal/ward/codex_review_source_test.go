@@ -746,6 +746,18 @@ func codexReviewSourceConfigForTest(
 	return sourceConfig
 }
 
+func TestNewCodexReviewSourceRejectsUninitializedBackend(t *testing.T) {
+	fx := newHandoffFixture(t)
+	backend := fx.backend(t)
+	cfg, request := testCodexReview(t)
+	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, request, &fakeCodexReviewJournal{})
+	sourceConfig.Backend = &Backend{}
+
+	if _, err := NewCodexReviewSource(sourceConfig); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("NewCodexReviewSource(uninitialized backend) = %v, want ErrInvalidConfig", err)
+	}
+}
+
 func TestCodexReviewSourceRunsWardLifecycleAndCleansBeforePoll(t *testing.T) {
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
@@ -1278,7 +1290,7 @@ func TestCodexReviewSourceAbortsPreHandoffLaunchForRejectedRequest(t *testing.T)
 	}
 }
 
-func TestCodexReviewSourceRejectedRequestStaysLoudBeforeBinding(t *testing.T) {
+func TestCodexReviewSourceRejectedRequestFencesAndRecoversBeforeBinding(t *testing.T) {
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
@@ -1310,22 +1322,105 @@ func TestCodexReviewSourceRejectedRequestStaysLoudBeforeBinding(t *testing.T) {
 	if err := journal.PutCodexReviewRequest(ctx, string(id), rewritten); err != nil {
 		t.Fatal(err)
 	}
-	// Before the durable binding exists nothing can authenticate a teardown,
-	// so the rejection stays loud without one: the recorded
-	// topology-contradiction boundary.
+	// A rejection before the binding is durable fences the prepared transition
+	// through the outcome row, then cleans the pre-start topology from the
+	// independently authenticated intent.
 	journal.intent.State = CodexReviewIntentPreparing
+	journal.binding = CodexReviewJournalBinding{}
 	var failure *exec.ReviewSourceFailure
 	err = source.VerifyRequestAuthority(ctx, id, authority)
 	if !errors.As(err, &failure) || failure.Class != domain.ReviewFailureContradiction ||
-		!strings.Contains(failure.Err.Error(), "pre-binding") {
+		!errors.Is(failure.Err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("pre-binding rejection = %v", err)
 	}
-	if _, _, err := journal.GetCodexReviewOutcome(ctx, string(id)); !errors.Is(err, ErrCodexReviewOutcomeNotFound) {
-		t.Fatalf("pre-binding rejection outcome = %v", err)
+	if outcome, ready, err := journal.GetCodexReviewOutcome(ctx, string(id)); err != nil ||
+		!ready || !outcome.AbortRequired {
+		t.Fatalf("pre-binding rejection outcome = %#v, ready=%v, %v", outcome, ready, err)
+	}
+	containers, _ := fx.rt.ListContainers(ctx)
+	volumes, _ := fx.rt.ListVolumes(ctx)
+	networks, _ := fx.rt.ListNetworks(ctx)
+	if len(containers) != 0 || len(volumes) != 0 || len(networks) != 0 {
+		t.Fatalf("pre-binding rejected topology leaked: containers=%v volumes=%v networks=%v",
+			containers, volumes, networks)
+	}
+}
+
+func TestCodexReviewSourceRejectedPreparingRequestAbortsWhenBindingExists(t *testing.T) {
+	ctx := context.Background()
+	fx := newHandoffFixture(t)
+	seedSpec := fx.seed(t)
+	backend := fx.backend(t)
+	cfg, requestSpec := testCodexReview(t)
+	journal := &fakeCodexReviewJournal{}
+	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
+	source, err := NewCodexReviewSource(sourceConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := domain.InvocationID("review-run-rejected-binding")
+	request := exec.ReviewRequest{
+		RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
+		RequestedAt: codexReviewEpoch.Add(-time.Minute),
+	}
+	if err := source.RequestReview(ctx, id, request); err != nil {
+		t.Fatal(err)
+	}
+	authority, err := request.AuthorityDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewritten := request
+	rewritten.HeadSHA = strings.Repeat("b", 40)
+	if err := journal.PutCodexReviewRequest(ctx, string(id), rewritten); err != nil {
+		t.Fatal(err)
+	}
+	// #605 keeps the intent preparing through final reconstruction, after the
+	// binding is durable. The rejection outcome fences preparation while the
+	// intent and binding authenticate abort cleanup.
+	journal.intent.State = CodexReviewIntentPreparing
+	releaseRun, err := backend.acquireCodexReviewRun(ctx, string(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	var failure *exec.ReviewSourceFailure
+	err = source.VerifyRequestAuthority(blockedCtx, id, authority)
+	if !errors.As(err, &failure) || failure.Class != domain.ReviewFailureTransient ||
+		!errors.Is(failure.Err, ErrCodexReviewOperational) {
+		t.Fatalf("rejection cleanup while launch active = %v, want transient wait", err)
+	}
+	outcome, ready, err := journal.GetCodexReviewOutcome(ctx, string(id))
+	if err != nil || ready || !outcome.AbortRequired {
+		t.Fatalf("blocked rejection outcome = %#v, ready=%v, %v", outcome, ready, err)
 	}
 	containers, _ := fx.rt.ListContainers(ctx)
 	if len(containers) == 0 {
-		t.Fatal("pre-binding rejection must not tear down an unauthenticatable topology")
+		t.Fatal("rejection cleanup ran before the active launch gate released")
+	}
+	releaseRun()
+
+	failure = nil
+	err = source.VerifyRequestAuthority(ctx, id, authority)
+	if !errors.As(err, &failure) || failure.Class != domain.ReviewFailureContradiction ||
+		!errors.Is(failure.Err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("binding-present preparing rejection = %v", err)
+	}
+	outcome, ready, err = journal.GetCodexReviewOutcome(ctx, string(id))
+	if err != nil || !ready || !outcome.AbortRequired ||
+		outcome.FailureClass != domain.ReviewFailureContradiction {
+		t.Fatalf("binding-present rejection outcome = %#v, ready=%v, %v", outcome, ready, err)
+	}
+	containers, _ = fx.rt.ListContainers(ctx)
+	volumes, _ := fx.rt.ListVolumes(ctx)
+	networks, _ := fx.rt.ListNetworks(ctx)
+	if len(containers) != 0 || len(volumes) != 0 || len(networks) != 0 {
+		t.Fatalf("binding-present rejected topology leaked: containers=%v volumes=%v networks=%v",
+			containers, volumes, networks)
 	}
 }
 
@@ -1428,9 +1523,8 @@ func TestCodexReviewSourceReapsPreparedWorkspaceForRejectedUnstartedRequest(t *t
 		RequestedAt: codexReviewEpoch.Add(-time.Minute),
 	}
 	// Persist and prepare without ever launching: the window between workspace
-	// preparation and container start. A rejection here reaps the prepared
-	// volume and needs no durable outcome, because nothing credential-bearing
-	// ever existed.
+	// preparation and container start. A rejection here durably fences any
+	// concurrent launch before reaping the prepared volume.
 	if err := journal.PutCodexReviewRequest(ctx, string(id), request); err != nil {
 		t.Fatal(err)
 	}
@@ -1449,8 +1543,9 @@ func TestCodexReviewSourceReapsPreparedWorkspaceForRejectedUnstartedRequest(t *t
 		!errors.Is(failure.Err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("unstarted rejection = %v", err)
 	}
-	if _, _, err := journal.GetCodexReviewOutcome(ctx, string(id)); !errors.Is(err, ErrCodexReviewOutcomeNotFound) {
-		t.Fatalf("unstarted rejection outcome = %v", err)
+	if outcome, ready, err := journal.GetCodexReviewOutcome(ctx, string(id)); err != nil ||
+		!ready || !outcome.AbortRequired {
+		t.Fatalf("unstarted rejection outcome = %#v, ready=%v, %v", outcome, ready, err)
 	}
 	volumes, _ := fx.rt.ListVolumes(ctx)
 	if len(volumes) != 0 {
@@ -1466,6 +1561,15 @@ func TestCodexReviewSourceReapsPreparedWorkspaceForRejectedUnstartedRequest(t *t
 	if !errors.As(err, &failure) || failure.Class != domain.ReviewFailureContradiction ||
 		!errors.Is(failure.Err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("bare rejection = %v", err)
+	}
+	if outcome, ready, err := journal.GetCodexReviewOutcome(ctx, string(bare)); err != nil ||
+		!ready || !outcome.AbortRequired {
+		t.Fatalf("bare rejection outcome = %#v, ready=%v, %v", outcome, ready, err)
+	}
+	failure = nil
+	if err := source.startRequestedReview(ctx, bare, request); !errors.As(err, &failure) ||
+		failure.Class != domain.ReviewFailureContradiction {
+		t.Fatalf("launch after bare rejection fence = %v, want contradiction", err)
 	}
 }
 
@@ -2442,6 +2546,9 @@ func TestCodexReviewSourcePollMarksPersistedFailureTerminal(t *testing.T) {
 }
 
 func TestCodexReviewSourceVerifyRejectsSwappedRequestAuthority(t *testing.T) {
+	fx := newHandoffFixture(t)
+	backend := fx.backend(t)
+	review, _ := testCodexReview(t)
 	id := domain.InvocationID("review-run-authority-1")
 	request := exec.ReviewRequest{
 		RunID: "run-1", Round: 1, Repo: "owner/repo", RepositoryID: 42, BaseRef: "main",
@@ -2482,9 +2589,12 @@ func TestCodexReviewSourceVerifyRejectsSwappedRequestAuthority(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			swapped := request
 			mutate(&swapped)
-			source := &CodexReviewSource{cfg: CodexReviewSourceConfig{Journal: &fakeCodexReviewJournal{
+			journal := &fakeCodexReviewJournal{
 				requests: map[string]exec.ReviewRequest{string(id): swapped},
-			}}}
+			}
+			source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
+				Backend: backend, Review: review, Journal: journal,
+			}}
 			if err := source.VerifyRequestAuthority(t.Context(), id, expected); !errors.Is(err, domain.ErrParentKeyMismatch) {
 				t.Fatalf("swapped request authority verification = %v", err)
 			}
