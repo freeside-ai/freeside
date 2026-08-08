@@ -1381,8 +1381,12 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if blocked != nil {
 		return *blocked, nil
 	}
+	adoptedProfile, err := w.adoptedReviewProfileDigest(ctx, binding)
+	if err != nil {
+		return productionTaskOutcome{}, err
+	}
 	if found {
-		candidate := productionCandidate(task, binding, checkpoint)
+		candidate := productionCandidate(task, binding, checkpoint, adoptedProfile)
 		if readyExists {
 			published, err := w.loadReadyPublicationOutcome(
 				ctx, task, binding, checkpoint, candidate,
@@ -1469,7 +1473,11 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		// Fall through to the publication path below.
 	}
 
-	candidate := productionCandidate(task, binding, checkpoint)
+	adoptedProfile, adoptedErr := w.adoptedReviewProfileDigest(ctx, binding)
+	if adoptedErr != nil {
+		return productionTaskOutcome{}, adoptedErr
+	}
+	candidate := productionCandidate(task, binding, checkpoint, adoptedProfile)
 	if published, found, err := w.loadPublicationOutcome(
 		ctx, task, candidate, w.publisher.VerifyOutcome,
 	); err != nil {
@@ -1738,34 +1746,40 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		recoveredContradiction = true
 	}
 	if binding.profile.Review.ConfigDigest != w.reviewConfigurationDigest {
-		if latestFailure != nil && latestFailure.Class == domain.ReviewFailureConfiguration &&
-			(latestRecord == nil || latestFailure.Round > latestRecord.Round) {
-			record := domain.ReviewRecord{
-				InvocationID: latestFailure.InvocationID, RunID: latestFailure.RunID,
-				Round: latestFailure.Round, BaseSHA: latestFailure.BaseSHA, HeadSHA: latestFailure.HeadSHA,
+		// The gate consults the adoption whenever the pinned profile disagrees
+		// with the effective configuration, not only while the parked failure
+		// outranks the latest review row: after the adopted round persists its
+		// record (or a later transient failure), a crash-recovered pass must
+		// still fall through here instead of re-recording a configuration
+		// failure and re-parking an already recovered run.
+		approved, err := w.reviewConfigurationApproved(ctx, binding)
+		if err != nil {
+			return productionReviewPending, err
+		}
+		if !approved {
+			if latestFailure != nil && latestFailure.Class == domain.ReviewFailureConfiguration &&
+				(latestRecord == nil || latestFailure.Round > latestRecord.Round) {
+				return w.parkReviewConfiguration(ctx, task, binding, *latestFailure)
 			}
-			if err := w.putReviewAttention(ctx, task, record,
-				"Codex review stopped because the effective reviewer configuration is not approved.",
-				domain.AttentionReviewDispute,
-			); err != nil {
-				return productionReviewPending, err
+			round := 1
+			if latestRecord != nil {
+				round = latestRecord.Round + 1
 			}
-			return productionReviewEscalated, nil
+			if latestFailure != nil && latestFailure.Round >= round {
+				round = latestFailure.Round + 1
+			}
+			return w.recordReviewSourceFailure(ctx, task,
+				ProductionReviewInvocationID(task.RunID, round), round,
+				binding.admission.Base.BaseSHA, task.HeadSHA,
+				&exec.ReviewSourceFailure{
+					Class: domain.ReviewFailureConfiguration,
+					Err:   domain.ErrTrustProfileSuperseded,
+				})
 		}
-		round := 1
-		if latestRecord != nil {
-			round = latestRecord.Round + 1
-		}
-		if latestFailure != nil && latestFailure.Round >= round {
-			round = latestFailure.Round + 1
-		}
-		return w.recordReviewSourceFailure(ctx, task,
-			ProductionReviewInvocationID(task.RunID, round), round,
-			binding.admission.Base.BaseSHA, task.HeadSHA,
-			&exec.ReviewSourceFailure{
-				Class: domain.ReviewFailureConfiguration,
-				Err:   domain.ErrTrustProfileSuperseded,
-			})
+		// approved: the operator-authorized supersession approves the
+		// effective configuration, so the gate falls through; when the latest
+		// row is still the parked failure, the round machinery below re-gates
+		// the exact-failure adoption binding before advancing past it.
 	}
 	if latestRecord != nil && latestRecord.ConfigurationDigest == w.reviewConfigurationDigest &&
 		(latestFailure == nil || latestRecord.Round > latestFailure.Round) {
@@ -1828,8 +1842,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			)
 		}
 		round = latestFailure.Round + 1
-		if latestFailure.Class == domain.ReviewFailureConfiguration ||
-			latestFailure.Class == domain.ReviewFailureQuota {
+		if latestFailure.Class == domain.ReviewFailureQuota {
 			record := domain.ReviewRecord{
 				InvocationID: latestFailure.InvocationID, RunID: latestFailure.RunID,
 				Round: latestFailure.Round, BaseSHA: latestFailure.BaseSHA, HeadSHA: latestFailure.HeadSHA,
@@ -1841,6 +1854,20 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 				return productionReviewPending, err
 			}
 			return productionReviewEscalated, nil
+		}
+		if latestFailure.Class == domain.ReviewFailureConfiguration {
+			adopted, err := w.reviewConfigurationRecovered(ctx, binding, *latestFailure)
+			if err != nil {
+				return productionReviewPending, err
+			}
+			if !adopted {
+				return w.parkReviewConfiguration(ctx, task, binding, *latestFailure)
+			}
+			// The adopted failure row's round may sit exactly at the hard
+			// limit; the exhaustion item below must then live under the
+			// recovered-identity namespace, because this round's ordinary
+			// identity already carries the concluded review_configuration item.
+			recoveredContradiction = true
 		}
 		if latestFailure.Class == domain.ReviewFailureTransient {
 			retryAt := latestFailure.ObservedAt.Add(reviewRetryDelay(latestFailure.Round))
@@ -2286,7 +2313,7 @@ func (w *productionPublicationWorkflow) recordReviewSourceFailure(
 		// row (which the write above cleared).
 		w.reviewRetryAfter[task.RunID] = w.now().Add(reviewRetryDelay(round))
 		return productionReviewPending, nil
-	case domain.ReviewFailureConfiguration, domain.ReviewFailureQuota:
+	case domain.ReviewFailureQuota:
 		record := domain.ReviewRecord{
 			InvocationID: failure.InvocationID, RunID: failure.RunID,
 			Round: failure.Round, BaseSHA: failure.BaseSHA, HeadSHA: failure.HeadSHA,
@@ -2298,6 +2325,14 @@ func (w *productionPublicationWorkflow) recordReviewSourceFailure(
 			return productionReviewPending, err
 		}
 		return productionReviewEscalated, nil
+	case domain.ReviewFailureConfiguration:
+		// Parked, never terminalized (issue #611, revising issue #527
+		// decision 3 for this class: the approved configuration cannot always
+		// be restored, because the change may itself be a required safety
+		// fix). The run stays tickable; the review gate raises the
+		// recovery-bearing item with the trust binding in scope on the next
+		// reconcile and holds the run until an operator decision.
+		return productionReviewPending, nil
 	case domain.ReviewFailureContradiction:
 		if err := w.putReviewContradictionAttention(ctx, task, failure); err != nil {
 			return productionReviewPending, err
@@ -2397,6 +2432,262 @@ func (w *productionPublicationWorkflow) putReviewContradictionAttention(
 	return w.attention.PutItem(ctx, item)
 }
 
+// reviewConfigurationAdoption returns the run's operator-authorized profile
+// supersession when one is effective right now. Every trust fact is
+// re-derived on this read: the transition itself re-gates its command, item
+// binding, immutable failure row, latest-profile status, and
+// review-configuration-only delta inside the store; this helper adds the run
+// binding (the superseded revision must be the run's admission-pinned
+// profile) and the effective-configuration equality (the adopted revision
+// must approve the digest this daemon actually computes). A decoded or stale
+// transition therefore never carries authority the operator did not grant to
+// this exact run under this exact configuration.
+func (w *productionPublicationWorkflow) reviewConfigurationAdoption(
+	ctx context.Context, binding productionBinding,
+) (domain.ReviewConfigurationRecoveryTransition, bool, error) {
+	var (
+		transition domain.ReviewConfigurationRecoveryTransition
+		found      bool
+	)
+	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		transition, found, err = tx.LatestReviewConfigurationRecoveryTransition(ctx, binding.run.ID)
+		if err != nil {
+			// An ineffective row (the adopted revision was itself superseded,
+			// or the delta widened) and a tampered or unbacked row all grant
+			// nothing. Treat them as no adoption so the run stays visibly
+			// parked behind its item instead of error-looping the lane; any
+			// other failure is environmental and propagates for retry.
+			if errors.Is(err, domain.ErrReviewConfigRecoveryBindingMismatch) ||
+				errors.Is(err, domain.ErrReviewConfigSupersessionInvalid) ||
+				errors.Is(err, domain.ErrTransitionUnbacked) {
+				found = false
+				return nil
+			}
+			return err
+		}
+		if !found {
+			return nil
+		}
+		if transition.SupersededProfileDigest != binding.profile.ProfileDigest ||
+			transition.Repo != binding.admission.Base.Repo ||
+			transition.RepositoryID != binding.admission.Base.RepositoryID {
+			found = false
+			return nil
+		}
+		superseding, err := tx.GetTrustProfile(ctx, transition.SupersedingProfileDigest)
+		if err != nil {
+			return err
+		}
+		if superseding.Review.Mode != domain.ReviewFreesideInvoked ||
+			superseding.Review.ConfigDigest != w.reviewConfigurationDigest {
+			found = false
+		}
+		return nil
+	})
+	if err != nil || !found {
+		return domain.ReviewConfigurationRecoveryTransition{}, false, err
+	}
+	return transition, true, nil
+}
+
+// reviewConfigurationApproved reports whether the run's trust context
+// approves the daemon's effective reviewer configuration: directly through
+// its admission-pinned profile, or through an effective operator-authorized
+// review-configuration-only supersession.
+func (w *productionPublicationWorkflow) reviewConfigurationApproved(
+	ctx context.Context, binding productionBinding,
+) (bool, error) {
+	if binding.profile.Review.ConfigDigest == w.reviewConfigurationDigest {
+		return true, nil
+	}
+	_, adopted, err := w.reviewConfigurationAdoption(ctx, binding)
+	return adopted, err
+}
+
+// reviewConfigurationRecovered reports whether the run's effective adoption
+// also authorizes advancing past exactly this parked failure row: the
+// transition must match every coordinate and the exact persisted body
+// digest, so an older recovery never authorizes a later failure.
+func (w *productionPublicationWorkflow) reviewConfigurationRecovered(
+	ctx context.Context, binding productionBinding, failure domain.ReviewFailure,
+) (bool, error) {
+	transition, adopted, err := w.reviewConfigurationAdoption(ctx, binding)
+	if err != nil || !adopted {
+		return false, err
+	}
+	var digest domain.Digest
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		digest, err = tx.ReviewFailureBodyDigest(ctx, failure.InvocationID)
+		return err
+	}); err != nil {
+		return false, err
+	}
+	return transition.Binding().Matches(failure, digest), nil
+}
+
+// parkReviewConfiguration holds one run on a configuration-class review
+// failure without terminalizing its publication task (issue #611, revising
+// issue #527 decision 3 for this class). The run stays tickable: it resumes
+// when an operator adopts a review-configuration-only profile supersession
+// that approves the effective configuration, and it terminalizes only when
+// the operator concludes the displayed item without an effective recovery
+// (a stop, or an adoption whose target has since been superseded).
+func (w *productionPublicationWorkflow) parkReviewConfiguration(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	failure domain.ReviewFailure,
+) (productionReviewGateState, error) {
+	if binding.admission.TrustProfileDigest == nil {
+		// Recovery rebinds an admission-pinned revision; a legacy admission
+		// without the pin resolves its profile as the repository's latest on
+		// every load, so the recovery binding would drift under the parked
+		// item. Keep #527 decision 3's terminalizing dispute for that shape.
+		record := domain.ReviewRecord{
+			InvocationID: failure.InvocationID, RunID: failure.RunID,
+			Round: failure.Round, BaseSHA: failure.BaseSHA, HeadSHA: failure.HeadSHA,
+		}
+		if err := w.putReviewAttention(ctx, task, record,
+			"Codex review stopped because of a configuration failure.",
+			domain.AttentionReviewDispute,
+		); err != nil {
+			return productionReviewPending, err
+		}
+		return productionReviewEscalated, nil
+	}
+	itemID := productionReviewItemID(task.RunID, failure.Round)
+	var existing *domain.AttentionItem
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.GetAttentionItem(ctx, itemID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		existing = &got
+		return nil
+	}); err != nil {
+		return productionReviewPending, err
+	}
+	if existing != nil && existing.Type == domain.AttentionReviewDispute {
+		// A pre-#611 daemon raised the terminalizing dispute at this identity
+		// and crashed before completing the task. Honor the contract that
+		// item presented rather than failing closed against its shape.
+		return productionReviewEscalated, nil
+	}
+	if existing != nil && existing.Type == domain.AttentionReviewConfiguration &&
+		existing.Status != domain.StatusOpen {
+		// Presence, not effectiveness, separates the operator's two exits: a
+		// conclusion that appended an adoption keeps the run parked (the
+		// signet transaction may have landed between this tick's transition
+		// and item reads, or the adoption may not be effective yet), while a
+		// conclusion without one is the explicit decline that ends the run
+		// exactly as #527 decision 3 always did for this class.
+		var digest domain.Digest
+		var adopted bool
+		if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			digest, err = tx.ReviewFailureBodyDigest(ctx, failure.InvocationID)
+			if err != nil {
+				return err
+			}
+			adopted, err = tx.HasReviewConfigurationRecoveryTransition(
+				ctx, failure.RunID, failure.InvocationID, digest)
+			return err
+		}); err != nil {
+			return productionReviewPending, err
+		}
+		if adopted {
+			return productionReviewPending, nil
+		}
+		return productionReviewEscalated, nil
+	}
+	if err := w.putReviewConfigurationAttention(ctx, task, binding, failure); err != nil {
+		return productionReviewPending, err
+	}
+	return productionReviewPending, nil
+}
+
+// putReviewConfigurationAttention exposes one parked configuration failure
+// without terminalizing its publication task. The deterministic identity plus
+// the preflight below keeps subsequent ticks from rewriting the same open
+// item or consuming a new sync revision; any divergent row fails closed.
+func (w *productionPublicationWorkflow) putReviewConfigurationAttention(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	failure domain.ReviewFailure,
+) error {
+	var digest domain.Digest
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		digest, err = tx.ReviewFailureBodyDigest(ctx, failure.InvocationID)
+		return err
+	}); err != nil {
+		return err
+	}
+	recovery := domain.ReviewConfigurationRecoveryBinding{
+		RunID: failure.RunID, InvocationID: failure.InvocationID, Round: failure.Round,
+		BaseSHA: failure.BaseSHA, HeadSHA: failure.HeadSHA, FailureDigest: digest,
+		Repo: binding.admission.Base.Repo, RepositoryID: binding.admission.Base.RepositoryID,
+		SupersededProfileDigest: binding.profile.ProfileDigest,
+	}
+	runID := task.RunID
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: productionReviewItemID(task.RunID, failure.Round), ProjectID: task.ProjectID,
+		Subject: domain.Subject{
+			Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID,
+		},
+		Type: domain.AttentionReviewConfiguration, Priority: domain.PriorityHigh,
+		Reason: fmt.Sprintf(
+			"Codex review parked on a reviewer configuration the trust profile no longer approves: %s",
+			failure.Reason),
+		RequestedDecision: []domain.Action{
+			domain.ActionAdoptReviewConfiguration, domain.ActionDiscuss, domain.ActionStop,
+		},
+		PRHeadSHA: failure.HeadSHA, ReviewConfigurationRecovery: &recovery,
+		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
+		Status: domain.StatusOpen,
+	}, w.approvedRecipes)
+	if err != nil {
+		return err
+	}
+	var existing *domain.AttentionItem
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.GetAttentionItem(ctx, item.ID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		existing = &got
+		return nil
+	}); err != nil {
+		return err
+	}
+	if existing != nil {
+		// Delivery receipts advance the item's version and derived timing, and
+		// a discuss decision attaches its conversation, all while the item
+		// remains parked. Ignore only those mutable fields; every identity,
+		// presentation, action, and recovery coordinate must still match the
+		// persisted failure exactly.
+		comparable := *existing
+		comparable.ItemVersion = item.ItemVersion
+		comparable.Timing = item.Timing
+		comparable.ConversationID = item.ConversationID
+		if !reflect.DeepEqual(comparable, item) {
+			return fmt.Errorf("review configuration item %q diverges from failure %q: %w",
+				item.ID, failure.InvocationID, domain.ErrReviewConfigRecoveryBindingMismatch)
+		}
+		return nil
+	}
+	return w.attention.PutItem(ctx, item)
+}
+
 func (w *productionPublicationWorkflow) putReviewAttention(
 	ctx context.Context,
 	task productionPublicationTask,
@@ -2488,8 +2779,12 @@ func (w *productionPublicationWorkflow) assertReviewedCandidate(
 	if err != nil {
 		return err
 	}
+	approved, err := w.reviewConfigurationApproved(ctx, binding)
+	if err != nil {
+		return err
+	}
 	if binding.profile.Review.Mode != domain.ReviewFreesideInvoked ||
-		binding.profile.Review.ConfigDigest != w.reviewConfigurationDigest ||
+		!approved ||
 		record == nil ||
 		record.Outcome != domain.ReviewClean ||
 		record.ConfigurationDigest != w.reviewConfigurationDigest ||
@@ -3473,6 +3768,7 @@ func productionCandidate(
 	task productionPublicationTask,
 	binding productionBinding,
 	checkpoint productionVerificationCheckpoint,
+	adoptedProfile *domain.Digest,
 ) publish.Candidate {
 	recipe := binding.image.RecipeDigest
 	authorization := checkpoint.Authorization.ID
@@ -3484,7 +3780,23 @@ func productionCandidate(
 		Artifacts: checkpoint.Artifacts, RecipeDigest: &recipe,
 		InvocationID: task.PublicationID, RunID: task.RunID,
 		AuthorizationID: &authorization, TrustProfileDigest: &profile,
+		AdoptedTrustProfileDigest: adoptedProfile,
 	}
+}
+
+// adoptedReviewProfileDigest returns the profile revision an effective
+// review-configuration adoption rebinds this run to, nil when none is
+// effective. The publish drift gate re-derives the claim from the trust
+// source before honoring it.
+func (w *productionPublicationWorkflow) adoptedReviewProfileDigest(
+	ctx context.Context, binding productionBinding,
+) (*domain.Digest, error) {
+	transition, adopted, err := w.reviewConfigurationAdoption(ctx, binding)
+	if err != nil || !adopted {
+		return nil, err
+	}
+	digest := transition.SupersedingProfileDigest
+	return &digest, nil
 }
 
 func (w *productionPublicationWorkflow) readyItem(

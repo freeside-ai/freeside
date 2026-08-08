@@ -1424,6 +1424,7 @@ components:
         - base_freshness
         - readiness_invalidation
         - review_recovery_binding
+        - review_configuration_recovery
         - item_version
         - interruption_class
         - conversation_id
@@ -1520,6 +1521,18 @@ components:
             domain.AttentionItem.ReviewRecoveryBinding). It binds the run,
             invocation, round, base, head, and immutable failure-row body
             digest displayed to the operator; null on every other item.
+        review_configuration_recovery:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ReviewConfigurationRecoveryBinding"
+          description: >
+            The exact parked configuration-class review failure this
+            review_configuration item offers to recover, and the
+            admission-pinned profile it was parked under (issue #611; mirrors
+            domain.AttentionItem.ReviewConfigurationRecovery). The adoption
+            target is resolved at decision time as the repository's currently
+            approved profile revision, so it is deliberately absent here;
+            null on every other item.
         item_version:
           type: integer
           minimum: 1
@@ -1602,6 +1615,7 @@ components:
         base_freshness: null
         readiness_invalidation: null
         review_recovery_binding: null
+        review_configuration_recovery: null
         item_version: 1
         interruption_class: "planned_gate"
         conversation_id: "conv-1"
@@ -2325,6 +2339,7 @@ components:
         - review_diminishing_returns
         - review_dispute
         - review_contradiction
+        - review_configuration
         - ready_for_final_review
         - publish_blocked
         - run_proposal
@@ -2371,6 +2386,7 @@ components:
         - stop_unattended
         - resume_unattended
         - recover_review
+        - adopt_review_configuration
 
     Priority:
       type: string
@@ -2513,6 +2529,57 @@ components:
         base_sha: "beefcafe"
         head_sha: "cafebabe"
         failure_digest: "sha256:review-failure-body"
+
+    ReviewConfigurationRecoveryBinding:
+      type: object
+      description: >
+        Every coordinate of one immutable persisted configuration-class
+        review failure, its exact body digest, and the admission-pinned
+        trust-profile revision the run was parked under. An
+        adopt_review_configuration command authorizes resuming past only
+        this row, by adopting the repository's currently approved profile
+        revision; the daemon re-derives that the adopted revision differs
+        from the superseded one solely in its review configuration digest.
+      required:
+        [run_id, invocation_id, round, base_sha, head_sha, failure_digest,
+         repo, repository_id, superseded_profile_digest]
+      properties:
+        run_id:
+          type: string
+          minLength: 1
+        invocation_id:
+          type: string
+          minLength: 1
+        round:
+          type: integer
+          minimum: 1
+        base_sha:
+          type: string
+          minLength: 1
+        head_sha:
+          type: string
+          minLength: 1
+        failure_digest:
+          $ref: "#/components/schemas/Digest"
+        repo:
+          type: string
+          minLength: 1
+        repository_id:
+          type: integer
+          format: int64
+          minimum: 1
+        superseded_profile_digest:
+          $ref: "#/components/schemas/Digest"
+      example:
+        run_id: "run-1"
+        invocation_id: "review-run-1-2"
+        round: 2
+        base_sha: "beefcafe"
+        head_sha: "cafebabe"
+        failure_digest: "sha256:review-failure-body"
+        repo: "owner/repo"
+        repository_id: 84958515
+        superseded_profile_digest: "sha256:profile-superseded"
 
     BlockingSupersession:
       type: object

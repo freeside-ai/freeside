@@ -1,0 +1,15 @@
+{
+  "run_id": "run-1",
+  "invocation_id": "review-run-1-2",
+  "round": 2,
+  "base_sha": "beefcafe",
+  "head_sha": "cafebabe",
+  "failure_digest": "sha256:review-failure-body",
+  "repo": "owner/repo",
+  "repository_id": 84958515,
+  "superseded_profile_digest": "sha256:profile-superseded",
+  "superseding_profile_digest": "sha256:profile-superseding",
+  "command_id": "command-adopt-review-configuration-1",
+  "reason": "operator adopted the superseding review configuration",
+  "occurred_at": "2026-01-02T03:04:05Z"
+}

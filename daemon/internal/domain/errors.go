@@ -193,6 +193,11 @@ var (
 	ErrReviewRecoveryBindingOutsideItem = errors.New("review recovery binding is a review_contradiction semantic")
 	ErrReviewRecoveryBindingMismatch    = errors.New("review recovery binding disagrees with its persisted failure")
 
+	ErrReviewConfigRecoveryBindingMissing     = errors.New("review configuration item lacks its recovery binding")
+	ErrReviewConfigRecoveryBindingOutsideItem = errors.New("review configuration recovery binding is a review_configuration semantic")
+	ErrReviewConfigRecoveryBindingMismatch    = errors.New("review configuration recovery binding disagrees with its persisted authority")
+	ErrReviewConfigSupersessionInvalid        = errors.New("review configuration supersession exceeds the review configuration digest")
+
 	// Transition failures: how a persisted aggregate may change between its
 	// stored version and an update (the transition validators). A writer maps
 	// these onto its own conflict/stale-write errors at its boundary.
