@@ -35,6 +35,7 @@ type CodexReviewJournal interface {
 	GetCodexReviewRequest(context.Context, string) (exec.ReviewRequest, error)
 	PutCodexReviewOutcome(context.Context, string, CodexReviewSourceOutcome) error
 	GetCodexReviewOutcome(context.Context, string) (CodexReviewSourceOutcome, bool, error)
+	ListCodexReviewOutcomeIDs(context.Context) ([]string, error)
 	MarkCodexReviewOutcomeReady(context.Context, string) error
 	// PutCodexReviewWorkspaceBinding records the ward-created candidate volume
 	// before any review topology may attach it.
@@ -210,11 +211,37 @@ func (b *Backend) CodexReview(
 	ctx context.Context,
 	cfg CodexReviewConfig,
 	launch CodexReviewLaunchSpec,
+) (*CodexReviewLaunch, error) {
+	if b == nil || !b.initialized {
+		return nil, fmt.Errorf("%w: backend is not initialized", ErrInvalidConfig)
+	}
+	if err := validateCodexReviewLaunch(cfg, launch); err != nil {
+		return nil, err
+	}
+	releaseRun, err := b.acquireCodexReviewRun(ctx, launch.RunID)
+	if err != nil {
+		return nil, codexReviewOperationalf("acquire Codex review run gate: %v", err)
+	}
+	defer releaseRun()
+	return b.codexReview(ctx, cfg, launch)
+}
+
+// codexReview runs with the caller holding the per-run lifecycle gate. The
+// ReviewSource uses it so workspace preparation, runtime launch, and proxy
+// publication are one exclusive operation; direct backend callers use the
+// exported wrapper above.
+func (b *Backend) codexReview(
+	ctx context.Context,
+	cfg CodexReviewConfig,
+	launch CodexReviewLaunchSpec,
 ) (_ *CodexReviewLaunch, retErr error) {
 	if b == nil || !b.initialized {
 		return nil, fmt.Errorf("%w: backend is not initialized", ErrInvalidConfig)
 	}
 	if err := validateCodexReviewLaunch(cfg, launch); err != nil {
+		return nil, err
+	}
+	if err := codexReviewOutcomeFence(ctx, cfg.Journal, launch.RunID); err != nil {
 		return nil, err
 	}
 	cfg.ProviderEndpoints = slices.Clone(cfg.ProviderEndpoints)
@@ -566,11 +593,6 @@ func (b *Backend) CodexReview(
 			CheckControlPlaneIsolation, "persist Codex review binding: %v", err,
 		)
 	}
-	if err := cfg.Journal.MarkCodexReviewIntentPrepared(ctx, launch.RunID); err != nil {
-		return nil, codexReviewJournalCheckf(
-			CheckControlPlaneIsolation, "mark Codex review launch prepared: %v", err,
-		)
-	}
 	persisted, err := cfg.Journal.GetCodexReviewBinding(ctx, launch.RunID)
 	if err != nil {
 		if errors.Is(err, ErrConformance) {
@@ -597,6 +619,11 @@ func (b *Backend) CodexReview(
 	}
 	if err := validateCodexReviewStartLifetime(cfg, launch); err != nil {
 		return nil, err
+	}
+	if err := cfg.Journal.MarkCodexReviewIntentPrepared(ctx, launch.RunID); err != nil {
+		return nil, codexReviewJournalCheckf(
+			CheckControlPlaneIsolation, "mark Codex review launch prepared: %v", err,
+		)
 	}
 	if err := cfg.Journal.MarkCodexReviewIntentStarting(ctx, launch.RunID); err != nil {
 		return nil, codexReviewJournalCheckf(
@@ -644,6 +671,54 @@ func (b *Backend) CodexReview(
 		return nil, errors.Join(markErr, proxyErr)
 	}
 	return &CodexReviewLaunch{Binding: persisted, proxy: proxy}, nil
+}
+
+func codexReviewOutcomeFence(ctx context.Context, journal CodexReviewJournal, runID string) error {
+	outcome, _, err := journal.GetCodexReviewOutcome(ctx, runID)
+	if errors.Is(err, ErrCodexReviewOutcomeNotFound) {
+		return nil
+	}
+	if err != nil {
+		if errors.Is(err, ErrCodexReviewOutcomeRejected) || errors.Is(err, ErrConformance) {
+			return failf(CheckControlPlaneIsolation, "load Codex review outcome fence: %v", err)
+		}
+		return codexReviewOperationalCheckf(
+			CheckControlPlaneIsolation, "load Codex review outcome fence: %v", err)
+	}
+	if validateErr := outcome.Validate(); validateErr != nil || string(outcome.InvocationID) != runID {
+		return failf(CheckControlPlaneIsolation, "Codex review outcome fence is invalid: %v",
+			errors.Join(validateErr, domain.ErrParentKeyMismatch))
+	}
+	return failf(CheckControlPlaneIsolation, "Codex review outcome fence already exists")
+}
+
+// acquireCodexReviewRun serializes launch and rejection cleanup for one run.
+// The gate is process-local by design: after a daemon restart no launch
+// goroutine survives, so durable recovery must be free to proceed immediately.
+func (b *Backend) acquireCodexReviewRun(ctx context.Context, runID string) (func(), error) {
+	for {
+		b.codexReviewMu.Lock()
+		active := b.codexReviewRuns[runID]
+		if active == nil {
+			done := make(chan struct{})
+			b.codexReviewRuns[runID] = done
+			b.codexReviewMu.Unlock()
+			return func() {
+				b.codexReviewMu.Lock()
+				if b.codexReviewRuns[runID] == done {
+					delete(b.codexReviewRuns, runID)
+					close(done)
+				}
+				b.codexReviewMu.Unlock()
+			}, nil
+		}
+		b.codexReviewMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-active:
+		}
+	}
 }
 
 func validateCodexReviewLaunch(cfg CodexReviewConfig, launch CodexReviewLaunchSpec) error {
@@ -1023,6 +1098,7 @@ func (r *CodexReviewRecovery) Reconcile(ctx context.Context) error {
 	}
 	var recoveryErrs []error
 	intentIDs := make(map[string]struct{}, len(ids))
+	knownIntentIDs := make(map[string]struct{}, len(ids))
 	allIntentsAuthenticated := true
 	for _, id := range ids {
 		intent, err := r.cfg.Journal.GetCodexReviewIntent(ctx, id)
@@ -1039,6 +1115,7 @@ func (r *CodexReviewRecovery) Reconcile(ctx context.Context) error {
 				failf(CheckControlPlaneIsolation, "recoverable Codex review intent is invalid")))
 			continue
 		}
+		knownIntentIDs[id] = struct{}{}
 		if intent.State != CodexReviewIntentClosed {
 			intentIDs[id] = struct{}{}
 		}
@@ -1055,21 +1132,66 @@ func (r *CodexReviewRecovery) Reconcile(ctx context.Context) error {
 			CheckControlPlaneIsolation, "list recoverable Codex review workspaces: %v", err))
 		return errors.Join(recoveryErrs...)
 	}
+	orphanWorkspaceIDs := make(map[string]struct{}, len(workspaceIDs))
 	for _, id := range workspaceIDs {
 		if _, exists := intentIDs[id]; exists {
 			continue
 		}
 		if err := r.removeInstructionSnapshot(id); err != nil {
+			orphanWorkspaceIDs[id] = struct{}{}
 			recoveryErrs = append(recoveryErrs,
 				fmt.Errorf("recover orphaned Codex review snapshot %q: %w", id, err))
 			continue
 		}
 		if err := r.backend.cleanupOrphanedCodexReviewWorkspace(ctx, r.cfg.Journal, id); err != nil {
+			orphanWorkspaceIDs[id] = struct{}{}
 			recoveryErrs = append(recoveryErrs,
 				fmt.Errorf("recover orphaned Codex review workspace %q: %w", id, err))
 		}
 	}
+	outcomeIDs, err := r.cfg.Journal.ListCodexReviewOutcomeIDs(ctx)
+	if err != nil {
+		recoveryErrs = append(recoveryErrs, codexReviewJournalCheckf(
+			CheckControlPlaneIsolation, "list recoverable Codex review outcomes: %v", err))
+		return errors.Join(recoveryErrs...)
+	}
+	for _, id := range outcomeIDs {
+		if _, exists := knownIntentIDs[id]; exists {
+			continue
+		}
+		if _, exists := orphanWorkspaceIDs[id]; exists {
+			continue
+		}
+		if err := r.markFenceOnlyOutcomeReady(ctx, id); err != nil {
+			recoveryErrs = append(recoveryErrs,
+				fmt.Errorf("recover fence-only Codex review outcome %q: %w", id, err))
+		}
+	}
 	return errors.Join(recoveryErrs...)
+}
+
+// markFenceOnlyOutcomeReady converges a rejection fence written before a
+// launch persisted any intent or workspace. There is no runtime topology to
+// authenticate in this state; re-reading and validating the durable outcome
+// is the only required recovery evidence before its ready transition.
+func (r *CodexReviewRecovery) markFenceOnlyOutcomeReady(ctx context.Context, id string) error {
+	outcome, ready, err := r.cfg.Journal.GetCodexReviewOutcome(ctx, id)
+	if err != nil {
+		return codexReviewJournalCheckf(
+			CheckControlPlaneIsolation, "load fence-only Codex review outcome: %v", err)
+	}
+	if err := outcome.Validate(); err != nil || string(outcome.InvocationID) != id {
+		return failf(CheckControlPlaneIsolation, "fence-only Codex review outcome is invalid: %v",
+			errors.Join(err, domain.ErrParentKeyMismatch))
+	}
+	if ready {
+		return nil
+	}
+	if err := r.cfg.Journal.MarkCodexReviewOutcomeReady(ctx, id); err != nil {
+		return codexReviewJournalCheckf(
+			CheckControlPlaneIsolation, "mark fence-only Codex review outcome ready: %v", err)
+	}
+	return nil
 }
 
 func (r *CodexReviewRecovery) reconcileIntent(

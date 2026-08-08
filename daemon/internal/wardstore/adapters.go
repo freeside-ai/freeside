@@ -260,6 +260,18 @@ func (a *Journal) GetCodexReviewOutcome(
 	return outcome, record.State == "ready", nil
 }
 
+func (a *Journal) ListCodexReviewOutcomeIDs(ctx context.Context) ([]string, error) {
+	var ids []string
+	if err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		ids, err = tx.ListCodexReviewOutcomeIDs(ctx)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 func (a *Journal) MarkCodexReviewOutcomeReady(ctx context.Context, id string) error {
 	return classifyCodexReviewMutation(a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.MarkCodexReviewOutcomeReady(ctx, id)
@@ -374,6 +386,7 @@ func (a *Journal) ListCodexReviewIntentIDs(ctx context.Context) ([]string, error
 func (a *Journal) updateCodexReviewIntent(
 	ctx context.Context,
 	runID string,
+	requireOutcomeAbsent bool,
 	mutate func(*ward.CodexReviewLaunchIntent) error,
 ) error {
 	return classifyCodexReviewMutation(a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
@@ -390,6 +403,13 @@ func (a *Journal) updateCodexReviewIntent(
 		}
 		if intent.RunID != runID || string(intent.State) != record.State {
 			return errors.Join(ward.ErrConformance, domain.ErrParentKeyMismatch)
+		}
+		if requireOutcomeAbsent && intent.State == ward.CodexReviewIntentPreparing {
+			if _, outcomeErr := tx.GetCodexReviewOutcome(ctx, runID); outcomeErr == nil {
+				return errors.Join(ward.ErrConformance, store.ErrImmutableConflict)
+			} else if !errors.Is(outcomeErr, store.ErrNotFound) {
+				return outcomeErr
+			}
 		}
 		before := append([]byte(nil), record.Body...)
 		beforeState := intent.State
@@ -411,7 +431,7 @@ func (a *Journal) updateCodexReviewIntent(
 func (a *Journal) MarkCodexReviewIntentResource(
 	ctx context.Context, runID string, resource ward.CodexReviewIntentResource,
 ) error {
-	return a.updateCodexReviewIntent(ctx, runID, func(intent *ward.CodexReviewLaunchIntent) error {
+	return a.updateCodexReviewIntent(ctx, runID, false, func(intent *ward.CodexReviewLaunchIntent) error {
 		if intent.State != ward.CodexReviewIntentPreparing {
 			return store.ErrImmutableConflict
 		}
@@ -428,8 +448,9 @@ func (a *Journal) MarkCodexReviewIntentResource(
 func (a *Journal) transitionCodexReviewIntent(
 	ctx context.Context, runID string,
 	from []ward.CodexReviewIntentState, to ward.CodexReviewIntentState,
+	requireOutcomeAbsent bool,
 ) error {
-	return a.updateCodexReviewIntent(ctx, runID, func(intent *ward.CodexReviewLaunchIntent) error {
+	return a.updateCodexReviewIntent(ctx, runID, requireOutcomeAbsent, func(intent *ward.CodexReviewLaunchIntent) error {
 		for _, allowed := range from {
 			if intent.State == allowed {
 				intent.State = to
@@ -445,17 +466,17 @@ func (a *Journal) transitionCodexReviewIntent(
 
 func (a *Journal) MarkCodexReviewIntentPrepared(ctx context.Context, runID string) error {
 	return a.transitionCodexReviewIntent(ctx, runID,
-		[]ward.CodexReviewIntentState{ward.CodexReviewIntentPreparing}, ward.CodexReviewIntentPrepared)
+		[]ward.CodexReviewIntentState{ward.CodexReviewIntentPreparing}, ward.CodexReviewIntentPrepared, true)
 }
 
 func (a *Journal) MarkCodexReviewIntentStarting(ctx context.Context, runID string) error {
 	return a.transitionCodexReviewIntent(ctx, runID,
-		[]ward.CodexReviewIntentState{ward.CodexReviewIntentPrepared}, ward.CodexReviewIntentStarting)
+		[]ward.CodexReviewIntentState{ward.CodexReviewIntentPrepared}, ward.CodexReviewIntentStarting, false)
 }
 
 func (a *Journal) MarkCodexReviewIntentStarted(ctx context.Context, runID string) error {
 	return a.transitionCodexReviewIntent(ctx, runID,
-		[]ward.CodexReviewIntentState{ward.CodexReviewIntentStarting}, ward.CodexReviewIntentStarted)
+		[]ward.CodexReviewIntentState{ward.CodexReviewIntentStarting}, ward.CodexReviewIntentStarted, false)
 }
 
 func (a *Journal) CloseCodexReviewIntent(ctx context.Context, runID string) error {
@@ -463,7 +484,7 @@ func (a *Journal) CloseCodexReviewIntent(ctx context.Context, runID string) erro
 		[]ward.CodexReviewIntentState{
 			ward.CodexReviewIntentPreparing, ward.CodexReviewIntentPrepared,
 			ward.CodexReviewIntentStarting, ward.CodexReviewIntentStarted,
-		}, ward.CodexReviewIntentClosed)
+		}, ward.CodexReviewIntentClosed, false)
 }
 
 func (a *Journal) PutCodexReviewBinding(
