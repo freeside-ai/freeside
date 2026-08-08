@@ -212,6 +212,10 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 				if err := s.applyReviewRecovery(ctx, tx, command, item, status); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
+			case outcomeAdoptsReviewConfiguration:
+				if err := s.applyReviewConfigurationRecovery(ctx, tx, command, item, status); err != nil {
+					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+				}
 			case outcomeRecords, outcomePending:
 				// Records: the command record is the whole effect. Pending:
 				// unreachable, rejected above before PutCommand.
@@ -274,6 +278,10 @@ const (
 	// outcomeRecoversReview: conclude the contradiction item and append the
 	// exact-row-bound recovery transition in the accepting transaction.
 	outcomeRecoversReview
+	// outcomeAdoptsReviewConfiguration: conclude the review_configuration item
+	// and append the exact-row, profile-supersession-bound configuration
+	// recovery transition in the accepting transaction.
+	outcomeAdoptsReviewConfiguration
 )
 
 // actionOutcome maps an action to what its acceptance does, following plan
@@ -316,6 +324,8 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		return domain.StatusResolved, outcomeResumesUnattended
 	case domain.ActionRecoverReview:
 		return domain.StatusResolved, outcomeRecoversReview
+	case domain.ActionAdoptReviewConfiguration:
+		return domain.StatusResolved, outcomeAdoptsReviewConfiguration
 	case domain.ActionOpenPR, domain.ActionMarkSeen, domain.ActionAcknowledge,
 		domain.ActionInspectTrustFailure, domain.ActionRunDoctor:
 		return "", outcomeRecords
