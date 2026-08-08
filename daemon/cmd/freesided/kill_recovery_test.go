@@ -97,6 +97,7 @@ func buildKillTestDaemon(t *testing.T) string {
 	args := []string{"build", "-tags=freeside_kill_test", "-o", binary}
 	args = append(args, raceBuildFlags()...)
 	args = append(args, "./cmd/freesided")
+	t.Logf("build kill-test freesided: go %q", args)
 	cmd := osexec.Command("go", args...) //nolint:gosec // fixed tool and test-owned output
 	cmd.Dir = moduleRoot
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -167,8 +168,8 @@ func startProcessFixture(
 			t.Fatalf("decode freesided readiness: %v; stderr=%s", decoded.err, p.stderr.String())
 		}
 		p.ready = decoded.value
-	case <-time.After(5 * time.Second):
-		t.Fatal("freesided did not emit readiness within 5s")
+	case <-time.After(readinessDeadline()):
+		t.Fatalf("freesided did not emit readiness within %s", readinessDeadline())
 	}
 	return p
 }

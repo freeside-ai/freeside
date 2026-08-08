@@ -1,0 +1,168 @@
+name: daemon race incident
+
+on:
+  workflow_run:
+    workflows: ["daemon CI"]
+    types: [completed]
+    branches: [main]
+
+# Keep the workflow default empty. Only the no-checkout observer job receives
+# issue-write authority, and upstream artifacts or repository code never cross
+# into that token boundary.
+permissions: {}
+
+jobs:
+  report:
+    name: report race failure
+    if: >-
+      ${{ github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_repository.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - name: Inspect completed daemon CI run
+        working-directory: .
+        env:
+          FAILING_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          INCIDENT_LABEL: ci-race
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          SERVER_URL: ${{ github.server_url }}
+          UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+
+          incident_classification=""
+          if ! jobs_json="$(gh api "repos/$GH_REPO/actions/runs/$UPSTREAM_RUN_ID/jobs?filter=latest&per_page=100")"; then
+            incident_classification="jobs API query failed"
+          elif ! jobs_shape="$(jq -er '
+            if type == "object" and
+              (.total_count | type) == "number" and
+              (.jobs | type) == "array" and
+              all(.jobs[]; (.name | type) == "string")
+            then [.total_count, (.jobs | length)] | @tsv
+            else error("malformed jobs response")
+            end
+          ' <<<"$jobs_json" 2>/dev/null)"; then
+            incident_classification="malformed jobs API response"
+          else
+            IFS=$'\t' read -r total_count jobs_count <<<"$jobs_shape"
+            if ((total_count != jobs_count || total_count > 100)); then
+              incident_classification="incomplete jobs API response: total=$total_count returned=$jobs_count"
+            else
+              race_count="$(jq -er '[.jobs[] | select(.name == "linux (race test)")] | length' <<<"$jobs_json")"
+              if [[ "$race_count" != "1" ]]; then
+                incident_classification="exact race job count: $race_count"
+              else
+                race_conclusion="$(jq -c '.jobs[] | select(.name == "linux (race test)") | .conclusion' <<<"$jobs_json")"
+                case "$race_conclusion" in
+                  '"failure"'|'"timed_out"'|'"startup_failure"'|'"stale"'|'"action_required"')
+                    incident_classification="race job conclusion: $race_conclusion"
+                    ;;
+                  '"success"'|'"cancelled"'|'"skipped"'|'"neutral"')
+                    printf 'race job conclusion %s; no incident required\n' "$race_conclusion"
+                    exit 0
+                    ;;
+                  *)
+                    incident_classification="unknown race job conclusion: $race_conclusion"
+                    ;;
+                esac
+              fi
+            fi
+          fi
+
+          body_file="$RUNNER_TEMP/ci-race-failure.md"
+          commit_url="$SERVER_URL/$GH_REPO/commit/$FAILING_SHA"
+          parent_count="unavailable"
+          merge_shape="unconfirmed because the commit API query failed"
+
+          if commit_json="$(gh api "repos/$GH_REPO/commits/$FAILING_SHA" 2>/dev/null)"; then
+            if api_commit_url="$(jq -er '.html_url | select(type == "string" and length > 0)' <<<"$commit_json" 2>/dev/null)" &&
+              api_parent_count="$(jq -er '.parents | select(type == "array") | length' <<<"$commit_json" 2>/dev/null)"; then
+              commit_url="$api_commit_url"
+              parent_count="$api_parent_count"
+              if [[ "$parent_count" == "2" ]]; then
+                merge_shape="expected two-parent first-parent merge"
+              else
+                merge_shape="unexpected non-merge main head; triage must confirm attribution"
+              fi
+            else
+              merge_shape="unconfirmed because the commit API response was malformed"
+            fi
+          fi
+
+          {
+            printf 'The main-branch race observer detected an incident.\n\n'
+            printf -- '- Actions run: %s\n' "$RUN_URL"
+            printf -- '- Upstream workflow conclusion: %s\n' "$UPSTREAM_CONCLUSION"
+            printf -- '- Observed classification: %s\n' "$incident_classification"
+            printf -- '- Failing full SHA: %s\n' "$FAILING_SHA"
+            printf -- '- Head main commit: %s\n' "$commit_url"
+            printf -- '- Parent count: %s (%s)\n' "$parent_count" "$merge_shape"
+            printf '\nThis reports any race-job failure, including an actual race, infrastructure fault, timeout, or setup failure, plus observer ambiguity that could hide one. Triage determines the failure class.\n'
+          } >"$body_file"
+
+          list_open_incidents() {
+            gh issue list \
+              --repo "$GH_REPO" \
+              --state open \
+              --label "$INCIDENT_LABEL" \
+              --limit 1000 \
+              --json number,createdAt
+          }
+
+          validate_incidents() {
+            jq -er '
+              if type == "array" and
+                all(.[]; (.number | type) == "number" and (.createdAt | type) == "string")
+              then .
+              else error("malformed incident list")
+              end
+            '
+          }
+
+          issues_json="$(list_open_incidents | validate_incidents)"
+          issue_count="$(jq -er 'length' <<<"$issues_json")"
+          if ((issue_count > 0)); then
+            canonical_issue="$(jq -er 'sort_by(.number) | .[0].number' <<<"$issues_json")"
+            if ((issue_count > 1)); then
+              printf '::warning::Found %s open %s issues; appending to canonical #%s\n' \
+                "$issue_count" "$INCIDENT_LABEL" "$canonical_issue"
+            fi
+            gh issue comment "$canonical_issue" --repo "$GH_REPO" --body-file "$body_file"
+            exit 0
+          fi
+
+          created_url="$(gh issue create \
+            --repo "$GH_REPO" \
+            --title "Race CI incident on main at ${FAILING_SHA:0:12}" \
+            --label "$INCIDENT_LABEL" \
+            --body-file "$body_file")"
+          if [[ ! "$created_url" =~ /issues/([0-9]+)$ ]]; then
+            printf 'race notifier could not parse created issue URL: %s\n' "$created_url" >&2
+            exit 1
+          fi
+          created_issue="${BASH_REMATCH[1]}"
+
+          reconciled_json="$(list_open_incidents | validate_incidents)"
+          canonical_issue="$(jq -er 'sort_by(.number) | .[0].number' <<<"$reconciled_json")"
+          created_is_open="$(jq -er --argjson created "$created_issue" '[.[] | select(.number == $created)] | length' <<<"$reconciled_json")"
+          if [[ "$created_is_open" != "1" ]]; then
+            printf 'race notifier cannot reconcile created issue #%s\n' "$created_issue" >&2
+            exit 1
+          fi
+          if [[ "$canonical_issue" == "$created_issue" ]]; then
+            exit 0
+          fi
+
+          gh issue comment "$canonical_issue" --repo "$GH_REPO" --body-file "$body_file"
+          duplicate_body="$RUNNER_TEMP/ci-race-duplicate.md"
+          printf 'Duplicate of #%s created by a concurrent race notifier; evidence was appended there.\n' \
+            "$canonical_issue" >"$duplicate_body"
+          gh issue comment "$created_issue" --repo "$GH_REPO" --body-file "$duplicate_body"
+          gh issue close "$created_issue" --repo "$GH_REPO" --reason "not planned"
