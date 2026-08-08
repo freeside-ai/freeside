@@ -24,6 +24,7 @@ const (
 	AttentionReviewDiminishing   AttentionType = "review_diminishing_returns"
 	AttentionReviewDispute       AttentionType = "review_dispute"
 	AttentionReviewContradiction AttentionType = "review_contradiction"
+	AttentionReviewConfiguration AttentionType = "review_configuration"
 	AttentionReadyForFinalReview AttentionType = "ready_for_final_review"
 	AttentionPublishBlocked      AttentionType = "publish_blocked"
 	AttentionRunProposal         AttentionType = "run_proposal"
@@ -40,6 +41,7 @@ var AllAttentionTypes = []AttentionType{
 	AttentionReviewDiminishing,
 	AttentionReviewDispute,
 	AttentionReviewContradiction,
+	AttentionReviewConfiguration,
 	AttentionReadyForFinalReview,
 	AttentionPublishBlocked,
 	AttentionRunProposal,
@@ -51,7 +53,7 @@ func (t AttentionType) valid() bool {
 	switch t {
 	case AttentionSpecApproval, AttentionExecutionFailure, AttentionAgentQuestion,
 		AttentionReviewDiminishing, AttentionReviewDispute, AttentionReviewContradiction,
-		AttentionReadyForFinalReview,
+		AttentionReviewConfiguration, AttentionReadyForFinalReview,
 		AttentionPublishBlocked, AttentionRunProposal, AttentionSystemHealth, AttentionBlocked:
 		return true
 	default:
@@ -297,35 +299,36 @@ func (c InterruptionClass) valid() bool {
 type Action string
 
 const (
-	ActionApprove              Action = "approve"
-	ActionRequestChanges       Action = "request_changes"
-	ActionDiscuss              Action = "discuss"
-	ActionStop                 Action = "stop"
-	ActionFinishNow            Action = "finish_now"
-	ActionApplyThenFinish      Action = "apply_then_finish"
-	ActionContinueUnderPolicy  Action = "continue_under_policy"
-	ActionConvertToPolicy      Action = "convert_to_policy"
-	ActionAdjudicate           Action = "adjudicate"
-	ActionRetry                Action = "retry"
-	ActionRetryWithCapability  Action = "retry_with_capabilities"
-	ActionAnswerAndRetry       Action = "answer_and_retry"
-	ActionAnswerWithoutRetry   Action = "answer_without_retry"
-	ActionRerunTrustEvaluation Action = "rerun_trust_evaluation"
-	ActionChooseAlternate      Action = "choose_alternate_profile"
-	ActionInspectTrustFailure  Action = "inspect_trust_failure"
-	ActionOpenPR               Action = "open_pr"
-	ActionReturnToAgent        Action = "return_to_agent"
-	ActionMarkSeen             Action = "mark_seen"
-	ActionDismiss              Action = "dismiss"
-	ActionStart                Action = "start"
-	ActionStartWithChanges     Action = "start_with_changes"
-	ActionDecline              Action = "decline"
-	ActionSnooze               Action = "snooze"
-	ActionAcknowledge          Action = "acknowledge"
-	ActionRunDoctor            Action = "run_doctor"
-	ActionStopUnattended       Action = "stop_unattended"
-	ActionResumeUnattended     Action = "resume_unattended"
-	ActionRecoverReview        Action = "recover_review"
+	ActionApprove                  Action = "approve"
+	ActionRequestChanges           Action = "request_changes"
+	ActionDiscuss                  Action = "discuss"
+	ActionStop                     Action = "stop"
+	ActionFinishNow                Action = "finish_now"
+	ActionApplyThenFinish          Action = "apply_then_finish"
+	ActionContinueUnderPolicy      Action = "continue_under_policy"
+	ActionConvertToPolicy          Action = "convert_to_policy"
+	ActionAdjudicate               Action = "adjudicate"
+	ActionRetry                    Action = "retry"
+	ActionRetryWithCapability      Action = "retry_with_capabilities"
+	ActionAnswerAndRetry           Action = "answer_and_retry"
+	ActionAnswerWithoutRetry       Action = "answer_without_retry"
+	ActionRerunTrustEvaluation     Action = "rerun_trust_evaluation"
+	ActionChooseAlternate          Action = "choose_alternate_profile"
+	ActionInspectTrustFailure      Action = "inspect_trust_failure"
+	ActionOpenPR                   Action = "open_pr"
+	ActionReturnToAgent            Action = "return_to_agent"
+	ActionMarkSeen                 Action = "mark_seen"
+	ActionDismiss                  Action = "dismiss"
+	ActionStart                    Action = "start"
+	ActionStartWithChanges         Action = "start_with_changes"
+	ActionDecline                  Action = "decline"
+	ActionSnooze                   Action = "snooze"
+	ActionAcknowledge              Action = "acknowledge"
+	ActionRunDoctor                Action = "run_doctor"
+	ActionStopUnattended           Action = "stop_unattended"
+	ActionResumeUnattended         Action = "resume_unattended"
+	ActionRecoverReview            Action = "recover_review"
+	ActionAdoptReviewConfiguration Action = "adopt_review_configuration"
 )
 
 // AllActions lists every valid Action.
@@ -338,7 +341,7 @@ var AllActions = []Action{
 	ActionOpenPR, ActionReturnToAgent, ActionMarkSeen, ActionDismiss,
 	ActionStart, ActionStartWithChanges, ActionDecline, ActionSnooze,
 	ActionAcknowledge, ActionRunDoctor, ActionStopUnattended,
-	ActionResumeUnattended, ActionRecoverReview,
+	ActionResumeUnattended, ActionRecoverReview, ActionAdoptReviewConfiguration,
 }
 
 func (a Action) valid() bool {
@@ -351,7 +354,7 @@ func (a Action) valid() bool {
 		ActionOpenPR, ActionReturnToAgent, ActionMarkSeen, ActionDismiss,
 		ActionStart, ActionStartWithChanges, ActionDecline, ActionSnooze,
 		ActionAcknowledge, ActionRunDoctor, ActionStopUnattended,
-		ActionResumeUnattended, ActionRecoverReview:
+		ActionResumeUnattended, ActionRecoverReview, ActionAdoptReviewConfiguration:
 		return true
 	default:
 		return false

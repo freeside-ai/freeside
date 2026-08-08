@@ -21,6 +21,7 @@
   "base_freshness": null,
   "readiness_invalidation": null,
   "review_recovery_binding": null,
+  "review_configuration_recovery": null,
   "item_version": 1,
   "interruption_class": "exceptional",
   "conversation_id": null,

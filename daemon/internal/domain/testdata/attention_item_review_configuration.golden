@@ -1,16 +1,18 @@
 {
-  "id": "item-review-recovery",
+  "id": "item-review-configuration",
   "project_id": "proj-1",
   "subject": {
     "subject_type": "run",
     "subject_id": "run-1",
     "run_id": "run-1"
   },
-  "type": "review_contradiction",
+  "type": "review_configuration",
   "priority": "high",
-  "reason": "review contradicted its execution contract",
+  "reason": "review parked on a configuration the trust profile no longer approves",
   "requested_decision": [
-    "recover_review"
+    "adopt_review_configuration",
+    "discuss",
+    "stop"
   ],
   "evidence_snapshot": null,
   "agent_claims": null,
@@ -19,17 +21,20 @@
   "commit_plan_notice": null,
   "base_freshness": null,
   "readiness_invalidation": null,
-  "review_recovery_binding": {
+  "review_recovery_binding": null,
+  "review_configuration_recovery": {
     "run_id": "run-1",
     "invocation_id": "review-run-1-2",
     "round": 2,
     "base_sha": "beefcafe",
     "head_sha": "cafebabe",
-    "failure_digest": "sha256:review-failure-body"
+    "failure_digest": "sha256:review-failure-body",
+    "repo": "owner/repo",
+    "repository_id": 84958515,
+    "superseded_profile_digest": "sha256:profile-superseded"
   },
-  "review_configuration_recovery": null,
   "item_version": 1,
-  "interruption_class": "exceptional",
+  "interruption_class": "planned_gate",
   "conversation_id": null,
   "timing": {
     "delivery_count": 0,

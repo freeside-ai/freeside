@@ -240,6 +240,18 @@ func TestGolden(t *testing.T) {
 		FailureDigest: "sha256:review-failure-body", CommandID: &commandID,
 		Reason: "operator authorized recovery of the displayed contradiction", OccurredAt: ts,
 	}
+	configCommandID := "command-adopt-review-configuration-1"
+	configRecovery := domain.ReviewConfigurationRecoveryTransition{
+		RunID: "run-1", InvocationID: "review-run-1-2", Round: 2,
+		BaseSHA: "beefcafe", HeadSHA: "cafebabe",
+		FailureDigest: "sha256:review-failure-body",
+		Repo:          "owner/repo", RepositoryID: 84958515,
+		SupersededProfileDigest:  "sha256:profile-superseded",
+		SupersedingProfileDigest: "sha256:profile-superseding",
+		CommandID:                &configCommandID,
+		Reason:                   "operator adopted the superseding review configuration",
+		OccurredAt:               ts,
+	}
 	recoveryRunID := domain.RunID("run-1")
 	recoveryItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-review-recovery", ProjectID: "proj-1",
@@ -252,6 +264,23 @@ func TestGolden(t *testing.T) {
 			BaseSHA: "beefcafe", HeadSHA: "cafebabe", FailureDigest: "sha256:review-failure-body",
 		},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configRecoveryItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-review-configuration", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &recoveryRunID},
+		Type:    domain.AttentionReviewConfiguration, Priority: domain.PriorityHigh,
+		Reason:            "review parked on a configuration the trust profile no longer approves",
+		RequestedDecision: []domain.Action{domain.ActionAdoptReviewConfiguration, domain.ActionDiscuss, domain.ActionStop},
+		PRHeadSHA:         "cafebabe", ReviewConfigurationRecovery: &domain.ReviewConfigurationRecoveryBinding{
+			RunID: "run-1", InvocationID: "review-run-1-2", Round: 2,
+			BaseSHA: "beefcafe", HeadSHA: "cafebabe", FailureDigest: "sha256:review-failure-body",
+			Repo: "owner/repo", RepositoryID: 84958515,
+			SupersededProfileDigest: "sha256:profile-superseded",
+		},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
 	}, approved)
 	if err != nil {
 		t.Fatal(err)
@@ -841,6 +870,8 @@ func TestGolden(t *testing.T) {
 		{"review_record", reviewRecord},
 		{"review_failure", reviewFailure},
 		{"review_recovery_transition", reviewRecovery},
+		{"review_configuration_recovery_transition", configRecovery},
+		{"attention_item_review_configuration", configRecoveryItem},
 		{"classification", classification},
 		{"command_discuss", discussCommand},
 		{"conversation", conversation},

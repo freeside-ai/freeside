@@ -39,6 +39,18 @@ func validItemInput(typ domain.AttentionType) domain.AttentionItemInput {
 			BaseSHA: "base", HeadSHA: "head", FailureDigest: "sha256:failure",
 		}
 	}
+	if typ == domain.AttentionReviewConfiguration {
+		runID := domain.RunID("run-1")
+		in.Subject.RunID = &runID
+		in.PRHeadSHA = "head"
+		in.RequestedDecision = []domain.Action{domain.ActionAdoptReviewConfiguration}
+		in.ReviewConfigurationRecovery = &domain.ReviewConfigurationRecoveryBinding{
+			RunID: runID, InvocationID: "review-1", Round: 2,
+			BaseSHA: "base", HeadSHA: "head", FailureDigest: "sha256:failure",
+			Repo: "acme/widgets", RepositoryID: 7,
+			SupersededProfileDigest: "sha256:profile-superseded",
+		}
+	}
 	return in
 }
 
@@ -59,8 +71,8 @@ func textClaims(text domain.ClaimText, digest domain.Digest) []domain.AgentClaim
 // attention types constructs a valid item; an unknown type and an invalid
 // subject type are rejected.
 func TestNewAttentionItemTypes(t *testing.T) {
-	if len(domain.AllAttentionTypes) != 11 {
-		t.Fatalf("expected eleven Phase 1 attention types, got %d", len(domain.AllAttentionTypes))
+	if len(domain.AllAttentionTypes) != 12 {
+		t.Fatalf("expected twelve Phase 1 attention types, got %d", len(domain.AllAttentionTypes))
 	}
 	for _, typ := range domain.AllAttentionTypes {
 		t.Run(string(typ), func(t *testing.T) {
