@@ -18,6 +18,7 @@ public enum AttentionFixtures {
         .review_diminishing_returns,
         .review_dispute,
         .review_contradiction,
+        .review_configuration,
         .ready_for_final_review,
         .publish_blocked,
         .run_proposal,
@@ -38,6 +39,7 @@ public enum AttentionFixtures {
         ],
         .review_dispute: [.adjudicate, .discuss, .stop],
         .review_contradiction: [.recover_review],
+        .review_configuration: [.adopt_review_configuration, .discuss, .stop],
         .ready_for_final_review: [.open_pr, .return_to_agent, .mark_seen, .dismiss, .stop],
         .publish_blocked: [
             .rerun_trust_evaluation, .choose_alternate_profile, .inspect_trust_failure, .stop,
@@ -62,7 +64,7 @@ public enum AttentionFixtures {
         .open_pr, .return_to_agent, .mark_seen, .dismiss,
         .start, .start_with_changes, .decline, .snooze,
         .acknowledge, .run_doctor, .stop_unattended,
-        .resume_unattended, .recover_review,
+        .resume_unattended, .recover_review, .adopt_review_configuration,
     ]
 
     /// The default mock inbox: one open item per Phase 1 type.
@@ -165,6 +167,9 @@ public enum AttentionFixtures {
         case .review_contradiction:
             priority = .high
             interruption = .exceptional
+        case .review_configuration:
+            priority = .high
+            interruption = .planned_gate
         default:
             priority = type == .execution_failure ? .urgent : .normal
             interruption = .exceptional
@@ -219,6 +224,21 @@ public enum AttentionFixtures {
                     failure_digest: "sha256:failure-\(key)"
                 ))
             : nil
+        let reviewConfigurationRecovery: Components.Schemas.AttentionItem.review_configuration_recoveryPayload? =
+            type == .review_configuration
+            ? .init(
+                value1: .init(
+                    run_id: "run-\(key)",
+                    invocation_id: "review-run-\(key)-2",
+                    round: 2,
+                    base_sha: "beefcafe",
+                    head_sha: "cafebabe",
+                    failure_digest: "sha256:failure-\(key)",
+                    repo: "owner/repo",
+                    repository_id: 84_958_515,
+                    superseded_profile_digest: "sha256:profile-\(key)"
+                ))
+            : nil
 
         let item = Components.Schemas.AttentionItem(
             id: "item-\(key)",
@@ -242,6 +262,7 @@ public enum AttentionFixtures {
             pr_head_sha: prHeadSHA,
             commit_plan_notice: commitPlanNotice,
             review_recovery_binding: reviewRecoveryBinding,
+            review_configuration_recovery: reviewConfigurationRecovery,
             item_version: 1,
             interruption_class: interruption,
             conversation_id: nil,
@@ -299,6 +320,8 @@ public enum AttentionFixtures {
             return "the agent disputes a review finding as contrived"
         case .review_contradiction:
             return "review contradicted its execution contract"
+        case .review_configuration:
+            return "the trust profile no longer approves the reviewer configuration"
         case .ready_for_final_review:
             return "checks are green and the diff is ready"
         case .publish_blocked:

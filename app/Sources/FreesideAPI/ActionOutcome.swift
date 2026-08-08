@@ -21,6 +21,7 @@ public enum ActionOutcome: Equatable {
     case stopsUnattended
     case resumesUnattended
     case recoversReview
+    case adoptsReviewConfiguration
 
     public static func of(_ action: Components.Schemas.Action) -> ActionOutcome {
         switch action {
@@ -35,6 +36,8 @@ public enum ActionOutcome: Equatable {
             return .resumesUnattended
         case .recover_review:
             return .recoversReview
+        case .adopt_review_configuration:
+            return .adoptsReviewConfiguration
         case .open_pr, .mark_seen, .acknowledge, .inspect_trust_failure, .run_doctor:
             return .records
         case .discuss, .snooze, .start_with_changes, .continue_under_policy,
