@@ -992,7 +992,7 @@ func BuildCodexReviewAgentSpec(
 		ProviderProxyAuthority:          req.Network.proxyAuthority,
 		RefreshEndpointReachable:        false,
 		PublicationCredentials:          false,
-		LauncherEnvironmentDigest:       digestStrings(env),
+		LauncherEnvironmentDigest:       digestEnvironment(env),
 		CommandDigest:                   digestStrings(command),
 	}
 	if err := validateCodexReviewAgentSpec(cfg, req, spec, binding); err != nil {
@@ -1616,6 +1616,12 @@ func digestStrings(values []string) string {
 	return fmt.Sprintf("sha256:%x", h.Sum(nil))
 }
 
+func digestEnvironment(environment []string) string {
+	canonical := slices.Clone(environment)
+	slices.Sort(canonical)
+	return digestStrings(canonical)
+}
+
 func validateCodexReviewAgentSpec(
 	cfg CodexReviewConfig,
 	req CodexReviewSpec,
@@ -1728,7 +1734,7 @@ func validateCodexReviewAgentSpec(
 		binding.ProviderNetworkGateway != req.Network.gateway ||
 		binding.ProviderNetworkSubnet != req.Network.subnet ||
 		binding.ProviderProxyAuthority != req.Network.proxyAuthority ||
-		binding.LauncherEnvironmentDigest != digestStrings(wantEnv) ||
+		binding.LauncherEnvironmentDigest != digestEnvironment(wantEnv) ||
 		binding.CommandDigest != digestStrings(wantCommand) ||
 		!contentaddr.Valid(binding.AuthSnapshotDigest) || !contentaddr.Valid(string(binding.InstructionDigest)) {
 		return failf(CheckControlPlaneIsolation, "Codex review journal binding diverged from the admitted topology")

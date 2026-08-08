@@ -124,7 +124,7 @@
     "provider_proxy_authority": "127.0.0.1:43123",
     "refresh_endpoint_reachable": false,
     "publication_credentials": false,
-    "launcher_environment_digest": "sha256:47f4dcdaa18bce03dff3fe6dcd5a9f357cf18e61071d3016c2a3ff3dd8aa569c",
+    "launcher_environment_digest": "sha256:0539629c9afabb416eea6a884893544e79220d27a38fdd8e8bd40cd2c1dae246",
     "command_digest": "sha256:b7b268209b5039965e23212b0e5f36ef932aa2c292fbe2c6c9a3ac00643a632d",
     "review_container": "",
     "review_container_fingerprint": "",

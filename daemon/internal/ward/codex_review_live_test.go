@@ -121,49 +121,8 @@ func TestLiveCodexReviewLifecycleCrossesReconstructionStartBoundary(t *testing.T
 		t.Fatalf("close review proxy: %v", err)
 	}
 
-	// #606 tracks Apple container's post-start environment reordering, which
-	// currently makes the ordinary AbortCodexReview identity comparison reject
-	// this otherwise authenticated fixture. Keep #605's live boundary proof
-	// independent of that adjacent bug: use the same durable ownership
-	// fingerprints and exclusive volume lease to reap only this test's objects.
-	intent := *journal.intent
-	owner := Label{Key: ownershipLabelKey, Value: intent.OwnershipToken}
-	if err := backend.reapCodexReviewContainer(ctx, names.reviewContainer,
-		objectClaim{attempted: true, owned: true, fingerprint: launch.Binding.ReviewContainerFingerprint}, owner,
-	); err != nil {
-		t.Fatalf("reap live review container: %v", err)
-	}
-	lease, _, err := reviewConfig.VolumeLifecycleLeaser.RecoverCodexReviewVolumeLease(
-		ctx, owner.Value, codexReviewLeaseVolumes(workspace, names.shadowVolume, names.snapshotVolume),
-	)
-	if err != nil {
-		t.Fatalf("recover live review volume lease: %v", err)
-	}
-	claims := make(map[string]objectClaim, len(intent.Resources))
-	for _, resource := range intent.Resources {
-		claims[resource.Name] = objectClaim{attempted: true, owned: true, fingerprint: resource.Fingerprint}
-	}
-	if err := backend.deleteCodexReviewVolume(ctx, names.shadowVolume, claims[names.shadowVolume], owner); err != nil {
-		t.Fatalf("delete live shadow volume: %v", err)
-	}
-	if err := backend.deleteCodexReviewVolume(ctx, names.snapshotVolume, claims[names.snapshotVolume], owner); err != nil {
-		t.Fatalf("delete live snapshot volume: %v", err)
-	}
-	workspaceOwner := Label{Key: ownershipLabelKey, Value: journal.workspaceBinding.OwnershipToken}
-	if err := backend.deleteCodexReviewVolume(ctx, workspace,
-		objectClaim{attempted: true, owned: true, fingerprint: journal.workspaceBinding.CreationFingerprint},
-		workspaceOwner,
-	); err != nil {
-		t.Fatalf("delete live workspace volume: %v", err)
-	}
-	if err := backend.teardownCodexReviewNetwork(ctx, names.network, claims[names.network], owner); err != nil {
-		t.Fatalf("delete live review network: %v", err)
-	}
-	if err := lease.ReleaseCodexReviewVolumeLease(ctx); err != nil {
-		t.Fatalf("release live review volume lease: %v", err)
-	}
-	if err := journal.CloseCodexReviewIntent(ctx, runID); err != nil {
-		t.Fatalf("close live review intent: %v", err)
+	if err := backend.AbortCodexReview(ctx, reviewConfig, runID); err != nil {
+		t.Fatalf("AbortCodexReview: %v", err)
 	}
 	if journal.intent.State != CodexReviewIntentClosed {
 		t.Fatalf("intent state after teardown = %q, want closed", journal.intent.State)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -165,17 +166,24 @@ func (b *Backend) authenticateCodexReviewContainerWithImage(
 		return CodexReviewLaunchIntent{}, CodexReviewJournalBinding{}, InspectReport{},
 			failf(CheckControlPlaneIsolation, "Codex review container is foreign or unprovable")
 	}
-	launcherEnv := report.Env
-	if len(launcherEnv) > 0 && launcherEnv[0] == fixedContainerPathEnv {
-		launcherEnv = launcherEnv[1:]
-	}
+	launcherEnv, hasSingleRuntimePath := stripCodexReviewRuntimePath(report.Env)
 	if (approvedImage != "" && !sameImage(report.ImageReference, approvedImage)) ||
+		!hasSingleRuntimePath ||
 		digestStrings(report.Command) != binding.CommandDigest ||
-		digestStrings(launcherEnv) != binding.LauncherEnvironmentDigest {
+		digestEnvironment(launcherEnv) != binding.LauncherEnvironmentDigest {
 		return CodexReviewLaunchIntent{}, CodexReviewJournalBinding{}, InspectReport{},
 			failf(CheckControlPlaneIsolation, "Codex review realized command changed after start")
 	}
 	return intent, binding, report, nil
+}
+
+func stripCodexReviewRuntimePath(environment []string) ([]string, bool) {
+	pathIndex := slices.Index(environment, fixedContainerPathEnv)
+	if pathIndex < 0 || slices.Contains(environment[pathIndex+1:], fixedContainerPathEnv) {
+		return environment, false
+	}
+	launcherEnvironment := slices.Clone(environment)
+	return append(launcherEnvironment[:pathIndex], launcherEnvironment[pathIndex+1:]...), true
 }
 
 // CleanupCodexReview reaps the authenticated terminal topology only after the
