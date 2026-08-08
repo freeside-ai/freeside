@@ -282,6 +282,14 @@ func newProductionPublicationHarnessWithPolicyKeys(
 		invocation:                submitted.InvocationID,
 	}
 	p.reviewSource = p.reviewer
+	// Mirror production: the signet decision-time adoption gate reads the
+	// engine's effective reviewer configuration. The closure reads the
+	// harness field so tests that drift the digest after construction stay
+	// in lockstep with the engines they rebuild.
+	p.attention = signet.NewService(p.store, signet.WithBlobStore(p.blobs),
+		signet.WithEffectiveReviewConfiguration(func() domain.Digest {
+			return p.reviewConfigurationDigest
+		}))
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	return p
 }
@@ -939,7 +947,11 @@ func TestProductionReviewConfigurationMustMatchTrustProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 1 {
+	// The configuration failure parks the run (issue #611, revising #527
+	// decision 3 for this class): no terminal record, no blocked item, and
+	// the recovery-bearing item is raised by the next tick's gate pass.
+	if result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 0 ||
+		result.PublicationTasksCompleted != 0 {
 		t.Fatalf("configuration-mismatched result = %#v", result)
 	}
 	if recoveryCalls != 2 {
@@ -957,11 +969,35 @@ func TestProductionReviewConfigurationMustMatchTrustProfile(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.reconcileLanes(); err != nil {
-		t.Fatalf("converged configuration mismatch replay: %v", err)
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
+		t.Fatalf("parked configuration replay = %#v, %v", result, err)
 	}
 	if recoveryCalls != 2 {
 		t.Fatalf("startup review recovery repeated after success: %d calls", recoveryCalls)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		digest, err := tx.ReviewFailureBodyDigest(p.ctx, failure.InvocationID)
+		if err != nil {
+			return err
+		}
+		item, err := tx.GetAttentionItem(p.ctx, productionReviewItemIDForTest(p.runID, 2))
+		if err != nil {
+			return err
+		}
+		if item.Type != domain.AttentionReviewConfiguration ||
+			!item.Offers(domain.ActionAdoptReviewConfiguration) || item.Status != domain.StatusOpen ||
+			item.ReviewConfigurationRecovery == nil ||
+			!item.ReviewConfigurationRecovery.Matches(failure, digest) ||
+			item.ReviewConfigurationRecovery.SupersededProfileDigest != p.profile.ProfileDigest {
+			t.Fatalf("configuration recovery item = %#v", item)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1752,7 +1788,9 @@ func TestProductionReviewWorkspaceMaterializationRefusalIsDurable(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.BlockedItemsCreated != 1 || result.PublicationTasksCompleted != 1 {
+	// A configuration-class refusal parks the run (issue #611); it no longer
+	// terminalizes the publication task behind a dispute.
+	if result.BlockedItemsCreated != 0 || result.PublicationTasksCompleted != 0 {
 		t.Fatalf("materialization refusal result = %#v", result)
 	}
 	if faults.requestCalls != 0 {
@@ -1783,6 +1821,19 @@ func TestProductionReviewWorkspaceMaterializationRefusalIsDurable(t *testing.T) 
 	}
 	if faults.requestCalls != 0 {
 		t.Fatalf("review launched while replaying materialization refusal: %d requests", faults.requestCalls)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		item, err := tx.GetAttentionItem(p.ctx, productionReviewItemIDForTest(p.runID, 1))
+		if err != nil {
+			return err
+		}
+		if item.Type != domain.AttentionReviewConfiguration ||
+			!item.Offers(domain.ActionAdoptReviewConfiguration) || item.Status != domain.StatusOpen {
+			t.Fatalf("materialization refusal item = %#v", item)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -4176,5 +4227,456 @@ func TestProductionPublicationRecordsWorkUnitPRBinding(t *testing.T) {
 	}
 	if again := readBinding(); again != binding {
 		t.Fatalf("replay churned the binding: %+v vs %+v", again, binding)
+	}
+}
+
+// recordSupersedingReviewProfile records (and thereby activates as latest) a
+// profile revision identical to the harness profile except its review
+// configuration digest; widen additionally flips a non-review trust field to
+// exercise the supersession gate's refusal.
+func recordSupersedingReviewProfile(
+	t *testing.T, p *productionPublicationHarness, configDigest domain.Digest, widen bool,
+) domain.AutomationTrustProfile {
+	t.Helper()
+	in := domain.AutomationTrustProfileInput{
+		Repo:                       p.profile.Repo,
+		RepositoryID:               p.profile.RepositoryID,
+		PRExecution:                p.profile.PRExecution,
+		CandidateAutomationChanges: p.profile.CandidateAutomationChanges,
+		PRGitHubTokenPermissions:   p.profile.PRGitHubTokenPermissions,
+		AllowOIDC:                  p.profile.AllowOIDC,
+		AllowEnvironmentSecrets:    p.profile.AllowEnvironmentSecrets,
+		AllowSecretBearingPRJobs:   p.profile.AllowSecretBearingPRJobs,
+		AllowSelfHostedCI:          p.profile.AllowSelfHostedCI,
+		AllowPullRequestTarget:     p.profile.AllowPullRequestTarget,
+		AllowReusableWorkflows:     p.profile.AllowReusableWorkflows,
+		AllowPackagePublishing:     p.profile.AllowPackagePublishing,
+		AllowArtifactConsumers:     p.profile.AllowArtifactConsumers,
+		CommitPlan:                 p.profile.CommitPlan,
+		MessageRuleset:             p.profile.MessageRuleset,
+		WorkflowAuditDigest:        p.profile.WorkflowAuditDigest,
+		Review: domain.ReviewSettings{
+			Mode: p.profile.Review.Mode, ConfigDigest: configDigest,
+		},
+		ProtectedPaths: p.profile.ProtectedPaths,
+	}
+	if widen {
+		in.AllowSelfHostedCI = !in.AllowSelfHostedCI
+	}
+	profile, err := domain.NewAutomationTrustProfile(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+		return tx.RecordTrustProfile(p.ctx, profile, p.now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return profile
+}
+
+// parkOnSupersededReviewConfiguration drives the harness run into the parked
+// configuration state under a new effective digest and returns the raised
+// recovery item's snapshot.
+func parkOnSupersededReviewConfiguration(
+	t *testing.T, p *productionPublicationHarness, effective domain.Digest,
+) signet.AttentionItemSnapshot {
+	t.Helper()
+	p.reviewConfigurationDigest = effective
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if result, err := p.reconcileLanes(); err != nil ||
+		result.PublicationTasksCompleted != 0 || result.BlockedItemsCreated != 0 {
+		t.Fatalf("park on superseded configuration = %#v, %v", result, err)
+	}
+	if result, err := p.reconcileLanes(); err != nil ||
+		result.PublicationTasksCompleted != 0 || result.BlockedItemsCreated != 0 {
+		t.Fatalf("raise configuration recovery item = %#v, %v", result, err)
+	}
+	snapshot, err := p.attention.GetAttentionItem(
+		p.ctx, productionReviewItemIDForTest(p.runID, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Item.Type != domain.AttentionReviewConfiguration ||
+		snapshot.Item.Status != domain.StatusOpen ||
+		snapshot.Item.ReviewConfigurationRecovery == nil {
+		t.Fatalf("parked configuration item = %#v", snapshot.Item)
+	}
+	return snapshot
+}
+
+func submitOnParkedConfigurationItem(
+	t *testing.T, p *productionPublicationHarness,
+	snapshot signet.AttentionItemSnapshot, commandID string, action domain.Action,
+) error {
+	t.Helper()
+	deviceID := domain.DeviceID("device-config-recovery")
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		return tx.PutDevice(p.ctx, domain.Device{
+			ID: deviceID, DisplayName: "Configuration recovery device",
+			Status: domain.DeviceActive, PairedAt: p.now,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := p.attention.Submit(p.ctx, signet.ClientCommand{
+		CommandID: commandID, DeviceID: deviceID,
+		ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: snapshot.Item.ID, ItemVersion: snapshot.Item.ItemVersion,
+			PRHeadSHA:       snapshot.Item.PRHeadSHA,
+			ArtifactDigests: snapshot.Item.ArtifactDigests,
+			Action:          action,
+		},
+	})
+	return err
+}
+
+// TestProductionReviewConfigurationAdoptionResumesRun is issue #611's core
+// acceptance: a run parked on a superseded reviewer configuration resumes
+// after one operator-authorized adoption of a review-configuration-only
+// profile supersession, with the parked failure row and the superseded
+// profile revision byte-identical afterward and no terminal record written
+// while parked.
+func TestProductionReviewConfigurationAdoptionResumesRun(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	effective := domain.Digest("sha256:" + strings.Repeat("d", 64))
+	snapshot := parkOnSupersededReviewConfiguration(t, p, effective)
+	firstID := engine.ProductionReviewInvocationID(p.runID, 1)
+	var original domain.ReviewFailure
+	var originalDigest domain.Digest
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		original, err = tx.GetReviewFailure(p.ctx, firstID)
+		if err != nil {
+			return err
+		}
+		originalDigest, err = tx.ReviewFailureBodyDigest(p.ctx, firstID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	superseding := recordSupersedingReviewProfile(t, p, effective, false)
+	if err := submitOnParkedConfigurationItem(
+		t, p, snapshot, "adopt-config-round-1", domain.ActionAdoptReviewConfiguration,
+	); err != nil {
+		t.Fatalf("submit adoption: %v", err)
+	}
+
+	p.now = p.now.Add(time.Second)
+	secondID := engine.ProductionReviewInvocationID(p.runID, 2)
+	p.reviewer.Script(secondID, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			ConfigurationDigest: effective,
+			CompletedAt:         p.now, CompletionEvidence: productionDigest([]byte("adopted clean review")),
+		},
+	})
+	result, err := p.reconcileLanes()
+	if err != nil || result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
+		t.Fatalf("adopted review = %#v, %v", result, err)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		failure, err := tx.GetReviewFailure(p.ctx, firstID)
+		if err != nil {
+			return err
+		}
+		digest, err := tx.ReviewFailureBodyDigest(p.ctx, firstID)
+		if err != nil {
+			return err
+		}
+		if failure != original || digest != originalDigest {
+			t.Fatalf("original failure changed: %#v/%s, want %#v/%s",
+				failure, digest, original, originalDigest)
+		}
+		superseded, err := tx.GetTrustProfile(p.ctx, p.profile.ProfileDigest)
+		if err != nil {
+			return err
+		}
+		if superseded.ProfileDigest != p.profile.ProfileDigest {
+			t.Fatalf("superseded profile changed: %#v", superseded)
+		}
+		latest, err := tx.LatestTrustProfile(p.ctx, p.profile.Repo)
+		if err != nil {
+			return err
+		}
+		if latest.ProfileDigest != superseding.ProfileDigest {
+			t.Fatalf("latest profile = %s, want adopted %s",
+				latest.ProfileDigest, superseding.ProfileDigest)
+		}
+		record, err := tx.LatestReviewRecord(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if record.Round != 2 || record.InvocationID != secondID {
+			t.Fatalf("adopted review record = %#v", record)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestProductionAdoptedReviewReplayPublishesWithoutReparking pins durable
+// crash recovery across an adoption (issue #611, Codex round 1): the adopted
+// round's clean record persists, the publishing push then fails transiently,
+// and a restarted daemon replays the record and publishes. Before the fix,
+// the configuration gate consulted the adoption only while the parked failure
+// outranked the latest review row, so this replay re-recorded a configuration
+// failure and re-parked an already recovered run.
+func TestProductionAdoptedReviewReplayPublishesWithoutReparking(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	fault := &faultReviewSource{ReviewSource: p.reviewer}
+	p.reviewSource = fault
+	effective := domain.Digest("sha256:" + strings.Repeat("d", 64))
+	snapshot := parkOnSupersededReviewConfiguration(t, p, effective)
+	recordSupersedingReviewProfile(t, p, effective, false)
+	if err := submitOnParkedConfigurationItem(
+		t, p, snapshot, "adopt-config-replay", domain.ActionAdoptReviewConfiguration,
+	); err != nil {
+		t.Fatalf("submit adoption: %v", err)
+	}
+
+	p.now = p.now.Add(time.Second)
+	secondID := engine.ProductionReviewInvocationID(p.runID, 2)
+	p.reviewer.Script(secondID, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			ConfigurationDigest: effective,
+			CompletedAt:         p.now, CompletionEvidence: productionDigest([]byte("adopted clean review")),
+		},
+	})
+	p.transport.failNextPush()
+	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 ||
+		result.PublicationTasksCompleted != 0 {
+		t.Fatalf("transient publishing push after adoption = %#v, %v", result, err)
+	}
+	if fault.requestCalls != 1 {
+		t.Fatalf("adopted round review requests = %d, want 1", fault.requestCalls)
+	}
+	// The adopted round's clean record persisted before the failed push.
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		review, err := tx.LatestReviewRecord(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if review.Outcome != domain.ReviewClean || review.Round != 2 {
+			t.Fatalf("persisted adopted review before push = %#v", review)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The daemon restarts, so the later pass replays from durable state alone.
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.now = p.now.Add(time.Minute)
+	result, err := p.reconcileLanes()
+	if err != nil || result.ReadyItemsCreated != 1 || result.PublicationTasksCompleted != 1 ||
+		result.LastPRNumber == 0 {
+		t.Fatalf("adopted record-replay publish = %#v, %v", result, err)
+	}
+	if fault.requestCalls != 1 {
+		t.Fatalf("record replay invoked a new review round: requests = %d", fault.requestCalls)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		failure, err := tx.LatestReviewFailure(p.ctx, p.runID)
+		if err != nil {
+			return err
+		}
+		if failure.Round != 1 || failure.Class != domain.ReviewFailureConfiguration {
+			t.Fatalf("replay recorded a new failure = %#v", failure)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.assertReady(t)
+}
+
+// TestProductionReviewConfigurationStopConcludesParkedRun pins the operator's
+// other exit: concluding the parked item without an effective adoption ends
+// the run the way #527 decision 3 always did for this class.
+func TestProductionReviewConfigurationStopConcludesParkedRun(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	effective := domain.Digest("sha256:" + strings.Repeat("d", 64))
+	snapshot := parkOnSupersededReviewConfiguration(t, p, effective)
+	if err := submitOnParkedConfigurationItem(
+		t, p, snapshot, "stop-config-round-1", domain.ActionStop,
+	); err != nil {
+		t.Fatalf("submit stop: %v", err)
+	}
+	result, err := p.reconcileLanes()
+	if err != nil || result.PublicationTasksCompleted != 1 || result.BlockedItemsCreated != 1 {
+		t.Fatalf("stopped parked run = %#v, %v", result, err)
+	}
+	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
+		t.Fatalf("stopped run replay = %#v, %v", result, err)
+	}
+}
+
+// TestProductionReviewConfigurationAdoptionRejectsTrustWidening pins the
+// fail-closed arm at the decision boundary: an adoption whose only available
+// superseding revision changes trust beyond the review configuration digest
+// rolls the whole decision back, leaving the item open and the run parked.
+func TestProductionReviewConfigurationAdoptionRejectsTrustWidening(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	effective := domain.Digest("sha256:" + strings.Repeat("d", 64))
+	snapshot := parkOnSupersededReviewConfiguration(t, p, effective)
+	recordSupersedingReviewProfile(t, p, effective, true)
+	err := submitOnParkedConfigurationItem(
+		t, p, snapshot, "adopt-config-widened", domain.ActionAdoptReviewConfiguration,
+	)
+	if !errors.Is(err, domain.ErrReviewConfigSupersessionInvalid) {
+		t.Fatalf("widened adoption = %v, want %v", err, domain.ErrReviewConfigSupersessionInvalid)
+	}
+	item, err := p.attention.GetAttentionItem(p.ctx, snapshot.Item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Item.Status != domain.StatusOpen {
+		t.Fatalf("rejected adoption concluded the item: %#v", item.Item)
+	}
+	if result, err := p.reconcileLanes(); err != nil ||
+		result.PublicationTasksCompleted != 0 || result.BlockedItemsCreated != 0 {
+		t.Fatalf("run left the park after a rejected adoption = %#v, %v", result, err)
+	}
+}
+
+// TestProductionReviewConfigurationAdoptionOutlivedByNewerProfileStaysParked
+// pins the presence-parks contract: once the operator has adopted, a later
+// profile activation makes the recorded adoption ineffective, and the run
+// must stay parked (no terminal record, no resume) rather than treating the
+// concluded item as a decline.
+func TestProductionReviewConfigurationAdoptionOutlivedByNewerProfileStaysParked(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	effective := domain.Digest("sha256:" + strings.Repeat("d", 64))
+	snapshot := parkOnSupersededReviewConfiguration(t, p, effective)
+	recordSupersedingReviewProfile(t, p, effective, false)
+	if err := submitOnParkedConfigurationItem(
+		t, p, snapshot, "adopt-config-outlived", domain.ActionAdoptReviewConfiguration,
+	); err != nil {
+		t.Fatalf("submit adoption: %v", err)
+	}
+	// The operator activates yet another revision before the run resumes; the
+	// recorded adoption no longer names the latest profile.
+	recordSupersedingReviewProfile(
+		t, p, domain.Digest("sha256:"+strings.Repeat("f", 64)), false)
+	for tick := 0; tick < 3; tick++ {
+		result, err := p.reconcileLanes()
+		if err != nil || result.PublicationTasksCompleted != 0 ||
+			result.BlockedItemsCreated != 0 || result.ReadyItemsCreated != 0 {
+			t.Fatalf("outlived adoption tick %d = %#v, %v", tick, result, err)
+		}
+	}
+}
+
+// TestProductionReviewConfigurationAdoptionRejectsIneffectiveTarget pins the
+// decision-time effectiveness gate end to end (issue #611, Codex round 4):
+// adopting while the latest activated revision does not approve the daemon's
+// effective configuration is rejected with the item left open, so the
+// operator activates the matching revision, retries, and the run resumes.
+// Without the gate, the accepted-but-ineffective adoption would conclude the
+// item while the one-adoption-per-failure binding blocks a corrected retry,
+// parking the run permanently.
+func TestProductionReviewConfigurationAdoptionRejectsIneffectiveTarget(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	effective := domain.Digest("sha256:" + strings.Repeat("d", 64))
+	snapshot := parkOnSupersededReviewConfiguration(t, p, effective)
+	// The activated revision approves a different configuration than the
+	// daemon effectively runs; adopting it could never grant authority.
+	recordSupersedingReviewProfile(
+		t, p, domain.Digest("sha256:"+strings.Repeat("e", 64)), false)
+	err := submitOnParkedConfigurationItem(
+		t, p, snapshot, "adopt-config-ineffective", domain.ActionAdoptReviewConfiguration,
+	)
+	if !errors.Is(err, domain.ErrReviewConfigAdoptionIneffective) {
+		t.Fatalf("ineffective adoption = %v, want %v", err, domain.ErrReviewConfigAdoptionIneffective)
+	}
+	item, err := p.attention.GetAttentionItem(p.ctx, snapshot.Item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Item.Status != domain.StatusOpen {
+		t.Fatalf("rejected adoption concluded the item: %#v", item.Item)
+	}
+	if result, err := p.reconcileLanes(); err != nil ||
+		result.PublicationTasksCompleted != 0 || result.BlockedItemsCreated != 0 {
+		t.Fatalf("run left the park after a rejected adoption = %#v, %v", result, err)
+	}
+
+	// The operator activates the matching revision and retries on the still
+	// open item; the adopted round then reviews clean and publishes.
+	recordSupersedingReviewProfile(t, p, effective, false)
+	if err := submitOnParkedConfigurationItem(
+		t, p, item, "adopt-config-effective", domain.ActionAdoptReviewConfiguration,
+	); err != nil {
+		t.Fatalf("submit retry adoption: %v", err)
+	}
+	p.now = p.now.Add(time.Second)
+	secondID := engine.ProductionReviewInvocationID(p.runID, 2)
+	p.reviewer.Script(secondID, fake.ReviewScript{
+		Outcome: fake.OutcomeComplete,
+		Result: exec.ReviewResult{
+			BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+			Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+			ConfigurationDigest: effective,
+			CompletedAt:         p.now, CompletionEvidence: productionDigest([]byte("retry adopted clean review")),
+		},
+	})
+	result, err := p.reconcileLanes()
+	if err != nil || result.PublicationTasksCompleted != 1 || result.ReadyItemsCreated != 1 {
+		t.Fatalf("retried adoption resume = %#v, %v", result, err)
+	}
+}
+
+// TestProductionReviewLegacyDisputeItemStillTerminalizes covers the upgrade
+// seam: a pre-#611 daemon that raised the terminalizing review_dispute for a
+// configuration failure and crashed before completing the task left that item
+// at the round's deterministic identity. The parked path honors the contract
+// that item presented instead of failing closed against its shape.
+func TestProductionReviewLegacyDisputeItemStillTerminalizes(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.reviewConfigurationDigest = domain.Digest("sha256:" + strings.Repeat("d", 64))
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatalf("record configuration failure: %v", err)
+	}
+	runID := p.runID
+	legacy, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: productionReviewItemIDForTest(p.runID, 1), ProjectID: p.projectID,
+		Subject: domain.Subject{
+			Type: domain.SubjectRun, ID: domain.SubjectID(p.runID), RunID: &runID,
+		},
+		Type: domain.AttentionReviewDispute, Priority: domain.PriorityNormal,
+		Reason:            "Codex review stopped because of a configuration failure.",
+		RequestedDecision: []domain.Action{domain.ActionDiscuss, domain.ActionStop},
+		PRHeadSHA:         p.replay.HeadSHA, ItemVersion: 1,
+		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(p.ctx, legacy)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := p.reconcileLanes()
+	if err != nil || result.PublicationTasksCompleted != 1 || result.BlockedItemsCreated != 1 {
+		t.Fatalf("legacy dispute conclusion = %#v, %v", result, err)
 	}
 }
