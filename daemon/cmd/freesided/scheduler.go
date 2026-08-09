@@ -48,10 +48,10 @@ type (
 // wires no native reviewer.
 type nativeReviewObserver func(ctx context.Context, repo string, number int) (publish.PullReviewObservation, error)
 
-// mergeCapture is the former §5.18 base-watch capture hook. Production and
-// fake composition leave it unwired after #463 moved resource observation to
-// active_resource.go; it remains here only as a focused regression harness for
-// the scheduler/capture transaction seam while that older coverage is ported.
+// mergeCapture is the §5.18 base-watch capture hook. Production wires it so a
+// base advance caused by the bound PR's merge records completion in the same
+// transaction as supersession. The active-resource reconciler remains the
+// status-independent recovery path when that observation fails or is missed.
 type mergeCapture struct {
 	pull  pullObserver
 	issue issueObserver
@@ -79,11 +79,12 @@ func (c mergeCapture) observe(
 		return nil, nil
 	}
 	var (
-		declaration domain.WorkUnitDeclaration
-		binding     domain.WorkUnitPRBinding
-		declared    bool
-		bound       bool
-		complete    bool
+		declaration  domain.WorkUnitDeclaration
+		binding      domain.WorkUnitPRBinding
+		readyBinding domain.ReadyItemPRBinding
+		declared     bool
+		bound        bool
+		complete     bool
 	)
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		d, err := tx.GetWorkUnitDeclarationByRun(ctx, *item.Subject.RunID)
@@ -103,9 +104,15 @@ func (c mergeCapture) observe(
 		}
 		if _, err := tx.GetWorkUnitCompletion(ctx, d.ID); err == nil {
 			complete = true
+			return nil
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return err
 		}
+		ready, err := tx.GetReadyItemPRBinding(ctx, item.ID)
+		if err != nil {
+			return err
+		}
+		readyBinding = ready
 		binding, bound = b, true
 		return nil
 	}); err != nil {
@@ -123,13 +130,21 @@ func (c mergeCapture) observe(
 		// forever unobserved.
 		return nil, fmt.Errorf("work unit %s is declared but has no pr binding yet", declaration.ID)
 	}
-	// The binding's coordinates must restate the first-party anchors before
-	// anything is observed or evaluated through them.
-	if binding.Repo != watch.Repo || binding.BaseRef != watch.BaseRef {
-		return nil, fmt.Errorf("work unit %s pr binding names %s@%s, the armed watch %s@%s",
-			declaration.ID, binding.Repo, binding.BaseRef, watch.Repo, watch.BaseRef)
+	// The work-unit binding must restate the independently reconstructed ready
+	// binding before anything is observed or evaluated through it. The watch
+	// and item add the scheduler pass's first-party base and head anchors.
+	if readyBinding.RunID != *item.Subject.RunID ||
+		binding.Repo != readyBinding.Repo || binding.RepositoryID != readyBinding.RepositoryID ||
+		binding.PRNumber != readyBinding.PRNumber || binding.BaseRef != readyBinding.BaseRef ||
+		binding.HeadSHA != readyBinding.HeadSHA {
+		return nil, fmt.Errorf("work-unit binding %s disagrees with ready resource %s",
+			binding.UnitID, readyBinding.ItemID)
 	}
-	if item.PRHeadSHA == "" || binding.HeadSHA != item.PRHeadSHA {
+	if readyBinding.Repo != watch.Repo || readyBinding.BaseRef != watch.BaseRef {
+		return nil, fmt.Errorf("work unit %s pr binding names %s@%s, the armed watch %s@%s",
+			declaration.ID, readyBinding.Repo, readyBinding.BaseRef, watch.Repo, watch.BaseRef)
+	}
+	if item.PRHeadSHA == "" || readyBinding.HeadSHA != item.PRHeadSHA {
 		return nil, fmt.Errorf("work unit %s pr binding head does not restate the ready item's published head",
 			declaration.ID)
 	}
@@ -138,15 +153,16 @@ func (c mergeCapture) observe(
 	if err != nil {
 		return nil, fmt.Errorf("observe pull %s#%d: %w", binding.Repo, binding.PRNumber, err)
 	}
-	// The fact carries the OBSERVED base-repository identity, never the
-	// binding's: the request is addressed by name, and stamping the
-	// binding's id onto whatever the name currently reaches would make the
-	// evaluator's repository check compare a value against itself. A name
-	// re-bound to a different repository records that repository's facts
-	// under its own id, and the unit never completes on them.
+	if err := validateObservedPullIdentityCoordinates(obs.BaseRepoID, obs.Number); err != nil {
+		return nil, fmt.Errorf("observe pull %s#%d: %w", binding.Repo, binding.PRNumber, err)
+	}
+	if obs.BaseRepoID != binding.RepositoryID || obs.Number != binding.PRNumber {
+		return nil, fmt.Errorf("observe pull %s#%d returned identity %d#%d",
+			binding.Repo, binding.PRNumber, obs.BaseRepoID, obs.Number)
+	}
 	pullFact := domain.PullMergeFact{
 		Repo: binding.Repo, RepositoryID: obs.BaseRepoID,
-		PRNumber: binding.PRNumber, State: domain.PullRequestState(obs.State),
+		PRNumber: obs.Number, State: domain.PullRequestState(obs.State),
 		Merged: obs.Merged, MergeCommitSHA: obs.MergeCommitSHA,
 		BaseRef: obs.BaseRef, HeadSHA: obs.HeadSHA, ObservedAt: firedAt.UTC(),
 	}
@@ -171,6 +187,10 @@ func (c mergeCapture) observe(
 		if err != nil {
 			return nil, fmt.Errorf("observe issue %s#%d: %w", binding.Repo, *declaration.BoundIssue, err)
 		}
+		if iobs.Number <= 0 || iobs.Number != *declaration.BoundIssue {
+			return nil, fmt.Errorf("observe issue %s#%d returned number %d",
+				binding.Repo, *declaration.BoundIssue, iobs.Number)
+		}
 		// The name could be re-bound between the two requests (transfer
 		// plus reuse), so the name→identity binding is re-verified after
 		// the issue read with a second pull observation — conditional, so
@@ -181,12 +201,15 @@ func (c mergeCapture) observe(
 		if err != nil {
 			return nil, fmt.Errorf("re-verify repository identity %s: %w", binding.Repo, err)
 		}
-		if recheck.BaseRepoID != pullFact.RepositoryID {
-			return nil, fmt.Errorf("repository %s changed identity during the capture pass", binding.Repo)
+		if err := validateObservedPullIdentityCoordinates(recheck.BaseRepoID, recheck.Number); err != nil {
+			return nil, fmt.Errorf("re-verify repository identity %s: %w", binding.Repo, err)
+		}
+		if recheck.BaseRepoID != pullFact.RepositoryID || recheck.Number != binding.PRNumber {
+			return nil, fmt.Errorf("repository %s changed pull identity during the capture pass", binding.Repo)
 		}
 		fact := domain.IssueStateFact{
 			Repo: binding.Repo, RepositoryID: pullFact.RepositoryID,
-			IssueNumber: *declaration.BoundIssue, State: domain.IssueState(iobs.State),
+			IssueNumber: iobs.Number, State: domain.IssueState(iobs.State),
 			ClosedByCommitSHA: iobs.ClosedByCommitSHA, ObservedAt: firedAt.UTC(),
 		}
 		if err := fact.Validate(); err != nil {
@@ -253,7 +276,44 @@ func (c mergeCapture) observe(
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return err
 		}
-		return tx.RecordWorkUnitCompletion(ctx, completion)
+		// Appends coalesce an observation that repeats the latest material
+		// state. Re-derive from the rows visible after those appends so a shared
+		// deterministic PR records the persisted fact timestamp, not this
+		// capture pass's later timestamp.
+		persistedDeclaration, err := tx.GetWorkUnitDeclaration(ctx, completion.UnitID)
+		if err != nil {
+			return err
+		}
+		persistedBinding, err := tx.GetWorkUnitPRBinding(ctx, completion.UnitID)
+		if err != nil {
+			return err
+		}
+		persistedPull, err := tx.LatestPullMergeFact(
+			ctx, persistedBinding.RepositoryID, persistedBinding.PRNumber,
+		)
+		if err != nil {
+			return err
+		}
+		var persistedIssue *domain.IssueStateFact
+		if persistedDeclaration.CompletionCriterion == domain.CompletionBoundIssueClosedByMergedPR {
+			if persistedDeclaration.BoundIssue == nil {
+				return errors.New("bound-issue completion criterion has no bound issue")
+			}
+			issue, err := tx.LatestIssueStateFact(
+				ctx, persistedBinding.RepositoryID, *persistedDeclaration.BoundIssue,
+			)
+			if err != nil {
+				return err
+			}
+			persistedIssue = &issue
+		}
+		persistedCompletion, ok := domain.EvaluateWorkUnitCompletion(
+			persistedDeclaration, persistedBinding, persistedPull, persistedIssue,
+		)
+		if !ok {
+			return errors.New("persisted resource facts do not support observed work-unit completion")
+		}
+		return tx.RecordWorkUnitCompletion(ctx, persistedCompletion)
 	}, nil
 }
 
@@ -392,8 +452,8 @@ func recheckItemSubject(
 // failure is an observe_failed outcome; the recurring watch retries at its
 // next nominal fire.
 //
-// The optional mergeCapture argument is unwired in every daemon composition;
-// see its declaration for the narrow regression-test reason it remains.
+// Production wires mergeCapture; the fake lane leaves it empty because its
+// static base never advances and its PRs never merge.
 func baseAdvanceRegistration(st *store.Store, observe baseTipObserver, capture mergeCapture) scheduler.Registration {
 	return scheduler.Registration{
 		// The built-in open-item check would resolve a concluded item's
@@ -673,9 +733,10 @@ func newClaudeScheduler(
 	// intent recorded by the onboarding CLI keeps its durable observation
 	// (and its expiry gets recorded) even when the operator never resumes.
 	kinds[domain.ScheduleInstallationPoll] = installPollRegistration(wiring.authority, wiring.janitor)
-	// PR/issue capture has its own plain-ticker lifecycle (active_resource.go).
-	// The durable base watch observes only base freshness in production.
-	for kind, reg := range publicationWatchRegistrations(st, wiring.observeBaseTip, mergeCapture{}) {
+	// Capture beside the base observation closes the merge/base-advance race;
+	// active_resource.go independently recovers any capture missed here.
+	capture := mergeCapture{pull: wiring.observePull, issue: wiring.observeIssue}
+	for kind, reg := range publicationWatchRegistrations(st, wiring.observeBaseTip, capture) {
 		kinds[kind] = reg
 	}
 	return scheduler.New(st, cfg.Claude.OperatingMode,

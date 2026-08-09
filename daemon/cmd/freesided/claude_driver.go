@@ -977,8 +977,9 @@ type claudeComposition struct {
 	// through the publish reconciler (§5.11 conditional requests; §5.16
 	// base_advance_watch consumer).
 	observeBaseTip func(context.Context, domain.ScheduleBaseWatch) (string, error)
-	// observePull and observeIssue are the §5.18 merge-capture pass's
-	// conditional reads through the same reconciler.
+	// observePull and observeIssue are the §5.18 base-watch capture and
+	// status-independent completion sweep's conditional reads through the same
+	// reconciler.
 	observePull  pullObserver
 	observeIssue issueObserver
 	// observeReview is the §5.16 native-review observation's conditional reads

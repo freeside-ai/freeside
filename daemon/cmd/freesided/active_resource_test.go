@@ -1026,3 +1026,220 @@ func TestActiveResourceReconcileSettlesReturnedAndDismissedItemsWithoutPolling(t
 		})
 	}
 }
+
+func TestActiveResourceReconcileRecoversSupersededCompletion(t *testing.T) {
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := capturedRun(t, st)
+	item.Status = domain.StatusSuperseded
+	item.ItemVersion++
+	item.BaseFreshness = &domain.BaseFreshness{
+		BaseRef: "main", AdmittedBaseSHA: "cafebabe", ObservedBaseSHA: "deadbeef",
+		Advanced: true, ObservedAt: activeResourceTestTime,
+	}
+	item.ReadinessInvalidation = &domain.ReadinessInvalidation{
+		Reason: domain.ReadinessInvalidationBaseAdvanced,
+		Bound:  "cafebabe", Observed: "deadbeef", ObservedAt: activeResourceTestTime,
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pullCalls := 0
+	reconciler := activeResourceReconciler{
+		store: st,
+		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			pullCalls++
+			return exactPull("closed", true), nil
+		},
+		issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+			return publish.IssueObservation{
+				Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
+			}, nil
+		},
+		now: func() time.Time { return activeResourceTestTime.Add(time.Minute) },
+	}
+	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("recovery Reconcile = %v, %v", failures, err)
+	}
+	got := readActiveItem(t, st, item.ID)
+	if got.Status != domain.StatusSuperseded || got.ItemVersion != item.ItemVersion {
+		t.Fatalf("completion recovery changed item = %+v", got)
+	}
+	pulls, issues, completion := readCaptureState(t, st)
+	if len(pulls) != 1 || len(issues) != 1 || completion == nil {
+		t.Fatalf("recovered capture = %v %v %v", pulls, issues, completion)
+	}
+	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("write-once Reconcile = %v, %v", failures, err)
+	}
+	if pullCalls != 2 {
+		t.Fatalf("completed unit was polled again: %d pull calls", pullCalls)
+	}
+	pulls, issues, completion = readCaptureState(t, st)
+	if len(pulls) != 1 || len(issues) != 1 || completion == nil {
+		t.Fatalf("write-once capture = %v %v %v", pulls, issues, completion)
+	}
+}
+
+func TestActiveResourceReconcileFinallyEvictsAcrossBindingRecovery(t *testing.T) {
+	ctx := context.Background()
+	st := schedTestStore(t)
+	runID := domain.RunID("run-binding-recovery")
+	seedCaptureRun(t, st, runID)
+	authority := seedReadyBindingAuthority(t, st, runID, "cafed00d")
+	declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
+		CompletionCriterion: domain.CompletionBoundPRMerged,
+	}, runID, "project-1", activeResourceTestTime.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-binding-recovery", ProjectID: "project-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Reason:            "published and verified",
+		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionMarkSeen},
+		PRHeadSHA:         "cafed00d", ItemVersion: 1,
+		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusResolved,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordWorkUnitDeclaration(ctx, declaration)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pullCalls := 0
+	evictions := 0
+	reconciler := activeResourceReconciler{
+		store: st,
+		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			pullCalls++
+			return exactPull("closed", true), nil
+		},
+		evictConcluded: func(domain.ReadyItemPRBinding, *int) {
+			evictions++
+		},
+		now: func() time.Time { return activeResourceTestTime },
+	}
+	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 1 {
+		t.Fatalf("ready-unbound Reconcile = %v, %v", failures, err)
+	}
+	if pullCalls != 0 || evictions != 0 {
+		t.Fatalf("ready-unbound resource calls = pulls %d evictions %d, want 0 and 0", pullCalls, evictions)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordReadyItemPRBinding(ctx, domain.ReadyItemPRBinding{
+			ItemID: item.ID, RunID: runID,
+			ProducingInvocationID: authority.invocationID, PublicationIdentity: authority.identity,
+			PublicationInvocationID: authority.publicationInvocationID,
+			Repo:                    "owner/repo", RepositoryID: 424242,
+			PRNumber: 450, BaseRef: "main", HeadSHA: "cafed00d",
+			RecordedAt: activeResourceTestTime,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("unit-unbound Reconcile = %v, %v", failures, err)
+	}
+	if pullCalls != 0 || evictions != 1 {
+		t.Fatalf("unit-unbound resource calls = pulls %d evictions %d, want 0 and 1", pullCalls, evictions)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordWorkUnitPRBinding(ctx, domain.WorkUnitPRBinding{
+			UnitID: declaration.ID, Repo: "owner/repo", RepositoryID: 424242,
+			PRNumber: 450, BaseRef: "main", HeadSHA: "cafed00d",
+			RecordedAt: activeResourceTestTime,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("bound Reconcile = %v, %v", failures, err)
+	}
+	if pullCalls != 1 || evictions != 2 {
+		t.Fatalf("bound resource calls = pulls %d evictions %d, want 1 and 2", pullCalls, evictions)
+	}
+	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("completed Reconcile = %v, %v", failures, err)
+	}
+	if pullCalls != 1 || evictions != 2 {
+		t.Fatalf("completed resource calls = pulls %d evictions %d, want 1 and 2", pullCalls, evictions)
+	}
+}
+
+func TestActiveResourceReconcileRecoversAfterClosedUnmergedPull(t *testing.T) {
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := capturedRun(t, st)
+	item.Status = domain.StatusDismissed
+	item.ItemVersion++
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	closed := domain.PullMergeFact{
+		Repo: "owner/repo", RepositoryID: 424242, PRNumber: 450,
+		State: domain.PullRequestClosed, Merged: false,
+		BaseRef: "main", HeadSHA: "cafed00d", ObservedAt: activeResourceTestTime,
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		_, err := tx.AppendPullMergeFact(ctx, closed)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	merged := false
+	pullCalls := 0
+	evictions := 0
+	reconciler := activeResourceReconciler{
+		store: st,
+		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			pullCalls++
+			return exactPull("closed", merged), nil
+		},
+		issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+			return publish.IssueObservation{
+				Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
+			}, nil
+		},
+		evictConcluded: func(domain.ReadyItemPRBinding, *int) {
+			evictions++
+		},
+		now: func() time.Time { return activeResourceTestTime.Add(time.Minute) },
+	}
+	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("closed-unmerged Reconcile = %v, %v", failures, err)
+	}
+	if evictions != 1 {
+		t.Fatalf("initial concluded eviction count = %d, want 1", evictions)
+	}
+	merged = true
+	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("reopened-and-merged Reconcile = %v, %v", failures, err)
+	}
+	pulls, issues, completion := readCaptureState(t, st)
+	if len(pulls) != 2 || pulls[0].Merged || !pulls[1].Merged ||
+		len(issues) != 1 || completion == nil {
+		t.Fatalf("reopened capture = %v %v %v", pulls, issues, completion)
+	}
+	if evictions != 2 {
+		t.Fatalf("post-completion eviction count = %d, want 2", evictions)
+	}
+	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("completed Reconcile = %v, %v", failures, err)
+	}
+	if pullCalls != 3 || evictions != 2 {
+		t.Fatalf("completed resource calls = pulls %d evictions %d, want 3 and 2", pullCalls, evictions)
+	}
+}
