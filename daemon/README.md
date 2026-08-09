@@ -124,7 +124,8 @@ elevation step, but the stateful daemon always runs as the non-root operator.
    evidence;
 4. derives a conservative profile from the fresh retained audit and returns
    the installation- and image-request-bound approval digest as
-   `review_required`;
+   `review_required`; the `-commit-plan` owner-policy flag selects
+   `single_commit` (the conservative default) or `plan_preferred`;
 5. accepts only `-approve <approval_digest>` from that review; and
 6. invokes `internal/projectimage` directly, requires the returned preparation
    command and registry/image destination to match the approved request, then
