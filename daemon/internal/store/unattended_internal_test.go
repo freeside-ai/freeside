@@ -4,12 +4,17 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/migrations"
 )
+
+func healthPosturePtr(posture domain.HealthPosture) *domain.HealthPosture {
+	return &posture
+}
 
 // TestUnattendedOperationMigrationAppliesFromHead is the migration acceptance
 // for 0017: a database at the real prior head upgrades with its existing
@@ -31,6 +36,7 @@ func TestUnattendedOperationMigrationAppliesFromHead(t *testing.T) {
 		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionExceptional,
+		Posture:           healthPosturePtr(domain.HealthPostureBlocking),
 		Status:            domain.StatusOpen,
 	}, nil)
 	if err != nil {
@@ -71,6 +77,129 @@ func TestUnattendedOperationMigrationAppliesFromHead(t *testing.T) {
 	}
 }
 
+// TestAttentionHealthPostureMigrationAppliesFromHead proves the body rewrite
+// preserves the historical meaning of pre-0035 system_health rows: the
+// formerly implicit blocker becomes explicitly blocking and reconstructs
+// through the current domain validation boundary. The body rewrite also
+// advances both sync cursors, so a client holding the pre-upgrade revision
+// cannot keep the posture-less body cached as current.
+func TestAttentionHealthPostureMigrationAppliesFromHead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openRaw(t)
+	migrateThrough(t, ctx, db, "0035_")
+	if got := rawVersion(t, db); got != 34 {
+		t.Fatalf("prior schema version = %d, want 34", got)
+	}
+
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "legacy-health", ProjectID: "proj-1",
+		Subject:           domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		Type:              domain.AttentionSystemHealth,
+		Priority:          domain.PriorityNormal,
+		Reason:            "legacy diagnostic",
+		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
+		ItemVersion:       1,
+		InterruptionClass: domain.InterruptionExceptional,
+		Posture:           healthPosturePtr(domain.HealthPostureBlocking),
+		Status:            domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewAttentionItem: %v", err)
+	}
+	body, err := encode(item)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	legacyBody := strings.Replace(body, `"posture":"blocking",`, "", 1)
+	if legacyBody == body {
+		t.Fatalf("legacy posture strip did not apply: %s", body)
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE server_state SET revision = 7 WHERE id = 1`); err != nil {
+		t.Fatalf("seed server revision: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO attention_items
+	   (id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body)
+	 VALUES (?, ?, NULL, ?, ?, 3, 7, ?)`,
+		item.ID, item.ProjectID, item.Type, item.Status, legacyBody); err != nil {
+		t.Fatalf("seed legacy item: %v", err)
+	}
+
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate to head: %v", err)
+	}
+	if got := rawVersion(t, db); got != 35 {
+		t.Fatalf("schema version = %d, want 35", got)
+	}
+	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture,
+		        entity_version, as_of_revision, body
+		 FROM attention_items WHERE id = ?`, item.ID))
+	if err != nil {
+		t.Fatalf("reconstruct backfilled item: %v", err)
+	}
+	if got.Posture == nil || *got.Posture != domain.HealthPostureBlocking {
+		t.Fatalf("backfilled posture = %v, want blocking", got.Posture)
+	}
+	if snapshot != (Snapshot{EntityVersion: 4, AsOfRevision: 8}) {
+		t.Fatalf("backfilled snapshot = %+v, want entity version 4 at revision 8", snapshot)
+	}
+	var serverRevision int64
+	if err := db.QueryRowContext(ctx,
+		`SELECT revision FROM server_state WHERE id = 1`).Scan(&serverRevision); err != nil {
+		t.Fatalf("read server revision: %v", err)
+	}
+	if serverRevision != 8 {
+		t.Fatalf("server revision = %d, want 8", serverRevision)
+	}
+}
+
+// TestAttentionHealthPostureReconstructionFailsClosed proves a partially
+// migrated or corrupt health body cannot reach admission as an implicit
+// blocker or advisory item. The body bypasses PutAttentionItem intentionally.
+func TestAttentionHealthPostureReconstructionFailsClosed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openRaw(t)
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "missing-posture", ProjectID: "proj-1",
+		Subject:           domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		Type:              domain.AttentionSystemHealth,
+		Priority:          domain.PriorityNormal,
+		Reason:            "corrupt diagnostic",
+		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
+		ItemVersion:       1,
+		InterruptionClass: domain.InterruptionExceptional,
+		Posture:           healthPosturePtr(domain.HealthPostureBlocking),
+		Status:            domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewAttentionItem: %v", err)
+	}
+	body, err := encode(item)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	body = strings.Replace(body, `"posture":"blocking",`, "", 1)
+	if _, err := db.ExecContext(ctx, `INSERT INTO attention_items
+	   (id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body)
+	 VALUES (?, ?, NULL, ?, ?, 1, 1, ?)`,
+		item.ID, item.ProjectID, item.Type, item.Status, body); err != nil {
+		t.Fatalf("seed malformed item: %v", err)
+	}
+	_, _, err = scanAttentionItemRecord(db.QueryRowContext(ctx,
+		`SELECT id, project_id, conversation_id, item_type, status, health_posture,
+		        entity_version, as_of_revision, body
+		 FROM attention_items WHERE id = ?`, item.ID))
+	if !errors.Is(err, domain.ErrHealthPostureInconsistent) {
+		t.Fatalf("missing posture reconstruction = %v, want %v", err, domain.ErrHealthPostureInconsistent)
+	}
+}
+
 // TestTamperedTransitionFailsClosed pins the transition trust binding: the
 // stored state is a decoded trust bit ("resumed" lifts a safety gate), so
 // reconstruction re-derives it from the immutable accepted command the row
@@ -95,6 +224,7 @@ func TestTamperedTransitionFailsClosed(t *testing.T) {
 		RequestedDecision: []domain.Action{domain.ActionStopUnattended},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionExceptional,
+		Posture:           healthPosturePtr(domain.HealthPostureBlocking),
 		Status:            domain.StatusOpen,
 	}, nil)
 	if err != nil {
@@ -163,12 +293,11 @@ func TestTamperedTransitionFailsClosed(t *testing.T) {
 	}
 }
 
-// TestForgedLookupColumnCannotHideABlocker pins the omission half of the
-// lookup-key trust rule: a column diverging from its body makes the row
-// invisible to the admission query's WHERE clause, so no per-row scan is left
-// to refuse it — the whole-table divergence count must fail the gate closed
-// instead of letting unattended admission proceed past a hidden open blocker.
-func TestForgedLookupColumnCannotHideABlocker(t *testing.T) {
+// TestForgedAdmissionColumnsOrBodyCannotLiftABlocker pins both halves of the
+// admission trust rule: lookup-column tampering cannot hide a blocker, and a
+// body-only posture rewrite cannot downgrade it to advisory. The whole-table
+// divergence count fails either manipulation closed before admission acts.
+func TestForgedAdmissionColumnsOrBodyCannotLiftABlocker(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	db := openRaw(t)
@@ -184,6 +313,7 @@ func TestForgedLookupColumnCannotHideABlocker(t *testing.T) {
 		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionExceptional,
+		Posture:           healthPosturePtr(domain.HealthPostureBlocking),
 		Status:            domain.StatusOpen,
 	}, nil)
 	if err != nil {
@@ -208,11 +338,15 @@ func TestForgedLookupColumnCannotHideABlocker(t *testing.T) {
 
 	for name, forged := range map[string]string{
 		"status hidden as resolved": `INSERT INTO attention_items
-		   (id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body)
-		 VALUES ('blocker-1', 'proj-1', NULL, 'system_health', 'resolved', 1, 1, ?)`,
+		   (id, project_id, conversation_id, item_type, status, health_posture, entity_version, as_of_revision, body)
+		 VALUES ('blocker-1', 'proj-1', NULL, 'system_health', 'resolved', 'blocking', 1, 1, ?)`,
 		"type hidden as blocked": `INSERT INTO attention_items
-		   (id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body)
-		 VALUES ('blocker-1', 'proj-1', NULL, 'blocked', 'open', 1, 1, ?)`,
+		   (id, project_id, conversation_id, item_type, status, health_posture, entity_version, as_of_revision, body)
+		 VALUES ('blocker-1', 'proj-1', NULL, 'blocked', 'open', 'blocking', 1, 1, ?)`,
+		"body posture downgraded": `INSERT INTO attention_items
+		   (id, project_id, conversation_id, item_type, status, health_posture, entity_version, as_of_revision, body)
+		 VALUES ('blocker-1', 'proj-1', NULL, 'system_health', 'open', 'blocking', 1, 1,
+		         json_set(?, '$.posture', 'advisory'))`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := db.ExecContext(ctx, `DELETE FROM attention_items`); err != nil {
@@ -234,8 +368,8 @@ func TestForgedLookupColumnCannotHideABlocker(t *testing.T) {
 		t.Fatalf("reset: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO attention_items
-	   (id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body)
-	 VALUES ('blocker-1', 'proj-1', NULL, 'system_health', 'open', 1, 1, ?)`, body); err != nil {
+	   (id, project_id, conversation_id, item_type, status, health_posture, entity_version, as_of_revision, body)
+	 VALUES ('blocker-1', 'proj-1', NULL, 'system_health', 'open', 'blocking', 1, 1, ?)`, body); err != nil {
 		t.Fatalf("seed truthful row: %v", err)
 	}
 	if err := requireAdmissible(); !errors.Is(err, domain.ErrBlockingSystemHealth) {
@@ -264,6 +398,7 @@ func TestForgedItemTypeColumnFailsClosed(t *testing.T) {
 		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionExceptional,
+		Posture:           healthPosturePtr(domain.HealthPostureBlocking),
 		Status:            domain.StatusOpen,
 	}, nil)
 	if err != nil {
@@ -275,11 +410,11 @@ func TestForgedItemTypeColumnFailsClosed(t *testing.T) {
 	}
 	for name, forged := range map[string]string{
 		"item_type": `INSERT INTO attention_items
-		   (id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body)
-		 VALUES ('item-1', 'proj-1', NULL, 'blocked', 'open', 1, 1, ?)`,
+		   (id, project_id, conversation_id, item_type, status, health_posture, entity_version, as_of_revision, body)
+		 VALUES ('item-1', 'proj-1', NULL, 'blocked', 'open', 'blocking', 1, 1, ?)`,
 		"status": `INSERT INTO attention_items
-		   (id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body)
-		 VALUES ('item-1', 'proj-1', NULL, 'system_health', 'resolved', 1, 1, ?)`,
+		   (id, project_id, conversation_id, item_type, status, health_posture, entity_version, as_of_revision, body)
+		 VALUES ('item-1', 'proj-1', NULL, 'system_health', 'resolved', 'blocking', 1, 1, ?)`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := db.ExecContext(ctx, `DELETE FROM attention_items`); err != nil {

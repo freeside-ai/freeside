@@ -908,7 +908,7 @@ core forward from wave 7 to wave 5.
 
 ---
 
-## Revision 28 (Current)
+## Revision 28
 
 Revision 28 resolves the Section 7 review-anchor fork, deliberately carried
 unresolved since revision 25, on the day of the first production backlog run
@@ -951,3 +951,20 @@ resolution pins one publication condition and names one deferred capability.
    satisfies the Section 7 requirement. Related to #502 as
    re-entry-after-terminal-state triggers.
    (User; same devlog; #524.)
+
+---
+
+## Revision 29 (Current)
+
+Revision 29 makes the admission effect of every `system_health` item explicit.
+Held from revision 28: everything.
+
+1. **System-health admission posture is explicit and immutable** (Sections 4
+   and 5.7): every `system_health` item is either `blocking` or `advisory`.
+   Advisory observations remain open and operator-visible without blocking
+   unrelated unattended admission; blocking items preserve the prior gate and
+   are the only items eligible for a validated blocking supersession. Existing
+   rows migrate to `blocking`, preserving their historical meaning. Revisit
+   when a third posture has a concrete admission behavior that neither posture
+   nor a validated supersession represents.
+   (User; devlog 2026-08-09-1739-system-health-posture.md; #625.)

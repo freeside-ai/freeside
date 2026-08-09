@@ -45,6 +45,7 @@
   },
   "expires_when": null,
   "decided_at": null,
+  "posture": null,
   "blocking_supersession": null,
   "status": "open"
 }

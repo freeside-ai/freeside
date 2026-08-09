@@ -4,6 +4,11 @@ import Testing
 @testable import FreesideCore
 
 @Suite struct AttentionDisplayTests {
+    @Test func healthPostureLabelsAreExplicit() {
+        #expect(AttentionDisplay.label(Components.Schemas.HealthPosture.blocking) == "Blocking")
+        #expect(AttentionDisplay.label(Components.Schemas.HealthPosture.advisory) == "Advisory")
+    }
+
     @Test func reviewRecoveryBindingRowsExposeEveryAuthorityCoordinate() {
         let item = AttentionFixtures.fixture(type: .review_contradiction).item
 

@@ -325,6 +325,17 @@ func TestValidateAttentionItemSupersessionImmutable(t *testing.T) {
 	})
 }
 
+func TestValidateAttentionItemHealthPostureImmutable(t *testing.T) {
+	stored := mustItem(t, validItemInput(domain.AttentionSystemHealth))
+	updated := stored
+	updated.ItemVersion = 2
+	posture := domain.HealthPostureAdvisory
+	updated.Posture = &posture
+	if err := domain.ValidateAttentionItemTransition(stored, updated); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("changing posture = %v, want ErrImmutableTransition", err)
+	}
+}
+
 func mustItem(t *testing.T, in domain.AttentionItemInput) domain.AttentionItem {
 	t.Helper()
 	item, err := domain.NewAttentionItem(in, nil)

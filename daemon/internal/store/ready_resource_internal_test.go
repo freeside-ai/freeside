@@ -27,7 +27,8 @@ func migrationsBeforeReadyResource(t *testing.T) fs.FS {
 			entry.Name() == "0031_review_retry.sql" ||
 			entry.Name() == "0032_review_recovery.sql" ||
 			entry.Name() == "0033_publish_installation_mint_audit.sql" ||
-			entry.Name() == "0034_review_configuration_recovery.sql" || entry.IsDir() {
+			entry.Name() == "0034_review_configuration_recovery.sql" ||
+			entry.Name() == "0035_attention_health_posture.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())

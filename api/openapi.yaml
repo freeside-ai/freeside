@@ -1431,6 +1431,7 @@ components:
         - timing
         - expires_when
         - decided_at
+        - posture
         - blocking_supersession
         - status
       properties:
@@ -1558,6 +1559,19 @@ components:
             and the status flip; the durable endpoint of the open-to-decision
             metric (plan §4). Never client-set; null while the item is open
             and for items concluded without a decision (expiry, supersession).
+        posture:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/HealthPosture"
+          description: >
+            The explicit admission posture of a system_health item (plan §4;
+            mirrors domain.AttentionItem.Posture): blocking preserves the
+            item's admission-gating effect, while advisory keeps the
+            observation open and visible without blocking unrelated unattended
+            admission. Required and non-null exactly on system_health items;
+            null on every other item type. A blocking_supersession may appear
+            only with the blocking posture. Fixed at creation and never
+            client-set.
         blocking_supersession:
           nullable: true
           allOf:
@@ -1627,6 +1641,7 @@ components:
           submit_to_first_open: 300000000000
         expires_when: "2026-01-03T03:04:05Z"
         decided_at: null
+        posture: null
         blocking_supersession: null
         status: "open"
 
@@ -2406,6 +2421,15 @@ components:
         - superseded
         - dismissed
         - expired
+
+    HealthPosture:
+      type: string
+      description: >
+        Whether an open system_health item blocks unrelated unattended
+        admission or remains advisory (plan §4; domain enums.go).
+      enum:
+        - blocking
+        - advisory
 
     SupersessionKind:
       type: string

@@ -14,6 +14,7 @@ import (
 // (the waived-posture shape once #319 lets the engine offer it).
 func seedHealthItem(t *testing.T, f fixture, id domain.ItemID) domain.AttentionItem {
 	t.Helper()
+	posture := domain.HealthPostureBlocking
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: id, ProjectID: "proj-1",
 		Subject:           domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
@@ -23,6 +24,7 @@ func seedHealthItem(t *testing.T, f fixture, id domain.ItemID) domain.AttentionI
 		RequestedDecision: []domain.Action{domain.ActionAcknowledge, domain.ActionStopUnattended},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionExceptional,
+		Posture:           &posture,
 		Status:            domain.StatusOpen,
 	}, nil)
 	if err != nil {
@@ -132,6 +134,9 @@ func TestSubmitStopUnattended(t *testing.T) {
 	}
 	if notice.ProjectID != health.ProjectID {
 		t.Errorf("stopped notice project = %q, want inherited %q", notice.ProjectID, health.ProjectID)
+	}
+	if notice.Posture == nil || *notice.Posture != domain.HealthPostureBlocking {
+		t.Errorf("stopped notice posture = %v, want blocking", notice.Posture)
 	}
 
 	// A retried command converges on the original result: no new revision,

@@ -157,6 +157,7 @@ func TestGolden(t *testing.T) {
 	// carrying the typed condition that supersedes its blocking effect, so the
 	// goldens pin the present render of blocking_supersession beside the
 	// explicit null the fixtures above keep.
+	blockingPosture := domain.HealthPostureBlocking
 	supersededItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-3", ProjectID: "proj-1",
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: "run-1", RunID: &runID},
@@ -167,10 +168,29 @@ func TestGolden(t *testing.T) {
 		AgentClaims:       []domain.AgentClaim{},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionExceptional,
+		Posture:           &blockingPosture,
 		BlockingSupersession: &domain.BlockingSupersession{
 			Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 424242,
 		},
 		Status: domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	advisoryPosture := domain.HealthPostureAdvisory
+	advisoryItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-4", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		Type:    domain.AttentionSystemHealth, Priority: domain.PriorityNormal,
+		Reason:            "active-resource observation is temporarily unavailable",
+		RequestedDecision: []domain.Action{domain.ActionAcknowledge, domain.ActionRunDoctor},
+		EvidenceSnapshot:  []domain.Artifact{},
+		AgentClaims:       []domain.AgentClaim{},
+		ItemVersion:       1,
+		InterruptionClass: domain.InterruptionExceptional,
+		Posture:           &advisoryPosture,
+		Status:            domain.StatusOpen,
 	}, approved)
 	if err != nil {
 		t.Fatal(err)
@@ -852,6 +872,7 @@ func TestGolden(t *testing.T) {
 		{"attention_item_blocked", blockedItem},
 		{"attention_item_decided", decidedItem},
 		{"attention_item_superseded", supersededItem},
+		{"attention_item_advisory", advisoryItem},
 		{"attention_item_review_recovery", recoveryItem},
 		{"command", command},
 		{"subject", subject},

@@ -18,6 +18,31 @@ import Testing
         #expect(MockContractValidation.itemValidityBreach(item) == nil)
     }
 
+    @Test func healthPostureIsExplicitAndTypeScoped() {
+        let fixture = AttentionFixtures.fixture(type: .system_health).item
+        #expect(fixture.posture?.value1 == .advisory)
+        #expect(MockContractValidation.itemValidityBreach(fixture) == nil)
+
+        var missing = fixture
+        missing.posture = nil
+        #expect(
+            MockContractValidation.itemValidityBreach(missing)
+                == "system_health item lacks posture")
+
+        var wrongType = AttentionFixtures.fixture(type: .spec_approval).item
+        wrongType.posture = .init(value1: .blocking)
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongType)
+                == "posture on a non-system_health item")
+
+        var supersededAdvisory = fixture
+        supersededAdvisory.blocking_supersession = .init(
+            value1: .init(kind: .backup_encryption_waiver, repository_id: 42))
+        #expect(
+            MockContractValidation.itemValidityBreach(supersededAdvisory)
+                == "blocking_supersession on an advisory system_health item")
+    }
+
     @Test func itemValidityBreachNamesTheFailedInvariant() {
         var empty = AttentionFixtures.fixture(type: .spec_approval).item
         empty.id = ""

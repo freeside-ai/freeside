@@ -34,6 +34,7 @@
   },
   "expires_when": null,
   "decided_at": null,
+  "posture": "blocking",
   "blocking_supersession": {
     "kind": "backup_encryption_waiver",
     "repository_id": 424242

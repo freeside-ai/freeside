@@ -80,6 +80,13 @@ enum AttentionDisplay {
         }
     }
 
+    static func label(_ posture: Components.Schemas.HealthPosture) -> String {
+        switch posture {
+        case .blocking: return "Blocking"
+        case .advisory: return "Advisory"
+        }
+    }
+
     static func label(_ notice: Components.Schemas.CommitPlanNoticeReason) -> String {
         switch notice {
         case .absent: return "No plan provided"

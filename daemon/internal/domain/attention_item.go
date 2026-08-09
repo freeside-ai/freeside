@@ -442,6 +442,12 @@ type AttentionItem struct {
 	// recorded it is immutable (ValidateAttentionItemTransition): an
 	// idempotent command replay or a later re-put must not move or erase it.
 	DecidedAt *time.Time `json:"decided_at"`
+	// Posture is required exactly on system_health items. Blocking preserves
+	// the historical admission behavior; advisory keeps the observation open
+	// and visible without blocking unrelated unattended admission. It is fixed
+	// at creation (ValidateAttentionItemTransition) and nil for every other
+	// item type.
+	Posture *HealthPosture `json:"posture"`
 	// BlockingSupersession is the typed condition under which this open
 	// system_health item does not block unattended admission (plan §4, §5.7),
 	// nil for every other item and for a health item that blocks
@@ -476,6 +482,9 @@ type AttentionItemInput struct {
 	InterruptionClass           InterruptionClass
 	ConversationID              *ConversationID
 	ExpiresWhen                 *time.Time
+	// Posture must be set exactly by daemon-internal creators of system_health
+	// items; there is no client input path to it.
+	Posture *HealthPosture
 	// BlockingSupersession may be set only by daemon-internal creators of
 	// system_health items; there is no client input path to it.
 	BlockingSupersession *BlockingSupersession
@@ -513,6 +522,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		InterruptionClass:           in.InterruptionClass,
 		ConversationID:              clonePtr(in.ConversationID),
 		ExpiresWhen:                 clonePtr(in.ExpiresWhen),
+		Posture:                     clonePtr(in.Posture),
 		BlockingSupersession:        clonePtr(in.BlockingSupersession),
 		Status:                      in.Status,
 	}
@@ -636,6 +646,21 @@ func (i AttentionItem) Validate() error {
 				i.ID, ErrReviewConfigRecoveryBindingMismatch)
 		}
 	}
+	if i.Posture == nil {
+		if i.Type == AttentionSystemHealth {
+			return fmt.Errorf("item %s type %q has no health posture: %w",
+				i.ID, i.Type, ErrHealthPostureInconsistent)
+		}
+	} else {
+		if i.Type != AttentionSystemHealth {
+			return fmt.Errorf("item %s type %q carries a health posture: %w",
+				i.ID, i.Type, ErrHealthPostureInconsistent)
+		}
+		if !i.Posture.valid() {
+			return fmt.Errorf("item %s health posture %q: %w",
+				i.ID, *i.Posture, ErrInvalidHealthPosture)
+		}
+	}
 	if i.BlockingSupersession != nil {
 		// Blocking is a system_health semantic (plan §4): only that type's
 		// blocking effect can be superseded, so a condition on any other type
@@ -643,6 +668,10 @@ func (i AttentionItem) Validate() error {
 		if i.Type != AttentionSystemHealth {
 			return fmt.Errorf("item %s type %q carries a blocking supersession: %w",
 				i.ID, i.Type, ErrSupersessionOutsideSystemHealth)
+		}
+		if i.Posture == nil || *i.Posture != HealthPostureBlocking {
+			return fmt.Errorf("item %s posture cannot carry a blocking supersession: %w",
+				i.ID, ErrSupersessionOnAdvisoryHealth)
 		}
 		if err := i.BlockingSupersession.Validate(); err != nil {
 			return fmt.Errorf("item %s: %w", i.ID, err)

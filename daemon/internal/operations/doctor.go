@@ -227,6 +227,7 @@ func (d Doctor) converge(ctx context.Context, findings []DoctorFinding) error {
 		}
 		switch {
 		case !exists:
+			posture := domain.HealthPostureBlocking
 			item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 				ID:        domain.ItemID(fmt.Sprintf("%s%s-%d", doctorItemPrefix, finding.Code, revision)),
 				ProjectID: d.ProjectID,
@@ -239,7 +240,8 @@ func (d Doctor) converge(ctx context.Context, findings []DoctorFinding) error {
 					domain.ActionStopUnattended,
 				},
 				ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
-				Status: domain.StatusOpen,
+				Posture: &posture,
+				Status:  domain.StatusOpen,
 			}, nil)
 			if err != nil {
 				return fmt.Errorf("doctor: construct %s finding: %w", finding.Code, err)

@@ -117,6 +117,16 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 		return fmt.Errorf("attention item %s: recorded decided_at would change: %w",
 			updated.ID, ErrImmutableTransition)
 	}
+	// Health posture is part of the item's fixed meaning: changing it in place
+	// would silently add or remove an admission gate without a new observation.
+	samePosture, err := jsonEqual(old.Posture, updated.Posture)
+	if err != nil {
+		return fmt.Errorf("attention item %s: %w", updated.ID, err)
+	}
+	if !samePosture {
+		return fmt.Errorf("attention item %s: health posture would change: %w",
+			updated.ID, ErrImmutableTransition)
+	}
 	// The supersession condition is part of what the item is about, fixed at
 	// creation like type and subject: a later write may neither add, remove,
 	// nor retarget it, or a stale copy could turn a conditionally non-blocking

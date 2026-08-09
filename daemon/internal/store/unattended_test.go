@@ -84,6 +84,7 @@ func recordTransition(t *testing.T, s *store.Store, transition domain.Unattended
 // actions, the carrier the test commands decide against.
 func decisionsItem(t *testing.T, id domain.ItemID) domain.AttentionItem {
 	t.Helper()
+	posture := domain.HealthPostureBlocking
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: id, ProjectID: "proj-1",
 		Subject:           domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
@@ -93,6 +94,7 @@ func decisionsItem(t *testing.T, id domain.ItemID) domain.AttentionItem {
 		RequestedDecision: []domain.Action{domain.ActionStopUnattended, domain.ActionResumeUnattended},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionExceptional,
+		Posture:           &posture,
 		Status:            domain.StatusOpen,
 	}, nil)
 	if err != nil {
@@ -119,7 +121,12 @@ func resumedAt(at time.Time, commandID string) domain.UnattendedOperationTransit
 
 // healthItem builds an open system_health item, optionally carrying the typed
 // supersession condition (issue #321).
-func healthItem(t *testing.T, id domain.ItemID, cond *domain.BlockingSupersession) domain.AttentionItem {
+func healthItem(
+	t *testing.T,
+	id domain.ItemID,
+	posture domain.HealthPosture,
+	cond *domain.BlockingSupersession,
+) domain.AttentionItem {
 	t.Helper()
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: id, ProjectID: "proj-1",
@@ -130,6 +137,7 @@ func healthItem(t *testing.T, id domain.ItemID, cond *domain.BlockingSupersessio
 		RequestedDecision:    []domain.Action{domain.ActionAcknowledge},
 		ItemVersion:          1,
 		InterruptionClass:    domain.InterruptionExceptional,
+		Posture:              &posture,
 		BlockingSupersession: cond,
 		Status:               domain.StatusOpen,
 	}, nil)
@@ -298,7 +306,7 @@ func TestBlockingSystemHealthRefusesUnattendedAdmission(t *testing.T) {
 	t.Run("unconditional open item blocks", func(t *testing.T) {
 		s := openWithFixture(t, f, unattendedOptions())
 		seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
-		putItem(t, s, healthItem(t, "health-1", nil))
+		putItem(t, s, healthItem(t, "health-1", domain.HealthPostureBlocking, nil))
 		if err := recordAdmission(t, s, f.admission); !errors.Is(err, domain.ErrBlockingSystemHealth) {
 			t.Fatalf("admission under open health item = %v, want %v", err, domain.ErrBlockingSystemHealth)
 		}
@@ -313,7 +321,7 @@ func TestBlockingSystemHealthRefusesUnattendedAdmission(t *testing.T) {
 	t.Run("encrypted backup supersedes a legacy waiver notice", func(t *testing.T) {
 		s := openWithFixture(t, f, unattendedOptions())
 		seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
-		putItem(t, s, healthItem(t, "waiver-notice", &domain.BlockingSupersession{
+		putItem(t, s, healthItem(t, "waiver-notice", domain.HealthPostureBlocking, &domain.BlockingSupersession{
 			Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 424242,
 		}))
 		if err := recordAdmission(t, s, f.admission); err != nil {
@@ -336,10 +344,34 @@ func TestBlockingSystemHealthRefusesUnattendedAdmission(t *testing.T) {
 		}
 	})
 
+	t.Run("advisory observation never blocks unrelated admission", func(t *testing.T) {
+		s := openWithFixture(t, f, unattendedOptions())
+		seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
+		item := healthItem(t, "advisory-observation", domain.HealthPostureAdvisory, nil)
+		putItem(t, s, item)
+
+		requireAdmission := func() error {
+			return s.Read(context.Background(), func(tx *store.ReadTx) error {
+				return tx.RequireUnattendedAdmissible(context.Background(), f.admission)
+			})
+		}
+		if err := requireAdmission(); err != nil {
+			t.Fatalf("admission with open advisory observation: %v", err)
+		}
+
+		resolved := item
+		resolved.ItemVersion = 2
+		resolved.Status = domain.StatusResolved
+		putItem(t, s, resolved)
+		if err := requireAdmission(); err != nil {
+			t.Fatalf("admission after advisory observation resolved: %v", err)
+		}
+	})
+
 	t.Run("resolved item stops blocking", func(t *testing.T) {
 		s := openWithFixture(t, f, unattendedOptions())
 		seedTrustProfile(t, s, f.admission.Base.Repo, f.admission.Base.RepositoryID)
-		item := healthItem(t, "health-2", nil)
+		item := healthItem(t, "health-2", domain.HealthPostureBlocking, nil)
 		putItem(t, s, item)
 
 		resolved := item
@@ -369,7 +401,7 @@ func TestRequireUnattendedAdmissibleLegacyNoticeNeedsHealthyEncryption(t *testin
 		return unhealthy, nil
 	})
 	s := openWithFixture(t, f, cleared)
-	putItem(t, s, healthItem(t, "waiver-notice", &domain.BlockingSupersession{
+	putItem(t, s, healthItem(t, "waiver-notice", domain.HealthPostureBlocking, &domain.BlockingSupersession{
 		Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 424242,
 	}))
 

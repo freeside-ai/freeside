@@ -1,15 +1,18 @@
 {
-  "id": "item-2",
+  "id": "item-4",
   "project_id": "proj-1",
   "subject": {
-    "subject_type": "run",
-    "subject_id": "run-1",
-    "run_id": "run-1"
+    "subject_type": "system",
+    "subject_id": "daemon",
+    "run_id": null
   },
-  "type": "blocked",
+  "type": "system_health",
   "priority": "normal",
-  "reason": "waiting on an external dependency",
-  "requested_decision": [],
+  "reason": "active-resource observation is temporarily unavailable",
+  "requested_decision": [
+    "acknowledge",
+    "run_doctor"
+  ],
   "evidence_snapshot": [],
   "agent_claims": [],
   "artifact_digests": [],
@@ -20,7 +23,7 @@
   "review_recovery_binding": null,
   "review_configuration_recovery": null,
   "item_version": 1,
-  "interruption_class": "planned_gate",
+  "interruption_class": "exceptional",
   "conversation_id": null,
   "timing": {
     "delivery_count": 0,
@@ -31,7 +34,7 @@
   },
   "expires_when": null,
   "decided_at": null,
-  "posture": null,
+  "posture": "advisory",
   "blocking_supersession": null,
   "status": "open"
 }

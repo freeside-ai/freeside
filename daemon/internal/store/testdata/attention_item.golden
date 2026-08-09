@@ -86,6 +86,7 @@
   },
   "expires_when": "2026-01-03T03:04:05Z",
   "decided_at": null,
+  "posture": null,
   "blocking_supersession": null,
   "status": "open"
 }

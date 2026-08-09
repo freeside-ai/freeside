@@ -89,6 +89,7 @@ func waivedPostureItem(
 	run domain.Run, invocationID domain.InvocationID, waiver domain.BackupEncryptionWaiver,
 ) (domain.AttentionItem, error) {
 	runID := run.ID
+	posture := domain.HealthPostureBlocking
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: waivedPostureItemID(invocationID), ProjectID: run.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &runID},
@@ -103,6 +104,7 @@ func waivedPostureItem(
 		// judged worse than an absent one.
 		RequestedDecision: []domain.Action{domain.ActionAcknowledge, domain.ActionStopUnattended},
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
+		Posture: &posture,
 		BlockingSupersession: &domain.BlockingSupersession{
 			Kind:         domain.SupersessionBackupEncryptionWaiver,
 			RepositoryID: waiver.RepositoryID,
