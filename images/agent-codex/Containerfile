@@ -30,19 +30,26 @@
 # The pins are declared before the first FROM so both stages, and the labels in
 # the final one, see the same values. The Codex CLI is a static musl binary, so
 # unlike the Claude base this image needs no language runtime; it is taken from
-# the upstream release bundle and verified against the sha256 literal held here.
-# The bundle, not the bare binary, is upstream's standalone layout: it carries
-# `codex-resources/bwrap` next to the executable, which is where the CLI looks
-# for its Linux sandbox helper ("no system bwrap was found on PATH and no
-# bundled codex-resources/bwrap binary was found next to the Codex executable").
+# the upstream release package and verified against the sha256 literal held
+# here. The package, not the bare binary, is upstream's standalone layout: it
+# carries `codex-resources` and `bin/codex-code-mode-host` alongside
+# `bin/codex`. The final image preserves the existing
+# `/usr/local/bin/codex-resources` shape, the CLI's first legacy candidate
+# relative to `/usr/local/bin/codex`, so its bundled bwrap and zsh remain
+# available without adding the package's separate `codex-path` to PATH. The
+# code-mode host ships beside the CLI because 0.147.0's default tool surface
+# routes composite shell commands through it: without the executable those
+# exec calls fail closed on every attempt, and the model can then report
+# success it never had (probed 2026-08-09; see
+# devlog/2026-08-09-1925-codex-0147-contract-reproof.md).
 ARG BASE_IMAGE=docker.io/library/debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd
-ARG CODEX_VERSION=0.137.0
-ARG CODEX_BUNDLE_SHA256=9942b7fd393ec1ae868153f56053c94cffc0e2eb89f9b80f56b5c955aaebbbb2
+ARG CODEX_VERSION=0.147.0
+ARG CODEX_PACKAGE_SHA256=692ff5c5d9eb86774c0448d930895e46659eee6a2c12f46b97399da458c1e8b7
 
 FROM ${BASE_IMAGE} AS build
 
 ARG CODEX_VERSION
-ARG CODEX_BUNDLE_SHA256
+ARG CODEX_PACKAGE_SHA256
 
 # curl and zstd are build-only. The final image's BusyBox applets are runtime
 # witnesses for ward's egress conformance, not build inputs.
@@ -52,14 +59,14 @@ RUN set -eux; \
 	rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
-	curl -fsSLo /tmp/codex.tar.zst \
-		"https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-aarch64-unknown-linux-musl-bundle.tar.zst"; \
-	echo "${CODEX_BUNDLE_SHA256}  /tmp/codex.tar.zst" | sha256sum -c -; \
+	curl -fsSLo /tmp/codex-package.tar.zst \
+		"https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-package-aarch64-unknown-linux-musl.tar.zst"; \
+	echo "${CODEX_PACKAGE_SHA256}  /tmp/codex-package.tar.zst" | sha256sum -c -; \
 	mkdir -p /out; \
-	tar --zstd -xf /tmp/codex.tar.zst -C /out; \
-	rm /tmp/codex.tar.zst; \
-	chmod 0755 /out/codex /out/codex-resources/bwrap; \
-	/out/codex --version
+	tar --zstd -xf /tmp/codex-package.tar.zst -C /out; \
+	rm /tmp/codex-package.tar.zst; \
+	chmod 0755 /out/bin/codex /out/bin/codex-code-mode-host /out/codex-resources/bwrap; \
+	/out/bin/codex --version
 
 FROM ${BASE_IMAGE}
 
@@ -87,7 +94,8 @@ RUN set -eux; \
 	nc -h 2>&1 | grep -F -- '-w SEC'; \
 	wget --help >/dev/null
 
-COPY --from=build /out/codex /usr/local/bin/codex
+COPY --from=build /out/bin/codex /usr/local/bin/codex
+COPY --from=build /out/bin/codex-code-mode-host /usr/local/bin/codex-code-mode-host
 COPY --from=build /out/codex-resources /usr/local/bin/codex-resources
 
 # The manifest records what the pinned inputs actually resolved to. Running the
@@ -99,8 +107,10 @@ RUN set -eux; \
 	{ \
 		echo "base_image ${BASE_IMAGE}"; \
 		echo "codex $(codex --version)"; \
+		echo "codex-code-mode-host sha256:$(sha256sum /usr/local/bin/codex-code-mode-host | cut -d' ' -f1)"; \
 		echo "rg $(rg --version | head -n 1)"; \
 		echo "bwrap $(/usr/local/bin/codex-resources/bwrap --version)"; \
+		echo "zsh $(/usr/local/bin/codex-resources/zsh/bin/zsh --version)"; \
 		echo "--- dpkg ---"; \
 		dpkg-query -W -f='${binary:Package} ${Version}\n'; \
 	} > /usr/local/share/freeside/image-manifest.txt

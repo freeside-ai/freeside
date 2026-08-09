@@ -31,7 +31,7 @@ case "$*" in
 	printf '%s\n' '2.1.220 (Claude Code)'
 	;;
 "run --rm --network none freeside-agent-codex:local codex --version")
-	printf '%s\n' 'codex-cli 0.137.0'
+	printf '%s\n' 'codex-cli 0.147.0'
 	;;
 "image inspect docker.io/library/registry@${BUILD_IMAGE_TEST_REGISTRY_HELPER_DIGEST:?}")
 	printf '{"digest":"%s"}\n' "$BUILD_IMAGE_TEST_REGISTRY_HELPER_DIGEST"
@@ -148,6 +148,31 @@ for builder in "${builders[@]}"; do
 	assert_contains "$case_name" "$ERR" "one of --registry HOST[/PATH] or --local-registry-port PORT is required" "actionable error"
 	assert_equal "$case_name" '' "$(cat "$LOG")" "build tool calls"
 
+	if [ "$script" = build-agent-codex-image.sh ]; then
+		case_name="$script version override without package digest"
+		: >"$LOG"
+		run_builder "$script" --registry registry.example/freeside --codex-version 0.147.0
+		assert_equal "$case_name" 2 "$RC" "exit status"
+		assert_contains "$case_name" "$ERR" "--codex-version requires --package-sha256" "paired-pin error"
+		assert_equal "$case_name" '' "$(cat "$LOG")" "build tool calls"
+
+		case_name="$script package digest override without version"
+		: >"$LOG"
+		run_builder "$script" --registry registry.example/freeside \
+			--package-sha256 "$(printf 'a%.0s' {1..64})"
+		assert_equal "$case_name" 2 "$RC" "exit status"
+		assert_contains "$case_name" "$ERR" "--package-sha256 requires --codex-version" "paired-pin error"
+		assert_equal "$case_name" '' "$(cat "$LOG")" "build tool calls"
+
+		case_name="$script malformed package digest"
+		: >"$LOG"
+		run_builder "$script" --registry registry.example/freeside \
+			--codex-version 0.147.0 --package-sha256 ABC
+		assert_equal "$case_name" 2 "$RC" "exit status"
+		assert_contains "$case_name" "$ERR" "--package-sha256 must be 64 lowercase hex digits" "digest-format error"
+		assert_equal "$case_name" '' "$(cat "$LOG")" "build tool calls"
+	fi
+
 	case_name="$script external registry"
 	: >"$LOG"
 	args=(--registry registry.example/freeside --ref-tag contract-test)
@@ -156,7 +181,7 @@ for builder in "${builders[@]}"; do
 		args+=(--claude-version 2.1.220)
 		;;
 	build-agent-codex-image.sh)
-		args+=(--codex-version 0.137.0 --bundle-sha256 "$(printf 'a%.0s' {1..64})")
+		args+=(--codex-version 0.147.0 --package-sha256 "$(printf 'a%.0s' {1..64})")
 		;;
 	esac
 	expected_ref="registry.example/freeside/${image}@${DIGEST}"
@@ -170,6 +195,11 @@ for builder in "${builders[@]}"; do
 	assert_contains "$case_name" "$call_log" "image push --scheme auto registry.example/freeside/${image}:contract-test" "push call"
 	assert_contains "$case_name" "$call_log" "image pull --scheme auto $expected_ref" "exact digest pull"
 	assert_contains "$case_name" "$call_log" "image inspect $expected_ref" "seeded digest verification"
+	if [ "$script" = build-agent-codex-image.sh ]; then
+		assert_contains "$case_name" "$call_log" \
+			"--build-arg CODEX_VERSION=0.147.0 --build-arg CODEX_PACKAGE_SHA256=$(printf 'a%.0s' {1..64})" \
+			"package pin build arguments"
+	fi
 	assert_in_order "$case_name" "$call_log" \
 		"image push --scheme auto registry.example/freeside/${image}:contract-test" \
 		"image pull --scheme auto $expected_ref" \
@@ -192,7 +222,7 @@ for builder in "${builders[@]}"; do
 		args+=(--claude-version 2.1.220)
 		;;
 	build-agent-codex-image.sh)
-		args+=(--codex-version 0.137.0 --bundle-sha256 "$(printf 'a%.0s' {1..64})")
+		args+=(--codex-version 0.147.0 --package-sha256 "$(printf 'a%.0s' {1..64})")
 		;;
 	esac
 	expected_ref="127.0.0.1:5000/${image}@${DIGEST}"

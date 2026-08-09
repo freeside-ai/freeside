@@ -95,8 +95,10 @@ The agent base carrying the pinned Codex CLI, built by
 `scripts/build-agent-codex-image.sh` and checked by the same
 `scripts/check-agent-image.sh`. It shares the Claude base's pinned Debian base
 and every one of its shape prohibitions, and differs in what it ships: the Codex
-CLI is a static musl binary taken from the upstream release bundle, so the image
+CLI is a static musl binary taken from the upstream release package (the
+standalone layout that replaced the bundle asset in 0.147.0), so the image
 carries no language runtime, and it adds `ripgrep`, which the CLI's file-search
-tool shells out to. The version pin is the one #401's gate probes closed on. Its
-README records the pins, the daemon-side contract those probes fixed, and the
-in-image behavior measured here.
+tool shells out to. The pin is 0.147.0, whose contract re-proof
+(`devlog/2026-08-09-1925-codex-0147-contract-reproof.md`) carries forward the
+#401 gate closures. Its README records the pins, the daemon-side contract those
+probes fixed, and the in-image behavior measured here.

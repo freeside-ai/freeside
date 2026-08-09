@@ -25,28 +25,37 @@ Use `--registry HOST[/PATH]` instead for a shared image. The image is
 | Input | Pin |
 | --- | --- |
 | Base | `docker.io/library/debian:trixie-slim@sha256:020c0d20…` |
-| Codex CLI | 0.137.0, upstream `codex-aarch64-unknown-linux-musl-bundle.tar.zst`, sha256 literal in the Containerfile |
+| Codex CLI | 0.147.0, upstream `codex-package-aarch64-unknown-linux-musl.tar.zst`, sha256 literal in the Containerfile |
 
-The pin stays at **0.137.0** by the #401 decision: 0.146.0 was checked
-specifically for the workspace-skill severance gate, has no such switch, and a
-bump would force re-proving every #395 and #401 empirical contract for nothing.
-Any future bump re-proves the contracts those notes list under Pinning.
+The pin moved to **0.147.0** in #623. That release removed the earlier bundle
+artifact, so the image now consumes the package artifact while preserving the
+installed paths the CLI uses for its bundled resources. Future bumps re-prove
+the contracts the #395 and #401 notes list under Pinning.
 
 `busybox-static`, `ca-certificates`, `git`, and `ripgrep` come from Debian's
 archive and are **recorded, not pinned**: their observed versions are written
 into `/usr/local/share/freeside/image-manifest.txt` in the image, along with the
-resolved Codex, ripgrep, and bwrap versions. An exact apt pin turns unbuildable
-once Debian drops the superseded version from its mirror.
+resolved Codex, ripgrep, bwrap, and bundled zsh versions. An exact apt pin turns
+unbuildable once Debian drops the superseded version from its mirror.
 
 "Reproducible" therefore means pinned inputs plus a recorded digest, not a
 bit-identical image: Apple container's build metadata varies between otherwise
 identical invocations (see
 `devlog/2026-07-21-1108-apple-container-exporter-seeding.md`).
 
-**Why the release bundle, not npm.** The CLI is a static musl binary, so this
-image needs no language runtime at all, and the bundle is upstream's own
-standalone layout: `codex` plus `codex-resources/bwrap` beside it, which is
-exactly where the CLI looks for its Linux sandbox helper. The npm package
+**Why the release package, not npm.** The CLI is a static musl binary, so this
+image needs no language runtime at all, and the package is upstream's own
+standalone layout: `bin/codex` and `bin/codex-code-mode-host` plus
+`codex-resources` containing the bundled bwrap and zsh. The image installs
+those as `/usr/local/bin/codex`, `/usr/local/bin/codex-code-mode-host`, and
+`/usr/local/bin/codex-resources`, the CLI's first legacy resource candidate.
+The code-mode host is load-bearing on 0.147.0, not a code-mode convenience:
+the CLI's default tool surface routes composite shell commands through it, and
+without the executable those exec calls fail closed while the model can then
+report success it never had (probed 2026-08-09; see
+`devlog/2026-08-09-1925-codex-0147-contract-reproof.md`). The image still
+omits the package's `codex-path/rg`, because Debian ripgrep is
+already the recorded runtime dependency. The npm package
 `@openai/codex` is a JS shim that resolves platform binaries at install time,
 which would add Node, npm, and a resolution step to pin. One sha256 literal over
 one artifact is the stronger pin.
