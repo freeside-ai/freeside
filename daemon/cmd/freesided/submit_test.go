@@ -8,10 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -288,6 +291,68 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		ctx, legacyID, domain.ModeUnattended, "example/repo",
 	); err != nil || production || author != (engine.ProductionCommitAuthor{}) {
 		t.Fatalf("legacy production author = %#v, production=%v, err=%v", author, production, err)
+	}
+}
+
+func TestStoreAdmissionAuthorityDerivesFallbackCommitMessage(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	root := t.TempDir()
+	specPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	cfg := submitCommandConfig{
+		DBPath: filepath.Join(root, "freeside.db"), SpecPath: specPath,
+		PolicyPath: policyPath, PublicationPath: publicationPath,
+		ProjectID: "proj-submit-message",
+	}
+	submitted, err := runSubmitCommand(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(ctx, cfg.DBPath, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := storeAdmissionAuthority{store: st, blobs: blobs}
+	admission := domain.ExecutionAdmission{
+		RunID: submitted.RunID, SpecDigest: submitted.SpecDigest,
+	}
+	got, err := authority.fallbackCommitMessage(ctx, admission, importer.Policy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subject, _, _ := strings.Cut(got, "\n"); subject != "Work item" {
+		t.Fatalf("undeclared subject = %q, want %q", subject, "Work item")
+	}
+
+	issue := 123
+	declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
+		CompletionCriterion: domain.CompletionBoundIssueClosedByMergedPR,
+		BoundIssue:          &issue,
+		DeclaredPaths:       []string{"daemon/**"},
+	}, submitted.RunID, domain.ProjectID(cfg.ProjectID), time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordWorkUnitDeclaration(ctx, declaration)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = authority.fallbackCommitMessage(ctx, admission, importer.Policy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subject, _, _ := strings.Cut(got, "\n"); subject != "Work item (#123)" {
+		t.Fatalf("issue-bound subject = %q, want %q", subject, "Work item (#123)")
+	}
+	reconstructed, err := authority.fallbackCommitMessage(ctx, admission, importer.Policy{})
+	if err != nil || reconstructed != got {
+		t.Fatalf("reconstructed message = %q, %v; want byte-identical %q", reconstructed, err, got)
 	}
 }
 

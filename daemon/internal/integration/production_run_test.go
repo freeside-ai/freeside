@@ -209,9 +209,11 @@ func registerSubmissionArtifactsWithPolicyKeys(
 ) (domain.Artifact, domain.Artifact, domain.ResolvedPolicy) {
 	t.Helper()
 	ctx := context.Background()
+	specBody := submissionSpecification(runID)
+	specSum := sha256.Sum256(specBody)
 	spec, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: domain.ArtifactID("artifact-spec-" + runID), Type: "specification",
-		Digest: submissionDigest(runID, "specification"),
+		Digest: domain.Digest("sha256:" + hex.EncodeToString(specSum[:])),
 		Provenance: domain.Provenance{
 			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: domain.InvocationID("submit-" + runID),
 			HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
@@ -317,6 +319,10 @@ func reviseWaivedTrustProfile(t *testing.T, st *store.Store) {
 	}); err != nil {
 		t.Fatalf("activate revised trust profile: %v", err)
 	}
+}
+
+func submissionSpecification(runID string) []byte {
+	return []byte("# Publish " + runID + "\n\nExercise the production workflow.\n")
 }
 
 func TestSubmitProductionRunConvergesAndRefusesRetargeting(t *testing.T) {

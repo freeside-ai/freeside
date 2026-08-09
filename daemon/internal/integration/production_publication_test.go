@@ -194,14 +194,34 @@ type productionPublicationHarness struct {
 	workflow                  *engine.Engine
 	invocation                domain.InvocationID
 	recipeReadTimeout         time.Duration
+	declaration               *domain.WorkUnitDeclaration
 }
 
 func newProductionPublicationHarness(t *testing.T, resultHead string) *productionPublicationHarness {
 	return newProductionPublicationHarnessWithPolicyKeys(t, resultHead, nil)
 }
 
+func newProductionPublicationHarnessWithBoundIssue(
+	t *testing.T, resultHead string, boundIssue int,
+) *productionPublicationHarness {
+	return newProductionPublicationHarnessWithPolicyKeysAndBoundIssue(
+		t, resultHead, nil, &boundIssue,
+	)
+}
+
 func newProductionPublicationHarnessWithPolicyKeys(
 	t *testing.T, resultHead string, extraKeys []domain.PolicyKey,
+) *productionPublicationHarness {
+	return newProductionPublicationHarnessWithPolicyKeysAndBoundIssue(
+		t, resultHead, extraKeys, nil,
+	)
+}
+
+func newProductionPublicationHarnessWithPolicyKeysAndBoundIssue(
+	t *testing.T,
+	resultHead string,
+	extraKeys []domain.PolicyKey,
+	boundIssue *int,
 ) *productionPublicationHarness {
 	t.Helper()
 	h := newPublicationHarness(t)
@@ -241,10 +261,6 @@ func newProductionPublicationHarnessWithPolicyKeys(
 		t.Fatal(err)
 	}
 
-	replay := buildProductionReplay(t, h)
-	if resultHead == "" {
-		resultHead = replay.HeadSHA
-	}
 	runID := domain.RunID("run-production-publication")
 	projectID := domain.ProjectID("project-production-publication")
 	policyKeys := append([]domain.PolicyKey{{
@@ -257,6 +273,8 @@ func newProductionPublicationHarnessWithPolicyKeys(
 	spec, policy, resolved := registerSubmissionArtifactsWithPolicyKeys(
 		t, h.store, string(runID), policyKeys,
 	)
+	specBody := submissionSpecification(string(runID))
+	putProductionBlob(t, h, spec.Digest, specBody)
 	submitted, err := engine.SubmitProductionRun(h.ctx, h.store, engine.ProductionRunSpec{
 		RunID: runID, ProjectID: projectID, SpecArtifactID: spec.ID,
 		PolicyArtifactID: policy.ID, ResolvedPolicy: resolved,
@@ -264,6 +282,27 @@ func newProductionPublicationHarnessWithPolicyKeys(
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	var declaration *domain.WorkUnitDeclaration
+	if boundIssue != nil {
+		captured, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
+			CompletionCriterion: domain.CompletionBoundIssueClosedByMergedPR,
+			BoundIssue:          boundIssue,
+			DeclaredPaths:       []string{"README.md"},
+		}, runID, projectID, fakePublicationTime)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.store.WriteInternal(h.ctx, func(tx *store.InternalTx) error {
+			return tx.RecordWorkUnitDeclaration(h.ctx, captured)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		declaration = &captured
+	}
+	replay := buildProductionReplay(t, h, runID, spec.Digest, specBody, boundIssue)
+	if resultHead == "" {
+		resultHead = replay.HeadSHA
 	}
 	driver, err := fake.NewStageDriverAt(filepath.Join(h.workDir, "production-driver"))
 	if err != nil {
@@ -279,7 +318,7 @@ func newProductionPublicationHarnessWithPolicyKeys(
 		room:                      &productionRoom{recipe: bytes.Clone(h.recipe)},
 		reviewer:                  fake.NewReviewSource(),
 		reviewConfigurationDigest: fake.DefaultReviewConfigurationDigest,
-		invocation:                submitted.InvocationID,
+		invocation:                submitted.InvocationID, declaration: declaration,
 	}
 	p.reviewSource = p.reviewer
 	// Mirror production: the signet decision-time adoption gate reads the
@@ -302,7 +341,14 @@ func productionPublicationBackend(t *testing.T) fake.RunnerBackend {
 	}
 }
 
-func buildProductionReplay(t *testing.T, h *publicationHarness) engine.ProductionReplay {
+func buildProductionReplay(
+	t *testing.T,
+	h *publicationHarness,
+	runID domain.RunID,
+	specDigest domain.Digest,
+	specBody []byte,
+	boundIssue *int,
+) engine.ProductionReplay {
 	t.Helper()
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "production change\n")
@@ -341,6 +387,10 @@ func buildProductionReplay(t *testing.T, h *publicationHarness) engine.Productio
 		AuthorEmail: productionPublicationMetadata().CommitAuthor.Email(),
 		Policy:      policy,
 	}
+	options.CommitMessage = engine.FallbackCommitMessage(engine.FallbackCommitMessageInput{
+		Spec: specBody, BoundIssue: boundIssue, RunID: runID,
+		SpecDigest: specDigest, Policy: policy,
+	})
 	imported, err := importer.Import(t.Context(), handoff, checkout, options)
 	if err != nil {
 		t.Fatal(err)
@@ -623,6 +673,15 @@ func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 	}
 	if p.room.reads != 1 {
 		t.Fatalf("project-image recipe reads = %d, want 1", p.room.reads)
+	}
+	message := p.transport.pushedCommitMessage()
+	wantSubject := "Publish run-production-publication"
+	if subject, _, _ := strings.Cut(message, "\n"); subject != wantSubject {
+		t.Fatalf("fallback commit subject = %q, want %q", subject, wantSubject)
+	}
+	if !strings.Contains(message, "Run ID: run-production-publication.") ||
+		!strings.Contains(message, "Specification digest:") {
+		t.Fatalf("fallback commit message lacks trace facts:\n%s", message)
 	}
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		review, err := tx.LatestReviewRecord(p.ctx, p.runID)
@@ -4171,26 +4230,8 @@ func TestShutdownEndsAParkedProductionPublicationWithoutLosingItsTask(t *testing
 // duplicating or conflicting.
 func TestProductionPublicationRecordsWorkUnitPRBinding(t *testing.T) {
 	t.Parallel()
-	p := newProductionPublicationHarness(t, "")
-	// Declaration capture at submission is covered in production_run_test.go;
-	// here the unit is declared for the already-submitted run so the ready
-	// pass has a binding to record.
-	boundIssue := 443
-	declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
-		CompletionCriterion: domain.CompletionBoundIssueClosedByMergedPR,
-		BoundIssue:          &boundIssue,
-		// The read re-gate requires the declared scope to equal the
-		// harness policy's paths key.
-		DeclaredPaths: []string{"README.md"},
-	}, p.runID, p.projectID, fakePublicationTime)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
-		return tx.RecordWorkUnitDeclaration(p.ctx, declaration)
-	}); err != nil {
-		t.Fatalf("record declaration: %v", err)
-	}
+	p := newProductionPublicationHarnessWithBoundIssue(t, "", 443)
+	declaration := *p.declaration
 
 	p.startAndRecordExport(t)
 	result, err := p.reconcileLanes()
@@ -4200,6 +4241,10 @@ func TestProductionPublicationRecordsWorkUnitPRBinding(t *testing.T) {
 	p.assertReady(t)
 	if result.LastPRNumber <= 0 {
 		t.Fatalf("reconcile result carries no PR number: %+v", result)
+	}
+	message := p.transport.pushedCommitMessage()
+	if subject, _, _ := strings.Cut(message, "\n"); subject != "Publish run-production-publication (#443)" {
+		t.Fatalf("issue-bound fallback subject = %q", subject)
 	}
 
 	readBinding := func() domain.WorkUnitPRBinding {
