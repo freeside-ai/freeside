@@ -58,6 +58,7 @@ func (s *Service) applyStopUnattended(
 			return nil
 		}
 	}
+	posture := domain.HealthPostureBlocking
 	notice, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID:        stoppedNoticeID(command.CommandID),
 		ProjectID: item.ProjectID,
@@ -71,6 +72,7 @@ func (s *Service) applyStopUnattended(
 		RequestedDecision: []domain.Action{domain.ActionResumeUnattended, domain.ActionAcknowledge},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionExceptional,
+		Posture:           &posture,
 		Status:            domain.StatusOpen,
 	}, nil)
 	if err != nil {

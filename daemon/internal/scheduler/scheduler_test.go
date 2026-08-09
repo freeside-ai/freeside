@@ -74,7 +74,8 @@ func openItem(t *testing.T, st *store.Store, id domain.ItemID, project domain.Pr
 		Reason:            "scheduler test subject",
 		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
 		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
-		Status: domain.StatusOpen,
+		Posture: ptr(domain.HealthPostureBlocking),
+		Status:  domain.StatusOpen,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)

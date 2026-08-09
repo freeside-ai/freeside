@@ -61,6 +61,28 @@ func (t AttentionType) valid() bool {
 	}
 }
 
+// HealthPosture declares whether an open system_health item blocks unrelated
+// unattended admission or is an advisory observation (plan §4). The posture
+// is explicit so omission never silently chooses either safety behavior.
+type HealthPosture string
+
+const (
+	HealthPostureBlocking HealthPosture = "blocking"
+	HealthPostureAdvisory HealthPosture = "advisory"
+)
+
+// AllHealthPostures lists every valid HealthPosture.
+var AllHealthPostures = []HealthPosture{HealthPostureBlocking, HealthPostureAdvisory}
+
+func (p HealthPosture) valid() bool {
+	switch p {
+	case HealthPostureBlocking, HealthPostureAdvisory:
+		return true
+	default:
+		return false
+	}
+}
+
 // SubjectType is what an AttentionItem is about (plan §4).
 type SubjectType string
 

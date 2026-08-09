@@ -858,6 +858,7 @@ public actor MockServer {
                         ),
                         expires_when: nil,
                         decided_at: nil,
+                        posture: .init(value1: .blocking),
                         blocking_supersession: nil,
                         status: .open
                     ))

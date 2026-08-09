@@ -17,7 +17,7 @@ VALUES (?, ?, ?, ?)`
 SELECT state, command_id, reason, occurred_at
 FROM unattended_operation_transitions ORDER BY id DESC LIMIT 1`
 	listOpenAttentionItemsByTypeSQL = `
-SELECT id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body
+SELECT id, project_id, conversation_id, item_type, status, health_posture, entity_version, as_of_revision, body
 FROM attention_items WHERE item_type = ? AND status = 'open' ORDER BY id`
 	// The lookup columns can only fail open by omission: a row whose column
 	// diverges from its canonical body is invisible to the WHERE clause
@@ -29,7 +29,8 @@ FROM attention_items WHERE item_type = ? AND status = 'open' ORDER BY id`
 	attentionColumnDivergenceSQL = `
 SELECT COUNT(*) FROM attention_items
 WHERE item_type <> COALESCE(json_extract(body, '$.type'), '')
-   OR status <> COALESCE(json_extract(body, '$.status'), '')`
+   OR status <> COALESCE(json_extract(body, '$.status'), '')
+   OR COALESCE(health_posture, '') <> COALESCE(json_extract(body, '$.posture'), '')`
 )
 
 // RecordUnattendedOperationTransition appends one operator stop/resume
@@ -190,6 +191,9 @@ func (tx *ReadTx) RequireUnattendedOperationOpen(ctx context.Context) error {
 	policy := tx.admissionPolicy
 	backupHealthLoaded := false
 	for _, item := range items {
+		if *item.Posture == domain.HealthPostureAdvisory {
+			continue
+		}
 		if item.BlockingSupersession == nil {
 			return fmt.Errorf("item %q: %w", item.ID, domain.ErrBlockingSystemHealth)
 		}

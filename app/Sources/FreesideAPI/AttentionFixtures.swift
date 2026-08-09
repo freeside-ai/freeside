@@ -275,6 +275,7 @@ public enum AttentionFixtures {
             ),
             expires_when: nil,
             decided_at: nil,
+            posture: type == .system_health ? .init(value1: .advisory) : nil,
             status: .open
         )
         return .init(as_of_revision: 1, entity_version: 1, item: item)
@@ -329,7 +330,7 @@ public enum AttentionFixtures {
         case .run_proposal:
             return "a scan proposes a dependency-update run"
         case .system_health:
-            return "the runner backend is not responding"
+            return "active-resource observation is temporarily unavailable"
         case .blocked:
             return "the run has waited 18h on an external reviewer"
         }

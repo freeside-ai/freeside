@@ -415,6 +415,7 @@ import Testing
             value1: .init(kind: .backup_encryption_waiver, repository_id: 424_242))
 
         var supersessionBadPayload = AttentionFixtures.fixture(type: .system_health)
+        supersessionBadPayload.item.posture = .init(value1: .blocking)
         supersessionBadPayload.item.blocking_supersession = .init(
             value1: .init(kind: .backup_encryption_waiver, repository_id: 0))
 
@@ -805,6 +806,7 @@ import Testing
         #expect(notice.item.status == .open)
         #expect(notice.item._type == .system_health)
         #expect(notice.item.requested_decision == [.resume_unattended, .acknowledge])
+        #expect(notice.item.posture?.value1 == .blocking)
         #expect(notice.item.blocking_supersession == nil)
 
         _ =

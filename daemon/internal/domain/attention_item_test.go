@@ -51,6 +51,10 @@ func validItemInput(typ domain.AttentionType) domain.AttentionItemInput {
 			SupersededProfileDigest: "sha256:profile-superseded",
 		}
 	}
+	if typ == domain.AttentionSystemHealth {
+		posture := domain.HealthPostureBlocking
+		in.Posture = &posture
+	}
 	return in
 }
 
@@ -892,4 +896,59 @@ func TestAttentionItemBlockingSupersessionRules(t *testing.T) {
 	if _, err := domain.NewAttentionItem(malformed, nil); !errors.Is(err, domain.ErrNonPositive) {
 		t.Fatalf("malformed payload = %v, want %v", err, domain.ErrNonPositive)
 	}
+}
+
+// TestAttentionItemHealthPostureRules pins the explicit type coupling: every
+// system_health item chooses blocking or advisory, no other type carries a
+// posture, and advisory observations cannot carry a blocking supersession.
+func TestAttentionItemHealthPostureRules(t *testing.T) {
+	t.Run("missing on system health", func(t *testing.T) {
+		in := validItemInput(domain.AttentionSystemHealth)
+		in.Posture = nil
+		if _, err := domain.NewAttentionItem(in, nil); !errors.Is(err, domain.ErrHealthPostureInconsistent) {
+			t.Fatalf("missing posture = %v, want %v", err, domain.ErrHealthPostureInconsistent)
+		}
+	})
+
+	t.Run("present on another type", func(t *testing.T) {
+		in := validItemInput(domain.AttentionSpecApproval)
+		posture := domain.HealthPostureBlocking
+		in.Posture = &posture
+		if _, err := domain.NewAttentionItem(in, nil); !errors.Is(err, domain.ErrHealthPostureInconsistent) {
+			t.Fatalf("foreign posture = %v, want %v", err, domain.ErrHealthPostureInconsistent)
+		}
+	})
+
+	t.Run("unknown posture", func(t *testing.T) {
+		in := validItemInput(domain.AttentionSystemHealth)
+		posture := domain.HealthPosture("informational")
+		in.Posture = &posture
+		if _, err := domain.NewAttentionItem(in, nil); !errors.Is(err, domain.ErrInvalidHealthPosture) {
+			t.Fatalf("unknown posture = %v, want %v", err, domain.ErrInvalidHealthPosture)
+		}
+	})
+
+	t.Run("advisory with supersession", func(t *testing.T) {
+		in := validItemInput(domain.AttentionSystemHealth)
+		posture := domain.HealthPostureAdvisory
+		in.Posture = &posture
+		in.BlockingSupersession = &domain.BlockingSupersession{
+			Kind: domain.SupersessionBackupEncryptionWaiver, RepositoryID: 42,
+		}
+		if _, err := domain.NewAttentionItem(in, nil); !errors.Is(err, domain.ErrSupersessionOnAdvisoryHealth) {
+			t.Fatalf("advisory supersession = %v, want %v", err, domain.ErrSupersessionOnAdvisoryHealth)
+		}
+	})
+
+	t.Run("constructor detaches posture", func(t *testing.T) {
+		in := validItemInput(domain.AttentionSystemHealth)
+		item, err := domain.NewAttentionItem(in, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		*in.Posture = domain.HealthPostureAdvisory
+		if *item.Posture != domain.HealthPostureBlocking {
+			t.Fatalf("constructed posture = %q, want blocking", *item.Posture)
+		}
+	})
 }

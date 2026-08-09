@@ -1,9 +1,9 @@
 ---
 title: Freeside Project Plan
-revision: 28
+revision: 29
 status: active
 phase: 1A
-updated: 2026-08-05
+updated: 2026-08-09
 ---
 
 # Freeside
@@ -257,7 +257,7 @@ Approval is not a universal action.
 | `ready_for_final_review` | Open the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. |
 | `run_proposal` | Start, **start with changes**, decline, or snooze. “Start with changes” creates a revised proposal artifact, supersedes the original item, creates a new item version, and starts the run from the exact revised digest. It never uses unversioned ad hoc parameters. Proposals are grouped under `proposal_batch_id` with per-candidate decisions. |
 | `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section 5.13 registry (added in 1B with the registry; first instance: follow-up issue filings in 1B.1, with proposed watches following once their schedule kind lands, Section 5.16). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `run_proposal`'s start-with-changes. `run_proposal` remains its own type. |
-| `system_health` | Acknowledge, run doctor, stop unattended operation, or — on the notice a stop raises — resume unattended operation. Acknowledge means seen, never resolved. The item remains blocking until the diagnostic clears, unattended operation is explicitly stopped, or a validated configuration supersedes it. A stop is a durable operating transition: only the explicit resume reopens unattended admission, and a restart alone never does. |
+| `system_health` | Acknowledge, run doctor, stop unattended operation, or, on the notice a stop raises, resume unattended operation. Acknowledge means seen, never resolved. Every item declares an immutable posture: `blocking` preserves the admission gate until the diagnostic clears, unattended operation is explicitly stopped, or a validated configuration supersedes it; `advisory` remains open and visible without blocking unrelated unattended admission. A stop is a durable operating transition: only the explicit resume reopens unattended admission, and a restart alone never does. |
 | `blocked` | Consolidates external waits that exceed Section 5.12 thresholds. It is read-only. |
 
 Section 9 governs each type's presentation: what its card leads with and what
@@ -2559,44 +2559,17 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 28 ("The review anchor"):
+Revision 29 ("Explicit health posture"):
 
-1. **The review anchor is pre-publication** (Sections 1, 7, and 11):
-   implement → verify → review → clean: publish; the PR opens already
-   reviewed, and forge checks still gate merge. This resolves the fork
-   revision 25 deliberately carried unresolved. The internal loop is the
-   agent's pre-push work; the PR is the collaboration surface: the PR list
-   stays a decision queue, not a work queue; post-publication state is the
-   expensive place to be correct (the #496/#514 ready-identity class); PR
-   comments are mutable, so the authoritative ReviewRecord lives in the
-   store under either anchor, and PR-anchoring would mean building both
-   surfaces; and owner drill-down usage is served by computed readiness,
-   the run timeline, and structured dispositions. The PR-anchored shape
-   stays recorded as the fallback; revisit when real usage shows the owner
-   cannot trust review they did not watch. The stage #427 landed
-   PR-anchored under the then-open fork; the implementation re-anchor is
-   tracked in #527.
-   (User; devlog 2026-08-05-1746-review-anchor-pre-publication.md; #482,
-   #427, #527.)
-2. **Publication carries the disposition history as the EvidencePublisher's
-   first slice** (Sections 7, 5.15, and 11): review rounds, final
-   dispositions including declined and deferred with reasons, and the
-   readiness derivation, so the merged PR is forensically self-explanatory
-   on the forge; the owner's condition on the anchor resolution, pinning
-   the slice's priority, not gating publication before #525 lands (until
-   then the store carries the durable review state; per-finding
-   disposition persistence precedes both #525's rendering and any
-   reliance on the store as the authoritative disposition record).
-   (User; same devlog; #525.)
-3. **External review response is a named deferred capability** (Sections 7
-   and 11): review activity arriving on a published PR from outside the
-   control plane is identity-gated by an external-reviewer allowlist in
-   the trust profile, normalized into the finding pipeline with source
-   provenance, and drives the standard remediation → reverify → re-review
-   cycle under the same convergence policy as internal rounds; it never
-   satisfies the Section 7 requirement. Related to #502 as
-   re-entry-after-terminal-state triggers.
-   (User; same devlog; #524.)
+1. **System-health admission posture is explicit and immutable** (Sections 4
+   and 5.7): every `system_health` item is either `blocking` or `advisory`.
+   Advisory observations remain open and operator-visible without blocking
+   unrelated unattended admission; blocking items preserve the prior gate and
+   are the only items eligible for a validated blocking supersession. Existing
+   rows migrate to `blocking`, preserving their historical meaning. Revisit
+   when a third posture has a concrete admission behavior that neither posture
+   nor a validated supersession represents.
+   (User; devlog 2026-08-09-1739-system-health-posture.md; #625.)
 
 ## 14. Risks
 

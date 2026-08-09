@@ -117,6 +117,9 @@ struct DecisionDetailView: View {
                 .font(.title2.weight(.semibold))
             Spacer()
             PriorityBadge(priority: item.priority)
+            if let posture = item.posture?.value1 {
+                HealthPostureBadge(posture: posture)
+            }
             StatusBadge(status: item.status)
         }
     }
@@ -314,5 +317,25 @@ struct DecisionDetailView: View {
             }
         }
         .buttonStyle(.bordered)
+    }
+}
+
+struct HealthPostureBadge: View {
+    let posture: Components.Schemas.HealthPosture
+
+    var body: some View {
+        Text(AttentionDisplay.label(posture))
+            .font(.caption2.weight(.medium))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.15), in: Capsule())
+            .foregroundStyle(color)
+    }
+
+    private var color: Color {
+        switch posture {
+        case .blocking: return .red
+        case .advisory: return .secondary
+        }
     }
 }

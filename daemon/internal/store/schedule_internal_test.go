@@ -59,8 +59,21 @@ func TestScheduleAuthorityMigrationBackfillsAndNormalizesOneShots(t *testing.T) 
 		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
 			return err
 		}
-		return tx.PutAttentionItem(ctx, item)
+		return nil
 	}); err != nil {
+		t.Fatal(err)
+	}
+	itemBody, err := encode(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Seed in the exact pre-0027 schema shape. The current Put includes
+	// columns introduced by later migrations and therefore must not be used
+	// to construct a historical migration fixture.
+	if _, err := db.ExecContext(ctx, `INSERT INTO attention_items
+		(id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body)
+		VALUES (?, ?, NULL, ?, ?, 1, 1, ?)`,
+		item.ID, item.ProjectID, item.Type, item.Status, itemBody); err != nil {
 		t.Fatal(err)
 	}
 
@@ -371,7 +384,8 @@ func migrationsBeforeScheduleAuthority(t *testing.T) fs.FS {
 			entry.Name() == "0031_review_retry.sql" ||
 			entry.Name() == "0032_review_recovery.sql" ||
 			entry.Name() == "0033_publish_installation_mint_audit.sql" ||
-			entry.Name() == "0034_review_configuration_recovery.sql" || entry.IsDir() {
+			entry.Name() == "0034_review_configuration_recovery.sql" ||
+			entry.Name() == "0035_attention_health_posture.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())

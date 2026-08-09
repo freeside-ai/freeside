@@ -503,6 +503,11 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	expires := time.Now().Add(24 * time.Hour)
+	var posture *domain.HealthPosture
+	if itemType == domain.AttentionSystemHealth {
+		blocking := domain.HealthPostureBlocking
+		posture = &blocking
+	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID:                          domain.ItemID(req.ID),
 		ProjectID:                   "proj-convergence",
@@ -518,6 +523,7 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		ItemVersion:                 req.ItemVersion,
 		InterruptionClass:           domain.InterruptionPlannedGate,
 		ExpiresWhen:                 &expires,
+		Posture:                     posture,
 		Status:                      domain.StatusOpen,
 	}, nil)
 	if err != nil {

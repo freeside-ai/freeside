@@ -123,6 +123,7 @@ func openUnattendedFixtureAt(t *testing.T, root string, seed bool) *workflowFixt
 func stopOperations(t *testing.T, f *workflowFixture, commandID string) {
 	t.Helper()
 	ctx := context.Background()
+	posture := domain.HealthPostureBlocking
 	carrier, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: domain.ItemID("health-carrier-" + commandID), ProjectID: "proj-235",
 		Subject:           domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
@@ -132,6 +133,7 @@ func stopOperations(t *testing.T, f *workflowFixture, commandID string) {
 		RequestedDecision: []domain.Action{domain.ActionAcknowledge, domain.ActionStopUnattended},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionExceptional,
+		Posture:           &posture,
 		Status:            domain.StatusOpen,
 	}, nil)
 	if err != nil {
@@ -470,6 +472,7 @@ func TestBlockingItemHoldsAFreshDispatchUnderAnUnconfiguredEngine(t *testing.T) 
 	invocation := f.discuss(t, feedback)
 	f.scriptCompletion(invocation, fake.OutcomeComplete)
 
+	posture := domain.HealthPostureBlocking
 	blocker, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "health-blocker", ProjectID: "proj-235",
 		Subject:           domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
@@ -479,6 +482,7 @@ func TestBlockingItemHoldsAFreshDispatchUnderAnUnconfiguredEngine(t *testing.T) 
 		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionExceptional,
+		Posture:           &posture,
 		Status:            domain.StatusOpen,
 	}, nil)
 	if err != nil {

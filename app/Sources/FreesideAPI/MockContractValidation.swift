@@ -46,6 +46,18 @@ enum MockContractValidation {
         // reason fails decode), and nil is a valid absence, so no check
         // remains to mirror.
         if item.item_version < 1 { return "non-positive item_version" }
+        // Posture mirrors the domain's explicit system_health-only admission
+        // effect. The generated enum makes an unknown posture unrepresentable.
+        if let posture = item.posture?.value1 {
+            if item._type != .system_health {
+                return "posture on a non-system_health item"
+            }
+            if item.blocking_supersession != nil, posture != .blocking {
+                return "blocking_supersession on an advisory system_health item"
+            }
+        } else if item._type == .system_health {
+            return "system_health item lacks posture"
+        }
         // blocking_supersession mirrors the domain's typed §4 condition
         // (#319/#321): legal only on system_health, and its payload must
         // name a positive repository id. The generated closed kind enum

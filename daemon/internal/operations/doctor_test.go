@@ -143,6 +143,10 @@ func assertOpenHealthItems(
 	for _, snapshot := range items {
 		if snapshot.Item.Type == domain.AttentionSystemHealth &&
 			snapshot.Item.Status == domain.StatusOpen {
+			if snapshot.Item.Posture == nil || *snapshot.Item.Posture != domain.HealthPostureBlocking {
+				t.Errorf("doctor item %s posture = %v, want blocking",
+					snapshot.Item.ID, snapshot.Item.Posture)
+			}
 			got++
 		}
 	}

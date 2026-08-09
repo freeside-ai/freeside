@@ -183,8 +183,11 @@ var (
 
 	// Unattended operating-state and §4 blocking failures (issues #319, #321).
 	ErrInvalidUnattendedOperationState  = errors.New("unknown unattended operation state")
+	ErrInvalidHealthPosture             = errors.New("unknown system_health posture")
+	ErrHealthPostureInconsistent        = errors.New("health posture is required exactly for system_health items")
 	ErrInvalidSupersessionKind          = errors.New("unknown blocking supersession kind")
 	ErrSupersessionOutsideSystemHealth  = errors.New("blocking supersession is a system_health semantic")
+	ErrSupersessionOnAdvisoryHealth     = errors.New("blocking supersession requires a blocking health posture")
 	ErrUnattendedOperationStopped       = errors.New("unattended operation is stopped by operator decision")
 	ErrBlockingSystemHealth             = errors.New("an open system_health item blocks unattended admission")
 	ErrTransitionUnbacked               = errors.New("operating transition names no accepted command")

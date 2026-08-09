@@ -24,6 +24,20 @@ func (stageInputBackend) Capabilities() exec.CapabilitySet {
 	return exec.NewCapabilitySet(exec.CapPostExitExport)
 }
 
+func TestWaivedPostureItemIsExplicitlyBlocking(t *testing.T) {
+	item, err := waivedPostureItem(
+		domain.Run{ID: "run-1", ProjectID: "proj-1"},
+		"inv-1",
+		domain.BackupEncryptionWaiver{RepositoryID: 42, Reason: "temporary operator waiver"},
+	)
+	if err != nil {
+		t.Fatalf("waivedPostureItem: %v", err)
+	}
+	if item.Posture == nil || *item.Posture != domain.HealthPostureBlocking {
+		t.Fatalf("waived posture item = %v, want blocking", item.Posture)
+	}
+}
+
 func TestWithAdmissionRejectsNonCanonicalPromptDigest(t *testing.T) {
 	option := WithAdmission(
 		stageInputBackend{}, nil,
