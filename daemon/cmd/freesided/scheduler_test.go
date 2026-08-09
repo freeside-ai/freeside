@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -342,6 +343,64 @@ func TestClaudeSchedulerRegistersEveryKind(t *testing.T) {
 	}
 	if len(registered) != len(domain.AllScheduleKinds) {
 		t.Errorf("registered %d kinds, union has %d", len(registered), len(domain.AllScheduleKinds))
+	}
+}
+
+func TestClaudeSchedulerCapturesCompletionWithBaseAdvance(t *testing.T) {
+	for _, captureFails := range []bool{false, true} {
+		name := "capture_succeeds"
+		if captureFails {
+			name = "capture_fails"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			st := schedTestStore(t)
+			item := capturedRun(t, st)
+			watch := watchSchedule(t, item)
+			wiring := &claudeComposition{
+				janitor: &janitorSession{janitor: &stubJanitorRunner{}},
+				observeBaseTip: func(context.Context, domain.ScheduleBaseWatch) (string, error) {
+					return "deadbeef", nil
+				},
+				observePull: func(context.Context, string, int) (publish.PullObservation, error) {
+					if captureFails {
+						return publish.PullObservation{}, errors.New("github unavailable")
+					}
+					return exactPull("closed", true), nil
+				},
+				observeIssue: func(context.Context, string, int) (publish.IssueObservation, error) {
+					return publish.IssueObservation{
+						Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
+					}, nil
+				},
+			}
+			cfg := config{Claude: &claudeDriverConfig{OperatingMode: domain.ModeAttendedDev}}
+			sched, err := newClaudeScheduler(st, cfg, wiring, func(context.Context) error { return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := sched.Arm(ctx, watch, watch.CreatedAt.Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			if err := sched.RunOnce(ctx); err != nil {
+				t.Fatal(err)
+			}
+			got := readActiveItem(t, st, item.ID)
+			if got.Status != domain.StatusSuperseded || got.ReadinessInvalidation == nil ||
+				got.ReadinessInvalidation.Reason != domain.ReadinessInvalidationBaseAdvanced {
+				t.Fatalf("base advance did not supersede item: %+v", got)
+			}
+			pulls, issues, completion := readCaptureState(t, st)
+			if captureFails {
+				if len(pulls) != 0 || len(issues) != 0 || completion != nil {
+					t.Fatalf("failed capture persisted state: %v %v %v", pulls, issues, completion)
+				}
+				return
+			}
+			if len(pulls) != 1 || len(issues) != 1 || completion == nil {
+				t.Fatalf("advance capture state = %v %v %v", pulls, issues, completion)
+			}
+		})
 	}
 }
 
@@ -937,6 +996,65 @@ func TestBaseAdvanceWatchCapturesMergeCompletion(t *testing.T) {
 	}
 }
 
+func TestMergeCaptureCompletionUsesPersistedSharedPRFacts(t *testing.T) {
+	ctx := context.Background()
+	st := schedTestStore(t)
+	first := capturedRunNamed(t, st, "run-capture-shared-first", "item-capture-shared-first")
+	second := capturedRunNamed(t, st, "run-capture-shared-second", "item-capture-shared-second")
+	capture := mergeCapture{
+		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			return exactPull("closed", true), nil
+		},
+		issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+			return publish.IssueObservation{
+				Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
+			}, nil
+		},
+	}
+	firstAt := activeResourceTestTime
+	for _, captured := range []struct {
+		item domain.AttentionItem
+		at   time.Time
+	}{{first, firstAt}, {second, firstAt.Add(time.Hour)}} {
+		watch := watchSchedule(t, captured.item)
+		commit, err := capture.observe(ctx, st, captured.item, *watch.BaseWatch, captured.at)
+		if err != nil || commit == nil {
+			t.Fatalf("observe %s = (commit=%t, err=%v)", captured.item.ID, commit != nil, err)
+		}
+		if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			return commit(ctx, tx)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		for _, runID := range []domain.RunID{"run-capture-shared-first", "run-capture-shared-second"} {
+			completion, err := tx.GetWorkUnitCompletion(ctx, domain.WorkUnitIDForRun(runID))
+			if err != nil {
+				return err
+			}
+			if !completion.RecordedAt.Equal(firstAt) {
+				t.Fatalf("completion %s recorded_at = %s, want persisted %s",
+					runID, completion.RecordedAt, firstAt)
+			}
+		}
+		pulls, err := tx.ListPullMergeFacts(ctx, 424242, 450)
+		if err != nil {
+			return err
+		}
+		issues, err := tx.ListIssueStateFacts(ctx, 424242, 443)
+		if err != nil {
+			return err
+		}
+		if len(pulls) != 1 || len(issues) != 1 {
+			t.Fatalf("coalesced facts = pulls %v issues %v", pulls, issues)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestBaseAdvanceWatchFinalCaptureOnConcludedItem: the operator merges and
 // immediately concludes the item; the watch's next fire is the final
 // capture pass. A failed observation leaves the schedule armed (the capture
@@ -1014,12 +1132,11 @@ func TestBaseAdvanceWatchFinalCaptureOnConcludedItem(t *testing.T) {
 	}
 }
 
-// TestBaseAdvanceWatchCaptureRecordsForeignIdentityWithoutCompleting: a
-// repository name re-bound to a different repository (rename plus
-// name reuse) records the observed repository's facts under the OBSERVED
-// numeric identity, never completes the unit on them, and never reads the
-// bound issue through the unverified name.
-func TestBaseAdvanceWatchCaptureRecordsForeignIdentityWithoutCompleting(t *testing.T) {
+// TestBaseAdvanceWatchCaptureRejectsForeignIdentity: a repository name
+// re-bound to a different repository (rename plus name reuse) fails closed,
+// records no foreign fact, and never reads the bound issue through the
+// unverified name.
+func TestBaseAdvanceWatchCaptureRejectsForeignIdentity(t *testing.T) {
 	ctx := context.Background()
 	st := schedTestStore(t)
 	item := capturedRun(t, st)
@@ -1079,12 +1196,127 @@ func TestBaseAdvanceWatchCaptureRecordsForeignIdentityWithoutCompleting(t *testi
 		if err != nil {
 			return err
 		}
-		if len(observed) != 1 || !observed[0].Merged {
-			t.Fatalf("observed facts = %+v, want the foreign repository's merge recorded honestly", observed)
+		if len(observed) != 0 {
+			t.Fatalf("foreign observation persisted facts: %+v", observed)
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMergeCaptureRejectsReturnedCoordinateMismatches(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(call int, pull *publish.PullObservation, issue *publish.IssueObservation)
+	}{
+		{name: "initial pr number", mutate: func(call int, pull *publish.PullObservation, _ *publish.IssueObservation) {
+			if call == 1 {
+				pull.Number = 451
+			}
+		}},
+		{name: "initial nonpositive pr number", mutate: func(call int, pull *publish.PullObservation, _ *publish.IssueObservation) {
+			if call == 1 {
+				pull.Number = 0
+			}
+		}},
+		{name: "recheck pr number", mutate: func(call int, pull *publish.PullObservation, _ *publish.IssueObservation) {
+			if call == 2 {
+				pull.Number = 451
+			}
+		}},
+		{name: "recheck nonpositive pr number", mutate: func(call int, pull *publish.PullObservation, _ *publish.IssueObservation) {
+			if call == 2 {
+				pull.Number = 0
+			}
+		}},
+		{name: "issue number", mutate: func(_ int, _ *publish.PullObservation, issue *publish.IssueObservation) {
+			if issue != nil {
+				issue.Number = 444
+			}
+		}},
+		{name: "nonpositive issue number", mutate: func(_ int, _ *publish.PullObservation, issue *publish.IssueObservation) {
+			if issue != nil {
+				issue.Number = 0
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := schedTestStore(t)
+			item := capturedRun(t, st)
+			watch := watchSchedule(t, item)
+			pullCalls := 0
+			capture := mergeCapture{
+				pull: func(context.Context, string, int) (publish.PullObservation, error) {
+					pullCalls++
+					observed := exactPull("closed", true)
+					tc.mutate(pullCalls, &observed, nil)
+					return observed, nil
+				},
+				issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+					observed := publish.IssueObservation{
+						Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef",
+					}
+					tc.mutate(pullCalls, nil, &observed)
+					return observed, nil
+				},
+			}
+			commit, err := capture.observe(ctx, st, item, *watch.BaseWatch, activeResourceTestTime)
+			if err == nil || commit != nil {
+				t.Fatalf("capture = (commit=%t, err=%v), want failed observation", commit != nil, err)
+			}
+			pulls, issues, completion := readCaptureState(t, st)
+			if len(pulls) != 0 || len(issues) != 0 || completion != nil {
+				t.Fatalf("mismatched capture persisted state: %v %v %v", pulls, issues, completion)
+			}
+		})
+	}
+}
+
+func TestMergeCaptureRequiresReadyBindingAnchor(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "store.db")
+	st, err := store.Open(ctx, dbPath, store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	item := capturedRun(t, st)
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE work_unit_pr_bindings
+		SET repository_id = 515151, pr_number = 451,
+			body = json_set(body, '$.repository_id', 515151, '$.pr_number', 451)
+		WHERE unit_id = ?`, domain.WorkUnitIDForRun("run-cap")); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	pullCalls := 0
+	capture := mergeCapture{pull: func(context.Context, string, int) (publish.PullObservation, error) {
+		pullCalls++
+		return exactPull("closed", true), nil
+	}}
+	watch := watchSchedule(t, item)
+	commit, err := capture.observe(ctx, st, item, *watch.BaseWatch, activeResourceTestTime)
+	if err == nil || commit != nil {
+		t.Fatalf("capture = (commit=%t, err=%v), want binding-anchor failure", commit != nil, err)
+	}
+	if pullCalls != 0 {
+		t.Fatalf("corrupt binding reached observer %d times", pullCalls)
 	}
 }
 
@@ -1098,6 +1330,7 @@ func TestBaseAdvanceWatchDeclaredUnboundRetriesInsteadOfResolving(t *testing.T) 
 	st := schedTestStore(t)
 	runID := domain.RunID("run-cap")
 	seedCaptureRun(t, st, runID)
+	authority := seedReadyBindingAuthority(t, st, runID, "cafed00d")
 	declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
 		CompletionCriterion: domain.CompletionBoundPRMerged,
 	}, runID, "project-1", time.Date(2026, 2, 3, 3, 0, 0, 0, time.UTC))
@@ -1126,6 +1359,18 @@ func TestBaseAdvanceWatchDeclaredUnboundRetriesInsteadOfResolving(t *testing.T) 
 	item.Status = domain.StatusResolved
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordReadyItemPRBinding(ctx, domain.ReadyItemPRBinding{
+			ItemID: item.ID, RunID: runID,
+			ProducingInvocationID: authority.invocationID, PublicationIdentity: authority.identity,
+			PublicationInvocationID: authority.publicationInvocationID,
+			Repo:                    "owner/repo", RepositoryID: 424242,
+			PRNumber: 450, BaseRef: "main", HeadSHA: "cafed00d",
+			RecordedAt: time.Date(2026, 2, 3, 3, 30, 0, 0, time.UTC),
+		})
 	}); err != nil {
 		t.Fatal(err)
 	}
