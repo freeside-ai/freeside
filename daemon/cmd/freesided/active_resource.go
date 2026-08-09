@@ -35,20 +35,21 @@ type activeResourceReconciler struct {
 	reviewInvalidate func(repo string, number int)
 	// evictConcluded drops every conditional-request cache entry owned by a
 	// ready resource after the item leaves the open state. evictedConcluded
-	// keeps the terminal branch's forever cadence from re-reading the durable
-	// binding on every pass; both are process-local optimizations.
+	// records whether the final, post-completion eviction has happened; both
+	// are process-local optimizations.
 	evictConcluded   func(domain.ReadyItemPRBinding, *int)
-	evictedConcluded map[domain.ItemID]struct{}
+	evictedConcluded map[domain.ItemID]bool
 	now              func() time.Time
 }
 
 type activeResourceObservation struct {
-	itemID  domain.ItemID
-	binding domain.ReadyItemPRBinding
-	// pull is nil only when the first successful observation has a foreign
-	// repository/PR identity. The foreign pull is never constructed as a fact
-	// or persisted; only the daemon's readiness withdrawal crosses the commit
-	// boundary (plan §7, issue #514).
+	itemID         domain.ItemID
+	binding        domain.ReadyItemPRBinding
+	completionOnly bool
+	// pull is nil when no completion sweep is needed or when the first
+	// lifecycle observation has a foreign repository/PR identity. A foreign
+	// pull is never constructed as a fact or persisted; only an open item's
+	// readiness withdrawal crosses the commit boundary (plan §7, issue #514).
 	pull        *domain.PullMergeFact
 	issue       *domain.IssueStateFact
 	completion  *domain.WorkUnitCompletion
@@ -162,6 +163,14 @@ func (r *activeResourceReconciler) Reconcile(ctx context.Context) ([]error, erro
 			continue
 		}
 		if item.Status != domain.StatusOpen {
+			observation, err := r.observeCompletionOnly(ctx, item, r.now().UTC())
+			if err != nil {
+				failures = append(failures, fmt.Errorf("recover ready resource completion %s: %w", item.ID, err))
+			} else if observation.material || observation.completion != nil {
+				if err := r.commit(ctx, observation); err != nil {
+					return failures, fmt.Errorf("commit ready resource completion %s: %w", item.ID, err)
+				}
+			}
 			if err := r.evictConcludedResource(ctx, item.ID); err != nil {
 				failures = append(failures, fmt.Errorf("evict concluded ready resource %s: %w", item.ID, err))
 			}
@@ -214,14 +223,15 @@ func (r *activeResourceReconciler) evictConcludedResource(
 	if r.evictConcluded == nil {
 		return nil
 	}
-	if _, ok := r.evictedConcluded[itemID]; ok {
+	if final, ok := r.evictedConcluded[itemID]; ok && final {
 		return nil
 	}
 	var (
-		binding    domain.ReadyItemPRBinding
-		boundIssue *int
-		concluded  bool
-		found      bool
+		binding          domain.ReadyItemPRBinding
+		boundIssue       *int
+		concluded        bool
+		found            bool
+		recoveryComplete = true
 	)
 	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
 		item, err := tx.GetAttentionItem(ctx, itemID)
@@ -248,20 +258,32 @@ func (r *activeResourceReconciler) evictConcludedResource(
 			return err
 		}
 		boundIssue = declaration.BoundIssue
+		if _, err := tx.GetWorkUnitPRBinding(ctx, declaration.ID); errors.Is(err, store.ErrNotFound) {
+			recoveryComplete = false
+			return nil
+		} else if err != nil {
+			return err
+		}
+		if _, err := tx.GetWorkUnitCompletion(ctx, declaration.ID); errors.Is(err, store.ErrNotFound) {
+			recoveryComplete = false
+		} else if err != nil {
+			return err
+		}
 		return nil
 	}); err != nil {
 		return err
 	}
-	if !concluded {
+	if !concluded || !found {
 		return nil
 	}
-	if found {
-		r.evictConcluded(binding, boundIssue)
+	if _, alreadyEvicted := r.evictedConcluded[itemID]; alreadyEvicted && !recoveryComplete {
+		return nil
 	}
+	r.evictConcluded(binding, boundIssue)
 	if r.evictedConcluded == nil {
-		r.evictedConcluded = make(map[domain.ItemID]struct{})
+		r.evictedConcluded = make(map[domain.ItemID]bool)
 	}
-	r.evictedConcluded[itemID] = struct{}{}
+	r.evictedConcluded[itemID] = recoveryComplete
 	return nil
 }
 
@@ -318,6 +340,22 @@ func (r activeResourceReconciler) settleSchedules(
 func (r activeResourceReconciler) observe(
 	ctx context.Context, item domain.AttentionItem, observedAt time.Time,
 ) (activeResourceObservation, error) {
+	return r.observeReadyResource(ctx, item, observedAt, false)
+}
+
+// observeCompletionOnly reuses the ready-resource trust gates and fact
+// construction without applying readiness, review, or item-lifecycle
+// semantics. It remains eligible after the item concludes until completion is
+// durable; a closed pull remains retryable because GitHub permits reopening it.
+func (r activeResourceReconciler) observeCompletionOnly(
+	ctx context.Context, item domain.AttentionItem, observedAt time.Time,
+) (activeResourceObservation, error) {
+	return r.observeReadyResource(ctx, item, observedAt, true)
+}
+
+func (r activeResourceReconciler) observeReadyResource(
+	ctx context.Context, item domain.AttentionItem, observedAt time.Time, completionOnly bool,
+) (activeResourceObservation, error) {
 	var (
 		binding     domain.ReadyItemPRBinding
 		declaration *domain.WorkUnitDeclaration
@@ -338,6 +376,9 @@ func (r activeResourceReconciler) observe(
 			return err
 		}
 		b, err := tx.GetWorkUnitPRBinding(ctx, d.ID)
+		if completionOnly && errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -357,6 +398,13 @@ func (r activeResourceReconciler) observe(
 	}); err != nil {
 		return activeResourceObservation{}, err
 	}
+	observation := activeResourceObservation{
+		itemID: item.ID, binding: binding, completionOnly: completionOnly,
+		completed: completed,
+	}
+	if completionOnly && (declaration == nil || unitBinding == nil || completed) {
+		return observation, nil
+	}
 	observed, err := r.pull(ctx, binding.Repo, binding.PRNumber)
 	if err != nil {
 		return activeResourceObservation{}, fmt.Errorf("observe pull %s#%d: %w", binding.Repo, binding.PRNumber, err)
@@ -371,6 +419,12 @@ func (r activeResourceReconciler) observe(
 	// fact. The mismatch proves only that readiness is no longer verifiable; it
 	// gives no authority over the foreign object (plan §7, issue #514).
 	if observed.BaseRepoID != binding.RepositoryID || observed.Number != binding.PRNumber {
+		if completionOnly {
+			return activeResourceObservation{}, fmt.Errorf(
+				"observe pull %s#%d returned identity %d#%d",
+				binding.Repo, binding.PRNumber, observed.BaseRepoID, observed.Number,
+			)
+		}
 		return activeResourceObservation{
 			itemID: item.ID, binding: binding,
 			invalidation: readinessIdentityInvalidationFor(
@@ -390,16 +444,14 @@ func (r activeResourceReconciler) observe(
 	exact := pullFact.RepositoryID == binding.RepositoryID &&
 		pullFact.PRNumber == binding.PRNumber && pullFact.BaseRef == binding.BaseRef &&
 		pullFact.HeadSHA == binding.HeadSHA
-	observation := activeResourceObservation{
-		itemID: item.ID, binding: binding, pull: &pullFact,
-		completed: completed, exactClosed: exact && pullFact.State == domain.PullRequestClosed,
-	}
+	observation.pull = &pullFact
+	observation.exactClosed = exact && pullFact.State == domain.PullRequestClosed
 	// A pull that is provably this PR (matching repository and number) but no
 	// longer matches its head or base ref invalidates the ready pass. Identity
 	// divergence already returned above without constructing a pull fact.
 	// exactClosed (the resolve path below) requires full exactness, so an
 	// invalidation and a conclusion are mutually exclusive by construction.
-	if !exact && pullFact.RepositoryID == binding.RepositoryID && pullFact.PRNumber == binding.PRNumber {
+	if !completionOnly && !exact && pullFact.RepositoryID == binding.RepositoryID && pullFact.PRNumber == binding.PRNumber {
 		observation.invalidation = readinessInvalidationFor(binding, pullFact)
 	}
 	// Native review activity is observed only while the live candidate is the
@@ -408,7 +460,7 @@ func (r activeResourceReconciler) observe(
 	// ready (plan §5.16). The observer's failure is isolated into nativeErr so
 	// it never blocks the pull/issue facts; on success, unchanged activity
 	// (a 304 across all sub-resources) yields nothing to record.
-	if r.review != nil && exact && pullFact.State == domain.PullRequestOpen {
+	if !completionOnly && r.review != nil && exact && pullFact.State == domain.PullRequestOpen {
 		reviewObs, err := r.review(ctx, binding.Repo, binding.PRNumber)
 		switch {
 		case err != nil:
@@ -472,7 +524,7 @@ func (r activeResourceReconciler) observe(
 	// conclusive only when the declared criterion is also durable: GitHub may
 	// expose the merge before its automatic issue-closing side effect, so the
 	// bound-issue resource must stay active until that second observation lands.
-	if observation.exactClosed {
+	if !completionOnly && observation.exactClosed {
 		observation.conclude = !pullFact.Merged || declaration == nil ||
 			observation.completed || observation.completion != nil
 	}
@@ -565,6 +617,9 @@ func (r activeResourceReconciler) commit(ctx context.Context, observation active
 			} else if err != nil {
 				return err
 			}
+		}
+		if observation.completionOnly {
+			return nil
 		}
 		item, err := tx.GetAttentionItem(ctx, observation.itemID)
 		if err != nil {
