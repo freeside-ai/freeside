@@ -290,6 +290,7 @@ type integrationTransport struct {
 	fetchRelease   chan struct{}
 	materializeErr error
 	pushes         int
+	lastMessage    string
 	fail           bool
 	conflict       bool
 }
@@ -424,8 +425,9 @@ func (tr *integrationTransport) PushHead(
 	// path missing, which the real transport would fail on but a double that
 	// never touched Dir() would silently mask (issue #527 checkout-vs-workspace
 	// seam).
-	if dir := checkout.Dir(); dir != "" {
-		if _, err := os.Stat(dir); err != nil {
+	checkoutDir := checkout.Dir()
+	if checkoutDir != "" {
+		if _, err := os.Stat(checkoutDir); err != nil {
 			return publish.PushResult{}, fmt.Errorf(
 				"publication checkout unavailable for push: %w", err)
 		}
@@ -434,8 +436,12 @@ func (tr *integrationTransport) PushHead(
 	// transport: a double that took them from separately supplied input
 	// could stand in for a push the Publisher never cleared.
 	identity := gated.Identity()
+	message := strings.TrimSpace(runGit(
+		tr.t, sealed.dir, "show", "-s", "--format=%B", gated.SourceHeadSHA(),
+	))
 	tr.mu.Lock()
 	tr.pushes++
+	tr.lastMessage = message
 	fail := tr.fail
 	tr.fail = false
 	injectConflict := tr.conflict
@@ -466,6 +472,12 @@ func (tr *integrationTransport) pushCount() int {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	return tr.pushes
+}
+
+func (tr *integrationTransport) pushedCommitMessage() string {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	return tr.lastMessage
 }
 
 func (tr *integrationTransport) failNextPush() {
@@ -1393,6 +1405,15 @@ func TestFakeCandidatePublicationRestoresAndConvergesExactlyOnce(t *testing.T) {
 		item.Item.PRHeadSHA == "" || len(item.Item.EvidenceSnapshot) != 2 {
 		t.Fatalf("ready item = %+v", item.Item)
 	}
+	message := h.transport.pushedCommitMessage()
+	if subject, _, _ := strings.Cut(message, "\n"); subject != "Publish attended fake candidate" {
+		t.Fatalf("fallback commit subject = %q, want attended title", subject)
+	}
+	for _, fact := range []string{"Run ID: run-fake-publication.", "Specification digest:"} {
+		if !strings.Contains(message, fact) {
+			t.Errorf("fallback commit message missing %q:\n%s", fact, message)
+		}
+	}
 	for _, artifact := range item.Item.EvidenceSnapshot {
 		if artifact.Provenance.SourceHeadSHA != item.Item.PRHeadSHA ||
 			artifact.Provenance.VerificationRecipeDigest == nil ||
@@ -1501,77 +1522,49 @@ func TestFakeCandidatePublicationSerializesOneTaskAcrossEngines(t *testing.T) {
 	}
 }
 
-func TestFakeCandidatePublicationSerializesOneIdentityAcrossRuns(t *testing.T) {
+func TestFakeCandidatePublicationRunTraceProducesDistinctIdentities(t *testing.T) {
 	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
 	writeFile(t, workspace, "candidate.txt", "verified\n")
-
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	var hookMu sync.Mutex
-	blockNext := true
-	h.afterPublicationFinalized = func() error {
-		hookMu.Lock()
-		block := blockNext
-		blockNext = false
-		hookMu.Unlock()
-		if block {
-			close(entered)
-			<-release
-		}
-		return nil
-	}
-	firstEngine := h.engine()
-	secondEngine := h.engine()
+	workflow := h.engine()
 	commitDate := fakePublicationTime.Add(-time.Hour)
 	first := h.spec(workspace)
 	first.CommitDate = commitDate
 	second := h.spec(workspace)
 	second.RunID = "run-same-identity"
 	second.ProjectID = "project-same-identity"
+	second.VerificationInvocationID = "verify-same-identity"
 	second.PublicationInvocationID = "publish-same-identity"
 	second.CommitDate = commitDate
-	if _, err := firstEngine.StartFakePublication(h.ctx, first); err != nil {
+	if _, err := workflow.StartFakePublication(h.ctx, first); err != nil {
 		t.Fatalf("start first publication: %v", err)
 	}
-	if _, err := secondEngine.StartFakePublication(h.ctx, second); err != nil {
+	if _, err := workflow.StartFakePublication(h.ctx, second); err != nil {
 		t.Fatalf("start second publication: %v", err)
 	}
-
-	type reconcileResult struct {
-		result engine.ReconcileResult
-		err    error
-	}
-	firstDone := make(chan reconcileResult, 1)
-	go func() {
-		result, err := firstEngine.ReconcileFakePublication(h.ctx, first.RunID)
-		firstDone <- reconcileResult{result: result, err: err}
-	}()
-	<-entered
-	secondDone := make(chan reconcileResult, 1)
-	go func() {
-		result, err := secondEngine.ReconcileFakePublication(h.ctx, second.RunID)
-		secondDone <- reconcileResult{result: result, err: err}
-	}()
-	select {
-	case result := <-secondDone:
-		t.Fatalf("second run crossed the identity lock before release: %+v, %v", result.result, result.err)
-	case <-time.After(100 * time.Millisecond):
-	}
-	close(release)
-	for name, done := range map[string]<-chan reconcileResult{
-		"first": firstDone, "second": secondDone,
+	for name, runID := range map[string]domain.RunID{
+		"first": first.RunID, "second": second.RunID,
 	} {
-		result := <-done
-		if result.err != nil || result.result.ReadyItemsCreated != 1 ||
-			result.result.LastPRNumber != 101 {
-			t.Fatalf("%s reconcile = %+v, %v", name, result.result, result.err)
+		result, err := workflow.ReconcileFakePublication(h.ctx, runID)
+		if err != nil || result.ReadyItemsCreated != 1 || result.LastPRNumber == 0 {
+			t.Fatalf("%s reconcile = %+v, %v", name, result, err)
 		}
 	}
-	if refs, prs := h.forge.counts(); refs != 1 || prs != 1 {
-		t.Fatalf("same-identity runs duplicated forge resources = refs:%d prs:%d", refs, prs)
+	firstItem, err := h.attention.GetAttentionItem(h.ctx, engine.FakePublicationReadyItemID(first.RunID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondItem, err := h.attention.GetAttentionItem(h.ctx, engine.FakePublicationReadyItemID(second.RunID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstItem.Item.PRHeadSHA == secondItem.Item.PRHeadSHA {
+		t.Fatalf("run-bound fallback messages reused head %s", firstItem.Item.PRHeadSHA)
+	}
+	if refs, prs := h.forge.counts(); refs != 2 || prs != 2 {
+		t.Fatalf("run-traced candidates = refs:%d prs:%d, want 2/2", refs, prs)
 	}
 }
 
@@ -2670,7 +2663,7 @@ func TestFakeCandidatePublicationRejectsAlteredImportAccountDuringOutcomeRecover
 	}
 }
 
-func TestFakeCandidatePublicationDoesNotReuseSiblingOutcome(t *testing.T) {
+func TestFakeCandidatePublicationDoesNotReuseSameTreeSiblingOutcome(t *testing.T) {
 	t.Parallel()
 	h := newPublicationHarness(t)
 	workspace := t.TempDir()
@@ -2692,6 +2685,7 @@ func TestFakeCandidatePublicationDoesNotReuseSiblingOutcome(t *testing.T) {
 	second := h.spec(workspace)
 	second.RunID = "run-same-candidate"
 	second.ProjectID = "project-same-candidate"
+	second.VerificationInvocationID = "verify-same-candidate"
 	second.PublicationInvocationID = "publish-same-candidate"
 	second.CommitDate = commitDate
 	if _, err := workflow.StartFakePublication(h.ctx, second); err != nil {
@@ -2739,29 +2733,9 @@ func TestFakeCandidatePublicationDoesNotReuseSiblingOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if firstItem.Item.PRHeadSHA != secondItem.Item.PRHeadSHA ||
-		!sameArtifactDigests(firstItem.Item.EvidenceSnapshot, secondItem.Item.EvidenceSnapshot) {
-		t.Fatal("fixture did not produce the same publication identity inputs")
+	if firstItem.Item.PRHeadSHA == secondItem.Item.PRHeadSHA {
+		t.Fatal("fixture did not produce run-distinct heads for the same tree")
 	}
-}
-
-func sameArtifactDigests(a, b []domain.Artifact) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	digests := make(map[domain.Digest]int, len(a))
-	for _, artifact := range a {
-		digests[artifact.Digest]++
-	}
-	for _, artifact := range b {
-		digests[artifact.Digest]--
-	}
-	for _, count := range digests {
-		if count != 0 {
-			return false
-		}
-	}
-	return true
 }
 
 func TestFakeCandidatePublicationReplayKeepsOriginalTrustBinding(t *testing.T) {

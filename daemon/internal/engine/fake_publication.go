@@ -1341,8 +1341,16 @@ func (w *fakePublicationWorkflow) reconcileTask(
 		return taskOutcome{}, err
 	}
 
+	// The attended 1A.1 task predates production spec artifacts. Its operator
+	// title is nevertheless immutable inside publicationRun's task digest, so
+	// use that authority rather than interpreting the task JSON as spec bytes.
+	run := publicationRun(task)
+	commitMessage := fallbackCommitMessageFromApprovedTitle(
+		task.Title, nil, task.RunID, run.SpecDigest, importPolicy,
+	)
 	imported, err := importer.Import(ctx, task.HandoffDir, checkoutDir, importer.Options{
-		BaseSHA: task.BaseSHA, CommitDate: task.CommitDate, Policy: importPolicy,
+		BaseSHA: task.BaseSHA, CommitMessage: commitMessage,
+		CommitDate: task.CommitDate, Policy: importPolicy,
 	})
 	if err != nil {
 		return taskOutcome{}, fmt.Errorf("gauntlet import: %w", err)

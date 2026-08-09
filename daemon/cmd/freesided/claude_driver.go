@@ -247,6 +247,7 @@ func (r exportRecorder) RecordExecutionExport(
 // authorization source.
 type storeAdmissionAuthority struct {
 	store                     *store.Store
+	blobs                     *signet.BlobStore
 	allowedPaths              []string
 	commitAuthors             productionCommitAuthorResolver
 	authenticatedStartAuthors *productionCommitAuthorAuthenticationCache
@@ -491,6 +492,10 @@ func (a storeAdmissionAuthority) ImportOptions(
 		return importer.Options{}, err
 	}
 	opts.Policy.Allowlist = allowedPaths
+	opts.CommitMessage, err = a.fallbackCommitMessage(ctx, admission, opts.Policy)
+	if err != nil {
+		return importer.Options{}, err
+	}
 	author, production, err := a.authenticateProductionCommitAuthorRevalidated(
 		ctx, id, admission.OperatingMode, spec.Base.Repo,
 	)
@@ -525,6 +530,10 @@ func (a storeAdmissionAuthority) ImportOptionsRecord(
 		return importer.Options{}, err
 	}
 	opts.Policy.Allowlist = allowedPaths
+	opts.CommitMessage, err = a.fallbackCommitMessage(ctx, admission, opts.Policy)
+	if err != nil {
+		return importer.Options{}, err
+	}
 	// This reconstructs an already-completed import from immutable records.
 	// App attribution was authenticated before the actual import; requiring
 	// live GitHub authority here would strand terminal replay after a restart.
@@ -536,6 +545,76 @@ func (a storeAdmissionAuthority) ImportOptionsRecord(
 		opts.AuthorName, opts.AuthorEmail = author.Name(), author.Email()
 	}
 	return opts, nil
+}
+
+func (a storeAdmissionAuthority) fallbackCommitMessage(
+	ctx context.Context,
+	admission domain.ExecutionAdmission,
+	policy importer.Policy,
+) (string, error) {
+	if a.blobs == nil {
+		return "", errors.New("derive fallback commit message: nil blob store")
+	}
+	var (
+		run        domain.Run
+		boundIssue *int
+	)
+	if err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(ctx, admission.RunID)
+		if err != nil {
+			return err
+		}
+		declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, admission.RunID)
+		switch {
+		case err == nil:
+			boundIssue = declaration.BoundIssue
+			return nil
+		case errors.Is(err, store.ErrNotFound):
+			return nil
+		default:
+			return err
+		}
+	}); err != nil {
+		return "", fmt.Errorf("derive fallback commit message authority: %w", err)
+	}
+	if run.SpecDigest != admission.SpecDigest {
+		return "", fmt.Errorf(
+			"run specification digest %q disagrees with admission %q: %w",
+			run.SpecDigest, admission.SpecDigest, domain.ErrParentKeyMismatch,
+		)
+	}
+	spec, err := readVerifiedBlob(ctx, a.blobs, run.SpecDigest)
+	if err != nil {
+		return "", fmt.Errorf("read approved specification: %w", err)
+	}
+	return engine.FallbackCommitMessage(engine.FallbackCommitMessageInput{
+		Spec: spec, BoundIssue: boundIssue, RunID: run.ID,
+		SpecDigest: run.SpecDigest, Policy: policy,
+	}), nil
+}
+
+func readVerifiedBlob(
+	ctx context.Context,
+	blobs *signet.BlobStore,
+	digest domain.Digest,
+) ([]byte, error) {
+	body, err := blobs.OpenContext(ctx, digest)
+	if err != nil {
+		return nil, err
+	}
+	hasher := sha256.New()
+	var content bytes.Buffer
+	_, copyErr := io.Copy(io.MultiWriter(&content, hasher), body)
+	closeErr := body.Close()
+	if err := errors.Join(copyErr, closeErr); err != nil {
+		return nil, err
+	}
+	got := domain.Digest("sha256:" + hex.EncodeToString(hasher.Sum(nil)))
+	if got != digest {
+		return nil, fmt.Errorf("body hashes to %s, want %s", got, digest)
+	}
+	return content.Bytes(), nil
 }
 
 func (a storeAdmissionAuthority) productionCommitAuthor(
@@ -1129,7 +1208,7 @@ func composeClaudeDriver(
 		Exports:    exportRecorder{store: st},
 		Outcomes:   exportRecorder{store: st},
 		Authority: storeAdmissionAuthority{
-			store: st, allowedPaths: slices.Clone(cfg.AllowedPaths),
+			store: st, blobs: blobs, allowedPaths: slices.Clone(cfg.AllowedPaths),
 			commitAuthors:             commitAuthors,
 			authenticatedStartAuthors: newProductionCommitAuthorAuthenticationCache(),
 		},

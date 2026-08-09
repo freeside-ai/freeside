@@ -82,6 +82,15 @@ func screenCommitMessage(message string, pol Policy) (commitMessageFindingKind, 
 	return "", nil
 }
 
+// ScreenMessage applies the same defaults and publishing-message checks used
+// for non-empty commit-plan groups. Daemon-authored fallback messages cross
+// the same GitHub automation surface, even though they do not originate in
+// the agent workspace.
+func ScreenMessage(message string, pol Policy) error {
+	_, err := screenCommitMessage(message, pol.withDefaults())
+	return err
+}
+
 func labelAgentMessage(message string) string {
 	return strings.TrimRight(message, "\n") + "\n\n" + agentProposedTrailer
 }

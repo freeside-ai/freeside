@@ -1121,6 +1121,9 @@ type productionTaskOutcome struct {
 
 type productionBinding struct {
 	run            domain.Run
+	declaration    *domain.WorkUnitDeclaration
+	spec           []byte
+	specLoaded     bool
 	admission      domain.ExecutionAdmission
 	export         domain.ExecutionExport
 	resolvedPolicy domain.ResolvedPolicy
@@ -1150,6 +1153,14 @@ func (w *productionPublicationWorkflow) loadBinding(
 		binding.resolvedPolicy, err = tx.GetResolvedPolicy(ctx, task.RunID)
 		if err != nil {
 			return err
+		}
+		declaration, declarationErr := tx.GetWorkUnitDeclarationByRun(ctx, task.RunID)
+		switch {
+		case declarationErr == nil:
+			binding.declaration = &declaration
+		case errors.Is(declarationErr, store.ErrNotFound):
+		default:
+			return declarationErr
 		}
 		if binding.admission.TrustProfileDigest == nil {
 			binding.profile, err = tx.LatestTrustProfile(ctx, binding.admission.Base.Repo)
@@ -1181,8 +1192,14 @@ func (w *productionPublicationWorkflow) loadBinding(
 	if err != nil {
 		return productionBinding{}, fmt.Errorf("load production publication authority: %w", err)
 	}
+	binding.spec, err = loadFakePublicationBlob(w.artifacts, binding.run.SpecDigest)
+	if err != nil {
+		return productionBinding{}, fmt.Errorf("load approved specification: %w", err)
+	}
+	binding.specLoaded = true
 	binding.replay = task.Replay
 	if binding.run.ID != task.RunID || binding.run.ProjectID != task.ProjectID ||
+		binding.run.SpecDigest != binding.admission.SpecDigest ||
 		binding.admission.RunID != task.RunID ||
 		binding.admission.StageID != productionStageID(task.RunID) ||
 		binding.export.AdmissionID != binding.admission.ID ||
@@ -1246,6 +1263,24 @@ func validateProductionReplayOptions(
 		AuthorName:  publication.CommitAuthor.Name(),
 		AuthorEmail: publication.CommitAuthor.Email(),
 		Policy:      policy,
+	}
+	if binding.replay.ImportOptions.CommitMessage != "" {
+		if !binding.specLoaded {
+			// The atomic export/task persistence boundary has no blob-store
+			// dependency. Preserve the recorded value there; loadBinding opens
+			// and verifies the approved spec before the publication re-gate
+			// authenticates the message itself.
+			want.CommitMessage = binding.replay.ImportOptions.CommitMessage
+		} else {
+			var boundIssue *int
+			if binding.declaration != nil {
+				boundIssue = binding.declaration.BoundIssue
+			}
+			want.CommitMessage = FallbackCommitMessage(FallbackCommitMessageInput{
+				Spec: binding.spec, BoundIssue: boundIssue, RunID: binding.run.ID,
+				SpecDigest: binding.run.SpecDigest, Policy: policy,
+			})
+		}
 	}
 	if binding.replay.ImportOptions.CommitDate.IsZero() ||
 		!reflect.DeepEqual(binding.replay.ImportOptions, want) {
