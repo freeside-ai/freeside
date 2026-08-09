@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -61,6 +62,9 @@ func runOnboardCommand(
 	baseImage := flags.String("base-image", "", "digest-pinned approved agent base (required)")
 	baseBuildRef := flags.String("base-build-ref", "", "local base tag matching -base-image (required)")
 	reviewConfig := flags.String("review-config-digest", "", "digest of the reviewed automated-review configuration (required)")
+	commitPlan := flags.String(
+		"commit-plan", string(domain.CommitPlanSingleCommit),
+		"commit-plan mode: single_commit or plan_preferred")
 	approval := flags.String("approve", "", "exact proposed review digest; omit for the one-time review")
 	registry := flags.String("registry", "", "registry host/path destination")
 	localRegistryPort := flags.Int("local-registry-port", 0, "managed loopback registry port")
@@ -90,6 +94,13 @@ func runOnboardCommand(
 		if required.value == "" {
 			return fmt.Errorf("%s is required", required.name)
 		}
+	}
+	commitPlanMode := domain.CommitPlanMode(*commitPlan)
+	if !slices.Contains(domain.AllCommitPlanModes, commitPlanMode) {
+		return fmt.Errorf(
+			"-commit-plan %q is invalid; valid values: %v",
+			*commitPlan, domain.AllCommitPlanModes,
+		)
 	}
 	if *registrationID <= 0 || *repositoryID <= 0 {
 		return errors.New("-registration-id and -repository-id must be positive")
@@ -250,7 +261,7 @@ func runOnboardCommand(
 			ApprovalDigest: domain.Digest(*approval),
 			Policy: operations.OnboardPolicy{
 				PRExecution:    domain.PRExecutionAuditedSameRepo,
-				CommitPlan:     domain.CommitPlanSingleCommit,
+				CommitPlan:     commitPlanMode,
 				MessageRuleset: domain.MessageRulesetGitHub1,
 				ReviewMode:     domain.ReviewFreesideInvoked,
 				ReviewConfig:   domain.Digest(*reviewConfig),

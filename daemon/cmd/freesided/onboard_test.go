@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -11,6 +13,33 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
+
+func TestOnboardRejectsInvalidCommitPlanBeforeStoreWork(t *testing.T) {
+	recipePath := filepath.Join(t.TempDir(), "verify.json")
+	if err := os.WriteFile(
+		recipePath, []byte(`{"commands":[["go","test","./..."]],"capture":"none"}`), 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	err := runOnboardCommand(t.Context(), []string{
+		"example/repo",
+		"-db", filepath.Join(t.TempDir(), "missing", "freeside.db"),
+		"-state-dir", t.TempDir(),
+		"-registration-id", "11",
+		"-repository-id", "44",
+		"-commit", "0123456789012345678901234567890123456789",
+		"-base-ref", "main",
+		"-base-image", "example.invalid/agent@sha256:test",
+		"-base-build-ref", "local/agent:test",
+		"-review-config-digest", "sha256:review",
+		"-recipe", recipePath,
+		"-commit-plan", "bogus",
+	}, io.Discard, io.Discard)
+	const want = "-commit-plan \"bogus\" is invalid; valid values: [single_commit plan_preferred]"
+	if err == nil || err.Error() != want {
+		t.Fatalf("runOnboardCommand error = %v, want %q", err, want)
+	}
+}
 
 type installationAuthorityFixtures map[int64]publish.InstallationAuthority
 
