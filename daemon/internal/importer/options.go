@@ -6,6 +6,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
 )
 
 // Default caps. The blob caps mirror the export helper's defaults so an
@@ -218,7 +219,7 @@ func (p Policy) withDefaults() Policy {
 // options are daemon-supplied, so a violation is a caller bug, not
 // hostile input, and it fails loud.
 func (o Options) validate() error {
-	if !validSHA1Hex(o.BaseSHA) {
+	if !pathfold.ValidSHA1Hex(o.BaseSHA) {
 		return fmt.Errorf("base SHA %q is not 40 lowercase hex: %w", o.BaseSHA, ErrInvalidOptions)
 	}
 	if o.ImportRef != "" && !importRefValid(o.ImportRef) {
@@ -272,25 +273,11 @@ func (o Options) validate() error {
 // permanently retrying import phase.
 func ValidatePathPatterns(patterns []string) error {
 	for _, pattern := range patterns {
-		if err := validGlob(pattern); err != nil {
+		if err := pathfold.ValidGlob(pattern); err != nil {
 			return fmt.Errorf(
 				"policy pattern %q: %w: %w", pattern, err, ErrInvalidOptions,
 			)
 		}
 	}
 	return nil
-}
-
-// validSHA1Hex reports whether s is a full 40-character lowercase hex
-// object name (the sha1 object format this package requires).
-func validSHA1Hex(s string) bool {
-	if len(s) != 40 {
-		return false
-	}
-	for _, c := range s {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
 }

@@ -4,8 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"golang.org/x/text/cases"
-	"golang.org/x/text/unicode/norm"
+	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
 )
 
 // detectCollisions flags candidate-introduced paths that would collide
@@ -72,7 +71,7 @@ func detectCollisions(changes []plannedChange, base map[string]treeEntry) []Find
 	// ancestors — both bounded, neither retaining ancestor strings.
 	fileOwner := make(map[string][]string, len(post))
 	for _, p := range post {
-		key := foldPath(p)
+		key := pathfold.FoldPath(p)
 		lst := fileOwner[key]
 		if len(lst) < 2 && (len(lst) == 0 || lst[0] != p) {
 			fileOwner[key] = append(lst, p)
@@ -104,7 +103,7 @@ func detectCollisions(changes []plannedChange, base map[string]treeEntry) []Find
 		if c.kind != ChangeAdded || c.mode == "" {
 			continue
 		}
-		comps := foldedComponents(c.path)
+		comps := strings.Split(pathfold.FoldPath(c.path), "/")
 		key := strings.Join(comps, "/")
 		partner, ok := otherOwner(key, c.path) // another leaf folds to the same name
 		for i := 1; !ok && i < len(comps); i++ {
@@ -141,33 +140,8 @@ func leafPartner(owners []string, self string) (string, bool) {
 	return "", false
 }
 
-// foldPath folds a whole path for use as a collision key.
-func foldPath(p string) string { return strings.Join(foldedComponents(p), "/") }
-
-// caseFold performs Unicode full case folding, the fold a
-// case-insensitive filesystem uses. It is stateless and safe to reuse.
-var caseFold = cases.Fold()
-
-// foldedComponents folds a path the way a case- and
-// normalization-insensitive filesystem does: split into components and,
-// per component, NFC-normalize (APFS compares in a normalized form, so
-// NFC and NFD names are the same) then apply Unicode full case folding.
-// Full folding, not simple lowercasing, is what matches APFS: it folds
-// ß→ss and the ﬁ ligature→fi (which simple ToLower leaves distinct, a
-// missed collision) while keeping İ (U+0130) apart from i (which ToLower
-// wrongly merges, a false collision). Two paths whose folded components
-// match, or where one is a component-prefix of the other, cannot coexist
-// there.
-func foldedComponents(p string) []string {
-	comps := strings.Split(p, "/")
-	for i, c := range comps {
-		comps[i] = CheckoutFoldComponent(c)
-	}
-	return comps
-}
-
 // CheckoutFoldComponent folds one repository path component using the case
 // and Unicode normalization posture of the reference checkout filesystem.
 func CheckoutFoldComponent(component string) string {
-	return caseFold.String(norm.NFC.String(component))
+	return pathfold.FoldComponent(component)
 }

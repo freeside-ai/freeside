@@ -1,13 +1,8 @@
 package verify
 
 import (
-	"path"
-	"strings"
-
-	"golang.org/x/text/cases"
-	"golang.org/x/text/unicode/norm"
-
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
 )
 
 // DefaultVerificationControlPatterns is the §5.6 verification-control
@@ -118,7 +113,7 @@ func flagControlPaths(changes []importer.Change, extra, commandPaths []string, r
 	patterns := verificationControl(extra, recipePath)
 	entrypoints := make(map[string]struct{}, len(commandPaths))
 	for _, cp := range commandPaths {
-		entrypoints[foldPath(cp)] = struct{}{}
+		entrypoints[pathfold.FoldPath(cp)] = struct{}{}
 	}
 	var findings []Finding
 	for _, c := range changes {
@@ -130,8 +125,8 @@ func flagControlPaths(changes []importer.Change, extra, commandPaths []string, r
 			})
 			continue
 		}
-		_, isEntrypoint := entrypoints[foldPath(c.Path)]
-		if isEntrypoint || matchAny(patterns, normalizeAliases(c.Path)) {
+		_, isEntrypoint := entrypoints[pathfold.FoldPath(c.Path)]
+		if isEntrypoint || pathfold.MatchAny(patterns, pathfold.NormalizeAliases(c.Path), true) {
 			findings = append(findings, Finding{
 				Path:   c.Path,
 				Kind:   FindingVerificationControlPath,
@@ -140,104 +135,4 @@ func flagControlPaths(changes []importer.Change, extra, commandPaths []string, r
 		}
 	}
 	return findings
-}
-
-// The matching machinery below is a deliberate package-local copy of
-// the importer's (unexported there; shared-package edits are outside
-// this unit's scope). It must stay decision-identical: a path the
-// importer's classes would catch under folding must fold the same way
-// here.
-
-// matchAny reports whether p matches any of the slash-separated glob
-// patterns under NFC + Unicode full case folding, where "**" spans any
-// number of path segments and other segments use path.Match semantics.
-func matchAny(patterns []string, p string) bool {
-	p = foldPath(p)
-	for _, pat := range patterns {
-		if matchSegments(strings.Split(foldPath(pat), "/"), strings.Split(p, "/")) {
-			return true
-		}
-	}
-	return false
-}
-
-func matchSegments(pat, segs []string) bool {
-	if len(pat) == 0 {
-		return len(segs) == 0
-	}
-	if pat[0] == "**" {
-		if matchSegments(pat[1:], segs) {
-			return true // ** spans zero segments
-		}
-		if len(segs) > 0 {
-			return matchSegments(pat, segs[1:]) // ** consumes one and stays greedy
-		}
-		return false
-	}
-	if len(segs) == 0 {
-		return false
-	}
-	ok, err := path.Match(pat[0], segs[0])
-	if err != nil || !ok {
-		return false
-	}
-	return matchSegments(pat[1:], segs[1:])
-}
-
-// caseFold performs Unicode full case folding, the fold a
-// case-insensitive filesystem uses. It is stateless and safe to reuse.
-var caseFold = cases.Fold()
-
-// foldPath folds a path the way a case- and normalization-insensitive
-// filesystem does: per component, NFC-normalize then apply Unicode full
-// case folding (ß→ss, the ﬁ ligature→fi), so an aliased spelling of a
-// protected name still matches the class.
-func foldPath(p string) string {
-	comps := strings.Split(p, "/")
-	for i, c := range comps {
-		comps[i] = caseFold.String(norm.NFC.String(c))
-	}
-	return strings.Join(comps, "/")
-}
-
-// normalizeAliases folds each path component through the deterministic
-// aliases a downstream NTFS/HFS checkout collapses: HFS-ignorable code
-// points stripped, an NTFS alternate-data-stream suffix dropped
-// (everything from the first colon), and trailing dots/spaces trimmed.
-// Case folding is left to matchAny.
-func normalizeAliases(p string) string {
-	comps := strings.Split(p, "/")
-	for i, c := range comps {
-		comps[i] = normalizeComponentAliases(c)
-	}
-	return strings.Join(comps, "/")
-}
-
-func normalizeComponentAliases(c string) string {
-	if strings.ContainsFunc(c, hfsIgnorable) {
-		var b strings.Builder
-		for _, r := range c {
-			if !hfsIgnorable(r) {
-				b.WriteRune(r)
-			}
-		}
-		c = b.String()
-	}
-	if i := strings.IndexByte(c, ':'); i >= 0 {
-		c = c[:i]
-	}
-	return strings.TrimRight(c, ". ")
-}
-
-// hfsIgnorable reports the code points HFS+ filename comparison
-// ignores, matching git's own protectHFS set.
-func hfsIgnorable(r rune) bool {
-	switch {
-	case r >= 0x200c && r <= 0x200f,
-		r >= 0x202a && r <= 0x202e,
-		r >= 0x206a && r <= 0x206f,
-		r == 0xfeff:
-		return true
-	}
-	return false
 }

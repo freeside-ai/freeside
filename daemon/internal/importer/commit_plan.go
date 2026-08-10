@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
 )
 
 const commitPlanVersion = "freeside.commit-plan/v1"
@@ -254,7 +255,7 @@ func validateTreePathSet(state map[string]treeEntry) error {
 	folded := make(map[string]bool, len(paths))
 	for _, p := range paths {
 		exact[p] = true
-		fold := foldPath(p)
+		fold := pathfold.FoldPath(p)
 		if folded[fold] {
 			return fmt.Errorf("paths collide under case/normalization folding")
 		}
@@ -266,7 +267,7 @@ func validateTreePathSet(state map[string]treeEntry) error {
 				return fmt.Errorf("path is both a file and directory")
 			}
 		}
-		fold := foldPath(p)
+		fold := pathfold.FoldPath(p)
 		// Consult the complete folded leaf set, not only earlier byte-sorted
 		// paths. NFC/NFD normalization can sort a descendant before its folded
 		// parent even though the parent must be rejected as a file/directory

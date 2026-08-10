@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
 	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 )
 
@@ -412,7 +413,7 @@ func (g *gitRunner) refValue(ctx context.Context, ref string) (string, error) {
 		return "", err
 	}
 	value := strings.TrimSpace(string(out))
-	if value != "" && !validSHA1Hex(value) {
+	if value != "" && !pathfold.ValidSHA1Hex(value) {
 		return "", fmt.Errorf("ref %s resolved to invalid object name %q: %w", ref, value, ErrGitPlumbing)
 	}
 	return value, nil
