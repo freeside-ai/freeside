@@ -26,7 +26,7 @@ var ErrCodexReviewOutcomeNotFound = errors.New("codex review outcome not found")
 const codexProductionReviewPromptVersion = "codex-production-review-prompt-v1"
 
 type CodexReviewSourceConfig struct {
-	Backend              *Backend
+	Lifecycle            *CodexReviewLifecycle
 	Review               CodexReviewConfig
 	Journal              CodexReviewJournal
 	WorkspaceSizeMB      int64
@@ -102,9 +102,11 @@ type CodexReviewSource struct {
 	launches map[domain.InvocationID]*CodexReviewLaunch
 }
 
+var _ exec.ReviewSource = (*CodexReviewSource)(nil)
+
 func NewCodexReviewSource(cfg CodexReviewSourceConfig) (*CodexReviewSource, error) {
-	if cfg.Backend == nil || !cfg.Backend.initialized {
-		return nil, fmt.Errorf("codex review source: %w: backend is not initialized", ErrInvalidConfig)
+	if !cfg.Lifecycle.valid() {
+		return nil, fmt.Errorf("codex review source: %w: lifecycle is not initialized", ErrInvalidConfig)
 	}
 	if cfg.Journal == nil || cfg.Review.Journal != cfg.Journal ||
 		cfg.Review.VolumeLifecycleLeaser == nil || cfg.WorkspaceSizeMB <= 0 ||
@@ -155,7 +157,7 @@ func (s *CodexReviewSource) RequestReview(
 func (s *CodexReviewSource) startRequestedReview(
 	ctx context.Context, id domain.InvocationID, req exec.ReviewRequest,
 ) error {
-	releaseRun, err := s.cfg.Backend.acquireCodexReviewRun(ctx, string(id))
+	releaseRun, err := s.cfg.Lifecycle.acquireCodexReviewRun(ctx, string(id))
 	if err != nil {
 		return &exec.ReviewSourceFailure{
 			Class: domain.ReviewFailureTransient,
@@ -172,7 +174,7 @@ func (s *CodexReviewSource) startRequestedReview(
 	workspace, err := s.cfg.Journal.GetCodexReviewWorkspaceBinding(ctx, string(id))
 	if errors.Is(err, ErrCodexReviewWorkspaceNotFound) ||
 		(err == nil && workspace.CreationFingerprint == "") {
-		workspace, err = s.cfg.Backend.PrepareCodexReviewWorkspace(
+		workspace, err = s.cfg.Lifecycle.PrepareCodexReviewWorkspace(
 			ctx, s.cfg.Journal, string(id), req.Workspace, candidate, s.cfg.WorkspaceSizeMB,
 		)
 	}
@@ -190,14 +192,14 @@ func (s *CodexReviewSource) startRequestedReview(
 			}
 			return &exec.ReviewSourceFailure{Class: class, Err: err}
 		}
-		cleanupErr := s.cfg.Backend.cleanupOrphanedCodexReviewWorkspace(
+		cleanupErr := s.cfg.Lifecycle.cleanupOrphanedCodexReviewWorkspace(
 			context.WithoutCancel(ctx), s.cfg.Journal, string(id))
 		if cleanupErr != nil {
 			return codexReviewLaunchCleanupFailure(err, cleanupErr)
 		}
 		return &exec.ReviewSourceFailure{Class: class, Err: err}
 	}
-	launch, err := s.cfg.Backend.codexReview(ctx, s.cfg.Review, CodexReviewLaunchSpec{
+	launch, err := s.cfg.Lifecycle.codexReview(ctx, s.cfg.Review, CodexReviewLaunchSpec{
 		RunID: string(id), Image: s.cfg.Review.ApprovedImage,
 		WorkspaceSourceRunID: string(id), WorkspaceVolume: workspace.Volume,
 		ExpectedHead: req.HeadSHA, Prompt: codexProductionReviewPrompt(req),
@@ -213,7 +215,7 @@ func (s *CodexReviewSource) startRequestedReview(
 			}
 			return &exec.ReviewSourceFailure{Class: domain.ReviewFailureTransient, Err: err}
 		}
-		cleanupErr := s.cfg.Backend.CleanupCodexReviewWorkspace(
+		cleanupErr := s.cfg.Lifecycle.CleanupCodexReviewWorkspace(
 			context.WithoutCancel(ctx), s.cfg.Journal, string(id))
 		if cleanupErr != nil {
 			return codexReviewLaunchCleanupFailure(err, cleanupErr)
@@ -579,7 +581,7 @@ func (s *CodexReviewSource) Inspect(
 			Class: classifyCodexObservationFailure(intentErr), Err: intentErr,
 		}
 	}
-	state, err := s.cfg.Backend.InspectCodexReview(ctx, s.cfg.Review, string(id))
+	state, err := s.cfg.Lifecycle.InspectCodexReview(ctx, s.cfg.Review, string(id))
 	if err != nil {
 		return "", &exec.ReviewSourceFailure{Class: classifyCodexObservationFailure(err), Err: err}
 	}
@@ -604,7 +606,7 @@ func (s *CodexReviewSource) Inspect(
 		}
 		return exec.StatusRunning, nil
 	}
-	collection, err := s.cfg.Backend.CollectCodexReview(ctx, s.cfg.Review, string(id))
+	collection, err := s.cfg.Lifecycle.CollectCodexReview(ctx, s.cfg.Review, string(id))
 	if err != nil {
 		if !errors.Is(err, ErrCodexReviewOutputInvalid) {
 			return "", &exec.ReviewSourceFailure{Class: classifyCodexObservationFailure(err), Err: err}
@@ -671,9 +673,9 @@ func (s *CodexReviewSource) finishCleanup(
 	}
 	var err error
 	if abort {
-		err = s.cfg.Backend.AbortCodexReview(ctx, s.cfg.Review, string(id))
+		err = s.cfg.Lifecycle.AbortCodexReview(ctx, s.cfg.Review, string(id))
 	} else {
-		err = s.cfg.Backend.CleanupCodexReview(ctx, s.cfg.Review, string(id))
+		err = s.cfg.Lifecycle.CleanupCodexReview(ctx, s.cfg.Review, string(id))
 	}
 	if err != nil {
 		return err
@@ -1078,7 +1080,7 @@ func (s *CodexReviewSource) reconcileRejectedRequest(
 		}
 	}
 
-	releaseRun, err := s.cfg.Backend.acquireCodexReviewRun(ctx, string(id))
+	releaseRun, err := s.cfg.Lifecycle.acquireCodexReviewRun(ctx, string(id))
 	if err != nil {
 		return &exec.ReviewSourceFailure{
 			Class: domain.ReviewFailureTransient,
@@ -1102,7 +1104,7 @@ func (s *CodexReviewSource) finishRejectedRequestCleanup(
 ) error {
 	intent, err := s.cfg.Journal.GetCodexReviewIntent(ctx, string(id))
 	if errors.Is(err, ErrCodexReviewIntentNotFound) {
-		if cleanupErr := s.cfg.Backend.CleanupCodexReviewWorkspace(
+		if cleanupErr := s.cfg.Lifecycle.CleanupCodexReviewWorkspace(
 			ctx, s.cfg.Journal, string(id),
 		); cleanupErr != nil && !errors.Is(cleanupErr, ErrCodexReviewWorkspaceNotFound) {
 			return cleanupErr
@@ -1114,13 +1116,13 @@ func (s *CodexReviewSource) finishRejectedRequestCleanup(
 	} else {
 		switch intent.State {
 		case CodexReviewIntentPreparing, CodexReviewIntentPrepared, CodexReviewIntentStarting:
-			if err := s.cfg.Backend.recoverCodexReviewIntent(ctx, s.cfg.Review, intent, true); err != nil {
+			if err := s.cfg.Lifecycle.recoverCodexReviewIntent(ctx, s.cfg.Review, intent, true); err != nil {
 				return err
 			}
 		case CodexReviewIntentStarted:
 			return s.finishCleanup(ctx, id, true)
 		case CodexReviewIntentClosed:
-			if cleanupErr := s.cfg.Backend.CleanupCodexReviewWorkspace(
+			if cleanupErr := s.cfg.Lifecycle.CleanupCodexReviewWorkspace(
 				ctx, s.cfg.Journal, string(id),
 			); cleanupErr != nil && !errors.Is(cleanupErr, ErrCodexReviewWorkspaceNotFound) {
 				return cleanupErr

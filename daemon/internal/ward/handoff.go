@@ -1023,7 +1023,7 @@ func (w *archiveCapWriter) Write(p []byte) (int, error) {
 // host-side archive under the byte cap. The check names the assertion the
 // caller is proving, so the same bounded collection serves the export path and
 // the base observation without either borrowing the other's failure vocabulary.
-func (b *Backend) materializeRootFS(ctx context.Context, id, tarPath string, c Check) error {
+func (b runtimeOps) materializeRootFS(ctx context.Context, id, tarPath string, c Check) error {
 	f, err := os.OpenFile(tarPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // gate-owned path under a fresh temp directory
 	if err != nil {
 		return failf(c, "create bounded rootfs archive: %v", err)
@@ -1299,7 +1299,7 @@ func ownedFingerprint(creationDate string, labels []Label, labelsObserved bool, 
 // a runtime that reports no creation instants, where the unpredictable token
 // is the whole evidence), and the delete that follows a satisfied wait
 // always targets a just-verified observation.
-func (b *Backend) waitStopped(ctx context.Context, id string, claim objectClaim, ownershipLabel Label, timeout time.Duration) error {
+func (b runtimeOps) waitStopped(ctx context.Context, id string, claim objectClaim, ownershipLabel Label, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	attempts := int((timeout + b.cfg.PollInterval - 1) / b.cfg.PollInterval)
@@ -1345,7 +1345,7 @@ func (b *Backend) waitStopped(ctx context.Context, id string, claim objectClaim,
 // (failing the run here would instead leave the claim owned, and teardown
 // would destroy an object this run did not create). A row whose evidence is
 // unprovable still fails the check.
-func (b *Backend) verifyContainerAbsent(ctx context.Context, id string, claim objectClaim, ownershipLabel Label, c Check) error {
+func (b runtimeOps) verifyContainerAbsent(ctx context.Context, id string, claim objectClaim, ownershipLabel Label, c Check) error {
 	ctrs, err := b.rt.ListContainers(ctx)
 	if err != nil {
 		return failf(c, "list containers to verify %q absent: %v", id, err)
@@ -1381,7 +1381,9 @@ func (b *Backend) verifyContainerAbsent(ctx context.Context, id string, claim ob
 // Teardown runs detached from the caller's cancellation so an aborted run is
 // still reaped, under its own deadline so a wedged runtime call cannot hang
 // Handoff.
-func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState) error {
+func (b runtimeOps) teardown(
+	ctx context.Context, names handoffNames, st *runState, hooks runtimeTeardownHooks,
+) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
 	defer cancel()
 	// The in-process per-identity slot frees when this run ends, however the
@@ -1389,13 +1391,13 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	// window refuses other holders; a same-holder convergence is refused at
 	// acquisition), so holding the slot past the run would only wedge the
 	// identity in-process.
-	defer b.freeLeaseSlot(st)
+	defer hooks.free(st)
 	// Before the first create attempt this invocation owns no runtime
 	// object, but it may already hold the §5.4 lease: acquisition precedes
 	// the first create so the window covers everything, and an early refusal
 	// must not leave the identity serialized until expiry.
 	if !st.workspace.attempted {
-		if problems := b.releaseAuthStoreLease(ctx, st); len(problems) > 0 {
+		if problems := hooks.release(ctx, st); len(problems) > 0 {
 			return failf(CheckTeardown, "%s", strings.Join(problems, "; "))
 		}
 		return nil
@@ -1454,7 +1456,7 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 				if !c.claim.attempted {
 					continue
 				}
-				if rerr := b.reapUnlistedContainer(ctx, c.id, c.claim, st.ownershipLabel); rerr != nil {
+				if rerr := hooks.reapUnlisted(ctx, b, c.id, c.claim, st.ownershipLabel); rerr != nil {
 					problems = append(problems, fmt.Sprintf("remove %q after list failure: %v", c.id, rerr))
 				}
 			}
@@ -1565,7 +1567,7 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 		}
 	}
 	if st.network.attempted {
-		if err := b.teardownNetwork(ctx, names.Network, st.network, st.ownershipLabel); err != nil {
+		if err := hooks.teardownNet(ctx, b, names.Network, st.network, st.ownershipLabel); err != nil {
 			problems = append(problems, err.Error())
 		}
 	}
@@ -1654,7 +1656,7 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	// holder to mutate beside a possibly-live writer — and the held window
 	// is recorded as its own teardown problem; expiry remains the backstop.
 	if writerGone {
-		problems = append(problems, b.releaseAuthStoreLease(ctx, st)...)
+		problems = append(problems, hooks.release(ctx, st)...)
 	} else if st.leaseHeld {
 		problems = append(problems, fmt.Sprintf(
 			"auth store mutation lease for identity %q kept held: writer absence unproven", st.lease.AuthIdentityID))
@@ -1666,7 +1668,7 @@ func (b *Backend) teardown(ctx context.Context, names handoffNames, st *runState
 	return nil
 }
 
-func (b *Backend) teardownNetwork(ctx context.Context, name string, claim objectClaim, ownershipLabel Label) error {
+func (b runtimeOps) teardownNetwork(ctx context.Context, name string, claim objectClaim, ownershipLabel Label) error {
 	networks, err := b.rt.ListNetworks(ctx)
 	if err != nil {
 		report, inspectErr := b.rt.InspectNetwork(ctx, name)
@@ -1805,7 +1807,7 @@ func underObserved(observedDate string, labelsObserved bool, claim objectClaim) 
 // row itself first and falling back to a direct inspect only when the row was
 // too incomplete to carry a verdict. The fallback report must identify the
 // exact candidate.
-func (b *Backend) containerEvidence(ctx context.Context, candidate ContainerSummary, claim objectClaim, ownershipLabel Label) (objectEvidence, error) {
+func (b runtimeOps) containerEvidence(ctx context.Context, candidate ContainerSummary, claim objectClaim, ownershipLabel Label) (objectEvidence, error) {
 	ev := classifyEvidence(claim, ownershipLabel, candidate.CreationDate, candidate.Labels, candidate.LabelsObserved)
 	if ev != evidenceUnprovable || !underObserved(candidate.CreationDate, candidate.LabelsObserved, claim) {
 		// The row already carried a verdict (a mismatched instant proves
@@ -1826,7 +1828,7 @@ func (b *Backend) containerEvidence(ctx context.Context, candidate ContainerSumm
 // volumeEvidence is the volume analogue of containerEvidence, using the
 // per-object InspectVolume when the list row was too incomplete to carry a
 // verdict.
-func (b *Backend) volumeEvidence(ctx context.Context, candidate VolumeSummary, claim objectClaim, ownershipLabel Label) (objectEvidence, error) {
+func (b runtimeOps) volumeEvidence(ctx context.Context, candidate VolumeSummary, claim objectClaim, ownershipLabel Label) (objectEvidence, error) {
 	ev := classifyEvidence(claim, ownershipLabel, candidate.CreationDate, candidate.Labels, candidate.LabelsObserved)
 	if ev != evidenceUnprovable || !underObserved(candidate.CreationDate, candidate.LabelsObserved, claim) {
 		return ev, nil
@@ -1849,7 +1851,7 @@ func (b *Backend) volumeEvidence(ctx context.Context, candidate VolumeSummary, c
 // untouched; a wrong identity or unprovable observation withholds the delete
 // and fails closed. The reap uses the inspected state so an already-stopped
 // container is not needlessly stopped.
-func (b *Backend) reapUnlistedContainer(ctx context.Context, id string, claim objectClaim, ownershipLabel Label) error {
+func (b runtimeOps) reapUnlistedContainer(ctx context.Context, id string, claim objectClaim, ownershipLabel Label) error {
 	rep, err := b.rt.Inspect(ctx, id)
 	if err != nil {
 		return fmt.Errorf("inspect: %w", err)
@@ -1922,7 +1924,7 @@ func uniqueNetwork(networks []NetworkSummary, name string) (NetworkSummary, bool
 // then attempts deletion even when stop reports an error. Unknown/drifted state
 // is not proof of stopped, and a stop error may still mean the side effect took
 // place; joining both results maximizes cleanup without hiding either failure.
-func (b *Backend) reapContainer(ctx context.Context, cs ContainerSummary) error {
+func (b runtimeOps) reapContainer(ctx context.Context, cs ContainerSummary) error {
 	var stopErr error
 	if cs.State != StateStopped {
 		if err := b.rt.StopContainer(ctx, cs.ID); err != nil {

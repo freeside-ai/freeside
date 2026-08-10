@@ -92,7 +92,7 @@ func TestCodexReviewLifecycleUsesRealJournalThroughStarted(t *testing.T) {
 	adapters := adapterFixture.Adapters
 	fixture := ward.NewCodexReviewLifecycleTestFixture(t, adapters.Journal)
 
-	launch, err := fixture.Backend.CodexReview(ctx, fixture.Config, fixture.Launch)
+	launch, err := fixture.Lifecycle.CodexReview(ctx, fixture.Config, fixture.Launch)
 	if err != nil {
 		t.Fatalf("CodexReview with real journal: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestCodexReviewLifecycleUsesRealJournalThroughStarted(t *testing.T) {
 	if err != nil || intent.State != ward.CodexReviewIntentStarted {
 		t.Fatalf("final intent = %+v, %v; want started", intent, err)
 	}
-	if err := fixture.Backend.AbortCodexReview(ctx, fixture.Config, fixture.Launch.RunID); err != nil {
+	if err := fixture.Lifecycle.AbortCodexReview(ctx, fixture.Config, fixture.Launch.RunID); err != nil {
 		t.Fatalf("abort started fixture: %v", err)
 	}
 
@@ -187,7 +187,7 @@ func TestCodexReviewRecoveryConvergesPreparingCrashAfterBinding(t *testing.T) {
 	crashConfig := fixture.Config
 	crashConfig.Journal = crashing
 
-	if launch, err := fixture.Backend.CodexReview(ctx, crashConfig, fixture.Launch); err == nil || launch != nil {
+	if launch, err := fixture.Lifecycle.CodexReview(ctx, crashConfig, fixture.Launch); err == nil || launch != nil {
 		t.Fatalf("CodexReview crash fixture = (%v, %v), want failure", launch, err)
 	} else if !errors.Is(err, ward.ErrCodexReviewOperational) {
 		t.Fatalf("CodexReview crash fixture = %v, want operational journal response loss", err)
@@ -208,7 +208,7 @@ func TestCodexReviewRecoveryConvergesPreparingCrashAfterBinding(t *testing.T) {
 	adapters = adapterFixture.Adapters
 	fixture.Config.Journal = adapters.Journal
 	fixture.RestartVolumeLifecycleLeaser(t)
-	if err := fixture.Backend.RecoverCodexReview(ctx, fixture.Config, fixture.Launch); err != nil {
+	if err := fixture.Lifecycle.RecoverCodexReview(ctx, fixture.Config, fixture.Launch); err != nil {
 		t.Fatalf("recover preparing crash: %v", err)
 	}
 	intent, err = adapters.Journal.GetCodexReviewIntent(ctx, fixture.Launch.RunID)
@@ -219,7 +219,7 @@ func TestCodexReviewRecoveryConvergesPreparingCrashAfterBinding(t *testing.T) {
 		t.Fatalf("snapshot stage residue stat = %v, want absent", err)
 	}
 	fixture.AssertNoLaunchRuntimeResidue(t)
-	if err := fixture.Backend.CleanupCodexReviewWorkspace(ctx, adapters.Journal, fixture.Launch.RunID); err != nil {
+	if err := fixture.Lifecycle.CleanupCodexReviewWorkspace(ctx, adapters.Journal, fixture.Launch.RunID); err != nil {
 		t.Fatalf("cleanup preserved retry workspace: %v", err)
 	}
 }
@@ -235,7 +235,7 @@ func TestCodexReviewClassifiesPostBindingJournalResponseLossOperational(t *testi
 	}
 	cfg := fixture.Config
 	cfg.Journal = responseLoss
-	if launch, err := fixture.Backend.CodexReview(ctx, cfg, fixture.Launch); err == nil || launch != nil {
+	if launch, err := fixture.Lifecycle.CodexReview(ctx, cfg, fixture.Launch); err == nil || launch != nil {
 		t.Fatalf("CodexReview response-loss fixture = (%v, %v), want failure", launch, err)
 	} else if !errors.Is(err, ward.ErrCodexReviewOperational) {
 		t.Fatalf("CodexReview response-loss fixture = %v, want operational classification", err)
@@ -243,10 +243,10 @@ func TestCodexReviewClassifiesPostBindingJournalResponseLossOperational(t *testi
 	if !responseLoss.failed {
 		t.Fatal("response-loss fixture failed before the post-binding resource update")
 	}
-	if err := fixture.Backend.RecoverCodexReview(ctx, fixture.Config, fixture.Launch); err != nil {
+	if err := fixture.Lifecycle.RecoverCodexReview(ctx, fixture.Config, fixture.Launch); err != nil {
 		t.Fatalf("recover response-loss fixture: %v", err)
 	}
-	if err := fixture.Backend.CleanupCodexReviewWorkspace(ctx, adapters.Journal, fixture.Launch.RunID); err != nil {
+	if err := fixture.Lifecycle.CleanupCodexReviewWorkspace(ctx, adapters.Journal, fixture.Launch.RunID); err != nil {
 		t.Fatalf("cleanup response-loss workspace: %v", err)
 	}
 }

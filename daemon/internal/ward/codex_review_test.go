@@ -703,7 +703,7 @@ func testCodexReview(t *testing.T) (CodexReviewConfig, CodexReviewSpec) {
 
 func testCodexReviewLifecycle(
 	t *testing.T,
-) (*Backend, *fakeRuntime, CodexReviewConfig, CodexReviewLaunchSpec, *fakeCodexReviewJournal) {
+) (*CodexReviewLifecycle, *fakeRuntime, CodexReviewConfig, CodexReviewLaunchSpec, *fakeCodexReviewJournal) {
 	t.Helper()
 	cfg, req := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
@@ -729,7 +729,7 @@ func testCodexReviewLifecycle(
 	}
 	fx.rt.volBase[launch.WorkspaceVolume] = testCodexReviewHead
 	fx.rt.volTree[launch.WorkspaceVolume] = testCodexReviewTreeDigest
-	return fx.backend(t), fx.rt, cfg, launch, journal
+	return fx.codexReviewLifecycle(t), fx.rt, cfg, launch, journal
 }
 
 func retargetCodexReviewLifecycle(
@@ -1243,7 +1243,7 @@ func TestRecoverCodexReviewKeepsRuntimeListingFailuresTransient(t *testing.T) {
 }
 
 func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
-	setup := func(t *testing.T) (*Backend, *fakeRuntime, CodexReviewConfig, CodexReviewLaunchSpec, *fakeCodexReviewJournal, Label) {
+	setup := func(t *testing.T) (*CodexReviewLifecycle, *fakeRuntime, CodexReviewConfig, CodexReviewLaunchSpec, *fakeCodexReviewJournal, Label) {
 		t.Helper()
 		backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
 		owner := testOwnershipLabel()
@@ -1285,7 +1285,7 @@ func TestRecoverCodexReviewAdoptsOnlyRecordedOwnerLease(t *testing.T) {
 	// under the trusted ExportRoot still holds a plaintext auth.json that the
 	// seeder's defer never wiped. It names no runtime resource, so only the
 	// recovery stage sweep can reap it.
-	plantStage := func(t *testing.T, backend *Backend, runID string) string {
+	plantStage := func(t *testing.T, backend *CodexReviewLifecycle, runID string) string {
 		t.Helper()
 		stage := codexReviewSnapshotStagePath(backend.cfg.ExportRoot, runID)
 		if err := os.Mkdir(stage, 0o700); err != nil {
@@ -1561,7 +1561,7 @@ func TestCodexReviewRecoveryCleansWorkspaceWithoutLaunchIntent(t *testing.T) {
 			ctx := context.Background()
 			fx := newHandoffFixture(t)
 			seed := fx.seed(t).Seed
-			backend := fx.backend(t)
+			backend := fx.codexReviewLifecycle(t)
 			journal := &fakeCodexReviewJournal{}
 			runID := "review-orphan-" + preparation
 			volume := namesFor(runID).Workspace
@@ -1613,7 +1613,7 @@ func TestCodexReviewRecoveryCleansWorkspaceWithoutLaunchIntent(t *testing.T) {
 func TestCodexReviewRecoveryMarksFenceOnlyRejectedOutcomeReady(t *testing.T) {
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, _ := testCodexReview(t)
 	leaser, err := NewRuntimeCodexReviewVolumeLeaser(fx.rt)
 	if err != nil {
@@ -2080,7 +2080,7 @@ func TestBackendCodexReviewReapsStartedReviewWhenHandoffJournalFails(t *testing.
 // `starting` state, the transferred lease, and the running review container.
 func crashedTransferredCodexReview(
 	t *testing.T,
-) (*Backend, *fakeRuntime, CodexReviewConfig, CodexReviewLaunchSpec, *fakeCodexReviewJournal, *fakeCodexReviewVolumeLeaser) {
+) (*CodexReviewLifecycle, *fakeRuntime, CodexReviewConfig, CodexReviewLaunchSpec, *fakeCodexReviewJournal, *fakeCodexReviewVolumeLeaser) {
 	t.Helper()
 	backend, rt, cfg, launch, journal := testCodexReviewLifecycle(t)
 	leaser := cfg.VolumeLifecycleLeaser.(*fakeCodexReviewVolumeLeaser)

@@ -1104,7 +1104,7 @@ func composeClaudeDriver(
 		return nil, fmt.Errorf("compose ward store adapters: %w", adapterErr)
 	}
 	runtime := ward.NewCLIRuntime(cfg.ContainerBin)
-	backend, backendErr := ward.New(runtime, ward.Config{
+	wardConfig := ward.Config{
 		AgentImage:    string(cfg.AgentImage),
 		ExporterImage: cfg.ExporterImage,
 		// The trusted in-image helper's fixed argv, from the gauntlet lane's
@@ -1117,9 +1117,14 @@ func composeClaudeDriver(
 		Scanner:           credentialScanner{},
 		AuthStoreLeaser:   adapters.Leaser,
 		Journal:           adapters.Journal,
-	})
+	}
+	backend, backendErr := ward.New(runtime, wardConfig)
 	if backendErr != nil {
 		return nil, fmt.Errorf("compose ward backend: %w", backendErr)
+	}
+	reviewLifecycle, lifecycleErr := ward.NewCodexReviewLifecycle(runtime, wardConfig)
+	if lifecycleErr != nil {
+		return nil, fmt.Errorf("compose Codex review lifecycle: %w", lifecycleErr)
 	}
 	var (
 		reviewSource              exec.ReviewSource
@@ -1131,7 +1136,7 @@ func composeClaudeDriver(
 		return nil, fmt.Errorf("compose Codex review volume lifecycle: %w", err)
 	}
 	reviewRecovery, err := ward.NewCodexReviewRecovery(
-		backend, adapters.Journal, volumeLeaser, cfg.ReviewInputRoot)
+		reviewLifecycle, adapters.Journal, volumeLeaser, cfg.ReviewInputRoot)
 	if err != nil {
 		return nil, fmt.Errorf("compose Codex review recovery: %w", err)
 	}
@@ -1162,7 +1167,7 @@ func composeClaudeDriver(
 			return nil, fmt.Errorf("digest Codex review configuration: %w", err)
 		}
 		reviewSource, err = ward.NewCodexReviewSource(ward.CodexReviewSourceConfig{
-			Backend: backend, Review: reviewConfig, Journal: adapters.Journal,
+			Lifecycle: reviewLifecycle, Review: reviewConfig, Journal: adapters.Journal,
 			WorkspaceSizeMB: cfg.ReviewWorkspaceSizeMB, AuthMode: cfg.ReviewAuthMode,
 			AuthIdentityID: cfg.ReviewAuthIdentityID, AuthSnapshot: cfg.ReviewAuthSnapshot,
 			InstructionArtifacts: blobs,

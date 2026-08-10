@@ -202,7 +202,7 @@ func TestCodexReviewRecoveryRemovesOrphanWorkspaceInstructionSnapshot(t *testing
 	ctx := t.Context()
 	fx := newHandoffFixture(t)
 	seed := fx.seed(t).Seed
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, _ := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	id := "review-orphaned-snapshot"
@@ -236,7 +236,7 @@ func TestCodexReviewRecoveryKeepsOrphanWorkspaceWhenSnapshotRemovalFails(t *test
 	ctx := t.Context()
 	fx := newHandoffFixture(t)
 	seed := fx.seed(t).Seed
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, _ := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	id := "review-orphaned-snapshot-failure"
@@ -394,7 +394,7 @@ func TestCodexReviewSourceCleansPreparedWorkspaceWhenInstructionClosureFails(t *
 			ctx := context.Background()
 			fx := newHandoffFixture(t)
 			seedSpec := fx.seed(t)
-			backend := fx.backend(t)
+			backend := fx.codexReviewLifecycle(t)
 			cfg, requestSpec := testCodexReview(t)
 			journal := &fakeCodexReviewJournal{}
 			sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -478,7 +478,7 @@ func TestCodexReviewSourceRetriesInstructionMaterializationUnderSameInvocation(t
 			ctx := context.Background()
 			fx := newHandoffFixture(t)
 			seedSpec := fx.seed(t)
-			backend := fx.backend(t)
+			backend := fx.codexReviewLifecycle(t)
 			cfg, requestSpec := testCodexReview(t)
 			journal := &fakeCodexReviewJournal{}
 			sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -556,7 +556,7 @@ func TestCodexReviewInstructionMaterializationRejectsDivergentSnapshotTopology(t
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -714,13 +714,13 @@ func testReviewVerificationEvidence() exec.ReviewVerificationEvidence {
 
 func codexReviewSourceConfigForTest(
 	t *testing.T,
-	backend *Backend,
+	lifecycle *CodexReviewLifecycle,
 	cfg CodexReviewConfig,
 	request CodexReviewSpec,
 	journal CodexReviewJournal,
 ) CodexReviewSourceConfig {
 	t.Helper()
-	leaser, err := NewRuntimeCodexReviewVolumeLeaser(backend.rt)
+	leaser, err := NewRuntimeCodexReviewVolumeLeaser(lifecycle.rt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -728,7 +728,7 @@ func codexReviewSourceConfigForTest(
 	cfg.ProxyURL = ""
 	cfg.VolumeLifecycleLeaser = leaser
 	sourceConfig := CodexReviewSourceConfig{
-		Backend: backend, Review: cfg, Journal: journal, WorkspaceSizeMB: 64,
+		Lifecycle: lifecycle, Review: cfg, Journal: journal, WorkspaceSizeMB: 64,
 		AuthMode: request.AuthMode, AuthIdentityID: request.AuthIdentityID,
 		AuthSnapshot: request.AuthSnapshot,
 		InstructionArtifacts: testReviewInstructionArtifacts{
@@ -746,15 +746,15 @@ func codexReviewSourceConfigForTest(
 	return sourceConfig
 }
 
-func TestNewCodexReviewSourceRejectsUninitializedBackend(t *testing.T) {
+func TestNewCodexReviewSourceRejectsUninitializedLifecycle(t *testing.T) {
 	fx := newHandoffFixture(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, request := testCodexReview(t)
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, request, &fakeCodexReviewJournal{})
-	sourceConfig.Backend = &Backend{}
+	sourceConfig.Lifecycle = &CodexReviewLifecycle{}
 
 	if _, err := NewCodexReviewSource(sourceConfig); !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("NewCodexReviewSource(uninitialized backend) = %v, want ErrInvalidConfig", err)
+		t.Fatalf("NewCodexReviewSource(uninitialized lifecycle) = %v, want ErrInvalidConfig", err)
 	}
 }
 
@@ -762,7 +762,7 @@ func TestCodexReviewSourceRunsWardLifecycleAndCleansBeforePoll(t *testing.T) {
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -886,7 +886,7 @@ func TestCodexReviewSourcePersistsInvalidCollectedResultAndCleans(t *testing.T) 
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -982,7 +982,7 @@ func TestCodexReviewSourcePersistsMalformedRawOutputAndCleans(t *testing.T) {
 			ctx := context.Background()
 			fx := newHandoffFixture(t)
 			seedSpec := fx.seed(t)
-			backend := fx.backend(t)
+			backend := fx.codexReviewLifecycle(t)
 			cfg, requestSpec := testCodexReview(t)
 			journal := &fakeCodexReviewJournal{}
 			sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -1042,7 +1042,7 @@ func TestCodexReviewSourceRetriesOperationalBindingRead(t *testing.T) {
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -1090,7 +1090,7 @@ func TestCodexReviewSourceCleansBeforeRejectingMalformedOutcome(t *testing.T) {
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -1154,7 +1154,7 @@ func TestCodexReviewSourceAbortsStartedInvocationForRejectedRequest(t *testing.T
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -1237,7 +1237,7 @@ func TestCodexReviewSourceAbortsPreHandoffLaunchForRejectedRequest(t *testing.T)
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -1294,7 +1294,7 @@ func TestCodexReviewSourceRejectedRequestFencesAndRecoversBeforeBinding(t *testi
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -1350,7 +1350,7 @@ func TestCodexReviewSourceRejectedPreparingRequestAbortsWhenBindingExists(t *tes
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -1428,7 +1428,7 @@ func TestCodexReviewSourceInspectAbortsInvocationForInvalidPersistedRequest(t *t
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -1475,7 +1475,7 @@ func TestCodexReviewSourcePreservesLegacyRequestThroughRejectedOutcome(t *testin
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	source, err := NewCodexReviewSource(
@@ -1506,7 +1506,7 @@ func TestCodexReviewSourceReapsPreparedWorkspaceForRejectedUnstartedRequest(t *t
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -1577,7 +1577,7 @@ func TestCodexReviewCleanupRefusesRedirectedWorkspaceBinding(t *testing.T) {
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -1628,7 +1628,7 @@ func TestCodexReviewCleanupRefusesSubstitutedIntentResources(t *testing.T) {
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -1670,7 +1670,7 @@ func TestCodexReviewCleanupRefusesMissingIntentAuthority(t *testing.T) {
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -1706,7 +1706,7 @@ func TestCodexReviewCleanupSurfacesForeignLeaseAsContradiction(t *testing.T) {
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -1754,7 +1754,7 @@ func TestCodexReviewRecoveryAbortsLegacyRunningInvocationWithLostProxy(t *testin
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -1829,7 +1829,7 @@ func TestCodexReviewSourceRestartAbortsRunningInvocationWithLostProxy(t *testing
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -1896,7 +1896,7 @@ func TestCodexReviewRecoveryCleansBeforeReportingRejectedOutcome(t *testing.T) {
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	source, err := NewCodexReviewSource(
@@ -1951,7 +1951,7 @@ func TestCodexReviewRecoveryDoesNotTrustClosedRejectedLegacyOutcome(t *testing.T
 	for _, ready := range []bool{false, true} {
 		t.Run(fmt.Sprintf("ready=%t", ready), func(t *testing.T) {
 			fx := newHandoffFixture(t)
-			backend := fx.backend(t)
+			backend := fx.codexReviewLifecycle(t)
 			id := "review-legacy-closed"
 			owner := strings.Repeat("b", 32)
 			shadow := codexReviewShadowVolumeName(id)
@@ -2179,7 +2179,7 @@ func TestCodexReviewSourceRecoversBeforeLaunchIntent(t *testing.T) {
 			ctx := context.Background()
 			fx := newHandoffFixture(t)
 			seedSpec := fx.seed(t)
-			backend := fx.backend(t)
+			backend := fx.codexReviewLifecycle(t)
 			cfg, requestSpec := testCodexReview(t)
 			journal := &fakeCodexReviewJournal{}
 			id := domain.InvocationID("review-recover-" + preparation)
@@ -2268,7 +2268,7 @@ func TestCodexReviewSourceRetriesTransientPreparationUnderSameInvocation(t *test
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	source, err := NewCodexReviewSource(
@@ -2316,7 +2316,7 @@ func TestCodexReviewSourceRetriesTransientLaunchUnderSameInvocation(t *testing.T
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	source, err := NewCodexReviewSource(
@@ -2371,7 +2371,7 @@ func TestCodexReviewRestartRecoversLegacyRoundAndRelaunchesSameRequest(t *testin
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
@@ -2547,7 +2547,7 @@ func TestCodexReviewSourcePollMarksPersistedFailureTerminal(t *testing.T) {
 
 func TestCodexReviewSourceVerifyRejectsSwappedRequestAuthority(t *testing.T) {
 	fx := newHandoffFixture(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	review, _ := testCodexReview(t)
 	id := domain.InvocationID("review-run-authority-1")
 	request := exec.ReviewRequest{
@@ -2593,7 +2593,7 @@ func TestCodexReviewSourceVerifyRejectsSwappedRequestAuthority(t *testing.T) {
 				requests: map[string]exec.ReviewRequest{string(id): swapped},
 			}
 			source := &CodexReviewSource{cfg: CodexReviewSourceConfig{
-				Backend: backend, Review: review, Journal: journal,
+				Lifecycle: backend, Review: review, Journal: journal,
 			}}
 			if err := source.VerifyRequestAuthority(t.Context(), id, expected); !errors.Is(err, domain.ErrParentKeyMismatch) {
 				t.Fatalf("swapped request authority verification = %v", err)
@@ -2889,7 +2889,7 @@ func TestCodexReviewSourceLaunchConformanceIsContradiction(t *testing.T) {
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
 	seedSpec := fx.seed(t)
-	backend := fx.backend(t)
+	backend := fx.codexReviewLifecycle(t)
 	cfg, requestSpec := testCodexReview(t)
 	journal := &fakeCodexReviewJournal{}
 	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)

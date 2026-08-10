@@ -51,6 +51,15 @@ func (fx *handoffFixture) backend(t *testing.T) *Backend {
 	return b
 }
 
+func (fx *handoffFixture) codexReviewLifecycle(t *testing.T) *CodexReviewLifecycle {
+	t.Helper()
+	lifecycle, err := NewCodexReviewLifecycle(fx.rt, fx.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return lifecycle
+}
+
 func (fx *handoffFixture) run(t *testing.T) (*HandoffResult, error) {
 	t.Helper()
 	res, err := fx.backend(t).Handoff(context.Background(), testHandoffSpec())

@@ -444,7 +444,7 @@ type CodexReviewJournalBinding struct {
 
 // BuildCodexReviewShadowObserverSpec returns the exact networkless helper
 // topology whose proof can establish that the .agents shadow is empty. It is
-// a topology constructor for conformance tests; Backend.CodexReview owns the
+// a topology constructor for conformance tests; CodexReviewLifecycle.CodexReview owns the
 // safe runtime lifecycle.
 func BuildCodexReviewShadowObserverSpec(
 	cfg CodexReviewConfig,
@@ -537,7 +537,7 @@ func ObserveCodexReviewShadow(
 // BuildCodexReviewSnapshotObserverSpec returns the pinned, networkless,
 // read-only observer whose proof establishes that the snapshot volume holds
 // exactly the two admitted files and reports their sha256 digests. It is a
-// topology constructor for conformance tests; Backend.CodexReview owns the safe
+// topology constructor for conformance tests; CodexReviewLifecycle.CodexReview owns the safe
 // runtime lifecycle.
 func BuildCodexReviewSnapshotObserverSpec(
 	cfg CodexReviewConfig,
@@ -729,7 +729,7 @@ func codexReviewSnapshotSeederScript(cfg Config, volumeTarget string) string {
 
 // BuildCodexReviewWorkspaceObserverSpec returns the pinned, networkless,
 // read-only observer used to bind the review to one candidate commit and tree.
-// Backend.CodexReview is the safe runtime lifecycle that executes it.
+// CodexReviewLifecycle.CodexReview is the safe runtime lifecycle that executes it.
 func BuildCodexReviewWorkspaceObserverSpec(
 	cfg CodexReviewConfig,
 	runID, volume string,
@@ -895,7 +895,7 @@ func ObserveCodexReviewNetwork(
 
 // BuildCodexReviewAgentSpec admits the two prepared files, constructs the
 // complete minimal container spec, independently re-verifies it, and returns
-// a prepared shape. It does not authorize start; Backend.CodexReview supplies
+// a prepared shape. It does not authorize start; CodexReviewLifecycle.CodexReview supplies
 // ownership, live reconstruction, durable binding, and the runtime start.
 func BuildCodexReviewAgentSpec(
 	cfg CodexReviewConfig,
@@ -1857,7 +1857,7 @@ func sameOptionalTime(a, b *time.Time) bool {
 }
 
 // verifyCodexReviewAllowlistShape compares already-collected values. It is a
-// shape sanity check used inside Backend.CodexReview, not a safe launch gate
+// shape sanity check used inside CodexReviewLifecycle.CodexReview, not a safe launch gate
 // for callers holding decoded observations.
 func verifyCodexReviewAllowlistShape(
 	cfg CodexReviewConfig,

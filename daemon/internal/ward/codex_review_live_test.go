@@ -110,7 +110,7 @@ func liveCodexReviewLifecycle(t *testing.T, slug string, withAgents bool) {
 	backendConfig.SeedRoot = root
 	backendConfig.PollInterval = 500 * time.Millisecond
 	backendConfig.SeedTimeout = 2 * time.Minute
-	backend, err := New(rt, backendConfig)
+	backend, err := NewCodexReviewLifecycle(rt, backendConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
