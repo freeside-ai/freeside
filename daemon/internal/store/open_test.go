@@ -40,6 +40,20 @@ func openStoreAt(t *testing.T, path string, opts store.Options) *store.Store {
 	return s
 }
 
+func backupHealthContext(t *testing.T, s *store.Store) store.BackupHealthContext {
+	t.Helper()
+	ctx := context.Background()
+	state, err := s.ServerState(ctx)
+	if err != nil {
+		t.Fatalf("ServerState: %v", err)
+	}
+	schemaVersion, err := s.SchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("SchemaVersion: %v", err)
+	}
+	return store.BackupHealthContext{ServerState: state, SchemaVersion: schemaVersion}
+}
+
 // TestOpenPragmas is acceptance fixture 1: a freshly opened store reports the
 // §5.2 pragma configuration.
 func TestOpenPragmas(t *testing.T) {

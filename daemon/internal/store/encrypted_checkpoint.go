@@ -42,6 +42,7 @@ var (
 	errBackupKeyMalformed         = errors.New("backup encryption key is corrupt")
 	errBackupKeyMissing           = errors.New("backup encryption key is absent for an encrypted checkpoint")
 	errCheckpointManifestMismatch = errors.New("checkpoint artifact manifest mismatch")
+	errCheckpointSchemaStale      = errors.New("checkpoint schema is older than this binary")
 )
 
 type encryptedCheckpointEnvelope struct {
@@ -112,6 +113,7 @@ func (s *encryptedCheckpointHealthSource) BackupHealth(
 	health := unhealthyBackupHealth()
 	snapshot, checkpoint, found, err := inspectEncryptedCheckpoint(
 		ctx,
+		current.SchemaVersion,
 		s.files,
 		true,
 		s.approvedRecipes,
@@ -119,7 +121,8 @@ func (s *encryptedCheckpointHealthSource) BackupHealth(
 	)
 	if err != nil {
 		if errors.Is(err, domain.ErrCheckpointAuthentication) ||
-			errors.Is(err, domain.ErrCheckpointDigestMismatch) {
+			errors.Is(err, domain.ErrCheckpointDigestMismatch) ||
+			errors.Is(err, errCheckpointSchemaStale) {
 			return health, nil
 		}
 		return domain.BackupHealth{}, fmt.Errorf("encrypted checkpoint health: %w", err)
@@ -248,6 +251,7 @@ func (f *LocalBackupFiles) RestoreCheckpoint(
 
 func inspectEncryptedCheckpoint(
 	ctx context.Context,
+	expectedSchemaVersion int,
 	files *LocalBackupFiles,
 	collectDigests bool,
 	approvedRecipes map[domain.Digest]bool,
@@ -273,6 +277,23 @@ func inspectEncryptedCheckpoint(
 		return backupDatabaseSnapshot{}, domain.BackupCheckpoint{}, false, err
 	}
 	defer closeDeserializedBackupDatabase(db, conn)
+	var checkpointSchemaVersion int
+	if err := conn.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).
+		Scan(&checkpointSchemaVersion); err != nil {
+		return backupDatabaseSnapshot{}, domain.BackupCheckpoint{}, false,
+			fmt.Errorf("checkpoint schema version: %w", err)
+	}
+	switch {
+	case checkpointSchemaVersion < expectedSchemaVersion:
+		return backupDatabaseSnapshot{}, domain.BackupCheckpoint{}, false,
+			fmt.Errorf("%w: checkpoint version %d, binary version %d",
+				errCheckpointSchemaStale, checkpointSchemaVersion, expectedSchemaVersion)
+	case checkpointSchemaVersion > expectedSchemaVersion:
+		return backupDatabaseSnapshot{}, domain.BackupCheckpoint{}, false,
+			fmt.Errorf("checkpoint schema version %d is newer than binary version %d",
+				checkpointSchemaVersion, expectedSchemaVersion)
+	}
 
 	snapshot, err := inspectBackupDB(
 		ctx,

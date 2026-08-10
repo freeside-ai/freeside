@@ -179,7 +179,7 @@ func TestRestoreFailsClosedOnACheckpointThisBinaryCannotScan(t *testing.T) {
 	) {
 		t.Fatalf("RestoreCheckpoint = %v, want ErrBackupClosureIncomplete", err)
 	}
-	health, err := downgradedSource.BackupHealth(ctx, store.BackupHealthContext{})
+	health, err := downgradedSource.BackupHealth(ctx, backupHealthContext(t, s))
 	if err != nil {
 		t.Fatalf("downgraded BackupHealth: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestEncryptedCheckpointFailsClosedOnWrongKeyTamperAndDigestMismatch(t *test
 			if err != nil {
 				t.Fatalf("corrupt checkpoint health source: %v", err)
 			}
-			health, err := corruptSource.BackupHealth(ctx, store.BackupHealthContext{})
+			health, err := corruptSource.BackupHealth(ctx, backupHealthContext(t, s))
 			if err != nil {
 				t.Fatalf("corrupt checkpoint health: %v", err)
 			}

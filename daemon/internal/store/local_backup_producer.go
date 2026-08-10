@@ -100,16 +100,18 @@ func (p *LocalBackupProducer) Maintain(ctx context.Context) error {
 
 	checkpoint, metadata, found, err := inspectEncryptedCheckpoint(
 		ctx,
+		current.SchemaVersion,
 		p.files,
 		true,
 		p.files.approvedRecipes,
 		p.files.payloadExtractors,
 	)
 	// A stored checkpoint this binary cannot verify is unusable, not fatal:
-	// both a manifest that no longer matches current policy and one whose
+	// a stale schema, a manifest that no longer matches current policy, and a
 	// closure this binary cannot recompute are replaced by production below.
 	if errors.Is(err, errCheckpointManifestMismatch) ||
-		errors.Is(err, ErrBackupClosureIncomplete) {
+		errors.Is(err, ErrBackupClosureIncomplete) ||
+		errors.Is(err, errCheckpointSchemaStale) {
 		found, err = false, nil
 	}
 	if err != nil {
@@ -135,7 +137,8 @@ func (p *LocalBackupProducer) Maintain(ctx context.Context) error {
 			return err
 		}
 		_, _, found, err = inspectEncryptedCheckpoint(
-			ctx, p.files, true, p.files.approvedRecipes, p.files.payloadExtractors)
+			ctx, current.SchemaVersion, p.files, true,
+			p.files.approvedRecipes, p.files.payloadExtractors)
 		if err != nil {
 			return fmt.Errorf("local backup producer: inspect produced checkpoint: %w", err)
 		}
