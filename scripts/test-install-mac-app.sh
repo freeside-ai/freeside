@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # test-install-mac-app.sh — focused filesystem regressions for the Mac installer.
 #
-# Issue #464 starts the broader matrix tracked by #458 with the restart states
-# that change installer behaviour: SIGKILL after the old app is renamed aside
-# leaves the valid app at `.install-superseded`, while the canonical path is
-# either absent or holds the not-yet-verified replacement. The ordinary suite
-# uses command stand-ins, so it needs neither Xcode nor a signing identity and
-# runs on Linux as well as macOS.
+# Issues #464 and #458 pin the restart and ordinary-install state machines:
+# crash recovery, swap-and-rollback fault injection, destination guards, and
+# the server-URL validator. The ordinary suite uses command stand-ins for the
+# build and signing boundaries, so it needs neither Xcode nor a signing
+# identity and runs on Linux as well as macOS. URL cases pass through to a real
+# Swift toolchain when one is available and report explicit skips otherwise.
 # `FREESIDE_TEST_REAL_RENAME=true` uses macOS Swift for the production-exclusive
 # rename while keeping the build and signing boundaries stubbed.
 #
@@ -15,6 +15,8 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 INSTALLER=${FREESIDE_INSTALLER_UNDER_TEST:-$SCRIPT_DIR/../app/scripts/install-mac-app.sh}
+REAL_SWIFT=$(command -v swift || true)
+export STUB_REAL_SWIFT=$REAL_SWIFT
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -29,6 +31,8 @@ STUB
 
 cat >"$STUB_BIN/plutil" <<'STUB'
 #!/usr/bin/env bash
+target=${!#}
+[[ -f "$target" ]] || exit 1
 printf '%s\n' "${STUB_BUNDLE_ID:-ai.freeside.app.macos}"
 STUB
 
@@ -37,9 +41,25 @@ cat >"$STUB_BIN/codesign" <<'STUB'
 target=${!#}
 case " $* " in
 *" --verify "*)
+    count_file="${STUB_CASE_DIR:?}/codesign-verify-count"
+    count=0
+    [[ ! -f "$count_file" ]] || read -r count <"$count_file"
+    count=$((count + 1))
+    printf '%s\n' "$count" >"$count_file"
     if [[ -n "${STUB_INTERLOPER_DEST:-}" ]]; then
         mkdir -p "$STUB_INTERLOPER_DEST"
         printf 'foreign contents\n' >"$STUB_INTERLOPER_DEST/marker"
+    fi
+    if [[ -n "${STUB_INTERLOPER_ON_VERIFY_DEST:-}" && \
+        "$target" == "$STUB_INTERLOPER_ON_VERIFY_DEST" ]]; then
+        /bin/mv "$target" "$STUB_CASE_DIR/displaced-staged-app"
+        mkdir -p "$target"
+        printf 'rollback interloper\n' >"$target/marker"
+        exit 1
+    fi
+    if [[ -n "${STUB_FAIL_VERIFY_CALL:-}" && \
+        "$count" -eq "$STUB_FAIL_VERIFY_CALL" ]]; then
+        exit 1
     fi
     [[ ! -e "$target/.invalid-signature" ]]
     ;;
@@ -100,7 +120,28 @@ if [[ -n "${STUB_REPLACE_BEFORE_ASIDE:-}" && \
     touch "$source/.invalid-signature"
     "$(dirname "$0")/stat" -f %i "$source" >"$STUB_CASE_DIR/pre-aside-interloper-inode"
 fi
-exec /bin/mv "$@"
+if [[ -n "${STUB_INTERLOPER_AFTER_ASIDE:-}" && \
+    "$destination" == "$source.install-superseded" ]]; then
+    /bin/mv "$source" "$destination"
+    case "$STUB_INTERLOPER_AFTER_ASIDE" in
+    file)
+        printf 'foreign file\n' >"$source"
+        ;;
+    directory)
+        mkdir -p "$source"
+        printf 'foreign directory\n' >"$source/marker"
+        ;;
+    *) exit 64 ;;
+    esac
+    exit 0
+fi
+/bin/mv "$@"
+rc=$?
+if [[ "$rc" -eq 0 && -n "${STUB_TERM_AFTER_MV_SOURCE:-}" && \
+    "$source" == "$STUB_TERM_AFTER_MV_SOURCE" ]]; then
+    kill -TERM "$PPID"
+fi
+exit "$rc"
 STUB
 
 cat >"$STUB_BIN/security" <<'STUB'
@@ -117,6 +158,10 @@ if [[ "${FREESIDE_TEST_REAL_RENAME:-false}" != true ]]; then
 program=$2
 case "$program" in
 *renamex_np*RENAME_EXCL*) ;;
+*'import Foundation'*)
+    [[ -n "${STUB_REAL_SWIFT:-}" ]] || exit 65
+    exec "$STUB_REAL_SWIFT" "$@"
+    ;;
 *) exit 65 ;;
 esac
 source=$3
@@ -153,6 +198,7 @@ chmod +x "$STUB_BIN"/*
 
 pass=0
 fail=0
+skip=0
 CASE=''
 CASE_DIR=''
 OUT=''
@@ -165,6 +211,7 @@ begin_case() {
     export STUB_CASE_DIR=$CASE_DIR
     unset STUB_BUNDLE_ID
     unset STUB_INTERLOPER_DEST
+    unset STUB_INTERLOPER_ON_VERIFY_DEST
     unset STUB_RENAME_INTERLOPER_DEST
     unset STUB_REPLACE_RENAME_SOURCE
     unset STUB_KILL_AFTER_RENAME
@@ -172,6 +219,9 @@ begin_case() {
     unset STUB_BUILD_SUCCEEDS
     unset STUB_INTERLOPER_AFTER_BUILD
     unset STUB_REPLACE_BEFORE_ASIDE
+    unset STUB_INTERLOPER_AFTER_ASIDE
+    unset STUB_TERM_AFTER_MV_SOURCE
+    unset STUB_FAIL_VERIFY_CALL
     unset STUB_SIGNING_IDENTITY
     echo "case: $CASE"
 }
@@ -185,10 +235,11 @@ report_failure() {
 run_installer() {
     set +e
     OUT=$(PATH="$STUB_BIN:$PATH" \
+        CLANG_MODULE_CACHE_PATH="$TMP/swift-module-cache" \
         FREESIDE_MAC_INSTALL_DIR="$CASE_DIR/Applications" \
         FREESIDE_MAC_BUILD_DIR="$CASE_DIR/Build" \
         FREESIDE_MAC_SIGNING_IDENTITY="${STUB_SIGNING_IDENTITY-Test Identity}" \
-        bash "$INSTALLER" 2>&1)
+        bash "$INSTALLER" "$@" 2>&1)
     RC=$?
     set -e
 }
@@ -237,6 +288,17 @@ make_recovery_app() {
     mkdir -p "$path/Contents"
     printf 'old client\n' >"$path/Contents/marker"
     printf 'fixture\n' >"$path/Contents/Info.plist"
+}
+
+assert_inode() {
+    local path=$1
+    local expected=$2
+    local description=$3
+    if [[ -e "$path" ]] && [[ "$(inode "$path")" == "$expected" ]]; then
+        pass=$((pass + 1))
+    else
+        report_failure "$description"
+    fi
 }
 
 # The pre-fix installer fails this case: the later build failure leaves the
@@ -607,5 +669,322 @@ else
     report_failure "untrusted replacement was not preserved in quarantine"
 fi
 
-echo "$pass assertions passed, $fail failed"
+begin_case "first install verification failure removes the replacement" 13
+destination=$CASE_DIR/Applications/Freeside.app
+export STUB_BUILD_SUCCEEDS=true
+export STUB_FAIL_VERIFY_CALL=2
+run_installer
+assert_rc 1
+assert_contains "the installed app failed signature verification"
+assert_contains "removed the unverified install"
+assert_absent "$destination"
+assert_absent "$destination.install-superseded"
+assert_absent "$destination.install-staging"
+
+begin_case "first install signal after rename removes the replacement" 14
+destination=$CASE_DIR/Applications/Freeside.app
+export STUB_BUILD_SUCCEEDS=true
+export STUB_TERM_AFTER_MV_SOURCE=$destination.install-staging
+run_installer
+assert_rc 130
+assert_contains "removed the unverified install"
+assert_absent "$destination"
+assert_absent "$destination.install-superseded"
+assert_absent "$destination.install-staging"
+
+begin_case "update verification failure restores the previous inode" 15
+destination=$CASE_DIR/Applications/Freeside.app
+superseded=$destination.install-superseded
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+export STUB_BUILD_SUCCEEDS=true
+export STUB_FAIL_VERIFY_CALL=2
+run_installer
+assert_rc 1
+assert_contains "the installed app failed signature verification"
+assert_contains "restored the previous install"
+assert_exists "$destination/Contents/marker"
+assert_absent "$superseded"
+assert_inode "$destination" "$old_inode" \
+    "verification rollback did not preserve the previous install inode"
+
+begin_case "signal between update renames restores the previous inode" 16
+destination=$CASE_DIR/Applications/Freeside.app
+superseded=$destination.install-superseded
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+export STUB_BUILD_SUCCEEDS=true
+export STUB_TERM_AFTER_MV_SOURCE=$destination
+run_installer
+assert_rc 130
+assert_contains "restored the previous install"
+assert_exists "$destination/Contents/marker"
+assert_absent "$superseded"
+assert_inode "$destination" "$old_inode" \
+    "signal rollback did not preserve the previous install inode"
+
+begin_case "foreign file appearing after aside survives rollback" 17
+destination=$CASE_DIR/Applications/Freeside.app
+superseded=$destination.install-superseded
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+export STUB_BUILD_SUCCEEDS=true
+export STUB_INTERLOPER_AFTER_ASIDE=file
+run_installer
+assert_rc 1
+assert_contains "$destination reappeared mid-swap"
+assert_contains "something else now occupies $destination"
+assert_exists "$destination"
+assert_exists "$superseded/Contents/marker"
+if [[ -f "$destination" && "$(<"$destination")" == "foreign file" ]]; then
+    pass=$((pass + 1))
+else
+    report_failure "foreign file did not survive the rollback refusal"
+fi
+assert_inode "$superseded" "$old_inode" \
+    "rollback refusal did not preserve the previous install inode"
+
+begin_case "foreign directory appearing after aside survives rollback" 18
+destination=$CASE_DIR/Applications/Freeside.app
+superseded=$destination.install-superseded
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+export STUB_BUILD_SUCCEEDS=true
+export STUB_INTERLOPER_AFTER_ASIDE=directory
+run_installer
+assert_rc 1
+assert_contains "$destination reappeared mid-swap"
+assert_contains "something else now occupies $destination"
+assert_exists "$destination/marker"
+assert_contains "previous install was left at $superseded"
+if [[ "$(<"$destination/marker")" == "foreign directory" ]]; then
+    pass=$((pass + 1))
+else
+    report_failure "foreign directory contents did not survive the rollback refusal"
+fi
+assert_inode "$superseded" "$old_inode" \
+    "directory interloper displaced the previous install backup"
+
+begin_case "interloper during rollback preserves the previous install aside" 19
+destination=$CASE_DIR/Applications/Freeside.app
+superseded=$destination.install-superseded
+make_recovery_app "$destination"
+old_inode=$(inode "$destination")
+export STUB_BUILD_SUCCEEDS=true
+export STUB_INTERLOPER_ON_VERIFY_DEST=$destination
+run_installer
+assert_rc 1
+assert_contains "the installed app failed signature verification"
+assert_contains "something else now occupies $destination"
+assert_contains "previous install was left at $superseded"
+assert_exists "$destination/marker"
+assert_exists "$CASE_DIR/displaced-staged-app/Contents/marker"
+assert_inode "$superseded" "$old_inode" \
+    "rollback interloper displaced the previous install backup"
+
+begin_case "dangling destination symlink is refused intact" 20
+destination=$CASE_DIR/Applications/Freeside.app
+target=$CASE_DIR/missing-target
+ln -s "$target" "$destination"
+run_installer
+assert_rc 1
+assert_contains "exists and is not an app bundle"
+assert_absent "$CASE_DIR/xcodebuild-called"
+if [[ -L "$destination" && "$(readlink "$destination")" == "$target" ]]; then
+    pass=$((pass + 1))
+else
+    report_failure "dangling destination symlink changed"
+fi
+assert_absent "$target"
+
+begin_case "live destination symlink is refused intact" 21
+destination=$CASE_DIR/Applications/Freeside.app
+target=$CASE_DIR/live-target
+make_recovery_app "$target"
+target_inode=$(inode "$target")
+ln -s "$target" "$destination"
+run_installer
+assert_rc 1
+assert_contains "exists and is not an app bundle"
+assert_absent "$CASE_DIR/xcodebuild-called"
+if [[ -L "$destination" && "$(readlink "$destination")" == "$target" ]]; then
+    pass=$((pass + 1))
+else
+    report_failure "live destination symlink changed"
+fi
+assert_inode "$target" "$target_inode" "live symlink target changed"
+
+begin_case "regular file destination is refused intact" 22
+destination=$CASE_DIR/Applications/Freeside.app
+printf 'foreign file\n' >"$destination"
+entry_inode=$(inode "$destination")
+run_installer
+assert_rc 1
+assert_contains "exists and is not an app bundle"
+assert_absent "$CASE_DIR/xcodebuild-called"
+assert_inode "$destination" "$entry_inode" "regular destination file changed"
+
+begin_case "fifo destination is refused intact" 23
+destination=$CASE_DIR/Applications/Freeside.app
+mkfifo "$destination"
+entry_inode=$(inode "$destination")
+run_installer
+assert_rc 1
+assert_contains "exists and is not an app bundle"
+assert_absent "$CASE_DIR/xcodebuild-called"
+assert_inode "$destination" "$entry_inode" "destination fifo changed"
+
+begin_case "directory without Info.plist is refused intact" 24
+destination=$CASE_DIR/Applications/Freeside.app
+mkdir -p "$destination/Contents"
+printf 'foreign contents\n' >"$destination/marker"
+entry_inode=$(inode "$destination")
+run_installer
+assert_rc 1
+assert_contains "holds bundle id 'unknown'"
+assert_absent "$CASE_DIR/xcodebuild-called"
+assert_exists "$destination/marker"
+assert_inode "$destination" "$entry_inode" \
+    "directory without Info.plist changed"
+
+begin_case "foreign bundle identifier is refused intact" 25
+destination=$CASE_DIR/Applications/Freeside.app
+make_recovery_app "$destination"
+entry_inode=$(inode "$destination")
+export STUB_BUNDLE_ID=example.foreign.app
+run_installer
+assert_rc 1
+assert_contains "holds bundle id 'example.foreign.app'"
+assert_absent "$CASE_DIR/xcodebuild-called"
+assert_inode "$destination" "$entry_inode" \
+    "foreign bundle destination changed"
+
+has_real_swift=false
+if [[ -n "$REAL_SWIFT" ]] && "$REAL_SWIFT" --version >/dev/null 2>&1; then
+    has_real_swift=true
+fi
+
+run_rejected_url_case() {
+    local name=$1
+    local slug=$2
+    local value=$3
+    begin_case "$name" "$slug"
+    if [[ "$has_real_swift" != true ]]; then
+        skip=$((skip + 1))
+        echo "SKIP [$CASE]: no real Swift toolchain; macOS CI runs this case"
+        return
+    fi
+    destination=$CASE_DIR/Applications/Freeside.app
+    run_installer --server-url "$value"
+    assert_rc 1
+    assert_contains "--server-url is not an http(s) URL with a host"
+    assert_absent "$destination"
+    assert_absent "$CASE_DIR/xcodebuild-called"
+}
+
+run_accepted_url_case() {
+    local name=$1
+    local slug=$2
+    local value=$3
+    begin_case "$name" "$slug"
+    if [[ "$has_real_swift" != true ]]; then
+        skip=$((skip + 1))
+        echo "SKIP [$CASE]: no real Swift toolchain; macOS CI runs this case"
+        return
+    fi
+    run_installer --server-url "$value"
+    assert_rc 1
+    assert_contains "build failed"
+    assert_exists "$CASE_DIR/xcodebuild-called"
+}
+
+run_rejected_url_case "server URL rejects port zero" url-reject-0 \
+    "http://localhost:0"
+run_rejected_url_case "server URL rejects port 65536" url-reject-65536 \
+    "http://localhost:65536"
+run_rejected_url_case "server URL rejects port 99999" url-reject-99999 \
+    "http://localhost:99999"
+run_rejected_url_case "server URL rejects an overflowing port" url-reject-overflow \
+    "http://localhost:18446744073709551616"
+run_rejected_url_case "server URL rejects a leading-zero port" url-reject-leading-zero \
+    "http://localhost:0080"
+run_rejected_url_case "server URL rejects a trailing colon" url-reject-colon \
+    "http://localhost:"
+run_rejected_url_case "server URL rejects an unmatched IPv6 bracket" url-reject-bracket \
+    "http://["
+run_rejected_url_case "server URL rejects an invalid percent escape" url-reject-percent \
+    "http://%"
+run_rejected_url_case "server URL rejects a missing host" url-reject-host \
+    "http://"
+run_rejected_url_case "server URL rejects a non-http scheme" url-reject-scheme \
+    "ftp://x"
+run_rejected_url_case "server URL rejects an empty flag value" url-reject-empty ""
+
+run_accepted_url_case "server URL accepts port 65535" url-accept-65535 \
+    "http://localhost:65535"
+run_accepted_url_case "server URL accepts an ordinary port" url-accept-port \
+    "http://localhost:8080"
+run_accepted_url_case "server URL accepts portless https with a path" url-accept-path \
+    "https://example.com/api/v1"
+run_accepted_url_case "server URL accepts a bracketed IPv6 host" url-accept-ipv6 \
+    "http://[::1]:8080"
+
+if [[ "${FREESIDE_CAN_GO_RED_CHILD:-false}" != true ]]; then
+    begin_case "rollback mutation makes the suite fail" can-go-red-rollback
+    mutant=$CASE_DIR/install-mac-app-no-rollback.sh
+    sed "s/^        mv \"\\\$superseded\" \"\\\$destination\" &&$/        true \&\&/" \
+        "$INSTALLER" >"$mutant"
+    if cmp -s "$INSTALLER" "$mutant" ||
+        ! grep -Fxq "        true &&" "$mutant" ||
+        ! bash -n "$mutant"; then
+        report_failure "rollback mutation anchor did not match the installer"
+    else
+        pass=$((pass + 1))
+    fi
+    set +e
+    FREESIDE_CAN_GO_RED_CHILD=true \
+        FREESIDE_INSTALLER_UNDER_TEST=$mutant \
+        bash "$0" >"$CASE_DIR/mutant-suite.log" 2>&1
+    mutant_rc=$?
+    set -e
+    if [[ "$mutant_rc" -ne 0 ]] &&
+        grep -Fq "FAIL [update verification failure restores the previous inode]" \
+            "$CASE_DIR/mutant-suite.log"; then
+        pass=$((pass + 1))
+    else
+        OUT=$(tail -40 "$CASE_DIR/mutant-suite.log")
+        report_failure "rollback mutant did not fail the targeted swap case"
+    fi
+
+    begin_case "URL-validator mutation makes the suite fail" can-go-red-url
+    if [[ "$has_real_swift" != true ]]; then
+        skip=$((skip + 1))
+        echo "SKIP [$CASE]: no real Swift toolchain; macOS CI runs this case"
+    else
+        mutant=$CASE_DIR/install-mac-app-no-url-validation.sh
+        sed "s/^if \\[\\[ \"\\\$server_url_given\" == true \\]\\] && ! swift -e /if false \&\& ! swift -e /" \
+            "$INSTALLER" >"$mutant"
+        if cmp -s "$INSTALLER" "$mutant" || ! bash -n "$mutant"; then
+            report_failure "URL-validator mutation anchor did not match the installer"
+        else
+            pass=$((pass + 1))
+        fi
+        set +e
+        FREESIDE_CAN_GO_RED_CHILD=true \
+            FREESIDE_INSTALLER_UNDER_TEST=$mutant \
+            bash "$0" >"$CASE_DIR/mutant-suite.log" 2>&1
+        mutant_rc=$?
+        set -e
+        if [[ "$mutant_rc" -ne 0 ]] &&
+            grep -Fq "FAIL [server URL rejects port zero]" \
+                "$CASE_DIR/mutant-suite.log"; then
+            pass=$((pass + 1))
+        else
+            OUT=$(tail -40 "$CASE_DIR/mutant-suite.log")
+            report_failure "URL-validator mutant did not fail the targeted URL case"
+        fi
+    fi
+fi
+
+echo "$pass assertions passed, $fail failed, $skip skipped"
 [[ "$fail" -eq 0 ]]

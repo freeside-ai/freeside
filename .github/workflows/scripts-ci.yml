@@ -6,7 +6,8 @@ name: scripts CI
 # suite (isolated synthetic repos, no network), the build-image reference
 # regression suite, and the check-agent-image regression suite (both use
 # scripted container-runtime stand-ins, no network), plus the Mac installer
-# recovery suite (command stand-ins, no Xcode).
+# recovery and rollback suite (command stand-ins, no Xcode). A macOS job runs
+# the installer's real Foundation URL validator and exclusive rename path.
 # The suites test the script implementations only; nothing here parses
 # PR prose. shellcheck
 # runs as a pinned, checksum-verified prebuilt binary, matching the
@@ -65,3 +66,15 @@ jobs:
         run: bash scripts/test-check-agent-image.sh
       - name: Mac installer recovery regression suite
         run: bash scripts/test-install-mac-app.sh
+
+  mac-installer:
+    name: Mac installer real-Swift matrix
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash syntax check
+        run: bash -n scripts/test-install-mac-app.sh app/scripts/install-mac-app.sh
+      - name: Installer matrix with rename stand-in
+        run: bash scripts/test-install-mac-app.sh
+      - name: Installer matrix with real exclusive rename
+        run: FREESIDE_TEST_REAL_RENAME=true bash scripts/test-install-mac-app.sh
