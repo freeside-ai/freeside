@@ -2,16 +2,17 @@ name: scripts CI
 
 # Gates the repo's maintained Bash scripts: bash syntax and shellcheck
 # over every script under scripts/ and app/scripts/ (the set AGENTS.md
-# tells contributors to run), plus the merge-result-audit regression
-# suite (isolated synthetic repos, no network), the build-image reference
-# regression suite, and the check-agent-image regression suite (both use
-# scripted container-runtime stand-ins, no network), plus the Mac installer
-# recovery and rollback suite (command stand-ins, no Xcode). A macOS job runs
-# the installer's real Foundation URL validator and exclusive rename path.
+# tells contributors to run), plus the commit-message and
+# merge-result-audit regression suites (isolated synthetic repos, no
+# network), the build-image reference regression suite, and the
+# check-agent-image regression suite (both use scripted container-runtime
+# stand-ins, no network), plus the Mac installer recovery and rollback suite
+# (command stand-ins, no Xcode). A macOS job runs the installer's real
+# Foundation URL validator and exclusive rename path.
 # The suites test the script implementations only; nothing here parses
-# PR prose. shellcheck
-# runs as a pinned, checksum-verified prebuilt binary, matching the
-# pinned-vacuum/golangci-lint determinism convention (a floating linter
+# PR prose. Shellcheck runs as a pinned, checksum-verified prebuilt binary,
+# matching the pinned-vacuum/golangci-lint determinism convention (a
+# floating linter
 # is nondeterministic verification).
 
 on:
@@ -60,6 +61,8 @@ jobs:
         run: ./shellcheck-v${SHELLCHECK_VERSION}/shellcheck scripts/*.sh app/scripts/*.sh
       - name: build-image reference regression suite
         run: bash scripts/test-build-image-references.sh
+      - name: commit-message regression suite
+        run: bash scripts/test-check-commit-messages.sh
       - name: merge-result-audit regression suite
         run: bash scripts/test-merge-result-audit.sh
       - name: check-agent-image regression suite
