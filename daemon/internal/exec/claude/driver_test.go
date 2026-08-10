@@ -903,7 +903,7 @@ func TestPostSeedAuthStoreCancellationPreservesSeedingForRecovery(t *testing.T) 
 	volumes := &secondLookupRefusingVolumes{
 		err: context.Canceled, entered: make(chan struct{}), release: make(chan struct{}),
 	}
-	d.volumes = volumes
+	d.provider = claudeProvider{volumes: volumes}
 	spec := testStartSpec()
 	inputs := stageInputs(t, &spec)
 	if err := d.StartWithInputs(context.Background(), testInvoke, spec,

@@ -20,6 +20,36 @@ var ErrSeedRetryable = errors.New("claude driver seed is retryable")
 // be converted into indefinitely retryable work during shutdown.
 var ErrSeedRefused = errors.New("claude driver seed was refused")
 
+// Provider supplies the behavior that varies between stage providers. The
+// durable state machine owns every other transition and persistence rule.
+type Provider interface {
+	HandoffSpec(context.Context, ProviderHandoffInput) (ward.HandoffSpec, error)
+	RenderPrompt(ProviderPromptInputs) (string, error)
+	RunID(domain.InvocationID) string
+	Workspace(domain.InvocationID) string
+	PrepareFailedStatus() int
+}
+
+// ProviderHandoffInput is the durable input needed to render one provider's
+// ward handoff request.
+type ProviderHandoffInput struct {
+	InvocationID domain.InvocationID
+	RunID        string
+	Spec         exec.StartSpec
+	Seed         string
+	Prompt       string
+	Instructions ward.VendorInstructions
+	Preparation  []string
+}
+
+// ProviderPromptInputs are the admitted immutable bodies a provider renders
+// into its invocation prompt.
+type ProviderPromptInputs struct {
+	Specification []byte
+	PromptPackage []byte
+	Policy        []byte
+}
+
 // Gate is the ward workspace-handoff gate (production: *ward.Backend). The
 // driver never talks to a container runtime directly: every containment
 // property §5.4 and §5.7 require is the gate's, and a driver-side shortcut

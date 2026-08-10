@@ -108,7 +108,7 @@ type Driver struct {
 	outcomes          OutcomeRecorder
 	authority         AdmissionAuthority
 	artifacts         Artifacts
-	volumes           AuthStoreVolumes
+	provider          Provider
 	preJob            func(context.Context, domain.InvocationID) error
 	imports           importer.Options
 	prepare           []string
@@ -192,7 +192,7 @@ func New(cfg Config) (*Driver, error) {
 		gate: cfg.Gate, seeder: cfg.Seeder,
 		seedFS:  seedFS,
 		exports: cfg.Exports, outcomes: cfg.Outcomes, authority: cfg.Authority,
-		artifacts: cfg.Artifacts, volumes: cfg.Volumes,
+		artifacts: cfg.Artifacts, provider: claudeProvider{volumes: cfg.Volumes},
 		preJob:  cfg.PreJob,
 		imports: cfg.Import, prepare: slices.Clone(cfg.Preparation),
 		now: cfg.Now, lifetime: cfg.Lifetime,
@@ -254,12 +254,12 @@ func (d *Driver) StartWithInputs(
 		return err
 	}
 	materialized := durableInputsFrom(inputs)
-	prompt, err := renderPromptParts(materialized)
+	prompt, err := d.provider.RenderPrompt(providerPromptInputsFrom(materialized))
 
 	now := d.now().UTC()
 	in := intent{
-		InvocationID: id, RunID: RunIDFor(id), Phase: phaseSeeding, Spec: spec,
-		Seed: filepath.Join(d.seedRoot, RunIDFor(id)), Prompt: prompt,
+		InvocationID: id, RunID: d.provider.RunID(id), Phase: phaseSeeding, Spec: spec,
+		Seed: filepath.Join(d.seedRoot, d.provider.RunID(id)), Prompt: prompt,
 		Inputs: materialized, Instructions: instructions,
 		// Capture the composition-derived hydration argv into the durable
 		// record so recovery rebuilds the launch command from the intent, not

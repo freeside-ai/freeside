@@ -761,7 +761,7 @@ func (d *Driver) cleanupTerminalSeed(in intent) error {
 	if d.seedFS == nil {
 		return errSeedCleanupAfterClose
 	}
-	runID := RunIDFor(in.InvocationID)
+	runID := d.provider.RunID(in.InvocationID)
 	for _, name := range []string{runID, runID + "-import"} {
 		if err := d.seedFS.RemoveAll(name); err != nil {
 			// Name the root-relative target, never filepath.Join(d.seedRoot,
@@ -1287,11 +1287,11 @@ func (d *Driver) recoverIntent(ctx context.Context, in intent) error {
 		// manifest guard exit 42), which is an environment fault the operator
 		// triages differently from an agent exit.
 		summary := fmt.Sprintf("Claude writer exited with status %d.", recovered.FailureStatus)
-		if recovered.FailureStatus == writerOutcomePrepareFailed {
+		if recovered.FailureStatus == d.provider.PrepareFailedStatus() {
 			summary = fmt.Sprintf(
 				"Workspace preparation failed before the agent started (status %d): "+
 					"the project-image hydration helper exited nonzero.",
-				writerOutcomePrepareFailed)
+				d.provider.PrepareFailedStatus())
 		}
 		return d.commitRecoveredTerminal(in.InvocationID, exec.StageResult{
 			InvocationID: in.InvocationID,

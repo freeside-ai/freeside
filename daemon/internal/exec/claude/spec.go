@@ -86,6 +86,24 @@ func RunIDFor(id domain.InvocationID) string {
 // creates for one invocation.
 func WorkspaceFor(id domain.InvocationID) string { return ward.WorkspaceRef(RunIDFor(id)) }
 
+type claudeProvider struct {
+	volumes AuthStoreVolumes
+}
+
+func (claudeProvider) RunID(id domain.InvocationID) string { return RunIDFor(id) }
+
+func (claudeProvider) Workspace(id domain.InvocationID) string { return WorkspaceFor(id) }
+
+func (claudeProvider) PrepareFailedStatus() int { return writerOutcomePrepareFailed }
+
+func (claudeProvider) RenderPrompt(inputs ProviderPromptInputs) (string, error) {
+	return renderPromptParts(durableInputs{
+		Specification: inputs.Specification,
+		PromptPackage: inputs.PromptPackage,
+		Policy:        inputs.Policy,
+	})
+}
+
 // maxPromptBytes bounds the rendered prompt below Linux's 128-KiB
 // MAX_ARG_STRLEN. It travels inside one sh -c argument because the writer gets
 // no stdin and ward's mount vocabulary is volume-only. Shell quoting expands
@@ -260,6 +278,12 @@ func shellQuote(s string) string {
 // binding rather than a driver-side name, and the vendor instructions are
 // the materialized bytes the admission froze.
 func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, error) {
+	return d.provider.HandoffSpec(ctx, providerHandoffInputFrom(in))
+}
+
+func (p claudeProvider) HandoffSpec(
+	ctx context.Context, in ProviderHandoffInput,
+) (ward.HandoffSpec, error) {
 	id, spec := in.InvocationID, in.Spec
 	if spec.CredentialMode != domain.CredentialSubscriptionContained {
 		return ward.HandoffSpec{}, fmt.Errorf(
@@ -279,7 +303,7 @@ func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, 
 			"%w: admitted workspace %q, driver derives %q",
 			ErrUnsupportedStart, spec.Workspace, want)
 	}
-	volume, err := d.volumes.AuthStoreVolume(ctx, spec.AuthIdentityID)
+	volume, err := p.volumes.AuthStoreVolume(ctx, spec.AuthIdentityID)
 	if err != nil {
 		return ward.HandoffSpec{}, fmt.Errorf("resolve auth store volume: %w", err)
 	}

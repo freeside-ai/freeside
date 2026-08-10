@@ -107,6 +107,26 @@ func durableInputsFrom(inputs exec.StageInputs) durableInputs {
 	}
 }
 
+func providerPromptInputsFrom(inputs durableInputs) ProviderPromptInputs {
+	return ProviderPromptInputs{
+		Specification: slices.Clone(inputs.Specification),
+		PromptPackage: slices.Clone(inputs.PromptPackage),
+		Policy:        slices.Clone(inputs.Policy),
+	}
+}
+
+func providerHandoffInputFrom(in intent) ProviderHandoffInput {
+	return ProviderHandoffInput{
+		InvocationID: in.InvocationID,
+		RunID:        in.RunID,
+		Spec:         in.Spec,
+		Seed:         in.Seed,
+		Prompt:       in.Prompt,
+		Instructions: in.Instructions,
+		Preparation:  slices.Clone(in.Preparation),
+	}
+}
+
 func (i intent) validate() error {
 	switch {
 	case i.InvocationID == "":
@@ -215,7 +235,7 @@ func releasedFrom(out exportOutcome) *releasedExport {
 // hashed into the run id, so an id carrying path separators cannot escape
 // the state directory.
 func (d *Driver) intentPath(id domain.InvocationID) string {
-	return filepath.Join(d.dir, RunIDFor(id)+".json")
+	return filepath.Join(d.dir, d.provider.RunID(id)+".json")
 }
 
 // loadIntent reads one durable intent. Absence returns ErrUnknownInvocation,
@@ -372,9 +392,9 @@ func (d *Driver) regateWithCurrentPolicy(
 	ctx context.Context, i intent, forceCurrent, applyCurrentPolicy bool,
 ) error {
 	switch {
-	case i.RunID != RunIDFor(i.InvocationID):
+	case i.RunID != d.provider.RunID(i.InvocationID):
 		return fmt.Errorf("%w: intent %s names run %q, derivation gives %q",
-			ErrUnsupportedStart, i.InvocationID, i.RunID, RunIDFor(i.InvocationID))
+			ErrUnsupportedStart, i.InvocationID, i.RunID, d.provider.RunID(i.InvocationID))
 	case i.Spec.CredentialMode != domain.CredentialSubscriptionContained:
 		return fmt.Errorf("%w: intent %s carries credential mode %q",
 			ErrUnsupportedStart, i.InvocationID, i.Spec.CredentialMode)
@@ -384,13 +404,13 @@ func (d *Driver) regateWithCurrentPolicy(
 	case i.Spec.AuthIdentityID == "":
 		return fmt.Errorf("%w: intent %s names no auth identity",
 			ErrUnsupportedStart, i.InvocationID)
-	case i.Spec.Workspace != WorkspaceFor(i.InvocationID):
+	case i.Spec.Workspace != d.provider.Workspace(i.InvocationID):
 		return fmt.Errorf("%w: intent %s names workspace %q, derivation gives %q",
-			ErrUnsupportedStart, i.InvocationID, i.Spec.Workspace, WorkspaceFor(i.InvocationID))
-	case i.Seed != filepath.Join(d.seedRoot, RunIDFor(i.InvocationID)):
+			ErrUnsupportedStart, i.InvocationID, i.Spec.Workspace, d.provider.Workspace(i.InvocationID))
+	case i.Seed != filepath.Join(d.seedRoot, d.provider.RunID(i.InvocationID)):
 		return fmt.Errorf("%w: intent %s names seed %q, derivation gives %q",
 			ErrUnsupportedStart, i.InvocationID, i.Seed,
-			filepath.Join(d.seedRoot, RunIDFor(i.InvocationID)))
+			filepath.Join(d.seedRoot, d.provider.RunID(i.InvocationID)))
 	}
 	if err := i.Spec.Base.Validate(); err != nil {
 		return fmt.Errorf("intent %s base: %w", i.InvocationID, err)
@@ -465,7 +485,7 @@ func (d *Driver) regateWithCurrentPolicy(
 				ErrUnsupportedStart, i.InvocationID, got, *vendor.Digest)
 		}
 	}
-	wantPrompt, promptErr := renderPromptParts(i.Inputs)
+	wantPrompt, promptErr := d.provider.RenderPrompt(providerPromptInputsFrom(i.Inputs))
 	if promptErr != nil {
 		if i.Phase != phaseCommitted || i.Result == nil ||
 			i.Result.Status != exec.StatusFailed || i.Prompt != "" ||
@@ -566,7 +586,7 @@ func (d *Driver) saveIntent(in intent) error {
 	if err != nil {
 		return fmt.Errorf("encode driver intent %s: %w", in.InvocationID, err)
 	}
-	tmp, err := os.CreateTemp(d.dir, RunIDFor(in.InvocationID)+".*.tmp")
+	tmp, err := os.CreateTemp(d.dir, d.provider.RunID(in.InvocationID)+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("stage driver intent %s: %w", in.InvocationID, err)
 	}
