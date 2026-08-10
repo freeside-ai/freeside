@@ -181,3 +181,54 @@ func FuzzParse(f *testing.F) {
 		}
 	})
 }
+
+// FuzzFormatAndHex compares the shared writer and inverse against the former
+// open-coded spellings. The independent formulas keep this refute-first check
+// capable of catching a regression in the helpers themselves.
+func FuzzFormatAndHex(f *testing.F) {
+	f.Add([]byte{})
+	f.Add([]byte("freeside"))
+	f.Add([]byte(strings.Repeat("x", 4096)))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		sum := sha256.Sum256(data)
+		oldAddr := "sha256:" + hex.EncodeToString(sum[:])
+		if got := contentaddr.Format(sum[:]); got != oldAddr {
+			t.Fatalf("Format() = %q, old spelling = %q", got, oldAddr)
+		}
+		if got := contentaddr.Sum(data); got != oldAddr {
+			t.Fatalf("Sum() = %q, old spelling = %q", got, oldAddr)
+		}
+
+		oldHex := strings.TrimPrefix(oldAddr, "sha256:")
+		if got := contentaddr.Hex(oldAddr); got != oldHex {
+			t.Fatalf("Hex() = %q, old spelling = %q", got, oldHex)
+		}
+		if got, ok := contentaddr.FromHex(oldHex); !ok || got != oldAddr {
+			t.Fatalf("FromHex() = (%q, %v), want (%q, true)", got, ok, oldAddr)
+		}
+	})
+}
+
+// FuzzFromHex pins the inverse's accepted set independently of Parse.
+func FuzzFromHex(f *testing.F) {
+	for _, seed := range []string{"", hex64, strings.ToUpper(hex64), hex64[:63], hex64 + "0", strings.Repeat("g", 64)} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, hexDigits string) {
+		wantOK := len(hexDigits) == sha256.Size*2
+		for _, c := range hexDigits {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+				wantOK = false
+			}
+		}
+		wantAddr := ""
+		if wantOK {
+			wantAddr = "sha256:" + hexDigits
+		}
+		if got, ok := contentaddr.FromHex(hexDigits); ok != wantOK || got != wantAddr {
+			t.Fatalf("FromHex(%q) = (%q, %v), want (%q, %v)", hexDigits, got, ok, wantAddr, wantOK)
+		}
+	})
+}
