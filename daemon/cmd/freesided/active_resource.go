@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -16,6 +19,8 @@ import (
 // schedule kind (plan §5.16). An immediate startup pass restores convergence;
 // later passes use conditional requests through publish.Reconciler.
 const defaultActiveResourceInterval = 15 * time.Minute
+
+const activeResourceObservationFailureThreshold = 4
 
 type activeResourceReconciler struct {
 	store *store.Store
@@ -37,9 +42,10 @@ type activeResourceReconciler struct {
 	// ready resource after the item leaves the open state. evictedConcluded
 	// records whether the final, post-completion eviction has happened; both
 	// are process-local optimizations.
-	evictConcluded   func(domain.ReadyItemPRBinding, *int)
-	evictedConcluded map[domain.ItemID]bool
-	now              func() time.Time
+	evictConcluded      func(domain.ReadyItemPRBinding, *int)
+	evictedConcluded    map[domain.ItemID]bool
+	observationFailures map[domain.ItemID]int
+	now                 func() time.Time
 }
 
 type activeResourceObservation struct {
@@ -163,6 +169,10 @@ func (r *activeResourceReconciler) Reconcile(ctx context.Context) ([]error, erro
 			continue
 		}
 		if item.Status != domain.StatusOpen {
+			delete(r.observationFailures, item.ID)
+			if err := r.convergeObservationHealth(ctx, snapshots, item, true); err != nil {
+				return failures, fmt.Errorf("resolve ready resource observation health %s: %w", item.ID, err)
+			}
 			observation, err := r.observeCompletionOnly(ctx, item, r.now().UTC())
 			if err != nil {
 				failures = append(failures, fmt.Errorf("recover ready resource completion %s: %w", item.ID, err))
@@ -182,7 +192,21 @@ func (r *activeResourceReconciler) Reconcile(ctx context.Context) ([]error, erro
 		observation, err := r.observe(ctx, item, r.now().UTC())
 		if err != nil {
 			failures = append(failures, fmt.Errorf("reconcile ready resource %s: %w", item.ID, err))
+			if r.observationFailures == nil {
+				r.observationFailures = make(map[domain.ItemID]int)
+			}
+			r.observationFailures[item.ID]++
+			if r.observationFailures[item.ID] >= activeResourceObservationFailureThreshold {
+				if healthErr := r.convergeObservationHealth(ctx, snapshots, item, false); healthErr != nil {
+					return failures, fmt.Errorf(
+						"raise ready resource observation health %s: %w", item.ID, healthErr)
+				}
+			}
 			continue
+		}
+		delete(r.observationFailures, item.ID)
+		if err := r.convergeObservationHealth(ctx, snapshots, item, true); err != nil {
+			return failures, fmt.Errorf("resolve ready resource observation health %s: %w", item.ID, err)
 		}
 		// A native-observe failure is isolated: it is reported but never blocks
 		// the pull/issue commit below, and the next tick retries (plan §5.16).
@@ -215,6 +239,98 @@ func (r *activeResourceReconciler) Reconcile(ctx context.Context) ([]error, erro
 		}
 	}
 	return failures, nil
+}
+
+func activeResourceObservationHealthPrefix(itemID domain.ItemID) string {
+	digest := sha256.Sum256([]byte(itemID))
+	return fmt.Sprintf("active-resource-observation-%x-", digest[:])
+}
+
+func activeResourceObservationHealthItems(
+	snapshots []store.Snapshotted[domain.AttentionItem], itemID domain.ItemID,
+) []domain.AttentionItem {
+	prefix := activeResourceObservationHealthPrefix(itemID)
+	items := make([]domain.AttentionItem, 0, 1)
+	for _, snapshot := range snapshots {
+		item := snapshot.Value
+		if item.Type == domain.AttentionSystemHealth &&
+			item.Status == domain.StatusOpen &&
+			strings.HasPrefix(string(item.ID), prefix) {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+// convergeObservationHealth raises one advisory health item after persistent
+// failure and resolves every open incident item once the resource recovers or
+// is no longer active. The error itself is deliberately not persisted: remote
+// response text is untrusted, while the ready item ID is a trusted local
+// coordinate an operator can use to inspect the logs.
+func (r *activeResourceReconciler) convergeObservationHealth(
+	ctx context.Context,
+	snapshots []store.Snapshotted[domain.AttentionItem],
+	ready domain.AttentionItem,
+	healthy bool,
+) error {
+	existing := activeResourceObservationHealthItems(snapshots, ready.ID)
+	if (healthy && len(existing) == 0) || (!healthy && len(existing) == 1) {
+		return nil
+	}
+	attention := signet.NewService(r.store)
+	if healthy {
+		for _, item := range existing {
+			item.ItemVersion++
+			item.Status = domain.StatusResolved
+			if err := attention.PutItem(ctx, item); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if len(existing) > 0 {
+		for _, duplicate := range existing[1:] {
+			duplicate.ItemVersion++
+			duplicate.Status = domain.StatusResolved
+			if err := attention.PutItem(ctx, duplicate); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	var state store.ServerState
+	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		state, err = tx.ServerState(ctx)
+		return err
+	}); err != nil {
+		return err
+	}
+	posture := domain.HealthPostureAdvisory
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: domain.ItemID(fmt.Sprintf(
+			"%s%d", activeResourceObservationHealthPrefix(ready.ID), state.Revision+1,
+		)),
+		ProjectID: ready.ProjectID,
+		Subject:   domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		Type:      domain.AttentionSystemHealth, Priority: domain.PriorityHigh,
+		Reason: fmt.Sprintf(
+			"Active-resource observation for %s failed for %d consecutive passes",
+			ready.ID,
+			activeResourceObservationFailureThreshold,
+		),
+		RequestedDecision: []domain.Action{
+			domain.ActionRunDoctor,
+			domain.ActionAcknowledge,
+			domain.ActionStopUnattended,
+		},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+		Posture: &posture, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		return err
+	}
+	return attention.PutItem(ctx, item)
 }
 
 func (r *activeResourceReconciler) evictConcludedResource(

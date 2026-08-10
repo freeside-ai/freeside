@@ -20,8 +20,10 @@ import (
 // keep passing (#281). Every other janitor stub in this package is uniform, so
 // none of them can exercise the gate's scope.
 type coveredJanitorStatus struct {
-	covered map[int64]bool
-	faults  []publish.JanitorRegistrationFault
+	covered    map[int64]bool
+	faults     []publish.JanitorRegistrationFault
+	churn      []publish.JanitorRegistrationChurn
+	incomplete []publish.JanitorRegistrationIncomplete
 }
 
 func (s coveredJanitorStatus) ActiveFor(registrationID int64) bool {
@@ -34,6 +36,14 @@ func (s coveredJanitorStatus) AllowsRepository(registrationID, _, _ int64) bool 
 
 func (s coveredJanitorStatus) RegistrationFaults() []publish.JanitorRegistrationFault {
 	return s.faults
+}
+
+func (s coveredJanitorStatus) ChurningRegistrations() []publish.JanitorRegistrationChurn {
+	return s.churn
+}
+
+func (s coveredJanitorStatus) IncompleteRegistrations() []publish.JanitorRegistrationIncomplete {
+	return s.incomplete
 }
 
 // twoRegistrationForge answers /app/installations for both registrations of
@@ -147,6 +157,65 @@ func TestResolutionSurfacesAllRecordedFaultsBeforeCoverage(t *testing.T) {
 	}
 	if contacted(501) != 0 || contacted(601) != 0 {
 		t.Error("resolution contacted the forge before any registration had coverage")
+	}
+}
+
+func TestMintNamesEveryCompletedPassWithdrawal(t *testing.T) {
+	t.Parallel()
+	fault := errors.New("authority snapshot is unreadable")
+	registrationID := strconv.FormatInt(fixtureAppID, 10)
+	tests := []struct {
+		name      string
+		status    coveredJanitorStatus
+		want      string
+		wantCause error
+	}{
+		{
+			name: "fault",
+			status: coveredJanitorStatus{faults: []publish.JanitorRegistrationFault{{
+				RegistrationID: fixtureAppID, Err: fault,
+			}}},
+			want: "registration " + registrationID + " janitor fault", wantCause: fault,
+		},
+		{
+			name: "churn",
+			status: coveredJanitorStatus{churn: []publish.JanitorRegistrationChurn{{
+				RegistrationID: fixtureAppID, ConsecutivePasses: 3,
+			}}},
+			want: "registration " + registrationID + " janitor removal churn for 3 consecutive passes",
+		},
+		{
+			name: "incomplete",
+			status: coveredJanitorStatus{incomplete: []publish.JanitorRegistrationIncomplete{{
+				RegistrationID: fixtureAppID,
+			}}},
+			want: "registration " + registrationID + " janitor reconciliation incomplete: removal budget",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			ks := newRegisteredKeystore(t)
+			forge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			}))
+			defer forge.Close()
+			test.status.covered = map[int64]bool{}
+			minter := publish.NewMinterWithJanitor(
+				ks, forge.Client(), forge.URL, &captureRecorder{}, conformantTrust(t),
+				fixedNow, test.status,
+			)
+			_, err := minter.MintInstallationToken(context.Background(), testTrustRepo)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Resolve error = %v, want %q", err, test.want)
+			}
+			if errors.Is(err, publish.ErrJanitorInactive) {
+				t.Fatalf("Resolve error = %v, want attributed withdrawal", err)
+			}
+			if test.wantCause != nil && !errors.Is(err, test.wantCause) {
+				t.Fatalf("Resolve error = %v, want cause %v", err, test.wantCause)
+			}
+		})
 	}
 }
 

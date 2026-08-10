@@ -130,6 +130,14 @@ type JanitorRegistrationChurn struct {
 	ConsecutivePasses int
 }
 
+// JanitorRegistrationIncomplete identifies a registration whose latest pass
+// could not visit every local credential record within the pass-wide removal
+// budget. It is distinct from a registration fault or removal churn so every
+// fail-closed coverage withdrawal has one attributable cause.
+type JanitorRegistrationIncomplete struct {
+	RegistrationID int64
+}
+
 // InstallationJanitor reconciles every App registration against canonical
 // installation-to-repository bindings and the current pending envelope. It has
 // no signet or AttentionItem dependency: unsolicited GitHub state can be
@@ -144,12 +152,14 @@ type InstallationJanitor struct {
 	now          func() time.Time
 	maxRemovals  int
 
-	cycleMu sync.Mutex
-	mu      sync.RWMutex
-	running bool
-	covered map[int64]registrationCoverage
-	faults  []JanitorRegistrationFault
-	churn   []JanitorRegistrationChurn
+	cycleMu    sync.Mutex
+	mu         sync.RWMutex
+	running    bool
+	passDone   chan struct{}
+	covered    map[int64]registrationCoverage
+	faults     []JanitorRegistrationFault
+	churn      []JanitorRegistrationChurn
+	incomplete []JanitorRegistrationIncomplete
 }
 
 // NewInstallationJanitor constructs a janitor with a hard per-cycle removal
@@ -206,6 +216,28 @@ func (j *InstallationJanitor) ActiveFor(registrationID int64) bool {
 	return ok
 }
 
+// AwaitActiveFor waits for a reconciliation pass already in progress to
+// publish its complete result before reporting registration coverage. It does
+// not preserve stale coverage: the caller remains denied until the pass has
+// finished, then receives only that pass's result.
+func (j *InstallationJanitor) AwaitActiveFor(registrationID int64) bool {
+	if j == nil {
+		return false
+	}
+	for {
+		j.mu.RLock()
+		if j.passDone != nil {
+			done := j.passDone
+			j.mu.RUnlock()
+			<-done
+			continue
+		}
+		_, ok := j.covered[registrationID]
+		j.mu.RUnlock()
+		return ok
+	}
+}
+
 // AllowsRepository reports whether the latest complete pass matched a trusted
 // binding for the exact registration, installation, and repository. Pending
 // envelopes never enter this allow-set.
@@ -230,24 +262,43 @@ func (j *InstallationJanitor) AllowsRepository(registrationID, installationID, r
 // AwaitAllowsRepository returns the latest completed pass's exact trusted
 // grant observation. If a pass is in progress, it waits for that pass to
 // publish or withdraw coverage rather than exposing the deliberate transient
-// withdrawal between those two events. Onboarding uses this coordinated view;
-// ordinary runtime gates retain the immediate fail-closed view above.
+// withdrawal between those two events. Onboarding and the final runtime mint
+// gate use this coordinated view; direct status probes retain the immediate
+// fail-closed view above.
 func (j *InstallationJanitor) AwaitAllowsRepository(
 	registrationID, installationID, repositoryID int64,
 ) bool {
 	if j == nil {
 		return false
 	}
-	j.cycleMu.Lock()
-	defer j.cycleMu.Unlock()
-	return j.AllowsRepository(registrationID, installationID, repositoryID)
+	for {
+		j.mu.RLock()
+		if j.passDone != nil {
+			done := j.passDone
+			j.mu.RUnlock()
+			<-done
+			continue
+		}
+		coverage, ok := j.covered[registrationID]
+		if !ok {
+			j.mu.RUnlock()
+			return false
+		}
+		repositories, ok := coverage.repositories[installationID]
+		if !ok {
+			j.mu.RUnlock()
+			return false
+		}
+		_, ok = repositories[repositoryID]
+		j.mu.RUnlock()
+		return ok
+	}
 }
 
 // WithStableCoverage runs fn while no reconciliation pass can withdraw or
 // replace the latest complete coverage snapshot. It is reserved for bounded
 // operational probes, such as scheduled conformance, whose own authenticated
 // reads must not fail merely because the janitor starts a concurrent pass.
-// Ordinary runtime gates continue to use the immediate fail-closed view.
 func (j *InstallationJanitor) WithStableCoverage(fn func() error) error {
 	if j == nil || fn == nil {
 		return errors.New("installation janitor: nil stable-coverage dependency")
@@ -295,12 +346,40 @@ func (j *InstallationJanitor) PendingReady(
 func (j *InstallationJanitor) AwaitPendingReady(
 	envelope PendingInstallationEnvelope,
 ) (int64, bool) {
-	if j == nil {
+	if j == nil || envelope.RegistrationID <= 0 || envelope.InstallationID < 0 ||
+		envelope.ActiveEpoch <= 0 || envelope.DurableIntentRevision <= 0 ||
+		len(envelope.ExpectedRepositoryIDs) == 0 {
 		return 0, false
 	}
-	j.cycleMu.Lock()
-	defer j.cycleMu.Unlock()
-	return j.PendingReady(envelope)
+	for {
+		j.mu.RLock()
+		if j.passDone != nil {
+			done := j.passDone
+			j.mu.RUnlock()
+			<-done
+			continue
+		}
+		coverage, ok := j.covered[envelope.RegistrationID]
+		if !ok || coverage.pendingReady == nil ||
+			(envelope.InstallationID > 0 &&
+				coverage.pendingReady.installationID != envelope.InstallationID) ||
+			coverage.pendingReady.activeEpoch != envelope.ActiveEpoch ||
+			coverage.pendingReady.durableIntentRevision != envelope.DurableIntentRevision ||
+			len(coverage.pendingReady.repositories) != len(envelope.ExpectedRepositoryIDs) {
+			j.mu.RUnlock()
+			return 0, false
+		}
+		ready := true
+		for _, repositoryID := range envelope.ExpectedRepositoryIDs {
+			if _, ok := coverage.pendingReady.repositories[repositoryID]; !ok {
+				ready = false
+				break
+			}
+		}
+		installationID := coverage.pendingReady.installationID
+		j.mu.RUnlock()
+		return installationID, ready
+	}
 }
 
 // RegistrationFaults reports the registrations the most recently completed
@@ -329,6 +408,19 @@ func (j *InstallationJanitor) ChurningRegistrations() []JanitorRegistrationChurn
 	j.mu.RLock()
 	defer j.mu.RUnlock()
 	return slices.Clone(j.churn)
+}
+
+// IncompleteRegistrations reports registrations whose most recently
+// completed pass did not visit every local credential record and had no more
+// specific fault or churn diagnosis. Like the other diagnostics, it remains
+// published while the next pass runs.
+func (j *InstallationJanitor) IncompleteRegistrations() []JanitorRegistrationIncomplete {
+	if j == nil {
+		return nil
+	}
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return slices.Clone(j.incomplete)
 }
 
 // Run keeps reconciliation active until ctx is canceled. Coverage is published
@@ -360,9 +452,11 @@ func (j *InstallationJanitor) Run(ctx context.Context, interval time.Duration) e
 		// churning registration reporting as merely unvisited for as long as
 		// each pass takes.
 		j.cycleMu.Lock()
+		done := j.beginPublishedPass()
 		j.withdrawCoverage()
 		_, pass, err := j.runCycle(ctx)
 		if err != nil {
+			j.endPublishedPass(done)
 			j.cycleMu.Unlock()
 			if errors.Is(err, context.Canceled) {
 				return nil
@@ -370,6 +464,7 @@ func (j *InstallationJanitor) Run(ctx context.Context, interval time.Duration) e
 			return err
 		}
 		j.publishPass(pass)
+		j.endPublishedPass(done)
 		j.cycleMu.Unlock()
 
 		timer := time.NewTimer(interval)
@@ -403,6 +498,8 @@ func (j *InstallationJanitor) RunScheduledPass(ctx context.Context) error {
 	if running {
 		return errors.New("installation janitor: always-on loop is already running")
 	}
+	done := j.beginPublishedPass()
+	defer j.endPublishedPass(done)
 	j.withdrawCoverage()
 	_, pass, err := j.runCycle(ctx)
 	if err != nil {
@@ -410,6 +507,23 @@ func (j *InstallationJanitor) RunScheduledPass(ctx context.Context) error {
 	}
 	j.publishPass(pass)
 	return nil
+}
+
+func (j *InstallationJanitor) beginPublishedPass() chan struct{} {
+	done := make(chan struct{})
+	j.mu.Lock()
+	j.passDone = done
+	j.mu.Unlock()
+	return done
+}
+
+func (j *InstallationJanitor) endPublishedPass(done chan struct{}) {
+	j.mu.Lock()
+	if j.passDone == done {
+		j.passDone = nil
+		close(done)
+	}
+	j.mu.Unlock()
 }
 
 // RunCycle performs one bounded pass without activating the runtime gate or
@@ -534,6 +648,17 @@ func (j *InstallationJanitor) runCycle(
 		}
 	}
 	slices.Sort(pass.incomplete)
+	classified := make(map[int64]struct{}, len(pass.faults)+len(pass.churn))
+	for _, fault := range pass.faults {
+		classified[fault.RegistrationID] = struct{}{}
+	}
+	for _, registrationID := range pass.churn {
+		classified[registrationID] = struct{}{}
+	}
+	pass.incomplete = slices.DeleteFunc(pass.incomplete, func(registrationID int64) bool {
+		_, ok := classified[registrationID]
+		return ok
+	})
 	pass.covered = withdrawUnreconciled(
 		pass.covered,
 		pass.faults,
@@ -1199,10 +1324,11 @@ func (j *InstallationJanitor) withdrawCoverage() {
 	j.mu.Unlock()
 }
 
-// publishPass replaces the gate's whole view of the latest pass. Coverage,
-// faults, and churn are written together. Churn persists without incrementing
-// when the pass-wide bound skips a known registration, and clears only after a
-// clean or failed reconciliation or when the registration leaves the keystore.
+// publishPass replaces the gate's whole view of the latest pass. Coverage and
+// every withdrawal diagnosis are written together. Churn persists without
+// incrementing when the pass-wide bound skips a known registration, and
+// clears only after a clean or failed reconciliation or when the registration
+// leaves the keystore.
 // A reader that takes diagnostics in separate calls can still straddle a pass
 // boundary, which may report a less specific inactive state but never grants
 // coverage.
@@ -1247,9 +1373,23 @@ func (j *InstallationJanitor) publishPass(pass janitorPass) {
 	slices.SortFunc(nextChurn, func(a, b JanitorRegistrationChurn) int {
 		return cmp.Compare(a.RegistrationID, b.RegistrationID)
 	})
+	churning := make(map[int64]struct{}, len(nextChurn))
+	for _, registration := range nextChurn {
+		churning[registration.RegistrationID] = struct{}{}
+	}
+	nextIncomplete := make([]JanitorRegistrationIncomplete, 0, len(pass.incomplete))
+	for _, registrationID := range pass.incomplete {
+		if _, ok := churning[registrationID]; ok {
+			continue
+		}
+		nextIncomplete = append(nextIncomplete, JanitorRegistrationIncomplete{
+			RegistrationID: registrationID,
+		})
+	}
 	j.covered = covered
 	j.faults = slices.Clone(pass.faults)
 	j.churn = nextChurn
+	j.incomplete = nextIncomplete
 	j.mu.Unlock()
 }
 
@@ -1269,5 +1409,6 @@ func (j *InstallationJanitor) finishRun() {
 	j.covered = map[int64]registrationCoverage{}
 	j.faults = nil
 	j.churn = nil
+	j.incomplete = nil
 	j.mu.Unlock()
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -986,6 +987,90 @@ func TestActiveResourceReconcileRetriesTransientFailureWithoutChurn(t *testing.T
 	}
 	if after.Revision != before.Revision {
 		t.Fatalf("unchanged observation advanced revision %d -> %d", before.Revision, after.Revision)
+	}
+}
+
+func TestActiveResourceReconcileConvergesPersistentObservationHealth(t *testing.T) {
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	remoteFailure := errors.New("remote response carried untrusted detail")
+	failing := true
+	reconciler := activeResourceReconciler{
+		store: st,
+		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			if failing {
+				return publish.PullObservation{}, remoteFailure
+			}
+			return exactPull("open", false), nil
+		},
+		now: func() time.Time { return activeResourceTestTime },
+	}
+	readHealth := func() []domain.AttentionItem {
+		t.Helper()
+		var got []domain.AttentionItem
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			snapshots, err := tx.ListAttentionItems(ctx)
+			if err != nil {
+				return err
+			}
+			prefix := activeResourceObservationHealthPrefix(item.ID)
+			for _, snapshot := range snapshots {
+				candidate := snapshot.Value
+				if strings.HasPrefix(string(candidate.ID), prefix) {
+					got = append(got, candidate)
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	for pass := 1; pass < activeResourceObservationFailureThreshold; pass++ {
+		failures, err := reconciler.Reconcile(ctx)
+		if err != nil || len(failures) != 1 || !errors.Is(failures[0], remoteFailure) {
+			t.Fatalf("failure pass %d = %v, %v", pass, failures, err)
+		}
+		if health := readHealth(); len(health) != 0 {
+			t.Fatalf("failure pass %d health = %+v, want none before threshold", pass, health)
+		}
+	}
+	if failures, err := reconciler.Reconcile(ctx); err != nil ||
+		len(failures) != 1 || !errors.Is(failures[0], remoteFailure) {
+		t.Fatalf("threshold pass = %v, %v", failures, err)
+	}
+	health := readHealth()
+	if len(health) != 1 || health[0].Status != domain.StatusOpen ||
+		health[0].Posture == nil || *health[0].Posture != domain.HealthPostureAdvisory {
+		t.Fatalf("threshold health = %+v, want one open advisory item", health)
+	}
+	if strings.Contains(health[0].Reason, remoteFailure.Error()) {
+		t.Fatalf("health reason persisted untrusted failure text: %q", health[0].Reason)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		return tx.RequireUnattendedOperationOpen(ctx)
+	}); err != nil {
+		t.Fatalf("advisory observation health blocked unrelated admission: %v", err)
+	}
+	version := health[0].ItemVersion
+	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 1 {
+		t.Fatalf("continued failure = %v, %v", failures, err)
+	}
+	health = readHealth()
+	if len(health) != 1 || health[0].ItemVersion != version {
+		t.Fatalf("continued failure health = %+v, want one unchanged item", health)
+	}
+
+	failing = false
+	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+		t.Fatalf("recovery = %v, %v", failures, err)
+	}
+	health = readHealth()
+	if len(health) != 1 || health[0].Status != domain.StatusResolved ||
+		health[0].ItemVersion != version+1 {
+		t.Fatalf("recovered health = %+v, want one resolved item", health)
 	}
 }
 

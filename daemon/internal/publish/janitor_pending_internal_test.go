@@ -107,3 +107,49 @@ func TestStableCoverageExcludesReconciliationWithdrawal(t *testing.T) {
 		t.Fatal("reconciliation did not withdraw coverage after coordinated probe")
 	}
 }
+
+func TestCoordinatedCoverageDoesNotRelockStableSection(t *testing.T) {
+	t.Parallel()
+	janitor := &InstallationJanitor{
+		covered: map[int64]registrationCoverage{
+			11: {
+				registrationID: 11,
+				repositories: map[int64]map[int64]struct{}{
+					22: {33: {}},
+				},
+				pendingReady: &pendingCoverage{
+					activeEpoch: 7, durableIntentRevision: 9,
+					installationID: 22, repositories: map[int64]struct{}{33: {}},
+				},
+			},
+		},
+	}
+	envelope := PendingInstallationEnvelope{
+		ActiveEpoch: 7, DurableIntentRevision: 9,
+		RegistrationID: 11, InstallationID: 22,
+		ExpectedRepositoryIDs: []int64{33},
+	}
+	probeDone := make(chan error, 1)
+	go func() {
+		probeDone <- janitor.WithStableCoverage(func() error {
+			if !janitor.AwaitActiveFor(11) {
+				return errors.New("coordinated active probe denied stable coverage")
+			}
+			if !janitor.AwaitAllowsRepository(11, 22, 33) {
+				return errors.New("coordinated repository probe denied stable coverage")
+			}
+			if installationID, ready := janitor.AwaitPendingReady(envelope); !ready || installationID != 22 {
+				return errors.New("coordinated pending probe denied stable coverage")
+			}
+			return nil
+		})
+	}()
+	select {
+	case err := <-probeDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("coordinated coverage probe deadlocked inside stable section")
+	}
+}
