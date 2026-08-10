@@ -1,4 +1,4 @@
-package claude
+package stage
 
 import (
 	"bytes"
@@ -116,13 +116,15 @@ func providerPromptInputsFrom(inputs durableInputs) ProviderPromptInputs {
 }
 
 func providerHandoffInputFrom(in intent) ProviderHandoffInput {
+	instructions := in.Instructions
+	instructions.Body = slices.Clone(instructions.Body)
 	return ProviderHandoffInput{
 		InvocationID: in.InvocationID,
 		RunID:        in.RunID,
-		Spec:         in.Spec,
+		Spec:         in.Spec.Clone(),
 		Seed:         in.Seed,
 		Prompt:       in.Prompt,
-		Instructions: in.Instructions,
+		Instructions: instructions,
 		Preparation:  slices.Clone(in.Preparation),
 	}
 }
@@ -200,7 +202,7 @@ type executionReplay struct {
 }
 
 // ExecutionReplay is the authenticated, directory-free description of one
-// completed Claude export. It deliberately returns content addresses rather
+// completed provider export. It deliberately returns content addresses rather
 // than bytes: the production composer materializes them through the same
 // durable blob store and re-runs the hostile importer before verification.
 type ExecutionReplay struct {
@@ -231,11 +233,11 @@ func releasedFrom(out exportOutcome) *releasedExport {
 	}
 }
 
-// intentPath is one invocation's state file. The name is the invocation id
-// hashed into the run id, so an id carrying path separators cannot escape
-// the state directory.
-func (d *Driver) intentPath(id domain.InvocationID) string {
-	return filepath.Join(d.dir, d.provider.RunID(id)+".json")
+// intentPath joins a run ID only after the caller validates it against the
+// ward-safe provider contract; it never accepts invocation or provider output
+// directly.
+func (d *Driver) intentPath(runID string) string {
+	return filepath.Join(d.dir, runID+".json")
 }
 
 // loadIntent reads one durable intent. Absence returns ErrUnknownInvocation,
@@ -259,7 +261,20 @@ func (d *Driver) loadIntentAdmission(
 func (d *Driver) loadIntentRegated(
 	ctx context.Context, id domain.InvocationID, applyCurrentPolicy bool,
 ) (intent, error) {
-	body, err := os.ReadFile(d.intentPath(id))
+	runID, err := d.validatedProviderRunID(id)
+	if err != nil {
+		return intent{}, err
+	}
+	return d.loadIntentRegatedForRunID(ctx, id, runID, applyCurrentPolicy)
+}
+
+func (d *Driver) loadIntentRegatedForRunID(
+	ctx context.Context,
+	id domain.InvocationID,
+	runID string,
+	applyCurrentPolicy bool,
+) (intent, error) {
+	body, err := os.ReadFile(d.intentPath(runID))
 	if errors.Is(err, os.ErrNotExist) {
 		return intent{}, fmt.Errorf("invocation %s: %w", id, exec.ErrUnknownInvocation)
 	}
@@ -391,10 +406,14 @@ func (d *Driver) regateAdmission(ctx context.Context, i intent) error {
 func (d *Driver) regateWithCurrentPolicy(
 	ctx context.Context, i intent, forceCurrent, applyCurrentPolicy bool,
 ) error {
+	runID, err := d.validatedProviderRunID(i.InvocationID)
+	if err != nil {
+		return err
+	}
 	switch {
-	case i.RunID != d.provider.RunID(i.InvocationID):
+	case i.RunID != runID:
 		return fmt.Errorf("%w: intent %s names run %q, derivation gives %q",
-			ErrUnsupportedStart, i.InvocationID, i.RunID, d.provider.RunID(i.InvocationID))
+			ErrUnsupportedStart, i.InvocationID, i.RunID, runID)
 	case i.Spec.CredentialMode != domain.CredentialSubscriptionContained:
 		return fmt.Errorf("%w: intent %s carries credential mode %q",
 			ErrUnsupportedStart, i.InvocationID, i.Spec.CredentialMode)
@@ -407,10 +426,10 @@ func (d *Driver) regateWithCurrentPolicy(
 	case i.Spec.Workspace != d.provider.Workspace(i.InvocationID):
 		return fmt.Errorf("%w: intent %s names workspace %q, derivation gives %q",
 			ErrUnsupportedStart, i.InvocationID, i.Spec.Workspace, d.provider.Workspace(i.InvocationID))
-	case i.Seed != filepath.Join(d.seedRoot, d.provider.RunID(i.InvocationID)):
+	case i.Seed != filepath.Join(d.seedRoot, runID):
 		return fmt.Errorf("%w: intent %s names seed %q, derivation gives %q",
 			ErrUnsupportedStart, i.InvocationID, i.Seed,
-			filepath.Join(d.seedRoot, d.provider.RunID(i.InvocationID)))
+			filepath.Join(d.seedRoot, runID))
 	}
 	if err := i.Spec.Base.Validate(); err != nil {
 		return fmt.Errorf("intent %s base: %w", i.InvocationID, err)
@@ -582,11 +601,14 @@ func (d *Driver) saveIntent(in intent) error {
 	if err := in.validate(); err != nil {
 		return err
 	}
+	if err := validateRunID(in.RunID); err != nil {
+		return fmt.Errorf("intent %s run ID: %w", in.InvocationID, err)
+	}
 	body, err := json.Marshal(in)
 	if err != nil {
 		return fmt.Errorf("encode driver intent %s: %w", in.InvocationID, err)
 	}
-	tmp, err := os.CreateTemp(d.dir, d.provider.RunID(in.InvocationID)+".*.tmp")
+	tmp, err := os.CreateTemp(d.dir, in.RunID+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("stage driver intent %s: %w", in.InvocationID, err)
 	}
@@ -603,7 +625,7 @@ func (d *Driver) saveIntent(in intent) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close driver intent %s: %w", in.InvocationID, err)
 	}
-	if err := os.Rename(name, d.intentPath(in.InvocationID)); err != nil {
+	if err := os.Rename(name, d.intentPath(in.RunID)); err != nil {
 		return fmt.Errorf("commit driver intent %s: %w", in.InvocationID, err)
 	}
 	// Syncing the file persists its contents; only syncing the directory
@@ -649,11 +671,14 @@ func (d *Driver) listIntents(ctx context.Context) ([]intent, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decode driver intent %s: %w", entry.Name(), err)
 		}
-		if entry.Name() != filepath.Base(d.intentPath(in.InvocationID)) {
+		if err := validateRunID(in.RunID); err != nil {
+			return nil, fmt.Errorf("driver intent %s run ID: %w", entry.Name(), err)
+		}
+		if entry.Name() != filepath.Base(d.intentPath(in.RunID)) {
 			return nil, fmt.Errorf(
 				"%w: driver intent %s names invocation %s whose canonical file is %s",
 				ErrUnsupportedStart, entry.Name(), in.InvocationID,
-				filepath.Base(d.intentPath(in.InvocationID)))
+				filepath.Base(d.intentPath(in.RunID)))
 		}
 		// The same fail-closed reconstruction gate loadIntent runs. Recovery
 		// hands this record's RunID straight to the ward gate, so an

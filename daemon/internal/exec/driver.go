@@ -166,6 +166,13 @@ func cloneStageInputSnapshot(in *domain.StageInputSnapshot) *domain.StageInputSn
 	return &cloned
 }
 
+// Clone returns a detached copy safe to hand to a component that must not
+// retain authority over the authenticated stage-input snapshot.
+func (s StartSpec) Clone() StartSpec {
+	s.StageInputs = cloneStageInputSnapshot(s.StageInputs)
+	return s
+}
+
 // StartSpec deliberately has no Validate method, unlike the other serialized
 // shapes here. A complete spec is only ever produced by
 // StartSpecFromAdmission, from a record whose own Validate already checked

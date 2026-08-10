@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/stage"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -96,12 +97,8 @@ func (claudeProvider) Workspace(id domain.InvocationID) string { return Workspac
 
 func (claudeProvider) PrepareFailedStatus() int { return writerOutcomePrepareFailed }
 
-func (claudeProvider) RenderPrompt(inputs ProviderPromptInputs) (string, error) {
-	return renderPromptParts(durableInputs{
-		Specification: inputs.Specification,
-		PromptPackage: inputs.PromptPackage,
-		Policy:        inputs.Policy,
-	})
+func (claudeProvider) RenderPrompt(inputs stage.ProviderPromptInputs) (string, error) {
+	return renderPromptParts(inputs)
 }
 
 // maxPromptBytes bounds the rendered prompt below Linux's 128-KiB
@@ -226,10 +223,14 @@ func sessionIDFor(id domain.InvocationID) string {
 // specification and resolved per-run policy. All three are admitted,
 // digest-verified bytes; the driver adds only the fixed framing.
 func renderPrompt(inputs exec.StageInputs) (string, error) {
-	return renderPromptParts(durableInputsFrom(inputs))
+	return renderPromptParts(stage.ProviderPromptInputs{
+		Specification: inputs.Specification().Bytes(),
+		PromptPackage: inputs.PromptPackage().Bytes(),
+		Policy:        inputs.Policy().Bytes(),
+	})
 }
 
-func renderPromptParts(inputs durableInputs) (string, error) {
+func renderPromptParts(inputs stage.ProviderPromptInputs) (string, error) {
 	for _, part := range []struct {
 		name string
 		body []byte
@@ -277,12 +278,8 @@ func shellQuote(s string) string {
 // admits, the leased auth-store volume comes from the trusted identity
 // binding rather than a driver-side name, and the vendor instructions are
 // the materialized bytes the admission froze.
-func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, error) {
-	return d.provider.HandoffSpec(ctx, providerHandoffInputFrom(in))
-}
-
 func (p claudeProvider) HandoffSpec(
-	ctx context.Context, in ProviderHandoffInput,
+	ctx context.Context, in stage.ProviderHandoffInput,
 ) (ward.HandoffSpec, error) {
 	id, spec := in.InvocationID, in.Spec
 	if spec.CredentialMode != domain.CredentialSubscriptionContained {

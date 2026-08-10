@@ -1,4 +1,4 @@
-package claude
+package stage
 
 import (
 	"context"
@@ -50,8 +50,8 @@ func orphan(t *testing.T, d *Driver, ph phase, released *releasedExport) intent 
 		t.Fatalf("render prompt: %v", err)
 	}
 	in := intent{
-		InvocationID: testInvoke, RunID: RunIDFor(testInvoke), Phase: ph, Spec: spec,
-		Seed: filepath.Join(d.seedRoot, RunIDFor(testInvoke)), Prompt: prompt,
+		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: ph, Spec: spec,
+		Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)), Prompt: prompt,
 		Inputs: durableInputsFrom(inputs), Instructions: instructions, Export: released,
 		RecordedAt: fixedNow, CommitDate: fixedNow,
 	}
@@ -136,7 +136,7 @@ func TestRecoveredPreparationFailureNamesTheEnvironmentFault(t *testing.T) {
 	gate := &stubGate{
 		recoverFn: func(string, ward.HandoffSpec) (*ward.RecoveryResult, error) {
 			return &ward.RecoveryResult{
-				Outcome: ward.RecoveryFailed, FailureStatus: writerOutcomePrepareFailed,
+				Outcome: ward.RecoveryFailed, FailureStatus: testPrepareFailedStatus,
 			}, nil
 		},
 	}
@@ -208,7 +208,7 @@ func TestDurableOutcomeRestoresBeforeMutablePolicy(t *testing.T) {
 			var released *releasedExport
 			if tc.initial == phaseExported {
 				released = &releasedExport{Dir: filepath.Join(os.TempDir(),
-					"freeside-handoff-"+RunIDFor(testInvoke)+"-out-stale")}
+					"freeside-handoff-"+testRunIDFor(testInvoke)+"-out-stale")}
 			}
 			orphan(t, d, tc.initial, released)
 			if err := outcomes.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
@@ -225,7 +225,7 @@ func TestDurableOutcomeRestoresBeforeMutablePolicy(t *testing.T) {
 			if err := d.Reconcile(ctx); err != nil {
 				t.Fatalf("Reconcile outcome-written crash window: %v", err)
 			}
-			body, err := os.ReadFile(d.intentPath(testInvoke))
+			body, err := os.ReadFile(d.intentPath(testRunIDFor(testInvoke)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -318,7 +318,7 @@ func TestHandoffReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.T
 			if err != nil {
 				return nil, err
 			}
-			outDir, err = os.MkdirTemp("", "freeside-handoff-"+RunIDFor(testInvoke)+"-out-")
+			outDir, err = os.MkdirTemp("", "freeside-handoff-"+testRunIDFor(testInvoke)+"-out-")
 			if err != nil {
 				return nil, err
 			}
@@ -383,7 +383,7 @@ func TestHandoffReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.T
 	if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
 		t.Fatalf("Inspect after persistence retry = %q, %v; want running", status.Status, err)
 	}
-	body, err := os.ReadFile(d.intentPath(testInvoke))
+	body, err := os.ReadFile(d.intentPath(testRunIDFor(testInvoke)))
 	if err != nil {
 		t.Fatalf("read retried intent: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestRecoveryReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.
 			if err != nil {
 				return nil, err
 			}
-			outDir, err = os.MkdirTemp("", "freeside-handoff-"+RunIDFor(testInvoke)+"-out-")
+			outDir, err = os.MkdirTemp("", "freeside-handoff-"+testRunIDFor(testInvoke)+"-out-")
 			if err != nil {
 				return nil, err
 			}
@@ -463,7 +463,7 @@ func TestRecoveryReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.
 	if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
 		t.Fatalf("Inspect after persistence retry = %q, %v; want running", status.Status, err)
 	}
-	body, err := os.ReadFile(d.intentPath(testInvoke))
+	body, err := os.ReadFile(d.intentPath(testRunIDFor(testInvoke)))
 	if err != nil {
 		t.Fatalf("read retried intent: %v", err)
 	}
@@ -546,7 +546,7 @@ func TestOnlyPreterminalIntentsRequireCurrentConformance(t *testing.T) {
 			if preterminalPhase == phaseExported {
 				released = &releasedExport{
 					Dir: filepath.Join(os.TempDir(),
-						"freeside-handoff-"+RunIDFor(testInvoke)+"-out-unrecorded"),
+						"freeside-handoff-"+testRunIDFor(testInvoke)+"-out-unrecorded"),
 					Manifest:        export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}},
 					ObservedBaseSHA: testBase.BaseSHA,
 				}
@@ -685,7 +685,7 @@ func TestPostHandoffCrashFinishesFromTheRecordedExport(t *testing.T) {
 	// The released directory did not survive the crash.
 	orphan(t, d, phaseExported, &releasedExport{
 		Dir: filepath.Join(os.TempDir(),
-			"freeside-handoff-"+RunIDFor(testInvoke)+"-out-gone"),
+			"freeside-handoff-"+testRunIDFor(testInvoke)+"-out-gone"),
 		Manifest: manifest, Evidence: evidence, EvidencePresent: true,
 		ObservedBaseSHA: testBase.BaseSHA, Replay: &executionReplay{},
 	})
@@ -734,7 +734,7 @@ func TestPostHandoffCrashFinishesFromTheRecordedExport(t *testing.T) {
 			if err != nil {
 				t.Fatalf("encode tampered intent: %v", err)
 			}
-			if err := os.WriteFile(d.intentPath(testInvoke), body, 0o600); err != nil {
+			if err := os.WriteFile(d.intentPath(testRunIDFor(testInvoke)), body, 0o600); err != nil {
 				t.Fatalf("write tampered intent: %v", err)
 			}
 			if _, err := d.Collect(ctx, testInvoke); !errors.Is(err, ErrUnsupportedStart) {
@@ -750,7 +750,7 @@ func TestPostHandoffCrashFinishesFromTheRecordedExport(t *testing.T) {
 		if err != nil {
 			t.Fatalf("encode tampered intent: %v", err)
 		}
-		if err := os.WriteFile(d.intentPath(testInvoke), body, 0o600); err != nil {
+		if err := os.WriteFile(d.intentPath(testRunIDFor(testInvoke)), body, 0o600); err != nil {
 			t.Fatalf("write tampered intent: %v", err)
 		}
 		if _, err := d.Collect(ctx, testInvoke); !errors.Is(err, ErrUnsupportedStart) {
@@ -782,7 +782,7 @@ func TestRecordedExportOutranksAStaleReleasedDirectory(t *testing.T) {
 	if err := exports.RecordExecutionExport(ctx, record, ExecutionReplay{}); err != nil {
 		t.Fatalf("record export: %v", err)
 	}
-	dir, err := os.MkdirTemp("", "freeside-handoff-"+RunIDFor(testInvoke)+"-out-")
+	dir, err := os.MkdirTemp("", "freeside-handoff-"+testRunIDFor(testInvoke)+"-out-")
 	if err != nil {
 		t.Fatalf("create stale release: %v", err)
 	}
@@ -841,7 +841,7 @@ func TestConflictingDurableExportFailsRecoveryWithoutTerminalizing(t *testing.T)
 	}
 	orphan(t, d, phaseExported, &releasedExport{
 		Dir: filepath.Join(os.TempDir(),
-			"freeside-handoff-"+RunIDFor(testInvoke)+"-out-gone-conflict"),
+			"freeside-handoff-"+testRunIDFor(testInvoke)+"-out-gone-conflict"),
 		Manifest: manifest, ObservedBaseSHA: testBase.BaseSHA,
 	})
 
@@ -851,7 +851,7 @@ func TestConflictingDurableExportFailsRecoveryWithoutTerminalizing(t *testing.T)
 	if len(exports.outcomes) != 0 {
 		t.Fatalf("authority conflict recorded %d contradictory outcomes", len(exports.outcomes))
 	}
-	body, err := os.ReadFile(d.intentPath(testInvoke))
+	body, err := os.ReadFile(d.intentPath(testRunIDFor(testInvoke)))
 	if err != nil {
 		t.Fatalf("read preserved conflict: %v", err)
 	}
@@ -893,7 +893,7 @@ func TestCommitResultPreservesTheDurableExportedIntent(t *testing.T) {
 	}
 	orphan(t, d, phaseExported, &releasedExport{
 		Dir: filepath.Join(os.TempDir(),
-			"freeside-handoff-"+RunIDFor(testInvoke)+"-out-consumed"),
+			"freeside-handoff-"+testRunIDFor(testInvoke)+"-out-consumed"),
 		Manifest: manifest, ObservedBaseSHA: testBase.BaseSHA,
 	})
 
@@ -967,7 +967,7 @@ func TestExportLookupErrorLeavesRecoveryRetryable(t *testing.T) {
 	d := newTestDriver(t, &stubGate{}, exports)
 	in := orphan(t, d, phaseExported, &releasedExport{
 		Dir: filepath.Join(os.TempDir(),
-			"freeside-handoff-"+RunIDFor(testInvoke)+"-out-gone"),
+			"freeside-handoff-"+testRunIDFor(testInvoke)+"-out-gone"),
 		Manifest:        export.Manifest{Version: export.ManifestVersion, Entries: []export.Entry{}},
 		ObservedBaseSHA: testBase.BaseSHA,
 	})
@@ -1010,7 +1010,7 @@ func TestOperationalFinishFailurePreservesTheExport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode manifest: %v", err)
 	}
-	dir, err := os.MkdirTemp("", "freeside-handoff-"+RunIDFor(testInvoke)+"-out-")
+	dir, err := os.MkdirTemp("", "freeside-handoff-"+testRunIDFor(testInvoke)+"-out-")
 	if err != nil {
 		t.Fatalf("create released export: %v", err)
 	}

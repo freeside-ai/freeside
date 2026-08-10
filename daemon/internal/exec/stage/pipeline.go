@@ -1,4 +1,4 @@
-package claude
+package stage
 
 import (
 	"bytes"
@@ -20,11 +20,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
-
-// ErrRecoveryRetryable marks an operational recovery failure that preserved
-// the durable preterminal intent. The daemon may start and let a later Inspect
-// retry it; permanent reconstruction failures remain startup-fatal.
-var ErrRecoveryRetryable = errors.New("claude driver recovery is retryable")
 
 // errDefinitiveExportRejection marks a returned workspace that the trust
 // boundary has conclusively rejected. Only this class may discard the
@@ -761,7 +756,16 @@ func (d *Driver) cleanupTerminalSeed(in intent) error {
 	if d.seedFS == nil {
 		return errSeedCleanupAfterClose
 	}
-	runID := d.provider.RunID(in.InvocationID)
+	runID, err := d.validatedProviderRunID(in.InvocationID)
+	if err != nil {
+		return err
+	}
+	if runID != in.RunID {
+		return fmt.Errorf(
+			"%w: refuse seed cleanup for invocation %s run %q, derivation gives %q",
+			ErrUnsupportedStart, in.InvocationID, in.RunID, runID,
+		)
+	}
 	for _, name := range []string{runID, runID + "-import"} {
 		if err := d.seedFS.RemoveAll(name); err != nil {
 			// Name the root-relative target, never filepath.Join(d.seedRoot,
@@ -1286,7 +1290,7 @@ func (d *Driver) recoverIntent(ctx context.Context, in intent) error {
 		// helper ran and exited nonzero before the agent started (e.g. its
 		// manifest guard exit 42), which is an environment fault the operator
 		// triages differently from an agent exit.
-		summary := fmt.Sprintf("Claude writer exited with status %d.", recovered.FailureStatus)
+		summary := fmt.Sprintf("%s writer exited with status %d.", d.displayName, recovered.FailureStatus)
 		if recovered.FailureStatus == d.provider.PrepareFailedStatus() {
 			summary = fmt.Sprintf(
 				"Workspace preparation failed before the agent started (status %d): "+
@@ -1302,7 +1306,7 @@ func (d *Driver) recoverIntent(ctx context.Context, in intent) error {
 		return d.commitRecoveredTerminal(in.InvocationID, exec.StageResult{
 			InvocationID: in.InvocationID,
 			Status:       exec.StatusCanceled,
-			Summary:      "Claude invocation canceled by daemon request.",
+			Summary:      d.displayName + " invocation canceled by daemon request.",
 		})
 	}
 	return fmt.Errorf("%w: gate reported recovery outcome %q",
