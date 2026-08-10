@@ -78,21 +78,28 @@ ARG CLAUDE_CODE_VERSION
 
 # git is a workspace tool: the agent commits normally, and nothing of its .git
 # is ever imported as git state (plan §5.6). ca-certificates serves the
-# provider API under the `provider_only` egress profile. BusyBox supplies the
+# provider API under the `provider_only` egress profile. diffutils, file, jq,
+# patch, and ripgrep are the baseline workspace tools. BusyBox supplies the
 # nslookup, nc, and wget applets whose exact behavior ward uses to witness that
 # provider-only egress is realized. Package versions are recorded in the
 # manifest below rather than pinned: Debian drops superseded versions from the
 # mirror, so an exact pin turns into an unbuildable image.
 RUN set -eux; \
 	apt-get update; \
-	apt-get install -y --no-install-recommends busybox-static ca-certificates git; \
+	apt-get install -y --no-install-recommends \
+		busybox-static ca-certificates diffutils file git jq patch ripgrep; \
 	rm -rf /var/lib/apt/lists/*; \
 	for applet in nc nslookup wget; do \
 		ln -s /bin/busybox "/usr/local/bin/${applet}"; \
 	done; \
 	nslookup --help 2>&1 | grep -F 'HOST [DNS_SERVER]'; \
 	nc -h 2>&1 | grep -F -- '-w SEC'; \
-	wget --help >/dev/null
+	wget --help >/dev/null; \
+	diff --version >/dev/null; \
+	file -b /bin/busybox | grep -F ELF; \
+	printf '{"ok":true}\n' | jq -e .ok; \
+	patch --version >/dev/null; \
+	printf 'needle\n' | rg -q needle
 
 COPY --from=build /usr/local /usr/local
 
@@ -121,6 +128,8 @@ RUN set -eux; \
 		echo "node $(node --version)"; \
 		echo "npm $(npm --version)"; \
 		echo "claude $(claude --version)"; \
+		echo "jq $(jq --version)"; \
+		echo "rg $(rg --version | head -n 1)"; \
 		echo "--- dpkg ---"; \
 		dpkg-query -W -f='${binary:Package} ${Version}\n'; \
 		echo "--- npm -g ---"; \

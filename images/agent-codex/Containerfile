@@ -78,21 +78,27 @@ ARG CODEX_VERSION
 # dependency, not a convenience: the Codex file-search tool shells out to
 # `rg --files --no-ignore --null …`, and the CLI reports a missing one as a
 # broken installation. ca-certificates serves the provider API under the
-# `provider_only` egress profile. BusyBox supplies the nslookup, nc, and wget
-# applets whose exact behavior ward uses to witness that provider-only egress
-# is realized. Package versions are recorded in the manifest below rather than
-# pinned: Debian drops superseded versions from the mirror, so an exact pin
-# turns into an unbuildable image.
+# `provider_only` egress profile. diffutils, file, jq, and patch are the baseline
+# workspace tools. BusyBox supplies the nslookup, nc, and wget applets whose
+# exact behavior ward uses to witness that provider-only egress is realized.
+# Package versions are recorded in the manifest below rather than pinned:
+# Debian drops superseded versions from the mirror, so an exact pin turns into
+# an unbuildable image.
 RUN set -eux; \
 	apt-get update; \
-	apt-get install -y --no-install-recommends busybox-static ca-certificates git ripgrep; \
+	apt-get install -y --no-install-recommends \
+		busybox-static ca-certificates diffutils file git jq patch ripgrep; \
 	rm -rf /var/lib/apt/lists/*; \
 	for applet in nc nslookup wget; do \
 		ln -s /bin/busybox "/usr/local/bin/${applet}"; \
 	done; \
 	nslookup --help 2>&1 | grep -F 'HOST [DNS_SERVER]'; \
 	nc -h 2>&1 | grep -F -- '-w SEC'; \
-	wget --help >/dev/null
+	wget --help >/dev/null; \
+	diff --version >/dev/null; \
+	file -b /bin/busybox | grep -F ELF; \
+	printf '{"ok":true}\n' | jq -e .ok; \
+	patch --version >/dev/null
 
 COPY --from=build /out/bin/codex /usr/local/bin/codex
 COPY --from=build /out/bin/codex-code-mode-host /usr/local/bin/codex-code-mode-host
@@ -108,6 +114,7 @@ RUN set -eux; \
 		echo "base_image ${BASE_IMAGE}"; \
 		echo "codex $(codex --version)"; \
 		echo "codex-code-mode-host sha256:$(sha256sum /usr/local/bin/codex-code-mode-host | cut -d' ' -f1)"; \
+		echo "jq $(jq --version)"; \
 		echo "rg $(rg --version | head -n 1)"; \
 		echo "bwrap $(/usr/local/bin/codex-resources/bwrap --version)"; \
 		echo "zsh $(/usr/local/bin/codex-resources/zsh/bin/zsh --version)"; \
