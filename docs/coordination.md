@@ -1,9 +1,10 @@
 # Coordination Protocol
 
 The mechanics behind AGENTS.md's coordination gates: the lane glossary, the
-claim-lease protocol, the session-start queries, session end, and deferral
-escalation. Read this file before claiming a unit, filing a deferral, or
-starting an issue-backed session.
+claim-lease protocol, the session-start queries, session end, deferral
+escalation, and the tracking-issue format. Read this file before claiming a
+unit, filing a deferral, starting an issue-backed session, or creating or
+updating a tracking issue.
 
 AGENTS.md holds the binding gates and is the authority where the two
 disagree; this file carries only the procedure that implements them. Section
@@ -129,9 +130,11 @@ the outcome hits a Decision notes trigger or the mandatory-note list.
 
 Write or update the unit's decision note only when a Decision notes
 trigger or the mandatory-note list applies. Additionally: deferrals
-discovered mid-unit follow Deferral escalation below; tick your unit on
-the wave tracking issue when your PR merges (or note partial state on
-the issue).
+discovered mid-unit follow Deferral escalation below; when your PR
+merges, tick your unit on the wave tracking issue and on any other open
+tracker that lists it, refreshing each tracker's Implementation order
+startable-now front in the same edit (Tracking Issues below), or note
+partial state on the issue.
 
 ## Deferral Escalation
 
@@ -173,3 +176,44 @@ planning session while waves exist; at phase boundaries after; ad hoc
 whenever the human runs one. Between sweeps the unscheduled queue is dormant
 by design; the Phase 1B scan initiator is the intended replacement for
 human-cadence sweeping.
+
+## Tracking Issues
+
+An issue that tracks other issues (a wave tracker, or any ad hoc tracker
+over a set of units) carries an **Implementation order** section:
+implementation order is the question a tracker's readers bring to it, and
+per-unit Dependencies fields scattered across the tracked issues do not
+answer it at a glance. Wave 5's tracker (#651) is the reference example.
+
+- **Prose digest first.** State the startable-now fronts, each serial
+  chain, the cross-cutting merge gates, and the critical path as scannable
+  text. The digest is the record; a reader who never renders the diagram
+  still gets the order.
+- **Diagram when the graph is nontrivial.** When the dependency graph is
+  more than a single chain, follow the digest with a Mermaid
+  `flowchart LR` (the forge renders it inline). A strictly linear sequence
+  states its chain in prose and skips the diagram: a mandatory chart
+  everywhere trains readers to skip charts.
+- **Fixed edge semantics, stated in a legend line.** Nodes are issue
+  numbers. Arrows point from prerequisite to dependent: `A --> B` means
+  A's PR merges before B starts. Solid arrows mean serialization within a
+  lane or chain; dotted arrows mean cross-cutting merge gates; a
+  highlighted `classDef` marks units under a repo-wide exclusivity regime
+  (e.g. the serialized contract chain). The legend line below the diagram
+  says which is which.
+- **Transitive reduction.** Draw only direct edges; an ordering already
+  implied through drawn paths is not repeated as its own arrow.
+- **Authority disclaimer.** The digest and diagram are a derived view;
+  each unit issue's Dependencies field is the authority. Say so on the
+  tracker: where they diverge, the unit issue wins and the tracker gets
+  repaired.
+- **Repair with the change, as one operation.** Whoever changes a tracked
+  unit's Dependencies field (a rescope, a spine repair, a new unit)
+  updates the digest and diagram of every open tracker listing the unit
+  in the same operation, mirroring the milestone-plus-listing rule under
+  Work units in AGENTS.md.
+  Merges advance the order the same way: the session recording a merged
+  unit on a tracker, wave or ad hoc (the Session End tick), refreshes
+  that tracker's startable-now front in the same edit, so routine
+  progress never strands a digest at its publication state. A stale diagram misleads where no diagram merely
+  omits.

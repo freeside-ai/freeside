@@ -751,10 +751,12 @@ system; this section governs building Freeside, not running it.
 
 The gates below bind every session and live here. The mechanics that
 implement them (the lane glossary, the claim-lease protocol, the
-session-start queries, session end, and the escalation routing rules) live
-in [`docs/coordination.md`](docs/coordination.md); read it before claiming a
-unit, filing a deferral, starting an issue-backed session, or starting any
-work that carries dependencies or blockers.
+session-start queries, session end, the escalation routing rules, and the
+tracking-issue format) live in
+[`docs/coordination.md`](docs/coordination.md); read it before claiming a
+unit, filing a deferral, starting an issue-backed session, creating or
+updating a tracking issue, or starting any work that carries dependencies
+or blockers.
 
 ### Work units
 
@@ -781,7 +783,9 @@ whole work contract; the issue as a whole is the contract), Acceptance
 integration order, not only issue refs).
 Labels: `lane:*` for ownership area, `kind:*` for type. Milestones carry the
 phase (1A, 1B). Each wave has a pinned tracking issue listing its units; the
-spine role maintains it.
+spine role maintains it. Any issue that tracks other issues (a wave tracker
+or an ad hoc tracker over a set of units) records their implementation
+order per the tracking-issue format in docs/coordination.md.
 
 Here and below, **scheduled** means both a milestone and a listing on the
 current tracking issue. The spine changes those fields as one planning
