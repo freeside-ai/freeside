@@ -33,6 +33,9 @@ type Config struct {
 	// CredentialMount is the immutable capability topology for the provider's
 	// sole identity-bound mount. Ward authenticates its dynamic volume.
 	CredentialMount CredentialMountPolicy
+	// ProviderConfigError preserves provider-specific construction validation
+	// without widening the runtime port. Nil means the provider is configured.
+	ProviderConfigError error
 	// Lifetime is the owning daemon's lifetime, not a reconcile-pass context.
 	// Every external writer is canceled when it ends.
 	Lifetime context.Context
@@ -326,6 +329,8 @@ func New(cfg Config) (*Driver, error) {
 		return nil, newError("nil admission authority")
 	case cfg.Artifacts == nil:
 		return nil, newError("nil artifact store")
+	case cfg.ProviderConfigError != nil:
+		return nil, fmt.Errorf("new %s: %w", cfg.ErrorPrefix, cfg.ProviderConfigError)
 	case cfg.Now == nil:
 		return nil, newError("nil clock")
 	case len(cfg.Preparation) > 0 &&

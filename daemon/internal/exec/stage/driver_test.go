@@ -768,6 +768,41 @@ func TestNewRejectsUnapprovedCredentialMountPolicy(t *testing.T) {
 	}
 }
 
+func TestNewOrdersProviderValidationWithExistingConfigChecks(t *testing.T) {
+	t.Parallel()
+	providerErr := errors.New("nil provider credential resolver")
+	valid := func() Config {
+		root := t.TempDir()
+		return Config{
+			ErrorPrefix: "test driver", DisplayName: "Test",
+			Provider:            testProvider{},
+			CredentialMount:     testCredentialMountPolicy,
+			ProviderConfigError: providerErr,
+			Lifetime:            context.Background(),
+			Dir:                 filepath.Join(root, "driver"),
+			SeedRoot:            filepath.Join(root, "seeds"),
+			ExportRoot:          filepath.Clean(os.TempDir()),
+			Gate:                &stubGate{},
+			Seeder:              stubSeeder{},
+			Exports:             newStubExports(),
+			Outcomes:            newStubExports(),
+			Authority:           stubAuthority{},
+			Artifacts:           newStubArtifacts(),
+			Now:                 func() time.Time { return fixedNow },
+		}
+	}
+
+	cfg := valid()
+	if _, err := New(cfg); !errors.Is(err, providerErr) {
+		t.Fatalf("New provider validation = %v, want provider error", err)
+	}
+	cfg = valid()
+	cfg.Lifetime = nil
+	if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "nil lifetime") {
+		t.Fatalf("New with nil lifetime and invalid provider = %v, want lifetime first", err)
+	}
+}
+
 // The two Seeder methods must not collapse into one call. Ward's observer
 // proves the workspace's raw worktree against HEAD, so seeding from the
 // repository-only shape leaves every tracked path missing, reports the

@@ -56,8 +56,9 @@ type Config struct {
 
 // New constructs the Claude provider over the shared durable stage machine.
 func New(cfg Config) (*Driver, error) {
+	var providerConfigError error
 	if cfg.Volumes == nil {
-		return nil, errors.New("new claude driver: nil auth store volumes")
+		providerConfigError = errors.New("nil auth store volumes")
 	}
 	return stage.New(stage.Config{
 		ErrorPrefix: "claude driver",
@@ -66,20 +67,21 @@ func New(cfg Config) (*Driver, error) {
 		CredentialMount: stage.CredentialMountPolicy{
 			Target: credentialMountTarget, Manifest: ward.CredentialManifestSetupToken,
 		},
-		Lifetime:    cfg.Lifetime,
-		Dir:         cfg.Dir,
-		SeedRoot:    cfg.SeedRoot,
-		ExportRoot:  cfg.ExportRoot,
-		Gate:        cfg.Gate,
-		Seeder:      cfg.Seeder,
-		Exports:     cfg.Exports,
-		Outcomes:    cfg.Outcomes,
-		Authority:   cfg.Authority,
-		Artifacts:   cfg.Artifacts,
-		PreJob:      cfg.PreJob,
-		Import:      cfg.Import,
-		Preparation: cfg.Preparation,
-		Now:         cfg.Now,
-		Logger:      cfg.Logger,
+		ProviderConfigError: providerConfigError,
+		Lifetime:            cfg.Lifetime,
+		Dir:                 cfg.Dir,
+		SeedRoot:            cfg.SeedRoot,
+		ExportRoot:          cfg.ExportRoot,
+		Gate:                cfg.Gate,
+		Seeder:              cfg.Seeder,
+		Exports:             cfg.Exports,
+		Outcomes:            cfg.Outcomes,
+		Authority:           cfg.Authority,
+		Artifacts:           cfg.Artifacts,
+		PreJob:              cfg.PreJob,
+		Import:              cfg.Import,
+		Preparation:         cfg.Preparation,
+		Now:                 cfg.Now,
+		Logger:              cfg.Logger,
 	})
 }
