@@ -214,6 +214,38 @@ func TestEnumValidity(t *testing.T) {
 		valids["ReadinessInvalidationReason"] = append(valids["ReadinessInvalidationReason"], v.valid)
 	}
 	invalids["ReadinessInvalidationReason"] = ReadinessInvalidationReason("").valid
+	for _, v := range AllClaimMediaTypes {
+		valids["ClaimMediaType"] = append(valids["ClaimMediaType"], v.valid)
+	}
+	invalids["ClaimMediaType"] = ClaimMediaType("").valid
+	for _, v := range AllCommitPlanModes {
+		valids["CommitPlanMode"] = append(valids["CommitPlanMode"], v.valid)
+	}
+	invalids["CommitPlanMode"] = CommitPlanMode("").valid
+	for _, v := range AllExecutionOutcomeStatuses {
+		valids["ExecutionOutcomeStatus"] = append(valids["ExecutionOutcomeStatus"], v.valid)
+	}
+	invalids["ExecutionOutcomeStatus"] = ExecutionOutcomeStatus("").valid
+	for _, v := range AllMessageRulesets {
+		valids["MessageRuleset"] = append(valids["MessageRuleset"], v.valid)
+	}
+	invalids["MessageRuleset"] = MessageRuleset("").valid
+	for _, v := range AllNativeReviewKinds {
+		valids["NativeReviewKind"] = append(valids["NativeReviewKind"], v.valid)
+	}
+	invalids["NativeReviewKind"] = NativeReviewKind("").valid
+	for _, v := range AllNativeReviewProviders {
+		valids["NativeReviewProvider"] = append(valids["NativeReviewProvider"], v.valid)
+	}
+	invalids["NativeReviewProvider"] = NativeReviewProvider("").valid
+	for _, v := range AllReviewFailureClasses {
+		valids["ReviewFailureClass"] = append(valids["ReviewFailureClass"], v.valid)
+	}
+	invalids["ReviewFailureClass"] = ReviewFailureClass("").valid
+	for _, v := range AllReviewOutcomes {
+		valids["ReviewOutcome"] = append(valids["ReviewOutcome"], v.valid)
+	}
+	invalids["ReviewOutcome"] = ReviewOutcome("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {
