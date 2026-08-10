@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
@@ -327,7 +328,7 @@ func removeLegacyLocalBackupFiles(files *LocalBackupFiles) error {
 			}
 		}
 	}
-	return syncLocalBackupDirectory(files.dir)
+	return atomicfile.SyncDir(files.dir)
 }
 
 func removeStaleCheckpointTemps(dir string) error {
@@ -344,7 +345,9 @@ func removeStaleCheckpointTemps(dir string) error {
 				strings.HasSuffix(name, ".db-shm"))
 		encryptedCheckpointTemp := strings.HasPrefix(name, ".latest-") &&
 			strings.HasSuffix(name, ".backup")
-		if !legacySQLiteTemp && !encryptedCheckpointTemp {
+		atomicCheckpointTemp := strings.HasPrefix(name, "."+encryptedCheckpointFilename+"-") &&
+			strings.HasSuffix(name, ".tmp")
+		if !legacySQLiteTemp && !encryptedCheckpointTemp && !atomicCheckpointTemp {
 			continue
 		}
 		path := filepath.Join(dir, name)
@@ -377,12 +380,4 @@ func ensurePrivateBackupDirectory(path string) error {
 		return fmt.Errorf("%s permissions are %04o, want owner-only", path, info.Mode().Perm())
 	}
 	return nil
-}
-
-func syncLocalBackupDirectory(path string) error {
-	dir, err := os.Open(path) //nolint:gosec // path is the validated local-backup directory
-	if err != nil {
-		return err
-	}
-	return errors.Join(dir.Sync(), dir.Close())
 }

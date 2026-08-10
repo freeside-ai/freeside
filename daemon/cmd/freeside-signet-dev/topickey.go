@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 )
 
 // topicKeyLen is the ntfy topic key's fixed length. It must be at least
@@ -193,7 +195,7 @@ func createTopicKey(path string) ([]byte, error) {
 	if err := f.Close(); err != nil {
 		return nil, fmt.Errorf("topic key: close %s: %w", path, err)
 	}
-	if err := syncDir(filepath.Dir(path)); err != nil {
+	if err := atomicfile.SyncDir(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("topic key: sync dir %s: %w", path, err)
 	}
 	return key, nil
@@ -337,15 +339,4 @@ func within(base, target string) bool {
 		return false
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
-}
-
-// syncDir fsyncs a directory so a newly created entry inside it is durable:
-// syncing only the file does not persist the entry on POSIX filesystems.
-func syncDir(dir string) error {
-	d, err := os.Open(dir) //nolint:gosec // dev-harness directory path only
-	if err != nil {
-		return err
-	}
-	defer d.Close() //nolint:errcheck // Sync is the durability barrier; close only releases the descriptor
-	return d.Sync()
 }

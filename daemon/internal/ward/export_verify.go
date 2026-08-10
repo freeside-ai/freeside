@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
@@ -102,10 +103,10 @@ func prepareExportRoot(root string) error {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("export root is not a daemon-owned directory")
 	}
-	if err := syncDir(root); err != nil {
+	if err := atomicfile.SyncDir(root); err != nil {
 		return fmt.Errorf("sync export root: %w", err)
 	}
-	if err := syncDir(filepath.Dir(root)); err != nil {
+	if err := atomicfile.SyncDir(filepath.Dir(root)); err != nil {
 		return fmt.Errorf("sync export root parent: %w", err)
 	}
 	return nil
@@ -137,21 +138,11 @@ func syncMaterializedExport(root string) error {
 		return err
 	}
 	for i := len(dirs) - 1; i >= 0; i-- {
-		if err := syncDir(dirs[i]); err != nil {
+		if err := atomicfile.SyncDir(dirs[i]); err != nil {
 			return err
 		}
 	}
-	return syncDir(filepath.Dir(root))
-}
-
-func syncDir(path string) error {
-	dir, err := os.Open(path) //nolint:gosec // daemon-owned configured path
-	if err != nil {
-		return err
-	}
-	syncErr := dir.Sync()
-	closeErr := dir.Close()
-	return errors.Join(syncErr, closeErr)
+	return atomicfile.SyncDir(filepath.Dir(root))
 }
 
 // verifyMaterializedExport re-runs the complete content gate over an existing

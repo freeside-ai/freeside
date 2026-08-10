@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -452,7 +453,7 @@ func TestFakePublicationDurabilityHelpers(t *testing.T) {
 	if err := syncFakePublicationTree(filepath.Join(root, "one")); err != nil {
 		t.Fatalf("sync tree: %v", err)
 	}
-	if err := syncFakePublicationDirectory(root); err != nil {
+	if err := atomicfile.SyncDir(root); err != nil {
 		t.Fatalf("sync directory: %v", err)
 	}
 }

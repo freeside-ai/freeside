@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	exporter "github.com/freeside-ai/freeside/daemon/internal/export"
@@ -1745,7 +1746,7 @@ func (w *fakePublicationWorkflow) commitHandoff(
 				)
 			}
 		case existingDigest == digest:
-			if err := syncFakePublicationDirectory(parent); err != nil {
+			if err := atomicfile.SyncDir(parent); err != nil {
 				return "", fmt.Errorf("sync adopted handoff directory entry: %w", err)
 			}
 			return digest, nil
@@ -1758,7 +1759,7 @@ func (w *fakePublicationWorkflow) commitHandoff(
 		return "", fmt.Errorf("inspect handoff target: %w", err)
 	}
 	if err := installFakePublicationHandoff(
-		output, task.HandoffDir, syncFakePublicationDirectory,
+		output, task.HandoffDir, atomicfile.SyncDir,
 	); err != nil {
 		return "", err
 	}
@@ -1768,7 +1769,7 @@ func (w *fakePublicationWorkflow) commitHandoff(
 }
 
 func rollbackFakePublicationHandoff(path string) error {
-	return rollbackFakePublicationHandoffWithSync(path, syncFakePublicationDirectory)
+	return rollbackFakePublicationHandoffWithSync(path, atomicfile.SyncDir)
 }
 
 func installFakePublicationHandoff(
@@ -1983,7 +1984,7 @@ func (w *fakePublicationWorkflow) installCandidateCheckpoint(
 		}
 		return existing, nil
 	}
-	if err := syncFakePublicationDirectory(parent); err != nil {
+	if err := atomicfile.SyncDir(parent); err != nil {
 		return fakePublicationCandidateCheckpoint{}, err
 	}
 	return checkpoint, nil
@@ -2012,7 +2013,7 @@ func (w *fakePublicationWorkflow) loadCandidateCheckpoint(
 	if err != nil {
 		return fakePublicationCandidateCheckpoint{}, false, err
 	}
-	if err := syncFakePublicationCheckpointDirectory(path, syncFakePublicationDirectory); err != nil {
+	if err := syncFakePublicationCheckpointDirectory(path, atomicfile.SyncDir); err != nil {
 		return fakePublicationCandidateCheckpoint{}, false,
 			fmt.Errorf("sync existing candidate checkpoint directory: %w", err)
 	}
@@ -2080,7 +2081,7 @@ func (w *fakePublicationWorkflow) candidateCheckpointPath(task fakePublicationTa
 // before proceeding. A later file or directory fsync cannot make an unsynced
 // ancestor entry durable on its own.
 func makeFakePublicationDirectory(path string, mode fs.FileMode) error {
-	return makeFakePublicationDirectoryWithSync(path, mode, syncFakePublicationDirectory)
+	return makeFakePublicationDirectoryWithSync(path, mode, atomicfile.SyncDir)
 }
 
 func makeFakePublicationDirectoryWithSync(
@@ -2157,19 +2158,11 @@ func syncFakePublicationTree(root string) error {
 		return err
 	}
 	for i := len(dirs) - 1; i >= 0; i-- {
-		if err := syncFakePublicationDirectory(dirs[i]); err != nil {
+		if err := atomicfile.SyncDir(dirs[i]); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func syncFakePublicationDirectory(path string) error {
-	dir, err := os.Open(path) //nolint:gosec // daemon-owned work directory path
-	if err != nil {
-		return err
-	}
-	return errors.Join(dir.Sync(), dir.Close())
 }
 
 func (w *fakePublicationWorkflow) persistCandidateMetadata(

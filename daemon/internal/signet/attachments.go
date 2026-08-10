@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -54,7 +55,7 @@ func NewBlobStore(dir string) (*BlobStore, error) {
 // makeBlobStoreDirectory re-syncs the deepest existing boundary before
 // creating and parent-syncing each missing component.
 func makeBlobStoreDirectory(path string, mode fs.FileMode) error {
-	return makeBlobStoreDirectoryWithSync(path, mode, syncBlobStoreDirectory)
+	return makeBlobStoreDirectoryWithSync(path, mode, atomicfile.SyncDir)
 }
 
 func makeBlobStoreDirectoryWithSync(
@@ -104,14 +105,6 @@ func makeBlobStoreDirectoryWithSync(
 	return nil
 }
 
-func syncBlobStoreDirectory(path string) error {
-	dir, err := os.Open(path) //nolint:gosec // caller passes only the blob-root ancestor chain
-	if err != nil {
-		return err
-	}
-	return errors.Join(dir.Sync(), dir.Close())
-}
-
 // blobPath validates the digest and derives the content path. The digest
 // becomes a filename, so the accepted form is deliberately stricter than
 // domain.Digest's non-empty rule: exactly "sha256:" plus 64 lowercase hex
@@ -131,7 +124,7 @@ func (b *BlobStore) blobPath(digest domain.Digest) (string, error) {
 // already present and the upload converged on the existing immutable bytes
 // (the retried-upload half of sync test 10).
 func (b *BlobStore) Put(digest domain.Digest, r io.Reader) (created bool, err error) {
-	return b.put(digest, r, b.syncDir)
+	return b.put(digest, r, nil)
 }
 
 // PutStageInput stores daemon-created canonical stage-input bytes through the
@@ -156,21 +149,18 @@ func (s *Service) PutStageInput(
 func (b *BlobStore) put(
 	digest domain.Digest,
 	r io.Reader,
-	syncDir func() error,
+	syncDir func(string) error,
 ) (created bool, err error) {
 	path, err := b.blobPath(digest)
 	if err != nil {
 		return false, err
 	}
 
-	tmp, err := os.CreateTemp(b.dir, "tmp-*")
+	tmp, err := atomicfile.Create(b.dir, "tmp-*")
 	if err != nil {
 		return false, fmt.Errorf("attachment %q: %w", digest, err)
 	}
-	defer func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-	}()
+	defer func() { _ = tmp.Abort() }()
 
 	hasher := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(tmp, hasher), r); err != nil {
@@ -184,7 +174,7 @@ func (b *BlobStore) put(
 	// stored content before the request is called converged, or a mismatched
 	// re-PUT of an existing digest would return success.
 	if _, err := os.Stat(path); err == nil {
-		if err := syncDir(); err != nil {
+		if err := b.syncDirectory(syncDir); err != nil {
 			return false, fmt.Errorf("attachment %q: %w", digest, err)
 		}
 		return false, nil
@@ -192,21 +182,25 @@ func (b *BlobStore) put(
 		return false, fmt.Errorf("attachment %q: %w", digest, err)
 	}
 
-	// fsync file, rename into place, fsync directory: the §5.14 finalize
-	// order, so a visible blob is a durable blob.
-	if err := tmp.Sync(); err != nil {
-		return false, fmt.Errorf("attachment %q: %w", digest, err)
+	// The shared commit preserves the §5.14 finalize order, so a visible blob
+	// is a durable blob.
+	var commitErr error
+	if syncDir == nil {
+		commitErr = tmp.Commit(path)
+	} else {
+		commitErr = tmp.CommitWithSync(path, syncDir)
 	}
-	if err := tmp.Close(); err != nil {
-		return false, fmt.Errorf("attachment %q: %w", digest, err)
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return false, fmt.Errorf("attachment %q: %w", digest, err)
-	}
-	if err := syncDir(); err != nil {
-		return false, fmt.Errorf("attachment %q: %w", digest, err)
+	if commitErr != nil {
+		return false, fmt.Errorf("attachment %q: %w", digest, commitErr)
 	}
 	return true, nil
+}
+
+func (b *BlobStore) syncDirectory(syncDir func(string) error) error {
+	if syncDir != nil {
+		return syncDir(b.dir)
+	}
+	return atomicfile.SyncDir(b.dir)
 }
 
 // Open returns a reader over the stored bytes; the caller closes it.
@@ -275,15 +269,6 @@ func (b *BlobStore) Verify(digest domain.Digest) (bool, error) {
 	}
 	got := contentaddr.Format(hasher.Sum(nil))
 	return got == string(digest), nil
-}
-
-func (b *BlobStore) syncDir() error {
-	d, err := os.Open(b.dir)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = d.Close() }()
-	return d.Sync()
 }
 
 // hasAttachment is the service-side gate: with no blob store composed,

@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 )
 
 // The keystore is the protected storage of docs/plan.md §10: the App's
@@ -222,7 +224,7 @@ func (k *Keystore) saveAppLocked(
 	if err := os.Mkdir(staging, 0o700); err != nil {
 		return fmt.Errorf("keystore: create staging: %w", err)
 	}
-	if err := syncDir(k.dir); err != nil {
+	if err := atomicfile.SyncDir(k.dir); err != nil {
 		return fmt.Errorf("keystore: sync staging entry: %w", err)
 	}
 
@@ -294,18 +296,18 @@ func (k *Keystore) saveAppLocked(
 		if rollbackErr := os.Rename(old, appDir); rollbackErr != nil {
 			return errors.Join(activateErr, fmt.Errorf("keystore: restore previous credentials: %w", rollbackErr))
 		}
-		if rollbackErr := syncDir(k.dir); rollbackErr != nil {
+		if rollbackErr := atomicfile.SyncDir(k.dir); rollbackErr != nil {
 			return errors.Join(activateErr, fmt.Errorf("keystore: sync restored credentials: %w", rollbackErr))
 		}
 		return activateErr
 	}
-	if err := syncDir(k.dir); err != nil {
+	if err := atomicfile.SyncDir(k.dir); err != nil {
 		return fmt.Errorf("keystore: sync %s: %w", k.dir, err)
 	}
 	if _, err := removeSwapLeftover(old); err != nil {
 		return fmt.Errorf("keystore: remove previous credentials: %w", err)
 	}
-	if err := syncDir(k.dir); err != nil {
+	if err := atomicfile.SyncDir(k.dir); err != nil {
 		return fmt.Errorf("keystore: sync previous-credential removal: %w", err)
 	}
 
@@ -442,7 +444,7 @@ func (k *Keystore) FinalizeAppAuthority(registration AppRegistration) error {
 	if err := os.Remove(filepath.Join(appDir, authorityPendingFileName)); err != nil {
 		return fmt.Errorf("keystore: finalize pending authority: %w", err)
 	}
-	if err := syncDir(appDir); err != nil {
+	if err := atomicfile.SyncDir(appDir); err != nil {
 		return fmt.Errorf("keystore: sync finalized authority marker: %w", err)
 	}
 	return nil
@@ -815,10 +817,10 @@ func (k *Keystore) QuarantineApp(ownerID int64) error {
 // Re-issuing both is idempotent, so a retry after a transient sync failure
 // completes the sequence.
 func (k *Keystore) syncWithdrawal(quarantineDir string) error {
-	if err := syncDir(quarantineDir); err != nil {
+	if err := atomicfile.SyncDir(quarantineDir); err != nil {
 		return fmt.Errorf("keystore: sync quarantine directory: %w", err)
 	}
-	if err := syncDir(k.dir); err != nil {
+	if err := atomicfile.SyncDir(k.dir); err != nil {
 		return fmt.Errorf("keystore: sync quarantined registration: %w", err)
 	}
 	return nil
@@ -922,7 +924,7 @@ func (k *Keystore) MigrateLegacyApp(owner string, ownerID int64, visibility AppV
 					fmt.Errorf("keystore: discard incomplete legacy staging credentials: %w", clearErr),
 				)
 			}
-			if syncErr := syncDir(k.root); syncErr != nil {
+			if syncErr := atomicfile.SyncDir(k.root); syncErr != nil {
 				return AppCredentials{}, fmt.Errorf("keystore: sync discarded legacy staging credentials: %w", syncErr)
 			}
 			return AppCredentials{}, ErrNoAppCredentials
@@ -941,7 +943,7 @@ func (k *Keystore) MigrateLegacyApp(owner string, ownerID int64, visibility AppV
 		if err := os.Rename(sourceDir, legacyDir); err != nil {
 			return AppCredentials{}, fmt.Errorf("keystore: journal legacy credentials: %w", err)
 		}
-		if err := syncDir(k.root); err != nil {
+		if err := atomicfile.SyncDir(k.root); err != nil {
 			return AppCredentials{}, fmt.Errorf("keystore: sync legacy journal: %w", err)
 		}
 	}
@@ -1138,7 +1140,7 @@ func (k *Keystore) recoverSwap(appDir string, promoteStaging bool) error {
 	if err := os.Rename(source, appDir); err != nil {
 		return fmt.Errorf("keystore: recover active credentials: %w", err)
 	}
-	if err := syncDir(filepath.Dir(appDir)); err != nil {
+	if err := atomicfile.SyncDir(filepath.Dir(appDir)); err != nil {
 		return fmt.Errorf("keystore: sync recovered credentials: %w", err)
 	}
 	return k.clearSwapLeftovers(appDir)
@@ -1154,7 +1156,7 @@ func (k *Keystore) clearSwapLeftovers(appDir string) error {
 		removed = removed || removedOne
 	}
 	if removed {
-		if err := syncDir(filepath.Dir(appDir)); err != nil {
+		if err := atomicfile.SyncDir(filepath.Dir(appDir)); err != nil {
 			return fmt.Errorf("keystore: sync leftover removal: %w", err)
 		}
 	}
@@ -1284,7 +1286,7 @@ func (k *Keystore) clearLegacyJournals() error {
 		removed = removed || removedOne
 	}
 	if removed {
-		if err := syncDir(k.root); err != nil {
+		if err := atomicfile.SyncDir(k.root); err != nil {
 			return fmt.Errorf("keystore: sync legacy migration: %w", err)
 		}
 	}
@@ -1489,7 +1491,7 @@ func writeFileExclSync(path string, data []byte) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return syncDir(filepath.Dir(path))
+	return atomicfile.SyncDir(filepath.Dir(path))
 }
 
 // mkdirAllSync creates dir owner-only and fsyncs every newly created
@@ -1533,25 +1535,13 @@ func mkdirAllSync(dir string) error {
 		return err
 	}
 	for cur := dir; ; cur = filepath.Dir(cur) {
-		if err := syncDir(cur); err != nil {
+		if err := atomicfile.SyncDir(cur); err != nil {
 			return err
 		}
 		if cur == base || filepath.Dir(cur) == cur {
 			return nil
 		}
 	}
-}
-
-// syncDir fsyncs a directory so a newly created entry inside it is
-// durable: syncing only the file does not persist the entry on POSIX
-// filesystems.
-func syncDir(dir string) error {
-	d, err := os.Open(dir) //nolint:gosec // package-internal directory paths only
-	if err != nil {
-		return err
-	}
-	defer d.Close() //nolint:errcheck // Sync is the durability barrier; close only releases the descriptor
-	return d.Sync()
 }
 
 // AppVisibility records whether GitHub permits installations outside the
