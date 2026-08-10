@@ -26,6 +26,10 @@
 #
 # Usage:
 #   scripts/check-agent-image.sh <image-reference> [container-executable]
+#
+# Environment:
+#   FREESIDE_CHECK_AGENT_IMAGE_RUNTIME_BOUND_SECONDS  wall-clock bound from 1
+#                                                     to 86400 (default: 120)
 set -euo pipefail
 
 # Duplicated from daemon/internal/ward/conformance.go (fixedContainerPathEnv).
@@ -45,6 +49,21 @@ case "$1" in
 esac
 image_ref="$1"
 container_bin="${2:-container}"
+runtime_bound_seconds="${FREESIDE_CHECK_AGENT_IMAGE_RUNTIME_BOUND_SECONDS:-120}"
+case "$runtime_bound_seconds" in
+"" | 0* | *[!0-9]*)
+	echo "check-agent-image: FREESIDE_CHECK_AGENT_IMAGE_RUNTIME_BOUND_SECONDS must be an integer from 1 to 86400" >&2
+	exit 2
+	;;
+esac
+if [ "${#runtime_bound_seconds}" -gt 5 ] || [ "$runtime_bound_seconds" -gt 86400 ]; then
+	echo "check-agent-image: FREESIDE_CHECK_AGENT_IMAGE_RUNTIME_BOUND_SECONDS must be an integer from 1 to 86400" >&2
+	exit 2
+fi
+
+# Runtime calls suppress runtime-owned stderr at several trust-boundary sites.
+# Keep checker-owned timeout diagnostics on the operator's original stderr.
+exec 3>&2
 
 command -v jq >/dev/null 2>&1 || {
 	echo "check-agent-image: jq is required to compare the inspected configuration" >&2
@@ -129,13 +148,166 @@ reject_duplicate_json_keys() {
 # failed command, or a failed sink fails the capture, and the caller
 # treats each like any other runtime failure.
 runtime_json_cap=16777216
-capture_runtime_json() { # <file> <command...>
+active_runtime_pid=""
+active_watchdog_pid=""
+active_watchdog_state=""
+watchdog_dir=""
+
+claim_watchdog_state() { # <state-file> <value>
+	claim_status=0
+	set -C
+	printf '%s\n' "$2" 2>/dev/null >"$1" || claim_status=$?
+	set +C
+	return "$claim_status"
+}
+
+bounded_runtime_process() { # <command...>
+	local stdout_fifo stderr_fifo stdout_relay_pid stderr_relay_pid
+	local runtime_status stdout_status stderr_status
+	# Keep the relay processes in the same group as this wrapper. A descendant
+	# may move itself elsewhere, but it only retains the relay pipes, never the
+	# checker's own stdout or stderr. Killing this group therefore closes the
+	# checker-facing descriptors at the bound even when that writer survives.
+	set +m
+	stdout_fifo=$watchdog_dir/runtime-stdout
+	stderr_fifo=$watchdog_dir/runtime-stderr
+	if ! mkfifo "$stdout_fifo" "$stderr_fifo"; then
+		return 1
+	fi
+	cat "$stdout_fifo" &
+	stdout_relay_pid=$!
+	cat "$stderr_fifo" >&2 &
+	stderr_relay_pid=$!
+	if "$@" >"$stdout_fifo" 2>"$stderr_fifo"; then
+		runtime_status=0
+	else
+		runtime_status=$?
+	fi
+	if wait "$stdout_relay_pid"; then
+		stdout_status=0
+	else
+		stdout_status=$?
+	fi
+	if wait "$stderr_relay_pid"; then
+		stderr_status=0
+	else
+		stderr_status=$?
+	fi
+	rm -f "$stdout_fifo" "$stderr_fifo"
+	if [ "$runtime_status" -ne 0 ] || [ "$stdout_status" -ne 0 ] ||
+		[ "$stderr_status" -ne 0 ]; then
+		return 1
+	fi
+}
+
+bounded_runtime_call() { # <command...>
+	local watchdog_state runtime_status timeout_state
+	# Monitor mode gives this one asynchronous job its own process group even
+	# in non-interactive Bash. Descendants inherit that group, so the watchdog
+	# can close every inherited capture descriptor instead of killing only the
+	# runtime CLI and then waiting on a helper that still owns the pipe.
+	set -m
+	bounded_runtime_process "$@" 3>&- &
+	active_runtime_pid=$!
+	set +m
+	watchdog_state=$watchdog_dir/$active_runtime_pid
+	active_watchdog_state=$watchdog_state
+	(
+		watchdog_tick=0
+		watchdog_ticks=$((runtime_bound_seconds * 10))
+		while [ "$watchdog_tick" -lt "$watchdog_ticks" ]; do
+			[ ! -e "$watchdog_state" ] || exit 0
+			sleep 0.1
+			watchdog_tick=$((watchdog_tick + 1))
+		done
+		if claim_watchdog_state "$watchdog_state" timed-out; then
+			echo "check-agent-image: runtime call exceeded ${runtime_bound_seconds}s" >&3
+			kill -KILL -- "-$active_runtime_pid" 2>/dev/null || true
+		fi
+	) &
+	active_watchdog_pid=$!
+
+	if wait "$active_runtime_pid"; then
+		runtime_status=0
+	else
+		runtime_status=$?
+	fi
+	rm -f "$watchdog_dir/runtime-stdout" "$watchdog_dir/runtime-stderr"
+	active_runtime_pid=""
+	claim_watchdog_state "$watchdog_state" completed || true
+	wait "$active_watchdog_pid" 2>/dev/null || true
+	active_watchdog_pid=""
+	active_watchdog_state=""
+	read -r timeout_state <"$watchdog_state" || timeout_state=""
+	rm -f "$watchdog_state"
+	if [ "$timeout_state" = "timed-out" ]; then
+		return 124
+	fi
+	return "$runtime_status"
+}
+
+interrupt() {
+	local runtime_pid watchdog_pid watchdog_state
+	runtime_pid=$active_runtime_pid
+	watchdog_pid=$active_watchdog_pid
+	watchdog_state=$active_watchdog_state
+	active_runtime_pid=""
+	active_watchdog_pid=""
+	active_watchdog_state=""
+	[ -z "$watchdog_state" ] || claim_watchdog_state "$watchdog_state" interrupted || true
+	if [ -n "$runtime_pid" ]; then
+		kill -TERM -- "-$runtime_pid" 2>/dev/null || true
+		kill -KILL -- "-$runtime_pid" 2>/dev/null || true
+	fi
+	[ -z "$watchdog_pid" ] || wait "$watchdog_pid" 2>/dev/null || true
+	[ -z "$runtime_pid" ] || wait "$runtime_pid" 2>/dev/null || true
+	[ -z "$watchdog_dir" ] || rm -f "$watchdog_dir/runtime-stdout" \
+		"$watchdog_dir/runtime-stderr"
+	[ -z "$watchdog_state" ] || rm -f "$watchdog_state"
+	exit 130
+}
+
+capture_runtime_output() { # <file> <status-file> <command...>
+	local capture_file capture_status_file
 	capture_file=$1
-	shift
+	capture_status_file=$2
+	shift 2
+	# bounded_runtime_call starts this function as one process-group job.
+	# Keep this inner pipeline in that same group so the watchdog terminates
+	# both the CLI and the capped sink. Even a descendant that changes groups
+	# cannot keep the checker waiting on the pipe after the sink is killed.
+	set +m
+	set +e
 	"$@" | head -c "$((runtime_json_cap + 1))" >"$capture_file"
 	capture_status=("${PIPESTATUS[@]}")
+	printf '%s %s\n' "${capture_status[0]}" "${capture_status[1]}" \
+		>"$capture_status_file"
+	if [ "${capture_status[0]}" -ne 0 ] || [ "${capture_status[1]}" -ne 0 ]; then
+		return 1
+	fi
+}
+
+capture_runtime_json() { # <file> <command...>
+	local capture_file capture_status_file runtime_status sink_status call_status
+	capture_file=$1
+	shift
+	capture_status_file=$watchdog_dir/capture-status
+	rm -f "$capture_status_file"
+	if bounded_runtime_call capture_runtime_output "$capture_file" \
+		"$capture_status_file" "$@"; then
+		call_status=0
+	else
+		call_status=$?
+	fi
+	runtime_status=1
+	sink_status=1
+	if [ -f "$capture_status_file" ]; then
+		read -r runtime_status sink_status <"$capture_status_file" || true
+	fi
+	rm -f "$capture_status_file"
 	capture_size=$(wc -c <"$capture_file")
-	if [ "${capture_status[0]}" -ne 0 ] || [ "${capture_status[1]}" -ne 0 ] ||
+	if [ "$call_status" -ne 0 ] || [ "$runtime_status" -ne 0 ] ||
+		[ "$sink_status" -ne 0 ] ||
 		[ "$capture_size" -gt "$runtime_json_cap" ]; then
 		return 1
 	fi
@@ -178,7 +350,7 @@ recovery_delete_owned() { # <id>
 		echo "check-agent-image: refusing recovery deletion of container $1: ownership no longer verified" >&2
 		return 1
 	fi
-	if ! "$container_bin" delete --force "$1" </dev/null >/dev/null 2>&1; then
+	if ! bounded_runtime_call "$container_bin" delete --force "$1" </dev/null >/dev/null 2>&1; then
 		echo "check-agent-image: could not remove recovered probe container $1" >&2
 		return 1
 	fi
@@ -281,7 +453,7 @@ cleanup() {
 			else
 				owned_id=$(inspected_owned_id "$probe_container") || owned_id=""
 				if [ "$owned_id" = "$probe_container" ]; then
-					if ! "$container_bin" delete --force "$owned_id" >/dev/null 2>&1; then
+					if ! bounded_runtime_call "$container_bin" delete --force "$owned_id" >/dev/null 2>&1; then
 						echo "check-agent-image: could not remove probe container ${owned_id}" >&2
 						cleanup_failed=1
 					fi
@@ -307,13 +479,17 @@ cleanup() {
 		echo "check-agent-image: could not remove runtime evidence file" >&2
 		cleanup_failed=1
 	fi
+	if [ -n "$watchdog_dir" ] && ! rmdir "$watchdog_dir"; then
+		echo "check-agent-image: could not remove runtime watchdog directory" >&2
+		cleanup_failed=1
+	fi
 	if [ "$cleanup_failed" -ne 0 ] && [ "$status" -eq 0 ]; then
 		status=1
 	fi
 	exit "$status"
 }
 trap cleanup EXIT
-trap 'exit 130' HUP INT TERM
+trap interrupt HUP INT TERM
 
 cidfile=$(mktemp "${TMPDIR:-/tmp}/freeside-image-checker-id.XXXXXX")
 rm -f "$cidfile"
@@ -321,12 +497,13 @@ rm -f "$cidfile"
 # substitution strips raw NUL bytes, which would let malformed runtime
 # output masquerade as valid JSON (see reject_duplicate_json_keys).
 runtime_json=$(mktemp "${TMPDIR:-/tmp}/freeside-image-checker-json.XXXXXX")
+watchdog_dir=$(mktemp -d "${TMPDIR:-/tmp}/freeside-image-checker-watchdog.XXXXXX")
 
 # The container is created, never started: the allowlist is verified on a
 # stopped container, exactly as the gate does it.
 echo "check-agent-image: creating a probe container from ${image_ref}" >&2
 create_attempted=1
-"$container_bin" create --cidfile "$cidfile" \
+bounded_runtime_call "$container_bin" create --cidfile "$cidfile" \
 	--label "${ownership_label}=${ownership_token}" \
 	-- "$image_ref" sh -c true >&2
 runtime_id=$(head -c 4096 "$cidfile" | tr -d '\r\n')
@@ -336,7 +513,8 @@ if ! valid_container_id "$runtime_id"; then
 fi
 probe_container="$runtime_id"
 
-if ! capture_runtime_json "$runtime_json" "$container_bin" inspect "$probe_container"; then
+if ! capture_runtime_json "$runtime_json" \
+	"$container_bin" inspect "$probe_container"; then
 	echo "check-agent-image: could not capture the probe inspection (runtime failure or output past the ${runtime_json_cap}-byte cap)" >&2
 	exit 1
 fi
