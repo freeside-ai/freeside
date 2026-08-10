@@ -1,6 +1,20 @@
 package publish
 
-import "testing"
+import (
+	"slices"
+	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/gitrun"
+)
+
+func TestNetRunnerArgvStartsWithTransportBaseline(t *testing.T) {
+	r := &netRunner{scheme: "https"}
+	args := []string{"fetch", "origin", "main"}
+	want := append(gitrun.TransportBaseline("https"), args...)
+	if got := r.argv(args...); !slices.Equal(got, want) {
+		t.Fatalf("argv = %q, want %q", got, want)
+	}
+}
 
 func TestClassifyTransportFailure(t *testing.T) {
 	t.Parallel()

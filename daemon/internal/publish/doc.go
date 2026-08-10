@@ -51,7 +51,8 @@
 // importer's re-authored candidate head on the managed repository
 // (PushHead), so Publisher converges against a head GitHub actually
 // holds. Every invocation runs under the hardened per-lane git runner
-// (netRunner): a fully replaced environment, no hooks or user config,
+// (netRunner): internal/gitrun's shared transport baseline, a fully replaced
+// environment, no hooks or user config,
 // protocol access closed to a single scheme, create-only single-ref
 // pushes, and the installation token crossing only as a per-invocation
 // header config entry in the child environment — never argv, never
