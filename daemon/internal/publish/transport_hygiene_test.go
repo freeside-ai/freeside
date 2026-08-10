@@ -2,39 +2,134 @@ package publish
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
+type treeScanFinding struct {
+	description string
+	path        string
+}
+
 // scanTreeForTokenForms walks every file under root and fails on any
 // occurrence of the token in raw or base64 form.
 func scanTreeForTokenForms(t *testing.T, root string) {
 	t.Helper()
+	findings, err := scanTreeForTokenFormsWithRead(root, os.ReadFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, finding := range findings {
+		t.Errorf("%s in %s", finding.description, finding.path)
+	}
+}
+
+func scanTreeForTokenFormsWithRead(root string, read func(string) ([]byte, error)) ([]treeScanFinding, error) {
+	var findings []treeScanFinding
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
+			if path != root && errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		if d.IsDir() {
 			return nil
 		}
-		data, err := os.ReadFile(path) //nolint:gosec // G304: test-owned fixture tree
+		data, err := read(path)
 		if err != nil {
+			if path != root && errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		for _, form := range stubTokenForms() {
 			if strings.Contains(string(data), form) {
-				t.Errorf("token bytes on disk in %s", path)
+				findings = append(findings, treeScanFinding{description: "token bytes on disk", path: path})
 			}
 		}
 		if strings.Contains(strings.ToLower(string(data)), "extraheader") {
-			t.Errorf("credential header config persisted in %s", path)
+			findings = append(findings, treeScanFinding{description: "credential header config persisted", path: path})
 		}
 		return nil
 	})
-	if err != nil {
+	return findings, err
+}
+
+func TestScanTreeForTokenFormsToleratesVanishingFile(t *testing.T) {
+	root := t.TempDir()
+	vanishing := filepath.Join(root, "a-vanishing")
+	surviving := filepath.Join(root, "b-surviving")
+	if err := os.WriteFile(vanishing, []byte("temporary"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.WriteFile(surviving, []byte(stubTokenValue), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	findings, err := scanTreeForTokenFormsWithRead(root, func(path string) ([]byte, error) {
+		if path == vanishing {
+			if err := os.Remove(path); err != nil {
+				return nil, err
+			}
+		}
+		return os.ReadFile(path) //nolint:gosec // G304: test-owned fixture tree
+	})
+	if err != nil {
+		t.Fatalf("scan with a vanishing file: %v", err)
+	}
+	if len(findings) != 1 || findings[0].path != surviving || findings[0].description != "token bytes on disk" {
+		t.Fatalf("findings = %+v, want the token in the surviving file", findings)
+	}
+}
+
+func TestScanTreeForTokenFormsToleratesVanishingDirectory(t *testing.T) {
+	root := t.TempDir()
+	trigger := filepath.Join(root, "a-trigger")
+	vanishing := filepath.Join(root, "b-vanishing")
+	if err := os.WriteFile(trigger, []byte("trigger"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(vanishing, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := scanTreeForTokenFormsWithRead(root, func(path string) ([]byte, error) {
+		if path == trigger {
+			if err := os.Remove(vanishing); err != nil {
+				return nil, err
+			}
+		}
+		return os.ReadFile(path) //nolint:gosec // G304: test-owned fixture tree
+	})
+	if err != nil {
+		t.Fatalf("scan with a vanishing directory: %v", err)
+	}
+}
+
+func TestScanTreeForTokenFormsRejectsOtherReadErrors(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "unreadable")
+	if err := os.WriteFile(file, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := scanTreeForTokenFormsWithRead(root, func(path string) ([]byte, error) {
+		return nil, &os.PathError{Op: "open", Path: path, Err: fs.ErrPermission}
+	})
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("scan error = %v, want permission error", err)
+	}
+}
+
+func TestScanTreeForTokenFormsRejectsMissingRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing")
+	_, err := scanTreeForTokenFormsWithRead(root, os.ReadFile)
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("scan error = %v, want missing-root error", err)
 	}
 }
 
