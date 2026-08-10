@@ -25,8 +25,6 @@ const procboundPath = "github.com/freeside-ai/freeside/daemon/internal/procbound
 var unboundSites = map[string]string{
 	"internal/verify/procroom.go:Run": "hand-rolled bounds predating this package; " +
 		"converging it is a follow-up, not this unit (#544)",
-	"internal/verify/gitrunner.go:runTo": "hand-rolled WaitDelay predating this package; " +
-		"same follow-up",
 	"internal/ward/runtime_cli.go:runTo": "builds the command and hands it straight to " +
 		"runPrepared in the same file, which binds it",
 }
