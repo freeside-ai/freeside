@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/gitrun"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 )
 
@@ -64,29 +65,21 @@ func TestExecRunnerSeparatesHostExitStatusFromCommandOutput(t *testing.T) {
 func TestGitFetchScrubsAmbientConfigurationAndAllowsOnlyHTTPS(t *testing.T) {
 	runner := &recordingRunner{}
 	source := gitSource{gitPath: "/usr/bin/git", runner: runner}
+	destination := t.TempDir() + "/repository.git"
 	if err := source.Fetch(t.Context(), "freeasinbird/gh-imgup", 1278475858, testCommit,
-		t.TempDir()+"/repository.git"); err != nil {
+		destination); err != nil {
 		t.Fatal(err)
 	}
 	if len(runner.specs) != 1 {
 		t.Fatalf("clone invocations = %d, want 1", len(runner.specs))
 	}
 	spec := runner.specs[0]
-	wantConfig := []string{
-		"-c", "core.hooksPath=/dev/null",
-		"-c", "core.fsmonitor=false",
-		"-c", "protocol.allow=never",
-		"-c", "protocol.https.allow=always",
-		"-c", "core.protectHFS=true",
-		"-c", "core.protectNTFS=true",
-		"-c", "credential.helper=",
-		"-c", "http.followRedirects=false",
-		"-c", "push.followTags=false",
-		"-c", "fetch.recurseSubmodules=false",
-		"-c", "transfer.fsckObjects=true",
-	}
-	if !slices.Equal(spec.Args[:len(wantConfig)], wantConfig) {
-		t.Fatalf("clone config = %q, want %q", spec.Args[:len(wantConfig)], wantConfig)
+	wantArgs := append(gitrun.TransportBaseline("https"),
+		"clone", "--quiet", "--bare",
+		"https://github.com/freeasinbird/gh-imgup.git", destination,
+	)
+	if !slices.Equal(spec.Args, wantArgs) {
+		t.Fatalf("clone args = %q, want %q", spec.Args, wantArgs)
 	}
 	if slices.Contains(spec.Args, "--no-tags") {
 		t.Fatal("clone suppresses commits reachable only through tags")
