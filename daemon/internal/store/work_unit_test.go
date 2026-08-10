@@ -84,7 +84,8 @@ func TestReadyItemPRBindingAnchorsToReadyItem(t *testing.T) {
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason: "published", RequestedDecision: []domain.Action{domain.ActionOpenPR},
-		PRHeadSHA: "cafebabe", ItemVersion: 1,
+		PRHeadSHA: "cafebabe", PRReference: &domain.PRReference{Repo: "owner/repo", Number: 450},
+		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
 	}, nil)
 	if err != nil {

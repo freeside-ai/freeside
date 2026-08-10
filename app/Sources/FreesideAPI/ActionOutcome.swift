@@ -2,7 +2,7 @@
 /// mirroring the signet boundary's actionOutcome table
 /// decision-for-decision (daemon/internal/signet/service.go). Concluding
 /// actions flip the item's status in the accepting transaction;
-/// record-only actions leave the item untouched (open_pr and
+/// record-only actions leave the item untouched (viewing a PR and
 /// inspect_trust_failure navigate, acknowledge and mark_seen mean seen,
 /// run_doctor leaves a system_health item blocking); the unattended
 /// stop/resume transactions conclude the decided item and durably move the

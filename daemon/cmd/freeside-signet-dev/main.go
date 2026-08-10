@@ -508,6 +508,10 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		blocking := domain.HealthPostureBlocking
 		posture = &blocking
 	}
+	var prReference *domain.PRReference
+	if itemType == domain.AttentionReadyForFinalReview {
+		prReference = &domain.PRReference{Repo: "freeside-ai/demo", Number: 123}
+	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID:                          domain.ItemID(req.ID),
 		ProjectID:                   "proj-convergence",
@@ -518,6 +522,7 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		RequestedDecision:           requested,
 		AgentClaims:                 claims,
 		PRHeadSHA:                   "cafebabe",
+		PRReference:                 prReference,
 		ReviewRecoveryBinding:       reviewRecoveryBinding,
 		ReviewConfigurationRecovery: reviewConfigurationRecovery,
 		ItemVersion:                 req.ItemVersion,

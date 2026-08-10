@@ -576,7 +576,9 @@ func TestListRejectsForgedMetadata(t *testing.T) {
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason:            "forged-metadata sibling fixture",
 		RequestedDecision: []domain.Action{domain.ActionOpenPR},
-		PRHeadSHA:         "cafebabe", ItemVersion: 1,
+		PRHeadSHA:         "cafebabe",
+		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 123},
+		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		Status:            domain.StatusOpen,
 	}, nil)
@@ -605,6 +607,10 @@ func TestListRejectsForgedMetadata(t *testing.T) {
 		}
 		bodies[entity] = body
 	}
+	prReferenceBody, err := encode(*item.PRReference)
+	if err != nil {
+		t.Fatalf("encode pr reference: %v", err)
+	}
 	// The forged item body reuses the sibling's shape under its own id.
 	forgedItem := item
 	forgedItem.ID = "item-a"
@@ -623,6 +629,7 @@ func TestListRejectsForgedMetadata(t *testing.T) {
 		t.Helper()
 		for _, reset := range []string{
 			`DELETE FROM attention_deliveries`,
+			`DELETE FROM attention_item_pr_references`,
 			`DELETE FROM attention_items`,
 			`DELETE FROM conversations`,
 			`DELETE FROM runs`,
@@ -641,6 +648,8 @@ func TestListRejectsForgedMetadata(t *testing.T) {
 			{`INSERT INTO conversations (id, entity_version, as_of_revision, body) VALUES ('conv-b', 1, 1, ?)`, []any{bodies["conv-b"]}},
 			{`INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body) VALUES ('item-a', 'proj-1', NULL, ?, ?, ?, ?, ?)`, []any{item.Type, item.Status, ev, rev, bodies["item-a"]}},
 			{`INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body) VALUES ('item-b', 'proj-1', NULL, ?, ?, 1, 1, ?)`, []any{item.Type, item.Status, bodies["item-b"]}},
+			{`INSERT INTO attention_item_pr_references (item_id, repo, pr_number, body) VALUES ('item-a', 'owner/repo', 123, ?)`, []any{prReferenceBody}},
+			{`INSERT INTO attention_item_pr_references (item_id, repo, pr_number, body) VALUES ('item-b', 'owner/repo', 123, ?)`, []any{prReferenceBody}},
 			{`INSERT INTO attention_deliveries (item_id, device_id, channel, attempt, entity_version, as_of_revision, body) VALUES ('item-b', 'device-1', 'ntfy', 1, ?, ?, ?)`, []any{ev, rev, bodies["delivery-a"]}},
 			{`INSERT INTO attention_deliveries (item_id, device_id, channel, attempt, entity_version, as_of_revision, body) VALUES ('item-b', 'device-1', 'ntfy', 2, 1, 1, ?)`, []any{bodies["delivery-b"]}},
 		}
@@ -746,7 +755,9 @@ func TestListRejectsInconsistentRow(t *testing.T) {
 			Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 			Reason:            "inconsistent-row fixture",
 			RequestedDecision: []domain.Action{domain.ActionOpenPR},
-			PRHeadSHA:         "cafebabe", ItemVersion: 1,
+			PRHeadSHA:         "cafebabe",
+			PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 123},
+			ItemVersion:       1,
 			InterruptionClass: domain.InterruptionPlannedGate,
 			ConversationID:    bind, Status: domain.StatusOpen,
 		}, nil)
@@ -900,7 +911,9 @@ func TestSnapshotRejectsForgedMetadata(t *testing.T) {
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason:            "forged-metadata fixture",
 		RequestedDecision: []domain.Action{domain.ActionOpenPR},
-		PRHeadSHA:         "cafebabe", ItemVersion: 1,
+		PRHeadSHA:         "cafebabe",
+		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 123},
+		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		Status:            domain.StatusOpen,
 	}, nil)
@@ -910,6 +923,10 @@ func TestSnapshotRejectsForgedMetadata(t *testing.T) {
 	itemBody, err := encode(item)
 	if err != nil {
 		t.Fatalf("encode item: %v", err)
+	}
+	prReferenceBody, err := encode(*item.PRReference)
+	if err != nil {
+		t.Fatalf("encode pr reference: %v", err)
 	}
 	command, err := domain.NewCommand(domain.CommandInput{
 		CommandID: "cmd-1", DeviceID: "device-1", ItemID: item.ID,
@@ -937,6 +954,9 @@ func TestSnapshotRejectsForgedMetadata(t *testing.T) {
 		if _, err := db.ExecContext(ctx, `DELETE FROM commands`); err != nil {
 			t.Fatalf("reset commands: %v", err)
 		}
+		if _, err := db.ExecContext(ctx, `DELETE FROM attention_item_pr_references`); err != nil {
+			t.Fatalf("reset item pr references: %v", err)
+		}
 		if _, err := db.ExecContext(ctx, `DELETE FROM attention_items`); err != nil {
 			t.Fatalf("reset items: %v", err)
 		}
@@ -944,6 +964,11 @@ func TestSnapshotRejectsForgedMetadata(t *testing.T) {
 			`INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body) VALUES ('item-1', 'proj-1', NULL, ?, ?, ?, ?, ?)`,
 			item.Type, item.Status, entityVersion, asOfRevision, itemBody); err != nil {
 			t.Fatalf("insert item: %v", err)
+		}
+		if _, err := db.ExecContext(ctx,
+			`INSERT INTO attention_item_pr_references (item_id, repo, pr_number, body) VALUES ('item-1', 'owner/repo', 123, ?)`,
+			prReferenceBody); err != nil {
+			t.Fatalf("insert item pr reference: %v", err)
 		}
 	}
 	seedCommand := func(entityVersion, asOfRevision int64) {
@@ -1054,6 +1079,7 @@ func TestPutAttentionItemPreNoticeRowConverges(t *testing.T) {
 		Priority:          domain.PriorityNormal,
 		Reason:            "checks are green and the diff is ready",
 		RequestedDecision: []domain.Action{domain.ActionOpenPR},
+		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 123},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		Status:            domain.StatusOpen,
@@ -1128,6 +1154,7 @@ func TestPutAttentionItemLegacyOffsetExpiresWhenConverges(t *testing.T) {
 		Priority:          domain.PriorityNormal,
 		Reason:            "checks are green and the diff is ready",
 		RequestedDecision: []domain.Action{domain.ActionOpenPR},
+		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 123},
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		Status:            domain.StatusOpen,
@@ -1154,6 +1181,15 @@ func TestPutAttentionItemLegacyOffsetExpiresWhenConverges(t *testing.T) {
 		`INSERT INTO attention_items (id, project_id, conversation_id, item_type, status, entity_version, as_of_revision, body) VALUES (?, ?, NULL, ?, ?, 1, 1, ?)`,
 		item.ID, item.ProjectID, item.Type, item.Status, legacy); err != nil {
 		t.Fatalf("insert legacy row: %v", err)
+	}
+	prReferenceBody, err := encode(*item.PRReference)
+	if err != nil {
+		t.Fatalf("encode pr reference: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO attention_item_pr_references (item_id, repo, pr_number, body) VALUES (?, ?, ?, ?)`,
+		item.ID, item.PRReference.Repo, item.PRReference.Number, prReferenceBody); err != nil {
+		t.Fatalf("insert pr reference: %v", err)
 	}
 
 	// Read canonicalizes to UTC on both the Get and List paths.

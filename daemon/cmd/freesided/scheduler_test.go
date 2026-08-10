@@ -57,6 +57,7 @@ func schedTestItem(t *testing.T, st *store.Store) domain.AttentionItem {
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason:            "published and verified",
 		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionMarkSeen},
+		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 123},
 		ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate,
 		Status: domain.StatusOpen,
 	}, nil)
@@ -836,6 +837,7 @@ func capturedRunWithCriterion(
 		// PRHeadSHA is the head anchor the capture pass verifies the
 		// binding against.
 		PRHeadSHA:   "cafed00d",
+		PRReference: &domain.PRReference{Repo: "owner/repo", Number: 450},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
 		Status: domain.StatusOpen,
 	}, nil)
@@ -1349,6 +1351,7 @@ func TestBaseAdvanceWatchDeclaredUnboundRetriesInsteadOfResolving(t *testing.T) 
 		Reason:            "published and verified",
 		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionMarkSeen},
 		PRHeadSHA:         "cafed00d",
+		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 450},
 		ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate,
 		Status: domain.StatusOpen,
 	}, nil)
@@ -1438,9 +1441,9 @@ func TestBaseAdvanceWatchDeclaredUnboundRetriesInsteadOfResolving(t *testing.T) 
 
 // TestBaseAdvanceWatchCaptureRefusesBindingOffTheAnchors: a reconstructed
 // binding that does not restate the pass's first-party anchors (here the
-// ready item's published head) fails the observation, so the concluded
-// item's watch retries rather than capturing through coordinates the
-// engine never published.
+// ready item's published head) fails the pre-fire reconstruction gate. The
+// scheduler reports the corrupt authority and leaves the watch armed rather
+// than capturing through coordinates the engine never published.
 func TestBaseAdvanceWatchCaptureRefusesBindingOffTheAnchors(t *testing.T) {
 	ctx := context.Background()
 	st := schedTestStore(t)
@@ -1484,8 +1487,8 @@ func TestBaseAdvanceWatchCaptureRefusesBindingOffTheAnchors(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = start.Add(61 * time.Second)
-	if err := s.RunOnce(ctx); err != nil {
-		t.Fatal(err)
+	if err := s.RunOnce(ctx); err == nil || !strings.Contains(err.Error(), "stored row body inconsistent") {
+		t.Fatalf("scheduler pass error = %v, want corrupt ready-item authority", err)
 	}
 	if pullCalls != 0 {
 		t.Fatalf("the pass observed through an unanchored binding (%d pulls)", pullCalls)

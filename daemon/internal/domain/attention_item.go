@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -353,6 +354,29 @@ type ReadinessInvalidation struct {
 	ObservedAt time.Time `json:"observed_at"`
 }
 
+// PRReference is the structured identity of the published pull request a
+// ready_for_final_review item links to. The repository is GitHub's canonical
+// owner/name coordinate; clients may render it or compose its browser URL
+// without parsing presentation prose.
+type PRReference struct {
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
+}
+
+// Validate reports whether the reference is a safe GitHub owner/name
+// coordinate with a positive pull-request number.
+func (r PRReference) Validate() error {
+	parts := strings.Split(r.Repo, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" ||
+		parts[0] == "." || parts[0] == ".." || parts[1] == "." || parts[1] == ".." {
+		return fmt.Errorf("pull request repo %q: %w", r.Repo, ErrPRReferenceInconsistent)
+	}
+	if r.Number <= 0 {
+		return fmt.Errorf("pull request number %d: %w", r.Number, ErrNonPositive)
+	}
+	return nil
+}
+
 // Validate reports whether the fact is structurally sound and internally
 // consistent.
 func (r ReadinessInvalidation) Validate() error {
@@ -400,6 +424,10 @@ type AttentionItem struct {
 	// changes.
 	ArtifactDigests []Digest `json:"artifact_digests"`
 	PRHeadSHA       string   `json:"pr_head_sha"`
+	// PRReference identifies the published pull request behind a
+	// ready_for_final_review item. It is required exactly on that type and
+	// renders explicit null on every other item.
+	PRReference *PRReference `json:"pr_reference"`
 	// CommitPlanNotice is the daemon-derived commit-plan notice (plan §5.6;
 	// CommitPlanNoticeReason): set when the reserved plan channel was
 	// consumed without a plan structuring the import, nil otherwise. The
@@ -475,6 +503,7 @@ type AttentionItemInput struct {
 	EvidenceSnapshot            []Artifact
 	AgentClaims                 []AgentClaim
 	PRHeadSHA                   string
+	PRReference                 *PRReference
 	CommitPlanNotice            *CommitPlanNoticeReason
 	ReviewRecoveryBinding       *ReviewRecoveryBinding
 	ReviewConfigurationRecovery *ReviewConfigurationRecoveryBinding
@@ -515,6 +544,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		EvidenceSnapshot:            cloneArtifacts(in.EvidenceSnapshot),
 		AgentClaims:                 cloneAgentClaims(in.AgentClaims),
 		PRHeadSHA:                   in.PRHeadSHA,
+		PRReference:                 clonePtr(in.PRReference),
 		CommitPlanNotice:            clonePtr(in.CommitPlanNotice),
 		ReviewRecoveryBinding:       clonePtr(in.ReviewRecoveryBinding),
 		ReviewConfigurationRecovery: clonePtr(in.ReviewConfigurationRecovery),
@@ -605,6 +635,20 @@ func (i AttentionItem) Validate() error {
 	}
 	if i.CommitPlanNotice != nil && !i.CommitPlanNotice.valid() {
 		return fmt.Errorf("item %s commit_plan_notice %q: %w", i.ID, *i.CommitPlanNotice, ErrInvalidCommitPlanNotice)
+	}
+	if i.PRReference == nil {
+		if i.Type == AttentionReadyForFinalReview {
+			return fmt.Errorf("item %s type %q has no pr reference: %w",
+				i.ID, i.Type, ErrPRReferenceInconsistent)
+		}
+	} else {
+		if i.Type != AttentionReadyForFinalReview {
+			return fmt.Errorf("item %s type %q carries a pr reference: %w",
+				i.ID, i.Type, ErrPRReferenceInconsistent)
+		}
+		if err := i.PRReference.Validate(); err != nil {
+			return fmt.Errorf("item %s: %w", i.ID, err)
+		}
 	}
 	if i.ReviewRecoveryBinding == nil {
 		if i.Type == AttentionReviewContradiction {

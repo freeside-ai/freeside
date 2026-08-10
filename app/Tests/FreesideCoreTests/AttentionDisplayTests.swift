@@ -4,6 +4,10 @@ import Testing
 @testable import FreesideCore
 
 @Suite struct AttentionDisplayTests {
+    @Test func existingPullRequestActionUsesViewLanguage() {
+        #expect(AttentionDisplay.label(Components.Schemas.Action.open_pr) == "View PR")
+    }
+
     @Test func healthPostureLabelsAreExplicit() {
         #expect(AttentionDisplay.label(Components.Schemas.HealthPosture.blocking) == "Blocking")
         #expect(AttentionDisplay.label(Components.Schemas.HealthPosture.advisory) == "Advisory")

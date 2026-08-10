@@ -42,6 +42,7 @@ func watchTestItem(t *testing.T, st *store.Store, status domain.ItemStatus) doma
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason:            "published and verified",
 		RequestedDecision: []domain.Action{domain.ActionOpenPR},
+		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 123},
 		ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate,
 		Status: status,
 	}, nil)

@@ -282,6 +282,7 @@ func TestReportDeliveryOpenedRegatesItemOnReplay(t *testing.T) {
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason:            "checks are green and the diff is ready",
 		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionStop, domain.ActionDismiss},
+		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 123},
 		EvidenceSnapshot:  []domain.Artifact{artifact},
 		AgentClaims: []domain.AgentClaim{{
 			Label: "screenshot", Artifact: "art-2", Digest: "sha256:img",

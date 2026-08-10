@@ -164,6 +164,16 @@ func TestValidateAttentionItemFixedBindings(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("pull request reference changes", func(t *testing.T) {
+		oldReady := mustItem(t, validItemInput(domain.AttentionReadyForFinalReview))
+		updated := validItemInput(domain.AttentionReadyForFinalReview)
+		updated.ItemVersion = 2
+		updated.PRReference.Number++
+		if err := domain.ValidateAttentionItemTransition(oldReady, mustItem(t, updated)); !errors.Is(err, domain.ErrImmutableTransition) {
+			t.Fatalf("ValidateAttentionItemTransition() = %v, want ErrImmutableTransition", err)
+		}
+	})
 }
 
 // TestValidateAttentionItemStaleWrite covers item_version monotonicity: a changed

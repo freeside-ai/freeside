@@ -77,6 +77,40 @@ import Testing
         #expect(store.pendingCommandsByItemID["item-spec_approval"] == nil)
     }
 
+    @Test func navigationReservationBlocksWithoutEnteringTheReplayLedger() async throws {
+        let store = await makeStore(server: MockServer())
+        let snapshot = try #require(store.snapshotsByID["item-ready_for_final_review"])
+        var ledgerWrites = 0
+        store.pendingCommandsObserver = {
+            ledgerWrites += 1
+            return true
+        }
+        let command = Components.Schemas.ClientCommand(
+            command_id: "cmd-navigation",
+            device_id: "device-mock",
+            expected_entity_version: snapshot.entity_version,
+            expected_bindings: .init(additionalProperties: [:]),
+            payload: .init(
+                item_id: snapshot.item.id,
+                action: .open_pr,
+                item_version: snapshot.item.item_version,
+                pr_head_sha: snapshot.item.pr_head_sha,
+                artifact_digests: snapshot.item.artifact_digests
+            )
+        )
+
+        #expect(store.reserveNavigation(itemID: snapshot.item.id))
+        #expect(!store.reserveNavigation(itemID: snapshot.item.id))
+        #expect(store.pendingCommandsByItemID[snapshot.item.id] == nil)
+        #expect(ledgerWrites == 0)
+        #expect(store.registerPendingCommand(command) == .slotOccupied)
+
+        store.releaseNavigation(itemID: snapshot.item.id)
+        #expect(ledgerWrites == 0)
+        #expect(store.registerPendingCommand(command) == .registered)
+        #expect(ledgerWrites == 1)
+    }
+
     @Test func staleRefreshFailureNeverClobbersANewerSuccess() async {
         // An older refresh that fails late must not overwrite the load
         // state of a newer one that already succeeded.

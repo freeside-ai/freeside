@@ -236,6 +236,7 @@ func TestFakePublicationPendingLegacyRecoveryConvergesOwnedSchedule(t *testing.T
 		},
 		Type: domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason: "published and verified", RequestedDecision: []domain.Action{domain.ActionOpenPR},
+		PRReference: &domain.PRReference{Repo: task.Repo, Number: 7},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
 		Status: domain.StatusOpen,
 	}, nil)
@@ -831,6 +832,7 @@ func TestPutTerminalItemAcceptsCompatibleLifecycleAdvance(t *testing.T) {
 			domain.ActionOpenPR, domain.ActionMarkSeen, domain.ActionDismiss, domain.ActionStop,
 		},
 		PRHeadSHA:   "0123456789012345678901234567890123456789",
+		PRReference: &domain.PRReference{Repo: "owner/repo", Number: 7},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
 		Status: domain.StatusOpen,
 	}, nil)
@@ -850,5 +852,51 @@ func TestPutTerminalItemAcceptsCompatibleLifecycleAdvance(t *testing.T) {
 	workflow := &fakePublicationWorkflow{store: st, attention: attention}
 	if err := workflow.putTerminalItem(ctx, expected); err != nil {
 		t.Fatalf("compatible terminal replay: %v", err)
+	}
+}
+
+func TestFakePublicationTerminalBindingAcceptsPrePRReferenceDigest(t *testing.T) {
+	task := validFakePublicationTask(t)
+	runID := task.RunID
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: FakePublicationReadyItemID(runID), ProjectID: task.ProjectID,
+		Subject: domain.Subject{
+			Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID,
+		},
+		Type: domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
+		Reason:            "published and ready",
+		RequestedDecision: []domain.Action{domain.ActionOpenPR},
+		PRHeadSHA:         task.BaseSHA,
+		PRReference:       &domain.PRReference{Repo: task.Repo, Number: 7},
+		ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate,
+		Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := fakePublicationTerminalDigestBeforePRReference(task, item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := fakePublicationTerminalDigest(task, item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy == current {
+		t.Fatal("legacy terminal digest unexpectedly equals current digest")
+	}
+	item.Reason += "\n\n" + fakePublicationTerminalBindingPrefix +
+		string(legacy) + fakePublicationTerminalBindingSuffix
+	got, err := validateFakePublicationTerminalBinding(task, item)
+	if err != nil {
+		t.Fatalf("validate legacy terminal binding: %v", err)
+	}
+	if got.Reason != "published and ready" {
+		t.Fatalf("unbound reason = %q", got.Reason)
+	}
+	tampered := item
+	tampered.PRHeadSHA = "foreign-head"
+	if _, err := validateFakePublicationTerminalBinding(task, tampered); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("tampered legacy terminal error = %v, want ErrParentKeyMismatch", err)
 	}
 }

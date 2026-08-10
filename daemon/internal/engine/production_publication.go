@@ -3859,7 +3859,10 @@ func (w *productionPublicationWorkflow) readyItemWithRecipes(
 			domain.ActionOpenPR, domain.ActionMarkSeen, domain.ActionDismiss, domain.ActionStop,
 		},
 		EvidenceSnapshot: checkpoint.Artifacts, AgentClaims: checkpoint.Imported.Claims,
-		PRHeadSHA:        checkpoint.Imported.CommitSHA,
+		PRHeadSHA: checkpoint.Imported.CommitSHA,
+		PRReference: &domain.PRReference{
+			Repo: checkpoint.Authorization.Repo, Number: published.PRNumber,
+		},
 		CommitPlanNotice: checkpoint.Imported.CommitPlanNotice,
 		ItemVersion:      1, InterruptionClass: domain.InterruptionPlannedGate,
 		Status: domain.StatusOpen,

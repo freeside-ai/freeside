@@ -212,6 +212,9 @@ public enum AttentionFixtures {
         // honor. Every other card keeps the null render.
         let commitPlanNotice: Components.Schemas.AttentionItem.commit_plan_noticePayload? =
             type == .ready_for_final_review ? .init(value1: .present_but_not_honored) : nil
+        let prReference: Components.Schemas.AttentionItem.pr_referencePayload? =
+            type == .ready_for_final_review
+            ? .init(value1: .init(repo: "owner/repo", number: 123)) : nil
         let reviewRecoveryBinding: Components.Schemas.AttentionItem.review_recovery_bindingPayload? =
             type == .review_contradiction
             ? .init(
@@ -260,6 +263,7 @@ public enum AttentionFixtures {
             agent_claims: agentClaims,
             artifact_digests: (agentClaims.map(\.digest) + [evidenceDigest]).sorted(),
             pr_head_sha: prHeadSHA,
+            pr_reference: prReference,
             commit_plan_notice: commitPlanNotice,
             review_recovery_binding: reviewRecoveryBinding,
             review_configuration_recovery: reviewConfigurationRecovery,

@@ -240,7 +240,7 @@ func (tx *ReadTx) ListOpenAttentionItems(
 	defer func() { _ = rows.Close() }()
 	var items []domain.AttentionItem
 	for rows.Next() {
-		item, _, err := tx.scanAttentionItemSnapshot(rows)
+		item, _, err := tx.scanAttentionItemSnapshot(ctx, rows)
 		if err != nil {
 			return nil, fmt.Errorf("list open %q items: %w", itemType, err)
 		}

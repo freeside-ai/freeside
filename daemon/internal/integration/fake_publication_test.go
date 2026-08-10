@@ -1965,8 +1965,9 @@ func TestFakeCandidatePublicationRejectsUnboundReadyTerminalDecisionInputs(t *te
 			domain.ActionOpenPR, domain.ActionMarkSeen, domain.ActionDismiss, domain.ActionStop,
 		},
 		EvidenceSnapshot: ready.Item.EvidenceSnapshot, AgentClaims: ready.Item.AgentClaims,
-		PRHeadSHA: ready.Item.PRHeadSHA, CommitPlanNotice: &forgedNotice,
-		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
+		PRHeadSHA: ready.Item.PRHeadSHA, PRReference: ready.Item.PRReference,
+		CommitPlanNotice: &forgedNotice,
+		ItemVersion:      1, InterruptionClass: domain.InterruptionPlannedGate,
 		Status: domain.StatusOpen,
 	}, map[domain.Digest]bool{h.recipeD: true})
 	if err != nil {

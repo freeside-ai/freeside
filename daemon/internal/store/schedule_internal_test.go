@@ -42,6 +42,7 @@ func TestScheduleAuthorityMigrationBackfillsAndNormalizesOneShots(t *testing.T) 
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason: "ready", RequestedDecision: []domain.Action{domain.ActionOpenPR},
+		PRReference: &domain.PRReference{Repo: "owner/repo", Number: 123},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
 		Status: domain.StatusOpen,
 	}, nil)
@@ -385,7 +386,8 @@ func migrationsBeforeScheduleAuthority(t *testing.T) fs.FS {
 			entry.Name() == "0032_review_recovery.sql" ||
 			entry.Name() == "0033_publish_installation_mint_audit.sql" ||
 			entry.Name() == "0034_review_configuration_recovery.sql" ||
-			entry.Name() == "0035_attention_health_posture.sql" || entry.IsDir() {
+			entry.Name() == "0035_attention_health_posture.sql" ||
+			entry.Name() == "0036_attention_pr_reference.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())

@@ -17,6 +17,7 @@
   "agent_claims": [],
   "artifact_digests": [],
   "pr_head_sha": "",
+  "pr_reference": null,
   "commit_plan_notice": null,
   "base_freshness": null,
   "readiness_invalidation": null,

@@ -43,6 +43,37 @@ import Testing
                 == "blocking_supersession on an advisory system_health item")
     }
 
+    @Test func pullRequestReferenceIsExactAndTypeScoped() {
+        let fixture = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        #expect(fixture.pr_reference?.value1.repo == "owner/repo")
+        #expect(fixture.pr_reference?.value1.number == 123)
+        #expect(MockContractValidation.itemValidityBreach(fixture) == nil)
+
+        var missing = fixture
+        missing.pr_reference = nil
+        #expect(
+            MockContractValidation.itemValidityBreach(missing)
+                == "ready_for_final_review item lacks pr_reference")
+
+        var wrongType = AttentionFixtures.fixture(type: .spec_approval).item
+        wrongType.pr_reference = fixture.pr_reference
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongType)
+                == "pr_reference on a non-ready_for_final_review item")
+
+        var invalidRepo = fixture
+        invalidRepo.pr_reference?.value1.repo = "owner/../repo"
+        #expect(
+            MockContractValidation.itemValidityBreach(invalidRepo)
+                == "invalid pr_reference repo")
+
+        var invalidNumber = fixture
+        invalidNumber.pr_reference?.value1.number = 0
+        #expect(
+            MockContractValidation.itemValidityBreach(invalidNumber)
+                == "non-positive pr_reference number")
+    }
+
     @Test func itemValidityBreachNamesTheFailedInvariant() {
         var empty = AttentionFixtures.fixture(type: .spec_approval).item
         empty.id = ""
