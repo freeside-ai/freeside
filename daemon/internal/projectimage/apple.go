@@ -1317,7 +1317,7 @@ func readOCIBlob(archivePath string, descriptor ociDescriptor, limit int64) ([]b
 	if !validDigest(descriptor.Digest) || descriptor.Size < 0 || descriptor.Size > limit {
 		return nil, fmt.Errorf("OCI descriptor is invalid")
 	}
-	entryName := "blobs/sha256/" + strings.TrimPrefix(descriptor.Digest, "sha256:")
+	entryName := "blobs/sha256/" + contentaddr.Hex(descriptor.Digest)
 	body, err := readOCIArchiveEntry(archivePath, entryName, limit)
 	if err != nil {
 		return nil, err
@@ -1343,7 +1343,7 @@ func extractOCILayers(
 				descriptor.MediaType != ociGzipMediaType) {
 			return nil, fmt.Errorf("OCI layer descriptor %d is invalid", index)
 		}
-		entry := "blobs/sha256/" + strings.TrimPrefix(descriptor.Digest, "sha256:")
+		entry := "blobs/sha256/" + contentaddr.Hex(descriptor.Digest)
 		if _, duplicate := byEntry[entry]; duplicate {
 			return nil, fmt.Errorf("OCI image repeats layer %s", descriptor.Digest)
 		}

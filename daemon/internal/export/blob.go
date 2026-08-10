@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
@@ -92,7 +91,7 @@ func (w *blobWriter) digestAndStore(fsys fs.FS, p string, store bool) (blobResul
 		_ = os.Remove(tmpName)
 		return blobResult{digest: d, size: n, stored: true}, nil
 	}
-	final := filepath.Join(w.dir, strings.TrimPrefix(string(d), "sha256:"))
+	final := filepath.Join(w.dir, contentaddr.Hex(string(d)))
 	if err := os.Rename(tmpName, final); err != nil {
 		_ = os.Remove(tmpName)
 		return blobResult{}, fmt.Errorf("commit blob for %q: %w", p, err)

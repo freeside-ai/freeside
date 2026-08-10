@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
@@ -428,7 +429,7 @@ func (b *Backend) verifyManifest(destDir string) (export.Manifest, map[string]bo
 		if e.Kind != export.EntryRegular || e.BlobOmitted {
 			continue
 		}
-		hexDigest := strings.TrimPrefix(string(*e.Digest), "sha256:")
+		hexDigest := contentaddr.Hex(string(*e.Digest))
 		rel := path.Join("blobs", "sha256", hexDigest)
 		referenced[rel] = true
 		key := hexDigest + ":" + strconv.FormatInt(*e.Size, 10)
@@ -486,7 +487,7 @@ func (b *Backend) verifyEvidence(destDir string) (export.EvidenceManifest, bool,
 	verified := make(map[string]bool)
 	for _, e := range em.Entries {
 		// Every evidence entry has a mandatory blob (the schema cannot omit one).
-		hexDigest := strings.TrimPrefix(string(e.Digest), "sha256:")
+		hexDigest := contentaddr.Hex(string(e.Digest))
 		rel := path.Join(export.EvidenceBlobsDirname, "sha256", hexDigest)
 		referenced[rel] = true
 		key := hexDigest + ":" + strconv.FormatInt(e.Size, 10)

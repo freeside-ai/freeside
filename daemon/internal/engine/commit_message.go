@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 )
@@ -100,7 +101,7 @@ func fallbackCommitMessageFloorSubject(boundIssue *int, runID domain.RunID) stri
 	trace := string(runID)
 	if !safeCommitTraceValue(trace) || len([]byte(prefix+trace+suffix)) > fallbackCommitSubjectMaxBytes {
 		sum := sha256.Sum256([]byte(trace))
-		trace = "sha256:" + hex.EncodeToString(sum[:8])
+		trace = contentaddr.Format(sum[:])[:len("sha256:")+16]
 	}
 	return prefix + trace + suffix
 }

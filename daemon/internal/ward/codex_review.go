@@ -254,8 +254,9 @@ type CodexReviewWorkspaceObservation struct {
 }
 
 func (o CodexReviewWorkspaceObservation) valid() bool {
+	_, treeDigestOK := contentaddr.FromHex(o.treeDigest)
 	return o.volume != "" && cliSafe(o.volume) && o.fingerprint != "" &&
-		commitSHAPattern.MatchString(o.head) && contentaddr.Valid("sha256:"+o.treeDigest) &&
+		commitSHAPattern.MatchString(o.head) && treeDigestOK &&
 		(o.agentsEntry == codexWorkspaceAgentsDir || o.agentsEntry == codexWorkspaceAgentsAbsent) &&
 		digestPinnedImagePattern.MatchString(o.observerImage) && o.observerFingerprint != ""
 }
@@ -1094,8 +1095,9 @@ func (b CodexReviewJournalBinding) validate(
 		workspaceAgentsValid = true
 		workspaceAgents = codexWorkspaceAgentsDir
 	}
+	_, workspaceTreeDigestOK := contentaddr.FromHex(b.WorkspaceTreeDigest)
 	if b.WorkspaceFingerprint == "" || !commitSHAPattern.MatchString(b.WorkspaceHead) ||
-		!contentaddr.Valid("sha256:"+b.WorkspaceTreeDigest) || !workspaceAgentsValid ||
+		!workspaceTreeDigestOK || !workspaceAgentsValid ||
 		!digestPinnedImagePattern.MatchString(b.WorkspaceObserverImage) ||
 		b.WorkspaceObserverFingerprint == "" {
 		return errors.New("codex review journal workspace evidence is invalid")
@@ -1665,7 +1667,8 @@ func codexReviewProofTreeDigest(proof []byte) (string, error) {
 		if !ok || key != baseProofTreeKey {
 			continue
 		}
-		if digest != "" || !contentaddr.Valid("sha256:"+value) {
+		_, validDigest := contentaddr.FromHex(value)
+		if digest != "" || !validDigest {
 			return "", failf(CheckObservedBaseIdentity, "Codex review workspace proof tree digest is invalid")
 		}
 		digest = value

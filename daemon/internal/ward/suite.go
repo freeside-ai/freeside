@@ -432,7 +432,7 @@ func expectedWriterExportMetadata(runID string) ([]byte, error) {
 		}
 		metadata.WriteByte('\n')
 		metadata.WriteString("blobs/sha256/")
-		metadata.WriteString(strings.TrimPrefix(string(*entry.Digest), "sha256:"))
+		metadata.WriteString(contentaddr.Hex(string(*entry.Digest)))
 	}
 	return metadata.Bytes(), nil
 }

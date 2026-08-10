@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
@@ -651,11 +652,7 @@ func imageDigest(ref domain.ImageRef) string {
 }
 
 func validDigest(digest string) bool {
-	return len(digest) == len("sha256:")+64 &&
-		strings.HasPrefix(digest, "sha256:") &&
-		strings.IndexFunc(digest[len("sha256:"):], func(r rune) bool {
-			return (r < '0' || r > '9') && (r < 'a' || r > 'f')
-		}) == -1
+	return contentaddr.Valid(digest)
 }
 
 func boundedOutput(output []byte) string {
