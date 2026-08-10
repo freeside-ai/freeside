@@ -1,12 +1,13 @@
 package domain
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 const projectImageEncodingVersion = "freeside.project-image/v1"
@@ -110,7 +111,7 @@ func (p ProjectImage) ComputeID() (Digest, error) {
 	if err != nil {
 		return "", fmt.Errorf("project image id: %w", err)
 	}
-	return Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body))), nil
+	return Digest(contentaddr.Sum(body)), nil
 }
 
 // Validate is the reconstruction backstop for a project-image build result.

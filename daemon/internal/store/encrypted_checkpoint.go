@@ -504,7 +504,7 @@ func artifactManifestDigest(digests []domain.Digest) domain.Digest {
 		_, _ = io.WriteString(hash, string(digest))
 		_, _ = io.WriteString(hash, "\n")
 	}
-	return domain.Digest(fmt.Sprintf("sha256:%x", hash.Sum(nil)))
+	return domain.Digest(contentaddr.Format(hash.Sum(nil)))
 }
 
 type sqliteDeserializer interface {

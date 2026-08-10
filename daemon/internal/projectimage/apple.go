@@ -253,7 +253,7 @@ func (a appleBackend) CheckProvenance(ctx context.Context, ref string, want prov
 	if !recipeFound || !prepareFound {
 		return fmt.Errorf("exported rootfs omitted embedded provenance files")
 	}
-	recipeDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(recipeBytes))
+	recipeDigest := contentaddr.Sum(recipeBytes)
 	if recipeDigest != string(want.RecipeDigest) ||
 		!bytes.Equal(prepareBytes, []byte(prepareScript)) {
 		return fmt.Errorf("embedded provenance file digests do not match the build inputs")
@@ -1323,7 +1323,7 @@ func readOCIBlob(archivePath string, descriptor ociDescriptor, limit int64) ([]b
 		return nil, err
 	}
 	if int64(len(body)) != descriptor.Size ||
-		fmt.Sprintf("sha256:%x", sha256.Sum256(body)) != descriptor.Digest {
+		contentaddr.Sum(body) != descriptor.Digest {
 		return nil, fmt.Errorf("OCI blob %s does not match its descriptor", descriptor.Digest)
 	}
 	return body, nil

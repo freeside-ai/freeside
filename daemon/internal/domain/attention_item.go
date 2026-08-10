@@ -1,12 +1,13 @@
 package domain
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 // Subject is what an AttentionItem is about (plan §4). RunID is set only when
@@ -79,7 +80,7 @@ type ClaimText struct {
 // the repository-wide "sha256:<hex>" form, so a text claim's digest is also
 // a valid attachment-store address for the same bytes.
 func (t ClaimText) ComputeDigest() Digest {
-	return Digest(fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(t.Content))))
+	return Digest(contentaddr.Sum([]byte(t.Content)))
 }
 
 // clone returns a copy detached from the caller's provenance and text

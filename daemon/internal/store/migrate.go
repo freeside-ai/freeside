@@ -2,13 +2,14 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"fmt"
 	"io/fs"
 	"regexp"
 	"sort"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 // migrationName pins the file naming rule: NNNN_description.sql, NNNN
@@ -72,7 +73,7 @@ func fileDigest(fsys fs.FS, name string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read migration %q: %w", name, err)
 	}
-	return fmt.Sprintf("sha256:%x", sha256.Sum256(body)), nil
+	return contentaddr.Sum(body), nil
 }
 
 // migrationFiles lists and validates the migration files: every name matches
@@ -141,7 +142,7 @@ func applyMigration(ctx context.Context, db *sql.DB, fsys fs.FS, version int, na
 	if err != nil {
 		return fmt.Errorf("read migration %q: %w", name, err)
 	}
-	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(body))
+	digest := contentaddr.Sum(body)
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("migration %q: begin: %w", name, err)

@@ -2,13 +2,13 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
@@ -19,7 +19,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (invocation_id) DO NOTHING`
 
 func reviewBodyDigest(body string) string {
-	return fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(body)))
+	return contentaddr.Sum([]byte(body))
 }
 
 func reviewBodyAuthority(body string) string {

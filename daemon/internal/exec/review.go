@@ -2,7 +2,6 @@ package exec
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -202,7 +201,7 @@ func (r ReviewRequest) AuthorityDigest() (domain.Digest, error) {
 	if err != nil {
 		return "", err
 	}
-	return domain.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body))), nil
+	return domain.Digest(contentaddr.Sum(body)), nil
 }
 
 // ReviewResult is the committed outcome of a review invocation: the

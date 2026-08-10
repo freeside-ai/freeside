@@ -944,9 +944,9 @@ func BuildCodexReviewAgentSpec(
 	// files; tie its per-file digests to the bytes admission just re-read so a
 	// seeded volume that diverged from the admitted body cannot start.
 	authSum := sha256.Sum256(authBody)
-	wantAuthDigest := fmt.Sprintf("sha256:%x", authSum)
+	wantAuthDigest := contentaddr.Format(authSum[:])
 	instructionSum := sha256.Sum256(instructionBody)
-	wantInstructionDigest := fmt.Sprintf("sha256:%x", instructionSum)
+	wantInstructionDigest := contentaddr.Format(instructionSum[:])
 	if req.Snapshot.authDigest != wantAuthDigest || req.Snapshot.instructionDigest != wantInstructionDigest {
 		return ContainerSpec{}, CodexReviewJournalBinding{}, failf(
 			CheckCredentialSeparation, "Codex review snapshot volume does not hold the admitted credential and instruction bytes",
@@ -1719,7 +1719,7 @@ func digestStrings(values []string) string {
 		h.Write([]byte(value))
 		h.Write([]byte{0})
 	}
-	return fmt.Sprintf("sha256:%x", h.Sum(nil))
+	return contentaddr.Format(h.Sum(nil))
 }
 
 func digestEnvironment(environment []string) string {
@@ -1757,9 +1757,9 @@ func validateCodexReviewAgentSpec(
 		return failf(CheckCredentialSeparation, "Codex review access token fell below its lifetime floor")
 	}
 	authSum := sha256.Sum256(authBody)
-	wantAuthDigest := fmt.Sprintf("sha256:%x", authSum)
+	wantAuthDigest := contentaddr.Format(authSum[:])
 	instructionSum := sha256.Sum256(instructionBody)
-	wantInstructionDigest := fmt.Sprintf("sha256:%x", instructionSum)
+	wantInstructionDigest := contentaddr.Format(instructionSum[:])
 	// Re-tie the snapshot observation's per-file digests to the bytes admission
 	// re-read, so a snapshot volume seeded with different content cannot pass the
 	// final pre-start reconstruction.

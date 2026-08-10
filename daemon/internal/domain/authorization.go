@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 // authorizationEncodingVersion tags the canonical encoding ComputeID digests.
@@ -216,7 +218,7 @@ func ComputeEvidenceSnapshotDigest(artifacts []Artifact) (Digest, error) {
 		return "", fmt.Errorf("encode evidence snapshot: %w", err)
 	}
 	sum := sha256.Sum256(payload)
-	return Digest(fmt.Sprintf("sha256:%x", sum)), nil
+	return Digest(contentaddr.Format(sum[:])), nil
 }
 
 // NewCandidateAuthorization builds a validated authorization whose findings
@@ -337,7 +339,7 @@ func (a CandidateAuthorization) ComputeID() (Digest, error) {
 	if err != nil {
 		return "", fmt.Errorf("candidate authorization id: %w", err)
 	}
-	return Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body))), nil
+	return Digest(contentaddr.Sum(body)), nil
 }
 
 // computeAuthorizesPublication implements the publication-authorization

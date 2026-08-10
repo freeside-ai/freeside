@@ -1,11 +1,12 @@
 package domain
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 // Message is one immutable turn in a conversation (plan §5.14). Its Sequence is
@@ -193,7 +194,7 @@ func (c Conversation) PrefixContent(through int) (Digest, []byte, error) {
 	if err != nil {
 		return "", nil, fmt.Errorf("conversation %s prefix: %w", c.ID, err)
 	}
-	return Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body))), body, nil
+	return Digest(contentaddr.Sum(body)), body, nil
 }
 
 // AgentInvocation binds an agent turn to the explicit immutable inputs it was
@@ -266,7 +267,7 @@ func (a AgentInvocation) ComputeInputDigest() (Digest, error) {
 	if err != nil {
 		return "", fmt.Errorf("agent invocation %s input digest: %w", a.ID, err)
 	}
-	return Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body))), nil
+	return Digest(contentaddr.Sum(body)), nil
 }
 
 // Validate reports whether the invocation is well-formed. It is the

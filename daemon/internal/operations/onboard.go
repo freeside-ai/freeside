@@ -2,7 +2,6 @@ package operations
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
@@ -409,7 +409,7 @@ func onboardApprovalDigest(
 	if err != nil {
 		return "", fmt.Errorf("onboard: encode approval review: %w", err)
 	}
-	return domain.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body))), nil
+	return domain.Digest(contentaddr.Sum(body)), nil
 }
 
 func projectImageReview(request projectimage.Request) ProjectImageReview {
