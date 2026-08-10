@@ -518,10 +518,50 @@ func TestGitHub1MessageScreening(t *testing.T) {
 		if err == nil {
 			t.Fatalf("mapping fixture %q passed", message)
 		}
+		if !kind.valid() {
+			t.Errorf("mapping fixture %q returned invalid kind %q", message, kind)
+		}
 		seenKinds[kind] = true
 	}
 	if len(seenKinds) != len(allCommitMessageFindingKinds) {
 		t.Fatalf("finding mapping covers %d kinds, registry has %d: %v", len(seenKinds), len(allCommitMessageFindingKinds), seenKinds)
+	}
+	for _, kind := range allCommitMessageFindingKinds {
+		if !kind.valid() {
+			t.Errorf("registered finding kind %q is invalid", kind)
+		}
+	}
+	if commitMessageFindingKind("").valid() {
+		t.Error("zero-value finding kind is valid")
+	}
+}
+
+func TestCommitMessageFindingKindTokens(t *testing.T) {
+	wantTokens := map[commitMessageFindingKind]string{
+		messageFindingOverCap:        "message_over_cap",
+		messageFindingEmpty:          "message_empty",
+		messageFindingControl:        "message_control",
+		messageFindingCloseDirective: "github_close_directive",
+		messageFindingSkipDirective:  "github_skip_directive",
+		messageFindingSpoofedTrailer: "github_spoofed_trailer",
+	}
+	if len(wantTokens) != len(allCommitMessageFindingKinds) {
+		t.Fatalf("token table covers %d kinds, registry has %d", len(wantTokens), len(allCommitMessageFindingKinds))
+	}
+	seen := make(map[commitMessageFindingKind]bool, len(allCommitMessageFindingKinds))
+	for _, kind := range allCommitMessageFindingKinds {
+		want, ok := wantTokens[kind]
+		if !ok {
+			t.Errorf("registered finding kind %q has no pinned token", kind)
+			continue
+		}
+		if got := string(kind); got != want {
+			t.Errorf("%v token = %q, want %q", kind, got, want)
+		}
+		seen[kind] = true
+	}
+	if len(seen) != len(wantTokens) {
+		t.Errorf("registry covers %d unique pinned kinds, token table has %d", len(seen), len(wantTokens))
 	}
 }
 
