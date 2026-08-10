@@ -192,10 +192,10 @@ func (r *ProjectImageRoom) cleanupOwnedContainers(
 		if id == "" {
 			return fmt.Errorf("list verification containers for ownership recovery: %w", err)
 		}
-		backend := &Backend{rt: r.runtime}
-		return backend.reapUnlistedContainer(ctx, id, objectClaim{attempted: true}, owner)
+		ops := runtimeOps{rt: r.runtime}
+		return ops.reapUnlistedContainer(ctx, id, objectClaim{attempted: true}, owner)
 	}
-	backend := &Backend{rt: r.runtime}
+	ops := runtimeOps{rt: r.runtime}
 	var cleanupErr error
 	for _, candidate := range containers {
 		if !validVerificationContainerID(candidate.ID) {
@@ -206,7 +206,7 @@ func (r *ProjectImageRoom) cleanupOwnedContainers(
 		if candidate.LabelsObserved && !slices.Contains(candidate.Labels, owner) && candidate.ID != id {
 			continue
 		}
-		evidence, evidenceErr := backend.containerEvidence(
+		evidence, evidenceErr := ops.containerEvidence(
 			ctx, candidate, objectClaim{attempted: true}, owner,
 		)
 		if evidenceErr != nil {
@@ -215,7 +215,7 @@ func (r *ProjectImageRoom) cleanupOwnedContainers(
 		}
 		switch evidence {
 		case evidenceOurs:
-			cleanupErr = errors.Join(cleanupErr, backend.reapContainer(ctx, candidate))
+			cleanupErr = errors.Join(cleanupErr, ops.reapContainer(ctx, candidate))
 		case evidenceForeign:
 			if candidate.ID == id {
 				cleanupErr = errors.Join(cleanupErr,

@@ -595,7 +595,9 @@ func sha256Sum(s string) []byte {
 //
 // The seeder is proven absent before returning, so its read-write attachment is
 // provably released before the writer's own attach.
-func (b *Backend) seedWorkspace(ctx context.Context, hs HandoffSpec, names handoffNames, st *runState) error {
+func (b runtimeOps) seedWorkspace(
+	ctx context.Context, hs HandoffSpec, names handoffNames, st *runState, hooks runtimeSeedHooks,
+) error {
 	if hs.Seed.Mode != SeedBaseCheckout {
 		return nil
 	}
@@ -607,8 +609,9 @@ func (b *Backend) seedWorkspace(ctx context.Context, hs HandoffSpec, names hando
 		return failf(CheckWorkspaceSeeding, "create seed snapshot directory: %v", err)
 	}
 	st.seedSnapshotDir = snapshot
+	seedCfg := b.cfg.seedConfig()
 	digest, err := stageSeedSource(
-		b.cfg, hs.Seed.SourceDir, hs.Seed.Base.Repo, hs.Seed.Base.RepositoryID, snapshot,
+		seedCfg, hs.Seed.SourceDir, hs.Seed.Base.Repo, hs.Seed.Base.RepositoryID, snapshot,
 	)
 	if err != nil {
 		return err
@@ -629,7 +632,7 @@ func (b *Backend) seedWorkspace(ctx context.Context, hs HandoffSpec, names hando
 		return failf(CheckWorkspaceSeeding, "write seed sentinel: %v", err)
 	}
 
-	spec := buildSeederSpec(b.cfg, hs, names, st.ownershipLabel)
+	spec := buildSeederSpec(seedCfg, hs, names, st.ownershipLabel)
 	st.seeder.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
 		return failf(CheckWorkspaceSeeding, "create seeder container: %v", err)
@@ -657,11 +660,15 @@ func (b *Backend) seedWorkspace(ctx context.Context, hs HandoffSpec, names hando
 
 	// Each copy is bounded on its own so a wedged transfer cannot consume the
 	// whole handoff budget while the seeder holds the workspace read-write.
-	if err := b.copyIntoSeeder(ctx, names.Seeder, source, b.cfg.SeedStageDir); err != nil {
+	copyIntoSeeder := b.copyIntoSeeder
+	if hooks.copyIntoSeeder != nil {
+		copyIntoSeeder = hooks.copyIntoSeeder
+	}
+	if err := copyIntoSeeder(ctx, names.Seeder, source, b.cfg.SeedStageDir); err != nil {
 		return err
 	}
 	// Ordering signal, sent only after the staged tree is complete.
-	if err := b.copyIntoSeeder(ctx, names.Seeder, readyDir, b.cfg.SeedReadyDir); err != nil {
+	if err := copyIntoSeeder(ctx, names.Seeder, readyDir, b.cfg.SeedReadyDir); err != nil {
 		return err
 	}
 
@@ -691,11 +698,13 @@ func (b *Backend) seedWorkspace(ctx context.Context, hs HandoffSpec, names hando
 // The observer runs before the writer, because the base is a pre-writer fact:
 // once the agent runs it may legitimately move HEAD, and an observation taken
 // afterwards would attest the agent's work rather than the base it started from.
-func (b *Backend) observeSeededBase(ctx context.Context, hs HandoffSpec, names handoffNames, st *runState) (string, error) {
+func (b runtimeOps) observeSeededBase(
+	ctx context.Context, hs HandoffSpec, names handoffNames, st *runState, hooks runtimeSeedHooks,
+) (string, error) {
 	if hs.Seed.Mode != SeedBaseCheckout {
 		return "", nil
 	}
-	spec := buildObserverSpec(b.cfg, hs, names, st.ownershipLabel)
+	spec := buildObserverSpec(b.cfg.seedConfig(), hs, names, st.ownershipLabel)
 	st.observer.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
 		return "", failf(CheckObservedBaseIdentity, "create base observer container: %v", err)
@@ -721,7 +730,11 @@ func (b *Backend) observeSeededBase(ctx context.Context, hs HandoffSpec, names h
 		return "", failf(CheckObservedBaseIdentity, "base observer: %v", err)
 	}
 
-	observed, err := b.readBaseProof(ctx, hs.RunID, names.Observer, st)
+	readBaseProof := b.readBaseProof
+	if hooks.readBaseProof != nil {
+		readBaseProof = hooks.readBaseProof
+	}
+	observed, err := readBaseProof(ctx, hs.RunID, names.Observer, st)
 	if err != nil {
 		return "", err
 	}
@@ -746,7 +759,7 @@ func (b *Backend) observeSeededBase(ctx context.Context, hs HandoffSpec, names h
 // filesystem and validates it. The archive is streamed under the same byte cap
 // as the export path and removed as soon as the proof is read: it is evidence
 // for this decision, never output.
-func (b *Backend) readBaseProof(ctx context.Context, runID, id string, st *runState) (string, error) {
+func (b runtimeOps) readBaseProof(ctx context.Context, runID, id string, st *runState) (string, error) {
 	dir, err := os.MkdirTemp("", "freeside-handoff-"+runID+"-base-")
 	if err != nil {
 		return "", failf(CheckObservedBaseIdentity, "create base proof directory: %v", err)
@@ -780,7 +793,7 @@ func (b *Backend) readBaseProof(ctx context.Context, runID, id string, st *runSt
 // that could pressure the host.
 const maxBaseProofBytes = 4 << 10
 
-func (b *Backend) copyIntoSeeder(ctx context.Context, id, hostDir, targetDir string) error {
+func (b runtimeOps) copyIntoSeeder(ctx context.Context, id, hostDir, targetDir string) error {
 	ctx, cancel := context.WithTimeout(ctx, b.cfg.SeedTimeout)
 	defer cancel()
 	if err := b.rt.CopyIntoContainer(ctx, id, hostDir, targetDir); err != nil {

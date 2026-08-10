@@ -9,12 +9,12 @@ import (
 )
 
 // CodexReviewLifecycleTestFixture exposes only the fixture plumbing needed by
-// external-package tests that bind Backend.CodexReview to the real wardstore
+// external-package tests that bind the Codex review lifecycle to the real wardstore
 // adapter without creating an import cycle in package ward.
 type CodexReviewLifecycleTestFixture struct {
-	Backend *Backend
-	Config  CodexReviewConfig
-	Launch  CodexReviewLaunchSpec
+	Lifecycle *CodexReviewLifecycle
+	Config    CodexReviewConfig
+	Launch    CodexReviewLaunchSpec
 
 	runtime *fakeRuntime
 }
@@ -23,7 +23,7 @@ func NewCodexReviewLifecycleTestFixture(
 	t *testing.T, journal CodexReviewJournal,
 ) *CodexReviewLifecycleTestFixture {
 	t.Helper()
-	backend, runtime, cfg, launch, fakeJournal := testCodexReviewLifecycle(t)
+	lifecycle, runtime, cfg, launch, fakeJournal := testCodexReviewLifecycle(t)
 	cfg.Journal = journal
 	if err := journal.PutCodexReviewWorkspaceBinding(
 		context.Background(), fakeJournal.workspaceBinding,
@@ -31,7 +31,7 @@ func NewCodexReviewLifecycleTestFixture(
 		t.Fatalf("persist real-adapter workspace fixture: %v", err)
 	}
 	return &CodexReviewLifecycleTestFixture{
-		Backend: backend, Config: cfg, Launch: launch, runtime: runtime,
+		Lifecycle: lifecycle, Config: cfg, Launch: launch, runtime: runtime,
 	}
 }
 
@@ -63,7 +63,7 @@ func (f *CodexReviewLifecycleTestFixture) RestartVolumeLifecycleLeaser(t *testin
 
 func (f *CodexReviewLifecycleTestFixture) SeedSnapshotStageResidue(t *testing.T) string {
 	t.Helper()
-	path := codexReviewSnapshotStagePath(f.Backend.cfg.ExportRoot, f.Launch.RunID)
+	path := codexReviewSnapshotStagePath(f.Lifecycle.cfg.ExportRoot, f.Launch.RunID)
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		t.Fatal(err)
 	}

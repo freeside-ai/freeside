@@ -207,13 +207,13 @@ func (l *CodexReviewLaunch) Close() error {
 // owns runtime creation and observation, persists the final binding, reloads
 // it through the durable seam, reconstructs all live evidence, and only then
 // starts the credential-bearing review container.
-func (b *Backend) CodexReview(
+func (b *CodexReviewLifecycle) CodexReview(
 	ctx context.Context,
 	cfg CodexReviewConfig,
 	launch CodexReviewLaunchSpec,
 ) (*CodexReviewLaunch, error) {
-	if b == nil || !b.initialized {
-		return nil, fmt.Errorf("%w: backend is not initialized", ErrInvalidConfig)
+	if !b.valid() {
+		return nil, fmt.Errorf("%w: Codex review lifecycle is not initialized", ErrInvalidConfig)
 	}
 	if err := validateCodexReviewLaunch(cfg, launch); err != nil {
 		return nil, err
@@ -229,14 +229,14 @@ func (b *Backend) CodexReview(
 // codexReview runs with the caller holding the per-run lifecycle gate. The
 // ReviewSource uses it so workspace preparation, runtime launch, and proxy
 // publication are one exclusive operation; direct backend callers use the
-// exported wrapper above.
-func (b *Backend) codexReview(
+// exported lifecycle wrapper above.
+func (b *CodexReviewLifecycle) codexReview(
 	ctx context.Context,
 	cfg CodexReviewConfig,
 	launch CodexReviewLaunchSpec,
 ) (_ *CodexReviewLaunch, retErr error) {
-	if b == nil || !b.initialized {
-		return nil, fmt.Errorf("%w: backend is not initialized", ErrInvalidConfig)
+	if !b.valid() {
+		return nil, fmt.Errorf("%w: Codex review lifecycle is not initialized", ErrInvalidConfig)
 	}
 	if err := validateCodexReviewLaunch(cfg, launch); err != nil {
 		return nil, err
@@ -695,7 +695,7 @@ func codexReviewOutcomeFence(ctx context.Context, journal CodexReviewJournal, ru
 // acquireCodexReviewRun serializes launch and rejection cleanup for one run.
 // The gate is process-local by design: after a daemon restart no launch
 // goroutine survives, so durable recovery must be free to proceed immediately.
-func (b *Backend) acquireCodexReviewRun(ctx context.Context, runID string) (func(), error) {
+func (b *CodexReviewLifecycle) acquireCodexReviewRun(ctx context.Context, runID string) (func(), error) {
 	for {
 		b.codexReviewMu.Lock()
 		active := b.codexReviewRuns[runID]
@@ -834,7 +834,7 @@ func codexReviewIntentDigest(cfg CodexReviewConfig, launch CodexReviewLaunchSpec
 // fresh-context review is disposable, so even a Start whose lease transfer
 // already succeeded is reaped rather than adopted, and resuming a partial
 // observer/proxy topology would turn missing observations into trust.
-func (b *Backend) RecoverCodexReview(
+func (b *CodexReviewLifecycle) RecoverCodexReview(
 	ctx context.Context, cfg CodexReviewConfig, launch CodexReviewLaunchSpec,
 ) error {
 	intent, err := cfg.Journal.GetCodexReviewIntent(ctx, launch.RunID)
@@ -858,7 +858,7 @@ func (b *Backend) RecoverCodexReview(
 	return b.recoverCodexReviewIntent(ctx, cfg, intent, false)
 }
 
-func (b *Backend) recoverCodexReviewIntent(
+func (b *CodexReviewLifecycle) recoverCodexReviewIntent(
 	ctx context.Context, cfg CodexReviewConfig, intent CodexReviewLaunchIntent, discardWorkspace bool,
 ) error {
 	names, namesErr := intent.validatedResourceNames(intent.RunID)
@@ -1071,17 +1071,17 @@ func (b *Backend) recoverCodexReviewIntent(
 // configuration. The optional input root only lets it remove an already
 // materialized daemon-owned snapshot, never read or launch from one.
 type CodexReviewRecovery struct {
-	backend *Backend
-	cfg     CodexReviewConfig
+	lifecycle *CodexReviewLifecycle
+	cfg       CodexReviewConfig
 }
 
 func NewCodexReviewRecovery(
-	backend *Backend, journal CodexReviewJournal, leaser CodexReviewVolumeLifecycleLeaser, inputRoot string,
+	lifecycle *CodexReviewLifecycle, journal CodexReviewJournal, leaser CodexReviewVolumeLifecycleLeaser, inputRoot string,
 ) (*CodexReviewRecovery, error) {
-	if backend == nil || journal == nil || leaser == nil || inputRoot != "" && !cleanAbs(inputRoot) {
+	if !lifecycle.valid() || journal == nil || leaser == nil || inputRoot != "" && !cleanAbs(inputRoot) {
 		return nil, errors.New("nil Codex review recovery dependency")
 	}
-	return &CodexReviewRecovery{backend: backend, cfg: CodexReviewConfig{
+	return &CodexReviewRecovery{lifecycle: lifecycle, cfg: CodexReviewConfig{
 		Journal: journal, VolumeLifecycleLeaser: leaser, InputRoot: inputRoot,
 	}}, nil
 }
@@ -1143,7 +1143,7 @@ func (r *CodexReviewRecovery) Reconcile(ctx context.Context) error {
 				fmt.Errorf("recover orphaned Codex review snapshot %q: %w", id, err))
 			continue
 		}
-		if err := r.backend.cleanupOrphanedCodexReviewWorkspace(ctx, r.cfg.Journal, id); err != nil {
+		if err := r.lifecycle.cleanupOrphanedCodexReviewWorkspace(ctx, r.cfg.Journal, id); err != nil {
 			orphanWorkspaceIDs[id] = struct{}{}
 			recoveryErrs = append(recoveryErrs,
 				fmt.Errorf("recover orphaned Codex review workspace %q: %w", id, err))
@@ -1225,7 +1225,7 @@ func (r *CodexReviewRecovery) reconcileIntent(
 		return nil
 	}
 	if intent.State != CodexReviewIntentStarted {
-		cleanupErr := r.backend.recoverCodexReviewIntent(ctx, r.cfg, intent, true)
+		cleanupErr := r.lifecycle.recoverCodexReviewIntent(ctx, r.cfg, intent, true)
 		if cleanupErr == nil {
 			cleanupErr = r.removeInstructionSnapshot(id)
 		}
@@ -1252,7 +1252,7 @@ func (r *CodexReviewRecovery) reconcileIntent(
 				CheckControlPlaneIsolation, "persist recovered Codex review outcome: %v", err)
 		}
 	}
-	cleanupErr := r.backend.AbortCodexReview(ctx, r.cfg, id)
+	cleanupErr := r.lifecycle.AbortCodexReview(ctx, r.cfg, id)
 	if cleanupErr == nil {
 		cleanupErr = r.removeInstructionSnapshot(id)
 	}
@@ -1293,7 +1293,7 @@ func allCodexReviewFailuresOperational(errs []error) bool {
 // against the durable intent, then stops and deletes the recorded owner's
 // container and proves it absent; a foreign or unprovable object refuses,
 // leaving the attachment visible.
-func (b *Backend) reapCodexReviewTransferredAttachment(
+func (b *CodexReviewLifecycle) reapCodexReviewTransferredAttachment(
 	ctx context.Context,
 	launch CodexReviewLaunchSpec,
 	intent CodexReviewLaunchIntent,
@@ -1440,7 +1440,7 @@ func (b CodexReviewWorkspaceBinding) validateFor(launch CodexReviewLaunchSpec) e
 	return nil
 }
 
-func (b *Backend) initializeCodexReviewShadow(
+func (b *CodexReviewLifecycle) initializeCodexReviewShadow(
 	ctx context.Context, cfg CodexReviewConfig, runID, volume string, owner Label,
 	mark func(CodexReviewIntentResource) error,
 ) (retErr error) {
@@ -1572,7 +1572,7 @@ func createPrivateStageDir(path string) error {
 // private 0700 directory with 0400 files at a deterministic, recovery-reapable
 // path, wiped on return; a crash before that wipe is swept by
 // recoverCodexReviewIntent.
-func (b *Backend) seedCodexReviewSnapshot(
+func (b *CodexReviewLifecycle) seedCodexReviewSnapshot(
 	ctx context.Context, cfg CodexReviewConfig, launch CodexReviewLaunchSpec, volume string, owner Label,
 	mark func(CodexReviewIntentResource) error,
 ) (retErr error) {
@@ -1626,7 +1626,7 @@ func (b *Backend) seedCodexReviewSnapshot(
 	spec := ContainerSpec{
 		Name:    codexReviewSnapshotSeederName(launch.RunID),
 		Image:   cfg.ObserverImage,
-		Command: []string{"sh", "-c", codexReviewSnapshotSeederScript(b.cfg, codexReviewSnapshotSeedTarget)},
+		Command: []string{"sh", "-c", codexReviewSnapshotSeederScript(b.cfg.seedConfig(), codexReviewSnapshotSeedTarget)},
 		Mounts: []Mount{{
 			Type: MountVolume, Source: volume, Target: codexReviewSnapshotSeedTarget,
 		}},
@@ -1689,7 +1689,7 @@ func (b *Backend) seedCodexReviewSnapshot(
 	return nil
 }
 
-func (b *Backend) observeCodexReviewSnapshot(
+func (b *CodexReviewLifecycle) observeCodexReviewSnapshot(
 	ctx context.Context, cfg CodexReviewConfig, runID, volume string,
 	volumeOwner Label, volumeReport VolumeSummary,
 ) (CodexReviewSnapshotObservation, error) {
@@ -1726,7 +1726,7 @@ func (b *Backend) observeCodexReviewSnapshot(
 	)
 }
 
-func (b *Backend) observeCodexReviewWorkspace(
+func (b *CodexReviewLifecycle) observeCodexReviewWorkspace(
 	ctx context.Context, cfg CodexReviewConfig, launch CodexReviewLaunchSpec,
 	workspaceOwner Label, volumeReport VolumeSummary,
 ) (CodexReviewWorkspaceObservation, error) {
@@ -1768,7 +1768,7 @@ func (b *Backend) observeCodexReviewWorkspace(
 	)
 }
 
-func (b *Backend) observeCodexReviewShadow(
+func (b *CodexReviewLifecycle) observeCodexReviewShadow(
 	ctx context.Context, cfg CodexReviewConfig, runID, volume string,
 	volumeOwner Label, volumeReport VolumeSummary,
 ) (CodexReviewShadowObservation, error) {
@@ -1803,7 +1803,7 @@ func (b *Backend) observeCodexReviewShadow(
 	)
 }
 
-func (b *Backend) runCodexReviewObserver(
+func (b *CodexReviewLifecycle) runCodexReviewObserver(
 	ctx context.Context, spec ContainerSpec, owner Label, proofPath string, check Check,
 	mark func(CodexReviewIntentResource) error,
 	verify func(InspectReport) error,
@@ -1863,7 +1863,7 @@ func (b *Backend) runCodexReviewObserver(
 	return report, proof, nil
 }
 
-func (b *Backend) reapCodexReviewContainer(
+func (b *CodexReviewLifecycle) reapCodexReviewContainer(
 	ctx context.Context, id string, claim objectClaim, owner Label,
 ) error {
 	report, err := b.rt.Inspect(ctx, id)
@@ -1895,7 +1895,7 @@ func (b *Backend) reapCodexReviewContainer(
 	return b.verifyCodexReviewContainerAbsent(ctx, id, claim, owner)
 }
 
-func (b *Backend) readCodexReviewProof(ctx context.Context, id, proofPath string, check Check) ([]byte, error) {
+func (b *CodexReviewLifecycle) readCodexReviewProof(ctx context.Context, id, proofPath string, check Check) ([]byte, error) {
 	dir, err := os.MkdirTemp("", "freeside-codex-review-proof-")
 	if err != nil {
 		return nil, failf(check, "create observer proof directory: %v", err)
@@ -1920,7 +1920,7 @@ func (b *Backend) readCodexReviewProof(ctx context.Context, id, proofPath string
 	return proof, nil
 }
 
-func (b *Backend) verifyCodexReviewWorkspaceExclusive(
+func (b *CodexReviewLifecycle) verifyCodexReviewWorkspaceExclusive(
 	ctx context.Context, workspaceVolume, reviewContainer string,
 ) error {
 	containers, err := b.rt.ListContainers(ctx)
@@ -1985,7 +1985,7 @@ func validateCodexReviewStartLifetime(
 	return nil
 }
 
-func (b *Backend) reobserveCodexReview(
+func (b *CodexReviewLifecycle) reobserveCodexReview(
 	ctx context.Context, cfg CodexReviewConfig, launch CodexReviewLaunchSpec,
 	workspaceOwner, owner Label, shadowName, snapshotName string,
 ) (CodexReviewShadowObservation, CodexReviewWorkspaceObservation, CodexReviewSnapshotObservation, CodexReviewNetworkObservation, error) {
@@ -2031,7 +2031,7 @@ func (b *Backend) reobserveCodexReview(
 	return shadow, workspace, snapshot, network, err
 }
 
-func (b *Backend) reconstructCodexReview(
+func (b *CodexReviewLifecycle) reconstructCodexReview(
 	ctx context.Context, cfg CodexReviewConfig, launch CodexReviewLaunchSpec,
 	req CodexReviewSpec, spec ContainerSpec, binding CodexReviewJournalBinding,
 	workspaceOwner, owner Label, shadowName, snapshotName string,
@@ -2106,7 +2106,7 @@ func cloneCodexReviewBinding(binding CodexReviewJournalBinding) CodexReviewJourn
 	return binding
 }
 
-func (b *Backend) deleteCodexReviewVolume(
+func (b *CodexReviewLifecycle) deleteCodexReviewVolume(
 	ctx context.Context, name string, claim objectClaim, owner Label,
 ) error {
 	volumes, err := b.rt.ListVolumes(ctx)

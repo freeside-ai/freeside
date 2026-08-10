@@ -26,7 +26,7 @@ type CodexReviewCollection struct {
 	Events     []byte
 }
 
-func (b *Backend) InspectCodexReview(
+func (b *CodexReviewLifecycle) InspectCodexReview(
 	ctx context.Context, cfg CodexReviewConfig, runID string,
 ) (ContainerState, error) {
 	intent, binding, report, err := b.authenticateCodexReviewContainer(ctx, cfg, runID)
@@ -39,7 +39,7 @@ func (b *Backend) InspectCodexReview(
 	return report.State, nil
 }
 
-func (b *Backend) CollectCodexReview(
+func (b *CodexReviewLifecycle) CollectCodexReview(
 	ctx context.Context, cfg CodexReviewConfig, runID string,
 ) (CodexReviewCollection, error) {
 	_, _, report, err := b.authenticateCodexReviewContainer(ctx, cfg, runID)
@@ -104,19 +104,19 @@ func (b *Backend) CollectCodexReview(
 	return CodexReviewCollection{ExitStatus: status, Result: result, Events: events}, nil
 }
 
-func (b *Backend) authenticateCodexReviewContainer(
+func (b *CodexReviewLifecycle) authenticateCodexReviewContainer(
 	ctx context.Context, cfg CodexReviewConfig, runID string,
 ) (CodexReviewLaunchIntent, CodexReviewJournalBinding, InspectReport, error) {
 	return b.authenticateCodexReviewContainerWithImage(ctx, cfg, runID, cfg.ApprovedImage)
 }
 
-func (b *Backend) authenticateCodexReviewContainerForCleanup(
+func (b *CodexReviewLifecycle) authenticateCodexReviewContainerForCleanup(
 	ctx context.Context, cfg CodexReviewConfig, runID string,
 ) (CodexReviewLaunchIntent, CodexReviewJournalBinding, InspectReport, error) {
 	return b.authenticateCodexReviewContainerWithImage(ctx, cfg, runID, "")
 }
 
-func (b *Backend) authenticateCodexReviewContainerWithImage(
+func (b *CodexReviewLifecycle) authenticateCodexReviewContainerWithImage(
 	ctx context.Context, cfg CodexReviewConfig, runID, approvedImage string,
 ) (CodexReviewLaunchIntent, CodexReviewJournalBinding, InspectReport, error) {
 	intent, err := cfg.Journal.GetCodexReviewIntent(ctx, runID)
@@ -188,7 +188,7 @@ func stripCodexReviewRuntimePath(environment []string) ([]string, bool) {
 
 // CleanupCodexReview reaps the authenticated terminal topology only after the
 // source has durably stored its collected account.
-func (b *Backend) CleanupCodexReview(
+func (b *CodexReviewLifecycle) CleanupCodexReview(
 	ctx context.Context, cfg CodexReviewConfig, runID string,
 ) error {
 	return b.cleanupCodexReview(ctx, cfg, runID, false)
@@ -197,13 +197,13 @@ func (b *Backend) CleanupCodexReview(
 // AbortCodexReview closes a started review whose daemon-owned CONNECT proxy
 // was lost. The review is disposable and read-only; its durable source
 // outcome records the transient loss before this destructive path runs.
-func (b *Backend) AbortCodexReview(
+func (b *CodexReviewLifecycle) AbortCodexReview(
 	ctx context.Context, cfg CodexReviewConfig, runID string,
 ) error {
 	return b.cleanupCodexReview(ctx, cfg, runID, true)
 }
 
-func (b *Backend) cleanupCodexReview(
+func (b *CodexReviewLifecycle) cleanupCodexReview(
 	ctx context.Context, cfg CodexReviewConfig, runID string, abort bool,
 ) error {
 	intent, err := cfg.Journal.GetCodexReviewIntent(ctx, runID)
@@ -360,7 +360,7 @@ func codexReviewJournalCheckf(check Check, format string, err error) error {
 	return codexReviewOperationalCheckf(check, format, err)
 }
 
-func (b *Backend) verifyCodexReviewContainerAbsent(
+func (b *CodexReviewLifecycle) verifyCodexReviewContainerAbsent(
 	ctx context.Context, id string, claim objectClaim, owner Label,
 ) error {
 	containers, err := b.rt.ListContainers(ctx)
@@ -391,7 +391,7 @@ func (b *Backend) verifyCodexReviewContainerAbsent(
 	return failf(CheckTeardown, "container %q survived cleanup or has unprovable ownership", id)
 }
 
-func (b *Backend) teardownCodexReviewNetwork(
+func (b *CodexReviewLifecycle) teardownCodexReviewNetwork(
 	ctx context.Context, name string, claim objectClaim, owner Label,
 ) error {
 	networks, err := b.rt.ListNetworks(ctx)

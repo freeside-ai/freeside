@@ -13,15 +13,15 @@ import (
 // PrepareCodexReviewWorkspace snapshots one exact candidate checkout into a
 // ward-owned volume, proves its HEAD and tree from a separate read-only VM,
 // and durably binds the resulting runtime identity before returning it.
-func (b *Backend) PrepareCodexReviewWorkspace(
+func (b *CodexReviewLifecycle) PrepareCodexReviewWorkspace(
 	ctx context.Context,
 	journal CodexReviewJournal,
 	runID, sourceDir string,
 	candidate domain.BaseRevision,
 	workspaceSizeMB int64,
 ) (_ CodexReviewWorkspaceBinding, retErr error) {
-	if b == nil || !b.initialized {
-		return CodexReviewWorkspaceBinding{}, fmt.Errorf("%w: backend is not initialized", ErrInvalidConfig)
+	if !b.valid() {
+		return CodexReviewWorkspaceBinding{}, fmt.Errorf("%w: Codex review lifecycle is not initialized", ErrInvalidConfig)
 	}
 	if journal == nil || !runIDPattern.MatchString(runID) || workspaceSizeMB <= 0 {
 		return CodexReviewWorkspaceBinding{}, fmt.Errorf("%w: invalid review workspace request", ErrInvalidCodexReviewSpec)
@@ -119,19 +119,19 @@ func (b *Backend) PrepareCodexReviewWorkspace(
 // CleanupCodexReviewWorkspace removes one prepared candidate volume by its
 // durable unpredictable owner. It is used when launch fails before
 // ReviewSource receives the started-container handoff.
-func (b *Backend) CleanupCodexReviewWorkspace(
+func (b *CodexReviewLifecycle) CleanupCodexReviewWorkspace(
 	ctx context.Context, journal CodexReviewJournal, sourceRunID string,
 ) error {
 	return b.cleanupCodexReviewWorkspace(ctx, journal, sourceRunID, false)
 }
 
-func (b *Backend) cleanupOrphanedCodexReviewWorkspace(
+func (b *CodexReviewLifecycle) cleanupOrphanedCodexReviewWorkspace(
 	ctx context.Context, journal CodexReviewJournal, sourceRunID string,
 ) error {
 	return b.cleanupCodexReviewWorkspace(ctx, journal, sourceRunID, true)
 }
 
-func (b *Backend) cleanupCodexReviewWorkspace(
+func (b *CodexReviewLifecycle) cleanupCodexReviewWorkspace(
 	ctx context.Context, journal CodexReviewJournal, sourceRunID string, deleteBinding bool,
 ) error {
 	binding, err := journal.GetCodexReviewWorkspaceBinding(ctx, sourceRunID)

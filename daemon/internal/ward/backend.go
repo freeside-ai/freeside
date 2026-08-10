@@ -18,8 +18,9 @@ import (
 // a Runtime. Construct it with New; the zero value declares nothing and
 // gates nothing.
 type Backend struct {
-	rt  Runtime
-	cfg Config
+	rt         Runtime
+	cfg        Config
+	runtimeOps runtimeOps
 	// daemonIdentity binds restored conformance to the exact freesided/ward
 	// executable that earned it. Rebuilding any gate implementation changes
 	// the binary identity and requires a fresh Full pass.
@@ -47,11 +48,6 @@ type Backend struct {
 	// handoffs would converge on one window (see acquireAuthStoreLease).
 	leaseMu      sync.Mutex
 	activeLeases map[domain.AuthIdentityID]bool
-	// codexReviewMu guards per-run lifecycle gates. A rejected request must not
-	// recover a preparing intent while the in-process launch still creates and
-	// journals resources under that same durable owner.
-	codexReviewMu   sync.Mutex
-	codexReviewRuns map[string]chan struct{}
 }
 
 type conformanceConfiguration struct {
@@ -82,8 +78,9 @@ func New(rt Runtime, cfg Config) (*Backend, error) {
 	if rt == nil {
 		return nil, fmt.Errorf("%w: Runtime is required", ErrInvalidConfig)
 	}
-	cfg = cfg.withDefaults()
-	if err := cfg.validate(); err != nil {
+	var err error
+	cfg, err = prepareConfig(cfg)
+	if err != nil {
 		return nil, err
 	}
 	runtimeIdentity, err := runtimeConfigurationIdentity(rt)
@@ -94,18 +91,27 @@ func New(rt Runtime, cfg Config) (*Backend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: daemon executable identity: %w", ErrInvalidConfig, err)
 	}
-	// Config is caller-owned. Freeze every reference field before it becomes
-	// the expected allowlist that runtime-observed state is compared against.
-	cfg.ExporterCommand = slices.Clone(cfg.ExporterCommand)
-	cfg.ProviderEndpoints = slices.Clone(cfg.ProviderEndpoints)
 	return &Backend{
-		rt: rt, cfg: cfg,
+		rt:              rt,
+		cfg:             cfg,
+		runtimeOps:      newRuntimeOps(rt, cfg),
 		daemonIdentity:  daemonIdentity,
 		runtimeIdentity: runtimeIdentity,
 		initialized:     true,
 		activeLeases:    map[domain.AuthIdentityID]bool{},
-		codexReviewRuns: map[string]chan struct{}{},
 	}, nil
+}
+
+func prepareConfig(cfg Config) (Config, error) {
+	cfg = cfg.withDefaults()
+	if err := cfg.validate(); err != nil {
+		return Config{}, err
+	}
+	// Config is caller-owned. Freeze every reference field before it becomes
+	// runtime policy or an allowlist compared with observed state.
+	cfg.ExporterCommand = slices.Clone(cfg.ExporterCommand)
+	cfg.ProviderEndpoints = slices.Clone(cfg.ProviderEndpoints)
+	return cfg, nil
 }
 
 // RestoreConformance republishes the suite-earned capabilities from the
