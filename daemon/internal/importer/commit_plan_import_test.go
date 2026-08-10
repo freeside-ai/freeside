@@ -580,6 +580,16 @@ func TestCommitPlanPreboundsCaseFoldedDuplicateKeys(t *testing.T) {
 	}
 }
 
+func TestCommitPlanInvalidUTF8PrecedesPreallocationGate(t *testing.T) {
+	pol := Policy{}.withDefaults()
+	pol.MaxCommitPlanGroups = 1
+	raw := []byte("{\"version\":\"freeside.commit-plan/v1\",\"groups\":[{},{}],\"note\":\"\xff\"}")
+	_, err := decodeAndResolveCommitPlan(raw, nil, nil, pol)
+	if err == nil || !strings.Contains(err.Error(), "commit plan is not UTF-8") {
+		t.Fatalf("compound-invalid commit plan error = %v, want UTF-8 refusal", err)
+	}
+}
+
 func TestCommitPlanGroupCap(t *testing.T) {
 	groups := strings.Repeat(`{"name":"x","message":"m","remainder":true},`, DefaultMaxCommitPlanGroups+1)
 	groups = strings.TrimSuffix(groups, ",")

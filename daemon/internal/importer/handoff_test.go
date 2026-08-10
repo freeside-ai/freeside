@@ -134,6 +134,16 @@ func TestLoadManifestRejects(t *testing.T) {
 			wantAlso: export.ErrInvalidUTF8,
 		},
 		{
+			name: "invalid utf-8 precedes entry cap",
+			manifest: strings.Replace(
+				manifestJSON(regularEntryJSON("a.txt"), regularEntryJSON("b.txt")),
+				"a.txt", "a\xfftxt", 1,
+			),
+			policy:   Policy{MaxEntries: 1},
+			wantErr:  ErrManifestInvalid,
+			wantAlso: export.ErrInvalidUTF8,
+		},
+		{
 			// A second "entries" key hides an over-cap array that json's
 			// last-wins would discard as empty; the streaming count sums both
 			// arrays and rejects before the typed decode can allocate the

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -27,6 +26,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
@@ -864,14 +864,12 @@ func decodeProductionPublicationTask(entry store.QueueEntry) (productionPublicat
 		return productionPublicationTask{}, fmt.Errorf("task %q has kind %q: %w",
 			entry.IdempotencyKey, entry.Kind, domain.ErrParentKeyMismatch)
 	}
-	decoder := json.NewDecoder(bytes.NewReader(entry.Payload))
-	decoder.DisallowUnknownFields()
 	var task productionPublicationTask
-	if err := decoder.Decode(&task); err != nil {
+	if err := strictjson.Decode(entry.Payload, &task, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return productionPublicationTask{}, errors.New("production publication task has trailing content")
+		}
 		return productionPublicationTask{}, err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return productionPublicationTask{}, errors.New("production publication task has trailing content")
 	}
 	if err := task.validate(); err != nil {
 		return productionPublicationTask{}, err
@@ -3737,19 +3735,19 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 	if entry.Kind != productionVerificationCheckpointKind {
 		return productionVerificationCheckpoint{}, false, domain.ErrParentKeyMismatch
 	}
-	decoder := json.NewDecoder(bytes.NewReader(entry.Payload))
-	decoder.DisallowUnknownFields()
 	var checkpoint productionVerificationCheckpoint
-	if err := decoder.Decode(&checkpoint); err != nil {
+	if err := strictjson.Decode(
+		entry.Payload, &checkpoint, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
+	); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return productionVerificationCheckpoint{}, false, fmt.Errorf(
+				"production verification checkpoint has trailing content: %w",
+				domain.ErrParentKeyMismatch,
+			)
+		}
 		return productionVerificationCheckpoint{}, false, fmt.Errorf(
 			"decode durable production verification checkpoint: %w",
 			errors.Join(err, domain.ErrParentKeyMismatch),
-		)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return productionVerificationCheckpoint{}, false, fmt.Errorf(
-			"production verification checkpoint has trailing content: %w",
-			domain.ErrParentKeyMismatch,
 		)
 	}
 	importDigest, err := digestJSON(checkpoint.Imported)

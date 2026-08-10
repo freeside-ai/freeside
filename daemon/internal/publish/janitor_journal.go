@@ -1,14 +1,14 @@
 package publish
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"slices"
 	"time"
 	"unicode/utf8"
+
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // installationJanitorJournalVersion is the only journal version this daemon
@@ -168,6 +168,8 @@ func (j janitorJournal) encode() ([]byte, error) {
 }
 
 func decodeJanitorJournal(payload []byte) (janitorJournal, error) {
+	// Preserve invalid UTF-8 as the first content error before the structural
+	// key gates. strictjson independently rechecks the same posture at decode.
 	if !utf8.Valid(payload) {
 		return janitorJournal{}, errors.New("installation janitor journal: decode: payload is not valid UTF-8")
 	}
@@ -178,13 +180,14 @@ func decodeJanitorJournal(payload []byte) (janitorJournal, error) {
 		return janitorJournal{}, fmt.Errorf("installation janitor journal: decode: %w", err)
 	}
 	var journal janitorJournal
-	dec := json.NewDecoder(bytes.NewReader(payload))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&journal); err != nil {
+	if err := strictjson.Decode(payload, &journal, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
+		if errors.Is(err, strictjson.ErrInvalidUTF8) {
+			return janitorJournal{}, errors.New("installation janitor journal: decode: payload is not valid UTF-8")
+		}
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return janitorJournal{}, errors.New("installation janitor journal: decode: trailing data after the journal")
+		}
 		return janitorJournal{}, fmt.Errorf("installation janitor journal: decode: %w", err)
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return janitorJournal{}, errors.New("installation janitor journal: decode: trailing data after the journal")
 	}
 	if err := journal.validate(); err != nil {
 		return janitorJournal{}, err

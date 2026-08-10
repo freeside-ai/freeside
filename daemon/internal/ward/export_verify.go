@@ -2,11 +2,9 @@ package ward
 
 import (
 	"archive/tar"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +17,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // maxProofBytes bounds the proof file; the real one is four short lines.
@@ -397,18 +396,15 @@ func (b *Backend) verifyManifest(destDir string) (export.Manifest, map[string]bo
 	if err := RejectDuplicateJSONKeys(raw); err != nil {
 		return manifest, nil, evidencef(CheckExportVerification, "manifest is not canonical %s JSON", export.ManifestVersion)
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&manifest); err != nil {
+	if err := strictjson.Decode(
+		raw, &manifest, strictjson.TolerateInvalidUTF8, strictjson.Limit(b.cfg.MaxManifestBytes),
+	); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return manifest, nil, evidencef(CheckExportVerification, "manifest carries trailing bytes after the first JSON value")
+		}
 		// A decode error can quote an unknown field name or value from the
 		// manifest, which is workspace-derived; report the failure without it.
 		return manifest, nil, evidencef(CheckExportVerification, "manifest is not valid %s JSON", export.ManifestVersion)
-	}
-	// Decode stops at the first JSON value; trailing bytes would be released
-	// in the output directory unchecked, and downstream consumes the bytes,
-	// not this struct. Require the manifest file to be exactly one value.
-	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
-		return manifest, nil, evidencef(CheckExportVerification, "manifest carries trailing bytes after the first JSON value")
 	}
 	if err := manifest.Validate(); err != nil {
 		// A validation error names the offending entry path, which is

@@ -43,19 +43,14 @@ func TestOnlyGitNetImportsExec(t *testing.T) {
 	}
 }
 
-// TestOnlyApprovedStreamingReaders keeps response size and trailing-data
-// enforcement centralized. New JSON decoders or whole-reader paths require an
-// explicit review of why they do not bypass decodeResponse.
+// TestOnlyApprovedStreamingReaders keeps publish's structural JSON walker,
+// unmarshal seams, and whole-reader paths attributable. Typed single-value
+// decoders are centralized and ratcheted by internal/strictjson.
 func TestOnlyApprovedStreamingReaders(t *testing.T) {
 	t.Parallel()
 	approved := map[string]map[string]int{
 		"encoding/json.NewDecoder": {
-			"forge.go.decodeResponse":                                 1,
-			"janitor_journal.go.decodeJanitorJournal":                 1,
-			"janitor_snapshot.go.DecodeInstallationAuthorityDocument": 1,
-			"janitor_snapshot.go.rejectDuplicateJSONKeys":             1,
-			"publicationrecord/record.go.decode":                      1,
-			"reservation.go.DecodeReservation":                        1,
+			"janitor_snapshot.go.rejectDuplicateJSONKeys": 1,
 		},
 		"encoding/json.Unmarshal": {
 			"janitor_snapshot.go.jsonArray":        1,

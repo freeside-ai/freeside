@@ -26,6 +26,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 	"golang.org/x/sys/unix"
 )
@@ -2016,14 +2017,12 @@ func (w *fakePublicationWorkflow) loadCandidateCheckpoint(
 			fmt.Errorf("sync existing candidate checkpoint directory: %w", err)
 	}
 	var checkpoint fakePublicationCandidateCheckpoint
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&checkpoint); err != nil {
+	if err := strictjson.Decode(body, &checkpoint, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return fakePublicationCandidateCheckpoint{}, false,
+				errors.New("candidate checkpoint has trailing content")
+		}
 		return fakePublicationCandidateCheckpoint{}, false, err
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return fakePublicationCandidateCheckpoint{}, false,
-			errors.New("candidate checkpoint has trailing content")
 	}
 	importDigest, err := digestJSON(checkpoint.Imported)
 	if err != nil {
@@ -2759,13 +2758,11 @@ func decodeFakePublicationInvocationOwner(
 	payload []byte,
 ) (fakePublicationInvocationOwner, error) {
 	var owner fakePublicationInvocationOwner
-	dec := json.NewDecoder(bytes.NewReader(payload))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&owner); err != nil {
+	if err := strictjson.Decode(payload, &owner, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return fakePublicationInvocationOwner{}, errors.New("trailing data")
+		}
 		return fakePublicationInvocationOwner{}, err
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return fakePublicationInvocationOwner{}, errors.New("trailing data")
 	}
 	if owner.Version != fakePublicationInvocationOwnerVersion {
 		return fakePublicationInvocationOwner{}, fmt.Errorf(

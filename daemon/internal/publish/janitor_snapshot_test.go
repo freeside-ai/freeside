@@ -323,6 +323,16 @@ func TestDecodeInstallationAuthorityDocumentRejectsDuplicateKeys(t *testing.T) {
 	}
 }
 
+func TestDecodeInstallationAuthorityDocumentInvalidUTF8PrecedesKeyGates(t *testing.T) {
+	t.Parallel()
+	payload := strings.Replace(validAuthorityJSON,
+		`"version": 1`, "\"version\": 1, \"version\": 1, \"note\": \"\xff\"", 1)
+	_, err := publish.DecodeInstallationAuthorityDocument([]byte(payload))
+	if err == nil || !strings.Contains(err.Error(), "payload is not valid UTF-8") {
+		t.Fatalf("compound-invalid authority error = %v, want UTF-8 refusal", err)
+	}
+}
+
 // TestDecodeInstallationAuthorityDocumentRequiresExplicitAbsence pins the two
 // fields where an omitted key would otherwise mean something dangerous: no
 // bindings is a mass-delete instruction, and a zero pending installation ID

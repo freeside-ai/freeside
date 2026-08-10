@@ -1,8 +1,6 @@
 package importer
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // loadManifest reads and re-validates the handoff manifest. The read is
@@ -64,11 +63,8 @@ func loadManifest(handoffDir string, pol Policy) (export.Manifest, error) {
 	if int64(len(data)) > pol.MaxManifestBytes {
 		return export.Manifest{}, fmt.Errorf("manifest exceeds %d bytes: %w", pol.MaxManifestBytes, ErrManifestTooLarge)
 	}
-	// Checked before decode because encoding/json replaces invalid UTF-8
-	// with U+FFFD instead of failing, laundering hostile bytes into a
-	// valid-looking path that then passes validCanonicalPath. Scanning the
-	// raw bytes is the only place this is catchable; every check after the
-	// decode sees the already-laundered string.
+	// Preserve the boundary's error priority before the structural allocation
+	// gate below; strictjson independently rechecks the same posture at decode.
 	if !utf8.Valid(data) {
 		return export.Manifest{}, fmt.Errorf("manifest bytes: %w: %w", ErrManifestInvalid, export.ErrInvalidUTF8)
 	}
@@ -86,14 +82,17 @@ func loadManifest(handoffDir string, pol Policy) (export.Manifest, error) {
 	if manifestEntryCountExceeds(data, pol.MaxEntries) {
 		return export.Manifest{}, fmt.Errorf("entries exceed the cap of %d: %w", pol.MaxEntries, ErrManifestTooLarge)
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
 	var m export.Manifest
-	if err := dec.Decode(&m); err != nil {
+	if err := strictjson.Decode(
+		data, &m, strictjson.RejectInvalidUTF8, strictjson.Limit(pol.MaxManifestBytes),
+	); err != nil {
+		if errors.Is(err, strictjson.ErrInvalidUTF8) {
+			return export.Manifest{}, fmt.Errorf("manifest bytes: %w: %w", ErrManifestInvalid, export.ErrInvalidUTF8)
+		}
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return export.Manifest{}, fmt.Errorf("manifest carries trailing content: %w", ErrManifestInvalid)
+		}
 		return export.Manifest{}, fmt.Errorf("decode manifest: %w: %w", ErrManifestInvalid, err)
-	}
-	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
-		return export.Manifest{}, fmt.Errorf("manifest carries trailing content: %w", ErrManifestInvalid)
 	}
 	if len(m.Entries) > pol.MaxEntries {
 		return export.Manifest{}, fmt.Errorf("%d entries exceed the cap of %d: %w", len(m.Entries), pol.MaxEntries, ErrManifestTooLarge)

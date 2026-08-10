@@ -19,7 +19,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -33,6 +32,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 func main() {
@@ -600,28 +600,17 @@ func (c controlHandler) submitDelivery(w http.ResponseWriter, r *http.Request) {
 // decodeControlRequest enforces the dev control boundary uniformly for every
 // POST handler: the body cap (413 on overflow, including a valid prefix
 // trailed by over-cap bytes), unknown-field rejection, and exactly one JSON
-// value with no trailing non-whitespace (400). It mirrors internal/signet's
-// decodeRequest rather than sharing it: the control surface is a separate,
-// dev-only boundary (issue #199 non-goal: no repository-wide JSON framework).
+// value with no trailing non-whitespace (400). The control surface remains a
+// separate, dev-only boundary while sharing the daemon's strict JSON gate.
 // On an unacceptable body it writes the response and returns false, so the
 // caller returns without touching the store, preserving decode-before-mutate.
 func decodeControlRequest(w http.ResponseWriter, r *http.Request, dst any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, maxControlBodyBytes)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	err := dec.Decode(dst)
-	if err == nil {
-		var extra any
-		if err2 := dec.Decode(&extra); !errors.Is(err2, io.EOF) {
-			// A second value, trailing junk, or over-cap trailing bytes: err2
-			// is nil for a bare extra value and a MaxBytesError for over-cap
-			// trailing content, which the classifier below routes to 413.
-			if err2 == nil {
-				err = errors.New("request body must contain exactly one JSON value")
-			} else {
-				err = err2
-			}
-		}
+	err := strictjson.DecodeReader(
+		r.Body, dst, strictjson.TolerateInvalidUTF8, strictjson.Limit(maxControlBodyBytes),
+	)
+	if errors.Is(err, strictjson.ErrTrailingData) {
+		err = errors.New("request body must contain exactly one JSON value")
 	}
 	if err != nil {
 		var tooLarge *http.MaxBytesError

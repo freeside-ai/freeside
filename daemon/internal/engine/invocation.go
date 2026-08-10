@@ -1,12 +1,9 @@
 package engine
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -14,6 +11,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // This value mirrors signet's private outbox kind. The string is durable
@@ -715,14 +713,12 @@ func completionAlreadyAccepted(conversation domain.Conversation, invocationID do
 }
 
 func decodeInvocationRequest(payload []byte) (invocationRequest, error) {
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
 	var request invocationRequest
-	if err := decoder.Decode(&request); err != nil {
+	if err := strictjson.Decode(payload, &request, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return invocationRequest{}, errors.New("decode payload: trailing JSON value")
+		}
 		return invocationRequest{}, fmt.Errorf("decode payload: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return invocationRequest{}, errors.New("decode payload: trailing JSON value")
 	}
 	if request.InvocationID == "" || request.ConversationID == "" || request.ItemID == "" {
 		return invocationRequest{}, fmt.Errorf("decode payload: required identity is empty: %w", domain.ErrEmptyID)

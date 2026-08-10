@@ -719,6 +719,7 @@ func TestDecodeControlRequest(t *testing.T) {
 		"trailing non-whitespace":         {[]byte(`{} garbage`), false, http.StatusBadRequest},
 		"single value over the cap":       {[]byte(overLimit), false, http.StatusRequestEntityTooLarge},
 		"valid prefix, over-cap trailing": {append([]byte("{} "), bytes.Repeat([]byte(" "), maxControlBodyBytes)...), false, http.StatusRequestEntityTooLarge},
+		"malformed prefix over the cap":   {append([]byte("{not-json"), bytes.Repeat([]byte("x"), maxControlBodyBytes)...), false, http.StatusRequestEntityTooLarge},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := httptest.NewRecorder()

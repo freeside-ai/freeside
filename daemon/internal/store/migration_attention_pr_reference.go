@@ -1,16 +1,15 @@
 package store
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/fakepublication"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 const attentionPRReferenceMigration = "0036_attention_pr_reference.sql"
@@ -219,13 +218,11 @@ func rewriteAnchoredPRReferences(ctx context.Context, tx *sql.Tx) error {
 }
 
 func decodeMigrationJSON(payload []byte, value any) error {
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(value); err != nil {
+	if err := strictjson.Decode(payload, value, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return errors.New("trailing JSON value")
+		}
 		return err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("trailing JSON value")
 	}
 	return nil
 }

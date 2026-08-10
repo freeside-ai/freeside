@@ -1,13 +1,11 @@
 package export
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
-	"unicode/utf8"
+
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // EvidenceWorkspaceDir is the reserved top-level workspace subtree that holds
@@ -142,17 +140,15 @@ func (m EvidenceSourceManifest) Validate() error {
 // re-gated by the importer's DecodeEvidenceManifest, so a duplicate JSON key
 // collapsing last-wins here cannot smuggle an unvalidated value downstream.
 func DecodeEvidenceSourceManifest(data []byte) (EvidenceSourceManifest, error) {
-	if !utf8.Valid(data) {
-		return EvidenceSourceManifest{}, fmt.Errorf("decode evidence source descriptor: %w", ErrInvalidUTF8)
-	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
 	var m EvidenceSourceManifest
-	if err := dec.Decode(&m); err != nil {
+	if err := strictjson.Decode(data, &m, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
+		if errors.Is(err, strictjson.ErrInvalidUTF8) {
+			return EvidenceSourceManifest{}, fmt.Errorf("decode evidence source descriptor: %w", ErrInvalidUTF8)
+		}
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return EvidenceSourceManifest{}, fmt.Errorf("decode evidence source descriptor: %w", ErrTrailingContent)
+		}
 		return EvidenceSourceManifest{}, fmt.Errorf("decode evidence source descriptor: %w", err)
-	}
-	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
-		return EvidenceSourceManifest{}, fmt.Errorf("decode evidence source descriptor: %w", ErrTrailingContent)
 	}
 	if err := m.Validate(); err != nil {
 		return EvidenceSourceManifest{}, err

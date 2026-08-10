@@ -9,6 +9,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 const maxCommandBodyBytes = 1 << 20
@@ -387,19 +388,13 @@ func (h httpHandler) revokeDevice(w http.ResponseWriter, r *http.Request, authen
 
 func decodeRequest(w http.ResponseWriter, r *http.Request, dst any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxCommandBodyBytes)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(dst); err != nil {
-		return err
+	err := strictjson.DecodeReader(
+		r.Body, dst, strictjson.TolerateInvalidUTF8, strictjson.Limit(maxCommandBodyBytes),
+	)
+	if errors.Is(err, strictjson.ErrTrailingData) {
+		return errors.New("request body must contain exactly one JSON object")
 	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("request body must contain exactly one JSON object")
-		}
-		return err
-	}
-	return nil
+	return err
 }
 
 type staleVersionResponse struct {

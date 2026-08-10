@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // installationAuthoritySnapshotVersion is the only document version this
@@ -364,6 +365,8 @@ func (d InstallationAuthorityDocument) Encode() ([]byte, error) {
 // U+FFFD, and a login this package cannot read exactly must not be compared
 // against a GitHub account.
 func DecodeInstallationAuthorityDocument(payload []byte) (InstallationAuthorityDocument, error) {
+	// Preserve invalid UTF-8 as the first content error before the structural
+	// key gates. strictjson independently rechecks the same posture at decode.
 	if !utf8.Valid(payload) {
 		return InstallationAuthorityDocument{}, fmt.Errorf(
 			"installation authority: decode: payload is not valid UTF-8: %w",
@@ -381,17 +384,21 @@ func DecodeInstallationAuthorityDocument(payload []byte) (InstallationAuthorityD
 		)
 	}
 	var document InstallationAuthorityDocument
-	dec := json.NewDecoder(bytes.NewReader(payload))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&document); err != nil {
+	if err := strictjson.Decode(payload, &document, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
+		if errors.Is(err, strictjson.ErrInvalidUTF8) {
+			return InstallationAuthorityDocument{}, fmt.Errorf(
+				"installation authority: decode: payload is not valid UTF-8: %w",
+				ErrInstallationAuthoritySnapshot,
+			)
+		}
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return InstallationAuthorityDocument{}, fmt.Errorf(
+				"installation authority: decode: trailing data after the document: %w",
+				ErrInstallationAuthoritySnapshot,
+			)
+		}
 		return InstallationAuthorityDocument{}, fmt.Errorf(
 			"installation authority: decode: %w: %w", err, ErrInstallationAuthoritySnapshot,
-		)
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return InstallationAuthorityDocument{}, fmt.Errorf(
-			"installation authority: decode: trailing data after the document: %w",
-			ErrInstallationAuthoritySnapshot,
 		)
 	}
 	if err := document.Validate(); err != nil {

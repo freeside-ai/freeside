@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // forge is the package's minimal GitHub resource client: exactly the
@@ -381,24 +383,14 @@ func (f *forge) updatePR(ctx context.Context, repo repoRef, number int, title, b
 const maxForgeResponseBytes = 16 << 20
 
 func decodeResponse(r io.Reader, v any) error {
-	limited := &io.LimitedReader{R: r, N: maxForgeResponseBytes + 1}
-	dec := json.NewDecoder(limited)
-	decodeErr := dec.Decode(v)
-	var trailingErr error
-	if decodeErr == nil {
-		if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-			trailingErr = errors.New("trailing data after the response document")
-		}
-	}
-	_, drainErr := io.Copy(io.Discard, limited)
-	if limited.N == 0 {
+	err := strictjson.DecodeReaderAllowingUnknownFields(
+		r, v, strictjson.TolerateInvalidUTF8, strictjson.Limit(maxForgeResponseBytes),
+	)
+	if errors.Is(err, strictjson.ErrLimitExceeded) {
 		return errors.New("response exceeds the 16777216-byte bound")
 	}
-	if decodeErr != nil {
-		return decodeErr
+	if errors.Is(err, strictjson.ErrTrailingData) {
+		return errors.New("trailing data after the response document")
 	}
-	if trailingErr != nil {
-		return trailingErr
-	}
-	return drainErr
+	return err
 }

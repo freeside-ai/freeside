@@ -217,6 +217,7 @@ func TestHTTPCommandRejectsMalformedBodiesWithoutStateChange(t *testing.T) {
 		{"null artifact digests", strings.Replace(valid, `"artifact_digests":[]`, `"artifact_digests":null`, 1), http.StatusBadRequest},
 		{"multiple objects", valid + valid, http.StatusBadRequest},
 		{"oversized", `{"padding":"` + strings.Repeat("x", maxTestCommandBodyBytes) + `"}`, http.StatusRequestEntityTooLarge},
+		{"malformed prefix oversized", `{not-json` + strings.Repeat("x", maxTestCommandBodyBytes), http.StatusRequestEntityTooLarge},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			before := f.revision(t)

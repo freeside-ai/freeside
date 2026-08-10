@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // IntentKindReservation is the outbox kind a publication invocation is held
@@ -134,13 +134,11 @@ func (r Reservation) Encode() ([]byte, error) {
 // "the invocation is free".
 func DecodeReservation(payload []byte) (Reservation, error) {
 	var r Reservation
-	dec := json.NewDecoder(bytes.NewReader(payload))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&r); err != nil {
+	if err := strictjson.Decode(payload, &r, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return Reservation{}, errors.New("reservation: decode: trailing data after the reservation")
+		}
 		return Reservation{}, fmt.Errorf("reservation: decode: %w", err)
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return Reservation{}, errors.New("reservation: decode: trailing data after the reservation")
 	}
 	if err := r.Validate(); err != nil {
 		return Reservation{}, err

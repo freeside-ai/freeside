@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -334,6 +335,18 @@ func TestUnusableJournalDeniesTheAuthority(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("invalid UTF-8 precedes missing-key gate", func(t *testing.T) {
+		dir, store := newDocumentStore(t, operatorDocument(operatorBinding(701, fixtureRepositoryID)))
+		payload := []byte("{\"version\":1,\"entries\":[{\"action\":\"\xff\"}]}")
+		if err := os.WriteFile(filepath.Join(dir, journalFileName), payload, 0o600); err != nil {
+			t.Fatalf("write journal: %v", err)
+		}
+		_, err := store.InstallationAuthority(t.Context(), 501)
+		if err == nil || !strings.Contains(err.Error(), "payload is not valid UTF-8") {
+			t.Fatalf("compound-invalid journal error = %v, want UTF-8 refusal", err)
+		}
+	})
 
 	t.Run("valid journal still serves", func(t *testing.T) {
 		dir, store := newDocumentStore(t, operatorDocument(operatorBinding(701, fixtureRepositoryID)))

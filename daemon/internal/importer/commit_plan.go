@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 const commitPlanVersion = "freeside.commit-plan/v1"
@@ -122,20 +123,25 @@ func scanCommitPlanStrings(raw []byte) []Finding {
 }
 
 func decodeAndResolveCommitPlan(raw []byte, changes []plannedChange, base map[string]treeEntry, pol Policy) ([]resolvedCommitGroup, error) {
+	// Keep invalid UTF-8 ahead of the structural allocation gates, matching
+	// this boundary's established classification. strictjson rechecks it.
 	if !utf8.Valid(raw) {
 		return nil, fmt.Errorf("commit plan is not UTF-8: %w", errPlanStructural)
 	}
 	if err := preboundCommitPlan(raw, pol.MaxCommitPlanGroups, pol.MaxEntries); err != nil {
 		return nil, err
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
 	var plan commitPlan
-	if err := dec.Decode(&plan); err != nil {
+	if err := strictjson.Decode(
+		raw, &plan, strictjson.RejectInvalidUTF8, strictjson.Limit(pol.MaxCommitPlanBytes),
+	); err != nil {
+		if errors.Is(err, strictjson.ErrInvalidUTF8) {
+			return nil, fmt.Errorf("commit plan is not UTF-8: %w", errPlanStructural)
+		}
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return nil, fmt.Errorf("commit plan carries trailing content: %w", errPlanStructural)
+		}
 		return nil, fmt.Errorf("decode commit plan: %w: %w", errPlanStructural, err)
-	}
-	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("commit plan carries trailing content: %w", errPlanStructural)
 	}
 	if plan.Version != commitPlanVersion {
 		return nil, fmt.Errorf("commit plan version %q: %w", plan.Version, errPlanStructural)

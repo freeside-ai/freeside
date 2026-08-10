@@ -25,6 +25,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 	"modernc.org/sqlite"
 )
 
@@ -398,15 +399,14 @@ func openEncryptedCheckpoint(
 	if err != nil {
 		return nil, domain.BackupCheckpoint{}, fmt.Errorf("read encrypted checkpoint: %w", err)
 	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
 	var envelope encryptedCheckpointEnvelope
-	if err := decoder.Decode(&envelope); err != nil {
+	if err := strictjson.Decode(body, &envelope, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return nil, domain.BackupCheckpoint{},
+				fmt.Errorf("%w: trailing envelope content", domain.ErrCheckpointAuthentication)
+		}
 		return nil, domain.BackupCheckpoint{},
 			fmt.Errorf("%w: decode envelope", domain.ErrCheckpointAuthentication)
-	}
-	if err := ensureJSONEOF(decoder); err != nil {
-		return nil, domain.BackupCheckpoint{}, err
 	}
 	if envelope.Version != backupCheckpointEnvelopeVersion ||
 		envelope.KeyID != backupKeyID(key) {
@@ -464,29 +464,22 @@ func decodeEncryptedCheckpointPayload(
 		return domain.BackupCheckpoint{}, nil, domain.ErrCheckpointAuthentication
 	}
 	metadataEnd := 8 + int(metadataSize) //nolint:gosec // the bound above proves metadataSize fits in int.
-	decoder := json.NewDecoder(bytes.NewReader(payload[8:metadataEnd]))
-	decoder.DisallowUnknownFields()
 	var checkpoint domain.BackupCheckpoint
-	if err := decoder.Decode(&checkpoint); err != nil {
+	if err := strictjson.Decode(
+		payload[8:metadataEnd], &checkpoint, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
+	); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return domain.BackupCheckpoint{}, nil,
+				fmt.Errorf("%w: trailing envelope content", domain.ErrCheckpointAuthentication)
+		}
 		return domain.BackupCheckpoint{}, nil,
 			fmt.Errorf("%w: decode metadata", domain.ErrCheckpointAuthentication)
-	}
-	if err := ensureJSONEOF(decoder); err != nil {
-		return domain.BackupCheckpoint{}, nil, err
 	}
 	if err := checkpoint.Validate(); err != nil {
 		return domain.BackupCheckpoint{}, nil,
 			fmt.Errorf("%w: invalid metadata", domain.ErrCheckpointAuthentication)
 	}
 	return checkpoint, payload[metadataEnd:], nil
-}
-
-func ensureJSONEOF(decoder *json.Decoder) error {
-	var trailing json.RawMessage
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("%w: trailing envelope content", domain.ErrCheckpointAuthentication)
-	}
-	return nil
 }
 
 func backupAEAD(key []byte) (cipher.AEAD, error) {

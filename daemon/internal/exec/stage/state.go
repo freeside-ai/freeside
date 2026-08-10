@@ -1,13 +1,11 @@
 package stage
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -375,14 +374,12 @@ func decodeIntent(body []byte) (intent, error) {
 	if err := ward.RejectDuplicateJSONKeys(body); err != nil {
 		return intent{}, err
 	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
 	var in intent
-	if err := decoder.Decode(&in); err != nil {
+	if err := strictjson.Decode(body, &in, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return intent{}, errors.New("trailing JSON value")
+		}
 		return intent{}, err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return intent{}, errors.New("trailing JSON value")
 	}
 	if err := in.validate(); err != nil {
 		return intent{}, err
