@@ -2,7 +2,7 @@
 # Build the Freeside Codex agent base image (issue #404).
 #
 # Assembles images/agent-codex/Containerfile: a pinned Debian slim base and the
-# pinned Codex CLI release bundle plan §5.7 requires a golden image to carry.
+# pinned Codex CLI release package plan §5.7 requires a golden image to carry.
 # Prints a registry-resolvable name@sha256:<digest> reference for the agent
 # stage's ImageRef.
 #
@@ -40,18 +40,18 @@
 #
 # Usage:
 #   scripts/build-agent-codex-image.sh [--tag NAME]
-#       [--codex-version VERSION --bundle-sha256 SHA256]
+#       [--codex-version VERSION --package-sha256 SHA256]
 #       {--registry HOST[/PATH] | --local-registry-port PORT} [--ref-tag TAG]
 #
 #   --codex-version VERSION
 #                       override the Codex CLI version pinned in the
 #                       Containerfile; the assertion follows the override.
-#                       Requires --bundle-sha256, because the Containerfile's
-#                       sha256 belongs to the pinned version's bundle and an
+#                       Requires --package-sha256, because the Containerfile's
+#                       sha256 belongs to the pinned version's package and an
 #                       unverified download is not a pin.
-#   --bundle-sha256 SHA256
+#   --package-sha256 SHA256
 #                       sha256 of that version's
-#                       codex-aarch64-unknown-linux-musl-bundle.tar.zst.
+#                       codex-package-aarch64-unknown-linux-musl.tar.zst.
 #   --dns IP            nameserver for the build, repeatable. The build fetches
 #                       from Debian's archive and GitHub releases; on a host
 #                       whose container gateway does not answer DNS (observed
@@ -74,7 +74,7 @@ registry=""
 local_registry_port=""
 ref_tag=v1
 codex_version=""
-bundle_sha256=""
+package_sha256=""
 dns_args=()
 
 require_value() {
@@ -96,9 +96,9 @@ while [ "$#" -gt 0 ]; do
 		codex_version="$2"
 		shift 2
 		;;
-	--bundle-sha256)
+	--package-sha256)
 		require_value "$@"
-		bundle_sha256="$2"
+		package_sha256="$2"
 		shift 2
 		;;
 	--dns)
@@ -153,19 +153,19 @@ if [ -n "$local_registry_port" ]; then
 	fi
 fi
 
-# The bundle is fetched over the network and verified against a literal, so the
+# The package is fetched over the network and verified against a literal, so the
 # version and its digest are one pin: overriding either alone would either check
-# the wrong bundle or install an unverified one.
-if [ -n "$codex_version" ] && [ -z "$bundle_sha256" ]; then
-	echo "build-agent-codex-image: --codex-version requires --bundle-sha256 for that version's bundle" >&2
+# the wrong package or install an unverified one.
+if [ -n "$codex_version" ] && [ -z "$package_sha256" ]; then
+	echo "build-agent-codex-image: --codex-version requires --package-sha256 for that version's package" >&2
 	exit 2
 fi
-if [ -n "$bundle_sha256" ] && [ -z "$codex_version" ]; then
-	echo "build-agent-codex-image: --bundle-sha256 requires --codex-version" >&2
+if [ -n "$package_sha256" ] && [ -z "$codex_version" ]; then
+	echo "build-agent-codex-image: --package-sha256 requires --codex-version" >&2
 	exit 2
 fi
-if [ -n "$bundle_sha256" ] && ! printf '%s' "$bundle_sha256" | grep -Eq '^[0-9a-f]{64}$'; then
-	echo "build-agent-codex-image: --bundle-sha256 must be 64 lowercase hex digits" >&2
+if [ -n "$package_sha256" ] && ! printf '%s' "$package_sha256" | grep -Eq '^[0-9a-f]{64}$'; then
+	echo "build-agent-codex-image: --package-sha256 must be 64 lowercase hex digits" >&2
 	exit 2
 fi
 
@@ -228,8 +228,8 @@ if [ -n "${HTTPS_PROXY:-}" ]; then
 fi
 
 version_args=(--build-arg "CODEX_VERSION=${codex_version}")
-if [ -n "$bundle_sha256" ]; then
-	version_args+=(--build-arg "CODEX_BUNDLE_SHA256=${bundle_sha256}")
+if [ -n "$package_sha256" ]; then
+	version_args+=(--build-arg "CODEX_PACKAGE_SHA256=${package_sha256}")
 fi
 
 echo "build-agent-codex-image: building with Apple container (Codex CLI ${codex_version})" >&2
