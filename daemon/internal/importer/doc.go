@@ -58,9 +58,9 @@
 //     file/directory conflicts)
 //   - blobs.go    blob store audit and content verification
 //   - change.go   ChangeKind enum and the derived Change shapes
-//   - gitrunner.go  hardened git plumbing (the package's only os/exec
-//     use); no hooks, no user/system/workspace config, scratch index,
-//     pinned identity, no working-tree materialization
+//   - gitrunner.go  importer methods over internal/gitrun's hardened process
+//     seam; no hooks, no user/system/workspace config, scratch index, pinned
+//     identity, no working-tree materialization
 //   - commit.go   scratch-index tree and atomic multi-commit construction with
 //     the exact-tree acceptance cross-check and one compare-and-swap ref move
 //   - derive.go   change derivation against the enforced base (the
