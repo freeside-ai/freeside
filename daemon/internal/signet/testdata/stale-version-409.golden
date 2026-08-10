@@ -1,0 +1,48 @@
+{
+  "message": "stale item version",
+  "replacement_item": {
+    "as_of_revision": 26,
+    "entity_version": 4,
+    "item": {
+      "id": "item-569",
+      "project_id": "project-569",
+      "subject": {
+        "subject_type": "run",
+        "subject_id": "run-569",
+        "run_id": "run-569"
+      },
+      "type": "spec_approval",
+      "priority": "normal",
+      "reason": "the implementation plan awaits approval",
+      "requested_decision": [
+        "approve",
+        "discuss"
+      ],
+      "evidence_snapshot": [],
+      "agent_claims": [],
+      "artifact_digests": [],
+      "pr_head_sha": "1111111111111111111111111111111111111111",
+      "pr_reference": null,
+      "commit_plan_notice": null,
+      "base_freshness": null,
+      "readiness_invalidation": null,
+      "review_recovery_binding": null,
+      "review_configuration_recovery": null,
+      "item_version": 3,
+      "interruption_class": "planned_gate",
+      "conversation_id": "conversation-569",
+      "timing": {
+        "delivery_count": 0,
+        "first_submitted_at": null,
+        "first_accepted_at": null,
+        "first_opened_at": null,
+        "submit_to_first_open": null
+      },
+      "expires_when": "2026-08-11T12:34:56Z",
+      "decided_at": null,
+      "posture": null,
+      "blocking_supersession": null,
+      "status": "open"
+    }
+  }
+}

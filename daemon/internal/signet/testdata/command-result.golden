@@ -1,0 +1,14 @@
+{
+  "record": {
+    "command_id": "command-569",
+    "device_id": "device-569",
+    "item_id": "item-569",
+    "item_version": 3,
+    "pr_head_sha": "1111111111111111111111111111111111111111",
+    "artifact_digests": [],
+    "action": "approve",
+    "message": "",
+    "attachments": []
+  },
+  "revision": 25
+}
