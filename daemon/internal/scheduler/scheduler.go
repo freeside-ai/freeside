@@ -57,8 +57,8 @@ type Consumption struct {
 // Handler consumes one fired occurrence. Long or external work (a janitor
 // cycle, a doctor pass, a GitHub read) runs here, outside any store
 // transaction; the returned Consumption is what commits. A returned error
-// is a correctness failure and stops the scheduler — a transient external
-// failure is an OutcomeObserveFailed consumption, not an error, so a
+// is a correctness or persistent-health failure and stops the scheduler. A
+// transient external failure is an OutcomeObserveFailed consumption, so a
 // recurring schedule retries at its next nominal fire.
 type Handler func(ctx context.Context, ev domain.ScheduleEvent, s domain.Schedule) (Consumption, error)
 
@@ -242,11 +242,10 @@ func sameShape(a, b domain.Schedule) bool {
 }
 
 // Run drives passes immediately and then on interval until ctx is
-// canceled, waiting out in-flight handlers on shutdown. A correctness
-// error — from a pass, a handler, or a consumption — stops the loop
-// instead of being hidden by retries, mirroring the engine's reconcile
-// loops (and, for the janitor kind, preserving "a stopped janitor stops
-// the daemon").
+// canceled, waiting out in-flight handlers on shutdown. A correctness or
+// persistent-health error from a pass, handler, or consumption stops the
+// loop instead of being hidden by retries. The daemon composition consumes
+// that loop exit as a durable in-process stop.
 func (s *Scheduler) Run(ctx context.Context, interval time.Duration) error {
 	if interval <= 0 {
 		return fmt.Errorf("scheduler: interval %s must be positive", interval)
@@ -262,7 +261,8 @@ func (s *Scheduler) Run(ctx context.Context, interval time.Duration) error {
 				return nil
 			}
 			// Recorded here rather than left to the caller: a pass error stops
-			// the daemon, and the channel it travels on may not outlive it.
+			// this scheduler instance, and the channel it travels on may not
+			// outlive it.
 			s.logger.Error("scheduling pass failed", "error", err)
 			return err
 		}

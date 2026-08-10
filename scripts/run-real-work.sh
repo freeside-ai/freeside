@@ -224,7 +224,8 @@ db_path="$FREESIDE_REAL_RUN_STATE_ROOT/freeside.db"
 mkdir -p "$FREESIDE_REAL_RUN_STATE_ROOT" "$FREESIDE_REAL_RUN_SEED_ROOT"
 
 echo "building freesided" >&2
-(cd "$repo_root/daemon" && go build -o "$workdir/freesided" ./cmd/freesided)
+build_version="$(git -C "$repo_root" rev-parse --short=12 HEAD)"
+(cd "$repo_root/daemon" && go build -ldflags "-X main.version=$build_version" -o "$workdir/freesided" ./cmd/freesided)
 
 echo "submitting the work item" >&2
 submit_log="$workdir/submit.json"

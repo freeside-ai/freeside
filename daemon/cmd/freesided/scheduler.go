@@ -17,8 +17,8 @@ import (
 // §10 obligations — including in attended_dev — with only their cadence
 // migrated off plain tickers; each keeps its synchronous startup pass
 // (main.go's initial doctor run, the janitor's coverage priming in
-// composeClaudeDriver) as a direct call, and a handler failure stops the
-// scheduler loop, which the daemon treats as fatal.
+// composeClaudeDriver) as a direct call. A handler failure stops the
+// scheduler loop, which the daemon consumes as a durable in-process stop.
 
 const (
 	schedulerSystemProjectID = domain.ProjectID("project-system")
@@ -711,22 +711,29 @@ func newClaudeScheduler(
 	wiring *claudeComposition,
 	runDoctor func(context.Context) error,
 ) (*scheduler.Scheduler, error) {
+	now := func() time.Time { return time.Now().UTC() }
+	failures := newScheduledFailureTracker(now, cfg.Logger)
 	kinds := map[domain.ScheduleKind]scheduler.Registration{
 		domain.ScheduleDoctor: {Handle: func(
 			ctx context.Context, _ domain.ScheduleEvent, _ domain.Schedule,
 		) (scheduler.Consumption, error) {
-			if err := runScheduledDoctorPass(ctx, wiring.runConformance, runDoctor); err != nil {
-				return scheduler.Consumption{}, fmt.Errorf("scheduled doctor pass: %w", err)
+			err := runScheduledDoctorPass(ctx, wiring.runConformance, runDoctor)
+			if err != nil {
+				err = fmt.Errorf("scheduled doctor pass: %w", err)
 			}
-			return scheduler.Consumption{Outcome: domain.OutcomeHandled}, nil
+			return failures.consumption(domain.ScheduleDoctor, err)
 		}},
 		domain.ScheduleJanitor: {Handle: func(
 			ctx context.Context, _ domain.ScheduleEvent, _ domain.Schedule,
 		) (scheduler.Consumption, error) {
-			if err := wiring.janitor.RunScheduledPass(ctx); err != nil {
-				return scheduler.Consumption{}, fmt.Errorf("installation janitor: %w", err)
+			err := wiring.janitor.RunScheduledPass(ctx)
+			if err == nil {
+				err = janitorRegistrationFailures(wiring.janitor.RegistrationFaults())
 			}
-			return scheduler.Consumption{Outcome: domain.OutcomeHandled}, nil
+			if err != nil {
+				err = fmt.Errorf("installation janitor: %w", err)
+			}
+			return failures.consumption(domain.ScheduleJanitor, err)
 		}},
 	}
 	// The installation-poll kind registers with the daemon too: a pending
@@ -739,8 +746,7 @@ func newClaudeScheduler(
 	for kind, reg := range publicationWatchRegistrations(st, wiring.observeBaseTip, capture) {
 		kinds[kind] = reg
 	}
-	return scheduler.New(st, cfg.Claude.OperatingMode,
-		func() time.Time { return time.Now().UTC() }, kinds)
+	return scheduler.New(st, cfg.Claude.OperatingMode, now, kinds)
 }
 
 // armTrustedConfigJobs converges the doctor and janitor schedules onto the

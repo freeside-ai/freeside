@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -29,13 +30,19 @@ type RequestAuthorizer func(*http.Request) (domain.DeviceID, bool)
 // NewHTTPHandler serves the currently implemented OpenAPI surface. Listener
 // placement stays with daemon composition, which must bind only to loopback
 // or the configured Tailscale address (plan §5.2). A nil authorizer denies
-// every request; there is no unauthenticated fallback.
-func NewHTTPHandler(service *Service, authorize RequestAuthorizer) http.Handler {
-	h := httpHandler{service: service, authorize: authorize}
+// every authenticated route; there is no fallback around those checks.
+func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHealth ...HealthResponse) http.Handler {
+	health := HealthResponse{Status: "ok", Version: "devel", StartedAt: time.Now().UTC()}
+	if len(configuredHealth) > 0 {
+		health = configuredHealth[0]
+	}
+	health.Status = "ok"
+	h := httpHandler{service: service, authorize: authorize, health: health}
 	mux := http.NewServeMux()
-	// POST /pairing is the one unauthenticated route (api/openapi.yaml
-	// security: []): the requester has no credential yet, and the short-lived
-	// code is the authenticator.
+	// GET /health and POST /pairing are the unauthenticated routes
+	// (api/openapi.yaml security: []). Health exposes only process liveness;
+	// pairing uses its short-lived code as the authenticator.
+	mux.Handle("GET /health", http.HandlerFunc(h.getHealth))
 	mux.Handle("POST /pairing", http.HandlerFunc(h.pairDevice))
 	mux.Handle("POST /devices/{device_id}/revoke", h.authenticated(h.revokeDevice))
 	mux.Handle("GET /sync/bootstrap", h.authenticated(h.getBootstrap))
@@ -57,6 +64,20 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer) http.Handler 
 type httpHandler struct {
 	service   *Service
 	authorize RequestAuthorizer
+	health    HealthResponse
+}
+
+// HealthResponse is the deliberately minimal unauthenticated liveness
+// response from plan §5.2. Status is fixed at "ok" by the HTTP boundary;
+// richer operational state remains behind authenticated routes.
+type HealthResponse struct {
+	Status    string    `json:"status"`
+	Version   string    `json:"version"`
+	StartedAt time.Time `json:"started_at"`
+}
+
+func (h httpHandler) getHealth(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, h.health)
 }
 
 type authenticatedHandler func(http.ResponseWriter, *http.Request, domain.DeviceID)
