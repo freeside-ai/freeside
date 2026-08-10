@@ -1158,6 +1158,7 @@ func TestClassifyTransportSeedError(t *testing.T) {
 	}{
 		{"missing base", publish.ErrRemoteMissingBase, false, true},
 		{"materialization refusal", publish.ErrMaterializationRefused, false, true},
+		{"installation token expiry refusal", publish.ErrTokenExpiry, false, true},
 		{"git auth", &publish.TransportGitError{Refusal: publish.RefusalAuth}, false, true},
 		{"API unauthorized", &publish.APIError{Status: http.StatusUnauthorized}, false, true},
 		{"API forbidden", &publish.APIError{Status: http.StatusForbidden}, false, true},
