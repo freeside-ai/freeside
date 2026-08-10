@@ -1482,6 +1482,8 @@ type janitorRunner interface {
 	ActiveFor(int64) bool
 	WithStableCoverage(func() error) error
 	RegistrationFaults() []publish.JanitorRegistrationFault
+	ChurningRegistrations() []publish.JanitorRegistrationChurn
+	IncompleteRegistrations() []publish.JanitorRegistrationIncomplete
 	PendingReady(publish.PendingInstallationEnvelope) (int64, bool)
 }
 
@@ -1517,13 +1519,28 @@ func startJanitorSession(
 		if janitor.ActiveFor(registrationID) {
 			continue
 		}
-		faultErrs := make([]error, 0, 1)
+		causes := make([]error, 0, 1)
 		for _, fault := range janitor.RegistrationFaults() {
-			faultErrs = append(faultErrs, fault.Err)
+			if fault.RegistrationID == registrationID {
+				causes = append(causes, fault.Err)
+			}
+		}
+		for _, churn := range janitor.ChurningRegistrations() {
+			if churn.RegistrationID == registrationID {
+				causes = append(causes, fmt.Errorf(
+					"removal churn for %d consecutive passes",
+					churn.ConsecutivePasses,
+				))
+			}
+		}
+		for _, incomplete := range janitor.IncompleteRegistrations() {
+			if incomplete.RegistrationID == registrationID {
+				causes = append(causes, errors.New("reconciliation incomplete: removal budget"))
+			}
 		}
 		return nil, errors.Join(fmt.Errorf(
 			"installation janitor did not publish coverage for registration %d",
-			registrationID), errors.Join(faultErrs...))
+			registrationID), errors.Join(causes...))
 	}
 	return &janitorSession{janitor: janitor}, nil
 }

@@ -1083,6 +1083,156 @@ func TestInstallationJanitorFaultsOutliveTheGateTheyExplain(t *testing.T) {
 	assertShutdown(t, cancel, done)
 }
 
+// TestResolverWaitsForScheduledPassPublication reproduces run 482's outage
+// shape: the active-resource cadence enters resolution after a scheduled pass
+// withdraws coverage but before that clean pass republishes it. The resolver
+// must wait for the safety pass, not misreport a durable inactive janitor.
+func TestResolverWaitsForScheduledPassPublication(t *testing.T) {
+	t.Parallel()
+	ks := publicJanitorKeystore(t)
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	var callsMu sync.Mutex
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
+			callsMu.Lock()
+			calls++
+			call := calls
+			callsMu.Unlock()
+			if call == 2 {
+				close(blocked)
+				<-release
+			}
+			_, _ = io.WriteString(w, operatorInstallations)
+			return
+		}
+		if !handleExactGrant(w, r, fixtureRepositoryID) {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	janitor := newJanitor(
+		t, ks, srv,
+		publicAuthority(publish.TrustedInstallation{
+			RegistrationID: 501, InstallationID: 701,
+			Account: "operator", AccountID: 101,
+			RepositoryIDs: []int64{fixtureRepositoryID},
+		}),
+		&removalRecorder{}, 4,
+	)
+	if err := janitor.RunScheduledPass(context.Background()); err != nil {
+		t.Fatalf("prime janitor: %v", err)
+	}
+	if !janitor.ActiveFor(501) {
+		t.Fatal("priming pass did not publish coverage")
+	}
+	passDone := make(chan error, 1)
+	go func() { passDone <- janitor.RunScheduledPass(context.Background()) }()
+	<-blocked
+	if janitor.ActiveFor(501) {
+		t.Fatal("scheduled pass did not withdraw coverage")
+	}
+
+	resolver := publish.NewInstallationResolverWithJanitor(
+		ks, srv.Client(), srv.URL, fixedNow, janitor,
+	)
+	type resolveResult struct {
+		binding publish.InstallationBinding
+		err     error
+	}
+	resolved := make(chan resolveResult, 1)
+	go func() {
+		binding, err := resolver.Resolve(context.Background(), "operator")
+		resolved <- resolveResult{binding: binding, err: err}
+	}()
+	select {
+	case result := <-resolved:
+		t.Fatalf("resolution escaped the in-progress pass: %+v, %v", result.binding, result.err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-passDone; err != nil {
+		t.Fatalf("scheduled pass: %v", err)
+	}
+	result := <-resolved
+	if result.err != nil {
+		t.Fatalf("Resolve after pass publication: %v", result.err)
+	}
+	if result.binding.RegistrationID != 501 || result.binding.InstallationID != 701 {
+		t.Fatalf("binding = %+v, want registration 501 installation 701", result.binding)
+	}
+}
+
+func TestScheduledJanitorRecoversCoverageAfterDriftClears(t *testing.T) {
+	t.Parallel()
+	ks := publicJanitorKeystore(t)
+	var callsMu sync.Mutex
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
+			callsMu.Lock()
+			calls++
+			call := calls
+			callsMu.Unlock()
+			if call == 2 {
+				_, _ = io.WriteString(w, `[{
+					"id":701,"app_id":501,"target_id":101,
+					"repository_selection":"selected","account":{"login":"operator","id":101}
+				},{
+					"id":702,"app_id":501,"target_id":303,
+					"repository_selection":"selected","account":{"login":"stranger","id":303}
+				}]`)
+				return
+			}
+			_, _ = io.WriteString(w, operatorInstallations)
+		case r.Method == http.MethodDelete && r.URL.Path == "/app/installations/702":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			if !handleExactGrant(w, r, fixtureRepositoryID) {
+				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			}
+		}
+	}))
+	defer srv.Close()
+	janitor := newJanitor(
+		t, ks, srv,
+		publicAuthority(publish.TrustedInstallation{
+			RegistrationID: 501, InstallationID: 701,
+			Account: "operator", AccountID: 101,
+			RepositoryIDs: []int64{fixtureRepositoryID},
+		}),
+		&removalRecorder{}, 1,
+	)
+	if err := janitor.RunScheduledPass(context.Background()); err != nil {
+		t.Fatalf("prime: %v", err)
+	}
+	if !janitor.ActiveFor(501) {
+		t.Fatal("priming pass did not cover registration 501")
+	}
+	if err := janitor.RunScheduledPass(context.Background()); err != nil {
+		t.Fatalf("drift pass: %v", err)
+	}
+	if janitor.ActiveFor(501) {
+		t.Fatal("drift pass retained coverage")
+	}
+	churn := janitor.ChurningRegistrations()
+	if len(churn) != 1 || churn[0].RegistrationID != 501 || churn[0].ConsecutivePasses != 1 {
+		t.Fatalf("drift diagnostics = %+v", churn)
+	}
+	if err := janitor.RunScheduledPass(context.Background()); err != nil {
+		t.Fatalf("recovery pass: %v", err)
+	}
+	if !janitor.ActiveFor(501) {
+		t.Fatal("clean pass did not recover coverage without restart")
+	}
+	if churn := janitor.ChurningRegistrations(); len(churn) != 0 {
+		t.Fatalf("churn survived clean recovery: %+v", churn)
+	}
+}
+
 // TestInstallationJanitorOrdersFaultsAndReportsCancellation pins the two
 // contracts a single-fault test cannot reach: faults are ordered by
 // registration ID, and a canceled pass reports the cancellation rather than a

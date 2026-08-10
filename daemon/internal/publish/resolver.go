@@ -99,6 +99,22 @@ type resolverJanitorFaultSource interface {
 	RegistrationFaults() []JanitorRegistrationFault
 }
 
+type resolverJanitorChurnSource interface {
+	ChurningRegistrations() []JanitorRegistrationChurn
+}
+
+type resolverJanitorIncompleteSource interface {
+	IncompleteRegistrations() []JanitorRegistrationIncomplete
+}
+
+type resolverJanitorAwaiter interface {
+	AwaitActiveFor(registrationID int64) bool
+}
+
+type resolverJanitorRepositoryAwaiter interface {
+	AwaitAllowsRepository(registrationID, installationID, repositoryID int64) bool
+}
+
 // NewInstallationResolver wires owner resolution without janitor coverage.
 // It exists for explicit fail-closed construction tests; every registration
 // will be refused before GitHub is contacted.
@@ -231,7 +247,7 @@ func (r *InstallationResolver) resolve(
 	// gate below, which is re-read after matching and re-checked at the mint.
 	covered := 0
 	for _, app := range apps {
-		if r.janitor != nil && r.janitor.ActiveFor(app.AppID) {
+		if janitorActiveFor(r.janitor, app.AppID) {
 			covered++
 		}
 	}
@@ -315,7 +331,7 @@ func (r *InstallationResolver) resolve(
 	// The floor above returns unless some registration is covered, so a janitor
 	// is present by the time any match exists.
 	for _, match := range matches {
-		if !r.janitor.ActiveFor(match.RegistrationID) {
+		if !janitorActiveFor(r.janitor, match.RegistrationID) {
 			return InstallationBinding{}, janitorInactiveError(r.janitor, match.RegistrationID)
 		}
 	}
@@ -331,38 +347,77 @@ func (r *InstallationResolver) resolve(
 	}
 }
 
+func janitorActiveFor(status JanitorStatus, registrationID int64) bool {
+	if status == nil {
+		return false
+	}
+	if awaiter, ok := status.(resolverJanitorAwaiter); ok {
+		return awaiter.AwaitActiveFor(registrationID)
+	}
+	return status.ActiveFor(registrationID)
+}
+
 func janitorInactiveError(status JanitorStatus, registrationIDs ...int64) error {
+	requested := make(map[int64]struct{}, len(registrationIDs))
+	for _, registrationID := range registrationIDs {
+		requested[registrationID] = struct{}{}
+	}
+	causeByRegistration := make(map[int64]error, len(requested))
 	if source, ok := status.(resolverJanitorFaultSource); ok {
-		requested := make(map[int64]struct{}, len(registrationIDs))
-		for _, registrationID := range registrationIDs {
-			requested[registrationID] = struct{}{}
-		}
-		faultByRegistration := make(map[int64]error, len(requested))
 		for _, fault := range source.RegistrationFaults() {
 			if _, ok := requested[fault.RegistrationID]; !ok || fault.Err == nil {
 				continue
 			}
-			faultByRegistration[fault.RegistrationID] = fault.Err
+			causeByRegistration[fault.RegistrationID] = fmt.Errorf(
+				"registration %d janitor fault: %w",
+				fault.RegistrationID,
+				fault.Err,
+			)
 		}
-		// Before repository matching, any unfaulted candidate may become
-		// covered when the active janitor pass finishes. Only a known single
-		// registration, or a candidate set faulted in full, is definitive.
-		if len(faultByRegistration) == len(requested) {
-			faults := make([]error, 0, len(requested))
-			seen := make(map[int64]struct{}, len(requested))
-			for _, registrationID := range registrationIDs {
-				if _, ok := seen[registrationID]; ok {
-					continue
-				}
-				seen[registrationID] = struct{}{}
-				faults = append(faults, fmt.Errorf(
-					"registration %d janitor fault: %w",
-					registrationID,
-					faultByRegistration[registrationID],
-				))
+	}
+	if source, ok := status.(resolverJanitorChurnSource); ok {
+		for _, churn := range source.ChurningRegistrations() {
+			if _, ok := requested[churn.RegistrationID]; !ok {
+				continue
 			}
-			return fmt.Errorf("installation resolution: %w", errors.Join(faults...))
+			if _, hasCause := causeByRegistration[churn.RegistrationID]; hasCause {
+				continue
+			}
+			causeByRegistration[churn.RegistrationID] = fmt.Errorf(
+				"registration %d janitor removal churn for %d consecutive passes",
+				churn.RegistrationID,
+				churn.ConsecutivePasses,
+			)
 		}
+	}
+	if source, ok := status.(resolverJanitorIncompleteSource); ok {
+		for _, incomplete := range source.IncompleteRegistrations() {
+			if _, ok := requested[incomplete.RegistrationID]; !ok {
+				continue
+			}
+			if _, hasCause := causeByRegistration[incomplete.RegistrationID]; hasCause {
+				continue
+			}
+			causeByRegistration[incomplete.RegistrationID] = fmt.Errorf(
+				"registration %d janitor reconciliation incomplete: removal budget",
+				incomplete.RegistrationID,
+			)
+		}
+	}
+	// Before repository matching, any candidate without a completed-pass cause
+	// may still become covered by its first pass. Only a known single
+	// registration, or a candidate set diagnosed in full, is definitive.
+	if len(causeByRegistration) == len(requested) {
+		causes := make([]error, 0, len(requested))
+		seen := make(map[int64]struct{}, len(requested))
+		for _, registrationID := range registrationIDs {
+			if _, ok := seen[registrationID]; ok {
+				continue
+			}
+			seen[registrationID] = struct{}{}
+			causes = append(causes, causeByRegistration[registrationID])
+		}
+		return fmt.Errorf("installation resolution: %w", errors.Join(causes...))
 	}
 	return fmt.Errorf(
 		"installation resolution: registration %d: %w",
@@ -374,8 +429,13 @@ func janitorInactiveError(status JanitorStatus, registrationIDs ...int64) error 
 func (r *InstallationResolver) allowsRepository(
 	registrationID, installationID, repositoryID int64,
 ) bool {
-	return r != nil && r.janitor != nil &&
-		r.janitor.AllowsRepository(registrationID, installationID, repositoryID)
+	if r == nil || r.janitor == nil {
+		return false
+	}
+	if awaiter, ok := r.janitor.(resolverJanitorRepositoryAwaiter); ok {
+		return awaiter.AwaitAllowsRepository(registrationID, installationID, repositoryID)
+	}
+	return r.janitor.AllowsRepository(registrationID, installationID, repositoryID)
 }
 
 func expectedInstallationOwner(app AppCredentials, requested string) string {

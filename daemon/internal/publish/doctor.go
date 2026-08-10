@@ -18,6 +18,7 @@ const (
 	CredentialFindingJanitorInactive    CredentialFindingCode = "janitor_inactive"
 	CredentialFindingJanitorFailed      CredentialFindingCode = "janitor_registration_failed"
 	CredentialFindingJanitorChurning    CredentialFindingCode = "janitor_removal_churn"
+	CredentialFindingJanitorIncomplete  CredentialFindingCode = "janitor_reconciliation_incomplete"
 	CredentialFindingLegacyLayout       CredentialFindingCode = "legacy_singleton_layout"
 	CredentialFindingReusedMachineKey   CredentialFindingCode = "reused_machine_key"
 	CredentialFindingUnreadableRecord   CredentialFindingCode = "unreadable_registration" //nolint:gosec // diagnostic vocabulary, not a credential
@@ -34,6 +35,7 @@ var AllCredentialFindingCodes = []CredentialFindingCode{
 	CredentialFindingJanitorInactive,
 	CredentialFindingJanitorFailed,
 	CredentialFindingJanitorChurning,
+	CredentialFindingJanitorIncomplete,
 	CredentialFindingLegacyLayout,
 	CredentialFindingReusedMachineKey,
 	CredentialFindingUnreadableRecord,
@@ -49,6 +51,7 @@ func (c CredentialFindingCode) valid() bool {
 		CredentialFindingJanitorInactive,
 		CredentialFindingJanitorFailed,
 		CredentialFindingJanitorChurning,
+		CredentialFindingJanitorIncomplete,
 		CredentialFindingLegacyLayout,
 		CredentialFindingReusedMachineKey,
 		CredentialFindingUnreadableRecord,
@@ -92,6 +95,10 @@ type janitorFaultSource interface {
 
 type janitorChurnSource interface {
 	ChurningRegistrations() []JanitorRegistrationChurn
+}
+
+type janitorIncompleteSource interface {
+	IncompleteRegistrations() []JanitorRegistrationIncomplete
 }
 
 // CredentialDoctor checks the local keystore and canonical App metadata. It
@@ -257,13 +264,18 @@ func (d *CredentialDoctor) janitorCode(registrationID int64) CredentialFindingCo
 			}
 		}
 	}
-	churn, ok := d.janitor.(janitorChurnSource)
-	if !ok {
-		return CredentialFindingJanitorInactive
+	if churn, ok := d.janitor.(janitorChurnSource); ok {
+		for _, registration := range churn.ChurningRegistrations() {
+			if registration.RegistrationID == registrationID {
+				return CredentialFindingJanitorChurning
+			}
+		}
 	}
-	for _, registration := range churn.ChurningRegistrations() {
-		if registration.RegistrationID == registrationID {
-			return CredentialFindingJanitorChurning
+	if incomplete, ok := d.janitor.(janitorIncompleteSource); ok {
+		for _, registration := range incomplete.IncompleteRegistrations() {
+			if registration.RegistrationID == registrationID {
+				return CredentialFindingJanitorIncomplete
+			}
 		}
 	}
 	return CredentialFindingJanitorInactive

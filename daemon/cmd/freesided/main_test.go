@@ -1211,6 +1211,8 @@ type stubJanitorRunner struct {
 	runErr         error
 	stableCoverage int
 	faults         []publish.JanitorRegistrationFault
+	churn          []publish.JanitorRegistrationChurn
+	incomplete     []publish.JanitorRegistrationIncomplete
 }
 
 func (j *stubJanitorRunner) RunScheduledPass(context.Context) error {
@@ -1231,6 +1233,14 @@ func (j *stubJanitorRunner) WithStableCoverage(fn func() error) error {
 
 func (j *stubJanitorRunner) RegistrationFaults() []publish.JanitorRegistrationFault {
 	return j.faults
+}
+
+func (j *stubJanitorRunner) ChurningRegistrations() []publish.JanitorRegistrationChurn {
+	return j.churn
+}
+
+func (j *stubJanitorRunner) IncompleteRegistrations() []publish.JanitorRegistrationIncomplete {
+	return j.incomplete
 }
 
 func (j *stubJanitorRunner) PendingReady(publish.PendingInstallationEnvelope) (int64, bool) {
@@ -1285,6 +1295,39 @@ func TestJanitorSessionReportsMissingCoverageWithFaults(t *testing.T) {
 	_, err := startJanitorSession(t.Context(), &faultyCoverageRunner{janitor}, []int64{4385298})
 	if err == nil || !errors.Is(err, fault) {
 		t.Fatalf("startJanitorSession error = %v, want fault %v", err, fault)
+	}
+}
+
+func TestJanitorSessionReportsEveryMissingCoverageCause(t *testing.T) {
+	tests := []struct {
+		name    string
+		janitor *stubJanitorRunner
+		want    string
+	}{
+		{
+			name: "churn",
+			janitor: &stubJanitorRunner{churn: []publish.JanitorRegistrationChurn{{
+				RegistrationID: 4385298, ConsecutivePasses: 2,
+			}}},
+			want: "removal churn for 2 consecutive passes",
+		},
+		{
+			name: "incomplete",
+			janitor: &stubJanitorRunner{incomplete: []publish.JanitorRegistrationIncomplete{{
+				RegistrationID: 4385298,
+			}}},
+			want: "reconciliation incomplete: removal budget",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := startJanitorSession(
+				t.Context(), &faultyCoverageRunner{test.janitor}, []int64{4385298},
+			)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("startJanitorSession error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

@@ -478,6 +478,15 @@ func (s churningJanitorStatus) ChurningRegistrations() []publish.JanitorRegistra
 	}}
 }
 
+type incompleteJanitorStatus struct {
+	inactiveJanitorStatus
+	registrationID int64
+}
+
+func (s incompleteJanitorStatus) IncompleteRegistrations() []publish.JanitorRegistrationIncomplete {
+	return []publish.JanitorRegistrationIncomplete{{RegistrationID: s.registrationID}}
+}
+
 type faultedChurningJanitorStatus struct {
 	churningJanitorStatus
 }
@@ -876,6 +885,27 @@ func TestCredentialDoctorDetections(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertFinding(t, findings, publish.CredentialFindingJanitorInactive)
+	})
+
+	t.Run("janitor reconciliation incomplete for this registration", func(t *testing.T) {
+		ks := newTestKeystore(t)
+		credentials := publicFixtureCredentials(t)
+		if err := ks.SaveApp(credentials); err != nil {
+			t.Fatal(err)
+		}
+		status := incompleteJanitorStatus{registrationID: credentials.AppID}
+		onboarder, _, _ := newTestOnboarder(t, ks, status)
+		findings, err := publish.NewCredentialDoctor(onboarder, status).
+			Check(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertFinding(t, findings, publish.CredentialFindingJanitorIncomplete)
+		for _, finding := range findings {
+			if finding.Code == publish.CredentialFindingJanitorInactive {
+				t.Error("incomplete reconciliation also reported the waiting-for-first-pass code")
+			}
+		}
 	})
 
 	t.Run("janitor failure takes precedence over removal churn", func(t *testing.T) {
