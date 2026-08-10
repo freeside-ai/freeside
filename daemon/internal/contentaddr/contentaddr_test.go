@@ -1,6 +1,9 @@
 package contentaddr_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -70,6 +73,67 @@ func TestParse(t *testing.T) {
 				t.Fatalf("Valid(%q) = %v, want %v (must match Parse)", tt.in, got, tt.wantOK)
 			}
 		})
+	}
+}
+
+func TestFormat(t *testing.T) {
+	sum := sha256.Sum256([]byte("freeside"))
+	want := "sha256:" + hex.EncodeToString(sum[:])
+	if got := contentaddr.Format(sum[:]); got != want {
+		t.Fatalf("Format() = %q, want %q", got, want)
+	}
+	if got := contentaddr.Sum([]byte("freeside")); got != want {
+		t.Fatalf("Sum() = %q, want %q", got, want)
+	}
+	if _, ok := contentaddr.Parse(contentaddr.Format(sum[:])); !ok {
+		t.Fatal("Parse(Format()) rejected a sha256 sum")
+	}
+
+	for _, size := range []int{0, sha256.Size - 1, sha256.Size + 1} {
+		t.Run(fmt.Sprintf("panics for %d bytes", size), func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("Format() did not panic for %d-byte sum", size)
+				}
+			}()
+			contentaddr.Format(make([]byte, size))
+		})
+	}
+}
+
+func TestHexAndFromHex(t *testing.T) {
+	tests := []struct {
+		name     string
+		hex      string
+		wantOK   bool
+		wantAddr string
+	}{
+		{"canonical", hex64, true, "sha256:" + hex64},
+		{"empty", "", false, ""},
+		{"short", hex64[:63], false, ""},
+		{"long", hex64 + "0", false, ""},
+		{"uppercase", strings.ToUpper(hex64), false, ""},
+		{"non-hex", strings.Repeat("g", 64), false, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotAddr, gotOK := contentaddr.FromHex(tt.hex)
+			if gotOK != tt.wantOK || gotAddr != tt.wantAddr {
+				t.Fatalf("FromHex(%q) = (%q, %v), want (%q, %v)", tt.hex, gotAddr, gotOK, tt.wantAddr, tt.wantOK)
+			}
+			if got := contentaddr.Hex(gotAddr); gotOK && got != tt.hex {
+				t.Fatalf("Hex(FromHex(%q)) = %q, want %q", tt.hex, got, tt.hex)
+			}
+		})
+	}
+
+	if got := contentaddr.Hex("sha256:" + strings.ToUpper(hex64)); got != "" {
+		t.Fatalf("Hex(non-canonical) = %q, want empty", got)
+	}
+	addr, ok := contentaddr.FromHex(contentaddr.Hex("sha256:" + hex64))
+	if !ok || addr != "sha256:"+hex64 {
+		t.Fatalf("FromHex(Hex(addr)) = (%q, %v), want original address", addr, ok)
 	}
 }
 
