@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // EvidenceManifestVersion identifies the evidence channel's wire format: the
@@ -246,25 +247,15 @@ func (m EvidenceManifest) Validate() error {
 // and entry-count caps are importer policy applied before these bytes
 // arrive.
 func DecodeEvidenceManifest(data []byte) (EvidenceManifest, error) {
-	// Checked before decode because encoding/json replaces invalid UTF-8
-	// with U+FFFD instead of failing, which would launder hostile bytes
-	// into a valid-looking manifest; the canonical-equality gate below
-	// would also catch it, but this names the failure precisely.
-	if !utf8.Valid(data) {
-		return EvidenceManifest{}, fmt.Errorf("decode evidence manifest: %w", ErrInvalidUTF8)
-	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
 	var m EvidenceManifest
-	if err := dec.Decode(&m); err != nil {
+	if err := strictjson.Decode(data, &m, strictjson.RejectInvalidUTF8, strictjson.NoLimit); err != nil {
+		if errors.Is(err, strictjson.ErrInvalidUTF8) {
+			return EvidenceManifest{}, fmt.Errorf("decode evidence manifest: %w", ErrInvalidUTF8)
+		}
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return EvidenceManifest{}, fmt.Errorf("decode evidence manifest: %w", ErrTrailingContent)
+		}
 		return EvidenceManifest{}, fmt.Errorf("decode evidence manifest: %w", err)
-	}
-	// Require EOF after the one value: dec.More reports another value, so a
-	// bare trailing delimiter slips past it; the second decode that must
-	// return io.EOF rejects every trailing byte (the repo's strict-decoder
-	// convention, e.g. verify/recipe.go, importer/handoff.go).
-	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
-		return EvidenceManifest{}, fmt.Errorf("decode evidence manifest: %w", ErrTrailingContent)
 	}
 	canonical, err := m.Encode()
 	if err != nil {

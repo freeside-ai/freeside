@@ -22,6 +22,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 const (
@@ -1328,14 +1329,14 @@ type codexAuthFile struct {
 }
 
 func inspectCodexAuthSnapshot(mode CodexAuthMode, body []byte) (*time.Time, error) {
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
 	var auth codexAuthFile
-	if err := dec.Decode(&auth); err != nil {
+	if err := strictjson.Decode(
+		body, &auth, strictjson.TolerateInvalidUTF8, strictjson.Limit(maxCodexAuthSnapshotBytes),
+	); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return nil, errors.New("auth.json carries trailing content")
+		}
 		return nil, errors.New("auth.json is malformed or carries an unknown field")
-	}
-	if err := ensureJSONEOF(dec); err != nil {
-		return nil, errors.New("auth.json carries trailing content")
 	}
 	if len(auth.LastRefresh) != 0 && !bytes.Equal(auth.LastRefresh, []byte("null")) {
 		var refreshed time.Time
@@ -1378,14 +1379,6 @@ func inspectCodexAuthSnapshot(mode CodexAuthMode, body []byte) (*time.Time, erro
 		return nil, nil
 	}
 	return nil, errors.New("unsupported auth mode")
-}
-
-func ensureJSONEOF(dec *json.Decoder) error {
-	var extra any
-	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
-		return errors.New("not EOF")
-	}
-	return nil
 }
 
 func jwtExpiry(token string) (time.Time, error) {

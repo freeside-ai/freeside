@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"reflect"
 	"slices"
 	"strconv"
@@ -18,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // Production workflow lane (#237, plan §5.12): a run created by `freesided
@@ -629,14 +629,12 @@ func decodeProductionRequest(entry store.QueueEntry) (productionInvocationReques
 		return productionInvocationRequest{}, fmt.Errorf("decode payload: unsupported version %q: %w",
 			unsupported, errProductionMarkerUnsupportedVersion)
 	}
-	decoder := json.NewDecoder(bytes.NewReader(entry.Payload))
-	decoder.DisallowUnknownFields()
 	var wire productionInvocationRequestWire
-	if err := decoder.Decode(&wire); err != nil {
+	if err := strictjson.Decode(entry.Payload, &wire, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return productionInvocationRequest{}, errors.New("decode payload: trailing JSON value")
+		}
 		return productionInvocationRequest{}, fmt.Errorf("decode payload: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return productionInvocationRequest{}, errors.New("decode payload: trailing JSON value")
 	}
 	if entry.Kind != KindProductionInvocationRequested {
 		return productionInvocationRequest{}, fmt.Errorf(
@@ -662,13 +660,13 @@ func decodeProductionRequest(entry store.QueueEntry) (productionInvocationReques
 		if len(wire.Publication) == 0 || bytes.Equal(wire.Publication, []byte("null")) {
 			return productionInvocationRequest{}, errors.New("decode payload: publication is required")
 		}
-		publicationDecoder := json.NewDecoder(bytes.NewReader(wire.Publication))
-		publicationDecoder.DisallowUnknownFields()
-		if err := publicationDecoder.Decode(&request.Publication); err != nil {
+		if err := strictjson.Decode(
+			wire.Publication, &request.Publication, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
+		); err != nil {
+			if errors.Is(err, strictjson.ErrTrailingData) {
+				return productionInvocationRequest{}, errors.New("decode payload publication: trailing JSON value")
+			}
 			return productionInvocationRequest{}, fmt.Errorf("decode payload publication: %w", err)
-		}
-		if err := publicationDecoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-			return productionInvocationRequest{}, errors.New("decode payload publication: trailing JSON value")
 		}
 		if err := request.Publication.Validate(); err != nil {
 			return productionInvocationRequest{}, fmt.Errorf("decode payload: %w", err)
@@ -857,16 +855,14 @@ func decodeProductionTerminal(
 		return productionTerminalRecord{}, fmt.Errorf("inbox row %q has kind %q: %w",
 			entry.IdempotencyKey, entry.Kind, domain.ErrParentKeyMismatch)
 	}
-	decoder := json.NewDecoder(bytes.NewReader(entry.Payload))
-	decoder.DisallowUnknownFields()
 	var terminal productionTerminalRecord
-	if err := decoder.Decode(&terminal); err != nil {
+	if err := strictjson.Decode(entry.Payload, &terminal, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return productionTerminalRecord{}, fmt.Errorf(
+				"decode terminal record %q: trailing JSON value", entry.IdempotencyKey)
+		}
 		return productionTerminalRecord{}, fmt.Errorf("decode terminal record %q: %w",
 			entry.IdempotencyKey, err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return productionTerminalRecord{}, fmt.Errorf(
-			"decode terminal record %q: trailing JSON value", entry.IdempotencyKey)
 	}
 	switch {
 	case string(terminal.InvocationID) != entry.IdempotencyKey:

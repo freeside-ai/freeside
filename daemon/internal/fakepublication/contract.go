@@ -4,13 +4,11 @@
 package fakepublication
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"path"
 	"path/filepath"
 	"strings"
@@ -19,6 +17,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 const (
@@ -130,13 +129,11 @@ func EncodeTask(task Task) ([]byte, error) {
 
 func DecodeTask(payload []byte) (Task, error) {
 	var task Task
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&task); err != nil {
+	if err := strictjson.Decode(payload, &task, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return Task{}, errors.New("decode fake publication task: trailing data")
+		}
 		return Task{}, fmt.Errorf("decode fake publication task: %w", err)
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return Task{}, errors.New("decode fake publication task: trailing data")
 	}
 	if err := task.Validate(); err != nil {
 		return Task{}, err

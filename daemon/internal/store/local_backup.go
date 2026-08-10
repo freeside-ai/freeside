@@ -23,6 +23,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // BackupArtifactStore is the part of the content-addressed blob store local
@@ -604,9 +605,9 @@ func checkpointArtifactDigests(
 			return artifactClosure{}, errors.New("codex review request instruction closure is null")
 		}
 		var request exec.ReviewRequest
-		decoder := json.NewDecoder(bytes.NewReader(body))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF || request.Validate() != nil {
+		if err := strictjson.Decode(
+			body, &request, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
+		); err != nil || request.Validate() != nil {
 			_ = reviewRows.Close()
 			return artifactClosure{}, errors.New("codex review request instruction closure is invalid")
 		}

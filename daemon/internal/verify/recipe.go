@@ -1,18 +1,16 @@
 package verify
 
 import (
-	"bytes"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"path"
 	"strings"
 	"unicode"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // CaptureMode is a recipe's evidence-capture declaration (§5.15: evidence
@@ -81,20 +79,12 @@ type recipeWire struct {
 // fail closed with ErrRecipeInvalid. Command arguments are otherwise
 // opaque: no whitespace splitting or metacharacter rejection.
 func ParseRecipe(raw []byte) (Recipe, error) {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
 	var w recipeWire
-	if err := dec.Decode(&w); err != nil {
+	if err := strictjson.Decode(raw, &w, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return Recipe{}, fmt.Errorf("recipe carries trailing data: %w", ErrRecipeInvalid)
+		}
 		return Recipe{}, fmt.Errorf("recipe does not parse: %w: %w", err, ErrRecipeInvalid)
-	}
-	// Require EOF after the one value. dec.More() reports another
-	// element only in the current array/object context, so at top level
-	// it misses a stray trailing token (`{...}]`, `{...}}`); a second
-	// decode that must return io.EOF rejects every trailing byte, which
-	// matters because this parser is the fail-closed boundary for
-	// trusted config and base-commit recipe bytes.
-	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
-		return Recipe{}, fmt.Errorf("recipe carries trailing data: %w", ErrRecipeInvalid)
 	}
 	if len(w.Commands) == 0 {
 		return Recipe{}, fmt.Errorf("recipe declares no commands: %w", ErrRecipeInvalid)

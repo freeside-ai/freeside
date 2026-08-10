@@ -20,6 +20,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -167,13 +168,13 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return submitResult{}, fmt.Errorf("submit: decode publication metadata: %w", err)
 	}
 	var publication engine.ProductionPublication
-	publicationDecoder := json.NewDecoder(bytes.NewReader(publicationFile.body))
-	publicationDecoder.DisallowUnknownFields()
-	if err := publicationDecoder.Decode(&publication); err != nil {
+	if err := strictjson.Decode(
+		publicationFile.body, &publication, strictjson.TolerateInvalidUTF8, strictjson.Limit(maxSubmissionFileBytes),
+	); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return submitResult{}, errors.New("submit: decode publication metadata: trailing JSON value")
+		}
 		return submitResult{}, fmt.Errorf("submit: decode publication metadata: %w", err)
-	}
-	if err := publicationDecoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return submitResult{}, errors.New("submit: decode publication metadata: trailing JSON value")
 	}
 	if err := publication.Validate(); err != nil {
 		return submitResult{}, fmt.Errorf("submit: decode publication metadata: %w", err)
@@ -188,13 +189,13 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return submitResult{}, fmt.Errorf("submit: decode resolved policy keys: %w", err)
 	}
 	var keys []domain.PolicyKey
-	decoder := json.NewDecoder(bytes.NewReader(policyFile.body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&keys); err != nil {
+	if err := strictjson.Decode(
+		policyFile.body, &keys, strictjson.TolerateInvalidUTF8, strictjson.Limit(maxSubmissionFileBytes),
+	); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return submitResult{}, errors.New("submit: decode resolved policy keys: trailing JSON value")
+		}
 		return submitResult{}, fmt.Errorf("submit: decode resolved policy keys: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return submitResult{}, errors.New("submit: decode resolved policy keys: trailing JSON value")
 	}
 	policyDigest, err := (domain.ResolvedPolicy{Keys: keys}).ComputeDigest()
 	if err != nil {
@@ -214,13 +215,13 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 			return submitResult{}, fmt.Errorf("submit: decode work-unit declaration: %w", err)
 		}
 		var declared submittedWorkUnit
-		workUnitDecoder := json.NewDecoder(bytes.NewReader(workUnitFile.body))
-		workUnitDecoder.DisallowUnknownFields()
-		if err := workUnitDecoder.Decode(&declared); err != nil {
+		if err := strictjson.Decode(
+			workUnitFile.body, &declared, strictjson.TolerateInvalidUTF8, strictjson.Limit(maxSubmissionFileBytes),
+		); err != nil {
+			if errors.Is(err, strictjson.ErrTrailingData) {
+				return submitResult{}, errors.New("submit: decode work-unit declaration: trailing JSON value")
+			}
 			return submitResult{}, fmt.Errorf("submit: decode work-unit declaration: %w", err)
-		}
-		if err := workUnitDecoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-			return submitResult{}, errors.New("submit: decode work-unit declaration: trailing JSON value")
 		}
 		// Declared collections are canonicalized here, not refused: their
 		// order carries no meaning, and the canonical form is what makes

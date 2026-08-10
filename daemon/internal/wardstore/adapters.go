@@ -5,12 +5,10 @@
 package wardstore
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -18,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -31,13 +30,11 @@ func marshalCodexReview(value any) ([]byte, error) {
 
 func decodeCodexReview[T any](body []byte) (T, error) {
 	var value T
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil {
+	if err := strictjson.Decode(body, &value, strictjson.TolerateInvalidUTF8, strictjson.NoLimit); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return value, errors.New("decode Codex review journal: trailing JSON value")
+		}
 		return value, fmt.Errorf("decode Codex review journal: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return value, errors.New("decode Codex review journal: trailing JSON value")
 	}
 	return value, nil
 }

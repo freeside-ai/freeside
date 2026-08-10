@@ -19,6 +19,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 var ErrCodexReviewOutcomeNotFound = errors.New("codex review outcome not found")
@@ -717,20 +718,20 @@ func (s *CodexReviewSource) normalizeCollection(
 			Failure:      "Codex review returned malformed structured output",
 		}
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(collection.Result)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&raw); err != nil {
+	if err := strictjson.Decode(
+		collection.Result, &raw, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
+	); err != nil {
+		if errors.Is(err, strictjson.ErrTrailingData) {
+			return CodexReviewSourceOutcome{
+				InvocationID: id,
+				FailureClass: domain.ReviewFailureContradiction,
+				Failure:      "Codex review returned trailing structured output",
+			}
+		}
 		return CodexReviewSourceOutcome{
 			InvocationID: id,
 			FailureClass: domain.ReviewFailureContradiction,
 			Failure:      "Codex review returned malformed structured output",
-		}
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return CodexReviewSourceOutcome{
-			InvocationID: id,
-			FailureClass: domain.ReviewFailureContradiction,
-			Failure:      "Codex review returned trailing structured output",
 		}
 	}
 	if raw.Findings == nil {
