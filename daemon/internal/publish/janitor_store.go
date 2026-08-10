@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 )
 
 const (
@@ -448,34 +450,13 @@ func (s *InstallationAuthorityStore) writeFile(name string, payload []byte) (err
 	// A crash between the temporary file and the rename leaves an orphan behind.
 	// Nothing reads it, but the caller holds the journal lock here, so this is
 	// the one safe moment to collect them.
-	stale, _ := filepath.Glob(filepath.Join(s.dir, name+".tmp-*"))
-	for _, path := range stale {
-		_ = os.Remove(path)
-	}
-	tmp, err := os.CreateTemp(s.dir, name+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer func() {
-		if err != nil {
-			_ = tmp.Close()
-			_ = os.Remove(tmpPath)
+	for _, pattern := range []string{name + ".tmp-*", "." + name + "-*.tmp"} {
+		stale, _ := filepath.Glob(filepath.Join(s.dir, pattern))
+		for _, path := range stale {
+			_ = os.Remove(path)
 		}
-	}()
-	if _, err = tmp.Write(payload); err != nil {
-		return err
 	}
-	if err = tmp.Sync(); err != nil {
-		return err
-	}
-	if err = tmp.Close(); err != nil {
-		return err
-	}
-	if err = os.Rename(tmpPath, filepath.Join(s.dir, name)); err != nil {
-		return err
-	}
-	return syncDir(s.dir)
+	return atomicfile.WriteFile(filepath.Join(s.dir, name), payload, 0o600)
 }
 
 // assertDirectory refuses a state directory another account can write to.

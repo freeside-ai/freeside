@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
@@ -102,14 +103,12 @@ func loadState(dir, name string, v any) error {
 	return nil
 }
 
-// atomicWrite serializes v as indented JSON and replaces dir/name atomically:
-// write a temp sibling, then rename over the target, so a reader (including
-// one after a crash mid-write, the exact boundary these fakes model) never
-// observes a partial file. Clock-free by construction: nothing here stamps a
-// time, and encoding/json sorts map keys, so equal state marshals to
-// byte-identical output on every platform.
+// atomicWrite serializes v as indented JSON and replaces dir/name durably, so
+// the fake models the same restart boundary as a production driver. Clock-free
+// by construction: nothing here stamps a time, and encoding/json sorts map
+// keys, so equal state marshals to byte-identical output on every platform.
 func atomicWrite(dir, name string, v any) error {
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := makeStateDirectory(dir); err != nil {
 		return fmt.Errorf("fake: create state dir %s: %w", dir, err)
 	}
 	b, err := json.MarshalIndent(v, "", "  ")
@@ -118,23 +117,55 @@ func atomicWrite(dir, name string, v any) error {
 	}
 	b = append(b, '\n')
 
-	tmp, err := os.CreateTemp(dir, name+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("fake: create temp for %s: %w", name, err)
+	if err := atomicfile.WriteFile(filepath.Join(dir, name), b, 0o600); err != nil {
+		return fmt.Errorf("fake: persist %s: %w", name, err)
 	}
-	tmpName := tmp.Name()
-	// Cleans up the temp on any error path; a no-op after a successful rename.
-	defer func() { _ = os.Remove(tmpName) }()
+	return nil
+}
 
-	if _, err := tmp.Write(b); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("fake: write %s: %w", tmpName, err)
+func makeStateDirectory(path string) error {
+	return makeStateDirectoryWithSync(path, atomicfile.SyncDir)
+}
+
+func makeStateDirectoryWithSync(path string, syncDir func(string) error) error {
+	var missing []string
+	var existing string
+	for current := filepath.Clean(path); ; current = filepath.Dir(current) {
+		info, err := os.Stat(current)
+		if err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("%s is not a directory", current)
+			}
+			existing = current
+			break
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		missing = append(missing, current)
+		if parent := filepath.Dir(current); parent == current {
+			return fmt.Errorf("no existing ancestor for %s", path)
+		}
 	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("fake: close %s: %w", tmpName, err)
+	if err := syncDir(filepath.Dir(existing)); err != nil {
+		return err
 	}
-	if err := os.Rename(tmpName, filepath.Join(dir, name)); err != nil {
-		return fmt.Errorf("fake: rename %s: %w", name, err)
+	for i := len(missing) - 1; i >= 0; i-- {
+		if err := os.Mkdir(missing[i], 0o750); err != nil {
+			if !errors.Is(err, fs.ErrExist) {
+				return err
+			}
+			info, statErr := os.Stat(missing[i])
+			if statErr != nil {
+				return statErr
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("%s is not a directory", missing[i])
+			}
+		}
+		if err := syncDir(filepath.Dir(missing[i])); err != nil {
+			return err
+		}
 	}
 	return nil
 }

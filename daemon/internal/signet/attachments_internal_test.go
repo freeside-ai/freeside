@@ -76,7 +76,7 @@ func TestBlobStorePutRetriesExistingBlobDirectorySync(t *testing.T) {
 	digest := domain.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(body))))
 	failedSync := errors.New("injected blob directory sync failure")
 	syncCalls := 0
-	syncDir := func() error {
+	syncDir := func(string) error {
 		syncCalls++
 		if syncCalls == 1 {
 			return failedSync

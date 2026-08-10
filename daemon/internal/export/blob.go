@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
@@ -69,18 +70,13 @@ func (w *blobWriter) digestAndStore(fsys fs.FS, p string, store bool) (blobResul
 		return blobResult{digest: d, size: n, stored: w.written[d]}, nil
 	}
 
-	tmp, err := os.CreateTemp(w.dir, ".partial-*")
+	tmp, err := atomicfile.Create(w.dir, ".partial-*")
 	if err != nil {
 		return blobResult{}, fmt.Errorf("stage blob for %q: %w", p, err)
 	}
-	tmpName := tmp.Name()
+	defer func() { _ = tmp.Abort() }()
 	n, err := io.Copy(io.MultiWriter(h, tmp), f)
-	closeErr := tmp.Close()
-	if err == nil {
-		err = closeErr
-	}
 	if err != nil {
-		_ = os.Remove(tmpName)
 		return blobResult{}, fmt.Errorf("write blob for %q: %w", p, err)
 	}
 
@@ -88,12 +84,13 @@ func (w *blobWriter) digestAndStore(fsys fs.FS, p string, store bool) (blobResul
 	if w.written[d] {
 		// Already stored by an identical file this export hashed itself;
 		// content addressing makes the duplicate byte-identical.
-		_ = os.Remove(tmpName)
+		if err := tmp.Abort(); err != nil {
+			return blobResult{}, fmt.Errorf("discard duplicate blob for %q: %w", p, err)
+		}
 		return blobResult{digest: d, size: n, stored: true}, nil
 	}
 	final := filepath.Join(w.dir, contentaddr.Hex(string(d)))
-	if err := os.Rename(tmpName, final); err != nil {
-		_ = os.Remove(tmpName)
+	if err := tmp.Commit(final); err != nil {
 		return blobResult{}, fmt.Errorf("commit blob for %q: %w", p, err)
 	}
 	w.written[d] = true

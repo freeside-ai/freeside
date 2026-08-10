@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
@@ -972,7 +973,7 @@ func (b *Backend) materializeExport(ctx context.Context, hs HandoffSpec, names h
 	if err != nil {
 		return "", fmt.Errorf("create export output dir: %w", err)
 	}
-	if err := syncDir(b.cfg.ExportRoot); err != nil {
+	if err := atomicfile.SyncDir(b.cfg.ExportRoot); err != nil {
 		return "", fmt.Errorf("sync export root after output creation: %w", err)
 	}
 	tarPath := filepath.Join(st.archiveDir, "export.tar")

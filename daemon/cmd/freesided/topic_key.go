@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 )
 
 const topicKeySuffix = ".ntfy-topic.key"
@@ -88,12 +90,7 @@ func createTopicKey(path string) ([]byte, error) {
 	if err := f.Close(); err != nil {
 		return nil, fmt.Errorf("close topic key %s: %w", path, err)
 	}
-	dir, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return nil, fmt.Errorf("open topic key directory: %w", err)
-	}
-	defer dir.Close() //nolint:errcheck // Sync below is the durability signal
-	if err := dir.Sync(); err != nil {
+	if err := atomicfile.SyncDir(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("sync topic key directory: %w", err)
 	}
 	return key, nil

@@ -79,6 +79,7 @@ func TestLocalBackupProducerCreatesRefreshesAndVerifiesEvidence(t *testing.T) {
 		"restore-test.db", "restore-test.db-wal", "restore-test.db-shm",
 		".latest-stale.db", ".latest-stale.db-wal", ".latest-stale.db-shm",
 		".latest-stale.backup",
+		".latest.backup-stale.tmp",
 		".restore-test-stale.db", ".restore-test-stale.db-wal",
 		".restore-test-stale.db-shm",
 	}

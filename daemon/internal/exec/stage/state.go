@@ -11,6 +11,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
@@ -591,9 +592,8 @@ func (d *Driver) regateWithCurrentPolicy(
 	return nil
 }
 
-// saveIntent writes one intent durably: a temp file in the same directory,
-// fsynced, then renamed, so a crash mid-write leaves the previous record
-// rather than a truncated one.
+// saveIntent writes one intent durably, so a crash mid-write leaves the
+// previous record rather than a truncated one.
 func (d *Driver) saveIntent(in intent) error {
 	if err := in.validate(); err != nil {
 		return err
@@ -605,38 +605,8 @@ func (d *Driver) saveIntent(in intent) error {
 	if err != nil {
 		return fmt.Errorf("encode driver intent %s: %w", in.InvocationID, err)
 	}
-	tmp, err := os.CreateTemp(d.dir, in.RunID+".*.tmp")
-	if err != nil {
-		return fmt.Errorf("stage driver intent %s: %w", in.InvocationID, err)
-	}
-	name := tmp.Name()
-	defer func() { _ = os.Remove(name) }()
-	if _, err := tmp.Write(body); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write driver intent %s: %w", in.InvocationID, err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("sync driver intent %s: %w", in.InvocationID, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close driver intent %s: %w", in.InvocationID, err)
-	}
-	if err := os.Rename(name, d.intentPath(in.RunID)); err != nil {
-		return fmt.Errorf("commit driver intent %s: %w", in.InvocationID, err)
-	}
-	// Syncing the file persists its contents; only syncing the directory
-	// persists the entry that names it. Without this a power loss after
-	// Start returns can drop the record while the outbox row is already
-	// dispatched, leaving an invocation nothing can adopt and nothing can
-	// rerun.
-	dir, err := os.Open(d.dir)
-	if err != nil {
-		return fmt.Errorf("open driver state dir: %w", err)
-	}
-	defer func() { _ = dir.Close() }()
-	if err := dir.Sync(); err != nil {
-		return fmt.Errorf("sync driver state dir: %w", err)
+	if err := atomicfile.WriteFile(d.intentPath(in.RunID), body, 0o600); err != nil {
+		return fmt.Errorf("save driver intent %s: %w", in.InvocationID, err)
 	}
 	return nil
 }
