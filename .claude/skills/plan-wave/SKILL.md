@@ -156,8 +156,13 @@ tracking issue, and neither file it as blocking nor resolve it.
   as one planning operation (either field alone is a spine-repair
   error; AGENTS.md, Work units).
 - Populate the tracking issue in order: the unit list with
-  dependencies, then separate sections for needs-human prerequisites,
-  sweep dispositions, and surfaced forks.
+  dependencies, then an Implementation order section per the
+  tracking-issue format (docs/coordination.md, Tracking Issues),
+  derived from the finished unit issues' Dependencies fields, then
+  separate sections for needs-human prerequisites, sweep dispositions,
+  and surfaced forks. Wave specifics for that format: the serialized
+  contract chain takes the repo-wide-exclusivity highlight, and a
+  strictly serial wave states its chain in prose with no diagram.
 - Devlog note only when a decision-note trigger applies
   (devlog/README.md): consequential rescoping or scheduling rationale
   that would otherwise exist only in chat. Decomposition and sweep
