@@ -655,35 +655,13 @@ func serializeBackupConnection(conn *sql.Conn) ([]byte, error) {
 }
 
 func installEncryptedCheckpoint(dir, target string, body []byte) error {
-	file, err := os.CreateTemp(dir, ".latest-*.backup")
-	if err != nil {
-		return fmt.Errorf("reserve encrypted checkpoint: %w", err)
+	if filepath.Clean(filepath.Dir(target)) != filepath.Clean(dir) {
+		return errors.New("encrypted checkpoint target is outside its directory")
 	}
-	tempPath := file.Name()
-	success := false
-	defer func() {
-		if !success {
-			_ = file.Close()
-			_ = os.Remove(tempPath)
-		}
-	}()
-	if err := file.Chmod(0o600); err != nil {
-		return fmt.Errorf("restrict encrypted checkpoint: %w", err)
-	}
-	if _, err := file.Write(body); err != nil {
-		return fmt.Errorf("write encrypted checkpoint: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		return fmt.Errorf("sync encrypted checkpoint: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close encrypted checkpoint: %w", err)
-	}
-	if err := os.Rename(tempPath, target); err != nil {
+	if err := atomicfile.WriteFile(target, body, 0o600); err != nil {
 		return fmt.Errorf("install encrypted checkpoint: %w", err)
 	}
-	success = true
-	return syncLocalBackupDirectory(dir)
+	return nil
 }
 
 func loadOrCreateBackupEncryptionKey(dbPath, checkpointPath string) ([]byte, error) {
@@ -699,8 +677,8 @@ func loadOrCreateBackupEncryptionKey(dbPath, checkpointPath string) ([]byte, err
 		// Retry the publication durability barrier on every open. If the
 		// creating daemon failed its directory sync after rename, a later
 		// startup must not silently accept the key without completing it.
-		if err := syncBackupKeyDirectory(filepath.Dir(path)); err != nil {
-			return nil, err
+		if err := atomicfile.SyncDir(filepath.Dir(path)); err != nil {
+			return nil, fmt.Errorf("sync backup encryption key directory: %w", err)
 		}
 		return key, nil
 	case errors.Is(err, fs.ErrNotExist):
@@ -748,34 +726,7 @@ func createBackupEncryptionKey(path string) ([]byte, error) {
 		return nil, fmt.Errorf("generate backup encryption key: %w", err)
 	}
 	dirPath := filepath.Dir(path)
-	file, err := os.CreateTemp(
-		dirPath,
-		"."+filepath.Base(path)+"-*.tmp",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("reserve backup encryption key %s: %w", path, err)
-	}
-	tempPath := file.Name()
-	settled := false
-	defer func() {
-		if !settled {
-			_ = file.Close()
-			_ = os.Remove(tempPath)
-		}
-	}()
-	if err := file.Chmod(0o600); err != nil {
-		return nil, fmt.Errorf("restrict backup encryption key %s: %w", tempPath, err)
-	}
-	if _, err := file.Write(key); err != nil {
-		return nil, fmt.Errorf("write backup encryption key %s: %w", tempPath, err)
-	}
-	if err := file.Sync(); err != nil {
-		return nil, fmt.Errorf("sync backup encryption key %s: %w", tempPath, err)
-	}
-	if err := file.Close(); err != nil {
-		return nil, fmt.Errorf("close backup encryption key %s: %w", tempPath, err)
-	}
-	if err := atomicfile.RenameNoReplace(tempPath, path); err != nil {
+	if err := atomicfile.WriteFileNoReplace(path, key, 0o600); err != nil {
 		if !errors.Is(err, fs.ErrExist) {
 			return nil, fmt.Errorf("publish backup encryption key %s: %w", path, err)
 		}
@@ -792,30 +743,10 @@ func createBackupEncryptionKey(path string) ([]byte, error) {
 		if err := errors.Join(readErr, closeErr); err != nil {
 			return nil, err
 		}
-		if err := os.Remove(tempPath); err != nil {
-			return nil, fmt.Errorf("remove losing backup encryption key %s: %w", tempPath, err)
-		}
-		settled = true
-		if err := syncBackupKeyDirectory(dirPath); err != nil {
-			return nil, err
+		if err := atomicfile.SyncDir(dirPath); err != nil {
+			return nil, fmt.Errorf("sync backup encryption key directory: %w", err)
 		}
 		return winningKey, nil
 	}
-	settled = true
-	if err := syncBackupKeyDirectory(dirPath); err != nil {
-		return nil, err
-	}
 	return key, nil
-}
-
-func syncBackupKeyDirectory(dirPath string) error {
-	dir, err := os.Open(dirPath) //nolint:gosec // fixed sibling credential directory
-	if err != nil {
-		return fmt.Errorf("open backup encryption key directory: %w", err)
-	}
-	defer dir.Close() //nolint:errcheck // Sync below is the durability signal
-	if err := dir.Sync(); err != nil {
-		return fmt.Errorf("sync backup encryption key directory: %w", err)
-	}
-	return nil
 }

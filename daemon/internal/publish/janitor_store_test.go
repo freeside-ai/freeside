@@ -3,6 +3,7 @@ package publish_test
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,7 +121,16 @@ func TestInstallationAuthorityStoreCopiesTheRegistrationIntoThePendingEnvelope(t
 
 func TestInstallationAuthorityStoreDocumentReplacementIsValidatedAndAtomic(t *testing.T) {
 	t.Parallel()
-	_, store := newAuthorityStore(t, validAuthorityJSON)
+	dir, store := newAuthorityStore(t, validAuthorityJSON)
+	staleTemps := []string{
+		"installation-authority.json.tmp-stale",
+		".installation-authority.json-stale.tmp",
+	}
+	for _, name := range staleTemps {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("stale"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	document, err := store.Document(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +144,11 @@ func TestInstallationAuthorityStoreDocumentReplacementIsValidatedAndAtomic(t *te
 		},
 	); err != nil {
 		t.Fatal(err)
+	}
+	for _, name := range staleTemps {
+		if _, err := os.Lstat(filepath.Join(dir, name)); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("stale temporary %s remains: %v", name, err)
+		}
 	}
 	reloaded, err := store.Document(t.Context())
 	if err != nil {
