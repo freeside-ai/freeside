@@ -2,6 +2,12 @@ import Foundation
 import FreesideAPI
 import Observation
 
+#if canImport(AppKit)
+    import AppKit
+#elseif canImport(UIKit)
+    import UIKit
+#endif
+
 /// One attention item's decision surface: revalidates the item's current
 /// state on open, exposes exactly the actions the item requests, and
 /// submits a ClientCommand bound to the rendered snapshot's versions and
@@ -36,6 +42,7 @@ public final class DecisionModel {
     public private(set) var submissionError: String?
 
     private let store: InboxStore
+    private let openURL: (URL) async -> Bool
     /// Overlapping validations resolve by recency: only the newest call
     /// may write the outcome, so a stale late failure cannot clobber a
     /// newer success (or vice versa).
@@ -50,6 +57,40 @@ public final class DecisionModel {
     public init(store: InboxStore, itemID: String) {
         self.store = store
         self.itemID = itemID
+        openURL = Self.openExternalURL
+    }
+
+    init(store: InboxStore, itemID: String, openURL: @escaping (URL) async -> Bool) {
+        self.store = store
+        self.itemID = itemID
+        self.openURL = openURL
+    }
+
+    private static func openExternalURL(_ url: URL) async -> Bool {
+        #if canImport(AppKit)
+            return NSWorkspace.shared.open(url)
+        #elseif canImport(UIKit)
+            guard UIApplication.shared.canOpenURL(url) else { return false }
+            return await withCheckedContinuation { continuation in
+                UIApplication.shared.open(url, options: [:]) { opened in
+                    continuation.resume(returning: opened)
+                }
+            }
+        #endif
+    }
+
+    static func pullRequestURL(for reference: Components.Schemas.PRReference) -> URL? {
+        let parts = reference.repo.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 2, reference.number > 0,
+            parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }),
+            var url = URL(string: "https://github.com")
+        else { return nil }
+        for part in parts {
+            url.appendPathComponent(String(part))
+        }
+        url.appendPathComponent("pull")
+        url.appendPathComponent(String(reference.number))
+        return url
     }
 
     /// Re-keys the view's validation task on the cache generation, so a
@@ -102,6 +143,7 @@ public final class DecisionModel {
         // (plan §5.14 cache eviction on epoch change; issue #162).
         guard store.cacheGeneration == validatedCacheGeneration else { return false }
         guard snapshot.item.status == .open else { return false }
+        guard !store.isNavigationReserved(itemID: itemID) else { return false }
         guard pendingCommand == nil else { return false }
         // A definitive negative sync signal overrides a point-in-time
         // validation (plan §5.14): while the daemon is unreachable or
@@ -200,6 +242,18 @@ public final class DecisionModel {
 
     public func submit(_ action: Components.Schemas.Action) async {
         guard actionsEnabled, isSubmittable(action), let snapshot else { return }
+        let urlToOpen: URL?
+        if action == .open_pr {
+            guard let reference = snapshot.item.pr_reference?.value1,
+                let url = Self.pullRequestURL(for: reference)
+            else {
+                submissionError = "the pull request link is unavailable"
+                return
+            }
+            urlToOpen = url
+        } else {
+            urlToOpen = nil
+        }
         let command = Components.Schemas.ClientCommand(
             command_id: UUID().uuidString,
             device_id: store.device.deviceID,
@@ -216,6 +270,19 @@ public final class DecisionModel {
                 artifact_digests: snapshot.item.artifact_digests
             )
         )
+        if let urlToOpen {
+            // Opening suspends on iOS. Coordinate every model through a
+            // shared, process-local reservation, but do not make the command
+            // replayable until UIKit confirms navigation: a crash or failed
+            // open must not later record engagement that never happened.
+            guard store.reserveNavigation(itemID: itemID) else { return }
+            let opened = await openURL(urlToOpen)
+            store.releaseNavigation(itemID: itemID)
+            guard opened else {
+                submissionError = "the pull request could not be opened"
+                return
+            }
+        }
         // The command claims the item's in-flight slot and durably records
         // itself before the first byte leaves: a card recreated mid-flight
         // sees the pending entry and cannot mint a second command, and a
@@ -259,7 +326,7 @@ public final class DecisionModel {
                 }
                 let result = try ok.body.json
                 // Read-your-write BEFORE settling. Not every action resolves
-                // its item (plan §4: open_pr is navigation, acknowledge
+                // its item (plan §4: viewing a PR is navigation, acknowledge
                 // means seen, never resolved), so read-your-write is a
                 // canonical refetch, never a local resolve — and settling
                 // (record + slot release) only after it confirms the

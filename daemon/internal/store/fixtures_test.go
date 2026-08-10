@@ -107,7 +107,8 @@ func newFixtures(t *testing.T) fixtures {
 				SensitivityClass:     domain.SensitivityNormal,
 			},
 		}},
-		PRHeadSHA: "cafebabe", CommitPlanNotice: &noticeReason, ItemVersion: 1,
+		PRHeadSHA: "cafebabe", PRReference: &domain.PRReference{Repo: "owner/repo", Number: 123},
+		CommitPlanNotice: &noticeReason, ItemVersion: 1,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		ConversationID:    &convID, ExpiresWhen: &expires, Status: domain.StatusOpen,
 	}, approved)

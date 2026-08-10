@@ -1,19 +1,21 @@
 package store
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"strings"
 
-	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 )
 
 const (
+	insertAttentionItemPRReferenceSQL = `INSERT INTO attention_item_pr_references
+		(item_id, repo, pr_number, body) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING`
+	selectAttentionItemPRReferenceBodySQL = `SELECT body
+		FROM attention_item_pr_references WHERE item_id = ?`
+	getAttentionItemPRReferenceSQL = `SELECT item_id, repo, pr_number, body
+		FROM attention_item_pr_references WHERE item_id = ?`
 	insertReadyItemPRBindingSQL = `INSERT INTO ready_item_pr_bindings
 		(item_id, run_id, producing_invocation_id, publication_invocation_id, publication_identity,
 		 repository_id, pr_number, body, recorded_at)
@@ -28,62 +30,53 @@ const (
 
 const readyPublicationIntentKind = "publish.publication"
 
-type readyPublicationIntent struct {
-	Identity              domain.Digest       `json:"identity"`
-	InvocationID          domain.InvocationID `json:"invocation_id"`
-	Repo                  string              `json:"repo"`
-	BaseRef               string              `json:"base_ref"`
-	SourceHeadSHA         string              `json:"source_head_sha"`
-	AuthorizationID       domain.Digest       `json:"authorization_id"`
-	ProducingInvocationID domain.InvocationID `json:"producing_invocation_id"`
-	ReservationRunID      domain.RunID        `json:"reservation_run_id"`
+func (tx *WriteTx) putAttentionItemPRReference(
+	ctx context.Context, item domain.AttentionItem,
+) error {
+	if item.Type != domain.AttentionReadyForFinalReview || item.PRReference == nil {
+		return nil
+	}
+	body, err := encode(*item.PRReference)
+	if err != nil {
+		return err
+	}
+	return tx.putImmutable(ctx, insertAttentionItemPRReferenceSQL,
+		[]any{item.ID, item.PRReference.Repo, item.PRReference.Number, body},
+		selectAttentionItemPRReferenceBodySQL, []any{item.ID}, body)
 }
+
+func (tx *ReadTx) getAttentionItemPRReference(
+	ctx context.Context, itemID domain.ItemID,
+) (domain.PRReference, error) {
+	var storedItemID, repo string
+	var number int64
+	var body []byte
+	if err := tx.tx.QueryRowContext(ctx, getAttentionItemPRReferenceSQL, itemID).Scan(
+		&storedItemID, &repo, &number, &body,
+	); err != nil {
+		return domain.PRReference{}, notFoundOr(err)
+	}
+	reference, err := decode[domain.PRReference](body)
+	if err != nil {
+		return domain.PRReference{}, err
+	}
+	if domain.ItemID(storedItemID) != itemID || reference.Repo != repo ||
+		int64(reference.Number) != number {
+		return domain.PRReference{}, errRowInconsistent
+	}
+	return reference, nil
+}
+
+type readyPublicationIntent = publicationrecord.Intent
 
 func decodeReadyPublicationIntent(payload []byte) (readyPublicationIntent, error) {
-	var intent readyPublicationIntent
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&intent); err != nil {
-		return readyPublicationIntent{}, err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return readyPublicationIntent{}, errors.New("trailing publication intent value")
-	}
-	if !contentaddr.Valid(string(intent.Identity)) || intent.InvocationID == "" ||
-		intent.Repo == "" || intent.BaseRef == "" || intent.SourceHeadSHA == "" ||
-		!contentaddr.Valid(string(intent.AuthorizationID)) || intent.ProducingInvocationID == "" ||
-		intent.ReservationRunID == "" {
-		return readyPublicationIntent{}, errRowInconsistent
-	}
-	return intent, nil
+	return publicationrecord.DecodeIntent(payload)
 }
 
-type readyPublicationOutcome struct {
-	Identity         domain.Digest `json:"identity"`
-	Repo             string        `json:"repo"`
-	BaseRef          string        `json:"base_ref"`
-	HeadSHA          string        `json:"head_sha"`
-	Branch           string        `json:"branch"`
-	PRNumber         int           `json:"pr_number"`
-	EvidenceEligible bool          `json:"evidence_eligible"`
-}
+type readyPublicationOutcome = publicationrecord.Outcome
 
 func decodeReadyPublicationOutcome(payload []byte) (readyPublicationOutcome, error) {
-	var outcome readyPublicationOutcome
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&outcome); err != nil {
-		return readyPublicationOutcome{}, err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return readyPublicationOutcome{}, errors.New("trailing publication outcome value")
-	}
-	if !contentaddr.Valid(string(outcome.Identity)) || outcome.Repo == "" ||
-		outcome.BaseRef == "" || outcome.HeadSHA == "" || outcome.Branch == "" ||
-		outcome.PRNumber <= 0 || !outcome.EvidenceEligible {
-		return readyPublicationOutcome{}, errRowInconsistent
-	}
-	return outcome, nil
+	return publicationrecord.DecodeOutcome(payload)
 }
 
 // RecordReadyItemPRBinding records the exact pull request behind a ready item.

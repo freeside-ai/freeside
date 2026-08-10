@@ -11,6 +11,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 )
 
 // identityEncodingVersion tags the canonical encoding DeriveIdentity
@@ -19,15 +20,6 @@ import (
 // different identities for the same candidate, or retries across an
 // upgrade would duplicate branches and PRs (plan §5.9).
 const identityEncodingVersion = "freeside-publication/v1"
-
-// branchPrefix namespaces every publication branch the daemon creates.
-const branchPrefix = "freeside/publish/"
-
-// branchDigestHexLen is how many leading hex digits of the identity
-// digest the branch name carries: 16 (64 bits) keeps refs readable
-// while a collision within one repository's publication set stays
-// negligible; the full digest travels in the PR marker.
-const branchDigestHexLen = 16
 
 // markerPrefix and markerSuffix frame the deterministic PR-section
 // marker (plan §5.15 rule 4) that binds a pull request to its
@@ -150,11 +142,7 @@ func (id Identity) Digest() domain.Digest { return id.digest }
 // DeriveIdentity returns it alongside its error, and it is what
 // GatedHead.Identity reads out of an unminted capability.
 func (id Identity) BranchName() string {
-	if !validIdentityDigest(string(id.digest)) {
-		return ""
-	}
-	hexPart := strings.TrimPrefix(string(id.digest), "sha256:")
-	return branchPrefix + hexPart[:branchDigestHexLen]
+	return publicationrecord.BranchName(id.digest)
 }
 
 // Marker returns the deterministic PR-section marker line that binds a

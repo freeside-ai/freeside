@@ -51,6 +51,9 @@ func validItemInput(typ domain.AttentionType) domain.AttentionItemInput {
 			SupersededProfileDigest: "sha256:profile-superseded",
 		}
 	}
+	if typ == domain.AttentionReadyForFinalReview {
+		in.PRReference = &domain.PRReference{Repo: "owner/repo", Number: 123}
+	}
 	if typ == domain.AttentionSystemHealth {
 		posture := domain.HealthPostureBlocking
 		in.Posture = &posture
@@ -91,6 +94,37 @@ func TestNewAttentionItemTypes(t *testing.T) {
 	}
 }
 
+func TestAttentionItemPRReferenceIsExactAndTypeScoped(t *testing.T) {
+	t.Run("ready item requires reference", func(t *testing.T) {
+		in := validItemInput(domain.AttentionReadyForFinalReview)
+		in.PRReference = nil
+		if _, err := domain.NewAttentionItem(in, nil); !errors.Is(err, domain.ErrPRReferenceInconsistent) {
+			t.Fatalf("NewAttentionItem = %v, want %v", err, domain.ErrPRReferenceInconsistent)
+		}
+	})
+	t.Run("other type rejects reference", func(t *testing.T) {
+		in := validItemInput(domain.AttentionSpecApproval)
+		in.PRReference = &domain.PRReference{Repo: "owner/repo", Number: 123}
+		if _, err := domain.NewAttentionItem(in, nil); !errors.Is(err, domain.ErrPRReferenceInconsistent) {
+			t.Fatalf("NewAttentionItem = %v, want %v", err, domain.ErrPRReferenceInconsistent)
+		}
+	})
+	for name, reference := range map[string]domain.PRReference{
+		"empty repo":      {Number: 123},
+		"extra path":      {Repo: "owner/other/repo", Number: 123},
+		"path traversal":  {Repo: "owner/../repo", Number: 123},
+		"non-positive pr": {Repo: "owner/repo"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := validItemInput(domain.AttentionReadyForFinalReview)
+			in.PRReference = &reference
+			if _, err := domain.NewAttentionItem(in, nil); err == nil {
+				t.Fatal("NewAttentionItem succeeded, want invalid PR reference")
+			}
+		})
+	}
+}
+
 // TestNewAttentionItemDetachesInput checks that a constructed item does not
 // alias caller-owned input: mutating the input's slices or the recipe pointer
 // inside an evidence artifact after construction cannot slip an agent artifact
@@ -118,6 +152,10 @@ func TestNewAttentionItemDetachesInput(t *testing.T) {
 	recipe = "sha256:tampered"
 	if got := item.EvidenceSnapshot[0].Provenance.VerificationRecipeDigest; got == nil || *got != approvedRecipe {
 		t.Errorf("mutating the input recipe pointer changed the item's evidence: %v", got)
+	}
+	in.PRReference.Repo = "other/repo"
+	if item.PRReference.Repo != "owner/repo" {
+		t.Errorf("mutating the input PR reference changed the item: %v", item.PRReference)
 	}
 	// The action slice is likewise detached: mutating the input leaves the
 	// item's own element unchanged (and therefore still valid).

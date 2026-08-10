@@ -68,7 +68,10 @@ FROM attention_items ORDER BY id`
 // semantics above), re-running the evidence gate on each row like
 // GetAttentionItemSnapshot.
 func (tx *ReadTx) ListAttentionItems(ctx context.Context) ([]Snapshotted[domain.AttentionItem], error) {
-	items, err := listSnapshotted(ctx, tx, listAttentionItemsSQL, (*ReadTx).scanAttentionItemSnapshot)
+	items, err := listSnapshotted(ctx, tx, listAttentionItemsSQL,
+		func(tx *ReadTx, sc scanner) (domain.AttentionItem, Snapshot, error) {
+			return tx.scanAttentionItemSnapshot(ctx, sc)
+		})
 	if err != nil {
 		return nil, fmt.Errorf("list attention items: %w", err)
 	}

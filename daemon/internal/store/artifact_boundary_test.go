@@ -118,7 +118,9 @@ func TestHeadIndependentEvidenceRoundTrips(t *testing.T) {
 		Reason:            "head-independent evidence survives remediation",
 		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionDismiss},
 		EvidenceSnapshot:  []domain.Artifact{indep},
-		PRHeadSHA:         "head-remediation", ItemVersion: 1,
+		PRHeadSHA:         "head-remediation",
+		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 123},
+		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		ConversationID:    &convID, Status: domain.StatusOpen,
 	}, approvedFixtureRecipes())

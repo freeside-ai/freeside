@@ -582,7 +582,7 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 		// A byte-identical replay (a retried command) converges without a
 		// write, so it causes no entity_version churn.
 		if string(existing) == body {
-			return nil
+			return tx.putAttentionItemPRReference(ctx, item)
 		}
 		old, err := decode[domain.AttentionItem](existing)
 		if err != nil {
@@ -600,7 +600,7 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 			return fmt.Errorf("put attention item %q: %w", item.ID, err)
 		}
 		if oldCanonical == body {
-			return nil
+			return tx.putAttentionItemPRReference(ctx, item)
 		}
 		if err := domain.ValidateAttentionItemTransition(old, item); err != nil {
 			return fmt.Errorf("put attention item %q: %w", item.ID, mapTransition(err))
@@ -610,6 +610,9 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 		item.ID, item.ProjectID, item.ConversationID, item.Type, item.Status,
 		item.Posture, tx.asOfRevision, body); err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
+	}
+	if err := tx.putAttentionItemPRReference(ctx, item); err != nil {
+		return fmt.Errorf("put attention item %q pr reference: %w", item.ID, err)
 	}
 	if existing == nil && item.Type == domain.AttentionReadyForFinalReview && item.Status == domain.StatusOpen {
 		tx.readyItemCreated = true
@@ -637,7 +640,7 @@ type Snapshot struct {
 // inside the body cannot distinguish a stale expected_entity_version when the
 // domain content matches, so acceptance needs the store's own version counter.
 func (tx *ReadTx) GetAttentionItemSnapshot(ctx context.Context, id domain.ItemID) (domain.AttentionItem, Snapshot, error) {
-	item, snap, err := tx.scanAttentionItemSnapshot(tx.tx.QueryRowContext(ctx,
+	item, snap, err := tx.scanAttentionItemSnapshot(ctx, tx.tx.QueryRowContext(ctx,
 		`SELECT id, project_id, conversation_id, item_type, status, health_posture, entity_version, as_of_revision, body FROM attention_items WHERE id = ?`, id))
 	if err != nil {
 		return domain.AttentionItem{}, Snapshot{}, fmt.Errorf("get attention item %q: %w", id, notFoundOr(err))
@@ -667,7 +670,7 @@ func (tx *ReadTx) GetAttentionItemRecord(
 // scanAttentionItemSnapshot reconstructs one attention_items row (see the
 // scanner doc for the shared gate sequence), including the evidence policy
 // re-gate.
-func (tx *ReadTx) scanAttentionItemSnapshot(sc scanner) (domain.AttentionItem, Snapshot, error) {
+func (tx *ReadTx) scanAttentionItemSnapshot(ctx context.Context, sc scanner) (domain.AttentionItem, Snapshot, error) {
 	item, snap, err := scanAttentionItemRecord(sc)
 	if err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
@@ -676,6 +679,9 @@ func (tx *ReadTx) scanAttentionItemSnapshot(sc scanner) (domain.AttentionItem, S
 	// recipe approval, so an item carrying evidence under a now-unapproved (or
 	// forged) recipe fails closed rather than reconstructing as valid.
 	if err := tx.gateEvidence(item); err != nil {
+		return domain.AttentionItem{}, Snapshot{}, err
+	}
+	if err := tx.gateReadyItemPRReference(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	return item, snap, nil
@@ -736,6 +742,36 @@ func (tx *ReadTx) gateEvidence(item domain.AttentionItem) error {
 		if err := domain.EligibleForEvidenceSnapshot(a, tx.approvedRecipes); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// gateReadyItemPRReference re-anchors a ready item's client-visible pull
+// request coordinates to the immutable store-owned reference. Production
+// items additionally re-run the deeper first-party publication binding gate.
+// The mutable synchronized body is data, never authority to retarget an
+// operator action.
+func (tx *ReadTx) gateReadyItemPRReference(ctx context.Context, item domain.AttentionItem) error {
+	if item.Type != domain.AttentionReadyForFinalReview {
+		return nil
+	}
+	anchored, err := tx.getAttentionItemPRReference(ctx, item.ID)
+	if err != nil {
+		return err
+	}
+	if item.PRReference == nil || *item.PRReference != anchored {
+		return errRowInconsistent
+	}
+	binding, err := tx.GetReadyItemPRBinding(ctx, item.ID)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if item.PRReference == nil || item.PRReference.Repo != binding.Repo ||
+		item.PRReference.Number != binding.PRNumber {
+		return errRowInconsistent
 	}
 	return nil
 }

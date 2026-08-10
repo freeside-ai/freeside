@@ -17,6 +17,126 @@ import Testing
         #expect(model.offeredActions == AttentionFixtures.phase1ActionSets[type])
     }
 
+    @Test func viewPRUsesTheFixtureReferenceAndRecordsTheNavigation() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        var openedURLs: [URL] = []
+        let model = DecisionModel(
+            store: store,
+            itemID: "item-ready_for_final_review",
+            openURL: {
+                openedURLs.append($0)
+                return true
+            })
+        await model.validate()
+
+        await model.submit(.open_pr)
+
+        #expect(openedURLs == [URL(string: "https://github.com/owner/repo/pull/123")!])
+        #expect(model.appliedRecord?.action == .open_pr)
+        #expect(model.snapshot?.item.status == .open)
+        #expect(model.actionsEnabled)
+    }
+
+    @Test func rejectedPRNavigationDoesNotRecordOperatorEngagement() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(
+            store: store,
+            itemID: "item-ready_for_final_review",
+            openURL: { _ in false })
+        await model.validate()
+
+        await model.submit(.open_pr)
+
+        #expect(model.submissionError == "the pull request could not be opened")
+        #expect(model.appliedRecord == nil)
+        #expect(model.pendingCommand == nil)
+        #expect(model.snapshot?.item.status == .open)
+    }
+
+    @Test func delayedRejectedPRNavigationDoesNotRecordOperatorEngagement() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        var openAttempts = 0
+        let model = DecisionModel(
+            store: store,
+            itemID: "item-ready_for_final_review",
+            openURL: { _ in
+                openAttempts += 1
+                await reached.open()
+                await release.wait()
+                return false
+            })
+        await model.validate()
+
+        let submission = Task { await model.submit(.open_pr) }
+        await reached.wait()
+        #expect(!model.actionsEnabled)
+        await model.submit(.open_pr)
+        #expect(openAttempts == 1)
+        #expect(model.appliedRecord == nil)
+        #expect(model.pendingCommand == nil)
+        #expect(store.isNavigationReserved(itemID: "item-ready_for_final_review"))
+
+        await release.open()
+        await submission.value
+        #expect(model.submissionError == "the pull request could not be opened")
+        #expect(model.appliedRecord == nil)
+        #expect(model.pendingCommand == nil)
+        #expect(!store.isNavigationReserved(itemID: "item-ready_for_final_review"))
+    }
+
+    @Test func concurrentModelsOpenAReadyPullRequestOnlyOnce() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        var openedURLs: [URL] = []
+        let openURL: (URL) async -> Bool = {
+            openedURLs.append($0)
+            await reached.open()
+            await release.wait()
+            return true
+        }
+        let first = DecisionModel(
+            store: store,
+            itemID: "item-ready_for_final_review",
+            openURL: openURL)
+        let second = DecisionModel(
+            store: store,
+            itemID: "item-ready_for_final_review",
+            openURL: openURL)
+        await first.validate()
+        await second.validate()
+
+        let firstSubmission = Task { await first.submit(.open_pr) }
+        await reached.wait()
+        #expect(first.pendingCommand == nil)
+        #expect(store.isNavigationReserved(itemID: "item-ready_for_final_review"))
+        await second.submit(.open_pr)
+
+        #expect(openedURLs == [URL(string: "https://github.com/owner/repo/pull/123")!])
+        #expect(second.appliedRecord == nil)
+
+        await release.open()
+        await firstSubmission.value
+        #expect(first.appliedRecord?.action == .open_pr)
+        #expect(!store.isNavigationReserved(itemID: "item-ready_for_final_review"))
+    }
+
+    @Test func pullRequestURLRejectsPathTraversalCoordinates() {
+        #expect(
+            DecisionModel.pullRequestURL(
+                for: .init(repo: "owner/../repo", number: 123)) == nil)
+        #expect(
+            DecisionModel.pullRequestURL(
+                for: .init(repo: "owner/repo", number: 123))
+                == URL(string: "https://github.com/owner/repo/pull/123"))
+    }
+
     // MARK: - Acceptance 2: stale submission swaps in the replacement
 
     @Test func staleSubmissionSwapsInTheReplacementWithoutCorruption() async {

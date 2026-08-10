@@ -92,6 +92,11 @@ public final class InboxStore {
     /// verbatim resend returns the recorded result or an authoritative
     /// rejection (plan §5.14 sync test 4).
     public private(set) var pendingCommandsByItemID: [String: PendingCommandEntry] = [:]
+    /// Process-local claims held only while an external PR URL is opening.
+    /// They coordinate re-created cards without entering the replay ledger:
+    /// a crash before navigation succeeds must never resurrect a command that
+    /// records engagement the operator may not have completed.
+    private var navigationReservations: Set<String> = []
     private var serverOrder: [String] = []
     /// Bumped every time the cache is evicted for a sync-epoch change
     /// (`discardSnapshots`, driven only by `SyncCoordinator.discardCache`).
@@ -233,6 +238,22 @@ public final class InboxStore {
         case notPersisted
     }
 
+    /// Claims an item's process-local navigation slot. The reservation is
+    /// deliberately non-durable and contains no command: only a successful
+    /// opener may proceed to the replay-safe pending-command registration.
+    func reserveNavigation(itemID: String) -> Bool {
+        guard pendingCommandsByItemID[itemID] == nil else { return false }
+        return navigationReservations.insert(itemID).inserted
+    }
+
+    func releaseNavigation(itemID: String) {
+        navigationReservations.remove(itemID)
+    }
+
+    func isNavigationReserved(itemID: String) -> Bool {
+        navigationReservations.contains(itemID)
+    }
+
     /// Claims the item's single in-flight slot and durably records the
     /// command before the caller sends. The durable write is a
     /// precondition, not a side effect: an in-memory-only claim whose
@@ -246,7 +267,9 @@ public final class InboxStore {
         _ command: Components.Schemas.ClientCommand
     ) -> PendingCommandRegistration {
         let itemID = command.payload.item_id
-        guard pendingCommandsByItemID[itemID] == nil else { return .slotOccupied }
+        guard pendingCommandsByItemID[itemID] == nil,
+            !navigationReservations.contains(itemID)
+        else { return .slotOccupied }
         pendingCommandsByItemID[itemID] =
             PendingCommandEntry(command: command, state: .inFlight)
         if let observer = pendingCommandsObserver, observer() == false {

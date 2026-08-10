@@ -40,6 +40,18 @@ enum MockContractValidation {
         if let decided = item.decided_at, decided.timeIntervalSince1970 < -62_000_000_000 {
             return "zero decided_at"
         }
+        if let reference = item.pr_reference?.value1 {
+            if item._type != .ready_for_final_review {
+                return "pr_reference on a non-ready_for_final_review item"
+            }
+            let parts = reference.repo.split(separator: "/", omittingEmptySubsequences: false)
+            if parts.count != 2 || parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) {
+                return "invalid pr_reference repo"
+            }
+            if reference.number < 1 { return "non-positive pr_reference number" }
+        } else if item._type == .ready_for_final_review {
+            return "ready_for_final_review item lacks pr_reference"
+        }
         // commit_plan_notice mirrors the domain's optional daemon-derived
         // reason (#222): the generated closed enum makes the daemon's
         // ErrInvalidCommitPlanNotice arm unrepresentable here (an unknown

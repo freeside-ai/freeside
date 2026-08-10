@@ -54,8 +54,7 @@ func TestOnlyApprovedStreamingReaders(t *testing.T) {
 			"janitor_journal.go.decodeJanitorJournal":                 1,
 			"janitor_snapshot.go.DecodeInstallationAuthorityDocument": 1,
 			"janitor_snapshot.go.rejectDuplicateJSONKeys":             1,
-			"ledger.go.DecodeIntent":                                  1,
-			"outcome.go.DecodeOutcome":                                1,
+			"publicationrecord/record.go.decode":                      1,
 			"reservation.go.DecodeReservation":                        1,
 		},
 		"encoding/json.Unmarshal": {
@@ -72,9 +71,13 @@ func TestOnlyApprovedStreamingReaders(t *testing.T) {
 		},
 	}
 	observed := make(map[string]map[string]int)
-	sources, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
+	var sources []string
+	for _, pattern := range []string{"*.go", "../publicationrecord/*.go"} {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sources = append(sources, matches...)
 	}
 	fset := token.NewFileSet()
 	for _, name := range sources {
@@ -106,6 +109,9 @@ func TestOnlyApprovedStreamingReaders(t *testing.T) {
 				continue
 			}
 			location := filepath.Base(name) + "." + function.Name.Name
+			if filepath.Base(filepath.Dir(name)) == "publicationrecord" {
+				location = "publicationrecord/" + location
+			}
 			ast.Inspect(function.Body, func(node ast.Node) bool {
 				call, ok := node.(*ast.CallExpr)
 				if !ok {

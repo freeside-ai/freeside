@@ -44,7 +44,7 @@ enum AttentionDisplay {
         case .rerun_trust_evaluation: return "Rerun trust evaluation"
         case .choose_alternate_profile: return "Choose alternate profile"
         case .inspect_trust_failure: return "Inspect trust failure"
-        case .open_pr: return "Open PR"
+        case .open_pr: return "View PR"
         case .return_to_agent: return "Return to agent"
         case .mark_seen: return "Mark seen"
         case .dismiss: return "Dismiss"

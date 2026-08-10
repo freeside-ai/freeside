@@ -51,6 +51,10 @@
     "sha256:log"
   ],
   "pr_head_sha": "cafebabe",
+  "pr_reference": {
+    "repo": "owner/repo",
+    "number": 123
+  },
   "commit_plan_notice": "present_but_not_honored",
   "base_freshness": {
     "base_ref": "main",

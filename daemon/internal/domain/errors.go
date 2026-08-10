@@ -111,6 +111,7 @@ var (
 	ErrScheduleDetailMismatch     = errors.New("schedule detail fields do not match the kind's contract")
 	ErrBaseFreshnessInconsistent  = errors.New("base freshness fields are internally inconsistent")
 	ErrBaseFreshnessOutsideReview = errors.New("base freshness is a ready_for_final_review semantic")
+	ErrPRReferenceInconsistent    = errors.New("pr reference is required exactly for ready_for_final_review items")
 
 	ErrInvalidReadinessInvalidationReason = errors.New("unknown readiness invalidation reason")
 	ErrReadinessInvalidationOutsideReview = errors.New("readiness invalidation is a ready_for_final_review semantic")

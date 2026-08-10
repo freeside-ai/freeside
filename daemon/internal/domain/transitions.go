@@ -156,6 +156,14 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 		return fmt.Errorf("attention item %s: review configuration recovery binding would change: %w",
 			updated.ID, ErrImmutableTransition)
 	}
+	samePRReference, err := jsonEqual(old.PRReference, updated.PRReference)
+	if err != nil {
+		return fmt.Errorf("attention item %s: %w", updated.ID, err)
+	}
+	if !samePRReference {
+		return fmt.Errorf("attention item %s: pr reference would change: %w",
+			updated.ID, ErrImmutableTransition)
+	}
 	return nil
 }
 

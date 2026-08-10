@@ -150,6 +150,9 @@ func applyMigration(ctx context.Context, db *sql.DB, fsys fs.FS, version int, na
 	if _, err := tx.ExecContext(ctx, string(body)); err != nil {
 		return fmt.Errorf("migration %q: %w", name, err)
 	}
+	if err := applyDataMigration(ctx, tx, version, name); err != nil {
+		return fmt.Errorf("migration %q data: %w", name, err)
+	}
 	appliedAt := formatTime(time.Now())
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO schema_migrations (version, name, digest, applied_at) VALUES (?, ?, ?, ?)`,

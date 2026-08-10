@@ -57,7 +57,9 @@ func newFixture(t *testing.T) fixture {
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason:            "checks are green and the diff is ready",
 		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionStop, domain.ActionDismiss},
-		PRHeadSHA:         "cafebabe", ItemVersion: 1,
+		PRHeadSHA:         "cafebabe",
+		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 123},
+		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate,
 		ExpiresWhen:       &expires, Status: domain.StatusOpen,
 	}, nil)
@@ -99,6 +101,7 @@ func TestPutItemRejectsDisallowedAction(t *testing.T) {
 	item.ID = "item-invalid-policy"
 	item.Type = domain.AttentionSpecApproval
 	item.RequestedDecision = []domain.Action{domain.ActionOpenPR}
+	item.PRReference = nil
 	if err := item.Validate(); err != nil {
 		t.Fatalf("domain fixture must be structurally valid: %v", err)
 	}
@@ -157,6 +160,7 @@ func TestPutItemActionlessBlocked(t *testing.T) {
 	blocked.ID = "item-blocked"
 	blocked.Type = domain.AttentionBlocked
 	blocked.RequestedDecision = nil
+	blocked.PRReference = nil
 	if err := f.service.PutItem(ctx, blocked); err != nil {
 		t.Fatalf("PutItem(actionless blocked): %v", err)
 	}
@@ -201,6 +205,7 @@ func TestSubmitRegatesDurableItemPolicy(t *testing.T) {
 			item.ID = domain.ItemID("item-legacy-" + string(action))
 			item.Type = domain.AttentionSpecApproval
 			item.RequestedDecision = []domain.Action{action}
+			item.PRReference = nil
 			if err := item.Validate(); err != nil {
 				t.Fatalf("domain fixture must be structurally valid: %v", err)
 			}

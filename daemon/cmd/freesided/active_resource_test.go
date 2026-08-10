@@ -35,7 +35,8 @@ func activeReadyItem(t *testing.T, st *store.Store) domain.AttentionItem {
 		Reason: "published and verified", RequestedDecision: []domain.Action{
 			domain.ActionOpenPR, domain.ActionReturnToAgent, domain.ActionDismiss,
 		},
-		PRHeadSHA: "cafed00d", ItemVersion: 1,
+		PRHeadSHA: "cafed00d", PRReference: &domain.PRReference{Repo: "owner/repo", Number: 450},
+		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
 	}, nil)
 	if err != nil {
@@ -1252,7 +1253,9 @@ func TestActiveResourceReconcileFinallyEvictsAcrossBindingRecovery(t *testing.T)
 		Type:    domain.AttentionReadyForFinalReview, Priority: domain.PriorityNormal,
 		Reason:            "published and verified",
 		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionMarkSeen},
-		PRHeadSHA:         "cafed00d", ItemVersion: 1,
+		PRHeadSHA:         "cafed00d",
+		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 450},
+		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusResolved,
 	}, nil)
 	if err != nil {

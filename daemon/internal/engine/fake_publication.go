@@ -12,19 +12,17 @@ import (
 	"io/fs"
 	"maps"
 	"os"
-	"path"
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	exporter "github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/fakepublication"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -33,17 +31,17 @@ import (
 )
 
 const (
-	fakePublicationTaskKind               = "engine.fake_publication"
+	fakePublicationTaskKind               = fakepublication.TaskKind
 	fakePublicationInvocationOwnerKind    = "engine.fake_publication_invocation_owner"
 	fakePublicationInvocationOwnerVersion = "freeside.engine.fake-publication-invocation-owner/v1"
-	fakePublicationTaskVersion            = "freeside.engine.fake-publication/v1"
+	fakePublicationTaskVersion            = fakepublication.TaskVersion
 	fakePublicationStageName              = "fake_candidate_publication"
 	fakePublicationMaxCommitTimestamp     = int64(4102444800)
 
 	// OperatingModeAttendedDev is the only mode the 1A.1 fake-candidate
 	// workflow accepts. Starting this explicit workflow is a manual attended
 	// operation; it does not enable auto-start or unattended publication.
-	OperatingModeAttendedDev = "attended_dev"
+	OperatingModeAttendedDev = fakepublication.OperatingModeAttended
 )
 
 // FakePublicationTaskKind identifies the durable outbox payload whose recipe
@@ -195,30 +193,7 @@ type FakePublicationSpec struct {
 	OperatingMode            string
 }
 
-type fakePublicationTask struct {
-	Version                  string              `json:"version"`
-	RunID                    domain.RunID        `json:"run_id"`
-	ProjectID                domain.ProjectID    `json:"project_id"`
-	StoreEpoch               string              `json:"store_epoch"`
-	WorkspaceDir             string              `json:"workspace_dir"`
-	HandoffDir               string              `json:"handoff_dir"`
-	HandoffDigest            domain.Digest       `json:"handoff_digest"`
-	Repo                     string              `json:"repo"`
-	BaseRef                  string              `json:"base_ref"`
-	BaseSHA                  string              `json:"base_sha"`
-	AllowedPaths             []string            `json:"allowed_paths"`
-	RecipeDigest             domain.Digest       `json:"recipe_digest"`
-	RecipePath               string              `json:"recipe_path"`
-	TrustProfileDigest       domain.Digest       `json:"trust_profile_digest"`
-	VerificationInvocationID domain.InvocationID `json:"verification_invocation_id"`
-	PublicationInvocationID  domain.InvocationID `json:"publication_invocation_id"`
-	Title                    string              `json:"title"`
-	Body                     string              `json:"body"`
-	CommitDate               time.Time           `json:"commit_date"`
-	CommitDateExplicit       bool                `json:"commit_date_explicit"`
-	StartedAt                time.Time           `json:"started_at"`
-	OperatingMode            string              `json:"operating_mode"`
-}
+type fakePublicationTask fakepublication.Task
 
 type fakePublicationInvocationOwner struct {
 	Version       string              `json:"version"`
@@ -2232,8 +2207,12 @@ func (w *fakePublicationWorkflow) readyItem(
 			domain.ActionOpenPR, domain.ActionMarkSeen, domain.ActionDismiss, domain.ActionStop,
 		},
 		EvidenceSnapshot: artifacts, AgentClaims: imported.Claims,
-		PRHeadSHA: imported.CommitSHA, CommitPlanNotice: imported.CommitPlanNotice,
-		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
+		PRHeadSHA: imported.CommitSHA,
+		PRReference: &domain.PRReference{
+			Repo: task.Repo, Number: published.PRNumber,
+		},
+		CommitPlanNotice: imported.CommitPlanNotice,
+		ItemVersion:      1, InterruptionClass: domain.InterruptionPlannedGate,
 		Status: domain.StatusOpen,
 	}, w.approvedRecipes)
 }
@@ -2401,16 +2380,11 @@ func (w *fakePublicationWorkflow) recoverTerminalTask(
 			)
 		}
 		item = boundItem
-		prefix := task.Repo + "#"
-		const suffix = " is published and ready for final review."
-		if !strings.HasPrefix(item.Reason, prefix) || !strings.HasSuffix(item.Reason, suffix) {
-			return taskOutcome{}, false, fmt.Errorf("ready item %q has invalid reason", item.ID)
-		}
-		number := strings.TrimSuffix(strings.TrimPrefix(item.Reason, prefix), suffix)
-		prNumber, err := strconv.Atoi(number)
-		if err != nil || prNumber <= 0 {
+		prNumber := item.PRReference.Number
+		if item.PRReference.Repo != task.Repo {
 			return taskOutcome{}, false, fmt.Errorf(
-				"ready item %q has invalid pull request number", item.ID,
+				"ready item %q names repository %q, want %q",
+				item.ID, item.PRReference.Repo, task.Repo,
 			)
 		}
 		recipeDigest := task.RecipeDigest
@@ -2469,55 +2443,32 @@ func validateFakePublicationTerminalBinding(
 	task fakePublicationTask,
 	item domain.AttentionItem,
 ) (domain.AttentionItem, error) {
-	reason, got, ok := ParseFakePublicationTerminalReason(item.Reason)
-	if !ok {
-		return domain.AttentionItem{}, fmt.Errorf(
-			"missing task binding: %w", domain.ErrParentKeyMismatch,
-		)
-	}
-	item.Reason = reason
-	want, err := fakePublicationTerminalDigest(task, item)
-	if err != nil {
-		return domain.AttentionItem{}, err
-	}
-	if got != string(want) {
-		return domain.AttentionItem{}, fmt.Errorf(
-			"task binding %q, want %q: %w", got, want, domain.ErrParentKeyMismatch,
-		)
-	}
-	return item, nil
+	return fakepublication.ValidateTerminalBinding(fakepublication.Task(task), item)
 }
 
 // ParseFakePublicationTerminalReason separates the human-facing reason from
 // the engine's hidden task binding. Recovery validates the returned digest;
 // clients use the reason only after reconciliation has accepted the terminal.
 func ParseFakePublicationTerminalReason(reason string) (string, string, bool) {
-	separator := "\n\n" + fakePublicationTerminalBindingPrefix
-	offset := strings.LastIndex(reason, separator)
-	if offset < 0 || !strings.HasSuffix(reason, fakePublicationTerminalBindingSuffix) {
-		return "", "", false
-	}
-	digest := reason[offset+len(separator) : len(reason)-len(fakePublicationTerminalBindingSuffix)]
-	return reason[:offset], digest, digest != ""
+	return fakepublication.ParseTerminalReason(reason)
 }
 
 func fakePublicationTerminalDigest(
 	task fakePublicationTask,
 	item domain.AttentionItem,
 ) (domain.Digest, error) {
-	item.ItemVersion = 1
-	item.Status = domain.StatusOpen
-	item.DecidedAt = nil
-	item.Timing = domain.TimingSummary{}
-	payload, err := json.Marshal(struct {
-		Task fakePublicationTask  `json:"task"`
-		Item domain.AttentionItem `json:"item"`
-	}{Task: task, Item: item})
-	if err != nil {
-		return "", fmt.Errorf("encode terminal binding: %w", err)
-	}
-	sum := sha256.Sum256(payload)
-	return domain.Digest("sha256:" + hex.EncodeToString(sum[:])), nil
+	return fakepublication.TerminalDigest(fakepublication.Task(task), item)
+}
+
+// fakePublicationTerminalDigestBeforePRReference reproduces the immutable
+// item shape used by fake-publication v1 before AttentionItem gained the
+// pr_reference member. Keep this explicit field list frozen: reconstructing
+// the old digest from today's struct would silently include future members.
+func fakePublicationTerminalDigestBeforePRReference(
+	task fakePublicationTask,
+	item domain.AttentionItem,
+) (domain.Digest, error) {
+	return fakepublication.TerminalDigestBeforePRReference(fakepublication.Task(task), item)
 }
 
 func (w *fakePublicationWorkflow) finishTask(ctx context.Context, task fakePublicationTask) error {
@@ -2717,7 +2668,7 @@ func publicationPolicy(task fakePublicationTask) domain.ResolvedPolicy {
 }
 
 func fakePublicationTaskKey(runID domain.RunID) string {
-	return fakePublicationTaskKind + "/" + string(runID)
+	return fakepublication.TaskKey(runID)
 }
 
 func fakePublicationInvocationOwnerKey(invocationID domain.InvocationID) string {
@@ -2727,18 +2678,13 @@ func fakePublicationInvocationOwnerKey(invocationID domain.InvocationID) string 
 // FakePublicationReadyItemID returns the workflow-owned ready-item namespace
 // for a run.
 func FakePublicationReadyItemID(runID domain.RunID) domain.ItemID {
-	return fakePublicationTerminalItemID("ready", runID)
+	return fakepublication.ReadyItemID(runID)
 }
 
 // FakePublicationBlockedItemID returns the workflow-owned blocked-item
 // namespace for a run.
 func FakePublicationBlockedItemID(runID domain.RunID) domain.ItemID {
-	return fakePublicationTerminalItemID("blocked", runID)
-}
-
-func fakePublicationTerminalItemID(kind string, runID domain.RunID) domain.ItemID {
-	sum := sha256.Sum256([]byte(fakePublicationTaskKind + "\x00" + kind + "\x00" + string(runID)))
-	return domain.ItemID("fake-publication-" + kind + "-" + hex.EncodeToString(sum[:]))
+	return fakepublication.BlockedItemID(runID)
 }
 
 func readyItemID(runID domain.RunID) domain.ItemID {
@@ -2750,14 +2696,7 @@ func blockedItemID(runID domain.RunID) domain.ItemID {
 }
 
 func encodeFakePublicationTask(task fakePublicationTask) ([]byte, error) {
-	if err := task.validate(); err != nil {
-		return nil, err
-	}
-	payload, err := json.Marshal(task)
-	if err != nil {
-		return nil, fmt.Errorf("encode fake publication task: %w", err)
-	}
-	return payload, nil
+	return fakepublication.EncodeTask(fakepublication.Task(task))
 }
 
 func mustEncodeFakePublicationTask(task fakePublicationTask) []byte {
@@ -2769,19 +2708,8 @@ func mustEncodeFakePublicationTask(task fakePublicationTask) []byte {
 }
 
 func decodeFakePublicationTask(payload []byte) (fakePublicationTask, error) {
-	var task fakePublicationTask
-	dec := json.NewDecoder(bytes.NewReader(payload))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&task); err != nil {
-		return fakePublicationTask{}, fmt.Errorf("decode fake publication task: %w", err)
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return fakePublicationTask{}, errors.New("decode fake publication task: trailing data")
-	}
-	if err := task.validate(); err != nil {
-		return fakePublicationTask{}, err
-	}
-	return task, nil
+	task, err := fakepublication.DecodeTask(payload)
+	return fakePublicationTask(task), err
 }
 
 // FakePublicationBackupPayloadDigests validates a durable fake-publication
@@ -2859,113 +2787,15 @@ func decodeFakePublicationInvocationOwner(
 }
 
 func (task fakePublicationTask) validate() error {
-	if task.Version != fakePublicationTaskVersion {
-		return fmt.Errorf("unknown task version %q", task.Version)
-	}
-	if err := validateFakePublicationTaskUTF8(task); err != nil {
-		return err
-	}
-	if task.RunID == "" || task.ProjectID == "" || task.StoreEpoch == "" ||
-		task.VerificationInvocationID == "" ||
-		task.PublicationInvocationID == "" {
-		return domain.ErrEmptyID
-	}
-	if task.VerificationInvocationID == task.PublicationInvocationID {
-		return errors.New("task reuses one invocation across verification and publication")
-	}
-	if task.OperatingMode != OperatingModeAttendedDev {
-		return fmt.Errorf("task operating mode %q is not %s", task.OperatingMode, OperatingModeAttendedDev)
-	}
-	if task.WorkspaceDir == "" || !filepath.IsAbs(task.WorkspaceDir) ||
-		task.HandoffDir == "" || !filepath.IsAbs(task.HandoffDir) {
-		return errors.New("task workspace and handoff paths must be absolute")
-	}
-	if task.Repo == "" || task.BaseRef == "" || !validCommitSHA(task.BaseSHA) ||
-		task.RecipeDigest == "" || task.RecipePath == "" ||
-		task.TrustProfileDigest == "" || task.Title == "" ||
-		!validSHA256Digest(task.HandoffDigest) {
-		return domain.ErrEmptyField
-	}
-	if task.CommitDate.IsZero() || task.StartedAt.IsZero() ||
-		task.CommitDate.Location() != time.UTC || task.StartedAt.Location() != time.UTC {
-		return errors.New("task timestamps must be non-zero UTC")
-	}
-	if err := validateFakePublicationCommitDate(task.CommitDate); err != nil {
-		return fmt.Errorf("task %w", err)
-	}
-	if len(task.AllowedPaths) == 0 {
-		return errors.New("task has no candidate path allowlist")
-	}
-	for _, path := range task.AllowedPaths {
-		if path == "" {
-			return errors.New("task allowed path is empty")
-		}
-	}
-	if err := publish.ValidateRepository(task.Repo); err != nil {
-		return fmt.Errorf("task repository %q: %w", task.Repo, err)
-	}
-	if err := publish.ValidateBranchName(task.BaseRef); err != nil {
-		return fmt.Errorf("task base ref %q: %w", task.BaseRef, err)
-	}
-	if err := validateFakePublicationAllowlist(task.AllowedPaths); err != nil {
-		return fmt.Errorf("task allowlist: %w", err)
-	}
-	if err := validateFakePublicationRecipePath(task.RecipePath); err != nil {
-		return fmt.Errorf("task recipe path: %w", err)
-	}
-	if err := publish.ValidateCandidateBody(task.Body); err != nil {
-		return fmt.Errorf("task publication body: %w", err)
-	}
-	return nil
+	return fakepublication.Task(task).Validate()
 }
 
 func validateFakePublicationCommitDate(commitDate time.Time) error {
-	if commitDate.Before(time.Unix(0, 0).UTC()) {
-		return errors.New("commit date must not precede the Unix epoch")
-	}
-	// Git's raw-date parser rejects 2100-01-01 and later even though those
-	// timestamps still fit in an unsigned 32-bit integer.
-	if !commitDate.Before(time.Unix(fakePublicationMaxCommitTimestamp, 0).UTC()) {
-		return errors.New("commit date must precede 2100-01-01 UTC")
-	}
-	return nil
+	return fakepublication.ValidateCommitDate(commitDate)
 }
 
 func validateFakePublicationTaskUTF8(task fakePublicationTask) error {
-	fields := []struct {
-		name  string
-		value string
-	}{
-		{"version", task.Version},
-		{"run_id", string(task.RunID)},
-		{"project_id", string(task.ProjectID)},
-		{"store_epoch", task.StoreEpoch},
-		{"workspace_dir", task.WorkspaceDir},
-		{"handoff_dir", task.HandoffDir},
-		{"handoff_digest", string(task.HandoffDigest)},
-		{"repo", task.Repo},
-		{"base_ref", task.BaseRef},
-		{"base_sha", task.BaseSHA},
-		{"recipe_digest", string(task.RecipeDigest)},
-		{"recipe_path", task.RecipePath},
-		{"trust_profile_digest", string(task.TrustProfileDigest)},
-		{"verification_invocation_id", string(task.VerificationInvocationID)},
-		{"publication_invocation_id", string(task.PublicationInvocationID)},
-		{"title", task.Title},
-		{"body", task.Body},
-		{"operating_mode", task.OperatingMode},
-	}
-	for _, field := range fields {
-		if !utf8.ValidString(field.value) {
-			return fmt.Errorf("task %s is not valid UTF-8", field.name)
-		}
-	}
-	for i, pattern := range task.AllowedPaths {
-		if !utf8.ValidString(pattern) {
-			return fmt.Errorf("task allowed_paths[%d] is not valid UTF-8", i)
-		}
-	}
-	return nil
+	return fakepublication.ValidateTaskUTF8(fakepublication.Task(task))
 }
 
 func sameFakePublicationRequest(
@@ -3120,32 +2950,11 @@ func digestFakePublicationTree(root string) (domain.Digest, error) {
 // glob grammar at admission. A deterministic caller error must not become a
 // durable outbox row that fails identically on every reconciliation.
 func validateFakePublicationAllowlist(patterns []string) error {
-	for _, pattern := range patterns {
-		for _, segment := range strings.Split(pattern, "/") {
-			if segment == "**" {
-				continue
-			}
-			if _, err := path.Match(segment, ""); err != nil {
-				return fmt.Errorf("invalid candidate path allowlist pattern %q: %w", pattern, err)
-			}
-		}
-	}
-	return nil
+	return fakepublication.ValidateAllowlist(patterns)
 }
 
 func validateFakePublicationRecipePath(recipePath string) error {
-	if recipePath == "" || strings.HasPrefix(recipePath, "/") ||
-		strings.ContainsAny(recipePath, `:\*?[]`) {
-		return errors.New(
-			"must be a relative slash path without colon, backslash, or glob metacharacters",
-		)
-	}
-	for _, component := range strings.Split(recipePath, "/") {
-		if component == "" || component == "." || component == ".." {
-			return fmt.Errorf("component %q is not allowed", component)
-		}
-	}
-	return nil
+	return fakepublication.ValidateRecipePath(recipePath)
 }
 
 // FakePublicationReplay is the durable bootstrap state a one-shot command

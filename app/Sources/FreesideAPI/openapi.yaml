@@ -1402,6 +1402,22 @@ components:
       minLength: 1
       description: A content digest, algorithm-prefixed (e.g. `sha256:...`).
 
+    PRReference:
+      type: object
+      description: >
+        The structured identity of a published GitHub pull request. Mirrors
+        domain.PRReference; clients compose the browser URL from these
+        coordinates instead of parsing presentation prose.
+      required: [repo, number]
+      properties:
+        repo:
+          type: string
+          minLength: 3
+          pattern: "^[^/]+/[^/]+$"
+        number:
+          type: integer
+          minimum: 1
+
     AttentionItem:
       type: object
       description: >
@@ -1420,6 +1436,7 @@ components:
         - agent_claims
         - artifact_digests
         - pr_head_sha
+        - pr_reference
         - commit_plan_notice
         - base_freshness
         - readiness_invalidation
@@ -1477,6 +1494,16 @@ components:
             stale-approval class, plan §3.1; §4 "approvals bind to digests").
         pr_head_sha:
           type: string
+        pr_reference:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/PRReference"
+          description: >
+            The published pull request behind a ready_for_final_review item
+            (plan §4; mirrors domain.AttentionItem.PRReference). Required and
+            non-null exactly on that item type; null on every other type.
+            Daemon-derived from the trusted publication coordinates, never
+            client-set.
         commit_plan_notice:
           nullable: true
           allOf:
@@ -1625,6 +1652,9 @@ components:
               sensitivity_class: "normal"
         artifact_digests: ["sha256:img", "sha256:log"]
         pr_head_sha: "cafebabe"
+        pr_reference:
+          repo: "owner/repo"
+          number: 123
         commit_plan_notice: "present_but_not_honored"
         base_freshness: null
         readiness_invalidation: null

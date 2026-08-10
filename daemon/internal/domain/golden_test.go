@@ -110,6 +110,7 @@ func TestGolden(t *testing.T) {
 		EvidenceSnapshot:  []domain.Artifact{artifact},
 		AgentClaims:       []domain.AgentClaim{agentClaim},
 		PRHeadSHA:         "cafebabe",
+		PRReference:       &domain.PRReference{Repo: "owner/repo", Number: 123},
 		CommitPlanNotice:  &noticeReason,
 		ItemVersion:       1,
 		InterruptionClass: domain.InterruptionPlannedGate,

@@ -16,6 +16,7 @@
   "agent_claims": null,
   "artifact_digests": [],
   "pr_head_sha": "cafebabe",
+  "pr_reference": null,
   "commit_plan_notice": null,
   "base_freshness": null,
   "readiness_invalidation": null,
