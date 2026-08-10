@@ -30,11 +30,12 @@ const (
 	installationTokenSkew     = jwtLifetime
 )
 
-// errTokenExpiry rejects an installation-token expiry that is missing,
+// ErrTokenExpiry rejects an installation-token expiry that is missing,
 // unparsable, already lapsed, or longer than the declared lifetime
 // allows. It is one sentinel because it is one decision: the response
-// did not carry the bounded expiry the mint asked for.
-var errTokenExpiry = errors.New("installation token expiry is not the expected bounded lifetime")
+// did not carry the bounded expiry the mint asked for. Callers key seed
+// permanence on it so the refused credential does not enter a retry loop.
+var ErrTokenExpiry = errors.New("installation token expiry is not the expected bounded lifetime")
 
 // checkInstallationTokenExpiry decodes an untrusted expires_at and
 // bounds it against now, returning the UTC instant only when the value
@@ -53,18 +54,18 @@ var errTokenExpiry = errors.New("installation token expiry is not the expected b
 // token a fresh mint hands back.
 func checkInstallationTokenExpiry(raw Secret, now time.Time) (time.Time, error) {
 	if raw.Reveal() == "" {
-		return time.Time{}, fmt.Errorf("%w: response carries no expiry", errTokenExpiry)
+		return time.Time{}, fmt.Errorf("%w: response carries no expiry", ErrTokenExpiry)
 	}
 	expiresAt, err := time.Parse(time.RFC3339, raw.Reveal())
 	if err != nil {
-		return time.Time{}, fmt.Errorf("%w: response expiry is unparsable", errTokenExpiry)
+		return time.Time{}, fmt.Errorf("%w: response expiry is unparsable", ErrTokenExpiry)
 	}
 	if !expiresAt.After(now) {
-		return time.Time{}, fmt.Errorf("%w: response expiry is not in the future", errTokenExpiry)
+		return time.Time{}, fmt.Errorf("%w: response expiry is not in the future", ErrTokenExpiry)
 	}
 	if bound := now.Add(installationTokenLifetime + installationTokenSkew); expiresAt.After(bound) {
 		return time.Time{}, fmt.Errorf("%w: response expiry is more than %s away",
-			errTokenExpiry, installationTokenLifetime+installationTokenSkew)
+			ErrTokenExpiry, installationTokenLifetime+installationTokenSkew)
 	}
 	return expiresAt.UTC(), nil
 }

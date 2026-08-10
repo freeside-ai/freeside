@@ -60,8 +60,8 @@ func TestCheckInstallationTokenExpiry(t *testing.T) {
 	for _, tc := range rejected {
 		t.Run("rejects "+tc.name, func(t *testing.T) {
 			got, err := checkInstallationTokenExpiry(Secret(tc.raw), expiryNow)
-			if !errors.Is(err, errTokenExpiry) {
-				t.Fatalf("checkInstallationTokenExpiry(%q) = %v, %v, want errTokenExpiry", tc.raw, got, err)
+			if !errors.Is(err, ErrTokenExpiry) {
+				t.Fatalf("checkInstallationTokenExpiry(%q) = %v, %v, want ErrTokenExpiry", tc.raw, got, err)
 			}
 			if !got.IsZero() {
 				t.Errorf("rejected expiry returned %v, want the zero time", got)

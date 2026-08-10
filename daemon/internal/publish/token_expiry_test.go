@@ -143,6 +143,9 @@ func TestMintRejectsExpiryOutsideTheDeclaredBound(t *testing.T) {
 			m := newCoveredMinter(ks, srv.Client(), srv.URL, rec, conformantTrust(t), fixedNow)
 			tok, err := m.MintInstallationToken(context.Background(), testTrustRepo)
 			assertNoExpiryLeak(t, err, tc)
+			if !errors.Is(err, publish.ErrTokenExpiry) {
+				t.Fatalf("err = %v, want ErrTokenExpiry", err)
+			}
 			if tok.Token.Reveal() != "" || !tok.ExpiresAt.IsZero() {
 				t.Errorf("rejected mint returned a token: %+v", tok.ExpiresAt)
 			}
@@ -252,6 +255,9 @@ func TestMintKeepsGrantMismatchForAnOverLongGrant(t *testing.T) {
 	if !errors.Is(err, publish.ErrGrantMismatch) {
 		t.Fatalf("err = %v, want ErrGrantMismatch", err)
 	}
+	if errors.Is(err, publish.ErrTokenExpiry) {
+		t.Fatalf("err = %v, want grant mismatch without ErrTokenExpiry", err)
+	}
 	if len(rec.records) != 0 {
 		t.Errorf("rejected mint recorded %d audit rows, want 0", len(rec.records))
 	}
@@ -287,6 +293,9 @@ func TestInstallationJanitorKeepsGrantMismatchForAnOverLongGrant(t *testing.T) {
 	_, err := janitor.RunCycle(context.Background())
 	if !errors.Is(err, publish.ErrGrantMismatch) {
 		t.Fatalf("err = %v, want ErrGrantMismatch", err)
+	}
+	if errors.Is(err, publish.ErrTokenExpiry) {
+		t.Fatalf("err = %v, want grant mismatch without ErrTokenExpiry", err)
 	}
 	if revokes != 1 || len(recorder.snapshot()) != 0 {
 		t.Errorf("revokes = %d, records = %d", revokes, len(recorder.snapshot()))
