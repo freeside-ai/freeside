@@ -368,8 +368,9 @@ func TestLocalBackupHealthPinsCheckpointAndRestoreGeneration(t *testing.T) {
 	}
 
 	healthDone := make(chan error, 1)
+	current := backupHealthContext(t, s)
 	go func() {
-		_, err := source.BackupHealth(ctx, store.BackupHealthContext{})
+		_, err := source.BackupHealth(ctx, current)
 		healthDone <- err
 	}()
 	<-artifacts.entered
@@ -499,7 +500,7 @@ func TestLocalBackupProducerReportsUnreadableDurableRowAndRecovers(t *testing.T)
 	if err := restartedProducer.Maintain(ctx); !errors.Is(err, store.ErrBackupClosureIncomplete) {
 		t.Fatalf("Maintain after restart = %v, want ErrBackupClosureIncomplete", err)
 	}
-	restartedHealth, err := restartedSource.BackupHealth(ctx, store.BackupHealthContext{})
+	restartedHealth, err := restartedSource.BackupHealth(ctx, backupHealthContext(t, s))
 	if err != nil {
 		t.Fatalf("BackupHealth after restart: %v", err)
 	}
