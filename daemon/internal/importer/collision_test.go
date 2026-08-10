@@ -1,10 +1,10 @@
 package importer
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
 )
 
 func TestDetectCollisions(t *testing.T) {
@@ -140,7 +140,7 @@ func TestDetectCollisionsFileDirectory(t *testing.T) {
 // merges).
 func TestFoldedComponentsFullCaseFold(t *testing.T) {
 	same := func(a, b string) bool {
-		return strings.Join(foldedComponents(a), "/") == strings.Join(foldedComponents(b), "/")
+		return pathfold.FoldPath(a) == pathfold.FoldPath(b)
 	}
 	if !same("straße", "STRASSE") {
 		t.Error("ß must fold to ss (APFS treats straße and STRASSE as one file)")

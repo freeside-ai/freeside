@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
 )
 
 // gatePaths enforces the structural path gates over a validated
@@ -69,7 +70,7 @@ func GitUnsafeComponent(c string) bool {
 	if strings.ContainsRune(c, '\\') {
 		return true
 	}
-	return isDotGitVariant(normalizeComponentAliases(c))
+	return isDotGitVariant(pathfold.NormalizeAliases(c))
 }
 
 // isDotGitVariant reports whether a component, after trimming the
@@ -78,53 +79,4 @@ func GitUnsafeComponent(c string) bool {
 func isDotGitVariant(c string) bool {
 	c = strings.TrimRight(c, ". ")
 	return strings.EqualFold(c, ".git") || strings.EqualFold(c, "git~1")
-}
-
-// normalizeComponentAliases folds one component through deterministic
-// aliases a downstream NTFS/HFS checkout collapses: HFS-ignorable code
-// points, an NTFS alternate-data-stream suffix (everything from the
-// first colon), and trailing dots/spaces. On NTFS, "name:stream" names a
-// stream of "name", and "name::$DATA" is its unnamed data stream.
-func normalizeComponentAliases(c string) string {
-	if strings.ContainsFunc(c, hfsIgnorable) {
-		var b strings.Builder
-		for _, r := range c {
-			if !hfsIgnorable(r) {
-				b.WriteRune(r)
-			}
-		}
-		c = b.String()
-	}
-	if i := strings.IndexByte(c, ':'); i >= 0 {
-		c = c[:i]
-	}
-	return strings.TrimRight(c, ". ")
-}
-
-// normalizeAliases folds each path component the way a downstream
-// checkout filesystem would collapse an alias to a protected name:
-// HFS-ignorable code points stripped, NTFS ADS suffixes stripped, and
-// trailing dots/spaces trimmed. A candidate path is canonical per the
-// manifest, but ".gitmodules " or ".gitmodules::$DATA" materializes as
-// the protected name downstream, so mandatory policy classes must match
-// this normalized form. Case folding is left to matchAny.
-func normalizeAliases(path string) string {
-	comps := strings.Split(path, "/")
-	for i, c := range comps {
-		comps[i] = normalizeComponentAliases(c)
-	}
-	return strings.Join(comps, "/")
-}
-
-// hfsIgnorable reports the code points HFS+ filename comparison
-// ignores, matching git's own protectHFS set.
-func hfsIgnorable(r rune) bool {
-	switch {
-	case r >= 0x200c && r <= 0x200f,
-		r >= 0x202a && r <= 0x202e,
-		r >= 0x206a && r <= 0x206f,
-		r == 0xfeff:
-		return true
-	}
-	return false
 }

@@ -2,12 +2,12 @@ package verify
 
 import (
 	"fmt"
-	"path"
 	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
 )
 
 // Defaults. As at the importer's hostile boundary, a zero cap selects
@@ -113,10 +113,10 @@ func (p Policy) withDefaults() Policy {
 // options are daemon-supplied, so a violation is a caller bug, not
 // hostile input, and it fails loud.
 func (o Options) validate() error {
-	if !validSHA1Hex(o.HeadSHA) {
+	if !pathfold.ValidSHA1Hex(o.HeadSHA) {
 		return fmt.Errorf("head SHA %q is not 40 lowercase hex: %w", o.HeadSHA, ErrInvalidOptions)
 	}
-	if !validSHA1Hex(o.BaseSHA) {
+	if !pathfold.ValidSHA1Hex(o.BaseSHA) {
 		return fmt.Errorf("base SHA %q is not 40 lowercase hex: %w", o.BaseSHA, ErrInvalidOptions)
 	}
 	if o.InvocationID == "" {
@@ -138,7 +138,7 @@ func (o Options) validate() error {
 	// (fail open), so a safety widening meant to add coverage would add
 	// none. Reject at the boundary instead.
 	for _, pat := range o.Policy.ExtraVerificationControlPatterns {
-		if err := validGlob(pat); err != nil {
+		if err := pathfold.ValidGlob(pat); err != nil {
 			return fmt.Errorf("policy pattern %q: %w: %w", pat, err, ErrInvalidOptions)
 		}
 	}
@@ -161,34 +161,4 @@ func validRecipePath(p string) error {
 		}
 	}
 	return nil
-}
-
-// validGlob reports whether every segment of a slash-separated pattern
-// compiles under path.Match ("**" is handled specially by matchSegments
-// and always valid), so an unparseable widening pattern fails closed at
-// this boundary rather than silently matching nothing.
-func validGlob(pattern string) error {
-	for _, seg := range strings.Split(pattern, "/") {
-		if seg == "**" {
-			continue
-		}
-		if _, err := path.Match(seg, ""); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// validSHA1Hex reports whether s is a full 40-character lowercase hex
-// object name (the sha1 object format this package requires).
-func validSHA1Hex(s string) bool {
-	if len(s) != 40 {
-		return false
-	}
-	for _, c := range s {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
 }

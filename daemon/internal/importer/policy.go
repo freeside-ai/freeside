@@ -2,10 +2,9 @@ package importer
 
 import (
 	"fmt"
-	"path"
-	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
 )
 
 // DefaultAutomationControlPatterns is the §5.5 automation-control path
@@ -159,7 +158,7 @@ func applyPolicy(changes []plannedChange, pol Policy) []Finding {
 		// name on a downstream NTFS/HFS checkout, and the finding must
 		// fire on the name that will exist there. The finding still
 		// reports the actual candidate path.
-		classPath := normalizeAliases(c.path)
+		classPath := pathfold.NormalizeAliases(c.path)
 		for _, cl := range controlPlaneClasses {
 			if matchAny(cl.patterns(pol), classPath, true) {
 				findings = append(findings, c.finding(cl.kind, string(c.kind)))
@@ -196,56 +195,5 @@ func applyPolicy(changes []plannedChange, pol Policy) []Finding {
 // misses aliases such as the ﬁ ligature → fi. The allowlist matches
 // exactly, since it names this repository's declared paths.
 func matchAny(patterns []string, p string, foldCase bool) bool {
-	if foldCase {
-		p = foldPath(p)
-	}
-	for _, pat := range patterns {
-		if foldCase {
-			pat = foldPath(pat)
-		}
-		if matchSegments(strings.Split(pat, "/"), strings.Split(p, "/")) {
-			return true
-		}
-	}
-	return false
-}
-
-func matchSegments(pat, segs []string) bool {
-	if len(pat) == 0 {
-		return len(segs) == 0
-	}
-	if pat[0] == "**" {
-		if matchSegments(pat[1:], segs) {
-			return true // ** spans zero segments
-		}
-		if len(segs) > 0 {
-			return matchSegments(pat, segs[1:]) // ** consumes one and stays greedy
-		}
-		return false
-	}
-	if len(segs) == 0 {
-		return false
-	}
-	ok, err := path.Match(pat[0], segs[0])
-	if err != nil || !ok {
-		return false
-	}
-	return matchSegments(pat[1:], segs[1:])
-}
-
-// validGlob reports whether every segment of a slash-separated pattern
-// compiles under path.Match ("**" is handled specially by
-// matchSegments and always valid). Options.validate rejects a policy
-// pattern that fails this, so an unparseable custom glob fails closed at
-// the boundary rather than silently matching nothing.
-func validGlob(pattern string) error {
-	for _, seg := range strings.Split(pattern, "/") {
-		if seg == "**" {
-			continue
-		}
-		if _, err := path.Match(seg, ""); err != nil {
-			return err
-		}
-	}
-	return nil
+	return pathfold.MatchAny(patterns, p, foldCase)
 }

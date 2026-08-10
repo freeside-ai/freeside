@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+
+	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
 )
 
 // ReadRecipeAtCommit reads the default recipe as a regular, size-bounded blob
@@ -14,7 +16,7 @@ func ReadRecipeAtCommit(
 	checkoutDir string,
 	commitSHA string,
 ) ([]byte, error) {
-	if !validSHA1Hex(commitSHA) {
+	if !pathfold.ValidSHA1Hex(commitSHA) {
 		return nil, fmt.Errorf("recipe commit %q: %w", commitSHA, ErrInvalidOptions)
 	}
 	scratch, err := os.MkdirTemp("", "freeside-recipe-read-*")
