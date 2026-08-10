@@ -1,0 +1,18 @@
+{
+  "device_token": "fixture-device-token",
+  "device": {
+    "as_of_revision": 24,
+    "entity_version": 1,
+    "device": {
+      "id": "device-569",
+      "display_name": "Fixture iPhone",
+      "status": "active",
+      "paired_at": "2026-08-10T12:34:56Z",
+      "revoked_at": null
+    }
+  },
+  "ntfy_subscription": {
+    "server_url": "https://ntfy.example.test",
+    "topic": "fs-55555555555555555555555555555555"
+  }
+}
