@@ -161,3 +161,26 @@ func TestReviewSourceRestartCrashAfterResultRecoverable(t *testing.T) {
 		t.Errorf("failed review after restart = %v, want ErrNoResult", err)
 	}
 }
+
+func TestReviewSourceRestartRetainsAuthorityRejection(t *testing.T) {
+	dir := t.TempDir()
+	s, err := fake.NewReviewSourceAt(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Script("inv-rejected", fake.ReviewScript{Outcome: fake.OutcomeComplete})
+	request := reviewRequest("cafebabe")
+	if err := s.RequestReview(t.Context(), "inv-rejected", request); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.VerifyRequestAuthority(t.Context(), "inv-rejected", "sha256:wrong"); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("reject mismatched authority = %v, want ErrParentKeyMismatch", err)
+	}
+	s = reopenReviewSource(t, dir)
+	if err := s.VerifyRequestAuthority(t.Context(), "inv-rejected", request.Instructions.ResultDigest); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Errorf("rejected authority after restart = %v, want ErrParentKeyMismatch", err)
+	}
+	if err := s.RequestReview(t.Context(), "inv-rejected", request); !errors.Is(err, exec.ErrDuplicateStart) {
+		t.Errorf("request rejected invocation after restart = %v, want ErrDuplicateStart", err)
+	}
+}

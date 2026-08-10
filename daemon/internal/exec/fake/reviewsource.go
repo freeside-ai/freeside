@@ -69,6 +69,8 @@ type ReviewSource struct {
 	scripts   map[domain.InvocationID]ReviewScript
 	sessions  map[domain.InvocationID]*reviewSession
 	committed map[domain.InvocationID]exec.ReviewResult
+	failed    map[domain.InvocationID]bool
+	rejected  map[domain.InvocationID]bool
 	intents   map[domain.InvocationID]exec.ReviewRequest
 }
 
@@ -80,6 +82,8 @@ func NewReviewSource() *ReviewSource {
 		scripts:   make(map[domain.InvocationID]ReviewScript),
 		sessions:  make(map[domain.InvocationID]*reviewSession),
 		committed: make(map[domain.InvocationID]exec.ReviewResult),
+		failed:    make(map[domain.InvocationID]bool),
+		rejected:  make(map[domain.InvocationID]bool),
 		intents:   make(map[domain.InvocationID]exec.ReviewRequest),
 	}
 }
@@ -99,10 +103,17 @@ func NewReviewSourceAt(dir string) (*ReviewSource, error) {
 		scripts:   st.Scripts,
 		sessions:  make(map[domain.InvocationID]*reviewSession),
 		committed: st.Committed,
+		failed:    st.Failed,
+		rejected:  st.Rejected,
 		intents:   st.Intents,
 	}
 	for id := range s.intents {
-		s.sessions[id] = &reviewSession{script: s.scripts[id], lost: true}
+		script := s.scripts[id]
+		s.sessions[id] = &reviewSession{
+			script:   script,
+			lost:     !s.failed[id],
+			finished: s.failed[id],
+		}
 	}
 	return s, nil
 }
@@ -117,6 +128,8 @@ func (s *ReviewSource) persistLocked() error {
 	return atomicWrite(s.dir, reviewStateFile, reviewState{
 		Scripts:   s.scripts,
 		Committed: s.committed,
+		Failed:    s.failed,
+		Rejected:  s.rejected,
 		Intents:   s.intents,
 	})
 }
@@ -153,6 +166,9 @@ func (s *ReviewSource) RequestReview(_ context.Context, id domain.InvocationID, 
 		return fmt.Errorf("fake review source request %s: %w", id, exec.ErrDuplicateStart)
 	}
 	if _, ok := s.committed[id]; ok {
+		return fmt.Errorf("fake review source request %s: %w", id, exec.ErrDuplicateStart)
+	}
+	if _, ok := s.intents[id]; ok {
 		return fmt.Errorf("fake review source request %s: %w", id, exec.ErrDuplicateStart)
 	}
 	script, ok := s.scripts[id]
@@ -200,6 +216,8 @@ func (s *ReviewSource) Inspect(_ context.Context, id domain.InvocationID) (exec.
 		return exec.StatusCompleted, nil
 	case OutcomeFail:
 		sess.finished = true
+		s.failed[id] = true
+		s.mustPersistLocked("record failed review", id)
 		return exec.StatusFailed, nil
 	case OutcomeCrashBeforeResult:
 		sess.lost = true
@@ -360,8 +378,16 @@ func (s *ReviewSource) VerifyRequestAuthority(
 	if !ok {
 		return fmt.Errorf("fake review source verify request %s: %w", id, exec.ErrUnknownInvocation)
 	}
+	if s.rejected[id] {
+		return fmt.Errorf("fake review source verify %s request authority: %w", id, domain.ErrParentKeyMismatch)
+	}
 	authority, err := request.AuthorityDigest()
 	if err != nil || authority != expected {
+		delete(s.sessions, id)
+		delete(s.committed, id)
+		delete(s.failed, id)
+		s.rejected[id] = true
+		s.mustPersistLocked("reject request authority", id)
 		return fmt.Errorf("fake review source verify %s request authority: %w",
 			id, errors.Join(err, domain.ErrParentKeyMismatch))
 	}
