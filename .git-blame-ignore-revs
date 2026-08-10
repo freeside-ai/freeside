@@ -4,3 +4,6 @@
 
 # Reformat app Swift sources with swift-format (18 files)
 ffead062320536bf3da7bf8d6eb027723cda14d8
+
+# Separate entity CRUD from the persistence kernel
+fee0031f9ee4a23120db2869281da1a3bcf3bad8

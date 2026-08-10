@@ -10,14 +10,27 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
-// ErrNotFound is returned (wrapped, with the entity and id) by every Get
-// whose row does not exist.
+// The persistence kernel supplies common mechanisms; each entity contract
+// selects the ones it needs. Required lookups wrap missing rows with ErrNotFound
+// and preserve other reconstruction failures through contextual wrapping;
+// optional lookups report absence explicitly. Typed-domain writes validate
+// proposed values, and aggregates enforce old-to-new transitions when their
+// domains define them. Records routed through putImmutable accept only
+// byte-identical replays and reject same-key rewrites. Typed-domain
+// reconstruction validates decoded values and cross-checks extracted columns
+// where present; authority-bearing reads re-run applicable current trust gates
+// instead of trusting persisted eligibility. Opaque and historical records
+// retain their owner-specific validation rules.
+
+// ErrNotFound is returned (wrapped, with the entity and id) when a required
+// lookup's row does not exist. Optional lookups report absence separately.
 var ErrNotFound = errors.New("not found")
 
 // errRowInconsistent marks a row whose JSON body disagrees with its extracted
 // key columns: the store's foreign keys and lookups act on the columns, so a
-// divergent body would be trusted domain data with unenforced keys. Every Get
-// cross-checks the two and fails loudly instead of returning it.
+// divergent body would be trusted domain data with unenforced keys.
+// Reconstruction paths with both representations cross-check them and fail
+// loudly instead of returning a divergent body.
 var errRowInconsistent = errors.New("stored row body inconsistent with its key columns")
 
 // ErrImmutableConflict is returned (wrapped, with the entity and id) when a
@@ -28,11 +41,11 @@ var errRowInconsistent = errors.New("stored row body inconsistent with its key c
 var ErrImmutableConflict = errors.New("immutable row already exists with different content")
 
 // ErrStaleWrite is returned (wrapped, with the entity and id) when an update
-// to a current-state aggregate does not move its state forward: an attention
-// item whose item_version is not beyond the stored one, or a delivery whose
-// lifecycle status regresses. Retries replaying the identical bytes converge
-// silently; a genuinely stale body must fail rather than roll back state
-// (§5.14 optimistic concurrency).
+// to a transition-guarded current-state aggregate does not move its state
+// forward: an attention item whose item_version is not beyond the stored one,
+// or a delivery whose lifecycle status regresses. Retries replaying the
+// identical bytes converge silently; a genuinely stale body must fail rather
+// than roll back state (§5.14 optimistic concurrency).
 var ErrStaleWrite = errors.New("write is stale: stored state is newer")
 
 // ErrStaleCommand is returned when a new command's pinned bindings no longer
@@ -103,10 +116,10 @@ type validator interface{ Validate() error }
 
 // mapTransition translates a domain transition-validator failure into the
 // store's own boundary error. The domain validators own the transition rules
-// (one definition every writer reuses); the store owns how a rejection surfaces
-// at its edge. Double-wrapping keeps the store sentinel matchable by errors.Is
-// while preserving the domain detail in the chain, so callers keep matching
-// ErrImmutableConflict / ErrStaleWrite unchanged.
+// (one definition reused by every writer of that aggregate); the store owns how
+// a rejection surfaces at its edge. Double-wrapping keeps the store sentinel
+// matchable by errors.Is while preserving the domain detail in the chain, so
+// callers keep matching ErrImmutableConflict / ErrStaleWrite unchanged.
 func mapTransition(err error) error {
 	switch {
 	case errors.Is(err, domain.ErrImmutableTransition):
@@ -157,11 +170,11 @@ func decode[T validator](body []byte) (T, error) {
 	return v, nil
 }
 
-// scanner is the shared surface of *sql.Row and *sql.Rows: one reconstruction
-// function per entity (scan, decode, cross-check the extracted columns,
-// range-check the store-stamped metadata, re-run the policy gate) serves both
-// the single-entity Get and the collection List, so a gate added to one path
-// cannot be missed on the other.
+// scanner is the shared surface of *sql.Row and *sql.Rows: it lets one
+// reconstruction function (scan, decode, cross-check the extracted columns,
+// range-check the store-stamped metadata, re-run the policy gate) serve both a
+// single-entity Get and a collection List, so a gate added to one path cannot
+// be missed on the other.
 type scanner interface{ Scan(dest ...any) error }
 
 // putImmutable inserts a write-once row (INSERT ... ON CONFLICT DO NOTHING),
@@ -205,8 +218,8 @@ func (tx *InternalTx) putImmutableInserted(ctx context.Context, insertSQL string
 }
 
 // existingBody fetches the current body for an aggregate's key, or nil when
-// the row does not exist. The query must be a constant from entities.go or
-// pairing.go. On InternalTx for the same reason as putImmutable.
+// the row does not exist. The query must be a fixed statement supplied by the
+// caller. On InternalTx for the same reason as putImmutable.
 func (tx *InternalTx) existingBody(ctx context.Context, selectSQL string, keyArgs ...any) ([]byte, error) {
 	var body []byte
 	err := tx.tx.QueryRowContext(ctx, selectSQL, keyArgs...).Scan(&body)
@@ -223,7 +236,8 @@ func (tx *InternalTx) existingBody(ctx context.Context, selectSQL string, keyArg
 // per-row EntityVersion a ClientCommand's expected_entity_version is checked
 // against, and the AsOfRevision of the transaction that last wrote the row.
 // Both are stamped by the store's own Puts, never by callers, and are
-// range-checked at reconstruction like every other extracted column.
+// range-checked alongside the other extracted columns on those reconstruction
+// paths.
 type Snapshot struct {
 	EntityVersion int64
 	AsOfRevision  int64
