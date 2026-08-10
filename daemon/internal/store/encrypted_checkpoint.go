@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
@@ -774,7 +775,7 @@ func createBackupEncryptionKey(path string) ([]byte, error) {
 	if err := file.Close(); err != nil {
 		return nil, fmt.Errorf("close backup encryption key %s: %w", tempPath, err)
 	}
-	if err := renameNoReplace(tempPath, path); err != nil {
+	if err := atomicfile.RenameNoReplace(tempPath, path); err != nil {
 		if !errors.Is(err, fs.ErrExist) {
 			return nil, fmt.Errorf("publish backup encryption key %s: %w", path, err)
 		}
