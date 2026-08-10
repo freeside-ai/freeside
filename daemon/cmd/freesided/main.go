@@ -780,7 +780,8 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				evictConcluded:   claudeWiring.evictConcluded,
 				now:              func() time.Time { return time.Now().UTC() },
 			}
-			err := reconciler.Run(ctx, defaultActiveResourceInterval, cfg.Logger)
+			err := reconciler.Run(ctx,
+				defaultActiveResourceInterval, operatorActiveResourceInterval, cfg.Logger)
 			if err != nil {
 				d.errs <- fmt.Errorf("active resource reconciler: %w", err)
 				return

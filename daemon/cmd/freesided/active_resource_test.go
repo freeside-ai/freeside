@@ -15,6 +15,13 @@ import (
 
 var activeResourceTestTime = time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
 
+func reconcileActiveResource(
+	r *activeResourceReconciler, ctx context.Context,
+) ([]error, error) {
+	result, err := r.Reconcile(ctx)
+	return result.failures, err
+}
+
 func activeReadyItem(t *testing.T, st *store.Store) domain.AttentionItem {
 	t.Helper()
 	ctx := context.Background()
@@ -191,6 +198,65 @@ func assertNoActiveCompletion(t *testing.T, st *store.Store, item domain.Attenti
 	}
 }
 
+func TestActiveResourceReconcileReportsCadenceRegime(t *testing.T) {
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := activeReadyItem(t, st)
+	var pullErr error
+	closed := false
+	reconciler := activeResourceReconciler{
+		store: st,
+		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			if pullErr != nil {
+				return publish.PullObservation{}, pullErr
+			}
+			if closed {
+				return exactPull("closed", false), nil
+			}
+			return exactPull("open", false), nil
+		},
+		now: func() time.Time { return activeResourceTestTime },
+	}
+
+	result, err := reconciler.Reconcile(ctx)
+	if err != nil || len(result.failures) != 0 {
+		t.Fatalf("open Reconcile = %+v, %v", result, err)
+	}
+	if !result.operatorActive {
+		t.Fatal("an open ready item did not select the operator-active regime")
+	}
+	if got := activeResourceInterval(true, 15*time.Minute, time.Minute); got != time.Minute {
+		t.Fatalf("operator-active interval = %s, want 1m", got)
+	}
+
+	pullErr = errors.New("token mint unavailable")
+	result, err = reconciler.Reconcile(ctx)
+	if err != nil || len(result.failures) != 1 || !result.operatorActive {
+		t.Fatalf("failed-observation Reconcile = %+v, %v", result, err)
+	}
+
+	pullErr = nil
+	closed = true
+	result, err = reconciler.Reconcile(ctx)
+	if err != nil || len(result.failures) != 0 {
+		t.Fatalf("concluding Reconcile = %+v, %v", result, err)
+	}
+	if result.operatorActive {
+		t.Fatal("a pass that concluded its only ready item stayed operator-active")
+	}
+	if got := activeResourceInterval(false, 15*time.Minute, time.Minute); got != 15*time.Minute {
+		t.Fatalf("idle interval = %s, want 15m", got)
+	}
+	if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusResolved {
+		t.Fatalf("concluded item status = %s, want resolved", got.Status)
+	}
+
+	result, err = reconciler.Reconcile(ctx)
+	if err != nil || len(result.failures) != 0 || result.operatorActive {
+		t.Fatalf("idle Reconcile = %+v, %v", result, err)
+	}
+}
+
 func TestActiveResourceReconcileWaitsForBoundIssueThenConcludes(t *testing.T) {
 	ctx := context.Background()
 	st := schedTestStore(t)
@@ -214,7 +280,7 @@ func TestActiveResourceReconcileWaitsForBoundIssueThenConcludes(t *testing.T) {
 		},
 		now: func() time.Time { return activeResourceTestTime },
 	}
-	failures, err := reconciler.Reconcile(ctx)
+	failures, err := reconcileActiveResource(&reconciler, ctx)
 	if err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
 	}
@@ -234,7 +300,7 @@ func TestActiveResourceReconcileWaitsForBoundIssueThenConcludes(t *testing.T) {
 	}
 
 	issueClosed = true
-	if failures, err = reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err = reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("issue-closure Reconcile = %v, %v", failures, err)
 	}
 	got = readActiveItem(t, st, item.ID)
@@ -266,7 +332,7 @@ func TestActiveResourceReconcileWaitsForBoundIssueThenConcludes(t *testing.T) {
 	}
 	// A fresh reconciler after restart sees the terminal item, settles no-op
 	// schedules, and never polls the concluded resource again.
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("restart Reconcile = %v, %v", failures, err)
 	}
 	if pullCalls != 4 { // two active passes, each with a repository-identity recheck
@@ -291,7 +357,7 @@ func TestActiveResourceCompletionUsesPersistedSharedPRFacts(t *testing.T) {
 		},
 		now: func() time.Time { return now },
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("first Reconcile = %v, %v", failures, err)
 	}
 	if got := readActiveItem(t, st, first.ID); got.Status != domain.StatusResolved {
@@ -300,7 +366,7 @@ func TestActiveResourceCompletionUsesPersistedSharedPRFacts(t *testing.T) {
 
 	second := capturedRunNamed(t, st, "run-shared-second", "item-shared-second")
 	now = now.Add(time.Hour)
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("shared-pr Reconcile = %v, %v", failures, err)
 	}
 	if got := readActiveItem(t, st, second.ID); got.Status != domain.StatusResolved {
@@ -336,7 +402,7 @@ func TestActiveResourcePRCompletionIgnoresOptionalBoundIssue(t *testing.T) {
 		},
 		now: func() time.Time { return activeResourceTestTime },
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
 	}
 	if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusResolved {
@@ -408,7 +474,7 @@ func TestActiveResourceHonorsHistoricalCompletionAfterIssueReopens(t *testing.T)
 		},
 		now: func() time.Time { return activeResourceTestTime },
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
 	}
 	if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusResolved {
@@ -433,7 +499,7 @@ func TestActiveResourceReconcileUnmergedCloseConcludesUndeclaredItem(t *testing.
 		},
 		now: func() time.Time { return activeResourceTestTime },
 	}
-	failures, err := reconciler.Reconcile(ctx)
+	failures, err := reconcileActiveResource(&reconciler, ctx)
 	if err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
 	}
@@ -494,7 +560,7 @@ func TestActiveResourceReconcileRequiresExactReturnedResource(t *testing.T) {
 				},
 				now: func() time.Time { return activeResourceTestTime },
 			}
-			failures, err := reconciler.Reconcile(ctx)
+			failures, err := reconcileActiveResource(&reconciler, ctx)
 			if err != nil || len(failures) != 0 {
 				t.Fatalf("Reconcile = %v, %v", failures, err)
 			}
@@ -538,7 +604,7 @@ func TestActiveResourceReconcileRetriesMalformedReturnedIdentity(t *testing.T) {
 				},
 				now: func() time.Time { return activeResourceTestTime },
 			}
-			failures, err := reconciler.Reconcile(ctx)
+			failures, err := reconcileActiveResource(&reconciler, ctx)
 			if err != nil || len(failures) != 1 || !errors.Is(failures[0], domain.ErrNonPositive) {
 				t.Fatalf("malformed Reconcile = %v, %v", failures, err)
 			}
@@ -557,7 +623,7 @@ func TestActiveResourceReconcileRetriesMalformedReturnedIdentity(t *testing.T) {
 			}
 
 			malformed = false
-			if failures, err = reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+			if failures, err = reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 				t.Fatalf("retry Reconcile = %v, %v", failures, err)
 			}
 			if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusOpen ||
@@ -581,7 +647,7 @@ func TestActiveResourceReconcileSameIdentityRenameStaysReady(t *testing.T) {
 		},
 		now: func() time.Time { return activeResourceTestTime },
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
 	}
 	got := readActiveItem(t, st, item.ID)
@@ -651,7 +717,7 @@ func TestActiveResourceReconcileInvalidatesReadyOnBindingDivergence(t *testing.T
 				},
 				now: func() time.Time { return activeResourceTestTime },
 			}
-			failures, err := reconciler.Reconcile(ctx)
+			failures, err := reconcileActiveResource(&reconciler, ctx)
 			if err != nil || len(failures) != 0 {
 				t.Fatalf("Reconcile = %v, %v", failures, err)
 			}
@@ -706,7 +772,7 @@ func TestActiveResourceIdentityInvalidationAfterRestart(t *testing.T) {
 		},
 		now: func() time.Time { return activeResourceTestTime },
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("restart Reconcile = %v, %v", failures, err)
 	}
 	assertIdentityInvalidated(t, reopened, item, "424242#450", "434343#450")
@@ -818,7 +884,7 @@ func TestActiveResourceIdentityDivergenceAtCompletionRecheck(t *testing.T) {
 		},
 		now: func() time.Time { return activeResourceTestTime },
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
 	}
 	assertIdentityInvalidated(t, st, item, "424242#450", "434343#451")
@@ -867,7 +933,7 @@ func TestActiveResourceMalformedIdentityAtCompletionRecheckRetriesWithoutChurn(t
 				},
 				now: func() time.Time { return activeResourceTestTime },
 			}
-			failures, err := reconciler.Reconcile(ctx)
+			failures, err := reconcileActiveResource(&reconciler, ctx)
 			if err != nil || len(failures) != 1 || !errors.Is(failures[0], domain.ErrNonPositive) {
 				t.Fatalf("malformed recheck Reconcile = %v, %v", failures, err)
 			}
@@ -889,7 +955,7 @@ func TestActiveResourceMalformedIdentityAtCompletionRecheckRetriesWithoutChurn(t
 
 			malformed = false
 			pullCalls = 0
-			if failures, err = reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+			if failures, err = reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 				t.Fatalf("retry Reconcile = %v, %v", failures, err)
 			}
 			if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusResolved ||
@@ -929,7 +995,7 @@ func TestActiveResourceReconcileInvalidationYieldsToConcurrentConclusion(t *test
 		},
 		now: func() time.Time { return activeResourceTestTime },
 	}
-	failures, err := reconciler.Reconcile(ctx)
+	failures, err := reconcileActiveResource(&reconciler, ctx)
 	if err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
 	}
@@ -955,7 +1021,7 @@ func TestActiveResourceReconcileRetriesTransientFailureWithoutChurn(t *testing.T
 		},
 		now: func() time.Time { return activeResourceTestTime },
 	}
-	failures, err := reconciler.Reconcile(ctx)
+	failures, err := reconcileActiveResource(&reconciler, ctx)
 	if err != nil || len(failures) != 1 || !errors.Is(failures[0], transient) {
 		t.Fatalf("failed Reconcile = %v, %v", failures, err)
 	}
@@ -963,7 +1029,7 @@ func TestActiveResourceReconcileRetriesTransientFailureWithoutChurn(t *testing.T
 		t.Fatalf("failed observation changed item = %+v", got)
 	}
 	fail = false
-	if failures, err = reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err = reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("retry Reconcile = %v, %v", failures, err)
 	}
 	var before store.ServerState
@@ -974,7 +1040,7 @@ func TestActiveResourceReconcileRetriesTransientFailureWithoutChurn(t *testing.T
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if failures, err = reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err = reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("unchanged Reconcile = %v, %v", failures, err)
 	}
 	var after store.ServerState
@@ -1029,7 +1095,7 @@ func TestActiveResourceReconcileConvergesPersistentObservationHealth(t *testing.
 	}
 
 	for pass := 1; pass < activeResourceObservationFailureThreshold; pass++ {
-		failures, err := reconciler.Reconcile(ctx)
+		failures, err := reconcileActiveResource(&reconciler, ctx)
 		if err != nil || len(failures) != 1 || !errors.Is(failures[0], remoteFailure) {
 			t.Fatalf("failure pass %d = %v, %v", pass, failures, err)
 		}
@@ -1037,7 +1103,7 @@ func TestActiveResourceReconcileConvergesPersistentObservationHealth(t *testing.
 			t.Fatalf("failure pass %d health = %+v, want none before threshold", pass, health)
 		}
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil ||
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil ||
 		len(failures) != 1 || !errors.Is(failures[0], remoteFailure) {
 		t.Fatalf("threshold pass = %v, %v", failures, err)
 	}
@@ -1055,7 +1121,7 @@ func TestActiveResourceReconcileConvergesPersistentObservationHealth(t *testing.
 		t.Fatalf("advisory observation health blocked unrelated admission: %v", err)
 	}
 	version := health[0].ItemVersion
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 1 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 1 {
 		t.Fatalf("continued failure = %v, %v", failures, err)
 	}
 	health = readHealth()
@@ -1064,7 +1130,7 @@ func TestActiveResourceReconcileConvergesPersistentObservationHealth(t *testing.
 	}
 
 	failing = false
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("recovery = %v, %v", failures, err)
 	}
 	health = readHealth()
@@ -1097,7 +1163,7 @@ func TestActiveResourceReconcileSettlesReturnedAndDismissedItemsWithoutPolling(t
 				},
 				now: func() time.Time { return activeResourceTestTime },
 			}
-			if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+			if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 				t.Fatalf("Reconcile = %v, %v", failures, err)
 			}
 			if pullCalls != 0 {
@@ -1145,7 +1211,7 @@ func TestActiveResourceReconcileRecoversSupersededCompletion(t *testing.T) {
 		},
 		now: func() time.Time { return activeResourceTestTime.Add(time.Minute) },
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("recovery Reconcile = %v, %v", failures, err)
 	}
 	got := readActiveItem(t, st, item.ID)
@@ -1156,7 +1222,7 @@ func TestActiveResourceReconcileRecoversSupersededCompletion(t *testing.T) {
 	if len(pulls) != 1 || len(issues) != 1 || completion == nil {
 		t.Fatalf("recovered capture = %v %v %v", pulls, issues, completion)
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("write-once Reconcile = %v, %v", failures, err)
 	}
 	if pullCalls != 2 {
@@ -1215,7 +1281,7 @@ func TestActiveResourceReconcileFinallyEvictsAcrossBindingRecovery(t *testing.T)
 		},
 		now: func() time.Time { return activeResourceTestTime },
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 1 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 1 {
 		t.Fatalf("ready-unbound Reconcile = %v, %v", failures, err)
 	}
 	if pullCalls != 0 || evictions != 0 {
@@ -1233,7 +1299,7 @@ func TestActiveResourceReconcileFinallyEvictsAcrossBindingRecovery(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("unit-unbound Reconcile = %v, %v", failures, err)
 	}
 	if pullCalls != 0 || evictions != 1 {
@@ -1248,13 +1314,13 @@ func TestActiveResourceReconcileFinallyEvictsAcrossBindingRecovery(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("bound Reconcile = %v, %v", failures, err)
 	}
 	if pullCalls != 1 || evictions != 2 {
 		t.Fatalf("bound resource calls = pulls %d evictions %d, want 1 and 2", pullCalls, evictions)
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("completed Reconcile = %v, %v", failures, err)
 	}
 	if pullCalls != 1 || evictions != 2 {
@@ -1303,14 +1369,14 @@ func TestActiveResourceReconcileRecoversAfterClosedUnmergedPull(t *testing.T) {
 		},
 		now: func() time.Time { return activeResourceTestTime.Add(time.Minute) },
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("closed-unmerged Reconcile = %v, %v", failures, err)
 	}
 	if evictions != 1 {
 		t.Fatalf("initial concluded eviction count = %d, want 1", evictions)
 	}
 	merged = true
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("reopened-and-merged Reconcile = %v, %v", failures, err)
 	}
 	pulls, issues, completion := readCaptureState(t, st)
@@ -1321,7 +1387,7 @@ func TestActiveResourceReconcileRecoversAfterClosedUnmergedPull(t *testing.T) {
 	if evictions != 2 {
 		t.Fatalf("post-completion eviction count = %d, want 2", evictions)
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("completed Reconcile = %v, %v", failures, err)
 	}
 	if pullCalls != 3 || evictions != 2 {

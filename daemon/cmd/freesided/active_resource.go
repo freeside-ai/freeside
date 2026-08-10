@@ -18,7 +18,10 @@ import (
 // Active-resource reconciliation is a process cadence, not a durable
 // schedule kind (plan §5.16). An immediate startup pass restores convergence;
 // later passes use conditional requests through publish.Reconciler.
-const defaultActiveResourceInterval = 15 * time.Minute
+const (
+	defaultActiveResourceInterval  = 15 * time.Minute
+	operatorActiveResourceInterval = time.Minute
+)
 
 const activeResourceObservationFailureThreshold = 4
 
@@ -77,6 +80,11 @@ type activeResourceObservation struct {
 	nativeErr          error
 }
 
+type activeResourceReconcileResult struct {
+	operatorActive bool
+	failures       []error
+}
+
 func validateObservedPullIdentityCoordinates(repositoryID int64, prNumber int) error {
 	if repositoryID <= 0 {
 		return fmt.Errorf("returned repository_id %d: %w", repositoryID, domain.ErrNonPositive)
@@ -87,72 +95,123 @@ func validateObservedPullIdentityCoordinates(repositoryID int64, prNumber int) e
 	return nil
 }
 
-// Run performs one startup pass and then polls on a plain ticker. A resource
-// failure is reported and isolated to that item; enumeration or transaction
-// failures stop the loop because continuing would silently omit durable work.
+// Run performs one startup pass and then re-arms its process-local timer from
+// the pass result. An open ready-for-final-review item selects the
+// operator-active interval; otherwise the background interval applies. A
+// resource failure is reported and isolated to that item; enumeration or
+// transaction failures stop the loop because continuing would silently omit
+// durable work.
 //
 // This is the GitHub-facing loop, so it is where a recurring credential or
 // rate-limit failure shows up. Reporting it at error severity with a
 // timestamp is the whole point: as an unstructured stderr line every
 // quarter hour, a persistent 401 was indistinguishable from noise.
 func (r activeResourceReconciler) Run(
-	ctx context.Context, interval time.Duration, logger *slog.Logger,
+	ctx context.Context, defaultInterval, operatorActiveInterval time.Duration,
+	logger *slog.Logger,
 ) error {
-	if interval <= 0 {
-		return fmt.Errorf("active resource interval %s must be positive", interval)
+	if defaultInterval <= 0 {
+		return fmt.Errorf("default active resource interval %s must be positive", defaultInterval)
+	}
+	if operatorActiveInterval <= 0 {
+		return fmt.Errorf("operator-active resource interval %s must be positive", operatorActiveInterval)
 	}
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	logger = logger.With("subsystem", "active-resource")
-	logger.Info("active resource reconciler started", "interval", interval)
-	reconcile := func() error {
-		failures, err := r.Reconcile(ctx)
+	logger.Info("active resource reconciler started",
+		"default_interval", defaultInterval,
+		"operator_active_interval", operatorActiveInterval,
+	)
+	operatorActive := false
+	reconcile := func() (time.Duration, error) {
+		result, err := r.Reconcile(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				// Cancellation mid-pass is shutdown, not a failure: the same
 				// reading the engine and scheduler loops already take. The
 				// select below logs the single stop record.
-				return nil
+				return defaultInterval, nil
 			}
 			logger.Error("active resource pass failed", "error", err)
-			return err
+			return 0, err
 		}
-		for _, failure := range failures {
+		for _, failure := range result.failures {
 			// Isolated per-item failures: the pass converged around them, so
 			// they are error severity without being loop-fatal.
 			logger.Error("active resource observation failed", "error", failure)
 		}
-		// Per-pass at debug. This runs every quarter hour forever; an info
-		// record per idle pass is a log an operator stops reading, and the
-		// records that matter drown in it.
-		logger.Debug("active resource pass complete", "failures", len(failures))
-		return nil
+		if result.operatorActive != operatorActive {
+			operatorActive = result.operatorActive
+			if operatorActive {
+				logger.Info("operator-active cadence engaged", "interval", operatorActiveInterval)
+			} else {
+				logger.Info("operator-active cadence released", "interval", defaultInterval)
+			}
+		}
+		// Per-pass at debug. This loop runs forever, including once a minute
+		// while an operator is active; an info record per pass is a log an
+		// operator stops reading, and the records that matter drown in it.
+		logger.Debug("active resource pass complete",
+			"failures", len(result.failures), "operator_active", result.operatorActive)
+		return activeResourceInterval(
+			result.operatorActive, defaultInterval, operatorActiveInterval,
+		), nil
 	}
-	if err := reconcile(); err != nil {
+	nextInterval, err := reconcile()
+	if err != nil {
 		return err
 	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	timer := time.NewTimer(nextInterval)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			logger.Info("active resource reconciler stopped")
 			return nil
-		case <-ticker.C:
-			if err := reconcile(); err != nil {
-				return err
-			}
+		case <-r.store.ReadyItemCreated():
+			// A new ready item must not wait through an idle interval before it
+			// can engage the operator-active cadence. The store emits only after
+			// commit; reconciliation remains authoritative if this wake is lost.
+		case <-timer.C:
+		}
+		nextInterval, err = reconcile()
+		if err != nil {
+			return err
+		}
+		resetActiveResourceTimer(timer, nextInterval)
+	}
+}
+
+func resetActiveResourceTimer(timer *time.Timer, interval time.Duration) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
 		}
 	}
+	timer.Reset(interval)
+}
+
+func activeResourceInterval(
+	operatorActive bool, defaultInterval, operatorActiveInterval time.Duration,
+) time.Duration {
+	if operatorActive {
+		return operatorActiveInterval
+	}
+	return defaultInterval
 }
 
 // Reconcile makes one independent pass over every active ready item.
 // Per-resource observation failures remain retryable and do not prevent a
 // healthy sibling from converging in the same pass.
-func (r *activeResourceReconciler) Reconcile(ctx context.Context) ([]error, error) {
+func (r *activeResourceReconciler) Reconcile(
+	ctx context.Context,
+) (activeResourceReconcileResult, error) {
+	result := activeResourceReconcileResult{}
 	if r.store == nil || r.pull == nil || r.now == nil {
-		return nil, errors.New("active resource reconciler is not fully configured")
+		return result, errors.New("active resource reconciler is not fully configured")
 	}
 	var snapshots []store.Snapshotted[domain.AttentionItem]
 	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -160,9 +219,9 @@ func (r *activeResourceReconciler) Reconcile(ctx context.Context) ([]error, erro
 		snapshots, err = tx.ListAttentionItems(ctx)
 		return err
 	}); err != nil {
-		return nil, fmt.Errorf("list active ready resources: %w", err)
+		return result, fmt.Errorf("list active ready resources: %w", err)
 	}
-	failures := make([]error, 0)
+	result.failures = make([]error, 0)
 	for _, snapshot := range snapshots {
 		item := snapshot.Value
 		if item.Type != domain.AttentionReadyForFinalReview {
@@ -171,34 +230,38 @@ func (r *activeResourceReconciler) Reconcile(ctx context.Context) ([]error, erro
 		if item.Status != domain.StatusOpen {
 			delete(r.observationFailures, item.ID)
 			if err := r.convergeObservationHealth(ctx, snapshots, item, true); err != nil {
-				return failures, fmt.Errorf("resolve ready resource observation health %s: %w", item.ID, err)
+				return result, fmt.Errorf("resolve ready resource observation health %s: %w", item.ID, err)
 			}
 			observation, err := r.observeCompletionOnly(ctx, item, r.now().UTC())
 			if err != nil {
-				failures = append(failures, fmt.Errorf("recover ready resource completion %s: %w", item.ID, err))
+				result.failures = append(result.failures,
+					fmt.Errorf("recover ready resource completion %s: %w", item.ID, err))
 			} else if observation.material || observation.completion != nil {
 				if err := r.commit(ctx, observation); err != nil {
-					return failures, fmt.Errorf("commit ready resource completion %s: %w", item.ID, err)
+					return result, fmt.Errorf("commit ready resource completion %s: %w", item.ID, err)
 				}
 			}
 			if err := r.evictConcludedResource(ctx, item.ID); err != nil {
-				failures = append(failures, fmt.Errorf("evict concluded ready resource %s: %w", item.ID, err))
+				result.failures = append(result.failures,
+					fmt.Errorf("evict concluded ready resource %s: %w", item.ID, err))
 			}
 			if err := r.settleSchedules(ctx, item.ID, r.now().UTC()); err != nil {
-				return failures, fmt.Errorf("settle ready resource %s: %w", item.ID, err)
+				return result, fmt.Errorf("settle ready resource %s: %w", item.ID, err)
 			}
 			continue
 		}
 		observation, err := r.observe(ctx, item, r.now().UTC())
 		if err != nil {
-			failures = append(failures, fmt.Errorf("reconcile ready resource %s: %w", item.ID, err))
+			result.operatorActive = true
+			result.failures = append(result.failures,
+				fmt.Errorf("reconcile ready resource %s: %w", item.ID, err))
 			if r.observationFailures == nil {
 				r.observationFailures = make(map[domain.ItemID]int)
 			}
 			r.observationFailures[item.ID]++
 			if r.observationFailures[item.ID] >= activeResourceObservationFailureThreshold {
 				if healthErr := r.convergeObservationHealth(ctx, snapshots, item, false); healthErr != nil {
-					return failures, fmt.Errorf(
+					return result, fmt.Errorf(
 						"raise ready resource observation health %s: %w", item.ID, healthErr)
 				}
 			}
@@ -206,28 +269,34 @@ func (r *activeResourceReconciler) Reconcile(ctx context.Context) ([]error, erro
 		}
 		delete(r.observationFailures, item.ID)
 		if err := r.convergeObservationHealth(ctx, snapshots, item, true); err != nil {
-			return failures, fmt.Errorf("resolve ready resource observation health %s: %w", item.ID, err)
+			return result, fmt.Errorf("resolve ready resource observation health %s: %w", item.ID, err)
 		}
 		// A native-observe failure is isolated: it is reported but never blocks
 		// the pull/issue commit below, and the next tick retries (plan §5.16).
 		if observation.nativeErr != nil {
-			failures = append(failures, fmt.Errorf("reconcile ready resource %s: %w", item.ID, observation.nativeErr))
+			result.failures = append(result.failures,
+				fmt.Errorf("reconcile ready resource %s: %w", item.ID, observation.nativeErr))
 		}
 		if observation.material || observation.conclude ||
 			observation.completion != nil || observation.invalidation != nil {
 			if err := r.commit(ctx, observation); err != nil {
-				return failures, fmt.Errorf("commit ready resource %s: %w", item.ID, err)
+				return result, fmt.Errorf("commit ready resource %s: %w", item.ID, err)
 			}
 			if err := r.evictConcludedResource(ctx, item.ID); err != nil {
-				failures = append(failures, fmt.Errorf("evict concluded ready resource %s: %w", item.ID, err))
+				result.failures = append(result.failures,
+					fmt.Errorf("evict concluded ready resource %s: %w", item.ID, err))
 			}
+		}
+		if !observation.conclude && observation.invalidation == nil {
+			result.operatorActive = true
 		}
 		// Native observations commit in their own daemon-internal transaction,
 		// so a native-store failure is isolated from the pull/issue facts and
 		// collected as a retryable failure rather than stopping the pass.
 		if len(observation.nativeObservations) > 0 {
 			if err := r.commitNativeReview(ctx, observation.nativeObservations); err != nil {
-				failures = append(failures, fmt.Errorf("record native review %s: %w", item.ID, err))
+				result.failures = append(result.failures,
+					fmt.Errorf("record native review %s: %w", item.ID, err))
 				// The observer already advanced its ETags on the fetch, so a 304
 				// on the next tick would suppress the rebuild and strand these
 				// un-persisted rows. Evict the cache so the retry re-fetches
@@ -238,7 +307,7 @@ func (r *activeResourceReconciler) Reconcile(ctx context.Context) ([]error, erro
 			}
 		}
 	}
-	return failures, nil
+	return result, nil
 }
 
 func activeResourceObservationHealthPrefix(itemID domain.ItemID) string {

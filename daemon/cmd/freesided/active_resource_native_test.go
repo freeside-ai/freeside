@@ -70,7 +70,7 @@ func TestActiveResourceRecordsNativeFindingsAndCleanPass(t *testing.T) {
 		reviewers: testReviewers(),
 		now:       func() time.Time { return activeResourceTestTime },
 	}
-	failures, err := reconciler.Reconcile(ctx)
+	failures, err := reconcileActiveResource(&reconciler, ctx)
 	if err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
 	}
@@ -128,7 +128,7 @@ func TestActiveResourceRecordsLateAndForeignFiltered(t *testing.T) {
 		reviewers: testReviewers(),
 		now:       func() time.Time { return activeResourceTestTime },
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
 	}
 	got := readNativeObservations(t, st)
@@ -162,7 +162,7 @@ func TestActiveResourceNormalizesBotLogin(t *testing.T) {
 		reviewers: testReviewers(),
 		now:       func() time.Time { return activeResourceTestTime },
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
 	}
 	got := readNativeObservations(t, st)
@@ -194,7 +194,7 @@ func TestActiveResourceRejectsStaleCleanPassReaction(t *testing.T) {
 		reviewers: testReviewers(),
 		now:       func() time.Time { return activeResourceTestTime },
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
 	}
 	got := readNativeObservations(t, st)
@@ -222,7 +222,7 @@ func TestActiveResourceRecordsStaleHeadReview(t *testing.T) {
 		reviewers: testReviewers(),
 		now:       func() time.Time { return activeResourceTestTime },
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
 	}
 	for _, o := range readNativeObservations(t, st) {
@@ -253,7 +253,7 @@ func TestActiveResourceNativeObserveFailureIsolated(t *testing.T) {
 		reviewers: testReviewers(),
 		now:       func() time.Time { return activeResourceTestTime },
 	}
-	failures, err := reconciler.Reconcile(ctx)
+	failures, err := reconcileActiveResource(&reconciler, ctx)
 	if err != nil {
 		t.Fatalf("Reconcile hard error: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestActiveResourceNativeObserveFailureIsolated(t *testing.T) {
 	// The next tick retries with a working observer and records, without
 	// re-appending the unchanged pull fact.
 	reconciler.review = staticReview(findingsReviewActivity())
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("retry Reconcile = %v, %v", failures, err)
 	}
 	if got := readNativeObservations(t, st); len(got) != 2 {
@@ -295,7 +295,7 @@ func TestActiveResourceNativeObservationConverges(t *testing.T) {
 		now:       func() time.Time { return activeResourceTestTime },
 	}
 	for i := 0; i < 3; i++ {
-		if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+		if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 			t.Fatalf("Reconcile %d = %v, %v", i, failures, err)
 		}
 	}
@@ -323,7 +323,7 @@ func TestActiveResourceNativeConvergesWithInvalidUTF8(t *testing.T) {
 	}
 	var first int
 	for i := 0; i < 3; i++ {
-		if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+		if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 			t.Fatalf("Reconcile %d = %v, %v", i, failures, err)
 		}
 		got := len(readNativeObservations(t, st))
@@ -353,7 +353,7 @@ func TestActiveResourceNativeNotModifiedRecordsNothing(t *testing.T) {
 		reviewers: testReviewers(),
 		now:       func() time.Time { return activeResourceTestTime },
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("Reconcile = %v, %v", failures, err)
 	}
 	if got := readNativeObservations(t, st); len(got) != 0 {
@@ -396,7 +396,7 @@ func TestActiveResourceNativeCommitFailureEvictsCache(t *testing.T) {
 		},
 		now: func() time.Time { return activeResourceTestTime },
 	}
-	failures, err := reconciler.Reconcile(ctx)
+	failures, err := reconcileActiveResource(&reconciler, ctx)
 	if err != nil {
 		t.Fatalf("Reconcile hard error: %v", err)
 	}

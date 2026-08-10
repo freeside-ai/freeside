@@ -137,7 +137,7 @@ func TestActiveResourceReconcileEvictsConcludedCachesAndAllowsResumption(t *test
 		},
 		now: func() time.Time { return activeResourceTestTime },
 	}
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("open Reconcile = %v, %v", failures, err)
 	}
 	if evictions != 0 {
@@ -145,7 +145,7 @@ func TestActiveResourceReconcileEvictsConcludedCachesAndAllowsResumption(t *test
 	}
 
 	forge.closePull()
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("concluding Reconcile = %v, %v", failures, err)
 	}
 	if evictions != 1 {
@@ -176,7 +176,7 @@ func TestActiveResourceReconcileEvictsConcludedCachesAndAllowsResumption(t *test
 		t.Fatalf("post-eviction reconcile sent %d conditional requests, want 0", got-conditionalBefore)
 	}
 
-	if failures, err := reconciler.Reconcile(ctx); err != nil || len(failures) != 0 {
+	if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
 		t.Fatalf("repeated terminal Reconcile = %v, %v", failures, err)
 	}
 	if evictions != 1 {
