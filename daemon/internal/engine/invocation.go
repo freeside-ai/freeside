@@ -467,20 +467,19 @@ func (e *Engine) acceptAttempt(ctx context.Context, run domain.Run, attempt doma
 		return false, fmt.Errorf("result status %q: %w", result.Status, ErrInvocationUnsuccessful)
 	}
 
-	// Re-gated here rather than before Inspect/Collect: a verdict taken before
-	// I/O and carried across it is a verdict about the past, and the trust
-	// profile an unattended or waived admission is anchored to can change
-	// while a driver call is in flight. This is the last point the engine
-	// controls before the acceptance commits.
-	//
-	// It is still not inside the accepting transaction, which signet owns
-	// (#316): a profile retired in the remaining window is not caught here.
-	if err := e.requireAdmissible(ctx, attempt.InvocationID); err != nil {
-		return false, err
-	}
 	if err := e.signet.AcceptAgentCompletion(ctx, attempt.InvocationID, signet.AgentReply{
 		Body: result.Summary, Attachments: result.Artifacts,
-	}); err != nil {
+	}, signet.WithPreCommitGate(func(ctx context.Context, tx *store.ReadTx) error {
+		// Reading the admission re-runs the mutable reconstruction gate. Signet
+		// invokes this closure after dedup and inside the same transaction that
+		// commits a genuinely new completion, so the verdict cannot go stale
+		// before acceptance.
+		_, _, err := tx.LookupExecutionAdmission(ctx, attempt.InvocationID)
+		if err != nil {
+			return fmt.Errorf("invocation %q is no longer admissible: %w", attempt.InvocationID, err)
+		}
+		return nil
+	})); err != nil {
 		return false, fmt.Errorf("accept result: %w", err)
 	}
 	return true, nil
@@ -592,32 +591,6 @@ func (e *Engine) loadInvocationRequest(ctx context.Context, entry store.QueueEnt
 		)
 	}
 	return request, binding, nil
-}
-
-// requireAdmissible re-gates an attempt's admission before its result is
-// accepted. Reading the record runs the store's reconstruction gate, so an
-// attempt admitted under a floor policy has since raised stops here rather
-// than advancing the workflow: accepting that output would publish work
-// produced under an isolation class the operator now rejects, which is the
-// silent downgrade §5.7 refuses.
-//
-// An attempt with no admission record is left alone. Admission is configured
-// (see WithAdmission), and an attempt appended before it was, or by a build
-// that predates the record, has no audited class to re-gate; failing those
-// would wedge existing work on a contract that did not exist when it started.
-func (e *Engine) requireAdmissible(ctx context.Context, invocationID domain.InvocationID) error {
-	// Absence is a boolean here, never an error class. A refused
-	// reconstruction can itself surface as a not-found (a waived admission
-	// whose trusted profile is gone), and reading that as "no record" would
-	// accept output whose gate had explicitly failed closed.
-	err := e.store.Read(ctx, func(tx *store.ReadTx) error {
-		_, _, err := tx.LookupExecutionAdmission(ctx, invocationID)
-		return err
-	})
-	if err != nil {
-		return fmt.Errorf("invocation %q is no longer admissible: %w", invocationID, err)
-	}
-	return nil
 }
 
 // attemptRecorded reports whether the run snapshot already carries an attempt
