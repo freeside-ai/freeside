@@ -942,10 +942,17 @@ func TestDefinitiveSeedRefusalCommitsFailure(t *testing.T) {
 	); err != nil {
 		t.Fatalf("StartWithInputs: %v", err)
 	}
+	// A definitive seed refusal completes with no pending intent or result,
+	// so the pipeline goroutine deletes its own session from d.running on the
+	// way out. That delete races this read: if the goroutine wins, the entry
+	// is already gone, and its recorded outcome is durable, so there is
+	// nothing left to await before Collect.
 	d.mu.Lock()
-	done := d.running[testInvoke].done
+	sess := d.running[testInvoke]
 	d.mu.Unlock()
-	<-done
+	if sess != nil {
+		<-sess.done
+	}
 
 	result, err := d.Collect(context.Background(), testInvoke)
 	if err != nil {
