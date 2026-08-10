@@ -129,8 +129,18 @@ func TestActiveResourceRunUsesOperatorActiveCadence(t *testing.T) {
 		t.Fatal(err)
 	}
 	const (
-		defaultInterval  = 300 * time.Millisecond
-		operatorInterval = 10 * time.Millisecond
+		// The idle interval sits far above the fast one on purpose. The test
+		// asserts the loop reschedules at the operator cadence, and a timer-reset
+		// regression (scheduling defaultInterval while operator-active) is caught
+		// only if the deadline separates the two: the correct fast path concludes
+		// in well under a second, so concludeByDeadline clears it comfortably while
+		// a regression cannot resolve before defaultInterval. -race slows a pass's
+		// CPU work, not the wall-clock timer, so that separation holds under the
+		// detector; the original 150ms bound flaked only because it sat right at a
+		// pass's own work time, not because it discriminated cadence.
+		defaultInterval    = 10 * time.Second
+		operatorInterval   = 10 * time.Millisecond
+		concludeByDeadline = 3 * time.Second
 	)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -152,14 +162,16 @@ func TestActiveResourceRunUsesOperatorActiveCadence(t *testing.T) {
 		}
 	}()
 
-	// The startup pass engages the tight cadence. Three observations arrive
-	// well inside the background interval, while unchanged state coalesces to
-	// one durable fact and leaves the item version untouched.
+	// The startup pass engages the tight cadence, so several observations arrive
+	// in quick succession while unchanged state coalesces to one durable fact and
+	// leaves the item version untouched. Each must land inside concludeByDeadline:
+	// under the operator cadence they arrive within milliseconds, whereas a loop
+	// that ignored the returned interval would not tick again until defaultInterval.
 	for pass := 0; pass < 3; pass++ {
 		select {
 		case <-observed:
-		case <-time.After(defaultInterval / 2):
-			t.Fatalf("operator-active pass %d did not arrive before the idle cadence", pass+1)
+		case <-time.After(concludeByDeadline):
+			t.Fatalf("operator-active pass %d did not arrive at the fast cadence", pass+1)
 		}
 	}
 	if got := readActiveItem(t, st, item.ID); got.ItemVersion != item.ItemVersion {
@@ -171,20 +183,22 @@ func TestActiveResourceRunUsesOperatorActiveCadence(t *testing.T) {
 	}
 	assertNoActiveCompletion(t, st, item)
 
-	mergedAt := time.Now()
 	merged.Store(true)
-	deadline := mergedAt.Add(defaultInterval / 2)
+	// The merged item must be concluded within concludeByDeadline, which proves
+	// the loop actually rescheduled at the operator cadence: the concluding pass
+	// fires on the next fast tick, well under the deadline, while a loop that fell
+	// back to defaultInterval could not resolve it in time. The wide margin below
+	// the deadline keeps this robust under -race, where a pass's CPU work, not the
+	// wall-clock timer, is what slows.
+	deadline := time.Now().Add(concludeByDeadline)
 	for {
 		if got := readActiveItem(t, st, item.ID); got.Status == domain.StatusResolved {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("merged ready item was not concluded at operator speed")
+			t.Fatal("merged ready item was not concluded at the operator cadence")
 		}
 		time.Sleep(time.Millisecond)
-	}
-	if elapsed := time.Since(mergedAt); elapsed >= defaultInterval/2 {
-		t.Fatalf("completion took %s, want well inside the %s idle interval", elapsed, defaultInterval)
 	}
 
 	// Once the concluding pass releases the regime, several former tight-cadence
@@ -253,7 +267,15 @@ func TestActiveResourceRunWakesForNewReadyItem(t *testing.T) {
 	}
 
 	const (
-		defaultInterval  = 300 * time.Millisecond
+		// A wide idle interval keeps the wake-versus-idle discriminator robust
+		// under -race: the ReadyItemCreated wake fires an immediate pass, so the
+		// observation arrives in well under a second, while the idle timer would
+		// not fire for ten. The select below allows half that interval, clearing
+		// the wake comfortably while still failing if the wake were lost. -race
+		// slows a pass's CPU work, not the wall-clock timer, so the separation
+		// holds; a tight interval (a few hundred ms) would sit close enough to a
+		// pass's own work time for jitter to erase, reddening the race job.
+		defaultInterval  = 10 * time.Second
 		operatorInterval = 10 * time.Millisecond
 	)
 	ctx, cancel := context.WithCancel(t.Context())
