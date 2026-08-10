@@ -11,13 +11,12 @@ import (
 	"testing"
 )
 
-// TestOnlyRunnersImportExec statically pins the execution lens: only
-// the hardened git runner and the process room shell out. A new
-// os/exec import anywhere else in the package is a structural change
-// to the trust story and must show up as a failing guarantee, not a
-// silent widening.
-func TestOnlyRunnersImportExec(t *testing.T) {
-	allowed := map[string]bool{"gitrunner.go": true, "procroom.go": true}
+// TestOnlyProcRoomImportsExec statically pins the execution lens: git
+// plumbing goes through internal/gitrun, so only the process room shells out
+// directly. A new os/exec import anywhere else in the package is a structural
+// change to the trust story and must show up as a failing guarantee.
+func TestOnlyProcRoomImportsExec(t *testing.T) {
+	allowed := map[string]bool{"procroom.go": true}
 	sources, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +32,7 @@ func TestOnlyRunnersImportExec(t *testing.T) {
 		}
 		for _, imp := range file.Imports {
 			if imp.Path.Value == `"os/exec"` && !allowed[filepath.Base(name)] {
-				t.Errorf("%s imports os/exec; only gitrunner.go and procroom.go may shell out", name)
+				t.Errorf("%s imports os/exec; only procroom.go may shell out directly", name)
 			}
 		}
 	}

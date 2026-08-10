@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/freeside-ai/freeside/daemon/internal/gitrun"
 	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 )
 
@@ -151,19 +152,7 @@ type netRunner struct {
 // network before they enter the daemon-owned object database. The
 // remaining keys mirror the importer runner's hardening.
 func transportConfig(scheme string) []string {
-	return []string{
-		"-c", "core.hooksPath=/dev/null",
-		"-c", "core.fsmonitor=false",
-		"-c", "protocol.allow=never",
-		"-c", "protocol." + scheme + ".allow=always",
-		"-c", "core.protectHFS=true",
-		"-c", "core.protectNTFS=true",
-		"-c", "credential.helper=",
-		"-c", "http.followRedirects=false",
-		"-c", "push.followTags=false",
-		"-c", "fetch.recurseSubmodules=false",
-		"-c", "transfer.fsckObjects=true",
-	}
+	return gitrun.TransportBaseline(scheme)
 }
 
 // transportSchemeValid gates the runner to the two schemes the package
@@ -292,15 +281,21 @@ func (r *netRunner) assertPristineConfig(ctx context.Context) error {
 	return nil
 }
 
+// argv constructs the one hardened argument prefix used by every netRunner
+// execution path.
+func (r *netRunner) argv(args ...string) []string {
+	config := transportConfig(r.scheme)
+	argv := make([]string, 0, len(config)+len(args))
+	argv = append(argv, config...)
+	return append(argv, args...)
+}
+
 // run executes one unauthenticated transport-context command and
 // returns stdout and stderr. Callers never fold the streams into
 // errors; a failed invocation surfaces as *TransportGitError carrying
 // only the classified refusal.
 func (r *netRunner) run(ctx context.Context, tok *InstallationToken, args ...string) (stdout, stderr []byte, err error) {
-	argv := make([]string, 0, len(transportConfig(r.scheme))+len(args))
-	argv = append(argv, transportConfig(r.scheme)...)
-	argv = append(argv, args...)
-	cmd := exec.CommandContext(ctx, r.gitPath, argv...) //nolint:gosec // G204: fixed transport argv from daemon-validated refs and SHAs; the token travels via the child environment, never as an argument
+	cmd := exec.CommandContext(ctx, r.gitPath, r.argv(args...)...) //nolint:gosec // G204: fixed transport argv from daemon-validated refs and SHAs; the token travels via the child environment, never as an argument
 	cmd.Dir = r.dir
 	env := r.env
 	if tok != nil {
@@ -327,10 +322,7 @@ func (r *netRunner) run(ctx context.Context, tok *InstallationToken, args ...str
 // only: stdout can be candidate blob content and must never enter error
 // classification or retention.
 func (r *netRunner) runTo(ctx context.Context, stdout io.Writer, args ...string) error {
-	argv := make([]string, 0, len(transportConfig(r.scheme))+len(args))
-	argv = append(argv, transportConfig(r.scheme)...)
-	argv = append(argv, args...)
-	cmd := exec.CommandContext(ctx, r.gitPath, argv...) //nolint:gosec // G204: fixed transport argv from daemon-validated SHAs
+	cmd := exec.CommandContext(ctx, r.gitPath, r.argv(args...)...) //nolint:gosec // G204: fixed transport argv from daemon-validated SHAs
 	cmd.Dir = r.dir
 	cmd.Env = r.env
 	procbound.Bind(cmd, procbound.DefaultWaitDelay)
@@ -388,10 +380,7 @@ func (r *netRunner) interact(
 	interaction func(io.Writer, io.Reader) error,
 	args ...string,
 ) error {
-	argv := make([]string, 0, len(transportConfig(r.scheme))+len(args))
-	argv = append(argv, transportConfig(r.scheme)...)
-	argv = append(argv, args...)
-	cmd := exec.CommandContext(ctx, r.gitPath, argv...) //nolint:gosec // G204: fixed plumbing argv; validated object IDs travel over stdin
+	cmd := exec.CommandContext(ctx, r.gitPath, r.argv(args...)...) //nolint:gosec // G204: fixed plumbing argv; validated object IDs travel over stdin
 	cmd.Dir = r.dir
 	cmd.Env = r.env
 	procbound.Bind(cmd, procbound.DefaultWaitDelay)

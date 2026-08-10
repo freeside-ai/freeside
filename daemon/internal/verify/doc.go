@@ -22,6 +22,9 @@
 // options, unreadable trusted recipe, head mismatch, room failure) fail
 // closed with typed errors and no Result; policy signals accumulate as
 // Findings and never block execution.
+// Git plumbing runs through internal/gitrun's shared hardened process seam;
+// this package adds verifier-only line-ending and attribute pins and retains
+// its own error classes and sha1 requirement.
 //
 // Named residual (§5.6): candidate test code executes inside the warded
 // verifier. Running the recipe's `go test` runs the candidate's test

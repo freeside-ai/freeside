@@ -11,11 +11,10 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
-// TestOnlyGitRunnerImportsExec pins the process-boundary discipline: no
-// import package file may execute a subprocess except the single
-// hardened plumbing wrapper. A new os/exec import anywhere else is the
-// escape this test exists to catch.
-func TestOnlyGitRunnerImportsExec(t *testing.T) {
+// TestImporterDoesNotImportExec pins the process-boundary discipline: all git
+// subprocesses go through internal/gitrun. A direct os/exec import in this
+// package is the escape this test exists to catch.
+func TestImporterDoesNotImportExec(t *testing.T) {
 	sources, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
@@ -30,8 +29,8 @@ func TestOnlyGitRunnerImportsExec(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, imp := range file.Imports {
-			if imp.Path.Value == `"os/exec"` && filepath.Base(name) != "gitrunner.go" {
-				t.Errorf("%s imports os/exec; only gitrunner.go may", name)
+			if imp.Path.Value == `"os/exec"` {
+				t.Errorf("%s imports os/exec; importer git commands must use internal/gitrun", name)
 			}
 		}
 	}
