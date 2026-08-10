@@ -938,6 +938,7 @@ func isPermanentSeedCredentialError(err error) bool {
 		publish.ErrAppRegistrationMismatch,
 		publish.ErrAppVisibilityMismatch,
 		publish.ErrGrantMismatch,
+		publish.ErrTokenExpiry,
 		publish.ErrInstallationResolution,
 		publish.ErrNoInstallation,
 		publish.ErrAmbiguousInstallation,
