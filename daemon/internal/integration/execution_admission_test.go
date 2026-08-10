@@ -544,6 +544,108 @@ func TestAcceptanceRegatesTheAdmission(t *testing.T) {
 	}
 }
 
+// TestAcceptanceRejectsAProfileSupersededBeforeCommit closes the last
+// acceptance race: the profile changes after dispatch but before Signet's
+// accepting transaction, so the transaction must refuse without consuming
+// the completion or advancing its conversation and item.
+func TestAcceptanceRejectsAProfileSupersededBeforeCommit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := openUnattendedFixture(t)
+
+	f.seed(t)
+	f.approve(t)
+	feedback := f.openFeedback(t)
+	invocationID := f.discuss(t, feedback)
+	f.driver.Script(invocationID, fake.StageScript{
+		RunningInspects: 1,
+		Outcome:         fake.OutcomeComplete,
+		Result: exec.StageResult{
+			Summary: "in flight when the trust profile was superseded",
+		},
+	})
+	started, err := f.engine.Reconcile(ctx)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if started.InvocationsStarted != 1 || started.ResultsAccepted != 0 {
+		t.Fatalf("dispatch pass = %#v, want one start and no acceptance", started)
+	}
+	beforeItem, err := f.signet.GetAttentionItem(ctx, domain.ItemID("feedback-"+string(testRunID)))
+	if err != nil {
+		t.Fatalf("get feedback before refusal: %v", err)
+	}
+	beforeRevision, err := f.store.ServerState(ctx)
+	if err != nil {
+		t.Fatalf("ServerState before refusal: %v", err)
+	}
+
+	current := unattendedTrustProfile(t)
+	superseding, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo:                       current.Repo,
+		RepositoryID:               current.RepositoryID,
+		PRExecution:                current.PRExecution,
+		CandidateAutomationChanges: current.CandidateAutomationChanges,
+		PRGitHubTokenPermissions:   current.PRGitHubTokenPermissions,
+		AllowOIDC:                  current.AllowOIDC,
+		AllowEnvironmentSecrets:    current.AllowEnvironmentSecrets,
+		AllowSecretBearingPRJobs:   current.AllowSecretBearingPRJobs,
+		AllowSelfHostedCI:          current.AllowSelfHostedCI,
+		AllowPullRequestTarget:     current.AllowPullRequestTarget,
+		AllowReusableWorkflows:     current.AllowReusableWorkflows,
+		AllowPackagePublishing:     current.AllowPackagePublishing,
+		AllowArtifactConsumers:     current.AllowArtifactConsumers,
+		CommitPlan:                 current.CommitPlan,
+		MessageRuleset:             current.MessageRuleset,
+		WorkflowAuditDigest:        current.WorkflowAuditDigest,
+		Review: domain.ReviewSettings{
+			Mode: current.Review.Mode, ConfigDigest: "sha256:review-config-superseding",
+		},
+		ProtectedPaths: current.ProtectedPaths,
+	})
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile: %v", err)
+	}
+	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordTrustProfile(ctx, superseding, admittedAt.Add(time.Minute))
+	}); err != nil {
+		t.Fatalf("activate superseding profile: %v", err)
+	}
+
+	if _, err := f.engine.Reconcile(ctx); !errors.Is(err, domain.ErrTrustProfileSuperseded) {
+		t.Fatalf("acceptance after profile supersession = %v, want %v",
+			err, domain.ErrTrustProfileSuperseded)
+	}
+	afterRevision, err := f.store.ServerState(ctx)
+	if err != nil {
+		t.Fatalf("ServerState after refusal: %v", err)
+	}
+	if afterRevision != beforeRevision {
+		t.Fatalf("refused acceptance changed server state %+v → %+v", beforeRevision, afterRevision)
+	}
+	afterItem, err := f.signet.GetAttentionItem(ctx, beforeItem.Item.ID)
+	if err != nil {
+		t.Fatalf("get feedback after refusal: %v", err)
+	}
+	if afterItem.Item.ItemVersion != beforeItem.Item.ItemVersion {
+		t.Fatalf("refused acceptance moved item version %d → %d",
+			beforeItem.Item.ItemVersion, afterItem.Item.ItemVersion)
+	}
+	conversation, err := f.signet.GetConversation(ctx, *afterItem.Item.ConversationID)
+	if err != nil {
+		t.Fatalf("get conversation after refusal: %v", err)
+	}
+	if got := len(conversation.Conversation.Messages); got != 1 {
+		t.Fatalf("refused acceptance left %d messages, want the user turn alone", got)
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetInbox(ctx, string(invocationID))
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("refused acceptance inbox = %v, want %v", err, store.ErrNotFound)
+	}
+}
+
 // TestEncryptedAdmissionDoesNotSurfaceRetiredWaiverPosture proves the
 // encrypted checkpoint gate replaces, rather than silently perpetuates, the
 // temporary plaintext-backup exception.

@@ -630,6 +630,228 @@ func TestCompletionRedeliveryConvergesBeforeAttachmentChecks(t *testing.T) {
 	}
 }
 
+// TestCompletionPreCommitGateRollsBack proves a refused gate leaves the
+// completion wholly retryable: the inbox dedup, conversation append, item
+// replacement, and server revision all roll back together.
+func TestCompletionPreCommitGateRollsBack(t *testing.T) {
+	ctx := context.Background()
+	f := newConversationFixture(t)
+
+	if _, err := f.service.Submit(ctx, f.discussCommand("cmd-d1", "question", nil, 1, 1)); err != nil {
+		t.Fatalf("Submit(discuss): %v", err)
+	}
+	driver := fake.NewStageDriver()
+	collected := completeInvocation(t, f, driver, "inv-cmd-d1", "answer", nil)
+	before := f.revision(t)
+	gateRefusal := errors.New("profile retired")
+	err := f.service.AcceptAgentCompletion(
+		ctx,
+		"inv-cmd-d1",
+		signet.AgentReply{Body: collected.Summary},
+		signet.WithPreCommitGate(func(context.Context, *store.ReadTx) error { return gateRefusal }),
+	)
+	if !errors.Is(err, gateRefusal) {
+		t.Fatalf("refused completion = %v, want gate refusal", err)
+	}
+	if after := f.revision(t); after != before {
+		t.Fatalf("refused completion moved the revision %d → %d", before, after)
+	}
+	snapshot := f.conversationSnapshot(t, "conv-item-d")
+	if got := len(snapshot.Conversation.Messages); got != 1 {
+		t.Fatalf("refused completion left %d messages, want the user turn alone", got)
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.GetInbox(ctx, "inv-cmd-d1"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("refused completion inbox = %v, want %v", err, store.ErrNotFound)
+		}
+		item, err := tx.GetAttentionItem(ctx, f.item.ID)
+		if err != nil {
+			return err
+		}
+		if item.ItemVersion != 2 {
+			t.Errorf("refused completion item version = %d, want 2", item.ItemVersion)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read refused state: %v", err)
+	}
+
+	if err := f.service.AcceptAgentCompletion(
+		ctx,
+		"inv-cmd-d1",
+		signet.AgentReply{Body: collected.Summary},
+		signet.WithPreCommitGate(func(context.Context, *store.ReadTx) error { return nil }),
+	); err != nil {
+		t.Fatalf("retry after gate recovery: %v", err)
+	}
+	if got := len(f.conversationSnapshot(t, "conv-item-d").Conversation.Messages); got != 2 {
+		t.Fatalf("retried completion left %d messages, want user and agent turns", got)
+	}
+}
+
+// TestCompletionDedupPrecedesPreCommitGate pins replay convergence: once the
+// completion committed, later policy drift cannot make its redelivery fail.
+func TestCompletionDedupPrecedesPreCommitGate(t *testing.T) {
+	ctx := context.Background()
+	f := newConversationFixture(t)
+
+	if _, err := f.service.Submit(ctx, f.discussCommand("cmd-d1", "question", nil, 1, 1)); err != nil {
+		t.Fatalf("Submit(discuss): %v", err)
+	}
+	driver := fake.NewStageDriver()
+	collected := completeInvocation(t, f, driver, "inv-cmd-d1", "answer", nil)
+	reply := signet.AgentReply{Body: collected.Summary}
+	if err := f.service.AcceptAgentCompletion(ctx, "inv-cmd-d1", reply); err != nil {
+		t.Fatalf("AcceptAgentCompletion: %v", err)
+	}
+	before := f.revision(t)
+	gateCalls := 0
+	err := f.service.AcceptAgentCompletion(
+		ctx,
+		"inv-cmd-d1",
+		reply,
+		signet.WithPreCommitGate(func(context.Context, *store.ReadTx) error {
+			gateCalls++
+			return errors.New("profile retired")
+		}),
+	)
+	if err != nil {
+		t.Fatalf("redelivery after policy drift = %v, want converging no-op", err)
+	}
+	if gateCalls != 0 {
+		t.Fatalf("redelivery called the gate %d times, want 0", gateCalls)
+	}
+	if after := f.revision(t); after != before {
+		t.Fatalf("redelivery moved the revision %d → %d", before, after)
+	}
+}
+
+// TestCompletionGateSerializesWithTrustProfileActivation proves the gate's
+// read is part of the accepting write transaction, not a preflight read whose
+// verdict can go stale before commit. A profile activation started after the
+// gate reads P1 cannot commit until that acceptance releases its transaction.
+func TestCompletionGateSerializesWithTrustProfileActivation(t *testing.T) {
+	ctx := context.Background()
+	f := newConversationFixture(t)
+	profile1 := completionTrustProfile(t, "sha256:review-config-1")
+	profile2 := completionTrustProfile(t, "sha256:review-config-2")
+	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordTrustProfile(ctx, profile1, *f.now)
+	}); err != nil {
+		t.Fatalf("record profile 1: %v", err)
+	}
+
+	if _, err := f.service.Submit(ctx, f.discussCommand("cmd-d1", "question", nil, 1, 1)); err != nil {
+		t.Fatalf("Submit(discuss): %v", err)
+	}
+	driver := fake.NewStageDriver()
+	collected := completeInvocation(t, f, driver, "inv-cmd-d1", "answer", nil)
+	gateRead := make(chan domain.Digest, 1)
+	releaseGate := make(chan struct{})
+	defer func() {
+		select {
+		case <-releaseGate:
+		default:
+			close(releaseGate)
+		}
+	}()
+	acceptDone := make(chan error, 1)
+	go func() {
+		acceptDone <- f.service.AcceptAgentCompletion(
+			ctx,
+			"inv-cmd-d1",
+			signet.AgentReply{Body: collected.Summary},
+			signet.WithPreCommitGate(func(ctx context.Context, tx *store.ReadTx) error {
+				if _, err := tx.GetInbox(ctx, "inv-cmd-d1"); err != nil {
+					return fmt.Errorf("gate cannot see provisional inbox row: %w", err)
+				}
+				profile, err := tx.LatestTrustProfile(ctx, profile1.Repo)
+				if err != nil {
+					return err
+				}
+				gateRead <- profile.ProfileDigest
+				<-releaseGate
+				return nil
+			}),
+		)
+	}()
+
+	select {
+	case got := <-gateRead:
+		if got != profile1.ProfileDigest {
+			t.Fatalf("gate read profile %q, want %q", got, profile1.ProfileDigest)
+		}
+	case err := <-acceptDone:
+		t.Fatalf("acceptance ended before reaching the gate barrier: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("acceptance did not reach the pre-commit gate")
+	}
+	activationStarted := make(chan struct{})
+	activationDone := make(chan error, 1)
+	go func() {
+		close(activationStarted)
+		activationDone <- f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			return tx.RecordTrustProfile(ctx, profile2, f.now.Add(time.Minute))
+		})
+	}()
+	<-activationStarted
+	select {
+	case err := <-activationDone:
+		t.Fatalf("profile activation completed while acceptance held its transaction: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseGate)
+	select {
+	case err := <-acceptDone:
+		if err != nil {
+			t.Fatalf("AcceptAgentCompletion: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("acceptance did not commit after releasing the gate")
+	}
+	select {
+	case err := <-activationDone:
+		if err != nil {
+			t.Fatalf("activate profile 2: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("profile activation did not proceed after acceptance committed")
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		current, err := tx.LatestTrustProfile(ctx, profile1.Repo)
+		if err != nil {
+			return err
+		}
+		if current.ProfileDigest != profile2.ProfileDigest {
+			t.Errorf("current profile = %q, want %q", current.ProfileDigest, profile2.ProfileDigest)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read current profile: %v", err)
+	}
+}
+
+func completionTrustProfile(t *testing.T, reviewConfig domain.Digest) domain.AutomationTrustProfile {
+	t.Helper()
+	profile, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: "freeside-ai/candidate-repo", RepositoryID: 424242,
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
+		WorkflowAuditDigest:        "sha256:workflow-audit",
+		Review: domain.ReviewSettings{
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: reviewConfig,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAutomationTrustProfile: %v", err)
+	}
+	return profile
+}
+
 // TestCompletionAfterTerminalDecisionAppendsWithoutReplacement: the user may
 // conclude the superseding item (stop/approve stay offered) while the reply
 // is in flight. The late completion still lands in the thread (an inbound

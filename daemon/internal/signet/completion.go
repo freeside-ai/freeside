@@ -31,6 +31,27 @@ type AgentReply struct {
 // revision or advancing the workflow a second time.
 var errCompletionReplay = errors.New("agent completion already accepted")
 
+type acceptOptions struct {
+	preCommitGate func(context.Context, *store.ReadTx) error
+}
+
+// AcceptOption configures one completion acceptance without coupling its
+// caller-specific policy to the Service's construction.
+type AcceptOption func(*acceptOptions) error
+
+// WithPreCommitGate runs gate inside the transaction that accepts a genuinely
+// new completion. The gate receives only the transaction's read surface and
+// runs after inbox dedup but before any other acceptance check or write.
+func WithPreCommitGate(gate func(context.Context, *store.ReadTx) error) AcceptOption {
+	return func(opts *acceptOptions) error {
+		if gate == nil {
+			return errors.New("nil pre-commit gate")
+		}
+		opts.preCommitGate = gate
+		return nil
+	}
+}
+
 // AcceptAgentCompletion commits one agent completion (plan §5.14 agent
 // completion semantics): blobs are finalized and fsynced before this is
 // called (BlobStore.Put's contract; presence is re-verified here), then one
@@ -39,9 +60,23 @@ var errCompletionReplay = errors.New("agent completion already accepted")
 // transaction leaves only harmless orphan blobs. A duplicate delivery of the
 // same invocation's completion is a no-op converging on the first accepted
 // result (§5.14 tests 5 and 6).
-func (s *Service) AcceptAgentCompletion(ctx context.Context, invocationID domain.InvocationID, reply AgentReply) error {
+func (s *Service) AcceptAgentCompletion(
+	ctx context.Context,
+	invocationID domain.InvocationID,
+	reply AgentReply,
+	opts ...AcceptOption,
+) error {
 	if invocationID == "" {
 		return fmt.Errorf("accept completion: invocation id: %w", domain.ErrEmptyID)
+	}
+	options := acceptOptions{}
+	for _, opt := range opts {
+		if opt == nil {
+			return fmt.Errorf("accept completion %q: nil option", invocationID)
+		}
+		if err := opt(&options); err != nil {
+			return fmt.Errorf("accept completion %q: option: %w", invocationID, err)
+		}
 	}
 
 	payload, err := json.Marshal(struct {
@@ -63,6 +98,11 @@ func (s *Service) AcceptAgentCompletion(ctx context.Context, invocationID domain
 		}
 		if !inserted {
 			return errCompletionReplay
+		}
+		if options.preCommitGate != nil {
+			if err := options.preCommitGate(ctx, &tx.ReadTx); err != nil {
+				return err
+			}
 		}
 
 		// Attachment presence is judged after the dedup, mirroring the
