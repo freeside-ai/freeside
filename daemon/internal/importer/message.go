@@ -31,6 +31,21 @@ var allCommitMessageFindingKinds = []commitMessageFindingKind{
 	messageFindingSpoofedTrailer,
 }
 
+// valid is the validity predicate; as a predicate it uses default.
+func (k commitMessageFindingKind) valid() bool {
+	switch k {
+	case messageFindingOverCap,
+		messageFindingEmpty,
+		messageFindingControl,
+		messageFindingCloseDirective,
+		messageFindingSkipDirective,
+		messageFindingSpoofedTrailer:
+		return true
+	default:
+		return false
+	}
+}
+
 type commitMessageFinding struct {
 	GroupOrdinal int
 	Kind         commitMessageFindingKind
