@@ -1,4 +1,4 @@
-package claude
+package stage
 
 import (
 	"bytes"
@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
@@ -32,6 +34,148 @@ var (
 	testAuthID  = domain.AuthIdentityID("auth-claude-owner")
 	testAuthVol = "claude-owner-credentials"
 )
+
+const (
+	maxPromptBytes          = 31 << 10
+	linuxMaxArgumentBytes   = 128 << 10
+	testPrepareFailedStatus = 87
+	agentUID                = "1001"
+	workspaceDir            = "/workspace"
+	transcriptPath          = workspaceDir + "/.freeside/evidence/agent-transcript.jsonl"
+	writerOutcomePath       = workspaceDir + "/.freeside/evidence/.control/writer-outcome"
+)
+
+var testCredentialMountPolicy = CredentialMountPolicy{
+	Target: "/var/lib/freeside/test-token", Manifest: ward.CredentialManifestSetupToken,
+}
+
+type testVolumeLookup interface {
+	AuthStoreVolume(context.Context, domain.AuthIdentityID) (string, error)
+}
+
+type testProvider struct {
+	volumes            testVolumeLookup
+	handoffInputMutate func(*ProviderHandoffInput)
+	handoffMutate      func(*ward.HandoffSpec)
+	runIDFor           func(domain.InvocationID) string
+	workspaceFor       func(domain.InvocationID) string
+}
+
+func testRunIDFor(id domain.InvocationID) string {
+	sum := sha256.Sum256([]byte(id))
+	return "t" + hex.EncodeToString(sum[:])[:31]
+}
+
+func testWorkspaceFor(id domain.InvocationID) string {
+	return ward.WorkspaceRef(testRunIDFor(id))
+}
+
+func (p testProvider) RunID(id domain.InvocationID) string {
+	if p.runIDFor != nil {
+		return p.runIDFor(id)
+	}
+	return testRunIDFor(id)
+}
+
+func (p testProvider) Workspace(id domain.InvocationID) string {
+	if p.workspaceFor != nil {
+		return p.workspaceFor(id)
+	}
+	return testWorkspaceFor(id)
+}
+
+func (testProvider) PrepareFailedStatus() int { return testPrepareFailedStatus }
+
+func (testProvider) RenderPrompt(inputs ProviderPromptInputs) (string, error) {
+	return renderPromptParts(durableInputs(inputs))
+}
+
+func renderPrompt(inputs exec.StageInputs) (string, error) {
+	return (testProvider{}).RenderPrompt(ProviderPromptInputs{
+		Specification: inputs.Specification().Bytes(),
+		PromptPackage: inputs.PromptPackage().Bytes(),
+		Policy:        inputs.Policy().Bytes(),
+	})
+}
+
+func renderPromptParts(inputs durableInputs) (string, error) {
+	for _, part := range []struct {
+		name string
+		body []byte
+	}{
+		{"prompt package", inputs.PromptPackage},
+		{"specification", inputs.Specification},
+		{"policy", inputs.Policy},
+	} {
+		if !utf8.Valid(part.body) {
+			return "", fmt.Errorf("%w: %s is not valid UTF-8", ErrUnsupportedStart, part.name)
+		}
+	}
+	prompt := string(inputs.PromptPackage) + "\n\n--- Approved work item specification ---\n\n" +
+		string(inputs.Specification) + "\n\n--- Resolved per-run policy ---\n\n" +
+		string(inputs.Policy) + "\n"
+	if len(prompt) > maxPromptBytes {
+		return "", fmt.Errorf("%w: rendered prompt is %d bytes, limit %d",
+			ErrUnsupportedStart, len(prompt), maxPromptBytes)
+	}
+	return prompt, nil
+}
+
+func agentCommand(prompt, _ string, _ domain.InvocationID, preparation []string) []string {
+	command := "setpriv --reuid=" + agentUID +
+		" --bounding-set=-all --no-new-privs test-agent " + prompt + " > " + writerOutcomePath
+	if len(preparation) > 0 {
+		command = "prepare_status=0 " + strings.Join(preparation, " ") + " " + command
+	}
+	return []string{"sh", "-c", command}
+}
+
+func (p testProvider) HandoffSpec(
+	ctx context.Context, in ProviderHandoffInput,
+) (ward.HandoffSpec, error) {
+	if p.handoffInputMutate != nil {
+		p.handoffInputMutate(&in)
+	}
+	spec := in.Spec
+	if spec.CredentialMode != domain.CredentialSubscriptionContained ||
+		spec.EgressProfile != domain.EgressProviderOnly || spec.AuthIdentityID == "" ||
+		spec.Workspace != p.Workspace(in.InvocationID) {
+		return ward.HandoffSpec{}, ErrUnsupportedStart
+	}
+	volume := testAuthVol
+	if p.volumes != nil {
+		var err error
+		volume, err = p.volumes.AuthStoreVolume(ctx, spec.AuthIdentityID)
+		if err != nil {
+			return ward.HandoffSpec{}, err
+		}
+	}
+	hs := ward.HandoffSpec{
+		RunID: in.RunID,
+		Seed:  ward.WorkspaceSeed{Mode: ward.SeedBaseCheckout, SourceDir: in.Seed, Base: spec.Base},
+		Agent: ward.AgentSpec{
+			Image: string(spec.ImageRef), Command: agentCommand(in.Prompt, "session", in.InvocationID, in.Preparation),
+			Env: []string{
+				"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.directory",
+				"GIT_CONFIG_VALUE_0=" + workspaceDir,
+			},
+			EgressProfile: spec.EgressProfile, OutcomeMarkerPath: writerOutcomePath,
+			LaunchState: ward.LaunchStateClaudeClean,
+			CredentialMounts: []ward.CredentialMount{{
+				Volume: volume, Target: "/var/lib/freeside/test-token",
+				Manifest: ward.CredentialManifestSetupToken,
+			}},
+			VendorInstructions: in.Instructions,
+		},
+		AuthStoreLease: &ward.AuthStoreLeaseClaim{
+			AuthIdentityID: spec.AuthIdentityID, Holder: in.InvocationID,
+		},
+	}
+	if p.handoffMutate != nil {
+		p.handoffMutate(&hs)
+	}
+	return hs, nil
+}
 
 // stubGate records the specs it is handed and returns scripted outcomes.
 type stubGate struct {
@@ -321,7 +465,7 @@ func testStartSpec() exec.StartSpec {
 		InputDigest:  domain.Digest("sha256:" + strings.Repeat("11", 32)),
 		SpecDigest:   domain.Digest("sha256:" + strings.Repeat("22", 32)),
 		PolicyDigest: domain.Digest("sha256:" + strings.Repeat("33", 32)),
-		Base:         testBase, Workspace: WorkspaceFor(testInvoke), ImageRef: testImage,
+		Base:         testBase, Workspace: testWorkspaceFor(testInvoke), ImageRef: testImage,
 		CredentialMode: domain.CredentialSubscriptionContained,
 		EgressProfile:  domain.EgressProviderOnly,
 		AuthIdentityID: testAuthID,
@@ -435,46 +579,6 @@ func TestOversizedRenderedPromptCommitsFailureWithoutWedgingDispatch(t *testing.
 	}
 }
 
-func TestPromptLimitLeavesLinuxArgumentHeadroom(t *testing.T) {
-	t.Parallel()
-	// Apostrophes are shellQuote's worst case: each input byte expands to the
-	// four-byte sequence that closes, escapes, and reopens the quoted word.
-	command := agentCommand(
-		strings.Repeat("'", maxPromptBytes),
-		"00000000-0000-4000-8000-000000000000",
-		"inv-headroom",
-		nil,
-	)[2]
-	if len(command) >= linuxMaxArgumentBytes {
-		t.Fatalf("max prompt produces %d-byte sh argument, Linux limit is %d",
-			len(command), linuxMaxArgumentBytes)
-	}
-}
-
-func TestRenderPromptRejectsNonUTF8Inputs(t *testing.T) {
-	t.Parallel()
-	for _, field := range []struct {
-		name   string
-		mutate func(*durableInputs)
-	}{
-		{"prompt package", func(in *durableInputs) { in.PromptPackage = []byte{0xff} }},
-		{"specification", func(in *durableInputs) { in.Specification = []byte{0xff} }},
-		{"policy", func(in *durableInputs) { in.Policy = []byte{0xff} }},
-	} {
-		t.Run(field.name, func(t *testing.T) {
-			inputs := durableInputs{
-				PromptPackage: []byte("prompt"),
-				Specification: []byte("specification"),
-				Policy:        []byte("policy"),
-			}
-			field.mutate(&inputs)
-			if _, err := renderPromptParts(inputs); !errors.Is(err, ErrUnsupportedStart) {
-				t.Fatalf("renderPromptParts = %v, want ErrUnsupportedStart", err)
-			}
-		})
-	}
-}
-
 // stubArtifacts records what the driver persisted, so a test can assert that
 // a result names only artifacts that were actually stored.
 type stubArtifacts struct {
@@ -517,13 +621,15 @@ func newTestDriver(t *testing.T, gate *stubGate, exports *stubExports) *Driver {
 	t.Helper()
 	root := t.TempDir()
 	d, err := New(Config{
-		Lifetime: context.Background(),
-		Dir:      filepath.Join(root, "driver"), SeedRoot: filepath.Join(root, "seeds"),
+		ErrorPrefix: "test driver", DisplayName: "Test",
+		Provider:        testProvider{volumes: stubVolumes{volume: testAuthVol}},
+		CredentialMount: testCredentialMountPolicy,
+		Lifetime:        context.Background(),
+		Dir:             filepath.Join(root, "driver"), SeedRoot: filepath.Join(root, "seeds"),
 		ExportRoot: filepath.Clean(os.TempDir()),
 		Gate:       gate, Seeder: stubSeeder{}, Exports: exports, Outcomes: exports,
 		Authority: stubAuthority{},
 		Artifacts: newStubArtifacts(),
-		Volumes:   stubVolumes{volume: testAuthVol},
 		Now:       func() time.Time { return fixedNow },
 	})
 	if err != nil {
@@ -539,14 +645,16 @@ func newPreparingTestDriver(t *testing.T) *Driver {
 	t.Helper()
 	root := t.TempDir()
 	d, err := New(Config{
-		Lifetime: context.Background(),
-		Dir:      filepath.Join(root, "driver"), SeedRoot: filepath.Join(root, "seeds"),
+		ErrorPrefix: "test driver", DisplayName: "Test",
+		Provider:        testProvider{volumes: stubVolumes{volume: testAuthVol}},
+		CredentialMount: testCredentialMountPolicy,
+		Lifetime:        context.Background(),
+		Dir:             filepath.Join(root, "driver"), SeedRoot: filepath.Join(root, "seeds"),
 		ExportRoot: filepath.Clean(os.TempDir()),
 		Gate:       &stubGate{}, Seeder: stubSeeder{},
 		Exports: newStubExports(), Outcomes: newStubExports(),
 		Authority:   stubAuthority{},
 		Artifacts:   newStubArtifacts(),
-		Volumes:     stubVolumes{volume: testAuthVol},
 		Now:         func() time.Time { return fixedNow },
 		Preparation: []string{projectimage.PreparationPath},
 	})
@@ -554,6 +662,23 @@ func newPreparingTestDriver(t *testing.T) *Driver {
 		t.Fatalf("New: %v", err)
 	}
 	return d
+}
+
+func TestProviderRunIDRefusesTraversalBeforeIntentRead(t *testing.T) {
+	t.Parallel()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	escaped := filepath.Join(filepath.Dir(d.dir), "neighbor.json")
+	if err := os.WriteFile(escaped, []byte("{"), 0o600); err != nil {
+		t.Fatalf("write neighboring fixture: %v", err)
+	}
+	d.provider = testProvider{runIDFor: func(domain.InvocationID) string {
+		return "../neighbor"
+	}}
+
+	err := d.StartWithInputs(context.Background(), testInvoke, testStartSpec(), nil)
+	if !errors.Is(err, ErrUnsupportedStart) {
+		t.Fatalf("StartWithInputs error = %v, want ErrUnsupportedStart", err)
+	}
 }
 
 // New is a trust boundary: the preparation argv reaches the root launch
@@ -565,14 +690,16 @@ func TestNewRejectsUnapprovedPreparation(t *testing.T) {
 	root := t.TempDir()
 	base := func() Config {
 		return Config{
-			Lifetime: context.Background(),
-			Dir:      filepath.Join(root, "driver"), SeedRoot: filepath.Join(root, "seeds"),
+			ErrorPrefix: "test driver", DisplayName: "Test",
+			Provider:        testProvider{volumes: stubVolumes{volume: testAuthVol}},
+			CredentialMount: testCredentialMountPolicy,
+			Lifetime:        context.Background(),
+			Dir:             filepath.Join(root, "driver"), SeedRoot: filepath.Join(root, "seeds"),
 			ExportRoot: filepath.Clean(os.TempDir()),
 			Gate:       &stubGate{}, Seeder: stubSeeder{},
 			Exports: newStubExports(), Outcomes: newStubExports(),
 			Authority: stubAuthority{},
 			Artifacts: newStubArtifacts(),
-			Volumes:   stubVolumes{volume: testAuthVol},
 			Now:       func() time.Time { return fixedNow },
 		}
 	}
@@ -602,6 +729,80 @@ func TestNewRejectsUnapprovedPreparation(t *testing.T) {
 	}
 }
 
+func TestNewRejectsUnapprovedCredentialMountPolicy(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	base := func() Config {
+		return Config{
+			ErrorPrefix: "test driver", DisplayName: "Test",
+			Provider:        testProvider{volumes: stubVolumes{volume: testAuthVol}},
+			CredentialMount: testCredentialMountPolicy,
+			Lifetime:        context.Background(),
+			Dir:             filepath.Join(root, "driver"), SeedRoot: filepath.Join(root, "seeds"),
+			ExportRoot: filepath.Clean(os.TempDir()),
+			Gate:       &stubGate{}, Seeder: stubSeeder{},
+			Exports: newStubExports(), Outcomes: newStubExports(),
+			Authority: stubAuthority{}, Artifacts: newStubArtifacts(),
+			Now: func() time.Time { return fixedNow },
+		}
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*CredentialMountPolicy)
+	}{
+		{"relative target", func(p *CredentialMountPolicy) { p.Target = "relative" }},
+		{"comma target", func(p *CredentialMountPolicy) { p.Target += ",readonly" }},
+		{"control target", func(p *CredentialMountPolicy) { p.Target += "\nreadonly" }},
+		{"invalid manifest", func(p *CredentialMountPolicy) { p.Manifest = "future" }},
+		{"writable", func(p *CredentialMountPolicy) { p.Writable = true }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := base()
+			tt.mutate(&cfg.CredentialMount)
+			if _, err := New(cfg); err == nil {
+				t.Fatal("New accepted an unapproved credential mount policy")
+			}
+		})
+	}
+}
+
+func TestNewOrdersProviderValidationWithExistingConfigChecks(t *testing.T) {
+	t.Parallel()
+	providerErr := errors.New("nil provider credential resolver")
+	valid := func() Config {
+		root := t.TempDir()
+		return Config{
+			ErrorPrefix: "test driver", DisplayName: "Test",
+			Provider:            testProvider{},
+			CredentialMount:     testCredentialMountPolicy,
+			ProviderConfigError: providerErr,
+			Lifetime:            context.Background(),
+			Dir:                 filepath.Join(root, "driver"),
+			SeedRoot:            filepath.Join(root, "seeds"),
+			ExportRoot:          filepath.Clean(os.TempDir()),
+			Gate:                &stubGate{},
+			Seeder:              stubSeeder{},
+			Exports:             newStubExports(),
+			Outcomes:            newStubExports(),
+			Authority:           stubAuthority{},
+			Artifacts:           newStubArtifacts(),
+			Now:                 func() time.Time { return fixedNow },
+		}
+	}
+
+	cfg := valid()
+	if _, err := New(cfg); !errors.Is(err, providerErr) {
+		t.Fatalf("New provider validation = %v, want provider error", err)
+	}
+	cfg = valid()
+	cfg.Lifetime = nil
+	if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "nil lifetime") {
+		t.Fatalf("New with nil lifetime and invalid provider = %v, want lifetime first", err)
+	}
+}
+
 // The two Seeder methods must not collapse into one call. Ward's observer
 // proves the workspace's raw worktree against HEAD, so seeding from the
 // repository-only shape leaves every tracked path missing, reports the
@@ -613,14 +814,16 @@ func TestWorkspaceSeedFetchesAMaterializedWorktree(t *testing.T) {
 	root := t.TempDir()
 	seeder := &recordingSeeder{}
 	d, err := New(Config{
-		Lifetime: context.Background(),
-		Dir:      filepath.Join(root, "driver"), SeedRoot: filepath.Join(root, "seeds"),
+		ErrorPrefix: "test driver", DisplayName: "Test",
+		Provider:        testProvider{volumes: stubVolumes{volume: testAuthVol}},
+		CredentialMount: testCredentialMountPolicy,
+		Lifetime:        context.Background(),
+		Dir:             filepath.Join(root, "driver"), SeedRoot: filepath.Join(root, "seeds"),
 		ExportRoot: filepath.Clean(os.TempDir()),
 		Gate:       &stubGate{}, Seeder: seeder,
 		Exports: newStubExports(), Outcomes: newStubExports(),
 		Authority: stubAuthority{},
 		Artifacts: newStubArtifacts(),
-		Volumes:   stubVolumes{volume: testAuthVol},
 		Now:       func() time.Time { return fixedNow },
 	})
 	if err != nil {
@@ -629,8 +832,8 @@ func TestWorkspaceSeedFetchesAMaterializedWorktree(t *testing.T) {
 	t.Cleanup(func() { _ = d.Close(context.Background()) })
 
 	in := intent{
-		InvocationID: testInvoke, RunID: RunIDFor(testInvoke),
-		Spec: testStartSpec(), Seed: filepath.Join(root, "seeds", RunIDFor(testInvoke)),
+		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke),
+		Spec: testStartSpec(), Seed: filepath.Join(root, "seeds", testRunIDFor(testInvoke)),
 	}
 	if err := d.seedBase(context.Background(), in); err != nil {
 		t.Fatalf("seedBase: %v", err)
@@ -716,7 +919,7 @@ func TestCloseDrainsEverySessionAfterCancellationAmendmentFailure(t *testing.T) 
 	ids := []domain.InvocationID{testInvoke, "inv-implement-run-2"}
 	for _, id := range ids {
 		spec := testStartSpec()
-		spec.Workspace = WorkspaceFor(id)
+		spec.Workspace = testWorkspaceFor(id)
 		inputs := stageInputs(t, &spec)
 		if err := d.StartWithInputs(
 			context.Background(),
@@ -903,7 +1106,7 @@ func TestPostSeedAuthStoreCancellationPreservesSeedingForRecovery(t *testing.T) 
 	volumes := &secondLookupRefusingVolumes{
 		err: context.Canceled, entered: make(chan struct{}), release: make(chan struct{}),
 	}
-	d.volumes = volumes
+	d.provider = testProvider{volumes: volumes}
 	spec := testStartSpec()
 	inputs := stageInputs(t, &spec)
 	if err := d.StartWithInputs(context.Background(), testInvoke, spec,
@@ -1014,8 +1217,8 @@ func TestHandoffSpecBindsContainmentAndInstructions(t *testing.T) {
 		t.Fatalf("render prompt: %v", err)
 	}
 	in := intent{
-		InvocationID: testInvoke, RunID: RunIDFor(testInvoke), Phase: phaseRunning,
-		Spec: spec, Seed: filepath.Join(d.seedRoot, RunIDFor(testInvoke)),
+		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
+		Spec: spec, Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)),
 		Prompt: prompt, Inputs: durableInputsFrom(inputs),
 		Instructions: instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
 	}
@@ -1081,6 +1284,195 @@ func TestHandoffSpecBindsContainmentAndInstructions(t *testing.T) {
 	}
 }
 
+func testHandoffIntent(t *testing.T, d *Driver) intent {
+	t.Helper()
+	spec := testStartSpec()
+	inputs := stageInputs(t, &spec)
+	instructions, err := ward.VendorInstructionsFromStageInputs(inputs)
+	if err != nil {
+		t.Fatalf("vendor instructions: %v", err)
+	}
+	prompt, err := renderPrompt(inputs)
+	if err != nil {
+		t.Fatalf("render prompt: %v", err)
+	}
+	return intent{
+		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
+		Spec: spec, Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)),
+		Prompt: prompt, Inputs: durableInputsFrom(inputs), Instructions: instructions,
+		RecordedAt: fixedNow, CommitDate: fixedNow,
+	}
+}
+
+func TestHandoffSpecRefusesProviderRetargeting(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		mutate func(*ward.HandoffSpec)
+	}{
+		{"run ID", func(hs *ward.HandoffSpec) { hs.RunID = "different-run" }},
+		{"seed mode", func(hs *ward.HandoffSpec) {
+			hs.Seed = ward.WorkspaceSeed{Mode: ward.SeedBlank}
+		}},
+		{"seed source", func(hs *ward.HandoffSpec) { hs.Seed.SourceDir = "/tmp/different-seed" }},
+		{"base repository", func(hs *ward.HandoffSpec) { hs.Seed.Base.Repo = "other/repo" }},
+		{"base repository ID", func(hs *ward.HandoffSpec) { hs.Seed.Base.RepositoryID++ }},
+		{"base ref", func(hs *ward.HandoffSpec) { hs.Seed.Base.BaseRef = "refs/heads/other" }},
+		{"base SHA", func(hs *ward.HandoffSpec) {
+			hs.Seed.Base.BaseSHA = strings.Repeat("9", 40)
+		}},
+		{"agent image", func(hs *ward.HandoffSpec) {
+			hs.Agent.Image = "example.test/other-agent@sha256:" + strings.Repeat("cd", 32)
+		}},
+		{"egress profile", func(hs *ward.HandoffSpec) {
+			hs.Agent.EgressProfile = domain.EgressProviderWebRead
+		}},
+		{"vendor instructions", func(hs *ward.HandoffSpec) {
+			body := []byte("different trusted instructions")
+			digest := sha256.Sum256(body)
+			hs.Agent.VendorInstructions.Body = body
+			hs.Agent.VendorInstructions.Digest = domain.Digest(
+				"sha256:" + hex.EncodeToString(digest[:]),
+			)
+		}},
+		{"missing credential mount", func(hs *ward.HandoffSpec) {
+			hs.Agent.CredentialMounts = nil
+		}},
+		{"additional read-only credential mount", func(hs *ward.HandoffSpec) {
+			hs.Agent.CredentialMounts = append(hs.Agent.CredentialMounts, ward.CredentialMount{
+				Volume: "unrelated-credentials", Target: "/var/lib/freeside/unrelated-token",
+				Manifest: ward.CredentialManifestSetupToken,
+			})
+		}},
+		{"additional writable credential mount", func(hs *ward.HandoffSpec) {
+			hs.Agent.CredentialMounts = append(hs.Agent.CredentialMounts, ward.CredentialMount{
+				Volume: "unrelated-credentials", Target: "/var/lib/freeside/unrelated-token",
+				Manifest: ward.CredentialManifestOpaque, Writable: true,
+			})
+		}},
+		{"credential mount target", func(hs *ward.HandoffSpec) {
+			hs.Agent.CredentialMounts[0].Target = "/var/lib/freeside/other-token"
+		}},
+		{"credential mount manifest", func(hs *ward.HandoffSpec) {
+			hs.Agent.CredentialMounts[0].Manifest = ward.CredentialManifestOpaque
+		}},
+		{"credential mount writable", func(hs *ward.HandoffSpec) {
+			hs.Agent.CredentialMounts[0].Writable = true
+		}},
+		{"missing auth-store lease", func(hs *ward.HandoffSpec) { hs.AuthStoreLease = nil }},
+		{"auth identity", func(hs *ward.HandoffSpec) {
+			hs.AuthStoreLease.AuthIdentityID = "other-auth"
+		}},
+		{"lease holder", func(hs *ward.HandoffSpec) {
+			hs.AuthStoreLease.Holder = "other-invocation"
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			d := newTestDriver(t, &stubGate{}, newStubExports())
+			d.provider = testProvider{handoffMutate: tt.mutate}
+			in := testHandoffIntent(t, d)
+
+			if _, err := d.handoffSpec(context.Background(), in); !errors.Is(err, ErrUnsupportedStart) {
+				t.Fatalf("handoffSpec error = %v, want ErrUnsupportedStart", err)
+			}
+		})
+	}
+}
+
+func TestHandoffSpecRefusesProviderWorkspaceDerivation(t *testing.T) {
+	t.Parallel()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	d.provider = testProvider{workspaceFor: func(domain.InvocationID) string {
+		return "provider-defined-workspace"
+	}}
+	in := testHandoffIntent(t, d)
+	in.Spec.Workspace = d.provider.Workspace(in.InvocationID)
+
+	if _, err := d.handoffSpec(context.Background(), in); !errors.Is(err, ErrUnsupportedStart) {
+		t.Fatalf("handoffSpec error = %v, want ErrUnsupportedStart", err)
+	}
+}
+
+func TestHandoffSpecDetachesProviderResult(t *testing.T) {
+	t.Parallel()
+	var providerOwned *ward.HandoffSpec
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	d.provider = testProvider{handoffMutate: func(hs *ward.HandoffSpec) {
+		hs.Agent.InstructionPolicy.Boundaries = []ward.InvocationBoundary{ward.InvocationStartup}
+		providerOwned = hs
+	}}
+	in := testHandoffIntent(t, d)
+	hs, err := d.handoffSpec(context.Background(), in)
+	if err != nil {
+		t.Fatalf("handoffSpec: %v", err)
+	}
+	if providerOwned == nil || len(providerOwned.Agent.VendorInstructions.Body) == 0 {
+		t.Fatal("provider fixture did not retain a mutable handoff")
+	}
+
+	providerOwned.Agent.Command[0] = "changed-command"
+	providerOwned.Agent.Env[0] = "CHANGED=1"
+	providerOwned.Agent.CredentialMounts[0].Volume = "changed-volume"
+	providerOwned.Agent.VendorInstructions.Body[0] ^= 0xff
+	providerOwned.Agent.InstructionPolicy.Boundaries[0] = ward.InvocationRecovery
+	providerOwned.AuthStoreLease.AuthIdentityID = "changed-auth"
+	providerOwned.AuthStoreLease.Holder = "changed-holder"
+
+	if hs.Agent.Command[0] != "sh" || hs.Agent.Env[0] != "GIT_CONFIG_COUNT=1" ||
+		hs.Agent.CredentialMounts[0].Volume != testAuthVol ||
+		hs.Agent.VendorInstructions.Body[0] != in.Instructions.Body[0] ||
+		hs.Agent.InstructionPolicy.Boundaries[0] != ward.InvocationStartup ||
+		hs.AuthStoreLease.AuthIdentityID != testAuthID || hs.AuthStoreLease.Holder != testInvoke {
+		t.Fatalf("handoff retained provider-owned mutable state: %#v", hs)
+	}
+}
+
+func TestHandoffSpecDetachesProviderInput(t *testing.T) {
+	t.Parallel()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	in := testHandoffIntent(t, d)
+	conversation := digestOf([]byte("conversation"))
+	prior := digestOf([]byte("prior artifact"))
+	image := digestOf([]byte("image input"))
+	snapshot, err := domain.NewStageInputSnapshot(domain.StageInputSnapshotInput{
+		InputDigest:          in.Spec.StageInputs.InputDigest,
+		SpecificationDigest:  in.Spec.StageInputs.SpecificationDigest,
+		PromptPackageDigest:  in.Spec.StageInputs.PromptPackageDigest,
+		PolicyDigest:         in.Spec.StageInputs.PolicyDigest,
+		VendorInstructions:   in.Spec.StageInputs.VendorInstructions,
+		ConversationDigest:   &conversation,
+		PriorArtifactDigests: []domain.Digest{prior},
+		ImageInputDigests:    []domain.Digest{image},
+	})
+	if err != nil {
+		t.Fatalf("new nested stage input snapshot: %v", err)
+	}
+	in.Spec.StageInputs = &snapshot
+	wantID := snapshot.ID
+	wantVendorDigest := *snapshot.VendorInstructions.Digest
+	var providerOwned *domain.StageInputSnapshot
+	d.provider = testProvider{handoffInputMutate: func(input *ProviderHandoffInput) {
+		providerOwned = input.Spec.StageInputs
+		providerOwned.ID = digestOf([]byte("changed ID"))
+		*providerOwned.VendorInstructions.Digest = digestOf([]byte("changed vendor"))
+		*providerOwned.ConversationDigest = digestOf([]byte("changed conversation"))
+		providerOwned.PriorArtifactDigests[0] = digestOf([]byte("changed prior"))
+		providerOwned.ImageInputDigests[0] = digestOf([]byte("changed image"))
+	}}
+
+	if _, err := d.handoffSpec(context.Background(), in); err != nil {
+		t.Fatalf("handoffSpec: %v", err)
+	}
+	providerOwned.PriorArtifactDigests[0] = digestOf([]byte("changed after return"))
+	if snapshot.ID != wantID || *snapshot.VendorInstructions.Digest != wantVendorDigest ||
+		*snapshot.ConversationDigest != conversation || snapshot.PriorArtifactDigests[0] != prior ||
+		snapshot.ImageInputDigests[0] != image {
+		t.Fatalf("provider mutated durable stage inputs: %#v", snapshot)
+	}
+}
+
 // The rebuilt launch command must reproduce the argv that opened the journal
 // from the durable record, never from the driver's current composition: ward
 // binds Agent.Command into SpecDigest, so a recovery that re-derived the
@@ -1102,8 +1494,8 @@ func TestHandoffSpecCommandTracksTheRecordNotComposition(t *testing.T) {
 	}
 	record := func(d *Driver, prep []string) intent {
 		return intent{
-			InvocationID: testInvoke, RunID: RunIDFor(testInvoke), Phase: phaseRunning,
-			Spec: spec, Seed: filepath.Join(d.seedRoot, RunIDFor(testInvoke)),
+			InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
+			Spec: spec, Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)),
 			Prompt: prompt, Inputs: durableInputsFrom(inputs),
 			Instructions: instructions, Preparation: prep,
 			RecordedAt: fixedNow, CommitDate: fixedNow,
@@ -1161,7 +1553,7 @@ func TestDecodeIntentReGatesPreparation(t *testing.T) {
 		t.Fatalf("render prompt: %v", err)
 	}
 	valid := intent{
-		InvocationID: testInvoke, RunID: RunIDFor(testInvoke), Phase: phaseRunning,
+		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
 		Spec: spec, Seed: "seed", Prompt: prompt, Inputs: durableInputsFrom(inputs),
 		Instructions: instructions, Preparation: []string{projectimage.PreparationPath},
 		RecordedAt: fixedNow, CommitDate: fixedNow,
@@ -1219,8 +1611,8 @@ func TestHandoffSpecRefusesUnsupportedContainment(t *testing.T) {
 	instructions, _ := ward.VendorInstructionsFromStageInputs(inputs)
 	prompt, _ := renderPrompt(inputs)
 	base := intent{
-		InvocationID: testInvoke, RunID: RunIDFor(testInvoke), Phase: phaseRunning,
-		Seed: filepath.Join(d.seedRoot, RunIDFor(testInvoke)), Prompt: prompt,
+		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
+		Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)), Prompt: prompt,
 		Instructions: instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
 	}
 	tests := []struct {
@@ -1279,8 +1671,8 @@ func TestStartRefusesDuplicateAndLeavesNoIntentOnRefusal(t *testing.T) {
 	waitSessionDone(t, d, testInvoke)
 	// The gate saw this run's spec, so the failure came from the scripted
 	// handoff rather than from the driver never reaching the gate.
-	if got := gate.lastSpec(t).RunID; got != RunIDFor(testInvoke) {
-		t.Fatalf("gate run id = %q, want %q", got, RunIDFor(testInvoke))
+	if got := gate.lastSpec(t).RunID; got != testRunIDFor(testInvoke) {
+		t.Fatalf("gate run id = %q, want %q", got, testRunIDFor(testInvoke))
 	}
 	in, err := d.loadIntent(ctx, testInvoke)
 	if err != nil {
@@ -1353,7 +1745,7 @@ func TestNonExportTerminalStateRequiresDurableOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	body, err := os.ReadFile(d.intentPath(testInvoke))
+	body, err := os.ReadFile(d.intentPath(testRunIDFor(testInvoke)))
 	if err != nil {
 		t.Fatalf("read intent: %v", err)
 	}
@@ -1387,7 +1779,7 @@ func TestTerminalIntentPersistenceFailureRetainsAnInProcessRetry(t *testing.T) {
 	ctx := context.Background()
 	d := newTestDriver(t, &stubGate{}, newStubExports())
 	orphan(t, d, phaseSeeding, nil)
-	seed := filepath.Join(d.seedRoot, RunIDFor(testInvoke))
+	seed := filepath.Join(d.seedRoot, testRunIDFor(testInvoke))
 	if err := os.MkdirAll(seed, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -1483,7 +1875,7 @@ func TestTerminalSeedCleanupIsRootScopedAndPhaseGated(t *testing.T) {
 		t.Run(string(ph), func(t *testing.T) {
 			t.Parallel()
 			d := newTestDriver(t, &stubGate{}, newStubExports())
-			runID := RunIDFor(testInvoke)
+			runID := testRunIDFor(testInvoke)
 			seed := filepath.Join(d.seedRoot, runID)
 			importSeed := filepath.Join(d.seedRoot, runID+"-import")
 			if err := os.MkdirAll(seed, 0o700); err != nil {
@@ -1494,6 +1886,7 @@ func TestTerminalSeedCleanupIsRootScopedAndPhaseGated(t *testing.T) {
 			}
 			in := intent{
 				InvocationID: testInvoke,
+				RunID:        runID,
 				Phase:        ph,
 				Seed:         filepath.Join(t.TempDir(), "forged-foreign-seed"),
 			}
@@ -1528,12 +1921,13 @@ func TestTerminalSeedCleanupIsRootScopedAndPhaseGated(t *testing.T) {
 		if err := os.MkdirAll(d.seedRoot, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		link := filepath.Join(d.seedRoot, RunIDFor(testInvoke))
+		link := filepath.Join(d.seedRoot, testRunIDFor(testInvoke))
 		if err := os.Symlink(outside, link); err != nil {
 			t.Fatal(err)
 		}
 		if err := d.cleanupTerminalSeed(intent{
-			InvocationID: testInvoke, Phase: phaseCommitted, Seed: outside,
+			InvocationID: testInvoke, RunID: testRunIDFor(testInvoke),
+			Phase: phaseCommitted, Seed: outside,
 		}); err != nil {
 			t.Fatalf("cleanup symlink fixture: %v", err)
 		}
@@ -1549,7 +1943,7 @@ func TestTerminalSeedCleanupIsRootScopedAndPhaseGated(t *testing.T) {
 	t.Run("root replacement", func(t *testing.T) {
 		t.Parallel()
 		d := newTestDriver(t, &stubGate{}, newStubExports())
-		runID := RunIDFor(testInvoke)
+		runID := testRunIDFor(testInvoke)
 		pinnedRoot := d.seedRoot + "-pinned"
 		if err := os.Rename(d.seedRoot, pinnedRoot); err != nil {
 			t.Fatal(err)
@@ -1572,7 +1966,7 @@ func TestTerminalSeedCleanupIsRootScopedAndPhaseGated(t *testing.T) {
 		}
 
 		if err := d.cleanupTerminalSeed(intent{
-			InvocationID: testInvoke, Phase: phaseCommitted,
+			InvocationID: testInvoke, RunID: runID, Phase: phaseCommitted,
 		}); err != nil {
 			t.Fatalf("cleanup after root replacement: %v", err)
 		}
@@ -1582,6 +1976,33 @@ func TestTerminalSeedCleanupIsRootScopedAndPhaseGated(t *testing.T) {
 		body, err := os.ReadFile(sentinel) //nolint:gosec // adversarial test-owned path
 		if err != nil || string(body) != "outside" {
 			t.Fatalf("root replacement redirected deletion: %q, %v", body, err)
+		}
+	})
+
+	t.Run("provider run ID drift", func(t *testing.T) {
+		t.Parallel()
+		d := newTestDriver(t, &stubGate{}, newStubExports())
+		durableRunID := testRunIDFor(testInvoke)
+		currentRunID := "other-valid-run"
+		for _, runID := range []string{durableRunID, durableRunID + "-import", currentRunID, currentRunID + "-import"} {
+			if err := os.MkdirAll(filepath.Join(d.seedRoot, runID), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		d.provider = testProvider{runIDFor: func(domain.InvocationID) string {
+			return currentRunID
+		}}
+
+		err := d.cleanupTerminalSeed(intent{
+			InvocationID: testInvoke, RunID: durableRunID, Phase: phaseCommitted,
+		})
+		if !errors.Is(err, ErrUnsupportedStart) {
+			t.Fatalf("cleanup after provider run ID drift = %v, want ErrUnsupportedStart", err)
+		}
+		for _, runID := range []string{durableRunID, durableRunID + "-import", currentRunID, currentRunID + "-import"} {
+			if _, statErr := os.Stat(filepath.Join(d.seedRoot, runID)); statErr != nil {
+				t.Errorf("cleanup after provider run ID drift changed %s: %v", runID, statErr)
+			}
 		}
 	})
 }
@@ -1645,7 +2066,7 @@ func TestTerminalSeedCleanupFailureIsReportedNotSwallowed(t *testing.T) {
 	// Plant an undeletable seed: an obstacle inside the run's seed directory
 	// whose parent is read-only, so a root-scoped RemoveAll cannot unlink the
 	// child. Restored in Cleanup so the temp dir can be torn down.
-	runID := RunIDFor(testInvoke)
+	runID := testRunIDFor(testInvoke)
 	seed := filepath.Join(d.seedRoot, runID)
 	if err := os.MkdirAll(seed, 0o700); err != nil {
 		t.Fatal(err)
@@ -1734,7 +2155,7 @@ func TestTerminalSeedCleanupSilentAfterDriverClose(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	in := intent{InvocationID: testInvoke, Phase: phaseCommitted, RunID: RunIDFor(testInvoke)}
+	in := intent{InvocationID: testInvoke, Phase: phaseCommitted, RunID: testRunIDFor(testInvoke)}
 	if err := d.cleanupTerminalSeed(in); !errors.Is(err, errSeedCleanupAfterClose) {
 		t.Fatalf("cleanup after close = %v, want errSeedCleanupAfterClose", err)
 	}
@@ -1761,7 +2182,7 @@ func TestTerminalSeedCleanupWarnsPerFailingPath(t *testing.T) {
 	handler := &captureHandler{}
 	d.logger = slog.New(handler)
 
-	runID := RunIDFor(testInvoke)
+	runID := testRunIDFor(testInvoke)
 	seed := filepath.Join(d.seedRoot, runID)
 	importSeed := filepath.Join(d.seedRoot, runID+"-import")
 	for _, dir := range []string{seed, importSeed} {
@@ -1918,8 +2339,8 @@ func TestRestartEnumerationReGatesIntents(t *testing.T) {
 	instructions, _ := ward.VendorInstructionsFromStageInputs(inputs)
 	prompt, _ := renderPrompt(inputs)
 	in := intent{
-		InvocationID: testInvoke, RunID: RunIDFor(testInvoke), Phase: phaseRunning,
-		Spec: spec, Seed: filepath.Join(d.seedRoot, RunIDFor(testInvoke)),
+		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
+		Spec: spec, Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)),
 		Prompt: prompt, Inputs: durableInputsFrom(inputs),
 		Instructions: instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
 	}
@@ -1947,7 +2368,7 @@ func TestRestartEnumerationReGatesIntents(t *testing.T) {
 			if err != nil {
 				t.Fatalf("marshal tampered intent: %v", err)
 			}
-			if err := os.WriteFile(d.intentPath(testInvoke), body, 0o600); err != nil {
+			if err := os.WriteFile(d.intentPath(testRunIDFor(testInvoke)), body, 0o600); err != nil {
 				t.Fatalf("write tampered intent: %v", err)
 			}
 			if _, err := d.listIntents(context.Background()); !errors.Is(err, ErrUnsupportedStart) {
@@ -1962,7 +2383,7 @@ func TestRestartEnumerationReGatesIntents(t *testing.T) {
 	if err := d.saveIntent(in); err != nil {
 		t.Fatalf("restore valid intent: %v", err)
 	}
-	body, err := os.ReadFile(d.intentPath(testInvoke))
+	body, err := os.ReadFile(d.intentPath(testRunIDFor(testInvoke)))
 	if err != nil {
 		t.Fatalf("read valid intent: %v", err)
 	}
@@ -1987,7 +2408,7 @@ func TestRestartEnumerationReGatesIntents(t *testing.T) {
 	}
 	for _, tc := range malformed {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := os.WriteFile(d.intentPath(testInvoke), tc.body, 0o600); err != nil {
+			if err := os.WriteFile(d.intentPath(testRunIDFor(testInvoke)), tc.body, 0o600); err != nil {
 				t.Fatalf("write malformed intent: %v", err)
 			}
 			if _, err := d.loadIntent(context.Background(), testInvoke); err == nil {
@@ -2014,8 +2435,8 @@ func TestRecoveryOfLostHandoffReportsNoResult(t *testing.T) {
 	// An orphan: a durable running intent with no live pipeline, exactly what
 	// a daemon restart leaves behind.
 	in := intent{
-		InvocationID: testInvoke, RunID: RunIDFor(testInvoke), Phase: phaseRunning,
-		Spec: spec, Seed: filepath.Join(d.seedRoot, RunIDFor(testInvoke)),
+		InvocationID: testInvoke, RunID: testRunIDFor(testInvoke), Phase: phaseRunning,
+		Spec: spec, Seed: filepath.Join(d.seedRoot, testRunIDFor(testInvoke)),
 		Prompt: prompt, Inputs: durableInputsFrom(inputs),
 		Instructions: instructions, RecordedAt: fixedNow, CommitDate: fixedNow,
 	}

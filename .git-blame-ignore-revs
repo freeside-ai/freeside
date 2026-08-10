@@ -7,3 +7,6 @@ ffead062320536bf3da7bf8d6eb027723cda14d8
 
 # Separate entity CRUD from the persistence kernel
 fee0031f9ee4a23120db2869281da1a3bcf3bad8
+
+# Extract the provider-neutral stage driver core (#557)
+c115f4548366d03fe0cd7af5e56d9c3c8cd35f08

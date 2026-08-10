@@ -1,17 +1,185 @@
 package claude
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"os"
-	"os/exec"
+	osexec "os/exec"
 	"path"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/stage"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
+
+type testAuthStoreVolumes struct {
+	volume string
+}
+
+func (v testAuthStoreVolumes) AuthStoreVolume(
+	context.Context, domain.AuthIdentityID,
+) (string, error) {
+	return v.volume, nil
+}
+
+func testProviderHandoffInput() stage.ProviderHandoffInput {
+	id := domain.InvocationID("inv-provider-spec")
+	return stage.ProviderHandoffInput{
+		InvocationID: id,
+		RunID:        RunIDFor(id),
+		Spec: exec.StartSpec{
+			Base: domain.BaseRevision{
+				Repo: "freeside-ai/candidate", RepositoryID: 42,
+				BaseRef: "refs/heads/main", BaseSHA: strings.Repeat("a", 40),
+			},
+			Workspace:      WorkspaceFor(id),
+			CredentialMode: domain.CredentialSubscriptionContained,
+			EgressProfile:  domain.EgressProviderOnly,
+			AuthIdentityID: "auth-provider-spec",
+			ImageRef: domain.ImageRef(
+				"127.0.0.1:5014/freeside-agent-claude@sha256:" + strings.Repeat("ab", 32),
+			),
+		},
+		Seed:   "/daemon/seeds/" + RunIDFor(id),
+		Prompt: "do the work",
+		Instructions: ward.VendorInstructions{
+			Vendor: domain.AgentVendorClaude,
+		},
+	}
+}
+
+func TestHandoffSpecBindsContainmentAndInstructions(t *testing.T) {
+	t.Parallel()
+	const volume = "provider-owner-credentials"
+	in := testProviderHandoffInput()
+	hs, err := (claudeProvider{volumes: testAuthStoreVolumes{volume: volume}}).
+		HandoffSpec(context.Background(), in)
+	if err != nil {
+		t.Fatalf("HandoffSpec: %v", err)
+	}
+	if len(hs.Agent.CredentialMounts) != 1 {
+		t.Fatalf("credential mounts = %#v, want exactly the leased one", hs.Agent.CredentialMounts)
+	}
+	mount := hs.Agent.CredentialMounts[0]
+	if mount.Volume != volume || mount.Writable ||
+		mount.Manifest != ward.CredentialManifestSetupToken {
+		t.Errorf("credential mount = %#v, want the trusted token volume read-only", mount)
+	}
+	if mount.Target == "/root/.claude" || strings.HasPrefix(mount.Target, "/root/.claude/") {
+		t.Errorf("credential mount target %q collides with the instruction mount", mount.Target)
+	}
+	if hs.Agent.LaunchState != ward.LaunchStateClaudeClean {
+		t.Errorf("launch state = %q, want clean Claude state", hs.Agent.LaunchState)
+	}
+	command := strings.Join(hs.Agent.Command, " ")
+	for _, required := range []string{
+		"setpriv --reuid=" + agentUID,
+		"--bounding-set=-all --no-new-privs",
+		writerOutcomePath,
+	} {
+		if !strings.Contains(command, required) {
+			t.Errorf("agent command omits privilege/outcome boundary %q", required)
+		}
+	}
+	if hs.Agent.OutcomeMarkerPath != writerOutcomePath {
+		t.Errorf("outcome marker = %q, want %q", hs.Agent.OutcomeMarkerPath, writerOutcomePath)
+	}
+	if hs.AuthStoreLease == nil || hs.AuthStoreLease.AuthIdentityID != in.Spec.AuthIdentityID ||
+		hs.AuthStoreLease.Holder != in.InvocationID {
+		t.Errorf("auth store lease = %#v, want the admitted identity and invocation", hs.AuthStoreLease)
+	}
+	wantEnv := []string{
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=safe.directory",
+		"GIT_CONFIG_VALUE_0=" + workspaceDir,
+	}
+	if !reflect.DeepEqual(hs.Agent.Env, wantEnv) {
+		t.Errorf("agent env = %#v, want %#v", hs.Agent.Env, wantEnv)
+	}
+}
+
+func TestHandoffSpecRefusesUnsupportedContainment(t *testing.T) {
+	t.Parallel()
+	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
+	tests := []struct {
+		name string
+		edit func(*exec.StartSpec)
+	}{
+		{"api key isolated", func(s *exec.StartSpec) { s.CredentialMode = domain.CredentialAPIKeyIsolated }},
+		{"web-read egress", func(s *exec.StartSpec) { s.EgressProfile = domain.EgressProviderWebRead }},
+		{"no auth identity", func(s *exec.StartSpec) { s.AuthIdentityID = "" }},
+		{"foreign workspace", func(s *exec.StartSpec) { s.Workspace = "foreign-workspace" }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			in := testProviderHandoffInput()
+			tc.edit(&in.Spec)
+			if _, err := provider.HandoffSpec(context.Background(), in); !errors.Is(err, ErrUnsupportedStart) {
+				t.Fatalf("HandoffSpec error = %v, want ErrUnsupportedStart", err)
+			}
+		})
+	}
+}
+
+func TestPromptLimitLeavesLinuxArgumentHeadroom(t *testing.T) {
+	t.Parallel()
+	// Apostrophes are shellQuote's worst case: each input byte expands to the
+	// four-byte sequence that closes, escapes, and reopens the quoted word.
+	command := agentCommand(
+		strings.Repeat("'", maxPromptBytes),
+		"00000000-0000-4000-8000-000000000000",
+		"inv-headroom",
+		nil,
+	)[2]
+	if len(command) >= linuxMaxArgumentBytes {
+		t.Fatalf("max prompt produces %d-byte sh argument, Linux limit is %d",
+			len(command), linuxMaxArgumentBytes)
+	}
+}
+
+func TestRenderPromptRejectsNonUTF8Inputs(t *testing.T) {
+	t.Parallel()
+	for _, field := range []struct {
+		name   string
+		mutate func(*stage.ProviderPromptInputs)
+	}{
+		{"prompt package", func(in *stage.ProviderPromptInputs) { in.PromptPackage = []byte{0xff} }},
+		{"specification", func(in *stage.ProviderPromptInputs) { in.Specification = []byte{0xff} }},
+		{"policy", func(in *stage.ProviderPromptInputs) { in.Policy = []byte{0xff} }},
+	} {
+		t.Run(field.name, func(t *testing.T) {
+			inputs := stage.ProviderPromptInputs{
+				PromptPackage: []byte("prompt"),
+				Specification: []byte("specification"),
+				Policy:        []byte("policy"),
+			}
+			field.mutate(&inputs)
+			if _, err := renderPromptParts(inputs); !errors.Is(err, ErrUnsupportedStart) {
+				t.Fatalf("renderPromptParts = %v, want ErrUnsupportedStart", err)
+			}
+		})
+	}
+}
+
+func TestOversizedPromptIsRejected(t *testing.T) {
+	t.Parallel()
+	_, err := renderPromptParts(stage.ProviderPromptInputs{
+		PromptPackage: bytes.Repeat([]byte("p"), maxPromptBytes),
+		Specification: []byte("specification"),
+		Policy:        []byte("policy"),
+	})
+	if !errors.Is(err, ErrUnsupportedStart) {
+		t.Fatalf("renderPromptParts = %v, want ErrUnsupportedStart", err)
+	}
+}
 
 // The writer-outcome marker's integrity rests entirely on this command's
 // filesystem topology, not on the nonce. An adversarial probe against the
@@ -199,7 +367,7 @@ func TestRuntimeDependencyCleanupDoesNotFollowReplacementSymlink(t *testing.T) {
 	if err := os.Symlink(outside, dependencies); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command( //nolint:gosec // G204: fixed shell snippet with a test-owned temp path
+	cmd := osexec.Command( //nolint:gosec // G204: fixed shell snippet with a test-owned temp path
 		"sh", "-c", `rm -rf -- "$1"`, "sh", dependencies,
 	)
 	if output, err := cmd.CombinedOutput(); err != nil {

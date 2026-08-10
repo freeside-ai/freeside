@@ -1,8 +1,7 @@
-package claude
+package stage
 
 import (
 	"context"
-	"errors"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
@@ -10,15 +9,44 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-// ErrSeedRetryable marks an operational exact-base failure that leaves
-// phaseSeeding recoverable. A Seeder returns unmarked errors for definitive
-// refusals that retrying cannot change.
-var ErrSeedRetryable = errors.New("claude driver seed is retryable")
+// Provider supplies the behavior that varies between stage providers. The
+// durable state machine owns every other transition and persistence rule.
+type Provider interface {
+	HandoffSpec(context.Context, ProviderHandoffInput) (ward.HandoffSpec, error)
+	RenderPrompt(ProviderPromptInputs) (string, error)
+	RunID(domain.InvocationID) string
+	Workspace(domain.InvocationID) string
+	PrepareFailedStatus() int
+}
 
-// ErrSeedRefused marks a definitive exact-base or credential refusal.
-// It outranks concurrent context cancellation so a permanent verdict cannot
-// be converted into indefinitely retryable work during shutdown.
-var ErrSeedRefused = errors.New("claude driver seed was refused")
+// ProviderHandoffInput is the durable input needed to render one provider's
+// ward handoff request.
+type ProviderHandoffInput struct {
+	InvocationID domain.InvocationID
+	RunID        string
+	Spec         exec.StartSpec
+	Seed         string
+	Prompt       string
+	Instructions ward.VendorInstructions
+	Preparation  []string
+}
+
+// CredentialMountPolicy is the immutable provider topology a returned
+// credential mount must match. The volume is excluded because ward resolves
+// and authenticates it independently against the admitted identity lease.
+type CredentialMountPolicy struct {
+	Target   string
+	Manifest ward.CredentialManifestPolicy
+	Writable bool
+}
+
+// ProviderPromptInputs are the admitted immutable bodies a provider renders
+// into its invocation prompt.
+type ProviderPromptInputs struct {
+	Specification []byte
+	PromptPackage []byte
+	Policy        []byte
+}
 
 // Gate is the ward workspace-handoff gate (production: *ward.Backend). The
 // driver never talks to a container runtime directly: every containment
@@ -110,13 +138,4 @@ type Artifacts interface {
 	// RecordClaims persists the §5.15 agent claims for one invocation,
 	// binding each stored blob to its label and provenance.
 	RecordClaims(ctx context.Context, id domain.InvocationID, claims []domain.AgentClaim) error
-}
-
-// AuthStoreVolumes resolves the trusted identity-to-credential-volume
-// binding (production: wardstore.Leaser, whose AuthStoreVolume reads the
-// durable domain.AuthIdentity row). The driver asks rather than deriving a
-// volume name: the binding is trusted state, and the gate re-checks the
-// answer against the same row before creating anything.
-type AuthStoreVolumes interface {
-	AuthStoreVolume(ctx context.Context, id domain.AuthIdentityID) (string, error)
 }

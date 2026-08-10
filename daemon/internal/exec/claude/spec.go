@@ -12,7 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/stage"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -85,6 +85,20 @@ func RunIDFor(id domain.InvocationID) string {
 // WorkspaceFor is the workspace reference the admission records and the gate
 // creates for one invocation.
 func WorkspaceFor(id domain.InvocationID) string { return ward.WorkspaceRef(RunIDFor(id)) }
+
+type claudeProvider struct {
+	volumes AuthStoreVolumes
+}
+
+func (claudeProvider) RunID(id domain.InvocationID) string { return RunIDFor(id) }
+
+func (claudeProvider) Workspace(id domain.InvocationID) string { return WorkspaceFor(id) }
+
+func (claudeProvider) PrepareFailedStatus() int { return writerOutcomePrepareFailed }
+
+func (claudeProvider) RenderPrompt(inputs stage.ProviderPromptInputs) (string, error) {
+	return renderPromptParts(inputs)
+}
 
 // maxPromptBytes bounds the rendered prompt below Linux's 128-KiB
 // MAX_ARG_STRLEN. It travels inside one sh -c argument because the writer gets
@@ -203,15 +217,7 @@ func sessionIDFor(id domain.InvocationID) string {
 		encoded[16:20] + "-" + encoded[20:]
 }
 
-// renderPrompt composes the agent's instruction text from the verified
-// inputs: the control-plane prompt package first, then the operator-approved
-// specification and resolved per-run policy. All three are admitted,
-// digest-verified bytes; the driver adds only the fixed framing.
-func renderPrompt(inputs exec.StageInputs) (string, error) {
-	return renderPromptParts(durableInputsFrom(inputs))
-}
-
-func renderPromptParts(inputs durableInputs) (string, error) {
+func renderPromptParts(inputs stage.ProviderPromptInputs) (string, error) {
 	for _, part := range []struct {
 		name string
 		body []byte
@@ -259,7 +265,9 @@ func shellQuote(s string) string {
 // admits, the leased auth-store volume comes from the trusted identity
 // binding rather than a driver-side name, and the vendor instructions are
 // the materialized bytes the admission froze.
-func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, error) {
+func (p claudeProvider) HandoffSpec(
+	ctx context.Context, in stage.ProviderHandoffInput,
+) (ward.HandoffSpec, error) {
 	id, spec := in.InvocationID, in.Spec
 	if spec.CredentialMode != domain.CredentialSubscriptionContained {
 		return ward.HandoffSpec{}, fmt.Errorf(
@@ -279,7 +287,7 @@ func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, 
 			"%w: admitted workspace %q, driver derives %q",
 			ErrUnsupportedStart, spec.Workspace, want)
 	}
-	volume, err := d.volumes.AuthStoreVolume(ctx, spec.AuthIdentityID)
+	volume, err := p.volumes.AuthStoreVolume(ctx, spec.AuthIdentityID)
 	if err != nil {
 		return ward.HandoffSpec{}, fmt.Errorf("resolve auth store volume: %w", err)
 	}

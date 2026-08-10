@@ -1,4 +1,4 @@
-package claude
+package stage
 
 import (
 	"bytes"
@@ -249,7 +249,7 @@ func TestRecoveryRefusesUnownedExportPathWithoutDeletingIt(t *testing.T) {
 	}
 	in := intent{
 		InvocationID: testInvoke,
-		RunID:        RunIDFor(testInvoke),
+		RunID:        testRunIDFor(testInvoke),
 		Spec:         testStartSpec(),
 		Export:       &releasedExport{Dir: dir},
 	}
@@ -265,13 +265,13 @@ func TestRecoveryRefusesSamePrefixExportNotIssuedByTheWard(t *testing.T) {
 	t.Parallel()
 	refused := errors.New("fixture: export directory not journal-bound")
 	gate := &stubGate{authenticateFn: func(runID, exportDir string) error {
-		if runID != RunIDFor(testInvoke) || exportDir == "" {
+		if runID != testRunIDFor(testInvoke) || exportDir == "" {
 			t.Fatalf("authenticate args = %q/%q", runID, exportDir)
 		}
 		return refused
 	}}
 	d := newTestDriver(t, gate, newStubExports())
-	dir, err := os.MkdirTemp("", "freeside-handoff-"+RunIDFor(testInvoke)+"-out-")
+	dir, err := os.MkdirTemp("", "freeside-handoff-"+testRunIDFor(testInvoke)+"-out-")
 	if err != nil {
 		t.Fatalf("create counterfeit export: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestRecoveryRefusesSamePrefixExportNotIssuedByTheWard(t *testing.T) {
 	}
 	in := intent{
 		InvocationID: testInvoke,
-		RunID:        RunIDFor(testInvoke),
+		RunID:        testRunIDFor(testInvoke),
 		Spec:         testStartSpec(),
 		Export:       &releasedExport{Dir: dir},
 	}
@@ -398,7 +398,7 @@ func TestDurableExportConflictPreservesReleasedDirectory(t *testing.T) {
 func TestReleasedExportPathUsesConfiguredDurableRoot(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	in := intent{RunID: RunIDFor(testInvoke)}
+	in := intent{RunID: testRunIDFor(testInvoke)}
 	valid := filepath.Join(root, "freeside-handoff-"+in.RunID+"-out-valid")
 	if err := validateReleasedExportPath(root, in, valid); err != nil {
 		t.Fatalf("configured durable export path: %v", err)
@@ -421,7 +421,7 @@ func TestReleasedExportBoundaryRejectsTamperedFields(t *testing.T) {
 		t.Helper()
 		in := intent{
 			InvocationID: testInvoke,
-			RunID:        RunIDFor(testInvoke),
+			RunID:        testRunIDFor(testInvoke),
 			Spec:         testStartSpec(),
 		}
 		dir, err := os.MkdirTemp(exportRoot, "freeside-handoff-"+in.RunID+"-out-")
