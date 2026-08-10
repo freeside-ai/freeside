@@ -144,6 +144,82 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Duplicated from observerScript, observerGitScript, and credObserverScript in
+# daemon/internal/ward/spec.go. Shell syntax and builtins are excluded; every
+# external command any generated observer can execute is listed so an outdated
+# exporter pin fails before build and submit.
+required_exporter_tools=(
+  sh git env mkdir rm cat head find xargs sort cmp sha256sum cut readlink stat ls sync
+)
+# shellcheck disable=SC2016 # The probed container's shell expands this script.
+exporter_probe_script='missing=0
+for tool do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    printf "freeside-missing-tool:%s\n" "$tool"
+    missing=1
+  fi
+done
+if [ "$missing" -ne 0 ]; then exit 127; fi'
+exporter_probe_output_cap=$((64 << 10))
+exporter_probe_output_file="$workdir/exporter-preflight.log"
+exporter_probe_nul_stripped_file="$workdir/exporter-preflight-no-nul.log"
+set +e
+container run --rm --network none -- \
+  "$FREESIDE_WARD_EXPORTER_IMAGE" sh -c "$exporter_probe_script" sh \
+  "${required_exporter_tools[@]}" 2>&1 |
+  head -c "$((exporter_probe_output_cap + 1))" >"$exporter_probe_output_file"
+exporter_probe_pipeline_status=("${PIPESTATUS[@]}")
+set -e
+exporter_probe_status=${exporter_probe_pipeline_status[0]}
+exporter_probe_capture_status=${exporter_probe_pipeline_status[1]}
+exporter_probe_output_size=$(wc -c <"$exporter_probe_output_file")
+if [[ "$exporter_probe_status" -eq 0 && "$exporter_probe_capture_status" -eq 0 &&
+  "$exporter_probe_output_size" -le "$exporter_probe_output_cap" ]]; then
+  :
+else
+  missing_marker_lines=""
+  if [[ "$exporter_probe_capture_status" -eq 0 &&
+    "$exporter_probe_output_size" -le "$exporter_probe_output_cap" ]] &&
+    LC_ALL=C tr -d '\000' <"$exporter_probe_output_file" \
+      >"$exporter_probe_nul_stripped_file" &&
+    cmp -s "$exporter_probe_output_file" "$exporter_probe_nul_stripped_file"; then
+    missing_marker_lines=$(sed -n 's/^freeside-missing-tool://p' \
+      "$exporter_probe_output_file")
+  fi
+  missing_exporter_tools=""
+  exporter_probe_markers_valid=true
+  while IFS= read -r missing_tool; do
+    [[ -n "$missing_tool" ]] || continue
+    missing_tool_known=false
+    for required_tool in "${required_exporter_tools[@]}"; do
+      if [[ "$missing_tool" == "$required_tool" ]]; then
+        missing_tool_known=true
+        break
+      fi
+    done
+    if [[ "$missing_tool_known" != true ||
+      " $missing_exporter_tools " == *" $missing_tool "* ]]; then
+      exporter_probe_markers_valid=false
+      break
+    fi
+    missing_exporter_tools="${missing_exporter_tools:+$missing_exporter_tools }$missing_tool"
+  done <<EOF
+$missing_marker_lines
+EOF
+  if [[ "$exporter_probe_status" -eq 127 &&
+    "$exporter_probe_markers_valid" == true && -n "$missing_exporter_tools" ]]; then
+    echo "run-real-work: exporter image $FREESIDE_WARD_EXPORTER_IMAGE is missing required observer tools: $missing_exporter_tools" >&2
+    exit 2
+  fi
+  if [[ "$exporter_probe_output_size" -gt "$exporter_probe_output_cap" ]]; then
+    echo "run-real-work: exporter preflight output exceeded the ${exporter_probe_output_cap}-byte cap" >&2
+  elif [[ "$exporter_probe_capture_status" -ne 0 ]]; then
+    echo "run-real-work: could not capture exporter preflight output" >&2
+  fi
+  echo "run-real-work: could not preflight exporter image $FREESIDE_WARD_EXPORTER_IMAGE (container exit $exporter_probe_status)" >&2
+  exit 2
+fi
+
 db_path="$FREESIDE_REAL_RUN_STATE_ROOT/freeside.db"
 mkdir -p "$FREESIDE_REAL_RUN_STATE_ROOT" "$FREESIDE_REAL_RUN_SEED_ROOT"
 
