@@ -12,7 +12,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/stage"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -216,18 +215,6 @@ func sessionIDFor(id domain.InvocationID) string {
 	encoded := hex.EncodeToString(sum[:16])
 	return encoded[:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" +
 		encoded[16:20] + "-" + encoded[20:]
-}
-
-// renderPrompt composes the agent's instruction text from the verified
-// inputs: the control-plane prompt package first, then the operator-approved
-// specification and resolved per-run policy. All three are admitted,
-// digest-verified bytes; the driver adds only the fixed framing.
-func renderPrompt(inputs exec.StageInputs) (string, error) {
-	return renderPromptParts(stage.ProviderPromptInputs{
-		Specification: inputs.Specification().Bytes(),
-		PromptPackage: inputs.PromptPackage().Bytes(),
-		Policy:        inputs.Policy().Bytes(),
-	})
 }
 
 func renderPromptParts(inputs stage.ProviderPromptInputs) (string, error) {

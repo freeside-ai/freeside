@@ -87,11 +87,7 @@ func (p testProvider) Workspace(id domain.InvocationID) string {
 func (testProvider) PrepareFailedStatus() int { return testPrepareFailedStatus }
 
 func (testProvider) RenderPrompt(inputs ProviderPromptInputs) (string, error) {
-	return renderPromptParts(durableInputs{
-		Specification: inputs.Specification,
-		PromptPackage: inputs.PromptPackage,
-		Policy:        inputs.Policy,
-	})
+	return renderPromptParts(durableInputs(inputs))
 }
 
 func renderPrompt(inputs exec.StageInputs) (string, error) {
