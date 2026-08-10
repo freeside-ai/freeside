@@ -36,7 +36,9 @@ func TestReconcilerLogsAPassFailureAtError(t *testing.T) {
 	}
 	// An unconfigured reconciler fails its first pass, which is the loop
 	// boundary under test; what the pass failed at is Reconcile's business.
-	if err := (activeResourceReconciler{}).Run(t.Context(), time.Minute, logger); err == nil {
+	if err := (activeResourceReconciler{}).Run(
+		t.Context(), time.Minute, time.Minute, logger,
+	); err == nil {
 		t.Fatal("Run returned nil for an unconfigured reconciler")
 	}
 	records := logRecords(t, out.String())

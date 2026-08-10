@@ -67,7 +67,8 @@ type WriteTx struct {
 	// asOfRevision is stamped into every row a Put touches: the revision the
 	// enclosing Write commits as (current+1). Only Write produces a WriteTx,
 	// so this is always a client-visible revision.
-	asOfRevision int64
+	asOfRevision     int64
+	readyItemCreated bool
 }
 
 // Write runs fn in a client-visible write transaction and increments
@@ -99,6 +100,12 @@ func (s *Store) Write(ctx context.Context, fn func(*WriteTx) error) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
+	}
+	if wtx.readyItemCreated {
+		select {
+		case s.readyItemCreated <- struct{}{}:
+		default:
+		}
 	}
 	return nil
 }

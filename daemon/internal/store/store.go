@@ -70,6 +70,11 @@ type Options struct {
 // for the write-path rules.
 type Store struct {
 	db *sql.DB
+	// readyItemCreated is a lossy, process-local wake-up for consumers whose
+	// next background pass must not wait for their idle cadence after a new
+	// ready-for-final-review item commits. Durable reconciliation remains the
+	// source of truth, so one pending wake is sufficient.
+	readyItemCreated chan struct{}
 	// approvedRecipes is the boundary policy set (see Options.ApprovedRecipes),
 	// snapshotted at Open and threaded into every transaction. Read-only after
 	// Open, so it is safe to share across concurrent transactions.
@@ -101,10 +106,18 @@ func Open(ctx context.Context, path string, opts Options) (*Store, error) {
 	// after Open cannot change it under a live store.
 	return &Store{
 		db:                 db,
+		readyItemCreated:   make(chan struct{}, 1),
 		approvedRecipes:    maps.Clone(opts.ApprovedRecipes),
 		admissionPolicy:    cloneAdmissionPolicy(opts),
 		backupHealthSource: opts.BackupHealthSource,
 	}, nil
+}
+
+// ReadyItemCreated reports that a new open ready-for-final-review item
+// committed in this process. It is intentionally best-effort: consumers must
+// still reconcile from durable state after restart or a missed wake.
+func (s *Store) ReadyItemCreated() <-chan struct{} {
+	return s.readyItemCreated
 }
 
 // cloneAdmissionPolicy detaches the admission policy from the caller's
