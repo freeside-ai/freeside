@@ -35,7 +35,11 @@
 //
 //   - Every implementation of a contract interface carries a compile-time
 //     assertion (var _ exec.StageDriver = (*fake.StageDriver)(nil)) so a
-//     signature drift fails the build, not a test.
+//     signature drift fails the build, not a test. StageDriver and
+//     ReviewSource implementations also call the shared runners in
+//     internal/exec/contract from their own tests, using an implementation
+//     harness to realize lifecycle scenarios without moving assertions out
+//     of the runner.
 //   - A typed refusal is a struct error carrying the machine-readable facts
 //     (which capabilities are missing) plus an Unwrap to a sentinel, so
 //     errors.Is matches the class and errors.As reaches the details; see

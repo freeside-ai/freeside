@@ -33,6 +33,8 @@ type stageState struct {
 type reviewState struct {
 	Scripts   map[domain.InvocationID]ReviewScript       `json:"scripts"`
 	Committed map[domain.InvocationID]exec.ReviewResult  `json:"committed"`
+	Failed    map[domain.InvocationID]bool               `json:"failed"`
+	Rejected  map[domain.InvocationID]bool               `json:"rejected"`
 	Intents   map[domain.InvocationID]exec.ReviewRequest `json:"intents"`
 }
 
@@ -68,6 +70,12 @@ func loadReviewState(dir string) (reviewState, error) {
 	}
 	if st.Committed == nil {
 		st.Committed = map[domain.InvocationID]exec.ReviewResult{}
+	}
+	if st.Failed == nil {
+		st.Failed = map[domain.InvocationID]bool{}
+	}
+	if st.Rejected == nil {
+		st.Rejected = map[domain.InvocationID]bool{}
 	}
 	if st.Intents == nil {
 		st.Intents = map[domain.InvocationID]exec.ReviewRequest{}
