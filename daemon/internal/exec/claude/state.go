@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -429,7 +428,7 @@ func (d *Driver) regateWithCurrentPolicy(
 	}
 	for _, check := range checks {
 		sum := sha256.Sum256(check.body)
-		got := domain.Digest("sha256:" + hex.EncodeToString(sum[:]))
+		got := domain.Digest(contentaddr.Format(sum[:]))
 		if got != check.digest {
 			return fmt.Errorf("%w: intent %s %s hashes to %s, admission names %s",
 				ErrUnsupportedStart, i.InvocationID, check.name, got, check.digest)
@@ -464,7 +463,7 @@ func (d *Driver) regateWithCurrentPolicy(
 			ErrUnsupportedStart, i.InvocationID)
 	default:
 		sum := sha256.Sum256(i.Instructions.Body)
-		got := domain.Digest("sha256:" + hex.EncodeToString(sum[:]))
+		got := domain.Digest(contentaddr.Format(sum[:]))
 		if got != *vendor.Digest {
 			return fmt.Errorf("%w: intent %s vendor instructions hash to %s, admission names %s",
 				ErrUnsupportedStart, i.InvocationID, got, *vendor.Digest)

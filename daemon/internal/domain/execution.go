@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -310,7 +309,7 @@ func (a ExecutionAdmission) ComputeID() (Digest, error) {
 	if err != nil {
 		return "", fmt.Errorf("execution admission id: %w", err)
 	}
-	return Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body))), nil
+	return Digest(contentaddr.Sum(body)), nil
 }
 
 // Validate reports whether the admission is well-formed and its identity

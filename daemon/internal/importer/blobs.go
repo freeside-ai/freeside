@@ -10,8 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
@@ -32,7 +32,7 @@ func (b *blobHasher) Write(p []byte) (int, error) {
 }
 
 func (b *blobHasher) digest() export.Digest {
-	return export.Digest("sha256:" + hex.EncodeToString(b.h.Sum(nil)))
+	return export.Digest(contentaddr.Format(b.h.Sum(nil)))
 }
 
 // blobInfo is what content verification proved about one stored blob:
@@ -150,7 +150,7 @@ func snapshotChannel(scratch, name string, sha256Dir *os.File, needed map[export
 		return nil, fmt.Errorf("create verified-blob scratch for %s: %w", name, err)
 	}
 	for digest, size := range needed {
-		verifiedPath := filepath.Join(verifiedDir, strings.TrimPrefix(string(digest), "sha256:"))
+		verifiedPath := filepath.Join(verifiedDir, contentaddr.Hex(string(digest)))
 		info, err := snapshotVerifiedBlob(sha256Dir, verifiedPath, digest, size)
 		if err != nil {
 			return nil, err
@@ -264,8 +264,10 @@ func auditBlobStore(root *os.File, dir, storeName string, present bool, needed m
 	}
 	found := make(map[string]struct{}, len(needed))
 	if err := scanOpenDirBatched(sha256, sha256Path, ErrHandoffUnreadable, func(bf os.DirEntry) error {
-		digest := export.Digest("sha256:" + bf.Name())
-		if _, ok := needed[digest]; !ok || !bf.Type().IsRegular() {
+		addr, validName := contentaddr.FromHex(bf.Name())
+		digest := export.Digest(addr)
+		_, referenced := needed[digest]
+		if !validName || !referenced || !bf.Type().IsRegular() {
 			return fmt.Errorf("%s-store entry %q is unreferenced or not a regular file: %w", storeName, bf.Name(), ErrOrphanBlob)
 		}
 		found[bf.Name()] = struct{}{}
@@ -275,7 +277,7 @@ func auditBlobStore(root *os.File, dir, storeName string, present bool, needed m
 		return nil, err
 	}
 	for digest := range needed {
-		if _, ok := found[strings.TrimPrefix(string(digest), "sha256:")]; !ok {
+		if _, ok := found[contentaddr.Hex(string(digest))]; !ok {
 			_ = sha256.Close()
 			return nil, fmt.Errorf("%s manifest stores %s but the handoff does not hold it: %w", storeName, digest, ErrMissingBlob)
 		}
@@ -341,7 +343,7 @@ func snapshotVerifiedBlob(dir *os.File, dst string, digest export.Digest, size i
 // bytes to dst. The digest, git object name, and daemon-private snapshot
 // therefore all derive from one bounded read of the pinned audited store.
 func verifyBlobTo(dir *os.File, digest export.Digest, size int64, dst io.Writer) (blobInfo, error) {
-	hexName := strings.TrimPrefix(string(digest), "sha256:")
+	hexName := contentaddr.Hex(string(digest))
 	f, err := openRegularAt(dir, hexName, ErrOrphanBlob)
 	if err != nil {
 		return blobInfo{}, fmt.Errorf("open blob %s: %w: %w", digest, ErrMissingBlob, err)
@@ -363,7 +365,7 @@ func verifyBlobTo(dir *os.File, digest export.Digest, size int64, dst io.Writer)
 	if n != size {
 		return blobInfo{}, fmt.Errorf("blob %s does not hold exactly the manifest's %d bytes: %w", digest, size, ErrSizeMismatch)
 	}
-	if got := "sha256:" + hex.EncodeToString(content.Sum(nil)); got != string(digest) {
+	if got := contentaddr.Format(content.Sum(nil)); got != string(digest) {
 		return blobInfo{}, fmt.Errorf("blob content hashes to %s, manifest claims %s: %w", got, digest, ErrDigestMismatch)
 	}
 	return blobInfo{size: size, gitOID: hex.EncodeToString(object.Sum(nil))}, nil

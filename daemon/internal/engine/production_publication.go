@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -3573,7 +3572,7 @@ func (w *productionPublicationWorkflow) materializeBlob(digest domain.Digest, di
 
 func digestProductionBytes(body []byte) domain.Digest {
 	sum := sha256.Sum256(body)
-	return domain.Digest("sha256:" + hex.EncodeToString(sum[:]))
+	return domain.Digest(contentaddr.Format(sum[:]))
 }
 
 func (w *productionPublicationWorkflow) verifyAndCheckpoint(

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"unicode/utf8"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
@@ -1014,7 +1015,7 @@ func encodeStoredCommand(
 		return "", "", err
 	}
 	sum := sha256.Sum256(body)
-	return string(body), domain.Digest(fmt.Sprintf("sha256:%x", sum)), nil
+	return string(body), domain.Digest(contentaddr.Format(sum[:])), nil
 }
 
 func decodeStoredCommand(
@@ -1054,7 +1055,7 @@ func decodeStoredCommand(
 	}
 	sum := sha256.Sum256(body)
 	return envelope.Command, inline,
-		domain.Digest(fmt.Sprintf("sha256:%x", sum)), nil
+		domain.Digest(contentaddr.Format(sum[:])), nil
 }
 
 // PutCommand records one accepted client decision as a write-once, immutable

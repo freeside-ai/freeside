@@ -408,7 +408,7 @@ func (i VendorInstructions) validate() error {
 			ErrInvalidHandoffSpec, len(i.Body), domain.MaxVendorInstructionBytes)
 	}
 	sum := sha256.Sum256(i.Body)
-	if got := domain.Digest(fmt.Sprintf("sha256:%x", sum)); got != i.Digest {
+	if got := domain.Digest(contentaddr.Format(sum[:])); got != i.Digest {
 		return fmt.Errorf("%w: vendor instruction body hashes to %s, not %s",
 			ErrInvalidHandoffSpec, got, i.Digest)
 	}

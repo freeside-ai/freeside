@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -216,7 +215,7 @@ func (s StageInputSnapshot) ComputeID() (Digest, error) {
 	if err != nil {
 		return "", fmt.Errorf("stage input snapshot id: %w", err)
 	}
-	return Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body))), nil
+	return Digest(contentaddr.Sum(body)), nil
 }
 
 // Validate is the reconstruction boundary for an admitted input snapshot.

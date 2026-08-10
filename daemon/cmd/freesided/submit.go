@@ -15,6 +15,7 @@ import (
 	"slices"
 	"syscall"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -131,7 +132,7 @@ func readSubmissionFile(path string) (submissionFile, error) {
 func submissionBytes(body []byte) submissionFile {
 	sum := sha256.Sum256(body)
 	return submissionFile{
-		digest: domain.Digest("sha256:" + hex.EncodeToString(sum[:])),
+		digest: domain.Digest(contentaddr.Format(sum[:])),
 		body:   body,
 	}
 }

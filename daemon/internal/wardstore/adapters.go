@@ -7,7 +7,6 @@ package wardstore
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -69,7 +69,7 @@ func classifyCodexReviewMutation(err error) error {
 }
 
 func verifyCodexReviewBody(record store.CodexReviewOpaqueRecord) error {
-	bodyDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(record.Body))
+	bodyDigest := contentaddr.Sum(record.Body)
 	if record.BodyDigest != bodyDigest {
 		return fmt.Errorf(
 			"persisted body digest %q does not match %q", record.BodyDigest, bodyDigest)
@@ -82,7 +82,7 @@ func verifyCodexReviewStateBody(record store.CodexReviewOpaqueRecord) error {
 	authority = append(authority, record.State...)
 	authority = append(authority, 0)
 	authority = append(authority, record.Body...)
-	bodyDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(authority))
+	bodyDigest := contentaddr.Sum(authority)
 	if record.BodyDigest != bodyDigest {
 		return fmt.Errorf(
 			"persisted state/body digest %q does not match %q", record.BodyDigest, bodyDigest)

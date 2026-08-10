@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
@@ -186,7 +187,7 @@ func ingestPromptPackage(blobs *signet.BlobStore, path string) (domain.Digest, e
 		return "", fmt.Errorf("prompt package %s is empty", path)
 	}
 	sum := sha256.Sum256(body)
-	digest := domain.Digest("sha256:" + hex.EncodeToString(sum[:]))
+	digest := domain.Digest(contentaddr.Format(sum[:]))
 	if _, err := blobs.Put(digest, bytes.NewReader(body)); err != nil {
 		return "", fmt.Errorf("store prompt package: %w", err)
 	}
@@ -610,7 +611,7 @@ func readVerifiedBlob(
 	if err := errors.Join(copyErr, closeErr); err != nil {
 		return nil, err
 	}
-	got := domain.Digest("sha256:" + hex.EncodeToString(hasher.Sum(nil)))
+	got := domain.Digest(contentaddr.Format(hasher.Sum(nil)))
 	if got != digest {
 		return nil, fmt.Errorf("body hashes to %s, want %s", got, digest)
 	}

@@ -23,6 +23,7 @@ package contentaddr
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 )
 
@@ -55,4 +56,37 @@ func Parse(raw string) (hexDigits string, ok bool) {
 func Valid(raw string) bool {
 	_, ok := Parse(raw)
 	return ok
+}
+
+// Format returns the canonical content address for a sha256 sum. It panics
+// when sum is not exactly sha256.Size bytes because a non-sha256 sum is a
+// programmer error and Format must never produce an address Parse rejects.
+func Format(sum []byte) string {
+	if len(sum) != sha256.Size {
+		panic("contentaddr: sha256 sum must be exactly 32 bytes")
+	}
+	return prefix + hex.EncodeToString(sum)
+}
+
+// Sum returns the canonical content address for the sha256 sum of data.
+func Sum(data []byte) string {
+	sum := sha256.Sum256(data)
+	return Format(sum[:])
+}
+
+// Hex returns the 64-character lowercase hex payload of a canonical content
+// address. It returns the empty string when addr is not canonical.
+func Hex(addr string) string {
+	hexDigits, _ := Parse(addr)
+	return hexDigits
+}
+
+// FromHex returns the canonical content address for a 64-character lowercase
+// hex payload. It returns ("", false) when hexDigits is not canonical.
+func FromHex(hexDigits string) (addr string, ok bool) {
+	addr = prefix + hexDigits
+	if !Valid(addr) {
+		return "", false
+	}
+	return addr, true
 }

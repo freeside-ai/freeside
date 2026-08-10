@@ -316,7 +316,7 @@ func (s *CodexReviewSource) readReviewInstructionArtifact(
 		return nil, errors.Join(ErrCodexReviewOperational, readErr, closeErr)
 	}
 	sum := sha256.Sum256(body)
-	if domain.Digest(fmt.Sprintf("sha256:%x", sum)) != digest {
+	if domain.Digest(contentaddr.Format(sum[:])) != digest {
 		return nil, fmt.Errorf("review instruction artifact does not match its digest: %w", ErrConformance)
 	}
 	if closeErr != nil {
@@ -694,7 +694,7 @@ func (s *CodexReviewSource) normalizeCollection(
 	evidenceBytes = fmt.Appendf(evidenceBytes, ":%d:", len(collection.Result))
 	evidenceBytes = append(evidenceBytes, collection.Result...)
 	evidenceBytes = fmt.Appendf(evidenceBytes, ":%d", collection.ExitStatus)
-	collectionEvidence := domain.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(evidenceBytes)))
+	collectionEvidence := domain.Digest(contentaddr.Sum(evidenceBytes))
 	if collection.ExitStatus != 0 {
 		class := classifyCodexTerminalFailure(collection.Events)
 		return CodexReviewSourceOutcome{
@@ -780,7 +780,7 @@ func CodexReviewResultEvidence(
 	if err != nil {
 		return "", err
 	}
-	return domain.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body))), nil
+	return domain.Digest(contentaddr.Sum(body)), nil
 }
 
 // CodexReviewConfigurationDigest binds the trust profile to every
@@ -834,7 +834,7 @@ func CodexReviewConfigurationDigest(
 	if err != nil {
 		return "", err
 	}
-	return domain.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body))), nil
+	return domain.Digest(contentaddr.Sum(body)), nil
 }
 
 func (s *CodexReviewSource) Poll(

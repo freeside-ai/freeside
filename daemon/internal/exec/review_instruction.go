@@ -2,7 +2,6 @@ package exec
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -179,5 +178,5 @@ func ComposeCodexReviewInstructions(
 }
 
 func digestReviewInstruction(body []byte) domain.Digest {
-	return domain.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body)))
+	return domain.Digest(contentaddr.Sum(body))
 }

@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -161,7 +160,7 @@ func BranchName(identity domain.Digest) string {
 	if !contentaddr.Valid(string(identity)) {
 		return ""
 	}
-	hexPart := strings.TrimPrefix(string(identity), "sha256:")
+	hexPart := contentaddr.Hex(string(identity))
 	return branchPrefix + hexPart[:branchDigestHexLen]
 }
 

@@ -1,13 +1,14 @@
 package domain
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"path"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 // trustProfileEncodingVersion tags the canonical encoding ComputeDigest
@@ -293,7 +294,7 @@ func (p AutomationTrustProfile) ComputeDigest() (Digest, error) {
 	if err != nil {
 		return "", fmt.Errorf("trust profile digest: %w", err)
 	}
-	return Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body))), nil
+	return Digest(contentaddr.Sum(body)), nil
 }
 
 // Validate reports whether the profile is well-formed and its ProfileDigest

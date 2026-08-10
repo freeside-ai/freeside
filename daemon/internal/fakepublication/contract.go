@@ -204,7 +204,7 @@ func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error)
 		return "", fmt.Errorf("encode terminal binding: %w", err)
 	}
 	sum := sha256.Sum256(payload)
-	return domain.Digest("sha256:" + hex.EncodeToString(sum[:])), nil
+	return domain.Digest(contentaddr.Format(sum[:])), nil
 }
 
 // TerminalDigestBeforePRReference reproduces the immutable item shape used by
@@ -263,7 +263,7 @@ func TerminalDigestBeforePRReference(task Task, item domain.AttentionItem) (doma
 		return "", fmt.Errorf("encode legacy terminal binding: %w", err)
 	}
 	sum := sha256.Sum256(payload)
-	return domain.Digest("sha256:" + hex.EncodeToString(sum[:])), nil
+	return domain.Digest(contentaddr.Format(sum[:])), nil
 }
 
 func ValidateCommitDate(commitDate time.Time) error {

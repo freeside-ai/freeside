@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 	"golang.org/x/sys/unix"
@@ -252,7 +253,7 @@ func (a appleBackend) CheckProvenance(ctx context.Context, ref string, want prov
 	if !recipeFound || !prepareFound {
 		return fmt.Errorf("exported rootfs omitted embedded provenance files")
 	}
-	recipeDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(recipeBytes))
+	recipeDigest := contentaddr.Sum(recipeBytes)
 	if recipeDigest != string(want.RecipeDigest) ||
 		!bytes.Equal(prepareBytes, []byte(prepareScript)) {
 		return fmt.Errorf("embedded provenance file digests do not match the build inputs")
@@ -1264,7 +1265,7 @@ func verifyOCIDiffIDs(
 		if closeErr != nil {
 			return closeErr
 		}
-		observed := "sha256:" + hex.EncodeToString(hash.Sum(nil))
+		observed := contentaddr.Format(hash.Sum(nil))
 		if written > maxOCILayerBytes || observed != diffIDs[index] {
 			return fmt.Errorf(
 				"OCI layer %d does not match config diff ID %s", index, diffIDs[index])
@@ -1316,13 +1317,13 @@ func readOCIBlob(archivePath string, descriptor ociDescriptor, limit int64) ([]b
 	if !validDigest(descriptor.Digest) || descriptor.Size < 0 || descriptor.Size > limit {
 		return nil, fmt.Errorf("OCI descriptor is invalid")
 	}
-	entryName := "blobs/sha256/" + strings.TrimPrefix(descriptor.Digest, "sha256:")
+	entryName := "blobs/sha256/" + contentaddr.Hex(descriptor.Digest)
 	body, err := readOCIArchiveEntry(archivePath, entryName, limit)
 	if err != nil {
 		return nil, err
 	}
 	if int64(len(body)) != descriptor.Size ||
-		fmt.Sprintf("sha256:%x", sha256.Sum256(body)) != descriptor.Digest {
+		contentaddr.Sum(body) != descriptor.Digest {
 		return nil, fmt.Errorf("OCI blob %s does not match its descriptor", descriptor.Digest)
 	}
 	return body, nil
@@ -1342,7 +1343,7 @@ func extractOCILayers(
 				descriptor.MediaType != ociGzipMediaType) {
 			return nil, fmt.Errorf("OCI layer descriptor %d is invalid", index)
 		}
-		entry := "blobs/sha256/" + strings.TrimPrefix(descriptor.Digest, "sha256:")
+		entry := "blobs/sha256/" + contentaddr.Hex(descriptor.Digest)
 		if _, duplicate := byEntry[entry]; duplicate {
 			return nil, fmt.Errorf("OCI image repeats layer %s", descriptor.Digest)
 		}
@@ -1387,7 +1388,7 @@ func extractOCILayers(
 			return nil, closeErr
 		}
 		if written != descriptor.Size ||
-			"sha256:"+hex.EncodeToString(hash.Sum(nil)) != descriptor.Digest {
+			contentaddr.Format(hash.Sum(nil)) != descriptor.Digest {
 			return nil, fmt.Errorf("OCI layer %s does not match its descriptor", descriptor.Digest)
 		}
 		found[index] = true

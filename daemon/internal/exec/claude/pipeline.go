@@ -559,7 +559,7 @@ func validateReleasedExportRecord(
 
 func digestBytes(body []byte) domain.Digest {
 	sum := sha256.Sum256(body)
-	return domain.Digest("sha256:" + hex.EncodeToString(sum[:]))
+	return domain.Digest(contentaddr.Format(sum[:]))
 }
 
 func validateReleasedExportPath(exportRoot string, in intent, dir string) error {
@@ -633,7 +633,7 @@ func readDigestedFile(path string, digest domain.Digest) ([]byte, error) {
 		return nil, fmt.Errorf("read %s: %w", filepath.Base(path), err)
 	}
 	sum := sha256.Sum256(body)
-	if got := domain.Digest("sha256:" + hex.EncodeToString(sum[:])); got != digest {
+	if got := domain.Digest(contentaddr.Format(sum[:])); got != digest {
 		return nil, fmt.Errorf("%s hashes to %s, record names %s", filepath.Base(path), got, digest)
 	}
 	return body, nil
@@ -1348,7 +1348,7 @@ func fileDigest(path string) (domain.Digest, error) {
 		return "", fmt.Errorf("digest %s: %w", filepath.Base(path), err)
 	}
 	sum := sha256.Sum256(body)
-	return domain.Digest("sha256:" + hex.EncodeToString(sum[:])), nil
+	return domain.Digest(contentaddr.Format(sum[:])), nil
 }
 
 // maxSummaryBytes bounds the human-readable outcome the engine carries into

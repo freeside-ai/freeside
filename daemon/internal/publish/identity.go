@@ -2,7 +2,6 @@ package publish
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -128,7 +127,7 @@ func DeriveIdentity(in IdentityInput) (Identity, error) {
 		return Identity{}, fmt.Errorf("identity: encode canonical form: %w", err)
 	}
 	sum := sha256.Sum256(enc)
-	return Identity{digest: domain.Digest("sha256:" + hex.EncodeToString(sum[:]))}, nil
+	return Identity{digest: domain.Digest(contentaddr.Format(sum[:]))}, nil
 }
 
 // Digest returns the full identity digest ("sha256:<64 hex>").

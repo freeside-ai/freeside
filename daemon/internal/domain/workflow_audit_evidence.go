@@ -1,10 +1,11 @@
 package domain
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 const (
@@ -71,7 +72,7 @@ func (e WorkflowAuditEvidence) ValidateBinding(repo string, digest Digest) error
 
 // Digest returns the content address of the exact retained JSON bytes.
 func (e WorkflowAuditEvidence) Digest() Digest {
-	return Digest(fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(e.body))))
+	return Digest(contentaddr.Sum([]byte(e.body)))
 }
 
 // Bytes returns a caller-owned copy for protected persistence.

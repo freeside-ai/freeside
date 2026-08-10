@@ -7,7 +7,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 // blobWriter stores digest-addressed content blobs under
@@ -64,7 +65,7 @@ func (w *blobWriter) digestAndStore(fsys fs.FS, p string, store bool) (blobResul
 		if err != nil {
 			return blobResult{}, fmt.Errorf("hash %q: %w", p, err)
 		}
-		d := Digest(fmt.Sprintf("sha256:%x", h.Sum(nil)))
+		d := Digest(contentaddr.Format(h.Sum(nil)))
 		return blobResult{digest: d, size: n, stored: w.written[d]}, nil
 	}
 
@@ -83,14 +84,14 @@ func (w *blobWriter) digestAndStore(fsys fs.FS, p string, store bool) (blobResul
 		return blobResult{}, fmt.Errorf("write blob for %q: %w", p, err)
 	}
 
-	d := Digest(fmt.Sprintf("sha256:%x", h.Sum(nil)))
+	d := Digest(contentaddr.Format(h.Sum(nil)))
 	if w.written[d] {
 		// Already stored by an identical file this export hashed itself;
 		// content addressing makes the duplicate byte-identical.
 		_ = os.Remove(tmpName)
 		return blobResult{digest: d, size: n, stored: true}, nil
 	}
-	final := filepath.Join(w.dir, strings.TrimPrefix(string(d), "sha256:"))
+	final := filepath.Join(w.dir, contentaddr.Hex(string(d)))
 	if err := os.Rename(tmpName, final); err != nil {
 		_ = os.Remove(tmpName)
 		return blobResult{}, fmt.Errorf("commit blob for %q: %w", p, err)

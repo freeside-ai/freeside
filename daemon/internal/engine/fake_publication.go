@@ -2863,7 +2863,7 @@ func digestJSON(value any) (domain.Digest, error) {
 
 func digestBytes(payload []byte) domain.Digest {
 	sum := sha256.Sum256(payload)
-	return domain.Digest("sha256:" + hex.EncodeToString(sum[:]))
+	return domain.Digest(contentaddr.Format(sum[:]))
 }
 
 func validCommitSHA(sha string) bool {
@@ -2943,7 +2943,7 @@ func digestFakePublicationTree(root string) (domain.Digest, error) {
 	if err != nil {
 		return "", err
 	}
-	return domain.Digest("sha256:" + hex.EncodeToString(hash.Sum(nil))), nil
+	return domain.Digest(contentaddr.Format(hash.Sum(nil))), nil
 }
 
 // validateFakePublicationAllowlist mirrors the importer's slash-separated
@@ -3104,7 +3104,7 @@ func verifyFakePublicationBlob(store ArtifactStore, artifact domain.Artifact) er
 	if err := errors.Join(copyErr, closeErr); err != nil {
 		return fmt.Errorf("read candidate checkpoint artifact %s: %w", artifact.ID, err)
 	}
-	got := domain.Digest("sha256:" + hex.EncodeToString(hasher.Sum(nil)))
+	got := domain.Digest(contentaddr.Format(hasher.Sum(nil)))
 	if got != artifact.Digest {
 		return fmt.Errorf(
 			"candidate checkpoint artifact %s body hashes to %s, want %s",
@@ -3129,7 +3129,7 @@ func loadFakePublicationBlob(
 	if err := errors.Join(copyErr, closeErr); err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
 	}
-	got := domain.Digest("sha256:" + hex.EncodeToString(hasher.Sum(nil)))
+	got := domain.Digest(contentaddr.Format(hasher.Sum(nil)))
 	if got != digest {
 		return nil, fmt.Errorf("body hashes to %s, want %s", got, digest)
 	}

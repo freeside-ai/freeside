@@ -146,10 +146,7 @@ func composeClaudeInstructions(
 	hostDigest := instructionSourceAbsent
 	bundle.WriteString("\n## Operator-Host Instructions\n\n")
 	if hs.Agent.VendorInstructions.Present {
-		hostDigest = strings.TrimPrefix(
-			string(hs.Agent.VendorInstructions.Digest),
-			"sha256:",
-		)
+		hostDigest = contentaddr.Hex(string(hs.Agent.VendorInstructions.Digest))
 		bundle.WriteString("--- BEGIN OPERATOR-HOST INSTRUCTION sha256:")
 		bundle.WriteString(hostDigest)
 		bundle.WriteString(" ---\n")
@@ -518,14 +515,15 @@ func expectedInstructions(hs HandoffSpec, st *runState) VendorInstructions {
 	if st.preparedInstructions == nil {
 		return hs.Agent.VendorInstructions
 	}
+	// BundleDigest is computed from a sha256 sum while preparing the bundle, so
+	// the inverse cannot fail here without an internal invariant violation.
+	digest, _ := contentaddr.FromHex(st.preparedInstructions.BundleDigest)
 	return VendorInstructions{
 		Vendor:   hs.Agent.VendorInstructions.Vendor,
 		Delivery: hs.Agent.VendorInstructions.Delivery,
 		Present:  true,
-		Digest: domain.Digest(
-			"sha256:" + st.preparedInstructions.BundleDigest,
-		),
-		Body: bytes.Clone(st.instructionBundleBody),
+		Digest:   domain.Digest(digest),
+		Body:     bytes.Clone(st.instructionBundleBody),
 	}
 }
 
@@ -593,11 +591,11 @@ func verifyInstructionProof(
 		return failf(CheckControlPlaneIsolation,
 			"vendor-instruction proof metadata does not match the admitted topology")
 	}
+	proofDigest, digestOK := contentaddr.FromHex(fields["digest"])
 	switch {
 	case expected.Present:
 		if fields["present"] != "yes" ||
-			!contentaddr.Valid("sha256:"+fields["digest"]) ||
-			"sha256:"+fields["digest"] != string(expected.Digest) {
+			!digestOK || proofDigest != string(expected.Digest) {
 			return failf(CheckControlPlaneIsolation,
 				"vendor-instruction proof does not match the admitted digest")
 		}

@@ -3,7 +3,6 @@ package engine
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -185,5 +184,5 @@ func readExactBaseReviewInstruction(path string, remaining int64) ([]byte, error
 }
 
 func reviewInstructionDigest(body []byte) domain.Digest {
-	return domain.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body)))
+	return domain.Digest(contentaddr.Sum(body))
 }

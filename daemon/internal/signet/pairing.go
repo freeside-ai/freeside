@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -209,7 +210,7 @@ func normalizePairingCode(typed string) string {
 func (s *Service) pairingCodeHash(plaintext string) domain.Digest {
 	mac := hmac.New(sha256.New, s.pairingKey)
 	mac.Write([]byte(plaintext))
-	return domain.Digest("sha256:" + hex.EncodeToString(mac.Sum(nil)))
+	return domain.Digest(contentaddr.Format(mac.Sum(nil)))
 }
 
 // randomPairingCode draws each character uniformly: the 32-character alphabet
@@ -250,5 +251,5 @@ func (s *Service) newDeviceIdentity() (domain.DeviceID, string, string, error) {
 // sha256 of the whole token string (api/openapi.yaml deviceCredential).
 func credentialDigest(token string) string {
 	sum := sha256.Sum256([]byte(token))
-	return "sha256:" + hex.EncodeToString(sum[:])
+	return contentaddr.Format(sum[:])
 }

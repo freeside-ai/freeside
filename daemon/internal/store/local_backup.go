@@ -767,5 +767,5 @@ func localBackupFileDigest(path string) (domain.Digest, error) {
 	if err := errors.Join(copyErr, file.Close()); err != nil {
 		return "", err
 	}
-	return domain.Digest(fmt.Sprintf("sha256:%x", hash.Sum(nil))), nil
+	return domain.Digest(contentaddr.Format(hash.Sum(nil))), nil
 }

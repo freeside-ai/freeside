@@ -2,10 +2,11 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 // CodexReviewOpaqueRecord is deliberately vocabulary-free: ward owns and
@@ -18,7 +19,7 @@ type CodexReviewOpaqueRecord struct {
 }
 
 func codexReviewBodyDigest(body []byte) string {
-	return fmt.Sprintf("sha256:%x", sha256.Sum256(body))
+	return contentaddr.Sum(body)
 }
 
 func codexReviewBodyAuthority(body []byte) string {

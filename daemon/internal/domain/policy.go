@@ -1,10 +1,11 @@
 package domain
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"sort"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 // KeyProvenance records where one resolved-policy key's value came from: a
@@ -94,7 +95,7 @@ func (p ResolvedPolicy) ComputeDigest() (Digest, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolved policy digest: %w", err)
 	}
-	return Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body))), nil
+	return Digest(contentaddr.Sum(body)), nil
 }
 
 // Validate reports whether the resolved policy is well-formed: identified,

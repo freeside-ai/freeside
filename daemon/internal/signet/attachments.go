@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -177,7 +176,7 @@ func (b *BlobStore) put(
 	if _, err := io.Copy(io.MultiWriter(tmp, hasher), r); err != nil {
 		return false, fmt.Errorf("attachment %q: %w", digest, err)
 	}
-	if got := "sha256:" + hex.EncodeToString(hasher.Sum(nil)); got != string(digest) {
+	if got := contentaddr.Format(hasher.Sum(nil)); got != string(digest) {
 		return false, fmt.Errorf("attachment %q: body hashes to %q: %w", digest, got, ErrDigestMismatch)
 	}
 
@@ -274,7 +273,7 @@ func (b *BlobStore) Verify(digest domain.Digest) (bool, error) {
 	if err := errors.Join(copyErr, closeErr); err != nil {
 		return false, fmt.Errorf("attachment %q: verify: %w", digest, err)
 	}
-	got := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
+	got := contentaddr.Format(hasher.Sum(nil))
 	return got == string(digest), nil
 }
 

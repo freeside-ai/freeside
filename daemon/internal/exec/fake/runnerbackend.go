@@ -2,9 +2,9 @@ package fake
 
 import (
 	"crypto/sha256"
-	"fmt"
 	"strings"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
@@ -37,7 +37,7 @@ func (b RunnerBackend) Capabilities() exec.CapabilitySet { return b.Caps.Clone()
 func (b RunnerBackend) ConfigurationDigest() domain.Digest {
 	sum := sha256.Sum256([]byte(b.BackendName + "\x00" +
 		strings.Join(capabilityNames(b.Caps.Snapshot()), "\x00")))
-	return domain.Digest(fmt.Sprintf("sha256:%x", sum))
+	return domain.Digest(contentaddr.Format(sum[:]))
 }
 
 func capabilityNames(capabilities domain.CapabilitySnapshot) []string {

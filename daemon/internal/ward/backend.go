@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
@@ -185,7 +186,7 @@ func (b *Backend) ConfigurationDigest() domain.Digest {
 	if err != nil {
 		panic(fmt.Sprintf("marshal ward conformance configuration: %v", err))
 	}
-	return domain.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(body)))
+	return domain.Digest(contentaddr.Sum(body))
 }
 
 func runtimeConfigurationIdentity(rt Runtime) (string, error) {
@@ -214,7 +215,7 @@ func executableIdentity(path string) (string, error) {
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s@sha256:%x", path, h.Sum(nil)), nil
+	return path + "@" + contentaddr.Format(h.Sum(nil)), nil
 }
 
 // Name identifies the backend in policy, refusals, and audit records.

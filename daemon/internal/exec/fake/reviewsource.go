@@ -2,11 +2,11 @@ package fake
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sync"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
@@ -286,9 +286,8 @@ func (s *ReviewSource) commit(id domain.InvocationID, r exec.ReviewResult) exec.
 		r.CompletedAt = intent.RequestedAt
 	}
 	if r.CompletionEvidence == "" {
-		r.CompletionEvidence = domain.Digest(fmt.Sprintf(
-			"sha256:%x", sha256.Sum256([]byte("fake-review-completion")),
-		))
+		r.CompletionEvidence = domain.Digest(contentaddr.Sum(
+			[]byte("fake-review-completion")))
 	}
 	// Store and return independent snapshots: Poll returns this value
 	// directly, so neither the committed copy nor the delivered one may

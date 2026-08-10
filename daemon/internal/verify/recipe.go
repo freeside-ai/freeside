@@ -3,7 +3,6 @@ package verify
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +11,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
@@ -264,7 +264,7 @@ func repoRelPath(tok string) (string, bool) {
 // re-encoding, so two byte forms can never alias one approved digest.
 func RecipeDigest(raw []byte) domain.Digest {
 	sum := sha256.Sum256(raw)
-	return domain.Digest("sha256:" + hex.EncodeToString(sum[:]))
+	return domain.Digest(contentaddr.Format(sum[:]))
 }
 
 // RecipeSource names where the trusted recipe bytes load from (§5.8):

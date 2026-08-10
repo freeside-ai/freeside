@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
@@ -143,7 +144,7 @@ func snapshotVendorInstructions(
 		return domain.VendorInstructionSnapshot{}, nil, err
 	}
 	sum := sha256.Sum256(body)
-	digest := domain.Digest(fmt.Sprintf("sha256:%x", sum))
+	digest := domain.Digest(contentaddr.Format(sum[:]))
 	snapshot.Digest = &digest
 	return snapshot, body, nil
 }

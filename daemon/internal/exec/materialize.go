@@ -3,7 +3,6 @@ package exec
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -379,7 +378,7 @@ func (m *Materializer) load(
 		return MaterializedContent{}, fmt.Errorf("materialize %s %s exceeds byte limit: %w",
 			role, digest, ErrInputTooLarge)
 	}
-	got := domain.Digest(fmt.Sprintf("sha256:%x", sha256.Sum256(content)))
+	got := domain.Digest(contentaddr.Sum(content))
 	if got != digest {
 		return MaterializedContent{}, fmt.Errorf("materialize %s: body hashes to %s, want %s: %w",
 			role, got, digest, ErrInputDigestMismatch)
