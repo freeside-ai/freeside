@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
@@ -32,7 +33,7 @@ func (b *blobHasher) Write(p []byte) (int, error) {
 }
 
 func (b *blobHasher) digest() export.Digest {
-	return export.Digest("sha256:" + hex.EncodeToString(b.h.Sum(nil)))
+	return export.Digest(contentaddr.Format(b.h.Sum(nil)))
 }
 
 // blobInfo is what content verification proved about one stored blob:
@@ -363,7 +364,7 @@ func verifyBlobTo(dir *os.File, digest export.Digest, size int64, dst io.Writer)
 	if n != size {
 		return blobInfo{}, fmt.Errorf("blob %s does not hold exactly the manifest's %d bytes: %w", digest, size, ErrSizeMismatch)
 	}
-	if got := "sha256:" + hex.EncodeToString(content.Sum(nil)); got != string(digest) {
+	if got := contentaddr.Format(content.Sum(nil)); got != string(digest) {
 		return blobInfo{}, fmt.Errorf("blob content hashes to %s, manifest claims %s: %w", got, digest, ErrDigestMismatch)
 	}
 	return blobInfo{size: size, gitOID: hex.EncodeToString(object.Sum(nil))}, nil

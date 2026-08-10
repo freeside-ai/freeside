@@ -2,10 +2,10 @@ package verify
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
@@ -139,5 +139,5 @@ func buildEvidence(opts Options, recipeDigest domain.Digest, rep report, transcr
 // contentDigest is the sha256 content address of evidence bytes.
 func contentDigest(content []byte) domain.Digest {
 	sum := sha256.Sum256(content)
-	return domain.Digest("sha256:" + hex.EncodeToString(sum[:]))
+	return domain.Digest(contentaddr.Format(sum[:]))
 }

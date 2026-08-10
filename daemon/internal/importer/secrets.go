@@ -3,11 +3,11 @@ package importer
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"regexp"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
 
@@ -112,7 +112,7 @@ func readScanBlob(info blobInfo, digest export.Digest) ([]byte, error) {
 		return nil, fmt.Errorf("verified snapshot %s does not hold exactly %d bytes: %w", digest, info.size, ErrSizeMismatch)
 	}
 	sum := sha256.Sum256(data)
-	if got := "sha256:" + hex.EncodeToString(sum[:]); got != string(digest) {
+	if got := contentaddr.Format(sum[:]); got != string(digest) {
 		return nil, fmt.Errorf("blob for scanning hashes to %s, expected %s: %w", got, digest, ErrDigestMismatch)
 	}
 	return data, nil

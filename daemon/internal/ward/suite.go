@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
@@ -350,7 +350,7 @@ func writerSentinel(runID string) string {
 // writer ran — behind it.
 func manifestHasContent(entries []export.Entry, path, content string) bool {
 	sum := sha256.Sum256([]byte(content))
-	want := export.Digest("sha256:" + hex.EncodeToString(sum[:]))
+	want := export.Digest(contentaddr.Format(sum[:]))
 	for _, e := range entries {
 		if e.Path == path && e.Kind == export.EntryRegular && !e.BlobOmitted && e.Digest != nil && *e.Digest == want {
 			return true
@@ -390,7 +390,7 @@ func expectedWriterManifest(runID string) export.Manifest {
 		mode := "0644"
 		size := int64(len(content))
 		sum := sha256.Sum256([]byte(content))
-		digest := export.Digest("sha256:" + hex.EncodeToString(sum[:]))
+		digest := export.Digest(contentaddr.Format(sum[:]))
 		return export.Entry{
 			Path:   name,
 			Kind:   export.EntryRegular,

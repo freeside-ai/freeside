@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 	"golang.org/x/sys/unix"
@@ -1264,7 +1265,7 @@ func verifyOCIDiffIDs(
 		if closeErr != nil {
 			return closeErr
 		}
-		observed := "sha256:" + hex.EncodeToString(hash.Sum(nil))
+		observed := contentaddr.Format(hash.Sum(nil))
 		if written > maxOCILayerBytes || observed != diffIDs[index] {
 			return fmt.Errorf(
 				"OCI layer %d does not match config diff ID %s", index, diffIDs[index])
@@ -1387,7 +1388,7 @@ func extractOCILayers(
 			return nil, closeErr
 		}
 		if written != descriptor.Size ||
-			"sha256:"+hex.EncodeToString(hash.Sum(nil)) != descriptor.Digest {
+			contentaddr.Format(hash.Sum(nil)) != descriptor.Digest {
 			return nil, fmt.Errorf("OCI layer %s does not match its descriptor", descriptor.Digest)
 		}
 		found[index] = true
