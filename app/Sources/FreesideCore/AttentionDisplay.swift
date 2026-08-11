@@ -1,3 +1,4 @@
+import Foundation
 import FreesideAPI
 
 /// Human-readable labels for the contract's enums. Behaviour-dispatch
@@ -58,6 +59,7 @@ enum AttentionDisplay {
         case .resume_unattended: return "Resume unattended"
         case .recover_review: return "Recover review"
         case .adopt_review_configuration: return "Adopt review configuration"
+        case .resolve_reenrollment: return "Resolve re-enrollment"
         }
     }
 
@@ -132,6 +134,21 @@ enum AttentionDisplay {
             BindingRow(label: "Failure digest", value: binding.failure_digest),
             BindingRow(label: "Repository", value: binding.repo),
             BindingRow(label: "Superseded profile", value: binding.superseded_profile_digest),
+        ]
+    }
+
+    static func codexReenrollmentRecoveryRows(
+        _ item: Components.Schemas.AttentionItem
+    ) -> [BindingRow] {
+        guard let binding = item.codex_reenrollment_recovery_binding?.value1 else { return [] }
+        return [
+            BindingRow(label: "Auth identity", value: binding.auth_identity_id),
+            BindingRow(label: "Lease fence", value: "\(binding.lease_fence)"),
+            BindingRow(label: "Auth store digest", value: binding.auth_store_digest),
+            BindingRow(
+                label: "Token expires",
+                value: binding.access_token_expires_at.formatted(.iso8601)
+            ),
         ]
     }
 }

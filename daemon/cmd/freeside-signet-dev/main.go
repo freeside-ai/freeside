@@ -26,6 +26,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"syscall"
 	"time"
 
@@ -508,28 +509,38 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		blocking := domain.HealthPostureBlocking
 		posture = &blocking
 	}
+	var codexReenrollmentRecoveryBinding *domain.CodexReenrollmentRecoveryBinding
+	if itemType == domain.AttentionSystemHealth &&
+		slices.Contains(requested, domain.ActionResolveReenrollment) {
+		codexReenrollmentRecoveryBinding = &domain.CodexReenrollmentRecoveryBinding{
+			AuthIdentityID: "codex-convergence", LeaseFence: 1,
+			AuthStoreDigest:      domain.Digest("sha256:codex-reenrollment-" + req.ID),
+			AccessTokenExpiresAt: expires.UTC(),
+		}
+	}
 	var prReference *domain.PRReference
 	if itemType == domain.AttentionReadyForFinalReview {
 		prReference = &domain.PRReference{Repo: "freeside-ai/demo", Number: 123}
 	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
-		ID:                          domain.ItemID(req.ID),
-		ProjectID:                   "proj-convergence",
-		Subject:                     domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
-		Type:                        itemType,
-		Priority:                    domain.PriorityNormal,
-		Reason:                      req.Reason,
-		RequestedDecision:           requested,
-		AgentClaims:                 claims,
-		PRHeadSHA:                   "cafebabe",
-		PRReference:                 prReference,
-		ReviewRecoveryBinding:       reviewRecoveryBinding,
-		ReviewConfigurationRecovery: reviewConfigurationRecovery,
-		ItemVersion:                 req.ItemVersion,
-		InterruptionClass:           domain.InterruptionPlannedGate,
-		ExpiresWhen:                 &expires,
-		Posture:                     posture,
-		Status:                      domain.StatusOpen,
+		ID:                               domain.ItemID(req.ID),
+		ProjectID:                        "proj-convergence",
+		Subject:                          domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		Type:                             itemType,
+		Priority:                         domain.PriorityNormal,
+		Reason:                           req.Reason,
+		RequestedDecision:                requested,
+		AgentClaims:                      claims,
+		PRHeadSHA:                        "cafebabe",
+		PRReference:                      prReference,
+		ReviewRecoveryBinding:            reviewRecoveryBinding,
+		CodexReenrollmentRecoveryBinding: codexReenrollmentRecoveryBinding,
+		ReviewConfigurationRecovery:      reviewConfigurationRecovery,
+		ItemVersion:                      req.ItemVersion,
+		InterruptionClass:                domain.InterruptionPlannedGate,
+		ExpiresWhen:                      &expires,
+		Posture:                          posture,
+		Status:                           domain.StatusOpen,
 	}, nil)
 	if err != nil {
 		// NewAttentionItem's Validate rejects an unknown type or a malformed

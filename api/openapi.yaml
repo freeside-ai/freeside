@@ -1441,6 +1441,7 @@ components:
         - base_freshness
         - readiness_invalidation
         - review_recovery_binding
+        - codex_reenrollment_recovery_binding
         - review_configuration_recovery
         - item_version
         - interruption_class
@@ -1549,6 +1550,16 @@ components:
             domain.AttentionItem.ReviewRecoveryBinding). It binds the run,
             invocation, round, base, head, and immutable failure-row body
             digest displayed to the operator; null on every other item.
+        codex_reenrollment_recovery_binding:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/CodexReenrollmentRecoveryBinding"
+          description: >
+            The exact completed and verified auth-store replacement that may
+            resolve a revoked Codex identity's system_health item (issue #684;
+            mirrors domain.AttentionItem.CodexReenrollmentRecoveryBinding).
+            Null while re-enrollment is pending or failed and on unrelated
+            items; immutable once projected onto the open marker.
         review_configuration_recovery:
           nullable: true
           allOf:
@@ -1659,6 +1670,7 @@ components:
         base_freshness: null
         readiness_invalidation: null
         review_recovery_binding: null
+        codex_reenrollment_recovery_binding: null
         review_configuration_recovery: null
         item_version: 1
         interruption_class: "planned_gate"
@@ -2441,6 +2453,7 @@ components:
         - resume_unattended
         - recover_review
         - adopt_review_configuration
+        - resolve_reenrollment
 
     Priority:
       type: string
@@ -2643,6 +2656,33 @@ components:
         repo: "owner/repo"
         repository_id: 84958515
         superseded_profile_digest: "sha256:profile-superseded"
+
+    CodexReenrollmentRecoveryBinding:
+      type: object
+      description: >
+        Exact coordinates of the latest verified Codex auth-store replacement.
+        A resolve_reenrollment command clears only the carrier item whose
+        binding matches this completed journal operation.
+      required:
+        [auth_identity_id, lease_fence, auth_store_digest, access_token_expires_at]
+      properties:
+        auth_identity_id:
+          type: string
+          minLength: 1
+        lease_fence:
+          type: integer
+          format: int64
+          minimum: 1
+        auth_store_digest:
+          $ref: "#/components/schemas/Digest"
+        access_token_expires_at:
+          type: string
+          format: date-time
+      example:
+        auth_identity_id: "codex-primary"
+        lease_fence: 4
+        auth_store_digest: "sha256:replacement-store"
+        access_token_expires_at: "2026-08-12T03:04:05Z"
 
     BlockingSupersession:
       type: object

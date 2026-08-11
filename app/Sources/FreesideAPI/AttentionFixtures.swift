@@ -45,7 +45,10 @@ public enum AttentionFixtures {
             .rerun_trust_evaluation, .choose_alternate_profile, .inspect_trust_failure, .stop,
         ],
         .run_proposal: [.start, .start_with_changes, .decline, .snooze],
-        .system_health: [.acknowledge, .run_doctor, .stop_unattended, .resume_unattended],
+        .system_health: [
+            .acknowledge, .run_doctor, .stop_unattended, .resume_unattended,
+            .resolve_reenrollment,
+        ],
         .blocked: [],
     ]
 
@@ -65,6 +68,7 @@ public enum AttentionFixtures {
         .start, .start_with_changes, .decline, .snooze,
         .acknowledge, .run_doctor, .stop_unattended,
         .resume_unattended, .recover_review, .adopt_review_configuration,
+        .resolve_reenrollment,
     ]
 
     /// The default mock inbox: one open item per Phase 1 type.
@@ -242,6 +246,16 @@ public enum AttentionFixtures {
                     superseded_profile_digest: "sha256:profile-\(key)"
                 ))
             : nil
+        let codexReenrollmentRecovery: Components.Schemas.AttentionItem.codex_reenrollment_recovery_bindingPayload? =
+            type == .system_health
+            ? .init(
+                value1: .init(
+                    auth_identity_id: "codex-primary",
+                    lease_fence: 4,
+                    auth_store_digest: "sha256:replacement-store",
+                    access_token_expires_at: Date(timeIntervalSince1970: 1_786_502_645)
+                ))
+            : nil
 
         let item = Components.Schemas.AttentionItem(
             id: "item-\(key)",
@@ -266,6 +280,7 @@ public enum AttentionFixtures {
             pr_reference: prReference,
             commit_plan_notice: commitPlanNotice,
             review_recovery_binding: reviewRecoveryBinding,
+            codex_reenrollment_recovery_binding: codexReenrollmentRecovery,
             review_configuration_recovery: reviewConfigurationRecovery,
             item_version: 1,
             interruption_class: interruption,
