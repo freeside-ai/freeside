@@ -22,6 +22,7 @@ public enum ActionOutcome: Equatable {
     case resumesUnattended
     case recoversReview
     case adoptsReviewConfiguration
+    case resolvesReenrollment
 
     public static func of(_ action: Components.Schemas.Action) -> ActionOutcome {
         switch action {
@@ -38,6 +39,8 @@ public enum ActionOutcome: Equatable {
             return .recoversReview
         case .adopt_review_configuration:
             return .adoptsReviewConfiguration
+        case .resolve_reenrollment:
+            return .resolvesReenrollment
         case .open_pr, .mark_seen, .acknowledge, .inspect_trust_failure, .run_doctor:
             return .records
         case .discuss, .snooze, .start_with_changes, .continue_under_policy,

@@ -1,0 +1,9 @@
+{
+  "auth_identity_id": "codex-primary",
+  "lease_fence": 4,
+  "auth_store_digest": "sha256:replacement-store",
+  "access_token_expires_at": "2026-01-03T03:04:05Z",
+  "command_id": "command-resolve-reenrollment-1",
+  "reason": "operator resolved the verified Codex re-enrollment",
+  "occurred_at": "2026-01-02T03:04:05Z"
+}

@@ -44,7 +44,7 @@ var allowedActionsByType = map[domain.AttentionType]map[domain.Action]struct{}{
 	),
 	domain.AttentionSystemHealth: actionSet(
 		domain.ActionAcknowledge, domain.ActionRunDoctor, domain.ActionStopUnattended,
-		domain.ActionResumeUnattended,
+		domain.ActionResumeUnattended, domain.ActionResolveReenrollment,
 	),
 	// blocked is a read-only consolidation of external waits (§5.12). The plan
 	// assigns it no action; the shared domain/API contracts permit the empty

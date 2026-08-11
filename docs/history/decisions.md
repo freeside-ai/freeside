@@ -954,7 +954,7 @@ resolution pins one publication condition and names one deferred capability.
 
 ---
 
-## Revision 29 (Current)
+## Revision 29
 
 Revision 29 makes the admission effect of every `system_health` item explicit.
 Held from revision 28: everything.
@@ -968,3 +968,20 @@ Held from revision 28: everything.
    when a third posture has a concrete admission behavior that neither posture
    nor a validated supersession represents.
    (User; devlog 2026-08-09-1739-system-health-posture.md; #625.)
+
+---
+
+## Revision 30 (Current)
+
+Revision 30 binds revoked Codex identity recovery to exact verified evidence.
+Held from revision 29: everything.
+
+1. **Revoked Codex identity recovery is command-backed by exact verified
+   evidence** (Section 4): the marker remains a `system_health` item and gains
+   `resolve_reenrollment` only after its exact latest re-enrollment operation
+   is verified and immutably bound to that marker occurrence. The resolving
+   command revalidates both records atomically; `acknowledge` remains seen-only,
+   and no human assertion can clear the identity gate. Revisit when a provider
+   requires additional durable recovery evidence beyond the current digest and
+   access-token expiry.
+   (User; devlog 2026-08-11-1025-codex-reenrollment-recovery.md; #684.)

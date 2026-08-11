@@ -869,6 +869,7 @@ public actor MockServer {
                         pr_head_sha: "",
                         commit_plan_notice: nil,
                         review_recovery_binding: nil,
+                        codex_reenrollment_recovery_binding: nil,
                         review_configuration_recovery: nil,
                         item_version: 1,
                         interruption_class: .exceptional,
@@ -899,6 +900,11 @@ public actor MockServer {
             // The daemon also appends the profile-supersession-bound
             // transition; it has no API surface, so resolving the carrier is
             // the mock's observable parity.
+            itemsByID[payload.item_id] = concluded(current, as: .resolved)
+        case .resolvesReenrollment:
+            // The daemon additionally records and re-gates the verified
+            // operation transition; the carrier resolution is the sync-visible
+            // portion the mock can mirror.
             itemsByID[payload.item_id] = concluded(current, as: .resolved)
         case .records:
             // The command record is the whole server-side effect; the

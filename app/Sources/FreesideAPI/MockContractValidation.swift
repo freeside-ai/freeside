@@ -104,6 +104,22 @@ enum MockContractValidation {
         } else if item._type == .review_contradiction {
             return "review_contradiction item lacks review_recovery_binding"
         }
+        if let recovery = item.codex_reenrollment_recovery_binding?.value1 {
+            if item._type != .system_health {
+                return "codex_reenrollment_recovery_binding on a non-system_health item"
+            }
+            if recovery.auth_identity_id.isEmpty || recovery.auth_store_digest.isEmpty {
+                return "empty codex_reenrollment_recovery_binding field"
+            }
+            if recovery.lease_fence < 1 {
+                return "non-positive codex re-enrollment lease fence"
+            }
+            if !item.requested_decision.contains(.resolve_reenrollment) {
+                return "codex re-enrollment binding lacks resolve_reenrollment"
+            }
+        } else if item.requested_decision.contains(.resolve_reenrollment) {
+            return "resolve_reenrollment lacks codex re-enrollment binding"
+        }
         if let recovery = item.review_configuration_recovery?.value1 {
             if item._type != .review_configuration {
                 return "review_configuration_recovery on a non-review_configuration item"

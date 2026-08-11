@@ -1,20 +1,20 @@
 {
-  "id": "item-3",
+  "id": "item-codex-reenrollment",
   "project_id": "proj-1",
   "subject": {
-    "subject_type": "run",
-    "subject_id": "run-1",
-    "run_id": "run-1"
+    "subject_type": "system",
+    "subject_id": "daemon",
+    "run_id": null
   },
   "type": "system_health",
-  "priority": "normal",
-  "reason": "unattended execution admitted under the backup-encryption waiver for repository 424242",
+  "priority": "high",
+  "reason": "Codex identity requires verified re-enrollment",
   "requested_decision": [
     "acknowledge",
-    "stop_unattended"
+    "resolve_reenrollment"
   ],
-  "evidence_snapshot": [],
-  "agent_claims": [],
+  "evidence_snapshot": null,
+  "agent_claims": null,
   "artifact_digests": [],
   "pr_head_sha": "",
   "pr_reference": null,
@@ -22,9 +22,14 @@
   "base_freshness": null,
   "readiness_invalidation": null,
   "review_recovery_binding": null,
-  "codex_reenrollment_recovery_binding": null,
+  "codex_reenrollment_recovery_binding": {
+    "auth_identity_id": "codex-primary",
+    "lease_fence": 4,
+    "auth_store_digest": "sha256:replacement-store",
+    "access_token_expires_at": "2026-01-03T03:04:05Z"
+  },
   "review_configuration_recovery": null,
-  "item_version": 1,
+  "item_version": 2,
   "interruption_class": "exceptional",
   "conversation_id": null,
   "timing": {
@@ -36,10 +41,7 @@
   },
   "expires_when": null,
   "decided_at": null,
-  "posture": "blocking",
-  "blocking_supersession": {
-    "kind": "backup_encryption_waiver",
-    "repository_id": 424242
-  },
+  "posture": "advisory",
+  "blocking_supersession": null,
   "status": "open"
 }

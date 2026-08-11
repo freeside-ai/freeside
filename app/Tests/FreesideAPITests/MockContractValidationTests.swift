@@ -188,6 +188,42 @@ import Testing
                 == "review configuration recovery disagrees with item subject or head")
     }
 
+    @Test func codexReenrollmentRecoveryIsExactAndTypeScoped() {
+        let fixture = AttentionFixtures.fixture(type: .system_health).item
+        #expect(MockContractValidation.itemValidityBreach(fixture) == nil)
+
+        var wrongType = AttentionFixtures.fixture(type: .spec_approval).item
+        wrongType.codex_reenrollment_recovery_binding =
+            fixture.codex_reenrollment_recovery_binding
+        #expect(
+            MockContractValidation.itemValidityBreach(wrongType)
+                == "codex_reenrollment_recovery_binding on a non-system_health item")
+
+        var empty = fixture
+        empty.codex_reenrollment_recovery_binding?.value1.auth_store_digest = ""
+        #expect(
+            MockContractValidation.itemValidityBreach(empty)
+                == "empty codex_reenrollment_recovery_binding field")
+
+        var zeroFence = fixture
+        zeroFence.codex_reenrollment_recovery_binding?.value1.lease_fence = 0
+        #expect(
+            MockContractValidation.itemValidityBreach(zeroFence)
+                == "non-positive codex re-enrollment lease fence")
+
+        var missingAction = fixture
+        missingAction.requested_decision.removeAll { $0 == .resolve_reenrollment }
+        #expect(
+            MockContractValidation.itemValidityBreach(missingAction)
+                == "codex re-enrollment binding lacks resolve_reenrollment")
+
+        var missingBinding = fixture
+        missingBinding.codex_reenrollment_recovery_binding = nil
+        #expect(
+            MockContractValidation.itemValidityBreach(missingBinding)
+                == "resolve_reenrollment lacks codex re-enrollment binding")
+    }
+
     // The text-claim carrier (#217): the daemon recomputes the claim digest
     // over the content bytes, so the mirrored checks here are the empty
     // content, the byte cap, and the binding rule. The invalid-media-type

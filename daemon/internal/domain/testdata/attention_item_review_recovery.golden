@@ -28,6 +28,7 @@
     "head_sha": "cafebabe",
     "failure_digest": "sha256:review-failure-body"
   },
+  "codex_reenrollment_recovery_binding": null,
   "review_configuration_recovery": null,
   "item_version": 1,
   "interruption_class": "exceptional",

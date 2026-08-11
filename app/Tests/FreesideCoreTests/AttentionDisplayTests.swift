@@ -63,4 +63,22 @@ import Testing
 
         #expect(AttentionDisplay.reviewConfigurationRecoveryRows(item).isEmpty)
     }
+
+    @Test func codexReenrollmentRecoveryRowsExposeEveryAuthorityCoordinate() {
+        let item = AttentionFixtures.fixture(type: .system_health).item
+
+        #expect(
+            AttentionDisplay.codexReenrollmentRecoveryRows(item) == [
+                .init(label: "Auth identity", value: "codex-primary"),
+                .init(label: "Lease fence", value: "4"),
+                .init(label: "Auth store digest", value: "sha256:replacement-store"),
+                .init(label: "Token expires", value: "2026-08-12T02:44:05Z"),
+            ])
+    }
+
+    @Test func ordinaryItemsHaveNoCodexReenrollmentRecoveryRows() {
+        let item = AttentionFixtures.fixture(type: .review_contradiction).item
+
+        #expect(AttentionDisplay.codexReenrollmentRecoveryRows(item).isEmpty)
+    }
 }

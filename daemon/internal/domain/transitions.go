@@ -148,6 +148,24 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 		return fmt.Errorf("attention item %s: review recovery binding would change: %w",
 			updated.ID, ErrImmutableTransition)
 	}
+	// A revoked-identity marker gains its verified re-enrollment binding only
+	// after the journal reaches a verified terminal outcome. That projection is
+	// one-way: replacing or removing the coordinates would retarget an already
+	// rendered recovery action.
+	if old.CodexReenrollmentRecoveryBinding != nil {
+		sameReenrollment, err := jsonEqual(old.CodexReenrollmentRecoveryBinding, updated.CodexReenrollmentRecoveryBinding)
+		if err != nil {
+			return fmt.Errorf("attention item %s: %w", updated.ID, err)
+		}
+		if !sameReenrollment {
+			return fmt.Errorf("attention item %s: codex re-enrollment recovery binding would change: %w",
+				updated.ID, ErrImmutableTransition)
+		}
+	} else if updated.CodexReenrollmentRecoveryBinding != nil &&
+		(old.Status != StatusOpen || updated.Status != StatusOpen || old.Type != AttentionSystemHealth) {
+		return fmt.Errorf("attention item %s: codex re-enrollment recovery binding cannot be attached in this transition: %w",
+			updated.ID, ErrImmutableTransition)
+	}
 	sameConfigRecovery, err := jsonEqual(old.ReviewConfigurationRecovery, updated.ReviewConfigurationRecovery)
 	if err != nil {
 		return fmt.Errorf("attention item %s: %w", updated.ID, err)

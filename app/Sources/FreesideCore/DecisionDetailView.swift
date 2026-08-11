@@ -94,6 +94,7 @@ struct DecisionDetailView: View {
                 let recoveryRows =
                     AttentionDisplay.reviewRecoveryBindingRows(item)
                     + AttentionDisplay.reviewConfigurationRecoveryRows(item)
+                    + AttentionDisplay.codexReenrollmentRecoveryRows(item)
                 if !recoveryRows.isEmpty {
                     Divider()
                     ForEach(Array(recoveryRows.enumerated()), id: \.offset) { _, row in

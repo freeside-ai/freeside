@@ -28,6 +28,8 @@ func applyDataMigration(
 		return rewriteAnchoredPRReferences(ctx, tx)
 	case version == 39 && name == outboxPayloadAuthenticationMigration:
 		return authenticateExistingOutboxPayloads(ctx, tx)
+	case version == 40 && name == codexReenrollmentMigration:
+		return rewriteLegacyCodexReenrollmentMarkers(ctx, tx)
 	default:
 		return nil
 	}

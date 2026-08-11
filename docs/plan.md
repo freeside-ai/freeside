@@ -1,9 +1,9 @@
 ---
 title: Freeside Project Plan
-revision: 29
+revision: 30
 status: active
 phase: 1A
-updated: 2026-08-09
+updated: 2026-08-11
 ---
 
 # Freeside
@@ -225,7 +225,8 @@ system, subject_id, run_id?}`, `type`, `priority`, `reason`,
 `pr_head_sha`, `pr_reference? {repo, number}`, `item_version`,
 `interruption_class`, `conversation_id?`, derived timing aggregates,
 `expires_when`, `review_recovery_binding?`,
-`review_configuration_recovery?`, and `status`.
+`codex_reenrollment_recovery_binding?`, `review_configuration_recovery?`, and
+`status`.
 
 `evidence_snapshot` contains engine facts and only verifier or daemon artifacts
 produced under an approved recipe (Section 5.15). Agent claims are labeled.
@@ -258,7 +259,7 @@ Approval is not a universal action.
 | `ready_for_final_review` | View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. |
 | `run_proposal` | Start, **start with changes**, decline, or snooze. “Start with changes” creates a revised proposal artifact, supersedes the original item, creates a new item version, and starts the run from the exact revised digest. It never uses unversioned ad hoc parameters. Proposals are grouped under `proposal_batch_id` with per-candidate decisions. |
 | `effect_proposal` | Approve, **approve with changes**, decline, or snooze a proposed effect from the Section 5.13 registry (added in 1B with the registry; first instance: follow-up issue filings in 1B.1, with proposed watches following once their schedule kind lands, Section 5.16). Approval binds to the proposal artifact digest; “approve with changes” creates a revised proposal artifact and supersedes the item, exactly as `run_proposal`'s start-with-changes. `run_proposal` remains its own type. |
-| `system_health` | Acknowledge, run doctor, stop unattended operation, or, on the notice a stop raises, resume unattended operation. Acknowledge means seen, never resolved. Every item declares an immutable posture: `blocking` preserves the admission gate until the diagnostic clears, unattended operation is explicitly stopped, or a validated configuration supersedes it; `advisory` remains open and visible without blocking unrelated unattended admission. A stop is a durable operating transition: only the explicit resume reopens unattended admission, and a restart alone never does. |
+| `system_health` | Acknowledge, run doctor, stop unattended operation, or, on the notice a stop raises, resume unattended operation. A revoked Codex identity marker additionally offers resolve re-enrollment (`resolve_reenrollment`) only after it carries the immutable binding for its exact latest verified re-enrollment operation; the command revalidates that operation and marker occurrence in the transaction that resolves the item. Acknowledge means seen, never resolved, and cannot clear revoked identity. Every item declares an immutable posture: `blocking` preserves the admission gate until the diagnostic clears, unattended operation is explicitly stopped, or a validated configuration supersedes it; `advisory` remains open and visible without blocking unrelated unattended admission. A stop is a durable operating transition: only the explicit resume reopens unattended admission, and a restart alone never does. |
 | `blocked` | Consolidates external waits that exceed Section 5.12 thresholds. It is read-only. |
 
 Section 9 governs each type's presentation: what its card leads with and what
@@ -2560,17 +2561,17 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 29 ("Explicit health posture"):
+Revision 30 ("Verified Codex re-enrollment recovery"):
 
-1. **System-health admission posture is explicit and immutable** (Sections 4
-   and 5.7): every `system_health` item is either `blocking` or `advisory`.
-   Advisory observations remain open and operator-visible without blocking
-   unrelated unattended admission; blocking items preserve the prior gate and
-   are the only items eligible for a validated blocking supersession. Existing
-   rows migrate to `blocking`, preserving their historical meaning. Revisit
-   when a third posture has a concrete admission behavior that neither posture
-   nor a validated supersession represents.
-   (User; devlog 2026-08-09-1739-system-health-posture.md; #625.)
+1. **Revoked Codex identity recovery is command-backed by exact verified
+   evidence** (Section 4): the marker remains a `system_health` item and gains
+   `resolve_reenrollment` only after its exact latest re-enrollment operation
+   is verified and immutably bound to that marker occurrence. The resolving
+   command revalidates both records atomically; `acknowledge` remains seen-only,
+   and no human assertion can clear the identity gate. Revisit when a provider
+   requires additional durable recovery evidence beyond the current digest and
+   access-token expiry.
+   (User; devlog 2026-08-11-1025-codex-reenrollment-recovery.md; #684.)
 
 ## 14. Risks
 

@@ -498,6 +498,8 @@ func TestControlPutItemPolicyBoundary(t *testing.T) {
 		{"blocked accepts the empty set", "blocked", []string{}, http.StatusOK, ""},
 		{"blocked rejects any action", "blocked", []string{"stop"}, http.StatusBadRequest, "is not allowed for"},
 		{"review contradiction accepts recovery", "review_contradiction", []string{"recover_review"}, http.StatusOK, ""},
+		{"system health accepts reenrollment recovery", "system_health", []string{"resolve_reenrollment"}, http.StatusOK, ""},
+		{"wrong type rejects reenrollment recovery", "spec_approval", []string{"resolve_reenrollment"}, http.StatusBadRequest, "is not allowed for"},
 		{"unknown type rejected", "not_a_real_type", []string{"stop"}, http.StatusBadRequest, "unknown attention type"},
 		{"unknown action rejected", "spec_approval", []string{"not_a_real_action"}, http.StatusBadRequest, "invalid action"},
 	}
