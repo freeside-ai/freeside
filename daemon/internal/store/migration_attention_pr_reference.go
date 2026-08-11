@@ -20,13 +20,16 @@ func applyDataMigration(
 	version int,
 	name string,
 ) error {
-	if version != 36 || name != attentionPRReferenceMigration {
-		return nil
+	if version == 36 && name == attentionPRReferenceMigration {
+		if err := backfillLegacyFakePRReferences(ctx, tx); err != nil {
+			return err
+		}
+		return rewriteAnchoredPRReferences(ctx, tx)
 	}
-	if err := backfillLegacyFakePRReferences(ctx, tx); err != nil {
-		return err
+	if version == 39 && name == codexReenrollmentMigration {
+		return rewriteLegacyCodexReenrollmentMarkers(ctx, tx)
 	}
-	return rewriteAnchoredPRReferences(ctx, tx)
+	return nil
 }
 
 type legacyAttentionRow struct {
