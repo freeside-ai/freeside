@@ -46,3 +46,20 @@ func TestWriteCommandErrorClassifiesAuthorityRejections(t *testing.T) {
 		t.Fatalf("ambiguous error -> %d, want %d", recorder.Code, http.StatusInternalServerError)
 	}
 }
+
+// TestWriteCommandErrorClassifiesOversizedRequestChanges guards that an
+// over-limit request_changes message, rejected by validateCommandContent
+// before the write, is reported as a 400 rather than an ambiguous 500.
+func TestWriteCommandErrorClassifiesOversizedRequestChanges(t *testing.T) {
+	t.Parallel()
+	recorder := httptest.NewRecorder()
+	writeCommandError(recorder, fmt.Errorf("action %q message is too long: %w",
+		domain.ActionRequestChanges, domain.ErrClaimTextTooLarge))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("oversized request_changes -> %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	var body errorResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || body.Message == "" {
+		t.Fatalf("body = %q, %v; want an error message", recorder.Body.String(), err)
+	}
+}

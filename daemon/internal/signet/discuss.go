@@ -15,6 +15,15 @@ import (
 // Wave 2 engine later) scans this kind.
 const kindAgentInvocationRequested = "agent_invocation_requested"
 
+// MaxRequestChangesMessageBytes bounds revision feedback before the
+// elaboration loop persists and repeatedly replays it as agent input.
+const MaxRequestChangesMessageBytes = 8 << 10
+
+// MaxRequestChangesCommandIDBytes bounds the command id so the derived
+// spec-feedback artifact id cannot bloat the elaboration request past its
+// aggregate protocol limit.
+const MaxRequestChangesCommandIDBytes = 256
+
 // AgentInvocationRequestedKind identifies a committed discuss invocation in
 // the durable outbox.
 const AgentInvocationRequestedKind = kindAgentInvocationRequested
@@ -35,13 +44,33 @@ type invocationRequest struct {
 // validateCommandContent is the per-action conversation-content policy the
 // domain deliberately does not own (the fields are content, which actions
 // require them is acceptance policy): discuss requires a non-empty message
-// and every referenced attachment already stored; every other action carries
+// and every referenced attachment already stored. request_changes carries one
+// required text comment but no attachments; its elaboration consumer binds
+// that comment as a research artifact. Every other action carries
 // no conversation content, and silently dropping supplied content would lose
 // the user's data, so it is rejected loudly. It runs before the Write so a
 // rejected command consumes no revision; attachment blobs are immutable, so
 // the pre-transaction existence check cannot go stale.
 func (s *Service) validateCommandContent(command domain.Command) error {
-	if _, kind := actionOutcome(command.Action); kind != outcomeDiscusses {
+	_, kind := actionOutcome(command.Action)
+	if command.Action == domain.ActionRequestChanges {
+		if len(command.CommandID) > MaxRequestChangesCommandIDBytes {
+			return fmt.Errorf("action %q command id is %d bytes: %w",
+				command.Action, len(command.CommandID), domain.ErrClaimTextTooLarge)
+		}
+		if command.Message == "" {
+			return fmt.Errorf("action %q: %w", command.Action, ErrMessageRequired)
+		}
+		if len(command.Message) > MaxRequestChangesMessageBytes {
+			return fmt.Errorf("action %q message is %d bytes: %w",
+				command.Action, len(command.Message), domain.ErrClaimTextTooLarge)
+		}
+		if len(command.Attachments) > 0 {
+			return fmt.Errorf("action %q: %w", command.Action, ErrContentNotAllowed)
+		}
+		return nil
+	}
+	if kind != outcomeDiscusses {
 		if command.Message != "" || len(command.Attachments) > 0 {
 			return fmt.Errorf("action %q: %w", command.Action, ErrContentNotAllowed)
 		}

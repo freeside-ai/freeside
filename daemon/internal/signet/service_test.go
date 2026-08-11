@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -611,7 +612,7 @@ func TestSubmitRejectsInvalidAndUnknown(t *testing.T) {
 			domain.ActionSnooze, domain.ActionStartWithChanges,
 			domain.ActionContinueUnderPolicy, domain.ActionConvertToPolicy,
 			domain.ActionAdjudicate, domain.ActionRetryWithCapability,
-			domain.ActionChooseAlternate, domain.ActionRequestChanges,
+			domain.ActionChooseAlternate,
 			domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry,
 			domain.ActionReturnToAgent,
 		}
@@ -623,6 +624,55 @@ func TestSubmitRejectsInvalidAndUnknown(t *testing.T) {
 		}
 		if after := f.revision(t); after != before {
 			t.Errorf("pending-action rejection moved the revision %d → %d", before, after)
+		}
+	})
+
+	t.Run("request changes records feedback and supersedes", func(t *testing.T) {
+		item := f.item
+		item.ID = "item-request-changes"
+		item.Type = domain.AttentionSpecApproval
+		item.RequestedDecision = []domain.Action{domain.ActionRequestChanges}
+		item.PRHeadSHA = ""
+		item.PRReference = nil
+		if err := f.service.PutItem(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+		command := f.command("cmd-request-changes", domain.ActionRequestChanges)
+		command.Payload.ItemID = item.ID
+		command.Payload.ItemVersion = item.ItemVersion
+		command.Payload.PRHeadSHA = item.PRHeadSHA
+		command.Payload.ArtifactDigests = item.ArtifactDigests
+		command.Payload.Message = "Show the refusal path."
+		withAttachment := command
+		withAttachment.CommandID = "cmd-request-changes-attachment"
+		withAttachment.Payload.Attachments = []domain.Digest{"sha256:unconsumed-attachment"}
+		if _, err := f.service.Submit(ctx, withAttachment); !errors.Is(err, signet.ErrContentNotAllowed) {
+			t.Fatalf("request_changes attachment error = %v, want ErrContentNotAllowed", err)
+		}
+		overlong := command
+		overlong.CommandID = "cmd-request-changes-overlong"
+		overlong.Payload.Message = strings.Repeat("x", signet.MaxRequestChangesMessageBytes+1)
+		if _, err := f.service.Submit(ctx, overlong); !errors.Is(err, domain.ErrClaimTextTooLarge) {
+			t.Fatalf("request_changes overlong error = %v, want ErrClaimTextTooLarge", err)
+		}
+		overlongID := command
+		overlongID.CommandID = strings.Repeat("c", signet.MaxRequestChangesCommandIDBytes+1)
+		if _, err := f.service.Submit(ctx, overlongID); !errors.Is(err, domain.ErrClaimTextTooLarge) {
+			t.Fatalf("request_changes overlong command id error = %v, want ErrClaimTextTooLarge", err)
+		}
+		if _, err := f.service.Submit(ctx, command); err != nil {
+			t.Fatal(err)
+		}
+		var stored domain.AttentionItem
+		if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			stored, err = tx.GetAttentionItem(ctx, item.ID)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if stored.Status != domain.StatusSuperseded {
+			t.Fatalf("status = %q", stored.Status)
 		}
 	})
 

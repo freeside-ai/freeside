@@ -468,6 +468,11 @@ func isCommandRequestError(err error) bool {
 	for _, target := range []error{
 		ErrActionNotAllowedForType, ErrUnsupportedAction,
 		ErrMessageRequired, ErrContentNotAllowed, ErrAttachmentNotStored,
+		// An over-limit request_changes message is deterministic invalid
+		// client input, rejected by validateCommandContent before the write,
+		// so it is a 400 like the empty-message and content-not-allowed cases
+		// beside it, never an ambiguous 500.
+		domain.ErrClaimTextTooLarge,
 		// A malformed attachment digest in the payload surfaces from the
 		// blob-store gate through validateCommandContent: the client sent
 		// it, so it is a request error like the unstored-digest case.
