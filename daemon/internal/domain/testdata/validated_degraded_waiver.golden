@@ -1,0 +1,10 @@
+{
+  "id": "waiver-1",
+  "requirement_resolution_digest": "sha256:3716a1b73347ec46e0b811fee7e96a53051e0c901b71f9d4754d3365ea09db9a",
+  "dimension": "repo_change_policy",
+  "authority": "explicit_human_approval",
+  "grant_digest": "sha256:grant",
+  "lifecycle_digest": "sha256:cfd14f3c3233f8c67755e3af5fc008c34ccd508e84d0a020be7a46a7bdb24c16",
+  "floor_registry_generation": 1,
+  "granted_at": "2026-08-11T01:02:03Z"
+}

@@ -64,6 +64,7 @@ func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 			root := t.TempDir()
 			marker := filepath.Join(root, "kill-checkpoint")
 			first := startProcessFixture(t, binary, root, ntfy.URL, tc.checkpoint, marker)
+			seedKillRecoveryReadiness(t, filepath.Join(root, "freeside.db"))
 			client := pairProcessDevice(t, first.ready)
 			approval := client.waitForItem(t, domain.ItemID("approval-"+string(defaultFakeRunID)))
 			client.submit(t, "approve-kill-recovery", approval, domain.ActionApprove, "")
@@ -83,6 +84,7 @@ func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 				restarted.stop(t)
 			}
 			assertKillRecoveryState(t, root, tc.acceptedResults)
+			assertKillRecoveryReadiness(t, filepath.Join(root, "freeside.db"))
 		})
 	}
 }
@@ -115,6 +117,89 @@ func waitForDurableStop(t *testing.T, root string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("restarted freesided did not file a durable-stop item within 5s")
+}
+
+func killRecoveryReadinessFixture(t *testing.T) (domain.RequirementResolution, domain.ValidatedDegradedWaiver, domain.WaiverLifecycleEvent) {
+	t.Helper()
+	now := time.Date(2026, 8, 11, 2, 3, 4, 0, time.UTC)
+	resolution, err := domain.NewRequirementResolution(domain.RequirementResolutionInput{
+		RequirementKey: "kill-recovery-policy", CheckClass: domain.CheckClassRepoChangePolicy,
+		Kind: domain.RequirementRequired, Applicable: true,
+		RequirementSetDigest:    "sha256:kill-recovery-requirements",
+		FloorRegistryGeneration: domain.CurrentVerificationFloorRegistryGeneration,
+		ResolvedPolicyDigest:    "sha256:kill-recovery-policy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := domain.NewWaiverLifecycleEvent("kill-recovery-waiver", 1, domain.WaiverLifecycleGranted, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiver, err := domain.NewValidatedDegradedWaiver(resolution, event.WaiverID, "repo_change_policy",
+		domain.WaiverAuthorityHumanApproval, "sha256:kill-recovery-grant", event, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolution, waiver, event
+}
+
+func killRecoveryReadinessOptions(grant domain.Digest) store.Options {
+	return store.Options{
+		WaiverGrantApprovals: map[domain.WaiverGrantingAuthority]map[domain.Digest]bool{
+			domain.WaiverAuthorityHumanApproval: {grant: true},
+		},
+		TrustedRequirementSets: map[domain.Digest][]domain.RequirementDefinition{
+			"sha256:kill-recovery-requirements": {
+				{
+					Key: "kill-recovery-policy", Class: domain.CheckClassRepoChangePolicy,
+					Kind: domain.RequirementRequired, Applicable: true,
+				},
+			},
+		},
+	}
+}
+
+func seedKillRecoveryReadiness(t *testing.T, path string) {
+	t.Helper()
+	ctx := context.Background()
+	resolution, waiver, event := killRecoveryReadinessFixture(t)
+	st, err := store.Open(ctx, path, killRecoveryReadinessOptions(waiver.GrantDigest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.RecordRequirementResolution(ctx, resolution); err != nil {
+			return err
+		}
+		return tx.RecordValidatedDegradedWaiver(ctx, waiver, event)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertKillRecoveryReadiness(t *testing.T, path string) {
+	t.Helper()
+	ctx := context.Background()
+	_, waiver, _ := killRecoveryReadinessFixture(t)
+	st, err := store.Open(ctx, path, killRecoveryReadinessOptions(waiver.GrantDigest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close() //nolint:errcheck // test cleanup; assertions already completed
+	resolution, waiver, _ := killRecoveryReadinessFixture(t)
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.GetRequirementResolution(ctx, resolution.Digest); err != nil {
+			return err
+		}
+		_, err := tx.GetValidatedDegradedWaiver(ctx, waiver.ID)
+		return err
+	}); err != nil {
+		t.Fatalf("readiness records after SIGKILL: %v", err)
+	}
 }
 
 func buildKillTestDaemon(t *testing.T) string {

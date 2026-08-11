@@ -22,6 +22,8 @@ type (
 	AuthIdentityID  string
 	ScheduleID      string
 	WorkUnitID      string
+	RequirementKey  string
+	WaiverID        string
 )
 
 // Digest is a content address (e.g. "sha256:..."); artifacts, specs, recipes,

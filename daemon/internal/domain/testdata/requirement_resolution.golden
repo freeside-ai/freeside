@@ -1,0 +1,12 @@
+{
+  "digest": "sha256:3716a1b73347ec46e0b811fee7e96a53051e0c901b71f9d4754d3365ea09db9a",
+  "requirement_key": "repo-change-policy",
+  "check_class": "repo_change_policy",
+  "kind": "required",
+  "applicable": true,
+  "base_dependent": false,
+  "requirement_set_digest": "sha256:requirement-set",
+  "floor_registry_generation": 1,
+  "resolved_policy_digest": "sha256:policy",
+  "sampling_decision": null
+}

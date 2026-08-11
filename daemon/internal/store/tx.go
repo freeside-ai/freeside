@@ -40,9 +40,36 @@ type ReadTx struct {
 	// Backup closure may hash many blobs. Memoize one verdict (including a
 	// source error) for this transaction so a list applies one current,
 	// consistent result to every row without re-evaluating the same evidence.
-	backupHealthEvaluated bool
-	backupHealth          *domain.BackupHealth
-	backupHealthErr       error
+	backupHealthEvaluated               bool
+	backupHealth                        *domain.BackupHealth
+	backupHealthErr                     error
+	verificationFloorRegistryGeneration uint64
+	waiverGrantApprovals                map[domain.WaiverGrantingAuthority]map[domain.Digest]bool
+	requirementSets                     map[domain.Digest]map[domain.RequirementKey]domain.RequirementDefinition
+	// authorizedReviewRecipes carries the run-scoped independent-review
+	// authority a caller has re-derived for this transaction. Independent-review
+	// approval is run-trust-context-scoped (profile plus adoption), so unlike
+	// approvedRecipes it cannot be a daemon-owned Open-time registry; a caller
+	// that has verified it asserts each approved recipe through
+	// AuthorizeIndependentReviewRecipe, and the check-proof recipe gate fails
+	// closed for any independent-review recipe absent from it, at write and
+	// read. Nil until a caller asserts, so the default is fail-closed.
+	authorizedReviewRecipes map[domain.Digest]bool
+}
+
+// AuthorizeIndependentReviewRecipe records that the caller has re-derived the
+// run-scoped independent-review authority (profile plus adoption) for recipe,
+// so the check-proof recipe gate accepts an independent_review proof bound to
+// it at both write and read. Without this assertion the gate fails closed: the
+// store never trusts a caller-supplied independent-review recipe on its own,
+// keeping the returned-object trust boundary defense-in-depth even though the
+// authority itself lives in the engine's run trust context, not a store
+// registry.
+func (tx *ReadTx) AuthorizeIndependentReviewRecipe(recipe domain.Digest) {
+	if tx.authorizedReviewRecipes == nil {
+		tx.authorizedReviewRecipes = map[domain.Digest]bool{}
+	}
+	tx.authorizedReviewRecipes[recipe] = true
 }
 
 // InternalTx is the transaction handle passed to WriteInternal callbacks:
@@ -159,6 +186,9 @@ func (s *Store) newReadTx(tx *sql.Tx) ReadTx {
 	return ReadTx{
 		tx: tx, approvedRecipes: s.approvedRecipes,
 		admissionPolicy: s.admissionPolicy, backupHealthSource: s.backupHealthSource,
+		verificationFloorRegistryGeneration: s.verificationFloorRegistryGeneration,
+		waiverGrantApprovals:                s.waiverGrantApprovals,
+		requirementSets:                     s.requirementSets,
 	}
 }
 

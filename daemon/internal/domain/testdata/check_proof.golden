@@ -1,0 +1,12 @@
+{
+  "digest": "sha256:6ea07d0b11ed3cd874bca7c6f80348e4bf38e1d51393d4dee262bfa19d22ac90",
+  "requirement_resolution_digest": "sha256:a2be16d7b2506028d1f2342425db804b22efac15e662167573b0009c7ec8d2b6",
+  "candidate_head": "head-sha",
+  "base": {
+    "repo": "freeside-ai/freeside",
+    "repository_id": 1,
+    "base_ref": "refs/heads/main",
+    "base_sha": "base-sha"
+  },
+  "recipe_digest": "sha256:review-config"
+}

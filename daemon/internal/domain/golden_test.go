@@ -965,3 +965,73 @@ func TestGolden(t *testing.T) {
 		})
 	}
 }
+
+func TestReadinessGoldenContracts(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
+	resolution, err := domain.NewRequirementResolution(domain.RequirementResolutionInput{
+		RequirementKey: "repo-change-policy", CheckClass: domain.CheckClassRepoChangePolicy,
+		Kind: domain.RequirementRequired, Applicable: true,
+		RequirementSetDigest:    "sha256:requirement-set",
+		FloorRegistryGeneration: domain.CurrentVerificationFloorRegistryGeneration,
+		ResolvedPolicyDigest:    "sha256:policy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifecycle, err := domain.NewWaiverLifecycleEvent("waiver-1", 1, domain.WaiverLifecycleGranted, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiver, err := domain.NewValidatedDegradedWaiver(resolution, "waiver-1", "repo_change_policy",
+		domain.WaiverAuthorityHumanApproval, "sha256:grant", lifecycle, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := domain.NewNonPassingCheckState(resolution, domain.AdvisoryFailed, &waiver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verdict, err := domain.EvaluateReadiness(domain.EvaluationTarget{CandidateHead: "head-sha"}, []domain.RequirementResolution{resolution}, []domain.CheckState{state}, func(r domain.RequirementResolution, w domain.ValidatedDegradedWaiver) error {
+		return domain.ValidateDegradedWaiver(r, lifecycle, w)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofResolution, err := domain.NewRequirementResolution(domain.RequirementResolutionInput{
+		RequirementKey: "review", CheckClass: domain.CheckClassIndependentReview,
+		Kind: domain.RequirementRequired, Applicable: true, BaseDependent: true,
+		RequirementSetDigest:    "sha256:requirement-set",
+		FloorRegistryGeneration: domain.CurrentVerificationFloorRegistryGeneration,
+		ResolvedPolicyDigest:    "sha256:policy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := domain.NewCheckProof(proofResolution, "head-sha", &domain.BaseRevision{
+		Repo: "freeside-ai/freeside", RepositoryID: 1, BaseRef: "refs/heads/main", BaseSHA: "base-sha",
+	}, "sha256:review-config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtures := []struct {
+		name  string
+		value any
+	}{
+		{"requirement_resolution", resolution},
+		{"check_proof", proof},
+		{"waiver_lifecycle_event", lifecycle},
+		{"validated_degraded_waiver", waiver},
+		{"check_state", state},
+		{"readiness_verdict", verdict},
+	}
+	for _, fixture := range fixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			body, err := json.MarshalIndent(fixture.value, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			golden.Assert(t, fixture.name, append(body, '\n'))
+		})
+	}
+}

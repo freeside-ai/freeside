@@ -112,9 +112,14 @@ type ReconcileResult struct {
 	InvocationsStarted        int
 	ResultsAccepted           int
 	PublicationTasksCompleted int
-	ReadyItemsCreated         int
-	BlockedItemsCreated       int
-	LastPRNumber              int
+	ReadyCleanItemsCreated    int
+	ReadyDegradedItemsCreated int
+	// ReadyItemsCreated is the operational event count retained for existing
+	// callers. Readiness authority is carried only by the two verdict-class
+	// fields above and the persisted ReadinessVerdict.
+	ReadyItemsCreated   int
+	BlockedItemsCreated int
+	LastPRNumber        int
 }
 
 // Reconcile advances every durable run and invocation as far as the currently
@@ -171,7 +176,9 @@ func (e *Engine) ReconcileProductionPublications(ctx context.Context) (Reconcile
 	result := ReconcileResult{
 		ResultsAccepted:           publication.accepted,
 		PublicationTasksCompleted: publication.completed,
-		ReadyItemsCreated:         publication.ready,
+		ReadyCleanItemsCreated:    publication.readyClean,
+		ReadyDegradedItemsCreated: publication.readyDegraded,
+		ReadyItemsCreated:         publication.readyClean + publication.readyDegraded,
 		BlockedItemsCreated:       publication.blocked,
 		LastPRNumber:              publication.lastPR,
 	}
