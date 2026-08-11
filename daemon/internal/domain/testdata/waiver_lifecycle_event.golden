@@ -1,0 +1,8 @@
+{
+  "waiver_id": "waiver-1",
+  "sequence": 1,
+  "status": "granted",
+  "previous_digest": null,
+  "event_digest": "sha256:cfd14f3c3233f8c67755e3af5fc008c34ccd508e84d0a020be7a46a7bdb24c16",
+  "recorded_at": "2026-08-11T01:02:03Z"
+}
