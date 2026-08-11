@@ -33,6 +33,20 @@ cat >"$STUB_BIN/plutil" <<'STUB'
 #!/usr/bin/env bash
 target=${!#}
 [[ -f "$target" ]] || exit 1
+if [[ "${1:-}" == -replace ]]; then
+    key=$2
+    value=$4
+    case "$key" in
+    ProgramArguments.2) token=__FREESIDE_DB_PATH__ ;;
+    ProgramArguments.4) token=__FREESIDE_STATE_DIR__ ;;
+    StandardErrorPath) token=__FREESIDE_STDERR_PATH__ ;;
+    *) exit 1 ;;
+    esac
+    escaped=$(printf '%s' "$value" | sed 's/[\\&|]/\\&/g')
+    sed "s|$token|$escaped|" "$target" >"$target.tmp"
+    mv "$target.tmp" "$target"
+    exit 0
+fi
 printf '%s\n' "${STUB_BUNDLE_ID:-ai.freeside.app.macos}"
 STUB
 
@@ -66,6 +80,9 @@ case " $* " in
 *" --display "*)
     printf '%s\n' '# designated => identifier "ai.freeside.app.macos"' >&2
     ;;
+*" --force --sign "*)
+    printf 'called\n' >"${STUB_CASE_DIR:?}/codesign-sign-called"
+    ;;
 *) exit 1 ;;
 esac
 STUB
@@ -78,6 +95,9 @@ if [[ -n "${STUB_BUILD_SUCCEEDS:-}" ]]; then
     mkdir -p "$built_app/Contents"
     printf 'new client\n' >"$built_app/Contents/marker"
     printf 'fixture\n' >"$built_app/Contents/Info.plist"
+    mkdir -p "$built_app/Contents/Library/LaunchAgents"
+    cp "$STUB_AGENT_TEMPLATE" \
+        "$built_app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist"
     if [[ -n "${STUB_INTERLOPER_AFTER_BUILD:-}" ]]; then
         mkdir -p "$STUB_INTERLOPER_AFTER_BUILD/Contents"
         printf 'interloper after build\n' >"$STUB_INTERLOPER_AFTER_BUILD/Contents/marker"
@@ -93,6 +113,13 @@ STUB
 cat >"$STUB_BIN/ditto" <<'STUB'
 #!/usr/bin/env bash
 cp -R "$1" "$2"
+STUB
+
+cat >"$STUB_BIN/defaults" <<'STUB'
+#!/usr/bin/env bash
+phase=before-build
+[[ -e "${STUB_CASE_DIR:?}/xcodebuild-called" ]] && phase=after-build
+printf '%s %s\n' "$phase" "$*" >>"$STUB_CASE_DIR/defaults-calls"
 STUB
 
 cat >"$STUB_BIN/stat" <<'STUB'
@@ -196,6 +223,20 @@ fi
 
 chmod +x "$STUB_BIN"/*
 
+STUB_AGENT_TEMPLATE=$TMP/ai.freeside.daemon.plist
+export STUB_AGENT_TEMPLATE
+cat >"$STUB_AGENT_TEMPLATE" <<'PLIST'
+<plist><dict>
+<key>BundleProgram</key><string>Contents/Resources/freesided</string>
+<key>ProgramArguments</key><array>
+<string>freesided</string><string>-db</string><string>__FREESIDE_DB_PATH__</string>
+<string>-state-dir</string><string>__FREESIDE_STATE_DIR__</string>
+<string>-listen</string><string>127.0.0.1:7331</string>
+</array>
+<key>StandardErrorPath</key><string>__FREESIDE_STDERR_PATH__</string>
+</dict></plist>
+PLIST
+
 pass=0
 fail=0
 skip=0
@@ -207,7 +248,9 @@ RC=0
 begin_case() {
     CASE=$1
     CASE_DIR=$TMP/case-$2
-    mkdir -p "$CASE_DIR/Applications"
+    mkdir -p "$CASE_DIR/Applications" "$CASE_DIR/home"
+    printf '#!/usr/bin/env bash\n' >"$CASE_DIR/freesided"
+    chmod +x "$CASE_DIR/freesided"
     export STUB_CASE_DIR=$CASE_DIR
     unset STUB_BUNDLE_ID
     unset STUB_INTERLOPER_DEST
@@ -233,12 +276,17 @@ report_failure() {
 }
 
 run_installer() {
+    run_installer_raw --daemon-path "$CASE_DIR/freesided" "$@"
+}
+
+run_installer_raw() {
     set +e
     OUT=$(PATH="$STUB_BIN:$PATH" \
         CLANG_MODULE_CACHE_PATH="$TMP/swift-module-cache" \
         FREESIDE_MAC_INSTALL_DIR="$CASE_DIR/Applications" \
         FREESIDE_MAC_BUILD_DIR="$CASE_DIR/Build" \
         FREESIDE_MAC_SIGNING_IDENTITY="${STUB_SIGNING_IDENTITY-Test Identity}" \
+        HOME="$CASE_DIR/home" \
         bash "$INSTALLER" "$@" 2>&1)
     RC=$?
     set -e
@@ -264,6 +312,26 @@ assert_exists() {
         pass=$((pass + 1))
     else
         report_failure "expected path to exist: $1"
+    fi
+}
+
+assert_file_contains() {
+    local path=$1
+    local text=$2
+    if [[ -f "$path" ]] && grep -Fq "$text" "$path"; then
+        pass=$((pass + 1))
+    else
+        report_failure "expected $path to contain: $text"
+    fi
+}
+
+assert_file_omits() {
+    local path=$1
+    local text=$2
+    if [[ -f "$path" ]] && ! grep -Fq "$text" "$path"; then
+        pass=$((pass + 1))
+    else
+        report_failure "expected $path to omit: $text"
     fi
 }
 
@@ -672,7 +740,7 @@ fi
 begin_case "first install verification failure removes the replacement" 13
 destination=$CASE_DIR/Applications/Freeside.app
 export STUB_BUILD_SUCCEEDS=true
-export STUB_FAIL_VERIFY_CALL=2
+export STUB_FAIL_VERIFY_CALL=3
 run_installer
 assert_rc 1
 assert_contains "the installed app failed signature verification"
@@ -698,7 +766,7 @@ superseded=$destination.install-superseded
 make_recovery_app "$destination"
 old_inode=$(inode "$destination")
 export STUB_BUILD_SUCCEEDS=true
-export STUB_FAIL_VERIFY_CALL=2
+export STUB_FAIL_VERIFY_CALL=3
 run_installer
 assert_rc 1
 assert_contains "the installed app failed signature verification"
@@ -858,6 +926,65 @@ assert_contains "holds bundle id 'example.foreign.app'"
 assert_absent "$CASE_DIR/xcodebuild-called"
 assert_inode "$destination" "$entry_inode" \
     "foreign bundle destination changed"
+
+begin_case "daemon path is required before building" 26
+destination=$CASE_DIR/Applications/Freeside.app
+run_installer_raw
+assert_rc 1
+assert_contains "--daemon-path is required"
+assert_absent "$destination"
+assert_absent "$CASE_DIR/xcodebuild-called"
+
+begin_case "daemon path must be absolute" 27
+run_installer_raw --daemon-path ./freesided
+assert_rc 1
+assert_contains "--daemon-path must be absolute"
+assert_absent "$CASE_DIR/xcodebuild-called"
+
+begin_case "daemon path must be executable" 28
+daemon=$CASE_DIR/not-executable
+printf 'not executable\n' >"$daemon"
+run_installer_raw --daemon-path "$daemon"
+assert_rc 1
+assert_contains "--daemon-path is not an executable file"
+assert_absent "$CASE_DIR/xcodebuild-called"
+
+begin_case "daemon is bundled and state paths are templated before the final seal" 29
+destination=$CASE_DIR/Applications/Freeside.app
+export STUB_BUILD_SUCCEEDS=true
+run_installer
+assert_rc 0
+agent=$destination/Contents/Library/LaunchAgents/ai.freeside.daemon.plist
+assert_file_contains "$agent" "Contents/Resources/freesided"
+assert_file_contains \
+    "$agent" "$CASE_DIR/home/Library/Application Support/Freeside/daemon/freeside.db"
+assert_file_contains \
+    "$agent" "$CASE_DIR/home/Library/Application Support/Freeside/daemon"
+assert_file_contains \
+    "$agent" "$CASE_DIR/home/Library/Application Support/Freeside/daemon/freesided.log"
+assert_file_omits "$agent" "__FREESIDE_"
+assert_file_contains "$destination/Contents/Resources/freesided" "#!/usr/bin/env bash"
+assert_exists "$CASE_DIR/codesign-sign-called"
+assert_file_contains \
+    "$SCRIPT_DIR/../app/Apps/macOS/LaunchAgents/ai.freeside.daemon.plist" \
+    "Contents/Resources/freesided"
+assert_file_contains \
+    "$CASE_DIR/defaults-calls" \
+    "before-build delete ai.freeside.app.macos FreesideLaunchAgentRegistrationCurrent"
+assert_file_contains \
+    "$CASE_DIR/defaults-calls" \
+    "after-build delete ai.freeside.app.macos FreesideLaunchAgentRegistrationCurrent"
+
+begin_case "registration invalidation precedes a later build failure" 30
+run_installer
+assert_rc 1
+assert_contains "build failed"
+assert_file_contains \
+    "$CASE_DIR/defaults-calls" \
+    "before-build delete ai.freeside.app.macos FreesideLaunchAgentRegistrationCurrent"
+assert_file_omits \
+    "$CASE_DIR/defaults-calls" \
+    "after-build delete ai.freeside.app.macos FreesideLaunchAgentRegistrationCurrent"
 
 has_real_swift=false
 if [[ -n "$REAL_SWIFT" ]] && "$REAL_SWIFT" --version >/dev/null 2>&1; then

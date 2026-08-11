@@ -1,7 +1,8 @@
 import Foundation
 import FreesideAPI
-import FreesideCore
 import Testing
+
+@testable import FreesideCore
 
 private struct StoreRefused: Error {}
 
@@ -185,6 +186,171 @@ private struct FailingCredentialStore: DeviceCredentialStore {
 }
 
 @Suite @MainActor struct AppSessionTests {
+    @Test func launchResolutionUsesExplicitModesThenReadinessThenPersisted() {
+        let local = DaemonReadiness(
+            apiURL: URL(string: "http://127.0.0.1:7331")!, pairingCode: "483911")
+
+        #expect(
+            AppSession.launchMode(
+                argumentServerURL: "http://127.0.0.1:9000",
+                pairingDemo: false,
+                mockMode: true,
+                readiness: local,
+                persistedServerURL: "https://daemon.example",
+                localDaemonURL: DaemonReadinessReader.supervisedAPIURL)
+                == .live(URL(string: "http://127.0.0.1:9000")!, pairingCode: ""))
+        #expect(
+            AppSession.launchMode(
+                argumentServerURL: nil,
+                pairingDemo: true,
+                mockMode: true,
+                readiness: local,
+                persistedServerURL: "https://daemon.example",
+                localDaemonURL: DaemonReadinessReader.supervisedAPIURL) == .pairingDemo)
+        #expect(
+            AppSession.launchMode(
+                argumentServerURL: nil,
+                pairingDemo: false,
+                mockMode: true,
+                readiness: local,
+                persistedServerURL: "https://daemon.example",
+                localDaemonURL: DaemonReadinessReader.supervisedAPIURL) == .mock)
+        #expect(
+            AppSession.launchMode(
+                argumentServerURL: nil,
+                pairingDemo: false,
+                mockMode: false,
+                readiness: local,
+                persistedServerURL: "https://daemon.example",
+                localDaemonURL: DaemonReadinessReader.supervisedAPIURL)
+                == .live(local.apiURL, pairingCode: "483911"))
+        let staleLocal = DaemonReadiness(
+            apiURL: URL(string: "http://127.0.0.1:49152")!, pairingCode: "stale-code")
+        #expect(
+            AppSession.launchMode(
+                argumentServerURL: nil,
+                pairingDemo: false,
+                mockMode: false,
+                readiness: staleLocal,
+                persistedServerURL: nil,
+                localDaemonURL: DaemonReadinessReader.supervisedAPIURL)
+                == .live(DaemonReadinessReader.supervisedAPIURL, pairingCode: ""))
+        #expect(
+            AppSession.launchMode(
+                argumentServerURL: nil,
+                pairingDemo: false,
+                mockMode: false,
+                readiness: nil,
+                persistedServerURL: "https://daemon.example",
+                localDaemonURL: DaemonReadinessReader.supervisedAPIURL)
+                == .live(URL(string: "https://daemon.example")!, pairingCode: ""))
+        #expect(
+            AppSession.launchMode(
+                argumentServerURL: nil,
+                pairingDemo: false,
+                mockMode: false,
+                readiness: nil,
+                persistedServerURL: nil,
+                localDaemonURL: DaemonReadinessReader.supervisedAPIURL)
+                == .live(DaemonReadinessReader.supervisedAPIURL, pairingCode: ""))
+    }
+
+    @Test func readinessPrefillsPairingWithoutChangingManualFallback() {
+        let empty = AppSession(
+            client: APIClientFactory.mock(),
+            credentials: InMemoryCredentialStore(),
+            cache: InMemoryCacheStore())
+        guard case .needsPairing(let emptyModel) = empty.phase else {
+            Issue.record("expected the manual pairing fallback")
+            return
+        }
+        #expect(emptyModel.pairingCode.isEmpty)
+
+        let prefilled = AppSession(
+            client: APIClientFactory.mock(),
+            credentials: InMemoryCredentialStore(),
+            cache: InMemoryCacheStore(),
+            pairingCode: "483911")
+        guard case .needsPairing(let prefilledModel) = prefilled.phase else {
+            Issue.record("expected readiness-backed pairing")
+            return
+        }
+        #expect(prefilledModel.pairingCode == "483911")
+
+        let stale = AppSession(
+            client: APIClientFactory.mock(),
+            credentials: InMemoryCredentialStore(),
+            cache: InMemoryCacheStore(),
+            pairingCode: "stale-code",
+            deploymentURL: DaemonReadinessReader.supervisedAPIURL)
+        guard case .needsPairing(let staleModel) = stale.phase else {
+            Issue.record("expected stale readiness-backed pairing")
+            return
+        }
+        stale.applyReadiness(
+            DaemonReadiness(
+                apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "fresh-code"))
+        #expect(staleModel.pairingCode == "fresh-code")
+        stale.applyReadiness(nil)
+        #expect(staleModel.pairingCode.isEmpty)
+        stale.applyReadiness(
+            DaemonReadiness(
+                apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "replacement-code"))
+        #expect(staleModel.pairingCode == "replacement-code")
+        staleModel.pairingCode = ""
+        stale.applyReadiness(
+            DaemonReadiness(
+                apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "newer-code"))
+        #expect(staleModel.pairingCode.isEmpty)
+        staleModel.pairingCode = "operator-input"
+        stale.applyReadiness(
+            DaemonReadiness(
+                apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "newest-code"))
+        #expect(staleModel.pairingCode == "operator-input")
+
+        empty.applyReadiness(
+            DaemonReadiness(
+                apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "later-code"))
+        #expect(emptyModel.pairingCode.isEmpty)
+
+        let local = AppSession(
+            client: APIClientFactory.mock(),
+            credentials: InMemoryCredentialStore(),
+            cache: InMemoryCacheStore(),
+            deploymentURL: DaemonReadinessReader.supervisedAPIURL)
+        guard case .needsPairing(let localModel) = local.phase else {
+            Issue.record("expected local manual pairing")
+            return
+        }
+        local.applyReadiness(
+            DaemonReadiness(
+                apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "later-code"))
+        #expect(localModel.pairingCode == "later-code")
+        localModel.pairingCode = "operator-input"
+        local.applyReadiness(nil)
+        #expect(localModel.pairingCode == "operator-input")
+        local.applyReadiness(
+            DaemonReadiness(
+                apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "newer-code"))
+        #expect(localModel.pairingCode == "operator-input")
+
+        let editedBeforeReadiness = AppSession(
+            client: APIClientFactory.mock(),
+            credentials: InMemoryCredentialStore(),
+            cache: InMemoryCacheStore(),
+            deploymentURL: DaemonReadinessReader.supervisedAPIURL)
+        guard case .needsPairing(let editedModel) = editedBeforeReadiness.phase else {
+            Issue.record("expected local manual pairing before readiness")
+            return
+        }
+        editedModel.pairingCode = "manual-code"
+        editedModel.pairingCode = ""
+        editedBeforeReadiness.applyReadiness(
+            DaemonReadiness(
+                apiURL: DaemonReadinessReader.supervisedAPIURL, pairingCode: "late-code"))
+        #expect(editedModel.pairingCode.isEmpty)
+    }
+
     @Test func aSessionWithoutACredentialNeedsPairingAndCompletes() async throws {
         let server = MockServer(authMode: .enforcing, pairingCodes: ["483911": .valid])
         let credentials = InMemoryCredentialStore()

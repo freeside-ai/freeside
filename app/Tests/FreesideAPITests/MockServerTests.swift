@@ -4,6 +4,30 @@ import OpenAPIRuntime
 import Testing
 
 @Suite struct MockServerTests {
+    @Test func healthIsAnonymousAndTracksRestartsAndOutages() async throws {
+        let server = MockServer(authMode: .enforcing)
+        let client = APIClientFactory.mock(server: server)
+
+        let first = try await client.getHealth().ok.body.json
+        #expect(first.status == .ok)
+        #expect(first.version == "mock")
+
+        let restartedAt = Date(timeIntervalSince1970: 1_725_184_860)
+        await server.restart(version: "mock-2", startedAt: restartedAt)
+        let restarted = try await client.getHealth().ok.body.json
+        #expect(restarted.version == "mock-2")
+        #expect(restarted.started_at == restartedAt)
+        #expect(restarted.started_at > first.started_at)
+
+        await server.setHealthAvailable(false)
+        do {
+            _ = try await client.getHealth()
+            Issue.record("an unavailable mock daemon answered health")
+        } catch {
+            // The transport failure is the dead-daemon signal callers poll.
+        }
+    }
+
     @Test func listReturnsTheSeededInbox() async throws {
         let client = APIClientFactory.mock(server: MockServer())
         let snapshots = try await client.listAttentionItems().ok.body.json

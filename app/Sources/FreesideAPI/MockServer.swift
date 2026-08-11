@@ -10,6 +10,8 @@ import OpenAPIRuntime
 /// cursor (tests 8 and 11); and the device surface pairs, revokes, and
 /// authenticates bearer tokens (tests 13-16).
 public actor MockServer {
+    public struct HealthUnavailableError: Error {}
+
     /// Test hook run before every response; suspend it to hold a response
     /// open, throw to fail the request.
     public typealias BeforeRespond = @Sendable (_ operationID: String) async throws -> Void
@@ -71,6 +73,9 @@ public actor MockServer {
     private var revision: Int64 = 1
     private var syncEpoch = "mock-epoch"
     private var epochGeneration = 1
+    private var healthVersion = "mock"
+    private var healthStartedAt = Date(timeIntervalSince1970: 1_725_184_800)
+    private var healthAvailable = true
     private var beforeRespond: BeforeRespond?
     private var afterRespond: BeforeRespond?
     /// The trusted approved-recipe set the evidence gate re-runs
@@ -213,6 +218,20 @@ public actor MockServer {
     /// response was lost (plan §5.14 sync test 4).
     public func setAfterRespond(_ hook: BeforeRespond?) {
         afterRespond = hook
+    }
+
+    /// Controls the mock process boundary independently of synchronized
+    /// state, so liveness clients can exercise running, outage, and restart.
+    public func setHealthAvailable(_ available: Bool) {
+        healthAvailable = available
+    }
+
+    public func restart(version: String? = nil, startedAt: Date) {
+        if let version {
+            healthVersion = version
+        }
+        healthStartedAt = startedAt
+        healthAvailable = true
     }
 
     /// Bumps the live item's versions as if a concurrent write applied,
@@ -469,6 +488,11 @@ public actor MockServer {
 
     func serverRevision() -> Components.Schemas.ServerRevision {
         .init(sync_epoch: syncEpoch, revision: revision)
+    }
+
+    func healthStatus() throws -> Components.Schemas.HealthStatus {
+        guard healthAvailable else { throw HealthUnavailableError() }
+        return .init(status: .ok, version: healthVersion, started_at: healthStartedAt)
     }
 
     /// One canonical snapshot of every synchronized resource from a

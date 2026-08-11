@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -115,12 +116,14 @@ func TestScheduledFailureClassificationFailsClosed(t *testing.T) {
 	}
 }
 
-func TestReadinessFileIsPrivateAndUsable(t *testing.T) {
+func TestReadinessFileIsPrivateMintedAfterStartupAndUsable(t *testing.T) {
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
 	if err := os.Mkdir(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	var clockMu sync.Mutex
+	clockNow := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	ctx, cancel := context.WithCancel(context.Background())
 	h, err := run(ctx, nil, config{
 		DBPath:            filepath.Join(root, "freeside.db"),
@@ -128,6 +131,17 @@ func TestReadinessFileIsPrivateAndUsable(t *testing.T) {
 		StateDir:          stateDir,
 		ListenAddr:        "127.0.0.1:0",
 		ReconcileInterval: 10 * time.Millisecond,
+		now: func() time.Time {
+			clockMu.Lock()
+			defer clockMu.Unlock()
+			return clockNow
+		},
+		afterBackgroundStart: func() error {
+			clockMu.Lock()
+			clockNow = clockNow.Add(11 * time.Minute)
+			clockMu.Unlock()
+			return nil
+		},
 	})
 	if err != nil {
 		cancel()
