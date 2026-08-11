@@ -12,7 +12,22 @@
 		100000000000000000000003 /* FreesideCore in Frameworks */ = {isa = PBXBuildFile; productRef = 100000000000000000000081 /* FreesideCore */; };
 		100000000000000000000004 /* FreesideCore in Frameworks */ = {isa = PBXBuildFile; productRef = 100000000000000000000082 /* FreesideCore */; };
 		100000000000000000000005 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000015 /* AppIcon.icon */; };
+		100000000000000000000006 /* ai.freeside.daemon.plist in Embed LaunchAgents */ = {isa = PBXBuildFile; fileRef = 100000000000000000000017 /* ai.freeside.daemon.plist */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		100000000000000000000063 /* Embed LaunchAgents */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Library/LaunchAgents;
+			dstSubfolderSpec = 1;
+			files = (
+				100000000000000000000006 /* ai.freeside.daemon.plist in Embed LaunchAgents */,
+			);
+			name = "Embed LaunchAgents";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		100000000000000000000011 /* FreesideMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FreesideMacApp.swift; sourceTree = "<group>"; };
@@ -21,6 +36,7 @@
 		100000000000000000000014 /* FreesideIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FreesideIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		100000000000000000000015 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		100000000000000000000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		100000000000000000000017 /* ai.freeside.daemon.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = LaunchAgents/ai.freeside.daemon.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -75,6 +91,7 @@
 				100000000000000000000011 /* FreesideMacApp.swift */,
 				100000000000000000000015 /* AppIcon.icon */,
 				100000000000000000000016 /* Info.plist */,
+				100000000000000000000017 /* ai.freeside.daemon.plist */,
 			);
 			path = macOS;
 			sourceTree = "<group>";
@@ -97,6 +114,7 @@
 				100000000000000000000051 /* Sources */,
 				100000000000000000000021 /* Frameworks */,
 				100000000000000000000061 /* Resources */,
+				100000000000000000000063 /* Embed LaunchAgents */,
 			);
 			buildRules = (
 			);
