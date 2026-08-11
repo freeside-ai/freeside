@@ -34,6 +34,11 @@ var (
 	// when a refresh chain can no longer be used safely.
 	ErrCodexAuthNeedsReenrollment   = errors.New("codex auth identity needs re-enrollment")
 	errCodexAuthRefreshIntentExists = errors.New("codex auth refresh intent already exists")
+	// errCodexAuthRefreshPredecessorMayBeConsumed marks the only recovery
+	// state an explicit re-enrollment may replace: the previous holder wrote
+	// its durable predecessor intent but never persisted a response.  The
+	// caller must still hold the exact mutation lease before removing it.
+	errCodexAuthRefreshPredecessorMayBeConsumed = errors.New("codex auth refresh may have consumed its predecessor")
 )
 
 // CodexAuthRefreshTokens is the vendor's rotation result. Fields are never
@@ -341,9 +346,13 @@ func (b *CodexReviewLifecycle) acquireCodexReviewAuth(
 			ErrInvalidCodexReviewSpec, launch.AuthIdentityID,
 		)
 	}
-	if _, err := recoverCodexAuthRefreshTransaction(
+	mutate, err := codexAuthLeaseMutationGuard(ctx, cfg, lease)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := recoverCodexAuthRefreshTransactionUnderLease(
 		cfg.InputRoot, resolvedPath, launch.AuthIdentityID, body, predecessorMetadata,
-		codexAuthRefreshThreshold(cfg),
+		codexAuthRefreshThreshold(cfg), false, mutate,
 	); err != nil {
 		return nil, b.markCodexAuthReenrollment(ctx, cfg, launch, err)
 	}
@@ -372,23 +381,65 @@ func (b *CodexReviewLifecycle) acquireCodexReviewAuth(
 			ctx, cfg, launch, errors.New("host auth store carries no refresh token"),
 		)
 	}
+	if _, _, err := rotateCodexAuthStoreUnderLease(
+		ctx, cfg, launch.AuthIdentityID, resolvedPath, body, predecessorMetadata,
+		auth, lease, holder, false,
+	); err != nil {
+		var operational *codexAuthRefreshOperationalError
+		if errors.As(err, &operational) {
+			return nil, operational.err
+		}
+		return nil, b.markCodexAuthReenrollment(ctx, cfg, launch, err)
+	}
+	return guard, nil
+}
+
+type codexAuthRefreshOperationalError struct{ err error }
+
+func (e *codexAuthRefreshOperationalError) Error() string { return e.err.Error() }
+func (e *codexAuthRefreshOperationalError) Unwrap() error { return e.err }
+
+// rotateCodexAuthStoreUnderLease is the one host-owned refresh transaction
+// shared by proactive review refresh and operator enrollment verification.
+// The caller owns acquisition and release; this function continuously
+// re-authenticates that exact holder and fence around the provider call and
+// filesystem commit.
+func rotateCodexAuthStoreUnderLease(
+	ctx context.Context,
+	cfg CodexReviewConfig,
+	id domain.AuthIdentityID,
+	resolvedPath string,
+	body []byte,
+	predecessorMetadata codexReviewInputMetadata,
+	auth codexAuthFile,
+	lease domain.AuthStoreMutationLease,
+	holder domain.InvocationID,
+	retainIntent bool,
+) ([]byte, time.Time, error) {
+	if auth.Tokens == nil || auth.Tokens.RefreshToken == nil || *auth.Tokens.RefreshToken == "" {
+		return nil, time.Time{}, errors.New("host auth store carries no refresh token")
+	}
 	previousRefreshToken := *auth.Tokens.RefreshToken
 	predecessor := newCodexAuthRefreshPredecessor(body, predecessorMetadata)
-	if err := verifyCodexAuthRefreshLease(ctx, cfg, lease, launch.AuthIdentityID, holder); err != nil {
-		return nil, err
+	if err := verifyCodexAuthRefreshLease(ctx, cfg, lease, id, holder); err != nil {
+		return nil, time.Time{}, &codexAuthRefreshOperationalError{err: err}
 	}
-	if err := writeCodexAuthRefreshIntent(
-		resolvedPath, launch.AuthIdentityID, predecessor, cfg.Now(),
-	); err != nil {
+	mutate, err := codexAuthLeaseMutationGuard(ctx, cfg, lease)
+	if err != nil {
+		return nil, time.Time{}, &codexAuthRefreshOperationalError{err: err}
+	}
+	if err := mutate(func() error {
+		return writeCodexAuthRefreshIntent(resolvedPath, id, predecessor, cfg.Now())
+	}); err != nil {
 		if errors.Is(err, errCodexAuthRefreshIntentExists) {
-			return nil, b.markCodexAuthReenrollment(ctx, cfg, launch, err)
+			return nil, time.Time{}, err
 		}
-		return nil, codexReviewOperationalCheckf(
+		return nil, time.Time{}, &codexAuthRefreshOperationalError{err: codexReviewOperationalCheckf(
 			CheckCredentialSeparation, "persist Codex auth refresh intent: %v", err,
-		)
+		)}
 	}
-	if err := verifyCodexAuthRefreshLease(ctx, cfg, lease, launch.AuthIdentityID, holder); err != nil {
-		return nil, b.markCodexAuthReenrollment(ctx, cfg, launch, err)
+	if err := verifyCodexAuthRefreshLease(ctx, cfg, lease, id, holder); err != nil {
+		return nil, time.Time{}, err
 	}
 	refreshCtx, cancel := context.WithDeadline(ctx, lease.ExpiresAt)
 	defer cancel()
@@ -396,16 +447,12 @@ func (b *CodexReviewLifecycle) acquireCodexReviewAuth(
 	if err != nil {
 		var refreshErr *CodexAuthRefreshError
 		if errors.As(err, &refreshErr) && refreshErr != nil && refreshErr.Revoked {
-			return nil, b.markCodexAuthReenrollment(
-				ctx, cfg, launch, errors.New("provider rejected the Codex auth refresh chain"),
-			)
+			return nil, time.Time{}, errors.New("provider rejected the Codex auth refresh chain")
 		}
-		return nil, b.markCodexAuthReenrollment(
-			ctx, cfg, launch, errors.New("Codex auth refresh result is ambiguous"), //nolint:staticcheck // surfaced sentence
-		)
+		return nil, time.Time{}, errors.New("Codex auth refresh result is ambiguous") //nolint:staticcheck // surfaced sentence
 	}
-	if err := verifyCodexAuthRefreshLease(ctx, cfg, lease, launch.AuthIdentityID, holder); err != nil {
-		return nil, b.markCodexAuthReenrollment(ctx, cfg, launch, err)
+	if err := verifyCodexAuthRefreshLease(ctx, cfg, lease, id, holder); err != nil {
+		return nil, time.Time{}, err
 	}
 	rotatedTokens := *auth.Tokens
 	if rotated.IDToken != "" {
@@ -418,52 +465,61 @@ func (b *CodexReviewLifecycle) acquireCodexReviewAuth(
 	if err := validateCodexAuthRotation(
 		auth.Tokens, &rotatedTokens, validatedAt, codexAuthRefreshThreshold(cfg),
 	); err != nil {
-		return nil, b.markCodexAuthReenrollment(
-			ctx, cfg, launch, err,
-		)
+		return nil, time.Time{}, err
 	}
 	*auth.Tokens = rotatedTokens
 	lastRefresh, err := json.Marshal(validatedAt)
 	if err != nil {
-		return nil, b.markCodexAuthReenrollment(ctx, cfg, launch, err)
+		return nil, time.Time{}, err
 	}
 	auth.LastRefresh = lastRefresh
 	rotatedBody, err := json.Marshal(auth)
 	if err != nil {
-		return nil, b.markCodexAuthReenrollment(ctx, cfg, launch, err)
+		return nil, time.Time{}, err
 	}
-	if _, _, err := inspectCodexHostAuth(launch.AuthMode, rotatedBody); err != nil {
-		return nil, b.markCodexAuthReenrollment(
-			ctx, cfg, launch, errors.New("provider returned an invalid Codex auth rotation"),
+	_, expiresAt, err := inspectCodexHostAuth(CodexAuthSubscription, rotatedBody)
+	if err != nil || expiresAt == nil {
+		return nil, time.Time{}, errors.New("provider returned an invalid Codex auth rotation")
+	}
+	if err := mutate(func() error {
+		return bindCodexAuthRefreshIntent(
+			cfg.InputRoot, resolvedPath, id, predecessor, rotatedBody, validatedAt,
 		)
+	}); err != nil {
+		return nil, time.Time{}, err
 	}
-	if err := bindCodexAuthRefreshIntent(
-		cfg.InputRoot, resolvedPath, launch.AuthIdentityID, predecessor, rotatedBody, validatedAt,
-	); err != nil {
-		return nil, b.markCodexAuthReenrollment(ctx, cfg, launch, err)
-	}
-	pending, err := stageCodexAuthStore(
-		cfg.InputRoot, resolvedPath, launch.AuthIdentityID, predecessor, rotatedBody,
-	)
+	observedIntent, err := readCodexAuthRefreshIntent(cfg.InputRoot, resolvedPath, id)
 	if err != nil {
-		return nil, b.markCodexAuthReenrollment(ctx, cfg, launch, err)
+		return nil, time.Time{}, err
 	}
-	if err := verifyCodexAuthRefreshLease(ctx, cfg, lease, launch.AuthIdentityID, holder); err != nil {
-		return nil, err
+	var pending string
+	if err := mutate(func() error {
+		var err error
+		pending, err = stageCodexAuthStore(
+			cfg.InputRoot, resolvedPath, id, predecessor, rotatedBody,
+		)
+		return err
+	}); err != nil {
+		return nil, time.Time{}, err
 	}
-	if err := commitCodexAuthStore(
-		cfg.InputRoot, resolvedPath, pending, predecessor, rotatedBody,
-	); err != nil {
-		return nil, codexReviewOperationalCheckf(
+	if err := mutate(func() error {
+		if err := commitCodexAuthStore(
+			cfg.InputRoot, resolvedPath, pending, predecessor, rotatedBody,
+		); err != nil {
+			return err
+		}
+		if retainIntent {
+			return nil
+		}
+		return removeObservedCodexAuthRefreshIntent(
+			cfg.InputRoot, resolvedPath, id, observedIntent,
+		)
+	}); err != nil {
+		return nil, time.Time{}, &codexAuthRefreshOperationalError{err: codexReviewOperationalCheckf(
 			CheckCredentialSeparation, "commit Codex auth rotation for recovery: %v", err,
-		)
+		)}
 	}
-	if err := removeCodexAuthRefreshIntent(resolvedPath, launch.AuthIdentityID); err != nil {
-		return nil, codexReviewOperationalCheckf(
-			CheckCredentialSeparation, "finish Codex auth refresh transaction: %v", err,
-		)
-	}
-	return guard, nil
+	return rotatedBody, expiresAt.UTC(), nil
 }
 
 func validateCodexAuthRotation(
@@ -599,6 +655,23 @@ func verifyCodexAuthRefreshLeaseWindow(
 		return failf(CheckAuthStoreMutationLease, "Codex auth refresh lease for identity %q changed", id)
 	}
 	return nil
+}
+
+type codexAuthLeaseMutation func(func() error) error
+
+func codexAuthLeaseMutationGuard(
+	ctx context.Context, cfg CodexReviewConfig, lease domain.AuthStoreMutationLease,
+) (codexAuthLeaseMutation, error) {
+	guard, ok := cfg.AuthStoreLeaser.(AuthStoreLeaseMutationGuard)
+	if !ok {
+		return nil, failf(
+			CheckAuthStoreMutationLease,
+			"Codex auth refresh lease does not support atomic filesystem mutation",
+		)
+	}
+	return func(mutation func() error) error {
+		return guard.WithHeldLeaseMutation(ctx, lease, cfg.Now, mutation)
+	}, nil
 }
 
 func (b *CodexReviewLifecycle) markCodexAuthReenrollment(
@@ -812,19 +885,11 @@ func writeCodexAuthRefreshIntent(
 		return errors.New("commit Codex auth refresh intent")
 	}
 	if err := syncDirectory(filepath.Dir(path)); err != nil {
-		if removeErr := os.Remove(intentPath); removeErr != nil {
-			return fmt.Errorf(
-				"%w: roll back unsynced Codex auth refresh intent",
-				errCodexAuthRefreshIntentExists,
-			)
-		}
-		if syncErr := syncDirectory(filepath.Dir(path)); syncErr != nil {
-			return fmt.Errorf(
-				"%w: sync rolled-back Codex auth refresh intent",
-				errCodexAuthRefreshIntentExists,
-			)
-		}
-		return err
+		// Leave the exclusive intent in place. Rolling its fixed path back
+		// after a failed directory sync could unlink a successor's replacement
+		// if this holder lost its lease while descheduled. Recovery can safely
+		// authenticate the retained intent before deciding what to do with it.
+		return fmt.Errorf("%w: sync Codex auth refresh intent: %w", errCodexAuthRefreshIntentExists, err)
 	}
 	return nil
 }
@@ -857,32 +922,62 @@ func removeCodexAuthRefreshIntentStages(intentPath string) error {
 	return nil
 }
 
+type codexAuthRefreshIntentObservation struct {
+	Intent   codexAuthRefreshIntent
+	Body     []byte
+	Metadata codexReviewInputMetadata
+}
+
 func readCodexAuthRefreshIntent(
 	root, path string, id domain.AuthIdentityID,
-) (codexAuthRefreshIntent, error) {
+) (codexAuthRefreshIntentObservation, error) {
 	_, body, metadata, err := readCodexReviewInputWithMetadata(
 		root, codexAuthRefreshIntentPath(path, id), maxCodexAuthSnapshotBytes,
 	)
 	if err != nil {
-		return codexAuthRefreshIntent{}, errors.New("codex auth refresh intent failed hardening verification")
+		return codexAuthRefreshIntentObservation{}, errors.New("codex auth refresh intent failed hardening verification")
 	}
 	var intent codexAuthRefreshIntent
 	if err := strictjson.Decode(
 		body, &intent, strictjson.TolerateInvalidUTF8, strictjson.Limit(maxCodexAuthSnapshotBytes),
 	); err != nil {
-		return codexAuthRefreshIntent{}, errors.New("codex auth refresh intent is malformed")
+		return codexAuthRefreshIntentObservation{}, errors.New("codex auth refresh intent is malformed")
 	}
 	if err := intent.validate(id); err != nil {
-		return codexAuthRefreshIntent{}, err
+		return codexAuthRefreshIntentObservation{}, err
 	}
 	if !intent.Predecessor.sameModeOwner(metadata) {
-		return codexAuthRefreshIntent{}, errors.New("codex auth refresh intent metadata diverges")
+		return codexAuthRefreshIntentObservation{}, errors.New("codex auth refresh intent metadata diverges")
 	}
-	return intent, nil
+	return codexAuthRefreshIntentObservation{
+		Intent: intent, Body: body, Metadata: metadata,
+	}, nil
 }
 
-func removeCodexAuthRefreshIntent(path string, id domain.AuthIdentityID) error {
-	if err := os.Remove(codexAuthRefreshIntentPath(path, id)); err != nil {
+func (o codexAuthRefreshIntentObservation) matches(
+	body []byte, metadata codexReviewInputMetadata,
+) bool {
+	return bytes.Equal(o.Body, body) && o.Metadata.Mode == metadata.Mode &&
+		o.Metadata.UID == metadata.UID && o.Metadata.GID == metadata.GID &&
+		o.Metadata.Device == metadata.Device && o.Metadata.Ino == metadata.Ino
+}
+
+// removeObservedCodexAuthRefreshIntent must run inside a
+// codexAuthLeaseMutation. Its body-and-inode check binds the deletion to the
+// transaction's observed intent; the store transaction prevents a successor
+// from taking the lease before the unlink completes.
+func removeObservedCodexAuthRefreshIntent(
+	root, path string, id domain.AuthIdentityID,
+	observed codexAuthRefreshIntentObservation,
+) error {
+	intentPath := codexAuthRefreshIntentPath(path, id)
+	_, body, metadata, err := readCodexReviewInputWithMetadata(
+		root, intentPath, maxCodexAuthSnapshotBytes,
+	)
+	if err != nil || !observed.matches(body, metadata) {
+		return errors.New("codex auth refresh intent changed before removal")
+	}
+	if err := os.Remove(intentPath); err != nil {
 		return errors.New("remove Codex auth refresh intent")
 	}
 	return syncDirectory(filepath.Dir(path))
@@ -973,9 +1068,54 @@ func writeCodexAuthRefreshFile(
 	return nil
 }
 
-func recoverCodexAuthRefreshTransaction(
+func recoverCodexAuthRefreshTransactionUnderLease(
 	root, path string, id domain.AuthIdentityID, currentBody []byte,
 	currentMetadata codexReviewInputMetadata, refreshThreshold time.Duration,
+	retainIntent bool, mutate codexAuthLeaseMutation,
+) (bool, error) {
+	return recoverCodexAuthRefreshTransactionWithIntent(
+		root, path, id, currentBody, currentMetadata, refreshThreshold,
+		retainIntent, mutate,
+	)
+}
+
+// discardCodexAuthRefreshIntentForReenrollmentUnderLease discards an
+// unbound refresh intent only after a new explicit enrollment holder has
+// verified its exact lease. A missing pending response means the predecessor
+// may have been spent, so normal refresh recovery must stop; a fresh operator
+// login is the one deliberate replacement authority for that terminal state.
+func discardCodexAuthRefreshIntentForReenrollmentUnderLease(
+	root, path string, id domain.AuthIdentityID, currentBody []byte,
+	currentMetadata codexReviewInputMetadata, mutate codexAuthLeaseMutation,
+) error {
+	observed, err := readCodexAuthRefreshIntent(root, path, id)
+	if err != nil {
+		return err
+	}
+	intent := observed.Intent
+	if !intent.Predecessor.matches(currentBody, currentMetadata) {
+		return errors.New("codex auth refresh intent no longer matches its predecessor")
+	}
+	pending := codexAuthRefreshPendingPath(path, id)
+	if _, err := os.Lstat(pending); err == nil {
+		return errors.New("codex auth refresh intent has a pending response")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return errors.New("inspect pending Codex auth rotation")
+	}
+	return mutate(func() error {
+		if _, err := os.Lstat(pending); err == nil {
+			return errors.New("codex auth refresh intent gained a pending response")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return errors.New("inspect pending Codex auth rotation")
+		}
+		return removeObservedCodexAuthRefreshIntent(root, path, id, observed)
+	})
+}
+
+func recoverCodexAuthRefreshTransactionWithIntent(
+	root, path string, id domain.AuthIdentityID, currentBody []byte,
+	currentMetadata codexReviewInputMetadata, refreshThreshold time.Duration,
+	retainIntent bool, mutate codexAuthLeaseMutation,
 ) (bool, error) {
 	intentPath := codexAuthRefreshIntentPath(path, id)
 	pending := codexAuthRefreshPendingPath(path, id)
@@ -995,27 +1135,55 @@ func recoverCodexAuthRefreshTransaction(
 	if !intentExists {
 		return false, errors.New("pending Codex auth rotation has no predecessor intent")
 	}
-	intent, err := readCodexAuthRefreshIntent(root, path, id)
+	observed, err := readCodexAuthRefreshIntent(root, path, id)
 	if err != nil {
 		return false, err
 	}
+	intent := observed.Intent
 	currentIsPredecessor := intent.Predecessor.matches(currentBody, currentMetadata)
 	if !currentIsPredecessor {
+		currentIsCommittedTarget := !pendingExists && intent.PendingDigest != "" &&
+			contentaddr.Sum(currentBody) == intent.PendingDigest &&
+			intent.Predecessor.sameModeOwner(currentMetadata)
+		if currentIsCommittedTarget {
+			currentAuth, _, err := inspectCodexHostAuth(CodexAuthSubscription, currentBody)
+			var validatedAt time.Time
+			if err != nil || len(currentAuth.LastRefresh) == 0 ||
+				bytes.Equal(currentAuth.LastRefresh, []byte("null")) ||
+				json.Unmarshal(currentAuth.LastRefresh, &validatedAt) != nil ||
+				!validatedAt.Equal(intent.ValidatedAt) {
+				return false, errors.New("committed Codex auth rotation diverges from its response binding")
+			}
+			if !retainIntent {
+				if err := mutate(func() error {
+					return removeObservedCodexAuthRefreshIntent(root, path, id, observed)
+				}); err != nil {
+					return false, err
+				}
+			}
+			return true, nil
+		}
 		// The exact body/inode/owner/mode binding proves another writer
 		// replaced the predecessor after this request began. Preserve that
 		// newer authority even when a crash left an incomplete pending file.
-		if pendingExists {
-			if err := os.Remove(pending); err != nil {
-				return false, errors.New("discard superseded Codex auth rotation")
+		if err := mutate(func() error {
+			currentObserved, err := readCodexAuthRefreshIntent(root, path, id)
+			if err != nil || !observed.matches(currentObserved.Body, currentObserved.Metadata) {
+				return errors.New("codex auth refresh intent changed before superseded cleanup")
 			}
-		}
-		if err := removeCodexAuthRefreshIntent(path, id); err != nil {
+			if pendingExists {
+				if err := os.Remove(pending); err != nil {
+					return errors.New("discard superseded Codex auth rotation")
+				}
+			}
+			return removeObservedCodexAuthRefreshIntent(root, path, id, observed)
+		}); err != nil {
 			return false, err
 		}
 		return false, nil
 	}
 	if !pendingExists {
-		return false, errors.New("codex auth refresh may have consumed its predecessor")
+		return false, errCodexAuthRefreshPredecessorMayBeConsumed
 	}
 	if intent.PendingDigest == "" || intent.ValidatedAt.IsZero() {
 		return false, errors.New("pending Codex auth rotation has no durable response binding")
@@ -1051,12 +1219,17 @@ func recoverCodexAuthRefreshTransaction(
 	if !intent.Predecessor.sameModeOwner(pendingMetadata) {
 		return false, errors.New("pending Codex auth rotation metadata diverges")
 	}
-	if err := commitCodexAuthStore(
-		root, path, pending, intent.Predecessor, pendingBody,
-	); err != nil {
-		return false, err
-	}
-	if err := removeCodexAuthRefreshIntent(path, id); err != nil {
+	if err := mutate(func() error {
+		if err := commitCodexAuthStore(
+			root, path, pending, intent.Predecessor, pendingBody,
+		); err != nil {
+			return err
+		}
+		if retainIntent {
+			return nil
+		}
+		return removeObservedCodexAuthRefreshIntent(root, path, id, observed)
+	}); err != nil {
 		return false, err
 	}
 	return true, nil

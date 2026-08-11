@@ -16,6 +16,16 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
+func recoverCodexAuthRefreshTransaction(
+	root, path string, id domain.AuthIdentityID, currentBody []byte,
+	currentMetadata codexReviewInputMetadata, refreshThreshold time.Duration,
+) (bool, error) {
+	return recoverCodexAuthRefreshTransactionWithIntent(
+		root, path, id, currentBody, currentMetadata, refreshThreshold,
+		false, func(mutation func() error) error { return mutation() },
+	)
+}
+
 type codexAuthRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f codexAuthRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -191,10 +201,12 @@ func TestPrepareCodexReviewAuthRotatesUnderLease(t *testing.T) {
 		"identity-get "+string(launch.AuthIdentityID),
 		"lease-acquire "+string(launch.AuthIdentityID),
 		"lease-get "+string(launch.AuthIdentityID),
+		"lease-mutate "+string(launch.AuthIdentityID),
 		"lease-get "+string(launch.AuthIdentityID),
 		"lease-get "+string(launch.AuthIdentityID),
-		"lease-get "+string(launch.AuthIdentityID),
-		"lease-get "+string(launch.AuthIdentityID),
+		"lease-mutate "+string(launch.AuthIdentityID),
+		"lease-mutate "+string(launch.AuthIdentityID),
+		"lease-mutate "+string(launch.AuthIdentityID),
 		"lease-release "+string(launch.AuthIdentityID),
 	)
 	after, err := os.Stat(launch.AuthSnapshot)

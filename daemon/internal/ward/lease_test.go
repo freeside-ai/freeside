@@ -119,6 +119,29 @@ func (l *fakeLeaser) Renew(
 	return l.lease, nil
 }
 
+func (l *fakeLeaser) WithHeldLeaseMutation(
+	_ context.Context, expected domain.AuthStoreMutationLease,
+	now func() time.Time, mutation func() error,
+) error {
+	l.recordCall("lease-mutate " + string(expected.AuthIdentityID))
+	current := l.lease
+	if l.onGet != nil {
+		var err error
+		current, err = l.onGet(current)
+		if err != nil {
+			return err
+		}
+	}
+	checkedAt := now()
+	if expected.Validate() != nil || !expected.HeldAt(checkedAt) ||
+		current.AuthIdentityID != expected.AuthIdentityID || current.Holder != expected.Holder ||
+		current.Fence != expected.Fence || !current.AcquiredAt.Equal(expected.AcquiredAt) ||
+		!current.ExpiresAt.Equal(expected.ExpiresAt) || !current.HeldAt(checkedAt) {
+		return errors.New("fake leaser: caller cannot mutate under the lease")
+	}
+	return mutation()
+}
+
 func (l *fakeLeaser) Release(ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
 	fence int64, releasedAt time.Time,
 ) error {

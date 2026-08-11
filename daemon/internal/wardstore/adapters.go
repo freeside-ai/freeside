@@ -91,9 +91,10 @@ func verifyCodexReviewStateBody(record store.CodexReviewOpaqueRecord) error {
 // separate Go types because AuthStoreLeaser.Get and HandoffJournal.Get
 // intentionally use the same verb for different records.
 type Adapters struct {
-	Journal   *Journal
-	Leaser    *Leaser
-	AuthState *AuthState
+	Journal    *Journal
+	Leaser     *Leaser
+	AuthState  *AuthState
+	Enrollment *Enrollment
 }
 
 // Journal backs ward's journal and atomic leased-open interfaces.
@@ -111,15 +112,25 @@ type AuthState struct {
 	store *store.Store
 }
 
+// Enrollment backs ward's Codex enrollment journal and verified projection
+// port. It owns the transaction that creates an initial identity and marker
+// before acquiring the exact mutation lease.
+type Enrollment struct {
+	store     *store.Store
+	authState *AuthState
+}
+
 // New constructs the production ward persistence adapters.
 func New(st *store.Store) (*Adapters, error) {
 	if st == nil {
 		return nil, errors.New("ward store adapters: nil store")
 	}
+	authState := &AuthState{store: st}
 	return &Adapters{
-		Journal:   &Journal{store: st},
-		Leaser:    &Leaser{store: st},
-		AuthState: &AuthState{store: st},
+		Journal:    &Journal{store: st},
+		Leaser:     &Leaser{store: st},
+		AuthState:  authState,
+		Enrollment: &Enrollment{store: st, authState: authState},
 	}, nil
 }
 
@@ -794,6 +805,214 @@ func (a *AuthState) ProjectVerifiedCodexReenrollment(
 	return projected, err
 }
 
+// Begin creates an initial identity and marker when needed, or authenticates
+// the current unbound marker for an existing identity, then opens the #684
+// journal under the exact lease in the same synchronized transaction.
+func (a *Enrollment) Begin(
+	ctx context.Context,
+	identity domain.AuthIdentity,
+	projectID domain.ProjectID,
+	holder domain.InvocationID,
+	now, expiresAt time.Time,
+) (domain.AuthStoreMutationLease, error) {
+	var lease domain.AuthStoreMutationLease
+	err := a.store.Write(ctx, func(tx *store.WriteTx) error {
+		stored, err := tx.GetAuthIdentity(ctx, identity.ID)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			if err := tx.RecordAuthIdentity(ctx, identity, now); err != nil {
+				return err
+			}
+		case err != nil:
+			return err
+		default:
+			identity.MaxParallelExecutions = stored.MaxParallelExecutions
+			if identity != stored {
+				return fmt.Errorf("existing Codex auth identity has incompatible fixed bindings: %w",
+					domain.ErrImmutableTransition)
+			}
+		}
+
+		items, err := tx.ListAttentionItems(ctx)
+		if err != nil {
+			return err
+		}
+		occurrences, err := scanCodexAuthReenrollmentOccurrences(items, identity.ID)
+		if err != nil {
+			return err
+		}
+		if len(occurrences.open) > 1 {
+			return errors.New("codex auth identity has multiple open re-enrollment items")
+		}
+		var marker domain.AttentionItem
+		if len(occurrences.open) == 1 {
+			marker = occurrences.open[0]
+			if marker.ID != occurrences.latest.ID {
+				return domain.ErrCodexReenrollmentMarkerMismatch
+			}
+			// A valid, explicit replacement enrollment has already authenticated
+			// fresh operator input before reaching this port. It supersedes a
+			// projected marker whose bound store no longer serves that authority,
+			// rather than letting stale verified evidence block repair forever.
+			if marker.CodexReenrollmentRecoveryBinding != nil ||
+				marker.Offers(domain.ActionResolveReenrollment) {
+				marker.Status = domain.StatusSuperseded
+				marker.ItemVersion++
+				if err := tx.PutAttentionItem(ctx, marker); err != nil {
+					return err
+				}
+				marker = domain.AttentionItem{}
+			}
+		}
+		if marker.ID == "" {
+			next, err := store.NextCodexReenrollmentMarkerOccurrence(occurrences.latestOccurrence)
+			if err != nil {
+				return err
+			}
+			marker, err = codexAuthReenrollmentItem(
+				identity.ID, next, projectID, 1, domain.StatusOpen, nil,
+			)
+			if err != nil {
+				return err
+			}
+			if err := tx.PutAttentionItem(ctx, marker); err != nil {
+				return err
+			}
+		}
+		_, lease, err = tx.BeginCodexReenrollmentJournal(
+			ctx, identity.ID, marker.ID, holder, now, expiresAt,
+		)
+		return err
+	})
+	return lease, err
+}
+
+// Fail records one credential-free terminal class. If an ordinary terminal
+// proves impossible because the lease ended, retry with #684's constrained
+// lease_lost outcome; the store accepts it only for this original holder and
+// exact expired, released, or superseded fence.
+func (a *Enrollment) Fail(
+	ctx context.Context,
+	id domain.AuthIdentityID,
+	holder domain.InvocationID,
+	fence int64,
+	class ward.CodexAuthEnrollmentFailure,
+	at time.Time,
+) error {
+	failure, err := codexEnrollmentFailureClass(class)
+	if err != nil {
+		return err
+	}
+	record := func(value store.CodexReenrollmentFailureClass) error {
+		return a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			return tx.FailCodexReenrollment(ctx, id, holder, fence, value, at)
+		})
+	}
+	err = record(failure)
+	if !errors.Is(err, store.ErrCodexReenrollmentLeaseMismatch) {
+		return err
+	}
+	return record(store.CodexReenrollmentLeaseLost)
+}
+
+func codexEnrollmentFailureClass(
+	class ward.CodexAuthEnrollmentFailure,
+) (store.CodexReenrollmentFailureClass, error) {
+	registered := false
+	for _, candidate := range ward.AllCodexAuthEnrollmentFailures {
+		if class == candidate {
+			registered = true
+			break
+		}
+	}
+	if !registered {
+		return "", fmt.Errorf("unknown Codex auth enrollment failure class %q", class)
+	}
+	switch class {
+	case ward.CodexAuthEnrollmentReplacementFailed:
+		return store.CodexReenrollmentAuthStoreReplacementFailed, nil
+	case ward.CodexAuthEnrollmentVerificationFailed:
+		return store.CodexReenrollmentVerificationFailed, nil
+	}
+	return "", fmt.Errorf("unknown Codex auth enrollment failure class %q", class)
+}
+
+// Verify records the exact digest and access-token expiry while this holder's
+// lease is still live.
+func (a *Enrollment) Verify(
+	ctx context.Context,
+	id domain.AuthIdentityID,
+	holder domain.InvocationID,
+	fence int64,
+	digest domain.Digest,
+	expiresAt, verifiedAt time.Time,
+) error {
+	return a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.VerifyCodexReenrollment(
+			ctx, id, holder, fence, digest, expiresAt, verifiedAt,
+		)
+	})
+}
+
+// RecoverableVerified returns the latest verified coordinates only while
+// their exact marker is still the sole open occurrence for this identity.
+// The caller must independently re-verify the live auth-store bytes before
+// projecting the resolving action.
+func (a *Enrollment) RecoverableVerified(
+	ctx context.Context,
+	identity domain.AuthIdentity,
+) (domain.CodexReenrollmentRecoveryBinding, bool, error) {
+	var binding domain.CodexReenrollmentRecoveryBinding
+	var found bool
+	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		stored, err := tx.GetAuthIdentity(ctx, identity.ID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		identity.MaxParallelExecutions = stored.MaxParallelExecutions
+		if identity != stored {
+			return fmt.Errorf("existing Codex auth identity has incompatible fixed bindings: %w",
+				domain.ErrImmutableTransition)
+		}
+		latest, exists, err := tx.LatestCodexReenrollmentJournal(ctx, identity.ID)
+		if err != nil || !exists {
+			return err
+		}
+		binding, err = latest.RecoveryBinding()
+		if errors.Is(err, store.ErrCodexReenrollmentNotVerified) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		items, err := tx.ListAttentionItems(ctx)
+		if err != nil {
+			return err
+		}
+		occurrences, err := scanCodexAuthReenrollmentOccurrences(items, identity.ID)
+		if err != nil {
+			return err
+		}
+		if len(occurrences.open) == 1 && occurrences.open[0].ID == latest.MarkerItemID &&
+			occurrences.open[0].ID == occurrences.latest.ID {
+			found = true
+		}
+		return nil
+	})
+	return binding, found, err
+}
+
+// ProjectVerified exposes resolve_reenrollment only after the journal's
+// verified terminal has committed.
+func (a *Enrollment) ProjectVerified(
+	ctx context.Context, id domain.AuthIdentityID,
+) (domain.AttentionItem, error) {
+	return a.authState.ProjectVerifiedCodexReenrollment(ctx, id)
+}
+
 // Acquire opens or converges on one mutation window.
 func (a *Leaser) Acquire(
 	ctx context.Context,
@@ -847,6 +1066,33 @@ func (a *Leaser) Renew(
 		return domain.AuthStoreMutationLease{}, err
 	}
 	return lease, nil
+}
+
+// WithHeldLeaseMutation authenticates the exact live lease and keeps the
+// store's immediate write transaction open through one short host-filesystem
+// mutation. A successor therefore cannot acquire the expired generation in
+// the interval between authentication and the syscall it authorizes.
+func (a *Leaser) WithHeldLeaseMutation(
+	ctx context.Context, expected domain.AuthStoreMutationLease,
+	now func() time.Time, mutation func() error,
+) error {
+	if now == nil || mutation == nil {
+		return errors.New("auth store lease mutation clock and callback are required")
+	}
+	return a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		lease, err := tx.GetAuthStoreMutationLease(ctx, expected.AuthIdentityID)
+		if err != nil {
+			return err
+		}
+		checkedAt := now()
+		if expected.Validate() != nil || !expected.HeldAt(checkedAt) ||
+			lease.AuthIdentityID != expected.AuthIdentityID || lease.Holder != expected.Holder ||
+			lease.Fence != expected.Fence || !lease.AcquiredAt.Equal(expected.AcquiredAt) ||
+			!lease.ExpiresAt.Equal(expected.ExpiresAt) || !lease.HeldAt(checkedAt) {
+			return fmt.Errorf("%w: auth store mutation lease changed", ward.ErrLeaseWindowEnded)
+		}
+		return mutation()
+	})
 }
 
 // Release ends the exact held window. Store refusals that mean the recorded

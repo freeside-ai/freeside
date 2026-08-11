@@ -110,6 +110,9 @@ func main() {
 		case "follow":
 			runFollowMain(os.Args[2:])
 			return
+		case "enroll-codex":
+			runEnrollCodexMain(os.Args[2:])
+			return
 		}
 	}
 	flags := flag.NewFlagSet("freesided", flag.ContinueOnError)
