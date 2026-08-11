@@ -201,7 +201,7 @@ func (s *CodexReviewSource) startRequestedReview(
 		return &exec.ReviewSourceFailure{Class: class, Err: err}
 	}
 	launch, err := s.cfg.Lifecycle.codexReview(ctx, s.cfg.Review, CodexReviewLaunchSpec{
-		RunID: string(id), Image: s.cfg.Review.ApprovedImage,
+		RunID: string(id), WorkflowRunID: req.RunID, Image: s.cfg.Review.ApprovedImage,
 		WorkspaceSourceRunID: string(id), WorkspaceVolume: workspace.Volume,
 		ExpectedHead: req.HeadSHA, Prompt: codexProductionReviewPrompt(req),
 		Boundary: CodexReviewFreshStart, AuthMode: s.cfg.AuthMode,
@@ -698,10 +698,14 @@ func (s *CodexReviewSource) normalizeCollection(
 	collectionEvidence := domain.Digest(contentaddr.Sum(evidenceBytes))
 	if collection.ExitStatus != 0 {
 		class := classifyCodexTerminalFailure(collection.Events)
+		failure := fmt.Sprintf("Codex review exited with status %d", collection.ExitStatus)
+		if codexRefreshAttemptFailure(collection.Events) {
+			failure = "Codex review attempted an in-container credential refresh"
+		}
 		return CodexReviewSourceOutcome{
 			InvocationID: id,
 			FailureClass: class,
-			Failure:      fmt.Sprintf("Codex review exited with status %d", collection.ExitStatus),
+			Failure:      failure,
 		}
 	}
 	var raw struct {
@@ -797,34 +801,37 @@ func CodexReviewConfigurationDigest(
 	if cfg.WorkspaceTarget == "" || !digestPinnedImagePattern.MatchString(cfg.ApprovedImage) ||
 		!digestPinnedImagePattern.MatchString(cfg.ObserverImage) || cfg.Model == "" ||
 		cfg.ReasoningEffort == "" || len(cfg.ProviderEndpoints) == 0 ||
-		cfg.AccessTokenLifetimeFloor <= 0 || workspaceSizeMB <= 0 || !authMode.valid() || authIdentityID == "" ||
+		cfg.AccessTokenLifetimeFloor <= 0 || codexAuthRefreshThreshold(cfg) <= cfg.AccessTokenLifetimeFloor ||
+		workspaceSizeMB <= 0 || !authMode.valid() || authIdentityID == "" ||
 		costOwner == "" {
 		return "", ErrInvalidCodexReviewSpec
 	}
 	endpoints := slices.Clone(cfg.ProviderEndpoints)
 	slices.Sort(endpoints)
 	canonical := struct {
-		Version                  string                `json:"version"`
-		Topology                 string                `json:"topology"`
-		ApprovedImage            string                `json:"approved_image"`
-		ObserverImage            string                `json:"observer_image"`
-		WorkspaceTarget          string                `json:"workspace_target"`
-		WorkspaceSizeMB          int64                 `json:"workspace_size_mb"`
-		ProviderEndpoints        []string              `json:"provider_endpoints"`
-		Model                    string                `json:"model"`
-		ReasoningEffort          string                `json:"reasoning_effort"`
-		AccessTokenLifetimeFloor int64                 `json:"access_token_lifetime_floor_ns"`
-		AuthMode                 CodexAuthMode         `json:"auth_mode"`
-		AuthIdentityID           domain.AuthIdentityID `json:"auth_identity_id"`
-		CostOwner                string                `json:"cost_owner"`
-		CommandTemplateDigest    string                `json:"command_template_digest"`
-		PromptProtocol           string                `json:"prompt_protocol"`
+		Version                     string                `json:"version"`
+		Topology                    string                `json:"topology"`
+		ApprovedImage               string                `json:"approved_image"`
+		ObserverImage               string                `json:"observer_image"`
+		WorkspaceTarget             string                `json:"workspace_target"`
+		WorkspaceSizeMB             int64                 `json:"workspace_size_mb"`
+		ProviderEndpoints           []string              `json:"provider_endpoints"`
+		Model                       string                `json:"model"`
+		ReasoningEffort             string                `json:"reasoning_effort"`
+		AccessTokenLifetimeFloor    int64                 `json:"access_token_lifetime_floor_ns"`
+		AccessTokenRefreshThreshold int64                 `json:"access_token_refresh_threshold_ns"`
+		AuthMode                    CodexAuthMode         `json:"auth_mode"`
+		AuthIdentityID              domain.AuthIdentityID `json:"auth_identity_id"`
+		CostOwner                   string                `json:"cost_owner"`
+		CommandTemplateDigest       string                `json:"command_template_digest"`
+		PromptProtocol              string                `json:"prompt_protocol"`
 	}{
-		Version: "codex-review-configuration-v2", Topology: codexReviewTopologyVersion,
+		Version: "codex-review-configuration-v3", Topology: codexReviewTopologyVersion,
 		ApprovedImage: cfg.ApprovedImage, ObserverImage: cfg.ObserverImage,
 		WorkspaceTarget: cfg.WorkspaceTarget, WorkspaceSizeMB: workspaceSizeMB,
 		ProviderEndpoints: endpoints, Model: cfg.Model, ReasoningEffort: cfg.ReasoningEffort,
-		AccessTokenLifetimeFloor: int64(cfg.AccessTokenLifetimeFloor), AuthMode: authMode,
+		AccessTokenLifetimeFloor:    int64(cfg.AccessTokenLifetimeFloor),
+		AccessTokenRefreshThreshold: int64(codexAuthRefreshThreshold(cfg)), AuthMode: authMode,
 		AuthIdentityID: authIdentityID, CostOwner: costOwner,
 		CommandTemplateDigest: digestStrings(codexReviewCommand(
 			cfg.WorkspaceTarget, cfg.Model, cfg.ReasoningEffort, "<runtime-review-prompt>",
@@ -1196,6 +1203,8 @@ func classifyCodexObservationFailure(err error) domain.ReviewFailureClass {
 func classifyCodexTerminalFailure(events []byte) domain.ReviewFailureClass {
 	text := strings.ToLower(string(events))
 	switch {
+	case codexRefreshAttemptFailure(events):
+		return domain.ReviewFailureConfiguration
 	case strings.Contains(text, "quota"), strings.Contains(text, "rate limit"),
 		strings.Contains(text, "too many requests"):
 		return domain.ReviewFailureQuota
@@ -1205,4 +1214,11 @@ func classifyCodexTerminalFailure(events []byte) domain.ReviewFailureClass {
 	default:
 		return domain.ReviewFailureTransient
 	}
+}
+
+func codexRefreshAttemptFailure(events []byte) bool {
+	text := strings.ToLower(string(events))
+	return strings.Contains(text, "failed to refresh token") ||
+		strings.Contains(text, "refresh token was already used") ||
+		strings.Contains(text, "invalid 'refresh_token'")
 }

@@ -23,6 +23,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 // TestLiveCodexReviewLifecycleCrossesReconstructionStartBoundary drives the
@@ -125,12 +127,16 @@ func liveCodexReviewLifecycle(t *testing.T, slug string, withAgents bool) {
 	reviewConfig.ObserverImage = exporterImage
 	reviewConfig.Journal = journal
 	reviewConfig.ProxyURL = ""
+	reviewConfig.AuthStoreLeaser = &fakeLeaser{volume: request.AuthSnapshot}
+	reviewConfig.AuthRefresher = &fakeCodexAuthRefresher{}
+	reviewConfig.AuthState = &fakeCodexAuthState{}
 	reviewConfig.VolumeLifecycleLeaser, err = NewRuntimeCodexReviewVolumeLeaser(rt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	launchSpec := CodexReviewLaunchSpec{
-		RunID: runID, Image: reviewImage, WorkspaceSourceRunID: runID,
+		RunID: runID, WorkflowRunID: domain.RunID(runID),
+		Image: reviewImage, WorkspaceSourceRunID: runID,
 		WorkspaceVolume: workspace, ExpectedHead: candidate.BaseSHA,
 		Prompt: request.Prompt, Boundary: request.Boundary,
 		AuthMode: request.AuthMode, AuthIdentityID: request.AuthIdentityID,

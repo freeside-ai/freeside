@@ -727,6 +727,9 @@ func codexReviewSourceConfigForTest(
 	cfg.Journal = journal
 	cfg.ProxyURL = ""
 	cfg.VolumeLifecycleLeaser = leaser
+	cfg.AuthStoreLeaser = &fakeLeaser{volume: request.AuthSnapshot}
+	cfg.AuthRefresher = &fakeCodexAuthRefresher{}
+	cfg.AuthState = &fakeCodexAuthState{}
 	sourceConfig := CodexReviewSourceConfig{
 		Lifecycle: lifecycle, Review: cfg, Journal: journal, WorkspaceSizeMB: 64,
 		AuthMode: request.AuthMode, AuthIdentityID: request.AuthIdentityID,
@@ -2097,6 +2100,9 @@ func TestCodexReviewSourceClassifiesTerminalFailures(t *testing.T) {
 	}{
 		{"quota", "rate limit exceeded", domain.ReviewFailureQuota},
 		{"configuration", "authentication failed", domain.ReviewFailureConfiguration},
+		{"refresh failure", "prefix FAILED TO REFRESH TOKEN suffix", domain.ReviewFailureConfiguration},
+		{"spent refresh", "Refresh token was already used.", domain.ReviewFailureConfiguration},
+		{"invalid refresh", "error: invalid 'refresh_token' value", domain.ReviewFailureConfiguration},
 		{"transient", "connection reset", domain.ReviewFailureTransient},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2104,6 +2110,17 @@ func TestCodexReviewSourceClassifiesTerminalFailures(t *testing.T) {
 				t.Fatalf("class = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCodexReviewSourceNamesInContainerRefreshAttempt(t *testing.T) {
+	source := &CodexReviewSource{}
+	outcome := source.normalizeCollection("review-run-1-1", exec.ReviewRequest{}, CodexReviewCollection{
+		Events: []byte("wrapped: Failed to refresh token while starting"), ExitStatus: 1,
+	})
+	if outcome.FailureClass != domain.ReviewFailureConfiguration ||
+		outcome.Failure != "Codex review attempted an in-container credential refresh" {
+		t.Fatalf("refresh attempt normalized as %#v", outcome)
 	}
 }
 
@@ -2407,7 +2424,8 @@ func TestCodexReviewRestartRecoversLegacyRoundAndRelaunchesSameRequest(t *testin
 		t.Fatal(err)
 	}
 	launchSpec := CodexReviewLaunchSpec{
-		RunID: string(id), Image: sourceConfig.Review.ApprovedImage,
+		RunID: string(id), WorkflowRunID: request.RunID,
+		Image:                sourceConfig.Review.ApprovedImage,
 		WorkspaceSourceRunID: string(id), WorkspaceVolume: workspace.Volume,
 		ExpectedHead: request.HeadSHA, Prompt: codexProductionReviewPrompt(request),
 		Boundary: CodexReviewFreshStart, AuthMode: sourceConfig.AuthMode,

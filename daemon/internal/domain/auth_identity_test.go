@@ -56,8 +56,8 @@ func TestValidateAuthIdentityTransition(t *testing.T) {
 	}{
 		{"unchanged", func(*domain.AuthIdentity) {}, nil},
 		{"remeasured parallelism", func(i *domain.AuthIdentity) { i.MaxParallelExecutions = 4 }, nil},
-		{"gained snapshot support", func(i *domain.AuthIdentity) { i.SupportsReadOnlyAuthSnapshot = true }, nil},
-		{"restrategized refresh", func(i *domain.AuthIdentity) { i.RefreshStrategy = domain.RefreshExternal }, nil},
+		{"gained snapshot support", func(i *domain.AuthIdentity) { i.SupportsReadOnlyAuthSnapshot = true }, domain.ErrImmutableTransition},
+		{"restrategized refresh", func(i *domain.AuthIdentity) { i.RefreshStrategy = domain.RefreshExternal }, domain.ErrImmutableTransition},
 		{"other identity", func(i *domain.AuthIdentity) { i.ID = "auth-2" }, domain.ErrImmutableTransition},
 		{"other provider", func(i *domain.AuthIdentity) { i.Provider = "openai" }, domain.ErrImmutableTransition},
 		{"other auth-store volume", func(i *domain.AuthIdentity) {

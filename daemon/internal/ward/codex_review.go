@@ -180,8 +180,15 @@ type CodexReviewConfig struct {
 	Model                    string
 	ReasoningEffort          string
 	AccessTokenLifetimeFloor time.Duration
-	Now                      func() time.Time
-	Journal                  CodexReviewJournal
+	// AccessTokenRefreshThreshold is the proactive host-side refresh point. It
+	// must exceed AccessTokenLifetimeFloor so a transient refresh failure never
+	// hands a marginal token to the reviewer.
+	AccessTokenRefreshThreshold time.Duration
+	AuthStoreLeaser             AuthStoreLeaser
+	AuthRefresher               CodexAuthRefresher
+	AuthState                   CodexAuthState
+	Now                         func() time.Time
+	Journal                     CodexReviewJournal
 	// VolumeLifecycleLeaser holds exclusive attachment authority for the
 	// workspace and .agents shadow through an atomic transfer into Start.
 	VolumeLifecycleLeaser CodexReviewVolumeLifecycleLeaser
@@ -906,11 +913,11 @@ func BuildCodexReviewAgentSpec(
 	if err := validateCodexReviewRequest(cfg, req); err != nil {
 		return ContainerSpec{}, CodexReviewJournalBinding{}, err
 	}
-	authPath, authBody, err := readCodexReviewInput(cfg.InputRoot, req.AuthSnapshot, maxCodexAuthSnapshotBytes)
+	authPath, hostAuthBody, err := readCodexReviewInput(cfg.InputRoot, req.AuthSnapshot, maxCodexAuthSnapshotBytes)
 	if err != nil {
 		return ContainerSpec{}, CodexReviewJournalBinding{}, fmt.Errorf("%w: auth snapshot: %w", ErrInvalidCodexReviewSpec, err)
 	}
-	accessExpiry, err := inspectCodexAuthSnapshot(req.AuthMode, authBody)
+	authBody, accessExpiry, err := codexReviewAgentAuthSnapshot(req.AuthMode, hostAuthBody)
 	if err != nil {
 		return ContainerSpec{}, CodexReviewJournalBinding{}, fmt.Errorf("%w: auth snapshot: %w", ErrInvalidCodexReviewSpec, err)
 	}
@@ -1208,6 +1215,8 @@ func validateCodexReviewRequest(cfg CodexReviewConfig, req CodexReviewSpec) erro
 		return fmt.Errorf("%w: InputRoot must be a clean absolute non-root path", ErrInvalidCodexReviewSpec)
 	case cfg.AccessTokenLifetimeFloor <= 0:
 		return fmt.Errorf("%w: AccessTokenLifetimeFloor must be positive", ErrInvalidCodexReviewSpec)
+	case codexAuthRefreshThreshold(cfg) <= cfg.AccessTokenLifetimeFloor:
+		return fmt.Errorf("%w: AccessTokenRefreshThreshold must exceed AccessTokenLifetimeFloor", ErrInvalidCodexReviewSpec)
 	case cfg.Now == nil:
 		return fmt.Errorf("%w: Now is required", ErrInvalidCodexReviewSpec)
 	case !slices.Equal(cfg.ProviderEndpoints, req.AuthMode.providerEndpoints()):
@@ -1255,7 +1264,21 @@ func cloneOptionalDigest(in *domain.Digest) *domain.Digest {
 	return &digest
 }
 
+type codexReviewInputMetadata struct {
+	Mode     os.FileMode
+	UID, GID uint32
+	Device   string
+	Ino      uint64
+}
+
 func readCodexReviewInput(root, file string, limit int64) (string, []byte, error) {
+	path, body, _, err := readCodexReviewInputWithMetadata(root, file, limit)
+	return path, body, err
+}
+
+func readCodexReviewInputWithMetadata(
+	root, file string, limit int64,
+) (string, []byte, codexReviewInputMetadata, error) {
 	rootInfo, err := os.Lstat(root)
 	var rootStat *syscall.Stat_t
 	rootStatOK := false
@@ -1264,50 +1287,54 @@ func readCodexReviewInput(root, file string, limit int64) (string, []byte, error
 	}
 	rootOwned := rootStatOK && codexReviewUIDMatches(rootStat, os.Geteuid())
 	if err != nil || !rootInfo.IsDir() || rootInfo.Mode().Perm()&0o077 != 0 || !rootOwned {
-		return "", nil, errors.New("input root is not a private directory")
+		return "", nil, codexReviewInputMetadata{}, errors.New("input root is not a private directory")
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return "", nil, errors.New("input root cannot be resolved")
+		return "", nil, codexReviewInputMetadata{}, errors.New("input root cannot be resolved")
 	}
 	info, err := os.Lstat(file)
 	if err != nil || !info.Mode().IsRegular() {
-		return "", nil, errors.New("input is not a regular file")
+		return "", nil, codexReviewInputMetadata{}, errors.New("input is not a regular file")
 	}
 	resolvedFile, err := filepath.EvalSymlinks(file)
 	if err != nil {
-		return "", nil, errors.New("input cannot be resolved")
+		return "", nil, codexReviewInputMetadata{}, errors.New("input cannot be resolved")
 	}
 	rel, err := filepath.Rel(resolvedRoot, resolvedFile)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return "", nil, errors.New("input resolves outside the trusted root")
+		return "", nil, codexReviewInputMetadata{}, errors.New("input resolves outside the trusted root")
 	}
 	if !cliSafe(resolvedFile) {
-		return "", nil, errors.New("input path is not CLI-safe")
+		return "", nil, codexReviewInputMetadata{}, errors.New("input path is not CLI-safe")
 	}
 	f, err := os.OpenFile(resolvedFile, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return "", nil, errors.New("input cannot be opened")
+		return "", nil, codexReviewInputMetadata{}, errors.New("input cannot be opened")
 	}
 	defer f.Close() //nolint:errcheck // read-only file
 	openedInfo, err := f.Stat()
 	if err != nil || !os.SameFile(info, openedInfo) {
-		return "", nil, errors.New("input changed while it was admitted")
+		return "", nil, codexReviewInputMetadata{}, errors.New("input changed while it was admitted")
 	}
 	stat, ok := openedInfo.Sys().(*syscall.Stat_t)
 	if !openedInfo.Mode().IsRegular() || openedInfo.Mode().Perm()&0o077 != 0 ||
 		openedInfo.Mode().Perm()&0o400 == 0 || !ok || stat.Nlink != 1 ||
 		!codexReviewUIDMatches(stat, os.Geteuid()) {
-		return "", nil, errors.New("input is not a private, singly linked regular file")
+		return "", nil, codexReviewInputMetadata{}, errors.New("input is not a private, singly linked regular file")
 	}
 	body, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
-		return "", nil, errors.New("input cannot be read")
+		return "", nil, codexReviewInputMetadata{}, errors.New("input cannot be read")
 	}
 	if int64(len(body)) > limit {
-		return "", nil, errors.New("input exceeds its byte limit")
+		return "", nil, codexReviewInputMetadata{}, errors.New("input exceeds its byte limit")
 	}
-	return resolvedFile, body, nil
+	metadata := codexReviewInputMetadata{
+		Mode: openedInfo.Mode().Perm(), UID: stat.Uid, GID: stat.Gid,
+		Device: fmt.Sprint(stat.Dev), Ino: uint64(stat.Ino),
+	}
+	return resolvedFile, body, metadata, nil
 }
 
 func codexReviewUIDMatches(stat *syscall.Stat_t, euid int) bool {
@@ -1329,56 +1356,110 @@ type codexAuthFile struct {
 }
 
 func inspectCodexAuthSnapshot(mode CodexAuthMode, body []byte) (*time.Time, error) {
+	auth, expires, err := inspectCodexHostAuth(mode, body)
+	if err != nil {
+		return nil, err
+	}
+	if mode == CodexAuthSubscription && auth.Tokens != nil && auth.Tokens.RefreshToken != nil &&
+		*auth.Tokens.RefreshToken != "" {
+		return nil, errors.New("subscription snapshot carries a refresh token")
+	}
+	return expires, nil
+}
+
+func inspectCodexHostAuth(
+	mode CodexAuthMode, body []byte,
+) (codexAuthFile, *time.Time, error) {
 	var auth codexAuthFile
 	if err := strictjson.Decode(
 		body, &auth, strictjson.TolerateInvalidUTF8, strictjson.Limit(maxCodexAuthSnapshotBytes),
 	); err != nil {
 		if errors.Is(err, strictjson.ErrTrailingData) {
-			return nil, errors.New("auth.json carries trailing content")
+			return codexAuthFile{}, nil, errors.New("auth.json carries trailing content")
 		}
-		return nil, errors.New("auth.json is malformed or carries an unknown field")
+		return codexAuthFile{}, nil, errors.New("auth.json is malformed or carries an unknown field")
 	}
 	if len(auth.LastRefresh) != 0 && !bytes.Equal(auth.LastRefresh, []byte("null")) {
 		var refreshed time.Time
 		if err := json.Unmarshal(auth.LastRefresh, &refreshed); err != nil || refreshed.IsZero() {
-			return nil, errors.New("auth.json last_refresh is not an instant or null")
+			return codexAuthFile{}, nil, errors.New("auth.json last_refresh is not an instant or null")
 		}
 	}
 	switch mode {
 	case CodexAuthSubscription:
 		if auth.AuthMode != "" && auth.AuthMode != "chatgpt" {
-			return nil, errors.New("auth.json mode is not chatgpt")
+			return codexAuthFile{}, nil, errors.New("auth.json mode is not chatgpt")
 		}
 		if auth.OpenAIAPIKey != nil && *auth.OpenAIAPIKey != "" {
-			return nil, errors.New("subscription snapshot also carries an API key")
+			return codexAuthFile{}, nil, errors.New("subscription snapshot also carries an API key")
 		}
 		if auth.Tokens == nil || auth.Tokens.AccessToken == "" {
-			return nil, errors.New("subscription snapshot carries no access token")
+			return codexAuthFile{}, nil, errors.New("subscription snapshot carries no access token")
 		}
 		if auth.Tokens.RefreshToken == nil {
-			return nil, errors.New("subscription snapshot carries no explicit refresh-token field")
+			return codexAuthFile{}, nil, errors.New("subscription snapshot carries no explicit refresh-token field")
 		}
-		if *auth.Tokens.RefreshToken != "" {
-			return nil, errors.New("subscription snapshot carries a refresh token")
+		if codexAuthRefreshTokenAliased(auth.Tokens) {
+			return codexAuthFile{}, nil, errors.New("subscription refresh token is aliased into an agent-visible field")
 		}
 		expires, err := jwtExpiry(auth.Tokens.AccessToken)
 		if err != nil {
-			return nil, err
+			return codexAuthFile{}, nil, err
 		}
-		return &expires, nil
+		return auth, &expires, nil
 	case CodexAuthAPIKey:
 		if auth.AuthMode != "" && auth.AuthMode != "apikey" && auth.AuthMode != "api_key" {
-			return nil, errors.New("auth.json mode is not API key")
+			return codexAuthFile{}, nil, errors.New("auth.json mode is not API key")
 		}
 		if auth.OpenAIAPIKey == nil || *auth.OpenAIAPIKey == "" {
-			return nil, errors.New("API-key snapshot carries no key")
+			return codexAuthFile{}, nil, errors.New("API-key snapshot carries no key")
 		}
 		if auth.Tokens != nil {
-			return nil, errors.New("API-key snapshot also carries token credentials")
+			return codexAuthFile{}, nil, errors.New("API-key snapshot also carries token credentials")
 		}
-		return nil, nil
+		return auth, nil, nil
 	}
-	return nil, errors.New("unsupported auth mode")
+	return codexAuthFile{}, nil, errors.New("unsupported auth mode")
+}
+
+func codexAuthRefreshTokenAliased(tokens *codexAuthTokens) bool {
+	if tokens == nil || tokens.RefreshToken == nil || *tokens.RefreshToken == "" {
+		return false
+	}
+	return codexAuthTokensExpose(tokens, *tokens.RefreshToken)
+}
+
+func codexAuthTokensExpose(tokens *codexAuthTokens, secret string) bool {
+	if tokens == nil || secret == "" {
+		return false
+	}
+	if strings.Contains(tokens.IDToken, secret) || strings.Contains(tokens.AccessToken, secret) {
+		return true
+	}
+	return tokens.AccountID != nil && strings.Contains(*tokens.AccountID, secret)
+}
+
+// codexReviewAgentAuthSnapshot derives the container-facing credential from
+// the host store. The host retains the rotating refresh token; the reviewer
+// receives byte-identical input only when it is already access-token-only.
+func codexReviewAgentAuthSnapshot(
+	mode CodexAuthMode, body []byte,
+) ([]byte, *time.Time, error) {
+	auth, expires, err := inspectCodexHostAuth(mode, body)
+	if err != nil {
+		return nil, nil, err
+	}
+	if mode != CodexAuthSubscription || auth.Tokens == nil ||
+		auth.Tokens.RefreshToken == nil || *auth.Tokens.RefreshToken == "" {
+		return bytes.Clone(body), expires, nil
+	}
+	empty := ""
+	auth.Tokens.RefreshToken = &empty
+	snapshot, err := json.Marshal(auth)
+	if err != nil {
+		return nil, nil, errors.New("auth.json snapshot cannot be encoded")
+	}
+	return snapshot, expires, nil
 }
 
 func jwtExpiry(token string) (time.Time, error) {
@@ -1733,7 +1814,7 @@ func validateCodexReviewAgentSpec(
 	if err := validateCodexReviewRequest(cfg, req); err != nil {
 		return err
 	}
-	_, authBody, err := readCodexReviewInput(
+	_, hostAuthBody, err := readCodexReviewInput(
 		cfg.InputRoot, req.AuthSnapshot, maxCodexAuthSnapshotBytes,
 	)
 	if err != nil {
@@ -1745,7 +1826,7 @@ func validateCodexReviewAgentSpec(
 	if err != nil || !bytes.Equal(instructionBody, req.Instructions.Body) {
 		return failf(CheckControlPlaneIsolation, "Codex review instruction snapshot changed after admission")
 	}
-	expires, err := inspectCodexAuthSnapshot(req.AuthMode, authBody)
+	authBody, expires, err := codexReviewAgentAuthSnapshot(req.AuthMode, hostAuthBody)
 	if err != nil {
 		return failf(CheckCredentialSeparation, "Codex review auth snapshot changed after admission")
 	}

@@ -1158,7 +1158,10 @@ func composeClaudeDriver(
 			ProviderEndpoints: reviewEndpoints, ApprovedImage: cfg.ReviewImage,
 			ObserverImage: cfg.ExporterImage, Model: cfg.ReviewModel,
 			ReasoningEffort: cfg.ReviewReasoningEffort, AccessTokenLifetimeFloor: time.Hour,
-			Now: func() time.Time { return time.Now().UTC() }, Journal: adapters.Journal,
+			AccessTokenRefreshThreshold: 2 * time.Hour,
+			AuthStoreLeaser:             adapters.Leaser, AuthRefresher: ward.NewCodexAuthHTTPRefresher(),
+			AuthState: adapters.AuthState,
+			Now:       func() time.Time { return time.Now().UTC() }, Journal: adapters.Journal,
 			VolumeLifecycleLeaser: volumeLeaser,
 		}
 		reviewConfigurationDigest, err = ward.CodexReviewConfigurationDigest(

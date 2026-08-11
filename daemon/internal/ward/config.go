@@ -31,6 +31,10 @@ import (
 var ErrLeaseWindowEnded = errors.New("auth store mutation lease window already ended")
 
 type AuthStoreLeaser interface {
+	// GetIdentity reconstructs the current trusted identity declaration. A
+	// refresh transaction re-gates the lease requirement, refresh strategy,
+	// and read-only snapshot support instead of trusting launch configuration.
+	GetIdentity(ctx context.Context, id domain.AuthIdentityID) (domain.AuthIdentity, error)
 	// AuthStoreVolume returns the immutable trusted volume binding for this
 	// identity. Handoff compares it with the one writable credential mount
 	// before opening a mutation window.
@@ -44,6 +48,10 @@ type AuthStoreLeaser interface {
 	// Get reconstructs the identity's current lease row; liveness is the
 	// caller's HeldAt question, never the row's claim.
 	Get(ctx context.Context, id domain.AuthIdentityID) (domain.AuthStoreMutationLease, error)
+	// Renew extends the exact live holder/fence window. It must refuse an
+	// expired or superseded generation rather than reacquiring it.
+	Renew(ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
+		fence int64, now, expiresAt time.Time) (domain.AuthStoreMutationLease, error)
 	// Release ends the lease the caller holds, identified by holder and
 	// fence; a non-holder or a left-behind fence is refused.
 	Release(ctx context.Context, id domain.AuthIdentityID, holder domain.InvocationID,

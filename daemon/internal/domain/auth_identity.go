@@ -23,10 +23,11 @@ type AuthIdentity struct {
 	// be mutated under a lease. An identity that declares no lease cannot take
 	// one: the store refuses, rather than treating the declaration as advice.
 	AuthStoreMutationLease bool `json:"auth_store_mutation_lease"`
-	// AuthStoreVolume is the trusted runtime volume that carries this
-	// identity's auth store. Every lease-declaring identity binds one exact
-	// volume, so a caller cannot lease identity A while mounting identity B's
-	// writable store.
+	// AuthStoreVolume is the trusted locator that carries this identity's auth
+	// store. Writable container identities bind a runtime volume; read-only
+	// host-snapshot identities bind the canonical host store path. Every
+	// lease-declaring identity binds one exact locator, so a caller cannot
+	// lease identity A while mutating identity B's store.
 	AuthStoreVolume string `json:"auth_store_volume"`
 	// MaxParallelExecutions is the inference-execution limit, independent of
 	// the mutation lease (§5.4). 1B establishes it experimentally; it is at
@@ -138,10 +139,10 @@ func (l AuthStoreMutationLease) HeldAt(now time.Time) bool {
 
 // ValidateAuthIdentityTransition reports whether updated is a legal successor
 // to the stored identity old. The identity's key, provider, auth-store volume,
-// and lease declaration are fixed: changing either store binding would let a
-// holder keep a lease over a different volume than the writer now mutates.
-// The parallelism limit and snapshot support may change, since 1B measures the
-// limit and a provider can gain read-only snapshot support.
+// lease declaration, refresh strategy, and snapshot capability are fixed:
+// changing any mutation rule while a holder relies on the recorded identity
+// would invalidate that lease's authority. Only the independently measured
+// parallelism limit may change.
 func ValidateAuthIdentityTransition(old, updated AuthIdentity) error {
 	if updated.ID != old.ID {
 		return fmt.Errorf("auth identity %s: identity would change from %s: %w",
@@ -149,7 +150,9 @@ func ValidateAuthIdentityTransition(old, updated AuthIdentity) error {
 	}
 	if updated.Provider != old.Provider ||
 		updated.AuthStoreMutationLease != old.AuthStoreMutationLease ||
-		updated.AuthStoreVolume != old.AuthStoreVolume {
+		updated.AuthStoreVolume != old.AuthStoreVolume ||
+		updated.RefreshStrategy != old.RefreshStrategy ||
+		updated.SupportsReadOnlyAuthSnapshot != old.SupportsReadOnlyAuthSnapshot {
 		return fmt.Errorf("auth identity %s: fixed bindings would change: %w",
 			updated.ID, ErrImmutableTransition)
 	}

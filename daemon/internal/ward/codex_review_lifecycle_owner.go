@@ -11,6 +11,7 @@ type codexReviewLifecycleConfig struct {
 	EgressDialContext  dialContextFunc
 	EgressProxyTimeout time.Duration
 	ExportRoot         string
+	HandoffTimeout     time.Duration
 	SeedReadyDir       string
 	SeedStageDir       string
 	SeedTimeout        time.Duration
@@ -22,6 +23,7 @@ func newCodexReviewLifecycleConfig(cfg Config) codexReviewLifecycleConfig {
 		EgressDialContext:  cfg.EgressDialContext,
 		EgressProxyTimeout: cfg.EgressProxyTimeout,
 		ExportRoot:         cfg.ExportRoot,
+		HandoffTimeout:     cfg.HandoffTimeout,
 		SeedReadyDir:       cfg.SeedReadyDir,
 		SeedStageDir:       cfg.SeedStageDir,
 		SeedTimeout:        cfg.SeedTimeout,
@@ -52,8 +54,8 @@ type CodexReviewLifecycle struct {
 }
 
 // NewCodexReviewLifecycle builds the Codex review runtime owner. Config is
-// defaulted, validated, and frozen independently of Backend so the lifecycle
-// cannot depend on handoff conformance or lease state.
+// defaulted, validated, and frozen independently of Backend. Review-specific
+// host auth dependencies arrive through CodexReviewConfig at launch.
 func NewCodexReviewLifecycle(rt Runtime, cfg Config) (*CodexReviewLifecycle, error) {
 	if rt == nil {
 		return nil, fmt.Errorf("%w: Runtime is required", ErrInvalidConfig)
@@ -74,8 +76,9 @@ func (l *CodexReviewLifecycle) valid() bool {
 	return l != nil && l.rt != nil && l.codexReviewRuns != nil
 }
 
-// Codex workspaces never acquire the handoff gate's auth-store lease. Passing
-// empty hooks keeps that capability outside the review lifecycle.
+// Running Codex workspaces never hold the handoff gate's auth-store lease.
+// Review launch holds its separate host-auth lease through container start,
+// then releases it before returning; teardown therefore receives no auth hooks.
 func (l *CodexReviewLifecycle) teardown(
 	ctx context.Context, names handoffNames, st *runState,
 ) error {

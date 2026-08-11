@@ -172,6 +172,7 @@ type CodexReviewWorkspaceBinding struct {
 // derives them inside CodexReview.
 type CodexReviewLaunchSpec struct {
 	RunID                string
+	WorkflowRunID        domain.RunID
 	Image                string
 	WorkspaceSourceRunID string
 	WorkspaceVolume      string
@@ -215,7 +216,7 @@ func (b *CodexReviewLifecycle) CodexReview(
 	if !b.valid() {
 		return nil, fmt.Errorf("%w: Codex review lifecycle is not initialized", ErrInvalidConfig)
 	}
-	if err := validateCodexReviewLaunch(cfg, launch); err != nil {
+	if err := validateCodexReviewLaunchShape(cfg, launch); err != nil {
 		return nil, err
 	}
 	releaseRun, err := b.acquireCodexReviewRun(ctx, launch.RunID)
@@ -238,7 +239,13 @@ func (b *CodexReviewLifecycle) codexReview(
 	if !b.valid() {
 		return nil, fmt.Errorf("%w: Codex review lifecycle is not initialized", ErrInvalidConfig)
 	}
-	if err := validateCodexReviewLaunch(cfg, launch); err != nil {
+	if err := validateCodexReviewLaunchShape(cfg, launch); err != nil {
+		return nil, err
+	}
+	if err := checkCodexAuthReenrollment(ctx, cfg, launch); err != nil {
+		return nil, err
+	}
+	if err := validateCodexReviewLaunchStructure(cfg, launch); err != nil {
 		return nil, err
 	}
 	if err := codexReviewOutcomeFence(ctx, cfg.Journal, launch.RunID); err != nil {
@@ -272,6 +279,21 @@ func (b *CodexReviewLifecycle) codexReview(
 		return nil, codexReviewOperationalCheckf(
 			CheckControlPlaneIsolation, "load Codex review launch intent: %v", getErr,
 		)
+	}
+	authGuard, err := b.acquireCodexReviewAuth(ctx, cfg, launch)
+	if err != nil {
+		return nil, err
+	}
+	authGuardReleased := authGuard == nil
+	if authGuard != nil {
+		defer func() {
+			if !authGuardReleased {
+				retErr = errors.Join(retErr, b.releaseCodexReviewAuthLease(ctx, authGuard))
+			}
+		}()
+	}
+	if err := validateCodexReviewLaunch(cfg, launch); err != nil {
+		return nil, err
 	}
 	owner, err := newOwnershipLabel()
 	if err != nil {
@@ -485,6 +507,9 @@ func (b *CodexReviewLifecycle) codexReview(
 			CheckCredentialSeparation, "journal Codex review snapshot: %v", err,
 		)
 	}
+	if err := verifyCodexAuthLaunchAdmission(ctx, cfg, launch, authGuard); err != nil {
+		return nil, err
+	}
 	if err := b.seedCodexReviewSnapshot(ctx, cfg, launch, snapshotName, owner,
 		func(resource CodexReviewIntentResource) error {
 			resource.OwnershipToken = owner.Value
@@ -620,6 +645,9 @@ func (b *CodexReviewLifecycle) codexReview(
 	if err := validateCodexReviewStartLifetime(cfg, launch); err != nil {
 		return nil, err
 	}
+	if err := verifyCodexAuthLaunchAdmission(ctx, cfg, launch, authGuard); err != nil {
+		return nil, err
+	}
 	if err := cfg.Journal.MarkCodexReviewIntentPrepared(ctx, launch.RunID); err != nil {
 		return nil, codexReviewJournalCheckf(
 			CheckControlPlaneIsolation, "mark Codex review launch prepared: %v", err,
@@ -630,7 +658,13 @@ func (b *CodexReviewLifecycle) codexReview(
 			CheckControlPlaneIsolation, "mark Codex review launch starting: %v", err,
 		)
 	}
-	if err := volumeLease.StartCodexReviewContainer(ctx, spec.Name); err != nil {
+	startCtx, cancelStart, err := reserveCodexAuthStartAdmission(ctx, cfg, launch, authGuard)
+	if err != nil {
+		return nil, err
+	}
+	startErr := volumeLease.StartCodexReviewContainer(startCtx, spec.Name)
+	cancelStart()
+	if startErr != nil {
 		// Starting is durable before the effect, and the error can describe
 		// either no effect or a successful atomic lease transfer. A
 		// fresh-context review is disposable, so both outcomes resolve the same
@@ -639,15 +673,15 @@ func (b *CodexReviewLifecycle) codexReview(
 		// lease visible; nothing live survives this error return either way.
 		leaseReleasable = false
 		started = true
-		startErr := codexReviewOperationalCheckf(
-			CheckControlPlaneIsolation, "start Codex review container: %v", err,
+		startFailure := codexReviewOperationalCheckf(
+			CheckControlPlaneIsolation, "start Codex review container: %v", startErr,
 		)
 		proxyErr := proxy.Close()
 		proxy = nil
-		if recoveryErr := b.RecoverCodexReview(ctx, cfg, launch); recoveryErr != nil {
-			return nil, errors.Join(startErr, recoveryErr, proxyErr)
+		if recoveryErr := b.recoverCodexReviewAfterStart(ctx, cfg, launch); recoveryErr != nil {
+			return nil, errors.Join(startFailure, recoveryErr, proxyErr)
 		}
-		return nil, errors.Join(startErr, proxyErr)
+		return nil, errors.Join(startFailure, proxyErr)
 	}
 	// A successful Start already transferred the lease. From here recovery owns
 	// every durable object: if the process dies before the handoff record, a
@@ -656,6 +690,16 @@ func (b *CodexReviewLifecycle) codexReview(
 	// start; #427 never owns a review whose start ward did not witness.
 	leaseTransferred = true
 	started = true
+	if err := b.releaseCodexReviewAuthLease(ctx, authGuard); err != nil {
+		releaseErr := err
+		proxyErr := proxy.Close()
+		proxy = nil
+		if recoveryErr := b.recoverCodexReviewAfterStart(ctx, cfg, launch); recoveryErr != nil {
+			return nil, errors.Join(releaseErr, recoveryErr, proxyErr)
+		}
+		return nil, errors.Join(releaseErr, proxyErr)
+	}
+	authGuardReleased = true
 	if err := cfg.Journal.MarkCodexReviewIntentStarted(ctx, launch.RunID); err != nil {
 		// Without the durable handoff record #427 can never own this review, so
 		// destroy it now rather than strand a running credential-bearing
@@ -665,12 +709,20 @@ func (b *CodexReviewLifecycle) codexReview(
 		)
 		proxyErr := proxy.Close()
 		proxy = nil
-		if recoveryErr := b.RecoverCodexReview(ctx, cfg, launch); recoveryErr != nil {
+		if recoveryErr := b.recoverCodexReviewAfterStart(ctx, cfg, launch); recoveryErr != nil {
 			return nil, errors.Join(markErr, recoveryErr, proxyErr)
 		}
 		return nil, errors.Join(markErr, proxyErr)
 	}
 	return &CodexReviewLaunch{Binding: persisted, proxy: proxy}, nil
+}
+
+func (b *CodexReviewLifecycle) recoverCodexReviewAfterStart(
+	ctx context.Context, cfg CodexReviewConfig, launch CodexReviewLaunchSpec,
+) error {
+	recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.HandoffTimeout)
+	defer cancel()
+	return b.RecoverCodexReview(recoveryCtx, cfg, launch)
 }
 
 func codexReviewOutcomeFence(ctx context.Context, journal CodexReviewJournal, runID string) error {
@@ -721,7 +773,7 @@ func (b *CodexReviewLifecycle) acquireCodexReviewRun(ctx context.Context, runID 
 	}
 }
 
-func validateCodexReviewLaunch(cfg CodexReviewConfig, launch CodexReviewLaunchSpec) error {
+func validateCodexReviewLaunchShape(cfg CodexReviewConfig, launch CodexReviewLaunchSpec) error {
 	switch {
 	case cfg.Journal == nil:
 		return fmt.Errorf("%w: Journal is required", ErrInvalidCodexReviewSpec)
@@ -729,6 +781,8 @@ func validateCodexReviewLaunch(cfg CodexReviewConfig, launch CodexReviewLaunchSp
 		return fmt.Errorf("%w: VolumeLifecycleLeaser is required", ErrInvalidCodexReviewSpec)
 	case !runIDPattern.MatchString(launch.RunID):
 		return fmt.Errorf("%w: RunID is invalid", ErrInvalidCodexReviewSpec)
+	case launch.WorkflowRunID == "":
+		return fmt.Errorf("%w: WorkflowRunID is required", ErrInvalidCodexReviewSpec)
 	case !digestPinnedImagePattern.MatchString(launch.Image):
 		return fmt.Errorf("%w: Image must be digest-pinned", ErrInvalidCodexReviewSpec)
 	case !digestPinnedImagePattern.MatchString(cfg.ApprovedImage) || !sameImage(cfg.ApprovedImage, launch.Image):
@@ -765,6 +819,12 @@ func validateCodexReviewLaunch(cfg CodexReviewConfig, launch CodexReviewLaunchSp
 		return fmt.Errorf("%w: InputRoot is invalid", ErrInvalidCodexReviewSpec)
 	case cfg.AccessTokenLifetimeFloor <= 0 || cfg.Now == nil:
 		return fmt.Errorf("%w: credential lifetime configuration is invalid", ErrInvalidCodexReviewSpec)
+	case cfg.AccessTokenRefreshThreshold != 0 &&
+		cfg.AccessTokenRefreshThreshold <= cfg.AccessTokenLifetimeFloor:
+		return fmt.Errorf("%w: credential refresh threshold must exceed its lifetime floor", ErrInvalidCodexReviewSpec)
+	case launch.AuthMode == CodexAuthSubscription &&
+		(cfg.AuthStoreLeaser == nil || cfg.AuthRefresher == nil || cfg.AuthState == nil):
+		return fmt.Errorf("%w: subscription host refresh dependencies are required", ErrInvalidCodexReviewSpec)
 	case !slices.Equal(cfg.ProviderEndpoints, launch.AuthMode.providerEndpoints()):
 		return fmt.Errorf("%w: provider_only endpoints do not exactly match auth mode", ErrInvalidCodexReviewSpec)
 	}
@@ -776,19 +836,24 @@ func validateCodexReviewLaunch(cfg CodexReviewConfig, launch CodexReviewLaunchSp
 		launch.InstructionBinding.ResultDigest != launch.Instructions.Digest {
 		return fmt.Errorf("%w: Codex instruction provenance is invalid", ErrInvalidCodexReviewSpec)
 	}
+	if now := cfg.Now(); now.IsZero() || now.Location() != time.UTC {
+		return fmt.Errorf("%w: credential clock is invalid", ErrInvalidCodexReviewSpec)
+	}
+	return nil
+}
+
+func validateCodexReviewLaunchStructure(cfg CodexReviewConfig, launch CodexReviewLaunchSpec) error {
+	if err := validateCodexReviewLaunchShape(cfg, launch); err != nil {
+		return err
+	}
 	authPath, authBody, err := readCodexReviewInput(
 		cfg.InputRoot, launch.AuthSnapshot, maxCodexAuthSnapshotBytes,
 	)
 	if err != nil {
 		return fmt.Errorf("%w: auth snapshot: %w", ErrInvalidCodexReviewSpec, err)
 	}
-	now := cfg.Now()
-	if now.IsZero() || now.Location() != time.UTC {
-		return fmt.Errorf("%w: credential clock is invalid", ErrInvalidCodexReviewSpec)
-	}
-	expires, err := inspectCodexAuthSnapshot(launch.AuthMode, authBody)
-	if err != nil || expires != nil && expires.Sub(now) < cfg.AccessTokenLifetimeFloor {
-		return fmt.Errorf("%w: auth snapshot is invalid or below its lifetime floor", ErrInvalidCodexReviewSpec)
+	if _, _, err := inspectCodexHostAuth(launch.AuthMode, authBody); err != nil {
+		return fmt.Errorf("%w: auth snapshot is invalid", ErrInvalidCodexReviewSpec)
 	}
 	instructionPath, instructionBody, err := readCodexReviewInput(
 		cfg.InputRoot, launch.InstructionFile, domain.MaxVendorInstructionBytes,
@@ -800,9 +865,35 @@ func validateCodexReviewLaunch(cfg CodexReviewConfig, launch CodexReviewLaunchSp
 	return nil
 }
 
+func validateCodexReviewLaunch(cfg CodexReviewConfig, launch CodexReviewLaunchSpec) error {
+	if err := validateCodexReviewLaunchStructure(cfg, launch); err != nil {
+		return err
+	}
+	_, authBody, err := readCodexReviewInput(
+		cfg.InputRoot, launch.AuthSnapshot, maxCodexAuthSnapshotBytes,
+	)
+	if err != nil {
+		return fmt.Errorf("%w: auth snapshot: %w", ErrInvalidCodexReviewSpec, err)
+	}
+	_, expires, err := codexReviewAgentAuthSnapshot(launch.AuthMode, authBody)
+	if err != nil {
+		return fmt.Errorf("%w: auth snapshot: %w", ErrInvalidCodexReviewSpec, err)
+	}
+	if expires != nil && expires.Sub(cfg.Now()) < cfg.AccessTokenLifetimeFloor {
+		return fmt.Errorf(
+			"%w: identity %q access token has %s remaining, floor %s",
+			ErrInvalidCodexReviewSpec, launch.AuthIdentityID,
+			expires.Sub(cfg.Now()), cfg.AccessTokenLifetimeFloor,
+		)
+	}
+	return nil
+}
+
 // codexReviewIntentDigest deliberately commits only non-secret launch shape.
 // The auth snapshot, prompt, and instruction body stay outside durable state;
 // their live content is re-read and re-gated before the handoff boundary.
+// WorkflowRunID routes a refresh failure to its owning run but does not change
+// runtime topology, so excluding it preserves compatibility with open intents.
 func codexReviewIntentDigest(cfg CodexReviewConfig, launch CodexReviewLaunchSpec) (string, error) {
 	shape := struct {
 		RunID, Image, WorkspaceSourceRunID, WorkspaceVolume, ExpectedHead     string
@@ -1576,7 +1667,11 @@ func (b *CodexReviewLifecycle) seedCodexReviewSnapshot(
 	ctx context.Context, cfg CodexReviewConfig, launch CodexReviewLaunchSpec, volume string, owner Label,
 	mark func(CodexReviewIntentResource) error,
 ) (retErr error) {
-	_, authBody, err := readCodexReviewInput(cfg.InputRoot, launch.AuthSnapshot, maxCodexAuthSnapshotBytes)
+	_, hostAuthBody, err := readCodexReviewInput(cfg.InputRoot, launch.AuthSnapshot, maxCodexAuthSnapshotBytes)
+	if err != nil {
+		return failf(CheckCredentialSeparation, "Codex review auth snapshot changed before snapshot seeding")
+	}
+	authBody, _, err := codexReviewAgentAuthSnapshot(launch.AuthMode, hostAuthBody)
 	if err != nil {
 		return failf(CheckCredentialSeparation, "Codex review auth snapshot changed before snapshot seeding")
 	}
@@ -1973,7 +2068,7 @@ func validateCodexReviewStartLifetime(
 	if err != nil {
 		return failf(CheckCredentialSeparation, "Codex review auth snapshot changed before start")
 	}
-	expires, err := inspectCodexAuthSnapshot(launch.AuthMode, authBody)
+	_, expires, err := codexReviewAgentAuthSnapshot(launch.AuthMode, authBody)
 	if err != nil {
 		return failf(CheckCredentialSeparation, "Codex review auth snapshot changed before start")
 	}
