@@ -168,6 +168,188 @@ func (tx *ReadTx) LatestReviewRecord(
 	return tx.GetReviewRecord(ctx, domain.InvocationID(id))
 }
 
+const putFindingDispositionSQL = `
+INSERT INTO finding_dispositions
+    (finding_id, run_id, round, disposition, reason, remediation_invocation_id,
+     created_at, body_digest, body)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (finding_id, round) DO NOTHING`
+
+// validateFindingDispositionBinding re-runs the authoritative joins instead
+// of trusting the disposition row's copied keys: the finding must belong to
+// the run and the exact review round must list that finding.
+func (tx *ReadTx) validateFindingDispositionBinding(
+	ctx context.Context, disposition domain.ReviewDispositionRecord,
+) error {
+	finding, err := tx.GetFinding(ctx, disposition.FindingID)
+	if err != nil {
+		return err
+	}
+	if finding.RunID != disposition.RunID {
+		return domain.ErrParentKeyMismatch
+	}
+	var invocationID string
+	if err := tx.tx.QueryRowContext(ctx, `SELECT invocation_id FROM review_records
+        WHERE run_id = ? AND round = ?`, disposition.RunID, disposition.Round).Scan(&invocationID); err != nil {
+		return notFoundOr(err)
+	}
+	record, err := tx.GetReviewRecord(ctx, domain.InvocationID(invocationID))
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(record.FindingIDs, disposition.FindingID) {
+		return domain.ErrParentKeyMismatch
+	}
+	if disposition.Disposition == domain.ReviewDispositionFixed {
+		remediation, err := tx.GetReviewRecord(ctx, disposition.RemediationInvocationID)
+		if err != nil {
+			return err
+		}
+		if remediation.RunID != record.RunID || remediation.Round <= record.Round ||
+			remediation.BaseSHA != record.BaseSHA || remediation.HeadSHA == record.HeadSHA {
+			return domain.ErrParentKeyMismatch
+		}
+	}
+	return nil
+}
+
+// PutFindingDisposition persists one immutable per-finding round outcome.
+// Replays converge only when the canonical bytes agree.
+func (tx *WriteTx) PutFindingDisposition(
+	ctx context.Context, disposition domain.ReviewDispositionRecord,
+) error {
+	if err := disposition.Validate(); err != nil {
+		return fmt.Errorf("put finding disposition %q round %d: %w",
+			disposition.FindingID, disposition.Round, err)
+	}
+	if err := tx.validateFindingDispositionBinding(ctx, disposition); err != nil {
+		return fmt.Errorf("put finding disposition %q round %d binding: %w",
+			disposition.FindingID, disposition.Round, err)
+	}
+	// A replay must validate the already-persisted row before putImmutable's
+	// byte comparison. Otherwise corruption limited to a copied lookup column
+	// could be hidden by an unchanged canonical body.
+	if _, err := tx.GetFindingDisposition(ctx, disposition.FindingID, disposition.Round); err != nil &&
+		!errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("put finding disposition %q round %d existing row: %w",
+			disposition.FindingID, disposition.Round, err)
+	}
+	body, err := encode(disposition)
+	if err != nil {
+		return fmt.Errorf("put finding disposition %q round %d: %w",
+			disposition.FindingID, disposition.Round, err)
+	}
+	if err := tx.putImmutable(ctx, putFindingDispositionSQL,
+		[]any{
+			disposition.FindingID, disposition.RunID, disposition.Round,
+			disposition.Disposition, disposition.Reason, disposition.RemediationInvocationID,
+			formatTime(disposition.CreatedAt),
+			reviewBodyDigest(body), body,
+		},
+		`SELECT body_digest || body FROM finding_dispositions WHERE finding_id = ? AND round = ?`,
+		[]any{disposition.FindingID, disposition.Round}, reviewBodyAuthority(body)); err != nil {
+		return fmt.Errorf("put finding disposition %q round %d: %w",
+			disposition.FindingID, disposition.Round, err)
+	}
+	return nil
+}
+
+// GetFindingDisposition reconstructs one disposition and re-runs its finding
+// and review-round bindings. Copied columns and decoded body must agree.
+func (tx *ReadTx) GetFindingDisposition(
+	ctx context.Context, findingID domain.FindingID, round int,
+) (domain.ReviewDispositionRecord, error) {
+	dispositions, err := tx.loadFindingDispositions(ctx)
+	if err != nil {
+		return domain.ReviewDispositionRecord{}, fmt.Errorf(
+			"get finding disposition %q round %d: %w", findingID, round, err)
+	}
+	for _, disposition := range dispositions {
+		if disposition.FindingID == findingID && disposition.Round == round {
+			return disposition, nil
+		}
+	}
+	return domain.ReviewDispositionRecord{}, fmt.Errorf(
+		"get finding disposition %q round %d: %w", findingID, round, ErrNotFound)
+}
+
+// ListFindingDispositions returns one run's disposition history in review
+// round then finding-id order. An inconsistent row fails the whole list.
+func (tx *ReadTx) ListFindingDispositions(
+	ctx context.Context, runID domain.RunID,
+) ([]domain.ReviewDispositionRecord, error) {
+	dispositions, err := tx.loadFindingDispositions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list finding dispositions %q: %w", runID, err)
+	}
+	out := make([]domain.ReviewDispositionRecord, 0, len(dispositions))
+	for _, disposition := range dispositions {
+		if disposition.RunID == runID {
+			out = append(out, disposition)
+		}
+	}
+	return out, nil
+}
+
+// loadFindingDispositions reconstructs the complete table before any lookup
+// or run filter is applied. A copied key is untrusted too: selecting by it
+// first would let corruption move an immutable record out of every keyed read.
+func (tx *ReadTx) loadFindingDispositions(ctx context.Context) ([]domain.ReviewDispositionRecord, error) {
+	type rawDisposition struct {
+		findingID, runID, class, reason, remediationInvocationID, bodyDigest string
+		createdAt                                                            string
+		round                                                                int
+		body                                                                 []byte
+	}
+	rows, err := tx.tx.QueryContext(ctx, `SELECT finding_id, run_id, round, disposition,
+        reason, remediation_invocation_id, created_at, body_digest, body FROM finding_dispositions
+        ORDER BY run_id, round, finding_id`)
+	if err != nil {
+		return nil, err
+	}
+	raw := []rawDisposition{}
+	for rows.Next() {
+		var item rawDisposition
+		if err := rows.Scan(&item.findingID, &item.runID, &item.round, &item.class,
+			&item.reason, &item.remediationInvocationID, &item.createdAt,
+			&item.bodyDigest, &item.body); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("row %d: %w", len(raw)+1, err)
+		}
+		raw = append(raw, item)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	out := make([]domain.ReviewDispositionRecord, 0, len(raw))
+	for index, item := range raw {
+		if item.bodyDigest != reviewBodyDigest(string(item.body)) {
+			return nil, fmt.Errorf("row %d: %w", index+1, errRowInconsistent)
+		}
+		disposition, err := decode[domain.ReviewDispositionRecord](item.body)
+		if err != nil {
+			return nil, fmt.Errorf("row %d: %w", index+1, err)
+		}
+		if string(disposition.FindingID) != item.findingID || string(disposition.RunID) != item.runID ||
+			disposition.Round != item.round || string(disposition.Disposition) != item.class ||
+			disposition.Reason != item.reason ||
+			string(disposition.RemediationInvocationID) != item.remediationInvocationID ||
+			formatTime(disposition.CreatedAt) != item.createdAt {
+			return nil, fmt.Errorf("row %d: %w", index+1, errRowInconsistent)
+		}
+		if err := tx.validateFindingDispositionBinding(ctx, disposition); err != nil {
+			return nil, fmt.Errorf("row %d binding: %w", index+1, err)
+		}
+		out = append(out, disposition)
+	}
+	return out, nil
+}
+
 // LatestReviewFailure returns the highest failed round for one run.
 func (tx *ReadTx) LatestReviewFailure(
 	ctx context.Context, runID domain.RunID,
