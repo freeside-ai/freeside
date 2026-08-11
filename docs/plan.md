@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 30
+revision: 31
 status: active
 phase: 1A
 updated: 2026-08-11
@@ -58,8 +58,8 @@ Linux-portable under Section 3.3.
    out-of-process hostile import boundary and then a fresh checkout.
 6. A trusted recipe verifies the candidate and captures evidence in a clean
    environment.
-7. Independent review and yield-driven remediation run within explicit
-   emergency brakes.
+7. Independent review, finding adjudication, and yield-driven remediation
+   run within explicit emergency brakes.
 8. The daemon publishes the verified, reviewed candidate under an audited
    GitHub trust profile.
 9. A ready-for-final-review item appears on my phone with mechanical evidence.
@@ -251,6 +251,7 @@ Approval is not a universal action.
 | `spec_approval` | Approve, request changes, discuss, or stop. Render the full specification. A revision shows the diff from the last reviewed version, prior comments, and claimed addressals. |
 | `review_diminishing_returns` | Finish now; apply the current batch and finish; continue under specified policy; or turn a recurring preference into a project-policy proposal PR. It never mutates policy directly. |
 | `review_dispute` | Adjudicate the finding, discuss, or stop. |
+| `finding_adjudication` | Accept the recommended route, choose an offered alternative, discuss, or stop (added with the Section 7 adjudication routing, 1B). Acceptance binds to the adjudication artifact digest and the item version; a Discuss response re-invokes adjudication against the same version bindings, and the new artifact supersedes the item. Stop leaves the run parked. |
 | `review_contradiction` | Recover only the exact persisted contradiction named by the card, or leave it parked. The card renders the bound run, invocation, round, base SHA, head SHA, and immutable failure-body digest; recovery preserves the original failure evidence. |
 | `review_configuration` | Adopt the review configuration (`adopt_review_configuration`), discuss, or stop. The run is parked, not terminal: adoption authorizes an operator-approved, review-configuration-only profile supersession of exactly the parked failure named by the card's binding, resolved at decision time as the repository's currently activated revision and re-gated on every read; stop concludes the run as a configuration failure always did. The card renders the same bound coordinates as `review_contradiction` plus the superseded profile digest. |
 | `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. |
@@ -640,7 +641,7 @@ gauntlet ──▶ fresh daemon-owned checkout; daemon re-authors clean commits
 fresh checkout ──▶ clean verification workspace (no credentials, no network;
    trusted recipe runs checks and captures evidence)
 verified candidate ──▶ required review pass (Section 7; pre-publication,
-   findings drive remediation and reverification)
+   adjudicated findings drive remediation and reverification)
 reviewed candidate ──▶ git/publish ──▶ GitHub PR (under trust profile)
 ```
 
@@ -1319,9 +1320,10 @@ Additional rules:
   specification as a digest-addressed artifact and creates the run.
 - `auto_start` is bounded by WIP caps. The conservative default is `propose`.
 - Raw findings are immutable. Classification is a versioned annotation.
-- Low-confidence materiality defaults to continued remediation or human
-  attention.
-- The classifier cannot declare a finding fixed.
+- Low-confidence materiality enters the Section 7 adjudication residue and
+  defaults to continued remediation or human attention.
+- Neither the classifier nor the Section 7 adjudicator can declare a finding
+  fixed.
 - Artifacts are typed, immutable, and digest-addressed. Approvals bind to their
   digests.
 - The stall heartbeat (1B.1) is ward- or daemon-observed and may only
@@ -1340,8 +1342,8 @@ The engine, not an agent, runs deterministic policy jobs:
 - cleanup.
 
 Agents appear where judgment is the work: elaborator, implementer, remediator,
-diagnostic, finding classifier, reviewer, shadow reviewer, and, later,
-briefer.
+diagnostic, finding classifier, finding adjudicator (Section 7), reviewer,
+shadow reviewer, and, later, briefer.
 
 #### Daemon Judgment Calls
 
@@ -1356,7 +1358,8 @@ telemetry.
 
 Every call site carries exactly one per-site authority contract:
 
-1. **Ceiling-bounded annotation** (type case: the finding classifier). It
+1. **Ceiling-bounded annotation** (type case: the finding classifier; the
+   Section 7 finding adjudicator is the second site). It
    declares its behavioral lattice and deterministic fallback; which outputs
    reduce work; raw-severity ceilings; second-adjudication rules; cumulative
    bounds on attention, compute, and starvation; and tests for extreme
@@ -1735,11 +1738,12 @@ never asserted — project and head binding. The authenticated ingestion actor
 is recorded separately from the claimed producer; the operator-selected
 ingestion target separately from the artifact's own source binding (exact /
 claimed / unknown; promotion to any blocking role requires exact).
-Quarantined findings cannot block readiness, trigger remediation, or consume
-remediation budgets. Automatic blocking or remediation requires
-source-specific admission or explicit human promotion, deduplication, and a
-declared authority-site contract (Section 5.13). External findings never
-satisfy ReviewSource freshness, independence, or review-completeness.
+Quarantined findings cannot block readiness, enter Section 7 adjudication,
+trigger remediation, or consume remediation budgets. Automatic blocking or
+remediation requires source-specific admission or explicit human promotion,
+deduplication, and a declared authority-site contract (Section 5.13).
+External findings never satisfy ReviewSource freshness, independence, or
+review-completeness.
 
 **Pre-publication adversarial pass (deferred).** An optional adversarial
 self-review before a PR opens, so the external reviewer starts from a higher
@@ -1839,8 +1843,9 @@ achieve it.
 
 **Review is a durable, Freeside-invoked and Freeside-orchestrated stage of
 the run workflow** (decider: user; revision 25): request, acknowledge, ingest
-normalized findings, drive remediation, reverify, re-review the new head,
-escalate a stalled or exhausted loop to durable attention. The first
+normalized findings, adjudicate them (Finding Adjudication, below), drive
+remediation, reverify, re-review the new head, escalate a stalled or
+exhausted loop to durable attention. The first
 production ReviewSource is a Freeside-invoked local Codex invocation.
 GitHub-native Codex review, when observed, is recorded as best-effort extra
 evidence; it never satisfies the review requirement. The trigger
@@ -1857,11 +1862,12 @@ credentials; it receives repository instructions and verification evidence,
 never the implementer's reasoning history; it returns normalized findings
 with severity, location, explanation, and stable identity; and it records
 provider, model configuration, invocation, cost owner, and completion
-evidence. The findings → remediation → reverify → re-review loop is bounded
-by resolved policy; exhaustion or ambiguity produces a durable AttentionItem,
-never a silent stall. Failure classification matches the publication
-boundary: transient failures retry with backoff; configuration or quota
-failures create attention; durable contradictions fail loudly.
+evidence. The findings → adjudication → remediation → reverify → re-review
+loop is bounded by resolved policy; exhaustion or ambiguity produces a
+durable AttentionItem, never a silent stall. Failure classification matches
+the publication boundary: transient failures retry with backoff;
+configuration or quota failures create attention; durable contradictions
+fail loudly.
 
 **Resolved fork (decider: user, 2026-08-05; revision 28): the review anchor
 is pre-publication.** Implement → verify → review → clean: publish; the PR
@@ -1931,8 +1937,249 @@ The classifier is never the sole safety gate:
   becomes an AttentionItem.
 - A credible critical or high shadow finding blocks ready status.
 
+Credibility is not a separate classifier output, and its guard is
+fail-safe: wherever this section says "credible", it names a
+deterministic guard anchored on review-contract severity, in which
+classification confidence can add protection but never remove it — a
+critical or high severity finding stays credible when classification is
+missing or low-confidence, because the landed classifier annotates
+materiality, not finding validity. No model output can mint or strip
+credibility. The boolean is total across the normalized scale: every
+finding, at every severity, is credible until a distinct validity
+signal exists and marks it otherwise at resolved-policy confidence —
+today no landed signal can, so credibility filters nothing and the
+word's whole force is the critical/high ceiling. A finding marked
+non-credible never fast-paths and never disappears: it enters the
+model adjudication, where the critical/high second-adjudication
+ceiling still applies.
+
+Severity itself resolves against a declared normalized scale —
+critical, high, medium, low. Each ReviewSource binding declares a
+deterministic mapping from its native vocabulary to that scale, and a
+missing or unmapped value fails protective, treated as high. The first
+instance is Freeside's normalization choice for the production
+`codex_local` binding — P1 → high, P2 → medium, P3 → low — a mapping
+decision of Freeside's, not a claim about the reviewer's own
+semantics.
+
 Some contamination is accepted. Freeside does not pass or fail based on routing
 results.
+
+### Finding Adjudication
+
+**Every finding batch is adjudicated before remediation authority is
+exercised** (decider: user; revision 31; #697). Direct findings-to-remediation
+routing assigned nobody the judgment that decides what a finding means for
+the approved work unit: a credible finding can be required by the accepted
+outcome yet prohibited here by the repository's own work-unit rules, a
+legitimate adjacent improvement, a contradiction of the approved
+specification, or governed by instructions that are ambiguous. Sending every
+finding to a remediator risks silent scope expansion; treating every
+non-local fix as deferrable risks false-ready work whose acceptance criteria
+depend on the deferred fix. Adjudication distinguishes whether a finding is
+credible, whether the approved outcome requires it, whether the repository's
+own rules permit the proposed remediation to land in this work unit, and
+which safe route follows.
+
+Each review round with findings produces one immutable, digest-addressed
+FindingAdjudication artifact bound to the run, the exact finding batch and
+round, the approved specification artifact digest, the trusted
+repository-instruction snapshot digest, and the resolved policy digest. Its
+inputs are the approved work-unit specification, the immutable raw findings
+with their versioned classifications, the proposed remediation surface, the
+work unit's declared path scope, repository instructions from the trusted
+base, prior disposition history, and any available structured repository
+facts (Section 5.18 capture); never the implementer's reasoning history.
+The proposed remediation surface is engine-derived per finding from
+that finding's normalized locations, never model-supplied — a batch
+never shares one union surface, so an out-of-scope sibling cannot
+strip an unrelated in-scope finding of its fast path. The surface is
+presumptive, and
+its enforcement backstops are the import boundary's path-scope enforcement
+and the remediator's labeled pushback, each re-entering adjudication as
+structured dissent when a correct fix must exceed it. Derivation fails
+closed: containment runs only over canonical repository-relative paths,
+their syntax validated against the trusted root and their existence
+resolved against either side of the bound base and candidate trees — so
+a finding on a candidate-added or candidate-deleted file keeps its
+deterministic route — and a finding whose location is missing,
+non-path, or unresolvable in both trees yields no presumptive surface —
+never a vacuously contained `allowed` — and, where the goal
+relationship is `required`, falls to `unknown` or attention; a
+non-`required` finding routes by its own row, which consumes no
+surface. Per
+finding it records two normalized axes, a recommended route, rationale
+and evidence, cited repository rules, assumptions, viable
+alternatives, and open questions. The route is the decision; the axes
+are its evidence. A fast-path routing decision is an engine fact,
+carrying no proposal and no confidence field; an adjudicator proposal —
+a model-residue entry — additionally records a self-assessed proposal
+confidence on the declared ordinal scale, labeled model output and
+engine-judged against the same bounded-below resolved-policy
+threshold. A proposal whose confidence is absent, out of scale, or
+below threshold is the ceilings' low-confidence output: it is not
+accepted, and the batch parks to recommendation-led attention, with
+`unknown` as its compatibility representation only where compatibility
+exists (`required`). The
+vocabulary is repository-generic: repository-specific language — a lane, a
+serialized-contract rule, an ownership file — appears only inside cited
+instruction text and explanations, never in the normalized outcomes.
+
+The goal-relationship axis states what the approved outcome makes of the
+finding: `required`, `adjacent`, `contradictory`, or `unclear`. The
+work-unit-compatibility axis states whether the repository's rules let the
+proposed remediation land in this work unit: `allowed`,
+`work_unit_revision_required`, `separate_work_required`,
+`human_decision_required`, or `unknown`. Validity constraints replace the raw
+cross product: compatibility is present exactly when the goal relationship is
+`required` — the only case where remediating here is on the table — and the
+route is a function of the axes:
+
+| Goal relationship | Compatibility | Route |
+| --- | --- | --- |
+| `required` | `allowed` | remediator → clean verification → re-review |
+| `required` | `work_unit_revision_required` | park; recommend a specification revision through the `spec_approval` revision path where prose alone must change, or a replan — a new run under a revised work unit — where the trusted work-unit scope itself must change (declared paths, dependencies, serialization), which a same-unit revision cannot alter |
+| `required` | `separate_work_required` | park; recommend prerequisite work (a Section 5.17 proposal where it is an issue), wait or stop — never defer-and-ready |
+| `required` | `human_decision_required` | recommendation-led `finding_adjudication` attention |
+| `required` | `unknown` | park plus recommendation-led attention; no scope widening |
+| `adjacent` | absent | reasoned deferred disposition; its recorded reason and the adjudication artifact carry the follow-up recommendation that the Section 5.17 human-gated proposal path (1B.1) consumes when it lands |
+| `contradictory` | absent | reasoned declined disposition, or the `review_dispute` item — where the human adjudicates — when the finding's severity is critical or high (the ceilings' second-adjudication case) or the self-assessed proposal confidence is below the resolved-policy threshold |
+| `unclear` | absent | recommendation-led attention with gating questions |
+
+These eight rows are the complete valid vocabulary; implementation fixtures
+enumerate them, not a sample of the cross product. A necessary finding that
+is incompatible with the current work unit parks or replans the run; the
+constraints make silent deferral structurally unrepresentable, because
+`required` has no route to a deferred disposition.
+
+Permission has a presumptive baseline, not an affirmative-citation
+requirement: remediation whose proposed surface stays within the work unit's
+declared paths is presumptively `allowed`, and `allowed` is representable
+only as an engine-derived value. The deterministic declared-path containment
+check is its sole producer, so model output cannot mint permission and the
+adjudicator structurally cannot infer permission to exit the declared
+surface. Rule interpretation is required only where remediation would exit
+that surface or a rule is affirmatively implicated; for that residue,
+missing, conflicting, stale, or low-confidence interpretation fails
+conservatively to `unknown` or human attention. Without the presumption,
+every ordinary in-scope fix would collapse to `unknown` and park the loop.
+On the deterministic path an affirmatively implicated rule reaches
+adjudication only through the structured residue signals below or the
+captured repository facts; that residual is accepted by decision — the
+downstream human merge gate, not fast-path rule interpretation, backstops
+it.
+
+The stage is engine-run with a model residue (Section 5.13: deterministic
+policy jobs stay engine-run; a model is invoked only where judgment is the
+work). The engine derives compatibility deterministically wherever it is
+mechanically decidable, starting with declared-path containment, and consumes
+the classifier's materiality-with-confidence annotation as presumptive
+goal-relationship evidence. Both fields resolve against declared
+scales — materiality and confidence are each ordinal, `low` /
+`medium` / `high`, matching the landed classification vocabulary so
+stored records need no migration — and the fast-path predicate is
+exact: materiality and confidence each at or above their
+resolved-policy dispatch thresholds. The thresholds are bounded below —
+`medium` or `high`, never `low`, defaulting to `high` — so a `low`
+value in either field is by definition the low-confidence residue case.
+A missing, unrecognized, or below-threshold value in either field never
+fast-paths; it fails into the model residue. Every term the dispatch predicate consumes — severity,
+credibility, materiality, confidence, location, surface — now carries
+a declared scale, a named producer, and a fail-closed fallback; a
+predicate input outside its scale is a malformed annotation, never a
+routing choice. The no-model fast path is one-directional,
+toward remediation: a credible, confidently material, in-surface finding
+routes to the remediator with no model adjudication call — erring toward
+an in-surface fix is bounded by the declared paths and is the loop's
+normal work. Selecting the `adjacent` deferral route always takes the
+model adjudication: the adjudicator is the only site that consumes the
+approved specification, and a spec-blind materiality annotation cannot
+decide a spec-relative route.
+The model residue is that deferral direction plus the rest:
+boundary-exiting fixes, contradicted
+specifications, ambiguous goals or rules, low-confidence classification, and
+structured dissent — a remediator's labeled pushback, a human challenge, or
+an attempted fix rejected by the import boundary's path-scope enforcement —
+each of which re-enters adjudication rather than looping silently.
+
+The adjudicator is a Section 5.13 ceiling-bounded annotation site on the
+daemon-side inference contract. Its output is a labeled proposal and
+explanation, never trust computation, transition legality, publication
+eligibility, or proof that a finding is fixed; it cannot widen issue scope,
+alter acceptance criteria, file an issue, or declare a finding fixed.
+Ceilings: a critical or high severity finding, credible or not, never
+routes to a declined or deferred disposition without a second adjudication —
+deterministic or from a distinct agent — or a durable AttentionItem;
+malformed, missing, or low-confidence output is never accepted — the
+batch parks to recommendation-led attention, `unknown` its
+compatibility representation only under `required`;
+adjudication consumes the review loop's resolved-policy bounds and the
+cumulative Section 5.13 budgets attributed to root lineage; every site ships
+a deterministic fake. Routes terminate in the landed disposition vocabulary
+unchanged (fixed / declined / deferred, reasons mandatory): `fixed` still
+requires the later same-base, different-head remediation review, one in
+which the finding's stable identity no longer appears — a re-emitted
+identity re-enters adjudication as the prior fix having failed, never as
+a fresh finding whose disposition can strand the original. That absence
+proof is valid only under a finding identity stable across the
+remediation rounds of one work unit; defining that cross-round identity
+is an acceptance requirement of the wave 6 `kind:contract` unit (#702).
+Adjudicated
+declines and deferrals cite the adjudication artifact digest in their
+recorded reason; and parked runs never publish, so the publication-time
+completeness rule (#525) — exactly one final disposition per finding in the
+current lineage — is satisfied structurally, never by deferring a required
+finding. Review completion is disposition-aware: the review requirement
+is satisfied by a round whose every finding carries a final
+disposition — `fixed` through the remediation re-review, declined and
+deferred through their adjudicated dispositions — so a round fully
+dispositioned without remediation publishes without a futile re-review
+of the unchanged head. The landed clean-only publication check is the
+pre-adjudication interim; the wave 6 unit extends it to this
+derivation, which the #525 readiness derivation carries to the forge.
+
+Human-facing adjudication always leads with a recommended route and why,
+then assumptions, repository-rule citations, viable alternatives with their
+consequences, and a small set of gating questions; a bare "what should I do?"
+interruption is defective. The recommendation is a labeled model proposal;
+bindings, containment verdicts, and cited instruction text are daemon facts
+in a separate register (Section 5.13). The human can accept the
+recommendation, choose an alternative, answer a question, challenge an
+assumption, request further elaboration, discuss again, or stop and leave the
+run parked. Each Discuss response re-invokes the stage against the same
+version bindings and produces a new immutable artifact recording how the
+recommendation changed and which feedback changed it; conversational text
+alone grants no authority — route execution binds to the typed command, the
+artifact digest, and the item version (Section 5.14). The loop is
+policy-bounded and remains parked when unresolved.
+
+Repository rules may further restrict where work lands; they can never
+weaken Freeside's non-waivable safety, trust, verification, or publication
+gates (Section 3.1). Admitted external review activity (#524) consumes this
+same adjudication and routing rather than a second path; Section 5.19
+quarantine and source-specific admission remain upstream, and a quarantined
+finding never enters adjudication. Adjudication is not the deferred planner
+judgment call (Section 5.18): it consumes captured work-unit facts as inputs
+and never computes parallelism or frontier claims. The classifier and the
+adjudicator are separate sites by decision: they differ in inputs (a finding
+with code context versus the specification, declared scope, instructions,
+and disposition history), in binding cadence (per-finding versioned
+annotation at ingestion versus per-batch digest-bound proposal), and in
+authority contract — every site carries exactly one — and the 1B sampled
+classification accuracy measurement requires classifier output measured
+independently of routing pressure. The FindingAdjudication artifact, its
+persistence and sync exposure, the `finding_adjudication` item type, the
+engine dispatch, and the adjudicator site are later implementation units
+(Section 11, wave 6); any change to domain types, migrations,
+StageDriver/ReviewSource surfaces, or API schemas splits into serialized
+`kind:contract` units with their generated consumers. The
+normative-term discipline above — a declared scale, a named producer,
+and a fail-closed fallback for every predicate input and proposal
+output, with the valid and failure cells and their interactions
+enumerated — is an acceptance requirement of that wave 6
+`kind:contract` unit: its typed schema and fixtures are the exhaustive
+enumeration, and this subsection states the design's constraints, not
+the field catalogue.
 
 ## 8. Observability and optimization telemetry
 
@@ -2013,6 +2260,7 @@ Actions and lifecycle live in Section 4; presentation is specified here.
 | `spec_approval` | The ask and a plan-altitude summary: intent, then key questions and decisions. A revision leads with the diff-from-last-reviewed summary and claimed addressals mapped to prior comments. | Full specification and full diff. |
 | `review_diminishing_returns` | Daemon facts: rounds, finding-rate trend, cost so far. Agent claim: what remains. | Per-finding list. |
 | `review_dispute` | The disputed finding with both positions side by side. Dissent is the content; it is never summarized away. | Code context and the full thread. |
+| `finding_adjudication` | The recommended route and why, as a labeled proposal; the finding and the daemon's binding and containment facts in a separate register. | Assumptions, cited repository instructions, alternatives with consequences, gating questions, then the full artifact and code context. |
 | `execution_failure` | Daemon facts: failure class and failing step. Labeled diagnostic claim: probable cause. | Log excerpt and transcript pointer. |
 | `agent_question` | The question as a labeled agent claim, self-contained: what is blocked and any enumerated options. Answering never requires the transcript. | The agent's supporting context. |
 | `publish_blocked` | The trust rule that failed (daemon fact) and the approved alternate profiles. | The failing artifact or scan detail. |
@@ -2372,9 +2620,9 @@ Phase 1B turns the secure path into the useful daily workflow:
 
 `labeled issue → daemon-fetched research → elaboration → spec approval →
 implementation → gauntlet → Freeside-invoked review (Section 7,
-pre-publication) → yield-driven remediation and pattern sweeps →
-diminishing-returns or dispute item → clean: PR under a trust profile,
-carrying the Section 7 disposition history (#525) → checks →
+pre-publication) → finding adjudication → yield-driven remediation and
+pattern sweeps → diminishing-returns or dispute item → clean: PR under a
+trust profile, carrying the Section 7 disposition history (#525) → checks →
 ready-for-final-review with yield history → human GitHub merge`
 
 External review activity on the published PR re-enters the workflow
@@ -2390,6 +2638,8 @@ Phase 1B adds:
   pre-publication re-anchor #527), with ReviewSource freshness verification
   and automatic re-review testing;
 - finding classification with sampled accuracy and second adjudication;
+- finding adjudication between classification and remediation (Section 7;
+  #697);
 - convergence policy and the shadow arm;
 - provenance-gated EvidencePublisher;
 - experimental `max_parallel_executions` per auth identity, visible to
@@ -2426,8 +2676,10 @@ stands, at the close of wave 4 (this section's coordination table).
 
 #### 1B.1: Operational Closure
 
-Human-gated follow-up issue filing (Section 5.17); the doctor
-credential-integrity probe (Section 10); the stall heartbeat (Section 5.12).
+Human-gated follow-up issue filing (Section 5.17), consuming the follow-up
+recommendations recorded by adjudicated deferred dispositions (Section 7);
+the doctor credential-integrity probe (Section 10); the stall heartbeat
+(Section 5.12).
 
 #### 1B.2: The Initiative View
 
@@ -2477,7 +2729,7 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **3 (1B.0): loop foundations** | Parallel lanes | Spine, serialized: the Section 5.16 scheduler (four timer kinds, trusted-job ticker migration), then Section 5.18 capture-hook recording. Ward: #401 gates 1/2/4/5 as parallel probes, then the #404 base image pinned per gate 2's outcome. App: Mac-first operator access (Section 10). |
 | **4 (1B.0): the review stage** | Serial | The spine rescopes #406/#407 into review cores and execution remainders, then lands the review-selection contract core, the review ward-topology slice, #405 only if review needs a project-derived image, and #427 — landed PR-anchored under the then-open Section 7 fork (resolved pre-publication in revision 28; the implementation re-anchor is #527, unscheduled). Its close stands the minimal loop; real-backlog use begins. |
 | **5 (1B.0): loop depth** | Parallel lanes | Elaborator and daemon research fetching with the spec-approval gate; label-initiator intake; the Section 5.13 classifier and diagnostic sites; the provenance-gated EvidencePublisher (first slice: the Section 7 disposition history at publication, #525); the runs list and run timeline; the `max_parallel_executions` experiment. The contract track drains the Section 6 state algebra, then the effect-registry retrofit of `run_proposal`. The supervision core consumes the revision-27 Section 5.2 contract, pulled forward by owner fiat: #454's daemon side and the app-side LaunchAgent and menu-bar unit. |
-| **6 (1B.0): convergence and yield** | Integrated | Convergence policy; the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section 10). 1B.0 exit. |
+| **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section 7 finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section 10). 1B.0 exit. |
 | **7 (1B.1): operational closure** | Parallel lanes | Human-gated follow-up filing with the `effect_proposal` card; the doctor credential-integrity probe; the stall heartbeat; the external daemon-liveness probe (Section 5.2); the deferral drain (sweep-eligible open deferrals enumerated at this wave's planning; dormant contract units excluded unless the spine assigns chain positions). The execution tail closes in order: #401 gate 3, the #406/#407 execution remainders, #405 if outstanding, #397 by explicit owner decision on shadow evidence, then #408. |
 | **8 (1B.2): the initiative view** | Integrated | The Section 5.18 frontier projection and the deterministic initiative view. 1B exit evaluation. |
 
@@ -2561,17 +2813,26 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 30 ("Verified Codex re-enrollment recovery"):
+Revision 31 ("Finding adjudication before remediation"):
 
-1. **Revoked Codex identity recovery is command-backed by exact verified
-   evidence** (Section 4): the marker remains a `system_health` item and gains
-   `resolve_reenrollment` only after its exact latest re-enrollment operation
-   is verified and immutably bound to that marker occurrence. The resolving
-   command revalidates both records atomically; `acknowledge` remains seen-only,
-   and no human assertion can clear the identity gate. Revisit when a provider
-   requires additional durable recovery evidence beyond the current digest and
-   access-token expiry.
-   (User; devlog 2026-08-11-1025-codex-reenrollment-recovery.md; #684.)
+1. **Every finding batch is adjudicated before remediation authority is
+   exercised** (Sections 1, 4, 5.6, 5.12, 5.13, 5.19, 7, 9, 11): an
+   immutable, digest-bound FindingAdjudication artifact records a
+   per-finding decision — goal relationship, work-unit compatibility,
+   and recommended route, with proposal vocabulary reserved for
+   model-residue entries — under validity constraints that leave
+   `required` no route to a deferred disposition. The engine derives compatibility
+   deterministically where mechanically decidable — in-surface remediation
+   is presumptively `allowed`, and `allowed` is engine-derived only — so an
+   unambiguous in-scope finding routes to the remediator with no model
+   call, while the deferral direction always takes adjudication; the model
+   residue is a second Section 5.13 ceiling-bounded annotation site,
+   separate from the classifier. A required finding incompatible with
+   the current work unit parks or replans the run, never defers into a
+   ready result. Revisit when wave 6 convergence measurement shows
+   credible, material, in-surface findings routinely reaching the model
+   residue: the deterministic dispatch predicate is then miscalibrated.
+   (User; devlog 2026-08-11-1504-review-finding-adjudication.md; #697.)
 
 ## 14. Risks
 
