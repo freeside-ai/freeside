@@ -461,6 +461,8 @@ func (p *productionPublicationHarness) reconcileLanes() (engine.ReconcileResult,
 	publication, err := p.workflow.ReconcileProductionPublications(p.ctx)
 	result.ResultsAccepted += publication.ResultsAccepted
 	result.PublicationTasksCompleted += publication.PublicationTasksCompleted
+	result.ReadyCleanItemsCreated += publication.ReadyCleanItemsCreated
+	result.ReadyDegradedItemsCreated += publication.ReadyDegradedItemsCreated
 	result.ReadyItemsCreated += publication.ReadyItemsCreated
 	result.BlockedItemsCreated += publication.BlockedItemsCreated
 	if publication.LastPRNumber > 0 {
@@ -488,6 +490,45 @@ func (p *productionPublicationHarness) newEngineWithApprovedRecipes(
 	return p.newEngineForMode(
 		t, seams, withPublication, approvedRecipes, domain.ModeUnattended, false,
 	)
+}
+
+// reopenStoreWithApprovedRecipes closes and reopens the harness store with a
+// new recipe-approval map, the realistic restart shape in which the store's
+// boundary policy, not only the engine's, reflects a revoked recipe. It
+// mirrors the initial open options so every other boundary policy is unchanged,
+// and must run before the next engine is built because engine.New binds the
+// store it is given.
+func (p *productionPublicationHarness) reopenStoreWithApprovedRecipes(
+	t *testing.T, approvedRecipes map[domain.Digest]bool,
+) {
+	t.Helper()
+	if err := p.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(p.ctx, p.dbPath, store.Options{
+		ApprovedRecipes: approvedRecipes,
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeAttendedDev: {},
+			domain.ModeUnattended:  {},
+		},
+		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
+		BackupHealthSource: store.BackupHealthSourceFunc(func(
+			context.Context, store.BackupHealthContext,
+		) (domain.BackupHealth, error) {
+			return domain.BackupHealth{
+				Encryption: domain.BackupHealthHealthy, CheckpointCurrency: domain.BackupHealthHealthy,
+				ArtifactClosure: domain.BackupHealthHealthy, RestoreTestAge: domain.BackupHealthHealthy,
+			}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	p.store = reopened
+	// The attention service and every later engine wrap the store handle, so
+	// rebind the service to the reopened store; engines are rebuilt by callers.
+	p.attention = signet.NewService(p.store, signet.WithBlobStore(p.blobs))
 }
 
 func (p *productionPublicationHarness) newEngineForMode(
@@ -664,6 +705,7 @@ func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.ResultsAccepted != 1 || result.ReadyItemsCreated != 1 ||
+		result.ReadyCleanItemsCreated != 1 || result.ReadyDegradedItemsCreated != 0 ||
 		result.PublicationTasksCompleted != 1 || result.LastPRNumber == 0 {
 		t.Fatalf("publication result = %#v", result)
 	}
@@ -2851,6 +2893,53 @@ func TestFinalizedProductionPublicationSurvivesLaterRecipeRevocation(t *testing.
 		p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
 	); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("finalized ready item created contradictory blocked item: %v", err)
+	}
+}
+
+// TestPostPublicationRecipeRevocationHoldsWhenStoreAlsoRevoked proves the
+// readiness reconstruction boundary re-gates the recipe through the STORE, not
+// only the engine: when a crash leaves a published run with no ready item and
+// the recipe is revoked at both the engine and a freshly reopened store (the
+// realistic restart shape), recovery takes the durable recipe-revoked hold
+// rather than failing the reconcile lane. The sibling
+// ...RegatesRecipeAuthorityBeforeReadiness revokes only the engine, so its
+// store still approves the clean-verification proof and never exercises the
+// store's recipe gate on this path. With the store revoked, that gate returns
+// ErrUnapprovedRecipe from RecordCheckProof; the recovery path must route it to
+// the hold, so it defers the recipe-gated proof persistence until after the
+// recipe-approval decision instead of writing the proof up front (issue #527,
+// decision 2). Without that deferral the error escapes as a lane-fatal reconcile
+// failure and the run never reaches its hold.
+func TestPostPublicationRecipeRevocationHoldsWhenStoreAlsoRevoked(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterPublication: func() error {
+			return errors.New("stop after publication, before readiness")
+		},
+	}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("afterPublication seam did not interrupt reconciliation")
+	}
+	revoked := map[domain.Digest]bool{productionDigest([]byte("unrelated recipe")): true}
+	p.reopenStoreWithApprovedRecipes(t, revoked)
+	p.workflow = p.newEngineWithApprovedRecipes(t, productionCrashSeams{}, true, revoked)
+	result, err := p.reconcileLanes()
+	if err != nil || result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 1 ||
+		result.PublicationTasksCompleted != 0 {
+		t.Fatalf("post-publication recipe revocation = %#v, %v", result, err)
+	}
+	if _, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID("production-ready-"+string(p.runID)),
+	); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("revoked recipe created readiness: %v", err)
+	}
+	hold, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
+	)
+	if err != nil || !strings.Contains(hold.Item.Reason, "no longer approves the verification recipe") {
+		t.Fatalf("recipe revocation hold = %#v, %v", hold, err)
 	}
 }
 

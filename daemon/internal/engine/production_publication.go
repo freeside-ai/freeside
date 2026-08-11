@@ -182,11 +182,12 @@ type productionPublicationWorkflow struct {
 }
 
 type productionPublicationResult struct {
-	completed int
-	accepted  int
-	ready     int
-	blocked   int
-	lastPR    int
+	completed     int
+	accepted      int
+	readyClean    int
+	readyDegraded int
+	blocked       int
+	lastPR        int
 }
 
 func newProductionPublicationWorkflow(
@@ -1025,7 +1026,16 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 		}
 		result.completed += boolCount(outcome.completed)
 		result.accepted += boolCount(outcome.accepted)
-		result.ready += boolCount(outcome.ready)
+		if outcome.readiness != nil {
+			switch outcome.readiness.Class {
+			case domain.ReadinessBlocked:
+				// Blocked readiness is represented by the blocked task path.
+			case domain.ReadinessReadyClean:
+				result.readyClean++
+			case domain.ReadinessReadyDegraded:
+				result.readyDegraded++
+			}
+		}
 		result.blocked += boolCount(outcome.blocked)
 		if outcome.prNumber > 0 {
 			result.lastPR = outcome.prNumber
@@ -1111,7 +1121,7 @@ func (w *productionPublicationWorkflow) pruneHeldTaskRetries(pending []store.Que
 type productionTaskOutcome struct {
 	completed bool
 	accepted  bool
-	ready     bool
+	readiness *domain.ReadinessVerdict
 	blocked   bool
 	prNumber  int
 }
@@ -1503,6 +1513,27 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		return w.completeReviewEscalationTask(ctx, task, binding)
 	case productionReviewPassed:
 		// Fall through to the publication path below.
+	}
+	// Reconstruct the complete §6 verdict immediately before the first
+	// publication effect. The same predicate runs again after recovery from a
+	// committed external outcome, so neither the forward path nor replay can
+	// flatten the review/verification pair into an inferred ready bit.
+	_, persistReadiness, err := w.assertReviewedCandidate(ctx, task, binding, checkpoint, reviewInstructions)
+	if err != nil {
+		if errors.Is(err, domain.ErrParentKeyMismatch) {
+			return w.holdBlockedTask(
+				ctx, task, checkpoint.Imported,
+				"Publication is durably held because the complete current verification requirement set is not ready under its exact policy, base, and registry bindings.",
+				domain.HoldTrustBlocked,
+			)
+		}
+		return productionTaskOutcome{}, err
+	}
+	// The recipe is approved on this pre-publication path (guarded above), so
+	// persist the readiness proofs now; the post-publication recovery path
+	// defers this to its readyExists/recipe decision instead.
+	if err := persistReadiness(ctx); err != nil {
+		return productionTaskOutcome{}, err
 	}
 
 	adoptedProfile, adoptedErr := w.adoptedReviewProfileDigest(ctx, binding)
@@ -2801,19 +2832,138 @@ func (w *productionPublicationWorkflow) completeReviewEscalationTask(
 // closed the profile-approval axis). A fully-ready old-order run, which does
 // carry a clean candidate-bound record under an approved configuration,
 // re-derives readiness idempotently through this same check.
+func productionReadinessResolutions(binding productionBinding, generation uint64) ([]domain.RequirementResolution, error) {
+	setDigest, err := domain.ProductionRequirementSetDigest(generation)
+	if err != nil {
+		return nil, err
+	}
+	definitions := domain.ProductionRequirementDefinitions()
+	resolutions := make([]domain.RequirementResolution, 0, len(definitions))
+	for _, definition := range definitions {
+		resolution, err := domain.NewRequirementResolution(domain.RequirementResolutionInput{
+			RequirementKey: definition.Key, CheckClass: definition.Class,
+			Kind: definition.Kind, Applicable: definition.Applicable,
+			BaseDependent:           definition.BaseDependent,
+			RequirementSetDigest:    setDigest,
+			FloorRegistryGeneration: generation,
+			ResolvedPolicyDigest:    binding.resolvedPolicy.Digest,
+		})
+		if err != nil {
+			return nil, err
+		}
+		resolutions = append(resolutions, resolution)
+	}
+	return resolutions, nil
+}
+
+func (w *productionPublicationWorkflow) currentReadinessVerdict(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	checkpoint productionVerificationCheckpoint,
+	reviewInstructions exec.ReviewInstructionBinding,
+	reviewRecord domain.ReviewRecord,
+) (domain.ReadinessVerdict, func(context.Context) error, error) {
+	resolutions, err := productionReadinessResolutions(
+		binding, w.store.VerificationFloorRegistryGeneration(),
+	)
+	if err != nil {
+		return domain.ReadinessVerdict{}, nil, err
+	}
+	// EvaluateReadiness rejects only an empty resolution set, not a strict
+	// subset of the requirement set: it trusts its caller to pass the complete
+	// set (the general fix, evaluating completeness against the trusted
+	// definitions itself, is deferred to #688). This production caller owns
+	// that completeness, so assert it here rather than let a future change to
+	// productionReadinessResolutions derive readiness by omitting a requirement.
+	resolved := make(map[domain.RequirementKey]struct{}, len(resolutions))
+	for _, resolution := range resolutions {
+		resolved[resolution.RequirementKey] = struct{}{}
+	}
+	for _, definition := range domain.ProductionRequirementDefinitions() {
+		if _, ok := resolved[definition.Key]; !ok {
+			return domain.ReadinessVerdict{}, nil, fmt.Errorf(
+				"production readiness resolution set omits requirement %q: %w",
+				definition.Key, domain.ErrParentKeyMismatch)
+		}
+	}
+	base := binding.admission.Base
+	verificationProof, err := domain.NewCheckProof(
+		resolutions[0], task.HeadSHA, &base, binding.image.RecipeDigest,
+	)
+	if err != nil {
+		return domain.ReadinessVerdict{}, nil, err
+	}
+	verificationState, err := domain.NewPassedCheckState(resolutions[0], verificationProof)
+	if err != nil {
+		return domain.ReadinessVerdict{}, nil, err
+	}
+	reviewRecipeDigest, err := digestJSON(struct {
+		Configuration domain.Digest `json:"configuration"`
+		Instructions  domain.Digest `json:"instructions"`
+	}{reviewRecord.ConfigurationDigest, reviewInstructions.ResultDigest})
+	if err != nil {
+		return domain.ReadinessVerdict{}, nil, err
+	}
+	reviewProof, err := domain.NewCheckProof(resolutions[1], task.HeadSHA, &base, reviewRecipeDigest)
+	if err != nil {
+		return domain.ReadinessVerdict{}, nil, err
+	}
+	reviewState, err := domain.NewPassedCheckState(resolutions[1], reviewProof)
+	if err != nil {
+		return domain.ReadinessVerdict{}, nil, err
+	}
+	states := []domain.CheckState{verificationState, reviewState}
+	target := domain.EvaluationTarget{CandidateHead: task.HeadSHA, Base: &base}
+	verdict, err := domain.EvaluateReadiness(target, resolutions, states, nil)
+	if err != nil {
+		return domain.ReadinessVerdict{}, nil, err
+	}
+	if checkpoint.Authorization.VerificationOutcome != domain.VerificationPassed ||
+		verdict.Class == domain.ReadinessBlocked {
+		return domain.ReadinessVerdict{}, nil, fmt.Errorf("current verification set is blocked: %w", domain.ErrParentKeyMismatch)
+	}
+	// The verdict above is a pure evaluation; persistence is a separate,
+	// recipe-gated step returned as a closure so the caller runs it only when
+	// it is actually creating new readiness under an approved recipe. Skipping
+	// it for an already-ready candidate is what lets that candidate finish
+	// after its verification recipe is revoked (issue #527, decision 2), rather
+	// than fail on the store's recipe gate.
+	persist := func(ctx context.Context) error {
+		return w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			for _, resolution := range resolutions {
+				if err := tx.RecordRequirementResolution(ctx, resolution); err != nil {
+					return err
+				}
+			}
+			if err := tx.RecordCheckProof(ctx, verificationProof); err != nil {
+				return err
+			}
+			// assertReviewedCandidate re-derived the run-scoped independent-review
+			// authority (profile plus adoption) before reaching this persistence,
+			// so assert it to the store; the store fails closed on an
+			// independent-review proof it has not been told is authorized.
+			tx.AuthorizeIndependentReviewRecipe(reviewRecipeDigest)
+			return tx.RecordCheckProof(ctx, reviewProof)
+		})
+	}
+	return verdict, persist, nil
+}
+
 func (w *productionPublicationWorkflow) assertReviewedCandidate(
 	ctx context.Context,
 	task productionPublicationTask,
 	binding productionBinding,
+	checkpoint productionVerificationCheckpoint,
 	reviewInstructions exec.ReviewInstructionBinding,
-) error {
+) (domain.ReadinessVerdict, func(context.Context) error, error) {
 	record, failure, err := w.latestReviewState(ctx, task.RunID)
 	if err != nil {
-		return err
+		return domain.ReadinessVerdict{}, nil, err
 	}
 	approved, err := w.reviewConfigurationApproved(ctx, binding)
 	if err != nil {
-		return err
+		return domain.ReadinessVerdict{}, nil, err
 	}
 	if binding.profile.Review.Mode != domain.ReviewFreesideInvoked ||
 		!approved ||
@@ -2824,12 +2974,12 @@ func (w *productionPublicationWorkflow) assertReviewedCandidate(
 		record.BaseSHA != binding.admission.Base.BaseSHA ||
 		record.HeadSHA != task.HeadSHA ||
 		(failure != nil && failure.Round >= record.Round) {
-		return fmt.Errorf(
+		return domain.ReadinessVerdict{}, nil, fmt.Errorf(
 			"published candidate lacks a clean, candidate-bound review record under the current trust-approved reviewer configuration: %w",
 			domain.ErrParentKeyMismatch,
 		)
 	}
-	return nil
+	return w.currentReadinessVerdict(ctx, task, binding, checkpoint, reviewInstructions, *record)
 }
 
 func (w *productionPublicationWorkflow) completePublishedTask(
@@ -2847,7 +2997,8 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 	// re-gate keeps every crash-recovery call site correct, including an
 	// old-order run that published before recording a clean, candidate-bound
 	// review.
-	if err := w.assertReviewedCandidate(ctx, task, binding, reviewInstructions); err != nil {
+	verdict, persistReadiness, err := w.assertReviewedCandidate(ctx, task, binding, checkpoint, reviewInstructions)
+	if err != nil {
 		// Decision 2 promises operator-visible disposition, not a lane-fatal
 		// error. The re-gate stays fail-closed (never silent readiness); only
 		// its failure handling is task-scoped here. On a fail-closed mismatch
@@ -2873,14 +3024,26 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
-	if !readyExists && !w.approvedRecipes[binding.image.RecipeDigest] {
-		return w.holdBlockedTask(
-			ctx, task, checkpoint.Imported,
-			"Publication is durably held because current trust no longer approves the verification recipe that authorized the candidate. Restore that approval before creating readiness.",
-			domain.HoldRecipeRevoked,
-		)
-	}
 	if !readyExists {
+		// Creating new readiness requires a still-approved recipe: persisting the
+		// clean-verification proof re-runs the store's recipe gate. A recipe
+		// revoked after publication takes the durable recipe-revoked hold here
+		// rather than failing the persistence with a lane-fatal error, so the
+		// proof write never runs under a revoked recipe. An already durably-ready
+		// candidate skips this block and finishes below without re-deriving its
+		// proofs, which is what lets it complete after its recipe is revoked
+		// (issue #527, decision 2); the verdict it reports was evaluated in
+		// memory above, independent of the recipe gate.
+		if !w.approvedRecipes[binding.image.RecipeDigest] {
+			return w.holdBlockedTask(
+				ctx, task, checkpoint.Imported,
+				"Publication is durably held because current trust no longer approves the verification recipe that authorized the candidate. Restore that approval before creating readiness.",
+				domain.HoldRecipeRevoked,
+			)
+		}
+		if err := persistReadiness(ctx); err != nil {
+			return productionTaskOutcome{}, err
+		}
 		ready, err := w.readyItem(task, checkpoint, published)
 		if err != nil {
 			return productionTaskOutcome{}, err
@@ -2937,7 +3100,7 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 		return productionTaskOutcome{}, err
 	}
 	return productionTaskOutcome{
-		completed: true, accepted: accepted, ready: true, prNumber: published.PRNumber,
+		completed: true, accepted: accepted, readiness: &verdict, prNumber: published.PRNumber,
 	}, nil
 }
 
