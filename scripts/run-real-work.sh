@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# run-real-work.sh — the §11 1A.2 complete unattended production exercise.
+# run-real-work.sh — the §11 1A.2 gated-unattended production exercise.
 #
 # Usage: run-real-work.sh <spec-file> <resolved-policy-keys.json> <publication.json> [work-unit.json]
 #
-# Submits one operator-approved work item through `freesided submit`,
-# runs the daemon with the production Claude driver until the run reaches
-# a ready-for-review outcome, then verifies the durable export, networkless
-# verification evidence, publication outcome, and exact published head with
-# the real-run harness test.
+# Submits one source work item through `freesided submit`, runs the daemon with
+# the production Claude driver, and pauses at the human specification-approval
+# gate. After an operator approves the spec in a Freeside client, the daemon
+# runs implementation to a ready-for-review outcome and the script verifies
+# the durable export, networkless verification evidence, publication outcome,
+# and exact published head with the real-run harness test.
 #
 # It never mints its own preconditions. Every binding below is the
 # operator's, supplied through the environment, because each one lands in
@@ -36,6 +37,7 @@
 #   FREESIDE_REAL_RUN_BASE_REF       short base branch name (for example main)
 #   FREESIDE_REAL_RUN_BASE_SHA       exact 40-character base commit
 #   FREESIDE_REAL_RUN_PROMPT_PACKAGE trusted prompt-package file
+#   FREESIDE_REAL_RUN_ELABORATION_PROMPT_PACKAGE trusted elaborator prompt-package file
 #   FREESIDE_REAL_RUN_INSTRUCTIONS   host vendor-instruction file (CLAUDE.md)
 #   FREESIDE_REAL_RUN_APPROVED_RECIPE exact recipe digest approved by onboarding
 #   FREESIDE_REAL_RUN_APP_STATE      GitHub App authority state directory
@@ -45,8 +47,9 @@
 #                                    agent may rewrite (no match-everything
 #                                    default: it is a containment control)
 #
-# Requires: Go, Apple `container` running, macOS, and an authenticated
-# credential volume for the named identity. The harness runs and durably
+# Requires: Go, Apple `container` running, macOS, an authenticated credential
+# volume for the named identity, and an operator watching a Freeside client to
+# approve or revise the generated specification. The harness runs and durably
 # records the exact production configuration's ward conformance suite before
 # the daemon can admit the submitted work.
 # The publication JSON is durable operator input with this shape:
@@ -88,7 +91,8 @@ required=(
   FREESIDE_REAL_RUN_REVIEW_COST_OWNER
   FREESIDE_REAL_RUN_SEED_ROOT FREESIDE_REAL_RUN_AUTH_IDENTITY FREESIDE_REAL_RUN_AUTH_VOLUME
   FREESIDE_REAL_RUN_REPO FREESIDE_REAL_RUN_REPOSITORY_ID FREESIDE_REAL_RUN_BASE_REF
-  FREESIDE_REAL_RUN_BASE_SHA FREESIDE_REAL_RUN_PROMPT_PACKAGE FREESIDE_REAL_RUN_INSTRUCTIONS
+  FREESIDE_REAL_RUN_BASE_SHA FREESIDE_REAL_RUN_PROMPT_PACKAGE
+  FREESIDE_REAL_RUN_ELABORATION_PROMPT_PACKAGE FREESIDE_REAL_RUN_INSTRUCTIONS
   FREESIDE_REAL_RUN_APPROVED_RECIPE
   FREESIDE_REAL_RUN_APP_STATE FREESIDE_REAL_RUN_APP_CREDS FREESIDE_REAL_RUN_PROJECT
   FREESIDE_REAL_RUN_ALLOWED_PATHS
@@ -241,13 +245,23 @@ if [[ -n "$work_unit_file" ]]; then
 fi
 "$workdir/freesided" submit "${submit_args[@]}" | tee "$submit_log"
 
-invocation_id="$(sed -n 's/.*"invocation_id":"\([^"]*\)".*/\1/p' "$submit_log")"
+invocation_id="$(sed -n 's/.*"implementation_invocation_id":"\([^"]*\)".*/\1/p' "$submit_log")"
 run_id="$(sed -n 's/.*"run_id":"\([^"]*\)".*/\1/p' "$submit_log")"
+elaboration_run_id="$(sed -n 's/.*"elaboration_run_id":"\([^"]*\)".*/\1/p' "$submit_log")"
+elaboration_invocation_id="$(sed -n 's/.*"elaboration_invocation_id":"\([^"]*\)".*/\1/p' "$submit_log")"
 if [[ -z "$invocation_id" || -z "$run_id" ]]; then
   echo "run-real-work: submit produced no run identity: $(cat "$submit_log")" >&2
   exit 1
 fi
-echo "submitted run=$run_id invocation=$invocation_id" >&2
+if [[ -n "$elaboration_run_id" && -n "$elaboration_invocation_id" ]]; then
+  echo "submitted elaboration run=$elaboration_run_id invocation=$elaboration_invocation_id" >&2
+elif [[ -n "$elaboration_run_id" || -n "$elaboration_invocation_id" ]]; then
+  echo "run-real-work: submit produced a partial elaboration identity: $(cat "$submit_log")" >&2
+  exit 1
+else
+  echo "legacy production-only replay: no elaboration approval gate" >&2
+fi
+echo "reserved implementation run=$run_id invocation=$invocation_id" >&2
 
 # Seed the durable auth-identity binding before the daemon can reach
 # admission. The verifier records it too, but that call happens inside the
@@ -286,6 +300,7 @@ echo "starting the daemon with the production Claude driver" >&2
   -seed-root "$FREESIDE_REAL_RUN_SEED_ROOT" \
   -state-dir "$FREESIDE_REAL_RUN_STATE_ROOT" \
   -prompt-package "$FREESIDE_REAL_RUN_PROMPT_PACKAGE" \
+  -elaboration-prompt-package "$FREESIDE_REAL_RUN_ELABORATION_PROMPT_PACKAGE" \
   -vendor-instructions "$FREESIDE_REAL_RUN_INSTRUCTIONS" \
   -repo "$FREESIDE_REAL_RUN_REPO" \
   -repository-id "$FREESIDE_REAL_RUN_REPOSITORY_ID" \
@@ -300,6 +315,11 @@ echo "starting the daemon with the production Claude driver" >&2
   -publication-credentials-dir "$FREESIDE_REAL_RUN_APP_CREDS" \
   > "$workdir/daemon.log" 2>&1 &
 daemon_pid=$!
+
+if [[ -n "$elaboration_run_id" ]]; then
+  echo "gated-unattended: waiting for an operator to approve or revise the generated specification" >&2
+  echo "implementation verification resumes automatically after approval" >&2
+fi
 
 # Wait for the run to reach the durable ready state. The verifier below is the
 # authority on success; this loop only bounds the wait.

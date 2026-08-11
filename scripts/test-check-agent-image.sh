@@ -215,23 +215,80 @@ run_checker_then_term() {
 }
 
 run_real_work() {
-  input_dir=$CASE_DIR/inputs
+	go_stub_mode=${1:-build-fail}
+	submit_shape=${2:-current}
+	input_dir=$CASE_DIR/inputs
   stub_bin=$CASE_DIR/bin
   mkdir -p "$input_dir" "$stub_bin"
   : >"$input_dir/spec.md"
   : >"$input_dir/policy.json"
   : >"$input_dir/publication.json"
-  cat >"$stub_bin/go" <<'GO_STUB'
+	cat >"$stub_bin/go" <<'GO_STUB'
 #!/usr/bin/env bash
+set -euo pipefail
 printf 'called\n' >"${STUB_DIR:?}/go.log"
-exit 97
+if [ "${GO_STUB_MODE:-}" != lifecycle ]; then
+	exit 97
+fi
+case " ${*} " in
+*" build "*)
+	output=""
+	while [ "$#" -gt 0 ]; do
+		if [ "$1" = -o ]; then
+			output=$2
+			break
+		fi
+		shift
+	done
+	[ -n "$output" ]
+	cat >"$output" <<'FREESIDED_STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = submit ]; then
+	if [ "${GO_STUB_SUBMIT_SHAPE:-current}" = legacy ]; then
+		printf '%s\n' '{"run_id":"impl-run","project_id":"freeside","invocation_id":"impl-inv","stage_id":"impl-stage","implementation_run_id":"impl-run","implementation_invocation_id":"impl-inv","implementation_stage_id":"impl-stage"}'
+	else
+		printf '%s\n' '{"run_id":"impl-run","elaboration_run_id":"elab-run","project_id":"freeside","invocation_id":"impl-inv","stage_id":"impl-stage","implementation_run_id":"impl-run","implementation_invocation_id":"impl-inv","implementation_stage_id":"impl-stage","elaboration_invocation_id":"elab-inv","elaboration_stage_id":"elab-stage"}'
+	fi
+	exit 0
+fi
+printf '%s\n' "$@" >"${STUB_DIR:?}/daemon.args.tmp"
+mv "${STUB_DIR:?}/daemon.args.tmp" "${STUB_DIR:?}/daemon.args"
+: >"${STUB_DIR:?}/daemon.args.ready"
+trap 'exit 0' TERM INT
+while :; do sleep 1; done
+FREESIDED_STUB
+	chmod +x "$output"
+	;;
+*" test "*)
+	if [ -z "${FREESIDE_REAL_RUN_INVOCATION:-}" ]; then
+		exit 0
+	fi
+	attempts=0
+	while [ ! -f "${STUB_DIR:?}/daemon.args.ready" ] && [ "$attempts" -lt 100 ]; do
+		sleep 0.01
+		attempts=$((attempts + 1))
+	done
+	[ -f "${STUB_DIR:?}/daemon.args.ready" ]
+	printf '%s\t%s\n' "$FREESIDE_REAL_RUN_RUN_ID" \
+		"$FREESIDE_REAL_RUN_INVOCATION" >>"${STUB_DIR:?}/verification-identities.log"
+	[ "$FREESIDE_REAL_RUN_RUN_ID" = impl-run ]
+	[ "$FREESIDE_REAL_RUN_INVOCATION" = impl-inv ]
+	printf '%s\n' 'real production pipeline verified: PR #7'
+	;;
+*)
+	exit 98
+	;;
+esac
 GO_STUB
   chmod +x "$stub_bin/go"
   digest="sha256:$(printf 'a%.0s' {1..64})"
 
   set +e
-  OUT=$(env \
-    PATH="$stub_bin:$TMP:$PATH" \
+	OUT=$(env \
+		PATH="$stub_bin:$TMP:$PATH" \
+		GO_STUB_MODE="$go_stub_mode" \
+		GO_STUB_SUBMIT_SHAPE="$submit_shape" \
     FREESIDE_REAL_RUN_STATE_ROOT="$CASE_DIR/state" \
     FREESIDE_REAL_RUN_AGENT_IMAGE="example.test/agent@$digest" \
     FREESIDE_WARD_EXPORTER_IMAGE="example.test/exporter@$digest" \
@@ -252,6 +309,7 @@ GO_STUB
     FREESIDE_REAL_RUN_BASE_REF=main \
     FREESIDE_REAL_RUN_BASE_SHA=0123456789012345678901234567890123456789 \
     FREESIDE_REAL_RUN_PROMPT_PACKAGE="$input_dir/prompts.json" \
+    FREESIDE_REAL_RUN_ELABORATION_PROMPT_PACKAGE="$input_dir/elaborator.md" \
     FREESIDE_REAL_RUN_INSTRUCTIONS="$input_dir/CLAUDE.md" \
     FREESIDE_REAL_RUN_APPROVED_RECIPE="$digest" \
     FREESIDE_REAL_RUN_APP_STATE="$CASE_DIR/app-state" \
@@ -840,6 +898,37 @@ assert_rc 2
 assert_contains "could not preflight exporter image"
 assert_lacks "missing required observer tools"
 assert_not_exists "$CASE_DIR/go.log"
+
+begin_case "46 the gated real-work harness keeps both lane identities distinct"
+run_real_work lifecycle
+assert_rc 0
+assert_contains "submitted elaboration run=elab-run invocation=elab-inv"
+assert_contains "reserved implementation run=impl-run invocation=impl-inv"
+assert_contains "gated-unattended: waiting for an operator"
+if grep -qx $'impl-run\timpl-inv' "$CASE_DIR/verification-identities.log" &&
+  ! grep -q 'elab-inv' "$CASE_DIR/verification-identities.log"; then
+	pass=$((pass + 1))
+else
+	report_failure "verification did not stay bound to the future implementation identity"
+fi
+if grep -qx -- '-prompt-package' "$CASE_DIR/daemon.args" &&
+  grep -qx -- '-elaboration-prompt-package' "$CASE_DIR/daemon.args"; then
+	pass=$((pass + 1))
+else
+	report_failure "daemon invocation omitted one of the stage prompt flags"
+fi
+
+begin_case "47 a legacy production-only replay remains runnable across upgrade"
+run_real_work lifecycle legacy
+assert_rc 0
+assert_contains "legacy production-only replay: no elaboration approval gate"
+assert_contains "reserved implementation run=impl-run invocation=impl-inv"
+assert_lacks "gated-unattended: waiting for an operator"
+if grep -qx $'impl-run\timpl-inv' "$CASE_DIR/verification-identities.log"; then
+	pass=$((pass + 1))
+else
+	report_failure "legacy replay verification lost the implementation identity"
+fi
 
 # --------------------- detector battery: adversarial input-space fixtures
 # Each document stands in for the whole inspect report. Duplicates of every

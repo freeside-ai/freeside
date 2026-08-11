@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"reflect"
 	"slices"
 	"syscall"
 
@@ -24,12 +25,11 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-// freesided submit (plan §5.12, §10): registers the operator-approved
-// specification and resolved policy as digest-addressed artifacts and creates
-// the production run the engine dispatches unattended. Registration only:
-// the unattended preconditions (operating state, waiver, conformance,
-// health) stay with the dispatch gates, so a submission is durable intent
-// even while the daemon is stopped or held.
+// freesided submit (plan §5.12, §10): registers the source work item and
+// resolved policy as digest-addressed artifacts, creates its pre-approval
+// elaboration run, and reserves the future implementation identity.
+// Registration only: execution preconditions stay with the dispatch gates,
+// so a submission is durable intent even while the daemon is stopped or held.
 
 // maxSubmissionFileBytes bounds one submitted input file. Specifications and
 // policies are prose and configuration; a larger file is far more likely a
@@ -43,12 +43,12 @@ func runSubmitMain(args []string) {
 	flags := flag.NewFlagSet("freesided submit", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	dbPath := flags.String("db", "", "SQLite database path (required)")
-	specPath := flags.String("spec", "", "operator-approved specification file (required)")
+	specPath := flags.String("spec", "", "source work-item specification file (required)")
 	policyPath := flags.String("policy", "", "resolved per-run policy-key JSON array (required)")
 	publicationPath := flags.String("publication", "", "reviewer-facing pull-request metadata JSON file (required)")
 	workUnitPath := flags.String("work-unit", "", "work-unit declaration JSON file (optional; §5.18 capture)")
 	projectID := flags.String("project", "", "project id the run belongs to (required)")
-	runID := flags.String("run-id", "", "run id (defaults from project, specification, resolved policy, publication metadata, and any work-unit declaration so an exact re-submission converges)")
+	runID := flags.String("run-id", "", "implementation run id (defaults from project, specification, resolved policy, publication metadata, and any work-unit declaration so an exact re-submission converges)")
 	if err := flags.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -91,16 +91,22 @@ type submittedWorkUnit struct {
 }
 
 type submitResult struct {
-	RunID             domain.RunID        `json:"run_id"`
-	ProjectID         domain.ProjectID    `json:"project_id"`
-	InvocationID      domain.InvocationID `json:"invocation_id"`
-	StageID           domain.StageID      `json:"stage_id"`
-	SpecDigest        domain.Digest       `json:"spec_digest"`
-	PolicyDigest      domain.Digest       `json:"policy_digest"`
-	SpecArtifactID    domain.ArtifactID   `json:"spec_artifact_id"`
-	PolicyArtifactID  domain.ArtifactID   `json:"policy_artifact_id"`
-	PublicationDigest domain.Digest       `json:"publication_digest"`
-	WorkUnitID        domain.WorkUnitID   `json:"work_unit_id,omitempty"`
+	RunID                      domain.RunID        `json:"run_id"`
+	ElaborationRunID           domain.RunID        `json:"elaboration_run_id"`
+	ProjectID                  domain.ProjectID    `json:"project_id"`
+	InvocationID               domain.InvocationID `json:"invocation_id"`
+	StageID                    domain.StageID      `json:"stage_id"`
+	ImplementationRunID        domain.RunID        `json:"implementation_run_id"`
+	ImplementationInvocationID domain.InvocationID `json:"implementation_invocation_id"`
+	ImplementationStageID      domain.StageID      `json:"implementation_stage_id"`
+	ElaborationInvocationID    domain.InvocationID `json:"elaboration_invocation_id"`
+	ElaborationStageID         domain.StageID      `json:"elaboration_stage_id"`
+	SpecDigest                 domain.Digest       `json:"spec_digest"`
+	PolicyDigest               domain.Digest       `json:"policy_digest"`
+	SpecArtifactID             domain.ArtifactID   `json:"spec_artifact_id"`
+	PolicyArtifactID           domain.ArtifactID   `json:"policy_artifact_id"`
+	PublicationDigest          domain.Digest       `json:"publication_digest"`
+	WorkUnitID                 domain.WorkUnitID   `json:"work_unit_id,omitempty"`
 }
 
 type submissionFile struct {
@@ -243,18 +249,22 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		workUnitDigest = submissionBytes(canonicalBody).digest
 	}
 
-	runID := cfg.RunID
-	if runID == "" {
+	implementationRunID := cfg.RunID
+	if implementationRunID == "" {
 		// The default covers every immutable run binding so only an exact
 		// resubmission converges; shared specification bytes in another
 		// project, under another policy, with different reviewer-facing
 		// metadata, or under a different work-unit declaration remain
 		// distinct work items. An undeclared submission keeps the
 		// pre-capture derivation byte-for-byte.
-		runID = defaultSubmissionRunID(
+		implementationRunID = defaultSubmissionRunID(
 			cfg.ProjectID, spec.digest, policyDigest, publicationFile.digest, workUnitDigest)
 	}
-	resolvedPolicy, err := domain.NewResolvedPolicy(runID, keys)
+	elaborationRunID, err := engine.ElaborationRunIDForImplementation(implementationRunID)
+	if err != nil {
+		return submitResult{}, fmt.Errorf("submit: %w", err)
+	}
+	resolvedPolicy, err := domain.NewResolvedPolicy(elaborationRunID, keys)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: validate resolved policy: %w", err)
 	}
@@ -316,27 +326,160 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 	}); err != nil {
 		return submitResult{}, fmt.Errorf("submit: register artifacts: %w", err)
 	}
+	elaborationStatePresent, err := engine.HasElaborationIntakeState(
+		ctx, st, elaborationRunID, implementationRunID,
+	)
+	if err != nil {
+		return submitResult{}, fmt.Errorf("submit: inspect elaboration intake: %w", err)
+	}
+	if !elaborationStatePresent {
+		legacy, found, err := legacyProductionReplay(ctx, st, implementationRunID, cfg.ProjectID,
+			specArtifact, policyArtifact, keys, publication, workUnit, publicationFile.digest)
+		if err != nil {
+			return submitResult{}, fmt.Errorf("submit: inspect legacy production replay: %w", err)
+		}
+		if found {
+			return legacy, nil
+		}
+	}
 
-	submitted, err := engine.SubmitProductionRun(ctx, st, engine.ProductionRunSpec{
-		RunID: runID, ProjectID: cfg.ProjectID,
-		SpecArtifactID: specArtifact.ID, PolicyArtifactID: policyArtifact.ID,
-		ResolvedPolicy: resolvedPolicy, Publication: publication,
+	submitted, err := engine.SubmitElaborationRun(ctx, st, engine.ElaborationRunSpec{
+		ElaborationRunID: elaborationRunID, ImplementationRunID: implementationRunID,
+		ProjectID: cfg.ProjectID, SourceArtifactID: specArtifact.ID,
+		PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: resolvedPolicy, Publication: publication,
 		WorkUnit: workUnit,
 	})
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
 	result := submitResult{
-		RunID: submitted.Run.ID, ProjectID: submitted.Run.ProjectID,
-		InvocationID: submitted.InvocationID, StageID: submitted.StageID,
-		SpecDigest: submitted.Run.SpecDigest, PolicyDigest: submitted.Run.PolicyDigest,
+		RunID: submitted.ImplementationRunID, ElaborationRunID: submitted.Run.ID,
+		ProjectID: submitted.Run.ProjectID,
+		// Keep the original fields as implementation aliases for existing
+		// harness consumers while exposing both lanes without ambiguity.
+		InvocationID:               submitted.ImplementationInvocationID,
+		StageID:                    submitted.ImplementationStageID,
+		ImplementationRunID:        submitted.ImplementationRunID,
+		ImplementationInvocationID: submitted.ImplementationInvocationID,
+		ImplementationStageID:      submitted.ImplementationStageID,
+		ElaborationInvocationID:    submitted.ElaborationInvocationID,
+		ElaborationStageID:         submitted.ElaborationStageID,
+		SpecDigest:                 spec.digest, PolicyDigest: submitted.Run.PolicyDigest,
 		SpecArtifactID: specArtifact.ID, PolicyArtifactID: policyArtifact.ID,
 		PublicationDigest: publicationFile.digest,
 	}
 	if workUnit != nil {
-		result.WorkUnitID = domain.WorkUnitIDForRun(submitted.Run.ID)
+		result.WorkUnitID = domain.WorkUnitIDForRun(submitted.ImplementationRunID)
 	}
 	return result, nil
+}
+
+// legacyProductionReplay preserves exact retries from the production-only
+// submit protocol that preceded elaboration. A matching legacy run remains
+// authoritative instead of being retrofitted with an elaboration reservation:
+// that reservation is an intake-time fact, and creating it after execution
+// could retarget a live or terminal production workflow.
+func legacyProductionReplay(
+	ctx context.Context,
+	st *store.Store,
+	runID domain.RunID,
+	projectID domain.ProjectID,
+	specArtifact, policyArtifact domain.Artifact,
+	keys []domain.PolicyKey,
+	publication engine.ProductionPublication,
+	workUnit *domain.WorkUnitDeclarationInput,
+	publicationDigest domain.Digest,
+) (submitResult, bool, error) {
+	var run domain.Run
+	var resolved domain.ResolvedPolicy
+	var marker store.QueueEntry
+	var invocation domain.AgentInvocation
+	var declaration domain.WorkUnitDeclaration
+	var declarationFound bool
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(ctx, runID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		resolved, err = tx.GetResolvedPolicy(ctx, runID)
+		if err != nil {
+			return err
+		}
+		marker, err = tx.GetOutbox(ctx, "inv-implement-"+string(runID))
+		if err != nil {
+			return err
+		}
+		invocation, err = tx.GetAgentInvocation(ctx, domain.InvocationID("inv-implement-"+string(runID)))
+		if err != nil {
+			return err
+		}
+		declaration, err = tx.GetWorkUnitDeclarationByRun(ctx, runID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		declarationFound = err == nil
+		return err
+	})
+	if err != nil {
+		return submitResult{}, false, err
+	}
+	if run.ID == "" {
+		return submitResult{}, false, nil
+	}
+	implementationPolicy, err := domain.NewResolvedPolicy(runID, keys)
+	if err != nil {
+		return submitResult{}, false, err
+	}
+	publicationFromMarker, present, err := engine.ProductionInvocationPublication(marker)
+	if err != nil {
+		return submitResult{}, false, nil
+	}
+	implementationStage := false
+	for _, stage := range run.Stages {
+		if stage.ID == domain.StageID("implement-"+string(runID)) && stage.Name == "implement" {
+			implementationStage = true
+			break
+		}
+	}
+	if run.ProjectID != projectID || run.SpecDigest != specArtifact.Digest ||
+		run.PolicyDigest != policyArtifact.Digest || resolved.RunID != runID ||
+		resolved.Digest != implementationPolicy.Digest ||
+		!slices.Equal(resolved.Keys, implementationPolicy.Keys) || !present ||
+		!reflect.DeepEqual(publicationFromMarker, publication) ||
+		!implementationStage || invocation.ConversationID != nil ||
+		!slices.Equal(invocation.InputIDs, []domain.ArtifactID{specArtifact.ID}) ||
+		invocation.ThroughSequence != 0 {
+		return submitResult{}, false, nil
+	}
+	if workUnit == nil {
+		if declarationFound {
+			return submitResult{}, false, nil
+		}
+	} else {
+		want, err := domain.NewWorkUnitDeclaration(*workUnit, runID, projectID, declaration.DeclaredAt)
+		if err != nil || !declarationFound || !reflect.DeepEqual(want, declaration) {
+			return submitResult{}, false, err
+		}
+	}
+	invocationID := domain.InvocationID("inv-implement-" + string(runID))
+	stageID := domain.StageID("implement-" + string(runID))
+	result := submitResult{
+		RunID: runID, ProjectID: projectID,
+		InvocationID: invocationID, StageID: stageID,
+		ImplementationRunID: runID, ImplementationInvocationID: invocationID,
+		ImplementationStageID: stageID,
+		SpecDigest:            specArtifact.Digest, PolicyDigest: policyArtifact.Digest,
+		SpecArtifactID: specArtifact.ID, PolicyArtifactID: policyArtifact.ID,
+		PublicationDigest: publicationDigest,
+	}
+	if declarationFound {
+		result.WorkUnitID = domain.WorkUnitIDForRun(runID)
+	}
+	return result, true, nil
 }
 
 // declaredPathScope extracts the resolved policy's paths key as the unit's

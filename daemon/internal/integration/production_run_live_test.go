@@ -146,16 +146,9 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open blob store: %v", err)
 	}
-	health, err := backupFiles.NewCheckpointHealthSource(blobs, opts.ApprovedRecipes,
-		map[string]store.BackupPayloadDigestExtractor{
-			engine.FakePublicationTaskKind:            engine.FakePublicationBackupPayloadDigests,
-			engine.FakePublicationInvocationOwnerKind: engine.FakePublicationInvocationOwnerBackupPayloadDigests,
-			signet.AgentInvocationRequestedKind:       signet.AgentInvocationBackupPayloadDigests,
-			engine.KindProductionInvocationRequested:  engine.ProductionInvocationBackupPayloadDigests,
-			engine.KindProductionPublicationRequested: engine.ProductionPublicationBackupPayloadDigests,
-			publish.IntentKindReservation:             publish.ReservationBackupPayloadDigests,
-			publish.IntentKindPublication:             publish.PublicationBackupPayloadDigests,
-		})
+	health, err := backupFiles.NewCheckpointHealthSource(
+		blobs, opts.ApprovedRecipes, realRunBackupPayloadExtractors(),
+	)
 	if err != nil {
 		t.Fatalf("build checkpoint health source: %v", err)
 	}
@@ -410,6 +403,33 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 
 	t.Logf("real production pipeline verified: PR #%d at head %s over base %s",
 		outcome.PRNumber, export.HeadSHA, export.ObservedBaseSHA)
+}
+
+func realRunBackupPayloadExtractors() map[string]store.BackupPayloadDigestExtractor {
+	return map[string]store.BackupPayloadDigestExtractor{
+		engine.FakePublicationTaskKind:            engine.FakePublicationBackupPayloadDigests,
+		engine.FakePublicationInvocationOwnerKind: engine.FakePublicationInvocationOwnerBackupPayloadDigests,
+		signet.AgentInvocationRequestedKind:       signet.AgentInvocationBackupPayloadDigests,
+		engine.KindProductionInvocationRequested:  engine.ProductionInvocationBackupPayloadDigests,
+		engine.KindProductionPublicationRequested: engine.ProductionPublicationBackupPayloadDigests,
+		engine.KindElaborationInvocationRequested: engine.ElaborationInvocationBackupPayloadDigests,
+		engine.KindElaborationImplementationClaim: engine.ElaborationImplementationClaimBackupPayloadDigests,
+		publish.IntentKindReservation:             publish.ReservationBackupPayloadDigests,
+		publish.IntentKindPublication:             publish.PublicationBackupPayloadDigests,
+	}
+}
+
+func TestRealRunBackupPayloadExtractorsIncludeElaborationMarkers(t *testing.T) {
+	t.Parallel()
+	extractors := realRunBackupPayloadExtractors()
+	for _, kind := range []string{
+		engine.KindElaborationInvocationRequested,
+		engine.KindElaborationImplementationClaim,
+	} {
+		if extractors[kind] == nil {
+			t.Errorf("backup payload extractor %q is not registered", kind)
+		}
+	}
 }
 
 func realRunAttentionState(

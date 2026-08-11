@@ -15,15 +15,20 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
-const maxResearchRedirects = 5
+const (
+	maxResearchRedirects        = 5
+	maxResearchContentTypeBytes = 8 << 10
+)
 
 var nonPublicResearchPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
@@ -65,6 +70,66 @@ type ResearchArtifact struct {
 	Artifact domain.Artifact
 	URL      string
 	FinalURL string
+}
+
+// ResearchSource attributes prompt-readable evidence to its requested and
+// final URL plus the daemon-observed HTTP metadata.
+type ResearchSource struct {
+	URL         string `json:"url"`
+	Purpose     string `json:"purpose"`
+	FinalURL    string `json:"final_url"`
+	Status      int    `json:"status"`
+	ContentType string `json:"content_type"`
+}
+
+// ResearchEvidence is the prompt-readable reconstruction of one stored
+// research envelope. Body is decoded from storage's base64 transport form;
+// the source fields keep the evidence attributable without exposing the
+// transport wrapper to the elaborator.
+type ResearchEvidence struct {
+	Source ResearchSource
+	Body   string
+}
+
+// DecodeResearchEvidence strictly reconstructs prompt-readable evidence from
+// the daemon's canonical stored envelope.
+func DecodeResearchEvidence(data []byte) (ResearchEvidence, error) {
+	var envelope researchEnvelope
+	if err := strictjson.Decode(
+		data, &envelope, strictjson.RejectInvalidUTF8,
+		strictjson.Limit(exec.ProductionMaxInputBytes),
+	); err != nil {
+		return ResearchEvidence{}, fmt.Errorf("decode research evidence: %w", err)
+	}
+	canonical, err := json.Marshal(envelope)
+	if err != nil || !bytes.Equal(canonical, data) {
+		return ResearchEvidence{}, fmt.Errorf("decode research evidence: non-canonical envelope: %w",
+			domain.ErrImmutableTransition)
+	}
+	body, err := base64.StdEncoding.DecodeString(envelope.BodyBase64)
+	if err != nil || int64(len(body)) > MaxResearchResponseBytes || !utf8.Valid(body) {
+		return ResearchEvidence{}, fmt.Errorf("decode research evidence body: %w", domain.ErrParentKeyMismatch)
+	}
+	request := FetchRequest{URL: envelope.URL, Purpose: envelope.Purpose}
+	if err := request.validate(); err != nil {
+		return ResearchEvidence{}, fmt.Errorf("decode research evidence request: %w", err)
+	}
+	final, err := url.Parse(envelope.FinalURL)
+	if err != nil || final.Scheme != "https" || final.User != nil || final.Hostname() == "" ||
+		final.Fragment != "" || net.ParseIP(final.Hostname()) != nil ||
+		envelope.Status < 200 || envelope.Status > 299 {
+		return ResearchEvidence{}, fmt.Errorf("decode research evidence metadata: %w", domain.ErrParentKeyMismatch)
+	}
+	if len(envelope.ContentType) > maxResearchContentTypeBytes {
+		return ResearchEvidence{}, fmt.Errorf("decode research evidence content type: %w", ErrResearchTooLarge)
+	}
+	return ResearchEvidence{
+		Source: ResearchSource{
+			URL: envelope.URL, Purpose: envelope.Purpose, FinalURL: envelope.FinalURL,
+			Status: envelope.Status, ContentType: envelope.ContentType,
+		},
+		Body: string(body),
+	}, nil
 }
 
 // Fetcher is the daemon-owned HTTP and persistence boundary for research.
@@ -171,14 +236,27 @@ func (f *Fetcher) Fetch(
 	if int64(len(body)) > maxBytes {
 		return ResearchArtifact{}, fmt.Errorf("%w: fetch research %q: %w", ErrResearchFetchFailed, request.URL, ErrResearchTooLarge)
 	}
+	if !utf8.Valid(body) {
+		return ResearchArtifact{}, fmt.Errorf("%w: fetch research %q: response is not valid UTF-8",
+			ErrResearchFetchFailed, request.URL)
+	}
 
+	contentType := response.Header.Get("Content-Type")
+	if len(contentType) > maxResearchContentTypeBytes {
+		return ResearchArtifact{}, fmt.Errorf("%w: fetch research %q content type exceeds %d bytes: %w",
+			ErrResearchFetchFailed, request.URL, maxResearchContentTypeBytes, ErrResearchTooLarge)
+	}
 	envelope, err := json.Marshal(researchEnvelope{
 		URL: request.URL, Purpose: request.Purpose, FinalURL: finalURL.String(),
-		Status: response.StatusCode, ContentType: response.Header.Get("Content-Type"),
+		Status: response.StatusCode, ContentType: contentType,
 		BodyBase64: base64.StdEncoding.EncodeToString(body),
 	})
 	if err != nil {
 		return ResearchArtifact{}, fmt.Errorf("encode research %q: %w", request.URL, err)
+	}
+	if int64(len(envelope)) > maxResearchEnvelopeBytes(maxBytes) {
+		return ResearchArtifact{}, fmt.Errorf("%w: fetch research %q encoded envelope is %d bytes: %w",
+			ErrResearchFetchFailed, request.URL, len(envelope), ErrResearchTooLarge)
 	}
 	digest := domain.Digest(contentaddr.Sum(envelope))
 	if _, err := f.blobs.Put(digest, bytes.NewReader(envelope)); err != nil {
@@ -238,9 +316,13 @@ func (f *Fetcher) recover(
 		return ResearchArtifact{}, false, fmt.Errorf("recover research %q: %w", id, err)
 	}
 	defer func() { _ = reader.Close() }()
-	limit := strictjson.Limit(maxBytes*2 + (1 << 20))
+	limit := strictjson.Limit(maxResearchEnvelopeBytes(maxBytes))
 	var envelope researchEnvelope
 	if err := strictjson.DecodeReader(reader, &envelope, strictjson.RejectInvalidUTF8, limit); err != nil {
+		if errors.Is(err, strictjson.ErrLimitExceeded) {
+			return ResearchArtifact{}, false, fmt.Errorf("%w: recover research %q: %w",
+				ErrResearchTooLarge, id, err)
+		}
 		return ResearchArtifact{}, false, fmt.Errorf("recover research %q: %w", id, err)
 	}
 	body, err := json.Marshal(envelope)
@@ -253,11 +335,19 @@ func (f *Fetcher) recover(
 		envelope.Status < 200 || envelope.Status > 299 {
 		return ResearchArtifact{}, false, fmt.Errorf("recover research %q: envelope disagrees: %w", id, domain.ErrParentKeyMismatch)
 	}
+	if !utf8.Valid(decoded) {
+		return ResearchArtifact{}, false, fmt.Errorf("%w: recover research %q: response is not valid UTF-8",
+			ErrResearchFetchFailed, id)
+	}
 	final, err := validateResearchURL(envelope.FinalURL, allowed)
 	if err != nil {
 		return ResearchArtifact{}, false, fmt.Errorf("recover research %q final URL: %w", id, err)
 	}
 	return ResearchArtifact{Artifact: artifact, URL: envelope.URL, FinalURL: final.String()}, true, nil
+}
+
+func maxResearchEnvelopeBytes(maxBytes int64) int64 {
+	return min(maxBytes*2+(1<<20), exec.ProductionMaxInputBytes)
 }
 
 type researchEnvelope struct {

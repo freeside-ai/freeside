@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/stage"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -98,6 +100,25 @@ func (claudeProvider) PrepareFailedStatus() int { return writerOutcomePrepareFai
 
 func (claudeProvider) RenderPrompt(inputs stage.ProviderPromptInputs) (string, error) {
 	return renderPromptParts(inputs)
+}
+
+// ValidatePromptInputs runs the production Claude renderer over one fully
+// materialized bundle. Elaboration uses it before committing a follow-up
+// invocation, so content accepted for research cannot become an undeliverable
+// terminal only after Start.
+func ValidatePromptInputs(inputs exec.StageInputs) error {
+	prior := inputs.PriorArtifacts()
+	priorBodies := make([][]byte, len(prior))
+	for i := range prior {
+		priorBodies[i] = prior[i].Bytes()
+	}
+	_, err := renderPromptParts(stage.ProviderPromptInputs{
+		Specification:  inputs.Specification().Bytes(),
+		PromptPackage:  inputs.PromptPackage().Bytes(),
+		Policy:         inputs.Policy().Bytes(),
+		PriorArtifacts: priorBodies,
+	})
+	return err
 }
 
 // maxPromptBytes bounds the rendered prompt below Linux's 128-KiB
@@ -217,23 +238,60 @@ func sessionIDFor(id domain.InvocationID) string {
 		encoded[16:20] + "-" + encoded[20:]
 }
 
+const textPriorPromptPackageDirective = "<!-- freeside:render-prior-artifacts=v1 -->\n"
+
+// ValidatePromptPackageRoles refuses a composition whose trusted prompt
+// packages do not select opposite prior-artifact behavior. The directive is
+// part of the content-addressed package, so durable replay keeps the decision.
+func ValidatePromptPackageRoles(implementation, elaboration []byte) error {
+	directive := []byte(textPriorPromptPackageDirective)
+	switch {
+	case bytes.HasPrefix(implementation, directive):
+		return fmt.Errorf("implementation prompt package enables elaboration prior artifacts")
+	case !bytes.HasPrefix(elaboration, directive):
+		return fmt.Errorf("elaboration prompt package does not enable prior artifacts")
+	default:
+		return nil
+	}
+}
+
 func renderPromptParts(inputs stage.ProviderPromptInputs) (string, error) {
-	for _, part := range []struct {
+	promptPackage, renderPriors := bytes.CutPrefix(
+		inputs.PromptPackage, []byte(textPriorPromptPackageDirective))
+	if !renderPriors {
+		promptPackage = inputs.PromptPackage
+	}
+	textPriors := inputs.PriorArtifacts
+	if !renderPriors {
+		textPriors = nil
+	}
+	parts := []struct {
 		name string
 		body []byte
 	}{
-		{"prompt package", inputs.PromptPackage},
+		{"prompt package", promptPackage},
 		{"specification", inputs.Specification},
 		{"policy", inputs.Policy},
-	} {
+	}
+	for index, prior := range textPriors {
+		parts = append(parts, struct {
+			name string
+			body []byte
+		}{fmt.Sprintf("prior artifact %d", index+1), prior})
+	}
+	for _, part := range parts {
 		if !utf8.Valid(part.body) {
 			return "", fmt.Errorf("%w: %s is not valid UTF-8",
 				ErrUnsupportedStart, part.name)
 		}
 	}
-	prompt := string(inputs.PromptPackage) +
+	var prior strings.Builder
+	for index, body := range textPriors {
+		fmt.Fprintf(&prior, "\n\n--- Prior artifact %d ---\n\n%s", index+1, body)
+	}
+	prompt := string(promptPackage) +
 		"\n\n--- Approved work item specification ---\n\n" +
-		string(inputs.Specification) +
+		string(inputs.Specification) + prior.String() +
 		"\n\n--- Resolved per-run policy ---\n\n" +
 		string(inputs.Policy) + "\n"
 	if len(prompt) > maxPromptBytes {

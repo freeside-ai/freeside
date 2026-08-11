@@ -660,6 +660,23 @@ func TestSubmitRejectsInvalidAndUnknown(t *testing.T) {
 		if _, err := f.service.Submit(ctx, overlongID); !errors.Is(err, domain.ErrClaimTextTooLarge) {
 			t.Fatalf("request_changes overlong command id error = %v, want ErrClaimTextTooLarge", err)
 		}
+		whitespace := command
+		whitespace.CommandID = "cmd-request-changes-whitespace"
+		whitespace.Payload.Message = " \t\n "
+		if _, err := f.service.Submit(ctx, whitespace); !errors.Is(err, signet.ErrMessageRequired) {
+			t.Fatalf("request_changes whitespace error = %v, want ErrMessageRequired", err)
+		}
+		var stillOpen domain.AttentionItem
+		if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			stillOpen, err = tx.GetAttentionItem(ctx, item.ID)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if stillOpen.Status != domain.StatusOpen {
+			t.Fatalf("whitespace request_changes status = %q, want open", stillOpen.Status)
+		}
 		if _, err := f.service.Submit(ctx, command); err != nil {
 			t.Fatal(err)
 		}

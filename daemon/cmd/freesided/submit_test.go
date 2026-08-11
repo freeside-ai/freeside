@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,8 +69,7 @@ func writeSubmissionInputs(t *testing.T, root string) (specPath, policyPath, pub
 	if err := os.WriteFile(specPath, []byte("# Work item\n\nImplement the thing.\n"), 0o600); err != nil {
 		t.Fatalf("write spec: %v", err)
 	}
-	policy := `[{"key":"paths","value":"daemon/**","provenance":{"source":"override","digest":"sha256:` +
-		strings.Repeat("ab", 32) + `"}}]`
+	policy := submissionPolicyBody("daemon/**", strings.Repeat("ab", 32))
 	if err := os.WriteFile(policyPath, []byte(policy), 0o600); err != nil {
 		t.Fatalf("write policy: %v", err)
 	}
@@ -77,6 +78,17 @@ func writeSubmissionInputs(t *testing.T, root string) (specPath, policyPath, pub
 		t.Fatalf("write publication metadata: %v", err)
 	}
 	return specPath, policyPath, publicationPath
+}
+
+func submissionPolicyBody(paths, digestHex string) string {
+	provenance := `,"provenance":{"source":"override","digest":"sha256:` + digestHex + `"}}`
+	return `[{"key":"paths","value":"` + paths + `"` + provenance +
+		`,{"key":"gates.spec_approval","value":"true"` + provenance +
+		`,{"key":"elaboration.max_iterations","value":"4"` + provenance +
+		`,{"key":"budgets.stage_active_time","value":"1h"` + provenance +
+		`,{"key":"waiting.spec_approval_attention_after","value":"1m"` + provenance +
+		`,{"key":"research.allowlist","value":"example.com"` + provenance +
+		`,{"key":"research.max_response_bytes","value":"1024"` + provenance + `]`
 }
 
 func TestSubmitCommandRegistersAndConverges(t *testing.T) {
@@ -102,6 +114,16 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	}
 	if got := len(strings.TrimPrefix(string(first.RunID), "run-")); got != sha256.Size*2 {
 		t.Fatalf("default run id digest length = %d, want %d", got, sha256.Size*2)
+	}
+	if first.ElaborationRunID == "" || first.ElaborationRunID == first.RunID ||
+		first.ImplementationRunID != first.RunID ||
+		first.InvocationID != first.ImplementationInvocationID ||
+		first.StageID != first.ImplementationStageID ||
+		!strings.HasPrefix(string(first.ImplementationInvocationID), "inv-implement-") ||
+		!strings.HasPrefix(string(first.ElaborationInvocationID), "inv-elaborate-") ||
+		first.ElaborationInvocationID == first.ImplementationInvocationID ||
+		first.ElaborationStageID == first.ImplementationStageID {
+		t.Fatalf("submission identities = %+v, want distinct elaboration and implementation runs", first)
 	}
 	if first.SpecDigest == "" || first.PolicyDigest == "" || first.SpecDigest == first.PolicyDigest {
 		t.Fatalf("digests = %q/%q, want distinct content digests", first.SpecDigest, first.PolicyDigest)
@@ -131,8 +153,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 
 	otherPolicy := cfg
 	otherPolicy.PolicyPath = filepath.Join(root, "other-policy.json")
-	otherPolicyBody := `[{"key":"paths","value":"app/**","provenance":{"source":"override","digest":"sha256:` +
-		strings.Repeat("cd", 32) + `"}}]`
+	otherPolicyBody := submissionPolicyBody("app/**", strings.Repeat("cd", 32))
 	if err := os.WriteFile(otherPolicy.PolicyPath, []byte(otherPolicyBody), 0o600); err != nil {
 		t.Fatalf("write other policy: %v", err)
 	}
@@ -163,15 +184,19 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		t.Fatalf("other-publication result = %#v, want distinct metadata and run", otherPublicationResult)
 	}
 
-	// The durable state a replayed submission converged on: run, artifacts,
-	// invocation, and pending dispatch intent.
+	// The durable state a replayed submission converged on: the private
+	// elaboration run, artifacts, invocation, and pending dispatch intent. The
+	// implementation run remains only a reservation until approval.
 	st, err := store.Open(ctx, cfg.DBPath, store.Options{})
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
 	defer func() { _ = st.Close() }()
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
-		run, err := tx.GetRun(ctx, first.RunID)
+		if _, err := tx.GetRun(ctx, first.RunID); !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("pre-approval implementation run, want absent: %w", err)
+		}
+		run, err := tx.GetRun(ctx, first.ElaborationRunID)
 		if err != nil {
 			return err
 		}
@@ -179,11 +204,21 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 			t.Errorf("run digests = %q/%q, want %q/%q",
 				run.SpecDigest, run.PolicyDigest, first.SpecDigest, first.PolicyDigest)
 		}
-		resolved, err := tx.GetResolvedPolicy(ctx, first.RunID)
+		observation, err := tx.ObserveRun(ctx, first.ElaborationRunID)
 		if err != nil {
 			return err
 		}
-		if resolved.Digest != first.PolicyDigest || len(resolved.Keys) != 1 {
+		if len(observation.Milestones) != 1 ||
+			observation.Milestones[0].Kind != domain.MilestoneRunSubmitted ||
+			observation.Milestones[0].InvocationID == nil ||
+			*observation.Milestones[0].InvocationID != first.ElaborationInvocationID {
+			t.Errorf("elaboration submission milestones = %+v, want one run_submitted milestone", observation.Milestones)
+		}
+		resolved, err := tx.GetResolvedPolicy(ctx, first.ElaborationRunID)
+		if err != nil {
+			return err
+		}
+		if resolved.Digest != first.PolicyDigest || len(resolved.Keys) != 7 {
 			t.Errorf("resolved policy = %#v, want the run-bound submitted policy", resolved)
 		}
 		artifact, err := tx.GetArtifact(ctx, first.SpecArtifactID)
@@ -193,14 +228,14 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		if artifact.Digest != first.SpecDigest || artifact.PublishEligible {
 			t.Errorf("spec artifact = %#v, want submitted digest, never publish-eligible", artifact)
 		}
-		entry, err := tx.GetOutbox(ctx, string(first.InvocationID))
+		entry, err := tx.GetOutbox(ctx, string(first.ElaborationInvocationID))
 		if err != nil {
 			return err
 		}
 		if entry.Dispatched() {
 			t.Error("dispatch intent already dispatched; submit must leave dispatch to the engine")
 		}
-		invocation, err := tx.GetAgentInvocation(ctx, first.InvocationID)
+		invocation, err := tx.GetAgentInvocation(ctx, first.ElaborationInvocationID)
 		if err != nil {
 			return err
 		}
@@ -211,14 +246,90 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("read submitted state: %v", err)
 	}
+	var submittedPolicy domain.ResolvedPolicy
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		submittedPolicy, err = tx.GetResolvedPolicy(ctx, first.ElaborationRunID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	authorityRunID := domain.RunID("authority-" + string(first.RunID))
+	authorityPolicy, err := domain.NewResolvedPolicy(authorityRunID, submittedPolicy.Keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authoritySubmission, err := engine.SubmitProductionRun(ctx, st, engine.ProductionRunSpec{
+		RunID: authorityRunID, ProjectID: first.ProjectID,
+		SpecArtifactID: first.SpecArtifactID, PolicyArtifactID: first.PolicyArtifactID,
+		ResolvedPolicy: authorityPolicy,
+		Publication: engine.ProductionPublication{
+			Title: "Test the work item", Body: "## Why\n\nCloses #123.\n",
+			CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit authority fixture: %v", err)
+	}
+	otherAuthorityRunID := domain.RunID("authority-" + string(otherPublicationResult.RunID))
+	otherAuthorityPolicy, err := domain.NewResolvedPolicy(otherAuthorityRunID, submittedPolicy.Keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherAuthoritySubmission, err := engine.SubmitProductionRun(ctx, st, engine.ProductionRunSpec{
+		RunID: otherAuthorityRunID, ProjectID: otherPublicationResult.ProjectID,
+		SpecArtifactID:   otherPublicationResult.SpecArtifactID,
+		PolicyArtifactID: otherPublicationResult.PolicyArtifactID,
+		ResolvedPolicy:   otherAuthorityPolicy,
+		Publication: engine.ProductionPublication{
+			Title: "Describe another outcome", Body: "## Why\n\nCloses #456.\n",
+			CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit second authority fixture: %v", err)
+	}
 	authority := storeAdmissionAuthority{
 		store: st,
 		commitAuthors: fixedProductionCommitAuthorResolver{identity: publish.AppBotIdentity{
 			AppSlug: "freeside-test", BotUserID: 12345,
 		}},
 	}
+	commitAuthorErr := errors.New("commit author resolution must not run for elaboration")
+	authority.commitAuthors = fixedProductionCommitAuthorResolver{err: commitAuthorErr}
+	if err := authority.authenticateInvocationStart(ctx, first.ElaborationInvocationID,
+		domain.ExecutionAdmission{
+			RunID: first.ElaborationRunID, StageID: first.ElaborationStageID,
+			OperatingMode: domain.ModeUnattended,
+		}, "example/repo"); err != nil {
+		t.Fatalf("authenticate elaboration start without publication author: %v", err)
+	}
+	if err := authority.authenticateInvocationStart(ctx, first.ElaborationInvocationID,
+		domain.ExecutionAdmission{
+			RunID: authorityRunID, StageID: first.ElaborationStageID,
+			OperatingMode: domain.ModeUnattended,
+		}, "example/repo"); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("authenticate elaboration start with foreign run = %v, want ErrParentKeyMismatch", err)
+	}
+	elaborationAdmission := domain.ExecutionAdmission{
+		RunID: first.ElaborationRunID, StageID: first.ElaborationStageID,
+		OperatingMode: domain.ModeUnattended,
+	}
+	if author, production, err := authority.invocationImportAuthor(
+		ctx, first.ElaborationInvocationID, elaborationAdmission, "example/repo",
+	); err != nil || production || author != (engine.ProductionCommitAuthor{}) {
+		t.Fatalf("authenticate elaboration import author = %#v, production=%t, err=%v", author, production, err)
+	}
+	if author, production, err := authority.invocationImportRecordAuthor(
+		ctx, first.ElaborationInvocationID, elaborationAdmission,
+	); err != nil || production || author != (engine.ProductionCommitAuthor{}) {
+		t.Fatalf("authenticate elaboration replay author = %#v, production=%t, err=%v", author, production, err)
+	}
+	authority.commitAuthors = fixedProductionCommitAuthorResolver{identity: publish.AppBotIdentity{
+		AppSlug: "freeside-test", BotUserID: 12345,
+	}}
 	author, production, err := authority.authenticateProductionCommitAuthor(
-		ctx, first.InvocationID, domain.ModeUnattended, "example/repo",
+		ctx, authoritySubmission.InvocationID, domain.ModeUnattended, "example/repo",
 	)
 	if err != nil {
 		t.Fatalf("read durable production author: %v", err)
@@ -234,7 +345,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	authority.authenticatedStartAuthors = newProductionCommitAuthorAuthenticationCache()
 	for range 2 {
 		if _, _, err := authority.authenticateProductionCommitAuthorForStart(
-			ctx, first.InvocationID, domain.ModeUnattended, "example/repo",
+			ctx, authoritySubmission.InvocationID, domain.ModeUnattended, "example/repo",
 		); err != nil {
 			t.Fatalf("authenticate cached production start author: %v", err)
 		}
@@ -244,13 +355,13 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 			countingResolver.resolveCalls, countingResolver.revalidateCalls)
 	}
 	if _, _, err := authority.authenticateProductionCommitAuthorForStart(
-		ctx, first.InvocationID, domain.ModeUnattended, "another/repo",
+		ctx, authoritySubmission.InvocationID, domain.ModeUnattended, "another/repo",
 	); err != nil {
 		t.Fatalf("re-authenticate changed start binding: %v", err)
 	}
-	authority.authenticatedStartAuthors.forget(first.InvocationID)
+	authority.authenticatedStartAuthors.forget(authoritySubmission.InvocationID)
 	if _, _, err := authority.authenticateProductionCommitAuthorForStart(
-		ctx, first.InvocationID, domain.ModeUnattended, "another/repo",
+		ctx, authoritySubmission.InvocationID, domain.ModeUnattended, "another/repo",
 	); err != nil {
 		t.Fatalf("re-authenticate forgotten start binding: %v", err)
 	}
@@ -258,7 +369,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		t.Fatalf("changed and forgotten starts made %d resolve calls, want 3", countingResolver.resolveCalls)
 	}
 	if _, _, err := authority.authenticateProductionCommitAuthorRevalidated(
-		ctx, first.InvocationID, domain.ModeUnattended, "another/repo",
+		ctx, authoritySubmission.InvocationID, domain.ModeUnattended, "another/repo",
 	); err != nil {
 		t.Fatalf("revalidate production author before import: %v", err)
 	}
@@ -267,7 +378,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 	}
 	countingResolver.identity = publish.AppBotIdentity{AppSlug: "another-app", BotUserID: 67890}
 	if _, _, err := authority.authenticateProductionCommitAuthorForStart(
-		ctx, otherPublicationResult.InvocationID, domain.ModeUnattended, "example/repo",
+		ctx, otherAuthoritySubmission.InvocationID, domain.ModeUnattended, "example/repo",
 	); !errors.Is(err, publish.ErrAppBotIdentityMismatch) {
 		t.Fatalf("new invocation under changed App binding = %v, want ErrAppBotIdentityMismatch", err)
 	}
@@ -275,7 +386,7 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		AppSlug: "another-app", BotUserID: 67890,
 	}}
 	if _, _, err := authority.authenticateProductionCommitAuthor(
-		ctx, first.InvocationID, domain.ModeUnattended, "example/repo",
+		ctx, authoritySubmission.InvocationID, domain.ModeUnattended, "example/repo",
 	); !errors.Is(err, publish.ErrAppBotIdentityMismatch) {
 		t.Fatalf("mismatched selected App author = %v, want ErrAppBotIdentityMismatch", err)
 	}
@@ -291,6 +402,139 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 		ctx, legacyID, domain.ModeUnattended, "example/repo",
 	); err != nil || production || author != (engine.ProductionCommitAuthor{}) {
 		t.Fatalf("legacy production author = %#v, production=%v, err=%v", author, production, err)
+	}
+}
+
+func TestSubmitCommandReplaysMatchingPreElaborationProductionRun(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	specPath, policyPath, publicationPath := writeSubmissionInputs(t, root)
+	cfg := submitCommandConfig{
+		DBPath:   filepath.Join(root, "freeside.db"),
+		SpecPath: specPath, PolicyPath: policyPath, PublicationPath: publicationPath,
+		ProjectID: "proj-submit",
+	}
+	spec, err := readSubmissionFile(specPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyFile, err := readSubmissionFile(policyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []domain.PolicyKey
+	if err := json.Unmarshal(policyFile.body, &keys); err != nil {
+		t.Fatal(err)
+	}
+	policyDigest, err := (domain.ResolvedPolicy{Keys: keys}).ComputeDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication := engine.ProductionPublication{
+		Title: "Test the work item", Body: "## Why\n\nCloses #123.\n",
+		CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
+	}
+	publicationBody, err := json.Marshal(publication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicationDigest := submissionBytes(publicationBody).digest
+	runID := defaultSubmissionRunID(cfg.ProjectID, spec.digest, policyDigest, publicationDigest, "")
+	resolved, err := domain.NewResolvedPolicy(runID, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyBody, err := json.Marshal(resolved.Keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := submissionBytes(policyBody)
+	specArtifact, err := submissionArtifact(domain.ArtifactKindSpecification, spec.digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyArtifact, err := submissionArtifact(domain.ArtifactKindPolicy, policy.digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadOrCreateTopicKey(cfg.DBPath, false); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(ctx, cfg.DBPath, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	blobs, err := signet.NewBlobStore(cfg.DBPath + ".blobs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blobs.Put(spec.digest, strings.NewReader(string(spec.body))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blobs.Put(policy.digest, strings.NewReader(string(policy.body))); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutArtifact(ctx, specArtifact); err != nil {
+			return err
+		}
+		return tx.PutArtifact(ctx, policyArtifact)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.SubmitProductionRun(ctx, st, engine.ProductionRunSpec{
+		RunID: runID, ProjectID: cfg.ProjectID, SpecArtifactID: specArtifact.ID,
+		PolicyArtifactID: policyArtifact.ID, ResolvedPolicy: resolved, Publication: publication,
+	}); err != nil {
+		t.Fatalf("seed pre-elaboration production run: %v", err)
+	}
+
+	replay, err := runSubmitCommand(ctx, cfg)
+	if err != nil {
+		t.Fatalf("replay pre-elaboration production run: %v", err)
+	}
+	if replay.RunID != runID || replay.ImplementationRunID != runID ||
+		replay.ElaborationRunID != "" || replay.ElaborationInvocationID != "" ||
+		replay.ElaborationStageID != "" {
+		t.Fatalf("legacy replay result = %+v", replay)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		elaborationRunID, err := engine.ElaborationRunIDForImplementation(runID)
+		if err != nil {
+			return err
+		}
+		_, err = tx.GetRun(ctx, elaborationRunID)
+		if !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("legacy replay created elaboration run: %w", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	issue := 123
+	workUnit := &domain.WorkUnitDeclarationInput{
+		CompletionCriterion: domain.CompletionBoundIssueClosedByMergedPR,
+		BoundIssue:          &issue,
+		DeclaredPaths:       declaredPathScope(keys),
+	}
+	declaration, err := domain.NewWorkUnitDeclaration(*workUnit, runID, cfg.ProjectID, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.RecordWorkUnitDeclaration(ctx, declaration)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	legacy, found, err := legacyProductionReplay(ctx, st, runID, cfg.ProjectID,
+		specArtifact, policyArtifact, keys, publication, workUnit, publicationDigest)
+	if err != nil || !found {
+		t.Fatalf("legacy work-unit replay = %#v, found=%t, err=%v", legacy, found, err)
+	}
+	if legacy.WorkUnitID != domain.WorkUnitIDForRun(runID) {
+		t.Fatalf("legacy work-unit id = %q, want %q", legacy.WorkUnitID, domain.WorkUnitIDForRun(runID))
 	}
 }
 
@@ -317,9 +561,34 @@ func TestStoreAdmissionAuthorityDerivesFallbackCommitMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var submittedPolicy domain.ResolvedPolicy
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		submittedPolicy, err = tx.GetResolvedPolicy(ctx, submitted.ElaborationRunID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	productionRunID := domain.RunID("fallback-" + string(submitted.RunID))
+	productionPolicy, err := domain.NewResolvedPolicy(productionRunID, submittedPolicy.Keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	production, err := engine.SubmitProductionRun(ctx, st, engine.ProductionRunSpec{
+		RunID: productionRunID, ProjectID: submitted.ProjectID,
+		SpecArtifactID: submitted.SpecArtifactID, PolicyArtifactID: submitted.PolicyArtifactID,
+		ResolvedPolicy: productionPolicy,
+		Publication: engine.ProductionPublication{
+			Title: "Test the work item", Body: "## Why\n\nCloses #123.\n",
+			CommitAuthor: engine.ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	authority := storeAdmissionAuthority{store: st, blobs: blobs}
 	admission := domain.ExecutionAdmission{
-		RunID: submitted.RunID, SpecDigest: submitted.SpecDigest,
+		RunID: production.Run.ID, SpecDigest: submitted.SpecDigest,
 	}
 	got, err := authority.fallbackCommitMessage(ctx, admission, importer.Policy{})
 	if err != nil {
@@ -334,7 +603,7 @@ func TestStoreAdmissionAuthorityDerivesFallbackCommitMessage(t *testing.T) {
 		CompletionCriterion: domain.CompletionBoundIssueClosedByMergedPR,
 		BoundIssue:          &issue,
 		DeclaredPaths:       []string{"daemon/**"},
-	}, submitted.RunID, domain.ProjectID(cfg.ProjectID), time.Now().UTC())
+	}, production.Run.ID, domain.ProjectID(cfg.ProjectID), time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +781,7 @@ func TestSubmissionArtifactIdentityRetainsFullDigest(t *testing.T) {
 }
 
 // TestSubmitCommandCapturesWorkUnitDeclaration (§5.18, issue #443): a
-// --work-unit submission persists the declaration with its path scope
+// --work-unit submission reserves the declaration with its path scope
 // derived from the resolved policy's paths key, joins the declaration into
 // the default run-id derivation (a different declaration is a different
 // run; an undeclared submission keeps the pre-capture derivation), and
@@ -547,13 +816,28 @@ func TestSubmitCommandCapturesWorkUnitDeclaration(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer func() { _ = st.Close() }()
-	var stored domain.WorkUnitDeclaration
+	var stored domain.WorkUnitDeclarationInput
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		stored, err = tx.GetWorkUnitDeclarationByRun(ctx, declared.RunID)
-		return err
+		if _, err := tx.GetWorkUnitDeclarationByRun(ctx, declared.RunID); !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("pre-approval implementation declaration, want absent: %w", err)
+		}
+		entry, err := tx.GetOutbox(ctx, string(declared.ElaborationInvocationID))
+		if err != nil {
+			return err
+		}
+		var payload struct {
+			WorkUnit *domain.WorkUnitDeclarationInput `json:"work_unit"`
+		}
+		if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+			return err
+		}
+		if payload.WorkUnit == nil {
+			return errors.New("elaboration reservation omitted work-unit declaration")
+		}
+		stored = *payload.WorkUnit
+		return nil
 	}); err != nil {
-		t.Fatalf("read declaration: %v", err)
+		t.Fatalf("read reserved declaration: %v", err)
 	}
 	if stored.BoundIssue == nil || *stored.BoundIssue != 443 || !stored.ContractSerialized {
 		t.Fatalf("stored declaration = %+v", stored)

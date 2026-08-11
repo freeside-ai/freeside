@@ -144,6 +144,7 @@ func main() {
 	stateDir := flags.String("state-dir", "", "production driver state directory")
 	providerEndpoints := flags.String("provider-endpoints", "api.anthropic.com:443", "comma-separated provider host:port allowlist")
 	promptPackage := flags.String("prompt-package", "", "trusted prompt-package file (ingested into the artifact store at startup)")
+	elaborationPromptPackage := flags.String("elaboration-prompt-package", "", "trusted elaborator prompt-package file (ingested into the artifact store at startup)")
 	vendorInstructions := flags.String("vendor-instructions", "", "host vendor-instruction file (CLAUDE.md)")
 	repo := flags.String("repo", "", "managed owner/name repository")
 	baseRef := flags.String("base-ref", "", "managed repository base branch")
@@ -249,11 +250,12 @@ func main() {
 		daemonConfig.Claude = &claudeDriverConfig{
 			AgentImage: domain.ImageRef(*agentImage), ExporterImage: *exporterImage,
 			ContainerBin: *containerBin, SeedRoot: *seedRoot,
-			StateDir:           *stateDir,
-			ProviderEndpoints:  strings.Split(*providerEndpoints, ","),
-			PromptPackageFile:  *promptPackage,
-			VendorInstructions: *vendorInstructions,
-			Repo:               *repo, RepositoryID: id,
+			StateDir:                     *stateDir,
+			ProviderEndpoints:            strings.Split(*providerEndpoints, ","),
+			PromptPackageFile:            *promptPackage,
+			ElaborationPromptPackageFile: *elaborationPromptPackage,
+			VendorInstructions:           *vendorInstructions,
+			Repo:                         *repo, RepositoryID: id,
 			BaseRef: *baseRef, BaseSHA: *baseSHA,
 			AuthIdentityID: domain.AuthIdentityID(*authIdentity),
 			AllowedPaths:   splitNonEmpty(*allowedPaths),
@@ -630,8 +632,14 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err != nil {
 			return nil, fmt.Errorf("compose research fetcher: %w", err)
 		}
+		deliveryMaterializer, err := productionMaterializer(blobs)
+		if err != nil {
+			return nil, fmt.Errorf("compose elaboration delivery validator: %w", err)
+		}
 		engineOptions = append(engineOptions, engine.WithElaboration(engine.ElaborationConfig{
 			Fetcher: researchFetcher, Blobs: blobs, Now: func() time.Time { return time.Now().UTC() },
+			PromptPackageDigest: claudeWiring.elaborationPromptPackage,
+			ValidateDelivery:    productionElaborationDeliveryValidator(deliveryMaterializer),
 		}))
 		engineOptions = append(engineOptions, engine.WithProductionPublication(engine.ProductionPublicationConfig{
 			WorkDir:   filepath.Join(cfg.Claude.SeedRoot, "production-publication"),

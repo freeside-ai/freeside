@@ -43,9 +43,10 @@ type CredentialMountPolicy struct {
 // ProviderPromptInputs are the admitted immutable bodies a provider renders
 // into its invocation prompt.
 type ProviderPromptInputs struct {
-	Specification []byte
-	PromptPackage []byte
-	Policy        []byte
+	Specification  []byte
+	PromptPackage  []byte
+	Policy         []byte
+	PriorArtifacts [][]byte
 }
 
 // Gate is the ward workspace-handoff gate (production: *ward.Backend). The

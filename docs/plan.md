@@ -1315,8 +1315,11 @@ telemetry:      {shadow_review_rate: 0.2}
 Additional rules:
 
 - `rein` resolves into digested per-run policy with per-key provenance.
-- **Manual initiation uses `freesided submit`.** It registers the approved
-  specification as a digest-addressed artifact and creates the run.
+- **Manual initiation uses `freesided submit`.** It registers the source work
+  item as a digest-addressed artifact, creates the elaboration run, and
+  reserves the deterministic implementation identity. The implementation run
+  starts only after elaboration accepts a specification and, when configured,
+  the operator approves that specification's digest.
 - `auto_start` is bounded by WIP caps. The conservative default is `propose`.
 - Raw findings are immutable. Classification is a versioned annotation.
 - Low-confidence materiality defaults to continued remediation or human
@@ -2099,7 +2102,7 @@ Build the installer only after the underlying interfaces survive real use. The
 | `freesided setup` | Performs installation. On the Mac-first path the operator app registers the daemon LaunchAgent (Section 5.2) and no step is privileged; when a hardened deployment needs privileged steps (user creation, LaunchDaemon installation), they run through a narrow elevation helper; the daemon never retains root. |
 | `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and invokes the proven reusable project-image builder. If installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls; a callback or `--resume` reopens the same review after approval. |
 | `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, and, from 1B.1, stored-credential integrity (a truncation and corruption probe). It runs on a schedule and files `system_health` items. |
-| `freesided submit` | Starts a manually approved work item. |
+| `freesided submit` | Registers a manually initiated source work item, starts elaboration, and reserves its future implementation run. |
 
 The project-image builder is an internal primitive, not an onboarding-only
 implementation. Phase 1A manually proves that primitive against the selected

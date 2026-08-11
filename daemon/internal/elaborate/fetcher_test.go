@@ -1,7 +1,9 @@
 package elaborate_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -9,11 +11,36 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/elaborate"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
+
+func TestDecodeResearchEvidenceClassifiesLegacyContentTypeLimit(t *testing.T) {
+	body, err := json.Marshal(struct {
+		URL         string `json:"url"`
+		Purpose     string `json:"purpose"`
+		FinalURL    string `json:"final_url"`
+		Status      int    `json:"status"`
+		ContentType string `json:"content_type"`
+		BodyBase64  string `json:"body_base64"`
+	}{
+		URL: "https://docs.example/legacy", Purpose: "verify legacy evidence",
+		FinalURL: "https://docs.example/legacy", Status: http.StatusOK,
+		ContentType: strings.Repeat("x", (8<<10)+1), BodyBase64: "",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = elaborate.DecodeResearchEvidence(body)
+	if !errors.Is(err, elaborate.ErrResearchTooLarge) || !elaborate.IsResearchRequestFailure(err) {
+		t.Fatalf("legacy oversized content type = %v, want research-size request failure", err)
+	}
+}
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
@@ -51,6 +78,23 @@ func TestFetcherStoresDigestAddressedResearch(t *testing.T) {
 	if ok, err := blobs.Verify(got.Artifact.Digest); err != nil || !ok {
 		t.Fatalf("blob verify = %v, %v", ok, err)
 	}
+	reader, err := blobs.Open(got.Artifact.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedEnvelope, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if err := errors.Join(readErr, closeErr); err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := elaborate.DecodeResearchEvidence(storedEnvelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Body != "bounded facts" || evidence.Source.URL != "https://DOCS.example/fact?q=1" ||
+		evidence.Source.Purpose != "confirm the contract" {
+		t.Fatalf("decoded research evidence = %+v", evidence)
+	}
 	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
 		stored, err := tx.GetArtifact(t.Context(), got.Artifact.ID)
 		if err == nil && stored.Digest != got.Artifact.Digest {
@@ -65,6 +109,43 @@ func TestFetcherStoresDigestAddressedResearch(t *testing.T) {
 	}, []string{"https://docs.example"}, 1024)
 	if err != nil || recovered.Artifact.Digest != got.Artifact.Digest || calls.Load() != 1 {
 		t.Fatalf("recovery = %+v, %v; transport calls = %d", recovered, err, calls.Load())
+	}
+	put := func(body []byte) domain.Digest {
+		t.Helper()
+		digest := domain.Digest(contentaddr.Sum(body))
+		if _, err := blobs.Put(digest, strings.NewReader(string(body))); err != nil {
+			t.Fatal(err)
+		}
+		return digest
+	}
+	specDigest := put([]byte("specification"))
+	promptDigest := put([]byte("prompt"))
+	policyDigest := put([]byte("policy"))
+	inputDigest := domain.Digest(contentaddr.Sum([]byte("research round trip")))
+	snapshot, err := domain.NewStageInputSnapshot(domain.StageInputSnapshotInput{
+		InputDigest: inputDigest, SpecificationDigest: specDigest,
+		PromptPackageDigest: promptDigest, PolicyDigest: policyDigest,
+		PriorArtifactDigests: []domain.Digest{recovered.Artifact.Digest},
+		ImageInputDigests:    []domain.Digest{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	materializer, err := exec.NewMaterializer(blobs, exec.MaterializerOptions{
+		MaxInputBytes: exec.ProductionMaxInputBytes, MaxTotalBytes: exec.ProductionMaxTotalInputBytes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := materializer.Materialize(t.Context(), exec.StartSpec{
+		InputDigest: inputDigest, SpecDigest: specDigest,
+		PolicyDigest: policyDigest, StageInputs: &snapshot,
+	})
+	if err != nil {
+		t.Fatalf("materialize recovered research: %v", err)
+	}
+	if err := claude.ValidatePromptInputs(inputs); err != nil {
+		t.Fatalf("render recovered research: %v", err)
 	}
 	_, err = fetcher.Fetch(t.Context(), "inv-elab-1", 1, elaborate.FetchRequest{
 		URL: "https://DOCS.example/fact?q=1", Purpose: "retarget the persisted ordinal",
@@ -129,6 +210,11 @@ func TestFetcherRedirectAndSizePolicies(t *testing.T) {
 			return result, nil
 		case "/large":
 			return response(request, http.StatusOK, "text/plain", "too large"), nil
+		case "/encoded-large":
+			return response(request, http.StatusOK, "application/octet-stream",
+				strings.Repeat("x", 3<<20)), nil
+		case "/large-content-type":
+			return response(request, http.StatusOK, strings.Repeat("x", 9<<10), "ok"), nil
 		case "/forged-final":
 			forged := request.Clone(request.Context())
 			forged.URL, _ = request.URL.Parse("https://evil.example/landing")
@@ -137,6 +223,13 @@ func TestFetcherRedirectAndSizePolicies(t *testing.T) {
 			return response(request, http.StatusServiceUnavailable, "text/plain", "unavailable"), nil
 		case "/network-error":
 			return nil, errors.New("network unavailable")
+		case "/non-utf8":
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/octet-stream"}},
+				Body:       io.NopCloser(bytes.NewReader([]byte{0xff})),
+				Request:    request,
+			}, nil
 		default:
 			return response(request, http.StatusOK, "text/plain", "ok"), nil
 		}
@@ -160,18 +253,33 @@ func TestFetcherRedirectAndSizePolicies(t *testing.T) {
 	if !elaborate.IsResearchRequestFailure(err) {
 		t.Fatalf("oversized response is not classified as a request failure: %v", err)
 	}
+	_, err = fetcher.Fetch(t.Context(), "inv-encoded-large", 1,
+		elaborate.FetchRequest{URL: "https://docs.example/encoded-large", Purpose: "test"},
+		[]string{"https://docs.example"}, 3<<20)
+	if !errors.Is(err, elaborate.ErrResearchTooLarge) {
+		t.Fatalf("encoded-envelope size error = %v, want ErrResearchTooLarge", err)
+	}
+	_, err = fetcher.Fetch(t.Context(), "inv-large-content-type", 1,
+		elaborate.FetchRequest{URL: "https://docs.example/large-content-type", Purpose: "test"},
+		[]string{"https://docs.example"}, 100)
+	if !errors.Is(err, elaborate.ErrResearchTooLarge) {
+		t.Fatalf("content-type size error = %v, want ErrResearchTooLarge", err)
+	}
 	_, err = fetcher.Fetch(t.Context(), "inv-forged-final", 1,
 		elaborate.FetchRequest{URL: "https://docs.example/forged-final", Purpose: "test"},
 		[]string{"https://docs.example"}, 100)
 	if !errors.Is(err, elaborate.ErrResearchURLRefused) {
 		t.Fatalf("forged final URL error = %v", err)
 	}
-	for _, path := range []string{"server-error", "network-error"} {
+	for _, path := range []string{"server-error", "network-error", "non-utf8"} {
 		_, err = fetcher.Fetch(t.Context(), domain.InvocationID("inv-"+path), 1,
 			elaborate.FetchRequest{URL: "https://docs.example/" + path, Purpose: "test"},
 			[]string{"https://docs.example"}, 100)
 		if !elaborate.IsResearchRequestFailure(err) {
 			t.Errorf("%s error is not classified as a request failure: %v", path, err)
+		}
+		if path == "non-utf8" && !errors.Is(err, elaborate.ErrResearchFetchFailed) {
+			t.Errorf("%s error = %v, want ErrResearchFetchFailed", path, err)
 		}
 	}
 	_, err = fetcher.Fetch(t.Context(), "inv-unbounded", 1,

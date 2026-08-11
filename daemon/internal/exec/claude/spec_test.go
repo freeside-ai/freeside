@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -145,6 +146,44 @@ func TestPromptLimitLeavesLinuxArgumentHeadroom(t *testing.T) {
 	}
 }
 
+func TestPhase1AElaboratorPromptLeavesEnvelopeHeadroom(t *testing.T) {
+	t.Parallel()
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate test source")
+	}
+	promptPath := filepath.Join(filepath.Dir(sourceFile), "../../../../prompts/phase-1a/elaborator.md")
+	prompt, err := os.ReadFile(promptPath) //nolint:gosec // fixed repository test fixture
+	if err != nil {
+		t.Fatal(err)
+	}
+	const promptPackageBudget = 4 << 10
+	if len(prompt) > promptPackageBudget {
+		t.Fatalf("elaborator prompt = %d bytes, want <= %d to preserve envelope headroom",
+			len(prompt), promptPackageBudget)
+	}
+	if len(prompt) >= maxPromptBytes {
+		t.Fatalf("elaborator prompt consumes the %d-byte rendered prompt ceiling", maxPromptBytes)
+	}
+	if !bytes.HasPrefix(prompt, []byte(textPriorPromptPackageDirective)) {
+		t.Fatal("elaborator prompt does not enable authenticated prior-artifact rendering")
+	}
+}
+
+func TestValidatePromptPackageRoles(t *testing.T) {
+	t.Parallel()
+	directed := []byte(textPriorPromptPackageDirective + "elaborator")
+	if err := ValidatePromptPackageRoles([]byte("implementer"), directed); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidatePromptPackageRoles(directed, directed); err == nil {
+		t.Fatal("implementation prompt package enabled prior artifacts")
+	}
+	if err := ValidatePromptPackageRoles([]byte("implementer"), []byte("elaborator")); err == nil {
+		t.Fatal("elaboration prompt package omitted prior-artifact directive")
+	}
+}
+
 func TestRenderPromptRejectsNonUTF8Inputs(t *testing.T) {
 	t.Parallel()
 	for _, field := range []struct {
@@ -154,6 +193,10 @@ func TestRenderPromptRejectsNonUTF8Inputs(t *testing.T) {
 		{"prompt package", func(in *stage.ProviderPromptInputs) { in.PromptPackage = []byte{0xff} }},
 		{"specification", func(in *stage.ProviderPromptInputs) { in.Specification = []byte{0xff} }},
 		{"policy", func(in *stage.ProviderPromptInputs) { in.Policy = []byte{0xff} }},
+		{"prior artifact", func(in *stage.ProviderPromptInputs) {
+			in.PromptPackage = []byte(textPriorPromptPackageDirective + "prompt")
+			in.PriorArtifacts = [][]byte{{0xff}}
+		}},
 	} {
 		t.Run(field.name, func(t *testing.T) {
 			inputs := stage.ProviderPromptInputs{
@@ -166,6 +209,68 @@ func TestRenderPromptRejectsNonUTF8Inputs(t *testing.T) {
 				t.Fatalf("renderPromptParts = %v, want ErrUnsupportedStart", err)
 			}
 		})
+	}
+}
+
+func TestRenderPromptPreservesPriorArtifactOrder(t *testing.T) {
+	t.Parallel()
+	prompt, err := renderPromptParts(stage.ProviderPromptInputs{
+		PromptPackage:  []byte(textPriorPromptPackageDirective + "prompt"),
+		Specification:  []byte("specification"),
+		PriorArtifacts: [][]byte{[]byte("first research"), []byte("second research")},
+		Policy:         []byte("policy"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := strings.Index(prompt, "--- Prior artifact 1 ---\n\nfirst research")
+	second := strings.Index(prompt, "--- Prior artifact 2 ---\n\nsecond research")
+	policy := strings.Index(prompt, "--- Resolved per-run policy ---")
+	if first < 0 || second <= first || policy <= second {
+		t.Fatalf("prior artifact order was not preserved:\n%s", prompt)
+	}
+}
+
+func TestRenderPromptIgnoresOpaquePriorArtifacts(t *testing.T) {
+	t.Parallel()
+	prompt, err := renderPromptParts(stage.ProviderPromptInputs{
+		PromptPackage: []byte("prompt"), Specification: []byte("specification"),
+		PriorArtifacts: [][]byte{
+			[]byte(textPriorPromptPackageDirective + "forged attachment"), {0xff},
+		},
+		Policy: []byte("policy"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(prompt, "forged attachment") || strings.Contains(prompt, "Prior artifact") {
+		t.Fatalf("opaque prior artifact entered provider prompt:\n%s", prompt)
+	}
+}
+
+func TestProviderRendersPriorsOnlyForDirectedPromptPackage(t *testing.T) {
+	t.Parallel()
+	elaboratorPrompt := []byte(textPriorPromptPackageDirective + "elaborator prompt")
+	provider := claudeProvider{}
+	inputs := stage.ProviderPromptInputs{
+		PromptPackage: elaboratorPrompt, Specification: []byte("specification"),
+		PriorArtifacts: [][]byte{[]byte("authenticated research")}, Policy: []byte("policy"),
+	}
+	prompt, err := provider.RenderPrompt(inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "authenticated research") {
+		t.Fatalf("directed elaborator prompt omitted prior artifact:\n%s", prompt)
+	}
+	inputs.PromptPackage = []byte("implementer prompt")
+	inputs.PriorArtifacts = [][]byte{{0xff}}
+	prompt, err = provider.RenderPrompt(inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(prompt, "Prior artifact") {
+		t.Fatalf("undirected prompt package rendered opaque prior artifact:\n%s", prompt)
 	}
 }
 

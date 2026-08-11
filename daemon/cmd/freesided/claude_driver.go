@@ -51,19 +51,19 @@ type claudeDriverConfig struct {
 	SeedRoot          string
 	StateDir          string
 	ProviderEndpoints []string
-	// PromptPackageFile is the trusted prompt-package file. The daemon
-	// ingests its bytes into the artifact blob store and derives the digest,
-	// rather than taking a digest on trust: the materializer resolves that
-	// digest from the blob store at every dispatch, so a configured digest
-	// whose bytes were never stored fails every start.
-	PromptPackageFile  string
-	VendorInstructions string
-	Repo               string
-	RepositoryID       int64
-	BaseRef            string
-	BaseSHA            string
-	AuthIdentityID     domain.AuthIdentityID
-	AllowedPaths       []string
+	// PromptPackageFile and ElaborationPromptPackageFile are the trusted
+	// implementation- and elaboration-stage prompt files. The daemon ingests
+	// their bytes into the artifact blob store and derives both digests rather
+	// than taking either digest on trust.
+	PromptPackageFile            string
+	ElaborationPromptPackageFile string
+	VendorInstructions           string
+	Repo                         string
+	RepositoryID                 int64
+	BaseRef                      string
+	BaseSHA                      string
+	AuthIdentityID               domain.AuthIdentityID
+	AllowedPaths                 []string
 	// RunConformance executes the store-backed full ward suite against this
 	// exact runtime/image/configuration before the engine can admit work.
 	RunConformance bool
@@ -96,6 +96,8 @@ func (c claudeDriverConfig) validate() error {
 		return fmt.Errorf("-provider-endpoints is required in claude driver mode")
 	case c.PromptPackageFile == "":
 		return fmt.Errorf("-prompt-package is required in claude driver mode")
+	case c.ElaborationPromptPackageFile == "":
+		return fmt.Errorf("-elaboration-prompt-package is required in claude driver mode")
 	case c.VendorInstructions == "":
 		return fmt.Errorf("-vendor-instructions is required in claude driver mode")
 	case c.Repo == "" || c.RepositoryID <= 0 || c.BaseRef == "" || c.BaseSHA == "":
@@ -178,20 +180,20 @@ func admissionFloor(mode domain.OperatingMode) []exec.Capability {
 // ingestPromptPackage stores the prompt package's bytes and returns their
 // content address, so the digest the admission records and the bytes the
 // materializer resolves are the same object by construction.
-func ingestPromptPackage(blobs *signet.BlobStore, path string) (domain.Digest, error) {
+func ingestPromptPackage(blobs *signet.BlobStore, path string) (domain.Digest, []byte, error) {
 	body, err := os.ReadFile(path) //nolint:gosec // G304: operator-configured control-plane prompt package
 	if err != nil {
-		return "", fmt.Errorf("read prompt package: %w", err)
+		return "", nil, fmt.Errorf("read prompt package: %w", err)
 	}
 	if len(body) == 0 {
-		return "", fmt.Errorf("prompt package %s is empty", path)
+		return "", nil, fmt.Errorf("prompt package %s is empty", path)
 	}
 	sum := sha256.Sum256(body)
 	digest := domain.Digest(contentaddr.Format(sum[:]))
 	if _, err := blobs.Put(digest, bytes.NewReader(body)); err != nil {
-		return "", fmt.Errorf("store prompt package: %w", err)
+		return "", nil, fmt.Errorf("store prompt package: %w", err)
 	}
-	return digest, nil
+	return digest, body, nil
 }
 
 // attendedAdmissionFloor is ward's honest base capability class before the
@@ -466,10 +468,46 @@ func (a storeAdmissionAuthority) AuthenticateStart(
 	if err != nil {
 		return err
 	}
+	return a.authenticateInvocationStart(ctx, id, admission, spec.Base.Repo)
+}
+
+func (a storeAdmissionAuthority) authenticateInvocationStart(
+	ctx context.Context, id domain.InvocationID, admission domain.ExecutionAdmission, repo string,
+) error {
+	elaboration, err := a.authenticateElaborationInvocation(ctx, id, admission)
+	if err != nil || elaboration {
+		return err
+	}
 	_, _, err = a.authenticateProductionCommitAuthorForStart(
-		ctx, id, admission.OperatingMode, spec.Base.Repo,
+		ctx, id, admission.OperatingMode, repo,
 	)
 	return err
+}
+
+func (a storeAdmissionAuthority) authenticateElaborationInvocation(
+	ctx context.Context, id domain.InvocationID, admission domain.ExecutionAdmission,
+) (bool, error) {
+	var entry store.QueueEntry
+	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		entry, err = tx.GetOutbox(ctx, string(id))
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("load elaboration invocation marker: %w", err)
+	}
+	if entry.Kind != engine.KindElaborationInvocationRequested {
+		return false, nil
+	}
+	if err := engine.AuthenticateElaborationInvocationMarker(
+		entry, admission.RunID, admission.StageID,
+	); err != nil {
+		return true, fmt.Errorf("authenticate elaboration invocation marker: %w", err)
+	}
+	return true, nil
 }
 
 func (a storeAdmissionAuthority) ImportOptions(
@@ -497,9 +535,7 @@ func (a storeAdmissionAuthority) ImportOptions(
 	if err != nil {
 		return importer.Options{}, err
 	}
-	author, production, err := a.authenticateProductionCommitAuthorRevalidated(
-		ctx, id, admission.OperatingMode, spec.Base.Repo,
-	)
+	author, production, err := a.invocationImportAuthor(ctx, id, admission, spec.Base.Repo)
 	if err != nil {
 		return importer.Options{}, err
 	}
@@ -538,7 +574,7 @@ func (a storeAdmissionAuthority) ImportOptionsRecord(
 	// This reconstructs an already-completed import from immutable records.
 	// App attribution was authenticated before the actual import; requiring
 	// live GitHub authority here would strand terminal replay after a restart.
-	author, production, err := a.productionCommitAuthor(ctx, id, admission.OperatingMode)
+	author, production, err := a.invocationImportRecordAuthor(ctx, id, admission)
 	if err != nil {
 		return importer.Options{}, err
 	}
@@ -546,6 +582,28 @@ func (a storeAdmissionAuthority) ImportOptionsRecord(
 		opts.AuthorName, opts.AuthorEmail = author.Name(), author.Email()
 	}
 	return opts, nil
+}
+
+func (a storeAdmissionAuthority) invocationImportAuthor(
+	ctx context.Context, id domain.InvocationID, admission domain.ExecutionAdmission, repo string,
+) (engine.ProductionCommitAuthor, bool, error) {
+	elaboration, err := a.authenticateElaborationInvocation(ctx, id, admission)
+	if err != nil || elaboration {
+		return engine.ProductionCommitAuthor{}, false, err
+	}
+	return a.authenticateProductionCommitAuthorRevalidated(
+		ctx, id, admission.OperatingMode, repo,
+	)
+}
+
+func (a storeAdmissionAuthority) invocationImportRecordAuthor(
+	ctx context.Context, id domain.InvocationID, admission domain.ExecutionAdmission,
+) (engine.ProductionCommitAuthor, bool, error) {
+	elaboration, err := a.authenticateElaborationInvocation(ctx, id, admission)
+	if err != nil || elaboration {
+		return engine.ProductionCommitAuthor{}, false, err
+	}
+	return a.productionCommitAuthor(ctx, id, admission.OperatingMode)
 }
 
 func (a storeAdmissionAuthority) fallbackCommitMessage(
@@ -971,6 +1029,7 @@ type claudeComposition struct {
 	reviewHostInstructions    engine.ReviewHostInstructions
 	containerBin              string
 	env                       engine.AdmissionEnvironment
+	elaborationPromptPackage  domain.Digest
 	derive                    engine.AdmissionDerivation
 	runConformance            func(context.Context) error
 	closer                    sessionCloser
@@ -1059,9 +1118,18 @@ func composeClaudeDriver(
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	promptPackage, err := ingestPromptPackage(blobs, cfg.PromptPackageFile)
+	promptPackage, promptPackageBody, err := ingestPromptPackage(blobs, cfg.PromptPackageFile)
 	if err != nil {
 		return nil, err
+	}
+	elaborationPromptPackage, elaborationPromptPackageBody, err := ingestPromptPackage(
+		blobs, cfg.ElaborationPromptPackageFile)
+	if err != nil {
+		return nil, err
+	}
+	if err := claude.ValidatePromptPackageRoles(
+		promptPackageBody, elaborationPromptPackageBody); err != nil {
+		return nil, fmt.Errorf("prompt package roles: %w", err)
 	}
 	// Resolve the workspace-hydration command before any network-touching
 	// composition, so a base/image misconfiguration fails at startup. Only the
@@ -1291,9 +1359,10 @@ func composeClaudeDriver(
 		publisher:            publisher, reviewSource: reviewSource,
 		reviewRecovery:            reviewRecovery.Reconcile,
 		reviewConfigurationDigest: reviewConfigurationDigest, containerBin: cfg.ContainerBin,
-		reviewHostInstructions: reviewHostInstructions,
-		env:                    env,
-		derive:                 claudeAdmissionDerivation(cfg),
+		reviewHostInstructions:   reviewHostInstructions,
+		env:                      env,
+		elaborationPromptPackage: elaborationPromptPackage,
+		derive:                   claudeAdmissionDerivation(cfg),
 		runConformance: func(runCtx context.Context) error {
 			return runClaudeConformance(
 				runCtx, st, transport, backend, cfg, janitor.WithStableCoverage,
@@ -1609,13 +1678,39 @@ func (g sessionGroup) Close(ctx context.Context) error {
 // stageDriver wraps the Claude driver in the production materializing seam,
 // so digest verification always completes before an intent is committed.
 func (c *claudeComposition) stageDriver(blobs *signet.BlobStore) (exec.StageDriver, error) {
-	materializer, err := exec.NewMaterializer(productionInputSource{blobs: blobs}, exec.MaterializerOptions{
-		MaxInputBytes: 4 << 20, MaxTotalBytes: 32 << 20,
-	})
+	materializer, err := productionMaterializer(blobs)
 	if err != nil {
 		return nil, fmt.Errorf("compose materializer: %w", err)
 	}
 	return exec.NewMaterializingStageDriver(materializer, c.driver)
+}
+
+func productionMaterializer(blobs *signet.BlobStore) (*exec.Materializer, error) {
+	return exec.NewMaterializer(productionInputSource{blobs: blobs}, exec.MaterializerOptions{
+		MaxInputBytes: exec.ProductionMaxInputBytes,
+		MaxTotalBytes: exec.ProductionMaxTotalInputBytes,
+	})
+}
+
+func productionElaborationDeliveryValidator(
+	materializer *exec.Materializer,
+) func(context.Context, exec.StartSpec) error {
+	return func(ctx context.Context, spec exec.StartSpec) error {
+		inputs, err := materializer.Materialize(ctx, spec)
+		if err != nil {
+			if errors.Is(err, exec.ErrInputTooLarge) {
+				return fmt.Errorf("%w: %w", engine.ErrElaborationInputUndeliverable, err)
+			}
+			return err
+		}
+		if err := claude.ValidatePromptInputs(inputs); err != nil {
+			if errors.Is(err, claude.ErrUnsupportedStart) {
+				return fmt.Errorf("%w: %w", engine.ErrElaborationInputUndeliverable, err)
+			}
+			return err
+		}
+		return nil
+	}
 }
 
 // productionInputSource separates an operational filesystem refusal from a
