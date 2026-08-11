@@ -132,7 +132,7 @@ func TestAttentionItemPRReferenceIsExactAndTypeScoped(t *testing.T) {
 func TestNewAttentionItemDetachesInput(t *testing.T) {
 	recipe := approvedRecipe
 	verifierArt := domain.Artifact{
-		ID: "art-good", Type: "log", Digest: "sha256:g",
+		ID: "art-good", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:g",
 		Provenance: provenance(domain.ProducerVerifier, &recipe),
 	}
 	in := validItemInput(domain.AttentionReadyForFinalReview)
@@ -143,7 +143,7 @@ func TestNewAttentionItemDetachesInput(t *testing.T) {
 	}
 
 	// Swapping the caller's slice element must not change the validated item.
-	in.EvidenceSnapshot[0] = domain.Artifact{ID: "art-bad", Type: "img", Digest: "sha256:b", Provenance: provenance(domain.ProducerAgent, nil)}
+	in.EvidenceSnapshot[0] = domain.Artifact{ID: "art-bad", Type: domain.ArtifactKindImage, Digest: "sha256:b", Provenance: provenance(domain.ProducerAgent, nil)}
 	if item.EvidenceSnapshot[0].Provenance.ProducerClass == domain.ProducerAgent {
 		t.Error("mutating the input evidence slice changed the validated item")
 	}
@@ -175,7 +175,7 @@ func TestNewAttentionItemDetachesInput(t *testing.T) {
 func TestNewAttentionItemRecomputesEvidenceEligibility(t *testing.T) {
 	recipe := approvedRecipe
 	understated := domain.Artifact{
-		ID: "art-1", Type: "log", Digest: "sha256:g",
+		ID: "art-1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:g",
 		Provenance:      provenance(domain.ProducerVerifier, &recipe),
 		PublishEligible: false, // caller lie: it is actually eligible
 	}
@@ -219,8 +219,8 @@ func TestNewAttentionItemDerivesBindingSet(t *testing.T) {
 	recipe := approvedRecipe
 	// Two evidence artifacts sharing a digest and one claim; the union
 	// deduplicates and sorts. "sha256:aaa" < "sha256:zzz" gives the order.
-	ev1 := domain.Artifact{ID: "e1", Type: "log", Digest: "sha256:zzz", Provenance: provenance(domain.ProducerVerifier, &recipe)}
-	ev2 := domain.Artifact{ID: "e2", Type: "log", Digest: "sha256:zzz", Provenance: provenance(domain.ProducerVerifier, &recipe)}
+	ev1 := domain.Artifact{ID: "e1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:zzz", Provenance: provenance(domain.ProducerVerifier, &recipe)}
+	ev2 := domain.Artifact{ID: "e2", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:zzz", Provenance: provenance(domain.ProducerVerifier, &recipe)}
 	claim := domain.AgentClaim{Label: "shot", Artifact: "c1", Digest: "sha256:aaa", Provenance: provenance(domain.ProducerAgent, nil)}
 	// A text claim joins the binding set through its computed content digest,
 	// so an approval over the item binds the rendered summary too.
@@ -255,7 +255,7 @@ func TestHeadIndependentEvidenceSurvivesRemediation(t *testing.T) {
 	indepProv := provenance(domain.ProducerVerifier, &recipe)
 	indepProv.HeadBinding = domain.HeadIndependent
 	indepProv.SourceHeadSHA = ""
-	indep := domain.Artifact{ID: "lic", Type: "license_scan", Digest: "sha256:lic", Provenance: indepProv}
+	indep := domain.Artifact{ID: "lic", Type: domain.ArtifactKindLicenseScan, Digest: "sha256:lic", Provenance: indepProv}
 
 	// Same head-independent artifact under two different remediation heads: both
 	// preserve it, since it is decoupled from head.
@@ -270,7 +270,7 @@ func TestHeadIndependentEvidenceSurvivesRemediation(t *testing.T) {
 
 	// Control: a head-bound artifact whose head does not match the (remediated)
 	// item head is still invalidated.
-	bound := domain.Artifact{ID: "log", Type: "log", Digest: "sha256:log", Provenance: provenance(domain.ProducerVerifier, &recipe)} // SourceHeadSHA "abc123"
+	bound := domain.Artifact{ID: "log", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:log", Provenance: provenance(domain.ProducerVerifier, &recipe)} // SourceHeadSHA "abc123"
 	in := validItemInput(domain.AttentionReadyForFinalReview)
 	in.PRHeadSHA = "head-B-remediation"
 	in.EvidenceSnapshot = []domain.Artifact{bound}
@@ -339,7 +339,7 @@ func TestValidateRejectsBindingMismatch(t *testing.T) {
 		recipe := approvedRecipe
 		in := validItemInput(domain.AttentionReadyForFinalReview)
 		in.PRHeadSHA = "abc123"
-		in.EvidenceSnapshot = []domain.Artifact{{ID: "e1", Type: "log", Digest: "sha256:log", Provenance: provenance(domain.ProducerVerifier, &recipe)}}
+		in.EvidenceSnapshot = []domain.Artifact{{ID: "e1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:log", Provenance: provenance(domain.ProducerVerifier, &recipe)}}
 		item, err := domain.NewAttentionItem(in, approvedRecipes())
 		if err != nil {
 			t.Fatal(err)
@@ -389,7 +389,7 @@ func TestValidateRejectsInvalidationWithoutSupersession(t *testing.T) {
 	readyItem := func() domain.AttentionItem {
 		in := validItemInput(domain.AttentionReadyForFinalReview)
 		in.PRHeadSHA = "abc123"
-		in.EvidenceSnapshot = []domain.Artifact{{ID: "e1", Type: "log", Digest: "sha256:log", Provenance: provenance(domain.ProducerVerifier, &recipe)}}
+		in.EvidenceSnapshot = []domain.Artifact{{ID: "e1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:log", Provenance: provenance(domain.ProducerVerifier, &recipe)}}
 		item, err := domain.NewAttentionItem(in, approvedRecipes())
 		if err != nil {
 			t.Fatal(err)
@@ -740,7 +740,7 @@ func TestNewAttentionItemRejects(t *testing.T) {
 			name: "duplicate evidence artifact",
 			mutate: func(in *domain.AttentionItemInput) {
 				recipe := approvedRecipe
-				a := domain.Artifact{ID: "dup", Type: "log", Digest: "sha256:d", Provenance: provenance(domain.ProducerVerifier, &recipe)}
+				a := domain.Artifact{ID: "dup", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:d", Provenance: provenance(domain.ProducerVerifier, &recipe)}
 				in.EvidenceSnapshot = []domain.Artifact{a, a}
 			},
 			wantErr: domain.ErrDuplicate,
@@ -774,7 +774,7 @@ func TestNewAttentionItemRejects(t *testing.T) {
 			mutate: func(in *domain.AttentionItemInput) {
 				recipe := approvedRecipe
 				in.PRHeadSHA = "head-A"
-				in.EvidenceSnapshot = []domain.Artifact{{ID: "e1", Type: "log", Digest: "sha256:e", Provenance: provenance(domain.ProducerVerifier, &recipe)}}
+				in.EvidenceSnapshot = []domain.Artifact{{ID: "e1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:e", Provenance: provenance(domain.ProducerVerifier, &recipe)}}
 			},
 			wantErr: domain.ErrEvidenceHeadMismatch,
 		},
@@ -783,7 +783,7 @@ func TestNewAttentionItemRejects(t *testing.T) {
 			mutate: func(in *domain.AttentionItemInput) {
 				recipe := approvedRecipe
 				in.PRHeadSHA = "abc123" // matches provenance() SourceHeadSHA so head-binding passes
-				in.EvidenceSnapshot = []domain.Artifact{{ID: "shared", Type: "log", Digest: "sha256:e", Provenance: provenance(domain.ProducerVerifier, &recipe)}}
+				in.EvidenceSnapshot = []domain.Artifact{{ID: "shared", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:e", Provenance: provenance(domain.ProducerVerifier, &recipe)}}
 				in.AgentClaims = []domain.AgentClaim{{Label: "x", Artifact: "shared", Digest: "sha256:c", Provenance: provenance(domain.ProducerAgent, nil)}}
 			},
 			wantErr: domain.ErrArtifactIdentityConflict,

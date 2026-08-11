@@ -194,7 +194,7 @@ func evidenceArtifact(t *testing.T, headSHA string) domain.Artifact {
 	r := testRecipe
 	a, err := domain.NewArtifact(domain.ArtifactInput{
 		ID:     "artifact-1",
-		Type:   "verification-evidence",
+		Type:   domain.ArtifactKindVerificationReport,
 		Digest: domain.Digest("sha256:" + strings.Repeat("b", 64)),
 		Provenance: domain.Provenance{
 			ProducerClass:            domain.ProducerVerifier,

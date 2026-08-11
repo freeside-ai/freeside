@@ -55,8 +55,9 @@ func (r Run) Validate() error {
 	return nil
 }
 
-// Stage is one bounded phase of a run (elaboration, implementation, review,
-// verification), holding its attempts (plan §5.3, §5.12).
+// Stage is one bounded phase of a run, holding its attempts (plan §5.3,
+// §5.12). Name remains string-typed because persisted Phase 1A runs include
+// engine-internal names; new workflow definitions use the StageName vocabulary.
 type Stage struct {
 	ID       StageID   `json:"id"`
 	RunID    RunID     `json:"run_id"`

@@ -869,7 +869,7 @@ func (a artifactStore) RecordClaims(
 	return a.store.Write(ctx, func(tx *store.WriteTx) error {
 		for _, claim := range claims {
 			artifact, err := domain.NewArtifact(domain.ArtifactInput{
-				ID: claim.Artifact, Type: "evidence", Digest: claim.Digest,
+				ID: claim.Artifact, Type: domain.ArtifactKindEvidence, Digest: claim.Digest,
 				Provenance: claim.Provenance,
 			}, nil)
 			if err != nil {

@@ -606,7 +606,7 @@ func TestLoadProductionBindingAuthenticatesTheSpecificationInput(t *testing.T) {
 	}
 	extra := specification
 	extra.ID = "artifact-extra"
-	extra.Type = "evidence"
+	extra.Type = domain.ArtifactKindEvidence
 	extra.Digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	extra.Provenance.ProducerInvocationID = "foreign-producer"
 	run := domain.Run{

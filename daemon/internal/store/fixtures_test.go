@@ -45,7 +45,7 @@ func newFixtures(t *testing.T) fixtures {
 	approved := approvedFixtureRecipes()
 
 	artifact, err := domain.NewArtifact(domain.ArtifactInput{
-		ID: "art-1", Type: "verify_log", Digest: "sha256:log",
+		ID: "art-1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:log",
 		Provenance: domain.Provenance{
 			ProducerClass:            domain.ProducerVerifier,
 			ProducerInvocationID:     "inv-1",

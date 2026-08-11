@@ -517,7 +517,7 @@ func testArtifact(t *testing.T, headSHA string) domain.Artifact {
 	recipe := testRecipe
 	a, err := domain.NewArtifact(domain.ArtifactInput{
 		ID:     "artifact-1",
-		Type:   "verification-evidence",
+		Type:   domain.ArtifactKindVerificationReport,
 		Digest: testArtifactD,
 		Provenance: domain.Provenance{
 			ProducerClass:            domain.ProducerVerifier,
@@ -1555,7 +1555,7 @@ func TestPublishRejectsRecipeMismatch(t *testing.T) {
 
 	a, err := domain.NewArtifact(domain.ArtifactInput{
 		ID:     "artifact-2",
-		Type:   "verification-evidence",
+		Type:   domain.ArtifactKindVerificationReport,
 		Digest: testArtifactD,
 		Provenance: domain.Provenance{
 			ProducerClass:            domain.ProducerVerifier,

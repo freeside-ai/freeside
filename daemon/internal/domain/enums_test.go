@@ -28,6 +28,22 @@ func TestEnumValidity(t *testing.T) {
 		valids["ProducerClass"] = append(valids["ProducerClass"], v.valid)
 	}
 	invalids["ProducerClass"] = ProducerClass("").valid
+	for _, v := range AllStageNames {
+		valids["StageName"] = append(valids["StageName"], v.valid)
+	}
+	invalids["StageName"] = StageName("").valid
+	for _, v := range AllArtifactKinds {
+		valids["ArtifactKind"] = append(valids["ArtifactKind"], v.valid)
+	}
+	invalids["ArtifactKind"] = ArtifactKind("").valid
+	for _, v := range AllInitiatorTypes {
+		valids["InitiatorType"] = append(valids["InitiatorType"], v.valid)
+	}
+	invalids["InitiatorType"] = InitiatorType("").valid
+	for _, v := range AllInitiatorModes {
+		valids["InitiatorMode"] = append(valids["InitiatorMode"], v.valid)
+	}
+	invalids["InitiatorMode"] = InitiatorMode("").valid
 	for _, v := range AllAgentVendors {
 		valids["AgentVendor"] = append(valids["AgentVendor"], v.valid)
 	}
@@ -246,6 +262,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["ReviewOutcome"] = append(valids["ReviewOutcome"], v.valid)
 	}
 	invalids["ReviewOutcome"] = ReviewOutcome("").valid
+	for _, v := range AllReviewDispositions {
+		valids["ReviewDisposition"] = append(valids["ReviewDisposition"], v.valid)
+	}
+	invalids["ReviewDisposition"] = ReviewDisposition("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {

@@ -29,6 +29,44 @@ type ReviewRecord struct {
 	FindingIDs          []FindingID   `json:"finding_ids"`
 }
 
+// ReviewDispositionRecord is the immutable per-round outcome for one raw
+// review finding (plan §7). A later round writes another record; it never
+// rewrites the finding or an earlier disposition.
+type ReviewDispositionRecord struct {
+	FindingID               FindingID         `json:"finding_id"`
+	RunID                   RunID             `json:"run_id"`
+	Round                   int               `json:"round"`
+	Disposition             ReviewDisposition `json:"disposition"`
+	Reason                  string            `json:"reason"`
+	RemediationInvocationID InvocationID      `json:"remediation_invocation_id,omitempty"`
+	CreatedAt               time.Time         `json:"created_at"`
+}
+
+// Validate reports whether the disposition is identified, round-bound,
+// explained, and stamped with a stable UTC time. Store reconstruction binds
+// it to the named finding and the review pass that produced that finding.
+func (r ReviewDispositionRecord) Validate() error {
+	switch {
+	case r.FindingID == "" || r.RunID == "":
+		return fmt.Errorf("review disposition identity: %w", ErrEmptyID)
+	case r.Round < 1:
+		return fmt.Errorf("review disposition round %d: %w", r.Round, ErrNonPositive)
+	case !r.Disposition.valid():
+		return fmt.Errorf("review disposition %q: %w", r.Disposition, ErrInvalidReviewDisposition)
+	case r.Reason == "":
+		return fmt.Errorf("review disposition reason: %w", ErrEmptyField)
+	case r.Disposition == ReviewDispositionFixed && r.RemediationInvocationID == "":
+		return fmt.Errorf("fixed review disposition remediation binding: %w", ErrEmptyField)
+	case r.Disposition != ReviewDispositionFixed && r.RemediationInvocationID != "":
+		return fmt.Errorf("non-fixed review disposition remediation binding: %w", ErrInvalidHeadBinding)
+	case r.CreatedAt.IsZero():
+		return fmt.Errorf("review disposition created_at: %w", ErrMissingTimestamp)
+	case r.CreatedAt.Location() != time.UTC:
+		return fmt.Errorf("review disposition created_at: %w", ErrTimestampNotUTC)
+	}
+	return nil
+}
+
 // Validate reports whether a review record is identified, attributable,
 // exact-base/head bound, completed, and internally consistent.
 func (r ReviewRecord) Validate() error {

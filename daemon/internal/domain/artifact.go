@@ -77,11 +77,11 @@ func (p Provenance) clone() Provenance {
 // trusted policy in NewArtifact and never taken from caller input; see
 // ArtifactInput.
 type Artifact struct {
-	ID              ArtifactID `json:"id"`
-	Type            string     `json:"type"`
-	Digest          Digest     `json:"digest"`
-	Provenance      Provenance `json:"provenance"`
-	PublishEligible bool       `json:"publish_eligible"`
+	ID              ArtifactID   `json:"id"`
+	Type            ArtifactKind `json:"type"`
+	Digest          Digest       `json:"digest"`
+	Provenance      Provenance   `json:"provenance"`
+	PublishEligible bool         `json:"publish_eligible"`
 }
 
 // Validate reports whether the artifact is well-formed. It is the backstop for
@@ -95,8 +95,8 @@ func (a Artifact) Validate() error {
 	if a.ID == "" {
 		return fmt.Errorf("artifact id: %w", ErrEmptyID)
 	}
-	if a.Type == "" {
-		return fmt.Errorf("artifact %s type: %w", a.ID, ErrEmptyField)
+	if !a.Type.valid() {
+		return fmt.Errorf("artifact %s type %q: %w", a.ID, a.Type, ErrInvalidArtifactKind)
 	}
 	if a.Digest == "" {
 		return fmt.Errorf("artifact %s digest: %w", a.ID, ErrEmptyField)
@@ -164,7 +164,7 @@ func cloneArtifacts(in []Artifact) []Artifact {
 // §5.15 rule 2).
 type ArtifactInput struct {
 	ID         ArtifactID
-	Type       string
+	Type       ArtifactKind
 	Digest     Digest
 	Provenance Provenance
 }

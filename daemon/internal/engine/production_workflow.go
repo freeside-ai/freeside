@@ -50,11 +50,11 @@ const productionStageName = "implement"
 
 // productionSpecificationArtifactType is the exact role registered by
 // freesided submit for the one invocation-owned production input.
-const productionSpecificationArtifactType = "specification"
+const productionSpecificationArtifactType = domain.ArtifactKindSpecification
 
 // productionPolicyArtifactType is the exact role registered by freesided
 // submit for the canonical resolved-policy bytes.
-const productionPolicyArtifactType = "policy"
+const productionPolicyArtifactType = domain.ArtifactKindPolicy
 
 const (
 	maxProductionPublicationTitleBytes = 256

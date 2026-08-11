@@ -254,7 +254,7 @@ public enum AttentionFixtures {
             evidence_snapshot: [
                 .init(
                     id: "art-log-\(key)",
-                    _type: "verify_log",
+                    _type: .verify_log,
                     digest: evidenceDigest,
                     provenance: provenance,
                     publish_eligible: true

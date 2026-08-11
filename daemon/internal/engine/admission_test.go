@@ -139,7 +139,7 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 	digest := func(fill string) domain.Digest {
 		return domain.Digest("sha256:" + strings.Repeat(fill, 64))
 	}
-	newArtifact := func(id domain.ArtifactID, artifactType string, bodyDigest domain.Digest) domain.Artifact {
+	newArtifact := func(id domain.ArtifactID, artifactType domain.ArtifactKind, bodyDigest domain.Digest) domain.Artifact {
 		t.Helper()
 		artifact, err := domain.NewArtifact(domain.ArtifactInput{
 			ID: id, Type: artifactType, Digest: bodyDigest,
@@ -155,7 +155,7 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 		}
 		return artifact
 	}
-	prior := newArtifact("prior-1", "report", digest("1"))
+	prior := newArtifact("prior-1", domain.ArtifactKindEvidence, digest("1"))
 	image := newArtifact("image-1", imageInputArtifactType, digest("2"))
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutArtifact(ctx, prior); err != nil {
@@ -293,7 +293,7 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 		t.Fatal("stored conversation prefix differs from admitted canonical bytes")
 	}
 
-	malformed := newArtifact("malformed-1", "report", "sha256:not-hex")
+	malformed := newArtifact("malformed-1", domain.ArtifactKindEvidence, "sha256:not-hex")
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutArtifact(ctx, malformed)
 	}); err != nil {

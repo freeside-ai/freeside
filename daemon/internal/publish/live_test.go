@@ -166,7 +166,7 @@ func TestLivePublishEffectivelyOnce(t *testing.T) {
 	approved := map[domain.Digest]bool{recipe: true}
 	artifact, err := domain.NewArtifact(domain.ArtifactInput{
 		ID:     "artifact-live",
-		Type:   "verification-evidence",
+		Type:   domain.ArtifactKindVerificationReport,
 		Digest: artifactDigest,
 		Provenance: domain.Provenance{
 			ProducerClass:            domain.ProducerVerifier,

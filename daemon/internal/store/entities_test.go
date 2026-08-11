@@ -172,7 +172,7 @@ func TestPutImmutableConflict(t *testing.T) {
 			func(tx *store.WriteTx) error { return tx.PutArtifact(ctx, f.artifact) },
 			func(tx *store.WriteTx) error {
 				changed := f.artifact
-				changed.Type = "changed_type"
+				changed.Type = domain.ArtifactKindEvidence
 				return tx.PutArtifact(ctx, changed)
 			},
 		},
