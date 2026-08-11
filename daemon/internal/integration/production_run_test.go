@@ -388,6 +388,7 @@ func TestSubmitProductionRunRefusesPreexistingPublicationIntent(t *testing.T) {
 	runID := "run-prod-occupied-publisher"
 	publicationID := domain.InvocationID("publish-production-" + runID)
 	intent := publish.Intent{
+		FormatVersion:   publish.IntentFormatCurrent,
 		Identity:        submissionDigest(runID, "publication-identity"),
 		InvocationID:    publicationID,
 		Repo:            derivedBase.Repo,

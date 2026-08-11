@@ -751,7 +751,8 @@ func seedReadyBindingAuthority(
 	}
 	publicationInvocationID := domain.InvocationID("publish-production-" + string(runID))
 	intentPayload, err := (publish.Intent{
-		Identity: identity.Digest(), InvocationID: publicationInvocationID,
+		FormatVersion: publish.IntentFormatCurrent,
+		Identity:      identity.Digest(), InvocationID: publicationInvocationID,
 		Repo: "owner/repo", BaseRef: "main", SourceHeadSHA: headSHA,
 		AuthorizationID:       domain.Digest("sha256:" + strings.Repeat("cd", 32)),
 		ProducingInvocationID: invocationID, ReservationRunID: runID,

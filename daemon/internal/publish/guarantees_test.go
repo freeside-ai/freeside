@@ -173,6 +173,7 @@ func TestFinalizeRejectsSubstitutedIntentCoordinates(t *testing.T) {
 		t.Fatalf("derive identity: %v", err)
 	}
 	substituted := Intent{
+		FormatVersion:   IntentFormatCurrent,
 		Identity:        identity.Digest(),
 		InvocationID:    candidate.InvocationID,
 		Repo:            "freeside-ai/foreign",

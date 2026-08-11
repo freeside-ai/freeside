@@ -74,6 +74,11 @@ func commitReservedIntent(
 	}
 	switch {
 	case entry.Kind == kind:
+		if kind == IntentKindPublication {
+			if _, err := DecodeStoredIntent(entry); err != nil {
+				return nil, false, fmt.Errorf("authenticate publication intent %q: %w", key, err)
+			}
+		}
 		return entry.Payload, inserted, nil
 	case entry.Kind == IntentKindReservation && kind == IntentKindPublication:
 		// The row this call converged on is the reservation that was holding
@@ -140,6 +145,9 @@ func promoteReservedIntent(
 	)
 	if err != nil {
 		return nil, false, fmt.Errorf("settle reserved intent %q: %w", key, err)
+	}
+	if _, err := DecodeStoredIntent(settled); err != nil {
+		return nil, false, fmt.Errorf("authenticate settled publication intent %q: %w", key, err)
 	}
 	if !promoted {
 		// The row moved between reading it and settling it. Only the caller's

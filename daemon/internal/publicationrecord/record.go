@@ -17,23 +17,33 @@ import (
 const (
 	IntentKindPublication = "publish.publication"
 	IntentKindOutcome     = "publish.outcome"
+	IntentFormatLegacy    = 1
+	IntentFormatCurrent   = 2
 	branchPrefix          = "freeside/publish/"
 	branchDigestHexLen    = 16
 )
 
 // Intent is the durable publication effect recorded before dispatch.
 type Intent struct {
-	Identity              domain.Digest       `json:"identity"`
-	InvocationID          domain.InvocationID `json:"invocation_id"`
-	Repo                  string              `json:"repo"`
-	BaseRef               string              `json:"base_ref"`
-	SourceHeadSHA         string              `json:"source_head_sha"`
-	AuthorizationID       domain.Digest       `json:"authorization_id"`
-	ProducingInvocationID domain.InvocationID `json:"producing_invocation_id,omitempty"`
-	ReservationRunID      domain.RunID        `json:"reservation_run_id,omitempty"`
+	FormatVersion            int                 `json:"format_version"`
+	Identity                 domain.Digest       `json:"identity"`
+	InvocationID             domain.InvocationID `json:"invocation_id"`
+	Repo                     string              `json:"repo"`
+	BaseRef                  string              `json:"base_ref"`
+	SourceHeadSHA            string              `json:"source_head_sha"`
+	AuthorizationID          domain.Digest       `json:"authorization_id"`
+	DispositionHistoryDigest domain.Digest       `json:"disposition_history_digest,omitempty"`
+	ProducingInvocationID    domain.InvocationID `json:"producing_invocation_id,omitempty"`
+	ReservationRunID         domain.RunID        `json:"reservation_run_id,omitempty"`
 }
 
 func (i Intent) Validate() error {
+	if i.FormatVersion != IntentFormatLegacy && i.FormatVersion != IntentFormatCurrent {
+		return fmt.Errorf("intent: unsupported format version %d", i.FormatVersion)
+	}
+	if i.FormatVersion == IntentFormatLegacy && i.DispositionHistoryDigest != "" {
+		return errors.New("intent: legacy format carries disposition history")
+	}
 	if !contentaddr.Valid(string(i.Identity)) {
 		return fmt.Errorf("intent identity %q is not a publication identity digest", i.Identity)
 	}
@@ -51,6 +61,9 @@ func (i Intent) Validate() error {
 	}
 	if !contentaddr.Valid(string(i.AuthorizationID)) {
 		return fmt.Errorf("intent authorization_id %q is not a digest", i.AuthorizationID)
+	}
+	if i.DispositionHistoryDigest != "" && !contentaddr.Valid(string(i.DispositionHistoryDigest)) {
+		return fmt.Errorf("intent disposition_history_digest %q is not a digest", i.DispositionHistoryDigest)
 	}
 	if (i.ProducingInvocationID == "") != (i.ReservationRunID == "") {
 		return errors.New("intent: producing invocation and reservation run must be present together")

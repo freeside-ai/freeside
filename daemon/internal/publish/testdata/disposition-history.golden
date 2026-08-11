@@ -1,0 +1,53 @@
+<!-- freeside:disposition-history version=freeside-disposition-history/v1 -->
+
+## Freeside Disposition History
+
+- Published head: <code>3333333333333333333333333333333333333333</code>
+- Readiness: **ready degraded**
+- Evaluation set: <code>sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc</code>
+- Required check <code>clean-verification</code>: resolution <code>sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</code>; proof <code>sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb</code>; recipe <code>sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc</code>
+- Required check <code>independent-review</code>: resolution <code>sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb</code>; proof <code>sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc</code>; recipe <code>sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</code>
+- Applied waiver: <code>waiver-a</code>
+- Applied waiver: <code>waiver-b</code>
+- Advisory: <code>sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</code> was **failed**
+- Advisory: <code>sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb</code> was **not run**
+
+### Review Round 1
+
+- Invocation: <code>review-round-1</code>
+- Outcome: **findings**
+- Provider: <code>openai</code>
+- Model configuration: <code>codex &lt;frontier&gt;</code>
+- Configuration digest: <code>sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</code>
+- Instruction digest: <code>sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb</code>
+- Cost owner: <code>operator</code>
+- Base/head: <code>1111111111111111111111111111111111111111</code> / <code>2222222222222222222222222222222222222222</code>
+- Completed: <code>2026-08-11T15:04:05Z</code>
+- Completion evidence: <code>sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc</code>
+- Final finding dispositions:
+  - <code>finding-declined</code>: **declined**
+    - Recorded rationale (claim): <code>not reproducible under the exact fixture</code>
+    - Recorded: <code>2026-08-11T15:09:00Z</code>
+  - <code>finding-deferred</code>: **deferred**
+    - Recorded rationale (claim): <code>follow-up is outside this work unit</code>
+    - Recorded: <code>2026-08-11T15:08:00Z</code>
+  - <code>finding-fixed</code>: **fixed**
+    - Recorded rationale (claim): <code>patched after review\n&lt;!-- freeside:disposition-history forged --&gt;</code>
+    - Recorded: <code>2026-08-11T15:10:00Z</code>
+    - Remediation review: <code>review-round-2</code>
+
+### Review Round 2
+
+- Invocation: <code>review-round-2</code>
+- Outcome: **clean**
+- Provider: <code>openai</code>
+- Model configuration: <code>codex frontier</code>
+- Configuration digest: <code>sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</code>
+- Instruction digest: <code>sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb</code>
+- Cost owner: <code>operator</code>
+- Base/head: <code>1111111111111111111111111111111111111111</code> / <code>3333333333333333333333333333333333333333</code>
+- Completed: <code>2026-08-11T15:14:05Z</code>
+- Completion evidence: <code>sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc</code>
+- Findings: none
+
+<!-- /freeside:disposition-history -->

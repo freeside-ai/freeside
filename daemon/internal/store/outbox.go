@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 // QueueEntry is one inbox or outbox row (§5.9): the two queues deliberately
@@ -19,6 +22,8 @@ type QueueEntry struct {
 	IdempotencyKey string
 	Kind           string
 	Payload        []byte
+	PayloadVersion int
+	PayloadDigest  string
 	Status         string
 	CreatedAt      time.Time
 }
@@ -55,19 +60,19 @@ const (
 
 const (
 	enqueueOutboxSQL = `
-INSERT INTO outbox (idempotency_key, kind, payload, created_at)
-VALUES (?, ?, ?, ?)
+INSERT INTO outbox (idempotency_key, kind, payload, payload_version, payload_digest, created_at)
+VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT (idempotency_key) DO NOTHING`
 	selectOutboxSQL = `
-SELECT id, idempotency_key, kind, payload, status, created_at
+SELECT id, idempotency_key, kind, payload, payload_version, payload_digest, status, created_at
 FROM outbox WHERE idempotency_key = ?`
 	listOutboxByStatusSQL = `
-SELECT id, idempotency_key, kind, payload, status, created_at
+SELECT id, idempotency_key, kind, payload, payload_version, payload_digest, status, created_at
 FROM outbox WHERE kind = ? AND status = ? ORDER BY id`
 	markOutboxDispatchedSQL = `
 UPDATE outbox SET status = ? WHERE idempotency_key = ? AND status = ?`
 	promoteOutboxSQL = `
-UPDATE outbox SET kind = ?, payload = ?
+UPDATE outbox SET kind = ?, payload = ?, payload_version = ?, payload_digest = ?
 WHERE idempotency_key = ? AND kind = ? AND payload = ? AND status = ?`
 
 	recordInboxSQL = `
@@ -85,7 +90,7 @@ FROM inbox WHERE idempotency_key = ?`
 // Call it inside the Write transaction that commits the decision the effect
 // belongs to (§5.14 discuss semantics).
 func (tx *InternalTx) EnqueueOutbox(ctx context.Context, key, kind string, payload []byte) (QueueEntry, bool, error) {
-	entry, inserted, err := tx.record(ctx, enqueueOutboxSQL, selectOutboxSQL, key, kind, payload)
+	entry, inserted, err := tx.recordOutbox(ctx, key, kind, payload)
 	if err != nil {
 		return QueueEntry{}, false, fmt.Errorf("enqueue outbox %q: %w", key, err)
 	}
@@ -126,12 +131,18 @@ func (tx *ReadTx) listOutboxByStatus(
 			entry  QueueEntry
 			stored string
 		)
-		if err := rows.Scan(&entry.ID, &entry.IdempotencyKey, &entry.Kind, &entry.Payload, &entry.Status, &stored); err != nil {
+		if err := rows.Scan(
+			&entry.ID, &entry.IdempotencyKey, &entry.Kind, &entry.Payload,
+			&entry.PayloadVersion, &entry.PayloadDigest, &entry.Status, &stored,
+		); err != nil {
 			return nil, fmt.Errorf("list outbox %q status %q: %w", kind, status, err)
 		}
 		entry.CreatedAt, err = parseTime(stored)
 		if err != nil {
 			return nil, fmt.Errorf("list outbox %q status %q: stored created_at invalid: %w", kind, status, err)
+		}
+		if err := validateOutboxPayload(entry); err != nil {
+			return nil, fmt.Errorf("list outbox %q status %q: %w", kind, status, err)
 		}
 		entries = append(entries, entry)
 	}
@@ -153,7 +164,7 @@ func (tx *ReadTx) GetOutbox(ctx context.Context, key string) (QueueEntry, error)
 	)
 	err := tx.tx.QueryRowContext(ctx, selectOutboxSQL, key).Scan(
 		&entry.ID, &entry.IdempotencyKey, &entry.Kind, &entry.Payload,
-		&entry.Status, &stored,
+		&entry.PayloadVersion, &entry.PayloadDigest, &entry.Status, &stored,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return QueueEntry{}, fmt.Errorf("get outbox %q: %w", key, ErrNotFound)
@@ -167,6 +178,9 @@ func (tx *ReadTx) GetOutbox(ctx context.Context, key string) (QueueEntry, error)
 	}
 	if !entry.validStatus() {
 		return QueueEntry{}, fmt.Errorf("get outbox %q: invalid status %q", key, entry.Status)
+	}
+	if err := validateOutboxPayload(entry); err != nil {
+		return QueueEntry{}, fmt.Errorf("get outbox %q: %w", key, err)
 	}
 	return entry, nil
 }
@@ -248,8 +262,11 @@ func (tx *InternalTx) PromoteOutbox(
 	if payload == nil {
 		payload = []byte{}
 	}
+	version := outboxPayloadVersion(toKind)
+	digest := contentaddr.Sum(payload)
 	res, err := tx.tx.ExecContext(ctx, promoteOutboxSQL,
-		toKind, payload, key, fromKind, expectPayload, outboxStatusPending)
+		toKind, payload, version, digest,
+		key, fromKind, expectPayload, outboxStatusPending)
 	if err != nil {
 		return QueueEntry{}, false, fmt.Errorf("promote outbox %q: %w", key, err)
 	}
@@ -267,6 +284,61 @@ func (tx *InternalTx) PromoteOutbox(
 			"promote outbox %q: row holds kind %q after promotion", key, entry.Kind)
 	}
 	return entry, affected > 0, nil
+}
+
+func (tx *InternalTx) recordOutbox(
+	ctx context.Context, key, kind string, payload []byte,
+) (QueueEntry, bool, error) {
+	if key == "" {
+		return QueueEntry{}, false, errors.New("empty idempotency key")
+	}
+	if kind == "" {
+		return QueueEntry{}, false, errors.New("empty kind")
+	}
+	if payload == nil {
+		payload = []byte{}
+	}
+	version := outboxPayloadVersion(kind)
+	digest := contentaddr.Sum(payload)
+	createdAt := formatTime(time.Now())
+	res, err := tx.tx.ExecContext(
+		ctx, enqueueOutboxSQL, key, kind, payload, version, digest, createdAt,
+	)
+	if err != nil {
+		return QueueEntry{}, false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return QueueEntry{}, false, err
+	}
+	entry, err := tx.GetOutbox(ctx, key)
+	if err != nil {
+		return QueueEntry{}, false, err
+	}
+	return entry, affected > 0, nil
+}
+
+func outboxPayloadVersion(kind string) int {
+	if kind == readyPublicationIntentKind {
+		return 2
+	}
+	return 1
+}
+
+func validateOutboxPayload(entry QueueEntry) error {
+	if entry.PayloadVersion != 1 && entry.PayloadVersion != 2 {
+		return fmt.Errorf("stored payload version %d is invalid", entry.PayloadVersion)
+	}
+	if !contentaddr.Valid(entry.PayloadDigest) {
+		return fmt.Errorf("stored payload digest %q is invalid", entry.PayloadDigest)
+	}
+	if got := contentaddr.Sum(entry.Payload); got != entry.PayloadDigest {
+		return fmt.Errorf(
+			"stored payload digest %s, computed %s: %w",
+			entry.PayloadDigest, got, domain.ErrParentKeyMismatch,
+		)
+	}
+	return nil
 }
 
 // RecordInbox dedups an externally-triggered intake under its idempotency

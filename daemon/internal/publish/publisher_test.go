@@ -2,18 +2,21 @@ package publish_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -561,6 +564,133 @@ func testCandidateAtHead(t *testing.T, headSHA string) publish.Candidate {
 	}
 }
 
+func testDispositionHistory(
+	t *testing.T, st *store.Store, candidate publish.Candidate,
+) *publish.DispositionHistory {
+	t.Helper()
+	runID := candidate.RunID
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		_, err := tx.GetRun(t.Context(), runID)
+		return err
+	}); errors.Is(err, store.ErrNotFound) {
+		if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+			return tx.PutRun(t.Context(), domain.Run{
+				ID: runID, ProjectID: "project-disposition-history",
+				SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+			})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	var auth domain.CandidateAuthorization
+	var profile domain.AutomationTrustProfile
+	if candidate.AuthorizationID == nil {
+		t.Fatal("test disposition candidate has no authorization")
+	}
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		auth, err = tx.GetCandidateAuthorization(t.Context(), *candidate.AuthorizationID)
+		if err != nil {
+			return err
+		}
+		profile, err = tx.LatestTrustProfile(t.Context(), candidate.Repo)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	record, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: "review-" + domain.InvocationID(runID), RunID: runID, Round: 1,
+		Provider: "openai", ModelConfiguration: "codex/high",
+		ConfigurationDigest: profile.Review.ConfigDigest,
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		CostOwner:           "operator", BaseSHA: auth.BaseSHA, HeadSHA: candidate.HeadSHA,
+		CompletedAt: fixtureTime, CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
+		Outcome: domain.ReviewClean,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.PutReviewRecord(t.Context(), record, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var run domain.Run
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(t.Context(), runID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	generation := st.VerificationFloorRegistryGeneration()
+	setDigest, err := domain.ProductionRequirementSetDigest(generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitions := domain.ProductionRequirementDefinitions()
+	resolutions := make([]domain.RequirementResolution, 0, len(definitions))
+	for _, definition := range definitions {
+		resolution, err := domain.NewRequirementResolution(domain.RequirementResolutionInput{
+			RequirementKey: definition.Key, CheckClass: definition.Class,
+			Kind: definition.Kind, Applicable: definition.Applicable,
+			BaseDependent: definition.BaseDependent, RequirementSetDigest: setDigest,
+			FloorRegistryGeneration: generation, ResolvedPolicyDigest: run.PolicyDigest,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resolutions = append(resolutions, resolution)
+	}
+	base := domain.BaseRevision{
+		Repo: candidate.Repo, RepositoryID: profile.RepositoryID,
+		BaseRef: candidate.BaseRef, BaseSHA: auth.BaseSHA,
+	}
+	verificationProof, err := domain.NewCheckProof(
+		resolutions[0], candidate.HeadSHA, &base, *candidate.RecipeDigest,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewRecipeBody, err := json.Marshal(struct {
+		Configuration domain.Digest `json:"configuration"`
+		Instructions  domain.Digest `json:"instructions"`
+	}{record.ConfigurationDigest, record.InstructionDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewRecipe := domain.Digest(contentaddr.Sum(reviewRecipeBody))
+	reviewProof, err := domain.NewCheckProof(
+		resolutions[1], candidate.HeadSHA, &base, reviewRecipe,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+		for _, resolution := range resolutions {
+			if err := tx.RecordRequirementResolution(t.Context(), resolution); err != nil {
+				return err
+			}
+		}
+		if err := tx.RecordCheckProof(t.Context(), verificationProof); err != nil {
+			return err
+		}
+		tx.AuthorizeIndependentReviewRecipe(reviewRecipe)
+		return tx.RecordCheckProof(t.Context(), reviewProof)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	history, err := publish.LoadDispositionHistory(
+		t.Context(), st, candidate, record.InstructionDigest,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &history
+}
+
 // newTestPublisher wires a publisher whose drift gate passes for
 // testCandidate: a conformant in-memory trust source. Tests exercising the
 // drift gate itself use newTestPublisherWithTrust.
@@ -1005,7 +1135,7 @@ func TestPublishRefusesTrustProfileDrift(t *testing.T) {
 		CommitPlan:                 domain.CommitPlanSingleCommit,
 		MessageRuleset:             domain.MessageRulesetGitHub1,
 		WorkflowAuditDigest:        "sha256:revised-audit",
-		Review:                     domain.ReviewSettings{Mode: domain.ReviewFreesideInvoked, ConfigDigest: "sha256:review-config"},
+		Review:                     domain.ReviewSettings{Mode: domain.ReviewFreesideInvoked, ConfigDigest: testRecipe},
 	})
 	if err != nil {
 		t.Fatalf("superseded profile: %v", err)
@@ -1341,6 +1471,245 @@ func TestVerifyOutcomeBindsUniqueLivePullRequestNumber(t *testing.T) {
 		context.Background(), candidate, identity, outcome,
 	); !errors.Is(err, publish.ErrPublicationConflict) {
 		t.Fatalf("duplicate identity PR error = %v", err)
+	}
+}
+
+func TestConvergeOutcomeRepairsExactDispositionHistoryWithoutCreating(t *testing.T) {
+	t.Parallel()
+	st := newExecutionBoundStore(t, executionChainOptions{})
+	seedDecisionRecords(t, st)
+	candidate := testCandidate(t)
+	candidate.RunID = "run-converge-history"
+	candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+	identity := testCandidateIdentity(t)
+	outcome := fixtureOutcome()
+	gh := newFakeGitHub(t)
+	gh.prs = append(gh.prs, fakePR{
+		Number: outcome.PRNumber, State: "open", Title: candidate.Title,
+		Body: identity.Marker(), HeadRef: identity.BranchName(), HeadSHA: candidate.HeadSHA,
+	})
+	p := storeBackedPublisher(t, st, gh, fixedWorkflowAuditor{audit: testWorkflowAudit(t)})
+	substituted := outcome
+	substituted.PRNumber++
+	if err := p.ConvergeOutcome(t.Context(), candidate, testApprovedRecipes(), identity, substituted); !errors.Is(err, publish.ErrPublicationConflict) {
+		t.Fatalf("substituted outcome number error = %v", err)
+	}
+	if writes := gh.writeRequests(); len(writes) != 0 {
+		t.Fatalf("substituted outcome mutated PR before refusal: %v", writes)
+	}
+	if err := p.ConvergeOutcome(t.Context(), candidate, nil, identity, outcome); !errors.Is(err, domain.ErrUnapprovedRecipe) {
+		t.Fatalf("revoked recipe repair error = %v, want unapproved recipe", err)
+	}
+	if writes := gh.writeRequests(); len(writes) != 0 {
+		t.Fatalf("revoked recipe mutated PR before refusal: %v", writes)
+	}
+	if err := p.ConvergeOutcome(t.Context(), candidate, testApprovedRecipes(), identity, outcome); err != nil {
+		t.Fatalf("ConvergeOutcome: %v", err)
+	}
+	if got := gh.prs[0].Body; strings.Count(got, "<!-- freeside:disposition-history ") != 1 ||
+		strings.Count(got, "<!-- /freeside:disposition-history -->") != 1 {
+		t.Fatalf("recovered PR body does not contain one exact history section:\n%s", got)
+	}
+	writes := gh.writeRequests()
+	if len(writes) != 1 || !strings.HasPrefix(writes[0], http.MethodPatch+" ") {
+		t.Fatalf("recovery writes = %v, want one PATCH", writes)
+	}
+	gh.prs[0].State = "closed"
+	if err := p.ConvergeOutcome(t.Context(), candidate, testApprovedRecipes(), identity, outcome); err != nil {
+		t.Fatalf("ConvergeOutcome exact closed PR: %v", err)
+	}
+	gh.prs[0].Body = identity.Marker()
+	if err := p.ConvergeOutcome(t.Context(), candidate, testApprovedRecipes(), identity, outcome); !errors.Is(err, publish.ErrPublicationConflict) {
+		t.Fatalf("closed PR missing history error = %v", err)
+	}
+	if after := len(gh.writeRequests()); after != len(writes) {
+		t.Fatalf("closed recovery mutated PR: writes %d -> %d", len(writes), after)
+	}
+
+	gh.prs = nil
+	before := len(gh.writeRequests())
+	if err := p.ConvergeOutcome(t.Context(), candidate, testApprovedRecipes(), identity, outcome); !errors.Is(err, publish.ErrPublicationConflict) {
+		t.Fatalf("missing outcome PR error = %v", err)
+	}
+	if after := len(gh.writeRequests()); after != before {
+		t.Fatalf("missing outcome created a replacement: writes %d -> %d", before, after)
+	}
+}
+
+func TestConvergeOutcomeRefusesTrustDriftBeforeRepair(t *testing.T) {
+	t.Parallel()
+	st := newExecutionBoundStore(t, executionChainOptions{})
+	seedDecisionRecords(t, st)
+	candidate := testCandidate(t)
+	candidate.RunID = "run-converge-trust-drift"
+	candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+	identity := testCandidateIdentity(t)
+	outcome := fixtureOutcome()
+	gh := newFakeGitHub(t)
+	gh.prs = append(gh.prs, fakePR{
+		Number: outcome.PRNumber, State: "open", Title: candidate.Title,
+		Body: identity.Marker(), HeadRef: identity.BranchName(), HeadSHA: candidate.HeadSHA,
+	})
+	p := storeBackedPublisher(t, st, gh, fixedWorkflowAuditor{audit: testWorkflowAudit(t)})
+	revised, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: testTrustRepo, RepositoryID: 123456789,
+		PRExecution:                domain.PRExecutionAuditedSameRepo,
+		CandidateAutomationChanges: domain.AutomationChangesBlocked,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadOnly,
+		CommitPlan:                 domain.CommitPlanSingleCommit,
+		MessageRuleset:             domain.MessageRulesetGitHub1,
+		WorkflowAuditDigest:        "sha256:revised-audit",
+		Review: domain.ReviewSettings{
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: testRecipe,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustChanged := false
+	gh.onRequest = func(method, path string) {
+		if trustChanged || method != http.MethodGet || !strings.HasSuffix(path, "/pulls") {
+			return
+		}
+		trustChanged = true
+		if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+			return tx.RecordTrustProfile(t.Context(), revised, fixtureTime.Add(time.Hour))
+		}); err != nil {
+			t.Error(err)
+		}
+	}
+	if err := p.ConvergeOutcome(
+		t.Context(), candidate, testApprovedRecipes(), identity, outcome,
+	); !errors.Is(err, publish.ErrTrustProfileDrift) {
+		t.Fatalf("trust-drift repair error = %v, want trust-profile drift", err)
+	}
+	if writes := gh.writeRequests(); len(writes) != 0 {
+		t.Fatalf("trust-drift repair reached forge: %v", writes)
+	}
+	if !trustChanged {
+		t.Fatal("test did not change trust during forge observation")
+	}
+}
+
+func TestConvergeOutcomeRefusesAuthorizationLossBeforeRepair(t *testing.T) {
+	t.Parallel()
+	candidate := testCandidate(t)
+	identity := testCandidateIdentity(t)
+	outcome := fixtureOutcome()
+	gh := newFakeGitHub(t)
+	gh.prs = append(gh.prs, fakePR{
+		Number: outcome.PRNumber, State: "open", Title: candidate.Title,
+		Body: identity.Marker(), HeadRef: identity.BranchName(), HeadSHA: candidate.HeadSHA,
+	})
+	p := newTestPublisherFull(
+		t, gh, newMemoryLedger(), conformantTrust(t), authzWith(),
+	)
+	if err := p.ConvergeOutcome(
+		t.Context(), candidate, testApprovedRecipes(), identity, outcome,
+	); !errors.Is(err, publish.ErrUnauthorizedPublication) {
+		t.Fatalf("authorization-loss repair error = %v, want unauthorized publication", err)
+	}
+	if writes := gh.writeRequests(); len(writes) != 0 {
+		t.Fatalf("authorization-loss repair reached forge: %v", writes)
+	}
+}
+
+func TestConvergeOutcomeRevalidatesDispositionHistoryBeforeRepair(t *testing.T) {
+	t.Parallel()
+	st := newExecutionBoundStore(t, executionChainOptions{})
+	seedDecisionRecords(t, st)
+	candidate := testCandidate(t)
+	candidate.RunID = "run-converge-late-review"
+	candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+	identity := testCandidateIdentity(t)
+	outcome := fixtureOutcome()
+	gh := newFakeGitHub(t)
+	gh.prs = append(gh.prs, fakePR{
+		Number: outcome.PRNumber, State: "open", Title: candidate.Title,
+		Body: identity.Marker(), HeadRef: identity.BranchName(), HeadSHA: candidate.HeadSHA,
+	})
+	lateFailureRecorded := false
+	gh.onRequest = func(method, path string) {
+		if lateFailureRecorded || method != http.MethodGet || !strings.HasSuffix(path, "/pulls") {
+			return
+		}
+		lateFailureRecorded = true
+		failure := domain.ReviewFailure{
+			InvocationID: "review-failure-during-repair", RunID: candidate.RunID, Round: 2,
+			BaseSHA: testOtherSHA, HeadSHA: candidate.HeadSHA,
+			Class: domain.ReviewFailureContradiction, Reason: "late authoritative failure",
+			ObservedAt: fixtureTime.Add(time.Minute),
+		}
+		if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+			return tx.PutReviewFailure(t.Context(), failure)
+		}); err != nil {
+			t.Error(err)
+		}
+	}
+	p := storeBackedPublisher(t, st, gh, fixedWorkflowAuditor{audit: testWorkflowAudit(t)})
+	if err := p.ConvergeOutcome(
+		t.Context(), candidate, testApprovedRecipes(), identity, outcome,
+	); err == nil || !strings.Contains(err.Error(), "latest review failure supersedes clean review") {
+		t.Fatalf("late-history repair error = %v", err)
+	}
+	if !lateFailureRecorded {
+		t.Fatal("test did not change disposition history during forge observation")
+	}
+	if writes := gh.writeRequests(); len(writes) != 0 {
+		t.Fatalf("late-history repair reached forge mutation: %v", writes)
+	}
+}
+
+func TestConvergeOutcomeRevalidatesPersistedReadinessProofsBeforeRepair(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "store.db")
+	st := newExecutionBoundStoreAt(t, path, executionChainOptions{})
+	seedDecisionRecords(t, st)
+	candidate := testCandidate(t)
+	candidate.RunID = "run-converge-missing-proof"
+	candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+	identity := testCandidateIdentity(t)
+	outcome := fixtureOutcome()
+	gh := newFakeGitHub(t)
+	gh.prs = append(gh.prs, fakePR{
+		Number: outcome.PRNumber, State: "open", Title: candidate.Title,
+		Body: identity.Marker(), HeadRef: identity.BranchName(), HeadSHA: candidate.HeadSHA,
+	})
+	proofDeleted := false
+	gh.onRequest = func(method, requestPath string) {
+		if proofDeleted || method != http.MethodGet || !strings.HasSuffix(requestPath, "/pulls") {
+			return
+		}
+		proofDeleted = true
+		raw, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		result, deleteErr := raw.ExecContext(
+			t.Context(),
+			"DELETE FROM check_proofs WHERE rowid = (SELECT MIN(rowid) FROM check_proofs)",
+		)
+		closeErr := raw.Close()
+		if deleteErr != nil || closeErr != nil {
+			t.Error(errors.Join(deleteErr, closeErr))
+			return
+		}
+		if deleted, err := result.RowsAffected(); err != nil || deleted != 1 {
+			t.Errorf("readiness proof rows deleted = %d, %v, want 1", deleted, err)
+		}
+	}
+	p := storeBackedPublisher(t, st, gh, fixedWorkflowAuditor{audit: testWorkflowAudit(t)})
+	if err := p.ConvergeOutcome(
+		t.Context(), candidate, testApprovedRecipes(), identity, outcome,
+	); err == nil || !strings.Contains(err.Error(), "check proof") {
+		t.Fatalf("missing-proof repair error = %v", err)
+	}
+	if !proofDeleted {
+		t.Fatal("test did not delete a readiness proof during forge observation")
+	}
+	if writes := gh.writeRequests(); len(writes) != 0 {
+		t.Fatalf("missing-proof repair reached forge mutation: %v", writes)
 	}
 }
 

@@ -58,6 +58,52 @@ func TestReviewRecordReadRevalidatesCanonicalBody(t *testing.T) {
 	}
 }
 
+func TestListReviewRecordsRejectsRunKeyOmissionTamper(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st, err := Open(ctx, t.TempDir()+"/review-list.db", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	first := domain.Run{ID: "run-review-list", ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
+	second := domain.Run{ID: "run-review-list-foreign", ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
+	record, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: "review-list-1", RunID: first.ID, Round: 1,
+		Provider: "openai", ModelConfiguration: "gpt-codex/high",
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		CostOwner:           "owner", BaseSHA: "base", HeadSHA: "head",
+		CompletedAt:        time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC),
+		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)), Outcome: domain.ReviewClean,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		if err := tx.PutRun(ctx, first); err != nil {
+			return err
+		}
+		if err := tx.PutRun(ctx, second); err != nil {
+			return err
+		}
+		return tx.PutReviewRecord(ctx, record, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.ExecContext(ctx,
+		`UPDATE review_records SET run_id = ? WHERE invocation_id = ?`, second.ID, record.InvocationID); err != nil {
+		t.Fatal(err)
+	}
+	err = st.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.ListReviewRecords(ctx, first.ID)
+		return err
+	})
+	if !errors.Is(err, errRowInconsistent) {
+		t.Fatalf("run-key omission tamper list = %v, want row inconsistency", err)
+	}
+}
+
 func TestReviewRecordReadPreservesLegacyMissingInstructionAuthority(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

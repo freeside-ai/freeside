@@ -161,7 +161,7 @@ func validateExecutionReservationState(
 			claim.InvocationID, ErrInvocationReserved,
 		)
 	case invocationCommitted:
-		intent, err := DecodeIntent(entry.Payload)
+		intent, err := DecodeStoredIntent(entry)
 		if err != nil {
 			return fmt.Errorf(
 				"authenticate execution publication intent %q: %w",

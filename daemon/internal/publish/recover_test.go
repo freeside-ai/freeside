@@ -298,6 +298,7 @@ func TestDrainReGateDriftLeavesPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	intentPayload, err := publish.Intent{
+		FormatVersion:   publish.IntentFormatCurrent,
 		Identity:        id.Digest(),
 		InvocationID:    "inv-0001",
 		Repo:            cand.Repo,
@@ -349,6 +350,7 @@ func TestDrainTrustDriftLeavesPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	intentPayload, err := publish.Intent{
+		FormatVersion:   publish.IntentFormatCurrent,
 		Identity:        id.Digest(),
 		InvocationID:    "inv-0001",
 		Repo:            cand.Repo,

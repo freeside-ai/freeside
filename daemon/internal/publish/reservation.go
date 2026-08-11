@@ -48,7 +48,7 @@ func PublicationBackupPayloadDigests(entry store.QueueEntry) ([]domain.Digest, e
 	if entry.Kind != IntentKindPublication {
 		return nil, domain.ErrParentKeyMismatch
 	}
-	intent, err := DecodeIntent(entry.Payload)
+	intent, err := DecodeStoredIntent(entry)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +291,7 @@ func classifyInvocation(
 		// claim reserved is this claim's own promoted intent. What is checked
 		// is that the payload names the invocation its key does, so a foreign
 		// payload filed under this key cannot pass as ours.
-		intent, err := DecodeIntent(entry.Payload)
+		intent, err := DecodeStoredIntent(entry)
 		if err != nil {
 			return "", store.QueueEntry{}, fmt.Errorf(
 				"publication invocation %q: %w: %w", key, err, domain.ErrParentKeyMismatch,

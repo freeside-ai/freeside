@@ -153,6 +153,15 @@ func (f legacyFakePRFixture) seed(t *testing.T, ctx context.Context, db *sql.DB)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var legacyIntent map[string]json.RawMessage
+	if err := json.Unmarshal(intentPayload, &legacyIntent); err != nil {
+		t.Fatal(err)
+	}
+	delete(legacyIntent, "format_version")
+	intentPayload, err = json.Marshal(legacyIntent)
+	if err != nil {
+		t.Fatal(err)
+	}
 	outcomePayload, err := json.Marshal(f.outcome)
 	if err != nil {
 		t.Fatal(err)

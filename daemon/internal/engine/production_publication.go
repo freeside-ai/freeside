@@ -40,6 +40,8 @@ const (
 	defaultProductionRecipeReadTimeout   = 2 * time.Minute
 	defaultProductionHoldRetryInterval   = 30 * time.Second
 	productionBlockRecipeRevoked         = "Current trust no longer approves the admitted project-image recipe."
+	productionBlockRepairRecipeRevoked   = "Publication is durably held because current trust no longer approves the verification recipe required to repair the pull request. Restore that approval before repairing external state."
+	productionBlockRepairTrustRefused    = "Publication is durably held because the current trust profile or candidate authorization no longer permits repairing the pull request. Restore that authority before repairing external state."
 	productionBlockVerification          = "Verification or current policy findings blocked production publication."
 	productionBlockTrust                 = "Current trust state definitively blocked publication."
 	productionBlockBaseAdvanced          = "The target base advanced after admission; rerun and reverify against the current base."
@@ -1428,34 +1430,77 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		return productionTaskOutcome{}, err
 	}
 	if found {
-		candidate := productionCandidate(task, binding, checkpoint, adoptedProfile)
-		if readyExists {
-			published, err := w.loadReadyPublicationOutcome(
-				ctx, task, binding, checkpoint, candidate,
-			)
-			if err != nil {
-				return productionTaskOutcome{}, err
-			}
-			return w.completePublishedTask(ctx, task, binding, checkpoint, published, reviewInstructions)
-		}
-		published, outcomeFound, err := w.loadPublicationOutcome(
-			ctx, task, candidate, w.publisher.VerifyOutcome,
-		)
+		finalizedIntent, err := w.hasFinalizedPublicationIntent(ctx, task.PublicationID)
 		if err != nil {
-			if isDurablePublicationConflict(err) {
-				return w.holdBlockedTask(
-					ctx, task, imported,
-					"Publication is durably held because the external branch or pull request conflicts with the committed identity. Inspect and repair that external state to resume recovery.",
-					domain.HoldExternalConflict,
-				)
-			}
-			if productionPublicationPermanentExternalFailure(err) {
-				return w.holdBlockedTask(ctx, task, imported, productionBlockExternal, domain.HoldExternalConflict)
-			}
 			return productionTaskOutcome{}, err
 		}
-		if outcomeFound {
-			return w.completePublishedTask(ctx, task, binding, checkpoint, published, reviewInstructions)
+		if readyExists || finalizedIntent {
+			_, _, err := w.assertReviewedCandidate(
+				ctx, task, binding, checkpoint, reviewInstructions,
+			)
+			if err != nil {
+				if errors.Is(err, domain.ErrParentKeyMismatch) {
+					return w.holdBlockedTask(
+						ctx, task, checkpoint.Imported,
+						"Publication is durably held because this published run lacks a clean, candidate-bound review record under the current trust-approved reviewer configuration. Restore the approved reviewer configuration or disposition the run manually.",
+						domain.HoldTrustBlocked,
+					)
+				}
+				return productionTaskOutcome{}, err
+			}
+			candidate := productionCandidate(task, binding, checkpoint, adoptedProfile, nil)
+			history, err := publish.LoadDispositionHistory(
+				ctx, w.store, candidate, reviewInstructions.ResultDigest,
+			)
+			if err != nil {
+				if errors.Is(err, domain.ErrParentKeyMismatch) {
+					return w.holdBlockedTask(
+						ctx, task, checkpoint.Imported,
+						"Publication is durably held because its disposition history no longer matches the current review and readiness authority.",
+						domain.HoldTrustBlocked,
+					)
+				}
+				return productionTaskOutcome{}, fmt.Errorf("load recovered publication disposition history: %w", err)
+			}
+			candidate.DispositionHistory = &history
+			if readyExists {
+				published, err := w.loadReadyPublicationOutcome(
+					ctx, task, binding, checkpoint, candidate,
+				)
+				if err != nil {
+					if held, handled, holdErr := w.holdPublicationRepairRefusal(
+						ctx, task, checkpoint.Imported, err,
+					); handled {
+						return held, holdErr
+					}
+					return productionTaskOutcome{}, err
+				}
+				return w.completePublishedTask(ctx, task, binding, checkpoint, published, reviewInstructions)
+			}
+			published, outcomeFound, err := w.loadPublicationOutcome(
+				ctx, task, candidate, w.convergePublicationOutcome,
+			)
+			if err != nil {
+				if isDurablePublicationConflict(err) {
+					return w.holdBlockedTask(
+						ctx, task, imported,
+						"Publication is durably held because the external branch or pull request conflicts with the committed identity. Inspect and repair that external state to resume recovery.",
+						domain.HoldExternalConflict,
+					)
+				}
+				if productionPublicationPermanentExternalFailure(err) {
+					return w.holdBlockedTask(ctx, task, imported, productionBlockExternal, domain.HoldExternalConflict)
+				}
+				if held, handled, holdErr := w.holdPublicationRepairRefusal(
+					ctx, task, checkpoint.Imported, err,
+				); handled {
+					return held, holdErr
+				}
+				return productionTaskOutcome{}, err
+			}
+			if outcomeFound {
+				return w.completePublishedTask(ctx, task, binding, checkpoint, published, reviewInstructions)
+			}
 		}
 	}
 	if !w.approvedRecipes[binding.image.RecipeDigest] {
@@ -1535,14 +1580,20 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if err := persistReadiness(ctx); err != nil {
 		return productionTaskOutcome{}, err
 	}
-
 	adoptedProfile, adoptedErr := w.adoptedReviewProfileDigest(ctx, binding)
 	if adoptedErr != nil {
 		return productionTaskOutcome{}, adoptedErr
 	}
-	candidate := productionCandidate(task, binding, checkpoint, adoptedProfile)
+	candidate := productionCandidate(task, binding, checkpoint, adoptedProfile, nil)
+	dispositionHistory, err := publish.LoadDispositionHistory(
+		ctx, w.store, candidate, reviewInstructions.ResultDigest,
+	)
+	if err != nil {
+		return productionTaskOutcome{}, fmt.Errorf("load publication disposition history: %w", err)
+	}
+	candidate.DispositionHistory = &dispositionHistory
 	if published, found, err := w.loadPublicationOutcome(
-		ctx, task, candidate, w.publisher.VerifyOutcome,
+		ctx, task, candidate, w.convergePublicationOutcome,
 	); err != nil {
 		if isDurablePublicationConflict(err) {
 			return w.holdBlockedTask(
@@ -1553,6 +1604,11 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		}
 		if productionPublicationPermanentExternalFailure(err) {
 			return w.holdBlockedTask(ctx, task, checkpoint.Imported, productionBlockExternal, domain.HoldExternalConflict)
+		}
+		if held, handled, holdErr := w.holdPublicationRepairRefusal(
+			ctx, task, checkpoint.Imported, err,
+		); handled {
+			return held, holdErr
 		}
 		return productionTaskOutcome{}, err
 	} else if found {
@@ -3445,7 +3501,7 @@ func (w *productionPublicationWorkflow) loadReadyPublicationOutcome(
 ) (publish.Result, error) {
 	published, found, err := w.loadPublicationOutcome(ctx, task, candidate, func(
 		ctx context.Context,
-		_ publish.Candidate,
+		candidate publish.Candidate,
 		identity publish.Identity,
 		outcome publish.Outcome,
 	) error {
@@ -3459,7 +3515,7 @@ func (w *productionPublicationWorkflow) loadReadyPublicationOutcome(
 		if !compatible {
 			return fmt.Errorf("ready item disappeared during finalized recovery: %w", store.ErrNotFound)
 		}
-		return nil
+		return w.convergePublicationOutcome(ctx, candidate, identity, outcome)
 	})
 	if err != nil {
 		return publish.Result{}, err
@@ -3471,6 +3527,40 @@ func (w *productionPublicationWorkflow) loadReadyPublicationOutcome(
 		)
 	}
 	return published, nil
+}
+
+func (w *productionPublicationWorkflow) convergePublicationOutcome(
+	ctx context.Context,
+	candidate publish.Candidate,
+	identity publish.Identity,
+	outcome publish.Outcome,
+) error {
+	return w.publisher.ConvergeOutcome(
+		ctx, candidate, w.approvedRecipes, identity, outcome,
+	)
+}
+
+func (w *productionPublicationWorkflow) holdPublicationRepairRefusal(
+	ctx context.Context,
+	task productionPublicationTask,
+	imported importer.Result,
+	err error,
+) (productionTaskOutcome, bool, error) {
+	var reason string
+	var cause domain.RunHoldReason
+	switch {
+	case errors.Is(err, domain.ErrUnapprovedRecipe):
+		reason = productionBlockRepairRecipeRevoked
+		cause = domain.HoldRecipeRevoked
+	case errors.Is(err, publish.ErrTrustProfileDrift),
+		errors.Is(err, publish.ErrUnauthorizedPublication):
+		reason = productionBlockRepairTrustRefused
+		cause = domain.HoldTrustBlocked
+	default:
+		return productionTaskOutcome{}, false, nil
+	}
+	held, holdErr := w.holdBlockedTask(ctx, task, imported, reason, cause)
+	return held, true, holdErr
 }
 
 func (w *productionPublicationWorkflow) armReadyItemWatches(
@@ -3550,7 +3640,7 @@ func (w *productionPublicationWorkflow) loadPublicationOutcome(
 	if entry.Kind != publish.IntentKindPublication || !entry.Dispatched() {
 		return publish.Result{}, false, nil
 	}
-	intent, err := publish.DecodeIntent(entry.Payload)
+	intent, err := publish.DecodeStoredIntent(entry)
 	if err != nil {
 		return publish.Result{}, false, fmt.Errorf(
 			"decode durable production publication intent: %w",
@@ -3568,6 +3658,11 @@ func (w *productionPublicationWorkflow) loadPublicationOutcome(
 			"production publication intent disagrees with task: %w", domain.ErrParentKeyMismatch,
 		)
 	}
+	if err := publish.ValidateIntentDispositionHistory(intent, candidate); err != nil {
+		return publish.Result{}, false, fmt.Errorf(
+			"production publication intent disposition history: %w", err,
+		)
+	}
 	if err := w.validatePublicationOutcomeAuthorization(ctx, candidate, intent.AuthorizationID); err != nil {
 		return publish.Result{}, false, err
 	}
@@ -3583,7 +3678,10 @@ func (w *productionPublicationWorkflow) loadPublicationOutcome(
 		ctx, w.store, candidate, outcomeRecipes, verify,
 	)
 	if err != nil {
-		if productionPublicationRetryableFailure(err) || isDurablePublicationConflict(err) {
+		if productionPublicationRetryableFailure(err) || isDurablePublicationConflict(err) ||
+			errors.Is(err, domain.ErrUnapprovedRecipe) ||
+			errors.Is(err, publish.ErrTrustProfileDrift) ||
+			errors.Is(err, publish.ErrUnauthorizedPublication) {
 			return publish.Result{}, found, err
 		}
 		return publish.Result{}, found, fmt.Errorf(
@@ -3658,6 +3756,29 @@ func (w *productionPublicationWorkflow) hasPendingPublicationIntent(
 	return slices.ContainsFunc(pending, func(entry store.QueueEntry) bool {
 		return entry.IdempotencyKey == key
 	}), nil
+}
+
+func (w *productionPublicationWorkflow) hasFinalizedPublicationIntent(
+	ctx context.Context,
+	invocationID domain.InvocationID,
+) (bool, error) {
+	key, err := publish.IntentKey(invocationID, publish.IntentKindPublication)
+	if err != nil {
+		return false, err
+	}
+	var entry store.QueueEntry
+	err = w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		entry, err = tx.GetOutbox(ctx, key)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return entry.Kind == publish.IntentKindPublication && entry.Dispatched(), nil
 }
 
 func (w *productionPublicationWorkflow) materializeReplay(
@@ -3964,6 +4085,7 @@ func productionCandidate(
 	binding productionBinding,
 	checkpoint productionVerificationCheckpoint,
 	adoptedProfile *domain.Digest,
+	dispositionHistory *publish.DispositionHistory,
 ) publish.Candidate {
 	recipe := binding.image.RecipeDigest
 	authorization := checkpoint.Authorization.ID
@@ -3971,7 +4093,7 @@ func productionCandidate(
 	return publish.Candidate{
 		Repo: binding.admission.Base.Repo, BaseRef: binding.admission.Base.BaseRef,
 		HeadSHA: task.HeadSHA, Title: task.Publication.Title,
-		Body:      task.Publication.Body,
+		Body: task.Publication.Body, DispositionHistory: dispositionHistory,
 		Artifacts: checkpoint.Artifacts, RecipeDigest: &recipe,
 		InvocationID: task.PublicationID, RunID: task.RunID,
 		AuthorizationID: &authorization, TrustProfileDigest: &profile,

@@ -50,6 +50,13 @@ func TestReviewRecordRoundTripsWithRawFindingsAndIsExclusiveWithFailure(t *testi
 		if got.InvocationID != record.InvocationID || len(got.FindingIDs) != 1 {
 			t.Fatalf("review record = %#v", got)
 		}
+		history, err := tx.ListReviewRecords(ctx, run.ID)
+		if err != nil {
+			return err
+		}
+		if len(history) != 1 || history[0].InvocationID != record.InvocationID {
+			t.Fatalf("review history = %#v", history)
+		}
 		gotFinding, err := tx.GetFinding(ctx, finding.ID)
 		if err != nil || gotFinding != finding {
 			t.Fatalf("finding = %#v, %v", gotFinding, err)
