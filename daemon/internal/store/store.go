@@ -63,6 +63,25 @@ type Options struct {
 	// than snapshotted at Open, so stale or unencrypted evidence closes the
 	// gate for already-recorded work too.
 	BackupHealthSource BackupHealthSource
+
+	// VerificationFloorRegistryGeneration is the current tighten-only §6
+	// floor and waiver-registry generation. Zero selects the compiled current
+	// generation; an older persisted resolution never becomes current by
+	// omission.
+	VerificationFloorRegistryGeneration uint64
+
+	// WaiverGrantApprovals is the daemon-owned authority registry for degraded
+	// verification waivers. A waiver's self-described authority and digest are
+	// insufficient: the store accepts it only when this current registry grants
+	// that exact pair.
+	WaiverGrantApprovals map[domain.WaiverGrantingAuthority]map[domain.Digest]bool
+
+	// TrustedRequirementSets registers additional daemon-owned requirement
+	// definitions by requirement-set digest. The compiled production set is
+	// always registered under its resolved-generation digest; a resolution
+	// naming any unregistered set, or disagreeing with its registered
+	// definition's policy-bearing fields, fails closed at write and read.
+	TrustedRequirementSets map[domain.Digest][]domain.RequirementDefinition
 }
 
 // Store is the daemon's handle on its SQLite database. Open configures the
@@ -84,12 +103,26 @@ type Store struct {
 	admissionPolicy domain.AdmissionPolicy
 	// backupHealthSource is live operational evidence, not policy or part of an
 	// admission's identity. It is queried at each admission trust boundary.
-	backupHealthSource BackupHealthSource
+	backupHealthSource                  BackupHealthSource
+	verificationFloorRegistryGeneration uint64
+	waiverGrantApprovals                map[domain.WaiverGrantingAuthority]map[domain.Digest]bool
+	requirementSets                     map[domain.Digest]map[domain.RequirementKey]domain.RequirementDefinition
 }
 
 // Open opens (creating if absent) the database at path, applies the §5.2
 // pragmas to every connection via the DSN, and migrates the schema to head.
 func Open(ctx context.Context, path string, opts Options) (*Store, error) {
+	verificationGeneration, err := resolveVerificationFloorRegistryGeneration(
+		opts.VerificationFloorRegistryGeneration,
+		domain.CurrentVerificationFloorRegistryGeneration,
+	)
+	if err != nil {
+		return nil, err
+	}
+	requirementSets, err := resolveTrustedRequirementSets(verificationGeneration, opts.TrustedRequirementSets)
+	if err != nil {
+		return nil, err
+	}
 	db, err := openDB(path, opts)
 	if err != nil {
 		return nil, err
@@ -105,12 +138,61 @@ func Open(ctx context.Context, path string, opts Options) (*Store, error) {
 	// Snapshot the boundary policy so a caller mutating its maps or slices
 	// after Open cannot change it under a live store.
 	return &Store{
-		db:                 db,
-		readyItemCreated:   make(chan struct{}, 1),
-		approvedRecipes:    maps.Clone(opts.ApprovedRecipes),
-		admissionPolicy:    cloneAdmissionPolicy(opts),
-		backupHealthSource: opts.BackupHealthSource,
+		db:                                  db,
+		readyItemCreated:                    make(chan struct{}, 1),
+		approvedRecipes:                     maps.Clone(opts.ApprovedRecipes),
+		admissionPolicy:                     cloneAdmissionPolicy(opts),
+		backupHealthSource:                  opts.BackupHealthSource,
+		verificationFloorRegistryGeneration: verificationGeneration,
+		waiverGrantApprovals:                cloneWaiverGrantApprovals(opts.WaiverGrantApprovals),
+		requirementSets:                     requirementSets,
 	}, nil
+}
+
+// resolveTrustedRequirementSets builds the daemon-owned requirement registry:
+// the compiled production set under its resolved-generation digest, plus any
+// configured sets. The production entry always wins its own digest, so
+// configuration cannot redefine the compiled set.
+func resolveTrustedRequirementSets(
+	generation uint64,
+	configured map[domain.Digest][]domain.RequirementDefinition,
+) (map[domain.Digest]map[domain.RequirementKey]domain.RequirementDefinition, error) {
+	out := make(map[domain.Digest]map[domain.RequirementKey]domain.RequirementDefinition, len(configured)+1)
+	for setDigest, definitions := range configured {
+		out[setDigest] = requirementDefinitionsByKey(definitions)
+	}
+	productionDigest, err := domain.ProductionRequirementSetDigest(generation)
+	if err != nil {
+		return nil, err
+	}
+	out[productionDigest] = requirementDefinitionsByKey(domain.ProductionRequirementDefinitions())
+	return out, nil
+}
+
+func requirementDefinitionsByKey(definitions []domain.RequirementDefinition) map[domain.RequirementKey]domain.RequirementDefinition {
+	byKey := make(map[domain.RequirementKey]domain.RequirementDefinition, len(definitions))
+	for _, definition := range definitions {
+		byKey[definition.Key] = definition
+	}
+	return byKey
+}
+
+func cloneWaiverGrantApprovals(in map[domain.WaiverGrantingAuthority]map[domain.Digest]bool) map[domain.WaiverGrantingAuthority]map[domain.Digest]bool {
+	out := make(map[domain.WaiverGrantingAuthority]map[domain.Digest]bool, len(in))
+	for authority, grants := range in {
+		out[authority] = maps.Clone(grants)
+	}
+	return out
+}
+
+func resolveVerificationFloorRegistryGeneration(configured, compiled uint64) (uint64, error) {
+	if configured == 0 {
+		return compiled, nil
+	}
+	if configured < compiled {
+		return 0, fmt.Errorf("verification floor registry generation: %w", domain.ErrVerificationFloorRegressed)
+	}
+	return configured, nil
 }
 
 // ReadyItemCreated reports that a new open ready-for-final-review item
@@ -118,6 +200,12 @@ func Open(ctx context.Context, path string, opts Options) (*Store, error) {
 // still reconcile from durable state after restart or a missed wake.
 func (s *Store) ReadyItemCreated() <-chan struct{} {
 	return s.readyItemCreated
+}
+
+// VerificationFloorRegistryGeneration returns the current tighten-only
+// verification registry generation selected when the store opened.
+func (s *Store) VerificationFloorRegistryGeneration() uint64 {
+	return s.verificationFloorRegistryGeneration
 }
 
 // cloneAdmissionPolicy detaches the admission policy from the caller's
