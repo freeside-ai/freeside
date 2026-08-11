@@ -346,6 +346,9 @@ type config struct {
 	// beforeStoreClose is a test seam for observing failed-start cleanup at
 	// the store-close boundary. Production leaves it nil.
 	beforeStoreClose func()
+	// now is the attention service clock. Production leaves it nil for the
+	// wall clock; tests can advance startup across pairing-code expiry.
+	now func() time.Time
 	// Claude, when set, replaces the permanent fake stage driver with the
 	// production Claude driver and its ward gate (#237). Nil keeps the 1A.0
 	// walking-skeleton composition byte-for-byte.
@@ -467,6 +470,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if cfg.SchedulerInterval < 0 {
 		return nil, fmt.Errorf("negative scheduler interval %s", cfg.SchedulerInterval)
 	}
+	if cfg.now == nil {
+		cfg.now = time.Now
+	}
 	if cfg.NtfyURL == "" {
 		cfg.NtfyURL = defaultNtfyURL
 	}
@@ -578,6 +584,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	)
 	attention := signet.NewService(st,
 		signet.WithPairingKey(pairingKey),
+		signet.WithClock(cfg.now),
 		signet.WithBlobStore(blobs),
 		signet.WithNtfy(signet.NtfyConfig{
 			BaseURL: cfg.NtfyURL, TopicKey: topicKey,
@@ -593,10 +600,6 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return claudeWiring.reviewConfigurationDigest
 		}),
 	)
-	pairingCode, _, err := attention.MintPairingCode(parent)
-	if err != nil {
-		return nil, fmt.Errorf("mint startup pairing code: %w", err)
-	}
 	if cfg.Claude == nil {
 		var walkingSkeletonOptions []engine.Option
 		if cfg.Logger != nil {
@@ -686,7 +689,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}
 	d := &daemon{
 		store: st, attention: attention, workflow: workflow, driver: driver,
-		listener: listener, cancel: cancel, errs: make(chan error, 1), pairingCode: pairingCode,
+		listener: listener, cancel: cancel, errs: make(chan error, 1),
 		logger: logger,
 		server: &http.Server{
 			Handler: signet.NewHTTPHandler(attention, signet.NewRequestAuthorizer(st), signet.HealthResponse{
@@ -799,6 +802,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			d.componentExited(parent, ctx, componentActiveResource, err)
 		}()
 	}
+	pairingCode, _, err := attention.MintPairingCode(parent)
+	if err != nil {
+		return nil, fmt.Errorf("mint startup pairing code: %w", err)
+	}
+	d.pairingCode = pairingCode
 	if err := publishReadiness(cfg.StateDir, d.readiness()); err != nil {
 		return nil, err
 	}

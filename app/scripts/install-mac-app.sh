@@ -2,7 +2,7 @@
 # install-mac-app.sh — install and update FreesideMac as the operator's
 # real client (plan §10, issue #444).
 #
-# Usage: install-mac-app.sh [--server-url <url>] [--launch]
+# Usage: install-mac-app.sh --daemon-path <absolute-path> [--server-url <url>] [--launch]
 #
 # Builds the Release product, signs it with a stable identity, and
 # installs or replaces Freeside.app at a fixed path. Re-running it after
@@ -18,6 +18,9 @@
 # preferences (`AppSession.fromEnvironment` reads `FreesideServerURL`
 # from UserDefaults), so the app reaches the operator's daemon when it
 # is launched from the Dock rather than with launch arguments.
+#
+# --daemon-path supplies the freesided binary copied into the app bundle
+# before the app receives its final code-signature seal.
 #
 # Signing identity, in resolution order:
 #   FREESIDE_MAC_SIGNING_IDENTITY  explicit codesign identity, by name or
@@ -51,6 +54,8 @@ recovery_guard="$destination.install-recovery-guard"
 
 server_url=""
 server_url_given=false
+daemon_path=""
+daemon_path_given=false
 launch_after_install=false
 
 die() {
@@ -62,6 +67,12 @@ die() {
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+    --daemon-path)
+        [[ $# -ge 2 ]] || die "--daemon-path needs an absolute executable path"
+        daemon_path="$2"
+        daemon_path_given=true
+        shift 2
+        ;;
     --server-url)
         [[ $# -ge 2 ]] || die "--server-url needs a URL"
         server_url="$2"
@@ -77,6 +88,14 @@ while [[ $# -gt 0 ]]; do
         ;;
     esac
 done
+
+[[ "$daemon_path_given" == true ]] ||
+    die "--daemon-path is required so the bundled LaunchAgent can run freesided"
+[[ "$daemon_path" == /* ]] || die "--daemon-path must be absolute: $daemon_path"
+[[ -f "$daemon_path" && -x "$daemon_path" ]] ||
+    die "--daemon-path is not an executable file: $daemon_path"
+
+daemon_state_dir="$HOME/Library/Application Support/Freeside/daemon"
 
 # The daemon URL becomes a durable preference of the installed app, so a
 # malformed one would strand every later launch on the mock composition
@@ -371,6 +390,18 @@ if [[ -e "$destination" ]]; then
     previous_requirement="$(designated_requirement "$destination")"
 fi
 
+# Invalidate before any fallible build or swap step. A failed install may make
+# the old app re-register its unchanged helper once, which is harmless; waiting
+# until the new bundle is canonical creates a SIGKILL window where launchd can
+# remain bound to the old generation indefinitely.
+defaults delete "$bundle_id" FreesideLaunchAgentRegistrationCurrent \
+    >/dev/null 2>&1 || true
+
+mkdir -p "$daemon_state_dir"
+[[ -d "$daemon_state_dir" && ! -L "$daemon_state_dir" ]] ||
+    die "the daemon state path is not a regular directory: $daemon_state_dir"
+chmod 700 "$daemon_state_dir"
+
 mkdir -p "$build_dir"
 build_log="$build_dir/xcodebuild.log"
 echo "install-mac-app: building Release (log: $build_log)"
@@ -391,6 +422,33 @@ fi
 
 built_app="$build_dir/Build/Products/Release/FreesideMac.app"
 [[ -d "$built_app" ]] || die "build produced no app at $built_app"
+launch_agent_plist="$built_app/Contents/Library/LaunchAgents/ai.freeside.daemon.plist"
+[[ -f "$launch_agent_plist" ]] ||
+    die "the built app contains no bundled LaunchAgent at $launch_agent_plist"
+bundled_daemon="$built_app/Contents/Resources/freesided"
+mkdir -p "$(dirname "$bundled_daemon")"
+ditto "$daemon_path" "$bundled_daemon" ||
+    die "could not copy freesided into the app bundle"
+chmod 755 "$bundled_daemon"
+[[ -f "$bundled_daemon" && -x "$bundled_daemon" ]] ||
+    die "the bundled freesided executable is missing or not executable"
+plutil -replace ProgramArguments.2 -string "$daemon_state_dir/freeside.db" \
+    "$launch_agent_plist" || die "could not bind the daemon database path"
+plutil -replace ProgramArguments.4 -string "$daemon_state_dir" \
+    "$launch_agent_plist" || die "could not bind the daemon state directory"
+plutil -replace StandardErrorPath -string "$daemon_state_dir/freesided.log" \
+    "$launch_agent_plist" || die "could not bind the daemon stderr log path"
+
+# Templating changes the outer bundle seal produced by Xcode. Re-sign only
+# after every host-local path is final. The helper gets the same identity first
+# so Service Management can validate it, then the outer seal binds that exact
+# executable before the artifact can replace the installed app.
+codesign --force --sign "$identity" "$bundled_daemon" ||
+    die "the bundled freesided executable could not be signed"
+codesign --verify --strict "$bundled_daemon" ||
+    die "the bundled freesided executable failed signature verification"
+codesign --force --sign "$identity" "$built_app" ||
+    die "the templated app could not be signed"
 codesign --verify --strict "$built_app" ||
     die "the built app failed signature verification"
 
@@ -490,6 +548,13 @@ roll_back_and_abort() {
 }
 trap roll_back_install EXIT
 trap roll_back_and_abort INT TERM
+
+# The old app can re-register its unchanged helper while the build runs and
+# restore the marker deleted above. It has now been stopped; invalidate that
+# stale generation again at the last possible point before the replacement
+# becomes canonical.
+defaults delete "$bundle_id" FreesideLaunchAgentRegistrationCurrent \
+    >/dev/null 2>&1 || true
 
 if [[ -e "$destination" ]]; then
     mv "$destination" "$superseded"

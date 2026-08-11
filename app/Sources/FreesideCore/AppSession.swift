@@ -20,21 +20,27 @@ public final class AppSession {
 
     private let client: any APIProtocol
     private let cache: any CacheStore
+    private let deploymentURL: URL?
 
     public init(
         client: any APIProtocol,
         credentials: any DeviceCredentialStore,
-        cache: any CacheStore
+        cache: any CacheStore,
+        pairingCode: String = "",
+        deploymentURL: URL? = nil
     ) {
         self.client = client
         self.cache = cache
+        self.deploymentURL = deploymentURL
         // An unreadable credential is indistinguishable from an absent
         // one here, and the recovery is the same either way: pairing
         // mints a new device (#64; a lost token is revoke-and-repair).
         if let credential = try? credentials.load() {
             phase = .ready(Self.coordinator(client: client, cache: cache, credential: credential))
         } else {
-            phase = .needsPairing(PairingModel(client: client, credentials: credentials))
+            phase = .needsPairing(
+                PairingModel(
+                    client: client, credentials: credentials, pairingCode: pairingCode))
         }
     }
 
@@ -42,6 +48,28 @@ public final class AppSession {
     /// pairing model already stored the credential.
     public func completePairing(_ credential: DeviceCredential) {
         phase = .ready(Self.coordinator(client: client, cache: cache, credential: credential))
+    }
+
+    /// A first-run LaunchAgent may publish readiness after the window already
+    /// rendered. Replace only an empty or still-unedited readiness suggestion
+    /// for the deployment this session already selected; never overwrite
+    /// operator input or apply a local code to a persisted remote daemon.
+    public func applyReadiness(_ readiness: DaemonReadiness?) {
+        guard
+            let deploymentURL,
+            case .needsPairing(let model) = phase
+        else { return }
+        guard let readiness else {
+            if Self.deploymentKey(for: deploymentURL)
+                == Self.deploymentKey(for: DaemonReadinessReader.supervisedAPIURL)
+            {
+                model.clearPairingCodePrefill()
+            }
+            return
+        }
+        guard Self.deploymentKey(for: deploymentURL) == Self.deploymentKey(for: readiness.apiURL)
+        else { return }
+        model.prefillPairingCode(readiness.pairingCode)
     }
 
     private static func coordinator(
@@ -56,21 +84,78 @@ public final class AppSession {
 
     // MARK: - Launch compositions
 
-    /// Composition by launch argument, cheapest honest default last:
-    /// `-FreesideServerURL <url>` runs against a real daemon with the
-    /// Keychain and the on-disk cache; `-FreesidePairingDemo YES` runs
-    /// the full pairing flow against an enforcing in-process mock (code
-    /// `483911`); otherwise the permissive mock with a pre-paired
-    /// identity, today's default experience.
+    enum LaunchMode: Equatable {
+        case live(URL, pairingCode: String)
+        case pairingDemo
+        case mock
+    }
+
+    static func launchMode(
+        argumentServerURL: String?,
+        pairingDemo: Bool,
+        mockMode: Bool,
+        readiness: DaemonReadiness?,
+        persistedServerURL: String?,
+        localDaemonURL: URL?
+    ) -> LaunchMode {
+        if let argumentServerURL, let url = URL(string: argumentServerURL) {
+            return .live(url, pairingCode: "")
+        }
+        if pairingDemo {
+            return .pairingDemo
+        }
+        if mockMode {
+            return .mock
+        }
+        if let readiness {
+            let matchesLocalDaemon =
+                localDaemonURL.map {
+                    Self.deploymentKey(for: readiness.apiURL) == Self.deploymentKey(for: $0)
+                } ?? true
+            if matchesLocalDaemon {
+                return .live(readiness.apiURL, pairingCode: readiness.pairingCode)
+            }
+        }
+        if let persistedServerURL, let url = URL(string: persistedServerURL) {
+            return .live(url, pairingCode: "")
+        }
+        if let localDaemonURL {
+            return .live(localDaemonURL, pairingCode: "")
+        }
+        return .mock
+    }
+
+    /// Explicit launch inputs stay the development override. Otherwise a
+    /// daemon-host readiness file selects and prefills the local deployment;
+    /// the persisted URL remains the fallback for remote clients and older
+    /// installs, followed by today's permissive mock experience.
     public static func fromEnvironment() -> AppSession {
         let defaults = UserDefaults.standard
-        if let raw = defaults.string(forKey: "FreesideServerURL"), let url = URL(string: raw) {
-            return live(serverURL: url)
-        }
-        if defaults.bool(forKey: "FreesidePairingDemo") {
+        let arguments = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        let readiness = DaemonReadinessReader.defaultFileURL()
+            .flatMap { DaemonReadinessReader().read(at: $0) }
+        let persistedServerURL = Bundle.main.bundleIdentifier
+            .flatMap { defaults.persistentDomain(forName: $0)?["FreesideServerURL"] as? String }
+        #if os(macOS)
+            let localDaemonURL: URL? = DaemonReadinessReader.supervisedAPIURL
+        #else
+            let localDaemonURL: URL? = nil
+        #endif
+        switch launchMode(
+            argumentServerURL: arguments["FreesideServerURL"] as? String,
+            pairingDemo: arguments["FreesidePairingDemo"] as? String == "YES",
+            mockMode: arguments["FreesideMock"] as? String == "YES",
+            readiness: readiness,
+            persistedServerURL: persistedServerURL,
+            localDaemonURL: localDaemonURL
+        ) {
+        case .live(let url, let pairingCode):
+            return live(serverURL: url, pairingCode: pairingCode)
+        case .pairingDemo:
             return pairingDemo()
+        case .mock:
+            return mock()
         }
-        return mock()
     }
 
     /// A real daemon: the credential lives in the Keychain and nowhere
@@ -79,7 +164,7 @@ public final class AppSession {
     /// minted by one daemon, so the Keychain lookup keys on the server
     /// URL and a token can never be attached to a request for another
     /// daemon; the cached rows are likewise one deployment's state.
-    public static func live(serverURL: URL) -> AppSession {
+    public static func live(serverURL: URL, pairingCode: String = "") -> AppSession {
         let credentials = KeychainCredentialStore(
             service: "ai.freeside.device-credential/\(deploymentKey(for: serverURL))")
         return AppSession(
@@ -87,7 +172,9 @@ public final class AppSession {
                 (try? credentials.load())?.token
             },
             credentials: credentials,
-            cache: DiskCacheStore(directory: cacheDirectory(for: serverURL))
+            cache: DiskCacheStore(directory: cacheDirectory(for: serverURL)),
+            pairingCode: pairingCode,
+            deploymentURL: serverURL
         )
     }
 

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>ai.freeside.daemon</string>
+	<key>BundleProgram</key>
+	<string>Contents/Resources/freesided</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>freesided</string>
+		<string>-db</string>
+		<string>__FREESIDE_STATE_DIR__/freeside.db</string>
+		<string>-state-dir</string>
+		<string>__FREESIDE_STATE_DIR__</string>
+		<string>-listen</string>
+		<string>127.0.0.1:7331</string>
+	</array>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ExitTimeOut</key>
+	<integer>0</integer>
+	<key>StandardErrorPath</key>
+	<string>__FREESIDE_STDERR_PATH__</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>
