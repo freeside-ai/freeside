@@ -971,7 +971,7 @@ Held from revision 28: everything.
 
 ---
 
-## Revision 30 (Current)
+## Revision 30
 
 Revision 30 binds revoked Codex identity recovery to exact verified evidence.
 Held from revision 29: everything.
@@ -985,3 +985,29 @@ Held from revision 29: everything.
    requires additional durable recovery evidence beyond the current digest and
    access-token expiry.
    (User; devlog 2026-08-11-1025-codex-reenrollment-recovery.md; #684.)
+
+---
+
+## Revision 31 (Current)
+
+Revision 31 inserts finding adjudication between review and remediation.
+Held from revision 30: everything.
+
+1. **Every finding batch is adjudicated before remediation authority is
+   exercised** (Sections 1, 4, 5.6, 5.12, 5.13, 5.19, 7, 9, 11): an
+   immutable, digest-bound FindingAdjudication artifact records a
+   per-finding decision — goal relationship, work-unit compatibility,
+   and recommended route, with proposal vocabulary reserved for
+   model-residue entries — under validity constraints that leave
+   `required` no route to a deferred disposition. The engine derives compatibility
+   deterministically where mechanically decidable — in-surface remediation
+   is presumptively `allowed`, and `allowed` is engine-derived only — so an
+   unambiguous in-scope finding routes to the remediator with no model
+   call, while the deferral direction always takes adjudication; the model
+   residue is a second Section 5.13 ceiling-bounded annotation site,
+   separate from the classifier. A required finding incompatible with
+   the current work unit parks or replans the run, never defers into a
+   ready result. Revisit when wave 6 convergence measurement shows
+   credible, material, in-surface findings routinely reaching the model
+   residue: the deterministic dispatch predicate is then miscalibrated.
+   (User; devlog 2026-08-11-1504-review-finding-adjudication.md; #697.)
