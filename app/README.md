@@ -12,7 +12,9 @@ The SwiftUI multiplatform client: the macOS + iOS attention inbox, decision deta
 
 Launch arguments select the composition (`AppSession.fromEnvironment`):
 
-- default: the permissive in-process mock with a pre-paired identity — the inbox renders immediately.
+- macOS default: the supervised daemon at `http://127.0.0.1:7331`; a readable readiness file selects the same deployment and prefills its pairing code, while a missing file leaves the manual pairing entry available.
+- iOS default: the permissive in-process mock with a pre-paired identity — the inbox renders immediately.
+- `-FreesideMock YES`: the permissive in-process mock, used by unsigned development and screenshot launches.
 - `-FreesidePairingDemo YES`: the full pairing flow against an enforcing mock; the code is `483911`.
 - `-FreesideServerURL <url>`: a real daemon; the device credential lives in the Keychain and the cache on disk.
 
@@ -51,7 +53,7 @@ APP=/tmp/freeside-dd/Build/Products/Debug/FreesideMac.app
 # One pass per appearance: launch pinned, find the window by owner
 # name (the app's display name is "Freeside"), capture it by id, quit.
 open -n "$APP" --args -ApplePersistenceIgnoreState YES \
-  -FreesideColorScheme light -FreesideSelect item-blocked
+  -FreesideMock YES -FreesideColorScheme light -FreesideSelect item-blocked
 sleep 3
 WID=$(swift -e 'import CoreGraphics
 let windows = CGWindowListCopyWindowInfo(

@@ -15,16 +15,21 @@ public final class PairingModel {
         case failed(String)
     }
 
-    public var pairingCode = ""
+    public var pairingCode: String
     public var displayName = ""
     public private(set) var phase: PhaseState = .idle
 
     private let client: any APIProtocol
     private let credentials: any DeviceCredentialStore
 
-    public init(client: any APIProtocol, credentials: any DeviceCredentialStore) {
+    public init(
+        client: any APIProtocol,
+        credentials: any DeviceCredentialStore,
+        pairingCode: String = ""
+    ) {
         self.client = client
         self.credentials = credentials
+        self.pairingCode = pairingCode
     }
 
     public var canSubmit: Bool {
