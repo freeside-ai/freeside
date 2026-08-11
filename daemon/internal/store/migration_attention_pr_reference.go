@@ -20,13 +20,17 @@ func applyDataMigration(
 	version int,
 	name string,
 ) error {
-	if version != 36 || name != attentionPRReferenceMigration {
+	switch {
+	case version == 36 && name == attentionPRReferenceMigration:
+		if err := backfillLegacyFakePRReferences(ctx, tx); err != nil {
+			return err
+		}
+		return rewriteAnchoredPRReferences(ctx, tx)
+	case version == 39 && name == outboxPayloadAuthenticationMigration:
+		return authenticateExistingOutboxPayloads(ctx, tx)
+	default:
 		return nil
 	}
-	if err := backfillLegacyFakePRReferences(ctx, tx); err != nil {
-		return err
-	}
-	return rewriteAnchoredPRReferences(ctx, tx)
 }
 
 type legacyAttentionRow struct {
@@ -136,8 +140,8 @@ func authenticateLegacyFakePRReference(
 		}
 		return domain.PRReference{}, false, err
 	}
-	intent, err := decodeReadyPublicationIntent(intentPayload)
-	if err != nil || intentKind != readyPublicationIntentKind ||
+	intent, ok := decodeLegacyPublicationIntentForMigration(intentPayload)
+	if !ok || intentKind != readyPublicationIntentKind ||
 		intentStatus != outboxStatusDispatched ||
 		intent.InvocationID != task.PublicationInvocationID ||
 		intent.Repo != task.Repo || intent.BaseRef != task.BaseRef ||

@@ -78,6 +78,7 @@ type integrationForge struct {
 	nextPR               int
 	writeCounts          map[string]int
 	failPRCreateResponse bool
+	requestHook          func(method, path string) bool
 }
 
 func newIntegrationForge(t *testing.T) (*integrationForge, *httptest.Server) {
@@ -93,6 +94,9 @@ func newIntegrationForge(t *testing.T) (*integrationForge, *httptest.Server) {
 func (f *integrationForge) handle(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.requestHook != nil && f.requestHook(r.Method, r.URL.Path) {
+		f.requestHook = nil
+	}
 	if got := r.Header.Get("Authorization"); got != "Bearer integration-token" {
 		f.t.Errorf("Authorization = %q", got)
 	}
@@ -205,6 +209,12 @@ func (f *integrationForge) handle(w http.ResponseWriter, r *http.Request) {
 		f.t.Errorf("unexpected forge request %s %s: %s", r.Method, r.URL.Path, body)
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+func (f *integrationForge) interceptRequest(hook func(method, path string) bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requestHook = hook
 }
 
 func integrationPRJSON(pr integrationPR) map[string]any {
@@ -1914,7 +1924,8 @@ func TestFakeCandidatePublicationRejectsUnboundReadyTerminalDecisionInputs(t *te
 		t.Fatal(err)
 	}
 	intent := publish.Intent{
-		Identity: identity.Digest(), InvocationID: second.PublicationInvocationID,
+		FormatVersion: publish.IntentFormatCurrent,
+		Identity:      identity.Digest(), InvocationID: second.PublicationInvocationID,
 		Repo: fakePublicationRepo, BaseRef: second.BaseRef,
 		SourceHeadSHA:   ready.Item.PRHeadSHA,
 		AuthorizationID: authorizations[0].ID,
@@ -2841,6 +2852,7 @@ func TestFakeCandidatePublicationBlocksForeignIntentBetweenAdmissionAndReconcili
 		t.Fatal(err)
 	}
 	foreign := publish.Intent{
+		FormatVersion:   publish.IntentFormatCurrent,
 		Identity:        "sha256:01c663f9a986e10d214b2c31c75fa5088e2995674a8e8f2ba959111e06a23fb8",
 		InvocationID:    spec.PublicationInvocationID,
 		Repo:            fakePublicationRepo,

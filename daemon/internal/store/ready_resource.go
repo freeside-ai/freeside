@@ -69,8 +69,15 @@ func (tx *ReadTx) getAttentionItemPRReference(
 
 type readyPublicationIntent = publicationrecord.Intent
 
-func decodeReadyPublicationIntent(payload []byte) (readyPublicationIntent, error) {
-	return publicationrecord.DecodeIntent(payload)
+func decodeReadyPublicationIntent(entry QueueEntry) (readyPublicationIntent, error) {
+	intent, err := publicationrecord.DecodeIntent(entry.Payload)
+	if err != nil {
+		return readyPublicationIntent{}, err
+	}
+	if intent.FormatVersion != entry.PayloadVersion {
+		return readyPublicationIntent{}, domain.ErrParentKeyMismatch
+	}
+	return intent, nil
 }
 
 type readyPublicationOutcome = publicationrecord.Outcome
@@ -182,7 +189,7 @@ func (tx *ReadTx) validateReadyItemPRBinding(
 		!intentEntry.Dispatched() {
 		return errRowInconsistent
 	}
-	intent, err := decodeReadyPublicationIntent(intentEntry.Payload)
+	intent, err := decodeReadyPublicationIntent(intentEntry)
 	if err != nil {
 		return fmt.Errorf("publication intent: %w", err)
 	}

@@ -38,7 +38,7 @@ func TestGetOutboxRejectsUnknownStatus(t *testing.T) {
 		_, _, err := tx.EnqueueOutbox(ctx, "intent-1", "publish", []byte(`{}`))
 		return err
 	})
-	if err == nil || !strings.Contains(err.Error(), `stored status "foreign" is invalid`) {
+	if err == nil || !strings.Contains(err.Error(), `invalid status "foreign"`) {
 		t.Fatalf("EnqueueOutbox error = %v, want invalid status", err)
 	}
 }

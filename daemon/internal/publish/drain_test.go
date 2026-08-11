@@ -227,6 +227,7 @@ func TestDrainExecutionIntentReauthenticatesRecordedExport(t *testing.T) {
 	)
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID
+	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
 	execution := publish.ExecutionCandidate{
 		Candidate:             candidate,
 		ProducingInvocationID: testProducingInvocationID,
@@ -338,7 +339,8 @@ func TestDrainRecoversHeadTransportBeforeForgeConvergence(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload, err := publish.Intent{
-		Identity: id.Digest(), InvocationID: cand.InvocationID,
+		FormatVersion: publish.IntentFormatCurrent,
+		Identity:      id.Digest(), InvocationID: cand.InvocationID,
 		Repo: cand.Repo, BaseRef: cand.BaseRef, SourceHeadSHA: cand.HeadSHA,
 		AuthorizationID: *cand.AuthorizationID,
 	}.Encode()
@@ -486,6 +488,7 @@ func TestDrainRejectsCorruptIntent(t *testing.T) {
 
 	corruptKey := "publish/inv-corrupt/" + publish.IntentKindPublication
 	payload, err := publish.Intent{
+		FormatVersion:   publish.IntentFormatCurrent,
 		Identity:        testCandidateIdentity(t).Digest(),
 		InvocationID:    "inv-other", // disagrees with the key
 		Repo:            "freeside-ai/evidence-repo",
@@ -533,6 +536,7 @@ func TestDrainRejectsDivergedResolver(t *testing.T) {
 		t.Fatal(err)
 	}
 	intentPayload, err := publish.Intent{
+		FormatVersion:   publish.IntentFormatCurrent,
 		Identity:        id.Digest(),
 		InvocationID:    "inv-0001",
 		Repo:            "freeside-ai/evidence-repo",
@@ -593,6 +597,7 @@ func TestDrainRejectsInvocationMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	intentPayload, err := publish.Intent{
+		FormatVersion:   publish.IntentFormatCurrent,
 		Identity:        id.Digest(),
 		InvocationID:    "inv-0001",
 		Repo:            "freeside-ai/evidence-repo",
@@ -641,6 +646,7 @@ func TestDrainRejectsAuthorizationMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	intentPayload, err := publish.Intent{
+		FormatVersion:   publish.IntentFormatCurrent,
 		Identity:        id.Digest(),
 		InvocationID:    "inv-0001",
 		Repo:            "freeside-ai/evidence-repo",

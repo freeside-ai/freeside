@@ -1595,7 +1595,7 @@ func (w *fakePublicationWorkflow) loadPublicationOutcome(
 	if !entry.Dispatched() {
 		return publish.Result{}, false, nil
 	}
-	intent, err := publish.DecodeIntent(entry.Payload)
+	intent, err := publish.DecodeStoredIntent(entry)
 	if err != nil {
 		return publish.Result{}, false, err
 	}

@@ -195,6 +195,9 @@ func ValidateCandidateBody(body string) error {
 			return errors.New("candidate body contains a publication identity marker")
 		}
 	}
+	if containsDispositionHistoryMarker(body) {
+		return errors.New("candidate body contains a disposition history marker")
+	}
 	return nil
 }
 

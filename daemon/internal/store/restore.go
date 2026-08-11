@@ -17,6 +17,15 @@ import (
 // from the trusted schema in sqlite_master).
 var safeTableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+const outboxPublicationInsertTrigger = "outbox_publication_intent_requires_current_insert"
+
+const canonicalOutboxPublicationInsertTriggerSQL = `CREATE TRIGGER outbox_publication_intent_requires_current_insert
+BEFORE INSERT ON outbox
+WHEN NEW.kind = 'publish.publication' AND NEW.payload_version != 2
+BEGIN
+    SELECT RAISE(ABORT, 'new publication intents require current payload version');
+END`
+
 // Checkpoint writes a consistent snapshot of the live database to path: a
 // standalone SQLite file carrying the schema, every row, and the current
 // sync_epoch/revision. This legacy plaintext primitive remains available for
@@ -145,6 +154,10 @@ func (s *Store) restoreFromSource(
 			_ = tx.Rollback()
 		}
 	}()
+	publicationInsertTriggerSQL, err := suspendPublicationInsertTrigger(ctx, tx)
+	if err != nil {
+		return ServerState{}, err
+	}
 
 	for _, t := range tables {
 		// t is a schema identifier validated by restorableTables and cannot be
@@ -156,6 +169,9 @@ func (s *Store) restoreFromSource(
 			`INSERT INTO main."`+t+`" SELECT * FROM restore_src."`+t+`"`); err != nil { //nolint:gosec // G202: t is a validated identifier from sqlite_master, not user input
 			return ServerState{}, fmt.Errorf("restore: copy %s: %w", t, err)
 		}
+	}
+	if err := restorePublicationInsertTrigger(ctx, tx, publicationInsertTriggerSQL); err != nil {
+		return ServerState{}, err
 	}
 	// Overwrite the epoch the checkpoint carried with a fresh one, in the same
 	// transaction as the data copy: this is the rotation, and it cannot be
@@ -240,6 +256,10 @@ func (s *Store) restoreFromDatabase(
 			_ = tx.Rollback()
 		}
 	}()
+	publicationInsertTriggerSQL, err := suspendPublicationInsertTrigger(ctx, tx)
+	if err != nil {
+		return ServerState{}, err
+	}
 	for _, table := range tables {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM "`+table+`"`); err != nil { //nolint:gosec // validated schema identifier
 			return ServerState{}, fmt.Errorf("restore: clear %s: %w", table, err)
@@ -247,6 +267,9 @@ func (s *Store) restoreFromDatabase(
 		if err := copyRestoredTable(ctx, source, tx, table); err != nil {
 			return ServerState{}, err
 		}
+	}
+	if err := restorePublicationInsertTrigger(ctx, tx, publicationInsertTriggerSQL); err != nil {
+		return ServerState{}, err
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE server_state SET sync_epoch = ? WHERE id = 1`, epoch); err != nil {
@@ -262,6 +285,34 @@ func (s *Store) restoreFromDatabase(
 	}
 	committed = true
 	return state, nil
+}
+
+// suspendPublicationInsertTrigger opens the one narrow exception to the
+// migration-provenance insert guard: Restore copies a complete, same-schema
+// checkpoint inside an exclusive transaction. The trigger is recreated before
+// commit; any intervening failure rolls the DROP back with the copied rows.
+func suspendPublicationInsertTrigger(ctx context.Context, tx *sql.Tx) (string, error) {
+	var definition string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?`,
+		outboxPublicationInsertTrigger,
+	).Scan(&definition); err != nil {
+		return "", fmt.Errorf("restore: read publication insert guard: %w", err)
+	}
+	if definition != canonicalOutboxPublicationInsertTriggerSQL {
+		return "", fmt.Errorf("restore: publication insert guard definition is not canonical")
+	}
+	if _, err := tx.ExecContext(ctx, `DROP TRIGGER "`+outboxPublicationInsertTrigger+`"`); err != nil {
+		return "", fmt.Errorf("restore: suspend publication insert guard: %w", err)
+	}
+	return definition, nil
+}
+
+func restorePublicationInsertTrigger(ctx context.Context, tx *sql.Tx, definition string) error {
+	if _, err := tx.ExecContext(ctx, definition); err != nil {
+		return fmt.Errorf("restore: reinstate publication insert guard: %w", err)
+	}
+	return nil
 }
 
 func restorableTablesFromDatabase(ctx context.Context, source *sql.Conn) ([]string, error) {

@@ -62,6 +62,26 @@ func TestValidateCandidateBodyReservesIdentityMarker(t *testing.T) {
 	}
 }
 
+func TestValidateCandidateBodyRejectsDispositionHistoryMarkers(t *testing.T) {
+	t.Parallel()
+	for name, body := range map[string]string{
+		"open":        "<!-- freeside:disposition-history version=freeside-disposition-history/v1 -->",
+		"close":       "<!-- /freeside:disposition-history -->",
+		"case":        "<!-- FREESIDE:DISPOSITION-HISTORY -->",
+		"indent":      "   <!-- freeside:disposition-history -->",
+		"prefix":      "quote <!-- freeside:disposition-history -->",
+		"suffix":      "<!-- freeside:disposition-history-extra -->",
+		"duplication": "<!-- freeside:disposition-history -->\n<!-- freeside:disposition-history -->",
+		"nesting":     "<!-- freeside:disposition-history -->\n<!-- /freeside:disposition-history -->",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := publish.ValidateCandidateBody(body); err == nil {
+				t.Fatalf("ValidateCandidateBody accepted marker-shaped prose %q", body)
+			}
+		})
+	}
+}
+
 // TestDeriveIdentityDeterministic: the same candidate always derives
 // the same identity, independent of artifact-digest order.
 func TestDeriveIdentityDeterministic(t *testing.T) {

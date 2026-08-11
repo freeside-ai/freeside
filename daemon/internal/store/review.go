@@ -155,6 +155,52 @@ func (tx *ReadTx) GetReviewRecord(
 	return record, nil
 }
 
+// ListReviewRecords returns one run's completed review history in round order.
+// The query first enumerates the complete table, and GetReviewRecord then
+// reconstructs and cross-checks every row before the run filter is applied.
+// A corrupted copied run key therefore cannot move a row out of all keyed
+// reads and make a published history look complete by omission.
+func (tx *ReadTx) ListReviewRecords(
+	ctx context.Context, runID domain.RunID,
+) ([]domain.ReviewRecord, error) {
+	rows, err := tx.tx.QueryContext(ctx, `SELECT invocation_id FROM review_records
+        ORDER BY run_id, round, invocation_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list review records %q: %w", runID, err)
+	}
+	var ids []domain.InvocationID
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("list review records %q row %d: %w", runID, len(ids)+1, err)
+		}
+		ids = append(ids, domain.InvocationID(id))
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("list review records %q: %w", runID, err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("list review records %q: %w", runID, err)
+	}
+
+	records := make([]domain.ReviewRecord, 0, len(ids))
+	for _, id := range ids {
+		record, err := tx.GetReviewRecord(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("list review records %q: %w", runID, err)
+		}
+		if record.RunID == runID {
+			records = append(records, record)
+		}
+	}
+	slices.SortFunc(records, func(a, b domain.ReviewRecord) int {
+		return a.Round - b.Round
+	})
+	return records, nil
+}
+
 // LatestReviewRecord returns the highest recorded round for one run.
 func (tx *ReadTx) LatestReviewRecord(
 	ctx context.Context, runID domain.RunID,

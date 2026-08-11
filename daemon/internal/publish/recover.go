@@ -155,7 +155,7 @@ func drainPendingPublications(
 		if targetKey != "" && entry.IdempotencyKey != targetKey {
 			continue
 		}
-		intent, err := DecodeIntent(entry.Payload)
+		intent, err := DecodeStoredIntent(entry)
 		if err != nil {
 			return dispatched, fmt.Errorf("drain publications: intent %q payload: %w", entry.IdempotencyKey, err)
 		}
@@ -306,11 +306,11 @@ func finalizePublicationEntry(
 			return fmt.Errorf("publication intent %q is quarantined: %w",
 				key, errPublicationIntentDiverged)
 		}
-		committed, err := DecodeIntent(entry.Payload)
+		committed, err := DecodeStoredIntent(entry)
 		if err != nil {
 			return fmt.Errorf("publication intent %q payload: %w", key, err)
 		}
-		if committed != intent {
+		if !intentsCompatible(committed, intent) {
 			return fmt.Errorf("publication intent %q changed before finalization: %w",
 				key, errPublicationIntentDiverged)
 		}

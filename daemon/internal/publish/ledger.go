@@ -6,11 +6,16 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 // IntentKindPublication is the outbox kind under which candidate
 // publication intents are recorded (and later scanned for recovery).
-const IntentKindPublication = publicationrecord.IntentKindPublication
+const (
+	IntentKindPublication = publicationrecord.IntentKindPublication
+	IntentFormatLegacy    = publicationrecord.IntentFormatLegacy
+	IntentFormatCurrent   = publicationrecord.IntentFormatCurrent
+)
 
 // IntentLedger is the publish-owned port onto the store's outbox
 // ledger (plan §5.9): a publication effect commits its intent through
@@ -64,6 +69,7 @@ func intentForCandidate(
 		return Intent{}, fmt.Errorf("candidate carries no authorization binding: %w", ErrUnauthorizedPublication)
 	}
 	intent := Intent{
+		FormatVersion:         publicationrecord.IntentFormatCurrent,
 		Identity:              identity.Digest(),
 		InvocationID:          c.InvocationID,
 		Repo:                  c.Repo,
@@ -71,6 +77,13 @@ func intentForCandidate(
 		SourceHeadSHA:         c.HeadSHA,
 		AuthorizationID:       *c.AuthorizationID,
 		ProducingInvocationID: producingInvocationID,
+	}
+	if c.DispositionHistory != nil {
+		digest, err := c.DispositionHistory.digest()
+		if err != nil {
+			return Intent{}, fmt.Errorf("digest disposition history: %w", err)
+		}
+		intent.DispositionHistoryDigest = digest
 	}
 	if producingInvocationID != "" {
 		intent.ReservationRunID = c.RunID
@@ -81,11 +94,65 @@ func intentForCandidate(
 	return intent, nil
 }
 
+// ValidateIntentDispositionHistory binds recovery to the exact publisher-owned
+// section frozen by the durable intent. Only authenticated legacy-format
+// intents may omit the digest for a candidate that now carries disposition
+// history; a current-format intent cannot gain that compatibility by losing
+// one field.
+func ValidateIntentDispositionHistory(intent Intent, c Candidate) error {
+	if c.DispositionHistory == nil {
+		if intent.DispositionHistoryDigest != "" {
+			return fmt.Errorf("intent has disposition history but candidate does not: %w", ErrPublicationConflict)
+		}
+		return nil
+	}
+	digest, err := c.DispositionHistory.digest()
+	if err != nil {
+		return err
+	}
+	if intent.FormatVersion == IntentFormatCurrent && intent.DispositionHistoryDigest != digest {
+		return fmt.Errorf("intent disposition history changed: %w", ErrPublicationConflict)
+	}
+	return nil
+}
+
+func intentsCompatible(committed, proposed Intent) bool {
+	if committed == proposed {
+		return true
+	}
+	if committed.FormatVersion == publicationrecord.IntentFormatLegacy &&
+		proposed.FormatVersion == publicationrecord.IntentFormatCurrent {
+		proposed.FormatVersion = publicationrecord.IntentFormatLegacy
+		if committed.DispositionHistoryDigest == "" {
+			proposed.DispositionHistoryDigest = ""
+		}
+		return committed == proposed
+	}
+	return false
+}
+
 // DecodeIntent deserializes and validates a ledger payload. Unknown
 // fields and trailing data fail closed: an intent this package cannot
 // fully interpret must not drive convergence decisions.
 func DecodeIntent(payload []byte) (Intent, error) {
 	return publicationrecord.DecodeIntent(payload)
+}
+
+// DecodeStoredIntent authenticates the payload contract against the
+// store-owned outbox format marker. The payload's own version cannot grant
+// legacy compatibility by itself.
+func DecodeStoredIntent(entry store.QueueEntry) (Intent, error) {
+	intent, err := DecodeIntent(entry.Payload)
+	if err != nil {
+		return Intent{}, err
+	}
+	if intent.FormatVersion != entry.PayloadVersion {
+		return Intent{}, fmt.Errorf(
+			"intent payload format %d disagrees with outbox format %d: %w",
+			intent.FormatVersion, entry.PayloadVersion, domain.ErrParentKeyMismatch,
+		)
+	}
+	return intent, nil
 }
 
 // IntentKey returns the idempotency key for one invocation's effect of

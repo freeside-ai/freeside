@@ -3,9 +3,15 @@ package publish_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"errors"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 // TestStoreLedgerRecordsIntent drives an intent through the production
@@ -74,6 +80,73 @@ func TestStoreLedgerConverges(t *testing.T) {
 	}
 	if !bytes.Equal(prior, original) {
 		t.Errorf("second Record prior = %q, want the original intent", prior)
+	}
+}
+
+func TestStoreLedgerAuthenticatesCommittedIntentFormat(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "store.db")
+	s, err := store.Open(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+	ledger, err := publish.NewStoreLedger(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := publish.IntentKey("inv-0001", publish.IntentKindPublication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := fixtureIntent().Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ledger.Record(ctx, key, publish.IntentKindPublication, payload, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(
+		ctx, "UPDATE outbox SET payload_version = 1 WHERE idempotency_key = ?", key,
+	); err == nil || !strings.Contains(err.Error(), "cannot be downgraded") {
+		_ = raw.Close()
+		t.Fatalf("payload-version downgrade = %v, want schema refusal", err)
+	}
+	var changed []byte
+	if err := raw.QueryRowContext(
+		ctx,
+		`UPDATE outbox
+		 SET payload = CAST(json_set(payload, '$.format_version', 1) AS BLOB)
+		 WHERE idempotency_key = ?
+		 RETURNING payload`,
+		key,
+	).Scan(&changed); err != nil {
+		_ = raw.Close()
+		t.Fatal(err)
+	}
+	_, digestErr := raw.ExecContext(
+		ctx, "UPDATE outbox SET payload_digest = ? WHERE idempotency_key = ?",
+		contentaddr.Sum(changed), key,
+	)
+	closeErr := raw.Close()
+	if digestErr != nil || closeErr != nil {
+		t.Fatal(errors.Join(digestErr, closeErr))
+	}
+
+	if _, _, err := ledger.Record(
+		ctx, key, publish.IntentKindPublication, payload, nil,
+	); err == nil || !strings.Contains(err.Error(), "disagrees with outbox format") {
+		t.Fatalf("Record with payload-declared legacy row = %v, want format mismatch", err)
 	}
 }
 
