@@ -20,15 +20,18 @@ public final class AppSession {
 
     private let client: any APIProtocol
     private let cache: any CacheStore
+    private let deploymentURL: URL?
 
     public init(
         client: any APIProtocol,
         credentials: any DeviceCredentialStore,
         cache: any CacheStore,
-        pairingCode: String = ""
+        pairingCode: String = "",
+        deploymentURL: URL? = nil
     ) {
         self.client = client
         self.cache = cache
+        self.deploymentURL = deploymentURL
         // An unreadable credential is indistinguishable from an absent
         // one here, and the recovery is the same either way: pairing
         // mints a new device (#64; a lost token is revoke-and-repair).
@@ -45,6 +48,28 @@ public final class AppSession {
     /// pairing model already stored the credential.
     public func completePairing(_ credential: DeviceCredential) {
         phase = .ready(Self.coordinator(client: client, cache: cache, credential: credential))
+    }
+
+    /// A first-run LaunchAgent may publish readiness after the window already
+    /// rendered. Replace only an empty or still-unedited readiness suggestion
+    /// for the deployment this session already selected; never overwrite
+    /// operator input or apply a local code to a persisted remote daemon.
+    public func applyReadiness(_ readiness: DaemonReadiness?) {
+        guard
+            let deploymentURL,
+            case .needsPairing(let model) = phase
+        else { return }
+        guard let readiness else {
+            if Self.deploymentKey(for: deploymentURL)
+                == Self.deploymentKey(for: DaemonReadinessReader.supervisedAPIURL)
+            {
+                model.clearPairingCodePrefill()
+            }
+            return
+        }
+        guard Self.deploymentKey(for: deploymentURL) == Self.deploymentKey(for: readiness.apiURL)
+        else { return }
+        model.prefillPairingCode(readiness.pairingCode)
     }
 
     private static func coordinator(
@@ -148,7 +173,8 @@ public final class AppSession {
             },
             credentials: credentials,
             cache: DiskCacheStore(directory: cacheDirectory(for: serverURL)),
-            pairingCode: pairingCode
+            pairingCode: pairingCode,
+            deploymentURL: serverURL
         )
     }
 

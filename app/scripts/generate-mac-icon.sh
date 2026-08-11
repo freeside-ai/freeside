@@ -5,6 +5,7 @@ set -euo pipefail
 app_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_image="$app_dir/Apps/macOS/AppIcon.icon/Assets/Freeside-light.png"
 dark_image="$app_dir/Apps/macOS/AppIcon.icon/Assets/Freeside-dark.png"
+menu_image="$app_dir/Apps/macOS/FreesideMenuMark.png"
 scratch_dir="$(mktemp -d)"
 trap 'rm -rf "$scratch_dir"' EXIT
 
@@ -32,4 +33,12 @@ magick -size 1024x1024 xc:'#16120E' \
     -define png:color-type=6 -define png:exclude-chunks=date,time \
     "PNG32:$dark_image"
 
-echo "Generated $dark_image"
+magick "$source_image" \
+    -crop 500x860+260+70 +repage \
+    -colorspace gray -threshold 25% -transparent black \
+    -trim +repage -resize 88x88 \
+    -gravity center -background none -extent 96x96 \
+    -define png:exclude-chunks=date,time \
+    "$menu_image"
+
+echo "Generated $dark_image and $menu_image"

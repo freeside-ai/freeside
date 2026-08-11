@@ -15,12 +15,20 @@ public final class PairingModel {
         case failed(String)
     }
 
-    public var pairingCode: String
+    public var pairingCode: String {
+        didSet {
+            if !isApplyingPairingCodePrefill {
+                pairingCodeWasEdited = true
+            }
+        }
+    }
     public var displayName = ""
     public private(set) var phase: PhaseState = .idle
 
     private let client: any APIProtocol
     private let credentials: any DeviceCredentialStore
+    private var isApplyingPairingCodePrefill = false
+    private var pairingCodeWasEdited = false
 
     public init(
         client: any APIProtocol,
@@ -34,6 +42,17 @@ public final class PairingModel {
 
     public var canSubmit: Bool {
         !pairingCode.isEmpty && !displayName.isEmpty && phase != .pairing
+    }
+
+    public func prefillPairingCode(_ code: String) {
+        guard !pairingCodeWasEdited else { return }
+        isApplyingPairingCodePrefill = true
+        defer { isApplyingPairingCodePrefill = false }
+        pairingCode = code
+    }
+
+    public func clearPairingCodePrefill() {
+        prefillPairingCode("")
     }
 
     /// Exchanges the code; on success the credential is already saved.

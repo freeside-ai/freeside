@@ -13,6 +13,7 @@
 		100000000000000000000004 /* FreesideCore in Frameworks */ = {isa = PBXBuildFile; productRef = 100000000000000000000082 /* FreesideCore */; };
 		100000000000000000000005 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000015 /* AppIcon.icon */; };
 		100000000000000000000006 /* ai.freeside.daemon.plist in Embed LaunchAgents */ = {isa = PBXBuildFile; fileRef = 100000000000000000000017 /* ai.freeside.daemon.plist */; };
+		100000000000000000000007 /* FreesideMenuMark.png in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000018 /* FreesideMenuMark.png */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -37,6 +38,7 @@
 		100000000000000000000015 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		100000000000000000000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		100000000000000000000017 /* ai.freeside.daemon.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = LaunchAgents/ai.freeside.daemon.plist; sourceTree = "<group>"; };
+		100000000000000000000018 /* FreesideMenuMark.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = FreesideMenuMark.png; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -92,6 +94,7 @@
 				100000000000000000000015 /* AppIcon.icon */,
 				100000000000000000000016 /* Info.plist */,
 				100000000000000000000017 /* ai.freeside.daemon.plist */,
+				100000000000000000000018 /* FreesideMenuMark.png */,
 			);
 			path = macOS;
 			sourceTree = "<group>";
@@ -184,7 +187,7 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		100000000000000000000061 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000005 /* AppIcon.icon in Resources */); runOnlyForDeploymentPostprocessing = 0; };
+		100000000000000000000061 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000005 /* AppIcon.icon in Resources */, 100000000000000000000007 /* FreesideMenuMark.png in Resources */); runOnlyForDeploymentPostprocessing = 0; };
 		100000000000000000000062 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
