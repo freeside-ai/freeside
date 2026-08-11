@@ -50,6 +50,16 @@ Admission checks an authenticated open occurrence before consulting any
 historical resolved transition, so a later revocation cannot be masked by an
 older successful recovery.
 
+A later refute pass found that open-first gating was insufficient once the
+newer marker reached any terminal state without its own verified recovery: the
+older resolved marker could still match the globally latest successful
+transition. The numerically highest canonical occurrence is now the sole
+current authority, and journal, transition, carrier, and occurrence reads share
+one SQLite snapshot. Non-canonical numeric suffixes are rejected because
+aliases such as `01` and `+1` would otherwise make that ordering ambiguous.
+The same occurrence scan prevents projection or revocation convergence from
+silently selecting an older open marker.
+
 Upgrade review found that the new strict shape would reject markers persisted
 by the immediately preceding daemon version. Migration 0039 now authenticates
 the full frozen legacy item against a recorded identity, its deterministic

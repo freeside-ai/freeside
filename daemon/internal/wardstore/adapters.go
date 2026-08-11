@@ -9,8 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
-	"strconv"
 	"strings"
 	"time"
 
@@ -569,99 +567,123 @@ func (a *Leaser) AuthStoreVolume(
 	return volume, nil
 }
 
-func codexAuthReenrollmentPrefix(id domain.AuthIdentityID) string {
-	digest := contentaddr.Hex(contentaddr.Sum([]byte(id)))
-	return "system-health-codex-auth-" + digest + "-"
-}
-
-func codexAuthReenrollmentReason(id domain.AuthIdentityID) string {
-	return fmt.Sprintf(
-		"Codex auth identity %q can no longer refresh. Re-enroll the identity, then acknowledge this item before retrying.",
-		id,
-	)
-}
-
 func codexAuthReenrollmentItem(
 	id domain.AuthIdentityID,
-	itemID domain.ItemID,
+	occurrence int,
 	projectID domain.ProjectID,
 	version int,
 	status domain.ItemStatus,
+	binding *domain.CodexReenrollmentRecoveryBinding,
 ) (domain.AttentionItem, error) {
-	posture := domain.HealthPostureAdvisory
-	return domain.NewAttentionItem(domain.AttentionItemInput{
-		ID: itemID, ProjectID: projectID,
-		Subject: domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
-		Type:    domain.AttentionSystemHealth, Priority: domain.PriorityHigh,
-		Reason: codexAuthReenrollmentReason(id),
-		RequestedDecision: []domain.Action{
-			domain.ActionAcknowledge, domain.ActionStopUnattended,
-		},
-		ItemVersion: version, InterruptionClass: domain.InterruptionExceptional,
-		Posture: &posture, Status: status,
-	}, nil)
+	return store.NewCodexReenrollmentMarker(id, occurrence, projectID, version, status, binding)
 }
 
 func validateCodexAuthReenrollmentItem(
 	item domain.AttentionItem, id domain.AuthIdentityID,
 ) (int, error) {
-	prefix := codexAuthReenrollmentPrefix(id)
-	suffix := strings.TrimPrefix(string(item.ID), prefix)
-	if suffix == string(item.ID) {
-		return 0, nil
-	}
-	occurrence, err := strconv.Atoi(suffix)
-	if err != nil || occurrence < 1 {
-		return 0, errors.New("codex auth re-enrollment item has an invalid occurrence")
-	}
-	expected, err := codexAuthReenrollmentItem(
-		id, item.ID, item.ProjectID, item.ItemVersion, item.Status,
-	)
-	if err != nil {
-		return 0, err
-	}
-	expected.Timing = item.Timing
-	expected.DecidedAt = item.DecidedAt
-	if !reflect.DeepEqual(expected, item) {
-		return 0, errors.New("codex auth re-enrollment item diverges from its identity binding")
-	}
-	return occurrence, nil
+	return store.CodexReenrollmentMarkerOccurrence(item, id)
 }
 
-// NeedsCodexAuthReenrollment authenticates the open occurrence for id. The
+type codexAuthReenrollmentOccurrences struct {
+	latest           domain.AttentionItem
+	latestOccurrence int
+	open             []domain.AttentionItem
+}
+
+func scanCodexAuthReenrollmentOccurrences(
+	items []store.Snapshotted[domain.AttentionItem], id domain.AuthIdentityID,
+) (codexAuthReenrollmentOccurrences, error) {
+	var occurrences codexAuthReenrollmentOccurrences
+	for _, snapshot := range items {
+		item := snapshot.Value
+		occurrence, err := validateCodexAuthReenrollmentItem(item, id)
+		if err != nil {
+			return codexAuthReenrollmentOccurrences{}, err
+		}
+		if occurrence == 0 {
+			continue
+		}
+		if occurrence > occurrences.latestOccurrence {
+			occurrences.latest = item
+			occurrences.latestOccurrence = occurrence
+		}
+		if item.Status == domain.StatusOpen {
+			occurrences.open = append(occurrences.open, item)
+		}
+	}
+	return occurrences, nil
+}
+
+// NeedsCodexAuthReenrollment authenticates the newest occurrence for id. The
 // item is advisory globally; this identity-specific predicate is the refusal.
 func (a *AuthState) NeedsCodexAuthReenrollment(
 	ctx context.Context, id domain.AuthIdentityID,
 ) (bool, error) {
-	var open int
+	var needs bool
 	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
 		items, err := tx.ListAttentionItems(ctx)
 		if err != nil {
 			return err
 		}
-		for _, snapshot := range items {
-			item := snapshot.Value
-			occurrence, err := validateCodexAuthReenrollmentItem(item, id)
-			if err != nil {
-				return err
-			}
-			if occurrence > 0 && item.Status == domain.StatusOpen {
-				open++
-			}
+		occurrences, err := scanCodexAuthReenrollmentOccurrences(items, id)
+		if err != nil {
+			return err
 		}
+		if len(occurrences.open) > 1 {
+			return errors.New("codex auth identity has multiple open re-enrollment items")
+		}
+		if occurrences.latestOccurrence == 0 {
+			needs = false
+			return nil
+		}
+		latestItem := occurrences.latest
+		if len(occurrences.open) > 0 || latestItem.Status != domain.StatusResolved ||
+			latestItem.CodexReenrollmentRecoveryBinding == nil {
+			needs = true
+			return nil
+		}
+		latestJournal, found, err := tx.LatestCodexReenrollmentJournal(ctx, id)
+		if err != nil {
+			return err
+		}
+		if !found {
+			needs = true
+			return nil
+		}
+		binding, err := latestJournal.RecoveryBinding()
+		if err != nil {
+			if errors.Is(err, store.ErrCodexReenrollmentNotVerified) {
+				needs = true
+				return nil
+			}
+			return err
+		}
+		if latestJournal.MarkerItemID != latestItem.ID ||
+			*latestItem.CodexReenrollmentRecoveryBinding != binding {
+			needs = true
+			return nil
+		}
+		transition, found, err := tx.LatestCodexReenrollmentRecoveryTransition(ctx, id)
+		if err != nil {
+			return err
+		}
+		if !found {
+			needs = true
+			return nil
+		}
+		carrier, err := tx.CodexReenrollmentRecoveryCarrier(ctx, transition)
+		if err != nil {
+			return err
+		}
+		needs = carrier != latestItem.ID || transition.Binding() != binding
 		return nil
 	})
-	if err != nil {
-		return false, err
-	}
-	if open > 1 {
-		return false, errors.New("codex auth identity has multiple open re-enrollment items")
-	}
-	return open == 1, nil
+	return needs, err
 }
 
-// MarkCodexAuthNeedsReenrollment converges on one open occurrence. A later
-// revocation after an acknowledged prior occurrence receives the next id.
+// MarkCodexAuthNeedsReenrollment converges on an unbound occurrence. A later
+// revocation supersedes a marker that already carries, or has completed, a
+// verified operation so the older authority cannot clear the new failure.
 func (a *AuthState) MarkCodexAuthNeedsReenrollment(
 	ctx context.Context, runID domain.RunID, id domain.AuthIdentityID,
 ) error {
@@ -674,32 +696,102 @@ func (a *AuthState) MarkCodexAuthNeedsReenrollment(
 		if err != nil {
 			return err
 		}
-		maxOccurrence := 0
-		var open []domain.ItemID
-		for _, snapshot := range items {
-			item := snapshot.Value
-			occurrence, err := validateCodexAuthReenrollmentItem(item, id)
-			if err != nil {
-				return err
-			}
-			maxOccurrence = max(maxOccurrence, occurrence)
-			if occurrence > 0 && item.Status == domain.StatusOpen {
-				open = append(open, item.ID)
-			}
+		occurrences, err := scanCodexAuthReenrollmentOccurrences(items, id)
+		if err != nil {
+			return err
 		}
-		if len(open) > 1 {
+		if len(occurrences.open) > 1 {
 			return errors.New("codex auth identity has multiple open re-enrollment items")
 		}
-		if len(open) == 1 {
-			return nil
+		if len(occurrences.open) == 1 {
+			current := occurrences.open[0]
+			if current.ID != occurrences.latest.ID {
+				return errors.New("codex auth identity open re-enrollment item is not its latest occurrence")
+			}
+			supersede := current.CodexReenrollmentRecoveryBinding != nil
+			if !supersede {
+				latest, found, err := tx.LatestCodexReenrollmentJournal(ctx, id)
+				if err != nil {
+					return err
+				}
+				supersede = found && latest.MarkerItemID == current.ID && latest.Terminal != nil &&
+					latest.Terminal.Outcome == store.CodexReenrollmentVerified
+			}
+			if !supersede {
+				return nil
+			}
+			current.Status = domain.StatusSuperseded
+			current.ItemVersion++
+			if err := tx.PutAttentionItem(ctx, current); err != nil {
+				return err
+			}
 		}
-		itemID := domain.ItemID(codexAuthReenrollmentPrefix(id) + strconv.Itoa(maxOccurrence+1))
-		item, err := codexAuthReenrollmentItem(id, itemID, run.ProjectID, 1, domain.StatusOpen)
+		nextOccurrence, err := store.NextCodexReenrollmentMarkerOccurrence(occurrences.latestOccurrence)
+		if err != nil {
+			return err
+		}
+		item, err := codexAuthReenrollmentItem(id, nextOccurrence, run.ProjectID, 1, domain.StatusOpen, nil)
 		if err != nil {
 			return err
 		}
 		return tx.PutAttentionItem(ctx, item)
 	})
+}
+
+// ProjectVerifiedCodexReenrollment attaches the latest verified operation to
+// the exact open revoked-identity marker and exposes its resolving action. The
+// synchronized item update and journal re-read share one SQLite transaction.
+func (a *AuthState) ProjectVerifiedCodexReenrollment(
+	ctx context.Context, id domain.AuthIdentityID,
+) (domain.AttentionItem, error) {
+	var projected domain.AttentionItem
+	err := a.store.Write(ctx, func(tx *store.WriteTx) error {
+		latest, found, err := tx.LatestCodexReenrollmentJournal(ctx, id)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return store.ErrNotFound
+		}
+		binding, err := latest.RecoveryBinding()
+		if err != nil {
+			return err
+		}
+		items, err := tx.ListAttentionItems(ctx)
+		if err != nil {
+			return err
+		}
+		occurrences, err := scanCodexAuthReenrollmentOccurrences(items, id)
+		if err != nil {
+			return err
+		}
+		if len(occurrences.open) != 1 {
+			return fmt.Errorf("project codex re-enrollment binding: found %d open markers", len(occurrences.open))
+		}
+		item := occurrences.open[0]
+		if item.ID != occurrences.latest.ID {
+			return domain.ErrCodexReenrollmentMarkerMismatch
+		}
+		if item.ID != latest.MarkerItemID {
+			return domain.ErrCodexReenrollmentMarkerMismatch
+		}
+		if item.CodexReenrollmentRecoveryBinding != nil {
+			if *item.CodexReenrollmentRecoveryBinding == binding && item.Offers(domain.ActionResolveReenrollment) {
+				projected = item
+				return nil
+			}
+			return domain.ErrCodexReenrollmentBindingMismatch
+		}
+		item.CodexReenrollmentRecoveryBinding = &binding
+		item.RequestedDecision = append(item.RequestedDecision, domain.ActionResolveReenrollment)
+		item.ItemVersion++
+		if err := tx.PutAttentionItem(ctx, item); err != nil {
+			return err
+		}
+		projected = item
+		return nil
+	})
+	return projected, err
 }
 
 // Acquire opens or converges on one mutation window.

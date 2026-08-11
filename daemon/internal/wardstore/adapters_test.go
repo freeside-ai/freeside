@@ -12,6 +12,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
@@ -415,8 +416,8 @@ func TestCodexAuthStateIsIdentityScopedAndAdvisory(t *testing.T) {
 		t.Fatalf("resolve marker: %v", err)
 	}
 	needs, err = adapters.AuthState.NeedsCodexAuthReenrollment(ctx, "codex-a")
-	if err != nil || needs {
-		t.Fatalf("resolved marker still refuses = %t, %v", needs, err)
+	if err != nil || !needs {
+		t.Fatalf("human-only marker resolution refusal = %t, %v", needs, err)
 	}
 	if err := adapters.AuthState.MarkCodexAuthNeedsReenrollment(ctx, run.ID, "codex-a"); err != nil {
 		t.Fatalf("second occurrence: %v", err)
@@ -432,6 +433,326 @@ func TestCodexAuthStateIsIdentityScopedAndAdvisory(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCodexAuthStateRequiresVerifiedCommandBackedRecovery(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	adapters, err := wardstore.New(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
+	identity := domain.AuthIdentity{
+		ID: "codex-primary", Provider: "codex", AuthStoreMutationLease: true,
+		AuthStoreVolume: "codex-auth", MaxParallelExecutions: 1,
+		RefreshStrategy: domain.RefreshOnDemand,
+	}
+	run := domain.Run{
+		ID: "run-codex-recovery", ProjectID: "project-1",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordAuthIdentity(ctx, identity, at)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, run) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapters.AuthState.MarkCodexAuthNeedsReenrollment(ctx, run.ID, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	var markerID domain.ItemID
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		items, err := tx.ListAttentionItems(ctx)
+		if err == nil && len(items) == 1 {
+			markerID = items[0].Value.ID
+		}
+		return err
+	}); err != nil || markerID == "" {
+		t.Fatalf("read re-enrollment marker = %q, %v", markerID, err)
+	}
+	var rec store.CodexReenrollmentJournal
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		var err error
+		rec, _, err = tx.BeginCodexReenrollmentJournal(
+			ctx, identity.ID, markerID, "enroll-1", at, at.Add(time.Minute))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, identity.ID); err != nil || !needs {
+		t.Fatalf("pending admission refusal = %t, %v", needs, err)
+	}
+	if _, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID); !errors.Is(err, store.ErrCodexReenrollmentNotVerified) {
+		t.Fatalf("pending projection = %v, want not verified", err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.VerifyCodexReenrollment(
+			ctx, identity.ID, rec.Holder, rec.LeaseFence,
+			"sha256:replacement", at.Add(24*time.Hour), at.Add(time.Second))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	projected, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected.CodexReenrollmentRecoveryBinding == nil ||
+		!projected.Offers(domain.ActionResolveReenrollment) ||
+		projected.Offers(domain.ActionStopUnattended) {
+		t.Fatalf("projected marker = %+v", projected)
+	}
+	if needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, identity.ID); err != nil || !needs {
+		t.Fatalf("projected but unresolved refusal = %t, %v", needs, err)
+	}
+
+	device := domain.Device{
+		ID: "device-1", DisplayName: "operator", Status: domain.DeviceActive, PairedAt: at,
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error { return tx.PutDevice(ctx, device) }); err != nil {
+		t.Fatal(err)
+	}
+	service := signet.NewService(st,
+		signet.WithPairingKey([]byte("wardstore-recovery-test-key")),
+		signet.WithClock(func() time.Time { return at.Add(2 * time.Second) }),
+	)
+	var entityVersion int64
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		_, snapshot, err := tx.GetAttentionItemSnapshot(ctx, projected.ID)
+		entityVersion = snapshot.EntityVersion
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	command := signet.ClientCommand{
+		CommandID: "command-resolve-reenrollment", DeviceID: device.ID,
+		ExpectedEntityVersion: entityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: projected.ID, Action: domain.ActionResolveReenrollment,
+			ItemVersion: projected.ItemVersion, PRHeadSHA: projected.PRHeadSHA,
+			ArtifactDigests: projected.ArtifactDigests,
+		},
+	}
+	if _, err := service.Submit(ctx, command); err != nil {
+		t.Fatal(err)
+	}
+	if needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, identity.ID); err != nil || needs {
+		t.Fatalf("verified command-backed recovery refusal = %t, %v", needs, err)
+	}
+	if err := adapters.AuthState.MarkCodexAuthNeedsReenrollment(ctx, run.ID, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	if needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, identity.ID); err != nil || !needs {
+		t.Fatalf("new occurrence hidden by historical recovery = %t, %v", needs, err)
+	}
+	var newest domain.AttentionItem
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		items, err := tx.ListAttentionItems(ctx)
+		if err != nil {
+			return err
+		}
+		for _, snapshot := range items {
+			if snapshot.Value.Status == domain.StatusOpen {
+				newest = snapshot.Value
+			}
+		}
+		return nil
+	}); err != nil || newest.ID == "" {
+		t.Fatalf("read newest occurrence = %q, %v", newest.ID, err)
+	}
+	newest.Status = domain.StatusResolved
+	newest.ItemVersion++
+	newest, err = newest.WithDecidedAt(at.Add(3 * time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, newest)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, identity.ID); err != nil || !needs {
+		t.Fatalf("newer unverified terminal occurrence hidden by historical recovery = %t, %v", needs, err)
+	}
+}
+
+func TestFailedCodexReenrollmentCannotProjectOrClearAdmission(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	adapters, err := wardstore.New(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
+	identity := domain.AuthIdentity{
+		ID: "codex-failed", Provider: "codex", AuthStoreMutationLease: true,
+		AuthStoreVolume: "codex-auth-failed", MaxParallelExecutions: 1,
+		RefreshStrategy: domain.RefreshOnDemand,
+	}
+	run := domain.Run{
+		ID: "run-codex-failed", ProjectID: "project-1",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+	}
+	var rec store.CodexReenrollmentJournal
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordAuthIdentity(ctx, identity, at)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, run) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapters.AuthState.MarkCodexAuthNeedsReenrollment(ctx, run.ID, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	var markerID domain.ItemID
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		items, err := tx.ListAttentionItems(ctx)
+		if err == nil && len(items) == 1 {
+			markerID = items[0].Value.ID
+		}
+		return err
+	}); err != nil || markerID == "" {
+		t.Fatalf("read failed re-enrollment marker = %q, %v", markerID, err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		var err error
+		rec, _, err = tx.BeginCodexReenrollmentJournal(
+			ctx, identity.ID, markerID, "enroll-failed", at, at.Add(time.Minute))
+		if err != nil {
+			return err
+		}
+		return tx.FailCodexReenrollment(
+			ctx, identity.ID, rec.Holder, rec.LeaseFence,
+			store.CodexReenrollmentVerificationFailed, at.Add(time.Second))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, identity.ID); err != nil || !needs {
+		t.Fatalf("failed admission refusal = %t, %v", needs, err)
+	}
+	if _, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID); !errors.Is(err, store.ErrCodexReenrollmentNotVerified) {
+		t.Fatalf("failed projection = %v, want not verified", err)
+	}
+}
+
+func TestCodexReenrollmentOperationCannotCrossMarkerOccurrences(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	adapters, err := wardstore.New(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
+	identity := domain.AuthIdentity{
+		ID: "codex-occurrence", Provider: "codex", AuthStoreMutationLease: true,
+		AuthStoreVolume: "codex-auth-occurrence", MaxParallelExecutions: 1,
+		RefreshStrategy: domain.RefreshOnDemand,
+	}
+	run := domain.Run{
+		ID: "run-codex-occurrence", ProjectID: "project-1",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordAuthIdentity(ctx, identity, at)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, run) }); err != nil {
+		t.Fatal(err)
+	}
+	markers := func() []domain.AttentionItem {
+		t.Helper()
+		var got []domain.AttentionItem
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			items, err := tx.ListAttentionItems(ctx)
+			if err != nil {
+				return err
+			}
+			for _, snapshot := range items {
+				if snapshot.Value.Type == domain.AttentionSystemHealth {
+					got = append(got, snapshot.Value)
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	verify := func(markerID domain.ItemID, holder domain.InvocationID, start time.Time) store.CodexReenrollmentJournal {
+		t.Helper()
+		var rec store.CodexReenrollmentJournal
+		if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			var err error
+			rec, _, err = tx.BeginCodexReenrollmentJournal(
+				ctx, identity.ID, markerID, holder, start, start.Add(time.Minute))
+			if err != nil {
+				return err
+			}
+			return tx.VerifyCodexReenrollment(
+				ctx, identity.ID, holder, rec.LeaseFence,
+				domain.Digest("sha256:"+string(holder)), start.Add(24*time.Hour), start.Add(time.Second))
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return rec
+	}
+
+	if err := adapters.AuthState.MarkCodexAuthNeedsReenrollment(ctx, run.ID, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	first := markers()[0]
+	firstOp := verify(first.ID, "enroll-first", at)
+	// A new revocation after verification but before projection must retire the
+	// unbound carrier rather than inheriting its completed operation.
+	if err := adapters.AuthState.MarkCodexAuthNeedsReenrollment(ctx, run.ID, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	got := markers()
+	if len(got) != 2 || got[0].Status != domain.StatusSuperseded || got[1].Status != domain.StatusOpen {
+		t.Fatalf("post-verification occurrences = %+v", got)
+	}
+	if _, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID); !errors.Is(err, domain.ErrCodexReenrollmentMarkerMismatch) {
+		t.Fatalf("old operation projection = %v, want marker mismatch", err)
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.ReleaseAuthStoreMutationLease(
+			ctx, identity.ID, firstOp.Holder, firstOp.LeaseFence, at.Add(2*time.Second))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	verify(got[1].ID, "enroll-second", at.Add(3*time.Second))
+	projected, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID)
+	if err != nil || projected.ID != got[1].ID {
+		t.Fatalf("second occurrence projection = %s, %v", projected.ID, err)
+	}
+	// A revocation while that projected marker is still open must also rotate
+	// the occurrence, making its operation unavailable to the new failure.
+	if err := adapters.AuthState.MarkCodexAuthNeedsReenrollment(ctx, run.ID, identity.ID); err != nil {
+		t.Fatal(err)
+	}
+	got = markers()
+	if len(got) != 3 || got[1].Status != domain.StatusSuperseded || got[2].Status != domain.StatusOpen {
+		t.Fatalf("post-projection occurrences = %+v", got)
+	}
+	if _, err := adapters.AuthState.ProjectVerifiedCodexReenrollment(ctx, identity.ID); !errors.Is(err, domain.ErrCodexReenrollmentMarkerMismatch) {
+		t.Fatalf("projected old operation reuse = %v, want marker mismatch", err)
 	}
 }
 

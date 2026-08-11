@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -31,6 +32,41 @@ func TestDecodeCodexReviewRejectsUnknownAndTrailingFields(t *testing.T) {
 		if err == nil {
 			t.Fatalf("decodeCodexReview(%q) succeeded", body)
 		}
+	}
+}
+
+func TestCodexAuthReenrollmentOccurrencesRequireCanonicalNumericOrder(t *testing.T) {
+	id := domain.AuthIdentityID("codex-order")
+	prefix := store.CodexReenrollmentMarkerPrefix(id)
+	item := func(occurrence int) domain.AttentionItem {
+		got, err := codexAuthReenrollmentItem(
+			id, occurrence, "project-1", 1, domain.StatusOpen, nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	for _, suffix := range []string{"+1", "01", " 1", "0", "-1", "999999999999999999999999999999999999"} {
+		malformed := item(1)
+		malformed.ID = domain.ItemID(prefix + suffix)
+		if _, err := validateCodexAuthReenrollmentItem(malformed, id); !errors.Is(err, domain.ErrCodexReenrollmentMarkerMismatch) {
+			t.Errorf("occurrence suffix %q accepted", suffix)
+		}
+	}
+	items := []store.Snapshotted[domain.AttentionItem]{
+		{Value: item(10)},
+		{Value: item(2)},
+	}
+	occurrences, err := scanCodexAuthReenrollmentOccurrences(items, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if occurrences.latestOccurrence != 10 || occurrences.latest.ID != domain.ItemID(prefix+"10") {
+		t.Fatalf("latest occurrence = %d, %q", occurrences.latestOccurrence, occurrences.latest.ID)
+	}
+	if _, err := store.NextCodexReenrollmentMarkerOccurrence(math.MaxInt); !errors.Is(err, domain.ErrCodexReenrollmentMarkerMismatch) {
+		t.Fatalf("exhausted occurrence = %v, want marker mismatch", err)
 	}
 }
 
