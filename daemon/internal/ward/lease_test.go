@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -21,14 +22,39 @@ type fakeLeaser struct {
 	lease    domain.AuthStoreMutationLease
 	released bool
 	volume   string
+	identity domain.AuthIdentity
+	holders  []domain.InvocationID
 	// releaseCtxErr records the context state Release observed, so tests can
 	// prove the release ran detached from an already-cancelled run context.
 	releaseCtxErr error
 
 	onAcquire func(id domain.AuthIdentityID, holder domain.InvocationID, now, expiresAt time.Time) (domain.AuthStoreMutationLease, error)
 	onGet     func(current domain.AuthStoreMutationLease) (domain.AuthStoreMutationLease, error)
+	onRenew   func(current domain.AuthStoreMutationLease, now, expiresAt time.Time) (domain.AuthStoreMutationLease, error)
 	onRelease func(id domain.AuthIdentityID, holder domain.InvocationID, fence int64, releasedAt time.Time) error
 	onVolume  func(id domain.AuthIdentityID) (string, error)
+}
+
+func (l *fakeLeaser) GetIdentity(
+	_ context.Context, id domain.AuthIdentityID,
+) (domain.AuthIdentity, error) {
+	l.recordCall("identity-get " + string(id))
+	if l.identity.ID != "" {
+		return l.identity, nil
+	}
+	store := l.volume
+	if store == "" {
+		store = "provider-cred"
+	} else if filepath.IsAbs(store) {
+		if resolved, err := filepath.EvalSymlinks(store); err == nil {
+			store = resolved
+		}
+	}
+	return domain.AuthIdentity{
+		ID: id, Provider: "openai", AuthStoreMutationLease: true,
+		AuthStoreVolume: store, MaxParallelExecutions: 1,
+		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+	}, nil
 }
 
 func (l *fakeLeaser) recordCall(s string) {
@@ -58,6 +84,7 @@ func (l *fakeLeaser) Acquire(_ context.Context, id domain.AuthIdentityID, holder
 	now, expiresAt time.Time,
 ) (domain.AuthStoreMutationLease, error) {
 	l.recordCall("lease-acquire " + string(id))
+	l.holders = append(l.holders, holder)
 	if l.onAcquire != nil {
 		return l.onAcquire(id, holder, now, expiresAt)
 	}
@@ -73,6 +100,22 @@ func (l *fakeLeaser) Get(_ context.Context, id domain.AuthIdentityID) (domain.Au
 	if l.onGet != nil {
 		return l.onGet(l.lease)
 	}
+	return l.lease, nil
+}
+
+func (l *fakeLeaser) Renew(
+	_ context.Context, id domain.AuthIdentityID, holder domain.InvocationID,
+	fence int64, now, expiresAt time.Time,
+) (domain.AuthStoreMutationLease, error) {
+	l.recordCall("lease-renew " + string(id))
+	if l.onRenew != nil {
+		return l.onRenew(l.lease, now, expiresAt)
+	}
+	if id != l.lease.AuthIdentityID || holder != l.lease.Holder || fence != l.lease.Fence ||
+		!l.lease.HeldAt(now) {
+		return domain.AuthStoreMutationLease{}, errors.New("fake leaser: caller cannot renew the lease")
+	}
+	l.lease.ExpiresAt = expiresAt
 	return l.lease, nil
 }
 

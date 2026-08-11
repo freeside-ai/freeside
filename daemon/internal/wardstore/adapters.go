@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -91,8 +93,9 @@ func verifyCodexReviewStateBody(record store.CodexReviewOpaqueRecord) error {
 // separate Go types because AuthStoreLeaser.Get and HandoffJournal.Get
 // intentionally use the same verb for different records.
 type Adapters struct {
-	Journal *Journal
-	Leaser  *Leaser
+	Journal   *Journal
+	Leaser    *Leaser
+	AuthState *AuthState
 }
 
 // Journal backs ward's journal and atomic leased-open interfaces.
@@ -105,14 +108,20 @@ type Leaser struct {
 	store *store.Store
 }
 
+// AuthState backs ward's durable, identity-scoped Codex re-enrollment marker.
+type AuthState struct {
+	store *store.Store
+}
+
 // New constructs the production ward persistence adapters.
 func New(st *store.Store) (*Adapters, error) {
 	if st == nil {
 		return nil, errors.New("ward store adapters: nil store")
 	}
 	return &Adapters{
-		Journal: &Journal{store: st},
-		Leaser:  &Leaser{store: st},
+		Journal:   &Journal{store: st},
+		Leaser:    &Leaser{store: st},
+		AuthState: &AuthState{store: st},
 	}, nil
 }
 
@@ -525,6 +534,22 @@ func (a *Journal) GetCodexReviewBinding(
 	return binding, nil
 }
 
+// GetIdentity reconstructs the current trusted identity declaration.
+func (a *Leaser) GetIdentity(
+	ctx context.Context, id domain.AuthIdentityID,
+) (domain.AuthIdentity, error) {
+	var identity domain.AuthIdentity
+	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		identity, err = tx.GetAuthIdentity(ctx, id)
+		return err
+	})
+	if err != nil {
+		return domain.AuthIdentity{}, fmt.Errorf("auth identity %q: %w", id, err)
+	}
+	return identity, nil
+}
+
 // AuthStoreVolume returns the trusted identity-to-volume binding.
 func (a *Leaser) AuthStoreVolume(
 	ctx context.Context, id domain.AuthIdentityID,
@@ -542,6 +567,139 @@ func (a *Leaser) AuthStoreVolume(
 		return "", fmt.Errorf("auth-store volume for identity %q: %w", id, err)
 	}
 	return volume, nil
+}
+
+func codexAuthReenrollmentPrefix(id domain.AuthIdentityID) string {
+	digest := contentaddr.Hex(contentaddr.Sum([]byte(id)))
+	return "system-health-codex-auth-" + digest + "-"
+}
+
+func codexAuthReenrollmentReason(id domain.AuthIdentityID) string {
+	return fmt.Sprintf(
+		"Codex auth identity %q can no longer refresh. Re-enroll the identity, then acknowledge this item before retrying.",
+		id,
+	)
+}
+
+func codexAuthReenrollmentItem(
+	id domain.AuthIdentityID,
+	itemID domain.ItemID,
+	projectID domain.ProjectID,
+	version int,
+	status domain.ItemStatus,
+) (domain.AttentionItem, error) {
+	posture := domain.HealthPostureAdvisory
+	return domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: itemID, ProjectID: projectID,
+		Subject: domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		Type:    domain.AttentionSystemHealth, Priority: domain.PriorityHigh,
+		Reason: codexAuthReenrollmentReason(id),
+		RequestedDecision: []domain.Action{
+			domain.ActionAcknowledge, domain.ActionStopUnattended,
+		},
+		ItemVersion: version, InterruptionClass: domain.InterruptionExceptional,
+		Posture: &posture, Status: status,
+	}, nil)
+}
+
+func validateCodexAuthReenrollmentItem(
+	item domain.AttentionItem, id domain.AuthIdentityID,
+) (int, error) {
+	prefix := codexAuthReenrollmentPrefix(id)
+	suffix := strings.TrimPrefix(string(item.ID), prefix)
+	if suffix == string(item.ID) {
+		return 0, nil
+	}
+	occurrence, err := strconv.Atoi(suffix)
+	if err != nil || occurrence < 1 {
+		return 0, errors.New("codex auth re-enrollment item has an invalid occurrence")
+	}
+	expected, err := codexAuthReenrollmentItem(
+		id, item.ID, item.ProjectID, item.ItemVersion, item.Status,
+	)
+	if err != nil {
+		return 0, err
+	}
+	expected.Timing = item.Timing
+	expected.DecidedAt = item.DecidedAt
+	if !reflect.DeepEqual(expected, item) {
+		return 0, errors.New("codex auth re-enrollment item diverges from its identity binding")
+	}
+	return occurrence, nil
+}
+
+// NeedsCodexAuthReenrollment authenticates the open occurrence for id. The
+// item is advisory globally; this identity-specific predicate is the refusal.
+func (a *AuthState) NeedsCodexAuthReenrollment(
+	ctx context.Context, id domain.AuthIdentityID,
+) (bool, error) {
+	var open int
+	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
+		items, err := tx.ListAttentionItems(ctx)
+		if err != nil {
+			return err
+		}
+		for _, snapshot := range items {
+			item := snapshot.Value
+			occurrence, err := validateCodexAuthReenrollmentItem(item, id)
+			if err != nil {
+				return err
+			}
+			if occurrence > 0 && item.Status == domain.StatusOpen {
+				open++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	if open > 1 {
+		return false, errors.New("codex auth identity has multiple open re-enrollment items")
+	}
+	return open == 1, nil
+}
+
+// MarkCodexAuthNeedsReenrollment converges on one open occurrence. A later
+// revocation after an acknowledged prior occurrence receives the next id.
+func (a *AuthState) MarkCodexAuthNeedsReenrollment(
+	ctx context.Context, runID domain.RunID, id domain.AuthIdentityID,
+) error {
+	return a.store.Write(ctx, func(tx *store.WriteTx) error {
+		run, err := tx.GetRun(ctx, runID)
+		if err != nil {
+			return err
+		}
+		items, err := tx.ListAttentionItems(ctx)
+		if err != nil {
+			return err
+		}
+		maxOccurrence := 0
+		var open []domain.ItemID
+		for _, snapshot := range items {
+			item := snapshot.Value
+			occurrence, err := validateCodexAuthReenrollmentItem(item, id)
+			if err != nil {
+				return err
+			}
+			maxOccurrence = max(maxOccurrence, occurrence)
+			if occurrence > 0 && item.Status == domain.StatusOpen {
+				open = append(open, item.ID)
+			}
+		}
+		if len(open) > 1 {
+			return errors.New("codex auth identity has multiple open re-enrollment items")
+		}
+		if len(open) == 1 {
+			return nil
+		}
+		itemID := domain.ItemID(codexAuthReenrollmentPrefix(id) + strconv.Itoa(maxOccurrence+1))
+		item, err := codexAuthReenrollmentItem(id, itemID, run.ProjectID, 1, domain.StatusOpen)
+		if err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, item)
+	})
 }
 
 // Acquire opens or converges on one mutation window.
@@ -571,6 +729,26 @@ func (a *Leaser) Get(
 	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		lease, err = tx.GetAuthStoreMutationLease(ctx, id)
+		return err
+	})
+	if err != nil {
+		return domain.AuthStoreMutationLease{}, err
+	}
+	return lease, nil
+}
+
+// Renew extends the exact live mutation window.
+func (a *Leaser) Renew(
+	ctx context.Context,
+	id domain.AuthIdentityID,
+	holder domain.InvocationID,
+	fence int64,
+	now, expiresAt time.Time,
+) (domain.AuthStoreMutationLease, error) {
+	var lease domain.AuthStoreMutationLease
+	err := a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		var err error
+		lease, err = tx.RenewAuthStoreMutationLease(ctx, id, holder, fence, now, expiresAt)
 		return err
 	})
 	if err != nil {
@@ -859,6 +1037,7 @@ func fromStoreRecord(rec store.HandoffJournalRecord) ward.HandoffJournalRecord {
 
 var (
 	_ ward.AuthStoreLeaser     = (*Leaser)(nil)
+	_ ward.CodexAuthState      = (*AuthState)(nil)
 	_ ward.HandoffJournal      = (*Journal)(nil)
 	_ ward.LeasedHandoffOpener = (*Journal)(nil)
 )

@@ -35,19 +35,21 @@ import (
 const realRunLiveEnv = "FREESIDE_REAL_RUN_LIVE_TEST"
 
 type realRunEnv struct {
-	stateRoot      string
-	agentImage     domain.ImageRef
-	exporterImage  string
-	seedRoot       string
-	authIdentityID domain.AuthIdentityID
-	authVolume     string
-	repo           string
-	repositoryID   int64
-	baseRef        string
-	baseSHA        string
-	promptPackage  string
-	instructions   string
-	approvedRecipe domain.Digest
+	stateRoot            string
+	agentImage           domain.ImageRef
+	exporterImage        string
+	seedRoot             string
+	authIdentityID       domain.AuthIdentityID
+	authVolume           string
+	reviewAuthIdentityID domain.AuthIdentityID
+	reviewAuthSnapshot   string
+	repo                 string
+	repositoryID         int64
+	baseRef              string
+	baseSHA              string
+	promptPackage        string
+	instructions         string
+	approvedRecipe       domain.Digest
 }
 
 func realRunEnvironment(t *testing.T) realRunEnv {
@@ -57,30 +59,38 @@ func realRunEnvironment(t *testing.T) realRunEnv {
 			"FREESIDE_REAL_RUN_STATE_ROOT, FREESIDE_REAL_RUN_AGENT_IMAGE (digest-pinned), " +
 			"FREESIDE_WARD_EXPORTER_IMAGE (digest-pinned), FREESIDE_REAL_RUN_SEED_ROOT, " +
 			"FREESIDE_REAL_RUN_AUTH_IDENTITY, FREESIDE_REAL_RUN_AUTH_VOLUME, " +
+			"FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY, FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT, " +
 			"FREESIDE_REAL_RUN_REPO (owner/name), FREESIDE_REAL_RUN_REPOSITORY_ID, " +
 			"FREESIDE_REAL_RUN_BASE_REF, FREESIDE_REAL_RUN_BASE_SHA, " +
 			"FREESIDE_REAL_RUN_PROMPT_PACKAGE (file), FREESIDE_REAL_RUN_INSTRUCTIONS (file), " +
 			"FREESIDE_REAL_RUN_APPROVED_RECIPE (sha256 digest)")
 	}
 	env := realRunEnv{
-		stateRoot:      requireEnv(t, "FREESIDE_REAL_RUN_STATE_ROOT"),
-		agentImage:     domain.ImageRef(requireEnv(t, "FREESIDE_REAL_RUN_AGENT_IMAGE")),
-		exporterImage:  requireEnv(t, "FREESIDE_WARD_EXPORTER_IMAGE"),
-		seedRoot:       requireEnv(t, "FREESIDE_REAL_RUN_SEED_ROOT"),
-		authIdentityID: domain.AuthIdentityID(requireEnv(t, "FREESIDE_REAL_RUN_AUTH_IDENTITY")),
-		authVolume:     requireEnv(t, "FREESIDE_REAL_RUN_AUTH_VOLUME"),
-		repo:           requireEnv(t, "FREESIDE_REAL_RUN_REPO"),
-		baseRef:        requireEnv(t, "FREESIDE_REAL_RUN_BASE_REF"),
-		baseSHA:        requireEnv(t, "FREESIDE_REAL_RUN_BASE_SHA"),
-		promptPackage:  requireEnv(t, "FREESIDE_REAL_RUN_PROMPT_PACKAGE"),
-		instructions:   requireEnv(t, "FREESIDE_REAL_RUN_INSTRUCTIONS"),
-		approvedRecipe: domain.Digest(requireEnv(t, "FREESIDE_REAL_RUN_APPROVED_RECIPE")),
+		stateRoot:            requireEnv(t, "FREESIDE_REAL_RUN_STATE_ROOT"),
+		agentImage:           domain.ImageRef(requireEnv(t, "FREESIDE_REAL_RUN_AGENT_IMAGE")),
+		exporterImage:        requireEnv(t, "FREESIDE_WARD_EXPORTER_IMAGE"),
+		seedRoot:             requireEnv(t, "FREESIDE_REAL_RUN_SEED_ROOT"),
+		authIdentityID:       domain.AuthIdentityID(requireEnv(t, "FREESIDE_REAL_RUN_AUTH_IDENTITY")),
+		authVolume:           requireEnv(t, "FREESIDE_REAL_RUN_AUTH_VOLUME"),
+		reviewAuthIdentityID: domain.AuthIdentityID(requireEnv(t, "FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY")),
+		reviewAuthSnapshot:   requireEnv(t, "FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT"),
+		repo:                 requireEnv(t, "FREESIDE_REAL_RUN_REPO"),
+		baseRef:              requireEnv(t, "FREESIDE_REAL_RUN_BASE_REF"),
+		baseSHA:              requireEnv(t, "FREESIDE_REAL_RUN_BASE_SHA"),
+		promptPackage:        requireEnv(t, "FREESIDE_REAL_RUN_PROMPT_PACKAGE"),
+		instructions:         requireEnv(t, "FREESIDE_REAL_RUN_INSTRUCTIONS"),
+		approvedRecipe:       domain.Digest(requireEnv(t, "FREESIDE_REAL_RUN_APPROVED_RECIPE")),
 	}
 	id, err := strconv.ParseInt(requireEnv(t, "FREESIDE_REAL_RUN_REPOSITORY_ID"), 10, 64)
 	if err != nil || id <= 0 {
 		t.Fatalf("FREESIDE_REAL_RUN_REPOSITORY_ID must be a positive integer: %v", err)
 	}
 	env.repositoryID = id
+	resolvedReviewAuth, err := filepath.EvalSymlinks(env.reviewAuthSnapshot)
+	if err != nil || !filepath.IsAbs(resolvedReviewAuth) {
+		t.Fatalf("FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT must resolve to an absolute host file: %v", err)
+	}
+	env.reviewAuthSnapshot = resolvedReviewAuth
 	// Digest pinning is the ward's own refusal, checked here so the harness
 	// reports a configuration mistake rather than a gate failure fifteen
 	// minutes into a run.
@@ -165,8 +175,20 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 		AuthStoreVolume: env.authVolume, MaxParallelExecutions: 1,
 		RefreshStrategy: domain.RefreshOnDemand,
 	}
+	reviewIdentity := domain.AuthIdentity{
+		ID: env.reviewAuthIdentityID, Provider: "openai", AuthStoreMutationLease: true,
+		AuthStoreVolume: env.reviewAuthSnapshot, MaxParallelExecutions: 1,
+		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+	}
+	if reviewIdentity.ID == identity.ID {
+		t.Fatal("writer and Codex reviewer auth identities must be distinct")
+	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		return tx.RecordAuthIdentity(ctx, identity, time.Now().UTC())
+		at := time.Now().UTC()
+		if err := tx.RecordAuthIdentity(ctx, identity, at); err != nil {
+			return err
+		}
+		return tx.RecordAuthIdentity(ctx, reviewIdentity, at)
 	}); err != nil {
 		t.Fatalf("record auth identity: %v", err)
 	}

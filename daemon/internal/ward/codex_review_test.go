@@ -1,6 +1,7 @@
 package ward
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -709,8 +710,12 @@ func testCodexReviewLifecycle(
 	journal := &fakeCodexReviewJournal{}
 	cfg.Journal = journal
 	cfg.ProxyURL = ""
+	cfg.AuthStoreLeaser = &fakeLeaser{volume: req.AuthSnapshot}
+	cfg.AuthRefresher = &fakeCodexAuthRefresher{}
+	cfg.AuthState = &fakeCodexAuthState{}
 	launch := CodexReviewLaunchSpec{
-		RunID: req.RunID, Image: req.Image, WorkspaceVolume: req.WorkspaceVolume,
+		RunID: req.RunID, WorkflowRunID: domain.RunID(req.RunID),
+		Image: req.Image, WorkspaceVolume: req.WorkspaceVolume,
 		WorkspaceSourceRunID: req.RunID,
 		ExpectedHead:         testCodexReviewHead, Prompt: req.Prompt, Boundary: req.Boundary,
 		AuthMode: req.AuthMode, AuthIdentityID: req.AuthIdentityID,
@@ -2692,13 +2697,6 @@ func TestCodexReviewAuthSnapshotFailsClosed(t *testing.T) {
 		auth func(*testing.T) []byte
 	}{
 		{
-			name: "refresh token present",
-			auth: func(t *testing.T) []byte {
-				return []byte(fmt.Sprintf(`{"OPENAI_API_KEY":null,"tokens":{"id_token":"id","access_token":%q,"refresh_token":"family-revoking"}}`,
-					codexReviewJWT(t, codexReviewEpoch.Add(2*time.Hour))))
-			},
-		},
-		{
 			name: "token below lifetime floor",
 			auth: func(t *testing.T) []byte {
 				return []byte(fmt.Sprintf(`{"OPENAI_API_KEY":null,"tokens":{"id_token":"id","access_token":%q,"refresh_token":""}}`,
@@ -2709,6 +2707,13 @@ func TestCodexReviewAuthSnapshotFailsClosed(t *testing.T) {
 			name: "mixed API key",
 			auth: func(t *testing.T) []byte {
 				return []byte(fmt.Sprintf(`{"OPENAI_API_KEY":"not-a-real-key","tokens":{"id_token":"id","access_token":%q,"refresh_token":""}}`,
+					codexReviewJWT(t, codexReviewEpoch.Add(2*time.Hour))))
+			},
+		},
+		{
+			name: "refresh token aliased into id token",
+			auth: func(t *testing.T) []byte {
+				return []byte(fmt.Sprintf(`{"OPENAI_API_KEY":null,"tokens":{"id_token":"prefix-family-revoking","access_token":%q,"refresh_token":"family-revoking"}}`,
 					codexReviewJWT(t, codexReviewEpoch.Add(2*time.Hour))))
 			},
 		},
@@ -2728,6 +2733,41 @@ func TestCodexReviewAuthSnapshotFailsClosed(t *testing.T) {
 				t.Fatalf("Build = %v, want typed refusal", err)
 			}
 		})
+	}
+}
+
+func TestCodexReviewDerivesAccessOnlySnapshotFromHostStore(t *testing.T) {
+	cfg, req := testCodexReview(t)
+	hostBody := []byte(fmt.Sprintf(
+		`{"OPENAI_API_KEY":null,"tokens":{"id_token":"id","access_token":%q,"refresh_token":"family-revoking"}}`,
+		codexReviewJWT(t, codexReviewEpoch.Add(2*time.Hour)),
+	))
+	req.AuthSnapshot = writeCodexReviewFile(t, cfg.InputRoot, "host-auth.json", hostBody)
+	snapshotBody, _, err := codexReviewAgentAuthSnapshot(req.AuthMode, hostBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Snapshot.authDigest = string(digestBody(snapshotBody))
+
+	_, binding, err := BuildCodexReviewAgentSpec(cfg, req)
+	if err != nil {
+		t.Fatalf("Build = %v, want access-only snapshot", err)
+	}
+	if binding.AuthSnapshotDigest != string(digestBody(snapshotBody)) {
+		t.Fatalf("binding auth digest = %q, want sanitized digest", binding.AuthSnapshotDigest)
+	}
+	if bytes.Contains(snapshotBody, []byte("family-revoking")) {
+		t.Fatal("derived agent snapshot carries the host refresh token")
+	}
+	if _, err := inspectCodexAuthSnapshot(req.AuthMode, snapshotBody); err != nil {
+		t.Fatalf("derived agent snapshot = %v", err)
+	}
+	stored, err := os.ReadFile(req.AuthSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stored, hostBody) {
+		t.Fatal("deriving the agent snapshot mutated the host store")
 	}
 }
 

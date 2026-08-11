@@ -297,7 +297,7 @@ func TestCodexReviewJournalRoundTripsLifecycleAcrossStoreReopen(t *testing.T) {
 	}
 }
 
-func TestLeaserMapsEndedWindowForWardConvergence(t *testing.T) {
+func TestLeaserExcludesConcurrentHolderAndMapsEndedWindow(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	if err != nil {
@@ -323,6 +323,11 @@ func TestLeaserMapsEndedWindowForWardConvergence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
+	if _, err := adapters.Leaser.Acquire(
+		ctx, identity.ID, "inv-2", at.Add(time.Second), at.Add(2*time.Minute),
+	); !errors.Is(err, store.ErrLeaseHeld) {
+		t.Fatalf("concurrent holder acquire = %v, want %v", err, store.ErrLeaseHeld)
+	}
 	err = adapters.Leaser.Release(
 		ctx, identity.ID, lease.Holder, lease.Fence, lease.ExpiresAt.Add(time.Second),
 	)
@@ -334,6 +339,99 @@ func TestLeaserMapsEndedWindowForWardConvergence(t *testing.T) {
 func TestNewRejectsNilStore(t *testing.T) {
 	if _, err := wardstore.New(nil); err == nil {
 		t.Fatal("wardstore.New(nil) succeeded")
+	}
+}
+
+func TestCodexAuthStateIsIdentityScopedAndAdvisory(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	adapters, err := wardstore.New(st)
+	if err != nil {
+		t.Fatalf("wardstore.New: %v", err)
+	}
+	run := domain.Run{
+		ID: "run-codex-auth", ProjectID: "project-1",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, run) }); err != nil {
+		t.Fatalf("PutRun: %v", err)
+	}
+
+	if err := adapters.AuthState.MarkCodexAuthNeedsReenrollment(ctx, run.ID, "codex-a"); err != nil {
+		t.Fatalf("first mark: %v", err)
+	}
+	if err := adapters.AuthState.MarkCodexAuthNeedsReenrollment(ctx, run.ID, "codex-a"); err != nil {
+		t.Fatalf("convergent mark: %v", err)
+	}
+	needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, "codex-a")
+	if err != nil || !needs {
+		t.Fatalf("codex-a needs re-enrollment = %t, %v", needs, err)
+	}
+	needs, err = adapters.AuthState.NeedsCodexAuthReenrollment(ctx, "codex-b")
+	if err != nil || needs {
+		t.Fatalf("codex-b needs re-enrollment = %t, %v", needs, err)
+	}
+
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		items, err := tx.ListAttentionItems(ctx)
+		if err != nil {
+			return err
+		}
+		if len(items) != 1 {
+			t.Fatalf("attention items = %d, want one converged marker", len(items))
+		}
+		item := items[0].Value
+		if item.Type != domain.AttentionSystemHealth || item.Posture == nil ||
+			*item.Posture != domain.HealthPostureAdvisory || item.Status != domain.StatusOpen {
+			t.Fatalf("attention item = %#v, want open advisory system health", item)
+		}
+		if item.ProjectID != run.ProjectID || item.Subject.Type != domain.SubjectSystem {
+			t.Fatalf("attention binding = project %q, subject %#v", item.ProjectID, item.Subject)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	decidedAt := time.Date(2026, 8, 10, 19, 0, 0, 0, time.UTC)
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		items, err := tx.ListAttentionItems(ctx)
+		if err != nil {
+			return err
+		}
+		resolved := items[0].Value
+		resolved.ItemVersion++
+		resolved.Status = domain.StatusResolved
+		resolved, err = resolved.WithDecidedAt(decidedAt)
+		if err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, resolved)
+	}); err != nil {
+		t.Fatalf("resolve marker: %v", err)
+	}
+	needs, err = adapters.AuthState.NeedsCodexAuthReenrollment(ctx, "codex-a")
+	if err != nil || needs {
+		t.Fatalf("resolved marker still refuses = %t, %v", needs, err)
+	}
+	if err := adapters.AuthState.MarkCodexAuthNeedsReenrollment(ctx, run.ID, "codex-a"); err != nil {
+		t.Fatalf("second occurrence: %v", err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		items, err := tx.ListAttentionItems(ctx)
+		if err != nil {
+			return err
+		}
+		if len(items) != 2 || items[1].Value.Status != domain.StatusOpen {
+			t.Fatalf("attention occurrences = %#v, want resolved then open", items)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
