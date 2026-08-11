@@ -92,6 +92,48 @@ func (tx *ReadTx) ListAttentionDeliveries(ctx context.Context) ([]Snapshotted[do
 	return deliveries, nil
 }
 
+// ListCommandsForItem returns every immutable accepted command for one item
+// in command-id order. Each row reconstructs through GetCommand, including its
+// extracted-column and backup-binding gates.
+func (tx *ReadTx) ListCommandsForItem(ctx context.Context, itemID domain.ItemID) ([]domain.Command, error) {
+	if itemID == "" {
+		return nil, fmt.Errorf("list commands for item: %w", domain.ErrEmptyID)
+	}
+	rows, err := tx.tx.QueryContext(ctx,
+		`SELECT command_id FROM commands WHERE item_id = ? ORDER BY command_id`, itemID)
+	if err != nil {
+		return nil, fmt.Errorf("list commands for item %q: %w", itemID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("list commands for item %q: %w", itemID, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list commands for item %q: %w", itemID, err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("list commands for item %q: %w", itemID, err)
+	}
+	commands := make([]domain.Command, 0, len(ids))
+	for _, id := range ids {
+		command, err := tx.GetCommand(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("list commands for item %q: %w", itemID, err)
+		}
+		if command.ItemID != itemID {
+			return nil, fmt.Errorf("list commands for item %q returned %q: %w",
+				itemID, command.ItemID, errRowInconsistent)
+		}
+		commands = append(commands, command)
+	}
+	return commands, nil
+}
+
 // listSnapshotted runs one constant list query and reconstructs each row
 // through the entity's shared scan function (passed as a method expression,
 // so the List cannot skip a gate the Get runs).

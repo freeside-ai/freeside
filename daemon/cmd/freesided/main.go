@@ -29,13 +29,13 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/elaborate"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/procbound"
-	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -521,15 +521,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}
 	backupHealth, err := localBackupFiles.NewCheckpointHealthSource(
 		blobs, storeOptions.ApprovedRecipes,
-		map[string]store.BackupPayloadDigestExtractor{
-			engine.FakePublicationTaskKind:            engine.FakePublicationBackupPayloadDigests,
-			engine.FakePublicationInvocationOwnerKind: engine.FakePublicationInvocationOwnerBackupPayloadDigests,
-			signet.AgentInvocationRequestedKind:       signet.AgentInvocationBackupPayloadDigests,
-			engine.KindProductionInvocationRequested:  engine.ProductionInvocationBackupPayloadDigests,
-			engine.KindProductionPublicationRequested: engine.ProductionPublicationBackupPayloadDigests,
-			publish.IntentKindReservation:             publish.ReservationBackupPayloadDigests,
-			publish.IntentKindPublication:             publish.PublicationBackupPayloadDigests,
-		})
+		backupPayloadExtractors())
 	if err != nil {
 		return nil, err
 	}
@@ -634,6 +626,13 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				claudeWiring.env, func() time.Time { return time.Now().UTC() }),
 			engine.WithAdmissionDerivation(claudeWiring.derive),
 		}
+		researchFetcher, err := elaborate.NewFetcher(st, blobs, nil)
+		if err != nil {
+			return nil, fmt.Errorf("compose research fetcher: %w", err)
+		}
+		engineOptions = append(engineOptions, engine.WithElaboration(engine.ElaborationConfig{
+			Fetcher: researchFetcher, Blobs: blobs, Now: func() time.Time { return time.Now().UTC() },
+		}))
 		engineOptions = append(engineOptions, engine.WithProductionPublication(engine.ProductionPublicationConfig{
 			WorkDir:   filepath.Join(cfg.Claude.SeedRoot, "production-publication"),
 			Transport: claudeWiring.publicationTransport,
