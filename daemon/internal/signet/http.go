@@ -497,6 +497,12 @@ func isCommandAuthorityRejection(err error) bool {
 		domain.ErrReviewConfigRecoveryBindingMismatch,
 		domain.ErrReviewRecoveryBindingMissing,
 		domain.ErrReviewRecoveryBindingMismatch,
+		domain.ErrCodexReenrollmentBindingMissing,
+		domain.ErrCodexReenrollmentBindingMismatch,
+		domain.ErrCodexReenrollmentMarkerMismatch,
+		store.ErrCodexReenrollmentNotVerified,
+		store.ErrCodexReenrollmentLeaseMismatch,
+		store.ErrCodexReenrollmentOutcomeConflict,
 		domain.ErrTransitionCommandMismatch,
 		domain.ErrTransitionUnbacked,
 	} {
