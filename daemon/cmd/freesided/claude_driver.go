@@ -1560,6 +1560,13 @@ func (s *janitorSession) RunScheduledPass(ctx context.Context) error {
 	return s.janitor.RunScheduledPass(ctx)
 }
 
+func (s *janitorSession) RegistrationFaults() []publish.JanitorRegistrationFault {
+	if s == nil || s.janitor == nil {
+		return nil
+	}
+	return s.janitor.RegistrationFaults()
+}
+
 func (s *janitorSession) WithStableCoverage(fn func() error) error {
 	if s == nil || s.janitor == nil {
 		return errors.New("nil installation janitor session")

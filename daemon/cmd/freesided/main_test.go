@@ -58,6 +58,7 @@ func TestRunDrainsBackgroundWorkersBeforeClosingStoreOnStartupFailure(t *testing
 	cfg := config{
 		DBPath:            filepath.Join(root, "freeside.db"),
 		FakeDriverDir:     filepath.Join(root, "driver"),
+		StateDir:          filepath.Join(root, "state"),
 		ListenAddr:        "127.0.0.1:0",
 		ReconcileInterval: time.Millisecond,
 		Logger:            logger,
@@ -93,6 +94,9 @@ func TestRunDrainsBackgroundWorkersBeforeClosingStoreOnStartupFailure(t *testing
 	}
 	if !errors.Is(err, startupErr) {
 		t.Fatalf("run error = %v, want %v", err, startupErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(cfg.StateDir, readinessFileName)); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("readiness after failed startup = %v, want absent", statErr)
 	}
 	if !strings.Contains(logsAtStoreClose, "reconcile loop stopped") {
 		t.Fatalf("store close began before the reconcile loop stopped:\n%s", logsAtStoreClose)
@@ -193,7 +197,7 @@ func TestRunConvergesLegacyFakePublicationBeforeStartingScheduler(t *testing.T) 
 		t.Fatal(err)
 	}
 	stopClean()
-	if err := errors.Join(clean.Wait(context.Background()), clean.Close()); err != nil {
+	if err := errors.Join(clean.Wait(cleanCtx), clean.Close()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -239,7 +243,7 @@ func TestRunStartsWithADurableRowItCannotReconstruct(t *testing.T) {
 		FakeDriverDir: filepath.Join(root, "driver"),
 		ListenAddr:    "127.0.0.1:0", ReconcileInterval: 10 * time.Millisecond,
 	}
-	start := func(t *testing.T, attempt string) (*daemon, context.CancelFunc) {
+	start := func(t *testing.T, attempt string) (*daemon, context.Context, context.CancelFunc) {
 		t.Helper()
 		ctx, cancel := context.WithCancel(context.Background())
 		h, err := run(ctx, nil, cfg)
@@ -247,12 +251,12 @@ func TestRunStartsWithADurableRowItCannotReconstruct(t *testing.T) {
 			cancel()
 			t.Fatalf("%s: run: %v", attempt, err)
 		}
-		return h, cancel
+		return h, ctx, cancel
 	}
-	stop := func(t *testing.T, attempt string, h *daemon, cancel context.CancelFunc) {
+	stop := func(t *testing.T, attempt string, h *daemon, ctx context.Context, cancel context.CancelFunc) {
 		t.Helper()
 		cancel()
-		if err := h.Wait(context.Background()); err != nil {
+		if err := h.Wait(ctx); err != nil {
 			t.Fatalf("%s: Wait after cancellation: %v", attempt, err)
 		}
 		if err := h.Close(); err != nil {
@@ -263,8 +267,8 @@ func TestRunStartsWithADurableRowItCannotReconstruct(t *testing.T) {
 	// Establish the state a newer daemon leaves behind: a complete store, a
 	// proven checkpoint, and then a durable row of a kind this binary has no
 	// extractor for.
-	h, cancel := start(t, "clean start")
-	stop(t, "clean start", h, cancel)
+	h, ctx, cancel := start(t, "clean start")
+	stop(t, "clean start", h, ctx, cancel)
 	seed, err := store.Open(context.Background(), dbPath, store.Options{})
 	if err != nil {
 		t.Fatalf("open store for seeding: %v", err)
@@ -279,7 +283,7 @@ func TestRunStartsWithADurableRowItCannotReconstruct(t *testing.T) {
 	}
 
 	for _, attempt := range []string{"first start", "restart"} {
-		h, cancel := start(t, attempt)
+		h, ctx, cancel := start(t, attempt)
 		health, err := h.store.BackupHealth(context.Background())
 		if err != nil {
 			cancel()
@@ -293,7 +297,7 @@ func TestRunStartsWithADurableRowItCannotReconstruct(t *testing.T) {
 			cancel()
 			t.Fatalf("%s: unattended admission stayed open", attempt)
 		}
-		stop(t, attempt, h, cancel)
+		stop(t, attempt, h, ctx, cancel)
 	}
 }
 

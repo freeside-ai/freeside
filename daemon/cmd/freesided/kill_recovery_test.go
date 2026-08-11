@@ -50,10 +50,10 @@ func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 	t.Cleanup(ntfy.Close)
 
 	tests := []struct {
-		name            string
-		checkpoint      string
-		acceptedResults int
-		restartFails    bool
+		name               string
+		checkpoint         string
+		acceptedResults    int
+		restartDurableStop bool
 	}{
 		{"before intent dispatch", killCheckpointBeforeIntentDispatch, 1, false},
 		{"after accepted intent before result", killCheckpointAfterIntentAccepted, 0, true},
@@ -75,8 +75,9 @@ func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 
 			restarted := startProcessFixture(t, binary, root, ntfy.URL, "", "")
 			client.baseURL = restarted.ready.APIURL
-			if tc.restartFails {
-				restarted.waitForFailure(t, "invocation ended without an accepted result")
+			if tc.restartDurableStop {
+				waitForDurableStop(t, root)
+				restarted.stop(t)
 			} else {
 				client.waitForAcceptedResult(t)
 				restarted.stop(t)
@@ -84,6 +85,36 @@ func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 			assertKillRecoveryState(t, root, tc.acceptedResults)
 		})
 	}
+}
+
+func waitForDurableStop(t *testing.T, root string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		st, err := store.Open(context.Background(), filepath.Join(root, "freeside.db"), store.Options{})
+		if err == nil {
+			var found bool
+			err = st.Read(context.Background(), func(tx *store.ReadTx) error {
+				items, err := tx.ListOpenAttentionItems(context.Background(), domain.AttentionSystemHealth)
+				if err != nil {
+					return err
+				}
+				for _, item := range items {
+					if strings.HasPrefix(string(item.ID), durableStopItemPrefix) {
+						found = true
+						return nil
+					}
+				}
+				return nil
+			})
+			closeErr := st.Close()
+			if err == nil && closeErr == nil && found {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("restarted freesided did not file a durable-stop item within 5s")
 }
 
 func buildKillTestDaemon(t *testing.T) string {
@@ -193,21 +224,6 @@ func (p *processFixture) stop(t *testing.T) {
 	<-p.done
 	if p.waitErr != nil {
 		t.Fatalf("stop freesided: %v; stderr=%s", p.waitErr, p.stderr.String())
-	}
-}
-
-func (p *processFixture) waitForFailure(t *testing.T, want string) {
-	t.Helper()
-	select {
-	case <-p.done:
-		if p.waitErr == nil {
-			t.Fatal("restarted freesided unexpectedly exited successfully")
-		}
-		if !strings.Contains(p.stderr.String(), want) {
-			t.Fatalf("restarted freesided stderr = %q, want %q", p.stderr.String(), want)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("restarted freesided did not report the lost invocation within 5s")
 	}
 }
 

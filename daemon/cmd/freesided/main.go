@@ -36,6 +36,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
@@ -213,7 +214,7 @@ func main() {
 		return
 	}
 	daemonConfig := config{
-		DBPath: *dbPath, FakeDriverDir: *driverDir,
+		DBPath: *dbPath, FakeDriverDir: *driverDir, StateDir: *stateDir,
 		ListenAddr: *listenAddr, NtfyURL: *ntfyURL, ReconcileInterval: *interval,
 		DoctorInterval:                     *doctorInterval,
 		SchedulerInterval:                  *schedulerInterval,
@@ -327,6 +328,7 @@ func splitNonEmpty(value string) []string {
 type config struct {
 	DBPath                             string
 	FakeDriverDir                      string
+	StateDir                           string
 	ListenAddr                         string
 	NtfyURL                            string
 	ReconcileInterval                  time.Duration
@@ -429,11 +431,16 @@ type daemon struct {
 	closeOnce     sync.Once
 	closeErr      error
 	pairingCode   string
+	logger        *slog.Logger
 }
 
 func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error) {
+	startedAt := time.Now().UTC()
 	if cfg.DBPath == "" {
 		return nil, errors.New("-db is required")
+	}
+	if cfg.StateDir == "" && cfg.Claude != nil {
+		cfg.StateDir = cfg.Claude.StateDir
 	}
 	if cfg.FakeDriverDir == "" {
 		cfg.FakeDriverDir = cfg.DBPath + ".fake-stage-driver"
@@ -673,33 +680,78 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		return nil, fmt.Errorf("converge legacy fake-publication policies: %w", err)
 	}
 
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	d := &daemon{
 		store: st, attention: attention, workflow: workflow, driver: driver,
-		listener: listener, cancel: cancel, errs: make(chan error, 7), pairingCode: pairingCode,
+		listener: listener, cancel: cancel, errs: make(chan error, 1), pairingCode: pairingCode,
+		logger: logger,
 		server: &http.Server{
-			Handler:           signet.NewHTTPHandler(attention, signet.NewRequestAuthorizer(st)),
+			Handler: signet.NewHTTPHandler(attention, signet.NewRequestAuthorizer(st), signet.HealthResponse{
+				Status: "ok", Version: buildVersion(), StartedAt: startedAt,
+			}),
 			ReadHeaderTimeout: 5 * time.Second,
 		},
 	}
 	if claudeWiring != nil {
 		d.sessionCloser = claudeWiring.closer
 	}
+	var fakeSched *scheduler.Scheduler
+	var claudeSched *scheduler.Scheduler
+	var activeReconciler *activeResourceReconciler
+	if claudeWiring == nil {
+		// Construct every loop before making restart-gated recovery available.
+		// None is running yet, so no operator can resume into a partial start.
+		fakeSched, err = newFakeScheduler(st)
+		if err != nil {
+			return nil, err
+		}
+		fakeSched.SetLogger(cfg.Logger)
+	} else {
+		// The doctor and janitor cadences live on the §5.16 durable scheduler;
+		// their initial coverage remains the direct calls above.
+		claudeSched, err = newClaudeScheduler(st, cfg, claudeWiring, runDoctor)
+		if err != nil {
+			return nil, err
+		}
+		claudeSched.SetLogger(cfg.Logger)
+		if err := armTrustedConfigJobs(parent, claudeSched, cfg); err != nil {
+			return nil, err
+		}
+		activeReconciler = &activeResourceReconciler{
+			store: st, pull: claudeWiring.observePull,
+			issue:  claudeWiring.observeIssue,
+			review: claudeWiring.observeReview,
+			// The default automated reviewer is wired here, not in the domain
+			// (plan §5.16, §7; AGENTS.md, Automated reviewer).
+			reviewers:        map[string]bool{defaultNativeReviewerLogin: true},
+			reviewInvalidate: claudeWiring.reviewInvalidate,
+			evictConcluded:   claudeWiring.evictConcluded,
+			now:              func() time.Time { return time.Now().UTC() },
+		}
+	}
+	if err := d.enableDurableStopRecovery(parent); err != nil {
+		return nil, fmt.Errorf("enable durable-stop recovery: %w", err)
+	}
+
 	d.wg.Add(3)
 	go func() {
 		defer d.wg.Done()
 		err := d.server.Serve(listener)
 		if errors.Is(err, http.ErrServerClosed) {
-			err = nil
+			return
 		}
-		d.errs <- err
+		d.componentExited(parent, ctx, componentHTTP, err)
 	}()
 	go func() {
 		defer d.wg.Done()
-		d.errs <- workflow.Run(ctx, cfg.ReconcileInterval)
+		d.componentExited(parent, ctx, componentWorkflow, workflow.Run(ctx, cfg.ReconcileInterval))
 	}()
 	go func() {
 		defer d.wg.Done()
-		d.errs <- localBackups.Run(ctx)
+		d.componentExited(parent, ctx, componentLocalBackups, localBackups.Run(ctx))
 	}()
 	defer func() {
 		if !success {
@@ -716,40 +768,15 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return nil, err
 		}
 	}
-	if claudeWiring == nil {
-		// The fake lane arms the §5.16 publication watches beside its ready
-		// items; the walking-skeleton composition runs the same watch kinds
-		// (with a static base observer) so both lanes share one behavior.
-		fakeSched, err := newFakeScheduler(st)
-		if err != nil {
-			return nil, err
-		}
-		fakeSched.SetLogger(cfg.Logger)
+	if fakeSched != nil {
 		d.wg.Add(1)
 		go func() {
 			defer d.wg.Done()
-			if err := fakeSched.Run(ctx, cfg.SchedulerInterval); err != nil {
-				d.errs <- fmt.Errorf("durable scheduler: %w", err)
-				return
-			}
-			d.errs <- nil
+			d.componentExited(parent, ctx, componentScheduler,
+				fakeSched.Run(ctx, cfg.SchedulerInterval))
 		}()
 	}
-	if claudeWiring != nil {
-		// The doctor and janitor cadences live on the §5.16 durable
-		// scheduler; their startup obligations (the synchronous initial
-		// doctor pass above, the janitor's coverage-priming pass inside
-		// composeClaudeDriver) stay direct calls. A scheduler-loop failure —
-		// including a janitor pass failure — is daemon-fatal below, exactly
-		// as the stopped always-on janitor loop was.
-		sched, err := newClaudeScheduler(st, cfg, claudeWiring, runDoctor)
-		if err != nil {
-			return nil, err
-		}
-		sched.SetLogger(cfg.Logger)
-		if err := armTrustedConfigJobs(parent, sched, cfg); err != nil {
-			return nil, err
-		}
+	if claudeSched != nil {
 		d.wg.Add(3)
 		// The production publication lane gets its own loop: one task holds a
 		// clone, a containerized verification, and GitHub calls for minutes,
@@ -757,37 +784,23 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		// invocation, and attention item for that whole span (issue #425).
 		go func() {
 			defer d.wg.Done()
-			d.errs <- workflow.RunProductionPublications(ctx, cfg.ReconcileInterval)
+			d.componentExited(parent, ctx, componentProductionPublication,
+				workflow.RunProductionPublications(ctx, cfg.ReconcileInterval))
 		}()
 		go func() {
 			defer d.wg.Done()
-			if err := sched.Run(ctx, cfg.SchedulerInterval); err != nil {
-				d.errs <- fmt.Errorf("durable scheduler: %w", err)
-				return
-			}
-			d.errs <- nil
+			d.componentExited(parent, ctx, componentScheduler,
+				claudeSched.Run(ctx, cfg.SchedulerInterval))
 		}()
 		go func() {
 			defer d.wg.Done()
-			reconciler := activeResourceReconciler{
-				store: st, pull: claudeWiring.observePull,
-				issue:  claudeWiring.observeIssue,
-				review: claudeWiring.observeReview,
-				// The default automated reviewer is wired here, not in the
-				// domain (plan §5.16, §7; AGENTS.md, Automated reviewer).
-				reviewers:        map[string]bool{defaultNativeReviewerLogin: true},
-				reviewInvalidate: claudeWiring.reviewInvalidate,
-				evictConcluded:   claudeWiring.evictConcluded,
-				now:              func() time.Time { return time.Now().UTC() },
-			}
-			err := reconciler.Run(ctx,
+			err := activeReconciler.Run(ctx,
 				defaultActiveResourceInterval, operatorActiveResourceInterval, cfg.Logger)
-			if err != nil {
-				d.errs <- fmt.Errorf("active resource reconciler: %w", err)
-				return
-			}
-			d.errs <- nil
+			d.componentExited(parent, ctx, componentActiveResource, err)
 		}()
+	}
+	if err := publishReadiness(cfg.StateDir, d.readiness()); err != nil {
+		return nil, err
 	}
 	success = true
 	return d, nil

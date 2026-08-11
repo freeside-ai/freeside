@@ -42,6 +42,66 @@ func TestHTTPAuthenticationFailsClosed(t *testing.T) {
 	}
 }
 
+func TestHTTPHealthIsMinimalAndUnauthenticated(t *testing.T) {
+	f := newFixture(t)
+	startedAt := time.Date(2026, 8, 10, 12, 13, 14, 0, time.UTC)
+	handler := signet.NewHTTPHandler(f.service, nil, signet.HealthResponse{
+		Status: "ok", Version: "v1.2.3", StartedAt: startedAt,
+	})
+	response := bearerRequest(t, handler, http.MethodGet, "/health", "", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /health status = %d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode health: %v", err)
+	}
+	if len(body) != 3 {
+		t.Fatalf("health keys = %v, want exactly status, version, started_at", body)
+	}
+	if string(body["status"]) != `"ok"` || string(body["version"]) != `"v1.2.3"` ||
+		string(body["started_at"]) != `"2026-08-10T12:13:14Z"` {
+		t.Fatalf("health = %s", response.Body.String())
+	}
+}
+
+func TestHTTPOnlyHealthAndPairingAreUnauthenticated(t *testing.T) {
+	f := newFixture(t)
+	handler := signet.NewHTTPHandler(f.service, nil)
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/devices/device-1/revoke"},
+		{http.MethodGet, "/sync/bootstrap"},
+		{http.MethodGet, "/sync/revision"},
+		{http.MethodGet, "/attention/items"},
+		{http.MethodGet, "/attention/items/item-1"},
+		{http.MethodGet, "/attention/items/item-1/deliveries"},
+		{http.MethodPut, "/attention/items/item-1/deliveries/ntfy/1/opened"},
+		{http.MethodGet, "/runs"},
+		{http.MethodGet, "/runs/run-1"},
+		{http.MethodGet, "/schedules"},
+		{http.MethodGet, "/conversations/conversation-1"},
+		{http.MethodPost, "/commands"},
+		{http.MethodPut, "/attachments/sha256:abc"},
+		{http.MethodGet, "/attachments/sha256:abc"},
+	} {
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
+			response := bearerRequest(t, handler, route.method, route.path, "", nil)
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d body=%s, want 401", response.Code, response.Body.String())
+			}
+		})
+	}
+	if response := bearerRequest(t, handler, http.MethodGet, "/health", "", nil); response.Code != http.StatusOK {
+		t.Fatalf("GET /health status = %d, want 200", response.Code)
+	}
+	if response := bearerRequest(t, handler, http.MethodPost, "/pairing", "", nil); response.Code == http.StatusUnauthorized {
+		t.Fatal("POST /pairing unexpectedly required a credential")
+	}
+}
+
 // TestHTTPPartialRefetchPreservesRevisionGap is §5.14 test 11's server half.
 // A single-entity response carries only that row's metadata, never the global
 // full-snapshot cursor; the heartbeat still reveals a write the refetch did
