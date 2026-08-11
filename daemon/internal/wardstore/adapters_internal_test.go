@@ -20,6 +20,17 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
+func TestCodexEnrollmentFailureClassMapsEveryRegisteredValue(t *testing.T) {
+	for _, class := range ward.AllCodexAuthEnrollmentFailures {
+		if _, err := codexEnrollmentFailureClass(class); err != nil {
+			t.Fatalf("registered failure class %q is unmapped: %v", class, err)
+		}
+	}
+	if _, err := codexEnrollmentFailureClass("unknown"); err == nil {
+		t.Fatal("unknown enrollment failure class mapped")
+	}
+}
+
 func TestDecodeCodexReviewRejectsUnknownAndTrailingFields(t *testing.T) {
 	t.Parallel()
 	for _, body := range [][]byte{

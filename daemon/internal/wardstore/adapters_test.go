@@ -116,6 +116,97 @@ func TestAdaptersRoundTripAcrossStoreReopen(t *testing.T) {
 	}
 }
 
+func TestLeaserHeldMutationBlocksExpiredTakeoverUntilFilesystemMutationReturns(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	st, err := store.Open(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	at := time.Date(2026, 8, 11, 20, 0, 0, 0, time.UTC)
+	identity := domain.AuthIdentity{
+		ID: "codex-atomic-mutation", Provider: "openai", AuthStoreMutationLease: true,
+		AuthStoreVolume: "codex-auth", MaxParallelExecutions: 1,
+		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordAuthIdentity(ctx, identity, at)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	adapters, err := wardstore.New(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contenderStore, err := store.Open(ctx, path, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = contenderStore.Close() })
+	contenderAdapters, err := wardstore.New(contenderStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := adapters.Leaser.Acquire(
+		ctx, identity.ID, "holder-a", at, at.Add(time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entered := make(chan struct{})
+	releaseMutation := make(chan struct{})
+	mutationDone := make(chan error, 1)
+	go func() {
+		mutationDone <- adapters.Leaser.WithHeldLeaseMutation(
+			ctx, lease, func() time.Time { return at.Add(30 * time.Second) }, func() error {
+				close(entered)
+				<-releaseMutation
+				return nil
+			},
+		)
+	}()
+	<-entered
+	type acquireResult struct {
+		lease domain.AuthStoreMutationLease
+		err   error
+	}
+	takeoverDone := make(chan acquireResult, 1)
+	takeoverStarted := make(chan struct{})
+	go func() {
+		close(takeoverStarted)
+		now := at.Add(2 * time.Minute)
+		next, err := contenderAdapters.Leaser.Acquire(
+			ctx, identity.ID, "holder-b", now, now.Add(time.Minute),
+		)
+		takeoverDone <- acquireResult{lease: next, err: err}
+	}()
+	<-takeoverStarted
+	select {
+	case result := <-takeoverDone:
+		t.Fatalf("successor entered held filesystem mutation: lease %+v, error %v", result.lease, result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseMutation)
+	if err := <-mutationDone; err != nil {
+		t.Fatal(err)
+	}
+	result := <-takeoverDone
+	if result.err != nil || result.lease.Holder != "holder-b" || result.lease.Fence != lease.Fence+1 {
+		t.Fatalf("successor after mutation = %+v, %v", result.lease, result.err)
+	}
+	staleMutationRan := false
+	if err := adapters.Leaser.WithHeldLeaseMutation(
+		ctx, lease, func() time.Time { return at.Add(2 * time.Minute) }, func() error {
+			staleMutationRan = true
+			return nil
+		},
+	); !errors.Is(err, ward.ErrLeaseWindowEnded) || staleMutationRan {
+		t.Fatalf("stale mutation = ran %t, error %v", staleMutationRan, err)
+	}
+}
+
 func TestJournalMapsMissingRecordToWardSentinel(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -334,6 +425,109 @@ func TestLeaserExcludesConcurrentHolderAndMapsEndedWindow(t *testing.T) {
 	)
 	if !errors.Is(err, ward.ErrLeaseWindowEnded) {
 		t.Fatalf("late release = %v, want %v", err, ward.ErrLeaseWindowEnded)
+	}
+}
+
+func TestEnrollmentAdapterCreatesExclusiveRecoverableOperation(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	adapters, err := wardstore.New(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	identity := domain.AuthIdentity{
+		ID: "codex-enrollment", Provider: "openai", AuthStoreMutationLease: true,
+		AuthStoreVolume: "/private/auth/codex.json", MaxParallelExecutions: 1,
+		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+	}
+	lease, err := adapters.Enrollment.Begin(
+		ctx, identity, "project-1", "enrollment-holder", at, at.Add(time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Fence != 1 || lease.Holder != "enrollment-holder" {
+		t.Fatalf("enrollment lease = %+v", lease)
+	}
+	if _, err := adapters.Leaser.Acquire(
+		ctx, identity.ID, "execution-holder", at.Add(time.Second), at.Add(2*time.Minute),
+	); !errors.Is(err, store.ErrLeaseHeld) {
+		t.Fatalf("execution acquired enrollment identity = %v, want lease held", err)
+	}
+	if binding, found, err := adapters.Enrollment.RecoverableVerified(ctx, identity); err != nil || found {
+		t.Fatalf("pending operation recovered = %+v, %t, %v", binding, found, err)
+	}
+	digest := domain.Digest("sha256:rotated-auth-store")
+	expiresAt := at.Add(4 * time.Hour)
+	if err := adapters.Enrollment.Verify(
+		ctx, identity.ID, lease.Holder, lease.Fence, digest, expiresAt, at.Add(2*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	binding, found, err := adapters.Enrollment.RecoverableVerified(ctx, identity)
+	if err != nil || !found {
+		t.Fatalf("verified operation recovery = %+v, %t, %v", binding, found, err)
+	}
+	if binding.AuthIdentityID != identity.ID || binding.LeaseFence != lease.Fence ||
+		binding.AuthStoreDigest != digest || !binding.AccessTokenExpiresAt.Equal(expiresAt) {
+		t.Fatalf("verified binding = %+v", binding)
+	}
+	item, err := adapters.Enrollment.ProjectVerified(ctx, identity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.CodexReenrollmentRecoveryBinding == nil ||
+		*item.CodexReenrollmentRecoveryBinding != binding ||
+		!item.Offers(domain.ActionResolveReenrollment) {
+		t.Fatalf("projected item = %+v", item)
+	}
+	if err := adapters.Leaser.Release(ctx, identity.ID, lease.Holder, lease.Fence, at.Add(3*time.Second)); err != nil {
+		t.Fatalf("release verified enrollment lease: %v", err)
+	}
+	if _, err := adapters.Enrollment.Begin(
+		ctx, identity, "project-1", "replacement-holder", at.Add(3*time.Second), at.Add(time.Minute),
+	); err != nil {
+		t.Fatalf("begin replacement after projected binding: %v", err)
+	}
+	needs, err := adapters.AuthState.NeedsCodexAuthReenrollment(ctx, identity.ID)
+	if err != nil || !needs {
+		t.Fatalf("replacement marker needs reenrollment = %t, %v", needs, err)
+	}
+}
+
+func TestEnrollmentAdapterRefusesChangedIdentityBindings(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	adapters, err := wardstore.New(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	stored := domain.AuthIdentity{
+		ID: "codex-fixed", Provider: "openai", AuthStoreMutationLease: true,
+		AuthStoreVolume: "/private/auth/original.json", MaxParallelExecutions: 1,
+		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordAuthIdentity(ctx, stored, at)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	changed := stored
+	changed.AuthStoreVolume = "/private/auth/rebound.json"
+	if _, err := adapters.Enrollment.Begin(
+		ctx, changed, "project-1", "enrollment-holder", at, at.Add(time.Minute),
+	); !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("changed identity binding = %v, want immutable transition", err)
 	}
 }
 

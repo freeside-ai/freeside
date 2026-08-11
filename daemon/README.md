@@ -110,6 +110,53 @@ Every state directory is owner-only, including the corrected
 The static binary and supervisor may be installed through a one-time narrow
 elevation step, but the stateful daemon always runs as the non-root operator.
 
+### Enroll A Codex Subscription Identity
+
+`freesided enroll-codex` bootstraps a Codex subscription identity and repairs
+one whose refresh chain was revoked. It replaces the live auth store only
+while holding that identity's mutation lease, immediately spends the supplied
+refresh token in a real provider rotation, verifies an access-only agent
+snapshot, and binds the resulting store digest and expiry to a recovery
+attention item. It never prints or persists token bytes in the database.
+
+Stop `freesided` before running this direct-store maintenance command. Create
+two non-overlapping owner-only directories: a temporary input root for the
+fresh `codex login` result and the durable review-input root that will contain
+the daemon-owned live auth store. The command refuses group/world-accessible
+directories, paths outside those roots, symlink escapes, and an input file
+that is not an owner-only regular file.
+
+```sh
+install -d -m 700 /path/to/codex-enrollment-input
+install -d -m 700 /path/to/freeside/review-inputs
+codex login
+install -m 600 ~/.codex/auth.json /path/to/codex-enrollment-input/auth.json
+
+freesided enroll-codex \
+  -db /path/to/freeside.db \
+  -project <project-id> \
+  -auth-identity codex-primary \
+  -input-root /path/to/codex-enrollment-input \
+  -input-file /path/to/codex-enrollment-input/auth.json \
+  -auth-store-root /path/to/freeside/review-inputs \
+  -auth-store /path/to/freeside/review-inputs/codex-primary.json
+```
+
+Success prints only the identity, store path, lease fence, verified digest,
+access-token expiry, and recovery item coordinates. The input refresh token
+has then been deliberately spent and is no longer a usable backup. Securely
+remove the temporary input copy after success; preserve the rotated live store
+at the printed path. A retry after verification safely rechecks and projects
+that same store even if the temporary input has already been removed.
+
+Restart the daemon with `-review-auth-mode subscription`,
+`-review-auth-identity codex-primary`, `-review-input-root` set to the durable
+review-input root, and `-review-auth-snapshot` set to the live store path.
+Initial enrollment and recovery both leave the identity blocked until the
+operator inspects the displayed digest, fence, and expiry and accepts the
+item's `Resolve re-enrollment` action. That command-backed decision, not this
+maintenance command alone, clears the revoked-identity marker.
+
 `freesided onboard <owner/name>` packages the previously manual path. It:
 
 1. resolves the repository ID through exactly one selected installation across

@@ -58,6 +58,19 @@ type AuthStoreLeaser interface {
 		fence int64, releasedAt time.Time) error
 }
 
+// AuthStoreLeaseMutationGuard is the stronger store-backed boundary used for
+// host filesystem mutations. The implementation holds the store's write
+// transaction from exact holder/fence authentication through mutation, so an
+// expired lease cannot transfer to a successor in the final syscall window.
+// The callback must be short and local: provider and other network I/O never
+// belongs inside this critical section.
+type AuthStoreLeaseMutationGuard interface {
+	WithHeldLeaseMutation(
+		ctx context.Context, lease domain.AuthStoreMutationLease,
+		now func() time.Time, mutation func() error,
+	) error
+}
+
 // OutputScanner is check 7's §5.4 scanning hook: it inspects the verified
 // export directory and returns an error to block the handoff. Scanning
 // policy (what counts as a leak) is gauntlet territory; the gate only
