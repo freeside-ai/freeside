@@ -26,11 +26,14 @@ Use `--registry HOST[/PATH]` instead for a shared image. The image is
 | Node | v24.18.0, official `linux-arm64` tarball, sha256 literal in the Containerfile |
 | Claude CLI | `@anthropic-ai/claude-code@2.1.220` |
 
-`busybox-static`, `git`, and `ca-certificates` come from Debian's archive and
-are **recorded, not pinned**: their observed versions are written into
+`busybox-static`, `ca-certificates`, `diffutils`, `file`, `git`, `jq`, `patch`,
+and `ripgrep` come from Debian's archive and are **recorded, not pinned**: their
+observed versions are written into
 `/usr/local/share/freeside/image-manifest.txt` in the image, along with the
-resolved Node, npm, and Claude versions. An exact apt pin turns unbuildable once
-Debian drops the superseded version from its mirror.
+resolved Node, npm, Claude, jq, and ripgrep versions. An exact apt pin turns
+unbuildable once Debian drops the superseded version from its mirror. Ripgrep
+serves Bash usage; the Claude CLI's Grep tool vendors its own ripgrep, so the
+PATH installation is an agent convenience rather than a CLI dependency.
 
 "Reproducible" therefore means pinned inputs plus a recorded digest, not a
 bit-identical image: Apple container's build metadata varies between otherwise

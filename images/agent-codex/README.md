@@ -32,11 +32,12 @@ artifact, so the image now consumes the package artifact while preserving the
 installed paths the CLI uses for its bundled resources. Future bumps re-prove
 the contracts the #395 and #401 notes list under Pinning.
 
-`busybox-static`, `ca-certificates`, `git`, and `ripgrep` come from Debian's
-archive and are **recorded, not pinned**: their observed versions are written
-into `/usr/local/share/freeside/image-manifest.txt` in the image, along with the
-resolved Codex, ripgrep, bwrap, and bundled zsh versions. An exact apt pin turns
-unbuildable once Debian drops the superseded version from its mirror.
+`busybox-static`, `ca-certificates`, `diffutils`, `file`, `git`, `jq`, `patch`,
+and `ripgrep` come from Debian's archive and are **recorded, not pinned**: their
+observed versions are written into
+`/usr/local/share/freeside/image-manifest.txt` in the image, along with the
+resolved Codex, jq, ripgrep, bwrap, and bundled zsh versions. An exact apt pin
+turns unbuildable once Debian drops the superseded version from its mirror.
 
 "Reproducible" therefore means pinned inputs plus a recorded digest, not a
 bit-identical image: Apple container's build metadata varies between otherwise
