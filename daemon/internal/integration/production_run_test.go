@@ -212,7 +212,7 @@ func registerSubmissionArtifactsWithPolicyKeys(
 	specBody := submissionSpecification(runID)
 	specSum := sha256.Sum256(specBody)
 	spec, err := domain.NewArtifact(domain.ArtifactInput{
-		ID: domain.ArtifactID("artifact-spec-" + runID), Type: "specification",
+		ID: domain.ArtifactID("artifact-spec-" + runID), Type: domain.ArtifactKindSpecification,
 		Digest: domain.Digest("sha256:" + hex.EncodeToString(specSum[:])),
 		Provenance: domain.Provenance{
 			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: domain.InvocationID("submit-" + runID),
@@ -227,7 +227,7 @@ func registerSubmissionArtifactsWithPolicyKeys(
 		t.Fatalf("new resolved policy: %v", err)
 	}
 	policy, err := domain.NewArtifact(domain.ArtifactInput{
-		ID: domain.ArtifactID("artifact-policy-" + runID), Type: "policy",
+		ID: domain.ArtifactID("artifact-policy-" + runID), Type: domain.ArtifactKindPolicy,
 		Digest: resolved.Digest,
 		Provenance: domain.Provenance{
 			ProducerClass: domain.ProducerDaemon, ProducerInvocationID: domain.InvocationID("submit-" + runID),
@@ -456,12 +456,12 @@ func TestSubmitProductionRunRejectsArtifactRoleSubstitution(t *testing.T) {
 			foreign := spec
 			if tc.replaceSpec {
 				foreign.ID = domain.ArtifactID("artifact-wrong-spec-role")
-				foreign.Type = "evidence"
+				foreign.Type = domain.ArtifactKindEvidence
 				spec = foreign
 			} else {
 				foreign = policy
 				foreign.ID = domain.ArtifactID("artifact-wrong-policy-role")
-				foreign.Type = "evidence"
+				foreign.Type = domain.ArtifactKindEvidence
 				policy = foreign
 			}
 			if err := f.store.Write(ctx, func(tx *store.WriteTx) error {

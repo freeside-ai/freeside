@@ -300,11 +300,11 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		return submitResult{}, fmt.Errorf("submit: store policy bytes: %w", err)
 	}
 
-	specArtifact, err := submissionArtifact("specification", spec.digest)
+	specArtifact, err := submissionArtifact(domain.ArtifactKindSpecification, spec.digest)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
-	policyArtifact, err := submissionArtifact("policy", policy.digest)
+	policyArtifact, err := submissionArtifact(domain.ArtifactKindPolicy, policy.digest)
 	if err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
@@ -367,15 +367,15 @@ func defaultSubmissionRunID(
 // run-derived), so two runs submitting the same bytes converge on one
 // write-once artifact row instead of conflicting; the daemon-produced
 // provenance carries no recipe, so the artifact is never publish-eligible.
-func submissionArtifact(role string, digest domain.Digest) (domain.Artifact, error) {
+func submissionArtifact(role domain.ArtifactKind, digest domain.Digest) (domain.Artifact, error) {
 	hexDigits := string(digest[len("sha256:"):])
 	return domain.NewArtifact(domain.ArtifactInput{
-		ID:     domain.ArtifactID("artifact-" + role + "-" + hexDigits),
+		ID:     domain.ArtifactID("artifact-" + string(role) + "-" + hexDigits),
 		Type:   role,
 		Digest: digest,
 		Provenance: domain.Provenance{
 			ProducerClass:        domain.ProducerDaemon,
-			ProducerInvocationID: domain.InvocationID("submit-" + role + "-" + hexDigits),
+			ProducerInvocationID: domain.InvocationID("submit-" + string(role) + "-" + hexDigits),
 			HeadBinding:          domain.HeadIndependent,
 			SensitivityClass:     domain.SensitivityNormal,
 		},

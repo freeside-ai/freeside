@@ -135,7 +135,6 @@ enum MockContractValidation {
         var evidenceIDs = Set<String>()
         for artifact in item.evidence_snapshot {
             if artifact.id.isEmpty { return "empty evidence artifact id" }
-            if artifact._type.isEmpty { return "empty evidence artifact type" }
             if artifact.digest.isEmpty { return "empty evidence digest" }
             switch artifact.provenance {
             case .head_bound(let bound):

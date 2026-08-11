@@ -764,7 +764,7 @@ func TestConfigStoreOptionsCarryDoctorRecipePolicy(t *testing.T) {
 	artifactBody := "approved verifier artifact"
 	artifactDigest := (domain.ClaimText{Content: artifactBody}).ComputeDigest()
 	artifact, err := domain.NewArtifact(domain.ArtifactInput{
-		ID: "artifact-doctor-policy", Type: "verify_log",
+		ID: "artifact-doctor-policy", Type: domain.ArtifactKindVerifyLog,
 		Digest: artifactDigest,
 		Provenance: domain.Provenance{
 			ProducerClass: domain.ProducerVerifier, ProducerInvocationID: "invocation-doctor-policy",

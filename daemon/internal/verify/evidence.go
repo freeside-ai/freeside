@@ -18,10 +18,10 @@ import (
 const (
 	// ArtifactTypeVerificationReport is the canonical JSON account:
 	// head, recipe digest, per-step argv and exit, outcome, findings.
-	ArtifactTypeVerificationReport = "verification_report"
+	ArtifactTypeVerificationReport = domain.ArtifactKindVerificationReport
 	// ArtifactTypeCommandTranscript is the bounded combined output of
 	// the recipe's commands.
-	ArtifactTypeCommandTranscript = "command_transcript"
+	ArtifactTypeCommandTranscript = domain.ArtifactKindCommandTranscript
 )
 
 // Evidence is one emitted artifact with its content bytes. The caller
@@ -100,7 +100,7 @@ func buildEvidence(opts Options, recipeDigest domain.Digest, rep report, transcr
 	reportBytes = append(reportBytes, '\n')
 	var out []Evidence
 	for _, e := range []struct {
-		artifactType string
+		artifactType domain.ArtifactKind
 		content      []byte
 	}{
 		{ArtifactTypeVerificationReport, reportBytes},
@@ -116,7 +116,7 @@ func buildEvidence(opts Options, recipeDigest domain.Digest, rep report, transcr
 			// content-derived name would make the later run's evidence
 			// unstorable. Within one invocation the name stays
 			// deterministic, so a replayed put is idempotent.
-			ID:     domain.ArtifactID(e.artifactType + ":" + string(opts.InvocationID) + ":" + string(digest)),
+			ID:     domain.ArtifactID(string(e.artifactType) + ":" + string(opts.InvocationID) + ":" + string(digest)),
 			Type:   e.artifactType,
 			Digest: digest,
 			Provenance: domain.Provenance{

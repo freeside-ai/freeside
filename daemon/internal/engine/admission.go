@@ -286,7 +286,7 @@ func (e *Engine) admitAttempt(
 
 // imageInputArtifactType is the Phase 1 artifact vocabulary already used for
 // agent-produced image inputs. Other artifact types are prior artifacts.
-const imageInputArtifactType = "image"
+const imageInputArtifactType = domain.ArtifactKindImage
 
 func (e *Engine) stageInputSnapshot(
 	ctx context.Context, binding invocationBinding, inputDigest domain.Digest,

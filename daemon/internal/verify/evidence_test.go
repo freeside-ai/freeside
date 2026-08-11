@@ -132,7 +132,7 @@ func TestAgentArtifactCannotEnterEvidence(t *testing.T) {
 	}
 
 	agent, err := domain.NewArtifact(domain.ArtifactInput{
-		ID: "art-agent", Type: "image", Digest: "sha256:img",
+		ID: "art-agent", Type: domain.ArtifactKindImage, Digest: "sha256:img",
 		Provenance: domain.Provenance{
 			ProducerClass:        domain.ProducerAgent,
 			ProducerInvocationID: "inv-1",

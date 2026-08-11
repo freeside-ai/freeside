@@ -123,7 +123,7 @@ func TestCommandBindsSameAs(t *testing.T) {
 	recipe := approvedRecipe
 	in := validItemInput(domain.AttentionReadyForFinalReview)
 	in.PRHeadSHA = "abc123" // matches provenance() head
-	in.EvidenceSnapshot = []domain.Artifact{{ID: "e1", Type: "log", Digest: "sha256:log", Provenance: provenance(domain.ProducerVerifier, &recipe)}}
+	in.EvidenceSnapshot = []domain.Artifact{{ID: "e1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:log", Provenance: provenance(domain.ProducerVerifier, &recipe)}}
 	item, err := domain.NewAttentionItem(in, approvedRecipes())
 	if err != nil {
 		t.Fatal(err)

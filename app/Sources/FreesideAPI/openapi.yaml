@@ -1816,7 +1816,16 @@ components:
           minLength: 1
         type:
           type: string
-          minLength: 1
+          enum:
+            - specification
+            - research
+            - policy
+            - evidence
+            - image
+            - verification_report
+            - command_transcript
+            - verify_log
+            - license_scan
         digest:
           $ref: "#/components/schemas/Digest"
         provenance:

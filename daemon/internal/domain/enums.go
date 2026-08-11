@@ -127,6 +127,110 @@ func (c ProducerClass) valid() bool {
 	}
 }
 
+// StageName is the closed vocabulary of workflow-definition stages consumed
+// by the elaborator and later workflow dispatch (plan §5.4, §5.12). Persisted
+// Stage.Name remains string-typed for compatibility with the Phase 1A engine's
+// narrower and internal stage names.
+type StageName string
+
+const (
+	StageNameElaboration    StageName = "elaboration"
+	StageNameImplementation StageName = "implementation"
+	StageNameReview         StageName = "review"
+	StageNameVerification   StageName = "verification"
+)
+
+// AllStageNames lists every valid StageName.
+var AllStageNames = []StageName{
+	StageNameElaboration, StageNameImplementation, StageNameReview, StageNameVerification,
+}
+
+func (n StageName) valid() bool {
+	switch n {
+	case StageNameElaboration, StageNameImplementation, StageNameReview, StageNameVerification:
+		return true
+	default:
+		return false
+	}
+}
+
+// ArtifactKind is the closed vocabulary of persisted artifact roles. It
+// includes the Phase 1A production roles, existing persisted evidence roles,
+// and the research/specification outputs needed by the 1B elaborator.
+type ArtifactKind string
+
+const (
+	ArtifactKindSpecification      ArtifactKind = "specification"
+	ArtifactKindResearch           ArtifactKind = "research"
+	ArtifactKindPolicy             ArtifactKind = "policy"
+	ArtifactKindEvidence           ArtifactKind = "evidence"
+	ArtifactKindImage              ArtifactKind = "image"
+	ArtifactKindVerificationReport ArtifactKind = "verification_report"
+	ArtifactKindCommandTranscript  ArtifactKind = "command_transcript"
+	ArtifactKindVerifyLog          ArtifactKind = "verify_log"
+	ArtifactKindLicenseScan        ArtifactKind = "license_scan"
+)
+
+// AllArtifactKinds lists every valid ArtifactKind.
+var AllArtifactKinds = []ArtifactKind{
+	ArtifactKindSpecification, ArtifactKindResearch, ArtifactKindPolicy,
+	ArtifactKindEvidence, ArtifactKindImage, ArtifactKindVerificationReport,
+	ArtifactKindCommandTranscript, ArtifactKindVerifyLog, ArtifactKindLicenseScan,
+}
+
+func (k ArtifactKind) valid() bool {
+	switch k {
+	case ArtifactKindSpecification, ArtifactKindResearch, ArtifactKindPolicy,
+		ArtifactKindEvidence, ArtifactKindImage, ArtifactKindVerificationReport,
+		ArtifactKindCommandTranscript, ArtifactKindVerifyLog, ArtifactKindLicenseScan:
+		return true
+	default:
+		return false
+	}
+}
+
+// InitiatorType identifies how a workflow definition admits a new unit. Scan
+// remains Phase 2 and is deliberately absent until a concrete consumer lands.
+type InitiatorType string
+
+const (
+	InitiatorTypeManual InitiatorType = "manual"
+	InitiatorTypeLabel  InitiatorType = "label"
+)
+
+// AllInitiatorTypes lists every valid InitiatorType.
+var AllInitiatorTypes = []InitiatorType{InitiatorTypeManual, InitiatorTypeLabel}
+
+func (t InitiatorType) valid() bool {
+	switch t {
+	case InitiatorTypeManual, InitiatorTypeLabel:
+		return true
+	default:
+		return false
+	}
+}
+
+// InitiatorMode is the label-intake admission posture. Propose is the
+// conservative default; auto_start is an explicit recorded preset override.
+type InitiatorMode string
+
+const (
+	InitiatorModePropose   InitiatorMode = "propose"
+	InitiatorModeAutoStart InitiatorMode = "auto_start"
+)
+
+// AllInitiatorModes lists every valid InitiatorMode.
+var AllInitiatorModes = []InitiatorMode{InitiatorModePropose, InitiatorModeAutoStart}
+
+func (m InitiatorMode) valid() bool {
+	switch m {
+	case InitiatorModePropose, InitiatorModeAutoStart:
+		return true
+	default:
+		return false
+	}
+}
+
 // AgentVendor names the vendor-native instruction mechanism one admitted
 // stage uses. The vocabulary is intentionally independent of the execution
 // driver set: adding a vendor also adds its exact delivery binding and
@@ -634,6 +738,31 @@ var AllReviewOutcomes = []ReviewOutcome{ReviewClean, ReviewFindings}
 func (o ReviewOutcome) valid() bool {
 	switch o {
 	case ReviewClean, ReviewFindings:
+		return true
+	default:
+		return false
+	}
+}
+
+// ReviewDisposition is the remediation result for one raw review finding in
+// one review round. It is separate from FindingDisposition, which is the
+// publication-gate stance over importer and verifier candidate findings.
+type ReviewDisposition string
+
+const (
+	ReviewDispositionFixed    ReviewDisposition = "fixed"
+	ReviewDispositionDeclined ReviewDisposition = "declined"
+	ReviewDispositionDeferred ReviewDisposition = "deferred"
+)
+
+// AllReviewDispositions lists every valid ReviewDisposition.
+var AllReviewDispositions = []ReviewDisposition{
+	ReviewDispositionFixed, ReviewDispositionDeclined, ReviewDispositionDeferred,
+}
+
+func (d ReviewDisposition) valid() bool {
+	switch d {
+	case ReviewDispositionFixed, ReviewDispositionDeclined, ReviewDispositionDeferred:
 		return true
 	default:
 		return false

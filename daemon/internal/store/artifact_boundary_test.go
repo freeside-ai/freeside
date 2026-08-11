@@ -15,7 +15,7 @@ import (
 // persists to smuggle unapproved evidence past the boundary.
 func forgedEligibleArtifact() domain.Artifact {
 	return domain.Artifact{
-		ID: "art-forged", Type: "verify_log", Digest: "sha256:forged",
+		ID: "art-forged", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:forged",
 		Provenance: domain.Provenance{
 			ProducerClass:            domain.ProducerVerifier,
 			ProducerInvocationID:     "inv-1",
@@ -64,7 +64,7 @@ func TestPutArtifactAllowsLegalNonEvidence(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t, store.Options{})
 	agentArt := domain.Artifact{
-		ID: "art-agent", Type: "image", Digest: "sha256:img",
+		ID: "art-agent", Type: domain.ArtifactKindImage, Digest: "sha256:img",
 		Provenance: domain.Provenance{
 			ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-1",
 			HeadBinding: domain.HeadBound, SourceHeadSHA: "cafebabe", SensitivityClass: domain.SensitivityNormal,
@@ -93,7 +93,7 @@ func TestHeadIndependentEvidenceRoundTrips(t *testing.T) {
 	recipe := fixtureRecipe
 
 	indep, err := domain.NewArtifact(domain.ArtifactInput{
-		ID: "art-lic", Type: "license_scan", Digest: "sha256:lic",
+		ID: "art-lic", Type: domain.ArtifactKindLicenseScan, Digest: "sha256:lic",
 		Provenance: domain.Provenance{
 			ProducerClass:            domain.ProducerVerifier,
 			ProducerInvocationID:     "inv-1",

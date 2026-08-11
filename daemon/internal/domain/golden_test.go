@@ -32,7 +32,7 @@ func TestGolden(t *testing.T) {
 		SensitivityClass:         domain.SensitivityNormal,
 	}
 	artifact, err := domain.NewArtifact(domain.ArtifactInput{
-		ID: "art-1", Type: "verify_log", Digest: "sha256:log", Provenance: provenance,
+		ID: "art-1", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:log", Provenance: provenance,
 	}, approved)
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func TestGolden(t *testing.T) {
 		SensitivityClass:         domain.SensitivityNormal,
 	}
 	indepArtifact, err := domain.NewArtifact(domain.ArtifactInput{
-		ID: "art-3", Type: "license_scan", Digest: "sha256:lic", Provenance: indepProvenance,
+		ID: "art-3", Type: domain.ArtifactKindLicenseScan, Digest: "sha256:lic", Provenance: indepProvenance,
 	}, approved)
 	if err != nil {
 		t.Fatal(err)
@@ -249,6 +249,15 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	reviewDisposition := domain.ReviewDispositionRecord{
+		FindingID: finding.ID, RunID: finding.RunID, Round: 1,
+		Disposition: domain.ReviewDispositionDeferred,
+		Reason:      "requires a separate hardening unit", CreatedAt: ts,
+	}
+	initiator := domain.InitiatorConfig{
+		Type: domain.InitiatorTypeLabel, Label: "freeside", Mode: domain.InitiatorModePropose,
+	}
+	manualInitiator := domain.InitiatorConfig{Type: domain.InitiatorTypeManual}
 	reviewFailure := domain.ReviewFailure{
 		InvocationID: "review-run-1-2", RunID: "run-1", Round: 2,
 		BaseSHA: "beefcafe", HeadSHA: "cafebabe", Class: domain.ReviewFailureQuota,
@@ -890,6 +899,7 @@ func TestGolden(t *testing.T) {
 		{"pairing_code", pairingCode},
 		{"finding", finding},
 		{"review_record", reviewRecord},
+		{"review_disposition_record", reviewDisposition},
 		{"review_failure", reviewFailure},
 		{"review_recovery_transition", reviewRecovery},
 		{"review_configuration_recovery_transition", configRecovery},
@@ -908,6 +918,8 @@ func TestGolden(t *testing.T) {
 		{"candidate_authorization", authorization},
 		{"candidate_authorization_blocked", blockedAuthorization},
 		{"run", run},
+		{"initiator_config", initiator},
+		{"initiator_config_manual", manualInitiator},
 		{"stage", stage},
 		{"attempt", attempt},
 		{"auth_identity", identity},

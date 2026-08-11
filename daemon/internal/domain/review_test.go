@@ -20,6 +20,46 @@ func validReviewRecord() domain.ReviewRecord {
 	}
 }
 
+func TestReviewDispositionRecordValidate(t *testing.T) {
+	t.Parallel()
+	valid := domain.ReviewDispositionRecord{
+		FindingID: "finding-1", RunID: "run-1", Round: 1,
+		Disposition: domain.ReviewDispositionFixed, Reason: "fixed in abc123",
+		RemediationInvocationID: "review-run-1-2",
+		CreatedAt:               time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid disposition rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*domain.ReviewDispositionRecord){
+		"finding":      func(r *domain.ReviewDispositionRecord) { r.FindingID = "" },
+		"run":          func(r *domain.ReviewDispositionRecord) { r.RunID = "" },
+		"round":        func(r *domain.ReviewDispositionRecord) { r.Round = 0 },
+		"disposition":  func(r *domain.ReviewDispositionRecord) { r.Disposition = "ignored" },
+		"reason":       func(r *domain.ReviewDispositionRecord) { r.Reason = "" },
+		"fixed review": func(r *domain.ReviewDispositionRecord) { r.RemediationInvocationID = "" },
+		"time":         func(r *domain.ReviewDispositionRecord) { r.CreatedAt = time.Time{} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			record := valid
+			mutate(&record)
+			if err := record.Validate(); err == nil {
+				t.Fatal("malformed disposition validated")
+			}
+		})
+	}
+	deferred := valid
+	deferred.Disposition = domain.ReviewDispositionDeferred
+	deferred.RemediationInvocationID = ""
+	if err := deferred.Validate(); err != nil {
+		t.Fatalf("valid deferred disposition rejected: %v", err)
+	}
+	deferred.RemediationInvocationID = "review-run-1-2"
+	if err := deferred.Validate(); !errors.Is(err, domain.ErrInvalidHeadBinding) {
+		t.Fatalf("deferred disposition with remediation head = %v, want invalid binding", err)
+	}
+}
+
 func TestReviewRecordBindsOutcomeToCanonicalFindings(t *testing.T) {
 	record := validReviewRecord()
 	record.Outcome = domain.ReviewFindings

@@ -487,11 +487,11 @@ func TestSubmissionArtifactIdentityRetainsFullDigest(t *testing.T) {
 	prefix := strings.Repeat("ab", 6)
 	firstDigest := domain.Digest("sha256:" + prefix + strings.Repeat("1", 52))
 	secondDigest := domain.Digest("sha256:" + prefix + strings.Repeat("2", 52))
-	first, err := submissionArtifact("specification", firstDigest)
+	first, err := submissionArtifact(domain.ArtifactKindSpecification, firstDigest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := submissionArtifact("specification", secondDigest)
+	second, err := submissionArtifact(domain.ArtifactKindSpecification, secondDigest)
 	if err != nil {
 		t.Fatal(err)
 	}

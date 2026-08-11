@@ -59,7 +59,7 @@ struct DecisionDetailView: View {
                 cardSection("Evidence") {
                     ForEach(item.evidence_snapshot, id: \.id) { artifact in
                         AttachmentRow(
-                            label: artifact._type, digest: artifact.digest,
+                            label: artifact._type.rawValue, digest: artifact.digest,
                             attachments: attachments)
                     }
                 }
