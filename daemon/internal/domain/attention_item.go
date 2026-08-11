@@ -451,6 +451,10 @@ type AttentionItem struct {
 	// item offers to recover. It is present only on review_contradiction items
 	// and is immutable across the item's lifecycle.
 	ReviewRecoveryBinding *ReviewRecoveryBinding `json:"review_recovery_binding"`
+	// CodexReenrollmentRecoveryBinding identifies the verified auth-store
+	// replacement that may resolve a revoked-identity system-health item. It is
+	// absent until verification and immutable once projected onto the item.
+	CodexReenrollmentRecoveryBinding *CodexReenrollmentRecoveryBinding `json:"codex_reenrollment_recovery_binding"`
 	// ReviewConfigurationRecovery identifies the exact parked
 	// configuration-class failure the item offers to recover and the
 	// admission-pinned profile it was parked under. It is present only on
@@ -494,24 +498,25 @@ type AttentionItem struct {
 // input path that sets either, so a caller cannot bind a digest it did not
 // render (plan §4).
 type AttentionItemInput struct {
-	ID                          ItemID
-	ProjectID                   ProjectID
-	Subject                     Subject
-	Type                        AttentionType
-	Priority                    Priority
-	Reason                      string
-	RequestedDecision           []Action
-	EvidenceSnapshot            []Artifact
-	AgentClaims                 []AgentClaim
-	PRHeadSHA                   string
-	PRReference                 *PRReference
-	CommitPlanNotice            *CommitPlanNoticeReason
-	ReviewRecoveryBinding       *ReviewRecoveryBinding
-	ReviewConfigurationRecovery *ReviewConfigurationRecoveryBinding
-	ItemVersion                 int
-	InterruptionClass           InterruptionClass
-	ConversationID              *ConversationID
-	ExpiresWhen                 *time.Time
+	ID                               ItemID
+	ProjectID                        ProjectID
+	Subject                          Subject
+	Type                             AttentionType
+	Priority                         Priority
+	Reason                           string
+	RequestedDecision                []Action
+	EvidenceSnapshot                 []Artifact
+	AgentClaims                      []AgentClaim
+	PRHeadSHA                        string
+	PRReference                      *PRReference
+	CommitPlanNotice                 *CommitPlanNoticeReason
+	ReviewRecoveryBinding            *ReviewRecoveryBinding
+	CodexReenrollmentRecoveryBinding *CodexReenrollmentRecoveryBinding
+	ReviewConfigurationRecovery      *ReviewConfigurationRecoveryBinding
+	ItemVersion                      int
+	InterruptionClass                InterruptionClass
+	ConversationID                   *ConversationID
+	ExpiresWhen                      *time.Time
 	// Posture must be set exactly by daemon-internal creators of system_health
 	// items; there is no client input path to it.
 	Posture *HealthPosture
@@ -535,27 +540,28 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 	subject := in.Subject
 	subject.RunID = clonePtr(in.Subject.RunID)
 	item := AttentionItem{
-		ID:                          in.ID,
-		ProjectID:                   in.ProjectID,
-		Subject:                     subject,
-		Type:                        in.Type,
-		Priority:                    in.Priority,
-		Reason:                      in.Reason,
-		RequestedDecision:           slices.Clone(in.RequestedDecision),
-		EvidenceSnapshot:            cloneArtifacts(in.EvidenceSnapshot),
-		AgentClaims:                 cloneAgentClaims(in.AgentClaims),
-		PRHeadSHA:                   in.PRHeadSHA,
-		PRReference:                 clonePtr(in.PRReference),
-		CommitPlanNotice:            clonePtr(in.CommitPlanNotice),
-		ReviewRecoveryBinding:       clonePtr(in.ReviewRecoveryBinding),
-		ReviewConfigurationRecovery: clonePtr(in.ReviewConfigurationRecovery),
-		ItemVersion:                 in.ItemVersion,
-		InterruptionClass:           in.InterruptionClass,
-		ConversationID:              clonePtr(in.ConversationID),
-		ExpiresWhen:                 clonePtr(in.ExpiresWhen),
-		Posture:                     clonePtr(in.Posture),
-		BlockingSupersession:        clonePtr(in.BlockingSupersession),
-		Status:                      in.Status,
+		ID:                               in.ID,
+		ProjectID:                        in.ProjectID,
+		Subject:                          subject,
+		Type:                             in.Type,
+		Priority:                         in.Priority,
+		Reason:                           in.Reason,
+		RequestedDecision:                slices.Clone(in.RequestedDecision),
+		EvidenceSnapshot:                 cloneArtifacts(in.EvidenceSnapshot),
+		AgentClaims:                      cloneAgentClaims(in.AgentClaims),
+		PRHeadSHA:                        in.PRHeadSHA,
+		PRReference:                      clonePtr(in.PRReference),
+		CommitPlanNotice:                 clonePtr(in.CommitPlanNotice),
+		ReviewRecoveryBinding:            clonePtr(in.ReviewRecoveryBinding),
+		CodexReenrollmentRecoveryBinding: clonePtr(in.CodexReenrollmentRecoveryBinding),
+		ReviewConfigurationRecovery:      clonePtr(in.ReviewConfigurationRecovery),
+		ItemVersion:                      in.ItemVersion,
+		InterruptionClass:                in.InterruptionClass,
+		ConversationID:                   clonePtr(in.ConversationID),
+		ExpiresWhen:                      clonePtr(in.ExpiresWhen),
+		Posture:                          clonePtr(in.Posture),
+		BlockingSupersession:             clonePtr(in.BlockingSupersession),
+		Status:                           in.Status,
 	}
 	// Normalize the optional expiry to UTC so the producer path stores one
 	// canonical spelling (a dev-CLI producer stamps it from the host clock);
@@ -690,6 +696,22 @@ func (i AttentionItem) Validate() error {
 			return fmt.Errorf("item %s configuration recovery binding disagrees with its subject or head: %w",
 				i.ID, ErrReviewConfigRecoveryBindingMismatch)
 		}
+	}
+	if i.CodexReenrollmentRecoveryBinding != nil {
+		if i.Type != AttentionSystemHealth {
+			return fmt.Errorf("item %s type %q carries a codex re-enrollment recovery binding: %w",
+				i.ID, i.Type, ErrCodexReenrollmentBindingOutsideItem)
+		}
+		if err := i.CodexReenrollmentRecoveryBinding.Validate(); err != nil {
+			return fmt.Errorf("item %s: %w", i.ID, err)
+		}
+		if !i.Offers(ActionResolveReenrollment) {
+			return fmt.Errorf("item %s codex re-enrollment binding has no recovery action: %w",
+				i.ID, ErrCodexReenrollmentBindingMismatch)
+		}
+	} else if i.Type == AttentionSystemHealth && i.Offers(ActionResolveReenrollment) {
+		return fmt.Errorf("item %s offers codex re-enrollment recovery without a binding: %w",
+			i.ID, ErrCodexReenrollmentBindingMissing)
 	}
 	if i.Posture == nil {
 		if i.Type == AttentionSystemHealth {

@@ -315,6 +315,34 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	reenrollmentBinding := domain.CodexReenrollmentRecoveryBinding{
+		AuthIdentityID: "codex-primary", LeaseFence: 4,
+		AuthStoreDigest:      "sha256:replacement-store",
+		AccessTokenExpiresAt: ts.Add(24 * time.Hour),
+	}
+	reenrollmentItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-codex-reenrollment", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		Type:    domain.AttentionSystemHealth, Priority: domain.PriorityHigh,
+		Reason:                           "Codex identity requires verified re-enrollment",
+		RequestedDecision:                []domain.Action{domain.ActionAcknowledge, domain.ActionResolveReenrollment},
+		CodexReenrollmentRecoveryBinding: &reenrollmentBinding,
+		ItemVersion:                      2, InterruptionClass: domain.InterruptionExceptional,
+		Posture: &advisoryPosture, Status: domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reenrollmentCommandID := "command-resolve-reenrollment-1"
+	reenrollmentTransition := domain.CodexReenrollmentRecoveryTransition{
+		AuthIdentityID:       reenrollmentBinding.AuthIdentityID,
+		LeaseFence:           reenrollmentBinding.LeaseFence,
+		AuthStoreDigest:      reenrollmentBinding.AuthStoreDigest,
+		AccessTokenExpiresAt: reenrollmentBinding.AccessTokenExpiresAt,
+		CommandID:            &reenrollmentCommandID,
+		Reason:               "operator resolved the verified Codex re-enrollment",
+		OccurredAt:           ts,
+	}
 	classification := domain.Classification{
 		FindingID: "find-1", Version: 1, Materiality: "medium", Confidence: "high", Note: "worth fixing",
 	}
@@ -904,6 +932,8 @@ func TestGolden(t *testing.T) {
 		{"review_recovery_transition", reviewRecovery},
 		{"review_configuration_recovery_transition", configRecovery},
 		{"attention_item_review_configuration", configRecoveryItem},
+		{"attention_item_codex_reenrollment", reenrollmentItem},
+		{"codex_reenrollment_recovery_transition", reenrollmentTransition},
 		{"classification", classification},
 		{"command_discuss", discussCommand},
 		{"conversation", conversation},

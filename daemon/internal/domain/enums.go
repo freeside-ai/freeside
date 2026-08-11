@@ -455,6 +455,7 @@ const (
 	ActionResumeUnattended         Action = "resume_unattended"
 	ActionRecoverReview            Action = "recover_review"
 	ActionAdoptReviewConfiguration Action = "adopt_review_configuration"
+	ActionResolveReenrollment      Action = "resolve_reenrollment"
 )
 
 // AllActions lists every valid Action.
@@ -468,6 +469,7 @@ var AllActions = []Action{
 	ActionStart, ActionStartWithChanges, ActionDecline, ActionSnooze,
 	ActionAcknowledge, ActionRunDoctor, ActionStopUnattended,
 	ActionResumeUnattended, ActionRecoverReview, ActionAdoptReviewConfiguration,
+	ActionResolveReenrollment,
 }
 
 func (a Action) valid() bool {
@@ -480,7 +482,8 @@ func (a Action) valid() bool {
 		ActionOpenPR, ActionReturnToAgent, ActionMarkSeen, ActionDismiss,
 		ActionStart, ActionStartWithChanges, ActionDecline, ActionSnooze,
 		ActionAcknowledge, ActionRunDoctor, ActionStopUnattended,
-		ActionResumeUnattended, ActionRecoverReview, ActionAdoptReviewConfiguration:
+		ActionResumeUnattended, ActionRecoverReview, ActionAdoptReviewConfiguration,
+		ActionResolveReenrollment:
 		return true
 	default:
 		return false

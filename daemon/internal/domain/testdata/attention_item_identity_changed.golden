@@ -64,6 +64,7 @@
     "observed_at": "2026-01-02T03:55:05Z"
   },
   "review_recovery_binding": null,
+  "codex_reenrollment_recovery_binding": null,
   "review_configuration_recovery": null,
   "item_version": 2,
   "interruption_class": "planned_gate",

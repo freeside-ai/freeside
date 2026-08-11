@@ -23,6 +23,7 @@
   "base_freshness": null,
   "readiness_invalidation": null,
   "review_recovery_binding": null,
+  "codex_reenrollment_recovery_binding": null,
   "review_configuration_recovery": {
     "run_id": "run-1",
     "invocation_id": "review-run-1-2",
