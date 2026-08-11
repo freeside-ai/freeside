@@ -78,6 +78,20 @@ type activeResourceObservation struct {
 	// retries.
 	nativeObservations []domain.NativeReviewObservation
 	nativeErr          error
+	foreclosure        *completionForeclosure
+}
+
+type completionForeclosure struct {
+	unitID  domain.WorkUnitID
+	binding domain.WorkUnitPRBinding
+	pull    domain.PullMergeFact
+}
+
+type completionRecoveryState struct {
+	declaration *domain.WorkUnitDeclaration
+	binding     *domain.WorkUnitPRBinding
+	completed   bool
+	foreclosure *completionForeclosure
 }
 
 type activeResourceReconcileResult struct {
@@ -93,6 +107,63 @@ func validateObservedPullIdentityCoordinates(repositoryID int64, prNumber int) e
 		return fmt.Errorf("returned pr_number %d: %w", prNumber, domain.ErrNonPositive)
 	}
 	return nil
+}
+
+func loadCompletionRecoveryState(
+	ctx context.Context, tx *store.ReadTx, readyBinding domain.ReadyItemPRBinding,
+) (completionRecoveryState, error) {
+	state := completionRecoveryState{}
+	declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, readyBinding.RunID)
+	if errors.Is(err, store.ErrNotFound) {
+		return state, nil
+	}
+	if err != nil {
+		return state, err
+	}
+	state.declaration = &declaration
+
+	binding, err := tx.GetWorkUnitPRBinding(ctx, declaration.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return state, nil
+	}
+	if err != nil {
+		return state, err
+	}
+	if binding.Repo != readyBinding.Repo ||
+		binding.RepositoryID != readyBinding.RepositoryID ||
+		binding.PRNumber != readyBinding.PRNumber ||
+		binding.BaseRef != readyBinding.BaseRef ||
+		binding.HeadSHA != readyBinding.HeadSHA {
+		return state, fmt.Errorf("work-unit binding %s disagrees with ready resource %s",
+			binding.UnitID, readyBinding.ItemID)
+	}
+	state.binding = &binding
+
+	if _, err := tx.GetWorkUnitCompletion(ctx, declaration.ID); err == nil {
+		state.completed = true
+		return state, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return state, err
+	}
+
+	pulls, err := tx.ListPullMergeFacts(ctx, binding.RepositoryID, binding.PRNumber)
+	if err != nil {
+		return state, err
+	}
+	// A merged pull cannot later reopen or change its head or base. Preserve
+	// the newest foreclosing proof even if a contradictory later fact is
+	// appended, rather than letting an impossible transition resurrect polling
+	// or authorize completion after restart.
+	for i := len(pulls) - 1; i >= 0; i-- {
+		pull := pulls[i]
+		if pull.Merged && (pull.HeadSHA != binding.HeadSHA || pull.BaseRef != binding.BaseRef) {
+			state.foreclosure = &completionForeclosure{
+				unitID: declaration.ID, binding: binding, pull: pull,
+			}
+			break
+		}
+	}
+	return state, nil
 }
 
 // Run performs one startup pass and then re-arms its process-local timer from
@@ -236,9 +307,16 @@ func (r *activeResourceReconciler) Reconcile(
 			if err != nil {
 				result.failures = append(result.failures,
 					fmt.Errorf("recover ready resource completion %s: %w", item.ID, err))
-			} else if observation.material || observation.completion != nil {
-				if err := r.commit(ctx, observation); err != nil {
-					return result, fmt.Errorf("commit ready resource completion %s: %w", item.ID, err)
+			} else {
+				if observation.material || observation.completion != nil {
+					if err := r.commit(ctx, observation); err != nil {
+						return result, fmt.Errorf("commit ready resource completion %s: %w", item.ID, err)
+					}
+				}
+				if observation.foreclosure != nil {
+					if err := r.convergeCompletionForeclosure(ctx, item, *observation.foreclosure); err != nil {
+						return result, fmt.Errorf("surface ready resource completion foreclosure %s: %w", item.ID, err)
+					}
 				}
 			}
 			if err := r.evictConcludedResource(ctx, item.ID); err != nil {
@@ -308,6 +386,62 @@ func (r *activeResourceReconciler) Reconcile(
 		}
 	}
 	return result, nil
+}
+
+func completionForeclosureItemID(unitID domain.WorkUnitID) domain.ItemID {
+	digest := sha256.Sum256([]byte(unitID))
+	return domain.ItemID(fmt.Sprintf("completion-foreclosed-%x", digest[:]))
+}
+
+// convergeCompletionForeclosure surfaces the terminal completion refusal once.
+// The deterministic ID is checked across every item status so acknowledging the
+// notice does not cause a later reconciliation pass to resurrect it.
+func (r *activeResourceReconciler) convergeCompletionForeclosure(
+	ctx context.Context, ready domain.AttentionItem, foreclosure completionForeclosure,
+) error {
+	itemID := completionForeclosureItemID(foreclosure.unitID)
+	var exists bool
+	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetAttentionItem(ctx, itemID)
+		switch {
+		case err == nil:
+			exists = true
+			return nil
+		case errors.Is(err, store.ErrNotFound):
+			return nil
+		default:
+			return err
+		}
+	}); err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+
+	posture := domain.HealthPostureAdvisory
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: itemID, ProjectID: ready.ProjectID,
+		Subject: domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
+		Type:    domain.AttentionSystemHealth, Priority: domain.PriorityHigh,
+		Reason: fmt.Sprintf(
+			"Work unit %s cannot record completion: merged %s#%d has base %s and head %s; the bound candidate has base %s and head %s",
+			foreclosure.unitID,
+			foreclosure.binding.Repo,
+			foreclosure.binding.PRNumber,
+			foreclosure.pull.BaseRef,
+			foreclosure.pull.HeadSHA,
+			foreclosure.binding.BaseRef,
+			foreclosure.binding.HeadSHA,
+		),
+		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
+		ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
+		Posture: &posture, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		return err
+	}
+	return signet.NewService(r.store).PutItem(ctx, item)
 }
 
 func activeResourceObservationHealthPrefix(itemID domain.ItemID) string {
@@ -435,24 +569,20 @@ func (r *activeResourceReconciler) evictConcludedResource(
 			return err
 		}
 		found = true
-		declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, binding.RunID)
-		if errors.Is(err, store.ErrNotFound) {
-			return nil
-		}
+		state, err := loadCompletionRecoveryState(ctx, tx, binding)
 		if err != nil {
 			return err
 		}
-		boundIssue = declaration.BoundIssue
-		if _, err := tx.GetWorkUnitPRBinding(ctx, declaration.ID); errors.Is(err, store.ErrNotFound) {
+		if state.declaration == nil {
+			return nil
+		}
+		boundIssue = state.declaration.BoundIssue
+		if state.binding == nil {
 			recoveryComplete = false
 			return nil
-		} else if err != nil {
-			return err
 		}
-		if _, err := tx.GetWorkUnitCompletion(ctx, declaration.ID); errors.Is(err, store.ErrNotFound) {
+		if !state.completed && state.foreclosure == nil {
 			recoveryComplete = false
-		} else if err != nil {
-			return err
 		}
 		return nil
 	}); err != nil {
@@ -546,12 +676,22 @@ func (r activeResourceReconciler) observeReadyResource(
 		declaration *domain.WorkUnitDeclaration
 		unitBinding *domain.WorkUnitPRBinding
 		completed   bool
+		foreclosure *completionForeclosure
 	)
 	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
 		binding, err = tx.GetReadyItemPRBinding(ctx, item.ID)
 		if err != nil {
 			return err
+		}
+		if completionOnly {
+			state, err := loadCompletionRecoveryState(ctx, tx, binding)
+			if err != nil {
+				return err
+			}
+			declaration, unitBinding = state.declaration, state.binding
+			completed, foreclosure = state.completed, state.foreclosure
+			return nil
 		}
 		d, err := tx.GetWorkUnitDeclarationByRun(ctx, binding.RunID)
 		if errors.Is(err, store.ErrNotFound) {
@@ -585,9 +725,9 @@ func (r activeResourceReconciler) observeReadyResource(
 	}
 	observation := activeResourceObservation{
 		itemID: item.ID, binding: binding, completionOnly: completionOnly,
-		completed: completed,
+		completed: completed, foreclosure: foreclosure,
 	}
-	if completionOnly && (declaration == nil || unitBinding == nil || completed) {
+	if completionOnly && (declaration == nil || unitBinding == nil || completed || foreclosure != nil) {
 		return observation, nil
 	}
 	observed, err := r.pull(ctx, binding.Repo, binding.PRNumber)

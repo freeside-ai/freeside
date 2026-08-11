@@ -1235,6 +1235,166 @@ func TestActiveResourceReconcileRecoversSupersededCompletion(t *testing.T) {
 	}
 }
 
+func TestActiveResourceReconcileForeclosesDivergedMergedCompletion(t *testing.T) {
+	cases := []struct {
+		name     string
+		mutate   func(*publish.PullObservation)
+		observed string
+	}{
+		{
+			name: "head changed",
+			mutate: func(pull *publish.PullObservation) {
+				pull.HeadSHA = "amended00"
+			},
+			observed: "amended00",
+		},
+		{
+			name: "base retargeted",
+			mutate: func(pull *publish.PullObservation) {
+				pull.BaseRef = "release"
+			},
+			observed: "release",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := schedTestStore(t)
+			item := capturedRun(t, st)
+			pull := exactPull("closed", true)
+			tc.mutate(&pull)
+
+			pullCalls := 0
+			evictions := 0
+			newReconciler := func() activeResourceReconciler {
+				return activeResourceReconciler{
+					store: st,
+					pull: func(context.Context, string, int) (publish.PullObservation, error) {
+						pullCalls++
+						return pull, nil
+					},
+					evictConcluded: func(domain.ReadyItemPRBinding, *int) { evictions++ },
+					now:            func() time.Time { return activeResourceTestTime.Add(time.Minute) },
+				}
+			}
+			reconciler := newReconciler()
+			if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+				t.Fatalf("divergence Reconcile = %v, %v", failures, err)
+			}
+			if got := readActiveItem(t, st, item.ID); got.Status != domain.StatusSuperseded {
+				t.Fatalf("diverged item status = %s, want superseded", got.Status)
+			}
+			if pullCalls != 1 || evictions != 1 {
+				t.Fatalf("diverged resource calls = pulls %d evictions %d, want 1 and 1", pullCalls, evictions)
+			}
+			assertNoActiveCompletion(t, st, item)
+
+			if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+				t.Fatalf("foreclosure Reconcile = %v, %v", failures, err)
+			}
+			if pullCalls != 1 || evictions != 1 {
+				t.Fatalf("foreclosed resource calls = pulls %d evictions %d, want 1 and 1", pullCalls, evictions)
+			}
+			noticeID := completionForeclosureItemID(domain.WorkUnitIDForRun(*item.Subject.RunID))
+			notice := readActiveItem(t, st, noticeID)
+			if notice.Type != domain.AttentionSystemHealth || notice.Status != domain.StatusOpen ||
+				notice.Posture == nil || *notice.Posture != domain.HealthPostureAdvisory ||
+				len(notice.RequestedDecision) != 1 || notice.RequestedDecision[0] != domain.ActionAcknowledge ||
+				!strings.Contains(notice.Reason, tc.observed) {
+				t.Fatalf("completion foreclosure notice = %+v", notice)
+			}
+
+			if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+				t.Fatalf("repeat Reconcile = %v, %v", failures, err)
+			}
+			if pullCalls != 1 || evictions != 1 {
+				t.Fatalf("repeat resource calls = pulls %d evictions %d, want 1 and 1", pullCalls, evictions)
+			}
+
+			notice.Status = domain.StatusResolved
+			notice.ItemVersion++
+			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				if err := tx.PutAttentionItem(ctx, notice); err != nil {
+					return err
+				}
+				laterExact := domain.PullMergeFact{
+					Repo: "owner/repo", RepositoryID: 424242, PRNumber: 450,
+					State: domain.PullRequestClosed, Merged: true, MergeCommitSHA: "deadbeef",
+					BaseRef: "main", HeadSHA: "cafed00d",
+					ObservedAt: activeResourceTestTime.Add(2 * time.Minute),
+				}
+				_, err := tx.AppendPullMergeFact(ctx, laterExact)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			restarted := newReconciler()
+			if failures, err := reconcileActiveResource(&restarted, ctx); err != nil || len(failures) != 0 {
+				t.Fatalf("restart Reconcile = %v, %v", failures, err)
+			}
+			if pullCalls != 1 {
+				t.Fatalf("restart changed pull calls to %d, want 1", pullCalls)
+			}
+			assertNoActiveCompletion(t, st, item)
+			if got := readActiveItem(t, st, noticeID); got.Status != domain.StatusResolved ||
+				got.ItemVersion != notice.ItemVersion {
+				t.Fatalf("resolved notice resurrected = %+v", got)
+			}
+		})
+	}
+}
+
+func TestActiveResourceReconcileKeepsExactMergedCompletionPending(t *testing.T) {
+	ctx := context.Background()
+	st := schedTestStore(t)
+	item := capturedRun(t, st)
+	item.Status = domain.StatusSuperseded
+	item.ItemVersion++
+	pull := domain.PullMergeFact{
+		Repo: "owner/repo", RepositoryID: 424242, PRNumber: 450,
+		State: domain.PullRequestClosed, Merged: true, MergeCommitSHA: "deadbeef",
+		BaseRef: "main", HeadSHA: "cafed00d", ObservedAt: activeResourceTestTime,
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutAttentionItem(ctx, item); err != nil {
+			return err
+		}
+		_, err := tx.AppendPullMergeFact(ctx, pull)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pullCalls := 0
+	reconciler := activeResourceReconciler{
+		store: st,
+		pull: func(context.Context, string, int) (publish.PullObservation, error) {
+			pullCalls++
+			return exactPull("closed", true), nil
+		},
+		issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+			return publish.IssueObservation{Number: 443, State: "open"}, nil
+		},
+		now: func() time.Time { return activeResourceTestTime.Add(time.Minute) },
+	}
+	for pass := 1; pass <= 2; pass++ {
+		if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+			t.Fatalf("pending pass %d Reconcile = %v, %v", pass, failures, err)
+		}
+	}
+	if pullCalls != 4 {
+		t.Fatalf("exact merged resource pull calls = %d, want 4", pullCalls)
+	}
+	assertNoActiveCompletion(t, st, item)
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetAttentionItem(
+			ctx, completionForeclosureItemID(domain.WorkUnitIDForRun(*item.Subject.RunID)),
+		)
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("exact pending merge foreclosure lookup = %v, want ErrNotFound", err)
+	}
+}
+
 func TestActiveResourceReconcileFinallyEvictsAcrossBindingRecovery(t *testing.T) {
 	ctx := context.Background()
 	st := schedTestStore(t)
