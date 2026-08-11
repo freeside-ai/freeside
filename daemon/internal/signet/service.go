@@ -327,8 +327,7 @@ const (
 // convert_to_policy, adjudicate, retry_with_capabilities, and
 // choose_alternate_profile carry decision parameters DecisionPayload has no
 // field for (a #22 contract widening when their consumers land); and
-// request_changes, answer_and_retry, answer_without_retry, and
-// return_to_agent ride the conversation channel but are decisions about a
+// answer_and_retry, answer_without_retry, and return_to_agent ride the conversation channel but are decisions about a
 // prior agent turn, whose accepted effect (what the workflow does with the
 // answer) is the Wave 2 engine's, not a plain discuss append. Recording any
 // of them today would silently drop the user's data. A behaviour switch, no
@@ -341,6 +340,8 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		domain.ActionApplyThenFinish, domain.ActionRetry,
 		domain.ActionRerunTrustEvaluation, domain.ActionStart:
 		return domain.StatusResolved, outcomeConcludes
+	case domain.ActionRequestChanges:
+		return domain.StatusSuperseded, outcomeConcludes
 	case domain.ActionStopUnattended:
 		return domain.StatusResolved, outcomeStopsUnattended
 	case domain.ActionResumeUnattended:
@@ -359,7 +360,7 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 	case domain.ActionSnooze, domain.ActionStartWithChanges,
 		domain.ActionContinueUnderPolicy, domain.ActionConvertToPolicy,
 		domain.ActionAdjudicate, domain.ActionRetryWithCapability,
-		domain.ActionChooseAlternate, domain.ActionRequestChanges,
+		domain.ActionChooseAlternate,
 		domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry,
 		domain.ActionReturnToAgent:
 		return "", outcomePending

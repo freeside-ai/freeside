@@ -1,0 +1,13 @@
+{
+  "fetch_requests": null,
+  "specification": {
+    "addressals": [
+      {
+        "comment": "Show the refusal path.",
+        "response": "Added refusal tests."
+      }
+    ],
+    "body": "# Objective\n\nRequire approval before implementation.",
+    "summary": "Add the missing lifecycle gate."
+  }
+}

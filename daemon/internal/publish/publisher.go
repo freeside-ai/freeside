@@ -23,11 +23,19 @@ type Candidate struct {
 	// objects).
 	HeadSHA string
 	// Title and Body are the PR's human-facing content. The identity
-	// marker is appended to Body deterministically; neither enters the
-	// publication identity, so wording fixes converge onto the same
-	// branch and PR instead of minting new ones.
+	// marker and, for an execution publication, the trusted disposition
+	// history are appended to Body deterministically; none enters the
+	// publication identity, so wording or evidence-rendering fixes converge
+	// onto the same branch and PR instead of minting new ones.
 	Title string
 	Body  string
+	// DispositionHistory is the publisher-owned forensic account rendered
+	// from durable review records and re-derived readiness authority.
+	// LoadDispositionHistory binds it to the same durable store used by
+	// this Publisher's decision boundary. Execution-bound production publication
+	// requires it; attended and legacy publication paths omit it because they do
+	// not satisfy the §7 independent-review requirement.
+	DispositionHistory *DispositionHistory
 	// Artifacts are the evidence artifacts being published. Each is
 	// re-gated against the approved-recipe set before any external
 	// effect.
@@ -204,6 +212,94 @@ func (p *Publisher) VerifyOutcome(
 			"verify publication outcome: live pull request #%d, persisted #%d: %w",
 			pr.Number, outcome.PRNumber, ErrPublicationConflict,
 		)
+	}
+	return nil
+}
+
+// ConvergeOutcome authenticates a previously persisted outcome and repairs
+// title/body drift to the exact current candidate content. It never creates a
+// missing PR: once an outcome exists, recovery may repair that one resource
+// but must not mint a replacement.
+func (p *Publisher) ConvergeOutcome(
+	ctx context.Context,
+	c Candidate,
+	approvedRecipes map[domain.Digest]bool,
+	identity Identity,
+	outcome Outcome,
+) error {
+	if c.DispositionHistory != nil {
+		if err := c.DispositionHistory.validateCandidate(c.RunID, c.HeadSHA); err != nil {
+			return fmt.Errorf("converge publication outcome: disposition history: %w", err)
+		}
+		if p.storeDecision == nil || c.DispositionHistory.sourceStore == nil ||
+			c.DispositionHistory.sourceStore != p.storeDecision.store {
+			return errors.New("converge publication outcome: disposition history does not come from the publisher decision store")
+		}
+	}
+	repo, err := parseRepo(c.Repo)
+	if err != nil {
+		return fmt.Errorf("converge publication outcome: %w", err)
+	}
+	title, body, err := desiredPRContent(identity, c)
+	if err != nil {
+		return fmt.Errorf("converge publication outcome: %w", err)
+	}
+	number, created, err := p.convergePR(
+		ctx, repo, identity, c, title, body, false, outcome.PRNumber, func() error {
+			return p.gateOutcomeRepair(ctx, c, approvedRecipes, identity)
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("converge publication outcome: %w", err)
+	}
+	if created || number != outcome.PRNumber {
+		return fmt.Errorf("converge publication outcome: live pull request #%d, persisted #%d: %w",
+			number, outcome.PRNumber, ErrPublicationConflict)
+	}
+	return nil
+}
+
+func (p *Publisher) gateOutcomeRepair(
+	ctx context.Context,
+	c Candidate,
+	approvedRecipes map[domain.Digest]bool,
+	identity Identity,
+) error {
+	if p.wiringErr != nil {
+		return p.wiringErr
+	}
+	identityInput, err := gatedCandidateIdentityInput(c, approvedRecipes)
+	if err != nil {
+		return err
+	}
+	currentIdentity, err := DeriveIdentity(identityInput)
+	if err != nil {
+		return err
+	}
+	if currentIdentity != identity {
+		return fmt.Errorf("candidate identity changed before repair: %w", ErrPublicationConflict)
+	}
+	if p.auditor == nil {
+		return errors.New("repair publication outcome: no workflow auditor")
+	}
+	audit, err := p.auditor.Audit(ctx, c.Repo, c.BaseRef)
+	if err != nil {
+		return fmt.Errorf("repair publication outcome: fresh workflow audit: %w", err)
+	}
+	if c.DispositionHistory != nil {
+		if p.storeDecision == nil {
+			return errors.New("repair publication outcome: no disposition-history decision store")
+		}
+		if err := p.storeDecision.revalidateOutcomeRepair(ctx, c, audit); err != nil {
+			return fmt.Errorf("repair publication outcome: current authority and disposition history: %w", err)
+		}
+		return nil
+	}
+	if err := p.gateTrustDrift(ctx, c, audit); err != nil {
+		return fmt.Errorf("repair publication outcome: %w", err)
+	}
+	if err := p.gateAuthorization(ctx, c); err != nil {
+		return fmt.Errorf("repair publication outcome: %w", err)
 	}
 	return nil
 }
@@ -409,6 +505,20 @@ func (p *Publisher) publish(
 	if err := ValidateCandidateBody(c.Body); err != nil {
 		return Result{}, fmt.Errorf("publish: %w", err)
 	}
+	if c.DispositionHistory != nil {
+		if err := c.DispositionHistory.validateCandidate(c.RunID, c.HeadSHA); err != nil {
+			return Result{}, fmt.Errorf("publish: disposition history: %w", err)
+		}
+		if p.storeDecision == nil || c.DispositionHistory.sourceStore == nil ||
+			c.DispositionHistory.sourceStore != p.storeDecision.store {
+			return Result{}, errors.New("publish: disposition history does not come from the publisher decision store")
+		}
+	}
+	if producingInvocationID != nil {
+		if c.DispositionHistory == nil {
+			return Result{}, errors.New("publish: execution candidate carries no disposition history")
+		}
+	}
 
 	// Trust gate before any external effect (§5.15 rule 2): every
 	// artifact is re-gated against the current approved-recipe set —
@@ -430,7 +540,10 @@ func (p *Publisher) publish(
 	// or the publisher's own PR would later be classified as foreign and
 	// convergence would deadlock: prose carrying a marker-shaped line
 	// (quoted from another PR, say) fails here, before any effect.
-	title, body := desiredPRContent(identity, c)
+	title, body, err := desiredPRContent(identity, c)
+	if err != nil {
+		return Result{}, fmt.Errorf("publish: %w", err)
+	}
 	if parsed, ok := ParseMarker(body); !ok || parsed != identity.Digest() {
 		return Result{}, errors.New("publish: candidate body would not parse back to the publication identity marker")
 	}
@@ -483,7 +596,7 @@ func (p *Publisher) publish(
 	}
 
 	// PR: check before create, bound by the identity marker.
-	pr, created, err := p.convergePR(ctx, repo, identity, c, title, body)
+	pr, created, err := p.convergePR(ctx, repo, identity, c, title, body, true, 0, nil)
 	if err != nil {
 		return Result{}, err
 	}
@@ -777,7 +890,7 @@ func (p *Publisher) preparePublication(
 		if err != nil {
 			return fmt.Errorf("publish: recorded intent for %s: %w", key, err)
 		}
-		if committed != intent {
+		if !intentsCompatible(committed, intent) {
 			return fmt.Errorf("publish: invocation %s already committed a different intent: %w", c.InvocationID, ErrPublicationConflict)
 		}
 	}
@@ -789,7 +902,17 @@ func (p *Publisher) preparePublication(
 // (its title and body are patched back if drifted); a marker-less PR
 // on the branch is foreign; a closed marked PR, a marked PR at another
 // head, or more than one marked PR is a conflict a human resolves.
-func (p *Publisher) convergePR(ctx context.Context, repo repoRef, identity Identity, c Candidate, title, body string) (number int, created bool, err error) {
+func (p *Publisher) convergePR(
+	ctx context.Context,
+	repo repoRef,
+	identity Identity,
+	c Candidate,
+	title string,
+	body string,
+	allowCreate bool,
+	expectedPRNumber int,
+	beforeRepair func() error,
+) (number int, created bool, err error) {
 	prs, err := p.forge.listPRsByHead(ctx, repo, identity.BranchName())
 	if err != nil {
 		return 0, false, fmt.Errorf("publish: %w", err)
@@ -808,7 +931,21 @@ func (p *Publisher) convergePR(ctx context.Context, repo repoRef, identity Ident
 		return 0, false, fmt.Errorf("publish: %d pull requests carry identity %s: %w", len(ours), identity.Digest(), ErrPublicationConflict)
 	case len(ours) == 1:
 		pr := ours[0]
+		if expectedPRNumber > 0 && pr.Number != expectedPRNumber {
+			return 0, false, fmt.Errorf(
+				"publish: live pull request #%d, persisted #%d: %w",
+				pr.Number, expectedPRNumber, ErrPublicationConflict,
+			)
+		}
 		if pr.State != "open" {
+			// Recovery may observe the human-completed PR after the exact
+			// publication content was already stored. Accept that immutable
+			// converged state, but never patch or reopen it; a completed PR
+			// missing the frozen content remains a conflict.
+			if !allowCreate && prMatchesPublicationCoordinates(pr, repo, identity, c) &&
+				pr.Title == title && pr.Body == body {
+				return pr.Number, false, nil
+			}
 			// A closed publication PR is a human decision; recreating or
 			// reopening it would override that decision silently.
 			return 0, false, fmt.Errorf("publish: pull request #%d for identity %s is closed: %w", pr.Number, identity.Digest(), ErrPublicationConflict)
@@ -822,6 +959,11 @@ func (p *Publisher) convergePR(ctx context.Context, repo repoRef, identity Ident
 			return 0, false, fmt.Errorf("publish: pull request #%d head or base does not match the candidate: %w", pr.Number, ErrPublicationConflict)
 		}
 		if pr.Title != title || pr.Body != body {
+			if beforeRepair != nil {
+				if err := beforeRepair(); err != nil {
+					return 0, false, fmt.Errorf("publish: repair gate: %w", err)
+				}
+			}
 			patched, err := p.forge.updatePR(ctx, repo, pr.Number, title, body)
 			if err != nil {
 				return 0, false, fmt.Errorf("publish: %w", err)
@@ -843,6 +985,10 @@ func (p *Publisher) convergePR(ctx context.Context, repo repoRef, identity Ident
 			}
 		}
 		return pr.Number, false, nil
+	}
+	if !allowCreate {
+		return 0, false, fmt.Errorf("publish: no pull request carries identity %s: %w",
+			identity.Digest(), ErrPublicationConflict)
 	}
 
 	pr, err := p.forge.createPR(ctx, repo, identity.BranchName(), c.BaseRef, title, body)
@@ -894,13 +1040,30 @@ func prMatchesPublicationCoordinates(
 		ok && parsed == identity.Digest()
 }
 
-// desiredPRContent is the deterministic PR content for a candidate:
-// the prose body followed by the identity marker as the final line
-// (plan §5.15 rule 4's deterministic PR-section marker).
-func desiredPRContent(identity Identity, c Candidate) (title, body string) {
+// desiredPRContent is the deterministic PR content for a candidate: operator
+// prose, the optional publisher-owned disposition history, and the identity
+// marker as the final line (plan §5.15 rule 4). The complete body is checked
+// against GitHub's ceiling here, after every publisher-owned section exists;
+// no section is silently truncated.
+func desiredPRContent(identity Identity, c Candidate) (title, body string, err error) {
 	prose := strings.TrimRight(c.Body, "\n")
-	if prose == "" {
-		return c.Title, identity.Marker()
+	parts := make([]string, 0, 3)
+	if prose != "" {
+		parts = append(parts, prose)
 	}
-	return c.Title, prose + "\n\n" + identity.Marker()
+	if c.DispositionHistory != nil {
+		section, err := RenderDispositionHistory(*c.DispositionHistory)
+		if err != nil {
+			return "", "", err
+		}
+		parts = append(parts, section)
+	}
+	parts = append(parts, identity.Marker())
+	body = strings.Join(parts, "\n\n")
+	if len(body) > maxPullRequestBodyBytes {
+		return "", "", fmt.Errorf(
+			"composed pull request body exceeds %d bytes", maxPullRequestBodyBytes,
+		)
+	}
+	return c.Title, body, nil
 }

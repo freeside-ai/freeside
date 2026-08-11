@@ -46,6 +46,7 @@ func (l *memoryLedger) Record(_ context.Context, key, kind string, payload []byt
 
 func fixtureIntent() publish.Intent {
 	return publish.Intent{
+		FormatVersion:   publish.IntentFormatCurrent,
 		Identity:        "sha256:01c663f9a986e10d214b2c31c75fa5088e2995674a8e8f2ba959111e06a23fb8",
 		InvocationID:    "inv-0001",
 		Repo:            "freeside-ai/evidence-repo",

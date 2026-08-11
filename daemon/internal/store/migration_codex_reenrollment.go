@@ -14,7 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
-const codexReenrollmentMigration = "0039_codex_reenrollment.sql"
+const codexReenrollmentMigration = "0040_codex_reenrollment.sql"
 
 type legacyCodexReenrollmentRow struct {
 	id            domain.ItemID

@@ -52,10 +52,11 @@ func (e *Engine) reconcileInvocations(ctx context.Context) (int, int, error) {
 // undiscoverable after a daemon restart.
 func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 	var (
-		pending           []store.QueueEntry
-		pendingProduction []store.QueueEntry
-		held              bool
-		holdReason        domain.RunHoldReason
+		pending            []store.QueueEntry
+		pendingProduction  []store.QueueEntry
+		pendingElaboration []store.QueueEntry
+		held               bool
+		holdReason         domain.RunHoldReason
 	)
 	err := e.store.Read(ctx, func(tx *store.ReadTx) error {
 		// An engine that is not explicitly configured attended_dev honours
@@ -97,6 +98,10 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			return err
 		}
 		pendingProduction, err = tx.ListPendingOutbox(ctx, KindProductionInvocationRequested)
+		if err != nil {
+			return err
+		}
+		pendingElaboration, err = tx.ListPendingOutbox(ctx, KindElaborationInvocationRequested)
 		return err
 	})
 	if err != nil {
@@ -110,6 +115,15 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 				continue
 			}
 			if err := e.observeRunHold(ctx, runID, invocationID, holdReason); err != nil {
+				return 0, err
+			}
+		}
+		for _, entry := range pendingElaboration {
+			request, err := decodeElaborationRequest(entry)
+			if err != nil {
+				return 0, err
+			}
+			if err := e.observeRunHold(ctx, request.ElaborationRunID, request.InvocationID, holdReason); err != nil {
 				return 0, err
 			}
 		}
@@ -129,6 +143,49 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		if !ok {
 			return started, fmt.Errorf("intent %q: run %q has no feedback stage",
 				entry.IdempotencyKey, binding.run.ID)
+		}
+		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
+		started += boolCount(startedNow)
+		if err != nil {
+			if invocationDispatchHold(err) {
+				continue
+			}
+			if unattendedDispatchRefusal(err) {
+				return started, nil
+			}
+			return started, err
+		}
+		if hold {
+			return started, nil
+		}
+	}
+	for _, entry := range pendingElaboration {
+		if e.elaboration == nil {
+			continue
+		}
+		request, binding, err := e.loadElaborationBinding(ctx, entry)
+		if err != nil {
+			return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
+		}
+		if attemptRecorded(binding.run, request.InvocationID) {
+			var admission domain.ExecutionAdmission
+			if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+				var err error
+				admission, err = tx.GetExecutionAdmissionRecord(ctx, request.InvocationID)
+				return err
+			}); err != nil {
+				return started, fmt.Errorf("intent %q admission: %w", entry.IdempotencyKey, err)
+			}
+			if admission.EgressProfile != domain.EgressProviderOnly {
+				return started, fmt.Errorf("elaboration admission has egress %q: %w",
+					admission.EgressProfile, exec.ErrCapabilityRefused)
+			}
+		} else if e.admission == nil || e.admission.environment.EgressProfile != domain.EgressProviderOnly {
+			return started, fmt.Errorf("elaboration requires provider_only admission: %w", exec.ErrCapabilityRefused)
+		}
+		stage, ok := findElaborationStage(binding.run)
+		if !ok {
+			return started, fmt.Errorf("intent %q: elaboration stage missing", entry.IdempotencyKey)
 		}
 		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
 		started += boolCount(startedNow)
@@ -417,6 +474,24 @@ func (e *Engine) acceptCompletedInvocations(ctx context.Context) (int, error) {
 			return accepted, err
 		}
 		if !ownedProduction {
+			ownedElaboration, err := e.ownsElaborationRun(ctx, run)
+			if err != nil {
+				return accepted, err
+			}
+			if !ownedElaboration {
+				continue
+			}
+			stage, ok := findElaborationStage(run)
+			if !ok {
+				continue
+			}
+			for _, attempt := range stage.Attempts {
+				didAccept, err := e.acceptElaborationAttempt(ctx, run, attempt)
+				if err != nil {
+					return accepted, fmt.Errorf("run %q invocation %q: %w", run.ID, attempt.InvocationID, err)
+				}
+				accepted += boolCount(didAccept)
+			}
 			continue
 		}
 		stage, ok := findProductionStage(run)

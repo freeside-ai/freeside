@@ -45,6 +45,7 @@ type Engine struct {
 	publication           *fakePublicationWorkflow
 	fakePublicationPolicy *fakePublicationPolicyRecovery
 	productionPublication *productionPublicationWorkflow
+	elaboration           *elaborationWorkflow
 	// admission is the configured capability gate and durable-record writer
 	// (see WithAdmission); nil leaves dispatch exactly as it was before a
 	// runner backend existed to admit against.
@@ -147,6 +148,14 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 		RunTransitions:     runTransitions,
 		InvocationsStarted: started,
 		ResultsAccepted:    accepted,
+	}
+	if e.elaboration != nil {
+		startedRuns, blocked, gateErr := e.reconcileElaborationGates(ctx)
+		result.RunTransitions += startedRuns
+		result.BlockedItemsCreated += blocked
+		if gateErr != nil {
+			return result, fmt.Errorf("reconcile elaboration gates: %w", gateErr)
+		}
 	}
 	if e.publication != nil {
 		publication, err := e.ReconcileFakePublications(ctx)

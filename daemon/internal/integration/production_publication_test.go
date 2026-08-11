@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
@@ -417,6 +419,38 @@ func productionDigest(body []byte) domain.Digest {
 	return domain.Digest("sha256:" + hex.EncodeToString(sum[:]))
 }
 
+func revisePublicationTrustProfile(t *testing.T, p *productionPublicationHarness) {
+	t.Helper()
+	current := p.profile
+	revised, err := domain.NewAutomationTrustProfile(domain.AutomationTrustProfileInput{
+		Repo: current.Repo, RepositoryID: current.RepositoryID,
+		PRExecution:                current.PRExecution,
+		CandidateAutomationChanges: current.CandidateAutomationChanges,
+		PRGitHubTokenPermissions:   domain.TokenPermissionsReadWrite,
+		AllowOIDC:                  current.AllowOIDC,
+		AllowEnvironmentSecrets:    current.AllowEnvironmentSecrets,
+		AllowSecretBearingPRJobs:   current.AllowSecretBearingPRJobs,
+		AllowSelfHostedCI:          current.AllowSelfHostedCI,
+		AllowPullRequestTarget:     current.AllowPullRequestTarget,
+		AllowReusableWorkflows:     current.AllowReusableWorkflows,
+		AllowPackagePublishing:     current.AllowPackagePublishing,
+		AllowArtifactConsumers:     current.AllowArtifactConsumers,
+		CommitPlan:                 current.CommitPlan,
+		MessageRuleset:             current.MessageRuleset,
+		WorkflowAuditDigest:        current.WorkflowAuditDigest,
+		Review:                     current.Review,
+		ProtectedPaths:             current.ProtectedPaths,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+		return tx.RecordTrustProfile(p.ctx, revised, p.now.Add(time.Hour))
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func putProductionBlob(t *testing.T, h *publicationHarness, digest domain.Digest, body []byte) {
 	t.Helper()
 	if _, err := h.blobs.Put(digest, bytes.NewReader(body)); err != nil {
@@ -682,6 +716,24 @@ func (p *productionPublicationHarness) assertReadyWithEvidence(t *testing.T, wan
 	if len(pullRequests) != 1 || pullRequests[0].Title != metadata.Title ||
 		!strings.HasPrefix(pullRequests[0].Body, strings.TrimRight(metadata.Body, "\n")+"\n\n") {
 		t.Fatalf("published PR metadata = %#v, want operator-authored title/body", pullRequests)
+	}
+	body := pullRequests[0].Body
+	for _, want := range []string{
+		"<!-- freeside:disposition-history version=freeside-disposition-history/v1 -->",
+		"## Freeside Disposition History",
+		"- Readiness: **ready clean**",
+		"### Review Round ",
+		"- Provider: <code>openai</code>",
+		"- Findings: none",
+		"<!-- /freeside:disposition-history -->",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("published PR body lacks %q:\n%s", want, body)
+		}
+	}
+	if strings.Count(body, "<!-- freeside:disposition-history ") != 1 ||
+		strings.Count(body, "<!-- /freeside:disposition-history -->") != 1 {
+		t.Fatalf("published PR body duplicated disposition history:\n%s", body)
 	}
 	var terminal store.QueueEntry
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
@@ -2781,7 +2833,7 @@ func TestFinalizedProductionPublicationSurvivesLaterTrustDrift(t *testing.T) {
 	if _, err := p.reconcileLanes(); err == nil {
 		t.Fatal("publication outcome seam did not interrupt reconciliation")
 	}
-	reviseWaivedTrustProfile(t, p.store)
+	revisePublicationTrustProfile(t, p)
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("finalize durable publication after trust drift: %v", err)
@@ -2940,6 +2992,169 @@ func TestPostPublicationRecipeRevocationHoldsWhenStoreAlsoRevoked(t *testing.T) 
 	)
 	if err != nil || !strings.Contains(hold.Item.Reason, "no longer approves the verification recipe") {
 		t.Fatalf("recipe revocation hold = %#v, %v", hold, err)
+	}
+}
+
+func TestReadyPublicationDriftAfterRecipeRevocationHoldsWithoutRepair(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterReady: func() error { return errors.New("stop after durable ready item") },
+	}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("ready seam did not interrupt reconciliation")
+	}
+	p.forge.mu.Lock()
+	p.forge.prs[0].Title = "externally drifted title"
+	p.forge.mu.Unlock()
+	revoked := map[domain.Digest]bool{
+		productionDigest([]byte("unrelated recipe")): true,
+	}
+	p.workflow = p.newEngineWithApprovedRecipes(
+		t, productionCrashSeams{}, true, revoked,
+	)
+	result, err := p.reconcileLanes()
+	if err != nil || result.BlockedItemsCreated != 1 ||
+		result.PublicationTasksCompleted != 0 {
+		t.Fatalf("drifted ready recovery after recipe revocation = %#v, %v", result, err)
+	}
+	prs := p.forge.pullRequests()
+	if len(prs) != 1 || prs[0].Title != "externally drifted title" {
+		t.Fatalf("revoked ready recovery repaired PR: %#v", prs)
+	}
+	hold, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
+	)
+	if err != nil || !strings.Contains(hold.Item.Reason, "before repairing external state") {
+		t.Fatalf("revoked repair hold = %#v, %v", hold, err)
+	}
+}
+
+func TestReadyPublicationDriftAfterTrustChangeHoldsWithoutRepair(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterReady: func() error { return errors.New("stop after durable ready item") },
+	}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("ready seam did not interrupt reconciliation")
+	}
+	p.forge.mu.Lock()
+	p.forge.prs[0].Title = "externally drifted title"
+	p.forge.mu.Unlock()
+	revisePublicationTrustProfile(t, p)
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	result, err := p.reconcileLanes()
+	if err != nil || result.BlockedItemsCreated != 1 ||
+		result.PublicationTasksCompleted != 0 {
+		t.Fatalf("drifted ready recovery after trust change = %#v, %v", result, err)
+	}
+	prs := p.forge.pullRequests()
+	if len(prs) != 1 || prs[0].Title != "externally drifted title" {
+		t.Fatalf("trust-drifted ready recovery repaired PR: %#v", prs)
+	}
+	hold, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
+	)
+	if err != nil || !strings.Contains(hold.Item.Reason, "before repairing external state") {
+		t.Fatalf("trust-drifted repair hold = %#v, %v", hold, err)
+	}
+}
+
+func TestReadyPublicationDriftAfterAuthorizationLossHoldsWithoutRepair(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterReady: func() error { return errors.New("stop after durable ready item") },
+	}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("ready seam did not interrupt reconciliation")
+	}
+	p.forge.mu.Lock()
+	p.forge.prs[0].Title = "externally drifted title"
+	p.forge.mu.Unlock()
+	p.forge.interceptRequest(func(method, path string) bool {
+		if method != http.MethodGet || !strings.HasSuffix(path, "/pulls") {
+			return false
+		}
+		raw, err := sql.Open("sqlite", p.dbPath)
+		if err != nil {
+			t.Error(err)
+			return true
+		}
+		_, deleteErr := raw.ExecContext(p.ctx, "DELETE FROM candidate_authorizations")
+		closeErr := raw.Close()
+		if deleteErr != nil || closeErr != nil {
+			t.Error(errors.Join(deleteErr, closeErr))
+		}
+		return true
+	})
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	result, err := p.reconcileLanes()
+	if err != nil || result.BlockedItemsCreated != 1 ||
+		result.PublicationTasksCompleted != 0 {
+		t.Fatalf("drifted ready recovery after authorization loss = %#v, %v", result, err)
+	}
+	prs := p.forge.pullRequests()
+	if len(prs) != 1 || prs[0].Title != "externally drifted title" {
+		t.Fatalf("unauthorized ready recovery repaired PR: %#v", prs)
+	}
+	hold, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
+	)
+	if err != nil || !strings.Contains(hold.Item.Reason, "before repairing external state") {
+		t.Fatalf("unauthorized repair hold = %#v, %v", hold, err)
+	}
+}
+
+func TestReadyPublicationAuthenticatesItemBeforeRepair(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.workflow = p.newEngine(t, productionCrashSeams{
+		afterReady: func() error { return errors.New("stop after durable ready item") },
+	}, true)
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err == nil {
+		t.Fatal("ready seam did not interrupt reconciliation")
+	}
+	ready, err := p.attention.GetAttentionItem(
+		p.ctx, domain.ItemID("production-ready-"+string(p.runID)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready.Item.Reason += " copied"
+	body, err := json.Marshal(ready.Item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", p.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, updateErr := raw.ExecContext(
+		p.ctx, "UPDATE attention_items SET body = ? WHERE id = ?", string(body), ready.Item.ID,
+	)
+	closeErr := raw.Close()
+	if updateErr != nil || closeErr != nil {
+		t.Fatal(errors.Join(updateErr, closeErr))
+	}
+	if updated, err := result.RowsAffected(); err != nil || updated != 1 {
+		t.Fatalf("stale ready item rows updated = %d, %v, want 1", updated, err)
+	}
+	p.forge.mu.Lock()
+	p.forge.prs[0].Title = "externally drifted title"
+	p.forge.mu.Unlock()
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	if _, err := p.reconcileLanes(); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("stale ready recovery error = %v, want parent-key mismatch", err)
+	}
+	prs := p.forge.pullRequests()
+	if len(prs) != 1 || prs[0].Title != "externally drifted title" {
+		t.Fatalf("stale ready recovery repaired PR before refusal: %#v", prs)
 	}
 }
 
@@ -4063,7 +4278,8 @@ func writeOutboxPayload(t *testing.T, p *productionPublicationHarness, key strin
 		t.Fatal(err)
 	}
 	result, err := raw.ExecContext(
-		p.ctx, `UPDATE outbox SET payload = ? WHERE idempotency_key = ?`, payload, key)
+		p.ctx, `UPDATE outbox SET payload = ?, payload_digest = ? WHERE idempotency_key = ?`,
+		payload, contentaddr.Sum(payload), key)
 	closeErr := raw.Close()
 	if err != nil || closeErr != nil {
 		t.Fatal(errors.Join(err, closeErr))

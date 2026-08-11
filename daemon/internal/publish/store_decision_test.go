@@ -2,12 +2,14 @@ package publish_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -124,6 +126,7 @@ const testBackendConfigurationDigest = domain.Digest(
 
 func executionStoreOptions() store.Options {
 	return store.Options{
+		ApprovedRecipes: testApprovedRecipes(),
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 			domain.ModeUnattended:  domain.NewCapabilitySnapshot(domain.CapPostExitExport),
@@ -158,9 +161,16 @@ func testExecutionCapabilities(t *testing.T) domain.CapabilitySnapshot {
 
 func newExecutionBoundStore(t *testing.T, opts executionChainOptions) *store.Store {
 	t.Helper()
+	return newExecutionBoundStoreAt(t, filepath.Join(t.TempDir(), "store.db"), opts)
+}
+
+func newExecutionBoundStoreAt(
+	t *testing.T, path string, opts executionChainOptions,
+) *store.Store {
+	t.Helper()
 	s, err := store.Open(
 		t.Context(),
-		filepath.Join(t.TempDir(), "store.db"),
+		path,
 		executionStoreOptions(),
 	)
 	if err != nil {
@@ -381,10 +391,18 @@ func TestStorePublicationDecisionCommitsFreshAuditWithIntent(t *testing.T) {
 	gh := newFakeGitHub(t)
 	p := storeBackedPublisher(t, s, gh, fixedWorkflowAuditor{audit: testWorkflowAudit(t)})
 
-	if _, err := p.Publish(t.Context(), testCandidate(t), testApprovedRecipes()); err != nil {
+	candidate := testCandidate(t)
+	if _, err := p.Publish(t.Context(), candidate, testApprovedRecipes()); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	assertDecisionRows(t, s, 1, 1)
+	writesBeforeRetry := len(gh.writeRequests())
+	if _, err := p.Publish(t.Context(), candidate, testApprovedRecipes()); err != nil {
+		t.Fatalf("Publish committed history-free retry: %v", err)
+	}
+	if writes := gh.writeRequests(); len(writes) != writesBeforeRetry {
+		t.Fatalf("committed history-free retry duplicated a forge effect: %v", writes)
+	}
 }
 
 func TestPublishExecutionHoldsSourceHeadAgainstRecordedExport(t *testing.T) {
@@ -467,6 +485,7 @@ func TestPublishExecutionHoldsSourceHeadAgainstRecordedExport(t *testing.T) {
 			)
 			candidate := testCandidate(t)
 			candidate.RunID = reservation.RunID
+			candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
 
 			result, err := p.PublishExecution(
 				t.Context(),
@@ -509,6 +528,7 @@ func TestPublishExecutionHoldsSourceHeadAgainstRecordedExport(t *testing.T) {
 				}); err != nil {
 					t.Fatalf("read settled execution intent: %v", err)
 				}
+				writesBeforeRetry := len(gh.writeRequests())
 				if _, err := p.PublishExecution(
 					t.Context(),
 					publish.ExecutionCandidate{
@@ -518,6 +538,17 @@ func TestPublishExecutionHoldsSourceHeadAgainstRecordedExport(t *testing.T) {
 					testApprovedRecipes(),
 				); err != nil {
 					t.Fatalf("PublishExecution committed retry: %v", err)
+				}
+				if writes := gh.writeRequests(); len(writes) != writesBeforeRetry {
+					t.Fatalf("committed retry duplicated a forge effect: %v", writes)
+				}
+				gh.mu.Lock()
+				prs := append([]fakePR(nil), gh.prs...)
+				gh.mu.Unlock()
+				if len(prs) != 1 ||
+					strings.Count(prs[0].Body, "<!-- freeside:disposition-history ") != 1 ||
+					strings.Count(prs[0].Body, "<!-- /freeside:disposition-history -->") != 1 {
+					t.Fatalf("committed retry duplicated disposition history: %#v", prs)
 				}
 				return
 			}
@@ -570,6 +601,7 @@ func TestPublishExecutionRefusesAdvancedTargetBeforeIntent(t *testing.T) {
 	p := storeBackedPublisher(t, s, gh, fixedWorkflowAuditor{audit: audit})
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID
+	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
 
 	_, err := p.PublishExecution(t.Context(), publish.ExecutionCandidate{
 		Candidate: candidate, ProducingInvocationID: testProducingInvocationID,
@@ -599,6 +631,119 @@ func TestPublishExecutionRefusesAdvancedTargetBeforeIntent(t *testing.T) {
 	}
 }
 
+func TestPublishExecutionRejectsDispositionHistoryFromAnotherStore(t *testing.T) {
+	t.Parallel()
+	head := testHeadSHA
+	s := newExecutionBoundStore(t, executionChainOptions{exportHead: &head})
+	seedDecisionRecords(t, s)
+	reservation := seedExecutionPublicationChain(
+		t, s, executionChainOptions{exportHead: &head},
+	)
+	gh := newFakeGitHub(t)
+	p := storeBackedPublisher(
+		t, s, gh, fixedWorkflowAuditor{audit: executionWorkflowAudit(t)},
+	)
+	candidate := testCandidate(t)
+	candidate.RunID = reservation.RunID
+	foreign := newExecutionBoundStore(t, executionChainOptions{})
+	seedDecisionRecords(t, foreign)
+	candidate.DispositionHistory = testDispositionHistory(t, foreign, candidate)
+
+	_, err := p.PublishExecution(t.Context(), publish.ExecutionCandidate{
+		Candidate: candidate, ProducingInvocationID: testProducingInvocationID,
+	}, testApprovedRecipes())
+	if err == nil || !strings.Contains(err.Error(), "does not come from the publisher decision store") {
+		t.Fatalf("PublishExecution foreign disposition store = %v", err)
+	}
+	assertDecisionRows(t, s, 0, 0)
+	if requests := gh.requestLog(); len(requests) != 0 {
+		t.Fatalf("foreign disposition store reached forge: %v", requests)
+	}
+}
+
+func TestPublishExecutionReauthenticatesDispositionHistoryInDecisionTransaction(t *testing.T) {
+	t.Parallel()
+	head := testHeadSHA
+	s := newExecutionBoundStore(t, executionChainOptions{exportHead: &head})
+	seedDecisionRecords(t, s)
+	reservation := seedExecutionPublicationChain(
+		t, s, executionChainOptions{exportHead: &head},
+	)
+	gh := newFakeGitHub(t)
+	p := storeBackedPublisher(
+		t, s, gh, fixedWorkflowAuditor{audit: executionWorkflowAudit(t)},
+	)
+	candidate := testCandidate(t)
+	candidate.RunID = reservation.RunID
+	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
+	failure := domain.ReviewFailure{
+		InvocationID: "review-failure-after-snapshot", RunID: candidate.RunID, Round: 2,
+		BaseSHA: testOtherSHA, HeadSHA: candidate.HeadSHA,
+		Class: domain.ReviewFailureContradiction, Reason: "late authoritative failure",
+		ObservedAt: fixtureTime.Add(time.Minute),
+	}
+	if err := s.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.PutReviewFailure(t.Context(), failure)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := p.PublishExecution(t.Context(), publish.ExecutionCandidate{
+		Candidate: candidate, ProducingInvocationID: testProducingInvocationID,
+	}, testApprovedRecipes())
+	if err == nil || !strings.Contains(err.Error(), "latest review failure supersedes clean review") {
+		t.Fatalf("PublishExecution after late review failure = %v", err)
+	}
+	assertDecisionRows(t, s, 1, 0)
+	if requests := gh.requestLog(); len(requests) != 0 {
+		t.Fatalf("late review failure reached forge: %v", requests)
+	}
+}
+
+func TestPublishExecutionRejectsForeignReviewInstructionsAtDecision(t *testing.T) {
+	t.Parallel()
+	head := testHeadSHA
+	s := newExecutionBoundStore(t, executionChainOptions{exportHead: &head})
+	seedDecisionRecords(t, s)
+	reservation := seedExecutionPublicationChain(
+		t, s, executionChainOptions{exportHead: &head},
+	)
+	gh := newFakeGitHub(t)
+	p := storeBackedPublisher(
+		t, s, gh, fixedWorkflowAuditor{audit: executionWorkflowAudit(t)},
+	)
+	candidate := testCandidate(t)
+	candidate.RunID = reservation.RunID
+	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
+	foreign, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: "review-foreign-instructions", RunID: candidate.RunID, Round: 2,
+		Provider: "openai", ModelConfiguration: "codex/high",
+		ConfigurationDigest: testRecipe,
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("9", 64)),
+		CostOwner:           "operator", BaseSHA: testOtherSHA, HeadSHA: candidate.HeadSHA,
+		CompletedAt:        fixtureTime.Add(time.Minute),
+		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("8", 64)),
+		Outcome:            domain.ReviewClean,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.PutReviewRecord(t.Context(), foreign, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.PublishExecution(t.Context(), publish.ExecutionCandidate{
+		Candidate: candidate, ProducingInvocationID: testProducingInvocationID,
+	}, testApprovedRecipes())
+	if err == nil || !strings.Contains(err.Error(), "review authority disagrees") {
+		t.Fatalf("PublishExecution under foreign review instructions = %v", err)
+	}
+	assertDecisionRows(t, s, 1, 0)
+	if requests := gh.requestLog(); len(requests) != 0 {
+		t.Fatalf("foreign review instructions reached forge: %v", requests)
+	}
+}
+
 func TestPublishExecutionRecoversCommittedIntentAfterTargetAdvances(t *testing.T) {
 	t.Parallel()
 	head := testHeadSHA
@@ -613,6 +758,7 @@ func TestPublishExecutionRecoversCommittedIntentAfterTargetAdvances(t *testing.T
 	p := storeBackedPublisher(t, s, gh, auditor)
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID
+	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
 	execution := publish.ExecutionCandidate{
 		Candidate: candidate, ProducingInvocationID: testProducingInvocationID,
 	}
@@ -624,6 +770,25 @@ func TestPublishExecutionRecoversCommittedIntentAfterTargetAdvances(t *testing.T
 		t.Fatalf("first publication = %v, want interruption", err)
 	}
 	assertDecisionRows(t, s, 1, 1)
+	key, err := publish.IntentKey(candidate.InvocationID, publish.IntentKindPublication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entry store.QueueEntry
+	if err := s.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		entry, err = tx.GetOutbox(t.Context(), key)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	intent, err := publish.DecodeIntent(entry.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.DispositionHistoryDigest == "" {
+		t.Fatal("committed execution intent did not freeze the disposition history digest")
+	}
 
 	auditor.audit.AuditedCommitSHA = testOtherSHA
 	result, err := p.PublishExecutionAfterGateAndFinalize(
@@ -640,6 +805,191 @@ func TestPublishExecutionRecoversCommittedIntentAfterTargetAdvances(t *testing.T
 	}
 	if !result.PRCreated || result.PRNumber == 0 {
 		t.Fatalf("recovery result = %+v, want created PR", result)
+	}
+}
+
+func TestPublishExecutionRevalidatesReadinessProofsOnCommittedRetry(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "store.db")
+	head := testHeadSHA
+	s := newExecutionBoundStoreAt(t, path, executionChainOptions{exportHead: &head})
+	seedDecisionRecords(t, s)
+	reservation := seedExecutionPublicationChain(
+		t, s, executionChainOptions{exportHead: &head},
+	)
+	gh := newFakeGitHub(t)
+	p := storeBackedPublisher(
+		t, s, gh, fixedWorkflowAuditor{audit: executionWorkflowAudit(t)},
+	)
+	candidate := testCandidate(t)
+	candidate.RunID = reservation.RunID
+	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
+	execution := publish.ExecutionCandidate{
+		Candidate: candidate, ProducingInvocationID: testProducingInvocationID,
+	}
+	interrupt := errors.New("interrupt after intent")
+	if _, err := p.PublishExecutionAfterGateAndFinalize(
+		t.Context(), execution, testApprovedRecipes(),
+		func(context.Context, publish.GatedHead) error { return interrupt },
+	); !errors.Is(err, interrupt) {
+		t.Fatalf("first publication = %v, want interruption", err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, deleteErr := raw.ExecContext(
+		t.Context(),
+		"DELETE FROM check_proofs WHERE rowid = (SELECT MIN(rowid) FROM check_proofs)",
+	)
+	closeErr := raw.Close()
+	if deleteErr != nil || closeErr != nil {
+		t.Fatal(errors.Join(deleteErr, closeErr))
+	}
+	if deleted, err := result.RowsAffected(); err != nil || deleted != 1 {
+		t.Fatalf("readiness proof rows deleted = %d, %v, want 1", deleted, err)
+	}
+	callbackCalled := false
+	if _, err := p.PublishExecutionAfterGateAndFinalize(
+		t.Context(), execution, testApprovedRecipes(),
+		func(context.Context, publish.GatedHead) error {
+			callbackCalled = true
+			return nil
+		},
+	); err == nil || !strings.Contains(err.Error(), "validate persisted readiness derivation") {
+		t.Fatalf("committed retry after proof loss = %v", err)
+	}
+	if callbackCalled {
+		t.Fatal("committed retry reached external effect after proof loss")
+	}
+	if requests := gh.requestLog(); len(requests) != 0 {
+		t.Fatalf("committed retry after proof loss reached forge: %v", requests)
+	}
+}
+
+func TestPublishExecutionRejectsModernIntentDowngrade(t *testing.T) {
+	t.Parallel()
+	testPublishExecutionRejectsModernIntentMutation(
+		t,
+		`UPDATE outbox
+		 SET payload = CAST(json_set(
+			json_remove(payload, '$.disposition_history_digest'),
+			'$.format_version', 1
+		 ) AS BLOB)
+		 WHERE idempotency_key = ?`,
+		"disagrees with outbox format",
+	)
+}
+
+func TestPublishExecutionRejectsModernIntentHistoryRemoval(t *testing.T) {
+	t.Parallel()
+	testPublishExecutionRejectsModernIntentMutation(
+		t,
+		`UPDATE outbox
+		 SET payload = CAST(json_remove(payload, '$.disposition_history_digest') AS BLOB)
+		 WHERE idempotency_key = ?`,
+		"already committed a different intent",
+	)
+}
+
+func TestValidateIntentDispositionHistoryRejectsCurrentFormatWithoutDigest(t *testing.T) {
+	t.Parallel()
+	head := testHeadSHA
+	s := newExecutionBoundStore(t, executionChainOptions{exportHead: &head})
+	seedDecisionRecords(t, s)
+	reservation := seedExecutionPublicationChain(
+		t, s, executionChainOptions{exportHead: &head},
+	)
+	candidate := testCandidate(t)
+	candidate.RunID = reservation.RunID
+	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
+	intent := publish.Intent{FormatVersion: publish.IntentFormatCurrent}
+	if err := publish.ValidateIntentDispositionHistory(intent, candidate); !errors.Is(err, publish.ErrPublicationConflict) {
+		t.Fatalf("current intent without disposition digest = %v, want ErrPublicationConflict", err)
+	}
+	intent.FormatVersion = publish.IntentFormatLegacy
+	if err := publish.ValidateIntentDispositionHistory(intent, candidate); err != nil {
+		t.Fatalf("legacy intent without disposition digest = %v, want compatibility", err)
+	}
+}
+
+func testPublishExecutionRejectsModernIntentMutation(t *testing.T, mutation, want string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "store.db")
+	head := testHeadSHA
+	s := newExecutionBoundStoreAt(t, path, executionChainOptions{exportHead: &head})
+	seedDecisionRecords(t, s)
+	reservation := seedExecutionPublicationChain(
+		t, s, executionChainOptions{exportHead: &head},
+	)
+	gh := newFakeGitHub(t)
+	p := storeBackedPublisher(
+		t, s, gh, fixedWorkflowAuditor{audit: executionWorkflowAudit(t)},
+	)
+	candidate := testCandidate(t)
+	candidate.RunID = reservation.RunID
+	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
+	execution := publish.ExecutionCandidate{
+		Candidate: candidate, ProducingInvocationID: testProducingInvocationID,
+	}
+	interrupt := errors.New("interrupt after intent")
+	if _, err := p.PublishExecutionAfterGateAndFinalize(
+		t.Context(), execution, testApprovedRecipes(),
+		func(context.Context, publish.GatedHead) error { return interrupt },
+	); !errors.Is(err, interrupt) {
+		t.Fatalf("first publication = %v, want interruption", err)
+	}
+	key, err := publish.IntentKey(candidate.InvocationID, publish.IntentKindPublication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downgradeResult, downgradeErr := raw.ExecContext(
+		t.Context(),
+		mutation,
+		key,
+	)
+	if downgradeErr != nil {
+		_ = raw.Close()
+		t.Fatal(downgradeErr)
+	}
+	if updated, err := downgradeResult.RowsAffected(); err != nil || updated != 1 {
+		_ = raw.Close()
+		t.Fatalf("publication intents downgraded = %d, %v, want 1", updated, err)
+	}
+	var downgradedPayload []byte
+	if err := raw.QueryRowContext(
+		t.Context(), "SELECT payload FROM outbox WHERE idempotency_key = ?", key,
+	).Scan(&downgradedPayload); err != nil {
+		_ = raw.Close()
+		t.Fatal(err)
+	}
+	_, digestErr := raw.ExecContext(
+		t.Context(), "UPDATE outbox SET payload_digest = ? WHERE idempotency_key = ?",
+		contentaddr.Sum(downgradedPayload), key,
+	)
+	closeErr := raw.Close()
+	if digestErr != nil || closeErr != nil {
+		t.Fatal(errors.Join(digestErr, closeErr))
+	}
+	callbackCalled := false
+	if _, err := p.PublishExecutionAfterGateAndFinalize(
+		t.Context(), execution, testApprovedRecipes(),
+		func(context.Context, publish.GatedHead) error {
+			callbackCalled = true
+			return nil
+		},
+	); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("mutated modern retry error = %v, want %q", err, want)
+	}
+	if callbackCalled {
+		t.Fatal("mutated modern retry reached external callback")
+	}
+	if requests := gh.requestLog(); len(requests) != 0 {
+		t.Fatalf("mutated modern retry reached forge: %v", requests)
 	}
 }
 
@@ -691,6 +1041,7 @@ func TestPublishExecutionAuthenticatesFrozenAdmissionAndExport(t *testing.T) {
 	)
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID
+	candidate.DispositionHistory = testDispositionHistory(t, current, candidate)
 	if _, err := p.PublishExecution(
 		t.Context(),
 		publish.ExecutionCandidate{

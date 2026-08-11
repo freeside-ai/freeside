@@ -61,7 +61,7 @@ The same occurrence scan prevents projection or revocation convergence from
 silently selecting an older open marker.
 
 Upgrade review found that the new strict shape would reject markers persisted
-by the immediately preceding daemon version. Migration 0039 now authenticates
+by the immediately preceding daemon version. Migration 0040 now authenticates
 the full frozen legacy item against a recorded identity, its deterministic
 marker ID, and a canonical numeric occurrence before normalizing the reason and
 actions. The Go hook preserves arbitrary quoted identity IDs and all lifecycle
