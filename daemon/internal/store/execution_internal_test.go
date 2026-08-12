@@ -66,6 +66,33 @@ func TestExecutionRecordsMigrationAppliesFromHead(t *testing.T) {
 	}
 }
 
+func TestExecutionIdentityParallelismIndexAppliesFromHead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openRaw(t)
+	migrateThrough(t, ctx, db, "0042_")
+
+	var before int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema
+		WHERE type = 'index' AND name = 'execution_admissions_auth_identity'`).Scan(&before); err != nil {
+		t.Fatalf("inspect pre-migration index: %v", err)
+	}
+	if before != 0 {
+		t.Fatalf("identity index exists before migration: %d", before)
+	}
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate to head: %v", err)
+	}
+	var after int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema
+		WHERE type = 'index' AND name = 'execution_admissions_auth_identity'`).Scan(&after); err != nil {
+		t.Fatalf("inspect migrated index: %v", err)
+	}
+	if after != 1 {
+		t.Fatalf("identity index count = %d, want 1", after)
+	}
+}
+
 func TestExecutionAuthorityTriggersRejectOverlap(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

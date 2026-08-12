@@ -31,7 +31,14 @@ func conformantCeiling(t *testing.T) domain.CapabilitySnapshot {
 // trust profile.
 func openUnattendedFixture(t *testing.T) *workflowFixture {
 	t.Helper()
-	return openUnattendedFixtureAt(t, t.TempDir(), true)
+	return openUnattendedFixtureWithIdentity(t, testIdentity)
+}
+
+func openUnattendedFixtureWithIdentity(
+	t *testing.T, identity domain.AuthIdentity,
+) *workflowFixture {
+	t.Helper()
+	return openUnattendedFixtureAtWithIdentity(t, t.TempDir(), true, identity)
 }
 
 // openUnattendedFixtureAt opens the unattended fixture over an explicit
@@ -40,6 +47,13 @@ func openUnattendedFixture(t *testing.T) *workflowFixture {
 // append spurious generations.
 func openUnattendedFixtureAt(t *testing.T, root string, seed bool) *workflowFixture {
 	t.Helper()
+	return openUnattendedFixtureAtWithIdentity(t, root, seed, testIdentity)
+}
+
+func openUnattendedFixtureAtWithIdentity(
+	t *testing.T, root string, seed bool, identity domain.AuthIdentity,
+) *workflowFixture {
+	t.Helper()
 	ctx := context.Background()
 	floor := []exec.Capability{exec.CapPostExitExport}
 	profile := unattendedTrustProfile(t)
@@ -47,6 +61,8 @@ func openUnattendedFixtureAt(t *testing.T, root string, seed bool) *workflowFixt
 	env := admissionEnvironment()
 	env.OperatingMode = domain.ModeUnattended
 	env.Base.Repo, env.Base.RepositoryID = profile.Repo, profile.RepositoryID
+	identityID := identity.ID
+	env.AuthIdentityID = &identityID
 	backend := fake.RunnerBackend{
 		BackendName: string(domain.BackendFreshVMReadOnlyVolumeHandoff),
 		Caps:        exec.NewCapabilitySet(conformantCeiling(t)...),
@@ -76,7 +92,7 @@ func openUnattendedFixtureAt(t *testing.T, root string, seed bool) *workflowFixt
 		if !seed {
 			return nil
 		}
-		if err := tx.RecordAuthIdentity(ctx, testIdentity, admittedAt); err != nil {
+		if err := tx.RecordAuthIdentity(ctx, identity, admittedAt); err != nil {
 			return err
 		}
 		if err := tx.RecordTrustProfile(ctx, profile, admittedAt); err != nil {

@@ -117,6 +117,8 @@ func dispatchHoldReason(err error) (domain.RunHoldReason, bool) {
 		return domain.HoldBlockingSystemHealth, true
 	case errors.Is(err, exec.ErrInputUnavailable):
 		return domain.HoldInputUnavailable, true
+	case errors.Is(err, domain.ErrIdentityParallelismExhausted):
+		return domain.HoldIdentityParallelism, true
 	case backendConformanceRefusal(err):
 		return domain.HoldBackendNotConformant, true
 	case errors.Is(err, domain.ErrBackupHealthUnavailable),

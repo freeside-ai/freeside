@@ -43,6 +43,7 @@ func (e QueueEntry) Quarantined() bool {
 
 func (e QueueEntry) validStatus() bool {
 	return e.Status == outboxStatusPending ||
+		e.Status == outboxStatusDispatching ||
 		e.Status == outboxStatusDispatched ||
 		e.Status == outboxStatusQuarantined
 }
@@ -54,6 +55,7 @@ func (e QueueEntry) validStatus() bool {
 // while keeping it out of the pending recovery scan.
 const (
 	outboxStatusPending     = "pending"
+	outboxStatusDispatching = "dispatching"
 	outboxStatusDispatched  = "dispatched"
 	outboxStatusQuarantined = "quarantined"
 )
@@ -69,7 +71,16 @@ FROM outbox WHERE idempotency_key = ?`
 	listOutboxByStatusSQL = `
 SELECT id, idempotency_key, kind, payload, payload_version, payload_digest, status, created_at
 FROM outbox WHERE kind = ? AND status = ? ORDER BY id`
+	listPendingOutboxSQL = `
+SELECT id, idempotency_key, kind, payload, payload_version, payload_digest, status, created_at
+FROM outbox WHERE kind = ? AND status IN (?, ?) ORDER BY id`
 	markOutboxDispatchedSQL = `
+	UPDATE outbox SET status = ?
+WHERE idempotency_key = ? AND status IN (?, ?)`
+	markOutboxDispatchingSQL = `
+	UPDATE outbox SET status = ?
+WHERE idempotency_key = ? AND status = ?`
+	releaseOutboxDispatchSQL = `
 UPDATE outbox SET status = ? WHERE idempotency_key = ? AND status = ?`
 	promoteOutboxSQL = `
 UPDATE outbox SET kind = ?, payload = ?, payload_version = ?, payload_digest = ?
@@ -102,7 +113,15 @@ func (tx *InternalTx) EnqueueOutbox(ctx context.Context, key, kind string, paylo
 // "discuss commits and the daemon dies pre-invocation"). Dispatch then
 // re-hands each to its provider, whose durable intent record dedups a repeat.
 func (tx *ReadTx) ListPendingOutbox(ctx context.Context, kind string) ([]QueueEntry, error) {
-	return tx.listOutboxByStatus(ctx, kind, outboxStatusPending)
+	return tx.listPendingOutbox(ctx, kind)
+}
+
+func (tx *ReadTx) listPendingOutbox(ctx context.Context, kind string) ([]QueueEntry, error) {
+	if kind == "" {
+		return nil, errors.New("list outbox: empty kind")
+	}
+	return tx.listOutboxQuery(ctx, listPendingOutboxSQL, kind, "pending or dispatching",
+		kind, outboxStatusPending, outboxStatusDispatching)
 }
 
 // ListDispatchedOutbox returns completed intents of one kind in insertion
@@ -120,7 +139,11 @@ func (tx *ReadTx) listOutboxByStatus(
 	if kind == "" {
 		return nil, errors.New("list outbox: empty kind")
 	}
-	rows, err := tx.tx.QueryContext(ctx, listOutboxByStatusSQL, kind, status)
+	return tx.listOutboxQuery(ctx, listOutboxByStatusSQL, kind, status, kind, status)
+}
+
+func (tx *ReadTx) listOutboxQuery(ctx context.Context, query, kind, status string, args ...any) ([]QueueEntry, error) {
+	rows, err := tx.tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list outbox %q status %q: %w", kind, status, err)
 	}
@@ -221,8 +244,51 @@ func (tx *InternalTx) MarkOutboxDispatched(ctx context.Context, key string) erro
 	if key == "" {
 		return errors.New("mark outbox dispatched: empty idempotency key")
 	}
-	if _, err := tx.tx.ExecContext(ctx, markOutboxDispatchedSQL, outboxStatusDispatched, key, outboxStatusPending); err != nil {
+	if _, err := tx.tx.ExecContext(ctx, markOutboxDispatchedSQL,
+		outboxStatusDispatched, key, outboxStatusPending, outboxStatusDispatching); err != nil {
 		return fmt.Errorf("mark outbox dispatched %q: %w", key, err)
+	}
+	return nil
+}
+
+// MarkOutboxDispatching reserves a pending intent before its provider handoff.
+// Recovery lists this state with pending work, so a crash before Start remains
+// retryable while an overlapping admission transaction sees the reservation.
+func (tx *InternalTx) MarkOutboxDispatching(ctx context.Context, key string) error {
+	_, err := tx.TryMarkOutboxDispatching(ctx, key)
+	return err
+}
+
+// TryMarkOutboxDispatching claims a pending intent's pre-start reservation.
+// Its changed result identifies the one dispatcher that may hand the intent to
+// the driver or release the reservation after a synchronous refusal. A caller
+// that observes false must leave the current owner alone: it may still be
+// materializing inputs for this same invocation.
+func (tx *InternalTx) TryMarkOutboxDispatching(ctx context.Context, key string) (bool, error) {
+	if key == "" {
+		return false, errors.New("mark outbox dispatching: empty idempotency key")
+	}
+	result, err := tx.tx.ExecContext(ctx, markOutboxDispatchingSQL,
+		outboxStatusDispatching, key, outboxStatusPending)
+	if err != nil {
+		return false, fmt.Errorf("mark outbox dispatching %q: %w", key, err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("mark outbox dispatching %q rows affected: %w", key, err)
+	}
+	return changed == 1, nil
+}
+
+// ReleaseOutboxDispatch returns an unstarted reservation to pending after a
+// synchronous driver refusal. It never reopens a driver-accepted handoff.
+func (tx *InternalTx) ReleaseOutboxDispatch(ctx context.Context, key string) error {
+	if key == "" {
+		return errors.New("release outbox dispatch: empty idempotency key")
+	}
+	if _, err := tx.tx.ExecContext(ctx, releaseOutboxDispatchSQL,
+		outboxStatusPending, key, outboxStatusDispatching); err != nil {
+		return fmt.Errorf("release outbox dispatch %q: %w", key, err)
 	}
 	return nil
 }

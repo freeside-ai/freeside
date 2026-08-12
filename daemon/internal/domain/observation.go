@@ -186,6 +186,9 @@ const (
 	// HoldBaseAdvanced: the target base advanced after admission; the run
 	// must be rerun against the current base.
 	HoldBaseAdvanced RunHoldReason = "base_advanced"
+	// HoldIdentityParallelism: the selected provider identity is already
+	// running its experimentally established maximum number of executions.
+	HoldIdentityParallelism RunHoldReason = "identity_parallelism"
 )
 
 // AllRunHoldReasons is the single registration point for hold reasons.
@@ -205,6 +208,7 @@ var AllRunHoldReasons = []RunHoldReason{
 	HoldVerificationFindings,
 	HoldTrustBlocked,
 	HoldBaseAdvanced,
+	HoldIdentityParallelism,
 }
 
 func (r RunHoldReason) valid() bool {
@@ -214,7 +218,8 @@ func (r RunHoldReason) valid() bool {
 		HoldBackupProtectionUnready, HoldRepositoryUntrusted,
 		HoldProviderAuthorityUnavailable, HoldAttendedModeActive,
 		HoldPublicationEnvironment, HoldExternalConflict, HoldRecipeRevoked,
-		HoldVerificationFindings, HoldTrustBlocked, HoldBaseAdvanced:
+		HoldVerificationFindings, HoldTrustBlocked, HoldBaseAdvanced,
+		HoldIdentityParallelism:
 		return true
 	default:
 		return false

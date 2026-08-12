@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
@@ -24,7 +26,10 @@ var ErrInvocationLost = errors.New("invocation ended without an accepted result"
 // terminal result. The 1A.0 skeleton has no retry/failure-item policy, so it
 // preserves the attempt and fails instead of laundering failure into an agent
 // reply and advancing the workflow.
-var ErrInvocationUnsuccessful = errors.New("invocation did not complete successfully")
+var (
+	ErrInvocationUnsuccessful   = errors.New("invocation did not complete successfully")
+	ErrDispatchRecoveryUnlocked = errors.New("dispatch recovery requires the daemon database lock")
+)
 
 // errForeignWorkflow marks durable invocation state owned by another workflow
 // in the shared store. Selection skips it without consuming its outbox row;
@@ -40,6 +45,8 @@ var errReplay = errors.New("engine transition already committed")
 // execution driver. It is safe to call Reconcile repeatedly; the store ledger
 // and deterministic workflow identities collapse retries onto prior work.
 type Engine struct {
+	databaseLock          *daemonlock.Lock
+	reconcileMu           sync.Mutex
 	store                 *store.Store
 	signet                *signet.Service
 	driver                exec.StageDriver
@@ -61,6 +68,17 @@ type Engine struct {
 	// logger reports what the reconcile loops do. Never nil after New, so
 	// the loops log without checking.
 	logger *slog.Logger
+}
+
+// WithDaemonLock authorizes recovery of a pre-start reservation.
+func WithDaemonLock(lock *daemonlock.Lock) Option {
+	return func(e *Engine) error {
+		if lock == nil || !lock.Held() {
+			return ErrDispatchRecoveryUnlocked
+		}
+		e.databaseLock = lock
+		return nil
+	}
 }
 
 // Option configures an optional engine workflow without changing the shared
@@ -150,6 +168,8 @@ type ReconcileResult struct {
 // ReconcileProductionPublications) instead of stalling every run, invocation,
 // and attention item behind one verification.
 func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
+	e.reconcileMu.Lock()
+	defer e.reconcileMu.Unlock()
 	if e.inference != nil {
 		_ = e.inference.Maintain(ctx)
 	}

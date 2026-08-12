@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/advisory"
+	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/elaborate"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
@@ -428,6 +429,7 @@ type sessionCloser interface {
 }
 
 type daemon struct {
+	lock          *daemonlock.Lock
 	store         *store.Store
 	attention     *signet.Service
 	workflow      *engine.Engine
@@ -449,6 +451,16 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if cfg.DBPath == "" {
 		return nil, errors.New("-db is required")
 	}
+	lock, err := daemonlock.Acquire(cfg.DBPath)
+	if err != nil {
+		return nil, fmt.Errorf("acquire database daemon lock: %w", err)
+	}
+	lockTransferred := false
+	defer func() {
+		if !lockTransferred {
+			_ = lock.Close()
+		}
+	}()
 	if cfg.StateDir == "" && cfg.Claude != nil {
 		cfg.StateDir = cfg.Claude.StateDir
 	}
@@ -600,7 +612,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}),
 	)
 	if cfg.Claude == nil {
-		var walkingSkeletonOptions []engine.Option
+		walkingSkeletonOptions := []engine.Option{engine.WithDaemonLock(lock)}
 		if cfg.Logger != nil {
 			walkingSkeletonOptions = append(walkingSkeletonOptions, engine.WithLogger(cfg.Logger))
 		}
@@ -629,6 +641,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return nil, err
 		}
 		engineOptions := []engine.Option{
+			engine.WithDaemonLock(lock),
 			engine.WithAdmission(claudeWiring.backend, admissionFloor(cfg.Claude.OperatingMode),
 				claudeWiring.env, func() time.Time { return time.Now().UTC() }),
 			engine.WithAdmissionDerivation(claudeWiring.derive),
@@ -736,6 +749,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		logger = slog.New(slog.DiscardHandler)
 	}
 	d := &daemon{
+		lock:  lock,
 		store: st, attention: attention, workflow: workflow, driver: driver,
 		listener: listener, cancel: cancel, errs: make(chan error, 1),
 		logger: logger,
@@ -859,6 +873,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		return nil, err
 	}
 	success = true
+	lockTransferred = true
 	return d, nil
 }
 
@@ -983,7 +998,7 @@ func (d *daemon) Close() error {
 		defer cancel()
 		shutdownErr := d.server.Shutdown(ctx)
 		d.wg.Wait()
-		d.closeErr = errors.Join(driverErr, shutdownErr, d.store.Close())
+		d.closeErr = errors.Join(driverErr, shutdownErr, d.store.Close(), d.lock.Close())
 	})
 	return d.closeErr
 }

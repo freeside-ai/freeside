@@ -231,7 +231,9 @@ func newElaborationFixture(t *testing.T, specApproval bool, maxIterations int) e
 		}
 		return tx.RecordAuthIdentity(t.Context(), domain.AuthIdentity{
 			ID: "auth-1", Provider: "codex", AuthStoreMutationLease: true,
-			AuthStoreVolume: "provider-credentials", MaxParallelExecutions: 1,
+			// Revision and restart cases intentionally retain several fake
+			// admissions; capacity itself is covered by integration tests.
+			AuthStoreVolume: "provider-credentials", MaxParallelExecutions: 64,
 			RefreshStrategy: domain.RefreshOnDemand,
 		}, now)
 	}); err != nil {

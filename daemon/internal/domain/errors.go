@@ -162,6 +162,7 @@ var (
 	ErrAuthorizationInconsistent         = errors.New("candidate authorization id or authorizes_publication does not match its content")
 	ErrTrustProfileDrift                 = errors.New("observed automation authority drifted from the approved trust profile")
 	ErrAdmissionInconsistent             = errors.New("execution admission id does not match its content")
+	ErrIdentityParallelismExhausted      = errors.New("auth identity execution parallelism exhausted")
 	ErrUnknownAdmissionFloor             = errors.New("no capability floor is configured for the admission's operating mode")
 	ErrCapabilityBelowFloor              = errors.New("admitted capability class is below the current policy floor")
 	ErrCredentialModeNotApproved         = errors.New("unattended admission runs under a credential mode policy has not approved")

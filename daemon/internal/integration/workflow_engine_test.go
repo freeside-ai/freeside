@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
@@ -28,6 +29,7 @@ const (
 
 type workflowFixture struct {
 	root   string
+	lock   *daemonlock.Lock
 	store  *store.Store
 	signet *signet.Service
 	driver *fake.StageDriver

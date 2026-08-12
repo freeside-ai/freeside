@@ -21,6 +21,7 @@ import (
 var holdClassifiedSentinels = []error{
 	domain.ErrUnattendedOperationStopped,
 	domain.ErrBlockingSystemHealth,
+	domain.ErrIdentityParallelismExhausted,
 	exec.ErrInputUnavailable,
 	exec.ErrCapabilityRefused,
 	exec.ErrPreJobRefused,

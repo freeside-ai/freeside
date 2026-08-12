@@ -205,6 +205,19 @@ func TestExecutionAdmissionRoundTrip(t *testing.T) {
 	}
 }
 
+func TestActiveIdentityExecutionCountRejectsUnknownIdentity(t *testing.T) {
+	t.Parallel()
+	f := newAdmissionFixture(t, nil)
+	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
+	err := s.Read(context.Background(), func(tx *store.ReadTx) error {
+		_, err := tx.ActiveIdentityExecutionCount(context.Background(), "auth-unknown")
+		return err
+	})
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown identity count = %v, want %v", err, store.ErrNotFound)
+	}
+}
+
 // TestExecutionAdmissionRegatedAgainstCurrentFloor is the #52 re-gate: the
 // snapshot is frozen at spawn, so what keeps it meaningful is re-checking it
 // against the floor policy states now, on both the write and every read.
@@ -649,6 +662,7 @@ func TestListUnattendedAdmissionsEvaluatesBackupHealthOnce(t *testing.T) {
 		in.InputDigest = "sha256:input-2"
 		in.Workspace = "ws-2"
 	})
+	first.identity.MaxParallelExecutions = 2
 	first.run.Stages[0].Attempts = append(first.run.Stages[0].Attempts, domain.Attempt{
 		ID: "attempt-2", StageID: "stage-1", Number: 2, InvocationID: "inv-2",
 	})

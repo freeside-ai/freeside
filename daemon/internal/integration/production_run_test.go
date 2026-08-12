@@ -155,10 +155,18 @@ func openProductionFixture(t *testing.T) *workflowFixture {
 
 func unattendedProductionOptions(t *testing.T) []engine.Option {
 	t.Helper()
+	return unattendedProductionOptionsForIdentity(t, testIdentity.ID)
+}
+
+func unattendedProductionOptionsForIdentity(
+	t *testing.T, identityID domain.AuthIdentityID,
+) []engine.Option {
+	t.Helper()
 	profile := unattendedTrustProfile(t)
 	env := admissionEnvironment()
 	env.OperatingMode = domain.ModeUnattended
 	env.Base.Repo, env.Base.RepositoryID = profile.Repo, profile.RepositoryID
+	env.AuthIdentityID = &identityID
 	backend := fake.RunnerBackend{
 		BackendName: string(domain.BackendFreshVMReadOnlyVolumeHandoff),
 		Caps:        exec.NewCapabilitySet(conformantCeiling(t)...),
