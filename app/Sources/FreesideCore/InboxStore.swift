@@ -74,6 +74,11 @@ public final class InboxStore {
     public var pendingCommandsObserver: (() -> Bool)?
     public private(set) var snapshotsByID: [String: Components.Schemas.AttentionItemSnapshot] = [:]
     public var scope: Scope = .open
+    public var projectID: String?
+
+    public var projects: [String] {
+        Array(Set(snapshotsByID.values.map(\.item.project_id))).sorted()
+    }
     /// A pending command's shared lifecycle: in flight while an attempt
     /// awaits its response (no retry affordance — the request may still
     /// succeed), unresolved once an attempt failed ambiguously (only a
@@ -151,11 +156,13 @@ public final class InboxStore {
         }
         return ordered.filter { _, snapshot in
             let status = statusAtOrderRebuild[snapshot.item.id] ?? snapshot.item.status
-            switch scope {
-            case .open: return status == .open
-            case .resolved: return status != .open
-            case .all: return true
-            }
+            let isInScope =
+                switch scope {
+                case .open: status == .open
+                case .resolved: status != .open
+                case .all: true
+                }
+            return isInScope && (projectID == nil || snapshot.item.project_id == projectID)
         }.sorted { lhs, rhs in
             let (lhsKey, rhsKey) = (
                 sortKey(
@@ -238,6 +245,7 @@ public final class InboxStore {
         snapshotsByID.removeValue(forKey: itemID)
         serverOrder.removeAll { $0 == itemID }
         statusAtOrderRebuild.removeValue(forKey: itemID)
+        repairProjectFilter()
     }
 
     /// Ingests a bootstrap or the persisted cache: the canonical full
@@ -264,6 +272,7 @@ public final class InboxStore {
         snapshotsByID = replaced
         serverOrder = snapshots.map(\.item.id).filter { replaced[$0] != nil }
         captureStatusesForCurrentOrder()
+        repairProjectFilter()
         loadState = .loaded
         for snapshot in snapshots {
             revisionObserver?(snapshot.as_of_revision)
@@ -278,6 +287,7 @@ public final class InboxStore {
         snapshotsByID = [:]
         serverOrder = []
         statusAtOrderRebuild = [:]
+        projectID = nil
         removalVersionFloors = [:]
         loadState = .idle
         // A new epoch: every prior per-item validation is now stale, even
@@ -289,6 +299,12 @@ public final class InboxStore {
         statusAtOrderRebuild = [:]
         for id in serverOrder {
             statusAtOrderRebuild[id] = snapshotsByID[id]?.item.status
+        }
+    }
+
+    public func repairProjectFilter() {
+        if let projectID, !projects.contains(projectID) {
+            self.projectID = nil
         }
     }
 

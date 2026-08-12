@@ -89,6 +89,39 @@ import Testing
         #expect(store.rows.contains { $0.item.id == resolved.item.id })
     }
 
+    @Test func projectFilterIsSortedDeduplicatedAndComposesWithScope() async throws {
+        let store = await makeStore(server: MockServer())
+        var first = try #require(store.snapshotsByID["item-spec_approval"])
+        first.item.project_id = "proj-b"
+        var second = try #require(store.snapshotsByID["item-execution_failure"])
+        second.item.project_id = "proj-a"
+        second.item.status = .resolved
+        var third = try #require(store.snapshotsByID["item-agent_question"])
+        third.item.project_id = "proj-a"
+        store.replaceAll(with: [first, second, third])
+
+        #expect(store.projects == ["proj-a", "proj-b"])
+        store.projectID = "proj-a"
+        #expect(store.rows.map(\.item.id) == [third.item.id])
+        store.scope = .resolved
+        #expect(store.rows.map(\.item.id) == [second.item.id])
+        store.scope = .all
+        #expect(Set(store.rows.map(\.item.id)) == [second.item.id, third.item.id])
+    }
+
+    @Test func projectFilterRepairsWhenItsProjectDisappears() async throws {
+        let store = await makeStore(server: MockServer())
+        let surviving = try #require(store.snapshotsByID["item-spec_approval"])
+        store.projectID = surviving.item.project_id
+
+        var replacement = surviving
+        replacement.item.project_id = "proj-replacement"
+        store.replaceAll(with: [replacement])
+
+        #expect(store.projectID == nil)
+        #expect(store.rows.map(\.item.id) == [replacement.item.id])
+    }
+
     @Test func clearReleasesOnlyTheSettledCommand() async {
         // A late completion from an older replay must never release a
         // newer command's slot: the clear is conditional on the stored

@@ -28,6 +28,16 @@ struct InboxView: View {
                     .padding(.horizontal)
                     .padding(.bottom, 8)
 
+                    Picker("Project", selection: Bindable(store).projectID) {
+                        Text("All projects").tag(String?.none)
+                        ForEach(store.projects, id: \.self) { project in
+                            Text(project).tag(String?.some(project))
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+
                     if store.rows.isEmpty {
                         ContentUnavailableView(
                             "No \(store.scope.label.lowercased()) items",
@@ -44,6 +54,11 @@ struct InboxView: View {
         }
         .navigationTitle("Inbox")
         .onChange(of: store.scope) { repairSelection() }
+        .onChange(of: store.projectID) { repairSelection() }
+        .onChange(of: store.projects) {
+            store.repairProjectFilter()
+            repairSelection()
+        }
         .onChange(of: store.rows.map(\.item.id)) { repairSelection() }
     }
 
