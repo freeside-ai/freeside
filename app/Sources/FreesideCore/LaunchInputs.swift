@@ -22,7 +22,15 @@ public struct LaunchInputs {
     /// a stray persisted default must not take the app down.
     public let selection: String?
 
-    public init(colorSchemeRaw: String?, selectionRaw: String?) {
+    /// Optional deterministic inbox presentation for screenshot launches.
+    public let inboxScope: InboxStore.Scope?
+    public let projectID: String?
+    public let detailsExpanded: Bool
+
+    public init(
+        colorSchemeRaw: String?, selectionRaw: String?, inboxScopeRaw: String? = nil,
+        projectIDRaw: String? = nil, detailsExpanded: Bool = false
+    ) {
         colorScheme =
             switch colorSchemeRaw {
             case "light": .light
@@ -36,6 +44,9 @@ public struct LaunchInputs {
         } else {
             selection = selectionRaw
         }
+        inboxScope = inboxScopeRaw.flatMap(InboxStore.Scope.init(rawValue:))
+        projectID = projectIDRaw
+        self.detailsExpanded = detailsExpanded
     }
 
     /// The process's launch arguments, via the UserDefaults argument
@@ -44,6 +55,9 @@ public struct LaunchInputs {
         let defaults = UserDefaults.standard
         return LaunchInputs(
             colorSchemeRaw: defaults.string(forKey: "FreesideColorScheme"),
-            selectionRaw: defaults.string(forKey: "FreesideSelect"))
+            selectionRaw: defaults.string(forKey: "FreesideSelect"),
+            inboxScopeRaw: defaults.string(forKey: "FreesideInboxScope"),
+            projectIDRaw: defaults.string(forKey: "FreesideProject"),
+            detailsExpanded: defaults.bool(forKey: "FreesideDetailsExpanded"))
     }
 }

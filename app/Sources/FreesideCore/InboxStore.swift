@@ -9,6 +9,22 @@ import Observation
 @MainActor
 @Observable
 public final class InboxStore {
+    public enum Scope: String, CaseIterable, Identifiable {
+        case open
+        case resolved
+        case all
+
+        public var id: Self { self }
+
+        var label: String {
+            switch self {
+            case .open: "Open"
+            case .resolved: "Resolved"
+            case .all: "All"
+            }
+        }
+    }
+
     public enum LoadState: Equatable {
         case idle
         case loading
@@ -57,6 +73,13 @@ public final class InboxStore {
     /// idempotent verbatim resend on relaunch).
     public var pendingCommandsObserver: (() -> Bool)?
     public private(set) var snapshotsByID: [String: Components.Schemas.AttentionItemSnapshot] = [:]
+    public var scope: Scope = .open
+    public var projectID: String?
+    private var pendingLaunchProjectID: String?
+
+    public var projects: [String] {
+        Array(Set(snapshotsByID.values.map(\.item.project_id))).sorted()
+    }
     /// A pending command's shared lifecycle: in flight while an attempt
     /// awaits its response (no retry affordance — the request may still
     /// succeed), unresolved once an attempt failed ambiguously (only a
@@ -98,6 +121,10 @@ public final class InboxStore {
     /// records engagement the operator may not have completed.
     private var navigationReservations: Set<String> = []
     private var serverOrder: [String] = []
+    /// Filtering uses the status captured by the last full list rebuild. A
+    /// resolving command can therefore show its applied confirmation on the
+    /// open card; the next refresh moves it into the resolved scope.
+    private var statusAtOrderRebuild: [String: Components.Schemas.ItemStatus] = [:]
     /// Same-epoch visibility removals retain the last rendered entity version
     /// so an older in-flight list/bootstrap cannot resurrect a snoozed row.
     /// A strictly newer snapshot is the release transition and clears it.
@@ -121,14 +148,31 @@ public final class InboxStore {
         attachments = AttachmentLoader(client: client)
     }
 
-    /// The inbox rows: open items first, urgent-to-low within a status,
-    /// server order as the stable tiebreak.
+    /// The inbox rows in the selected scope: open items first when scopes are
+    /// combined, urgent-to-low within a status, server order as the stable
+    /// tiebreak.
     public var rows: [Components.Schemas.AttentionItemSnapshot] {
         let ordered = serverOrder.enumerated().compactMap {
             index, id in snapshotsByID[id].map { (index, $0) }
         }
-        return ordered.sorted { lhs, rhs in
-            let (lhsKey, rhsKey) = (sortKey(lhs.1, index: lhs.0), sortKey(rhs.1, index: rhs.0))
+        return ordered.filter { _, snapshot in
+            let status = statusAtOrderRebuild[snapshot.item.id] ?? snapshot.item.status
+            let isInScope =
+                switch scope {
+                case .open: status == .open
+                case .resolved: status != .open
+                case .all: true
+                }
+            return isInScope && (projectID == nil || snapshot.item.project_id == projectID)
+        }.sorted { lhs, rhs in
+            let (lhsKey, rhsKey) = (
+                sortKey(
+                    lhs.1, index: lhs.0,
+                    status: statusAtOrderRebuild[lhs.1.item.id] ?? lhs.1.item.status),
+                sortKey(
+                    rhs.1, index: rhs.0,
+                    status: statusAtOrderRebuild[rhs.1.item.id] ?? rhs.1.item.status)
+            )
             return lhsKey < rhsKey
         }.map(\.1)
     }
@@ -152,7 +196,9 @@ public final class InboxStore {
             // list must never hide a newer snapshot from the rows.
             let listed = snapshots.map(\.item.id)
             serverOrder = listed + serverOrder.filter { !listed.contains($0) }
+            captureStatusesForCurrentOrder()
             loadState = .loaded
+            finishLaunchProjectRepair()
         } catch {
             guard generation == refreshGeneration else { return }
             loadState = .failed(String(describing: error))
@@ -200,6 +246,8 @@ public final class InboxStore {
             removalVersionFloors[itemID] ?? 0, renderedVersion, floor)
         snapshotsByID.removeValue(forKey: itemID)
         serverOrder.removeAll { $0 == itemID }
+        statusAtOrderRebuild.removeValue(forKey: itemID)
+        repairProjectFilter()
     }
 
     /// Ingests a bootstrap or the persisted cache: the canonical full
@@ -225,6 +273,8 @@ public final class InboxStore {
         }
         snapshotsByID = replaced
         serverOrder = snapshots.map(\.item.id).filter { replaced[$0] != nil }
+        captureStatusesForCurrentOrder()
+        repairProjectFilter()
         loadState = .loaded
         for snapshot in snapshots {
             revisionObserver?(snapshot.as_of_revision)
@@ -238,11 +288,63 @@ public final class InboxStore {
     public func discardSnapshots() {
         snapshotsByID = [:]
         serverOrder = []
+        statusAtOrderRebuild = [:]
+        projectID = nil
         removalVersionFloors = [:]
         loadState = .idle
         // A new epoch: every prior per-item validation is now stale, even
         // for rows a subsequent bootstrap repopulates (issue #162).
         cacheGeneration += 1
+    }
+
+    private func captureStatusesForCurrentOrder() {
+        statusAtOrderRebuild = [:]
+        for id in serverOrder {
+            statusAtOrderRebuild[id] = snapshotsByID[id]?.item.status
+        }
+    }
+
+    public func repairProjectFilter() {
+        if let pendingLaunchProjectID {
+            if projects.contains(pendingLaunchProjectID) {
+                projectID = pendingLaunchProjectID
+            } else if projects.isEmpty, loadState != .loaded {
+                projectID = pendingLaunchProjectID
+            } else {
+                projectID = nil
+            }
+            return
+        }
+        if let projectID, !projects.contains(projectID) {
+            self.projectID = nil
+        }
+    }
+
+    func applyLaunchProjectFilter(_ projectID: String) {
+        pendingLaunchProjectID = projectID
+        self.projectID = projectID
+        repairProjectFilter()
+        if freshness == .fresh {
+            finishLaunchProjectRepair()
+        }
+    }
+
+    func selectProjectFilter(_ projectID: String?) {
+        pendingLaunchProjectID = nil
+        self.projectID = projectID
+    }
+
+    func finishLaunchProjectRepair() {
+        guard let pendingLaunchProjectID else {
+            repairProjectFilter()
+            return
+        }
+        if projects.contains(pendingLaunchProjectID) {
+            projectID = pendingLaunchProjectID
+        } else {
+            projectID = nil
+            self.pendingLaunchProjectID = nil
+        }
     }
 
     /// Rows in server order, for cache persistence.
@@ -355,9 +457,10 @@ public final class InboxStore {
     }
 
     private func sortKey(
-        _ snapshot: Components.Schemas.AttentionItemSnapshot, index: Int
+        _ snapshot: Components.Schemas.AttentionItemSnapshot, index: Int,
+        status: Components.Schemas.ItemStatus
     ) -> (Int, Int, Int) {
-        let statusRank = snapshot.item.status == .open ? 0 : 1
+        let statusRank = status == .open ? 0 : 1
         let priorityRank: Int
         switch snapshot.item.priority {
         case .urgent: priorityRank = 0

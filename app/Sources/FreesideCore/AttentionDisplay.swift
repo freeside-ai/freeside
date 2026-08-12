@@ -10,6 +10,11 @@ enum AttentionDisplay {
         let value: String
     }
 
+    struct SubjectLine: Equatable {
+        let lead: String
+        let identifier: String?
+    }
+
     static func title(_ type: Components.Schemas.AttentionType) -> String {
         switch type {
         case .spec_approval: return "Spec approval"
@@ -98,13 +103,62 @@ enum AttentionDisplay {
         }
     }
 
-    static func subject(_ subject: Components.Schemas.Subject) -> String {
-        switch subject {
+    static func subject(_ item: Components.Schemas.AttentionItem) -> SubjectLine {
+        switch item.subject {
         case .run(let run), .proposal_batch(let run):
-            return run.subject_id
+            return SubjectLine(lead: item.project_id, identifier: run.subject_id)
         case .project(let unscoped), .system(let unscoped):
-            return unscoped.subject_id
+            return SubjectLine(lead: unscoped.subject_id, identifier: nil)
         }
+    }
+
+    static func attachmentDigestRows(
+        _ item: Components.Schemas.AttentionItem
+    ) -> [BindingRow] {
+        var rows: [BindingRow] = []
+        var representedDigests: Set<String> = []
+        var seenEvidenceDigests: Set<String> = []
+        var seenClaimDigests: Set<String> = []
+
+        func append(_ label: String, _ digest: String, seen: inout Set<String>) {
+            guard seen.insert(digest).inserted else { return }
+            rows.append(.init(label: label, value: digest))
+            representedDigests.insert(digest)
+        }
+
+        for artifact in item.evidence_snapshot {
+            append("Evidence digest", artifact.digest, seen: &seenEvidenceDigests)
+        }
+        for claim in item.agent_claims {
+            append("Claim digest", claim.digest, seen: &seenClaimDigests)
+        }
+        for digest in item.artifact_digests {
+            guard representedDigests.insert(digest).inserted else { continue }
+            rows.append(.init(label: "Artifact digest", value: digest))
+        }
+        return rows
+    }
+
+    static func detailBindingRows(
+        _ item: Components.Schemas.AttentionItem,
+        priorProposalDigest: String? = nil,
+        proposalDigest: String? = nil
+    ) -> [BindingRow] {
+        var rows = [BindingRow(label: "Item version", value: "\(item.item_version)")]
+        if !item.pr_head_sha.isEmpty {
+            rows.append(.init(label: "PR head", value: item.pr_head_sha))
+        }
+        rows.append(contentsOf: attachmentDigestRows(item))
+        if let priorProposalDigest {
+            rows.append(.init(label: "Prior proposal", value: priorProposalDigest))
+        }
+        if let proposalDigest {
+            rows.append(.init(label: "Proposal", value: proposalDigest))
+        }
+        rows.append(contentsOf: reviewRecoveryBindingRows(item))
+        rows.append(contentsOf: reviewConfigurationRecoveryRows(item))
+        rows.append(contentsOf: codexReenrollmentRecoveryRows(item))
+        return rows
     }
 
     static func reviewRecoveryBindingRows(

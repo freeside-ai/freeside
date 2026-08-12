@@ -1,10 +1,12 @@
 import FreesideAPI
 import SwiftUI
 
-/// The inbox list: every attention item as a row, open items first.
+/// The attention inbox, scoped to open work by default.
 struct InboxView: View {
     let store: InboxStore
     @Binding var selection: String?
+    let launchScope: InboxStore.Scope?
+    let launchProjectID: String?
 
     var body: some View {
         Group {
@@ -18,20 +20,85 @@ struct InboxView: View {
                     Text(message)
                 }
             case .loaded:
-                if store.rows.isEmpty {
-                    ContentUnavailableView(
-                        "Freeside",
-                        systemImage: "checklist",
-                        description: Text("Attention items will appear here.")
-                    )
-                } else {
-                    List(store.rows, id: \.item.id, selection: $selection) { snapshot in
-                        InboxRowView(item: snapshot.item)
+                VStack(spacing: 0) {
+                    Picker("Scope", selection: Bindable(store).scope) {
+                        ForEach(InboxStore.Scope.allCases) { scope in
+                            Text(scope.label).tag(scope)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+
+                    Picker("Project", selection: projectSelection) {
+                        Text("All projects").tag(String?.none)
+                        ForEach(store.projects, id: \.self) { project in
+                            Text(project).tag(String?.some(project))
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+
+                    if store.rows.isEmpty {
+                        ContentUnavailableView(
+                            "No \(store.scope.label.lowercased()) items",
+                            systemImage: "checklist",
+                            description: Text("Attention items in this scope will appear here.")
+                        )
+                    } else {
+                        List(store.rows, id: \.item.id, selection: $selection) { snapshot in
+                            InboxRowView(item: snapshot.item)
+                        }
                     }
                 }
             }
         }
         .navigationTitle("Inbox")
+        .task {
+            Self.applyLaunchFilters(
+                to: store, scope: launchScope, projectID: launchProjectID)
+        }
+        .onChange(of: store.scope) { repairSelection() }
+        .onChange(of: store.projectID) { repairSelection() }
+        .onChange(of: store.projects) {
+            if store.freshness == .fresh {
+                store.finishLaunchProjectRepair()
+            } else {
+                store.repairProjectFilter()
+            }
+            repairSelection()
+        }
+        .onChange(of: store.freshness) {
+            if store.freshness == .fresh {
+                store.finishLaunchProjectRepair()
+            }
+        }
+        .onChange(of: store.rows.map(\.item.id)) { repairSelection() }
+    }
+
+    private var projectSelection: Binding<String?> {
+        Binding(
+            get: { store.projectID },
+            set: { store.selectProjectFilter($0) }
+        )
+    }
+
+    @MainActor
+    static func applyLaunchFilters(
+        to store: InboxStore,
+        scope: InboxStore.Scope?,
+        projectID: String?
+    ) {
+        if let scope { store.scope = scope }
+        if let projectID { store.applyLaunchProjectFilter(projectID) }
+    }
+
+    private func repairSelection() {
+        guard store.loadState == .loaded else { return }
+        if let selection, !store.rows.contains(where: { $0.item.id == selection }) {
+            self.selection = nil
+        }
     }
 }
 
@@ -39,6 +106,7 @@ struct InboxRowView: View {
     let item: Components.Schemas.AttentionItem
 
     var body: some View {
+        let subject = AttentionDisplay.subject(item)
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
                 Text(AttentionDisplay.title(item._type))
@@ -51,9 +119,16 @@ struct InboxRowView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
             HStack(spacing: 8) {
-                Text(AttentionDisplay.subject(item.subject))
+                Text(subject.lead)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
+                if let identifier = subject.identifier {
+                    Text(identifier)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 if item.status != .open {
                     StatusBadge(status: item.status)
                 }

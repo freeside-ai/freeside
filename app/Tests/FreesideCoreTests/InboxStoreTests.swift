@@ -27,12 +27,16 @@ import Testing
 
     @Test func rowsSortOpenItemsFirstThenPriority() async {
         let store = await makeStore(server: MockServer())
+        store.scope = .all
         guard var resolved = store.snapshotsByID["item-execution_failure"] else {
             Issue.record("missing seeded snapshot")
             return
         }
         resolved.item.status = .resolved
-        store.apply(resolved)
+        let snapshots = store.snapshotsByID.values.map {
+            $0.item.id == resolved.item.id ? resolved : $0
+        }
+        store.replaceAll(with: snapshots)
 
         let statuses = store.rows.map(\.item.status)
         let firstNonOpen = statuses.firstIndex { $0 != .open } ?? statuses.count
@@ -41,6 +45,155 @@ import Testing
         // The urgent item left the open set, so the high-priority one leads.
         #expect(store.rows.first?.item.priority == .high)
         #expect(store.rows.last?.item.id == "item-execution_failure")
+    }
+
+    @Test func scopeDefaultsToOpenAndResolvedItemsRemainFindable() async throws {
+        let store = await makeStore(server: MockServer())
+        var resolved = try #require(store.snapshotsByID["item-execution_failure"])
+        resolved.item.status = .resolved
+        var dismissed = try #require(store.snapshotsByID["item-agent_question"])
+        dismissed.item.status = .dismissed
+        let snapshots = store.snapshotsByID.values.map { snapshot in
+            switch snapshot.item.id {
+            case resolved.item.id: resolved
+            case dismissed.item.id: dismissed
+            default: snapshot
+            }
+        }
+        store.replaceAll(with: snapshots)
+
+        #expect(store.scope == .open)
+        #expect(!store.rows.contains { $0.item.status != .open })
+
+        store.scope = .resolved
+        #expect(Set(store.rows.map(\.item.id)) == [resolved.item.id, dismissed.item.id])
+
+        store.scope = .all
+        #expect(store.rows.count == snapshots.count)
+    }
+
+    @Test func locallyResolvedItemStaysOpenUntilTheNextFullRebuild() async throws {
+        let store = await makeStore(server: MockServer())
+        var resolved = try #require(store.snapshotsByID["item-spec_approval"])
+        resolved.item.status = .resolved
+
+        store.apply(resolved)
+        #expect(store.rows.contains { $0.item.id == resolved.item.id })
+        store.scope = .resolved
+        #expect(!store.rows.contains { $0.item.id == resolved.item.id })
+
+        store.replaceAll(with: Array(store.snapshotsByID.values))
+        store.scope = .open
+        #expect(!store.rows.contains { $0.item.id == resolved.item.id })
+        store.scope = .resolved
+        #expect(store.rows.contains { $0.item.id == resolved.item.id })
+    }
+
+    @Test func projectFilterIsSortedDeduplicatedAndComposesWithScope() async throws {
+        let store = await makeStore(server: MockServer())
+        var first = try #require(store.snapshotsByID["item-spec_approval"])
+        first.item.project_id = "proj-b"
+        var second = try #require(store.snapshotsByID["item-execution_failure"])
+        second.item.project_id = "proj-a"
+        second.item.status = .resolved
+        var third = try #require(store.snapshotsByID["item-agent_question"])
+        third.item.project_id = "proj-a"
+        store.replaceAll(with: [first, second, third])
+
+        #expect(store.projects == ["proj-a", "proj-b"])
+        store.projectID = "proj-a"
+        #expect(store.rows.map(\.item.id) == [third.item.id])
+        store.scope = .resolved
+        #expect(store.rows.map(\.item.id) == [second.item.id])
+        store.scope = .all
+        #expect(Set(store.rows.map(\.item.id)) == [second.item.id, third.item.id])
+    }
+
+    @Test func projectFilterRepairsWhenItsProjectDisappears() async throws {
+        let store = await makeStore(server: MockServer())
+        let surviving = try #require(store.snapshotsByID["item-spec_approval"])
+        store.projectID = surviving.item.project_id
+
+        var replacement = surviving
+        replacement.item.project_id = "proj-replacement"
+        store.replaceAll(with: [replacement])
+
+        #expect(store.projectID == nil)
+        #expect(store.rows.map(\.item.id) == [replacement.item.id])
+    }
+
+    @Test func invalidLaunchProjectIsRepairedAgainstTheLoadedCache() async {
+        let store = await makeStore(server: MockServer())
+
+        InboxView.applyLaunchFilters(to: store, scope: .all, projectID: "proj-missing")
+
+        #expect(store.scope == .all)
+        #expect(store.projectID == nil)
+        #expect(!store.rows.isEmpty)
+    }
+
+    @Test func launchProjectSurvivesUntilTheInitialLoadCanValidateIt() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+
+        InboxView.applyLaunchFilters(to: store, scope: nil, projectID: "proj-1")
+        #expect(store.projectID == "proj-1")
+
+        store.replaceAll(with: [AttentionFixtures.fixture(type: .spec_approval)])
+        #expect(store.projectID == "proj-1")
+    }
+
+    @Test func launchProjectMissingFromCacheCanAppearInTheBootstrap() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        var cached = AttentionFixtures.fixture(type: .spec_approval)
+        cached.item.project_id = "proj-cached"
+        store.replaceAll(with: [cached])
+
+        InboxView.applyLaunchFilters(to: store, scope: nil, projectID: "proj-bootstrap")
+        #expect(store.projectID == nil)
+
+        var authoritative = cached
+        authoritative.item.project_id = "proj-bootstrap"
+        store.replaceAll(with: [authoritative])
+        #expect(store.projectID == "proj-bootstrap")
+    }
+
+    @Test func unknownLaunchProjectStaysClearedAfterAuthoritativeBootstrap() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        let cached = AttentionFixtures.fixture(type: .spec_approval)
+        store.replaceAll(with: [cached])
+
+        InboxView.applyLaunchFilters(to: store, scope: nil, projectID: "proj-missing")
+        store.replaceAll(with: [cached])
+        store.finishLaunchProjectRepair()
+
+        #expect(store.projectID == nil)
+    }
+
+    @Test func unknownLaunchProjectDoesNotLingerWhenTheCacheIsAlreadyFresh() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        var current = AttentionFixtures.fixture(type: .spec_approval)
+        store.replaceAll(with: [current])
+        store.freshness = .fresh
+
+        InboxView.applyLaunchFilters(to: store, scope: nil, projectID: "proj-later")
+        #expect(store.projectID == nil)
+
+        current.item.project_id = "proj-later"
+        store.replaceAll(with: [current])
+        #expect(store.projectID == nil)
+    }
+
+    @Test func validLaunchProjectSurvivesAnEpochDiscard() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        let authoritative = AttentionFixtures.fixture(type: .spec_approval)
+        store.replaceAll(with: [authoritative])
+        InboxView.applyLaunchFilters(to: store, scope: nil, projectID: "proj-1")
+
+        store.discardSnapshots()
+        #expect(store.projectID == nil)
+        store.replaceAll(with: [authoritative])
+
+        #expect(store.projectID == "proj-1")
     }
 
     @Test func clearReleasesOnlyTheSettledCommand() async {
