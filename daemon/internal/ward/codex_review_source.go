@@ -1,6 +1,7 @@
 package ward
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -697,9 +698,9 @@ func (s *CodexReviewSource) normalizeCollection(
 	evidenceBytes = fmt.Appendf(evidenceBytes, ":%d", collection.ExitStatus)
 	collectionEvidence := domain.Digest(contentaddr.Sum(evidenceBytes))
 	if collection.ExitStatus != 0 {
-		class := classifyCodexTerminalFailure(collection.Events)
+		class, terminalMessage := classifyCodexTerminalFailure(collection.Events)
 		failure := fmt.Sprintf("Codex review exited with status %d", collection.ExitStatus)
-		if codexRefreshAttemptFailure(collection.Events) {
+		if codexRefreshAttemptFailure([]byte(terminalMessage)) {
 			failure = "Codex review attempted an in-container credential refresh"
 		}
 		return CodexReviewSourceOutcome{
@@ -1200,19 +1201,36 @@ func classifyCodexObservationFailure(err error) domain.ReviewFailureClass {
 	return domain.ReviewFailureTransient
 }
 
-func classifyCodexTerminalFailure(events []byte) domain.ReviewFailureClass {
-	text := strings.ToLower(string(events))
+func classifyCodexTerminalFailure(events []byte) (domain.ReviewFailureClass, string) {
+	var message string
+	for line := range bytes.SplitSeq(events, []byte("\n")) {
+		var terminal struct {
+			Type  string `json:"type"`
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := RejectDuplicateJSONKeys(line); err != nil {
+			continue
+		}
+		if err := json.Unmarshal(line, &terminal); err != nil || terminal.Type != "turn.failed" {
+			continue
+		}
+		message = terminal.Error.Message
+	}
+
+	text := strings.ToLower(message)
 	switch {
-	case codexRefreshAttemptFailure(events):
-		return domain.ReviewFailureConfiguration
+	case codexRefreshAttemptFailure([]byte(message)):
+		return domain.ReviewFailureConfiguration, message
 	case strings.Contains(text, "quota"), strings.Contains(text, "rate limit"),
 		strings.Contains(text, "too many requests"):
-		return domain.ReviewFailureQuota
+		return domain.ReviewFailureQuota, message
 	case strings.Contains(text, "authentication"), strings.Contains(text, "unauthorized"),
 		strings.Contains(text, "invalid api key"), strings.Contains(text, "configuration"):
-		return domain.ReviewFailureConfiguration
+		return domain.ReviewFailureConfiguration, message
 	default:
-		return domain.ReviewFailureTransient
+		return domain.ReviewFailureTransient, message
 	}
 }
 

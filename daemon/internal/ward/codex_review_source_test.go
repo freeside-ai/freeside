@@ -2098,15 +2098,131 @@ func TestCodexReviewSourceClassifiesTerminalFailures(t *testing.T) {
 		events string
 		want   domain.ReviewFailureClass
 	}{
-		{"quota", "rate limit exceeded", domain.ReviewFailureQuota},
-		{"configuration", "authentication failed", domain.ReviewFailureConfiguration},
-		{"refresh failure", "prefix FAILED TO REFRESH TOKEN suffix", domain.ReviewFailureConfiguration},
-		{"spent refresh", "Refresh token was already used.", domain.ReviewFailureConfiguration},
-		{"invalid refresh", "error: invalid 'refresh_token' value", domain.ReviewFailureConfiguration},
-		{"transient", "connection reset", domain.ReviewFailureTransient},
+		{
+			"quota",
+			`{"type":"turn.failed","error":{"message":"quota exceeded"}}`,
+			domain.ReviewFailureQuota,
+		},
+		{
+			"rate limit",
+			`{"type":"turn.failed","error":{"message":"rate limit exceeded"}}`,
+			domain.ReviewFailureQuota,
+		},
+		{
+			"too many requests",
+			`{"type":"turn.failed","error":{"message":"too many requests"}}`,
+			domain.ReviewFailureQuota,
+		},
+		{
+			"authentication",
+			`{"type":"turn.failed","error":{"message":"authentication failed"}}`,
+			domain.ReviewFailureConfiguration,
+		},
+		{
+			"unauthorized",
+			`{"type":"turn.failed","error":{"message":"unauthorized"}}`,
+			domain.ReviewFailureConfiguration,
+		},
+		{
+			"invalid API key",
+			`{"type":"turn.failed","error":{"message":"invalid api key"}}`,
+			domain.ReviewFailureConfiguration,
+		},
+		{
+			"configuration",
+			`{"type":"turn.failed","error":{"message":"configuration is invalid"}}`,
+			domain.ReviewFailureConfiguration,
+		},
+		{
+			"refresh failure",
+			`{"type":"turn.failed","error":{"message":"prefix FAILED TO REFRESH TOKEN suffix"}}`,
+			domain.ReviewFailureConfiguration,
+		},
+		{
+			"spent refresh",
+			`{"type":"turn.failed","error":{"message":"Refresh token was already used."}}`,
+			domain.ReviewFailureConfiguration,
+		},
+		{
+			"invalid refresh",
+			`{"type":"turn.failed","error":{"message":"error: invalid 'refresh_token' value"}}`,
+			domain.ReviewFailureConfiguration,
+		},
+		{
+			"earlier failure terms do not classify transient terminal",
+			"{\"type\":\"item.completed\",\"item\":{\"text\":\"quota rate limit authentication configuration\"}}\n" +
+				"unauthorized: diagnostic from stderr\n" +
+				`{"type":"turn.failed","error":{"message":"connection reset"}}`,
+			domain.ReviewFailureTransient,
+		},
+		{
+			"terminal quota overrides benign history",
+			"{\"type\":\"item.completed\",\"item\":{\"text\":\"reviewing files\"}}\n" +
+				`{"type":"turn.failed","error":{"message":"quota exhausted"}}`,
+			domain.ReviewFailureQuota,
+		},
+		{
+			"last failed turn wins",
+			"{\"type\":\"turn.failed\",\"error\":{\"message\":\"quota exhausted\"}}\n" +
+				`{"type":"turn.failed","error":{"message":"connection reset"}}`,
+			domain.ReviewFailureTransient,
+		},
+		{"empty transcript", "", domain.ReviewFailureTransient},
+		{
+			"no failed turn",
+			`{"type":"turn.completed","usage":{"input_tokens":12}}`,
+			domain.ReviewFailureTransient,
+		},
+		{
+			"invalid JSON terminal line",
+			`{"type":"turn.failed",this-is-not-json}`,
+			domain.ReviewFailureTransient,
+		},
+		{
+			"duplicate message keys",
+			`{"type":"turn.failed","error":{"message":"connection reset","message":"quota exceeded"}}`,
+			domain.ReviewFailureTransient,
+		},
+		{
+			"case variant duplicate message keys",
+			`{"type":"turn.failed","error":{"message":"connection reset","MESSAGE":"configuration invalid"}}`,
+			domain.ReviewFailureTransient,
+		},
+		{
+			"missing error message",
+			`{"type":"turn.failed","error":{}}`,
+			domain.ReviewFailureTransient,
+		},
+		{
+			"truncated terminal line",
+			`{"type":"turn.failed","error":{"message":"quota`,
+			domain.ReviewFailureTransient,
+		},
+		{
+			"malformed later line preserves last decoded failure",
+			"{\"type\":\"turn.failed\",\"error\":{\"message\":\"quota exhausted\"}}\n" +
+				`{"type":"turn.failed","error":{"message":"connection reset`,
+			domain.ReviewFailureQuota,
+		},
+		{
+			"interleaved stderr is ignored",
+			"warning: quota configuration unauthorized\n" +
+				`{"type":"turn.failed","error":{"message":"connection reset"}}` + "\nretrying after rate limit",
+			domain.ReviewFailureTransient,
+		},
+		{
+			"unknown fields are tolerated",
+			`{"type":"turn.failed","future":{"nested":true},"error":{"code":"limit","message":"quota exhausted"}}`,
+			domain.ReviewFailureQuota,
+		},
+		{
+			"unrecognized terminal failure",
+			`{"type":"turn.failed","error":{"message":"connection reset"}}`,
+			domain.ReviewFailureTransient,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := classifyCodexTerminalFailure([]byte(tc.events)); got != tc.want {
+			if got, _ := classifyCodexTerminalFailure([]byte(tc.events)); got != tc.want {
 				t.Fatalf("class = %q, want %q", got, tc.want)
 			}
 		})
@@ -2116,11 +2232,22 @@ func TestCodexReviewSourceClassifiesTerminalFailures(t *testing.T) {
 func TestCodexReviewSourceNamesInContainerRefreshAttempt(t *testing.T) {
 	source := &CodexReviewSource{}
 	outcome := source.normalizeCollection("review-run-1-1", exec.ReviewRequest{}, CodexReviewCollection{
-		Events: []byte("wrapped: Failed to refresh token while starting"), ExitStatus: 1,
+		Events:     []byte(`{"type":"turn.failed","error":{"message":"Failed to refresh token while starting"}}`),
+		ExitStatus: 1,
 	})
 	if outcome.FailureClass != domain.ReviewFailureConfiguration ||
 		outcome.Failure != "Codex review attempted an in-container credential refresh" {
 		t.Fatalf("refresh attempt normalized as %#v", outcome)
+	}
+
+	outcome = source.normalizeCollection("review-run-1-2", exec.ReviewRequest{}, CodexReviewCollection{
+		Events: []byte("{\"type\":\"item.completed\",\"item\":{\"text\":\"Failed to refresh token\"}}\n" +
+			`{"type":"turn.failed","error":{"message":"connection reset"}}`),
+		ExitStatus: 1,
+	})
+	if outcome.FailureClass != domain.ReviewFailureTransient ||
+		outcome.Failure != "Codex review exited with status 1" {
+		t.Fatalf("historical refresh mention normalized as %#v", outcome)
 	}
 }
 
