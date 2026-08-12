@@ -5,12 +5,18 @@ public struct FreesideRootView: View {
     @State private var session: AppSession
     @State private var selection: String?
     private let launchColorScheme: ColorScheme?
+    private let launchInboxScope: InboxStore.Scope?
+    private let launchProjectID: String?
+    private let launchDetailsExpanded: Bool
 
     @MainActor
     public init(session: AppSession, launchInputs: LaunchInputs = .standard()) {
         _session = State(initialValue: session)
         _selection = State(initialValue: launchInputs.selection)
         launchColorScheme = launchInputs.colorScheme
+        launchInboxScope = launchInputs.inboxScope
+        launchProjectID = launchInputs.projectID
+        launchDetailsExpanded = launchInputs.detailsExpanded
     }
 
     /// Composes from launch arguments (see AppSession.fromEnvironment
@@ -42,12 +48,18 @@ public struct FreesideRootView: View {
         VStack(spacing: 0) {
             FreshnessBanner(freshness: coordinator.store.freshness)
             NavigationSplitView {
-                InboxView(store: coordinator.store, selection: $selection)
-                    .navigationSplitViewColumnWidth(min: 260, ideal: 300)
+                InboxView(
+                    store: coordinator.store, selection: $selection,
+                    launchScope: launchInboxScope, launchProjectID: launchProjectID
+                )
+                .navigationSplitViewColumnWidth(min: 260, ideal: 300)
             } detail: {
                 if let selection {
-                    DecisionDetailView(store: coordinator.store, itemID: selection)
-                        .id(selection)
+                    DecisionDetailView(
+                        store: coordinator.store, itemID: selection,
+                        detailsExpanded: launchDetailsExpanded
+                    )
+                    .id(selection)
                 } else {
                     ContentUnavailableView(
                         "Freeside",

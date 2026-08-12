@@ -14,11 +14,13 @@ struct DecisionDetailView: View {
 
     @State private var model: DecisionModel
     @State private var proposalEditor: ProposalEditor?
+    @State private var detailsExpanded: Bool
     private let attachments: AttachmentLoader
 
     @MainActor
-    init(store: InboxStore, itemID: String) {
+    init(store: InboxStore, itemID: String, detailsExpanded: Bool = false) {
         _model = State(initialValue: DecisionModel(store: store, itemID: itemID))
+        _detailsExpanded = State(initialValue: detailsExpanded)
         attachments = store.attachments
     }
 
@@ -118,7 +120,7 @@ struct DecisionDetailView: View {
                 }
             }
 
-            DisclosureGroup("Details") {
+            DisclosureGroup("Details", isExpanded: $detailsExpanded) {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
                         LabeledContent(row.label) {

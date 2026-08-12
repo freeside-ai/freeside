@@ -75,6 +75,7 @@ public final class InboxStore {
     public private(set) var snapshotsByID: [String: Components.Schemas.AttentionItemSnapshot] = [:]
     public var scope: Scope = .open
     public var projectID: String?
+    private var pendingLaunchProjectID: String?
 
     public var projects: [String] {
         Array(Set(snapshotsByID.values.map(\.item.project_id))).sorted()
@@ -197,6 +198,7 @@ public final class InboxStore {
             serverOrder = listed + serverOrder.filter { !listed.contains($0) }
             captureStatusesForCurrentOrder()
             loadState = .loaded
+            finishLaunchProjectRepair()
         } catch {
             guard generation == refreshGeneration else { return }
             loadState = .failed(String(describing: error))
@@ -303,8 +305,45 @@ public final class InboxStore {
     }
 
     public func repairProjectFilter() {
+        if let pendingLaunchProjectID {
+            if projects.contains(pendingLaunchProjectID) {
+                projectID = pendingLaunchProjectID
+            } else if projects.isEmpty, loadState != .loaded {
+                projectID = pendingLaunchProjectID
+            } else {
+                projectID = nil
+            }
+            return
+        }
         if let projectID, !projects.contains(projectID) {
             self.projectID = nil
+        }
+    }
+
+    func applyLaunchProjectFilter(_ projectID: String) {
+        pendingLaunchProjectID = projectID
+        self.projectID = projectID
+        repairProjectFilter()
+        if freshness == .fresh {
+            finishLaunchProjectRepair()
+        }
+    }
+
+    func selectProjectFilter(_ projectID: String?) {
+        pendingLaunchProjectID = nil
+        self.projectID = projectID
+    }
+
+    func finishLaunchProjectRepair() {
+        guard let pendingLaunchProjectID else {
+            repairProjectFilter()
+            return
+        }
+        if projects.contains(pendingLaunchProjectID) {
+            projectID = pendingLaunchProjectID
+        } else {
+            projectID = nil
+            self.pendingLaunchProjectID = nil
         }
     }
 

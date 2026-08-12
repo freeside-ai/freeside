@@ -122,6 +122,80 @@ import Testing
         #expect(store.rows.map(\.item.id) == [replacement.item.id])
     }
 
+    @Test func invalidLaunchProjectIsRepairedAgainstTheLoadedCache() async {
+        let store = await makeStore(server: MockServer())
+
+        InboxView.applyLaunchFilters(to: store, scope: .all, projectID: "proj-missing")
+
+        #expect(store.scope == .all)
+        #expect(store.projectID == nil)
+        #expect(!store.rows.isEmpty)
+    }
+
+    @Test func launchProjectSurvivesUntilTheInitialLoadCanValidateIt() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+
+        InboxView.applyLaunchFilters(to: store, scope: nil, projectID: "proj-1")
+        #expect(store.projectID == "proj-1")
+
+        store.replaceAll(with: [AttentionFixtures.fixture(type: .spec_approval)])
+        #expect(store.projectID == "proj-1")
+    }
+
+    @Test func launchProjectMissingFromCacheCanAppearInTheBootstrap() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        var cached = AttentionFixtures.fixture(type: .spec_approval)
+        cached.item.project_id = "proj-cached"
+        store.replaceAll(with: [cached])
+
+        InboxView.applyLaunchFilters(to: store, scope: nil, projectID: "proj-bootstrap")
+        #expect(store.projectID == nil)
+
+        var authoritative = cached
+        authoritative.item.project_id = "proj-bootstrap"
+        store.replaceAll(with: [authoritative])
+        #expect(store.projectID == "proj-bootstrap")
+    }
+
+    @Test func unknownLaunchProjectStaysClearedAfterAuthoritativeBootstrap() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        let cached = AttentionFixtures.fixture(type: .spec_approval)
+        store.replaceAll(with: [cached])
+
+        InboxView.applyLaunchFilters(to: store, scope: nil, projectID: "proj-missing")
+        store.replaceAll(with: [cached])
+        store.finishLaunchProjectRepair()
+
+        #expect(store.projectID == nil)
+    }
+
+    @Test func unknownLaunchProjectDoesNotLingerWhenTheCacheIsAlreadyFresh() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        var current = AttentionFixtures.fixture(type: .spec_approval)
+        store.replaceAll(with: [current])
+        store.freshness = .fresh
+
+        InboxView.applyLaunchFilters(to: store, scope: nil, projectID: "proj-later")
+        #expect(store.projectID == nil)
+
+        current.item.project_id = "proj-later"
+        store.replaceAll(with: [current])
+        #expect(store.projectID == nil)
+    }
+
+    @Test func validLaunchProjectSurvivesAnEpochDiscard() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        let authoritative = AttentionFixtures.fixture(type: .spec_approval)
+        store.replaceAll(with: [authoritative])
+        InboxView.applyLaunchFilters(to: store, scope: nil, projectID: "proj-1")
+
+        store.discardSnapshots()
+        #expect(store.projectID == nil)
+        store.replaceAll(with: [authoritative])
+
+        #expect(store.projectID == "proj-1")
+    }
+
     @Test func clearReleasesOnlyTheSettledCommand() async {
         // A late completion from an older replay must never release a
         // newer command's slot: the clear is conditional on the stored

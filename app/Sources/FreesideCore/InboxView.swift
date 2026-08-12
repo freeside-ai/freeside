@@ -5,6 +5,8 @@ import SwiftUI
 struct InboxView: View {
     let store: InboxStore
     @Binding var selection: String?
+    let launchScope: InboxStore.Scope?
+    let launchProjectID: String?
 
     var body: some View {
         Group {
@@ -28,7 +30,7 @@ struct InboxView: View {
                     .padding(.horizontal)
                     .padding(.bottom, 8)
 
-                    Picker("Project", selection: Bindable(store).projectID) {
+                    Picker("Project", selection: projectSelection) {
                         Text("All projects").tag(String?.none)
                         ForEach(store.projects, id: \.self) { project in
                             Text(project).tag(String?.some(project))
@@ -53,16 +55,47 @@ struct InboxView: View {
             }
         }
         .navigationTitle("Inbox")
+        .task {
+            Self.applyLaunchFilters(
+                to: store, scope: launchScope, projectID: launchProjectID)
+        }
         .onChange(of: store.scope) { repairSelection() }
         .onChange(of: store.projectID) { repairSelection() }
         .onChange(of: store.projects) {
-            store.repairProjectFilter()
+            if store.freshness == .fresh {
+                store.finishLaunchProjectRepair()
+            } else {
+                store.repairProjectFilter()
+            }
             repairSelection()
+        }
+        .onChange(of: store.freshness) {
+            if store.freshness == .fresh {
+                store.finishLaunchProjectRepair()
+            }
         }
         .onChange(of: store.rows.map(\.item.id)) { repairSelection() }
     }
 
+    private var projectSelection: Binding<String?> {
+        Binding(
+            get: { store.projectID },
+            set: { store.selectProjectFilter($0) }
+        )
+    }
+
+    @MainActor
+    static func applyLaunchFilters(
+        to store: InboxStore,
+        scope: InboxStore.Scope?,
+        projectID: String?
+    ) {
+        if let scope { store.scope = scope }
+        if let projectID { store.applyLaunchProjectFilter(projectID) }
+    }
+
     private func repairSelection() {
+        guard store.loadState == .loaded else { return }
         if let selection, !store.rows.contains(where: { $0.item.id == selection }) {
             self.selection = nil
         }

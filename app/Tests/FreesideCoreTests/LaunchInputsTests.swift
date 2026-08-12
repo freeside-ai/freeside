@@ -28,4 +28,17 @@ import Testing
     @Test func unsetSelectionStaysUnselected() {
         #expect(LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil).selection == nil)
     }
+
+    @Test func screenshotPresentationInputsAreExplicitAndOptional() {
+        let inputs = LaunchInputs(
+            colorSchemeRaw: "dark", selectionRaw: "item-review_configuration",
+            inboxScopeRaw: "resolved", projectIDRaw: "proj-1", detailsExpanded: true)
+
+        #expect(inputs.inboxScope == .resolved)
+        #expect(inputs.projectID == "proj-1")
+        #expect(inputs.detailsExpanded)
+        #expect(
+            LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, inboxScopeRaw: "nope")
+                .inboxScope == nil)
+    }
 }
