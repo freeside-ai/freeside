@@ -28,12 +28,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/elaborate"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
@@ -631,6 +633,42 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				claudeWiring.env, func() time.Time { return time.Now().UTC() }),
 			engine.WithAdmissionDerivation(claudeWiring.derive),
 		}
+		advisoryStore, advisoryErr := advisory.Open(
+			filepath.Join(cfg.StateDir, "advisory.json"), 2_000, 64<<10,
+		)
+		var advisoryWriter inference.AdvisoryWriter = advisoryStore
+		if advisoryErr != nil {
+			advisoryWriter = advisory.Unavailable(advisoryErr)
+			if cfg.Logger != nil {
+				cfg.Logger.Warn("inference advisory store unavailable; judgment calls will fail safe", "error", advisoryErr)
+			}
+		}
+		judgmentBudget := inference.Budget{
+			Window: 24 * time.Hour,
+			Site: inference.Limits{
+				Calls: 100, ComputeUnits: 1_000_000, AttentionItems: 25, Starvation: time.Hour,
+			},
+			Project: inference.Limits{
+				Calls: 500, ComputeUnits: 5_000_000, AttentionItems: 100, Starvation: 4 * time.Hour,
+			},
+			Global: inference.Limits{
+				Calls: 1_000, ComputeUnits: 10_000_000, AttentionItems: 200, Starvation: 8 * time.Hour,
+			},
+			MaxCallsPerRoot: 20, MaxStarvationPerRoot: 10 * time.Minute,
+		}
+		judgments, err := inference.New(inference.Config{
+			StatePath:  filepath.Join(cfg.StateDir, "inference-budget.json"),
+			AnchorPath: cfg.DBPath + ".inference-budget-anchor",
+			Binding:    inference.Binding{Provider: "unavailable", Model: "unbound"},
+			Sites: []inference.Site{
+				inference.ClassifierSite(judgmentBudget), inference.DiagnosticSite(judgmentBudget),
+			},
+			Advisory: advisoryWriter, Now: func() time.Time { return time.Now().UTC() },
+		})
+		if err != nil {
+			return nil, fmt.Errorf("compose inference boundary: %w", err)
+		}
+		engineOptions = append(engineOptions, engine.WithInference(judgments))
 		researchFetcher, err := elaborate.NewFetcher(st, blobs, nil)
 		if err != nil {
 			return nil, fmt.Errorf("compose research fetcher: %w", err)

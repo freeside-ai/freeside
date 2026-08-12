@@ -9,6 +9,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -46,6 +47,7 @@ type Engine struct {
 	fakePublicationPolicy *fakePublicationPolicyRecovery
 	productionPublication *productionPublicationWorkflow
 	elaboration           *elaborationWorkflow
+	inference             *inference.Client
 	// admission is the configured capability gate and durable-record writer
 	// (see WithAdmission); nil leaves dispatch exactly as it was before a
 	// runner backend existed to admit against.
@@ -78,6 +80,18 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
+// WithInference installs the daemon-side judgment-call boundary. It is
+// optional so a daemon with inference unavailable remains fully operable.
+func WithInference(client *inference.Client) Option {
+	return func(e *Engine) error {
+		if client == nil {
+			return errors.New("engine inference: nil client")
+		}
+		e.inference = client
+		return nil
+	}
+}
+
 // New constructs an Engine from already-open boundaries. Their lifetimes stay
 // with the daemon composition that supplied them.
 func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, opts ...Option) (*Engine, error) {
@@ -102,6 +116,9 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 		if err := opt(e); err != nil {
 			return nil, err
 		}
+	}
+	if e.productionPublication != nil {
+		e.productionPublication.inference = e.inference
 	}
 	return e, nil
 }
@@ -133,6 +150,9 @@ type ReconcileResult struct {
 // ReconcileProductionPublications) instead of stalling every run, invocation,
 // and attention item behind one verification.
 func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
+	if e.inference != nil {
+		_ = e.inference.Maintain(ctx)
+	}
 	if err := e.ConvergeLegacyFakePublicationPolicies(ctx); err != nil {
 		return ReconcileResult{}, fmt.Errorf("converge legacy fake-publication policies: %w", err)
 	}
@@ -180,6 +200,9 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 func (e *Engine) ReconcileProductionPublications(ctx context.Context) (ReconcileResult, error) {
 	if e.productionPublication == nil {
 		return ReconcileResult{}, errors.New("production publication workflow is not configured")
+	}
+	if e.inference != nil {
+		_ = e.inference.Maintain(ctx)
 	}
 	publication, err := e.productionPublication.reconcile(ctx)
 	result := ReconcileResult{

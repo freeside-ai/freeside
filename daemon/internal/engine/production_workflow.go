@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
@@ -1352,6 +1353,15 @@ func (e *Engine) recordProductionTerminalWithAuthority(
 	}
 	if err != nil {
 		return false, fmt.Errorf("record terminal for %q: %w", terminal.InvocationID, err)
+	}
+	if inserted && terminal.Status != exec.StatusCompleted && e.inference != nil {
+		// A diagnostic claim is advisory-only. Failure to produce or retain one
+		// cannot roll back the durable failure fact or make the engine unavailable.
+		_ = e.inference.DiagnoseExecutionFailure(ctx, inference.DiagnosticInput{
+			Project: string(run.ProjectID), RootLineage: string(run.ID), RunID: string(run.ID),
+			FailureClass: string(terminal.Status), FailingStep: string(terminal.StageID),
+			Reason: terminal.Summary,
+		})
 	}
 	return inserted && terminal.Status == exec.StatusCompleted, nil
 }
