@@ -32,14 +32,36 @@ though the rendering itself is straightforward.
   PR. Historical intents without the new optional digest remain recoverable,
   but still pass current authority reconstruction before their existing PR is
   repaired.
-- Chose bounded failure over truncation. The composed PR body must fit the
-  publisher's 64 KiB limit, including operator prose, disposition history, and
-  identity marker. Oversized content fails before an intent or forge effect.
+- Chose bounded failure for the composed PR body over truncating operator prose
+  or publisher-owned structure. The complete body must fit the publisher's
+  64 KiB limit, including operator prose, disposition history, and identity
+  marker; content that remains oversized fails before an intent or forge
+  effect.
+- Chose a bounded, digest-addressed representation for each rendered finding
+  and disposition claim, plus a 48 KiB aggregate section budget, over
+  republishing complete text. Review results admit up to 1 MiB of third-party
+  text and an unbounded finding count, while the forge body admits only 64 KiB.
+  The durable records retain every complete claim. The published history uses
+  deterministic prefixes with per-claim digests, and if their aggregate still
+  crosses the section budget it preserves complete rendered lines plus a
+  digest of the full canonical section.
 - Chose escaped, explicitly labeled recorded claims for disposition rationale.
   Raw reviewer finding text is not republished, and marker-shaped text cannot
   escape into daemon-owned structure.
 
 ## Verification Findings
+
+PR #705's automated review confirmed two P1 members of the same publication-
+budget class. First, one complete persisted claim could exceed GitHub's 64 KiB
+PR-body limit and make a cleanly reviewed candidate unpublishable. The initial
+per-claim bound closed that case but exposed the wider input: the review-result
+contract permits enough findings for individually bounded claims to exceed the
+limit in aggregate. Both findings are fixed by deterministic claim and section
+bounds whose omitted content is digest-addressed; regressions cover a 1 MiB
+message and eight multi-field findings while preserving one matched marker
+pair. A fresh-context refute pass then rejected aggregate-cap arithmetic,
+UTF-8 line-boundary, marker closure, omitted-tail digest, and decision-time
+reconstruction regressions against the final implementation.
 
 Independent refute-first reviews found and closed five P1 gaps across two
 passes: history originally loaded before the publication decision transaction;

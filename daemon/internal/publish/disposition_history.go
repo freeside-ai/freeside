@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -31,6 +32,7 @@ type dispositionHistoryInput struct {
 	headSHA                   string
 	expectedInstructionDigest domain.Digest
 	reviews                   []domain.ReviewRecord
+	findings                  []domain.Finding
 	dispositions              []domain.ReviewDispositionRecord
 	readiness                 domain.ReadinessVerdict
 	readinessProofs           []dispositionReadinessProof
@@ -52,10 +54,22 @@ type DispositionHistory struct {
 	headSHA                   string
 	expectedInstructionDigest domain.Digest
 	reviews                   []domain.ReviewRecord
+	findings                  []domain.Finding
 	dispositions              []domain.ReviewDispositionRecord
 	readiness                 domain.ReadinessVerdict
 	readinessProofs           []dispositionReadinessProof
 }
+
+const (
+	// maxRenderedDispositionClaimBytes keeps one third-party claim from
+	// consuming the forge-facing section budget by itself.
+	maxRenderedDispositionClaimBytes = 4 << 10
+	// maxRenderedDispositionHistoryBytes leaves one quarter of GitHub's PR-body
+	// limit for operator prose and the publisher identity marker. The complete
+	// unbounded rendering remains digest-addressed when the section hits this
+	// aggregate cap.
+	maxRenderedDispositionHistoryBytes = 48 << 10
+)
 
 // LoadDispositionHistory reads one transactionally consistent snapshot from
 // the durable store, then validates and canonicalizes it. The returned value
@@ -188,6 +202,26 @@ func loadDispositionHistoryFromTx(
 	if len(reviews) == 0 {
 		return DispositionHistory{}, fmt.Errorf("no current review lineage: %w", domain.ErrParentKeyMismatch)
 	}
+	findingIDs := make([]domain.FindingID, 0)
+	seenFindingIDs := make(map[domain.FindingID]struct{})
+	for _, lineageReview := range reviews {
+		for _, findingID := range lineageReview.FindingIDs {
+			if _, seen := seenFindingIDs[findingID]; seen {
+				continue
+			}
+			seenFindingIDs[findingID] = struct{}{}
+			findingIDs = append(findingIDs, findingID)
+		}
+	}
+	slices.Sort(findingIDs)
+	findings := make([]domain.Finding, 0, len(findingIDs))
+	for _, findingID := range findingIDs {
+		finding, err := tx.GetFinding(ctx, findingID)
+		if err != nil {
+			return DispositionHistory{}, err
+		}
+		findings = append(findings, finding)
+	}
 	review := reviews[len(reviews)-1]
 	failure, failureErr := tx.LatestReviewFailure(ctx, c.RunID)
 	if failureErr != nil && !errors.Is(failureErr, store.ErrNotFound) {
@@ -271,7 +305,8 @@ func loadDispositionHistoryFromTx(
 	return newDispositionHistory(dispositionHistoryInput{
 		runID: c.RunID, headSHA: c.HeadSHA,
 		expectedInstructionDigest: expectedInstructionDigest, reviews: reviews,
-		dispositions: dispositions, readiness: readiness, readinessProofs: readinessProofs,
+		findings: findings, dispositions: dispositions, readiness: readiness,
+		readinessProofs: readinessProofs,
 	}, st)
 }
 
@@ -326,6 +361,10 @@ func newDispositionHistory(
 		}
 		return strings.Compare(string(a.InvocationID), string(b.InvocationID))
 	})
+	findings := slices.Clone(in.findings)
+	slices.SortFunc(findings, func(a, b domain.Finding) int {
+		return strings.Compare(string(a.ID), string(b.ID))
+	})
 	dispositions := slices.Clone(in.dispositions)
 	slices.SortFunc(dispositions, func(a, b domain.ReviewDispositionRecord) int {
 		if a.Round != b.Round {
@@ -352,7 +391,8 @@ func newDispositionHistory(
 	history := DispositionHistory{
 		sourceStore: sourceStore, runID: in.runID, headSHA: in.headSHA,
 		expectedInstructionDigest: in.expectedInstructionDigest, reviews: reviews,
-		dispositions: dispositions, readiness: readiness, readinessProofs: readinessProofs,
+		findings: findings, dispositions: dispositions, readiness: readiness,
+		readinessProofs: readinessProofs,
 	}
 	if err := history.validate(); err != nil {
 		return DispositionHistory{}, fmt.Errorf("disposition history: %w", err)
@@ -376,6 +416,7 @@ func (h DispositionHistory) validate() error {
 
 	reviewsByRound := make(map[int]domain.ReviewRecord, len(h.reviews))
 	reviewsByInvocation := make(map[domain.InvocationID]domain.ReviewRecord, len(h.reviews))
+	expectedFindingIDs := make(map[domain.FindingID]struct{})
 	for i, review := range h.reviews {
 		if err := review.Validate(); err != nil {
 			return fmt.Errorf("review round %d: %w", review.Round, err)
@@ -388,11 +429,38 @@ func (h DispositionHistory) validate() error {
 		}
 		reviewsByRound[review.Round] = review
 		reviewsByInvocation[review.InvocationID] = review
+		for _, findingID := range review.FindingIDs {
+			expectedFindingIDs[findingID] = struct{}{}
+		}
 	}
 	latest := h.reviews[len(h.reviews)-1]
 	if h.expectedInstructionDigest == "" || latest.InstructionDigest != h.expectedInstructionDigest ||
 		latest.HeadSHA != h.headSHA || latest.Outcome != domain.ReviewClean {
 		return fmt.Errorf("latest review is not clean at published head: %w", domain.ErrParentKeyMismatch)
+	}
+
+	findingsByID := make(map[domain.FindingID]domain.Finding, len(h.findings))
+	for _, finding := range h.findings {
+		if err := finding.Validate(); err != nil {
+			return fmt.Errorf("finding %s: %w", finding.ID, err)
+		}
+		if finding.RunID != h.runID {
+			return fmt.Errorf("finding %s run: %w", finding.ID, domain.ErrParentKeyMismatch)
+		}
+		if _, duplicate := findingsByID[finding.ID]; duplicate {
+			return fmt.Errorf("duplicate finding %s: %w", finding.ID, domain.ErrParentKeyMismatch)
+		}
+		findingsByID[finding.ID] = finding
+	}
+	for findingID := range expectedFindingIDs {
+		if _, ok := findingsByID[findingID]; !ok {
+			return fmt.Errorf("review finding %s is missing: %w", findingID, domain.ErrParentKeyMismatch)
+		}
+	}
+	for findingID := range findingsByID {
+		if _, ok := expectedFindingIDs[findingID]; !ok {
+			return fmt.Errorf("finding %s is outside the review lineage: %w", findingID, domain.ErrParentKeyMismatch)
+		}
 	}
 
 	type dispositionKey struct {
@@ -463,6 +531,10 @@ func RenderDispositionHistory(h DispositionHistory) (string, error) {
 		}
 		byRound[disposition.Round][disposition.FindingID] = disposition
 	}
+	findingsByID := make(map[domain.FindingID]domain.Finding, len(h.findings))
+	for _, finding := range h.findings {
+		findingsByID[finding.ID] = finding
+	}
 
 	var out strings.Builder
 	fmt.Fprintf(&out, "%s\n\n## Freeside Disposition History\n\n", dispositionHistoryOpenMarker)
@@ -502,9 +574,15 @@ func RenderDispositionHistory(h DispositionHistory) (string, error) {
 		}
 		out.WriteString("- Final finding dispositions:\n")
 		for _, findingID := range review.FindingIDs {
+			finding := findingsByID[findingID]
 			disposition := byRound[review.Round][findingID]
 			fmt.Fprintf(&out, "  - %s: **%s**\n", dispositionCode(string(findingID)), dispositionLabel(string(disposition.Disposition)))
-			fmt.Fprintf(&out, "    - Recorded rationale (claim): %s\n", dispositionCode(disposition.Reason))
+			if finding.Severity != "" {
+				fmt.Fprintf(&out, "    - Severity: %s\n", boundedDispositionClaim(finding.Severity))
+			}
+			fmt.Fprintf(&out, "    - Location: %s\n", boundedDispositionClaim(finding.Location))
+			fmt.Fprintf(&out, "    - Reviewer message (claim): %s\n", boundedDispositionClaim(finding.Message))
+			fmt.Fprintf(&out, "    - Recorded rationale (claim): %s\n", boundedDispositionClaim(disposition.Reason))
 			fmt.Fprintf(&out, "    - Recorded: %s\n", dispositionCode(disposition.CreatedAt.UTC().Format(time.RFC3339Nano)))
 			if disposition.RemediationInvocationID != "" {
 				fmt.Fprintf(&out, "    - Remediation review: %s\n", dispositionCode(string(disposition.RemediationInvocationID)))
@@ -512,12 +590,52 @@ func RenderDispositionHistory(h DispositionHistory) (string, error) {
 		}
 	}
 	out.WriteString("\n" + dispositionHistoryCloseMarker)
-	return out.String(), nil
+	return boundedDispositionHistory(out.String()), nil
 }
 
 func dispositionCode(value string) string {
 	replacer := strings.NewReplacer("\r", `\r`, "\n", `\n`)
 	return "<code>" + html.EscapeString(replacer.Replace(value)) + "</code>"
+}
+
+// boundedDispositionClaim preserves a deterministic prefix of an untrusted
+// claim and identifies the omitted bytes by their content address. The raw
+// value remains durable in the finding or disposition record; this only bounds
+// its forge-facing representation.
+func boundedDispositionClaim(value string) string {
+	rendered := dispositionCode(value)
+	if len(rendered) <= maxRenderedDispositionClaimBytes {
+		return rendered
+	}
+
+	digest := contentaddr.Sum([]byte(value))
+	suffix := "</code> (truncated; content digest " + dispositionCode(digest) + ")"
+	prefix := rendered[len("<code>") : len(rendered)-len("</code>")]
+	limit := maxRenderedDispositionClaimBytes - len("<code>") - len(suffix)
+	for limit > 0 && !utf8.RuneStart(prefix[limit]) {
+		limit--
+	}
+	return "<code>" + prefix[:limit] + suffix
+}
+
+// boundedDispositionHistory preserves only complete rendered lines and binds
+// every omitted byte through the digest of the complete canonical rendering.
+// The publisher-owned close marker is always restored outside the bounded
+// prefix, so third-party volume cannot hide or forge the section boundary.
+func boundedDispositionHistory(rendered string) string {
+	if len(rendered) <= maxRenderedDispositionHistoryBytes {
+		return rendered
+	}
+
+	digest := contentaddr.Sum([]byte(rendered))
+	suffix := "\n- Disposition history truncated; full rendered digest: " +
+		dispositionCode(digest) + "\n\n" + dispositionHistoryCloseMarker
+	limit := maxRenderedDispositionHistoryBytes - len(suffix)
+	prefix := rendered[:limit]
+	if newline := strings.LastIndexByte(prefix, '\n'); newline >= 0 {
+		prefix = prefix[:newline]
+	}
+	return prefix + suffix
 }
 
 func dispositionLabel(value string) string {
