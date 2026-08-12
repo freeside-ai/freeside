@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -689,7 +690,28 @@ func snapshotWorktree(t *testing.T, root string) map[string]string {
 
 func assertTreeUnchanged(t *testing.T, root string, before map[string]string) {
 	t.Helper()
-	if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
-		t.Errorf("refused materialization changed %s", root)
+	after := snapshotTree(t, root)
+	if reflect.DeepEqual(after, before) {
+		return
 	}
+	var added, removed, changed []string
+	for p, body := range after {
+		if old, ok := before[p]; !ok {
+			added = append(added, p)
+		} else if old != body {
+			changed = append(changed, p)
+		}
+	}
+	for p := range before {
+		if _, ok := after[p]; !ok {
+			removed = append(removed, p)
+		}
+	}
+	sort.Strings(added)
+	sort.Strings(removed)
+	sort.Strings(changed)
+	// Attribute the mismatch: a genuine RetainWorktree side effect names
+	// the worktree paths it touched, while an environmental writer (e.g. a
+	// detached git maintenance child) names only .git internals.
+	t.Errorf("refused materialization changed %s: added=%v removed=%v changed=%v", root, added, removed, changed)
 }

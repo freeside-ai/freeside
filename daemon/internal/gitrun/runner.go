@@ -24,6 +24,13 @@ func Baseline() []string {
 		"-c", "protocol.allow=never",
 		"-c", "core.protectHFS=true",
 		"-c", "core.protectNTFS=true",
+		// Suppress the detached `git maintenance run --auto --detach`
+		// child modern git (~2.46+) spawns on commit and other commands;
+		// it keeps mutating the checkout's .git after the foreground
+		// command returns, exactly the async side effect a daemon-owned
+		// invocation must exclude. gc.auto=0 belts older gits.
+		"-c", "maintenance.auto=false",
+		"-c", "gc.auto=0",
 	}
 }
 
