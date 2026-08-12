@@ -447,7 +447,7 @@ func TestLiveCodexReviewSnapshotPreambleFailsClosedWhenImageShadowsCredential(t 
 	if err := rt.CreateContainer(ctx, ContainerSpec{
 		Name:            review,
 		Image:           liveImage,
-		Command:         []string{"sh", "-c", command},
+		Command:         []string{"sh", "-c", command, prod[3], prod[4]},
 		Env:             []string{"CODEX_HOME=" + CodexHomeTarget},
 		Labels:          append(runLabels(runID), label),
 		NetworkDisabled: true,

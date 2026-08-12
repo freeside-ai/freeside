@@ -25,7 +25,18 @@ import (
 
 var ErrCodexReviewOutcomeNotFound = errors.New("codex review outcome not found")
 
-const codexProductionReviewPromptVersion = "codex-production-review-prompt-v1"
+const codexProductionReviewPromptVersion = "codex-production-review-prompt-v3"
+
+const codexProductionReviewRules = `Apply these daemon-owned Freeside review rules:
+1. Trust re-derivation
+   Flag: a change treats stored or caller-supplied publish eligibility, approval, or provenance bits as authoritative without re-running the applicable gate against current trusted state.
+   Safe path: re-run the applicable gate against current trusted state and fail closed when trust cannot be established.
+2. Verification integrity
+   Flag: a change deletes or skips a failing test, loosens an assertion, or broadens a lint exclusion merely to make the change pass.
+   Safe path: fix the implementation, or revise a genuinely obsolete check as its own visible and justified change.
+3. Credential containment
+   Flag: a change logs, exports, persists, or exposes credential material outside sealed stores and bounded daemon-owned delivery surfaces.
+   Safe path: keep durable secrets sealed; use only private, daemon-owned ephemeral snapshots or volumes with read-only consumer mounts and cleanup for runtime delivery; refer to credentials by name and use placeholders in fixtures and examples.`
 
 type CodexReviewSourceConfig struct {
 	Lifecycle            *CodexReviewLifecycle
@@ -508,8 +519,19 @@ func codexReviewLaunchCleanupFailure(launchErr, cleanupErr error) error {
 
 func codexProductionReviewPrompt(req exec.ReviewRequest) string {
 	evidence, _ := json.Marshal(req.Verification)
-	return fmt.Sprintf("Review the exact candidate at head %s against base %s. The preceding verification evidence is %s. Focus on correctness, security, data loss, and regressions. Return every actionable finding through the required JSON schema. Return an empty findings array only when the candidate is clean.",
-		req.HeadSHA, req.BaseSHA, evidence)
+	return fmt.Sprintf(`Review the exact candidate at head %s against base %s. The preceding verification evidence is %s.
+
+Apply a precision-first admission test focused on correctness, security, data loss, and regressions. Admit a finding only when all of these are true:
+- The head-versus-base change introduced it.
+- It has a demonstrable failure path.
+- It is discrete and actionable.
+- It is not speculative, pre-existing, or merely stylistic.
+- It survives a deliberate attempt to falsify it against the code and diff.
+
+%s
+
+Return every finding that meets this bar through the required JSON schema. An empty findings array means that nothing met the admission bar; it does not claim the candidate is flawless.`,
+		req.HeadSHA, req.BaseSHA, evidence, codexProductionReviewRules)
 }
 
 func (s *CodexReviewSource) Inspect(

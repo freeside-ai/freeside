@@ -73,6 +73,91 @@ func testReviewInstructionBinding() exec.ReviewInstructionBinding {
 	return binding
 }
 
+func TestCodexProductionReviewPromptAppliesPrecisionFirstAdmissionBar(t *testing.T) {
+	request := exec.ReviewRequest{
+		BaseSHA:      strings.Repeat("a", 40),
+		HeadSHA:      strings.Repeat("b", 40),
+		Verification: testReviewVerificationEvidence(),
+	}
+	prompt := codexProductionReviewPrompt(request)
+	for _, want := range []string{
+		"head " + request.HeadSHA,
+		"base " + request.BaseSHA,
+		`"recipe_digest":"sha256:` + strings.Repeat("c", 64) + `"`,
+		"head-versus-base change introduced it",
+		"demonstrable failure path",
+		"discrete and actionable",
+		"not speculative, pre-existing, or merely stylistic",
+		"deliberate attempt to falsify it",
+		"nothing met the admission bar",
+		"does not claim the candidate is flawless",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("production review prompt omitted %q:\n%s", want, prompt)
+		}
+	}
+	if codexProductionReviewPromptVersion != "codex-production-review-prompt-v3" {
+		t.Fatalf("prompt protocol = %q", codexProductionReviewPromptVersion)
+	}
+}
+
+func TestCodexProductionReviewPromptCarriesFreesideRulePairs(t *testing.T) {
+	prompt := codexProductionReviewPrompt(exec.ReviewRequest{
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
+		Verification: testReviewVerificationEvidence(),
+	})
+	for _, rule := range []struct {
+		name   string
+		unsafe string
+		safe   string
+	}{
+		{
+			name:   "trust re-derivation",
+			unsafe: "as authoritative without re-running the applicable gate against current trusted state",
+			safe:   "re-run the applicable gate against current trusted state and fail closed",
+		},
+		{
+			name:   "verification integrity",
+			unsafe: "deletes or skips a failing test, loosens an assertion, or broadens a lint exclusion",
+			safe:   "fix the implementation, or revise a genuinely obsolete check as its own visible and justified change",
+		},
+		{
+			name:   "credential containment",
+			unsafe: "logs, exports, persists, or exposes credential material outside sealed stores and bounded daemon-owned delivery surfaces",
+			safe:   "private, daemon-owned ephemeral snapshots or volumes with read-only consumer mounts and cleanup",
+		},
+	} {
+		t.Run(rule.name, func(t *testing.T) {
+			if !strings.Contains(prompt, rule.unsafe) || !strings.Contains(prompt, rule.safe) {
+				t.Fatalf("prompt rule does not pair unsafe and safe paths:\n%s", prompt)
+			}
+		})
+	}
+}
+
+func TestCodexProductionReviewPromptPreservesPriorEvidenceCapacity(t *testing.T) {
+	request := exec.ReviewRequest{
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
+		Verification: testReviewVerificationEvidence(),
+	}
+	for i := range 420 {
+		request.Verification.ArtifactDigests = append(request.Verification.ArtifactDigests,
+			domain.Digest(fmt.Sprintf("sha256:%064x", i)))
+	}
+	prompt := codexProductionReviewPrompt(request)
+	if len(prompt) > maxCodexReviewPromptBytes {
+		t.Fatalf("420-artifact production review prompt = %d bytes, limit %d",
+			len(prompt), maxCodexReviewPromptBytes)
+	}
+	command := codexReviewCommand("/workspace/project", "gpt-5.2-codex", "high", prompt)
+	if got := command[len(command)-1]; got != prompt {
+		t.Fatal("production review prompt was not preserved as its own command argument")
+	}
+	if strings.Contains(command[2], prompt) {
+		t.Fatal("production review prompt was expanded into the sh -c program")
+	}
+}
+
 func TestCodexReviewSourceReconstructsInstructionClosure(t *testing.T) {
 	cfg, _ := testCodexReview(t)
 	host := []byte("operator rules\n")

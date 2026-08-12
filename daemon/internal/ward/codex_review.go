@@ -74,8 +74,11 @@ const (
 	codexReviewTopologyVersion   = "codex_review_read_only_v3"
 	codexReviewTopologyVersionV2 = "codex_review_read_only_v2"
 	maxCodexAuthSnapshotBytes    = 1 << 20
-	maxCodexReviewPromptBytes    = 31 << 10
-	emptyCodexShadowDigest       = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	// The prompt is a dedicated sh -c positional argument, not part of the
+	// shell program. Keep it below Linux's 128-KiB MAX_ARG_STRLEN with room for
+	// the terminating NUL and runtime implementation margins.
+	maxCodexReviewPromptBytes = 120 << 10
+	emptyCodexShadowDigest    = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 	// codexWorkspaceAgentsKey is the workspace observer's proof line reporting
 	// what the candidate tree holds at <workspace>/.agents. The shadow-mount
@@ -1512,10 +1515,10 @@ func codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt string) 
 		" -c project_doc_max_bytes=0 --ignore-user-config --ignore-rules" +
 		" --output-schema " + shellQuote(codexReviewSchemaPath) +
 		" --output-last-message " + shellQuote(codexReviewResultPath) +
-		" -- " + shellQuote(prompt) + " > " + shellQuote(codexReviewEventsPath) + " 2>&1; " +
+		" -- \"$1\" > " + shellQuote(codexReviewEventsPath) + " 2>&1; " +
 		"review_status=$?; printf '%s\\n' \"$review_status\" > " + shellQuote(codexReviewStatusPath) +
 		"; exit \"$review_status\""
-	return []string{"sh", "-c", command}
+	return []string{"sh", "-c", command, "freeside-codex-review", prompt}
 }
 
 type codexReviewResourceNames struct {
