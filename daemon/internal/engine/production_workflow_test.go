@@ -12,10 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -26,6 +29,62 @@ func productionEntry(payload string) store.QueueEntry {
 		IdempotencyKey: "inv-implement-run-1",
 		Kind:           KindProductionInvocationRequested,
 		Payload:        []byte(payload),
+	}
+}
+
+func TestProductionTerminalFailureWritesAdvisoryDiagnosticOnce(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(ctx, filepath.Join(dir, "store.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	now := func() time.Time { return time.Unix(2, 0).UTC() }
+	advisoryStore, err := advisory.Open(
+		filepath.Join(dir, "advisory.json"), 20, 16<<10, advisory.WithClock(now),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver := inferencefake.New()
+	driver.Script(inference.DiagnosticSiteID, inferencefake.Script{Response: inference.Response{
+		Output:       []byte(`{"probable_cause":"tool failure","explanation":"the stage returned failed"}`),
+		ComputeUnits: 2,
+	}})
+	limits := inference.Limits{Calls: 10, ComputeUnits: 100_000, AttentionItems: 10, Starvation: time.Hour}
+	site := inference.DiagnosticSite(inference.Budget{
+		Window: time.Hour, Site: limits, Project: limits, Global: limits,
+		MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,
+	})
+	site.AuditEvery = 1
+	client, err := inference.New(inference.Config{
+		StatePath: filepath.Join(dir, "ledger.json"),
+		Binding:   inference.Binding{Provider: "fake", Model: "diagnostic", Driver: driver},
+		Sites:     []inference.Site{site}, Advisory: advisoryStore,
+		Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := &Engine{store: st, inference: client}
+	run := domain.Run{ID: "run-1", ProjectID: "project-1"}
+	terminal := productionTerminalRecord{
+		InvocationID: "inv-1", RunID: run.ID, StageID: "stage-1",
+		Status: exec.StatusFailed, Summary: "exit 1",
+	}
+	if completed, err := workflow.recordProductionTerminalWithAuthority(ctx, run, terminal, false); err != nil || completed {
+		t.Fatalf("record failure = %v, %v", completed, err)
+	}
+	if completed, err := workflow.recordProductionTerminalWithAuthority(ctx, run, terminal, false); err != nil || completed {
+		t.Fatalf("replay failure = %v, %v", completed, err)
+	}
+	entries, err := advisoryStore.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[1].Kind != "diagnostic_claim" {
+		t.Fatalf("advisory entries = %#v", entries)
 	}
 }
 
@@ -1299,6 +1358,149 @@ func validPublicationTask(
 			Title: "Publish the production run", Body: "Produced by a production run.\n",
 			CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside", BotUserID: 42},
 		},
+	}
+}
+
+func TestReviewAttentionReusesFirstClassifierRoutingDecision(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		first       domain.AttentionType
+		second      domain.AttentionType
+		firstReason string
+	}{
+		{
+			name:  "fallback then recovered classification",
+			first: domain.AttentionReviewDispute, second: domain.AttentionReviewDiminishing,
+			firstReason: "classification was unavailable",
+		},
+		{
+			name:  "classification then conservative retry",
+			first: domain.AttentionReviewDiminishing, second: domain.AttentionReviewDispute,
+			firstReason: "classification did not require attention",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			w := &productionPublicationWorkflow{store: st, attention: signet.NewService(st)}
+			task := productionPublicationTask{
+				RunID: "run-classifier-retry", ProjectID: "project-classifier-retry",
+				HeadSHA: strings.Repeat("a", 40),
+			}
+			record := domain.ReviewRecord{Round: 1}
+			if err := w.putReviewAttention(ctx, task, record, tc.firstReason, tc.first); err != nil {
+				t.Fatalf("put first routing decision: %v", err)
+			}
+			if err := w.putReviewAttention(ctx, task, record, "retry chose another route", tc.second); err != nil {
+				t.Fatalf("reuse first routing decision: %v", err)
+			}
+			var item domain.AttentionItem
+			if err := st.Read(ctx, func(tx *store.ReadTx) error {
+				var readErr error
+				item, readErr = tx.GetAttentionItem(ctx, productionReviewItemID(task.RunID, record.Round))
+				return readErr
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if item.Type != tc.first || item.Reason != tc.firstReason || item.ItemVersion != 1 {
+				t.Fatalf("reused attention = %#v", item)
+			}
+		})
+	}
+	t.Run("rejects a changed candidate binding", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = st.Close() })
+		w := &productionPublicationWorkflow{store: st, attention: signet.NewService(st)}
+		task := productionPublicationTask{
+			RunID: "run-classifier-retry", ProjectID: "project-classifier-retry",
+			HeadSHA: strings.Repeat("a", 40),
+		}
+		record := domain.ReviewRecord{Round: 1}
+		if err := w.putReviewAttention(
+			ctx, task, record, "first decision", domain.AttentionReviewDispute,
+		); err != nil {
+			t.Fatal(err)
+		}
+		task.HeadSHA = strings.Repeat("b", 40)
+		if err := w.putReviewAttention(
+			ctx, task, record, "changed candidate", domain.AttentionReviewDispute,
+		); !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Fatalf("changed candidate binding error = %v", err)
+		}
+	})
+	for _, status := range []domain.ItemStatus{domain.StatusOpen, domain.StatusResolved} {
+		t.Run("legacy dispute "+string(status), func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			attention := signet.NewService(st)
+			w := &productionPublicationWorkflow{store: st, attention: attention}
+			task := productionPublicationTask{
+				RunID: "run-classifier-retry", ProjectID: "project-classifier-retry",
+				HeadSHA: strings.Repeat("a", 40),
+			}
+			record := domain.ReviewRecord{Round: 1}
+			runID := task.RunID
+			legacy, err := domain.NewAttentionItem(domain.AttentionItemInput{
+				ID: productionReviewItemID(task.RunID, record.Round), ProjectID: task.ProjectID,
+				Subject: domain.Subject{
+					Type: domain.SubjectRun, ID: domain.SubjectID(task.RunID), RunID: &runID,
+				},
+				Type: domain.AttentionReviewDispute, Priority: domain.PriorityNormal,
+				Reason: "legacy dispute",
+				RequestedDecision: []domain.Action{
+					domain.ActionAdjudicate, domain.ActionDiscuss, domain.ActionStop,
+				},
+				PRHeadSHA: task.HeadSHA, ItemVersion: 1,
+				InterruptionClass: domain.InterruptionPlannedGate, Status: status,
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := attention.PutItem(ctx, legacy); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.putReviewAttention(
+				ctx, task, record, "retry chose diminishing", domain.AttentionReviewDiminishing,
+			); err != nil {
+				t.Fatalf("reuse legacy dispute: %v", err)
+			}
+			var item domain.AttentionItem
+			if err := st.Read(ctx, func(tx *store.ReadTx) error {
+				var readErr error
+				item, readErr = tx.GetAttentionItem(ctx, legacy.ID)
+				return readErr
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if item.Type != domain.AttentionReviewDispute || item.Reason != legacy.Reason ||
+				item.Status != status {
+				t.Fatalf("reused legacy dispute = %#v", item)
+			}
+			if status == domain.StatusOpen {
+				if item.ItemVersion != 2 || item.Offers(domain.ActionAdjudicate) ||
+					!item.Offers(domain.ActionDiscuss) || !item.Offers(domain.ActionStop) {
+					t.Fatalf("repaired legacy dispute = %#v", item)
+				}
+			} else if item.ItemVersion != 1 || !item.Offers(domain.ActionAdjudicate) {
+				t.Fatalf("closed legacy dispute was rewritten = %#v", item)
+			}
+		})
 	}
 }
 

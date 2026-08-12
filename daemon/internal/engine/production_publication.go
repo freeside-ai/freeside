@@ -24,6 +24,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
@@ -159,6 +160,7 @@ type productionPublicationWorkflow struct {
 	approvedRecipes           map[domain.Digest]bool
 	newRoom                   func(domain.ProjectImage) (ProductionVerificationRoom, error)
 	reviewSource              exec.ReviewSource
+	inference                 *inference.Client
 	reviewRecovery            func(context.Context) error
 	reviewRecoveryPending     bool
 	reviewConfigurationDigest domain.Digest
@@ -1909,10 +1911,16 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		}
 		if latestRecord.InstructionDigest == reviewInstructions.ResultDigest {
 			if latestRecord.Outcome == domain.ReviewFindings {
-				if err := w.putReviewAttention(ctx, task, *latestRecord,
-					fmt.Sprintf("Codex review found %d issue(s) requiring remediation.", len(latestRecord.FindingIDs)),
-					domain.AttentionReviewDiminishing,
-				); err != nil {
+				requiresAttention, classifyErr := w.classifyReviewFindings(ctx, task, *latestRecord)
+				itemType := domain.AttentionReviewDiminishing
+				reason := fmt.Sprintf("Codex review found %d issue(s) requiring remediation.", len(latestRecord.FindingIDs))
+				if classifyErr != nil || requiresAttention {
+					if w.reserveClassifierAttention(task, *latestRecord) {
+						itemType = domain.AttentionReviewDispute
+						reason = fmt.Sprintf("Codex review found %d issue(s); classification was unavailable or a critical/high finding lacks high confidence and requires adjudication.", len(latestRecord.FindingIDs))
+					}
+				}
+				if err := w.putReviewAttention(ctx, task, *latestRecord, reason, itemType); err != nil {
 					return productionReviewPending, err
 				}
 				return productionReviewEscalated, nil
@@ -2224,19 +2232,100 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	}); err != nil {
 		return productionReviewPending, err
 	}
+	requiresAttention, err := w.classifyReviewFindings(ctx, task, record)
+	if err != nil {
+		// Inference and its advisory telemetry are never control-plane
+		// availability dependencies. The existing review attention remains the
+		// conservative fallback for every unclassified finding.
+		requiresAttention = true
+	}
 	if err := w.removeReviewWorkspace(id); err != nil {
 		return productionReviewPending, err
 	}
 	if record.Outcome == domain.ReviewFindings {
+		itemType := domain.AttentionReviewDiminishing
+		reason := fmt.Sprintf("Codex review found %d issue(s) requiring remediation.", len(record.FindingIDs))
+		if requiresAttention {
+			if w.reserveClassifierAttention(task, record) {
+				itemType = domain.AttentionReviewDispute
+				reason = fmt.Sprintf("Codex review found %d issue(s); a critical/high finding lacks a high-confidence classification and requires adjudication.", len(record.FindingIDs))
+			}
+		}
 		if err := w.putReviewAttention(ctx, task, record,
-			fmt.Sprintf("Codex review found %d issue(s) requiring remediation.", len(record.FindingIDs)),
-			domain.AttentionReviewDiminishing,
+			reason, itemType,
 		); err != nil {
 			return productionReviewPending, err
 		}
 		return productionReviewEscalated, nil
 	}
 	return productionReviewPassed, nil
+}
+
+func (w *productionPublicationWorkflow) reserveClassifierAttention(
+	task productionPublicationTask, record domain.ReviewRecord,
+) bool {
+	if w.inference == nil {
+		return false
+	}
+	return w.inference.ReserveAttention(
+		inference.ClassifierSiteID, string(task.ProjectID), string(task.RunID),
+		string(productionReviewItemID(task.RunID, record.Round)),
+	) == nil
+}
+
+func (w *productionPublicationWorkflow) classifyReviewFindings(
+	ctx context.Context, task productionPublicationTask, record domain.ReviewRecord,
+) (bool, error) {
+	if w.inference == nil || record.Outcome != domain.ReviewFindings {
+		return false, nil
+	}
+	requiresAttention := false
+	for _, findingID := range record.FindingIDs {
+		var (
+			finding        domain.Finding
+			classification domain.Classification
+			classified     bool
+		)
+		if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			finding, err = tx.GetFinding(ctx, findingID)
+			if err != nil {
+				return err
+			}
+			classification, err = tx.GetClassification(ctx, findingID, record.Round)
+			if err == nil {
+				classified = true
+				return nil
+			}
+			if errors.Is(err, store.ErrNotFound) {
+				return nil
+			}
+			return err
+		}); err != nil {
+			return true, err
+		}
+		if classified {
+			persistedAttention, err := w.inference.EvaluateClassification(finding, classification)
+			if err != nil {
+				return true, err
+			}
+			requiresAttention = requiresAttention || persistedAttention
+			continue
+		}
+		decision, err := w.inference.ClassifyFinding(
+			ctx, string(task.ProjectID), string(task.RunID), finding, record.Round,
+		)
+		if err != nil {
+			return true, err
+		}
+		requiresAttention = requiresAttention || decision.RequiresAttention
+		if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+			return tx.PutClassification(ctx, decision.Classification)
+		}); err != nil {
+			return true, err
+		}
+	}
+	return requiresAttention, nil
 }
 
 func normalizeTerminalReviewFailure(err error) error {
@@ -2829,11 +2918,56 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithID(
 	itemID domain.ItemID,
 ) error {
 	runID := task.RunID
+	// The first item written at this round's deterministic identity durably
+	// binds its routing decision. Classification may recover differently on a
+	// later reconciliation, but changing the item's type in place is forbidden
+	// and would otherwise strand terminalization behind an immutable-transition
+	// error. Reuse the bound decision after verifying its run coordinates.
+	var existing *domain.AttentionItem
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.GetAttentionItem(ctx, itemID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		existing = &got
+		return nil
+	}); err != nil {
+		return err
+	}
+	if existing != nil {
+		validType := existing.Type == domain.AttentionReviewDiminishing ||
+			existing.Type == domain.AttentionReviewDispute
+		validSubject := existing.Subject.Type == domain.SubjectRun &&
+			existing.Subject.ID == domain.SubjectID(task.RunID) &&
+			existing.Subject.RunID != nil && *existing.Subject.RunID == task.RunID
+		if !validType || existing.ProjectID != task.ProjectID || !validSubject ||
+			existing.PRHeadSHA != task.HeadSHA {
+			return fmt.Errorf("review attention item %q disagrees with run %q: %w",
+				itemID, task.RunID, domain.ErrParentKeyMismatch)
+		}
+		// Repair an open dispute created before adjudication became executable
+		// only in Wave 6. The routing decision and all recovery bindings stay
+		// fixed; only its currently actionable controls advance one version.
+		executableDisputeActions := []domain.Action{domain.ActionDiscuss, domain.ActionStop}
+		if existing.Type == domain.AttentionReviewDispute && existing.Status == domain.StatusOpen &&
+			!slices.Equal(existing.RequestedDecision, executableDisputeActions) {
+			repaired := *existing
+			repaired.RequestedDecision = executableDisputeActions
+			repaired.ItemVersion++
+			return w.attention.PutItem(ctx, repaired)
+		}
+		return nil
+	}
 	// Review escalation completes the publication task before presenting this
-	// item. It therefore offers only the executable acknowledgement action,
+	// item. It therefore offers only actions executable at this boundary,
 	// rather than remediation choices whose effects this workflow cannot enact.
 	actions := []domain.Action{domain.ActionFinishNow}
 	if itemType == domain.AttentionReviewDispute {
+		// Wave 6 owns the adjudication transaction. Until it lands, keep the
+		// item actionable through the executable conversation and stop paths.
 		actions = []domain.Action{domain.ActionDiscuss, domain.ActionStop}
 	}
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{

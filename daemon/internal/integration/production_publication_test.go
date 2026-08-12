@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
@@ -26,6 +27,8 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -197,6 +200,7 @@ type productionPublicationHarness struct {
 	invocation                domain.InvocationID
 	recipeReadTimeout         time.Duration
 	declaration               *domain.WorkUnitDeclaration
+	judgments                 *inference.Client
 }
 
 func newProductionPublicationHarness(t *testing.T, resultHead string) *productionPublicationHarness {
@@ -600,6 +604,9 @@ func (p *productionPublicationHarness) newEngineForMode(
 				BaseRef: "main", BaseSHA: p.baseSHA,
 			}, nil
 		}),
+	}
+	if p.judgments != nil {
+		options = append(options, engine.WithInference(p.judgments))
 	}
 	if withPublication {
 		reviewRecovery := seams.reviewRecovery
@@ -1279,6 +1286,72 @@ func TestProductionReviewFindingsEscalateWithoutReady(t *testing.T) {
 		}
 		if item.Type != domain.AttentionReviewDiminishing || item.PRHeadSHA != p.replay.HeadSHA {
 			t.Fatalf("review attention = %#v", item)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductionClassifierPersistsAnnotationAndEscalatesLowConfidenceP1(t *testing.T) {
+	p := newProductionPublicationHarness(t, "")
+	driver := inferencefake.New()
+	driver.Script(inference.ClassifierSiteID, inferencefake.Script{Response: inference.Response{
+		Output:       []byte(`{"materiality":"low","confidence":"low","note":"ambiguous scope"}`),
+		ComputeUnits: 3,
+	}})
+	advisoryStore, err := advisory.Open(
+		filepath.Join(t.TempDir(), "advisory.json"), 20, 16<<10,
+		advisory.WithClock(func() time.Time { return p.now }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := inference.Limits{Calls: 10, ComputeUnits: 100_000, AttentionItems: 10, Starvation: time.Hour}
+	p.judgments, err = inference.New(inference.Config{
+		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
+		Binding:   inference.Binding{Provider: "fake", Model: "classifier", Driver: driver},
+		Sites: []inference.Site{inference.ClassifierSite(inference.Budget{
+			Window: time.Hour, Site: limits, Project: limits, Global: limits,
+			MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,
+		})},
+		Advisory: advisoryStore, Now: func() time.Time { return p.now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	reviewID := engine.ProductionReviewInvocationID(p.runID, 1)
+	p.reviewer.Script(reviewID, fake.ReviewScript{Outcome: fake.OutcomeComplete, Result: exec.ReviewResult{
+		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+		Provider: "openai", ModelConfiguration: "codex/test", CostOwner: "test",
+		CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("classified findings")),
+		Findings: []domain.Finding{{
+			ID: "review-finding-classified", RunID: p.runID, Source: "codex_local", Severity: "P1",
+			Location: "daemon/main.go:12", Message: "ambiguous", RawText: "ambiguous", CreatedAt: p.now,
+		}},
+	}})
+	p.startAndRecordExport(t)
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		classification, err := tx.GetClassification(p.ctx, "review-finding-classified", 1)
+		if err != nil {
+			return err
+		}
+		if classification.Materiality != "low" || classification.Confidence != "low" ||
+			!strings.HasPrefix(classification.Note, "producer=fake/classifier; ") {
+			t.Fatalf("classification = %#v", classification)
+		}
+		item, err := tx.GetAttentionItem(p.ctx, domain.ItemID(fmt.Sprintf("production-review-%s-1", p.runID)))
+		if err != nil {
+			return err
+		}
+		if item.Type != domain.AttentionReviewDispute ||
+			item.Offers(domain.ActionAdjudicate) ||
+			!item.Offers(domain.ActionDiscuss) || !item.Offers(domain.ActionStop) {
+			t.Fatalf("classifier ceiling attention = %#v", item)
 		}
 		return nil
 	}); err != nil {
