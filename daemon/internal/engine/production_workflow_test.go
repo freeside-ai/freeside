@@ -29,6 +29,44 @@ func productionEntry(payload string) store.QueueEntry {
 	}
 }
 
+type transientCleanupReviewSource struct {
+	cause        error
+	inspectID    domain.InvocationID
+	requestCalls int
+}
+
+func (s *transientCleanupReviewSource) RequestReview(
+	context.Context, domain.InvocationID, exec.ReviewRequest,
+) error {
+	s.requestCalls++
+	return errors.New("unexpected review request")
+}
+
+func (s *transientCleanupReviewSource) Inspect(
+	_ context.Context, id domain.InvocationID,
+) (exec.Status, error) {
+	s.inspectID = id
+	return "", &exec.ReviewSourceFailure{Class: domain.ReviewFailureTransient, Err: s.cause}
+}
+
+func (*transientCleanupReviewSource) Poll(
+	context.Context, domain.InvocationID,
+) (exec.ReviewResult, error) {
+	return exec.ReviewResult{}, errors.New("unexpected review poll")
+}
+
+func (*transientCleanupReviewSource) Verify(
+	context.Context, domain.InvocationID, string, string,
+) error {
+	return errors.New("unexpected review verification")
+}
+
+func (*transientCleanupReviewSource) VerifyRequestAuthority(
+	context.Context, domain.InvocationID, domain.Digest,
+) error {
+	return nil
+}
+
 func TestNormalizeTerminalReviewFailurePreservesDeclaredClass(t *testing.T) {
 	for _, class := range []domain.ReviewFailureClass{
 		domain.ReviewFailureTransient,
@@ -97,6 +135,98 @@ func TestProductionReviewTransientSourceFailureSchedulesSameInvocationRetry(t *t
 		}
 		if _, err := tx.GetReviewFailure(ctx, id); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("transient materialization recorded terminal failure: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProductionReviewTransientCleanupFailureSchedulesSameInvocationRetry(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	runID := domain.RunID("run-review-cleanup-retry")
+	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
+		Key: "review.hard_round_limit", Value: "25",
+		Provenance: domain.KeyProvenance{
+			Source: domain.ProvenancePreset, Digest: "sha256:review-policy",
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := domain.Run{
+		ID: runID, ProjectID: "project-1",
+		SpecDigest: "sha256:spec", PolicyDigest: policy.Digest,
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		return tx.PutResolvedPolicy(ctx, policy)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	cleanupErr := errors.New("runtime cleanup temporarily unavailable")
+	source := &transientCleanupReviewSource{cause: cleanupErr}
+	configDigest := domain.Digest("sha256:" + strings.Repeat("c", 64))
+	w := &productionPublicationWorkflow{
+		store: st, now: func() time.Time { return now }, workDir: t.TempDir(),
+		reviewSource: source, reviewConfigurationDigest: configDigest,
+		reviewRetryAfter: make(map[domain.RunID]time.Time),
+	}
+	_, instructions, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseSHA := strings.Repeat("a", 40)
+	headSHA := strings.Repeat("b", 40)
+	state, err := w.reconcileReviewGate(
+		ctx,
+		productionPublicationTask{RunID: runID, HeadSHA: headSHA},
+		productionBinding{
+			admission: domain.ExecutionAdmission{Base: domain.BaseRevision{
+				Repo: "owner/repo", RepositoryID: 42, BaseRef: "main", BaseSHA: baseSHA,
+			}},
+			profile: domain.AutomationTrustProfile{Review: domain.ReviewSettings{
+				Mode: domain.ReviewFreesideInvoked, ConfigDigest: configDigest,
+			}},
+		},
+		productionVerificationCheckpoint{Authorization: domain.CandidateAuthorization{
+			VerificationRecipeDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
+			EvidenceSnapshotDigest:   domain.Digest("sha256:" + strings.Repeat("e", 64)),
+			VerificationOutcome:      domain.VerificationPassed,
+		}},
+		nil,
+		instructions,
+	)
+	if err != nil || state != productionReviewPending {
+		t.Fatalf("cleanup retry routing = %q, %v", state, err)
+	}
+	id := ProductionReviewInvocationID(runID, 1)
+	if source.inspectID != id || source.requestCalls != 0 {
+		t.Fatalf("cleanup retry invocation = %q, requests=%d; want %q, 0",
+			source.inspectID, source.requestCalls, id)
+	}
+	if got := w.reviewRetryAfter[runID]; !got.Equal(now.Add(reviewRetryDelay(1))) {
+		t.Fatalf("in-memory cleanup retry deadline = %v", got)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		retry, err := tx.GetReviewRetry(ctx, runID)
+		if err != nil {
+			return err
+		}
+		if retry.InvocationID != id || retry.Round != 1 || retry.BaseSHA != baseSHA ||
+			retry.HeadSHA != headSHA || retry.ObservedAt != now || !strings.Contains(retry.Reason, cleanupErr.Error()) {
+			t.Fatalf("durable cleanup retry = %#v", retry)
+		}
+		if _, err := tx.GetReviewFailure(ctx, id); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("transient cleanup recorded terminal failure: %v", err)
 		}
 		return nil
 	}); err != nil {

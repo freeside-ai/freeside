@@ -39,6 +39,7 @@ type fakeCodexReviewJournal struct {
 	requests            map[string]exec.ReviewRequest
 	outcomes            map[string]CodexReviewSourceOutcome
 	ready               map[string]bool
+	readyMarkCalls      map[string]int
 	failResourceMark    error
 	failStarting        error
 	failStarted         error
@@ -112,7 +113,11 @@ func (j *fakeCodexReviewJournal) MarkCodexReviewOutcomeReady(
 	if j.ready == nil {
 		j.ready = make(map[string]bool)
 	}
+	if j.readyMarkCalls == nil {
+		j.readyMarkCalls = make(map[string]int)
+	}
 	j.ready[id] = true
+	j.readyMarkCalls[id]++
 	return nil
 }
 
