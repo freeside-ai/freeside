@@ -55,6 +55,20 @@ import Testing
         #expect(rows.contains(.init(label: "Proposal", value: digest)))
     }
 
+    @Test func runSubjectLeadsWithProjectAndDemotesTheRunID() {
+        let item = AttentionFixtures.fixture(type: .execution_failure).item
+
+        #expect(
+            AttentionDisplay.subject(item)
+                == .init(lead: "proj-1", identifier: "run-execution_failure"))
+    }
+
+    @Test func readableUnscopedSubjectRendersOnlyOnce() {
+        let item = AttentionFixtures.fixture(type: .system_health).item
+
+        #expect(AttentionDisplay.subject(item) == .init(lead: "system", identifier: nil))
+    }
+
     @Test func reviewRecoveryBindingRowsExposeEveryAuthorityCoordinate() {
         let item = AttentionFixtures.fixture(type: .review_contradiction).item
 

@@ -10,6 +10,11 @@ enum AttentionDisplay {
         let value: String
     }
 
+    struct SubjectLine: Equatable {
+        let lead: String
+        let identifier: String?
+    }
+
     static func title(_ type: Components.Schemas.AttentionType) -> String {
         switch type {
         case .spec_approval: return "Spec approval"
@@ -98,12 +103,12 @@ enum AttentionDisplay {
         }
     }
 
-    static func subject(_ subject: Components.Schemas.Subject) -> String {
-        switch subject {
+    static func subject(_ item: Components.Schemas.AttentionItem) -> SubjectLine {
+        switch item.subject {
         case .run(let run), .proposal_batch(let run):
-            return run.subject_id
+            return SubjectLine(lead: item.project_id, identifier: run.subject_id)
         case .project(let unscoped), .system(let unscoped):
-            return unscoped.subject_id
+            return SubjectLine(lead: unscoped.subject_id, identifier: nil)
         }
     }
 

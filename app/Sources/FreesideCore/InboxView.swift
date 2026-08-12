@@ -73,6 +73,7 @@ struct InboxRowView: View {
     let item: Components.Schemas.AttentionItem
 
     var body: some View {
+        let subject = AttentionDisplay.subject(item)
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
                 Text(AttentionDisplay.title(item._type))
@@ -85,9 +86,16 @@ struct InboxRowView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
             HStack(spacing: 8) {
-                Text(AttentionDisplay.subject(item.subject))
+                Text(subject.lead)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
+                if let identifier = subject.identifier {
+                    Text(identifier)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 if item.status != .open {
                     StatusBadge(status: item.status)
                 }
