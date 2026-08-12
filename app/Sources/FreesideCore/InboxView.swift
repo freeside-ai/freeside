@@ -1,7 +1,7 @@
 import FreesideAPI
 import SwiftUI
 
-/// The inbox list: every attention item as a row, open items first.
+/// The attention inbox, scoped to open work by default.
 struct InboxView: View {
     let store: InboxStore
     @Binding var selection: String?
@@ -18,20 +18,39 @@ struct InboxView: View {
                     Text(message)
                 }
             case .loaded:
-                if store.rows.isEmpty {
-                    ContentUnavailableView(
-                        "Freeside",
-                        systemImage: "checklist",
-                        description: Text("Attention items will appear here.")
-                    )
-                } else {
-                    List(store.rows, id: \.item.id, selection: $selection) { snapshot in
-                        InboxRowView(item: snapshot.item)
+                VStack(spacing: 0) {
+                    Picker("Scope", selection: Bindable(store).scope) {
+                        ForEach(InboxStore.Scope.allCases) { scope in
+                            Text(scope.label).tag(scope)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+
+                    if store.rows.isEmpty {
+                        ContentUnavailableView(
+                            "No \(store.scope.label.lowercased()) items",
+                            systemImage: "checklist",
+                            description: Text("Attention items in this scope will appear here.")
+                        )
+                    } else {
+                        List(store.rows, id: \.item.id, selection: $selection) { snapshot in
+                            InboxRowView(item: snapshot.item)
+                        }
                     }
                 }
             }
         }
         .navigationTitle("Inbox")
+        .onChange(of: store.scope) { repairSelection() }
+        .onChange(of: store.rows.map(\.item.id)) { repairSelection() }
+    }
+
+    private func repairSelection() {
+        if let selection, !store.rows.contains(where: { $0.item.id == selection }) {
+            self.selection = nil
+        }
     }
 }
 

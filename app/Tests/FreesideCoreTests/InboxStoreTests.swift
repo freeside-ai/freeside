@@ -27,12 +27,16 @@ import Testing
 
     @Test func rowsSortOpenItemsFirstThenPriority() async {
         let store = await makeStore(server: MockServer())
+        store.scope = .all
         guard var resolved = store.snapshotsByID["item-execution_failure"] else {
             Issue.record("missing seeded snapshot")
             return
         }
         resolved.item.status = .resolved
-        store.apply(resolved)
+        let snapshots = store.snapshotsByID.values.map {
+            $0.item.id == resolved.item.id ? resolved : $0
+        }
+        store.replaceAll(with: snapshots)
 
         let statuses = store.rows.map(\.item.status)
         let firstNonOpen = statuses.firstIndex { $0 != .open } ?? statuses.count
@@ -41,6 +45,48 @@ import Testing
         // The urgent item left the open set, so the high-priority one leads.
         #expect(store.rows.first?.item.priority == .high)
         #expect(store.rows.last?.item.id == "item-execution_failure")
+    }
+
+    @Test func scopeDefaultsToOpenAndResolvedItemsRemainFindable() async throws {
+        let store = await makeStore(server: MockServer())
+        var resolved = try #require(store.snapshotsByID["item-execution_failure"])
+        resolved.item.status = .resolved
+        var dismissed = try #require(store.snapshotsByID["item-agent_question"])
+        dismissed.item.status = .dismissed
+        let snapshots = store.snapshotsByID.values.map { snapshot in
+            switch snapshot.item.id {
+            case resolved.item.id: resolved
+            case dismissed.item.id: dismissed
+            default: snapshot
+            }
+        }
+        store.replaceAll(with: snapshots)
+
+        #expect(store.scope == .open)
+        #expect(!store.rows.contains { $0.item.status != .open })
+
+        store.scope = .resolved
+        #expect(Set(store.rows.map(\.item.id)) == [resolved.item.id, dismissed.item.id])
+
+        store.scope = .all
+        #expect(store.rows.count == snapshots.count)
+    }
+
+    @Test func locallyResolvedItemStaysOpenUntilTheNextFullRebuild() async throws {
+        let store = await makeStore(server: MockServer())
+        var resolved = try #require(store.snapshotsByID["item-spec_approval"])
+        resolved.item.status = .resolved
+
+        store.apply(resolved)
+        #expect(store.rows.contains { $0.item.id == resolved.item.id })
+        store.scope = .resolved
+        #expect(!store.rows.contains { $0.item.id == resolved.item.id })
+
+        store.replaceAll(with: Array(store.snapshotsByID.values))
+        store.scope = .open
+        #expect(!store.rows.contains { $0.item.id == resolved.item.id })
+        store.scope = .resolved
+        #expect(store.rows.contains { $0.item.id == resolved.item.id })
     }
 
     @Test func clearReleasesOnlyTheSettledCommand() async {
