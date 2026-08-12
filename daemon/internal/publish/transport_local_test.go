@@ -68,6 +68,13 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 		"-c", "user.email=fixture@example.invalid",
 		"-c", "commit.gpgsign=false",
 		"-c", "protocol.file.allow=always",
+		// Modern git (~2.46+) spawns a detached `git maintenance run
+		// --auto --quiet --detach` child on commit; it keeps touching
+		// the repo's .git after the foreground command returns, racing
+		// any snapshot of the fixture. Suppress the spawn site and belt
+		// it with gc.auto=0 so no fixture ever hosts a background writer.
+		"-c", "maintenance.auto=false",
+		"-c", "gc.auto=0",
 	}
 	cmd := exec.Command("git", append(base, args...)...) //nolint:gosec // G204: test-authored fixture arguments
 	cmd.Env = scrubbedGitEnv()
