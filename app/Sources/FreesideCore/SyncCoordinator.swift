@@ -208,6 +208,12 @@ public final class SyncCoordinator {
                 runs = snapshots
                 if let revision = snapshots.map(\.as_of_revision).max() {
                     observe(revision: revision)
+                } else {
+                    // An empty collection has no row carrying the read's
+                    // revision. Confirm it through the revision endpoint so
+                    // the client never keeps a stale full cache fresh merely
+                    // because no run exists to advance the partial cursor.
+                    await heartbeat()
                 }
                 persist()
             case .undocumented(let statusCode, _):

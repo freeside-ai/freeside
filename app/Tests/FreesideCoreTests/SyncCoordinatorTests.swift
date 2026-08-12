@@ -84,6 +84,21 @@ private final class FailingCacheStore: CacheStore, @unchecked Sendable {
         #expect(converged.lastFullSnapshotRevision == converged.highestObservedServerRevision)
     }
 
+    @Test func emptyRunListBootstrapsAfterTheServerRevisionAdvances() async throws {
+        let server = MockServer(runs: [])
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let before = try #require(coordinator.cursors)
+
+        await server.advance(itemID: AttentionFixtures.defaultInbox()[0].item.id)
+        await coordinator.refreshRuns()
+
+        let after = try #require(coordinator.cursors)
+        #expect(after.lastFullSnapshotRevision > before.lastFullSnapshotRevision)
+        #expect(after.highestObservedServerRevision > before.highestObservedServerRevision)
+        #expect(coordinator.store.freshness == .fresh)
+    }
+
     @Test func timelineNotFoundStopsLoading() async {
         let server = MockServer(timelines: [])
         let coordinator = makeCoordinator(server: server)
