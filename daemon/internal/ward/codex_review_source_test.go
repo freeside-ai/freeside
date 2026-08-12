@@ -853,8 +853,13 @@ func TestCodexReviewSourceRunsWardLifecycleAndCleansBeforePoll(t *testing.T) {
 		return false, nil
 	}
 	status, err := restarted.Inspect(ctx, id)
-	if err != nil || status != exec.StatusPending {
+	var failure *exec.ReviewSourceFailure
+	if status != "" || !errors.As(err, &failure) ||
+		failure.Class != domain.ReviewFailureTransient || !strings.Contains(err.Error(), cleanupFailure.Error()) {
 		t.Fatalf("transient cleanup status = %q, %v", status, err)
+	}
+	if _, ready, getErr := journal.GetCodexReviewOutcome(ctx, string(id)); getErr != nil || ready {
+		t.Fatalf("outcome after transient cleanup = ready %v, %v", ready, getErr)
 	}
 	if _, err := restarted.Poll(ctx, id); !errors.Is(err, exec.ErrResultNotReady) {
 		t.Fatalf("poll after transient cleanup = %v", err)
@@ -873,6 +878,9 @@ func TestCodexReviewSourceRunsWardLifecycleAndCleansBeforePoll(t *testing.T) {
 	}
 	if err := restarted.Verify(ctx, id, request.BaseSHA, request.HeadSHA); err != nil {
 		t.Fatal(err)
+	}
+	if journal.readyMarkCalls[string(id)] != 1 {
+		t.Fatalf("outcome ready marks = %d, want 1", journal.readyMarkCalls[string(id)])
 	}
 	containers, _ := fx.rt.ListContainers(ctx)
 	volumes, _ := fx.rt.ListVolumes(ctx)
@@ -1021,6 +1029,15 @@ func TestCodexReviewSourcePersistsMalformedRawOutputAndCleans(t *testing.T) {
 			for attempts := 0; err == nil && status != exec.StatusFailed && attempts < 5; attempts++ {
 				status, err = source.Inspect(ctx, id)
 			}
+			var failure *exec.ReviewSourceFailure
+			if status != "" || !errors.As(err, &failure) ||
+				failure.Class != domain.ReviewFailureTransient {
+				t.Fatalf("malformed raw output cleanup retry = %q, %v", status, err)
+			}
+			if _, ready, getErr := journal.GetCodexReviewOutcome(ctx, string(id)); getErr != nil || ready {
+				t.Fatalf("malformed raw output before cleanup = ready %v, %v", ready, getErr)
+			}
+			status, err = source.Inspect(ctx, id)
 			if err != nil || status != exec.StatusFailed {
 				t.Fatalf("malformed raw output status = %q, %v", status, err)
 			}
@@ -1133,9 +1150,14 @@ func TestCodexReviewSourceCleansBeforeRejectingMalformedOutcome(t *testing.T) {
 	journal.failGetOutcome = errors.Join(
 		ErrCodexReviewOutcomeRejected, errors.New("decode persisted outcome"))
 	var failure *exec.ReviewSourceFailure
-	if status, err := source.Inspect(ctx, id); err != nil || status != exec.StatusPending {
+	if status, err := source.Inspect(ctx, id); status != "" ||
+		!errors.As(err, &failure) || failure.Class != domain.ReviewFailureTransient {
 		t.Fatalf("malformed outcome cleanup retry = %q, %v", status, err)
 	}
+	if journal.ready[string(id)] {
+		t.Fatal("malformed outcome became ready before cleanup succeeded")
+	}
+	failure = nil
 	if _, err := source.Inspect(ctx, id); !errors.As(err, &failure) ||
 		failure.Class != domain.ReviewFailureContradiction ||
 		!errors.Is(failure.Err, ErrCodexReviewOutcomeRejected) {
@@ -1428,49 +1450,95 @@ func TestCodexReviewSourceRejectedPreparingRequestAbortsWhenBindingExists(t *tes
 }
 
 func TestCodexReviewSourceInspectAbortsInvocationForInvalidPersistedRequest(t *testing.T) {
-	ctx := context.Background()
-	fx := newHandoffFixture(t)
-	seedSpec := fx.seed(t)
-	backend := fx.codexReviewLifecycle(t)
-	cfg, requestSpec := testCodexReview(t)
-	journal := &fakeCodexReviewJournal{}
-	sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
-	source, err := NewCodexReviewSource(sourceConfig)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id := domain.InvocationID("review-run-rejected-5")
-	request := exec.ReviewRequest{
-		RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
-		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
-		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
-		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
-		RequestedAt: codexReviewEpoch.Add(-time.Minute),
-	}
-	if err := source.RequestReview(ctx, id, request); err != nil {
-		t.Fatal(err)
-	}
-	// Model the production adapter rejecting a corrupt decoded row before it can
-	// return a ReviewRequest. Inspect must route that sentinel through the same
-	// authenticated teardown used for a validly decoded authority mismatch.
-	journal.failGetRequest = errors.Join(
-		ErrCodexReviewRequestRejected, errors.New("decode persisted request"))
-	var failure *exec.ReviewSourceFailure
-	if _, err := source.Inspect(ctx, id); !errors.As(err, &failure) ||
-		failure.Class != domain.ReviewFailureContradiction {
-		t.Fatalf("inspect of invalid persisted request = %v", err)
-	}
-	outcome, ready, err := journal.GetCodexReviewOutcome(ctx, string(id))
-	if err != nil || !ready || !outcome.AbortRequired ||
-		outcome.FailureClass != domain.ReviewFailureContradiction {
-		t.Fatalf("inspect rejection outcome = %#v, ready=%v, %v", outcome, ready, err)
-	}
-	containers, _ := fx.rt.ListContainers(ctx)
-	volumes, _ := fx.rt.ListVolumes(ctx)
-	networks, _ := fx.rt.ListNetworks(ctx)
-	if len(containers) != 0 || len(volumes) != 0 || len(networks) != 0 {
-		t.Fatalf("inspect-rejected topology leaked: containers=%v volumes=%v networks=%v",
-			containers, volumes, networks)
+	for _, tc := range []struct {
+		name   string
+		reject func(*fakeCodexReviewJournal, domain.InvocationID, exec.ReviewRequest)
+	}{
+		{
+			name: "rejected decoded row",
+			reject: func(journal *fakeCodexReviewJournal, _ domain.InvocationID, _ exec.ReviewRequest) {
+				journal.failGetRequest = errors.Join(
+					ErrCodexReviewRequestRejected, errors.New("decode persisted request"))
+			},
+		},
+		{
+			name: "invalid decoded request",
+			reject: func(journal *fakeCodexReviewJournal, id domain.InvocationID, request exec.ReviewRequest) {
+				request.HeadSHA = ""
+				journal.requests[string(id)] = request
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			fx := newHandoffFixture(t)
+			seedSpec := fx.seed(t)
+			backend := fx.codexReviewLifecycle(t)
+			cfg, requestSpec := testCodexReview(t)
+			journal := &fakeCodexReviewJournal{}
+			sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
+			source, err := NewCodexReviewSource(sourceConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := domain.InvocationID("review-run-rejected-5")
+			request := exec.ReviewRequest{
+				RunID: "run-rejected", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+				RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
+				BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
+				Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(),
+				RequestedAt: codexReviewEpoch.Add(-time.Minute),
+			}
+			if err := source.RequestReview(ctx, id, request); err != nil {
+				t.Fatal(err)
+			}
+			tc.reject(journal, id, request)
+			intent, err := journal.GetCodexReviewIntent(ctx, string(id))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cleanupFailure := errors.New("runtime cleanup temporarily unavailable")
+			failedCleanup := false
+			fx.rt.onDeleteContainer = func(container string) (bool, error) {
+				if container == intent.ReviewContainer && !failedCleanup {
+					failedCleanup = true
+					return true, cleanupFailure
+				}
+				return false, nil
+			}
+			var failure *exec.ReviewSourceFailure
+			status, err := source.Inspect(ctx, id)
+			if status != "" || !errors.As(err, &failure) ||
+				failure.Class != domain.ReviewFailureTransient || !strings.Contains(err.Error(), cleanupFailure.Error()) {
+				t.Fatalf("inspect rejection cleanup retry = %q, %v", status, err)
+			}
+			outcome, ready, err := journal.GetCodexReviewOutcome(ctx, string(id))
+			if err != nil || ready || !outcome.AbortRequired ||
+				outcome.FailureClass != domain.ReviewFailureContradiction {
+				t.Fatalf("inspect rejection outcome before retry = %#v, ready=%v, %v", outcome, ready, err)
+			}
+			fx.rt.onDeleteContainer = nil
+			if status, err = source.Inspect(ctx, id); err != nil || status != exec.StatusFailed {
+				t.Fatalf("inspect of invalid persisted request = %q, %v", status, err)
+			}
+			failure = nil
+			if _, err := source.Poll(ctx, id); !errors.As(err, &failure) ||
+				failure.Class != domain.ReviewFailureContradiction {
+				t.Fatalf("poll of invalid persisted request = %v", err)
+			}
+			outcome, ready, err = journal.GetCodexReviewOutcome(ctx, string(id))
+			if err != nil || !ready || !outcome.AbortRequired ||
+				outcome.FailureClass != domain.ReviewFailureContradiction {
+				t.Fatalf("inspect rejection outcome = %#v, ready=%v, %v", outcome, ready, err)
+			}
+			containers, _ := fx.rt.ListContainers(ctx)
+			volumes, _ := fx.rt.ListVolumes(ctx)
+			networks, _ := fx.rt.ListNetworks(ctx)
+			if len(containers) != 0 || len(volumes) != 0 || len(networks) != 0 {
+				t.Fatalf("inspect-rejected topology leaked: containers=%v volumes=%v networks=%v",
+					containers, volumes, networks)
+			}
+		})
 	}
 }
 
@@ -1877,7 +1945,8 @@ func TestCodexReviewSourceRestartAbortsRunningInvocationWithLostProxy(t *testing
 		return false, nil
 	}
 	status, err := restarted.Inspect(ctx, id)
-	if err != nil || status != exec.StatusPending {
+	var failure *exec.ReviewSourceFailure
+	if status != "" || !errors.As(err, &failure) || failure.Class != domain.ReviewFailureTransient {
 		t.Fatalf("restart transient abort = %q, %v", status, err)
 	}
 	if _, err := restarted.Poll(ctx, id); !errors.Is(err, exec.ErrResultNotReady) {
@@ -1889,7 +1958,7 @@ func TestCodexReviewSourceRestartAbortsRunningInvocationWithLostProxy(t *testing
 		t.Fatalf("restart inspect = %q, %v", status, err)
 	}
 	_, err = restarted.Poll(ctx, id)
-	var failure *exec.ReviewSourceFailure
+	failure = nil
 	if !errors.As(err, &failure) || failure.Class != domain.ReviewFailureTransient {
 		t.Fatalf("restart poll failure = %v", err)
 	}
@@ -2260,7 +2329,8 @@ func TestCodexReviewSourceClassifiesOutcomeWritesAndCleanup(t *testing.T) {
 	}
 
 	status, err := codexReviewCleanupStatus(errors.New("runtime temporarily unavailable"))
-	if err != nil || status != exec.StatusPending {
+	failure = nil
+	if status != "" || !errors.As(err, &failure) || failure.Class != domain.ReviewFailureTransient {
 		t.Fatalf("operational cleanup = %q, %v", status, err)
 	}
 	conformanceErr := fmt.Errorf("foreign cleanup topology: %w", ErrConformance)

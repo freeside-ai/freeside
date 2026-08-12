@@ -545,9 +545,6 @@ func (s *CodexReviewSource) Inspect(
 	if err != nil {
 		if errors.Is(err, ErrCodexReviewRequestRejected) {
 			rejectErr := s.rejectPersistedRequest(ctx, id, err)
-			if exec.ClassifyReviewSourceFailure(rejectErr) == domain.ReviewFailureTransient {
-				return exec.StatusPending, nil
-			}
 			return "", rejectErr
 		}
 		if !errors.Is(err, exec.ErrUnknownInvocation) {
@@ -558,9 +555,6 @@ func (s *CodexReviewSource) Inspect(
 	if err := request.Validate(); err != nil {
 		rejectErr := s.rejectPersistedRequest(ctx, id, err)
 		if rejectErr != nil {
-			if exec.ClassifyReviewSourceFailure(rejectErr) == domain.ReviewFailureTransient {
-				return exec.StatusPending, nil
-			}
 			return "", rejectErr
 		}
 	}
@@ -657,9 +651,6 @@ func codexReviewOutcomeWriteFailure(err error) error {
 
 func codexReviewCleanupStatus(err error) (exec.Status, error) {
 	class := classifyCodexObservationFailure(err)
-	if class == domain.ReviewFailureTransient {
-		return exec.StatusPending, nil
-	}
 	return "", &exec.ReviewSourceFailure{Class: class, Err: err}
 }
 
@@ -1029,9 +1020,6 @@ func (s *CodexReviewSource) rejectedOutcomeStatus(
 	ctx context.Context, id domain.InvocationID, cause error,
 ) (exec.Status, error) {
 	err := s.rejectPersistedOutcome(ctx, id, cause)
-	if exec.ClassifyReviewSourceFailure(err) == domain.ReviewFailureTransient {
-		return exec.StatusPending, nil
-	}
 	return "", err
 }
 
