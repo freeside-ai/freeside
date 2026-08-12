@@ -119,11 +119,18 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			}
 		}
 		for _, entry := range pendingElaboration {
-			request, err := decodeElaborationRequest(entry)
+			request, binding, err := e.loadElaborationBinding(ctx, entry)
 			if err != nil {
+				quarantined, quarantineErr := e.quarantinePendingElaborationMarker(ctx, entry, err)
+				if quarantineErr != nil {
+					return 0, quarantineErr
+				}
+				if quarantined {
+					continue
+				}
 				return 0, err
 			}
-			if err := e.observeRunHold(ctx, request.ElaborationRunID, request.InvocationID, holdReason); err != nil {
+			if err := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, holdReason); err != nil {
 				return 0, err
 			}
 		}
@@ -165,7 +172,34 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		}
 		request, binding, err := e.loadElaborationBinding(ctx, entry)
 		if err != nil {
+			quarantined, quarantineErr := e.quarantinePendingElaborationMarker(ctx, entry, err)
+			if quarantineErr != nil {
+				return started, quarantineErr
+			}
+			if quarantined {
+				continue
+			}
 			return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
+		}
+		if err := releaseProductionQuarantine(
+			ctx, e.store, e.signet, elaborationMarkerQuarantinePrefix, binding.run.ID,
+		); err != nil {
+			return started, err
+		}
+		// Submission records durable intent before a daemon composition is
+		// available to materialize it. Classify a permanent source-input
+		// refusal here, before recording an attempt, so a valid submission
+		// cannot remain pending forever when the elaborator cannot carry it.
+		if !attemptRecorded(binding.run, request.InvocationID) {
+			if err := e.validateElaborationInvocationDelivery(ctx, binding.run, binding.invocation); err != nil {
+				if errors.Is(err, ErrElaborationInputUndeliverable) {
+					if err := e.recordElaborationFailure(ctx, binding.run, request, exec.StatusFailed, err.Error()); err != nil {
+						return started, err
+					}
+					continue
+				}
+				return started, err
+			}
 		}
 		if attemptRecorded(binding.run, request.InvocationID) {
 			var admission domain.ExecutionAdmission
@@ -174,18 +208,44 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 				admission, err = tx.GetExecutionAdmissionRecord(ctx, request.InvocationID)
 				return err
 			}); err != nil {
+				if errors.Is(err, store.ErrNotFound) {
+					cause := fmt.Errorf("%w: elaboration admission is missing", errElaborationMarkerUnreadable)
+					quarantined, quarantineErr := e.quarantinePendingElaborationMarker(ctx, entry, cause)
+					if quarantineErr != nil {
+						return started, quarantineErr
+					}
+					if quarantined {
+						continue
+					}
+				}
 				return started, fmt.Errorf("intent %q admission: %w", entry.IdempotencyKey, err)
 			}
 			if admission.EgressProfile != domain.EgressProviderOnly {
-				return started, fmt.Errorf("elaboration admission has egress %q: %w",
-					admission.EgressProfile, exec.ErrCapabilityRefused)
+				cause := fmt.Errorf("%w: elaboration admission has egress %q",
+					errElaborationMarkerUnreadable, admission.EgressProfile)
+				quarantined, quarantineErr := e.quarantinePendingElaborationMarker(ctx, entry, cause)
+				if quarantineErr != nil {
+					return started, quarantineErr
+				}
+				if quarantined {
+					continue
+				}
+				return started, cause
 			}
 		} else if e.admission == nil || e.admission.environment.EgressProfile != domain.EgressProviderOnly {
 			return started, fmt.Errorf("elaboration requires provider_only admission: %w", exec.ErrCapabilityRefused)
 		}
 		stage, ok := findElaborationStage(binding.run)
 		if !ok {
-			return started, fmt.Errorf("intent %q: elaboration stage missing", entry.IdempotencyKey)
+			cause := fmt.Errorf("%w: elaboration stage missing", errElaborationMarkerUnreadable)
+			quarantined, quarantineErr := e.quarantinePendingElaborationMarker(ctx, entry, cause)
+			if quarantineErr != nil {
+				return started, quarantineErr
+			}
+			if quarantined {
+				continue
+			}
+			return started, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, cause)
 		}
 		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
 		started += boolCount(startedNow)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -58,7 +59,7 @@ func (s *Service) validateCommandContent(command domain.Command) error {
 			return fmt.Errorf("action %q command id is %d bytes: %w",
 				command.Action, len(command.CommandID), domain.ErrClaimTextTooLarge)
 		}
-		if command.Message == "" {
+		if strings.TrimSpace(command.Message) == "" {
 			return fmt.Errorf("action %q: %w", command.Action, ErrMessageRequired)
 		}
 		if len(command.Message) > MaxRequestChangesMessageBytes {

@@ -237,9 +237,34 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 		t.Fatalf("prior artifact digests = %v, want [%s %s]",
 			got, prior.Digest, attachmentDigest)
 	}
-	if got := admission.StageInputs.ImageInputDigests; len(got) != 1 ||
-		got[0] != image.Digest {
+	if got := admission.StageInputs.ImageInputDigests; len(got) != 1 || got[0] != image.Digest {
 		t.Fatalf("image input digests = %v, want [%s]", got, image.Digest)
+	}
+	e.elaboration = &elaborationWorkflow{promptPackage: digest("7"), blobs: blobs}
+	elaborationInvocation, err := domain.NewAgentInvocation(
+		"inv-elaboration", nil, &conversationID, 1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	elaborationBinding := binding
+	elaborationBinding.run.ID = "elaboration-run"
+	elaborationBinding.invocation = elaborationInvocation
+	elaborationAdmission, admitted, err := e.admitAttempt(ctx, elaborationBinding, domain.Stage{
+		ID: elaborationStageID(elaborationBinding.run.ID), Name: elaborationStageName,
+	}, elaborationInvocation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !admitted || elaborationAdmission.StageInputs == nil {
+		t.Fatalf("elaboration admitted = %t, stage inputs = %v",
+			admitted, elaborationAdmission.StageInputs)
+	}
+	if got := elaborationAdmission.StageInputs.PriorArtifactDigests; len(got) != 0 {
+		t.Fatalf("elaboration prior artifacts include opaque conversation attachment: %v", got)
+	}
+	if got := elaborationAdmission.StageInputs.ImageInputDigests; len(got) != 0 {
+		t.Fatalf("elaboration image inputs claim unsupported attachment delivery: %v", got)
 	}
 	if admission.StageInputs.ConversationDigest == nil {
 		t.Fatal("conversation-bound admission has no conversation digest")

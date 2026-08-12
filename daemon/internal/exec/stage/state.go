@@ -59,7 +59,7 @@ type intent struct {
 	// recovery rebuilds the identical handoff spec.
 	Seed   string `json:"seed"`
 	Prompt string `json:"prompt"`
-	// Inputs are the three immutable bodies used to render Prompt. Their
+	// Inputs are the immutable bodies used to render Prompt. Their
 	// digests are re-checked against Spec on every reconstruction, so the
 	// exported state file cannot substitute a prompt or policy while the
 	// daemon is down.
@@ -94,25 +94,43 @@ type intent struct {
 }
 
 type durableInputs struct {
-	Specification []byte `json:"specification"`
-	PromptPackage []byte `json:"prompt_package"`
-	Policy        []byte `json:"policy"`
+	Specification           []byte   `json:"specification"`
+	PromptPackage           []byte   `json:"prompt_package"`
+	Policy                  []byte   `json:"policy"`
+	PriorArtifacts          [][]byte `json:"prior_artifacts,omitempty"`
+	PriorArtifactsPersisted bool     `json:"prior_artifacts_persisted,omitempty"`
 }
 
 func durableInputsFrom(inputs exec.StageInputs) durableInputs {
+	prior := inputs.PriorArtifacts()
+	priorBodies := make([][]byte, len(prior))
+	for i := range prior {
+		priorBodies[i] = prior[i].Bytes()
+	}
 	return durableInputs{
-		Specification: inputs.Specification().Bytes(),
-		PromptPackage: inputs.PromptPackage().Bytes(),
-		Policy:        inputs.Policy().Bytes(),
+		Specification:           inputs.Specification().Bytes(),
+		PromptPackage:           inputs.PromptPackage().Bytes(),
+		Policy:                  inputs.Policy().Bytes(),
+		PriorArtifacts:          priorBodies,
+		PriorArtifactsPersisted: true,
 	}
 }
 
 func providerPromptInputsFrom(inputs durableInputs) ProviderPromptInputs {
 	return ProviderPromptInputs{
-		Specification: slices.Clone(inputs.Specification),
-		PromptPackage: slices.Clone(inputs.PromptPackage),
-		Policy:        slices.Clone(inputs.Policy),
+		Specification:  slices.Clone(inputs.Specification),
+		PromptPackage:  slices.Clone(inputs.PromptPackage),
+		Policy:         slices.Clone(inputs.Policy),
+		PriorArtifacts: cloneBodies(inputs.PriorArtifacts),
 	}
+}
+
+func cloneBodies(in [][]byte) [][]byte {
+	out := make([][]byte, len(in))
+	for i := range in {
+		out[i] = slices.Clone(in[i])
+	}
+	return out
 }
 
 func providerHandoffInputFrom(in intent) ProviderHandoffInput {
@@ -470,6 +488,26 @@ func (d *Driver) regateWithCurrentPolicy(
 			return fmt.Errorf("%w: intent %s %s hashes to %s, admission names %s",
 				ErrUnsupportedStart, i.InvocationID, check.name, got, check.digest)
 		}
+	}
+	// Historical durable intents predate prior-artifact body persistence. The
+	// explicit marker lets them reproduce the old no-prior prompt without
+	// making removal of bodies from a new intent authenticate as history.
+	if i.Inputs.PriorArtifactsPersisted {
+		if len(i.Inputs.PriorArtifacts) != len(snapshot.PriorArtifactDigests) {
+			return fmt.Errorf("%w: intent %s materialized %d prior artifacts, admission names %d",
+				ErrUnsupportedStart, i.InvocationID, len(i.Inputs.PriorArtifacts), len(snapshot.PriorArtifactDigests))
+		}
+		for index, body := range i.Inputs.PriorArtifacts {
+			sum := sha256.Sum256(body)
+			got := domain.Digest(contentaddr.Format(sum[:]))
+			if got != snapshot.PriorArtifactDigests[index] {
+				return fmt.Errorf("%w: intent %s prior artifact %d hashes to %s, admission names %s",
+					ErrUnsupportedStart, i.InvocationID, index, got, snapshot.PriorArtifactDigests[index])
+			}
+		}
+	} else if i.Inputs.PriorArtifacts != nil {
+		return fmt.Errorf("%w: intent %s has unmarked prior artifact bodies",
+			ErrUnsupportedStart, i.InvocationID)
 	}
 	vendor := snapshot.VendorInstructions
 	if vendor == nil || vendor.Vendor != i.Instructions.Vendor {

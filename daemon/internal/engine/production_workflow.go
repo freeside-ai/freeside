@@ -67,6 +67,8 @@ const (
 	productionInvocationRequestVersion       = "freeside.production-invocation/v2"
 )
 
+var ErrImplementationRunReserved = errors.New("implementation run is reserved by elaboration")
+
 func productionStageID(runID domain.RunID) domain.StageID {
 	return domain.StageID("implement-" + string(runID))
 }
@@ -223,6 +225,19 @@ type ProductionRun struct {
 // A replay converges on the stored state; a retry whose fixed bindings
 // disagree with the stored run fails rather than retargeting it.
 func SubmitProductionRun(ctx context.Context, st *store.Store, spec ProductionRunSpec) (ProductionRun, error) {
+	return submitProductionRun(ctx, st, spec, nil)
+}
+
+// submitProductionRun is the single production intake transaction. Only the
+// authenticated elaboration approval path can supply a reservation grant;
+// external callers use SubmitProductionRun and therefore cannot bypass a
+// pre-approval implementation claim.
+func submitProductionRun(
+	ctx context.Context,
+	st *store.Store,
+	spec ProductionRunSpec,
+	elaborationGrant *elaborationRequest,
+) (ProductionRun, error) {
 	if st == nil {
 		return ProductionRun{}, errors.New("submit production run: nil store")
 	}
@@ -273,6 +288,9 @@ func SubmitProductionRun(ctx context.Context, st *store.Store, spec ProductionRu
 		runCreated bool
 	)
 	err = st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := authorizeProductionSubmission(ctx, tx, spec, elaborationGrant); err != nil {
+			return err
+		}
 		// The digests come from the registered artifacts, not the caller: a
 		// submission for bytes the store does not hold is refused, and the
 		// run's trusted configuration is bound to what was actually
@@ -518,6 +536,85 @@ func SubmitProductionRun(ctx context.Context, st *store.Store, spec ProductionRu
 		return ProductionRun{}, fmt.Errorf("submit production run %q: %w", spec.RunID, err)
 	}
 	return ProductionRun{Run: run, InvocationID: invocationID, StageID: stageID}, nil
+}
+
+func authorizeProductionSubmission(
+	ctx context.Context,
+	tx *store.WriteTx,
+	spec ProductionRunSpec,
+	grant *elaborationRequest,
+) error {
+	claim, err := tx.GetOutbox(ctx, elaborationImplementationClaimKey(spec.RunID))
+	if errors.Is(err, store.ErrNotFound) {
+		if grant != nil {
+			return fmt.Errorf("elaboration grant for unreserved implementation run %q: %w",
+				spec.RunID, domain.ErrParentKeyMismatch)
+		}
+		reserved, evidenceErr := hasElaborationReservationEvidence(ctx, &tx.ReadTx, spec.RunID)
+		if evidenceErr != nil {
+			return evidenceErr
+		}
+		if reserved {
+			return fmt.Errorf("implementation run %q has damaged elaboration reservation state: %w",
+				spec.RunID, ErrImplementationRunReserved)
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if grant == nil {
+		return fmt.Errorf("implementation run %q: %w", spec.RunID, ErrImplementationRunReserved)
+	}
+	if err := grant.validate(); err != nil {
+		return fmt.Errorf("authenticate implementation reservation: %w", err)
+	}
+	if err := authenticateElaborationRoot(ctx, &tx.ReadTx, *grant); err != nil {
+		return fmt.Errorf("authenticate implementation reservation: %w", err)
+	}
+	if claim.Kind != KindElaborationImplementationClaim || !claim.Dispatched() ||
+		grant.ImplementationRunID != spec.RunID || grant.ProjectID != spec.ProjectID ||
+		grant.PolicyArtifactID != spec.PolicyArtifactID || grant.Publication != spec.Publication ||
+		!sameElaborationWorkUnit(grant.WorkUnit, spec.WorkUnit) {
+		return fmt.Errorf("implementation reservation disagrees with production submission: %w",
+			domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+func hasElaborationReservationEvidence(
+	ctx context.Context, tx *store.ReadTx, implementationRunID domain.RunID,
+) (bool, error) {
+	elaborationRunID, err := ElaborationRunIDForImplementation(implementationRunID)
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.GetRun(ctx, elaborationRunID); err == nil {
+		return true, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return false, err
+	}
+	if _, err := tx.GetOutbox(ctx, string(elaborationInvocationID(elaborationRunID, 1))); err == nil {
+		return true, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return false, err
+	}
+	for _, list := range []func(context.Context, string) ([]store.QueueEntry, error){
+		tx.ListPendingOutbox,
+		tx.ListDispatchedOutbox,
+	} {
+		entries, err := list(ctx, KindElaborationInvocationRequested)
+		if err != nil {
+			return false, err
+		}
+		for _, entry := range entries {
+			request, err := decodeElaborationRequest(entry)
+			if err == nil && request.Iteration == 1 && request.ImplementationRunID == implementationRunID {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // ProductionInvocationBackupPayloadDigests validates a durable production
@@ -1555,6 +1652,9 @@ func confirmProductionQuarantineItem(
 func productionQuarantineNoticeFor(prefix, reason string) bool {
 	if prefix == productionTaskQuarantinePrefix {
 		return reason == productionQuarantineUnreadableTask
+	}
+	if prefix == elaborationMarkerQuarantinePrefix {
+		return reason == elaborationQuarantineUnreadable
 	}
 	return reason == productionQuarantineUnsupportedVersion ||
 		reason == productionQuarantineUnreadable
