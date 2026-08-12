@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 )
@@ -891,10 +892,49 @@ func TestGolden(t *testing.T) {
 		t.Fatal("golden completion fixture did not evaluate as completed")
 	}
 
+	// Label-intake occurrence fixtures (issue #720). The admitted occurrence
+	// derives its admission key from its own coordinates, so a valid fixture
+	// sets it from ProposalAdmissionKey rather than a hand-written literal.
+	intakeFreshOccurrence, err := domain.NewIntakeOccurrence("owner/repo", 42, 7, "freeside", 1, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intakeIssueSource := domain.ElaborationSource{
+		Kind:         domain.ElaborationSourceIssueSubject,
+		IssueSubject: &domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 42, IssueNumber: 7},
+	}
+	intakeSpecSource := domain.ElaborationSource{
+		Kind: domain.ElaborationSourceSpecArtifact, SpecArtifactID: "spec-art-1",
+	}
+	intakeAdmittedOccurrence := domain.IntakeOccurrence{
+		Repo: "owner/repo", RepositoryID: 42, IssueNumber: 7, Label: "freeside",
+		Ordinal: 2, State: domain.IntakeOccurrenceAbsent,
+		Admission: &domain.IntakeAdmission{
+			ProposalInstanceID: "proposal-1",
+			ProposalDigest:     domain.Digest(contentaddr.Sum([]byte("intake-proposal"))),
+			Subject: domain.IntakeSubjectBinding{
+				ProjectID: "proj-1", ImplementationRunID: "run-impl-1",
+				WorkUnitID:           domain.WorkUnitIDForRun("run-impl-1"),
+				PolicyArtifactID:     "policy-art-1",
+				PolicyArtifactDigest: domain.Digest(contentaddr.Sum([]byte("intake-resolved-policy"))),
+				ResolvedPolicyDigest: domain.Digest(contentaddr.Sum([]byte("intake-resolved-policy"))),
+				Source:               intakeIssueSource,
+			},
+		},
+		Refusal:      &domain.IntakeStartRefusal{Reason: domain.IntakeRefusalWIPCapExhausted, RecordedAt: ts},
+		Supersession: &domain.IntakeSupersession{Reason: domain.IntakeSupersededLabelRemoved, RecordedAt: ts},
+		RecordedAt:   ts,
+	}
+	intakeAdmittedOccurrence.Admission.AdmissionKey = intakeAdmittedOccurrence.ProposalAdmissionKey()
+
 	cases := []struct {
 		name  string
 		value any
 	}{
+		{"intake_occurrence", intakeFreshOccurrence},
+		{"intake_occurrence_admitted", intakeAdmittedOccurrence},
+		{"elaboration_source_spec", intakeSpecSource},
+		{"elaboration_source_issue", intakeIssueSource},
 		{"attention_item_base_freshness", freshItem},
 		{"attention_item_readiness_invalidation", invalidatedItem},
 		{"attention_item_identity_changed", identityInvalidatedItem},

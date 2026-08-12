@@ -1,0 +1,8 @@
+{
+  "kind": "issue_subject",
+  "issue_subject": {
+    "repo": "owner/repo",
+    "repository_id": 42,
+    "issue_number": 7
+  }
+}

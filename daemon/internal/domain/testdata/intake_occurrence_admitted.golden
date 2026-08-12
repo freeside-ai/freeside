@@ -1,0 +1,41 @@
+{
+  "repo": "owner/repo",
+  "repository_id": 42,
+  "issue_number": 7,
+  "label": "freeside",
+  "ordinal": 2,
+  "state": "absent",
+  "admission": {
+    "admission_key": {
+      "source": "upstream_event",
+      "upstream_event_id": "label-intake/42/7/freeside/2"
+    },
+    "proposal_instance_id": "proposal-1",
+    "proposal_digest": "sha256:287db3ea97dadc785853bd270b6fff0febf259bb809856dca869751a49f847d5",
+    "subject": {
+      "project_id": "proj-1",
+      "work_unit_id": "workunit-run-impl-1",
+      "implementation_run_id": "run-impl-1",
+      "policy_artifact_id": "policy-art-1",
+      "policy_artifact_digest": "sha256:214169d7fc1bae4fdabce21fe2bb7086cbb2785324d7774d1a51ae41b134e029",
+      "resolved_policy_digest": "sha256:214169d7fc1bae4fdabce21fe2bb7086cbb2785324d7774d1a51ae41b134e029",
+      "source": {
+        "kind": "issue_subject",
+        "issue_subject": {
+          "repo": "owner/repo",
+          "repository_id": 42,
+          "issue_number": 7
+        }
+      }
+    }
+  },
+  "refusal": {
+    "reason": "wip_cap_exhausted",
+    "recorded_at": "2026-01-02T03:04:05Z"
+  },
+  "supersession": {
+    "reason": "label_removed",
+    "recorded_at": "2026-01-02T03:04:05Z"
+  },
+  "recorded_at": "2026-01-02T03:04:05Z"
+}

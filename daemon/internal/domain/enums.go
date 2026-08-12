@@ -1202,3 +1202,118 @@ func (s RefreshStrategy) valid() bool {
 		return false
 	}
 }
+
+// IntakeOccurrenceState is the observed presence/lifecycle of one labeled-issue
+// intake occurrence (plan §5.12 label intake). present and absent are the
+// label's observed presence; closed is the issue's terminal close. The zero
+// value "" is invalid by design. Transitions are constrained by
+// CanTransitionTo: once absent (the label was observed gone) or closed the
+// occurrence never returns to present — a reappearing label is a new
+// occurrence, allocated under the next ordinal.
+type IntakeOccurrenceState string
+
+const (
+	IntakeOccurrencePresent IntakeOccurrenceState = "present"
+	IntakeOccurrenceAbsent  IntakeOccurrenceState = "absent"
+	IntakeOccurrenceClosed  IntakeOccurrenceState = "closed"
+)
+
+// AllIntakeOccurrenceStates is the single registration point for the states.
+var AllIntakeOccurrenceStates = []IntakeOccurrenceState{
+	IntakeOccurrencePresent, IntakeOccurrenceAbsent, IntakeOccurrenceClosed,
+}
+
+func (s IntakeOccurrenceState) valid() bool {
+	switch s {
+	case IntakeOccurrencePresent, IntakeOccurrenceAbsent, IntakeOccurrenceClosed:
+		return true
+	default:
+		return false
+	}
+}
+
+// IntakeStartRefusalReason names why a start was refused for an occurrence and
+// the item was left as an ordinary proposal (plan §5.12). Each is a durable,
+// re-readable fact recorded on the occurrence row. The zero value "" is
+// invalid by design.
+type IntakeStartRefusalReason string
+
+const (
+	// IntakeRefusalWIPCapExhausted: the project is at or over its recorded
+	// run-level WIP cap.
+	IntakeRefusalWIPCapExhausted IntakeStartRefusalReason = "wip_cap_exhausted"
+	// IntakeRefusalModeNotAuthorized: auto_start was requested without the
+	// explicit override provenance the mode key requires.
+	IntakeRefusalModeNotAuthorized IntakeStartRefusalReason = "mode_not_authorized"
+	// IntakeRefusalSubjectInputMissing: a bound elaboration/start input is
+	// absent (project, declaration, or policy artifact gone).
+	IntakeRefusalSubjectInputMissing IntakeStartRefusalReason = "subject_input_missing"
+	// IntakeRefusalSubjectInputStale: a bound input exists but no longer
+	// matches the digest read at admission (policy artifact superseded).
+	IntakeRefusalSubjectInputStale IntakeStartRefusalReason = "subject_input_stale"
+)
+
+// AllIntakeStartRefusalReasons is the single registration point for the reasons.
+var AllIntakeStartRefusalReasons = []IntakeStartRefusalReason{
+	IntakeRefusalWIPCapExhausted, IntakeRefusalModeNotAuthorized,
+	IntakeRefusalSubjectInputMissing, IntakeRefusalSubjectInputStale,
+}
+
+func (r IntakeStartRefusalReason) valid() bool {
+	switch r {
+	case IntakeRefusalWIPCapExhausted, IntakeRefusalModeNotAuthorized,
+		IntakeRefusalSubjectInputMissing, IntakeRefusalSubjectInputStale:
+		return true
+	default:
+		return false
+	}
+}
+
+// IntakeSupersessionReason names why the still-open proposal for an occurrence
+// was superseded (plan §5.12): the label was removed, or the issue was closed.
+// The zero value "" is invalid by design.
+type IntakeSupersessionReason string
+
+const (
+	IntakeSupersededLabelRemoved IntakeSupersessionReason = "label_removed"
+	IntakeSupersededIssueClosed  IntakeSupersessionReason = "issue_closed"
+)
+
+// AllIntakeSupersessionReasons is the single registration point for the reasons.
+var AllIntakeSupersessionReasons = []IntakeSupersessionReason{
+	IntakeSupersededLabelRemoved, IntakeSupersededIssueClosed,
+}
+
+func (r IntakeSupersessionReason) valid() bool {
+	switch r {
+	case IntakeSupersededLabelRemoved, IntakeSupersededIssueClosed:
+		return true
+	default:
+		return false
+	}
+}
+
+// ElaborationSourceKind is the arm of an ElaborationSource union in use: a
+// pre-registered spec-source artifact (the freesided submit path), or an
+// occurrence-bound issue subject authenticated from a durable IntakeOccurrence
+// record (the label-intake path). The zero value "" is invalid by design.
+type ElaborationSourceKind string
+
+const (
+	ElaborationSourceSpecArtifact ElaborationSourceKind = "spec_artifact"
+	ElaborationSourceIssueSubject ElaborationSourceKind = "issue_subject"
+)
+
+// AllElaborationSourceKinds is the single registration point for the kinds.
+var AllElaborationSourceKinds = []ElaborationSourceKind{
+	ElaborationSourceSpecArtifact, ElaborationSourceIssueSubject,
+}
+
+func (k ElaborationSourceKind) valid() bool {
+	switch k {
+	case ElaborationSourceSpecArtifact, ElaborationSourceIssueSubject:
+		return true
+	default:
+		return false
+	}
+}
