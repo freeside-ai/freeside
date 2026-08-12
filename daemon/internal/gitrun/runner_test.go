@@ -17,6 +17,8 @@ func TestBaseline(t *testing.T) {
 		"-c", "protocol.allow=never",
 		"-c", "core.protectHFS=true",
 		"-c", "core.protectNTFS=true",
+		"-c", "maintenance.auto=false",
+		"-c", "gc.auto=0",
 	}
 	got := Baseline()
 	if !slices.Equal(got, want) {
