@@ -55,6 +55,7 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHea
 	mux.Handle("GET /runs", h.authenticated(h.listRuns))
 	mux.Handle("GET /schedules", h.authenticated(h.listSchedules))
 	mux.Handle("GET /runs/{run_id}", h.authenticated(h.getRun))
+	mux.Handle("GET /runs/{run_id}/timeline", h.authenticated(h.getRunTimeline))
 	mux.Handle("GET /conversations/{conversation_id}", h.authenticated(h.getConversation))
 	mux.Handle("POST /commands", h.authenticated(h.submitCommand))
 	mux.Handle("PUT /attachments/{digest}", h.authenticated(h.putAttachment))
@@ -203,6 +204,16 @@ func (h httpHandler) getRun(w http.ResponseWriter, r *http.Request, _ domain.Dev
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
+}
+
+func (h httpHandler) getRunTimeline(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {
+	timeline, err := h.service.GetRunTimeline(
+		r.Context(), domain.RunID(r.PathValue("run_id")))
+	if err != nil {
+		writeReadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, timeline)
 }
 
 func (h httpHandler) getConversation(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {

@@ -151,16 +151,10 @@ func dispatchHoldReason(err error) (domain.RunHoldReason, bool) {
 // reasons; recovery already fails closed on any other string, so an
 // unmatched reason here is the same contract violation.
 func productionBlockReason(reason string) (domain.RunHoldReason, bool) {
-	switch reason {
-	case productionBlockRecipeRevoked:
-		return domain.HoldRecipeRevoked, true
-	case productionBlockVerification:
-		return domain.HoldVerificationFindings, true
-	case productionBlockTrust:
-		return domain.HoldTrustBlocked, true
-	case productionBlockBaseAdvanced:
-		return domain.HoldBaseAdvanced, true
-	case productionBlockExternal:
+	if mapped, ok := domain.DefinitivePublicationBlockReason(reason); ok {
+		return mapped, true
+	}
+	if reason == productionBlockExternal {
 		return domain.HoldExternalConflict, true
 	}
 	return "", false
@@ -188,7 +182,7 @@ func (e *Engine) observeInvocation(
 	if !e.pace.due(key, state, now) {
 		return nil
 	}
-	if err := e.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := e.store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordInvocationObservation(ctx, domain.InvocationObservation{
 			InvocationID: invocationID, RunID: runID,
 			Status: status, Live: inspection.Live, ObservedAt: now,
@@ -210,7 +204,7 @@ func (e *Engine) observeRunHold(
 	if !e.pace.due(key, string(reason), now) {
 		return nil
 	}
-	if err := e.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := e.store.Write(ctx, func(tx *store.WriteTx) error {
 		return recordRunHold(ctx, tx, runID, invocationID, reason, now)
 	}); err != nil {
 		e.pace.forget(key)
@@ -222,7 +216,7 @@ func (e *Engine) observeRunHold(
 // recordRunHold is the shared write: the publication workflow uses it
 // directly because its retry window already paces it.
 func recordRunHold(
-	ctx context.Context, tx *store.InternalTx, runID domain.RunID,
+	ctx context.Context, tx *store.WriteTx, runID domain.RunID,
 	invocationID domain.InvocationID, reason domain.RunHoldReason, now time.Time,
 ) error {
 	hold := domain.RunHoldObservation{

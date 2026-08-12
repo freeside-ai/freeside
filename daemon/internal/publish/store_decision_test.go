@@ -276,7 +276,7 @@ func seedExecutionPublicationChain(
 	if err != nil {
 		t.Fatalf("NewReservation: %v", err)
 	}
-	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		conformance, err := domain.NewBackendConformance(
 			domain.BackendConformanceInput{
 				Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,

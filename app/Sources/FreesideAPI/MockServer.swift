@@ -111,6 +111,9 @@ public actor MockServer {
     /// Rows only seed through init; the one mutation is the opened
     /// receipt, which advances an existing attempt and never creates one.
     private var deliveriesByKey: [DeliveryKey: Components.Schemas.AttentionDeliverySnapshot] = [:]
+    private var runsByID: [String: Components.Schemas.RunSnapshot] = [:]
+    private var schedulesByID: [String: Components.Schemas.ScheduleSnapshot] = [:]
+    private var timelinesByRunID: [String: Components.Schemas.RunTimeline] = [:]
 
     struct DeliveryKey: Hashable, Comparable {
         let itemID: String
@@ -138,6 +141,9 @@ public actor MockServer {
     public init(
         items: [Components.Schemas.AttentionItemSnapshot] = AttentionFixtures.defaultInbox(),
         deliveries: [Components.Schemas.AttentionDeliverySnapshot] = [],
+        runs: [Components.Schemas.RunSnapshot] = RunFixtures.defaultRuns(),
+        schedules: [Components.Schemas.ScheduleSnapshot] = RunFixtures.defaultSchedules(),
+        timelines: [Components.Schemas.RunTimeline] = RunFixtures.defaultTimelines(),
         approvedRecipes: Set<String> = [AttentionFixtures.approvedRecipeDigest],
         authMode: AuthMode = .permissive,
         pairingCodes: [String: PairingCodeState] = [:],
@@ -152,12 +158,24 @@ public actor MockServer {
         for snapshot in deliveries {
             deliveriesByKey[DeliveryKey(snapshot.delivery)] = snapshot
         }
+        for snapshot in runs {
+            runsByID[snapshot.run.id] = snapshot
+        }
+        for snapshot in schedules {
+            schedulesByID[snapshot.schedule.id] = snapshot
+        }
+        for timeline in timelines {
+            timelinesByRunID[timeline.run_id] = timeline
+        }
         // The server revision starts at or beyond every seeded snapshot's
         // as_of_revision, so the heartbeat and the next CommandResult can
         // never run backwards relative to what this mock lists.
         revision = max(
             1, items.map(\.as_of_revision).max() ?? 1,
-            deliveries.map(\.as_of_revision).max() ?? 1)
+            deliveries.map(\.as_of_revision).max() ?? 1,
+            runs.map(\.as_of_revision).max() ?? 1,
+            schedules.map(\.as_of_revision).max() ?? 1,
+            timelines.map(\.as_of_revision).max() ?? 1)
         // Seeded delivery rows exist only because the daemon's pipeline
         // would have recorded them, and that pipeline re-derives the
         // item's timing and bumps the item's versions in the same write
@@ -252,6 +270,19 @@ public actor MockServer {
         itemsByID[itemID] = snapshot
     }
 
+    /// Advances one run projection and its computed timeline under the next
+    /// revision, modeling a daemon observation write for partial-sync tests.
+    public func advanceRun(id: String) {
+        guard var snapshot = runsByID[id] else { return }
+        revision += 1
+        snapshot.as_of_revision = revision
+        runsByID[id] = snapshot
+        if var timeline = timelinesByRunID[id] {
+            timeline.as_of_revision = revision
+            timelinesByRunID[id] = timeline
+        }
+    }
+
     public func advanceTime(to instant: Date) {
         currentTime = instant
         convergeProposalSnoozes()
@@ -264,13 +295,22 @@ public actor MockServer {
 
     /// Simulates a daemon restore (plan §5.14 sync test 8): a new sync
     /// epoch, optionally rewinding the revision to the restored state's.
-    /// Rows are left alone; to a client the epoch change alone is what
-    /// makes its cached cursors meaningless, whatever the new revision.
+    /// When the revision rewinds, the mock restamps computed run resources
+    /// into that restored epoch as the real restored store would.
     public func rotateEpoch(revision restored: Int64? = nil) {
         epochGeneration += 1
         syncEpoch = "mock-epoch-\(epochGeneration)"
         if let restored {
             revision = max(1, restored)
+            for id in runsByID.keys {
+                runsByID[id]?.as_of_revision = revision
+            }
+            for id in schedulesByID.keys {
+                schedulesByID[id]?.as_of_revision = revision
+            }
+            for id in timelinesByRunID.keys {
+                timelinesByRunID[id]?.as_of_revision = revision
+            }
         }
     }
 
@@ -518,19 +558,34 @@ public actor MockServer {
     /// One canonical snapshot of every synchronized resource from a
     /// single actor-isolated read, as the daemon's bootstrap is one
     /// Store.Read (plan §5.14): the cursor pair and the rows can never
-    /// be torn. Runs, conversations, and schedules stay empty until their
-    /// units seed them; the envelope still carries every collection, so a
-    /// client decodes the real shape today.
+    /// be torn. The run fixtures are deterministic daemon observations used by both
+    /// app platforms and their screenshot workflow.
     func bootstrapSnapshot() throws -> Components.Schemas.BootstrapSnapshot {
         .init(
             sync_epoch: syncEpoch,
             revision: revision,
             attention_items: try listAttentionItems(),
             attention_deliveries: try listAttentionDeliveries(),
-            runs: [],
+            runs: listRuns(),
             conversations: [],
-            schedules: []
+            schedules: listSchedules()
         )
+    }
+
+    func listRuns() -> [Components.Schemas.RunSnapshot] {
+        runsByID.keys.sorted().compactMap { runsByID[$0] }
+    }
+
+    func run(id: String) -> Components.Schemas.RunSnapshot? {
+        runsByID[id]
+    }
+
+    func runTimeline(id: String) -> Components.Schemas.RunTimeline? {
+        timelinesByRunID[id]
+    }
+
+    func listSchedules() -> [Components.Schemas.ScheduleSnapshot] {
+        schedulesByID.keys.sorted().compactMap { schedulesByID[$0] }
     }
 
     struct InvalidDeliveryError: Error {

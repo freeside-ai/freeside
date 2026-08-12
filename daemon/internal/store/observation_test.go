@@ -12,7 +12,7 @@ import (
 
 func appendMilestone(t *testing.T, s *store.Store, m domain.RunMilestone) {
 	t.Helper()
-	if err := s.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
+	if err := s.Write(context.Background(), func(tx *store.WriteTx) error {
 		return tx.AppendRunMilestone(context.Background(), m)
 	}); err != nil {
 		t.Fatalf("append milestone %s: %v", m.Kind, err)
@@ -50,7 +50,7 @@ func TestRunObservationRoundTrip(t *testing.T) {
 		RunID: f.run.ID, Kind: domain.MilestoneInvocationStarted,
 		InvocationID: &inv, RecordedAt: admissionEpoch.Add(time.Minute),
 	})
-	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordInvocationObservation(ctx, domain.InvocationObservation{
 			InvocationID: inv, RunID: f.run.ID,
 			Status: domain.ObservedStatusRunning, Live: true,
@@ -123,7 +123,7 @@ func TestRunHoldObservationLifecycle(t *testing.T) {
 
 	recordHold := func(reason domain.RunHoldReason, at time.Time) {
 		t.Helper()
-		if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := s.Write(ctx, func(tx *store.WriteTx) error {
 			return tx.RecordRunHold(ctx, domain.RunHoldObservation{
 				RunID: f.run.ID, InvocationID: &inv, Reason: reason,
 				FirstObservedAt: at, LastObservedAt: at,
@@ -181,7 +181,7 @@ func TestRunHoldObservationLifecycle(t *testing.T) {
 		t.Errorf("stepped-back re-record = %+v, want an overwritten span", got.Hold)
 	}
 
-	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.ClearRunHold(ctx, f.run.ID)
 	}); err != nil {
 		t.Fatalf("clear hold: %v", err)
@@ -201,7 +201,7 @@ func TestClearRunHoldCause(t *testing.T) {
 	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
 
 	inv := domain.InvocationID("inv-observed")
-	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordRunHold(ctx, domain.RunHoldObservation{
 			RunID: f.run.ID, InvocationID: &inv,
 			Reason:          domain.HoldVerificationFindings,
@@ -211,7 +211,7 @@ func TestClearRunHoldCause(t *testing.T) {
 		t.Fatalf("record hold: %v", err)
 	}
 	clearCause := func(reason domain.RunHoldReason) error {
-		return s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return s.Write(ctx, func(tx *store.WriteTx) error {
 			return tx.ClearRunHoldCause(ctx, f.run.ID, reason)
 		})
 	}
@@ -235,7 +235,7 @@ func TestClearRunHoldCause(t *testing.T) {
 		t.Errorf("unknown cause: ClearRunHoldCause() = %v, want %v",
 			err, domain.ErrInvalidRunHoldReason)
 	}
-	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.ClearRunHoldCause(ctx, "", domain.HoldAttendedModeActive)
 	}); !errors.Is(err, domain.ErrEmptyID) {
 		t.Errorf("empty run: ClearRunHoldCause() = %v, want %v", err, domain.ErrEmptyID)
@@ -253,7 +253,7 @@ func TestInvocationObservationUpsert(t *testing.T) {
 	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
 
 	record := func(o domain.InvocationObservation) error {
-		return s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return s.Write(ctx, func(tx *store.WriteTx) error {
 			return tx.RecordInvocationObservation(ctx, o)
 		})
 	}
@@ -318,7 +318,7 @@ func TestExecutionRecordsProjectMilestones(t *testing.T) {
 		Status: domain.ExecutionOutcomeFailed, Summary: "provider stderr: secret-ish detail",
 		RecordedAt: f.admission.AdmittedAt.Add(time.Hour),
 	}
-	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordExecutionOutcome(ctx, outcome)
 	}); err != nil {
 		t.Fatalf("record outcome: %v", err)
@@ -349,7 +349,7 @@ func TestExecutionRecordsProjectMilestones(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecutionExport: %v", err)
 	}
-	if err := s2.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := s2.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordExecutionExport(ctx, export)
 	}); err != nil {
 		t.Fatalf("record export: %v", err)

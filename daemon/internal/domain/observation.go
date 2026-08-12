@@ -139,6 +139,17 @@ func (s ObservedInvocationStatus) Concluded() bool {
 // contract change. The zero value "" is invalid by design.
 type RunHoldReason string
 
+// Definitive production publication reasons are shared by the workflow that
+// authors a terminal blocked item and the read boundary that authenticates
+// its typed observation. Keeping the prose-to-code map here prevents either
+// side from widening the other's closed contract independently.
+const (
+	PublicationBlockRecipeRevoked = "Current trust no longer approves the admitted project-image recipe."
+	PublicationBlockVerification  = "Verification or current policy findings blocked production publication."
+	PublicationBlockTrust         = "Current trust state definitively blocked publication."
+	PublicationBlockBaseAdvanced  = "The target base advanced after admission; rerun and reverify against the current base."
+)
+
 const (
 	// HoldOperationStopped: the durable operator stop is in force.
 	HoldOperationStopped RunHoldReason = "operation_stopped"
@@ -224,6 +235,23 @@ func (r RunHoldReason) valid() bool {
 	default:
 		return false
 	}
+}
+
+// DefinitivePublicationBlockReason maps the exact durable terminal-item
+// reason onto its operator-safe code. Transient publication holds deliberately
+// have no member here, even when they use the same AttentionType.
+func DefinitivePublicationBlockReason(reason string) (RunHoldReason, bool) {
+	switch reason {
+	case PublicationBlockRecipeRevoked:
+		return HoldRecipeRevoked, true
+	case PublicationBlockVerification:
+		return HoldVerificationFindings, true
+	case PublicationBlockTrust:
+		return HoldTrustBlocked, true
+	case PublicationBlockBaseAdvanced:
+		return HoldBaseAdvanced, true
+	}
+	return "", false
 }
 
 // RunMilestone is one appended, first-observation-wins timeline entry: the
@@ -621,4 +649,139 @@ func (o RunObservation) LastObservedAt() (time.Time, bool) {
 		consider(obs.ObservedAt)
 	}
 	return latest, found
+}
+
+// RunOutcome is the operator-facing classification of a run's final result.
+// It is derived fresh from the milestone timeline and is never workflow
+// authority persisted for the engine to read back.
+type RunOutcome string
+
+const (
+	RunOutcomePending   RunOutcome = "pending"
+	RunOutcomePublished RunOutcome = "published"
+	RunOutcomeBlocked   RunOutcome = "blocked"
+	RunOutcomeFailed    RunOutcome = "failed"
+	RunOutcomeLost      RunOutcome = "lost"
+)
+
+// AllRunOutcomes is the single registration point for run outcomes.
+var AllRunOutcomes = []RunOutcome{
+	RunOutcomePending,
+	RunOutcomePublished,
+	RunOutcomeBlocked,
+	RunOutcomeFailed,
+	RunOutcomeLost,
+}
+
+func (o RunOutcome) valid() bool {
+	switch o {
+	case RunOutcomePending, RunOutcomePublished, RunOutcomeBlocked,
+		RunOutcomeFailed, RunOutcomeLost:
+		return true
+	default:
+		return false
+	}
+}
+
+// RunConclusion is the run's daemon-derived outcome as the timeline currently
+// reads. A current hold is independent and can coexist with Pending; Reason is
+// present only for a definitive publication block.
+type RunConclusion struct {
+	Outcome  RunOutcome
+	Reason   *RunHoldReason
+	Terminal *ObservedInvocationStatus
+	Final    bool
+}
+
+// Validate reports whether the conclusion carries exactly the detail its
+// outcome declares.
+func (c RunConclusion) Validate() error {
+	if !c.Outcome.valid() {
+		return fmt.Errorf("run conclusion outcome %q: %w", c.Outcome, ErrInvalidRunOutcome)
+	}
+	check := func(wantReason, wantTerminal, wantFinal bool) error {
+		switch {
+		case (c.Reason != nil) != wantReason:
+			return fmt.Errorf("run conclusion %s reason: %w", c.Outcome, ErrRunOutcomeDetailMismatch)
+		case (c.Terminal != nil) != wantTerminal:
+			return fmt.Errorf("run conclusion %s terminal: %w", c.Outcome, ErrRunOutcomeDetailMismatch)
+		case c.Final != wantFinal:
+			return fmt.Errorf("run conclusion %s final: %w", c.Outcome, ErrRunOutcomeDetailMismatch)
+		}
+		if c.Reason != nil && !c.Reason.valid() {
+			return fmt.Errorf("run conclusion %s reason %q: %w",
+				c.Outcome, *c.Reason, ErrInvalidRunHoldReason)
+		}
+		if c.Terminal != nil && !c.Terminal.valid() {
+			return fmt.Errorf("run conclusion %s terminal %q: %w",
+				c.Outcome, *c.Terminal, ErrInvalidObservedStatus)
+		}
+		return nil
+	}
+	switch c.Outcome {
+	case RunOutcomePending:
+		return check(false, false, false)
+	case RunOutcomePublished:
+		return check(false, false, true)
+	case RunOutcomeBlocked:
+		return check(true, false, true)
+	case RunOutcomeFailed, RunOutcomeLost:
+		return check(false, true, true)
+	}
+	return fmt.Errorf("run conclusion outcome %q: %w", c.Outcome, ErrInvalidRunOutcome)
+}
+
+// ConcludeRun classifies a run from its milestone timeline. A definitive
+// publication block outranks ready because it is the actionable result.
+func ConcludeRun(observation RunObservation) RunConclusion {
+	var (
+		terminal           *ObservedInvocationStatus
+		terminalInvocation InvocationID
+		blocked            *RunHoldReason
+		published          bool
+	)
+	for _, milestone := range observation.Milestones {
+		switch milestone.Kind {
+		case MilestonePublicationReady:
+			published = true
+		case MilestonePublicationBlocked:
+			blocked = milestone.Reason
+		case MilestoneTerminalRecorded:
+			terminal = milestone.Terminal
+			terminalInvocation = *milestone.InvocationID
+		case MilestoneInvocationAdmitted, MilestoneInvocationStarted:
+			if terminal != nil && *milestone.InvocationID != terminalInvocation {
+				terminal = nil
+			}
+		case MilestoneRunSubmitted, MilestoneExecutionExportRecorded,
+			MilestoneExecutionOutcomeRecorded:
+		}
+	}
+	switch {
+	case blocked != nil:
+		return RunConclusion{Outcome: RunOutcomeBlocked, Reason: blocked, Final: true}
+	case published:
+		return RunConclusion{Outcome: RunOutcomePublished, Final: true}
+	case terminal == nil:
+		return RunConclusion{Outcome: RunOutcomePending}
+	}
+	outcome, final := concludeTerminalOutcome(*terminal)
+	if !final {
+		return RunConclusion{Outcome: outcome}
+	}
+	return RunConclusion{Outcome: outcome, Terminal: terminal, Final: true}
+}
+
+func concludeTerminalOutcome(terminal ObservedInvocationStatus) (RunOutcome, bool) {
+	switch terminal {
+	case ObservedStatusCompleted:
+		return RunOutcomePending, false
+	case ObservedStatusFailed, ObservedStatusCanceled:
+		return RunOutcomeFailed, true
+	case ObservedStatusGone:
+		return RunOutcomeLost, true
+	case ObservedStatusPending, ObservedStatusRunning:
+		return RunOutcomePending, false
+	}
+	return RunOutcomePending, false
 }

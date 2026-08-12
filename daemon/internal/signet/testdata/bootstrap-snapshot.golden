@@ -67,14 +67,17 @@
   ],
   "runs": [
     {
-      "as_of_revision": 20,
+      "as_of_revision": 23,
       "entity_version": 2,
       "run": {
         "id": "run-569",
         "project_id": "project-569",
         "spec_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "policy_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-        "stages": []
+        "stages": [],
+        "latest_milestone": "run_submitted",
+        "outcome": "pending",
+        "hold_reason": null
       }
     }
   ],

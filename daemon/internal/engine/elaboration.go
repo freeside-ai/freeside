@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	KindElaborationInvocationRequested = "elaboration_invocation_requested"
+	KindElaborationInvocationRequested = string(domain.ElaborationInvocationRequestedKind)
 	kindElaborationTerminal            = "elaboration_stage_terminal"
 	// KindElaborationImplementationClaim reserves the future implementation
 	// run identity before approval and remains dispatched for durable replay.

@@ -357,6 +357,28 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /runs/{run_id}/timeline:
+    get:
+      operationId: getRunTimeline
+      tags: [runs]
+      summary: Get one run timeline
+      description: >
+        Returns the daemon-derived milestone, hold, and invocation-observation
+        timeline for one run. The snapshot is computed in one store read and
+        carries the revision that bounds every fact. A partial fetch; it never
+        marks the whole cache current (plan §5.14).
+      parameters:
+        - $ref: "#/components/parameters/RunID"
+      responses:
+        "200":
+          description: The run timeline snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunTimeline"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /schedules:
     get:
       operationId: listSchedules
@@ -864,6 +886,194 @@ components:
           $ref: "#/components/schemas/EntityVersion"
         run:
           $ref: "#/components/schemas/Run"
+
+    RunTimeline:
+      type: object
+      description: >
+        A computed, typed daemon-observation timeline for one run. It carries no
+        agent-authored free text; stage and attempt labels come from the Run
+        aggregate and join to invocation_id in these facts (plan §9).
+      additionalProperties: false
+      required: [as_of_revision, as_of, run_id, milestones, hold, invocations]
+      properties:
+        as_of_revision:
+          $ref: "#/components/schemas/AsOfRevision"
+        as_of:
+          type: string
+          format: date-time
+          description: The daemon-clock instant at which this timeline was projected.
+        run_id:
+          type: string
+          minLength: 1
+        milestones:
+          type: array
+          items:
+            $ref: "#/components/schemas/RunMilestone"
+        hold:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RunHold"
+        invocations:
+          type: array
+          items:
+            $ref: "#/components/schemas/InvocationObservation"
+      example:
+        as_of_revision: 42
+        as_of: "2026-01-02T03:14:06Z"
+        run_id: "run-1"
+        milestones:
+          - run_id: "run-1"
+            kind: "run_submitted"
+            invocation_id: "inv-1"
+            terminal: null
+            outcome: null
+            reason: null
+            recorded_at: "2026-01-02T03:04:05Z"
+          - run_id: "run-1"
+            kind: "terminal_recorded"
+            invocation_id: "inv-1"
+            terminal: "completed"
+            outcome: null
+            reason: null
+            recorded_at: "2026-01-02T03:14:05Z"
+        hold: null
+        invocations:
+          - invocation_id: "inv-1"
+            run_id: "run-1"
+            status: "completed"
+            live: false
+            observed_at: "2026-01-02T03:14:05Z"
+
+    RunMilestoneKind:
+      type: string
+      description: >
+        The closed milestone vocabulary mirrored from
+        domain.RunMilestoneKind. Widening it is a contract change.
+      enum:
+        - run_submitted
+        - invocation_admitted
+        - invocation_started
+        - execution_export_recorded
+        - execution_outcome_recorded
+        - terminal_recorded
+        - publication_ready
+        - publication_blocked
+
+    RunHoldReason:
+      type: string
+      description: >
+        The closed, operator-safe hold vocabulary mirrored from
+        domain.RunHoldReason. Values are typed daemon observations, never free text.
+      enum:
+        - operation_stopped
+        - blocking_system_health
+        - input_unavailable
+        - backend_not_conformant
+        - admission_policy_refused
+        - backup_protection_unready
+        - repository_untrusted
+        - provider_authority_unavailable
+        - attended_mode_active
+        - publication_environment
+        - external_conflict
+        - recipe_revoked
+        - verification_findings
+        - trust_blocked
+        - base_advanced
+        - identity_parallelism
+
+    RunOutcome:
+      type: string
+      description: >
+        The daemon-derived run result mirrored from domain.RunOutcome.
+        Pending can coexist with a current hold; blocked means a definitive
+        publication_blocked milestone, not merely a transient hold.
+      enum: [pending, published, blocked, failed, lost]
+
+    ObservedInvocationStatus:
+      type: string
+      description: The daemon's closed observation-side invocation lifecycle.
+      enum: [pending, running, completed, failed, canceled, gone]
+
+    ExecutionOutcomeStatus:
+      type: string
+      description: The closed non-export terminal authority vocabulary.
+      enum: [failed, canceled, lost]
+
+    RunMilestone:
+      type: object
+      description: >
+        One append-only, first-observation-wins daemon milestone. Detail
+        fields are kind-scoped and use explicit null when absent.
+      additionalProperties: false
+      required: [run_id, kind, invocation_id, terminal, outcome, reason, recorded_at]
+      properties:
+        run_id:
+          type: string
+          minLength: 1
+        kind:
+          $ref: "#/components/schemas/RunMilestoneKind"
+        invocation_id:
+          type: string
+          minLength: 1
+          nullable: true
+        terminal:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ObservedInvocationStatus"
+        outcome:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ExecutionOutcomeStatus"
+        reason:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RunHoldReason"
+        recorded_at:
+          type: string
+          format: date-time
+
+    RunHold:
+      type: object
+      description: The daemon's current typed hold observation for one run.
+      additionalProperties: false
+      required: [run_id, invocation_id, reason, first_observed_at, last_observed_at]
+      properties:
+        run_id:
+          type: string
+          minLength: 1
+        invocation_id:
+          type: string
+          minLength: 1
+          nullable: true
+        reason:
+          $ref: "#/components/schemas/RunHoldReason"
+        first_observed_at:
+          type: string
+          format: date-time
+        last_observed_at:
+          type: string
+          format: date-time
+
+    InvocationObservation:
+      type: object
+      description: The daemon's latest observation of one run invocation.
+      additionalProperties: false
+      required: [invocation_id, run_id, status, live, observed_at]
+      properties:
+        invocation_id:
+          type: string
+          minLength: 1
+        run_id:
+          type: string
+          minLength: 1
+        status:
+          $ref: "#/components/schemas/ObservedInvocationStatus"
+        live:
+          type: boolean
+        observed_at:
+          type: string
+          format: date-time
 
     ConversationSnapshot:
       type: object
@@ -2459,10 +2669,13 @@ components:
     Run:
       type: object
       description: >
-        A run aggregate with stages and attempts embedded; mirrors
-        domain.Run. spec_digest and policy_digest bind the run to its typed
-        inputs.
-      required: [id, project_id, spec_digest, policy_digest, stages]
+        A run aggregate with stages and attempts embedded plus a
+        daemon-derived progress summary. spec_digest and policy_digest bind
+        the run to its typed inputs; summary fields are computed from the
+        observation timeline and never persisted as workflow authority.
+      required:
+        [id, project_id, spec_digest, policy_digest, stages,
+         latest_milestone, outcome, hold_reason]
       properties:
         id:
           type: string
@@ -2478,11 +2691,24 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Stage"
+        latest_milestone:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RunMilestoneKind"
+        outcome:
+          $ref: "#/components/schemas/RunOutcome"
+        hold_reason:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RunHoldReason"
       example:
         id: "run-1"
         project_id: "proj-1"
         spec_digest: "sha256:spec"
         policy_digest: "sha256:policy"
+        latest_milestone: "invocation_started"
+        outcome: "pending"
+        hold_reason: null
         stages:
           - id: "stage-1"
             run_id: "run-1"

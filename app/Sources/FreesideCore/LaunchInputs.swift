@@ -11,6 +11,14 @@ import SwiftUI
 /// `AppSession.fromEnvironment` follow the same convention. Unset
 /// means the ordinary launch: system appearance, nothing selected.
 public struct LaunchInputs {
+    public enum Screen: String {
+        case inbox
+        case runs
+    }
+
+    /// `-FreesideScreen inbox|runs`; defaults to the attention inbox.
+    public let screen: Screen
+
     /// `-FreesideColorScheme light|dark`; unset or unrecognized
     /// follows the system.
     public let colorScheme: ColorScheme?
@@ -29,15 +37,19 @@ public struct LaunchInputs {
 
     public init(
         colorSchemeRaw: String?, selectionRaw: String?, inboxScopeRaw: String? = nil,
-        projectIDRaw: String? = nil, detailsExpanded: Bool = false
+        projectIDRaw: String? = nil, detailsExpanded: Bool = false, screenRaw: String? = nil
     ) {
+        screen = Screen(rawValue: screenRaw ?? "") ?? .inbox
         colorScheme =
             switch colorSchemeRaw {
             case "light": .light
             case "dark": .dark
             default: nil
             }
-        if let selectionRaw, !AttentionFixtures.defaultInboxItemIDs().contains(selectionRaw) {
+        let knownSelections =
+            screen == .runs
+            ? RunFixtures.defaultRunIDs() : AttentionFixtures.defaultInboxItemIDs()
+        if let selectionRaw, !knownSelections.contains(selectionRaw) {
             FileHandle.standardError.write(
                 Data("FreesideSelect ignored: unknown item id \(selectionRaw)\n".utf8))
             selection = nil
@@ -58,6 +70,7 @@ public struct LaunchInputs {
             selectionRaw: defaults.string(forKey: "FreesideSelect"),
             inboxScopeRaw: defaults.string(forKey: "FreesideInboxScope"),
             projectIDRaw: defaults.string(forKey: "FreesideProject"),
-            detailsExpanded: defaults.bool(forKey: "FreesideDetailsExpanded"))
+            detailsExpanded: defaults.bool(forKey: "FreesideDetailsExpanded"),
+            screenRaw: defaults.string(forKey: "FreesideScreen"))
     }
 }

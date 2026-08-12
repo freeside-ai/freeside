@@ -40,6 +40,18 @@ func TestSignetWireGoldens(t *testing.T) {
 		SpecDigest:   domain.Digest("sha256:" + strings.Repeat("2", 64)),
 		PolicyDigest: domain.Digest("sha256:" + strings.Repeat("3", 64)),
 	}
+	invocationID := domain.InvocationID("inv-569")
+	observation := domain.RunObservation{
+		RunID: runID,
+		Milestones: []domain.RunMilestone{{
+			RunID: runID, Kind: domain.MilestoneRunSubmitted,
+			InvocationID: &invocationID, RecordedAt: createdAt,
+		}},
+		Invocations: []domain.InvocationObservation{{
+			InvocationID: invocationID, RunID: runID,
+			Status: domain.ObservedStatusRunning, Live: true, ObservedAt: acceptedAt,
+		}},
+	}
 	conversation := domain.Conversation{ID: conversationID, Status: domain.ConversationIdle}
 	schedule := domain.Schedule{
 		ID: "schedule-569", ProjectID: item.ProjectID, Kind: domain.ScheduleDoctor,
@@ -86,7 +98,10 @@ func TestSignetWireGoldens(t *testing.T) {
 					deliverySnapshot(delivery, store.Snapshot{AsOfRevision: 19, EntityVersion: 1}),
 				},
 				Runs: []RunSnapshot{
-					runSnapshot(run, store.Snapshot{AsOfRevision: 20, EntityVersion: 2}),
+					runSnapshot(
+						run, store.Snapshot{AsOfRevision: 20, EntityVersion: 2},
+						observation, 23,
+					),
 				},
 				Conversations: []ConversationSnapshot{
 					conversationSnapshot(conversation, store.Snapshot{AsOfRevision: 21, EntityVersion: 4}),
@@ -97,6 +112,7 @@ func TestSignetWireGoldens(t *testing.T) {
 			},
 		},
 		{name: "server-revision", value: ServerRevision{SyncEpoch: "sync-epoch-569", Revision: 23}},
+		{name: "run-timeline", value: runTimeline(observation, 23, acceptedAt)},
 		{
 			name: "pairing-grant",
 			value: PairingGrant{

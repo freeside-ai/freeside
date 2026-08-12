@@ -16,7 +16,7 @@ import (
 // intent (plan §5.14 discuss semantics): the durable request that an agent
 // turn be invoked. The dispatch loop (DispatchPendingInvocations here; the
 // Wave 2 engine later) scans this kind.
-const kindAgentInvocationRequested = "agent_invocation_requested"
+const kindAgentInvocationRequested = string(domain.AgentInvocationRequestedKind)
 
 // MaxRequestChangesMessageBytes bounds revision feedback before the
 // elaboration loop persists and repeatedly replays it as agent input.

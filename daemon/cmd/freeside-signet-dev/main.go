@@ -311,6 +311,7 @@ func newControlHandler(service *signet.Service, st *store.Store, checkpointDir s
 	mux.Handle("POST /control/restore", http.HandlerFunc(c.restore))
 	mux.Handle("POST /control/epoch", http.HandlerFunc(c.rotateEpoch))
 	mux.Handle("POST /control/items", http.HandlerFunc(c.putItem))
+	mux.Handle("POST /control/runs", http.HandlerFunc(c.putRun))
 	mux.Handle("POST /control/deliveries", http.HandlerFunc(c.submitDelivery))
 	return mux
 }
@@ -563,6 +564,103 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 			controlJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 			return
 		}
+		controlError(w, err)
+		return
+	}
+	state, err := c.store.ServerState(r.Context())
+	if err != nil {
+		controlError(w, err)
+		return
+	}
+	controlJSON(w, http.StatusOK, map[string]any{"revision": state.Revision})
+}
+
+type putRunRequest struct {
+	ID string `json:"id"`
+}
+
+// putRun seeds one complete run-list/timeline fixture through the real store
+// APIs. The Swift convergence suite supplies only the identity; every
+// operator-visible fact is daemon-constructed and domain-validated here.
+func (c controlHandler) putRun(w http.ResponseWriter, r *http.Request) {
+	var req putRunRequest
+	if !decodeControlRequest(w, r, &req) {
+		return
+	}
+	if req.ID == "" {
+		controlJSON(w, http.StatusBadRequest, map[string]string{"message": "run id is required"})
+		return
+	}
+	runID := domain.RunID(req.ID)
+	invocationID := domain.InvocationID("inv-" + req.ID)
+	stageID := domain.StageID("stage-" + req.ID)
+	policyDigest := domain.Digest("sha256:policy-" + req.ID)
+	run := domain.Run{
+		ID: runID, ProjectID: "proj-convergence",
+		SpecDigest: "sha256:spec-" + domain.Digest(req.ID), PolicyDigest: policyDigest,
+		Stages: []domain.Stage{{
+			ID: stageID, RunID: runID, Name: "implementation",
+			Attempts: []domain.Attempt{{
+				ID: domain.AttemptID("attempt-" + req.ID), StageID: stageID,
+				Number: 1, InvocationID: invocationID,
+			}},
+		}},
+	}
+	// The control route is an idempotent convergence fixture: replaying the
+	// same run must reconstruct the same immutable schedule even when calls
+	// cross a wall-clock second.
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	fireAt := now.Add(time.Hour)
+	itemID := domain.ItemID("item-" + req.ID)
+	itemVersion := 1
+	schedule, err := domain.NewSchedule(domain.ScheduleInput{
+		ID: domain.ScheduleID("schedule-" + req.ID), ProjectID: run.ProjectID,
+		Kind: domain.ScheduleReviewWaitThreshold,
+		Subject: domain.ScheduleSubject{
+			Type:   domain.ScheduleSubjectAttentionItem,
+			ItemID: &itemID, ItemVersion: &itemVersion,
+		},
+		RunID: &runID, PolicyDigest: &policyDigest,
+		CreatedAt: now, FireAt: &fireAt,
+	})
+	if err != nil {
+		controlJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+	if err := c.store.Write(r.Context(), func(tx *store.WriteTx) error {
+		if err := tx.PutRun(r.Context(), run); err != nil {
+			return err
+		}
+		if _, _, err := tx.EnqueueOutbox(r.Context(), string(invocationID),
+			string(domain.ProductionInvocationRequestedKind), []byte(fmt.Sprintf(
+				`{"invocation_id":%q,"run_id":%q,"stage_id":%q}`,
+				invocationID, runID, stageID))); err != nil {
+			return err
+		}
+		return tx.PutSchedule(r.Context(), schedule)
+	}); err != nil {
+		controlError(w, err)
+		return
+	}
+	if err := c.store.Write(r.Context(), func(tx *store.WriteTx) error {
+		if err := tx.AppendRunMilestone(r.Context(), domain.RunMilestone{
+			RunID: runID, Kind: domain.MilestoneRunSubmitted,
+			InvocationID: &invocationID, RecordedAt: now,
+		}); err != nil {
+			return err
+		}
+		if err := tx.RecordInvocationObservation(r.Context(), domain.InvocationObservation{
+			InvocationID: invocationID, RunID: runID,
+			Status: domain.ObservedStatusRunning, Live: true, ObservedAt: now,
+		}); err != nil {
+			return err
+		}
+		return tx.RecordRunHold(r.Context(), domain.RunHoldObservation{
+			RunID: runID, InvocationID: &invocationID,
+			Reason:          domain.HoldVerificationFindings,
+			FirstObservedAt: now, LastObservedAt: now,
+		})
+	}); err != nil {
 		controlError(w, err)
 		return
 	}

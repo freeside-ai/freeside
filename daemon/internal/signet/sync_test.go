@@ -2,6 +2,7 @@ package signet_test
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -79,6 +80,124 @@ func TestBootstrapProjectsOneTransactionalSnapshot(t *testing.T) {
 			t.Errorf("%s metadata = v%d/r%d outside bootstrap revision %d",
 				name, snapshot.entityVersion, snapshot.asOfRevision, bootstrap.Revision)
 		}
+	}
+}
+
+func TestRunSummariesAndTimelineProjectOneStoreRevision(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	run := domain.Run{
+		ID: "run-1", ProjectID: "proj-1",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+		Stages: []domain.Stage{{
+			ID: "stage-1", RunID: "run-1", Name: "implementation",
+			Attempts: []domain.Attempt{{
+				ID: "attempt-1", StageID: "stage-1", Number: 1,
+				InvocationID: "inv-1",
+			}},
+		}},
+	}
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutRun(ctx, run)
+	}); err != nil {
+		t.Fatalf("PutRun: %v", err)
+	}
+	beforeObservation, err := f.service.Revision(ctx)
+	if err != nil {
+		t.Fatalf("Revision before observation: %v", err)
+	}
+	invocationID := domain.InvocationID("inv-1")
+	recordedAt := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		if _, _, err := tx.EnqueueOutbox(ctx, string(invocationID), string(domain.ProductionInvocationRequestedKind),
+			[]byte(`{"invocation_id":"inv-1","run_id":"run-1","stage_id":"stage-1"}`)); err != nil {
+			return err
+		}
+		if err := tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: run.ID, Kind: domain.MilestoneRunSubmitted,
+			InvocationID: &invocationID, RecordedAt: recordedAt,
+		}); err != nil {
+			return err
+		}
+		return tx.RecordRunHold(ctx, domain.RunHoldObservation{
+			RunID: run.ID, InvocationID: &invocationID,
+			Reason:          domain.HoldAttendedModeActive,
+			FirstObservedAt: recordedAt.Add(time.Minute),
+			LastObservedAt:  recordedAt.Add(2 * time.Minute),
+		})
+	}); err != nil {
+		t.Fatalf("seed observation: %v", err)
+	}
+	afterObservation, err := f.service.Revision(ctx)
+	if err != nil {
+		t.Fatalf("Revision after observation: %v", err)
+	}
+	if afterObservation.Revision != beforeObservation.Revision+1 {
+		t.Fatalf("observation revision %d -> %d, want one client-visible bump",
+			beforeObservation.Revision, afterObservation.Revision)
+	}
+
+	runs, err := f.service.ListRuns(ctx)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Run.LatestMilestone == nil ||
+		*runs[0].Run.LatestMilestone != domain.MilestoneRunSubmitted ||
+		runs[0].Run.Outcome != domain.RunOutcomePending ||
+		runs[0].Run.HoldReason == nil || *runs[0].Run.HoldReason != domain.HoldAttendedModeActive {
+		t.Fatalf("ListRuns summary = %+v", runs)
+	}
+
+	timeline, err := f.service.GetRunTimeline(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("GetRunTimeline: %v", err)
+	}
+	state, err := f.service.Revision(ctx)
+	if err != nil {
+		t.Fatalf("Revision: %v", err)
+	}
+	if timeline.AsOfRevision != state.Revision || timeline.RunID != run.ID ||
+		len(timeline.Milestones) != 1 || timeline.Hold == nil ||
+		timeline.Invocations == nil {
+		t.Fatalf("timeline = %+v at server revision %+v", timeline, state)
+	}
+	if _, err := f.service.GetRunTimeline(ctx, "missing"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("GetRunTimeline(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestRunSummaryAuthenticatesSubmittedReservationBeforeAnAttemptExists(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	run := domain.Run{
+		ID: "run-submitted", ProjectID: "proj-1",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+		Stages: []domain.Stage{{ID: "stage-submitted", RunID: "run-submitted", Name: "implementation"}},
+	}
+	invocation := domain.InvocationID("inv-submitted")
+	payload := []byte(`{"invocation_id":"inv-submitted","run_id":"run-submitted","stage_id":"stage-submitted"}`)
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		if _, _, err := tx.EnqueueOutbox(ctx, string(invocation), string(domain.ProductionInvocationRequestedKind), payload); err != nil {
+			return err
+		}
+		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: run.ID, Kind: domain.MilestoneRunSubmitted,
+			InvocationID: &invocation, RecordedAt: time.Date(2026, 8, 12, 15, 0, 0, 0, time.UTC),
+		})
+	}); err != nil {
+		t.Fatalf("seed submitted run: %v", err)
+	}
+
+	runs, err := f.service.ListRuns(ctx)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Run.LatestMilestone == nil ||
+		*runs[0].Run.LatestMilestone != domain.MilestoneRunSubmitted {
+		t.Fatalf("ListRuns = %+v, want submitted zero-attempt run", runs)
 	}
 }
 

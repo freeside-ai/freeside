@@ -40,7 +40,7 @@ import (
 // KindProductionInvocationRequested is the outbox kind for the production
 // lane's dispatch intent. Exported with its backup-payload extractor so the
 // daemon composition can register it (store.BackupPayloadDigestExtractor).
-const KindProductionInvocationRequested = "production_invocation_requested"
+const KindProductionInvocationRequested = string(domain.ProductionInvocationRequestedKind)
 
 // kindProductionStageTerminal is the inbox kind recording the engine's
 // at-most-once acceptance of a production stage's terminal outcome.

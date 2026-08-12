@@ -622,8 +622,10 @@ func TestAcceptanceRejectsAProfileSupersededBeforeCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ServerState after refusal: %v", err)
 	}
-	if afterRevision != beforeRevision {
-		t.Fatalf("refused acceptance changed server state %+v → %+v", beforeRevision, afterRevision)
+	if afterRevision.SyncEpoch != beforeRevision.SyncEpoch ||
+		afterRevision.Revision != beforeRevision.Revision+1 {
+		t.Fatalf("refused acceptance observation state %+v → %+v, want one visible revision",
+			beforeRevision, afterRevision)
 	}
 	afterItem, err := f.signet.GetAttentionItem(ctx, beforeItem.Item.ID)
 	if err != nil {

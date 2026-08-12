@@ -12,6 +12,8 @@ import Testing
         let bootstrap = try await client.getSyncBootstrap().ok.body.json
         let heartbeat = try await client.getSyncRevision().ok.body.json
         let listed = try await client.listAttentionItems().ok.body.json
+        let runs = try await client.listRuns().ok.body.json
+        let schedules = try await client.listSchedules().ok.body.json
 
         // The full-cache cursor pair matches the heartbeat's ServerState
         // read, and the item collection is the same canonical list the
@@ -19,11 +21,17 @@ import Testing
         #expect(bootstrap.sync_epoch == heartbeat.sync_epoch)
         #expect(bootstrap.revision == heartbeat.revision)
         #expect(bootstrap.attention_items == listed)
-        // The other collections are present-but-empty until their units
-        // seed them; the envelope shape is the real contract's.
         #expect(bootstrap.attention_deliveries.isEmpty)
-        #expect(bootstrap.runs.isEmpty)
+        #expect(bootstrap.runs == runs)
+        #expect(bootstrap.schedules == schedules)
         #expect(bootstrap.conversations.isEmpty)
+
+        let timeline = try await client.getRunTimeline(
+            path: .init(run_id: RunFixtures.activeRunID)
+        ).ok.body.json
+        #expect(timeline.run_id == RunFixtures.activeRunID)
+        #expect(timeline.as_of_revision == heartbeat.revision)
+        #expect(!timeline.milestones.isEmpty)
     }
 
     @Test func bootstrapFailsClosedOnOneInvalidRow() async throws {

@@ -41,4 +41,15 @@ import Testing
             LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, inboxScopeRaw: "nope")
                 .inboxScope == nil)
     }
+
+    @Test func runsScreenAcceptsOnlyRunFixtureSelections() {
+        let run = LaunchInputs(
+            colorSchemeRaw: nil, selectionRaw: RunFixtures.activeRunID, screenRaw: "runs")
+        #expect(run.screen == .runs)
+        #expect(run.selection == RunFixtures.activeRunID)
+
+        let item = LaunchInputs(
+            colorSchemeRaw: nil, selectionRaw: "item-spec_approval", screenRaw: "runs")
+        #expect(item.selection == nil)
+    }
 }

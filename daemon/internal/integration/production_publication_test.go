@@ -2697,8 +2697,8 @@ func TestAttendedRestartHoldsQueuedUnattendedPublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after != before {
-		t.Fatalf("attended publication hold moved server state from %#v to %#v", before, after)
+	if after.SyncEpoch != before.SyncEpoch || after.Revision != before.Revision+1 {
+		t.Fatalf("attended publication hold state = %#v -> %#v, want one visible revision", before, after)
 	}
 	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
 		t.Fatalf("attended publication hold caused effects: %d refs, %d PRs", refs, prs)
