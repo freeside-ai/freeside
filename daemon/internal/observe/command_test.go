@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -234,7 +235,12 @@ func TestFollowCommandResumesAcrossReconnectAndDaemonRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconnected follow: %v", err)
 	}
-	if first != second {
+	// elapsed= is rendered from the real clock as now-submitted truncated to
+	// whole seconds, so the two invocations differ by a second whenever they
+	// straddle a second boundary. Mask that one field: the assertion is that
+	// the durable timeline replays identically across reconnect, not which
+	// wall-clock second each invocation happened to land on.
+	if maskElapsed(first) != maskElapsed(second) {
 		t.Errorf("reconnect lost the observed timeline:\nfirst:\n%s\nsecond:\n%s", first, second)
 	}
 	assertFollowContains(t, second,
@@ -257,6 +263,17 @@ func TestFollowCommandResumesAcrossReconnectAndDaemonRestart(t *testing.T) {
 		t.Fatalf("resumed follow: %v", err)
 	}
 	assertFollowContains(t, live, "status=running  liveness=observed_live")
+}
+
+// elapsedValue matches the single clock-derived field in a follow output.
+// Named to avoid colliding with the production elapsedField in follow.go.
+var elapsedValue = regexp.MustCompile(`elapsed=\S+`)
+
+// maskElapsed removes the one clock-derived value from a follow output so
+// byte-for-byte comparisons assert timeline replay, not which wall-clock
+// second the invocation happened to land on.
+func maskElapsed(output string) string {
+	return elapsedValue.ReplaceAllString(output, "elapsed=<masked>")
 }
 
 // TestFollowCommandShowsElapsedAndLastObservation pins the two quantities the
