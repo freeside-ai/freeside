@@ -110,6 +110,13 @@ type ElaborationRunSpec struct {
 	ResolvedPolicy      domain.ResolvedPolicy
 	Publication         ProductionPublication
 	WorkUnit            *domain.WorkUnitDeclarationInput
+	// Source optionally names what this run elaborates from as a typed union
+	// (plan §5.12, #720). SubmitElaborationRun executes only the spec_artifact
+	// arm and requires it to agree with SourceArtifactID; the issue_subject arm
+	// is nameable for the label-intake reconciliation loop (#659), which owns
+	// its assembly and submission. A zero Source keeps the legacy spec-artifact
+	// behaviour so existing callers are unaffected.
+	Source domain.ElaborationSource
 }
 
 type elaborationRequest struct {
@@ -282,6 +289,28 @@ func SubmitElaborationRun(ctx context.Context, st *store.Store, spec Elaboration
 		spec.ElaborationRunID == spec.ImplementationRunID || spec.ProjectID == "" ||
 		spec.SourceArtifactID == "" || spec.PolicyArtifactID == "" {
 		return ElaborationRun{}, errors.New("submit elaboration run: distinct run IDs, project, source, and policy are required")
+	}
+	// A named source must be well-formed and, for the arm this path executes,
+	// agree with SourceArtifactID. The issue_subject arm is nameable in the
+	// spec but assembled by the label-intake reconciliation loop (#659), so it
+	// fails closed here rather than silently running the SourceArtifactID path.
+	// A zero Source (Kind == "") keeps the legacy spec-artifact behaviour.
+	if spec.Source.Kind != "" {
+		if err := spec.Source.Validate(); err != nil {
+			return ElaborationRun{}, fmt.Errorf("submit elaboration run source: %w", err)
+		}
+		switch spec.Source.Kind {
+		case domain.ElaborationSourceSpecArtifact:
+			if spec.Source.SpecArtifactID != spec.SourceArtifactID {
+				return ElaborationRun{}, fmt.Errorf(
+					"submit elaboration run: source spec artifact %q differs from source artifact %q: %w",
+					spec.Source.SpecArtifactID, spec.SourceArtifactID, domain.ErrParentKeyMismatch)
+			}
+		case domain.ElaborationSourceIssueSubject:
+			return ElaborationRun{}, errors.New(
+				"submit elaboration run: issue-subject elaboration is assembled by the " +
+					"label-intake reconciliation loop (#659), not this path")
+		}
 	}
 	if spec.ResolvedPolicy.RunID != spec.ElaborationRunID {
 		return ElaborationRun{}, fmt.Errorf("submit elaboration run: policy run %q differs from %q: %w",
