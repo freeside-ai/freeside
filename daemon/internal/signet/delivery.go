@@ -53,6 +53,9 @@ func (s *Service) SubmitDelivery(ctx context.Context, itemID domain.ItemID, devi
 	if err := s.ntfy.validate(); err != nil {
 		return domain.AttentionDelivery{}, fmt.Errorf("submit delivery %s/%s: %w: %w", itemID, deviceID, err, ErrNotifierUnavailable)
 	}
+	if err := s.convergeProposalSnoozes(ctx, s.now().UTC()); err != nil {
+		return domain.AttentionDelivery{}, fmt.Errorf("submit delivery %s/%s proposal snoozes: %w", itemID, deviceID, err)
+	}
 
 	var (
 		row  domain.AttentionDelivery
@@ -68,6 +71,11 @@ func (s *Service) SubmitDelivery(ctx context.Context, itemID domain.ItemID, devi
 		}
 		if item.Status != domain.StatusOpen {
 			return fmt.Errorf("item %q is %s: %w", itemID, item.Status, ErrItemNotOpenForDelivery)
+		}
+		if snoozed, err := proposalSnoozed(ctx, tx, item, s.now().UTC()); err != nil {
+			return err
+		} else if snoozed {
+			return ErrProposalSnoozed
 		}
 		attempt, err := nextAttempt(ctx, tx, itemID, deviceID)
 		if err != nil {

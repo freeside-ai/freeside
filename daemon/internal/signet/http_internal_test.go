@@ -63,3 +63,26 @@ func TestWriteCommandErrorClassifiesOversizedRequestChanges(t *testing.T) {
 		t.Fatalf("body = %q, %v; want an error message", recorder.Body.String(), err)
 	}
 }
+
+func TestNoOpProposalRevisionHTTPMappingIsAuthoritative(t *testing.T) {
+	t.Parallel()
+	recorder := httptest.NewRecorder()
+	writeCommandError(recorder, fmt.Errorf("submit revision: %w", ErrInvalidProposalDecisionPayload))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("no-op proposal revision -> %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+}
+
+func TestSnoozedProposalHTTPMappingsAreAuthoritative(t *testing.T) {
+	t.Parallel()
+	command := httptest.NewRecorder()
+	writeCommandError(command, fmt.Errorf("submit: %w", ErrProposalSnoozed))
+	if command.Code != http.StatusBadRequest {
+		t.Fatalf("snoozed command -> %d, want %d", command.Code, http.StatusBadRequest)
+	}
+	read := httptest.NewRecorder()
+	writeReadError(read, fmt.Errorf("get: %w", ErrProposalSnoozed))
+	if read.Code != http.StatusNotFound {
+		t.Fatalf("snoozed read -> %d, want %d", read.Code, http.StatusNotFound)
+	}
+}

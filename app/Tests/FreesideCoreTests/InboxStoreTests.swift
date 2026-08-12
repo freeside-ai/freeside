@@ -190,4 +190,34 @@ import Testing
         #expect(store.snapshotsByID["item-spec_approval"] == replacement)
         #expect(store.rows.count == AttentionFixtures.phase1Types.count)
     }
+
+    @Test func visibilityRemovalRejectsStaleResponsesUntilANewerRelease() async throws {
+        let store = await makeStore(server: MockServer())
+        let stale = try #require(store.snapshotsByID["item-run_proposal"])
+
+        store.removeSnapshot(
+            itemID: stale.item.id, atLeastEntityVersion: stale.entity_version)
+        #expect(!store.apply(stale))
+        store.replaceAll(with: [stale])
+        #expect(store.snapshotsByID[stale.item.id] == nil)
+
+        var released = stale
+        released.entity_version += 2
+        released.item.item_version += 2
+        #expect(store.apply(released))
+        #expect(store.snapshotsByID[stale.item.id] == released)
+    }
+
+    @Test func visibilityRemovalKeepsItsFloorAfterAnotherResponseAlreadyOmittedTheRow()
+        async throws
+    {
+        let store = await makeStore(server: MockServer())
+        let stale = try #require(store.snapshotsByID["item-run_proposal"])
+
+        store.replaceAll(with: [])
+        store.removeSnapshot(
+            itemID: stale.item.id, atLeastEntityVersion: stale.entity_version)
+        #expect(!store.apply(stale))
+        #expect(store.snapshotsByID[stale.item.id] == nil)
+    }
 }

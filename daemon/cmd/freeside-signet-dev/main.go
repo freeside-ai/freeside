@@ -554,10 +554,12 @@ func (c controlHandler) putItem(w http.ResponseWriter, r *http.Request) {
 		// else (store contention, I/O) is the harness's fault, not the
 		// request's, and must not read as a scripted 400 in a test log.
 		// ErrActionNotAllowedForType (a valid action wrong for the type) and
-		// ErrNoActions (a non-blocked type offering nothing) are both per-type
-		// policy rejections and surface as the client-visible 400 the parity
-		// suite asserts.
-		if errors.Is(err, signet.ErrActionNotAllowedForType) || errors.Is(err, domain.ErrNoActions) {
+		// ErrNoActions (a non-blocked type offering nothing) are per-type policy
+		// rejections. A valid run proposal reaches the later specialized-admission
+		// rejection because this generic test route cannot create its authority
+		// records atomically. All three are definitive client-visible 400s.
+		if errors.Is(err, signet.ErrActionNotAllowedForType) || errors.Is(err, domain.ErrNoActions) ||
+			errors.Is(err, signet.ErrProposalAdmissionRequired) {
 			controlJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 			return
 		}

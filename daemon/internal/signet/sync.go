@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -15,6 +16,8 @@ import (
 // in both reads and writes; signet adds the pure-read upper bound against the
 // ServerState read in the same transaction.
 var ErrInvalidSyncSnapshot = errors.New("invalid sync snapshot")
+
+var errNoProposalSnoozeRelease = errors.New("no proposal snooze release pending")
 
 // ServerRevision is the revision heartbeat payload. A changed SyncEpoch
 // invalidates every client cache; a higher Revision tells a client that it
@@ -30,6 +33,30 @@ type AttentionItemSnapshot struct {
 	AsOfRevision  int64                `json:"as_of_revision"`
 	EntityVersion int64                `json:"entity_version"`
 	Item          domain.AttentionItem `json:"item"`
+}
+
+// RunProposalFactsSnapshot is the authenticated, bounded review projection
+// for one run-proposal card. The opaque subject handle and policy identities
+// remain server-side; this tuple proves the facts match the rendered item and
+// its digest-bound proposal revision.
+type RunProposalFactsSnapshot struct {
+	AsOfRevision      int64                     `json:"as_of_revision"`
+	EntityVersion     int64                     `json:"entity_version"`
+	ItemVersion       int                       `json:"item_version"`
+	ProposalDigest    domain.Digest             `json:"proposal_digest"`
+	Supersedes        *RunProposalRevisionFacts `json:"supersedes"`
+	Intent            domain.RunProposalIntent  `json:"intent"`
+	ExpectedCostUnits int                       `json:"expected_cost_units"`
+	Scope             domain.RunProposalScope   `json:"scope"`
+}
+
+// RunProposalRevisionFacts is one bounded side of a revision comparison.
+// It contains no opaque handle or policy authority.
+type RunProposalRevisionFacts struct {
+	ProposalDigest    domain.Digest            `json:"proposal_digest"`
+	Intent            domain.RunProposalIntent `json:"intent"`
+	ExpectedCostUnits int                      `json:"expected_cost_units"`
+	Scope             domain.RunProposalScope  `json:"scope"`
 }
 
 // AttentionDeliverySnapshot is an AttentionDelivery with its store-stamped
@@ -85,6 +112,10 @@ type BootstrapSnapshot struct {
 // last_full_snapshot_revision. All other reads below are partial resource
 // fetches and deliberately carry no whole-cache revision cursor.
 func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
+	now := s.now().UTC()
+	if err := s.convergeProposalSnoozes(ctx, now); err != nil {
+		return BootstrapSnapshot{}, fmt.Errorf("bootstrap proposal snoozes: %w", err)
+	}
 	var out BootstrapSnapshot
 	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
 		state, err := tx.ServerState(ctx)
@@ -123,13 +154,25 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 			Conversations:       make([]ConversationSnapshot, 0, len(conversations)),
 			Schedules:           make([]ScheduleSnapshot, 0, len(schedules)),
 		}
+		snoozedItems := make(map[domain.ItemID]bool)
 		for _, item := range items {
 			if err := validateSnapshot(state, item.Snapshot); err != nil {
 				return fmt.Errorf("attention item %q: %w", item.Value.ID, err)
 			}
+			snoozed, err := proposalSnoozed(ctx, tx, item.Value, now)
+			if err != nil {
+				return fmt.Errorf("attention item %q snooze: %w", item.Value.ID, err)
+			}
+			if snoozed {
+				snoozedItems[item.Value.ID] = true
+				continue
+			}
 			out.AttentionItems = append(out.AttentionItems, itemSnapshot(item.Value, item.Snapshot))
 		}
 		for _, delivery := range deliveries {
+			if snoozedItems[delivery.Value.ItemID] {
+				continue
+			}
 			if err := validateSnapshot(state, delivery.Snapshot); err != nil {
 				return fmt.Errorf("attention delivery %q/%q/%s/%d: %w",
 					delivery.Value.ItemID, delivery.Value.DeviceID, delivery.Value.Channel, delivery.Value.Attempt, err)
@@ -168,6 +211,9 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 // Revision returns the cheap periodic heartbeat. Only Bootstrap advances the
 // client's full-snapshot cursor; this value exists to reveal a revision gap.
 func (s *Service) Revision(ctx context.Context) (ServerRevision, error) {
+	if err := s.convergeProposalSnoozes(ctx, s.now().UTC()); err != nil {
+		return ServerRevision{}, fmt.Errorf("sync revision proposal snoozes: %w", err)
+	}
 	state, err := s.store.ServerState(ctx)
 	if err != nil {
 		return ServerRevision{}, fmt.Errorf("sync revision: %w", err)
@@ -183,22 +229,47 @@ func (s *Service) Revision(ctx context.Context) (ServerRevision, error) {
 // included in the result and therefore cannot be mistaken for a full-cache
 // cursor.
 func (s *Service) ListAttentionItems(ctx context.Context) ([]AttentionItemSnapshot, error) {
-	state, values, err := readSnapshots(ctx, s.store, (*store.ReadTx).ListAttentionItems)
+	now := s.now().UTC()
+	if err := s.convergeProposalSnoozes(ctx, now); err != nil {
+		return nil, fmt.Errorf("list attention items proposal snoozes: %w", err)
+	}
+	var out []AttentionItemSnapshot
+	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+		state, err := tx.ServerState(ctx)
+		if err != nil {
+			return err
+		}
+		values, err := tx.ListAttentionItems(ctx)
+		if err != nil {
+			return err
+		}
+		out = make([]AttentionItemSnapshot, 0, len(values))
+		for _, value := range values {
+			if err := validateSnapshot(state, value.Snapshot); err != nil {
+				return fmt.Errorf("item %q: %w", value.Value.ID, err)
+			}
+			snoozed, err := proposalSnoozed(ctx, tx, value.Value, now)
+			if err != nil {
+				return fmt.Errorf("item %q snooze: %w", value.Value.ID, err)
+			}
+			if !snoozed {
+				out = append(out, itemSnapshot(value.Value, value.Snapshot))
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list attention items: %w", err)
-	}
-	out := make([]AttentionItemSnapshot, 0, len(values))
-	for _, value := range values {
-		if err := validateSnapshot(state, value.Snapshot); err != nil {
-			return nil, fmt.Errorf("list attention items: item %q: %w", value.Value.ID, err)
-		}
-		out = append(out, itemSnapshot(value.Value, value.Snapshot))
 	}
 	return out, nil
 }
 
 // GetAttentionItem returns one current canonical item snapshot.
 func (s *Service) GetAttentionItem(ctx context.Context, id domain.ItemID) (AttentionItemSnapshot, error) {
+	now := s.now().UTC()
+	if err := s.convergeProposalSnoozes(ctx, now); err != nil {
+		return AttentionItemSnapshot{}, fmt.Errorf("get attention item %q proposal snoozes: %w", id, err)
+	}
 	var out AttentionItemSnapshot
 	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
 		state, err := tx.ServerState(ctx)
@@ -212,6 +283,13 @@ func (s *Service) GetAttentionItem(ctx context.Context, id domain.ItemID) (Atten
 		if err := validateSnapshot(state, snapshot); err != nil {
 			return err
 		}
+		snoozed, err := proposalSnoozed(ctx, tx, item, now)
+		if err != nil {
+			return err
+		}
+		if snoozed {
+			return ErrProposalSnoozed
+		}
 		out = itemSnapshot(item, snapshot)
 		return nil
 	})
@@ -219,6 +297,93 @@ func (s *Service) GetAttentionItem(ctx context.Context, id domain.ItemID) (Atten
 		return AttentionItemSnapshot{}, fmt.Errorf("get attention item %q: %w", id, err)
 	}
 	return out, nil
+}
+
+// GetRunProposalFacts returns only store-authenticated proposal facts whose
+// item/entity/digest tuple can be matched to the decision card. It follows the
+// same active-snooze visibility rule as the item reads.
+func (s *Service) GetRunProposalFacts(ctx context.Context, id domain.ItemID) (RunProposalFactsSnapshot, error) {
+	now := s.now().UTC()
+	if err := s.convergeProposalSnoozes(ctx, now); err != nil {
+		return RunProposalFactsSnapshot{}, fmt.Errorf("get run proposal facts %q snoozes: %w", id, err)
+	}
+	var out RunProposalFactsSnapshot
+	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+		state, err := tx.ServerState(ctx)
+		if err != nil {
+			return err
+		}
+		item, snapshot, err := tx.GetAttentionItemSnapshot(ctx, id)
+		if err != nil {
+			return err
+		}
+		if err := validateSnapshot(state, snapshot); err != nil {
+			return err
+		}
+		if item.Type != domain.AttentionRunProposal {
+			return store.ErrNotFound
+		}
+		snoozed, err := proposalSnoozed(ctx, tx, item, now)
+		if err != nil {
+			return err
+		}
+		if snoozed {
+			return ErrProposalSnoozed
+		}
+		_, proposal, superseded, err := tx.ProposalForItemWithRevisionContext(ctx, id)
+		if err != nil {
+			return err
+		}
+		if proposal.RunProposal == nil || len(item.ArtifactDigests) != 1 ||
+			item.ArtifactDigests[0] != proposal.Digest {
+			return ErrInvalidSyncSnapshot
+		}
+		var supersedes *RunProposalRevisionFacts
+		if superseded != nil {
+			supersedes = &RunProposalRevisionFacts{
+				ProposalDigest: superseded.Digest, Intent: superseded.RunProposal.Intent,
+				ExpectedCostUnits: superseded.RunProposal.ExpectedCostUnits,
+				Scope:             superseded.RunProposal.Scope,
+			}
+		}
+		out = RunProposalFactsSnapshot{
+			AsOfRevision: snapshot.AsOfRevision, EntityVersion: snapshot.EntityVersion,
+			ItemVersion: item.ItemVersion, ProposalDigest: proposal.Digest,
+			Supersedes: supersedes, Intent: proposal.RunProposal.Intent,
+			ExpectedCostUnits: proposal.RunProposal.ExpectedCostUnits,
+			Scope:             proposal.RunProposal.Scope,
+		}
+		return nil
+	})
+	if err != nil {
+		return RunProposalFactsSnapshot{}, fmt.Errorf("get run proposal facts %q: %w", id, err)
+	}
+	return out, nil
+}
+
+func (s *Service) convergeProposalSnoozes(ctx context.Context, now time.Time) error {
+	var pending bool
+	if err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		pending, err = tx.ProposalSnoozeReleasePending(ctx, now)
+		return err
+	}); err != nil || !pending {
+		return err
+	}
+	err := s.store.Write(ctx, func(tx *store.WriteTx) error {
+		released, err := tx.ReleaseExpiredProposalSnoozes(ctx, now)
+		if err != nil {
+			return err
+		}
+		if !released {
+			return errNoProposalSnoozeRelease
+		}
+		return nil
+	})
+	if errors.Is(err, errNoProposalSnoozeRelease) {
+		return nil
+	}
+	return err
 }
 
 // ListAttentionItemDeliveries returns every delivery attempt for one item in

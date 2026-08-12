@@ -73,6 +73,111 @@ import Testing
         _ = try missing.notFound
     }
 
+    @Test func proposalRevisionCreatesExactReplacementAndFactsDiff() async throws {
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        let before = try await client.getAttentionItem(
+            path: .init(item_id: "item-run_proposal")
+        ).ok.body.json
+        var command = Self.command(
+            id: "cmd-revise-proposal", against: before, action: .start_with_changes)
+        command.payload.run_proposal_revision = .init(
+            value1: .init(
+                intent: .implement_subject, expected_cost_units: 25,
+                scope: .init(
+                    component_count: 2, declared_path_count: 3,
+                    touches_control_plane: true)))
+
+        _ = try await client.submitCommand(body: .json(command)).ok.body.json
+
+        let original = try await client.getAttentionItem(
+            path: .init(item_id: before.item.id)
+        ).ok.body.json
+        #expect(original.item.status == .superseded)
+        let replacementID = before.item.id + "/revision/" + command.command_id
+        let replacement = try await client.getAttentionItem(
+            path: .init(item_id: replacementID)
+        ).ok.body.json
+        let facts = try await client.getRunProposalFacts(
+            path: .init(item_id: replacementID)
+        ).ok.body.json
+        #expect(replacement.item.status == .resolved)
+        #expect(replacement.item.artifact_digests == [facts.proposal_digest])
+        #expect(facts.supersedes?.value1.proposal_digest == before.item.artifact_digests[0])
+        #expect(facts.supersedes?.value1.expected_cost_units == 12)
+        #expect(facts.expected_cost_units == 25)
+        #expect(facts.scope.component_count == 2)
+    }
+
+    @Test func unchangedProposalRevisionIsDefinitiveAndDoesNotAdvanceRevision() async throws {
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        let before = try await client.getAttentionItem(
+            path: .init(item_id: "item-run_proposal")
+        ).ok.body.json
+        let facts = try await client.getRunProposalFacts(
+            path: .init(item_id: before.item.id)
+        ).ok.body.json
+        let revisionBefore = try await client.getSyncRevision().ok.body.json.revision
+        var command = Self.command(
+            id: "cmd-no-op-proposal", against: before, action: .start_with_changes)
+        command.payload.run_proposal_revision = .init(
+            value1: .init(
+                intent: facts.intent, expected_cost_units: facts.expected_cost_units,
+                scope: facts.scope))
+
+        let response = try await client.submitCommand(body: .json(command))
+        guard case .undocumented(let status, _) = response else {
+            Issue.record("unchanged proposal revision was not definitively rejected: \(response)")
+            return
+        }
+        #expect(status == 400)
+        #expect(try await client.getSyncRevision().ok.body.json.revision == revisionBefore)
+        let after = try await client.getAttentionItem(
+            path: .init(item_id: before.item.id)
+        ).ok.body.json
+        #expect(after == before)
+    }
+
+    @Test func proposalSnoozeHidesThenReleasesWithVersionedTransitions() async throws {
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        let before = try await client.getAttentionItem(
+            path: .init(item_id: "item-run_proposal")
+        ).ok.body.json
+        let until = Date(timeIntervalSince1970: 1_786_506_245)
+        var command = Self.command(id: "cmd-snooze-proposal", against: before, action: .snooze)
+        command.payload.snooze_until = until
+
+        _ = try await client.submitCommand(body: .json(command)).ok.body.json
+        _ = try await client.getAttentionItem(path: .init(item_id: before.item.id)).notFound
+        guard let hidden = await server.snapshot(itemID: before.item.id) else {
+            Issue.record("snoozed proposal disappeared from durable mock state")
+            return
+        }
+        let beforeRejected = try await client.getSyncRevision().ok.body.json.revision
+        let rejected = try await client.submitCommand(
+            body: .json(Self.command(id: "cmd-while-snoozed", against: hidden, action: .start)))
+        guard case .undocumented(let status, _) = rejected else {
+            Issue.record("active snooze accepted a new command: \(rejected)")
+            return
+        }
+        #expect(status == 400)
+        #expect(try await client.getSyncRevision().ok.body.json.revision == beforeRejected)
+
+        await server.advanceTime(to: until)
+        let released = try await client.getAttentionItem(
+            path: .init(item_id: before.item.id)
+        ).ok.body.json
+        #expect(released.item.status == .open)
+        #expect(released.item.item_version == before.item.item_version + 2)
+        #expect(released.entity_version == before.entity_version + 2)
+        _ = try await client.submitCommand(
+            body: .json(Self.command(id: "cmd-after-snooze", against: released, action: .start))
+        )
+        .ok.body.json
+    }
+
     @Test func attachmentsServeSeededBytesAndUnknownDigestIsNotFound() async throws {
         // The digest-addressed read path (plan §4): stored bytes come
         // back verbatim through the generated binary pipeline, and a

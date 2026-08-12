@@ -50,6 +50,8 @@ public actor MockServer {
         let artifactDigests: [String]
         let message: String
         let attachments: [String]
+        let runProposalRevision: Components.Schemas.RunProposalRevisionInput?
+        let snoozeUntil: Date?
 
         init(_ command: Components.Schemas.ClientCommand) {
             commandID = command.command_id
@@ -64,12 +66,17 @@ public actor MockServer {
             // sent, never canonicalized.
             message = command.payload.message ?? ""
             attachments = command.payload.attachments ?? []
+            runProposalRevision = command.payload.run_proposal_revision?.value1
+            snoozeUntil = command.payload.snooze_until
         }
     }
 
     private var itemsByID: [String: Components.Schemas.AttentionItemSnapshot] = [:]
     private var commandsByID: [String: NormalizedCommand] = [:]
     private var resultsByCommandID: [String: Components.Schemas.CommandResult] = [:]
+    private var proposalFactsByItemID: [String: Components.Schemas.RunProposalFactsSnapshot] = [:]
+    private var proposalSnoozesByItemID: [String: Date] = [:]
+    private var currentTime = Date(timeIntervalSince1970: 1_786_502_645)
     private var revision: Int64 = 1
     private var syncEpoch = "mock-epoch"
     private var epochGeneration = 1
@@ -243,6 +250,11 @@ public actor MockServer {
         snapshot.as_of_revision = revision
         snapshot.item.item_version += 1
         itemsByID[itemID] = snapshot
+    }
+
+    public func advanceTime(to instant: Date) {
+        currentTime = instant
+        convergeProposalSnoozes()
     }
 
     /// The server's current canonical snapshot, for test assertions.
@@ -455,6 +467,14 @@ public actor MockServer {
     /// expected-version check, both ahead of the replay read).
     public struct MalformedCommandError: Error {
         public let commandID: String
+        public let reason: String
+    }
+
+    public struct ProposalSnoozedError: Error {
+        public let itemID: String
+    }
+
+    public struct InvalidProposalDecisionError: Error {
         public let reason: String
     }
 
@@ -716,10 +736,13 @@ public actor MockServer {
     /// unrepresentable. Evidence eligibility beyond the binding
     /// invariant is already unrepresentable in the generated shapes.
     func listAttentionItems() throws -> [Components.Schemas.AttentionItemSnapshot] {
+        convergeProposalSnoozes()
         // The daemon's list query orders by item id (store list.go), not
         // by insertion, so seeded scenarios see the same stable order a
         // real inbox would.
-        let snapshots = itemsByID.keys.sorted().compactMap { itemsByID[$0] }
+        let snapshots = itemsByID.keys.sorted().compactMap { id in
+            proposalSnoozesByItemID[id] == nil ? itemsByID[id] : nil
+        }
         for snapshot in snapshots {
             if let breach = snapshotBreach(snapshot) {
                 throw InvalidItemError(itemID: snapshot.item.id, reason: breach)
@@ -733,11 +756,35 @@ public actor MockServer {
     func servedSnapshot(
         itemID: String
     ) throws -> Components.Schemas.AttentionItemSnapshot? {
+        convergeProposalSnoozes()
+        guard proposalSnoozesByItemID[itemID] == nil else { return nil }
         guard let snapshot = itemsByID[itemID] else { return nil }
         if let breach = snapshotBreach(snapshot) {
             throw InvalidItemError(itemID: itemID, reason: breach)
         }
         return snapshot
+    }
+
+    func runProposalFacts(
+        itemID: String
+    ) throws -> Components.Schemas.RunProposalFactsSnapshot? {
+        guard let snapshot = try servedSnapshot(itemID: itemID), snapshot.item._type == .run_proposal,
+            let digest = snapshot.item.evidence_snapshot.first?.digest
+        else { return nil }
+        if let facts = proposalFactsByItemID[itemID] {
+            return facts
+        }
+        return .init(
+            as_of_revision: snapshot.as_of_revision,
+            entity_version: snapshot.entity_version,
+            item_version: snapshot.item.item_version,
+            proposal_digest: digest,
+            supersedes: nil,
+            intent: .implement_subject,
+            expected_cost_units: 12,
+            scope: .init(
+                component_count: 1, declared_path_count: 3,
+                touches_control_plane: false))
     }
 
     /// The actor's convenience wrapper over
@@ -753,6 +800,7 @@ public actor MockServer {
     }
 
     func submitCommand(_ command: Components.Schemas.ClientCommand) throws -> SubmitOutcome {
+        convergeProposalSnoozes()
         // Well-formedness precedes every lookup, as the signet boundary
         // orders it (domain.NewCommand, then expected_entity_version):
         // ids identify, versions are positive, digests content-address.
@@ -790,6 +838,9 @@ public actor MockServer {
         // the action-not-offered gate below, as on the daemon.
         if let breach = MockContractValidation.itemPolicyBreach(current.item) {
             throw ItemPolicyError(itemID: payload.item_id, reason: breach)
+        }
+        if proposalSnoozesByItemID[payload.item_id] != nil {
+            throw ProposalSnoozedError(itemID: payload.item_id)
         }
         // The pending gate runs only for a genuinely new command against
         // a policy-valid item (ErrUnsupportedAction).
@@ -830,6 +881,25 @@ public actor MockServer {
         guard current.item.requested_decision.contains(payload.action) else {
             throw ActionNotOfferedError(
                 commandID: command.command_id, action: payload.action, itemID: payload.item_id)
+        }
+        switch ActionOutcome.of(payload.action) {
+        case .revisesProposal:
+            guard let revised = payload.run_proposal_revision?.value1 else {
+                throw MalformedCommandError(
+                    commandID: command.command_id, reason: "missing run_proposal_revision")
+            }
+            guard let facts = try runProposalFacts(itemID: payload.item_id),
+                !Self.isSameProposal(revised, facts)
+            else {
+                throw InvalidProposalDecisionError(reason: "run_proposal_revision is unchanged")
+            }
+        case .snoozesProposal:
+            guard let until = payload.snooze_until, until > currentTime else {
+                throw MalformedCommandError(
+                    commandID: command.command_id, reason: "snooze_until is not in the future")
+            }
+        default:
+            break
         }
         revision += 1
         switch ActionOutcome.of(payload.action) {
@@ -906,6 +976,71 @@ public actor MockServer {
             // operation transition; the carrier resolution is the sync-visible
             // portion the mock can mirror.
             itemsByID[payload.item_id] = concluded(current, as: .resolved)
+        case .revisesProposal:
+            guard let revised = payload.run_proposal_revision?.value1, payload.snooze_until == nil,
+                payload.message == nil, payload.attachments == nil
+            else {
+                throw MalformedCommandError(
+                    commandID: command.command_id,
+                    reason: "start_with_changes requires only run_proposal_revision")
+            }
+            guard let priorFacts = try runProposalFacts(itemID: payload.item_id),
+                var artifact = current.item.evidence_snapshot.first
+            else {
+                throw MalformedCommandError(
+                    commandID: command.command_id, reason: "proposal facts are unavailable")
+            }
+            let revisedDigest = Self.proposalDigest(revised)
+            var superseded = current
+            superseded.entity_version += 1
+            superseded.as_of_revision = revision
+            superseded.item.item_version += 1
+            superseded.item.status = .superseded
+            itemsByID[payload.item_id] = superseded
+
+            artifact.id += "-revision-\(command.command_id)"
+            artifact.digest = revisedDigest
+            let replacementID = payload.item_id + "/revision/" + command.command_id
+            var replacement = current
+            replacement.as_of_revision = revision
+            replacement.entity_version = 1
+            replacement.item.id = replacementID
+            replacement.item.reason = "Start the revised daemon-enumerated work subject"
+            replacement.item.evidence_snapshot = [artifact]
+            replacement.item.agent_claims = []
+            replacement.item.artifact_digests = [revisedDigest]
+            replacement.item.item_version += 1
+            replacement.item.status = .resolved
+            replacement.item.decided_at = currentTime
+            itemsByID[replacementID] = replacement
+            proposalFactsByItemID[replacementID] = .init(
+                as_of_revision: revision, entity_version: 1,
+                item_version: replacement.item.item_version,
+                proposal_digest: revisedDigest,
+                supersedes: .init(
+                    value1: .init(
+                        proposal_digest: priorFacts.proposal_digest,
+                        intent: priorFacts.intent,
+                        expected_cost_units: priorFacts.expected_cost_units,
+                        scope: priorFacts.scope)),
+                intent: revised.intent,
+                expected_cost_units: revised.expected_cost_units,
+                scope: revised.scope)
+        case .snoozesProposal:
+            guard let until = payload.snooze_until,
+                payload.run_proposal_revision == nil, payload.message == nil,
+                payload.attachments == nil
+            else {
+                throw MalformedCommandError(
+                    commandID: command.command_id,
+                    reason: "snooze requires only a future snooze_until")
+            }
+            var snoozed = current
+            snoozed.entity_version += 1
+            snoozed.as_of_revision = revision
+            snoozed.item.item_version += 1
+            itemsByID[payload.item_id] = snoozed
+            proposalSnoozesByItemID[payload.item_id] = until
         case .records:
             // The command record is the whole server-side effect; the
             // item row is left untouched (signet outcomeRecords).
@@ -937,6 +1072,39 @@ public actor MockServer {
         commandsByID[command.command_id] = NormalizedCommand(command)
         resultsByCommandID[command.command_id] = result
         return .ok(result)
+    }
+
+    private func convergeProposalSnoozes() {
+        let expired = proposalSnoozesByItemID.filter { $0.value <= currentTime }.map(\.key)
+        for itemID in expired {
+            proposalSnoozesByItemID.removeValue(forKey: itemID)
+            guard var snapshot = itemsByID[itemID] else { continue }
+            revision += 1
+            snapshot.as_of_revision = revision
+            snapshot.entity_version += 1
+            snapshot.item.item_version += 1
+            itemsByID[itemID] = snapshot
+        }
+    }
+
+    private static func proposalDigest(
+        _ revision: Components.Schemas.RunProposalRevisionInput
+    ) -> String {
+        MockContractValidation.sha256Digest(
+            of: "\(revision.intent.rawValue)|\(revision.expected_cost_units)|"
+                + "\(revision.scope.component_count)|\(revision.scope.declared_path_count)|"
+                + "\(revision.scope.touches_control_plane)")
+    }
+
+    private static func isSameProposal(
+        _ revision: Components.Schemas.RunProposalRevisionInput,
+        _ facts: Components.Schemas.RunProposalFactsSnapshot
+    ) -> Bool {
+        revision.intent == facts.intent
+            && revision.expected_cost_units == facts.expected_cost_units
+            && revision.scope.component_count == facts.scope.component_count
+            && revision.scope.declared_path_count == facts.scope.declared_path_count
+            && revision.scope.touches_control_plane == facts.scope.touches_control_plane
     }
 
     /// The concluding decision's item side: version bump, terminal status,

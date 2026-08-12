@@ -49,6 +49,7 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHea
 	mux.Handle("GET /sync/revision", h.authenticated(h.getRevision))
 	mux.Handle("GET /attention/items", h.authenticated(h.listAttentionItems))
 	mux.Handle("GET /attention/items/{item_id}", h.authenticated(h.getAttentionItem))
+	mux.Handle("GET /attention/items/{item_id}/run-proposal", h.authenticated(h.getRunProposalFacts))
 	mux.Handle("GET /attention/items/{item_id}/deliveries", h.authenticated(h.listAttentionItemDeliveries))
 	mux.Handle("PUT /attention/items/{item_id}/deliveries/{channel}/{attempt}/opened", h.authenticated(h.reportDeliveryOpened))
 	mux.Handle("GET /runs", h.authenticated(h.listRuns))
@@ -133,6 +134,15 @@ func (h httpHandler) getAttentionItem(w http.ResponseWriter, r *http.Request, _ 
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+func (h httpHandler) getRunProposalFacts(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {
+	facts, err := h.service.GetRunProposalFacts(r.Context(), domain.ItemID(r.PathValue("item_id")))
+	if err != nil {
+		writeReadError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, facts)
 }
 
 func (h httpHandler) listAttentionItemDeliveries(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {
@@ -292,8 +302,10 @@ type decisionPayloadRequest struct {
 	// pure decisions omit them); the service's per-action content policy
 	// decides whether their presence or absence is an error, so nil maps to
 	// the zero values rather than a required-field 400 here.
-	Message     *string          `json:"message"`
-	Attachments *[]domain.Digest `json:"attachments"`
+	Message             *string                   `json:"message"`
+	Attachments         *[]domain.Digest          `json:"attachments"`
+	RunProposalRevision *RunProposalRevisionInput `json:"run_proposal_revision"`
+	SnoozeUntil         *time.Time                `json:"snooze_until"`
 }
 
 func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authenticatedDevice domain.DeviceID) {
@@ -332,7 +344,9 @@ func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authe
 	payload := DecisionPayload{
 		ItemID: request.Payload.ItemID, Action: request.Payload.Action,
 		ItemVersion: request.Payload.ItemVersion, PRHeadSHA: *request.Payload.PRHeadSHA,
-		ArtifactDigests: *request.Payload.ArtifactDigests,
+		ArtifactDigests:     *request.Payload.ArtifactDigests,
+		RunProposalRevision: request.Payload.RunProposalRevision,
+		SnoozeUntil:         request.Payload.SnoozeUntil,
 	}
 	if request.Payload.Message != nil {
 		payload.Message = *request.Payload.Message
@@ -467,6 +481,7 @@ func writeCommandError(w http.ResponseWriter, err error) {
 func isCommandRequestError(err error) bool {
 	for _, target := range []error{
 		ErrActionNotAllowedForType, ErrUnsupportedAction,
+		ErrInvalidProposalDecisionPayload,
 		ErrMessageRequired, ErrContentNotAllowed, ErrAttachmentNotStored,
 		// An over-limit request_changes message is deterministic invalid
 		// client input, rejected by validateCommandContent before the write,
@@ -496,6 +511,7 @@ func isCommandRequestError(err error) bool {
 // possibly-committed 5xx that holds its pending slot and replays forever.
 func isCommandAuthorityRejection(err error) bool {
 	for _, target := range []error{
+		ErrProposalSnoozed,
 		domain.ErrReviewConfigAdoptionIneffective,
 		domain.ErrReviewConfigSupersessionInvalid,
 		domain.ErrReviewConfigRecoveryBindingMissing,
@@ -519,7 +535,7 @@ func isCommandAuthorityRejection(err error) bool {
 }
 
 func writeReadError(w http.ResponseWriter, err error) {
-	if errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, store.ErrNotFound) || errors.Is(err, ErrProposalSnoozed) {
 		writeJSON(w, http.StatusNotFound, errorResponse{Message: "not found"})
 		return
 	}

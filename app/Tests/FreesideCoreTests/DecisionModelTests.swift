@@ -263,6 +263,121 @@ import Testing
         #expect(model.snapshot?.item.status == .open)
     }
 
+    @Test func runProposalRendersAuthenticatedFactsAndSubmitsTypedRevision() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        await model.validate()
+
+        #expect(model.proposalFacts?.intent == .implement_subject)
+        #expect(model.proposalFacts?.expected_cost_units == 12)
+        #expect(model.proposalFacts?.scope.component_count == 1)
+        #expect(model.actionsEnabled)
+        for action in [
+            Components.Schemas.Action.start, .start_with_changes, .decline, .snooze,
+        ] {
+            #expect(model.isSubmittable(action))
+        }
+        #expect(model.isSubmittable(.start_with_changes))
+        #expect(model.isSubmittable(.snooze))
+
+        guard let facts = model.proposalFacts else { return }
+        await model.submitRunProposalRevision(
+            .init(
+                intent: facts.intent,
+                expected_cost_units: 20,
+                scope: .init(
+                    component_count: 2, declared_path_count: facts.scope.declared_path_count,
+                    touches_control_plane: true)))
+
+        #expect(model.appliedRecord?.action == .start_with_changes)
+        #expect(model.snapshot?.item.status == .superseded)
+    }
+
+    @Test func parameterizedRunProposalActionsCannotUseTheUntypedSubmitPath() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        await model.validate()
+
+        await model.submit(.start_with_changes)
+        await model.submit(.snooze)
+
+        #expect(model.appliedRecord == nil)
+        #expect(model.pendingCommand == nil)
+        #expect(model.snapshot?.item.status == .open)
+    }
+
+    @Test func unchangedRunProposalRevisionClearsTheDefinitivelyRejectedCommand() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        await model.validate()
+        guard let facts = model.proposalFacts else { return }
+
+        await model.submitRunProposalRevision(
+            .init(
+                intent: facts.intent, expected_cost_units: facts.expected_cost_units,
+                scope: facts.scope))
+
+        #expect(model.appliedRecord == nil)
+        #expect(model.pendingCommand == nil)
+        #expect(model.snapshot?.item.status == .open)
+        #expect(model.submissionError != nil)
+    }
+
+    @Test(arguments: [Components.Schemas.Action.start, .decline])
+    func runProposalTerminalControlsSubmit(action: Components.Schemas.Action) async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        await model.validate()
+
+        await model.submit(action)
+
+        #expect(model.appliedRecord?.action == action)
+        #expect(model.snapshot?.item.status == (action == .start ? .resolved : .dismissed))
+    }
+
+    @Test func runProposalSnoozeControlSubmitsTypedInstant() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        await model.validate()
+
+        await model.snooze(until: Date(timeIntervalSince1970: 1_786_506_245))
+
+        #expect(model.appliedRecord?.action == .snooze)
+        #expect(model.snapshot == nil)
+        #expect(model.validation == .validated)
+        #expect(model.submissionError == nil)
+        #expect(!model.actionsEnabled)
+    }
+
+    @Test func selectedRunProposalRevalidatesWhenItsSnapshotTupleAdvances() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let model = DecisionModel(store: store, itemID: "item-run_proposal")
+        await model.validate()
+        let beforeID = model.revalidationID
+        #expect(model.actionsEnabled)
+
+        await server.advance(itemID: "item-run_proposal")
+        guard let advanced = await server.snapshot(itemID: "item-run_proposal") else {
+            Issue.record("advanced proposal snapshot disappeared")
+            return
+        }
+        #expect(store.apply(advanced))
+        #expect(model.revalidationID != beforeID)
+        #expect(!model.actionsEnabled)
+
+        await model.validate()
+        #expect(model.proposalFacts?.as_of_revision == advanced.as_of_revision)
+        #expect(model.proposalFacts?.entity_version == advanced.entity_version)
+        #expect(model.proposalFacts?.item_version == advanced.item.item_version)
+        #expect(model.actionsEnabled)
+    }
+
     @Test func blockedItemOffersNoActionableDecision() async {
         // Signet policy pins blocked read-only: since #96 it offers the
         // empty set, so the card renders no action button, and even a

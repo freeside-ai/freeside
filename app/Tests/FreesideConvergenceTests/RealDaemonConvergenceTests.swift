@@ -409,15 +409,24 @@ struct RealDaemonConvergenceTests {
         let allowed = try #require(AttentionFixtures.phase1ActionSets[type])
         let allowedSet = Set(allowed)
 
-        // The whole allowed set is accepted at the policy boundary (blocked: the
-        // empty set). A fixture that offered an action the daemon disallows would
-        // 400 here — one drift signal.
+        // The whole allowed set reaches the post-policy boundary (blocked: the
+        // empty set). Run proposals then fail with the specialized-admission
+        // sentinel because this generic fixture route cannot atomically create
+        // their instance, carrier, and binding. Any disallowed action would fail
+        // earlier with the distinct policy error.
         let whole = try await control.seedItemOutcome(
             id: ConvergenceHarness.uniqueItemID("pol-\(type.rawValue)-all"),
             type: type, actions: allowed)
-        #expect(
-            whole.statusCode == 200,
-            "allowed set for \(type.rawValue) rejected: \(whole.message ?? "")")
+        if type == .run_proposal {
+            #expect(whole.statusCode == 400)
+            #expect(
+                whole.message?.contains("requires atomic proposal admission") == true,
+                "allowed run-proposal set did not reach admission: \(whole.message ?? "")")
+        } else {
+            #expect(
+                whole.statusCode == 200,
+                "allowed set for \(type.rawValue) rejected: \(whole.message ?? "")")
+        }
 
         // Each action's individual verdict must equal the fixture's
         // classification: allowed → accepted; otherwise → the typed
@@ -428,9 +437,16 @@ struct RealDaemonConvergenceTests {
                 id: ConvergenceHarness.uniqueItemID("pol-\(type.rawValue)-\(action.rawValue)"),
                 type: type, actions: [action])
             if allowedSet.contains(action) {
-                #expect(
-                    outcome.statusCode == 200,
-                    "\(action.rawValue) should be allowed for \(type.rawValue): \(outcome.message ?? "")")
+                if type == .run_proposal {
+                    #expect(outcome.statusCode == 400)
+                    #expect(
+                        outcome.message?.contains("requires atomic proposal admission") == true,
+                        "\(action.rawValue) did not pass run-proposal policy: \(outcome.message ?? "")")
+                } else {
+                    #expect(
+                        outcome.statusCode == 200,
+                        "\(action.rawValue) should be allowed for \(type.rawValue): \(outcome.message ?? "")")
+                }
             } else {
                 #expect(
                     outcome.statusCode == 400,

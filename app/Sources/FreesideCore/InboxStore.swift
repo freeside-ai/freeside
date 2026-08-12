@@ -98,6 +98,10 @@ public final class InboxStore {
     /// records engagement the operator may not have completed.
     private var navigationReservations: Set<String> = []
     private var serverOrder: [String] = []
+    /// Same-epoch visibility removals retain the last rendered entity version
+    /// so an older in-flight list/bootstrap cannot resurrect a snoozed row.
+    /// A strictly newer snapshot is the release transition and clears it.
+    private var removalVersionFloors: [String: Int64] = [:]
     /// Bumped every time the cache is evicted for a sync-epoch change
     /// (`discardSnapshots`, driven only by `SyncCoordinator.discardCache`).
     /// A per-item validation stamps the generation it certified against,
@@ -170,6 +174,10 @@ public final class InboxStore {
     /// carries no epoch, so the rejection is the only local signal.
     @discardableResult
     public func apply(_ snapshot: Components.Schemas.AttentionItemSnapshot) -> Bool {
+        if let floor = removalVersionFloors[snapshot.item.id] {
+            guard snapshot.entity_version > floor else { return false }
+            removalVersionFloors.removeValue(forKey: snapshot.item.id)
+        }
         if let existing = snapshotsByID[snapshot.item.id],
             existing.entity_version > snapshot.entity_version
         {
@@ -183,6 +191,17 @@ public final class InboxStore {
         return true
     }
 
+    /// Removes a row after an authoritative read proves it is intentionally
+    /// absent from the visible inbox, as an active proposal snooze does. This
+    /// is a same-epoch visibility transition, not a cache-epoch reset.
+    public func removeSnapshot(itemID: String, atLeastEntityVersion floor: Int64) {
+        let renderedVersion = snapshotsByID[itemID]?.entity_version ?? 0
+        removalVersionFloors[itemID] = max(
+            removalVersionFloors[itemID] ?? 0, renderedVersion, floor)
+        snapshotsByID.removeValue(forKey: itemID)
+        serverOrder.removeAll { $0 == itemID }
+    }
+
     /// Ingests a bootstrap or the persisted cache: the canonical full
     /// snapshot replaces rows and order wholesale (per-item version
     /// monotonicity still holds against a racing partial read), while
@@ -192,6 +211,10 @@ public final class InboxStore {
     public func replaceAll(with snapshots: [Components.Schemas.AttentionItemSnapshot]) {
         var replaced: [String: Components.Schemas.AttentionItemSnapshot] = [:]
         for snapshot in snapshots {
+            if let floor = removalVersionFloors[snapshot.item.id] {
+                guard snapshot.entity_version > floor else { continue }
+                removalVersionFloors.removeValue(forKey: snapshot.item.id)
+            }
             if let existing = snapshotsByID[snapshot.item.id],
                 existing.entity_version > snapshot.entity_version
             {
@@ -201,7 +224,7 @@ public final class InboxStore {
             }
         }
         snapshotsByID = replaced
-        serverOrder = snapshots.map(\.item.id)
+        serverOrder = snapshots.map(\.item.id).filter { replaced[$0] != nil }
         loadState = .loaded
         for snapshot in snapshots {
             revisionObserver?(snapshot.as_of_revision)
@@ -215,6 +238,7 @@ public final class InboxStore {
     public func discardSnapshots() {
         snapshotsByID = [:]
         serverOrder = []
+        removalVersionFloors = [:]
         loadState = .idle
         // A new epoch: every prior per-item validation is now stale, even
         // for rows a subsequent bootstrap repopulates (issue #162).

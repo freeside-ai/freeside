@@ -213,6 +213,30 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /attention/items/{item_id}/run-proposal:
+    get:
+      operationId: getRunProposalFacts
+      tags: [attention]
+      summary: Get authenticated run-proposal facts
+      description: >
+        Returns the exact digest-bound run-proposal facts rendered by a
+        run_proposal item. The daemon reconstructs the private proposal ledger,
+        re-resolves the opaque work-unit handle through its durable declaration
+        and current policy, and returns only bounded review facts. The version
+        tuple lets the client prove the facts and card were read from the same
+        item state. Active snoozes remain hidden as 404.
+      parameters:
+        - $ref: "#/components/parameters/ItemID"
+      responses:
+        "200":
+          description: Authenticated run-proposal facts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunProposalFactsSnapshot"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /attention/items/{item_id}/deliveries:
     get:
       operationId: listAttentionItemDeliveries
@@ -720,6 +744,103 @@ components:
         item:
           $ref: "#/components/schemas/AttentionItem"
 
+    RunProposalFactsSnapshot:
+      type: object
+      description: >
+        Store-authenticated, digest-bound proposal facts matched to one exact
+        attention-item snapshot before the client enables a decision.
+      additionalProperties: false
+      required:
+        - as_of_revision
+        - entity_version
+        - item_version
+        - proposal_digest
+        - supersedes
+        - intent
+        - expected_cost_units
+        - scope
+      properties:
+        as_of_revision:
+          $ref: "#/components/schemas/AsOfRevision"
+        entity_version:
+          $ref: "#/components/schemas/EntityVersion"
+        item_version:
+          type: integer
+          minimum: 1
+        proposal_digest:
+          $ref: "#/components/schemas/Digest"
+        supersedes:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RunProposalRevisionFacts"
+          description: >
+            The exact authenticated prior facts for a revised card; null for
+            the initially admitted proposal.
+        intent:
+          $ref: "#/components/schemas/RunProposalIntent"
+        expected_cost_units:
+          type: integer
+          minimum: 1
+          maximum: 1000000
+        scope:
+          $ref: "#/components/schemas/RunProposalScope"
+
+    RunProposalRevisionFacts:
+      type: object
+      description: One digest-bound, bounded side of a proposal revision comparison.
+      additionalProperties: false
+      required: [proposal_digest, intent, expected_cost_units, scope]
+      properties:
+        proposal_digest:
+          $ref: "#/components/schemas/Digest"
+        intent:
+          $ref: "#/components/schemas/RunProposalIntent"
+        expected_cost_units:
+          type: integer
+          minimum: 1
+          maximum: 1000000
+        scope:
+          $ref: "#/components/schemas/RunProposalScope"
+
+    RunProposalRevisionInput:
+      type: object
+      description: >
+        Bounded public parameters an operator may revise; the opaque work-unit
+        handle and current policy remain store-derived authority.
+      additionalProperties: false
+      required: [intent, expected_cost_units, scope]
+      properties:
+        intent:
+          $ref: "#/components/schemas/RunProposalIntent"
+        expected_cost_units:
+          type: integer
+          minimum: 1
+          maximum: 1000000
+        scope:
+          $ref: "#/components/schemas/RunProposalScope"
+
+    RunProposalScope:
+      type: object
+      description: Bounded aggregate scope facts with no paths or target identities.
+      additionalProperties: false
+      required: [component_count, declared_path_count, touches_control_plane]
+      properties:
+        component_count:
+          type: integer
+          minimum: 1
+          maximum: 32
+        declared_path_count:
+          type: integer
+          minimum: 1
+          maximum: 4096
+        touches_control_plane:
+          type: boolean
+
+    RunProposalIntent:
+      type: string
+      description: Closed intent understood by the run-proposal registry.
+      enum: [implement_subject]
+
     AttentionDeliverySnapshot:
       type: object
       description: A resource snapshot wrapping one attention delivery (plan §5.14).
@@ -1152,6 +1273,23 @@ components:
             /attachments/{digest}, referenced by the appended message. Unlike
             artifact_digests this is ordered message content, not a binding
             set: order is preserved, never canonicalized.
+        run_proposal_revision:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RunProposalRevisionInput"
+          description: >
+            Typed replacement parameters, present only for
+            start_with_changes. The daemon preserves the current opaque
+            subject handle, re-resolves its declaration and policy, and
+            computes the revised digest inside the accepting transaction.
+        snooze_until:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            Typed UTC deferral instant, present only for snooze. The daemon
+            requires a future canonical instant and records it in the proposal
+            ledger.
       example:
         item_id: "item-1"
         action: "open_pr"

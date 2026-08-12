@@ -209,6 +209,13 @@ public enum AttentionFixtures {
                     text: .init(media_type: .text_sol_markdown, content: summary)
                 ))
         }
+        // A run-proposal item is the exact store-derived carrier for one
+        // proposal digest. Unlike ordinary attention cards it has no agent
+        // claims, so the client's authenticated-facts tuple can require the
+        // sole command binding to equal that proposal digest.
+        if type == .run_proposal {
+            agentClaims = []
+        }
 
         // The daemon-derived commit-plan notice (plan §5.6) rides the review
         // card in the seeded inbox, matching the daemon's golden fixture: a

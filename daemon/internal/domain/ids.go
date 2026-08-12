@@ -6,24 +6,26 @@ package domain
 // non-emptiness (checked where they are required); the daemon assigns their
 // values, and this types-only package never generates them.
 type (
-	ItemID          string
-	ProjectID       string
-	SubjectID       string
-	DeviceID        string
-	ConversationID  string
-	MessageID       string
-	RunID           string
-	StageID         string
-	AttemptID       string
-	InvocationID    string
-	FindingID       string
-	ArtifactID      string
-	ProposalBatchID string
-	AuthIdentityID  string
-	ScheduleID      string
-	WorkUnitID      string
-	RequirementKey  string
-	WaiverID        string
+	ItemID              string
+	ProjectID           string
+	SubjectID           string
+	DeviceID            string
+	ConversationID      string
+	MessageID           string
+	RunID               string
+	StageID             string
+	AttemptID           string
+	InvocationID        string
+	FindingID           string
+	ArtifactID          string
+	ProposalBatchID     string
+	ProposalInstanceID  string
+	OpaqueSubjectHandle string
+	AuthIdentityID      string
+	ScheduleID          string
+	WorkUnitID          string
+	RequirementKey      string
+	WaiverID            string
 )
 
 // Digest is a content address (e.g. "sha256:..."); artifacts, specs, recipes,

@@ -124,6 +124,16 @@ public struct MockServerTransport: ClientTransport {
                     )
                 )
             }
+        case "getRunProposalFacts":
+            guard let itemID = Self.runProposalItemID(request.path),
+                let facts = try await server.runProposalFacts(itemID: itemID)
+            else {
+                return try Self.json(
+                    status: .notFound,
+                    body: Components.Schemas._Error(
+                        message: "no visible run proposal exists under the identifier"))
+            }
+            return try Self.json(status: .ok, body: facts)
         case "pairDevice":
             guard let body else {
                 return (HTTPResponse(status: .badRequest), nil)
@@ -214,6 +224,17 @@ public struct MockServerTransport: ClientTransport {
                     status: .unprocessableContent,
                     body: Components.Schemas._Error(
                         message: "malformed command: \(rejection.reason)")
+                )
+            } catch let rejection as MockServer.ProposalSnoozedError {
+                return try Self.json(
+                    status: .badRequest,
+                    body: Components.Schemas._Error(
+                        message: "proposal \(rejection.itemID) is snoozed")
+                )
+            } catch let rejection as MockServer.InvalidProposalDecisionError {
+                return try Self.json(
+                    status: .badRequest,
+                    body: Components.Schemas._Error(message: rejection.reason)
                 )
             } catch let rejection as MockServer.ItemPolicyError {
                 return try Self.json(
@@ -323,6 +344,13 @@ public struct MockServerTransport: ClientTransport {
         default:
             return (HTTPResponse(status: .notImplemented), nil)
         }
+    }
+
+    private static func runProposalItemID(_ path: String?) -> String? {
+        guard let path else { return nil }
+        let parts = path.split(separator: "/")
+        guard parts.count >= 4, parts.last == "run-proposal" else { return nil }
+        return String(parts[parts.count - 2]).removingPercentEncoding
     }
 
     private static let encoder: JSONEncoder = {

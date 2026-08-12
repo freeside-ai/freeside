@@ -111,6 +111,12 @@ func (s *Service) PutItem(ctx context.Context, item domain.AttentionItem) error 
 	if err := validateRequestedActions(item.Type, item.RequestedDecision); err != nil {
 		return fmt.Errorf("put item %q: %w", item.ID, err)
 	}
+	// A run proposal is authoritative only when Engine.AdmitProposal creates
+	// its instance, evidence carrier, item, and immutable item binding in one
+	// transaction. Generic intake has none of that trusted admission context.
+	if item.Type == domain.AttentionRunProposal {
+		return fmt.Errorf("put item %q: %w", item.ID, ErrProposalAdmissionRequired)
+	}
 	return s.store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutAttentionItem(ctx, item)
 	})
@@ -132,12 +138,22 @@ var errReplay = errors.New("idempotent replay: original result captured")
 // one Write, one revision, no window where the command exists without its
 // resolution.
 func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, error) {
-	command, err := domain.NewCommand(domain.CommandInput{
-		CommandID: in.CommandID, DeviceID: in.DeviceID, ItemID: in.Payload.ItemID,
-		ItemVersion: in.Payload.ItemVersion, PRHeadSHA: in.Payload.PRHeadSHA,
-		ArtifactDigests: in.Payload.ArtifactDigests, Action: in.Payload.Action,
-		Message: in.Payload.Message, Attachments: in.Payload.Attachments,
-	})
+	if err := s.convergeProposalSnoozes(ctx, s.now().UTC()); err != nil {
+		return CommandResult{}, fmt.Errorf("submit command %q proposal snoozes: %w", in.CommandID, err)
+	}
+	newCommand := func(message string) (domain.Command, error) {
+		return domain.NewCommand(domain.CommandInput{
+			CommandID: in.CommandID, DeviceID: in.DeviceID, ItemID: in.Payload.ItemID,
+			ItemVersion: in.Payload.ItemVersion, PRHeadSHA: in.Payload.PRHeadSHA,
+			ArtifactDigests: in.Payload.ArtifactDigests, Action: in.Payload.Action,
+			Message: message, Attachments: in.Payload.Attachments,
+		})
+	}
+	// Build the structural command first, without interpreting parameterized
+	// action content. Durable item policy and command-id replay have precedence
+	// over content policy; the canonical typed message is overlaid inside the
+	// appropriate branch below.
+	command, err := newCommand(in.Payload.Message)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, err)
 	}
@@ -174,6 +190,11 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 			if err := validateRequestedActions(item.Type, item.RequestedDecision); err != nil {
 				return fmt.Errorf("submit command %q: item %q: %w", command.CommandID, item.ID, err)
 			}
+			if snoozed, err := proposalSnoozed(ctx, tx, item, s.now().UTC()); err != nil {
+				return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+			} else if snoozed {
+				return fmt.Errorf("submit command %q: %w", command.CommandID, ErrProposalSnoozed)
+			}
 			// The pending-action gate runs only for a genuinely new command_id,
 			// after replay and durable-item policy have been judged: an id already
 			// on record keeps the command-id-first contract, while an invalid legacy
@@ -182,6 +203,14 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 			if _, kind := actionOutcome(command.Action); kind == outcomePending {
 				return fmt.Errorf("submit command %q: action %q: %w",
 					command.CommandID, command.Action, ErrUnsupportedAction)
+			}
+			message, err := decisionMessage(in.Payload)
+			if err != nil {
+				return fmt.Errorf("submit command %q: %w", in.CommandID, err)
+			}
+			command, err = newCommand(message)
+			if err != nil {
+				return fmt.Errorf("submit command %q: %w", in.CommandID, err)
 			}
 			// The per-action content policy sits with the pending gate, inside
 			// the new-command branch: a committed command_id retried with
@@ -236,11 +265,36 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 				if err := s.applyCodexReenrollmentRecovery(ctx, tx, command, item, status); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
+			case outcomeStartsProposal:
+				if err := s.applyStartProposal(ctx, tx, command, item, s.now().UTC()); err != nil {
+					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+				}
+			case outcomeRevisesAndStartsProposal:
+				if err := s.applyStartProposalWithChanges(ctx, tx, command, item, s.now().UTC()); err != nil {
+					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+				}
+			case outcomeDeclinesProposal:
+				if err := s.applyDeclineProposal(ctx, tx, command, item, s.now().UTC()); err != nil {
+					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+				}
+			case outcomeSnoozesProposal:
+				if err := s.applySnoozeProposal(ctx, tx, command, item, s.now().UTC()); err != nil {
+					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
+				}
 			case outcomeRecords, outcomePending:
 				// Records: the command record is the whole effect. Pending:
 				// unreachable, rejected above before PutCommand.
 			}
 		} else {
+			// A valid typed retry must reconstruct the same canonical durable
+			// message. If typed decoding fails, retain the structural command:
+			// PutCommand will still surface an immutable conflict for a changed
+			// body under the occupied id, preserving command-id-first judgment.
+			if message, messageErr := decisionMessage(in.Payload); messageErr == nil {
+				if canonical, commandErr := newCommand(message); commandErr == nil {
+					command = canonical
+				}
+			}
 			// A byte-identical replay is a no-op inside PutCommand; a changed
 			// body under the same id surfaces its ErrImmutableConflict here,
 			// before any item check, so the item-carrying rejections cannot
@@ -305,6 +359,11 @@ const (
 	// outcomeResolvesReenrollment: conclude the revoked-identity marker and
 	// append its latest-verified-operation-bound recovery transition.
 	outcomeResolvesReenrollment
+	// Proposal outcomes own the instance ledger and exact proposal digest.
+	outcomeStartsProposal
+	outcomeRevisesAndStartsProposal
+	outcomeDeclinesProposal
+	outcomeSnoozesProposal
 )
 
 // actionOutcome maps an action to what its acceptance does, following plan
@@ -334,11 +393,11 @@ const (
 // default, so a new Action member must declare its outcome here.
 func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 	switch action {
-	case domain.ActionDismiss, domain.ActionDecline:
+	case domain.ActionDismiss:
 		return domain.StatusDismissed, outcomeConcludes
 	case domain.ActionApprove, domain.ActionStop, domain.ActionFinishNow,
 		domain.ActionApplyThenFinish, domain.ActionRetry,
-		domain.ActionRerunTrustEvaluation, domain.ActionStart:
+		domain.ActionRerunTrustEvaluation:
 		return domain.StatusResolved, outcomeConcludes
 	case domain.ActionRequestChanges:
 		return domain.StatusSuperseded, outcomeConcludes
@@ -352,13 +411,20 @@ func actionOutcome(action domain.Action) (domain.ItemStatus, outcomeKind) {
 		return domain.StatusResolved, outcomeAdoptsReviewConfiguration
 	case domain.ActionResolveReenrollment:
 		return domain.StatusResolved, outcomeResolvesReenrollment
+	case domain.ActionStart:
+		return domain.StatusResolved, outcomeStartsProposal
+	case domain.ActionStartWithChanges:
+		return domain.StatusResolved, outcomeRevisesAndStartsProposal
+	case domain.ActionDecline:
+		return domain.StatusDismissed, outcomeDeclinesProposal
+	case domain.ActionSnooze:
+		return "", outcomeSnoozesProposal
 	case domain.ActionOpenPR, domain.ActionMarkSeen, domain.ActionAcknowledge,
 		domain.ActionInspectTrustFailure, domain.ActionRunDoctor:
 		return "", outcomeRecords
 	case domain.ActionDiscuss:
 		return "", outcomeDiscusses
-	case domain.ActionSnooze, domain.ActionStartWithChanges,
-		domain.ActionContinueUnderPolicy, domain.ActionConvertToPolicy,
+	case domain.ActionContinueUnderPolicy, domain.ActionConvertToPolicy,
 		domain.ActionAdjudicate, domain.ActionRetryWithCapability,
 		domain.ActionChooseAlternate,
 		domain.ActionAnswerAndRetry, domain.ActionAnswerWithoutRetry,

@@ -304,6 +304,9 @@ func (tx *WriteTx) PutArtifact(ctx context.Context, artifact domain.Artifact) er
 	if err := domain.ValidatePublishEligibility(artifact, tx.approvedRecipes); err != nil {
 		return fmt.Errorf("put artifact %q: %w", artifact.ID, err)
 	}
+	if err := tx.gateEffectProposalArtifact(ctx, artifact); err != nil {
+		return fmt.Errorf("put artifact %q: %w", artifact.ID, err)
+	}
 	if err := tx.putImmutable(ctx, putArtifactSQL,
 		[]any{artifact.ID, artifact.Digest, tx.asOfRevision, body},
 		`SELECT body FROM artifacts WHERE id = ?`, []any{artifact.ID}, body); err != nil {
@@ -337,6 +340,9 @@ func (tx *ReadTx) GetArtifact(ctx context.Context, id domain.ArtifactID) (domain
 	if err := domain.ValidatePublishEligibility(artifact, tx.approvedRecipes); err != nil {
 		return domain.Artifact{}, fmt.Errorf("get artifact %q: %w", id, err)
 	}
+	if err := tx.gateEffectProposalArtifact(ctx, artifact); err != nil {
+		return domain.Artifact{}, fmt.Errorf("get artifact %q: %w", id, err)
+	}
 	return artifact, nil
 }
 
@@ -363,7 +369,7 @@ func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionIt
 	// caller bypassing NewAttentionItem could otherwise persist an evidence
 	// artifact under an unapproved recipe (plan §5.15 rule 2). Runs before the
 	// write, so an idempotent replay is gated too.
-	if err := tx.gateEvidence(item); err != nil {
+	if err := tx.gateEvidence(ctx, item); err != nil {
 		return fmt.Errorf("put attention item %q: %w", item.ID, err)
 	}
 	existing, err := tx.existingBody(ctx, `SELECT body FROM attention_items WHERE id = ?`, item.ID)
@@ -460,7 +466,7 @@ func (tx *ReadTx) scanAttentionItemSnapshot(ctx context.Context, sc scanner) (do
 	// Reconstruction re-runs the evidence gate: decode's Validate cannot check
 	// recipe approval, so an item carrying evidence under a now-unapproved (or
 	// forged) recipe fails closed rather than reconstructing as valid.
-	if err := tx.gateEvidence(item); err != nil {
+	if err := tx.gateEvidence(ctx, item); err != nil {
 		return domain.AttentionItem{}, Snapshot{}, err
 	}
 	if err := tx.gateReadyItemPRReference(ctx, item); err != nil {
@@ -519,9 +525,12 @@ func scanAttentionItemRecord(sc scanner) (domain.AttentionItem, Snapshot, error)
 // snapshot at the persistence/reconstruction boundary, using the transaction's
 // policy set. It is the store's enforcement of the recipe-approval half of the
 // evidence rule that AttentionItem.Validate cannot check (it holds no policy).
-func (tx *ReadTx) gateEvidence(item domain.AttentionItem) error {
+func (tx *ReadTx) gateEvidence(ctx context.Context, item domain.AttentionItem) error {
 	for _, a := range item.EvidenceSnapshot {
 		if err := domain.EligibleForEvidenceSnapshot(a, tx.approvedRecipes); err != nil {
+			return err
+		}
+		if err := tx.gateEffectProposalArtifact(ctx, a); err != nil {
 			return err
 		}
 	}
