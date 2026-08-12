@@ -13,6 +13,48 @@ import Testing
         #expect(AttentionDisplay.label(Components.Schemas.HealthPosture.advisory) == "Advisory")
     }
 
+    @Test func attachmentDigestsKeepTheirEvidenceAndClaimContext() {
+        let item = AttentionFixtures.fixture(type: .spec_approval).item
+
+        let rows = AttentionDisplay.attachmentDigestRows(item)
+
+        #expect(rows.count == item.artifact_digests.count)
+        #expect(rows.first?.label == "Evidence digest")
+        #expect(rows.dropFirst().allSatisfy { $0.label == "Claim digest" })
+        #expect(Set(rows.map(\.value)) == Set(item.artifact_digests))
+    }
+
+    @Test func sharedAttachmentDigestKeepsBothTrustChannelLabels() {
+        var item = AttentionFixtures.fixture(type: .spec_approval).item
+        let digest = item.evidence_snapshot[0].digest
+        item.agent_claims[0].digest = digest
+        item.artifact_digests = Array(Set(item.agent_claims.map(\.digest) + [digest])).sorted()
+
+        let rows = AttentionDisplay.attachmentDigestRows(item)
+
+        #expect(rows.contains(.init(label: "Evidence digest", value: digest)))
+        #expect(rows.contains(.init(label: "Claim digest", value: digest)))
+    }
+
+    @Test func detailBindingsKeepDistinctLabelsThatShareAValue() {
+        let item = AttentionFixtures.fixture(type: .review_contradiction).item
+
+        let rows = AttentionDisplay.detailBindingRows(item)
+
+        #expect(rows.contains(.init(label: "PR head", value: "cafebabe")))
+        #expect(rows.contains(.init(label: "Head", value: "cafebabe")))
+    }
+
+    @Test func proposalBindingSurvivesMatchingAttachmentDigest() {
+        let item = AttentionFixtures.fixture(type: .run_proposal).item
+        let digest = item.artifact_digests[0]
+
+        let rows = AttentionDisplay.detailBindingRows(item, proposalDigest: digest)
+
+        #expect(rows.contains { $0.value == digest && $0.label.hasSuffix("digest") })
+        #expect(rows.contains(.init(label: "Proposal", value: digest)))
+    }
+
     @Test func reviewRecoveryBindingRowsExposeEveryAuthorityCoordinate() {
         let item = AttentionFixtures.fixture(type: .review_contradiction).item
 

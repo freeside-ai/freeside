@@ -67,6 +67,7 @@ struct DecisionDetailView: View {
             banner
             Text(item.reason)
                 .font(.body)
+            actions(item)
 
             // Daemon-derived commit-plan notice (plan §5.6): the reserved
             // plan channel was consumed without structuring the import, and
@@ -89,16 +90,6 @@ struct DecisionDetailView: View {
                         Text("Revision context")
                             .font(.caption.weight(.semibold))
                         proposalRevisionRows(prior)
-                        Text(prior.proposal_digest)
-                            .font(.caption.monospaced())
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Image(systemName: "arrow.down")
-                            .foregroundStyle(.secondary)
-                        Text(facts.proposal_digest)
-                            .font(.caption.monospaced())
-                            .lineLimit(1)
-                            .truncationMode(.middle)
                     }
                 }
             }
@@ -127,37 +118,32 @@ struct DecisionDetailView: View {
                 }
             }
 
-            cardSection("Decision binds to") {
-                LabeledContent("Item version", value: "\(item.item_version)")
-                if !item.pr_head_sha.isEmpty {
-                    LabeledContent("PR head", value: item.pr_head_sha)
-                }
-                ForEach(item.artifact_digests, id: \.self) { digest in
-                    Text(digest)
-                        .font(.caption.monospaced())
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .foregroundStyle(.secondary)
-                }
-                let recoveryRows =
-                    AttentionDisplay.reviewRecoveryBindingRows(item)
-                    + AttentionDisplay.reviewConfigurationRecoveryRows(item)
-                    + AttentionDisplay.codexReenrollmentRecoveryRows(item)
-                if !recoveryRows.isEmpty {
-                    Divider()
-                    ForEach(Array(recoveryRows.enumerated()), id: \.offset) { _, row in
+            DisclosureGroup("Details") {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(detailRows(item).enumerated()), id: \.offset) { _, row in
                         LabeledContent(row.label) {
                             Text(row.value)
                                 .font(.caption.monospaced())
                                 .multilineTextAlignment(.trailing)
-                                .textSelection(.enabled)
                         }
                     }
                 }
+                .padding(.top, 6)
             }
-
-            actions(item)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
         }
+    }
+
+    private func detailRows(
+        _ item: Components.Schemas.AttentionItem
+    ) -> [AttentionDisplay.BindingRow] {
+        AttentionDisplay.detailBindingRows(
+            item,
+            priorProposalDigest: model.proposalFacts?.supersedes?.value1.proposal_digest,
+            proposalDigest: model.proposalFacts?.proposal_digest
+        )
     }
 
     @ViewBuilder
@@ -250,15 +236,12 @@ struct DecisionDetailView: View {
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
     }
 
-    /// One labeled attachment row: always the digest (the decision
-    /// stays visibly bound to it, whatever the bytes do), plus the
-    /// rendering underneath. A text claim renders its inline,
-    /// digest-bound content directly (plan §9's summary carrier; the
-    /// daemon already re-verified digest == sha256(content), so no fetch
-    /// runs). Otherwise the fetched bytes render — the image inline when
-    /// they decode (plan §4), a placeholder when the fetch fails or the
-    /// digest is missing, and nothing extra for a non-image attachment,
-    /// which keeps its plain digest row.
+    /// One labeled attachment row. Plan §9's presentation layers supersede
+    /// the earlier digest-leading choice: content stays in the evidence layer,
+    /// while its binding digest appears once in the card's collapsed details.
+    /// A text claim renders its daemon-verified inline content directly;
+    /// otherwise fetched image bytes render inline and a failed fetch gets a
+    /// placeholder. Attachment bytes remain memory-only.
     private struct AttachmentRow: View {
         let label: String
         let digest: String
@@ -267,16 +250,11 @@ struct DecisionDetailView: View {
 
         var body: some View {
             VStack(alignment: .leading, spacing: 6) {
-                LabeledContent(label) {
-                    Text(digest)
-                        .font(.caption.monospaced())
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
+                Text(label)
+                    .font(.callout.weight(.semibold))
                 if let text {
-                    // No accessibility override: the content is the text a
-                    // VoiceOver user must hear, and the claim's label is
-                    // already announced by the labeled digest row above.
+                    // No accessibility override: VoiceOver must hear the
+                    // content, and the visible label already names the claim.
                     claimText(text)
                         .font(.callout)
                         .textSelection(.enabled)
