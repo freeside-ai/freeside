@@ -1,0 +1,17 @@
+{
+  "encoding_version": 1,
+  "kind": "run_proposal",
+  "resolved_policy_run_id": "run-policy",
+  "resolved_policy_digest": "sha256:57afc93cbc6ec4a3dc987a7803b24f65f954d481569bdd5af0dc74e4fd251d11",
+  "run_proposal": {
+    "subject_handle": "subject-opaque-1",
+    "intent": "implement_subject",
+    "expected_cost_units": 10,
+    "scope": {
+      "component_count": 1,
+      "declared_path_count": 4,
+      "touches_control_plane": false
+    }
+  },
+  "digest": "sha256:1b35b963f1a65b54e12dde2470d97d326371d8dd6d8c1ec7f77362204f3c22d3"
+}

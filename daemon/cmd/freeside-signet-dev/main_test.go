@@ -492,7 +492,7 @@ func TestControlPutItemPolicyBoundary(t *testing.T) {
 		wantStatus int
 		wantMsg    string
 	}{
-		{"allowed set accepted", "run_proposal", []string{"start", "decline"}, http.StatusOK, ""},
+		{"run proposal requires admission", "run_proposal", []string{"start", "start_with_changes", "decline", "snooze"}, http.StatusBadRequest, "requires atomic proposal admission"},
 		{"disallowed action rejected", "run_proposal", []string{"approve"}, http.StatusBadRequest, "is not allowed for"},
 		{"empty set on non-blocked rejected", "spec_approval", []string{}, http.StatusBadRequest, "offers no requested decision"},
 		{"blocked accepts the empty set", "blocked", []string{}, http.StatusOK, ""},

@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 // kindAgentInvocationRequested is the outbox kind of a committed discuss
@@ -54,6 +56,27 @@ type invocationRequest struct {
 // the pre-transaction existence check cannot go stale.
 func (s *Service) validateCommandContent(command domain.Command) error {
 	_, kind := actionOutcome(command.Action)
+	if command.Action == domain.ActionStartWithChanges {
+		if command.Message == "" || len(command.Message) > domain.MaxEffectProposalBytes || len(command.Attachments) > 0 {
+			return fmt.Errorf("action %q: %w", command.Action, ErrInvalidProposalDecisionPayload)
+		}
+		var revision RunProposalRevisionInput
+		if err := strictjson.Decode([]byte(command.Message), &revision,
+			strictjson.RejectInvalidUTF8, domain.MaxEffectProposalBytes); err != nil {
+			return fmt.Errorf("action %q: %w: %w", command.Action, ErrInvalidProposalDecisionPayload, err)
+		}
+		if err := revision.validate(); err != nil {
+			return fmt.Errorf("action %q: %w: %w", command.Action, ErrInvalidProposalDecisionPayload, err)
+		}
+		return nil
+	}
+	if command.Action == domain.ActionSnooze {
+		until, err := time.Parse(time.RFC3339Nano, command.Message)
+		if err != nil || until.Location() != time.UTC || len(command.Attachments) > 0 {
+			return fmt.Errorf("action %q: %w", command.Action, ErrInvalidProposalDecisionPayload)
+		}
+		return nil
+	}
 	if command.Action == domain.ActionRequestChanges {
 		if len(command.CommandID) > MaxRequestChangesCommandIDBytes {
 			return fmt.Errorf("action %q command id is %d bytes: %w",

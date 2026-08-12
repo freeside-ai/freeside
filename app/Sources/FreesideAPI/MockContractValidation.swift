@@ -299,6 +299,30 @@ enum MockContractValidation {
                 throw malformed("duplicate attachment digest")
             }
         }
+        switch command.payload.action {
+        case .start_with_changes:
+            guard let revision = command.payload.run_proposal_revision?.value1,
+                command.payload.snooze_until == nil,
+                command.payload.message == nil,
+                command.payload.attachments == nil,
+                revision.expected_cost_units >= 1,
+                revision.expected_cost_units <= 1_000_000,
+                revision.scope.component_count >= 1,
+                revision.scope.component_count <= 32,
+                revision.scope.declared_path_count >= 1,
+                revision.scope.declared_path_count <= 4096
+            else { throw malformed("invalid run_proposal_revision") }
+        case .snooze:
+            guard command.payload.snooze_until != nil,
+                command.payload.run_proposal_revision == nil,
+                command.payload.message == nil,
+                command.payload.attachments == nil
+            else { throw malformed("invalid snooze_until") }
+        default:
+            guard command.payload.run_proposal_revision == nil,
+                command.payload.snooze_until == nil
+            else { throw malformed("proposal input on unrelated action") }
+        }
     }
 
     /// The policy set is passed rather than read from an actor so seed-time

@@ -137,10 +137,19 @@ func Open(ctx context.Context, path string, opts Options) (*Store, error) {
 	}
 	// Snapshot the boundary policy so a caller mutating its maps or slices
 	// after Open cannot change it under a live store.
+	approvedRecipes := maps.Clone(opts.ApprovedRecipes)
+	if approvedRecipes == nil {
+		approvedRecipes = map[domain.Digest]bool{}
+	}
+	// The closed effect registry is a compiled deterministic recipe. Unlike
+	// configured verification recipes, its authority ships with this binary;
+	// registering it here lets proposal metadata bind attention decisions while
+	// the dedicated proposal row remains independently re-gated.
+	approvedRecipes[domain.EffectProposalRecipeDigest] = true
 	return &Store{
 		db:                                  db,
 		readyItemCreated:                    make(chan struct{}, 1),
-		approvedRecipes:                     maps.Clone(opts.ApprovedRecipes),
+		approvedRecipes:                     approvedRecipes,
 		admissionPolicy:                     cloneAdmissionPolicy(opts),
 		backupHealthSource:                  opts.BackupHealthSource,
 		verificationFloorRegistryGeneration: verificationGeneration,

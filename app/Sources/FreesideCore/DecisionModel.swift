@@ -40,6 +40,7 @@ public final class DecisionModel {
     public private(set) var phase: SubmissionPhase = .idle
     public private(set) var appliedRecord: Components.Schemas.CommandRecord?
     public private(set) var submissionError: String?
+    public private(set) var proposalFacts: Components.Schemas.RunProposalFactsSnapshot?
 
     private let store: InboxStore
     private let openURL: (URL) async -> Bool
@@ -93,12 +94,15 @@ public final class DecisionModel {
         return url
     }
 
-    /// Re-keys the view's validation task on the cache generation, so a
-    /// card left open across a sync-epoch eviction re-validates against
-    /// the re-bootstrapped snapshot instead of sitting on a stale
-    /// validation (issue #162).
+    /// Re-keys the view's validation task on cache generation and, for a
+    /// run-proposal card, the exact snapshot tuple its authenticated facts
+    /// must match. A selected card therefore revalidates after either an epoch
+    /// eviction or an ordinary same-epoch proposal advance such as snooze
+    /// release or delivery timing convergence.
     public var revalidationID: String {
-        "\(itemID)#\(store.cacheGeneration)"
+        let epochKey = "\(itemID)#\(store.cacheGeneration)"
+        guard let snapshot, snapshot.item._type == .run_proposal else { return epochKey }
+        return "\(epochKey)#\(snapshot.as_of_revision)#\(snapshot.entity_version)#\(snapshot.item.item_version)"
     }
 
     public var snapshot: Components.Schemas.AttentionItemSnapshot? {
@@ -143,6 +147,9 @@ public final class DecisionModel {
         // (plan §5.14 cache eviction on epoch change; issue #162).
         guard store.cacheGeneration == validatedCacheGeneration else { return false }
         guard snapshot.item.status == .open else { return false }
+        if snapshot.item._type == .run_proposal {
+            guard let proposalFacts, proposalFactsMatch(snapshot, proposalFacts) else { return false }
+        }
         guard !store.isNavigationReserved(itemID: itemID) else { return false }
         guard pendingCommand == nil else { return false }
         // A definitive negative sync signal overrides a point-in-time
@@ -220,6 +227,18 @@ public final class DecisionModel {
                 guard generation == validationGeneration else { return }
                 guard store.cacheGeneration == generationBefore else { continue }
                 if store.apply(current) {
+                    if current.item._type == .run_proposal {
+                        let facts = try await store.client.getRunProposalFacts(
+                            path: .init(item_id: itemID)
+                        ).ok.body.json
+                        guard generation == validationGeneration,
+                            store.cacheGeneration == generationBefore,
+                            proposalFactsMatch(current, facts)
+                        else { continue }
+                        proposalFacts = facts
+                    } else {
+                        proposalFacts = nil
+                    }
                     markValidated()
                     // Phase converges with canonical state: applied sticks
                     // only while the item is closed. A record-only decision
@@ -236,12 +255,44 @@ public final class DecisionModel {
             validation = .failed(Self.shadowedByStaleCache)
         } catch {
             guard generation == validationGeneration else { return }
+            proposalFacts = nil
             validation = .failed(String(describing: error))
         }
     }
 
+    private func proposalFactsMatch(
+        _ snapshot: Components.Schemas.AttentionItemSnapshot,
+        _ facts: Components.Schemas.RunProposalFactsSnapshot
+    ) -> Bool {
+        facts.as_of_revision == snapshot.as_of_revision
+            && facts.entity_version == snapshot.entity_version
+            && facts.item_version == snapshot.item.item_version
+            && snapshot.item.artifact_digests == [facts.proposal_digest]
+    }
+
+    public func submitRunProposalRevision(
+        _ revision: Components.Schemas.RunProposalRevisionInput
+    ) async {
+        await submit(.start_with_changes, revision: revision)
+    }
+
+    public func snooze(until: Date) async {
+        await submit(.snooze, snoozeUntil: until)
+    }
+
     public func submit(_ action: Components.Schemas.Action) async {
+        await submit(action, revision: nil, snoozeUntil: nil)
+    }
+
+    private func submit(
+        _ action: Components.Schemas.Action,
+        revision: Components.Schemas.RunProposalRevisionInput? = nil,
+        snoozeUntil: Date? = nil
+    ) async {
         guard actionsEnabled, isSubmittable(action), let snapshot else { return }
+        guard (action == .start_with_changes) == (revision != nil),
+            (action == .snooze) == (snoozeUntil != nil)
+        else { return }
         let urlToOpen: URL?
         if action == .open_pr {
             guard let reference = snapshot.item.pr_reference?.value1,
@@ -267,7 +318,11 @@ public final class DecisionModel {
                 action: action,
                 item_version: snapshot.item.item_version,
                 pr_head_sha: snapshot.item.pr_head_sha,
-                artifact_digests: snapshot.item.artifact_digests
+                artifact_digests: snapshot.item.artifact_digests,
+                run_proposal_revision: revision.map {
+                    .init(value1: $0)
+                },
+                snooze_until: snoozeUntil
             )
         )
         if let urlToOpen {
@@ -336,9 +391,25 @@ public final class DecisionModel {
                 let generationBeforeRefetch = store.cacheGeneration
                 let refetched: Components.Schemas.AttentionItemSnapshot
                 do {
-                    refetched = try await store.client.getAttentionItem(
-                        path: .init(item_id: itemID)
-                    ).ok.body.json
+                    let output = try await store.client.getAttentionItem(
+                        path: .init(item_id: itemID))
+                    if action == .snooze, case .notFound = output {
+                        guard store.cacheGeneration == generationBeforeRefetch else {
+                            await settleAmbiguousOutcome(
+                                command, message: Self.restoredBeforeConfirmed)
+                            return
+                        }
+                        appliedRecord = result.record
+                        store.removeSnapshot(
+                            itemID: itemID, atLeastEntityVersion: snapshot.entity_version)
+                        proposalFacts = nil
+                        store.clearPendingCommand(
+                            itemID: itemID, commandID: command.command_id)
+                        store.revisionObserver?(result.revision)
+                        phase = .applied
+                        return
+                    }
+                    refetched = try output.ok.body.json
                 } catch {
                     guard store.cacheGeneration == generationBeforeRefetch else {
                         // Evicted during a failed refetch: the commit may be

@@ -70,6 +70,8 @@ var (
 	ErrInvalidWaiverGrantingAuthority   = errors.New("invalid waiver granting authority")
 	ErrInvalidVerificationCheckClass    = errors.New("invalid verification check class")
 	ErrInvalidWaiverLifecycleStatus     = errors.New("invalid waiver lifecycle status")
+	ErrInvalidEffectKind                = errors.New("invalid effect kind")
+	ErrInvalidProposalAdmissionSource   = errors.New("invalid proposal admission source")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")
@@ -139,6 +141,11 @@ var (
 	ErrNativeReviewTextTooLarge           = errors.New("native review finding text exceeds the inline size cap")
 	ErrDependenciesNotCanonical           = errors.New("declared dependency issues are not in canonical (ascending, deduplicated) order")
 	ErrDeclaredPathsNotCanonical          = errors.New("declared paths are not in canonical (sorted, deduplicated) order")
+	ErrEffectProposalInconsistent         = errors.New("effect proposal fields do not match its registered kind")
+	ErrEffectProposalDigestMismatch       = errors.New("effect proposal digest does not match its canonical content")
+	ErrProposalParameterTooLarge          = errors.New("effect proposal parameter exceeds its bound")
+	ErrProposalPolicyMismatch             = errors.New("effect proposal does not bind the resolved policy")
+	ErrProposalAdmissionKeyInconsistent   = errors.New("proposal admission key fields do not match its source")
 
 	// Trust-boundary failures.
 	ErrPlaintextCredential               = errors.New("credential material must be a sha256 digest, never plaintext")

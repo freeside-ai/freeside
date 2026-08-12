@@ -61,6 +61,68 @@ func (t AttentionType) valid() bool {
 	}
 }
 
+// EffectKind is the closed registry of agent-requestable real-world effects.
+// A new member must add a fixed parameter type and gate in effect_proposal.go.
+type EffectKind string
+
+const (
+	EffectRunProposal EffectKind = "run_proposal"
+)
+
+// AllEffectKinds is the single registration point for effect kinds.
+var AllEffectKinds = []EffectKind{EffectRunProposal}
+
+func (k EffectKind) valid() bool {
+	switch k {
+	case EffectRunProposal:
+		return true
+	default:
+		return false
+	}
+}
+
+// ProposalAdmissionSource identifies the durable occurrence identity supplied
+// at proposal admission. Semantic proposal content is deliberately absent.
+type ProposalAdmissionSource string
+
+const (
+	ProposalSourceUpstreamEvent ProposalAdmissionSource = "upstream_event"
+	ProposalSourceClientCommand ProposalAdmissionSource = "client_command"
+	ProposalSourceRunEmission   ProposalAdmissionSource = "run_emission"
+)
+
+// AllProposalAdmissionSources is the single registration point for sources.
+var AllProposalAdmissionSources = []ProposalAdmissionSource{
+	ProposalSourceUpstreamEvent, ProposalSourceClientCommand, ProposalSourceRunEmission,
+}
+
+func (s ProposalAdmissionSource) valid() bool {
+	switch s {
+	case ProposalSourceUpstreamEvent, ProposalSourceClientCommand, ProposalSourceRunEmission:
+		return true
+	default:
+		return false
+	}
+}
+
+// RunProposalIntent is the bounded action requested by run_proposal. The
+// daemon resolves the opaque subject into display facts; arbitrary event text
+// never enters the parameter object.
+type RunProposalIntent string
+
+const RunProposalIntentImplement RunProposalIntent = "implement_subject"
+
+var AllRunProposalIntents = []RunProposalIntent{RunProposalIntentImplement}
+
+func (i RunProposalIntent) valid() bool {
+	switch i {
+	case RunProposalIntentImplement:
+		return true
+	default:
+		return false
+	}
+}
+
 // HealthPosture declares whether an open system_health item blocks unrelated
 // unattended admission or is an advisory observation (plan §4). The posture
 // is explicit so omission never silently chooses either safety behavior.

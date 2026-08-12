@@ -31,16 +31,20 @@ var ErrCallerSetDecidedAt = errors.New("decided_at is stamped by the accepting t
 
 // ErrUnsupportedAction is returned for a genuinely new command (idempotency
 // by command_id is judged first) whose action's accepted effect this boundary
-// cannot represent yet:
-// its transaction belongs to a later unit (discuss's conversation, snooze's
-// timing update, start_with_changes's revised artifact and supersede), or the
-// decision carries parameters or content DecisionPayload has no field for.
+// cannot represent yet: its transaction belongs to a later unit, or the
+// decision carries parameters this boundary cannot represent.
 // Recording such a command would silently drop the user's data and, for
 // discuss, let two devices commit against one item version where §5.14
 // test 7 requires a single winner; failing loudly keeps the durable record
 // faithful until the owning unit lifts the rejection (the pending group in
 // actionOutcome).
 var ErrUnsupportedAction = errors.New("action's transaction is not yet available at this boundary")
+
+var (
+	ErrInvalidProposalDecisionPayload = errors.New("proposal decision payload is invalid")
+	ErrProposalAdmissionRequired      = errors.New("run proposal requires atomic proposal admission")
+	ErrProposalSnoozed                = errors.New("proposal is snoozed")
+)
 
 // ErrMessageRequired is returned for a discuss command with an empty message:
 // the discuss transaction's first step is "append message" (plan §5.14), so

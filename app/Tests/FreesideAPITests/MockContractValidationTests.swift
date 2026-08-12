@@ -287,7 +287,7 @@ import Testing
     // Every fixture passes the full validity check, each text claim's digest
     // recomputes from its content, and the summary claim appears exactly on
     // the types that carry §9's summary layer (the purely mechanical
-    // system_health and blocked stay text-free).
+    // system_health, blocked, and the exact one-carrier run proposal stay text-free).
     @Test(arguments: AttentionFixtures.phase1Types)
     func fixtureTextClaimsBindTheirContent(type: Components.Schemas.AttentionType) {
         let item = AttentionFixtures.fixture(type: type).item
@@ -297,7 +297,7 @@ import Testing
             #expect(claim.digest == MockContractValidation.sha256Digest(of: text.content))
         }
         let hasText = item.agent_claims.contains { $0.text != nil }
-        #expect(hasText == (type != .system_health && type != .blocked))
+        #expect(hasText == (type != .system_health && type != .blocked && type != .run_proposal))
     }
 
     // MARK: - itemPolicyBreach

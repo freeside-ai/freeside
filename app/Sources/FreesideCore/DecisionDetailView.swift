@@ -6,7 +6,14 @@ import SwiftUI
 /// and exactly the item's requested actions. Actions stay disabled until
 /// the model's revalidation of current state succeeds.
 struct DecisionDetailView: View {
+    private enum ProposalEditor: String, Identifiable {
+        case revision
+        case snooze
+        var id: String { rawValue }
+    }
+
     @State private var model: DecisionModel
+    @State private var proposalEditor: ProposalEditor?
     private let attachments: AttachmentLoader
 
     @MainActor
@@ -36,6 +43,20 @@ struct DecisionDetailView: View {
         // card left open across a restore recertifies the re-bootstrapped
         // snapshot instead of sitting on a stale validation (issue #162).
         .task(id: model.revalidationID) { await model.validate() }
+        .sheet(item: $proposalEditor) { editor in
+            switch editor {
+            case .revision:
+                if let facts = model.proposalFacts {
+                    RunProposalRevisionSheet(facts: facts) { revision in
+                        Task { await model.submitRunProposalRevision(revision) }
+                    }
+                }
+            case .snooze:
+                RunProposalSnoozeSheet { until in
+                    Task { await model.snooze(until: until) }
+                }
+            }
+        }
         .navigationTitle(model.snapshot.map { AttentionDisplay.title($0.item._type) } ?? "Decision")
     }
 
@@ -53,6 +74,33 @@ struct DecisionDetailView: View {
             if let notice = item.commit_plan_notice?.value1 {
                 LabeledContent("Commit plan", value: AttentionDisplay.label(notice))
                     .font(.callout)
+            }
+
+            if let facts = model.proposalFacts {
+                cardSection("Authenticated proposal") {
+                    LabeledContent("Intent", value: facts.intent.rawValue)
+                    LabeledContent("Expected cost", value: "\(facts.expected_cost_units) units")
+                    LabeledContent("Components", value: "\(facts.scope.component_count)")
+                    LabeledContent("Declared paths", value: "\(facts.scope.declared_path_count)")
+                    LabeledContent(
+                        "Control plane", value: facts.scope.touches_control_plane ? "Yes" : "No")
+                    if let prior = facts.supersedes?.value1 {
+                        Divider()
+                        Text("Revision context")
+                            .font(.caption.weight(.semibold))
+                        proposalRevisionRows(prior)
+                        Text(prior.proposal_digest)
+                            .font(.caption.monospaced())
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Image(systemName: "arrow.down")
+                            .foregroundStyle(.secondary)
+                        Text(facts.proposal_digest)
+                            .font(.caption.monospaced())
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
             }
 
             if !item.evidence_snapshot.isEmpty {
@@ -110,6 +158,19 @@ struct DecisionDetailView: View {
 
             actions(item)
         }
+    }
+
+    @ViewBuilder
+    private func proposalRevisionRows(
+        _ prior: Components.Schemas.RunProposalRevisionFacts
+    ) -> some View {
+        LabeledContent("Prior intent", value: prior.intent.rawValue)
+        LabeledContent("Prior cost", value: "\(prior.expected_cost_units) units")
+        LabeledContent(
+            "Prior scope",
+            value: "\(prior.scope.component_count) components, \(prior.scope.declared_path_count) paths")
+        LabeledContent(
+            "Prior control plane", value: prior.scope.touches_control_plane ? "Yes" : "No")
     }
 
     private func header(_ item: Components.Schemas.AttentionItem) -> some View {
@@ -295,7 +356,14 @@ struct DecisionDetailView: View {
             // identities can drop or cross-wire buttons.
             ForEach(Array(model.offeredActions.enumerated()), id: \.offset) { _, action in
                 Button {
-                    Task { await model.submit(action) }
+                    switch action {
+                    case .start_with_changes:
+                        proposalEditor = .revision
+                    case .snooze:
+                        proposalEditor = .snooze
+                    default:
+                        Task { await model.submit(action) }
+                    }
                 } label: {
                     HStack {
                         Text(AttentionDisplay.label(action))
@@ -318,6 +386,96 @@ struct DecisionDetailView: View {
             }
         }
         .buttonStyle(.bordered)
+    }
+}
+
+private struct RunProposalRevisionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var expectedCost: Int
+    @State private var componentCount: Int
+    @State private var declaredPathCount: Int
+    @State private var touchesControlPlane: Bool
+    private let originalFacts: Components.Schemas.RunProposalFactsSnapshot
+    let submit: (Components.Schemas.RunProposalRevisionInput) -> Void
+
+    init(
+        facts: Components.Schemas.RunProposalFactsSnapshot,
+        submit: @escaping (Components.Schemas.RunProposalRevisionInput) -> Void
+    ) {
+        _expectedCost = State(initialValue: facts.expected_cost_units)
+        _componentCount = State(initialValue: facts.scope.component_count)
+        _declaredPathCount = State(initialValue: facts.scope.declared_path_count)
+        _touchesControlPlane = State(initialValue: facts.scope.touches_control_plane)
+        originalFacts = facts
+        self.submit = submit
+    }
+
+    private var changesProposal: Bool {
+        expectedCost != originalFacts.expected_cost_units
+            || componentCount != originalFacts.scope.component_count
+            || declaredPathCount != originalFacts.scope.declared_path_count
+            || touchesControlPlane != originalFacts.scope.touches_control_plane
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                LabeledContent("Intent", value: "Implement subject")
+                Stepper("Expected cost: \(expectedCost) units", value: $expectedCost, in: 1...1_000_000)
+                Stepper("Components: \(componentCount)", value: $componentCount, in: 1...32)
+                Stepper("Declared paths: \(declaredPathCount)", value: $declaredPathCount, in: 1...4096)
+                Toggle("Touches control plane", isOn: $touchesControlPlane)
+            }
+            .navigationTitle("Start with changes")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Submit") {
+                        submit(
+                            .init(
+                                intent: .implement_subject,
+                                expected_cost_units: expectedCost,
+                                scope: .init(
+                                    component_count: componentCount,
+                                    declared_path_count: declaredPathCount,
+                                    touches_control_plane: touchesControlPlane)))
+                        dismiss()
+                    }
+                    .disabled(!changesProposal)
+                }
+            }
+        }
+        .frame(minWidth: 380, minHeight: 280)
+    }
+}
+
+private struct RunProposalSnoozeSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var until = Date().addingTimeInterval(60 * 60)
+    let submit: (Date) -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                DatePicker(
+                    "Snooze until", selection: $until, in: Date()..., displayedComponents: [.date, .hourAndMinute])
+            }
+            .navigationTitle("Snooze proposal")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Snooze") {
+                        submit(until)
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .frame(minWidth: 380, minHeight: 220)
     }
 }
 
