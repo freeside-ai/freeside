@@ -154,6 +154,11 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
 		started += boolCount(startedNow)
 		if err != nil {
+			if reason, ok := dispatchHoldReason(err); ok {
+				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason); obsErr != nil {
+					return started, obsErr
+				}
+			}
 			if invocationDispatchHold(err) {
 				continue
 			}
@@ -250,6 +255,11 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		startedNow, hold, err := e.dispatchIntent(ctx, entry, binding, stage, request.InvocationID)
 		started += boolCount(startedNow)
 		if err != nil {
+			if reason, ok := dispatchHoldReason(err); ok {
+				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason); obsErr != nil {
+					return started, obsErr
+				}
+			}
 			if invocationDispatchHold(err) {
 				continue
 			}
@@ -373,7 +383,8 @@ func unattendedDispatchRefusal(err error) bool {
 }
 
 func invocationDispatchHold(err error) bool {
-	return errors.Is(err, exec.ErrInputUnavailable)
+	return errors.Is(err, exec.ErrInputUnavailable) ||
+		errors.Is(err, domain.ErrIdentityParallelismExhausted)
 }
 
 // MutableAdmissionPolicyRefusal identifies a fail-closed current-policy
@@ -440,7 +451,9 @@ func (e *Engine) dispatchIntent(
 	// admission instant (and therefore identity) has moved since. Starting
 	// under a fresh id would hand the driver an admission no reader can
 	// reconstruct.
-	_, effective, bound, err := e.recordAttempt(ctx, binding.run.ID, stage.ID, invocationID, fresh)
+	_, effective, bound, err := e.recordAttempt(
+		ctx, binding.run.ID, stage.ID, invocationID, entry.Status, fresh,
+	)
 	if err != nil {
 		// The admitting transaction's operating-state refusal (a stop or a
 		// blocking system_health item committed since the pass began) is
@@ -461,7 +474,6 @@ func (e *Engine) dispatchIntent(
 		}
 		return false, false, err
 	}
-
 	startSpec := exec.StartSpec{RunID: binding.run.ID, StageID: stage.ID}
 	if bound {
 		startSpec = exec.StartSpecFromAdmission(effective)
@@ -469,6 +481,14 @@ func (e *Engine) dispatchIntent(
 	startedNow := false
 	if err := e.driver.Start(ctx, invocationID, startSpec); err != nil {
 		if !errors.Is(err, exec.ErrDuplicateStart) {
+			if bound && effective.AuthIdentityID != nil {
+				if releaseErr := e.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+					return tx.ReleaseOutboxDispatch(ctx, string(invocationID))
+				}); releaseErr != nil {
+					return false, false, fmt.Errorf("intent %q release dispatch reservation: %w",
+						entry.IdempotencyKey, errors.Join(err, releaseErr))
+				}
+			}
 			return false, false, fmt.Errorf("intent %q: start: %w", entry.IdempotencyKey, err)
 		}
 	} else {
@@ -476,6 +496,14 @@ func (e *Engine) dispatchIntent(
 	}
 	if err := e.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		if err := tx.MarkOutboxDispatched(ctx, entry.IdempotencyKey); err != nil {
+			return err
+		}
+		// A capacity hold is current scheduling state, not history. Clear only
+		// that exact cause when this invocation starts; the store's predicate
+		// preserves a newer, different hold that may have replaced it.
+		if err := tx.ClearRunHoldCause(
+			ctx, binding.run.ID, domain.HoldIdentityParallelism,
+		); err != nil {
 			return err
 		}
 		// The started milestone rides the dispatch bookkeeping transaction:
@@ -871,7 +899,7 @@ func decodeInvocationRequest(payload []byte) (invocationRequest, error) {
 // appended, and a crash between them is exactly when the record matters.
 func (e *Engine) recordAttempt(
 	ctx context.Context, runID domain.RunID, stageID domain.StageID,
-	invocationID domain.InvocationID, fresh *domain.ExecutionAdmission,
+	invocationID domain.InvocationID, outboxStatus string, fresh *domain.ExecutionAdmission,
 ) (bool, domain.ExecutionAdmission, bool, error) {
 	added := false
 	var effective domain.ExecutionAdmission
@@ -911,6 +939,9 @@ func (e *Engine) recordAttempt(
 						// treating a closed gate as a legacy attempt.
 						return fmt.Errorf("replayed invocation %q: %w", invocationID, err)
 					case found:
+						if stored.AuthIdentityID != nil && outboxStatus == "dispatching" && (e.databaseLock == nil || !e.databaseLock.Held()) {
+							return ErrDispatchRecoveryUnlocked
+						}
 						// A recorded admission whose driver never started is
 						// still new unattended operation about to begin, so
 						// the operating-state gate holds here too (#319): a
@@ -918,6 +949,9 @@ func (e *Engine) recordAttempt(
 						// leak one last start. The record itself stays
 						// readable — this gates the start, not the row.
 						if err := tx.RequireUnattendedAdmissible(ctx, stored); err != nil {
+							return fmt.Errorf("replayed invocation %q: %w", invocationID, err)
+						}
+						if err := tx.RequireIdentityExecutionCapacity(ctx, stored); err != nil {
 							return fmt.Errorf("replayed invocation %q: %w", invocationID, err)
 						}
 						effective, bound = stored, true
@@ -981,7 +1015,7 @@ func (e *Engine) recordAttempt(
 		return nil
 	})
 	if errors.Is(err, errReplay) {
-		return false, effective, bound, nil
+		return true, effective, bound, nil
 	}
 	if err != nil {
 		return false, domain.ExecutionAdmission{}, false,

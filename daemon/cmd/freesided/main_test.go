@@ -112,6 +112,16 @@ func TestRunDrainsBackgroundWorkersBeforeClosingStoreOnStartupFailure(t *testing
 			t.Fatalf("background worker used the closed store (%q):\n%s", unexpected, gotLogs)
 		}
 	}
+	retry, err := run(t.Context(), nil, config{
+		DBPath: filepath.Join(root, "freeside.db"), FakeDriverDir: filepath.Join(root, "retry-driver"),
+		StateDir: root, ListenAddr: "127.0.0.1:0",
+	})
+	if err != nil {
+		t.Fatalf("retry after failed startup: %v", err)
+	}
+	if err := retry.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRunReturnsAfterPostBackgroundStartFailure(t *testing.T) {

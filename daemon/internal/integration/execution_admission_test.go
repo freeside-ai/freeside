@@ -18,12 +18,14 @@ import (
 )
 
 var (
-	admittedAt   = time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
-	agentImage   = domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32))
+	admittedAt = time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	agentImage = domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32))
+	// Shared workflow fixtures exercise multi-invocation behavior unrelated to
+	// capacity; parallelism tests copy this identity and set the exact limit.
 	testIdentity = domain.AuthIdentity{
 		ID: "auth-claude-owner", Provider: "claude", AuthStoreMutationLease: true,
 		AuthStoreVolume:       "claude-owner-credentials",
-		MaxParallelExecutions: 1, RefreshStrategy: domain.RefreshOnDemand,
+		MaxParallelExecutions: 64, RefreshStrategy: domain.RefreshOnDemand,
 	}
 )
 

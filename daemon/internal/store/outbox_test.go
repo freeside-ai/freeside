@@ -187,6 +187,14 @@ func TestListPendingOutbox(t *testing.T) {
 	// Only the requested kind, in insertion order; the other kind's row is
 	// not swept into a foreign dispatcher's scan.
 	assertPending(t, "inv-1", "inv-2")
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.MarkOutboxDispatching(ctx, "inv-1")
+	}); err != nil {
+		t.Fatalf("reserve dispatch: %v", err)
+	}
+	// A pre-start reservation remains recovery-visible. A process that dies
+	// between admission and driver handoff must retry it, not strand it.
+	assertPending(t, "inv-1", "inv-2")
 
 	if err := s.Read(ctx, func(tx *store.ReadTx) error {
 		if _, err := tx.ListPendingOutbox(ctx, ""); err == nil {
