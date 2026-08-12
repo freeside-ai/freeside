@@ -7,5 +7,5 @@ func generatedClientDecodesMockRevision() async throws {
     let revision = try response.ok.body.json
 
     #expect(revision.sync_epoch == "mock-epoch")
-    #expect(revision.revision == 1)
+    #expect(revision.revision == 12)
 }

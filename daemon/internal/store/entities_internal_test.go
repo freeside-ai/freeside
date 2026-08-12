@@ -58,12 +58,24 @@ func TestGetRejectsInconsistentRow(t *testing.T) {
 				tc.id, tc.proj, tc.policy, body); err != nil {
 				t.Fatalf("insert corrupt row: %v", err)
 			}
-			err := s.Read(ctx, func(tx *ReadTx) error {
-				_, err := tx.GetRun(ctx, tc.getID)
-				return err
-			})
-			if !errors.Is(err, errRowInconsistent) {
-				t.Fatalf("GetRun error = %v, want errRowInconsistent", err)
+			gets := []struct {
+				name string
+				get  func(*ReadTx) error
+			}{
+				{"GetRun", func(tx *ReadTx) error {
+					_, err := tx.GetRun(ctx, tc.getID)
+					return err
+				}},
+				{"GetRunSnapshot", func(tx *ReadTx) error {
+					_, err := tx.GetRunSnapshot(ctx, tc.getID)
+					return err
+				}},
+			}
+			for _, get := range gets {
+				err := s.Read(ctx, get.get)
+				if !errors.Is(err, errRowInconsistent) {
+					t.Fatalf("%s error = %v, want errRowInconsistent", get.name, err)
+				}
 			}
 		})
 	}

@@ -38,6 +38,9 @@ public struct SyncCursors: Codable, Equatable, Sendable {
 public struct CachedState: Codable, Equatable, Sendable {
     public var cursors: SyncCursors?
     public var attentionItems: [Components.Schemas.AttentionItemSnapshot]
+    public var runs: [Components.Schemas.RunSnapshot]
+    public var schedules: [Components.Schemas.ScheduleSnapshot]
+    public var runTimelines: [Components.Schemas.RunTimeline]
     /// The persisted ledger by item id; nil when absent or unreadable.
     /// The ledger is client mutation state, not readable cache, so it
     /// degrades independently: a corrupt section costs the retry
@@ -47,10 +50,16 @@ public struct CachedState: Codable, Equatable, Sendable {
     public init(
         cursors: SyncCursors?,
         attentionItems: [Components.Schemas.AttentionItemSnapshot],
+        runs: [Components.Schemas.RunSnapshot] = [],
+        schedules: [Components.Schemas.ScheduleSnapshot] = [],
+        runTimelines: [Components.Schemas.RunTimeline] = [],
         pendingCommands: [String: InboxStore.PendingCommandEntry]? = nil
     ) {
         self.cursors = cursors
         self.attentionItems = attentionItems
+        self.runs = runs
+        self.schedules = schedules
+        self.runTimelines = runTimelines
         self.pendingCommands = pendingCommands
     }
 
@@ -59,6 +68,15 @@ public struct CachedState: Codable, Equatable, Sendable {
         cursors = try container.decodeIfPresent(SyncCursors.self, forKey: .cursors)
         attentionItems = try container.decode(
             [Components.Schemas.AttentionItemSnapshot].self, forKey: .attentionItems)
+        runs =
+            try container.decodeIfPresent(
+                [Components.Schemas.RunSnapshot].self, forKey: .runs) ?? []
+        schedules =
+            try container.decodeIfPresent(
+                [Components.Schemas.ScheduleSnapshot].self, forKey: .schedules) ?? []
+        runTimelines =
+            try container.decodeIfPresent(
+                [Components.Schemas.RunTimeline].self, forKey: .runTimelines) ?? []
         // The ledger section is forgiving on its own: an undecodable
         // section loads as absent without failing the whole file.
         pendingCommands = try? container.decodeIfPresent(
@@ -86,10 +104,13 @@ public protocol CacheStore: Sendable {
 /// Codable payload rebuilt wholesale on every bootstrap, and epoch
 /// discard is `rm`; a database earns nothing here.
 public struct DiskCacheStore: CacheStore {
-    /// Bumped when the persisted shape changes incompatibly; an old
-    /// file then loads as absent and the client bootstraps. 2: cursors
-    /// became optional and the pending-command ledger joined (#115).
-    static let format = 2
+    /// Bumped when persisted snapshots change incompatibly. A pre-ledger
+    /// file loads absent; format 2 preserves its independent ledger while
+    /// invalidating snapshots and forcing a bootstrap. 2: cursors
+    /// became optional and the pending-command ledger joined (#115). 3:
+    /// run and schedule snapshots joined, so a format-2 cache cannot
+    /// incorrectly claim freshness while those durable rows are absent.
+    static let format = 3
 
     private struct CacheFile: Codable {
         var format: Int
@@ -104,10 +125,24 @@ public struct DiskCacheStore: CacheStore {
 
     public func load() -> CachedState? {
         guard let data = try? Data(contentsOf: fileURL),
-            let file = try? Self.decoder.decode(CacheFile.self, from: data),
-            file.format == Self.format
+            let file = try? Self.decoder.decode(CacheFile.self, from: data)
         else { return nil }
-        return file.state
+        switch file.format {
+        case Self.format:
+            return file.state
+        case 2:
+            // Format 2 already carried retryable commands, but predates the
+            // run surfaces. Keep only that independent ledger: its cursors
+            // cannot scope an incomplete cache, while losing a command ID
+            // could duplicate an operator decision after relaunch.
+            return CachedState(
+                cursors: nil,
+                attentionItems: [],
+                pendingCommands: file.state.pendingCommands
+            )
+        default:
+            return nil
+        }
     }
 
     public func save(_ state: CachedState) throws {

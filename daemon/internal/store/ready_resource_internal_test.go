@@ -533,7 +533,7 @@ func TestReadyItemBindingRegatesEveryResourceCoordinate(t *testing.T) {
 		RecordedAt: admittedAt.Add(2 * time.Minute),
 	}
 	intentKey := "publish/" + string(publicationInvocationID) + "/" + readyPublicationIntentKind
-	if err := st.WriteInternal(ctx, func(tx *InternalTx) error {
+	if err := st.Write(ctx, func(tx *WriteTx) error {
 		if err := tx.RecordExecutionAdmission(ctx, admission); err != nil {
 			return err
 		}

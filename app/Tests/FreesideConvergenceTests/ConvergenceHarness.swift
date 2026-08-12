@@ -93,6 +93,12 @@ struct ControlClient {
         _ = try await post("control/items", body: body)
     }
 
+    /// Seeds or advances one daemon-constructed run, attached schedule, and
+    /// observation timeline through the real store-backed control harness.
+    func seedRun(id: String) async throws {
+        _ = try await post("control/runs", body: ["id": id])
+    }
+
     /// Seeds one item at an explicit type and offered action set and returns the
     /// daemon's verdict (status + `message`) instead of throwing on a 4xx, so a
     /// policy test can assert the accept/reject outcome. `type` / `actions` are
@@ -225,6 +231,10 @@ enum ConvergenceHarness {
     /// so isolation comes from identity, never from resetting state.
     static func uniqueItemID(_ label: String) -> String {
         "item-conv-\(label)-\(UUID().uuidString.prefix(8).lowercased())"
+    }
+
+    static func uniqueRunID(_ label: String) -> String {
+        "run-conv-\(label)-\(UUID().uuidString.prefix(8).lowercased())"
     }
 
     /// Seeds one fresh item under a unique ID and returns that ID; the

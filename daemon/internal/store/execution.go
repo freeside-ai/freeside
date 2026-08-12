@@ -100,7 +100,7 @@ FROM execution_outcomes WHERE invocation_id = ?`
 // Write-once: a byte-identical replay converges on the stored row, and a
 // second admission of the same invocation with different content fails with
 // ErrImmutableConflict.
-func (tx *InternalTx) RecordExecutionAdmission(ctx context.Context, admission domain.ExecutionAdmission) error {
+func (tx *WriteTx) RecordExecutionAdmission(ctx context.Context, admission domain.ExecutionAdmission) error {
 	if admission.BackupEncryptionWaiver != nil {
 		return fmt.Errorf("record execution admission %q: %w",
 			admission.InvocationID, domain.ErrBackupEncryptionWaiverUnsupported)
@@ -591,7 +591,7 @@ func (tx *InternalTx) requireBoundInputs(ctx context.Context, admission domain.E
 //
 // Write-once: a byte-identical replay converges, and a second, different
 // export for one invocation fails with ErrImmutableConflict.
-func (tx *InternalTx) RecordExecutionExport(ctx context.Context, export domain.ExecutionExport) error {
+func (tx *WriteTx) RecordExecutionExport(ctx context.Context, export domain.ExecutionExport) error {
 	return tx.recordExecutionExport(ctx, export, true)
 }
 
@@ -600,13 +600,13 @@ func (tx *InternalTx) RecordExecutionExport(ctx context.Context, export domain.E
 // policy. It is the narrow store boundary used by the production workflow
 // after it has independently authenticated production ownership and replay;
 // callers accepting ordinary attended work use RecordExecutionExport.
-func (tx *InternalTx) RecordExecutionExportRecord(
+func (tx *WriteTx) RecordExecutionExportRecord(
 	ctx context.Context, export domain.ExecutionExport,
 ) error {
 	return tx.recordExecutionExport(ctx, export, false)
 }
 
-func (tx *InternalTx) recordExecutionExport(
+func (tx *WriteTx) recordExecutionExport(
 	ctx context.Context, export domain.ExecutionExport, requireCurrent bool,
 ) error {
 	body, err := encode(export)
@@ -727,7 +727,7 @@ func (tx *ReadTx) getExecutionExport(
 // RecordExecutionOutcome persists a trusted non-export terminal outcome.
 // The admission binding is checked in the same transaction, and the row is
 // write-once so a replay converges while a changed status or summary refuses.
-func (tx *InternalTx) RecordExecutionOutcome(
+func (tx *WriteTx) RecordExecutionOutcome(
 	ctx context.Context, outcome domain.ExecutionOutcome,
 ) error {
 	body, err := encode(outcome)

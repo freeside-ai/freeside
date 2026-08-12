@@ -864,7 +864,7 @@ func (r exportRecorder) lookupExecutionExport(
 func (r exportRecorder) RecordExecutionOutcome(
 	ctx context.Context, record domain.ExecutionOutcome,
 ) error {
-	return r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	return r.store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordExecutionOutcome(ctx, record)
 	})
 }

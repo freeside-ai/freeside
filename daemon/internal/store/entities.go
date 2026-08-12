@@ -181,12 +181,20 @@ func (tx *ReadTx) scanRunSnapshot(sc scanner) (domain.Run, Snapshot, error) {
 }
 
 func (tx *ReadTx) GetRun(ctx context.Context, id domain.RunID) (domain.Run, error) {
-	run, _, err := tx.scanRunSnapshot(tx.tx.QueryRowContext(ctx,
+	snapshot, err := tx.GetRunSnapshot(ctx, id)
+	return snapshot.Value, err
+}
+
+// GetRunSnapshot reconstructs one run with the sync metadata read from the
+// same row. It shares scanRunSnapshot with GetRun and ListRuns so every read
+// re-runs the identical returned-object trust gate.
+func (tx *ReadTx) GetRunSnapshot(ctx context.Context, id domain.RunID) (Snapshotted[domain.Run], error) {
+	run, snapshot, err := tx.scanRunSnapshot(tx.tx.QueryRowContext(ctx,
 		`SELECT id, project_id, policy_digest, entity_version, as_of_revision, body FROM runs WHERE id = ?`, id))
 	if err != nil {
-		return domain.Run{}, fmt.Errorf("get run %q: %w", id, notFoundOr(err))
+		return Snapshotted[domain.Run]{}, fmt.Errorf("get run %q: %w", id, notFoundOr(err))
 	}
-	return run, nil
+	return Snapshotted[domain.Run]{Value: run, Snapshot: snapshot}, nil
 }
 
 const putConversationSQL = `

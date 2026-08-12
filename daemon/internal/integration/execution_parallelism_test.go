@@ -406,7 +406,7 @@ func TestIdentityParallelismFailureRelease(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("read failed execution admission: %v", err)
 	}
-	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
 			InvocationID: failed.InvocationID, AdmissionID: admission.ID,
 			Status: domain.ExecutionOutcomeFailed, Summary: "expected fixture failure",
@@ -485,7 +485,7 @@ func recordParallelismCompletion(
 	if err != nil {
 		t.Fatalf("new completion export: %v", err)
 	}
-	if err := st.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
+	if err := st.Write(context.Background(), func(tx *store.WriteTx) error {
 		return tx.RecordExecutionExportRecord(context.Background(), executionExport)
 	}); err != nil {
 		t.Fatalf("record completion export: %v", err)

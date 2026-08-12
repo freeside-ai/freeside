@@ -124,6 +124,36 @@ struct RealDaemonConvergenceTests {
         #expect(coordinator.store.freshness == .fresh)
     }
 
+    @Test func runListScheduleJoinAndTimelineConvergeThroughTheRealDaemon() async throws {
+        let control = try ConvergenceHarness.control()
+        let runID = ConvergenceHarness.uniqueRunID("657")
+        try await control.seedRun(id: runID)
+        let device = try await ConvergenceHarness.pairDevice(displayName: "Convergence 657")
+        let coordinator = ConvergenceHarness.coordinator(for: device)
+        await coordinator.bootstrap()
+
+        let run = try #require(coordinator.runs.first { $0.run.id == runID })
+        #expect(run.run.project_id == "proj-convergence")
+        #expect(run.run.latest_milestone?.value1 == .run_submitted)
+        #expect(run.run.outcome == .pending)
+        #expect(run.run.hold_reason?.value1 == .verification_findings)
+        #expect(coordinator.schedules.contains { $0.schedule.run_id == runID })
+
+        let before = try #require(coordinator.cursors)
+        try await control.seedRun(id: runID)
+        await coordinator.refreshRuns()
+        await coordinator.refreshTimeline(for: runID)
+
+        let partial = try #require(coordinator.cursors)
+        #expect(partial.lastFullSnapshotRevision == before.lastFullSnapshotRevision)
+        #expect(partial.highestObservedServerRevision > partial.lastFullSnapshotRevision)
+        let timeline = try #require(coordinator.timelinesByRunID[runID])
+        #expect(timeline.milestones.map(\.kind) == [.run_submitted])
+        #expect(timeline.hold?.value1.reason == .verification_findings)
+        #expect(timeline.invocations.first?.status == .running)
+        #expect(run.run.stages.first?.attempts.first?.number == 1)
+    }
+
     // MARK: - Two-device convergence (tests 1 and 2)
 
     @Test func resolveOnOneDeviceConvergesTheOther() async throws {

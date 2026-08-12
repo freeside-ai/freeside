@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -676,13 +677,8 @@ outcome  pending
 // TestConclusionValidatesItsOutcomeContract pins the enum's registration and
 // the outcome-scoped detail fields, so a new outcome has to declare both.
 func TestConclusionValidatesItsOutcomeContract(t *testing.T) {
-	for _, outcome := range AllOutcomes {
-		if !outcome.valid() {
-			t.Errorf("registered outcome %q is not valid", outcome)
-		}
-	}
-	if Outcome("").valid() || Outcome("shipped").valid() {
-		t.Error("an unregistered outcome validates")
+	if got, want := AllOutcomes, domain.AllRunOutcomes; !slices.Equal(got, want) {
+		t.Fatalf("AllOutcomes = %v, want shared domain registration %v", got, want)
 	}
 
 	reason := domain.HoldVerificationFindings

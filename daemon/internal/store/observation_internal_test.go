@@ -106,7 +106,7 @@ func TestObservationReadsFailClosedOnTamper(t *testing.T) {
 		}
 		now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 		inv := domain.InvocationID("inv-1")
-		if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		if err := s.Write(ctx, func(tx *WriteTx) error {
 			return tx.RecordRunHold(ctx, domain.RunHoldObservation{
 				RunID: "run-1", InvocationID: &inv,
 				Reason:          domain.HoldOperationStopped,
@@ -155,7 +155,7 @@ func TestAuthorityReplayDoesNotBackfillMilestones(t *testing.T) {
 		Status: domain.ExecutionOutcomeFailed, Summary: "failed once",
 		RecordedAt: admission.AdmittedAt.Add(time.Hour),
 	}
-	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+	if err := s.Write(ctx, func(tx *WriteTx) error {
 		return tx.RecordExecutionOutcome(ctx, outcome)
 	}); err != nil {
 		t.Fatalf("record outcome: %v", err)
@@ -180,7 +180,7 @@ func TestAuthorityReplayDoesNotBackfillMilestones(t *testing.T) {
 		t.Fatalf("erase milestones: %v", err)
 	}
 
-	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+	if err := s.Write(ctx, func(tx *WriteTx) error {
 		if err := tx.RecordExecutionAdmission(ctx, admission); err != nil {
 			return err
 		}
@@ -204,7 +204,7 @@ func TestAuthorityReplayDoesNotBackfillMilestones(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecutionExport: %v", err)
 	}
-	if err := s2.WriteInternal(ctx, func(tx *InternalTx) error {
+	if err := s2.Write(ctx, func(tx *WriteTx) error {
 		return tx.RecordExecutionExport(ctx, export)
 	}); err != nil {
 		t.Fatalf("record export: %v", err)
@@ -213,7 +213,7 @@ func TestAuthorityReplayDoesNotBackfillMilestones(t *testing.T) {
 		`DELETE FROM run_milestones WHERE run_id = ?`, admission2.RunID); err != nil {
 		t.Fatalf("erase milestones: %v", err)
 	}
-	if err := s2.WriteInternal(ctx, func(tx *InternalTx) error {
+	if err := s2.Write(ctx, func(tx *WriteTx) error {
 		return tx.RecordExecutionExport(ctx, export)
 	}); err != nil {
 		t.Fatalf("replay export: %v", err)

@@ -56,6 +56,134 @@ private final class FailingCacheStore: CacheStore, @unchecked Sendable {
         let persisted = try #require(cache.load())
         #expect(persisted.cursors == cursors)
         #expect(persisted.attentionItems.count == coordinator.store.rows.count)
+        #expect(persisted.runs == coordinator.runs)
+        #expect(persisted.schedules == coordinator.schedules)
+    }
+
+    @Test func runAndTimelinePartialReadsDoNotMarkTheCacheCurrent() async throws {
+        let server = MockServer()
+        let cache = InMemoryCacheStore()
+        let coordinator = makeCoordinator(server: server, cache: cache)
+        await coordinator.bootstrap()
+        let before = try #require(coordinator.cursors)
+
+        await server.advanceRun(id: RunFixtures.activeRunID)
+        await coordinator.refreshRuns()
+        await coordinator.refreshTimeline(for: RunFixtures.activeRunID)
+
+        let partial = try #require(coordinator.cursors)
+        #expect(partial.lastFullSnapshotRevision == before.lastFullSnapshotRevision)
+        #expect(partial.highestObservedServerRevision > partial.lastFullSnapshotRevision)
+        #expect(coordinator.store.freshness == .unvalidated)
+        #expect(coordinator.timelinesByRunID[RunFixtures.activeRunID] != nil)
+        #expect(coordinator.timelineLoadStates[RunFixtures.activeRunID] == .loaded)
+        #expect(cache.load()?.runTimelines.map(\.run_id) == [RunFixtures.activeRunID])
+
+        await coordinator.heartbeat()
+        let converged = try #require(coordinator.cursors)
+        #expect(converged.lastFullSnapshotRevision == converged.highestObservedServerRevision)
+    }
+
+    @Test func timelineNotFoundStopsLoading() async {
+        let server = MockServer(timelines: [])
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+
+        await coordinator.refreshTimeline(for: RunFixtures.activeRunID)
+
+        #expect(coordinator.timelinesByRunID[RunFixtures.activeRunID] == nil)
+        #expect(coordinator.timelineLoadStates[RunFixtures.activeRunID] == .unavailable)
+    }
+
+    @Test func timelineResponseInFlightAcrossEpochChangeIsDiscarded() async {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        await server.setBeforeRespond { operationID in
+            if operationID == "getRunTimeline" {
+                await reached.open()
+                await release.wait()
+            }
+        }
+
+        let refresh = Task { await coordinator.refreshTimeline(for: RunFixtures.activeRunID) }
+        await reached.wait()
+        await server.rotateEpoch(revision: 1)
+        await coordinator.heartbeat()
+        await release.open()
+        await refresh.value
+
+        #expect(coordinator.timelinesByRunID.isEmpty)
+    }
+
+    @Test func timelineResponseMayFinishAcrossOrdinaryHeartbeat() async {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        await server.setBeforeRespond { operationID in
+            if operationID == "getRunTimeline" {
+                await reached.open()
+                await release.wait()
+            }
+        }
+
+        let refresh = Task { await coordinator.refreshTimeline(for: RunFixtures.activeRunID) }
+        await reached.wait()
+        await coordinator.heartbeat()
+        await release.open()
+        await refresh.value
+
+        #expect(coordinator.timelinesByRunID[RunFixtures.activeRunID] != nil)
+        #expect(coordinator.timelineLoadStates[RunFixtures.activeRunID] == .loaded)
+    }
+
+    @Test func staleRunFailureCannotOverwriteReplacementFreshness() async {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        await server.setBeforeRespond { operationID in
+            if operationID == "listRuns" {
+                await reached.open()
+                await release.wait()
+                throw InjectedFailure()
+            }
+        }
+
+        let refresh = Task { await coordinator.refreshRuns() }
+        await reached.wait()
+        await server.rotateEpoch(revision: 1)
+        await coordinator.heartbeat()
+        await release.open()
+        await refresh.value
+
+        #expect(coordinator.store.freshness == .fresh)
+    }
+
+    @Test func canceledTimelineRequestIsNotAnOutage() async {
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let reached = AsyncGate()
+        await server.setBeforeRespond { operationID in
+            if operationID == "getRunTimeline" {
+                await reached.open()
+                try await Task.sleep(for: .seconds(30))
+            }
+        }
+
+        let refresh = Task { await coordinator.refreshTimeline(for: RunFixtures.activeRunID) }
+        await reached.wait()
+        refresh.cancel()
+        await refresh.value
+
+        #expect(coordinator.store.freshness == .fresh)
+        #expect(coordinator.timelineLoadStates[RunFixtures.activeRunID] == .idle)
     }
 
     @Test func partialRefetchAdvancesOnlyTheObservedCursor() async throws {
@@ -126,6 +254,9 @@ private final class FailingCacheStore: CacheStore, @unchecked Sendable {
         await coordinator.heartbeat()
 
         #expect(coordinator.store.rows.isEmpty)
+        #expect(coordinator.runs.isEmpty)
+        #expect(coordinator.schedules.isEmpty)
+        #expect(coordinator.timelinesByRunID.isEmpty)
         #expect(coordinator.cursors == nil)
         #expect(cache.load() == nil)
         #expect(coordinator.store.freshness == .unreachable)
@@ -212,6 +343,78 @@ private final class FailingCacheStore: CacheStore, @unchecked Sendable {
 
         #expect(coordinator.cursors == adopted)
         #expect(cache.load()?.cursors == adopted)
+        #expect(coordinator.store.freshness == .fresh)
+    }
+
+    @Test func aBootstrapOlderThanAPartialReadRefetchesBeforeAdopting() async throws {
+        // A bootstrap is canonical only at the revision it read. If a
+        // same-epoch partial run read reaches a later revision while that
+        // response is delayed, the old bootstrap must not replace it and call
+        // the cache fresh.
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let before = try #require(coordinator.cursors)
+
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        await server.setAfterRespond { operationID in
+            if operationID == "getSyncBootstrap" {
+                await reached.open()
+                await release.wait()
+            }
+        }
+        let stale = Task { await coordinator.bootstrap() }
+        await reached.wait()
+        await server.setAfterRespond(nil)
+
+        await server.advanceRun(id: RunFixtures.activeRunID)
+        await coordinator.refreshRuns()
+        let partial = try #require(coordinator.cursors)
+        #expect(partial.highestObservedServerRevision > before.lastFullSnapshotRevision)
+
+        await release.open()
+        await stale.value
+
+        let adopted = try #require(coordinator.cursors)
+        #expect(adopted.lastFullSnapshotRevision == adopted.highestObservedServerRevision)
+        #expect(adopted.lastFullSnapshotRevision == partial.highestObservedServerRevision)
+        #expect(coordinator.store.freshness == .fresh)
+    }
+
+    @Test func aHeartbeatOlderThanAPartialReadBootstrapsBeforeFreshness() async throws {
+        // A heartbeat's server revision is only the value it captured. If a
+        // partial read reaches a newer revision before that response returns,
+        // the heartbeat must inspect the live cursor and bootstrap instead of
+        // restoring a false .fresh state.
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let before = try #require(coordinator.cursors)
+
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        await server.setAfterRespond { operationID in
+            if operationID == "getSyncRevision" {
+                await reached.open()
+                await release.wait()
+            }
+        }
+        let heartbeat = Task { await coordinator.heartbeat() }
+        await reached.wait()
+        await server.setAfterRespond(nil)
+
+        await server.advanceRun(id: RunFixtures.activeRunID)
+        await coordinator.refreshRuns()
+        let partial = try #require(coordinator.cursors)
+        #expect(partial.highestObservedServerRevision > before.lastFullSnapshotRevision)
+
+        await release.open()
+        await heartbeat.value
+
+        let converged = try #require(coordinator.cursors)
+        #expect(converged.lastFullSnapshotRevision == converged.highestObservedServerRevision)
+        #expect(converged.lastFullSnapshotRevision == partial.highestObservedServerRevision)
         #expect(coordinator.store.freshness == .fresh)
     }
 

@@ -10,6 +10,17 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
+// ProductionReadyItemID and ProductionBlockedItemID are the workflow-owned
+// attention-item identities that authenticate terminal publication
+// observations at read boundaries.
+func ProductionReadyItemID(runID RunID) ItemID {
+	return ItemID("production-ready-" + string(runID))
+}
+
+func ProductionBlockedItemID(runID RunID) ItemID {
+	return ItemID("production-publish-blocked-" + string(runID))
+}
+
 // Subject is what an AttentionItem is about (plan §4). RunID is set only when
 // the subject is a run (or a run-scoped proposal); it is nil otherwise.
 type Subject struct {

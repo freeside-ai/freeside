@@ -149,7 +149,7 @@ func openWithFixture(t *testing.T, f admissionFixture, opts store.Options) *stor
 
 func recordAdmission(t *testing.T, s *store.Store, admission domain.ExecutionAdmission) error {
 	t.Helper()
-	return s.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
+	return s.Write(context.Background(), func(tx *store.WriteTx) error {
 		return tx.RecordExecutionAdmission(context.Background(), admission)
 	})
 }
@@ -347,7 +347,7 @@ func seedTrustProfile(t *testing.T, s *store.Store, repo string, repositoryID in
 	if err != nil {
 		t.Fatalf("NewAutomationTrustProfile: %v", err)
 	}
-	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordTrustProfile(ctx, profile, admissionEpoch)
 	}); err != nil {
 		t.Fatalf("RecordTrustProfile: %v", err)
@@ -751,7 +751,7 @@ func TestAdmissionBoundToTheActiveTrustProfileRevision(t *testing.T) {
 	if revised.ProfileDigest == active {
 		t.Fatal("the revised profile must differ from the one admitted under")
 	}
-	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordTrustProfile(ctx, revised, admissionEpoch.Add(time.Hour))
 	}); err != nil {
 		t.Fatalf("activate the revision: %v", err)
@@ -760,7 +760,7 @@ func TestAdmissionBoundToTheActiveTrustProfileRevision(t *testing.T) {
 		InvocationID: f.admission.InvocationID, AdmissionID: f.admission.ID,
 		Status: domain.ExecutionOutcomeLost, RecordedAt: admissionEpoch.Add(2 * time.Hour),
 	}
-	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordExecutionOutcome(ctx, outcome)
 	}); err != nil {
 		t.Fatalf("record terminal outcome after policy revision: %v", err)
@@ -894,7 +894,7 @@ func TestExecutionExportBinding(t *testing.T) {
 		t.Fatalf("NewExecutionExport: %v", err)
 	}
 	record := func(x domain.ExecutionExport) error {
-		return s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return s.Write(ctx, func(tx *store.WriteTx) error {
 			return tx.RecordExecutionExport(ctx, x)
 		})
 	}
@@ -960,7 +960,7 @@ func TestExecutionOutcomeBinding(t *testing.T) {
 		RecordedAt:   admissionEpoch.Add(time.Hour),
 	}
 	record := func(x domain.ExecutionOutcome) error {
-		return s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return s.Write(ctx, func(tx *store.WriteTx) error {
 			return tx.RecordExecutionOutcome(ctx, x)
 		})
 	}
@@ -994,24 +994,24 @@ func TestExecutionExportAndOutcomeAreMutuallyExclusive(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		recordFirst func(
-			context.Context, *store.InternalTx,
+			context.Context, *store.WriteTx,
 			domain.ExecutionExport, domain.ExecutionOutcome,
 		) error
 		recordSecond func(
-			context.Context, *store.InternalTx,
+			context.Context, *store.WriteTx,
 			domain.ExecutionExport, domain.ExecutionOutcome,
 		) error
 	}{
 		{
 			name: "export then outcome",
 			recordFirst: func(
-				ctx context.Context, tx *store.InternalTx,
+				ctx context.Context, tx *store.WriteTx,
 				export domain.ExecutionExport, _ domain.ExecutionOutcome,
 			) error {
 				return tx.RecordExecutionExport(ctx, export)
 			},
 			recordSecond: func(
-				ctx context.Context, tx *store.InternalTx,
+				ctx context.Context, tx *store.WriteTx,
 				_ domain.ExecutionExport, outcome domain.ExecutionOutcome,
 			) error {
 				return tx.RecordExecutionOutcome(ctx, outcome)
@@ -1020,13 +1020,13 @@ func TestExecutionExportAndOutcomeAreMutuallyExclusive(t *testing.T) {
 		{
 			name: "outcome then export",
 			recordFirst: func(
-				ctx context.Context, tx *store.InternalTx,
+				ctx context.Context, tx *store.WriteTx,
 				_ domain.ExecutionExport, outcome domain.ExecutionOutcome,
 			) error {
 				return tx.RecordExecutionOutcome(ctx, outcome)
 			},
 			recordSecond: func(
-				ctx context.Context, tx *store.InternalTx,
+				ctx context.Context, tx *store.WriteTx,
 				export domain.ExecutionExport, _ domain.ExecutionOutcome,
 			) error {
 				return tx.RecordExecutionExport(ctx, export)
@@ -1054,12 +1054,12 @@ func TestExecutionExportAndOutcomeAreMutuallyExclusive(t *testing.T) {
 				Status: domain.ExecutionOutcomeFailed, Summary: "failed",
 				RecordedAt: admissionEpoch.Add(time.Hour),
 			}
-			if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			if err := s.Write(ctx, func(tx *store.WriteTx) error {
 				return tc.recordFirst(ctx, tx, export, outcome)
 			}); err != nil {
 				t.Fatalf("record first authority: %v", err)
 			}
-			if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			if err := s.Write(ctx, func(tx *store.WriteTx) error {
 				return tc.recordSecond(ctx, tx, export, outcome)
 			}); !errors.Is(err, store.ErrImmutableConflict) {
 				t.Fatalf("record contradictory authority = %v, want immutable conflict", err)
@@ -1097,7 +1097,7 @@ func TestRunReachesItsAdmissionAndExport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecutionExport: %v", err)
 	}
-	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordExecutionExport(ctx, export)
 	}); err != nil {
 		t.Fatalf("record export: %v", err)

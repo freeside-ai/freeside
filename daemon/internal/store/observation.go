@@ -12,11 +12,11 @@ import (
 
 // Run observation rows (migration 0024) are the operator-facing projection
 // of run progress: written beside the workflow facts, never read by them.
-// The write methods live on InternalTx because the rows are non-synchronized
-// bookkeeping; the read surface re-validates every row and fails closed, so
-// a row the current vocabulary cannot express is an error, never a silently
-// weaker observation (issue #394; the store's reconstruction-gate
-// convention).
+// They are synchronized facts now that the runs list and timeline expose
+// them, so every write lives on WriteTx and advances the server revision.
+// The read surface re-validates every row and fails closed, so a row the
+// current vocabulary cannot express is an error, never a silently weaker
+// observation (issues #394 and #657; the reconstruction-gate convention).
 
 const (
 	appendRunMilestoneSQL = `INSERT INTO run_milestones
@@ -61,7 +61,7 @@ const (
 // milestone that actually inserts is forward progress and clears the run's
 // current hold; a converged replay clears nothing, because no progress
 // happened now and a standing hold must not blink out under replays.
-func (tx *InternalTx) AppendRunMilestone(ctx context.Context, m domain.RunMilestone) error {
+func (tx *WriteTx) AppendRunMilestone(ctx context.Context, m domain.RunMilestone) error {
 	if err := m.Validate(); err != nil {
 		return fmt.Errorf("append run milestone: %w", err)
 	}
@@ -108,7 +108,7 @@ func (tx *InternalTx) AppendRunMilestone(ctx context.Context, m domain.RunMilest
 // reconcile pass that carries this write, which is exactly the authority the
 // trust boundary denies it: a divergent stored binding is repaired by
 // overwrite, never believed (the refute pass demonstrated the wedge).
-func (tx *InternalTx) RecordInvocationObservation(
+func (tx *WriteTx) RecordInvocationObservation(
 	ctx context.Context, o domain.InvocationObservation,
 ) error {
 	if err := o.Validate(); err != nil {
@@ -134,7 +134,7 @@ func (tx *InternalTx) RecordInvocationObservation(
 // incoming observation cannot extend (a stepped-back clock) all fall through
 // to a plain overwrite instead of failing the workflow pass that carries
 // this write.
-func (tx *InternalTx) RecordRunHold(ctx context.Context, h domain.RunHoldObservation) error {
+func (tx *WriteTx) RecordRunHold(ctx context.Context, h domain.RunHoldObservation) error {
 	if err := h.Validate(); err != nil {
 		return fmt.Errorf("record run hold: %w", err)
 	}
@@ -169,7 +169,7 @@ func (tx *InternalTx) RecordRunHold(ctx context.Context, h domain.RunHoldObserva
 }
 
 // ClearRunHold removes the run's current hold observation, if any.
-func (tx *InternalTx) ClearRunHold(ctx context.Context, runID domain.RunID) error {
+func (tx *WriteTx) ClearRunHold(ctx context.Context, runID domain.RunID) error {
 	if runID == "" {
 		return fmt.Errorf("clear run hold: %w", domain.ErrEmptyID)
 	}
@@ -185,7 +185,7 @@ func (tx *InternalTx) ClearRunHold(ctx context.Context, runID domain.RunID) erro
 // re-recording it), so the cause is a delete predicate: the stored row is
 // still never read back, and a row naming a different cause is left exactly
 // as it stands.
-func (tx *InternalTx) ClearRunHoldCause(
+func (tx *WriteTx) ClearRunHoldCause(
 	ctx context.Context, runID domain.RunID, reason domain.RunHoldReason,
 ) error {
 	if runID == "" {

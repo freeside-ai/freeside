@@ -134,6 +134,30 @@ public struct MockServerTransport: ClientTransport {
                         message: "no visible run proposal exists under the identifier"))
             }
             return try Self.json(status: .ok, body: facts)
+        case "listRuns":
+            return try Self.json(status: .ok, body: await server.listRuns())
+        case "getRun":
+            guard let runID = Self.lastPathComponent(request.path),
+                let run = await server.run(id: runID)
+            else {
+                return try Self.json(
+                    status: .notFound,
+                    body: Components.Schemas._Error(
+                        message: "no entity exists under the identifier"))
+            }
+            return try Self.json(status: .ok, body: run)
+        case "getRunTimeline":
+            guard let runID = Self.runID(inTimelinePath: request.path),
+                let timeline = await server.runTimeline(id: runID)
+            else {
+                return try Self.json(
+                    status: .notFound,
+                    body: Components.Schemas._Error(
+                        message: "no entity exists under the identifier"))
+            }
+            return try Self.json(status: .ok, body: timeline)
+        case "listSchedules":
+            return try Self.json(status: .ok, body: await server.listSchedules())
         case "pairDevice":
             guard let body else {
                 return (HTTPResponse(status: .badRequest), nil)
@@ -350,6 +374,13 @@ public struct MockServerTransport: ClientTransport {
         guard let path else { return nil }
         let parts = path.split(separator: "/")
         guard parts.count >= 4, parts.last == "run-proposal" else { return nil }
+        return String(parts[parts.count - 2]).removingPercentEncoding
+    }
+
+    private static func runID(inTimelinePath path: String?) -> String? {
+        guard let path else { return nil }
+        let parts = path.split(separator: "/")
+        guard parts.count >= 3, parts.last == "timeline" else { return nil }
         return String(parts[parts.count - 2]).removingPercentEncoding
     }
 

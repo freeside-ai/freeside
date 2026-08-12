@@ -55,7 +55,7 @@ func followMilestone(kind domain.RunMilestoneKind, seconds int) domain.RunMilest
 func appendFollowMilestones(t *testing.T, st *store.Store, milestones ...domain.RunMilestone) {
 	t.Helper()
 	ctx := context.Background()
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		for _, m := range milestones {
 			if err := tx.AppendRunMilestone(ctx, m); err != nil {
 				return err
@@ -73,7 +73,7 @@ func recordFollowObservation(
 ) {
 	t.Helper()
 	ctx := context.Background()
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordInvocationObservation(ctx, domain.InvocationObservation{
 			InvocationID: followInvocation, RunID: followRun,
 			Status: status, Live: live, ObservedAt: observedAt,
@@ -87,7 +87,7 @@ func recordFollowHold(t *testing.T, st *store.Store, reason domain.RunHoldReason
 	t.Helper()
 	ctx := context.Background()
 	invocation := followInvocation
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordRunHold(ctx, domain.RunHoldObservation{
 			RunID: followRun, InvocationID: &invocation, Reason: reason,
 			FirstObservedAt: followAt(seconds), LastObservedAt: followAt(seconds),

@@ -17,7 +17,7 @@ import (
 // This value mirrors signet's private outbox kind. The string is durable
 // storage vocabulary, not an exported signet API: the engine is the intended
 // production consumer while signet remains the producer.
-const kindAgentInvocationRequested = "agent_invocation_requested"
+const kindAgentInvocationRequested = string(domain.AgentInvocationRequestedKind)
 
 type invocationRequest struct {
 	InvocationID   domain.InvocationID   `json:"invocation_id"`
@@ -494,7 +494,7 @@ func (e *Engine) dispatchIntent(
 	} else {
 		startedNow = true
 	}
-	if err := e.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := e.store.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.MarkOutboxDispatched(ctx, entry.IdempotencyKey); err != nil {
 			return err
 		}

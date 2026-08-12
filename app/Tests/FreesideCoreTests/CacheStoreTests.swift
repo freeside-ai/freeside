@@ -60,6 +60,39 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(store.load() == nil)
     }
 
+    @Test func aPreRunsFormatTwoCachePreservesOnlyTheCommandLedger() throws {
+        // Format 2 predates runs and schedules.  Its valid cached cursors
+        // must not make an upgraded client consider empty default arrays
+        // current, or completed durable runs would stay invisible until a
+        // later server revision happens to force a bootstrap.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
+        ]
+        try store.save(state)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var legacyState = try #require(object["state"] as? [String: Any])
+        legacyState.removeValue(forKey: "runs")
+        legacyState.removeValue(forKey: "schedules")
+        legacyState.removeValue(forKey: "runTimelines")
+        object["format"] = 2
+        object["state"] = legacyState
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.cursors == nil)
+        #expect(migrated.attentionItems.isEmpty)
+        #expect(migrated.runs.isEmpty)
+        #expect(migrated.schedules.isEmpty)
+        #expect(migrated.runTimelines.isEmpty)
+        #expect(migrated.pendingCommands == state.pendingCommands)
+    }
+
     @Test func roundTripsThePendingCommandLedger() throws {
         let (store, directory) = temporaryStore()
         defer { try? FileManager.default.removeItem(at: directory) }

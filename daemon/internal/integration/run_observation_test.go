@@ -601,7 +601,7 @@ func TestForgedMilestonesDriveNoWorkflowDecision(t *testing.T) {
 	// demonstrated that trusting the stored binding wedged the reconcile
 	// loop, so this row must be repaired, never believed.
 	invocation := submitted.InvocationID
-	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		for _, kind := range []domain.RunMilestoneKind{
 			domain.MilestoneInvocationAdmitted,
 			domain.MilestoneInvocationStarted,

@@ -461,169 +461,26 @@ func safeIdentifier(id string) bool {
 	return true
 }
 
-// Outcome is the operator-facing classification of a run's final result. It
-// is presentation, derived fresh from the milestone timeline on every read:
-// nothing persists it, and it holds no authority the workflow reads back.
-type Outcome string
+type (
+	Outcome    = domain.RunOutcome
+	Conclusion = domain.RunConclusion
+)
 
 const (
-	// OutcomePending: the run has not reached a final outcome.
-	OutcomePending Outcome = "pending"
-	// OutcomePublished: publication converged and the run is ready for final
-	// review.
-	OutcomePublished Outcome = "published"
-	// OutcomeBlocked: publication reached a definitive block; Conclusion
-	// carries the closed cause code.
-	OutcomeBlocked Outcome = "blocked"
-	// OutcomeFailed: the recorded terminal class is a failure or a
-	// cancellation.
-	OutcomeFailed Outcome = "failed"
-	// OutcomeLost: the execution's session was proven lost.
-	OutcomeLost Outcome = "lost"
+	OutcomePending   = domain.RunOutcomePending
+	OutcomePublished = domain.RunOutcomePublished
+	OutcomeBlocked   = domain.RunOutcomeBlocked
+	OutcomeFailed    = domain.RunOutcomeFailed
+	OutcomeLost      = domain.RunOutcomeLost
 )
 
-// AllOutcomes is the single registration point for run outcomes.
-var AllOutcomes = []Outcome{
-	OutcomePending,
-	OutcomePublished,
-	OutcomeBlocked,
-	OutcomeFailed,
-	OutcomeLost,
-}
-
-// valid is a predicate, so it keeps its default; the zero value "" is invalid
-// by design.
-func (o Outcome) valid() bool {
-	switch o {
-	case OutcomePending, OutcomePublished, OutcomeBlocked, OutcomeFailed, OutcomeLost:
-		return true
-	default:
-		return false
-	}
-}
+var AllOutcomes = domain.AllRunOutcomes
 
 var (
-	// ErrInvalidOutcome reports an outcome outside AllOutcomes.
-	ErrInvalidOutcome = errors.New("invalid run outcome")
-	// ErrOutcomeDetailMismatch reports a conclusion carrying detail its
-	// outcome does not declare, or missing detail the outcome requires.
-	ErrOutcomeDetailMismatch = errors.New("run outcome detail mismatch")
+	ErrInvalidOutcome        = domain.ErrInvalidRunOutcome
+	ErrOutcomeDetailMismatch = domain.ErrRunOutcomeDetailMismatch
 )
 
-// Conclusion is the run's outcome as the timeline currently reads.
-type Conclusion struct {
-	Outcome Outcome
-	// Reason is the closed block cause; set exactly for OutcomeBlocked.
-	Reason *domain.RunHoldReason
-	// Terminal is the recorded terminal class; set for OutcomeFailed and
-	// OutcomeLost.
-	Terminal *domain.ObservedInvocationStatus
-	// Final reports whether the run's outcome is decided.
-	Final bool
-}
-
-// Validate reports whether the conclusion is structurally sound, including
-// the outcome-scoped detail fields. Conclude always builds a valid one, so
-// this guards the exported shape against a caller assembling a block with no
-// reason, a failure with no terminal class, or an undecided outcome claiming
-// to be final. Outcome dispatch omits default so the exhaustive linter forces
-// a new outcome to declare its detail contract; the trailing return rejects
-// the invalid zero value.
-func (c Conclusion) Validate() error {
-	if !c.Outcome.valid() {
-		return fmt.Errorf("conclusion outcome %q: %w", c.Outcome, ErrInvalidOutcome)
-	}
-	check := func(wantReason, wantTerminal, wantFinal bool) error {
-		switch {
-		case (c.Reason != nil) != wantReason:
-			return fmt.Errorf("conclusion %s reason: %w", c.Outcome, ErrOutcomeDetailMismatch)
-		case (c.Terminal != nil) != wantTerminal:
-			return fmt.Errorf("conclusion %s terminal: %w", c.Outcome, ErrOutcomeDetailMismatch)
-		case c.Final != wantFinal:
-			return fmt.Errorf("conclusion %s final: %w", c.Outcome, ErrOutcomeDetailMismatch)
-		}
-		// The domain's validity predicates are unexported, so membership is
-		// checked against its registration slices, which exist for exactly
-		// this: a caller outside the domain needing the closed set.
-		if c.Reason != nil && !slices.Contains(domain.AllRunHoldReasons, *c.Reason) {
-			return fmt.Errorf("conclusion %s reason %q: %w",
-				c.Outcome, *c.Reason, domain.ErrInvalidRunHoldReason)
-		}
-		if c.Terminal != nil &&
-			!slices.Contains(domain.AllObservedInvocationStatuses, *c.Terminal) {
-			return fmt.Errorf("conclusion %s terminal %q: %w",
-				c.Outcome, *c.Terminal, domain.ErrInvalidObservedStatus)
-		}
-		return nil
-	}
-	switch c.Outcome {
-	case OutcomePending:
-		return check(false, false, false)
-	case OutcomePublished:
-		return check(false, false, true)
-	case OutcomeBlocked:
-		return check(true, false, true)
-	case OutcomeFailed, OutcomeLost:
-		return check(false, true, true)
-	}
-	return fmt.Errorf("conclusion outcome %q: %w", c.Outcome, ErrInvalidOutcome)
-}
-
-// Conclude classifies the run from its milestone timeline. A definitive
-// publication block outranks a ready publication because the two cannot both
-// be a run's result and the block is the operator-actionable one.
-func Conclude(o domain.RunObservation) Conclusion {
-	var (
-		terminal  *domain.ObservedInvocationStatus
-		blocked   *domain.RunHoldReason
-		published bool
-	)
-	// Behaviour dispatch over the milestone vocabulary, so no default: a new
-	// milestone kind must state whether it decides a run's outcome.
-	for _, m := range o.Milestones {
-		switch m.Kind {
-		case domain.MilestonePublicationReady:
-			published = true
-		case domain.MilestonePublicationBlocked:
-			blocked = m.Reason
-		case domain.MilestoneTerminalRecorded:
-			terminal = m.Terminal
-		case domain.MilestoneRunSubmitted, domain.MilestoneInvocationAdmitted,
-			domain.MilestoneInvocationStarted, domain.MilestoneExecutionExportRecorded,
-			domain.MilestoneExecutionOutcomeRecorded:
-		}
-	}
-	switch {
-	case blocked != nil:
-		return Conclusion{Outcome: OutcomeBlocked, Reason: blocked, Final: true}
-	case published:
-		return Conclusion{Outcome: OutcomePublished, Final: true}
-	case terminal == nil:
-		return Conclusion{Outcome: OutcomePending}
-	}
-	outcome, final := terminalOutcome(*terminal)
-	if !final {
-		return Conclusion{Outcome: outcome}
-	}
-	return Conclusion{Outcome: outcome, Terminal: terminal, Final: true}
-}
-
-// terminalOutcome classifies a recorded terminal class. Behaviour dispatch,
-// so no default; the trailing return rejects the invalid zero value.
-func terminalOutcome(t domain.ObservedInvocationStatus) (Outcome, bool) {
-	switch t {
-	case domain.ObservedStatusCompleted:
-		// A completed execution is not the run's outcome: import and
-		// publication still decide it.
-		return OutcomePending, false
-	case domain.ObservedStatusFailed, domain.ObservedStatusCanceled:
-		return OutcomeFailed, true
-	case domain.ObservedStatusGone:
-		return OutcomeLost, true
-	case domain.ObservedStatusPending, domain.ObservedStatusRunning:
-		// Unreachable: a live class is not a terminal the milestone
-		// vocabulary can carry (domain.RunMilestone.Validate).
-		return OutcomePending, false
-	}
-	return OutcomePending, false
+func Conclude(observation domain.RunObservation) Conclusion {
+	return domain.ConcludeRun(observation)
 }

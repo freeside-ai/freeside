@@ -31,6 +31,57 @@ func validMilestone(kind RunMilestoneKind) RunMilestone {
 	return m
 }
 
+func TestRunOutcomeRegistrationAndConclusion(t *testing.T) {
+	for _, outcome := range AllRunOutcomes {
+		if !outcome.valid() {
+			t.Errorf("registered run outcome %q is invalid", outcome)
+		}
+	}
+	if RunOutcome("").valid() || RunOutcome("shipped").valid() {
+		t.Error("an unregistered run outcome validates")
+	}
+
+	reason := HoldVerificationFindings
+	conclusion := ConcludeRun(RunObservation{
+		RunID: "run-1",
+		Milestones: []RunMilestone{{
+			RunID: "run-1", Kind: MilestonePublicationBlocked,
+			InvocationID: ptr(InvocationID("inv-1")), Reason: &reason,
+			RecordedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		}},
+	})
+	if conclusion.Outcome != RunOutcomeBlocked || conclusion.Reason == nil ||
+		*conclusion.Reason != reason || !conclusion.Final {
+		t.Fatalf("ConcludeRun() = %+v, want final verification block", conclusion)
+	}
+	if err := conclusion.Validate(); err != nil {
+		t.Fatalf("ConcludeRun().Validate() = %v", err)
+	}
+}
+
+func TestConcludeRunClearsPriorTerminalWhenAnotherAttemptMakesProgress(t *testing.T) {
+	failed := ObservedStatusFailed
+	first := InvocationID("inv-1")
+	second := InvocationID("inv-2")
+	observation := RunObservation{
+		RunID: "run-1",
+		Milestones: []RunMilestone{
+			{RunID: "run-1", Kind: MilestoneTerminalRecorded, InvocationID: &first, Terminal: &failed},
+			{RunID: "run-1", Kind: MilestoneInvocationAdmitted, InvocationID: &second},
+		},
+	}
+	if got := ConcludeRun(observation); got.Outcome != RunOutcomePending || got.Final {
+		t.Fatalf("ConcludeRun() = %+v, want pending retry", got)
+	}
+
+	// A replay of the failed attempt is not a retry and must leave its
+	// terminal conclusion intact.
+	observation.Milestones[1].InvocationID = &first
+	if got := ConcludeRun(observation); got.Outcome != RunOutcomeFailed || !got.Final {
+		t.Fatalf("ConcludeRun() after same-attempt replay = %+v, want failed final", got)
+	}
+}
+
 // TestRunMilestoneValidatePerKind: every registered kind has a valid fixture
 // (the golden discipline), and each kind-scoped detail field is required
 // exactly where declared.
@@ -196,6 +247,27 @@ func TestRunHoldObservationValidate(t *testing.T) {
 	unscoped.InvocationID = nil
 	if err := unscoped.Validate(); err != nil {
 		t.Errorf("unscoped hold rejected: %v", err)
+	}
+}
+
+func TestDefinitivePublicationBlockReason(t *testing.T) {
+	t.Parallel()
+	for reason, want := range map[string]RunHoldReason{
+		PublicationBlockRecipeRevoked: HoldRecipeRevoked,
+		PublicationBlockVerification:  HoldVerificationFindings,
+		PublicationBlockTrust:         HoldTrustBlocked,
+		PublicationBlockBaseAdvanced:  HoldBaseAdvanced,
+	} {
+		got, ok := DefinitivePublicationBlockReason(reason)
+		if !ok || got != want {
+			t.Errorf("DefinitivePublicationBlockReason(%q) = %q, %v; want %q, true",
+				reason, got, ok, want)
+		}
+	}
+	if got, ok := DefinitivePublicationBlockReason(
+		"Publication is durably held while a transient retry remains possible.",
+	); ok || got != "" {
+		t.Errorf("transient reason = %q, %v; want empty, false", got, ok)
 	}
 }
 

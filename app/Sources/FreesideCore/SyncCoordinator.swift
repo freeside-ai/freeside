@@ -14,8 +14,19 @@ import Observation
 @MainActor
 @Observable
 public final class SyncCoordinator {
+    public enum TimelineLoadState: Equatable, Sendable {
+        case idle
+        case loading
+        case loaded
+        case unavailable
+    }
+
     public let store: InboxStore
     public private(set) var cursors: SyncCursors?
+    public private(set) var runs: [Components.Schemas.RunSnapshot] = []
+    public private(set) var schedules: [Components.Schemas.ScheduleSnapshot] = []
+    public private(set) var timelinesByRunID: [String: Components.Schemas.RunTimeline] = [:]
+    public private(set) var timelineLoadStates: [String: TimelineLoadState] = [:]
 
     private let cache: CacheStore
     /// Overlapping sync rounds resolve by recency, as the store's
@@ -25,6 +36,13 @@ public final class SyncCoordinator {
     /// back for a dead epoch (or regress the full-snapshot cursor
     /// within one).
     private var syncGeneration = 0
+    // A successful canonical replacement invalidates partial responses that
+    // were issued against the prior cache image. Unlike syncGeneration this
+    // token does not advance for an ordinary same-epoch heartbeat, so a lazy
+    // timeline fetch may finish while liveness is being confirmed.
+    private var cacheGeneration = 0
+    private var runListGeneration = 0
+    private var timelineGenerations: [String: Int] = [:]
 
     public init(
         client: any APIProtocol,
@@ -37,6 +55,11 @@ public final class SyncCoordinator {
             if let cursors = cached.cursors {
                 self.cursors = cursors
                 store.replaceAll(with: cached.attentionItems)
+                runs = cached.runs
+                schedules = cached.schedules
+                timelinesByRunID = cached.runTimelines.reduce(into: [:]) { timelines, timeline in
+                    timelines[timeline.run_id] = timeline
+                }
             }
             // The ledger restores even without cursors: an epoch discard
             // preserves it precisely so an unresolved command's retry
@@ -74,7 +97,13 @@ public final class SyncCoordinator {
             guard generation == syncGeneration else { return }
             switch output {
             case .ok(let ok):
-                adopt(try ok.body.json)
+                if !adopt(try ok.body.json) {
+                    // A same-epoch partial read completed while this
+                    // bootstrap response was in flight. Fetch one new
+                    // canonical snapshot rather than replacing that newer
+                    // observation with an older full image.
+                    await bootstrap()
+                }
             case .undocumented(let statusCode, _):
                 mark(failureStatus: statusCode)
             }
@@ -109,15 +138,24 @@ public final class SyncCoordinator {
                     // epoch change).
                     discardCache()
                     await bootstrap()
-                } else if server.revision > cursors.lastFullSnapshotRevision {
-                    // Partial reads may already have shown pieces of
-                    // these revisions, but only a bootstrap makes the
-                    // whole cache current (test 11).
-                    observe(revision: server.revision)
-                    await bootstrap()
                 } else {
+                    // The response's revision is only a lower bound on the
+                    // live cursor: a partial read may have completed while
+                    // this heartbeat was in flight. Re-read that cursor
+                    // after observing the response before claiming freshness.
                     observe(revision: server.revision)
-                    store.freshness = .fresh
+                    guard let current = self.cursors else {
+                        await bootstrap()
+                        return
+                    }
+                    if current.highestObservedServerRevision > current.lastFullSnapshotRevision {
+                        // Partial reads may already have shown pieces of
+                        // these revisions, but only a bootstrap makes the
+                        // whole cache current (test 11).
+                        await bootstrap()
+                    } else {
+                        store.freshness = .fresh
+                    }
                 }
             case .undocumented(let statusCode, _):
                 mark(failureStatus: statusCode)
@@ -144,17 +182,114 @@ public final class SyncCoordinator {
         guard var cursors, revision > cursors.highestObservedServerRevision else { return }
         cursors.highestObservedServerRevision = revision
         self.cursors = cursors
+        if revision > cursors.lastFullSnapshotRevision {
+            store.freshness = .unvalidated
+        }
         persist()
     }
 
-    private func adopt(_ snapshot: Components.Schemas.BootstrapSnapshot) {
+    /// Refreshes the list-level run projections without claiming the whole
+    /// cache current. The response's highest revision advances only the
+    /// observed cursor (plan §5.14 sync test 11).
+    public func refreshRuns() async {
+        runListGeneration += 1
+        let requestGeneration = runListGeneration
+        let requestCacheGeneration = cacheGeneration
+        do {
+            let output = try await store.client.listRuns()
+            guard requestGeneration == runListGeneration,
+                requestCacheGeneration == cacheGeneration
+            else {
+                return
+            }
+            switch output {
+            case .ok(let ok):
+                let snapshots = try ok.body.json
+                runs = snapshots
+                if let revision = snapshots.map(\.as_of_revision).max() {
+                    observe(revision: revision)
+                }
+                persist()
+            case .undocumented(let statusCode, _):
+                mark(failureStatus: statusCode)
+            }
+        } catch {
+            guard requestGeneration == runListGeneration,
+                requestCacheGeneration == cacheGeneration
+            else { return }
+            if error is CancellationError || Task.isCancelled { return }
+            store.freshness = .unreachable
+        }
+    }
+
+    /// Fetches one computed timeline on navigation. A cached same-epoch value
+    /// remains available while unreachable; a successful partial read replaces
+    /// it and advances only the observed cursor.
+    public func refreshTimeline(for runID: String) async {
+        let requestGeneration = (timelineGenerations[runID] ?? 0) + 1
+        timelineGenerations[runID] = requestGeneration
+        let requestCacheGeneration = cacheGeneration
+        timelineLoadStates[runID] = .loading
+        do {
+            let output = try await store.client.getRunTimeline(
+                path: .init(run_id: runID))
+            guard timelineGenerations[runID] == requestGeneration,
+                requestCacheGeneration == cacheGeneration
+            else { return }
+            switch output {
+            case .ok(let ok):
+                let timeline = try ok.body.json
+                guard timeline.run_id == runID else {
+                    timelineLoadStates[runID] = .unavailable
+                    store.freshness = .unreachable
+                    return
+                }
+                timelinesByRunID[runID] = timeline
+                timelineLoadStates[runID] = .loaded
+                observe(revision: timeline.as_of_revision)
+                persist()
+            case .notFound:
+                timelineLoadStates[runID] = .unavailable
+            case .undocumented(let statusCode, _):
+                timelineLoadStates[runID] = .unavailable
+                mark(failureStatus: statusCode)
+            }
+        } catch {
+            guard timelineGenerations[runID] == requestGeneration,
+                requestCacheGeneration == cacheGeneration
+            else { return }
+            if error is CancellationError || Task.isCancelled {
+                timelineLoadStates[runID] = .idle
+                return
+            }
+            timelineLoadStates[runID] = .unavailable
+            store.freshness = .unreachable
+        }
+    }
+
+    /// Returns false when a same-epoch canonical snapshot was overtaken by a
+    /// partial read. The caller must refetch instead of letting older rows
+    /// replace the newer observation and falsely claim the cache is current.
+    private func adopt(_ snapshot: Components.Schemas.BootstrapSnapshot) -> Bool {
+        if let cursors,
+            cursors.syncEpoch == snapshot.sync_epoch,
+            cursors.highestObservedServerRevision > snapshot.revision
+        {
+            store.freshness = .unvalidated
+            return false
+        }
         if let cursors, cursors.syncEpoch != snapshot.sync_epoch {
             // The old epoch's cache and cursors are dead (test 8), even
             // when its revisions ran ahead of the restored daemon's:
             // revisions never compare across epochs.
             discardCache()
         }
+        cacheGeneration += 1
         store.replaceAll(with: snapshot.attention_items)
+        runs = snapshot.runs
+        schedules = snapshot.schedules
+        timelinesByRunID = [:]
+        timelineLoadStates = [:]
         cursors = SyncCursors(
             syncEpoch: snapshot.sync_epoch,
             lastFullSnapshotRevision: snapshot.revision,
@@ -163,6 +298,7 @@ public final class SyncCoordinator {
         )
         store.freshness = .fresh
         persist()
+        return true
     }
 
     private func mark(failureStatus: Int) {
@@ -176,7 +312,12 @@ public final class SyncCoordinator {
         // commitment is epoch-independent, and only its verbatim resend
         // can settle an unresolved command against the restored daemon.
         cache.discard()
+        cacheGeneration += 1
         store.discardSnapshots()
+        runs = []
+        schedules = []
+        timelinesByRunID = [:]
+        timelineLoadStates = [:]
         cursors = nil
         persist()
     }
@@ -201,6 +342,10 @@ public final class SyncCoordinator {
                 CachedState(
                     cursors: cursors,
                     attentionItems: cursors == nil ? [] : store.orderedSnapshots,
+                    runs: cursors == nil ? [] : runs,
+                    schedules: cursors == nil ? [] : schedules,
+                    runTimelines: cursors == nil
+                        ? [] : timelinesByRunID.keys.sorted().compactMap { timelinesByRunID[$0] },
                     pendingCommands: pending
                 ))
             return true

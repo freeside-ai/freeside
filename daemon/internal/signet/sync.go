@@ -70,9 +70,33 @@ type AttentionDeliverySnapshot struct {
 // RunSnapshot is a Run with its store-stamped sync metadata, matching
 // api/openapi.yaml.
 type RunSnapshot struct {
-	AsOfRevision  int64      `json:"as_of_revision"`
-	EntityVersion int64      `json:"entity_version"`
-	Run           domain.Run `json:"run"`
+	AsOfRevision  int64 `json:"as_of_revision"`
+	EntityVersion int64 `json:"entity_version"`
+	Run           Run   `json:"run"`
+}
+
+// Run is the synchronized run aggregate plus its current daemon-derived
+// progress pulse. The summary is presentation, never workflow authority.
+type Run struct {
+	ID              domain.RunID             `json:"id"`
+	ProjectID       domain.ProjectID         `json:"project_id"`
+	SpecDigest      domain.Digest            `json:"spec_digest"`
+	PolicyDigest    domain.Digest            `json:"policy_digest"`
+	Stages          []domain.Stage           `json:"stages"`
+	LatestMilestone *domain.RunMilestoneKind `json:"latest_milestone"`
+	Outcome         domain.RunOutcome        `json:"outcome"`
+	HoldReason      *domain.RunHoldReason    `json:"hold_reason"`
+}
+
+// RunTimeline is the typed daemon-observation projection read under one
+// server revision. It deliberately carries no free agent-authored text.
+type RunTimeline struct {
+	AsOfRevision int64                          `json:"as_of_revision"`
+	AsOf         time.Time                      `json:"as_of"`
+	RunID        domain.RunID                   `json:"run_id"`
+	Milestones   []domain.RunMilestone          `json:"milestones"`
+	Hold         *domain.RunHoldObservation     `json:"hold"`
+	Invocations  []domain.InvocationObservation `json:"invocations"`
 }
 
 // ConversationSnapshot is a whole Conversation with its store-stamped sync
@@ -184,7 +208,15 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 			if err := validateSnapshot(state, run.Snapshot); err != nil {
 				return fmt.Errorf("run %q: %w", run.Value.ID, err)
 			}
-			out.Runs = append(out.Runs, runSnapshot(run.Value, run.Snapshot))
+			observation, err := tx.ObserveRun(ctx, run.Value.ID)
+			if err != nil {
+				return fmt.Errorf("run %q timeline: %w", run.Value.ID, err)
+			}
+			if err := authenticateRunObservation(ctx, tx, state, run.Value, observation, items); err != nil {
+				return fmt.Errorf("run %q timeline: %w", run.Value.ID, err)
+			}
+			out.Runs = append(out.Runs,
+				runSnapshot(run.Value, run.Snapshot, observation, state.Revision))
 		}
 		for _, conversation := range conversations {
 			if err := validateSnapshot(state, conversation.Snapshot); err != nil {
@@ -444,36 +476,122 @@ func (s *Service) ListSchedules(ctx context.Context) ([]ScheduleSnapshot, error)
 
 // ListRuns returns the current run aggregates as partial resource snapshots.
 func (s *Service) ListRuns(ctx context.Context) ([]RunSnapshot, error) {
-	state, values, err := readSnapshots(ctx, s.store, (*store.ReadTx).ListRuns)
+	var out []RunSnapshot
+	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+		state, err := tx.ServerState(ctx)
+		if err != nil {
+			return err
+		}
+		if err := validateServerState(state); err != nil {
+			return err
+		}
+		values, err := tx.ListRuns(ctx)
+		if err != nil {
+			return err
+		}
+		items, err := tx.ListAttentionItems(ctx)
+		if err != nil {
+			return err
+		}
+		out = make([]RunSnapshot, 0, len(values))
+		for _, value := range values {
+			if err := validateSnapshot(state, value.Snapshot); err != nil {
+				return fmt.Errorf("run %q: %w", value.Value.ID, err)
+			}
+			observation, err := tx.ObserveRun(ctx, value.Value.ID)
+			if err != nil {
+				return fmt.Errorf("run %q timeline: %w", value.Value.ID, err)
+			}
+			if err := authenticateRunObservation(ctx, tx, state, value.Value, observation, items); err != nil {
+				return fmt.Errorf("run %q timeline: %w", value.Value.ID, err)
+			}
+			out = append(out,
+				runSnapshot(value.Value, value.Snapshot, observation, state.Revision))
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list runs: %w", err)
-	}
-	out := make([]RunSnapshot, 0, len(values))
-	for _, value := range values {
-		if err := validateSnapshot(state, value.Snapshot); err != nil {
-			return nil, fmt.Errorf("list runs: run %q: %w", value.Value.ID, err)
-		}
-		out = append(out, runSnapshot(value.Value, value.Snapshot))
 	}
 	return out, nil
 }
 
 // GetRun returns one current run aggregate snapshot.
 func (s *Service) GetRun(ctx context.Context, id domain.RunID) (RunSnapshot, error) {
-	state, values, err := readSnapshots(ctx, s.store, (*store.ReadTx).ListRuns)
+	var out RunSnapshot
+	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+		state, err := tx.ServerState(ctx)
+		if err != nil {
+			return err
+		}
+		if err := validateServerState(state); err != nil {
+			return err
+		}
+		value, err := tx.GetRunSnapshot(ctx, id)
+		if err != nil {
+			return err
+		}
+		if err := validateSnapshot(state, value.Snapshot); err != nil {
+			return err
+		}
+		observation, err := tx.ObserveRun(ctx, id)
+		if err != nil {
+			return err
+		}
+		items, err := tx.ListAttentionItems(ctx)
+		if err != nil {
+			return err
+		}
+		if err := authenticateRunObservation(ctx, tx, state, value.Value, observation, items); err != nil {
+			return err
+		}
+		out = runSnapshot(value.Value, value.Snapshot, observation, state.Revision)
+		return nil
+	})
 	if err != nil {
 		return RunSnapshot{}, fmt.Errorf("get run %q: %w", id, err)
 	}
-	for _, value := range values {
-		if value.Value.ID != id {
-			continue
+	return out, nil
+}
+
+// GetRunTimeline returns one run's observation timeline from a single store
+// transaction, after proving the run itself exists under the current trust
+// gate. The server revision is the upper bound for every returned fact.
+func (s *Service) GetRunTimeline(ctx context.Context, id domain.RunID) (RunTimeline, error) {
+	var out RunTimeline
+	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+		state, err := tx.ServerState(ctx)
+		if err != nil {
+			return err
 		}
-		if err := validateSnapshot(state, value.Snapshot); err != nil {
-			return RunSnapshot{}, fmt.Errorf("get run %q: %w", id, err)
+		if err := validateServerState(state); err != nil {
+			return err
 		}
-		return runSnapshot(value.Value, value.Snapshot), nil
+		run, err := tx.GetRunSnapshot(ctx, id)
+		if err != nil {
+			return err
+		}
+		if err := validateSnapshot(state, run.Snapshot); err != nil {
+			return err
+		}
+		observation, err := tx.ObserveRun(ctx, id)
+		if err != nil {
+			return err
+		}
+		items, err := tx.ListAttentionItems(ctx)
+		if err != nil {
+			return err
+		}
+		if err := authenticateRunObservation(ctx, tx, state, run.Value, observation, items); err != nil {
+			return err
+		}
+		out = runTimeline(observation, state.Revision, time.Now().UTC())
+		return nil
+	})
+	if err != nil {
+		return RunTimeline{}, fmt.Errorf("get run %q timeline: %w", id, err)
 	}
-	return RunSnapshot{}, fmt.Errorf("get run %q: %w", id, store.ErrNotFound)
+	return out, nil
 }
 
 // GetConversation returns one whole Phase 1 conversation snapshot.
@@ -545,10 +663,420 @@ func deliverySnapshot(delivery domain.AttentionDelivery, snapshot store.Snapshot
 	}
 }
 
-func runSnapshot(run domain.Run, snapshot store.Snapshot) RunSnapshot {
-	return RunSnapshot{
-		AsOfRevision: snapshot.AsOfRevision, EntityVersion: snapshot.EntityVersion, Run: normalizeRun(run),
+func runSnapshot(
+	run domain.Run,
+	snapshot store.Snapshot,
+	observation domain.RunObservation,
+	asOfRevision int64,
+) RunSnapshot {
+	normalized := normalizeRun(run)
+	projection := Run{
+		ID: normalized.ID, ProjectID: normalized.ProjectID,
+		SpecDigest: normalized.SpecDigest, PolicyDigest: normalized.PolicyDigest,
+		Stages:  normalized.Stages,
+		Outcome: domain.ConcludeRun(observation).Outcome,
 	}
+	if len(observation.Milestones) > 0 {
+		latest := observation.Milestones[len(observation.Milestones)-1].Kind
+		projection.LatestMilestone = &latest
+	}
+	if observation.Hold != nil {
+		reason := observation.Hold.Reason
+		projection.HoldReason = &reason
+	}
+	return RunSnapshot{
+		AsOfRevision: asOfRevision, EntityVersion: snapshot.EntityVersion, Run: projection,
+	}
+}
+
+func runTimeline(observation domain.RunObservation, asOfRevision int64, asOf time.Time) RunTimeline {
+	return RunTimeline{
+		AsOfRevision: asOfRevision,
+		AsOf:         asOf,
+		RunID:        observation.RunID,
+		Milestones:   nonNilSlice(observation.Milestones),
+		Hold:         observation.Hold,
+		Invocations:  nonNilSlice(observation.Invocations),
+	}
+}
+
+type runAttemptBinding struct {
+	stageID   domain.StageID
+	attemptID domain.AttemptID
+}
+
+// authenticateRunObservation re-binds every outcome-bearing projection row
+// to the durable authority it summarizes. Observation rows are deliberately
+// powerless workflow mirrors; serving one as an operator observation therefore
+// requires more than structural decoding. A forged milestone must fail the
+// read, not turn a failed run into a ready one.
+func authenticateRunObservation(
+	ctx context.Context,
+	tx *store.ReadTx,
+	state store.ServerState,
+	run domain.Run,
+	observation domain.RunObservation,
+	items []store.Snapshotted[domain.AttentionItem],
+) error {
+	attempts := make(map[domain.InvocationID]runAttemptBinding)
+	for _, stage := range run.Stages {
+		for _, attempt := range stage.Attempts {
+			attempts[attempt.InvocationID] = runAttemptBinding{
+				stageID: stage.ID, attemptID: attempt.ID,
+			}
+		}
+	}
+	var readyBinding *domain.ReadyItemPRBinding
+	blockedReasons := make(map[domain.RunHoldReason]bool)
+	readyMilestone := false
+	blockedMilestone := false
+	terminalByInvocation := make(map[domain.InvocationID]domain.ObservedInvocationStatus)
+	for _, snapshot := range items {
+		if err := validateSnapshot(state, snapshot.Snapshot); err != nil {
+			return fmt.Errorf("attention item %q authority: %w", snapshot.Value.ID, err)
+		}
+		item := snapshot.Value
+		if item.Subject.RunID == nil || *item.Subject.RunID != run.ID {
+			continue
+		}
+		if item.ProjectID != run.ProjectID || item.Subject.Type != domain.SubjectRun ||
+			item.Subject.ID != domain.SubjectID(run.ID) {
+			return fmt.Errorf("attention item %q does not bind to run %q: %w",
+				item.ID, run.ID, domain.ErrParentKeyMismatch)
+		}
+		switch item.Type {
+		case domain.AttentionReadyForFinalReview:
+			if item.ID != domain.ProductionReadyItemID(run.ID) {
+				continue
+			}
+			if binding, err := tx.GetReadyItemPRBinding(ctx, item.ID); err == nil {
+				readyBinding = &binding
+			} else if !errors.Is(err, store.ErrNotFound) {
+				return fmt.Errorf("ready item %q authority: %w", item.ID, err)
+			}
+		case domain.AttentionPublishBlocked:
+			reason, definitive := domain.DefinitivePublicationBlockReason(item.Reason)
+			if item.ID == domain.ProductionBlockedItemID(run.ID) &&
+				definitive && slices.Equal(item.RequestedDecision,
+				[]domain.Action{domain.ActionInspectTrustFailure, domain.ActionStop}) {
+				blockedReasons[reason] = true
+			}
+		case domain.AttentionSpecApproval, domain.AttentionExecutionFailure,
+			domain.AttentionAgentQuestion, domain.AttentionReviewDiminishing,
+			domain.AttentionReviewDispute, domain.AttentionReviewContradiction,
+			domain.AttentionReviewConfiguration, domain.AttentionRunProposal,
+			domain.AttentionSystemHealth, domain.AttentionBlocked:
+		}
+	}
+	for _, invocation := range observation.Invocations {
+		if _, ok := attempts[invocation.InvocationID]; !ok {
+			return fmt.Errorf("invocation observation %q is not an attempt of run %q: %w",
+				invocation.InvocationID, run.ID, domain.ErrParentKeyMismatch)
+		}
+	}
+	if observation.Hold != nil {
+		if observation.Hold.InvocationID == nil {
+			return fmt.Errorf("hold invocation is not bound to run %q: %w",
+				run.ID, domain.ErrParentKeyMismatch)
+		}
+		holdInvocation := *observation.Hold.InvocationID
+		if !runObservationInvocation(run.ID, holdInvocation, attempts) {
+			// A hold can precede any attempt: a run submitted but refused
+			// admission (a backend below the floor, an identity-parallelism
+			// limit) holds its reserved invocation before that invocation
+			// becomes an attempt. Bind it under the same reserved-intent
+			// authority the run_submitted milestone uses, so a hold on an
+			// invocation the run never reserved still fails closed.
+			if err := authenticateRunSubmission(ctx, tx, run, holdInvocation); err != nil {
+				return fmt.Errorf("hold invocation is not bound to run %q: %w",
+					run.ID, domain.ErrParentKeyMismatch)
+			}
+		}
+	}
+	for _, milestone := range observation.Milestones {
+		invocation := *milestone.InvocationID
+		publicationInvocation := productionPublicationInvocationID(run.ID)
+		switch milestone.Kind {
+		case domain.MilestoneRunSubmitted:
+			if err := authenticateRunSubmission(ctx, tx, run, invocation); err != nil {
+				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+			}
+		case domain.MilestoneInvocationAdmitted:
+			if err := authenticateAdmissionRun(ctx, tx, invocation, run.ID, attempts[invocation]); err != nil {
+				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+			}
+		case domain.MilestoneInvocationStarted:
+			if _, ok := attempts[invocation]; !ok {
+				return fmt.Errorf("milestone %s invocation %q is not an attempt of run %q: %w",
+					milestone.Kind, invocation, run.ID, domain.ErrParentKeyMismatch)
+			}
+			entry, err := tx.GetOutbox(ctx, string(invocation))
+			if err != nil {
+				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+			}
+			if !entry.Dispatched() {
+				return fmt.Errorf("milestone %s invocation %q was not dispatched: %w",
+					milestone.Kind, invocation, domain.ErrParentKeyMismatch)
+			}
+			if err := domain.AuthenticateInvocationDispatchIntent(domain.InvocationDispatchIntent{
+				Kind: entry.Kind, IdempotencyKey: entry.IdempotencyKey, Payload: entry.Payload,
+			}, invocation, run.ID, attempts[invocation].stageID); err != nil {
+				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+			}
+			if err := authenticateConversationInvocationIntent(ctx, tx, entry, invocation, run.ID); err != nil {
+				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+			}
+			// A conversation intent omits its run and stage (see
+			// AuthenticateInvocationDispatchIntent) and, unlike a production or
+			// elaboration attempt, has no execution admission to bind against:
+			// the engine dispatches a conversation invocation unbound, so no
+			// admission record exists and demanding one would fail a legitimate
+			// start closed. Its attempt identity is still deterministic, so bind
+			// the started attempt to that identity: a run graph that retargets
+			// the conversation invocation to a different attempt fails this
+			// equality while a legitimately unbound start passes. Stage
+			// retargeting has no first-order authority for an unbound invocation
+			// and is left to run-record integrity (the note's boundary line).
+			if entry.Kind == string(domain.AgentInvocationRequestedKind) &&
+				attempts[invocation].attemptID != attemptIDForInvocation(invocation) {
+				return fmt.Errorf("milestone %s conversation invocation %q is not its own attempt: %w",
+					milestone.Kind, invocation, domain.ErrParentKeyMismatch)
+			}
+		case domain.MilestoneExecutionExportRecorded:
+			if _, err := tx.GetExecutionExportRecord(ctx, invocation); err != nil {
+				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+			}
+			if err := authenticateAdmissionRun(ctx, tx, invocation, run.ID, attempts[invocation]); err != nil {
+				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+			}
+			terminalByInvocation[invocation] = domain.ObservedStatusCompleted
+		case domain.MilestoneExecutionOutcomeRecorded:
+			outcome, err := tx.GetExecutionOutcomeRecord(ctx, invocation)
+			if err != nil {
+				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+			}
+			if outcome.Status != *milestone.Outcome {
+				return fmt.Errorf("milestone %s outcome disagrees with authority: %w",
+					milestone.Kind, domain.ErrParentKeyMismatch)
+			}
+			if err := authenticateAdmissionRun(ctx, tx, invocation, run.ID, attempts[invocation]); err != nil {
+				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+			}
+			terminalByInvocation[invocation] = observedStatusForExecutionOutcome(outcome.Status)
+		case domain.MilestoneTerminalRecorded:
+			if err := authenticateTerminal(ctx, tx, invocation, run.ID, attempts[invocation], *milestone.Terminal); err != nil {
+				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+			}
+			terminalByInvocation[invocation] = *milestone.Terminal
+		case domain.MilestonePublicationReady:
+			readyMilestone = true
+			if err := authenticatePublicationInvocation(
+				run.ID, invocation, publicationInvocation, attempts,
+			); err != nil {
+				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+			}
+			if readyBinding == nil || readyBinding.PublicationInvocationID != invocation {
+				return fmt.Errorf("milestone %s has no durable ready item: %w",
+					milestone.Kind, domain.ErrParentKeyMismatch)
+			}
+		case domain.MilestonePublicationBlocked:
+			blockedMilestone = true
+			if err := authenticatePublicationInvocation(
+				run.ID, invocation, publicationInvocation, attempts,
+			); err != nil {
+				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+			}
+			if !blockedReasons[*milestone.Reason] {
+				return fmt.Errorf("milestone %s reason has no matching definitive blocked item: %w",
+					milestone.Kind, domain.ErrParentKeyMismatch)
+			}
+		}
+	}
+	for _, invocation := range observation.Invocations {
+		if err := validateTerminalObservation(invocation, terminalByInvocation); err != nil {
+			return err
+		}
+	}
+	if err := validatePublicationAuthorityExclusivity(run.ID, readyMilestone, blockedMilestone); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateTerminalObservation(
+	invocation domain.InvocationObservation, terminals map[domain.InvocationID]domain.ObservedInvocationStatus,
+) error {
+	if terminal, ok := terminals[invocation.InvocationID]; ok && invocation.Status != terminal {
+		return fmt.Errorf("invocation observation %q status %q contradicts terminal %q: %w",
+			invocation.InvocationID, invocation.Status, terminal, domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+func observedStatusForExecutionOutcome(status domain.ExecutionOutcomeStatus) domain.ObservedInvocationStatus {
+	switch status {
+	case domain.ExecutionOutcomeFailed:
+		return domain.ObservedStatusFailed
+	case domain.ExecutionOutcomeCanceled:
+		return domain.ObservedStatusCanceled
+	case domain.ExecutionOutcomeLost:
+		return domain.ObservedStatusGone
+	}
+	return ""
+}
+
+func authenticateRunSubmission(
+	ctx context.Context, tx *store.ReadTx, run domain.Run, invocation domain.InvocationID,
+) error {
+	entry, err := tx.GetOutbox(ctx, string(invocation))
+	if err != nil {
+		return err
+	}
+	for _, stage := range run.Stages {
+		if err := domain.AuthenticateInvocationDispatchIntent(domain.InvocationDispatchIntent{
+			Kind: entry.Kind, IdempotencyKey: entry.IdempotencyKey, Payload: entry.Payload,
+		}, invocation, run.ID, stage.ID); err == nil {
+			return authenticateConversationInvocationIntent(ctx, tx, entry, invocation, run.ID)
+		}
+	}
+	return fmt.Errorf("submitted invocation %q does not bind to a stage of run %q: %w",
+		invocation, run.ID, domain.ErrParentKeyMismatch)
+}
+
+func validatePublicationAuthorityExclusivity(runID domain.RunID, ready, blocked bool) error {
+	if ready && blocked {
+		return fmt.Errorf("run %q has both ready and blocked publication authority: %w",
+			runID, domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+func authenticateConversationInvocationIntent(
+	ctx context.Context, tx *store.ReadTx, entry store.QueueEntry,
+	invocation domain.InvocationID, runID domain.RunID,
+) error {
+	if entry.Kind != string(domain.AgentInvocationRequestedKind) {
+		return nil
+	}
+	request, err := domain.DecodeConversationInvocationIntent(entry.Payload)
+	if err != nil {
+		return err
+	}
+	durable, err := tx.GetAgentInvocation(ctx, invocation)
+	if err != nil {
+		return err
+	}
+	item, err := tx.GetAttentionItem(ctx, request.ItemID)
+	if err != nil {
+		return err
+	}
+	if durable.ConversationID == nil || *durable.ConversationID != request.ConversationID {
+		return fmt.Errorf("conversation invocation %q does not bind conversation %q: %w",
+			invocation, request.ConversationID, domain.ErrParentKeyMismatch)
+	}
+	// Later agent and operator actions supersede the item version after the
+	// request commits. It may advance but can never regress below the version
+	// named by the immutable dispatch intent.
+	if item.ConversationID == nil || *item.ConversationID != request.ConversationID ||
+		item.ItemVersion < request.ItemVersion || item.Subject.RunID == nil || *item.Subject.RunID != runID {
+		return fmt.Errorf("conversation invocation intent does not bind run %q: %w", runID, domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+func productionPublicationInvocationID(runID domain.RunID) domain.InvocationID {
+	return domain.InvocationID("publish-production-" + string(runID))
+}
+
+// attemptIDForInvocation mirrors the engine's deterministic attempt identity
+// (engine.attemptIDFor: "attempt-<invocation>"), which the engine enforces when
+// it records an attempt. The read boundary re-derives it to bind a conversation
+// start, which carries no run/stage-bearing dispatch intent and no execution
+// admission, to its own attempt. This is the same recompute-an-engine-id pattern
+// as productionPublicationInvocationID; both stay in step with their engine
+// convention by construction.
+func attemptIDForInvocation(invocation domain.InvocationID) domain.AttemptID {
+	return domain.AttemptID("attempt-" + string(invocation))
+}
+
+func authenticatePublicationInvocation(
+	runID domain.RunID,
+	invocation, publicationInvocation domain.InvocationID,
+	attempts map[domain.InvocationID]runAttemptBinding,
+) error {
+	if invocation != publicationInvocation {
+		return fmt.Errorf("invocation %q is not the publication invocation of run %q: %w",
+			invocation, runID, domain.ErrParentKeyMismatch)
+	}
+	if _, isAttempt := attempts[invocation]; isAttempt {
+		return fmt.Errorf("publication invocation %q is also an attempt of run %q: %w",
+			invocation, runID, domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+func runObservationInvocation[T any](
+	runID domain.RunID,
+	invocation domain.InvocationID,
+	attempts map[domain.InvocationID]T,
+) bool {
+	if _, ok := attempts[invocation]; ok {
+		return true
+	}
+	return invocation == productionPublicationInvocationID(runID)
+}
+
+func authenticateAdmissionRun(
+	ctx context.Context, tx *store.ReadTx, invocation domain.InvocationID, runID domain.RunID,
+	attempt runAttemptBinding,
+) error {
+	admission, err := tx.GetExecutionAdmissionRecord(ctx, invocation)
+	if err != nil {
+		return err
+	}
+	if admission.RunID != runID || admission.StageID != attempt.stageID ||
+		admission.AttemptID != attempt.attemptID {
+		return fmt.Errorf("invocation %q admission does not match run %q attempt: %w",
+			invocation, runID, domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+func authenticateTerminal(
+	ctx context.Context,
+	tx *store.ReadTx,
+	invocation domain.InvocationID,
+	runID domain.RunID,
+	attempt runAttemptBinding,
+	terminal domain.ObservedInvocationStatus,
+) error {
+	if err := authenticateAdmissionRun(ctx, tx, invocation, runID, attempt); err != nil {
+		return err
+	}
+	if terminal == domain.ObservedStatusCompleted {
+		_, err := tx.GetExecutionExportRecord(ctx, invocation)
+		return err
+	}
+	outcome, err := tx.GetExecutionOutcomeRecord(ctx, invocation)
+	if err != nil {
+		return err
+	}
+	want := domain.ExecutionOutcomeFailed
+	switch terminal {
+	case domain.ObservedStatusFailed:
+		want = domain.ExecutionOutcomeFailed
+	case domain.ObservedStatusCanceled:
+		want = domain.ExecutionOutcomeCanceled
+	case domain.ObservedStatusGone:
+		want = domain.ExecutionOutcomeLost
+	case domain.ObservedStatusPending, domain.ObservedStatusRunning,
+		domain.ObservedStatusCompleted:
+	}
+	if outcome.Status != want {
+		return fmt.Errorf("terminal %q disagrees with outcome %q: %w",
+			terminal, outcome.Status, domain.ErrParentKeyMismatch)
+	}
+	return nil
 }
 
 func scheduleSnapshot(schedule domain.Schedule, snapshot store.Snapshot) ScheduleSnapshot {

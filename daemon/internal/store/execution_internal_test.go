@@ -107,7 +107,7 @@ func TestExecutionAuthorityTriggersRejectOverlap(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewExecutionExport: %v", err)
 		}
-		if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		if err := s.Write(ctx, func(tx *WriteTx) error {
 			return tx.RecordExecutionExport(ctx, export)
 		}); err != nil {
 			t.Fatalf("record export: %v", err)
@@ -146,7 +146,7 @@ func TestExecutionAuthorityTriggersRejectOverlap(t *testing.T) {
 			Status: domain.ExecutionOutcomeFailed, Summary: "failed",
 			RecordedAt: admission.AdmittedAt.Add(time.Hour),
 		}
-		if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		if err := s.Write(ctx, func(tx *WriteTx) error {
 			return tx.RecordExecutionOutcome(ctx, outcome)
 		}); err != nil {
 			t.Fatalf("record outcome: %v", err)
@@ -654,7 +654,7 @@ func TestExecutionExportAuditFieldsCrossChecked(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewExecutionExport: %v", err)
 			}
-			if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+			if err := s.Write(ctx, func(tx *WriteTx) error {
 				return tx.RecordExecutionExport(ctx, export)
 			}); err != nil {
 				t.Fatalf("record export: %v", err)

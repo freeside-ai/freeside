@@ -40,12 +40,12 @@ const (
 	productionVerificationCheckpointKind = "production_verification_checkpoint"
 	defaultProductionRecipeReadTimeout   = 2 * time.Minute
 	defaultProductionHoldRetryInterval   = 30 * time.Second
-	productionBlockRecipeRevoked         = "Current trust no longer approves the admitted project-image recipe."
+	productionBlockRecipeRevoked         = domain.PublicationBlockRecipeRevoked
 	productionBlockRepairRecipeRevoked   = "Publication is durably held because current trust no longer approves the verification recipe required to repair the pull request. Restore that approval before repairing external state."
 	productionBlockRepairTrustRefused    = "Publication is durably held because the current trust profile or candidate authorization no longer permits repairing the pull request. Restore that authority before repairing external state."
-	productionBlockVerification          = "Verification or current policy findings blocked production publication."
-	productionBlockTrust                 = "Current trust state definitively blocked publication."
-	productionBlockBaseAdvanced          = "The target base advanced after admission; rerun and reverify against the current base."
+	productionBlockVerification          = domain.PublicationBlockVerification
+	productionBlockTrust                 = domain.PublicationBlockTrust
+	productionBlockBaseAdvanced          = domain.PublicationBlockBaseAdvanced
 	productionBlockExternal              = "Publication is durably held because the external service permanently refused the committed operation. Repair that external state to resume recovery."
 )
 
@@ -290,11 +290,11 @@ func productionVerificationCheckpointKey(runID domain.RunID) string {
 }
 
 func productionReadyItemID(runID domain.RunID) domain.ItemID {
-	return domain.ItemID("production-ready-" + string(runID))
+	return domain.ProductionReadyItemID(runID)
 }
 
 func productionBlockedItemID(runID domain.RunID) domain.ItemID {
-	return domain.ItemID("production-publish-blocked-" + string(runID))
+	return domain.ProductionBlockedItemID(runID)
 }
 
 func productionReviewItemID(runID domain.RunID, round int) domain.ItemID {
@@ -493,7 +493,7 @@ func RecordExecutionExport(
 	}
 	switch admission.OperatingMode {
 	case domain.ModeAttendedDev:
-		return st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return st.Write(ctx, func(tx *store.WriteTx) error {
 			return tx.RecordExecutionExport(ctx, executionExport)
 		})
 	case domain.ModeUnattended:
@@ -510,7 +510,7 @@ func RecordExecutionExport(
 			return err
 		}
 		if request.Legacy {
-			return st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			return st.Write(ctx, func(tx *store.WriteTx) error {
 				return tx.RecordExecutionExport(ctx, executionExport)
 			})
 		}
@@ -3347,7 +3347,7 @@ func (w *productionPublicationWorkflow) holdBlockedTask(
 	// The durable hold's typed cause is stated by each call site, never
 	// derived from the operator prose; the retry window paces the write
 	// (issue #394).
-	if err := w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
 		return recordRunHold(ctx, tx, task.RunID, task.PublicationID, cause, w.now().UTC())
 	}); err != nil {
 		return productionTaskOutcome{}, err
@@ -3423,7 +3423,7 @@ func (w *productionPublicationWorkflow) recordAttendedPublicationHolds(ctx conte
 		if !w.holdPace.due("hold:"+string(runID), string(domain.HoldAttendedModeActive), now) {
 			continue
 		}
-		if err := w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
 			return recordRunHold(ctx, tx, runID,
 				productionPublicationInvocationID(runID),
 				domain.HoldAttendedModeActive, now)
@@ -3444,7 +3444,7 @@ func (w *productionPublicationWorkflow) appendPublicationMilestone(
 	ctx context.Context, task productionPublicationTask,
 	kind domain.RunMilestoneKind, cause *domain.RunHoldReason,
 ) error {
-	return w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	return w.store.Write(ctx, func(tx *store.WriteTx) error {
 		invocation := task.PublicationID
 		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
 			RunID: task.RunID, Kind: kind,
@@ -3468,7 +3468,7 @@ func (w *productionPublicationWorkflow) recordWorkUnitPRBinding(
 	binding productionBinding,
 	published publish.Result,
 ) error {
-	return w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	return w.store.Write(ctx, func(tx *store.WriteTx) error {
 		declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, task.RunID)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
@@ -3509,7 +3509,7 @@ func (w *productionPublicationWorkflow) recordReadyItemPRBinding(
 	binding productionBinding,
 	published publish.Result,
 ) error {
-	return w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	return w.store.Write(ctx, func(tx *store.WriteTx) error {
 		record := domain.ReadyItemPRBinding{
 			ItemID:                  productionReadyItemID(task.RunID),
 			RunID:                   task.RunID,
@@ -3557,7 +3557,7 @@ func (w *productionPublicationWorkflow) recordPublicationEnvironmentHold(
 	if ctx.Err() != nil {
 		return nil
 	}
-	return w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	return w.store.Write(ctx, func(tx *store.WriteTx) error {
 		return recordRunHold(ctx, tx, task.RunID, task.PublicationID,
 			domain.HoldPublicationEnvironment, w.now().UTC())
 	})
@@ -3580,7 +3580,7 @@ func (w *productionPublicationWorkflow) clearAttendedPublicationHold(
 	if !w.holdPace.due(key, publicationAttemptPaceState, w.now().UTC()) {
 		return nil
 	}
-	if err := w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.ClearRunHoldCause(ctx, task.RunID, domain.HoldAttendedModeActive)
 	}); err != nil {
 		w.holdPace.forget(key)

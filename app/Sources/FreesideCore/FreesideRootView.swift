@@ -3,7 +3,9 @@ import SwiftUI
 
 public struct FreesideRootView: View {
     @State private var session: AppSession
-    @State private var selection: String?
+    @State private var screen: LaunchInputs.Screen
+    @State private var attentionSelection: String?
+    @State private var runSelection: String?
     private let launchColorScheme: ColorScheme?
     private let launchInboxScope: InboxStore.Scope?
     private let launchProjectID: String?
@@ -12,7 +14,11 @@ public struct FreesideRootView: View {
     @MainActor
     public init(session: AppSession, launchInputs: LaunchInputs = .standard()) {
         _session = State(initialValue: session)
-        _selection = State(initialValue: launchInputs.selection)
+        _screen = State(initialValue: launchInputs.screen)
+        _attentionSelection = State(
+            initialValue: launchInputs.screen == .inbox ? launchInputs.selection : nil)
+        _runSelection = State(
+            initialValue: launchInputs.screen == .runs ? launchInputs.selection : nil)
         launchColorScheme = launchInputs.colorScheme
         launchInboxScope = launchInputs.inboxScope
         launchProjectID = launchInputs.projectID
@@ -48,24 +54,54 @@ public struct FreesideRootView: View {
         VStack(spacing: 0) {
             FreshnessBanner(freshness: coordinator.store.freshness)
             NavigationSplitView {
-                InboxView(
-                    store: coordinator.store, selection: $selection,
-                    launchScope: launchInboxScope, launchProjectID: launchProjectID
-                )
-                .navigationSplitViewColumnWidth(min: 260, ideal: 300)
+                VStack(spacing: 0) {
+                    Picker("Section", selection: $screen) {
+                        Label("Inbox", systemImage: "tray.full").tag(LaunchInputs.Screen.inbox)
+                        Label("Runs", systemImage: "point.3.connected.trianglepath.dotted")
+                            .tag(LaunchInputs.Screen.runs)
+                    }
+                    .pickerStyle(.segmented)
+                    .padding()
+                    switch screen {
+                    case .inbox:
+                        InboxView(
+                            store: coordinator.store, selection: $attentionSelection,
+                            launchScope: launchInboxScope, launchProjectID: launchProjectID)
+                    case .runs:
+                        RunsListView(
+                            runs: coordinator.runs,
+                            schedules: coordinator.schedules,
+                            selection: $runSelection)
+                    }
+                }
+                .navigationSplitViewColumnWidth(min: 280, ideal: 320)
             } detail: {
-                if let selection {
-                    DecisionDetailView(
-                        store: coordinator.store, itemID: selection,
-                        detailsExpanded: launchDetailsExpanded
-                    )
-                    .id(selection)
-                } else {
-                    ContentUnavailableView(
-                        "Freeside",
-                        systemImage: "checklist",
-                        description: Text("Select an attention item to decide.")
-                    )
+                switch screen {
+                case .inbox:
+                    if let attentionSelection {
+                        DecisionDetailView(
+                            store: coordinator.store, itemID: attentionSelection,
+                            detailsExpanded: launchDetailsExpanded
+                        )
+                        .id(attentionSelection)
+                    } else {
+                        ContentUnavailableView(
+                            "Freeside",
+                            systemImage: "checklist",
+                            description: Text("Select an attention item to decide."))
+                    }
+                case .runs:
+                    if let runSelection,
+                        let run = coordinator.runs.first(where: { $0.run.id == runSelection })
+                    {
+                        RunTimelineView(coordinator: coordinator, snapshot: run)
+                            .id(runSelection)
+                    } else {
+                        ContentUnavailableView(
+                            "Runs",
+                            systemImage: "point.3.connected.trianglepath.dotted",
+                            description: Text("Select a run to inspect its timeline."))
+                    }
                 }
             }
         }

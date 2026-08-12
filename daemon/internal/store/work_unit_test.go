@@ -153,7 +153,7 @@ func TestReadyItemPRBindingAnchorsToReadyItem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.RecordExecutionAdmission(ctx, fixture.admission); err != nil {
 			return err
 		}
