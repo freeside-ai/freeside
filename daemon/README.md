@@ -35,6 +35,38 @@ func TestRender(t *testing.T) {
 
 `internal/golden` and its `golden_test.go` are the worked example.
 
+**Timer-dependent tests.** A test whose behavior depends on real stdlib time
+in the code under test (a `time.Timer`, `time.Ticker`, `time.After`,
+`time.Sleep`, or a `context` deadline) runs inside a `testing/synctest` bubble
+rather than a real-clock sleep or poll loop:
+
+```go
+import "testing/synctest"
+
+func TestCadence(t *testing.T) {
+    synctest.Test(t, func(t *testing.T) {
+        // ... start the timer-driven work in a goroutine ...
+        time.Sleep(5 * time.Second) // fake time; advances only when idle
+        synctest.Wait()             // let the work settle before asserting
+    })
+}
+```
+
+The bubble's fake clock advances only when every goroutine in it is durably
+blocked, so a ticker or timeout fires deterministically with no wall-clock
+flakiness and no wasted real time.
+
+- **Ratchet, not a retrofit sweep.** New or substantially revised
+  timer-dependent tests use synctest; an existing real-sleep or `Eventually`
+  test converts only when a revision already touches it.
+- **Only where the code uses the real `time` package.** Behavior driven by an
+  injected clock (the scheduler's occurrence-due `clock`, the janitor's
+  reconciliation `now`, the engine's retry `now`) is already deterministic and
+  gains nothing from synctest; leave those on their fake clock.
+
+`internal/scheduler/run_synctest_test.go`, which drives `Scheduler.Run`'s real
+`time.NewTicker` cadence, is the worked example.
+
 ## GitHub App Credential Onboarding
 
 The default publish identity is one public GitHub App owned by the operator's
