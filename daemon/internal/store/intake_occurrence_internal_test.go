@@ -617,7 +617,7 @@ func TestIntakeReGateRejectsCrossRepositoryProject(t *testing.T) {
 			Subject: domain.IntakeSubjectBinding{
 				ProjectID:            "project-cross",
 				WorkUnitID:           declaration.ID,
-				ImplementationRunID:  policy.RunID,
+				ElaborationRunID:     policy.RunID,
 				PolicyArtifactID:     "policy-art-1",
 				PolicyArtifactDigest: policy.Digest,
 				ResolvedPolicyDigest: policy.Digest,

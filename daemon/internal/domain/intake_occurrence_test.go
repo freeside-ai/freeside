@@ -23,8 +23,8 @@ func admittedOccurrence(t *testing.T) domain.IntakeOccurrence {
 			ProposalInstanceID: "proposal-1",
 			ProposalDigest:     domain.Digest(contentaddr.Sum([]byte("p"))),
 			Subject: domain.IntakeSubjectBinding{
-				ProjectID: "proj-1", ImplementationRunID: "run-impl-1",
-				WorkUnitID:           domain.WorkUnitIDForRun("run-impl-1"),
+				ProjectID: "proj-1", ElaborationRunID: "run-elab-1",
+				WorkUnitID:           domain.WorkUnitIDForRun("run-elab-1"),
 				PolicyArtifactID:     "policy-art-1",
 				PolicyArtifactDigest: domain.Digest(contentaddr.Sum([]byte("rp"))),
 				ResolvedPolicyDigest: domain.Digest(contentaddr.Sum([]byte("rp"))),
