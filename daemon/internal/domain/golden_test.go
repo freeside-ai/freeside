@@ -604,6 +604,11 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	project, err := domain.NewProject("project-alpha", "freeasinbird/gh-imgup", 1278475858)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	conformanceCeiling, ok := domain.ProvableCapabilities(domain.BackendFreshVMReadOnlyVolumeHandoff)
 	if !ok {
 		t.Fatal("fresh-vm class has no registered ceiling")
@@ -1000,6 +1005,7 @@ func TestGolden(t *testing.T) {
 		{"execution_admission_waived", waivedAdmission},
 		{"execution_export", export},
 		{"project_image", projectImage},
+		{"project", project},
 		{"backend_conformance", backendConformance},
 		{"backend_conformance_failed", failedConformance},
 		{"backend_conformance_superseded", supersededConformance},
