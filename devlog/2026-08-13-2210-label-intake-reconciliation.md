@@ -91,6 +91,42 @@ deliberate conservatism:
   itself reaches a terminal outcome, which for a never-started run is never.
   Freeing the slot on decline/supersede is a follow-up (not #659 scope).
 
+## Decision 3: Auto_start records a daemon-attributed decision (GQ2)
+
+`RecordProposalDecision` requires a `Command`, and the operator `Submit` path is
+gated on an active device. Auto_start is daemon-initiated, so it records its
+decision through the ledger (GQ2 convergence with the manual path) by creating a
+daemon-attributed start `Command` directly via `tx.PutCommand` — reserved
+`DeviceID` `daemon-label-intake`, a `CommandID` derived from the occurrence — then
+`RecordProposalDecision(ActionStart)` and resolving the item, all in one write
+transaction, before executing `SubmitElaborationRun`. `PutCommand` still re-gates
+item openness, digest binding, and the offered-action set; it enforces no device
+FK, so a synthetic daemon device is the correct attribution for a decision no
+operator made. The device-active gate lives only in `Submit`, which is the
+operator surface, not this one.
+
+## Decision 4: One execution trigger for both start paths
+
+The loop executes elaboration for any admitted occurrence whose proposal is
+decided `start` and not yet started (dispatch marker absent). This unifies:
+auto_start (the loop records the decision, above) and an operator's manual start
+on a propose card (`applyStartProposal` records the decision and resolves the
+item but does not launch elaboration — nothing else consumes a decided
+`run_proposal` yet). So propose mode is functional end-to-end: the operator
+starts, the next intake pass launches. `SubmitElaborationRun`'s convergence makes
+the trigger crash-safe. `start_with_changes` is **not offered** on a label
+proposal (the offered set is narrowed at admission): the issue-subject subject is
+fixed to the occurrence's own issue, so revising the subject is not a
+label-intake flow, and offering an action the loop's launch trigger does not
+consume would strand the occurrence (round-2 finding B below).
+
+The WIP cap gates only the auto_start *decision* (card still open); an operator
+who explicitly starts a propose card is a deliberate human decision and is not
+WIP-capped. The `subject_input_missing` / `subject_input_stale` refusals are the
+auto_start pre-decision availability check (card open, refusable); if a
+manually-decided start finds its input gone, `SubmitElaborationRun` fails and the
+loop logs it (the card is already resolved, so no refusal can be recorded).
+
 ## Verification posture (returned-object trust boundary)
 
 The issue-subject arm adopts a persisted run and drives it, so a refute-first
@@ -128,3 +164,116 @@ rejected-by-verification or accepted-by-decision.
   re-label reused its ordinal. Fix: a departed unadmitted occurrence is advanced
   out of `present` with `RecordIntakeObservation` (no proposal to supersede), so
   a re-label allocates a fresh occurrence.
+
+Round-2 findings (all confirmed):
+
+- **P1, label scan not bound to the configured repository id (fixed).** The scan
+  fetched by repository *name* and never checked the observed canonical numeric
+  id against the configured `RepositoryID`, so a name rebound to a different
+  repository could intake the replacement repo's issues while recording
+  occurrence, project, and work-unit authority under the old id — the §5.18
+  rebinding hole (`forge.go` already states the rebinding is detectable only
+  through the observed id). Fix: `ReconcileLabelIssues` resolves the repository's
+  canonical id (`getRepositoryID`, an unconditional `GET /repos/{owner}/{repo}`
+  each pass) into `LabelIssuesObservation.RepositoryID`, and the loop fails the
+  pass closed (`errIntakeRepositoryRebound`) before allocating any occurrence
+  when it disagrees with `init.RepositoryID`.
+- **P1, `start_with_changes` offered but strands the occurrence (fixed, aligns
+  Decision 4).** The shared admission path offered `start_with_changes` on every
+  run_proposal; an operator choosing it supersedes the original item and creates a
+  *resolved replacement*, but the loop's launch trigger (`proposalDecidedStart`)
+  reads only the original item's status, so the occurrence never launched despite
+  a recorded start. Fix: `ProposalAdmission.RequestedDecision` lets a caller
+  narrow the offered set, and label intake omits `start_with_changes` (subject is
+  fixed to the occurrence's issue). This makes the offered set match Decision 4
+  rather than reversing it; other run_proposal consumers keep the full set.
+- **P2, single-page-to-multi-page validator edge (deferred, #747).** The round-1
+  multi-page-drop fix learns `multiPage` only from a 200, so a cached single-page
+  set that grows past 100 via an *older* issue can stay hidden behind a page-1
+  304. The complete fix drops conditional requests for the intake label scan
+  entirely, which reverses this PR's conditional-observation design and is a
+  decision in its own right; tracked as #747 rather than rushed here.
+
+Round-3 findings (all confirmed, all fixed):
+
+- **P1, decided start stranded by a departure (fixed).** A start decided (by an
+  operator on a propose card) between the present pass and the next pass's
+  observation of a label removal / issue close was never launched: the departure
+  retired the occurrence, and only present labeled issues reach the launch
+  trigger. Fix: `reconcileDepartures` launches a decided-but-unstarted proposal
+  (`launchDecidedDeparture`) before `advanceDeparture` retires the occurrence, and
+  does not retire until the launch lands. `SubmitElaborationRun` converges, so a
+  replay is a no-op. Test: `TestIntakeLaunchesDepartedDecidedStart`.
+- **P1, provenance falsified by allowlist injection (fixed).** The loop appended
+  the forge host to the resolved `research.allowlist` value while keeping the
+  key's original preset/override provenance, so the persisted policy falsely
+  attested an egress the source never authorized (defeating the per-key
+  provenance audit and silently widening operator policy). Fix: the loop no
+  longer rewrites the key; `requireForgeResearchHost` fails admission closed
+  (`errIntakeForgeHostNotAllowed`) when the operator's own allowlist omits the
+  forge host, so the egress carries authentic provenance from the rein. Test:
+  `TestIntakeRequiresForgeHostInAllowlist`.
+- **P1, adoption accepted a non-bare reserved run (fixed).** The issue-subject
+  adoption gate checked the elaboration stage's identity and count but not that
+  it was bare, so a reserved run whose stage carried a pre-existing attempt
+  (corruption or tampering between admission and start) was accepted and wrapped
+  in ownership markers, and the reconciler would stall on the rogue attempt. Fix:
+  at first start (marker absent) the stage must have zero attempts, else the
+  adoption fails closed (`ErrImmutableTransition`). Test:
+  `TestSubmitIssueSubjectElaborationRunRejectsNonBareStage`.
+
+Round-4 findings (all confirmed, all fixed):
+
+- **P1, departure retire non-atomic with the decided-start launch (fixed; a
+  completion of the round-3 D fix, not thrash).** The round-3 fix checked the
+  decision and retired in separate transactions, so a start decided in that
+  window was retired without launching. Fix: `advanceDeparture` re-reads the
+  proposal status and the dispatch marker in the *same* write as the retire, and
+  defers (`errIntakeDeferDepartureRetire`, launched next pass) when the proposal
+  is resolved but has no marker; the store write lock serializes this against a
+  concurrent operator start. Test:
+  `TestIntakeDefersDepartureUntilDecidedStartLaunches`.
+- **P1, adopted work unit not bound to the minted declaration (fixed; closes the
+  adoption-trust class).** The caller's `WorkUnit` flowed unchanged to the
+  implementation run at spec approval after only structural validation, so a
+  wider `DeclaredPaths`, a retargeted `BoundIssue`, or a nil declaration could
+  diverge from the intake declaration the admission minted. Fix: the adopter
+  loads the minted declaration for the reserved run and binds the caller's work
+  unit to it (`elaborationWorkUnitMatchesDeclaration`), failing closed on any
+  divergence. With this, every caller-supplied adoption input is bound to
+  authoritative state (source artifact ↔ SpecDigest, policy artifact ↔ resolved
+  policy, issue subject pinned, work unit ↔ declaration); the daemon-composed
+  publication has no authority to bind to. Test:
+  `TestSubmitIssueSubjectElaborationRunBindsWorkUnitToDeclaration`.
+
+Round-5 findings (both confirmed, both fixed):
+
+- **P1, launch trigger trusted a decoded item status (fixed; new class).**
+  `proposalDecidedStart` (and the departure re-check) treated a decoded
+  `resolved` attention-item status as proof of a start, so a corrupt or tampered
+  row could launch a run autonomously with no genuine decision. Fix:
+  `store.AuthenticateStartDecision` requires a matching `effect_proposal_decisions`
+  row bound to the admitted proposal digest — the independent ledger authority —
+  and both the launch trigger and the atomic departure guard now authenticate
+  against it. Tests: `TestAuthenticateStartDecision`, and the existing decided-start
+  loop tests exercise the real ledger path.
+- **P2, initial issue subject not authenticated at adoption (fixed; my round-4
+  class-sweep miss).** Round 4's note over-claimed that "issue subject [was]
+  bound": `sameIssueSubject` only pins the subject across *later* iterations
+  against the root marker, never authenticating the *initial* subject against the
+  reservation, so a caller could adopt a run under a foreign issue. Fix: the
+  adopter binds `Source.IssueSubject.IssueNumber` to the minted declaration's
+  `BoundIssue`; the repository and project remain the store occurrence re-gate's
+  authority (#720/#740, which binds them to the admitted proposal). Test:
+  `TestSubmitIssueSubjectElaborationRunBindsIssueToDeclaration`.
+
+**Review-tail note (updated after round 5).** The adoption trust boundary was
+enumerated across rounds 2–5 (repository id, bare stage, work unit, issue
+subject), the #720 pattern. With round 5 every caller-supplied adoption input is
+now bound to authoritative state — source ↔ SpecDigest, policy ↔ resolved
+policy, work unit ↔ declaration, issue number ↔ declaration, repository/project ↔
+the store occurrence re-gate — and the daemon-composed publication has no
+authority to bind to. The launch trigger authenticates against the decision
+ledger and the departure retire is atomic. Both classes are now closed by
+binding, not by one-more-field verification. A recurrence on either class after
+this complete sweep is thrash: reframe or escalate rather than fold again.

@@ -261,6 +261,27 @@ func (tx *ReadTx) verifyIntakeAdmission(ctx context.Context, o domain.IntakeOccu
 // decided, not intake-withdrawn — the authority that distinguishes a genuine
 // label/issue supersession from a start_with_changes that also superseded the
 // original card.
+// AuthenticateStartDecision reports whether the proposal instance carries a
+// durable start decision in the ledger bound to the admitted proposal digest.
+// The label-intake launch trigger authenticates against it rather than a decoded
+// attention-item status: a corrupt or tampered attention_items row could present
+// a structurally valid resolved status with no matching decision, and launching
+// a run on that decoded status would run autonomously without a genuine,
+// digest-bound start. The effect_proposal_decisions row is the independent
+// authority (the same ledger intake supersession already re-gates against).
+func (tx *ReadTx) AuthenticateStartDecision(
+	ctx context.Context, instanceID domain.ProposalInstanceID, admittedDigest domain.Digest,
+) (bool, error) {
+	var count int
+	if err := tx.tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM effect_proposal_decisions
+			WHERE instance_id = ? AND action = ? AND selected_digest = ?`,
+		instanceID, domain.ActionStart, admittedDigest).Scan(&count); err != nil {
+		return false, fmt.Errorf("authenticate start decision: %w", err)
+	}
+	return count > 0, nil
+}
+
 func (tx *ReadTx) proposalInstanceDecided(ctx context.Context, instanceID domain.ProposalInstanceID) (bool, error) {
 	var count int
 	if err := tx.tx.QueryRowContext(ctx,
@@ -464,6 +485,52 @@ func (tx *ReadTx) LatestIntakeOccurrence(
 			"latest intake occurrence %d/%d/%s: %w", repositoryID, issueNumber, label, err)
 	}
 	return o, true, nil
+}
+
+// ListPresentIntakeOccurrences returns every present occurrence for one
+// (repository, label), ascending by issue then ordinal, each fully reconstructed
+// and re-gated (scanIntakeOccurrence). The label-intake loop uses it to find the
+// occurrences whose issue has left the labeled-open set and must be superseded.
+// It drains the matching keys before re-gating each, so the reconstruction reads
+// (which query other tables on the same transaction) never run against an open
+// cursor.
+func (tx *ReadTx) ListPresentIntakeOccurrences(
+	ctx context.Context, repositoryID int64, label string,
+) ([]domain.IntakeOccurrence, error) {
+	rows, err := tx.tx.QueryContext(ctx,
+		`SELECT issue_number, ordinal FROM intake_occurrences
+			WHERE repository_id = ? AND label = ? AND state = ?
+			ORDER BY issue_number, ordinal`,
+		repositoryID, label, string(domain.IntakeOccurrencePresent))
+	if err != nil {
+		return nil, fmt.Errorf("list present intake occurrences: %w", err)
+	}
+	type occurrenceKey struct{ issue, ordinal int }
+	var keys []occurrenceKey
+	for rows.Next() {
+		var k occurrenceKey
+		if err := rows.Scan(&k.issue, &k.ordinal); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("list present intake occurrences: %w", err)
+		}
+		keys = append(keys, k)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("list present intake occurrences: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("list present intake occurrences: %w", err)
+	}
+	occurrences := make([]domain.IntakeOccurrence, 0, len(keys))
+	for _, k := range keys {
+		o, err := tx.GetIntakeOccurrence(ctx, repositoryID, k.issue, label, k.ordinal)
+		if err != nil {
+			return nil, fmt.Errorf("list present intake occurrences: %w", err)
+		}
+		occurrences = append(occurrences, o)
+	}
+	return occurrences, nil
 }
 
 // AllocateNextIntakeOccurrence returns the active occurrence for a present

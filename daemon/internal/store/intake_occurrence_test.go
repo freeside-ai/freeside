@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -363,6 +364,57 @@ func bindAdmittedOccurrence(
 		t.Fatalf("bind admission: %v", err)
 	}
 	return instance.ID
+}
+
+// TestAuthenticateStartDecision proves the launch trigger's authority is the
+// decision ledger bound to the admitted digest, not a decoded item status: no
+// decision (or a foreign digest) does not authenticate, and only a genuine,
+// digest-bound start decision does.
+func TestAuthenticateStartDecision(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openStore(t, store.Options{})
+	policy, proposal, _ := proposalFixture(t)
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		instanceID := bindAdmittedOccurrence(t, ctx, tx, policy, proposal, false)
+		if ok, err := tx.AuthenticateStartDecision(ctx, instanceID, proposal.Digest); err != nil {
+			return err
+		} else if ok {
+			return errors.New("no decision must not authenticate a start")
+		}
+		item, err := tx.GetAttentionItem(ctx, domain.ItemID(instanceID))
+		if err != nil {
+			return err
+		}
+		command, err := domain.NewCommand(domain.CommandInput{
+			CommandID: "start-cmd", DeviceID: "device-1", ItemID: item.ID,
+			ItemVersion: item.ItemVersion, ArtifactDigests: item.ArtifactDigests, Action: domain.ActionStart,
+		})
+		if err != nil {
+			return err
+		}
+		if err := tx.PutCommand(ctx, command); err != nil {
+			return err
+		}
+		digest := proposal.Digest
+		if err := tx.RecordProposalDecision(ctx, instanceID, "start-cmd", domain.ActionStart, &digest, intakeStoreTS); err != nil {
+			return err
+		}
+		if ok, err := tx.AuthenticateStartDecision(ctx, instanceID, proposal.Digest); err != nil {
+			return err
+		} else if !ok {
+			return errors.New("a genuine digest-bound start decision was not authenticated")
+		}
+		foreign := domain.Digest("sha256:" + strings.Repeat("f", 64))
+		if ok, err := tx.AuthenticateStartDecision(ctx, instanceID, foreign); err != nil {
+			return err
+		} else if ok {
+			return errors.New("a foreign digest must not authenticate a start")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestIntakeSupersedeRecordsOnlyOpenProposal proves supersession records its

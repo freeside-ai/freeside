@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -20,6 +21,14 @@ type ProposalAdmission struct {
 	Kind            domain.EffectKind
 	Parameters      any
 	Priority        domain.Priority
+	// RequestedDecision, when set, is the exact offered-action set for the
+	// created item; empty defaults to the full run_proposal set. Label intake
+	// omits start_with_changes because a label proposal's subject is fixed to
+	// the occurrence's own issue, so revising the subject is not a label-intake
+	// flow and offering it would strand the occurrence (#659, decision note
+	// Decision 4). Signet policy still requires the set be a non-empty subset of
+	// the type's allowed actions.
+	RequestedDecision []domain.Action
 }
 
 // ProposalAdmissionResult is the atomically committed occurrence and its
@@ -109,7 +118,7 @@ func (e *Engine) admitProposalAt(
 		if err := tx.PutArtifact(ctx, artifact); err != nil {
 			return fmt.Errorf("persist proposal artifact: %w", err)
 		}
-		item, err := newProposalItem(request.ProjectID, instance, artifact, request.Priority)
+		item, err := newProposalItem(request.ProjectID, instance, artifact, request.Priority, request.RequestedDecision)
 		if err != nil {
 			return err
 		}
@@ -133,9 +142,17 @@ func newProposalItem(
 	instance domain.ProposalInstance,
 	artifact domain.Artifact,
 	priority domain.Priority,
+	requestedDecision []domain.Action,
 ) (domain.AttentionItem, error) {
 	if instance.Proposal.Kind != domain.EffectRunProposal || instance.Proposal.RunProposal == nil {
 		return domain.AttentionItem{}, domain.ErrEffectProposalInconsistent
+	}
+	// The default full set; a caller may narrow it (label intake drops
+	// start_with_changes). NewAttentionItem and signet policy re-gate the set.
+	if len(requestedDecision) == 0 {
+		requestedDecision = []domain.Action{
+			domain.ActionStart, domain.ActionStartWithChanges, domain.ActionDecline, domain.ActionSnooze,
+		}
 	}
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: domain.ItemID(instance.ID), ProjectID: projectID,
@@ -143,11 +160,9 @@ func newProposalItem(
 			Type: domain.SubjectProposalBatch, ID: domain.SubjectID(instance.ProposalBatchID),
 		},
 		Type: domain.AttentionRunProposal, Priority: priority,
-		Reason: "Start the daemon-enumerated work subject",
-		RequestedDecision: []domain.Action{
-			domain.ActionStart, domain.ActionStartWithChanges, domain.ActionDecline, domain.ActionSnooze,
-		},
-		EvidenceSnapshot: []domain.Artifact{artifact}, ItemVersion: 1,
+		Reason:            "Start the daemon-enumerated work subject",
+		RequestedDecision: slices.Clone(requestedDecision),
+		EvidenceSnapshot:  []domain.Artifact{artifact}, ItemVersion: 1,
 		InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
 	}, map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true})
 }

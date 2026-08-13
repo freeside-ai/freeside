@@ -36,6 +36,68 @@ func (s *Service) currentProposal(
 	return instance, proposal, err
 }
 
+// UnattendedInitiatorDeviceID attributes a decision the daemon makes on its own
+// initiative (label-initiator auto_start, #659), rather than an operator device.
+// It is a reserved, non-operator attribution: commands under it are created
+// directly through the store's item/binding/offered-action gates, never the
+// device-gated operator Submit path, so no active device is implied.
+const UnattendedInitiatorDeviceID = domain.DeviceID("daemon-label-intake")
+
+// StartRunProposalUnattended records a daemon-attributed start decision on an
+// open run_proposal, through the same decision ledger an operator start uses
+// (GQ2): it creates a reserved-device start command and applies it, resolving
+// the item and recording the effect_proposal_decisions row. It reports whether
+// it recorded the start: an item that is no longer open -- an operator declined
+// or a departure superseded it between the caller's gate and this call, or a
+// prior pass already decided it -- records no second decision and returns
+// started=false, so the caller launches only a start this call actually made. A
+// decided-start item is relaunched for convergence by the reconciler's
+// already-decided path, not here. It does not launch the run; the caller (the
+// label-intake loop) executes SubmitElaborationRun after the decision is
+// durable, exactly as it does for an operator-decided start.
+func (s *Service) StartRunProposalUnattended(
+	ctx context.Context, itemID domain.ItemID, commandID string,
+) (started bool, err error) {
+	if commandID == "" {
+		return false, fmt.Errorf("start run proposal unattended: %w", domain.ErrEmptyID)
+	}
+	err = s.store.Write(ctx, func(tx *store.WriteTx) error {
+		item, err := tx.GetAttentionItem(ctx, itemID)
+		if err != nil {
+			return fmt.Errorf("start run proposal unattended: %w", err)
+		}
+		if item.Type != domain.AttentionRunProposal {
+			return fmt.Errorf("start run proposal unattended: item %q is a %q, not a run proposal: %w",
+				itemID, item.Type, domain.ErrParentKeyMismatch)
+		}
+		if item.Status != domain.StatusOpen {
+			// Already decided (a prior auto_start replay, an operator start or
+			// decline, or a departure supersession). Record no second decision and
+			// report started=false: the caller must not launch a proposal this call
+			// did not start, so an explicit decline can never become a run. A genuine
+			// decided-start is relaunched by the reconciler's already-decided path.
+			return nil
+		}
+		command, err := domain.NewCommand(domain.CommandInput{
+			CommandID: commandID, DeviceID: UnattendedInitiatorDeviceID, ItemID: itemID,
+			ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA,
+			ArtifactDigests: item.ArtifactDigests, Action: domain.ActionStart,
+		})
+		if err != nil {
+			return fmt.Errorf("start run proposal unattended: %w", err)
+		}
+		if err := tx.PutCommand(ctx, command); err != nil {
+			return fmt.Errorf("start run proposal unattended: %w", err)
+		}
+		if err := s.applyStartProposal(ctx, tx, command, item, s.now().UTC()); err != nil {
+			return err
+		}
+		started = true
+		return nil
+	})
+	return started, err
+}
+
 func (s *Service) applyStartProposal(
 	ctx context.Context,
 	tx *store.WriteTx,

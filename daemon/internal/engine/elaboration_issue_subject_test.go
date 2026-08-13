@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -26,7 +27,7 @@ type issueSubjectReservation struct {
 	workItemArtifact domain.ArtifactID
 }
 
-func newIssueSubjectReservation(t *testing.T) issueSubjectReservation {
+func newIssueSubjectReservation(t *testing.T, stageAttempts ...domain.Attempt) issueSubjectReservation {
 	t.Helper()
 	root := t.TempDir()
 	st, err := store.Open(t.Context(), filepath.Join(root, "state.db"), store.Options{})
@@ -55,6 +56,7 @@ func newIssueSubjectReservation(t *testing.T) issueSubjectReservation {
 		{Key: elaborate.PolicyApprovalWait, Value: "1m", Provenance: provenance},
 		{Key: elaborate.PolicyResearchAllowlist, Value: "https://api.github.com", Provenance: provenance},
 		{Key: elaborate.PolicyResearchMaxBytes, Value: "1024", Provenance: provenance},
+		{Key: "paths", Value: "src/", Provenance: provenance},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -77,13 +79,21 @@ func newIssueSubjectReservation(t *testing.T) issueSubjectReservation {
 	if _, err := blobs.Put(policyArt.Digest, strings.NewReader(string(policyBody))); err != nil {
 		t.Fatal(err)
 	}
-	reservedRun := domain.Run{
-		ID: elaborationRunID, ProjectID: "project-1",
-		SpecDigest: workItemDigest, PolicyDigest: policy.Digest,
-		Stages: []domain.Stage{{
-			ID: elaborationStageID(elaborationRunID), RunID: elaborationRunID,
-			Name: elaborationStageName, Attempts: []domain.Attempt{},
-		}},
+	reservedRun := NewReservedElaborationRun(elaborationRunID, "project-1", workItemDigest, policy.Digest)
+	if len(stageAttempts) > 0 {
+		reservedRun.Stages[0].Attempts = stageAttempts
+	}
+	// The admission mints a work-unit declaration for the reserved run bound to
+	// the occurrence's issue; the adopter binds the caller's WorkUnit to it.
+	issue := 7
+	workUnitInput := domain.WorkUnitDeclarationInput{
+		CompletionCriterion: domain.CompletionBoundPRMerged,
+		BoundIssue:          &issue,
+		DeclaredPaths:       []string{"src/"},
+	}
+	declaration, err := domain.NewWorkUnitDeclaration(workUnitInput, elaborationRunID, "project-1", time.Unix(2, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
 		if err := tx.PutArtifact(t.Context(), workItem); err != nil {
@@ -95,10 +105,14 @@ func newIssueSubjectReservation(t *testing.T) issueSubjectReservation {
 		if err := tx.PutRun(t.Context(), reservedRun); err != nil {
 			return err
 		}
+		if err := tx.RecordWorkUnitDeclaration(t.Context(), declaration); err != nil {
+			return err
+		}
 		return tx.PutResolvedPolicy(t.Context(), policy)
 	}); err != nil {
 		t.Fatal(err)
 	}
+	specWorkUnit := workUnitInput
 	spec := ElaborationRunSpec{
 		ElaborationRunID: elaborationRunID, ImplementationRunID: implementationRunID,
 		ProjectID: "project-1", SourceArtifactID: workItem.ID,
@@ -107,6 +121,7 @@ func newIssueSubjectReservation(t *testing.T) issueSubjectReservation {
 			Title: "Resolve labeled issue #7", Body: "Daemon-composed publication.",
 			CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside-bot", BotUserID: 12345},
 		},
+		WorkUnit: &specWorkUnit,
 		Source: domain.ElaborationSource{
 			Kind: domain.ElaborationSourceIssueSubject,
 			IssueSubject: &domain.IssueSubjectRef{
@@ -253,6 +268,70 @@ func TestSubmitIssueSubjectElaborationRunRejectsForeignWorkItem(t *testing.T) {
 
 	if _, err := SubmitElaborationRun(t.Context(), r.store, spec); !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("submit with a foreign work item: err = %v, want ErrParentKeyMismatch", err)
+	}
+}
+
+// TestSubmitIssueSubjectElaborationRunRejectsNonBareStage proves the adoption
+// gate fails closed when the reserved run's elaboration stage already carries an
+// attempt (corruption or tampering between admission and start), rather than
+// wrapping ownership markers around a rogue attempt the reconciler would stall
+// on.
+func TestSubmitIssueSubjectElaborationRunRejectsNonBareStage(t *testing.T) {
+	t.Parallel()
+	elaborationRunID, err := ElaborationRunIDForImplementation("run-label-intake-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocationID := elaborationInvocationID(elaborationRunID, 1)
+	r := newIssueSubjectReservation(t, domain.Attempt{
+		ID: attemptIDFor(invocationID), StageID: elaborationStageID(elaborationRunID),
+		Number: 1, InvocationID: invocationID,
+	})
+
+	_, err = SubmitElaborationRun(t.Context(), r.store, r.spec)
+	if !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("adopting a non-bare reserved run: err = %v, want ErrImmutableTransition", err)
+	}
+}
+
+// TestSubmitIssueSubjectElaborationRunBindsWorkUnitToDeclaration proves the
+// adopter binds the caller's work unit to the declaration the admission minted:
+// a wider declared-path scope, or a dropped declaration, is refused rather than
+// flowing unchanged to the implementation run at spec approval.
+func TestSubmitIssueSubjectElaborationRunBindsWorkUnitToDeclaration(t *testing.T) {
+	t.Parallel()
+	r := newIssueSubjectReservation(t)
+	wider := *r.spec.WorkUnit
+	wider.DeclaredPaths = []string{"docs/", "src/"} // canonical, but wider than the minted ["src/"]
+	spec := r.spec
+	spec.WorkUnit = &wider
+	if _, err := SubmitElaborationRun(t.Context(), r.store, spec); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("wider work unit: err = %v, want ErrParentKeyMismatch", err)
+	}
+
+	r2 := newIssueSubjectReservation(t)
+	spec2 := r2.spec
+	spec2.WorkUnit = nil
+	if _, err := SubmitElaborationRun(t.Context(), r2.store, spec2); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("nil work unit: err = %v, want ErrParentKeyMismatch", err)
+	}
+}
+
+// TestSubmitIssueSubjectElaborationRunBindsIssueToDeclaration proves the adopter
+// authenticates the initial issue subject against the minted declaration: a
+// caller that supplies the correct run, artifacts, policy, and work unit but a
+// foreign issue number is refused, not trusted.
+func TestSubmitIssueSubjectElaborationRunBindsIssueToDeclaration(t *testing.T) {
+	t.Parallel()
+	r := newIssueSubjectReservation(t)
+	altered := *r.spec.Source.IssueSubject
+	altered.IssueNumber = 999 // a foreign issue, not the minted declaration's bound issue
+	spec := r.spec
+	spec.Source = domain.ElaborationSource{
+		Kind: domain.ElaborationSourceIssueSubject, IssueSubject: &altered,
+	}
+	if _, err := SubmitElaborationRun(t.Context(), r.store, spec); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("foreign issue subject: err = %v, want ErrParentKeyMismatch", err)
 	}
 }
 

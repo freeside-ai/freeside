@@ -90,6 +90,27 @@ func elaborationStageID(runID domain.RunID) domain.StageID {
 	return domain.StageID("elaborate-" + string(runID))
 }
 
+// NewReservedElaborationRun builds the bare reserved elaboration run the
+// label-intake admission persists before a start (#659), the shape the
+// issue-subject arm of SubmitElaborationRun adopts: one empty elaboration stage,
+// the daemon-authored work-item document's digest as SpecDigest, the resolved
+// policy digest, and no dispatch markers. The constructor lives beside the
+// adopter so the reserved shape and the shape submitIssueSubjectElaborationRun
+// verifies cannot drift; the elaboration reconciler does not own the run until a
+// start creates its iteration-1 marker.
+func NewReservedElaborationRun(
+	elaborationRunID domain.RunID, projectID domain.ProjectID, specDigest, policyDigest domain.Digest,
+) domain.Run {
+	return domain.Run{
+		ID: elaborationRunID, ProjectID: projectID,
+		SpecDigest: specDigest, PolicyDigest: policyDigest,
+		Stages: []domain.Stage{{
+			ID: elaborationStageID(elaborationRunID), RunID: elaborationRunID,
+			Name: elaborationStageName, Attempts: []domain.Attempt{},
+		}},
+	}
+}
+
 func elaborationInvocationID(runID domain.RunID, iteration int) domain.InvocationID {
 	return domain.InvocationID(fmt.Sprintf("inv-elaborate-%s-%d", runID, iteration))
 }
@@ -289,6 +310,42 @@ func HasElaborationIntakeState(
 	})
 	if err != nil {
 		return false, fmt.Errorf("inspect elaboration intake: %w", err)
+	}
+	return present, nil
+}
+
+// ElaborationDispatchMarkerKey is the outbox key of a reserved elaboration run's
+// iteration-1 dispatch marker. A caller with an open transaction (the
+// label-intake departure retire) uses it to check start atomically alongside its
+// own state change, so a start decided in the same instant is not stranded.
+func ElaborationDispatchMarkerKey(elaborationRunID domain.RunID) string {
+	return string(elaborationInvocationID(elaborationRunID, 1))
+}
+
+// HasElaborationDispatchMarker reports whether a reserved elaboration run has
+// been started, i.e. its iteration-1 dispatch marker exists. The label-intake
+// loop uses it to make the start decision idempotent: a run whose marker is
+// present is already launched and must not be re-decided.
+func HasElaborationDispatchMarker(
+	ctx context.Context, st *store.Store, elaborationRunID domain.RunID,
+) (bool, error) {
+	if st == nil || elaborationRunID == "" {
+		return false, errors.New("inspect elaboration dispatch marker: store and run id are required")
+	}
+	present := false
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetOutbox(ctx, string(elaborationInvocationID(elaborationRunID, 1)))
+		if err == nil {
+			present = true
+			return nil
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return err
+	})
+	if err != nil {
+		return false, fmt.Errorf("inspect elaboration dispatch marker: %w", err)
 	}
 	return present, nil
 }
@@ -531,8 +588,35 @@ func submitIssueSubjectElaborationRun(
 			!slices.Equal(storedPolicy.Keys, spec.ResolvedPolicy.Keys) {
 			return fmt.Errorf("reserved elaboration run disagrees with submission: %w", domain.ErrParentKeyMismatch)
 		}
-		if _, ok := findElaborationStage(existing); !ok || len(existing.Stages) != 1 {
+		stage, ok := findElaborationStage(existing)
+		if !ok || len(existing.Stages) != 1 {
 			return fmt.Errorf("reserved elaboration run stage disagrees: %w", domain.ErrParentKeyMismatch)
+		}
+		// Bind the adopted work unit to the declaration the admission minted for
+		// this reserved run: the caller-supplied WorkUnit flows unchanged to the
+		// implementation run at spec approval, so a wider DeclaredPaths, a
+		// retargeted BoundIssue, or a dropped declaration must not be trusted. The
+		// minted intake declaration is the authority, and an issue-subject run
+		// always carries one.
+		minted, err := tx.GetWorkUnitDeclarationByRun(ctx, spec.ElaborationRunID)
+		if err != nil {
+			return fmt.Errorf("issue-subject elaboration requires a minted declaration: %w", err)
+		}
+		if !elaborationWorkUnitMatchesDeclaration(request.WorkUnit, minted) {
+			return fmt.Errorf("issue-subject work unit disagrees with the minted declaration: %w",
+				domain.ErrParentKeyMismatch)
+		}
+		// Bind the adopted issue subject's issue to the same authoritative issue
+		// the declaration carries. The caller's Source.IssueSubject is otherwise
+		// pinned only across later iterations (sameIssueSubject), never against the
+		// reservation, so the initial subject would be trusted. The declaration's
+		// BoundIssue is the store's occurrence re-gate authority (#720/#740, which
+		// binds it to the occurrence's repository and project); the issue number is
+		// bound here so a caller cannot adopt a run under a foreign issue.
+		if request.IssueSubject == nil || minted.BoundIssue == nil ||
+			request.IssueSubject.IssueNumber != *minted.BoundIssue {
+			return fmt.Errorf("issue-subject issue disagrees with the minted declaration: %w",
+				domain.ErrParentKeyMismatch)
 		}
 		run = existing
 		// Adopt-or-converge on the dispatch marker. When present, every derived
@@ -553,6 +637,14 @@ func submitIssueSubjectElaborationRun(
 			return nil
 		} else if !errors.Is(markerErr, store.ErrNotFound) {
 			return markerErr
+		}
+		// At first start the reserved run must still be bare: a stage carrying a
+		// pre-existing attempt (corruption or tampering between admission and
+		// start) is not the shape this arm reserves, so fail closed rather than
+		// wrapping ownership markers around a rogue attempt the elaboration
+		// reconciler would then stall on.
+		if len(stage.Attempts) != 0 {
+			return fmt.Errorf("reserved elaboration run stage is not bare: %w", domain.ErrImmutableTransition)
 		}
 		// First start: the implementation run is created fresh at spec approval,
 		// so it must not exist yet.
@@ -601,6 +693,32 @@ func submitIssueSubjectElaborationRun(
 		ImplementationInvocationID: productionInvocationID(spec.ImplementationRunID),
 		ImplementationStageID:      productionStageID(spec.ImplementationRunID),
 	}, nil
+}
+
+// elaborationWorkUnitMatchesDeclaration reports whether the caller-supplied work
+// unit is exactly the one the admission minted for the reserved run (the
+// issue-subject arm's authority). A nil work unit, or one that widens the
+// declared paths, retargets the bound issue, changes the completion criterion,
+// or adds dependency or contract-serialization claims, does not match.
+func elaborationWorkUnitMatchesDeclaration(
+	in *domain.WorkUnitDeclarationInput, decl domain.WorkUnitDeclaration,
+) bool {
+	if in == nil {
+		return false
+	}
+	if in.CompletionCriterion != decl.CompletionCriterion ||
+		in.ContractSerialized != decl.ContractSerialized {
+		return false
+	}
+	if in.BoundIssue == nil || decl.BoundIssue == nil {
+		if in.BoundIssue != nil || decl.BoundIssue != nil {
+			return false
+		}
+	} else if *in.BoundIssue != *decl.BoundIssue {
+		return false
+	}
+	return slices.Equal(in.DeclaredPaths, decl.DeclaredPaths) &&
+		slices.Equal(in.DependsOnIssues, decl.DependsOnIssues)
 }
 
 func cloneIssueSubject(in *domain.IssueSubjectRef) *domain.IssueSubjectRef {

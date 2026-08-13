@@ -1053,6 +1053,12 @@ type claudeComposition struct {
 	// reconciler.
 	observePull  pullObserver
 	observeIssue issueObserver
+	// observeLabelIssues is the label-intake loop's conditional read of the open
+	// issues carrying one initiator label, through the same reconciler (#659).
+	observeLabelIssues labelIssueObserver
+	// evictLabelIssues drops a (repo, label) label-issue cache after a failed
+	// durable intake write, so the next tick re-observes unconditionally.
+	evictLabelIssues func(repo, label string)
 	// observeReview is the §5.16 native-review observation's conditional reads
 	// through the same reconciler (issue #497).
 	observeReview nativeReviewObserver
@@ -1353,6 +1359,10 @@ func composeClaudeDriver(
 		observeIssue: func(obsCtx context.Context, repo string, number int) (publish.IssueObservation, error) {
 			return reconciler.ReconcileIssue(obsCtx, repo, number)
 		},
+		observeLabelIssues: func(obsCtx context.Context, repo, label string) (publish.LabelIssuesObservation, error) {
+			return reconciler.ReconcileLabelIssues(obsCtx, repo, label)
+		},
+		evictLabelIssues: reconciler.EvictLabelIssues,
 		observeReview: func(obsCtx context.Context, repo string, number int) (publish.PullReviewObservation, error) {
 			return reconciler.ReconcilePullReviewActivity(obsCtx, repo, number)
 		},
