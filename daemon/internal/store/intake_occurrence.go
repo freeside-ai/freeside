@@ -40,6 +40,15 @@ import (
 // out-of-date binding from a transient error and hold, never act on it.
 var ErrIntakeAdmissionInconsistent = errors.New("intake occurrence admission binding is inconsistent with its parents")
 
+// ErrIntakeProjectRepositoryMismatch marks a run whose project does not belong
+// to the occurrence's own repository — the tie #720 could only document as a
+// caller assumption, now store-enforced through the durable Project authority
+// (issue #740). MintIntakeDeclaration returns it directly at mint time; the read
+// re-gate additionally wraps ErrIntakeAdmissionInconsistent so a consumer still
+// holds a tampered or cross-repo binding rather than acting on it.
+var ErrIntakeProjectRepositoryMismatch = errors.New(
+	"intake run project belongs to a different repository than the occurrence")
+
 const intakeOccurrenceColumns = `repository_id, issue_number, label, ordinal, repo, state,
 	admission_key, proposal_instance_id, work_unit_id, policy_artifact_id,
 	refusal_reason, supersession_reason, body`
@@ -347,8 +356,15 @@ func (tx *ReadTx) authenticatedIntakeProposal(
 // with subject_input_missing/stale — the read boundary must not make an
 // occurrence with an unavailable-but-authentic input unreadable (owner-ratified
 // after round 11 #1). The admission-time presence of the artifact is checked
-// separately on the write path (authenticateIntakePolicyArtifact). Fails closed
-// with ErrIntakeAdmissionInconsistent.
+// separately on the write path (authenticateIntakePolicyArtifact). The
+// declaration's project, by contrast, IS re-resolved here and required to belong
+// to the occurrence's repository (issue #740): the projects row is write-once and
+// undeletable, so an authentic binding always resolves it — the
+// availability-vs-integrity distinction cuts the other way than for the policy
+// artifact. This closes the tampered cross-repo case #720's re-gate could not
+// check: the stored binding faithfully mirrors a declaration whose project maps
+// to a foreign repository, so the byte-equality re-derivation still matches and
+// only this check catches it. Fails closed with ErrIntakeAdmissionInconsistent.
 func (tx *ReadTx) deriveIntakeAdmission(
 	ctx context.Context, o domain.IntakeOccurrence,
 	instanceID domain.ProposalInstanceID, policyArtifactID domain.ArtifactID,
@@ -365,6 +381,31 @@ func (tx *ReadTx) deriveIntakeAdmission(
 	if declaration.BoundIssue == nil || *declaration.BoundIssue != o.IssueNumber {
 		return domain.IntakeAdmission{}, fmt.Errorf(
 			"intake admission work unit is not bound to the occurrence's issue %d: %w", o.IssueNumber, ErrIntakeAdmissionInconsistent)
+	}
+	// The declaration's project must belong to the occurrence's own repository
+	// (#740). The projects row is write-once and undeletable, so for an authentic
+	// binding it always reconstructs. A *durable* reconstruction failure —
+	// unregistered (ErrNotFound), or a corrupt/tampered row
+	// (errRowInconsistent, which scanProject also carries for a body that fails
+	// to decode or re-validate) — is authority corruption, so classify it as
+	// ErrIntakeAdmissionInconsistent (the hold signal a consumer must not retry
+	// past) while preserving the cause. A *transient* fault (context
+	// cancellation, a DB operational error) is propagated as-is, without the hold
+	// sentinel, so a consumer retries a healthy admission instead of parking it.
+	project, err := tx.GetProject(ctx, declaration.ProjectID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) || errors.Is(err, errRowInconsistent) {
+			return domain.IntakeAdmission{}, fmt.Errorf(
+				"intake admission project %q authority is unresolvable: %w: %w",
+				declaration.ProjectID, ErrIntakeAdmissionInconsistent, err)
+		}
+		return domain.IntakeAdmission{}, fmt.Errorf("intake admission project: %w", err)
+	}
+	if project.RepositoryID != o.RepositoryID {
+		return domain.IntakeAdmission{}, fmt.Errorf(
+			"intake admission run project %q belongs to repository %d, not the occurrence's %d: %w: %w",
+			declaration.ProjectID, project.RepositoryID, o.RepositoryID,
+			ErrIntakeAdmissionInconsistent, ErrIntakeProjectRepositoryMismatch)
 	}
 	return domain.IntakeAdmission{
 		AdmissionKey:       o.ProposalAdmissionKey(),
@@ -533,14 +574,17 @@ func (tx *WriteTx) RecordIntakeObservation(
 // declaration for the run bound to a different issue is an immutable conflict —
 // an occurrence can never be admitted onto another issue's work unit.
 //
-// Caller trust assumption (owner-ratified, option a): the caller mints runID
-// under the occurrence's *own* repository's project. The store cannot verify
-// that tie — no project→repository authority exists (Run has only ProjectID;
-// ProjectImage has RepositoryID but no ProjectID; no Project entity) — so a run
-// belonging to another repository's project would bind. A durable
-// project→repository authority is tracked as a contract follow-up scheduled
-// ahead of #659 (the reconciliation loop that mints the run); until it lands
-// this tie is the caller's responsibility, not a store-enforced invariant.
+// The run's project must belong to the occurrence's own repository: this
+// resolves run.ProjectID through the durable Project authority (issue #740) and
+// refuses a run whose project maps to another repository, so an occurrence can
+// never be admitted onto a run for a different repository's project (the case a
+// shared issue number would otherwise let through). An unregistered project
+// fails closed — the GetProject ErrNotFound propagates, nothing defaults open.
+// This replaces the caller trust assumption #720 documented here, which held
+// only because the store then had no project→repository map (a Run carries only
+// a ProjectID, a ProjectImage a RepositoryID but no ProjectID, and no Project
+// entity existed); #659 registers the project its configuration names before
+// minting the run.
 // The declaration instant is the occurrence's own RecordedAt, not a caller
 // clock: a crash-recovery replay passes a later wall-clock, and a caller-clock
 // DeclaredAt would make the reconstructed declaration differ byte-for-byte, so
@@ -561,6 +605,17 @@ func (tx *WriteTx) MintIntakeDeclaration(
 	run, err := tx.GetRun(ctx, runID)
 	if err != nil {
 		return domain.WorkUnitDeclaration{}, fmt.Errorf("intake declaration run: %w", err)
+	}
+	// The run's project must belong to the occurrence's own repository (#740).
+	// An unregistered project fails closed: the GetProject ErrNotFound propagates.
+	project, err := tx.GetProject(ctx, run.ProjectID)
+	if err != nil {
+		return domain.WorkUnitDeclaration{}, fmt.Errorf("intake declaration project: %w", err)
+	}
+	if project.RepositoryID != occurrence.RepositoryID {
+		return domain.WorkUnitDeclaration{}, fmt.Errorf(
+			"intake declaration run project %q belongs to repository %d, not the occurrence's %d: %w",
+			run.ProjectID, project.RepositoryID, occurrence.RepositoryID, ErrIntakeProjectRepositoryMismatch)
 	}
 	policy, err := tx.GetResolvedPolicy(ctx, runID)
 	if err != nil {

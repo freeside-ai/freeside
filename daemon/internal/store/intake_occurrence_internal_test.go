@@ -52,6 +52,15 @@ func seedBoundIntakeOccurrence(t *testing.T, ctx context.Context, tx *WriteTx) d
 	if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
 		t.Fatalf("put resolved policy: %v", err)
 	}
+	// The mint gate (#740) requires the run's project registered against the
+	// occurrence's repository before MintIntakeDeclaration will bind it.
+	project, err := domain.NewProject("project-1", intakeIntRepo, intakeIntRepoID)
+	if err != nil {
+		t.Fatalf("build project: %v", err)
+	}
+	if err := tx.RegisterProject(ctx, project); err != nil {
+		t.Fatalf("register project: %v", err)
+	}
 	policyArtifact, err := domain.NewArtifact(domain.ArtifactInput{
 		ID: "policy-art-1", Type: domain.ArtifactKindPolicy, Digest: policy.Digest,
 		Provenance: domain.Provenance{
@@ -514,6 +523,155 @@ func TestIntakeReGateRejectsTamperedSupersessionReason(t *testing.T) {
 		}
 		if _, err := tx.GetIntakeOccurrence(ctx, intakeIntRepoID, intakeIntIssue, intakeIntLabel, 1); !errors.Is(err, errRowInconsistent) {
 			return fmt.Errorf("body-only tampered supersession reason not rejected, got %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestIntakeReGateRejectsCrossRepositoryProject proves the read re-gate closes
+// the case #720's re-gate could not (issue #740): a stored admission whose
+// durable declaration names a project registered against a different repository
+// than the occurrence is rejected on reconstruction. The binding is otherwise
+// authentic — its subject byte-equals what re-derivation produces — so only the
+// project→repository check catches it. No write path can reach this state (the
+// mint gate and the bind-time derive both refuse it), so the occurrence is
+// assembled directly: the declaration is recorded cross-repo through the
+// lower-level RecordWorkUnitDeclaration, and the admission is written through
+// putIntakeOccurrence.
+func TestIntakeReGateRejectsCrossRepositoryProject(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = st.Write(ctx, func(tx *WriteTx) error {
+		policy, err := domain.NewResolvedPolicy("intake-cross-run", []domain.PolicyKey{{
+			Key: "paths", Value: "daemon/", Provenance: domain.KeyProvenance{
+				Source: domain.ProvenanceOverride,
+				Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			},
+		}})
+		if err != nil {
+			return err
+		}
+		handle := domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(policy.RunID))
+		proposal, err := domain.NewEffectProposal(domain.EffectRunProposal, domain.RunProposalParameters{
+			SubjectHandle: handle, Intent: domain.RunProposalIntentImplement,
+			ExpectedCostUnits: 10, Scope: domain.RunProposalScope{ComponentCount: 1, DeclaredPathCount: 1},
+		}, policy)
+		if err != nil {
+			return err
+		}
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: policy.RunID, ProjectID: "project-cross", SpecDigest: "sha256:spec", PolicyDigest: policy.Digest,
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
+			return err
+		}
+		// The declaration's project is registered against a different repository
+		// than the occurrence (intakeIntRepoID).
+		foreign, err := domain.NewProject("project-cross", "other/repo", intakeIntRepoID+1)
+		if err != nil {
+			return err
+		}
+		if err := tx.RegisterProject(ctx, foreign); err != nil {
+			return err
+		}
+
+		occurrence, _, err := tx.AllocateNextIntakeOccurrence(ctx, intakeIntRepo, intakeIntRepoID, intakeIntIssue, intakeIntLabel, intakeIntTS)
+		if err != nil {
+			return err
+		}
+		// Record the cross-repo declaration directly, bypassing the mint gate that
+		// would refuse it, so the durable parent the re-gate re-derives from exists.
+		issue := occurrence.IssueNumber
+		declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
+			CompletionCriterion: domain.CompletionBoundPRMerged,
+			BoundIssue:          &issue,
+			DeclaredPaths:       domain.CanonicalDeclaredPaths(policy),
+		}, policy.RunID, "project-cross", occurrence.RecordedAt)
+		if err != nil {
+			return err
+		}
+		if err := tx.RecordWorkUnitDeclaration(ctx, declaration); err != nil {
+			return err
+		}
+		instance, _, err := tx.AllocateProposalInstance(ctx, occurrence.ProposalAdmissionKey(), "batch-1", proposal, intakeIntTS)
+		if err != nil {
+			return err
+		}
+		// Hand-build the domain-valid admission the mint would have produced, then
+		// write it directly: the subject faithfully mirrors the cross-repo
+		// declaration, so the re-gate's byte-equality would pass and only the
+		// project→repository check fires.
+		occurrence.Admission = &domain.IntakeAdmission{
+			AdmissionKey:       occurrence.ProposalAdmissionKey(),
+			ProposalInstanceID: instance.ID,
+			ProposalDigest:     proposal.Digest,
+			Subject: domain.IntakeSubjectBinding{
+				ProjectID:            "project-cross",
+				WorkUnitID:           declaration.ID,
+				ImplementationRunID:  policy.RunID,
+				PolicyArtifactID:     "policy-art-1",
+				PolicyArtifactDigest: policy.Digest,
+				ResolvedPolicyDigest: policy.Digest,
+				Source: domain.ElaborationSource{
+					Kind: domain.ElaborationSourceIssueSubject,
+					IssueSubject: &domain.IssueSubjectRef{
+						Repo: occurrence.Repo, RepositoryID: occurrence.RepositoryID, IssueNumber: occurrence.IssueNumber,
+					},
+				},
+			},
+		}
+		if err := tx.putIntakeOccurrence(ctx, occurrence); err != nil {
+			return err
+		}
+		_, readErr := tx.GetIntakeOccurrence(ctx, intakeIntRepoID, intakeIntIssue, intakeIntLabel, 1)
+		if !errors.Is(readErr, ErrIntakeProjectRepositoryMismatch) {
+			return fmt.Errorf("cross-repository binding not rejected for mismatch, got %w", readErr)
+		}
+		if !errors.Is(readErr, ErrIntakeAdmissionInconsistent) {
+			return fmt.Errorf("cross-repository read rejection is not the held-binding class, got %w", readErr)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestIntakeReGateClassifiesCorruptProjectRowAsHold proves a GetProject failure
+// that is not ErrNotFound — here a tampered projects row whose column disagrees
+// with its body — still surfaces through the read re-gate as
+// ErrIntakeAdmissionInconsistent, the durable "hold, don't act" signal. The
+// projects row is write-once and undeletable, so any reconstruction failure of
+// an authentic binding is authority corruption, not a transient store fault a
+// consumer might retry past.
+func TestIntakeReGateClassifiesCorruptProjectRowAsHold(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = st.Write(ctx, func(tx *WriteTx) error {
+		seedBoundIntakeOccurrence(t, ctx, tx)
+		// Tamper the authentic project's row so its repository_id column no longer
+		// matches the body; GetProject then fails the cross-check with
+		// errRowInconsistent rather than ErrNotFound.
+		if _, err := tx.tx.ExecContext(ctx,
+			`UPDATE projects SET repository_id = repository_id + 1 WHERE project_id = ?`,
+			"project-1"); err != nil {
+			return err
+		}
+		if _, err := tx.GetIntakeOccurrence(ctx, intakeIntRepoID, intakeIntIssue, intakeIntLabel, 1); !errors.Is(err, ErrIntakeAdmissionInconsistent) {
+			return fmt.Errorf("corrupt project row not classified as a durable hold, got %w", err)
 		}
 		return nil
 	})

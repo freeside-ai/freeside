@@ -55,6 +55,15 @@ func putIntakeProposalPolicy(t *testing.T, ctx context.Context, tx *store.WriteT
 	}); err != nil {
 		t.Fatalf("put run: %v", err)
 	}
+	// The mint gate (#740) requires the run's project to be registered against
+	// the occurrence's repository before MintIntakeDeclaration will bind it.
+	project, err := domain.NewProject("project-1", intakeRepo, intakeRepoID)
+	if err != nil {
+		t.Fatalf("build project: %v", err)
+	}
+	if err := tx.RegisterProject(ctx, project); err != nil {
+		t.Fatalf("register project: %v", err)
+	}
 	if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
 		t.Fatalf("put resolved policy: %v", err)
 	}
@@ -670,6 +679,73 @@ func TestIntakeDeclarationReplayConverges(t *testing.T) {
 		}
 		if !first.DeclaredAt.Equal(second.DeclaredAt) || first.DeclaredAt.Equal(time.Time{}) {
 			return fmt.Errorf("declaration instant not stable across replay: %s vs %s", first.DeclaredAt, second.DeclaredAt)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestIntakeMintRefusesCrossRepositoryProject proves the mint gate (#740) refuses
+// a run whose project belongs to another repository, closing the tie #720 could
+// only document as a caller assumption: an occurrence can never be admitted onto
+// a run for a different repository's project.
+func TestIntakeMintRefusesCrossRepositoryProject(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openStore(t, store.Options{})
+	policy, _, _ := proposalFixture(t)
+
+	err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: policy.RunID, ProjectID: "project-cross", SpecDigest: "sha256:spec", PolicyDigest: policy.Digest,
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
+			return err
+		}
+		// The run's project is registered against a different repository.
+		if err := tx.RegisterProject(ctx, mustProject(t, "project-cross", "other/repo", intakeRepoID+1)); err != nil {
+			return err
+		}
+		if _, _, err := tx.AllocateNextIntakeOccurrence(ctx, intakeRepo, intakeRepoID, intakeIssue, intakeLabel, intakeStoreTS); err != nil {
+			return err
+		}
+		if _, err := tx.MintIntakeDeclaration(ctx, intakeRepoID, intakeIssue, intakeLabel, 1, policy.RunID); !errors.Is(err, store.ErrIntakeProjectRepositoryMismatch) {
+			return fmt.Errorf("cross-repository project not refused, got %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestIntakeMintRefusesUnregisteredProject proves the mint gate fails closed on
+// an unregistered project: the GetProject ErrNotFound propagates, nothing
+// defaults open.
+func TestIntakeMintRefusesUnregisteredProject(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openStore(t, store.Options{})
+	policy, _, _ := proposalFixture(t)
+
+	err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: policy.RunID, ProjectID: "project-unregistered", SpecDigest: "sha256:spec", PolicyDigest: policy.Digest,
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
+			return err
+		}
+		if _, _, err := tx.AllocateNextIntakeOccurrence(ctx, intakeRepo, intakeRepoID, intakeIssue, intakeLabel, intakeStoreTS); err != nil {
+			return err
+		}
+		if _, err := tx.MintIntakeDeclaration(ctx, intakeRepoID, intakeIssue, intakeLabel, 1, policy.RunID); !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("unregistered project not refused, got %w", err)
 		}
 		return nil
 	})
