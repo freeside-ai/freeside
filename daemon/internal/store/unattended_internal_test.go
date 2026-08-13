@@ -129,8 +129,8 @@ func TestAttentionHealthPostureMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 43 {
-		t.Fatalf("schema version = %d, want 43", got)
+	if got := rawVersion(t, db); got != 44 {
+		t.Fatalf("schema version = %d, want 44", got)
 	}
 	got, snapshot, err := scanAttentionItemRecord(db.QueryRowContext(ctx,
 		`SELECT id, project_id, conversation_id, item_type, status, health_posture,
