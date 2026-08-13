@@ -35,10 +35,20 @@ import (
 // back to a placeholder. Publication metadata is operator-authored and absent
 // at label admission, so it is composed by the reconciliation loop, not bound
 // here; the target repository is named by an issue_subject source.
+//
+// ElaborationRunID is the run the admission reserves and mints the declaration
+// against: the pre-approval elaboration run, whose resolved policy the proposal
+// resolves through and which a start augments with its invocation. It is not the
+// implementation run — that run is created fresh at spec approval, must not
+// pre-exist, and carries an immutable spec digest, so it cannot be the run that
+// must already exist when the declaration is minted. The reconciliation loop
+// derives the implementation run id from the occurrence's own coordinates when a
+// start needs it (issue #744; see the "Revisit when #659 begins" note in
+// devlog/2026-08-12-2015-label-intake-contracts.md).
 type IntakeSubjectBinding struct {
 	ProjectID            ProjectID         `json:"project_id"`
 	WorkUnitID           WorkUnitID        `json:"work_unit_id"`
-	ImplementationRunID  RunID             `json:"implementation_run_id"`
+	ElaborationRunID     RunID             `json:"elaboration_run_id"`
 	PolicyArtifactID     ArtifactID        `json:"policy_artifact_id"`
 	PolicyArtifactDigest Digest            `json:"policy_artifact_digest"`
 	ResolvedPolicyDigest Digest            `json:"resolved_policy_digest"`
@@ -56,12 +66,12 @@ func (b IntakeSubjectBinding) Validate() error {
 	if b.WorkUnitID == "" {
 		return fmt.Errorf("intake subject work_unit_id: %w", ErrEmptyID)
 	}
-	if b.ImplementationRunID == "" {
-		return fmt.Errorf("intake subject implementation_run_id: %w", ErrEmptyID)
+	if b.ElaborationRunID == "" {
+		return fmt.Errorf("intake subject elaboration_run_id: %w", ErrEmptyID)
 	}
-	if b.WorkUnitID != WorkUnitIDForRun(b.ImplementationRunID) {
+	if b.WorkUnitID != WorkUnitIDForRun(b.ElaborationRunID) {
 		return fmt.Errorf("intake subject work_unit_id %q is not derived from run %q: %w",
-			b.WorkUnitID, b.ImplementationRunID, ErrIntakeOccurrenceInconsistent)
+			b.WorkUnitID, b.ElaborationRunID, ErrIntakeOccurrenceInconsistent)
 	}
 	if b.PolicyArtifactID == "" {
 		return fmt.Errorf("intake subject policy_artifact_id: %w", ErrEmptyID)

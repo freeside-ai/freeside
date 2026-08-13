@@ -414,7 +414,7 @@ func (tx *ReadTx) deriveIntakeAdmission(
 		Subject: domain.IntakeSubjectBinding{
 			ProjectID:            declaration.ProjectID,
 			WorkUnitID:           declaration.ID,
-			ImplementationRunID:  declaration.RunID,
+			ElaborationRunID:     declaration.RunID,
 			PolicyArtifactID:     policyArtifactID,
 			PolicyArtifactDigest: policy.Digest,
 			ResolvedPolicyDigest: policy.Digest,
@@ -562,10 +562,14 @@ func (tx *WriteTx) RecordIntakeObservation(
 	return occurrence, nil
 }
 
-// MintIntakeDeclaration mints and persists the implementation-run identity's
-// work-unit declaration for a present occurrence (plan §5.12 item 3): bound to
-// the occurrence's own issue, on the caller-minted run, at the project the run
-// names and scoped to the run's resolved policy. The admission transaction calls
+// MintIntakeDeclaration mints and persists the reserved elaboration run's
+// work-unit declaration for a present occurrence (plan §5.12 item 3, issue
+// #744): bound to the occurrence's own issue, on the caller-reserved run, at the
+// project the run names and scoped to the run's resolved policy. The reserved
+// run is the pre-approval elaboration run (which can exist at admission and
+// compose with the elaboration lane), not the implementation run; the binding's
+// ElaborationRunID records it, and the reconciliation loop derives the
+// implementation run id from the occurrence's coordinates downstream. The admission transaction calls
 // this before AllocateProposalInstance, so the proposal's SubjectHandle resolves
 // through the existing ResolveProposalSubject path and admission never has to
 // trust a caller-supplied subject: binding the declaration to the occurrence's
