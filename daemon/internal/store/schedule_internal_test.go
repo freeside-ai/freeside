@@ -393,7 +393,8 @@ func migrationsBeforeScheduleAuthority(t *testing.T) fs.FS {
 			entry.Name() == "0039_outbox_payload_authentication.sql" ||
 			entry.Name() == "0040_codex_reenrollment.sql" ||
 			entry.Name() == "0041_effect_proposals.sql" ||
-			entry.Name() == "0042_execution_identity_parallelism.sql" || entry.IsDir() {
+			entry.Name() == "0042_execution_identity_parallelism.sql" ||
+			entry.Name() == "0043_intake_occurrences.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())

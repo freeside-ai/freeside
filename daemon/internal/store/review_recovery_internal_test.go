@@ -24,8 +24,8 @@ func TestReviewRecoveryMigrationAppliesFromHead(t *testing.T) {
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatalf("migrate to head: %v", err)
 	}
-	if got := rawVersion(t, db); got != 42 {
-		t.Fatalf("schema version = %d, want 42", got)
+	if got := rawVersion(t, db); got != 43 {
+		t.Fatalf("schema version = %d, want 43", got)
 	}
 	var count int
 	if err := db.QueryRowContext(ctx,

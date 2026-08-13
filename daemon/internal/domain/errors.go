@@ -73,6 +73,10 @@ var (
 	ErrInvalidWaiverLifecycleStatus     = errors.New("invalid waiver lifecycle status")
 	ErrInvalidEffectKind                = errors.New("invalid effect kind")
 	ErrInvalidProposalAdmissionSource   = errors.New("invalid proposal admission source")
+	ErrInvalidIntakeOccurrenceState     = errors.New("invalid intake occurrence state")
+	ErrInvalidIntakeStartRefusalReason  = errors.New("invalid intake start refusal reason")
+	ErrInvalidIntakeSupersessionReason  = errors.New("invalid intake supersession reason")
+	ErrInvalidElaborationSourceKind     = errors.New("invalid elaboration source kind")
 
 	// Structural failures.
 	ErrEmptyID    = errors.New("required identifier is empty")
@@ -148,6 +152,8 @@ var (
 	ErrProposalParameterTooLarge          = errors.New("effect proposal parameter exceeds its bound")
 	ErrProposalPolicyMismatch             = errors.New("effect proposal does not bind the resolved policy")
 	ErrProposalAdmissionKeyInconsistent   = errors.New("proposal admission key fields do not match its source")
+	ErrElaborationSourceInconsistent      = errors.New("elaboration source fields do not match its kind")
+	ErrIntakeOccurrenceInconsistent       = errors.New("intake occurrence fields are internally inconsistent")
 
 	// Trust-boundary failures.
 	ErrPlaintextCredential               = errors.New("credential material must be a sha256 digest, never plaintext")

@@ -2238,3 +2238,63 @@ func (f elaborationFixture) run(id domain.RunID) (domain.Run, error) {
 	})
 	return run, err
 }
+
+// specWithSource builds an otherwise-valid elaboration spec carrying the given
+// typed source, so a test isolates the SubmitElaborationRun source guard.
+func (f elaborationFixture) specWithSource(source domain.ElaborationSource) ElaborationRunSpec {
+	return ElaborationRunSpec{
+		ElaborationRunID: "elaboration-run", ImplementationRunID: "implementation-run",
+		ProjectID: "project-1", SourceArtifactID: f.source.ID, PolicyArtifactID: f.policyArt.ID,
+		ResolvedPolicy: f.policy,
+		Publication: ProductionPublication{
+			Title: "Implement approved work item", Body: "Implements the operator-approved specification.",
+			CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
+		},
+		Source: source,
+	}
+}
+
+func TestSubmitElaborationRunSourceGuard(t *testing.T) {
+	t.Run("spec_artifact consistent is accepted", func(t *testing.T) {
+		f := newElaborationFixture(t, true, 4)
+		spec := f.specWithSource(domain.ElaborationSource{
+			Kind: domain.ElaborationSourceSpecArtifact, SpecArtifactID: f.source.ID,
+		})
+		if _, err := SubmitElaborationRun(t.Context(), f.store, spec); err != nil {
+			t.Fatalf("consistent spec_artifact source: %v", err)
+		}
+	})
+
+	t.Run("zero source keeps legacy behaviour", func(t *testing.T) {
+		f := newElaborationFixture(t, true, 4)
+		spec := f.specWithSource(domain.ElaborationSource{})
+		if _, err := SubmitElaborationRun(t.Context(), f.store, spec); err != nil {
+			t.Fatalf("zero source: %v", err)
+		}
+	})
+
+	t.Run("spec_artifact mismatch is refused", func(t *testing.T) {
+		f := newElaborationFixture(t, true, 4)
+		spec := f.specWithSource(domain.ElaborationSource{
+			Kind: domain.ElaborationSourceSpecArtifact, SpecArtifactID: "some-other-artifact",
+		})
+		_, err := SubmitElaborationRun(t.Context(), f.store, spec)
+		if !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Fatalf("mismatched source: err = %v, want ErrParentKeyMismatch", err)
+		}
+	})
+
+	t.Run("issue_subject is deferred to #659", func(t *testing.T) {
+		f := newElaborationFixture(t, true, 4)
+		spec := f.specWithSource(domain.ElaborationSource{
+			Kind: domain.ElaborationSourceIssueSubject,
+			IssueSubject: &domain.IssueSubjectRef{
+				Repo: "freeside-ai/freeside", RepositoryID: 1, IssueNumber: 659,
+			},
+		})
+		_, err := SubmitElaborationRun(t.Context(), f.store, spec)
+		if err == nil || !strings.Contains(err.Error(), "reconciliation loop") {
+			t.Fatalf("issue_subject source: err = %v, want a deferred-path refusal", err)
+		}
+	})
+}

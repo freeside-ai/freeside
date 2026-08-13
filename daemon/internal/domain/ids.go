@@ -26,6 +26,7 @@ type (
 	WorkUnitID          string
 	RequirementKey      string
 	WaiverID            string
+	IntakeOccurrenceID  string
 )
 
 // Digest is a content address (e.g. "sha256:..."); artifacts, specs, recipes,

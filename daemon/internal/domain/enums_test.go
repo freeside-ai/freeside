@@ -162,6 +162,22 @@ func TestEnumValidity(t *testing.T) {
 		valids["RefreshStrategy"] = append(valids["RefreshStrategy"], v.valid)
 	}
 	invalids["RefreshStrategy"] = RefreshStrategy("").valid
+	for _, v := range AllIntakeOccurrenceStates {
+		valids["IntakeOccurrenceState"] = append(valids["IntakeOccurrenceState"], v.valid)
+	}
+	invalids["IntakeOccurrenceState"] = IntakeOccurrenceState("").valid
+	for _, v := range AllIntakeStartRefusalReasons {
+		valids["IntakeStartRefusalReason"] = append(valids["IntakeStartRefusalReason"], v.valid)
+	}
+	invalids["IntakeStartRefusalReason"] = IntakeStartRefusalReason("").valid
+	for _, v := range AllIntakeSupersessionReasons {
+		valids["IntakeSupersessionReason"] = append(valids["IntakeSupersessionReason"], v.valid)
+	}
+	invalids["IntakeSupersessionReason"] = IntakeSupersessionReason("").valid
+	for _, v := range AllElaborationSourceKinds {
+		valids["ElaborationSourceKind"] = append(valids["ElaborationSourceKind"], v.valid)
+	}
+	invalids["ElaborationSourceKind"] = ElaborationSourceKind("").valid
 	for _, v := range AllBackupHealthStatuses {
 		valids["BackupHealthStatus"] = append(valids["BackupHealthStatus"], v.valid)
 	}
