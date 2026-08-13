@@ -132,6 +132,15 @@ type elaborationRequest struct {
 	PolicyArtifactID    domain.ArtifactID                `json:"policy_artifact_id"`
 	Publication         ProductionPublication            `json:"publication"`
 	WorkUnit            *domain.WorkUnitDeclarationInput `json:"work_unit,omitempty"`
+	// IssueSubject marks the label-intake issue-subject arm and pins the
+	// occurrence-bound issue the run elaborates (plan §5.12, #659). Nil on the
+	// spec-artifact arm (freesided submit). It carries only issue coordinates,
+	// never issue content; the coordinates-only work-item document is delivered
+	// in the specification role from run.SpecDigest, and the issue's text enters
+	// elaboration only as elaborator-fetched research. Pinned in the canonical
+	// encode/decode and re-checked in authenticateElaborationRoot so a retargeted
+	// request cannot swap the bound subject.
+	IssueSubject *domain.IssueSubjectRef `json:"issue_subject,omitempty"`
 }
 
 type elaborationTerminal struct {
@@ -290,26 +299,21 @@ func SubmitElaborationRun(ctx context.Context, st *store.Store, spec Elaboration
 		spec.SourceArtifactID == "" || spec.PolicyArtifactID == "" {
 		return ElaborationRun{}, errors.New("submit elaboration run: distinct run IDs, project, source, and policy are required")
 	}
-	// A named source must be well-formed and, for the arm this path executes,
-	// agree with SourceArtifactID. The issue_subject arm is nameable in the
-	// spec but assembled by the label-intake reconciliation loop (#659), so it
-	// fails closed here rather than silently running the SourceArtifactID path.
-	// A zero Source (Kind == "") keeps the legacy spec-artifact behaviour.
+	// A named source must be well-formed and consistent with SourceArtifactID.
+	// The spec-artifact arm's Source names that same artifact; the issue-subject
+	// arm (label-intake, #659) names an occurrence-bound issue and its
+	// SourceArtifactID is the daemon-authored coordinates-only work-item
+	// Specification the admission registered. A zero Source (Kind == "") keeps
+	// the legacy spec-artifact behaviour so existing callers are unaffected.
 	if spec.Source.Kind != "" {
 		if err := spec.Source.Validate(); err != nil {
 			return ElaborationRun{}, fmt.Errorf("submit elaboration run source: %w", err)
 		}
-		switch spec.Source.Kind {
-		case domain.ElaborationSourceSpecArtifact:
-			if spec.Source.SpecArtifactID != spec.SourceArtifactID {
-				return ElaborationRun{}, fmt.Errorf(
-					"submit elaboration run: source spec artifact %q differs from source artifact %q: %w",
-					spec.Source.SpecArtifactID, spec.SourceArtifactID, domain.ErrParentKeyMismatch)
-			}
-		case domain.ElaborationSourceIssueSubject:
-			return ElaborationRun{}, errors.New(
-				"submit elaboration run: issue-subject elaboration is assembled by the " +
-					"label-intake reconciliation loop (#659), not this path")
+		if spec.Source.Kind == domain.ElaborationSourceSpecArtifact &&
+			spec.Source.SpecArtifactID != spec.SourceArtifactID {
+			return ElaborationRun{}, fmt.Errorf(
+				"submit elaboration run: source spec artifact %q differs from source artifact %q: %w",
+				spec.Source.SpecArtifactID, spec.SourceArtifactID, domain.ErrParentKeyMismatch)
 		}
 	}
 	if spec.ResolvedPolicy.RunID != spec.ElaborationRunID {
@@ -327,6 +331,12 @@ func SubmitElaborationRun(ctx context.Context, st *store.Store, spec Elaboration
 			*spec.WorkUnit, spec.ImplementationRunID, spec.ProjectID, time.Unix(1, 0)); err != nil {
 			return ElaborationRun{}, fmt.Errorf("submit elaboration run work unit: %w", err)
 		}
+	}
+	// The issue-subject arm (label-intake, #659) adopts the reserved run the
+	// admission persisted rather than creating one; the shared validation above
+	// applies to both arms, so branch only the write here.
+	if spec.Source.Kind == domain.ElaborationSourceIssueSubject {
+		return submitIssueSubjectElaborationRun(ctx, st, spec)
 	}
 	invocationID := elaborationInvocationID(spec.ElaborationRunID, 1)
 	request := elaborationRequest{
@@ -452,6 +462,155 @@ func SubmitElaborationRun(ctx context.Context, st *store.Store, spec Elaboration
 	}, nil
 }
 
+// submitIssueSubjectElaborationRun executes the label-intake issue-subject arm
+// of elaboration submission (#659). Unlike the spec-artifact arm it ADOPTS the
+// reserved elaboration run the admission already persisted rather than creating
+// it: MintIntakeDeclaration requires that run to exist before the proposal is
+// admitted, so the run (bare, no markers), its resolved policy, the policy
+// artifact, and the daemon-authored coordinates-only work-item Specification
+// artifact all exist at admission. A start adds only the iteration-1 invocation,
+// dispatch marker, implementation claim, and run-submitted milestone, converging
+// when they already exist. The work-item document is delivered to the elaborator
+// in the specification role from run.SpecDigest (GQ1: a daemon-authored,
+// issue-content-free document in the spec role), so no issue content is
+// authority; its bytes are the run's SpecDigest and must be in the blob store.
+// See devlog/2026-08-13-2210-label-intake-reconciliation.md.
+func submitIssueSubjectElaborationRun(
+	ctx context.Context, st *store.Store, spec ElaborationRunSpec,
+) (ElaborationRun, error) {
+	invocationID := elaborationInvocationID(spec.ElaborationRunID, 1)
+	request := elaborationRequest{
+		Version: elaborationRequestVersion, ElaborationRunID: spec.ElaborationRunID,
+		ImplementationRunID: spec.ImplementationRunID, ProjectID: spec.ProjectID,
+		InvocationID: invocationID, Iteration: 1,
+		InputArtifactIDs: []domain.ArtifactID{spec.SourceArtifactID},
+		PolicyArtifactID: spec.PolicyArtifactID, Publication: spec.Publication,
+		WorkUnit:     cloneElaborationWorkUnit(spec.WorkUnit),
+		IssueSubject: cloneIssueSubject(spec.Source.IssueSubject),
+	}
+	payload, err := encodeElaborationRequest(request)
+	if err != nil {
+		return ElaborationRun{}, err
+	}
+	invocation, err := domain.NewAgentInvocation(invocationID, request.InputArtifactIDs, nil, 0)
+	if err != nil {
+		return ElaborationRun{}, err
+	}
+	var run domain.Run
+	err = st.Write(ctx, func(tx *store.WriteTx) error {
+		// The reserved elaboration run must already exist: this arm adopts it.
+		existing, err := tx.GetRun(ctx, spec.ElaborationRunID)
+		if err != nil {
+			return fmt.Errorf("issue-subject elaboration adopts a reserved run: %w", err)
+		}
+		source, err := tx.GetArtifact(ctx, spec.SourceArtifactID)
+		if err != nil {
+			return err
+		}
+		// The work-item artifact is the run's own specification source: a
+		// daemon-authored coordinates-only Specification whose digest is the
+		// reserved run's SpecDigest. A mismatch means the caller named a foreign
+		// artifact, so fail closed.
+		if source.Type != domain.ArtifactKindSpecification || source.Digest != existing.SpecDigest {
+			return fmt.Errorf("issue-subject work-item artifact disagrees with the reserved run spec: %w",
+				domain.ErrParentKeyMismatch)
+		}
+		policyArtifact, err := tx.GetArtifact(ctx, spec.PolicyArtifactID)
+		if err != nil {
+			return err
+		}
+		if policyArtifact.Type != domain.ArtifactKindPolicy || policyArtifact.Digest != spec.ResolvedPolicy.Digest {
+			return fmt.Errorf("elaboration policy artifact disagrees with resolved policy: %w", domain.ErrParentKeyMismatch)
+		}
+		storedPolicy, err := tx.GetResolvedPolicy(ctx, spec.ElaborationRunID)
+		if err != nil {
+			return err
+		}
+		if existing.ProjectID != spec.ProjectID || existing.PolicyDigest != spec.ResolvedPolicy.Digest ||
+			storedPolicy.Digest != spec.ResolvedPolicy.Digest ||
+			!slices.Equal(storedPolicy.Keys, spec.ResolvedPolicy.Keys) {
+			return fmt.Errorf("reserved elaboration run disagrees with submission: %w", domain.ErrParentKeyMismatch)
+		}
+		if _, ok := findElaborationStage(existing); !ok || len(existing.Stages) != 1 {
+			return fmt.Errorf("reserved elaboration run stage disagrees: %w", domain.ErrParentKeyMismatch)
+		}
+		run = existing
+		// Adopt-or-converge on the dispatch marker. When present, every derived
+		// record must match byte-for-byte, so a crash-recovery replay converges
+		// instead of conflicting.
+		marker, markerErr := tx.GetOutbox(ctx, string(invocationID))
+		if markerErr == nil {
+			claim, claimErr := tx.GetOutbox(ctx, elaborationImplementationClaimKey(spec.ImplementationRunID))
+			storedInvocation, invocationErr := tx.GetAgentInvocation(ctx, invocationID)
+			if marker.Kind != KindElaborationInvocationRequested || !bytes.Equal(marker.Payload, payload) ||
+				claimErr != nil || claim.Kind != KindElaborationImplementationClaim || !claim.Dispatched() ||
+				!bytes.Equal(claim.Payload, payload) || invocationErr != nil ||
+				storedInvocation.ConversationID != nil ||
+				!slices.Equal(storedInvocation.InputIDs, invocation.InputIDs) ||
+				storedInvocation.ThroughSequence != invocation.ThroughSequence {
+				return fmt.Errorf("stored issue-subject elaboration disagrees: %w", domain.ErrImmutableTransition)
+			}
+			return nil
+		} else if !errors.Is(markerErr, store.ErrNotFound) {
+			return markerErr
+		}
+		// First start: the implementation run is created fresh at spec approval,
+		// so it must not exist yet.
+		if _, err := tx.GetRun(ctx, spec.ImplementationRunID); err == nil {
+			return fmt.Errorf("implementation run %q already exists: %w",
+				spec.ImplementationRunID, domain.ErrImmutableTransition)
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		if err := tx.PutAgentInvocation(ctx, invocation); err != nil {
+			return err
+		}
+		entry, inserted, err := tx.EnqueueOutbox(ctx, string(invocationID), KindElaborationInvocationRequested, payload)
+		if err != nil {
+			return err
+		}
+		if !inserted || entry.Kind != KindElaborationInvocationRequested || !bytes.Equal(entry.Payload, payload) {
+			return fmt.Errorf("create elaboration marker: %w", domain.ErrImmutableTransition)
+		}
+		claim, claimed, err := tx.EnqueueOutbox(ctx,
+			elaborationImplementationClaimKey(spec.ImplementationRunID),
+			KindElaborationImplementationClaim, payload)
+		if err != nil {
+			return err
+		}
+		if !claimed || claim.Kind != KindElaborationImplementationClaim || !bytes.Equal(claim.Payload, payload) {
+			return fmt.Errorf("claim implementation run %q: %w",
+				spec.ImplementationRunID, domain.ErrImmutableTransition)
+		}
+		if err := tx.MarkOutboxDispatched(ctx, claim.IdempotencyKey); err != nil {
+			return err
+		}
+		observedInvocation := invocationID
+		return tx.AppendRunMilestone(ctx, domain.RunMilestone{
+			RunID: spec.ElaborationRunID, Kind: domain.MilestoneRunSubmitted,
+			InvocationID: &observedInvocation, RecordedAt: time.Now().UTC(),
+		})
+	})
+	if err != nil {
+		return ElaborationRun{}, err
+	}
+	return ElaborationRun{
+		Run: run, ImplementationRunID: spec.ImplementationRunID,
+		ElaborationInvocationID:    invocationID,
+		ElaborationStageID:         elaborationStageID(spec.ElaborationRunID),
+		ImplementationInvocationID: productionInvocationID(spec.ImplementationRunID),
+		ImplementationStageID:      productionStageID(spec.ImplementationRunID),
+	}, nil
+}
+
+func cloneIssueSubject(in *domain.IssueSubjectRef) *domain.IssueSubjectRef {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
+}
+
 func cloneElaborationWorkUnit(in *domain.WorkUnitDeclarationInput) *domain.WorkUnitDeclarationInput {
 	if in == nil {
 		return nil
@@ -480,6 +639,15 @@ func (r elaborationRequest) validate() error {
 	if r.WorkUnit != nil {
 		if _, err := domain.NewWorkUnitDeclaration(
 			*r.WorkUnit, r.ImplementationRunID, r.ProjectID, time.Unix(1, 0)); err != nil {
+			return err
+		}
+	}
+	// The issue-subject arm pins the occurrence-bound issue. Its work-item
+	// document is a daemon-produced Specification artifact bound at index 0
+	// (run.SpecDigest), so the input-shape rules below are unchanged; only the
+	// subject reference is additionally validated.
+	if r.IssueSubject != nil {
+		if err := r.IssueSubject.Validate(); err != nil {
 			return err
 		}
 	}
@@ -634,10 +802,22 @@ func authenticateElaborationRoot(
 		request.ImplementationRunID != root.ImplementationRunID ||
 		request.ProjectID != root.ProjectID || request.PolicyArtifactID != root.PolicyArtifactID ||
 		request.Publication != root.Publication || !sameElaborationWorkUnit(request.WorkUnit, root.WorkUnit) ||
+		!sameIssueSubject(request.IssueSubject, root.IssueSubject) ||
 		len(request.InputArtifactIDs) == 0 || request.InputArtifactIDs[0] != root.InputArtifactIDs[0] {
 		return fmt.Errorf("elaboration request disagrees with initial claim: %w", domain.ErrParentKeyMismatch)
 	}
 	return nil
+}
+
+// sameIssueSubject reports whether two optional issue-subject references are the
+// same arm and value: both absent (the spec-artifact arm), or both present and
+// equal. It pins the label-intake subject across a run's iterations so a
+// retargeted request cannot adopt a foreign occurrence's issue.
+func sameIssueSubject(left, right *domain.IssueSubjectRef) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func sameElaborationWorkUnit(left, right *domain.WorkUnitDeclarationInput) bool {
