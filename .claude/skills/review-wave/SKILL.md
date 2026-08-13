@@ -123,6 +123,19 @@ text itself.
      disposition record: the findings summary lists each risk-class
      candidate as confirmed, rejected-by-verification (so a later
      audit does not re-raise it), or accepted-by-decision;
+   - a concurrency and lifecycle lens for any partition that launches
+     goroutines, owns a background loop, or coordinates teardown:
+     goroutine ownership (every launch either joined, typically via
+     WaitGroup+context or done-channel+cancel, or deliberately unjoined
+     under an explicit concurrency bound it releases when it returns;
+     none merely orphaned), cancellation that actually propagates past
+     a context deadline or cancel, teardown that leaves no unbounded
+     goroutine and double-closes no channel, and effects that stay
+     single and correctly ordered under concurrent or retried
+     execution; instruct the reviewer to hunt the missing join or
+     bound, the unpropagated cancel, and the duplicated effect, not to
+     confirm the happy path; this lens carries no disposition-record
+     requirement, unlike the risk-class lenses above;
    - an open-fork guard for each owner decision deliberately carried
      unresolved: instruct the reviewer to check the code did not
      quietly resolve it, not to re-litigate it;
