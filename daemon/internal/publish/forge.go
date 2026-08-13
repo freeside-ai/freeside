@@ -285,6 +285,37 @@ func (f *forge) listPRsByHead(ctx context.Context, repo repoRef, branch string) 
 	return states, nil
 }
 
+// repoIDResponse decodes only a repository's canonical numeric identity.
+type repoIDResponse struct {
+	ID int64 `json:"id"`
+}
+
+// getRepositoryID resolves a repository's canonical numeric identity from the
+// name a request is addressed by. Label intake compares it against the
+// configured RepositoryID and fails closed on a mismatch (§5.18): a repository
+// name rebound to a different repository is only detectable through the observed
+// id, never the name, so intake must never record occurrence, project, or
+// work-unit authority under a name that now resolves elsewhere.
+func (f *forge) getRepositoryID(ctx context.Context, repo repoRef) (int64, error) {
+	path := "/repos/" + repo.path()
+	resp, err := f.do(ctx, http.MethodGet, repo, path, "", nil)
+	if err != nil {
+		return 0, fmt.Errorf("get repository id: %w", err)
+	}
+	defer drainAndClose(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("get repository id: %w", &APIError{Status: resp.StatusCode, RequestPath: path})
+	}
+	var decoded repoIDResponse
+	if err := decodeResponse(resp.Body, &decoded); err != nil {
+		return 0, fmt.Errorf("get repository id: decode response: %w", err)
+	}
+	if decoded.ID <= 0 {
+		return 0, errors.New("get repository id: response carries no positive repository id")
+	}
+	return decoded.ID, nil
+}
+
 // prRead is a conditional pull-request observation: the decoded state
 // plus the validator for the next conditional request, or NotModified
 // when the server confirmed the cached state still holds.

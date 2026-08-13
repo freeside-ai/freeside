@@ -40,6 +40,7 @@ type Reconciler struct {
 	pulls          map[string]pullCacheEntry
 	issues         map[string]issueCacheEntry
 	reviewActivity map[string]reviewActivityCacheEntry
+	labelIssues    map[string]labelIssuesCacheEntry
 }
 
 type refCacheEntry struct {
@@ -85,6 +86,19 @@ func issueKey(repo string, number int) string {
 
 func reviewActivityKey(repo string, number int) string {
 	return fmt.Sprintf("%s\x00review\x00%d", repo, number)
+}
+
+// labelIssuesCacheEntry caches the labeled open-issue list for one
+// (repo, label) pair alongside its validator, so an unchanged list answers 304
+// and the cached issues are reused. An empty etag makes the next poll
+// unconditional.
+type labelIssuesCacheEntry struct {
+	etag   string
+	issues []LabelIssue
+}
+
+func labelIssuesKey(repo, label string) string {
+	return fmt.Sprintf("%s\x00label\x00%s", repo, label)
 }
 
 // RefObservation is the reconciled state of one branch ref.
@@ -150,6 +164,23 @@ type PullReviewObservation struct {
 	NotModified bool
 }
 
+// LabelIssuesObservation is the reconciled set of open issues carrying one
+// initiator label. NotModified reports that the server confirmed the cached
+// list (a 304); Issues then repeats that cached list. The list carries every
+// currently-labeled open issue, so an occurrence whose issue is absent from it
+// has either lost the label or closed — the intake loop distinguishes those by
+// observing the issue directly.
+type LabelIssuesObservation struct {
+	Issues []LabelIssue
+	// RepositoryID is the canonical numeric identity the initiator repository
+	// name currently resolves to, observed unconditionally each pass. The intake
+	// loop fails closed when it does not equal the configured RepositoryID, so a
+	// repository name rebound to a different repository cannot redirect intake
+	// (§5.18); the name alone can never surface that rebinding.
+	RepositoryID int64
+	NotModified  bool
+}
+
 // NewReconciler wires a Reconciler. baseURL is the GitHub API root
 // (real: https://api.github.com; tests: an httptest server).
 func NewReconciler(ts TokenSource, client *http.Client, baseURL string) *Reconciler {
@@ -159,6 +190,7 @@ func NewReconciler(ts TokenSource, client *http.Client, baseURL string) *Reconci
 		pulls:          map[string]pullCacheEntry{},
 		issues:         map[string]issueCacheEntry{},
 		reviewActivity: map[string]reviewActivityCacheEntry{},
+		labelIssues:    map[string]labelIssuesCacheEntry{},
 	}
 }
 
@@ -397,6 +429,67 @@ func (r *Reconciler) ReconcilePullReviewActivity(ctx context.Context, repo strin
 	}
 	r.mu.Unlock()
 	return obs, nil
+}
+
+// ReconcileLabelIssues observes the open issues carrying label, conditionally
+// when a prior observation holds a validator. The list is a single conditional
+// resource: a 304 confirms the whole labeled-open set unchanged and reuses the
+// cached list; a 200 replaces it. Read-only — occurrence, admission, and start
+// decisions belong to the intake loop that consumes this.
+func (r *Reconciler) ReconcileLabelIssues(ctx context.Context, repo, label string) (LabelIssuesObservation, error) {
+	ref, err := parseRepo(repo)
+	if err != nil {
+		return LabelIssuesObservation{}, fmt.Errorf("reconcile: %w", err)
+	}
+	if label == "" {
+		return LabelIssuesObservation{}, errors.New("reconcile: empty label")
+	}
+	key := labelIssuesKey(repo, label)
+
+	r.mu.Lock()
+	entry := r.labelIssues[key]
+	epoch := r.cacheEpoch
+	r.mu.Unlock()
+
+	// Resolve the repository's canonical numeric identity unconditionally each
+	// pass, before the (conditional) label scan, so the intake loop can fail
+	// closed on a rebound name even when the labeled list itself answers 304.
+	repositoryID, err := r.forge.getRepositoryID(ctx, ref)
+	if err != nil {
+		return LabelIssuesObservation{}, fmt.Errorf("reconcile: %w", err)
+	}
+	read, err := r.forge.getLabelIssues(ctx, ref, label, entry.etag)
+	if err != nil {
+		return LabelIssuesObservation{}, fmt.Errorf("reconcile: %w", err)
+	}
+	issues, etag, err := resolveListPart(read, entry.etag, entry.issues)
+	if err != nil {
+		return LabelIssuesObservation{}, fmt.Errorf("reconcile label issues: %w", err)
+	}
+	obs := LabelIssuesObservation{Issues: issues, RepositoryID: repositoryID, NotModified: read.NotModified}
+	r.mu.Lock()
+	if epoch == r.cacheEpoch {
+		if etag != "" {
+			r.labelIssues[key] = labelIssuesCacheEntry{etag: etag, issues: issues}
+		} else {
+			// No validator on the 200: the next poll is unconditional.
+			delete(r.labelIssues, key)
+		}
+	}
+	r.mu.Unlock()
+	return obs, nil
+}
+
+// EvictLabelIssues drops the cached validator and list for one (repo, label)
+// pair, so the next ReconcileLabelIssues re-fetches unconditionally instead of
+// riding a 304. The intake loop calls this when a durable intake write fails
+// after a successful fetch already advanced the ETag, so the observation is
+// retried on the next tick rather than suppressed until the labeled set changes.
+func (r *Reconciler) EvictLabelIssues(repo, label string) {
+	r.mu.Lock()
+	r.cacheEpoch++
+	delete(r.labelIssues, labelIssuesKey(repo, label))
+	r.mu.Unlock()
 }
 
 // EvictRef drops the cached validator and observation for one branch ref.

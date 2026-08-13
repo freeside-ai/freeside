@@ -96,7 +96,10 @@ type reactionResponse struct {
 // Pending (never-submitted) reviews are not observations and are skipped.
 func (f *forge) getPullReviews(ctx context.Context, repo repoRef, number int, etag string) (listRead[PullReview], error) {
 	path := fmt.Sprintf("/repos/%s/pulls/%d/reviews?per_page=100", repo.path(), number)
-	raw, resultETag, notModified, err := fetchConditionalList[reviewResponse](ctx, f, repo, path, etag)
+	// Review evidence is best-effort: a later-page change under a first-page 304
+	// is an accepted completeness gap (see fetchConditionalList), so multiPage is
+	// ignored here.
+	raw, resultETag, notModified, _, err := fetchConditionalList[reviewResponse](ctx, f, repo, path, etag)
 	if err != nil {
 		return listRead[PullReview]{}, fmt.Errorf("get pull reviews: %w", err)
 	}
@@ -124,7 +127,8 @@ func (f *forge) getPullReviews(ctx context.Context, repo repoRef, number int, et
 // conditionally.
 func (f *forge) getPullReviewComments(ctx context.Context, repo repoRef, number int, etag string) (listRead[PullReviewComment], error) {
 	path := fmt.Sprintf("/repos/%s/pulls/%d/comments?per_page=100", repo.path(), number)
-	raw, resultETag, notModified, err := fetchConditionalList[reviewCommentResponse](ctx, f, repo, path, etag)
+	// Best-effort review evidence: multiPage ignored (see getPullReviews).
+	raw, resultETag, notModified, _, err := fetchConditionalList[reviewCommentResponse](ctx, f, repo, path, etag)
 	if err != nil {
 		return listRead[PullReviewComment]{}, fmt.Errorf("get pull review comments: %w", err)
 	}
@@ -154,7 +158,8 @@ func (f *forge) getPullReviewComments(ctx context.Context, repo repoRef, number 
 // conditionally (the reactions surface is served under the issues path).
 func (f *forge) getIssueReactions(ctx context.Context, repo repoRef, number int, etag string) (listRead[PullDescriptionReaction], error) {
 	path := fmt.Sprintf("/repos/%s/issues/%d/reactions?per_page=100", repo.path(), number)
-	raw, resultETag, notModified, err := fetchConditionalList[reactionResponse](ctx, f, repo, path, etag)
+	// Best-effort review evidence: multiPage ignored (see getPullReviews).
+	raw, resultETag, notModified, _, err := fetchConditionalList[reactionResponse](ctx, f, repo, path, etag)
 	if err != nil {
 		return listRead[PullDescriptionReaction]{}, fmt.Errorf("get issue reactions: %w", err)
 	}
@@ -177,23 +182,24 @@ func (f *forge) getIssueReactions(ctx context.Context, repo repoRef, number int,
 // fetchConditionalList issues a conditional GET for the first page of a list
 // resource and walks any further pages unconditionally, decoding each page
 // into []E and concatenating. The first-page ETag is the returned validator:
-// for the single-page lists this package observes (a PR's reviews, review
-// comments, and description reactions) it is the whole-list validator, so a
-// 304 confirms the list unchanged. The known limitation is a list that spans
-// pages: an item appended to a later page while the first page is unchanged
-// answers 304 and is observed only once the first page changes. That degrades
-// best-effort (readiness-inert) evidence completeness on a >100-item review,
-// never a safety property; the page bound fails closed on an unbounded history
+// for a single-page list it is the whole-list validator, so a 304 confirms the
+// list unchanged. The known limitation is a list that spans pages: an item
+// appended to (or removed from) a later page while the first page is unchanged
+// answers 304 and is observed only once the first page changes. It reports
+// multiPage so a caller whose correctness needs the whole list (label intake)
+// can drop the validator and force an unconditional re-read; the review-evidence
+// callers accept the degradation as best-effort (readiness-inert) completeness,
+// never a safety property. The page bound fails closed on an unbounded history
 // rather than answering from a partial read.
 func fetchConditionalList[E any](
 	ctx context.Context, f *forge, repo repoRef, basePath, etag string,
-) (items []E, resultETag string, notModified bool, err error) {
+) (items []E, resultETag string, notModified, multiPage bool, err error) {
 	const maxPages = 10
 	path := basePath
 	first := true
 	for pageNum := 0; ; pageNum++ {
 		if pageNum == maxPages {
-			return nil, "", false, fmt.Errorf("list history exceeds the %d-page read bound", maxPages)
+			return nil, "", false, false, fmt.Errorf("list history exceeds the %d-page read bound", maxPages)
 		}
 		reqETag := ""
 		if first {
@@ -201,15 +207,15 @@ func fetchConditionalList[E any](
 		}
 		resp, err := f.do(ctx, http.MethodGet, repo, path, reqETag, nil)
 		if err != nil {
-			return nil, "", false, err
+			return nil, "", false, false, err
 		}
 		if first && resp.StatusCode == http.StatusNotModified {
 			drainAndClose(resp.Body)
-			return nil, etag, true, nil
+			return nil, etag, true, false, nil
 		}
 		if resp.StatusCode != http.StatusOK {
 			drainAndClose(resp.Body)
-			return nil, "", false, &APIError{Status: resp.StatusCode, RequestPath: path}
+			return nil, "", false, false, &APIError{Status: resp.StatusCode, RequestPath: path}
 		}
 		var batch []E
 		decodeErr := decodeResponse(resp.Body, &batch)
@@ -217,12 +223,12 @@ func fetchConditionalList[E any](
 		pageETag := resp.Header.Get("ETag")
 		drainAndClose(resp.Body)
 		if decodeErr != nil {
-			return nil, "", false, fmt.Errorf("decode response: %w", decodeErr)
+			return nil, "", false, false, fmt.Errorf("decode response: %w", decodeErr)
 		}
 		// JSON null decodes into a nil slice without error; an empty page is a
 		// legitimate list, null is not.
 		if batch == nil {
-			return nil, "", false, errors.New("response is not a list")
+			return nil, "", false, false, errors.New("response is not a list")
 		}
 		if first {
 			resultETag = pageETag
@@ -230,12 +236,12 @@ func fetchConditionalList[E any](
 		}
 		items = append(items, batch...)
 		if next == "" {
-			return items, resultETag, false, nil
+			return items, resultETag, false, pageNum > 0, nil
 		}
 		// The Link target is absolute; only this API root is followable, so a
 		// redirect off-host cannot carry the authenticated request away.
 		if !strings.HasPrefix(next, f.baseURL+"/") {
-			return nil, "", false, errors.New("next page is outside the API root")
+			return nil, "", false, false, errors.New("next page is outside the API root")
 		}
 		path = strings.TrimPrefix(next, f.baseURL)
 	}

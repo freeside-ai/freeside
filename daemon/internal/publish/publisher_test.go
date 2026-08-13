@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,6 +72,7 @@ type fakeIssueEvent struct {
 type fakeIssue struct {
 	State  string
 	Events []fakeIssueEvent
+	Labels []string
 	// IsPR marks the number as secretly a pull request: the issues API
 	// serves both, flagged by a pull_request object.
 	IsPR bool
@@ -90,9 +93,15 @@ type fakeGitHub struct {
 
 	issues    map[int]fakeIssue
 	issueRevs map[int]int // issue number -> revision, drives issue ETags
+	// labelIssueRevs drives the labeled open-issue list ETag per label; bump
+	// to invalidate one label's cached list.
+	labelIssueRevs map[string]int
 	// issueEventsPageSize, when non-zero, paginates the issue event list
 	// with rel="next" Link headers (default: one page).
 	issueEventsPageSize int
+	// labelIssuesPageSize, when non-zero, paginates the labeled open-issue list
+	// with rel="next" Link headers (default: one page).
+	labelIssuesPageSize int
 
 	// Native review activity per PR number, each list ETag'd by its revision
 	// counter (bump to invalidate). reviews are submitted reviews, comments
@@ -120,15 +129,21 @@ type fakeGitHub struct {
 	// onRequest, when set, runs under the lock before each request is
 	// handled (for ordering assertions and mid-flow interleavings).
 	onRequest func(method, path string)
+
+	// repositoryID is the canonical numeric identity served for GET /repos/{repo}
+	// (label intake's §5.18 rebinding check). Defaults to testRepoID; a test sets
+	// it to a different value to simulate a rebound name.
+	repositoryID int64
 }
 
 func newFakeGitHub(t *testing.T) *fakeGitHub {
 	return &fakeGitHub{
 		t: t, refs: map[string]string{}, prRevs: map[int]int{}, nextPR: 101,
-		issues: map[int]fakeIssue{}, issueRevs: map[int]int{},
+		issues: map[int]fakeIssue{}, issueRevs: map[int]int{}, labelIssueRevs: map[string]int{},
 		reviews: map[int][]fakeReview{}, reviewRevs: map[int]int{},
 		reviewComments: map[int][]fakeReviewComment{}, reviewCommentRevs: map[int]int{},
 		reactions: map[int][]fakeReaction{}, reactionRevs: map[int]int{},
+		repositoryID: testRepoID,
 	}
 }
 
@@ -182,6 +197,9 @@ func (g *fakeGitHub) writeRequests() []string {
 }
 
 const testRepoPath = "/repos/freeside-ai/evidence-repo"
+
+// testRepoID is the canonical numeric identity the fake reports for testRepo.
+const testRepoID int64 = 84958515
 
 func (g *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 	g.mu.Lock()
@@ -373,6 +391,69 @@ func (g *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
+
+	case r.Method == http.MethodGet && path == testRepoPath:
+		// GET /repos/{owner}/{repo}: label intake's §5.18 rebinding check reads
+		// only the canonical numeric id.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"id":%d}`, g.repositoryID)
+
+	case r.Method == http.MethodGet && path == testRepoPath+"/issues":
+		label := r.URL.Query().Get("labels")
+		etag := fmt.Sprintf(`"label-issues-%s-%d"`, label, g.labelIssueRevs[label])
+		page := 1
+		if p := r.URL.Query().Get("page"); p != "" {
+			var err error
+			if page, err = strconv.Atoi(p); err != nil || page < 1 {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+		}
+		// Only the first page carries the conditional validator: fetchConditionalList
+		// sends If-None-Match on page 1 alone and stores that page's ETag.
+		if page == 1 && r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		numbers := make([]int, 0, len(g.issues))
+		for n := range g.issues {
+			numbers = append(numbers, n)
+		}
+		sort.Ints(numbers)
+		rows := []map[string]any{} // GitHub returns [], never null, for an empty page
+		for _, n := range numbers {
+			issue := g.issues[n]
+			// The forge's ?labels=&state=open filter: only open issues carrying
+			// the requested label appear in the list.
+			if issue.State != "open" || !slices.Contains(issue.Labels, label) {
+				continue
+			}
+			labels := make([]map[string]any, 0, len(issue.Labels))
+			for _, l := range issue.Labels {
+				labels = append(labels, map[string]any{"name": l})
+			}
+			row := map[string]any{"number": n, "state": issue.State, "labels": labels}
+			if issue.IsPR {
+				row["pull_request"] = map[string]any{"url": "http://" + r.Host + testRepoPath + "/pulls/" + strconv.Itoa(n)}
+			}
+			rows = append(rows, row)
+		}
+		pageSize := g.labelIssuesPageSize
+		if pageSize <= 0 {
+			pageSize = len(rows) + 1
+		}
+		start := (page - 1) * pageSize
+		end := min(start+pageSize, len(rows))
+		if end < len(rows) {
+			w.Header().Set("Link", fmt.Sprintf(`<http://%s%s/issues?labels=%s&state=open&per_page=100&page=%d>; rel="next"`,
+				r.Host, testRepoPath, label, page+1))
+		}
+		w.Header().Set("ETag", etag)
+		out := []map[string]any{}
+		if start < len(rows) {
+			out = rows[start:end]
+		}
+		_ = json.NewEncoder(w).Encode(out)
 
 	case r.Method == http.MethodGet && strings.HasPrefix(path, testRepoPath+"/issues/") && strings.HasSuffix(path, "/events"):
 		trimmed := strings.TrimSuffix(strings.TrimPrefix(path, testRepoPath+"/issues/"), "/events")
