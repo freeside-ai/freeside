@@ -246,6 +246,15 @@ discipline).
   closed. Promoted per #52 when the invariant recurred beyond the
   store. (Detail: `daemon/internal/store/entities.go`,
   `daemon/internal/domain/artifact.go`.)
+- **Timer-dependent tests**: a test whose behavior depends on real
+  stdlib time in the code under test (`time.Timer`/`time.Ticker`/
+  `time.After`/`context` deadline) runs inside a `testing/synctest`
+  bubble, not a real-clock sleep or poll. A ratchet on new or
+  substantially revised tests, not a retrofit sweep, and only where the
+  code uses the real `time` package; injected-clock behavior (the
+  scheduler's occurrence-due logic, the janitor and engine `now`) is
+  already deterministic. (Detail: `daemon/README.md`; worked example:
+  `daemon/internal/scheduler/run_synctest_test.go`.)
 
 ## Monorepo scope discipline
 
