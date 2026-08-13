@@ -625,12 +625,23 @@ func TestOversizedRenderedPromptCommitsFailureWithoutWedgingDispatch(t *testing.
 	}
 }
 
+// errStubClaimConflict is the fake's write-once conflict, mirroring the store's
+// ErrImmutableConflict so the shared RecordClaims contract binds the fake and the
+// production adapter to the same differing-set rejection.
+var errStubClaimConflict = errors.New("stub artifacts: claim set already recorded with different content")
+
 // stubArtifacts records what the driver persisted, so a test can assert that
-// a result names only artifacts that were actually stored.
+// a result names only artifacts that were actually stored. RecordClaims mirrors
+// the production adapter's write-once semantics: an empty set records nothing, a
+// byte-identical replay converges, and any differing set is a conflict. It
+// snapshots the recorded set by its serialization exactly as the store adapter
+// does, so a caller mutating the slice or a nested Text/Provenance pointer after
+// the fact cannot rewrite the recorded value or its replay identity.
 type stubArtifacts struct {
 	mu     sync.Mutex
 	blobs  map[domain.Digest][]byte
 	claims map[domain.InvocationID][]domain.AgentClaim
+	bodies map[domain.InvocationID][]byte
 	err    error
 }
 
@@ -638,6 +649,7 @@ func newStubArtifacts() *stubArtifacts {
 	return &stubArtifacts{
 		blobs:  map[domain.Digest][]byte{},
 		claims: map[domain.InvocationID][]domain.AgentClaim{},
+		bodies: map[domain.InvocationID][]byte{},
 	}
 }
 
@@ -659,7 +671,30 @@ func (a *stubArtifacts) RecordClaims(
 	if a.err != nil {
 		return a.err
 	}
-	a.claims[id] = claims
+	if len(claims) == 0 {
+		return nil
+	}
+	body, err := json.Marshal(claims)
+	if err != nil {
+		return err
+	}
+	if prior, ok := a.bodies[id]; ok {
+		// Compare against the body frozen at the first write, not a re-marshal of
+		// the stored slice, so a post-record mutation cannot make a differing set
+		// look identical.
+		if !bytes.Equal(prior, body) {
+			return fmt.Errorf("record claims for %s: %w", id, errStubClaimConflict)
+		}
+		return nil
+	}
+	// Snapshot by decoding a detached copy, mirroring the store adapter's
+	// serialize-at-write: later caller mutation cannot rewrite the record.
+	var snapshot []domain.AgentClaim
+	if err := json.Unmarshal(body, &snapshot); err != nil {
+		return err
+	}
+	a.bodies[id] = body
+	a.claims[id] = snapshot
 	return nil
 }
 

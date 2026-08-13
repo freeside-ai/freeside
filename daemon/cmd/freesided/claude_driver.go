@@ -900,10 +900,11 @@ func (r exportRecorder) lookupExecutionOutcome(
 	return record, err == nil, err
 }
 
-// artifactStore persists released evidence bytes and the immutable artifact
-// rows the imported claims name. Persisting the complete labeled AgentClaim on
-// an invocation-bound review surface is tracked in #381; an artifact row alone
-// is not that claim record.
+// artifactStore persists released evidence bytes, the immutable artifact rows
+// the imported claims name, and the invocation-bound claim record that carries
+// the complete labeled AgentClaim set (label and inline text included) for the
+// durable review surface. An artifact row alone drops the label and text, so it
+// is not that record.
 type artifactStore struct {
 	blobs *signet.BlobStore
 	store *store.Store
@@ -936,6 +937,15 @@ func (a artifactStore) RecordClaims(
 			if err := tx.PutArtifact(ctx, artifact); err != nil {
 				return fmt.Errorf("persist agent claim %q for %s: %w", claim.Label, id, err)
 			}
+		}
+		// The claim record and its artifact rows share this transaction, so the
+		// invocation-bound record either lands complete or not at all: no artifact
+		// row survives without the labeled claim set that names it, and RecordClaims
+		// never reports success for a partial record. PutAgentClaims is write-once,
+		// so a re-run replaying the identical set converges and a differing set is
+		// an ErrImmutableConflict.
+		if err := tx.PutAgentClaims(ctx, id, claims); err != nil {
+			return fmt.Errorf("persist agent claims for %s: %w", id, err)
 		}
 		return nil
 	})

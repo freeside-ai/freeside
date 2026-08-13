@@ -136,7 +136,13 @@ type AdmissionAuthority interface {
 type Artifacts interface {
 	// PutBlob stores one evidence blob under its content address.
 	PutBlob(ctx context.Context, digest domain.Digest, body []byte) error
-	// RecordClaims persists the §5.15 agent claims for one invocation,
-	// binding each stored blob to its label and provenance.
+	// RecordClaims durably persists the complete §5.15 agent claim set for one
+	// invocation on its invocation-bound record: each claim's label, artifact
+	// identity, digest, provenance (sensitivity class included), and optional
+	// inline text survive intact, not the artifact rows alone. It is write-once
+	// per invocation: recording the byte-identical set again converges without
+	// duplication, while any differing set (a changed label, digest, membership,
+	// inline text, or order) is a conflict, never a silent overwrite. An empty
+	// set records nothing.
 	RecordClaims(ctx context.Context, id domain.InvocationID, claims []domain.AgentClaim) error
 }
