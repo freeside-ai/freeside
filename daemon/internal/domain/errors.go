@@ -154,6 +154,7 @@ var (
 	ErrProposalAdmissionKeyInconsistent   = errors.New("proposal admission key fields do not match its source")
 	ErrElaborationSourceInconsistent      = errors.New("elaboration source fields do not match its kind")
 	ErrIntakeOccurrenceInconsistent       = errors.New("intake occurrence fields are internally inconsistent")
+	ErrProjectInvalid                     = errors.New("project record is invalid")
 
 	// Trust-boundary failures.
 	ErrPlaintextCredential               = errors.New("credential material must be a sha256 digest, never plaintext")
