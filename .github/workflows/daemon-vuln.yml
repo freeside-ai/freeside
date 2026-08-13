@@ -1,0 +1,363 @@
+name: daemon vuln scan
+
+# Scheduled + main-push govulncheck for the daemon module, a ci-vuln analog
+# of daemon-race-incident.yml's ci-race observer. Deliberately NOT PR-blocking:
+# a newly published advisory against an unchanged dependency would otherwise
+# redden every unrelated open PR. Findings are filed as deduped issues instead,
+# exactly one open issue per vulnerability ID.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "daemon/**"
+      - ".github/workflows/daemon-vuln.yml"
+  schedule:
+    # Daily, off the hour so it doesn't contend with top-of-hour cron load.
+    - cron: "17 7 * * *"
+
+# The scan job below reads repository code and writes issues in one job. Its
+# only triggers are push-to-main and schedule, which both run the workflow
+# definition and the analyzed code from the default branch; an untrusted ref
+# cannot supply either. There is no pull_request trigger. workflow_dispatch is
+# deliberately omitted: a dispatch runs the *selected* ref's workflow, so a ref
+# that edited this file, dropping the job guard while keeping issues:write,
+# would run with that authority, and an in-file guard cannot constrain the very
+# ref that supplies it. Manual re-runs are unnecessary anyway (push and the
+# daily schedule cover them). The job-level `if` below stays as defense in depth
+# for any trigger added later.
+permissions:
+  contents: read
+
+# Serialize instances so a scheduled run and a push run cannot both create an
+# issue for the same vulnerability ID; the reconcile step is the backstop.
+concurrency:
+  group: daemon-vuln
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: daemon
+
+jobs:
+  scan:
+    name: govulncheck (main + scheduled)
+    # Defense in depth: keep the privileged (issues:write) job on main even if a
+    # future trigger is added. push and schedule already run only the default
+    # branch, so this is always true today; it is not the security boundary
+    # (that is the trigger list above), just a backstop against a careless edit.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    env:
+      # Pinned like every other tool in this repo: a floating scanner is
+      # nondeterministic verification, and upgrades are deliberate PRs.
+      GOVULNCHECK_VERSION: v1.6.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Resolved from the workspace root, not the working-directory default.
+          go-version-file: daemon/go.mod
+          cache: false
+      - name: Install govulncheck
+        # Install a host-native binary so GOOS/GOARCH below select the analysis
+        # target: `go run govulncheck` with GOOS set would cross-build the tool
+        # itself and fail to exec on the runner.
+        run: go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+      - name: Run govulncheck (linux and darwin)
+        id: scan
+        run: |
+          set -euo pipefail
+          gobin="$(go env GOBIN)"
+          gobin="${gobin:-$(go env GOPATH)/bin}"
+          combined="$RUNNER_TEMP/govulncheck.json"
+          : >"$combined"
+          # Scan every platform the daemon supports (matching daemon-ci.yml's
+          # linux+macos matrix): source mode analyzes only the current
+          # GOOS/GOARCH build graph, so a Linux-only run would miss a
+          # vulnerability reachable solely through Darwin-tagged code (e.g.
+          # internal/atomicfile's per-OS rename syscall) and report a false
+          # clean scan for the Mac deployment.
+          for target in "linux amd64" "darwin arm64"; do
+            # shellcheck disable=SC2086
+            set -- $target
+            goos="$1"; goarch="$2"
+            out="$RUNNER_TEMP/govulncheck-$goos-$goarch.json"
+            errf="$RUNNER_TEMP/govulncheck-$goos-$goarch.err"
+            set +e
+            GOOS="$goos" GOARCH="$goarch" "$gobin/govulncheck" \
+              -format json ./... >"$out" 2>"$errf"
+            gv_exit=$?
+            set -e
+            # Per target: in -format json mode govulncheck exits 0 on a completed
+            # scan whether or not vulnerabilities are found (exit 3 is text-mode
+            # only), so any non-zero exit is an operational failure (package
+            # load, DB fetch, build error), including one that already emitted
+            # the leading config frame. Fail loudly rather than treating a
+            # partial scan of this platform as clean; the config-frame check is
+            # defense in depth against a zero-exit path that produced no output.
+            if ((gv_exit != 0)) || ! jq -e -s 'any(.[]; has("config"))' "$out" >/dev/null 2>&1; then
+              echo "::error::govulncheck did not complete cleanly for $goos/$goarch (exit $gv_exit)"
+              cat "$errf" >&2
+              exit 1
+            fi
+            cat "$out" >>"$combined"
+          done
+          # The combined stream is the union of both platforms' frames; the
+          # filing step dedups called vulnerabilities by OSV id across it, so a
+          # vulnerability on both platforms yields one issue.
+          echo "result=$combined" >>"$GITHUB_OUTPUT"
+      - name: File deduped issues for called vulnerabilities
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          VULN_LABEL: ci-vuln
+          RESULT: ${{ steps.scan.outputs.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # Reportable = OSV IDs govulncheck traced to a called function in
+          # source mode; advisories only imported, never called, carry no
+          # function-level trace frame and are excluded. Fail closed at this
+          # returned-object boundary: assert every finding has the expected
+          # shape (string osv, array trace) so a changed govulncheck schema
+          # errors here rather than silently yielding zero IDs, and capture the
+          # result in a status-checked substitution because a bare
+          # `mapfile < <(jq ...)` would not propagate a jq failure and would
+          # then report a clean scan.
+          # shellcheck disable=SC2016
+          if ! vuln_ids_raw="$(jq -r -s '
+            [ .[] | select(has("finding")) | .finding ] as $f
+            | if any($f[]; (.osv | type) != "string" or (.osv == "")
+                           or (.trace | type) != "array")
+              then error("unexpected or empty govulncheck finding shape")
+              else [ $f[]
+                     | select(any(.trace[]; (.function // null) != null))
+                     | .osv ] | unique | .[]
+              end
+          ' "$RESULT")"; then
+            echo "::error::could not extract vulnerability IDs from govulncheck output"
+            exit 1
+          fi
+          vuln_ids=()
+          while IFS= read -r vid; do
+            [[ -n "$vid" ]] && vuln_ids+=("$vid")
+          done <<<"$vuln_ids_raw"
+
+          if ((${#vuln_ids[@]} == 0)); then
+            echo "govulncheck found no called vulnerabilities"
+            exit 0
+          fi
+
+          # Idempotent: create the label on first use, refresh metadata after.
+          gh label create "$VULN_LABEL" \
+            --repo "$GH_REPO" \
+            --color b60205 \
+            --description "Open govulncheck finding: called vulnerability on main" \
+            --force
+
+          list_open_vuln_issues() {
+            gh issue list \
+              --repo "$GH_REPO" \
+              --state open \
+              --label "$VULN_LABEL" \
+              --limit 1000 \
+              --json number,body
+          }
+
+          # Fail closed at this returned-object boundary: every entry must have a
+          # numeric .number and a .body that is a string or null. A non-string
+          # body would otherwise pass silently and its marker be missed by the
+          # match(...)? below, so a covered vulnerability would look uncovered
+          # and get a fresh duplicate issue every scan.
+          validate_issue_list() {
+            jq -e '
+              if type == "array"
+                 and all(.[]; (.number | type) == "number"
+                              and ((.body | type) | . == "string" or . == "null"))
+              then .
+              else error("malformed issue list")
+              end
+            '
+          }
+
+          # An open issue "covers" a vulnerability ID when its body carries the
+          # stable marker below; a human-filed ci-vuln issue without one simply
+          # does not count as coverage.
+          covered_ids() {
+            jq -r '
+              [ .[]
+                | (.body // "")
+                | (match("<!-- govulncheck-vuln:([A-Za-z0-9-]+) -->")? | .captures[0].string)
+              ] | map(select(. != null)) | unique | .[]
+            '
+          }
+
+          # The mutable advisory facts (summary, affected/fixed versions, called
+          # symbols) live between markers so a long-open issue can be refreshed
+          # in place when they change, without a create/close churn. Emitted by
+          # build_details; recovered from an existing body by extract_details.
+          build_details() {
+            local id="$1"
+            # $def/$finds/... are jq variables (via --arg / bindings), not shell.
+            # shellcheck disable=SC2016
+            jq -r -s --arg id "$id" '
+              ([ .[] | select(.osv.id == $id) | .osv ] | first) as $def
+              | ([ .[] | select(has("finding")) | .finding | select(.osv == $id) ]) as $finds
+              | ($finds | map(.fixed_version) | map(select(. != null)) | unique) as $fixes
+              | ($finds | map(.trace[0] // empty) | map(select(.module != null))
+                        | map({module, version}) | unique) as $mods
+              | ($finds | map(.trace[]? | select(.function != null)
+                        | ((.package // "") + "." + .function)) | unique) as $syms
+              | "- Summary: "
+                  + (($def.summary // $def.details // "(no summary in advisory)")
+                     | gsub("\n"; " ") | .[0:300])
+                + (if ($mods|length) > 0
+                     then "\n- Modules: "
+                       + ($mods | map(.module + " " + (.version // "?")) | join(", "))
+                     else "" end)
+                + (if ($fixes|length) > 0
+                     then "\n- Fixed in: " + ($fixes | join(", "))
+                     else "\n- Fixed in: (no fixed version published)" end)
+                + (if ($syms|length) > 0
+                     then "\n- Called symbols: " + ($syms | join(", "))
+                     else "" end)
+            ' "$RESULT"
+          }
+
+          extract_details() {
+            sed -n '/<!-- govulncheck-details:start -->/,/<!-- govulncheck-details:end -->/p' \
+              | sed '1d;$d'
+          }
+
+          # A body is safe to splice only with exactly one start marker and one
+          # end marker, start before end. Any other shape (missing, duplicated,
+          # or reordered, e.g. an operator who deleted the end marker) cannot be
+          # spliced without dropping operator text, so it fails closed here and
+          # the caller leaves the body untouched.
+          marker_pair_ok() {
+            awk '
+              /<!-- govulncheck-details:start -->/ { s++; if (!sat) sat=NR }
+              /<!-- govulncheck-details:end -->/   { e++; if (!eat) eat=NR }
+              END { exit !(s==1 && e==1 && sat && eat && sat < eat) }
+            '
+          }
+
+          # Replace only the marker-bounded details region of an existing body
+          # (on stdin) with the block in $1, leaving everything else, including
+          # operator-authored notes or checklists, untouched. Assumes
+          # marker_pair_ok already passed for the body.
+          splice_details() {
+            local newfile="$1"
+            awk -v nf="$newfile" '
+              BEGIN { newblock=""; while ((getline line < nf) > 0) newblock = newblock line "\n" }
+              /<!-- govulncheck-details:start -->/ { print; printf "%s", newblock; inblock=1; next }
+              /<!-- govulncheck-details:end -->/ { inblock=0; print; next }
+              !inblock { print }
+            '
+          }
+
+          build_body() {
+            local id="$1" bodyfile="$2"
+            # The backticked `main` markdown span is a literal, not a subshell.
+            # shellcheck disable=SC2016
+            {
+              printf '<!-- govulncheck-vuln:%s -->\n' "$id"
+              printf 'govulncheck reported a **called** vulnerability on `main`.\n\n'
+              printf -- '- Vulnerability: [%s](https://pkg.go.dev/vuln/%s)\n' "$id" "$id"
+              printf '<!-- govulncheck-details:start -->\n'
+              build_details "$id"
+              printf '<!-- govulncheck-details:end -->\n'
+              printf '\n- Detected by: %s at %s\n' "$RUN_URL" "${HEAD_SHA:0:12}"
+              printf '\nThis scan runs on main pushes and on a schedule; it is '
+              printf 'not PR-blocking. Remediate by updating the affected module, '
+              printf 'then close this issue.\n'
+            } >"$bodyfile"
+          }
+
+          # Lowest-numbered open issue carrying $id's marker (the canonical one
+          # the reconcile step keeps), or its body. contains() is an exact
+          # substring test, so no OSV-id character needs regex escaping.
+          canonical_field() {
+            # shellcheck disable=SC2016
+            jq -r --arg id "$1" --arg f "$2" '
+              [ .[] | select((.body // "") | contains("<!-- govulncheck-vuln:" + $id + " -->")) ]
+              | sort_by(.number) | first | (.[$f] // empty)
+            ' <<<"$issues_json"
+          }
+
+          issues_json="$(list_open_vuln_issues | validate_issue_list)"
+          declare -A covered_map=()
+          while IFS= read -r cid; do
+            [[ -n "$cid" ]] && covered_map["$cid"]=1
+          done < <(covered_ids <<<"$issues_json")
+
+          for id in "${vuln_ids[@]}"; do
+            body_file="$RUNNER_TEMP/vuln-$id.md"
+            if [[ -z "${covered_map[$id]:-}" ]]; then
+              build_body "$id" "$body_file"
+              gh issue create \
+                --repo "$GH_REPO" \
+                --title "govulncheck: $id called on main" \
+                --label "$VULN_LABEL" \
+                --body-file "$body_file"
+              continue
+            fi
+            # Already open: refresh the canonical issue only when the advisory
+            # details changed, so a persisting finding never shows stale fix or
+            # affected-version guidance (and an unchanged one causes no edit).
+            canonical_num="$(canonical_field "$id" number)"
+            canonical_body="$(canonical_field "$id" body)"
+            existing_details="$(printf '%s' "$canonical_body" | extract_details)"
+            if [[ "$(build_details "$id")" != "$existing_details" ]]; then
+              if printf '%s\n' "$canonical_body" | marker_pair_ok; then
+                # Splice the new details into the existing body, preserving any
+                # operator-authored text outside the marker region.
+                details_file="$RUNNER_TEMP/details-$id.md"
+                build_details "$id" >"$details_file"
+                printf '%s\n' "$canonical_body" | splice_details "$details_file" >"$body_file"
+                gh issue edit "$canonical_num" --repo "$GH_REPO" --body-file "$body_file"
+                printf 'refreshed #%s (%s): advisory details changed\n' "$canonical_num" "$id"
+              else
+                # Markers missing, duplicated, or reordered: editing would risk
+                # dropping operator text, so preserve the body and flag it for a
+                # manual refresh rather than making a destructive edit.
+                printf '::warning::#%s (%s): advisory details changed but its govulncheck-details markers are missing or malformed; left unedited to preserve operator content\n' \
+                  "$canonical_num" "$id"
+              fi
+            else
+              printf '#%s already current for %s\n' "$canonical_num" "$id"
+            fi
+          done
+
+          # Backstop for the "exactly one open issue per vulnerability ID"
+          # invariant: if any ID has more than one open issue (a concurrent race
+          # the concurrency group did not catch, or a pre-existing human dup),
+          # keep the lowest-numbered and close the rest as duplicates.
+          reconciled_json="$(list_open_vuln_issues | validate_issue_list)"
+          jq -r '
+            [ .[]
+              | { number,
+                  id: ((.body // "")
+                       | (match("<!-- govulncheck-vuln:([A-Za-z0-9-]+) -->")? | .captures[0].string)) }
+              | select(.id != null)
+            ]
+            | group_by(.id)
+            | map(select(length > 1))
+            | .[]
+            | (sort_by(.number)) as $g
+            | ($g[0].number | tostring) + " " + ($g[1:] | map(.number | tostring) | join(" "))
+          ' <<<"$reconciled_json" | while read -r keep rest; do
+            for dup in $rest; do
+              dup_body="$RUNNER_TEMP/dup-$dup.md"
+              printf 'Duplicate of #%s (same vulnerability ID); consolidating there.\n' \
+                "$keep" >"$dup_body"
+              gh issue comment "$dup" --repo "$GH_REPO" --body-file "$dup_body"
+              gh issue close "$dup" --repo "$GH_REPO" --reason "not planned"
+            done
+          done
