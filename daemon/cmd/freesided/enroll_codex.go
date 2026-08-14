@@ -51,6 +51,9 @@ func runEnrollCodexCommandWithRefresher(
 	inputFile := flags.String("input-file", "", "operator-generated auth.json under input-root (required)")
 	authStoreRoot := flags.String("auth-store-root", "", "separate private root containing live Codex auth stores (required)")
 	authStorePath := flags.String("auth-store", "", "live auth.json path under auth-store-root (required; immutable after initial enrollment)")
+	approvedRecipes := digestSetFlag{}
+	flags.Var(&approvedRecipes, "approved-recipe",
+		"approved verification-recipe digest (repeatable)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -74,7 +77,7 @@ func runEnrollCodexCommandWithRefresher(
 		return errors.New("-auth-store is required")
 	}
 
-	st, err := store.Open(ctx, *dbPath, store.Options{})
+	st, err := store.Open(ctx, *dbPath, store.Options{ApprovedRecipes: approvedRecipes})
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
@@ -92,6 +95,11 @@ func runEnrollCodexCommandWithRefresher(
 		AuthRefresher: refresher,
 	})
 	if err != nil {
+		if errors.Is(err, domain.ErrUnapprovedRecipe) {
+			return fmt.Errorf(
+				"the store contains recipe-gated evidence; pass each approved "+
+					"verification-recipe digest with -approved-recipe: %w", err)
+		}
 		return err
 	}
 	if err := json.NewEncoder(stdout).Encode(result); err != nil {

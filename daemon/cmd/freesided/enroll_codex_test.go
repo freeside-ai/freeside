@@ -5,11 +5,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -80,6 +84,132 @@ func TestEnrollCodexCommandRunsVerifiedEnrollment(t *testing.T) {
 	}
 	if err := json.Unmarshal(body, &auth); err != nil || auth.Tokens.RefreshToken != "rotated-refresh" {
 		t.Fatalf("stored auth was not rotated: %v", err)
+	}
+}
+
+// seedRecipeGatedEvidence writes one AttentionItem carrying a verifier-produced
+// evidence artifact into a fresh store at dbPath, and returns the approved
+// recipe digest the artifact was produced under. Every production store holds
+// such recipe-gated evidence, so enroll-codex must open the store with this
+// digest or the ListAttentionItems re-gate fails closed on the row (#759). The
+// seed open carries the approved set because PutAttentionItem runs the same
+// gate on write.
+func seedRecipeGatedEvidence(t *testing.T, dbPath string) domain.Digest {
+	t.Helper()
+	recipe := domain.Digest("sha256:" + strings.Repeat("a", 64))
+	approved := map[domain.Digest]bool{recipe: true}
+	art, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: "art-evidence", Type: domain.ArtifactKindVerificationReport, Digest: "sha256:evidence",
+		Provenance: domain.Provenance{
+			ProducerClass:            domain.ProducerVerifier,
+			ProducerInvocationID:     "inv-verify",
+			HeadBinding:              domain.HeadIndependent,
+			VerificationRecipeDigest: &recipe,
+			SensitivityClass:         domain.SensitivityNormal,
+		},
+	}, approved)
+	if err != nil {
+		t.Fatalf("NewArtifact: %v", err)
+	}
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-evidence", ProjectID: "project-1",
+		Subject:           domain.Subject{Type: domain.SubjectSystem, ID: "sys-1"},
+		Type:              domain.AttentionExecutionFailure,
+		Priority:          domain.PriorityNormal,
+		Reason:            "recipe-gated evidence present",
+		InterruptionClass: domain.InterruptionExceptional,
+		EvidenceSnapshot:  []domain.Artifact{art},
+		ItemVersion:       1,
+		Status:            domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatalf("NewAttentionItem: %v", err)
+	}
+	ctx := context.Background()
+	st, err := store.Open(ctx, dbPath, store.Options{ApprovedRecipes: approved})
+	if err != nil {
+		t.Fatalf("open seed store: %v", err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatalf("seed attention item: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close seed store: %v", err)
+	}
+	return recipe
+}
+
+// runEnrollCodexAgainst runs the enroll-codex command against an existing store
+// at dbPath, using the same operator-login fixtures as the happy-path test and
+// appending extraArgs (e.g. -approved-recipe <digest>).
+func runEnrollCodexAgainst(
+	t *testing.T, dbPath string, extraArgs ...string,
+) (*commandCodexAuthRefresher, string, string, error) {
+	t.Helper()
+	root := t.TempDir()
+	inputRoot := filepath.Join(root, "input")
+	storeRoot := filepath.Join(root, "store")
+	for _, path := range []string{inputRoot, storeRoot} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inputPath := filepath.Join(inputRoot, "auth.json")
+	storePath := filepath.Join(storeRoot, "auth.json")
+	if err := os.WriteFile(inputPath, commandCodexAuth("operator-refresh"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := append([]string{
+		"-db", dbPath,
+		"-project", "project-1",
+		"-auth-identity", "codex-primary",
+		"-input-root", inputRoot,
+		"-input-file", inputPath,
+		"-auth-store-root", storeRoot,
+		"-auth-store", storePath,
+	}, extraArgs...)
+	refresher := &commandCodexAuthRefresher{}
+	var stdout, stderr bytes.Buffer
+	err := runEnrollCodexCommandWithRefresher(context.Background(), args, &stdout, &stderr, refresher)
+	return refresher, stdout.String(), stderr.String(), err
+}
+
+func TestEnrollCodexCommandFailsClosedWithoutApprovedRecipe(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	seedRecipeGatedEvidence(t, dbPath)
+
+	_, _, stderr, err := runEnrollCodexAgainst(t, dbPath)
+	if err == nil {
+		t.Fatalf("enroll-codex without -approved-recipe succeeded; stderr = %s", stderr)
+	}
+	if !errors.Is(err, domain.ErrUnapprovedRecipe) {
+		t.Fatalf("error is not ErrUnapprovedRecipe: %v", err)
+	}
+	if !strings.Contains(err.Error(), "-approved-recipe") {
+		t.Fatalf("error does not name -approved-recipe: %v", err)
+	}
+}
+
+func TestEnrollCodexCommandEnrollsWithApprovedRecipe(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	recipe := seedRecipeGatedEvidence(t, dbPath)
+
+	refresher, stdout, stderr, err := runEnrollCodexAgainst(t, dbPath, "-approved-recipe", string(recipe))
+	if err != nil {
+		t.Fatalf("enroll-codex with -approved-recipe: %v; stderr = %s", err, stderr)
+	}
+	if refresher.calls != 1 || refresher.input != "operator-refresh" {
+		t.Fatalf("refresh calls = %d, input = %q", refresher.calls, refresher.input)
+	}
+	var result ward.CodexAuthEnrollmentResult
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("decode result %q: %v", stdout, err)
+	}
+	if result.AuthIdentityID != "codex-primary" || result.AuthStorePath == "" ||
+		result.LeaseFence != 1 || result.AuthStoreDigest == "" || result.AttentionItemID == "" {
+		t.Fatalf("result = %+v", result)
 	}
 }
 
