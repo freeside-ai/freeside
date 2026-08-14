@@ -657,15 +657,24 @@ func (o RunObservation) LastObservedAt() (time.Time, bool) {
 type RunOutcome string
 
 const (
-	RunOutcomePending   RunOutcome = "pending"
-	RunOutcomePublished RunOutcome = "published"
-	RunOutcomeBlocked   RunOutcome = "blocked"
-	RunOutcomeFailed    RunOutcome = "failed"
-	RunOutcomeLost      RunOutcome = "lost"
+	// RunOutcomeUnobserved marks a run with no observation history at all:
+	// a run created before migration 0024, which deliberately backfills no
+	// milestones, and with no nonterminal invocation observation either. It
+	// is non-final with pending-shaped detail, distinct from pending so a
+	// legacy terminal run is not rendered as still in flight; a legacy run
+	// still executing across the upgrade has a nonterminal invocation
+	// observation and reports pending instead.
+	RunOutcomeUnobserved RunOutcome = "unobserved"
+	RunOutcomePending    RunOutcome = "pending"
+	RunOutcomePublished  RunOutcome = "published"
+	RunOutcomeBlocked    RunOutcome = "blocked"
+	RunOutcomeFailed     RunOutcome = "failed"
+	RunOutcomeLost       RunOutcome = "lost"
 )
 
 // AllRunOutcomes is the single registration point for run outcomes.
 var AllRunOutcomes = []RunOutcome{
+	RunOutcomeUnobserved,
 	RunOutcomePending,
 	RunOutcomePublished,
 	RunOutcomeBlocked,
@@ -675,8 +684,8 @@ var AllRunOutcomes = []RunOutcome{
 
 func (o RunOutcome) valid() bool {
 	switch o {
-	case RunOutcomePending, RunOutcomePublished, RunOutcomeBlocked,
-		RunOutcomeFailed, RunOutcomeLost:
+	case RunOutcomeUnobserved, RunOutcomePending, RunOutcomePublished,
+		RunOutcomeBlocked, RunOutcomeFailed, RunOutcomeLost:
 		return true
 	default:
 		return false
@@ -719,7 +728,7 @@ func (c RunConclusion) Validate() error {
 		return nil
 	}
 	switch c.Outcome {
-	case RunOutcomePending:
+	case RunOutcomeUnobserved, RunOutcomePending:
 		return check(false, false, false)
 	case RunOutcomePublished:
 		return check(false, false, true)
@@ -734,6 +743,20 @@ func (c RunConclusion) Validate() error {
 // ConcludeRun classifies a run from its milestone timeline. A definitive
 // publication block outranks ready because it is the actionable result.
 func ConcludeRun(observation RunObservation) RunConclusion {
+	// An empty history is a pre-0024 legacy run: 0024 backfills no
+	// milestones, so classify it as unobserved rather than pending. The
+	// observation history is milestones and invocation observations
+	// together: a run still in flight across the upgrade gains liveness
+	// observations, not milestones (observeInvocation records observations,
+	// never milestones), so a nonterminal invocation observation is already
+	// in-flight evidence and classifies as pending. Only a run with neither
+	// a milestone nor a nonterminal invocation observation is unobserved.
+	if len(observation.Milestones) == 0 {
+		if hasNonterminalInvocation(observation.Invocations) {
+			return RunConclusion{Outcome: RunOutcomePending}
+		}
+		return RunConclusion{Outcome: RunOutcomeUnobserved}
+	}
 	var (
 		terminal           *ObservedInvocationStatus
 		terminalInvocation InvocationID
@@ -770,6 +793,24 @@ func ConcludeRun(observation RunObservation) RunConclusion {
 		return RunConclusion{Outcome: outcome}
 	}
 	return RunConclusion{Outcome: outcome, Terminal: terminal, Final: true}
+}
+
+// hasNonterminalInvocation reports whether any invocation observation is
+// still in flight (pending or running). Such evidence means the run has
+// been observed and is active even when no milestone has been recorded, as
+// for a pre-0024 run still executing across the upgrade. Dispatch switch
+// without default so the exhaustive linter forces a new member to be
+// classified; the trailing return covers the invalid zero value.
+func hasNonterminalInvocation(observations []InvocationObservation) bool {
+	for _, obs := range observations {
+		switch obs.Status {
+		case ObservedStatusPending, ObservedStatusRunning:
+			return true
+		case ObservedStatusCompleted, ObservedStatusFailed,
+			ObservedStatusCanceled, ObservedStatusGone:
+		}
+	}
+	return false
 }
 
 func concludeTerminalOutcome(terminal ObservedInvocationStatus) (RunOutcome, bool) {
