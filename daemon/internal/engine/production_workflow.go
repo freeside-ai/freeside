@@ -570,7 +570,11 @@ func authorizeProductionSubmission(
 	if err := grant.validate(); err != nil {
 		return fmt.Errorf("authenticate implementation reservation: %w", err)
 	}
-	if err := authenticateElaborationRoot(ctx, &tx.ReadTx, *grant); err != nil {
+	verified, err := verifyElaborationTerminal(ctx, &tx.ReadTx, *grant)
+	if err != nil {
+		return fmt.Errorf("authenticate implementation reservation: %w", err)
+	}
+	if err := authorizeElaborationImplementation(verified, spec.SpecArtifactID); err != nil {
 		return fmt.Errorf("authenticate implementation reservation: %w", err)
 	}
 	if claim.Kind != KindElaborationImplementationClaim || !claim.Dispatched() ||
@@ -600,9 +604,16 @@ func hasElaborationReservationEvidence(
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return false, err
 	}
+	// This fallback is a conservative existence probe used only to refuse an
+	// ungranted production submission when the deterministic reservation claim
+	// is missing. It never grants execution or transition authority, so parsing
+	// any surviving marker here does not substitute for transition-chain
+	// verification; a match can only turn the answer from "unreserved" into
+	// "damaged reservation, fail closed."
 	for _, list := range []func(context.Context, string) ([]store.QueueEntry, error){
 		tx.ListPendingOutbox,
 		tx.ListDispatchedOutbox,
+		tx.ListQuarantinedOutbox,
 	} {
 		entries, err := list(ctx, KindElaborationInvocationRequested)
 		if err != nil {
@@ -610,7 +621,7 @@ func hasElaborationReservationEvidence(
 		}
 		for _, entry := range entries {
 			request, err := decodeElaborationRequest(entry)
-			if err == nil && request.Iteration == 1 && request.ImplementationRunID == implementationRunID {
+			if err == nil && request.ImplementationRunID == implementationRunID {
 				return true, nil
 			}
 		}

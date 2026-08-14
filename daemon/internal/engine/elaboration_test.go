@@ -1307,6 +1307,126 @@ func TestElaborationRequestChangesCarriesFeedbackAndAddressals(t *testing.T) {
 	}
 }
 
+func TestEnqueueSpecRevisionRequiresExactStoredDecision(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*domain.Command)
+	}{
+		{name: "command id", mutate: func(command *domain.Command) { command.CommandID = "foreign-command" }},
+		{name: "item", mutate: func(command *domain.Command) { command.ItemID = "foreign-item" }},
+		{name: "message", mutate: func(command *domain.Command) { command.Message = "different feedback" }},
+		{name: "digest", mutate: func(command *domain.Command) {
+			command.ArtifactDigests = []domain.Digest{domain.Digest("sha256:" + strings.Repeat("f", 64))}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			f := newElaborationFixture(t, true, 3)
+			driver := f.newDriver(t)
+			invocationID := elaborationInvocationID("elaboration-run", 1)
+			if err := elaboratefake.Script(driver, invocationID, 0, 0, elaborate.Output{
+				Specification: &elaborate.Specification{
+					Summary: "First draft.", Body: "# Specification\n\nBound the workflow.",
+					Addressals: []elaborate.Addressal{},
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			f.submit(t)
+			engine := f.newEngine(t, driver)
+			if _, err := engine.Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			item, snapshot := f.item(t, "spec-approval-implementation-run-1")
+			if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+				CommandID: "revise-exact-decision", DeviceID: "device-1",
+				ExpectedEntityVersion: snapshot.EntityVersion,
+				Payload: signet.DecisionPayload{
+					ItemID: item.ID, Action: domain.ActionRequestChanges,
+					ItemVersion: item.ItemVersion, ArtifactDigests: item.ArtifactDigests,
+					Message: "Use the exact stored feedback.",
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var request elaborationRequest
+			var commands []domain.Command
+			if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+				entry, err := tx.GetOutbox(t.Context(), string(invocationID))
+				if err != nil {
+					return err
+				}
+				request, err = decodeElaborationRequest(entry)
+				if err != nil {
+					return err
+				}
+				commands, err = tx.ListCommandsForItem(t.Context(), item.ID)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			run, err := f.run("elaboration-run")
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := commands[0]
+			test.mutate(&command)
+			err = engine.enqueueSpecRevision(
+				t.Context(), run, request, "spec-implementation-run-1", command,
+			)
+			if !errors.Is(err, domain.ErrParentKeyMismatch) {
+				t.Fatalf("mutated decision error = %v, want ErrParentKeyMismatch", err)
+			}
+			if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+				_, err := tx.GetOutbox(t.Context(), string(elaborationInvocationID("elaboration-run", 2)))
+				return err
+			}); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("mutated decision created revision outbox: %v", err)
+			}
+		})
+	}
+}
+
+func TestStartApprovedImplementationReverifiesTransitionChain(t *testing.T) {
+	f := newElaborationFixture(t, true, 2)
+	driver := f.newDriver(t)
+	invocationID := elaborationInvocationID("elaboration-run", 1)
+	if err := elaboratefake.Script(driver, invocationID, 0, 0, elaborate.Output{
+		Specification: &elaborate.Specification{
+			Summary: "Awaiting approval.", Body: "# Specification\n\nDo not bypass the gate.",
+			Addressals: []elaborate.Addressal{},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.submit(t)
+	engine := f.newEngine(t, driver)
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var request elaborationRequest
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		entry, err := tx.GetOutbox(t.Context(), string(invocationID))
+		if err != nil {
+			return err
+		}
+		request, err = decodeElaborationRequest(entry)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	retargeted := request
+	retargeted.Publication.Title = "Retargeted implementation"
+	if _, err := engine.startApprovedImplementation(
+		t.Context(), retargeted, "spec-implementation-run-1",
+	); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("retargeted implementation start error = %v, want ErrParentKeyMismatch", err)
+	}
+	if _, err := f.run("implementation-run"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("retargeted transition created implementation run: %v", err)
+	}
+}
+
 func TestElaborationEnvelopesKeepRolesAfterRevisionResearch(t *testing.T) {
 	f := newElaborationFixture(t, true, 4)
 	driver := f.newDriver(t)
@@ -1372,13 +1492,34 @@ func TestElaborationEnvelopesKeepRolesAfterRevisionResearch(t *testing.T) {
 		t.Fatal("post-revision research prompt was not captured")
 	}
 	assertElaborationPriorArtifacts(t, prompt, []expectedElaborationPriorArtifact{
-		{role: "prior_specification", digest: f.artifact(t, "spec-implementation-run-1").Digest},
-		{role: "human_feedback", digest: f.artifact(t, "spec-feedback-revise-then-research").Digest},
 		{
 			role: "research", digest: f.artifact(t, domain.ArtifactID("research-"+string(secondID)+"-1")).Digest,
 			body: "authoritative research", sourceURL: "https://docs.example/protocol",
 		},
+		{role: "prior_specification", digest: f.artifact(t, "spec-implementation-run-1").Digest},
+		{role: "human_feedback", digest: f.artifact(t, "spec-feedback-revise-then-research").Digest},
 	})
+}
+
+func TestElaborationInputOrderAcceptsPreChainVerifierRevisionResearch(t *testing.T) {
+	source := domain.ArtifactID("source")
+	research := domain.ArtifactID("research")
+	priorSpec := domain.ArtifactID("prior-spec")
+	feedback := domain.ArtifactID("feedback")
+	canonical := elaborationInputs(source, []domain.ArtifactID{research}, &priorSpec, []domain.ArtifactID{feedback})
+	legacy := []domain.ArtifactID{source, priorSpec, feedback, research}
+
+	if !acceptsElaborationInputOrder(legacy, canonical, legacy) {
+		t.Fatal("pre-chain-verifier revision research order was rejected")
+	}
+	if !acceptsElaborationInputOrder(canonical, canonical, legacy) {
+		t.Fatal("canonical revision research order was rejected")
+	}
+	if acceptsElaborationInputOrder(
+		[]domain.ArtifactID{source, feedback, priorSpec, research}, canonical, legacy,
+	) {
+		t.Fatal("unauthorized revision research order was accepted")
+	}
 }
 
 // TestElaborationSecondRequestChangesDispatches guards #685: a second
@@ -1988,6 +2129,53 @@ func TestDamagedElaborationReservationFailsClosed(t *testing.T) {
 	}
 }
 
+func TestLaterElaborationMarkerStillReservesImplementation(t *testing.T) {
+	f := newElaborationFixture(t, true, 3)
+	implementationRunID := domain.RunID("marker-only-implementation")
+	elaborationRunID, err := ElaborationRunIDForImplementation(implementationRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication := ProductionPublication{
+		Title: "Implement approved work item", Body: "Implements the operator-approved specification.",
+		CommitAuthor: ProductionCommitAuthor{AppSlug: "freeside-test", BotUserID: 12345},
+	}
+	request := elaborationRequest{
+		Version: elaborationRequestVersion, ElaborationRunID: elaborationRunID,
+		ImplementationRunID: implementationRunID, ProjectID: "project-1",
+		InvocationID: elaborationInvocationID(elaborationRunID, 2), Iteration: 2,
+		InputArtifactIDs: []domain.ArtifactID{f.source.ID}, PolicyArtifactID: f.policyArt.ID,
+		FeedbackArtifactIDs: []domain.ArtifactID{}, Publication: publication,
+	}
+	payload, err := encodeElaborationRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		_, _, err := tx.EnqueueOutbox(
+			t.Context(), string(request.InvocationID), KindElaborationInvocationRequested, payload,
+		)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	implementationPolicy, err := domain.NewResolvedPolicy(implementationRunID, f.policy.Keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = SubmitProductionRun(t.Context(), f.store, ProductionRunSpec{
+		RunID: implementationRunID, ProjectID: "project-1",
+		SpecArtifactID: f.source.ID, PolicyArtifactID: f.policyArt.ID,
+		ResolvedPolicy: implementationPolicy, Publication: publication,
+	})
+	if !errors.Is(err, ErrImplementationRunReserved) {
+		t.Fatalf("direct submission with surviving later marker = %v, want ErrImplementationRunReserved", err)
+	}
+	if _, err := f.run(implementationRunID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("later-marker reservation created implementation run: %v", err)
+	}
+}
+
 func TestElaborationReconstructionRejectsChangedRootAndTerminal(t *testing.T) {
 	f := newElaborationFixture(t, true, 3)
 	f.submit(t)
@@ -2036,14 +2224,10 @@ func TestElaborationReconstructionRejectsChangedRootAndTerminal(t *testing.T) {
 	}
 }
 
-// TestLoadElaborationBindingRejectsForeignInputProducer guards #685 (Codex
-// round 6): the dispatch reconstruction must re-bind every accumulated input
-// to this run's own prior elaboration invocations. A retargeted request that
-// appends another run's research artifact — well-typed and daemon-produced,
-// so it passes the type and feedback-provenance checks — is rejected because
-// its producer is not one of this run's invocations, before its bytes could
-// reach the elaborator or the approved specification.
-func TestLoadElaborationBindingRejectsForeignInputProducer(t *testing.T) {
+// TestLoadElaborationBindingRejectsOrphanedSameRunResearch guards #698: a
+// same-run producer is not sufficient authority. Only the exact ordered
+// research IDs named by the preceding terminal may enter the next request.
+func TestLoadElaborationBindingRejectsOrphanedSameRunResearch(t *testing.T) {
 	f := newElaborationFixture(t, true, 4)
 	f.submit(t)
 
@@ -2059,16 +2243,15 @@ func TestLoadElaborationBindingRejectsForeignInputProducer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	foreign, err := domain.NewArtifact(domain.ArtifactInput{
-		ID: "research-foreign-1", Type: domain.ArtifactKindResearch,
-		Digest: domain.Digest(contentaddr.Sum([]byte("foreign research"))),
-		Provenance: domain.Provenance{
-			ProducerClass:        domain.ProducerDaemon,
-			ProducerInvocationID: elaborationInvocationID("other-run", 1),
-			HeadBinding:          domain.HeadIndependent,
-			SensitivityClass:     domain.SensitivityNormal,
-		},
-	}, nil)
+	producer := elaborationInvocationID("elaboration-run", 1)
+	authorized := testElaborationArtifact(t, "research-authorized-1", domain.ArtifactKindResearch,
+		domain.Digest(contentaddr.Sum([]byte("authorized research"))), domain.ProducerDaemon, producer)
+	orphan := testElaborationArtifact(t, "research-orphan-2", domain.ArtifactKindResearch,
+		domain.Digest(contentaddr.Sum([]byte("orphaned partial batch"))), domain.ProducerDaemon, producer)
+	terminalBody, err := encodeElaborationTerminal(elaborationTerminal{
+		InvocationID: producer, Iteration: 1, Status: exec.StatusCompleted,
+		ResearchArtifactIDs: []domain.ArtifactID{authorized.ID},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2076,7 +2259,7 @@ func TestLoadElaborationBindingRejectsForeignInputProducer(t *testing.T) {
 	next := root
 	next.Iteration = 2
 	next.InvocationID = elaborationInvocationID("elaboration-run", 2)
-	next.InputArtifactIDs = append(slices.Clone(root.InputArtifactIDs), foreign.ID)
+	next.InputArtifactIDs = append(slices.Clone(root.InputArtifactIDs), authorized.ID, orphan.ID)
 	payload, err := encodeElaborationRequest(next)
 	if err != nil {
 		t.Fatal(err)
@@ -2086,7 +2269,16 @@ func TestLoadElaborationBindingRejectsForeignInputProducer(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
-		if err := tx.PutArtifact(t.Context(), foreign); err != nil {
+		if err := tx.PutArtifact(t.Context(), authorized); err != nil {
+			return err
+		}
+		if err := tx.PutArtifact(t.Context(), orphan); err != nil {
+			return err
+		}
+		if _, _, err := tx.RecordInbox(t.Context(), string(producer), kindElaborationTerminal, terminalBody); err != nil {
+			return err
+		}
+		if err := tx.MarkOutboxDispatched(t.Context(), string(producer)); err != nil {
 			return err
 		}
 		if err := tx.PutAgentInvocation(t.Context(), invocation); err != nil {
@@ -2106,11 +2298,174 @@ func TestLoadElaborationBindingRejectsForeignInputProducer(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	engine := f.newEngine(t, f.newDriver(t))
-	_, _, err = engine.loadElaborationBinding(t.Context(), entry)
-	if !errors.Is(err, domain.ErrParentKeyMismatch) || !strings.Contains(err.Error(), "is not a prior invocation") {
-		t.Fatalf("foreign input producer error = %v, want producer-binding ErrParentKeyMismatch", err)
+	driver := &countingElaborationDriver{StageDriver: f.newDriver(t)}
+	engine := f.newEngine(t, driver)
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		return AuthenticateElaborationInvocationTransition(
+			t.Context(), tx, entry, "elaboration-run", elaborationStageID("elaboration-run"),
+		)
+	}); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("driver start authorization error = %v, want ErrParentKeyMismatch", err)
 	}
+	_, _, err = engine.loadElaborationBinding(t.Context(), entry)
+	if !errors.Is(err, domain.ErrParentKeyMismatch) || !strings.Contains(err.Error(), "not authorized") {
+		t.Fatalf("orphaned same-run research error = %v, want transition-authorization ErrParentKeyMismatch", err)
+	}
+	if result, err := engine.Reconcile(t.Context()); err != nil || result.InvocationsStarted != 0 {
+		t.Fatalf("pending unauthorized dispatch = %+v, %v", result, err)
+	}
+	run, err := f.run("elaboration-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := domain.Attempt{
+		ID: attemptIDFor(next.InvocationID), StageID: elaborationStageID(run.ID),
+		Number: 1, InvocationID: next.InvocationID,
+	}
+	run.Stages[0].Attempts = []domain.Attempt{attempt}
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		if err := tx.PutRun(t.Context(), run); err != nil {
+			return err
+		}
+		return tx.MarkOutboxDispatched(t.Context(), string(next.InvocationID))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if accepted, err := engine.acceptElaborationAttempt(t.Context(), run, attempt); err != nil || accepted {
+		t.Fatalf("dispatched unauthorized acceptance = %t, %v", accepted, err)
+	}
+	if driver.inspect.Load() != 0 || driver.collect.Load() != 0 || driver.stream.Load() != 0 {
+		t.Fatalf("unauthorized acceptance touched driver: inspect=%d collect=%d stream=%d",
+			driver.inspect.Load(), driver.collect.Load(), driver.stream.Load())
+	}
+	forgedSpec := testElaborationArtifact(t, "spec-implementation-run-2", domain.ArtifactKindSpecification,
+		domain.Digest(contentaddr.Sum([]byte("forged specification"))), domain.ProducerAgent, next.InvocationID)
+	forgedTerminal, err := encodeElaborationTerminal(elaborationTerminal{
+		InvocationID: next.InvocationID, Iteration: next.Iteration, Status: exec.StatusCompleted,
+		ResearchArtifactIDs: []domain.ArtifactID{}, SpecArtifactID: &forgedSpec.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		if err := tx.PutArtifact(t.Context(), forgedSpec); err != nil {
+			return err
+		}
+		_, _, err := tx.RecordInbox(
+			t.Context(), string(next.InvocationID), kindElaborationTerminal, forgedTerminal,
+		)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if started, blocked, err := engine.reconcileElaborationGates(t.Context()); err != nil || started != 0 || blocked != 0 {
+		t.Fatalf("unauthorized gate reconciliation = started %d blocked %d, %v", started, blocked, err)
+	}
+	if _, err := f.run("implementation-run"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unauthorized gate created implementation run: %v", err)
+	}
+}
+
+// FuzzElaborationTransitionChain seeds paired request/invocation/terminal
+// triples. Ordinary go test executes every seed deterministically; fuzzing
+// varies the mutation selector while the verifier's policy bound keeps each
+// reconstruction finite.
+func FuzzElaborationTransitionChain(fuzz *testing.F) {
+	for mutation := range uint8(5) {
+		fuzz.Add(mutation)
+	}
+	fuzz.Fuzz(func(t *testing.T, rawMutation uint8) {
+		mutation := rawMutation % 5
+		f := newElaborationFixture(t, true, 4)
+		f.submit(t)
+		producer := elaborationInvocationID("elaboration-run", 1)
+		a := testElaborationArtifact(t, "research-a", domain.ArtifactKindResearch,
+			domain.Digest(contentaddr.Sum([]byte("research a"))), domain.ProducerDaemon, producer)
+		bProducer := producer
+		if mutation == 4 {
+			bProducer = elaborationInvocationID("foreign-run", 1)
+		}
+		b := testElaborationArtifact(t, "research-b", domain.ArtifactKindResearch,
+			domain.Digest(contentaddr.Sum([]byte("research b"))), domain.ProducerDaemon, bProducer)
+		orphan := testElaborationArtifact(t, "research-orphan", domain.ArtifactKindResearch,
+			domain.Digest(contentaddr.Sum([]byte("research orphan"))), domain.ProducerDaemon, producer)
+
+		var root elaborationRequest
+		if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+			entry, err := tx.GetOutbox(t.Context(), string(producer))
+			if err != nil {
+				return err
+			}
+			root, err = decodeElaborationRequest(entry)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		terminalIDs := []domain.ArtifactID{a.ID, b.ID}
+		requestIDs := []domain.ArtifactID{root.InputArtifactIDs[0], a.ID, b.ID}
+		switch mutation {
+		case 0: // valid control
+		case 1: // orphaned same-run artifact
+			requestIDs = append(requestIDs, orphan.ID)
+		case 2: // terminal output omitted
+			requestIDs = requestIDs[:2]
+		case 3: // terminal outputs reordered
+			requestIDs[1], requestIDs[2] = requestIDs[2], requestIDs[1]
+		case 4: // terminal-named artifact has a foreign producer
+		}
+		terminalBody, err := encodeElaborationTerminal(elaborationTerminal{
+			InvocationID: producer, Iteration: 1, Status: exec.StatusCompleted,
+			ResearchArtifactIDs: terminalIDs,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		next := root
+		next.Iteration = 2
+		next.InvocationID = elaborationInvocationID("elaboration-run", 2)
+		next.InputArtifactIDs = requestIDs
+		payload, err := encodeElaborationRequest(next)
+		if err != nil {
+			t.Fatal(err)
+		}
+		invocation, err := domain.NewAgentInvocation(next.InvocationID, requestIDs, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+			for _, artifact := range []domain.Artifact{a, b, orphan} {
+				if err := tx.PutArtifact(t.Context(), artifact); err != nil {
+					return err
+				}
+			}
+			if _, _, err := tx.RecordInbox(t.Context(), string(producer), kindElaborationTerminal, terminalBody); err != nil {
+				return err
+			}
+			if err := tx.PutAgentInvocation(t.Context(), invocation); err != nil {
+				return err
+			}
+			_, _, err := tx.EnqueueOutbox(t.Context(), string(next.InvocationID), KindElaborationInvocationRequested, payload)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		var entry store.QueueEntry
+		if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+			var err error
+			entry, err = tx.GetOutbox(t.Context(), string(next.InvocationID))
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		engine := f.newEngine(t, f.newDriver(t))
+		_, _, err = engine.loadElaborationBinding(t.Context(), entry)
+		if mutation == 0 && err != nil {
+			t.Fatalf("valid transition rejected: %v", err)
+		}
+		if mutation != 0 && !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Fatalf("mutation %d error = %v, want ErrParentKeyMismatch", mutation, err)
+		}
+	})
 }
 
 // TestEncodeElaborationRequestRejectsOversizedPayload guards #685 (Codex
