@@ -127,6 +127,7 @@ struct RunOutcomeBadge: View {
 
     private var color: Color {
         switch outcome {
+        case .unobserved: .secondary
         case .pending: .blue
         case .published: .green
         case .blocked: .orange
@@ -163,6 +164,7 @@ enum RunDisplay {
 
     static func label(_ value: Components.Schemas.RunOutcome) -> String {
         switch value {
+        case .unobserved: "Not observed"
         case .pending: "In progress"
         case .published: "Ready"
         case .blocked: "Blocked"
