@@ -143,6 +143,104 @@ func (k FindingKind) blocksCommit() bool {
 	return false
 }
 
+// FindingProfile selects how a pipeline dispatches on import findings. It
+// follows the daemon enum convention: every named member is nonempty and the
+// zero value "" is invalid. The *default* (publish-strict) is not a "" member
+// but the absence of a profile — a nil *FindingProfile on Policy — so a record
+// written before the field existed decodes to nil and re-encodes with the key
+// omitted (Policy.FindingProfile is optional and omitempty), keeping those
+// records and the production publication task payload byte-identical.
+type FindingProfile string
+
+const (
+	// FindingProfilePublishStrict fails the invocation on any finding at all:
+	// repo-channel content is published, so every finding is publish-blocking.
+	// It is also the behavior of a nil (absent) profile, so it need not be set
+	// explicitly; naming it lets a caller state the strict choice.
+	FindingProfilePublishStrict FindingProfile = "publish_strict"
+	// FindingProfileSpecification tolerates the workspace-debris finding classes
+	// because the elaboration stage publishes a typed JSON specification, never
+	// workspace content, so an agent's incidental build/test output must not
+	// definitively fail the invocation. Integrity, secret, and control-plane
+	// findings stay fatal (see fatalForSpecification).
+	FindingProfileSpecification FindingProfile = "specification"
+)
+
+// AllFindingProfiles is the single registration point for finding profiles.
+var AllFindingProfiles = []FindingProfile{
+	FindingProfilePublishStrict,
+	FindingProfileSpecification,
+}
+
+func (p FindingProfile) valid() bool {
+	switch p {
+	case FindingProfilePublishStrict, FindingProfileSpecification:
+		return true
+	default:
+		return false
+	}
+}
+
+// Fatal reports whether this finding must terminally fail the invocation under
+// the given profile. It is the exported dispatch a pipeline uses to partition
+// a result's findings into definitively-fatal and tolerated. A nil profile is
+// the default publish-strict behavior.
+func (f Finding) Fatal(profile *FindingProfile) bool {
+	return f.Kind.fatalForProfile(profile)
+}
+
+// fatalForProfile dispatches per-profile. A nil (absent) profile is
+// publish-strict. The switch omits default so a new profile must decide its
+// stance; the trailing return fails closed, treating an unknown profile as
+// fully publish-strict.
+func (k FindingKind) fatalForProfile(profile *FindingProfile) bool {
+	if profile == nil {
+		return true
+	}
+	switch *profile {
+	case FindingProfilePublishStrict:
+		// Every finding blocks publication of repo-channel content.
+		return true
+	case FindingProfileSpecification:
+		return k.fatalForSpecification()
+	}
+	return true
+}
+
+// fatalForSpecification reports whether a finding of this kind stays fatal
+// under the elaboration (specification) profile. The switch omits default so a
+// new FindingKind must decide its class; the trailing return covers the
+// invalid zero value, failing closed.
+//
+// The fatality table (design call recorded in issue #768):
+//   - Inherently fatal: the four kinds that already withhold the commit itself
+//     (blocksCommit) — the tree cannot represent the candidate at all.
+//   - Stay fatal for elaboration: a tolerated secret would be durably copied
+//     into the daemon CAS by persistRepositoryBlobs, and none of the
+//     control-plane path classes (§5.5/§5.8) or git metadata is plausible
+//     investigation debris — an elaborator editing CI, policy, reviewer
+//     instructions, or git metadata is off-contract even unpublished.
+//   - Tolerated debris: gitignored build/test output is out-of-allowlist and
+//     routinely over the size and scan caps. Tolerating secret_scan_skipped
+//     means large debris goes unscanned; accepted because nothing publishes
+//     and a secret match on scanned content stays fatal.
+func (k FindingKind) fatalForSpecification() bool {
+	switch k {
+	case FindingNonRegularChange, FindingInvalidPathEntry, FindingBlobOmitted,
+		FindingCommitPlanSecret:
+		return true
+	case FindingSecret, FindingAutomationControlPath,
+		FindingReviewerInstructionPath, FindingVerificationRecipePath,
+		FindingPromptsPolicyPath, FindingEgressTrustPath,
+		FindingMaterialityRulesPath, FindingGitMetadataPath:
+		return true
+	case FindingAllowlistViolation, FindingSizeViolation,
+		FindingPathCollision, FindingSecretScanSkipped:
+		return false
+	}
+	return true
+}
+
 // Finding is one publish-blocking policy finding. Path names the
 // affected canonical path; PathHex carries raw name bytes for
 // invalid_path entries (the two are mutually exclusive, as in the

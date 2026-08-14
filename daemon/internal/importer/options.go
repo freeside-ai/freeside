@@ -92,6 +92,16 @@ type Policy struct {
 	// profile values.
 	CommitPlan     domain.CommitPlanMode
 	MessageRuleset domain.MessageRuleset
+	// FindingProfile, when non-nil, selects how the pipeline dispatches on the
+	// findings this import produces. nil is the default publish-strict profile
+	// (every finding fatal) and serializes as an omitted key, so records written
+	// before this field existed — and the production publication task payload
+	// that embeds ImportOptions — stay byte-identical. It is a pointer, not a
+	// "" enum member, to keep the FindingProfile enum convention-compliant
+	// (nonempty members, invalid zero value) while still encoding the default as
+	// absence. The importer itself does not consume it: it always reports
+	// findings honestly, and tolerance is the pipeline's disposition.
+	FindingProfile *FindingProfile `json:",omitempty"`
 	// Allowlist, when non-nil, is the work unit's declared path scope as
 	// glob patterns ("**" spans path segments): every derived change,
 	// deletions included, must match one, and a change outside it is an
@@ -244,6 +254,9 @@ func (o Options) validate() error {
 	case domain.MessageRulesetGitHub1:
 	default:
 		return fmt.Errorf("message ruleset %q: %w", o.Policy.MessageRuleset, ErrInvalidOptions)
+	}
+	if fp := o.Policy.FindingProfile; fp != nil && !fp.valid() {
+		return fmt.Errorf("finding profile %q: %w", *fp, ErrInvalidOptions)
 	}
 	// A caller-supplied glob that does not compile would otherwise
 	// silently match nothing (fail open), so a safety-gate widening
