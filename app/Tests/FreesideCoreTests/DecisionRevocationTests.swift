@@ -144,4 +144,29 @@ private struct MockOutage: Error {}
         #expect(coordinator.store.freshness == .fresh)
         #expect(model.actionsEnabled)
     }
+
+    @Test func actionsDisableWhileSyncFailingAndRecover() async throws {
+        // Acceptance 1: a reachable daemon whose sync read fails with a
+        // non-401 status takes the validated card read-only, exactly as
+        // unreachable does, and recovers with the next good round.
+        let server = MockServer()
+        let coordinator = SyncCoordinator(
+            client: APIClientFactory.mock(server: server), cache: InMemoryCacheStore())
+        await coordinator.bootstrap()
+        let model = DecisionModel(store: coordinator.store, itemID: "item-spec_approval")
+        await model.validate()
+        #expect(model.actionsEnabled)
+
+        await server.setBeforeRespond { op in
+            if op == "getSyncRevision" { throw MockServer.ForcedStatus(500) }
+        }
+        await coordinator.heartbeat()
+        #expect(coordinator.store.freshness == .syncFailing)
+        #expect(!model.actionsEnabled)
+
+        await server.setBeforeRespond(nil)
+        await coordinator.heartbeat()
+        #expect(coordinator.store.freshness == .fresh)
+        #expect(model.actionsEnabled)
+    }
 }

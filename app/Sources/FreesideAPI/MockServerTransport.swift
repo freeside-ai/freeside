@@ -17,7 +17,16 @@ public struct MockServerTransport: ClientTransport {
         baseURL: URL,
         operationID: String
     ) async throws -> (HTTPResponse, HTTPBody?) {
-        try await server.runBeforeRespond(operationID)
+        do {
+            try await server.runBeforeRespond(operationID)
+        } catch let forced as MockServer.ForcedStatus {
+            // An answered-but-failed read: the daemon is reachable and
+            // returns a status, which the generated client surfaces as
+            // `.undocumented`, unlike a plain throw (a transport outage).
+            return try Self.json(
+                status: .init(code: forced.code),
+                body: Components.Schemas._Error(message: "forced status \(forced.code)"))
+        }
         let response = try await route(request, body: body, operationID: operationID)
         try await server.runAfterRespond(operationID)
         return response

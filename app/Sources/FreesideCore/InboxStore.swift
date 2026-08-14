@@ -42,8 +42,17 @@ public final class InboxStore {
         case unvalidated
         /// The last sync round-trip succeeded; the cache is current.
         case fresh
-        /// The daemon is unreachable: cached read-only view.
+        /// The daemon is unreachable: the request never got an answer
+        /// (a transport-level failure). Cached read-only view.
         case unreachable
+        /// The daemon answered a sync read but the answer failed: a
+        /// non-401 error status (e.g. a 500), or a 200 whose body this
+        /// client cannot decode (schema skew or a malformed body). It is
+        /// reachable but its reads are failing, so the cache cannot be
+        /// confirmed current. Distinct from `.unreachable` (the request
+        /// got no answer at all) so the operator sees a live-but-erroring
+        /// daemon for what it is; still a cached read-only view.
+        case syncFailing
         /// The daemon answered 401: this device's credential no longer
         /// authenticates (revoked, or not yet paired).
         case unauthenticated

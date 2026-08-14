@@ -32,7 +32,14 @@ var targets: [Target] = [
     targets.append(
         .target(
             name: "FreesideCore",
-            dependencies: ["FreesideAPI"]
+            dependencies: [
+                "FreesideAPI",
+                // Directly, not only transitively via FreesideAPI: the sync
+                // coordinator inspects OpenAPIRuntime's ClientError to tell a
+                // decode failure (the daemon answered) from a transport
+                // outage (it did not).
+                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+            ]
         )
     )
     targets.append(

@@ -317,6 +317,97 @@ private final class FailingCacheStore: CacheStore, @unchecked Sendable {
         #expect(coordinator.store.freshness == .fresh)
     }
 
+    @Test func reachableDaemonWithFailingReadsSurfacesSyncFailing() async throws {
+        // A non-401 answered failure on any of the four sync reads is a
+        // reachable-but-failing daemon: a state distinct from unreachable
+        // (which is a transport outage, still asserted separately above),
+        // keeping the cache readable and recovering to fresh on the next
+        // good round.
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let rows = coordinator.store.rows
+
+        func force(_ operationID: String) async {
+            await server.setBeforeRespond { op in
+                if op == operationID { throw MockServer.ForcedStatus(500) }
+            }
+        }
+        func recover() async {
+            await server.setBeforeRespond(nil)
+            await coordinator.heartbeat()
+            #expect(coordinator.store.freshness == .fresh)
+        }
+
+        await force("getSyncBootstrap")
+        await coordinator.bootstrap()
+        #expect(coordinator.store.freshness == .syncFailing)
+        #expect(coordinator.store.rows == rows)
+        await recover()
+
+        await force("getSyncRevision")
+        await coordinator.heartbeat()
+        #expect(coordinator.store.freshness == .syncFailing)
+        await recover()
+
+        await force("listRuns")
+        await coordinator.refreshRuns()
+        #expect(coordinator.store.freshness == .syncFailing)
+        await recover()
+
+        await force("getRunTimeline")
+        await coordinator.refreshTimeline(for: RunFixtures.activeRunID)
+        #expect(coordinator.store.freshness == .syncFailing)
+        #expect(coordinator.timelineLoadStates[RunFixtures.activeRunID] == .unavailable)
+        await recover()
+    }
+
+    @Test func answered200WithUndecodableBodySurfacesSyncFailing() async throws {
+        // Schema skew: the daemon answers 200 but the body does not match
+        // this client's schema, so `ok.body.json` throws. That is an
+        // answered-but-failing read, not a transport outage, and must
+        // reach syncFailing on every path rather than falling into the
+        // transport catch. ForcedStatus(200) pairs a 200 with an
+        // error-shaped body the sync/run schemas cannot decode.
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let rows = coordinator.store.rows
+
+        func force(_ operationID: String) async {
+            await server.setBeforeRespond { op in
+                if op == operationID { throw MockServer.ForcedStatus(200) }
+            }
+        }
+        func recover() async {
+            await server.setBeforeRespond(nil)
+            await coordinator.heartbeat()
+            #expect(coordinator.store.freshness == .fresh)
+        }
+
+        await force("getSyncBootstrap")
+        await coordinator.bootstrap()
+        #expect(coordinator.store.freshness == .syncFailing)
+        #expect(coordinator.store.rows == rows)
+        await recover()
+
+        await force("getSyncRevision")
+        await coordinator.heartbeat()
+        #expect(coordinator.store.freshness == .syncFailing)
+        await recover()
+
+        await force("listRuns")
+        await coordinator.refreshRuns()
+        #expect(coordinator.store.freshness == .syncFailing)
+        await recover()
+
+        await force("getRunTimeline")
+        await coordinator.refreshTimeline(for: RunFixtures.activeRunID)
+        #expect(coordinator.store.freshness == .syncFailing)
+        #expect(coordinator.timelineLoadStates[RunFixtures.activeRunID] == .unavailable)
+        await recover()
+    }
+
     @Test func rejectedCredentialSurfacesAsUnauthenticated() async throws {
         // An enforcing server with no credential: every sync read is
         // 401, which is a distinct honest state (revoked or unpaired),
