@@ -54,6 +54,20 @@ func TestProductionElaborationDeliveryValidatorRejectsAggregateOverflow(t *testi
 	}
 }
 
+func TestStoreAdmissionAuthorityRejectsMissingElaborationMarker(t *testing.T) {
+	st, _, _, _ := deliveryValidatorFixture(t, true)
+	authority := storeAdmissionAuthority{store: st}
+	elaboration, err := authority.authenticateElaborationInvocation(
+		t.Context(), "inv-elaborate-run-missing-2", domain.ExecutionAdmission{
+			RunID: "run-missing", StageID: "elaborate-run-missing",
+		},
+	)
+	if !elaboration || !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing elaboration marker = elaboration %t, error %v; want fail-closed ErrNotFound",
+			elaboration, err)
+	}
+}
+
 func deliveryStartSpec(
 	t *testing.T, run domain.Run, promptDigest domain.Digest, prior []domain.Digest,
 ) exec.StartSpec {

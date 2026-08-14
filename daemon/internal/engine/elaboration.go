@@ -864,10 +864,10 @@ func ElaborationInvocationBackupPayloadDigests(entry store.QueueEntry) ([]domain
 	return nil, nil
 }
 
-// AuthenticateElaborationInvocationMarker binds the canonical durable dispatch
-// marker to the admitted run and stage at every execution authority boundary.
-// Commit-author attribution belongs only to the later implementation lane;
-// elaboration still requires durable ownership, but never a publication author.
+// AuthenticateElaborationInvocationMarker checks a standalone marker's
+// canonical run/stage identity. It does not grant execution authority because
+// it has no store snapshot in which to reconstruct the preceding transitions;
+// execution callers use AuthenticateElaborationInvocationTransition.
 func AuthenticateElaborationInvocationMarker(
 	entry store.QueueEntry, runID domain.RunID, stageID domain.StageID,
 ) error {
@@ -880,6 +880,29 @@ func AuthenticateElaborationInvocationMarker(
 			domain.ErrParentKeyMismatch)
 	}
 	return nil
+}
+
+// AuthenticateElaborationInvocationTransition binds a dispatch marker to its
+// admitted run and stage and reconstructs the complete authorizing history in
+// the caller's store snapshot. Commit-author attribution belongs only to the
+// later implementation lane; elaboration still requires durable ownership,
+// but never a publication author.
+func AuthenticateElaborationInvocationTransition(
+	ctx context.Context,
+	tx *store.ReadTx,
+	entry store.QueueEntry,
+	runID domain.RunID,
+	stageID domain.StageID,
+) error {
+	if err := AuthenticateElaborationInvocationMarker(entry, runID, stageID); err != nil {
+		return err
+	}
+	request, err := decodeElaborationRequest(entry)
+	if err != nil {
+		return err
+	}
+	_, err = verifyElaborationChain(ctx, tx, request)
+	return err
 }
 
 // ElaborationImplementationClaimBackupPayloadDigests authenticates the
@@ -963,104 +986,454 @@ func findElaborationStage(run domain.Run) (domain.Stage, bool) {
 	return domain.Stage{}, false
 }
 
+type verifiedElaborationBinding struct {
+	request  elaborationRequest
+	binding  invocationBinding
+	policy   domain.ResolvedPolicy
+	settings elaborate.Policy
+}
+
+type verifiedElaborationTerminal struct {
+	binding       verifiedElaborationBinding
+	entry         store.QueueEntry
+	terminal      elaborationTerminal
+	specification *domain.Artifact
+	approval      *domain.AttentionItem
+	commands      []domain.Command
+}
+
+func sameArtifactID(left, right *domain.ArtifactID) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func sameElaborationRequest(left, right elaborationRequest) bool {
+	return left.Version == right.Version &&
+		left.ElaborationRunID == right.ElaborationRunID &&
+		left.ImplementationRunID == right.ImplementationRunID &&
+		left.ProjectID == right.ProjectID &&
+		left.InvocationID == right.InvocationID &&
+		left.Iteration == right.Iteration &&
+		slices.Equal(left.InputArtifactIDs, right.InputArtifactIDs) &&
+		sameArtifactID(left.PriorSpecArtifactID, right.PriorSpecArtifactID) &&
+		slices.Equal(left.FeedbackArtifactIDs, right.FeedbackArtifactIDs) &&
+		left.PolicyArtifactID == right.PolicyArtifactID &&
+		left.Publication == right.Publication &&
+		sameElaborationWorkUnit(left.WorkUnit, right.WorkUnit) &&
+		sameIssueSubject(left.IssueSubject, right.IssueSubject)
+}
+
+func sameElaborationRoot(left, right elaborationRequest) bool {
+	return left.Version == right.Version &&
+		left.ElaborationRunID == right.ElaborationRunID &&
+		left.ImplementationRunID == right.ImplementationRunID &&
+		left.ProjectID == right.ProjectID &&
+		left.PolicyArtifactID == right.PolicyArtifactID &&
+		left.Publication == right.Publication &&
+		sameElaborationWorkUnit(left.WorkUnit, right.WorkUnit) &&
+		sameIssueSubject(left.IssueSubject, right.IssueSubject)
+}
+
+func elaborationInputs(
+	source domain.ArtifactID,
+	research []domain.ArtifactID,
+	priorSpec *domain.ArtifactID,
+	feedback []domain.ArtifactID,
+) []domain.ArtifactID {
+	inputs := make([]domain.ArtifactID, 0, 1+len(research)+len(feedback)+boolCount(priorSpec != nil))
+	inputs = append(inputs, source)
+	inputs = append(inputs, research...)
+	if priorSpec != nil {
+		inputs = append(inputs, *priorSpec)
+	}
+	return append(inputs, feedback...)
+}
+
+// acceptsElaborationInputOrder recognizes the current role-canonical vector
+// and the sole pre-#698 durable variant. Older daemons appended research
+// fetched after a request_changes transition to the then-current vector,
+// after its prior specification and feedback. The same terminal still
+// authorizes those exact IDs, so accepting that historical representation
+// preserves recovery without allowing arbitrary reordering.
+func acceptsElaborationInputOrder(
+	actual, canonical, legacyPostRevisionResearch []domain.ArtifactID,
+) bool {
+	return slices.Equal(actual, canonical) ||
+		len(legacyPostRevisionResearch) > 0 && slices.Equal(actual, legacyPostRevisionResearch)
+}
+
+func requireElaborationOutputProvenance(
+	artifact domain.Artifact,
+	kind domain.ArtifactKind,
+	producer domain.ProducerClass,
+	invocationID domain.InvocationID,
+) error {
+	provenance := artifact.Provenance
+	if artifact.Type != kind || provenance.ProducerClass != producer ||
+		provenance.ProducerInvocationID != invocationID ||
+		provenance.HeadBinding != domain.HeadIndependent || provenance.SourceHeadSHA != "" ||
+		provenance.VerificationRecipeDigest != nil ||
+		provenance.SensitivityClass != domain.SensitivityNormal {
+		return fmt.Errorf("elaboration artifact %q has unauthorized type or provenance: %w",
+			artifact.ID, domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+func verifyElaborationSpecification(
+	ctx context.Context,
+	tx *store.ReadTx,
+	request elaborationRequest,
+	terminal elaborationTerminal,
+) (domain.Artifact, error) {
+	expectedID := domain.ArtifactID(fmt.Sprintf("spec-%s-%d", request.ImplementationRunID, request.Iteration))
+	if terminal.SpecArtifactID == nil || *terminal.SpecArtifactID != expectedID {
+		return domain.Artifact{}, fmt.Errorf("elaboration terminal %q specification identity mismatch: %w",
+			request.InvocationID, domain.ErrParentKeyMismatch)
+	}
+	artifact, err := tx.GetArtifact(ctx, expectedID)
+	if err != nil {
+		return domain.Artifact{}, err
+	}
+	if err := requireElaborationOutputProvenance(
+		artifact, domain.ArtifactKindSpecification, domain.ProducerAgent, request.InvocationID,
+	); err != nil {
+		return domain.Artifact{}, err
+	}
+	return artifact, nil
+}
+
+func verifyElaborationApproval(
+	ctx context.Context,
+	tx *store.ReadTx,
+	request elaborationRequest,
+	terminal elaborationTerminal,
+	specification domain.Artifact,
+) (domain.AttentionItem, []domain.Command, error) {
+	expectedID := domain.ItemID(fmt.Sprintf("spec-approval-%s-%d", request.ImplementationRunID, request.Iteration))
+	if terminal.ApprovalItemID == nil || *terminal.ApprovalItemID != expectedID {
+		return domain.AttentionItem{}, nil, fmt.Errorf(
+			"elaboration terminal %q approval identity mismatch: %w",
+			request.InvocationID, domain.ErrParentKeyMismatch)
+	}
+	item, err := tx.GetAttentionItem(ctx, expectedID)
+	if err != nil {
+		return domain.AttentionItem{}, nil, err
+	}
+	if item.ProjectID != request.ProjectID || item.Type != domain.AttentionSpecApproval ||
+		item.Subject.Type != domain.SubjectRun || item.Subject.ID != domain.SubjectID(request.ElaborationRunID) ||
+		item.Subject.RunID == nil || *item.Subject.RunID != request.ElaborationRunID ||
+		!slices.Equal(item.RequestedDecision,
+			[]domain.Action{domain.ActionApprove, domain.ActionRequestChanges, domain.ActionStop}) ||
+		len(item.EvidenceSnapshot) != 0 || len(item.AgentClaims) != 1 ||
+		!slices.Equal(item.ArtifactDigests, []domain.Digest{specification.Digest}) || item.PRHeadSHA != "" {
+		return domain.AttentionItem{}, nil, fmt.Errorf(
+			"elaboration approval item %q is not bound to its run and specification: %w",
+			item.ID, domain.ErrParentKeyMismatch)
+	}
+	claim := item.AgentClaims[0]
+	if claim.Label != "Specification" || claim.Artifact != specification.ID ||
+		claim.Digest != specification.Digest || claim.Provenance != specification.Provenance {
+		return domain.AttentionItem{}, nil, fmt.Errorf(
+			"elaboration approval item %q claim disagrees with specification %q: %w",
+			item.ID, specification.ID, domain.ErrParentKeyMismatch)
+	}
+	commands, err := tx.ListCommandsForItem(ctx, item.ID)
+	if err != nil {
+		return domain.AttentionItem{}, nil, err
+	}
+	commands, err = elaborationDecisionCommands(commands)
+	if err != nil {
+		return domain.AttentionItem{}, nil, err
+	}
+	return item, commands, nil
+}
+
+// verifyElaborationChain reconstructs the complete transition history that
+// authorized current. It derives each request's ordered input vector from the
+// preceding terminal or request_changes command instead of trusting a
+// self-consistent request/invocation pair recovered from durable storage.
+func verifyElaborationChain(
+	ctx context.Context,
+	tx *store.ReadTx,
+	current elaborationRequest,
+) (verifiedElaborationBinding, error) {
+	if err := authenticateElaborationRoot(ctx, tx, current); err != nil {
+		return verifiedElaborationBinding{}, err
+	}
+	rootEntry, err := tx.GetOutbox(ctx, string(elaborationInvocationID(current.ElaborationRunID, 1)))
+	if err != nil {
+		return verifiedElaborationBinding{}, err
+	}
+	root, err := decodeElaborationRequest(rootEntry)
+	if err != nil {
+		return verifiedElaborationBinding{}, err
+	}
+	run, err := tx.GetRun(ctx, current.ElaborationRunID)
+	if err != nil {
+		return verifiedElaborationBinding{}, err
+	}
+	if run.ProjectID != root.ProjectID {
+		return verifiedElaborationBinding{}, fmt.Errorf("elaboration run project disagrees: %w",
+			domain.ErrParentKeyMismatch)
+	}
+	policy, err := tx.GetResolvedPolicy(ctx, run.ID)
+	if err != nil {
+		return verifiedElaborationBinding{}, err
+	}
+	if run.PolicyDigest != policy.Digest {
+		return verifiedElaborationBinding{}, fmt.Errorf("elaboration run policy disagrees: %w",
+			domain.ErrParentKeyMismatch)
+	}
+	settings, err := elaborate.ParsePolicy(policy)
+	if err != nil {
+		return verifiedElaborationBinding{}, fmt.Errorf("%w: %w", errElaborationMarkerUnreadable, err)
+	}
+	if current.Iteration > settings.MaxIterations {
+		return verifiedElaborationBinding{}, fmt.Errorf(
+			"elaboration iteration %d exceeds the policy maximum %d: %w",
+			current.Iteration, settings.MaxIterations, domain.ErrParentKeyMismatch)
+	}
+	policyArtifact, err := tx.GetArtifact(ctx, root.PolicyArtifactID)
+	if err != nil {
+		return verifiedElaborationBinding{}, err
+	}
+	if policyArtifact.Type != domain.ArtifactKindPolicy || policyArtifact.Digest != policy.Digest {
+		return verifiedElaborationBinding{}, fmt.Errorf("elaboration policy artifact disagrees: %w",
+			domain.ErrParentKeyMismatch)
+	}
+	sourceID := root.InputArtifactIDs[0]
+	source, err := tx.GetArtifact(ctx, sourceID)
+	if err != nil {
+		return verifiedElaborationBinding{}, err
+	}
+	if source.Type != domain.ArtifactKindSpecification || source.Digest != run.SpecDigest {
+		return verifiedElaborationBinding{}, fmt.Errorf("elaboration source artifact disagrees: %w",
+			domain.ErrParentKeyMismatch)
+	}
+
+	research := []domain.ArtifactID{}
+	feedback := []domain.ArtifactID{}
+	var priorSpec *domain.ArtifactID
+	var legacyPostRevisionResearch []domain.ArtifactID
+	var currentInvocation domain.AgentInvocation
+	for iteration := 1; iteration <= current.Iteration; iteration++ {
+		invocationID := elaborationInvocationID(run.ID, iteration)
+		entry, err := tx.GetOutbox(ctx, string(invocationID))
+		if err != nil {
+			return verifiedElaborationBinding{}, err
+		}
+		request, err := decodeElaborationRequest(entry)
+		if err != nil {
+			return verifiedElaborationBinding{}, err
+		}
+		expectedInputs := elaborationInputs(sourceID, research, priorSpec, feedback)
+		if !sameElaborationRoot(request, root) || request.InvocationID != invocationID ||
+			request.Iteration != iteration ||
+			!acceptsElaborationInputOrder(request.InputArtifactIDs, expectedInputs, legacyPostRevisionResearch) ||
+			!sameArtifactID(request.PriorSpecArtifactID, priorSpec) ||
+			!slices.Equal(request.FeedbackArtifactIDs, feedback) {
+			return verifiedElaborationBinding{}, fmt.Errorf(
+				"elaboration request %q is not authorized by its preceding transition: %w",
+				invocationID, domain.ErrParentKeyMismatch)
+		}
+		if iteration == current.Iteration && !sameElaborationRequest(request, current) {
+			return verifiedElaborationBinding{}, fmt.Errorf(
+				"elaboration request %q disagrees with its stored transition: %w",
+				invocationID, domain.ErrParentKeyMismatch)
+		}
+		invocation, err := tx.GetAgentInvocation(ctx, invocationID)
+		if err != nil {
+			return verifiedElaborationBinding{}, err
+		}
+		if invocation.ConversationID != nil || invocation.ThroughSequence != 0 ||
+			!slices.Equal(invocation.InputIDs, request.InputArtifactIDs) {
+			return verifiedElaborationBinding{}, fmt.Errorf(
+				"elaboration invocation %q inputs disagree: %w",
+				invocationID, domain.ErrParentKeyMismatch)
+		}
+		if iteration == current.Iteration {
+			currentInvocation = invocation
+			break
+		}
+
+		terminalEntry, err := tx.GetInbox(ctx, string(invocationID))
+		if err != nil {
+			return verifiedElaborationBinding{}, err
+		}
+		terminal, err := decodeElaborationTerminal(terminalEntry)
+		if err != nil {
+			return verifiedElaborationBinding{}, err
+		}
+		if terminal.InvocationID != invocationID || terminal.Iteration != iteration ||
+			terminal.Status != exec.StatusCompleted {
+			return verifiedElaborationBinding{}, fmt.Errorf(
+				"elaboration terminal %q cannot authorize iteration %d: %w",
+				invocationID, iteration+1, domain.ErrParentKeyMismatch)
+		}
+		if len(terminal.ResearchArtifactIDs) > 0 {
+			for _, id := range terminal.ResearchArtifactIDs {
+				if slices.Contains(expectedInputs, id) {
+					return verifiedElaborationBinding{}, fmt.Errorf(
+						"elaboration research %q was already carried: %w", id, domain.ErrParentKeyMismatch)
+				}
+				artifact, err := tx.GetArtifact(ctx, id)
+				if err != nil {
+					return verifiedElaborationBinding{}, err
+				}
+				if err := requireElaborationOutputProvenance(
+					artifact, domain.ArtifactKindResearch, domain.ProducerDaemon, invocationID,
+				); err != nil {
+					return verifiedElaborationBinding{}, err
+				}
+			}
+			legacyPostRevisionResearch = append(
+				slices.Clone(request.InputArtifactIDs), terminal.ResearchArtifactIDs...,
+			)
+			research = append(research, terminal.ResearchArtifactIDs...)
+			continue
+		}
+		legacyPostRevisionResearch = nil
+
+		if !settings.SpecApproval {
+			return verifiedElaborationBinding{}, fmt.Errorf(
+				"auto-approved elaboration terminal %q cannot authorize another iteration: %w",
+				invocationID, domain.ErrParentKeyMismatch)
+		}
+		specification, err := verifyElaborationSpecification(ctx, tx, request, terminal)
+		if err != nil {
+			return verifiedElaborationBinding{}, err
+		}
+		item, commands, err := verifyElaborationApproval(ctx, tx, request, terminal, specification)
+		if err != nil {
+			return verifiedElaborationBinding{}, err
+		}
+		if item.Status != domain.StatusSuperseded || len(commands) != 1 ||
+			commands[0].Action != domain.ActionRequestChanges {
+			return verifiedElaborationBinding{}, fmt.Errorf(
+				"elaboration specification %q lacks one effective request_changes decision: %w",
+				specification.ID, domain.ErrParentKeyMismatch)
+		}
+		command := commands[0]
+		message := strings.TrimSpace(command.Message)
+		if command.ItemID != item.ID || command.ItemVersion+1 != item.ItemVersion ||
+			command.PRHeadSHA != item.PRHeadSHA ||
+			!slices.Equal(command.ArtifactDigests, item.ArtifactDigests) ||
+			message == "" || len(command.Attachments) != 0 {
+			return verifiedElaborationBinding{}, fmt.Errorf(
+				"request_changes command %q is not bound to approval item %q: %w",
+				command.CommandID, item.ID, domain.ErrParentKeyMismatch)
+		}
+		feedbackID := domain.ArtifactID("spec-feedback-" + command.CommandID)
+		feedbackArtifact, err := tx.GetArtifact(ctx, feedbackID)
+		if err != nil {
+			return verifiedElaborationBinding{}, err
+		}
+		if feedbackArtifact.Digest != domain.Digest(contentaddr.Sum([]byte(message))) {
+			return verifiedElaborationBinding{}, fmt.Errorf(
+				"feedback artifact %q disagrees with command %q: %w",
+				feedbackID, command.CommandID, domain.ErrParentKeyMismatch)
+		}
+		if err := requireElaborationOutputProvenance(
+			feedbackArtifact, domain.ArtifactKindResearch, domain.ProducerDaemon, invocationID,
+		); err != nil {
+			return verifiedElaborationBinding{}, err
+		}
+		priorSpecID := specification.ID
+		priorSpec = &priorSpecID
+		feedback = append(feedback, feedbackID)
+	}
+	return verifiedElaborationBinding{
+		request: current,
+		binding: invocationBinding{run: run, invocation: currentInvocation},
+		policy:  policy, settings: settings,
+	}, nil
+}
+
+func verifyElaborationTerminal(
+	ctx context.Context,
+	tx *store.ReadTx,
+	request elaborationRequest,
+) (verifiedElaborationTerminal, error) {
+	binding, err := verifyElaborationChain(ctx, tx, request)
+	if err != nil {
+		return verifiedElaborationTerminal{}, err
+	}
+	entry, err := tx.GetInbox(ctx, string(request.InvocationID))
+	if err != nil {
+		return verifiedElaborationTerminal{}, err
+	}
+	terminal, err := decodeElaborationTerminal(entry)
+	if err != nil {
+		return verifiedElaborationTerminal{}, err
+	}
+	if terminal.InvocationID != request.InvocationID || terminal.Iteration != request.Iteration {
+		return verifiedElaborationTerminal{}, fmt.Errorf(
+			"elaboration terminal %q disagrees with its verified request: %w",
+			request.InvocationID, domain.ErrParentKeyMismatch)
+	}
+	verified := verifiedElaborationTerminal{binding: binding, entry: entry, terminal: terminal}
+	if terminal.SpecArtifactID == nil {
+		return verified, nil
+	}
+	specification, err := verifyElaborationSpecification(ctx, tx, request, terminal)
+	if err != nil {
+		return verifiedElaborationTerminal{}, err
+	}
+	verified.specification = &specification
+	if !binding.settings.SpecApproval {
+		if terminal.ApprovalItemID != nil {
+			return verifiedElaborationTerminal{}, fmt.Errorf(
+				"auto-approved elaboration terminal %q carries an approval item: %w",
+				request.InvocationID, domain.ErrParentKeyMismatch)
+		}
+		return verified, nil
+	}
+	item, commands, err := verifyElaborationApproval(ctx, tx, request, terminal, specification)
+	if err != nil {
+		return verifiedElaborationTerminal{}, err
+	}
+	verified.approval = &item
+	verified.commands = commands
+	return verified, nil
+}
+
+func authorizeElaborationImplementation(
+	verified verifiedElaborationTerminal,
+	specArtifactID domain.ArtifactID,
+) error {
+	if verified.specification == nil || verified.specification.ID != specArtifactID {
+		return fmt.Errorf("implementation specification %q is not the verified terminal output: %w",
+			specArtifactID, domain.ErrParentKeyMismatch)
+	}
+	if !verified.binding.settings.SpecApproval {
+		return nil
+	}
+	if verified.approval == nil || verified.approval.Status != domain.StatusResolved ||
+		len(verified.commands) != 1 || verified.commands[0].Action != domain.ActionApprove ||
+		verified.commands[0].ItemID != verified.approval.ID ||
+		verified.commands[0].ItemVersion+1 != verified.approval.ItemVersion ||
+		verified.commands[0].PRHeadSHA != verified.approval.PRHeadSHA ||
+		!slices.Equal(verified.commands[0].ArtifactDigests, verified.approval.ArtifactDigests) ||
+		verified.commands[0].Message != "" || len(verified.commands[0].Attachments) != 0 {
+		return fmt.Errorf("implementation run %q: %w",
+			verified.binding.request.ImplementationRunID, ErrSpecApprovalRequired)
+	}
+	return nil
+}
+
 func (e *Engine) loadElaborationBinding(ctx context.Context, entry store.QueueEntry) (elaborationRequest, invocationBinding, error) {
 	request, err := authenticateElaborationMarker(entry)
 	if err != nil {
 		return elaborationRequest{}, invocationBinding{}, err
 	}
-	var binding invocationBinding
+	var verified verifiedElaborationBinding
 	err = e.store.Read(ctx, func(tx *store.ReadTx) error {
-		if err := authenticateElaborationRoot(ctx, tx, request); err != nil {
-			return err
-		}
 		var err error
-		binding.run, err = tx.GetRun(ctx, request.ElaborationRunID)
-		if err != nil {
-			return err
-		}
-		binding.invocation, err = tx.GetAgentInvocation(ctx, request.InvocationID)
-		if err != nil {
-			return err
-		}
-		if binding.invocation.ConversationID != nil || !slices.Equal(binding.invocation.InputIDs, request.InputArtifactIDs) {
-			return fmt.Errorf("elaboration invocation inputs disagree: %w", domain.ErrParentKeyMismatch)
-		}
-		if binding.run.ProjectID != request.ProjectID {
-			return fmt.Errorf("elaboration run project disagrees: %w", domain.ErrParentKeyMismatch)
-		}
-		policy, err := tx.GetResolvedPolicy(ctx, request.ElaborationRunID)
-		if err != nil {
-			return err
-		}
-		if binding.run.PolicyDigest != policy.Digest {
-			return fmt.Errorf("elaboration run policy disagrees: %w", domain.ErrParentKeyMismatch)
-		}
-		policyArtifact, err := tx.GetArtifact(ctx, request.PolicyArtifactID)
-		if err != nil {
-			return err
-		}
-		if policyArtifact.Type != domain.ArtifactKindPolicy || policyArtifact.Digest != policy.Digest {
-			return fmt.Errorf("elaboration policy artifact disagrees: %w", domain.ErrParentKeyMismatch)
-		}
-		// Every non-source input must have been produced by one of this run's
-		// own prior elaboration invocations. Research fetches, prior
-		// specifications, and revision feedback each stamp the producing
-		// elaboration invocation, so re-binding the decoded input to that
-		// producer set rejects a retargeted request that adopts a foreign
-		// run's artifact by type alone, before its bytes reach the elaborator
-		// or the approved specification. The reconcile-side consumption gate
-		// re-binds the terminal's own identities; this is the dispatch-side
-		// counterpart for the accumulated inputs.
-		settings, err := elaborate.ParsePolicy(policy)
-		if err != nil {
-			return fmt.Errorf("%w: %w", errElaborationMarkerUnreadable, err)
-		}
-		// Bound the decoded iteration before using it as an allocation
-		// capacity and loop count: validate() only requires Iteration >= 1,
-		// so a retargeted request with a huge iteration would otherwise
-		// force an unbounded map allocation and loop here.
-		if request.Iteration > settings.MaxIterations {
-			return fmt.Errorf("elaboration iteration %d exceeds the policy maximum %d: %w",
-				request.Iteration, settings.MaxIterations, domain.ErrParentKeyMismatch)
-		}
-		validProducers := make(map[domain.InvocationID]struct{}, request.Iteration)
-		for iteration := 1; iteration < request.Iteration; iteration++ {
-			validProducers[elaborationInvocationID(binding.run.ID, iteration)] = struct{}{}
-		}
-		for index, id := range request.InputArtifactIDs {
-			artifact, err := tx.GetArtifact(ctx, id)
-			if err != nil {
-				return err
-			}
-			if index == 0 {
-				if artifact.Type != domain.ArtifactKindSpecification || artifact.Digest != binding.run.SpecDigest {
-					return fmt.Errorf("elaboration source artifact disagrees: %w", domain.ErrParentKeyMismatch)
-				}
-				continue
-			}
-			if _, ok := validProducers[artifact.Provenance.ProducerInvocationID]; !ok {
-				return fmt.Errorf("elaboration input %q producer %q is not a prior invocation of run %q: %w",
-					artifact.ID, artifact.Provenance.ProducerInvocationID, binding.run.ID, domain.ErrParentKeyMismatch)
-			}
-			if request.PriorSpecArtifactID != nil && id == *request.PriorSpecArtifactID {
-				if artifact.Type != domain.ArtifactKindSpecification {
-					return fmt.Errorf("prior specification %q has type %q: %w",
-						artifact.ID, artifact.Type, domain.ErrParentKeyMismatch)
-				}
-				continue
-			}
-			if artifact.Type != domain.ArtifactKindResearch {
-				return fmt.Errorf("elaboration input %q has type %q: %w",
-					artifact.ID, artifact.Type, domain.ErrParentKeyMismatch)
-			}
-			if slices.Contains(request.FeedbackArtifactIDs, id) &&
-				(artifact.Provenance.ProducerClass != domain.ProducerDaemon ||
-					artifact.Provenance.HeadBinding != domain.HeadIndependent) {
-				return fmt.Errorf("feedback artifact %q has invalid provenance: %w",
-					artifact.ID, domain.ErrParentKeyMismatch)
-			}
-		}
-		return nil
+		verified, err = verifyElaborationChain(ctx, tx, request)
+		return err
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) ||
@@ -1071,11 +1444,11 @@ func (e *Engine) loadElaborationBinding(ctx context.Context, entry store.QueueEn
 		}
 		return elaborationRequest{}, invocationBinding{}, err
 	}
-	if _, ok := findElaborationStage(binding.run); !ok || len(binding.run.Stages) != 1 {
+	if _, ok := findElaborationStage(verified.binding.run); !ok || len(verified.binding.run.Stages) != 1 {
 		return elaborationRequest{}, invocationBinding{},
 			fmt.Errorf("%w: elaboration stage missing: %w", errElaborationMarkerUnreadable, domain.ErrParentKeyMismatch)
 	}
-	return request, binding, nil
+	return request, verified.binding, nil
 }
 
 func authenticateElaborationMarker(entry store.QueueEntry) (elaborationRequest, error) {
@@ -1104,6 +1477,20 @@ func elaborationRunIDFromInvocationID(id domain.InvocationID) (domain.RunID, boo
 	runID := domain.RunID(raw[len(prefix):lastDash])
 	want := domain.InvocationID("inv-elaborate-" + string(runID) + "-" + iteration.String())
 	return runID, want == id
+}
+
+// IsElaborationInvocationIdentity reports whether the invocation, admitted
+// run, and admitted stage form one deterministic elaboration identity. It lets
+// the final driver-start boundary distinguish a genuinely absent production
+// marker from a damaged elaboration marker without duplicating private ID
+// formulas in the daemon composition.
+func IsElaborationInvocationIdentity(
+	id domain.InvocationID,
+	runID domain.RunID,
+	stageID domain.StageID,
+) bool {
+	parsedRunID, ok := elaborationRunIDFromInvocationID(id)
+	return ok && parsedRunID == runID && stageID == elaborationStageID(runID)
 }
 
 func (e *Engine) quarantinePendingElaborationMarker(
@@ -1375,7 +1762,6 @@ func (e *Engine) cancelExpiredElaboration(ctx context.Context, attempt domain.At
 }
 
 func (e *Engine) acceptResearchRequests(ctx context.Context, run domain.Run, request elaborationRequest, requests []elaborate.FetchRequest, settings elaborate.Policy) (bool, error) {
-	inputs := slices.Clone(request.InputArtifactIDs)
 	ids := make([]domain.ArtifactID, 0, len(requests))
 	for index, fetchRequest := range requests {
 		artifact, err := e.elaboration.fetcher.Fetch(ctx, request.InvocationID, index+1, fetchRequest,
@@ -1386,9 +1772,20 @@ func (e *Engine) acceptResearchRequests(ctx context.Context, run domain.Run, req
 			}
 			return false, err
 		}
-		inputs = append(inputs, artifact.Artifact.ID)
 		ids = append(ids, artifact.Artifact.ID)
 	}
+	// Rebuild the vector by role instead of appending to the persisted order.
+	// Revision feedback and the current prior specification trail all
+	// terminal-authorized research, even when research is fetched after a
+	// request_changes transition.
+	research := slices.DeleteFunc(slices.Clone(request.InputArtifactIDs[1:]), func(id domain.ArtifactID) bool {
+		return request.PriorSpecArtifactID != nil && id == *request.PriorSpecArtifactID ||
+			slices.Contains(request.FeedbackArtifactIDs, id)
+	})
+	research = append(research, ids...)
+	inputs := elaborationInputs(
+		request.InputArtifactIDs[0], research, request.PriorSpecArtifactID, request.FeedbackArtifactIDs,
+	)
 	next := request
 	next.Iteration++
 	next.InvocationID = elaborationInvocationID(request.ElaborationRunID, next.Iteration)
@@ -1416,6 +1813,13 @@ func (e *Engine) acceptResearchRequests(ctx context.Context, run domain.Run, req
 		return false, err
 	}
 	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
+		verified, err := verifyElaborationChain(ctx, &tx.ReadTx, request)
+		if err != nil {
+			return err
+		}
+		if verified.binding.run.ID != run.ID {
+			return fmt.Errorf("research transition run disagrees: %w", domain.ErrParentKeyMismatch)
+		}
 		if _, found, err := tx.LookupExecutionAdmission(ctx, request.InvocationID); err != nil {
 			return err
 		} else if !found {
@@ -1556,6 +1960,13 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 		return false, err
 	}
 	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
+		verified, err := verifyElaborationChain(ctx, &tx.ReadTx, request)
+		if err != nil {
+			return err
+		}
+		if verified.binding.run.ID != run.ID {
+			return fmt.Errorf("specification transition run disagrees: %w", domain.ErrParentKeyMismatch)
+		}
 		if _, found, err := tx.LookupExecutionAdmission(ctx, request.InvocationID); err != nil {
 			return err
 		} else if !found {
@@ -1874,110 +2285,71 @@ func (e *Engine) reconcileElaborationGates(ctx context.Context) (int, int, error
 			continue
 		}
 		latest := stage.Attempts[len(stage.Attempts)-1]
-		var terminalEntry, requestEntry store.QueueEntry
-		var resolved domain.ResolvedPolicy
+		requestEntry := store.QueueEntry{IdempotencyKey: string(latest.InvocationID)}
+		hasTerminal := false
+		var verified verifiedElaborationTerminal
 		err = e.store.Read(ctx, func(tx *store.ReadTx) error {
-			var err error
-			terminalEntry, err = tx.GetInbox(ctx, string(latest.InvocationID))
-			if err != nil {
+			if _, err := tx.GetInbox(ctx, string(latest.InvocationID)); err != nil {
 				return err
 			}
+			hasTerminal = true
+			var err error
 			requestEntry, err = tx.GetOutbox(ctx, string(latest.InvocationID))
 			if err != nil {
 				return err
 			}
-			resolved, err = tx.GetResolvedPolicy(ctx, run.ID)
-			return err
+			request, err := decodeElaborationRequest(requestEntry)
+			if err != nil {
+				return fmt.Errorf("%w: %w", errElaborationMarkerUnreadable, err)
+			}
+			verified, err = verifyElaborationTerminal(ctx, tx, request)
+			if err != nil {
+				return err
+			}
+			if verified.binding.binding.run.ID != run.ID ||
+				verified.binding.binding.invocation.ID != latest.InvocationID {
+				return fmt.Errorf("elaboration terminal %q binding disagrees: %w",
+					latest.InvocationID, domain.ErrParentKeyMismatch)
+			}
+			return nil
 		})
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, store.ErrNotFound) && !hasTerminal {
 			continue
 		}
 		if err != nil {
+			if errors.Is(err, store.ErrNotFound) ||
+				errors.Is(err, domain.ErrParentKeyMismatch) ||
+				errors.Is(err, domain.ErrImmutableTransition) {
+				err = fmt.Errorf("%w: %w", errElaborationMarkerUnreadable, err)
+			}
+			quarantined, quarantineErr := e.quarantinePendingElaborationMarker(ctx, requestEntry, err)
+			if quarantineErr != nil {
+				return started, blocked, quarantineErr
+			}
+			if quarantined {
+				continue
+			}
 			return started, blocked, err
 		}
-		terminal, err := decodeElaborationTerminal(terminalEntry)
-		if err != nil {
-			return started, blocked, err
-		}
+		terminal := verified.terminal
 		if terminal.SpecArtifactID == nil {
 			continue
 		}
-		request, err := decodeElaborationRequest(requestEntry)
-		if err != nil {
-			return started, blocked, err
-		}
-		if terminal.InvocationID != latest.InvocationID || request.ElaborationRunID != run.ID ||
-			request.InvocationID != latest.InvocationID {
-			return started, blocked, fmt.Errorf("elaboration terminal %q binding disagrees: %w",
-				latest.InvocationID, domain.ErrParentKeyMismatch)
-		}
-		// Re-bind the reconstructed terminal to this run before trusting its
-		// approval and specification identities. Both IDs are deterministic in
-		// the implementation identity and iteration, so a corrupted or
-		// retargeted terminal that named a foreign, already-approved item and
-		// specification would otherwise satisfy the self-consistent digest
-		// checks below and start this implementation from the foreign spec.
-		expectedSpec := domain.ArtifactID(fmt.Sprintf("spec-%s-%d", request.ImplementationRunID, request.Iteration))
-		if *terminal.SpecArtifactID != expectedSpec {
-			return started, blocked, fmt.Errorf("elaboration terminal %q identity mismatch: %w",
-				latest.InvocationID, domain.ErrParentKeyMismatch)
-		}
-		settings, err := elaborate.ParsePolicy(resolved)
-		if err != nil {
-			return started, blocked, err
-		}
+		request := verified.binding.request
+		run = verified.binding.binding.run
+		settings := verified.binding.settings
+		terminalEntry := verified.entry
+		specArtifact := *verified.specification
 		if terminal.ApprovalItemID == nil {
-			if settings.SpecApproval {
-				return started, blocked, fmt.Errorf("elaboration terminal %q omitted required approval: %w",
-					latest.InvocationID, domain.ErrParentKeyMismatch)
-			}
-			var specArtifact domain.Artifact
-			if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
-				var err error
-				specArtifact, err = tx.GetArtifact(ctx, *terminal.SpecArtifactID)
-				return err
-			}); err != nil {
-				return started, blocked, err
-			}
-			if specArtifact.Provenance.ProducerInvocationID != latest.InvocationID {
-				return started, blocked, fmt.Errorf("elaboration spec %q was not produced by invocation %q: %w",
-					specArtifact.ID, latest.InvocationID, domain.ErrParentKeyMismatch)
-			}
-			created, err := e.startApprovedImplementation(ctx, request, *terminal.SpecArtifactID)
+			created, err := e.startApprovedImplementation(ctx, request, specArtifact.ID)
 			if err != nil {
 				return started, blocked, err
 			}
 			started += boolCount(created)
 			continue
 		}
-		expectedItem := domain.ItemID(fmt.Sprintf("spec-approval-%s-%d", request.ImplementationRunID, request.Iteration))
-		if *terminal.ApprovalItemID != expectedItem {
-			return started, blocked, fmt.Errorf("elaboration terminal %q identity mismatch: %w",
-				latest.InvocationID, domain.ErrParentKeyMismatch)
-		}
-		var item domain.AttentionItem
-		var commands []domain.Command
-		err = e.store.Read(ctx, func(tx *store.ReadTx) error {
-			var err error
-			item, err = tx.GetAttentionItem(ctx, *terminal.ApprovalItemID)
-			if err != nil {
-				return err
-			}
-			commands, err = tx.ListCommandsForItem(ctx, item.ID)
-			return err
-		})
-		if err != nil {
-			return started, blocked, err
-		}
-		if item.Type != domain.AttentionSpecApproval || item.Subject.Type != domain.SubjectRun ||
-			item.Subject.RunID == nil || *item.Subject.RunID != run.ID {
-			return started, blocked, fmt.Errorf("elaboration approval item %q is not a spec approval bound to run %q: %w",
-				item.ID, run.ID, domain.ErrParentKeyMismatch)
-		}
-		commands, err = elaborationDecisionCommands(commands)
-		if err != nil {
-			return started, blocked, err
-		}
+		item := *verified.approval
+		commands := verified.commands
 		if item.Status != domain.StatusOpen {
 			if err := e.supersedeElaborationBlockedItem(ctx, *terminal.ApprovalItemID); err != nil {
 				return started, blocked, err
@@ -1996,20 +2368,6 @@ func (e *Engine) reconcileElaborationGates(ctx context.Context) (int, int, error
 		case domain.StatusResolved:
 			if len(commands) == 1 && commands[0].Action == domain.ActionStop {
 				continue
-			}
-			var specArtifact domain.Artifact
-			if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
-				var err error
-				specArtifact, err = tx.GetArtifact(ctx, *terminal.SpecArtifactID)
-				return err
-			}); err != nil {
-				return started, blocked, err
-			}
-			// The spec must have been produced by this run's own elaboration
-			// invocation, never adopted from a foreign run.
-			if specArtifact.Provenance.ProducerInvocationID != latest.InvocationID {
-				return started, blocked, fmt.Errorf("elaboration spec %q was not produced by invocation %q: %w",
-					specArtifact.ID, latest.InvocationID, domain.ErrParentKeyMismatch)
 			}
 			digest := specArtifact.Digest
 			if len(commands) != 1 || commands[0].Action != domain.ActionApprove ||
@@ -2079,18 +2437,50 @@ func elaborationDecisionCommands(commands []domain.Command) ([]domain.Command, e
 	return decisions, nil
 }
 
+func sameElaborationCommand(left, right domain.Command) bool {
+	return left.CommandID == right.CommandID && left.DeviceID == right.DeviceID &&
+		left.ItemID == right.ItemID && left.ItemVersion == right.ItemVersion &&
+		left.PRHeadSHA == right.PRHeadSHA &&
+		slices.Equal(left.ArtifactDigests, right.ArtifactDigests) &&
+		left.Action == right.Action && left.Message == right.Message &&
+		slices.Equal(left.Attachments, right.Attachments)
+}
+
+func authorizeElaborationRevision(
+	ctx context.Context,
+	tx *store.ReadTx,
+	run domain.Run,
+	request elaborationRequest,
+	priorSpec domain.ArtifactID,
+	command domain.Command,
+) error {
+	verified, err := verifyElaborationTerminal(ctx, tx, request)
+	if err != nil {
+		return err
+	}
+	if verified.binding.binding.run.ID != run.ID || verified.specification == nil ||
+		verified.specification.ID != priorSpec || verified.approval == nil ||
+		verified.approval.Status != domain.StatusSuperseded || len(verified.commands) != 1 ||
+		!sameElaborationCommand(verified.commands[0], command) ||
+		command.Action != domain.ActionRequestChanges {
+		return fmt.Errorf("elaboration revision is not authorized by its terminal and command: %w",
+			domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
 func (e *Engine) startApprovedImplementation(ctx context.Context, request elaborationRequest, specArtifactID domain.ArtifactID) (bool, error) {
 	var resolved domain.ResolvedPolicy
 	alreadyExists := false
 	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		if err := authenticateElaborationRoot(ctx, tx, request); err != nil {
-			return err
-		}
-		resolved, err = tx.GetResolvedPolicy(ctx, request.ElaborationRunID)
+		verified, err := verifyElaborationTerminal(ctx, tx, request)
 		if err != nil {
 			return err
 		}
+		if err := authorizeElaborationImplementation(verified, specArtifactID); err != nil {
+			return err
+		}
+		resolved = verified.binding.policy
 		_, err = tx.GetRun(ctx, request.ImplementationRunID)
 		alreadyExists = err == nil
 		if errors.Is(err, store.ErrNotFound) {
@@ -2114,6 +2504,11 @@ func (e *Engine) startApprovedImplementation(ctx context.Context, request elabor
 }
 
 func (e *Engine) enqueueSpecRevision(ctx context.Context, run domain.Run, request elaborationRequest, priorSpec domain.ArtifactID, command domain.Command) error {
+	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		return authorizeElaborationRevision(ctx, tx, run, request, priorSpec, command)
+	}); err != nil {
+		return err
+	}
 	feedbackMessage := strings.TrimSpace(command.Message)
 	if feedbackMessage == "" {
 		return errors.New("request_changes command has no feedback")
@@ -2170,6 +2565,11 @@ func (e *Engine) enqueueSpecRevision(ctx context.Context, run domain.Run, reques
 		return err
 	}
 	return e.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := authorizeElaborationRevision(
+			ctx, &tx.ReadTx, run, request, priorSpec, command,
+		); err != nil {
+			return err
+		}
 		if err := tx.PutArtifact(ctx, feedback); err != nil {
 			return err
 		}

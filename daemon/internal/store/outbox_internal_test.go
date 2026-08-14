@@ -86,3 +86,40 @@ func TestPromoteOutboxRefusesQuarantinedRow(t *testing.T) {
 			entry.Kind, entry.Status)
 	}
 }
+
+func TestListQuarantinedOutbox(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openRaw(t)
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	s := &Store{db: db}
+	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		if _, _, err := tx.EnqueueOutbox(ctx, "intent-1", "reservation", []byte(`{}`)); err != nil {
+			return err
+		}
+		_, _, err := tx.EnqueueOutbox(ctx, "intent-2", "other", []byte(`{}`))
+		return err
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE outbox SET status = 'quarantined'`); err != nil {
+		t.Fatalf("quarantine: %v", err)
+	}
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		entries, err := tx.ListQuarantinedOutbox(ctx, "reservation")
+		if err != nil {
+			return err
+		}
+		if len(entries) != 1 || entries[0].IdempotencyKey != "intent-1" || !entries[0].Quarantined() {
+			t.Fatalf("quarantined entries = %+v, want intent-1", entries)
+		}
+		if _, err := tx.ListQuarantinedOutbox(ctx, ""); err == nil {
+			t.Fatal("ListQuarantinedOutbox accepted an empty kind")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

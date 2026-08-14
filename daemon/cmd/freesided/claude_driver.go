@@ -487,27 +487,32 @@ func (a storeAdmissionAuthority) authenticateInvocationStart(
 func (a storeAdmissionAuthority) authenticateElaborationInvocation(
 	ctx context.Context, id domain.InvocationID, admission domain.ExecutionAdmission,
 ) (bool, error) {
-	var entry store.QueueEntry
+	elaboration := false
 	err := a.store.Read(ctx, func(tx *store.ReadTx) error {
-		var err error
-		entry, err = tx.GetOutbox(ctx, string(id))
-		return err
+		entry, err := tx.GetOutbox(ctx, string(id))
+		if err != nil {
+			return err
+		}
+		if entry.Kind != engine.KindElaborationInvocationRequested {
+			return nil
+		}
+		elaboration = true
+		return engine.AuthenticateElaborationInvocationTransition(
+			ctx, tx, entry, admission.RunID, admission.StageID,
+		)
 	})
 	if errors.Is(err, store.ErrNotFound) {
+		if elaboration || engine.IsElaborationInvocationIdentity(
+			id, admission.RunID, admission.StageID,
+		) {
+			return true, fmt.Errorf("authenticate elaboration invocation marker: %w", err)
+		}
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("load elaboration invocation marker: %w", err)
+		return elaboration, fmt.Errorf("authenticate elaboration invocation marker: %w", err)
 	}
-	if entry.Kind != engine.KindElaborationInvocationRequested {
-		return false, nil
-	}
-	if err := engine.AuthenticateElaborationInvocationMarker(
-		entry, admission.RunID, admission.StageID,
-	); err != nil {
-		return true, fmt.Errorf("authenticate elaboration invocation marker: %w", err)
-	}
-	return true, nil
+	return elaboration, nil
 }
 
 func (a storeAdmissionAuthority) ImportOptions(

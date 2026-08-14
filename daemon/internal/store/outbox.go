@@ -132,6 +132,15 @@ func (tx *ReadTx) ListDispatchedOutbox(ctx context.Context, kind string) ([]Queu
 	return tx.listOutboxByStatus(ctx, kind, outboxStatusDispatched)
 }
 
+// ListQuarantinedOutbox returns audit-preserved intents of one kind in
+// insertion order. Quarantined work is never eligible for dispatch, but
+// conservative ownership probes use these rows as evidence that a missing
+// active claim is damaged state rather than permission to create competing
+// work.
+func (tx *ReadTx) ListQuarantinedOutbox(ctx context.Context, kind string) ([]QueueEntry, error) {
+	return tx.listOutboxByStatus(ctx, kind, outboxStatusQuarantined)
+}
+
 func (tx *ReadTx) listOutboxByStatus(
 	ctx context.Context,
 	kind, status string,
