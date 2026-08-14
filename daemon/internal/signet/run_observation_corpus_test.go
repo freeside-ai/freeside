@@ -47,7 +47,7 @@ type corpusFixture struct {
 	at      time.Time
 }
 
-func newCorpusFixture(t *testing.T) corpusFixture {
+func newCorpusFixture(t *testing.T, opts ...signet.Option) corpusFixture {
 	t.Helper()
 	ctx := context.Background()
 	s, err := store.Open(ctx, t.TempDir()+"/corpus.db", store.Options{
@@ -66,7 +66,9 @@ func newCorpusFixture(t *testing.T) corpusFixture {
 	})
 	at := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	readAt := at.Add(time.Hour)
-	svc := signet.NewService(s, signet.WithClock(func() time.Time { return readAt }))
+	svc := signet.NewService(s, append([]signet.Option{
+		signet.WithClock(func() time.Time { return readAt }),
+	}, opts...)...)
 	return corpusFixture{store: s, service: svc, at: at}
 }
 

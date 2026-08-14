@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -46,6 +47,12 @@ type Service struct {
 	effectiveReviewConfig func() domain.Digest
 	now                   func() time.Time
 	rand                  io.Reader
+	// logger records durable diagnoses the read projections would otherwise
+	// swallow into an undifferentiated 500 (issue #767): when a listing read
+	// isolates a run whose observation rows contradict their durable authority,
+	// it names that run here. Never nil; a discard handler is the default so a
+	// composition that supplies none stays silent.
+	logger *slog.Logger
 }
 
 // Option configures a Service. The clock and randomness sources exist so
@@ -86,8 +93,20 @@ func WithEffectiveReviewConfiguration(digest func() domain.Digest) Option {
 	return func(s *Service) { s.effectiveReviewConfig = digest }
 }
 
+// WithLogger supplies the process logger the read projections record a run
+// integrity contradiction through (issue #767). A nil logger is ignored so the
+// discard default stands; the daemon composition threads its process logger in.
+func WithLogger(logger *slog.Logger) Option {
+	return func(s *Service) {
+		if logger == nil {
+			return
+		}
+		s.logger = logger.With("subsystem", "signet")
+	}
+}
+
 func NewService(st *store.Store, opts ...Option) *Service {
-	s := &Service{store: st, now: time.Now, rand: rand.Reader}
+	s := &Service{store: st, now: time.Now, rand: rand.Reader, logger: slog.New(slog.DiscardHandler)}
 	for _, opt := range opts {
 		opt(s)
 	}

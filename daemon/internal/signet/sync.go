@@ -17,6 +17,18 @@ import (
 // ServerState read in the same transaction.
 var ErrInvalidSyncSnapshot = errors.New("invalid sync snapshot")
 
+// ErrRunObservationIntegrity marks a run whose observation projection
+// contradicts its own durable authority (issue #767): a powerless observation
+// row that disagrees with the run's terminal, admission, or publication
+// records. The listing reads (Bootstrap, ListRuns) isolate such a run by
+// excluding it and logging the contradiction, so one damaged legacy run cannot
+// fail the whole operator observation surface; the single-run reads (GetRun,
+// GetRunTimeline) still surface it as this differentiated failure for the
+// specifically-requested run rather than a false-empty. An infrastructure
+// failure (a store or db read error) never carries this sentinel and still
+// fails the whole read closed.
+var ErrRunObservationIntegrity = errors.New("run observation projection integrity failure")
+
 var errNoProposalSnoozeRelease = errors.New("no proposal snooze release pending")
 
 // ServerRevision is the revision heartbeat payload. A changed SyncEpoch
@@ -141,6 +153,7 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 		return BootstrapSnapshot{}, fmt.Errorf("bootstrap proposal snoozes: %w", err)
 	}
 	var out BootstrapSnapshot
+	var excluded []excludedRun
 	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
 		state, err := tx.ServerState(ctx)
 		if err != nil {
@@ -208,15 +221,15 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 			if err := validateSnapshot(state, run.Snapshot); err != nil {
 				return fmt.Errorf("run %q: %w", run.Value.ID, err)
 			}
-			observation, err := tx.ObserveRun(ctx, run.Value.ID)
+			snapshot, err := projectRunSnapshot(ctx, tx, state, run.Value, run.Snapshot, items)
 			if err != nil {
-				return fmt.Errorf("run %q timeline: %w", run.Value.ID, err)
+				if errors.Is(err, ErrRunObservationIntegrity) {
+					excluded = append(excluded, excludedRun{id: run.Value.ID, err: err})
+					continue
+				}
+				return err
 			}
-			if err := authenticateRunObservation(ctx, tx, state, run.Value, observation, items); err != nil {
-				return fmt.Errorf("run %q timeline: %w", run.Value.ID, err)
-			}
-			out.Runs = append(out.Runs,
-				runSnapshot(run.Value, run.Snapshot, observation, state.Revision))
+			out.Runs = append(out.Runs, snapshot)
 		}
 		for _, conversation := range conversations {
 			if err := validateSnapshot(state, conversation.Snapshot); err != nil {
@@ -237,6 +250,7 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 	if err != nil {
 		return BootstrapSnapshot{}, fmt.Errorf("bootstrap sync: %w", err)
 	}
+	s.logExcludedRuns(excluded)
 	return out, nil
 }
 
@@ -477,6 +491,7 @@ func (s *Service) ListSchedules(ctx context.Context) ([]ScheduleSnapshot, error)
 // ListRuns returns the current run aggregates as partial resource snapshots.
 func (s *Service) ListRuns(ctx context.Context) ([]RunSnapshot, error) {
 	var out []RunSnapshot
+	var excluded []excludedRun
 	err := s.store.Read(ctx, func(tx *store.ReadTx) error {
 		state, err := tx.ServerState(ctx)
 		if err != nil {
@@ -498,21 +513,22 @@ func (s *Service) ListRuns(ctx context.Context) ([]RunSnapshot, error) {
 			if err := validateSnapshot(state, value.Snapshot); err != nil {
 				return fmt.Errorf("run %q: %w", value.Value.ID, err)
 			}
-			observation, err := tx.ObserveRun(ctx, value.Value.ID)
+			snapshot, err := projectRunSnapshot(ctx, tx, state, value.Value, value.Snapshot, items)
 			if err != nil {
-				return fmt.Errorf("run %q timeline: %w", value.Value.ID, err)
+				if errors.Is(err, ErrRunObservationIntegrity) {
+					excluded = append(excluded, excludedRun{id: value.Value.ID, err: err})
+					continue
+				}
+				return err
 			}
-			if err := authenticateRunObservation(ctx, tx, state, value.Value, observation, items); err != nil {
-				return fmt.Errorf("run %q timeline: %w", value.Value.ID, err)
-			}
-			out = append(out,
-				runSnapshot(value.Value, value.Snapshot, observation, state.Revision))
+			out = append(out, snapshot)
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list runs: %w", err)
 	}
+	s.logExcludedRuns(excluded)
 	return out, nil
 }
 
@@ -543,7 +559,7 @@ func (s *Service) GetRun(ctx context.Context, id domain.RunID) (RunSnapshot, err
 			return err
 		}
 		if err := authenticateRunObservation(ctx, tx, state, value.Value, observation, items); err != nil {
-			return err
+			return asRunObservationIntegrityError(err)
 		}
 		out = runSnapshot(value.Value, value.Snapshot, observation, state.Revision)
 		return nil
@@ -583,7 +599,7 @@ func (s *Service) GetRunTimeline(ctx context.Context, id domain.RunID) (RunTimel
 			return err
 		}
 		if err := authenticateRunObservation(ctx, tx, state, run.Value, observation, items); err != nil {
-			return err
+			return asRunObservationIntegrityError(err)
 		}
 		out = runTimeline(observation, state.Revision, time.Now().UTC())
 		return nil
@@ -697,6 +713,61 @@ func runTimeline(observation domain.RunObservation, asOfRevision int64, asOf tim
 		Milestones:   nonNilSlice(observation.Milestones),
 		Hold:         observation.Hold,
 		Invocations:  nonNilSlice(observation.Invocations),
+	}
+}
+
+// projectRunSnapshot re-derives one run's authenticated observation projection
+// for the listing reads (Bootstrap, ListRuns). A returned error wrapping
+// ErrRunObservationIntegrity marks a per-run semantic contradiction the caller
+// isolates by excluding that run; any other error is an infrastructure failure
+// the caller propagates to fail the whole read closed.
+func projectRunSnapshot(
+	ctx context.Context,
+	tx *store.ReadTx,
+	state store.ServerState,
+	run domain.Run,
+	snapshot store.Snapshot,
+	items []store.Snapshotted[domain.AttentionItem],
+) (RunSnapshot, error) {
+	observation, err := tx.ObserveRun(ctx, run.ID)
+	if err != nil {
+		return RunSnapshot{}, fmt.Errorf("run %q timeline: %w", run.ID, err)
+	}
+	if err := authenticateRunObservation(ctx, tx, state, run, observation, items); err != nil {
+		return RunSnapshot{}, fmt.Errorf("run %q timeline: %w", run.ID, asRunObservationIntegrityError(err))
+	}
+	return runSnapshot(run, snapshot, observation, state.Revision), nil
+}
+
+// asRunObservationIntegrityError tags a semantic projection contradiction with
+// the ErrRunObservationIntegrity sentinel the listing reads isolate on, so the
+// skip keys on an intentional signal rather than the broadly-reused
+// domain.ErrParentKeyMismatch. An infrastructure error (a store or db read
+// failure) carries no ErrParentKeyMismatch and is returned unwrapped, so it
+// still fails the whole read closed.
+func asRunObservationIntegrityError(err error) error {
+	if errors.Is(err, domain.ErrParentKeyMismatch) {
+		return fmt.Errorf("%w: %w", ErrRunObservationIntegrity, err)
+	}
+	return err
+}
+
+// excludedRun pairs a run the listing reads dropped with the integrity
+// contradiction that dropped it, so logExcludedRuns can name both after the
+// read transaction closes.
+type excludedRun struct {
+	id  domain.RunID
+	err error
+}
+
+// logExcludedRuns records one durable Warn per run a listing read excluded for
+// a projection integrity contradiction (#767), so the cause is diagnosable
+// server-side instead of vanishing into an undifferentiated 500. Called after
+// the read transaction closes, never inside it.
+func (s *Service) logExcludedRuns(excluded []excludedRun) {
+	for _, run := range excluded {
+		s.logger.Warn("run observation projection integrity failure; excluding run from listing",
+			"run", run.id, "error", run.err)
 	}
 }
 
