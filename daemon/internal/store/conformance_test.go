@@ -185,6 +185,209 @@ func TestUnattendedAdmissionRequiresTheCurrentBackendConfiguration(t *testing.T)
 	}
 }
 
+// authenticateConformance re-gates an already-recorded admission through the
+// tolerant authenticate path (AuthenticateBackendConformant); requireConformance
+// runs the strict mint path (RequireBackendConformant). The two share a core
+// and differ only in how a same-configuration supersession marker is treated.
+func authenticateConformance(t *testing.T, s *store.Store, admission domain.ExecutionAdmission) error {
+	t.Helper()
+	return s.Read(context.Background(), func(tx *store.ReadTx) error {
+		return tx.AuthenticateBackendConformant(context.Background(), admission)
+	})
+}
+
+func requireConformance(t *testing.T, s *store.Store, admission domain.ExecutionAdmission) error {
+	t.Helper()
+	return s.Read(context.Background(), func(tx *store.ReadTx) error {
+		return tx.RequireBackendConformant(context.Background(), admission)
+	})
+}
+
+// TestAuthenticateToleratesSameConfigurationRecheck is issue #761's core: an
+// already-admitted invocation re-authenticates across its own daemon's startup
+// re-proof of the same configuration (a supersession marker for the admission's
+// digest) by re-binding to the passed proof the marker superseded. The mint
+// gate stays strict against the identical state, so unadmitted work still holds
+// out the window.
+func TestAuthenticateToleratesSameConfigurationRecheck(t *testing.T) {
+	t.Parallel()
+	s, f := openUnattendedNoConformance(t)
+	recordConformance(t, s, conformanceAt(t, domain.ConformancePassed, conformantCapabilities(t), admissionEpoch))
+	recordConformance(t, s, conformanceAt(t, domain.ConformanceSuperseded, nil, admissionEpoch.Add(time.Minute)))
+
+	if err := authenticateConformance(t, s, f.admission); err != nil {
+		t.Fatalf("authenticate during a same-configuration recheck = %v, want nil", err)
+	}
+	if err := requireConformance(t, s, f.admission); !errors.Is(err, store.ErrBackendNotConformant) {
+		t.Fatalf("mint during a same-configuration recheck = %v, want %v", err, store.ErrBackendNotConformant)
+	}
+}
+
+// TestAuthenticateSupersessionPreservesCeiling proves the recovered proof, not
+// the capability-nil marker, supplies the ceiling: an admission wider than the
+// superseded proof is refused as an over-claim, never silently authenticated by
+// a dropped ceiling.
+func TestAuthenticateSupersessionPreservesCeiling(t *testing.T) {
+	t.Parallel()
+	s, f := openUnattendedNoConformance(t)
+	proven := domain.NewCapabilitySnapshot(domain.CapPostExitExport)
+	recordConformance(t, s, conformanceAt(t, domain.ConformancePassed, proven, admissionEpoch))
+	recordConformance(t, s, conformanceAt(t, domain.ConformanceSuperseded, nil, admissionEpoch.Add(time.Minute)))
+
+	if err := authenticateConformance(t, s, f.admission); !errors.Is(err, domain.ErrAdmissionExceedsConformance) {
+		t.Fatalf("authenticate beyond the superseded proof = %v, want %v",
+			err, domain.ErrAdmissionExceedsConformance)
+	}
+}
+
+// TestAuthenticateRefusesDifferentConfigurationSupersession keeps a
+// reconfiguration fatal: a marker for a different configuration means the
+// admission's configuration is no longer current, so tolerance never applies
+// and the admission cannot start or recover.
+func TestAuthenticateRefusesDifferentConfigurationSupersession(t *testing.T) {
+	t.Parallel()
+	s, f := openUnattendedNoConformance(t)
+	recordConformance(t, s, conformanceAt(t, domain.ConformancePassed, conformantCapabilities(t), admissionEpoch))
+	reconfigured, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformanceSuperseded,
+		ConfigurationDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+		ProvedAt:            admissionEpoch.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordConformance(t, s, reconfigured)
+
+	if err := authenticateConformance(t, s, f.admission); !errors.Is(err, store.ErrBackendNotConformant) {
+		t.Fatalf("authenticate under a different-configuration recheck = %v, want %v",
+			err, store.ErrBackendNotConformant)
+	}
+}
+
+// TestAuthenticateRefusesFailedSameConfiguration keeps a failed proof fatal:
+// tolerance is scoped to the supersession marker a recheck-in-progress writes,
+// never a completed failure, which is a real non-conformance.
+func TestAuthenticateRefusesFailedSameConfiguration(t *testing.T) {
+	t.Parallel()
+	s, f := openUnattendedNoConformance(t)
+	recordConformance(t, s, conformanceAt(t, domain.ConformancePassed, conformantCapabilities(t), admissionEpoch))
+	recordConformance(t, s, conformanceAt(t, domain.ConformanceFailed, nil, admissionEpoch.Add(time.Minute)))
+
+	if err := authenticateConformance(t, s, f.admission); !errors.Is(err, store.ErrBackendNotConformant) {
+		t.Fatalf("authenticate under a failed same-configuration proof = %v, want %v",
+			err, store.ErrBackendNotConformant)
+	}
+}
+
+// TestAuthenticateRefusesSupersessionWithoutPriorPass keeps tolerance closed
+// when the marker superseded no passed proof this admission may re-bind to.
+func TestAuthenticateRefusesSupersessionWithoutPriorPass(t *testing.T) {
+	t.Parallel()
+	s, f := openUnattendedNoConformance(t)
+	recordConformance(t, s, conformanceAt(t, domain.ConformanceSuperseded, nil, admissionEpoch))
+
+	if err := authenticateConformance(t, s, f.admission); !errors.Is(err, store.ErrBackendNotConformant) {
+		t.Fatalf("authenticate with no prior passed proof = %v, want %v",
+			err, store.ErrBackendNotConformant)
+	}
+}
+
+// TestAuthenticateRefusesInterveningFailedProof keeps a failed re-proof fatal
+// even when an older pass survives in the log: passed, superseded, failed,
+// superseded. Re-binding to the older pass over the intervening failure would
+// authenticate an already-admitted invocation against a declaration that
+// failure invalidated (a fail-open the mint gate refuses), so tolerance must
+// re-bind to the declaration the marker superseded, which failed.
+func TestAuthenticateRefusesInterveningFailedProof(t *testing.T) {
+	t.Parallel()
+	s, f := openUnattendedNoConformance(t)
+	recordConformance(t, s, conformanceAt(t, domain.ConformancePassed, conformantCapabilities(t), admissionEpoch))
+	recordConformance(t, s, conformanceAt(t, domain.ConformanceSuperseded, nil, admissionEpoch.Add(time.Minute)))
+	recordConformance(t, s, conformanceAt(t, domain.ConformanceFailed, nil, admissionEpoch.Add(2*time.Minute)))
+	recordConformance(t, s, conformanceAt(t, domain.ConformanceSuperseded, nil, admissionEpoch.Add(3*time.Minute)))
+
+	if err := authenticateConformance(t, s, f.admission); !errors.Is(err, store.ErrBackendNotConformant) {
+		t.Fatalf("authenticate over an intervening failed re-proof = %v, want %v",
+			err, store.ErrBackendNotConformant)
+	}
+}
+
+// TestAuthenticateRefusesInterveningOtherConfigurationPass keeps a rollback
+// window fatal: passed(A), passed(B), superseded(A). The marker superseded the
+// B declaration, not the older A pass, so an A-bound admission must not
+// resurrect that A pass while no completed proof currently authorizes A. The
+// recovery must find the actual superseded declaration (B) regardless of
+// digest and refuse because it does not match the admission.
+func TestAuthenticateRefusesInterveningOtherConfigurationPass(t *testing.T) {
+	t.Parallel()
+	s, f := openUnattendedNoConformance(t)
+	recordConformance(t, s, conformanceAt(t, domain.ConformancePassed, conformantCapabilities(t), admissionEpoch))
+	otherConfig, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformancePassed,
+		ConfigurationDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+		Capabilities:        conformantCapabilities(t),
+		ProvedAt:            admissionEpoch.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordConformance(t, s, otherConfig)
+	recordConformance(t, s, conformanceAt(t, domain.ConformanceSuperseded, nil, admissionEpoch.Add(2*time.Minute)))
+
+	if err := authenticateConformance(t, s, f.admission); !errors.Is(err, store.ErrBackendNotConformant) {
+		t.Fatalf("authenticate over an intervening other-configuration pass = %v, want %v",
+			err, store.ErrBackendNotConformant)
+	}
+}
+
+// TestAuthenticateRefusesRestartStackedSupersession refuses when a restart
+// mid-recheck stacks two markers: passed, superseded, superseded. The row the
+// newest marker superseded is itself a marker, so the passing declaration was
+// already cleared and no completed pass is current. Tolerance re-binds only to
+// an immediately-preceding pass; here it refuses and the engine holds the run
+// until the re-proof completes, which is conservative but never a fail-open.
+func TestAuthenticateRefusesRestartStackedSupersession(t *testing.T) {
+	t.Parallel()
+	s, f := openUnattendedNoConformance(t)
+	recordConformance(t, s, conformanceAt(t, domain.ConformancePassed, conformantCapabilities(t), admissionEpoch))
+	recordConformance(t, s, conformanceAt(t, domain.ConformanceSuperseded, nil, admissionEpoch.Add(time.Minute)))
+	recordConformance(t, s, conformanceAt(t, domain.ConformanceSuperseded, nil, admissionEpoch.Add(2*time.Minute)))
+
+	if err := authenticateConformance(t, s, f.admission); !errors.Is(err, store.ErrBackendNotConformant) {
+		t.Fatalf("authenticate across a restart-stacked recheck = %v, want %v",
+			err, store.ErrBackendNotConformant)
+	}
+}
+
+// TestAuthenticateRefusesStackedCrossConfigurationMarkers is the fail-open the
+// digest-agnostic recovery closes: passed(A), superseded(B), superseded(A). The
+// reconfiguration to B cleared A at the B marker and B never completed, so no
+// pass currently authorizes A. Because the row the A marker superseded is the B
+// marker, not the old A pass, tolerance must refuse rather than resurrect A.
+func TestAuthenticateRefusesStackedCrossConfigurationMarkers(t *testing.T) {
+	t.Parallel()
+	s, f := openUnattendedNoConformance(t)
+	recordConformance(t, s, conformanceAt(t, domain.ConformancePassed, conformantCapabilities(t), admissionEpoch))
+	reconfigured, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+		Backend:             domain.BackendFreshVMReadOnlyVolumeHandoff,
+		Outcome:             domain.ConformanceSuperseded,
+		ConfigurationDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+		ProvedAt:            admissionEpoch.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordConformance(t, s, reconfigured)
+	recordConformance(t, s, conformanceAt(t, domain.ConformanceSuperseded, nil, admissionEpoch.Add(2*time.Minute)))
+
+	if err := authenticateConformance(t, s, f.admission); !errors.Is(err, store.ErrBackendNotConformant) {
+		t.Fatalf("authenticate across stacked cross-configuration markers = %v, want %v",
+			err, store.ErrBackendNotConformant)
+	}
+}
+
 // TestAttendedAdmissionNeedsNoConformance is the owner-ratified scope
 // reading: §5.7 admits a weaker, unproven runner class for attended_dev, so
 // the conformance gate applies to unattended admission only.

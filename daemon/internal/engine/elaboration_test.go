@@ -188,6 +188,24 @@ func (d *countingElaborationDriver) Stream(
 	return d.StageDriver.Stream(ctx, id)
 }
 
+// inspectRefusingDriver forces every Inspect to return a fixed error while
+// delegating Start and the rest to the embedded fake, so a scripted invocation
+// dispatches normally and only the collect re-gate refuses. It stands in for
+// the real stage driver's AuthenticateStart refusing an admission whose backend
+// conformance moved under it (issue #761).
+type inspectRefusingDriver struct {
+	exec.StageDriver
+	err     error
+	inspect *atomic.Int64
+}
+
+func (d inspectRefusingDriver) Inspect(
+	context.Context, domain.InvocationID,
+) (exec.Inspection, error) {
+	d.inspect.Add(1)
+	return exec.Inspection{}, d.err
+}
+
 type elaborationFixture struct {
 	store                *store.Store
 	blobs                *signet.BlobStore
@@ -1893,6 +1911,76 @@ func TestElaborationFailureAndGatePolicies(t *testing.T) {
 			t.Fatalf("lost-invocation failure = %+v", item)
 		}
 	})
+}
+
+// TestElaborationCollectHoldsOnConformanceRefusal is issue #761's engine half:
+// a conformance (mutable-policy) refusal surfacing from the collect re-gate
+// holds the invocation for a later pass instead of exiting the engine loop into
+// a durable stop. No terminal failure is recorded, so the run stays collectable
+// once the backend re-proves. Mirrors the "lost invocation" collector case,
+// which records a failure; a mutable-policy refusal instead holds.
+func TestElaborationCollectHoldsOnConformanceRefusal(t *testing.T) {
+	f := newElaborationFixture(t, true, 2)
+	base := f.newDriver(t)
+	id := elaborationInvocationID("elaboration-run", 1)
+	base.Script(id, execfake.StageScript{Outcome: execfake.OutcomeComplete})
+	f.submit(t)
+	refusal := fmt.Errorf("inspect: authenticate current intent %s: %w",
+		id, store.ErrBackendNotConformant)
+	var inspects atomic.Int64
+	engine := f.newEngine(t, inspectRefusingDriver{StageDriver: base, err: refusal, inspect: &inspects})
+
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile durable-stopped on a collect conformance refusal: %v", err)
+	}
+	if inspects.Load() == 0 {
+		t.Fatal("collect re-gate never ran: the hold assertion would be vacuous")
+	}
+
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		_, err := tx.GetAttentionItem(t.Context(), domain.ItemID("execution-failure-"+string(id)))
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("held conformance refusal recorded a terminal failure (item lookup = %v)", err)
+	}
+}
+
+// TestElaborationExpiryHoldsOnConformanceRefusal covers the expiry path, which
+// runs before the collect hold and inspects through the same policy-gated
+// driver: an attempt past its stage-active-time whose re-gate refuses must hold
+// too, not durable-stop. Without this the exact restart-stacked supersession
+// state the store tests refuse would still brick an expired elaboration.
+func TestElaborationExpiryHoldsOnConformanceRefusal(t *testing.T) {
+	f := newElaborationFixture(t, true, 2)
+	base := f.newDriver(t)
+	id := elaborationInvocationID("elaboration-run", 1)
+	base.Script(id, execfake.StageScript{Outcome: execfake.OutcomeComplete})
+	f.submit(t)
+	refusal := fmt.Errorf("inspect: authenticate current intent %s: %w",
+		id, store.ErrBackendNotConformant)
+	var inspects atomic.Int64
+	engine := f.newEngine(t, inspectRefusingDriver{StageDriver: base, err: refusal, inspect: &inspects})
+
+	// Dispatch the attempt; the collect re-gate holds on the refusal.
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("first reconcile durable-stopped: %v", err)
+	}
+	// Drive it past its stage-active-time so the expiry cancellation runs and
+	// inspects before the collect hold is reached.
+	*f.now = f.now.Add(2 * time.Minute)
+	before := inspects.Load()
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("expired reconcile durable-stopped on a conformance refusal: %v", err)
+	}
+	if inspects.Load() <= before {
+		t.Fatal("expiry path never inspected: the hold assertion would be vacuous")
+	}
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		_, err := tx.GetAttentionItem(t.Context(), domain.ItemID("execution-failure-"+string(id)))
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("held expired conformance refusal recorded a terminal failure (item lookup = %v)", err)
+	}
 }
 
 func TestElaborationDecisionCommandsRejectDiscussion(t *testing.T) {

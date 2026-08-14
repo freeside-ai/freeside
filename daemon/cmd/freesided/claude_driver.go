@@ -331,8 +331,12 @@ func (a storeAdmissionAuthority) admission(
 			// Existing attempts bypass fresh admission on replay. Re-run the
 			// recording-time conformance check here so an intent admitted under
 			// backend configuration A cannot start or recover after this daemon
-			// has restarted under a current proof for B.
-			if err := tx.RequireBackendConformant(ctx, admission); err != nil {
+			// has restarted under a current proof for B. The authenticate gate
+			// tolerates a same-configuration recheck in progress (a supersession
+			// marker for A) so this daemon's own startup re-proof cannot make an
+			// in-flight admission permanently unauthenticatable (issue #761); a
+			// proof for a different configuration B still refuses.
+			if err := tx.AuthenticateBackendConformant(ctx, admission); err != nil {
 				return err
 			}
 		}
