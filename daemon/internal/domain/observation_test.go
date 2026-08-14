@@ -82,6 +82,66 @@ func TestConcludeRunClearsPriorTerminalWhenAnotherAttemptMakesProgress(t *testin
 	}
 }
 
+// TestConcludeRunEmptyHistoryIsUnobserved pins the pre-migration-0024 legacy
+// run: a run with no observation history classifies as unobserved (non-final,
+// pending-shaped detail), and either a first observed milestone or a
+// nonterminal invocation observation flips it to pending. Only a run with
+// neither a milestone nor a nonterminal invocation observation is unobserved.
+func TestConcludeRunEmptyHistoryIsUnobserved(t *testing.T) {
+	got := ConcludeRun(RunObservation{RunID: "run-1"})
+	if got.Outcome != RunOutcomeUnobserved || got.Final ||
+		got.Reason != nil || got.Terminal != nil {
+		t.Fatalf("ConcludeRun(empty) = %+v, want non-final unobserved", got)
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("ConcludeRun(empty).Validate() = %v", err)
+	}
+
+	// The boundary: a single observed milestone is enough to leave
+	// unobserved for pending, preserving the 0024 no-backfill rule (an
+	// in-flight run that gains its first milestone across the upgrade).
+	boundary := ConcludeRun(RunObservation{
+		RunID:      "run-1",
+		Milestones: []RunMilestone{validMilestone(MilestoneRunSubmitted)},
+	})
+	if boundary.Outcome != RunOutcomePending || boundary.Final {
+		t.Fatalf("ConcludeRun(one milestone) = %+v, want pending", boundary)
+	}
+
+	// A pre-0024 run still executing across the upgrade gains liveness
+	// observations, not milestones: observeInvocation records invocation
+	// observations, never milestones. A nonterminal (running) invocation
+	// observation is in-flight evidence, so the run is pending, not
+	// unobserved, even though its milestone history stays empty.
+	live := ConcludeRun(RunObservation{
+		RunID: "run-1",
+		Invocations: []InvocationObservation{{
+			InvocationID: "inv-1", RunID: "run-1",
+			Status: ObservedStatusRunning, Live: true,
+			ObservedAt: time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC),
+		}},
+	})
+	if live.Outcome != RunOutcomePending || live.Final {
+		t.Fatalf("ConcludeRun(live invocation, no milestone) = %+v, want pending", live)
+	}
+
+	// A terminal-only invocation observation with no milestone is not
+	// in-flight evidence, so the run stays unobserved rather than reading as
+	// still running: the workflow records the terminal outcome as a
+	// milestone, which is what refines it.
+	terminalObs := ConcludeRun(RunObservation{
+		RunID: "run-1",
+		Invocations: []InvocationObservation{{
+			InvocationID: "inv-1", RunID: "run-1",
+			Status: ObservedStatusFailed, Live: false,
+			ObservedAt: time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC),
+		}},
+	})
+	if terminalObs.Outcome != RunOutcomeUnobserved || terminalObs.Final {
+		t.Fatalf("ConcludeRun(terminal invocation, no milestone) = %+v, want unobserved", terminalObs)
+	}
+}
+
 // TestRunMilestoneValidatePerKind: every registered kind has a valid fixture
 // (the golden discipline), and each kind-scoped detail field is required
 // exactly where declared.

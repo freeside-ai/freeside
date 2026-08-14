@@ -201,6 +201,44 @@ func TestRunSummaryAuthenticatesSubmittedReservationBeforeAnAttemptExists(t *tes
 	}
 }
 
+// TestUnobservedLegacyRunProjectsWithoutBackfill is the acceptance for #733: a
+// pre-migration-0024 run has no observation milestones (0024 backfills none),
+// so the projection must report the unobserved outcome and synthesize no
+// milestones, distinct from the pending state a submitted run reports.
+func TestUnobservedLegacyRunProjectsWithoutBackfill(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	run := domain.Run{
+		ID: "run-legacy", ProjectID: "proj-1",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+		Stages: []domain.Stage{{ID: "stage-legacy", RunID: "run-legacy", Name: "implementation"}},
+	}
+	// Persist the run with no milestone: the reconstructed observation history
+	// is empty, exactly as a run created before 0024 reads after upgrade.
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutRun(ctx, run)
+	}); err != nil {
+		t.Fatalf("PutRun: %v", err)
+	}
+
+	runs, err := f.service.ListRuns(ctx)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Run.Outcome != domain.RunOutcomeUnobserved ||
+		runs[0].Run.LatestMilestone != nil {
+		t.Fatalf("ListRuns summary = %+v, want unobserved with no milestone", runs)
+	}
+
+	timeline, err := f.service.GetRunTimeline(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("GetRunTimeline: %v", err)
+	}
+	if len(timeline.Milestones) != 0 {
+		t.Fatalf("timeline milestones = %+v, want no synthesized milestones", timeline.Milestones)
+	}
+}
+
 // TestRestoreForcesFreshBootstrap is §5.14 test 8's server half, driven by the
 // real checkpoint/restore path (#165) rather than a bare epoch hook: a restore
 // atomically rolls the database back to the checkpoint and rotates the sync

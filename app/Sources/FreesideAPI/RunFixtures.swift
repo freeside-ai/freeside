@@ -5,6 +5,7 @@ import Foundation
 public enum RunFixtures {
     public static let activeRunID = "run-freeside-657"
     public static let readyRunID = "run-freeside-654"
+    public static let legacyRunID = "run-freeside-540"
 
     public static func defaultRuns() -> [Components.Schemas.RunSnapshot] {
         [
@@ -18,6 +19,11 @@ public enum RunFixtures {
             snapshot(
                 id: "run-oriole-121", projectID: "oriole", stage: "verification",
                 attempt: 1, milestone: .terminal_recorded, outcome: .failed),
+            // A pre-migration-0024 legacy run: structural stages but no
+            // observation milestones, so an unobserved outcome and no timeline.
+            snapshot(
+                id: legacyRunID, projectID: "freeside", stage: "implementation",
+                attempt: 1, milestone: nil, outcome: .unobserved),
         ]
     }
 
@@ -78,6 +84,12 @@ public enum RunFixtures {
                         invocation_id: "inv-\(readyRunID)-1", run_id: readyRunID,
                         status: .completed, live: false, observed_at: date(1_080))
                 ]),
+            // The legacy run's timeline is empty: no milestones synthesized,
+            // matching the daemon's no-backfill projection of an unobserved run.
+            .init(
+                as_of_revision: 12, as_of: date(0), run_id: legacyRunID,
+                milestones: [],
+                invocations: []),
         ]
     }
 
@@ -90,7 +102,7 @@ public enum RunFixtures {
         projectID: String,
         stage: String,
         attempt: Int,
-        milestone: Components.Schemas.RunMilestoneKind,
+        milestone: Components.Schemas.RunMilestoneKind?,
         outcome: Components.Schemas.RunOutcome,
         hold: Components.Schemas.RunHoldReason? = nil
     ) -> Components.Schemas.RunSnapshot {
@@ -112,7 +124,7 @@ public enum RunFixtures {
                                 number: $0, invocation_id: "inv-\(id)-\($0)")
                         })
                 ],
-                latest_milestone: .init(value1: milestone),
+                latest_milestone: milestone.map { .init(value1: $0) },
                 outcome: outcome,
                 hold_reason: hold.map { .init(value1: $0) }))
     }

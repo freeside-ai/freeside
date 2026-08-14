@@ -988,7 +988,13 @@ components:
         The daemon-derived run result mirrored from domain.RunOutcome.
         Pending can coexist with a current hold; blocked means a definitive
         publication_blocked milestone, not merely a transient hold.
-      enum: [pending, published, blocked, failed, lost]
+        A run with no observation history (a pre-migration-0024 legacy run,
+        which is deliberately not backfilled, and with no nonterminal
+        invocation observation) classifies as unobserved, never pending, so a
+        legacy terminal run is not shown as in flight; a legacy run still
+        executing across the upgrade has a nonterminal invocation observation
+        and reports pending.
+      enum: [unobserved, pending, published, blocked, failed, lost]
 
     ObservedInvocationStatus:
       type: string
